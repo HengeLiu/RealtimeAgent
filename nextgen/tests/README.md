@@ -21,6 +21,7 @@
 - `test_runtime_integration.py`：运行时集成测试
 - `test_interface_contracts.py`：接口层测试
 - `test_scenarios.py`：场景测试
+- `test_find_object_e2e.py`：寻找物体黄金链路端到端测试
 
 ## 测试分层说明
 

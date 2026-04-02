@@ -1,4 +1,4 @@
-"""眼镜端运行时应用骨架。"""
+"""眼镜端运行时应用实现。"""
 
 from dataclasses import dataclass
 
@@ -34,6 +34,7 @@ class GlassRuntimeApp:
         self.event_detector = GlassEventDetector(device_id=self.device_id)
         self.executor_bus = GlassExecutorBus()
         self.device_control = GlassDeviceControl()
+        self.gateway.connect()
 
     def build_voice_event(self, text: str, audio_ref: str, confidence: float):
         """基于当前事件感知模块构造语音事件。"""
@@ -48,3 +49,5 @@ class GlassRuntimeApp:
         主要逻辑：
         - 当前阶段只保留停止入口，占位后续资源释放逻辑。
         """
+
+        self.gateway.disconnect()

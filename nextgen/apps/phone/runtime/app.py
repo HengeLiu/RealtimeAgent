@@ -1,4 +1,4 @@
-"""手机端运行时应用骨架。"""
+"""手机端运行时应用实现。"""
 
 from dataclasses import dataclass
 
@@ -24,6 +24,7 @@ class PhoneRuntimeApp:
         self.local_task_center = LocalTaskCenter()
         self.find_object_task = FindObjectTask(target_name="未设置")
         self.object_detection_skill = ObjectDetectionSkill()
+        self.gateway.connect()
 
     def analyze_find_object_frame(
         self,
@@ -46,3 +47,5 @@ class PhoneRuntimeApp:
 
     def stop(self) -> None:
         """停止手机端运行时。"""
+
+        self.gateway.disconnect()
