@@ -1,6 +1,7 @@
 """服务器端运行时应用骨架。"""
 
 from dataclasses import dataclass
+from typing import Any, Dict
 
 from nextgen.apps.server.agent.agent_center import AgentCenter
 from nextgen.apps.server.gateway.server_gateway import ServerGateway
@@ -29,11 +30,30 @@ class ServerRuntimeApp:
         self.agent_center = AgentCenter()
         self.background_task_center = BackgroundTaskCenter()
         self.skill_registry = ServerSkillRegistry()
-        self.create_hybrid_task = CreateHybridTaskSkill()
+        self.create_hybrid_task = CreateHybridTaskSkill(
+            task_center=self.background_task_center,
+            state_log_store=self.state_log_store if hasattr(self, "state_log_store") else None,
+        )
         self.mcp_registry = ServerMcpRegistry()
         self.state_log_store = StateLogStore()
+        self.create_hybrid_task.state_log_store = self.state_log_store
+        self.agent_center.task_center = self.background_task_center
 
         self.skill_registry.register("create_hybrid_task", self.create_hybrid_task)
+        self.event_router.on_keyword_dispatch = self.handle_keyword_dispatch
 
     def stop(self) -> None:
         """停止服务器端运行时。"""
+
+    def handle_keyword_dispatch(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """处理基于关键词的任务分发。"""
+
+        payload = event.get("payload", {})
+        text = payload.get("text", "")
+        parsed = self.agent_center.interpret(text)
+        if parsed.get("intent") == "create_hybrid_task":
+            return self.create_hybrid_task.run(
+                task_name=parsed["task_name"],
+                params=parsed["params"],
+            )
+        return {"status": "ignored", "reason": "no_matching_intent"}

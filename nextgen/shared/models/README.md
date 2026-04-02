@@ -12,5 +12,5 @@
 - `capture.py`：采集模型
 - `event.py`：事件模型
 - `execution.py`：执行模型
-- `detection.py`：检测与引导模型
+- `detection.py`：检测结果、手部观测、目标观测、单帧分析输入与引导模型
 - `error.py`：错误模型

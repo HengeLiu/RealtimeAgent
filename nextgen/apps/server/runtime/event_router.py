@@ -1,7 +1,7 @@
-"""事件任务分发骨架实现。"""
+"""事件任务分发实现。"""
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 
 @dataclass
@@ -18,6 +18,7 @@ class EventRouter:
     """
 
     enable_keyword_dispatch: bool = False
+    on_keyword_dispatch: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
 
     def route(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """路由一个事件。
@@ -33,8 +34,16 @@ class EventRouter:
         - 最小路由结果。
         """
 
-        return {
+        route_result = {
             "received": True,
             "keyword_dispatch_enabled": self.enable_keyword_dispatch,
             "event": event,
         }
+        if (
+            self.enable_keyword_dispatch
+            and event.get("event_type") == "voice_event"
+            and self.on_keyword_dispatch is not None
+        ):
+            dispatch_result = self.on_keyword_dispatch(event)
+            route_result["dispatch_result"] = dispatch_result
+        return route_result

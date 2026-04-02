@@ -22,3 +22,13 @@ class ServerSkillRegistry(SkillRegistry):
         """
 
         self.skills[name] = skill
+
+    def get(self, name: str) -> Any:
+        """获取技能对象。"""
+
+        return self.skills.get(name)
+
+    def list_names(self) -> list[str]:
+        """列出已注册技能名称。"""
+
+        return sorted(self.skills.keys())

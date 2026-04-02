@@ -17,3 +17,13 @@ class ServerMcpRegistry(McpRegistry):
         """注册 MCP 服务。"""
 
         self.services[name] = service
+
+    def get(self, name: str) -> Any:
+        """获取 MCP 服务。"""
+
+        return self.services.get(name)
+
+    def list_names(self) -> list[str]:
+        """列出已注册 MCP 服务名称。"""
+
+        return sorted(self.services.keys())
