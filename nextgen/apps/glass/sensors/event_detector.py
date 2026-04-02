@@ -21,6 +21,7 @@ class GlassEventDetector(EventDetector):
         """
 
         self.device_id = device_id
+        self.vad_threshold = 0.5
 
     def build_voice_event(self, text: str, audio_ref: str, confidence: float) -> VoiceEvent:
         """构造语音事件。
@@ -41,3 +42,8 @@ class GlassEventDetector(EventDetector):
             audio_ref=audio_ref,
             vad_confidence=confidence,
         )
+
+    def should_emit_voice_event(self, text: str, confidence: float) -> bool:
+        """判断当前语音片段是否应当输出为结构化语音事件。"""
+
+        return bool(text and text.strip()) and confidence >= self.vad_threshold

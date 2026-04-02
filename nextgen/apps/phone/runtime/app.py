@@ -25,5 +25,24 @@ class PhoneRuntimeApp:
         self.find_object_task = FindObjectTask(target_name="未设置")
         self.object_detection_skill = ObjectDetectionSkill()
 
+    def analyze_find_object_frame(
+        self,
+        session_id: str,
+        target_name: str,
+        candidates,
+        hand_observation=None,
+    ):
+        """执行一次手机侧找物单帧分析。"""
+
+        analysis = self.object_detection_skill.build_frame_analysis(
+            frame_width=320,
+            frame_height=240,
+            target_name=target_name,
+            candidates=candidates,
+            hand_observation=hand_observation,
+        )
+        self.find_object_task.target_name = target_name
+        return self.find_object_task.update_from_frame_analysis(session_id=session_id, analysis=analysis)
+
     def stop(self) -> None:
         """停止手机端运行时。"""

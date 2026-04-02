@@ -13,7 +13,11 @@ class GlassDeviceControl(DeviceControl):
     def __init__(self) -> None:
         """初始化执行器控制模块。"""
 
-        self.settings: dict = {}
+        self.settings: dict = {
+            "speaker_volume": 50,
+            "vibration_strength": 50,
+            "mute": False,
+        }
 
     def configure(self, settings: dict) -> None:
         """应用执行器配置。
@@ -23,3 +27,8 @@ class GlassDeviceControl(DeviceControl):
         """
 
         self.settings.update(settings)
+
+    def get_settings(self) -> dict:
+        """获取当前执行器配置快照。"""
+
+        return dict(self.settings)

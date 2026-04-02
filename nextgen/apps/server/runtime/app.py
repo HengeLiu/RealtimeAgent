@@ -1,4 +1,4 @@
-"""服务器端运行时应用骨架。"""
+"""服务器端运行时应用实现。"""
 
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -30,13 +30,12 @@ class ServerRuntimeApp:
         self.agent_center = AgentCenter()
         self.background_task_center = BackgroundTaskCenter()
         self.skill_registry = ServerSkillRegistry()
+        self.state_log_store = StateLogStore()
         self.create_hybrid_task = CreateHybridTaskSkill(
             task_center=self.background_task_center,
-            state_log_store=self.state_log_store if hasattr(self, "state_log_store") else None,
+            state_log_store=self.state_log_store,
         )
         self.mcp_registry = ServerMcpRegistry()
-        self.state_log_store = StateLogStore()
-        self.create_hybrid_task.state_log_store = self.state_log_store
         self.agent_center.task_center = self.background_task_center
 
         self.skill_registry.register("create_hybrid_task", self.create_hybrid_task)
@@ -44,6 +43,8 @@ class ServerRuntimeApp:
 
     def stop(self) -> None:
         """停止服务器端运行时。"""
+
+        self.gateway.disconnect()
 
     def handle_keyword_dispatch(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """处理基于关键词的任务分发。"""
