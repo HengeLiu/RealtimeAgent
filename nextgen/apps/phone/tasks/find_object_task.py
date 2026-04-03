@@ -1,6 +1,6 @@
 """寻找物体任务组件实现。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from nextgen.apps.phone.skills.object_detection_skill import ObjectDetectionSkill
 from nextgen.shared.models.detection import DetectionResult, FindObjectFrameAnalysis, HintPayload
@@ -21,7 +21,7 @@ class FindObjectTask:
 
     target_name: str
     phase: str = "waiting_stream"
-    detection_skill: ObjectDetectionSkill = ObjectDetectionSkill()
+    detection_skill: ObjectDetectionSkill = field(default_factory=ObjectDetectionSkill)
 
     def update_from_detection(self, result: DetectionResult) -> HintPayload:
         """根据检测结果生成引导建议。
