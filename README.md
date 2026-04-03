@@ -23,12 +23,13 @@
 当前仓库已经按 `uv` 项目方式固定 Python 依赖：
 
 - 根目录使用 [pyproject.toml](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/pyproject.toml) 管理依赖
+- 根目录使用 [uv.lock](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/uv.lock) 固定解析后的锁定版本
 - 根目录使用 [\.python-version](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/.python-version) 固定 Python 版本为 `3.11`
 - 后续建议统一使用 `uv sync` 或 `uv run` 维护与执行
 
 推荐命令：
 
 ```bash
-uv sync
+uv sync --frozen
 uv run pytest nextgen/tests -q
 ```
