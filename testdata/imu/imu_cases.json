@@ -1,0 +1,29 @@
+[
+  {
+    "case_id": "imu_stable_001",
+    "description": "平稳状态",
+    "samples": [
+      {"t": 0, "yaw": 0.0, "pitch": 0.0, "roll": 0.0},
+      {"t": 100, "yaw": 0.5, "pitch": 0.1, "roll": 0.0},
+      {"t": 200, "yaw": 0.2, "pitch": 0.0, "roll": 0.1}
+    ]
+  },
+  {
+    "case_id": "imu_turn_light_001",
+    "description": "轻微转头",
+    "samples": [
+      {"t": 0, "yaw": 0.0, "pitch": 0.0, "roll": 0.0},
+      {"t": 100, "yaw": 8.0, "pitch": 0.0, "roll": 0.2},
+      {"t": 200, "yaw": 12.0, "pitch": 0.0, "roll": 0.3}
+    ]
+  },
+  {
+    "case_id": "imu_turn_strong_001",
+    "description": "明显转头",
+    "samples": [
+      {"t": 0, "yaw": 0.0, "pitch": 0.0, "roll": 0.0},
+      {"t": 100, "yaw": 20.0, "pitch": 0.5, "roll": 0.3},
+      {"t": 200, "yaw": 35.0, "pitch": 0.8, "roll": 0.5}
+    ]
+  }
+]

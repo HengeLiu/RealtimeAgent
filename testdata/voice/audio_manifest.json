@@ -1,0 +1,27 @@
+[
+  {
+    "case_id": "voice_find_phone_001",
+    "expected_file": "audio_samples/voice_find_phone_001.wav",
+    "text": "帮我找一下手机"
+  },
+  {
+    "case_id": "voice_find_wallet_001",
+    "expected_file": "audio_samples/voice_find_wallet_001.wav",
+    "text": "帮我找一下钱包"
+  },
+  {
+    "case_id": "voice_find_card_001",
+    "expected_file": "audio_samples/voice_find_card_001.wav",
+    "text": "帮我找一下门卡"
+  },
+  {
+    "case_id": "voice_status_001",
+    "expected_file": "audio_samples/voice_status_001.wav",
+    "text": "现在任务状态怎么样"
+  },
+  {
+    "case_id": "voice_ask_front_001",
+    "expected_file": "audio_samples/voice_ask_front_001.wav",
+    "text": "看一下前面有什么"
+  }
+]

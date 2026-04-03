@@ -1,0 +1,42 @@
+[
+  {
+    "case_id": "voice_find_phone_001",
+    "text": "帮我找一下手机",
+    "audio_ref": "audio://voice_find_phone_001",
+    "vad_confidence": 0.95,
+    "expected_intent": "find_object",
+    "target_name": "手机"
+  },
+  {
+    "case_id": "voice_find_wallet_001",
+    "text": "帮我找一下钱包",
+    "audio_ref": "audio://voice_find_wallet_001",
+    "vad_confidence": 0.94,
+    "expected_intent": "find_object",
+    "target_name": "钱包"
+  },
+  {
+    "case_id": "voice_find_card_001",
+    "text": "帮我找一下门卡",
+    "audio_ref": "audio://voice_find_card_001",
+    "vad_confidence": 0.93,
+    "expected_intent": "find_object",
+    "target_name": "门卡"
+  },
+  {
+    "case_id": "voice_status_001",
+    "text": "现在任务状态怎么样",
+    "audio_ref": "audio://voice_status_001",
+    "vad_confidence": 0.96,
+    "expected_intent": "task_status_query",
+    "target_name": null
+  },
+  {
+    "case_id": "voice_ask_front_001",
+    "text": "看一下前面有什么",
+    "audio_ref": "audio://voice_ask_front_001",
+    "vad_confidence": 0.91,
+    "expected_intent": "general_vision_query",
+    "target_name": null
+  }
+]

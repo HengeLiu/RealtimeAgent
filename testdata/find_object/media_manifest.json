@@ -1,0 +1,26 @@
+[
+  {
+    "case_id": "find_object_phone_center_001",
+    "image_dir": "images/find_object_phone_center_001/",
+    "video_file": "videos/find_object_phone_center_001.mp4",
+    "notes": "目标明显，适合验证正常发现与完成闭环。"
+  },
+  {
+    "case_id": "find_object_wallet_missing_001",
+    "image_dir": "images/find_object_wallet_missing_001/",
+    "video_file": "videos/find_object_wallet_missing_001.mp4",
+    "notes": "无目标，用于验证继续扫描。"
+  },
+  {
+    "case_id": "find_object_card_left_001",
+    "image_dir": "images/find_object_card_left_001/",
+    "video_file": "videos/find_object_card_left_001.mp4",
+    "notes": "目标偏左，用于验证方向引导。"
+  },
+  {
+    "case_id": "find_object_phone_grasp_001",
+    "image_dir": "images/find_object_phone_grasp_001/",
+    "video_file": "videos/find_object_phone_grasp_001.mp4",
+    "notes": "手已经接近或接触目标，用于验证保持或抓握相关引导。"
+  }
+]

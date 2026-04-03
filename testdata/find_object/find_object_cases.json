@@ -1,0 +1,68 @@
+[
+  {
+    "case_id": "find_object_phone_center_001",
+    "voice_case_id": "voice_find_phone_001",
+    "target_name": "手机",
+    "frame_width": 320,
+    "frame_height": 240,
+    "expected_hint_contains": "已发现手机",
+    "expected_final_status": "completed",
+    "candidates": [
+      {
+        "polygon": [[220.0, 100.0], [280.0, 100.0], [280.0, 160.0], [220.0, 160.0]],
+        "score": 0.92
+      }
+    ],
+    "hand_observation": null
+  },
+  {
+    "case_id": "find_object_wallet_missing_001",
+    "voice_case_id": "voice_find_wallet_001",
+    "target_name": "钱包",
+    "frame_width": 320,
+    "frame_height": 240,
+    "expected_hint_contains": "继续扫描",
+    "expected_final_status": "running",
+    "candidates": [],
+    "hand_observation": null
+  },
+  {
+    "case_id": "find_object_card_left_001",
+    "voice_case_id": "voice_find_card_001",
+    "target_name": "门卡",
+    "frame_width": 320,
+    "frame_height": 240,
+    "expected_hint_contains": "向左",
+    "expected_final_status": "running",
+    "candidates": [
+      {
+        "polygon": [[50.0, 90.0], [110.0, 90.0], [110.0, 150.0], [50.0, 150.0]],
+        "score": 0.88
+      }
+    ],
+    "hand_observation": null
+  },
+  {
+    "case_id": "find_object_phone_grasp_001",
+    "voice_case_id": "voice_find_phone_001",
+    "target_name": "手机",
+    "frame_width": 320,
+    "frame_height": 240,
+    "expected_hint_contains": "保持",
+    "expected_final_status": "completed",
+    "candidates": [
+      {
+        "polygon": [[170.0, 100.0], [230.0, 100.0], [230.0, 160.0], [170.0, 160.0]],
+        "score": 0.95
+      }
+    ],
+    "hand_observation": {
+      "center_x": 200.0,
+      "center_y": 130.0,
+      "area": 5000.0,
+      "bbox": {"x1": 160, "y1": 90, "x2": 240, "y2": 170},
+      "grasp_detected": true,
+      "grasp_score": 0.9
+    }
+  }
+]

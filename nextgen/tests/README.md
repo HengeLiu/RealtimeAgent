@@ -22,12 +22,14 @@
 - `test_interface_contracts.py`：接口层测试
 - `test_scenarios.py`：场景测试
 - `test_find_object_e2e.py`：寻找物体黄金链路端到端测试
+- `test_simulation_data.py`：标准测试数据测试
+- `test_process_simulation.py`：三进程模拟测试
 
 ## 测试分层说明
 
 当前测试已经覆盖以下四层：
 
 - 场景测试：`test_scenarios.py`
-- 集成测试：`test_runtime_integration.py`、`test_find_object_smoke.py`
+- 集成测试：`test_runtime_integration.py`、`test_find_object_smoke.py`、`test_process_simulation.py`
 - 接口测试：`test_protocol.py`、`test_interface_contracts.py`
 - 单元测试：其余以模块能力和原子逻辑为主的测试文件
