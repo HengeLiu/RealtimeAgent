@@ -8,6 +8,7 @@
 
 - `base.py`：基础标识与公共结构
 - `device.py`：设备模型
+- `control.py`：设备登记、心跳与任务级连接模型
 - `task.py`：任务模型
 - `capture.py`：采集模型
 - `event.py`：事件模型

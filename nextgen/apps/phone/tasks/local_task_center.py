@@ -81,6 +81,8 @@ class LocalTaskCenter(TaskCenter):
         status: TaskStatus,
         phase: str,
         summary: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[Dict[str, Any]] = None,
     ) -> TaskSession:
         """推进任务状态。"""
 
@@ -93,5 +95,7 @@ class LocalTaskCenter(TaskCenter):
             phase=phase,
             updated_at=datetime.now().astimezone().isoformat(),
             last_state_summary=summary or session.last_state_summary,
+            result=result if result is not None else session.result,
+            error=error if error is not None else session.error,
         )
         return self.update_session(updated)

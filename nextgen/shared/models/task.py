@@ -46,6 +46,7 @@ class TaskDefinition:
     - phases：任务阶段集合
     - required_capabilities：不同运行时所需能力
     - capture_policies：默认采集策略
+    - requires_peer_stream：是否需要眼镜与手机建立任务级长连接
     """
 
     task_name: str
@@ -57,6 +58,7 @@ class TaskDefinition:
     phases: List[str] = field(default_factory=list)
     required_capabilities: Dict[str, List[str]] = field(default_factory=dict)
     capture_policies: List[CapturePolicy] = field(default_factory=list)
+    requires_peer_stream: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """将任务模板转换为字典。"""
@@ -71,6 +73,7 @@ class TaskDefinition:
             "phases": self.phases,
             "required_capabilities": self.required_capabilities,
             "capture_policies": [item.to_dict() for item in self.capture_policies],
+            "requires_peer_stream": self.requires_peer_stream,
         }
 
 
@@ -95,6 +98,7 @@ class TaskSession:
     - last_state_summary：最近状态摘要
     - result：结果信息
     - error：错误信息
+    - link_status：任务级连接状态
     """
 
     session_id: str
@@ -110,6 +114,7 @@ class TaskSession:
     last_state_summary: Dict[str, Any] = field(default_factory=dict)
     result: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
+    link_status: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """将任务实例转换为字典。"""
@@ -128,4 +133,5 @@ class TaskSession:
             "last_state_summary": self.last_state_summary,
             "result": self.result,
             "error": self.error,
+            "link_status": self.link_status,
         }

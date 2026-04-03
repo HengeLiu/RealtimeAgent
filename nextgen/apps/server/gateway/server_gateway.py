@@ -26,6 +26,7 @@ class ServerGateway(Gateway):
         self.current_partial: str = ""
         self.recent_finals: List[str] = []
         self.recent_limit = 50
+        self.runtime = None
 
     def connect(self) -> None:
         """服务器端默认视为已就绪。"""
@@ -60,6 +61,11 @@ class ServerGateway(Gateway):
             "online": True,
         }
         return client_key
+
+    def attach_runtime(self, runtime: Any) -> None:
+        """挂接服务器运行时。"""
+
+        self.runtime = runtime
 
     def unregister_client(self, runtime: str, device_id: str, component: Optional[str] = None) -> None:
         """注销一个接入客户端。"""

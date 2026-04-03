@@ -136,3 +136,15 @@ class TransportMode(str, Enum):
 
     RELAY = "relay"
     PEER = "peer"
+
+
+class LinkStatus(str, Enum):
+    """任务级连接状态。"""
+
+    PENDING = "pending"
+    LISTENING = "listening"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    BROKEN = "broken"
+    FAILED = "failed"
+    CLOSED = "closed"
