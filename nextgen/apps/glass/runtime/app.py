@@ -39,8 +39,8 @@ class GlassRuntimeApp:
         self.gateway.device_id = self.device_id
         self.sensor_hub = GlassSensorHub()
         self.event_detector = GlassEventDetector(device_id=self.device_id)
-        self.executor_bus = GlassExecutorBus()
         self.device_control = GlassDeviceControl()
+        self.executor_bus = GlassExecutorBus(device_control=self.device_control)
         self.server_base_url: str | None = None
         self.peer_ws_clients: Dict[str, WebSocketRpcClient] = {}
         self.gateway.connect()
@@ -74,6 +74,66 @@ class GlassRuntimeApp:
         """配置服务器控制面地址。"""
 
         self.server_base_url = server_base_url.rstrip("/")
+
+    def enable_local_camera(self, camera_index: int = 0, preferred_width: int | None = None, preferred_height: int | None = None) -> None:
+        """启用本机摄像头。
+
+        参数：
+        - camera_index：摄像头编号
+        - preferred_width：期望宽度
+        - preferred_height：期望高度
+        """
+
+        self.sensor_hub.configure_local_camera(
+            camera_index=camera_index,
+            preferred_width=preferred_width,
+            preferred_height=preferred_height,
+        )
+
+    def enable_local_microphone(self, sample_rate: int = 16000, channels: int = 1, dtype: str = "int16") -> None:
+        """启用本机麦克风。
+
+        参数：
+        - sample_rate：采样率
+        - channels：声道数
+        - dtype：采样数据类型
+        """
+
+        self.sensor_hub.configure_local_microphone(
+            sample_rate=sample_rate,
+            channels=channels,
+            dtype=dtype,
+        )
+
+    def enable_local_speaker(self) -> None:
+        """启用本机喇叭。"""
+
+        self.device_control.enable_local_speaker()
+
+    def capture_real_camera_frame(self, output_path: str | None = None) -> dict:
+        """采集一帧本机摄像头画面。
+
+        参数：
+        - output_path：可选输出路径
+
+        返回值：
+        - 摄像头采集结果
+        """
+
+        return self.sensor_hub.capture_local_camera_frame(output_path=output_path)
+
+    def record_real_microphone_audio(self, duration_sec: float, output_path: str) -> dict:
+        """录制一段本机麦克风音频。
+
+        参数：
+        - duration_sec：录音时长
+        - output_path：输出路径
+
+        返回值：
+        - 麦克风录音结果
+        """
+
+        return self.sensor_hub.record_local_microphone_audio(duration_sec=duration_sec, output_path=output_path)
 
     def handle_connect_peer_command(self, task_session_id: str, peer_device_id: str, peer_endpoint: dict, stream_type: str) -> dict:
         """处理服务器下发的连接手机命令。"""

@@ -3,6 +3,8 @@
 from copy import deepcopy
 from typing import Dict, List, Optional
 
+from nextgen.apps.glass.hardware.local_devices import LocalCameraDevice, LocalMicrophoneDevice
+
 from nextgen.shared.contracts.sensor import SensorHub
 from nextgen.shared.enums.common import TaskPriority
 from nextgen.shared.models.capture import CaptureGrant, CaptureProfile, CaptureRequest
@@ -30,6 +32,8 @@ class GlassSensorHub(SensorHub):
 
         self.requests: Dict[str, CaptureRequest] = {}
         self.sensor_index: Dict[str, List[str]] = {}
+        self.local_camera_device: Optional[LocalCameraDevice] = None
+        self.local_microphone_device: Optional[LocalMicrophoneDevice] = None
 
     def register_capture_request(self, request: CaptureRequest) -> CaptureGrant:
         """注册采集请求。
@@ -120,3 +124,68 @@ class GlassSensorHub(SensorHub):
             TaskPriority.URGENT: 4,
         }
         return order[priority]
+
+    def configure_local_camera(self, camera_index: int = 0, preferred_width: Optional[int] = None, preferred_height: Optional[int] = None) -> None:
+        """配置本机摄像头适配器。
+
+        参数：
+        - camera_index：摄像头编号
+        - preferred_width：期望宽度
+        - preferred_height：期望高度
+        """
+
+        self.local_camera_device = LocalCameraDevice(
+            camera_index=camera_index,
+            preferred_width=preferred_width,
+            preferred_height=preferred_height,
+        )
+
+    def capture_local_camera_frame(self, output_path: Optional[str] = None) -> Dict[str, object]:
+        """采集一帧本机摄像头画面。
+
+        参数：
+        - output_path：可选输出文件路径
+
+        返回值：
+        - 摄像头采集结果字典
+
+        异常情况：
+        - 若尚未配置本机摄像头，则抛出 `RuntimeError`
+        """
+
+        if self.local_camera_device is None:
+            raise RuntimeError("本机摄像头尚未配置。")
+        return self.local_camera_device.capture_frame(output_path=output_path)
+
+    def configure_local_microphone(self, sample_rate: int = 16000, channels: int = 1, dtype: str = "int16") -> None:
+        """配置本机麦克风适配器。
+
+        参数：
+        - sample_rate：采样率
+        - channels：声道数
+        - dtype：采样数据类型
+        """
+
+        self.local_microphone_device = LocalMicrophoneDevice(
+            sample_rate=sample_rate,
+            channels=channels,
+            dtype=dtype,
+        )
+
+    def record_local_microphone_audio(self, duration_sec: float, output_path: str) -> Dict[str, object]:
+        """录制一段本机麦克风音频。
+
+        参数：
+        - duration_sec：录音时长
+        - output_path：输出文件路径
+
+        返回值：
+        - 麦克风录制结果字典
+
+        异常情况：
+        - 若尚未配置本机麦克风，则抛出 `RuntimeError`
+        """
+
+        if self.local_microphone_device is None:
+            raise RuntimeError("本机麦克风尚未配置。")
+        return self.local_microphone_device.record_audio(duration_sec=duration_sec, output_path=output_path)

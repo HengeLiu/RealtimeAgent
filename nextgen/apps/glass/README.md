@@ -10,5 +10,6 @@
 - `gateway/`：眼镜接入层
 - `sensors/`：感知总线与事件感知
 - `execution/`：执行总线与执行器控制
+- `hardware/`：本机硬件适配层
 - `tasks/`：眼镜端局部任务占位
 - `tests/`：眼镜端相关测试

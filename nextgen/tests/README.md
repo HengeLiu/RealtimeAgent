@@ -28,6 +28,7 @@
 - `test_real_control_plane.py`：真实场景控制面参考实现测试
 - `test_real_find_object_demo.py`：真实场景找物通讯三进程 demo 测试
 - `test_real_peer_link_recovery_demo.py`：真实场景任务级连接恢复 demo 测试
+- `test_local_glass_hardware.py`：本机伪眼镜硬件适配测试
 
 ## 测试分层说明
 

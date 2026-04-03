@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import datetime
 from typing import List, Optional
 
+from nextgen.apps.glass.execution.device_control import GlassDeviceControl
+from nextgen.shared.enums.common import ExecutionType
 from nextgen.shared.contracts.execution import ExecutorBus
 from nextgen.shared.models.execution import ExecutionFeedback, ExecutionRequest
 
@@ -17,11 +19,12 @@ class GlassExecutorBus(ExecutorBus):
     - 不真正播放音频或控制震动，只维护执行状态
     """
 
-    def __init__(self) -> None:
+    def __init__(self, device_control: Optional[GlassDeviceControl] = None) -> None:
         """初始化执行总线。"""
 
         self.queue: List[ExecutionRequest] = []
         self.current_request: Optional[ExecutionRequest] = None
+        self.device_control = device_control
 
     def submit(self, request: ExecutionRequest) -> ExecutionFeedback:
         """提交执行请求。
@@ -37,6 +40,7 @@ class GlassExecutorBus(ExecutorBus):
         if self.current_request is None:
             self.current_request = deepcopy(request)
             status = "running"
+            self._dispatch_request(request)
         elif request.policy.drop_if_busy:
             status = "dropped"
         elif (
@@ -47,6 +51,7 @@ class GlassExecutorBus(ExecutorBus):
             self.queue.insert(0, deepcopy(self.current_request))
             self.current_request = deepcopy(request)
             status = "preempted_running"
+            self._dispatch_request(request)
         else:
             self.queue.append(deepcopy(request))
 
@@ -70,3 +75,15 @@ class GlassExecutorBus(ExecutorBus):
             "current_request": self.current_request.to_dict() if self.current_request else None,
             "queue_size": len(self.queue),
         }
+
+    def _dispatch_request(self, request: ExecutionRequest) -> None:
+        """将执行请求下发到执行器控制层。
+
+        参数：
+        - request：执行请求对象
+        """
+
+        if self.device_control is None:
+            return
+        if request.execution_type == ExecutionType.SPEECH:
+            self.device_control.execute_speech(str(request.payload.get("text", "")))
