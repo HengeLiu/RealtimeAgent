@@ -2,9 +2,13 @@
 
 import json
 import logging
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict
+
+import cv2
+import numpy as np
 
 from nextgen.apps.phone.gateway.phone_gateway import PhoneGateway
 from nextgen.apps.phone.skills.object_detection_skill import ObjectDetectionSkill
@@ -259,6 +263,63 @@ class PhoneRuntimeApp:
             "status": status.value,
             "phase": phase,
         }
+
+    def handle_find_object_stream_frame_message(self, task_session_id: str, payload: Dict[str, Any]) -> dict:
+        """处理来自眼镜端的原始图片/视频帧。
+
+        说明：
+        - 将原始 JPEG 帧解码后接入手机侧找物检测技能
+        - 检测结果继续复用统一的 `handle_find_object_frame_message` 流程
+        """
+
+        jpeg_base64 = payload.get("jpeg_base64")
+        if not jpeg_base64:
+            raise ValueError("原始帧消息缺少 jpeg_base64。")
+        raw_bytes = base64.b64decode(jpeg_base64.encode("ascii"))
+        frame = cv2.imdecode(np.frombuffer(raw_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("原始帧 JPEG 解码失败。")
+
+        target_name = self._resolve_stream_target_name(task_session_id=task_session_id, payload=payload)
+        analysis = self.object_detection_skill.build_frame_analysis_from_image(
+            frame=frame,
+            target_name=target_name,
+            source="peer_ws_stream_frame",
+        )
+        self._log_info(
+            "stream_frame_detected",
+            {
+                "task_session_id": task_session_id,
+                "frame_index": payload.get("frame_index"),
+                "target_name": target_name,
+                "found": analysis.found,
+                "candidate_count": analysis.candidate_count,
+            },
+        )
+        return self.handle_find_object_frame_message(
+            task_session_id=task_session_id,
+            payload={
+                "task_session_id": task_session_id,
+                "target_name": target_name,
+                "analysis": analysis.to_dict(),
+                "mark_completed": bool(payload.get("mark_completed", False)),
+            },
+        )
+
+    def _resolve_stream_target_name(self, task_session_id: str, payload: Dict[str, Any]) -> str:
+        """为原始帧消息解析目标名称。"""
+
+        target_name = str(payload.get("target_name", "")).strip()
+        if target_name:
+            return target_name
+        local_session = self.local_task_center.get_session(task_session_id)
+        if local_session is not None:
+            target_name = str(local_session.input.get("target_name", "")).strip()
+            if target_name:
+                return target_name
+        if self.find_object_task.target_name and self.find_object_task.target_name != "未设置":
+            return self.find_object_task.target_name
+        return "手机"
 
     def analyze_find_object_frame(
         self,

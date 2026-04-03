@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -47,6 +48,8 @@ class GlassRuntimeApp:
         self.server_base_url: str | None = None
         self.peer_ws_clients: Dict[str, WebSocketRpcClient] = {}
         self.test_inputs: Dict[str, Any] = {"texts": [], "images": []}
+        self.last_guidance_texts: Dict[str, str] = {}
+        self.last_guidance_ts: Dict[str, float] = {}
         self.gateway.connect()
         self._log_info("runtime_started", {"name": self.name, "device_id": self.device_id})
 
@@ -240,27 +243,7 @@ class GlassRuntimeApp:
             self._log_info("frame_analysis_send_failed", {"task_session_id": task_session_id, "reason": str(exc)})
             raise
 
-        hint = response["hint"]
-        execution_feedback = self.executor_bus.submit(
-            ExecutionRequest(
-                execution_id=f"exec_{task_session_id}",
-                session_id=task_session_id,
-                execution_type=ExecutionType.SPEECH,
-                priority=TaskPriority.HIGH,
-                payload={"text": hint["text"]},
-            )
-        )
-        execution_payload = {
-            "runtime": "glass",
-            "hint_text": hint["text"],
-            "execution_feedback": execution_feedback.to_dict(),
-            "state_summary": response.get("state_summary", {}),
-        }
-        if self.server_base_url:
-            post_json(
-                f"{self.server_base_url}/tasks/{task_session_id}/guidance-executed",
-                execution_payload,
-            )
+        hint, execution_feedback = self._execute_find_object_hint_response(task_session_id=task_session_id, response=response)
 
         self._log_info(
             "frame_analysis_sent",
@@ -269,18 +252,61 @@ class GlassRuntimeApp:
                 "target_name": target_name,
                 "analysis": analysis,
                 "hint": hint,
-                "execution_feedback": execution_feedback.to_dict(),
+                "execution_feedback": execution_feedback,
             },
         )
 
         return {
             "task_session_id": task_session_id,
             "hint": hint,
-            "execution_feedback": execution_feedback.to_dict(),
+            "execution_feedback": execution_feedback,
             "state_summary": response.get("state_summary", {}),
             "status": response.get("status"),
             "phase": response.get("phase"),
         }
+
+    def _execute_find_object_hint_response(self, task_session_id: str, response: Dict[str, Any]):
+        """执行手机侧回传的找物引导建议，并避免连续帧重复播报。"""
+
+        hint = response["hint"]
+        hint_text = hint["text"]
+        now = time.time()
+        should_execute = (
+            self.last_guidance_texts.get(task_session_id) != hint_text
+            or (now - self.last_guidance_ts.get(task_session_id, 0.0)) >= 2.0
+        )
+        if should_execute:
+            execution_feedback = self.executor_bus.submit(
+                ExecutionRequest(
+                    execution_id=f"exec_{task_session_id}",
+                    session_id=task_session_id,
+                    execution_type=ExecutionType.SPEECH,
+                    priority=TaskPriority.HIGH,
+                    payload={"text": hint_text},
+                )
+            )
+            execution_feedback_dict = execution_feedback.to_dict()
+            self.last_guidance_texts[task_session_id] = hint_text
+            self.last_guidance_ts[task_session_id] = now
+            if self.server_base_url:
+                post_json(
+                    f"{self.server_base_url}/tasks/{task_session_id}/guidance-executed",
+                    {
+                        "runtime": "glass",
+                        "hint_text": hint_text,
+                        "execution_feedback": execution_feedback_dict,
+                        "state_summary": response.get("state_summary", {}),
+                    },
+                )
+        else:
+            execution_feedback_dict = {
+                "execution_id": f"exec_{task_session_id}",
+                "session_id": task_session_id,
+                "accepted": False,
+                "status": "deduped",
+                "detail": "重复引导已跳过播报",
+            }
+        return hint, execution_feedback_dict
 
     def build_voice_event(self, text: str, audio_ref: str, confidence: float):
         """基于当前事件感知模块构造语音事件。"""
@@ -315,7 +341,7 @@ class GlassRuntimeApp:
         self._log_info("test_image_received", record)
         return record
 
-    def stream_video_file(self, task_session_id: str, video_path: str, fps_limit: float = 5.0) -> dict:
+    def stream_video_file(self, task_session_id: str, video_path: str, fps_limit: float = 5.0, target_name: str = "手机") -> dict:
         """通过任务级 WebSocket 流式发送本地视频文件。
 
         参数：
@@ -341,6 +367,8 @@ class GlassRuntimeApp:
 
         frame_index = 0
         sent_frames = 0
+        detected_frames = 0
+        last_response = None
         started_at = time.time()
         try:
             while True:
@@ -356,8 +384,17 @@ class GlassRuntimeApp:
                     "width": int(frame.shape[1]),
                     "height": int(frame.shape[0]),
                     "jpeg_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                    "target_name": target_name,
                 }
-                client.request("/stream/frame", payload)
+                response = client.request("/stream/frame", payload)
+                last_response = response
+                if response.get("hint"):
+                    _hint, execution_feedback = self._execute_find_object_hint_response(
+                        task_session_id=task_session_id,
+                        response=response,
+                    )
+                    if execution_feedback.get("status") != "deduped":
+                        detected_frames += 1
                 frame_index += 1
                 sent_frames += 1
                 if fps_limit > 0:
@@ -369,13 +406,15 @@ class GlassRuntimeApp:
             "task_session_id": task_session_id,
             "video_path": video_path,
             "sent_frames": sent_frames,
+            "detected_frames": detected_frames,
             "elapsed_sec": round(time.time() - started_at, 3),
             "fps_limit": fps_limit,
+            "last_response": last_response,
         }
         self._log_info("video_stream_sent", result)
         return result
 
-    def send_image_file_to_peer(self, task_session_id: str, image_path: str) -> dict:
+    def send_image_file_to_peer(self, task_session_id: str, image_path: str, target_name: str = "手机") -> dict:
         """通过任务级 WebSocket 发送一张本地图像文件。
 
         参数：
@@ -407,12 +446,17 @@ class GlassRuntimeApp:
                 "width": int(frame.shape[1]),
                 "height": int(frame.shape[0]),
                 "jpeg_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                "target_name": target_name,
+                "mark_completed": True,
             },
         )
+        hint, execution_feedback = self._execute_find_object_hint_response(task_session_id=task_session_id, response=response)
         result = {
             "task_session_id": task_session_id,
             "image_path": image_path,
             "response": response,
+            "hint": hint,
+            "execution_feedback": execution_feedback,
         }
         self._log_info("image_sent_to_peer", result)
         return result
@@ -427,6 +471,8 @@ class GlassRuntimeApp:
         for client in self.peer_ws_clients.values():
             client.close()
         self.peer_ws_clients.clear()
+        self.last_guidance_texts.clear()
+        self.last_guidance_ts.clear()
         self.gateway.disconnect()
         self._log_info("runtime_stopped", {"name": self.name, "device_id": self.device_id})
 

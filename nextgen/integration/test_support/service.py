@@ -143,6 +143,17 @@ class LocalStackManager:
             "connected_session_ids": connected_session_ids,
         }
 
+    def get_task_target_name(self, task_session_id: str) -> str:
+        """从服务器快照中解析指定任务的目标名称。"""
+
+        snapshot = self.get_snapshot()["server_snapshot"]
+        for task in snapshot.get("tasks", []):
+            if task.get("session_id") == task_session_id:
+                target_name = str((task.get("input") or {}).get("target_name", "")).strip()
+                if target_name:
+                    return target_name
+        return "手机"
+
 
 def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, phone_port: int = 18492, logger: logging.Logger | None = None) -> FastAPI:
     """构造测试支持服务。"""
@@ -304,7 +315,11 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
         if task_session_id:
             result = post_json(
                 f"{manager.glass_base_url}/device-api/task/send-image-file",
-                {"task_session_id": task_session_id, "image_path": str(destination)},
+                {
+                    "task_session_id": task_session_id,
+                    "image_path": str(destination),
+                    "target_name": manager.get_task_target_name(task_session_id),
+                },
             )
         else:
             result = post_json(
@@ -326,7 +341,12 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
         destination.write_bytes(await file.read())
         result = post_json(
             f"{manager.glass_base_url}/device-api/task/stream-video-file",
-            {"task_session_id": task_session_id, "video_path": str(destination), "fps_limit": fps_limit},
+            {
+                "task_session_id": task_session_id,
+                "video_path": str(destination),
+                "fps_limit": fps_limit,
+                "target_name": manager.get_task_target_name(task_session_id),
+            },
         )
         service_logger.info(
             "upload_video %s",

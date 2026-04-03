@@ -51,21 +51,7 @@ def build_phone_control_app(runtime_app: PhoneRuntimeApp | None = None) -> FastA
                     elif path == "/find-object/frame-analysis":
                         response_payload = runtime.handle_find_object_frame_message(task_session_id, payload)
                     elif path == "/stream/frame":
-                        runtime._log_info(
-                            "stream_frame_received",
-                            {
-                                "task_session_id": task_session_id,
-                                "frame_index": payload.get("frame_index"),
-                                "width": payload.get("width"),
-                                "height": payload.get("height"),
-                                "jpeg_base64_size": len(payload.get("jpeg_base64", "")),
-                            },
-                        )
-                        response_payload = {
-                            "task_session_id": task_session_id,
-                            "frame_index": payload.get("frame_index"),
-                            "status": "received",
-                        }
+                        response_payload = runtime.handle_find_object_stream_frame_message(task_session_id, payload)
                     else:
                         raise ValueError(f"未找到任务级 WebSocket 路由: {path}")
                     await websocket.send_json(

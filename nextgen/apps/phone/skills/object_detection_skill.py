@@ -148,6 +148,115 @@ class ObjectDetectionSkill:
             source=source,
         )
 
+    def build_frame_analysis_from_image(
+        self,
+        frame,
+        target_name: str,
+        source: str = "peer_stream_raw_frame",
+    ) -> FindObjectFrameAnalysis:
+        """从原始图像帧构造单帧分析输入。
+
+        说明：
+        - 该入口用于把测试支持服务上传的图片/视频帧真正接到找物检测链路
+        - 当前阶段采用轻量 OpenCV 启发式检测，而不是直接依赖重模型推理
+        """
+
+        frame_height, frame_width = frame.shape[:2]
+        candidates = self.extract_object_candidates_from_image(frame=frame, target_name=target_name)
+        return self.build_frame_analysis(
+            frame_width=frame_width,
+            frame_height=frame_height,
+            target_name=target_name,
+            candidates=candidates,
+            hand_observation=None,
+            source=source,
+        )
+
+    def extract_object_candidates_from_image(
+        self,
+        frame,
+        target_name: str,
+    ) -> List[ObjectObservation]:
+        """从原始图像帧中提取候选目标。
+
+        当前阶段策略：
+        - 使用边缘 + 形态学闭运算提取显著区域
+        - 对矩形度和长宽比做简单打分
+        - 若目标名称看起来像手机，则对“手机形状”的候选做额外加权
+        """
+
+        import cv2
+        import numpy as np
+
+        frame_height, frame_width = frame.shape[:2]
+        frame_area = float(frame_width * frame_height)
+        if frame_area <= 0:
+            return []
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 60, 160)
+        kernel = np.ones((5, 5), dtype=np.uint8)
+        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        candidates: List[ObjectObservation] = []
+        for contour in contours:
+            contour_area = float(cv2.contourArea(contour))
+            if contour_area < frame_area * 0.015:
+                continue
+
+            x, y, width, height = cv2.boundingRect(contour)
+            if width <= 0 or height <= 0:
+                continue
+
+            rect_area = float(width * height)
+            fill_ratio = contour_area / rect_area if rect_area > 0 else 0.0
+            aspect_ratio = max(width, height) / max(1.0, min(width, height))
+            phone_shape_bonus = self._score_phone_shape(target_name=target_name, aspect_ratio=aspect_ratio)
+            score = min(
+                0.99,
+                max(
+                    0.1,
+                    0.35
+                    + min(0.35, contour_area / max(frame_area * 0.25, 1.0))
+                    + min(0.2, fill_ratio * 0.2)
+                    + phone_shape_bonus,
+                ),
+            )
+
+            polygon = cv2.approxPolyDP(contour, epsilon=0.02 * cv2.arcLength(contour, True), closed=True)
+            points = polygon.reshape(-1, 2).tolist() if polygon is not None and len(polygon) >= 3 else [
+                [x, y],
+                [x + width, y],
+                [x + width, y + height],
+                [x, y + height],
+            ]
+            observation = self.build_object_observation(points, score=score)
+            if observation is None:
+                continue
+            position, _ = self.get_center_guidance(
+                object_center=(observation.center_x, observation.center_y),
+                frame_center=(frame_width / 2.0, frame_height / 2.0),
+                threshold=max(20, int(min(frame_width, frame_height) * 0.08)),
+            )
+            observation.position = position
+            candidates.append(observation)
+
+        return sorted(candidates, key=lambda item: (item.area, item.score), reverse=True)
+
+    def _score_phone_shape(self, target_name: str, aspect_ratio: float) -> float:
+        """根据目标名称和长宽比为手机形状做简单加权。"""
+
+        normalized_target = "".join(str(target_name).lower().split())
+        if not any(keyword in normalized_target for keyword in ("手机", "phone", "iphone", "android")):
+            return 0.0
+        if 1.4 <= aspect_ratio <= 2.6:
+            return 0.18
+        if 1.2 <= aspect_ratio <= 3.0:
+            return 0.08
+        return 0.0
+
     def detect_from_analysis(
         self,
         session_id: str,

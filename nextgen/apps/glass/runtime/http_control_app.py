@@ -58,6 +58,7 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
                 task_session_id=payload["task_session_id"],
                 video_path=payload["video_path"],
                 fps_limit=float(payload.get("fps_limit", 5.0)),
+                target_name=str(payload.get("target_name", "手机")),
             ),
         }
 
@@ -69,6 +70,7 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
             "result": runtime.send_image_file_to_peer(
                 task_session_id=payload["task_session_id"],
                 image_path=payload["image_path"],
+                target_name=str(payload.get("target_name", "手机")),
             ),
         }
 
