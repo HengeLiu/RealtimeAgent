@@ -94,6 +94,7 @@ def wait_for_runtime_probe_snapshots(
     runtimes: Iterable[str],
     timeout_sec: float = 10.0,
     poll_interval_sec: float = 0.1,
+    updated_after: Optional[str] = None,
 ) -> Dict[str, RuntimeProbeSnapshot]:
     """等待一组运行时探针文件准备完成。
 
@@ -117,7 +118,10 @@ def wait_for_runtime_probe_snapshots(
         for runtime in expected:
             path = status_dir / f"{runtime}.json"
             if path.exists():
-                found[runtime] = load_runtime_probe_snapshot(status_dir, runtime)
+                snapshot = load_runtime_probe_snapshot(status_dir, runtime)
+                if updated_after is not None and snapshot.timestamp <= updated_after:
+                    continue
+                found[runtime] = snapshot
         if len(found) == len(expected):
             return found
         time.sleep(poll_interval_sec)

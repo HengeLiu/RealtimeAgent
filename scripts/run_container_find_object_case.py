@@ -15,6 +15,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="运行容器级寻找物体标准场景。")
     parser.add_argument("--case-id", default="find_object_phone_center_001", help="标准测试场景编号。")
     parser.add_argument("--status-dir", default="/shared/status", help="共享状态目录。")
+    parser.add_argument("--glass-ws-url", default="ws://glass-sim:18081", help="眼镜 WebSocket 服务地址。")
+    parser.add_argument("--server-ws-url", default="ws://server-sim:18083", help="服务器 WebSocket 服务地址。")
     parser.add_argument(
         "--output",
         default="/shared/results/find_object_phone_center_001.json",
@@ -31,6 +33,8 @@ def main() -> None:
     report = run_containerized_find_object_case(
         case_id=args.case_id,
         status_dir=Path(args.status_dir),
+        glass_ws_url=args.glass_ws_url,
+        server_ws_url=args.server_ws_url,
     )
     write_containerized_find_object_report(
         output_path=Path(args.output),

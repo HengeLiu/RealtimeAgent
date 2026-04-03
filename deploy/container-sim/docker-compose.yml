@@ -10,10 +10,18 @@ services:
       - glass
       - --device-id
       - glass-001
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18081"
       - --status-dir
       - /shared/status
-      - --hold-seconds
-      - "120"
+      - --server-ws-url
+      - ws://server-sim:18083
+      - --phone-ws-url
+      - ws://phone-sim:18082
+      - --glass-ws-url
+      - ws://glass-sim:18081
     volumes:
       - container-sim-data:/shared
       - ../../testdata:/workspace/testdata:ro
@@ -29,10 +37,18 @@ services:
       - phone
       - --device-id
       - phone-001
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18082"
       - --status-dir
       - /shared/status
-      - --hold-seconds
-      - "120"
+      - --server-ws-url
+      - ws://server-sim:18083
+      - --phone-ws-url
+      - ws://phone-sim:18082
+      - --glass-ws-url
+      - ws://glass-sim:18081
     volumes:
       - container-sim-data:/shared
       - ../../testdata:/workspace/testdata:ro
@@ -48,10 +64,18 @@ services:
       - server
       - --device-id
       - server-main
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18083"
       - --status-dir
       - /shared/status
-      - --hold-seconds
-      - "120"
+      - --server-ws-url
+      - ws://server-sim:18083
+      - --phone-ws-url
+      - ws://phone-sim:18082
+      - --glass-ws-url
+      - ws://glass-sim:18081
     volumes:
       - container-sim-data:/shared
       - ../../testdata:/workspace/testdata:ro
@@ -71,6 +95,10 @@ services:
       - find_object_phone_center_001
       - --status-dir
       - /shared/status
+      - --glass-ws-url
+      - ws://glass-sim:18081
+      - --server-ws-url
+      - ws://server-sim:18083
       - --output
       - /shared/results/find_object_phone_center_001.json
     volumes:

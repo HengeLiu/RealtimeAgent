@@ -5,4 +5,6 @@ ENV PYTHONPATH=/workspace
 
 WORKDIR /workspace
 
+RUN pip install --no-cache-dir websockets==12.0
+
 COPY . /workspace
