@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from nextgen.apps.glass.runtime.app import GlassRuntimeApp
 from nextgen.apps.glass.runtime.http_control_app import build_glass_control_app
 from nextgen.shared.utils.http import post_json
+from nextgen.shared.utils.logging_utils import setup_file_logger
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -28,6 +29,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--advertise-host", default="127.0.0.1")
     parser.add_argument("--server-base-url", default="http://127.0.0.1:18090")
     parser.add_argument("--heartbeat-seconds", type=float, default=2.0)
+    parser.add_argument("--log-file", default="nextgen/apps/glass/logs/glass-runtime.log")
     return parser
 
 
@@ -56,6 +58,7 @@ def main() -> None:
     """脚本主入口。"""
 
     args = build_argument_parser().parse_args()
+    setup_file_logger("nextgen.glass.runtime", args.log_file)
     runtime = GlassRuntimeApp(device_id=args.device_id)
     runtime.start()
     runtime.configure_control_endpoint(host=args.advertise_host, port=args.port)

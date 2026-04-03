@@ -3,3 +3,4 @@ __*
 .vscode
 .pytest_cache
 .venv
+*.log

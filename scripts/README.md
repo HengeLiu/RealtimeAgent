@@ -12,6 +12,7 @@
 - `run_glass_control_runtime.py`：启动眼镜控制面参考实现
 - `run_phone_control_runtime.py`：启动手机控制面参考实现
 - `run_local_glass_hardware_probe.py`：使用本机相机、麦克风和喇叭探测伪眼镜硬件能力
+- `run_local_test_support_service.py`：启动本机多进程联调用测试支持服务
 - `run_real_control_plane_demo.py`：启动真实场景控制面三进程 demo
 - `run_real_find_object_demo.py`：启动真实场景找物通讯三进程 demo
 - `run_real_peer_link_recovery_demo.py`：启动真实场景任务级连接恢复 demo

@@ -49,9 +49,42 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
             ),
         }
 
+    @app.post("/device-api/task/stream-video-file")
+    async def stream_video_file(request: Request) -> dict:
+        payload = await request.json()
+        return {
+            "ok": True,
+            "result": runtime.stream_video_file(
+                task_session_id=payload["task_session_id"],
+                video_path=payload["video_path"],
+                fps_limit=float(payload.get("fps_limit", 5.0)),
+            ),
+        }
+
+    @app.post("/device-api/task/send-image-file")
+    async def send_image_file(request: Request) -> dict:
+        payload = await request.json()
+        return {
+            "ok": True,
+            "result": runtime.send_image_file_to_peer(
+                task_session_id=payload["task_session_id"],
+                image_path=payload["image_path"],
+            ),
+        }
+
     @app.post("/device-api/task/link-broken")
     async def link_broken(request: Request) -> dict:
         payload = await request.json()
         return {"ok": True, **runtime.build_broken_link_payload(payload["task_session_id"], payload.get("reason", "unknown"))}
+
+    @app.post("/device-api/test/input-text")
+    async def test_input_text(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "result": runtime.handle_test_text_input(payload["text"])}
+
+    @app.post("/device-api/test/input-image")
+    async def test_input_image(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "result": runtime.handle_test_image_input(payload["image_path"])}
 
     return app

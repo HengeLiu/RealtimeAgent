@@ -1,5 +1,7 @@
 """服务器端运行时应用实现。"""
 
+import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict
 from uuid import uuid4
@@ -32,6 +34,7 @@ class ServerRuntimeApp:
         - 当前阶段完成最小模块装配，便于后续扩展真实服务启动逻辑。
         """
 
+        self.logger = logging.getLogger("nextgen.server.runtime")
         self.gateway = ServerGateway()
         self.event_router = EventRouter()
         self.agent_center = AgentCenter()
@@ -50,11 +53,13 @@ class ServerRuntimeApp:
         self.skill_registry.register("create_hybrid_task", self.create_hybrid_task)
         self.event_router.on_keyword_dispatch = self.handle_keyword_dispatch
         self.gateway.attach_runtime(self)
+        self._log_info("runtime_started", {"name": self.name})
 
     def stop(self) -> None:
         """停止服务器端运行时。"""
 
         self.gateway.disconnect()
+        self._log_info("runtime_stopped", {"name": self.name})
 
     def handle_keyword_dispatch(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """处理基于关键词的任务分发。"""
@@ -73,6 +78,7 @@ class ServerRuntimeApp:
         """注册设备。"""
 
         stored = self.device_registry.register(registration)
+        self._log_info("device_registered", stored)
         self.state_log_store.append_device_event(
             device_id=registration.device_id,
             event={"event_name": "device_registered", "runtime": registration.runtime.value, "endpoint": registration.endpoint.to_dict()},
@@ -83,6 +89,7 @@ class ServerRuntimeApp:
         """应用设备心跳。"""
 
         stored = self.device_registry.heartbeat(heartbeat)
+        self._log_info("device_heartbeat", stored)
         self.state_log_store.append_device_event(
             device_id=heartbeat.device_id,
             event={"event_name": "device_heartbeat", "status": heartbeat.status, "endpoint": heartbeat.endpoint.to_dict() if heartbeat.endpoint else None},
@@ -99,6 +106,7 @@ class ServerRuntimeApp:
             stream_type=stream_type,
         )
         self._sync_session_link_status(session_id, link_state.to_dict(), phase="preparing_peer_link")
+        self._log_info("peer_link_prepare", {"session_id": session_id, "link_state": link_state.to_dict()})
         self.state_log_store.append_task_event(
             session_id=session_id,
             event={"event_name": "peer_link_prepare_requested", "phone_device_id": phone_device_id, "glass_device_id": glass_device_id, "stream_type": stream_type},
@@ -114,6 +122,7 @@ class ServerRuntimeApp:
 
         link_state = self.peer_link_coordinator.mark_phone_ready(session_id=session_id, listen_endpoint=listen_endpoint)
         self._sync_session_link_status(session_id, link_state.to_dict(), phase="peer_link_listening")
+        self._log_info("peer_link_ready", {"session_id": session_id, "listen_endpoint": listen_endpoint.to_dict()})
         self.state_log_store.append_task_event(
             session_id=session_id,
             event={"event_name": "peer_link_ready", "listen_endpoint": listen_endpoint.to_dict()},
@@ -135,6 +144,10 @@ class ServerRuntimeApp:
         )
         phase = "peer_link_connected" if link_state.status == LinkStatus.CONNECTED else f"peer_link_{link_state.status.value}"
         self._sync_session_link_status(session_id, link_state.to_dict(), phase=phase)
+        self._log_info(
+            "peer_link_status",
+            {"session_id": session_id, "runtime": runtime, "status": status.value, "reason": reason, "link_state": link_state.to_dict()},
+        )
         self.state_log_store.append_task_event(
             session_id=session_id,
             event={"event_name": "peer_link_status_reported", "runtime": runtime, "status": status.value, "reason": reason},
@@ -146,6 +159,7 @@ class ServerRuntimeApp:
 
         link_state = self.peer_link_coordinator.close_link(session_id)
         self._sync_session_link_status(session_id, link_state.to_dict(), phase="peer_link_closed")
+        self._log_info("peer_link_stopped", {"session_id": session_id, "link_state": link_state.to_dict()})
         self.state_log_store.append_task_event(
             session_id=session_id,
             event={"event_name": "peer_link_stop_requested"},
@@ -187,6 +201,7 @@ class ServerRuntimeApp:
             session_id=session_id,
             event={"event_name": "control_session_created", "task_name": task_name, "glass_device_id": glass_device_id, "phone_device_id": phone_device_id},
         )
+        self._log_info("control_session_created", {"session_id": session_id, "task_name": task_name})
         return session.to_dict()
 
     def orchestrate_peer_link(self, session_id: str, stream_type: str = "image_stream") -> Dict[str, Any]:
@@ -224,6 +239,16 @@ class ServerRuntimeApp:
         )
         self.report_peer_link_status(session_id=session_id, runtime="phone", status=LinkStatus.CONNECTED)
         final_state = self.report_peer_link_status(session_id=session_id, runtime="glass", status=LinkStatus.CONNECTED)
+        self._log_info(
+            "peer_link_orchestrated",
+            {
+                "session_id": session_id,
+                "phone_command": phone_command,
+                "phone_ready": phone_ready,
+                "glass_command": glass_command,
+                "glass_connected": glass_connected,
+            },
+        )
         return {
             "task_session_id": session_id,
             "prepare_response": prepare_response,
@@ -254,6 +279,10 @@ class ServerRuntimeApp:
                 f"{NodeEndpoint(**glass_device['endpoint']).as_base_url()}/task/stop-peer-link",
                 response["glass_command"],
             )
+        self._log_info(
+            "peer_link_stop_notified",
+            {"session_id": session_id, "phone_ack": phone_ack, "glass_ack": glass_ack},
+        )
         return {
             **response,
             "phone_ack": phone_ack,
@@ -290,6 +319,10 @@ class ServerRuntimeApp:
                 "summary": summary or {},
             },
         )
+        self._log_info(
+            "task_state_updated",
+            {"session_id": session_id, "runtime": runtime, "status": status.value, "phase": phase, "summary": summary or {}},
+        )
         return session.to_dict()
 
     def record_guidance_executed(
@@ -311,6 +344,10 @@ class ServerRuntimeApp:
                 "execution_feedback": execution_feedback,
                 "state_summary": state_summary or {},
             },
+        )
+        self._log_info(
+            "guidance_executed",
+            {"session_id": session_id, "runtime": runtime, "hint_text": hint_text, "execution_feedback": execution_feedback},
         )
         session = self.background_task_center.get_session(session_id)
         if session is not None:
@@ -341,6 +378,10 @@ class ServerRuntimeApp:
         recovered = None
         if auto_recover:
             recovered = self.recover_peer_link(session_id)
+        self._log_info(
+            "peer_link_broken",
+            {"session_id": session_id, "runtime": runtime, "reason": reason, "auto_recover": auto_recover, "recovered": recovered is not None},
+        )
         return {
             "link_state": link_state,
             "recovered": recovered,
@@ -359,10 +400,17 @@ class ServerRuntimeApp:
             session_id=session_id,
             event={"event_name": "peer_link_recover_requested"},
         )
+        self._log_info("peer_link_recover_requested", {"session_id": session_id})
         return self.orchestrate_peer_link(
             session_id=session_id,
             stream_type=link_state["stream_type"],
         )
+
+    def ingest_voice_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """接收一条来自眼镜的语音事件并进入事件分发。"""
+
+        self._log_info("voice_event_received", event)
+        return self.event_router.route(event)
 
     def render_status_page(self) -> str:
         """渲染简单的 Web 状态页面。"""
@@ -427,3 +475,10 @@ class ServerRuntimeApp:
         if updated is not None:
             updated.link_status = link_status
             self.background_task_center.update_session(updated)
+
+    def _log_info(self, action: str, payload: Dict[str, Any]) -> None:
+        """记录结构化信息日志。"""
+
+        if not hasattr(self, "logger"):
+            return
+        self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))

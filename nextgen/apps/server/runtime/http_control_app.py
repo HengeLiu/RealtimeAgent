@@ -57,6 +57,11 @@ def build_server_control_app(runtime_app: ServerRuntimeApp | None = None) -> Fas
         )
         return {"ok": True, "device": runtime.apply_heartbeat(heartbeat)}
 
+    @app.post("/events/voice")
+    async def voice_event(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "route_result": runtime.ingest_voice_event(payload["event"])}
+
     @app.post("/tasks/{session_id}/peer-link/prepare")
     async def prepare_peer_link(session_id: str, request: Request) -> dict:
         payload = await request.json()

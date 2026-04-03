@@ -1,5 +1,7 @@
 """手机端运行时应用实现。"""
 
+import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict
@@ -29,6 +31,7 @@ class PhoneRuntimeApp:
         - 当前阶段完成最小模块装配，便于后续扩展真实连接与任务装配。
         """
 
+        self.logger = logging.getLogger("nextgen.phone.runtime")
         self.gateway = PhoneGateway()
         self.gateway.device_id = self.device_id
         self.local_task_center = LocalTaskCenter()
@@ -36,6 +39,7 @@ class PhoneRuntimeApp:
         self.object_detection_skill = ObjectDetectionSkill()
         self.server_base_url: str | None = None
         self.gateway.connect()
+        self._log_info("runtime_started", {"name": self.name, "device_id": self.device_id})
 
     def configure_control_endpoint(self, host: str, port: int, scheme: str = "http", base_path: str = "/device-api") -> None:
         """配置手机控制面地址。"""
@@ -64,6 +68,7 @@ class PhoneRuntimeApp:
         """配置服务器控制面地址。"""
 
         self.server_base_url = server_base_url.rstrip("/")
+        self._log_info("server_base_url_configured", {"server_base_url": self.server_base_url})
 
     def handle_prepare_peer_link(self, task_session_id: str, peer_device_id: str, stream_type: str) -> dict:
         """处理服务器下发的准备连接命令。"""
@@ -89,6 +94,7 @@ class PhoneRuntimeApp:
                     input={"peer_device_id": peer_device_id, "stream_type": stream_type},
                 )
             )
+        self._log_info("peer_link_listener_prepared", {"task_session_id": task_session_id, "session": session})
         return {
             "task_session_id": task_session_id,
             "runtime": "phone",
@@ -127,6 +133,7 @@ class PhoneRuntimeApp:
                 phase="stream_connected",
                 summary={"status": "connected"},
             )
+        self._log_info("peer_stream_connected", {"task_session_id": task_session_id})
         return session
 
     def handle_peer_stream_closed(self, task_session_id: str) -> dict:
@@ -134,6 +141,7 @@ class PhoneRuntimeApp:
 
         session = self.gateway.peer_sessions.setdefault(task_session_id, {"session_id": task_session_id})
         session["status"] = LinkStatus.CLOSED.value
+        self._log_info("peer_stream_closed", {"task_session_id": task_session_id})
         return session
 
     def build_find_object_analysis(
@@ -239,6 +247,11 @@ class PhoneRuntimeApp:
                 },
             )
 
+        self._log_info(
+            "find_object_frame_processed",
+            {"task_session_id": task_session_id, "target_name": target_name, "summary": summary, "hint": hint.to_dict()},
+        )
+
         return {
             "task_session_id": task_session_id,
             "hint": hint.to_dict(),
@@ -270,3 +283,11 @@ class PhoneRuntimeApp:
         """停止手机端运行时。"""
 
         self.gateway.disconnect()
+        self._log_info("runtime_stopped", {"name": self.name, "device_id": self.device_id})
+
+    def _log_info(self, action: str, payload: Dict[str, Any]) -> None:
+        """记录结构化信息日志。"""
+
+        if not hasattr(self, "logger"):
+            return
+        self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))

@@ -1,5 +1,7 @@
 """眼镜端运行时应用实现。"""
 
+import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -35,6 +37,7 @@ class GlassRuntimeApp:
         - 当前阶段完成最小模块装配，便于后续扩展真实启动逻辑。
         """
 
+        self.logger = logging.getLogger("nextgen.glass.runtime")
         self.gateway = GlassGateway()
         self.gateway.device_id = self.device_id
         self.sensor_hub = GlassSensorHub()
@@ -43,7 +46,9 @@ class GlassRuntimeApp:
         self.executor_bus = GlassExecutorBus(device_control=self.device_control)
         self.server_base_url: str | None = None
         self.peer_ws_clients: Dict[str, WebSocketRpcClient] = {}
+        self.test_inputs: Dict[str, Any] = {"texts": [], "images": []}
         self.gateway.connect()
+        self._log_info("runtime_started", {"name": self.name, "device_id": self.device_id})
 
     def configure_control_endpoint(self, host: str, port: int, scheme: str = "http", base_path: str = "/device-api") -> None:
         """配置眼镜控制面地址。"""
@@ -74,6 +79,7 @@ class GlassRuntimeApp:
         """配置服务器控制面地址。"""
 
         self.server_base_url = server_base_url.rstrip("/")
+        self._log_info("server_base_url_configured", {"server_base_url": self.server_base_url})
 
     def enable_local_camera(self, camera_index: int = 0, preferred_width: int | None = None, preferred_height: int | None = None) -> None:
         """启用本机摄像头。
@@ -88,6 +94,10 @@ class GlassRuntimeApp:
             camera_index=camera_index,
             preferred_width=preferred_width,
             preferred_height=preferred_height,
+        )
+        self._log_info(
+            "local_camera_enabled",
+            {"camera_index": camera_index, "preferred_width": preferred_width, "preferred_height": preferred_height},
         )
 
     def enable_local_microphone(self, sample_rate: int = 16000, channels: int = 1, dtype: str = "int16") -> None:
@@ -104,11 +114,13 @@ class GlassRuntimeApp:
             channels=channels,
             dtype=dtype,
         )
+        self._log_info("local_microphone_enabled", {"sample_rate": sample_rate, "channels": channels, "dtype": dtype})
 
     def enable_local_speaker(self) -> None:
         """启用本机喇叭。"""
 
         self.device_control.enable_local_speaker()
+        self._log_info("local_speaker_enabled", self.device_control.get_settings())
 
     def capture_real_camera_frame(self, output_path: str | None = None) -> dict:
         """采集一帧本机摄像头画面。
@@ -120,7 +132,9 @@ class GlassRuntimeApp:
         - 摄像头采集结果
         """
 
-        return self.sensor_hub.capture_local_camera_frame(output_path=output_path)
+        result = self.sensor_hub.capture_local_camera_frame(output_path=output_path)
+        self._log_info("local_camera_frame_captured", result)
+        return result
 
     def record_real_microphone_audio(self, duration_sec: float, output_path: str) -> dict:
         """录制一段本机麦克风音频。
@@ -133,7 +147,9 @@ class GlassRuntimeApp:
         - 麦克风录音结果
         """
 
-        return self.sensor_hub.record_local_microphone_audio(duration_sec=duration_sec, output_path=output_path)
+        result = self.sensor_hub.record_local_microphone_audio(duration_sec=duration_sec, output_path=output_path)
+        self._log_info("local_microphone_audio_recorded", result)
+        return result
 
     def handle_connect_peer_command(self, task_session_id: str, peer_device_id: str, peer_endpoint: dict, stream_type: str) -> dict:
         """处理服务器下发的连接手机命令。"""
@@ -153,9 +169,11 @@ class GlassRuntimeApp:
         try:
             wait_for_ws_ready(client, timeout_sec=5.0)
             self.peer_ws_clients[task_session_id] = client
+            self._log_info("peer_link_connected", {"task_session_id": task_session_id, "ws_url": ws_url})
         except Exception as exc:
             client.close()
             self.gateway.report_broken_peer_link(task_session_id=task_session_id, reason=str(exc))
+            self._log_info("peer_link_connect_failed", {"task_session_id": task_session_id, "reason": str(exc), "ws_url": ws_url})
             raise
         return {
             "task_session_id": task_session_id,
@@ -171,6 +189,7 @@ class GlassRuntimeApp:
         if client is not None:
             client.close()
         self.gateway.close_peer_session(task_session_id)
+        self._log_info("peer_link_stopped", {"task_session_id": task_session_id})
         return {
             "task_session_id": task_session_id,
             "runtime": "glass",
@@ -181,6 +200,7 @@ class GlassRuntimeApp:
         """构造连接异常上报载荷。"""
 
         self.gateway.report_broken_peer_link(task_session_id=task_session_id, reason=reason)
+        self._log_info("peer_link_broken", {"task_session_id": task_session_id, "reason": reason})
         return {
             "task_session_id": task_session_id,
             "runtime": "glass",
@@ -217,6 +237,7 @@ class GlassRuntimeApp:
                     f"{self.server_base_url}/tasks/{task_session_id}/peer-link/broken",
                     {"runtime": "glass", "reason": str(exc), "auto_recover": True},
                 )
+            self._log_info("frame_analysis_send_failed", {"task_session_id": task_session_id, "reason": str(exc)})
             raise
 
         hint = response["hint"]
@@ -241,6 +262,17 @@ class GlassRuntimeApp:
                 execution_payload,
             )
 
+        self._log_info(
+            "frame_analysis_sent",
+            {
+                "task_session_id": task_session_id,
+                "target_name": target_name,
+                "analysis": analysis,
+                "hint": hint,
+                "execution_feedback": execution_feedback.to_dict(),
+            },
+        )
+
         return {
             "task_session_id": task_session_id,
             "hint": hint,
@@ -255,7 +287,135 @@ class GlassRuntimeApp:
 
         if not self.event_detector.should_emit_voice_event(text, confidence):
             return None
-        return self.event_detector.build_voice_event(text, audio_ref, confidence)
+        event = self.event_detector.build_voice_event(text, audio_ref, confidence)
+        self._log_info("voice_event_built", event.to_dict())
+        return event
+
+    def handle_test_text_input(self, text: str) -> dict:
+        """处理测试支持服务注入的文本输入。"""
+
+        event = self.build_voice_event(text=text, audio_ref="test-support://text", confidence=0.99)
+        if event is None:
+            raise RuntimeError("文本未形成有效语音事件。")
+        self.test_inputs["texts"].append(event.to_dict())
+        if self.server_base_url is None:
+            raise RuntimeError("服务器控制面地址尚未配置。")
+        route_result = post_json(f"{self.server_base_url}/events/voice", {"event": event.to_dict()})
+        self._log_info("test_text_forwarded", {"text": text, "route_result": route_result})
+        return {
+            "voice_event": event.to_dict(),
+            "route_result": route_result,
+        }
+
+    def handle_test_image_input(self, image_path: str) -> dict:
+        """处理测试支持服务注入的图片输入。"""
+
+        record = {"image_path": image_path}
+        self.test_inputs["images"].append(record)
+        self._log_info("test_image_received", record)
+        return record
+
+    def stream_video_file(self, task_session_id: str, video_path: str, fps_limit: float = 5.0) -> dict:
+        """通过任务级 WebSocket 流式发送本地视频文件。
+
+        参数：
+        - task_session_id：任务实例标识
+        - video_path：视频文件路径
+        - fps_limit：发送帧率上限
+
+        返回值：
+        - 视频流发送结果
+        """
+
+        import base64
+        import time
+        import cv2
+
+        client = self.peer_ws_clients.get(task_session_id)
+        if client is None:
+            raise RuntimeError(f"任务级连接尚未建立: {task_session_id}")
+
+        capture = cv2.VideoCapture(video_path)
+        if not capture.isOpened():
+            raise RuntimeError(f"无法打开视频文件: {video_path}")
+
+        frame_index = 0
+        sent_frames = 0
+        started_at = time.time()
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    break
+                encoded_ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if not encoded_ok:
+                    continue
+                payload = {
+                    "task_session_id": task_session_id,
+                    "frame_index": frame_index,
+                    "width": int(frame.shape[1]),
+                    "height": int(frame.shape[0]),
+                    "jpeg_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                }
+                client.request("/stream/frame", payload)
+                frame_index += 1
+                sent_frames += 1
+                if fps_limit > 0:
+                    time.sleep(1.0 / fps_limit)
+        finally:
+            capture.release()
+
+        result = {
+            "task_session_id": task_session_id,
+            "video_path": video_path,
+            "sent_frames": sent_frames,
+            "elapsed_sec": round(time.time() - started_at, 3),
+            "fps_limit": fps_limit,
+        }
+        self._log_info("video_stream_sent", result)
+        return result
+
+    def send_image_file_to_peer(self, task_session_id: str, image_path: str) -> dict:
+        """通过任务级 WebSocket 发送一张本地图像文件。
+
+        参数：
+        - task_session_id：任务实例标识
+        - image_path：图像文件路径
+
+        返回值：
+        - 图像发送结果
+        """
+
+        import base64
+        import cv2
+
+        client = self.peer_ws_clients.get(task_session_id)
+        if client is None:
+            raise RuntimeError(f"任务级连接尚未建立: {task_session_id}")
+
+        frame = cv2.imread(image_path)
+        if frame is None:
+            raise RuntimeError(f"无法读取图像文件: {image_path}")
+        encoded_ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not encoded_ok:
+            raise RuntimeError("图像 JPEG 编码失败。")
+        response = client.request(
+            "/stream/frame",
+            {
+                "task_session_id": task_session_id,
+                "frame_index": 0,
+                "width": int(frame.shape[1]),
+                "height": int(frame.shape[0]),
+                "jpeg_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
+            },
+        )
+        result = {
+            "task_session_id": task_session_id,
+            "image_path": image_path,
+            "response": response,
+        }
+        self._log_info("image_sent_to_peer", result)
+        return result
 
     def stop(self) -> None:
         """停止眼镜端运行时。
@@ -268,3 +428,11 @@ class GlassRuntimeApp:
             client.close()
         self.peer_ws_clients.clear()
         self.gateway.disconnect()
+        self._log_info("runtime_stopped", {"name": self.name, "device_id": self.device_id})
+
+    def _log_info(self, action: str, payload: Dict[str, Any]) -> None:
+        """记录结构化信息日志。"""
+
+        if not hasattr(self, "logger"):
+            return
+        self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))
