@@ -17,3 +17,18 @@
 - 所有新功能和新架构代码优先写入 `nextgen/`
 - `origin-src/` 仅作为旧实现参考、迁移来源和回归对照对象
 - 若需要做模拟联调，优先使用 `testdata/` 和 `scripts/`
+
+## Python 环境
+
+当前仓库已经按 `uv` 项目方式固定 Python 依赖：
+
+- 根目录使用 [pyproject.toml](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/pyproject.toml) 管理依赖
+- 根目录使用 [\.python-version](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/.python-version) 固定 Python 版本为 `3.11`
+- 后续建议统一使用 `uv sync` 或 `uv run` 维护与执行
+
+推荐命令：
+
+```bash
+uv sync
+uv run pytest nextgen/tests -q
+```
