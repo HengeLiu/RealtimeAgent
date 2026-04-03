@@ -8,6 +8,8 @@
 
 - `README.md`：目录说明文档
 - `run_find_object_process_simulation.py`：按标准 `case_id` 运行寻找物体三进程模拟
+- `run_simulated_runtime.py`：启动单个模拟运行时容器并写出探针文件
+- `run_container_find_object_case.py`：在容器环境下执行标准找物场景并写出结果
 
 ## 使用原则
 

@@ -1,0 +1,81 @@
+services:
+  glass-sim:
+    build:
+      context: ../..
+      dockerfile: deploy/container-sim/Dockerfile
+    command:
+      - python
+      - scripts/run_simulated_runtime.py
+      - --runtime
+      - glass
+      - --device-id
+      - glass-001
+      - --status-dir
+      - /shared/status
+      - --hold-seconds
+      - "120"
+    volumes:
+      - container-sim-data:/shared
+      - ../../testdata:/workspace/testdata:ro
+
+  phone-sim:
+    build:
+      context: ../..
+      dockerfile: deploy/container-sim/Dockerfile
+    command:
+      - python
+      - scripts/run_simulated_runtime.py
+      - --runtime
+      - phone
+      - --device-id
+      - phone-001
+      - --status-dir
+      - /shared/status
+      - --hold-seconds
+      - "120"
+    volumes:
+      - container-sim-data:/shared
+      - ../../testdata:/workspace/testdata:ro
+
+  server-sim:
+    build:
+      context: ../..
+      dockerfile: deploy/container-sim/Dockerfile
+    command:
+      - python
+      - scripts/run_simulated_runtime.py
+      - --runtime
+      - server
+      - --device-id
+      - server-main
+      - --status-dir
+      - /shared/status
+      - --hold-seconds
+      - "120"
+    volumes:
+      - container-sim-data:/shared
+      - ../../testdata:/workspace/testdata:ro
+
+  find-object-runner:
+    build:
+      context: ../..
+      dockerfile: deploy/container-sim/Dockerfile
+    depends_on:
+      - glass-sim
+      - phone-sim
+      - server-sim
+    command:
+      - python
+      - scripts/run_container_find_object_case.py
+      - --case-id
+      - find_object_phone_center_001
+      - --status-dir
+      - /shared/status
+      - --output
+      - /shared/results/find_object_phone_center_001.json
+    volumes:
+      - container-sim-data:/shared
+      - ../../testdata:/workspace/testdata:ro
+
+volumes:
+  container-sim-data:
