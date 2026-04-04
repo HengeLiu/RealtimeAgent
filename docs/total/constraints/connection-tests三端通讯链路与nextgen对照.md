@@ -392,7 +392,7 @@ ESP32 的 `send_frame_to_preferred_target()` 是整个设计的核心：
 
 #### 1. nextgen 还没有真正吸收“手机作为被眼镜主动连接的本地服务端”这个运行形态
 
-我们现在的 `nextgen` 容器级模拟已经做到了：
+我们之前的 `nextgen` 容器级模拟历史方案已经做到过：
 
 - 三端直连 WebSocket 长连接
 

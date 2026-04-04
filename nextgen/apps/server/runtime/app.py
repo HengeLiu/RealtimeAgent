@@ -102,7 +102,7 @@ class ServerRuntimeApp:
         """应用设备心跳。"""
 
         stored = self.device_registry.heartbeat(heartbeat)
-        self._log_info("device_heartbeat", stored)
+        self._log_debug("device_heartbeat", stored)
         self.state_log_store.append_device_event(
             device_id=heartbeat.device_id,
             event={"event_name": "device_heartbeat", "status": heartbeat.status, "endpoint": heartbeat.endpoint.to_dict() if heartbeat.endpoint else None},
@@ -529,3 +529,10 @@ class ServerRuntimeApp:
         if not hasattr(self, "logger"):
             return
         self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))
+
+    def _log_debug(self, action: str, payload: Dict[str, Any]) -> None:
+        """记录结构化调试日志。"""
+
+        if not hasattr(self, "logger"):
+            return
+        self.logger.debug("%s %s", action, json.dumps(payload, ensure_ascii=False))

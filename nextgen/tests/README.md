@@ -24,7 +24,6 @@
 - `test_find_object_e2e.py`：寻找物体黄金链路端到端测试
 - `test_simulation_data.py`：标准测试数据测试
 - `test_process_simulation.py`：三进程模拟测试
-- `test_container_simulation_support.py`：容器级模拟支持测试
 - `test_real_control_plane.py`：真实场景控制面参考实现测试
 - `test_real_find_object_demo.py`：真实场景找物通讯三进程 demo 测试
 - `test_real_peer_link_recovery_demo.py`：真实场景任务级连接恢复 demo 测试
@@ -36,6 +35,6 @@
 当前测试已经覆盖以下四层：
 
 - 场景测试：`test_scenarios.py`
-- 集成测试：`test_runtime_integration.py`、`test_find_object_smoke.py`、`test_process_simulation.py`、`test_container_simulation_support.py`、`test_real_control_plane.py`
+- 集成测试：`test_runtime_integration.py`、`test_find_object_smoke.py`、`test_process_simulation.py`、`test_real_control_plane.py`
 - 接口测试：`test_protocol.py`、`test_interface_contracts.py`
 - 单元测试：其余以模块能力和原子逻辑为主的测试文件
