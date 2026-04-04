@@ -2,7 +2,12 @@
 
 import json
 import logging
+import os
 import time
+import threading
+import uuid
+import tempfile
+import base64
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -16,6 +21,7 @@ from nextgen.shared.models.control import NodeEndpoint
 from nextgen.shared.models.execution import ExecutionRequest
 from nextgen.shared.utils.http import post_json
 from nextgen.shared.utils.ws_rpc import WebSocketRpcClient, wait_for_ws_ready
+from websockets.sync.client import connect
 
 @dataclass
 class GlassRuntimeApp:
@@ -50,6 +56,7 @@ class GlassRuntimeApp:
         self.test_inputs: Dict[str, Any] = {"texts": [], "images": []}
         self.last_guidance_texts: Dict[str, str] = {}
         self.last_guidance_ts: Dict[str, float] = {}
+        self.voice_sessions: Dict[str, Dict[str, Any]] = {}
         self.gateway.connect()
         self._log_info("runtime_started", {"name": self.name, "device_id": self.device_id})
 
@@ -317,6 +324,173 @@ class GlassRuntimeApp:
         self._log_info("voice_event_built", event.to_dict())
         return event
 
+    def start_push_to_talk_recording(self, session_id: str | None = None) -> dict:
+        """启动对讲模式录音。"""
+
+        if session_id is None:
+            session_id = f"ptt_{uuid.uuid4().hex[:8]}"
+        output_path = os.path.join(tempfile.gettempdir(), f"{session_id}.wav")
+        result = self.sensor_hub.start_local_microphone_recording(output_path=output_path)
+        self.voice_sessions[session_id] = {
+            "mode": "push_to_talk",
+            "recording": True,
+            "audio_path": output_path,
+        }
+        self._log_info("push_to_talk_recording_started", {"session_id": session_id, **result})
+        return {"session_id": session_id, **result}
+
+    def stop_push_to_talk_recording_and_dispatch(self, session_id: str) -> dict:
+        """停止对讲录音、上传服务器处理，并通过语音 WS 接收 TTS 音频。"""
+
+        if self.server_base_url is None:
+            raise RuntimeError("服务器控制面地址尚未配置。")
+        session = self.voice_sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"对讲录音会话不存在: {session_id}")
+        recording = self.sensor_hub.stop_local_microphone_recording()
+        voice_session = post_json(
+            f"{self.server_base_url}/voice/sessions",
+            {"device_id": self.device_id, "mode": "push_to_talk"},
+        )["session"]
+        voice_session_id = voice_session["session_id"]
+        ws_url = self._build_server_voice_ws_url(voice_session_id)
+        self._open_voice_ws_session(voice_session_id=voice_session_id, ws_url=ws_url, mode="push_to_talk")
+        processed = post_json(
+            f"{self.server_base_url}/voice/sessions/{voice_session_id}/push-to-talk",
+            {"audio_path": recording["output_path"]},
+        )
+        session.update(
+            {
+                "recording": False,
+                "server_voice_session_id": voice_session_id,
+                "audio_path": recording["output_path"],
+            }
+        )
+        self._log_info(
+            "push_to_talk_recording_stopped",
+            {
+                "session_id": session_id,
+                "voice_session_id": voice_session_id,
+                "recording": recording,
+                "processed": processed,
+            },
+        )
+        return {
+            "session_id": session_id,
+            "voice_session_id": voice_session_id,
+            "recording": recording,
+            "processed": processed,
+        }
+
+    def start_realtime_voice_conversation(self) -> dict:
+        """启动实时语音对话。"""
+
+        if self.server_base_url is None:
+            raise RuntimeError("服务器控制面地址尚未配置。")
+        voice_session = post_json(
+            f"{self.server_base_url}/voice/sessions",
+            {"device_id": self.device_id, "mode": "realtime"},
+        )["session"]
+        voice_session_id = voice_session["session_id"]
+        ws_url = self._build_server_voice_ws_url(voice_session_id)
+        state = self._open_voice_ws_session(voice_session_id=voice_session_id, ws_url=ws_url, mode="realtime")
+
+        def _on_chunk(chunk_bytes: bytes) -> None:
+            if state.get("closed"):
+                return
+            try:
+                with state["send_lock"]:
+                    state["connection"].send(
+                        json.dumps(
+                            {
+                                "type": "audio.chunk",
+                                "session_id": voice_session_id,
+                                "audio_base64": base64.b64encode(chunk_bytes).decode("ascii"),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+            except Exception as exc:
+                self._log_info("realtime_audio_send_failed", {"session_id": voice_session_id, "reason": str(exc)})
+
+        state["microphone_stream"] = self.sensor_hub.start_local_microphone_stream(on_chunk=_on_chunk, blocksize=1600)
+        self._log_info("realtime_voice_started", {"voice_session_id": voice_session_id, "ws_url": ws_url})
+        return {"voice_session_id": voice_session_id, "ws_url": ws_url}
+
+    def stop_realtime_voice_conversation(self, voice_session_id: str) -> dict:
+        """停止实时语音对话。"""
+
+        state = self.voice_sessions.get(voice_session_id)
+        if state is None:
+            raise KeyError(f"实时语音会话不存在: {voice_session_id}")
+        microphone_stream = state.get("microphone_stream")
+        if microphone_stream is not None:
+            microphone_stream.stop()
+            microphone_stream.close()
+        connection = state.get("connection")
+        if connection is not None:
+            try:
+                with state["send_lock"]:
+                    connection.send(json.dumps({"type": "session.close", "session_id": voice_session_id}, ensure_ascii=False))
+            except Exception:
+                pass
+            try:
+                connection.close()
+            except Exception:
+                pass
+        state["closed"] = True
+        self.device_control.stop_audio_playback()
+        self._log_info("realtime_voice_stopped", {"voice_session_id": voice_session_id})
+        return {"voice_session_id": voice_session_id, "status": "stopped"}
+
+    def _build_server_voice_ws_url(self, voice_session_id: str) -> str:
+        http_base = self.server_base_url.rstrip("/")
+        if http_base.startswith("https://"):
+            return http_base.replace("https://", "wss://", 1) + f"/voice/ws/{voice_session_id}"
+        return http_base.replace("http://", "ws://", 1) + f"/voice/ws/{voice_session_id}"
+
+    def _open_voice_ws_session(self, voice_session_id: str, ws_url: str, mode: str) -> Dict[str, Any]:
+        connection = connect(ws_url, open_timeout=5, close_timeout=1, max_size=2**22)
+        state = {
+            "voice_session_id": voice_session_id,
+            "mode": mode,
+            "connection": connection,
+            "send_lock": threading.Lock(),
+            "closed": False,
+            "microphone_stream": None,
+        }
+        self.voice_sessions[voice_session_id] = state
+
+        def _receiver() -> None:
+            try:
+                while not state["closed"]:
+                    raw = connection.recv()
+                    message = json.loads(raw)
+                    self._handle_voice_server_message(voice_session_id, message)
+            except Exception as exc:
+                self._log_info("voice_ws_closed", {"voice_session_id": voice_session_id, "reason": str(exc)})
+            finally:
+                state["closed"] = True
+
+        state["receiver_thread"] = threading.Thread(target=_receiver, daemon=True)
+        state["receiver_thread"].start()
+        return state
+
+    def _handle_voice_server_message(self, voice_session_id: str, message: Dict[str, Any]) -> None:
+        message_type = message.get("type")
+        if message_type == "tts.audio.chunk":
+            audio_bytes = base64.b64decode(message["audio_base64"].encode("ascii"))
+            result = self.device_control.play_audio_chunk(audio_bytes, sample_rate=int(message.get("sample_rate", 16000)))
+            self._log_info(
+                "voice_tts_chunk_played",
+                {"voice_session_id": voice_session_id, "chunk_size": len(audio_bytes), "playback": result},
+            )
+        elif message_type == "tts.stop":
+            result = self.device_control.stop_audio_playback()
+            self._log_info("voice_tts_stopped", {"voice_session_id": voice_session_id, "playback": result})
+        else:
+            self._log_info("voice_server_message_received", {"voice_session_id": voice_session_id, "message": message})
+
     def handle_test_text_input(self, text: str) -> dict:
         """处理测试支持服务注入的文本输入。"""
 
@@ -471,6 +645,21 @@ class GlassRuntimeApp:
         for client in self.peer_ws_clients.values():
             client.close()
         self.peer_ws_clients.clear()
+        for voice_session_id in list(self.voice_sessions.keys()):
+            state = self.voice_sessions.get(voice_session_id, {})
+            if state.get("mode") == "realtime":
+                try:
+                    self.stop_realtime_voice_conversation(voice_session_id)
+                except Exception:
+                    pass
+            else:
+                connection = state.get("connection")
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+        self.voice_sessions.clear()
         self.last_guidance_texts.clear()
         self.last_guidance_ts.clear()
         self.gateway.disconnect()

@@ -15,3 +15,7 @@ def test_local_test_support_service_routes_exist() -> None:
     assert "/actions/send-text" in routes
     assert "/actions/send-image" in routes
     assert "/actions/upload-video" in routes
+    assert "/actions/voice/push-to-talk/start" in routes
+    assert "/actions/voice/push-to-talk/stop" in routes
+    assert "/actions/voice/realtime/start" in routes
+    assert "/actions/voice/realtime/stop" in routes

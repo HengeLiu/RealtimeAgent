@@ -1,6 +1,9 @@
 """服务器控制面 HTTP 参考实现。"""
 
-from fastapi import FastAPI, HTTPException, Request
+import asyncio
+import base64
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from nextgen.apps.server.runtime.app import ServerRuntimeApp
@@ -61,6 +64,62 @@ def build_server_control_app(runtime_app: ServerRuntimeApp | None = None) -> Fas
     async def voice_event(request: Request) -> dict:
         payload = await request.json()
         return {"ok": True, "route_result": runtime.ingest_voice_event(payload["event"])}
+
+    @app.post("/voice/sessions")
+    async def create_voice_session(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "session": runtime.create_voice_session(device_id=payload["device_id"], mode=payload["mode"])}
+
+    @app.post("/voice/sessions/{session_id}/push-to-talk")
+    async def process_push_to_talk(session_id: str, request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, **runtime.process_push_to_talk_audio(session_id=session_id, audio_path=payload["audio_path"])}
+
+    @app.websocket("/voice/ws/{session_id}")
+    async def voice_ws(websocket: WebSocket, session_id: str) -> None:
+        await websocket.accept()
+        session = runtime.voice_session_manager.get(session_id)
+        if session is None:
+            await websocket.send_json({"type": "error", "message": f"语音会话不存在: {session_id}"})
+            await websocket.close()
+            return
+        if session.mode == "realtime":
+            session.start_realtime()
+        try:
+            while True:
+                try:
+                    outbound = session.outgoing.get_nowait()
+                    await websocket.send_json(outbound)
+                    continue
+                except Exception:
+                    pass
+                try:
+                    message = await asyncio.wait_for(websocket.receive_json(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                msg_type = message.get("type")
+                if msg_type == "audio.chunk":
+                    session.accept_audio_chunk(base64.b64decode(message["audio_base64"]))
+                elif msg_type == "audio.commit":
+                    if session.realtime_asr_session is not None:
+                        session.realtime_asr_session.stop()
+                        session.realtime_asr_session = runtime.asr_service.start_streaming_session(
+                            on_sentence=session.handle_asr_sentence,
+                            audio_format="pcm",
+                        )
+                elif msg_type == "session.close":
+                    session.stop_realtime()
+                    await websocket.send_json({"type": "session.closed", "session_id": session_id})
+                    break
+                elif msg_type == "playback.interrupted":
+                    session.outgoing.put({"type": "tts.stop", "session_id": session_id})
+                else:
+                    await websocket.send_json({"type": "warning", "message": f"未知语音消息类型: {msg_type}"})
+        except WebSocketDisconnect:
+            session.stop_realtime()
+        except Exception:
+            session.stop_realtime()
+            raise
 
     @app.post("/tasks/{session_id}/peer-link/prepare")
     async def prepare_peer_link(session_id: str, request: Request) -> dict:

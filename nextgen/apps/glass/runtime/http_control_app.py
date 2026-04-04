@@ -89,4 +89,23 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
         payload = await request.json()
         return {"ok": True, "result": runtime.handle_test_image_input(payload["image_path"])}
 
+    @app.post("/device-api/voice/push-to-talk/start")
+    async def start_push_to_talk(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "result": runtime.start_push_to_talk_recording(payload.get("session_id"))}
+
+    @app.post("/device-api/voice/push-to-talk/stop")
+    async def stop_push_to_talk(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "result": runtime.stop_push_to_talk_recording_and_dispatch(payload["session_id"])}
+
+    @app.post("/device-api/voice/realtime/start")
+    async def start_realtime_voice() -> dict:
+        return {"ok": True, "result": runtime.start_realtime_voice_conversation()}
+
+    @app.post("/device-api/voice/realtime/stop")
+    async def stop_realtime_voice(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "result": runtime.stop_realtime_voice_conversation(payload["voice_session_id"])}
+
     return app

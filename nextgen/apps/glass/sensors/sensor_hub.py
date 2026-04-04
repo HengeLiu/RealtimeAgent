@@ -189,3 +189,24 @@ class GlassSensorHub(SensorHub):
         if self.local_microphone_device is None:
             raise RuntimeError("本机麦克风尚未配置。")
         return self.local_microphone_device.record_audio(duration_sec=duration_sec, output_path=output_path)
+
+    def start_local_microphone_recording(self, output_path: str) -> Dict[str, object]:
+        """启动一段可停止的本机录音。"""
+
+        if self.local_microphone_device is None:
+            raise RuntimeError("本机麦克风尚未配置。")
+        return self.local_microphone_device.start_recording(output_path=output_path)
+
+    def stop_local_microphone_recording(self) -> Dict[str, object]:
+        """停止当前本机录音。"""
+
+        if self.local_microphone_device is None:
+            raise RuntimeError("本机麦克风尚未配置。")
+        return self.local_microphone_device.stop_recording()
+
+    def start_local_microphone_stream(self, on_chunk, blocksize: int = 1600):
+        """启动实时本机麦克风流。"""
+
+        if self.local_microphone_device is None:
+            raise RuntimeError("本机麦克风尚未配置。")
+        return self.local_microphone_device.start_streaming(on_chunk=on_chunk, blocksize=blocksize)

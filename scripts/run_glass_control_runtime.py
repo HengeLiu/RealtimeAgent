@@ -61,6 +61,8 @@ def main() -> None:
     setup_file_logger("nextgen.glass.runtime", args.log_file)
     runtime = GlassRuntimeApp(device_id=args.device_id)
     runtime.start()
+    runtime.enable_local_microphone()
+    runtime.enable_local_speaker()
     runtime.configure_control_endpoint(host=args.advertise_host, port=args.port)
     runtime.configure_server_base_url(args.server_base_url)
     start_registration_loop(runtime, args.server_base_url, args.heartbeat_seconds)

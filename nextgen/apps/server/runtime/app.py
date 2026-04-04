@@ -7,6 +7,10 @@ from typing import Any, Dict
 from uuid import uuid4
 
 from nextgen.apps.server.agent.agent_center import AgentCenter
+from nextgen.apps.server.conversation.dashscope_asr_service import DashscopeAsrService
+from nextgen.apps.server.conversation.dashscope_chat_service import DashscopeChatService
+from nextgen.apps.server.conversation.dashscope_tts_service import DashscopeTtsService
+from nextgen.apps.server.conversation.voice_session_manager import VoiceSessionManager
 from nextgen.apps.server.gateway.server_gateway import ServerGateway
 from nextgen.apps.server.mcp.mcp_registry import ServerMcpRegistry
 from nextgen.apps.server.runtime.device_registry import DeviceRegistry
@@ -49,6 +53,15 @@ class ServerRuntimeApp:
         )
         self.mcp_registry = ServerMcpRegistry()
         self.agent_center.task_center = self.background_task_center
+        self.asr_service = DashscopeAsrService()
+        self.tts_service = DashscopeTtsService()
+        self.chat_service = DashscopeChatService()
+        self.voice_session_manager = VoiceSessionManager(
+            asr_service=self.asr_service,
+            tts_service=self.tts_service,
+            chat_service=self.chat_service,
+            agent_center=self.agent_center,
+        )
 
         self.skill_registry.register("create_hybrid_task", self.create_hybrid_task)
         self.event_router.on_keyword_dispatch = self.handle_keyword_dispatch
@@ -177,6 +190,16 @@ class ServerRuntimeApp:
         return {
             "devices": self.device_registry.list_all(),
             "tasks": [item.to_dict() for item in self.background_task_center.list_sessions()],
+            "voice_sessions": [
+                {
+                    "session_id": session.session_id,
+                    "device_id": session.device_id,
+                    "mode": session.mode,
+                    "message_count": len(session.messages),
+                    "closed": session.closed,
+                }
+                for session in self.voice_session_manager.sessions.values()
+            ],
             "recent_logs": self.state_log_store.get_recent_records(limit=30),
         }
 
@@ -411,6 +434,30 @@ class ServerRuntimeApp:
 
         self._log_info("voice_event_received", event)
         return self.event_router.route(event)
+
+    def create_voice_session(self, device_id: str, mode: str) -> Dict[str, Any]:
+        """创建一个语音对话会话。"""
+
+        session = self.voice_session_manager.create_session(device_id=device_id, mode=mode)
+        self._log_info("voice_session_created", {"session_id": session.session_id, "device_id": device_id, "mode": mode})
+        return {
+            "session_id": session.session_id,
+            "device_id": device_id,
+            "mode": mode,
+        }
+
+    def process_push_to_talk_audio(self, session_id: str, audio_path: str) -> Dict[str, Any]:
+        """处理对讲模式录音文件。"""
+
+        session = self.voice_session_manager.get(session_id)
+        if session is None:
+            raise KeyError(f"语音会话不存在: {session_id}")
+        transcript = session.process_push_to_talk_audio(audio_path=audio_path)
+        self._log_info(
+            "push_to_talk_audio_processed",
+            {"session_id": session_id, "audio_path": audio_path, "transcript": transcript},
+        )
+        return {"session_id": session_id, "transcript": transcript}
 
     def render_status_page(self) -> str:
         """渲染简单的 Web 状态页面。"""

@@ -58,3 +58,20 @@ class GlassDeviceControl(DeviceControl):
             return {"speaker_backend": "noop", "pid": None, "text": text}
         self.local_speaker_device.volume = int(self.settings.get("speaker_volume", 50))
         return self.local_speaker_device.speak_text(text)
+
+    def play_audio_chunk(self, pcm_bytes: bytes, sample_rate: int) -> Dict[str, object]:
+        """播放一段流式 PCM 音频。"""
+
+        if self.settings.get("mute", False):
+            return {"speaker_backend": "mute", "chunk_size": len(pcm_bytes), "sample_rate": sample_rate}
+        if self.local_speaker_device is None:
+            return {"speaker_backend": "noop", "chunk_size": len(pcm_bytes), "sample_rate": sample_rate}
+        self.local_speaker_device.volume = int(self.settings.get("speaker_volume", 50))
+        return self.local_speaker_device.push_pcm_chunk(pcm_bytes=pcm_bytes, sample_rate=sample_rate)
+
+    def stop_audio_playback(self) -> Dict[str, object]:
+        """停止当前流式音频播放。"""
+
+        if self.local_speaker_device is None:
+            return {"speaker_backend": "noop", "status": "stopped"}
+        return self.local_speaker_device.stop_pcm_stream()

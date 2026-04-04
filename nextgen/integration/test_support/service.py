@@ -207,6 +207,12 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
     <button onclick="sendText()">发送文本到眼镜</button>
   </section>
   <section>
+    <h2>语音对话</h2>
+    <button id="pttButton" onclick="togglePushToTalk()">开始对讲录音</button>
+    <button id="realtimeButton" onclick="toggleRealtime()">开始实时对话</button>
+    <pre id="voiceState"></pre>
+  </section>
+  <section>
     <h2>图片输入</h2>
     <input type="file" id="imageFile" accept="image/*" />
     <button onclick="sendImage()">发送图片到眼镜</button>
@@ -220,12 +226,15 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
   <script>
     let latestConnectedSessionId = null;
     let dialogShownForSession = null;
+    let pushToTalkSessionId = null;
+    let realtimeVoiceSessionId = null;
 
     async function refreshSnapshot() {
       const response = await fetch('/snapshot');
       const data = await response.json();
       document.getElementById('snapshot').textContent = JSON.stringify(data, null, 2);
       latestConnectedSessionId = (data.connected_session_ids || [])[0] || null;
+      document.getElementById('voiceState').textContent = JSON.stringify(data.server_snapshot.voice_sessions || [], null, 2);
       if (latestConnectedSessionId && dialogShownForSession !== latestConnectedSessionId) {
         dialogShownForSession = latestConnectedSessionId;
         document.getElementById('videoDialog').showModal();
@@ -244,6 +253,44 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({text}),
       });
+      await refreshSnapshot();
+    }
+
+    async function togglePushToTalk() {
+      const button = document.getElementById('pttButton');
+      if (!pushToTalkSessionId) {
+        const response = await fetch('/actions/voice/push-to-talk/start', { method: 'POST' });
+        const data = await response.json();
+        pushToTalkSessionId = data.result.session_id;
+        button.textContent = '结束对讲录音并发送';
+      } else {
+        await fetch('/actions/voice/push-to-talk/stop', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session_id: pushToTalkSessionId}),
+        });
+        pushToTalkSessionId = null;
+        button.textContent = '开始对讲录音';
+      }
+      await refreshSnapshot();
+    }
+
+    async function toggleRealtime() {
+      const button = document.getElementById('realtimeButton');
+      if (!realtimeVoiceSessionId) {
+        const response = await fetch('/actions/voice/realtime/start', { method: 'POST' });
+        const data = await response.json();
+        realtimeVoiceSessionId = data.result.voice_session_id;
+        button.textContent = '结束实时对话';
+      } else {
+        await fetch('/actions/voice/realtime/stop', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({voice_session_id: realtimeVoiceSessionId}),
+        });
+        realtimeVoiceSessionId = null;
+        button.textContent = '开始实时对话';
+      }
       await refreshSnapshot();
     }
 
@@ -304,6 +351,42 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
         result = post_json(f"{manager.glass_base_url}/device-api/test/input-text", {"text": payload["text"]})
         service_logger.info("send_text %s", json.dumps(payload, ensure_ascii=False))
         return {"ok": True, "result": result}
+
+    @app.post("/actions/voice/push-to-talk/start")
+    async def push_to_talk_start() -> dict:
+        manager: LocalStackManager = app.state.manager
+        result = post_json(f"{manager.glass_base_url}/device-api/voice/push-to-talk/start", {})
+        service_logger.info("push_to_talk_start %s", json.dumps(result, ensure_ascii=False))
+        return {"ok": True, "result": result["result"]}
+
+    @app.post("/actions/voice/push-to-talk/stop")
+    async def push_to_talk_stop(request: Request) -> dict:
+        manager: LocalStackManager = app.state.manager
+        payload = await request.json()
+        result = post_json(
+            f"{manager.glass_base_url}/device-api/voice/push-to-talk/stop",
+            {"session_id": payload["session_id"]},
+        )
+        service_logger.info("push_to_talk_stop %s", json.dumps(payload, ensure_ascii=False))
+        return {"ok": True, "result": result["result"]}
+
+    @app.post("/actions/voice/realtime/start")
+    async def realtime_start() -> dict:
+        manager: LocalStackManager = app.state.manager
+        result = post_json(f"{manager.glass_base_url}/device-api/voice/realtime/start", {})
+        service_logger.info("realtime_start %s", json.dumps(result, ensure_ascii=False))
+        return {"ok": True, "result": result["result"]}
+
+    @app.post("/actions/voice/realtime/stop")
+    async def realtime_stop(request: Request) -> dict:
+        manager: LocalStackManager = app.state.manager
+        payload = await request.json()
+        result = post_json(
+            f"{manager.glass_base_url}/device-api/voice/realtime/stop",
+            {"voice_session_id": payload["voice_session_id"]},
+        )
+        service_logger.info("realtime_stop %s", json.dumps(payload, ensure_ascii=False))
+        return {"ok": True, "result": result["result"]}
 
     @app.post("/actions/send-image")
     async def send_image(file: UploadFile = File(...), task_session_id: str | None = Form(None)) -> dict:
