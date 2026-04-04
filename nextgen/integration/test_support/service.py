@@ -92,7 +92,7 @@ class LocalStackManager:
                 cwd=PROJECT_ROOT,
             ),
         ]
-        self.logger.info("local_stack_started %s", json.dumps(self.get_process_states(), ensure_ascii=False))
+        self.logger.info("本机三端联调服务启动(local_stack_started) %s", json.dumps(self.get_process_states(), ensure_ascii=False))
         wait_for_http_ready(f"{self.server_base_url}/health", timeout_sec=12.0)
         wait_for_http_ready(f"{self.glass_base_url}/health", timeout_sec=12.0)
         wait_for_http_ready(f"{self.phone_base_url}/health", timeout_sec=12.0)
@@ -107,7 +107,7 @@ class LocalStackManager:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
-        self.logger.info("local_stack_stopped %s", json.dumps(self.get_process_states(), ensure_ascii=False))
+        self.logger.info("本机三端联调服务停止(local_stack_stopped) %s", json.dumps(self.get_process_states(), ensure_ascii=False))
 
     def get_process_states(self) -> List[Dict[str, Any]]:
         """获取进程状态快照。"""
@@ -341,7 +341,7 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
             f"{manager.server_base_url}/tasks/{session_id}/peer-link/orchestrate",
             {"stream_type": "image_stream"},
         )
-        service_logger.info("create_find_object_peer_link %s", json.dumps({"session_id": session_id}, ensure_ascii=False))
+        service_logger.info("创建找物长连接(create_find_object_peer_link) %s", json.dumps({"session_id": session_id}, ensure_ascii=False))
         return {"ok": True, "created": created, "orchestrated": orchestrated}
 
     @app.post("/actions/send-text")
@@ -349,14 +349,14 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
         payload = await request.json()
         manager: LocalStackManager = app.state.manager
         result = post_json(f"{manager.glass_base_url}/device-api/test/input-text", {"text": payload["text"]})
-        service_logger.info("send_text %s", json.dumps(payload, ensure_ascii=False))
+        service_logger.info("发送测试文本(send_text) %s", json.dumps(payload, ensure_ascii=False))
         return {"ok": True, "result": result}
 
     @app.post("/actions/voice/push-to-talk/start")
     async def push_to_talk_start() -> dict:
         manager: LocalStackManager = app.state.manager
         result = post_json(f"{manager.glass_base_url}/device-api/voice/push-to-talk/start", {})
-        service_logger.info("push_to_talk_start %s", json.dumps(result, ensure_ascii=False))
+        service_logger.info("开始对讲录音(push_to_talk_start) %s", json.dumps(result, ensure_ascii=False))
         return {"ok": True, "result": result["result"]}
 
     @app.post("/actions/voice/push-to-talk/stop")
@@ -367,14 +367,14 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
             f"{manager.glass_base_url}/device-api/voice/push-to-talk/stop",
             {"session_id": payload["session_id"]},
         )
-        service_logger.info("push_to_talk_stop %s", json.dumps(payload, ensure_ascii=False))
+        service_logger.info("结束对讲录音(push_to_talk_stop) %s", json.dumps(payload, ensure_ascii=False))
         return {"ok": True, "result": result["result"]}
 
     @app.post("/actions/voice/realtime/start")
     async def realtime_start() -> dict:
         manager: LocalStackManager = app.state.manager
         result = post_json(f"{manager.glass_base_url}/device-api/voice/realtime/start", {})
-        service_logger.info("realtime_start %s", json.dumps(result, ensure_ascii=False))
+        service_logger.info("开始实时对话(realtime_start) %s", json.dumps(result, ensure_ascii=False))
         return {"ok": True, "result": result["result"]}
 
     @app.post("/actions/voice/realtime/stop")
@@ -385,7 +385,7 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
             f"{manager.glass_base_url}/device-api/voice/realtime/stop",
             {"voice_session_id": payload["voice_session_id"]},
         )
-        service_logger.info("realtime_stop %s", json.dumps(payload, ensure_ascii=False))
+        service_logger.info("结束实时对话(realtime_stop) %s", json.dumps(payload, ensure_ascii=False))
         return {"ok": True, "result": result["result"]}
 
     @app.post("/actions/send-image")
@@ -410,7 +410,7 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
                 {"image_path": str(destination)},
             )
         service_logger.info(
-            "send_image %s",
+            "发送测试图片(send_image) %s",
             json.dumps({"file": file.filename, "task_session_id": task_session_id, "path": str(destination)}, ensure_ascii=False),
         )
         return {"ok": True, "result": result}
@@ -432,7 +432,7 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
             },
         )
         service_logger.info(
-            "upload_video %s",
+            "上传测试视频(upload_video) %s",
             json.dumps({"file": file.filename, "task_session_id": task_session_id, "fps_limit": fps_limit}, ensure_ascii=False),
         )
         return {"ok": True, "result": result}

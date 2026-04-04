@@ -36,6 +36,35 @@ class GlassRuntimeApp:
 
     name: str = "glass-runtime"
     device_id: str = "glass-001"
+    ACTION_LABELS = {
+        "runtime_started": "眼镜运行时启动",
+        "runtime_stopped": "眼镜运行时停止",
+        "server_base_url_configured": "配置服务器地址",
+        "local_camera_enabled": "启用本机摄像头",
+        "local_microphone_enabled": "启用本机麦克风",
+        "local_speaker_enabled": "启用本机喇叭",
+        "local_camera_frame_captured": "采集摄像头画面",
+        "local_microphone_audio_recorded": "完成麦克风录音",
+        "peer_link_connected": "建立任务级长连接",
+        "peer_link_connect_failed": "任务级长连接失败",
+        "peer_link_stopped": "关闭任务级长连接",
+        "peer_link_broken": "上报长连接断开",
+        "frame_analysis_sent": "发送找物分析结果",
+        "frame_analysis_send_failed": "发送找物分析失败",
+        "push_to_talk_recording_started": "开始对讲录音",
+        "push_to_talk_recording_stopped": "结束对讲录音并发送",
+        "realtime_voice_started": "开始实时对话",
+        "realtime_voice_stopped": "结束实时对话",
+        "voice_tts_chunk_played": "播放流式语音音频块",
+        "voice_tts_stopped": "停止语音播放",
+        "voice_server_message_received": "收到语音会话消息",
+        "voice_ws_closed": "语音会话连接关闭",
+        "stream_frame_detected": "处理原始图像帧",
+        "video_stream_sent": "开始或完成视频流发送",
+        "image_sent_to_peer": "发送单张图片到手机",
+        "test_text_forwarded": "转发测试文本到服务器",
+        "test_image_received": "收到测试图片",
+    }
 
     def start(self) -> None:
         """启动眼镜端运行时。
@@ -670,4 +699,5 @@ class GlassRuntimeApp:
 
         if not hasattr(self, "logger"):
             return
-        self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))
+        label = self.ACTION_LABELS.get(action, action)
+        self.logger.info("%s(%s) %s", label, action, json.dumps(payload, ensure_ascii=False))

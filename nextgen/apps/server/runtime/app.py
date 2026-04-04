@@ -30,6 +30,26 @@ class ServerRuntimeApp:
     """服务器端运行时应用。"""
 
     name: str = "server-runtime"
+    ACTION_LABELS = {
+        "runtime_started": "服务器启动",
+        "runtime_stopped": "服务器停止",
+        "device_registered": "设备注册",
+        "device_heartbeat": "设备心跳",
+        "peer_link_prepare": "开始协调长连接",
+        "peer_link_ready": "手机长连接入口已就绪",
+        "peer_link_status": "长连接状态更新",
+        "peer_link_stopped": "长连接关闭",
+        "control_session_created": "任务实例创建",
+        "peer_link_orchestrated": "长连接建立完成",
+        "peer_link_stop_and_notify": "长连接关闭并通知设备",
+        "task_state_applied": "任务状态更新",
+        "guidance_executed": "眼镜执行引导",
+        "peer_link_broken": "长连接异常断开",
+        "peer_link_recover_requested": "请求重建长连接",
+        "voice_event_received": "收到语音事件",
+        "voice_session_created": "创建语音会话",
+        "push_to_talk_audio_processed": "处理对讲录音",
+    }
 
     def start(self) -> None:
         """启动服务器端运行时。
@@ -528,11 +548,13 @@ class ServerRuntimeApp:
 
         if not hasattr(self, "logger"):
             return
-        self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))
+        label = self.ACTION_LABELS.get(action, action)
+        self.logger.info("%s(%s) %s", label, action, json.dumps(payload, ensure_ascii=False))
 
     def _log_debug(self, action: str, payload: Dict[str, Any]) -> None:
         """记录结构化调试日志。"""
 
         if not hasattr(self, "logger"):
             return
-        self.logger.debug("%s %s", action, json.dumps(payload, ensure_ascii=False))
+        label = self.ACTION_LABELS.get(action, action)
+        self.logger.debug("%s(%s) %s", label, action, json.dumps(payload, ensure_ascii=False))

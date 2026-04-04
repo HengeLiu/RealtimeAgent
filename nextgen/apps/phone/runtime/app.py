@@ -27,6 +27,16 @@ class PhoneRuntimeApp:
 
     name: str = "phone-runtime"
     device_id: str = "phone-001"
+    ACTION_LABELS = {
+        "runtime_started": "手机运行时启动",
+        "runtime_stopped": "手机运行时停止",
+        "server_base_url_configured": "配置服务器地址",
+        "peer_link_listener_prepared": "准备长连接监听入口",
+        "peer_stream_connected": "手机收到长连接建立",
+        "peer_stream_closed": "手机侧长连接关闭",
+        "find_object_frame_processed": "处理找物单帧结果",
+        "stream_frame_detected": "处理原始图片或视频帧",
+    }
 
     def start(self) -> None:
         """启动手机端运行时。
@@ -351,4 +361,5 @@ class PhoneRuntimeApp:
 
         if not hasattr(self, "logger"):
             return
-        self.logger.info("%s %s", action, json.dumps(payload, ensure_ascii=False))
+        label = self.ACTION_LABELS.get(action, action)
+        self.logger.info("%s(%s) %s", label, action, json.dumps(payload, ensure_ascii=False))
