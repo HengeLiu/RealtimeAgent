@@ -150,15 +150,27 @@ class ServerRuntimeApp:
             "link_state": link_state.to_dict(),
         }
 
-    def mark_peer_link_ready(self, session_id: str, listen_endpoint: NodeEndpoint) -> Dict[str, Any]:
+    def mark_peer_link_ready(
+        self,
+        session_id: str,
+        listen_endpoint: NodeEndpoint,
+        expires_at: str | None = None,
+    ) -> Dict[str, Any]:
         """记录手机已准备好任务级连接入口。"""
 
-        link_state = self.peer_link_coordinator.mark_phone_ready(session_id=session_id, listen_endpoint=listen_endpoint)
+        link_state = self.peer_link_coordinator.mark_phone_ready(
+            session_id=session_id,
+            listen_endpoint=listen_endpoint,
+            expires_at=expires_at,
+        )
         self._sync_session_link_status(session_id, link_state.to_dict(), phase="peer_link_listening")
-        self._log_info("peer_link_ready", {"session_id": session_id, "listen_endpoint": listen_endpoint.to_dict()})
+        self._log_info(
+            "peer_link_ready",
+            {"session_id": session_id, "listen_endpoint": listen_endpoint.to_dict(), "expires_at": expires_at},
+        )
         self.state_log_store.append_task_event(
             session_id=session_id,
-            event={"event_name": "peer_link_ready", "listen_endpoint": listen_endpoint.to_dict()},
+            event={"event_name": "peer_link_ready", "listen_endpoint": listen_endpoint.to_dict(), "expires_at": expires_at},
         )
         return {
             "task_session_id": session_id,

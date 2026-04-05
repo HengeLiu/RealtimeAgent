@@ -142,6 +142,7 @@ def build_server_control_app(runtime_app: ServerRuntimeApp | None = None) -> Fas
             **runtime.mark_peer_link_ready(
                 session_id=session_id,
                 listen_endpoint=NodeEndpoint(**payload["listen_endpoint"]),
+                expires_at=payload.get("expires_at"),
             ),
         }
 

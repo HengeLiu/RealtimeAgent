@@ -27,11 +27,17 @@ class PeerLinkCoordinator:
         self.links[session_id] = state
         return deepcopy(state)
 
-    def mark_phone_ready(self, session_id: str, listen_endpoint: NodeEndpoint) -> PeerLinkState:
+    def mark_phone_ready(
+        self,
+        session_id: str,
+        listen_endpoint: NodeEndpoint,
+        expires_at: Optional[str] = None,
+    ) -> PeerLinkState:
         """标记手机连接入口已准备完成。"""
 
         state = self._require(session_id)
         state.phone_listen_endpoint = listen_endpoint
+        state.phone_expires_at = expires_at
         state.phone_status = LinkStatus.LISTENING
         state.status = LinkStatus.LISTENING
         state.updated_at = datetime.now().astimezone().isoformat()

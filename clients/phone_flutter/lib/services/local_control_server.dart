@@ -7,6 +7,11 @@ typedef PeerFrameHandler = Future<Map<String, dynamic>> Function(
   String path,
   Map<String, dynamic> payload,
 );
+typedef PeerSocketStatusHandler = Future<void> Function(
+  String taskSessionId,
+  String status,
+  String? reason,
+);
 
 class LocalControlServer {
   LocalControlServer({
@@ -15,6 +20,7 @@ class LocalControlServer {
     required this.onPreparePeerLink,
     required this.onStopPeerLink,
     required this.onPeerFrame,
+    required this.onPeerSocketStatus,
   });
 
   final int port;
@@ -26,6 +32,7 @@ class LocalControlServer {
   ) onPreparePeerLink;
   final Future<Map<String, dynamic>> Function(String taskSessionId) onStopPeerLink;
   final PeerFrameHandler onPeerFrame;
+  final PeerSocketStatusHandler onPeerSocketStatus;
 
   HttpServer? _server;
   String? _localHost;
@@ -89,29 +96,39 @@ class LocalControlServer {
   }
 
   Future<void> _handlePeerSocket(String taskSessionId, WebSocket socket) async {
-    socket.listen((dynamic raw) async {
-      if (raw is! String) {
-        return;
-      }
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      final requestId = decoded['request_id'];
-      final path = decoded['path'] as String? ?? '';
-      final payload = (decoded['payload'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
-      try {
-        final responsePayload = await onPeerFrame(taskSessionId, path, payload);
-        socket.add(jsonEncode({
-          'request_id': requestId,
-          'status': 'ok',
-          'payload': responsePayload,
-        }));
-      } catch (error) {
-        socket.add(jsonEncode({
-          'request_id': requestId,
-          'status': 'error',
-          'error': error.toString(),
-        }));
-      }
-    });
+    unawaited(onPeerSocketStatus(taskSessionId, 'connected', null));
+    socket.listen(
+      (dynamic raw) async {
+        if (raw is! String) {
+          return;
+        }
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        final requestId = decoded['request_id'];
+        final path = decoded['path'] as String? ?? '';
+        final payload = (decoded['payload'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+        try {
+          final responsePayload = await onPeerFrame(taskSessionId, path, payload);
+          socket.add(jsonEncode({
+            'request_id': requestId,
+            'status': 'ok',
+            'payload': responsePayload,
+          }));
+        } catch (error) {
+          socket.add(jsonEncode({
+            'request_id': requestId,
+            'status': 'error',
+            'error': error.toString(),
+          }));
+        }
+      },
+      onDone: () {
+        unawaited(onPeerSocketStatus(taskSessionId, 'closed', null));
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        unawaited(onPeerSocketStatus(taskSessionId, 'broken', error.toString()));
+      },
+      cancelOnError: true,
+    );
   }
 
   Future<void> _writeJson(HttpResponse response, Map<String, dynamic> payload) async {

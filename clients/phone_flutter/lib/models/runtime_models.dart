@@ -26,6 +26,8 @@ class PeerSessionState {
     required this.streamType,
     required this.status,
     this.listenEndpoint,
+    this.expiresAt,
+    this.lastError,
   });
 
   final String sessionId;
@@ -33,10 +35,14 @@ class PeerSessionState {
   final String streamType;
   final String status;
   final Map<String, dynamic>? listenEndpoint;
+  final String? expiresAt;
+  final String? lastError;
 
   PeerSessionState copyWith({
     String? status,
     Map<String, dynamic>? listenEndpoint,
+    String? expiresAt,
+    String? lastError,
   }) {
     return PeerSessionState(
       sessionId: sessionId,
@@ -44,6 +50,8 @@ class PeerSessionState {
       streamType: streamType,
       status: status ?? this.status,
       listenEndpoint: listenEndpoint ?? this.listenEndpoint,
+      expiresAt: expiresAt ?? this.expiresAt,
+      lastError: lastError ?? this.lastError,
     );
   }
 }

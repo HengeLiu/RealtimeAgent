@@ -59,6 +59,7 @@ class PhoneRuntimeController {
         onPreparePeerLink: _handlePreparePeerLink,
         onStopPeerLink: _handleStopPeerLink,
         onPeerFrame: _handlePeerFrame,
+        onPeerSocketStatus: _handlePeerSocketStatus,
       );
       await _server!.start();
       _appendLog('local_control_server_started: host=${_server?.localHost} port=$listenPort');
@@ -193,6 +194,7 @@ class PhoneRuntimeController {
     String peerDeviceId,
     String streamType,
   ) async {
+    final expiresAt = DateTime.now().add(const Duration(minutes: 5)).toIso8601String();
     final endpoint = ControlEndpoint(
       host: _server?.localHost ?? '127.0.0.1',
       port: listenPort,
@@ -205,9 +207,27 @@ class PhoneRuntimeController {
       streamType: streamType,
       status: 'listening',
       listenEndpoint: endpoint.toJson(),
+      expiresAt: expiresAt,
     );
     _findObjectTasks.putIfAbsent(taskSessionId, () => FindObjectTask(targetName: '手机'));
     _appendLog('prepare_peer_link: $taskSessionId');
+    unawaited(
+      _api.reportPeerLinkReady(
+        serverBaseUrl: serverBaseUrl,
+        sessionId: taskSessionId,
+        listenEndpoint: endpoint,
+        streamType: streamType,
+        expiresAt: expiresAt,
+      ),
+    );
+    unawaited(
+      _api.reportPeerLinkStatus(
+        serverBaseUrl: serverBaseUrl,
+        sessionId: taskSessionId,
+        runtime: 'phone',
+        status: 'listening',
+      ),
+    );
     unawaited(
       _api.reportTaskState(
         serverBaseUrl: serverBaseUrl,
@@ -221,7 +241,9 @@ class PhoneRuntimeController {
       'task_session_id': taskSessionId,
       'runtime': 'phone',
       'status': 'listening',
+      'stream_type': streamType,
       'listen_endpoint': endpoint.toJson(),
+      'expires_at': expiresAt,
     };
   }
 
@@ -232,6 +254,14 @@ class PhoneRuntimeController {
     }
     _findObjectTasks.remove(taskSessionId);
     _appendLog('stop_peer_link: $taskSessionId');
+    unawaited(
+      _api.reportPeerLinkStatus(
+        serverBaseUrl: serverBaseUrl,
+        sessionId: taskSessionId,
+        runtime: 'phone',
+        status: 'closed',
+      ),
+    );
     unawaited(
       _api.reportTaskState(
         serverBaseUrl: serverBaseUrl,
@@ -253,19 +283,6 @@ class PhoneRuntimeController {
     String path,
     Map<String, dynamic> payload,
   ) async {
-    final session = _peerSessions[taskSessionId];
-    if (session != null) {
-      _peerSessions[taskSessionId] = session.copyWith(status: 'connected');
-    }
-    unawaited(
-      _api.reportTaskState(
-        serverBaseUrl: serverBaseUrl,
-        sessionId: taskSessionId,
-        status: 'running',
-        phase: 'stream_connected',
-        summary: <String, dynamic>{'status': 'connected'},
-      ),
-    );
     _appendLog('peer_frame: $taskSessionId $path');
     if (path == '/health') {
       return {
@@ -385,6 +402,60 @@ class PhoneRuntimeController {
       'status': 'ignored',
       'path': path,
     };
+  }
+
+  Future<void> _handlePeerSocketStatus(
+    String taskSessionId,
+    String status,
+    String? reason,
+  ) async {
+    final session = _peerSessions[taskSessionId];
+    if (session != null) {
+      _peerSessions[taskSessionId] = session.copyWith(status: status, lastError: reason);
+    }
+    _appendLog('peer_socket_status: $taskSessionId status=$status reason=${reason ?? "-"}');
+    if (status == 'connected') {
+      unawaited(
+        _api.reportPeerLinkStatus(
+          serverBaseUrl: serverBaseUrl,
+          sessionId: taskSessionId,
+          runtime: 'phone',
+          status: 'connected',
+        ),
+      );
+      unawaited(
+        _api.reportTaskState(
+          serverBaseUrl: serverBaseUrl,
+          sessionId: taskSessionId,
+          status: 'running',
+          phase: 'stream_connected',
+          summary: <String, dynamic>{'status': 'connected'},
+        ),
+      );
+      return;
+    }
+    if (status == 'closed') {
+      unawaited(
+        _api.reportPeerLinkStatus(
+          serverBaseUrl: serverBaseUrl,
+          sessionId: taskSessionId,
+          runtime: 'phone',
+          status: 'closed',
+        ),
+      );
+      return;
+    }
+    if (status == 'broken') {
+      unawaited(
+        _api.reportPeerLinkBroken(
+          serverBaseUrl: serverBaseUrl,
+          sessionId: taskSessionId,
+          runtime: 'phone',
+          reason: reason ?? 'peer_socket_error',
+          autoRecover: false,
+        ),
+      );
+    }
   }
 
   ControlEndpoint? _buildEndpoint() {

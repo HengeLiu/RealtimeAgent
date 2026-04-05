@@ -86,4 +86,67 @@ class ControlApiService {
         .timeout(_requestTimeout);
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  Future<Map<String, dynamic>> reportPeerLinkReady({
+    required String serverBaseUrl,
+    required String sessionId,
+    required ControlEndpoint listenEndpoint,
+    required String streamType,
+    required String expiresAt,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('${normalizeBaseUrl(serverBaseUrl)}/tasks/$sessionId/peer-link/ready'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'listen_endpoint': listenEndpoint.toJson(),
+            'stream_type': streamType,
+            'expires_at': expiresAt,
+          }),
+        )
+        .timeout(_requestTimeout);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reportPeerLinkStatus({
+    required String serverBaseUrl,
+    required String sessionId,
+    required String runtime,
+    required String status,
+    String? reason,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('${normalizeBaseUrl(serverBaseUrl)}/tasks/$sessionId/peer-link/status'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'runtime': runtime,
+            'status': status,
+            if (reason != null) 'reason': reason,
+          }),
+        )
+        .timeout(_requestTimeout);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reportPeerLinkBroken({
+    required String serverBaseUrl,
+    required String sessionId,
+    required String runtime,
+    required String reason,
+    bool autoRecover = false,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('${normalizeBaseUrl(serverBaseUrl)}/tasks/$sessionId/peer-link/broken'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'runtime': runtime,
+            'reason': reason,
+            'auto_recover': autoRecover,
+          }),
+        )
+        .timeout(_requestTimeout);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
 }

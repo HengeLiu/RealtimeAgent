@@ -96,6 +96,7 @@ class PeerLinkState:
     stream_type: str
     status: LinkStatus = LinkStatus.PENDING
     phone_listen_endpoint: Optional[NodeEndpoint] = None
+    phone_expires_at: Optional[str] = None
     glass_status: LinkStatus = LinkStatus.PENDING
     phone_status: LinkStatus = LinkStatus.PENDING
     connect_attempt_count: int = 0
@@ -112,6 +113,7 @@ class PeerLinkState:
             "stream_type": self.stream_type,
             "status": self.status.value,
             "phone_listen_endpoint": self.phone_listen_endpoint.to_dict() if self.phone_listen_endpoint else None,
+            "phone_expires_at": self.phone_expires_at,
             "glass_status": self.glass_status.value,
             "phone_status": self.phone_status.value,
             "connect_attempt_count": self.connect_attempt_count,
