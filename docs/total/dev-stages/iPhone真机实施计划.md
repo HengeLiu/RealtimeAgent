@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-本文档用于约束手机端从当前 Python / 原型 Flutter 形态迁移到 iPhone 真机运行的实施路径。
+本文档用于约束手机端从历史 Python / 原型 Flutter 形态迁移到 iPhone 真机运行的实施路径。
 
 本计划的目标不是一步到位把所有检测逻辑都迁到 iOS，而是先完成：
 
@@ -16,20 +16,19 @@
 
 ## 2. 当前现实约束
 
-截至 2026-04-04，仓库当前状态如下：
+截至 2026-04-05，仓库当前状态如下：
 
-- 已有手机端 Python 参考实现：
-  - [nextgen/apps/phone/runtime/app.py](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/nextgen/apps/phone/runtime/app.py)
-  - [nextgen/apps/phone/runtime/http_control_app.py](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/nextgen/apps/phone/runtime/http_control_app.py)
+- Python 手机模拟运行时已从 `nextgen/` 中删除
 - 已有 Flutter 原型可参考：
   - [connection-tests/flutter_app](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/connection-tests/flutter_app)
-- 本机当前没有 Flutter CLI
-- 本机当前没有完整 Xcode 开发目录
+- 已有正式 Flutter 手机端目录：
+  - [clients/phone_flutter](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/clients/phone_flutter)
+- 当前仍需补齐 Flutter + Xcode 真机运行环境
 
 因此当前实施策略为：
 
-1. 先在仓库中落正式 Flutter 手机端目录和代码骨架
-2. 后续在具备 Flutter + Xcode 的机器上完成 `flutter pub get`、iOS 工程生成、签名和真机运行
+1. 继续以 `clients/phone_flutter/` 为唯一手机端实现目录
+2. 在具备 Flutter + Xcode 的机器上完成 `flutter pub get`、iOS 工程生成、签名和真机运行
 
 ---
 
@@ -86,6 +85,12 @@
 ## 4. 当前阶段实施内容
 
 当前这一轮已完成阶段 A 和阶段 B 的最小链路，开始推进阶段 C 的后端抽象。
+
+并且已经完成：
+
+- 删除 `nextgen/apps/phone` Python 手机模拟运行时代码
+- 删除依赖 Python 手机模拟的启动脚本和 demo
+- 本机测试支持服务改为只启动 server + glass，iPhone 真机需单独运行 Flutter App
 
 明确不做：
 

@@ -1,4 +1,3 @@
-import '../models/detection_models.dart';
 import '../models/detector_backend_models.dart';
 import 'detector_backends/coreml_detector_backend.dart';
 import 'detector_backends/detector_backend.dart';

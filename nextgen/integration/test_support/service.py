@@ -24,19 +24,17 @@ class LocalStackManager:
     """本机三进程联调管理器。
 
     主要功能：
-    - 启动和停止 server / glass / phone 三个本机进程
+    - 启动和停止 server / glass 两个本机进程
     - 提供服务健康检查和状态快照能力
     """
 
-    def __init__(self, server_port: int, glass_port: int, phone_port: int, logger: logging.Logger) -> None:
+    def __init__(self, server_port: int, glass_port: int, logger: logging.Logger) -> None:
         """初始化管理器。"""
 
         self.server_port = server_port
         self.glass_port = glass_port
-        self.phone_port = phone_port
         self.server_base_url = f"http://127.0.0.1:{server_port}"
         self.glass_base_url = f"http://127.0.0.1:{glass_port}"
-        self.phone_base_url = f"http://127.0.0.1:{phone_port}"
         self.logger = logger
         self.processes: List[subprocess.Popen] = []
 
@@ -74,28 +72,10 @@ class LocalStackManager:
                 ],
                 cwd=PROJECT_ROOT,
             ),
-            subprocess.Popen(
-                [
-                    sys.executable,
-                    "scripts/run_phone_control_runtime.py",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(self.phone_port),
-                    "--advertise-host",
-                    "127.0.0.1",
-                    "--server-base-url",
-                    self.server_base_url,
-                    "--log-file",
-                    "nextgen/apps/phone/logs/phone-runtime.log",
-                ],
-                cwd=PROJECT_ROOT,
-            ),
         ]
-        self.logger.info("本机三端联调服务启动(local_stack_started) %s", json.dumps(self.get_process_states(), ensure_ascii=False))
+        self.logger.info("本机联调服务启动(local_stack_started) %s", json.dumps(self.get_process_states(), ensure_ascii=False))
         wait_for_http_ready(f"{self.server_base_url}/health", timeout_sec=12.0)
         wait_for_http_ready(f"{self.glass_base_url}/health", timeout_sec=12.0)
-        wait_for_http_ready(f"{self.phone_base_url}/health", timeout_sec=12.0)
 
     def stop(self) -> None:
         """停止三端进程。"""
@@ -107,13 +87,13 @@ class LocalStackManager:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
-        self.logger.info("本机三端联调服务停止(local_stack_stopped) %s", json.dumps(self.get_process_states(), ensure_ascii=False))
+        self.logger.info("本机联调服务停止(local_stack_stopped) %s", json.dumps(self.get_process_states(), ensure_ascii=False))
 
     def get_process_states(self) -> List[Dict[str, Any]]:
         """获取进程状态快照。"""
 
         items = []
-        for name, process in zip(["server", "glass", "phone"], self.processes):
+        for name, process in zip(["server", "glass"], self.processes):
             items.append(
                 {
                     "name": name,
@@ -137,7 +117,6 @@ class LocalStackManager:
         return {
             "server_base_url": self.server_base_url,
             "glass_base_url": self.glass_base_url,
-            "phone_base_url": self.phone_base_url,
             "processes": self.get_process_states(),
             "server_snapshot": server_snapshot,
             "connected_session_ids": connected_session_ids,
@@ -155,14 +134,14 @@ class LocalStackManager:
         return "手机"
 
 
-def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, phone_port: int = 18492, logger: logging.Logger | None = None) -> FastAPI:
+def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, logger: logging.Logger | None = None) -> FastAPI:
     """构造测试支持服务。"""
 
     service_logger = logger or logging.getLogger("nextgen.test_support")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        manager = LocalStackManager(server_port=server_port, glass_port=glass_port, phone_port=phone_port, logger=service_logger)
+        manager = LocalStackManager(server_port=server_port, glass_port=glass_port, logger=service_logger)
         manager.start()
         app.state.manager = manager
         yield
@@ -198,6 +177,7 @@ def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, ph
   <h1>本机联调测试支持服务</h1>
   <section>
     <h2>控制台</h2>
+    <p>当前页面只会自动启动 server 和 glass。手机端请在 iPhone 上运行 Flutter App，并指向下面的 server 地址。</p>
     <button onclick="createPeerLink()">创建找物长连接</button>
     <pre id="snapshot"></pre>
   </section>

@@ -5,11 +5,11 @@ from nextgen.apps.glass.execution.executor_bus import GlassExecutorBus
 from nextgen.apps.glass.gateway.glass_gateway import GlassGateway
 from nextgen.apps.glass.sensors.event_detector import GlassEventDetector
 from nextgen.apps.glass.sensors.sensor_hub import GlassSensorHub
-from nextgen.apps.phone.gateway.phone_gateway import PhoneGateway
-from nextgen.apps.phone.skills.object_detection_skill import ObjectDetectionSkill
-from nextgen.apps.phone.tasks.find_object_task import FindObjectTask
-from nextgen.apps.phone.tasks.local_task_center import LocalTaskCenter
 from nextgen.apps.server.agent.agent_center import AgentCenter
+from nextgen.apps.server.conversation.dashscope_asr_service import DashscopeAsrService
+from nextgen.apps.server.conversation.dashscope_chat_service import DashscopeChatService
+from nextgen.apps.server.conversation.dashscope_tts_service import DashscopeTtsService
+from nextgen.apps.server.conversation.voice_session_manager import VoiceSessionManager
 from nextgen.apps.server.gateway.server_gateway import ServerGateway
 from nextgen.apps.server.mcp.mcp_registry import ServerMcpRegistry
 from nextgen.apps.server.skills.create_hybrid_task import CreateHybridTaskSkill
@@ -27,16 +27,21 @@ def test_all_stage_one_skeleton_classes_can_be_imported() -> None:
         GlassEventDetector(device_id="glass-001"),
         GlassExecutorBus(),
         GlassDeviceControl(),
-        PhoneGateway(),
-        LocalTaskCenter(),
-        FindObjectTask(target_name="手机"),
-        ObjectDetectionSkill(),
         ServerGateway(),
         AgentCenter(),
+        DashscopeAsrService(api_key="test"),
+        DashscopeTtsService(api_key="test"),
+        DashscopeChatService(api_key="test"),
         BackgroundTaskCenter(),
         ServerSkillRegistry(),
         CreateHybridTaskSkill(),
         ServerMcpRegistry(),
         StateLogStore(),
+        VoiceSessionManager(
+            asr_service=object(),
+            tts_service=object(),
+            chat_service=object(),
+            agent_center=AgentCenter(),
+        ),
     ]
     assert len(instances) == 16

@@ -7,7 +7,7 @@
 - 作为 iPhone 真机运行的手机端通信壳
 - 承接 server 注册 / 心跳 / 本地控制服务 / 任务级 WebSocket 入口
 - 承接找物任务的最小 Dart 侧处理链路
-- 为后续迁移 `nextgen/apps/phone` 的能力提供 Dart 版本落位
+- 作为仓库当前唯一正式手机端实现
 
 ## 当前已落代码
 
@@ -25,6 +25,7 @@
 - 任务级 WebSocket 入口
 - `/stream/frame` 的最小图片帧解码与启发式找物处理
 - `/find-object/frame-analysis` 的 Dart 侧引导建议生成
+- 任务状态回传 server
 - 可切换的检测后端抽象层
 - CoreML / TFLite / ONNX Runtime Mobile 后端占位与配置落位
 
@@ -62,7 +63,7 @@ flutter run -d <your-iphone-device-id>
 
 - 历史原型：
   - [connection-tests/flutter_app](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/connection-tests/flutter_app)
-- 当前 Python 参考实现：
-  - [nextgen/apps/phone](/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/nextgen/apps/phone)
+- 当前正式实现：
+  - 本目录
 
-正式手机端后续统一以本目录为准。
+仓库中的 Python 手机模拟运行时已删除，手机端后续统一以本目录为准。

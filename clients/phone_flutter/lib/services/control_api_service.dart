@@ -54,4 +54,26 @@ class ControlApiService {
     final response = await http.get(Uri.parse('${normalizeBaseUrl(serverBaseUrl)}/snapshot'));
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  Future<Map<String, dynamic>> reportTaskState({
+    required String serverBaseUrl,
+    required String sessionId,
+    required String status,
+    required String phase,
+    required Map<String, dynamic> summary,
+    Map<String, dynamic>? result,
+  }) async {
+    final response = await http.post(
+      Uri.parse('${normalizeBaseUrl(serverBaseUrl)}/tasks/$sessionId/state'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'runtime': 'phone',
+        'status': status,
+        'phase': phase,
+        'summary': summary,
+        if (result != null) 'result': result,
+      }),
+    );
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
 }

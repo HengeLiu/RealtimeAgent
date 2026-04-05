@@ -19,6 +19,8 @@ class _PhoneRuntimeScreenState extends State<PhoneRuntimeScreen> {
   Map<String, dynamic>? _snapshot;
   bool _starting = false;
 
+  DetectorBackendType? get _selectedBackend => _runtime?.selectedBackend;
+
   @override
   void dispose() {
     _runtime?.stop();
@@ -111,30 +113,47 @@ class _PhoneRuntimeScreenState extends State<PhoneRuntimeScreen> {
               title: '检测后端',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: runtime.detectorConfigs
-                    .map(
-                      (config) => RadioListTile<DetectorBackendType>(
-                        value: config.type,
-                        groupValue: runtime.selectedBackend,
-                        onChanged: config.enabled
-                            ? (value) {
-                                if (value == null) {
-                                  return;
-                                }
-                                setState(() {
-                                  runtime.selectDetectorBackend(value);
-                                });
-                              }
-                            : null,
-                        title: Text(config.displayName),
-                        subtitle: Text(
-                          config.enabled
-                              ? '可用'
-                              : '占位未启用${config.modelAssetPath == null ? '' : '\n${config.modelAssetPath}'}',
-                        ),
+                children: [
+                  DropdownButtonFormField<DetectorBackendType>(
+                    initialValue: _selectedBackend,
+                    decoration: const InputDecoration(
+                      labelText: '检测后端',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: runtime.detectorConfigs
+                        .map(
+                          (config) => DropdownMenuItem<DetectorBackendType>(
+                            value: config.type,
+                            enabled: config.enabled,
+                            child: Text(
+                              config.enabled
+                                  ? config.displayName
+                                  : '${config.displayName}（未启用）',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() {
+                        runtime.selectDetectorBackend(value);
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  ...runtime.detectorConfigs.map(
+                    (config) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        '${config.displayName}：'
+                        '${config.enabled ? '可用' : '占位未启用'}'
+                        '${config.modelAssetPath == null ? '' : '\n模型路径：${config.modelAssetPath}'}',
                       ),
-                    )
-                    .toList(),
+                    ),
+                  ),
+                ],
               ),
             ),
           if (runtime != null) const SizedBox(height: 16),

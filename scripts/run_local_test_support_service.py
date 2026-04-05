@@ -23,7 +23,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=18400)
     parser.add_argument("--server-port", type=int, default=18490)
     parser.add_argument("--glass-port", type=int, default=18491)
-    parser.add_argument("--phone-port", type=int, default=18492)
     parser.add_argument("--log-file", default="nextgen/integration/test_support/logs/test-support.log")
     return parser
 
@@ -36,7 +35,6 @@ def main() -> None:
     app = build_test_support_app(
         server_port=args.server_port,
         glass_port=args.glass_port,
-        phone_port=args.phone_port,
         logger=logger,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

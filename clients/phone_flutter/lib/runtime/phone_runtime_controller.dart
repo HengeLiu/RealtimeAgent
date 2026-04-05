@@ -115,6 +115,15 @@ class PhoneRuntimeController {
     );
     _findObjectTasks.putIfAbsent(taskSessionId, () => FindObjectTask(targetName: '手机'));
     _appendLog('prepare_peer_link: $taskSessionId');
+    unawaited(
+      _api.reportTaskState(
+        serverBaseUrl: serverBaseUrl,
+        sessionId: taskSessionId,
+        status: 'starting',
+        phase: 'preparing_peer_link',
+        summary: <String, dynamic>{'status': 'listening'},
+      ),
+    );
     return {
       'task_session_id': taskSessionId,
       'runtime': 'phone',
@@ -130,6 +139,15 @@ class PhoneRuntimeController {
     }
     _findObjectTasks.remove(taskSessionId);
     _appendLog('stop_peer_link: $taskSessionId');
+    unawaited(
+      _api.reportTaskState(
+        serverBaseUrl: serverBaseUrl,
+        sessionId: taskSessionId,
+        status: 'completed',
+        phase: 'peer_link_closed',
+        summary: <String, dynamic>{'status': 'closed'},
+      ),
+    );
     return {
       'task_session_id': taskSessionId,
       'runtime': 'phone',
@@ -146,6 +164,15 @@ class PhoneRuntimeController {
     if (session != null) {
       _peerSessions[taskSessionId] = session.copyWith(status: 'connected');
     }
+    unawaited(
+      _api.reportTaskState(
+        serverBaseUrl: serverBaseUrl,
+        sessionId: taskSessionId,
+        status: 'running',
+        phase: 'stream_connected',
+        summary: <String, dynamic>{'status': 'connected'},
+      ),
+    );
     _appendLog('peer_frame: $taskSessionId $path');
     if (path == '/health') {
       return {
@@ -174,17 +201,28 @@ class PhoneRuntimeController {
       _appendLog(
         'find_object_stream_frame: $taskSessionId backend=${backend.displayName} found=${analysis.found} candidateCount=${analysis.candidateCount} hint=${hint.text}',
       );
+      final stateSummary = <String, dynamic>{
+        'target_name': targetName,
+        'found': analysis.found,
+        'position': analysis.objectObservation?.position ?? 'unknown',
+        'phase': task.phase,
+      };
+      unawaited(
+        _api.reportTaskState(
+          serverBaseUrl: serverBaseUrl,
+          sessionId: taskSessionId,
+          status: (payload['mark_completed'] == true) ? 'completed' : 'running',
+          phase: task.phase,
+          summary: stateSummary,
+          result: (payload['mark_completed'] == true) ? <String, dynamic>{'target_name': targetName} : null,
+        ),
+      );
       return {
         'task_session_id': taskSessionId,
         'status': (payload['mark_completed'] == true) ? 'completed' : 'running',
         'frame_index': payload['frame_index'],
         'phase': task.phase,
-        'state_summary': {
-          'target_name': targetName,
-          'found': analysis.found,
-          'position': analysis.objectObservation?.position ?? 'unknown',
-          'phase': task.phase,
-        },
+        'state_summary': stateSummary,
         'hint': hint.toJson(),
         'analysis': analysis.toJson(),
         'backend': _selectedBackend.name,
@@ -226,16 +264,26 @@ class PhoneRuntimeController {
       _appendLog(
         'find_object_frame_analysis: $taskSessionId found=${analysis.found} candidateCount=${analysis.candidateCount} hint=${hint.text}',
       );
+      final stateSummary = <String, dynamic>{
+        'target_name': targetName,
+        'found': analysis.found,
+        'position': analysis.objectObservation?.position ?? 'unknown',
+        'phase': task.phase,
+      };
+      unawaited(
+        _api.reportTaskState(
+          serverBaseUrl: serverBaseUrl,
+          sessionId: taskSessionId,
+          status: 'running',
+          phase: task.phase,
+          summary: stateSummary,
+        ),
+      );
       return {
         'task_session_id': taskSessionId,
         'status': 'ok',
         'phase': task.phase,
-        'state_summary': {
-          'target_name': targetName,
-          'found': analysis.found,
-          'position': analysis.objectObservation?.position ?? 'unknown',
-          'phase': task.phase,
-        },
+        'state_summary': stateSummary,
         'hint': hint.toJson(),
       };
     }
