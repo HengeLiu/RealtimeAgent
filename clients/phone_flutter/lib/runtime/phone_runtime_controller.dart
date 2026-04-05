@@ -9,6 +9,7 @@ import '../models/runtime_models.dart';
 import '../services/control_api_service.dart';
 import '../services/detector_backend_registry.dart';
 import '../services/local_control_server.dart';
+import '../services/native_network_probe_service.dart';
 import '../tasks/find_object_task.dart';
 
 class PhoneRuntimeController {
@@ -24,6 +25,7 @@ class PhoneRuntimeController {
 
   final ControlApiService _api = ControlApiService();
   final DetectorBackendRegistry _detectorRegistry = DetectorBackendRegistry();
+  final NativeNetworkProbeService _nativeProbeService = NativeNetworkProbeService();
   final List<String> _logs = <String>[];
   final Map<String, PeerSessionState> _peerSessions = <String, PeerSessionState>{};
   final Map<String, FindObjectTask> _findObjectTasks = <String, FindObjectTask>{};
@@ -45,6 +47,8 @@ class PhoneRuntimeController {
       _appendLog('network_interfaces: ${jsonEncode(interfaceSummary)}');
       final probeSummary = await probeServerConnectivity();
       _appendLog('server_probe: ${jsonEncode(probeSummary)}');
+      final nativeProbeSummary = await probeServerNativeConnectivity();
+      _appendLog('native_server_probe: ${jsonEncode(nativeProbeSummary)}');
       _server = LocalControlServer(
         port: listenPort,
         deviceId: deviceId,
@@ -166,6 +170,18 @@ class PhoneRuntimeController {
     }
 
     return result;
+  }
+
+  Future<Map<String, dynamic>> probeServerNativeConnectivity() async {
+    final normalizedBaseUrl = _api.normalizeBaseUrl(serverBaseUrl);
+    try {
+      return await _nativeProbeService.probe('$normalizedBaseUrl/health');
+    } catch (error) {
+      return <String, dynamic>{
+        'target': '$normalizedBaseUrl/health',
+        'native_probe_error': error.toString(),
+      };
+    }
   }
 
   Future<Map<String, dynamic>> _handlePreparePeerLink(
