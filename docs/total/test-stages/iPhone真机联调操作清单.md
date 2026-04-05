@@ -225,8 +225,14 @@ http://127.0.0.1:18490/status
 优先查看：
 
 - App 页面中的 `Runtime Logs`
+- App 页面 `本机状态` 中显示的 `logFile` 路径
 - `flutter run` 终端输出
 - Xcode 控制台输出
+
+说明：
+
+- iPhone 真机日志当前会写入 App 沙盒的 Documents 目录
+- 不会像 `server` / `glass` 一样直接写回 Mac 仓库里的 `clients/phone_flutter/logs/`
 
 重点关注这些关键字：
 

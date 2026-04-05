@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class LocalStackManager:
-    """本机三进程联调管理器。
+    """本机联调管理器。
 
     主要功能：
     - 启动和停止 server / glass 两个本机进程
@@ -48,7 +48,7 @@ class LocalStackManager:
         self.processes: List[subprocess.Popen] = []
 
     def start(self) -> None:
-        """启动三端进程。"""
+        """启动本机 server / glass 进程。"""
 
         self.processes = [
             subprocess.Popen(
@@ -87,7 +87,7 @@ class LocalStackManager:
         wait_for_http_ready(f"{self.glass_base_url}/health", timeout_sec=12.0)
 
     def stop(self) -> None:
-        """停止三端进程。"""
+        """停止本机 server / glass 进程。"""
 
         for process in reversed(self.processes):
             process.terminate()
@@ -198,7 +198,7 @@ def build_test_support_app(
   <h1>本机联调测试支持服务</h1>
   <section>
     <h2>控制台</h2>
-    <p>当前页面只会自动启动 server 和 glass。手机端请在 iPhone 上运行 Flutter App，并指向下面的 server 地址。</p>
+    <p>当前页面会自动启动本机 server 和 glass。手机端请在 iPhone 上运行 Flutter App，并指向下面的 server 地址。</p>
     <button onclick="createPeerLink()">创建找物长连接</button>
     <pre id="snapshot"></pre>
   </section>
