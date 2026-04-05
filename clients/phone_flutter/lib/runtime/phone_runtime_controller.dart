@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import '../models/detection_models.dart';
@@ -38,23 +39,39 @@ class PhoneRuntimeController {
   List<DetectorBackendConfig> get detectorConfigs => _detectorRegistry.availableConfigs;
 
   Future<void> start() async {
-    _server = LocalControlServer(
-      port: listenPort,
-      deviceId: deviceId,
-      onPreparePeerLink: _handlePreparePeerLink,
-      onStopPeerLink: _handleStopPeerLink,
-      onPeerFrame: _handlePeerFrame,
-    );
-    await _server!.start();
-    await register();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      unawaited(heartbeat());
-    });
+    try {
+      _appendLog('runtime_starting: server=$serverBaseUrl listenPort=$listenPort');
+      final interfaceSummary = await collectInterfaceSummary();
+      _appendLog('network_interfaces: ${jsonEncode(interfaceSummary)}');
+      final probeSummary = await probeServerConnectivity();
+      _appendLog('server_probe: ${jsonEncode(probeSummary)}');
+      _server = LocalControlServer(
+        port: listenPort,
+        deviceId: deviceId,
+        onPreparePeerLink: _handlePreparePeerLink,
+        onStopPeerLink: _handleStopPeerLink,
+        onPeerFrame: _handlePeerFrame,
+      );
+      await _server!.start();
+      _appendLog('local_control_server_started: host=${_server?.localHost} port=$listenPort');
+      await register();
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        unawaited(heartbeat());
+      });
+      _appendLog('runtime_started');
+    } catch (error) {
+      _appendLog('runtime_start_failed: $error');
+      await stop();
+      rethrow;
+    }
   }
 
   Future<void> stop() async {
     _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     await _server?.stop();
+    _server = null;
+    _appendLog('runtime_stopped');
   }
 
   void selectDetectorBackend(DetectorBackendType backendType) {
@@ -92,6 +109,62 @@ class PhoneRuntimeController {
   Future<Map<String, dynamic>> fetchSnapshot() async {
     final result = await _api.fetchSnapshot(serverBaseUrl);
     _appendLog('snapshot: fetched');
+    return result;
+  }
+
+  Future<List<Map<String, dynamic>>> collectInterfaceSummary() async {
+    final interfaces = await NetworkInterface.list(
+      includeLoopback: false,
+      type: InternetAddressType.any,
+    );
+    return interfaces
+        .map(
+          (interface) => {
+            'name': interface.name,
+            'addresses': interface.addresses
+                .map(
+                  (address) => {
+                    'address': address.address,
+                    'type': address.type.name,
+                  },
+                )
+                .toList(),
+          },
+        )
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> probeServerConnectivity() async {
+    final normalizedBaseUrl = _api.normalizeBaseUrl(serverBaseUrl);
+    final uri = Uri.parse('$normalizedBaseUrl/health');
+    final result = <String, dynamic>{
+      'target': uri.toString(),
+      'host': uri.host,
+      'port': uri.port,
+    };
+
+    try {
+      final socket = await Socket.connect(uri.host, uri.port, timeout: const Duration(seconds: 3));
+      result['socket_connect'] = 'ok';
+      await socket.close();
+    } catch (error) {
+      result['socket_connect'] = 'error';
+      result['socket_error'] = error.toString();
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    try {
+      final request = await client.getUrl(uri);
+      final response = await request.close();
+      result['http_status'] = response.statusCode;
+      result['http_reason'] = response.reasonPhrase;
+      await response.drain();
+    } catch (error) {
+      result['http_error'] = error.toString();
+    } finally {
+      client.close(force: true);
+    }
+
     return result;
   }
 

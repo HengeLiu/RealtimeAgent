@@ -31,8 +31,8 @@
 
 ## 当前未完成
 
-- 本机没有 Flutter CLI，尚未生成完整 iOS Runner 工程
-- 本机没有完整 Xcode 开发目录，未进行真机编译
+- 尚未完成真机签名与首次部署
+- 尚未完成与本地 server + glass 的一次完整真机联调
 - 还未接入真正的 iOS 本地检测模型
 
 ## 当前检测后端状态
@@ -54,9 +54,8 @@
 
 ```bash
 cd clients/phone_flutter
-flutter create . --platforms=ios
 flutter pub get
-flutter run -d <your-iphone-device-id>
+flutter run -d 00008130-000579010281001C
 ```
 
 ## 与仓库现有代码的关系

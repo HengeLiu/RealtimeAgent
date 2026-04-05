@@ -1,16 +1,24 @@
 # iOS 准备说明
 
-当前目录尚未生成完整的 Flutter iOS Runner 工程。
+当前目录已经生成完整的 Flutter iOS Runner 工程。
 
-在具备 Flutter CLI 和完整 Xcode 的机器上执行：
+推荐步骤：
 
 ```bash
 cd clients/phone_flutter
-flutter create . --platforms=ios
 flutter pub get
+open ios/Runner.xcworkspace
 ```
 
-之后在 `ios/Runner/Info.plist` 中补这些权限：
+然后：
+
+1. 在 Xcode 中打开 `Runner.xcworkspace`
+2. 选中 `Runner -> Signing & Capabilities`
+3. 配置你的 Team 和唯一的 Bundle Identifier
+4. 确认已连接 iPhone 真机
+5. 首次运行时在手机上信任开发者证书
+
+当前 `ios/Runner/Info.plist` 已补这些权限：
 
 - `NSCameraUsageDescription`
 - `NSMicrophoneUsageDescription`

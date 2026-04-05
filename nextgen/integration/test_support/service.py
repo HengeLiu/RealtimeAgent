@@ -28,11 +28,20 @@ class LocalStackManager:
     - 提供服务健康检查和状态快照能力
     """
 
-    def __init__(self, server_port: int, glass_port: int, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        server_port: int,
+        glass_port: int,
+        logger: logging.Logger,
+        bind_host: str = "0.0.0.0",
+        advertise_host: str = "192.168.10.5",
+    ) -> None:
         """初始化管理器。"""
 
         self.server_port = server_port
         self.glass_port = glass_port
+        self.bind_host = bind_host
+        self.advertise_host = advertise_host
         self.server_base_url = f"http://127.0.0.1:{server_port}"
         self.glass_base_url = f"http://127.0.0.1:{glass_port}"
         self.logger = logger
@@ -47,7 +56,7 @@ class LocalStackManager:
                     sys.executable,
                     "scripts/run_server_control_runtime.py",
                     "--host",
-                    "127.0.0.1",
+                    self.bind_host,
                     "--port",
                     str(self.server_port),
                     "--log-file",
@@ -60,11 +69,11 @@ class LocalStackManager:
                     sys.executable,
                     "scripts/run_glass_control_runtime.py",
                     "--host",
-                    "127.0.0.1",
+                    self.bind_host,
                     "--port",
                     str(self.glass_port),
                     "--advertise-host",
-                    "127.0.0.1",
+                    self.advertise_host,
                     "--server-base-url",
                     self.server_base_url,
                     "--log-file",
@@ -134,14 +143,26 @@ class LocalStackManager:
         return "手机"
 
 
-def build_test_support_app(server_port: int = 18490, glass_port: int = 18491, logger: logging.Logger | None = None) -> FastAPI:
+def build_test_support_app(
+    server_port: int = 18490,
+    glass_port: int = 18491,
+    logger: logging.Logger | None = None,
+    bind_host: str = "0.0.0.0",
+    advertise_host: str = "192.168.10.5",
+) -> FastAPI:
     """构造测试支持服务。"""
 
     service_logger = logger or logging.getLogger("nextgen.test_support")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        manager = LocalStackManager(server_port=server_port, glass_port=glass_port, logger=service_logger)
+        manager = LocalStackManager(
+            server_port=server_port,
+            glass_port=glass_port,
+            logger=service_logger,
+            bind_host=bind_host,
+            advertise_host=advertise_host,
+        )
         manager.start()
         app.state.manager = manager
         yield

@@ -125,14 +125,36 @@ class LocalControlServer {
       includeLoopback: false,
       type: InternetAddressType.IPv4,
     );
+    String? tenNetworkCandidate;
+    String? otherPrivateCandidate;
+
     for (final interface in interfaces) {
       for (final address in interface.addresses) {
         final ip = address.address;
-        if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+        if (ip.startsWith('192.168.')) {
           return ip;
+        }
+        if (_isRfc1918_172(ip)) {
+          otherPrivateCandidate ??= ip;
+          continue;
+        }
+        if (ip.startsWith('10.')) {
+          tenNetworkCandidate ??= ip;
         }
       }
     }
-    return null;
+    return otherPrivateCandidate ?? tenNetworkCandidate;
+  }
+
+  bool _isRfc1918_172(String ip) {
+    if (!ip.startsWith('172.')) {
+      return false;
+    }
+    final segments = ip.split('.');
+    if (segments.length < 2) {
+      return false;
+    }
+    final second = int.tryParse(segments[1]);
+    return second != null && second >= 16 && second <= 31;
   }
 }

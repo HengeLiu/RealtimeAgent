@@ -19,10 +19,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     """构造命令行参数解析器。"""
 
     parser = argparse.ArgumentParser(description="启动本机多进程联调用测试支持服务。")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=18400)
     parser.add_argument("--server-port", type=int, default=18490)
     parser.add_argument("--glass-port", type=int, default=18491)
+    parser.add_argument("--advertise-host", default="192.168.10.5")
     parser.add_argument("--log-file", default="nextgen/integration/test_support/logs/test-support.log")
     return parser
 
@@ -36,6 +37,8 @@ def main() -> None:
         server_port=args.server_port,
         glass_port=args.glass_port,
         logger=logger,
+        bind_host=args.host,
+        advertise_host=args.advertise_host,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

@@ -34,6 +34,15 @@
 	<string>需要访问本地网络以便与眼镜设备建立任务级连接。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>需要访问相册以便选择图片和视频进行联调测试。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInLocalNetworking</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
