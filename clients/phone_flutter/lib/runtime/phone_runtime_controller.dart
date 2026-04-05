@@ -35,6 +35,7 @@ class PhoneRuntimeController {
   Timer? _heartbeatTimer;
   DetectorBackendType _selectedBackend = DetectorBackendType.heuristic;
   RuntimeLogService? _logService;
+  bool _registered = false;
 
   List<String> get logs => List<String>.unmodifiable(_logs);
   List<PeerSessionState> get peerSessions => _peerSessions.values.toList();
@@ -63,9 +64,9 @@ class PhoneRuntimeController {
       );
       await _server!.start();
       _appendLog('local_control_server_started: host=${_server?.localHost} port=$listenPort');
-      await register();
+      await _maintainRegistration();
       _heartbeatTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-        unawaited(heartbeat());
+        unawaited(_maintainRegistration());
       });
       _appendLog('runtime_started');
     } catch (error) {
@@ -80,6 +81,7 @@ class PhoneRuntimeController {
     _heartbeatTimer = null;
     await _server?.stop();
     _server = null;
+    _registered = false;
     _appendLog('runtime_stopped');
   }
 
@@ -92,20 +94,21 @@ class PhoneRuntimeController {
     final endpoint = _buildEndpoint();
     if (endpoint == null) {
       _appendLog('无法注册：本机地址未准备好');
-      return;
+      throw StateError('本机地址未准备好，无法注册。');
     }
     final result = await _api.registerDevice(
       serverBaseUrl: serverBaseUrl,
       deviceId: deviceId,
       endpoint: endpoint,
     );
+    _registered = true;
     _appendLog('register: ${jsonEncode(result)}');
   }
 
   Future<void> heartbeat() async {
     final endpoint = _buildEndpoint();
     if (endpoint == null) {
-      return;
+      throw StateError('本机地址未准备好，无法发送心跳。');
     }
     final result = await _api.heartbeat(
       serverBaseUrl: serverBaseUrl,
@@ -113,6 +116,25 @@ class PhoneRuntimeController {
       endpoint: endpoint,
     );
     _appendLog('heartbeat: ${jsonEncode(result)}');
+  }
+
+  Future<void> _maintainRegistration() async {
+    if (!_registered) {
+      try {
+        await register();
+      } catch (error) {
+        _registered = false;
+        _appendLog('register_failed: $error');
+      }
+      return;
+    }
+
+    try {
+      await heartbeat();
+    } catch (error) {
+      _registered = false;
+      _appendLog('heartbeat_failed_re_register_required: $error');
+    }
   }
 
   Future<Map<String, dynamic>> fetchSnapshot() async {

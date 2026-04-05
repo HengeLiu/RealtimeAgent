@@ -1,5 +1,7 @@
 """服务器运行时与任务承接测试。"""
 
+import pytest
+
 from nextgen.apps.server.runtime.app import ServerRuntimeApp
 from nextgen.shared.enums.common import TaskStatus
 from nextgen.shared.models.control import DeviceHeartbeat, NodeEndpoint
@@ -76,20 +78,17 @@ def test_agent_center_can_answer_latest_task_status() -> None:
     assert answer["session"]["session_id"] == created["session_id"]
 
 
-def test_unknown_device_heartbeat_is_auto_upserted() -> None:
-    """验证未注册设备先发心跳时，服务器会自动补建设备记录。"""
+def test_unknown_device_heartbeat_is_rejected() -> None:
+    """验证未注册设备发送心跳时会被拒绝。"""
 
     app = ServerRuntimeApp()
     app.start()
 
-    stored = app.apply_heartbeat(
-        DeviceHeartbeat(
-            device_id="phone-001",
-            status="ready",
-            endpoint=NodeEndpoint(host="192.168.1.20", port=19092, scheme="http", base_path="/device-api"),
+    with pytest.raises(KeyError, match="设备未注册: phone-001"):
+        app.apply_heartbeat(
+            DeviceHeartbeat(
+                device_id="phone-001",
+                status="ready",
+                endpoint=NodeEndpoint(host="192.168.1.20", port=19092, scheme="http", base_path="/device-api"),
+            )
         )
-    )
-
-    assert stored["device_id"] == "phone-001"
-    assert stored["created_from"] == "heartbeat_auto_upsert"
-    assert stored["endpoint"]["port"] == 19092

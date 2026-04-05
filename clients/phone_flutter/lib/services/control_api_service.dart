@@ -34,7 +34,7 @@ class ControlApiService {
           }),
         )
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'registerDevice');
   }
 
   Future<Map<String, dynamic>> heartbeat({
@@ -53,14 +53,14 @@ class ControlApiService {
           }),
         )
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'heartbeat');
   }
 
   Future<Map<String, dynamic>> fetchSnapshot(String serverBaseUrl) async {
     final response = await http
         .get(Uri.parse('${normalizeBaseUrl(serverBaseUrl)}/snapshot'))
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'fetchSnapshot');
   }
 
   Future<Map<String, dynamic>> reportTaskState({
@@ -84,7 +84,7 @@ class ControlApiService {
           }),
         )
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'reportTaskState');
   }
 
   Future<Map<String, dynamic>> reportPeerLinkReady({
@@ -105,7 +105,7 @@ class ControlApiService {
           }),
         )
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'reportPeerLinkReady');
   }
 
   Future<Map<String, dynamic>> reportPeerLinkStatus({
@@ -126,7 +126,7 @@ class ControlApiService {
           }),
         )
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'reportPeerLinkStatus');
   }
 
   Future<Map<String, dynamic>> reportPeerLinkBroken({
@@ -147,6 +147,15 @@ class ControlApiService {
           }),
         )
         .timeout(_requestTimeout);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonResponse(response, 'reportPeerLinkBroken');
+  }
+
+  Map<String, dynamic> _decodeJsonResponse(http.Response response, String operation) {
+    final body = response.body.isEmpty ? '{}' : response.body;
+    final decoded = jsonDecode(body) as Map<String, dynamic>;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('$operation failed: status=${response.statusCode}, body=$decoded');
+    }
+    return decoded;
   }
 }
