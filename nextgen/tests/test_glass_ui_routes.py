@@ -33,3 +33,19 @@ def test_glass_ui_snapshot_returns_input_state() -> None:
 
     assert "sensor_inputs" in payload
     assert "ui_simulation" in payload["sensor_inputs"]
+    assert "registration_state" in payload
+
+
+def test_glass_ui_snapshot_includes_registration_failure() -> None:
+    """验证眼镜 UI 快照会暴露注册失败状态。"""
+
+    runtime = GlassRuntimeApp()
+    runtime.start()
+    runtime.configure_server_base_url("http://127.0.0.1:19490")
+    runtime.mark_registration_failure("register", "connection refused")
+
+    payload = runtime.build_ui_snapshot()
+
+    assert payload["registration_state"]["registered"] is False
+    assert payload["registration_state"]["last_action"] == "register"
+    assert payload["registration_state"]["last_error"] == "connection refused"

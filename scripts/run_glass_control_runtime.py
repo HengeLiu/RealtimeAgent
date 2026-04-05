@@ -1,10 +1,12 @@
 """启动眼镜控制面参考实现。"""
 
 import argparse
+import json
 import socket
 import sys
 import threading
 import time
+from ipaddress import ip_address
 from pathlib import Path
 
 import uvicorn
@@ -23,11 +25,24 @@ from nextgen.shared.utils.logging_utils import setup_file_logger
 def detect_preferred_ipv4() -> str:
     """探测当前机器优先使用的局域网 IPv4 地址。"""
 
+    def _is_preferred(address: str) -> bool:
+        try:
+            parsed = ip_address(address)
+        except ValueError:
+            return False
+        if parsed.version != 4:
+            return False
+        if parsed.is_loopback or parsed.is_link_local:
+            return False
+        if address.startswith("198.18.") or address.startswith("198.19."):
+            return False
+        return parsed.is_private
+
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
             client.connect(("8.8.8.8", 80))
             address = client.getsockname()[0]
-            if address and not address.startswith("127."):
+            if _is_preferred(address):
                 return address
     except OSError:
         pass
@@ -36,7 +51,7 @@ def detect_preferred_ipv4() -> str:
         hostname = socket.gethostname()
         for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
             address = sockaddr[0]
-            if address and not address.startswith("127."):
+            if _is_preferred(address):
                 return address
     except OSError:
         pass
@@ -68,10 +83,28 @@ def start_registration_loop(runtime: GlassRuntimeApp, server_base_url: str, inte
             try:
                 if not registered:
                     post_json(f"{server_base_url}/devices/register", runtime.build_registration_payload())
+                    runtime.mark_registration_success("register")
+                    runtime.logger.info(
+                        "注册眼镜设备(register_device) %s",
+                        json.dumps({"device_id": runtime.device_id, "server_base_url": server_base_url}, ensure_ascii=False),
+                    )
                     registered = True
                 else:
                     post_json(f"{server_base_url}/devices/heartbeat", runtime.build_heartbeat_payload())
-            except Exception:
+                    runtime.mark_registration_success("heartbeat")
+                    runtime.logger.debug(
+                        "发送眼镜心跳(device_heartbeat) %s",
+                        json.dumps({"device_id": runtime.device_id, "server_base_url": server_base_url}, ensure_ascii=False),
+                    )
+            except Exception as exc:
+                runtime.mark_registration_failure("register" if not registered else "heartbeat", str(exc))
+                runtime.logger.error(
+                    "眼镜注册或心跳失败(register_or_heartbeat_failed) %s",
+                    json.dumps(
+                        {"device_id": runtime.device_id, "server_base_url": server_base_url, "reason": str(exc)},
+                        ensure_ascii=False,
+                    ),
+                )
                 registered = False
             time.sleep(interval_sec)
 
@@ -86,7 +119,7 @@ def main() -> None:
     args = build_argument_parser().parse_args()
     setup_file_logger("nextgen.glass.runtime", args.log_file)
     advertise_host = args.advertise_host.strip() or detect_preferred_ipv4()
-    server_base_url = args.server_base_url.strip() or f"http://{advertise_host}:{args.server_port}"
+    server_base_url = args.server_base_url.strip() or f"http://127.0.0.1:{args.server_port}"
     bootstrap_logger = setup_file_logger("nextgen.glass.runtime.bootstrap", args.log_file)
     bootstrap_logger.info(
         "启动眼镜控制面(glass_bootstrap) %s",
@@ -96,6 +129,7 @@ def main() -> None:
             "port": args.port,
             "advertise_host": advertise_host,
             "server_base_url": server_base_url,
+            "same_machine_server": True,
             "ui_url": f"http://127.0.0.1:{args.port}/",
         },
     )

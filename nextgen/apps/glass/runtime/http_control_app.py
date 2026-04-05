@@ -36,6 +36,7 @@ def _render_glass_ui() -> str:
   <section>
     <h2>状态总览</h2>
     <p>该页面由眼镜服务自身提供，负责样例数据上传、语音模式控制和找物任务触发。</p>
+    <div id="registrationBanner" style="display:none; padding:12px; border-radius:8px; margin-bottom:12px;"></div>
     <button onclick="refreshSnapshot()">刷新状态</button>
     <pre id="snapshot"></pre>
   </section>
@@ -75,6 +76,22 @@ def _render_glass_ui() -> str:
       const response = await fetch('/ui/snapshot');
       const data = await response.json();
       document.getElementById('snapshot').textContent = JSON.stringify(data, null, 2);
+      const banner = document.getElementById('registrationBanner');
+      const registration = data.registration_state || {};
+      if (registration.last_error) {
+        banner.style.display = 'block';
+        banner.style.background = '#fee2e2';
+        banner.style.color = '#991b1b';
+        banner.textContent = `眼镜注册或心跳失败：${registration.last_error}`;
+      } else if (registration.registered) {
+        banner.style.display = 'block';
+        banner.style.background = '#dcfce7';
+        banner.style.color = '#166534';
+        banner.textContent = `眼镜已连接服务器，最近动作：${registration.last_action}，时间：${registration.last_success_at || 'unknown'}`;
+      } else {
+        banner.style.display = 'none';
+        banner.textContent = '';
+      }
       const tasks = (data.server_snapshot && data.server_snapshot.tasks) || [];
       const connectedTask = tasks.find((item) => (item.link_status || {}).status === 'connected');
       latestConnectedSessionId = connectedTask ? connectedTask.session_id : null;

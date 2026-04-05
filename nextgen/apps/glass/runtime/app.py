@@ -85,6 +85,13 @@ class GlassRuntimeApp:
         self.last_guidance_texts: Dict[str, str] = {}
         self.last_guidance_ts: Dict[str, float] = {}
         self.voice_sessions: Dict[str, Dict[str, Any]] = {}
+        self.registration_state: Dict[str, Any] = {
+            "registered": False,
+            "last_action": "not_started",
+            "last_success_at": None,
+            "last_error": None,
+            "server_base_url": None,
+        }
         self.gateway.connect()
         self._log_info("runtime_started", {"name": self.name, "device_id": self.device_id})
 
@@ -117,7 +124,34 @@ class GlassRuntimeApp:
         """配置服务器控制面地址。"""
 
         self.server_base_url = server_base_url.rstrip("/")
+        self.registration_state["server_base_url"] = self.server_base_url
         self._log_info("server_base_url_configured", {"server_base_url": self.server_base_url})
+
+    def mark_registration_success(self, action: str) -> None:
+        """记录注册或心跳成功状态。"""
+
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        self.registration_state.update(
+            {
+                "registered": True,
+                "last_action": action,
+                "last_success_at": timestamp,
+                "last_error": None,
+                "server_base_url": self.server_base_url,
+            }
+        )
+
+    def mark_registration_failure(self, action: str, reason: str) -> None:
+        """记录注册或心跳失败状态。"""
+
+        self.registration_state.update(
+            {
+                "registered": False,
+                "last_action": action,
+                "last_error": reason,
+                "server_base_url": self.server_base_url,
+            }
+        )
 
     def build_ui_snapshot(self) -> dict:
         """构造眼镜独立 UI 所需的状态快照。"""
@@ -135,6 +169,7 @@ class GlassRuntimeApp:
             "sensor_inputs": self.sensor_hub.build_input_snapshot(),
             "peer_sessions": self.gateway.list_peer_sessions(),
             "voice_sessions": list(self.voice_sessions.keys()),
+            "registration_state": dict(self.registration_state),
             "server_snapshot": server_snapshot,
         }
 

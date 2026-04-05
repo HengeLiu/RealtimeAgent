@@ -3,6 +3,7 @@
 import argparse
 import socket
 import sys
+from ipaddress import ip_address
 from pathlib import Path
 
 import uvicorn
@@ -19,11 +20,24 @@ from nextgen.shared.utils.logging_utils import setup_file_logger
 def detect_preferred_ipv4() -> str:
     """探测当前机器优先使用的局域网 IPv4 地址。"""
 
+    def _is_preferred(address: str) -> bool:
+        try:
+            parsed = ip_address(address)
+        except ValueError:
+            return False
+        if parsed.version != 4:
+            return False
+        if parsed.is_loopback or parsed.is_link_local:
+            return False
+        if address.startswith("198.18.") or address.startswith("198.19."):
+            return False
+        return parsed.is_private
+
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
             client.connect(("8.8.8.8", 80))
             address = client.getsockname()[0]
-            if address and not address.startswith("127."):
+            if _is_preferred(address):
                 return address
     except OSError:
         pass
@@ -32,7 +46,7 @@ def detect_preferred_ipv4() -> str:
         hostname = socket.gethostname()
         for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
             address = sockaddr[0]
-            if address and not address.startswith("127."):
+            if _is_preferred(address):
                 return address
     except OSError:
         pass
