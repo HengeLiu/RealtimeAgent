@@ -90,7 +90,8 @@
 
 - 删除 `nextgen/apps/phone` Python 手机模拟运行时代码
 - 删除依赖 Python 手机模拟的启动脚本和 demo
-- 本机测试支持服务改为只启动 server + glass，iPhone 真机需单独运行 Flutter App
+- 测试支持服务已删除，当前改为 `server`、`glass`、iPhone 真机 `phone` 三端独立运行
+- 样例数据注入与语音控制由眼镜自身 UI 页面承担
 
 明确不做：
 

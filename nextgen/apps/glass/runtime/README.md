@@ -6,5 +6,5 @@
 
 ## 文件说明
 
-- `app.py`：眼镜端运行时应用骨架、任务级 WebSocket 客户端、执行上报与本机硬件启用入口
-- `http_control_app.py`：眼镜端控制面 HTTP 参考实现与发送单帧分析入口
+- `app.py`：眼镜端运行时应用骨架、任务级 WebSocket 客户端、执行上报、样例数据注入与本机硬件启用入口
+- `http_control_app.py`：眼镜端控制面 HTTP 参考实现与眼镜独立联调 UI

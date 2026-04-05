@@ -1,6 +1,7 @@
 """启动眼镜控制面参考实现。"""
 
 import argparse
+import socket
 import sys
 import threading
 import time
@@ -19,15 +20,40 @@ from nextgen.shared.utils.http import post_json
 from nextgen.shared.utils.logging_utils import setup_file_logger
 
 
+def detect_preferred_ipv4() -> str:
+    """探测当前机器优先使用的局域网 IPv4 地址。"""
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+            client.connect(("8.8.8.8", 80))
+            address = client.getsockname()[0]
+            if address and not address.startswith("127."):
+                return address
+    except OSError:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            address = sockaddr[0]
+            if address and not address.startswith("127."):
+                return address
+    except OSError:
+        pass
+
+    return "127.0.0.1"
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     """构造命令行参数解析器。"""
 
     parser = argparse.ArgumentParser(description="启动 nextgen 眼镜控制面。")
     parser.add_argument("--device-id", default="glass-001")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=18091)
-    parser.add_argument("--advertise-host", default="127.0.0.1")
-    parser.add_argument("--server-base-url", default="http://127.0.0.1:18090")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=18491)
+    parser.add_argument("--advertise-host", default="")
+    parser.add_argument("--server-base-url", default="")
+    parser.add_argument("--server-port", type=int, default=18490)
     parser.add_argument("--heartbeat-seconds", type=float, default=2.0)
     parser.add_argument("--log-file", default="nextgen/apps/glass/logs/glass-runtime.log")
     return parser
@@ -59,13 +85,27 @@ def main() -> None:
 
     args = build_argument_parser().parse_args()
     setup_file_logger("nextgen.glass.runtime", args.log_file)
+    advertise_host = args.advertise_host.strip() or detect_preferred_ipv4()
+    server_base_url = args.server_base_url.strip() or f"http://{advertise_host}:{args.server_port}"
+    bootstrap_logger = setup_file_logger("nextgen.glass.runtime.bootstrap", args.log_file)
+    bootstrap_logger.info(
+        "启动眼镜控制面(glass_bootstrap) %s",
+        {
+            "device_id": args.device_id,
+            "host": args.host,
+            "port": args.port,
+            "advertise_host": advertise_host,
+            "server_base_url": server_base_url,
+            "ui_url": f"http://127.0.0.1:{args.port}/",
+        },
+    )
     runtime = GlassRuntimeApp(device_id=args.device_id)
     runtime.start()
     runtime.enable_local_microphone()
     runtime.enable_local_speaker()
-    runtime.configure_control_endpoint(host=args.advertise_host, port=args.port)
-    runtime.configure_server_base_url(args.server_base_url)
-    start_registration_loop(runtime, args.server_base_url, args.heartbeat_seconds)
+    runtime.configure_control_endpoint(host=advertise_host, port=args.port)
+    runtime.configure_server_base_url(server_base_url)
+    start_registration_loop(runtime, server_base_url, args.heartbeat_seconds)
     uvicorn.run(build_glass_control_app(runtime), host=args.host, port=args.port, log_level="warning")
 
 

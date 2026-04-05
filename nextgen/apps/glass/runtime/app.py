@@ -19,7 +19,7 @@ from nextgen.apps.glass.sensors.sensor_hub import GlassSensorHub
 from nextgen.shared.enums.common import CapabilityType, ExecutionType, LinkStatus, TaskPriority
 from nextgen.shared.models.control import NodeEndpoint
 from nextgen.shared.models.execution import ExecutionRequest
-from nextgen.shared.utils.http import post_json
+from nextgen.shared.utils.http import get_json, post_json
 from nextgen.shared.utils.ws_rpc import WebSocketRpcClient, wait_for_ws_ready
 from websockets.sync.client import connect
 
@@ -82,7 +82,6 @@ class GlassRuntimeApp:
         self.executor_bus = GlassExecutorBus(device_control=self.device_control)
         self.server_base_url: str | None = None
         self.peer_ws_clients: Dict[str, WebSocketRpcClient] = {}
-        self.test_inputs: Dict[str, Any] = {"texts": [], "images": []}
         self.last_guidance_texts: Dict[str, str] = {}
         self.last_guidance_ts: Dict[str, float] = {}
         self.voice_sessions: Dict[str, Dict[str, Any]] = {}
@@ -119,6 +118,50 @@ class GlassRuntimeApp:
 
         self.server_base_url = server_base_url.rstrip("/")
         self._log_info("server_base_url_configured", {"server_base_url": self.server_base_url})
+
+    def build_ui_snapshot(self) -> dict:
+        """构造眼镜独立 UI 所需的状态快照。"""
+
+        server_snapshot = None
+        if self.server_base_url:
+            try:
+                server_snapshot = get_json(f"{self.server_base_url}/snapshot")
+            except Exception:
+                server_snapshot = None
+
+        return {
+            "device_id": self.device_id,
+            "server_base_url": self.server_base_url,
+            "sensor_inputs": self.sensor_hub.build_input_snapshot(),
+            "peer_sessions": self.gateway.list_peer_sessions(),
+            "voice_sessions": list(self.voice_sessions.keys()),
+            "server_snapshot": server_snapshot,
+        }
+
+    def create_find_object_peer_link(self, phone_device_id: str = "phone-001", target_name: str = "手机") -> dict:
+        """通过服务器创建一条找物任务级长连接。"""
+
+        if self.server_base_url is None:
+            raise RuntimeError("服务器控制面地址尚未配置。")
+        created = post_json(
+            f"{self.server_base_url}/tasks/create-session",
+            {
+                "task_name": "find_object",
+                "glass_device_id": self.device_id,
+                "phone_device_id": phone_device_id,
+                "input": {"target_name": target_name},
+            },
+        )
+        session_id = created["session"]["session_id"]
+        orchestrated = post_json(
+            f"{self.server_base_url}/tasks/{session_id}/peer-link/orchestrate",
+            {"stream_type": "image_stream"},
+        )
+        self._log_info(
+            "create_find_object_peer_link",
+            {"session_id": session_id, "phone_device_id": phone_device_id, "target_name": target_name},
+        )
+        return {"created": created, "orchestrated": orchestrated}
 
     def enable_local_camera(self, camera_index: int = 0, preferred_width: int | None = None, preferred_height: int | None = None) -> None:
         """启用本机摄像头。
@@ -521,27 +564,34 @@ class GlassRuntimeApp:
             self._log_info("voice_server_message_received", {"voice_session_id": voice_session_id, "message": message})
 
     def handle_test_text_input(self, text: str) -> dict:
-        """处理测试支持服务注入的文本输入。"""
+        """处理 UI 注入的文本输入。"""
 
         event = self.build_voice_event(text=text, audio_ref="test-support://text", confidence=0.99)
         if event is None:
             raise RuntimeError("文本未形成有效语音事件。")
-        self.test_inputs["texts"].append(event.to_dict())
+        input_record = self.sensor_hub.inject_ui_text(text)
         if self.server_base_url is None:
             raise RuntimeError("服务器控制面地址尚未配置。")
         route_result = post_json(f"{self.server_base_url}/events/voice", {"event": event.to_dict()})
-        self._log_info("test_text_forwarded", {"text": text, "route_result": route_result})
+        self._log_info("test_text_forwarded", {"text": text, "route_result": route_result, "input_record": input_record})
         return {
+            "input_record": input_record,
             "voice_event": event.to_dict(),
             "route_result": route_result,
         }
 
     def handle_test_image_input(self, image_path: str) -> dict:
-        """处理测试支持服务注入的图片输入。"""
+        """处理 UI 注入的图片输入。"""
 
-        record = {"image_path": image_path}
-        self.test_inputs["images"].append(record)
+        record = self.sensor_hub.inject_ui_image(image_path)
         self._log_info("test_image_received", record)
+        return record
+
+    def handle_test_video_input(self, video_path: str) -> dict:
+        """处理 UI 注入的视频输入。"""
+
+        record = self.sensor_hub.inject_ui_video(video_path)
+        self._log_info("test_video_received", record)
         return record
 
     def stream_video_file(self, task_session_id: str, video_path: str, fps_limit: float = 5.0, target_name: str = "手机") -> dict:

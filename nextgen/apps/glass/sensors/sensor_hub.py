@@ -3,7 +3,7 @@
 from copy import deepcopy
 from typing import Dict, List, Optional
 
-from nextgen.apps.glass.hardware.local_devices import LocalCameraDevice, LocalMicrophoneDevice
+from nextgen.apps.glass.sensors.input_sources import HardwareSensorSource, UiSimulationSensorSource
 
 from nextgen.shared.contracts.sensor import SensorHub
 from nextgen.shared.enums.common import TaskPriority
@@ -32,8 +32,8 @@ class GlassSensorHub(SensorHub):
 
         self.requests: Dict[str, CaptureRequest] = {}
         self.sensor_index: Dict[str, List[str]] = {}
-        self.local_camera_device: Optional[LocalCameraDevice] = None
-        self.local_microphone_device: Optional[LocalMicrophoneDevice] = None
+        self.ui_simulation_source = UiSimulationSensorSource()
+        self.hardware_source = HardwareSensorSource()
 
     def register_capture_request(self, request: CaptureRequest) -> CaptureGrant:
         """注册采集请求。
@@ -134,7 +134,7 @@ class GlassSensorHub(SensorHub):
         - preferred_height：期望高度
         """
 
-        self.local_camera_device = LocalCameraDevice(
+        self.hardware_source.configure_camera(
             camera_index=camera_index,
             preferred_width=preferred_width,
             preferred_height=preferred_height,
@@ -153,9 +153,7 @@ class GlassSensorHub(SensorHub):
         - 若尚未配置本机摄像头，则抛出 `RuntimeError`
         """
 
-        if self.local_camera_device is None:
-            raise RuntimeError("本机摄像头尚未配置。")
-        return self.local_camera_device.capture_frame(output_path=output_path)
+        return self.hardware_source.capture_camera_frame(output_path=output_path)
 
     def configure_local_microphone(self, sample_rate: int = 16000, channels: int = 1, dtype: str = "int16") -> None:
         """配置本机麦克风适配器。
@@ -166,7 +164,7 @@ class GlassSensorHub(SensorHub):
         - dtype：采样数据类型
         """
 
-        self.local_microphone_device = LocalMicrophoneDevice(
+        self.hardware_source.configure_microphone(
             sample_rate=sample_rate,
             channels=channels,
             dtype=dtype,
@@ -186,27 +184,55 @@ class GlassSensorHub(SensorHub):
         - 若尚未配置本机麦克风，则抛出 `RuntimeError`
         """
 
-        if self.local_microphone_device is None:
-            raise RuntimeError("本机麦克风尚未配置。")
-        return self.local_microphone_device.record_audio(duration_sec=duration_sec, output_path=output_path)
+        return self.hardware_source.record_microphone_audio(duration_sec=duration_sec, output_path=output_path)
 
     def start_local_microphone_recording(self, output_path: str) -> Dict[str, object]:
         """启动一段可停止的本机录音。"""
 
-        if self.local_microphone_device is None:
-            raise RuntimeError("本机麦克风尚未配置。")
-        return self.local_microphone_device.start_recording(output_path=output_path)
+        return self.hardware_source.start_microphone_recording(output_path=output_path)
 
     def stop_local_microphone_recording(self) -> Dict[str, object]:
         """停止当前本机录音。"""
 
-        if self.local_microphone_device is None:
-            raise RuntimeError("本机麦克风尚未配置。")
-        return self.local_microphone_device.stop_recording()
+        return self.hardware_source.stop_microphone_recording()
 
     def start_local_microphone_stream(self, on_chunk, blocksize: int = 1600):
         """启动实时本机麦克风流。"""
 
-        if self.local_microphone_device is None:
-            raise RuntimeError("本机麦克风尚未配置。")
-        return self.local_microphone_device.start_streaming(on_chunk=on_chunk, blocksize=blocksize)
+        return self.hardware_source.start_microphone_stream(on_chunk=on_chunk, blocksize=blocksize)
+
+    def inject_ui_text(self, text: str) -> Dict[str, object]:
+        """通过 UI 模拟方式注入一段文本。"""
+
+        return self.ui_simulation_source.inject_text(text)
+
+    def inject_ui_image(self, image_path: str) -> Dict[str, object]:
+        """通过 UI 模拟方式注入一张图片。"""
+
+        return self.ui_simulation_source.inject_image_path(image_path)
+
+    def inject_ui_video(self, video_path: str) -> Dict[str, object]:
+        """通过 UI 模拟方式注入一段视频。"""
+
+        return self.ui_simulation_source.inject_video_path(video_path)
+
+    def build_input_snapshot(self) -> Dict[str, object]:
+        """构造当前感知总线输入快照。"""
+
+        return {
+            "ui_simulation": self.ui_simulation_source.snapshot(),
+            "hardware": self.hardware_source.snapshot(),
+            "active_requests": [item.to_dict() for item in self.list_active_requests()],
+        }
+
+    @property
+    def local_camera_device(self):
+        """兼容旧调用方访问本机摄像头适配器。"""
+
+        return self.hardware_source.local_camera_device
+
+    @property
+    def local_microphone_device(self):
+        """兼容旧调用方访问本机麦克风适配器。"""
+
+        return self.hardware_source.local_microphone_device

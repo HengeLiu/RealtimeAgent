@@ -18,7 +18,7 @@
 - `test_interface_contracts.py`：接口层测试
 - `test_simulation_data.py`：标准测试数据测试
 - `test_local_glass_hardware.py`：本机伪眼镜硬件适配测试
-- `test_local_test_support_service.py`：本机测试支持服务路由测试
+- `test_glass_ui_routes.py`：眼镜独立 UI 路由测试
 - `test_voice_session_manager.py`：语音会话管理测试
 
 ## 测试分层说明
