@@ -10,6 +10,7 @@ import '../services/control_api_service.dart';
 import '../services/detector_backend_registry.dart';
 import '../services/local_control_server.dart';
 import '../services/native_network_probe_service.dart';
+import '../services/runtime_log_service.dart';
 import '../tasks/find_object_task.dart';
 
 class PhoneRuntimeController {
@@ -33,15 +34,18 @@ class PhoneRuntimeController {
   LocalControlServer? _server;
   Timer? _heartbeatTimer;
   DetectorBackendType _selectedBackend = DetectorBackendType.heuristic;
+  RuntimeLogService? _logService;
 
   List<String> get logs => List<String>.unmodifiable(_logs);
   List<PeerSessionState> get peerSessions => _peerSessions.values.toList();
   String? get localHost => _server?.localHost;
   DetectorBackendType get selectedBackend => _selectedBackend;
   List<DetectorBackendConfig> get detectorConfigs => _detectorRegistry.availableConfigs;
+  String? get logFilePath => _logService?.logFilePath;
 
   Future<void> start() async {
     try {
+      _logService ??= await RuntimeLogService.create(deviceId: deviceId);
       _appendLog('runtime_starting: server=$serverBaseUrl listenPort=$listenPort');
       final interfaceSummary = await collectInterfaceSummary();
       _appendLog('network_interfaces: ${jsonEncode(interfaceSummary)}');
@@ -393,9 +397,14 @@ class PhoneRuntimeController {
 
   void _appendLog(String message) {
     final now = DateTime.now().toIso8601String();
-    _logs.insert(0, '[$now] $message');
+    final line = '[$now] $message';
+    _logs.insert(0, line);
     if (_logs.length > 200) {
       _logs.removeRange(200, _logs.length);
+    }
+    final logService = _logService;
+    if (logService != null) {
+      unawaited(logService.append(line));
     }
   }
 }

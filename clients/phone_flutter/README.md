@@ -26,6 +26,7 @@
 - `/stream/frame` 的最小图片帧解码与启发式找物处理
 - `/find-object/frame-analysis` 的 Dart 侧引导建议生成
 - 任务状态回传 server
+- 真机运行日志写入 iPhone App 沙盒内的日志文件
 - 可切换的检测后端抽象层
 - CoreML / TFLite / ONNX Runtime Mobile 后端占位与配置落位
 
@@ -66,3 +67,13 @@ flutter run -d 00008130-000579010281001C
   - 本目录
 
 仓库中的 Python 手机模拟运行时已删除，手机端后续统一以本目录为准。
+
+## 日志说明
+
+iPhone 真机运行时，日志不会直接写回 Mac 仓库路径。
+
+当前实现会把运行日志写入 iPhone App 沙盒的 Documents 目录下：
+
+- `Documents/logs/phone-001-runtime.log`
+
+App 页面中的 `本机状态` 会显示当前实际日志文件路径，`Runtime Logs` 仍会保留最近的内存日志用于现场查看。

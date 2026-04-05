@@ -136,7 +136,7 @@ class _PhoneRuntimeScreenState extends State<PhoneRuntimeScreen> {
             title: '本机状态',
             child: Text(runtime == null
                 ? '尚未启动'
-                : 'localHost=${runtime.localHost ?? 'unknown'}\npeerSessions=${runtime.peerSessions.length}\nbackend=${runtime.selectedBackend.name}'),
+                : 'localHost=${runtime.localHost ?? 'unknown'}\npeerSessions=${runtime.peerSessions.length}\nbackend=${runtime.selectedBackend.name}\nlogFile=${runtime.logFilePath ?? 'preparing...'}'),
           ),
           const SizedBox(height: 16),
           if (runtime != null)
