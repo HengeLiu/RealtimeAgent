@@ -1,8 +1,11 @@
 """服务器运行时与任务承接测试。"""
 
+import asyncio
+
 import pytest
 
 from nextgen.apps.server.runtime.app import ServerRuntimeApp
+from nextgen.apps.server.runtime.http_control_app import build_server_control_app
 from nextgen.shared.enums.common import TaskStatus
 from nextgen.shared.models.control import DeviceHeartbeat, NodeEndpoint
 
@@ -92,3 +95,35 @@ def test_unknown_device_heartbeat_is_rejected() -> None:
                 endpoint=NodeEndpoint(host="192.168.1.20", port=19092, scheme="http", base_path="/device-api"),
             )
         )
+
+
+def test_push_to_talk_endpoint_runs_processing_in_request_flow(monkeypatch) -> None:
+    """验证对讲录音接口可以正常返回处理结果。"""
+
+    app = ServerRuntimeApp()
+    app.start()
+
+    app.create_voice_session(device_id="glass-001", mode="push_to_talk")
+    session_id = next(iter(app.voice_session_manager.sessions.keys()))
+
+    called = {}
+
+    def _fake_process_push_to_talk_audio(*, session_id: str, audio_path: str):
+        called["session_id"] = session_id
+        called["audio_path"] = audio_path
+        return {"session_id": session_id, "transcript": "帮我看一下前面"}
+
+    monkeypatch.setattr(app, "process_push_to_talk_audio", _fake_process_push_to_talk_audio)
+
+    fastapi_app = build_server_control_app(app)
+    route = next(route for route in fastapi_app.routes if getattr(route, "path", "") == "/voice/sessions/{session_id}/push-to-talk")
+    endpoint = route.endpoint
+
+    class _FakeRequest:
+        async def json(self):
+            return {"audio_path": "/tmp/fake.wav"}
+
+    response = asyncio.run(endpoint(session_id=session_id, request=_FakeRequest()))
+
+    assert response["transcript"] == "帮我看一下前面"
+    assert called == {"session_id": session_id, "audio_path": "/tmp/fake.wav"}

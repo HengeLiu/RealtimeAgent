@@ -48,6 +48,7 @@ class ServerRuntimeApp:
         "peer_link_recover_requested": "请求重建长连接",
         "voice_event_received": "收到语音事件",
         "voice_session_created": "创建语音会话",
+        "asr_transcript_completed": "完成语音转文本",
         "push_to_talk_audio_processed": "处理对讲录音",
     }
 
@@ -485,6 +486,10 @@ class ServerRuntimeApp:
         if session is None:
             raise KeyError(f"语音会话不存在: {session_id}")
         transcript = session.process_push_to_talk_audio(audio_path=audio_path)
+        self._log_info(
+            "asr_transcript_completed",
+            {"session_id": session_id, "audio_path": audio_path, "transcript": transcript},
+        )
         self._log_info(
             "push_to_talk_audio_processed",
             {"session_id": session_id, "audio_path": audio_path, "transcript": transcript},

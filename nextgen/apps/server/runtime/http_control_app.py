@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import logging
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -19,6 +20,7 @@ def build_server_control_app(runtime_app: ServerRuntimeApp | None = None) -> Fas
     if not hasattr(runtime, "gateway"):
         runtime.start()
     app.state.runtime = runtime
+    logger = logging.getLogger("nextgen.server.runtime")
 
     @app.get("/health")
     async def health() -> dict:
@@ -73,7 +75,27 @@ def build_server_control_app(runtime_app: ServerRuntimeApp | None = None) -> Fas
     @app.post("/voice/sessions/{session_id}/push-to-talk")
     async def process_push_to_talk(session_id: str, request: Request) -> dict:
         payload = await request.json()
-        return {"ok": True, **runtime.process_push_to_talk_audio(session_id=session_id, audio_path=payload["audio_path"])}
+        logger.info(
+            "收到对讲录音处理请求(push_to_talk_request_received) %s",
+            {"session_id": session_id, "audio_path": payload.get("audio_path")},
+        )
+        try:
+            result = await asyncio.to_thread(
+                runtime.process_push_to_talk_audio,
+                session_id=session_id,
+                audio_path=payload["audio_path"],
+            )
+        except Exception:
+            logger.exception(
+                "处理对讲录音失败(push_to_talk_request_failed) %s",
+                {"session_id": session_id, "audio_path": payload.get("audio_path")},
+            )
+            raise
+        logger.info(
+            "完成对讲录音处理(push_to_talk_request_completed) %s",
+            {"session_id": session_id, "transcript": result.get("transcript")},
+        )
+        return {"ok": True, **result}
 
     @app.websocket("/voice/ws/{session_id}")
     async def voice_ws(websocket: WebSocket, session_id: str) -> None:

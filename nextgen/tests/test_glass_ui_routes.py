@@ -18,10 +18,10 @@ def test_glass_ui_routes_exist() -> None:
     assert "/ui/actions/send-text" in routes
     assert "/ui/actions/send-image" in routes
     assert "/ui/actions/upload-video" in routes
+    assert "/ui/actions/voice/recording/start" in routes
+    assert "/ui/actions/voice/recording/stop" in routes
     assert "/ui/actions/voice/push-to-talk/start" in routes
     assert "/ui/actions/voice/push-to-talk/stop" in routes
-    assert "/ui/actions/voice/realtime/start" in routes
-    assert "/ui/actions/voice/realtime/stop" in routes
 
 
 def test_glass_ui_snapshot_returns_input_state() -> None:
@@ -31,6 +31,7 @@ def test_glass_ui_snapshot_returns_input_state() -> None:
     runtime.start()
     payload = runtime.build_ui_snapshot()
 
+    assert payload["runtime_state"] == "READY"
     assert "sensor_inputs" in payload
     assert "ui_simulation" in payload["sensor_inputs"]
     assert "registration_state" in payload

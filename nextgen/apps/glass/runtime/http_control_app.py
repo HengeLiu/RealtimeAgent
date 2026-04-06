@@ -53,8 +53,7 @@ def _render_glass_ui() -> str:
   </section>
   <section>
     <h2>语音对话</h2>
-    <button id="pttButton" onclick="togglePushToTalk()">开始对讲录音</button>
-    <button id="realtimeButton" onclick="toggleRealtime()">开始实时对话</button>
+    <button id="recordButton" onclick="toggleRecording()">开始录音</button>
     <pre id="voiceState"></pre>
   </section>
   <section>
@@ -69,8 +68,7 @@ def _render_glass_ui() -> str:
   </section>
   <script>
     let latestConnectedSessionId = null;
-    let pushToTalkSessionId = null;
-    let realtimeVoiceSessionId = null;
+    let recordingSessionId = null;
 
     async function refreshSnapshot() {
       const response = await fetch('/ui/snapshot');
@@ -95,7 +93,10 @@ def _render_glass_ui() -> str:
       const tasks = (data.server_snapshot && data.server_snapshot.tasks) || [];
       const connectedTask = tasks.find((item) => (item.link_status || {}).status === 'connected');
       latestConnectedSessionId = connectedTask ? connectedTask.session_id : null;
-      document.getElementById('voiceState').textContent = JSON.stringify(data.voice_sessions || [], null, 2);
+      document.getElementById('voiceState').textContent = JSON.stringify({
+        runtime_state: data.runtime_state,
+        voice_sessions: data.voice_sessions || {},
+      }, null, 2);
     }
 
     async function createPeerLink() {
@@ -119,40 +120,21 @@ def _render_glass_ui() -> str:
       await refreshSnapshot();
     }
 
-    async function togglePushToTalk() {
-      const button = document.getElementById('pttButton');
-      if (!pushToTalkSessionId) {
-        const response = await fetch('/ui/actions/voice/push-to-talk/start', { method: 'POST' });
+    async function toggleRecording() {
+      const button = document.getElementById('recordButton');
+      if (!recordingSessionId) {
+        const response = await fetch('/ui/actions/voice/recording/start', { method: 'POST' });
         const data = await response.json();
-        pushToTalkSessionId = data.result.session_id;
-        button.textContent = '结束对讲录音并发送';
+        recordingSessionId = data.result.session_id;
+        button.textContent = '结束录音并发送';
       } else {
-        await fetch('/ui/actions/voice/push-to-talk/stop', {
+        await fetch('/ui/actions/voice/recording/stop', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({session_id: pushToTalkSessionId}),
+          body: JSON.stringify({session_id: recordingSessionId}),
         });
-        pushToTalkSessionId = null;
-        button.textContent = '开始对讲录音';
-      }
-      await refreshSnapshot();
-    }
-
-    async function toggleRealtime() {
-      const button = document.getElementById('realtimeButton');
-      if (!realtimeVoiceSessionId) {
-        const response = await fetch('/ui/actions/voice/realtime/start', { method: 'POST' });
-        const data = await response.json();
-        realtimeVoiceSessionId = data.result.voice_session_id;
-        button.textContent = '结束实时对话';
-      } else {
-        await fetch('/ui/actions/voice/realtime/stop', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({voice_session_id: realtimeVoiceSessionId}),
-        });
-        realtimeVoiceSessionId = null;
-        button.textContent = '开始实时对话';
+        recordingSessionId = null;
+        button.textContent = '开始录音';
       }
       await refreshSnapshot();
     }
@@ -216,7 +198,7 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
 
     @app.get("/ui/snapshot")
     async def ui_snapshot() -> dict:
-        return {"ok": True, **runtime.build_ui_snapshot(), "voice_sessions": list(runtime.voice_sessions.keys())}
+        return {"ok": True, **runtime.build_ui_snapshot()}
 
     @app.post("/device-api/task/connect-peer")
     async def connect_peer(request: Request) -> dict:
@@ -304,6 +286,16 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
         payload = await request.json()
         return {"ok": True, "result": runtime.stop_push_to_talk_recording_and_dispatch(payload["session_id"])}
 
+    @app.post("/device-api/voice/recording/start")
+    async def start_recording(request: Request) -> dict:
+        payload = await request.json() if request.headers.get("content-type") == "application/json" else {}
+        return {"ok": True, "result": runtime.start_push_to_talk_recording(payload.get("session_id"))}
+
+    @app.post("/device-api/voice/recording/stop")
+    async def stop_recording(request: Request) -> dict:
+        payload = await request.json()
+        return {"ok": True, "result": runtime.stop_push_to_talk_recording_and_dispatch(payload["session_id"])}
+
     @app.post("/device-api/voice/realtime/start")
     async def start_realtime_voice() -> dict:
         return {"ok": True, "result": runtime.start_realtime_voice_conversation()}
@@ -338,14 +330,14 @@ def build_glass_control_app(runtime_app: GlassRuntimeApp | None = None) -> FastA
         payload = await request.json()
         return {"ok": True, "result": runtime.stop_push_to_talk_recording_and_dispatch(payload["session_id"])}
 
-    @app.post("/ui/actions/voice/realtime/start")
-    async def ui_start_realtime() -> dict:
-        return {"ok": True, "result": runtime.start_realtime_voice_conversation()}
+    @app.post("/ui/actions/voice/recording/start")
+    async def ui_start_recording() -> dict:
+        return {"ok": True, "result": runtime.start_push_to_talk_recording()}
 
-    @app.post("/ui/actions/voice/realtime/stop")
-    async def ui_stop_realtime(request: Request) -> dict:
+    @app.post("/ui/actions/voice/recording/stop")
+    async def ui_stop_recording(request: Request) -> dict:
         payload = await request.json()
-        return {"ok": True, "result": runtime.stop_realtime_voice_conversation(payload["voice_session_id"])}
+        return {"ok": True, "result": runtime.stop_push_to_talk_recording_and_dispatch(payload["session_id"])}
 
     @app.post("/ui/actions/send-image")
     async def ui_send_image(file: UploadFile = File(...), task_session_id: str | None = Form(None)) -> dict:

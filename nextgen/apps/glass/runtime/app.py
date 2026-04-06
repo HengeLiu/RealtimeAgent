@@ -45,14 +45,15 @@ class GlassRuntimeApp:
         "local_speaker_enabled": "启用本机喇叭",
         "local_camera_frame_captured": "采集摄像头画面",
         "local_microphone_audio_recorded": "完成麦克风录音",
+        "runtime_state_changed": "眼镜整体状态切换",
         "peer_link_connected": "建立任务级长连接",
         "peer_link_connect_failed": "任务级长连接失败",
         "peer_link_stopped": "关闭任务级长连接",
         "peer_link_broken": "上报长连接断开",
         "frame_analysis_sent": "发送找物分析结果",
         "frame_analysis_send_failed": "发送找物分析失败",
-        "push_to_talk_recording_started": "开始对讲录音",
-        "push_to_talk_recording_stopped": "结束对讲录音并发送",
+        "push_to_talk_recording_started": "开始录音",
+        "push_to_talk_recording_stopped": "结束录音并发送",
         "realtime_voice_started": "开始实时对话",
         "realtime_voice_stopped": "结束实时对话",
         "voice_tts_chunk_played": "播放流式语音音频块",
@@ -85,6 +86,7 @@ class GlassRuntimeApp:
         self.last_guidance_texts: Dict[str, str] = {}
         self.last_guidance_ts: Dict[str, float] = {}
         self.voice_sessions: Dict[str, Dict[str, Any]] = {}
+        self.runtime_state: str = "READY"
         self.registration_state: Dict[str, Any] = {
             "registered": False,
             "last_action": "not_started",
@@ -165,10 +167,11 @@ class GlassRuntimeApp:
 
         return {
             "device_id": self.device_id,
+            "runtime_state": self.runtime_state,
             "server_base_url": self.server_base_url,
             "sensor_inputs": self.sensor_hub.build_input_snapshot(),
             "peer_sessions": self.gateway.list_peer_sessions(),
-            "voice_sessions": list(self.voice_sessions.keys()),
+            "voice_sessions": {key: self._build_voice_session_snapshot(value) for key, value in self.voice_sessions.items()},
             "registration_state": dict(self.registration_state),
             "server_snapshot": server_snapshot,
         }
@@ -434,6 +437,8 @@ class GlassRuntimeApp:
     def start_push_to_talk_recording(self, session_id: str | None = None) -> dict:
         """启动对讲模式录音。"""
 
+        if self.runtime_state == "RECORDING":
+            raise RuntimeError("当前已经处于录音中。")
         if session_id is None:
             session_id = f"ptt_{uuid.uuid4().hex[:8]}"
         output_path = os.path.join(tempfile.gettempdir(), f"{session_id}.wav")
@@ -442,7 +447,9 @@ class GlassRuntimeApp:
             "mode": "push_to_talk",
             "recording": True,
             "audio_path": output_path,
+            "status": "recording",
         }
+        self._set_runtime_state("RECORDING", {"session_id": session_id})
         self._log_info("push_to_talk_recording_started", {"session_id": session_id, **result})
         return {"session_id": session_id, **result}
 
@@ -455,6 +462,14 @@ class GlassRuntimeApp:
         if session is None:
             raise KeyError(f"对讲录音会话不存在: {session_id}")
         recording = self.sensor_hub.stop_local_microphone_recording()
+        session.update(
+            {
+                "recording": False,
+                "status": "uploaded",
+                "audio_path": recording["output_path"],
+            }
+        )
+        self._set_runtime_state("READY", {"session_id": session_id, "audio_path": recording["output_path"]})
         voice_session = post_json(
             f"{self.server_base_url}/voice/sessions",
             {"device_id": self.device_id, "mode": "push_to_talk"},
@@ -462,15 +477,35 @@ class GlassRuntimeApp:
         voice_session_id = voice_session["session_id"]
         ws_url = self._build_server_voice_ws_url(voice_session_id)
         self._open_voice_ws_session(voice_session_id=voice_session_id, ws_url=ws_url, mode="push_to_talk")
-        processed = post_json(
-            f"{self.server_base_url}/voice/sessions/{voice_session_id}/push-to-talk",
-            {"audio_path": recording["output_path"]},
-        )
+        try:
+            processed = post_json(
+                f"{self.server_base_url}/voice/sessions/{voice_session_id}/push-to-talk",
+                {"audio_path": recording["output_path"]},
+                timeout_sec=120.0,
+            )
+        except Exception as exc:
+            session.update(
+                {
+                    "server_voice_session_id": voice_session_id,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            self._log_info(
+                "push_to_talk_recording_stopped",
+                {
+                    "session_id": session_id,
+                    "voice_session_id": voice_session_id,
+                    "recording": recording,
+                    "error": str(exc),
+                },
+            )
+            raise
         session.update(
             {
-                "recording": False,
                 "server_voice_session_id": voice_session_id,
-                "audio_path": recording["output_path"],
+                "transcript": processed.get("transcript"),
+                "status": "processed",
             }
         )
         self._log_info(
@@ -587,6 +622,7 @@ class GlassRuntimeApp:
         message_type = message.get("type")
         if message_type == "tts.audio.chunk":
             audio_bytes = base64.b64decode(message["audio_base64"].encode("ascii"))
+            self._set_runtime_state("PLAYING", {"voice_session_id": voice_session_id})
             result = self.device_control.play_audio_chunk(audio_bytes, sample_rate=int(message.get("sample_rate", 16000)))
             self._log_info(
                 "voice_tts_chunk_played",
@@ -594,7 +630,11 @@ class GlassRuntimeApp:
             )
         elif message_type == "tts.stop":
             result = self.device_control.stop_audio_playback()
+            self._set_runtime_state("READY", {"voice_session_id": voice_session_id, "reason": "tts_stop"})
             self._log_info("voice_tts_stopped", {"voice_session_id": voice_session_id, "playback": result})
+        elif message_type == "tts.done":
+            self._set_runtime_state("READY", {"voice_session_id": voice_session_id, "reason": "tts_done"})
+            self._log_info("voice_server_message_received", {"voice_session_id": voice_session_id, "message": message})
         else:
             self._log_info("voice_server_message_received", {"voice_session_id": voice_session_id, "message": message})
 
@@ -776,8 +816,31 @@ class GlassRuntimeApp:
         self.voice_sessions.clear()
         self.last_guidance_texts.clear()
         self.last_guidance_ts.clear()
+        self.runtime_state = "STOPPED"
         self.gateway.disconnect()
         self._log_info("runtime_stopped", {"name": self.name, "device_id": self.device_id})
+
+    def _set_runtime_state(self, state: str, payload: Dict[str, Any] | None = None) -> None:
+        """切换眼镜整体状态。"""
+
+        self.runtime_state = state
+        self._log_info("runtime_state_changed", {"state": state, **(payload or {})})
+
+    def _build_voice_session_snapshot(self, session_state: Dict[str, Any]) -> Dict[str, Any]:
+        """构造单个语音会话的 UI 快照。"""
+
+        snapshot = {
+            "mode": session_state.get("mode"),
+            "recording": session_state.get("recording", False),
+            "status": session_state.get("status", "unknown"),
+            "audio_path": session_state.get("audio_path"),
+            "server_voice_session_id": session_state.get("server_voice_session_id"),
+            "transcript": session_state.get("transcript"),
+            "error": session_state.get("error"),
+        }
+        if session_state.get("closed") is not None:
+            snapshot["closed"] = session_state.get("closed")
+        return snapshot
 
     def _log_info(self, action: str, payload: Dict[str, Any]) -> None:
         """记录结构化信息日志。"""

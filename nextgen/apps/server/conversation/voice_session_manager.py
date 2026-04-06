@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import queue
 import threading
 import uuid
@@ -50,6 +51,12 @@ class VoiceConversationSession:
     realtime_asr_session: Any = None
     closed: bool = False
 
+    @property
+    def logger(self):
+        """获取语音会话日志器。"""
+
+        return logging.getLogger("nextgen.server.runtime")
+
     def start_realtime(self) -> None:
         """启动实时 ASR 会话。"""
 
@@ -92,8 +99,16 @@ class VoiceConversationSession:
             if self.current_partial_assistant.strip():
                 self.messages.append({"role": "assistant", "content": self.current_partial_assistant})
             self.outgoing.put({"type": "tts.stop", "session_id": self.session_id})
+            self.logger.info(
+                "语音回复被打断(voice_reply_interrupted) %s",
+                {"session_id": self.session_id, "mode": self.mode, "partial_assistant": self.current_partial_assistant},
+            )
 
         self.messages.append({"role": "user", "content": normalized})
+        self.logger.info(
+            "接收用户转写文本(voice_user_text_accepted) %s",
+            {"session_id": self.session_id, "mode": self.mode, "text": normalized, "message_count": len(self.messages)},
+        )
         self.current_partial_assistant = ""
         self.current_cancel_event = threading.Event()
         self.current_generation_thread = threading.Thread(
@@ -107,6 +122,10 @@ class VoiceConversationSession:
         """处理对讲模式音频文件。"""
 
         transcript = self.asr_service.transcribe_file(audio_path)
+        self.logger.info(
+            "对讲录音完成 ASR(voice_asr_completed) %s",
+            {"session_id": self.session_id, "audio_path": audio_path, "transcript": transcript},
+        )
         self.accept_user_text(transcript)
         return transcript
 
@@ -115,11 +134,19 @@ class VoiceConversationSession:
         last_tts_offset = 0
         try:
             messages = self._build_model_messages()
+            self.logger.info(
+                "开始调用大模型(voice_llm_started) %s",
+                {"session_id": self.session_id, "mode": self.mode, "messages": messages},
+            )
             for chunk in self._stream_reply_text(messages):
                 if cancel_event.is_set():
                     break
                 assistant_text += chunk
                 self.current_partial_assistant = assistant_text
+                self.logger.info(
+                    "收到大模型流式文本(voice_llm_chunk_received) %s",
+                    {"session_id": self.session_id, "chunk": chunk, "accumulated_text": assistant_text},
+                )
                 ready_segments = _chunk_text_for_tts(assistant_text[last_tts_offset:])
                 if ready_segments:
                     for segment in ready_segments[:-1] if len(ready_segments) > 1 else ready_segments:
@@ -133,7 +160,22 @@ class VoiceConversationSession:
                     self._stream_tts_segment(tail, cancel_event)
                 if assistant_text.strip():
                     self.messages.append({"role": "assistant", "content": assistant_text.strip()})
+                self.logger.info(
+                    "大模型回复完成(voice_llm_completed) %s",
+                    {"session_id": self.session_id, "assistant_text": assistant_text.strip()},
+                )
                 self.outgoing.put({"type": "tts.done", "session_id": self.session_id})
+            else:
+                self.logger.info(
+                    "大模型回复提前结束(voice_llm_cancelled) %s",
+                    {"session_id": self.session_id, "assistant_text": assistant_text.strip()},
+                )
+        except Exception:
+            self.logger.exception(
+                "语音回复生成失败(voice_reply_generation_failed) %s",
+                {"session_id": self.session_id, "mode": self.mode},
+            )
+            raise
         finally:
             self.current_partial_assistant = ""
 
@@ -164,10 +206,18 @@ class VoiceConversationSession:
         if not text.strip():
             return
         segment_id = uuid.uuid4().hex[:8]
+        self.logger.info(
+            "开始调用 TTS(voice_tts_started) %s",
+            {"session_id": self.session_id, "segment_id": segment_id, "text": text},
+        )
 
         def _on_audio_chunk(chunk: bytes) -> None:
             if cancel_event.is_set():
                 return
+            self.logger.info(
+                "收到 TTS 音频块(voice_tts_chunk_received) %s",
+                {"session_id": self.session_id, "segment_id": segment_id, "chunk_size": len(chunk)},
+            )
             self.outgoing.put(
                 {
                     "type": "tts.audio.chunk",
@@ -179,7 +229,18 @@ class VoiceConversationSession:
                 }
             )
 
-        self.tts_service.stream_text(text, on_audio_chunk=_on_audio_chunk)
+        try:
+            self.tts_service.stream_text(text, on_audio_chunk=_on_audio_chunk)
+            self.logger.info(
+                "TTS 调用完成(voice_tts_completed) %s",
+                {"session_id": self.session_id, "segment_id": segment_id, "text": text},
+            )
+        except Exception:
+            self.logger.exception(
+                "TTS 调用失败(voice_tts_failed) %s",
+                {"session_id": self.session_id, "segment_id": segment_id, "text": text},
+            )
+            raise
 
 
 @dataclass
