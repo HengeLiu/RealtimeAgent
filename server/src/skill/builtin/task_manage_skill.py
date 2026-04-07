@@ -47,4 +47,22 @@ class TaskManageSkill(SkillBase):
                 task_id=task.task_id,
             )
 
+        if action == "pause":
+            task = self._task_manager.pause(task_id)
+            return SkillResult(
+                status="completed",
+                data={"task_id": task.task_id, "status": task.status.value},
+                summary="direct_result",
+                task_id=task.task_id,
+            )
+
+        if action == "resume":
+            task = self._task_manager.resume(task_id)
+            return SkillResult(
+                status="completed",
+                data={"task_id": task.task_id, "status": task.status.value},
+                summary="direct_result",
+                task_id=task.task_id,
+            )
+
         return SkillResult(status="failed", summary="unsupported_action", error={"action": action})

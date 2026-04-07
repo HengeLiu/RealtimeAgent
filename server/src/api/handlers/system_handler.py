@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from api.session.connection_manager import ConnectionManager
 from api.session.device_registry import DeviceRegistry
 from infra.clock.system_clock import SystemClock
 from infra.config.settings import Settings
 from infra.logging import log_event
-from protocol.enums import DeviceStatus, MessageType
+from protocol.enums import DeviceStatus, DeviceType, MessageType
 from protocol.messages.envelope import Endpoint, Envelope
 from protocol.messages.payloads import RegisterPayload
 
@@ -37,8 +38,20 @@ class SystemHandler:
         payload = RegisterPayload.from_dict(envelope.payload)
         if not payload.auth:
             raise ValueError("register.auth is required")
+        if envelope.protocol_version != self._settings.protocol_version:
+            raise ValueError(
+                f"protocol mismatch: got={envelope.protocol_version} expected={self._settings.protocol_version}"
+            )
 
         device = payload.device
+        if device.device_type not in {DeviceType.GLASS, DeviceType.PHONE, DeviceType.SERVER}:
+            raise ValueError(f"unsupported device_type={device.device_type.value}")
+        if device.protocol_version != self._settings.protocol_version:
+            raise ValueError(
+                f"device protocol mismatch: got={device.protocol_version} expected={self._settings.protocol_version}"
+            )
+        if device.device_id != envelope.source.device_id:
+            raise ValueError("envelope source device_id mismatch register payload")
         device.status = DeviceStatus.ONLINE
         device.last_seen_at = SystemClock.now_iso()
         self._device_registry.upsert(device)
@@ -102,3 +115,24 @@ class SystemHandler:
             timestamp=SystemClock.now_iso(),
             payload={"ack_status": "processed"},
         )
+
+    def reconcile_device_health(self) -> None:
+        now = datetime.now(timezone.utc)
+        degraded_seconds = self._settings.heartbeat_interval_seconds * 2
+        offline_seconds = self._settings.heartbeat_timeout_seconds
+
+        for device in self._device_registry.all():
+            session = self._connection_manager.get_by_device(device.device_id)
+            if not session:
+                self._device_registry.update_status(device.device_id, DeviceStatus.OFFLINE, last_seen_at=device.last_seen_at)
+                continue
+
+            elapsed = (now - session.last_heartbeat_at).total_seconds()
+            if elapsed > offline_seconds:
+                self._device_registry.update_status(device.device_id, DeviceStatus.OFFLINE, last_seen_at=device.last_seen_at)
+            elif elapsed > degraded_seconds:
+                self._device_registry.update_status(
+                    device.device_id,
+                    DeviceStatus.DEGRADED,
+                    last_seen_at=session.last_heartbeat_at.isoformat(),
+                )

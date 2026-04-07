@@ -54,6 +54,9 @@ class TaskManager:
         task_id = self.scheduler.dequeue()
         if not task_id:
             return None
+        return self.start(task_id)
+
+    def start(self, task_id: str) -> TaskModel:
         task = self._tasks[task_id]
         context = self.context_store.get(task_id)
         if not context:
@@ -70,6 +73,16 @@ class TaskManager:
         result = task_instance.run()
         task.result = result.data
         self._transition(task, TaskStatus.COMPLETED, "task.completed", summary=result.summary)
+        return task
+
+    def pause(self, task_id: str) -> TaskModel:
+        task = self._tasks[task_id]
+        self._transition(task, TaskStatus.PAUSED, "task.paused")
+        return task
+
+    def resume(self, task_id: str) -> TaskModel:
+        task = self._tasks[task_id]
+        self._transition(task, TaskStatus.RUNNING, "task.resumed")
         return task
 
     def cancel(self, task_id: str) -> TaskModel:

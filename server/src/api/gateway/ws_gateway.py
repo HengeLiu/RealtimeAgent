@@ -5,9 +5,11 @@ from dataclasses import dataclass
 from api.router.message_router import MessageRouter
 from api.session.connection_manager import ConnectionManager
 from api.session.connection_session import Transport
+from infra.clock.system_clock import SystemClock
 from infra.logging import create_logger
 from protocol.codec.json_codec import JsonMessageCodec
-from protocol.messages.envelope import Envelope
+from protocol.enums import MessageType
+from protocol.messages.envelope import Endpoint, Envelope
 
 
 @dataclass(slots=True)
@@ -35,7 +37,29 @@ class WsGateway:
                 module=envelope.source.module,
             )
 
-        return self.router.route(envelope)
+        try:
+            return self.router.route(envelope)
+        except Exception as exc:  # pragma: no cover - defensive path
+            return [
+                Envelope(
+                    message_id=f"{envelope.message_id}_error",
+                    trace_id=envelope.trace_id,
+                    correlation_id=envelope.message_id,
+                    message_type=MessageType.ERROR,
+                    message_name="system.error",
+                    protocol_version=envelope.protocol_version,
+                    source=Endpoint(device_id=envelope.target.device_id, module="server-api"),
+                    target=Endpoint(device_id=envelope.source.device_id, module=envelope.source.module),
+                    timestamp=SystemClock.now_iso(),
+                    payload={
+                        "error_code": "router_error",
+                        "error_message": str(exc),
+                        "error_type": "internal_error",
+                        "source": "ws_gateway",
+                        "retryable": True,
+                    },
+                )
+            ]
 
     def send(self, envelope: Envelope) -> None:
         session = self.connection_manager.get_by_device(envelope.target.device_id)
