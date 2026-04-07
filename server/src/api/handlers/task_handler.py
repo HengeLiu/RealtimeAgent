@@ -40,7 +40,7 @@ class TaskHandler:
             if not task_id:
                 return [self._error(envelope, "validation_error", "task_id is required")]
 
-            if envelope.message_name == "task.query":
+            if envelope.message_name in {"task.query", "task.state"}:
                 task = self._task_manager.get(task_id)
                 if not task:
                     return [self._error(envelope, "task_not_found", f"unknown task_id={task_id}")]
@@ -71,6 +71,8 @@ class TaskHandler:
 
             if envelope.message_name == "task.start":
                 started = self._task_manager.start(task_id)
+                if started.status.value == "completed":
+                    return [self._event(envelope, "task.completed", started.to_dict())]
                 return [self._event(envelope, "task.state", started.to_dict())]
 
             if envelope.message_name == "task.next":
@@ -83,6 +85,17 @@ class TaskHandler:
         except KeyError as exc:
             return [self._error(envelope, "task_not_found", str(exc))]
         except ValueError as exc:
+            if envelope.message_name in {"task.start", "task.next"}:
+                return [
+                    self._event(
+                        envelope,
+                        "task.failed",
+                        {
+                            "task_id": str(envelope.payload.get("task_id", "")),
+                            "error": str(exc),
+                        },
+                    )
+                ]
             return [self._error(envelope, "task_transition_invalid", str(exc))]
 
     def _event(self, envelope: Envelope, message_name: str, payload: dict[str, object]) -> Envelope:

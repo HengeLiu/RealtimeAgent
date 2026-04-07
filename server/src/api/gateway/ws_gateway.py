@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from api.router.message_router import MessageRouter
 from api.session.connection_manager import ConnectionManager
@@ -11,12 +11,23 @@ from protocol.codec.json_codec import JsonMessageCodec
 from protocol.enums import MessageType
 from protocol.messages.envelope import Endpoint, Envelope
 
+_IDEMPOTENT_MESSAGES = {
+    "system.register",
+    "task.create",
+    "task.cancel",
+    "audio.stop",
+    "peer.start_link",
+    "peer.stop_link",
+}
+
 
 @dataclass(slots=True)
 class WsGateway:
     router: MessageRouter
     connection_manager: ConnectionManager
     codec: JsonMessageCodec
+    idempotent_cache_size: int = 512
+    _idempotent_responses: dict[str, list[Envelope]] = field(default_factory=dict)
 
     def open_connection(self, connection_id: str, transport: Transport) -> None:
         self.connection_manager.open_session(connection_id, transport)
@@ -37,10 +48,16 @@ class WsGateway:
                 module=envelope.source.module,
             )
 
+        idempotent_key = self._idempotency_key(envelope)
+        if idempotent_key:
+            cached = self._idempotent_responses.get(idempotent_key)
+            if cached is not None:
+                return cached
+
         try:
-            return self.router.route(envelope)
+            responses = self.router.route(envelope)
         except Exception as exc:  # pragma: no cover - defensive path
-            return [
+            responses = [
                 Envelope(
                     message_id=f"{envelope.message_id}_error",
                     trace_id=envelope.trace_id,
@@ -60,12 +77,28 @@ class WsGateway:
                     },
                 )
             ]
+        if idempotent_key:
+            self._cache_idempotent_response(idempotent_key, responses)
+        return responses
 
     def send(self, envelope: Envelope) -> None:
         session = self.connection_manager.get_by_device(envelope.target.device_id)
         if not session:
             raise ValueError(f"Target device offline: {envelope.target.device_id}")
         session.transport.send(self.codec.encode(envelope))
+
+    def _idempotency_key(self, envelope: Envelope) -> str | None:
+        if envelope.message_name not in _IDEMPOTENT_MESSAGES:
+            return None
+        return f"{envelope.source.device_id}:{envelope.message_id}"
+
+    def _cache_idempotent_response(self, key: str, responses: list[Envelope]) -> None:
+        if key in self._idempotent_responses:
+            self._idempotent_responses.pop(key, None)
+        self._idempotent_responses[key] = responses
+        while len(self._idempotent_responses) > self.idempotent_cache_size:
+            oldest = next(iter(self._idempotent_responses))
+            self._idempotent_responses.pop(oldest, None)
 
 
 DEFAULT_GATEWAY_LOGGER = create_logger("server-api.gateway")

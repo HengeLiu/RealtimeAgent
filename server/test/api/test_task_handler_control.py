@@ -82,3 +82,46 @@ def test_task_handler_pause_invalid_transition_returns_error() -> None:
 
     assert paused.message_name == "system.error"
     assert paused.payload["error_code"] == "task_transition_invalid"
+
+
+def test_task_handler_start_returns_task_completed_when_task_finishes() -> None:
+    handler = _handler()
+    created = handler.handle(
+        _message(
+            "task.create",
+            {
+                "task_type": "timer",
+                "source": TaskSource.AGENT.value,
+                "priority": "normal",
+                "input": {"duration_seconds": 1},
+            },
+        )
+    )[0]
+
+    task_id = created.payload["task_id"]
+    started = handler.handle(_message("task.start", {"task_id": task_id}))[0]
+
+    assert started.message_name == "task.completed"
+    assert started.payload["task_id"] == task_id
+
+
+def test_task_handler_start_on_completed_task_returns_task_failed_event() -> None:
+    handler = _handler()
+    created = handler.handle(
+        _message(
+            "task.create",
+            {
+                "task_type": "timer",
+                "source": TaskSource.AGENT.value,
+                "priority": "normal",
+                "input": {"duration_seconds": 1},
+            },
+        )
+    )[0]
+    task_id = created.payload["task_id"]
+
+    handler.handle(_message("task.start", {"task_id": task_id}))
+    second = handler.handle(_message("task.start", {"task_id": task_id}))[0]
+
+    assert second.message_name == "task.failed"
+    assert second.payload["task_id"] == task_id

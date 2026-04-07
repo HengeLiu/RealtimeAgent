@@ -1,7 +1,18 @@
+#include "../glass_api/transport/server_client.h"
+#include "../infra/logging/logger.h"
+
+ServerClient g_server_client;
+
 void setup() {
-  // 第一阶段架构骨架：启动时应初始化 protocol/sensor/actuator/api。
+  Serial.begin(115200);
+  log_event("glass.bootstrap.start");
+  g_server_client.connect();
+  g_server_client.registerDevice("dev_glass_001", "masked_token");
+  log_event("glass.bootstrap.ready");
 }
 
 void loop() {
-  // 运行时骨架：轮询连接状态、感知调度和执行调度。
+  g_server_client.tick(millis());
+  // 第一阶段骨架：后续接入 sensor_hub / actuator_hub 调度。
+  delay(50);
 }

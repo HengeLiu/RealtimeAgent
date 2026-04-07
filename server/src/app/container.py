@@ -8,7 +8,7 @@ from agent_core.model_adapter import BailianHttpClient, BailianQwenOmniAdapter
 from agent_core.runtime import AgentRuntime, ResponsePlanner, SkillGateway, TaskGateway
 from agent_core.tool_registry import ToolRegistry, ToolSpec
 from api.gateway import WsGateway
-from api.handlers import AudioHandler, PeerHandler, SystemHandler, TaskHandler
+from api.handlers import AudioHandler, CameraHandler, PeerHandler, SystemHandler, TaskHandler
 from api.router import MessageRouter
 from api.session import BindingRegistry, ConnectionManager, DeviceRegistry
 from backend_task_core.event_bus import TaskEventBus
@@ -31,7 +31,7 @@ from skill.builtin import (
     TaskManageSkill,
 )
 from skill.registry import SkillRegistry
-from task.templates import NavigationTask, PhotoInterpretTask, TimerTask
+from task.templates import NavigationTask, PhoneVideoLinkTask, PhotoInterpretTask, TimerTask
 
 
 @dataclass(slots=True)
@@ -79,6 +79,7 @@ def build_container(settings: Settings | None = None) -> AppContainer:
     task_registry.register(TimerTask.task_type, TimerTask)
     task_registry.register(NavigationTask.task_type, NavigationTask)
     task_registry.register(PhotoInterpretTask.task_type, PhotoInterpretTask)
+    task_registry.register(PhoneVideoLinkTask.task_type, PhoneVideoLinkTask)
 
     task_manager = TaskManager(
         task_registry=task_registry,
@@ -95,6 +96,7 @@ def build_container(settings: Settings | None = None) -> AppContainer:
         logger=logger,
     )
     audio_handler = AudioHandler()
+    camera_handler = CameraHandler()
     task_handler = TaskHandler(task_manager=task_manager, logger=logger)
     peer_handler = PeerHandler(
         binding_registry=binding_registry,
@@ -105,6 +107,7 @@ def build_container(settings: Settings | None = None) -> AppContainer:
     router.register_module("server-api", system_handler.handle)
     router.register_module("backend-task-core", task_handler.handle)
     router.register_domain("audio", audio_handler.handle)
+    router.register_domain("camera", camera_handler.handle)
     router.register_domain("peer", peer_handler.handle)
     router.register_domain("system", system_handler.handle)
     router.register_domain("task", task_handler.handle)

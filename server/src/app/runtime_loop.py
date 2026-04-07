@@ -26,22 +26,41 @@ class RuntimeLoop:
             time.sleep(interval)
 
     def _tick(self, tick: int) -> None:
-        self.container.system_handler.reconcile_device_health()
-        started = self.container.task_manager.start_next()
-
-        if started:
+        trace_id = f"trace_runtime_{tick}"
+        try:
+            self.container.system_handler.reconcile_device_health()
+        except Exception as exc:  # pragma: no cover - defensive path
             log_event(
                 self.container.logger,
-                logging.INFO,
-                "runtime.task_started",
-                task_id=started.task_id,
-                trace_id=f"trace_runtime_{tick}",
-                status=started.status.value,
+                logging.ERROR,
+                "runtime.health_reconcile_failed",
+                trace_id=trace_id,
+                error=str(exc),
             )
-        else:
+
+        try:
+            started = self.container.task_manager.start_next()
+            if started:
+                log_event(
+                    self.container.logger,
+                    logging.INFO,
+                    "runtime.task_started",
+                    task_id=started.task_id,
+                    trace_id=trace_id,
+                    status=started.status.value,
+                )
+            else:
+                log_event(
+                    self.container.logger,
+                    logging.DEBUG,
+                    "runtime.idle_tick",
+                    trace_id=trace_id,
+                )
+        except Exception as exc:  # pragma: no cover - defensive path
             log_event(
                 self.container.logger,
-                logging.DEBUG,
-                "runtime.idle_tick",
-                trace_id=f"trace_runtime_{tick}",
+                logging.ERROR,
+                "runtime.task_tick_failed",
+                trace_id=trace_id,
+                error=str(exc),
             )
