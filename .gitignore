@@ -3,3 +3,4 @@ __*
 .vscode
 .venv
 tmp
+.arduino-build
