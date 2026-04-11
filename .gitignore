@@ -4,3 +4,10 @@ __*
 .venv
 tmp
 .arduino-build
+.cache
+
+# ESP-IDF spike generated artifacts
+glass/spike/**/build/
+glass/spike/**/managed_components/
+glass/spike/**/sdkconfig
+glass/spike/**/sdkconfig.old
