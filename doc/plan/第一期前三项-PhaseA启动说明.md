@@ -17,13 +17,13 @@ PYTHONPATH=server/src python3 -m app.main
 可选覆盖参数：
 
 ```bash
-PYTHONPATH=server/src python3 -m app.main --host 127.0.0.1 --port 8081
+PYTHONPATH=server/src python3 -m app.main --host 127.0.0.1 --port 8765
 ```
 
 ### 2.2 环境变量
 
 - `SERVER_HOST`：监听地址，默认 `0.0.0.0`
-- `SERVER_PORT`：监听端口，默认 `8081`
+- `SERVER_PORT`：监听端口，默认 `8765`
 - `APP_ENV`：环境名，默认 `dev`
 - `LOG_LEVEL`：日志级别，默认 `INFO`
 - `DEVICE_TOKEN_MAP`：设备配对映射，格式 `glass-001=token-a,glass-002=token-b`

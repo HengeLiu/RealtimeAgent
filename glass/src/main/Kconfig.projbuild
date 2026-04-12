@@ -1,0 +1,40 @@
+menu "Glass Runtime Config"
+
+config GLASS_WIFI_PRIMARY_SSID
+    string "主 WiFi 名称"
+    default ""
+
+config GLASS_WIFI_PRIMARY_PASSWORD
+    string "主 WiFi 密码"
+    default ""
+
+config GLASS_WIFI_FALLBACK_SSID
+    string "兜底 WiFi 名称"
+    default ""
+
+config GLASS_WIFI_FALLBACK_PASSWORD
+    string "兜底 WiFi 密码"
+    default ""
+
+config GLASS_SERVER_WS_URI
+    string "服务端控制连接地址"
+    default "ws://192.168.1.10:8765/ws/control"
+
+config GLASS_DEVICE_ID
+    string "眼镜设备编号"
+    default "glass-001"
+
+config GLASS_PAIR_TOKEN
+    string "眼镜配对令牌"
+    default "pair-demo-token"
+
+config GLASS_FIRMWARE_VERSION
+    string "固件版本"
+    default "0.1.0"
+
+config GLASS_HEARTBEAT_INTERVAL_MS
+    int "设备默认心跳间隔"
+    range 1000 60000
+    default 5000
+
+endmenu

@@ -7,7 +7,13 @@ tmp
 .cache
 
 # ESP-IDF spike generated artifacts
-glass/spike/**/build/
-glass/spike/**/managed_components/
+glass/**/build/
+glass/**/managed_components/
 glass/spike/**/sdkconfig
 glass/spike/**/sdkconfig.old
+glass/src/sdkconfig
+glass/src/sdkconfig.old
+glass/src/sdkconfig.local
+glass/src/sdkconfig.local.old
+glass/src/dependencies.lock
+glass/config/local_build.env

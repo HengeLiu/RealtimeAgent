@@ -70,11 +70,27 @@ class ServerSettingsTestCase(unittest.TestCase):
         os.environ["SERVER_HOST"] = "127.0.0.1"
         os.environ["SERVER_PORT"] = "9001"
         os.environ["LOG_LEVEL"] = "debug"
+        os.environ["HEARTBEAT_INTERVAL_MS"] = "3000"
+        os.environ["HEARTBEAT_TIMEOUT_MS"] = "9000"
+        os.environ["SERVER_DEVICE_ID"] = "server-phase-b"
         settings = ServerSettings.from_env()
 
         self.assertEqual(settings.host, "127.0.0.1")
         self.assertEqual(settings.port, 9001)
         self.assertEqual(settings.log_level, "DEBUG")
+        self.assertEqual(settings.heartbeat_interval_ms, 3000)
+        self.assertEqual(settings.heartbeat_timeout_ms, 9000)
+        self.assertEqual(settings.server_device_id, "server-phase-b")
+
+    def test_from_env_without_overrides_uses_defaults(self) -> None:
+        """测试目标：验证无环境变量覆盖时仍能回退到默认值。"""
+
+        settings = ServerSettings.from_env()
+
+        self.assertEqual(settings.host, "0.0.0.0")
+        self.assertEqual(settings.port, 8765)
+        self.assertEqual(settings.log_level, "INFO")
+        self.assertEqual(settings.server_device_id, "server-main")
 
     def test_invalid_port_raises(self) -> None:
         """测试目标：验证非法端口会触发结构化配置错误。
@@ -110,6 +126,17 @@ class ServerSettingsTestCase(unittest.TestCase):
 
         self.assertEqual(token_map["glass-001"], "token-a")
         self.assertEqual(token_map["glass-002"], "token-b")
+
+    def test_invalid_heartbeat_timeout_raises(self) -> None:
+        """测试目标：验证心跳超时必须大于心跳间隔。"""
+
+        with self.assertRaises(AppError) as ctx:
+            ServerSettings(
+                heartbeat_interval_ms=5000,
+                heartbeat_timeout_ms=4000,
+            ).validate()
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
 
 
 if __name__ == "__main__":

@@ -22,13 +22,19 @@ class ServerSettings:
     3. `environment`：运行环境名称，例如 `dev`。
     4. `log_level`：日志级别。
     5. `device_token_map`：设备与配对令牌映射，格式为 `device_id=token,device2=token2`。
+    6. `heartbeat_interval_ms`：服务端下发给设备的心跳建议间隔。
+    7. `heartbeat_timeout_ms`：服务端判定设备离线的心跳超时时间。
+    8. `server_device_id`：服务端在控制消息中的设备编号。
     """
 
     host: str = "0.0.0.0"
-    port: int = 8081
+    port: int = 8765
     environment: str = "dev"
     log_level: str = "INFO"
     device_token_map: str = ""
+    heartbeat_interval_ms: int = 5000
+    heartbeat_timeout_ms: int = 15000
+    server_device_id: str = "server-main"
 
     @classmethod
     def from_env(cls) -> "ServerSettings":
@@ -46,7 +52,9 @@ class ServerSettings:
         2. 校验失败时抛出 `AppError(INVALID_CONFIG)`。
         """
 
-        port_raw = os.getenv("SERVER_PORT", str(cls.port))
+        defaults = cls()
+
+        port_raw = os.getenv("SERVER_PORT", str(defaults.port))
         try:
             port = int(port_raw)
         except ValueError as exc:
@@ -57,14 +65,48 @@ class ServerSettings:
             ) from exc
 
         settings = cls(
-            host=os.getenv("SERVER_HOST", cls.host),
+            host=os.getenv("SERVER_HOST", defaults.host),
             port=port,
-            environment=os.getenv("APP_ENV", cls.environment),
-            log_level=os.getenv("LOG_LEVEL", cls.log_level).upper(),
-            device_token_map=os.getenv("DEVICE_TOKEN_MAP", cls.device_token_map),
+            environment=os.getenv("APP_ENV", defaults.environment),
+            log_level=os.getenv("LOG_LEVEL", defaults.log_level).upper(),
+            device_token_map=os.getenv("DEVICE_TOKEN_MAP", defaults.device_token_map),
+            heartbeat_interval_ms=cls._parse_int_env(
+                "HEARTBEAT_INTERVAL_MS",
+                defaults.heartbeat_interval_ms,
+            ),
+            heartbeat_timeout_ms=cls._parse_int_env(
+                "HEARTBEAT_TIMEOUT_MS",
+                defaults.heartbeat_timeout_ms,
+            ),
+            server_device_id=os.getenv("SERVER_DEVICE_ID", defaults.server_device_id),
         )
         settings.validate()
         return settings
+
+    @staticmethod
+    def _parse_int_env(name: str, default: int) -> int:
+        """读取整数环境变量。
+
+        参数：
+        1. `name`：环境变量名。
+        2. `default`：默认值。
+
+        返回值：
+        1. 解析后的整数。
+
+        异常情况：
+        1. 无法转为整数时抛出 `AppError(INVALID_CONFIG)`。
+        """
+
+        raw = os.getenv(name, str(default))
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                f"{name} 必须是整数",
+                details={"value": raw},
+            ) from exc
 
     def validate(self) -> None:
         """校验配置合法性。
@@ -96,6 +138,32 @@ class ServerSettings:
                 "LOG_LEVEL 非法",
                 details={"log_level": self.log_level, "valid_levels": sorted(valid_levels)},
             )
+        if self.heartbeat_interval_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "HEARTBEAT_INTERVAL_MS 必须大于 0",
+                details={"heartbeat_interval_ms": self.heartbeat_interval_ms},
+            )
+        if self.heartbeat_timeout_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "HEARTBEAT_TIMEOUT_MS 必须大于 0",
+                details={"heartbeat_timeout_ms": self.heartbeat_timeout_ms},
+            )
+        if self.heartbeat_timeout_ms <= self.heartbeat_interval_ms:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "HEARTBEAT_TIMEOUT_MS 必须大于 HEARTBEAT_INTERVAL_MS",
+                details={
+                    "heartbeat_interval_ms": self.heartbeat_interval_ms,
+                    "heartbeat_timeout_ms": self.heartbeat_timeout_ms,
+                },
+            )
+        if not self.server_device_id.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "SERVER_DEVICE_ID 不能为空",
+            )
 
     def summary(self) -> dict[str, str | int]:
         """生成配置摘要。
@@ -110,6 +178,9 @@ class ServerSettings:
             "environment": self.environment,
             "log_level": self.log_level,
             "device_token_count": len(self.parse_device_token_map()),
+            "heartbeat_interval_ms": self.heartbeat_interval_ms,
+            "heartbeat_timeout_ms": self.heartbeat_timeout_ms,
+            "server_device_id": self.server_device_id,
         }
 
     def parse_device_token_map(self) -> dict[str, str]:

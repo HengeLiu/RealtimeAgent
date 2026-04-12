@@ -9,8 +9,21 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
+from api.ws import ControlRuntime
+from api.ws.websocket_transport import handle_control_websocket
 from infra.config import ServerSettings
 from infra.errors import AppError
+
+
+class AppHTTPServer(ThreadingHTTPServer):
+    """带运行时上下文的 HTTP 服务。"""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, server_address: tuple[str, int], request_handler_class, runtime: ControlRuntime):
+        super().__init__(server_address, request_handler_class)
+        self.runtime = runtime
 
 
 @dataclass(slots=True)
@@ -26,8 +39,9 @@ class ServerHandle:
     2. `thread`：服务线程。
     """
 
-    server: ThreadingHTTPServer
+    server: AppHTTPServer
     thread: threading.Thread
+    runtime: ControlRuntime
 
     @property
     def host(self) -> str:
@@ -44,11 +58,13 @@ class ServerHandle:
     def start(self) -> None:
         """启动服务线程。"""
 
+        self.runtime.start()
         self.thread.start()
 
     def stop(self) -> None:
         """停止服务并等待线程退出。"""
 
+        self.runtime.stop()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=3)
@@ -71,7 +87,7 @@ def _json_response(handler: BaseHTTPRequestHandler, status: HTTPStatus, body: di
     handler.wfile.write(payload)
 
 
-def create_http_server(settings: ServerSettings) -> ThreadingHTTPServer:
+def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> AppHTTPServer:
     """创建 HTTP 服务实例。
 
     主要逻辑：
@@ -101,6 +117,10 @@ def create_http_server(settings: ServerSettings) -> ThreadingHTTPServer:
             2. `/api/config-summary`：配置摘要。
             """
 
+            if self.path == "/ws/control":
+                handle_control_websocket(self, self.server.runtime)
+                return
+
             if self.path == "/api/health":
                 _json_response(
                     self,
@@ -108,6 +128,17 @@ def create_http_server(settings: ServerSettings) -> ThreadingHTTPServer:
                     {
                         "status": "ok",
                         "service": "server-api",
+                    },
+                )
+                return
+
+            if self.path == "/api/runtime/devices":
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "ok",
+                        "runtime": self.server.runtime.build_runtime_snapshot(),
                     },
                 )
                 return
@@ -142,7 +173,7 @@ def create_http_server(settings: ServerSettings) -> ThreadingHTTPServer:
 
             return
 
-    return ThreadingHTTPServer((settings.host, settings.port), RequestHandler)
+    return AppHTTPServer((settings.host, settings.port), RequestHandler, runtime)
 
 
 def build_server_handle(settings: ServerSettings) -> ServerHandle:
@@ -158,9 +189,10 @@ def build_server_handle(settings: ServerSettings) -> ServerHandle:
     1. 底层端口绑定失败会抛出系统异常。
     """
 
-    server = create_http_server(settings)
+    runtime = ControlRuntime(settings)
+    server = create_http_server(settings, runtime)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    return ServerHandle(server=server, thread=thread)
+    return ServerHandle(server=server, thread=thread, runtime=runtime)
 
 
 def run_forever(settings: ServerSettings) -> None:
