@@ -1,5 +1,10 @@
 # ESP32-S3 音频链路 Spike 复盘
 
+说明：
+
+1. 本文档仅保留为历史复盘记录。
+2. spike 验证结果已经并入主工程 `glass/src`，对应独立 spike 代码与脚本已从当前主流程中移除。
+
 ## 1. 试验背景与目标
 
 - 日期：2026-04-11
@@ -13,8 +18,7 @@
 
 ### 2.1 工程落地
 
-- 新建独立 ESP-IDF 工程：
-  - `glass/spike/esp32s3_audio_sr_spike`
+- 当时新建了独立 ESP-IDF 工程，后续已合并进主工程并移除独立目录。
 - 关键文件：
   - `main/sr_spike_main.c`
   - `main/idf_component.yml`（`espressif/esp-sr = 2.1.2`）

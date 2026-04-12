@@ -97,7 +97,7 @@ curl http://127.0.0.1:8765/api/runtime/devices
 
 ### 4.1 配置方式
 
-不要直接手改 `sdkconfig`，也不要求每次进入交互式 `menuconfig`。
+眼镜端配置必须走本地私有配置文件，不使用交互式 `menuconfig` 作为日常流程，也不要直接手改 `sdkconfig`。
 
 推荐方式：
 
@@ -128,6 +128,7 @@ vim glass/config/local_build.env
 2. `GLASS_DEVICE_ID` 必须与服务端 `DEVICE_TOKEN_MAP` 中的键一致。
 3. `GLASS_PAIR_TOKEN` 必须与服务端 `DEVICE_TOKEN_MAP` 中的值一致。
 4. 脚本会在每次编译前把这些值同步到本地 `glass/src/sdkconfig.local`，这个文件不会提交到 Git。
+5. 主流程只保留 `glass/config/local_build.env -> run_glass_esp32.sh` 这一套配置方式，避免出现两份配置来源。
 
 ### 4.2 编译与烧录
 
@@ -152,12 +153,6 @@ bash script/run_glass_esp32.sh --build-only
 
 ```bash
 bash script/run_glass_esp32.sh --monitor-only -p /dev/cu.usbmodem2101
-```
-
-如需临时进入 IDF 原生配置页面，也可以执行：
-
-```bash
-bash script/run_glass_esp32.sh -m
 ```
 
 ### 4.3 串口日志观察点
@@ -235,4 +230,5 @@ bash script/run_phase_b_tests.sh
 2. 注册失败。
 3. 重连覆盖。
 4. 心跳超时。
-5. 配置与协议公共层回归。
+5. `sensor.audio.segment.started` 接收回归。
+6. 配置与协议公共层回归。

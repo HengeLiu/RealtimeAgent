@@ -6,11 +6,9 @@ tmp
 .arduino-build
 .cache
 
-# ESP-IDF spike generated artifacts
+# ESP-IDF generated artifacts
 glass/**/build/
 glass/**/managed_components/
-glass/spike/**/sdkconfig
-glass/spike/**/sdkconfig.old
 glass/src/sdkconfig
 glass/src/sdkconfig.old
 glass/src/sdkconfig.local

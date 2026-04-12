@@ -19,13 +19,14 @@
 当前仓库已有：
 
 1. Phase B 注册、心跳和 `voice.session.open` 自动下发。
-2. `glass/spike/esp32s3_audio_sr_spike` 中已有独立的 WakeNet + 本地端点检测试验。
+2. WakeNet 试验结果已经合并进入主工程 `glass/src`，不再保留独立 spike 作为联调入口。
 3. 协议文档中已冻结 `sensor.audio.segment.started` 作为“WakeNet 唤醒成功后开始一轮语音采集”的标准消息名。
 
 当前缺口：
 
 1. 主工程 `glass/src` 还未接入 `esp-sr`、模型分区和 PDM Mic 输入。
 2. 眼镜端虽然已能注册成功，但在 `voice.session.opened` 后还不会真正进入唤醒监听态。
+3. 文档与脚本需要统一到单一主流程，避免注册联调和 WakeNet 联调混用历史 spike 入口。
 
 ## 3. 实现方案描述
 
@@ -42,6 +43,7 @@
 1. 为主工程提供 WakeNet 所需的 `esp-sr` 依赖。
 2. 提供 `model` 分区，支持 `CONFIG_MODEL_IN_FLASH=y`。
 3. 默认启用 `wn9_hilexin`、PSRAM 和 8MB Flash 配置。
+4. 保持与 `glass/config/local_build.env -> sdkconfig.local` 的非交互式构建流程兼容。
 
 ### 3.2 眼镜端主流程扩展
 
@@ -52,11 +54,12 @@
 关键逻辑：
 
 1. 保留现有 WiFi、控制连接、注册、心跳流程。
-2. 启动时初始化 PDM Mic 和 AFE/WakeNet 运行时。
-3. 收到 `voice.session.open` 并回 `voice.session.opened` 后，打开唤醒监听开关。
-4. `sr_pipeline_task` 持续执行 `feed/fetch`。
-5. 当 `wakeup_state == WAKENET_DETECTED` 时，生成 `segment_id` 并发送 `sensor.audio.segment.started`。
-6. 本地仍执行尾静音/超时判断，仅用于复位当前段状态，为下一次唤醒做准备；本次不接入音频上行。
+2. 每次构建均从本地私有配置文件 `glass/config/local_build.env` 生成 `sdkconfig.local`，不使用交互式配置作为主路径。
+3. 启动时初始化 PDM Mic 和 AFE/WakeNet 运行时。
+4. 收到 `voice.session.open` 并回 `voice.session.opened` 后，打开唤醒监听开关。
+5. `sr_pipeline_task` 持续执行 `feed/fetch`。
+6. 当 `wakeup_state == WAKENET_DETECTED` 时，生成 `segment_id` 并发送 `sensor.audio.segment.started`。
+7. 本地仍执行尾静音/超时判断，仅用于复位当前段状态，为下一次唤醒做准备；本次不接入音频上行。
 
 ### 3.3 服务端接收行为
 
@@ -147,6 +150,7 @@ S -> S : 记录唤醒日志
 
 1. 服务端自动化测试已补充 `sensor.audio.segment.started` 路径。
 2. 真机串口验证需要在本地 ESP-IDF 环境中完成。
+3. WakeNet 联调默认使用 `bash script/run_glass_esp32.sh`，不再使用独立 spike 工程。
 
 ## 9. 当前实现进展
 

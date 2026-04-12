@@ -27,7 +27,6 @@ PREFERRED_PYTHON="${ESP_PYTHON:-}"
 DO_BUILD=1
 DO_FLASH=1
 DO_MONITOR=1
-DO_MENUCONFIG=0
 FORCE_SET_TARGET=0
 DO_FULLCLEAN=0
 DO_ERASE_FLASH=0
@@ -42,7 +41,6 @@ Default behavior:
 Options:
   -p, --port PORT       串口端口，例如 /dev/cu.usbmodem2101
   -b, --baud BAUD       串口监看波特率，默认: ${BAUD_RATE}
-  -m, --menuconfig      编译前打开 menuconfig（编辑 ${SDKCONFIG_FILE}）
   -t, --set-target      强制执行 "idf.py set-target ${TARGET}"
   -c, --clean           执行 "idf.py fullclean"
   -e, --erase-flash     烧录前执行 "idf.py erase-flash"
@@ -260,7 +258,6 @@ print_header() {
   echo "Build       : ${DO_BUILD}"
   echo "Flash       : ${DO_FLASH}"
   echo "Monitor     : ${DO_MONITOR}"
-  echo "Menuconfig  : ${DO_MENUCONFIG}"
   echo "Set target  : ${FORCE_SET_TARGET}"
   echo "Fullclean   : ${DO_FULLCLEAN}"
   echo "Erase flash : ${DO_ERASE_FLASH}"
@@ -276,10 +273,6 @@ while [[ $# -gt 0 ]]; do
     -b|--baud)
       BAUD_RATE="${2:-}"
       shift 2
-      ;;
-    -m|--menuconfig)
-      DO_MENUCONFIG=1
-      shift
       ;;
     -t|--set-target)
       FORCE_SET_TARGET=1
@@ -401,13 +394,6 @@ if [[ ${FORCE_SET_TARGET} -eq 1 || ! -f "${SDKCONFIG_FILE}" ]]; then
   echo "[2/?] Setting target to ${TARGET}..."
   idf_cmd set-target "${TARGET}"
   echo
-fi
-
-if [[ ${DO_MENUCONFIG} -eq 1 ]]; then
-  echo "[3/?] Opening menuconfig..."
-  idf_cmd menuconfig
-  echo
-  validate_runtime_config
 fi
 
 if [[ ${DO_BUILD} -eq 1 || ${DO_FLASH} -eq 1 ]]; then
