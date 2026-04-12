@@ -153,6 +153,26 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
                 self.codec.encode(
                     create_control_message(
                         semantic="notify",
+                        name="sensor.audio.segment.started",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "device_id": "glass-001",
+                            "stream_id": "stream_test_001",
+                            "segment_id": "seg_test_001",
+                            "wake_word": {
+                                "engine": "esp-sr-wakenet",
+                                "model": "WakeNet9",
+                            },
+                        },
+                        session_id=opened.session_id,
+                    )
+                ).decode("utf-8")
+            )
+            client.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="notify",
                         name="device.heartbeat",
                         source=self._glass_endpoint(),
                         target=self._server_endpoint(),

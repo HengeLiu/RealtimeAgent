@@ -174,11 +174,21 @@ bash script/run_glass_esp32.sh -m
 8. `已发送控制消息: voice.session.opened`
 9. 后续周期性出现 `已发送控制消息: device.heartbeat`
 
+如果当前固件已接入 WakeNet，上述日志之外还应看到：
+
+1. `WakeNet model selected: ...`
+2. `WakeNet runtime ready; waiting for voice.session.open`
+3. `WakeNet listening enabled for session_id=...`
+4. 说出唤醒词后出现 `WakeNet detected: segment_id=...`
+5. 紧接着出现 `已发送控制消息: sensor.audio.segment.started`
+
 服务端应同时看到：
 
 1. `收到控制消息: device.register`
 2. `收到控制消息: voice.session.opened`
 3. `收到控制消息: device.heartbeat`
+4. 说出唤醒词后出现 `收到控制消息: sensor.audio.segment.started`
+5. 随后出现 `收到语音唤醒状态上报: segment_id=...`
 
 ## 5. 联调验收步骤
 

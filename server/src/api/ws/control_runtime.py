@@ -161,6 +161,9 @@ class ControlRuntime:
         if message.name == "voice.session.opened":
             self._handle_voice_session_opened(connection, message)
             return
+        if message.name == "sensor.audio.segment.started":
+            self._handle_segment_started(connection, message)
+            return
 
         log_info(self._logger, f"忽略未支持控制消息: {message.name}", context)
 
@@ -317,6 +320,21 @@ class ControlRuntime:
             )
         connection.touch_heartbeat()
         connection.voice_opened = True
+
+    def _handle_segment_started(self, connection: ControlConnection, message: ControlMessage) -> None:
+        connection.last_seen_monotonic = time.monotonic()
+        segment_id = str(message.payload.get("segment_id", "")).strip()
+        stream_id = str(message.payload.get("stream_id", "")).strip()
+        log_info(
+            self._logger,
+            f"收到语音唤醒状态上报: segment_id={segment_id or '<none>'} stream_id={stream_id or '<none>'}",
+            LogContext(
+                trace_id=message.trace_id,
+                session_id=message.session_id,
+                device_id=connection.device_id,
+                message_id=message.message_id,
+            ),
+        )
 
     def _send_register_failed(
         self,

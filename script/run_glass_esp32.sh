@@ -20,7 +20,7 @@ BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build}"
 LOCAL_CONFIG_FILE="${LOCAL_CONFIG_FILE:-${REPO_ROOT}/glass/config/local_build.env}"
 LOCAL_CONFIG_TEMPLATE="${LOCAL_CONFIG_TEMPLATE:-${REPO_ROOT}/glass/config/local_build.env.example}"
 SDKCONFIG_FILE="${SDKCONFIG_FILE:-${PROJECT_DIR}/sdkconfig.local}"
-SDKCONFIG_BASE_FILE="${SDKCONFIG_BASE_FILE:-${PROJECT_DIR}/sdkconfig}"
+SDKCONFIG_DEFAULTS_FILE="${SDKCONFIG_DEFAULTS_FILE:-${PROJECT_DIR}/sdkconfig.defaults}"
 ESP_PYTHON_DEFAULT="/opt/miniconda3/bin/python3"
 PREFERRED_PYTHON="${ESP_PYTHON:-}"
 
@@ -60,6 +60,7 @@ Environment overrides:
   BUILD_DIR    构建目录，默认: ${BUILD_DIR}
   LOCAL_CONFIG_FILE   私有配置文件，默认: ${LOCAL_CONFIG_FILE}
   SDKCONFIG_FILE      本地生成的 sdkconfig，默认: ${SDKCONFIG_FILE}
+  SDKCONFIG_DEFAULTS_FILE  默认配置模板，默认: ${SDKCONFIG_DEFAULTS_FILE}
   ESP_PYTHON   ESP-IDF 使用的 Python；为空时自动回退到 ${ESP_PYTHON_DEFAULT} 或 python3
 
 Current project:
@@ -178,12 +179,10 @@ upsert_sdkconfig_int() {
 sync_local_config_to_sdkconfig() {
   mkdir -p "$(dirname "${SDKCONFIG_FILE}")"
 
-  if [[ ! -f "${SDKCONFIG_FILE}" ]]; then
-    if [[ -f "${SDKCONFIG_BASE_FILE}" ]]; then
-      cp "${SDKCONFIG_BASE_FILE}" "${SDKCONFIG_FILE}"
-    else
-      : > "${SDKCONFIG_FILE}"
-    fi
+  if [[ -f "${SDKCONFIG_DEFAULTS_FILE}" ]]; then
+    cp "${SDKCONFIG_DEFAULTS_FILE}" "${SDKCONFIG_FILE}"
+  else
+    : > "${SDKCONFIG_FILE}"
   fi
 
   upsert_sdkconfig_string "CONFIG_GLASS_WIFI_PRIMARY_SSID" "${GLASS_WIFI_PRIMARY_SSID}"
@@ -370,7 +369,7 @@ cleanup_non_cmake_build_dir() {
 }
 
 idf_cmd() {
-  idf.py -B "${BUILD_DIR}" -DSDKCONFIG="${SDKCONFIG_FILE}" "$@"
+  idf.py -B "${BUILD_DIR}" -DSDKCONFIG="${SDKCONFIG_FILE}" -DSDKCONFIG_DEFAULTS="${SDKCONFIG_DEFAULTS_FILE}" "$@"
 }
 
 if [[ ${DO_FLASH} -eq 1 || ${DO_MONITOR} -eq 1 ]]; then
