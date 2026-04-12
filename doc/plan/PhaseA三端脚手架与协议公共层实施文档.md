@@ -29,7 +29,8 @@
 1. 服务端入口：`server/src/app/main.py`
 2. 服务端基础路由：`server/src/api/http_server.py`
 3. 手机端模拟入口：`phone/src/main.py`
-4. 眼镜端模拟入口：`glass/src/main.py`
+4. 眼镜端 ESP-IDF 入口：`glass/src/main/glass_main.c`
+5. 眼镜端工程构建文件：`glass/src/CMakeLists.txt`、`glass/src/main/CMakeLists.txt`
 
 ### 3.2 配置、日志、错误
 

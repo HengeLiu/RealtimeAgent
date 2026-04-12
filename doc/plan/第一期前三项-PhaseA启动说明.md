@@ -45,17 +45,21 @@ python3 phone/src/main.py --once
 python3 phone/src/main.py
 ```
 
-## 4. 眼镜端模拟入口
+## 4. 眼镜端入口（ESP-IDF）
+
+眼镜端采用 ESP-IDF C 工程入口，目录为 `glass/src`，启动方式如下：
 
 ```bash
-python3 glass/src/main.py --once
+cd glass/src
+idf.py set-target esp32s3
+idf.py build
+idf.py flash monitor
 ```
 
-默认持续运行：
+说明：
 
-```bash
-python3 glass/src/main.py
-```
+1. 当前 Phase A 使用最小待机主循环 `main/glass_main.c`，用于验证端侧入口与主循环可运行。
+2. 后续 Phase C 会在该入口基础上接入 WakeNet、端点检测、播放闭麦状态机。
 
 ## 5. 一键测试命令
 

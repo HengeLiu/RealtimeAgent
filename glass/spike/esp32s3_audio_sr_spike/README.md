@@ -41,6 +41,10 @@ Wake word 定制参考：
 
 ## 运行步骤
 
+快捷方式：
+
+- 一键编译 + 烧录 + 串口监看：`./script/run_esp32s3_audio_sr_spike.sh`
+
 1. 安装并导出 ESP-IDF 环境。
 2. 进入工程：
    - `cd glass/spike/esp32s3_audio_sr_spike`
