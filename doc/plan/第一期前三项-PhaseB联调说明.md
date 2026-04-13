@@ -21,10 +21,11 @@
 在仓库根目录执行：
 
 ```bash
+uv sync --python 3.11
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export HEARTBEAT_INTERVAL_MS=5000
 export HEARTBEAT_TIMEOUT_MS=15000
-PYTHONPATH=server/src python3 -m app.main --host 0.0.0.0 --port 8765
+PYTHONPATH=server/src uv run --python 3.11 python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 更推荐直接使用脚本：
@@ -45,6 +46,7 @@ bash script/deprecated/run_server_phase_b_remote.sh all
 2. Phase B 联调时建议先只配一台设备，避免日志干扰。
 3. 脚本支持 `start/logs/stop/all` 四种动作。
 4. 远程脚本支持 `sync/start/stop/logs/all`，默认把当前仓库同步到 `ali5:/home/liuh/dev/<当前仓库名>`。
+5. 本地 Python 相关命令统一使用 `uv + Python 3.11`。
 
 ## 3. 本地模拟设备联调
 
@@ -53,7 +55,7 @@ bash script/deprecated/run_server_phase_b_remote.sh all
 服务端启动后，另开一个终端执行：
 
 ```bash
-python3 script/phase_b_control_client.py \
+uv run --python 3.11 python script/phase_b_control_client.py \
   --host 127.0.0.1 \
   --port 8765 \
   --device-id glass-001 \

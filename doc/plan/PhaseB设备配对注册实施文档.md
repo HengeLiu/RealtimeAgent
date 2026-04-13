@@ -176,7 +176,7 @@ end
 
 ### 6.3 功能测试 / 联调测试
 
-1. 本地模拟设备联调：`python3 script/phase_b_control_client.py ...`
+1. 本地模拟设备联调：`uv run --python 3.11 python script/phase_b_control_client.py ...`
 2. 真机联调：`bash script/run_glass_esp32.sh`
 3. 服务端观察：`bash script/deprecated/run_server_phase_b.sh all`
 4. 运行态观察：`curl http://127.0.0.1:8765/api/runtime/devices`

@@ -17,6 +17,8 @@ LOG_FILE="${LOG_FILE:-${LOG_DIR}/phase_b_server.log}"
 PID_FILE="${PID_FILE:-${LOG_DIR}/phase_b_server.pid}"
 TAIL_LINES="${TAIL_LINES:-80}"
 PYTHON_BIN="${PYTHON_BIN:-}"
+UV_PYTHON="${UV_PYTHON:-3.11}"
+RUNNER=()
 
 usage() {
   cat <<EOF
@@ -39,7 +41,8 @@ Environment overrides:
   LOG_FILE               默认: ${LOG_FILE}
   PID_FILE               默认: ${PID_FILE}
   TAIL_LINES             默认: ${TAIL_LINES}
-  PYTHON_BIN             指定 Python，默认优先 .venv/bin/python 其次 python3
+  PYTHON_BIN             可选，手动指定 Python 解释器
+  UV_PYTHON              未指定 PYTHON_BIN 时，uv 使用的 Python 版本，默认: ${UV_PYTHON}
 EOF
 }
 
@@ -51,16 +54,34 @@ require_command() {
   fi
 }
 
-select_python() {
+ensure_python_version() {
+  local python_bin="$1"
+  local version_text
+  version_text="$("${python_bin}" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+  if [[ "${version_text}" != "3."* ]]; then
+    echo "无法识别 Python 版本: ${version_text}" >&2
+    exit 1
+  fi
+
+  local major="${version_text%%.*}"
+  local minor="${version_text##*.}"
+  if (( major < 3 || (major == 3 && minor < 11) )); then
+    echo "Python 版本过低: ${version_text}，需要 >= 3.11" >&2
+    exit 1
+  fi
+}
+
+build_runner() {
+  RUNNER=()
   if [[ -n "${PYTHON_BIN}" ]]; then
-    printf '%s\n' "${PYTHON_BIN}"
+    require_command "${PYTHON_BIN}"
+    ensure_python_version "${PYTHON_BIN}"
+    RUNNER=("${PYTHON_BIN}")
     return 0
   fi
-  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
-    printf '%s\n' "${REPO_ROOT}/.venv/bin/python"
-    return 0
-  fi
-  command -v python3
+
+  require_command uv
+  RUNNER=(uv run --python "${UV_PYTHON}" python)
 }
 
 server_running() {
@@ -104,10 +125,7 @@ stop_server() {
 }
 
 start_server() {
-  local python_bin
-  python_bin="$(select_python)"
-
-  require_command "${python_bin}"
+  build_runner
   require_command curl
   mkdir -p "${LOG_DIR}"
 
@@ -131,7 +149,7 @@ start_server() {
       HEARTBEAT_INTERVAL_MS="${HEARTBEAT_INTERVAL_MS}" \
       HEARTBEAT_TIMEOUT_MS="${HEARTBEAT_TIMEOUT_MS}" \
       SERVER_DEVICE_ID="${SERVER_DEVICE_ID}" \
-      "${python_bin}" -m app.main --host "${HOST}" --port "${PORT}"
+      "${RUNNER[@]}" -m app.main --host "${HOST}" --port "${PORT}"
   ) >"${LOG_FILE}" 2>&1 < /dev/null &
 
   echo $! > "${PID_FILE}"

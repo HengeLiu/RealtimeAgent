@@ -30,6 +30,7 @@ bash script/run_server_phase_c_remote.sh all
 如果需要在本机直接启动服务端，可在仓库根目录执行：
 
 ```bash
+uv sync --python 3.11
 export DASHSCOPE_API_KEY="<your-api-key>"
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export VOICE_ASR_MODEL_NAME="qwen3-asr-flash"
@@ -42,6 +43,7 @@ bash script/run_server_phase_c.sh all
 2. 服务端默认监听 `8765`，日志文件默认是 `logs/phase_c_server.log`。
 3. 运行态观察接口：`http://127.0.0.1:8765/api/runtime/devices`
 4. 远程脚本支持 `sync/start/stop/logs/all`，默认把当前仓库同步到 `ali5:/home/liuh/dev/<当前仓库名>`。
+5. 本地 Python 相关命令统一使用 `uv + Python 3.11`。
 
 ## 3. 本地模拟设备联调
 
@@ -50,7 +52,7 @@ bash script/run_server_phase_c.sh all
 服务端启动后，另开一个终端执行：
 
 ```bash
-python3 script/phase_c_voice_client.py \
+uv run --python 3.11 python script/phase_c_voice_client.py \
   --host 127.0.0.1 \
   --port 8765 \
   --device-id glass-001 \
@@ -61,7 +63,7 @@ python3 script/phase_c_voice_client.py \
 可选：
 
 ```bash
-python3 script/phase_c_voice_client.py --wav /path/to/input.wav
+uv run --python 3.11 python script/phase_c_voice_client.py --wav /path/to/input.wav
 ```
 
 要求：

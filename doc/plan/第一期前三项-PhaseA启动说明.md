@@ -11,13 +11,14 @@
 在仓库根目录执行：
 
 ```bash
-PYTHONPATH=server/src python3 -m app.main
+uv sync --python 3.11
+PYTHONPATH=server/src uv run --python 3.11 python -m app.main
 ```
 
 可选覆盖参数：
 
 ```bash
-PYTHONPATH=server/src python3 -m app.main --host 127.0.0.1 --port 8765
+PYTHONPATH=server/src uv run --python 3.11 python -m app.main --host 127.0.0.1 --port 8765
 ```
 
 ### 2.2 环境变量
@@ -36,13 +37,13 @@ PYTHONPATH=server/src python3 -m app.main --host 127.0.0.1 --port 8765
 ## 3. 手机端模拟入口
 
 ```bash
-python3 phone/src/main.py --once
+uv run --python 3.11 python phone/src/main.py --once
 ```
 
 默认持续运行：
 
 ```bash
-python3 phone/src/main.py
+uv run --python 3.11 python phone/src/main.py
 ```
 
 ## 4. 眼镜端入口（ESP-IDF）
@@ -72,3 +73,8 @@ bash script/run_phase_a_tests.sh
 - 协议模型与编解码单元测试
 - 配置与错误模型单元测试
 - 服务端基础路由冒烟测试
+
+补充说明：
+
+- 所有 Python 命令统一通过 `uv` 运行，避免误用系统 `python3`。
+- 当前项目要求 Python 版本不低于 `3.11`。

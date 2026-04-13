@@ -101,26 +101,13 @@ cd "${REMOTE_DIR}"
 mkdir -p "${REMOTE_LOG_DIR}"
 
 ensure_runtime() {
-  if [[ -x .venv/bin/python ]]; then
-    return 0
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "remote uv runtime not available" >&2
+    exit 1
   fi
 
-  if command -v uv >/dev/null 2>&1; then
-    echo "[start] .venv 不存在，执行 uv sync"
-    uv sync
-    return 0
-  fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    echo "[start] 使用 python3 创建 .venv 并安装当前项目"
-    python3 -m venv .venv
-    .venv/bin/python -m pip install -U pip
-    .venv/bin/python -m pip install -e .
-    return 0
-  fi
-
-  echo "remote python runtime not available" >&2
-  exit 1
+  echo "[start] 执行 uv sync --python 3.11"
+  uv sync --python 3.11
 }
 
 ensure_runtime
