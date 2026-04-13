@@ -46,7 +46,7 @@ class ServerSettings:
     server_device_id: str = "server-main"
     dashscope_api_key: str = ""
     voice_model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    # voice_model_name: str = "qwen3-omni-flash"
+    # voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Cherry"
     voice_model_timeout_ms: int = 45000

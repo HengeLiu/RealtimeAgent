@@ -7,7 +7,7 @@
 本阶段必须交付：
 
 1. 眼镜端完成 WakeNet 后的真实音频上行、端点收口、播放闭麦与恢复监听。
-2. 服务端完成 `/ws_audio` 接入、音频聚合、最小 `VoiceSessionController`、`qwen3-omni-flash` 调用与 `/stream.wav` 下行。
+2. 服务端完成 `/ws_audio` 接入、音频聚合、最小 `VoiceSessionController`、`qwen3.5-omni-plus` 调用与 `/stream.wav` 下行。
 3. 服务端和眼镜端完成 `sensor.audio.segment.finished`、`actuator.audio.play`、`actuator.audio.started`、`actuator.audio.finished` 的控制闭环。
 4. 补齐自动化测试、联调脚本、联调说明和验收方案。
 
@@ -51,7 +51,7 @@ Phase B 和“Phase C 语音唤醒状态上报”完成后，仓库已有以下�
 本次实现严格按 [语音对话协议与时序设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/语音对话协议与时序设计.md) 的约束执行：
 
 1. 用户输入不会直接送入对话模型，而是先通过百炼 `qwen3-asr-flash` 转写成文本。
-2. 对话阶段再通过百炼 OpenAI 兼容 `chat/completions` 调用 `qwen3-omni-flash`。
+2. 对话阶段再通过百炼 OpenAI 兼容 `chat/completions` 调用 `qwen3.5-omni-plus`。
 3. 对话请求为 `stream=true`，输出模态固定为 `["text","audio"]`。
 4. 音频输出按流式 SSE 增量读取。
 5. 服务端把模型返回的 `24kHz` PCM 增量实时重采样为 `16kHz`，并送入 `/stream.wav` 播放流。
@@ -108,7 +108,7 @@ if (唤醒词命中?) then (是)
   :本地端点检测收口;
   :发送 sensor.audio.segment.finished;
   :暂停 WakeNet;
-  :服务端聚合音频并调用 qwen3-omni-flash;
+  :服务端聚合音频并调用 qwen3.5-omni-plus;
   :首段可播数据到达;
   :服务端下发 actuator.audio.play;
   :设备拉取 /stream.wav 播放;
@@ -231,7 +231,7 @@ Phase C 当前状态：`服务端主链路已完成，固件主状态机已推�
 已完成项：
 
 1. 服务端 `/ws_audio`、音频段聚合、最小语音运行时、`/stream.wav`、`actuator.audio.play` 控制闭环。
-2. 服务端 `qwen3-asr-flash -> qwen3-omni-flash` 两阶段百炼兼容接口适配与 `24kHz -> 16kHz` 流式重采样。
+2. 服务端 `qwen3-asr-flash -> qwen3.5-omni-plus` 两阶段百炼兼容接口适配与 `24kHz -> 16kHz` 流式重采样。
 3. 眼镜端 `audio_chunk` 上行、`sensor.audio.segment.finished`、HTTP 播放任务、播放闭麦与恢复监听。
 4. 自动化测试、启动脚本、本地模拟联调客户端、联调说明。
 5. 服务端日志已补齐 ASR 转写结果、完整模型输入 `messages` 与最终文本回复，便于多轮历史联调排障。

@@ -56,7 +56,7 @@
 - 在 `sensor.audio.segment.finished` 后先调用独立 ASR
 - 把当前轮转写文本写入 `MessageContext` / `DerivedArtifact`
 - 再构造对话模型输入
-- 调用 `qwen3-omni-flash`
+- 调用 `qwen3.5-omni-plus`
 - 在收到首段可播放音频后触发 `actuator.audio.play`
 - 持续把回复音频写入播放下行通道
 - 在 `actuator.audio.finished` 后恢复待命
