@@ -85,8 +85,11 @@ python3 script/phase_c_voice_client.py --wav /path/to/input.wav
 
 1. `收到控制消息: sensor.audio.segment.started`
 2. `收到控制消息: sensor.audio.segment.finished`
-3. `已发送控制消息: actuator.audio.play`
-4. `语音回复已准备: ...`
+3. `ASR 转写结果: ...`
+4. `输入大模型的 messages: ...`
+5. `大模型文本回复: ...`
+6. `已发送控制消息: actuator.audio.play`
+7. `语音回复已准备: ...`
 
 ### 3.4 运行态观察
 
@@ -150,8 +153,11 @@ bash script/run_glass_phase_c.sh --monitor-only -p /dev/cu.usbmodem2101
 
 1. `收到控制消息: sensor.audio.segment.started`
 2. `收到控制消息: sensor.audio.segment.finished`
-3. `已发送控制消息: actuator.audio.play`
-4. `语音回复已准备`
+3. `ASR 转写结果`
+4. `输入大模型的 messages`
+5. `大模型文本回复`
+6. `已发送控制消息: actuator.audio.play`
+7. `语音回复已准备`
 
 ## 5. 验收步骤
 
@@ -178,6 +184,7 @@ bash script/run_glass_phase_c.sh --monitor-only -p /dev/cu.usbmodem2101
 1. 配错 `pair_token` 后，设备不能进入语音态。
 2. 不配置 `DASHSCOPE_API_KEY` 时，服务端日志中能明确报出模型配置缺失。
 3. 播放期间设备不会再次触发 WakeNet。
+4. 连续两轮提问时，第二轮 `messages` 中应包含第一轮用户文本历史。
 
 ## 6. 自动化测试命令
 

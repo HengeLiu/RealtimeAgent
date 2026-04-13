@@ -51,12 +51,12 @@ def main() -> None:
     log_info(
         logger,
         "服务端启动中",
-        LogContext(trace_id="bootstrap", session_id="phase-b"),
+        LogContext(trace_id="bootstrap", session_id="phase-c"),
     )
     log_info(
         logger,
         f"配置摘要: {settings.summary()}",
-        LogContext(trace_id="bootstrap", session_id="phase-b"),
+        LogContext(trace_id="bootstrap", session_id="phase-c"),
     )
 
     run_forever(settings)

@@ -1,4 +1,4 @@
-"""Phase B 控制连接运行时。"""
+"""控制连接运行时。"""
 
 from __future__ import annotations
 
@@ -53,7 +53,13 @@ class ControlConnection:
 
 
 class ControlRuntime:
-    """控制面注册运行时。"""
+    """控制面运行时。
+
+    主要功能：
+    1. 管理设备控制连接、注册状态和心跳超时。
+    2. 路由控制消息到语音运行时。
+    3. 对外暴露运行态快照，服务联调与验收观察。
+    """
 
     def __init__(
         self,

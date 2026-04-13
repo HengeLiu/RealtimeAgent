@@ -133,6 +133,7 @@ title Phase C 控制面 + 数据面时序
 participant "Glass" as G
 participant "Server API" as S
 participant "VoiceRuntime" as V
+participant "Qwen3-ASR-Flash" as A
 participant "Qwen3-Omni-Flash" as M
 
 S -> G : voice.session.open
@@ -146,6 +147,8 @@ end
 G -> S : sensor.audio.segment.finished
 
 S -> V : 聚合段音频
+V -> A : chat/completions(stream=false)
+A --> V : transcript text
 V -> M : chat/completions(stream=true)
 M --> V : text delta + audio delta
 V -> G : actuator.audio.play
@@ -166,6 +169,7 @@ G -> S : actuator.audio.finished
 1. 新增 `server/test/unit/test_voice_runtime.py`，覆盖：
 2. `24kHz -> 16kHz` 流式重采样。
 3. `/stream.wav` WAV 头生成。
+4. ASR `data:` URL 与多轮文本历史消息构造。
 
 ### 6.2 集成测试
 
@@ -173,7 +177,7 @@ G -> S : actuator.audio.finished
 
 1. 控制连接注册成功并自动进入 `voice.session.open`。
 2. `/ws_audio` 建链与 `MediaFrame(audio_chunk)` 上行。
-3. `sensor.audio.segment.finished` 触发模型调用。
+3. `sensor.audio.segment.finished` 先触发 ASR，再触发对话模型调用。
 4. 服务端下发 `actuator.audio.play`。
 5. 设备通过 `/stream.wav` 拉到回复音频。
 6. `actuator.audio.started/finished` 回报后，会话状态回到 `listening`。
@@ -227,9 +231,10 @@ Phase C 当前状态：`服务端主链路已完成，固件主状态机已推�
 已完成项：
 
 1. 服务端 `/ws_audio`、音频段聚合、最小语音运行时、`/stream.wav`、`actuator.audio.play` 控制闭环。
-2. 服务端 `qwen3-omni-flash` 百炼兼容接口适配与 `24kHz -> 16kHz` 流式重采样。
+2. 服务端 `qwen3-asr-flash -> qwen3-omni-flash` 两阶段百炼兼容接口适配与 `24kHz -> 16kHz` 流式重采样。
 3. 眼镜端 `audio_chunk` 上行、`sensor.audio.segment.finished`、HTTP 播放任务、播放闭麦与恢复监听。
 4. 自动化测试、启动脚本、本地模拟联调客户端、联调说明。
+5. 服务端日志已补齐 ASR 转写结果、完整模型输入 `messages` 与最终文本回复，便于多轮历史联调排障。
 
 下一步建议：
 

@@ -53,7 +53,9 @@
 - 维护该设备当前会话的短期 Message 上下文
 - 接收 `sensor.audio.segment.started`
 - 聚合当前 `segment_id` 的 `audio_chunk`
-- 在 `sensor.audio.segment.finished` 后构造模型输入
+- 在 `sensor.audio.segment.finished` 后先调用独立 ASR
+- 把当前轮转写文本写入 `MessageContext` / `DerivedArtifact`
+- 再构造对话模型输入
 - 调用 `qwen3-omni-flash`
 - 在收到首段可播放音频后触发 `actuator.audio.play`
 - 持续把回复音频写入播放下行通道
@@ -368,3 +370,69 @@
 - 语音转写或摘要结果挂接到消息上下文
 
 做到这里，已经足够支撑第 1、2 项真实开发。
+
+## 7.1 引入独立 ASR 后的补充约束
+
+第一期实际落地中，语音链路已经采用“独立 ASR + 对话模型”两阶段。
+
+因此 `VoiceSessionController` 在语音链路中的职责应进一步细化为：
+
+1. 聚合当前轮用户音频。
+2. 调用独立 ASR，把当前轮用户语音转成文本。
+3. 生成 `DerivedArtifact(transcript)`。
+4. 把转写文本写入当前轮 `MessageContext.text`。
+5. 仅把文本历史送入对话模型多轮上下文。
+6. 把原始音频继续保存在 `asset_refs` 中，供审计、复盘和必要时重新转写。
+
+这意味着：
+
+1. `MessageContext` 的主载体仍然是文本。
+2. 原始音频不应充当多轮历史主输入。
+3. `DerivedArtifact.transcript` 是语音链路进入 `agent-core` 之前最关键的中间产物。
+
+## 7.2 语音消息在上下文中的推荐保留方式
+
+引入独立 ASR 后，推荐一轮用户语音消息至少保留：
+
+```json
+{
+  "role": "user",
+  "kind": "audio_input",
+  "text": "给我讲个笑话",
+  "asset_refs": [
+    "runs/session/sess_xxx/audio/input/seg_xxx.wav"
+  ],
+  "derived_refs": [
+    "runs/session/sess_xxx/artifact/transcript_seg_xxx.json"
+  ]
+}
+```
+
+对应的派生结果可以是：
+
+```json
+{
+  "artifact_id": "artifact_transcript_01J...",
+  "artifact_type": "transcript",
+  "source_asset_id": "asset_audio_01J...",
+  "text": "给我讲个笑话",
+  "language": "zh",
+  "created_at": 1744262400000
+}
+```
+
+## 7.3 多轮上下文的推荐组装方式
+
+引入独立 ASR 后，提交给对话模型的多轮上下文推荐遵循：
+
+1. `system`：系统提示词。
+2. 历史 `user`：使用转写后的文本。
+3. 历史 `assistant`：使用回复文本。
+4. 当前轮 `user`：优先使用当前轮 ASR 文本。
+5. 当前轮原始音频不直接作为多轮历史主输入；若后续模型能力或产品策略需要，可作为补充输入单独开启。
+
+这样做的原因是：
+
+1. 文本历史更稳定，便于回答“我刚才问了什么”这类问题。
+2. 文本历史更轻量，便于裁剪和长期演进。
+3. 保留音频资产和 transcript 派生结果后，后续仍可扩展更复杂的多模态回放策略。
