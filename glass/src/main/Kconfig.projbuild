@@ -1,5 +1,12 @@
 menu "Glass Runtime Config"
 
+config GLASS_ENABLE_WAKENET_TEST_APP
+    bool "启用独立 WakeNet 测试入口"
+    default n
+    help
+        开启后，main 组件会编译并运行 test_wakenet.c，而不是 glass_main.c。
+        该模式只测试唤醒词成功率，不连接服务端，不进行语音对话。
+
 config GLASS_WIFI_PRIMARY_SSID
     string "主 WiFi 名称"
     default ""

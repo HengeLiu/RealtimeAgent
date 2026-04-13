@@ -9,9 +9,11 @@ import struct
 from typing import Final
 
 from api.ws.control_runtime import ControlRuntime
+from protocol.media import MediaFrame
 
 GUID: Final[str] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 OPCODE_TEXT: Final[int] = 0x1
+OPCODE_BINARY: Final[int] = 0x2
 OPCODE_CLOSE: Final[int] = 0x8
 OPCODE_PING: Final[int] = 0x9
 OPCODE_PONG: Final[int] = 0xA
@@ -24,23 +26,7 @@ class WebSocketProtocolError(RuntimeError):
 def handle_control_websocket(handler, runtime: ControlRuntime) -> None:
     """处理 `/ws/control` WebSocket 请求。"""
 
-    key = handler.headers.get("Sec-WebSocket-Key")
-    upgrade = (handler.headers.get("Upgrade") or "").lower()
-    if not key or upgrade != "websocket":
-        handler.send_response(400)
-        handler.end_headers()
-        return
-
-    accept = base64.b64encode(hashlib.sha1(f"{key}{GUID}".encode("utf-8")).digest()).decode("utf-8")
-    handler.send_response(101, "Switching Protocols")
-    handler.send_header("Upgrade", "websocket")
-    handler.send_header("Connection", "Upgrade")
-    handler.send_header("Sec-WebSocket-Accept", accept)
-    handler.end_headers()
-    handler.close_connection = True
-
-    sock = handler.connection
-    sock.settimeout(1.0)
+    sock = _perform_handshake(handler)
     peer = f"{handler.client_address[0]}:{handler.client_address[1]}"
 
     def _send_text(text: str) -> None:
@@ -94,6 +80,44 @@ def handle_control_websocket(handler, runtime: ControlRuntime) -> None:
             pass
 
 
+def handle_audio_websocket(handler, runtime: ControlRuntime, query: dict[str, list[str]]) -> None:
+    """处理 `/ws_audio` WebSocket 请求。"""
+
+    device_id = (query.get("device_id") or [""])[0].strip()
+    if not device_id:
+        handler.send_response(400)
+        handler.end_headers()
+        return
+
+    sock = _perform_handshake(handler)
+    peer = f"{handler.client_address[0]}:{handler.client_address[1]}"
+    runtime.voice_runtime.on_audio_connection_opened(device_id=device_id, peer=peer)
+
+    try:
+        while True:
+            try:
+                opcode, payload = _read_frame(sock)
+            except TimeoutError:
+                continue
+            except (ConnectionError, OSError, WebSocketProtocolError):
+                break
+
+            if opcode == OPCODE_BINARY:
+                runtime.voice_runtime.on_audio_frame(device_id=device_id, frame=MediaFrame.decode(payload))
+                continue
+            if opcode == OPCODE_PING:
+                _send_frame(sock, OPCODE_PONG, payload)
+                continue
+            if opcode == OPCODE_CLOSE:
+                break
+    finally:
+        runtime.voice_runtime.on_audio_connection_closed(device_id=device_id)
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < size:
@@ -126,6 +150,27 @@ def _read_frame(sock: socket.socket) -> tuple[int, bytes]:
     payload = _recv_exact(sock, length)
     decoded = bytes(value ^ mask_key[index % 4] for index, value in enumerate(payload))
     return opcode, decoded
+
+
+def _perform_handshake(handler) -> socket.socket:
+    key = handler.headers.get("Sec-WebSocket-Key")
+    upgrade = (handler.headers.get("Upgrade") or "").lower()
+    if not key or upgrade != "websocket":
+        handler.send_response(400)
+        handler.end_headers()
+        raise ConnectionError("invalid websocket handshake")
+
+    accept = base64.b64encode(hashlib.sha1(f"{key}{GUID}".encode("utf-8")).digest()).decode("utf-8")
+    handler.send_response(101, "Switching Protocols")
+    handler.send_header("Upgrade", "websocket")
+    handler.send_header("Connection", "Upgrade")
+    handler.send_header("Sec-WebSocket-Accept", accept)
+    handler.end_headers()
+    handler.close_connection = True
+
+    sock = handler.connection
+    sock.settimeout(1.0)
+    return sock
 
 
 def _send_frame(sock: socket.socket, opcode: int, payload: bytes) -> None:

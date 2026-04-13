@@ -174,6 +174,37 @@ upsert_sdkconfig_int() {
   fi
 }
 
+upsert_sdkconfig_bool() {
+  local key="$1"
+  local value="${2:-0}"
+  local normalized="n"
+
+  case "${value}" in
+    1|y|Y|yes|YES|true|TRUE|on|ON)
+      normalized="y"
+      ;;
+    *)
+      normalized="n"
+      ;;
+  esac
+
+  if [[ "${normalized}" == "y" ]]; then
+    if grep -q "^# ${key} is not set" "${SDKCONFIG_FILE}" 2>/dev/null; then
+      sed -i.bak "s|^# ${key} is not set|${key}=y|" "${SDKCONFIG_FILE}"
+    elif grep -q "^${key}=" "${SDKCONFIG_FILE}" 2>/dev/null; then
+      sed -i.bak "s|^${key}=.*|${key}=y|" "${SDKCONFIG_FILE}"
+    else
+      printf '%s=y\n' "${key}" >> "${SDKCONFIG_FILE}"
+    fi
+  else
+    if grep -q "^${key}=" "${SDKCONFIG_FILE}" 2>/dev/null; then
+      sed -i.bak "s|^${key}=.*|# ${key} is not set|" "${SDKCONFIG_FILE}"
+    elif ! grep -q "^# ${key} is not set" "${SDKCONFIG_FILE}" 2>/dev/null; then
+      printf '# %s is not set\n' "${key}" >> "${SDKCONFIG_FILE}"
+    fi
+  fi
+}
+
 sync_local_config_to_sdkconfig() {
   mkdir -p "$(dirname "${SDKCONFIG_FILE}")"
 
@@ -192,6 +223,7 @@ sync_local_config_to_sdkconfig() {
   upsert_sdkconfig_string "CONFIG_GLASS_PAIR_TOKEN" "${GLASS_PAIR_TOKEN}"
   upsert_sdkconfig_string "CONFIG_GLASS_FIRMWARE_VERSION" "${GLASS_FIRMWARE_VERSION:-0.1.0}"
   upsert_sdkconfig_int "CONFIG_GLASS_HEARTBEAT_INTERVAL_MS" "${GLASS_HEARTBEAT_INTERVAL_MS:-5000}"
+  upsert_sdkconfig_bool "CONFIG_GLASS_ENABLE_WAKENET_TEST_APP" "${GLASS_ENABLE_WAKENET_TEST_APP:-0}"
 
   rm -f "${SDKCONFIG_FILE}.bak"
 }

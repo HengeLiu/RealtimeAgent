@@ -53,6 +53,24 @@ class TestWebSocketClient:
         masked = bytes(value ^ mask_key[index % 4] for index, value in enumerate(payload))
         self._sock.sendall(bytes(head) + mask_key + masked)
 
+    def send_binary(self, payload: bytes) -> None:
+        """发送二进制帧。"""
+
+        head = bytearray()
+        head.append(0x82)
+        length = len(payload)
+        mask_key = os.urandom(4)
+        if length < 126:
+            head.append(0x80 | length)
+        elif length < 65536:
+            head.append(0x80 | 126)
+            head.extend(struct.pack("!H", length))
+        else:
+            head.append(0x80 | 127)
+            head.extend(struct.pack("!Q", length))
+        masked = bytes(value ^ mask_key[index % 4] for index, value in enumerate(payload))
+        self._sock.sendall(bytes(head) + mask_key + masked)
+
     def recv_text(self) -> str:
         """接收一条文本帧。"""
 

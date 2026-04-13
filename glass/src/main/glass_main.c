@@ -7,12 +7,14 @@
 
 #include "cJSON.h"
 #include "driver/i2s_pdm.h"
+#include "driver/i2s_std.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_psram.h"
@@ -34,10 +36,18 @@
 
 #define MIC_PDM_CLK_GPIO GPIO_NUM_42
 #define MIC_PDM_DATA_GPIO GPIO_NUM_41
+#define SPK_I2S_BCLK_GPIO GPIO_NUM_7
+#define SPK_I2S_LRCK_GPIO GPIO_NUM_8
+#define SPK_I2S_DOUT_GPIO GPIO_NUM_9
 #define SR_SAMPLE_RATE_HZ 16000
 #define AFE_INPUT_FORMAT "M"
 #define LOCAL_ENDPOINT_TAIL_MS 900
+#define LOCAL_ENDPOINT_MIN_MS 1200
 #define LOCAL_ENDPOINT_MAX_MS 8000
+#define AUDIO_FRAME_SAMPLES 320
+#define AUDIO_FRAME_BYTES (AUDIO_FRAME_SAMPLES * sizeof(int16_t))
+#define PRE_ROLL_FRAME_COUNT 8
+#define WAKE_IDLE_SUMMARY_MS 3000
 
 typedef struct {
     const char *ssid;
@@ -70,15 +80,24 @@ typedef struct {
     int tail_silence_ms;
     int elapsed_ms;
     uint32_t segment_pcm_bytes;
+    uint32_t chunk_seq;
     char segment_id[64];
 } segment_state_t;
+
+typedef struct {
+    uint8_t data[AUDIO_FRAME_BYTES];
+    size_t size;
+    bool valid;
+} pre_roll_frame_t;
 
 static const char *TAG = "glass-main";
 static EventGroupHandle_t s_wifi_event_group;
 static esp_websocket_client_handle_t s_ws_client;
+static esp_websocket_client_handle_t s_audio_ws_client;
 static esp_event_handler_instance_t s_wifi_event_instance;
 static esp_event_handler_instance_t s_ip_event_instance;
 static i2s_chan_handle_t s_mic_rx_chan;
+static i2s_chan_handle_t s_spk_tx_chan;
 static int s_active_wifi_profile = 0;
 static int s_wifi_retry_count = 0;
 static uint32_t s_message_sequence = 0;
@@ -86,8 +105,16 @@ static bool s_registered = false;
 static bool s_voice_session_opened = false;
 static bool s_wake_listening_enabled = false;
 static bool s_sr_task_started = false;
+static bool s_audio_ws_ready = false;
+static bool s_audio_transport_started = false;
+static bool s_playback_active = false;
+static bool s_playback_task_running = false;
+static bool s_speaker_channel_enabled = false;
 static char s_current_session_id[64];
 static char s_current_stream_id[64];
+static char s_current_playback_stream_id[64];
+static char s_audio_ws_uri[256];
+static char s_stream_wav_url[256];
 static sr_runtime_ctx_t s_sr_ctx;
 
 static const wifi_profile_t s_wifi_profiles[WIFI_PROFILE_COUNT] = {
@@ -133,6 +160,74 @@ static void build_message_id(char *buffer, size_t size)
     char token[48];
     build_runtime_token("msg", token, sizeof(token));
     snprintf(buffer, size, "%s_%s", token, s_runtime_config.device_id);
+}
+
+static bool split_server_uri(
+    const char *ws_uri,
+    char *scheme_buffer,
+    size_t scheme_size,
+    char *authority_buffer,
+    size_t authority_size
+)
+{
+    const char *prefix = NULL;
+    const char *authority_start = NULL;
+    const char *authority_end = NULL;
+    size_t authority_len;
+
+    if (strncmp(ws_uri, "ws://", 5) == 0) {
+        prefix = "ws";
+        authority_start = ws_uri + 5;
+    } else if (strncmp(ws_uri, "wss://", 6) == 0) {
+        prefix = "wss";
+        authority_start = ws_uri + 6;
+    } else {
+        return false;
+    }
+
+    authority_end = strchr(authority_start, '/');
+    authority_len = authority_end != NULL ? (size_t)(authority_end - authority_start) : strlen(authority_start);
+    if (authority_len == 0 || authority_len >= authority_size) {
+        return false;
+    }
+
+    strlcpy(scheme_buffer, prefix, scheme_size);
+    memcpy(authority_buffer, authority_start, authority_len);
+    authority_buffer[authority_len] = '\0';
+    return true;
+}
+
+static bool build_audio_ws_uri(char *buffer, size_t size)
+{
+    char scheme[8];
+    char authority[128];
+    if (!split_server_uri(s_runtime_config.server_ws_uri, scheme, sizeof(scheme), authority, sizeof(authority))) {
+        return false;
+    }
+    snprintf(buffer, size, "%s://%s/ws_audio?device_id=%s", scheme, authority, s_runtime_config.device_id);
+    return true;
+}
+
+static bool build_stream_wav_url(const char *stream_id, char *buffer, size_t size)
+{
+    char scheme[8];
+    char authority[128];
+    const char *http_scheme;
+    if (!split_server_uri(s_runtime_config.server_ws_uri, scheme, sizeof(scheme), authority, sizeof(authority))) {
+        return false;
+    }
+
+    http_scheme = strcmp(scheme, "wss") == 0 ? "https" : "http";
+    snprintf(
+        buffer,
+        size,
+        "%s://%s/stream.wav?device_id=%s&stream_id=%s",
+        http_scheme,
+        authority,
+        s_runtime_config.device_id,
+        stream_id
+    );
+    return true;
 }
 
 static cJSON *build_endpoint_json(const char *device_id, const char *device_type, const char *module)
@@ -221,7 +316,7 @@ static void send_control_message_json(char *json_text, const char *name)
     );
     if (written < 0) {
         ESP_LOGE(TAG, "发送控制消息失败: %s", name);
-    } else {
+    } else if (strcmp(name, "device.heartbeat") != 0) {
         ESP_LOGI(TAG, "已发送控制消息: %s", name);
     }
     free(json_text);
@@ -321,6 +416,130 @@ static void send_audio_segment_started_message(const char *segment_id)
     );
 }
 
+static void send_audio_segment_finished_message(
+    const char *segment_id,
+    int duration_ms,
+    uint32_t pcm_bytes,
+    const char *finish_reason
+)
+{
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "构造 sensor.audio.segment.finished 失败");
+        return;
+    }
+    if (s_current_session_id[0] == '\0' || s_current_stream_id[0] == '\0') {
+        ESP_LOGW(TAG, "session_id 或 stream_id 为空，跳过发送 sensor.audio.segment.finished");
+        cJSON_Delete(payload);
+        return;
+    }
+
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    cJSON_AddStringToObject(payload, "stream_id", s_current_stream_id);
+    cJSON_AddStringToObject(payload, "segment_id", segment_id);
+    cJSON_AddNumberToObject(payload, "duration_ms", duration_ms);
+    cJSON_AddNumberToObject(payload, "bytes", (double)pcm_bytes);
+    cJSON_AddStringToObject(payload, "finish_reason", finish_reason);
+
+    send_control_message_json(
+        build_control_message_json("notify", "sensor.audio.segment.finished", s_current_session_id, payload),
+        "sensor.audio.segment.finished"
+    );
+}
+
+static void send_actuator_audio_state_message(const char *name, const char *stream_id)
+{
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "构造 %s 失败", name);
+        return;
+    }
+    if (s_current_session_id[0] == '\0' || stream_id == NULL || stream_id[0] == '\0') {
+        ESP_LOGW(TAG, "session_id 或 stream_id 为空，跳过发送 %s", name);
+        cJSON_Delete(payload);
+        return;
+    }
+
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    cJSON_AddStringToObject(payload, "stream_id", stream_id);
+    send_control_message_json(
+        build_control_message_json("notify", name, s_current_session_id, payload),
+        name
+    );
+}
+
+static bool send_audio_chunk_frame(
+    const char *stream_id,
+    const char *segment_id,
+    const uint8_t *payload,
+    size_t payload_size,
+    uint32_t chunk_seq,
+    bool final
+)
+{
+    cJSON *header = cJSON_CreateObject();
+    char *header_json = NULL;
+    uint8_t *raw = NULL;
+    uint32_t header_len = 0;
+    int written = -1;
+
+    if (s_audio_ws_client == NULL || !esp_websocket_client_is_connected(s_audio_ws_client)) {
+        return false;
+    }
+    if (header == NULL) {
+        ESP_LOGE(TAG, "构造音频帧头失败");
+        return false;
+    }
+
+    cJSON_AddStringToObject(header, "version", "v1");
+    cJSON_AddStringToObject(header, "stream_id", stream_id);
+    cJSON_AddStringToObject(header, "segment_id", segment_id);
+    cJSON_AddStringToObject(header, "frame_type", "audio_chunk");
+    cJSON_AddNumberToObject(header, "seq", (double)chunk_seq);
+    cJSON_AddNumberToObject(header, "ts_ms", (double)now_ms());
+    cJSON_AddStringToObject(header, "codec", "pcm16le");
+    cJSON_AddNumberToObject(header, "sample_rate", SR_SAMPLE_RATE_HZ);
+    cJSON_AddNumberToObject(header, "channels", 1);
+    cJSON_AddNumberToObject(header, "payload_size", (double)payload_size);
+    cJSON_AddBoolToObject(header, "final", final);
+
+    header_json = cJSON_PrintUnformatted(header);
+    if (header_json == NULL) {
+        ESP_LOGE(TAG, "序列化音频帧头失败");
+        goto cleanup;
+    }
+
+    header_len = (uint32_t)strlen(header_json);
+    raw = heap_caps_malloc(4 + header_len + payload_size, MALLOC_CAP_8BIT);
+    if (raw == NULL) {
+        ESP_LOGE(TAG, "分配音频帧缓冲失败");
+        goto cleanup;
+    }
+
+    raw[0] = (uint8_t)((header_len >> 24) & 0xFF);
+    raw[1] = (uint8_t)((header_len >> 16) & 0xFF);
+    raw[2] = (uint8_t)((header_len >> 8) & 0xFF);
+    raw[3] = (uint8_t)(header_len & 0xFF);
+    memcpy(raw + 4, header_json, header_len);
+    memcpy(raw + 4 + header_len, payload, payload_size);
+
+    written = esp_websocket_client_send_bin(
+        s_audio_ws_client,
+        (const char *)raw,
+        4 + (int)header_len + (int)payload_size,
+        pdMS_TO_TICKS(3000)
+    );
+    if (written < 0) {
+        ESP_LOGW(TAG, "发送 audio_chunk 失败: seq=%" PRIu32, chunk_seq);
+    }
+
+cleanup:
+    heap_caps_free(raw);
+    free(header_json);
+    cJSON_Delete(header);
+    return written >= 0;
+}
+
 static esp_err_t apply_wifi_profile(int index)
 {
     wifi_config_t wifi_config = {0};
@@ -379,8 +598,10 @@ static void wifi_event_handler(
         s_registered = false;
         s_voice_session_opened = false;
         s_wake_listening_enabled = false;
+        s_playback_active = false;
         s_current_session_id[0] = '\0';
         s_current_stream_id[0] = '\0';
+        s_current_playback_stream_id[0] = '\0';
 
         if (s_wifi_retry_count < WIFI_RETRY_PER_PROFILE) {
             s_wifi_retry_count += 1;
@@ -502,6 +723,52 @@ static esp_err_t init_mic_i2s(void)
     return ESP_OK;
 }
 
+static esp_err_t init_speaker_i2s(void)
+{
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    i2s_std_config_t std_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SR_SAMPLE_RATE_HZ),
+        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = SPK_I2S_BCLK_GPIO,
+            .ws = SPK_I2S_LRCK_GPIO,
+            .dout = SPK_I2S_DOUT_GPIO,
+            .din = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
+    };
+    chan_cfg.auto_clear_after_cb = true;
+
+    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &s_spk_tx_chan, NULL), TAG, "new speaker channel failed");
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_spk_tx_chan, &std_cfg), TAG, "init std tx mode failed");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_spk_tx_chan), TAG, "enable speaker channel failed");
+    s_speaker_channel_enabled = true;
+    ESP_LOGI(
+        TAG,
+        "Speaker ready: STD TX, sr=%d, bclk=%d, lrck=%d, dout=%d",
+        SR_SAMPLE_RATE_HZ,
+        SPK_I2S_BCLK_GPIO,
+        SPK_I2S_LRCK_GPIO,
+        SPK_I2S_DOUT_GPIO
+    );
+    return ESP_OK;
+}
+
+static void mono16_to_stereo32_msb(const int16_t *input, size_t sample_count, int32_t *output, float gain)
+{
+    for (size_t index = 0; index < sample_count; index += 1) {
+        int32_t sample = (int32_t)((float)input[index] * gain);
+        int32_t stereo_value = sample << 16;
+        output[index * 2] = stereo_value;
+        output[index * 2 + 1] = stereo_value;
+    }
+}
+
 static void reset_segment_state(segment_state_t *state)
 {
     state->segment_active = false;
@@ -509,13 +776,385 @@ static void reset_segment_state(segment_state_t *state)
     state->tail_silence_ms = 0;
     state->elapsed_ms = 0;
     state->segment_pcm_bytes = 0;
+    state->chunk_seq = 0;
     state->segment_id[0] = '\0';
+}
+
+static void reset_pre_roll(pre_roll_frame_t *frames, size_t count, size_t *next_index, size_t *valid_count)
+{
+    for (size_t index = 0; index < count; index += 1) {
+        frames[index].size = 0;
+        frames[index].valid = false;
+    }
+    *next_index = 0;
+    *valid_count = 0;
+}
+
+static void store_pre_roll_frame(
+    pre_roll_frame_t *frames,
+    size_t count,
+    size_t *next_index,
+    size_t *valid_count,
+    const uint8_t *data,
+    size_t size
+)
+{
+    if (count == 0 || data == NULL || size == 0) {
+        return;
+    }
+
+    if (size > sizeof(frames[0].data)) {
+        size = sizeof(frames[0].data);
+    }
+
+    memcpy(frames[*next_index].data, data, size);
+    frames[*next_index].size = size;
+    frames[*next_index].valid = true;
+    *next_index = (*next_index + 1U) % count;
+    if (*valid_count < count) {
+        *valid_count += 1U;
+    }
+}
+
+static void flush_pre_roll_frames(
+    pre_roll_frame_t *frames,
+    size_t count,
+    size_t next_index,
+    size_t valid_count,
+    segment_state_t *segment
+)
+{
+    if (valid_count == 0 || segment == NULL) {
+        return;
+    }
+
+    size_t start_index = (valid_count == count) ? next_index : 0;
+    for (size_t offset = 0; offset < valid_count; offset += 1) {
+        size_t frame_index = (start_index + offset) % count;
+        pre_roll_frame_t *frame = &frames[frame_index];
+        if (!frame->valid || frame->size == 0) {
+            continue;
+        }
+        if (!send_audio_chunk_frame(
+                s_current_stream_id,
+                segment->segment_id,
+                frame->data,
+                frame->size,
+                segment->chunk_seq,
+                false)) {
+            ESP_LOGW(TAG, "发送预取音频失败: seq=%" PRIu32, segment->chunk_seq);
+        } else {
+            segment->segment_pcm_bytes += (uint32_t)frame->size;
+            segment->chunk_seq += 1U;
+        }
+    }
+}
+
+static void drain_and_pause_speaker(void)
+{
+    if (s_spk_tx_chan == NULL || !s_speaker_channel_enabled) {
+        return;
+    }
+    esp_err_t disable_err = i2s_channel_disable(s_spk_tx_chan);
+    if (disable_err != ESP_OK) {
+        ESP_LOGW(TAG, "关闭扬声器通道失败: %s", esp_err_to_name(disable_err));
+        return;
+    }
+    s_speaker_channel_enabled = false;
+}
+
+static void log_wake_gate_state(
+    bool registered,
+    bool voice_session_opened,
+    bool wake_listening_enabled,
+    bool audio_ws_ready,
+    bool playback_active,
+    bool has_session_id
+)
+{
+    ESP_LOGI(
+        TAG,
+        "唤醒门控状态: registered=%d voice_session_opened=%d wake_listening_enabled=%d audio_ws_ready=%d playback_active=%d has_session_id=%d",
+        registered,
+        voice_session_opened,
+        wake_listening_enabled,
+        audio_ws_ready,
+        playback_active,
+        has_session_id
+    );
+}
+
+static void log_sr_fetch_state(
+    const char *phase,
+    int wakeup_state,
+    int vad_state,
+    int data_size,
+    bool segment_active,
+    bool got_speech,
+    int tail_silence_ms,
+    int elapsed_ms
+)
+{
+    ESP_LOGI(
+        TAG,
+        "SR 状态[%s]: wakeup_state=%d vad_state=%d data_size=%d segment_active=%d got_speech=%d tail_silence_ms=%d elapsed_ms=%d",
+        phase,
+        wakeup_state,
+        vad_state,
+        data_size,
+        segment_active,
+        got_speech,
+        tail_silence_ms,
+        elapsed_ms
+    );
+}
+
+static void audio_websocket_event_handler(
+    void *handler_args,
+    esp_event_base_t base,
+    int32_t event_id,
+    void *event_data
+)
+{
+    (void)handler_args;
+    (void)base;
+    (void)event_data;
+
+    if (event_id == WEBSOCKET_EVENT_CONNECTED) {
+        s_audio_ws_ready = true;
+        ESP_LOGI(TAG, "音频上行连接已建立");
+        return;
+    }
+    if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
+        s_audio_ws_ready = false;
+        ESP_LOGW(TAG, "音频上行连接已断开");
+        return;
+    }
+    if (event_id == WEBSOCKET_EVENT_ERROR) {
+        s_audio_ws_ready = false;
+        ESP_LOGE(TAG, "音频上行连接发生错误");
+    }
+}
+
+static void ensure_audio_transport_started(void)
+{
+    if (s_audio_transport_started) {
+        if (!s_audio_ws_ready && s_audio_ws_client != NULL) {
+            esp_websocket_client_start(s_audio_ws_client);
+        }
+        return;
+    }
+    if (!build_audio_ws_uri(s_audio_ws_uri, sizeof(s_audio_ws_uri))) {
+        ESP_LOGE(TAG, "构造音频上行地址失败: %s", s_runtime_config.server_ws_uri);
+        return;
+    }
+
+    esp_websocket_client_config_t websocket_config = {
+        .uri = s_audio_ws_uri,
+        .buffer_size = 4096,
+        .network_timeout_ms = 5000,
+        .task_stack = 8192,
+    };
+    s_audio_ws_client = esp_websocket_client_init(&websocket_config);
+    if (s_audio_ws_client == NULL) {
+        ESP_LOGE(TAG, "创建音频上行客户端失败");
+        return;
+    }
+
+    ESP_ERROR_CHECK(
+        esp_websocket_register_events(
+            s_audio_ws_client,
+            WEBSOCKET_EVENT_ANY,
+            audio_websocket_event_handler,
+            NULL
+        )
+    );
+    ESP_ERROR_CHECK(esp_websocket_client_start(s_audio_ws_client));
+    s_audio_transport_started = true;
+}
+
+static void playback_stream_task(void *arg)
+{
+    int32_t *stereo_buffer = NULL;
+    uint8_t wav_header[44];
+    int header_read = 0;
+    bool started_sent = false;
+    esp_http_client_config_t config = {
+        .url = s_stream_wav_url,
+        .timeout_ms = 5000,
+        .buffer_size = 2048,
+    };
+    esp_http_client_handle_t client = NULL;
+
+    stereo_buffer = heap_caps_malloc(AUDIO_FRAME_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_8BIT);
+    if (stereo_buffer == NULL) {
+        ESP_LOGE(TAG, "分配播放缓冲失败");
+        goto cleanup;
+    }
+
+    client = esp_http_client_init(&config);
+    if (client == NULL) {
+        ESP_LOGE(TAG, "创建播放 HTTP 客户端失败");
+        goto cleanup;
+    }
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "打开播放流失败: %s", s_stream_wav_url);
+        goto cleanup;
+    }
+    if (esp_http_client_fetch_headers(client) < 0) {
+        ESP_LOGE(TAG, "获取播放流响应头失败");
+        goto cleanup;
+    }
+
+    while (header_read < (int)sizeof(wav_header)) {
+        int read_size = esp_http_client_read(client, (char *)wav_header + header_read, sizeof(wav_header) - header_read);
+        if (read_size <= 0) {
+            ESP_LOGE(TAG, "读取 WAV 头失败");
+            goto cleanup;
+        }
+        header_read += read_size;
+    }
+    if (memcmp(wav_header, "RIFF", 4) != 0 || memcmp(wav_header + 8, "WAVE", 4) != 0) {
+        ESP_LOGE(TAG, "播放流不是有效 WAV 头");
+        goto cleanup;
+    }
+
+    for (;;) {
+        uint8_t pcm_buffer[AUDIO_FRAME_BYTES];
+        size_t pcm_filled = 0;
+
+        while (pcm_filled < sizeof(pcm_buffer)) {
+            int read_size = esp_http_client_read(
+                client,
+                (char *)pcm_buffer + pcm_filled,
+                sizeof(pcm_buffer) - pcm_filled
+            );
+            if (read_size < 0) {
+                ESP_LOGE(TAG, "读取播放流失败");
+                goto cleanup;
+            }
+            if (read_size == 0) {
+                break;
+            }
+            pcm_filled += (size_t)read_size;
+        }
+        if (pcm_filled == 0) {
+            break;
+        }
+        if ((pcm_filled % 2U) != 0U) {
+            pcm_filled -= 1;
+        }
+        if (pcm_filled == 0) {
+            continue;
+        }
+
+        mono16_to_stereo32_msb((const int16_t *)pcm_buffer, pcm_filled / 2U, stereo_buffer, 0.8f);
+        size_t bytes_to_write = (pcm_filled / 2U) * 2U * sizeof(int32_t);
+        size_t written_total = 0;
+        while (written_total < bytes_to_write) {
+            size_t written_size = 0;
+            esp_err_t err = i2s_channel_write(
+                s_spk_tx_chan,
+                (const uint8_t *)stereo_buffer + written_total,
+                bytes_to_write - written_total,
+                &written_size,
+                pdMS_TO_TICKS(1000)
+            );
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "扬声器写入失败: %s", esp_err_to_name(err));
+                goto cleanup;
+            }
+            written_total += written_size;
+        }
+
+        if (!started_sent) {
+            send_actuator_audio_state_message("actuator.audio.started", s_current_playback_stream_id);
+            started_sent = true;
+        }
+    }
+
+cleanup:
+    if (client != NULL) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+    }
+    drain_and_pause_speaker();
+    heap_caps_free(stereo_buffer);
+    if (started_sent) {
+        send_actuator_audio_state_message("actuator.audio.finished", s_current_playback_stream_id);
+    }
+    s_playback_active = false;
+    s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+    s_playback_task_running = false;
+    s_current_playback_stream_id[0] = '\0';
+    ESP_LOGI(TAG, "播放结束，恢复待命监听");
+    vTaskDelete(NULL);
+}
+
+static void start_playback_stream(const char *stream_id)
+{
+    int32_t zero_buffer[AUDIO_FRAME_SAMPLES * 2] = {0};
+    size_t preloaded_size = 0;
+
+    if (stream_id == NULL || stream_id[0] == '\0') {
+        ESP_LOGW(TAG, "playback stream_id 为空，忽略播放请求");
+        return;
+    }
+    if (!build_stream_wav_url(stream_id, s_stream_wav_url, sizeof(s_stream_wav_url))) {
+        ESP_LOGE(TAG, "构造播放流地址失败");
+        return;
+    }
+    if (s_playback_task_running) {
+        ESP_LOGW(TAG, "当前播放任务仍在运行，忽略新的播放请求");
+        return;
+    }
+    if (s_spk_tx_chan == NULL) {
+        ESP_LOGE(TAG, "扬声器通道未初始化，无法播放");
+        return;
+    }
+    if (!s_speaker_channel_enabled) {
+        esp_err_t preload_err = i2s_channel_preload_data(
+            s_spk_tx_chan,
+            zero_buffer,
+            sizeof(zero_buffer),
+            &preloaded_size
+        );
+        if (preload_err != ESP_OK) {
+            ESP_LOGW(TAG, "预装扬声器静音帧失败: %s", esp_err_to_name(preload_err));
+        }
+        esp_err_t enable_err = i2s_channel_enable(s_spk_tx_chan);
+        if (enable_err != ESP_OK) {
+            ESP_LOGE(TAG, "恢复扬声器通道失败: %s", esp_err_to_name(enable_err));
+            return;
+        }
+        s_speaker_channel_enabled = true;
+    }
+
+    strlcpy(s_current_playback_stream_id, stream_id, sizeof(s_current_playback_stream_id));
+    s_playback_active = true;
+    s_wake_listening_enabled = false;
+    s_playback_task_running = true;
+    if (xTaskCreate(playback_stream_task, "playback_stream_task", 8192, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "创建 playback_stream_task 失败");
+        s_playback_active = false;
+        s_playback_task_running = false;
+        s_current_playback_stream_id[0] = '\0';
+    }
 }
 
 static void sr_pipeline_task(void *arg)
 {
     sr_runtime_ctx_t *ctx = (sr_runtime_ctx_t *)arg;
     segment_state_t segment = {0};
+    pre_roll_frame_t pre_roll_frames[PRE_ROLL_FRAME_COUNT] = {0};
+    size_t pre_roll_next_index = 0;
+    size_t pre_roll_valid_count = 0;
+    bool last_wake_active = false;
+    int last_vad_state = -999;
+    int last_wakeup_state = -999;
+    uint32_t idle_fetch_count = 0;
+    uint64_t last_idle_summary_ms = now_ms();
+    uint64_t last_gate_log_ms = 0;
 
     ESP_LOGI(
         TAG,
@@ -526,15 +1165,48 @@ static void sr_pipeline_task(void *arg)
     );
 
     for (;;) {
+        bool current_frame_flushed_from_pre_roll = false;
+        bool has_session_id = s_current_session_id[0] != '\0';
         bool wake_active = s_registered &&
                            s_voice_session_opened &&
                            s_wake_listening_enabled &&
-                           s_current_session_id[0] != '\0';
+                           s_audio_ws_ready &&
+                           !s_playback_active &&
+                           has_session_id;
+        uint64_t current_ms = now_ms();
+        if (wake_active != last_wake_active) {
+            log_wake_gate_state(
+                s_registered,
+                s_voice_session_opened,
+                s_wake_listening_enabled,
+                s_audio_ws_ready,
+                s_playback_active,
+                has_session_id
+            );
+            last_wake_active = wake_active;
+            last_gate_log_ms = current_ms;
+        } else if (!wake_active && (current_ms - last_gate_log_ms) >= WAKE_IDLE_SUMMARY_MS) {
+            log_wake_gate_state(
+                s_registered,
+                s_voice_session_opened,
+                s_wake_listening_enabled,
+                s_audio_ws_ready,
+                s_playback_active,
+                has_session_id
+            );
+            last_gate_log_ms = current_ms;
+        }
         if (!wake_active) {
             if (segment.segment_active) {
                 ESP_LOGI(TAG, "voice session inactive, reset local speech segment");
                 reset_segment_state(&segment);
             }
+            reset_pre_roll(
+                pre_roll_frames,
+                PRE_ROLL_FRAME_COUNT,
+                &pre_roll_next_index,
+                &pre_roll_valid_count
+            );
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
@@ -561,15 +1233,73 @@ static void sr_pipeline_task(void *arg)
             continue;
         }
 
+        if (res->wakeup_state != last_wakeup_state || res->vad_state != last_vad_state) {
+            log_sr_fetch_state(
+                segment.segment_active ? "segment_active" : "idle",
+                res->wakeup_state,
+                res->vad_state,
+                res->data_size,
+                segment.segment_active,
+                segment.got_speech,
+                segment.tail_silence_ms,
+                segment.elapsed_ms
+            );
+            last_wakeup_state = res->wakeup_state;
+            last_vad_state = res->vad_state;
+        }
+        if (!segment.segment_active) {
+            idle_fetch_count += 1U;
+            if ((current_ms - last_idle_summary_ms) >= WAKE_IDLE_SUMMARY_MS) {
+                ESP_LOGI(
+                    TAG,
+                    "待唤醒摘要: idle_fetch_count=%" PRIu32 " wakeup_state=%d vad_state=%d audio_ws_ready=%d",
+                    idle_fetch_count,
+                    res->wakeup_state,
+                    res->vad_state,
+                    s_audio_ws_ready
+                );
+                idle_fetch_count = 0;
+                last_idle_summary_ms = current_ms;
+            }
+        }
+
+        if (res->data && res->data_size > 0) {
+            store_pre_roll_frame(
+                pre_roll_frames,
+                PRE_ROLL_FRAME_COUNT,
+                &pre_roll_next_index,
+                &pre_roll_valid_count,
+                (const uint8_t *)res->data,
+                (size_t)res->data_size
+            );
+        }
+
         if (!segment.segment_active && res->wakeup_state == WAKENET_DETECTED) {
             segment.segment_active = true;
             segment.got_speech = false;
             segment.tail_silence_ms = 0;
             segment.elapsed_ms = 0;
             segment.segment_pcm_bytes = 0;
+            segment.chunk_seq = 0;
             build_runtime_token("seg", segment.segment_id, sizeof(segment.segment_id));
             ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
             send_audio_segment_started_message(segment.segment_id);
+            flush_pre_roll_frames(
+                pre_roll_frames,
+                PRE_ROLL_FRAME_COUNT,
+                pre_roll_next_index,
+                pre_roll_valid_count,
+                &segment
+            );
+            current_frame_flushed_from_pre_roll = res->data && res->data_size > 0;
+            reset_pre_roll(
+                pre_roll_frames,
+                PRE_ROLL_FRAME_COUNT,
+                &pre_roll_next_index,
+                &pre_roll_valid_count
+            );
+            idle_fetch_count = 0;
+            last_idle_summary_ms = current_ms;
         }
 
         if (!segment.segment_active) {
@@ -577,8 +1307,18 @@ static void sr_pipeline_task(void *arg)
         }
 
         segment.elapsed_ms += ctx->feed_chunk_ms;
-        if (res->data && res->data_size > 0) {
-            segment.segment_pcm_bytes += (uint32_t)res->data_size;
+        if (!current_frame_flushed_from_pre_roll && res->data && res->data_size > 0) {
+            if (send_audio_chunk_frame(
+                s_current_stream_id,
+                segment.segment_id,
+                (const uint8_t *)res->data,
+                (size_t)res->data_size,
+                segment.chunk_seq,
+                false
+            )) {
+                segment.segment_pcm_bytes += (uint32_t)res->data_size;
+                segment.chunk_seq += 1;
+            }
         }
 
         if (res->vad_state == VAD_SPEECH) {
@@ -588,7 +1328,10 @@ static void sr_pipeline_task(void *arg)
             segment.tail_silence_ms += ctx->feed_chunk_ms;
         }
 
-        bool endpoint_by_silence = segment.got_speech && (segment.tail_silence_ms >= LOCAL_ENDPOINT_TAIL_MS);
+        bool min_capture_reached = segment.elapsed_ms >= LOCAL_ENDPOINT_MIN_MS;
+        bool endpoint_by_silence = min_capture_reached &&
+                                   segment.got_speech &&
+                                   (segment.tail_silence_ms >= LOCAL_ENDPOINT_TAIL_MS);
         bool endpoint_by_timeout = (segment.elapsed_ms >= LOCAL_ENDPOINT_MAX_MS);
         if (!endpoint_by_silence && !endpoint_by_timeout) {
             continue;
@@ -603,6 +1346,13 @@ static void sr_pipeline_task(void *arg)
             segment.tail_silence_ms,
             segment.segment_pcm_bytes
         );
+        send_audio_segment_finished_message(
+            segment.segment_id,
+            segment.elapsed_ms,
+            segment.segment_pcm_bytes,
+            endpoint_by_silence ? "endpoint_detected" : "max_capture"
+        );
+        s_wake_listening_enabled = false;
         reset_segment_state(&segment);
     }
 }
@@ -626,6 +1376,10 @@ static void init_speech_runtime(void)
 
     if (init_mic_i2s() != ESP_OK) {
         ESP_LOGE(TAG, "init_mic_i2s failed, WakeNet runtime disabled");
+        return;
+    }
+    if (init_speaker_i2s() != ESP_OK) {
+        ESP_LOGE(TAG, "init_speaker_i2s failed, playback runtime disabled");
         return;
     }
 
@@ -716,6 +1470,7 @@ static void handle_control_message(const char *data, int data_len)
     const cJSON *name = NULL;
     const cJSON *payload = NULL;
     const cJSON *session_id = NULL;
+    const cJSON *stream_id = NULL;
 
     char *json_text = calloc((size_t)data_len + 1U, sizeof(char));
     if (json_text == NULL) {
@@ -733,6 +1488,7 @@ static void handle_control_message(const char *data, int data_len)
     name = cJSON_GetObjectItemCaseSensitive(root, "name");
     payload = cJSON_GetObjectItemCaseSensitive(root, "payload");
     session_id = cJSON_GetObjectItemCaseSensitive(root, "session_id");
+    stream_id = cJSON_GetObjectItemCaseSensitive(root, "stream_id");
     if (!cJSON_IsString(name) || name->valuestring == NULL) {
         ESP_LOGW(TAG, "控制消息缺少 name");
         goto cleanup;
@@ -782,12 +1538,30 @@ static void handle_control_message(const char *data, int data_len)
         ESP_LOGI(TAG, "收到 voice.session.open: session_id=%s", s_current_session_id);
         send_voice_session_opened_message(s_current_session_id);
         s_voice_session_opened = true;
+        ensure_audio_transport_started();
         s_wake_listening_enabled = s_sr_ctx.initialized;
         if (!s_sr_ctx.initialized) {
             ESP_LOGW(TAG, "WakeNet runtime not ready; wake word status reporting disabled");
         } else {
             ESP_LOGI(TAG, "WakeNet listening enabled for session_id=%s", s_current_session_id);
         }
+        goto cleanup;
+    }
+
+    if (strcmp(name->valuestring, "actuator.audio.play") == 0) {
+        const cJSON *payload_stream_id = payload != NULL
+            ? cJSON_GetObjectItemCaseSensitive(payload, "stream_id")
+            : NULL;
+        const char *play_stream_id = NULL;
+
+        if (cJSON_IsString(stream_id) && stream_id->valuestring != NULL) {
+            play_stream_id = stream_id->valuestring;
+        } else if (cJSON_IsString(payload_stream_id) && payload_stream_id->valuestring != NULL) {
+            play_stream_id = payload_stream_id->valuestring;
+        }
+
+        ESP_LOGI(TAG, "收到 actuator.audio.play: stream_id=%s", play_stream_id != NULL ? play_stream_id : "<none>");
+        start_playback_stream(play_stream_id);
         goto cleanup;
     }
 
@@ -815,8 +1589,10 @@ static void websocket_event_handler(
         s_registered = false;
         s_voice_session_opened = false;
         s_wake_listening_enabled = false;
+        s_playback_active = false;
         s_current_session_id[0] = '\0';
         s_current_stream_id[0] = '\0';
+        s_current_playback_stream_id[0] = '\0';
         send_register_message();
         return;
     }
@@ -826,8 +1602,10 @@ static void websocket_event_handler(
         s_registered = false;
         s_voice_session_opened = false;
         s_wake_listening_enabled = false;
+        s_playback_active = false;
         s_current_session_id[0] = '\0';
         s_current_stream_id[0] = '\0';
+        s_current_playback_stream_id[0] = '\0';
         return;
     }
 
@@ -880,22 +1658,29 @@ static void heartbeat_task(void *arg)
 
 void app_main(void)
 {
+    ESP_EARLY_LOGI(TAG, "app_main entered");
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_EARLY_LOGW(TAG, "nvs 需要擦除后重新初始化: %s", esp_err_to_name(ret));
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    ESP_EARLY_LOGI(TAG, "nvs 初始化完成");
 
-    ESP_LOGI(TAG, "glass runtime bootstrapping (Phase B)");
+    ESP_LOGI(TAG, "glass runtime bootstrapping (Phase C)");
     log_runtime_config();
+    ESP_EARLY_LOGI(TAG, "运行时配置已输出");
 
     if (!init_wifi()) {
         return;
     }
+    ESP_EARLY_LOGI(TAG, "WiFi 初始化完成");
 
     start_control_connection();
+    ESP_EARLY_LOGI(TAG, "控制连接初始化完成");
     init_speech_runtime();
+    ESP_EARLY_LOGI(TAG, "语音运行时初始化完成");
 
     BaseType_t task_ret = xTaskCreate(
         heartbeat_task,
@@ -910,5 +1695,5 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "glass runtime entered Phase B main loop");
+    ESP_LOGI(TAG, "glass runtime entered Phase C main loop");
 }

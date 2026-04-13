@@ -76,7 +76,7 @@ Phase A 完成后，仓库已有协议模型、配置、日志和基础 HTTP 路
 本次新增：
 
 1. `script/run_phase_b_tests.sh`
-2. `script/run_server_phase_b.sh`
+2. `script/deprecated/run_server_phase_b.sh`
 3. `script/phase_b_control_client.py`
 4. `script/run_glass_esp32.sh`
 5. [第一期前三项-PhaseB联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项-PhaseB联调说明.md)
@@ -178,7 +178,7 @@ end
 
 1. 本地模拟设备联调：`python3 script/phase_b_control_client.py ...`
 2. 真机联调：`bash script/run_glass_esp32.sh`
-3. 服务端观察：`bash script/run_server_phase_b.sh all`
+3. 服务端观察：`bash script/deprecated/run_server_phase_b.sh all`
 4. 运行态观察：`curl http://127.0.0.1:8765/api/runtime/devices`
 
 ## 7. 当前方案与架构设计的契合程度
@@ -214,7 +214,7 @@ bash script/run_phase_b_tests.sh
 补充说明：
 
 1. 自动化测试覆盖的是服务端真实注册链路与运行态，不包含真机烧录步骤。
-2. 沙箱内独立前台端口绑定受限，因此 `run_server_phase_b.sh start` 在当前沙箱无法完成启动验证；仓库内集成测试使用进程内临时端口方式已通过。
+2. 沙箱内独立前台端口绑定受限，因此 `script/deprecated/run_server_phase_b.sh start` 在当前沙箱无法完成启动验证；仓库内集成测试使用进程内临时端口方式已通过。
 3. 真机编译、烧录、串口日志观察已在联调说明中给出标准操作方式。
 
 ## 9. 当前实现进展

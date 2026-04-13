@@ -14,6 +14,8 @@ from infra.logging import LogContext, get_logger, log_info
 from protocol.codec.json_codec import JsonMessageCodec
 from protocol.messages.control_message import ControlMessage, Endpoint
 from protocol.utils.message_factory import create_control_message
+from runtime import VoiceRuntime
+from runtime.voice_runtime import SpeechRecognitionClient, VoiceModelClient
 
 
 @dataclass(slots=True)
@@ -53,13 +55,25 @@ class ControlConnection:
 class ControlRuntime:
     """控制面注册运行时。"""
 
-    def __init__(self, settings: ServerSettings) -> None:
+    def __init__(
+        self,
+        settings: ServerSettings,
+        *,
+        model_client: VoiceModelClient | None = None,
+        asr_client: SpeechRecognitionClient | None = None,
+    ) -> None:
         self._settings = settings
         self._codec = JsonMessageCodec()
         self._logger = get_logger("server.control")
         self._lock = threading.Lock()
         self._connections: dict[str, ControlConnection] = {}
         self._device_connections: dict[str, ControlConnection] = {}
+        self._voice_runtime = VoiceRuntime(
+            settings=settings,
+            send_control_message=self._send_message_to_device,
+            model_client=model_client,
+            asr_client=asr_client,
+        )
         self._stop_event = threading.Event()
         self._sweeper_thread = threading.Thread(
             target=self._heartbeat_sweeper,
@@ -111,6 +125,7 @@ class ControlRuntime:
     def on_transport_closed(self, connection: ControlConnection) -> None:
         """处理底层连接关闭。"""
 
+        removed_device_id: str | None = None
         with self._lock:
             connection.closed = True
             self._connections.pop(connection.connection_id, None)
@@ -118,6 +133,8 @@ class ControlRuntime:
                 current = self._device_connections.get(connection.device_id)
                 if current is connection:
                     self._device_connections.pop(connection.device_id, None)
+                    removed_device_id = connection.device_id
+        self._voice_runtime.on_control_connection_closed(removed_device_id)
 
     def close_connection(self, connection: ControlConnection, *, code: int, reason: str) -> None:
         """关闭一条控制连接。"""
@@ -142,7 +159,8 @@ class ControlRuntime:
             device_id=connection.device_id,
             message_id=message.message_id,
         )
-        log_info(self._logger, f"收到控制消息: {message.name}", context)
+        if self._should_log_control_message(message.name):
+            log_info(self._logger, f"收到控制消息: {message.name}", context)
         connection.last_seen_monotonic = time.monotonic()
 
         if not connection.registered and message.name != "device.register":
@@ -163,6 +181,15 @@ class ControlRuntime:
             return
         if message.name == "sensor.audio.segment.started":
             self._handle_segment_started(connection, message)
+            return
+        if message.name == "sensor.audio.segment.finished":
+            self._handle_segment_finished(connection, message)
+            return
+        if message.name == "actuator.audio.started":
+            self._handle_actuator_audio_started(connection, message)
+            return
+        if message.name == "actuator.audio.finished":
+            self._handle_actuator_audio_finished(connection, message)
             return
 
         log_info(self._logger, f"忽略未支持控制消息: {message.name}", context)
@@ -197,6 +224,7 @@ class ControlRuntime:
             "online_device_count": len(online_devices),
             "online_devices": online_devices,
             "connections": connection_items,
+            "voice_sessions": self._voice_runtime.build_runtime_snapshot(),
         }
 
     def _handle_register(self, connection: ControlConnection, message: ControlMessage) -> None:
@@ -246,6 +274,11 @@ class ControlRuntime:
             connection.session_id = f"sess_{uuid.uuid4().hex[:12]}"
             connection.touch_heartbeat()
             self._device_connections[device_id] = connection
+            self._voice_runtime.open_session(
+                device_id=device_id,
+                device_type=device_type,
+                session_id=connection.session_id,
+            )
 
         if old_connection is not None:
             log_info(
@@ -276,15 +309,7 @@ class ControlRuntime:
                 name="voice.session.open",
                 source=self._server_endpoint(),
                 target=self._device_endpoint(device_id, device_type),
-                payload={
-                    "sample_rate": 16000,
-                    "channels": 1,
-                    "codec": "pcm16",
-                    "endpoint": {
-                        "trailing_silence_ms": 800,
-                        "max_capture_ms": 10000,
-                    },
-                },
+                payload=self._voice_runtime.build_open_payload(),
                 trace_id=message.trace_id,
                 session_id=connection.session_id,
             ),
@@ -320,11 +345,20 @@ class ControlRuntime:
             )
         connection.touch_heartbeat()
         connection.voice_opened = True
+        self._voice_runtime.on_voice_session_opened(
+            device_id=connection.device_id or "",
+            session_id=message.session_id,
+        )
 
     def _handle_segment_started(self, connection: ControlConnection, message: ControlMessage) -> None:
         connection.last_seen_monotonic = time.monotonic()
         segment_id = str(message.payload.get("segment_id", "")).strip()
         stream_id = str(message.payload.get("stream_id", "")).strip()
+        self._voice_runtime.on_segment_started(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or "",
+            payload=message.payload,
+        )
         log_info(
             self._logger,
             f"收到语音唤醒状态上报: segment_id={segment_id or '<none>'} stream_id={stream_id or '<none>'}",
@@ -334,6 +368,30 @@ class ControlRuntime:
                 device_id=connection.device_id,
                 message_id=message.message_id,
             ),
+        )
+
+    def _handle_segment_finished(self, connection: ControlConnection, message: ControlMessage) -> None:
+        connection.last_seen_monotonic = time.monotonic()
+        self._voice_runtime.on_segment_finished(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or "",
+            payload=message.payload,
+        )
+
+    def _handle_actuator_audio_started(self, connection: ControlConnection, message: ControlMessage) -> None:
+        stream_id = str(message.payload.get("stream_id") or message.stream_id or "").strip()
+        self._voice_runtime.on_playback_started(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or "",
+            stream_id=stream_id,
+        )
+
+    def _handle_actuator_audio_finished(self, connection: ControlConnection, message: ControlMessage) -> None:
+        stream_id = str(message.payload.get("stream_id") or message.stream_id or "").strip()
+        self._voice_runtime.on_playback_finished(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or "",
+            stream_id=stream_id,
         )
 
     def _send_register_failed(
@@ -371,14 +429,48 @@ class ControlRuntime:
         raw = self._codec.encode(message).decode("utf-8")
         with connection.send_lock:
             connection.send_text(raw)
-        log_info(
-            self._logger,
-            f"已发送控制消息: {message.name}",
-            LogContext(
-                trace_id=message.trace_id,
-                session_id=message.session_id,
-                device_id=connection.device_id,
-                message_id=message.message_id,
+        if self._should_log_control_message(message.name):
+            log_info(
+                self._logger,
+                f"已发送控制消息: {message.name}",
+                LogContext(
+                    trace_id=message.trace_id,
+                    session_id=message.session_id,
+                    device_id=connection.device_id,
+                    message_id=message.message_id,
+                ),
+            )
+
+    def _send_message_to_device(
+        self,
+        device_id: str,
+        semantic: str,
+        name: str,
+        session_id: str,
+        payload: dict[str, object],
+    ) -> None:
+        with self._lock:
+            connection = self._device_connections.get(device_id)
+        if connection is None or connection.closed:
+            raise build_error(
+                ErrorCode.STREAM_NOT_FOUND,
+                "目标设备控制连接不存在",
+                details={"device_id": device_id, "name": name},
+            )
+
+        stream_id = None
+        if isinstance(payload.get("stream_id"), str):
+            stream_id = str(payload["stream_id"])
+        self._send_message(
+            connection,
+            create_control_message(
+                semantic=semantic,
+                name=name,
+                source=self._server_endpoint(),
+                target=self._device_endpoint(connection.device_id or device_id, connection.device_type),
+                payload=payload,
+                session_id=session_id,
+                stream_id=stream_id,
             ),
         )
 
@@ -417,3 +509,24 @@ class ControlRuntime:
             device_type=device_type,
             module="glass-api",
         )
+
+    @property
+    def voice_runtime(self) -> VoiceRuntime:
+        return self._voice_runtime
+
+    @staticmethod
+    def _should_log_control_message(name: str) -> bool:
+        """判断控制消息是否需要输出常规成功日志。
+
+        主要逻辑：
+        1. 对高频正常心跳消息默认静默，避免刷屏。
+        2. 其它消息仍然保持原有日志粒度。
+
+        参数：
+        1. `name`：控制消息名。
+
+        返回值：
+        1. `True` 表示打印常规日志；`False` 表示静默。
+        """
+
+        return name != "device.heartbeat"

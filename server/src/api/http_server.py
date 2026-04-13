@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
+from urllib.parse import parse_qs, urlsplit
 
 from api.ws import ControlRuntime
-from api.ws.websocket_transport import handle_control_websocket
+from api.ws.websocket_transport import handle_audio_websocket, handle_control_websocket
 from infra.config import ServerSettings
 from infra.errors import AppError
+from runtime.voice_runtime import SpeechRecognitionClient, VoiceModelClient
 
 
 class AppHTTPServer(ThreadingHTTPServer):
@@ -107,6 +109,7 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
     class RequestHandler(BaseHTTPRequestHandler):
         """最小请求处理器。"""
 
+        protocol_version = "HTTP/1.1"
         get_config_summary: Callable[[], dict] = staticmethod(_get_summary)
 
         def do_GET(self) -> None:  # noqa: N802
@@ -117,11 +120,25 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
             2. `/api/config-summary`：配置摘要。
             """
 
-            if self.path == "/ws/control":
+            parsed = urlsplit(self.path)
+            path = parsed.path
+            query = parse_qs(parsed.query)
+
+            if path == "/ws/control":
                 handle_control_websocket(self, self.server.runtime)
                 return
+            if path == "/ws_audio":
+                handle_audio_websocket(self, self.server.runtime, query)
+                return
+            if path == "/stream.wav":
+                self.server.runtime.voice_runtime.stream_playback(
+                    self,
+                    device_id=(query.get("device_id") or [""])[0].strip(),
+                    stream_id=(query.get("stream_id") or [""])[0].strip(),
+                )
+                return
 
-            if self.path == "/api/health":
+            if path == "/api/health":
                 _json_response(
                     self,
                     HTTPStatus.OK,
@@ -132,7 +149,7 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                 )
                 return
 
-            if self.path == "/api/runtime/devices":
+            if path == "/api/runtime/devices":
                 _json_response(
                     self,
                     HTTPStatus.OK,
@@ -143,7 +160,7 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                 )
                 return
 
-            if self.path == "/api/config-summary":
+            if path == "/api/config-summary":
                 _json_response(
                     self,
                     HTTPStatus.OK,
@@ -161,7 +178,7 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                     "status": "error",
                     "error": {
                         "code": "NOT_FOUND",
-                        "message": f"路径不存在: {self.path}",
+                        "message": f"路径不存在: {path}",
                         "retryable": False,
                         "details": {},
                     },
@@ -176,7 +193,12 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
     return AppHTTPServer((settings.host, settings.port), RequestHandler, runtime)
 
 
-def build_server_handle(settings: ServerSettings) -> ServerHandle:
+def build_server_handle(
+    settings: ServerSettings,
+    *,
+    model_client: VoiceModelClient | None = None,
+    asr_client: SpeechRecognitionClient | None = None,
+) -> ServerHandle:
     """构建可启动的服务句柄。
 
     参数：
@@ -189,7 +211,7 @@ def build_server_handle(settings: ServerSettings) -> ServerHandle:
     1. 底层端口绑定失败会抛出系统异常。
     """
 
-    runtime = ControlRuntime(settings)
+    runtime = ControlRuntime(settings, model_client=model_client, asr_client=asr_client)
     server = create_http_server(settings, runtime)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     return ServerHandle(server=server, thread=thread, runtime=runtime)

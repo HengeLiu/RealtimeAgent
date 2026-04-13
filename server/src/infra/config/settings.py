@@ -25,6 +25,15 @@ class ServerSettings:
     6. `heartbeat_interval_ms`：服务端下发给设备的心跳建议间隔。
     7. `heartbeat_timeout_ms`：服务端判定设备离线的心跳超时时间。
     8. `server_device_id`：服务端在控制消息中的设备编号。
+    9. `dashscope_api_key`：百炼兼容接口 API Key。
+    10. `voice_model_base_url`：百炼兼容接口基础地址。
+    11. `voice_model_name`：语音模型名称。
+    12. `voice_model_voice`：语音输出音色。
+    13. `voice_model_timeout_ms`：模型请求超时时间。
+    14. `voice_runs_root`：语音运行时资产落盘目录。
+    15. `voice_asr_model_name`：语音转写模型名称。
+    16. `voice_system_prompt`：默认系统提示词。
+    17. `max_segment_audio_bytes`：单轮上行音频最大字节数。
     """
 
     host: str = "0.0.0.0"
@@ -35,6 +44,16 @@ class ServerSettings:
     heartbeat_interval_ms: int = 5000
     heartbeat_timeout_ms: int = 15000
     server_device_id: str = "server-main"
+    dashscope_api_key: str = ""
+    voice_model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # voice_model_name: str = "qwen3-omni-flash"
+    voice_model_name: str = "qwen3.5-omni-plus"
+    voice_model_voice: str = "Cherry"
+    voice_model_timeout_ms: int = 45000
+    voice_runs_root: str = "runs/session"
+    voice_asr_model_name: str = "qwen3-asr-flash"
+    voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
+    max_segment_audio_bytes: int = 524288
 
     @classmethod
     def from_env(cls) -> "ServerSettings":
@@ -79,6 +98,21 @@ class ServerSettings:
                 defaults.heartbeat_timeout_ms,
             ),
             server_device_id=os.getenv("SERVER_DEVICE_ID", defaults.server_device_id),
+            dashscope_api_key=os.getenv("DASHSCOPE_API_KEY", defaults.dashscope_api_key),
+            voice_model_base_url=os.getenv("VOICE_MODEL_BASE_URL", defaults.voice_model_base_url),
+            voice_model_name=os.getenv("VOICE_MODEL_NAME", defaults.voice_model_name),
+            voice_model_voice=os.getenv("VOICE_MODEL_VOICE", defaults.voice_model_voice),
+            voice_model_timeout_ms=cls._parse_int_env(
+                "VOICE_MODEL_TIMEOUT_MS",
+                defaults.voice_model_timeout_ms,
+            ),
+            voice_runs_root=os.getenv("VOICE_RUNS_ROOT", defaults.voice_runs_root),
+            voice_asr_model_name=os.getenv("VOICE_ASR_MODEL_NAME", defaults.voice_asr_model_name),
+            voice_system_prompt=os.getenv("VOICE_SYSTEM_PROMPT", defaults.voice_system_prompt),
+            max_segment_audio_bytes=cls._parse_int_env(
+                "MAX_SEGMENT_AUDIO_BYTES",
+                defaults.max_segment_audio_bytes,
+            ),
         )
         settings.validate()
         return settings
@@ -164,6 +198,43 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "SERVER_DEVICE_ID 不能为空",
             )
+        if self.voice_model_timeout_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_MODEL_TIMEOUT_MS 必须大于 0",
+                details={"voice_model_timeout_ms": self.voice_model_timeout_ms},
+            )
+        if not self.voice_model_base_url.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_MODEL_BASE_URL 不能为空",
+            )
+        if not self.voice_model_name.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_MODEL_NAME 不能为空",
+            )
+        if not self.voice_model_voice.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_MODEL_VOICE 不能为空",
+            )
+        if not self.voice_runs_root.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_RUNS_ROOT 不能为空",
+            )
+        if not self.voice_asr_model_name.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_ASR_MODEL_NAME 不能为空",
+            )
+        if self.max_segment_audio_bytes <= 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "MAX_SEGMENT_AUDIO_BYTES 必须大于 0",
+                details={"max_segment_audio_bytes": self.max_segment_audio_bytes},
+            )
 
     def summary(self) -> dict[str, str | int]:
         """生成配置摘要。
@@ -181,6 +252,13 @@ class ServerSettings:
             "heartbeat_interval_ms": self.heartbeat_interval_ms,
             "heartbeat_timeout_ms": self.heartbeat_timeout_ms,
             "server_device_id": self.server_device_id,
+            "voice_model_base_url": self.voice_model_base_url,
+            "voice_model_name": self.voice_model_name,
+            "voice_model_voice": self.voice_model_voice,
+            "voice_model_timeout_ms": self.voice_model_timeout_ms,
+            "voice_runs_root": self.voice_runs_root,
+            "voice_asr_model_name": self.voice_asr_model_name,
+            "max_segment_audio_bytes": self.max_segment_audio_bytes,
         }
 
     def parse_device_token_map(self) -> dict[str, str]:

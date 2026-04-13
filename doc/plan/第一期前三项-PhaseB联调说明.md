@@ -30,13 +30,13 @@ PYTHONPATH=server/src python3 -m app.main --host 0.0.0.0 --port 8765
 更推荐直接使用脚本：
 
 ```bash
-bash script/run_server_phase_b.sh all
+bash script/deprecated/run_server_phase_b.sh all
 ```
 
 如果联调阶段服务端部署在远程服务器 `ali5`，可直接使用远程发布脚本：
 
 ```bash
-bash script/run_server_phase_b_remote.sh all
+bash script/deprecated/run_server_phase_b_remote.sh all
 ```
 
 说明：
