@@ -150,7 +150,7 @@ S -> S : 记录唤醒日志
 
 1. 服务端自动化测试已补充 `sensor.audio.segment.started` 路径。
 2. 真机串口验证需要在本地 ESP-IDF 环境中完成。
-3. WakeNet 联调默认使用 `bash script/run_glass_esp32.sh`，不再使用独立 spike 工程。
+3. WakeNet 的历史 Phase C 联调脚本已归档为 `bash script/deprecated/run_glass_phase_c.sh`，当前主流程统一使用 `bash script/run_glass.sh`。
 
 ## 9. 当前实现进展
 

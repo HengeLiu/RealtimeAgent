@@ -107,7 +107,7 @@ class AgentFacade:
                 f"agent-core 返回结构化失败: error={exc.to_dict()} input_text={turn.input_text!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
             )
-            return self._build_failure_result(turn=turn, error=exc, traces=[])
+            result = self._build_failure_result(turn=turn, error=exc, traces=[])
         except Exception as exc:
             error = build_error(
                 ErrorCode.INTERNAL_ERROR,
@@ -119,7 +119,13 @@ class AgentFacade:
                 f"agent-core 返回非结构化失败: error={error.to_dict()} input_text={turn.input_text!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
             )
-            return self._build_failure_result(turn=turn, error=error, traces=[])
+            result = self._build_failure_result(turn=turn, error=error, traces=[])
+
+        result = self._persist_result(turn=turn, result=result)
+        return result
+
+    def _persist_result(self, *, turn: AgentTurn, result: AgentTurnResult) -> AgentTurnResult:
+        """把运行结果统一写回会话上下文。"""
 
         assistant_message_id = generate_id("msg")
         self._session_store.append_capability_traces(

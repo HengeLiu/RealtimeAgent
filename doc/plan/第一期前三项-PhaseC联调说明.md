@@ -24,7 +24,7 @@
 export DASHSCOPE_API_KEY="<your-api-key>"
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export VOICE_ASR_MODEL_NAME="qwen3-asr-flash"
-bash script/run_server_phase_c_remote.sh all
+bash script/deprecated/run_server_phase_c_remote.sh all
 ```
 
 如果需要在本机直接启动服务端，可在仓库根目录执行：
@@ -34,13 +34,13 @@ uv sync --python 3.11
 export DASHSCOPE_API_KEY="<your-api-key>"
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export VOICE_ASR_MODEL_NAME="qwen3-asr-flash"
-bash script/run_server_phase_c.sh all
+bash script/deprecated/run_server_phase_c.sh all
 ```
 
 说明：
 
 1. 不配置 `DASHSCOPE_API_KEY` 时，真实模型调用不可用。
-2. 服务端默认监听 `8765`，日志文件默认是 `logs/phase_c_server.log`。
+2. 当前归档的 Phase C 服务端脚本默认监听 `8765`，日志文件默认是 `logs/server.log`。
 3. 运行态观察接口：`http://127.0.0.1:8765/api/runtime/devices`
 4. 远程脚本支持 `sync/start/stop/logs/all`，默认把当前仓库同步到 `ali5:/home/liuh/dev/<当前仓库名>`。
 5. 本地 Python 相关命令统一使用 `uv + Python 3.11`。
@@ -112,17 +112,17 @@ curl http://127.0.0.1:8765/api/runtime/devices
 ### 4.1 烧录与监看
 
 ```bash
-bash script/run_glass_phase_c.sh -m
+bash script/deprecated/run_glass_phase_c.sh -m
 ```
 
 常用变体：
 
 ```bash
-bash script/run_glass_phase_c.sh --build-only
+bash script/deprecated/run_glass_phase_c.sh --build-only
 ```
 
 ```bash
-bash script/run_glass_phase_c.sh --monitor-only -p /dev/cu.usbmodem2101
+bash script/deprecated/run_glass_phase_c.sh --monitor-only -p /dev/cu.usbmodem2101
 ```
 
 ### 4.2 设备配置

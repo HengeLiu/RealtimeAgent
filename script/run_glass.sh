@@ -4,7 +4,7 @@ set -euo pipefail
 
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   echo "This script should be executed, not sourced." >&2
-  echo "Use: bash script/run_glass_esp32.sh" >&2
+  echo "Use: bash script/run_glass.sh" >&2
   return 1 2>/dev/null || exit 1
 fi
 
@@ -276,7 +276,7 @@ validate_runtime_config() {
 
 print_header() {
   echo "========================================"
-  echo " OpenAI Glass ESP32 Build + Flash + Monitor"
+  echo " OpenAI Glass Build + Flash + Monitor"
   echo "========================================"
   echo "IDF root    : ${IDF_ROOT}"
   echo "Project dir : ${PROJECT_DIR}"

@@ -130,7 +130,7 @@ vim glass/config/local_build.env
 2. `GLASS_DEVICE_ID` 必须与服务端 `DEVICE_TOKEN_MAP` 中的键一致。
 3. `GLASS_PAIR_TOKEN` 必须与服务端 `DEVICE_TOKEN_MAP` 中的值一致。
 4. 脚本会在每次编译前把这些值同步到本地 `glass/src/sdkconfig.local`，这个文件不会提交到 Git。
-5. 主流程只保留 `glass/config/local_build.env -> run_glass_esp32.sh` 这一套配置方式，避免出现两份配置来源。
+5. Phase B 历史主流程脚本已归档为 `glass/config/local_build.env -> script/deprecated/run_glass_phase_b.sh`，当前主流程统一使用 `script/run_glass.sh`。
 
 ### 4.2 编译与烧录
 
@@ -144,17 +144,17 @@ idf.py -p <串口端口> flash monitor
 更推荐直接使用脚本：
 
 ```bash
-bash script/run_glass_esp32.sh
+bash script/deprecated/run_glass_phase_b.sh
 ```
 
 常用变体：
 
 ```bash
-bash script/run_glass_esp32.sh --build-only
+bash script/deprecated/run_glass_phase_b.sh --build-only
 ```
 
 ```bash
-bash script/run_glass_esp32.sh --monitor-only -p /dev/cu.usbmodem2101
+bash script/deprecated/run_glass_phase_b.sh --monitor-only -p /dev/cu.usbmodem2101
 ```
 
 ### 4.3 串口日志观察点

@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-reply",
         default="runs/simple-glass-replies",
-        help="保存服务器返回音频的相对路径；可传目录或 wav 文件名，最终文件名会自动追加时间戳",
+        help="保存服务器返回音频的相对路径；传目录时会自动追加时间戳，传 wav 文件名时按原路径保存",
     )
     parser.add_argument("--timeout-seconds", type=float, default=45.0, help="网络超时时间，单位秒")
     parser.add_argument("--chunk-interval-ms", type=int, default=20, help="每个音频包的发送间隔，单位毫秒")
@@ -206,8 +206,8 @@ def build_reply_output_path(save_reply: str, input_wav: str) -> Path:
 
     主要逻辑：
     1. 相对路径一律基于当前项目根目录解析。
-    2. 若传入目录，则使用输入音频名作为输出基名。
-    3. 最终文件名统一追加时间戳，避免覆盖旧结果。
+    2. 若传入具体 wav 文件路径，则按该路径原样保存。
+    3. 若传入目录，则使用输入音频名作为输出基名，并追加时间戳避免覆盖。
     """
 
     project_root = repo_root()
@@ -217,8 +217,7 @@ def build_reply_output_path(save_reply: str, input_wav: str) -> Path:
     target_path = raw_target if raw_target.is_absolute() else project_root / raw_target
 
     if target_path.suffix.lower() == ".wav":
-        output_dir = target_path.parent
-        base_name = target_path.stem
+        return target_path
     else:
         output_dir = target_path
         base_name = input_stem

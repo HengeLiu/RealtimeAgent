@@ -9,11 +9,12 @@ from unittest.mock import patch
 
 from agent_core import AgentFacade, AgentTurn, AgentTurnResult, DerivedArtifact, MediaAssetRef
 from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace, MessageContext
+from agent_core.context.assembler import ContextAssembler
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.runtime.runner import StructuredAgentReply
 from agent_core.tools import AgentToolContext, ToolRegistry
 from infra.config import ServerSettings
-from infra.errors import AppError, ErrorCode, build_error
+from infra.errors import ErrorCode, build_error
 
 
 class FakeAgentLoopRunner(AgentLoopRunner):
@@ -51,6 +52,19 @@ class ErrorAgentLoopRunner(AgentLoopRunner):
         raise build_error(
             ErrorCode.INTERNAL_ERROR,
             "模拟 agent-core 失败",
+        )
+
+
+class AskUserAgentLoopRunner(AgentLoopRunner):
+    """测试用追问运行循环。"""
+
+    def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            action="ask_user",
+            reply_text="你想让我查设备状态，还是直接回答问题？",
         )
 
 
@@ -148,6 +162,37 @@ class AgentCoreTestCase(unittest.TestCase):
 
         self.assertEqual(result.action, "fail")
         self.assertIn("模拟 agent-core 失败", result.reply_text)
+        session = facade.get_session_store().get_session("sess_002")
+        self.assertIsNotNone(session)
+        assert session is not None
+        self.assertEqual(len(session.messages), 2)
+        self.assertEqual(session.messages[1].meta["action"], "fail")
+
+    def test_agent_facade_persists_ask_user_and_dialog_state(self) -> None:
+        """测试目标：验证 ask_user 结果会写入消息并更新 pending_question。"""
+
+        facade = AgentFacade(
+            session_store=AgentSessionStore(),
+            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+            runner=AskUserAgentLoopRunner(),
+        )
+
+        result = facade.handle_turn(
+            AgentTurn(
+                turn_id="turn_ask_001",
+                session_id="sess_ask_001",
+                device_id="glass-001",
+                source="voice_asr",
+                input_text="帮我处理一下",
+            )
+        )
+
+        self.assertEqual(result.action, "ask_user")
+        session = facade.get_session_store().get_session("sess_ask_001")
+        self.assertIsNotNone(session)
+        assert session is not None
+        self.assertEqual(session.messages[1].kind, "assistant_question")
+        self.assertEqual(session.dialog_state.pending_question, "你想让我查设备状态，还是直接回答问题？")
 
     def test_query_device_state_tool_records_trace(self) -> None:
         """测试目标：验证 query_device_state 工具会返回设备状态并写轨迹。
@@ -188,6 +233,56 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(len(traces), 1)
         self.assertEqual(traces[0].status, "succeeded")
 
+    def test_context_assembler_includes_history_assets_and_artifacts(self) -> None:
+        """测试目标：验证 ContextAssembler 会组装历史、资产和派生结果摘要。"""
+
+        assembler = ContextAssembler()
+        session = AgentSession(
+            session_id="sess_ctx_001",
+            device_id="glass-001",
+            messages=[
+                MessageContext(
+                    message_id="msg_001",
+                    session_id="sess_ctx_001",
+                    role="assistant",
+                    kind="assistant_reply",
+                    text="上一轮回复",
+                )
+            ],
+        )
+        turn = AgentTurn(
+            turn_id="turn_ctx_001",
+            session_id="sess_ctx_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="这一轮问题",
+            asset_refs=[
+                MediaAssetRef(
+                    asset_id="asset_ctx_001",
+                    session_id="sess_ctx_001",
+                    asset_type="audio",
+                    storage_uri="runs/session/sess_ctx_001/audio/input.wav",
+                    mime_type="audio/wav",
+                )
+            ],
+            derived_artifacts=[
+                DerivedArtifact(
+                    artifact_id="artifact_ctx_001",
+                    session_id="sess_ctx_001",
+                    artifact_type="asr_transcript",
+                    storage_uri="runs/session/sess_ctx_001/artifact/transcript.json",
+                    text="这一轮问题",
+                )
+            ],
+        )
+
+        assembled = assembler.assemble_turn_input(session=session, turn=turn)
+
+        self.assertIn("助手: 上一轮回复", assembled)
+        self.assertIn("这一轮问题", assembled)
+        self.assertIn("audio: runs/session/sess_ctx_001/audio/input.wav", assembled)
+        self.assertIn("asr_transcript: 这一轮问题", assembled)
+
     def test_openai_runner_delegates_to_agents_sdk(self) -> None:
         """测试目标：验证 OpenAIAgentLoopRunner 会调用 OpenAI Agents SDK。
 
@@ -224,7 +319,7 @@ class AgentCoreTestCase(unittest.TestCase):
             session_id="sess_004",
             device_id="glass-001",
             source="voice_asr",
-            input_text="这一轮想知道设备状态",
+            input_text="把上一轮回复复述给我",
         )
 
         class _FakeRunResult:
@@ -242,7 +337,7 @@ class AgentCoreTestCase(unittest.TestCase):
         mocked_run.assert_called_once()
         _, input_payload = mocked_run.call_args.args[:2]
         self.assertIn("上一轮回复", input_payload)
-        self.assertIn("这一轮想知道设备状态", input_payload)
+        self.assertIn("把上一轮回复复述给我", input_payload)
 
     def test_openai_runner_creates_event_loop_in_worker_thread(self) -> None:
         """测试目标：验证 OpenAIAgentLoopRunner 在工作线程中会自动补齐 event loop。
@@ -347,6 +442,29 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("待命监听", result.reply_text)
         self.assertEqual(len(result.capability_traces), 1)
         self.assertEqual(result.capability_traces[0].capability_name, "query_device_state")
+
+    def test_openai_runner_returns_fail_with_trace_when_direct_tool_fails(self) -> None:
+        """测试目标：验证直连 Tool 失败时会回到对话链路并保留失败轨迹。"""
+
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+        )
+        session = AgentSession(session_id="sess_007", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_007",
+            session_id="sess_007",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="我的眼镜现在怎么样了？",
+        )
+
+        result = runner.run_turn(session=session, turn=turn)
+
+        self.assertEqual(result.action, "fail")
+        self.assertIn("目标设备当前不在线或状态未知", result.reply_text)
+        self.assertEqual(len(result.capability_traces), 1)
+        self.assertEqual(result.capability_traces[0].status, "failed")
 
 
 if __name__ == "__main__":

@@ -78,7 +78,7 @@ Phase A 完成后，仓库已有协议模型、配置、日志和基础 HTTP 路
 1. `script/run_phase_b_tests.sh`
 2. `script/deprecated/run_server_phase_b.sh`
 3. `script/phase_b_control_client.py`
-4. `script/run_glass_esp32.sh`
+4. `script/deprecated/run_glass_phase_b.sh`
 5. [第一期前三项-PhaseB联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项-PhaseB联调说明.md)
 
 作用：
@@ -177,7 +177,7 @@ end
 ### 6.3 功能测试 / 联调测试
 
 1. 本地模拟设备联调：`uv run --python 3.11 python script/phase_b_control_client.py ...`
-2. 真机联调：`bash script/run_glass_esp32.sh`
+2. 真机联调：`bash script/deprecated/run_glass_phase_b.sh`
 3. 服务端观察：`bash script/deprecated/run_server_phase_b.sh all`
 4. 运行态观察：`curl http://127.0.0.1:8765/api/runtime/devices`
 

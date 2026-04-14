@@ -76,18 +76,17 @@ Phase B 和“Phase C 语音唤醒状态上报”完成后，仓库已有以下�
 本次新增：
 
 1. `script/run_phase_c_tests.sh`
-2. `script/run_server_phase_c.sh`
-3. `script/run_server_phase_c_remote.sh`
-4. `script/run_glass_phase_c.sh`
+2. `script/deprecated/run_server_phase_c.sh`
+3. `script/deprecated/run_server_phase_c_remote.sh`
+4. `script/deprecated/run_glass_phase_c.sh`
 5. `script/phase_c_voice_client.py`
 6. [第一期前三项-PhaseC联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项-PhaseC联调说明.md)
 
 作用：
 
 1. 一键执行 Phase C 自动化测试。
-2. 一键启动带模型参数的本地服务端。
-3. 一键同步并操控远端 Phase C 服务端。
-4. 复用现有 ESP-IDF 固件构建脚本进入 Phase C 联调。
+2. 一键启动带模型参数的本地或远端 Phase C 服务端。
+3. 复用现有 ESP-IDF 固件构建脚本进入 Phase C 联调。
 5. 在无真机或模型接口排障时，用本地 Python 模拟设备跑完整控制面、音频上行和播放下行。
 
 ## 4. 流程图（PlantUML）

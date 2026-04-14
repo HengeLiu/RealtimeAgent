@@ -12,7 +12,7 @@ from agent_core.context.assembler import ContextAssembler
 from agent_core.context.models import AgentSession, AgentTurn, AgentTurnResult
 from agent_core.tools import AgentToolContext, ToolRegistry
 from infra.config import ServerSettings
-from infra.errors import ErrorCode, build_error
+from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug
 
 
@@ -86,21 +86,6 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         1. API Key 缺失或 SDK 调用失败时抛出结构化错误。
         """
 
-        if not self._settings.dashscope_api_key.strip():
-            raise build_error(
-                ErrorCode.INVALID_CONFIG,
-                "缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
-            )
-
-        try:
-            from agents import Agent, MultiProvider, RunConfig, Runner
-        except ImportError as exc:
-            raise build_error(
-                ErrorCode.INVALID_CONFIG,
-                "缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
-                details={"hint": "请执行 uv sync 安装 openai-agents"},
-            ) from exc
-
         capability_traces = []
         tool_context = AgentToolContext(
             session_id=turn.session_id,
@@ -109,24 +94,34 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             device_state_reader=self._tool_registry.get_device_state_reader(),
             trace_sink=capability_traces.append,
         )
+
+        if not self._settings.dashscope_api_key.strip():
+            return self._build_failure_result(
+                turn=turn,
+                message="缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
+                traces=capability_traces,
+                error=build_error(
+                    ErrorCode.INVALID_CONFIG,
+                    "缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
+                ),
+            )
+
+        try:
+            from agents import Agent, MultiProvider, RunConfig, Runner
+        except ImportError as exc:
+            return self._build_failure_result(
+                turn=turn,
+                message="缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
+                traces=capability_traces,
+                error=build_error(
+                    ErrorCode.INVALID_CONFIG,
+                    "缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
+                    details={"hint": "请执行 uv sync 安装 openai-agents"},
+                ),
+            )
+
         if self._should_force_query_device_state(turn.input_text):
-            log_debug(
-                self._logger,
-                f"命中设备状态直连路由，直接调用 query_device_state: input={turn.input_text!r}",
-                LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
-            )
-            device_state = self._tool_registry.invoke(
-                name="query_device_state",
-                context=tool_context,
-            )
-            return AgentTurnResult(
-                turn_id=turn.turn_id,
-                session_id=turn.session_id,
-                device_id=turn.device_id,
-                action="final_answer",
-                reply_text=self._build_device_state_reply(device_state),
-                capability_traces=capability_traces,
-            )
+            return self._run_direct_device_state_query(turn=turn, context=tool_context, traces=capability_traces)
 
         agent = Agent(
             name="OpenAIGlassesAgent",
@@ -171,11 +166,16 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 f"agent-core 运行异常: reason={exc!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
             )
-            raise build_error(
-                ErrorCode.INTERNAL_ERROR,
-                "agent-core 运行失败",
-                details={"reason": str(exc)},
-            ) from exc
+            return self._build_failure_result(
+                turn=turn,
+                message="agent-core 运行失败",
+                traces=capability_traces,
+                error=build_error(
+                    ErrorCode.INTERNAL_ERROR,
+                    "agent-core 运行失败",
+                    details={"reason": str(exc)},
+                ),
+            )
 
         final_output = run_result.final_output
         if isinstance(final_output, StructuredAgentReply):
@@ -185,10 +185,15 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             action = "final_answer"
             reply_text = final_output.strip()
         else:
-            raise build_error(
-                ErrorCode.INTERNAL_ERROR,
-                "agent-core 返回了无法识别的最终输出",
-                details={"final_output_type": type(final_output).__name__},
+            return self._build_failure_result(
+                turn=turn,
+                message="agent-core 返回了无法识别的最终输出",
+                traces=capability_traces,
+                error=build_error(
+                    ErrorCode.INTERNAL_ERROR,
+                    "agent-core 返回了无法识别的最终输出",
+                    details={"final_output_type": type(final_output).__name__},
+                ),
             )
 
         return AgentTurnResult(
@@ -198,6 +203,80 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             action=action,
             reply_text=reply_text or "抱歉，我现在还没法稳定回答这个问题。",
             capability_traces=capability_traces,
+        )
+
+    def _run_direct_device_state_query(
+        self,
+        *,
+        turn: AgentTurn,
+        context: AgentToolContext,
+        traces: list,
+    ) -> AgentTurnResult:
+        """执行设备状态的直连查询。
+
+        主要逻辑：
+        1. 对明确的设备状态问题绕过模型调用，直接触发 Tool。
+        2. Tool 成功时返回最终回复；失败时返回统一 `fail` 结果并保留轨迹。
+        """
+
+        log_debug(
+            self._logger,
+            f"命中设备状态直连路由，直接调用 query_device_state: input={turn.input_text!r}",
+            LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+        )
+        try:
+            device_state = self._tool_registry.invoke(
+                name="query_device_state",
+                context=context,
+            )
+        except Exception as exc:
+            log_debug(
+                self._logger,
+                f"设备状态直连路由失败: reason={exc!r}",
+                LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+            )
+            error = exc if isinstance(exc, AppError) else build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "query_device_state 调用失败",
+                details={"reason": str(exc)},
+            )
+            return self._build_failure_result(
+                turn=turn,
+                message=error.message,
+                traces=traces,
+                error=error,
+            )
+
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            action="final_answer",
+            reply_text=self._build_device_state_reply(device_state),
+            capability_traces=traces,
+        )
+
+    @staticmethod
+    def _build_failure_result(
+        *,
+        turn: AgentTurn,
+        message: str,
+        traces: list,
+        error=None,
+    ) -> AgentTurnResult:
+        """构造统一失败结果。"""
+
+        meta = {}
+        if error is not None and hasattr(error, "to_dict"):
+            meta["error"] = error.to_dict()
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            action="fail",
+            reply_text=f"抱歉，这一轮处理失败了：{message}",
+            capability_traces=traces,
+            meta=meta,
         )
 
     @staticmethod
