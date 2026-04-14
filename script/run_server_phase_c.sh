@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ACTION="${1:-all}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8765}"
+LOG_LEVEL="${LOG_LEVEL:-INFO}"
 DEVICE_TOKEN_MAP="${DEVICE_TOKEN_MAP:-glass-001=pair-demo-token}"
 HEARTBEAT_INTERVAL_MS="${HEARTBEAT_INTERVAL_MS:-5000}"
 HEARTBEAT_TIMEOUT_MS="${HEARTBEAT_TIMEOUT_MS:-15000}"
@@ -42,6 +43,7 @@ Required for real model calls:
 Environment overrides:
   HOST                   默认: ${HOST}
   PORT                   默认: ${PORT}
+  LOG_LEVEL              默认: ${LOG_LEVEL}
   DEVICE_TOKEN_MAP       默认: ${DEVICE_TOKEN_MAP}
   HEARTBEAT_INTERVAL_MS  默认: ${HEARTBEAT_INTERVAL_MS}
   HEARTBEAT_TIMEOUT_MS   默认: ${HEARTBEAT_TIMEOUT_MS}
@@ -147,6 +149,7 @@ start_server() {
 
   echo "[start] 启动 Phase C 服务端"
   echo "[start] host=${HOST} port=${PORT}"
+  echo "[start] log_level=${LOG_LEVEL}"
   echo "[start] asr_model=${VOICE_ASR_MODEL_NAME} model=${VOICE_MODEL_NAME} voice=${VOICE_MODEL_VOICE}"
   echo "[start] runs_root=${VOICE_RUNS_ROOT}"
   echo "[start] log_file=${LOG_FILE}"
@@ -157,6 +160,7 @@ start_server() {
       PYTHONPATH=server/src \
       SERVER_HOST="${HOST}" \
       SERVER_PORT="${PORT}" \
+      LOG_LEVEL="${LOG_LEVEL}" \
       DEVICE_TOKEN_MAP="${DEVICE_TOKEN_MAP}" \
       HEARTBEAT_INTERVAL_MS="${HEARTBEAT_INTERVAL_MS}" \
       HEARTBEAT_TIMEOUT_MS="${HEARTBEAT_TIMEOUT_MS}" \

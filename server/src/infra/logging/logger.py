@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+DATA_URL_PATTERN = re.compile(
+    r"data:(?P<mime>(?:audio|image)/[A-Za-z0-9.+-]+);base64,(?P<body>.*?)(?=(?:['\"}\],)]|$))",
+    re.DOTALL,
+)
 
 
 @dataclass(slots=True)
@@ -71,13 +77,37 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": sanitize_log_message(record.getMessage()),
         }
         for key in ("trace_id", "session_id", "device_id", "message_id"):
             value = getattr(record, key, None)
             if value:
                 payload[key] = value
         return json.dumps(payload, ensure_ascii=False)
+
+
+def sanitize_log_message(message: str) -> str:
+    """对日志消息做轻量脱敏。
+
+    主要逻辑：
+    1. 脱敏音频与图片 `data:` URL 中的 base64 内容。
+    2. 保留 MIME 类型，方便判断是音频还是图片载荷。
+
+    参数：
+    1. `message`：原始日志文本。
+
+    返回值：
+    1. 脱敏后的日志文本。
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        mime = match.group("mime")
+        return f"data:{mime};base64,<redacted>"
+
+    sanitized = DATA_URL_PATTERN.sub(_replace, message)
+    sanitized = sanitized.replace("<redacted>\\n", "<redacted>")
+    sanitized = sanitized.replace("<redacted>\n", "<redacted>")
+    return sanitized
 
 
 def configure_root_logger(level: str = "INFO") -> None:
@@ -128,3 +158,24 @@ def log_info(logger: logging.Logger, message: str, context: LogContext | None = 
 
     extra = context.to_dict() if context else {}
     logger.info(message, extra=extra)
+
+
+def log_warning(logger: logging.Logger, message: str, context: LogContext | None = None) -> None:
+    """输出带上下文的 WARNING 日志。"""
+
+    extra = context.to_dict() if context else {}
+    logger.warning(message, extra=extra)
+
+
+def log_error(logger: logging.Logger, message: str, context: LogContext | None = None) -> None:
+    """输出带上下文的 ERROR 日志。"""
+
+    extra = context.to_dict() if context else {}
+    logger.error(message, extra=extra)
+
+
+def log_debug(logger: logging.Logger, message: str, context: LogContext | None = None) -> None:
+    """输出带上下文的 DEBUG 日志。"""
+
+    extra = context.to_dict() if context else {}
+    logger.debug(message, extra=extra)

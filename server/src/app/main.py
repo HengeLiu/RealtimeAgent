@@ -7,7 +7,7 @@ import argparse
 from api import run_forever
 from infra.config import ServerSettings
 from infra.errors import AppError
-from infra.logging import LogContext, configure_root_logger, get_logger, log_info
+from infra.logging import LogContext, configure_root_logger, get_logger, log_debug, log_info
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +53,7 @@ def main() -> None:
         "服务端启动中",
         LogContext(trace_id="bootstrap", session_id="phase-c"),
     )
-    log_info(
+    log_debug(
         logger,
         f"配置摘要: {settings.summary()}",
         LogContext(trace_id="bootstrap", session_id="phase-c"),

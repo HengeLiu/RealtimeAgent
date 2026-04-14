@@ -5,6 +5,8 @@ __*
 tmp
 .arduino-build
 .cache
+reply
+m4a
 
 # ESP-IDF generated artifacts
 glass/**/build/

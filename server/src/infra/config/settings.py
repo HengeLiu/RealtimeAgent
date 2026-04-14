@@ -40,15 +40,14 @@ class ServerSettings:
     port: int = 8765
     environment: str = "dev"
     log_level: str = "INFO"
-    device_token_map: str = ""
+    device_token_map: str = "glass-001=pair-demo-token"
     heartbeat_interval_ms: int = 5000
     heartbeat_timeout_ms: int = 15000
     server_device_id: str = "server-main"
     dashscope_api_key: str = ""
     voice_model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    # voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
-    voice_model_voice: str = "Cherry"
+    voice_model_voice: str = "Tina"
     voice_model_timeout_ms: int = 45000
     voice_runs_root: str = "runs/session"
     voice_asr_model_name: str = "qwen3-asr-flash"

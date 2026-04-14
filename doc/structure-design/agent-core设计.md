@@ -1,438 +1,637 @@
-# agent-core 与 VoiceSessionController 最小运行时设计
+# agent-core 设计
 
-## 1. 目标
+## 1. 文档定位
 
-本设计只解决 [第一期功能开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/restriction/第一期功能开发计划.md) 第 1、2 项落地时真正需要的服务端运行时边界问题：
+本文档是当前项目 `agent-core` 的**最终设计定稿**。
 
-- `server-api` 到底负责什么
-- 第一期是否必须先实现完整 `agent-core`
-- 语音对话链路由谁编排
-- 后续 Skill、MCP、后台任务怎样在不推翻首版实现的前提下接入
+本文档只保留已经收敛后的架构结论、模块边界、运行时对象、任务运行时设计和实施约束，不再展开方案调研、选型比较和解释性讨论。
 
-结论先写清楚：
+方案调研、适配性分析和选型理由已迁移到：
 
-- 第一期第 1、2 项不以完整 `agent-core` 为前置
-- 服务端先实现一个最小 `VoiceSessionController`
-- `VoiceSessionController` 负责单设备短期会话上下文、单轮音频聚合、模型调用、回复播放编排
-- 后续真正引入 `agent-core` 时，再把 `VoiceSessionController` 作为其内部语音子组件接管
+- [agent-core方案调研与OpenAI Agents SDK选型说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/experimental/agent-core方案调研与OpenAI%20Agents%20SDK选型说明.md)
 
-## 2. 第一期最小运行时划分
+`backend-task-core` 的详细设计已独立到：
 
-### 2.1 `server-api`
+- [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)
 
-定位：
+---
 
-- 服务器侧传输与接入边界
+## 2. 设计目标
+
+本设计用于支撑以下目标：
+
+1. 在当前已完成的语音主链路之上，引入完整 `agent-core`。
+2. 用统一方式承接 Tool、MCP、后台任务调用。
+3. 为后续拍照解读、导航和后台任务管理提供稳定运行时基座。
+4. 允许更多开发者在统一框架下扩展模型能力，而不需要修改核心运行循环。
+
+---
+
+## 3. 最终设计结论
+
+### 3.1 总体结论
+
+当前项目采用如下策略：
+
+1. `agent-core` 的通用运行循环基于 **OpenAI Agents SDK** 实现。
+2. `server-api`、`voice-runtime`、设备控制链路、媒体链路继续自研。
+3. `backend-task-core` 继续作为独立 `task runtime` 存在。
+4. 短期内不引入复杂 Skill Runtime，Skill 先简化为“业务型高级 Tool”。
+
+### 3.2 核心边界
+
+#### OpenAI Agents SDK 承担
+
+1. `agent loop`
+2. tool calling
+3. sessions
+4. MCP 接入
+5. tracing
+6. handoff
+7. human-in-the-loop
+
+#### 项目继续自研
+
+1. `server-api`
+2. `voice-runtime`
+3. 图片抓拍链路
+4. 媒体资产存储
+5. `backend-task-core`
+6. 任务模板
+7. 设备执行策略
+
+---
+
+## 4. 总体架构
+
+服务器侧采用如下分层：
+
+1. `server-api`
+2. `voice-runtime`
+3. `agent-core`
+4. `backend-task-core`
+5. `tool / skill / mcp / task` 能力层
+6. `asset/context store`
+
+### 4.1 `server-api`
 
 职责：
 
-- 接收控制连接与媒体连接
-- 解析和校验 `ControlMessage`
-- 维护 `device_id -> control_connection`
-- 把控制消息路由给对应运行时主体
-- 把媒体流交给对应 `VoiceSessionController`
-- 对外暴露 `/ws/control`、`/ws_audio`、`/stream.wav` 这类通道
+1. 接收控制连接与媒体连接。
+2. 维护 `/ws/control`、`/ws_audio`、`/stream.wav`、后续相机通道等接入点。
+3. 路由设备输入到对应运行时。
 
 不负责：
 
-- 不负责维护对话上下文
-- 不负责判断何时调用模型
-- 不负责业务编排和工具调用
-- 不把语音会话逻辑散在 WebSocket handler 内
+1. 不负责模型决策。
+2. 不负责长期任务调度。
 
-### 2.2 `VoiceSessionController`
-
-定位：
-
-- 第一期语音链路的最小会话编排器
+### 4.2 `voice-runtime`
 
 职责：
 
-- 在设备注册成功后自动打开语音会话
-- 为每台眼镜维护一条活跃语音会话
-- 维护该设备当前会话的短期 Message 上下文
-- 接收 `sensor.audio.segment.started`
-- 聚合当前 `segment_id` 的 `audio_chunk`
-- 在 `sensor.audio.segment.finished` 后先调用独立 ASR
-- 把当前轮转写文本写入 `MessageContext` / `DerivedArtifact`
-- 再构造对话模型输入
-- 调用 `qwen3.5-omni-plus`
-- 在收到首段可播放音频后触发 `actuator.audio.play`
-- 持续把回复音频写入播放下行通道
-- 在 `actuator.audio.finished` 后恢复待命
+1. 管理语音会话。
+2. 聚合用户单轮音频。
+3. 调用 ASR。
+4. 把语音输入转换成 `AgentTurn`。
+5. 把最终回复转换为音频并完成播放控制。
 
 不负责：
 
-- 不负责通用 Skill 调度
-- 不负责 MCP 管理
-- 不负责后台任务管理
-- 不负责长期记忆、跨会话上下文和复杂知识库管理
+1. 不负责业务能力选择。
+2. 不负责长期任务管理。
 
-### 2.3 第一期中的 `agent-core`
+### 4.3 `agent-core`
 
-第 1、2 项阶段，`agent-core` 只作为未来扩展位存在。
+职责：
 
-建议落地方式：
+1. 维护开放式会话上下文。
+2. 承担 `agent loop`。
+3. 决定：
+   - 直接回复
+   - 追问澄清
+   - 调用 Tool
+   - 调用 Skill
+   - 调用 MCP
+   - 创建、查询、取消任务
+4. 把能力调用结果写回上下文。
+5. 统一处理错误和最终回复生成。
+6. 按需要直接调用各种工具和远程能力。
 
-- 代码目录可以先预留 `agent-core`
-- 但运行时只实现一个面向语音的 `VoiceSessionController`
-- `VoiceSessionController` 可以先放在 `server` 内部语音模块里
-- 后续引入完整 `agent-core` 时，再把它收编成 `agent-core.voice`
+不负责：
 
-这样可以避免为了第 2 项先把 Skill、MCP、记忆、任务编排一并做出来。
+1. 不直接维护设备连接。
+2. 不直接管理媒体流。
+3. 不直接维护任务状态机。
 
-## 3. 最小运行时对象
+### 4.4 `backend-task-core`
 
-第一期第 1、2 项只需要四类运行时对象：
+职责：
 
-1. `DeviceConnection`
-   - 代表一台已注册设备的控制连接
-2. `VoiceSession`
-   - 代表一条逻辑语音会话
-3. `VoiceSegmentBuffer`
-   - 代表当前一轮用户输入的音频缓冲
-4. `PlaybackStreamContext`
-   - 代表当前回复播放流上下文
-5. `MessageContext`
-   - 代表当前会话短期消息上下文
-6. `MediaAssetRef`
-   - 代表一段音频、图片或视频的存储引用
+1. 创建任务实例。
+2. 管理任务状态机。
+3. 调度任务生命周期。
+4. 输出任务事件。
+5. 接受查询、取消、暂停、恢复请求。
+6. 在后台执行过程中直接调用 Tool、Skill、MCP 等原子能力。
 
-建议最小索引：
+不负责：
 
-- `device_id -> DeviceConnection`
-- `device_id -> VoiceSessionController`
-- `session_id -> VoiceSession`
-- `stream_id -> PlaybackStreamContext`
-- `session_id -> MessageContext`
-- `asset_id -> MediaAssetRef`
+1. 不负责开放式对话决策。
+2. 不负责自然语言理解。
 
-第一期第 1、2 项默认不需要 `task_id -> TaskRuntime`。
+---
 
-## 3.1 Message 上下文模型
+## 5. 当前最小运行时与完整 agent-core 的关系
 
-多模态模型的会话上下文不能只存纯文本。
+当前已落地的 `VoiceSessionController` 保留，但其定位调整为：
 
-建议把上下文拆成三层：
+**语音输入输出边界组件**
+
+而不是：
+
+**完整的 agent-core**
+
+### 5.1 当前 `VoiceSessionController` 继续负责
+
+1. 单设备语音会话。
+2. 当前轮音频聚合。
+3. ASR 接入。
+4. 回复播放控制。
+
+### 5.2 完整接入后的协作方式
+
+推荐流程：
+
+1. `voice-runtime` 完成当前轮 ASR。
+2. 把 `user_text + asset_refs + derived_refs` 提交给 `agent-core`。
+3. `agent-core` 返回：
+   - 最终文本回复
+   - 或能力调用结果
+   - 或需要追问的问题
+4. `voice-runtime` 负责音频播报和设备控制。
+
+---
+
+## 6. 关键概念定义
+
+### 6.1 Tool
+
+`Tool` 是单次函数调用即可完成的原子能力。
+
+示例：
+
+1. `query_device_state`
+2. `capture_photo`
+3. `create_timer`
+4. `query_task_status`
+5. `cancel_task`
+
+### 6.2 Skill
+
+短期定义：
+
+**Skill = 业务型高级 Tool**
+
+即：
+
+1. 对模型表现为 tool。
+2. 对项目代码而言，内部可以组合多个 Tool、MCP 或任务接口。
+
+示例：
+
+1. `photo_interpret`
+2. `prepare_navigation`
+3. `timer_manage`
+
+### 6.3 MCP
+
+`MCP` 是远程工具服务接入层。
+
+特点：
+
+1. 面向远程原子方法。
+2. 负责参数转换、超时、错误包装。
+3. 优先被 Tool 或 Skill 包装后使用。
+
+示例：
+
+1. `amap.poi_search`
+2. `amap.geocode`
+3. `amap.route_plan`
+
+### 6.4 Task
+
+`Task` 是未启动的后台任务模板代码，是与 `Tool / Skill / MCP` 同等级的一等扩展单元。
+
+特点：
+
+1. 表示一种可注册、可发现、可复用的后台能力模板。
+2. 生命周期跨越单次模型调用，但在启动前并不是实例。
+3. 允许在内部自由组装 Tool、Skill、MCP、设备网关和其他基础能力。
+4. 由开发者按统一框架扩展，并由 `backend-task-core` 负责注册和托管。
+
+示例：
+
+1. `timer_task`
+2. `navigation_task`
+3. `phone_video_link_task`
+
+### 6.5 TaskRuntime
+
+`TaskRuntime` 表示某个 `Task` 被实际创建后的后台任务实例。
+
+特点：
+
+1. 对应唯一 `task_id`。
+2. 有明确状态机和运行上下文。
+3. 会持续产出事件、状态和结果。
+4. 由 `backend-task-core` 创建、调度和托管。
+
+---
+
+## 7. OpenAI Agents SDK 下的能力映射
+
+## 7.1 Tool 映射
+
+当前项目里的 Tool 直接映射为 OpenAI Agents SDK function tools。
+
+首批 Tool：
+
+1. `query_device_state`
+2. `capture_photo`
+3. `create_timer`
+4. `query_task_status`
+5. `cancel_task`
+
+约束：
+
+1. 一个 Tool 对应一个明确函数。
+2. 函数签名定义 schema。
+3. docstring 用中文写清楚功能、参数、返回值和异常情况。
+
+## 7.2 Skill 映射
+
+短期内不建立独立 Skill Runtime。
+
+采用两种实现形态：
+
+1. `Tool 包装型 Skill`
+2. `Agent-as-Tool 型 Skill`
+
+默认优先采用：
+
+1. `Tool 包装型 Skill`
+
+## 7.3 MCP 映射
+
+MCP 尽量直接接入 OpenAI Agents SDK 原生 MCP 支持。
+
+AMap 建议暴露的原子方法：
+
+1. `amap.poi_search`
+2. `amap.geocode`
+3. `amap.route_plan`
+
+## 7.4 Task 映射
+
+`Task` 与 `TaskRuntime` 都不映射为 OpenAI Agents SDK 原生对象。
+
+原则：
+
+1. SDK 负责任务相关决策和开放式调用链路。
+2. 项目自己的 `backend-task-core` 负责 `Task` 注册和 `TaskRuntime` 运行。
+
+---
+
+## 8. 上下文与资产模型
+
+完整 `agent-core` 保留并扩展以下模型：
 
 1. `MessageContext`
-   - 维护当前会话中的消息顺序
-   - 维护每条消息的角色、摘要、模态引用
 2. `MediaAssetRef`
-   - 维护原始媒体资产引用
-   - 维护媒体的存储位置、格式、时长、大小等元信息
 3. `DerivedArtifact`
-   - 维护从原始模态提取出来的可复用结果
-   - 例如语音转写文本、图片摘要、视频摘要、检测结果
+4. `CapabilityTrace`
+5. `TaskRef`
 
-核心原则：
+### 8.1 MessageContext
 
-- 消息上下文里不直接塞原始音频、图片、视频字节
-- 上下文只保留轻量文本和资产引用
-- 原始媒体单独存储
-- 提交给模型时，再按需把引用解析成模型需要的输入结构
+每条消息至少包含：
 
-## 3.2 Message 结构建议
+1. `message_id`
+2. `session_id`
+3. `role`
+4. `kind`
+5. `text`
+6. `asset_refs`
+7. `derived_refs`
+8. `task_refs`
+9. `meta`
 
-建议一条会话消息最少包含：
+### 8.2 MediaAssetRef
 
-```json
-{
-  "message_id": "msg_01J...",
-  "session_id": "sess_01J...",
-  "role": "user",
-  "kind": "multimodal_input",
-  "created_at": 1744262400000,
-  "text": "帮我看一下前面有什么",
-  "asset_refs": [
-    "asset_audio_01J...",
-    "asset_image_01J..."
-  ],
-  "derived_refs": [
-    "artifact_transcript_01J...",
-    "artifact_caption_01J..."
-  ],
-  "meta": {}
-}
+至少包含：
+
+1. `asset_id`
+2. `asset_type`
+3. `storage_uri`
+4. `mime_type`
+5. `codec`
+6. `duration_ms / width / height / fps`
+7. `source_stream_id`
+
+### 8.3 DerivedArtifact
+
+用于保存：
+
+1. 语音转写文本
+2. 图片摘要
+3. 地图查询结果
+4. 路线摘要
+5. 检测结果
+6. 任务查询结果
+
+### 8.4 TaskRef
+
+用于表示会话与后台任务的关联关系。
+
+---
+
+## 9. 最小运行时对象
+
+完整 `agent-core` 至少包含以下对象：
+
+1. `AgentSession`
+2. `AgentTurn`
+3. `DialogState`
+4. `CapabilityTrace`
+5. `TaskRef`
+6. `VoiceSessionController`
+
+### 9.1 AgentSession
+
+表示一条开放式会话。
+
+### 9.2 AgentTurn
+
+表示一次输入处理单元。
+
+输入来源包括：
+
+1. 语音转写文本
+2. 文本输入
+3. 图片抓拍结果
+4. 任务完成事件
+5. 任务状态变化事件
+
+### 9.3 DialogState
+
+用于表示：
+
+1. 当前待确认信息
+2. 当前待补齐参数
+3. 当前追问状态
+
+### 9.4 CapabilityTrace
+
+记录一次 turn 中所有 Tool、Skill、MCP 调用轨迹。
+
+---
+
+## 10. task runtime 设计
+
+这是当前方案里风险最高、优先级最高的部分。
+
+本章只保留系统级摘要，`task-core` 的详细设计以 [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md:1) 为准。
+
+## 10.1 定位
+
+`task runtime` 即与 `agent-core` 平级的 `backend-task-core`。
+
+其系统定位是：
+
+1. 统一承接所有长生命周期后台任务。
+2. 作为 `Task` 模板的注册、创建、调度和托管中心。
+3. 独立于 `agent-core` 运行，但与 `agent-core` 通过标准事件和网关协作。
+
+## 10.2 系统边界
+
+`agent-core` 负责：
+
+1. 理解用户意图。
+2. 决定是否需要创建、查询、取消后台任务。
+3. 在对话执行链路中直接调用 Tool、Skill、MCP。
+4. 在收到任务事件后决定是否追问、确认、播报或继续调用其他能力。
+
+`backend-task-core` 负责：
+
+1. 注册和发现 `Task` 模板。
+2. 创建并托管 `TaskRuntime` 实例。
+3. 管理任务状态机、调度、上下文和事件流。
+4. 在后台执行过程中直接调用 Tool、Skill、MCP 与设备能力。
+
+## 10.3 协作原则
+
+双方协作遵循以下原则：
+
+1. `Task` 是未启动的后台任务模板，`TaskRuntime` 是启动后的实例。
+2. `agent-core` 与 `backend-task-core` 都允许直接调用各种工具能力。
+3. `backend-task-core` 必须先产出结构化事件，再由统一通知策略决定是否直接通知设备。
+4. 默认任务事件先回流 `agent-core`；高优先级或安全相关事件允许绕过 `agent-core` 直接通知，同时仍需回流标准事件用于上下文同步。
+
+典型链路如下：
+
+1. 用户输入进入 `agent-core`。
+2. `agent-core` 通过 Tool 或其他受控入口创建后台任务。
+3. `backend-task-core` 创建 `TaskRuntime` 并开始运行。
+4. 任务运行过程中持续产出标准事件。
+5. 事件根据优先级决定是仅回流 `agent-core`，还是先直达设备再回流 `agent-core`。
+
+## 10.4 第一期范围
+
+第一阶段在主设计层只要求：
+
+1. 完成 `timer_task` 的最小闭环。
+2. 打通任务创建、查询、取消、完成通知。
+3. 固定 `Task / TaskRuntime / TaskEvent / TaskGateway` 的基本边界。
+
+更细的对象模型、模块拆分、事件字段和扩展规范，统一放在 [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md:1) 中维护。
+
+---
+
+## 11. Agent Loop 设计
+
+一轮 `AgentTurn` 的处理流程如下：
+
+1. `TurnBuilder`
+2. `ContextAssembler`
+3. `Planner`
+4. `DecisionRouter`
+5. `Executor`
+6. `ContextUpdater`
+7. 若未完成，则继续下一步
+
+建议动作类型至少包括：
+
+1. `final_answer`
+2. `ask_user`
+3. `call_tool`
+4. `call_skill`
+5. `call_mcp`
+6. `create_task`
+7. `query_task`
+8. `cancel_task`
+9. `fail`
+
+---
+
+## 12. 第 4-8 项的落地映射
+
+## 12.1 第 4 项：AgentCore 调工具
+
+落地项：
+
+1. OpenAI Agents SDK 作为主循环
+2. `AgentFacade`
+3. 第一批 Tool
+
+## 12.2 第 5 项：Skills 与 MCP
+
+落地项：
+
+1. MCP 接入
+2. 简化 Skill
+
+首批建议：
+
+1. `photo_interpret`
+2. `timer_manage`
+3. `amap` MCP adapter
+
+## 12.3 第 6 项：拍照 Skill + 图片解读
+
+设计：
+
+1. `capture_photo` 作为 Tool
+2. `photo_interpret` 作为业务型高级 Tool
+3. 图片抓拍和资产存储继续自研
+
+## 12.4 第 7 项：AMap MCP 导航
+
+设计：
+
+1. AMap 作为 MCP
+2. `prepare_navigation` 作为业务型高级 Tool
+3. `navigation_task` 作为长期任务
+
+## 12.5 第 8 项：后台任务管理 Skill
+
+设计：
+
+1. `create_timer`
+2. `query_task_status`
+3. `cancel_task`
+4. `timer_task`
+
+原则：
+
+1. Agent 负责决策。
+2. Task Runtime 负责执行。
+3. `agent-core` 与 `backend-task-core` 都允许直接调用各种工具。
+
+---
+
+## 13. 扩展规范
+
+## 13.1 新增 Tool
+
+需要完成：
+
+1. 实现 Python 函数
+2. 中文 docstring
+3. 在 `AgentFacade` 注册
+4. 补测试
+
+禁止：
+
+1. 在主循环硬编码特殊逻辑
+
+## 13.2 新增 Skill
+
+短期内：
+
+1. 以业务型高级 Tool 方式扩展
+
+## 13.3 新增 MCP
+
+需要完成：
+
+1. MCP adapter 定义
+2. 方法清单
+3. 超时和错误包装
+4. 注册
+
+## 13.4 新增 Task
+
+需要完成：
+
+1. 实现 `Task` 模板代码
+2. 定义输入、上下文和状态机
+3. 在 `TaskRegistry` 注册
+4. 说明内部可组装的 Tool、Skill、MCP 与设备能力
+5. 通过 Tool、Task 或受控入口发起创建
+
+---
+
+## 14. 推荐目录结构
+
+建议后续目录结构如下：
+
+```text
+server/src/agent_core/
+  facade/
+  session/
+  context/
+  runtime/
+  tools/
+  mcp/
+  prompts/
 ```
 
-建议字段：
+继续保留：
 
-- `role`
-  - `system`、`user`、`assistant`、`tool`
-- `kind`
-  - `text`
-  - `audio_input`
-  - `image_input`
-  - `video_input`
-  - `multimodal_input`
-  - `assistant_reply`
-- `text`
-  - 当前消息的文本部分或摘要
-- `asset_refs`
-  - 指向原始模态资产
-- `derived_refs`
-  - 指向转写、摘要、检测结果等派生结果
-
-## 3.3 MediaAssetRef 结构建议
-
-建议一条媒体资产引用至少包含：
-
-```json
-{
-  "asset_id": "asset_audio_01J...",
-  "session_id": "sess_01J...",
-  "asset_type": "audio",
-  "storage_kind": "file",
-  "storage_uri": "runs/session/sess_01J/audio/seg_01J.wav",
-  "mime_type": "audio/wav",
-  "codec": "pcm16le",
-  "created_at": 1744262400000,
-  "duration_ms": 3420,
-  "bytes": 109440
-}
+```text
+server/src/runtime/voice_runtime.py
+server/src/backend_task_core/
+server/src/task/
 ```
 
-扩展到图片和视频时，增加：
+原则：
 
-- `width`
-- `height`
-- `frame_count`
-- `fps`
-- `source_stream_id`
+1. `agent-core` 只负责决策与能力调用。
+2. `voice-runtime` 负责语音边界。
+3. `backend-task-core` 作为与 `agent-core` 平级的独立模块，负责长期任务运行时。
 
-## 3.4 多模态资产的存储位置
+---
 
-多模态模型交互里，图片、视频、语音都可能在多个阶段复用，因此必须有独立存储位置。
+## 15. 实施优先级
 
-第一期建议先用最简单的本地文件存储：
+建议实施顺序：
 
-- 用户语音
-  - `runs/session/<session_id>/audio/input/<segment_id>.wav`
-- 模型回复音频
-  - `runs/session/<session_id>/audio/output/<reply_id>.wav`
-- 拍照图片
-  - `runs/session/<session_id>/image/<capture_id>.jpg`
-- 视频片段或关键帧
-  - `runs/session/<session_id>/video/<stream_id>/...`
-- 转写和摘要
-  - `runs/session/<session_id>/artifact/...json`
+1. 先接入 OpenAI Agents SDK，替换自研主循环
+2. 再落第一批 Tool
+3. 再落 `timer_task`
+4. 然后接图片能力
+5. 最后接导航能力
 
-后续可以替换成对象存储，但对上层 `MediaAssetRef` 接口不应变化。
+---
 
-## 3.5 不同模态在上下文中的保留方式
+## 16. 最终设计结论
 
-### 3.5.1 语音
-
-建议保留：
-
-- 原始聚合后的输入 `wav`
-- 转写文本
-- 必要时保留端点检测、时长等元数据
-
-一般不保留：
-
-- 每个 `20ms` 的原始分片
-
-### 3.5.2 图片
-
-建议保留：
-
-- 原始图片文件
-- 图片摘要
-- 若后续有视觉工具结果，也作为派生结果挂接
-
-### 3.5.3 视频
-
-视频不应直接进入大模型长期上下文。
-
-建议保留方式：
-
-- 原始视频片段或关键帧目录
-- 关键帧摘要
-- 结构化检测结果
-- 必要时只把“当前轮用到的关键帧”引用给模型
-
-## 3.6 提交给多模态模型时的组装原则
-
-提交给模型前，`VoiceSessionController` 或后续 `agent-core` 应做一次上下文组装：
-
-1. 读取当前 `session_id` 的 `MessageContext`
-2. 选取最近若干轮有效消息
-3. 把文本消息直接放入 `messages`
-4. 把 `asset_refs` 解析为模型所需的音频、图片或视频输入
-5. 把过大的视频或长音频先转成摘要、关键帧或裁剪片段
-
-关键点：
-
-- 模型输入是“按需展开”的
-- 会话上下文是“轻量引用”的
-- 存储层是“独立持久化”的
-
-## 3.7 第 1、2 项的最小上下文要求
-
-即使当前只做语音对话，第 1、2 项也不应完全没有 Message 上下文。
-
-最小要求：
-
-- 一条 `system` 提示词
-- 最近若干轮 `user` 文本或语音转写摘要
-- 最近若干轮 `assistant` 文本摘要
-- 当前轮输入音频的 `asset_ref`
-- 当前轮回复音频的 `asset_ref`
-
-第一期不要求：
-
-- 跨天持久记忆
-- 多设备共享上下文
-- 用户知识库
-- 自动长期摘要压缩
-- 全量原始视频进入长期会话历史
-
-## 4. 注册成功后的自动动作
-
-设备注册成功后，服务端必须自动做下面几件事：
-
-1. 建立 `device_id -> control_connection` 映射
-2. 获取或创建该设备的 `VoiceSessionController`
-3. 创建新的 `session_id`
-4. 下发 `voice.session.open`
-5. 等待设备回 `voice.session.opened`
-
-第 1 项阶段不需要让用户手动触发“开始对话”。
-
-## 5. 语音链路中的职责边界
-
-### 5.1 控制消息流
-
-- `glass-api` 发送 `device.register`
-- `server-api` 校验注册并回 `device.registered`
-- `VoiceSessionController` 触发 `voice.session.open`
-- `glass-api` 回 `voice.session.opened`
-- `glass-api` 上报 `sensor.audio.segment.started`
-- `glass-api` 上报 `sensor.audio.segment.finished`
-- `server-api` 转交给 `VoiceSessionController`
-- `VoiceSessionController` 下发 `actuator.audio.play`
-- `glass-api` 上报 `actuator.audio.started`
-- `glass-api` 上报 `actuator.audio.finished`
-
-### 5.2 媒体流
-
-- 麦克风上行继续走 `/ws_audio`
-- 回复下行首版继续走 `/stream.wav`
-- `server-api` 只负责接入与转发
-- `VoiceSessionController` 负责决定何时开始聚合、何时开始播放、何时结束本轮
-
-### 5.3 MessageContext 与媒体资产
-
-- `server-api` 不直接维护消息上下文
-- `VoiceSessionController` 维护当前设备会话的短期 `MessageContext`
-- 原始音频、图片、视频不直接放入 `MessageContext`
-- `MessageContext` 只持有文本、摘要、`asset_ref`
-- 原始媒体统一落到独立存储位置
-- 提交给模型时，再由控制器按需把 `asset_ref` 展开成模型输入
-
-## 6. 与后续完整 agent-core 的关系
-
-后续如果进入第 4 项“引入 AgentCore 调用工具”，建议这样演进：
-
-1. 保留 `server-api` 的接入职责不变
-2. 把 `VoiceSessionController` 迁入 `agent-core`
-3. 在 `VoiceSessionController` 内增加：
-   - 上下文维护
-   - Tool/Skill 调用
-   - MCP 调用
-   - 文本与语音统一回复
-   - 多模态资产管理
-4. 让后台任务相关能力通过 `backend-task-core` 接入
-
-也就是说：
-
-- 第一期第 1、2 项先实现的是“可演进的最小语音运行时”
-- 不是一次性把最终 `agent-core` 全部做完
-
-## 7. 第一版不做的东西
-
-第一版明确不做：
-
-- 通用 Agent SDK 封装
-- Skill 运行时
-- MCP 路由层
-- 后台任务管理器
-- 多设备共享上下文
-- 长记忆
-- 复杂状态机引擎
-
-但第一版仍然需要：
-
-- 短期 `MessageContext`
-- 原始音频资产落盘
-- 语音转写或摘要结果挂接到消息上下文
-
-做到这里，已经足够支撑第 1、2 项真实开发。
-
-## 7.1 引入独立 ASR 后的补充约束
-
-第一期实际落地中，语音链路已经采用“独立 ASR + 对话模型”两阶段。
-
-因此 `VoiceSessionController` 在语音链路中的职责应进一步细化为：
-
-1. 聚合当前轮用户音频。
-2. 调用独立 ASR，把当前轮用户语音转成文本。
-3. 生成 `DerivedArtifact(transcript)`。
-4. 把转写文本写入当前轮 `MessageContext.text`。
-5. 仅把文本历史送入对话模型多轮上下文。
-6. 把原始音频继续保存在 `asset_refs` 中，供审计、复盘和必要时重新转写。
-
-这意味着：
-
-1. `MessageContext` 的主载体仍然是文本。
-2. 原始音频不应充当多轮历史主输入。
-3. `DerivedArtifact.transcript` 是语音链路进入 `agent-core` 之前最关键的中间产物。
-
-## 7.2 语音消息在上下文中的推荐保留方式
-
-引入独立 ASR 后，推荐一轮用户语音消息至少保留：
-
-```json
-{
-  "role": "user",
-  "kind": "audio_input",
-  "text": "给我讲个笑话",
-  "asset_refs": [
-    "runs/session/sess_xxx/audio/input/seg_xxx.wav"
-  ],
-  "derived_refs": [
-    "runs/session/sess_xxx/artifact/transcript_seg_xxx.json"
-  ]
-}
-```
-
-对应的派生结果可以是：
-
-```json
-{
-  "artifact_id": "artifact_transcript_01J...",
-  "artifact_type": "transcript",
-  "source_asset_id": "asset_audio_01J...",
-  "text": "给我讲个笑话",
-  "language": "zh",
-  "created_at": 1744262400000
-}
-```
-
-## 7.3 多轮上下文的推荐组装方式
-
-引入独立 ASR 后，提交给对话模型的多轮上下文推荐遵循：
-
-1. `system`：系统提示词。
-2. 历史 `user`：使用转写后的文本。
-3. 历史 `assistant`：使用回复文本。
-4. 当前轮 `user`：优先使用当前轮 ASR 文本。
-5. 当前轮原始音频不直接作为多轮历史主输入；若后续模型能力或产品策略需要，可作为补充输入单独开启。
-
-这样做的原因是：
-
-1. 文本历史更稳定，便于回答“我刚才问了什么”这类问题。
-2. 文本历史更轻量，便于裁剪和长期演进。
-3. 保留音频资产和 transcript 派生结果后，后续仍可扩展更复杂的多模态回放策略。
+1. 当前项目采用 OpenAI Agents SDK 作为 `agent-core` 的运行时基座。
+2. `VoiceSessionController` 保留，但仅作为语音边界组件。
+3. `server-api`、`voice-runtime`、设备链路、媒体链路和 `task runtime` 继续自研。
+4. `Tool / Skill / MCP / Task` 严格区分，其中短期 Skill 简化为业务型高级 Tool。
+5. 当前整个方案中，风险最高的部分是 `task runtime`，实现优先级高于复杂 Skill 设计。
+6. OpenAI Agents SDK 支持打断、引导、审批和任务协作中的决策层能力，但不替代本项目的业务引导层和任务执行层。
+7. 通过统一的 AgentFacade、Tool 注册规范、Task Runtime 和 MCP 接入规范，可以持续支持更多开发者参与模型能力扩展。

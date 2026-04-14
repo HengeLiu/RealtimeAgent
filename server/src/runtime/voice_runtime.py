@@ -16,9 +16,11 @@ import wave
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+from agent_core import AgentFacade, AgentTurn, DerivedArtifact, MediaAssetRef
+from agent_core.context import generate_id
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
-from infra.logging import LogContext, get_logger, log_info
+from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 from protocol.media import MediaFrame
 
 SERVER_SAMPLE_RATE_HZ = 16000
@@ -153,6 +155,36 @@ class VoiceModelClient:
 
     def stream_reply(self, *, settings: ServerSettings, messages: list[dict[str, Any]]) -> Iterable[ModelChunk]:
         raise NotImplementedError
+
+    def stream_tts(self, *, settings: ServerSettings, text: str) -> Iterable[ModelChunk]:
+        """把文本转换为可播放语音流。
+
+        主要逻辑：
+        1. 当前默认通过同一语音模型执行“文本转音频”。
+        2. 使用严格的“原样朗读”提示词，尽量避免改写文本。
+
+        参数：
+        1. `settings`：服务端配置。
+        2. `text`：待播报文本。
+
+        返回值：
+        1. 流式音频分片。
+        """
+
+        prompt = text.strip() or "收到。"
+        return self.stream_reply(
+            settings=settings,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你现在只负责把用户提供的文本原样朗读成语音，不要补充解释，不要改写。",
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+        )
 
 
 class SpeechRecognitionClient:
@@ -475,6 +507,7 @@ class VoiceRuntime:
         send_control_message: Callable[[str, str, str, str, dict[str, Any]], None],
         model_client: VoiceModelClient | None = None,
         asr_client: SpeechRecognitionClient | None = None,
+        agent_facade: AgentFacade | None = None,
     ) -> None:
         self._settings = settings
         self._send_control_message = send_control_message
@@ -485,6 +518,10 @@ class VoiceRuntime:
         self._playback_condition = threading.Condition(self._lock)
         self._controllers: dict[str, VoiceSessionController] = {}
         self._playback_streams: dict[tuple[str, str], PlaybackStreamContext] = {}
+        self._agent_facade = agent_facade or AgentFacade.build_default(
+            settings=settings,
+            device_state_reader=self.build_runtime_snapshot,
+        )
 
     def open_session(self, *, device_id: str, device_type: str, session_id: str) -> None:
         with self._lock:
@@ -608,7 +645,7 @@ class VoiceRuntime:
         with self._lock:
             controller = self._controllers.get(device_id)
             if controller is None:
-                log_info(
+                log_debug(
                     self._logger,
                     f"丢弃音频帧：device_id={device_id} 尚未建立控制器",
                     LogContext(device_id=device_id),
@@ -616,7 +653,7 @@ class VoiceRuntime:
                 return
             segment = controller.current_segment
             if segment is None:
-                log_info(
+                log_debug(
                     self._logger,
                     f"丢弃音频帧：device_id={device_id} 当前没有激活中的 segment",
                     LogContext(device_id=device_id, session_id=controller.session_id or None),
@@ -625,7 +662,7 @@ class VoiceRuntime:
             try:
                 segment.append_frame(frame, max_bytes=self._settings.max_segment_audio_bytes)
             except AppError as exc:
-                log_info(
+                log_debug(
                     self._logger,
                     f"丢弃异常音频帧: code={exc.code} message={exc.message}",
                     LogContext(device_id=device_id, session_id=controller.session_id or None),
@@ -735,7 +772,7 @@ class VoiceRuntime:
         controller = self._get_controller(device_id)
         input_wav = segment.to_wav_bytes()
         input_path = self._store_asset(session_id, "input", f"{segment.segment_id}.wav", input_wav)
-        assistant_text_parts: list[str] = []
+        transcript_path = ""
         output_pcm = bytearray()
         playback_stream_id = f"reply_{uuid.uuid4().hex[:12]}"
 
@@ -747,24 +784,89 @@ class VoiceRuntime:
                     "当前轮用户语音转写结果为空，无法继续调用对话模型",
                     details={"segment_id": segment.segment_id},
                 )
-            log_info(
+            log_debug(
                 self._logger,
                 f"ASR 转写结果: {user_text}",
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            messages = self._build_model_messages(controller, user_text)
-            log_info(
-                self._logger,
-                f"输入大模型的 messages: {json.dumps(messages, ensure_ascii=False)}",
-                LogContext(device_id=device_id, session_id=session_id),
+            transcript_path = self._store_artifact(
+                session_id,
+                "transcript",
+                f"{segment.segment_id}.json",
+                {
+                    "segment_id": segment.segment_id,
+                    "stream_id": segment.stream_id,
+                    "transcript": user_text,
+                },
             )
+            turn = AgentTurn(
+                turn_id=generate_id("turn"),
+                session_id=session_id,
+                device_id=device_id,
+                source="voice_asr",
+                input_text=user_text,
+                asset_refs=[
+                    MediaAssetRef(
+                        asset_id=generate_id("asset"),
+                        session_id=session_id,
+                        asset_type="audio",
+                        storage_uri=input_path,
+                        mime_type="audio/wav",
+                        codec="pcm16le",
+                        duration_ms=segment.duration_ms(),
+                        bytes=len(input_wav),
+                        source_stream_id=segment.stream_id,
+                    )
+                ],
+                derived_artifacts=[
+                    DerivedArtifact(
+                        artifact_id=generate_id("artifact"),
+                        session_id=session_id,
+                        artifact_type="asr_transcript",
+                        storage_uri=transcript_path,
+                        text=user_text,
+                        meta={
+                            "segment_id": segment.segment_id,
+                            "stream_id": segment.stream_id,
+                        },
+                    )
+                ],
+                meta={
+                    "segment_id": segment.segment_id,
+                    "stream_id": segment.stream_id,
+                },
+            )
+            agent_result = self._agent_facade.handle_turn(turn)
+            capability_trace_ids = [trace.trace_id for trace in agent_result.capability_traces]
+            log_debug(
+                self._logger,
+                f"Agent 输出: action={agent_result.action} traces={capability_trace_ids}",
+                LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
+            )
+            if agent_result.action == "fail":
+                log_debug(
+                    self._logger,
+                    f"Agent 失败详情: meta={agent_result.meta}",
+                    LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
+                )
             playback = self._create_playback_stream(device_id=device_id, session_id=session_id, stream_id=playback_stream_id)
+            assistant_text = agent_result.reply_text.strip() or "收到。"
+            self._send_control_message(
+                device_id,
+                "notify",
+                "assistant.reply",
+                session_id,
+                {
+                    "device_id": device_id,
+                    "text": assistant_text,
+                    "action": agent_result.action,
+                    "stream_id": playback_stream_id,
+                },
+            )
             play_sent = False
             resampler: PCM16StreamResampler | None = None
 
-            for chunk in self._model_client.stream_reply(settings=self._settings, messages=messages):
-                if chunk.text_delta:
-                    assistant_text_parts.append(chunk.text_delta)
+            for chunk in self._model_client.stream_tts(settings=self._settings, text=agent_result.reply_text):
                 if chunk.audio_pcm_bytes:
                     if resampler is None or chunk.sample_rate_hz != resampler._input_rate_hz:
                         resampler = PCM16StreamResampler(chunk.sample_rate_hz, SERVER_SAMPLE_RATE_HZ)
@@ -837,43 +939,44 @@ class VoiceRuntime:
                 f"{playback_stream_id}.wav",
                 build_wav_bytes(bytes(output_pcm), SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS),
             )
-            assistant_text = "".join(assistant_text_parts).strip() or "收到。"
             log_info(
                 self._logger,
-                f"大模型文本回复: {assistant_text}",
+                f"Agent 最终回复: {assistant_text}",
                 LogContext(device_id=device_id, session_id=session_id),
             )
+            if agent_result.assistant_message_id:
+                self._agent_facade.attach_assistant_asset(
+                    session_id=session_id,
+                    assistant_message_id=agent_result.assistant_message_id,
+                    asset=MediaAssetRef(
+                        asset_id=generate_id("asset"),
+                        session_id=session_id,
+                        asset_type="audio",
+                        storage_uri=output_path,
+                        mime_type="audio/wav",
+                        codec="pcm16le",
+                        bytes=len(output_pcm),
+                        source_stream_id=playback_stream_id,
+                    ),
+                )
 
             with self._lock:
-                controller.message_context.append(
-                    MessageEntry(
-                        role="user",
-                        kind="audio_input",
-                        text=user_text,
-                        asset_refs=[input_path],
-                    )
-                )
-                controller.message_context.append(
-                    MessageEntry(
-                        role="assistant",
-                        kind="assistant_reply",
-                        text=assistant_text,
-                        asset_refs=[output_path],
-                    )
-                )
                 if controller.current_playback is playback:
                     controller.state = "reply_streaming"
 
-            log_info(
+            log_debug(
                 self._logger,
-                f"语音回复已准备: device_id={device_id} transcript={user_text} input={input_path} output={output_path}",
+                (
+                    f"语音回复已准备: device_id={device_id} transcript={user_text} "
+                    f"input={input_path} transcript_artifact={transcript_path} output={output_path}"
+                ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
         except AppError as exc:
             self._fail_current_playback(device_id)
             with self._lock:
                 controller.state = "failed"
-            log_info(
+            log_error(
                 self._logger,
                 f"语音链路失败: code={exc.code} message={exc.message} details={exc.details}",
                 LogContext(device_id=device_id, session_id=session_id),
@@ -882,9 +985,9 @@ class VoiceRuntime:
             self._fail_current_playback(device_id)
             with self._lock:
                 controller.state = "failed"
-            log_info(
+            log_error(
                 self._logger,
-                f"模型调用或播放编排失败: {exc}",
+                f"agent-core 或播放编排失败: {exc}",
                 LogContext(device_id=device_id, session_id=session_id),
             )
 
@@ -1020,6 +1123,26 @@ class VoiceRuntime:
         path = os.path.join(directory, filename)
         with open(path, "wb") as file:
             file.write(data)
+        return path
+
+    def _store_artifact(self, session_id: str, kind: str, filename: str, data: dict[str, Any]) -> str:
+        """落盘派生结果文件。
+
+        参数：
+        1. `session_id`：会话编号。
+        2. `kind`：派生结果分类目录。
+        3. `filename`：文件名。
+        4. `data`：待写入的字典数据。
+
+        返回值：
+        1. 结果文件绝对或相对路径。
+        """
+
+        directory = os.path.join(self._settings.voice_runs_root, session_id, "artifact", kind)
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, filename)
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
         return path
 
     @staticmethod

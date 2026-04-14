@@ -629,7 +629,7 @@ async def start_ai_with_text(user_text: str):
         content_list.append({"type": "text", "text": user_text})
 
         try:
-            async for piece in stream_chat(content_list, voice="Cherry", audio_format="wav"):
+            async for piece in stream_chat(content_list, voice="Tina", audio_format="wav"):
                 # 文本增量（仅 UI）
                 if piece.text_delta:
                     txt_buf.append(piece.text_delta)

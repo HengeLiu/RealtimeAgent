@@ -48,6 +48,7 @@
 #define AUDIO_FRAME_BYTES (AUDIO_FRAME_SAMPLES * sizeof(int16_t))
 #define PRE_ROLL_FRAME_COUNT 8
 #define WAKE_IDLE_SUMMARY_MS 3000
+#define SERVER_REPLY_TIMEOUT_MS 15000
 
 typedef struct {
     const char *ssid;
@@ -107,9 +108,11 @@ static bool s_wake_listening_enabled = false;
 static bool s_sr_task_started = false;
 static bool s_audio_ws_ready = false;
 static bool s_audio_transport_started = false;
+static bool s_control_transport_started = false;
 static bool s_playback_active = false;
 static bool s_playback_task_running = false;
 static bool s_speaker_channel_enabled = false;
+static uint64_t s_reply_wait_started_ms = 0;
 static char s_current_session_id[64];
 static char s_current_stream_id[64];
 static char s_current_playback_stream_id[64];
@@ -135,6 +138,13 @@ static glass_runtime_config_t s_runtime_config = {
     .firmware_version = CONFIG_GLASS_FIRMWARE_VERSION,
     .heartbeat_interval_ms = CONFIG_GLASS_HEARTBEAT_INTERVAL_MS,
 };
+
+static void clear_reply_wait_state(void);
+static void begin_reply_wait_state(void);
+static bool reply_wait_timed_out(uint64_t current_ms);
+static void recover_wake_listening_after_reply_timeout(uint64_t current_ms);
+static void reset_control_session_state(void);
+static void ensure_control_transport_started(void);
 
 static bool wifi_profile_available(int index)
 {
@@ -317,7 +327,7 @@ static void send_control_message_json(char *json_text, const char *name)
     if (written < 0) {
         ESP_LOGE(TAG, "发送控制消息失败: %s", name);
     } else if (strcmp(name, "device.heartbeat") != 0) {
-        ESP_LOGI(TAG, "已发送控制消息: %s", name);
+        ESP_LOGD(TAG, "已发送控制消息: %s", name);
     }
     free(json_text);
 }
@@ -595,13 +605,7 @@ static void wifi_event_handler(
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-        s_registered = false;
-        s_voice_session_opened = false;
-        s_wake_listening_enabled = false;
-        s_playback_active = false;
-        s_current_session_id[0] = '\0';
-        s_current_stream_id[0] = '\0';
-        s_current_playback_stream_id[0] = '\0';
+        reset_control_session_state();
 
         if (s_wifi_retry_count < WIFI_RETRY_PER_PROFILE) {
             s_wifi_retry_count += 1;
@@ -780,6 +784,50 @@ static void reset_segment_state(segment_state_t *state)
     state->segment_id[0] = '\0';
 }
 
+static void clear_reply_wait_state(void)
+{
+    s_reply_wait_started_ms = 0;
+}
+
+static void begin_reply_wait_state(void)
+{
+    s_reply_wait_started_ms = now_ms();
+}
+
+static bool reply_wait_timed_out(uint64_t current_ms)
+{
+    return s_reply_wait_started_ms > 0 &&
+           current_ms >= s_reply_wait_started_ms &&
+           (current_ms - s_reply_wait_started_ms) >= SERVER_REPLY_TIMEOUT_MS;
+}
+
+static void recover_wake_listening_after_reply_timeout(uint64_t current_ms)
+{
+    uint64_t waited_ms = current_ms - s_reply_wait_started_ms;
+    clear_reply_wait_state();
+    s_playback_active = false;
+    s_current_playback_stream_id[0] = '\0';
+    s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+    ESP_LOGW(
+        TAG,
+        "等待服务端回复超时，自动恢复待命监听: waited_ms=%" PRIu64 " timeout_ms=%d",
+        waited_ms,
+        SERVER_REPLY_TIMEOUT_MS
+    );
+}
+
+static void reset_control_session_state(void)
+{
+    s_registered = false;
+    s_voice_session_opened = false;
+    s_wake_listening_enabled = false;
+    s_playback_active = false;
+    clear_reply_wait_state();
+    s_current_session_id[0] = '\0';
+    s_current_stream_id[0] = '\0';
+    s_current_playback_stream_id[0] = '\0';
+}
+
 static void reset_pre_roll(pre_roll_frame_t *frames, size_t count, size_t *next_index, size_t *valid_count)
 {
     for (size_t index = 0; index < count; index += 1) {
@@ -872,7 +920,7 @@ static void log_wake_gate_state(
     bool has_session_id
 )
 {
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "唤醒门控状态: registered=%d voice_session_opened=%d wake_listening_enabled=%d audio_ws_ready=%d playback_active=%d has_session_id=%d",
         registered,
@@ -895,7 +943,7 @@ static void log_sr_fetch_state(
     int elapsed_ms
 )
 {
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "SR 状态[%s]: wakeup_state=%d vad_state=%d data_size=%d segment_active=%d got_speech=%d tail_silence_ms=%d elapsed_ms=%d",
         phase,
@@ -922,16 +970,21 @@ static void audio_websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_CONNECTED) {
         s_audio_ws_ready = true;
+        if (!s_playback_active) {
+            s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+        }
         ESP_LOGI(TAG, "音频上行连接已建立");
         return;
     }
     if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
         s_audio_ws_ready = false;
+        s_wake_listening_enabled = false;
         ESP_LOGW(TAG, "音频上行连接已断开");
         return;
     }
     if (event_id == WEBSOCKET_EVENT_ERROR) {
         s_audio_ws_ready = false;
+        s_wake_listening_enabled = false;
         ESP_LOGE(TAG, "音频上行连接发生错误");
     }
 }
@@ -1083,6 +1136,7 @@ cleanup:
     if (started_sent) {
         send_actuator_audio_state_message("actuator.audio.finished", s_current_playback_stream_id);
     }
+    clear_reply_wait_state();
     s_playback_active = false;
     s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
     s_playback_task_running = false;
@@ -1131,12 +1185,14 @@ static void start_playback_stream(const char *stream_id)
     }
 
     strlcpy(s_current_playback_stream_id, stream_id, sizeof(s_current_playback_stream_id));
+    clear_reply_wait_state();
     s_playback_active = true;
     s_wake_listening_enabled = false;
     s_playback_task_running = true;
     if (xTaskCreate(playback_stream_task, "playback_stream_task", 8192, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "创建 playback_stream_task 失败");
         s_playback_active = false;
+        s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
         s_playback_task_running = false;
         s_current_playback_stream_id[0] = '\0';
     }
@@ -1156,7 +1212,7 @@ static void sr_pipeline_task(void *arg)
     uint64_t last_idle_summary_ms = now_ms();
     uint64_t last_gate_log_ms = 0;
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "SR pipeline started, feed_chunksize=%d, feed_nch=%d, chunk_ms=%d",
         ctx->feed_chunksize,
@@ -1174,6 +1230,13 @@ static void sr_pipeline_task(void *arg)
                            !s_playback_active &&
                            has_session_id;
         uint64_t current_ms = now_ms();
+        if (!segment.segment_active && !s_playback_active && reply_wait_timed_out(current_ms)) {
+            recover_wake_listening_after_reply_timeout(current_ms);
+            last_wake_active = false;
+            last_gate_log_ms = current_ms;
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
         if (wake_active != last_wake_active) {
             log_wake_gate_state(
                 s_registered,
@@ -1198,7 +1261,7 @@ static void sr_pipeline_task(void *arg)
         }
         if (!wake_active) {
             if (segment.segment_active) {
-                ESP_LOGI(TAG, "voice session inactive, reset local speech segment");
+                ESP_LOGD(TAG, "voice session inactive, reset local speech segment");
                 reset_segment_state(&segment);
             }
             reset_pre_roll(
@@ -1250,7 +1313,7 @@ static void sr_pipeline_task(void *arg)
         if (!segment.segment_active) {
             idle_fetch_count += 1U;
             if ((current_ms - last_idle_summary_ms) >= WAKE_IDLE_SUMMARY_MS) {
-                ESP_LOGI(
+                ESP_LOGD(
                     TAG,
                     "待唤醒摘要: idle_fetch_count=%" PRIu32 " wakeup_state=%d vad_state=%d audio_ws_ready=%d",
                     idle_fetch_count,
@@ -1352,6 +1415,7 @@ static void sr_pipeline_task(void *arg)
             segment.segment_pcm_bytes,
             endpoint_by_silence ? "endpoint_detected" : "max_capture"
         );
+        begin_reply_wait_state();
         s_wake_listening_enabled = false;
         reset_segment_state(&segment);
     }
@@ -1514,11 +1578,7 @@ static void handle_control_message(const char *data, int data_len)
     if (strcmp(name->valuestring, "device.register.failed") == 0) {
         const cJSON *error = payload != NULL ? cJSON_GetObjectItemCaseSensitive(payload, "error") : NULL;
         const cJSON *message = error != NULL ? cJSON_GetObjectItemCaseSensitive(error, "message") : NULL;
-        s_registered = false;
-        s_voice_session_opened = false;
-        s_wake_listening_enabled = false;
-        s_current_session_id[0] = '\0';
-        s_current_stream_id[0] = '\0';
+        reset_control_session_state();
         ESP_LOGE(
             TAG,
             "注册失败: %s",
@@ -1535,6 +1595,7 @@ static void handle_control_message(const char *data, int data_len)
         }
         build_runtime_token("stream", s_current_stream_id, sizeof(s_current_stream_id));
         s_voice_session_opened = false;
+        clear_reply_wait_state();
         ESP_LOGI(TAG, "收到 voice.session.open: session_id=%s", s_current_session_id);
         send_voice_session_opened_message(s_current_session_id);
         s_voice_session_opened = true;
@@ -1560,12 +1621,12 @@ static void handle_control_message(const char *data, int data_len)
             play_stream_id = payload_stream_id->valuestring;
         }
 
-        ESP_LOGI(TAG, "收到 actuator.audio.play: stream_id=%s", play_stream_id != NULL ? play_stream_id : "<none>");
+        ESP_LOGD(TAG, "收到 actuator.audio.play: stream_id=%s", play_stream_id != NULL ? play_stream_id : "<none>");
         start_playback_stream(play_stream_id);
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "收到未处理控制消息: %s", name->valuestring);
+    ESP_LOGD(TAG, "收到未处理控制消息: %s", name->valuestring);
 
 cleanup:
     cJSON_Delete(root);
@@ -1586,26 +1647,14 @@ static void websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_CONNECTED) {
         ESP_LOGI(TAG, "控制连接已建立");
-        s_registered = false;
-        s_voice_session_opened = false;
-        s_wake_listening_enabled = false;
-        s_playback_active = false;
-        s_current_session_id[0] = '\0';
-        s_current_stream_id[0] = '\0';
-        s_current_playback_stream_id[0] = '\0';
+        reset_control_session_state();
         send_register_message();
         return;
     }
 
     if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
         ESP_LOGW(TAG, "控制连接已断开");
-        s_registered = false;
-        s_voice_session_opened = false;
-        s_wake_listening_enabled = false;
-        s_playback_active = false;
-        s_current_session_id[0] = '\0';
-        s_current_stream_id[0] = '\0';
-        s_current_playback_stream_id[0] = '\0';
+        reset_control_session_state();
         return;
     }
 
@@ -1616,6 +1665,7 @@ static void websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_ERROR) {
         ESP_LOGE(TAG, "控制连接发生错误");
+        reset_control_session_state();
     }
 }
 
@@ -1643,6 +1693,19 @@ static void start_control_connection(void)
         )
     );
     ESP_ERROR_CHECK(esp_websocket_client_start(s_ws_client));
+    s_control_transport_started = true;
+}
+
+static void ensure_control_transport_started(void)
+{
+    if (s_control_transport_started) {
+        if (s_ws_client != NULL && !esp_websocket_client_is_connected(s_ws_client)) {
+            esp_websocket_client_start(s_ws_client);
+        }
+        return;
+    }
+
+    start_control_connection();
 }
 
 static void heartbeat_task(void *arg)
@@ -1650,6 +1713,10 @@ static void heartbeat_task(void *arg)
     (void)arg;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(s_runtime_config.heartbeat_interval_ms));
+        if (s_ws_client == NULL || !esp_websocket_client_is_connected(s_ws_client)) {
+            ensure_control_transport_started();
+            continue;
+        }
         if (s_registered && s_ws_client != NULL && esp_websocket_client_is_connected(s_ws_client)) {
             send_heartbeat_message();
         }

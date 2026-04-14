@@ -9,6 +9,8 @@ import struct
 from typing import Final
 
 from api.ws.control_runtime import ControlRuntime
+from infra.errors import AppError
+from infra.logging import LogContext, get_logger, log_debug
 from protocol.media import MediaFrame
 
 GUID: Final[str] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -17,6 +19,7 @@ OPCODE_BINARY: Final[int] = 0x2
 OPCODE_CLOSE: Final[int] = 0x8
 OPCODE_PING: Final[int] = 0x9
 OPCODE_PONG: Final[int] = 0xA
+LOGGER = get_logger("server.websocket")
 
 
 class WebSocketProtocolError(RuntimeError):
@@ -103,7 +106,16 @@ def handle_audio_websocket(handler, runtime: ControlRuntime, query: dict[str, li
                 break
 
             if opcode == OPCODE_BINARY:
-                runtime.voice_runtime.on_audio_frame(device_id=device_id, frame=MediaFrame.decode(payload))
+                try:
+                    frame = MediaFrame.decode(payload)
+                    runtime.voice_runtime.on_audio_frame(device_id=device_id, frame=frame)
+                except AppError as exc:
+                    log_debug(
+                        LOGGER,
+                        f"丢弃异常音频 WebSocket 帧: code={exc.code} message={exc.message} details={exc.details}",
+                        LogContext(device_id=device_id),
+                    )
+                    continue
                 continue
             if opcode == OPCODE_PING:
                 _send_frame(sock, OPCODE_PONG, payload)

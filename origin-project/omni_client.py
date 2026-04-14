@@ -26,7 +26,7 @@ class OmniStreamPiece:
 
 async def stream_chat(
     content_list: List[Dict[str, Any]],
-    voice: str = "Cherry",
+    voice: str = "Tina",
     audio_format: str = "wav",
 ) -> AsyncGenerator[OmniStreamPiece, None]:
     """

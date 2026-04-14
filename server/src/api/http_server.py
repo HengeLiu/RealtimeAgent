@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
+from agent_core import AgentFacade
 from api.ws import ControlRuntime
 from api.ws.websocket_transport import handle_audio_websocket, handle_control_websocket
 from infra.config import ServerSettings
@@ -198,6 +199,7 @@ def build_server_handle(
     *,
     model_client: VoiceModelClient | None = None,
     asr_client: SpeechRecognitionClient | None = None,
+    agent_facade: AgentFacade | None = None,
 ) -> ServerHandle:
     """构建可启动的服务句柄。
 
@@ -211,7 +213,12 @@ def build_server_handle(
     1. 底层端口绑定失败会抛出系统异常。
     """
 
-    runtime = ControlRuntime(settings, model_client=model_client, asr_client=asr_client)
+    runtime = ControlRuntime(
+        settings,
+        model_client=model_client,
+        asr_client=asr_client,
+        agent_facade=agent_facade,
+    )
     server = create_http_server(settings, runtime)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     return ServerHandle(server=server, thread=thread, runtime=runtime)

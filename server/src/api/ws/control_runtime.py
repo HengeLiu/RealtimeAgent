@@ -8,9 +8,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 
+from agent_core import AgentFacade
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
-from infra.logging import LogContext, get_logger, log_info
+from infra.logging import LogContext, get_logger, log_debug, log_info, log_warning
 from protocol.codec.json_codec import JsonMessageCodec
 from protocol.messages.control_message import ControlMessage, Endpoint
 from protocol.utils.message_factory import create_control_message
@@ -67,6 +68,7 @@ class ControlRuntime:
         *,
         model_client: VoiceModelClient | None = None,
         asr_client: SpeechRecognitionClient | None = None,
+        agent_facade: AgentFacade | None = None,
     ) -> None:
         self._settings = settings
         self._codec = JsonMessageCodec()
@@ -79,6 +81,7 @@ class ControlRuntime:
             send_control_message=self._send_message_to_device,
             model_client=model_client,
             asr_client=asr_client,
+            agent_facade=agent_facade,
         )
         self._stop_event = threading.Event()
         self._sweeper_thread = threading.Thread(
@@ -166,7 +169,7 @@ class ControlRuntime:
             message_id=message.message_id,
         )
         if self._should_log_control_message(message.name):
-            log_info(self._logger, f"收到控制消息: {message.name}", context)
+            log_debug(self._logger, f"收到控制消息: {message.name}", context)
         connection.last_seen_monotonic = time.monotonic()
 
         if not connection.registered and message.name != "device.register":
@@ -198,7 +201,7 @@ class ControlRuntime:
             self._handle_actuator_audio_finished(connection, message)
             return
 
-        log_info(self._logger, f"忽略未支持控制消息: {message.name}", context)
+        log_debug(self._logger, f"忽略未支持控制消息: {message.name}", context)
 
     def build_runtime_snapshot(self) -> dict[str, object]:
         """返回当前运行态快照。"""
@@ -287,7 +290,7 @@ class ControlRuntime:
             )
 
         if old_connection is not None:
-            log_info(
+            log_warning(
                 self._logger,
                 f"检测到同设备重连，关闭旧连接: device_id={device_id}",
                 LogContext(device_id=device_id),
@@ -365,7 +368,7 @@ class ControlRuntime:
             session_id=message.session_id or "",
             payload=message.payload,
         )
-        log_info(
+        log_debug(
             self._logger,
             f"收到语音唤醒状态上报: segment_id={segment_id or '<none>'} stream_id={stream_id or '<none>'}",
             LogContext(
@@ -436,7 +439,7 @@ class ControlRuntime:
         with connection.send_lock:
             connection.send_text(raw)
         if self._should_log_control_message(message.name):
-            log_info(
+            log_debug(
                 self._logger,
                 f"已发送控制消息: {message.name}",
                 LogContext(
@@ -494,7 +497,7 @@ class ControlRuntime:
                         stale_connections.append(connection)
 
             for connection in stale_connections:
-                log_info(
+                log_warning(
                     self._logger,
                     "设备心跳超时，关闭连接",
                     LogContext(device_id=connection.device_id, session_id=connection.session_id),

@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import shutil
+import sys
 import tempfile
 import time
 import unittest
 from urllib.request import urlopen
 
+from agent_core import AgentFacade, AgentTurnResult
+from agent_core.context import AgentSession, AgentSessionStore
+from agent_core.runtime import AgentLoopRunner
+from agent_core.tools import ToolRegistry
 from api.http_server import build_server_handle
 from infra.config import ServerSettings
 from protocol.codec.json_codec import JsonMessageCodec
@@ -26,6 +33,10 @@ class FakeVoiceModelClient(VoiceModelClient):
         self.last_messages = messages
         yield ModelChunk(text_delta="收到。", audio_pcm_bytes=b"\x40\x06" * 2400, sample_rate_hz=24000)
 
+    def stream_tts(self, *, settings: ServerSettings, text: str):
+        self.last_tts_text = text
+        yield ModelChunk(audio_pcm_bytes=b"\x40\x06" * 2400, sample_rate_hz=24000)
+
 
 class FakeSpeechRecognitionClient(SpeechRecognitionClient):
     """用于集成测试的假 ASR 客户端。"""
@@ -41,6 +52,23 @@ class FakeSpeechRecognitionClient(SpeechRecognitionClient):
         return "兜底转写"
 
 
+class FakeAgentLoopRunner(AgentLoopRunner):
+    """用于集成测试的假 Agent 运行循环。"""
+
+    def __init__(self) -> None:
+        self.turns = []
+
+    def run_turn(self, *, session: AgentSession, turn) -> AgentTurnResult:
+        self.turns.append(turn)
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            action="final_answer",
+            reply_text=f"Agent 已收到：{turn.input_text}",
+        )
+
+
 class VoiceDialogFlowTestCase(unittest.TestCase):
     """验证 `/ws_audio` 与 `/stream.wav` 的闭环。"""
 
@@ -48,6 +76,12 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
         self.codec = JsonMessageCodec()
         self.model_client = FakeVoiceModelClient()
         self.asr_client = FakeSpeechRecognitionClient()
+        self.agent_runner = FakeAgentLoopRunner()
+        self.agent_facade = AgentFacade(
+            session_store=AgentSessionStore(),
+            tool_registry=ToolRegistry(device_state_reader=lambda: self._fetch_runtime()),
+            runner=self.agent_runner,
+        )
         self.temp_dir = tempfile.mkdtemp(prefix="phase-c-runs-")
         settings = ServerSettings(
             host="127.0.0.1",
@@ -57,7 +91,12 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
             heartbeat_timeout_ms=1000,
             voice_runs_root=self.temp_dir,
         )
-        self.handle = build_server_handle(settings, model_client=self.model_client, asr_client=self.asr_client)
+        self.handle = build_server_handle(
+            settings,
+            model_client=self.model_client,
+            asr_client=self.asr_client,
+            agent_facade=self.agent_facade,
+        )
         self.handle.start()
 
     def tearDown(self) -> None:
@@ -149,6 +188,10 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
                 ).decode("utf-8")
             )
 
+            text_reply = self._expect_message(control, "assistant.reply")
+            self.assertEqual(text_reply.payload["text"], "Agent 已收到：给我讲个笑话")
+            self.assertEqual(text_reply.payload["action"], "final_answer")
+
             play = self._expect_message(control, "actuator.audio.play")
             stream_id = play.stream_id or play.payload["stream_id"]
             with urlopen(
@@ -199,11 +242,55 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
                 self.fail("voice session did not return to listening")
 
             self.assertTrue(runtime["voice_sessions"]["glass-001"]["audio_connection_online"])
-            self.assertEqual(self.model_client.last_messages[1]["content"], "给我讲个笑话")
+            self.assertEqual(self.model_client.last_tts_text, "Agent 已收到：给我讲个笑话")
+            self.assertEqual(len(self.agent_runner.turns), 1)
+            self.assertEqual(self.agent_runner.turns[0].input_text, "给我讲个笑话")
+            session = self.agent_facade.get_session_store().get_session(opened.session_id)
+            self.assertIsNotNone(session)
+            assert session is not None
+            self.assertEqual(session.messages[0].text, "给我讲个笑话")
+            self.assertEqual(session.messages[1].text, "Agent 已收到：给我讲个笑话")
         finally:
             if audio is not None:
                 audio.close()
             control.close()
+
+    def test_simple_glass_audio_client_prints_text_and_saves_reply(self) -> None:
+        wav_path = os.path.join(self.temp_dir, "input.wav")
+        reply_path = os.path.join(self.temp_dir, "reply.wav")
+        self._write_wav_fixture(wav_path)
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            "script",
+            "simple_glass_audio_client.py",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                script_path,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(self.handle.port),
+                "--wav",
+                wav_path,
+                "--save-reply",
+                reply_path,
+                "--timeout-seconds",
+                "10",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+        self.assertIn("reply_text: Agent 已收到：给我讲个笑话", result.stdout)
+        self.assertTrue(os.path.exists(reply_path))
+        with open(reply_path, "rb") as file:
+            wav_bytes = file.read()
+        self.assertEqual(wav_bytes[:4], b"RIFF")
 
     def _send_register(self, client: TestWebSocketClient) -> None:
         client.send_text(
@@ -245,6 +332,19 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
     @staticmethod
     def _server_endpoint() -> Endpoint:
         return Endpoint(device_id="server-main", device_type="server", module="server-api")
+
+    @staticmethod
+    def _write_wav_fixture(path: str) -> None:
+        with open(path, "wb") as raw_file:
+            raw_file.write(b"")
+
+        import wave
+
+        with wave.open(path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(b"\x10\x00" * 320 * 3)
 
 
 if __name__ == "__main__":
