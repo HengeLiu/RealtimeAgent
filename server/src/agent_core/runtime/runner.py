@@ -10,19 +10,15 @@ from pydantic import BaseModel, Field, model_validator
 
 from agent_core.context.assembler import ContextAssembler
 from agent_core.context.models import AgentSession, AgentTurn, AgentTurnResult
-from agent_core.tools import AgentToolContext, ToolRegistry
+from agent_core.context.session_store import AgentSessionStore
+from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug
 
 
 class StructuredAgentReply(BaseModel):
-    """Agent 最终结构化输出。
-
-    主要功能：
-    1. 约束模型最终只能输出当前阶段支持的动作。
-    2. 把对话回复文本与动作一起回传给 `voice-runtime`。
-    """
+    """Agent 最终结构化输出。"""
 
     action: Literal["final_answer", "ask_user"] = Field(description="当前轮最终动作")
     reply_text: str = Field(description="当前轮需要返回给用户的中文文本")
@@ -42,86 +38,84 @@ class AgentLoopRunner(ABC):
 
     @abstractmethod
     def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
-        """执行一轮 AgentTurn。
-
-        参数：
-        1. `session`：当前会话对象。
-        2. `turn`：当前轮输入对象。
-
-        返回值：
-        1. `AgentTurnResult`。
-        """
+        """执行一轮 AgentTurn。"""
 
 
 class OpenAIAgentLoopRunner(AgentLoopRunner):
-    """基于 OpenAI Agents SDK 的最小运行循环。
-
-    主要功能：
-    1. 把会话历史和当前输入装配为 Agent 输入。
-    2. 通过 OpenAI Agents SDK 执行工具调用与最终回复生成。
-    3. 把 Tool 调用轨迹汇总回 `AgentTurnResult`。
-    """
+    """基于 OpenAI Agents SDK 的最小运行循环。"""
 
     def __init__(
         self,
         *,
         settings: ServerSettings,
+        session_store: AgentSessionStore,
         tool_registry: ToolRegistry,
+        tool_gateway: ToolGateway,
         context_assembler: ContextAssembler | None = None,
     ) -> None:
         self._settings = settings
+        self._session_store = session_store
         self._tool_registry = tool_registry
+        self._tool_gateway = tool_gateway
         self._context_assembler = context_assembler or ContextAssembler()
         self._logger = get_logger("server.agent.runner")
 
     def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
-        """执行一轮 AgentTurn。
-
-        主要逻辑：
-        1. 构造 OpenAI Agents SDK 所需的 Agent、Tool 上下文和运行配置。
-        2. 提交短期历史与当前轮文本。
-        3. 读取结构化最终输出并转为统一结果对象。
-
-        异常情况：
-        1. API Key 缺失或 SDK 调用失败时抛出结构化错误。
-        """
+        """执行一轮 AgentTurn。"""
 
         capability_traces = []
         tool_context = AgentToolContext(
             session_id=turn.session_id,
             device_id=turn.device_id,
             turn_id=turn.turn_id,
+            settings=self._settings,
+            session_store=self._session_store,
             device_state_reader=self._tool_registry.get_device_state_reader(),
             trace_sink=capability_traces.append,
+            task_gateway=self._tool_registry.get_task_gateway(),
+            tool_gateway=self._tool_gateway,
+            skill_gateway=self._tool_registry.get_skill_gateway(),
+            mcp_gateway=self._tool_registry.get_mcp_gateway(),
         )
 
+        if self._should_force_query_device_state(turn.input_text):
+            result = self._run_direct_device_state_query(turn=turn, context=tool_context, traces=capability_traces)
+            return self._attach_capability_outputs(result=result, context=tool_context)
+
+        direct_route_result = self._run_direct_capability_route(turn=turn, context=tool_context, traces=capability_traces)
+        if direct_route_result is not None:
+            return self._attach_capability_outputs(result=direct_route_result, context=tool_context)
+
         if not self._settings.dashscope_api_key.strip():
-            return self._build_failure_result(
-                turn=turn,
-                message="缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
-                traces=capability_traces,
-                error=build_error(
-                    ErrorCode.INVALID_CONFIG,
-                    "缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
+            return self._attach_capability_outputs(
+                result=self._build_failure_result(
+                    turn=turn,
+                    message="缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
+                    traces=capability_traces,
+                    error=build_error(
+                        ErrorCode.INVALID_CONFIG,
+                        "缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
+                    ),
                 ),
+                context=tool_context,
             )
 
         try:
             from agents import Agent, MultiProvider, RunConfig, Runner
-        except ImportError as exc:
-            return self._build_failure_result(
-                turn=turn,
-                message="缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
-                traces=capability_traces,
-                error=build_error(
-                    ErrorCode.INVALID_CONFIG,
-                    "缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
-                    details={"hint": "请执行 uv sync 安装 openai-agents"},
+        except ImportError:
+            return self._attach_capability_outputs(
+                result=self._build_failure_result(
+                    turn=turn,
+                    message="缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
+                    traces=capability_traces,
+                    error=build_error(
+                        ErrorCode.INVALID_CONFIG,
+                        "缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
+                        details={"hint": "请执行 uv sync 安装 openai-agents"},
+                    ),
                 ),
+                context=tool_context,
             )
-
-        if self._should_force_query_device_state(turn.input_text):
-            return self._run_direct_device_state_query(turn=turn, context=tool_context, traces=capability_traces)
 
         agent = Agent(
             name="OpenAIGlassesAgent",
@@ -166,15 +160,18 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 f"agent-core 运行异常: reason={exc!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
             )
-            return self._build_failure_result(
-                turn=turn,
-                message="agent-core 运行失败",
-                traces=capability_traces,
-                error=build_error(
-                    ErrorCode.INTERNAL_ERROR,
-                    "agent-core 运行失败",
-                    details={"reason": str(exc)},
+            return self._attach_capability_outputs(
+                result=self._build_failure_result(
+                    turn=turn,
+                    message="agent-core 运行失败",
+                    traces=capability_traces,
+                    error=build_error(
+                        ErrorCode.INTERNAL_ERROR,
+                        "agent-core 运行失败",
+                        details={"reason": str(exc)},
+                    ),
                 ),
+                context=tool_context,
             )
 
         final_output = run_result.final_output
@@ -185,24 +182,30 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             action = "final_answer"
             reply_text = final_output.strip()
         else:
-            return self._build_failure_result(
-                turn=turn,
-                message="agent-core 返回了无法识别的最终输出",
-                traces=capability_traces,
-                error=build_error(
-                    ErrorCode.INTERNAL_ERROR,
-                    "agent-core 返回了无法识别的最终输出",
-                    details={"final_output_type": type(final_output).__name__},
+            return self._attach_capability_outputs(
+                result=self._build_failure_result(
+                    turn=turn,
+                    message="agent-core 返回了无法识别的最终输出",
+                    traces=capability_traces,
+                    error=build_error(
+                        ErrorCode.INTERNAL_ERROR,
+                        "agent-core 返回了无法识别的最终输出",
+                        details={"final_output_type": type(final_output).__name__},
+                    ),
                 ),
+                context=tool_context,
             )
 
-        return AgentTurnResult(
-            turn_id=turn.turn_id,
-            session_id=turn.session_id,
-            device_id=turn.device_id,
-            action=action,
-            reply_text=reply_text or "抱歉，我现在还没法稳定回答这个问题。",
-            capability_traces=capability_traces,
+        return self._attach_capability_outputs(
+            result=AgentTurnResult(
+                turn_id=turn.turn_id,
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                action=action,
+                reply_text=reply_text or "抱歉，我现在还没法稳定回答这个问题。",
+                capability_traces=capability_traces,
+            ),
+            context=tool_context,
         )
 
     def _run_direct_device_state_query(
@@ -212,12 +215,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         context: AgentToolContext,
         traces: list,
     ) -> AgentTurnResult:
-        """执行设备状态的直连查询。
-
-        主要逻辑：
-        1. 对明确的设备状态问题绕过模型调用，直接触发 Tool。
-        2. Tool 成功时返回最终回复；失败时返回统一 `fail` 结果并保留轨迹。
-        """
+        """执行设备状态的直连查询。"""
 
         log_debug(
             self._logger,
@@ -225,7 +223,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
         )
         try:
-            device_state = self._tool_registry.invoke(
+            device_state = self._tool_gateway.invoke(
                 name="query_device_state",
                 context=context,
             )
@@ -252,9 +250,81 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             session_id=turn.session_id,
             device_id=turn.device_id,
             action="final_answer",
-            reply_text=self._build_device_state_reply(device_state),
+            reply_text=self._build_device_state_reply(device_state.data),
             capability_traces=traces,
         )
+
+    def _run_direct_capability_route(
+        self,
+        *,
+        turn: AgentTurn,
+        context: AgentToolContext,
+        traces: list,
+    ) -> AgentTurnResult | None:
+        """处理 Phase E 的直连能力路由。"""
+
+        text = turn.input_text.strip()
+        if not text:
+            return None
+
+        if self._should_force_photo_interpret(text):
+            result = self._tool_gateway.invoke(
+                name="photo_interpret",
+                context=context,
+                arguments={
+                    "question": text,
+                    "capture_first": True,
+                },
+            )
+            return AgentTurnResult(
+                turn_id=turn.turn_id,
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                action="final_answer",
+                reply_text=str(result.data.get("answer_text") or result.message or "我已经看过图片了。"),
+                capability_traces=traces,
+            )
+
+        if self._should_force_timer_manage(text):
+            result = self._tool_gateway.invoke(
+                name="timer_manage",
+                context=context,
+                arguments=self._build_timer_manage_arguments(text),
+            )
+            return AgentTurnResult(
+                turn_id=turn.turn_id,
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                action="final_answer",
+                reply_text=str(result.data.get("summary") or result.message or "计时器操作已完成。"),
+                capability_traces=traces,
+            )
+
+        if self._should_force_amap_route_plan(text):
+            result = self._tool_gateway.invoke(
+                name="amap_route_plan",
+                context=context,
+                arguments=self._build_amap_route_arguments(text),
+            )
+            return AgentTurnResult(
+                turn_id=turn.turn_id,
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                action="final_answer",
+                reply_text=str(result.data.get("summary") or result.message or "路线已规划。"),
+                capability_traces=traces,
+            )
+
+        return None
+
+    @staticmethod
+    def _attach_capability_outputs(*, result: AgentTurnResult, context: AgentToolContext) -> AgentTurnResult:
+        """把能力调用产生的引用对象挂到 turn result。"""
+
+        result.meta.setdefault("asset_refs", list(context.emitted_assets))
+        result.meta.setdefault("derived_artifacts", list(context.emitted_artifacts))
+        result.meta.setdefault("task_refs", list(context.emitted_tasks))
+        return result
 
     @staticmethod
     def _build_failure_result(
@@ -281,25 +351,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
     @staticmethod
     def _run_with_thread_event_loop(callback):
-        """确保当前线程存在可用 event loop 后再执行回调。
-
-        主要逻辑：
-        1. 读取当前线程绑定的 event loop。
-        2. 若当前线程尚无 loop，或 loop 已关闭，则创建临时 loop。
-        3. 回调执行完成后关闭临时 loop，避免泄漏。
-
-        参数：
-        1. `callback`：需要在有 event loop 环境中执行的同步函数。
-
-        返回值：
-        1. 回调返回值。
-        """
+        """确保当前线程存在可用 event loop 后再执行回调。"""
 
         previous_loop = None
         created_loop = None
 
         try:
-            previous_loop = asyncio.get_event_loop()
+            previous_loop = asyncio.get_running_loop()
         except RuntimeError:
             previous_loop = None
 
@@ -340,6 +398,57 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         return any(pattern in text for pattern in direct_patterns)
 
     @staticmethod
+    def _should_force_photo_interpret(text: str) -> bool:
+        photo_keywords = ("拍照", "看看前面", "照片", "画面", "障碍")
+        return any(keyword in text for keyword in photo_keywords)
+
+    @staticmethod
+    def _should_force_timer_manage(text: str) -> bool:
+        timer_keywords = ("计时", "定时", "倒计时")
+        return any(keyword in text for keyword in timer_keywords)
+
+    @staticmethod
+    def _should_force_amap_route_plan(text: str) -> bool:
+        nav_keywords = ("导航", "带我去", "去最近的", "路线")
+        return any(keyword in text for keyword in nav_keywords)
+
+    @staticmethod
+    def _build_timer_manage_arguments(text: str) -> dict[str, object]:
+        duration_seconds = 300
+        digits = []
+        current_digits = ""
+        for char in text:
+            if char.isdigit():
+                current_digits += char
+            elif current_digits:
+                digits.append(int(current_digits))
+                current_digits = ""
+        if current_digits:
+            digits.append(int(current_digits))
+        if digits:
+            first = digits[0]
+            duration_seconds = first * 60 if "分钟" in text else first
+        return {
+            "action": "create",
+            "duration_seconds": duration_seconds,
+            "query": text,
+        }
+
+    @staticmethod
+    def _build_amap_route_arguments(text: str) -> dict[str, object]:
+        destination = text
+        for prefix in ("导航去", "带我去", "去最近的", "去", "导航到"):
+            if prefix in text:
+                destination = text.split(prefix, 1)[1].strip(" ，。？?")
+                break
+        destination = destination or "最近的目的地"
+        return {
+            "origin": "当前设备位置",
+            "destination": destination,
+            "strategy": "walking",
+        }
+
+    @staticmethod
     def _build_device_state_reply(device_state: dict[str, object]) -> str:
         """把结构化设备状态转换为口语化回复。"""
 
@@ -365,11 +474,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         return f"眼镜主连接在线，但音频链路当前不在线，状态是 {state}。"
 
     def _build_instructions(self) -> str:
-        """构造最小 Agent 指令。
-
-        返回值：
-        1. 适用于 Phase D 的系统级中文提示词。
-        """
+        """构造最小 Agent 指令。"""
 
         return (
             f"{self._settings.voice_system_prompt}\n"
@@ -377,6 +482,9 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             "请遵守以下规则：\n"
             "1. 当前阶段最终只允许输出 `final_answer` 或 `ask_user`。\n"
             "2. 当用户询问设备状态、是否在线、是否正在监听时，应优先调用 `query_device_state`。\n"
-            "3. 若信息不足，需要用简短中文追问，并输出 `ask_user`。\n"
-            "4. 回复必须简短、口语化、直接，不要输出代码块。\n"
+            "3. 当用户要求拍照看前方时，可调用 `photo_interpret` 或 `capture_photo`。\n"
+            "4. 当用户要求创建计时器时，可调用 `timer_manage` 或计时器相关 Tool。\n"
+            "5. 当用户询问路线或导航时，可调用 `amap_route_plan`。\n"
+            "6. 若信息不足，需要用简短中文追问，并输出 `ask_user`。\n"
+            "7. 回复必须简短、口语化、直接，不要输出代码块。\n"
         )

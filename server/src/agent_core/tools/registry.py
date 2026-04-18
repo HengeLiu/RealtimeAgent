@@ -1,214 +1,249 @@
-"""agent-core 最小工具注册表。"""
+"""agent-core 统一工具注册表。"""
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
-from agents import RunContextWrapper, function_tool
+from pydantic import BaseModel, Field
 
-from agent_core.context.models import CapabilityTrace, now_ms
+from agent_core.mcp import McpGateway, McpRegistry
+from agent_core.models import ToolSpec
+from agent_core.skills import SkillGateway, SkillRegistry
+from agent_core.tools.base import AgentToolContext, BaseMcpTool, BaseSkillTool, BaseTool
+from backend_task_core import InMemoryTaskGateway, TaskGateway
 from infra.errors import ErrorCode, build_error
 
+try:  # pragma: no cover - 真实 SDK 可选
+    from agents import RunContextWrapper, function_tool
+except ImportError:  # pragma: no cover - 单测环境兜底
+    class RunContextWrapper:  # type: ignore[override]
+        """最小 RunContextWrapper 兜底类型。"""
 
-@dataclass(slots=True)
-class AgentToolContext:
-    """工具调用上下文。
+        def __class_getitem__(cls, _item):
+            return cls
 
-    主要功能：
-    1. 向 Tool 暴露当前会话、设备和调用轨迹写入口。
-    2. 隔离 Tool 对外部运行时的直接依赖。
+    def function_tool(*, name_override=None, failure_error_function=None):  # type: ignore[override]
+        """无 agents 依赖时退化为原函数装饰器。"""
 
-    主要属性：
-    1. `session_id/device_id/turn_id`：当前调用链路标识。
-    2. `device_state_reader`：设备状态读取函数。
-    3. `trace_sink`：能力轨迹写入函数。
-    """
+        def _decorator(func):
+            func._tool_name_override = name_override
+            func._tool_failure_error_function = failure_error_function
+            return func
 
-    session_id: str
-    device_id: str
-    turn_id: str
-    device_state_reader: Callable[[], dict[str, Any]]
-    trace_sink: Callable[[CapabilityTrace], None]
+        return _decorator
 
 
-@dataclass(slots=True)
-class RegisteredTool:
-    """注册完成的工具定义。"""
+class _GenericPayload(BaseModel):
+    """SDK Tool 通用参数对象。"""
 
-    name: str
-    description: str
-    sdk_tool: Any
-    invoke_handler: Callable[..., Any]
+    payload: dict[str, Any] | None = Field(default=None, description="工具参数字典")
+
+
+class SkillToolProxy(BaseSkillTool):
+    """把 Skill 暴露成统一 Tool。"""
+
+    def __init__(
+        self,
+        *,
+        skill_name: str,
+        skill_gateway: SkillGateway,
+        description: str,
+        input_model: type[BaseModel],
+    ) -> None:
+        self._skill_name = skill_name
+        self._skill_gateway = skill_gateway
+        self.spec = ToolSpec(
+            name=skill_name,
+            description=description,
+            input_model=input_model,
+            capability_type="skill",
+            tags=["skill"],
+        )
+
+    def run(self, context: AgentToolContext, input_data):
+        return self._skill_gateway.invoke(
+            name=self._skill_name,
+            context=context,
+            arguments=input_data.model_dump(exclude_none=True),
+            record_trace=False,
+        )
+
+
+class McpToolProxy(BaseMcpTool):
+    """把 MCP 方法暴露成统一 Tool。"""
+
+    def __init__(
+        self,
+        *,
+        method_name: str,
+        tool_name: str,
+        mcp_gateway: McpGateway,
+        description: str,
+        input_model: type[BaseModel],
+    ) -> None:
+        self._method_name = method_name
+        self._mcp_gateway = mcp_gateway
+        self.spec = ToolSpec(
+            name=tool_name,
+            description=description,
+            input_model=input_model,
+            capability_type="mcp",
+            tags=["mcp"],
+        )
+
+    def run(self, context: AgentToolContext, input_data):
+        return self._mcp_gateway.invoke(
+            name=self._method_name,
+            context=context,
+            arguments=input_data.model_dump(exclude_none=True),
+            record_trace=False,
+        )
 
 
 class ToolRegistry:
-    """最小工具注册表。
+    """统一 Tool 注册表。"""
 
-    主要功能：
-    1. 管理首批 Tool 的注册与发现。
-    2. 为 OpenAI Agents SDK 提供可调用工具列表。
-    3. 为测试环境提供手工调用入口。
-    """
-
-    def __init__(self, *, device_state_reader: Callable[[], dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        *,
+        device_state_reader,
+        task_gateway: TaskGateway | None = None,
+        skill_registry: SkillRegistry | None = None,
+        skill_gateway: SkillGateway | None = None,
+        mcp_registry: McpRegistry | None = None,
+        mcp_gateway: McpGateway | None = None,
+    ) -> None:
         self._device_state_reader = device_state_reader
-        self._tools: dict[str, RegisteredTool] = {}
-        self._register_query_device_state_tool()
+        self._task_gateway = task_gateway or InMemoryTaskGateway()
+        self._skill_registry = skill_registry or SkillRegistry()
+        self._skill_gateway = skill_gateway or SkillGateway(self._skill_registry)
+        self._mcp_registry = mcp_registry or McpRegistry()
+        self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
+        self._tools: dict[str, BaseTool] = {}
+        self._sdk_tools: dict[str, Any] = {}
+        self._gateway = None
+        self.discover_tools()
+
+    def bind_gateway(self, gateway) -> None:
+        """绑定统一 ToolGateway。"""
+
+        self._gateway = gateway
+
+    def discover_tools(self) -> None:
+        """导入并注册内置 Function/Skill/MCP Tool。"""
+
+        from agent_core.tools.builtins import (
+            CancelTaskTool,
+            CapturePhotoTool,
+            CreateTimerTool,
+            QueryDeviceStateTool,
+            QueryTaskStatusTool,
+        )
+
+        for tool in (
+            QueryDeviceStateTool(),
+            CapturePhotoTool(),
+            CreateTimerTool(),
+            QueryTaskStatusTool(),
+            CancelTaskTool(),
+        ):
+            self._register_tool(tool)
+
+        for skill in self._skill_registry.list_skills():
+            self._register_tool(
+                SkillToolProxy(
+                    skill_name=skill.spec.name,
+                    skill_gateway=self._skill_gateway,
+                    description=skill.spec.description,
+                    input_model=skill.spec.input_model,
+                )
+            )
+
+        for method in self._mcp_registry.list_methods():
+            self._register_tool(
+                McpToolProxy(
+                    method_name=method.spec.name,
+                    tool_name=method.spec.name.replace(".", "_"),
+                    mcp_gateway=self._mcp_gateway,
+                    description=method.spec.description,
+                    input_model=method.spec.input_model,
+                )
+            )
+
+    def _register_tool(self, tool: BaseTool) -> None:
+        self._tools[tool.spec.name] = tool
+        self._sdk_tools[tool.spec.name] = self._build_sdk_tool(tool.spec.name, tool.spec.description)
+
+    def get(self, name: str) -> BaseTool | None:
+        """按名称查询 Tool。"""
+
+        return self._tools.get(name)
+
+    def list_tools(self) -> list[BaseTool]:
+        """列出全部 Tool。"""
+
+        return list(self._tools.values())
 
     def list_sdk_tools(self) -> list[Any]:
-        """返回全部 SDK Tool。
+        """返回全部 SDK Tool。"""
 
-        返回值：
-        1. 可直接传给 OpenAI Agents SDK 的工具列表。
-        """
+        return [self._sdk_tools[name] for name in self._tools]
 
-        return [tool.sdk_tool for tool in self._tools.values()]
-
-    def get_device_state_reader(self) -> Callable[[], dict[str, Any]]:
-        """返回设备状态读取函数。
-
-        返回值：
-        1. 当前注册表绑定的设备状态读取函数。
-        """
+    def get_device_state_reader(self):
+        """返回设备状态读取函数。"""
 
         return self._device_state_reader
 
-    def invoke(self, *, name: str, context: AgentToolContext, arguments: dict[str, Any] | None = None) -> Any:
-        """手工调用指定工具。
+    def get_task_gateway(self) -> TaskGateway:
+        """返回任务网关。"""
 
-        参数：
-        1. `name`：工具名称。
-        2. `context`：工具调用上下文。
-        3. `arguments`：工具参数字典。
+        return self._task_gateway
 
-        返回值：
-        1. 工具执行结果。
+    def get_skill_gateway(self) -> SkillGateway:
+        """返回 SkillGateway。"""
 
-        异常情况：
-        1. 工具不存在时抛出结构化错误。
-        """
+        return self._skill_gateway
 
-        tool = self._tools.get(name)
-        if tool is None:
-            raise build_error(
-                ErrorCode.TASK_NOT_FOUND,
-                "指定工具不存在",
-                details={"tool_name": name},
-            )
-        return tool.invoke_handler(context=context, **(arguments or {}))
+    def get_mcp_gateway(self) -> McpGateway:
+        """返回 McpGateway。"""
 
-    def _register_query_device_state_tool(self) -> None:
-        """注册设备状态查询工具。"""
+        return self._mcp_gateway
 
-        def _build_trace(*, context: AgentToolContext, target_device_id: str | None) -> CapabilityTrace:
-            return CapabilityTrace(
-                trace_id=f"cap_{context.turn_id}_{now_ms()}",
-                turn_id=context.turn_id,
-                capability_type="tool",
-                capability_name="query_device_state",
-                status="running",
-                input_summary=json.dumps(
-                    {
-                        "target_device_id": target_device_id or context.device_id,
-                    },
-                    ensure_ascii=False,
-                ),
-                started_at_ms=now_ms(),
-            )
+    def invoke(self, *, name: str, context: AgentToolContext, arguments: dict[str, Any] | None = None):
+        """兼容旧调用面，转发到 ToolGateway。"""
 
-        def _normalize_device_snapshot(snapshot: dict[str, Any], device_id: str) -> dict[str, Any] | None:
-            if "voice_sessions" in snapshot and isinstance(snapshot["voice_sessions"], dict):
-                session_snapshot = snapshot["voice_sessions"].get(device_id)
-                if isinstance(session_snapshot, dict):
-                    return session_snapshot
-                return None
-            candidate = snapshot.get(device_id)
-            return candidate if isinstance(candidate, dict) else None
+        gateway = self._gateway
+        if gateway is None:
+            from agent_core.tools.gateway import ToolGateway
 
-        def invoke_query_device_state(
-            *,
-            context: AgentToolContext,
-            target_device_id: str | None = None,
-        ) -> dict[str, Any]:
-            """查询指定设备的当前状态。
+            gateway = ToolGateway(self)
+            self.bind_gateway(gateway)
+        return gateway.invoke(name=name, context=context, arguments=arguments)
 
-            功能：
-            1. 读取当前运行时里的设备状态快照。
-            2. 返回目标设备的会话和语音链路状态。
-
-            参数：
-            1. `context`：工具调用上下文。
-            2. `target_device_id`：待查询设备编号；为空时默认查询当前设备。
-
-            返回值：
-            1. 结构化设备状态字典。
-
-            异常情况：
-            1. 若目标设备不存在，则抛出结构化错误。
-            """
-
-            trace = _build_trace(context=context, target_device_id=target_device_id)
-            device_id = (target_device_id or context.device_id).strip()
-            try:
-                snapshot = context.device_state_reader()
-                device_snapshot = _normalize_device_snapshot(snapshot, device_id)
-                if device_snapshot is None:
-                    raise build_error(
-                        ErrorCode.STREAM_NOT_FOUND,
-                        "目标设备当前不在线或状态未知",
-                        details={"device_id": device_id},
-                    )
-                result = {
-                    "device_id": device_id,
-                    "online": True,
-                    "state": str(device_snapshot.get("state", "unknown")),
-                    "session_id": device_snapshot.get("session_id"),
-                    "audio_connection_online": bool(device_snapshot.get("audio_connection_online", False)),
-                    "reply_stream_id": device_snapshot.get("reply_stream_id"),
-                }
-                trace.status = "succeeded"
-                trace.output_summary = json.dumps(result, ensure_ascii=False)
-                trace.completed_at_ms = now_ms()
-                context.trace_sink(trace)
-                return result
-            except Exception as exc:
-                trace.status = "failed"
-                trace.error_message = str(exc)
-                trace.completed_at_ms = now_ms()
-                context.trace_sink(trace)
-                raise
-
+    def _build_sdk_tool(self, tool_name: str, description: str):
         @function_tool(
-            name_override="query_device_state",
-            failure_error_function=lambda _ctx, exc: f"工具 query_device_state 调用失败：{exc}",
+            name_override=tool_name,
+            failure_error_function=lambda _ctx, exc: f"工具 {tool_name} 调用失败：{exc}",
         )
-        def sdk_query_device_state(
+        def _sdk_tool(
             ctx: RunContextWrapper[AgentToolContext],
-            target_device_id: str | None = None,
+            payload: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
-            """查询设备当前运行状态。
+            """统一 SDK Tool 入口。"""
 
-            功能：
-            1. 查询当前或指定设备的在线状态与语音会话状态。
-            2. 适用于回答“设备现在怎么样”“还在监听吗”等问题。
+            gateway = self._gateway
+            if gateway is None:
+                raise build_error(
+                    ErrorCode.INVALID_CONFIG,
+                    "ToolGateway 尚未绑定到 ToolRegistry",
+                    details={"tool_name": tool_name},
+                )
+            result = gateway.invoke(
+                name=tool_name,
+                context=ctx.context,
+                arguments=payload or {},
+            )
+            return result.data
 
-            参数：
-            1. `target_device_id`：待查询设备编号；为空时默认查询当前会话设备。
-
-            返回值：
-            1. 包含 `device_id`、`state`、`session_id`、`audio_connection_online` 的字典。
-
-            异常情况：
-            1. 设备不存在或不在线时，返回给模型明确错误信息。
-            """
-
-            return invoke_query_device_state(context=ctx.context, target_device_id=target_device_id)
-
-        self._tools["query_device_state"] = RegisteredTool(
-            name="query_device_state",
-            description="查询设备运行状态",
-            sdk_tool=sdk_query_device_state,
-            invoke_handler=invoke_query_device_state,
-        )
+        _sdk_tool.__doc__ = description
+        return _sdk_tool

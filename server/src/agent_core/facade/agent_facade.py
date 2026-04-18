@@ -5,7 +5,8 @@ from __future__ import annotations
 from agent_core.context import AgentSessionStore, AgentTurn, AgentTurnResult, MessageContext, generate_id
 from agent_core.context.models import CapabilityTrace, MediaAssetRef
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
-from agent_core.tools import ToolRegistry
+from agent_core.tools import ToolGateway, ToolRegistry
+from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug
@@ -50,8 +51,19 @@ class AgentFacade:
         """
 
         session_store = AgentSessionStore()
-        tool_registry = ToolRegistry(device_state_reader=device_state_reader)
-        runner = OpenAIAgentLoopRunner(settings=settings, tool_registry=tool_registry)
+        task_gateway = InMemoryTaskGateway()
+        tool_registry = ToolRegistry(
+            device_state_reader=device_state_reader,
+            task_gateway=task_gateway,
+        )
+        tool_gateway = ToolGateway(tool_registry)
+        tool_registry.bind_gateway(tool_gateway)
+        runner = OpenAIAgentLoopRunner(
+            settings=settings,
+            session_store=session_store,
+            tool_registry=tool_registry,
+            tool_gateway=tool_gateway,
+        )
         return cls(
             session_store=session_store,
             tool_registry=tool_registry,
@@ -128,6 +140,18 @@ class AgentFacade:
         """把运行结果统一写回会话上下文。"""
 
         assistant_message_id = generate_id("msg")
+        assistant_asset_ids = self._session_store.save_assets(
+            session_id=turn.session_id,
+            assets=result.meta.get("asset_refs", []),
+        )
+        assistant_artifact_ids = self._session_store.save_artifacts(
+            session_id=turn.session_id,
+            artifacts=result.meta.get("derived_artifacts", []),
+        )
+        assistant_task_ids = self._session_store.save_task_refs(
+            session_id=turn.session_id,
+            task_refs=result.meta.get("task_refs", []),
+        )
         self._session_store.append_capability_traces(
             session_id=turn.session_id,
             traces=result.capability_traces,
@@ -140,6 +164,9 @@ class AgentFacade:
                 role="assistant",
                 kind="assistant_question" if result.action == "ask_user" else "assistant_reply",
                 text=result.reply_text,
+                asset_refs=assistant_asset_ids,
+                derived_refs=assistant_artifact_ids,
+                task_refs=assistant_task_ids,
                 meta={
                     "turn_id": turn.turn_id,
                     "action": result.action,

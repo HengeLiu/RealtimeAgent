@@ -211,7 +211,7 @@ V -> V : 恢复 listening
 推荐执行：
 
 ```bash
-bash script/run_phase_d_tests.sh
+bash script/deprecated/run_phase_d_tests_phase_d.sh
 ```
 
 该脚本会在 `uv` 环境下执行：
@@ -244,7 +244,7 @@ PYTHONPATH=server/src uv run python -m unittest discover -s server/test -p 'test
 执行命令：
 
 ```bash
-bash script/run_phase_d_tests.sh
+bash script/deprecated/run_phase_d_tests_phase_d.sh
 ```
 
 结果汇总：

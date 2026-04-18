@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+import types
 import unittest
 from unittest.mock import patch
 
@@ -12,9 +14,62 @@ from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace,
 from agent_core.context.assembler import ContextAssembler
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.runtime.runner import StructuredAgentReply
-from agent_core.tools import AgentToolContext, ToolRegistry
+from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
+
+
+def build_tooling(device_state_reader=lambda: {}):
+    registry = ToolRegistry(device_state_reader=device_state_reader)
+    gateway = ToolGateway(registry)
+    registry.bind_gateway(gateway)
+    return registry, gateway
+
+
+def build_tool_context(*, registry, gateway, session_id, turn_id):
+    return AgentToolContext(
+        session_id=session_id,
+        device_id="glass-001",
+        turn_id=turn_id,
+        settings=ServerSettings(),
+        session_store=AgentSessionStore(),
+        device_state_reader=registry.get_device_state_reader(),
+        trace_sink=lambda _trace: None,
+        task_gateway=registry.get_task_gateway(),
+        tool_gateway=gateway,
+        skill_gateway=registry.get_skill_gateway(),
+        mcp_gateway=registry.get_mcp_gateway(),
+    )
+
+
+def install_fake_agents_module():
+    module = types.ModuleType("agents")
+
+    class Agent:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class MultiProvider:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class RunConfig:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class Runner:
+        @staticmethod
+        def run_sync(*args, **kwargs):  # pragma: no cover - 测试会 patch
+            raise AssertionError("Runner.run_sync should be patched in tests")
+
+    module.Agent = Agent
+    module.MultiProvider = MultiProvider
+    module.RunConfig = RunConfig
+    module.Runner = Runner
+    return patch.dict(sys.modules, {"agents": module})
 
 
 class FakeAgentLoopRunner(AgentLoopRunner):
@@ -86,7 +141,7 @@ class AgentCoreTestCase(unittest.TestCase):
         """
 
         session_store = AgentSessionStore()
-        tool_registry = ToolRegistry(device_state_reader=lambda: {})
+        tool_registry, _ = build_tooling()
         facade = AgentFacade(
             session_store=session_store,
             tool_registry=tool_registry,
@@ -146,7 +201,7 @@ class AgentCoreTestCase(unittest.TestCase):
 
         facade = AgentFacade(
             session_store=AgentSessionStore(),
-            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+            tool_registry=build_tooling()[0],
             runner=ErrorAgentLoopRunner(),
         )
 
@@ -173,7 +228,7 @@ class AgentCoreTestCase(unittest.TestCase):
 
         facade = AgentFacade(
             session_store=AgentSessionStore(),
-            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+            tool_registry=build_tooling()[0],
             runner=AskUserAgentLoopRunner(),
         )
 
@@ -207,7 +262,7 @@ class AgentCoreTestCase(unittest.TestCase):
         """
 
         traces: list[CapabilityTrace] = []
-        registry = ToolRegistry(
+        registry, gateway = build_tooling(
             device_state_reader=lambda: {
                 "glass-001": {
                     "session_id": "sess_003",
@@ -215,7 +270,7 @@ class AgentCoreTestCase(unittest.TestCase):
                     "audio_connection_online": True,
                     "reply_stream_id": None,
                 }
-            }
+            },
         )
 
         result = registry.invoke(
@@ -224,12 +279,18 @@ class AgentCoreTestCase(unittest.TestCase):
                 session_id="sess_003",
                 device_id="glass-001",
                 turn_id="turn_003",
+                settings=ServerSettings(),
+                session_store=AgentSessionStore(),
                 device_state_reader=registry.get_device_state_reader(),
                 trace_sink=traces.append,
+                task_gateway=registry.get_task_gateway(),
+                tool_gateway=gateway,
+                skill_gateway=registry.get_skill_gateway(),
+                mcp_gateway=registry.get_mcp_gateway(),
             ),
         )
 
-        self.assertEqual(result["state"], "listening")
+        self.assertEqual(result.data["state"], "listening")
         self.assertEqual(len(traces), 1)
         self.assertEqual(traces[0].status, "succeeded")
 
@@ -297,9 +358,12 @@ class AgentCoreTestCase(unittest.TestCase):
         3. 输入文本中包含最近历史消息。
         """
 
+        registry, gateway = build_tooling()
         runner = OpenAIAgentLoopRunner(
             settings=ServerSettings(dashscope_api_key="demo-key"),
-            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
         )
         session = AgentSession(
             session_id="sess_004",
@@ -329,8 +393,9 @@ class AgentCoreTestCase(unittest.TestCase):
                     reply_text="设备当前正在监听",
                 )
 
-        with patch("agents.Runner.run_sync", return_value=_FakeRunResult()) as mocked_run:
-            result = runner.run_turn(session=session, turn=turn)
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_sync", return_value=_FakeRunResult()) as mocked_run:
+                result = runner.run_turn(session=session, turn=turn)
 
         self.assertEqual(result.action, "final_answer")
         self.assertEqual(result.reply_text, "设备当前正在监听")
@@ -351,9 +416,12 @@ class AgentCoreTestCase(unittest.TestCase):
         2. 假 `Runner.run_sync` 能读取到未关闭的 event loop。
         """
 
+        registry, gateway = build_tooling()
         runner = OpenAIAgentLoopRunner(
             settings=ServerSettings(dashscope_api_key="demo-key"),
-            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
         )
         session = AgentSession(session_id="sess_005", device_id="glass-001")
         turn = AgentTurn(
@@ -387,10 +455,11 @@ class AgentCoreTestCase(unittest.TestCase):
             except BaseException as exc:  # pragma: no cover - 仅在失败时记录
                 failure.append(exc)
 
-        with patch("agents.Runner.run_sync", side_effect=_fake_run_sync):
-            thread = threading.Thread(target=_worker, name="agent-test-worker")
-            thread.start()
-            thread.join(timeout=3)
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_sync", side_effect=_fake_run_sync):
+                thread = threading.Thread(target=_worker, name="agent-test-worker")
+                thread.start()
+                thread.join(timeout=3)
 
         self.assertFalse(failure)
         self.assertIn("loop", observed)
@@ -414,18 +483,21 @@ class AgentCoreTestCase(unittest.TestCase):
     def test_openai_runner_forces_device_state_tool_for_status_query(self) -> None:
         """测试目标：验证设备状态问题会直接命中 query_device_state。"""
 
+        registry, gateway = build_tooling(
+            device_state_reader=lambda: {
+                "glass-001": {
+                    "session_id": "sess_006",
+                    "state": "listening",
+                    "audio_connection_online": True,
+                    "reply_stream_id": None,
+                }
+            }
+        )
         runner = OpenAIAgentLoopRunner(
             settings=ServerSettings(dashscope_api_key="demo-key"),
-            tool_registry=ToolRegistry(
-                device_state_reader=lambda: {
-                    "glass-001": {
-                        "session_id": "sess_006",
-                        "state": "listening",
-                        "audio_connection_online": True,
-                        "reply_stream_id": None,
-                    }
-                }
-            ),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
         )
         session = AgentSession(session_id="sess_006", device_id="glass-001")
         turn = AgentTurn(
@@ -446,9 +518,12 @@ class AgentCoreTestCase(unittest.TestCase):
     def test_openai_runner_returns_fail_with_trace_when_direct_tool_fails(self) -> None:
         """测试目标：验证直连 Tool 失败时会回到对话链路并保留失败轨迹。"""
 
+        registry, gateway = build_tooling()
         runner = OpenAIAgentLoopRunner(
             settings=ServerSettings(dashscope_api_key="demo-key"),
-            tool_registry=ToolRegistry(device_state_reader=lambda: {}),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
         )
         session = AgentSession(session_id="sess_007", device_id="glass-001")
         turn = AgentTurn(
@@ -465,6 +540,113 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("目标设备当前不在线或状态未知", result.reply_text)
         self.assertEqual(len(result.capability_traces), 1)
         self.assertEqual(result.capability_traces[0].status, "failed")
+
+    def test_tool_registry_discovers_phase_e_capabilities(self) -> None:
+        """测试目标：验证 Phase E 首批 Tool/Skill/MCP 均已注册。"""
+
+        registry, gateway = build_tooling()
+        tool_names = {tool.spec.name for tool in registry.list_tools()}
+
+        self.assertIn("query_device_state", tool_names)
+        self.assertIn("capture_photo", tool_names)
+        self.assertIn("create_timer", tool_names)
+        self.assertIn("query_task_status", tool_names)
+        self.assertIn("cancel_task", tool_names)
+        self.assertIn("photo_interpret", tool_names)
+        self.assertIn("timer_manage", tool_names)
+        self.assertIn("amap_poi_search", tool_names)
+        self.assertIn("amap_geocode", tool_names)
+        self.assertIn("amap_route_plan", tool_names)
+
+    def test_photo_interpret_skill_triggers_capture_photo(self) -> None:
+        """测试目标：验证 Skill 会在一轮调用中组合抓拍 Tool。"""
+
+        registry, gateway = build_tooling()
+        traces: list[CapabilityTrace] = []
+
+        result = registry.invoke(
+            name="photo_interpret",
+            context=AgentToolContext(
+                session_id="sess_photo_001",
+                device_id="glass-001",
+                turn_id="turn_photo_001",
+                settings=ServerSettings(voice_runs_root="/tmp/agent-core-phase-e"),
+                session_store=AgentSessionStore(),
+                device_state_reader=registry.get_device_state_reader(),
+                trace_sink=traces.append,
+                task_gateway=registry.get_task_gateway(),
+                tool_gateway=gateway,
+                skill_gateway=registry.get_skill_gateway(),
+                mcp_gateway=registry.get_mcp_gateway(),
+            ),
+            arguments={"question": "帮我看看前面有什么"},
+        )
+
+        self.assertIn("answer_text", result.data)
+        self.assertEqual(len(traces), 2)
+        self.assertEqual(traces[0].capability_name, "capture_photo")
+        self.assertEqual(traces[1].capability_name, "photo_interpret")
+
+    def test_timer_manage_skill_creates_task(self) -> None:
+        """测试目标：验证 timer_manage Skill 会调用底层任务 Tool。"""
+
+        registry, gateway = build_tooling()
+        traces: list[CapabilityTrace] = []
+
+        result = registry.invoke(
+            name="timer_manage",
+            context=AgentToolContext(
+                session_id="sess_timer_001",
+                device_id="glass-001",
+                turn_id="turn_timer_001",
+                settings=ServerSettings(),
+                session_store=AgentSessionStore(),
+                device_state_reader=registry.get_device_state_reader(),
+                trace_sink=traces.append,
+                task_gateway=registry.get_task_gateway(),
+                tool_gateway=gateway,
+                skill_gateway=registry.get_skill_gateway(),
+                mcp_gateway=registry.get_mcp_gateway(),
+            ),
+            arguments={"query": "帮我定时 5 分钟"},
+        )
+
+        self.assertIn("task_id", result.data)
+        self.assertEqual(len(traces), 2)
+        self.assertEqual(traces[0].capability_name, "create_timer")
+        self.assertEqual(traces[1].capability_name, "timer_manage")
+
+    def test_amap_route_plan_tool_records_mcp_trace(self) -> None:
+        """测试目标：验证 AMap MCP Tool 会记录 mcp trace 并返回结构化结果。"""
+
+        registry, gateway = build_tooling()
+        traces: list[CapabilityTrace] = []
+
+        result = registry.invoke(
+            name="amap_route_plan",
+            context=AgentToolContext(
+                session_id="sess_nav_001",
+                device_id="glass-001",
+                turn_id="turn_nav_001",
+                settings=ServerSettings(),
+                session_store=AgentSessionStore(),
+                device_state_reader=registry.get_device_state_reader(),
+                trace_sink=traces.append,
+                task_gateway=registry.get_task_gateway(),
+                tool_gateway=gateway,
+                skill_gateway=registry.get_skill_gateway(),
+                mcp_gateway=registry.get_mcp_gateway(),
+            ),
+            arguments={
+                "origin": "当前设备位置",
+                "destination": "最近的咖啡店",
+                "strategy": "walking",
+            },
+        )
+
+        self.assertIn("summary", result.data)
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0].capability_type, "mcp")
 
 
 if __name__ == "__main__":

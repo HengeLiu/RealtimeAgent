@@ -13,7 +13,7 @@
 在仓库根目录执行：
 
 ```bash
-bash script/run_phase_d_tests.sh
+bash script/deprecated/run_phase_d_tests_phase_d.sh
 ```
 
 预期结果：
