@@ -7,7 +7,7 @@
 1. `ToolRegistry / ToolGateway`
 2. `SkillRegistry / SkillGateway`
 3. `McpRegistry / McpGateway`
-4. `capture_photo / timer_manage / amap_route_plan` 的最小闭环
+4. `photo_interpret / timer_manage / map_manage` 的最小闭环
 
 联调重点观察：
 
@@ -35,7 +35,7 @@ PYTHONPATH=server/src python -m unittest \
 
 1. `unit.test_agent_core.*` 全部通过
 2. `integration.test_agent_phase_e_flow.*` 通过
-3. 输出中能看到 `photo_interpret`、`timer_manage`、`amap_route_plan` 相关断言全部通过
+3. 输出中能看到 `photo_interpret`、`timer_manage`、`map_manage` 相关断言全部通过
 
 ## 3. 服务端启动
 
@@ -44,13 +44,22 @@ PYTHONPATH=server/src python -m unittest \
 ```bash
 export DASHSCOPE_API_KEY="<your-api-key>"
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
+export LOG_FILE="logs/server.log"
+export AGENT_MODEL_NAME="qwen3.6-plus"
+export VOICE_MODEL_NAME="qwen3.5-omni-plus"
 PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 说明：
 
-1. 当前 `OpenAIAgentLoopRunner` 已补了若干直连能力路由，便于在没有真实模型工具决策的情况下观察 Phase E 能力层行为。
-2. AMap 当前默认走 mock adapter，不依赖真实第三方配置。
+1. `AGENT_MODEL_NAME` 用于 agent-core 文本决策与图片理解，建议当前使用 `qwen3.6-plus`。
+2. `VOICE_MODEL_NAME` 用于 TTS，当前保持 `qwen3.5-omni-plus`。
+3. 当前 `OpenAIAgentLoopRunner` 已回到标准 SDK tool calling 主路径，不再保留图片、计时器、导航和设备状态的直连能力路由。
+4. AMap 当前默认走 mock adapter，不依赖真实第三方配置。
+5. 若设置了 `LOG_FILE`，服务端会在标准输出之外，额外把同样的 JSON 结构化日志写入该文件，便于长期保留 `tool.call/result`、`skill.call/result`、`mcp.call/result` 调试链路。
+6. 当前发给模型的历史上下文已直接采用 `history messages`，不再把历史、资产和派生结果压成一整段说明文本。
+7. 当前模型侧只暴露 3 个高层工具：`photo_interpret / timer_manage / map_manage`。
+8. `photo_interpret` 现在会先抓拍，再优先通过 SDK 原生图片输入做视觉理解；只有在缺少依赖或接口失败时才回退 mock。
 
 ## 4. 建议联调话术
 
@@ -64,7 +73,7 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 1. 第一句会命中 `photo_interpret`，内部触发 `capture_photo`
 2. 第二句会命中 `timer_manage`，内部触发 `create_timer`
-3. 第三句会命中 `amap_route_plan`，并通过 mock AMap 返回路线摘要
+3. 第三句会命中 `map_manage`，内部再调用 mock AMap 返回路线摘要
 
 ## 5. 联调观察点
 
@@ -72,11 +81,12 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 重点关注以下日志模式：
 
-1. `Agent 输出: action=... traces=[...]`
+1. `Agent 输出: has_error=... traces=[...]`
 2. `capability_name='capture_photo'`
 3. `capability_name='photo_interpret'`
 4. `capability_name='timer_manage'`
-5. `capability_name='amap_route_plan'`
+5. `capability_name='amap.route_plan'`
+6. `capability_name='map_manage'`
 
 说明：
 
@@ -115,7 +125,7 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 ## 7. 当前限制
 
-1. `capture_photo` 当前是模拟抓拍，不代表真实相机链路已打通。
+1. 本文编写时 `capture_photo` 仍是模拟抓拍；真实相机链路现已补到 [PhaseG-真实抓拍图片联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/PhaseG-真实抓拍图片联调说明.md)。
 2. `timer_manage` 当前通过 `InMemoryTaskGateway` 工作，不代表完整后台任务状态机已完成。
-3. `amap_route_plan` 当前是 mock 结果，不代表真实路线质量。
+3. `map_manage` 当前内部调用的 AMap 结果仍是 mock，不代表真实路线质量。
 4. 若要验证完整语音主链路，仍需在允许本地绑定端口的环境中执行 socket 级集成测试。

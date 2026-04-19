@@ -11,6 +11,7 @@ from agent_core.models import CapabilityResult, ToolSpec
 from infra.config import ServerSettings
 
 if TYPE_CHECKING:
+    from agent_core.camera import CameraGateway
     from agent_core.context import AgentSessionStore
     from agent_core.mcp import McpGateway
     from agent_core.skills import SkillGateway
@@ -30,6 +31,7 @@ class AgentToolContext:
     device_state_reader: Callable[[], dict[str, Any]]
     trace_sink: Callable[[CapabilityTrace], None]
     task_gateway: "TaskGateway | None" = None
+    camera_gateway: "CameraGateway | None" = None
     tool_gateway: "ToolGateway | None" = None
     skill_gateway: "SkillGateway | None" = None
     mcp_gateway: "McpGateway | None" = None

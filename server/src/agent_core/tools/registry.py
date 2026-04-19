@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
+from agent_core.camera import CameraGateway
 from agent_core.mcp import McpGateway, McpRegistry
 from agent_core.models import ToolSpec
 from agent_core.skills import SkillGateway, SkillRegistry
@@ -22,22 +24,16 @@ except ImportError:  # pragma: no cover - 单测环境兜底
         def __class_getitem__(cls, _item):
             return cls
 
-    def function_tool(*, name_override=None, failure_error_function=None):  # type: ignore[override]
+    def function_tool(*, name_override=None, failure_error_function=None, strict_mode=None):  # type: ignore[override]
         """无 agents 依赖时退化为原函数装饰器。"""
 
         def _decorator(func):
             func._tool_name_override = name_override
             func._tool_failure_error_function = failure_error_function
+            func._tool_strict_mode = strict_mode
             return func
 
         return _decorator
-
-
-class _GenericPayload(BaseModel):
-    """SDK Tool 通用参数对象。"""
-
-    payload: dict[str, Any] | None = Field(default=None, description="工具参数字典")
-
 
 class SkillToolProxy(BaseSkillTool):
     """把 Skill 暴露成统一 Tool。"""
@@ -108,6 +104,7 @@ class ToolRegistry:
         *,
         device_state_reader,
         task_gateway: TaskGateway | None = None,
+        camera_gateway: CameraGateway | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_gateway: SkillGateway | None = None,
         mcp_registry: McpRegistry | None = None,
@@ -115,12 +112,14 @@ class ToolRegistry:
     ) -> None:
         self._device_state_reader = device_state_reader
         self._task_gateway = task_gateway or InMemoryTaskGateway()
+        self._camera_gateway = camera_gateway
         self._skill_registry = skill_registry or SkillRegistry()
         self._skill_gateway = skill_gateway or SkillGateway(self._skill_registry)
         self._mcp_registry = mcp_registry or McpRegistry()
         self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
         self._tools: dict[str, BaseTool] = {}
         self._sdk_tools: dict[str, Any] = {}
+        self._model_tool_names: list[str] = []
         self._gateway = None
         self.discover_tools()
 
@@ -128,6 +127,11 @@ class ToolRegistry:
         """绑定统一 ToolGateway。"""
 
         self._gateway = gateway
+
+    def bind_camera_gateway(self, camera_gateway: CameraGateway) -> None:
+        """绑定相机抓拍网关。"""
+
+        self._camera_gateway = camera_gateway
 
     def discover_tools(self) -> None:
         """导入并注册内置 Function/Skill/MCP Tool。"""
@@ -147,7 +151,7 @@ class ToolRegistry:
             QueryTaskStatusTool(),
             CancelTaskTool(),
         ):
-            self._register_tool(tool)
+            self._register_tool(tool, expose_to_model=False)
 
         for skill in self._skill_registry.list_skills():
             self._register_tool(
@@ -156,7 +160,8 @@ class ToolRegistry:
                     skill_gateway=self._skill_gateway,
                     description=skill.spec.description,
                     input_model=skill.spec.input_model,
-                )
+                ),
+                expose_to_model=skill.spec.name in {"photo_interpret", "timer_manage", "map_manage"},
             )
 
         for method in self._mcp_registry.list_methods():
@@ -167,12 +172,19 @@ class ToolRegistry:
                     mcp_gateway=self._mcp_gateway,
                     description=method.spec.description,
                     input_model=method.spec.input_model,
-                )
+                ),
+                expose_to_model=False,
             )
 
-    def _register_tool(self, tool: BaseTool) -> None:
+    def _register_tool(self, tool: BaseTool, *, expose_to_model: bool) -> None:
         self._tools[tool.spec.name] = tool
-        self._sdk_tools[tool.spec.name] = self._build_sdk_tool(tool.spec.name, tool.spec.description)
+        self._sdk_tools[tool.spec.name] = self._build_sdk_tool(
+            tool_name=tool.spec.name,
+            description=tool.spec.description,
+            input_model=tool.spec.input_model,
+        )
+        if expose_to_model:
+            self._model_tool_names.append(tool.spec.name)
 
     def get(self, name: str) -> BaseTool | None:
         """按名称查询 Tool。"""
@@ -180,14 +192,14 @@ class ToolRegistry:
         return self._tools.get(name)
 
     def list_tools(self) -> list[BaseTool]:
-        """列出全部 Tool。"""
+        """列出当前对模型暴露的 Tool。"""
 
-        return list(self._tools.values())
+        return [self._tools[name] for name in self._model_tool_names]
 
     def list_sdk_tools(self) -> list[Any]:
-        """返回全部 SDK Tool。"""
+        """返回当前对模型暴露的 SDK Tool。"""
 
-        return [self._sdk_tools[name] for name in self._tools]
+        return [self._sdk_tools[name] for name in self._model_tool_names]
 
     def get_device_state_reader(self):
         """返回设备状态读取函数。"""
@@ -198,6 +210,11 @@ class ToolRegistry:
         """返回任务网关。"""
 
         return self._task_gateway
+
+    def get_camera_gateway(self) -> CameraGateway | None:
+        """返回相机抓拍网关。"""
+
+        return self._camera_gateway
 
     def get_skill_gateway(self) -> SkillGateway:
         """返回 SkillGateway。"""
@@ -220,14 +237,16 @@ class ToolRegistry:
             self.bind_gateway(gateway)
         return gateway.invoke(name=name, context=context, arguments=arguments)
 
-    def _build_sdk_tool(self, tool_name: str, description: str):
-        @function_tool(
-            name_override=tool_name,
-            failure_error_function=lambda _ctx, exc: f"工具 {tool_name} 调用失败：{exc}",
-        )
+    def _build_sdk_tool(
+        self,
+        *,
+        tool_name: str,
+        description: str,
+        input_model: type[BaseModel],
+    ):
         def _sdk_tool(
             ctx: RunContextWrapper[AgentToolContext],
-            payload: dict[str, Any] | None = None,
+            **kwargs,
         ) -> dict[str, Any]:
             """统一 SDK Tool 入口。"""
 
@@ -241,9 +260,50 @@ class ToolRegistry:
             result = gateway.invoke(
                 name=tool_name,
                 context=ctx.context,
-                arguments=payload or {},
+                arguments=dict(kwargs),
             )
             return result.data
 
         _sdk_tool.__doc__ = description
-        return _sdk_tool
+        _sdk_tool.__signature__ = self._build_sdk_signature(input_model)  # type: ignore[attr-defined]
+        _sdk_tool.__annotations__ = self._build_sdk_annotations(input_model)
+        return function_tool(
+            name_override=tool_name,
+            failure_error_function=lambda _ctx, exc: f"工具 {tool_name} 调用失败：{exc}",
+            strict_mode=False,
+        )(_sdk_tool)
+
+    @staticmethod
+    def _build_sdk_signature(input_model: type[BaseModel]) -> inspect.Signature:
+        """按输入模型动态生成 SDK Tool 签名。"""
+
+        parameters = [
+            inspect.Parameter(
+                "ctx",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=RunContextWrapper[AgentToolContext],
+            )
+        ]
+        for field_name, field in input_model.model_fields.items():
+            default = inspect._empty if field.is_required() else field.default
+            parameters.append(
+                inspect.Parameter(
+                    field_name,
+                    inspect.Parameter.KEYWORD_ONLY,
+                    default=default,
+                    annotation=field.annotation,
+                )
+            )
+        return inspect.Signature(parameters=parameters, return_annotation=dict[str, Any])
+
+    @staticmethod
+    def _build_sdk_annotations(input_model: type[BaseModel]) -> dict[str, Any]:
+        """按输入模型动态生成 SDK Tool 注解。"""
+
+        annotations: dict[str, Any] = {
+            "ctx": RunContextWrapper[AgentToolContext],
+            "return": dict[str, Any],
+        }
+        for field_name, field in input_model.model_fields.items():
+            annotations[field_name] = field.annotation
+        return annotations

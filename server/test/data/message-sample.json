@@ -1,91 +1,264 @@
 {
-    "timestamp": "2026-04-13T16:54:06.372402+00:00",
-    "level": "DEBUG",
-    "logger": "openai._base_client",
-    "message": {
-        "method": "post",
-        "url": "/chat/completions",
-        "headers": {
-            "User-Agent": "Agents/Python 0.3.3"
-        },
-        "files": null,
-        "idempotency_key": "stainless-python-retry-5f6867a3-7a0a-4523-b706-bfeb8f2025da",
-        "json_data": {
-            "messages": [
-                {
-                    "content": "你的名字是\"乐鑫\"。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。\\n你现在运行在智能眼镜服务端的 agent-core 中。\\n请遵守以下规则：\\n1. 当前阶段最终只允许输出 `final_answer` 或 `ask_user`。\\n2. 当用户询问设备状态、是否在线、是否正在监听时，应优先调用 `query_device_state`。\\n3. 若信息不足，需要用简短中文追问，并输出 `ask_user`。\\n4. 回复必须简短、口语化、直接，不要输出代码块。\\n",
-                    "role": "system"
-                },
-                {
-                    "role": "user",
-                    "content": "你正在处理一轮来自智能眼镜的中文语音输入。\\n【最近对话历史】\\n暂无历史消息\\n【当前轮输入】\\n讲个笑话。\\n【当前轮媒体资产】\\n- audio: runs/session/sess_13b5fdb50f0f/audio/input/seg_366_4a25e496.wav\\n【当前轮派生结果】\\n- asr_transcript: 讲个笑话。"
-                }
-            ],
-            "model": "qwen3.5-omni-plus",
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "final_output",
-                    "strict": true,
-                    "schema": {
-                        "description": "Agent 最终结构化输出。\\n\\n主要功能：\\n1. 约束模型最终只能输出当前阶段支持的动作。\\n2. 把对话回复文本与动作一起回传给 `voice-runtime`。",
-                        "properties": {
-                            "action": {
-                                "description": "当前轮最终动作",
-                                "enum": [
-                                    "final_answer",
-                                    "ask_user"
-                                ],
-                                "title": "Action",
-                                "type": "string"
-                            },
-                            "reply_text": {
-                                "description": "当前轮需要返回给用户的中文文本",
-                                "title": "Reply Text",
-                                "type": "string"
-                            }
-                        },
-                        "required": [
-                            "action",
-                            "reply_text"
-                        ],
-                        "title": "StructuredAgentReply",
-                        "type": "object",
-                        "additionalProperties": false
-                    }
-                }
+  "method": "post",
+  "url": "/chat/completions",
+  "headers": {
+    "User-Agent": "Agents/Python 0.3.3"
+  },
+  "files": null,
+  "idempotency_key": "sample-agent-request",
+  "json_data": {
+    "messages": [
+      {
+        "role": "system",
+        "content": "你的名字是\"乐鑫\"。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。\n请使用简短、口语化、直接的中文回答。\n必要时可以调用已提供的工具。\n不要输出代码块。\n"
+      },
+      {
+        "role": "user",
+        "content": "自我介绍。"
+      },
+      {
+        "role": "assistant",
+        "content": "你好，我是乐鑫，你的盲人眼镜语音助手。我可以帮你识别图片、障碍物，还能引导你安全过马路。"
+      },
+      {
+        "role": "user",
+        "content": "我眼前是什么？"
+      }
+    ],
+    "model": "qwen3.6-plus",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "final_output",
+        "strict": true,
+        "schema": {
+          "description": "Agent 最终结构化输出。",
+          "properties": {
+            "action": {
+              "description": "当前轮最终动作",
+              "enum": [
+                "final_answer",
+                "ask_user"
+              ],
+              "title": "Action",
+              "type": "string"
             },
-            "stream": false,
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "query_device_state",
-                        "description": "查询设备当前运行状态。\\n\\n功能：\\n1. 查询当前或指定设备的在线状态与语音会话状态。\\n2. 适用于回答“设备现在怎么样”“还在监听吗”等问题。\\n\\n参数：\\n1. `target_device_id`：待查询设备编号；为空时默认查询当前会话设备。\\n\\n返回值：\\n1. 包含 `device_id`、`state`、`session_id`、`audio_connection_online` 的字典。\\n\\n异常情况：\\n1. 设备不存在或不在线时，返回给模型明确错误信息。",
-                        "parameters": {
-                            "properties": {
-                                "target_device_id": {
-                                    "anyOf": [
-                                        {
-                                            "type": "string"
-                                        },
-                                        {
-                                            "type": "null"
-                                        }
-                                    ],
-                                    "title": "Target Device Id"
-                                }
-                            },
-                            "title": "query_device_state_args",
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": [
-                                "target_device_id"
-                            ]
-                        }
-                    }
-                }
-            ]
+            "reply_text": {
+              "description": "当前轮需要返回给用户的中文文本",
+              "title": "Reply Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "reply_text"
+          ],
+          "title": "StructuredAgentReply",
+          "type": "object",
+          "additionalProperties": false
         }
-    }
+      }
+    },
+    "stream": false,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "photo_interpret",
+          "description": "当用户提问需要用到用户眼前图像时，先调用相机拍照，再根据图片回答用户问题。",
+          "parameters": {
+            "properties": {
+              "question": {
+                "title": "Question",
+                "type": "string"
+              },
+              "capture_first": {
+                "default": true,
+                "title": "Capture First",
+                "type": "boolean"
+              },
+              "photo_asset_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Photo Asset Id"
+              }
+            },
+            "required": [
+              "question"
+            ],
+            "title": "photo_interpret_args",
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "timer_manage",
+          "description": "当用户要创建、查询或取消计时器时使用。",
+          "parameters": {
+            "properties": {
+              "action": {
+                "default": "auto",
+                "enum": [
+                  "auto",
+                  "create",
+                  "query",
+                  "cancel"
+                ],
+                "title": "Action",
+                "type": "string"
+              },
+              "duration_seconds": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Duration Seconds"
+              },
+              "task_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Task Id"
+              },
+              "label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Label"
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Query"
+              }
+            },
+            "title": "timer_manage_args",
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "map_manage",
+          "description": "当用户需要搜索地点、确认地址位置或规划路线时使用。如果用户已经给出起点和终点，就规划路线；如果只是找地点，就先搜索地点。",
+          "parameters": {
+            "properties": {
+              "action": {
+                "default": "auto",
+                "enum": [
+                  "auto",
+                  "search",
+                  "geocode",
+                  "route"
+                ],
+                "title": "Action",
+                "type": "string"
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Query"
+              },
+              "city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "City"
+              },
+              "address": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Address"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Origin"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Destination"
+              },
+              "strategy": {
+                "default": "walking",
+                "title": "Strategy",
+                "type": "string"
+              }
+            },
+            "title": "map_manage_args",
+            "type": "object"
+          }
+        }
+      }
+    ]
+  }
 }

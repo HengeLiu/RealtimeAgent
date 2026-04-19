@@ -768,6 +768,12 @@ class VoiceRuntime:
             }
         return result
 
+    @property
+    def agent_facade(self) -> AgentFacade:
+        """返回内部 agent facade，供调试接口使用。"""
+
+        return self._agent_facade
+
     def _run_model_pipeline(self, device_id: str, session_id: str, segment: SegmentBuffer) -> None:
         controller = self._get_controller(device_id)
         input_wav = segment.to_wav_bytes()
@@ -840,13 +846,13 @@ class VoiceRuntime:
             capability_trace_ids = [trace.trace_id for trace in agent_result.capability_traces]
             log_debug(
                 self._logger,
-                f"Agent 输出: action={agent_result.action} traces={capability_trace_ids}",
+                f"Agent 输出: has_error={agent_result.error is not None} traces={capability_trace_ids}",
                 LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
             )
-            if agent_result.action == "fail":
+            if agent_result.error is not None:
                 log_debug(
                     self._logger,
-                    f"Agent 失败详情: meta={agent_result.meta}",
+                    f"Agent 失败详情: error={agent_result.error} meta={agent_result.meta}",
                     LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
                 )
             playback = self._create_playback_stream(device_id=device_id, session_id=session_id, stream_id=playback_stream_id)
@@ -859,7 +865,6 @@ class VoiceRuntime:
                 {
                     "device_id": device_id,
                     "text": assistant_text,
-                    "action": agent_result.action,
                     "stream_id": playback_stream_id,
                 },
             )

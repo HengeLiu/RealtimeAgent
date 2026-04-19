@@ -9,6 +9,7 @@ from agent_core.models import CapabilityError, CapabilityResult, SkillCall, Skil
 from agent_core.tools.base import AgentToolContext
 from agent_core.tools.gateway import summarize_payload
 from infra.errors import AppError, ErrorCode, build_error
+from infra.logging import LogContext, get_logger, log_debug
 
 
 class SkillGateway:
@@ -16,6 +17,7 @@ class SkillGateway:
 
     def __init__(self, registry) -> None:
         self._registry = registry
+        self._logger = get_logger("server.agent.capability.skill")
 
     def invoke(
         self,
@@ -52,6 +54,11 @@ class SkillGateway:
             turn_id=context.turn_id,
             arguments=raw_arguments,
         )
+        log_debug(
+            self._logger,
+            f"skill.call name={skill.spec.name} arguments={summarize_payload(raw_arguments)}",
+            LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+        )
 
         try:
             result = skill.run(context, input_data)
@@ -68,6 +75,12 @@ class SkillGateway:
             if record_trace:
                 context.trace_sink(trace)
             context.absorb(result)
+            log_debug(
+                self._logger,
+                f"skill.result name={skill.spec.name} data={summarize_payload(result.data)} "
+                f"assets={len(result.asset_refs)} artifacts={len(result.derived_artifacts)} tasks={len(result.task_refs)}",
+                LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+            )
             return result
         except AppError as exc:
             trace.status = "failed"
@@ -75,6 +88,11 @@ class SkillGateway:
             trace.completed_at_ms = now_ms()
             if record_trace:
                 context.trace_sink(trace)
+            log_debug(
+                self._logger,
+                f"skill.failed name={skill.spec.name} error={exc.to_dict()}",
+                LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+            )
             raise
         except Exception as exc:
             trace.status = "failed"
@@ -95,6 +113,11 @@ class SkillGateway:
                     message=f"{skill.spec.name} 调用失败",
                     details={"reason": str(exc)},
                 ),
+            )
+            log_debug(
+                self._logger,
+                f"skill.failed name={skill.spec.name} reason={exc!r}",
+                LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
             )
             raise build_error(
                 ErrorCode.INTERNAL_ERROR,

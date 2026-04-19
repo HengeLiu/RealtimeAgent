@@ -9,6 +9,7 @@ from agent_core.context.models import CapabilityTrace, now_ms
 from agent_core.models import CapabilityResult
 from agent_core.tools.base import AgentToolContext
 from infra.errors import AppError, ErrorCode, build_error
+from infra.logging import LogContext, get_logger, log_debug
 
 
 def summarize_payload(payload: Any) -> str:
@@ -25,6 +26,7 @@ class ToolGateway:
 
     def __init__(self, registry) -> None:
         self._registry = registry
+        self._logger = get_logger("server.agent.capability.tool")
 
     def invoke(
         self,
@@ -55,6 +57,11 @@ class ToolGateway:
             input_summary=summarize_payload(raw_arguments),
             started_at_ms=now_ms(),
         )
+        log_debug(
+            self._logger,
+            f"tool.call name={tool.spec.name} arguments={summarize_payload(raw_arguments)}",
+            LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+        )
 
         try:
             result = tool.run(context, input_data)
@@ -70,6 +77,12 @@ class ToolGateway:
             if record_trace:
                 context.trace_sink(trace)
             context.absorb(result)
+            log_debug(
+                self._logger,
+                f"tool.result name={tool.spec.name} data={summarize_payload(result.data)} "
+                f"assets={len(result.asset_refs)} artifacts={len(result.derived_artifacts)} tasks={len(result.task_refs)}",
+                LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+            )
             return result
         except AppError as exc:
             trace.status = "failed"
@@ -77,6 +90,11 @@ class ToolGateway:
             trace.completed_at_ms = now_ms()
             if record_trace:
                 context.trace_sink(trace)
+            log_debug(
+                self._logger,
+                f"tool.failed name={tool.spec.name} error={exc.to_dict()}",
+                LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+            )
             raise
         except Exception as exc:
             trace.status = "failed"
@@ -84,6 +102,11 @@ class ToolGateway:
             trace.completed_at_ms = now_ms()
             if record_trace:
                 context.trace_sink(trace)
+            log_debug(
+                self._logger,
+                f"tool.failed name={tool.spec.name} reason={exc!r}",
+                LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
+            )
             raise build_error(
                 ErrorCode.INTERNAL_ERROR,
                 f"{tool.spec.name} 调用失败",

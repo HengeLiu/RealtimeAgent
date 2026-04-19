@@ -39,7 +39,7 @@ PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
 应看到：
 
 1. `ASR 转写结果: ...`
-2. `Agent 输出: action=... traces=[...]`
+2. `Agent 输出: has_error=... traces=[...]`
 3. `Agent 最终回复: ...`
 4. `语音回复已准备: ... transcript_artifact=...`
 

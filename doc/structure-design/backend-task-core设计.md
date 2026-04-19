@@ -38,7 +38,7 @@
 ## 3. 设计原则
 
 1. `agent-core` 与 `backend-task-core` 是平级独立模块，前者偏开放式决策，后者偏后台执行。
-2. 模型不能直接调用 `Task`，只能通过 `Task Tools` 调用 `backend-task-core`。
+2. 模型不能直接调用 `Task`，只能通过高层任务管理工具调用 `backend-task-core`。
 3. 任务状态必须结构化保存，不能只放在临时内存变量里。
 4. 任务运行必须有统一生命周期、统一状态机和统一事件模型。
 5. `backend-task-core` 不直接做自然语言决策。
@@ -56,7 +56,7 @@
 
 1. 理解用户意图。
 2. 决定是否需要创建后台任务。
-3. 决定需要调用哪个 `Task Tool`。
+3. 决定需要调用哪个高层任务管理工具。
 4. 在收到任务事件后，利用大模型决定下一步动作。
 5. 决定是否播报、追问、确认或继续调用其他 Tool。
 6. 维护开放式会话上下文。
@@ -77,8 +77,8 @@
 #### 链路 1：`agent-core -> backend-task-core`
 
 1. `agent-core` 不直接操作任务实例。
-2. `agent-core` 通过 `Task Tools` 调用 `backend-task-core` 的 `TaskManager` 或等价任务管理服务。
-3. `Task Tools` 负责把模型调用转换为任务管理调用。
+2. `agent-core` 通过高层任务管理工具调用 `backend-task-core` 的 `TaskManager` 或等价任务管理服务。
+3. 这些高层工具负责把模型调用转换为任务管理调用。
 
 #### 链路 2：`backend-task-core -> agent-core`
 
@@ -150,7 +150,7 @@
 2. 任务查询入口。
 3. 任务取消、暂停、恢复入口。
 4. 统一管理活动任务句柄。
-5. 承接来自 `Task Tool` 的 northbound 调用。
+5. 承接来自高层任务管理工具的 northbound 调用。
 6. 承接来自设备事件入口的外部事件推进。
 
 #### `TaskContextStore`
@@ -493,20 +493,20 @@ DeviceEventIngress --> TaskManager
 
 ### 9.1 `agent-core -> backend-task-core`
 
-`agent-core` 通过 `Task Tools` 调用 `backend-task-core`。
+`agent-core` 通过高层任务管理工具调用 `backend-task-core`。
 
 调用链如下：
 
 1. 用户输入进入 `agent-core`
-2. 大模型选择某个 `Task Tool`
-3. `Task Tool` 调用 `TaskManager`
+2. 大模型选择某个高层任务管理工具
+3. 该工具调用 `TaskManager`
 4. `TaskManager` 创建、查询、取消或恢复任务
-5. `Task Tool` 将结构化结果返回给模型
+5. 工具将结构化结果返回给模型
 
 结论：
 
 1. `agent-core` 不直接依赖 `TaskManager` 内部对象。
-2. `Task Tools` 是两者之间唯一标准 northbound 接口。
+2. 高层任务管理工具是两者之间唯一标准 northbound 接口。
 
 ### 9.2 `backend-task-core -> agent-core`
 
@@ -572,15 +572,15 @@ DeviceEventIngress --> TaskManager
 
 ```plantuml
 @startuml
-title agent-core 通过 Task Tool 创建任务
+title agent-core 通过高层任务工具创建任务
 
 actor User as U
 participant "agent-core" as A
-participant "Task Tool" as TT
+participant "高层任务工具" as TT
 participant "TaskManager" as TM
 
 U -> A : 用户提出长任务需求
-A -> TT : call_tool(create_task)
+A -> TT : tool_call(timer_manage)
 TT -> TM : create_task(...)
 TM --> TT : TaskRuntime
 TT --> A : task_id / state / summary
@@ -722,8 +722,8 @@ TM -> Bus : publish(task.progress.updated / task.completed)
 1. `Tool` 是模型可调用单元。
 2. `Task` 是后台执行模板。
 3. `Task` 不直接暴露给模型。
-4. 模型通过 `Task Tools` 管理 `Task`。
-5. 新增任务能力时，优先扩展 `Task` 模板，而不是新增专用 `Task Tool`。
+4. 模型通过高层任务管理工具间接管理 `Task`。
+5. 新增任务能力时，优先扩展 `Task` 模板，而不是新增专用模型入口。
 
 ### 12.3 Task 开发者扩展约束
 
@@ -946,7 +946,7 @@ bind_command_to_task(command_id, task_id) -> None
 ## 18. 最终设计结论
 
 1. `backend-task-core` 必须作为独立运行时中心存在。
-2. `agent-core` 通过 `Task Tools` 调用 `backend-task-core` 的任务管理服务，这是两者之间唯一标准任务控制入口。
+2. `agent-core` 通过高层任务管理工具调用 `backend-task-core` 的任务管理服务，这是两者之间唯一标准任务控制入口。
 3. `backend-task-core` 必须通过结构化 `TaskEvent` 把任务结果回流给 `agent-core`，由大模型决定下一步动作。
 4. `agent-core` 与 `backend-task-core` 都允许直接通知端侧，但必须经过统一优先级管理和通知调度机制。
 5. `backend-task-core` 的核心不是某个任务模板，而是统一的任务模板模型、任务实例模型、状态机、事件流、桥接链路和任务管理服务。

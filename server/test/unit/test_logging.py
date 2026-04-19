@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 import unittest
 
-from infra.logging.logger import JsonFormatter, sanitize_log_message
+from infra.logging.logger import JsonFormatter, configure_root_logger, sanitize_log_message
 
 
 class LoggingTestCase(unittest.TestCase):
@@ -71,6 +73,36 @@ class LoggingTestCase(unittest.TestCase):
         self.assertIn("data:audio/wav;base64,<redacted>", sanitized)
         self.assertNotIn("AAAABBBB", sanitized)
         self.assertNotIn("CCCCDDDDEEEE", sanitized)
+
+    def test_configure_root_logger_writes_json_log_file(self) -> None:
+        """测试目标：验证根日志器可同时写入标准输出和日志文件。
+
+        测试方法：
+        1. 创建临时日志文件路径。
+        2. 调用 `configure_root_logger` 打开文件处理器。
+        3. 通过根日志器写入一条日志并读取文件内容。
+
+        预期结果：
+        1. 日志文件会被自动创建。
+        2. 文件中的内容仍是 JSON 单行格式。
+        3. `message` 字段与实际输出一致。
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_file = os.path.join(temp_dir, "nested", "server.log")
+
+            configure_root_logger("DEBUG", log_file)
+            logging.getLogger("test.file").info("写入文件日志")
+            logging.shutdown()
+
+            with open(log_file, "r", encoding="utf-8") as handle:
+                lines = [line.strip() for line in handle.readlines() if line.strip()]
+
+        self.assertGreaterEqual(len(lines), 1)
+        payload = json.loads(lines[-1])
+        self.assertEqual(payload["logger"], "test.file")
+        self.assertEqual(payload["message"], "写入文件日志")
+        logging.getLogger().handlers.clear()
 
 
 if __name__ == "__main__":

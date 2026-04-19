@@ -64,7 +64,6 @@ class FakeAgentLoopRunner(AgentLoopRunner):
             turn_id=turn.turn_id,
             session_id=turn.session_id,
             device_id=turn.device_id,
-            action="final_answer",
             reply_text=f"Agent 已收到：{turn.input_text}",
         )
 
@@ -190,7 +189,6 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
 
             text_reply = self._expect_message(control, "assistant.reply")
             self.assertEqual(text_reply.payload["text"], "Agent 已收到：给我讲个笑话")
-            self.assertEqual(text_reply.payload["action"], "final_answer")
 
             play = self._expect_message(control, "actuator.audio.play")
             stream_id = play.stream_id or play.payload["stream_id"]

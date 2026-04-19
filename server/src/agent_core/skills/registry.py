@@ -15,9 +15,9 @@ class SkillRegistry:
     def discover_skills(self) -> None:
         """导入并注册内置 Skill。"""
 
-        from agent_core.skills.builtins import PhotoInterpretSkill, TimerManageSkill
+        from agent_core.skills.builtins import MapManageSkill, PhotoInterpretSkill, TimerManageSkill
 
-        for skill in (PhotoInterpretSkill(), TimerManageSkill()):
+        for skill in (PhotoInterpretSkill(), TimerManageSkill(), MapManageSkill()):
             self._skills[skill.spec.name] = skill
 
     def get(self, name: str) -> BaseSkill | None:

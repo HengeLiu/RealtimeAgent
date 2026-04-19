@@ -21,31 +21,35 @@ class ServerSettings:
     2. `port`：监听端口。
     3. `environment`：运行环境名称，例如 `dev`。
     4. `log_level`：日志级别。
+    5. `log_file`：日志文件路径，留空表示只输出到标准输出。
     5. `device_token_map`：设备与配对令牌映射，格式为 `device_id=token,device2=token2`。
     6. `heartbeat_interval_ms`：服务端下发给设备的心跳建议间隔。
     7. `heartbeat_timeout_ms`：服务端判定设备离线的心跳超时时间。
     8. `server_device_id`：服务端在控制消息中的设备编号。
     9. `dashscope_api_key`：百炼兼容接口 API Key。
     10. `voice_model_base_url`：百炼兼容接口基础地址。
-    11. `voice_model_name`：语音模型名称。
-    12. `voice_model_voice`：语音输出音色。
-    13. `voice_model_timeout_ms`：模型请求超时时间。
-    14. `voice_runs_root`：语音运行时资产落盘目录。
-    15. `voice_asr_model_name`：语音转写模型名称。
-    16. `voice_system_prompt`：默认系统提示词。
-    17. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    11. `agent_model_name`：agent-core 文本与图片理解模型名称。
+    12. `voice_model_name`：语音输出模型名称。
+    13. `voice_model_voice`：语音输出音色。
+    14. `voice_model_timeout_ms`：模型请求超时时间。
+    15. `voice_runs_root`：语音运行时资产落盘目录。
+    16. `voice_asr_model_name`：语音转写模型名称。
+    17. `voice_system_prompt`：默认系统提示词。
+    18. `max_segment_audio_bytes`：单轮上行音频最大字节数。
     """
 
     host: str = "0.0.0.0"
     port: int = 8765
     environment: str = "dev"
     log_level: str = "INFO"
+    log_file: str = ""
     device_token_map: str = "glass-001=pair-demo-token"
     heartbeat_interval_ms: int = 5000
     heartbeat_timeout_ms: int = 15000
     server_device_id: str = "server-main"
     dashscope_api_key: str = ""
     voice_model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    agent_model_name: str = "qwen3.6-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Tina"
     voice_model_timeout_ms: int = 45000
@@ -87,6 +91,7 @@ class ServerSettings:
             port=port,
             environment=os.getenv("APP_ENV", defaults.environment),
             log_level=os.getenv("LOG_LEVEL", defaults.log_level).upper(),
+            log_file=os.getenv("LOG_FILE", defaults.log_file),
             device_token_map=os.getenv("DEVICE_TOKEN_MAP", defaults.device_token_map),
             heartbeat_interval_ms=cls._parse_int_env(
                 "HEARTBEAT_INTERVAL_MS",
@@ -99,6 +104,7 @@ class ServerSettings:
             server_device_id=os.getenv("SERVER_DEVICE_ID", defaults.server_device_id),
             dashscope_api_key=os.getenv("DASHSCOPE_API_KEY", defaults.dashscope_api_key),
             voice_model_base_url=os.getenv("VOICE_MODEL_BASE_URL", defaults.voice_model_base_url),
+            agent_model_name=os.getenv("AGENT_MODEL_NAME", defaults.agent_model_name),
             voice_model_name=os.getenv("VOICE_MODEL_NAME", defaults.voice_model_name),
             voice_model_voice=os.getenv("VOICE_MODEL_VOICE", defaults.voice_model_voice),
             voice_model_timeout_ms=cls._parse_int_env(
@@ -171,6 +177,11 @@ class ServerSettings:
                 "LOG_LEVEL 非法",
                 details={"log_level": self.log_level, "valid_levels": sorted(valid_levels)},
             )
+        if self.log_file and not self.log_file.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "LOG_FILE 不能为空白字符串",
+            )
         if self.heartbeat_interval_ms <= 0:
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
@@ -207,6 +218,11 @@ class ServerSettings:
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_MODEL_BASE_URL 不能为空",
+            )
+        if not self.agent_model_name.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "AGENT_MODEL_NAME 不能为空",
             )
         if not self.voice_model_name.strip():
             raise build_error(
@@ -247,11 +263,13 @@ class ServerSettings:
             "port": self.port,
             "environment": self.environment,
             "log_level": self.log_level,
+            "log_file": self.log_file or "<stdout-only>",
             "device_token_count": len(self.parse_device_token_map()),
             "heartbeat_interval_ms": self.heartbeat_interval_ms,
             "heartbeat_timeout_ms": self.heartbeat_timeout_ms,
             "server_device_id": self.server_device_id,
             "voice_model_base_url": self.voice_model_base_url,
+            "agent_model_name": self.agent_model_name,
             "voice_model_name": self.voice_model_name,
             "voice_model_voice": self.voice_model_voice,
             "voice_model_timeout_ms": self.voice_model_timeout_ms,

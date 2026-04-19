@@ -34,7 +34,7 @@ class TimerManageSkill(BaseSkill):
 
     spec = SkillSpec(
         name="timer_manage",
-        description="管理后台计时器任务",
+        description="当用户要创建、查询或取消计时器时使用。",
         input_model=TimerManageInput,
         output_model=TimerManageOutput,
         tags=["timer", "task"],

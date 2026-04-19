@@ -70,17 +70,23 @@ class ServerSettingsTestCase(unittest.TestCase):
         os.environ["SERVER_HOST"] = "127.0.0.1"
         os.environ["SERVER_PORT"] = "9001"
         os.environ["LOG_LEVEL"] = "debug"
+        os.environ["LOG_FILE"] = "logs/test-server.log"
         os.environ["HEARTBEAT_INTERVAL_MS"] = "3000"
         os.environ["HEARTBEAT_TIMEOUT_MS"] = "9000"
         os.environ["SERVER_DEVICE_ID"] = "server-phase-b"
+        os.environ["AGENT_MODEL_NAME"] = "qwen3.6-plus"
+        os.environ["VOICE_MODEL_NAME"] = "qwen3.5-omni-plus"
         settings = ServerSettings.from_env()
 
         self.assertEqual(settings.host, "127.0.0.1")
         self.assertEqual(settings.port, 9001)
         self.assertEqual(settings.log_level, "DEBUG")
+        self.assertEqual(settings.log_file, "logs/test-server.log")
         self.assertEqual(settings.heartbeat_interval_ms, 3000)
         self.assertEqual(settings.heartbeat_timeout_ms, 9000)
         self.assertEqual(settings.server_device_id, "server-phase-b")
+        self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
+        self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
 
     def test_from_env_without_overrides_uses_defaults(self) -> None:
         """测试目标：验证无环境变量覆盖时仍能回退到默认值。"""
@@ -90,7 +96,10 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.host, "0.0.0.0")
         self.assertEqual(settings.port, 8765)
         self.assertEqual(settings.log_level, "INFO")
+        self.assertEqual(settings.log_file, "")
         self.assertEqual(settings.server_device_id, "server-main")
+        self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
+        self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
 
     def test_invalid_port_raises(self) -> None:
         """测试目标：验证非法端口会触发结构化配置错误。

@@ -65,6 +65,7 @@
 
 1. 把通用 Agent Runtime 交给成熟框架。
 2. 把项目独有的设备层、任务层和媒体层留给自研。
+3. 不在 SDK 之外重新定义模型动作协议。
 
 ---
 
@@ -84,6 +85,12 @@
    - handoff
    - human-in-the-loop
 3. 它更适合作为通用 `agent-core` 基座，而不是要求项目继续维护一套完全自定义的 loop。
+
+补充结论：
+
+1. 既然采用 OpenAI Agents SDK，就应直接使用 SDK 的 tool calling。
+2. 不应再额外设计模型输出 `action=xxx` 这类项目私有协议。
+3. 项目应把重点放在上下文管理、工具实现和运行时边界，而不是自研 loop。
 
 ## 5.2 适配性判断
 
@@ -277,4 +284,3 @@ OpenAI Agents SDK 支持：
 最终设计定稿见：
 
 - [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)
-

@@ -46,7 +46,7 @@ def main() -> None:
         settings.port = args.port
     settings.validate()
 
-    configure_root_logger(settings.log_level)
+    configure_root_logger(settings.log_level, settings.log_file)
     logger = get_logger("server.main")
     log_info(
         logger,

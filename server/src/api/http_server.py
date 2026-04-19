@@ -161,6 +161,49 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                 )
                 return
 
+            if path == "/api/agent/session":
+                session_id = (query.get("session_id") or [""])[0].strip()
+                if not session_id:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": {
+                                "code": "INVALID_REQUEST",
+                                "message": "缺少 session_id",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        },
+                    )
+                    return
+                session_snapshot = self.server.runtime.voice_runtime.agent_facade.get_session_debug_snapshot(session_id)
+                if session_snapshot is None:
+                    _json_response(
+                        self,
+                        HTTPStatus.NOT_FOUND,
+                        {
+                            "status": "error",
+                            "error": {
+                                "code": "SESSION_NOT_FOUND",
+                                "message": f"未找到会话: {session_id}",
+                                "retryable": False,
+                                "details": {"session_id": session_id},
+                            },
+                        },
+                    )
+                    return
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "ok",
+                        "session": session_snapshot,
+                    },
+                )
+                return
+
             if path == "/api/config-summary":
                 _json_response(
                     self,

@@ -7,7 +7,6 @@
 本阶段必须交付：
 
 1. 建立统一 `ToolRegistry / ToolGateway`，并落地首批 Tool：
-   - `query_device_state`
    - `capture_photo`
    - `create_timer`
    - `query_task_status`
@@ -15,6 +14,7 @@
 2. 建立最小 `SkillRegistry / SkillGateway`，并落地首批 Skill：
    - `photo_interpret`
    - `timer_manage`
+   - `map_manage`
 3. 建立最小 `McpRegistry / McpGateway` 与 `AmapMcpAdapter`，并打通：
    - `amap.poi_search`
    - `amap.geocode`
@@ -26,7 +26,7 @@
 
 Phase D 完成后，仓库已有以下基础：
 
-1. `AgentFacade / AgentSessionStore / ContextAssembler / OpenAIAgentLoopRunner` 已经形成最小闭环。
+1. `AgentFacade / AgentSessionStore / OpenAIAgentLoopRunner` 已经形成最小闭环，当前历史对话直接基于 `session.messages` 传入模型。
 2. `query_device_state` 已经以“单个 Tool”的方式跑通。
 3. `voice-runtime -> agent-core -> voice-runtime` 的最小文本回复路径已完成。
 
@@ -44,7 +44,7 @@ Phase D 完成后，仓库已有以下基础：
 
 本次实现遵循以下策略：
 
-1. 保持“模型侧只感知统一 Tool 调用面”的总体架构不变。
+1. 保持“模型侧只感知统一 Tool 调用面”的总体架构不变，并进一步把模型可见工具收敛为少量高层工具。
 2. Skill 与 MCP 在工程实现层仍保留独立注册表与网关，但最终通过 Tool 代理统一暴露给 Agent。
 3. 所有能力调用都走统一 trace / error / result 契约，不允许 Function、Skill、MCP 各走一套。
 4. `backend-task-core` 在 Phase E 仍只提供最小内存网关，不提前做 Phase F 的完整状态机和事件总线。
@@ -79,33 +79,31 @@ Phase D 完成后，仓库已有以下基础：
    - 统一处理错误包装
    - 统一记录 `CapabilityTrace`
 3. `ToolRegistry`
-   - 统一注册 Function Tool
-   - 把 Skill 与 MCP 代理为模型可见 Tool
+   - 统一注册内部 Function Tool、Skill 与 MCP
+   - 只把少量高层 Skill 作为模型可见 Tool
 4. `SkillRegistry`
-   - 管理 `photo_interpret`、`timer_manage`
+   - 管理 `photo_interpret`、`timer_manage`、`map_manage`
 5. `McpRegistry`
    - 管理 `amap.*` 原子方法
 6. `InMemoryTaskGateway`
    - 先承接 `create_timer / query_task_status / cancel_task`
    - 为 Phase F 切换真正的 `TaskManager` 保留接口边界
 
-### 3.3 首批 Tool 落地
+### 3.3 内部 Tool 落地
 
 本次首批 Tool 具体如下：
 
-1. `query_device_state`
-   - 沿用 Phase D 的设备状态查询能力
-2. `capture_photo`
+1. `capture_photo`
    - 生成一张最小模拟图片
    - 写入 `voice_runs_root/<session_id>/image/capture`
    - 返回 `MediaAssetRef`
-3. `create_timer`
+2. `create_timer`
    - 调用 `InMemoryTaskGateway.create_task`
    - 返回 `TaskRef`
-4. `query_task_status`
+3. `query_task_status`
    - 查询任务实例
    - 产出 `task_status_snapshot` 派生结果
-5. `cancel_task`
+4. `cancel_task`
    - 取消任务实例
    - 回写最新 `TaskRef`
 
@@ -115,13 +113,16 @@ Phase D 完成后，仓库已有以下基础：
 
 1. `photo_interpret`
    - 内部先通过 `ToolGateway` 触发 `capture_photo`
-   - 再生成最小模拟视觉描述
+   - 再通过 SDK 原生图片输入完成视觉理解
    - 回写 `image_interpretation` 派生结果
 2. `timer_manage`
    - 内部根据输入自动路由到 `create_timer / query_task_status / cancel_task`
    - 产出对用户可直接播报的摘要
+3. `map_manage`
+   - 内部根据输入自动路由到 `amap.poi_search / amap.geocode / amap.route_plan`
+   - 对模型保持单一地图工具调用面
 
-这里保持了“Skill 是业务型高级 Tool”的设计结论：模型侧仍只看到 `photo_interpret / timer_manage` 两个 Tool 名，内部编排细节留在 Skill 层。
+这里保持了“Skill 是业务型高级 Tool”的设计结论：模型侧当前只看到 `photo_interpret / timer_manage / map_manage` 三个 Tool 名，内部编排细节留在 Skill 层。
 
 ### 3.5 MCP 与 AMap Adapter 落地
 
@@ -137,11 +138,7 @@ Phase D 完成后，仓库已有以下基础：
 2. 对上层业务隐藏底层 provider 差异
 3. 所有 AMap 结果都统一产出结构化字典与 `DerivedArtifact`
 
-同时通过 `McpToolProxy` 把 `amap.route_plan` 这类 MCP 方法暴露成模型可见 Tool，例如：
-
-1. `amap_route_plan`
-2. `amap_poi_search`
-3. `amap_geocode`
+同时保留 `McpToolProxy` 作为统一承载层，但 `amap.*` 当前不再直接暴露给模型，而是由 `map_manage` 在内部调用。
 
 ### 3.6 Agent 结果回写改造
 
@@ -163,6 +160,15 @@ Phase D 完成后，仓库已有以下基础：
 
 这一步是 Phase E 的关键，因为它让图片、任务和地图结果真正进入统一上下文，而不是停留在临时变量里。
 
+补充说明：
+
+1. 当前轮进入模型的历史上下文已调整为直接使用 `session.messages` 中的原始 `user / assistant` 轮次。
+2. system prompt 已收缩为最小角色设定与回复风格约束，不再把框架内部运行规则写进 prompt。
+3. `photo_interpret` 现已优先通过 OpenAI SDK 的原生图片输入执行视觉理解，只有在缺少依赖或接口失败时才回退到 mock 结果。
+4. `OpenAIAgentLoopRunner` 已移除图片、计时器、导航和设备状态的直连能力路由，主路径统一回到标准 SDK tool calling。
+5. 当前模型侧只暴露 3 个高层工具，底层 `capture_photo / create_timer / query_task_status / cancel_task / amap.*` 只作为内部能力存在。
+6. 当前 `agent-core` 默认模型为 `qwen3.6-plus`，TTS 模型保持 `qwen3.5-omni-plus`。
+
 ### 3.7 测试脚本与历史脚本整理
 
 按照 [功能开发文档要求.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/restriction/功能开发文档要求.md) 的联调脚本命名约束：
@@ -182,23 +188,12 @@ start
 :voice-runtime 提交 AgentTurn;
 :AgentFacade 写入用户消息;
 :OpenAIAgentLoopRunner 构造 AgentToolContext;
-
-if (命中直连能力路由?) then (是)
-  if (图片解读) then (是)
-    :ToolGateway 调 photo_interpret;
-    :SkillGateway 执行 photo_interpret;
-    :Skill 内部再调 capture_photo;
-  elseif (计时器) then (是)
-    :ToolGateway 调 timer_manage;
-    :SkillGateway 执行 timer_manage;
-    :Skill 内部再调 create_timer/query_task_status/cancel_task;
-  else (导航)
-    :ToolGateway 调 amap_route_plan;
-    :McpGateway 调 AmapMcpAdapter;
-  endif
-else (否)
-  :OpenAI Agents SDK 正常跑 Tool Loop;
-endif
+:OpenAI Agents SDK 正常跑 Tool Loop;
+:若模型选择 photo_interpret;
+:Skill 内部先调 capture_photo;
+:再通过 SDK 原生图片输入执行视觉理解;
+:若模型选择 timer_manage / map_manage;
+:走统一 ToolGateway / SkillGateway / McpGateway;
 
 :把 trace / asset / artifact / task_refs 写回 AgentTurnResult;
 :AgentFacade 追加助手消息并挂接引用;
@@ -240,9 +235,11 @@ else 用户要求计时
   S --> T : CapabilityResult
   T --> R : CapabilityResult
 else 用户要求导航
-  R -> T : invoke(amap_route_plan)
-  T -> M : invoke(amap.route_plan)
-  M --> T : CapabilityResult(derived_artifacts)
+  R -> T : invoke(map_manage)
+  T -> S : invoke(map_manage)
+  S -> M : invoke(amap.route_plan)
+  M --> S : CapabilityResult(derived_artifacts)
+  S --> T : CapabilityResult
   T --> R : CapabilityResult
 end
 
@@ -261,7 +258,7 @@ A -> A : 保存 trace + asset + artifact + task_ref
 2. `query_device_state` 仍能记录 trace
 3. `photo_interpret` 会组合 `capture_photo`
 4. `timer_manage` 会组合任务 Tool
-5. `amap_route_plan` 会生成 `mcp` 类型 trace
+5. `map_manage` 会组合 `amap.route_plan` 并生成 `mcp + skill` trace
 6. `OpenAIAgentLoopRunner` 的 SDK 委托与事件循环兼容性仍然成立
 
 ### 6.2 集成测试
@@ -271,7 +268,8 @@ A -> A : 保存 trace + asset + artifact + task_ref
 1. 单轮 `AgentTurn` 中串起：
    - `capture_photo`
    - `photo_interpret`
-   - `amap_route_plan`
+   - `map_manage`
+   - `amap.route_plan`
 2. `CapabilityTrace` 会按顺序写回
 3. 助手消息会挂接能力产出的资产和派生结果
 
@@ -305,7 +303,7 @@ PYTHONPATH=server/src python -m unittest \
 当前仍保留的限制：
 
 1. `AmapMcpAdapter` 当前仍是 mock/stub 版本，真实环境接入留到 Phase H 或专门的 provider 接入阶段。
-2. `capture_photo` 仍是模拟抓拍，只提供最小图片资产闭环，真实相机控制和图片上传留到 Phase G。
+2. 本文完成时 `capture_photo` 仍是模拟抓拍；2026-04-18 已在 [PhaseG-真实抓拍图片实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/PhaseG-真实抓拍图片实施文档.md) 中补齐真实抓拍链路。
 3. `InMemoryTaskGateway` 还不是完整 `backend-task-core`，Phase F 仍需补状态机、调度器、事件总线和通知桥。
 
 ## 8. 开发后测试结果

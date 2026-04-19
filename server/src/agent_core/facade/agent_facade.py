@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
+from agent_core.camera import CameraGateway
 from agent_core.context import AgentSessionStore, AgentTurn, AgentTurnResult, MessageContext, generate_id
 from agent_core.context.models import CapabilityTrace, MediaAssetRef
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
@@ -27,10 +30,12 @@ class AgentFacade:
         session_store: AgentSessionStore,
         tool_registry: ToolRegistry,
         runner: AgentLoopRunner,
+        system_prompt: str = "",
     ) -> None:
         self._session_store = session_store
         self._tool_registry = tool_registry
         self._runner = runner
+        self._system_prompt = system_prompt
         self._logger = get_logger("server.agent")
 
     @classmethod
@@ -68,6 +73,7 @@ class AgentFacade:
             session_store=session_store,
             tool_registry=tool_registry,
             runner=runner,
+            system_prompt=settings.voice_system_prompt,
         )
 
     def handle_turn(self, turn: AgentTurn) -> AgentTurnResult:
@@ -136,6 +142,19 @@ class AgentFacade:
         result = self._persist_result(turn=turn, result=result)
         return result
 
+    def bind_camera_gateway(self, camera_gateway: CameraGateway) -> None:
+        """补绑真实相机网关。
+
+        主要逻辑：
+        1. 默认 `AgentFacade` 在 `VoiceRuntime` 初始化时先行构建。
+        2. 等 `ControlRuntime` 就绪后，再把设备侧相机能力绑定进 `ToolRegistry`。
+
+        参数：
+        1. `camera_gateway`：真实相机抓拍网关。
+        """
+
+        self._tool_registry.bind_camera_gateway(camera_gateway)
+
     def _persist_result(self, *, turn: AgentTurn, result: AgentTurnResult) -> AgentTurnResult:
         """把运行结果统一写回会话上下文。"""
 
@@ -162,26 +181,26 @@ class AgentFacade:
                 message_id=assistant_message_id,
                 session_id=turn.session_id,
                 role="assistant",
-                kind="assistant_question" if result.action == "ask_user" else "assistant_reply",
+                kind="assistant_reply",
                 text=result.reply_text,
                 asset_refs=assistant_asset_ids,
                 derived_refs=assistant_artifact_ids,
                 task_refs=assistant_task_ids,
                 meta={
                     "turn_id": turn.turn_id,
-                    "action": result.action,
                     "capability_trace_ids": [trace.trace_id for trace in result.capability_traces],
+                    **({"error": result.error} if result.error is not None else {}),
                 },
             ),
         )
 
         session = self._session_store.get_session(turn.session_id)
         if session is not None:
-            if result.action == "ask_user":
-                session.dialog_state.pending_question = result.reply_text
-            else:
-                session.dialog_state.pending_question = None
-                session.dialog_state.missing_slots.clear()
+            model_request = result.meta.get("model_request")
+            if model_request is not None:
+                session.dialog_state.meta["last_model_request"] = model_request
+            session.dialog_state.pending_question = None
+            session.dialog_state.missing_slots.clear()
 
         result.assistant_message_id = assistant_message_id
         return result
@@ -217,6 +236,63 @@ class AgentFacade:
 
         return self._session_store
 
+    def get_session_debug_snapshot(self, session_id: str) -> dict[str, object] | None:
+        """返回可用于联调与回归结果落盘的会话快照。"""
+
+        session = self._session_store.get_session(session_id)
+        if session is None:
+            return None
+        return {
+            "session_id": session.session_id,
+            "device_id": session.device_id,
+            "created_at_ms": session.created_at_ms,
+            "updated_at_ms": session.updated_at_ms,
+            "dialog_state": {
+                "pending_question": session.dialog_state.pending_question,
+                "missing_slots": list(session.dialog_state.missing_slots),
+                "meta": dict(session.dialog_state.meta),
+            },
+            "model_request": session.dialog_state.meta.get("last_model_request"),
+            "messages": self._build_debug_messages(session),
+            "assets": {asset_id: asdict(asset) for asset_id, asset in session.assets.items()},
+            "artifacts": {artifact_id: asdict(artifact) for artifact_id, artifact in session.artifacts.items()},
+            "tasks": {task_id: asdict(task) for task_id, task in session.tasks.items()},
+            "capability_traces": [asdict(trace) for trace in session.capability_traces],
+        }
+
+    def _build_debug_messages(self, session) -> list[dict[str, object]]:
+        """构造用于联调导出的完整消息列表。
+
+        主要逻辑：
+        1. 若当前门面持有系统提示词，则在消息首位补一条 `system` 消息。
+        2. 后续顺序保留会话内真实写入的 user/assistant 消息。
+
+        参数：
+        1. `session`：当前会话对象。
+
+        返回值：
+        1. 适合直接写入调试快照或 `result.json` 的完整消息列表。
+        """
+
+        messages: list[dict[str, object]] = []
+        if self._system_prompt:
+            messages.append(
+                {
+                    "message_id": "system_prompt",
+                    "session_id": session.session_id,
+                    "role": "system",
+                    "kind": "system_prompt",
+                    "text": self._system_prompt,
+                    "asset_refs": [],
+                    "derived_refs": [],
+                    "task_refs": [],
+                    "meta": {"source": "settings.voice_system_prompt"},
+                    "created_at_ms": session.created_at_ms,
+                }
+            )
+        messages.extend(asdict(message) for message in session.messages)
+        return messages
+
     def _build_failure_result(
         self,
         *,
@@ -232,15 +308,15 @@ class AgentFacade:
         3. `traces`：当前轮轨迹列表。
 
         返回值：
-        1. `action=fail` 的统一结果。
+        1. 统一失败结果。
         """
 
         return AgentTurnResult(
             turn_id=turn.turn_id,
             session_id=turn.session_id,
             device_id=turn.device_id,
-            action="fail",
             reply_text=f"抱歉，这一轮处理失败了：{error.message}",
             capability_traces=traces,
+            error=error.to_dict(),
             meta={"error": error.to_dict()},
         )

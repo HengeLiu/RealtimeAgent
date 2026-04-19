@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 
 def now_ms() -> int:
@@ -229,20 +229,20 @@ class AgentTurnResult:
 
     主要功能：
     1. 作为 `agent-core -> voice-runtime` 的统一输出对象。
-    2. 表达本轮最终回复、追问或失败结果。
+    2. 表达本轮最终回复和框架内部错误信息。
 
     主要属性：
-    1. `action`：当前最终动作，支持 `final_answer/ask_user/fail`。
-    2. `reply_text`：需要交给语音播报的最终文本。
-    3. `assistant_message_id`：当前轮生成的助手消息编号。
-    4. `capability_traces`：本轮能力调用轨迹。
+    1. `reply_text`：需要交给语音播报的最终文本。
+    2. `assistant_message_id`：当前轮生成的助手消息编号。
+    3. `capability_traces`：本轮能力调用轨迹。
+    4. `error`：若本轮执行失败，则保存统一错误字典。
     """
 
     turn_id: str
     session_id: str
     device_id: str
-    action: Literal["final_answer", "ask_user", "fail"]
     reply_text: str
     assistant_message_id: str | None = None
     capability_traces: list[CapabilityTrace] = field(default_factory=list)
+    error: dict[str, Any] | None = None
     meta: dict[str, Any] = field(default_factory=dict)

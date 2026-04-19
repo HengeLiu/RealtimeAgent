@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -110,24 +111,36 @@ def sanitize_log_message(message: str) -> str:
     return sanitized
 
 
-def configure_root_logger(level: str = "INFO") -> None:
+def configure_root_logger(level: str = "INFO", log_file: str | None = None) -> None:
     """配置全局日志器。
 
     主要逻辑：
     1. 清理默认处理器，避免重复打印。
     2. 绑定 JSON 输出处理器到标准输出。
+    3. 若传入日志文件路径，则额外写入同格式日志文件。
 
     参数：
     1. `level`：日志级别。
+    2. `log_file`：日志文件路径，留空时只输出到标准输出。
     """
 
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(level)
 
-    handler = logging.StreamHandler(stream=sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    root.addHandler(handler)
+    formatter = JsonFormatter()
+
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
+    stream_handler.setFormatter(formatter)
+    root.addHandler(stream_handler)
+
+    if log_file and log_file.strip():
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
 
 
 def get_logger(name: str) -> logging.Logger:

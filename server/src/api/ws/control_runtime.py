@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import threading
 import time
 import uuid
@@ -9,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from agent_core import AgentFacade
+from agent_core.camera import CameraCaptureResult, CameraGateway
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_info, log_warning
@@ -53,7 +55,26 @@ class ControlConnection:
         self.last_heartbeat_monotonic = now
 
 
-class ControlRuntime:
+@dataclass(slots=True)
+class PendingCameraCapture:
+    """待完成的单次抓拍请求。
+
+    主要功能：
+    1. 保存一次抓拍请求的等待状态。
+    2. 允许设备回传图片后唤醒阻塞中的 Tool 调用。
+    """
+
+    request_id: str
+    device_id: str
+    session_id: str
+    reason: str
+    created_at_monotonic: float = field(default_factory=time.monotonic)
+    event: threading.Event = field(default_factory=threading.Event)
+    result: CameraCaptureResult | None = None
+    error: Exception | None = None
+
+
+class ControlRuntime(CameraGateway):
     """控制面运行时。
 
     主要功能：
@@ -76,6 +97,7 @@ class ControlRuntime:
         self._lock = threading.Lock()
         self._connections: dict[str, ControlConnection] = {}
         self._device_connections: dict[str, ControlConnection] = {}
+        self._pending_camera_captures: dict[str, PendingCameraCapture] = {}
         self._voice_runtime = VoiceRuntime(
             settings=settings,
             send_control_message=self._send_message_to_device,
@@ -83,6 +105,7 @@ class ControlRuntime:
             asr_client=asr_client,
             agent_facade=agent_facade,
         )
+        self._voice_runtime.agent_facade.bind_camera_gateway(self)
         self._stop_event = threading.Event()
         self._sweeper_thread = threading.Thread(
             target=self._heartbeat_sweeper,
@@ -108,6 +131,16 @@ class ControlRuntime:
 
         with self._lock:
             connections = list(self._connections.values())
+            pending_requests = list(self._pending_camera_captures.values())
+            self._pending_camera_captures.clear()
+
+        for pending in pending_requests:
+            pending.error = build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "服务端正在关闭，抓拍请求被中断",
+                details={"request_id": pending.request_id},
+            )
+            pending.event.set()
 
         for connection in connections:
             self.close_connection(connection, code=1001, reason="server shutdown")
@@ -200,14 +233,79 @@ class ControlRuntime:
         if message.name == "actuator.audio.finished":
             self._handle_actuator_audio_finished(connection, message)
             return
+        if message.name == "sensor.camera.captured":
+            self._handle_camera_captured(connection, message)
+            return
 
         log_debug(self._logger, f"忽略未支持控制消息: {message.name}", context)
+
+    def capture_photo(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        reason: str,
+        timeout_ms: int,
+    ) -> CameraCaptureResult:
+        """通过控制面向设备发起一次抓拍，并等待图片回传。"""
+
+        request_id = f"capture_{uuid.uuid4().hex[:12]}"
+        pending = PendingCameraCapture(
+            request_id=request_id,
+            device_id=device_id,
+            session_id=session_id,
+            reason=reason,
+        )
+        with self._lock:
+            self._pending_camera_captures[request_id] = pending
+
+        try:
+            log_debug(
+                self._logger,
+                f"camera.capture.request request_id={request_id} reason={reason}",
+                LogContext(device_id=device_id, session_id=session_id, message_id=request_id),
+            )
+            self._send_message_to_device(
+                device_id,
+                "request",
+                "sensor.camera.capture",
+                session_id,
+                {
+                    "device_id": device_id,
+                    "request_id": request_id,
+                    "reason": reason,
+                },
+            )
+            if not pending.event.wait(timeout_ms / 1000):
+                raise build_error(
+                    ErrorCode.TIMEOUT,
+                    "等待设备抓拍回传超时",
+                    details={
+                        "device_id": device_id,
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "timeout_ms": timeout_ms,
+                    },
+                )
+            if pending.error is not None:
+                raise pending.error
+            if pending.result is None:
+                raise build_error(
+                    ErrorCode.INTERNAL_ERROR,
+                    "抓拍请求已结束，但未收到图片结果",
+                    details={"request_id": request_id},
+                )
+            return pending.result
+        finally:
+            with self._lock:
+                self._pending_camera_captures.pop(request_id, None)
 
     def build_runtime_snapshot(self) -> dict[str, object]:
         """返回当前运行态快照。"""
 
         with self._lock:
             connections = list(self._connections.values())
+            pending_camera_capture_count = len(self._pending_camera_captures)
 
         now = time.monotonic()
         online_devices = sorted(
@@ -233,6 +331,7 @@ class ControlRuntime:
             "online_device_count": len(online_devices),
             "online_devices": online_devices,
             "connections": connection_items,
+            "pending_camera_capture_count": pending_camera_capture_count,
             "voice_sessions": self._voice_runtime.build_runtime_snapshot(),
         }
 
@@ -401,6 +500,114 @@ class ControlRuntime:
             device_id=connection.device_id or "",
             session_id=message.session_id or "",
             stream_id=stream_id,
+        )
+
+    def _handle_camera_captured(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理设备回传的单次抓拍结果。"""
+
+        request_id = str(message.payload.get("request_id", "")).strip()
+        if not request_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "sensor.camera.captured 缺少 request_id",
+            )
+
+        with self._lock:
+            pending = self._pending_camera_captures.get(request_id)
+        if pending is None:
+            log_warning(
+                self._logger,
+                f"收到未知抓拍回传，已忽略: request_id={request_id}",
+                LogContext(
+                    trace_id=message.trace_id,
+                    session_id=message.session_id,
+                    device_id=connection.device_id,
+                    message_id=message.message_id,
+                ),
+            )
+            return
+
+        if connection.device_id and pending.device_id != connection.device_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "抓拍回传的设备与请求设备不一致",
+                details={
+                    "request_device_id": pending.device_id,
+                    "connection_device_id": connection.device_id,
+                    "request_id": request_id,
+                },
+            )
+
+        if message.session_id and pending.session_id != message.session_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "抓拍回传的 session_id 与请求不一致",
+                details={
+                    "request_session_id": pending.session_id,
+                    "actual_session_id": message.session_id,
+                    "request_id": request_id,
+                },
+            )
+
+        ok = bool(message.payload.get("ok", True))
+        if not ok:
+            error_payload = message.payload.get("error", {})
+            error_message = "设备抓拍失败"
+            if isinstance(error_payload, dict):
+                error_message = str(error_payload.get("message") or error_message)
+            pending.error = build_error(
+                ErrorCode.INTERNAL_ERROR,
+                error_message,
+                details={
+                    "request_id": request_id,
+                    "error": error_payload,
+                },
+            )
+            pending.event.set()
+            return
+
+        image_base64 = str(message.payload.get("image_base64", "")).strip()
+        if not image_base64:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "sensor.camera.captured 缺少 image_base64",
+                details={"request_id": request_id},
+            )
+        try:
+            image_bytes = base64.b64decode(image_base64)
+        except Exception as exc:  # pragma: no cover - 非法输入防御
+            raise build_error(
+                ErrorCode.DECODE_ERROR,
+                "image_base64 解码失败",
+                details={"request_id": request_id, "reason": str(exc)},
+            ) from exc
+
+        mime_type = str(message.payload.get("mime_type", "image/jpeg")).strip() or "image/jpeg"
+        codec = str(message.payload.get("codec", "jpeg")).strip() or "jpeg"
+        width = message.payload.get("width")
+        height = message.payload.get("height")
+        pending.result = CameraCaptureResult(
+            request_id=request_id,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            codec=codec,
+            width=int(width) if isinstance(width, (int, float)) else None,
+            height=int(height) if isinstance(height, (int, float)) else None,
+            meta={
+                "reason": pending.reason,
+                "image_bytes": len(image_bytes),
+            },
+        )
+        pending.event.set()
+        log_debug(
+            self._logger,
+            f"camera.capture.result request_id={request_id} mime_type={mime_type} bytes={len(image_bytes)}",
+            LogContext(
+                trace_id=message.trace_id,
+                session_id=message.session_id,
+                device_id=connection.device_id,
+                message_id=message.message_id,
+            ),
         )
 
     def _send_register_failed(

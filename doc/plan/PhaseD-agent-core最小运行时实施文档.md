@@ -60,13 +60,14 @@ Phase C 完成后，仓库已有以下基础：
    - 保存 `session_id -> AgentSession`
    - 保存 `MessageContext / MediaAssetRef / DerivedArtifact / CapabilityTrace`
 2. `ContextAssembler`
-   - 负责把最近短期历史和当前轮输入装配成 Agent 输入文本
+   - 负责把当前轮输入整理成可进入 `agent-core` 的结构化对象
+   - 会话历史仍以 `session.messages` 为准
 3. `ToolRegistry`
    - 管理首批 Tool 注册
    - 当前首批 Tool 仅实现 `query_device_state`
 4. `OpenAIAgentLoopRunner`
    - 基于 OpenAI Agents SDK 的 `Agent + Runner.run_sync`
-   - 支持 Tool 调用与结构化最终输出
+   - 支持 SDK 原生 Tool 调用
 5. `AgentFacade`
    - 作为 `voice-runtime` 的统一接入点
    - 负责上下文写入、调用运行循环、返回统一 `AgentTurnResult`
@@ -178,7 +179,7 @@ end
 
 R --> A : AgentTurnResult
 A -> A : 保存 assistant message + traces
-A --> V : final_answer / ask_user / fail
+A --> V : reply_text / error
 V -> G : actuator.audio.play + /stream.wav
 G -> S : actuator.audio.finished
 S -> V : on_playback_finished
@@ -230,6 +231,7 @@ PYTHONPATH=server/src uv run python -m unittest discover -s server/test -p 'test
 2. `agent-core` 的主循环确实采用 OpenAI Agents SDK，而不是继续在 `voice-runtime` 中自研一套新 loop。
 3. 上下文模型已按 `MessageContext / MediaAssetRef / DerivedArtifact / CapabilityTrace` 落地最小结构。
 4. 当前只实现最小 Tool 注册表，没有提前引入复杂 Skill Runtime，符合第二阶段计划里的 Phase D 范围。
+5. 当前实现已进一步调整为“框架管理 history messages，system prompt 保持最小”，更符合最新设计收敛方向。
 
 当前仍保留的限制：
 
@@ -265,7 +267,7 @@ bash script/deprecated/run_phase_d_tests_phase_d.sh
 
 已完成项：
 
-1. `AgentFacade / AgentSessionStore / ContextAssembler / ToolRegistry / OpenAIAgentLoopRunner`。
+1. `AgentFacade / AgentSessionStore / ToolRegistry / OpenAIAgentLoopRunner`。
 2. `voice-runtime -> agent-core -> voice-runtime` 最小闭环。
 3. 首个 Tool：`query_device_state`。
 4. `MessageContext / MediaAssetRef / DerivedArtifact / CapabilityTrace` 最小存储结构。

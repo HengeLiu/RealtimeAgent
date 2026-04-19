@@ -7,6 +7,7 @@ tmp
 .cache
 reply
 m4a
+runs
 
 # ESP-IDF generated artifacts
 glass/**/build/

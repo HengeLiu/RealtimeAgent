@@ -10,6 +10,7 @@
 #include "driver/i2s_std.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
+#include "esp_camera.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_event.h"
@@ -24,8 +25,10 @@
 #include "esp_websocket_client.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 #include "nvs_flash.h"
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -39,6 +42,22 @@
 #define SPK_I2S_BCLK_GPIO GPIO_NUM_7
 #define SPK_I2S_LRCK_GPIO GPIO_NUM_8
 #define SPK_I2S_DOUT_GPIO GPIO_NUM_9
+#define CAM_XCLK_GPIO GPIO_NUM_10
+#define CAM_SIOD_GPIO GPIO_NUM_40
+#define CAM_SIOC_GPIO GPIO_NUM_39
+#define CAM_Y9_GPIO GPIO_NUM_48
+#define CAM_Y8_GPIO GPIO_NUM_11
+#define CAM_Y7_GPIO GPIO_NUM_12
+#define CAM_Y6_GPIO GPIO_NUM_14
+#define CAM_Y5_GPIO GPIO_NUM_16
+#define CAM_Y4_GPIO GPIO_NUM_18
+#define CAM_Y3_GPIO GPIO_NUM_17
+#define CAM_Y2_GPIO GPIO_NUM_15
+#define CAM_VSYNC_GPIO GPIO_NUM_38
+#define CAM_HREF_GPIO GPIO_NUM_47
+#define CAM_PCLK_GPIO GPIO_NUM_13
+#define CAM_PWDN_GPIO (-1)
+#define CAM_RESET_GPIO (-1)
 #define SR_SAMPLE_RATE_HZ 16000
 #define AFE_INPUT_FORMAT "M"
 #define LOCAL_ENDPOINT_TAIL_MS 900
@@ -49,6 +68,10 @@
 #define PRE_ROLL_FRAME_COUNT 8
 #define WAKE_IDLE_SUMMARY_MS 3000
 #define SERVER_REPLY_TIMEOUT_MS 15000
+#define CAMERA_FRAME_SIZE FRAMESIZE_VGA
+#define CAMERA_JPEG_QUALITY 18
+#define CAMERA_FB_COUNT 1
+#define CAMERA_CAPTURE_TASK_STACK_SIZE (6 * 1024)
 
 typedef struct {
     const char *ssid;
@@ -112,6 +135,8 @@ static bool s_control_transport_started = false;
 static bool s_playback_active = false;
 static bool s_playback_task_running = false;
 static bool s_speaker_channel_enabled = false;
+static bool s_camera_initialized = false;
+static bool s_camera_capture_busy = false;
 static uint64_t s_reply_wait_started_ms = 0;
 static char s_current_session_id[64];
 static char s_current_stream_id[64];
@@ -145,6 +170,7 @@ static bool reply_wait_timed_out(uint64_t current_ms);
 static void recover_wake_listening_after_reply_timeout(uint64_t current_ms);
 static void reset_control_session_state(void);
 static void ensure_control_transport_started(void);
+static bool init_camera(void);
 
 static bool wifi_profile_available(int index)
 {
@@ -476,6 +502,266 @@ static void send_actuator_audio_state_message(const char *name, const char *stre
         build_control_message_json("notify", name, s_current_session_id, payload),
         name
     );
+}
+
+static bool init_camera(void)
+{
+    camera_config_t config = {0};
+    esp_err_t err;
+    sensor_t *sensor = NULL;
+
+    config.ledc_channel = LEDC_CHANNEL_0;
+    config.ledc_timer = LEDC_TIMER_0;
+    config.pin_d0 = CAM_Y2_GPIO;
+    config.pin_d1 = CAM_Y3_GPIO;
+    config.pin_d2 = CAM_Y4_GPIO;
+    config.pin_d3 = CAM_Y5_GPIO;
+    config.pin_d4 = CAM_Y6_GPIO;
+    config.pin_d5 = CAM_Y7_GPIO;
+    config.pin_d6 = CAM_Y8_GPIO;
+    config.pin_d7 = CAM_Y9_GPIO;
+    config.pin_xclk = CAM_XCLK_GPIO;
+    config.pin_pclk = CAM_PCLK_GPIO;
+    config.pin_vsync = CAM_VSYNC_GPIO;
+    config.pin_href = CAM_HREF_GPIO;
+    config.pin_sccb_sda = CAM_SIOD_GPIO;
+    config.pin_sccb_scl = CAM_SIOC_GPIO;
+    config.pin_pwdn = CAM_PWDN_GPIO;
+    config.pin_reset = CAM_RESET_GPIO;
+    config.xclk_freq_hz = 20000000;
+    config.pixel_format = PIXFORMAT_JPEG;
+    config.frame_size = CAMERA_FRAME_SIZE;
+    config.jpeg_quality = CAMERA_JPEG_QUALITY;
+    /*
+     * 当前业务只需要“收到指令后抓一张图”，不需要持续视频流。
+     * 这里必须使用单缓冲 + WHEN_EMPTY，避免摄像头在空闲时持续产出帧，
+     * 但应用层又没有持续消费，最终触发 cam_hal 的 FB-OVF 日志。
+     */
+    config.fb_count = CAMERA_FB_COUNT;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+    err = esp_camera_init(&config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "摄像头初始化失败: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    sensor = esp_camera_sensor_get();
+    if (sensor != NULL) {
+        sensor->set_hmirror(sensor, 1);
+        sensor->set_vflip(sensor, 0);
+        sensor->set_brightness(sensor, 0);
+        sensor->set_contrast(sensor, 1);
+        sensor->set_saturation(sensor, 1);
+        sensor->set_gain_ctrl(sensor, 1);
+        sensor->set_exposure_ctrl(sensor, 0);
+        sensor->set_whitebal(sensor, 1);
+        sensor->set_awb_gain(sensor, 1);
+        sensor->set_aec2(sensor, 0);
+        sensor->set_aec_value(sensor, 40);
+    }
+
+    ESP_LOGI(
+        TAG,
+        "摄像头初始化完成: frame_size=%d jpeg_quality=%d fb_count=%d grab_mode=%d",
+        CAMERA_FRAME_SIZE,
+        CAMERA_JPEG_QUALITY,
+        CAMERA_FB_COUNT,
+        CAMERA_GRAB_WHEN_EMPTY
+    );
+    return true;
+}
+
+static bool base64_encode_bytes(const uint8_t *input, size_t input_size, char **output)
+{
+    size_t encoded_capacity = 4 * ((input_size + 2) / 3) + 1;
+    size_t encoded_length = 0;
+    int ret;
+    char *buffer = NULL;
+
+    if (output == NULL) {
+        return false;
+    }
+    *output = NULL;
+
+    buffer = heap_caps_malloc(encoded_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buffer == NULL) {
+        buffer = heap_caps_malloc(encoded_capacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (buffer == NULL) {
+        ESP_LOGE(TAG, "分配图片 base64 缓冲失败: bytes=%u", (unsigned)input_size);
+        return false;
+    }
+
+    ret = mbedtls_base64_encode(
+        (unsigned char *)buffer,
+        encoded_capacity,
+        &encoded_length,
+        input,
+        input_size
+    );
+    if (ret != 0) {
+        ESP_LOGE(TAG, "图片 base64 编码失败: ret=%d", ret);
+        heap_caps_free(buffer);
+        return false;
+    }
+    buffer[encoded_length] = '\0';
+    *output = buffer;
+    return true;
+}
+
+static void send_camera_captured_message(
+    const char *session_id,
+    const char *request_id,
+    bool ok,
+    const char *mime_type,
+    const char *codec,
+    int width,
+    int height,
+    const char *image_base64,
+    const char *error_message
+)
+{
+    cJSON *payload = cJSON_CreateObject();
+    cJSON *error = NULL;
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "构造 sensor.camera.captured 失败");
+        return;
+    }
+
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    cJSON_AddStringToObject(payload, "request_id", request_id);
+    cJSON_AddBoolToObject(payload, "ok", ok);
+    if (ok) {
+        cJSON_AddStringToObject(payload, "mime_type", mime_type);
+        cJSON_AddStringToObject(payload, "codec", codec);
+        cJSON_AddNumberToObject(payload, "width", width);
+        cJSON_AddNumberToObject(payload, "height", height);
+        cJSON_AddStringToObject(payload, "image_base64", image_base64);
+    } else {
+        error = cJSON_CreateObject();
+        if (error == NULL) {
+            cJSON_Delete(payload);
+            ESP_LOGE(TAG, "构造抓拍错误对象失败");
+            return;
+        }
+        cJSON_AddStringToObject(error, "code", "CAMERA_CAPTURE_FAILED");
+        cJSON_AddStringToObject(error, "message", error_message != NULL ? error_message : "设备抓拍失败");
+        cJSON_AddItemToObject(payload, "error", error);
+    }
+
+    send_control_message_json(
+        build_control_message_json("notify", "sensor.camera.captured", session_id, payload),
+        "sensor.camera.captured"
+    );
+}
+
+typedef struct {
+    char request_id[64];
+    char session_id[64];
+    char reason[64];
+} camera_capture_task_arg_t;
+
+static void camera_capture_task(void *arg)
+{
+    camera_capture_task_arg_t *task_arg = (camera_capture_task_arg_t *)arg;
+    camera_fb_t *fb = NULL;
+    char *image_base64 = NULL;
+
+    if (task_arg == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (!s_camera_initialized) {
+        send_camera_captured_message(
+            task_arg->session_id,
+            task_arg->request_id,
+            false,
+            NULL,
+            NULL,
+            0,
+            0,
+            NULL,
+            "摄像头尚未初始化"
+        );
+        goto cleanup;
+    }
+
+    ESP_LOGI(TAG, "开始执行单次抓拍: request_id=%s reason=%s", task_arg->request_id, task_arg->reason);
+    fb = esp_camera_fb_get();
+    if (fb == NULL) {
+        send_camera_captured_message(
+            task_arg->session_id,
+            task_arg->request_id,
+            false,
+            NULL,
+            NULL,
+            0,
+            0,
+            NULL,
+            "摄像头抓拍失败，未拿到图像帧"
+        );
+        goto cleanup;
+    }
+    if (fb->format != PIXFORMAT_JPEG) {
+        send_camera_captured_message(
+            task_arg->session_id,
+            task_arg->request_id,
+            false,
+            NULL,
+            NULL,
+            0,
+            0,
+            NULL,
+            "摄像头返回了非 JPEG 图像"
+        );
+        goto cleanup;
+    }
+    if (!base64_encode_bytes(fb->buf, fb->len, &image_base64)) {
+        send_camera_captured_message(
+            task_arg->session_id,
+            task_arg->request_id,
+            false,
+            NULL,
+            NULL,
+            0,
+            0,
+            NULL,
+            "图片编码失败"
+        );
+        goto cleanup;
+    }
+
+    send_camera_captured_message(
+        task_arg->session_id,
+        task_arg->request_id,
+        true,
+        "image/jpeg",
+        "jpeg",
+        fb->width,
+        fb->height,
+        image_base64,
+        NULL
+    );
+    ESP_LOGI(
+        TAG,
+        "单次抓拍完成: request_id=%s width=%d height=%d bytes=%u",
+        task_arg->request_id,
+        fb->width,
+        fb->height,
+        (unsigned)fb->len
+    );
+
+cleanup:
+    if (fb != NULL) {
+        esp_camera_fb_return(fb);
+    }
+    heap_caps_free(image_base64);
+    s_camera_capture_busy = false;
+    free(task_arg);
+    vTaskDelete(NULL);
 }
 
 static bool send_audio_chunk_frame(
@@ -1535,6 +1821,8 @@ static void handle_control_message(const char *data, int data_len)
     const cJSON *payload = NULL;
     const cJSON *session_id = NULL;
     const cJSON *stream_id = NULL;
+    const cJSON *request_id = NULL;
+    const cJSON *reason = NULL;
 
     char *json_text = calloc((size_t)data_len + 1U, sizeof(char));
     if (json_text == NULL) {
@@ -1553,6 +1841,8 @@ static void handle_control_message(const char *data, int data_len)
     payload = cJSON_GetObjectItemCaseSensitive(root, "payload");
     session_id = cJSON_GetObjectItemCaseSensitive(root, "session_id");
     stream_id = cJSON_GetObjectItemCaseSensitive(root, "stream_id");
+    request_id = payload != NULL ? cJSON_GetObjectItemCaseSensitive(payload, "request_id") : NULL;
+    reason = payload != NULL ? cJSON_GetObjectItemCaseSensitive(payload, "reason") : NULL;
     if (!cJSON_IsString(name) || name->valuestring == NULL) {
         ESP_LOGW(TAG, "控制消息缺少 name");
         goto cleanup;
@@ -1626,6 +1916,97 @@ static void handle_control_message(const char *data, int data_len)
         goto cleanup;
     }
 
+    if (strcmp(name->valuestring, "sensor.camera.capture") == 0) {
+        camera_capture_task_arg_t *task_arg = NULL;
+        BaseType_t task_ret;
+
+        if (!cJSON_IsString(session_id) || session_id->valuestring == NULL) {
+            ESP_LOGW(TAG, "sensor.camera.capture 缺少 session_id");
+            goto cleanup;
+        }
+        if (!cJSON_IsString(request_id) || request_id->valuestring == NULL) {
+            ESP_LOGW(TAG, "sensor.camera.capture 缺少 request_id");
+            goto cleanup;
+        }
+        if (s_camera_capture_busy) {
+            send_camera_captured_message(
+                session_id->valuestring,
+                request_id->valuestring,
+                false,
+                NULL,
+                NULL,
+                0,
+                0,
+                NULL,
+                "camera is already occupied by another task"
+            );
+            goto cleanup;
+        }
+
+        task_arg = calloc(1, sizeof(camera_capture_task_arg_t));
+        if (task_arg == NULL) {
+            send_camera_captured_message(
+                session_id->valuestring,
+                request_id->valuestring,
+                false,
+                NULL,
+                NULL,
+                0,
+                0,
+                NULL,
+                "设备内存不足，无法启动抓拍任务"
+            );
+            goto cleanup;
+        }
+        strlcpy(task_arg->request_id, request_id->valuestring, sizeof(task_arg->request_id));
+        strlcpy(task_arg->session_id, session_id->valuestring, sizeof(task_arg->session_id));
+        if (cJSON_IsString(reason) && reason->valuestring != NULL) {
+            strlcpy(task_arg->reason, reason->valuestring, sizeof(task_arg->reason));
+        } else {
+            strlcpy(task_arg->reason, "agent_requested", sizeof(task_arg->reason));
+        }
+
+        s_camera_capture_busy = true;
+        task_ret = xTaskCreateWithCaps(
+            camera_capture_task,
+            "camera_capture_task",
+            CAMERA_CAPTURE_TASK_STACK_SIZE,
+            task_arg,
+            5,
+            NULL,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+        if (task_ret != pdPASS) {
+            size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            size_t largest_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            s_camera_capture_busy = false;
+            free(task_arg);
+            ESP_LOGE(
+                TAG,
+                "创建设备抓拍任务失败: stack=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
+                CAMERA_CAPTURE_TASK_STACK_SIZE,
+                (unsigned)free_internal,
+                (unsigned)largest_internal,
+                (unsigned)free_spiram,
+                (unsigned)largest_spiram
+            );
+            send_camera_captured_message(
+                session_id->valuestring,
+                request_id->valuestring,
+                false,
+                NULL,
+                NULL,
+                0,
+                0,
+                NULL,
+                "创建设备抓拍任务失败"
+            );
+        }
+        goto cleanup;
+    }
+
     ESP_LOGD(TAG, "收到未处理控制消息: %s", name->valuestring);
 
 cleanup:
@@ -1673,7 +2054,7 @@ static void start_control_connection(void)
 {
     esp_websocket_client_config_t websocket_config = {
         .uri = s_runtime_config.server_ws_uri,
-        .buffer_size = 2048,
+        .buffer_size = 16384,
         .network_timeout_ms = 5000,
         .task_stack = 8192,
     };
@@ -1746,6 +2127,10 @@ void app_main(void)
 
     start_control_connection();
     ESP_EARLY_LOGI(TAG, "控制连接初始化完成");
+    s_camera_initialized = init_camera();
+    if (!s_camera_initialized) {
+        ESP_LOGW(TAG, "摄像头初始化失败，当前仅保留语音链路");
+    }
     init_speech_runtime();
     ESP_EARLY_LOGI(TAG, "语音运行时初始化完成");
 

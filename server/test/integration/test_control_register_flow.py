@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import struct
+import threading
 import time
 import unittest
 from urllib.request import urlopen
@@ -252,6 +253,98 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
                 time.sleep(0.05)
             else:
                 self.fail("device did not time out as expected")
+        finally:
+            client.close()
+
+    def test_camera_capture_round_trip_returns_real_image_bytes(self) -> None:
+        """测试目标：验证服务端可下发单次抓拍并收到设备图片回传。
+
+        测试方法：
+        1. 完成设备注册与语音会话打开。
+        2. 在服务端线程里调用 `request_camera_capture`。
+        3. 测试客户端接收 `sensor.camera.capture` 后回传 `sensor.camera.captured`。
+
+        预期结果：
+        1. 服务端拿到真实图片字节。
+        2. 回传的图片元信息会被完整解析。
+        """
+
+        client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        tiny_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0bIDATx\xdac\xfc\xff"
+            b"\x1f\x00\x02\xeb\x01\xf5\x8fg?\xed\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        result_box: dict[str, object] = {}
+        error_box: dict[str, BaseException] = {}
+
+        try:
+            self._send_register(client, pair_token="pair-demo-token")
+
+            self.codec.decode(client.recv_text())
+            opened = self.codec.decode(client.recv_text())
+
+            client.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="notify",
+                        name="voice.session.opened",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={"device_id": "glass-001"},
+                        session_id=opened.session_id,
+                    )
+                ).decode("utf-8")
+            )
+
+            def _request_capture() -> None:
+                try:
+                    result_box["capture"] = self.handle.runtime.capture_photo(
+                        device_id="glass-001",
+                        session_id=opened.session_id or "",
+                        reason="integration_test",
+                        timeout_ms=1000,
+                    )
+                except BaseException as exc:  # pragma: no cover - 仅在失败时回填
+                    error_box["error"] = exc
+
+            request_thread = threading.Thread(target=_request_capture, name="camera-capture-request")
+            request_thread.start()
+
+            capture_request = self.codec.decode(client.recv_text())
+            self.assertEqual(capture_request.name, "sensor.camera.capture")
+            request_id = capture_request.payload["request_id"]
+
+            client.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="notify",
+                        name="sensor.camera.captured",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "device_id": "glass-001",
+                            "request_id": request_id,
+                            "ok": True,
+                            "mime_type": "image/png",
+                            "codec": "png",
+                            "width": 1,
+                            "height": 1,
+                            "image_base64": base64.b64encode(tiny_png).decode("utf-8"),
+                        },
+                        session_id=opened.session_id,
+                    )
+                ).decode("utf-8")
+            )
+
+            request_thread.join(timeout=2)
+            self.assertNotIn("error", error_box)
+            self.assertIn("capture", result_box)
+            capture = result_box["capture"]
+            self.assertEqual(capture.mime_type, "image/png")
+            self.assertEqual(capture.width, 1)
+            self.assertEqual(capture.height, 1)
+            self.assertEqual(capture.image_bytes, tiny_png)
         finally:
             client.close()
 
