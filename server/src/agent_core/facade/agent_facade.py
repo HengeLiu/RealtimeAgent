@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 
 from agent_core.camera import CameraGateway
@@ -76,7 +77,13 @@ class AgentFacade:
             system_prompt=settings.voice_system_prompt,
         )
 
-    def handle_turn(self, turn: AgentTurn) -> AgentTurnResult:
+    def handle_turn(
+        self,
+        turn: AgentTurn,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+        reply_text_delta_callback: Callable[[str], None] | None = None,
+    ) -> AgentTurnResult:
         """处理一轮 Agent 输入。
 
         主要逻辑：
@@ -87,6 +94,8 @@ class AgentFacade:
 
         参数：
         1. `turn`：当前轮输入对象。
+        2. `progress_callback`：中间播报回调，用于长耗时工具前的即时反馈。
+        3. `reply_text_delta_callback`：最终回复的文本增量回调，用于流式播报。
 
         返回值：
         1. `AgentTurnResult`。
@@ -118,7 +127,12 @@ class AgentFacade:
         )
 
         try:
-            result = self._runner.run_turn(session=session, turn=turn)
+            result = self._runner.run_turn(
+                session=session,
+                turn=turn,
+                progress_callback=progress_callback,
+                reply_text_delta_callback=reply_text_delta_callback,
+            )
         except AppError as exc:
             log_debug(
                 self._logger,

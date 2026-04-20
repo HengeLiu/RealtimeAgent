@@ -8,7 +8,7 @@ import os
 import tempfile
 import unittest
 
-from infra.logging.logger import JsonFormatter, configure_root_logger, sanitize_log_message
+from infra.logging.logger import NOISY_LIBRARY_LOG_LEVELS, JsonFormatter, configure_root_logger, sanitize_log_message
 
 
 class LoggingTestCase(unittest.TestCase):
@@ -102,6 +102,24 @@ class LoggingTestCase(unittest.TestCase):
         payload = json.loads(lines[-1])
         self.assertEqual(payload["logger"], "test.file")
         self.assertEqual(payload["message"], "写入文件日志")
+        logging.getLogger().handlers.clear()
+
+    def test_configure_root_logger_lowers_noisy_library_levels(self) -> None:
+        """测试目标：验证高频第三方日志会被统一收敛。
+
+        测试方法：
+        1. 调用 `configure_root_logger` 完成全局日志初始化。
+        2. 逐个检查约定的第三方日志器级别。
+
+        预期结果：
+        1. 高频第三方日志器级别不低于 `WARNING`。
+        """
+
+        configure_root_logger("DEBUG")
+
+        for logger_name, level in NOISY_LIBRARY_LOG_LEVELS:
+            self.assertEqual(logging.getLogger(logger_name).level, level)
+
         logging.getLogger().handlers.clear()
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 
 from infra.errors import ErrorCode, build_error
 
@@ -29,13 +30,17 @@ class ServerSettings:
     9. `dashscope_api_key`：百炼兼容接口 API Key。
     10. `voice_model_base_url`：百炼兼容接口基础地址。
     11. `agent_model_name`：agent-core 文本与图片理解模型名称。
-    12. `voice_model_name`：语音输出模型名称。
-    13. `voice_model_voice`：语音输出音色。
-    14. `voice_model_timeout_ms`：模型请求超时时间。
-    15. `voice_runs_root`：语音运行时资产落盘目录。
-    16. `voice_asr_model_name`：语音转写模型名称。
-    17. `voice_system_prompt`：默认系统提示词。
-    18. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    12. `voice_model_name`：兼容旧链路的语音模型名称。
+    13. `voice_model_voice`：兼容旧链路的语音音色。
+    14. `tts_model_name`：专用流式 TTS 模型名称。
+    15. `tts_voice`：专用流式 TTS 音色。
+    16. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
+    17. `tts_sample_rate_hz`：TTS 原始输出采样率。
+    18. `voice_model_timeout_ms`：模型请求超时时间。
+    19. `voice_runs_root`：语音运行时资产落盘目录。
+    20. `voice_asr_model_name`：语音转写模型名称。
+    21. `voice_system_prompt`：默认系统提示词。
+    22. `max_segment_audio_bytes`：单轮上行音频最大字节数。
     """
 
     host: str = "0.0.0.0"
@@ -52,11 +57,30 @@ class ServerSettings:
     agent_model_name: str = "qwen3.6-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Tina"
+    tts_model_name: str = "cosyvoice-v3-flash"
+    tts_voice: str = "longanhuan"
+    tts_websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    tts_sample_rate_hz: int = 22050
     voice_model_timeout_ms: int = 45000
     voice_runs_root: str = "runs/session"
     voice_asr_model_name: str = "qwen3-asr-flash"
     voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
     max_segment_audio_bytes: int = 524288
+
+    @staticmethod
+    def build_default_log_file() -> str:
+        """生成默认日志文件路径。
+
+        主要逻辑：
+        1. 在项目当前工作目录下创建 `logs` 目录约定。
+        2. 使用时间戳生成新的日志文件名，避免覆盖上一轮运行结果。
+
+        返回值：
+        1. 默认日志文件相对路径。
+        """
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        return os.path.join("logs", f"server-{timestamp}.log")
 
     @classmethod
     def from_env(cls) -> "ServerSettings":
@@ -91,7 +115,7 @@ class ServerSettings:
             port=port,
             environment=os.getenv("APP_ENV", defaults.environment),
             log_level=os.getenv("LOG_LEVEL", defaults.log_level).upper(),
-            log_file=os.getenv("LOG_FILE", defaults.log_file),
+            log_file=os.getenv("LOG_FILE", cls.build_default_log_file()),
             device_token_map=os.getenv("DEVICE_TOKEN_MAP", defaults.device_token_map),
             heartbeat_interval_ms=cls._parse_int_env(
                 "HEARTBEAT_INTERVAL_MS",
@@ -107,6 +131,10 @@ class ServerSettings:
             agent_model_name=os.getenv("AGENT_MODEL_NAME", defaults.agent_model_name),
             voice_model_name=os.getenv("VOICE_MODEL_NAME", defaults.voice_model_name),
             voice_model_voice=os.getenv("VOICE_MODEL_VOICE", defaults.voice_model_voice),
+            tts_model_name=os.getenv("TTS_MODEL_NAME", defaults.tts_model_name),
+            tts_voice=os.getenv("TTS_VOICE", defaults.tts_voice),
+            tts_websocket_api_url=os.getenv("TTS_WEBSOCKET_API_URL", defaults.tts_websocket_api_url),
+            tts_sample_rate_hz=cls._parse_int_env("TTS_SAMPLE_RATE_HZ", defaults.tts_sample_rate_hz),
             voice_model_timeout_ms=cls._parse_int_env(
                 "VOICE_MODEL_TIMEOUT_MS",
                 defaults.voice_model_timeout_ms,
@@ -234,6 +262,27 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_MODEL_VOICE 不能为空",
             )
+        if not self.tts_model_name.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "TTS_MODEL_NAME 不能为空",
+            )
+        if not self.tts_voice.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "TTS_VOICE 不能为空",
+            )
+        if not self.tts_websocket_api_url.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "TTS_WEBSOCKET_API_URL 不能为空",
+            )
+        if self.tts_sample_rate_hz <= 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "TTS_SAMPLE_RATE_HZ 必须大于 0",
+                details={"tts_sample_rate_hz": self.tts_sample_rate_hz},
+            )
         if not self.voice_runs_root.strip():
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
@@ -272,6 +321,10 @@ class ServerSettings:
             "agent_model_name": self.agent_model_name,
             "voice_model_name": self.voice_model_name,
             "voice_model_voice": self.voice_model_voice,
+            "tts_model_name": self.tts_model_name,
+            "tts_voice": self.tts_voice,
+            "tts_websocket_api_url": self.tts_websocket_api_url,
+            "tts_sample_rate_hz": self.tts_sample_rate_hz,
             "voice_model_timeout_ms": self.voice_model_timeout_ms,
             "voice_runs_root": self.voice_runs_root,
             "voice_asr_model_name": self.voice_asr_model_name,

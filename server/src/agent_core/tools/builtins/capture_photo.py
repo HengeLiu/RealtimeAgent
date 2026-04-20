@@ -42,7 +42,7 @@ class CapturePhotoTool(BaseTool):
 
     spec = ToolSpec(
         name="capture_photo",
-        description="当回答用户问题需要用到用户眼前图像时，调用相机抓拍当前画面，并把图片保存为可引用资产。",
+        description="当回答用户问题需要查看用户眼前画面时，调用相机拍下当前场景，供后续直接查看图片并回答。",
         input_model=CapturePhotoInput,
         output_model=CapturePhotoOutput,
         capability_type="tool",

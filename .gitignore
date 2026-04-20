@@ -5,6 +5,7 @@ __*
 tmp
 .arduino-build
 .cache
+logs
 reply
 m4a
 runs

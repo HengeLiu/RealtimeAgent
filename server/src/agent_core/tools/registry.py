@@ -151,7 +151,7 @@ class ToolRegistry:
             QueryTaskStatusTool(),
             CancelTaskTool(),
         ):
-            self._register_tool(tool, expose_to_model=False)
+            self._register_tool(tool, expose_to_model=tool.spec.name == "capture_photo")
 
         for skill in self._skill_registry.list_skills():
             self._register_tool(
@@ -161,7 +161,7 @@ class ToolRegistry:
                     description=skill.spec.description,
                     input_model=skill.spec.input_model,
                 ),
-                expose_to_model=skill.spec.name in {"photo_interpret", "timer_manage", "map_manage"},
+                expose_to_model=skill.spec.name in {"timer_manage", "map_manage"},
             )
 
         for method in self._mcp_registry.list_methods():

@@ -47,7 +47,14 @@ class PhaseECapabilityRunner(AgentLoopRunner):
         self._tool_gateway = ToolGateway(tool_registry)
         self._tool_registry.bind_gateway(self._tool_gateway)
 
-    def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
+    def run_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        progress_callback=None,
+        reply_text_delta_callback=None,
+    ) -> AgentTurnResult:
         traces = []
         context = AgentToolContext(
             session_id=turn.session_id,

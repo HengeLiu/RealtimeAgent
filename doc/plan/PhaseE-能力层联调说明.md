@@ -7,7 +7,7 @@
 1. `ToolRegistry / ToolGateway`
 2. `SkillRegistry / SkillGateway`
 3. `McpRegistry / McpGateway`
-4. `photo_interpret / timer_manage / map_manage` 的最小闭环
+4. `capture_photo / timer_manage / map_manage` 的最小闭环
 
 联调重点观察：
 
@@ -53,13 +53,13 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 说明：
 
 1. `AGENT_MODEL_NAME` 用于 agent-core 文本决策与图片理解，建议当前使用 `qwen3.6-plus`。
-2. `VOICE_MODEL_NAME` 用于 TTS，当前保持 `qwen3.5-omni-plus`。
+2. `TTS_MODEL_NAME` 默认使用 `cosyvoice-v3-flash`；若依赖缺失则自动回退旧 TTS 链路。
 3. 当前 `OpenAIAgentLoopRunner` 已回到标准 SDK tool calling 主路径，不再保留图片、计时器、导航和设备状态的直连能力路由。
 4. AMap 当前默认走 mock adapter，不依赖真实第三方配置。
 5. 若设置了 `LOG_FILE`，服务端会在标准输出之外，额外把同样的 JSON 结构化日志写入该文件，便于长期保留 `tool.call/result`、`skill.call/result`、`mcp.call/result` 调试链路。
 6. 当前发给模型的历史上下文已直接采用 `history messages`，不再把历史、资产和派生结果压成一整段说明文本。
-7. 当前模型侧只暴露 3 个高层工具：`photo_interpret / timer_manage / map_manage`。
-8. `photo_interpret` 现在会先抓拍，再优先通过 SDK 原生图片输入做视觉理解；只有在缺少依赖或接口失败时才回退 mock。
+7. 当前模型侧只暴露 3 个高层工具：`capture_photo / timer_manage / map_manage`。
+8. 图片理解改由主链路模型直接接收文本与图片完成；`capture_photo` 只负责取图。
 
 ## 4. 建议联调话术
 
@@ -71,7 +71,7 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 预期行为：
 
-1. 第一句会命中 `photo_interpret`，内部触发 `capture_photo`
+1. 第一句会命中 `capture_photo`，随后主链路模型继续查看真实图片
 2. 第二句会命中 `timer_manage`，内部触发 `create_timer`
 3. 第三句会命中 `map_manage`，内部再调用 mock AMap 返回路线摘要
 
@@ -83,15 +83,19 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 1. `Agent 输出: has_error=... traces=[...]`
 2. `capability_name='capture_photo'`
-3. `capability_name='photo_interpret'`
-4. `capability_name='timer_manage'`
-5. `capability_name='amap.route_plan'`
-6. `capability_name='map_manage'`
+3. `拍照后切换到主链路图片解读`
+4. `主链路图片解读完成`
+5. `capability_name='timer_manage'`
+6. `capability_name='amap.route_plan'`
+7. `capability_name='map_manage'`
+8. `CosyVoice 流式 TTS 初始化成功`
 
 说明：
 
 1. 若只看到最终回复，看不到 trace，说明能力调用没有进入统一网关。
-2. 若 `photo_interpret` 成功但助手消息没有图片资产，说明 `AgentTurnResult.meta -> AgentFacade` 的结果回写链路有问题。
+2. 若拍照后第二次模型请求里仍只有 `asset_id / storage_uri` 这样的文本，而没有真正的 `image_url`，说明还没有切到新的主链路图片解读实现。
+3. 若日志出现 `CosyVoice 流式 TTS 初始化失败，回退全文 TTS`，说明当前环境仍在走旧的全文 TTS 降级路径。
+4. 若抓拍回传图片较大，`sensor.camera.captured` 可能被拆成多个 WebSocket 分片；当前服务端已支持重组分片后再做 JSON 解码，若仍看到 `ControlMessage JSON 解码失败`，需要继续排查设备端是否发送了损坏文本。
 
 ### 5.2 会话上下文
 

@@ -15,6 +15,12 @@ DATA_URL_PATTERN = re.compile(
     r"data:(?P<mime>(?:audio|image)/[A-Za-z0-9.+-]+);base64,(?P<body>.*?)(?=(?:['\"}\],)]|$))",
     re.DOTALL,
 )
+NOISY_LIBRARY_LOG_LEVELS: tuple[tuple[str, int], ...] = (
+    ("dashscope", logging.WARNING),
+    ("httpcore", logging.WARNING),
+    ("httpx", logging.WARNING),
+    ("openai.agents", logging.WARNING),
+)
 
 
 @dataclass(slots=True)
@@ -141,6 +147,20 @@ def configure_root_logger(level: str = "INFO", log_file: str | None = None) -> N
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
+
+    configure_library_loggers()
+
+
+def configure_library_loggers() -> None:
+    """收敛第三方库日志级别。
+
+    主要逻辑：
+    1. 压低高频第三方调试日志，避免淹没业务主链路。
+    2. 保留 WARNING 及以上级别，确保异常仍然可见。
+    """
+
+    for logger_name, level in NOISY_LIBRARY_LOG_LEVELS:
+        logging.getLogger(logger_name).setLevel(level)
 
 
 def get_logger(name: str) -> logging.Logger:

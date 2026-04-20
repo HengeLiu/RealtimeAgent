@@ -7,7 +7,16 @@ import struct
 import unittest
 
 from infra.config import ServerSettings
-from runtime.voice_runtime import MessageEntry, PCM16StreamResampler, VoiceRuntime, VoiceSessionController, build_audio_data_url, extract_message_text, wav_header_unknown_size
+from runtime.voice_runtime import (
+    MessageEntry,
+    PCM16StreamResampler,
+    VoiceRuntime,
+    VoiceSessionController,
+    _extract_tts_event_summary,
+    build_audio_data_url,
+    extract_message_text,
+    wav_header_unknown_size,
+)
 
 
 class VoiceRuntimeTestCase(unittest.TestCase):
@@ -136,6 +145,140 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             choices = [_Choice()]
 
         self.assertEqual(extract_message_text(_Completion()), "转写文本")
+
+    def test_extract_tts_event_summary_reads_sentence_end(self) -> None:
+        """测试目标：验证 TTS 句子结束事件会被提炼成摘要。
+
+        测试方法：
+        1. 构造一条最小 `sentence-end` 事件字典。
+        2. 调用事件摘要提取函数。
+
+        预期结果：
+        1. 返回值包含任务编号、句子序号、文本和字符数。
+        """
+
+        summary = _extract_tts_event_summary(
+            {
+                "header": {"task_id": "task-123", "event": "result-generated"},
+                "payload": {
+                    "output": {
+                        "type": "sentence-end",
+                        "sentence": {"index": 2},
+                        "original_text": "第二句内容\n",
+                        "usage": {"characters": 18},
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            summary,
+            {
+                "kind": "sentence-end",
+                "task_id": "task-123",
+                "sentence_index": 2,
+                "text": "第二句内容",
+                "characters": 18,
+            },
+        )
+
+    def test_extract_tts_event_summary_reads_task_finished(self) -> None:
+        """测试目标：验证 TTS 完成事件会被保留下来。
+
+        测试方法：
+        1. 构造一条 `task-finished` 事件字典。
+        2. 调用事件摘要提取函数。
+
+        预期结果：
+        1. 返回值包含完成事件类型和任务编号。
+        """
+
+        summary = _extract_tts_event_summary(
+            {
+                "header": {"task_id": "task-456", "event": "task-finished"},
+                "payload": {"output": {}},
+            }
+        )
+
+        self.assertEqual(summary, {"kind": "task-finished", "task_id": "task-456"})
+
+    def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
+        """测试目标：验证旧播放流完成时不会误伤当前新播放流。
+
+        测试方法：
+        1. 手动创建同一会话下的两条播放流，后一条作为当前播放流。
+        2. 先上报旧播放流的 `finished`。
+        3. 再检查当前播放流是否仍然保留。
+
+        预期结果：
+        1. 旧播放流会被正常回收。
+        2. 当前播放流不会因为旧流收尾被清空。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+
+        first = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_old_001",
+        )
+        second = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_new_001",
+        )
+
+        runtime.on_playback_finished(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_old_001",
+        )
+
+        snapshot = runtime.build_runtime_snapshot()
+        self.assertTrue(first.completed)
+        self.assertEqual(snapshot["glass-001"]["reply_stream_id"], second.stream_id)
+
+    def test_create_playback_stream_queues_later_reply(self) -> None:
+        """测试目标：验证后续回复播放流会排队等待当前播放流结束。
+
+        测试方法：
+        1. 创建同一会话下的两条播放流。
+        2. 不结束第一条流，直接创建第二条流。
+        3. 检查当前流与待播放队列状态。
+
+        预期结果：
+        1. 第一条流仍是当前播放流。
+        2. 第二条流进入待播放队列，而不是覆盖当前流。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-queue")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-queue")
+
+        first = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-queue",
+            stream_id="reply_queue_001",
+        )
+        second = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-queue",
+            stream_id="reply_queue_002",
+        )
+
+        snapshot = runtime.build_runtime_snapshot()
+        self.assertEqual(snapshot["glass-001"]["reply_stream_id"], first.stream_id)
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测覆盖内部状态机
+        self.assertEqual(len(controller.pending_playbacks), 1)
+        self.assertIs(controller.pending_playbacks[0], second)
 
 
 if __name__ == "__main__":

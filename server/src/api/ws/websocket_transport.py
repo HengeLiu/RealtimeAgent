@@ -16,6 +16,7 @@ from protocol.media import MediaFrame
 GUID: Final[str] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 OPCODE_TEXT: Final[int] = 0x1
 OPCODE_BINARY: Final[int] = 0x2
+OPCODE_CONTINUATION: Final[int] = 0x0
 OPCODE_CLOSE: Final[int] = 0x8
 OPCODE_PING: Final[int] = 0x9
 OPCODE_PONG: Final[int] = 0xA
@@ -61,14 +62,25 @@ def handle_control_websocket(handler, runtime: ControlRuntime) -> None:
     try:
         while not connection.closed:
             try:
-                opcode, payload = _read_frame(sock)
+                opcode, payload = _read_message(sock)
             except TimeoutError:
                 continue
             except (ConnectionError, OSError, WebSocketProtocolError):
                 break
 
             if opcode == OPCODE_TEXT:
-                runtime.handle_text(connection, payload.decode("utf-8"))
+                try:
+                    runtime.handle_text(connection, payload.decode("utf-8"))
+                except AppError as exc:
+                    log_debug(
+                        LOGGER,
+                        (
+                            "控制消息处理失败，关闭当前控制连接: "
+                            f"code={exc.code} message={exc.message} details={exc.details}"
+                        ),
+                        LogContext(device_id=connection.device_id, session_id=connection.session_id),
+                    )
+                    break
                 continue
             if opcode == OPCODE_PING:
                 _send_frame(sock, OPCODE_PONG, payload)
@@ -99,7 +111,7 @@ def handle_audio_websocket(handler, runtime: ControlRuntime, query: dict[str, li
     try:
         while True:
             try:
-                opcode, payload = _read_frame(sock)
+                opcode, payload = _read_message(sock)
             except TimeoutError:
                 continue
             except (ConnectionError, OSError, WebSocketProtocolError):
@@ -143,9 +155,10 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes:
     return bytes(chunks)
 
 
-def _read_frame(sock: socket.socket) -> tuple[int, bytes]:
+def _read_frame(sock: socket.socket) -> tuple[bool, int, bytes]:
     head = _recv_exact(sock, 2)
     first, second = head
+    fin = bool(first & 0x80)
     opcode = first & 0x0F
     masked = bool(second & 0x80)
     length = second & 0x7F
@@ -161,7 +174,37 @@ def _read_frame(sock: socket.socket) -> tuple[int, bytes]:
     mask_key = _recv_exact(sock, 4)
     payload = _recv_exact(sock, length)
     decoded = bytes(value ^ mask_key[index % 4] for index, value in enumerate(payload))
-    return opcode, decoded
+    return fin, opcode, decoded
+
+
+def _read_message(sock: socket.socket) -> tuple[int, bytes]:
+    """读取一条完整 WebSocket 消息。
+
+    主要逻辑：
+    1. 先读取首帧。
+    2. 若首帧已经结束，则直接返回。
+    3. 若消息被分片，则持续读取 continuation 帧并拼接 payload。
+
+    返回值：
+    1. 完整消息的 opcode 和拼接后的 payload。
+
+    异常情况：
+    1. 分片序列非法时抛出 `WebSocketProtocolError`。
+    """
+
+    fin, opcode, payload = _read_frame(sock)
+    if fin:
+        return opcode, payload
+    if opcode in {OPCODE_CLOSE, OPCODE_PING, OPCODE_PONG}:
+        raise WebSocketProtocolError("控制帧不允许使用分片")
+
+    chunks = bytearray(payload)
+    while not fin:
+        fin, continuation_opcode, continuation_payload = _read_frame(sock)
+        if continuation_opcode != OPCODE_CONTINUATION:
+            raise WebSocketProtocolError("WebSocket continuation 帧序列非法")
+        chunks.extend(continuation_payload)
+    return opcode, bytes(chunks)
 
 
 def _perform_handshake(handler) -> socket.socket:

@@ -210,7 +210,7 @@ system prompt 只保留：
 1. 助手身份。
 2. 语言风格。
 3. 必要安全边界。
-4. 为兼容当前 provider 所需的最小结构化输出约束。
+4. 需要工具时的最小使用原则。
 
 system prompt 不承载：
 
@@ -239,21 +239,22 @@ system prompt 不承载：
 
 当前模型侧只暴露 3 个高层工具：
 
-1. `photo_interpret`
+1. `capture_photo`
 2. `timer_manage`
 3. `map_manage`
 
 说明：
 
-1. `photo_interpret` 负责“需要看图时先拍照再回答”。
+1. `capture_photo` 只负责“需要看图时先拍照拿到当前画面”。
 2. `timer_manage` 负责“创建、查询、取消计时器”。
 3. `map_manage` 负责“地点搜索、地址解析、路线规划”。
+4. 若同一轮内连续生成多条助手语音回复，播放层必须按顺序排队播报，不能让后续回复覆盖前序播放。
 
 ### 8.3 当前内部能力
 
 内部保留但默认不直接暴露给模型的能力包括：
 
-1. `capture_photo`
+1. `photo_interpret`
 2. `create_timer`
 3. `query_task_status`
 4. `cancel_task`
@@ -266,8 +267,11 @@ system prompt 不承载：
 这样设计的原因是：
 
 1. 模型看到的工具越少，选择越稳定。
-2. 用户说的是“帮我看看前面有什么”“帮我定时 5 分钟”“导航去最近的咖啡店”，不是底层原子接口名。
-3. 复合业务流程应由框架封装，而不是让模型自己拼底层调用。
+2. 用户说的是“帮我看看前面有什么”“帮我定时 5 分钟”“导航去最近的咖啡店”，模型只需要看见与这些语义直接对应的高层入口。
+3. 拍照和图片理解要拆开：工具只负责获取真实图片，图片解读由主链路模型自己完成。
+4. 当视觉链路耗时较长时，框架可以在工具调用前后插入中间播报，减少长时间静默等待。
+5. 拍照完成后的图片解读要切换到专门的“看图直接回答”提示词，避免模型只说明已经拍照或追问保存照片。
+6. 每次模型决定再次调用 `capture_photo` 时，主链路只允许使用本次新抓拍的图片，不允许回退复用历史旧图。
 
 ---
 
@@ -413,9 +417,9 @@ system prompt 不承载：
 
 设计：
 
-1. `capture_photo` 作为内部本地能力
-2. `photo_interpret` 作为模型可见高层工具
-3. 图片通过 SDK 原生图片输入传给模型
+1. `capture_photo` 作为模型可见拍照工具
+2. `photo_interpret` 退回内部辅助能力，不再作为模型主入口
+3. 图片通过 SDK 原生图片输入传给主链路模型
 
 ### 13.4 第 7 项：AMap 导航
 
@@ -496,6 +500,6 @@ server/src/backend_task_core/
 1. 当前项目采用 OpenAI Agents SDK 作为 `agent-core` 的运行时基座。
 2. 模型不再使用项目自定义 `action` 协议。
 3. 工具调用完全依赖 SDK 原生 tool calling。
-4. 模型只看到 3 个高层工具：`photo_interpret / timer_manage / map_manage`。
+4. 模型只看到 3 个高层工具：`capture_photo / timer_manage / map_manage`。
 5. 框架负责上下文、媒体、任务、调试轨迹和设备协议，不把这些概念泄漏给模型。
 6. `backend-task-core` 与 `agent-core` 保持平级独立。

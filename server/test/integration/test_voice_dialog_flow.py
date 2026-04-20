@@ -58,7 +58,14 @@ class FakeAgentLoopRunner(AgentLoopRunner):
     def __init__(self) -> None:
         self.turns = []
 
-    def run_turn(self, *, session: AgentSession, turn) -> AgentTurnResult:
+    def run_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn,
+        progress_callback=None,
+        reply_text_delta_callback=None,
+    ) -> AgentTurnResult:
         self.turns.append(turn)
         return AgentTurnResult(
             turn_id=turn.turn_id,

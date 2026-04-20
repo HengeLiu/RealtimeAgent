@@ -120,6 +120,7 @@ class PlaybackStreamContext:
     channels: int
     queue: queue.Queue[bytes | None] = field(default_factory=lambda: queue.Queue(maxsize=PLAYBACK_QUEUE_MAX))
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    play_requested: bool = False
     started: bool = False
     completed: bool = False
     failed: bool = False
@@ -137,6 +138,7 @@ class VoiceSessionController:
     state: str = "opened"
     current_segment: SegmentBuffer | None = None
     current_playback: PlaybackStreamContext | None = None
+    pending_playbacks: list[PlaybackStreamContext] = field(default_factory=list)
     message_context: list[MessageEntry] = field(default_factory=list)
     audio_connection_peer: str | None = None
 
@@ -148,6 +150,282 @@ class ModelChunk:
     text_delta: str = ""
     audio_pcm_bytes: bytes = b""
     sample_rate_hz: int = MODEL_OUTPUT_SAMPLE_RATE_HZ
+
+
+@dataclass(slots=True)
+class ReplySynthesisContext:
+    """单条回复的语音合成上下文。
+
+    主要功能：
+    1. 保存一次回复对应的播放流和重采样状态。
+    2. 把流式 TTS 产出的音频持续写入眼镜播放队列。
+    """
+
+    stream_id: str
+    playback: PlaybackStreamContext
+    output_pcm: bytearray = field(default_factory=bytearray)
+    resampler: PCM16StreamResampler | None = None
+
+
+class StreamingTtsSession:
+    """流式 TTS 会话抽象接口。"""
+
+    def push_text(self, text_delta: str) -> None:
+        """推送一段新的文本增量。"""
+
+        raise NotImplementedError
+
+    def finish(self) -> None:
+        """通知 TTS 当前文本已经全部推送完成。"""
+
+        raise NotImplementedError
+
+
+class BufferedStreamingTtsSession(StreamingTtsSession):
+    """退化版流式 TTS 会话。
+
+    主要功能：
+    1. 在不支持真正增量合成时，先缓存所有文本。
+    2. 在 `finish()` 时一次性调用旧的全文 TTS 生成音频。
+    """
+
+    def __init__(
+        self,
+        *,
+        client: VoiceModelClient,
+        settings: ServerSettings,
+        on_chunk: Callable[[ModelChunk], None],
+    ) -> None:
+        self._client = client
+        self._settings = settings
+        self._on_chunk = on_chunk
+        self._parts: list[str] = []
+
+    def push_text(self, text_delta: str) -> None:
+        if text_delta:
+            self._parts.append(text_delta)
+
+    def finish(self) -> None:
+        text = "".join(self._parts).strip()
+        if not text:
+            text = "收到。"
+        for chunk in self._client.stream_tts(settings=self._settings, text=text):
+            self._on_chunk(chunk)
+
+
+def _normalize_tts_event_payload(event: Any) -> dict[str, Any]:
+    """归一化 TTS 事件对象。
+
+    主要逻辑：
+    1. 兼容字典、JSON 字符串和 SDK 对象三种输入。
+    2. 抽取 `header` 与 `payload` 两层结构，便于统一解析。
+
+    参数：
+    1. `event`：DashScope 回调给出的事件对象。
+
+    返回值：
+    1. 统一后的事件字典；无法识别时返回空字典。
+    """
+
+    if event is None:
+        return {}
+    if isinstance(event, dict):
+        return event
+    if isinstance(event, str):
+        try:
+            parsed = json.loads(event)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    for method_name in ("to_dict", "model_dump", "dict"):
+        method = getattr(event, method_name, None)
+        if callable(method):
+            try:
+                payload = method()
+            except TypeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+
+    header = _normalize_tts_event_payload(getattr(event, "header", None))
+    payload = _normalize_tts_event_payload(getattr(event, "payload", None))
+    if header or payload:
+        return {"header": header, "payload": payload}
+    return {}
+
+
+def _extract_tts_event_summary(event: Any) -> dict[str, Any] | None:
+    """提取需要保留的 TTS 关键事件摘要。
+
+    主要逻辑：
+    1. 只保留句子结束和任务完成两类节点。
+    2. 提取任务编号、句子序号、句子文本与字符数，便于排查问题。
+
+    参数：
+    1. `event`：DashScope 回调给出的事件对象。
+
+    返回值：
+    1. 关键事件摘要；若当前事件无需记录则返回 `None`。
+    """
+
+    payload = _normalize_tts_event_payload(event)
+    if not payload:
+        return None
+
+    header = payload.get("header")
+    payload_body = payload.get("payload")
+    if not isinstance(header, dict) or not isinstance(payload_body, dict):
+        return None
+
+    task_id = header.get("task_id")
+    if header.get("event") == "task-finished":
+        return {"kind": "task-finished", "task_id": task_id}
+
+    output = payload_body.get("output")
+    if not isinstance(output, dict):
+        return None
+    if output.get("type") != "sentence-end":
+        return None
+
+    sentence = output.get("sentence")
+    usage = output.get("usage")
+    if not isinstance(sentence, dict):
+        sentence = {}
+    if not isinstance(usage, dict):
+        usage = {}
+
+    return {
+        "kind": "sentence-end",
+        "task_id": task_id,
+        "sentence_index": sentence.get("index"),
+        "text": (output.get("original_text") or "").strip(),
+        "characters": usage.get("characters"),
+    }
+
+
+class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
+    """基于百炼 CosyVoice WebSocket 的真正流式 TTS 会话。"""
+
+    def __init__(
+        self,
+        *,
+        settings: ServerSettings,
+        on_chunk: Callable[[ModelChunk], None],
+    ) -> None:
+        try:
+            import dashscope
+            from dashscope.audio.tts_v2 import AudioFormat, ResultCallback, SpeechSynthesizer
+        except ImportError as exc:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "缺少 dashscope 依赖，无法启用 CosyVoice 流式 TTS",
+                details={"hint": "请执行 uv sync 安装 dashscope"},
+            ) from exc
+
+        self._settings = settings
+        self._on_chunk = on_chunk
+        self._error_message: str | None = None
+        self._completed = threading.Event()
+        self._closed = threading.Event()
+        self._logger = get_logger("server.voice")
+        self._task_id: str | None = None
+
+        dashscope.api_key = settings.dashscope_api_key
+        dashscope.base_websocket_api_url = settings.tts_websocket_api_url
+
+        completed_event = self._completed
+        closed_event = self._closed
+        error_box = self
+        chunk_sink = self._on_chunk
+        sample_rate_hz = settings.tts_sample_rate_hz
+
+        class _Callback(ResultCallback):
+            """CosyVoice 回调桥接器。"""
+
+            def on_open(self):  # pragma: no cover - 真实联调路径
+                return None
+
+            def on_complete(self):  # pragma: no cover - 真实联调路径
+                completed_event.set()
+
+            def on_error(self, message: str):  # pragma: no cover - 真实联调路径
+                error_box._error_message = message
+                completed_event.set()
+
+            def on_close(self):  # pragma: no cover - 真实联调路径
+                closed_event.set()
+
+            def on_event(self, message):  # pragma: no cover - 真实联调路径
+                error_box._handle_event(message)
+
+            def on_data(self, data: bytes) -> None:  # pragma: no cover - 真实联调路径
+                if data:
+                    chunk_sink(ModelChunk(audio_pcm_bytes=data, sample_rate_hz=sample_rate_hz))
+
+        self._synthesizer = SpeechSynthesizer(
+            model=settings.tts_model_name,
+            voice=settings.tts_voice,
+            format=AudioFormat.PCM_22050HZ_MONO_16BIT,
+            callback=_Callback(),
+        )
+
+    def push_text(self, text_delta: str) -> None:
+        if text_delta:
+            self._synthesizer.streaming_call(text_delta)
+
+    def finish(self) -> None:
+        log_debug(
+            self._logger,
+            (
+                "TTS 文本推送完成，等待音频收尾: "
+                f"task_id={self._task_id or '<pending>'} "
+                f"model={self._settings.tts_model_name} voice={self._settings.tts_voice}"
+            ),
+        )
+        self._synthesizer.streaming_complete()
+        completed = self._completed.wait(timeout=max(5.0, self._settings.voice_model_timeout_ms / 1000))
+        if not completed:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "CosyVoice 流式 TTS 等待完成超时",
+            )
+        if self._error_message:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "CosyVoice 流式 TTS 调用失败",
+                details={"reason": self._error_message},
+            )
+
+    def _handle_event(self, event: Any) -> None:
+        """处理 DashScope 回调事件并输出精简日志。"""
+
+        summary = _extract_tts_event_summary(event)
+        if summary is None:
+            return
+
+        task_id = summary.get("task_id")
+        if isinstance(task_id, str) and task_id.strip():
+            self._task_id = task_id
+
+        if summary["kind"] == "sentence-end":
+            log_debug(
+                self._logger,
+                (
+                    "TTS 句子完成: "
+                    f"task_id={self._task_id or '<unknown>'} "
+                    f"sentence_index={summary.get('sentence_index')} "
+                    f"characters={summary.get('characters')} "
+                    f"text={summary.get('text')}"
+                ),
+            )
+            return
+
+        if summary["kind"] == "task-finished":
+            log_debug(
+                self._logger,
+                f"TTS 任务完成: task_id={self._task_id or '<unknown>'}",
+            )
 
 
 class VoiceModelClient:
@@ -186,6 +464,25 @@ class VoiceModelClient:
             ],
         )
 
+    def create_streaming_tts_session(
+        self,
+        *,
+        settings: ServerSettings,
+        on_chunk: Callable[[ModelChunk], None],
+    ) -> StreamingTtsSession:
+        """创建一个支持增量文本输入的 TTS 会话。
+
+        主要逻辑：
+        1. 默认返回退化版实现。
+        2. 若子类支持真正的增量语音合成，可以覆盖该方法。
+        """
+
+        return BufferedStreamingTtsSession(
+            client=self,
+            settings=settings,
+            on_chunk=on_chunk,
+        )
+
 
 class SpeechRecognitionClient:
     """语音转写客户端接口。
@@ -221,6 +518,42 @@ class DashscopeVoiceModelClient(VoiceModelClient):
         """
 
         self._sdk_client = sdk_client
+
+    def create_streaming_tts_session(
+        self,
+        *,
+        settings: ServerSettings,
+        on_chunk: Callable[[ModelChunk], None],
+    ) -> StreamingTtsSession:
+        """创建 DashScope CosyVoice 流式 TTS 会话。
+
+        主要逻辑：
+        1. 优先尝试使用官方 `dashscope.audio.tts_v2` WebSocket 能力。
+        2. 若本地缺少依赖或初始化失败，则回退到兼容旧逻辑的全文 TTS。
+        """
+
+        try:
+            session = DashscopeCosyVoiceTtsSession(
+                settings=settings,
+                on_chunk=on_chunk,
+            )
+            log_debug(
+                get_logger("server.voice"),
+                (
+                    "CosyVoice 流式 TTS 初始化成功: "
+                    f"model={settings.tts_model_name} voice={settings.tts_voice} "
+                    f"sample_rate_hz={settings.tts_sample_rate_hz}"
+                ),
+                LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+            )
+            return session
+        except Exception as exc:  # pragma: no cover - 依赖缺失时走降级
+            log_debug(
+                get_logger("server.voice"),
+                f"CosyVoice 流式 TTS 初始化失败，回退全文 TTS: reason={exc!r}",
+                LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+            )
+            return super().create_streaming_tts_session(settings=settings, on_chunk=on_chunk)
 
     def stream_reply(self, *, settings: ServerSettings, messages: list[dict[str, Any]]) -> Iterable[ModelChunk]:
         """调用百炼兼容接口并返回流式回复。
@@ -539,6 +872,7 @@ class VoiceRuntime:
                 controller.state = "opened"
                 controller.current_segment = None
                 controller.current_playback = None
+                controller.pending_playbacks.clear()
 
     def build_open_payload(self) -> dict[str, Any]:
         return {
@@ -570,15 +904,22 @@ class VoiceRuntime:
             controller = self._controllers.get(device_id)
             if controller is None:
                 return
+            playback_streams = []
             if controller.current_playback is not None:
-                controller.current_playback.abort_event.set()
-                controller.current_playback.failed = True
-                controller.current_playback.completed = True
-                controller.current_playback.finished_event.set()
+                playback_streams.append(controller.current_playback)
+            playback_streams.extend(controller.pending_playbacks)
+            for playback in playback_streams:
+                playback.abort_event.set()
+                playback.failed = True
+                playback.completed = True
+                playback.finished_event.set()
+                self._playback_streams.pop((device_id, playback.stream_id), None)
                 try:
-                    controller.current_playback.queue.put_nowait(None)
+                    playback.queue.put_nowait(None)
                 except queue.Full:
                     pass
+            controller.current_playback = None
+            controller.pending_playbacks.clear()
             controller.state = "closed"
             controller.audio_connection_peer = None
 
@@ -707,22 +1048,24 @@ class VoiceRuntime:
         controller = self._get_controller(device_id)
         with self._lock:
             self._ensure_session_match(controller, session_id)
-            playback = controller.current_playback
-            if playback is None or playback.stream_id != stream_id:
+            playback = self._playback_streams.get((device_id, stream_id))
+            if playback is None:
                 raise build_error(
                     ErrorCode.STREAM_NOT_FOUND,
                     "actuator.audio.started 对应播放流不存在",
                     details={"device_id": device_id, "stream_id": stream_id},
                 )
             playback.started = True
-            controller.state = "replying"
+            if controller.current_playback is playback:
+                controller.state = "replying"
 
     def on_playback_finished(self, *, device_id: str, session_id: str, stream_id: str) -> None:
         controller = self._get_controller(device_id)
+        next_playback: PlaybackStreamContext | None = None
         with self._lock:
             self._ensure_session_match(controller, session_id)
-            playback = controller.current_playback
-            if playback is None or playback.stream_id != stream_id:
+            playback = self._playback_streams.get((device_id, stream_id))
+            if playback is None:
                 raise build_error(
                     ErrorCode.STREAM_NOT_FOUND,
                     "actuator.audio.finished 对应播放流不存在",
@@ -730,9 +1073,22 @@ class VoiceRuntime:
                 )
             playback.completed = True
             playback.finished_event.set()
-            controller.current_playback = None
-            controller.state = "listening"
             self._playback_streams.pop((device_id, stream_id), None)
+            if controller.current_playback is playback:
+                if controller.pending_playbacks:
+                    next_playback = controller.pending_playbacks.pop(0)
+                    controller.current_playback = next_playback
+                    controller.state = "reply_streaming"
+                else:
+                    controller.current_playback = None
+                    controller.state = "listening"
+        if next_playback is not None:
+            self._request_playback_start(
+                device_id=device_id,
+                session_id=session_id,
+                playback=next_playback,
+                force=not next_playback.queue.empty() or next_playback.completed,
+            )
 
     def stream_playback(self, handler, *, device_id: str, stream_id: str) -> None:
         playback = self._wait_for_playback(device_id=device_id, stream_id=stream_id, timeout_s=10.0)
@@ -842,7 +1198,47 @@ class VoiceRuntime:
                     "stream_id": segment.stream_id,
                 },
             )
-            agent_result = self._agent_facade.handle_turn(turn)
+            streamed_reply_parts: list[str] = []
+            final_synthesis_context: ReplySynthesisContext | None = None
+            final_tts_session: StreamingTtsSession | None = None
+
+            def _handle_progress_text(text: str) -> None:
+                progress_text = text.strip()
+                if not progress_text:
+                    return
+                threading.Thread(
+                    target=self._play_intermediate_reply,
+                    args=(device_id, session_id, progress_text),
+                    daemon=True,
+                ).start()
+
+            def _handle_reply_text_delta(text_delta: str) -> None:
+                nonlocal final_synthesis_context, final_tts_session
+                if not text_delta:
+                    return
+                streamed_reply_parts.append(text_delta)
+                if final_synthesis_context is None:
+                    final_synthesis_context = self._open_reply_synthesis_context(
+                        device_id=device_id,
+                        session_id=session_id,
+                    )
+                    final_tts_session = self._model_client.create_streaming_tts_session(
+                        settings=self._settings,
+                        on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                            device_id=device_id,
+                            session_id=session_id,
+                            context=final_synthesis_context,
+                            chunk=chunk,
+                        ),
+                    )
+                assert final_tts_session is not None
+                final_tts_session.push_text(text_delta)
+
+            agent_result = self._agent_facade.handle_turn(
+                turn,
+                progress_callback=_handle_progress_text,
+                reply_text_delta_callback=_handle_reply_text_delta,
+            )
             capability_trace_ids = [trace.trace_id for trace in agent_result.capability_traces]
             log_debug(
                 self._logger,
@@ -855,89 +1251,55 @@ class VoiceRuntime:
                     f"Agent 失败详情: error={agent_result.error} meta={agent_result.meta}",
                     LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
                 )
-            playback = self._create_playback_stream(device_id=device_id, session_id=session_id, stream_id=playback_stream_id)
-            assistant_text = agent_result.reply_text.strip() or "收到。"
-            self._send_control_message(
-                device_id,
-                "notify",
-                "assistant.reply",
-                session_id,
-                {
-                    "device_id": device_id,
-                    "text": assistant_text,
-                    "stream_id": playback_stream_id,
-                },
-            )
-            play_sent = False
-            resampler: PCM16StreamResampler | None = None
-
-            for chunk in self._model_client.stream_tts(settings=self._settings, text=agent_result.reply_text):
-                if chunk.audio_pcm_bytes:
-                    if resampler is None or chunk.sample_rate_hz != resampler._input_rate_hz:
-                        resampler = PCM16StreamResampler(chunk.sample_rate_hz, SERVER_SAMPLE_RATE_HZ)
-                    pcm_chunk = resampler.push(chunk.audio_pcm_bytes, final=False)
-                    if pcm_chunk:
-                        if not play_sent:
-                            self._send_control_message(
-                                device_id,
-                                "request",
-                                "actuator.audio.play",
-                                session_id,
-                                {
-                                    "mode": "stream",
-                                    "stream_id": playback_stream_id,
-                                    "format": "pcm16",
-                                    "sample_rate": SERVER_SAMPLE_RATE_HZ,
-                                    "channels": SERVER_CHANNELS,
-                                    "interrupt_policy": "forbid",
-                                },
-                            )
-                            play_sent = True
-                        self._enqueue_playback_chunk(playback, pcm_chunk)
-                        output_pcm.extend(pcm_chunk)
-
-            if resampler is not None:
-                tail_chunk = resampler.push(b"", final=True)
-                if tail_chunk:
-                    if not play_sent:
-                        self._send_control_message(
-                            device_id,
-                            "request",
-                            "actuator.audio.play",
-                            session_id,
-                            {
-                                "mode": "stream",
-                                "stream_id": playback_stream_id,
-                                "format": "pcm16",
-                                "sample_rate": SERVER_SAMPLE_RATE_HZ,
-                                "channels": SERVER_CHANNELS,
-                                "interrupt_policy": "forbid",
-                            },
-                        )
-                        play_sent = True
-                    self._enqueue_playback_chunk(playback, tail_chunk)
-                    output_pcm.extend(tail_chunk)
-
-            if not play_sent:
-                silent_chunk = b"\x00" * 640
+            assistant_text = "".join(streamed_reply_parts).strip() or agent_result.reply_text.strip() or "收到。"
+            if final_synthesis_context is not None and final_tts_session is not None:
+                final_tts_session.finish()
+                self._finalize_synthesis_context(
+                    device_id=device_id,
+                    session_id=session_id,
+                    context=final_synthesis_context,
+                )
+                playback_stream_id = final_synthesis_context.stream_id
+                output_pcm.extend(final_synthesis_context.output_pcm)
+            else:
+                final_synthesis_context = self._open_reply_synthesis_context(
+                    device_id=device_id,
+                    session_id=session_id,
+                )
+                playback_stream_id = final_synthesis_context.stream_id
                 self._send_control_message(
                     device_id,
-                    "request",
-                    "actuator.audio.play",
+                    "notify",
+                    "assistant.reply",
                     session_id,
                     {
-                        "mode": "stream",
+                        "device_id": device_id,
+                        "text": assistant_text,
                         "stream_id": playback_stream_id,
-                        "format": "pcm16",
-                        "sample_rate": SERVER_SAMPLE_RATE_HZ,
-                        "channels": SERVER_CHANNELS,
-                        "interrupt_policy": "forbid",
                     },
                 )
-                self._enqueue_playback_chunk(playback, silent_chunk)
-                output_pcm.extend(silent_chunk)
+                self._synthesize_text_into_context(
+                    device_id=device_id,
+                    session_id=session_id,
+                    context=final_synthesis_context,
+                    text=assistant_text,
+                )
+                playback_stream_id = final_synthesis_context.stream_id
+                output_pcm.extend(final_synthesis_context.output_pcm)
+                playback_stream_id = final_synthesis_context.stream_id
 
-            self._finish_playback_stream(playback)
+            if final_tts_session is not None and final_synthesis_context is not None:
+                self._send_control_message(
+                    device_id,
+                    "notify",
+                    "assistant.reply",
+                    session_id,
+                    {
+                        "device_id": device_id,
+                        "text": assistant_text,
+                        "stream_id": playback_stream_id,
+                    },
+                )
             output_path = self._store_asset(
                 session_id,
                 "output",
@@ -966,7 +1328,10 @@ class VoiceRuntime:
                 )
 
             with self._lock:
-                if controller.current_playback is playback:
+                if (
+                    final_synthesis_context is not None
+                    and controller.current_playback is final_synthesis_context.playback
+                ):
                     controller.state = "reply_streaming"
 
             log_debug(
@@ -1050,6 +1415,182 @@ class VoiceRuntime:
             return {"role": entry.role, "content": entry.text}
         return None
 
+    def _play_intermediate_reply(self, device_id: str, session_id: str, text: str) -> None:
+        """异步播报一段中间提示语。"""
+
+        try:
+            context = self._open_reply_synthesis_context(device_id=device_id, session_id=session_id)
+            self._send_control_message(
+                device_id,
+                "notify",
+                "assistant.reply",
+                session_id,
+                {
+                    "device_id": device_id,
+                    "text": text,
+                    "stream_id": context.stream_id,
+                },
+            )
+            self._synthesize_text_into_context(
+                device_id=device_id,
+                session_id=session_id,
+                context=context,
+                text=text,
+            )
+        except Exception as exc:  # pragma: no cover - 真实联调路径
+            log_debug(
+                self._logger,
+                f"中间播报失败，已忽略: reason={exc!r}",
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+
+    def _synthesize_text_into_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        context: ReplySynthesisContext,
+        text: str,
+    ) -> None:
+        """把完整文本合成到指定播放流上下文。
+
+        主要逻辑：
+        1. 优先走统一的流式 TTS 会话接口。
+        2. 即使当前只有完整文本，也按“推送文本 -> 完成”的方式进入 TTS，
+           这样中间播报与最终播报都能复用 CosyVoice 流式链路。
+        """
+
+        tts_session = self._model_client.create_streaming_tts_session(
+            settings=self._settings,
+            on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                device_id=device_id,
+                session_id=session_id,
+                context=context,
+                chunk=chunk,
+            ),
+        )
+        tts_session.push_text(text)
+        tts_session.finish()
+        self._finalize_synthesis_context(device_id=device_id, session_id=session_id, context=context)
+
+    def _open_reply_synthesis_context(self, *, device_id: str, session_id: str) -> ReplySynthesisContext:
+        """创建一条新的回复播放流上下文。"""
+
+        stream_id = f"reply_{uuid.uuid4().hex[:12]}"
+        playback = self._create_playback_stream(device_id=device_id, session_id=session_id, stream_id=stream_id)
+        return ReplySynthesisContext(stream_id=stream_id, playback=playback)
+
+    def _request_playback_start(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        playback: PlaybackStreamContext,
+        force: bool,
+    ) -> None:
+        """按当前播放队列状态决定是否下发播放请求。
+
+        主要逻辑：
+        1. 只有当前激活播放流才能真正启动播放。
+        2. 已经下发过 `actuator.audio.play` 的流不重复下发。
+        3. 对排队中的后续流，仅缓存音频，待前序流结束后再启动。
+
+        参数：
+        1. `device_id`：设备编号。
+        2. `session_id`：会话编号。
+        3. `playback`：目标播放流。
+        4. `force`：是否在已有音频时立即启动。
+        """
+
+        should_send = False
+        with self._lock:
+            controller = self._controllers.get(device_id)
+            if controller is None:
+                raise build_error(
+                    ErrorCode.STREAM_NOT_FOUND,
+                    "未找到对应设备的语音会话控制器",
+                    details={"device_id": device_id},
+                )
+            if controller.current_playback is playback and not playback.play_requested and force:
+                playback.play_requested = True
+                should_send = True
+
+        if should_send:
+            self._send_control_message(
+                device_id,
+                "request",
+                "actuator.audio.play",
+                session_id,
+                {
+                    "mode": "stream",
+                    "stream_id": playback.stream_id,
+                    "format": "pcm16",
+                    "sample_rate": SERVER_SAMPLE_RATE_HZ,
+                    "channels": SERVER_CHANNELS,
+                    "interrupt_policy": "forbid",
+                },
+            )
+
+    def _emit_synthesis_chunk(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        context: ReplySynthesisContext,
+        chunk: ModelChunk,
+    ) -> None:
+        """把 TTS 音频分片推入当前播放流。"""
+
+        if not chunk.audio_pcm_bytes:
+            return
+        if context.resampler is None or chunk.sample_rate_hz != context.resampler._input_rate_hz:
+            context.resampler = PCM16StreamResampler(chunk.sample_rate_hz, SERVER_SAMPLE_RATE_HZ)
+        pcm_chunk = context.resampler.push(chunk.audio_pcm_bytes, final=False)
+        if not pcm_chunk:
+            return
+        self._enqueue_playback_chunk(context.playback, pcm_chunk)
+        context.output_pcm.extend(pcm_chunk)
+        self._request_playback_start(
+            device_id=device_id,
+            session_id=session_id,
+            playback=context.playback,
+            force=True,
+        )
+
+    def _finalize_synthesis_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        context: ReplySynthesisContext,
+    ) -> None:
+        """结束回复播放流，并补齐重采样尾巴。"""
+
+        if context.resampler is not None:
+            tail_chunk = context.resampler.push(b"", final=True)
+            if tail_chunk:
+                self._enqueue_playback_chunk(context.playback, tail_chunk)
+                context.output_pcm.extend(tail_chunk)
+                self._request_playback_start(
+                    device_id=device_id,
+                    session_id=session_id,
+                    playback=context.playback,
+                    force=True,
+                )
+
+        if not context.playback.play_requested:
+            silent_chunk = b"\x00" * 640
+            self._enqueue_playback_chunk(context.playback, silent_chunk)
+            context.output_pcm.extend(silent_chunk)
+            self._request_playback_start(
+                device_id=device_id,
+                session_id=session_id,
+                playback=context.playback,
+                force=True,
+            )
+
+        self._finish_playback_stream(context.playback)
+
     def _create_playback_stream(self, *, device_id: str, session_id: str, stream_id: str) -> PlaybackStreamContext:
         playback = PlaybackStreamContext(
             device_id=device_id,
@@ -1066,7 +1607,10 @@ class VoiceRuntime:
                     "未找到对应设备的语音会话控制器",
                     details={"device_id": device_id},
                 )
-            controller.current_playback = playback
+            if controller.current_playback is None or controller.current_playback.completed:
+                controller.current_playback = playback
+            else:
+                controller.pending_playbacks.append(playback)
             self._playback_streams[(device_id, stream_id)] = playback
             self._playback_condition.notify_all()
         return playback
@@ -1099,6 +1643,17 @@ class VoiceRuntime:
             playback.abort_event.set()
             playback.finished_event.set()
             controller.current_playback = None
+            for pending in controller.pending_playbacks:
+                pending.failed = True
+                pending.completed = True
+                pending.abort_event.set()
+                pending.finished_event.set()
+                self._playback_streams.pop((device_id, pending.stream_id), None)
+                try:
+                    pending.queue.put_nowait(None)
+                except queue.Full:
+                    pass
+            controller.pending_playbacks.clear()
             controller.state = "failed"
             self._playback_streams.pop((device_id, playback.stream_id), None)
         try:

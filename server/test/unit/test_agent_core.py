@@ -6,10 +6,11 @@ import asyncio
 import inspect
 import os
 import sys
+import tempfile
 import threading
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from agent_core import AgentFacade, AgentTurn, AgentTurnResult, DerivedArtifact, MediaAssetRef
 from agent_core.camera import CameraCaptureResult
@@ -95,6 +96,10 @@ def install_fake_agents_module():
         def run_sync(*args, **kwargs):  # pragma: no cover - 测试会 patch
             raise AssertionError("Runner.run_sync should be patched in tests")
 
+        @staticmethod
+        def run_streamed(*args, **kwargs):  # pragma: no cover - 测试会 patch
+            raise AssertionError("Runner.run_streamed should be patched in tests")
+
     module.Agent = Agent
     module.MultiProvider = MultiProvider
     module.RunConfig = RunConfig
@@ -108,7 +113,14 @@ class FakeAgentLoopRunner(AgentLoopRunner):
     def __init__(self) -> None:
         self.turns: list[AgentTurn] = []
 
-    def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
+    def run_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        progress_callback=None,
+        reply_text_delta_callback=None,
+    ) -> AgentTurnResult:
         self.turns.append(turn)
         return AgentTurnResult(
             turn_id=turn.turn_id,
@@ -132,7 +144,14 @@ class FakeAgentLoopRunner(AgentLoopRunner):
 class ErrorAgentLoopRunner(AgentLoopRunner):
     """测试用失败运行循环。"""
 
-    def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
+    def run_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        progress_callback=None,
+        reply_text_delta_callback=None,
+    ) -> AgentTurnResult:
         raise build_error(
             ErrorCode.INTERNAL_ERROR,
             "模拟 agent-core 失败",
@@ -142,7 +161,14 @@ class ErrorAgentLoopRunner(AgentLoopRunner):
 class AskUserAgentLoopRunner(AgentLoopRunner):
     """测试用普通回复运行循环。"""
 
-    def run_turn(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnResult:
+    def run_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        progress_callback=None,
+        reply_text_delta_callback=None,
+    ) -> AgentTurnResult:
         return AgentTurnResult(
             turn_id=turn.turn_id,
             session_id=turn.session_id,
@@ -671,13 +697,301 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("agent-core 运行失败", result.reply_text)
         self.assertEqual(len(result.capability_traces), 0)
 
+    def test_openai_runner_can_emit_progress_before_capture_photo(self) -> None:
+        """测试目标：验证视觉链路会在拍照前发出中间播报。
+
+        测试方法：
+        1. 伪造 `run_streamed` 事件流，只产出 `capture_photo` 的 tool_called/tool_output。
+        2. 将主链路图片续跑方法打桩为固定回复。
+        3. 收集中间播报回调与最终结果。
+
+        预期结果：
+        1. 中间播报会先收到“好的，你保持别动，我拍一张帮你看。”
+        2. 最终回复来自图片续跑阶段。
+        """
+
+        registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_stream_photo_001", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_stream_photo_001",
+            session_id="sess_stream_photo_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="看一下我眼前是什么",
+        )
+        progress_messages: list[str] = []
+
+        class _FakeStream:
+            def __init__(self, events) -> None:
+                self._events = iter(events)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._events)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        class _FakeRunResult:
+            final_output = ""
+
+            def stream_events(self):
+                tool_called = types.SimpleNamespace(
+                    type="run_item_stream_event",
+                    name="tool_called",
+                    item=types.SimpleNamespace(raw_item=types.SimpleNamespace(name="capture_photo", call_id="call_photo_001")),
+                )
+                tool_output = types.SimpleNamespace(
+                    type="run_item_stream_event",
+                    name="tool_output",
+                    item=types.SimpleNamespace(raw_item=types.SimpleNamespace(call_id="call_photo_001")),
+                )
+                return _FakeStream([tool_called, tool_output])
+
+            def cancel(self):
+                return None
+
+        async def _fake_followup(*args, **kwargs):
+            return "我看到前方有一张桌子。"
+
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_streamed", return_value=_FakeRunResult()):
+                with patch.object(
+                    runner,
+                    "_wait_for_new_image_asset",
+                    new=AsyncMock(
+                        return_value=MediaAssetRef(
+                            asset_id="asset_test_001",
+                            session_id="sess_stream_photo_001",
+                            asset_type="image",
+                            storage_uri="/tmp/fake.jpg",
+                            mime_type="image/jpeg",
+                        )
+                    ),
+                ):
+                    with patch.object(runner, "_stream_image_followup_reply", side_effect=_fake_followup):
+                        result = runner.run_turn(
+                            session=session,
+                            turn=turn,
+                            progress_callback=progress_messages.append,
+                        )
+
+        self.assertEqual(progress_messages, ["好的，你保持别动，我拍一张帮你看。"])
+        self.assertEqual(result.reply_text, "我看到前方有一张桌子。")
+
+    def test_stream_image_followup_reply_uses_multimodal_request(self) -> None:
+        """测试目标：验证拍照后主链路会把真实图片作为多模态输入发给模型。
+
+        测试方法：
+        1. 构造带图片资产的会话与上下文。
+        2. 注入假 SDK 客户端，记录 `chat.completions.create` 请求参数。
+        3. 调用 `_stream_image_followup_reply(...)` 收集文本增量。
+
+        预期结果：
+        1. 模型请求最后一条用户消息包含文本和 `image_url` 两个 part。
+        2. 系统提示词明确要求直接根据图片回答，不再追问是否保存照片。
+        3. 返回文本与增量回调内容一致。
+        """
+
+        temp_dir = tempfile.mkdtemp(prefix="agent-image-followup-")
+        image_path = os.path.join(temp_dir, "capture.png")
+        with open(image_path, "wb") as file:
+            file.write(_FAKE_PNG_BYTES)
+
+        session_store = AgentSessionStore()
+        session = session_store.get_or_create_session(
+            session_id="sess_image_followup_001",
+            device_id="glass-001",
+        )
+        image_asset = MediaAssetRef(
+            asset_id="asset_image_followup_001",
+            session_id="sess_image_followup_001",
+            asset_type="image",
+            storage_uri=image_path,
+            mime_type="image/png",
+        )
+        session.assets[image_asset.asset_id] = image_asset
+        session.messages.append(
+            MessageContext(
+                message_id="msg_hist_001",
+                session_id="sess_image_followup_001",
+                role="assistant",
+                kind="assistant_reply",
+                text="上一轮我已经回答过一次。",
+            )
+        )
+
+        registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=session_store,
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        tool_context = AgentToolContext(
+            session_id="sess_image_followup_001",
+            device_id="glass-001",
+            turn_id="turn_image_followup_001",
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=session_store,
+            device_state_reader=registry.get_device_state_reader(),
+            trace_sink=lambda _trace: None,
+            task_gateway=registry.get_task_gateway(),
+            camera_gateway=registry.get_camera_gateway(),
+            tool_gateway=gateway,
+            skill_gateway=registry.get_skill_gateway(),
+            mcp_gateway=registry.get_mcp_gateway(),
+        )
+        tool_context.emitted_assets.append(image_asset)
+        turn = AgentTurn(
+            turn_id="turn_image_followup_001",
+            session_id="sess_image_followup_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="看看我眼前有什么。",
+        )
+
+        captured_requests: list[dict[str, object]] = []
+
+        class _FakeChunk:
+            def __init__(self, text: str) -> None:
+                self.choices = [types.SimpleNamespace(delta=types.SimpleNamespace(content=text))]
+
+        class _FakeChatCompletions:
+            def create(self, **kwargs):
+                captured_requests.append(kwargs)
+                return [_FakeChunk("前面"), _FakeChunk("有一张桌子。")]
+
+        class _FakeChat:
+            completions = _FakeChatCompletions()
+
+        class _FakeClient:
+            chat = _FakeChat()
+
+        delta_parts: list[str] = []
+
+        with patch.object(runner, "_create_sdk_client", return_value=_FakeClient()):
+            reply_text = asyncio.run(
+                runner._stream_image_followup_reply(
+                    tool_context=tool_context,
+                    turn=turn,
+                    image_asset=image_asset,
+                    history_session=session,
+                    reply_text_delta_callback=delta_parts.append,
+                )
+            )
+
+        self.assertEqual(reply_text, "前面有一张桌子。")
+        self.assertEqual(delta_parts, ["前面", "有一张桌子。"])
+        self.assertEqual(len(captured_requests), 1)
+        request = captured_requests[0]
+        self.assertEqual(request["model"], "qwen3.6-plus")
+        messages = request["messages"]
+        assert isinstance(messages, list)
+        self.assertIn("请直接结合图片回答用户刚才的问题", messages[0]["content"])
+        self.assertIn("不要只说你已经拍照了", messages[0]["content"])
+        user_message = messages[-1]
+        self.assertEqual(user_message["role"], "user")
+        assert isinstance(user_message["content"], list)
+        self.assertEqual(user_message["content"][0]["type"], "text")
+        self.assertEqual(user_message["content"][0]["text"], "看看我眼前有什么。")
+        self.assertEqual(user_message["content"][1]["type"], "image_url")
+        self.assertTrue(user_message["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_wait_for_new_image_asset_skips_old_history_image(self) -> None:
+        """测试目标：验证拍照续跑只会等待本次新抓拍图片，不会复用旧图。
+
+        测试方法：
+        1. 先在会话里放入一张历史图片。
+        2. 调用 `_wait_for_new_image_asset(...)`，并在短延迟后追加一张新图。
+        3. 检查返回的是否为新增图片。
+
+        预期结果：
+        1. 旧图片会被排除。
+        2. 返回值是本次新增的图片资产。
+        """
+
+        session_store = AgentSessionStore()
+        session = session_store.get_or_create_session(
+            session_id="sess_new_image_001",
+            device_id="glass-001",
+        )
+        old_image = MediaAssetRef(
+            asset_id="asset_old_image_001",
+            session_id="sess_new_image_001",
+            asset_type="image",
+            storage_uri="/tmp/old.jpg",
+            mime_type="image/jpeg",
+        )
+        session.assets[old_image.asset_id] = old_image
+
+        registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=session_store,
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        tool_context = AgentToolContext(
+            session_id="sess_new_image_001",
+            device_id="glass-001",
+            turn_id="turn_new_image_001",
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=session_store,
+            device_state_reader=registry.get_device_state_reader(),
+            trace_sink=lambda _trace: None,
+            task_gateway=registry.get_task_gateway(),
+            camera_gateway=registry.get_camera_gateway(),
+            tool_gateway=gateway,
+            skill_gateway=registry.get_skill_gateway(),
+            mcp_gateway=registry.get_mcp_gateway(),
+        )
+
+        async def _exercise():
+            async def _append_new_image():
+                await asyncio.sleep(0.02)
+                tool_context.emitted_assets.append(
+                    MediaAssetRef(
+                        asset_id="asset_new_image_001",
+                        session_id="sess_new_image_001",
+                        asset_type="image",
+                        storage_uri="/tmp/new.jpg",
+                        mime_type="image/jpeg",
+                    )
+                )
+
+            producer = asyncio.create_task(_append_new_image())
+            try:
+                return await runner._wait_for_new_image_asset(
+                    tool_context=tool_context,
+                    session=session,
+                    excluded_asset_ids={"asset_old_image_001"},
+                    timeout_seconds=0.5,
+                )
+            finally:
+                await producer
+
+        image_asset = asyncio.run(_exercise())
+
+        self.assertIsNotNone(image_asset)
+        assert image_asset is not None
+        self.assertEqual(image_asset.asset_id, "asset_new_image_001")
+
     def test_tool_registry_only_exposes_three_model_facing_tools(self) -> None:
         """测试目标：验证当前只向模型暴露计时器、拍照和地图三个工具。"""
 
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, {"photo_interpret", "timer_manage", "map_manage"})
+        self.assertEqual(tool_names, {"capture_photo", "timer_manage", "map_manage"})
         self.assertIsNotNone(registry.get("capture_photo"))
         self.assertIsNotNone(registry.get("create_timer"))
         self.assertIsNotNone(registry.get("amap_route_plan"))
