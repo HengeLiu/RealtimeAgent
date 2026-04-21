@@ -243,6 +243,107 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertTrue(first.completed)
         self.assertEqual(snapshot["glass-001"]["reply_stream_id"], second.stream_id)
 
+    def test_on_playback_finished_ignores_late_interrupt_finish(self) -> None:
+        """测试目标：验证被打断旧流的迟到完成回报会被忽略。
+
+        测试方法：
+        1. 构造一个最小运行时与会话。
+        2. 预先登记一条已打断播放流标记。
+        3. 直接上报该流的 `actuator.audio.finished`。
+
+        预期结果：
+        1. 运行时不会抛出找不到播放流异常。
+        2. 已打断标记会在收到完成回报后被清理。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime._interrupted_playback_streams.add(("glass-001", "stream_interrupt"))  # noqa: SLF001 - 单测覆盖迟到回报路径
+
+        runtime.on_playback_finished(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="stream_interrupt",
+        )
+
+        self.assertNotIn(("glass-001", "stream_interrupt"), runtime._interrupted_playback_streams)  # noqa: SLF001 - 单测检查内部状态
+
+    def test_on_playback_state_records_terminal_result(self) -> None:
+        """测试目标：验证结构化播放终态会进入运行时快照。
+
+        测试方法：
+        1. 构造一个最小运行时并打开会话。
+        2. 上报一条 `interrupted` 终态和原因。
+        3. 读取运行时快照检查记录内容。
+
+        预期结果：
+        1. 快照中会保留最后一次播放流编号。
+        2. 快照中会保留终态值与原因。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+
+        runtime.on_playback_state(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_state_001",
+            state="interrupted",
+            reason="interrupt_requested",
+        )
+
+        snapshot = runtime.build_runtime_snapshot()
+        self.assertEqual(snapshot["glass-001"]["last_playback_stream_id"], "reply_state_001")
+        self.assertEqual(snapshot["glass-001"]["last_playback_state"], "interrupted")
+        self.assertEqual(snapshot["glass-001"]["last_playback_reason"], "interrupt_requested")
+
+    def test_on_playback_finished_keeps_structured_terminal_state(self) -> None:
+        """测试目标：验证收到 finished 后不会覆盖已记录的结构化终态。
+
+        测试方法：
+        1. 创建一条活动播放流。
+        2. 先上报 `failed` 结构化终态。
+        3. 再上报同一流的 `finished`。
+
+        预期结果：
+        1. 结构化终态仍保持为 `failed`。
+        2. 原始原因不会被默认完成态覆盖。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_state_002",
+        )
+
+        runtime.on_playback_state(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_state_002",
+            state="failed",
+            reason="speaker_write_failed",
+        )
+        runtime.on_playback_finished(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_state_002",
+        )
+
+        snapshot = runtime.build_runtime_snapshot()
+        self.assertEqual(snapshot["glass-001"]["last_playback_state"], "failed")
+        self.assertEqual(snapshot["glass-001"]["last_playback_reason"], "speaker_write_failed")
+
     def test_create_playback_stream_queues_later_reply(self) -> None:
         """测试目标：验证后续回复播放流会排队等待当前播放流结束。
 

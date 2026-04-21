@@ -106,6 +106,7 @@ class ControlRuntime(CameraGateway):
             agent_facade=agent_facade,
         )
         self._voice_runtime.agent_facade.bind_camera_gateway(self)
+        self._voice_runtime.agent_facade.bind_task_event_listener(self._voice_runtime.on_task_event)
         self._stop_event = threading.Event()
         self._sweeper_thread = threading.Thread(
             target=self._heartbeat_sweeper,
@@ -128,6 +129,7 @@ class ControlRuntime(CameraGateway):
         self._stop_event.set()
         if self._started:
             self._sweeper_thread.join(timeout=2)
+        self._voice_runtime.agent_facade.shutdown()
 
         with self._lock:
             connections = list(self._connections.values())
@@ -229,6 +231,9 @@ class ControlRuntime(CameraGateway):
             return
         if message.name == "actuator.audio.started":
             self._handle_actuator_audio_started(connection, message)
+            return
+        if message.name == "actuator.audio.state":
+            self._handle_actuator_audio_state(connection, message)
             return
         if message.name == "actuator.audio.finished":
             self._handle_actuator_audio_finished(connection, message)
@@ -487,6 +492,7 @@ class ControlRuntime(CameraGateway):
         )
 
     def _handle_actuator_audio_started(self, connection: ControlConnection, message: ControlMessage) -> None:
+        connection.last_seen_monotonic = time.monotonic()
         stream_id = str(message.payload.get("stream_id") or message.stream_id or "").strip()
         self._voice_runtime.on_playback_started(
             device_id=connection.device_id or "",
@@ -495,11 +501,37 @@ class ControlRuntime(CameraGateway):
         )
 
     def _handle_actuator_audio_finished(self, connection: ControlConnection, message: ControlMessage) -> None:
+        connection.last_seen_monotonic = time.monotonic()
         stream_id = str(message.payload.get("stream_id") or message.stream_id or "").strip()
         self._voice_runtime.on_playback_finished(
             device_id=connection.device_id or "",
             session_id=message.session_id or "",
             stream_id=stream_id,
+        )
+
+    def _handle_actuator_audio_state(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理设备回传的结构化播放状态。"""
+
+        connection.last_seen_monotonic = time.monotonic()
+        stream_id = str(message.payload.get("stream_id") or message.stream_id or "").strip()
+        state = str(message.payload.get("state", "")).strip()
+        reason = str(message.payload.get("reason", "")).strip() or None
+        if not stream_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "actuator.audio.state 缺少 stream_id",
+            )
+        if not state:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "actuator.audio.state 缺少 state",
+            )
+        self._voice_runtime.on_playback_state(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or "",
+            stream_id=stream_id,
+            state=state,
+            reason=reason,
         )
 
     def _handle_camera_captured(self, connection: ControlConnection, message: ControlMessage) -> None:

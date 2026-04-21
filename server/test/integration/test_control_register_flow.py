@@ -218,6 +218,65 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         finally:
             client.close()
 
+    def test_audio_state_is_visible_in_runtime_snapshot(self) -> None:
+        """测试目标：验证结构化播放状态会上报到服务端运行态快照。
+
+        测试方法：
+        1. 建立一条已注册且已开会话的控制连接。
+        2. 发送一条 `actuator.audio.state`，携带 `failed` 终态与原因。
+        3. 查询 `/api/runtime/devices` 快照并检查字段。
+
+        预期结果：
+        1. 服务端能记录最后一次播放流编号。
+        2. 服务端能记录结构化终态和值原因。
+        """
+
+        client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(client, pair_token="pair-demo-token")
+            self.codec.decode(client.recv_text())
+            opened = self.codec.decode(client.recv_text())
+            self.assertEqual(opened.name, "voice.session.open")
+
+            client.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="notify",
+                        name="voice.session.opened",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={"device_id": "glass-001"},
+                        session_id=opened.session_id,
+                    )
+                ).decode("utf-8")
+            )
+            client.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="notify",
+                        name="actuator.audio.state",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "device_id": "glass-001",
+                            "stream_id": "reply_state_900",
+                            "state": "failed",
+                            "reason": "speaker_write_failed",
+                        },
+                        session_id=opened.session_id,
+                        stream_id="reply_state_900",
+                    )
+                ).decode("utf-8")
+            )
+
+            runtime = self._fetch_runtime()
+            voice_session = runtime["voice_sessions"]["glass-001"]
+            self.assertEqual(voice_session["last_playback_stream_id"], "reply_state_900")
+            self.assertEqual(voice_session["last_playback_state"], "failed")
+            self.assertEqual(voice_session["last_playback_reason"], "speaker_write_failed")
+        finally:
+            client.close()
+
     def test_reconnect_replaces_old_connection(self) -> None:
         first = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         second = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")

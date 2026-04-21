@@ -134,6 +134,7 @@ static bool s_audio_transport_started = false;
 static bool s_control_transport_started = false;
 static bool s_playback_active = false;
 static bool s_playback_task_running = false;
+static volatile bool s_playback_interrupt_requested = false;
 static bool s_speaker_channel_enabled = false;
 static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
@@ -141,8 +142,10 @@ static uint64_t s_reply_wait_started_ms = 0;
 static char s_current_session_id[64];
 static char s_current_stream_id[64];
 static char s_current_playback_stream_id[64];
+static char s_next_playback_stream_id[64];
 static char s_audio_ws_uri[256];
 static char s_stream_wav_url[256];
+static TaskHandle_t s_playback_task_handle = NULL;
 static sr_runtime_ctx_t s_sr_ctx;
 
 static const wifi_profile_t s_wifi_profiles[WIFI_PROFILE_COUNT] = {
@@ -171,6 +174,7 @@ static void recover_wake_listening_after_reply_timeout(uint64_t current_ms);
 static void reset_control_session_state(void);
 static void ensure_control_transport_started(void);
 static bool init_camera(void);
+static void start_playback_stream(const char *stream_id);
 
 static bool wifi_profile_available(int index)
 {
@@ -483,7 +487,12 @@ static void send_audio_segment_finished_message(
     );
 }
 
-static void send_actuator_audio_state_message(const char *name, const char *stream_id)
+static void send_actuator_audio_state_message(
+    const char *name,
+    const char *stream_id,
+    const char *state,
+    const char *reason
+)
 {
     cJSON *payload = cJSON_CreateObject();
     if (payload == NULL) {
@@ -498,6 +507,12 @@ static void send_actuator_audio_state_message(const char *name, const char *stre
 
     cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
     cJSON_AddStringToObject(payload, "stream_id", stream_id);
+    if (state != NULL && state[0] != '\0') {
+        cJSON_AddStringToObject(payload, "state", state);
+    }
+    if (reason != NULL && reason[0] != '\0') {
+        cJSON_AddStringToObject(payload, "reason", reason);
+    }
     send_control_message_json(
         build_control_message_json("notify", name, s_current_session_id, payload),
         name
@@ -1108,10 +1123,14 @@ static void reset_control_session_state(void)
     s_voice_session_opened = false;
     s_wake_listening_enabled = false;
     s_playback_active = false;
+    s_playback_task_running = false;
+    s_playback_interrupt_requested = false;
     clear_reply_wait_state();
     s_current_session_id[0] = '\0';
     s_current_stream_id[0] = '\0';
     s_current_playback_stream_id[0] = '\0';
+    s_next_playback_stream_id[0] = '\0';
+    s_playback_task_handle = NULL;
 }
 
 static void reset_pre_roll(pre_roll_frame_t *frames, size_t count, size_t *next_index, size_t *valid_count)
@@ -1318,12 +1337,19 @@ static void playback_stream_task(void *arg)
     uint8_t wav_header[44];
     int header_read = 0;
     bool started_sent = false;
+    bool interrupted = false;
+    bool failed = false;
+    char next_stream_id[64];
+    const char *terminal_state = "completed";
+    const char *terminal_reason = "stream_completed";
     esp_http_client_config_t config = {
         .url = s_stream_wav_url,
-        .timeout_ms = 5000,
+        .timeout_ms = 200,
         .buffer_size = 2048,
     };
     esp_http_client_handle_t client = NULL;
+
+    next_stream_id[0] = '\0';
 
     stereo_buffer = heap_caps_malloc(AUDIO_FRAME_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_8BIT);
     if (stereo_buffer == NULL) {
@@ -1346,14 +1372,28 @@ static void playback_stream_task(void *arg)
     }
 
     while (header_read < (int)sizeof(wav_header)) {
+        if (s_playback_interrupt_requested) {
+            interrupted = true;
+            goto cleanup;
+        }
         int read_size = esp_http_client_read(client, (char *)wav_header + header_read, sizeof(wav_header) - header_read);
         if (read_size <= 0) {
+            if (s_playback_interrupt_requested) {
+                interrupted = true;
+                goto cleanup;
+            }
+            failed = true;
+            terminal_state = "failed";
+            terminal_reason = "wav_header_read_failed";
             ESP_LOGE(TAG, "读取 WAV 头失败");
             goto cleanup;
         }
         header_read += read_size;
     }
     if (memcmp(wav_header, "RIFF", 4) != 0 || memcmp(wav_header + 8, "WAVE", 4) != 0) {
+        failed = true;
+        terminal_state = "failed";
+        terminal_reason = "invalid_wav_header";
         ESP_LOGE(TAG, "播放流不是有效 WAV 头");
         goto cleanup;
     }
@@ -1362,13 +1402,29 @@ static void playback_stream_task(void *arg)
         uint8_t pcm_buffer[AUDIO_FRAME_BYTES];
         size_t pcm_filled = 0;
 
+        if (s_playback_interrupt_requested) {
+            interrupted = true;
+            break;
+        }
+
         while (pcm_filled < sizeof(pcm_buffer)) {
+            if (s_playback_interrupt_requested) {
+                interrupted = true;
+                goto cleanup;
+            }
             int read_size = esp_http_client_read(
                 client,
                 (char *)pcm_buffer + pcm_filled,
                 sizeof(pcm_buffer) - pcm_filled
             );
             if (read_size < 0) {
+                if (s_playback_interrupt_requested) {
+                    interrupted = true;
+                    goto cleanup;
+                }
+                failed = true;
+                terminal_state = "failed";
+                terminal_reason = "stream_read_failed";
                 ESP_LOGE(TAG, "读取播放流失败");
                 goto cleanup;
             }
@@ -1391,6 +1447,10 @@ static void playback_stream_task(void *arg)
         size_t bytes_to_write = (pcm_filled / 2U) * 2U * sizeof(int32_t);
         size_t written_total = 0;
         while (written_total < bytes_to_write) {
+            if (s_playback_interrupt_requested) {
+                interrupted = true;
+                goto cleanup;
+            }
             size_t written_size = 0;
             esp_err_t err = i2s_channel_write(
                 s_spk_tx_chan,
@@ -1400,6 +1460,9 @@ static void playback_stream_task(void *arg)
                 pdMS_TO_TICKS(1000)
             );
             if (err != ESP_OK) {
+                failed = true;
+                terminal_state = "failed";
+                terminal_reason = "speaker_write_failed";
                 ESP_LOGE(TAG, "扬声器写入失败: %s", esp_err_to_name(err));
                 goto cleanup;
             }
@@ -1407,27 +1470,48 @@ static void playback_stream_task(void *arg)
         }
 
         if (!started_sent) {
-            send_actuator_audio_state_message("actuator.audio.started", s_current_playback_stream_id);
+            send_actuator_audio_state_message("actuator.audio.started", s_current_playback_stream_id, NULL, NULL);
             started_sent = true;
         }
     }
 
 cleanup:
+    if (interrupted) {
+        terminal_state = "interrupted";
+        terminal_reason = "interrupt_requested";
+    } else if (failed) {
+        terminal_state = "failed";
+    }
     if (client != NULL) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
     }
     drain_and_pause_speaker();
     heap_caps_free(stereo_buffer);
-    if (started_sent) {
-        send_actuator_audio_state_message("actuator.audio.finished", s_current_playback_stream_id);
+    if (s_current_playback_stream_id[0] != '\0') {
+        send_actuator_audio_state_message(
+            "actuator.audio.state",
+            s_current_playback_stream_id,
+            terminal_state,
+            terminal_reason
+        );
+        send_actuator_audio_state_message("actuator.audio.finished", s_current_playback_stream_id, NULL, NULL);
     }
     clear_reply_wait_state();
     s_playback_active = false;
     s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
     s_playback_task_running = false;
+    s_playback_interrupt_requested = false;
+    s_playback_task_handle = NULL;
     s_current_playback_stream_id[0] = '\0';
-    ESP_LOGI(TAG, "播放结束，恢复待命监听");
+    if (s_next_playback_stream_id[0] != '\0') {
+        strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
+        s_next_playback_stream_id[0] = '\0';
+    }
+    ESP_LOGI(TAG, interrupted ? "播放已被打断，恢复待命监听" : "播放结束，恢复待命监听");
+    if (next_stream_id[0] != '\0') {
+        start_playback_stream(next_stream_id);
+    }
     vTaskDelete(NULL);
 }
 
@@ -1445,7 +1529,12 @@ static void start_playback_stream(const char *stream_id)
         return;
     }
     if (s_playback_task_running) {
-        ESP_LOGW(TAG, "当前播放任务仍在运行，忽略新的播放请求");
+        if (s_playback_interrupt_requested) {
+            strlcpy(s_next_playback_stream_id, stream_id, sizeof(s_next_playback_stream_id));
+            ESP_LOGI(TAG, "当前播放正在被打断，已暂存下一条播放请求: stream_id=%s", stream_id);
+        } else {
+            ESP_LOGW(TAG, "当前播放任务仍在运行，忽略新的播放请求");
+        }
         return;
     }
     if (s_spk_tx_chan == NULL) {
@@ -1471,17 +1560,54 @@ static void start_playback_stream(const char *stream_id)
     }
 
     strlcpy(s_current_playback_stream_id, stream_id, sizeof(s_current_playback_stream_id));
+    s_next_playback_stream_id[0] = '\0';
     clear_reply_wait_state();
     s_playback_active = true;
     s_wake_listening_enabled = false;
     s_playback_task_running = true;
-    if (xTaskCreate(playback_stream_task, "playback_stream_task", 8192, NULL, 5, NULL) != pdPASS) {
+    s_playback_interrupt_requested = false;
+    if (xTaskCreate(playback_stream_task, "playback_stream_task", 8192, NULL, 5, &s_playback_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "创建 playback_stream_task 失败");
         s_playback_active = false;
         s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
         s_playback_task_running = false;
+        s_playback_interrupt_requested = false;
         s_current_playback_stream_id[0] = '\0';
+        s_playback_task_handle = NULL;
     }
+}
+
+/*
+ * 功能：请求打断当前播放任务。
+ * 主要逻辑：
+ * 1. 校验当前是否存在可打断的播放流。
+ * 2. 可选校验 stream_id，避免误打断已经切换过的播放。
+ * 3. 仅设置中断标志，由播放任务自行完成清理和 finished 回报。
+ * 参数：
+ * 1. stream_id：期望打断的播放流编号；为空时表示打断当前活动流。
+ * 返回值：无。
+ * 异常情况：若当前没有活动播放，或 stream_id 与当前流不一致，则直接忽略。
+ */
+static void request_playback_interrupt(const char *stream_id)
+{
+    if (!s_playback_task_running || !s_playback_active) {
+        ESP_LOGI(TAG, "当前没有活动播放任务，忽略打断请求");
+        return;
+    }
+    if (stream_id != NULL &&
+        stream_id[0] != '\0' &&
+        strcmp(stream_id, s_current_playback_stream_id) != 0) {
+        ESP_LOGW(
+            TAG,
+            "打断请求的 stream_id 与当前播放流不一致，已忽略: expected=%s actual=%s",
+            s_current_playback_stream_id,
+            stream_id
+        );
+        return;
+    }
+
+    s_playback_interrupt_requested = true;
+    ESP_LOGI(TAG, "已请求打断当前播放: stream_id=%s", s_current_playback_stream_id);
 }
 
 static void sr_pipeline_task(void *arg)
@@ -1913,6 +2039,27 @@ static void handle_control_message(const char *data, int data_len)
 
         ESP_LOGD(TAG, "收到 actuator.audio.play: stream_id=%s", play_stream_id != NULL ? play_stream_id : "<none>");
         start_playback_stream(play_stream_id);
+        goto cleanup;
+    }
+
+    if (strcmp(name->valuestring, "actuator.audio.interrupt") == 0) {
+        const cJSON *payload_stream_id = payload != NULL
+            ? cJSON_GetObjectItemCaseSensitive(payload, "stream_id")
+            : NULL;
+        const char *interrupt_stream_id = NULL;
+
+        if (cJSON_IsString(stream_id) && stream_id->valuestring != NULL) {
+            interrupt_stream_id = stream_id->valuestring;
+        } else if (cJSON_IsString(payload_stream_id) && payload_stream_id->valuestring != NULL) {
+            interrupt_stream_id = payload_stream_id->valuestring;
+        }
+
+        ESP_LOGI(
+            TAG,
+            "收到 actuator.audio.interrupt: stream_id=%s",
+            interrupt_stream_id != NULL ? interrupt_stream_id : "<current>"
+        );
+        request_playback_interrupt(interrupt_stream_id);
         goto cleanup;
     }
 

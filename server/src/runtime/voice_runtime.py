@@ -18,10 +18,13 @@ from typing import Any, Callable, Iterable
 
 from agent_core import AgentFacade, AgentTurn, DerivedArtifact, MediaAssetRef
 from agent_core.context import generate_id
+from backend_task_core import TaskEvent
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 from protocol.media import MediaFrame
+from runtime.notifications import NotificationCoordinator, NotificationRequest, NotificationSubmitResult
+from runtime.task_event_bridge import TaskEventBridge
 
 SERVER_SAMPLE_RATE_HZ = 16000
 SERVER_CHANNELS = 1
@@ -141,6 +144,9 @@ class VoiceSessionController:
     pending_playbacks: list[PlaybackStreamContext] = field(default_factory=list)
     message_context: list[MessageEntry] = field(default_factory=list)
     audio_connection_peer: str | None = None
+    last_playback_stream_id: str | None = None
+    last_playback_state: str | None = None
+    last_playback_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -851,9 +857,17 @@ class VoiceRuntime:
         self._playback_condition = threading.Condition(self._lock)
         self._controllers: dict[str, VoiceSessionController] = {}
         self._playback_streams: dict[tuple[str, str], PlaybackStreamContext] = {}
+        self._notification_stream_requests: dict[tuple[str, str], str] = {}
+        self._notification_request_streams: dict[str, tuple[str, str]] = {}
+        self._interrupted_playback_streams: set[tuple[str, str]] = set()
         self._agent_facade = agent_facade or AgentFacade.build_default(
             settings=settings,
             device_state_reader=self.build_runtime_snapshot,
+        )
+        self._task_event_bridge = TaskEventBridge(session_store=self._agent_facade.get_session_store())
+        self._notification_coordinator = NotificationCoordinator(
+            dispatcher=self._dispatch_notification_request,
+            interrupter=self._interrupt_notification_request,
         )
 
     def open_session(self, *, device_id: str, device_type: str, session_id: str) -> None:
@@ -873,6 +887,9 @@ class VoiceRuntime:
                 controller.current_segment = None
                 controller.current_playback = None
                 controller.pending_playbacks.clear()
+                controller.last_playback_stream_id = None
+                controller.last_playback_state = None
+                controller.last_playback_reason = None
 
     def build_open_payload(self) -> dict[str, Any]:
         return {
@@ -914,6 +931,9 @@ class VoiceRuntime:
                 playback.completed = True
                 playback.finished_event.set()
                 self._playback_streams.pop((device_id, playback.stream_id), None)
+                request_id = self._notification_stream_requests.pop((device_id, playback.stream_id), None)
+                if request_id is not None:
+                    self._notification_request_streams.pop(request_id, None)
                 try:
                     playback.queue.put_nowait(None)
                 except queue.Full:
@@ -1050,6 +1070,8 @@ class VoiceRuntime:
             self._ensure_session_match(controller, session_id)
             playback = self._playback_streams.get((device_id, stream_id))
             if playback is None:
+                if (device_id, stream_id) in self._interrupted_playback_streams:
+                    return
                 raise build_error(
                     ErrorCode.STREAM_NOT_FOUND,
                     "actuator.audio.started 对应播放流不存在",
@@ -1062,15 +1084,24 @@ class VoiceRuntime:
     def on_playback_finished(self, *, device_id: str, session_id: str, stream_id: str) -> None:
         controller = self._get_controller(device_id)
         next_playback: PlaybackStreamContext | None = None
+        notification_request_id: str | None = None
         with self._lock:
             self._ensure_session_match(controller, session_id)
             playback = self._playback_streams.get((device_id, stream_id))
             if playback is None:
+                interrupted_key = (device_id, stream_id)
+                if interrupted_key in self._interrupted_playback_streams:
+                    self._interrupted_playback_streams.discard(interrupted_key)
+                    return
                 raise build_error(
                     ErrorCode.STREAM_NOT_FOUND,
                     "actuator.audio.finished 对应播放流不存在",
                     details={"device_id": device_id, "stream_id": stream_id},
                 )
+            if controller.last_playback_stream_id != stream_id:
+                controller.last_playback_stream_id = stream_id
+                controller.last_playback_state = "completed"
+                controller.last_playback_reason = "device_finished"
             playback.completed = True
             playback.finished_event.set()
             self._playback_streams.pop((device_id, stream_id), None)
@@ -1082,6 +1113,14 @@ class VoiceRuntime:
                 else:
                     controller.current_playback = None
                     controller.state = "listening"
+            notification_request_id = self._notification_stream_requests.pop((device_id, stream_id), None)
+            if notification_request_id is not None:
+                self._notification_request_streams.pop(notification_request_id, None)
+        if notification_request_id is not None:
+            self._notification_coordinator.complete_request(
+                device_id=device_id,
+                request_id=notification_request_id,
+            )
         if next_playback is not None:
             self._request_playback_start(
                 device_id=device_id,
@@ -1089,6 +1128,46 @@ class VoiceRuntime:
                 playback=next_playback,
                 force=not next_playback.queue.empty() or next_playback.completed,
             )
+
+    def on_playback_state(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        stream_id: str,
+        state: str,
+        reason: str | None,
+    ) -> None:
+        """记录设备上报的结构化播放终态。"""
+
+        controller = self._get_controller(device_id)
+        with self._lock:
+            self._ensure_session_match(controller, session_id)
+            controller.last_playback_stream_id = stream_id
+            controller.last_playback_state = state
+            controller.last_playback_reason = reason
+
+    def on_task_event(self, event: TaskEvent) -> None:
+        """处理后台任务事件。
+
+        主要逻辑：
+        1. 通过 `TaskEventBridge` 把事件写入会话上下文。
+        2. 对允许直发的事件，交给统一通知协调器裁决与下发。
+        3. 对要求回流决策的事件，再转换成 `AgentTurn` 交给 `agent-core`。
+        """
+
+        request = self._task_event_bridge.handle_event(event)
+        if request is None:
+            dispatched = False
+        else:
+            submit_result = self._notification_coordinator.submit(request)
+            dispatched = submit_result.dispatched
+        if event.requires_agent_decision:
+            threading.Thread(
+                target=self._run_task_event_agent_turn,
+                args=(event, dispatched),
+                daemon=True,
+            ).start()
 
     def stream_playback(self, handler, *, device_id: str, stream_id: str) -> None:
         playback = self._wait_for_playback(device_id=device_id, stream_id=stream_id, timeout_s=10.0)
@@ -1121,6 +1200,9 @@ class VoiceRuntime:
                 "active_segment_id": controller.current_segment.segment_id if controller.current_segment else None,
                 "reply_stream_id": controller.current_playback.stream_id if controller.current_playback else None,
                 "audio_connection_online": controller.audio_connection_peer is not None,
+                "last_playback_stream_id": controller.last_playback_stream_id,
+                "last_playback_state": controller.last_playback_state,
+                "last_playback_reason": controller.last_playback_reason,
             }
         return result
 
@@ -1444,6 +1526,154 @@ class VoiceRuntime:
                 LogContext(device_id=device_id, session_id=session_id),
             )
 
+    def _dispatch_notification_request(self, request: NotificationRequest) -> None:
+        """把通过裁决的通知申请转成实际播报。"""
+
+        threading.Thread(
+            target=self._play_notification_request,
+            args=(request,),
+            daemon=True,
+        ).start()
+
+    def _play_notification_request(self, request: NotificationRequest) -> None:
+        """播报通知协调器批准的通知。"""
+
+        text = str(request.payload.get("text", "")).strip()
+        if not text:
+            return
+        try:
+            context = self._open_reply_synthesis_context(device_id=request.device_id, session_id=request.session_id)
+            with self._lock:
+                self._notification_stream_requests[(request.device_id, context.stream_id)] = request.request_id
+                self._notification_request_streams[request.request_id] = (request.device_id, context.stream_id)
+            self._send_control_message(
+                request.device_id,
+                "notify",
+                "assistant.reply",
+                request.session_id,
+                {
+                    "device_id": request.device_id,
+                    "text": text,
+                    "stream_id": context.stream_id,
+                    "task_id": request.task_id,
+                    "task_type": request.payload.get("task_type"),
+                    "task_state": request.payload.get("task_state"),
+                    "priority": request.priority,
+                },
+            )
+            self._synthesize_text_into_context(
+                device_id=request.device_id,
+                session_id=request.session_id,
+                context=context,
+                text=text,
+            )
+        except Exception as exc:  # pragma: no cover - 真机联调路径
+            log_debug(
+                self._logger,
+                f"通知播报失败，已忽略: reason={exc!r}",
+                LogContext(device_id=request.device_id, session_id=request.session_id, message_id=request.request_id),
+            )
+
+    def _run_task_event_agent_turn(self, event: TaskEvent, dispatched_direct_notify: bool) -> None:
+        """执行后台任务事件的 Agent 回流主路径。"""
+
+        try:
+            turn = self._task_event_bridge.convert_event_to_agent_turn(event)
+            agent_result = self._agent_facade.handle_turn(turn)
+            reply_text = agent_result.reply_text.strip()
+            if not reply_text or dispatched_direct_notify:
+                return
+            self._notification_coordinator.submit(
+                NotificationRequest(
+                    request_id=generate_id("notify_req"),
+                    source_module="agent-core",
+                    session_id=event.session_id,
+                    device_id=event.device_id,
+                    task_id=event.task_id,
+                    priority=event.priority,
+                    notification_type=f"{event.event_name}.agent_reply",
+                    delivery_mode="audio",
+                    allow_interrupt=event.priority in {"high", "critical"},
+                    allow_merge=event.priority in {"low", "normal"},
+                    requires_agent_context_sync=False,
+                    dedupe_key=f"{event.event_name}:{event.task_id}:agent_reply",
+                    payload={
+                        "text": reply_text,
+                        "task_type": event.task_type,
+                        "task_state": event.state,
+                    },
+                )
+            )
+        except Exception as exc:  # pragma: no cover - 真机联调路径
+            log_debug(
+                self._logger,
+                f"任务事件回流 agent-core 失败，已忽略: reason={exc!r}",
+                LogContext(device_id=event.device_id, session_id=event.session_id, message_id=event.event_id),
+            )
+
+    def _interrupt_notification_request(self, request: NotificationRequest) -> None:
+        """中断当前活动的通知播报流。
+
+        主要逻辑：
+        1. 根据通知编号找到对应播放流。
+        2. 只摘除当前通知对应的播放流，不清空普通回复待播队列。
+        3. 先向设备显式下发 `actuator.audio.interrupt`，再让新的高优先级通知接管活动位置。
+        """
+
+        playback: PlaybackStreamContext | None = None
+        interrupt_device_id: str | None = None
+        interrupt_session_id: str | None = None
+        interrupt_stream_id: str | None = None
+        with self._lock:
+            stream_ref = self._notification_request_streams.pop(request.request_id, None)
+            if stream_ref is None:
+                return
+            device_id, stream_id = stream_ref
+            interrupt_device_id = device_id
+            interrupt_stream_id = stream_id
+            self._notification_stream_requests.pop((device_id, stream_id), None)
+            playback = self._playback_streams.pop((device_id, stream_id), None)
+            controller = self._controllers.get(device_id)
+            if playback is None or controller is None:
+                return
+            interrupt_session_id = playback.session_id
+            self._interrupted_playback_streams.add((device_id, stream_id))
+            controller.last_playback_stream_id = stream_id
+            controller.last_playback_state = "interrupted"
+            controller.last_playback_reason = "higher_priority_notification"
+            playback.abort_event.set()
+            playback.failed = True
+            playback.completed = True
+            playback.finished_event.set()
+            if controller.current_playback is playback:
+                controller.current_playback = None
+                controller.state = "listening"
+            else:
+                controller.pending_playbacks = [
+                    pending for pending in controller.pending_playbacks if pending is not playback
+                ]
+        if (
+            interrupt_device_id is not None
+            and interrupt_session_id is not None
+            and interrupt_stream_id is not None
+        ):
+            self._send_control_message(
+                interrupt_device_id,
+                "request",
+                "actuator.audio.interrupt",
+                interrupt_session_id,
+                {
+                    "device_id": interrupt_device_id,
+                    "stream_id": interrupt_stream_id,
+                    "reason": "higher_priority_notification",
+                    "request_id": request.request_id,
+                },
+            )
+        try:
+            playback.queue.put_nowait(None)
+        except queue.Full:
+            pass
+
     def _synthesize_text_into_context(
         self,
         *,
@@ -1649,6 +1879,9 @@ class VoiceRuntime:
                 pending.abort_event.set()
                 pending.finished_event.set()
                 self._playback_streams.pop((device_id, pending.stream_id), None)
+                request_id = self._notification_stream_requests.pop((device_id, pending.stream_id), None)
+                if request_id is not None:
+                    self._notification_request_streams.pop(request_id, None)
                 try:
                     pending.queue.put_nowait(None)
                 except queue.Full:
@@ -1656,6 +1889,9 @@ class VoiceRuntime:
             controller.pending_playbacks.clear()
             controller.state = "failed"
             self._playback_streams.pop((device_id, playback.stream_id), None)
+            request_id = self._notification_stream_requests.pop((device_id, playback.stream_id), None)
+            if request_id is not None:
+                self._notification_request_streams.pop(request_id, None)
         try:
             playback.queue.put_nowait(None)
         except queue.Full:

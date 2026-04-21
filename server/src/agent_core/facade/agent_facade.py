@@ -10,7 +10,7 @@ from agent_core.context import AgentSessionStore, AgentTurn, AgentTurnResult, Me
 from agent_core.context.models import CapabilityTrace, MediaAssetRef
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.tools import ToolGateway, ToolRegistry
-from backend_task_core import InMemoryTaskGateway
+from backend_task_core import InMemoryTaskGateway, TaskEvent
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug
@@ -168,6 +168,21 @@ class AgentFacade:
         """
 
         self._tool_registry.bind_camera_gateway(camera_gateway)
+
+    def bind_task_event_listener(self, listener: Callable[[TaskEvent], None]) -> None:
+        """补绑任务事件监听器。
+
+        主要逻辑：
+        1. 让 `backend-task-core` 的任务事件能回流到外部运行时。
+        2. 当前主要用于把计时器完成事件交给语音运行时播报。
+        """
+
+        self._tool_registry.get_task_gateway().subscribe_events(listener)
+
+    def shutdown(self) -> None:
+        """关闭门面内部后台资源。"""
+
+        self._tool_registry.get_task_gateway().shutdown()
 
     def _persist_result(self, *, turn: AgentTurn, result: AgentTurnResult) -> AgentTurnResult:
         """把运行结果统一写回会话上下文。"""
