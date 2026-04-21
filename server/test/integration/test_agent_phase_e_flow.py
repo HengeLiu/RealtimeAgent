@@ -67,14 +67,13 @@ class PhaseECapabilityRunner(AgentLoopRunner):
             task_gateway=self._tool_registry.get_task_gateway(),
             camera_gateway=self._tool_registry.get_camera_gateway(),
             tool_gateway=self._tool_gateway,
-            skill_gateway=self._tool_registry.get_skill_gateway(),
             mcp_gateway=self._tool_registry.get_mcp_gateway(),
         )
 
         photo_result = self._tool_gateway.invoke(
-            name="photo_interpret",
+            name="capture_photo",
             context=context,
-            arguments={"question": "帮我看看前面有什么"},
+            arguments={"reason": "phase_e_integration"},
         )
         nav_result = self._tool_gateway.invoke(
             name="map_manage",
@@ -89,7 +88,7 @@ class PhaseECapabilityRunner(AgentLoopRunner):
             turn_id=turn.turn_id,
             session_id=turn.session_id,
             device_id=turn.device_id,
-            reply_text=f"{photo_result.data['answer_text']} {nav_result.data['summary']}",
+            reply_text=f"已完成抓拍，图片资产是 {photo_result.data['asset_id']}。{nav_result.data['summary']}",
             capability_traces=traces,
             meta={
                 "asset_refs": list(context.emitted_assets),
@@ -100,9 +99,9 @@ class PhaseECapabilityRunner(AgentLoopRunner):
 
 
 class AgentPhaseEFlowTestCase(unittest.TestCase):
-    """验证一轮 AgentTurn 能串起 Tool / Skill / MCP。"""
+    """验证一轮 AgentTurn 能串起 Tool 与 MCP。"""
 
-    def test_agent_turn_can_chain_tool_skill_and_mcp(self) -> None:
+    def test_agent_turn_can_chain_tool_and_mcp(self) -> None:
         temp_dir = tempfile.mkdtemp(prefix="phase-e-agent-")
         settings = ServerSettings(voice_runs_root=temp_dir)
         session_store = AgentSessionStore()
@@ -132,22 +131,22 @@ class AgentPhaseEFlowTestCase(unittest.TestCase):
         )
 
         self.assertIsNone(result.error)
-        self.assertEqual(len(result.capability_traces), 4)
+        self.assertEqual(len(result.capability_traces), 3)
         self.assertEqual(result.capability_traces[0].capability_name, "capture_photo")
-        self.assertEqual(result.capability_traces[1].capability_name, "photo_interpret")
-        self.assertEqual(result.capability_traces[2].capability_name, "amap.route_plan")
-        self.assertEqual(result.capability_traces[2].capability_type, "mcp")
-        self.assertEqual(result.capability_traces[3].capability_name, "map_manage")
-        self.assertEqual(result.capability_traces[3].capability_type, "skill")
+        self.assertEqual(result.capability_traces[0].capability_type, "tool")
+        self.assertEqual(result.capability_traces[1].capability_name, "amap.route_plan")
+        self.assertEqual(result.capability_traces[1].capability_type, "mcp")
+        self.assertEqual(result.capability_traces[2].capability_name, "map_manage")
+        self.assertEqual(result.capability_traces[2].capability_type, "tool")
 
         session = session_store.get_session("sess_phase_e_001")
         self.assertIsNotNone(session)
         assert session is not None
         self.assertGreaterEqual(len(session.assets), 1)
-        self.assertGreaterEqual(len(session.artifacts), 2)
+        self.assertGreaterEqual(len(session.artifacts), 1)
         self.assertEqual(len(session.messages), 2)
         self.assertGreaterEqual(len(session.messages[1].asset_refs), 1)
-        self.assertGreaterEqual(len(session.messages[1].derived_refs), 2)
+        self.assertGreaterEqual(len(session.messages[1].derived_refs), 1)
 
 
 if __name__ == "__main__":

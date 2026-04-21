@@ -13,7 +13,7 @@
 改造前存在 3 个明显问题：
 
 1. 主链路只有最终回复会播报给用户，视觉问题会经历“工具选择 -> 拍照 -> 图片解读 -> 二次总结”多个阶段，用户只能一直等待。
-2. `photo_interpret` 既负责拍照，又在 Skill 内部直接调用视觉模型，导致主链路模型并没有真正看到图片。
+2. 历史方案中图片解读曾放在内部复合能力里完成，导致主链路模型并没有真正看到图片。
 3. TTS 只有在最终文本完整生成后才启动，虽然音频下发是流式的，但文字生成与语音合成之间仍然是串行关系。
 
 ## 3. 实现方案描述
@@ -30,7 +30,7 @@
 
 ### 3.2 拍照与图片理解职责拆分
 
-1. 模型可见工具从 `photo_interpret / timer_manage / map_manage` 调整为：
+1. 模型可见工具收敛为：
    - `capture_photo`
    - `timer_manage`
    - `map_manage`
@@ -146,7 +146,7 @@ VoiceRuntime -> Glass : assistant.reply(完整文本)
 
 1. `test_full_voice_dialog_flow`
    - 验证 `voice-runtime -> agent-core -> TTS -> 眼镜播放` 的闭环未被破坏
-2. `test_agent_turn_can_chain_tool_skill_and_mcp`
+2. `test_agent_turn_can_chain_tool_and_mcp`
    - 验证能力层集成路径仍然可用
 
 ## 7. 跨设备联调方案

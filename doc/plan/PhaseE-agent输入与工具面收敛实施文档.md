@@ -6,8 +6,8 @@
 
 1. 不再在大模型提示词中引入任何架构层概念，例如“资产”“派生结果”“运行阶段”等。
 2. 模型侧工具面收敛为 3 个：
+   - `capture_photo`
    - `timer_manage`
-   - `photo_interpret`
    - `map_manage`
 3. `agent-core` 默认模型切换为 `qwen3.6-plus`，同时保留当前 `qwen3.5-omni-plus` 作为 TTS 模型。
 
@@ -15,9 +15,9 @@
 
 ## 2. 现状分析
 
-在本次调整前，代码已经完成了 Tool / Skill / MCP 的统一承载层，但仍有三个问题：
+在本次调整前，代码已经完成了 Tool / MCP 的统一承载层，但仍有三个问题：
 
-1. 模型侧可见工具过多，既有 `photo_interpret / timer_manage / amap_route_plan`，也暴露了 `capture_photo / create_timer / query_task_status / cancel_task / amap_poi_search / amap_geocode` 等底层能力。
+1. 模型侧可见工具过多，既有 `capture_photo / timer_manage / map_manage`，也暴露了 `create_timer / query_task_status / cancel_task / amap_poi_search / amap_geocode` 等底层能力。
 2. 默认 `agent-core` 模型仍是 `qwen3-max`，与本次希望统一使用 `qwen3.6-plus` 处理文本和图片的目标不一致。
 3. 文档和样例文件仍保留旧工具面与旧模型名称，容易误导后续开发。
 
@@ -54,19 +54,19 @@
    - `amap_poi_search`
    - `amap_geocode`
 2. 模型可见层：
-   - `photo_interpret`
+   - `capture_photo`
    - `timer_manage`
    - `map_manage`
 
 其中：
 
-1. `photo_interpret` 负责“需要看图时先拍照再回答”。
+1. `capture_photo` 负责“需要看图时先拍照拿到当前画面”。
 2. `timer_manage` 负责“创建、查询、取消计时器”。
 3. `map_manage` 负责“地点搜索、地址解析、路线规划”，内部再调用 `amap.*` 方法。
 
 ### 3.4 地图工具合并方案
 
-新增 `MapManageSkill`，输入支持：
+新增 `MapManageTool`，输入支持：
 
 1. `action=search/geocode/route/auto`
 2. `query`
@@ -107,8 +107,8 @@ start
 :向模型暴露 3 个高层工具;
 
 if (需要看图?) then (是)
-  :模型调用 photo_interpret;
-  :内部触发 capture_photo;
+  :模型调用 capture_photo;
+  :框架在主链路中接入真实图片;
   :把图片作为原生 image input 发送给模型;
 elseif (需要计时器?) then (是)
   :模型调用 timer_manage;
@@ -131,20 +131,14 @@ title map_manage 调用底层 MCP 的时序
 
 participant "Runner" as R
 participant "ToolGateway" as T
-participant "SkillGateway" as S
-participant "MapManageSkill" as K
 participant "McpGateway" as M
 participant "AmapAdapter" as A
 
 R -> T : invoke(map_manage)
-T -> S : invoke(map_manage)
-S -> K : run(input)
-K -> M : invoke(amap.route_plan / amap.poi_search / amap.geocode)
+T -> M : invoke(amap.route_plan / amap.poi_search / amap.geocode)
 M -> A : adapter.invoke(...)
 A --> M : CapabilityResult
-M --> K : CapabilityResult
-K --> S : CapabilityResult(summary)
-S --> T : CapabilityResult
+M --> T : CapabilityResult(summary)
 T --> R : CapabilityResult
 @enduml
 ```
@@ -156,9 +150,9 @@ T --> R : CapabilityResult
 重点覆盖：
 
 1. `ToolRegistry` 只向模型暴露 3 个工具。
-2. `photo_interpret` 仍能内部触发 `capture_photo`。
-3. `map_manage` 能内部调用 `amap.route_plan` 并同时记录 `mcp + skill` 轨迹。
-4. `PhotoInterpretSkill` 使用 `agent_model_name` 作为图片理解模型。
+2. `capture_photo` 会生成真实图片资产。
+3. `map_manage` 能内部调用 `amap.route_plan` 并同时记录 `mcp + tool` 轨迹。
+4. 主链路图片理解使用 `agent_model_name`。
 5. `ServerSettings` 默认 `agent_model_name=qwen3.6-plus`。
 
 ### 6.2 功能测试
@@ -166,7 +160,7 @@ T --> R : CapabilityResult
 重点覆盖：
 
 1. `AgentPhaseEFlow` 中一轮输入能串起：
-   - `photo_interpret`
+   - `capture_photo`
    - `map_manage`
 2. 真实音频样例批量工具写出的 `result.json` 中，`model_request.model` 已切换为 `qwen3.6-plus`。
 
@@ -192,14 +186,14 @@ PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
 
 1. `openai._base_client` 日志中的模型是否为 `qwen3.6-plus`
 2. 模型工具列表是否只有 3 个
-3. 拍照问题是否触发 `photo_interpret`
+3. 拍照问题是否先触发 `capture_photo`
 4. 地图问题是否触发 `map_manage`
 
 ## 7. 当前方案与架构设计的契合程度
 
 本次调整与既有架构总体契合，主要体现在：
 
-1. 没有破坏 `ToolRegistry / SkillRegistry / McpRegistry` 三层结构。
+1. 没有破坏 `ToolRegistry / McpRegistry` 两层结构。
 2. 只调整模型可见层，不破坏底层能力实现。
 3. 进一步符合“框架承载编排，模型只感知少量高层工具”的方向。
 
@@ -231,7 +225,7 @@ PYTHONPATH=server/src uv run python -m unittest \
 当前已经完成：
 
 1. 模型提示词收敛，不再引入架构概念。
-2. 模型可见工具收敛为 `photo_interpret / timer_manage / map_manage`。
+2. 模型可见工具收敛为 `capture_photo / timer_manage / map_manage`。
 3. `agent-core` 默认模型切换到 `qwen3.6-plus`。
 4. 图片理解改用 `agent_model_name`。
 5. 联调样例、测试和说明文档同步完成。

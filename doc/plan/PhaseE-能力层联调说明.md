@@ -5,13 +5,12 @@
 本说明用于验证 Phase E 已完成以下能力层落地：
 
 1. `ToolRegistry / ToolGateway`
-2. `SkillRegistry / SkillGateway`
-3. `McpRegistry / McpGateway`
-4. `capture_photo / timer_manage / map_manage` 的最小闭环
+2. `McpRegistry / McpGateway`
+3. `capture_photo / timer_manage / map_manage` 的最小闭环
 
 联调重点观察：
 
-1. `CapabilityTrace` 是否会记录 `tool / skill / mcp / task`
+1. `CapabilityTrace` 是否会记录 `tool / mcp / task`
 2. 能力调用产生的 `asset_refs / derived_artifacts / task_refs` 是否会写回会话
 3. AMap 是否能先以 mock 方式稳定返回结构化结果
 
@@ -35,7 +34,7 @@ PYTHONPATH=server/src python -m unittest \
 
 1. `unit.test_agent_core.*` 全部通过
 2. `integration.test_agent_phase_e_flow.*` 通过
-3. 输出中能看到 `photo_interpret`、`timer_manage`、`map_manage` 相关断言全部通过
+3. 输出中能看到 `capture_photo`、`timer_manage`、`map_manage` 相关断言全部通过
 
 ## 3. 服务端启动
 
@@ -56,7 +55,7 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 2. `TTS_MODEL_NAME` 默认使用 `cosyvoice-v3-flash`；若依赖缺失则自动回退旧 TTS 链路。
 3. 当前 `OpenAIAgentLoopRunner` 已回到标准 SDK tool calling 主路径，不再保留图片、计时器、导航和设备状态的直连能力路由。
 4. AMap 当前默认走 mock adapter，不依赖真实第三方配置。
-5. 若设置了 `LOG_FILE`，服务端会在标准输出之外，额外把同样的 JSON 结构化日志写入该文件，便于长期保留 `tool.call/result`、`skill.call/result`、`mcp.call/result` 调试链路。
+5. 若设置了 `LOG_FILE`，服务端会在标准输出之外，额外把同样的 JSON 结构化日志写入该文件，便于长期保留 `tool.call/result`、`mcp.call/result` 调试链路。
 6. 当前发给模型的历史上下文已直接采用 `history messages`，不再把历史、资产和派生结果压成一整段说明文本。
 7. 当前模型侧只暴露 3 个高层工具：`capture_photo / timer_manage / map_manage`。
 8. 图片理解改由主链路模型直接接收文本与图片完成；`capture_photo` 只负责取图。
@@ -109,7 +108,7 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 预期：
 
-1. 图片解读后至少新增 1 个 `image` 资产和 1 个 `image_interpretation` 派生结果
+1. 图片解读后至少新增 1 个 `image` 资产
 2. 计时器创建后至少新增 1 个 `TaskRef`
 3. 导航后至少新增 1 个 `amap_route_plan` 派生结果
 

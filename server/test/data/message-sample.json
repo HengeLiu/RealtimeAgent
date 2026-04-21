@@ -64,20 +64,11 @@
       {
         "type": "function",
         "function": {
-          "name": "photo_interpret",
-          "description": "当用户提问需要用到用户眼前图像时，先调用相机拍照，再根据图片回答用户问题。",
+          "name": "capture_photo",
+          "description": "调用眼镜相机抓拍一张当前画面图片，供后续主链路理解使用。",
           "parameters": {
             "properties": {
-              "question": {
-                "title": "Question",
-                "type": "string"
-              },
-              "capture_first": {
-                "default": true,
-                "title": "Capture First",
-                "type": "boolean"
-              },
-              "photo_asset_id": {
+              "reason": {
                 "anyOf": [
                   {
                     "type": "string"
@@ -87,13 +78,10 @@
                   }
                 ],
                 "default": null,
-                "title": "Photo Asset Id"
+                "title": "Reason"
               }
             },
-            "required": [
-              "question"
-            ],
-            "title": "photo_interpret_args",
+            "title": "capture_photo_args",
             "type": "object"
           }
         }

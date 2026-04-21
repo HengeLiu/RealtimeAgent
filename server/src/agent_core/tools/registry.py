@@ -10,8 +10,7 @@ from pydantic import BaseModel
 from agent_core.camera import CameraGateway
 from agent_core.mcp import McpGateway, McpRegistry
 from agent_core.models import ToolSpec
-from agent_core.skills import SkillGateway, SkillRegistry
-from agent_core.tools.base import AgentToolContext, BaseMcpTool, BaseSkillTool, BaseTool
+from agent_core.tools.base import AgentToolContext, BaseMcpTool, BaseTool
 from backend_task_core import InMemoryTaskGateway, TaskGateway
 from infra.errors import ErrorCode, build_error
 
@@ -34,36 +33,6 @@ except ImportError:  # pragma: no cover - 单测环境兜底
             return func
 
         return _decorator
-
-class SkillToolProxy(BaseSkillTool):
-    """把 Skill 暴露成统一 Tool。"""
-
-    def __init__(
-        self,
-        *,
-        skill_name: str,
-        skill_gateway: SkillGateway,
-        description: str,
-        input_model: type[BaseModel],
-    ) -> None:
-        self._skill_name = skill_name
-        self._skill_gateway = skill_gateway
-        self.spec = ToolSpec(
-            name=skill_name,
-            description=description,
-            input_model=input_model,
-            capability_type="skill",
-            tags=["skill"],
-        )
-
-    def run(self, context: AgentToolContext, input_data):
-        return self._skill_gateway.invoke(
-            name=self._skill_name,
-            context=context,
-            arguments=input_data.model_dump(exclude_none=True),
-            record_trace=False,
-        )
-
 
 class McpToolProxy(BaseMcpTool):
     """把 MCP 方法暴露成统一 Tool。"""
@@ -105,16 +74,12 @@ class ToolRegistry:
         device_state_reader,
         task_gateway: TaskGateway | None = None,
         camera_gateway: CameraGateway | None = None,
-        skill_registry: SkillRegistry | None = None,
-        skill_gateway: SkillGateway | None = None,
         mcp_registry: McpRegistry | None = None,
         mcp_gateway: McpGateway | None = None,
     ) -> None:
         self._device_state_reader = device_state_reader
         self._task_gateway = task_gateway or InMemoryTaskGateway()
         self._camera_gateway = camera_gateway
-        self._skill_registry = skill_registry or SkillRegistry()
-        self._skill_gateway = skill_gateway or SkillGateway(self._skill_registry)
         self._mcp_registry = mcp_registry or McpRegistry()
         self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
         self._tools: dict[str, BaseTool] = {}
@@ -134,35 +99,28 @@ class ToolRegistry:
         self._camera_gateway = camera_gateway
 
     def discover_tools(self) -> None:
-        """导入并注册内置 Function/Skill/MCP Tool。"""
+        """导入并注册内置 Tool 与 MCP Tool。"""
 
         from agent_core.tools.builtins import (
             CancelTaskTool,
             CapturePhotoTool,
             CreateTimerTool,
+            MapManageTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
+            TimerManageTool,
         )
 
         for tool in (
             QueryDeviceStateTool(),
             CapturePhotoTool(),
+            TimerManageTool(),
+            MapManageTool(),
             CreateTimerTool(),
             QueryTaskStatusTool(),
             CancelTaskTool(),
         ):
-            self._register_tool(tool, expose_to_model=tool.spec.name == "capture_photo")
-
-        for skill in self._skill_registry.list_skills():
-            self._register_tool(
-                SkillToolProxy(
-                    skill_name=skill.spec.name,
-                    skill_gateway=self._skill_gateway,
-                    description=skill.spec.description,
-                    input_model=skill.spec.input_model,
-                ),
-                expose_to_model=skill.spec.name in {"timer_manage", "map_manage"},
-            )
+            self._register_tool(tool, expose_to_model=tool.spec.name in {"capture_photo", "timer_manage", "map_manage"})
 
         for method in self._mcp_registry.list_methods():
             self._register_tool(
@@ -215,11 +173,6 @@ class ToolRegistry:
         """返回相机抓拍网关。"""
 
         return self._camera_gateway
-
-    def get_skill_gateway(self) -> SkillGateway:
-        """返回 SkillGateway。"""
-
-        return self._skill_gateway
 
     def get_mcp_gateway(self) -> McpGateway:
         """返回 McpGateway。"""

@@ -7,14 +7,14 @@
 1. 服务端可向指定眼镜设备下发 `sensor.camera.capture`。
 2. 眼镜端真实调用摄像头抓拍一张 JPEG 图片。
 3. 眼镜端把图片回传给服务端。
-4. 服务端把图片落盘为 `MediaAssetRef`，供 `photo_interpret` 使用 OpenAI SDK 原生图片输入继续解读。
+4. 服务端把图片落盘为 `MediaAssetRef`，供主链路模型使用 OpenAI SDK 原生图片输入继续解读。
 
 ## 2. 现状分析
 
 开发前现状如下：
 
 1. `capture_photo` 只会在服务端本地写入一张 1x1 mock PNG。
-2. `photo_interpret` 已经支持把图片作为 SDK 原生 image input 传给模型，但它依赖的图片仍是假图。
+2. 主链路图片理解已经支持把图片作为 SDK 原生 image input 传给模型，但它依赖的图片仍是假图。
 3. 协议设计和阶段计划中已经预留了 `sensor.camera.capture / sensor.camera.captured`。
 4. 当前 `glass/src/main/glass_main.c` 只有控制面和语音链路，没有真实相机初始化与抓拍逻辑。
 5. 仓库里的 `origin-project/compile/compile.ino` 已有一套可参考的 `esp_camera` 初始化和单张 JPEG 抓拍实现。
@@ -79,21 +79,21 @@ T -> A : MediaAssetRef(image)
 @enduml
 ```
 
-### 4.2 `photo_interpret` 使用真实抓拍图片
+### 4.2 主链路使用真实抓拍图片
 
 ```plantuml
 @startuml
 participant "Model" as M
-participant "photo_interpret" as P
 participant "capture_photo" as T
 participant "ControlRuntime" as C
+participant "AgentCore" as A
 
-M -> P : tool call photo_interpret
-P -> T : invoke(capture_photo)
+M -> T : tool call capture_photo
 T -> C : request real capture
 C --> T : image asset
-P -> M : text + image input
-M --> P : visual answer
+T -> A : image asset
+A -> M : text + image input
+M --> A : visual answer
 @enduml
 ```
 
@@ -103,8 +103,8 @@ M --> P : visual answer
 
 1. `test_capture_photo_tool_uses_real_camera_gateway_result`
    - 目标：验证 `capture_photo` 会把相机网关返回的真实字节写成图片资产。
-2. `test_photo_interpret_skill_triggers_capture_photo`
-   - 目标：验证 `photo_interpret` 仍会组合调用 `capture_photo`。
+2. `test_openai_runner_can_emit_progress_before_capture_photo`
+   - 目标：验证视觉主链路会在抓拍前先发出中间反馈。
 
 ### 5.2 功能测试
 
@@ -135,7 +135,7 @@ M --> P : visual answer
 理由：
 
 1. `agent-core` 没有直接侵入设备控制细节，而是通过新增 `camera_gateway` 保持分层。
-2. `capture_photo` 仍然是统一 Tool，`photo_interpret` 仍然是统一 Skill，模型侧调用面没有变化。
+2. `capture_photo` 仍然是统一 Tool，模型通过该工具拿到图片后，再由主链路模型继续完成图片理解。
 3. 控制消息仍使用既定的 `sensor.camera.capture / sensor.camera.captured`，没有引入临时字符串协议。
 
 当前与理想架构的偏差：

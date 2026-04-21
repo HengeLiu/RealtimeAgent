@@ -2,7 +2,12 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第二阶段第4-8项开发落地计划.md) 的 Phase E，核心是把 Phase D 已完成的最小 `agent-core` 运行时升级为可承载 Tool / Skill / MCP 的统一能力层。
+本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第二阶段第4-8项开发落地计划.md) 的 Phase E，核心是把 Phase D 已完成的最小 `agent-core` 运行时升级为可承载 Tool / MCP 的统一能力层。
+
+补充说明：
+
+1. 当前阶段正式主链路不再建设或依赖 Skill 运行时。
+2. 第 6 项主链路以 `capture_photo` 工具为准，图片理解由主链路模型完成。
 
 本阶段必须交付：
 
@@ -11,10 +16,7 @@
    - `create_timer`
    - `query_task_status`
    - `cancel_task`
-2. 建立最小 `SkillRegistry / SkillGateway`，并落地首批 Skill：
-   - `photo_interpret`
-   - `timer_manage`
-   - `map_manage`
+2. 当前阶段主链路不再要求 Skill 成为正式依赖；高层能力统一通过 Tool 形式对模型暴露。
 3. 建立最小 `McpRegistry / McpGateway` 与 `AmapMcpAdapter`，并打通：
    - `amap.poi_search`
    - `amap.geocode`
@@ -32,10 +34,10 @@ Phase D 完成后，仓库已有以下基础：
 
 但进入 Phase E 后，主要缺口如下：
 
-1. `agent_core/tools/__init__.py`、`agent_core/skills/__init__.py`、`agent_core/mcp/__init__.py` 已预留导出面，但对应源码并未真正落地。
+1. `agent_core/tools/__init__.py`、`agent_core/mcp/__init__.py` 已预留导出面，但对应源码并未真正落地。
 2. `ToolRegistry` 仍是 Phase D 的单工具注册器，无法承载统一 schema、统一网关与统一错误包装。
 3. `backend_task_core` 仅保留导出和字节码缓存，缺少可维护的最小源代码实现。
-4. Skill 与 MCP 还没有最小对象模型，也没有统一的 `skill.call/result/failed`、`mcp.call/result` 记录结构。
+4. MCP 还没有最小对象模型，也没有统一的 `mcp.call/result` 记录结构。
 5. 能力调用产生的 `MediaAssetRef / DerivedArtifact / TaskRef` 还不会自动回写到会话上下文。
 
 ## 3. 实现方案描述
@@ -45,8 +47,8 @@ Phase D 完成后，仓库已有以下基础：
 本次实现遵循以下策略：
 
 1. 保持“模型侧只感知统一 Tool 调用面”的总体架构不变，并进一步把模型可见工具收敛为少量高层工具。
-2. Skill 与 MCP 在工程实现层仍保留独立注册表与网关，但最终通过 Tool 代理统一暴露给 Agent。
-3. 所有能力调用都走统一 trace / error / result 契约，不允许 Function、Skill、MCP 各走一套。
+2. Tool 与 MCP 在工程实现层保留独立注册表与网关，不再建设 Skill 层。
+3. 所有能力调用都走统一 trace / error / result 契约，不允许 Function、Tool、MCP 各走一套。
 4. `backend-task-core` 在 Phase E 仍只提供最小内存网关，不提前做 Phase F 的完整状态机和事件总线。
 5. 自动化测试必须在没有 `openai-agents` 依赖的情况下也能运行本地能力层。
 
@@ -58,31 +60,28 @@ Phase D 完成后，仓库已有以下基础：
 2. `server/src/agent_core/tools/base.py`
 3. `server/src/agent_core/tools/gateway.py`
 4. `server/src/agent_core/tools/builtins/*.py`
-5. `server/src/agent_core/skills/base.py`
-6. `server/src/agent_core/skills/registry.py`
-7. `server/src/agent_core/skills/gateway.py`
-8. `server/src/agent_core/skills/builtins/*.py`
-9. `server/src/agent_core/mcp/base.py`
-10. `server/src/agent_core/mcp/registry.py`
-11. `server/src/agent_core/mcp/gateway.py`
-12. `server/src/agent_core/mcp/adapters/amap_adapter.py`
-13. `server/src/backend_task_core/models.py`
-14. `server/src/backend_task_core/gateway.py`
+5. `server/src/agent_core/mcp/base.py`
+6. `server/src/agent_core/mcp/registry.py`
+7. `server/src/agent_core/mcp/gateway.py`
+8. `server/src/agent_core/mcp/adapters/amap_adapter.py`
+9. `server/src/backend_task_core/models.py`
+10. `server/src/backend_task_core/gateway.py`
 
 关键职责如下：
 
-1. `CapabilityResult / ToolSpec / SkillSpec / McpMethodSpec`
+1. `CapabilityResult / ToolSpec / McpMethodSpec`
    - 固定能力层输入输出契约
    - 统一承载 `asset_refs / derived_artifacts / task_refs`
-2. `ToolGateway / SkillGateway / McpGateway`
+2. `ToolGateway / McpGateway`
    - 统一处理参数校验
    - 统一处理错误包装
    - 统一记录 `CapabilityTrace`
 3. `ToolRegistry`
-   - 统一注册内部 Function Tool、Skill 与 MCP
-   - 只把少量高层 Skill 作为模型可见 Tool
-4. `SkillRegistry`
-   - 管理 `photo_interpret`、`timer_manage`、`map_manage`
+   - 统一注册内部 Function Tool 与 MCP
+   - 只把少量高层 Tool 作为模型可见 Tool
+4. 高层 Tool 层
+   - 当前正式能力为 `capture_photo`、`timer_manage`、`map_manage`
+   - 不再保留 Skill 兼容层作为正式验收前提
 5. `McpRegistry`
    - 管理 `amap.*` 原子方法
 6. `InMemoryTaskGateway`
@@ -107,22 +106,19 @@ Phase D 完成后，仓库已有以下基础：
    - 取消任务实例
    - 回写最新 `TaskRef`
 
-### 3.4 Skill 落地
+### 3.4 高层 Tool 收敛说明
 
-本次首批 Skill 如下：
+当前正式对模型暴露的高层 Tool 如下：
 
-1. `photo_interpret`
-   - 内部先通过 `ToolGateway` 触发 `capture_photo`
-   - 再通过 SDK 原生图片输入完成视觉理解
-   - 回写 `image_interpretation` 派生结果
+1. `capture_photo`
+   - 负责触发真实抓拍
+   - 产出图片资产引用
 2. `timer_manage`
    - 内部根据输入自动路由到 `create_timer / query_task_status / cancel_task`
    - 产出对用户可直接播报的摘要
 3. `map_manage`
    - 内部根据输入自动路由到 `amap.poi_search / amap.geocode / amap.route_plan`
    - 对模型保持单一地图工具调用面
-
-这里保持了“Skill 是业务型高级 Tool”的设计结论：模型侧当前只看到 `photo_interpret / timer_manage / map_manage` 三个 Tool 名，内部编排细节留在 Skill 层。
 
 ### 3.5 MCP 与 AMap Adapter 落地
 
@@ -154,7 +150,7 @@ Phase D 完成后，仓库已有以下基础：
    - `ToolRegistry`
    - `ToolGateway`
    - `OpenAIAgentLoopRunner`
-2. `OpenAIAgentLoopRunner` 现在会把 `settings / session_store / task_gateway / skill_gateway / mcp_gateway` 注入 `AgentToolContext`
+2. `OpenAIAgentLoopRunner` 现在会把 `settings / session_store / task_gateway / mcp_gateway` 注入 `AgentToolContext`
 3. 能力调用过程中产出的 `asset_refs / derived_artifacts / task_refs` 会挂到 `AgentTurnResult.meta`
 4. `AgentFacade._persist_result()` 会把这些引用写回当前会话，并挂到助手消息上
 
@@ -164,10 +160,9 @@ Phase D 完成后，仓库已有以下基础：
 
 1. 当前轮进入模型的历史上下文已调整为直接使用 `session.messages` 中的原始 `user / assistant` 轮次。
 2. system prompt 已收缩为最小角色设定与回复风格约束，不再把框架内部运行规则写进 prompt。
-3. `photo_interpret` 现已优先通过 OpenAI SDK 的原生图片输入执行视觉理解，只有在缺少依赖或接口失败时才回退到 mock 结果。
-4. `OpenAIAgentLoopRunner` 已移除图片、计时器、导航和设备状态的直连能力路由，主路径统一回到标准 SDK tool calling。
-5. 当前模型侧只暴露 3 个高层工具，底层 `capture_photo / create_timer / query_task_status / cancel_task / amap.*` 只作为内部能力存在。
-6. 当前 `agent-core` 默认模型为 `qwen3.6-plus`，TTS 模型保持 `qwen3.5-omni-plus`。
+3. `OpenAIAgentLoopRunner` 已移除图片、计时器、导航和设备状态的直连能力路由，主路径统一回到标准 SDK tool calling。
+4. 当前模型侧正式口径暴露 3 个高层工具：`capture_photo / timer_manage / map_manage`。
+5. 当前 `agent-core` 默认模型为 `qwen3.6-plus`，TTS 模型保持 `qwen3.5-omni-plus`。
 
 ### 3.7 测试脚本与历史脚本整理
 
@@ -189,11 +184,11 @@ start
 :AgentFacade 写入用户消息;
 :OpenAIAgentLoopRunner 构造 AgentToolContext;
 :OpenAI Agents SDK 正常跑 Tool Loop;
-:若模型选择 photo_interpret;
-:Skill 内部先调 capture_photo;
+:若模型选择 capture_photo;
+:框架接入真实图片;
 :再通过 SDK 原生图片输入执行视觉理解;
 :若模型选择 timer_manage / map_manage;
-:走统一 ToolGateway / SkillGateway / McpGateway;
+:走统一 ToolGateway / McpGateway;
 
 :把 trace / asset / artifact / task_refs 写回 AgentTurnResult;
 :AgentFacade 追加助手消息并挂接引用;
@@ -205,13 +200,12 @@ stop
 
 ```plantuml
 @startuml
-title Phase E Tool / Skill / MCP / TaskGateway 协作时序
+title Phase E Tool / MCP / TaskGateway 协作时序
 
 participant "VoiceRuntime" as V
 participant "AgentFacade" as A
 participant "Runner" as R
 participant "ToolGateway" as T
-participant "SkillGateway" as S
 participant "McpGateway" as M
 participant "TaskGateway" as G
 
@@ -219,27 +213,18 @@ V -> A : handle_turn(AgentTurn)
 A -> R : run_turn(session, turn)
 
 alt 用户要求拍照看前方
-  R -> T : invoke(photo_interpret)
-  T -> S : invoke(photo_interpret)
-  S -> T : invoke(capture_photo)
-  T --> S : CapabilityResult(asset_refs)
-  S --> T : CapabilityResult(derived_artifacts)
+  R -> T : invoke(capture_photo)
   T --> R : CapabilityResult
 else 用户要求计时
   R -> T : invoke(timer_manage)
-  T -> S : invoke(timer_manage)
-  S -> T : invoke(create_timer)
+  T -> T : invoke(create_timer)
   T -> G : create_task(timer_task)
   G --> T : TaskRuntime
-  T --> S : CapabilityResult(task_refs)
-  S --> T : CapabilityResult
   T --> R : CapabilityResult
 else 用户要求导航
   R -> T : invoke(map_manage)
-  T -> S : invoke(map_manage)
-  S -> M : invoke(amap.route_plan)
-  M --> S : CapabilityResult(derived_artifacts)
-  S --> T : CapabilityResult
+  T -> M : invoke(amap.route_plan)
+  M --> T : CapabilityResult(derived_artifacts)
   T --> R : CapabilityResult
 end
 
@@ -254,11 +239,10 @@ A -> A : 保存 trace + asset + artifact + task_ref
 
 更新 `server/test/unit/test_agent_core.py`，覆盖：
 
-1. `ToolRegistry` 自动发现首批 Tool / Skill / MCP 能力
+1. `ToolRegistry` 自动发现首批 Tool / MCP 能力
 2. `query_device_state` 仍能记录 trace
-3. `photo_interpret` 会组合 `capture_photo`
-4. `timer_manage` 会组合任务 Tool
-5. `map_manage` 会组合 `amap.route_plan` 并生成 `mcp + skill` trace
+3. `timer_manage` 会组合任务 Tool
+4. `map_manage` 会组合 `amap.route_plan` 并生成 `mcp + tool` trace
 6. `OpenAIAgentLoopRunner` 的 SDK 委托与事件循环兼容性仍然成立
 
 ### 6.2 集成测试
@@ -267,7 +251,6 @@ A -> A : 保存 trace + asset + artifact + task_ref
 
 1. 单轮 `AgentTurn` 中串起：
    - `capture_photo`
-   - `photo_interpret`
    - `map_manage`
    - `amap.route_plan`
 2. `CapabilityTrace` 会按顺序写回
@@ -296,7 +279,7 @@ PYTHONPATH=server/src python -m unittest \
 理由：
 
 1. 严格遵守 [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md) 中“模型侧统一 Tool 调用面”的结论。
-2. Skill 与 MCP 虽然内部保留独立 registry / gateway，但最终都通过 Tool 代理统一暴露。
+2. MCP 当前通过独立 registry / gateway 接入，模型侧统一只看到 Tool。
 3. `backend-task-core` 仍保持与 `agent-core` 平级，仅通过 `TaskGateway` 被调用，没有重新侵入主循环。
 4. `MediaAssetRef / DerivedArtifact / TaskRef / CapabilityTrace` 全部进入统一上下文模型，没有出现旁路存储。
 
@@ -336,8 +319,8 @@ PYTHONPATH=server/src python -m unittest \
 
 已完成：
 
-1. `Tool / Skill / MCP` 三层骨架源码补齐。
-2. 首批 Tool / Skill / MCP 与最小 `backend_task_core` 网关打通。
+1. `Tool / MCP` 两层骨架源码补齐。
+2. 首批 Tool / MCP 与最小 `backend_task_core` 网关打通。
 3. 能力调用结果可写回 `AgentSessionStore`。
 4. Phase E 自动化测试与联调说明已补齐。
 5. 当前阶段主测试脚本已切换为 `script/run_tests.sh`。

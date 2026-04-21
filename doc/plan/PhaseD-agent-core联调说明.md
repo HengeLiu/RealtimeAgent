@@ -63,5 +63,5 @@ curl http://127.0.0.1:8765/api/runtime/devices
 
 ## 5. 当前限制
 
-1. 当前联调说明只覆盖 Phase D，不包含 Skill / MCP / Task 的真实联调。
+1. 当前联调说明只覆盖 Phase D，不包含高层 Tool / MCP / Task 的真实联调。
 2. 若需要验证真实 Tool 决策，建议后续在 Phase E 增加专门的脚本化对话样例。

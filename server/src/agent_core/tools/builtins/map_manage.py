@@ -1,4 +1,4 @@
-"""地图管理 Skill。"""
+"""地图管理 Tool。"""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from agent_core.models import CapabilityResult, SkillSpec
-from agent_core.skills.base import BaseSkill
+from agent_core.models import CapabilityResult, ToolSpec
+from agent_core.tools.base import AgentToolContext, BaseTool
 from infra.errors import ErrorCode, build_error
 
 
 class MapManageInput(BaseModel):
-    """地图管理输入。"""
+    """地图管理输入。
+
+    主要功能：
+    1. 统一封装地点搜索、地址解析和路线规划三类地图需求。
+    2. 让模型只面对一个稳定高层入口，而不是直接操作底层地图方法。
+    """
 
     action: Literal["auto", "search", "geocode", "route"] = Field(
         default="auto",
@@ -43,10 +48,15 @@ class MapManageOutput(BaseModel):
     duration_s: int | None = None
 
 
-class MapManageSkill(BaseSkill):
-    """封装地点搜索、地址解析与路线规划。"""
+class MapManageTool(BaseTool):
+    """统一封装地图相关复合流程。
 
-    spec = SkillSpec(
+    主要功能：
+    1. 对模型暴露高层入口 `map_manage`。
+    2. 在内部继续通过 `McpGateway` 调用 `amap.*` 底层能力。
+    """
+
+    spec = ToolSpec(
         name="map_manage",
         description=(
             "当用户需要搜索地点、确认地址位置或规划路线时使用。"
@@ -54,27 +64,28 @@ class MapManageSkill(BaseSkill):
         ),
         input_model=MapManageInput,
         output_model=MapManageOutput,
+        capability_type="tool",
         tags=["map", "navigation", "amap"],
     )
 
-    def run(self, context, input_data: MapManageInput) -> CapabilityResult:
-        """执行地图相关复合流程。
+    def run(self, context: AgentToolContext, input_data: MapManageInput) -> CapabilityResult:
+        """执行地图复合流程。
 
         主要逻辑：
-        1. 根据 `action` 或输入字段自动判断本轮要做地点搜索、地址解析还是路线规划。
-        2. 调用统一 `McpGateway` 执行底层地图能力。
-        3. 把底层结果整理成适合直接播报的摘要。
+        1. 先根据显式动作或字段内容确定当前属于搜索、解析还是路线规划。
+        2. 再调用底层 `amap.*` MCP 方法。
+        3. 最后把底层结果整理成适合直接播报的高层摘要。
 
         参数：
         1. `context`：能力调用上下文。
         2. `input_data`：地图管理输入。
 
         返回值：
-        1. 统一 `CapabilityResult`，其中 `data` 会包含摘要和对应地图结果。
+        1. 统一 `CapabilityResult`，包含摘要和底层结果要点。
 
         异常情况：
         1. 未配置 `McpGateway` 时抛出配置错误。
-        2. 缺少当前动作必须字段时抛出消息错误。
+        2. 必填字段缺失时抛出消息错误。
         """
 
         if context.mcp_gateway is None:

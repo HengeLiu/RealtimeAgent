@@ -112,7 +112,7 @@ class CapabilityTrace:
     """能力调用轨迹。
 
     主要功能：
-    1. 记录单轮 turn 中的 Tool / Skill / MCP / Task 调用。
+    1. 记录单轮 turn 中的 Tool / MCP / Task 调用。
     2. 提供后续排障、审计和联调观察依据。
 
     主要属性：

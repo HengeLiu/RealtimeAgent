@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from agent_core.camera import CameraGateway
     from agent_core.context import AgentSessionStore
     from agent_core.mcp import McpGateway
-    from agent_core.skills import SkillGateway
     from agent_core.tools.gateway import ToolGateway
     from backend_task_core import TaskGateway
 
@@ -33,7 +32,6 @@ class AgentToolContext:
     task_gateway: "TaskGateway | None" = None
     camera_gateway: "CameraGateway | None" = None
     tool_gateway: "ToolGateway | None" = None
-    skill_gateway: "SkillGateway | None" = None
     mcp_gateway: "McpGateway | None" = None
     emitted_assets: list[MediaAssetRef] = field(default_factory=list)
     emitted_artifacts: list[DerivedArtifact] = field(default_factory=list)
@@ -65,10 +63,6 @@ class BaseTool(ABC):
     @abstractmethod
     def run(self, context: AgentToolContext, input_data) -> CapabilityResult:
         """执行 Tool 逻辑。"""
-
-
-class BaseSkillTool(BaseTool):
-    """Skill Tool 基类。"""
 
 
 class BaseMcpTool(BaseTool):

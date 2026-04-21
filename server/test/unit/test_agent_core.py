@@ -17,7 +17,6 @@ from agent_core.camera import CameraCaptureResult
 from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace, MessageContext
 from agent_core.context.assembler import ContextAssembler
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
-from agent_core.skills.builtins.photo_interpret import PhotoInterpretInput, PhotoInterpretSkill
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
@@ -68,7 +67,6 @@ def build_tool_context(*, registry, gateway, session_id, turn_id):
         task_gateway=registry.get_task_gateway(),
         camera_gateway=registry.get_camera_gateway(),
         tool_gateway=gateway,
-        skill_gateway=registry.get_skill_gateway(),
         mcp_gateway=registry.get_mcp_gateway(),
     )
 
@@ -384,7 +382,6 @@ class AgentCoreTestCase(unittest.TestCase):
                 task_gateway=registry.get_task_gateway(),
                 camera_gateway=registry.get_camera_gateway(),
                 tool_gateway=gateway,
-                skill_gateway=registry.get_skill_gateway(),
                 mcp_gateway=registry.get_mcp_gateway(),
             ),
         )
@@ -847,7 +844,6 @@ class AgentCoreTestCase(unittest.TestCase):
             task_gateway=registry.get_task_gateway(),
             camera_gateway=registry.get_camera_gateway(),
             tool_gateway=gateway,
-            skill_gateway=registry.get_skill_gateway(),
             mcp_gateway=registry.get_mcp_gateway(),
         )
         tool_context.emitted_assets.append(image_asset)
@@ -951,7 +947,6 @@ class AgentCoreTestCase(unittest.TestCase):
             task_gateway=registry.get_task_gateway(),
             camera_gateway=registry.get_camera_gateway(),
             tool_gateway=gateway,
-            skill_gateway=registry.get_skill_gateway(),
             mcp_gateway=registry.get_mcp_gateway(),
         )
 
@@ -1013,123 +1008,6 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("label", signature.parameters)
         self.assertNotIn("payload", signature.parameters)
 
-    def test_photo_interpret_skill_triggers_capture_photo(self) -> None:
-        """测试目标：验证 Skill 会在一轮调用中组合抓拍 Tool。"""
-
-        registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
-        traces: list[CapabilityTrace] = []
-
-        result = registry.invoke(
-            name="photo_interpret",
-            context=AgentToolContext(
-                session_id="sess_photo_001",
-                device_id="glass-001",
-                turn_id="turn_photo_001",
-                settings=ServerSettings(voice_runs_root="/tmp/agent-core-phase-e"),
-                session_store=AgentSessionStore(),
-                device_state_reader=registry.get_device_state_reader(),
-                trace_sink=traces.append,
-                task_gateway=registry.get_task_gateway(),
-                camera_gateway=registry.get_camera_gateway(),
-                tool_gateway=gateway,
-                skill_gateway=registry.get_skill_gateway(),
-                mcp_gateway=registry.get_mcp_gateway(),
-            ),
-            arguments={"question": "帮我看看前面有什么"},
-        )
-
-        self.assertIn("answer_text", result.data)
-        self.assertEqual(len(traces), 2)
-        self.assertEqual(traces[0].capability_name, "capture_photo")
-        self.assertEqual(traces[1].capability_name, "photo_interpret")
-
-    def test_photo_interpret_skill_uses_image_input_via_sdk(self) -> None:
-        """测试目标：验证图片解读会通过 SDK 的图片输入能力传图。
-
-        测试方法：
-        1. 准备一张本地图片资产并放入会话存储。
-        2. 注入假 SDK 客户端，记录 `chat.completions.create` 请求参数。
-        3. 执行 `photo_interpret.run(...)`。
-
-        预期结果：
-        1. 用户消息包含文本 part 和 `image_url` part。
-        2. 返回答案来源标记为 `sdk_vision`。
-        """
-
-        session_store = AgentSessionStore()
-        session_store.get_or_create_session(session_id="sess_photo_sdk_001", device_id="glass-001")
-        asset = MediaAssetRef(
-            asset_id="asset_photo_sdk_001",
-            session_id="sess_photo_sdk_001",
-            asset_type="image",
-            storage_uri="/tmp/agent-core-photo-sdk.png",
-            mime_type="image/png",
-            codec="png",
-            width=1,
-            height=1,
-        )
-        with open(asset.storage_uri, "wb") as handle:
-            handle.write(
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-                b"\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0bIDATx\xdac\xfc\xff"
-                b"\x1f\x00\x02\xeb\x01\xf5\x8fg?\xed\x00\x00\x00\x00IEND\xaeB`\x82"
-            )
-        session_store.save_assets(session_id="sess_photo_sdk_001", assets=[asset])
-
-        recorded: dict[str, object] = {}
-
-        class _FakeCompletions:
-            def create(self, **kwargs):
-                recorded["kwargs"] = kwargs
-
-                class _Message:
-                    content = "前方是一张桌子。"
-
-                class _Choice:
-                    message = _Message()
-
-                class _Completion:
-                    choices = [_Choice()]
-
-                return _Completion()
-
-        class _FakeChat:
-            completions = _FakeCompletions()
-
-        class _FakeSdkClient:
-            chat = _FakeChat()
-
-        skill = PhotoInterpretSkill(sdk_client=_FakeSdkClient())
-        context = AgentToolContext(
-            session_id="sess_photo_sdk_001",
-            device_id="glass-001",
-            turn_id="turn_photo_sdk_001",
-            settings=ServerSettings(
-                dashscope_api_key="demo-key",
-                voice_model_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            ),
-            session_store=session_store,
-            device_state_reader=lambda: {},
-            trace_sink=lambda _trace: None,
-        )
-
-        result = skill.run(
-            context,
-            PhotoInterpretInput(
-                question="帮我看看前面有什么",
-                capture_first=False,
-                photo_asset_id="asset_photo_sdk_001",
-            ),
-        )
-
-        self.assertEqual(result.data["answer_source"], "sdk_vision")
-        self.assertEqual(recorded["kwargs"]["model"], "qwen3.6-plus")
-        message_parts = recorded["kwargs"]["messages"][1]["content"]
-        self.assertEqual(message_parts[0]["type"], "text")
-        self.assertEqual(message_parts[1]["type"], "image_url")
-        self.assertTrue(message_parts[1]["image_url"]["url"].startswith("data:image/png;base64,"))
-        os.remove(asset.storage_uri)
-
     def test_capture_photo_tool_uses_real_camera_gateway_result(self) -> None:
         """测试目标：验证 capture_photo 会把相机网关返回的真实字节写成图片资产。
 
@@ -1158,7 +1036,6 @@ class AgentCoreTestCase(unittest.TestCase):
                 task_gateway=registry.get_task_gateway(),
                 camera_gateway=registry.get_camera_gateway(),
                 tool_gateway=gateway,
-                skill_gateway=registry.get_skill_gateway(),
                 mcp_gateway=registry.get_mcp_gateway(),
             ),
             arguments={"reason": "unit_test"},
@@ -1169,8 +1046,8 @@ class AgentCoreTestCase(unittest.TestCase):
         with open(result.data["storage_uri"], "rb") as handle:
             self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
 
-    def test_timer_manage_skill_creates_task(self) -> None:
-        """测试目标：验证 timer_manage Skill 会调用底层任务 Tool。"""
+    def test_timer_manage_tool_creates_task(self) -> None:
+        """测试目标：验证 timer_manage Tool 会调用底层任务 Tool。"""
 
         registry, gateway = build_tooling()
         traces: list[CapabilityTrace] = []
@@ -1188,7 +1065,6 @@ class AgentCoreTestCase(unittest.TestCase):
                 task_gateway=registry.get_task_gateway(),
                 camera_gateway=registry.get_camera_gateway(),
                 tool_gateway=gateway,
-                skill_gateway=registry.get_skill_gateway(),
                 mcp_gateway=registry.get_mcp_gateway(),
             ),
             arguments={"query": "帮我定时 5 分钟"},
@@ -1197,10 +1073,12 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("task_id", result.data)
         self.assertEqual(len(traces), 2)
         self.assertEqual(traces[0].capability_name, "create_timer")
+        self.assertEqual(traces[0].capability_type, "task")
         self.assertEqual(traces[1].capability_name, "timer_manage")
+        self.assertEqual(traces[1].capability_type, "tool")
 
-    def test_map_manage_skill_records_skill_and_mcp_trace(self) -> None:
-        """测试目标：验证地图工具会通过内部 MCP 调用返回结构化结果。"""
+    def test_map_manage_tool_records_tool_and_mcp_trace(self) -> None:
+        """测试目标：验证地图 Tool 会通过内部 MCP 调用返回结构化结果。"""
 
         registry, gateway = build_tooling()
         traces: list[CapabilityTrace] = []
@@ -1218,7 +1096,6 @@ class AgentCoreTestCase(unittest.TestCase):
                 task_gateway=registry.get_task_gateway(),
                 camera_gateway=registry.get_camera_gateway(),
                 tool_gateway=gateway,
-                skill_gateway=registry.get_skill_gateway(),
                 mcp_gateway=registry.get_mcp_gateway(),
             ),
             arguments={
@@ -1233,7 +1110,7 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(len(traces), 2)
         self.assertEqual(traces[0].capability_type, "mcp")
         self.assertEqual(traces[0].capability_name, "amap.route_plan")
-        self.assertEqual(traces[1].capability_type, "skill")
+        self.assertEqual(traces[1].capability_type, "tool")
         self.assertEqual(traces[1].capability_name, "map_manage")
 
 

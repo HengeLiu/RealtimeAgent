@@ -82,18 +82,7 @@ class ToolSpec:
     description: str
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None = None
-    capability_type: Literal["tool", "skill", "mcp", "task"] = "tool"
-    tags: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class SkillSpec:
-    """Skill 元数据定义。"""
-
-    name: str
-    description: str
-    input_model: type[BaseModel]
-    output_model: type[BaseModel] | None = None
+    capability_type: Literal["tool", "mcp", "task"] = "tool"
     tags: list[str] = field(default_factory=list)
 
 
@@ -106,26 +95,6 @@ class McpMethodSpec:
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None = None
     tags: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class SkillCall:
-    """Skill 调用记录。"""
-
-    skill_name: str
-    session_id: str
-    turn_id: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class SkillResultRecord:
-    """Skill 调用结果记录。"""
-
-    call: SkillCall
-    status: Literal["result", "failed"]
-    result: CapabilityResult | None = None
-    error: CapabilityError | None = None
 
 
 @dataclass(slots=True)

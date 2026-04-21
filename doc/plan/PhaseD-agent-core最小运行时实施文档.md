@@ -25,7 +25,7 @@ Phase C 完成后，仓库已有以下基础：
 
 1. `voice-runtime` 仍直接承担“历史组装 + 模型调用 + 回复决策”，未真正引入 `agent-core`。
 2. 缺少统一的会话上下文存储，语音输入、转写结果、回复结果尚未进入统一上下文模型。
-3. 缺少最小 Tool 注册表和调用轨迹记录，后续 Skill / MCP / Task 无统一承载体。
+3. 缺少最小 Tool 注册表和调用轨迹记录，后续 Tool / MCP / Task 无统一承载体。
 4. 缺少可替换的 Agent Runner，测试无法在不依赖真实模型接口的情况下验证 `agent-core` 链路。
 
 ## 3. 实现方案描述
@@ -41,7 +41,7 @@ Phase C 完成后，仓库已有以下基础：
    - 首批 Tool 调用
    - 统一错误包装
 3. 生产路径采用 OpenAI Agents SDK；测试路径允许注入假 Runner，避免自动化测试依赖真实模型接口。
-4. Phase D 不提前实现完整 Skill / MCP / Task Runtime，只为 Phase E/F 预留接口和上下文结构。
+4. Phase D 不提前实现完整 Tool 编排 / MCP / Task Runtime，只为 Phase E/F 预留接口和上下文结构。
 
 ### 3.2 新增模块
 
@@ -106,7 +106,7 @@ Phase C 完成后，仓库已有以下基础：
 
 1. 通过 `ToolRegistry` 注册。
 2. 对 OpenAI Agents SDK 暴露为 `function_tool`。
-3. 同时保留手工 `invoke()` 入口，便于单元测试和未来 `SkillGateway` 复用。
+3. 同时保留手工 `invoke()` 入口，便于单元测试和未来复合 Tool 复用。
 4. Tool 调用时生成 `CapabilityTrace`，无论成功或失败都写入轨迹。
 
 ### 3.5 测试策略
@@ -230,12 +230,12 @@ PYTHONPATH=server/src uv run python -m unittest discover -s server/test -p 'test
 1. 严格遵守 [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md) 中“`voice-runtime` 只负责语音边界、`agent-core` 承担开放式决策”的边界。
 2. `agent-core` 的主循环确实采用 OpenAI Agents SDK，而不是继续在 `voice-runtime` 中自研一套新 loop。
 3. 上下文模型已按 `MessageContext / MediaAssetRef / DerivedArtifact / CapabilityTrace` 落地最小结构。
-4. 当前只实现最小 Tool 注册表，没有提前引入复杂 Skill Runtime，符合第二阶段计划里的 Phase D 范围。
+4. 当前只实现最小 Tool 注册表，没有提前引入复杂能力编排层，符合第二阶段计划里的 Phase D 范围。
 5. 当前实现已进一步调整为“框架管理 history messages，system prompt 保持最小”，更符合最新设计收敛方向。
 
 当前仍保留的限制：
 
-1. 当前 Tool 仅有 `query_device_state`，Skill / MCP / Task 仍待后续 Phase E/F 落地。
+1. 当前 Tool 仅有 `query_device_state`，Tool / MCP / Task 的完整能力面仍待后续 Phase E/F 落地。
 2. 生产路径已接 OpenAI Agents SDK，但自动化测试仍通过假 Runner 验证，真实模型联调仍需后续环境验证。
 3. `voice-runtime` 目前仍沿用模型 TTS 输出链路，尚未把 TTS 独立成专门能力模块。
 
@@ -276,4 +276,4 @@ bash script/deprecated/run_phase_d_tests_phase_d.sh
 下一步建议：
 
 1. 进入 Phase E，先补 `capture_photo`、`create_timer`、`query_task_status`、`cancel_task` 等最小 Tool。
-2. 再进入 Skill / MCP gateway，实现 `photo_interpret` 和 `amap` 的统一承载层。
+2. 再进入高层 Tool / MCP gateway，完善 `capture_photo`、`map_manage` 等统一承载层。

@@ -85,7 +85,6 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             task_gateway=self._tool_registry.get_task_gateway(),
             camera_gateway=self._tool_registry.get_camera_gateway(),
             tool_gateway=self._tool_gateway,
-            skill_gateway=self._tool_registry.get_skill_gateway(),
             mcp_gateway=self._tool_registry.get_mcp_gateway(),
         )
 

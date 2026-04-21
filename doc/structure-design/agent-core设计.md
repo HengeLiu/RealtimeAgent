@@ -51,7 +51,7 @@
 
 1. `agent-core` 的通用主循环基于 **OpenAI Agents SDK**。
 2. 模型侧只感知一组统一工具。
-3. 模型不感知 `Skill`、`MCP`、`TaskRuntime` 等内部概念。
+3. 模型不感知 `MCP`、`TaskRuntime` 等内部概念。
 4. `backend-task-core` 继续作为与 `agent-core` 平级的后台任务运行时。
 5. `voice-runtime` 继续负责语音边界，不由 SDK 替代。
 
@@ -254,13 +254,12 @@ system prompt 不承载：
 
 内部保留但默认不直接暴露给模型的能力包括：
 
-1. `photo_interpret`
-2. `create_timer`
-3. `query_task_status`
-4. `cancel_task`
-5. `amap.poi_search`
-6. `amap.geocode`
-7. `amap.route_plan`
+1. `create_timer`
+2. `query_task_status`
+3. `cancel_task`
+4. `amap.poi_search`
+5. `amap.geocode`
+6. `amap.route_plan`
 
 ### 8.4 设计理由
 
@@ -284,8 +283,7 @@ system prompt 不承载：
 3. `OpenAIAgentLoopRunner`
 4. `ToolRegistry`
 5. `ToolGateway`
-6. `SkillRegistry / SkillGateway`
-7. `McpRegistry / McpGateway`
+6. `McpRegistry / McpGateway`
 
 ### 9.1 `AgentFacade`
 
@@ -405,21 +403,21 @@ system prompt 不承载：
 3. `ToolRegistry`
 4. `ToolGateway`
 
-### 13.2 第 5 项：Skills 与 MCP
+### 13.2 第 5 项：工具与 MCP
 
 落地项：
 
-1. 保留 Skill 内部实现
+1. 保留高层 Tool 内部实现
 2. 保留 MCP 内部适配
 3. 模型侧通过高层工具统一调用
 
-### 13.3 第 6 项：拍照 Skill + 图片解读
+### 13.3 第 6 项：拍照工具 + 图片解读
 
 设计：
 
 1. `capture_photo` 作为模型可见拍照工具
-2. `photo_interpret` 退回内部辅助能力，不再作为模型主入口
-3. 图片通过 SDK 原生图片输入传给主链路模型
+2. 图片通过 SDK 原生图片输入传给主链路模型
+3. 本期不再保留 `photo_interpret` 作为正式能力抽象
 
 ### 13.4 第 7 项：AMap 导航
 
@@ -476,7 +474,6 @@ server/src/agent_core/
   context/
   runtime/
   tools/
-  skills/
   mcp/
 ```
 

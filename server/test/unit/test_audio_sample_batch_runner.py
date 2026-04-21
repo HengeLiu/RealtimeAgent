@@ -114,7 +114,7 @@ class AudioSampleBatchRunnerTestCase(unittest.TestCase):
                         },
                     ],
                     "capability_traces": [
-                        {"capability_name": "photo_interpret", "status": "succeeded"},
+                        {"capability_name": "capture_photo", "status": "succeeded"},
                     ],
                 }
 
@@ -150,7 +150,7 @@ class AudioSampleBatchRunnerTestCase(unittest.TestCase):
         )
         self.assertEqual(
             first_result_json["agent_session"]["capability_traces"][0]["capability_name"],
-            "photo_interpret",
+            "capture_photo",
         )
 
 

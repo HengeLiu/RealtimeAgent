@@ -6,7 +6,7 @@
 
 1. 服务端可下发 `sensor.camera.capture`
 2. 眼镜端可真实抓拍一张图片
-3. 图片可回到 `capture_photo -> photo_interpret`
+3. 图片可回到 `capture_photo -> 主链路图片理解`
 
 ## 2. 服务端启动
 
@@ -45,8 +45,8 @@ LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=server/src uv run python -m 
 
 预期：
 
-1. 模型命中 `photo_interpret`
-2. `photo_interpret` 内部触发 `capture_photo`
+1. 模型先命中 `capture_photo`
+2. 抓拍完成后，主链路模型继续查看真实图片
 3. 返回语音答复时，`agent_session.assets` 中出现真实图片
 
 ## 5. 排障建议
@@ -61,4 +61,4 @@ LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=server/src uv run python -m 
 
 1. 查看 `result.json` 中的图片路径是否为真实 `.jpg`
 2. 查看 `agent_session.capability_traces`
-3. 确认 `photo_interpret` 的 `answer_source` 是否为 `sdk_vision`
+3. 确认最终图片理解是否来自主链路多模态请求
