@@ -34,7 +34,7 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAILED_BIT BIT1
 #define WIFI_PROFILE_COUNT 2
-#define WIFI_RETRY_PER_PROFILE 8
+#define WIFI_RETRY_DELAY_MS 5000
 #define CONTROL_TARGET_DEVICE_ID "server-main"
 
 #define MIC_PDM_CLK_GPIO GPIO_NUM_42
@@ -72,6 +72,7 @@
 #define CAMERA_JPEG_QUALITY 18
 #define CAMERA_FB_COUNT 1
 #define CAMERA_CAPTURE_TASK_STACK_SIZE (6 * 1024)
+#define CAMERA_STREAM_TASK_STACK_SIZE (8 * 1024)
 
 typedef struct {
     const char *ssid;
@@ -118,12 +119,13 @@ static const char *TAG = "glass-main";
 static EventGroupHandle_t s_wifi_event_group;
 static esp_websocket_client_handle_t s_ws_client;
 static esp_websocket_client_handle_t s_audio_ws_client;
+static esp_websocket_client_handle_t s_camera_ws_client;
 static esp_event_handler_instance_t s_wifi_event_instance;
 static esp_event_handler_instance_t s_ip_event_instance;
 static i2s_chan_handle_t s_mic_rx_chan;
 static i2s_chan_handle_t s_spk_tx_chan;
 static int s_active_wifi_profile = 0;
-static int s_wifi_retry_count = 0;
+static int s_wifi_round_attempt_count = 0;
 static uint32_t s_message_sequence = 0;
 static bool s_registered = false;
 static bool s_voice_session_opened = false;
@@ -138,6 +140,8 @@ static volatile bool s_playback_interrupt_requested = false;
 static bool s_speaker_channel_enabled = false;
 static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
+static bool s_camera_stream_active = false;
+static bool s_camera_stream_task_running = false;
 static uint64_t s_reply_wait_started_ms = 0;
 static char s_current_session_id[64];
 static char s_current_stream_id[64];
@@ -145,7 +149,13 @@ static char s_current_playback_stream_id[64];
 static char s_next_playback_stream_id[64];
 static char s_audio_ws_uri[256];
 static char s_stream_wav_url[256];
+static char s_camera_stream_ws_uri[256];
+static char s_current_camera_stream_id[64];
+static int s_camera_frame_interval_ms = 500;
+static uint32_t s_camera_frame_seq = 0;
 static TaskHandle_t s_playback_task_handle = NULL;
+static TaskHandle_t s_camera_stream_task_handle = NULL;
+static TaskHandle_t s_wifi_retry_task_handle = NULL;
 static sr_runtime_ctx_t s_sr_ctx;
 
 static const wifi_profile_t s_wifi_profiles[WIFI_PROFILE_COUNT] = {
@@ -175,12 +185,47 @@ static void reset_control_session_state(void);
 static void ensure_control_transport_started(void);
 static bool init_camera(void);
 static void start_playback_stream(const char *stream_id);
+static void start_camera_stream(const char *stream_id, const char *target_ws_uri, int frame_interval_ms);
+static void stop_camera_stream(const char *stream_id);
+static void schedule_next_wifi_round(void);
 
 static bool wifi_profile_available(int index)
 {
     return index >= 0 &&
            index < WIFI_PROFILE_COUNT &&
            s_wifi_profiles[index].ssid[0] != '\0';
+}
+
+static int first_available_wifi_profile(void)
+{
+    for (int index = 0; index < WIFI_PROFILE_COUNT; index += 1) {
+        if (wifi_profile_available(index)) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+static int count_available_wifi_profiles(void)
+{
+    int count = 0;
+    for (int index = 0; index < WIFI_PROFILE_COUNT; index += 1) {
+        if (wifi_profile_available(index)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+static int next_available_wifi_profile(int current_index)
+{
+    for (int offset = 1; offset <= WIFI_PROFILE_COUNT; offset += 1) {
+        int candidate = (current_index + offset) % WIFI_PROFILE_COUNT;
+        if (wifi_profile_available(candidate)) {
+            return candidate;
+        }
+    }
+    return -1;
 }
 
 static uint64_t now_ms(void)
@@ -851,6 +896,79 @@ cleanup:
     return written >= 0;
 }
 
+static bool send_camera_frame(
+    const char *stream_id,
+    const uint8_t *payload,
+    size_t payload_size,
+    uint32_t frame_seq,
+    uint16_t width,
+    uint16_t height,
+    bool final
+)
+{
+    cJSON *header = cJSON_CreateObject();
+    char *header_json = NULL;
+    uint8_t *raw = NULL;
+    uint32_t header_len = 0;
+    int written = -1;
+
+    if (s_camera_ws_client == NULL || !esp_websocket_client_is_connected(s_camera_ws_client)) {
+        return false;
+    }
+    if (header == NULL) {
+        ESP_LOGE(TAG, "构造相机帧头失败");
+        return false;
+    }
+
+    cJSON_AddStringToObject(header, "version", "v1");
+    cJSON_AddStringToObject(header, "stream_id", stream_id);
+    cJSON_AddStringToObject(header, "frame_type", "camera_frame");
+    cJSON_AddNumberToObject(header, "seq", (double)frame_seq);
+    cJSON_AddNumberToObject(header, "ts_ms", (double)now_ms());
+    cJSON_AddStringToObject(header, "codec", "jpeg");
+    cJSON_AddNumberToObject(header, "payload_size", (double)payload_size);
+    cJSON_AddBoolToObject(header, "final", final);
+    cJSON_AddNumberToObject(header, "width", (double)width);
+    cJSON_AddNumberToObject(header, "height", (double)height);
+    cJSON_AddNumberToObject(header, "frame_index", (double)frame_seq);
+
+    header_json = cJSON_PrintUnformatted(header);
+    if (header_json == NULL) {
+        ESP_LOGE(TAG, "序列化相机帧头失败");
+        goto cleanup;
+    }
+
+    header_len = (uint32_t)strlen(header_json);
+    raw = heap_caps_malloc(4 + header_len + payload_size, MALLOC_CAP_8BIT);
+    if (raw == NULL) {
+        ESP_LOGE(TAG, "分配相机帧缓冲失败");
+        goto cleanup;
+    }
+
+    raw[0] = (uint8_t)((header_len >> 24) & 0xFF);
+    raw[1] = (uint8_t)((header_len >> 16) & 0xFF);
+    raw[2] = (uint8_t)((header_len >> 8) & 0xFF);
+    raw[3] = (uint8_t)(header_len & 0xFF);
+    memcpy(raw + 4, header_json, header_len);
+    memcpy(raw + 4 + header_len, payload, payload_size);
+
+    written = esp_websocket_client_send_bin(
+        s_camera_ws_client,
+        (const char *)raw,
+        4 + (int)header_len + (int)payload_size,
+        pdMS_TO_TICKS(3000)
+    );
+    if (written < 0) {
+        ESP_LOGW(TAG, "发送 camera_frame 失败: seq=%" PRIu32, frame_seq);
+    }
+
+cleanup:
+    heap_caps_free(raw);
+    free(header_json);
+    cJSON_Delete(header);
+    return written >= 0;
+}
+
 static esp_err_t apply_wifi_profile(int index)
 {
     wifi_config_t wifi_config = {0};
@@ -870,23 +988,63 @@ static esp_err_t apply_wifi_profile(int index)
     return esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
 }
 
-static bool try_switch_wifi_profile(void)
+static void connect_active_wifi_profile(const char *reason)
 {
-    int next = s_active_wifi_profile + 1;
-    while (next < WIFI_PROFILE_COUNT) {
-        if (!wifi_profile_available(next)) {
-            next += 1;
-            continue;
+    if (!wifi_profile_available(s_active_wifi_profile)) {
+        int first_profile = first_available_wifi_profile();
+        if (first_profile < 0) {
+            ESP_LOGE(TAG, "没有可用的 WiFi 配置，无法发起连接");
+            return;
         }
-
-        s_active_wifi_profile = next;
-        s_wifi_retry_count = 0;
-        ESP_LOGW(TAG, "主 WiFi 连接失败，切换到兜底 WiFi: %s", s_wifi_profiles[next].ssid);
-        ESP_ERROR_CHECK(apply_wifi_profile(next));
-        ESP_ERROR_CHECK(esp_wifi_connect());
-        return true;
+        s_active_wifi_profile = first_profile;
     }
-    return false;
+
+    ESP_LOGI(
+        TAG,
+        "开始连接 WiFi: ssid=%s reason=%s",
+        s_wifi_profiles[s_active_wifi_profile].ssid,
+        reason
+    );
+    ESP_ERROR_CHECK(apply_wifi_profile(s_active_wifi_profile));
+    ESP_ERROR_CHECK(esp_wifi_connect());
+}
+
+static void wifi_retry_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(WIFI_RETRY_DELAY_MS));
+    s_wifi_retry_task_handle = NULL;
+    if ((xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT) != 0) {
+        ESP_LOGD(TAG, "WiFi 在等待期间已恢复，跳过本次延迟重试");
+        vTaskDelete(NULL);
+        return;
+    }
+    connect_active_wifi_profile("round_retry");
+    vTaskDelete(NULL);
+}
+
+static void schedule_next_wifi_round(void)
+{
+    int first_profile = first_available_wifi_profile();
+    if (first_profile < 0) {
+        ESP_LOGE(TAG, "没有可用的 WiFi 配置，无法安排下一轮重试");
+        xEventGroupSetBits(s_wifi_event_group, WIFI_FAILED_BIT);
+        return;
+    }
+
+    s_active_wifi_profile = first_profile;
+    s_wifi_round_attempt_count = 0;
+    if (s_wifi_retry_task_handle != NULL) {
+        ESP_LOGD(TAG, "WiFi 延迟重试任务已在等待，本次不重复创建");
+        return;
+    }
+
+    ESP_LOGW(TAG, "本轮 WiFi 均连接失败，等待 %d ms 后重新开始轮询", WIFI_RETRY_DELAY_MS);
+    if (xTaskCreate(wifi_retry_task, "wifi_retry_task", 4096, NULL, 4, &s_wifi_retry_task_handle) != pdPASS) {
+        s_wifi_retry_task_handle = NULL;
+        ESP_LOGE(TAG, "创建 WiFi 延迟重试任务失败，立即重试首个 WiFi");
+        connect_active_wifi_profile("round_retry_fallback");
+    }
 }
 
 static void wifi_event_handler(
@@ -899,8 +1057,7 @@ static void wifi_event_handler(
     (void)arg;
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "开始连接 WiFi: %s", s_wifi_profiles[s_active_wifi_profile].ssid);
-        ESP_ERROR_CHECK(esp_wifi_connect());
+        connect_active_wifi_profile("sta_start");
         return;
     }
 
@@ -908,28 +1065,38 @@ static void wifi_event_handler(
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         reset_control_session_state();
 
-        if (s_wifi_retry_count < WIFI_RETRY_PER_PROFILE) {
-            s_wifi_retry_count += 1;
-            ESP_LOGW(
-                TAG,
-                "WiFi 断开，继续重试: ssid=%s retry=%d",
-                s_wifi_profiles[s_active_wifi_profile].ssid,
-                s_wifi_retry_count
-            );
-            ESP_ERROR_CHECK(esp_wifi_connect());
+        int available_profiles = count_available_wifi_profiles();
+        if (available_profiles <= 0) {
+            ESP_LOGE(TAG, "没有可用的 WiFi 配置，无法继续重连");
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAILED_BIT);
             return;
         }
 
-        if (!try_switch_wifi_profile()) {
-            ESP_LOGE(TAG, "WiFi 连接失败，所有配置均已尝试");
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAILED_BIT);
+        s_wifi_round_attempt_count += 1;
+        ESP_LOGW(
+            TAG,
+            "WiFi 断开: ssid=%s round_attempt=%d/%d",
+            s_wifi_profiles[s_active_wifi_profile].ssid,
+            s_wifi_round_attempt_count,
+            available_profiles
+        );
+
+        if (s_wifi_round_attempt_count < available_profiles) {
+            int next_profile = next_available_wifi_profile(s_active_wifi_profile);
+            if (next_profile >= 0 && next_profile != s_active_wifi_profile) {
+                s_active_wifi_profile = next_profile;
+                connect_active_wifi_profile("switch_profile");
+                return;
+            }
         }
+
+        schedule_next_wifi_round();
         return;
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        s_wifi_retry_count = 0;
+        s_wifi_round_attempt_count = 0;
         ESP_LOGI(
             TAG,
             "WiFi 已获取 IP，准备建立控制连接: ip=" IPSTR,
@@ -955,8 +1122,9 @@ static bool init_wifi(void)
     EventBits_t bits;
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 
-    if (!wifi_profile_available(0)) {
-        ESP_LOGE(TAG, "主 WiFi 名称为空，请先在本地配置文件中设置");
+    s_active_wifi_profile = first_available_wifi_profile();
+    if (s_active_wifi_profile < 0) {
+        ESP_LOGE(TAG, "WiFi 名称为空，请先在本地配置文件中设置至少一个 WiFi");
         return false;
     }
 
@@ -990,7 +1158,7 @@ static bool init_wifi(void)
 
     bits = xEventGroupWaitBits(
         s_wifi_event_group,
-        WIFI_CONNECTED_BIT | WIFI_FAILED_BIT,
+        WIFI_CONNECTED_BIT,
         pdFALSE,
         pdFALSE,
         portMAX_DELAY
@@ -1131,6 +1299,17 @@ static void reset_control_session_state(void)
     s_current_playback_stream_id[0] = '\0';
     s_next_playback_stream_id[0] = '\0';
     s_playback_task_handle = NULL;
+    s_camera_stream_active = false;
+    s_camera_stream_task_running = false;
+    s_camera_stream_ws_uri[0] = '\0';
+    s_current_camera_stream_id[0] = '\0';
+    s_camera_frame_seq = 0;
+    s_camera_stream_task_handle = NULL;
+    if (s_camera_ws_client != NULL) {
+        esp_websocket_client_stop(s_camera_ws_client);
+        esp_websocket_client_destroy(s_camera_ws_client);
+        s_camera_ws_client = NULL;
+    }
 }
 
 static void reset_pre_roll(pre_roll_frame_t *frames, size_t count, size_t *next_index, size_t *valid_count)
@@ -1331,6 +1510,200 @@ static void ensure_audio_transport_started(void)
     s_audio_transport_started = true;
 }
 
+static void camera_websocket_event_handler(
+    void *handler_args,
+    esp_event_base_t base,
+    int32_t event_id,
+    void *event_data
+)
+{
+    (void)handler_args;
+    (void)base;
+    (void)event_data;
+
+    if (event_id == WEBSOCKET_EVENT_CONNECTED) {
+        ESP_LOGI(TAG, "相机流连接已建立");
+        return;
+    }
+    if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
+        ESP_LOGW(TAG, "相机流连接已断开");
+        return;
+    }
+    if (event_id == WEBSOCKET_EVENT_ERROR) {
+        ESP_LOGE(TAG, "相机流连接发生错误");
+    }
+}
+
+static void camera_stream_task(void *arg)
+{
+    (void)arg;
+    camera_fb_t *fb = NULL;
+
+    while (s_camera_stream_active) {
+        if (s_camera_ws_client == NULL || !esp_websocket_client_is_connected(s_camera_ws_client)) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        fb = esp_camera_fb_get();
+        if (fb == NULL) {
+            ESP_LOGW(TAG, "获取相机帧失败");
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        if (!send_camera_frame(
+                s_current_camera_stream_id,
+                fb->buf,
+                fb->len,
+                s_camera_frame_seq++,
+                (uint16_t)fb->width,
+                (uint16_t)fb->height,
+                false)) {
+            ESP_LOGW(TAG, "发送 camera_frame 失败");
+        } else {
+            ESP_LOGD(
+                TAG,
+                "已发送 camera_frame: stream_id=%s seq=%" PRIu32 " bytes=%u",
+                s_current_camera_stream_id,
+                s_camera_frame_seq - 1,
+                (unsigned)fb->len
+            );
+        }
+        esp_camera_fb_return(fb);
+        fb = NULL;
+        vTaskDelay(pdMS_TO_TICKS(s_camera_frame_interval_ms));
+    }
+
+    if (fb != NULL) {
+        esp_camera_fb_return(fb);
+    }
+    if (s_camera_ws_client != NULL) {
+        esp_websocket_client_stop(s_camera_ws_client);
+        esp_websocket_client_destroy(s_camera_ws_client);
+        s_camera_ws_client = NULL;
+    }
+    s_camera_stream_task_running = false;
+    s_current_camera_stream_id[0] = '\0';
+    s_camera_stream_ws_uri[0] = '\0';
+    s_camera_frame_seq = 0;
+    s_camera_stream_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void start_camera_stream(const char *stream_id, const char *target_ws_uri, int frame_interval_ms)
+{
+    esp_websocket_client_config_t websocket_config = {0};
+
+    if (stream_id == NULL || stream_id[0] == '\0' || target_ws_uri == NULL || target_ws_uri[0] == '\0') {
+        ESP_LOGW(TAG, "相机流启动参数不完整，已忽略");
+        return;
+    }
+    if (!s_camera_initialized) {
+        ESP_LOGW(TAG, "相机未初始化，无法启动持续视频流");
+        return;
+    }
+    if (s_camera_capture_busy) {
+        ESP_LOGW(TAG, "当前相机正被单次抓拍占用，无法启动持续视频流");
+        return;
+    }
+    if (s_camera_stream_task_running) {
+        ESP_LOGW(TAG, "当前已有持续视频流任务在运行，已忽略新的启动请求");
+        return;
+    }
+
+    strlcpy(s_current_camera_stream_id, stream_id, sizeof(s_current_camera_stream_id));
+    strlcpy(s_camera_stream_ws_uri, target_ws_uri, sizeof(s_camera_stream_ws_uri));
+    s_camera_frame_interval_ms = frame_interval_ms > 0 ? frame_interval_ms : 500;
+    s_camera_frame_seq = 0;
+
+    websocket_config.uri = s_camera_stream_ws_uri;
+    websocket_config.buffer_size = 16384;
+    websocket_config.network_timeout_ms = 5000;
+    websocket_config.task_stack = 8192;
+
+    s_camera_ws_client = esp_websocket_client_init(&websocket_config);
+    if (s_camera_ws_client == NULL) {
+        ESP_LOGE(TAG, "创建相机流客户端失败");
+        s_current_camera_stream_id[0] = '\0';
+        s_camera_stream_ws_uri[0] = '\0';
+        return;
+    }
+    ESP_ERROR_CHECK(
+        esp_websocket_register_events(
+            s_camera_ws_client,
+            WEBSOCKET_EVENT_ANY,
+            camera_websocket_event_handler,
+            NULL
+        )
+    );
+    s_camera_stream_active = true;
+    s_camera_stream_task_running = true;
+    if (
+        xTaskCreateWithCaps(
+            camera_stream_task,
+            "camera_stream_task",
+            CAMERA_STREAM_TASK_STACK_SIZE,
+            NULL,
+            5,
+            &s_camera_stream_task_handle,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        ) != pdPASS
+    ) {
+        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        size_t largest_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_camera_stream_active = false;
+        s_camera_stream_task_running = false;
+        s_camera_stream_task_handle = NULL;
+        s_current_camera_stream_id[0] = '\0';
+        s_camera_stream_ws_uri[0] = '\0';
+        esp_websocket_client_destroy(s_camera_ws_client);
+        s_camera_ws_client = NULL;
+        ESP_LOGE(
+            TAG,
+            "创建 camera_stream_task 失败: stack=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
+            CAMERA_STREAM_TASK_STACK_SIZE,
+            (unsigned)free_internal,
+            (unsigned)largest_internal,
+            (unsigned)free_spiram,
+            (unsigned)largest_spiram
+        );
+        return;
+    }
+
+    if (esp_websocket_client_start(s_camera_ws_client) != ESP_OK) {
+        ESP_LOGE(TAG, "启动相机流客户端失败");
+        s_camera_stream_active = false;
+        s_camera_stream_task_running = false;
+        s_camera_stream_task_handle = NULL;
+        s_current_camera_stream_id[0] = '\0';
+        s_camera_stream_ws_uri[0] = '\0';
+        esp_websocket_client_destroy(s_camera_ws_client);
+        s_camera_ws_client = NULL;
+        return;
+    }
+}
+
+static void stop_camera_stream(const char *stream_id)
+{
+    if (!s_camera_stream_task_running || !s_camera_stream_active) {
+        return;
+    }
+    if (stream_id != NULL && stream_id[0] != '\0' && strcmp(stream_id, s_current_camera_stream_id) != 0) {
+        ESP_LOGW(
+            TAG,
+            "停止相机流时 stream_id 不匹配，已忽略: expected=%s actual=%s",
+            s_current_camera_stream_id,
+            stream_id
+        );
+        return;
+    }
+    s_camera_stream_active = false;
+    ESP_LOGI(TAG, "已请求停止相机流: stream_id=%s", s_current_camera_stream_id);
+}
+
 static void playback_stream_task(void *arg)
 {
     int32_t *stereo_buffer = NULL;
@@ -1508,7 +1881,10 @@ cleanup:
         strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
         s_next_playback_stream_id[0] = '\0';
     }
-    ESP_LOGI(TAG, interrupted ? "播放已被打断，恢复待命监听" : "播放结束，恢复待命监听");
+    {
+        const char *resume_message = interrupted ? "播放已被打断，恢复待命监听" : "播放结束，恢复待命监听";
+        ESP_LOGI(TAG, "%s", resume_message);
+    }
     if (next_stream_id[0] != '\0') {
         start_playback_stream(next_stream_id);
     }
@@ -2075,6 +2451,20 @@ static void handle_control_message(const char *data, int data_len)
             ESP_LOGW(TAG, "sensor.camera.capture 缺少 request_id");
             goto cleanup;
         }
+        if (s_camera_stream_task_running || s_camera_stream_active) {
+            send_camera_captured_message(
+                session_id->valuestring,
+                request_id->valuestring,
+                false,
+                NULL,
+                NULL,
+                0,
+                0,
+                NULL,
+                "camera stream is already running"
+            );
+            goto cleanup;
+        }
         if (s_camera_capture_busy) {
             send_camera_captured_message(
                 session_id->valuestring,
@@ -2154,6 +2544,58 @@ static void handle_control_message(const char *data, int data_len)
         goto cleanup;
     }
 
+    if (strcmp(name->valuestring, "sensor.camera.stream.start") == 0) {
+        const cJSON *payload_stream_id = payload != NULL
+            ? cJSON_GetObjectItemCaseSensitive(payload, "stream_id")
+            : NULL;
+        const cJSON *payload_target_ws_uri = payload != NULL
+            ? cJSON_GetObjectItemCaseSensitive(payload, "target_ws_uri")
+            : NULL;
+        const cJSON *payload_frame_interval_ms = payload != NULL
+            ? cJSON_GetObjectItemCaseSensitive(payload, "frame_interval_ms")
+            : NULL;
+        int frame_interval_ms = 500;
+
+        if (!cJSON_IsString(payload_stream_id) || payload_stream_id->valuestring == NULL) {
+            ESP_LOGW(TAG, "sensor.camera.stream.start 缺少 stream_id");
+            goto cleanup;
+        }
+        if (!cJSON_IsString(payload_target_ws_uri) || payload_target_ws_uri->valuestring == NULL) {
+            ESP_LOGW(TAG, "sensor.camera.stream.start 缺少 target_ws_uri");
+            goto cleanup;
+        }
+        if (cJSON_IsNumber(payload_frame_interval_ms)) {
+            frame_interval_ms = payload_frame_interval_ms->valueint;
+        }
+        ESP_LOGI(
+            TAG,
+            "收到 sensor.camera.stream.start: stream_id=%s target_ws_uri=%s frame_interval_ms=%d",
+            payload_stream_id->valuestring,
+            payload_target_ws_uri->valuestring,
+            frame_interval_ms
+        );
+        start_camera_stream(payload_stream_id->valuestring, payload_target_ws_uri->valuestring, frame_interval_ms);
+        goto cleanup;
+    }
+
+    if (strcmp(name->valuestring, "sensor.camera.stream.stop") == 0) {
+        const cJSON *payload_stream_id = payload != NULL
+            ? cJSON_GetObjectItemCaseSensitive(payload, "stream_id")
+            : NULL;
+        const char *stop_stream_id = NULL;
+
+        if (cJSON_IsString(payload_stream_id) && payload_stream_id->valuestring != NULL) {
+            stop_stream_id = payload_stream_id->valuestring;
+        }
+        ESP_LOGI(
+            TAG,
+            "收到 sensor.camera.stream.stop: stream_id=%s",
+            stop_stream_id != NULL ? stop_stream_id : "<current>"
+        );
+        stop_camera_stream(stop_stream_id);
+        goto cleanup;
+    }
+
     ESP_LOGD(TAG, "收到未处理控制消息: %s", name->valuestring);
 
 cleanup:
@@ -2203,6 +2645,7 @@ static void start_control_connection(void)
         .uri = s_runtime_config.server_ws_uri,
         .buffer_size = 16384,
         .network_timeout_ms = 5000,
+        .reconnect_timeout_ms = 10000,
         .task_stack = 8192,
     };
 
@@ -2227,9 +2670,6 @@ static void start_control_connection(void)
 static void ensure_control_transport_started(void)
 {
     if (s_control_transport_started) {
-        if (s_ws_client != NULL && !esp_websocket_client_is_connected(s_ws_client)) {
-            esp_websocket_client_start(s_ws_client);
-        }
         return;
     }
 

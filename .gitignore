@@ -10,12 +10,30 @@ reply
 m4a
 runs
 
+# Python generated artifacts
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
 # ESP-IDF generated artifacts
 glass/**/build/
 glass/**/managed_components/
+glass/**/*.bin
 glass/src/sdkconfig
 glass/src/sdkconfig.old
 glass/src/sdkconfig.local
 glass/src/sdkconfig.local.old
 glass/src/dependencies.lock
 glass/config/local_build.env
+
+# iOS generated artifacts
+phone/ios/build*
+phone/ios/DerivedData/
+phone/ios/**/*.xcresult
+phone/ios/**/xcuserdata/
+phone/ios/**/*.xcuserstate
+phone/ios/**/ModuleCache.noindex/
+phone/ios/**/SDKStatCaches.noindex/
+phone/ios/**/CompilationCache.noindex/

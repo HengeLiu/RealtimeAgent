@@ -10,9 +10,10 @@ import struct
 import threading
 import time
 import unittest
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from api.http_server import build_server_handle
+from backend_task_core import TaskEvent
 from infra.config import ServerSettings
 from protocol.codec.json_codec import JsonMessageCodec
 from protocol.messages.control_message import Endpoint
@@ -134,7 +135,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         settings = ServerSettings(
             host="127.0.0.1",
             port=0,
-            device_token_map="glass-001=pair-demo-token",
+            device_token_map="glass-001=pair-demo-token,phone-001=pair-phone-token",
             heartbeat_interval_ms=120,
             heartbeat_timeout_ms=420,
         )
@@ -147,7 +148,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
     def test_register_success_and_runtime_snapshot(self) -> None:
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
-            self._send_register(client, pair_token="pair-demo-token")
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
 
             registered = self.codec.decode(client.recv_text())
             self.assertEqual(registered.name, "device.registered")
@@ -210,7 +211,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
     def test_register_failed_when_pair_token_mismatch(self) -> None:
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
-            self._send_register(client, pair_token="bad-token")
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="bad-token")
             failed = self.codec.decode(client.recv_text())
 
             self.assertEqual(failed.name, "device.register.failed")
@@ -233,7 +234,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
 
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
-            self._send_register(client, pair_token="pair-demo-token")
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
             self.codec.decode(client.recv_text())
             opened = self.codec.decode(client.recv_text())
             self.assertEqual(opened.name, "voice.session.open")
@@ -281,11 +282,11 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         first = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         second = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
-            self._send_register(first, pair_token="pair-demo-token")
+            self._send_register(first, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
             self.codec.decode(first.recv_text())
             self.codec.decode(first.recv_text())
 
-            self._send_register(second, pair_token="pair-demo-token")
+            self._send_register(second, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
             self.codec.decode(second.recv_text())
             self.codec.decode(second.recv_text())
 
@@ -300,7 +301,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
     def test_heartbeat_timeout_marks_device_offline(self) -> None:
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
-            self._send_register(client, pair_token="pair-demo-token")
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
             self.codec.decode(client.recv_text())
             self.codec.decode(client.recv_text())
 
@@ -338,7 +339,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         error_box: dict[str, BaseException] = {}
 
         try:
-            self._send_register(client, pair_token="pair-demo-token")
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
 
             self.codec.decode(client.recv_text())
             opened = self.codec.decode(client.recv_text())
@@ -407,23 +408,475 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         finally:
             client.close()
 
-    def _send_register(self, client: TestWebSocketClient, *, pair_token: str) -> None:
+    def test_phone_register_success_without_voice_session(self) -> None:
+        """测试目标：验证手机注册成功后不会自动打开语音会话。
+
+        测试方法：
+        1. 使用 `device_type=phone` 注册手机设备。
+        2. 检查首条返回是否为 `device.registered`。
+        3. 查询运行态快照，确认设备类型与在线状态正确。
+
+        预期结果：
+        1. 手机注册成功。
+        2. 运行态中能看到 `device_type=phone`。
+        3. 手机不会进入 `voice_sessions`。
+        """
+
+        client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(client, device_id="phone-001", device_type="phone", pair_token="pair-phone-token")
+            registered = self.codec.decode(client.recv_text())
+            self.assertEqual(registered.name, "device.registered")
+
+            runtime = self._fetch_runtime()
+            self.assertIn("phone-001", runtime["online_devices"])
+            self.assertEqual(runtime["connections"][0]["device_type"], "phone")
+            self.assertNotIn("phone-001", runtime["voice_sessions"])
+        finally:
+            client.close()
+
+    def test_device_bind_creates_runtime_binding_snapshot(self) -> None:
+        """测试目标：验证眼镜与手机可建立最小绑定关系。
+
+        测试方法：
+        1. 分别注册眼镜与手机设备。
+        2. 发送 `device.bind`。
+        3. 检查两端收到 `device.binded`，并校验运行态中的绑定快照。
+
+        预期结果：
+        1. 绑定消息能成功下发到眼镜与手机。
+        2. 运行态中的 `glass_to_phone / phone_to_glass` 正确写入。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            self._send_register(phone, device_id="phone-001", device_type="phone", pair_token="pair-phone-token")
+            self.codec.decode(phone.recv_text())
+
+            glass.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="request",
+                        name="device.bind",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "glass_device_id": "glass-001",
+                            "phone_device_id": "phone-001",
+                        },
+                    )
+                ).decode("utf-8")
+            )
+
+            glass_binded = self.codec.decode(glass.recv_text())
+            phone_binded = self.codec.decode(phone.recv_text())
+            self.assertEqual(glass_binded.name, "device.binded")
+            self.assertEqual(phone_binded.name, "device.binded")
+
+            runtime = self._fetch_runtime()
+            self.assertEqual(runtime["device_bindings"]["glass_to_phone"]["glass-001"], "phone-001")
+            self.assertEqual(runtime["device_bindings"]["phone_to_glass"]["phone-001"], "glass-001")
+        finally:
+            glass.close()
+            phone.close()
+
+    def test_phone_first_register_auto_binds_after_glass_online(self) -> None:
+        """测试目标：验证手机先注册并声明目标眼镜后，可在眼镜上线时自动完成绑定。
+
+        测试方法：
+        1. 先注册手机，并携带 `desired_glass_device_id`。
+        2. 再注册对应眼镜。
+        3. 检查双方收到 `device.binded`，并校验运行态绑定快照。
+
+        预期结果：
+        1. 无需手动发送 `device.bind`。
+        2. 服务端会自动建立绑定关系。
+        """
+
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                desired_glass_device_id="glass-001",
+            )
+            phone_registered = self.codec.decode(phone.recv_text())
+            self.assertEqual(phone_registered.name, "device.registered")
+
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            phone_binded = self.codec.decode(phone.recv_text())
+            glass_binded = self.codec.decode(glass.recv_text())
+            self.assertEqual(phone_binded.name, "device.binded")
+            self.assertEqual(glass_binded.name, "device.binded")
+
+            runtime = self._fetch_runtime()
+            self.assertEqual(runtime["device_bindings"]["glass_to_phone"]["glass-001"], "phone-001")
+            self.assertEqual(runtime["device_bindings"]["phone_to_glass"]["phone-001"], "glass-001")
+        finally:
+            phone.close()
+            glass.close()
+
+    def test_binding_removed_when_phone_disconnects(self) -> None:
+        """测试目标：验证手机离线后绑定关系会自动清理。
+
+        测试方法：
+        1. 注册眼镜与手机并建立绑定关系。
+        2. 主动关闭手机连接。
+        3. 轮询运行态快照直到绑定关系被移除。
+
+        预期结果：
+        1. 手机离线后，`glass_to_phone / phone_to_glass` 同步清空。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            self._send_register(phone, device_id="phone-001", device_type="phone", pair_token="pair-phone-token")
+            self.codec.decode(phone.recv_text())
+
+            glass.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="request",
+                        name="device.bind",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "glass_device_id": "glass-001",
+                            "phone_device_id": "phone-001",
+                        },
+                    )
+                ).decode("utf-8")
+            )
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            phone.close()
+
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                runtime = self._fetch_runtime()
+                if not runtime["device_bindings"]["glass_to_phone"] and not runtime["device_bindings"]["phone_to_glass"]:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("binding was not cleared after phone disconnect")
+        finally:
+            glass.close()
+
+    def test_phone_video_link_task_started_dispatches_camera_stream_start(self) -> None:
+        """测试目标：验证视频直连任务启动后会向眼镜下发相机流开始消息。
+
+        测试方法：
+        1. 注册眼镜与手机，并建立绑定关系。
+        2. 手动向 `ControlRuntime` 注入一条 `phone_video_link_task.task.started` 事件。
+        3. 检查眼镜端收到 `sensor.camera.stream.start`。
+
+        预期结果：
+        1. 服务端会向眼镜端下发相机流开始消息。
+        2. 消息中包含 `stream_id` 与 `target_ws_uri`。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            opened = self.codec.decode(glass.recv_text())
+            self.assertEqual(opened.name, "voice.session.open")
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+
+            glass.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="request",
+                        name="device.bind",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "glass_device_id": "glass-001",
+                            "phone_device_id": "phone-001",
+                        },
+                    )
+                ).decode("utf-8")
+            )
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            self.handle.runtime._handle_task_event(
+                TaskEvent(
+                    event_id="evt_video_start_001",
+                    event_name="task.started",
+                    task_id="task_video_001",
+                    task_type="phone_video_link_task",
+                    session_id=opened.session_id or "",
+                    device_id="glass-001",
+                    state="running",
+                    priority="normal",
+                    requires_agent_decision=False,
+                    allow_direct_notify=False,
+                    ts=int(time.time() * 1000),
+                    payload={
+                        "stream_id": "stream_cam_001",
+                        "target_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                        "frame_interval_ms": 500,
+                        "codec": "jpeg",
+                    },
+                )
+            )
+
+            camera_start = self.codec.decode(glass.recv_text())
+            self.assertEqual(camera_start.name, "sensor.camera.stream.start")
+            self.assertEqual(camera_start.payload["stream_id"], "stream_cam_001")
+            self.assertEqual(camera_start.payload["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+        finally:
+            glass.close()
+            phone.close()
+
+    def test_debug_start_phone_video_link_endpoint_dispatches_camera_stream_start(self) -> None:
+        """测试目标：验证调试接口可直接启动眼镜到手机的视频直连任务。
+
+        测试方法：
+        1. 注册眼镜设备并打开语音会话。
+        2. 调用 `/api/debug/phone-video-link/start`。
+        3. 检查眼镜端收到 `sensor.camera.stream.start`。
+
+        预期结果：
+        1. 接口返回 `phone_video_link_task` 运行态。
+        2. 眼镜端收到包含 `target_ws_uri` 的开始推流消息。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            opened = self.codec.decode(glass.recv_text())
+            self.assertEqual(opened.name, "voice.session.open")
+
+            payload = self._post_json(
+                "/api/debug/phone-video-link/start",
+                {
+                    "glass_device_id": "glass-001",
+                    "target_ws_uri": "ws://10.193.29.133:9001/ws/camera",
+                    "frame_interval_ms": 400,
+                    "reason": "manual_debug",
+                },
+            )
+
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["task"]["task_type"], "phone_video_link_task")
+            self.assertEqual(payload["task"]["session_id"], opened.session_id)
+
+            camera_start = self.codec.decode(glass.recv_text())
+            self.assertEqual(camera_start.name, "sensor.camera.stream.start")
+            self.assertEqual(camera_start.payload["target_ws_uri"], "ws://10.193.29.133:9001/ws/camera")
+            self.assertEqual(camera_start.payload["frame_interval_ms"], 400)
+        finally:
+            glass.close()
+
+    def test_debug_start_phone_video_link_endpoint_uses_bound_phone_sink_uri(self) -> None:
+        """测试目标：验证调试接口在未传地址时，可自动使用已绑定手机上报的接收地址。
+
+        测试方法：
+        1. 注册眼镜与手机，并让手机上报 `camera_sink_ws_uri`。
+        2. 通过 `device.bind` 建立绑定关系。
+        3. 调用 `/api/debug/phone-video-link/start`，但不传 `target_ws_uri`。
+
+        预期结果：
+        1. 服务端自动解析手机地址并成功创建任务。
+        2. 眼镜端收到包含该地址的开始推流消息。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            opened = self.codec.decode(glass.recv_text())
+            self.assertEqual(opened.name, "voice.session.open")
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+
+            glass.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="request",
+                        name="device.bind",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "glass_device_id": "glass-001",
+                            "phone_device_id": "phone-001",
+                        },
+                    )
+                ).decode("utf-8")
+            )
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            payload = self._post_json(
+                "/api/debug/phone-video-link/start",
+                {
+                    "glass_device_id": "glass-001",
+                    "frame_interval_ms": 350,
+                    "reason": "bound_debug",
+                },
+            )
+
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["task"]["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+
+            camera_start = self.codec.decode(glass.recv_text())
+            self.assertEqual(camera_start.name, "sensor.camera.stream.start")
+            self.assertEqual(camera_start.payload["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+            self.assertEqual(camera_start.payload["frame_interval_ms"], 350)
+        finally:
+            glass.close()
+            phone.close()
+
+    def test_debug_stop_phone_video_link_endpoint_dispatches_camera_stream_stop(self) -> None:
+        """测试目标：验证调试停止接口可下发相机流停止消息。
+
+        测试方法：
+        1. 注册眼镜并通过调试接口启动一条视频任务。
+        2. 再调用 `/api/debug/phone-video-link/stop`。
+        3. 检查眼镜收到 `sensor.camera.stream.stop`。
+
+        预期结果：
+        1. 服务端成功取消当前视频直连任务。
+        2. 眼镜端收到对应的停止消息。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            self._post_json(
+                "/api/debug/phone-video-link/start",
+                {
+                    "glass_device_id": "glass-001",
+                    "target_ws_uri": "ws://10.193.29.133:9001/ws/camera",
+                    "frame_interval_ms": 400,
+                    "reason": "manual_debug",
+                },
+            )
+            camera_start = self.codec.decode(glass.recv_text())
+            self.assertEqual(camera_start.name, "sensor.camera.stream.start")
+
+            payload = self._post_json(
+                "/api/debug/phone-video-link/stop",
+                {
+                    "glass_device_id": "glass-001",
+                },
+            )
+
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["task"]["task_type"], "phone_video_link_task")
+            self.assertFalse(payload["task"]["noop"])
+
+            camera_stop = self._recv_until_message_name(glass, "sensor.camera.stream.stop")
+            self.assertEqual(camera_stop.name, "sensor.camera.stream.stop")
+            self.assertEqual(camera_stop.payload["stream_id"], camera_start.payload["stream_id"])
+        finally:
+            glass.close()
+
+    def test_debug_stop_phone_video_link_endpoint_is_idempotent_when_task_missing(self) -> None:
+        """测试目标：验证停止接口在任务映射缺失时仍可幂等返回成功。
+
+        测试方法：
+        1. 注册眼镜并打开语音会话。
+        2. 直接调用 `/api/debug/phone-video-link/stop`，不预先创建任务。
+        3. 检查接口返回成功，并向眼镜发送停止消息。
+
+        预期结果：
+        1. 服务端不再返回 400。
+        2. 眼镜端依然能收到 `sensor.camera.stream.stop`。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            payload = self._post_json(
+                "/api/debug/phone-video-link/stop",
+                {
+                    "glass_device_id": "glass-001",
+                },
+            )
+
+            self.assertEqual(payload["status"], "ok")
+            self.assertTrue(payload["task"]["noop"])
+
+            camera_stop = self._recv_until_message_name(glass, "sensor.camera.stream.stop")
+            self.assertEqual(camera_stop.name, "sensor.camera.stream.stop")
+        finally:
+            glass.close()
+
+    def _send_register(
+        self,
+        client: TestWebSocketClient,
+        *,
+        device_id: str,
+        device_type: str,
+        pair_token: str,
+        camera_sink_ws_uri: str | None = None,
+        desired_glass_device_id: str | None = None,
+    ) -> None:
+        payload = {
+            "device_id": device_id,
+            "device_type": device_type,
+            "firmware_version": "0.1.0",
+            "auth": {
+                "mode": "pair_token",
+                "pair_token": pair_token,
+            },
+        }
+        if camera_sink_ws_uri is not None:
+            payload["camera_sink_ws_uri"] = camera_sink_ws_uri
+        if desired_glass_device_id is not None:
+            payload["desired_glass_device_id"] = desired_glass_device_id
         client.send_text(
             self.codec.encode(
                 create_control_message(
                     semantic="request",
                     name="device.register",
-                    source=self._glass_endpoint(),
+                    source=self._phone_endpoint(device_id) if device_type == "phone" else self._glass_endpoint(device_id),
                     target=self._server_endpoint(),
-                    payload={
-                        "device_id": "glass-001",
-                        "device_type": "glass",
-                        "firmware_version": "0.1.0",
-                        "auth": {
-                            "mode": "pair_token",
-                            "pair_token": pair_token,
-                        },
-                    },
+                    payload=payload,
                 )
             ).decode("utf-8")
         )
@@ -434,12 +887,60 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             payload = json.loads(response.read().decode("utf-8"))
         return payload["runtime"]
 
+    def _post_json(self, path: str, body: dict) -> dict:
+        """向服务端发送 JSON POST 请求。
+
+        参数：
+        1. `path`：目标路径。
+        2. `body`：JSON 请求体。
+
+        返回值：
+        1. 响应中的 JSON 对象。
+        """
+
+        request = Request(
+            url=f"http://127.0.0.1:{self.handle.port}{path}",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return payload
+
+    def _recv_until_message_name(self, client: TestWebSocketClient, expected_name: str, *, max_attempts: int = 6):
+        """持续读取消息，直到命中指定消息名。
+
+        测试方法：
+        1. 顺序读取控制消息。
+        2. 遇到噪声消息时跳过。
+        3. 在限定次数内查找目标消息。
+
+        预期结果：
+        1. 返回首条命中的控制消息。
+        2. 若多次读取后仍未命中，则测试失败。
+        """
+
+        for _ in range(max_attempts):
+            message = self.codec.decode(client.recv_text())
+            if message.name == expected_name:
+                return message
+        self.fail(f"未在限定次数内收到目标消息: {expected_name}")
+
     @staticmethod
-    def _glass_endpoint() -> Endpoint:
+    def _glass_endpoint(device_id: str = "glass-001") -> Endpoint:
         return Endpoint(
-            device_id="glass-001",
+            device_id=device_id,
             device_type="glass",
             module="glass-api",
+        )
+
+    @staticmethod
+    def _phone_endpoint(device_id: str = "phone-001") -> Endpoint:
+        return Endpoint(
+            device_id=device_id,
+            device_type="phone",
+            module="phone-api",
         )
 
     @staticmethod

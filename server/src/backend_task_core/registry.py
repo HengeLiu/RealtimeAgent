@@ -22,6 +22,13 @@ class TaskRegistry:
                 description="计时器后台任务",
                 supports_cancel=True,
                 timeout_seconds=86400,
+            ),
+            "phone_video_link_task": TaskSpec(
+                task_type="phone_video_link_task",
+                version="v1",
+                description="眼镜与手机直连视频后台任务",
+                supports_cancel=True,
+                timeout_seconds=86400,
             )
         }
 

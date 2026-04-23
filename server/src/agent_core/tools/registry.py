@@ -108,6 +108,7 @@ class ToolRegistry:
             MapManageTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
+            StartPhoneVideoLinkTool,
             TimerManageTool,
         )
 
@@ -119,6 +120,7 @@ class ToolRegistry:
             CreateTimerTool(),
             QueryTaskStatusTool(),
             CancelTaskTool(),
+            StartPhoneVideoLinkTool(),
         ):
             self._register_tool(tool, expose_to_model=tool.spec.name in {"capture_photo", "timer_manage", "map_manage"})
 

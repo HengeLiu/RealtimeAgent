@@ -184,6 +184,16 @@ class AgentFacade:
 
         self._tool_registry.get_task_gateway().shutdown()
 
+    def get_task_gateway(self):
+        """返回内部任务网关。
+
+        主要逻辑：
+        1. 对外暴露 `backend-task-core` 的统一访问入口。
+        2. 供调试接口或联调脚本在不经过完整 Agent Loop 时创建后台任务。
+        """
+
+        return self._tool_registry.get_task_gateway()
+
     def _persist_result(self, *, turn: AgentTurn, result: AgentTurnResult) -> AgentTurnResult:
         """把运行结果统一写回会话上下文。"""
 

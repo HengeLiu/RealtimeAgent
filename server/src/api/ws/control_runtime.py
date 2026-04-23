@@ -19,6 +19,7 @@ from protocol.messages.control_message import ControlMessage, Endpoint
 from protocol.utils.message_factory import create_control_message
 from runtime import VoiceRuntime
 from runtime.voice_runtime import SpeechRecognitionClient, VoiceModelClient
+from backend_task_core import TaskEvent
 
 
 @dataclass(slots=True)
@@ -38,6 +39,9 @@ class ControlConnection:
     last_heartbeat_monotonic: float = field(default_factory=time.monotonic)
     closed: bool = False
     send_lock: threading.Lock = field(default_factory=threading.Lock)
+    camera_sink_ws_uri: str | None = None
+    desired_glass_device_id: str | None = None
+    desired_phone_device_id: str | None = None
 
     def touch(self) -> None:
         """刷新最近活跃时间。"""
@@ -97,6 +101,9 @@ class ControlRuntime(CameraGateway):
         self._lock = threading.Lock()
         self._connections: dict[str, ControlConnection] = {}
         self._device_connections: dict[str, ControlConnection] = {}
+        self._glass_to_phone: dict[str, str] = {}
+        self._phone_to_glass: dict[str, str] = {}
+        self._active_phone_video_task_ids_by_glass: dict[str, str] = {}
         self._pending_camera_captures: dict[str, PendingCameraCapture] = {}
         self._voice_runtime = VoiceRuntime(
             settings=settings,
@@ -107,6 +114,7 @@ class ControlRuntime(CameraGateway):
         )
         self._voice_runtime.agent_facade.bind_camera_gateway(self)
         self._voice_runtime.agent_facade.bind_task_event_listener(self._voice_runtime.on_task_event)
+        self._voice_runtime.agent_facade.bind_task_event_listener(self._handle_task_event)
         self._stop_event = threading.Event()
         self._sweeper_thread = threading.Thread(
             target=self._heartbeat_sweeper,
@@ -170,6 +178,7 @@ class ControlRuntime(CameraGateway):
         """处理底层连接关闭。"""
 
         removed_device_id: str | None = None
+        removed_bindings: tuple[str | None, str | None] = (None, None)
         with self._lock:
             connection.closed = True
             self._connections.pop(connection.connection_id, None)
@@ -178,7 +187,9 @@ class ControlRuntime(CameraGateway):
                 if current is connection:
                     self._device_connections.pop(connection.device_id, None)
                     removed_device_id = connection.device_id
+                    removed_bindings = self._unbind_device_locked(connection.device_id)
         self._voice_runtime.on_control_connection_closed(removed_device_id)
+        self._notify_binding_removed(removed_bindings)
 
     def close_connection(self, connection: ControlConnection, *, code: int, reason: str) -> None:
         """关闭一条控制连接。"""
@@ -222,6 +233,9 @@ class ControlRuntime(CameraGateway):
             return
         if message.name == "voice.session.opened":
             self._handle_voice_session_opened(connection, message)
+            return
+        if message.name == "device.bind":
+            self._handle_device_bind(connection, message)
             return
         if message.name == "sensor.audio.segment.started":
             self._handle_segment_started(connection, message)
@@ -305,12 +319,182 @@ class ControlRuntime(CameraGateway):
             with self._lock:
                 self._pending_camera_captures.pop(request_id, None)
 
+    def start_phone_video_link_debug(
+        self,
+        *,
+        glass_device_id: str,
+        target_ws_uri: str,
+        frame_interval_ms: int,
+        reason: str,
+    ):
+        """通过调试入口启动一条眼镜到手机的视频直连任务。
+
+        主要逻辑：
+        1. 校验眼镜设备当前在线。
+        2. 复用当前控制连接上的会话编号。
+        3. 直接调用 `backend-task-core` 创建 `phone_video_link_task`。
+
+        参数：
+        1. `glass_device_id`：目标眼镜设备编号。
+        2. `target_ws_uri`：手机当前显示的接收地址。
+        3. `frame_interval_ms`：推帧间隔，单位毫秒。
+        4. `reason`：调试原因说明。
+
+        返回值：
+        1. 新创建的任务运行态对象。
+
+        异常情况：
+        1. 眼镜离线、未开会话或地址为空时抛出结构化错误。
+        """
+
+        if frame_interval_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "frame_interval_ms 必须大于 0",
+                details={"frame_interval_ms": frame_interval_ms},
+            )
+
+        with self._lock:
+            connection = self._device_connections.get(glass_device_id)
+        if connection is None or connection.closed:
+            raise build_error(
+                ErrorCode.STREAM_NOT_FOUND,
+                "目标眼镜当前不在线，无法启动视频直连任务",
+                details={"glass_device_id": glass_device_id},
+            )
+
+        session_id = str(connection.session_id or "").strip()
+        if not session_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "目标眼镜尚未打开语音会话，无法复用会话编号启动视频直连任务",
+                details={"glass_device_id": glass_device_id},
+            )
+
+        resolved_phone_device_id, resolved_target_ws_uri = self._resolve_phone_video_target(
+            glass_device_id=glass_device_id,
+            target_ws_uri=target_ws_uri.strip(),
+        )
+
+        task_gateway = self._voice_runtime.agent_facade.get_task_gateway()
+        runtime = task_gateway.create_task(
+            task_type="phone_video_link_task",
+            session_id=session_id,
+            device_id=glass_device_id,
+            input_data={
+                "phone_device_id": resolved_phone_device_id,
+                "target_ws_uri": resolved_target_ws_uri,
+                "link_mode": "direct",
+                "reason": reason,
+                "frame_interval_ms": frame_interval_ms,
+            },
+        )
+        with self._lock:
+            self._active_phone_video_task_ids_by_glass[glass_device_id] = runtime.task_id
+        return runtime
+
+    def stop_phone_video_link_debug(
+        self,
+        *,
+        glass_device_id: str,
+    ):
+        """通过调试入口停止一条眼镜到手机的视频直连任务。
+
+        参数：
+        1. `glass_device_id`：目标眼镜设备编号。
+
+        返回值：
+        1. 被取消后的任务运行态对象。
+
+        异常情况：
+        1. 当前眼镜没有活动视频任务时抛出结构化错误。
+        """
+
+        with self._lock:
+            task_id = self._active_phone_video_task_ids_by_glass.get(glass_device_id)
+            connection = self._device_connections.get(glass_device_id)
+
+        if task_id:
+            runtime = self._voice_runtime.agent_facade.get_task_gateway().cancel_task(task_id)
+            with self._lock:
+                self._active_phone_video_task_ids_by_glass.pop(glass_device_id, None)
+            return {
+                "task_id": runtime.task_id,
+                "task_type": runtime.task_type,
+                "state": runtime.state,
+                "device_id": runtime.device_id,
+                "session_id": runtime.session_id,
+                "noop": False,
+            }
+
+        if connection is None or connection.closed or not connection.registered:
+            return {
+                "task_id": "",
+                "task_type": "phone_video_link_task",
+                "state": "cancelled",
+                "device_id": glass_device_id,
+                "session_id": "",
+                "noop": True,
+            }
+
+        self._send_message_to_device(
+            glass_device_id,
+            "request",
+            "sensor.camera.stream.stop",
+            connection.session_id or "",
+            {},
+        )
+        return {
+            "task_id": "",
+            "task_type": "phone_video_link_task",
+            "state": "cancelled",
+            "device_id": glass_device_id,
+            "session_id": connection.session_id or "",
+            "noop": True,
+        }
+
+    def _resolve_phone_video_target(
+        self,
+        *,
+        glass_device_id: str,
+        target_ws_uri: str,
+    ) -> tuple[str, str]:
+        """解析视频直连任务的目标手机与接收地址。
+
+        主要逻辑：
+        1. 若显式传入 `target_ws_uri`，则直接使用手动调试目标。
+        2. 若未传入，则尝试从当前绑定关系和手机注册信息中解析。
+        """
+
+        if target_ws_uri:
+            return "manual-debug-phone", target_ws_uri
+
+        with self._lock:
+            phone_device_id = self._glass_to_phone.get(glass_device_id)
+            phone_connection = self._device_connections.get(phone_device_id or "")
+        if not phone_device_id or phone_connection is None or phone_connection.closed:
+            raise build_error(
+                ErrorCode.STREAM_NOT_FOUND,
+                "当前眼镜尚未绑定在线手机，无法自动解析视频接收地址",
+                details={"glass_device_id": glass_device_id},
+            )
+        resolved_target_ws_uri = str(phone_connection.camera_sink_ws_uri or "").strip()
+        if not resolved_target_ws_uri:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "已绑定手机尚未上报视频接收地址，无法启动视频直连任务",
+                details={"glass_device_id": glass_device_id, "phone_device_id": phone_device_id},
+            )
+        return phone_device_id, resolved_target_ws_uri
+
     def build_runtime_snapshot(self) -> dict[str, object]:
         """返回当前运行态快照。"""
 
         with self._lock:
             connections = list(self._connections.values())
             pending_camera_capture_count = len(self._pending_camera_captures)
+            glass_to_phone = dict(self._glass_to_phone)
+            phone_to_glass = dict(self._phone_to_glass)
 
         now = time.monotonic()
         online_devices = sorted(
@@ -324,10 +508,14 @@ class ControlRuntime(CameraGateway):
                 {
                     "connection_id": connection.connection_id,
                     "device_id": connection.device_id,
+                    "device_type": connection.device_type,
                     "peer": connection.peer,
                     "registered": connection.registered,
                     "session_id": connection.session_id,
                     "voice_opened": connection.voice_opened,
+                    "camera_sink_ws_uri": connection.camera_sink_ws_uri,
+                    "desired_glass_device_id": connection.desired_glass_device_id,
+                    "desired_phone_device_id": connection.desired_phone_device_id,
                     "last_seen_ms_ago": int((now - connection.last_seen_monotonic) * 1000),
                     "heartbeat_age_ms": int((now - connection.last_heartbeat_monotonic) * 1000),
                 }
@@ -336,6 +524,10 @@ class ControlRuntime(CameraGateway):
             "online_device_count": len(online_devices),
             "online_devices": online_devices,
             "connections": connection_items,
+            "device_bindings": {
+                "glass_to_phone": glass_to_phone,
+                "phone_to_glass": phone_to_glass,
+            },
             "pending_camera_capture_count": pending_camera_capture_count,
             "voice_sessions": self._voice_runtime.build_runtime_snapshot(),
         }
@@ -347,11 +539,15 @@ class ControlRuntime(CameraGateway):
         auth = payload.get("auth", {})
         auth_mode = str(auth.get("mode", "")).strip() if isinstance(auth, dict) else ""
         pair_token = str(auth.get("pair_token", "")).strip() if isinstance(auth, dict) else ""
+        camera_sink_ws_uri = str(payload.get("camera_sink_ws_uri", "")).strip() or None
+        desired_glass_device_id = str(payload.get("desired_glass_device_id", "")).strip() or None
+        desired_phone_device_id = str(payload.get("desired_phone_device_id", "")).strip() or None
 
         if not device_id:
             self._send_register_failed(
                 connection=connection,
                 device_id="",
+                device_type=device_type,
                 reason="device_id 不能为空",
                 code=ErrorCode.INVALID_MESSAGE,
             )
@@ -360,6 +556,7 @@ class ControlRuntime(CameraGateway):
             self._send_register_failed(
                 connection=connection,
                 device_id=device_id,
+                device_type=device_type,
                 reason="仅支持 mode=pair_token",
                 code=ErrorCode.UNAUTHORIZED,
             )
@@ -370,12 +567,14 @@ class ControlRuntime(CameraGateway):
             self._send_register_failed(
                 connection=connection,
                 device_id=device_id,
+                device_type=device_type,
                 reason="pair_token 校验失败",
                 code=ErrorCode.UNAUTHORIZED,
             )
             return
 
         old_connection: ControlConnection | None = None
+        should_open_voice_session = device_type == "glass"
         with self._lock:
             current = self._device_connections.get(device_id)
             if current and current is not connection:
@@ -384,14 +583,18 @@ class ControlRuntime(CameraGateway):
             connection.device_type = device_type
             connection.registered = True
             connection.voice_opened = False
-            connection.session_id = f"sess_{uuid.uuid4().hex[:12]}"
+            connection.session_id = f"sess_{uuid.uuid4().hex[:12]}" if should_open_voice_session else None
+            connection.camera_sink_ws_uri = camera_sink_ws_uri
+            connection.desired_glass_device_id = desired_glass_device_id
+            connection.desired_phone_device_id = desired_phone_device_id
             connection.touch_heartbeat()
             self._device_connections[device_id] = connection
-            self._voice_runtime.open_session(
-                device_id=device_id,
-                device_type=device_type,
-                session_id=connection.session_id,
-            )
+            if should_open_voice_session and connection.session_id is not None:
+                self._voice_runtime.open_session(
+                    device_id=device_id,
+                    device_type=device_type,
+                    session_id=connection.session_id,
+                )
 
         if old_connection is not None:
             log_warning(
@@ -415,18 +618,20 @@ class ControlRuntime(CameraGateway):
                 trace_id=message.trace_id,
             ),
         )
-        self._send_message(
-            connection,
-            create_control_message(
-                semantic="request",
-                name="voice.session.open",
-                source=self._server_endpoint(),
-                target=self._device_endpoint(device_id, device_type),
-                payload=self._voice_runtime.build_open_payload(),
-                trace_id=message.trace_id,
-                session_id=connection.session_id,
-            ),
-        )
+        if should_open_voice_session and connection.session_id is not None:
+            self._send_message(
+                connection,
+                create_control_message(
+                    semantic="request",
+                    name="voice.session.open",
+                    source=self._server_endpoint(),
+                    target=self._device_endpoint(device_id, device_type),
+                    payload=self._voice_runtime.build_open_payload(),
+                    trace_id=message.trace_id,
+                    session_id=connection.session_id,
+                ),
+            )
+        self._try_auto_bind_after_register(device_id=device_id)
 
     def _handle_heartbeat(self, connection: ControlConnection, message: ControlMessage) -> None:
         payload_device_id = str(message.payload.get("device_id", "")).strip()
@@ -462,6 +667,121 @@ class ControlRuntime(CameraGateway):
             device_id=connection.device_id or "",
             session_id=message.session_id,
         )
+
+    def _handle_device_bind(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理设备绑定请求。"""
+
+        glass_device_id = str(message.payload.get("glass_device_id", "")).strip()
+        phone_device_id = str(message.payload.get("phone_device_id", "")).strip()
+        if not glass_device_id or not phone_device_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "device.bind 需要同时提供 glass_device_id 和 phone_device_id",
+                details={"payload": message.payload},
+            )
+
+        self._bind_devices(glass_device_id=glass_device_id, phone_device_id=phone_device_id)
+
+    def _try_auto_bind_after_register(self, *, device_id: str) -> None:
+        """在设备注册成功后尝试自动完成手机与眼镜配对。"""
+
+        with self._lock:
+            connection = self._device_connections.get(device_id)
+            if connection is None or connection.closed or not connection.registered:
+                return
+
+            candidate_pair: tuple[str, str] | None = None
+            if connection.device_type == "phone" and connection.desired_glass_device_id:
+                glass_connection = self._device_connections.get(connection.desired_glass_device_id)
+                if glass_connection and not glass_connection.closed and glass_connection.registered:
+                    candidate_pair = (connection.desired_glass_device_id, connection.device_id or "")
+            elif connection.device_type == "glass":
+                if connection.desired_phone_device_id:
+                    phone_connection = self._device_connections.get(connection.desired_phone_device_id)
+                    if phone_connection and not phone_connection.closed and phone_connection.registered:
+                        candidate_pair = (connection.device_id or "", connection.desired_phone_device_id)
+                else:
+                    for phone_connection in self._device_connections.values():
+                        if phone_connection.closed or not phone_connection.registered:
+                            continue
+                        if phone_connection.device_type != "phone":
+                            continue
+                        if phone_connection.desired_glass_device_id == connection.device_id:
+                            candidate_pair = (connection.device_id or "", phone_connection.device_id or "")
+                            break
+
+        if candidate_pair is None:
+            return
+        glass_device_id, phone_device_id = candidate_pair
+        try:
+            self._bind_devices(glass_device_id=glass_device_id, phone_device_id=phone_device_id)
+            log_info(
+                self._logger,
+                f"设备已自动绑定: glass_device_id={glass_device_id} phone_device_id={phone_device_id}",
+                LogContext(device_id=glass_device_id),
+            )
+        except Exception as exc:
+            log_warning(
+                self._logger,
+                f"自动绑定失败，已等待后续重试: glass_device_id={glass_device_id} phone_device_id={phone_device_id} reason={exc}",
+                LogContext(device_id=glass_device_id),
+            )
+
+    def _bind_devices(self, *, glass_device_id: str, phone_device_id: str) -> None:
+        """绑定一台眼镜和一台手机，并向双方发送绑定完成通知。"""
+
+        with self._lock:
+            glass_connection = self._device_connections.get(glass_device_id)
+            phone_connection = self._device_connections.get(phone_device_id)
+            if glass_connection is None or glass_connection.closed or not glass_connection.registered:
+                raise build_error(
+                    ErrorCode.STREAM_NOT_FOUND,
+                    "目标眼镜当前不在线",
+                    details={"glass_device_id": glass_device_id},
+                )
+            if phone_connection is None or phone_connection.closed or not phone_connection.registered:
+                raise build_error(
+                    ErrorCode.STREAM_NOT_FOUND,
+                    "目标手机当前不在线",
+                    details={"phone_device_id": phone_device_id},
+                )
+            if glass_connection.device_type != "glass":
+                raise build_error(
+                    ErrorCode.INVALID_MESSAGE,
+                    "glass_device_id 对应设备类型不是 glass",
+                    details={"glass_device_id": glass_device_id, "device_type": glass_connection.device_type},
+                )
+            if phone_connection.device_type != "phone":
+                raise build_error(
+                    ErrorCode.INVALID_MESSAGE,
+                    "phone_device_id 对应设备类型不是 phone",
+                    details={"phone_device_id": phone_device_id, "device_type": phone_connection.device_type},
+                )
+
+            bound_phone_id = self._glass_to_phone.get(glass_device_id)
+            if bound_phone_id is not None and bound_phone_id != phone_device_id:
+                raise build_error(
+                    ErrorCode.INVALID_MESSAGE,
+                    "目标眼镜已绑定其它手机",
+                    details={"glass_device_id": glass_device_id, "bound_phone_id": bound_phone_id},
+                )
+            bound_glass_id = self._phone_to_glass.get(phone_device_id)
+            if bound_glass_id is not None and bound_glass_id != glass_device_id:
+                raise build_error(
+                    ErrorCode.INVALID_MESSAGE,
+                    "目标手机已绑定其它眼镜",
+                    details={"phone_device_id": phone_device_id, "bound_glass_id": bound_glass_id},
+                )
+
+            self._glass_to_phone[glass_device_id] = phone_device_id
+            self._phone_to_glass[phone_device_id] = glass_device_id
+
+        bind_payload = {
+            "glass_device_id": glass_device_id,
+            "phone_device_id": phone_device_id,
+        }
+        self._send_message_to_device(glass_device_id, "notify", "device.binded", "", bind_payload)
+        self._send_message_to_device(phone_device_id, "notify", "device.binded", "", bind_payload)
 
     def _handle_segment_started(self, connection: ControlConnection, message: ControlMessage) -> None:
         connection.last_seen_monotonic = time.monotonic()
@@ -647,6 +967,7 @@ class ControlRuntime(CameraGateway):
         *,
         connection: ControlConnection,
         device_id: str,
+        device_type: str,
         reason: str,
         code: ErrorCode,
     ) -> None:
@@ -657,7 +978,7 @@ class ControlRuntime(CameraGateway):
                 semantic="notify",
                 name="device.register.failed",
                 source=self._server_endpoint(),
-                target=self._device_endpoint(target_device_id, "glass"),
+                target=self._device_endpoint(target_device_id, device_type),
                 payload={
                     "device_id": device_id,
                     "error": {
@@ -755,7 +1076,32 @@ class ControlRuntime(CameraGateway):
         return Endpoint(
             device_id=device_id,
             device_type=device_type,
-            module="glass-api",
+            module="phone-api" if device_type == "phone" else "glass-api",
+        )
+
+    def _unbind_device_locked(self, device_id: str) -> tuple[str | None, str | None]:
+        """在持锁状态下清理与目标设备相关的绑定关系。"""
+
+        if device_id in self._glass_to_phone:
+            phone_device_id = self._glass_to_phone.pop(device_id)
+            self._phone_to_glass.pop(phone_device_id, None)
+            return device_id, phone_device_id
+        if device_id in self._phone_to_glass:
+            glass_device_id = self._phone_to_glass.pop(device_id)
+            self._glass_to_phone.pop(glass_device_id, None)
+            return glass_device_id, device_id
+        return None, None
+
+    def _notify_binding_removed(self, binding: tuple[str | None, str | None]) -> None:
+        """在绑定关系被移除后打印调试日志。"""
+
+        glass_device_id, phone_device_id = binding
+        if not glass_device_id or not phone_device_id:
+            return
+        log_info(
+            self._logger,
+            f"设备绑定已移除: glass_device_id={glass_device_id} phone_device_id={phone_device_id}",
+            LogContext(device_id=glass_device_id),
         )
 
     @property
@@ -778,3 +1124,44 @@ class ControlRuntime(CameraGateway):
         """
 
         return name != "device.heartbeat"
+
+    def _handle_task_event(self, event: TaskEvent) -> None:
+        """根据任务事件驱动设备控制消息。"""
+
+        if event.task_type != "phone_video_link_task":
+            return
+        if event.event_name == "task.started":
+            with self._lock:
+                self._active_phone_video_task_ids_by_glass[event.device_id] = event.task_id
+            stream_id = str(event.payload.get("stream_id", "")).strip()
+            target_ws_uri = str(event.payload.get("target_ws_uri", "")).strip()
+            if not stream_id or not target_ws_uri:
+                return
+            self._send_message_to_device(
+                event.device_id,
+                "request",
+                "sensor.camera.stream.start",
+                event.session_id,
+                {
+                    "stream_id": stream_id,
+                    "target_ws_uri": target_ws_uri,
+                    "frame_interval_ms": int(event.payload.get("frame_interval_ms", 500)),
+                    "codec": str(event.payload.get("codec", "jpeg")),
+                },
+            )
+            return
+        if event.event_name == "task.cancelled":
+            with self._lock:
+                self._active_phone_video_task_ids_by_glass.pop(event.device_id, None)
+            stream_id = str(event.payload.get("stream_id", "")).strip()
+            if not stream_id:
+                return
+            self._send_message_to_device(
+                event.device_id,
+                "request",
+                "sensor.camera.stream.stop",
+                event.session_id,
+                {
+                    "stream_id": stream_id,
+                },
+            )

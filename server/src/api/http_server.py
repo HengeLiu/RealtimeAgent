@@ -14,7 +14,7 @@ from agent_core import AgentFacade
 from api.ws import ControlRuntime
 from api.ws.websocket_transport import handle_audio_websocket, handle_control_websocket
 from infra.config import ServerSettings
-from infra.errors import AppError
+from infra.errors import AppError, ErrorCode
 from runtime.voice_runtime import SpeechRecognitionClient, VoiceModelClient
 
 
@@ -228,6 +228,165 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                     },
                 },
             )
+
+        def do_POST(self) -> None:  # noqa: N802
+            """处理 POST 请求。
+
+            路由：
+            1. `/api/debug/phone-video-link/start`：手动启动眼镜到手机的视频直连任务。
+            2. `/api/debug/phone-video-link/stop`：手动停止眼镜到手机的视频直连任务。
+            """
+
+            parsed = urlsplit(self.path)
+            path = parsed.path
+
+            if path == "/api/debug/phone-video-link/start":
+                try:
+                    body = self._read_json_body()
+                    glass_device_id = str(body.get("glass_device_id", "")).strip()
+                    target_ws_uri = str(body.get("target_ws_uri", "")).strip()
+                    frame_interval_ms = int(body.get("frame_interval_ms", 500))
+                    reason = str(body.get("reason", "manual_debug")).strip() or "manual_debug"
+                    runtime = self.server.runtime.start_phone_video_link_debug(
+                        glass_device_id=glass_device_id,
+                        target_ws_uri=target_ws_uri,
+                        frame_interval_ms=frame_interval_ms,
+                        reason=reason,
+                    )
+                except AppError as exc:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": exc.to_dict(),
+                        },
+                    )
+                    return
+                except ValueError:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": {
+                                "code": "INVALID_MESSAGE",
+                                "message": "frame_interval_ms 必须是整数",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        },
+                    )
+                    return
+
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "ok",
+                        "task": {
+                            "task_id": runtime.task_id,
+                            "task_type": runtime.task_type,
+                            "state": runtime.state,
+                            "device_id": runtime.device_id,
+                            "session_id": runtime.session_id,
+                            "target_ws_uri": runtime.input.get("target_ws_uri"),
+                            "frame_interval_ms": runtime.input.get("frame_interval_ms"),
+                        },
+                    },
+                )
+                return
+
+            if path == "/api/debug/phone-video-link/stop":
+                try:
+                    body = self._read_json_body()
+                    glass_device_id = str(body.get("glass_device_id", "")).strip()
+                    runtime = self.server.runtime.stop_phone_video_link_debug(
+                        glass_device_id=glass_device_id,
+                    )
+                except AppError as exc:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": exc.to_dict(),
+                        },
+                    )
+                    return
+
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "ok",
+                        "task": {
+                            "task_id": runtime["task_id"],
+                            "task_type": runtime["task_type"],
+                            "state": runtime["state"],
+                            "device_id": runtime["device_id"],
+                            "session_id": runtime["session_id"],
+                            "noop": runtime["noop"],
+                        },
+                    },
+                )
+                return
+
+            _json_response(
+                self,
+                HTTPStatus.NOT_FOUND,
+                {
+                    "status": "error",
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": f"路径不存在: {path}",
+                        "retryable": False,
+                        "details": {},
+                    },
+                },
+            )
+
+        def _read_json_body(self) -> dict:
+            """读取并解析 JSON 请求体。
+
+            主要逻辑：
+            1. 根据 `Content-Length` 读取请求体。
+            2. 执行 JSON 反序列化。
+            3. 校验顶层对象必须是字典。
+
+            返回值：
+            1. 解析成功后的字典对象。
+
+            异常情况：
+            1. 长度非法、JSON 非法或顶层不是对象时抛出结构化错误。
+            """
+
+            content_length = int(self.headers.get("Content-Length", "0") or "0")
+            if content_length <= 0:
+                raise AppError(
+                    code=ErrorCode.INVALID_MESSAGE,
+                    message="请求体不能为空",
+                    retryable=False,
+                    details={},
+                )
+            raw = self.rfile.read(content_length)
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise AppError(
+                    code=ErrorCode.INVALID_MESSAGE,
+                    message="请求体不是合法 JSON",
+                    retryable=False,
+                    details={"reason": str(exc)},
+                ) from exc
+            if not isinstance(body, dict):
+                raise AppError(
+                    code=ErrorCode.INVALID_MESSAGE,
+                    message="请求体顶层必须是 JSON 对象",
+                    retryable=False,
+                    details={},
+                )
+            return body
 
         def log_message(self, format: str, *args: object) -> None:
             """覆盖默认日志输出，避免标准错误噪声。"""

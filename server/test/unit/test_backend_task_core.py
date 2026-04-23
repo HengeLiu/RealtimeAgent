@@ -94,6 +94,45 @@ class BackendTaskCoreTestCase(unittest.TestCase):
         ]
         self.assertEqual(completed_events, [])
 
+    def test_phone_video_link_task_starts_and_can_be_cancelled(self) -> None:
+        """测试目标：验证视频直连任务可进入运行态并支持取消。
+
+        测试方法：
+        1. 创建一个 `phone_video_link_task`。
+        2. 检查任务初始状态是否为 `running`。
+        3. 再取消该任务并检查事件列表。
+
+        预期结果：
+        1. 创建后任务立即进入 `running`。
+        2. 事件总线包含 `task.created`、`task.started`、`task.cancelled`。
+        3. 取消后任务状态为 `cancelled`。
+        """
+
+        runtime = self.gateway.create_task(
+            task_type="phone_video_link_task",
+            session_id="sess_video_001",
+            device_id="glass-001",
+            input_data={
+                "phone_device_id": "phone-001",
+                "target_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                "link_mode": "direct",
+                "reason": "unit_test",
+                "frame_interval_ms": 400,
+            },
+        )
+
+        self.assertEqual(runtime.state, "running")
+        self.assertEqual(runtime.context["phone_device_id"], "phone-001")
+        self.assertEqual(runtime.context["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+
+        cancelled = self.gateway.cancel_task(runtime.task_id)
+        self.assertEqual(cancelled.state, "cancelled")
+
+        event_names = [event.event_name for event in self.events if event.task_id == runtime.task_id]
+        self.assertIn("task.created", event_names)
+        self.assertIn("task.started", event_names)
+        self.assertIn("task.cancelled", event_names)
+
 
 if __name__ == "__main__":
     unittest.main()

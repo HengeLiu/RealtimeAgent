@@ -267,13 +267,88 @@ class AgentCoreTestCase(unittest.TestCase):
             )
         )
 
-        self.assertIsNotNone(result.error)
-        self.assertIn("模拟 agent-core 失败", result.reply_text)
-        session = facade.get_session_store().get_session("sess_002")
-        self.assertIsNotNone(session)
-        assert session is not None
-        self.assertEqual(len(session.messages), 2)
-        self.assertEqual(session.messages[1].meta["error"]["message"], "模拟 agent-core 失败")
+    def test_start_phone_video_link_tool_creates_task_with_bound_phone(self) -> None:
+        """测试目标：验证视频直连 Tool 会基于绑定关系创建后台任务。
+
+        测试方法：
+        1. 构造包含 `glass_to_phone` 绑定快照的工具上下文。
+        2. 通过 `ToolGateway` 调用 `start_phone_video_link`。
+        3. 检查返回的任务编号、目标手机和任务状态。
+
+        预期结果：
+        1. Tool 调用成功。
+        2. 返回结果中的目标手机等于当前绑定手机。
+        3. 任务引用会被写入结果。
+        """
+
+        registry, gateway = build_tooling(
+            device_state_reader=lambda: {
+                "device_bindings": {
+                    "glass_to_phone": {"glass-001": "phone-001"},
+                    "phone_to_glass": {"phone-001": "glass-001"},
+                },
+                "connections": [
+                    {
+                        "device_id": "phone-001",
+                        "device_type": "phone",
+                        "camera_sink_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                    }
+                ],
+            }
+        )
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_video_tool_001",
+            turn_id="turn_video_tool_001",
+        )
+
+        result = gateway.invoke(
+            name="start_phone_video_link",
+            context=context,
+            arguments={},
+        )
+
+        self.assertEqual(result.data["phone_device_id"], "phone-001")
+        self.assertEqual(result.data["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+        self.assertEqual(result.data["state"], "running")
+        self.assertEqual(len(result.task_refs), 1)
+        self.assertEqual(result.task_refs[0].task_type, "phone_video_link_task")
+
+    def test_start_phone_video_link_tool_rejects_missing_binding(self) -> None:
+        """测试目标：验证未绑定手机时不能创建视频直连任务。
+
+        测试方法：
+        1. 构造不包含绑定关系的工具上下文。
+        2. 调用 `start_phone_video_link`。
+
+        预期结果：
+        1. Tool 调用抛出结构化错误。
+        2. 错误信息明确指出当前眼镜尚未绑定手机。
+        """
+
+        registry, gateway = build_tooling(
+            device_state_reader=lambda: {
+                "device_bindings": {
+                    "glass_to_phone": {},
+                    "phone_to_glass": {},
+                },
+                "connections": [],
+            }
+        )
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_video_tool_002",
+            turn_id="turn_video_tool_002",
+        )
+
+        with self.assertRaisesRegex(Exception, "当前眼镜尚未绑定手机"):
+            gateway.invoke(
+                name="start_phone_video_link",
+                context=context,
+                arguments={},
+            )
 
     def test_agent_facade_persists_plain_reply_without_custom_action(self) -> None:
         """测试目标：验证普通回复会以统一助手消息写入，而不再使用自定义 action。

@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_NAME="$(basename "${REPO_ROOT}")"
+LOCAL_SERVER_CONFIG_FILE="${LOCAL_SERVER_CONFIG_FILE:-${REPO_ROOT}/config/local_server.env}"
+LOCAL_SERVER_CONFIG_TEMPLATE="${LOCAL_SERVER_CONFIG_TEMPLATE:-${REPO_ROOT}/config/local_server.env.example}"
 
 TARGET="local"
 ACTION="all"
@@ -57,6 +59,7 @@ TAIL_LINES="${TAIL_LINES:-120}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 UV_PYTHON="${UV_PYTHON:-3.11}"
 RUNNER=()
+SERVER_PUBLIC_HOST="${SERVER_PUBLIC_HOST:-}"
 
 REMOTE_HOST="${REMOTE_HOST:-ali5}"
 REMOTE_BASE_DIR="${REMOTE_BASE_DIR:-/home/liuh/dev}"
@@ -122,6 +125,7 @@ Common environment overrides:
   PORT                   默认: ${PORT}
   LOG_LEVEL              默认: ${LOG_LEVEL}
   DEVICE_TOKEN_MAP       默认: ${DEVICE_TOKEN_MAP}
+  LOCAL_SERVER_CONFIG_FILE   默认: ${LOCAL_SERVER_CONFIG_FILE}
   HEARTBEAT_INTERVAL_MS  默认: ${HEARTBEAT_INTERVAL_MS}
   HEARTBEAT_TIMEOUT_MS   默认: ${HEARTBEAT_TIMEOUT_MS}
   SERVER_DEVICE_ID       默认: ${SERVER_DEVICE_ID}
@@ -154,6 +158,15 @@ Remote-only overrides:
   REMOTE_PYTHON_BIN      指定远程 Python，可为空
   TAIL_LINES             跟随日志行数，默认: ${TAIL_LINES}
 EOF
+}
+
+load_local_server_config() {
+  if [[ ! -f "${LOCAL_SERVER_CONFIG_FILE}" ]]; then
+    return 0
+  fi
+
+  # shellcheck disable=SC1090
+  source "${LOCAL_SERVER_CONFIG_FILE}"
 }
 
 require_command() {
@@ -232,6 +245,7 @@ stop_local() {
 }
 
 start_local() {
+  load_local_server_config
   build_runner
   require_command curl
   mkdir -p "${LOG_DIR}" "$(dirname "${VOICE_RUNS_ROOT}")"
@@ -243,6 +257,9 @@ start_local() {
 
   echo "[start] 启动本地服务端"
   echo "[start] host=${HOST} port=${PORT}"
+  if [[ -n "${SERVER_PUBLIC_HOST}" ]]; then
+    echo "[start] public_host=${SERVER_PUBLIC_HOST}"
+  fi
   echo "[start] log_level=${LOG_LEVEL}"
   echo "[start] asr_model=${VOICE_ASR_MODEL_NAME} agent_model=${AGENT_MODEL_NAME} voice_model=${VOICE_MODEL_NAME} voice=${VOICE_MODEL_VOICE}"
   echo "[start] tts_model=${TTS_MODEL_NAME} tts_voice=${TTS_VOICE} tts_ws=${TTS_WEBSOCKET_API_URL}"
@@ -292,6 +309,10 @@ start_local() {
 
   echo "[start] 启动成功: pid=$(cat "${PID_FILE}")"
   echo "[start] 运行态接口: http://127.0.0.1:${PORT}/api/runtime/devices"
+  if [[ -n "${SERVER_PUBLIC_HOST}" ]]; then
+    echo "[start] 局域网控制地址: ws://${SERVER_PUBLIC_HOST}:${PORT}/ws/control"
+    echo "[start] 局域网运行态接口: http://${SERVER_PUBLIC_HOST}:${PORT}/api/runtime/devices"
+  fi
 }
 
 tail_local_logs() {

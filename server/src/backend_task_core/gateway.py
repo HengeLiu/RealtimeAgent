@@ -92,70 +92,146 @@ class InMemoryTaskGateway(TaskGateway):
         """
 
         spec = self._registry.get_spec(task_type)
-        if task_type != "timer_task":
-            raise build_error(
-                ErrorCode.TASK_NOT_FOUND,
-                "当前只支持 timer_task",
-                details={"task_type": task_type},
-            )
-
-        duration_seconds = self._extract_duration_seconds(input_data)
         task_id = generate_id("task")
         created_at = now_ms()
-        runtime = TaskRuntime(
-            task_id=task_id,
-            task_type=spec.task_type,
-            version=spec.version,
-            session_id=session_id,
-            device_id=device_id,
-            state="scheduled",
-            input={
-                "duration_seconds": duration_seconds,
-                "label": input_data.get("label"),
-            },
-            context={
-                "phase": "scheduled",
-                "created_by": "agent_core_phase_f",
-                "scheduled_at_ms": created_at,
-                "duration_seconds": duration_seconds,
-                "label": input_data.get("label"),
-                "deadline_at_ms": created_at + duration_seconds * 1000,
-            },
-            started_at_ms=created_at,
-        )
-        runtime = self._store.save(runtime)
-        self._publish_runtime_event(
-            runtime=runtime,
-            event_name="task.created",
-            priority="normal",
-            requires_agent_decision=False,
-            allow_direct_notify=False,
-            payload={
-                "message": f"已创建 {duration_seconds} 秒计时器",
-                "duration_seconds": duration_seconds,
-                "label": input_data.get("label"),
-            },
-        )
+        if task_type == "timer_task":
+            duration_seconds = self._extract_duration_seconds(input_data)
+            runtime = TaskRuntime(
+                task_id=task_id,
+                task_type=spec.task_type,
+                version=spec.version,
+                session_id=session_id,
+                device_id=device_id,
+                state="scheduled",
+                input={
+                    "duration_seconds": duration_seconds,
+                    "label": input_data.get("label"),
+                },
+                context={
+                    "phase": "scheduled",
+                    "created_by": "agent_core_phase_f",
+                    "scheduled_at_ms": created_at,
+                    "duration_seconds": duration_seconds,
+                    "label": input_data.get("label"),
+                    "deadline_at_ms": created_at + duration_seconds * 1000,
+                },
+                started_at_ms=created_at,
+            )
+            runtime = self._store.save(runtime)
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.created",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"已创建 {duration_seconds} 秒计时器",
+                    "duration_seconds": duration_seconds,
+                    "label": input_data.get("label"),
+                },
+            )
 
-        runtime = self._transition_runtime(
-            runtime=runtime,
-            to_state="running",
-            phase="counting_down",
+            runtime = self._transition_runtime(
+                runtime=runtime,
+                to_state="running",
+                phase="counting_down",
+            )
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.started",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"计时器已启动，倒计时 {duration_seconds} 秒",
+                    "duration_seconds": duration_seconds,
+                    "label": input_data.get("label"),
+                },
+            )
+            self._schedule_timer_completion(runtime.task_id, duration_seconds)
+            return runtime
+
+        if task_type == "phone_video_link_task":
+            phone_device_id = self._extract_phone_device_id(input_data)
+            target_ws_uri = self._extract_target_ws_uri(input_data)
+            link_mode = str(input_data.get("link_mode") or "direct").strip() or "direct"
+            reason = str(input_data.get("reason") or "agent_requested").strip() or "agent_requested"
+            frame_interval_ms = self._extract_frame_interval_ms(input_data)
+            stream_id = str(input_data.get("stream_id") or generate_id("stream")).strip()
+            runtime = TaskRuntime(
+                task_id=task_id,
+                task_type=spec.task_type,
+                version=spec.version,
+                session_id=session_id,
+                device_id=device_id,
+                state="scheduled",
+                input={
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "link_mode": link_mode,
+                    "reason": reason,
+                    "frame_interval_ms": frame_interval_ms,
+                    "stream_id": stream_id,
+                },
+                context={
+                    "phase": "scheduled",
+                    "created_by": "agent_core_phase_j",
+                    "glass_device_id": device_id,
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "link_mode": link_mode,
+                    "reason": reason,
+                    "frame_interval_ms": frame_interval_ms,
+                    "stream_id": stream_id,
+                },
+                started_at_ms=created_at,
+            )
+            runtime = self._store.save(runtime)
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.created",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"已创建眼镜与手机视频直连任务，目标手机是 {phone_device_id}",
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "link_mode": link_mode,
+                    "reason": reason,
+                    "frame_interval_ms": frame_interval_ms,
+                    "stream_id": stream_id,
+                },
+            )
+            runtime = self._transition_runtime(
+                runtime=runtime,
+                to_state="running",
+                phase="link_prepared",
+            )
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.started",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"视频直连任务已进入运行态，目标手机是 {phone_device_id}",
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "link_mode": link_mode,
+                    "reason": reason,
+                    "frame_interval_ms": frame_interval_ms,
+                    "codec": "jpeg",
+                    "stream_id": stream_id,
+                },
+            )
+            return runtime
+
+        raise build_error(
+            ErrorCode.TASK_NOT_FOUND,
+            "当前不支持指定任务类型",
+            details={"task_type": task_type},
         )
-        self._publish_runtime_event(
-            runtime=runtime,
-            event_name="task.started",
-            priority="normal",
-            requires_agent_decision=False,
-            allow_direct_notify=False,
-            payload={
-                "message": f"计时器已启动，倒计时 {duration_seconds} 秒",
-                "duration_seconds": duration_seconds,
-                "label": input_data.get("label"),
-            },
-        )
-        self._schedule_timer_completion(runtime.task_id, duration_seconds)
-        return runtime
 
     def query_task(self, task_id: str) -> TaskRuntime:
         """查询任务实例。"""
@@ -183,20 +259,36 @@ class InMemoryTaskGateway(TaskGateway):
         if runtime.state in {"failed", "timeout", "cancelled", "completed"}:
             return runtime
 
-        self._cancel_timer_handle(task_id)
+        if runtime.task_type == "timer_task":
+            self._cancel_timer_handle(task_id)
+        cancel_message = "任务已取消"
+        cancel_payload: dict[str, Any] = {"message": "计时器已取消"}
+        requires_agent_decision = True
+        allow_direct_notify = True
+        if runtime.task_type == "phone_video_link_task":
+            cancel_message = "视频直连任务已取消"
+            cancel_payload = {
+                "message": cancel_message,
+                "phone_device_id": runtime.input.get("phone_device_id"),
+                "target_ws_uri": runtime.input.get("target_ws_uri"),
+                "stream_id": runtime.input.get("stream_id"),
+            }
+            requires_agent_decision = False
+            allow_direct_notify = False
+
         runtime = self._transition_runtime(
             runtime=runtime,
             to_state="cancelled",
             phase="cancelled",
-            result={"message": "任务已取消"},
+            result={"message": cancel_message},
         )
         self._publish_runtime_event(
             runtime=runtime,
             event_name="task.cancelled",
             priority="normal",
-            requires_agent_decision=True,
-            allow_direct_notify=True,
-            payload={"message": "计时器已取消"},
+            requires_agent_decision=requires_agent_decision,
+            allow_direct_notify=allow_direct_notify,
+            payload=cancel_payload,
         )
         return runtime
 
@@ -237,6 +329,49 @@ class InMemoryTaskGateway(TaskGateway):
                 details={"input_data": input_data},
             )
         return duration_seconds
+
+    def _extract_phone_device_id(self, input_data: dict[str, Any]) -> str:
+        """提取并校验目标手机编号。"""
+
+        phone_device_id = str(input_data.get("phone_device_id", "")).strip()
+        if not phone_device_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "创建视频直连任务需要 phone_device_id",
+                details={"input_data": input_data},
+            )
+        return phone_device_id
+
+    def _extract_target_ws_uri(self, input_data: dict[str, Any]) -> str:
+        """提取并校验目标视频接收地址。"""
+
+        target_ws_uri = str(input_data.get("target_ws_uri", "")).strip()
+        if not target_ws_uri:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "创建视频直连任务需要 target_ws_uri",
+                details={"input_data": input_data},
+            )
+        return target_ws_uri
+
+    def _extract_frame_interval_ms(self, input_data: dict[str, Any]) -> int:
+        """提取帧间隔。"""
+
+        try:
+            frame_interval_ms = int(input_data.get("frame_interval_ms", 500))
+        except (TypeError, ValueError) as exc:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "frame_interval_ms 必须是整数",
+                details={"input_data": input_data},
+            ) from exc
+        if frame_interval_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "frame_interval_ms 必须大于 0",
+                details={"frame_interval_ms": frame_interval_ms},
+            )
+        return frame_interval_ms
 
     def _transition_runtime(
         self,
