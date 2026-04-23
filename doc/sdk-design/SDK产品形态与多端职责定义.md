@@ -96,6 +96,8 @@ SDK 应统一解决以下非业务问题：
 8. 手机与眼镜之间的直连协作
 9. 服务器与手机之间的能力调用协调
 10. Tool、Task、MCP、设备能力的统一注册与调用
+11. 手机侧传感器、视觉模型、本地 SDK 能力的统一接入
+12. 跨端任务中的低延迟通知、状态回流和上下文同步
 
 ### 4.2 SDK 不应要求开发者处理的问题
 
@@ -109,6 +111,8 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 6. 高优先级通知如何抢占
 7. 设备断线后如何恢复状态
 8. 媒体资产如何落盘与索引
+9. 手机侧传感器事件如何与服务器任务关联
+10. 手机本地算法结果何时直达眼镜、何时回流服务器
 
 如果开发者仍需要显式处理这些问题，则说明 SDK 分层仍然不够成熟。
 
@@ -150,12 +154,16 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 2. 接收来自眼镜的连续媒体流
 3. 运行本地视觉、检测、跟踪、导航辅助等算法
 4. 作为设备组中的弹性算力补充
+5. 接入手机本地传感器，例如 GPS、陀螺仪、方向、ToF 相机
+6. 接入手机本地 SDK，例如高德导航 SDK
+7. 在服务器任务授权的策略范围内，做低延迟本地引导和风险提示
 
 不承担的职责：
 
 1. 不负责智能体完整运行态
 2. 不负责开放式多轮会话上下文
 3. 不负责全局任务编排决策
+4. 不负责长期上下文压缩、记忆和 Agent Loop
 
 ### 5.1.3 server
 
@@ -168,11 +176,13 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 3. 维护 Tool、Task、MCP 等能力注册表
 4. 负责任务创建、通知协调和全局调度
 5. 决定某项能力应在服务器、手机还是眼镜侧执行
+6. 维护跨端任务的策略边界，例如哪些手机通知可以直达眼镜，哪些必须回流 agent
 
 不承担的职责：
 
 1. 不必承接所有实时感知计算
 2. 不应继续把所有视觉算法都塞回服务端
+3. 不应介入每一帧视频或每一次传感器采样的低延迟判断
 
 ---
 
@@ -282,6 +292,8 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 3. `media-receiver`
 4. `phone-tool-runtime`
 5. 本地推理执行框架
+6. `sensor-provider`
+7. `local-sdk-adapter`
 
 ## 7.4 第四层：开发者扩展层
 
@@ -292,9 +304,11 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 1. `BaseTool`
 2. `BaseTask`
 3. `BasePhoneProcessor`
-4. `DeviceGroupContext`
-5. `TaskEventHandler`
-6. `CapabilityResult`
+4. `BasePhoneTask`
+5. `BaseSensorProvider`
+6. `DeviceGroupContext`
+7. `TaskEventHandler`
+8. `CapabilityResult`
 
 开发者新增能力时，原则上只应与这一层打交道。
 
@@ -441,58 +455,162 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 
 都应在这个层级上扩展，而不是由开发者自己实现手机网络接入与帧接收。
 
+## 9.6 BasePhoneTask
+
+这是手机侧长生命周期本地任务抽象。
+
+它不同于 `BasePhoneProcessor`：
+
+1. `BasePhoneProcessor` 更偏单帧或局部连续帧处理
+2. `BasePhoneTask` 更偏组合手机本地 SDK、传感器和处理器形成持续任务
+
+适合承载：
+
+1. 高德导航 SDK 会话
+2. GPS 与陀螺仪方向校验
+3. 行进中视觉引导
+4. ToF 兜底安全检测
+
+在复合导航场景中，手机侧不只是“跑 YOLO 的算力节点”，还要承接一部分低延迟安全判断。因此 SDK 必须允许手机侧任务在服务器授权的范围内直接向眼镜发出高优先级提示。
+
+## 9.7 BaseSensorProvider
+
+这是手机和眼镜侧传感器能力的统一抽象。
+
+适合承载：
+
+1. GPS
+2. 陀螺仪
+3. 方向角
+4. ToF 深度信息
+5. IMU
+
+开发者不应直接操作平台底层传感器 API，而应通过 SDK 提供的传感器提供者读取结构化数据。
+
 ---
 
-## 10. 下一阶段的产品化优先级
+## 10. 复合导航能力对 SDK 职责边界的校验
+
+复合导航是比“寻找物体”更复杂的 SDK 校验用例。
+
+它同时包含：
+
+1. 大模型前置确认
+2. 地图 SDK 或 MCP 路径规划
+3. 手机本地导航会话
+4. 手机陀螺仪与 GPS 方向校验
+5. 眼镜视频流到手机
+6. 手机 YOLO 识别人行道、车道、非机动车道、红绿灯、斑马线
+7. ToF 兜底检测近距离坑洞或障碍
+8. 眼镜语音和震动提示
+9. 任务状态回流服务器与 agent
+
+这个能力能清楚验证 SDK 是否把系统复杂度封装好了。
+
+## 10.1 推荐分层
+
+建议将导航拆成四层：
+
+1. `NavigationPrepareTool`
+   - 服务器侧 Tool
+   - 负责与用户确认目的地、出行方式、路线偏好
+   - 负责调用地图能力获得候选路线
+2. `NavigationTask`
+   - 服务器侧 `BaseTask`
+   - 负责创建跨端导航任务、下发路线、管理任务状态
+   - 负责定义手机侧可以直发眼镜的通知策略
+3. `PhoneNavigationTask`
+   - 手机侧 `BasePhoneTask`
+   - 负责调起高德 SDK、读取 GPS 和陀螺仪、维护本地导航态
+4. `GuidanceProcessor`
+   - 手机侧 `BasePhoneProcessor`
+   - 负责视频帧和 ToF 数据处理，输出结构化行进引导事件
+
+如果开发者必须把这四层全部写在一个巨大的“导航 Skill”里，说明 SDK 抽象不合理。
+
+## 10.2 通知和事件边界
+
+复合导航中必须区分两类输出：
+
+1. 低延迟安全提示
+   - 例如“停下”“前方有坑”“右侧有障碍物”
+   - 手机可以在服务器授权策略内直达眼镜
+   - 同时必须异步回流服务器记录任务上下文
+2. 需要 agent 决策的事件
+   - 例如用户偏离路线、目的地不明确、任务失败
+   - 必须回流服务器，由 `NavigationTask` 或 agent 决定下一步
+
+因此 SDK 需要提供统一通知协议，但不应要求所有通知都先经过大模型。
+
+## 10.3 对三端定位的修正
+
+复合导航说明手机不只是“被动算力资源”。
+
+更准确地说：
+
+1. 眼镜是用户身上的感知与执行终端
+2. 手机是本地实时导航和安全判断节点
+3. 服务器是任务、上下文、策略和 agent 中心
+
+服务器可以定义策略，手机可以在策略边界内执行低延迟判断，眼镜负责最终触达用户。
+
+---
+
+## 11. 下一阶段的产品化优先级
 
 如果下一期目标切换为 SDK 产品化，建议优先级如下。
 
-## 10.1 第一优先级
+## 11.1 第一优先级
 
 1. 固化 `DeviceGroup` 概念
 2. 固化 `DeviceGroupRuntime`
 3. 固化 `DeviceGroupContext`
 4. 固化服务器侧 `BaseTool / BaseTask`
-5. 固化手机侧 `BasePhoneProcessor`
+5. 固化手机侧 `BasePhoneTask / BasePhoneProcessor / BaseSensorProvider`
 
 这一步的目标不是多做业务，而是先让开发者扩展面成型。
 
-## 10.2 第二优先级
+## 11.2 第二优先级
 
 1. 手机注册与设备组绑定最小闭环
 2. 手机与眼镜直连媒体链路最小闭环
 3. 连续视频帧通道最小闭环
+4. 手机传感器事件上报与任务绑定最小闭环
+5. 手机本地通知直达眼镜并回流服务器的最小闭环
 
 这一步的目标是让“手机作为边缘算力节点”的系统定位真正落地。
 
-## 10.3 第三优先级
+## 11.3 第三优先级
 
 用一个真正具有代表性的三端能力作为 SDK 样板能力。
 
-建议优先选：
+建议分两级验证：
 
-**寻找物体**
+1. `find_object_task`
+   - 用于验证最小三端视频与手机推理链路
+2. `navigation_task`
+   - 用于验证复合传感器、地图 SDK、低延迟通知和长期任务编排
 
 原因：
 
-1. 它天然覆盖眼镜采集
-2. 它天然覆盖手机侧推理
-3. 它天然覆盖服务器任务编排
-4. 它比计时器更能证明 SDK 的系统封装是否成立
+1. 寻找物体能验证基础跨端能力
+2. 导航能验证 SDK 是否能承载真实复杂产品能力
+3. 导航比计时器和寻物更能暴露职责边界是否合理
 
 ---
 
-## 11. 建议的样板能力落地方式
+## 12. 建议的样板能力落地方式
 
 为了验证 SDK 是否真的达到了“开发者只关注业务”的目标，建议用一个样板能力做验收。
 
-推荐样板能力：
+推荐先后使用两个样板能力：
 
-- `find_object_task`
+1. `find_object_task`
+2. `navigation_task`
 
-建议由系统与业务分层如下：
+## 12.1 find_object_task 分层
 
-### 11.1 系统层负责
+### 12.1.1 系统层负责
 
 1. 设备组绑定
 2. 眼镜到手机的视频流建立
@@ -501,7 +619,7 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 5. 通知协调
 6. 结果回流 agent
 
-### 11.2 开发者负责
+### 12.1.2 开发者负责
 
 1. 定义目标物体识别逻辑
 2. 实现手机端检测处理器
@@ -510,9 +628,31 @@ SDK 的目标是让开发者完全不需要关注下列问题：
 
 如果这个样板能力落地时，开发者仍然需要自己写连接管理、消息路由、任务回调桥接，那么说明 SDK 设计还没有达标。
 
+## 12.2 navigation_task 分层
+
+### 12.2.1 系统层负责
+
+1. 用户与 agent 的多轮前置确认
+2. Tool 调用与任务创建
+3. 眼镜、手机、服务器设备组绑定
+4. 服务器到手机的路线与策略下发
+5. 眼镜到手机的视频流建立
+6. 手机事件与服务器任务状态关联
+7. 通知优先级、去重、抢占和回流
+
+### 12.2.2 开发者负责
+
+1. 定义导航前置确认 Tool 的业务参数
+2. 定义服务器侧 `NavigationTask` 状态机
+3. 定义手机侧 `PhoneNavigationTask`
+4. 定义手机侧视觉和 ToF 处理器
+5. 定义导航事件到用户提示的业务策略
+
+如果 `navigation_task` 落地时，开发者仍然需要手动处理传感器连接、视频链路、设备绑定、通知抢占、状态回流，则说明 SDK 仍然只是一组底层库，不是产品级 SDK。
+
 ---
 
-## 12. 建议的工程交付形态
+## 13. 建议的工程交付形态
 
 为了让开源社区能够真正使用，后续工程形态也应同步调整。
 
@@ -530,6 +670,7 @@ examples/
   server-tool-demo/
   timer-task-demo/
   find-object-demo/
+  navigation-demo/
 ```
 
 建议含义如下：
@@ -547,7 +688,7 @@ examples/
 
 ---
 
-## 13. 流程图（PlantUML）
+## 14. 流程图（PlantUML）
 
 下面用一张简化流程图说明 SDK 中系统层与开发者层的关系。
 
@@ -556,7 +697,7 @@ examples/
 title SDK 中系统层与开发者层关系
 
 rectangle "Developer Extension Layer" {
-  rectangle "BaseTool / BaseTask / BasePhoneProcessor"
+  rectangle "BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor"
 }
 
 rectangle "System Runtime Layer" {
@@ -579,9 +720,9 @@ rectangle "Protocol Layer" {
   rectangle "TaskEvent"
 }
 
-"BaseTool / BaseTask / BasePhoneProcessor" --> "DeviceGroupRuntime"
-"BaseTool / BaseTask / BasePhoneProcessor" --> "AgentRuntime"
-"BaseTool / BaseTask / BasePhoneProcessor" --> "BackendTaskRuntime"
+"BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor" --> "DeviceGroupRuntime"
+"BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor" --> "AgentRuntime"
+"BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor" --> "BackendTaskRuntime"
 "DeviceGroupRuntime" --> "Glass Runtime"
 "DeviceGroupRuntime" --> "Phone Runtime"
 "DeviceGroupRuntime" --> "Server Runtime"
@@ -597,7 +738,7 @@ rectangle "Protocol Layer" {
 
 ---
 
-## 14. 最终结论
+## 15. 最终结论
 
 本文档最终希望团队统一以下判断：
 
@@ -605,7 +746,8 @@ rectangle "Protocol Layer" {
 2. Python 主要承担服务器侧扩展面，不应被视为整个 SDK 的唯一实现形态。
 3. 眼镜的定位是感知与执行节点，手机的定位是边缘计算节点，服务器的定位是协调与上下文中心节点。
 4. SDK 的价值在于吃掉所有系统复杂度，让开发者只写业务能力。
-5. 下一阶段最重要的不是继续堆更多功能，而是先把 `DeviceGroupRuntime`、扩展抽象和手机侧运行时正式产品化。
+5. 导航这类复合能力要求手机在策略边界内具备低延迟本地判断能力，而不是只作为被动推理服务。
+6. 下一阶段最重要的不是继续堆更多功能，而是先把 `DeviceGroupRuntime`、扩展抽象和手机侧运行时正式产品化。
 
 如果后续设计与开发仍然围绕“先做一个功能，再补一点系统逻辑”推进，那么最终很难形成一个真正适合社区扩展的 SDK。
 

@@ -54,6 +54,8 @@
 2. **手机侧扩展面**
    - `BasePhoneProcessor`
    - `FrameProcessor`
+   - `BasePhoneTask`
+   - `BaseSensorProvider`
    - `PhoneTask`
 
 3. **系统托管能力**
@@ -155,6 +157,38 @@ SDK 负责：
 1. 手机端持续视频检测
 2. 连续场景分析
 3. 轻量导航辅助
+
+### 4.2.3 `BaseSensorProvider`
+
+适合封装手机或眼镜侧传感器，例如：
+
+1. GPS
+2. 陀螺仪
+3. 方向角
+4. ToF 深度信息
+5. IMU
+
+开发者不应直接处理底层系统传感器 API，而应通过 SDK 提供的结构化传感器数据完成业务判断。
+
+## 4.3 Skill、Tool、Task 的关系
+
+产品讨论中经常会使用 “Skill” 这个词。
+
+在 SDK 实现上，建议这样理解：
+
+1. `Skill` 是面向产品和用户的能力包概念。
+2. 一个 `Skill` 内部可以组合多个 `Tool`、`Task`、`PhoneTask`、`PhoneProcessor`。
+3. SDK 底层不必把 Skill 做成第一优先级的运行时概念，但需要允许开发者用清晰目录或声明文件组织能力包。
+
+以导航为例：
+
+1. `navigation_skill` 是产品层能力包。
+2. `prepare_navigation` 是服务器侧 Tool。
+3. `navigation_task` 是服务器侧后台任务。
+4. `phone_navigation_task` 是手机侧本地任务。
+5. `sidewalk_yolo_processor`、`traffic_light_processor`、`tof_safety_processor` 是手机侧处理器。
+
+这样既保留产品语义，也避免把所有逻辑塞进一个巨大的 Skill 类。
 
 ---
 
@@ -367,7 +401,16 @@ SDK 负责：
 
 ### 5.7.1 理想的开发者体验
 
-开发者应写一个高层 `prepare_navigation` Tool 或 `navigation_task`，而不是自己拼地图 API。
+导航不应被理解成“只调用一次 AMap MCP”。
+
+面向盲人用户的导航至少包含两个阶段：
+
+1. 前置确认阶段
+   - 由 agent 与用户确认目的地、出行方式、路线偏好
+   - 适合用服务器侧 `Tool` 或产品层 `Skill` 组织
+2. 导航执行阶段
+   - 由服务器侧 `navigation_task` 管理长期状态
+   - 由手机侧 `phone_navigation_task` 和多个 `PhoneProcessor` 执行本地引导
 
 例如：
 
@@ -395,10 +438,98 @@ SDK 负责：
 2. 返回结构统一化
 3. 结果写入上下文
 4. 后续导航任务启动接口
+5. 将确认后的路线下发给手机端任务
+6. 维护导航任务与手机本地导航会话的绑定
 
 ### 5.7.3 对 SDK 设计的验证
 
-如果开发者为了写导航能力，还要区分“现在是在 Agent 里还是在 Task 里、地图结果怎么挂上下文、怎么和手机联动”，那导航扩展面还不够高层。
+如果开发者为了写导航能力，还要区分“地图结果怎么挂上下文、手机控制连接怎么找、视频流怎么建、传感器事件怎么回流”，那导航扩展面还不够高层。
+
+### 5.7.4 复合导航推荐实现方式
+
+复合导航建议拆为以下开发者可见组件：
+
+1. `PrepareNavigationTool`
+   - 服务器侧 Tool
+   - 负责地点确认、路线偏好确认和路线准备
+2. `NavigationTask`
+   - 服务器侧 `BaseTask`
+   - 负责跨端任务生命周期、策略下发、状态回流和异常处理
+3. `PhoneNavigationTask`
+   - 手机侧 `BasePhoneTask`
+   - 负责调起高德 SDK、读取 GPS 和陀螺仪、维护手机本地导航态
+4. `SidewalkYoloProcessor`
+   - 手机侧 `BasePhoneProcessor`
+   - 负责识别人行道、车道、非机动车道和可行进区域
+5. `TrafficLightProcessor`
+   - 手机侧 `BasePhoneProcessor`
+   - 负责红绿灯和斑马线识别
+6. `TofSafetyProcessor`
+   - 手机侧 `BasePhoneProcessor`
+   - 负责近距离坑洞、台阶、障碍物兜底检测
+
+对应伪代码如下：
+
+```python
+class NavigationTask(BaseTask):
+    task_type = "navigation_task"
+
+    def on_start(self, context):
+        context.device_group.require_phone()
+        context.device_group.require_glass()
+        context.start_phone_task(
+            task_type="phone_navigation_task",
+            parameters={
+                "route": self.input.route,
+                "notification_policy": {
+                    "safety_events": "direct_to_glass_and_report_server",
+                    "route_events": "report_server_first",
+                },
+            },
+        )
+        context.start_phone_video_link(
+            processors=[
+                "sidewalk_yolo_processor",
+                "traffic_light_processor",
+                "tof_safety_processor",
+            ],
+        )
+        context.set_state("running")
+
+    def on_external_event(self, context, event):
+        if event.name == "safety.blocked":
+            context.notify_user(event.payload["hint"], priority="critical")
+        if event.name == "route.deviated":
+            context.ask_agent_to_replan(event.payload)
+        if event.name == "navigation.completed":
+            context.complete(event.payload)
+```
+
+手机侧伪代码如下：
+
+```python
+class PhoneNavigationTask(BasePhoneTask):
+    task_type = "phone_navigation_task"
+
+    def on_start(self, context):
+        self.amap_session = context.local_sdk("amap").start_navigation(context.parameters["route"])
+        self.gyro = context.sensor("gyroscope")
+        self.gps = context.sensor("gps")
+
+    def on_tick(self, context):
+        heading = self.gyro.read_heading()
+        gps_direction = self.gps.read_direction()
+        if self._heading_drift_too_large(heading, gps_direction):
+            context.emit_event("route.heading_drift", {"hint": "方向偏了，请稍微向左调整"})
+```
+
+开发者不应该在这些代码里处理：
+
+1. 手机和眼镜如何绑定
+2. 眼镜视频流如何到手机
+3. 手机事件如何送回服务器任务
+4. 手机如何直接让眼镜震动或播报
+5. 同一时间多个通知如何抢占
 
 ## 5.8 第 8 项：后台任务管理工具
 
@@ -589,10 +720,12 @@ SDK 需要提供：
 
 ### 6.3.1 开发者应实现什么
 
-开发者应主要实现：
+开发者应主要实现一个产品层 `navigation_skill`，内部拆成：
 
 1. `prepare_navigation` Tool
 2. `navigation_task`
+3. `phone_navigation_task`
+4. 多个手机侧视觉和传感器处理器
 
 ### 6.3.2 SDK 需要承担什么
 
@@ -603,10 +736,30 @@ SDK 应统一承接：
 3. 手机导航状态输入
 4. 任务事件回流
 5. 通知协调
+6. 眼镜到手机的视频流
+7. 手机传感器事件和服务器任务的绑定
+8. 手机本地安全提示直达眼镜的授权策略
 
 ### 6.3.3 对 SDK 的验证
 
 如果导航任务需要开发者同时理解地图、agent、任务、手机、通知、媒体五条链路，说明抽象层级过低。
+
+### 6.3.4 复合导航中的事件分级
+
+导航场景必须把事件分成至少三类：
+
+1. 安全类事件
+   - 例如前方有坑、近距离障碍、需要立即停下
+   - 手机可以在任务策略授权下直达眼镜
+   - 服务器必须异步记录
+2. 行进引导类事件
+   - 例如向左微调、保持直行、准备过斑马线
+   - 手机可以生成高频提示，但 SDK 应做节流、去重和优先级控制
+3. 决策类事件
+   - 例如偏离路线、路线不可通行、需要重新规划
+   - 应回流服务器任务和 agent，由 agent 决定是否追问或重规划
+
+如果 SDK 没有内建这类通知和事件分级能力，导航开发者就会被迫自己做大量系统逻辑。
 
 ## 6.4 室外主动系统：寻找通路 / 红绿灯 / 盲道 / 非机动车道
 
@@ -632,6 +785,19 @@ SDK 需要支持：
 3. 服务器任务根据事件推进状态
 
 如果这些都需要每个开发者自己拼，那么后续能力会大量重复造轮子。
+
+### 6.4.3 与导航任务的关系
+
+这些能力不应全部做成互相独立的孤立 Skill。
+
+更合理的方式是：
+
+1. `navigation_task` 可以按场景启用不同处理器
+2. `visual_guidance_task` 可以复用同一批处理器
+3. 红绿灯、斑马线、盲道、障碍物都输出统一 `GuidanceEvent`
+4. 任务根据事件类型和优先级决定是否直达眼镜或回流 agent
+
+这样才能避免每个能力重复实现一套手机视频链路、通知策略和任务状态机。
 
 ## 6.5 用户自定义系统：定时检查画面变化
 
@@ -734,6 +900,8 @@ SDK 应统一承接：
 1. 开发者如何注册手机处理器
 2. 手机如何声明自己支持哪些本地能力
 3. 服务器如何调度某个手机处理器
+4. 手机本地任务如何接入高德 SDK、GPS、陀螺仪、ToF
+5. 手机本地安全提示如何在策略授权下直达眼镜
 
 如果这个扩展面不补齐，很多设想功能都无法真正以 SDK 方式交付。
 
@@ -786,21 +954,27 @@ sdk.run()
 1. `BasePhoneProcessor`
 2. `PhoneProcessorRegistry`
 3. `PhoneTaskContext`
+4. `BasePhoneTask`
+5. `BaseSensorProvider`
 
 这会让“YOLO 放在手机端运行”这件事在 SDK 里有明确归属。
 
-## 10.3 用一个三端样板能力验证设计
+## 10.3 用复合导航样板能力验证设计
 
-建议优先用下面这个能力做 SDK 样板验收：
+建议用两个递进样板能力验证 SDK：
 
-**寻找物体**
+1. `find_object_task`
+   - 验证眼镜视频流、手机 YOLO、服务器任务编排
+2. `navigation_task`
+   - 验证地图 SDK、手机传感器、视觉处理、ToF、安全通知和长期任务编排
 
-因为它最能验证：
+其中 `navigation_task` 是更强的最终验收样板，因为它最能验证：
 
 1. 设备组是否成立
 2. 手机处理器模型是否成立
 3. 跨端任务模型是否成立
 4. 通知回流是否成立
+5. 手机本地低延迟决策是否能被 SDK 安全托管
 
 ---
 
@@ -813,7 +987,7 @@ sdk.run()
 title 开发者基于 SDK 开发能力的理想流程
 
 start
-:开发者定义 Tool / Task / PhoneProcessor;
+:开发者定义 Tool / Task / PhoneTask / PhoneProcessor;
 :向 SDK 注册能力;
 :SDK 自动完成设备组绑定与运行时接入;
 
@@ -826,8 +1000,13 @@ else (否)
   :Task 使用 DeviceGroupContext;
   if (需要手机计算?) then (是)
     :SDK 建立眼镜到手机数据链路;
-    :SDK 调用 PhoneProcessor;
-    :结果回流 Task;
+    :SDK 启动 PhoneTask 和 PhoneProcessor;
+    :手机输出结构化事件;
+    if (事件需要低延迟通知?) then (是)
+      :SDK 按策略直达眼镜并回流服务器;
+    else (否)
+      :事件回流 Task 或 Agent;
+    endif
   endif
   :Task 产出 TaskEvent;
 endif
@@ -845,7 +1024,7 @@ stop
 
 1. 写 `Tool`
 2. 写 `Task`
-3. 写 `PhoneProcessor`
+3. 写 `PhoneTask / PhoneProcessor`
 
 而不应主要围绕下面三件事开发：
 
@@ -857,5 +1036,6 @@ stop
 
 1. 当前项目已经有 SDK 化的正确方向，但还没有完全形成开发者产品。
 2. 最大缺口是 `DeviceGroupRuntime` 和手机侧扩展面。
-3. 下一阶段若要验证 SDK 是否合理，最好的方法不是再做一个简单能力，而是用“寻找物体”这类真实三端能力做样板。
-4. 只有当开发者可以在不理解系统内部细节的前提下完成这类能力开发，才能说明 SDK 设计真正成立。
+3. 导航能力说明手机不是简单推理节点，而是需要承接本地导航 SDK、传感器融合和低延迟安全判断的边缘运行时。
+4. 下一阶段若要验证 SDK 是否合理，最好的方法不是再做一个简单能力，而是用“寻找物体 -> 复合导航”两个递进样板验证。
+5. 只有当开发者可以在不理解系统内部细节的前提下完成复合导航开发，才能说明 SDK 设计真正成立。
