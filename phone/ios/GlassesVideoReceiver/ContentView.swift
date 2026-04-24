@@ -97,6 +97,18 @@ struct ContentView: View {
                     .font(.footnote)
             }
 
+            if let findTask = store.activeFindObjectTask {
+                Text("找物体任务：\(findTask.targetObject)")
+                    .font(.footnote)
+                    .foregroundStyle(.blue)
+            }
+
+            if let latestVisionSummary = store.latestVisionSummary {
+                Text("最近检测：\(latestVisionSummary)")
+                    .font(.footnote)
+                    .foregroundStyle(store.latestVisionFound ? .green : .secondary)
+            }
+
             HStack(spacing: 12) {
                 Button("刷新地址") {
                     store.refreshSinkURIs()

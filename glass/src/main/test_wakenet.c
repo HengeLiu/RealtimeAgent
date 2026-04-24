@@ -37,6 +37,22 @@ static const char *TAG = "test-wakenet";
 static i2s_chan_handle_t s_mic_rx_chan = NULL;
 static wakenet_test_ctx_t s_ctx = {0};
 
+static const char *preferred_wakenet_model_name(srmodel_list_t *models)
+{
+    char *wn_name = NULL;
+
+#if CONFIG_SR_WN_WN9_HILEXIN
+    wn_name = esp_srmodel_filter(models, ESP_WN_PREFIX, "hilexin");
+    if (wn_name != NULL) {
+        ESP_LOGI(TAG, "优先命中嗨乐鑫 WakeNet 模型: %s", wn_name);
+        return wn_name;
+    }
+    ESP_LOGW(TAG, "未命中嗨乐鑫 WakeNet 模型，回退到首个可用模型");
+#endif
+
+    return esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
+}
+
 /**
  * 初始化麦克风 PDM 输入通道。
  *
@@ -123,7 +139,7 @@ static esp_err_t init_wakenet_runtime(wakenet_test_ctx_t *ctx)
     afe_cfg->vad_init = true;
     afe_cfg->aec_init = false;
 
-    wn_name = esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
+    wn_name = (char *)preferred_wakenet_model_name(models);
     ESP_RETURN_ON_FALSE(wn_name != NULL, ESP_ERR_NOT_FOUND, TAG, "No WakeNet model found");
 
     afe_cfg->wakenet_model_name = wn_name;

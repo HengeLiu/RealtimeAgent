@@ -133,6 +133,37 @@ class BackendTaskCoreTestCase(unittest.TestCase):
         self.assertIn("task.started", event_names)
         self.assertIn("task.cancelled", event_names)
 
+    def test_find_object_task_starts_and_publishes_stream_context(self) -> None:
+        """测试目标：验证找物体任务模板已注册且可进入运行态。"""
+
+        runtime = self.gateway.create_task(
+            task_type="find_object_task",
+            session_id="sess_find_object_001",
+            device_id="glass-001",
+            input_data={
+                "target_object": "手机",
+                "phone_device_id": "phone-001",
+                "target_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                "frame_interval_ms": 500,
+            },
+        )
+
+        self.assertEqual(runtime.state, "running")
+        self.assertEqual(runtime.context["target_object"], "手机")
+        self.assertEqual(runtime.context["phone_device_id"], "phone-001")
+        self.assertEqual(runtime.context["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+        self.assertEqual(runtime.context["frame_interval_ms"], 500)
+        self.assertTrue(str(runtime.context["stream_id"]).startswith("stream_"))
+
+        started_event = next(
+            event
+            for event in self.events
+            if event.task_id == runtime.task_id and event.event_name == "task.started"
+        )
+        self.assertEqual(started_event.payload["target_object"], "手机")
+        self.assertEqual(started_event.payload["phone_device_id"], "phone-001")
+        self.assertEqual(started_event.payload["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+
 
 if __name__ == "__main__":
     unittest.main()

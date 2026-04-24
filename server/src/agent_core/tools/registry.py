@@ -98,6 +98,11 @@ class ToolRegistry:
 
         self._camera_gateway = camera_gateway
 
+    def bind_device_state_reader(self, device_state_reader) -> None:
+        """绑定设备运行态读取函数。"""
+
+        self._device_state_reader = device_state_reader
+
     def discover_tools(self) -> None:
         """导入并注册内置 Tool 与 MCP Tool。"""
 
@@ -108,6 +113,7 @@ class ToolRegistry:
             MapManageTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
+            StartFindObjectTool,
             StartPhoneVideoLinkTool,
             TimerManageTool,
         )
@@ -120,9 +126,13 @@ class ToolRegistry:
             CreateTimerTool(),
             QueryTaskStatusTool(),
             CancelTaskTool(),
+            StartFindObjectTool(),
             StartPhoneVideoLinkTool(),
         ):
-            self._register_tool(tool, expose_to_model=tool.spec.name in {"capture_photo", "timer_manage", "map_manage"})
+            self._register_tool(
+                tool,
+                expose_to_model=tool.spec.name in {"capture_photo", "timer_manage", "map_manage", "start_find_object"},
+            )
 
         for method in self._mcp_registry.list_methods():
             self._register_tool(

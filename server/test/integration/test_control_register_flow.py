@@ -527,6 +527,37 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             phone.close()
             glass.close()
 
+    def test_single_glass_and_phone_auto_bind_without_desired_ids(self) -> None:
+        """测试目标：验证单眼镜单手机在线时可自动完成兜底绑定。"""
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+
+            glass_binded = self.codec.decode(glass.recv_text())
+            phone_binded = self.codec.decode(phone.recv_text())
+            self.assertEqual(glass_binded.name, "device.binded")
+            self.assertEqual(phone_binded.name, "device.binded")
+
+            runtime = self._fetch_runtime()
+            self.assertEqual(runtime["device_bindings"]["glass_to_phone"]["glass-001"], "phone-001")
+            self.assertEqual(runtime["device_bindings"]["phone_to_glass"]["phone-001"], "glass-001")
+        finally:
+            glass.close()
+            phone.close()
+
     def test_binding_removed_when_phone_disconnects(self) -> None:
         """测试目标：验证手机离线后绑定关系会自动清理。
 
@@ -845,6 +876,57 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             self.assertEqual(camera_stop.name, "sensor.camera.stream.stop")
         finally:
             glass.close()
+
+    def test_debug_start_find_object_endpoint_starts_task_without_voice_reply(self) -> None:
+        """测试目标：验证调试接口可直接启动找物体任务且不向眼镜播报。"""
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            opened = self.codec.decode(glass.recv_text())
+            self.assertEqual(opened.name, "voice.session.open")
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            payload = self._post_json(
+                "/api/debug/find-object/start",
+                {
+                    "glass_device_id": "glass-001",
+                    "target_object": "手机",
+                    "frame_interval_ms": 500,
+                    "reason": "manual_debug",
+                },
+            )
+
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["reply_text"], "已开始寻找手机，找到后会记录任务结果。")
+            self.assertEqual(payload["task"]["task_type"], "find_object_task")
+            self.assertEqual(payload["task"]["state"], "running")
+            self.assertEqual(payload["task"]["target_object"], "手机")
+            self.assertEqual(payload["task"]["phone_device_id"], "phone-001")
+            self.assertEqual(payload["task"]["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+
+            phone_start = self._recv_until_message_name(phone, "vision.find_object.start")
+            self.assertEqual(phone_start.payload["task_id"], payload["task"]["task_id"])
+            self.assertEqual(phone_start.payload["target_object"], "手机")
+
+            camera_start = self._recv_until_message_name(glass, "sensor.camera.stream.start")
+            self.assertEqual(camera_start.payload["stream_id"], payload["task"]["stream_id"])
+            self.assertEqual(camera_start.payload["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+        finally:
+            glass.close()
+            phone.close()
 
     def _send_register(
         self,

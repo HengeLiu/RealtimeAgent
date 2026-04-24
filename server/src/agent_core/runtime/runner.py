@@ -257,7 +257,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         """
 
         from agents import Runner
-        from agents.items import ItemHelpers, MessageOutputItem
+        from agents.items import MessageOutputItem
 
         run_result = Runner.run_streamed(
             agent,
@@ -279,10 +279,6 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     continue
 
                 if event.name == "message_output_created" and isinstance(event.item, MessageOutputItem):
-                    message_text = ItemHelpers.text_message_output(event.item).strip()
-                    if message_text and not progress_sent and progress_callback is not None:
-                        progress_callback(message_text)
-                        progress_sent = True
                     continue
 
                 if event.name == "tool_called":

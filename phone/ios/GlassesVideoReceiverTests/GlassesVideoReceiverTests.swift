@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import GlassesVideoReceiver
 
 /// iOS 视频回显核心逻辑测试。
@@ -133,6 +134,80 @@ struct GlassesVideoReceiverTests {
         #expect(responseText.hasSuffix("\r\n\r\n"))
     }
 
+    /// 测试目标：验证手机端最小 YOLO 检测接口可输出结构化命中结果。
+    ///
+    /// 测试方法：
+    /// 1. 构造一张纯白测试图像。
+    /// 2. 使用 `HeuristicYoloObjectDetector` 检测目标。
+    ///
+    /// 预期结果：
+    /// 1. 检测结果命中。
+    /// 2. 结果包含目标名称、置信度、位置和摘要。
+    @Test
+    func testHeuristicYoloDetectorReturnsStructuredHit() throws {
+        let image = try #require(Self.makeSolidImage(red: 1, green: 1, blue: 1))
+        let detector = HeuristicYoloObjectDetector()
+
+        let result = detector.detect(image: image, targetObject: "测试水杯", frameSequence: 3)
+
+        #expect(result.found)
+        #expect(result.targetObject == "测试水杯")
+        #expect(result.confidence > 0.6)
+        #expect(result.position.isEmpty == false)
+        #expect(result.summary.contains("测试水杯"))
+    }
+
+    /// 测试目标：验证找物体停止消息会同步结束当前视频会话。
+    ///
+    /// 测试方法：
+    /// 1. 构造一个正在接收视频且存在找物体任务的页面状态。
+    /// 2. 调用 `stopFindObjectTask`。
+    ///
+    /// 预期结果：
+    /// 1. 当前找物体任务被清空。
+    /// 2. 视频连接状态被重置为等待下一次接收。
+    @MainActor
+    @Test
+    func testStopFindObjectTaskAlsoFinishesVideoSession() {
+        let store = CameraStreamStore()
+        store.isConnected = true
+        store.startFindObjectTask(
+            taskID: "task-001",
+            targetObject: "水杯",
+            streamID: "stream-001",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001"
+        )
+
+        store.stopFindObjectTask(taskID: "task-001", reason: "task.cancelled")
+
+        #expect(store.activeFindObjectTask == nil)
+        #expect(store.isConnected == false)
+        #expect(store.latestImage == nil)
+    }
+
+    /// 测试目标：验证统一服务端地址可正确派生控制与 HTTP 地址。
+    ///
+    /// 测试方法：
+    /// 1. 构造只包含统一服务端地址的配置。
+    /// 2. 分别读取 HTTP 基地址和控制 WebSocket 地址。
+    ///
+    /// 预期结果：
+    /// 1. HTTP 基地址保持原值。
+    /// 2. 控制地址自动补全为 `/ws/control`。
+    @Test
+    func testReceiverAppConfigDerivesControlAndHTTPURLsFromSingleServerBaseURL() {
+        let config = ReceiverAppConfig(
+            serverBaseURLString: "http://192.168.10.8:8765",
+            phoneDeviceID: "phone-001",
+            pairToken: "pair-phone-token",
+            desiredGlassDeviceID: "glass-001"
+        )
+
+        #expect(config.serverHTTPBaseURLString == "http://192.168.10.8:8765")
+        #expect(config.serverControlWebSocketURLString == "ws://192.168.10.8:8765/ws/control")
+    }
+
     /// 构造测试所需媒体帧原始字节。
     ///
     /// 参数：
@@ -162,5 +237,20 @@ struct GlassesVideoReceiverTests {
         result.append(headerData)
         result.append(payload)
         return result
+    }
+
+    /// 构造纯色测试图。
+    ///
+    /// 参数：
+    /// 1. `red/green/blue`：颜色通道值，范围 0 到 1。
+    ///
+    /// 返回值：
+    /// 1. `UIImage`，失败时返回 `nil`。
+    private static func makeSolidImage(red: CGFloat, green: CGFloat, blue: CGFloat) -> UIImage? {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4))
+        return renderer.image { context in
+            UIColor(red: red, green: green, blue: blue, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
     }
 }

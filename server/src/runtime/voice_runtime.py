@@ -1171,23 +1171,30 @@ class VoiceRuntime:
 
     def stream_playback(self, handler, *, device_id: str, stream_id: str) -> None:
         playback = self._wait_for_playback(device_id=device_id, stream_id=stream_id, timeout_s=10.0)
-        self._send_chunked_headers(handler)
-        self._write_chunk(handler, wav_header_unknown_size(playback.sample_rate, playback.channels))
+        try:
+            self._send_chunked_headers(handler)
+            self._write_chunk(handler, wav_header_unknown_size(playback.sample_rate, playback.channels))
 
-        while True:
-            if playback.abort_event.is_set():
-                break
-            try:
-                item = playback.queue.get(timeout=0.5)
-            except queue.Empty:
-                if playback.completed:
+            while True:
+                if playback.abort_event.is_set():
                     break
-                continue
-            if item is None:
-                break
-            self._write_chunk(handler, item)
+                try:
+                    item = playback.queue.get(timeout=0.5)
+                except queue.Empty:
+                    if playback.completed:
+                        break
+                    continue
+                if item is None:
+                    break
+                self._write_chunk(handler, item)
 
-        self._finish_chunked(handler)
+            self._finish_chunked(handler)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError) as exc:
+            log_debug(
+                self._logger,
+                f"播放流 HTTP 客户端已断开: device_id={device_id} stream_id={stream_id} reason={exc.__class__.__name__}",
+                LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
+            )
 
     def build_runtime_snapshot(self) -> dict[str, dict[str, Any]]:
         with self._lock:

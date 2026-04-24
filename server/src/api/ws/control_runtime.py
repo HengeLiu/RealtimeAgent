@@ -42,6 +42,7 @@ class ControlConnection:
     camera_sink_ws_uri: str | None = None
     desired_glass_device_id: str | None = None
     desired_phone_device_id: str | None = None
+    mock_capabilities: dict[str, object] = field(default_factory=dict)
 
     def touch(self) -> None:
         """刷新最近活跃时间。"""
@@ -104,6 +105,7 @@ class ControlRuntime(CameraGateway):
         self._glass_to_phone: dict[str, str] = {}
         self._phone_to_glass: dict[str, str] = {}
         self._active_phone_video_task_ids_by_glass: dict[str, str] = {}
+        self._active_find_object_task_ids_by_glass: dict[str, str] = {}
         self._pending_camera_captures: dict[str, PendingCameraCapture] = {}
         self._voice_runtime = VoiceRuntime(
             settings=settings,
@@ -112,6 +114,7 @@ class ControlRuntime(CameraGateway):
             asr_client=asr_client,
             agent_facade=agent_facade,
         )
+        self._voice_runtime.agent_facade.bind_device_state_reader(self.build_runtime_snapshot)
         self._voice_runtime.agent_facade.bind_camera_gateway(self)
         self._voice_runtime.agent_facade.bind_task_event_listener(self._voice_runtime.on_task_event)
         self._voice_runtime.agent_facade.bind_task_event_listener(self._handle_task_event)
@@ -393,6 +396,70 @@ class ControlRuntime(CameraGateway):
             self._active_phone_video_task_ids_by_glass[glass_device_id] = runtime.task_id
         return runtime
 
+    def start_find_object_debug(
+        self,
+        *,
+        glass_device_id: str,
+        target_object: str,
+        target_ws_uri: str,
+        frame_interval_ms: int,
+        reason: str,
+    ):
+        """通过调试入口启动一条找物体任务。
+
+        这个入口只创建后台任务并触发端侧控制消息，不向眼镜下发语音播报。
+        调用方可把返回的 `reply_text` 写到本地用于联调记录。
+        """
+
+        if frame_interval_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "frame_interval_ms 必须大于 0",
+                details={"frame_interval_ms": frame_interval_ms},
+            )
+        normalized_target = target_object.strip()
+        if not normalized_target:
+            raise build_error(ErrorCode.INVALID_MESSAGE, "target_object 不能为空")
+
+        with self._lock:
+            connection = self._device_connections.get(glass_device_id)
+        if connection is None or connection.closed:
+            raise build_error(
+                ErrorCode.STREAM_NOT_FOUND,
+                "目标眼镜当前不在线，无法启动找物体任务",
+                details={"glass_device_id": glass_device_id},
+            )
+
+        session_id = str(connection.session_id or "").strip()
+        if not session_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "目标眼镜尚未打开语音会话，无法复用会话编号启动找物体任务",
+                details={"glass_device_id": glass_device_id},
+            )
+
+        resolved_phone_device_id, resolved_target_ws_uri = self._resolve_phone_video_target(
+            glass_device_id=glass_device_id,
+            target_ws_uri=target_ws_uri.strip(),
+        )
+
+        runtime = self._voice_runtime.agent_facade.get_task_gateway().create_task(
+            task_type="find_object_task",
+            session_id=session_id,
+            device_id=glass_device_id,
+            input_data={
+                "target_object": normalized_target,
+                "phone_device_id": resolved_phone_device_id,
+                "target_ws_uri": resolved_target_ws_uri,
+                "frame_interval_ms": frame_interval_ms,
+                "reason": reason,
+            },
+        )
+        return {
+            "runtime": runtime,
+            "reply_text": f"已开始寻找{normalized_target}，找到后会记录任务结果。",
+        }
+
     def stop_phone_video_link_debug(
         self,
         *,
@@ -412,7 +479,21 @@ class ControlRuntime(CameraGateway):
 
         with self._lock:
             task_id = self._active_phone_video_task_ids_by_glass.get(glass_device_id)
+            find_object_task_id = self._active_find_object_task_ids_by_glass.get(glass_device_id)
             connection = self._device_connections.get(glass_device_id)
+
+        if find_object_task_id:
+            runtime = self._voice_runtime.agent_facade.get_task_gateway().cancel_task(find_object_task_id)
+            with self._lock:
+                self._active_find_object_task_ids_by_glass.pop(glass_device_id, None)
+            return {
+                "task_id": runtime.task_id,
+                "task_type": runtime.task_type,
+                "state": runtime.state,
+                "device_id": runtime.device_id,
+                "session_id": runtime.session_id,
+                "noop": False,
+            }
 
         if task_id:
             runtime = self._voice_runtime.agent_facade.get_task_gateway().cancel_task(task_id)
@@ -452,6 +533,55 @@ class ControlRuntime(CameraGateway):
             "session_id": connection.session_id or "",
             "noop": True,
         }
+
+    def report_find_object_result(
+        self,
+        *,
+        task_id: str,
+        phone_device_id: str,
+        found: bool,
+        target_object: str,
+        confidence: float,
+        position: str,
+        frame_seq: int | None,
+        summary: str,
+    ):
+        """接收手机端找物体检测结果并更新后台任务。
+
+        主要逻辑：
+        1. 校验上报手机与任务绑定手机一致。
+        2. 调用 `backend-task-core` 更新任务运行态。
+        3. 若任务完成，后续由任务事件监听器统一停流和通知端侧。
+        """
+
+        task_gateway = self._voice_runtime.agent_facade.get_task_gateway()
+        runtime = task_gateway.query_task(task_id)
+        expected_phone_device_id = str(runtime.input.get("phone_device_id") or "").strip()
+        if runtime.task_type != "find_object_task":
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "目标任务不是 find_object_task",
+                details={"task_id": task_id, "task_type": runtime.task_type},
+            )
+        if expected_phone_device_id and expected_phone_device_id != phone_device_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "检测结果上报手机与任务绑定手机不一致",
+                details={
+                    "task_id": task_id,
+                    "expected_phone_device_id": expected_phone_device_id,
+                    "actual_phone_device_id": phone_device_id,
+                },
+            )
+        return task_gateway.report_find_object_result(
+            task_id=task_id,
+            found=found,
+            target_object=target_object,
+            confidence=confidence,
+            position=position,
+            frame_seq=frame_seq,
+            summary=summary,
+        )
 
     def _resolve_phone_video_target(
         self,
@@ -516,6 +646,7 @@ class ControlRuntime(CameraGateway):
                     "camera_sink_ws_uri": connection.camera_sink_ws_uri,
                     "desired_glass_device_id": connection.desired_glass_device_id,
                     "desired_phone_device_id": connection.desired_phone_device_id,
+                    "mock_capabilities": dict(connection.mock_capabilities),
                     "last_seen_ms_ago": int((now - connection.last_seen_monotonic) * 1000),
                     "heartbeat_age_ms": int((now - connection.last_heartbeat_monotonic) * 1000),
                 }
@@ -542,6 +673,9 @@ class ControlRuntime(CameraGateway):
         camera_sink_ws_uri = str(payload.get("camera_sink_ws_uri", "")).strip() or None
         desired_glass_device_id = str(payload.get("desired_glass_device_id", "")).strip() or None
         desired_phone_device_id = str(payload.get("desired_phone_device_id", "")).strip() or None
+        mock_capabilities = payload.get("mock_capabilities")
+        if not isinstance(mock_capabilities, dict):
+            mock_capabilities = {}
 
         if not device_id:
             self._send_register_failed(
@@ -587,6 +721,7 @@ class ControlRuntime(CameraGateway):
             connection.camera_sink_ws_uri = camera_sink_ws_uri
             connection.desired_glass_device_id = desired_glass_device_id
             connection.desired_phone_device_id = desired_phone_device_id
+            connection.mock_capabilities = dict(mock_capabilities)
             connection.touch_heartbeat()
             self._device_connections[device_id] = connection
             if should_open_voice_session and connection.session_id is not None:
@@ -709,6 +844,24 @@ class ControlRuntime(CameraGateway):
                         if phone_connection.desired_glass_device_id == connection.device_id:
                             candidate_pair = (connection.device_id or "", phone_connection.device_id or "")
                             break
+            if candidate_pair is None:
+                online_glass_ids = [
+                    item.device_id or ""
+                    for item in self._device_connections.values()
+                    if item.registered and not item.closed and item.device_type == "glass" and item.device_id
+                ]
+                online_phone_ids = [
+                    item.device_id or ""
+                    for item in self._device_connections.values()
+                    if item.registered and not item.closed and item.device_type == "phone" and item.device_id
+                ]
+                if (
+                    len(online_glass_ids) == 1
+                    and len(online_phone_ids) == 1
+                    and online_glass_ids[0] not in self._glass_to_phone
+                    and online_phone_ids[0] not in self._phone_to_glass
+                ):
+                    candidate_pair = (online_glass_ids[0], online_phone_ids[0])
 
         if candidate_pair is None:
             return
@@ -759,13 +912,15 @@ class ControlRuntime(CameraGateway):
                 )
 
             bound_phone_id = self._glass_to_phone.get(glass_device_id)
+            bound_glass_id = self._phone_to_glass.get(phone_device_id)
+            if bound_phone_id == phone_device_id and bound_glass_id == glass_device_id:
+                return
             if bound_phone_id is not None and bound_phone_id != phone_device_id:
                 raise build_error(
                     ErrorCode.INVALID_MESSAGE,
                     "目标眼镜已绑定其它手机",
                     details={"glass_device_id": glass_device_id, "bound_phone_id": bound_phone_id},
                 )
-            bound_glass_id = self._phone_to_glass.get(phone_device_id)
             if bound_glass_id is not None and bound_glass_id != glass_device_id:
                 raise build_error(
                     ErrorCode.INVALID_MESSAGE,
@@ -1128,6 +1283,9 @@ class ControlRuntime(CameraGateway):
     def _handle_task_event(self, event: TaskEvent) -> None:
         """根据任务事件驱动设备控制消息。"""
 
+        if event.task_type == "find_object_task":
+            self._handle_find_object_task_event(event)
+            return
         if event.task_type != "phone_video_link_task":
             return
         if event.event_name == "task.started":
@@ -1165,3 +1323,83 @@ class ControlRuntime(CameraGateway):
                     "stream_id": stream_id,
                 },
             )
+
+    def _handle_find_object_task_event(self, event: TaskEvent) -> None:
+        """根据找物体任务事件驱动眼镜和手机控制消息。"""
+
+        stream_id = str(event.payload.get("stream_id", "")).strip()
+        phone_device_id = str(event.payload.get("phone_device_id", "")).strip()
+        if event.event_name == "task.started":
+            with self._lock:
+                self._active_find_object_task_ids_by_glass[event.device_id] = event.task_id
+            target_ws_uri = str(event.payload.get("target_ws_uri", "")).strip()
+            target_object = str(event.payload.get("target_object", "")).strip()
+            if phone_device_id:
+                self._send_message_to_device(
+                    phone_device_id,
+                    "request",
+                    "vision.find_object.start",
+                    event.session_id,
+                    {
+                        "task_id": event.task_id,
+                        "glass_device_id": event.device_id,
+                        "target_object": target_object,
+                        "stream_id": stream_id,
+                    },
+                )
+            if stream_id and target_ws_uri:
+                self._send_message_to_device(
+                    event.device_id,
+                    "request",
+                    "sensor.camera.stream.start",
+                    event.session_id,
+                    {
+                        "stream_id": stream_id,
+                        "target_ws_uri": target_ws_uri,
+                        "frame_interval_ms": int(event.payload.get("frame_interval_ms", 500)),
+                        "codec": str(event.payload.get("codec", "jpeg")),
+                    },
+                )
+            return
+
+        if event.event_name not in {"task.completed", "task.cancelled"}:
+            return
+
+        with self._lock:
+            self._active_find_object_task_ids_by_glass.pop(event.device_id, None)
+        if stream_id:
+            try:
+                self._send_message_to_device(
+                    event.device_id,
+                    "request",
+                    "sensor.camera.stream.stop",
+                    event.session_id,
+                    {
+                        "stream_id": stream_id,
+                    },
+                )
+            except Exception as exc:
+                log_warning(
+                    self._logger,
+                    f"找物体任务停流失败，已忽略: task_id={event.task_id} reason={exc}",
+                    LogContext(device_id=event.device_id, session_id=event.session_id),
+                )
+        if phone_device_id:
+            try:
+                self._send_message_to_device(
+                    phone_device_id,
+                    "request",
+                    "vision.find_object.stop",
+                    event.session_id,
+                    {
+                        "task_id": event.task_id,
+                        "stream_id": stream_id,
+                        "reason": event.event_name,
+                    },
+                )
+            except Exception as exc:
+                log_warning(
+                    self._logger,
+                    f"找物体任务通知手机停止失败，已忽略: task_id={event.task_id} reason={exc}",
+                    LogContext(device_id=phone_device_id, session_id=event.session_id),
+                )

@@ -29,7 +29,14 @@ class TaskRegistry:
                 description="眼镜与手机直连视频后台任务",
                 supports_cancel=True,
                 timeout_seconds=86400,
-            )
+            ),
+            "find_object_task": TaskSpec(
+                task_type="find_object_task",
+                version="v1",
+                description="手机端找物体视觉任务",
+                supports_cancel=True,
+                timeout_seconds=86400,
+            ),
         }
 
     def get_spec(self, task_type: str) -> TaskSpec:

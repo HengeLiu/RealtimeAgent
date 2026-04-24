@@ -381,6 +381,38 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(len(controller.pending_playbacks), 1)
         self.assertIs(controller.pending_playbacks[0], second)
 
+    def test_stream_playback_treats_broken_pipe_as_client_disconnect(self) -> None:
+        """测试目标：验证播放流 HTTP 客户端提前断开时不抛出 traceback。"""
+
+        class _BrokenPipeHeaders:
+            def write(self, _payload: bytes) -> None:
+                raise BrokenPipeError("client closed")
+
+        class _Handler:
+            wfile = _BrokenPipeHeaders()
+
+            def send_response(self, _status: int) -> None:
+                return
+
+            def send_header(self, _name: str, _value: str) -> None:
+                return
+
+            def end_headers(self) -> None:
+                return
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖 HTTP 断流路径
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_broken_pipe",
+        )
+
+        runtime.stream_playback(_Handler(), device_id="glass-001", stream_id="reply_broken_pipe")
+
 
 if __name__ == "__main__":
     unittest.main()

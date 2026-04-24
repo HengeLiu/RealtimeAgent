@@ -1055,16 +1055,30 @@ class AgentCoreTestCase(unittest.TestCase):
         assert image_asset is not None
         self.assertEqual(image_asset.asset_id, "asset_new_image_001")
 
-    def test_tool_registry_only_exposes_three_model_facing_tools(self) -> None:
-        """测试目标：验证当前只向模型暴露计时器、拍照和地图三个工具。"""
+    def test_tool_registry_exposes_expected_model_facing_tools(self) -> None:
+        """测试目标：验证当前向模型暴露计时器、拍照、地图和找物体四个工具。"""
 
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, {"capture_photo", "timer_manage", "map_manage"})
+        self.assertEqual(tool_names, {"capture_photo", "timer_manage", "map_manage", "start_find_object"})
         self.assertIsNotNone(registry.get("capture_photo"))
         self.assertIsNotNone(registry.get("create_timer"))
+        self.assertIsNotNone(registry.get("start_find_object"))
         self.assertIsNotNone(registry.get("amap_route_plan"))
+
+    def test_tool_registry_device_state_reader_can_be_rebound(self) -> None:
+        """测试目标：验证工具运行态读取函数可在控制面就绪后重新绑定。"""
+
+        registry, _ = build_tooling(device_state_reader=lambda: {"source": "voice"})
+
+        self.assertEqual(registry.get_device_state_reader()()["source"], "voice")
+
+        registry.bind_device_state_reader(lambda: {"source": "control", "device_bindings": {}})
+
+        snapshot = registry.get_device_state_reader()()
+        self.assertEqual(snapshot["source"], "control")
+        self.assertIn("device_bindings", snapshot)
 
     def test_sdk_tool_signature_uses_explicit_input_fields(self) -> None:
         """测试目标：验证 SDK Tool 不再暴露宽泛 payload 字段。"""

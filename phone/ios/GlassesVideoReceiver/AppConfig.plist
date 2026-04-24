@@ -2,10 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>serverControlWebSocketURLString</key>
-	<string>ws://172.20.10.12:8765/ws/control</string>
-	<key>serverHTTPBaseURLString</key>
-	<string>http://172.20.10.12:8765</string>
+	<key>serverBaseURLString</key>
+	<string>http://192.168.10.8:8765</string>
 	<key>phoneDeviceID</key>
 	<string>phone-001</string>
 	<key>pairToken</key>

@@ -235,6 +235,8 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
             路由：
             1. `/api/debug/phone-video-link/start`：手动启动眼镜到手机的视频直连任务。
             2. `/api/debug/phone-video-link/stop`：手动停止眼镜到手机的视频直连任务。
+            3. `/api/debug/find-object/start`：手动启动找物体任务。
+            4. `/api/vision/find-object/report`：接收手机端找物体检测结果。
             """
 
             parsed = urlsplit(self.path)
@@ -297,6 +299,70 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                 )
                 return
 
+            if path == "/api/debug/find-object/start":
+                try:
+                    body = self._read_json_body()
+                    glass_device_id = str(body.get("glass_device_id", "")).strip()
+                    target_object = str(body.get("target_object", "")).strip()
+                    target_ws_uri = str(body.get("target_ws_uri", "")).strip()
+                    frame_interval_ms = int(body.get("frame_interval_ms", 500))
+                    reason = str(body.get("reason", "manual_debug")).strip() or "manual_debug"
+                    result = self.server.runtime.start_find_object_debug(
+                        glass_device_id=glass_device_id,
+                        target_object=target_object,
+                        target_ws_uri=target_ws_uri,
+                        frame_interval_ms=frame_interval_ms,
+                        reason=reason,
+                    )
+                    runtime = result["runtime"]
+                except AppError as exc:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": exc.to_dict(),
+                        },
+                    )
+                    return
+                except ValueError:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": {
+                                "code": "INVALID_MESSAGE",
+                                "message": "frame_interval_ms 必须是整数",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        },
+                    )
+                    return
+
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "ok",
+                        "reply_text": result["reply_text"],
+                        "task": {
+                            "task_id": runtime.task_id,
+                            "task_type": runtime.task_type,
+                            "state": runtime.state,
+                            "device_id": runtime.device_id,
+                            "session_id": runtime.session_id,
+                            "target_object": runtime.input.get("target_object"),
+                            "phone_device_id": runtime.input.get("phone_device_id"),
+                            "target_ws_uri": runtime.input.get("target_ws_uri"),
+                            "frame_interval_ms": runtime.input.get("frame_interval_ms"),
+                            "stream_id": runtime.input.get("stream_id"),
+                        },
+                    },
+                )
+                return
+
             if path == "/api/debug/phone-video-link/stop":
                 try:
                     body = self._read_json_body()
@@ -327,6 +393,64 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                             "device_id": runtime["device_id"],
                             "session_id": runtime["session_id"],
                             "noop": runtime["noop"],
+                        },
+                    },
+                )
+                return
+
+            if path == "/api/vision/find-object/report":
+                try:
+                    body = self._read_json_body()
+                    frame_seq_value = body.get("frame_seq")
+                    frame_seq = int(frame_seq_value) if frame_seq_value is not None else None
+                    runtime = self.server.runtime.report_find_object_result(
+                        task_id=str(body.get("task_id", "")).strip(),
+                        phone_device_id=str(body.get("phone_device_id", "")).strip(),
+                        found=bool(body.get("found", False)),
+                        target_object=str(body.get("target_object", "")).strip(),
+                        confidence=float(body.get("confidence", 0.0)),
+                        position=str(body.get("position", "unknown")).strip(),
+                        frame_seq=frame_seq,
+                        summary=str(body.get("summary", "")).strip(),
+                    )
+                except AppError as exc:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": exc.to_dict(),
+                        },
+                    )
+                    return
+                except (TypeError, ValueError):
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "status": "error",
+                            "error": {
+                                "code": "INVALID_MESSAGE",
+                                "message": "检测结果字段类型非法",
+                                "retryable": False,
+                                "details": {},
+                            },
+                        },
+                    )
+                    return
+
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "ok",
+                        "task": {
+                            "task_id": runtime.task_id,
+                            "task_type": runtime.task_type,
+                            "state": runtime.state,
+                            "device_id": runtime.device_id,
+                            "session_id": runtime.session_id,
+                            "latest_detection": runtime.context.get("latest_detection"),
                         },
                     },
                 )

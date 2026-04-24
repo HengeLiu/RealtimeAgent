@@ -117,12 +117,40 @@ final class CameraSinkServer {
 /// 1. 从独立 `AppConfig.plist` 读取服务端地址。
 /// 2. 保存手机设备编号、配对令牌和目标眼镜编号。
 /// 3. 让后续切换局域网或服务端时无需改动 Swift 代码。
-private struct ReceiverAppConfig {
-    let serverControlWebSocketURLString: String
-    let serverHTTPBaseURLString: String
+struct ReceiverAppConfig {
+    let serverBaseURLString: String
     let phoneDeviceID: String
     let pairToken: String
     let desiredGlassDeviceID: String
+
+    /// 返回服务端 HTTP 基地址。
+    ///
+    /// 主要逻辑：
+    /// 1. 统一把服务端地址视为 HTTP 基地址。
+    /// 2. 停止任务、结果上报等接口都直接复用该地址。
+    var serverHTTPBaseURLString: String {
+        serverBaseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 返回服务端控制 WebSocket 地址。
+    ///
+    /// 主要逻辑：
+    /// 1. 基于统一服务端地址推导控制通道。
+    /// 2. 自动把 `http/https` 转成 `ws/wss`，并补上 `/ws/control` 路径。
+    var serverControlWebSocketURLString: String {
+        guard var components = URLComponents(string: serverHTTPBaseURLString) else {
+            return serverHTTPBaseURLString
+        }
+        if components.scheme == "https" {
+            components.scheme = "wss"
+        } else {
+            components.scheme = "ws"
+        }
+        components.path = "/ws/control"
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? serverHTTPBaseURLString
+    }
 
     /// 读取主应用配置文件。
     ///
@@ -140,8 +168,7 @@ private struct ReceiverAppConfig {
         }
 
         guard
-            let serverControlWebSocketURLString = dictionary["serverControlWebSocketURLString"] as? String,
-            let serverHTTPBaseURLString = dictionary["serverHTTPBaseURLString"] as? String,
+            let serverBaseURLString = dictionary["serverBaseURLString"] as? String,
             let phoneDeviceID = dictionary["phoneDeviceID"] as? String,
             let pairToken = dictionary["pairToken"] as? String,
             let desiredGlassDeviceID = dictionary["desiredGlassDeviceID"] as? String
@@ -150,8 +177,7 @@ private struct ReceiverAppConfig {
         }
 
         return ReceiverAppConfig(
-            serverControlWebSocketURLString: serverControlWebSocketURLString,
-            serverHTTPBaseURLString: serverHTTPBaseURLString,
+            serverBaseURLString: serverBaseURLString,
             phoneDeviceID: phoneDeviceID,
             pairToken: pairToken,
             desiredGlassDeviceID: desiredGlassDeviceID
@@ -249,13 +275,19 @@ final class PhoneControlClient {
 
     /// 通知服务端停止当前视频接收任务。
     func stopVideoReceiving() async {
-        let glassDeviceID = store.boundGlassDeviceID ?? config.desiredGlassDeviceID
+        let glassDeviceID = store.boundGlassDeviceID ??
+            store.activeFindObjectTask?.glassDeviceID ??
+            config.desiredGlassDeviceID
+        guard !glassDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            store.markError("当前缺少眼镜设备编号，无法请求服务端停止视频任务")
+            return
+        }
         do {
             let result = try await DebugVideoTaskAPI.stop(glassDeviceID: glassDeviceID, config: config)
             if result.noop {
                 store.events.insert("[\(Self.timestampText())] 服务端确认当前视频任务已结束，无需重复停止", at: 0)
             } else {
-                store.events.insert("[\(Self.timestampText())] 已请求服务端停止视频直连任务", at: 0)
+                store.events.insert("[\(Self.timestampText())] 已请求服务端停止视频任务：glass=\(glassDeviceID)", at: 0)
             }
         } catch {
             store.markError("请求服务端停止视频任务失败：\(error.localizedDescription)")
@@ -325,6 +357,22 @@ final class PhoneControlClient {
             let glassDeviceID = payload["glass_device_id"] as? String ?? ""
             let phoneDeviceID = payload["phone_device_id"] as? String ?? config.phoneDeviceID
             store.markBound(glassDeviceID: glassDeviceID, phoneDeviceID: phoneDeviceID)
+        case "vision.find_object.start":
+            let taskID = payload["task_id"] as? String ?? ""
+            let targetObject = payload["target_object"] as? String ?? ""
+            let streamID = payload["stream_id"] as? String ?? ""
+            let glassDeviceID = payload["glass_device_id"] as? String ?? config.desiredGlassDeviceID
+            store.startFindObjectTask(
+                taskID: taskID,
+                targetObject: targetObject,
+                streamID: streamID,
+                glassDeviceID: glassDeviceID,
+                phoneDeviceID: config.phoneDeviceID
+            )
+        case "vision.find_object.stop":
+            let taskID = payload["task_id"] as? String ?? ""
+            let reason = payload["reason"] as? String ?? "server_requested"
+            store.stopFindObjectTask(taskID: taskID, reason: reason)
         case "device.register.failed":
             heartbeatTimer?.invalidate()
             heartbeatTimer = nil

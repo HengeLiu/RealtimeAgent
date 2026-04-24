@@ -67,7 +67,10 @@
 #define AUDIO_FRAME_BYTES (AUDIO_FRAME_SAMPLES * sizeof(int16_t))
 #define PRE_ROLL_FRAME_COUNT 8
 #define WAKE_IDLE_SUMMARY_MS 3000
-#define SERVER_REPLY_TIMEOUT_MS 15000
+#define SERVER_REPLY_TIMEOUT_MS 45000
+#define AUDIO_WS_RECONNECT_INTERVAL_MS 3000
+#define PLAYBACK_HTTP_TIMEOUT_MS 5000
+#define PLAYBACK_STREAM_IDLE_TIMEOUT_MS 30000
 #define CAMERA_FRAME_SIZE FRAMESIZE_VGA
 #define CAMERA_JPEG_QUALITY 18
 #define CAMERA_FB_COUNT 1
@@ -188,6 +191,22 @@ static void start_playback_stream(const char *stream_id);
 static void start_camera_stream(const char *stream_id, const char *target_ws_uri, int frame_interval_ms);
 static void stop_camera_stream(const char *stream_id);
 static void schedule_next_wifi_round(void);
+
+static const char *preferred_wakenet_model_name(srmodel_list_t *models)
+{
+    char *wn_name = NULL;
+
+#if CONFIG_SR_WN_WN9_HILEXIN
+    wn_name = esp_srmodel_filter(models, ESP_WN_PREFIX, "hilexin");
+    if (wn_name != NULL) {
+        ESP_LOGI(TAG, "优先命中嗨乐鑫 WakeNet 模型: %s", wn_name);
+        return wn_name;
+    }
+    ESP_LOGW(TAG, "未命中嗨乐鑫 WakeNet 模型，回退到首个可用模型");
+#endif
+
+    return esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
+}
 
 static bool wifi_profile_available(int index)
 {
@@ -1477,7 +1496,10 @@ static void ensure_audio_transport_started(void)
 {
     if (s_audio_transport_started) {
         if (!s_audio_ws_ready && s_audio_ws_client != NULL) {
-            esp_websocket_client_start(s_audio_ws_client);
+            esp_websocket_client_stop(s_audio_ws_client);
+            if (esp_websocket_client_start(s_audio_ws_client) != ESP_OK) {
+                ESP_LOGW(TAG, "重新启动音频上行连接失败");
+            }
         }
         return;
     }
@@ -1713,11 +1735,12 @@ static void playback_stream_task(void *arg)
     bool interrupted = false;
     bool failed = false;
     char next_stream_id[64];
+    uint64_t last_stream_data_ms = now_ms();
     const char *terminal_state = "completed";
     const char *terminal_reason = "stream_completed";
     esp_http_client_config_t config = {
         .url = s_stream_wav_url,
-        .timeout_ms = 200,
+        .timeout_ms = PLAYBACK_HTTP_TIMEOUT_MS,
         .buffer_size = 2048,
     };
     esp_http_client_handle_t client = NULL;
@@ -1755,12 +1778,18 @@ static void playback_stream_task(void *arg)
                 interrupted = true;
                 goto cleanup;
             }
+            if (!esp_http_client_is_complete_data_received(client) &&
+                (now_ms() - last_stream_data_ms) < PLAYBACK_STREAM_IDLE_TIMEOUT_MS) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
             failed = true;
             terminal_state = "failed";
             terminal_reason = "wav_header_read_failed";
             ESP_LOGE(TAG, "读取 WAV 头失败");
             goto cleanup;
         }
+        last_stream_data_ms = now_ms();
         header_read += read_size;
     }
     if (memcmp(wav_header, "RIFF", 4) != 0 || memcmp(wav_header + 8, "WAVE", 4) != 0) {
@@ -1795,6 +1824,11 @@ static void playback_stream_task(void *arg)
                     interrupted = true;
                     goto cleanup;
                 }
+                if (!esp_http_client_is_complete_data_received(client) &&
+                    (now_ms() - last_stream_data_ms) < PLAYBACK_STREAM_IDLE_TIMEOUT_MS) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                    continue;
+                }
                 failed = true;
                 terminal_state = "failed";
                 terminal_reason = "stream_read_failed";
@@ -1802,8 +1836,14 @@ static void playback_stream_task(void *arg)
                 goto cleanup;
             }
             if (read_size == 0) {
+                if (!esp_http_client_is_complete_data_received(client) &&
+                    (now_ms() - last_stream_data_ms) < PLAYBACK_STREAM_IDLE_TIMEOUT_MS) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                    continue;
+                }
                 break;
             }
+            last_stream_data_ms = now_ms();
             pcm_filled += (size_t)read_size;
         }
         if (pcm_filled == 0) {
@@ -1999,6 +2039,7 @@ static void sr_pipeline_task(void *arg)
     uint32_t idle_fetch_count = 0;
     uint64_t last_idle_summary_ms = now_ms();
     uint64_t last_gate_log_ms = 0;
+    uint64_t last_audio_reconnect_ms = 0;
 
     ESP_LOGD(
         TAG,
@@ -2018,6 +2059,15 @@ static void sr_pipeline_task(void *arg)
                            !s_playback_active &&
                            has_session_id;
         uint64_t current_ms = now_ms();
+        if (s_registered &&
+            s_voice_session_opened &&
+            !s_playback_active &&
+            !s_audio_ws_ready &&
+            (current_ms - last_audio_reconnect_ms) >= AUDIO_WS_RECONNECT_INTERVAL_MS) {
+            last_audio_reconnect_ms = current_ms;
+            ESP_LOGW(TAG, "音频上行未就绪，尝试重新建立连接");
+            ensure_audio_transport_started();
+        }
         if (!segment.segment_active && !s_playback_active && reply_wait_timed_out(current_ms)) {
             recover_wake_listening_after_reply_timeout(current_ms);
             last_wake_active = false;
@@ -2251,7 +2301,7 @@ static void init_speech_runtime(void)
     afe_cfg->vad_init = true;
     afe_cfg->aec_init = false;
 
-    wn_name = esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
+    wn_name = (char *)preferred_wakenet_model_name(models);
     if (!wn_name) {
         ESP_LOGE(TAG, "No WakeNet model found; enable one in sdkconfig.defaults");
         return;
@@ -2313,6 +2363,10 @@ static void init_speech_runtime(void)
 
     s_sr_task_started = true;
     s_sr_ctx.initialized = true;
+    if (s_registered && s_voice_session_opened && !s_playback_active) {
+        s_wake_listening_enabled = true;
+        ESP_LOGI(TAG, "WakeNet 初始化完成后已补开唤醒监听: session_id=%s", s_current_session_id);
+    }
     ESP_LOGI(TAG, "WakeNet runtime ready; waiting for voice.session.open");
 }
 

@@ -169,6 +169,11 @@ class AgentFacade:
 
         self._tool_registry.bind_camera_gateway(camera_gateway)
 
+    def bind_device_state_reader(self, device_state_reader) -> None:
+        """补绑真实设备运行态读取函数。"""
+
+        self._tool_registry.bind_device_state_reader(device_state_reader)
+
     def bind_task_event_listener(self, listener: Callable[[TaskEvent], None]) -> None:
         """补绑任务事件监听器。
 

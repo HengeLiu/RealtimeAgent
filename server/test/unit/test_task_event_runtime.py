@@ -315,14 +315,18 @@ class TaskEventRuntimeTestCase(unittest.TestCase):
             agent_facade=fake_facade,
         )
         submitted_requests: list[NotificationRequest] = []
-        runtime._notification_coordinator.submit = (  # noqa: SLF001
-            lambda request: submitted_requests.append(request)
-            or NotificationSubmitResult(
+        notification_submitted = threading.Event()
+
+        def _submit_notification(request: NotificationRequest) -> NotificationSubmitResult:
+            submitted_requests.append(request)
+            notification_submitted.set()
+            return NotificationSubmitResult(
                 accepted=True,
                 dispatched=False,
                 queued=False,
             )
-        )
+
+        runtime._notification_coordinator.submit = _submit_notification  # noqa: SLF001
 
         runtime.on_task_event(
             TaskEvent(
@@ -342,6 +346,7 @@ class TaskEventRuntimeTestCase(unittest.TestCase):
         )
 
         self.assertTrue(fake_facade.event.wait(timeout=1.0))
+        self.assertTrue(notification_submitted.wait(timeout=1.0))
         self.assertEqual(fake_facade.turns[0].source, "task_event")
         self.assertEqual(len(submitted_requests), 1)
         self.assertEqual(submitted_requests[0].source_module, "agent-core")

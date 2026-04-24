@@ -50,6 +50,20 @@ class TaskGateway(ABC):
         """取消任务实例。"""
 
     @abstractmethod
+    def report_find_object_result(
+        self,
+        *,
+        task_id: str,
+        found: bool,
+        target_object: str,
+        confidence: float,
+        position: str,
+        frame_seq: int | None,
+        summary: str,
+    ) -> TaskRuntime:
+        """上报一次找物体检测结果。"""
+
+    @abstractmethod
     def subscribe_events(self, listener: Callable[[TaskEvent], None]) -> None:
         """订阅任务事件。"""
 
@@ -227,6 +241,146 @@ class InMemoryTaskGateway(TaskGateway):
             )
             return runtime
 
+        if task_type == "find_object_task":
+            target_object = self._extract_target_object(input_data)
+            phone_device_id = self._extract_phone_device_id(input_data)
+            target_ws_uri = self._extract_target_ws_uri(input_data)
+            frame_interval_ms = self._extract_frame_interval_ms(input_data)
+            stream_id = str(input_data.get("stream_id") or generate_id("stream")).strip()
+            runtime = TaskRuntime(
+                task_id=task_id,
+                task_type=spec.task_type,
+                version=spec.version,
+                session_id=session_id,
+                device_id=device_id,
+                state="scheduled",
+                input={
+                    "target_object": target_object,
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "frame_interval_ms": frame_interval_ms,
+                    "stream_id": stream_id,
+                    "reason": str(input_data.get("reason") or "agent_requested").strip() or "agent_requested",
+                },
+                context={
+                    "phase": "scheduled",
+                    "created_by": "agent_core_phase_k",
+                    "glass_device_id": device_id,
+                    "phone_device_id": phone_device_id,
+                    "target_object": target_object,
+                    "target_ws_uri": target_ws_uri,
+                    "frame_interval_ms": frame_interval_ms,
+                    "stream_id": stream_id,
+                    "latest_detection": None,
+                },
+                started_at_ms=created_at,
+            )
+            runtime = self._store.save(runtime)
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.created",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"已创建找物体任务，目标是 {target_object}",
+                    "target_object": target_object,
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "frame_interval_ms": frame_interval_ms,
+                    "stream_id": stream_id,
+                },
+            )
+            runtime = self._transition_runtime(
+                runtime=runtime,
+                to_state="running",
+                phase="detecting",
+            )
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.started",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"开始在手机端寻找 {target_object}",
+                    "target_object": target_object,
+                    "phone_device_id": phone_device_id,
+                    "target_ws_uri": target_ws_uri,
+                    "frame_interval_ms": frame_interval_ms,
+                    "codec": "jpeg",
+                    "stream_id": stream_id,
+                },
+            )
+            return runtime
+
+        if task_type == "navigation_task":
+            destination = self._extract_destination(input_data)
+            origin = str(input_data.get("origin") or "当前位置").strip() or "当前位置"
+            route_summary = str(input_data.get("route_summary") or "").strip()
+            phone_device_id = str(input_data.get("phone_device_id") or "mock-phone").strip() or "mock-phone"
+            runtime = TaskRuntime(
+                task_id=task_id,
+                task_type=spec.task_type,
+                version=spec.version,
+                session_id=session_id,
+                device_id=device_id,
+                state="scheduled",
+                input={
+                    "destination": destination,
+                    "origin": origin,
+                    "route_summary": route_summary,
+                    "phone_device_id": phone_device_id,
+                    "phone_runtime": "mock",
+                },
+                context={
+                    "phase": "scheduled",
+                    "created_by": "agent_core_skill_navigation_guide",
+                    "glass_device_id": device_id,
+                    "phone_device_id": phone_device_id,
+                    "destination": destination,
+                    "origin": origin,
+                    "route_summary": route_summary,
+                    "phone_runtime": "mock",
+                },
+                started_at_ms=created_at,
+            )
+            runtime = self._store.save(runtime)
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.created",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"已创建前往 {destination} 的模拟导航任务",
+                    "destination": destination,
+                    "origin": origin,
+                    "phone_device_id": phone_device_id,
+                    "phone_runtime": "mock",
+                },
+            )
+            runtime = self._transition_runtime(
+                runtime=runtime,
+                to_state="running",
+                phase="mock_navigating",
+            )
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.started",
+                priority="normal",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload={
+                    "message": f"模拟导航已启动，目的地是 {destination}",
+                    "destination": destination,
+                    "origin": origin,
+                    "phone_device_id": phone_device_id,
+                    "phone_runtime": "mock",
+                },
+            )
+            return runtime
+
         raise build_error(
             ErrorCode.TASK_NOT_FOUND,
             "当前不支持指定任务类型",
@@ -275,6 +429,27 @@ class InMemoryTaskGateway(TaskGateway):
             }
             requires_agent_decision = False
             allow_direct_notify = False
+        if runtime.task_type == "find_object_task":
+            cancel_message = "找物体任务已取消"
+            cancel_payload = {
+                "message": cancel_message,
+                "target_object": runtime.input.get("target_object"),
+                "phone_device_id": runtime.input.get("phone_device_id"),
+                "target_ws_uri": runtime.input.get("target_ws_uri"),
+                "stream_id": runtime.input.get("stream_id"),
+            }
+            requires_agent_decision = False
+            allow_direct_notify = False
+        if runtime.task_type == "navigation_task":
+            cancel_message = "模拟导航任务已取消"
+            cancel_payload = {
+                "message": cancel_message,
+                "destination": runtime.input.get("destination"),
+                "phone_device_id": runtime.input.get("phone_device_id"),
+                "phone_runtime": runtime.input.get("phone_runtime"),
+            }
+            requires_agent_decision = False
+            allow_direct_notify = False
 
         runtime = self._transition_runtime(
             runtime=runtime,
@@ -289,6 +464,84 @@ class InMemoryTaskGateway(TaskGateway):
             requires_agent_decision=requires_agent_decision,
             allow_direct_notify=allow_direct_notify,
             payload=cancel_payload,
+        )
+        return runtime
+
+    def report_find_object_result(
+        self,
+        *,
+        task_id: str,
+        found: bool,
+        target_object: str,
+        confidence: float,
+        position: str,
+        frame_seq: int | None,
+        summary: str,
+    ) -> TaskRuntime:
+        """上报手机端找物体检测结果。
+
+        主要逻辑：
+        1. 查询并校验目标任务仍在运行。
+        2. 保存最近一次结构化检测结果。
+        3. 未找到目标时发布 `task.updated`。
+        4. 找到目标时推进到 `completed` 并发布可播报的 `task.completed`。
+        """
+
+        runtime = self.query_task(task_id)
+        if runtime.task_type != "find_object_task":
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "目标任务不是 find_object_task",
+                details={"task_id": task_id, "task_type": runtime.task_type},
+            )
+        if runtime.state != "running":
+            return runtime
+
+        normalized_target = target_object.strip() or str(runtime.input.get("target_object") or "")
+        detection = {
+            "found": bool(found),
+            "target_object": normalized_target,
+            "phone_device_id": runtime.input.get("phone_device_id"),
+            "target_ws_uri": runtime.input.get("target_ws_uri"),
+            "stream_id": runtime.input.get("stream_id"),
+            "confidence": max(0.0, min(float(confidence), 1.0)),
+            "position": position.strip() or "unknown",
+            "frame_seq": frame_seq,
+            "summary": summary.strip() or ("找到目标" if found else "暂未找到目标"),
+            "reported_at_ms": now_ms(),
+        }
+        runtime.context["latest_detection"] = detection
+        runtime.updated_at_ms = now_ms()
+
+        if not found:
+            runtime = self._store.update(runtime)
+            self._publish_runtime_event(
+                runtime=runtime,
+                event_name="task.updated",
+                priority="low",
+                requires_agent_decision=False,
+                allow_direct_notify=False,
+                payload=detection,
+            )
+            return runtime
+
+        runtime = self._transition_runtime(
+            runtime=runtime,
+            to_state="completed",
+            phase="completed",
+            result=detection,
+        )
+        message = detection["summary"] or f"找到{normalized_target}了"
+        self._publish_runtime_event(
+            runtime=runtime,
+            event_name="task.completed",
+            priority="high",
+            requires_agent_decision=True,
+            allow_direct_notify=True,
+            payload={
+                **detection,
+                "message": message,
+            },
         )
         return runtime
 
@@ -372,6 +625,30 @@ class InMemoryTaskGateway(TaskGateway):
                 details={"frame_interval_ms": frame_interval_ms},
             )
         return frame_interval_ms
+
+    def _extract_target_object(self, input_data: dict[str, Any]) -> str:
+        """提取并校验找物体目标名称。"""
+
+        target_object = str(input_data.get("target_object", "")).strip()
+        if not target_object:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "创建找物体任务需要 target_object",
+                details={"input_data": input_data},
+            )
+        return target_object
+
+    def _extract_destination(self, input_data: dict[str, Any]) -> str:
+        """提取并校验导航目的地。"""
+
+        destination = str(input_data.get("destination", "")).strip()
+        if not destination:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "创建导航任务需要 destination",
+                details={"input_data": input_data},
+            )
+        return destination
 
     def _transition_runtime(
         self,
