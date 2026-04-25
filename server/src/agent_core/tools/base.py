@@ -29,6 +29,7 @@ class AgentToolContext:
     session_store: "AgentSessionStore | None"
     device_state_reader: Callable[[], dict[str, Any]]
     trace_sink: Callable[[CapabilityTrace], None]
+    device_group_context_factory: Callable[..., Any] | None = None
     task_gateway: "TaskGateway | None" = None
     camera_gateway: "CameraGateway | None" = None
     tool_gateway: "ToolGateway | None" = None

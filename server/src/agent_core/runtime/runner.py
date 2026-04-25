@@ -81,6 +81,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             settings=self._settings,
             session_store=self._session_store,
             device_state_reader=self._tool_registry.get_device_state_reader(),
+            device_group_context_factory=self._tool_registry.get_device_group_context_factory(),
             trace_sink=capability_traces.append,
             task_gateway=self._tool_registry.get_task_gateway(),
             camera_gateway=self._tool_registry.get_camera_gateway(),

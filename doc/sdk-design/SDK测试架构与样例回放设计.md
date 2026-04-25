@@ -192,6 +192,24 @@ testdata/
 8. `scenario`
    - 把多种样例组合成完整测试场景的 manifest
 
+当前仓库已经落地的最小版本为：
+
+1. `testdata/text/find_object_frames_water_cup.json`
+2. `testdata/scenario/find_object_with_testdata.json`
+3. `example/scenario/find_object_basic.json`
+4. `testdata/task_event/find_object_cancel_timeline.json`
+5. `testdata/scenario/find_object_cancelled.json`
+6. `testdata/scenario/find_object_missing_phone.json`
+7. `testdata/scenario/find_object_video_link_start_failed.json`
+
+其中：
+
+1. `example/scenario/find_object_basic.json` 适合演示最小闭环。
+2. `testdata/scenario/find_object_with_testdata.json` 适合演示“场景 manifest 引用可复用资产”的推荐形态。
+3. `testdata/scenario/find_object_cancelled.json` 适合演示任务取消、链路停止和回放断言。
+4. `testdata/scenario/find_object_missing_phone.json` 适合演示设备缺失类失败场景。
+5. `testdata/scenario/find_object_video_link_start_failed.json` 适合演示系统适配层异常场景。
+
 ---
 
 ## 6. Scenario Manifest 设计
@@ -356,6 +374,13 @@ testdata/
 5. 回放输入时间轴
 6. 收集任务事件、通知、上下文快照
 7. 与 expected 断言对比
+
+当前最小实现已经支持：
+
+1. `fast` 与 `realtime` 两种回放模式。
+2. `frame`、`task.cancel`、`task.event`、`sensor.<type>` 等事件类型。
+3. 通过 `script/run_sdk_scenario.py` 执行场景并输出 JSON 报告。
+4. 通过 `script/run_sdk_preflight.py` 把回放、pytest、编译检查和服务健康检查收敛成一条预检链路。
 
 ---
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """手动启动眼镜到手机视频直连任务的联调脚本。"""
+"""python script/start_phone_video_link.py --host 127.0.0.1 --port 8765 --glass-device-id glass-001 --frame-interval-ms 100"""
 
 from __future__ import annotations
 

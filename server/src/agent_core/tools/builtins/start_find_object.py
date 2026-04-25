@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from agent_core.context.models import TaskRef
 from agent_core.models import CapabilityResult, ToolSpec
 from agent_core.tools.base import AgentToolContext, BaseTool
+from agent_core.tools.device_group_resolver import resolve_bound_phone_id, resolve_phone_camera_sink_uri
 from infra.errors import ErrorCode, build_error
 
 
@@ -61,8 +62,8 @@ class StartFindObjectTool(BaseTool):
             raise build_error(ErrorCode.INVALID_MESSAGE, "找物体任务需要 target_object")
 
         runtime_snapshot = context.device_state_reader()
-        phone_device_id = self._resolve_bound_phone_id(runtime_snapshot=runtime_snapshot, glass_device_id=context.device_id)
-        target_ws_uri = self._resolve_target_ws_uri(runtime_snapshot=runtime_snapshot, phone_device_id=phone_device_id)
+        phone_device_id = resolve_bound_phone_id(runtime_snapshot=runtime_snapshot, glass_device_id=context.device_id)
+        target_ws_uri = resolve_phone_camera_sink_uri(runtime_snapshot=runtime_snapshot, phone_device_id=phone_device_id)
 
         runtime = context.task_gateway.create_task(
             task_type="find_object_task",
@@ -95,43 +96,4 @@ class StartFindObjectTool(BaseTool):
             },
             message=summary,
             task_refs=[task_ref],
-        )
-
-    @staticmethod
-    def _resolve_bound_phone_id(*, runtime_snapshot: dict, glass_device_id: str) -> str:
-        """从运行态快照中解析当前眼镜绑定的手机。"""
-
-        bindings = runtime_snapshot.get("device_bindings")
-        if not isinstance(bindings, dict):
-            raise build_error(ErrorCode.INVALID_CONFIG, "当前运行态缺少设备绑定信息")
-        glass_to_phone = bindings.get("glass_to_phone")
-        if not isinstance(glass_to_phone, dict):
-            raise build_error(ErrorCode.INVALID_CONFIG, "当前运行态缺少 glass_to_phone 绑定信息")
-        phone_device_id = str(glass_to_phone.get(glass_device_id) or "").strip()
-        if not phone_device_id:
-            raise build_error(
-                ErrorCode.INVALID_MESSAGE,
-                "当前眼镜尚未绑定手机，无法创建找物体任务",
-                details={"glass_device_id": glass_device_id},
-            )
-        return phone_device_id
-
-    @staticmethod
-    def _resolve_target_ws_uri(*, runtime_snapshot: dict, phone_device_id: str) -> str:
-        """从运行态快照中解析目标手机的视频接收地址。"""
-
-        connections = runtime_snapshot.get("connections")
-        if not isinstance(connections, list):
-            raise build_error(ErrorCode.INVALID_CONFIG, "当前运行态缺少连接列表，无法解析手机视频接收地址")
-        for connection in connections:
-            if not isinstance(connection, dict) or connection.get("device_id") != phone_device_id:
-                continue
-            camera_sink_ws_uri = str(connection.get("camera_sink_ws_uri") or "").strip()
-            if camera_sink_ws_uri:
-                return camera_sink_ws_uri
-            break
-        raise build_error(
-            ErrorCode.INVALID_MESSAGE,
-            "目标手机尚未上报视频接收地址，无法创建找物体任务",
-            details={"phone_device_id": phone_device_id},
         )

@@ -174,6 +174,11 @@ class AgentFacade:
 
         self._tool_registry.bind_device_state_reader(device_state_reader)
 
+    def bind_device_group_context_factory(self, factory) -> None:
+        """补绑 DeviceGroupContext 工厂。"""
+
+        self._tool_registry.bind_device_group_context_factory(factory)
+
     def bind_task_event_listener(self, listener: Callable[[TaskEvent], None]) -> None:
         """补绑任务事件监听器。
 
@@ -198,6 +203,11 @@ class AgentFacade:
         """
 
         return self._tool_registry.get_task_gateway()
+
+    def get_tool_registry(self):
+        """返回内部工具注册表。"""
+
+        return self._tool_registry
 
     def _persist_result(self, *, turn: AgentTurn, result: AgentTurnResult) -> AgentTurnResult:
         """把运行结果统一写回会话上下文。"""

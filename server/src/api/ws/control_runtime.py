@@ -20,6 +20,8 @@ from protocol.utils.message_factory import create_control_message
 from runtime import VoiceRuntime
 from runtime.voice_runtime import SpeechRecognitionClient, VoiceModelClient
 from backend_task_core import TaskEvent
+from openaiglasses.runtime import BackendTaskGatewayAdapter
+from openaiglasses.runtime.device_group import DeviceGroupRuntime
 
 
 @dataclass(slots=True)
@@ -104,6 +106,7 @@ class ControlRuntime(CameraGateway):
         self._device_connections: dict[str, ControlConnection] = {}
         self._glass_to_phone: dict[str, str] = {}
         self._phone_to_glass: dict[str, str] = {}
+        self._device_group_runtime = DeviceGroupRuntime()
         self._active_phone_video_task_ids_by_glass: dict[str, str] = {}
         self._active_find_object_task_ids_by_glass: dict[str, str] = {}
         self._pending_camera_captures: dict[str, PendingCameraCapture] = {}
@@ -114,7 +117,14 @@ class ControlRuntime(CameraGateway):
             asr_client=asr_client,
             agent_facade=agent_facade,
         )
+        self._device_group_runtime.task_runtime = BackendTaskGatewayAdapter(
+            task_gateway=self._voice_runtime.agent_facade.get_task_gateway(),
+        )
         self._voice_runtime.agent_facade.bind_device_state_reader(self.build_runtime_snapshot)
+        self._voice_runtime.agent_facade.bind_device_group_context_factory(self.create_device_group_context)
+        task_gateway = self._voice_runtime.agent_facade.get_task_gateway()
+        if hasattr(task_gateway, "bind_device_groups"):
+            task_gateway.bind_device_groups(self._device_group_runtime)
         self._voice_runtime.agent_facade.bind_camera_gateway(self)
         self._voice_runtime.agent_facade.bind_task_event_listener(self._voice_runtime.on_task_event)
         self._voice_runtime.agent_facade.bind_task_event_listener(self._handle_task_event)
@@ -158,6 +168,66 @@ class ControlRuntime(CameraGateway):
         for connection in connections:
             self.close_connection(connection, code=1001, reason="server shutdown")
 
+    @property
+    def device_group_runtime(self) -> DeviceGroupRuntime:
+        """返回设备组运行时。
+
+        主要功能：
+        1. 为调试入口、SDK 装配层和集成测试暴露统一设备组能力。
+        2. 避免外部代码直接访问私有字段。
+        """
+
+        return self._device_group_runtime
+
+    def create_device_group_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str | None = None,
+        task_id: str | None = None,
+    ):
+        """创建真实运行时上的 SDK 设备组上下文。
+
+        主要逻辑：
+        1. 若未显式提供 `session_id`，则优先复用当前控制连接上的会话编号。
+        2. 再委托 `DeviceGroupRuntime` 创建高层上下文。
+
+        参数：
+        1. `device_id`：当前设备编号。
+        2. `session_id`：可选会话编号。
+        3. `task_id`：可选任务编号。
+
+        返回值：
+        1. `DeviceGroupContext`。
+
+        异常情况：
+        1. 设备不在线或缺少可用会话时抛出结构化错误。
+        """
+
+        resolved_session_id = str(session_id or "").strip()
+        if not resolved_session_id:
+            with self._lock:
+                connection = self._device_connections.get(device_id)
+            if connection is None or connection.closed or not connection.registered:
+                raise build_error(
+                    ErrorCode.STREAM_NOT_FOUND,
+                    "目标设备当前不在线，无法创建 SDK 设备组上下文",
+                    details={"device_id": device_id},
+                )
+            resolved_session_id = str(connection.session_id or "").strip()
+            if not resolved_session_id:
+                raise build_error(
+                    ErrorCode.INVALID_MESSAGE,
+                    "目标设备当前没有可复用的会话编号",
+                    details={"device_id": device_id},
+                )
+
+        return self._device_group_runtime.create_context(
+            device_id=device_id,
+            session_id=resolved_session_id,
+            task_id=task_id,
+        )
+
     def open_connection(
         self,
         *,
@@ -175,6 +245,21 @@ class ControlRuntime(CameraGateway):
         )
         with self._lock:
             self._connections[connection.connection_id] = connection
+            connection_count = len(self._connections)
+        log_info(
+            self._logger,
+            "控制连接已建立",
+            LogContext(
+                message_id=connection.connection_id,
+                fields={
+                    "peer": peer,
+                    "connection_id": connection.connection_id,
+                    "connection_count": connection_count,
+                    "heartbeat_interval_ms": self._settings.heartbeat_interval_ms,
+                    "heartbeat_timeout_ms": self._settings.heartbeat_timeout_ms,
+                },
+            ),
+        )
         return connection
 
     def on_transport_closed(self, connection: ControlConnection) -> None:
@@ -185,12 +270,27 @@ class ControlRuntime(CameraGateway):
         with self._lock:
             connection.closed = True
             self._connections.pop(connection.connection_id, None)
+            connection_count = len(self._connections)
             if connection.device_id:
                 current = self._device_connections.get(connection.device_id)
                 if current is connection:
                     self._device_connections.pop(connection.device_id, None)
                     removed_device_id = connection.device_id
                     removed_bindings = self._unbind_device_locked(connection.device_id)
+                    self._device_group_runtime.mark_device_offline(connection.device_id)
+        log_info(
+            self._logger,
+            "控制连接已关闭并清理运行态",
+            self._build_connection_log_context(
+                connection,
+                fields={
+                    "connection_count": connection_count,
+                    "removed_device_id": removed_device_id,
+                    "removed_binding_glass_device_id": removed_bindings[0],
+                    "removed_binding_phone_device_id": removed_bindings[1],
+                },
+            ),
+        )
         self._voice_runtime.on_control_connection_closed(removed_device_id)
         self._notify_binding_removed(removed_bindings)
 
@@ -202,10 +302,53 @@ class ControlRuntime(CameraGateway):
                 return
             connection.closed = True
 
+        log_warning(
+            self._logger,
+            "准备关闭控制连接",
+            self._build_connection_log_context(
+                connection,
+                fields={
+                    "close_code": code,
+                    "close_reason": reason,
+                },
+            ),
+        )
         try:
             connection.close_transport(code, reason)
         finally:
             self.on_transport_closed(connection)
+
+    def _build_connection_log_context(
+        self,
+        connection: ControlConnection,
+        *,
+        fields: dict[str, object] | None = None,
+    ) -> LogContext:
+        """构造控制连接日志上下文。"""
+
+        now = time.monotonic()
+        payload: dict[str, object] = {
+            "connection_id": connection.connection_id,
+            "peer": connection.peer,
+            "device_type": connection.device_type,
+            "registered": connection.registered,
+            "closed": connection.closed,
+            "voice_opened": connection.voice_opened,
+            "last_seen_age_ms": int((now - connection.last_seen_monotonic) * 1000),
+            "heartbeat_age_ms": int((now - connection.last_heartbeat_monotonic) * 1000),
+            "heartbeat_timeout_ms": self._settings.heartbeat_timeout_ms,
+            "camera_sink_ws_uri": connection.camera_sink_ws_uri,
+            "desired_glass_device_id": connection.desired_glass_device_id,
+            "desired_phone_device_id": connection.desired_phone_device_id,
+        }
+        if fields:
+            payload.update(fields)
+        return LogContext(
+            device_id=connection.device_id,
+            session_id=connection.session_id,
+            message_id=connection.connection_id,
+            fields=payload,
+        )
 
     def handle_text(self, connection: ControlConnection, text: str) -> None:
         """处理一条文本控制消息。"""
@@ -216,6 +359,13 @@ class ControlRuntime(CameraGateway):
             session_id=message.session_id,
             device_id=connection.device_id,
             message_id=message.message_id,
+            fields={
+                "connection_id": connection.connection_id,
+                "peer": connection.peer,
+                "message_name": message.name,
+                "semantic": message.semantic,
+                "payload_keys": sorted(str(key) for key in message.payload.keys()),
+            },
         )
         if self._should_log_control_message(message.name):
             log_debug(self._logger, f"收到控制消息: {message.name}", context)
@@ -651,7 +801,7 @@ class ControlRuntime(CameraGateway):
                     "heartbeat_age_ms": int((now - connection.last_heartbeat_monotonic) * 1000),
                 }
             )
-        return {
+        snapshot = {
             "online_device_count": len(online_devices),
             "online_devices": online_devices,
             "connections": connection_items,
@@ -659,8 +809,113 @@ class ControlRuntime(CameraGateway):
                 "glass_to_phone": glass_to_phone,
                 "phone_to_glass": phone_to_glass,
             },
+            "device_groups": self._device_group_runtime.build_snapshot(),
             "pending_camera_capture_count": pending_camera_capture_count,
             "voice_sessions": self._voice_runtime.build_runtime_snapshot(),
+        }
+        snapshot["diagnostics"] = self._build_runtime_diagnostics(snapshot)
+        return snapshot
+
+    def is_device_registered(self, device_id: str) -> bool:
+        """判断设备是否已经完成控制面注册。
+
+        功能：
+        1. 给音频、视频等旁路连接提供轻量级检查入口。
+        2. 区分“只连上音频 WebSocket”和“设备真正进入 SDK 设备组”的状态。
+
+        参数：
+        1. `device_id`：设备编号。
+
+        返回值：
+        1. 已注册且连接未关闭时返回 True，否则返回 False。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        with self._lock:
+            connection = self._device_connections.get(device_id)
+            return bool(connection and connection.registered and not connection.closed)
+
+    def _build_runtime_diagnostics(self, snapshot: dict[str, object]) -> dict[str, object]:
+        """构建运行态诊断信息。
+
+        主要逻辑：
+        1. 找出只有音频连接、但没有控制面注册的设备。
+        2. 找出手机或眼镜声明的期望绑定对象是否缺失。
+        3. 输出未绑定的在线设备，方便真机联调时快速定位绑定问题。
+
+        参数：
+        1. `snapshot`：当前运行态快照。
+
+        返回值：
+        1. 面向调试接口展示的结构化诊断信息。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        online_devices = set(str(item) for item in snapshot.get("online_devices", []))
+        voice_sessions = snapshot.get("voice_sessions", {})
+        voice_device_ids = set(str(item) for item in voice_sessions.keys()) if isinstance(voice_sessions, dict) else set()
+        audio_only_device_ids = sorted(voice_device_ids - online_devices)
+
+        connections = snapshot.get("connections", [])
+        connection_items = connections if isinstance(connections, list) else []
+        desired_binding_issues: list[dict[str, object]] = []
+        unbound_online_devices: list[str] = []
+
+        device_bindings = snapshot.get("device_bindings", {})
+        glass_to_phone: dict[str, object] = {}
+        phone_to_glass: dict[str, object] = {}
+        if isinstance(device_bindings, dict):
+            raw_glass_to_phone = device_bindings.get("glass_to_phone", {})
+            raw_phone_to_glass = device_bindings.get("phone_to_glass", {})
+            if isinstance(raw_glass_to_phone, dict):
+                glass_to_phone = raw_glass_to_phone
+            if isinstance(raw_phone_to_glass, dict):
+                phone_to_glass = raw_phone_to_glass
+
+        for item in connection_items:
+            if not isinstance(item, dict):
+                continue
+            if not item.get("registered"):
+                continue
+            device_id = str(item.get("device_id") or "")
+            device_type = str(item.get("device_type") or "")
+            if not device_id:
+                continue
+            if device_type == "phone":
+                desired_glass_device_id = str(item.get("desired_glass_device_id") or "")
+                if desired_glass_device_id and desired_glass_device_id not in online_devices:
+                    desired_binding_issues.append(
+                        {
+                            "device_id": device_id,
+                            "device_type": device_type,
+                            "desired_device_id": desired_glass_device_id,
+                            "reason": "期望绑定的眼镜尚未完成控制面注册",
+                        }
+                    )
+                if device_id not in phone_to_glass:
+                    unbound_online_devices.append(device_id)
+            elif device_type == "glass":
+                desired_phone_device_id = str(item.get("desired_phone_device_id") or "")
+                if desired_phone_device_id and desired_phone_device_id not in online_devices:
+                    desired_binding_issues.append(
+                        {
+                            "device_id": device_id,
+                            "device_type": device_type,
+                            "desired_device_id": desired_phone_device_id,
+                            "reason": "期望绑定的手机尚未完成控制面注册",
+                        }
+                    )
+                if device_id not in glass_to_phone:
+                    unbound_online_devices.append(device_id)
+
+        return {
+            "audio_only_device_ids": audio_only_device_ids,
+            "desired_binding_issues": desired_binding_issues,
+            "unbound_online_devices": sorted(set(unbound_online_devices)),
         }
 
     def _handle_register(self, connection: ControlConnection, message: ControlMessage) -> None:
@@ -724,6 +979,18 @@ class ControlRuntime(CameraGateway):
             connection.mock_capabilities = dict(mock_capabilities)
             connection.touch_heartbeat()
             self._device_connections[device_id] = connection
+            self._device_group_runtime.register_device(
+                device_id=device_id,
+                role=self._normalize_device_group_role(device_type),
+                capabilities=set(str(item) for item in mock_capabilities.keys()),
+                metadata={
+                    "device_type": device_type,
+                    "peer": connection.peer,
+                    "camera_sink_ws_uri": camera_sink_ws_uri,
+                    "desired_glass_device_id": desired_glass_device_id,
+                    "desired_phone_device_id": desired_phone_device_id,
+                },
+            )
             if should_open_voice_session and connection.session_id is not None:
                 self._voice_runtime.open_session(
                     device_id=device_id,
@@ -735,9 +1002,27 @@ class ControlRuntime(CameraGateway):
             log_warning(
                 self._logger,
                 f"检测到同设备重连，关闭旧连接: device_id={device_id}",
-                LogContext(device_id=device_id),
+                self._build_connection_log_context(
+                    old_connection,
+                    fields={
+                        "new_connection_id": connection.connection_id,
+                    },
+                ),
             )
             self.close_connection(old_connection, code=4001, reason="replaced by new connection")
+
+        log_info(
+            self._logger,
+            "设备注册成功",
+            self._build_connection_log_context(
+                connection,
+                fields={
+                    "auth_mode": auth_mode,
+                    "mock_capabilities": sorted(str(item) for item in mock_capabilities.keys()),
+                    "should_open_voice_session": should_open_voice_session,
+                },
+            ),
+        )
 
         self._send_message(
             connection,
@@ -779,7 +1064,20 @@ class ControlRuntime(CameraGateway):
                     "connection_device_id": connection.device_id,
                 },
             )
+        age_ms = int((time.monotonic() - connection.last_heartbeat_monotonic) * 1000)
         connection.touch_heartbeat()
+        if age_ms > self._settings.heartbeat_interval_ms * 2:
+            log_debug(
+                self._logger,
+                "收到延迟心跳",
+                self._build_connection_log_context(
+                    connection,
+                    fields={
+                        "heartbeat_age_before_touch_ms": age_ms,
+                        "heartbeat_interval_ms": self._settings.heartbeat_interval_ms,
+                    },
+                ),
+            )
 
     def _handle_voice_session_opened(self, connection: ControlConnection, message: ControlMessage) -> None:
         if not connection.session_id:
@@ -870,14 +1168,27 @@ class ControlRuntime(CameraGateway):
             self._bind_devices(glass_device_id=glass_device_id, phone_device_id=phone_device_id)
             log_info(
                 self._logger,
-                f"设备已自动绑定: glass_device_id={glass_device_id} phone_device_id={phone_device_id}",
-                LogContext(device_id=glass_device_id),
+                "设备已自动绑定",
+                LogContext(
+                    device_id=glass_device_id,
+                    fields={
+                        "glass_device_id": glass_device_id,
+                        "phone_device_id": phone_device_id,
+                    },
+                ),
             )
         except Exception as exc:
             log_warning(
                 self._logger,
-                f"自动绑定失败，已等待后续重试: glass_device_id={glass_device_id} phone_device_id={phone_device_id} reason={exc}",
-                LogContext(device_id=glass_device_id),
+                "自动绑定失败，已等待后续重试",
+                LogContext(
+                    device_id=glass_device_id,
+                    fields={
+                        "glass_device_id": glass_device_id,
+                        "phone_device_id": phone_device_id,
+                        "reason": str(exc),
+                    },
+                ),
             )
 
     def _bind_devices(self, *, glass_device_id: str, phone_device_id: str) -> None:
@@ -930,6 +1241,10 @@ class ControlRuntime(CameraGateway):
 
             self._glass_to_phone[glass_device_id] = phone_device_id
             self._phone_to_glass[phone_device_id] = glass_device_id
+            self._device_group_runtime.bind_devices(
+                glass_device_id=glass_device_id,
+                phone_device_id=phone_device_id,
+            )
 
         bind_payload = {
             "glass_device_id": glass_device_id,
@@ -937,6 +1252,39 @@ class ControlRuntime(CameraGateway):
         }
         self._send_message_to_device(glass_device_id, "notify", "device.binded", "", bind_payload)
         self._send_message_to_device(phone_device_id, "notify", "device.binded", "", bind_payload)
+        log_info(
+            self._logger,
+            "设备绑定完成",
+            LogContext(
+                device_id=glass_device_id,
+                fields={
+                    "glass_device_id": glass_device_id,
+                    "phone_device_id": phone_device_id,
+                },
+            ),
+        )
+
+    @staticmethod
+    def _normalize_device_group_role(device_type: str) -> str:
+        """归一化 SDK 设备组角色。
+
+        功能：
+        1. 将控制面设备类型映射到 SDK 设备组角色。
+        2. 对未知类型保守归为 `server`，避免污染 glass / phone 角色。
+
+        参数：
+        1. `device_type`：控制面设备类型。
+
+        返回值：
+        1. SDK 设备组角色。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        if device_type in {"glass", "phone", "server"}:
+            return device_type
+        return "server"
 
     def _handle_segment_started(self, connection: ControlConnection, message: ControlMessage) -> None:
         connection.last_seen_monotonic = time.monotonic()
@@ -1215,7 +1563,13 @@ class ControlRuntime(CameraGateway):
                 log_warning(
                     self._logger,
                     "设备心跳超时，关闭连接",
-                    LogContext(device_id=connection.device_id, session_id=connection.session_id),
+                    self._build_connection_log_context(
+                        connection,
+                        fields={
+                            "close_code": 4000,
+                            "close_reason": "heartbeat timeout",
+                        },
+                    ),
                 )
                 self.close_connection(connection, code=4000, reason="heartbeat timeout")
 
@@ -1255,8 +1609,14 @@ class ControlRuntime(CameraGateway):
             return
         log_info(
             self._logger,
-            f"设备绑定已移除: glass_device_id={glass_device_id} phone_device_id={phone_device_id}",
-            LogContext(device_id=glass_device_id),
+            "设备绑定已移除",
+            LogContext(
+                device_id=glass_device_id,
+                fields={
+                    "glass_device_id": glass_device_id,
+                    "phone_device_id": phone_device_id,
+                },
+            ),
         )
 
     @property

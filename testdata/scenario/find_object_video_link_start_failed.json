@@ -1,0 +1,29 @@
+{
+  "scenario_id": "find_object_video_link_start_failed",
+  "title": "寻找物体视频链路启动失败场景",
+  "description": "验证视频链路启动适配器抛出异常时，任务会在启动阶段失败并保留错误信息。",
+  "capability": "find_object",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001",
+    "video_link_start_mode": "fail"
+  },
+  "inputs": {
+    "target_object": "水杯",
+    "frames": []
+  },
+  "expected": {
+    "task_state": "failed",
+    "task_error": {
+      "code": "task_start_failed",
+      "message": "模拟手机视频链路启动失败"
+    },
+    "notification_count_equals": 0,
+    "glass_commands": [
+      "sensor.camera.stream.start"
+    ],
+    "phone_commands": [
+      "phone.processor.prepare"
+    ]
+  }
+}

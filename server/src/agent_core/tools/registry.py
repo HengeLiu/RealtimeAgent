@@ -82,6 +82,7 @@ class ToolRegistry:
         self._camera_gateway = camera_gateway
         self._mcp_registry = mcp_registry or McpRegistry()
         self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
+        self._device_group_context_factory = None
         self._tools: dict[str, BaseTool] = {}
         self._sdk_tools: dict[str, Any] = {}
         self._model_tool_names: list[str] = []
@@ -102,6 +103,11 @@ class ToolRegistry:
         """绑定设备运行态读取函数。"""
 
         self._device_state_reader = device_state_reader
+
+    def bind_device_group_context_factory(self, factory) -> None:
+        """绑定 DeviceGroupContext 构造工厂。"""
+
+        self._device_group_context_factory = factory
 
     def discover_tools(self) -> None:
         """导入并注册内置 Tool 与 MCP Tool。"""
@@ -153,8 +159,15 @@ class ToolRegistry:
             description=tool.spec.description,
             input_model=tool.spec.input_model,
         )
+        if tool.spec.name in self._model_tool_names:
+            self._model_tool_names.remove(tool.spec.name)
         if expose_to_model:
             self._model_tool_names.append(tool.spec.name)
+
+    def register_external_tool(self, tool: BaseTool, *, expose_to_model: bool = True) -> None:
+        """注册外部注入的 Tool。"""
+
+        self._register_tool(tool, expose_to_model=expose_to_model)
 
     def get(self, name: str) -> BaseTool | None:
         """按名称查询 Tool。"""
@@ -175,6 +188,11 @@ class ToolRegistry:
         """返回设备状态读取函数。"""
 
         return self._device_state_reader
+
+    def get_device_group_context_factory(self):
+        """返回 DeviceGroupContext 工厂。"""
+
+        return self._device_group_context_factory
 
     def get_task_gateway(self) -> TaskGateway:
         """返回任务网关。"""

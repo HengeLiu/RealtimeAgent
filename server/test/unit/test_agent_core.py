@@ -315,6 +315,63 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(len(result.task_refs), 1)
         self.assertEqual(result.task_refs[0].task_type, "phone_video_link_task")
 
+    def test_start_phone_video_link_tool_prefers_device_group_snapshot(self) -> None:
+        """测试目标：验证视频直连 Tool 优先使用 SDK 设备组快照。
+
+        测试方法：
+        1. 构造只包含 `device_groups`、不包含旧 `device_bindings` 的运行态。
+        2. 调用 `start_phone_video_link`。
+
+        预期结果：
+        1. Tool 能从设备组中解析绑定手机。
+        2. Tool 能从手机 metadata 中解析视频接收地址。
+        """
+
+        registry, gateway = build_tooling(
+            device_state_reader=lambda: {
+                "device_groups": {
+                    "group_count": 1,
+                    "groups": [
+                        {
+                            "group_id": "group_001",
+                            "devices": [
+                                {
+                                    "device_id": "glass-001",
+                                    "role": "glass",
+                                    "online": True,
+                                    "metadata": {},
+                                },
+                                {
+                                    "device_id": "phone-001",
+                                    "role": "phone",
+                                    "online": True,
+                                    "metadata": {
+                                        "camera_sink_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            }
+        )
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_video_tool_group_001",
+            turn_id="turn_video_tool_group_001",
+        )
+
+        result = gateway.invoke(
+            name="start_phone_video_link",
+            context=context,
+            arguments={},
+        )
+
+        self.assertEqual(result.data["phone_device_id"], "phone-001")
+        self.assertEqual(result.data["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
+        self.assertEqual(result.task_refs[0].task_type, "phone_video_link_task")
+
     def test_start_phone_video_link_tool_rejects_missing_binding(self) -> None:
         """测试目标：验证未绑定手机时不能创建视频直连任务。
 

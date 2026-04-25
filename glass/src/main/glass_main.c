@@ -2724,6 +2724,13 @@ static void start_control_connection(void)
 static void ensure_control_transport_started(void)
 {
     if (s_control_transport_started) {
+        if (s_ws_client != NULL && !esp_websocket_client_is_connected(s_ws_client)) {
+            ESP_LOGW(TAG, "控制连接未就绪，尝试重新建立连接");
+            esp_websocket_client_stop(s_ws_client);
+            if (esp_websocket_client_start(s_ws_client) != ESP_OK) {
+                ESP_LOGW(TAG, "重新启动控制连接失败");
+            }
+        }
         return;
     }
 

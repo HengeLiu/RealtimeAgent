@@ -10,7 +10,7 @@ from typing import Final
 
 from api.ws.control_runtime import ControlRuntime
 from infra.errors import AppError
-from infra.logging import LogContext, get_logger, log_debug
+from infra.logging import LogContext, get_logger, log_debug, log_warning
 from protocol.media import MediaFrame
 
 GUID: Final[str] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -106,6 +106,19 @@ def handle_audio_websocket(handler, runtime: ControlRuntime, query: dict[str, li
 
     sock = _perform_handshake(handler)
     peer = f"{handler.client_address[0]}:{handler.client_address[1]}"
+    if not runtime.is_device_registered(device_id):
+        log_warning(
+            LOGGER,
+            "收到未完成控制面注册设备的音频连接",
+            LogContext(
+                device_id=device_id,
+                fields={
+                    "peer": peer,
+                    "path": "/ws_audio",
+                    "diagnosis": "设备只有音频旁路在线，不会加入 SDK 设备组；请检查 /ws/control 是否已连接并发送 device.register",
+                },
+            ),
+        )
     runtime.voice_runtime.on_audio_connection_opened(device_id=device_id, peer=peer)
 
     try:

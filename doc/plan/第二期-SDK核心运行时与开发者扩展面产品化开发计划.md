@@ -52,6 +52,41 @@
 
 第二期可以按四个阶段推进。每个阶段都应该有独立验收结果，避免把 SDK 产品化改造成一次高风险大重构。
 
+### 3.0 当前阶段判断（2026-04-24）
+
+结合当前仓库实现、样例目录和自动化测试结果，当前开发阶段可以判断为：
+
+| 阶段 | 当前状态 | 说明 |
+| --- | --- | --- |
+| Phase A：目录边界与 SDK 包骨架 | 已完成 | `sdk/python/openaiglasses` 包骨架、`example/` 官方案例目录、`example/server/main.py` 启动入口均已落地，依赖方向保持为 `example -> sdk`。 |
+| Phase B：DeviceGroupRuntime 与 DeviceGroupContext | 已完成 | `DeviceGroupRuntime` 与 `DeviceGroupContext` 已实现，抓拍、查询设备、启动手机视频链路、通知提交、任务创建等高层接口已经具备。 |
+| Phase C：服务器侧与手机侧扩展面 | 基本完成 | `BaseTool / BaseTask / TaskContext`、`BasePhoneProcessor / BasePhoneTask / BaseSensorProvider`、能力注册表、`OpenAIGlassesSDK` 主入口、真实服务端装配能力均已完成，当前主要是文档和边界继续收口。 |
+| Phase D：find_object 官方 example 与回放测试最小闭环 | 已完成最小闭环 | `example/capabilities/find_object` 的服务端 Tool/Task、手机端 Processor/PhoneTask 已落地，`ScenarioRunner` 与相关单元测试已可以验证最小闭环，但回放资产与场景丰富度仍需扩展。 |
+
+当前整体判断：
+
+1. 第二期已经从“方案设计阶段”进入“收口与产品化补完阶段”。
+2. 当前工作重点不再是证明 SDK 是否可行，而是继续把已实现的能力整理成更稳定的开发者使用面。
+3. 从阶段位置上看，当前已处于第二期后半段，接近 Phase D 完成后的收尾阶段，可以开始为下一期复杂能力样板做准备。
+
+### 3.0.1 收口验证状态（2026-04-25）
+
+当前已经完成一次 SDK 联调前预检收口：
+
+```bash
+uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.json
+```
+
+预检结果：
+
+1. `compileall` 通过。
+2. 官方三端入口检查通过。
+3. `testdata/scenario` 下 4 个场景回放全部通过。
+4. 第二期核心 pytest 通过。
+5. 服务端 `/api/health` 健康检查通过。
+
+本轮修复了运行态快照中 `diagnostics` 字段不可达的问题，使音频旁路设备诊断可以稳定出现在 `/api/runtime/devices` 响应中。当前第二期已经具备进入官方 `find_object` 真机联调验收的条件。
+
 ### 3.1 第二期 Phase A：目录边界与 SDK 包骨架
 
 目标：
@@ -776,7 +811,7 @@ TASK -> SDK : complete()
 2. 在文档中明确 `example` 是外部开发者项目形态的案例代码。
 3. 新业务能力如果只是案例实现，应放入 `example/capabilities`，不能写入 SDK 框架层。
 
-## 13. 当前方案与最终 SDK 目标的契合程度
+## 13. 当前方案与架构设计的契合程度
 
 契合度评估：高。
 
@@ -788,11 +823,39 @@ TASK -> SDK : complete()
 4. `BaseTask / BasePhoneProcessor` 让开发者主要围绕能力开发。
 5. `example/capabilities/find_object` 可以成为判断 SDK 是否合格的第一块试金石。
 
+与以下已有架构设计文档的契合情况如下：
+
+1. 与 `/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/restriction/软件架构设计.md` 保持一致：系统层继续由“眼镜 + 手机 + 服务器”三端协同构成，SDK 只是把系统职责进一步产品化抽象，并没有改变原始分层关系。
+2. 与 `/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK产品形态与多端职责定义.md` 保持一致：服务端负责运行时编排与能力装配，手机侧负责本地处理器与传感器任务，眼镜侧负责采集与反馈，职责边界没有被回退到业务代码中。
+3. 与 `/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/开发者如何基于SDK完成一期与设想功能开发.md` 保持一致：开发者已经可以主要围绕 Tool、Task、PhoneProcessor、PhoneTask 等业务扩展面开发，而不必直接处理底层连接和绑定细节。
+4. 与 `/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK测试架构与样例回放设计.md` 基本一致：最小回放能力已经进入代码实现，但测试资产目录、场景清单规范和更丰富的回放数据还没有完全补齐。
+
 如果第二期完成后，开发者仍然需要阅读 WebSocket 协议、设备绑定细节或媒体帧传输实现才能写 `find_object`，说明第二期没有真正完成。
 
-## 14. 后续阶段建议
+## 14. 后续开发计划
 
-第二期完成后，建议进入下一期复杂能力验证：
+### 14.1 第二期剩余收口工作
+
+当前建议优先完成以下收口事项，使第二期能够从“功能已跑通”进入“可对外说明、可持续演进”的状态：
+
+1. **补齐测试资产规范**
+   - 建立更正式的 `testdata/` 目录规范。
+   - 为 `ScenarioRunner` 增加场景清单、输入资产说明和回放结果断言约定。
+   - 让回放测试从“能跑通一个样例”提升到“可持续新增样例”。
+2. **补齐跨端联调文档与脚本引用**
+   - 统一 `example/server`、`example/phone`、`example/glass` 的启动说明。
+   - 按照当前脚本命名约定整理主流程联调脚本和历史归档脚本。
+   - 在文档中明确本地开发、跨设备联调、Mock 回放三种使用路径。
+3. **继续收口手机侧 SDK 边界**
+   - 明确 `PhoneRuntime`、`PhoneTaskContext`、`SensorProvider` 的最小稳定接口。
+   - 把当前偏样例性质的手机端对接方式继续整理为更可复用的宿主接入模式。
+4. **继续完善官方样例的表达能力**
+   - 在 `find_object` 官方样例基础上，补充更多任务状态、异常路径和取消路径说明。
+   - 让官方样例不仅能证明成功路径，也能证明失败、取消、设备缺失等场景下 SDK 的行为边界。
+
+### 14.2 下一期建议方向
+
+第二期收口后，建议进入“复杂能力样板验证阶段”，重点不再是最小闭环，而是验证 SDK 对真实复杂业务的承载能力：
 
 1. 方向一：SDK 样例回放测试体系
    - 完整实现 `ScenarioRunner`。
@@ -808,3 +871,89 @@ TASK -> SDK : complete()
 
 1. SDK 是否容易测试。
 2. SDK 是否能承载真实复杂三端业务能力。
+
+### 14.3 当前优先级建议
+
+如果按“离最终开源 SDK 形态更近”为原则排序，建议接下来按以下优先级推进：
+
+1. **第一优先级：完成第二期收口**
+   - 先把当前已经具备的运行时、扩展面、样例和测试说明整理完整。
+   - 这是后续继续扩功能而不失控的前提。
+2. **第二优先级：补强测试与回放体系**
+   - 让 SDK 开发者能脱离真机完成日常能力自测。
+   - 这是开源可用性的关键门槛之一。
+3. **第三优先级：推进导航类复合能力样板**
+   - 用更复杂的跨端任务验证当前抽象是否足够稳。
+   - 如果导航能力无法顺畅落在当前扩展面上，就说明第二期接口仍需迭代。
+
+## 15. 开发后测试结果
+
+本次阶段总结与文档补充前，对当前第二期相关实现执行了以下自动化验证：
+
+1. 单元测试命令：
+
+   ```bash
+   uv run pytest server/test/unit/test_sdk_phase_two.py -q
+   ```
+
+   结果：**14 个测试全部通过**。
+
+2. 相关核心链路测试命令：
+
+   ```bash
+   uv run pytest server/test/unit/test_agent_core.py server/test/unit/test_backend_task_core.py server/test/integration/test_control_register_flow.py -q
+   ```
+
+   结果：**46 个测试全部通过**。
+
+3. 语法编译检查命令：
+
+   ```bash
+   python -m compileall sdk/python/openaiglasses example/server/main.py example/capabilities/find_object
+   ```
+
+   结果：**编译检查通过**，未发现语法错误。
+
+4. 当前已知告警：
+   - `server/test/integration/test_control_register_flow.py` 中的 `TestWebSocketClient` 因定义了 `__init__`，触发 1 条 `PytestCollectionWarning`。
+   - 该告警当前不影响主要测试通过，但后续建议单独整理测试辅助类命名或结构，避免误导测试收集过程。
+
+结论：
+
+1. 当前第二期核心运行时、扩展面装配、官方样例接入和关键兼容链路均已具备基本稳定性。
+2. 当前主要剩余工作集中在工程化收口、文档补完、测试资产扩展和跨端接入说明，而不是核心链路不可用。
+
+## 16. 当前实现进展
+
+截至 2026-04-24，第二期实现进展可总结为：
+
+### 16.1 已完成内容
+
+1. 已完成 `sdk/python/openaiglasses` 主包骨架建设，并具备对外导出能力。
+2. 已完成 `DeviceGroupRuntime` 与 `DeviceGroupContext` 的核心能力落地。
+3. 已完成 `BaseTool / BaseTask / TaskContext` 与能力注册表的主要实现。
+4. 已完成 `BasePhoneProcessor / BasePhoneTask / BaseSensorProvider / PhoneRuntime` 的最小运行时抽象。
+5. 已完成 `OpenAIGlassesSDK` 主入口、`build_agent_facade()`、`build_server_handle()`、`run_server()` 等真实装配能力。
+6. 已完成服务端与现有 `agent_core`、`backend_task_core`、`control_runtime` 的桥接适配。
+7. 已完成官方 `example/capabilities/find_object` 样例，包括服务端 Tool/Task 与手机端 Processor/PhoneTask。
+8. 已完成第二期相关单元测试、集成测试和编译检查，能够验证最小闭环。
+
+### 16.2 基本完成但仍需补强的内容
+
+1. `ScenarioRunner` 与 Mock 体系已经具备最小版本，但回放场景覆盖度仍然偏低。
+2. 手机侧扩展面已具备接口和样例接入方式，但距离“更稳定、可宿主复用”的产品化形态还有收口空间。
+3. 官方样例已经可以证明正向闭环，但异常场景、失败路径、设备缺失路径的文档和测试还可以继续补强。
+4. 快速开始文档和样例说明已初步建立，但与联调脚本、测试资产、跨端运行说明之间还可以继续统一。
+
+### 16.3 尚未完成内容
+
+1. 尚未提供导航类复合能力的官方样板实现。
+2. 尚未完成完整 Android / iOS 原生 SDK 发布形态。
+3. 尚未完成正式的能力包发布、插件市场、版本兼容与升级策略。
+4. 尚未完成生产级鉴权、租户隔离、远程 OTA 等产品化能力。
+
+### 16.4 当前阶段结论
+
+1. 第二期目标已经基本达成，尤其是 SDK 核心运行时与开发者扩展面的主体能力已经落地。
+2. 当前阶段最合理的推进方式不是继续无序加功能，而是先把第二期剩余工程化事项收口。
+3. 当第二期收口完成后，项目就具备进入下一期复杂能力样板验证的条件。

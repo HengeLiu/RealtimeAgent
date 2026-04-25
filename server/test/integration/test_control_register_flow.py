@@ -208,6 +208,83 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         finally:
             client.close()
 
+    def test_runtime_snapshot_reports_audio_only_glass(self) -> None:
+        """测试目标：验证运行态快照能暴露眼镜只有音频连接、未完成控制注册的问题。
+
+        测试方法：
+        1. 只建立 `/ws_audio?device_id=glass-001` 连接，不发送 `device.register`。
+        2. 拉取运行态快照并读取 `diagnostics.audio_only_device_ids`。
+
+        预期结果：
+        1. `glass-001` 出现在音频旁路在线诊断列表中。
+        2. `online_devices` 和 SDK 设备组中不会错误出现 `glass-001`。
+        """
+
+        audio_client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws_audio?device_id=glass-001")
+        try:
+            deadline = time.time() + 1.5
+            runtime = self._fetch_runtime()
+            while time.time() < deadline:
+                runtime = self._fetch_runtime()
+                diagnostics = runtime.get("diagnostics", {})
+                if "glass-001" in diagnostics.get("audio_only_device_ids", []):
+                    break
+                time.sleep(0.05)
+
+            self.assertNotIn("glass-001", runtime["online_devices"])
+            self.assertIn("glass-001", runtime["diagnostics"]["audio_only_device_ids"])
+            group_devices = [
+                device["device_id"]
+                for group in runtime["device_groups"]["groups"]
+                for device in group["devices"]
+            ]
+            self.assertNotIn("glass-001", group_devices)
+        finally:
+            audio_client.close()
+
+    def test_control_runtime_can_create_sdk_device_group_context(self) -> None:
+        """测试目标：验证真实控制运行时可产出 SDK 设备组上下文并桥接后台任务。
+
+        测试方法：
+        1. 注册一台眼镜设备。
+        2. 通过 `ControlRuntime.create_device_group_context()` 获取 SDK 上下文。
+        3. 使用该上下文创建一个 `timer_task` 并轮询完成。
+
+        预期结果：
+        1. SDK 上下文中能读取当前眼镜设备。
+        2. 创建的任务进入 `running`，随后进入 `completed`。
+        """
+
+        client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            registered = self.codec.decode(client.recv_text())
+            self.assertEqual(registered.name, "device.registered")
+            opened = self.codec.decode(client.recv_text())
+            self.assertEqual(opened.name, "voice.session.open")
+
+            context = self.handle.runtime.create_device_group_context(device_id="glass-001")
+            self.assertEqual(context.require_glass().device_id, "glass-001")
+
+            created = context.create_task(
+                task_type="timer_task",
+                input_data={"duration_seconds": 1, "label": "SDK 桥接计时"},
+            )
+            self.assertEqual(created.state, "running")
+
+            deadline = time.time() + 2.5
+            latest = created
+            while time.time() < deadline:
+                latest = context.query_task(created.task_id)
+                if latest.state == "completed":
+                    break
+                time.sleep(0.05)
+
+            self.assertEqual(latest.state, "completed")
+            self.assertEqual(latest.result["message"], "计时结束")
+        finally:
+            client.close()
+
     def test_register_failed_when_pair_token_mismatch(self) -> None:
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
@@ -481,6 +558,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             runtime = self._fetch_runtime()
             self.assertEqual(runtime["device_bindings"]["glass_to_phone"]["glass-001"], "phone-001")
             self.assertEqual(runtime["device_bindings"]["phone_to_glass"]["phone-001"], "glass-001")
+            self._assert_device_group_contains(runtime, {"glass-001": "glass", "phone-001": "phone"})
         finally:
             glass.close()
             phone.close()
@@ -523,6 +601,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             runtime = self._fetch_runtime()
             self.assertEqual(runtime["device_bindings"]["glass_to_phone"]["glass-001"], "phone-001")
             self.assertEqual(runtime["device_bindings"]["phone_to_glass"]["phone-001"], "glass-001")
+            self._assert_device_group_contains(runtime, {"glass-001": "glass", "phone-001": "phone"})
         finally:
             phone.close()
             glass.close()
@@ -554,6 +633,7 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             runtime = self._fetch_runtime()
             self.assertEqual(runtime["device_bindings"]["glass_to_phone"]["glass-001"], "phone-001")
             self.assertEqual(runtime["device_bindings"]["phone_to_glass"]["phone-001"], "glass-001")
+            self._assert_device_group_contains(runtime, {"glass-001": "glass", "phone-001": "phone"})
         finally:
             glass.close()
             phone.close()
@@ -968,6 +1048,27 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         with urlopen(url, timeout=3) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return payload["runtime"]
+
+    def _assert_device_group_contains(self, runtime: dict, expected: dict[str, str]) -> None:
+        """断言 SDK 设备组快照包含指定设备。
+
+        测试目标：验证旧控制面绑定表与新 `DeviceGroupRuntime` 快照保持一致。
+        测试方法：读取 `/api/runtime/devices` 中的 `device_groups` 字段并查找设备。
+        预期结果：指定设备都在同一个设备组中，角色正确且在线。
+        """
+
+        groups = runtime["device_groups"]["groups"]
+        matched_groups = []
+        for group in groups:
+            devices = {item["device_id"]: item for item in group["devices"]}
+            if all(device_id in devices for device_id in expected):
+                matched_groups.append(devices)
+
+        self.assertEqual(len(matched_groups), 1)
+        devices = matched_groups[0]
+        for device_id, role in expected.items():
+            self.assertEqual(devices[device_id]["role"], role)
+            self.assertTrue(devices[device_id]["online"])
 
     def _post_json(self, path: str, body: dict) -> dict:
         """向服务端发送 JSON POST 请求。

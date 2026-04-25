@@ -1,0 +1,16 @@
+{
+  "scenario_id": "find_object_basic",
+  "title": "寻找物体最小闭环",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "target_object": "水杯",
+    "frames": ["桌面", "桌面 水杯"]
+  },
+  "expected": {
+    "task_state": "completed",
+    "notification_contains": "找到水杯"
+  }
+}

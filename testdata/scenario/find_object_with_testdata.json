@@ -1,0 +1,27 @@
+{
+  "scenario_id": "find_object_with_testdata",
+  "title": "寻找物体 testdata 资产回放样例",
+  "description": "通过 testdata/text 下的复用帧样例驱动找物体任务完成。",
+  "capability": "find_object",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "target_object": "水杯",
+    "frames": "text/find_object_frames_water_cup.json",
+    "processor_type": "yolo_find_object"
+  },
+  "expected": {
+    "task_state": "completed",
+    "task_result": {
+      "found": true,
+      "target_object": "水杯"
+    },
+    "notification_contains": "找到水杯",
+    "notification_count_at_least": 1,
+    "glass_commands": [
+      "sensor.camera.stream.start"
+    ]
+  }
+}

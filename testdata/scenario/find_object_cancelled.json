@@ -1,0 +1,34 @@
+{
+  "scenario_id": "find_object_cancelled",
+  "title": "寻找物体取消路径回放样例",
+  "description": "验证找物体任务在未找到目标时被取消，且视频链路被正确停止。",
+  "capability": "find_object",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "target_object": "水杯",
+    "processor_type": "yolo_find_object",
+    "timeline": "task_event/find_object_cancel_timeline.json"
+  },
+  "expected": {
+    "task_state": "cancelled",
+    "task_data": {
+      "cancel_reason": "user_cancelled"
+    },
+    "notification_count_equals": 0,
+    "glass_commands": [
+      "sensor.camera.stream.start",
+      "sensor.camera.stream.stop"
+    ],
+    "phone_commands": [
+      "phone.processor.prepare",
+      "phone.processor.stop"
+    ],
+    "timeline_event_types": [
+      "frame",
+      "task.cancel"
+    ]
+  }
+}

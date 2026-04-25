@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import tempfile
 import unittest
 
-from infra.logging.logger import NOISY_LIBRARY_LOG_LEVELS, JsonFormatter, configure_root_logger, sanitize_log_message
+from infra.logging.logger import LineFormatter, LogContext, NOISY_LIBRARY_LOG_LEVELS, configure_root_logger, sanitize_log_message
 
 
 class LoggingTestCase(unittest.TestCase):
@@ -32,19 +31,19 @@ class LoggingTestCase(unittest.TestCase):
 
         self.assertEqual(sanitized, "request data=data:audio/wav;base64,<redacted>")
 
-    def test_json_formatter_redacts_image_data_url(self) -> None:
-        """测试目标：验证 JSON 格式化输出会对图片 data URL 做脱敏。
+    def test_line_formatter_redacts_image_data_url(self) -> None:
+        """测试目标：验证单行日志格式化输出会对图片 data URL 做脱敏。
 
         测试方法：
         1. 构造一条带图片 data URL 的 `LogRecord`。
-        2. 使用 `JsonFormatter` 格式化。
+        2. 使用 `LineFormatter` 格式化。
 
         预期结果：
-        1. `message` 字段保留 MIME 类型。
-        2. `message` 字段不包含原始图片 base64。
+        1. 日志行保留 MIME 类型。
+        2. 日志行不包含原始图片 base64。
         """
 
-        formatter = JsonFormatter()
+        formatter = LineFormatter()
         record = logging.LogRecord(
             name="test.logger",
             level=logging.DEBUG,
@@ -55,10 +54,52 @@ class LoggingTestCase(unittest.TestCase):
             exc_info=None,
         )
 
-        payload = json.loads(formatter.format(record))
+        line = formatter.format(record)
 
-        self.assertEqual(payload["logger"], "test.logger")
-        self.assertEqual(payload["message"], "payload=data:image/png;base64,<redacted>")
+        self.assertIn("-DEBUG-test.logger---payload=data:image/png;base64,<redacted>", line)
+        self.assertNotIn("iVBORw0KGgoAAAANSUhEUgAAAAUA", line)
+
+    def test_line_formatter_keeps_structured_extra_fields(self) -> None:
+        """测试目标：验证结构化上下文字段会进入单行日志。
+
+        测试方法：
+        1. 构造带有 `LogContext.fields` 的日志记录。
+        2. 使用 `LineFormatter` 格式化。
+
+        预期结果：
+        1. 常规链路字段存在。
+        2. 自定义业务字段也存在。
+        """
+
+        formatter = LineFormatter()
+        extra = LogContext(
+            device_id="glass-001",
+            message_id="conn-001",
+            fields={
+                "connection_id": "conn-001",
+                "heartbeat_age_ms": 16000,
+                "nested": {"ok": True},
+            },
+        ).to_dict()
+        record = logging.LogRecord(
+            name="test.logger",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="设备心跳超时，关闭连接",
+            args=(),
+            exc_info=None,
+        )
+        for key, value in extra.items():
+            setattr(record, key, value)
+
+        line = formatter.format(record)
+
+        self.assertIn("-WARNING-test.logger-conn-001-设备心跳超时，关闭连接", line)
+        self.assertIn("device_id=glass-001", line)
+        self.assertIn("connection_id=conn-001", line)
+        self.assertIn("heartbeat_age_ms=16000", line)
+        self.assertIn('nested={"ok":true}', line)
 
     def test_sanitize_log_message_redacts_multiline_audio_data_url(self) -> None:
         """测试目标：验证跨行的音频 data URL 也会被完整脱敏。"""
@@ -74,7 +115,7 @@ class LoggingTestCase(unittest.TestCase):
         self.assertNotIn("AAAABBBB", sanitized)
         self.assertNotIn("CCCCDDDDEEEE", sanitized)
 
-    def test_configure_root_logger_writes_json_log_file(self) -> None:
+    def test_configure_root_logger_writes_line_log_file(self) -> None:
         """测试目标：验证根日志器可同时写入标准输出和日志文件。
 
         测试方法：
@@ -84,8 +125,8 @@ class LoggingTestCase(unittest.TestCase):
 
         预期结果：
         1. 日志文件会被自动创建。
-        2. 文件中的内容仍是 JSON 单行格式。
-        3. `message` 字段与实际输出一致。
+        2. 文件中的内容是单行文本格式。
+        3. 日志行包含实际输出内容。
         """
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -99,9 +140,7 @@ class LoggingTestCase(unittest.TestCase):
                 lines = [line.strip() for line in handle.readlines() if line.strip()]
 
         self.assertGreaterEqual(len(lines), 1)
-        payload = json.loads(lines[-1])
-        self.assertEqual(payload["logger"], "test.file")
-        self.assertEqual(payload["message"], "写入文件日志")
+        self.assertIn("-INFO-test.file---写入文件日志", lines[-1])
         logging.getLogger().handlers.clear()
 
     def test_configure_root_logger_lowers_noisy_library_levels(self) -> None:
