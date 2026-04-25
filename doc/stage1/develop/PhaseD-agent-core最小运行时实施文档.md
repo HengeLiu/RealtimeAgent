@@ -2,7 +2,7 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第二阶段第4-8项开发落地计划.md) 的 Phase D，核心是把当前已完成的语音主链路，从“ASR 后直接在 `voice-runtime` 里调用大模型”升级为“ASR 后提交 `AgentTurn` 到 `agent-core` 再统一决策”。
+本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第二阶段第4-8项开发落地计划.md) 的 Phase D，核心是把当前已完成的语音主链路，从“ASR 后直接在 `voice-runtime` 里调用大模型”升级为“ASR 后提交 `AgentTurn` 到 `agent-core` 再统一决策”。
 
 本阶段必须交付：
 

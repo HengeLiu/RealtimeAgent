@@ -4,7 +4,7 @@
 
 本文档不是继续讨论系统内部怎么实现，而是切换到 **SDK 使用者视角**，回答下面两个问题：
 
-1. 一个外部开发者如果拿到本项目未来的 SDK，应当如何基于 SDK 完成 [第一期功能开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/restriction/第一期功能开发计划.md) 中的功能开发。
+1. 一个外部开发者如果拿到本项目未来的 SDK，应当如何基于 SDK 完成 [第一期功能开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第一期功能开发计划.md) 中的功能开发。
 2. 一个外部开发者如果要继续完成 [设想的功能与实现方案.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/restriction/设想的功能与实现方案.md) 中的核心能力，应当如何使用 SDK。
 
 本文档的核心目的不是提供某个具体 API 细节，而是通过“开发者如何开发”来反向验证 SDK 的设计是否合理。

@@ -2,7 +2,7 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第一期前三项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项开发落地计划.md) 的 Phase C，要求在已完成的注册链路基础上，真正打通“唤醒 -> 收音 -> 上行 -> 模型 -> 播放 -> 恢复监听”的非实时语音对话主链路。
+本阶段目标对应 [第一期前三项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第一期前三项开发落地计划.md) 的 Phase C，要求在已完成的注册链路基础上，真正打通“唤醒 -> 收音 -> 上行 -> 模型 -> 播放 -> 恢复监听”的非实时语音对话主链路。
 
 本阶段必须交付：
 
@@ -80,7 +80,7 @@ Phase B 和“Phase C 语音唤醒状态上报”完成后，仓库已有以下�
 3. `script/deprecated/run_server_phase_c_remote.sh`
 4. `script/deprecated/run_glass_phase_c.sh`
 5. `script/phase_c_voice_client.py`
-6. [第一期前三项-PhaseC联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项-PhaseC联调说明.md)
+6. [第一期前三项-PhaseC联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/第一期前三项-PhaseC联调说明.md)
 
 作用：
 

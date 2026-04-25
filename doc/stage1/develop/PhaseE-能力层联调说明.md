@@ -128,7 +128,7 @@ PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
 
 ## 7. 当前限制
 
-1. 本文编写时 `capture_photo` 仍是模拟抓拍；真实相机链路现已补到 [PhaseG-真实抓拍图片联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/PhaseG-真实抓拍图片联调说明.md)。
+1. 本文编写时 `capture_photo` 仍是模拟抓拍；真实相机链路现已补到 [PhaseG-真实抓拍图片联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseG-真实抓拍图片联调说明.md)。
 2. `timer_manage` 当前通过 `InMemoryTaskGateway` 工作，不代表完整后台任务状态机已完成。
 3. `map_manage` 当前内部调用的 AMap 结果仍是 mock，不代表真实路线质量。
 4. 若要验证完整语音主链路，仍需在允许本地绑定端口的环境中执行 socket 级集成测试。

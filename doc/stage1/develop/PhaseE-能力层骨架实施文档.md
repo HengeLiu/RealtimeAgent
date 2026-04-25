@@ -2,7 +2,7 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第二阶段第4-8项开发落地计划.md) 的 Phase E，核心是把 Phase D 已完成的最小 `agent-core` 运行时升级为可承载 Tool / MCP 的统一能力层。
+本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第二阶段第4-8项开发落地计划.md) 的 Phase E，核心是把 Phase D 已完成的最小 `agent-core` 运行时升级为可承载 Tool / MCP 的统一能力层。
 
 补充说明：
 
@@ -286,7 +286,7 @@ PYTHONPATH=server/src python -m unittest \
 当前仍保留的限制：
 
 1. `AmapMcpAdapter` 当前仍是 mock/stub 版本，真实环境接入留到 Phase H 或专门的 provider 接入阶段。
-2. 本文完成时 `capture_photo` 仍是模拟抓拍；2026-04-18 已在 [PhaseG-真实抓拍图片实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/PhaseG-真实抓拍图片实施文档.md) 中补齐真实抓拍链路。
+2. 本文完成时 `capture_photo` 仍是模拟抓拍；2026-04-18 已在 [PhaseG-真实抓拍图片实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseG-真实抓拍图片实施文档.md) 中补齐真实抓拍链路。
 3. `InMemoryTaskGateway` 还不是完整 `backend-task-core`，Phase F 仍需补状态机、调度器、事件总线和通知桥。
 
 ## 8. 开发后测试结果

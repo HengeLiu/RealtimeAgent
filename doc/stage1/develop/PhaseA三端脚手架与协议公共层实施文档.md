@@ -2,7 +2,7 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第一期前三项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项开发落地计划.md) 的 Phase A，核心是先把可运行的工程底座搭起来，为后续注册链路与语音链路提供稳定公共能力。
+本阶段目标对应 [第一期前三项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第一期前三项开发落地计划.md) 的 Phase A，核心是先把可运行的工程底座搭起来，为后续注册链路与语音链路提供稳定公共能力。
 
 本阶段必须交付：
 

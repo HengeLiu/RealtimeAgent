@@ -2,7 +2,7 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第一期前三项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项开发落地计划.md) 的 Phase B，核心是把“设备真实注册”链路落到代码，而不是停留在协议模型或模拟入口。
+本阶段目标对应 [第一期前三项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第一期前三项开发落地计划.md) 的 Phase B，核心是把“设备真实注册”链路落到代码，而不是停留在协议模型或模拟入口。
 
 本阶段必须交付：
 
@@ -79,7 +79,7 @@ Phase A 完成后，仓库已有协议模型、配置、日志和基础 HTTP 路
 2. `script/deprecated/run_server_phase_b.sh`
 3. `script/phase_b_control_client.py`
 4. `script/deprecated/run_glass_phase_b.sh`
-5. [第一期前三项-PhaseB联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第一期前三项-PhaseB联调说明.md)
+5. [第一期前三项-PhaseB联调说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/第一期前三项-PhaseB联调说明.md)
 
 作用：
 

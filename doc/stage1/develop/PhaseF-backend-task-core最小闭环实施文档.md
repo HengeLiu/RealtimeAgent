@@ -2,7 +2,7 @@
 
 ## 1. 需求理解
 
-本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/plan/第二阶段第4-8项开发落地计划.md) 的 Phase F，核心是把 Phase E 中仅用于占位的最小 `TaskGateway` 升级为可运行、可查询、可取消、可回流对话链路的 `backend-task-core` 最小闭环。
+本阶段目标对应 [第二阶段第4-8项开发落地计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan/第二阶段第4-8项开发落地计划.md) 的 Phase F，核心是把 Phase E 中仅用于占位的最小 `TaskGateway` 升级为可运行、可查询、可取消、可回流对话链路的 `backend-task-core` 最小闭环。
 
 本阶段必须交付：
 
