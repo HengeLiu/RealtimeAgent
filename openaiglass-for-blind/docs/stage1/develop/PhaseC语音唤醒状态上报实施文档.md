@@ -19,12 +19,12 @@
 当前仓库已有：
 
 1. Phase B 注册、心跳和 `voice.session.open` 自动下发。
-2. WakeNet 试验结果已经合并进入主工程 `glass/src`，不再保留独立 spike 作为联调入口。
+2. WakeNet 试验结果已经合并进入主工程 `openaiglass-sdk/glass-esp32`，不再保留独立 spike 作为联调入口。
 3. 协议文档中已冻结 `sensor.audio.segment.started` 作为“WakeNet 唤醒成功后开始一轮语音采集”的标准消息名。
 
 当前缺口：
 
-1. 主工程 `glass/src` 还未接入 `esp-sr`、模型分区和 PDM Mic 输入。
+1. 主工程 `openaiglass-sdk/glass-esp32` 还未接入 `esp-sr`、模型分区和 PDM Mic 输入。
 2. 眼镜端虽然已能注册成功，但在 `voice.session.opened` 后还不会真正进入唤醒监听态。
 3. 文档与脚本需要统一到单一主流程，避免注册联调和 WakeNet 联调混用历史 spike 入口。
 
@@ -34,27 +34,27 @@
 
 本次新增：
 
-1. `glass/src/main/idf_component.yml` 增加 `espressif/esp-sr`
-2. `glass/src/partitions.csv`
-3. `glass/src/sdkconfig.defaults`
+1. `openaiglass-sdk/glass-esp32/main/idf_component.yml` 增加 `espressif/esp-sr`
+2. `openaiglass-sdk/glass-esp32/partitions.csv`
+3. `openaiglass-sdk/glass-esp32/sdkconfig.defaults`
 
 作用：
 
 1. 为主工程提供 WakeNet 所需的 `esp-sr` 依赖。
 2. 提供 `model` 分区，支持 `CONFIG_MODEL_IN_FLASH=y`。
 3. 默认启用 `wn9_hilexin`、PSRAM 和 8MB Flash 配置。
-4. 保持与 `glass/config/local_build.env -> sdkconfig.local` 的非交互式构建流程兼容。
+4. 保持与 `openaiglass-for-blind/host/glass/config/local_build.env -> sdkconfig.local` 的非交互式构建流程兼容。
 
 ### 3.2 眼镜端主流程扩展
 
 本次修改：
 
-1. `glass/src/main/glass_main.c`
+1. `openaiglass-sdk/glass-esp32/main/glass_main.c`
 
 关键逻辑：
 
 1. 保留现有 WiFi、控制连接、注册、心跳流程。
-2. 每次构建均从本地私有配置文件 `glass/config/local_build.env` 生成 `sdkconfig.local`，不使用交互式配置作为主路径。
+2. 每次构建均从本地私有配置文件 `openaiglass-for-blind/host/glass/config/local_build.env` 生成 `sdkconfig.local`，不使用交互式配置作为主路径。
 3. 启动时初始化 PDM Mic 和 AFE/WakeNet 运行时。
 4. 收到 `voice.session.open` 并回 `voice.session.opened` 后，打开唤醒监听开关。
 5. `sr_pipeline_task` 持续执行 `feed/fetch`。
@@ -65,7 +65,7 @@
 
 本次修改：
 
-1. `server/src/api/ws/control_runtime.py`
+1. `openaiglass-sdk/server-python/api/ws/control_runtime.py`
 
 关键逻辑：
 

@@ -56,16 +56,16 @@ Phase D 完成后，仓库已有以下基础：
 
 本次新增或补齐：
 
-1. `server/src/agent_core/models/capability_models.py`
-2. `server/src/agent_core/tools/base.py`
-3. `server/src/agent_core/tools/gateway.py`
-4. `server/src/agent_core/tools/builtins/*.py`
-5. `server/src/agent_core/mcp/base.py`
-6. `server/src/agent_core/mcp/registry.py`
-7. `server/src/agent_core/mcp/gateway.py`
-8. `server/src/agent_core/mcp/adapters/amap_adapter.py`
-9. `server/src/backend_task_core/models.py`
-10. `server/src/backend_task_core/gateway.py`
+1. `openaiglass-sdk/server-python/agent_core/models/capability_models.py`
+2. `openaiglass-sdk/server-python/agent_core/tools/base.py`
+3. `openaiglass-sdk/server-python/agent_core/tools/gateway.py`
+4. `openaiglass-sdk/server-python/agent_core/tools/builtins/*.py`
+5. `openaiglass-sdk/server-python/agent_core/mcp/base.py`
+6. `openaiglass-sdk/server-python/agent_core/mcp/registry.py`
+7. `openaiglass-sdk/server-python/agent_core/mcp/gateway.py`
+8. `openaiglass-sdk/server-python/agent_core/mcp/adapters/amap_adapter.py`
+9. `openaiglass-sdk/server-python/backend_task_core/models.py`
+10. `openaiglass-sdk/server-python/backend_task_core/gateway.py`
 
 关键职责如下：
 
@@ -140,8 +140,8 @@ Phase D 完成后，仓库已有以下基础：
 
 本次同时改造：
 
-1. `server/src/agent_core/facade/agent_facade.py`
-2. `server/src/agent_core/runtime/runner.py`
+1. `openaiglass-sdk/server-python/agent_core/facade/agent_facade.py`
+2. `openaiglass-sdk/server-python/agent_core/runtime/runner.py`
 
 关键变化：
 
@@ -267,7 +267,7 @@ bash script/run_tests.sh
 若只想验证 Phase E 相关能力层，可执行：
 
 ```bash
-PYTHONPATH=server/src python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python python -m unittest \
   server.test.unit.test_agent_core \
   server.test.integration.test_agent_phase_e_flow -v
 ```
@@ -296,7 +296,7 @@ PYTHONPATH=server/src python -m unittest \
 已执行命令：
 
 ```bash
-PYTHONPATH=server/src python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python python -m unittest \
   server.test.unit.test_agent_core \
   server.test.integration.test_agent_phase_e_flow -v
 ```

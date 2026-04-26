@@ -47,12 +47,12 @@ Phase C 完成后，仓库已有以下基础：
 
 本次新增：
 
-1. `server/src/agent_core/context/models.py`
-2. `server/src/agent_core/context/session_store.py`
-3. `server/src/agent_core/context/assembler.py`
-4. `server/src/agent_core/tools/registry.py`
-5. `server/src/agent_core/runtime/runner.py`
-6. `server/src/agent_core/facade/agent_facade.py`
+1. `openaiglass-sdk/server-python/agent_core/context/models.py`
+2. `openaiglass-sdk/server-python/agent_core/context/session_store.py`
+3. `openaiglass-sdk/server-python/agent_core/context/assembler.py`
+4. `openaiglass-sdk/server-python/agent_core/tools/registry.py`
+5. `openaiglass-sdk/server-python/agent_core/runtime/runner.py`
+6. `openaiglass-sdk/server-python/agent_core/facade/agent_facade.py`
 
 关键职责如下：
 
@@ -76,9 +76,9 @@ Phase C 完成后，仓库已有以下基础：
 
 本次修改：
 
-1. `server/src/runtime/voice_runtime.py`
-2. `server/src/api/ws/control_runtime.py`
-3. `server/src/api/http_server.py`
+1. `openaiglass-sdk/server-python/runtime/voice_runtime.py`
+2. `openaiglass-sdk/server-python/api/ws/control_runtime.py`
+3. `openaiglass-sdk/server-python/api/http_server.py`
 
 关键变化：
 
@@ -218,7 +218,7 @@ bash script/deprecated/run_phase_d_tests_phase_d.sh
 该脚本会在 `uv` 环境下执行：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest discover -s server/test -p 'test_*.py' -v
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest discover -s server/test -p 'test_*.py' -v
 ```
 
 ## 7. 当前方案与架构设计的契合程度

@@ -34,7 +34,7 @@
 2. 眼镜端已经支持通过 WebSocket 二进制发送 `MediaFrame(camera_frame)`。
 3. 服务端已经支持 `phone_video_link_task`，并在任务启动时向眼镜下发开始推流控制消息。
 4. 协议层已经定义统一 `MediaFrame` 格式。
-5. 手机目录目前只有 [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 这类 Python 调试实现，不适合作为 iOS 真机交付物。
+5. 手机目录目前只有 [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 这类 Python 调试实现，不适合作为 iOS 真机交付物。
 
 当前主要问题如下：
 
@@ -46,7 +46,7 @@
 
 1. 当前最合理的收敛方式是先补一个“iOS 视频回显验证 app”。
 2. 这个 app 在近期实现中已经从“纯回显工具”扩展为“最小手机运行时入口”。
-3. [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 当前只保留为桌面环境协议调试工具。
+3. [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 当前只保留为桌面环境协议调试工具。
 
 ## 3. 实现方案描述
 
@@ -65,12 +65,12 @@
 
 建议目录结构如下：
 
-1. `phone/ios/GlassesVideoReceiver/`
-2. `phone/ios/GlassesVideoReceiver/GlassesVideoReceiverApp.swift`
-3. `phone/ios/GlassesVideoReceiver/ContentView.swift`
-4. `phone/ios/GlassesVideoReceiver/Core/`
-5. `phone/ios/GlassesVideoReceiver/Networking/`
-6. `phone/ios/GlassesVideoReceiverTests/`
+1. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/`
+2. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/GlassesVideoReceiverApp.swift`
+3. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/ContentView.swift`
+4. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Core/`
+5. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Networking/`
+6. `openaiglass-sdk/phone-ios/GlassesVideoReceiverTests/`
 
 应用主要模块职责如下：
 
@@ -274,10 +274,10 @@ end
 
 ```bash
 xcodebuild test \
-  -project phone/ios/GlassesVideoReceiver.xcodeproj \
+  -project openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj \
   -scheme GlassesVideoReceiver \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -derivedDataPath phone/ios/build
+  -derivedDataPath openaiglass-sdk/phone-ios/build
 ```
 
 2. 测试结果：
@@ -302,7 +302,7 @@ xcodebuild test \
 
 当前实现状态如下：
 
-1. 已新增原生 iOS 工程 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/ios/GlassesVideoReceiver.xcodeproj)。
+1. 已新增原生 iOS 工程 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj)。
 2. 已完成最小视频回显页面，可展示监听状态、接收地址、最近帧序号、最近接收时间、服务端状态、绑定状态和最近事件。
 3. 已完成最小 WebSocket 服务端实现，支持：
    - Upgrade 握手
@@ -318,7 +318,7 @@ xcodebuild test \
    - 注册失败自动重试
    - 前台恢复后自动保活
 6. 页面已增加“完成”按钮，用于结束当前视频接收，并通知服务端停止视频任务。
-7. [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 已明确降级为桌面环境协议调试工具，不再作为手机端正式实现。
+7. [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 已明确降级为桌面环境协议调试工具，不再作为手机端正式实现。
 
 当前仍未完成的部分如下：
 

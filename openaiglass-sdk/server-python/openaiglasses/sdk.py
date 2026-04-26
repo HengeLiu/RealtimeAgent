@@ -22,7 +22,7 @@ class OpenAIGlassesSDK:
 
     主要功能：
     1. 聚合能力注册表和设备组运行时。
-    2. 为 example 或外部开发者项目提供统一装配入口。
+    2. 为 openaiglass-for-blind 或外部开发者项目提供统一装配入口。
 
     主要方法：
     1. `register_tool`：注册 Tool。

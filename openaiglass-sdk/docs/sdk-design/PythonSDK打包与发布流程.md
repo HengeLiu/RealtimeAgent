@@ -17,7 +17,7 @@ pip install openaiglasses-sdk
 Python SDK 包位于：
 
 ```text
-sdk/python/
+openaiglass-sdk/server-python/
   pyproject.toml
   README.md
   openaiglasses/
@@ -33,14 +33,14 @@ sdk/python/
 
 1. `openaiglasses` 是开发者公开导入入口。
 2. `agent_core / backend_task_core / api / runtime / protocol / infra` 是 SDK 内部运行时包，随 wheel 一起发布。
-3. 外部业务项目不应直接依赖 `server/src` 或仓库根路径。
+3. 外部业务项目不应直接依赖 `openaiglass-sdk/server-python` 或仓库根路径。
 
 ## 3. 本地安装验证
 
 在仓库根目录执行：
 
 ```bash
-pip install ./sdk/python
+pip install ./openaiglass-sdk/server-python
 ```
 
 或使用当前仓库验证脚本：
@@ -77,13 +77,13 @@ python script/run_sdk_preflight.py --report logs/sdk-preflight-release.json
 
 ```bash
 python -m pip install build twine
-python -m build sdk/python
+python -m build openaiglass-sdk/server-python
 ```
 
 产物位于：
 
 ```text
-sdk/python/dist/
+openaiglass-sdk/server-python/dist/
   openaiglasses_sdk-<version>-py3-none-any.whl
   openaiglasses_sdk-<version>.tar.gz
 ```
@@ -95,7 +95,7 @@ sdk/python/dist/
 首次发布或版本结构变化时，先发布到 TestPyPI：
 
 ```bash
-python -m twine upload --repository testpypi sdk/python/dist/*
+python -m twine upload --repository testpypi openaiglass-sdk/server-python/dist/*
 ```
 
 在干净环境验证：
@@ -111,7 +111,7 @@ python -m venv /tmp/openaiglasses-sdk-test
 TestPyPI 验证通过后发布到 PyPI：
 
 ```bash
-python -m twine upload sdk/python/dist/*
+python -m twine upload openaiglass-sdk/server-python/dist/*
 ```
 
 正式发布后验证：
@@ -124,7 +124,7 @@ python -m venv /tmp/openaiglasses-sdk-prod
 
 ## 8. 版本管理规则
 
-1. 每次发布前更新 [sdk/python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/pyproject.toml) 中的 `version`。
+1. 每次发布前更新 [openaiglass-sdk/server-python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/pyproject.toml) 中的 `version`。
 2. 修改公开 API 时，同步更新 [SDK开发者快速开始.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md)。
 3. 修改系统协议或运行时契约时，同步更新 `testdata/contracts` 和契约测试。
 4. 发布前保留 `logs/sdk-preflight-release.json` 作为验收记录，但 `logs/` 不提交到 git。

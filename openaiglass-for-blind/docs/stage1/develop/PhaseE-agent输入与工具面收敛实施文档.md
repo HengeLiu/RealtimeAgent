@@ -173,7 +173,7 @@ cd /home/liuh/dev/OpenAIglassesDemo_2
 AGENT_MODEL_NAME=qwen3.6-plus \
 VOICE_MODEL_NAME=qwen3.5-omni-plus \
 LOG_LEVEL=DEBUG LOG_FILE=logs/server.log \
-PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 眼镜端：
@@ -206,7 +206,7 @@ PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
 已执行：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_settings \
   server.test.unit.test_agent_core \
   server.test.integration.test_agent_phase_e_flow \

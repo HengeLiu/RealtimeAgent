@@ -25,7 +25,7 @@ bash script/run_tests.sh
 若只验证 Phase E 相关能力层：
 
 ```bash
-PYTHONPATH=server/src python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python python -m unittest \
   server.test.unit.test_agent_core \
   server.test.integration.test_agent_phase_e_flow -v
 ```
@@ -46,7 +46,7 @@ export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export LOG_FILE="logs/server.log"
 export AGENT_MODEL_NAME="qwen3.6-plus"
 export VOICE_MODEL_NAME="qwen3.5-omni-plus"
-PYTHONPATH=server/src python -m app.main --host 0.0.0.0 --port 8765
+PYTHONPATH=openaiglass-sdk/server-python python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 说明：

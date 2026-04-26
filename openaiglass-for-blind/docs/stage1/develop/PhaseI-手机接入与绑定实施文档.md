@@ -29,7 +29,7 @@
 2. 注册成功后，服务端会记录 `device_id -> ControlConnection`，并自动为设备打开语音会话。
 3. `device_type` 字段已经存在于协议模型中，但服务端行为仍默认围绕眼镜设备设计。
 4. 眼镜端已实现真实注册链路。
-5. 手机端当前只有 [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 这个待机入口，还没有真实接入逻辑。
+5. 手机端当前只有 [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 这个待机入口，还没有真实接入逻辑。
 
 主要缺口如下：
 
@@ -58,7 +58,7 @@
 
 ### 3.2 服务端改造
 
-本阶段服务端主要改造 [server/src/api/ws/control_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/api/ws/control_runtime.py)。
+本阶段服务端主要改造 [openaiglass-sdk/server-python/api/ws/control_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/api/ws/control_runtime.py)。
 
 关键变更如下：
 
@@ -83,16 +83,16 @@
 
 ### 3.3 手机端改造
 
-本阶段最初使用 [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 作为最小控制面客户端完成服务端联调；在后续阶段中，正式手机实现已切换为 iOS 原生应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/ios/GlassesVideoReceiver.xcodeproj)。
+本阶段最初使用 [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 作为最小控制面客户端完成服务端联调；在后续阶段中，正式手机实现已切换为 iOS 原生应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj)。
 
 当前手机端关键变更如下：
 
-1. iOS 应用启动后自动读取 [AppConfig.plist](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/ios/GlassesVideoReceiver/AppConfig.plist) 中的服务端控制地址、手机设备编号、配对令牌和目标眼镜编号。
+1. iOS 应用启动后自动读取 [AppConfig.plist](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist) 中的服务端控制地址、手机设备编号、配对令牌和目标眼镜编号。
 2. iOS 应用前台运行时自动建立控制 WebSocket，并发送 `device.register(device_type=phone)`。
 3. 手机注册成功后自动进入心跳循环，并在页面上实时显示注册状态。
 4. 手机会通过 `desired_glass_device_id` 告诉服务端自己要绑定的眼镜，支持“手机先启动、眼镜后启动”和“眼镜先启动、手机后启动”两种自动绑定路径。
 5. 如果服务端短暂不可用或注册失败，iOS 应用会每隔数秒自动重试，并在页面上显示重试状态和下一次重试时间。
-6. [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 当前只保留为桌面协议调试工具，不再作为手机端正式交付物。
+6. [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 当前只保留为桌面协议调试工具，不再作为手机端正式交付物。
 
 ### 3.4 绑定消息模型
 
@@ -223,11 +223,11 @@ S --> P : device.binded
 本阶段联调建议如下：
 
 1. 启动服务端
-   - `PYTHONPATH=server/src uv run --python 3.11 python -m app.main`
+   - `PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m app.main`
 2. 启动眼镜端
    - 继续沿用当前 `script/run_glass.sh`
 3. 启动手机端
-   - `uv run --python 3.11 python phone/src/main.py --host 127.0.0.1 --port 8765 --device-id phone-001 --pair-token pair-phone-token`
+   - `uv run --python 3.11 python openaiglass-for-blind/host/phone/src/main.py --host 127.0.0.1 --port 8765 --device-id phone-001 --pair-token pair-phone-token`
 4. 在当前真实主流程中，优先使用 iOS 应用完成自动注册与自动绑定；保留 `device.bind` 作为调试兜底入口
 
 联调观察点：
@@ -261,7 +261,7 @@ S --> P : device.binded
 已执行命令：
 
 ```bash
-PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m unittest \
   server.test.integration.test_control_register_flow -v
 ```
 
@@ -293,7 +293,7 @@ PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
    - `phone` 仅进入在线待机态
 3. 服务端已支持最小 `device.bind / device.binded` 控制语义。
 4. 服务端运行态快照已增加设备类型与绑定关系。
-5. iOS 应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/ios/GlassesVideoReceiver.xcodeproj) 已承接手机正式接入能力，可完成注册、心跳、自动绑定和状态展示。
+5. iOS 应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj) 已承接手机正式接入能力，可完成注册、心跳、自动绑定和状态展示。
 6. 手机端前台运行时已支持注册失败自动重试与状态可视化。
 7. 当前本地服务端地址、手机端地址和眼镜端地址均已抽到独立配置文件，便于局域网切换。
 

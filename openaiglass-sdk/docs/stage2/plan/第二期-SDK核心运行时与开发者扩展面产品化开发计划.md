@@ -26,11 +26,11 @@
 
 第二期启动时，仓库已经具备以下基础：
 
-1. 原 `server/src/agent_core` 中已经有 `BaseTool` 和工具注册表，最终已迁入 `sdk/python/agent_core`。
-2. 原 `server/src/backend_task_core` 中已经有 `TaskSpec / TaskRuntime / TaskEvent / TaskGateway`，最终已迁入 `sdk/python/backend_task_core`。
-3. 原 `server/src/api/ws/control_runtime.py` 中已经支持眼镜和手机注册、绑定、运行态查询、视频链路启动和停止，最终已由 `sdk/python/api/ws/control_runtime.py` 承载。
-4. 原 `server/src/runtime/voice_runtime.py` 已经承担语音会话、模型调用、回复播报和通知播放，最终已由 `sdk/python/runtime/voice_runtime.py` 承载。
-5. `phone/ios` 已经有手机视频接收、回显、注册和通用手机任务承载能力；找物体业务闭环已迁入官方 `example`。
+1. 原 `openaiglass-sdk/server-python/agent_core` 中已经有 `BaseTool` 和工具注册表，最终已迁入 `openaiglass-sdk/server-python/agent_core`。
+2. 原 `openaiglass-sdk/server-python/backend_task_core` 中已经有 `TaskSpec / TaskRuntime / TaskEvent / TaskGateway`，最终已迁入 `openaiglass-sdk/server-python/backend_task_core`。
+3. 原 `openaiglass-sdk/server-python/api/ws/control_runtime.py` 中已经支持眼镜和手机注册、绑定、运行态查询、视频链路启动和停止，最终已由 `openaiglass-sdk/server-python/api/ws/control_runtime.py` 承载。
+4. 原 `openaiglass-sdk/server-python/runtime/voice_runtime.py` 已经承担语音会话、模型调用、回复播报和通知播放，最终已由 `openaiglass-sdk/server-python/runtime/voice_runtime.py` 承载。
+5. `openaiglass-sdk/phone-ios` 已经有手机视频接收、回显、注册和通用手机任务承载能力；找物体业务闭环已迁入官方 `openaiglass-for-blind`。
 6. `PhaseK` 已经证明 `find_object_task` 可以作为首个三端视觉样板能力。
 
 当前主要缺口：
@@ -40,13 +40,13 @@
 3. 当前 `AgentToolContext` 更像系统内部上下文，不是面向 SDK 开发者的高层 `DeviceGroupContext`。
 4. `BaseTask` 还没有作为开发者可继承的稳定抽象。
 5. 手机侧扩展面还没有产品化，当前手机代码仍偏具体 App 实现。
-6. 当前业务能力和 SDK 框架边界不够清楚，后续若继续把能力写进 `server/src`，会导致 SDK 难以开源复用。
+6. 当前业务能力和 SDK 框架边界不够清楚，后续若继续把能力写进 `openaiglass-sdk/server-python`，会导致 SDK 难以开源复用。
 
 结论：
 
 1. 第二期最重要的不是补更多业务功能，而是完成 SDK 框架层和业务扩展层的隔离。
-2. `find_object_task` 应从“项目内置能力”调整为唯一官方 `example` 中的业务实现，用于反向验证 SDK 是否足够高层。
-3. 只有当 `example` 中的业务代码不再处理设备绑定、WebSocket、媒体链路和任务回流，SDK 形态才算初步成立。
+2. `find_object_task` 应从“项目内置能力”调整为唯一官方 `openaiglass-for-blind` 中的业务实现，用于反向验证 SDK 是否足够高层。
+3. 只有当 `openaiglass-for-blind` 中的业务代码不再处理设备绑定、WebSocket、媒体链路和任务回流，SDK 形态才算初步成立。
 
 ## 3. 第二期阶段划分
 
@@ -58,10 +58,10 @@
 
 | 阶段 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Phase A：目录边界与 SDK 包骨架 | 已完成 | `sdk/python/openaiglasses` 包骨架、`example/` 官方案例目录、`server/main.py` 启动入口均已落地，依赖方向保持为 `example -> sdk`。 |
+| Phase A：目录边界与 SDK 包骨架 | 已完成 | `openaiglass-sdk/server-python/openaiglasses` 包骨架、`openaiglass-for-blind/` 官方案例目录、`server/main.py` 启动入口均已落地，依赖方向保持为 `openaiglass-for-blind -> sdk`。 |
 | Phase B：DeviceGroupRuntime 与 DeviceGroupContext | 已完成 | `DeviceGroupRuntime` 与 `DeviceGroupContext` 已实现，抓拍、查询设备、启动手机视频链路、通知提交、任务创建等高层接口已经具备。 |
 | Phase C：服务器侧与手机侧扩展面 | 主体完成，进入收口 | `BaseTool / BaseTask / TaskContext`、`BasePhoneProcessor / BasePhoneTask / BaseSensorProvider`、能力注册表、`OpenAIGlassesSDK` 主入口、真实服务端装配能力均已落地，当时根目录系统编排与 SDK 集成层的边界仍需继续收紧。 |
-| Phase D：find_object 官方 example 与回放测试最小闭环 | 最小闭环完成，等待最终 SDK 化验收 | `capabilities/find_object` 的服务端 Tool/Task、手机端 Processor/PhoneTask 已落地，`ScenarioRunner` 与相关单元测试已可以验证最小闭环；当时已从写死首个样板能力改为能力处理器分发机制，但整体开发者体验仍需要继续收口。 |
+| Phase D：find_object 官方 openaiglass-for-blind 与回放测试最小闭环 | 最小闭环完成，等待最终 SDK 化验收 | `capabilities/find_object` 的服务端 Tool/Task、手机端 Processor/PhoneTask 已落地，`ScenarioRunner` 与相关单元测试已可以验证最小闭环；当时已从写死首个样板能力改为能力处理器分发机制，但整体开发者体验仍需要继续收口。 |
 
 当时整体判断：
 
@@ -91,29 +91,29 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 
 围绕“根目录只保留 SDK运行时 与系统运行时代码”这一目标，当前已经完成：
 
-1. `server/src` 已移除 `start_find_object` 内建 Tool、`find_object_task` 内建任务模板，以及 `/api/debug/find-object/start`、`/api/vision/find-object/report` 这类找物体专用服务端入口。
+1. `openaiglass-sdk/server-python` 已移除 `start_find_object` 内建 Tool、`find_object_task` 内建任务模板，以及 `/api/debug/find-object/start`、`/api/vision/find-object/report` 这类找物体专用服务端入口。
 2. 手机端示例能力已改为通过 SDK 高层接口 `start_phone_task()` / `stop_phone_task()` 和通用事件上报接口 `/api/tasks/report-event` 与服务端协作，不再依赖根目录中的找物体专用协议分支。
-3. `phone/ios` 根目录运行时代码已经抽成通用 `PhoneTaskCapabilityRuntime` SDK运行时；`find_object` 的业务检测与上报逻辑位于 `capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift`。
-4. `phone/ios` 中与 `find_object` 直接耦合的业务测试已迁到 `capabilities/find_object/phone/ios/FindObjectPhoneCapabilityTests.swift`，根目录测试只保留 SDK运行时 通用行为验证。
-5. `server/src` 已移除 `timer_manage / create_timer / map_manage` 这类历史高层业务能力；根服务端默认只保留系统级硬件原语 `capture_photo` 和后台任务管理内部支撑。
+3. `openaiglass-sdk/phone-ios` 根目录运行时代码已经抽成通用 `PhoneTaskCapabilityRuntime` SDK运行时；`find_object` 的业务检测与上报逻辑位于 `capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift`。
+4. `openaiglass-sdk/phone-ios` 中与 `find_object` 直接耦合的业务测试已迁到 `capabilities/find_object/phone/ios/FindObjectPhoneCapabilityTests.swift`，根目录测试只保留 SDK运行时 通用行为验证。
+5. `openaiglass-sdk/server-python` 已移除 `timer_manage / create_timer / map_manage` 这类历史高层业务能力；根服务端默认只保留系统级硬件原语 `capture_photo` 和后台任务管理内部支撑。
 6. 根服务端默认 MCP 注册表不再内置 `AmapMcpAdapter`，外部业务项目需要通过 SDK 装配入口注册自己的 MCP adapter。
-7. 根 `phone/ios` 已不再直接调用 `makePhoneCapabilityRuntime()` 这类官方样板函数，改为通过 `PhoneCapabilityRuntimeFactory` 与 `PhoneCapabilityBootstrap` 做通用装配。
+7. 根 `openaiglass-sdk/phone-ios` 已不再直接调用 `makePhoneCapabilityRuntime()` 这类官方样板函数，改为通过 `PhoneCapabilityRuntimeFactory` 与 `PhoneCapabilityBootstrap` 做通用装配。
 
 按 2026-04-25 重新校准后的边界判断：
 
-1. 根目录 `server/src` 已基本不再承载 `find_object` 这类业务能力，但系统编排仍有一部分没有完全收进 SDK 集成层。
-2. 根目录 `phone/ios` 已以 SDK运行时 为主，`find_object` 业务实现已迁到 `capabilities/find_object/phone/ios`，但 SDK运行时 无关化仍需继续验证。
+1. 根目录 `openaiglass-sdk/server-python` 已基本不再承载 `find_object` 这类业务能力，但系统编排仍有一部分没有完全收进 SDK 集成层。
+2. 根目录 `openaiglass-sdk/phone-ios` 已以 SDK运行时 为主，`find_object` 业务实现已迁到 `capabilities/find_object/phone/ios`，但 SDK运行时 无关化仍需继续验证。
    - 当前已经去掉根页面对官方样板运行时工厂的直接调用，改为通用工厂装配。
 3. 根目录 `glass` 未发现 `find_object / timer / map / navigation` 等明确业务实现，但仍存在少量带业务假设的注释和默认行为描述，需要继续清理。
 4. 官方业务样例已集中在 `capabilities/find_object` 和 `capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift`，这一方向正确。
 
-### 3.0.2.2 `server/src` 迁移进展（2026-04-25）
+### 3.0.2.2 `openaiglass-sdk/server-python` 迁移进展（2026-04-25）
 
 按“`server/` 只保留薄 SDK运行时，开发者不需要关心的系统实现全部进入 SDK”这一要求，当前已执行以下迁移动作：
 
-1. 先对原 `server/src` 完整实现做了目录级备份：
+1. 先对原 `openaiglass-sdk/server-python` 完整实现做了目录级备份：
    - [backup/server_src_20260425_195102](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/backup/server_src_20260425_195102)
-2. 已将以下顶层系统包整体迁入 `sdk/python`：
+2. 已将以下顶层系统包整体迁入 `openaiglass-sdk/server-python`：
    - `agent_core`
    - `api`
    - `app`
@@ -122,38 +122,38 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
    - `infra`
    - `protocol`
    - `runtime`
-3. 当前根目录 [server/src](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src) 仅保留薄壳桥接层：
-   - [server/src/_sdk_bridge.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/_sdk_bridge.py:1)
+3. 当前根目录 [openaiglass-sdk/server-python](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python) 仅保留薄壳桥接层：
+   - [openaiglass-sdk/server-python/_sdk_bridge.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/_sdk_bridge.py:1)
    - 各顶层包的 `__init__.py` 兼容导入壳
-4. 旧导入路径仍然可用，但真实实现已经从 `sdk/python` 目录加载。
-5. `ScenarioRunner` 已从直接写死 `find_object` 执行分支，调整为能力处理器分发机制；当前 `find_object` 的场景处理器已注册到 `example/`，SDK 回放层只保留通用框架。
-6. 根 `phone/ios` SDK运行时已从直接依赖官方样板能力工厂，调整为通用工厂与启动器模式，减少 SDK运行时 对 `find_object` 的默认认知。
+4. 旧导入路径仍然可用，但真实实现已经从 `openaiglass-sdk/server-python` 目录加载。
+5. `ScenarioRunner` 已从直接写死 `find_object` 执行分支，调整为能力处理器分发机制；当前 `find_object` 的场景处理器已注册到 `openaiglass-for-blind/`，SDK 回放层只保留通用框架。
+6. 根 `openaiglass-sdk/phone-ios` SDK运行时已从直接依赖官方样板能力工厂，调整为通用工厂与启动器模式，减少 SDK运行时 对 `find_object` 的默认认知。
 
 这一步的意义是：
 
-1. 先从目录物理形态上打破“SDK 包一层、真实实现还在 `server/src`”的过渡状态。
+1. 先从目录物理形态上打破“SDK 包一层、真实实现还在 `openaiglass-sdk/server-python`”的过渡状态。
 2. 让后续继续清理系统边界时，不必再一边改逻辑、一边和旧目录事实冲突。
-3. 把 `server/src` 明确降级为兼容壳，而不再视为主要实现目录。
+3. 把 `openaiglass-sdk/server-python` 明确降级为兼容壳，而不再视为主要实现目录。
 
 ### 3.0.2.1 按当前验收要求的过渡状态（2026-04-25，已被 3.0.4 覆盖）
 
 本期重新按以下三条硬要求判断：
 
 1. 所有系统细节都隐藏在 SDK 中。
-2. `example` 中只保留开发者需要关注的基类业务实现。
-3. 根目录 `server / glass / phone` 下不再含有业务代码，全部迁移到 `example` 或 `sdk` 中。
+2. `openaiglass-for-blind` 中只保留开发者需要关注的基类业务实现。
+3. 根目录 `server / glass / phone` 下不再含有业务代码，全部迁移到 `openaiglass-for-blind` 或 `sdk` 中。
 
 当时结论：
 
 1. **第 1 条待完成**
-   - `server/src` 主体实现已经迁入 SDK，服务端方向前进明显。
+   - `openaiglass-sdk/server-python` 主体实现已经迁入 SDK，服务端方向前进明显。
    - 但 `phone / glass` 的 SDK运行时 与部分兼容壳仍需继续收薄，所以“所有系统细节都隐藏在 SDK 中”当时还处于收口中。
 2. **第 2 条部分达到**
    - `find_object` 样例已经基本按 `Tool / Task / PhoneTask / PhoneProcessor` 组织。
-   - 当前测试回放层已经改成能力处理器分发机制，且 `find_object` 场景处理器已迁入 `example/`；手机 SDK运行时 也已改成通用工厂装配，不再把首个官方样板直接写死在总流程分发或页面创建里；但开发者体验还需要更多样板能力和 SDK运行时 文档来验证。
+   - 当前测试回放层已经改成能力处理器分发机制，且 `find_object` 场景处理器已迁入 `openaiglass-for-blind/`；手机 SDK运行时 也已改成通用工厂装配，不再把首个官方样板直接写死在总流程分发或页面创建里；但开发者体验还需要更多样板能力和 SDK运行时 文档来验证。
 3. **第 3 条大体接近，进入最后收口**
    - 明显业务能力大多已经迁出根目录。
-   - 但根目录 `phone / glass` 的 SDK运行时 与 SDK 的系统边界当时还没有最终收紧，因此仍需继续推进到“根目录只剩 SDK运行时、业务都在 example/sdk”的验收状态。
+   - 但根目录 `phone / glass` 的 SDK运行时 与 SDK 的系统边界当时还没有最终收紧，因此仍需继续推进到“根目录只剩 SDK运行时、业务都在 openaiglass-for-blind/sdk”的验收状态。
 
 ### 3.0.3 第二期剩余收口项判断（2026-04-25）
 
@@ -177,9 +177,9 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 
 | 验收要求 | 当前状态 | 代码与测试证据 |
 | --- | --- | --- |
-| 所有系统细节隐藏在 SDK 中 | 已达到第二期验收口径 | 服务端主体实现已迁入 `sdk/python`；`server/src` 只保留兼容桥接；`DeviceGroupContext`、`TaskContext`、`PhoneRuntime` 承担开发者扩展面。 |
-| `example` 中只有开发者关注的基类业务实现 | 已达到第二期验收口径 | 官方业务能力集中在 `capabilities/find_object` 和 `capabilities/find_object/phone/ios`；`ScenarioRunner` 通过能力处理器注册，不再内建样板能力。 |
-| 根目录 `server / glass / phone` 不再含业务代码 | 已达到第二期验收口径 | `script/run_sdk_preflight.py` 新增 `sdk_boundary` 检查，扫描根运行时和 Xcode 工程文件，拦截 `find_object / timer_manage / map_manage / Amap / navigation_task` 等业务词汇以及对 `example` 的反向依赖。 |
+| 所有系统细节隐藏在 SDK 中 | 已达到第二期验收口径 | 服务端主体实现已迁入 `openaiglass-sdk/server-python`；`openaiglass-sdk/server-python` 只保留兼容桥接；`DeviceGroupContext`、`TaskContext`、`PhoneRuntime` 承担开发者扩展面。 |
+| `openaiglass-for-blind` 中只有开发者关注的基类业务实现 | 已达到第二期验收口径 | 官方业务能力集中在 `capabilities/find_object` 和 `capabilities/find_object/phone/ios`；`ScenarioRunner` 通过能力处理器注册，不再内建样板能力。 |
+| 根目录 `server / glass / phone` 不再含业务代码 | 已达到第二期验收口径 | `script/run_sdk_preflight.py` 新增 `sdk_boundary` 检查，扫描根运行时和 Xcode 工程文件，拦截 `find_object / timer_manage / map_manage / Amap / navigation_task` 等业务词汇以及对 `openaiglass-for-blind` 的反向依赖。 |
 | 公共契约有测试保护 | 已达到第二期验收口径 | `server/test/contracts` 与 `testdata/contracts` 已纳入 `run_sdk_preflight`。 |
 | 官方样例可离线验收 | 已达到第二期验收口径 | `testdata/scenario` 的 5 个场景回放和 `testdata/compat/find_object_scenarios.json` 兼容性回归已纳入预检。 |
 
@@ -196,18 +196,18 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 
 目标：
 
-1. 建立 `sdk/python/openaiglasses` 包骨架。
-2. 建立唯一官方 `example` 目录。
-3. 在 `example` 中同时放置三端可运行入口和业务能力实现。
-4. 明确 SDK 与 `example` 的依赖方向。
+1. 建立 `openaiglass-sdk/server-python/openaiglasses` 包骨架。
+2. 建立唯一官方 `openaiglass-for-blind` 目录。
+3. 在 `openaiglass-for-blind` 中同时放置三端可运行入口和业务能力实现。
+4. 明确 SDK 与 `openaiglass-for-blind` 的依赖方向。
 5. 保留现有 `server/phone/glass` 目录可运行。
 
 验收标准：
 
-1. `example` 中的业务代码可以通过 import 使用 SDK。
-2. `example` 中的服务端可以通过 Python SDK 启动对应运行时。
-3. `example` 中的手机端和眼镜端可以通过脚本或对应平台开发工具启动，并接入 SDK 定义的协议与设备组运行时。
-4. SDK 包不反向 import `example`。
+1. `openaiglass-for-blind` 中的业务代码可以通过 import 使用 SDK。
+2. `openaiglass-for-blind` 中的服务端可以通过 Python SDK 启动对应运行时。
+3. `openaiglass-for-blind` 中的手机端和眼镜端可以通过脚本或对应平台开发工具启动，并接入 SDK 定义的协议与设备组运行时。
+4. SDK 包不反向 import `openaiglass-for-blind`。
 5. 现有自动化测试不因目录调整失效。
 
 ### 3.2 第二期 Phase B：DeviceGroupRuntime 与 DeviceGroupContext
@@ -240,20 +240,20 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 2. 开发者可以实现并注册一个自定义 `BasePhoneProcessor`。
 3. 注册能力后，运行时可以查询并调度该能力。
 
-### 3.4 第二期 Phase D：find_object 官方 example 与回放测试最小闭环
+### 3.4 第二期 Phase D：find_object 官方 openaiglass-for-blind 与回放测试最小闭环
 
 目标：
 
 1. 将当前 `find_object_task` 迁移为 `capabilities/find_object`。
 2. 建立 `MockGlassRuntime / MockPhoneRuntime` 最小版本。
 3. 建立 `ScenarioRunner` 最小版本。
-4. 用样例回放验证唯一官方 `example` 可以完成三端闭环。
+4. 用样例回放验证唯一官方 `openaiglass-for-blind` 可以完成三端闭环。
 
 验收标准：
 
-1. `example` 中的 `find_object` 业务实现不直接处理设备绑定、WebSocket 和媒体协议。
+1. `openaiglass-for-blind` 中的 `find_object` 业务实现不直接处理设备绑定、WebSocket 和媒体协议。
 2. Mock 场景可以驱动任务进入 `completed`。
-3. 真机联调入口仍可使用同一个 `example` 能力。
+3. 真机联调入口仍可使用同一个 `openaiglass-for-blind` 能力。
 
 ### 3.5 第二期后半程收口方向
 
@@ -280,9 +280,9 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 项目目录应区分两类代码：
 
 1. SDK 框架代码：面向开源社区复用，提供运行时、协议、上下文和扩展基类。
-2. `example` 案例代码：模拟外部开发者项目，包含实际业务能力实现，也包含服务端、手机端、眼镜端三个可运行入口。服务端通过 import 使用 Python SDK，手机端和眼镜端使用各自平台代码接入 SDK 协议。
+2. `openaiglass-for-blind` 案例代码：模拟外部开发者项目，包含实际业务能力实现，也包含服务端、手机端、眼镜端三个可运行入口。服务端通过 import 使用 Python SDK，手机端和眼镜端使用各自平台代码接入 SDK 协议。
 
-开发者新增业务能力时，不应该修改 SDK 框架代码，而应该参考 `example/` 的结构，在自己的项目中实现 `BaseTool / BaseTask / BasePhoneProcessor` 子类。
+开发者新增业务能力时，不应该修改 SDK 框架代码，而应该参考 `openaiglass-for-blind/` 的结构，在自己的项目中实现 `BaseTool / BaseTask / BasePhoneProcessor` 子类。
 
 ### 4.2 推荐目录结构
 
@@ -316,7 +316,7 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 │   │   └── README.md
 │   └── glass/
 │       └── README.md
-├── example/
+├── openaiglass-for-blind/
 │   ├── README.md
 │   ├── config/
 │   ├── server/
@@ -356,32 +356,32 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 
 建议采用三步迁移：
 
-1. 第一阶段：先新增 `sdk/python/openaiglasses` 和 `example`，保留旧目录可运行。
-2. 第二阶段：把框架稳定抽象从 `server/src` 复制或迁移到 `sdk/python/openaiglasses`，旧代码通过兼容导入继续工作。
+1. 第一阶段：先新增 `openaiglass-sdk/server-python/openaiglasses` 和 `openaiglass-for-blind`，保留旧目录可运行。
+2. 第二阶段：把框架稳定抽象从 `openaiglass-sdk/server-python` 复制或迁移到 `openaiglass-sdk/server-python/openaiglasses`，旧代码通过兼容导入继续工作。
 3. 第三阶段：把 `server`、`phone`、`glass` 作为本仓库官方可运行案例，SDK 框架代码只保留在 `sdk/` 下。
 
 第二期只要求完成第一阶段和关键抽象迁移，不要求完全删除旧路径。
 
-### 4.4 SDK 与 example 的依赖方向
+### 4.4 SDK 与 openaiglass-for-blind 的依赖方向
 
 依赖方向必须固定为：
 
 ```text
-example -> sdk
-sdk -> 不依赖 example
+openaiglass-for-blind -> sdk
+sdk -> 不依赖 openaiglass-for-blind
 ```
 
 禁止出现：
 
 ```text
-sdk -> example
+sdk -> openaiglass-for-blind
 ```
 
 原因：
 
 1. SDK 必须可以独立发布。
-2. `example` 只是 SDK 使用案例，不应成为框架运行时依赖。
-3. `example` 同时提供三端启动入口和业务能力实现，用于模拟真实开发者项目如何集成 SDK。
+2. `openaiglass-for-blind` 只是 SDK 使用案例，不应成为框架运行时依赖。
+3. `openaiglass-for-blind` 同时提供三端启动入口和业务能力实现，用于模拟真实开发者项目如何集成 SDK。
 
 ### 4.5 手机端与眼镜端代码放置原则
 
@@ -389,15 +389,15 @@ sdk -> example
 
 建议放置方式：
 
-1. `capabilities/find_object/phone/ios`：放 iOS 原生工程，例如当前 `phone/ios` 中的手机端实现。
-2. `phone/ios/GlassesVideoReceiver.xcodeproj`：放手机端示例启动脚本，可调用 `xcodebuild`、XcodeBuildMCP 或其他平台工具。
-3. `glass/esp32`：放 ESP32 / ESP-IDF / Arduino 工程，例如当前 `glass/src` 中的眼镜端实现。
+1. `capabilities/find_object/phone/ios`：放 iOS 原生工程，例如当前 `openaiglass-sdk/phone-ios` 中的手机端实现。
+2. `openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj`：放手机端示例启动脚本，可调用 `xcodebuild`、XcodeBuildMCP 或其他平台工具。
+3. `glass/esp32`：放 ESP32 / ESP-IDF / Arduino 工程，例如当前 `openaiglass-sdk/glass-esp32` 中的眼镜端实现。
 4. `scripts/run_glass.sh`：放眼镜端示例构建、烧录或串口启动脚本，可调用 `idf.py`、Arduino CLI 或其他端侧工具。
 5. `server/main.py`：放服务端 Python 示例入口，通过 Python SDK 装配运行时和业务能力。
 
 职责边界：
 
-1. `sdk/python/openaiglasses` 提供服务端 SDK、协议对象、运行时抽象、测试工具和跨端契约。
+1. `openaiglass-sdk/server-python/openaiglasses` 提供服务端 SDK、协议对象、运行时抽象、测试工具和跨端契约。
 2. `phone` 提供手机侧实际工程代码，负责接入 SDK 协议、注册手机设备、运行本地处理器、接收媒体流。
 3. `glass` 提供眼镜侧实际工程代码，负责接入 SDK 协议、采集传感器、推送媒体帧、执行音频和震动反馈。
 4. SDK 不直接 import 手机或眼镜工程代码，手机和眼镜工程也不需要 import Python SDK。
@@ -502,7 +502,7 @@ class DescribeCurrentSceneTool(BaseTool):
         return CapabilityResult.success(summary=summary, asset_refs=[photo])
 ```
 
-这段 example 不应出现设备绑定、WebSocket、HTTP 路由或控制消息拼装。
+这段 openaiglass-for-blind 不应出现设备绑定、WebSocket、HTTP 路由或控制消息拼装。
 
 ### 5.4 `BaseTask`
 
@@ -649,25 +649,25 @@ class YoloFindObjectProcessor(BasePhoneProcessor):
         context.emit_result(result)
 ```
 
-## 6. example 设计
+## 6. openaiglass-for-blind 设计
 
-### 6.1 example 的定位
+### 6.1 openaiglass-for-blind 的定位
 
-`example/` 目录不是临时测试代码，而是 SDK 开源后的唯一官方参考案例。
+`openaiglass-for-blind/` 目录不是临时测试代码，而是 SDK 开源后的唯一官方参考案例。
 
 它应该满足：
 
-1. 整个 `example` 像一个外部开发者项目。
-2. `example` 通过 import 使用 SDK。
-3. `example` 尽量少依赖仓库内部路径。
-4. `example` 有 README，说明业务目标、三端启动方式和测试方式。
-5. `example` 有可回放 scenario，降低真机依赖。
-6. `example` 中包含服务端 Python 入口、手机端脚本和眼镜端脚本。
-7. `example` 中包含实际业务能力实现，例如 `find_object` 的 Tool、Task 和 PhoneProcessor。
+1. 整个 `openaiglass-for-blind` 像一个外部开发者项目。
+2. `openaiglass-for-blind` 通过 import 使用 SDK。
+3. `openaiglass-for-blind` 尽量少依赖仓库内部路径。
+4. `openaiglass-for-blind` 有 README，说明业务目标、三端启动方式和测试方式。
+5. `openaiglass-for-blind` 有可回放 scenario，降低真机依赖。
+6. `openaiglass-for-blind` 中包含服务端 Python 入口、手机端脚本和眼镜端脚本。
+7. `openaiglass-for-blind` 中包含实际业务能力实现，例如 `find_object` 的 Tool、Task 和 PhoneProcessor。
 
 ### 6.2 唯一官方案例
 
-第二期只提供一个官方案例：`example/`。该目录本身就是完整案例，不再额外拆出多个样例目录。
+第二期只提供一个官方案例：`openaiglass-for-blind/`。该目录本身就是完整案例，不再额外拆出多个样例目录。
 
 该案例必须同时验证：
 
@@ -677,9 +677,9 @@ class YoloFindObjectProcessor(BasePhoneProcessor):
 4. 业务能力代码放在 `capabilities/find_object` 下。
 5. 业务能力通过 SDK 注册，不直接接触系统底层连接。
 
-### 6.3 example 不应承担的职责
+### 6.3 openaiglass-for-blind 不应承担的职责
 
-`example` 中的业务能力实现禁止直接处理：
+`openaiglass-for-blind` 中的业务能力实现禁止直接处理：
 
 1. 设备注册。
 2. 设备绑定。
@@ -692,7 +692,7 @@ class YoloFindObjectProcessor(BasePhoneProcessor):
 说明：
 
 1. `server/main.py` 可以作为服务端 Python 入口调用 SDK 启动运行时。
-2. `phone/ios/GlassesVideoReceiver.xcodeproj` 可以作为手机端启动入口，调用 iOS 或其他手机平台开发工具启动原生工程。
+2. `openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj` 可以作为手机端启动入口，调用 iOS 或其他手机平台开发工具启动原生工程。
 3. `scripts/run_glass.sh` 可以作为眼镜端启动入口，调用 ESP-IDF、Arduino CLI 或其他端侧工具构建、烧录和运行。
 4. `capabilities` 下的业务代码不应处理上述系统职责。
 5. 如果业务能力实现需要写这些逻辑，说明 SDK 抽象仍不合格。
@@ -705,8 +705,8 @@ class YoloFindObjectProcessor(BasePhoneProcessor):
 
 实施顺序：
 
-1. 新增 `sdk/python/openaiglasses` 包骨架。
-2. 新增 `example` 目录和 README。
+1. 新增 `openaiglass-sdk/server-python/openaiglasses` 包骨架。
+2. 新增 `openaiglass-for-blind` 目录和 README。
 3. 在 SDK 中定义 `DeviceGroupRuntime / DeviceGroupContext`。
 4. 将当前 `ControlRuntime` 中的设备组能力逐步委托给 `DeviceGroupRuntime`。
 5. 在 SDK 中定义 `BaseTask / TaskContext`，并适配现有 `TaskGateway`。
@@ -723,14 +723,14 @@ class YoloFindObjectProcessor(BasePhoneProcessor):
 
 兼容原则：
 
-1. 旧的 `server/src` 仍可启动。
+1. 旧的 `openaiglass-sdk/server-python` 仍可启动。
 2. 旧的测试应继续通过。
 3. 新 SDK 包先通过适配层调用旧运行时能力。
 4. 等 `DeviceGroupRuntime` 稳定后，再逐步反向让旧代码依赖 SDK。
 
 ### 7.3 import 方式
 
-`example` 中的业务代码应采用类似方式：
+`openaiglass-for-blind` 中的业务代码应采用类似方式：
 
 ```python
 from openaiglasses import BaseTask, BaseTool
@@ -764,19 +764,19 @@ sdk.run()
 
 ```plantuml
 @startuml
-title 第二期 SDK 与 example 依赖关系
+title 第二期 SDK 与 openaiglass-for-blind 依赖关系
 
 skinparam shadowing false
 skinparam defaultFontName Microsoft YaHei
 
-package "sdk/python/openaiglasses" as SDK {
+package "openaiglass-sdk/server-python/openaiglasses" as SDK {
   rectangle "协议对象\nControlMessage / MediaFrame" as PROTOCOL
   rectangle "运行时\nDeviceGroupRuntime\nTaskRuntime\nNotificationCoordinator" as RUNTIME
   rectangle "扩展基类\nBaseTool\nBaseTask\nBasePhoneProcessor" as BASE
   rectangle "测试工具\nScenarioRunner\nMockGlass\nMockPhone" as TESTING
 }
 
-package "example" as EXAMPLE {
+package "openaiglass-for-blind" as EXAMPLE {
   rectangle "server/main.py\n服务端启动入口" as SERVER_APP
   rectangle "phone/run.sh + ios\n手机端工程与启动脚本" as PHONE_APP
   rectangle "glass/run.sh + esp32\n眼镜端工程与启动脚本" as GLASS_APP
@@ -800,10 +800,10 @@ SDK --> TESTING
 
 ```plantuml
 @startuml
-title example 基于 SDK 协议启动三端与 find_object
+title openaiglass-for-blind 基于 SDK 协议启动三端与 find_object
 
 participant "server/main.py" as SERVER
-participant "phone/ios/GlassesVideoReceiver.xcodeproj" as PHONE_APP
+participant "openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj" as PHONE_APP
 participant "scripts/run_glass.sh" as GLASS_APP
 participant "OpenAIGlassesSDK" as SDK
 participant "FindObjectTask(capabilities)" as TASK
@@ -845,9 +845,9 @@ TASK -> SDK : complete()
 测试方法：构造只有眼镜的设备组，调用 `require_phone()`。  
 预期结果：抛出设备组不完整错误，错误信息包含当前 group_id。
 
-3. 测试目标：验证 `example` 不能被 SDK 包反向 import。  
-测试方法：扫描 `sdk/python/openaiglasses` 源码中的 import 语句。  
-预期结果：不存在 `example` 导入。
+3. 测试目标：验证 `openaiglass-for-blind` 不能被 SDK 包反向 import。  
+测试方法：扫描 `openaiglass-sdk/server-python/openaiglasses` 源码中的 import 语句。  
+预期结果：不存在 `openaiglass-for-blind` 导入。
 
 4. 测试目标：验证 `BaseTask` 子类可注册。  
 测试方法：定义测试任务并调用 `OpenAIGlassesSDK.register_task()`。  
@@ -855,7 +855,7 @@ TASK -> SDK : complete()
 
 ### 10.2 组件测试
 
-1. 测试目标：验证 `example` 中的 `find_object` 能力可通过 SDK 注册。  
+1. 测试目标：验证 `openaiglass-for-blind` 中的 `find_object` 能力可通过 SDK 注册。  
 测试方法：加载 `capabilities.find_object` 中的 Task、Tool、PhoneProcessor。  
 预期结果：SDK 注册表包含对应能力。
 
@@ -869,7 +869,7 @@ TASK -> SDK : complete()
 
 ### 10.3 跨端模拟测试
 
-1. 测试目标：验证 `example` 在 MockGlass 和 MockPhone 下完成闭环。  
+1. 测试目标：验证 `openaiglass-for-blind` 在 MockGlass 和 MockPhone 下完成闭环。  
 测试方法：使用 `ScenarioRunner` 加载 `testdata/scenario/find_object_basic.json`。  
 预期结果：任务进入 `completed`，通知列表包含“找到目标”。
 
@@ -885,17 +885,17 @@ TASK -> SDK : complete()
 
 第二期完成后应满足：
 
-1. 仓库中存在 `sdk/python/openaiglasses` 包骨架。
-2. 仓库中存在唯一官方 `example` 目录。
-3. `example` 中包含服务端 Python 入口、手机端原生工程和眼镜端固件工程。
+1. 仓库中存在 `openaiglass-sdk/server-python/openaiglasses` 包骨架。
+2. 仓库中存在唯一官方 `openaiglass-for-blind` 目录。
+3. `openaiglass-for-blind` 中包含服务端 Python 入口、手机端原生工程和眼镜端固件工程。
 4. `capabilities/find_object` 中包含实际业务能力实现。
-5. `example` 通过 import 使用 SDK，不直接依赖 `sdk/python/api/ws/control_runtime.py` 等系统运行时内部实现。
+5. `openaiglass-for-blind` 通过 import 使用 SDK，不直接依赖 `openaiglass-sdk/server-python/api/ws/control_runtime.py` 等系统运行时内部实现。
 6. `DeviceGroupRuntime` 能承接现有设备注册、绑定和组内查询能力。
 7. `DeviceGroupContext` 能为 Tool 和 Task 提供高层设备组能力。
 8. `BaseTask` 和 `TaskContext` 可支持 `find_object_task` 从业务代码中实现。
 9. 手机侧扩展基类至少有接口定义和 Mock 测试。
-10. `example` 可以通过 MockGlass / MockPhone 回放测试完成闭环。
-11. `example` 可以通过 SDK 启动服务端代码，并通过脚本或平台工具启动手机端和眼镜端代码。
+10. `openaiglass-for-blind` 可以通过 MockGlass / MockPhone 回放测试完成闭环。
+11. `openaiglass-for-blind` 可以通过 SDK 启动服务端代码，并通过脚本或平台工具启动手机端和眼镜端代码。
 12. 现有服务器测试继续通过。
 13. 现有真机联调入口不被破坏。
 
@@ -922,10 +922,10 @@ TASK -> SDK : complete()
 处理策略：
 
 1. 首版 API 标记为 experimental。
-2. 用唯一官方 `example` 中的 `find_object` 能力校验接口。
+2. 用唯一官方 `openaiglass-for-blind` 中的 `find_object` 能力校验接口。
 3. 真正对外发布前再冻结字段和命名。
 
-### 12.3 example 与 SDK 边界再次混淆
+### 12.3 openaiglass-for-blind 与 SDK 边界再次混淆
 
 风险：
 
@@ -933,8 +933,8 @@ TASK -> SDK : complete()
 
 处理策略：
 
-1. 增加源码扫描测试，禁止 SDK import `example`。
-2. 在文档中明确 `example` 是外部开发者项目形态的案例代码。
+1. 增加源码扫描测试，禁止 SDK import `openaiglass-for-blind`。
+2. 在文档中明确 `openaiglass-for-blind` 是外部开发者项目形态的案例代码。
 3. 新业务能力如果只是案例实现，应放入 `capabilities`，不能写入 SDK 框架层。
 
 ## 13. 当前方案与架构设计的契合程度
@@ -1069,8 +1069,8 @@ TASK -> SDK : complete()
 
 1. 当前第二期核心运行时、扩展面装配、官方样例接入和关键兼容链路已经具备基本可运行性。
 2. 本轮测试额外证明：根 `backend_task_core` 已不再内建 `phone_video_link_task`，该系统任务已开始转入 SDK 集成层管理。
-3. 本轮测试还证明：`server/src` 旧导入路径在保持兼容的前提下，已经切换为从 `sdk/python` 加载真实实现。
-4. 常用脚本与预检入口已改为默认直接走 `sdk/python`，不再把 `server/src` 作为主导入面。
+3. 本轮测试还证明：`openaiglass-sdk/server-python` 旧导入路径在保持兼容的前提下，已经切换为从 `openaiglass-sdk/server-python` 加载真实实现。
+4. 常用脚本与预检入口已改为默认直接走 `openaiglass-sdk/server-python`，不再把 `openaiglass-sdk/server-python` 作为主导入面。
 5. 但上述结果仍不能证明“系统细节都已收进 SDK”或“开发者体验已经达标”；当前测试更多证明的是边界收口正在推进，而不是第二期已经完成。
 
 ## 16. 当前实现进展
@@ -1079,7 +1079,7 @@ TASK -> SDK : complete()
 
 ### 16.1 已完成内容
 
-1. 已完成 `sdk/python/openaiglasses` 主包骨架建设，并具备对外导出能力。
+1. 已完成 `openaiglass-sdk/server-python/openaiglasses` 主包骨架建设，并具备对外导出能力。
 2. 已完成 `DeviceGroupRuntime` 与 `DeviceGroupContext` 的核心能力落地。
 3. 已完成 `BaseTool / BaseTask / TaskContext` 与能力注册表的主要实现。
 4. 已完成 `BasePhoneProcessor / BasePhoneTask / BaseSensorProvider / PhoneRuntime` 的最小运行时抽象。
@@ -1088,14 +1088,14 @@ TASK -> SDK : complete()
 7. 已完成官方 `capabilities/find_object` 样例，包括服务端 Tool/Task 与手机端 Processor/PhoneTask。
 8. 已完成第二期相关单元测试、集成测试和编译检查，能够验证最小闭环。
 9. 已将 `phone_video_link_task` 从根 `backend_task_core` 内建实现迁出，改为由 SDK 集成层托管，根服务端不再把该系统任务写死在基础任务网关里。
-10. 已将原 `server/src` 主体实现整体迁入 `sdk/python`，当前根 `server/src` 已收缩为兼容旧导入路径的薄壳桥接层。
+10. 已将原 `openaiglass-sdk/server-python` 主体实现整体迁入 `openaiglass-sdk/server-python`，当前根 `openaiglass-sdk/server-python` 已收缩为兼容旧导入路径的薄壳桥接层。
 11. 已将 `ScenarioRunner` 从样板能力写死分支改为能力处理器分发机制，并把 `find_object` 场景处理器迁入 `capabilities/find_object/scenario.py`；SDK 回放层不再默认回退到 `find_object`。
-12. 已将根 `phone/ios` SDK运行时 从直接依赖官方样板运行时工厂，调整为 `PhoneCapabilityRuntimeFactory + PhoneCapabilityBootstrap` 通用装配模式。
+12. 已将根 `openaiglass-sdk/phone-ios` SDK运行时 从直接依赖官方样板运行时工厂，调整为 `PhoneCapabilityRuntimeFactory + PhoneCapabilityBootstrap` 通用装配模式。
 
 ### 16.2 已完成但后续仍可增强的内容
 
 1. `ScenarioRunner` 与 Mock 体系已经具备第二期验收所需的最小版本，并已切到能力处理器分发机制；后续可以继续扩展更多业务场景样本。
-2. 手机侧扩展面已具备接口和样例接入方式，并已明确 `PhoneRuntime.query_task/list_tasks`、`PhoneTaskContext.query_self` 等最小稳定接口；根 `phone/ios` 当前只编译通用 SDK运行时。
+2. 手机侧扩展面已具备接口和样例接入方式，并已明确 `PhoneRuntime.query_task/list_tasks`、`PhoneTaskContext.query_self` 等最小稳定接口；根 `openaiglass-sdk/phone-ios` 当前只编译通用 SDK运行时。
 3. 官方样例已经可以证明正向闭环，并已补齐第二期验收所需的边界检查、回放测试和文档说明；后续可以继续补强异常场景和设备缺失场景。
 4. 快速开始文档、样例说明、最终验收方案和预检脚本已经对齐，能够支撑第二期交付验收。
 
@@ -1109,6 +1109,6 @@ TASK -> SDK : complete()
 ### 16.4 当前阶段结论
 
 1. 按第二期定义，SDK 核心运行时与开发者扩展面已经完成最终验收所需的代码、测试、边界检查和文档收口。
-2. 当前根 `server / phone / glass` 不再承载官方样板业务代码，系统细节已经收入 SDK，官方业务样例集中在 `example`。
-3. 当前 `server/src` 已收缩为兼容旧导入路径的薄壳桥接层，真实服务器入口与运行时实现位于 `sdk/python`。
+2. 当前根 `server / phone / glass` 不再承载官方样板业务代码，系统细节已经收入 SDK，官方业务样例集中在 `openaiglass-for-blind`。
+3. 当前 `openaiglass-sdk/server-python` 已收缩为兼容旧导入路径的薄壳桥接层，真实服务器入口与运行时实现位于 `openaiglass-sdk/server-python`。
 4. 开发者开发官方样例能力时，只需要实现 Tool、Task、PhoneProcessor、PhoneTask、场景回放处理器等业务扩展点，不需要理解底层连接、绑定、消息路由和系统任务编排。

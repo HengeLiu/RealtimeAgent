@@ -20,7 +20,7 @@
 
 ## 2. 当前可用能力
 
-当前 `sdk/python/openaiglasses` 已提供以下最小能力：
+当前 `openaiglass-sdk/server-python/openaiglasses` 已提供以下最小能力：
 
 1. 服务端扩展面
    - `BaseTool`
@@ -64,16 +64,16 @@ import openaiglasses
 在 SDK 尚未正式发布到 PyPI 前，可以从仓库本地安装：
 
 ```bash
-pip install ./sdk/python
+pip install ./openaiglass-sdk/server-python
 ```
 
 也可以在外部项目中指向源码路径安装：
 
 ```bash
-pip install /path/to/OpenAIglassesDemo_2/sdk/python
+pip install /path/to/OpenAIglassesDemo_2/openaiglass-sdk/server-python
 ```
 
-安装后不应再依赖 `PYTHONPATH=server/src:sdk/python` 这类仓库开发路径。
+安装后不应再依赖 `PYTHONPATH=openaiglass-sdk/server-python:openaiglass-sdk/server-python` 这类仓库开发路径。
 
 ### 3.3 开发者项目最小结构
 
@@ -376,7 +376,7 @@ all_tasks = sdk.phone_runtime.list_tasks()
 1. 业务 `Task` 自己决定何时调用 `start_phone_video_link()` / `stop_phone_video_link()`。
 2. 若手机端还需要并行启动一个业务 `PhoneTask`，服务端业务 `Task` 应通过 `start_phone_task(task_type, params)` 下发启动指令。
 3. 手机端产出的结构化业务结果，应通过 `/api/tasks/report-event` 统一回传，而不是为每个能力新增一条专用 HTTP 接口。
-4. `send_glass_command()` / `send_phone_command()` 只作为高级逃生口保留，官方 example 不应直接拼 SDK 内部控制命令。
+4. `send_glass_command()` / `send_phone_command()` 只作为高级逃生口保留，官方 openaiglass-for-blind 不应直接拼 SDK 内部控制命令。
 
 ---
 
@@ -384,7 +384,7 @@ all_tasks = sdk.phone_runtime.list_tasks()
 
 当前最小回放入口有两种：
 
-### 6.1 直接运行 example 下的最小场景
+### 6.1 直接运行 openaiglass-for-blind 下的最小场景
 
 ```python
 from pathlib import Path
@@ -490,7 +490,7 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 5. `capabilities/find_object/phone/task.py`
 6. `capabilities/find_object/scenario.py`
 
-建议新增能力时，优先参考这一套结构，而不是直接修改 `server/src` 内部实现。
+建议新增能力时，优先参考这一套结构，而不是直接修改 `openaiglass-sdk/server-python` 内部实现。
 
 ---
 
@@ -506,14 +506,14 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 
 当前边界检查结果：
 
-1. `sdk/python/openaiglasses` 不反向依赖 `example`。
+1. `openaiglass-sdk/server-python/openaiglasses` 不反向依赖 `openaiglass-for-blind`。
 2. `capabilities/find_object` 不直接处理 WebSocket、设备绑定表和底层媒体协议。
 3. `find_object` 业务代码通过 `DeviceGroupContext` 启动视频链路、提交通知和推进任务。
 4. `ScenarioRunner` 只保留通用回放框架，`find_object` 的场景处理逻辑位于 `capabilities/find_object/scenario.py`。
 5. 设备缺失、视频链路启动失败、任务取消和正向完成路径均已有 scenario 覆盖。
-6. `server/src` 已不再内建找物体专用 Tool、任务模板和专用 HTTP 调试接口。
-7. `phone/ios` 的 SDK运行时代码只保留通用任务接口，官方 `find_object` 手机能力位于 `capabilities/find_object/phone/ios/`。
-8. `server/src` 已不再内建计时器、地图和 AMap mock 这类业务能力；根服务端默认模型工具只保留系统级 `capture_photo`。
+6. `openaiglass-sdk/server-python` 已不再内建找物体专用 Tool、任务模板和专用 HTTP 调试接口。
+7. `openaiglass-sdk/phone-ios` 的 SDK运行时代码只保留通用任务接口，官方 `find_object` 手机能力位于 `capabilities/find_object/phone/ios/`。
+8. `openaiglass-sdk/server-python` 已不再内建计时器、地图和 AMap mock 这类业务能力；根服务端默认模型工具只保留系统级 `capture_photo`。
 
 不属于第二期最终验收范围、后续继续推进的事项：
 

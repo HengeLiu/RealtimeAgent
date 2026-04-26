@@ -207,7 +207,7 @@ S -> G : actuator.audio.play(统一通知链路)
    - 说明：两个 warning 为测试辅助类 `TestWebSocketClient` 带 `__init__`，pytest 不将其作为测试类收集，不影响测试结果。
 2. iOS 模拟器测试：
    - 命令：通过 XcodeBuildMCP 执行 `test_sim`
-   - 工程：`phone/ios/GlassesVideoReceiver.xcodeproj`
+   - 工程：`openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj`
    - Scheme：`GlassesVideoReceiver`
    - 设备：`iPhone 17 (iOS Simulator 26.3.1)`
    - 结果：`8 passed`

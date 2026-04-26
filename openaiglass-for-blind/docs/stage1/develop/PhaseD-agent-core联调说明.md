@@ -29,7 +29,7 @@ bash script/deprecated/run_phase_d_tests_phase_d.sh
 ```bash
 export DASHSCOPE_API_KEY="<your-api-key>"
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
-PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 ## 4. 联调观察点

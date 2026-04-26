@@ -54,7 +54,7 @@
 
 1. **对象模型契约**
    - 例如 `DeviceEndpoint`、`DeviceGroup`、`TaskEvent`、`SensorReading`。
-   - 主要用于 SDK 代码、测试代码和 example 能力实现。
+   - 主要用于 SDK 代码、测试代码和 openaiglass-for-blind 能力实现。
 2. **跨端协议契约**
    - 例如 `ControlMessage`、`sdk.phone.task.start`、`/api/tasks/report-event` 请求体。
    - 主要用于 phone / glass / server 之间协作。
@@ -105,8 +105,8 @@ package "测试资产契约" {
 
 当前代码落点：
 
-1. `sdk/python/openaiglasses/models.py`
-2. `sdk/python/openaiglasses/runtime/device_group.py`
+1. `openaiglass-sdk/server-python/openaiglasses/models.py`
+2. `openaiglass-sdk/server-python/openaiglasses/runtime/device_group.py`
 
 公共对象：
 
@@ -148,15 +148,15 @@ package "测试资产契约" {
 边界保护：
 
 1. `script/run_sdk_preflight.py` 已加入 `sdk_boundary` 检查。
-2. 该检查会扫描根目录 `server/src`、`phone/src`、`phone/ios/GlassesVideoReceiver`、`phone/ios/GlassesVideoReceiverTests`、`phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `glass/src`。
+2. 该检查会扫描根目录 `openaiglass-sdk/server-python`、`openaiglass-for-blind/host/phone/src`、`openaiglass-sdk/phone-ios/GlassesVideoReceiver`、`openaiglass-sdk/phone-ios/GlassesVideoReceiverTests`、`openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `openaiglass-sdk/glass-esp32`。
 3. 若这些根运行时目录重新出现 `find_object`、`YoloFindObject`、`start_find_object`、`timer_manage`、`map_manage`、`Amap`、`navigation_task` 等业务词汇，预检会失败。
-4. 同一检查还会拦截 `sdk/python`、`server/src`、`phone/src`、根 iOS 运行时和 `glass/src` 对 `example` 的反向依赖。
+4. 同一检查还会拦截 `openaiglass-sdk/server-python`、`openaiglass-sdk/server-python`、`openaiglass-for-blind/host/phone/src`、根 iOS 运行时和 `openaiglass-sdk/glass-esp32` 对 `openaiglass-for-blind` 的反向依赖。
 
 ### 4.2 控制消息信封
 
 当前代码落点：
 
-1. `server/src/protocol/messages/control_message.py`
+1. `openaiglass-sdk/server-python/protocol/messages/control_message.py`
 2. [统一通信协议信封设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/统一通信协议信封设计.md)
 
 公共对象：
@@ -213,8 +213,8 @@ package "测试资产契约" {
 
 当前代码落点：
 
-1. `sdk/python/openaiglasses/capabilities/base_task.py`
-2. `sdk/python/openaiglasses/runtime/tasks.py`
+1. `openaiglass-sdk/server-python/openaiglasses/capabilities/base_task.py`
+2. `openaiglass-sdk/server-python/openaiglasses/runtime/tasks.py`
 
 公共对象：
 
@@ -256,8 +256,8 @@ package "测试资产契约" {
 
 当前代码落点：
 
-1. `sdk/python/openaiglasses/runtime/device_group.py`
-2. `phone/ios/GlassesVideoReceiver/Networking/CameraSinkServer.swift`
+1. `openaiglass-sdk/server-python/openaiglasses/runtime/device_group.py`
+2. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Networking/CameraSinkServer.swift`
 
 公共消息：
 
@@ -310,9 +310,9 @@ package "测试资产契约" {
 
 当前代码落点：
 
-1. `phone/ios/GlassesVideoReceiver/Networking/PhoneTaskEventReportAPI.swift`
-2. `sdk/python/api/http_server.py`
-3. `sdk/python/api/ws/control_runtime.py`
+1. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Networking/PhoneTaskEventReportAPI.swift`
+2. `openaiglass-sdk/server-python/api/http_server.py`
+3. `openaiglass-sdk/server-python/api/ws/control_runtime.py`
 
 当前 HTTP 入口：
 
@@ -352,7 +352,7 @@ package "测试资产契约" {
 
 当前代码落点：
 
-1. `sdk/python/openaiglasses/phone/sensor_provider.py`
+1. `openaiglass-sdk/server-python/openaiglasses/phone/sensor_provider.py`
 
 公共对象：
 
@@ -377,8 +377,8 @@ package "测试资产契约" {
 
 当前代码落点：
 
-1. `sdk/python/openaiglasses/capabilities/registry.py`
-2. `sdk/python/openaiglasses/sdk.py`
+1. `openaiglass-sdk/server-python/openaiglasses/capabilities/registry.py`
+2. `openaiglass-sdk/server-python/openaiglasses/sdk.py`
 
 公共标识：
 
@@ -392,13 +392,13 @@ package "测试资产契约" {
 
 1. 同一个 SDK 实例内不允许重复注册同名能力。
 2. 能力标识应使用小写、下划线或点分层风格。
-3. 能力标识一旦被官方 example 使用，不应在第二期内重命名。
+3. 能力标识一旦被官方 openaiglass-for-blind 使用，不应在第二期内重命名。
 
 ### 4.8 场景 manifest 最小格式
 
 当前代码落点：
 
-1. `sdk/python/openaiglasses/testing/scenario_runner.py`
+1. `openaiglass-sdk/server-python/openaiglasses/testing/scenario_runner.py`
 2. `testdata/scenario/*.json`
 3. `testdata/scenario/*.json`
 
@@ -424,7 +424,7 @@ package "测试资产契约" {
 
 ### 5.1 公共面
 
-以下内容可以被开发者和官方 example 依赖：
+以下内容可以被开发者和官方 openaiglass-for-blind 依赖：
 
 1. `OpenAIGlassesSDK` 注册入口。
 2. `BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor / BaseSensorProvider`。

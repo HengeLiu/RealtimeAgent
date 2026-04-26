@@ -6,8 +6,8 @@
 
 它服务于以下目标：
 
-1. 让 `phone/ios` 从具体业务 App 收敛成通用手机 SDK运行时。
-2. 让业务能力放在 `example/` 或外部开发者项目中，而不是继续侵入根目录手机工程。
+1. 让 `openaiglass-sdk/phone-ios` 从具体业务 App 收敛成通用手机 SDK运行时。
+2. 让业务能力放在 `openaiglass-for-blind/` 或外部开发者项目中，而不是继续侵入根目录手机工程。
 3. 让手机端开发者只实现本地处理器、手机任务或传感器提供者，不关心设备组绑定和服务端路由。
 
 本文档不定义完整 iOS SDK 发布形态，也不要求第二期完成 Android 侧 SDK运行时。
@@ -34,16 +34,16 @@
 4. 直接处理设备组绑定规则。
 5. 直接拼装非公共协议字段。
 
-当前仓库中，根目录 `phone/ios/GlassesVideoReceiver` 应被视为通用手机 SDK运行时；`capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift` 才是官方样例业务能力。
+当前仓库中，根目录 `openaiglass-sdk/phone-ios/GlassesVideoReceiver` 应被视为通用手机 SDK运行时；`capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift` 才是官方样例业务能力。
 
 ## 3. 当前代码落点
 
 当前相关代码：
 
-1. `phone/ios/GlassesVideoReceiver/Networking/CameraSinkServer.swift`
-2. `phone/ios/GlassesVideoReceiver/Networking/PhoneTaskEventReportAPI.swift`
-3. `phone/ios/GlassesVideoReceiver/Core/CameraStreamStore.swift`
-4. `phone/ios/GlassesVideoReceiver/Core/MediaFrameDecoder.swift`
+1. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Networking/CameraSinkServer.swift`
+2. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Networking/PhoneTaskEventReportAPI.swift`
+3. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Core/CameraStreamStore.swift`
+4. `openaiglass-sdk/phone-ios/GlassesVideoReceiver/Core/MediaFrameDecoder.swift`
 5. `capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift`
 6. `capabilities/find_object/phone/ios/FindObjectPhoneCapabilityTests.swift`
 
@@ -124,7 +124,7 @@
 3. 按 `task_type` 查找已注册的手机能力。
 4. 将后续视频帧投递给该能力。
 
-SDK运行时不应对某个具体 `task_type` 写业务分支。第二期最终验收要求是：根目录 `phone/ios` 可以接收任意 `task_type` 并交给已注册能力处理，但自身不包含 `find_object`、导航、地图或计时器等业务分支。
+SDK运行时不应对某个具体 `task_type` 写业务分支。第二期最终验收要求是：根目录 `openaiglass-sdk/phone-ios` 可以接收任意 `task_type` 并交给已注册能力处理，但自身不包含 `find_object`、导航、地图或计时器等业务分支。
 
 ### 4.4 事件上报
 
@@ -194,13 +194,13 @@ POST /api/tasks/report-event
 1. 服务端私有连接表。
 2. `ControlRuntime` 私有字段。
 3. `ScenarioRunner` 内部实现。
-4. 某个官方 example 的内部类名。
+4. 某个官方 openaiglass-for-blind 的内部类名。
 
 ## 7. 第二期验收标准
 
 第二期手机 SDK运行时收口完成时，应满足：
 
-1. 根目录 `phone/ios` 只保留 SDK运行时 逻辑。
+1. 根目录 `openaiglass-sdk/phone-ios` 只保留 SDK运行时 逻辑。
 2. 具体业务能力位于 `capabilities/find_object/phone/ios` 或外部开发者项目。
 3. 新增业务能力时，不需要修改视频接收和控制连接底层逻辑。
 4. 手机任务启动、停止和事件上报都符合 [SDK公共契约设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/SDK公共契约设计.md)。
@@ -211,7 +211,7 @@ POST /api/tasks/report-event
 
 第二期下半程建议继续做：
 
-1. 检查 `phone/ios` 中是否还有具体业务词汇。
+1. 检查 `openaiglass-sdk/phone-ios` 中是否还有具体业务词汇。
 2. 将残留业务分支迁回 `capabilities/find_object/phone/ios`。
 3. 为 `sdk.phone.task.start / stop` 增加金样测试。
 4. 为 `/api/tasks/report-event` 增加契约测试。

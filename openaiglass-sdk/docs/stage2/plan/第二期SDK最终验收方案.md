@@ -7,7 +7,7 @@
 验收目标不是证明某个业务功能效果完美，而是证明当前仓库已经达到第二期 SDK 形态：
 
 1. 系统细节隐藏在 SDK 中。
-2. 官方 `example` 只承载开发者需要关注的业务能力实现。
+2. 官方 `openaiglass-for-blind` 只承载开发者需要关注的业务能力实现。
 3. 根目录 `server / phone / glass` 不再承载具体业务能力。
 4. 开发者可以基于 `BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor` 完成第一轮离线开发和验证。
 5. Python SDK 可以被构建成 wheel，并通过 `pip install` 安装后导入使用。
@@ -19,7 +19,7 @@
 1. Python SDK 包与服务端运行时。
 2. iOS 手机 SDK运行时 边界。
 3. ESP32 眼镜 SDK运行时 边界。
-4. 官方 `find_object` example。
+4. 官方 `find_object` openaiglass-for-blind。
 5. SDK 公共契约与金样测试。
 6. 离线场景回放与兼容性回归。
 7. 真机联调前检查入口。
@@ -72,11 +72,11 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-fin
 其中 `sdk_boundary` 是第二期最终验收的关键检查项。它必须证明：
 
 1. 宿主目录 `host/phone/src`、`../../openaiglass-sdk/phone-ios/GlassesVideoReceiver`、`../../openaiglass-sdk/phone-ios/GlassesVideoReceiverTests`、`../../openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `../../openaiglass-sdk/glass-esp32` 中没有具体业务能力词汇。
-2. `sdk/python`、根运行时和端侧运行时没有反向依赖 `example`。
+2. `openaiglass-sdk/server-python`、根运行时和端侧运行时没有反向依赖 `openaiglass-for-blind`。
 
 其中 `sdk_package` 必须证明：
 
-1. [sdk/python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/pyproject.toml) 可以构建 `openaiglasses-sdk` wheel。
+1. [openaiglass-sdk/server-python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/pyproject.toml) 可以构建 `openaiglasses-sdk` wheel。
 2. 构建出的 wheel 可以通过 `pip install` 安装到临时环境。
 3. 安装后可以从 `openaiglasses` 导入 `OpenAIGlassesSDK / ServerSettings`。
 4. 安装后内部运行时模块 `agent_core.skills / infra.clock / api.http_server / runtime.voice_runtime` 可以正常导入。
@@ -136,7 +136,7 @@ uv run python script/run_sdk_scenario.py --scenario-dir testdata/scenario --pret
 
 ## 5. 代码边界人工验收
 
-### 5.1 SDK 不依赖 example
+### 5.1 SDK 不依赖 openaiglass-for-blind
 
 执行：
 
@@ -146,8 +146,8 @@ rg -n "from capabilities|import capabilities|../../capabilities" openaiglass-sdk
 
 预期结果：
 
-1. 不应出现 SDK 或根运行时依赖 `example` 的结果。
-2. 如果命中 `doc` 或 `example` 以外路径，应判定为边界回退。
+1. 不应出现 SDK 或根运行时依赖 `openaiglass-for-blind` 的结果。
+2. 如果命中 `doc` 或 `openaiglass-for-blind` 以外路径，应判定为边界回退。
 
 ### 5.2 根运行时不含业务能力
 
@@ -160,9 +160,9 @@ rg -n "find_object|FindObject|YoloFindObject|start_find_object|timer_manage|map_
 预期结果：
 
 1. 不应出现命中。
-2. 如果需要新增业务能力，应放入 `example/` 或外部开发者项目，不应修改根运行时。
+2. 如果需要新增业务能力，应放入 `openaiglass-for-blind/` 或外部开发者项目，不应修改根运行时。
 
-### 5.3 example 只写业务扩展
+### 5.3 openaiglass-for-blind 只写业务扩展
 
 重点检查：
 
@@ -191,9 +191,9 @@ rg -n "find_object|FindObject|YoloFindObject|start_find_object|timer_manage|map_
 验收标准：
 
 1. 文档中的当前状态与代码目录一致。
-2. 文档不再把根目录 `phone/ios` 描述为具体 `find_object` App。
+2. 文档不再把根目录 `openaiglass-sdk/phone-ios` 描述为具体 `find_object` App。
 3. 文档明确说明根 iOS 工程默认只编译通用 SDK运行时。
-4. 文档明确说明官方样例能力位于 `example/`，并由外部宿主显式接入。
+4. 文档明确说明官方样例能力位于 `openaiglass-for-blind/`，并由外部宿主显式接入。
 
 ## 7. 真机联调前验收
 

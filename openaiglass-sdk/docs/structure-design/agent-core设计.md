@@ -469,7 +469,7 @@ system prompt 不承载：
 建议在 SDK 主体实现中保持：
 
 ```text
-sdk/python/agent_core/
+openaiglass-sdk/server-python/agent_core/
   facade/
   context/
   runtime/
@@ -480,8 +480,8 @@ sdk/python/agent_core/
 以及：
 
 ```text
-sdk/python/runtime/voice_runtime.py
-sdk/python/backend_task_core/
+openaiglass-sdk/server-python/runtime/voice_runtime.py
+openaiglass-sdk/server-python/backend_task_core/
 ```
 
 原则：

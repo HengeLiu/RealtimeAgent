@@ -68,7 +68,7 @@
 
 ### 3.2 手机端方案
 
-手机端当前正式方案已切换为 iOS 原生应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/ios/GlassesVideoReceiver.xcodeproj)，原 [phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/src/main.py) 仅保留为桌面调试工具。
+手机端当前正式方案已切换为 iOS 原生应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj)，原 [openaiglass-for-blind/host/phone/src/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-for-blind/host/phone/src/main.py) 仅保留为桌面调试工具。
 
 iOS 方案当前承担两部分能力：
 
@@ -291,12 +291,12 @@ G -x P : close websocket
 已执行命令：
 
 ```bash
-PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m unittest \
   server.test.integration.test_control_register_flow -v
 ```
 
 ```bash
-PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m unittest \
   server.test.unit.test_backend_task_core \
   server.test.unit.test_agent_core -v
 ```
@@ -305,7 +305,7 @@ PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
 
 1. `server.test.integration.test_control_register_flow` 共 15 个测试，全部通过。
 2. `server.test.unit.test_backend_task_core + server.test.unit.test_agent_core` 共 25 个测试，全部通过。
-3. `xcodebuild test -project phone/ios/GlassesVideoReceiver.xcodeproj -scheme GlassesVideoReceiver -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath phone/ios/build` 通过。
+3. `xcodebuild test -project openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj -scheme GlassesVideoReceiver -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath openaiglass-sdk/phone-ios/build` 通过。
 4. `bash script/run_glass.sh` 已完成眼镜端编译与刷机，最终监视步骤因当前终端不是 TTY 未执行。
 5. 本次新增验证点已覆盖：
    - 手机注册并上报 `camera_sink_ws_uri`
@@ -326,13 +326,13 @@ PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
 
 当前已完成：
 
-1. iOS 应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/phone/ios/GlassesVideoReceiver.xcodeproj) 已承接手机端正式视频接收、注册、心跳与状态展示能力。
+1. iOS 应用 [GlassesVideoReceiver.xcodeproj](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj) 已承接手机端正式视频接收、注册、心跳与状态展示能力。
 2. 手机注册时已可向服务端上报 `camera_sink_ws_uri`，并支持手机先启动或眼镜先启动两种自动绑定路径。
-3. 服务端 [control_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/api/ws/control_runtime.py) 已保存该地址，并在 `phone_video_link_task.task.started / task.cancelled` 时向眼镜下发：
+3. 服务端 [control_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/api/ws/control_runtime.py) 已保存该地址，并在 `phone_video_link_task.task.started / task.cancelled` 时向眼镜下发：
    - `sensor.camera.stream.start`
    - `sensor.camera.stream.stop`
 4. `start_phone_video_link` 已可从运行态快照中解析目标手机的视频接收地址，并把它写入任务输入。
-5. 眼镜端 [glass_main.c](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/glass/src/main/glass_main.c) 已补齐：
+5. 眼镜端 [glass_main.c](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/glass-esp32/main/glass_main.c) 已补齐：
    - 相机流 WebSocket 客户端
    - `sensor.camera.stream.start / stop` 控制消息处理
    - 最小 `camera_stream_task`

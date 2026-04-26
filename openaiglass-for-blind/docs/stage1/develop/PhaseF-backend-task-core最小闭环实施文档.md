@@ -53,17 +53,17 @@ Phase E 完成后，仓库已有如下基础：
 
 本阶段新增或补齐：
 
-1. `server/src/backend_task_core/models.py`
-2. `server/src/backend_task_core/event_bus.py`
-3. `server/src/backend_task_core/store.py`
-4. `server/src/backend_task_core/state_machine.py`
-5. `server/src/backend_task_core/registry.py`
-6. `server/src/backend_task_core/gateway.py`
-7. `server/src/runtime/task_event_bridge.py`
-8. `server/src/runtime/notifications.py`
-9. `server/src/runtime/voice_runtime.py`
-10. `server/src/api/ws/control_runtime.py`
-11. `glass/src/main/glass_main.c`
+1. `openaiglass-sdk/server-python/backend_task_core/models.py`
+2. `openaiglass-sdk/server-python/backend_task_core/event_bus.py`
+3. `openaiglass-sdk/server-python/backend_task_core/store.py`
+4. `openaiglass-sdk/server-python/backend_task_core/state_machine.py`
+5. `openaiglass-sdk/server-python/backend_task_core/registry.py`
+6. `openaiglass-sdk/server-python/backend_task_core/gateway.py`
+7. `openaiglass-sdk/server-python/runtime/task_event_bridge.py`
+8. `openaiglass-sdk/server-python/runtime/notifications.py`
+9. `openaiglass-sdk/server-python/runtime/voice_runtime.py`
+10. `openaiglass-sdk/server-python/api/ws/control_runtime.py`
+11. `openaiglass-sdk/glass-esp32/main/glass_main.c`
 
 关键职责如下：
 
@@ -291,7 +291,7 @@ end
 ### 6.3 执行命令
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_voice_runtime \
   server.test.unit.test_task_event_runtime \
   server.test.unit.test_backend_task_core \
@@ -326,7 +326,7 @@ PYTHONPATH=server/src uv run python -m unittest \
 本阶段文档补齐时，已执行如下自动化测试命令：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_voice_runtime \
   server.test.unit.test_task_event_runtime \
   server.test.unit.test_backend_task_core \

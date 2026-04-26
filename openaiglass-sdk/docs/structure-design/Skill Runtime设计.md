@@ -189,7 +189,7 @@ requires_confirmation: true
 
 ## 7. 运行时模块
 
-建议在 `sdk/python/agent_core/skills/` 下新增以下模块。`server/src` 仅保留兼容旧导入路径的薄壳，不再承载 Skill Runtime 主体实现。
+建议在 `openaiglass-sdk/server-python/agent_core/skills/` 下新增以下模块。`openaiglass-sdk/server-python` 仅保留兼容旧导入路径的薄壳，不再承载 Skill Runtime 主体实现。
 
 ### 7.1 `SkillManifest`
 
@@ -552,7 +552,7 @@ Voice --> User : TTS 播报
 
 交付物：
 
-1. `sdk/python/agent_core/skills/` 基础模块。
+1. `openaiglass-sdk/server-python/agent_core/skills/` 基础模块。
 2. `server/skills/*/SKILL.md` 本地目录。
 3. `read_skill` Tool。
 4. active skill 会话状态。

@@ -25,7 +25,7 @@ uv sync --python 3.11
 export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export HEARTBEAT_INTERVAL_MS=5000
 export HEARTBEAT_TIMEOUT_MS=15000
-PYTHONPATH=server/src uv run --python 3.11 python -m app.main --host 0.0.0.0 --port 8765
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 更推荐直接使用脚本：
@@ -104,13 +104,13 @@ curl http://127.0.0.1:8765/api/runtime/devices
 推荐方式：
 
 ```bash
-cp glass/config/local_build.env.example glass/config/local_build.env
+cp openaiglass-for-blind/host/glass/config/local_build.env.openaiglass-for-blind openaiglass-for-blind/host/glass/config/local_build.env
 ```
 
 然后编辑本地私有配置文件：
 
 ```bash
-vim glass/config/local_build.env
+vim openaiglass-for-blind/host/glass/config/local_build.env
 ```
 
 需要填写：
@@ -129,13 +129,13 @@ vim glass/config/local_build.env
 1. `GLASS_SERVER_WS_URI` 示例：`ws://192.168.1.10:8765/ws/control`
 2. `GLASS_DEVICE_ID` 必须与服务端 `DEVICE_TOKEN_MAP` 中的键一致。
 3. `GLASS_PAIR_TOKEN` 必须与服务端 `DEVICE_TOKEN_MAP` 中的值一致。
-4. 脚本会在每次编译前把这些值同步到本地 `glass/src/sdkconfig.local`，这个文件不会提交到 Git。
-5. Phase B 历史主流程脚本已归档为 `glass/config/local_build.env -> script/deprecated/run_glass_phase_b.sh`，当前主流程统一使用 `script/run_glass.sh`。
+4. 脚本会在每次编译前把这些值同步到本地 `openaiglass-sdk/glass-esp32/sdkconfig.local`，这个文件不会提交到 Git。
+5. Phase B 历史主流程脚本已归档为 `openaiglass-for-blind/host/glass/config/local_build.env -> script/deprecated/run_glass_phase_b.sh`，当前主流程统一使用 `script/run_glass.sh`。
 
 ### 4.2 编译与烧录
 
 ```bash
-cd glass/src
+cd openaiglass-sdk/glass-esp32
 idf.py set-target esp32s3
 idf.py build
 idf.py -p <串口端口> flash monitor

@@ -24,7 +24,7 @@
 优先执行自动化回归：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_voice_runtime \
   server.test.unit.test_task_event_runtime \
   server.test.unit.test_backend_task_core \
@@ -50,7 +50,7 @@ export DEVICE_TOKEN_MAP="glass-001=pair-demo-token"
 export LOG_FILE="logs/server.log"
 export AGENT_MODEL_NAME="qwen3.6-plus"
 export VOICE_MODEL_NAME="qwen3.5-omni-plus"
-PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 说明：

@@ -818,7 +818,7 @@ def test_sdk_package_does_not_import_blind_business_code() -> None:
     """测试目标：验证 SDK 不反向依赖盲人业务代码。
 
     测试方法：
-    1. 扫描 `sdk/python/openaiglasses` 下所有 Python 文件的 import 语句。
+    1. 扫描 `openaiglass-sdk/server-python/openaiglasses` 下所有 Python 文件的 import 语句。
     2. 检查是否导入 `capabilities` 或盲人业务 `server` 入口。
 
     预期结果：

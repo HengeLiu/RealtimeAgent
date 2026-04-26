@@ -16,7 +16,7 @@
 1. `capture_photo` 只会在服务端本地写入一张 1x1 mock PNG。
 2. 主链路图片理解已经支持把图片作为 SDK 原生 image input 传给模型，但它依赖的图片仍是假图。
 3. 协议设计和阶段计划中已经预留了 `sensor.camera.capture / sensor.camera.captured`。
-4. 当前 `glass/src/main/glass_main.c` 只有控制面和语音链路，没有真实相机初始化与抓拍逻辑。
+4. 当前 `openaiglass-sdk/glass-esp32/main/glass_main.c` 只有控制面和语音链路，没有真实相机初始化与抓拍逻辑。
 5. 仓库里的 `origin-project/compile/compile.ino` 已有一套可参考的 `esp_camera` 初始化和单张 JPEG 抓拍实现。
 
 ## 3. 实现方案描述
@@ -118,9 +118,9 @@ M --> A : visual answer
 联调建议按下面顺序执行：
 
 1. 服务端启动
-   - `LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765`
+   - `LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=openaiglass-sdk/server-python uv run python -m app.main --host 0.0.0.0 --port 8765`
 2. 眼镜端重新编译烧录
-   - 需确保 `glass/src/main/idf_component.yml` 已拉到最新，并拉取 `espressif/esp32-camera`
+   - 需确保 `openaiglass-sdk/glass-esp32/main/idf_component.yml` 已拉到最新，并拉取 `espressif/esp32-camera`
 3. 设备注册成功后，直接说：
    - “看一下我前面有什么”
 4. 检查结果：
@@ -151,7 +151,7 @@ M --> A : visual answer
 已执行命令：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_agent_core \
   server.test.integration.test_control_register_flow \
   server.test.integration.test_agent_phase_e_flow -v

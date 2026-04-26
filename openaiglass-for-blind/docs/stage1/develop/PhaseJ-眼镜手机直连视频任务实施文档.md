@@ -223,7 +223,7 @@ T --> A : task_id / state / phone_device_id
 已执行命令：
 
 ```bash
-PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m unittest \
   server.test.unit.test_backend_task_core \
   server.test.unit.test_agent_core -v
 ```
@@ -249,7 +249,7 @@ PYTHONPATH=server/src uv run --python 3.11 python -m unittest \
 
 1. `TaskRegistry` 已新增 `phone_video_link_task` 模板。
 2. `InMemoryTaskGateway` 已支持创建和取消 `phone_video_link_task`。
-3. 已新增高层 Tool [start_phone_video_link.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/agent_core/tools/builtins/start_phone_video_link.py)。
+3. 已新增高层 Tool [start_phone_video_link.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/agent_core/tools/builtins/start_phone_video_link.py)。
 4. Tool 会基于当前运行态绑定关系校验是否允许创建视频直连任务。
 5. 任务创建后会通过当前标准 `TaskEvent` 主路径发布 `task.created / task.started` 事件。
 6. 后续实现中，`phone_video_link_task` 已继续承接真实视频流控制参数：

@@ -15,7 +15,7 @@
 
 当前仓库在 Phase A 开始前存在以下情况：
 
-1. `server/src`、`phone/src`、`glass/src` 无可运行业务代码。
+1. `openaiglass-sdk/server-python`、`openaiglass-for-blind/host/phone/src`、`openaiglass-sdk/glass-esp32` 无可运行业务代码。
 2. 新架构协议文档已明确，但缺少落地模型代码和编解码实现。
 3. 测试目录为空，无法自动验证协议与配置行为。
 4. 启动命令和环境变量规范未形成统一文档。
@@ -26,19 +26,19 @@
 
 本次新增：
 
-1. 服务端入口：`server/src/app/main.py`
-2. 服务端基础路由：`server/src/api/http_server.py`
-3. 手机端模拟入口：`phone/src/main.py`
-4. 眼镜端 ESP-IDF 入口：`glass/src/main/glass_main.c`
-5. 眼镜端工程构建文件：`glass/src/CMakeLists.txt`、`glass/src/main/CMakeLists.txt`
+1. 服务端入口：`openaiglass-sdk/server-python/app/main.py`
+2. 服务端基础路由：`openaiglass-sdk/server-python/api/http_server.py`
+3. 手机端模拟入口：`openaiglass-for-blind/host/phone/src/main.py`
+4. 眼镜端 ESP-IDF 入口：`openaiglass-sdk/glass-esp32/main/glass_main.c`
+5. 眼镜端工程构建文件：`openaiglass-sdk/glass-esp32/CMakeLists.txt`、`openaiglass-sdk/glass-esp32/main/CMakeLists.txt`
 
 ### 3.2 配置、日志、错误
 
 本次新增：
 
-1. 配置模块：`server/src/infra/config/settings.py`
-2. 日志模块：`server/src/infra/logging/logger.py`
-3. 错误模型：`server/src/infra/errors/error_codes.py`
+1. 配置模块：`openaiglass-sdk/server-python/infra/config/settings.py`
+2. 日志模块：`openaiglass-sdk/server-python/infra/logging/logger.py`
+3. 错误模型：`openaiglass-sdk/server-python/infra/errors/error_codes.py`
 
 关键点：
 
@@ -50,11 +50,11 @@
 
 本次新增：
 
-1. 控制消息模型：`server/src/protocol/messages/control_message.py`
-2. JSON 编解码：`server/src/protocol/codec/json_codec.py`
-3. 媒体帧模型：`server/src/protocol/media/media_frame.py`
-4. 消息工厂：`server/src/protocol/utils/message_factory.py`
-5. 最小幂等索引：`server/src/protocol/idempotency.py`
+1. 控制消息模型：`openaiglass-sdk/server-python/protocol/messages/control_message.py`
+2. JSON 编解码：`openaiglass-sdk/server-python/protocol/codec/json_codec.py`
+3. 媒体帧模型：`openaiglass-sdk/server-python/protocol/media/media_frame.py`
+4. 消息工厂：`openaiglass-sdk/server-python/protocol/utils/message_factory.py`
+5. 最小幂等索引：`openaiglass-sdk/server-python/protocol/idempotency.py`
 
 关键点：
 

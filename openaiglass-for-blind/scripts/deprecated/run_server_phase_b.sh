@@ -142,7 +142,7 @@ start_server() {
   (
     cd "${REPO_ROOT}" || exit 1
     env \
-      PYTHONPATH=server/src \
+      PYTHONPATH=openaiglass-sdk/server-python \
       SERVER_HOST="${HOST}" \
       SERVER_PORT="${PORT}" \
       DEVICE_TOKEN_MAP="${DEVICE_TOKEN_MAP}" \

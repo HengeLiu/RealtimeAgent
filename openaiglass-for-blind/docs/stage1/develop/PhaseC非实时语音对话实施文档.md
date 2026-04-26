@@ -32,11 +32,11 @@ Phase B 和“Phase C 语音唤醒状态上报”完成后，仓库已有以下�
 
 本次新增与修改：
 
-1. `server/src/runtime/voice_runtime.py`
-2. `server/src/api/ws/control_runtime.py`
-3. `server/src/api/ws/websocket_transport.py`
-4. `server/src/api/http_server.py`
-5. `server/src/infra/config/settings.py`
+1. `openaiglass-sdk/server-python/runtime/voice_runtime.py`
+2. `openaiglass-sdk/server-python/api/ws/control_runtime.py`
+3. `openaiglass-sdk/server-python/api/ws/websocket_transport.py`
+4. `openaiglass-sdk/server-python/api/http_server.py`
+5. `openaiglass-sdk/server-python/infra/config/settings.py`
 
 关键实现：
 
@@ -61,7 +61,7 @@ Phase B 和“Phase C 语音唤醒状态上报”完成后，仓库已有以下�
 
 本次修改：
 
-1. `glass/src/main/glass_main.c`
+1. `openaiglass-sdk/glass-esp32/main/glass_main.c`
 
 关键实现：
 

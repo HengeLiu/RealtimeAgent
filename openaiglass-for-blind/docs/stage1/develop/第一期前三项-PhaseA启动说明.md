@@ -12,13 +12,13 @@
 
 ```bash
 uv sync --python 3.11
-PYTHONPATH=server/src uv run --python 3.11 python -m app.main
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m app.main
 ```
 
 可选覆盖参数：
 
 ```bash
-PYTHONPATH=server/src uv run --python 3.11 python -m app.main --host 127.0.0.1 --port 8765
+PYTHONPATH=openaiglass-sdk/server-python uv run --python 3.11 python -m app.main --host 127.0.0.1 --port 8765
 ```
 
 ### 2.2 环境变量
@@ -37,21 +37,21 @@ PYTHONPATH=server/src uv run --python 3.11 python -m app.main --host 127.0.0.1 -
 ## 3. 手机端模拟入口
 
 ```bash
-uv run --python 3.11 python phone/src/main.py --once
+uv run --python 3.11 python openaiglass-for-blind/host/phone/src/main.py --once
 ```
 
 默认持续运行：
 
 ```bash
-uv run --python 3.11 python phone/src/main.py
+uv run --python 3.11 python openaiglass-for-blind/host/phone/src/main.py
 ```
 
 ## 4. 眼镜端入口（ESP-IDF）
 
-眼镜端采用 ESP-IDF C 工程入口，目录为 `glass/src`，启动方式如下：
+眼镜端采用 ESP-IDF C 工程入口，目录为 `openaiglass-sdk/glass-esp32`，启动方式如下：
 
 ```bash
-cd glass/src
+cd openaiglass-sdk/glass-esp32
 idf.py set-target esp32s3
 idf.py build
 idf.py flash monitor

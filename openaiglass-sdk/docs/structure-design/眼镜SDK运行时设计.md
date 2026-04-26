@@ -10,7 +10,7 @@
 2. 让业务能力通过服务端任务和手机端处理器扩展，而不是写死在眼镜固件中。
 3. 让眼镜端只关心采集、播放、控制消息和媒体链路，不关心完整业务编排。
 
-本文档不要求第二期完成正式 ESP32 SDK 发布，也不要求一次性移动 `glass/src` 到 `glass/esp32`。
+本文档不要求第二期完成正式 ESP32 SDK 发布，也不要求一次性移动 `openaiglass-sdk/glass-esp32` 到 `glass/esp32`。
 
 ## 2. 核心结论
 
@@ -34,15 +34,15 @@
 5. 设备组绑定决策。
 6. 地图、导航、找物体等业务能力判断。
 
-当前仓库中，`glass/src` 仍是实际眼镜工程；`scripts/run_glass.sh` 先委托该工程。第二期的收口目标是明确其 SDK运行时 职责，不要求立即完成目录迁移。
+当前仓库中，`openaiglass-sdk/glass-esp32` 仍是实际眼镜工程；`scripts/run_glass.sh` 先委托该工程。第二期的收口目标是明确其 SDK运行时 职责，不要求立即完成目录迁移。
 
 ## 3. 当前代码落点
 
 当前相关代码：
 
-1. `glass/src/main/glass_main.c`
-2. `glass/src/main/test_wakenet.c`
-3. `glass/config/local_build.env.example`
+1. `openaiglass-sdk/glass-esp32/main/glass_main.c`
+2. `openaiglass-sdk/glass-esp32/main/test_wakenet.c`
+3. `openaiglass-for-blind/host/glass/config/local_build.env.openaiglass-for-blind`
 4. `scripts/run_glass.sh`
 5. `glass/README.md`
 
@@ -184,14 +184,14 @@
 
 1. 服务端任务运行时内部结构。
 2. 手机任务内部状态。
-3. 官方 example 的业务类名。
+3. 官方 openaiglass-for-blind 的业务类名。
 4. `ScenarioRunner` 的回放实现。
 
 ## 7. 第二期验收标准
 
 第二期眼镜 SDK运行时收口完成时，应满足：
 
-1. `glass/src` 不保留 `find_object / navigation / map / timer` 这类业务分支。
+1. `openaiglass-sdk/glass-esp32` 不保留 `find_object / navigation / map / timer` 这类业务分支。
 2. 新增业务能力时，不需要修改眼镜端底层采集、播放和连接逻辑。
 3. 眼镜端所有跨端动作都通过公共控制消息或媒体流协议触发。
 4. 眼镜端调试日志能看到 `device_id / session_id / task_id / stream_id` 等关键关联字段。
@@ -202,7 +202,7 @@
 
 第二期下半程建议继续做：
 
-1. 检查 `glass/src` 中是否还有业务能力词汇。
+1. 检查 `openaiglass-sdk/glass-esp32` 中是否还有业务能力词汇。
 2. 梳理眼镜端支持的控制消息清单。
 3. 将眼镜端启动、注册、媒体链路和播放链路纳入联调检查文档。
-4. 后续目录迁移时，再考虑把 `glass/src` 移入 `glass/esp32`。
+4. 后续目录迁移时，再考虑把 `openaiglass-sdk/glass-esp32` 移入 `glass/esp32`。

@@ -157,7 +157,7 @@ VoiceRuntime -> Glass : assistant.reply(完整文本)
 cd /Users/elio/dev/llm-project/OpenAIglassesDemo_2
 LOG_LEVEL=DEBUG \
 LOG_FILE=logs/server.log \
-PYTHONPATH=server/src \
+PYTHONPATH=openaiglass-sdk/server-python \
 uv run python -m app.main --host 0.0.0.0 --port 8765
 ```
 
@@ -171,7 +171,7 @@ TTS_VOICE=longanhuan \
 TTS_WEBSOCKET_API_URL=wss://dashscope.aliyuncs.com/api-ws/v1/inference \
 LOG_LEVEL=DEBUG \
 LOG_FILE=logs/server.log \
-PYTHONPATH=server/src \
+PYTHONPATH=openaiglass-sdk/server-python \
 uv run python -m app.main --host 0.0.0.0 --port 8765
 ```
 
@@ -209,7 +209,7 @@ bash script/run_glass.sh
 已执行：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_agent_core \
   server.test.integration.test_voice_dialog_flow \
   server.test.integration.test_agent_phase_e_flow -v
@@ -222,7 +222,7 @@ PYTHONPATH=server/src uv run python -m unittest \
 另执行：
 
 ```bash
-PYTHONPATH=server/src uv run python -m unittest \
+PYTHONPATH=openaiglass-sdk/server-python uv run python -m unittest \
   server.test.unit.test_settings \
   server.test.unit.test_agent_core -v
 ```

@@ -27,10 +27,10 @@ Phase A 完成后，仓库已有协议模型、配置、日志和基础 HTTP 路
 
 本次新增与修改：
 
-1. `server/src/api/http_server.py`
-2. `server/src/api/ws/control_runtime.py`
-3. `server/src/api/ws/websocket_transport.py`
-4. `server/src/infra/config/settings.py`
+1. `openaiglass-sdk/server-python/api/http_server.py`
+2. `openaiglass-sdk/server-python/api/ws/control_runtime.py`
+3. `openaiglass-sdk/server-python/api/ws/websocket_transport.py`
+4. `openaiglass-sdk/server-python/infra/config/settings.py`
 
 关键实现：
 
@@ -57,13 +57,13 @@ Phase A 完成后，仓库已有协议模型、配置、日志和基础 HTTP 路
 
 本次新增与修改：
 
-1. `glass/src/main/glass_main.c`
-2. `glass/src/main/Kconfig.projbuild`
-3. `glass/src/main/CMakeLists.txt`
+1. `openaiglass-sdk/glass-esp32/main/glass_main.c`
+2. `openaiglass-sdk/glass-esp32/main/Kconfig.projbuild`
+3. `openaiglass-sdk/glass-esp32/main/CMakeLists.txt`
 
 关键实现：
 
-1. 保留 `Glass Runtime Config` 配置定义，但日常主流程固定为从本地私有配置文件 `glass/config/local_build.env` 生成 `sdkconfig.local`，不再使用交互式 `menuconfig` 作为编译入口。
+1. 保留 `Glass Runtime Config` 配置定义，但日常主流程固定为从本地私有配置文件 `openaiglass-for-blind/host/glass/config/local_build.env` 生成 `sdkconfig.local`，不再使用交互式 `menuconfig` 作为编译入口。
 2. 使用 ESP-IDF 的 `esp_wifi` 完成 STA 模式联网，并在主 WiFi 失败后自动切换兜底 WiFi。
 3. 使用 `esp_websocket_client` 连接服务端 `/ws/control`。
 4. 连接成功后自动发送 `device.register`。
@@ -86,7 +86,7 @@ Phase A 完成后，仓库已有协议模型、配置、日志和基础 HTTP 路
 1. 一键执行 Phase B 自动化测试。
 2. 一键启动服务端并跟随日志。
 3. 在无真机时，用本地模拟设备跑真实 WebSocket 注册链路。
-4. 在有真机时，只通过本地私有配置文件 `glass/config/local_build.env` 驱动构建，并由脚本统一完成“读取本地私有配置 -> 生成 `sdkconfig.local` -> build/flash/monitor”。
+4. 在有真机时，只通过本地私有配置文件 `openaiglass-for-blind/host/glass/config/local_build.env` 驱动构建，并由脚本统一完成“读取本地私有配置 -> 生成 `sdkconfig.local` -> build/flash/monitor”。
 
 ## 4. 流程图（PlantUML）
 
@@ -227,7 +227,7 @@ Phase B 当前状态：`核心代码已完成，可进入本地联调和真机�
 2. 注册成功后的 `voice.session.open` 自动下发与 `voice.session.opened` 回包确认。
 3. 眼镜端真实 ESP-IDF 启动、WiFi、控制连接、注册、心跳代码。
 4. 自动化测试、联调脚本、启动脚本、验收说明。
-5. 眼镜端配置方式已收敛为 `glass/config/local_build.env -> sdkconfig.local`，不再把交互式 `menuconfig` 作为主流程。
+5. 眼镜端配置方式已收敛为 `openaiglass-for-blind/host/glass/config/local_build.env -> sdkconfig.local`，不再把交互式 `menuconfig` 作为主流程。
 
 下一步建议：
 

@@ -25,7 +25,7 @@
 
 第二期当前已经完成：
 
-1. `sdk/python/openaiglasses` 包骨架。
+1. `openaiglass-sdk/server-python/openaiglasses` 包骨架。
 2. `DeviceGroupRuntime / DeviceGroupContext`。
 3. `BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor / BaseSensorProvider`。
 4. `find_object` 官方样例最小闭环。
@@ -88,7 +88,7 @@
 
 第二期验收口径：
 
-1. 根目录 `phone/ios` 和 `glass` 中不再保留具体业务词汇和业务流程分支。
+1. 根目录 `openaiglass-sdk/phone-ios` 和 `glass` 中不再保留具体业务词汇和业务流程分支。
 2. 官方样例能力接入时，不需要继续修改 SDK运行时 底层逻辑。
 3. 文档中要明确“SDK运行时负责什么、能力负责什么、SDK 公共层负责什么”。
 
@@ -158,9 +158,9 @@ testdata/
 
 约束原则：
 
-1. 公共契约代码不能依赖 `example/`。
+1. 公共契约代码不能依赖 `openaiglass-for-blind/`。
 2. SDK运行时代码不能继续回流依赖业务样例实现。
-3. `example/` 继续作为第二期唯一官方样例。
+3. `openaiglass-for-blind/` 继续作为第二期唯一官方样例。
 
 ## 6. 实施顺序建议
 
@@ -189,8 +189,8 @@ testdata/
 
 ### 7.2 SDK运行时产品化收口任务
 
-1. 盘点 `phone/ios` 和 `glass` 中剩余的业务词汇与能力耦合点。
-2. 把仍然残留在 SDK运行时 中的业务逻辑继续迁回 `example/`。
+1. 盘点 `openaiglass-sdk/phone-ios` 和 `glass` 中剩余的业务词汇与能力耦合点。
+2. 把仍然残留在 SDK运行时 中的业务逻辑继续迁回 `openaiglass-for-blind/`。
 3. 新增手机 SDK运行时 与眼镜 SDK运行时 职责说明文档。
 4. 补 SDK运行时 通用行为测试，避免未来新增能力又重新侵入 SDK运行时。
 

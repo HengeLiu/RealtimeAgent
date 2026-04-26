@@ -13,7 +13,7 @@
 在仓库根目录执行：
 
 ```bash
-LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=server/src uv run python -m app.main --host 0.0.0.0 --port 8765
+LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=openaiglass-sdk/server-python uv run python -m app.main --host 0.0.0.0 --port 8765
 ```
 
 重点观察：
@@ -26,7 +26,7 @@ LOG_LEVEL=DEBUG LOG_FILE=logs/server.log PYTHONPATH=server/src uv run python -m 
 
 建议步骤：
 
-1. 重新拉取依赖并编译 `glass/src`
+1. 重新拉取依赖并编译 `openaiglass-sdk/glass-esp32`
 2. 烧录到 `XIAO ESP32S3 Sense`
 3. 打开串口日志
 
