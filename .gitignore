@@ -20,22 +20,22 @@ dist/
 build/
 
 # ESP-IDF generated artifacts
-glass/**/build/
-glass/**/managed_components/
-glass/**/*.bin
-glass/src/sdkconfig
-glass/src/sdkconfig.old
-glass/src/sdkconfig.local
-glass/src/sdkconfig.local.old
-glass/src/dependencies.lock
-glass/config/local_build.env
+openaiglass-for-blind/glass/**/build/
+openaiglass-for-blind/glass/**/managed_components/
+openaiglass-for-blind/glass/**/*.bin
+openaiglass-for-blind/glass/src/sdkconfig
+openaiglass-for-blind/glass/src/sdkconfig.old
+openaiglass-for-blind/glass/src/sdkconfig.local
+openaiglass-for-blind/glass/src/sdkconfig.local.old
+openaiglass-for-blind/glass/src/dependencies.lock
+openaiglass-for-blind/glass/config/local_build.env
 
 # iOS generated artifacts
-phone/ios/build*
-phone/ios/DerivedData/
-phone/ios/**/*.xcresult
-phone/ios/**/xcuserdata/
-phone/ios/**/*.xcuserstate
-phone/ios/**/ModuleCache.noindex/
-phone/ios/**/SDKStatCaches.noindex/
-phone/ios/**/CompilationCache.noindex/
+openaiglass-for-blind/phone/ios/build*
+openaiglass-for-blind/phone/ios/DerivedData/
+openaiglass-for-blind/phone/ios/**/*.xcresult
+openaiglass-for-blind/phone/ios/**/xcuserdata/
+openaiglass-for-blind/phone/ios/**/*.xcuserstate
+openaiglass-for-blind/phone/ios/**/ModuleCache.noindex/
+openaiglass-for-blind/phone/ios/**/SDKStatCaches.noindex/
+openaiglass-for-blind/phone/ios/**/CompilationCache.noindex/

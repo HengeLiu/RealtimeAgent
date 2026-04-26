@@ -1,0 +1,12 @@
+# SDK 文档入口
+
+本目录只放 SDK 开发框架相关文档：三端协议、统一模型、运行时、公共契约、SDK 安装发布、SDK 测试和联调方法。
+
+| 目录 | 内容 |
+| --- | --- |
+| [structure-design](./structure-design) | 协议、媒体帧、设备注册、agent-core、backend-task-core、Skill Runtime、手机/眼镜 SDK 运行时设计。 |
+| [sdk-design](./sdk-design) | SDK 产品形态、开发者快速开始、测试架构、真机联调、打包和发布流程。 |
+| [stage2](./stage2) | SDK 产品化阶段计划、验收方案和回归说明。 |
+| [experimental](./experimental) | SDK 相关调研、Spike 和实验 demo。 |
+
+盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。
