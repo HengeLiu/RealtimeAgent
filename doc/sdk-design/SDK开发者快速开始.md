@@ -35,6 +35,8 @@
    - `HybridTaskGateway`
 4. 测试能力
    - `ScenarioRunner`
+   - `run_sdk_contract_tests.py`
+   - `run_sdk_compatibility_tests.py`
 
 ### 2.1 当前验证状态
 
@@ -48,9 +50,11 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 
 1. `compileall` 通过。
 2. `example/server`、`example/phone`、`example/glass` 入口检查通过。
-3. `testdata/scenario` 下 4 个回放场景全部通过。
-4. 第二期核心 pytest 通过。
-5. 服务端 `/api/health` 健康检查通过。
+3. `server/test/contracts` 下 SDK 公共契约测试通过。
+4. 官方 `find_object` 样例兼容性回归通过。
+5. `testdata/scenario` 下 5 个回放场景全部通过。
+6. 第二期核心 pytest 通过。
+7. 服务端 `/api/health` 健康检查通过。
 
 这表示当前可以进入官方 `find_object` 样例的三端真机联调阶段。
 
@@ -97,6 +101,12 @@ class MyTool(BaseTool):
 
 sdk.register_tool(MyTool())
 ```
+
+当前注册表约束：
+
+1. 同名 `Tool` 不允许重复注册。
+2. 同类型 `Task / PhoneProcessor / PhoneTask / SensorProvider` 不允许被静默覆盖。
+3. 若出现重复注册，SDK 会直接抛出 `ValueError`，避免运行时能力被后注册对象顶掉。
 
 ### 3.3 注册 Task
 
@@ -224,6 +234,34 @@ snapshot = sdk.phone_runtime.process_task_frame(
     task_id=snapshot.task_id,
     frame="demo frame",
 )
+
+latest = sdk.phone_runtime.query_task(snapshot.task_id)
+all_tasks = sdk.phone_runtime.list_tasks()
+```
+
+### 4.5 手机侧最小稳定接口
+
+当前阶段建议把下面这些接口视为手机侧扩展面的最小稳定面：
+
+1. `PhoneRuntime`
+   - `start_task(task_type, params)`：启动手机任务。
+   - `process_task_frame(task_id, frame)`：向指定任务输入一帧数据。
+   - `stop_task(task_id)`：停止指定任务。
+   - `query_task(task_id)`：查询单个任务快照。
+   - `list_tasks()`：列出当前运行时中的全部任务快照。
+   - `process_with_processor(processor_type, frame, params)`：直接调用手机处理器。
+   - `read_sensor(sensor_type)`：读取一次传感器数据。
+2. `PhoneTaskContext`
+   - `emit_state(state, data)`：更新当前任务状态。
+   - `emit_result(result)`：追加结构化结果。
+   - `update(data)`：更新任务上下文数据。
+   - `process_frame(processor_type, frame, params)`：把一帧数据交给手机处理器。
+   - `read_sensor(sensor_type)`：读取一次传感器。
+   - `query_self()`：读取当前任务的最新快照。
+3. `BaseSensorProvider`
+   - 只约定 `sensor_type` 和 `read()`，不把平台细节暴露给业务代码。
+
+建议业务代码默认只依赖上述接口，不直接触达手机 SDK运行时 的底层连接对象。
 ```
 
 ---
@@ -244,6 +282,10 @@ snapshot = sdk.phone_runtime.process_task_frame(
 8. `create_task()`
 9. `query_task()`
 10. `cancel_task()`
+11. `start_phone_task()`
+12. `stop_phone_task()`
+13. `send_glass_command()`
+14. `send_phone_command()`
 
 开发者不应直接处理：
 
@@ -251,6 +293,13 @@ snapshot = sdk.phone_runtime.process_task_frame(
 2. 设备绑定表
 3. 媒体链路底层协议
 4. 任务存储细节
+
+当前推荐做法：
+
+1. 业务 `Task` 自己决定何时调用 `start_phone_video_link()` / `stop_phone_video_link()`。
+2. 若手机端还需要并行启动一个业务 `PhoneTask`，服务端业务 `Task` 应通过 `start_phone_task(task_type, params)` 下发启动指令。
+3. 手机端产出的结构化业务结果，应通过 `/api/tasks/report-event` 统一回传，而不是为每个能力新增一条专用 HTTP 接口。
+4. `send_glass_command()` / `send_phone_command()` 只作为高级逃生口保留，官方 example 不应直接拼 SDK 内部控制命令。
 
 ---
 
@@ -265,7 +314,7 @@ from pathlib import Path
 
 from openaiglasses.testing import ScenarioRunner
 
-result = ScenarioRunner(sdk).run_find_object(
+result = ScenarioRunner(sdk).run(
     Path("example/scenario/find_object_basic.json")
 )
 ```
@@ -330,6 +379,9 @@ testdata/
 uv run python script/run_sdk_scenario.py --scenario testdata/scenario/find_object_with_testdata.json --pretty
 uv run python script/run_sdk_scenario.py --scenario testdata/scenario/find_object_cancelled.json --pretty
 uv run python script/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
+uv run python script/run_sdk_scenario.py --describe-scenario testdata/scenario/find_object_with_testdata.json --pretty
+uv run python script/run_sdk_scenario.py --list-scenarios testdata/scenario --pretty
+uv run python script/run_sdk_scenario.py --validate-scenarios testdata/scenario --pretty
 uv run python script/run_sdk_preflight.py --report logs/sdk-preflight.json
 uv run python script/sync_sdk_live_config.py
 uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
@@ -343,6 +395,10 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 4. `run_sdk_preflight.py` 会统一执行编译检查、批量 scenario 回放、核心 pytest 和服务健康检查。
 5. `sync_sdk_live_config.py` 会把 `config/local_server.env` 中的局域网地址和配对令牌同步到手机与眼镜端本地配置。
 6. `run_sdk_live_check.py` 会检查服务端、手机端和眼镜端的设备编号、配对令牌、局域网地址是否一致。
+7. `run_sdk_scenario.py --describe-scenario` 会输出单个场景的输入资产和断言字段约定。
+8. `run_sdk_scenario.py --list-scenarios` 会扫描目录下全部场景并输出摘要列表，便于维护回放资产清单。
+9. `run_sdk_scenario.py --validate-scenarios` 会在不执行回放的情况下检查场景字段、资产引用和最小断言约定，适合新增场景后的第一步检查。
+10. 当前 `testdata/scenario` 已覆盖成功、取消、设备缺失、链路失败和 heading 传感器参与五类找物体场景。
 
 ---
 
@@ -355,6 +411,7 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 3. `example/capabilities/find_object/server/task.py`
 4. `example/capabilities/find_object/phone/processor.py`
 5. `example/capabilities/find_object/phone/task.py`
+6. `example/capabilities/find_object/scenario.py`
 
 建议新增能力时，优先参考这一套结构，而不是直接修改 `server/src` 内部实现。
 
@@ -375,9 +432,13 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 1. `sdk/python/openaiglasses` 不反向依赖 `example`。
 2. `example/capabilities/find_object` 不直接处理 WebSocket、设备绑定表和底层媒体协议。
 3. `find_object` 业务代码通过 `DeviceGroupContext` 启动视频链路、提交通知和推进任务。
-4. 设备缺失、视频链路启动失败、任务取消和正向完成路径均已有 scenario 覆盖。
+4. `ScenarioRunner` 只保留通用回放框架，`find_object` 的场景处理逻辑位于 `example/capabilities/find_object/scenario.py`。
+5. 设备缺失、视频链路启动失败、任务取消和正向完成路径均已有 scenario 覆盖。
+6. `server/src` 已不再内建找物体专用 Tool、任务模板和专用 HTTP 调试接口。
+7. `phone/ios` 的 SDK运行时代码只保留通用任务接口，官方 `find_object` 手机能力位于 `example/phone/ios/`。
+8. `server/src` 已不再内建计时器、地图和 AMap mock 这类业务能力；根服务端默认模型工具只保留系统级 `capture_photo`。
 
-当前尚未完成：
+不属于第二期最终验收范围、后续继续推进的事项：
 
 1. 完整导航样例
 2. 手机原生 SDK 发布形态

@@ -13,6 +13,7 @@
 7. [stage1/develop](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop)：按 Phase 查看每次实施、联调和测试结果。
 8. [sdk-design/SDK开发者快速开始.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md)：进入 SDK 使用面。
 9. [stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md)：理解 SDK 产品化方向。
+10. [stage2/plan/第二期SDK最终验收方案.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期SDK最终验收方案.md)：执行第二期完成后的最终验收。
 
 ## 目录职责
 
@@ -31,11 +32,11 @@
 
 | 主题 | 代码入口 | 主要文档 |
 | --- | --- | --- |
-| 服务端启动与 HTTP 路由 | [server/src/app/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/app/main.py)、[server/src/api/http_server.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/api/http_server.py) | [当前实现状态.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/当前实现状态.md) |
-| 控制连接、注册、绑定、抓拍、视频任务 | [server/src/api/ws/control_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/api/ws/control_runtime.py) | [PhaseI-手机接入与绑定实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseI-手机接入与绑定实施文档.md)、[PhaseJ-真实视频数据面实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseJ-真实视频数据面实施文档.md) |
-| 语音链路与 TTS 播放 | [server/src/runtime/voice_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/runtime/voice_runtime.py) | [PhaseC非实时语音对话实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseC非实时语音对话实施文档.md)、[PhaseE-流式交互与拍照主链路改造实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseE-流式交互与拍照主链路改造实施文档.md) |
-| agent-core 与工具面 | [server/src/agent_core](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/agent_core) | [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)、[PhaseE-agent输入与工具面收敛实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseE-agent输入与工具面收敛实施文档.md) |
-| backend-task-core | [server/src/backend_task_core](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/backend_task_core) | [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)、[PhaseF-backend-task-core最小闭环实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseF-backend-task-core最小闭环实施文档.md) |
+| 服务端启动与 HTTP 路由 | [sdk/python/app/main.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/app/main.py)、[sdk/python/api/http_server.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/api/http_server.py) | [当前实现状态.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/当前实现状态.md) |
+| 控制连接、注册、绑定、抓拍、视频任务 | [sdk/python/api/ws/control_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/api/ws/control_runtime.py) | [PhaseI-手机接入与绑定实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseI-手机接入与绑定实施文档.md)、[PhaseJ-真实视频数据面实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseJ-真实视频数据面实施文档.md) |
+| 语音链路与 TTS 播放 | [sdk/python/runtime/voice_runtime.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/runtime/voice_runtime.py) | [PhaseC非实时语音对话实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseC非实时语音对话实施文档.md)、[PhaseE-流式交互与拍照主链路改造实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseE-流式交互与拍照主链路改造实施文档.md) |
+| agent-core 与工具面 | [sdk/python/agent_core](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/agent_core) | [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)、[PhaseE-agent输入与工具面收敛实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseE-agent输入与工具面收敛实施文档.md) |
+| backend-task-core | [sdk/python/backend_task_core](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/backend_task_core) | [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)、[PhaseF-backend-task-core最小闭环实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseF-backend-task-core最小闭环实施文档.md) |
 | SDK 与官方 example | [sdk/python/openaiglasses](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/openaiglasses)、[example](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/example) | [sdk-design](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design)、[第二期-SDK核心运行时与开发者扩展面产品化开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md) |
 
 ## 文档维护规则

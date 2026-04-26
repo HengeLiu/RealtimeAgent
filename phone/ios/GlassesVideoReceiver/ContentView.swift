@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// 视频回显主页面。
+/// 手机 SDK运行时 主页面。
 ///
 /// 主要功能：
 /// 1. 展示当前监听状态与接收地址。
-/// 2. 实时显示最近收到的一帧图像。
-/// 3. 展示帧序号、接收时间和最近事件，便于三端联调。
+/// 2. 展示最近接收到的一帧图像和运行状态。
+/// 3. 展示最近事件，便于三端联调。
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var store = CameraStreamStore()
+    @State private var store = CameraStreamStore(capabilityRuntime: PhoneCapabilityRuntimeFactory.makeRuntime())
     @State private var server: CameraSinkServer?
     @State private var controlClient: PhoneControlClient?
 
@@ -43,7 +43,7 @@ struct ContentView: View {
     /// 2. 提供刷新本机地址按钮，便于网络变化后重新确认。
     private var statusSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("眼镜视频回显验证")
+            Text("手机 SDK运行时")
                 .font(.title2.bold())
 
             Label(store.statusText, systemImage: store.statusIconName)
@@ -97,16 +97,16 @@ struct ContentView: View {
                     .font(.footnote)
             }
 
-            if let findTask = store.activeFindObjectTask {
-                Text("找物体任务：\(findTask.targetObject)")
+            if let activeTaskDescription = store.activeTaskDescription {
+                Text("当前任务：\(activeTaskDescription)")
                     .font(.footnote)
                     .foregroundStyle(.blue)
             }
 
-            if let latestVisionSummary = store.latestVisionSummary {
-                Text("最近检测：\(latestVisionSummary)")
+            if let latestCapabilitySummary = store.latestCapabilitySummary {
+                Text("最近任务结果：\(latestCapabilitySummary)")
                     .font(.footnote)
-                    .foregroundStyle(store.latestVisionFound ? .green : .secondary)
+                    .foregroundStyle((store.latestCapabilitySuccess ?? false) ? .green : .secondary)
             }
 
             HStack(spacing: 12) {
@@ -116,7 +116,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
 
-                Button("完成") {
+                Button("结束接收") {
                     Task {
                         await finishReceiving()
                     }
@@ -143,7 +143,7 @@ struct ContentView: View {
     /// 2. 在没有图像时显示占位提示，帮助判断当前仍未连通。
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("最近一帧")
+            Text("最近一帧图像")
                 .font(.headline)
 
             ZStack {
@@ -160,9 +160,9 @@ struct ContentView: View {
                     VStack(spacing: 10) {
                         Image(systemName: "video.slash")
                             .font(.system(size: 36))
-                        Text("等待眼镜发送视频帧")
+                        Text("等待眼镜发送图像帧")
                             .font(.headline)
-                        Text("连接建立后，这里会实时显示最近一帧 JPEG。")
+                        Text("连接建立后，这里会显示最近一帧 JPEG。")
                             .font(.footnote)
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)

@@ -1,0 +1,9 @@
+{
+  "task_id": "task_contract_001",
+  "phone_device_id": "phone-001",
+  "event_name": "phone.vision.find_object.result",
+  "payload": {
+    "found": true,
+    "summary": "found water_cup on the left"
+  }
+}

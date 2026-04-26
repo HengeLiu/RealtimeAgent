@@ -55,6 +55,18 @@ class PhoneTaskContext:
 
         return self.runtime.read_sensor(sensor_type)
 
+    def query_self(self):
+        """读取当前手机任务快照。
+
+        返回值：
+        1. 当前任务对应的 `PhoneTaskSnapshot`。
+
+        异常情况：
+        1. 当前任务已被运行时移除时，底层运行时会抛出异常。
+        """
+
+        return self.runtime.query_task(self.task_id)
+
 
 class BasePhoneTask(ABC):
     """手机侧长生命周期任务基类。"""

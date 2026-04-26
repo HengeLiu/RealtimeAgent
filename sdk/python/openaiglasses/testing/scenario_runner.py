@@ -4,11 +4,27 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from openaiglasses.testing.mocks import MockGlassRuntime, MockPhoneRuntime
-from openaiglasses.testing.replay import ReplaySensorProvider, ReplayTimeline
+from openaiglasses.testing.replay import ReplayTimeline
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioCapabilityHandler:
+    """单类能力场景处理器。
+
+    主要功能：
+    1. 为单个能力提供运行、摘要和输入校验实现。
+    2. 让 `ScenarioRunner` 不再把首个官方样例直接写死在总流程分发里。
+    """
+
+    capability: str
+    run: Callable[["ScenarioRunner", dict[str, Any], Path], dict[str, Any]]
+    describe_inputs: Callable[["ScenarioRunner", dict[str, Any]], dict[str, Any]]
+    validate_inputs: Callable[["ScenarioRunner", dict[str, Any], Path, dict[str, Any], list[str], list[str]], None]
 
 
 class ScenarioRunner:
@@ -22,7 +38,8 @@ class ScenarioRunner:
 
     主要方法：
     1. `run`：按 manifest 自动选择回放能力。
-    2. `run_find_object`：执行找物体示例回放。
+    2. `describe`：输出场景摘要。
+    3. `validate`：校验场景与资产引用。
     """
 
     def __init__(
@@ -35,6 +52,34 @@ class ScenarioRunner:
         self._sdk = sdk
         self._workspace_root = Path(workspace_root).resolve() if workspace_root else None
         self._replay_mode = replay_mode
+
+    def _get_capability_handler(self, capability: str) -> ScenarioCapabilityHandler:
+        """返回对应能力的场景处理器。"""
+
+        normalized = capability.strip()
+        handler = self._sdk.get_scenario_handler(normalized)
+        if handler is None:
+            raise RuntimeError(f"暂不支持的场景能力类型: {normalized}")
+        return handler
+
+    def _resolve_capability(self, scenario: dict[str, Any]) -> str:
+        """解析场景能力类型。
+
+        规则：
+        1. 优先使用 manifest 中显式声明的 `capability`。
+        2. 如果未声明且 SDK 只注册了一个场景处理器，则自动推断。
+        3. 其他情况直接报错，避免默认偏向某个官方样板。
+        """
+
+        explicit = str(scenario.get("capability") or "").strip()
+        if explicit:
+            return explicit
+        registered = self._sdk.list_scenario_capabilities()
+        if len(registered) == 1:
+            return registered[0]
+        if not registered:
+            raise RuntimeError("当前 SDK 未注册任何场景处理器")
+        raise RuntimeError("场景缺少 capability，且当前已注册多个场景处理器，无法自动推断")
 
     def run(self, scenario_path: str | Path) -> dict[str, Any]:
         """运行一个场景。
@@ -51,291 +96,178 @@ class ScenarioRunner:
 
         scenario_file = Path(scenario_path).resolve()
         scenario = self._load_json_file(scenario_file)
-        capability = str(scenario.get("capability") or "find_object").strip() or "find_object"
-        if capability == "find_object":
-            return self._run_find_object_manifest(scenario=scenario, scenario_file=scenario_file)
-        raise RuntimeError(f"暂不支持的场景能力类型: {capability}")
+        capability = self._resolve_capability(scenario)
+        handler = self._get_capability_handler(capability)
+        return handler.run(self, scenario, scenario_file)
 
-    def run_find_object(self, scenario_path: str | Path) -> dict[str, Any]:
-        """运行找物体场景。"""
+    def describe(self, scenario_path: str | Path) -> dict[str, Any]:
+        """输出场景摘要，便于维护回放资产。
 
-        return self.run(scenario_path)
+        参数：
+        1. `scenario_path`：场景 manifest 路径。
 
-    def _run_find_object_manifest(self, *, scenario: dict[str, Any], scenario_file: Path) -> dict[str, Any]:
-        """执行找物体 manifest。"""
+        返回值：
+        1. 场景摘要字典，包含能力类型、输入资产和断言约定。
+        """
 
+        scenario_file = Path(scenario_path).resolve()
+        scenario = self._load_json_file(scenario_file)
         inputs = self._require_mapping(scenario, "inputs")
-        target_object = str(inputs.get("target_object") or "").strip()
-        if not target_object:
-            raise RuntimeError("场景 inputs.target_object 不能为空")
-
-        phone_task_type = str(scenario.get("phone_task_type") or "find_object_phone_task").strip() or "find_object_phone_task"
-        processor_type = str(inputs.get("processor_type") or "yolo_find_object").strip() or "yolo_find_object"
-
-        tool = self._sdk.registry.get_tool("start_find_object")
-        if tool is None:
-            raise RuntimeError("未注册 start_find_object 工具")
-        if self._sdk.registry.get_phone_task(phone_task_type) is None:
-            raise RuntimeError(f"未注册 {phone_task_type} 手机任务")
-        if self._sdk.registry.get_phone_processor(processor_type) is None:
-            raise RuntimeError(f"未注册 {processor_type} 手机处理器")
-
-        device_group = self._require_mapping(scenario, "device_group")
-        glass_id = str(device_group.get("glass") or "").strip()
-        phone_id = str(device_group.get("phone") or "").strip()
-        if not glass_id or not phone_id:
-            raise RuntimeError("场景 device_group.glass 与 device_group.phone 不能为空")
-
-        runtime = self._sdk.device_groups
-        mock_glass = MockGlassRuntime(device_id=glass_id)
-        mock_phone = MockPhoneRuntime(device_id=phone_id)
-
-        self._prepare_device_group(
-            scenario=scenario,
-            runtime=runtime,
-            glass_id=glass_id,
-            phone_id=phone_id,
-            mock_glass=mock_glass,
-            mock_phone=mock_phone,
-        )
-
-        device_context = runtime.create_context(device_id=glass_id, session_id="scenario_session")
-        tool_result = tool.run(device_context, {"target_object": target_object})
-        if not tool_result.ok:
-            raise RuntimeError(tool_result.message or "启动找物体任务失败")
-        task_id = str(tool_result.data["task_id"])
-        task_snapshot = self._sdk.task_runtime.query_task(task_id)
-        phone_task = None
-        if task_snapshot.state != "failed":
-            phone_task = self._sdk.phone_runtime.start_task(
-                task_type=phone_task_type,
-                params={
-                    "target_object": target_object,
-                    "processor_type": processor_type,
-                },
-            )
-            mock_phone.start_task(
-                task_type=phone_task_type,
-                params={
-                    "target_object": target_object,
-                    "processor_type": processor_type,
-                },
-            )
-
-        sensor_providers = self._prepare_sensor_providers(
+        expected = self._require_mapping(scenario, "expected", required=False) or {}
+        capability = self._resolve_capability(scenario)
+        handler = self._get_capability_handler(capability)
+        assets = self._collect_assets(
             scenario=scenario,
             scenario_file=scenario_file,
         )
-        timeline = self._load_timeline(
-            scenario=scenario,
-            scenario_file=scenario_file,
-            fallback_frames=self._load_frame_inputs(scenario_file=scenario_file, inputs=inputs),
-        )
-        processed_event_types: list[str] = []
-
-        if phone_task is not None:
-            previous_at = 0
-            for event in timeline.events:
-                self._maybe_wait_for_event(event_at=event.at, previous_at=previous_at)
-                previous_at = event.at
-                processed_event_types.append(event.event_type)
-                task_snapshot, phone_task = self._process_find_object_event(
-                    event=event,
-                    task_id=task_id,
-                    task_snapshot=task_snapshot,
-                    phone_task=phone_task,
-                    mock_glass=mock_glass,
-                    mock_phone=mock_phone,
-                    runtime=runtime,
-                    sensor_providers=sensor_providers,
-                )
-                if task_snapshot.state in {"completed", "cancelled", "failed"}:
-                    break
-
-        result = {
+        return {
             "scenario_id": str(scenario.get("scenario_id") or scenario_file.stem),
             "title": str(scenario.get("title") or ""),
-            "task_id": task_id,
-            "task_state": task_snapshot.state,
-            "task_result": task_snapshot.result,
-            "task_data": task_snapshot.data,
-            "task_error": task_snapshot.error,
-            "notifications": runtime.list_notifications(),
-            "glass_commands": list(mock_glass.commands),
-            "glass_frames": list(mock_glass.frames),
-            "phone_commands": list(mock_phone.commands),
-            "phone_results": list(mock_phone.results),
-            "phone_stopped_tasks": list(mock_phone.stopped_tasks),
-            "replay_mode": self._replay_mode,
-            "timeline_event_count": len(processed_event_types),
-            "timeline_event_types": processed_event_types,
-            "sensor_readings": {
-                sensor_type: provider.snapshot()
-                for sensor_type, provider in sensor_providers.items()
-            },
+            "description": str(scenario.get("description") or ""),
+            "capability": capability,
+            "scenario_path": str(scenario_file),
+            "replay_inputs": handler.describe_inputs(self, inputs),
+            "assets": assets,
+            "expected_assertions": sorted(str(key) for key in expected.keys()),
+            "supported_timeline_event_types": [
+                "frame",
+                "glass.frame",
+                "task.cancel",
+                "task.event",
+                "sensor.<type>",
+                "video_link.stop",
+            ],
         }
-        assertions = self._evaluate_expected(
-            expected=self._require_mapping(scenario, "expected", required=False) or {},
-            result=result,
-        )
-        result["assertions"] = assertions
-        return result
 
-    def _prepare_device_group(
-        self,
-        *,
-        scenario: dict[str, Any],
-        runtime,
-        glass_id: str,
-        phone_id: str,
-        mock_glass: MockGlassRuntime,
-        mock_phone: MockPhoneRuntime,
-    ) -> None:
-        """根据场景配置初始化设备组与链路适配器。"""
+    def validate(self, scenario_path: str | Path) -> dict[str, Any]:
+        """校验场景 manifest 与引用资产是否符合最小约定。
 
-        device_group = self._require_mapping(scenario, "device_group")
-        register_phone = bool(device_group.get("register_phone", True))
-        bind_phone = bool(device_group.get("bind_phone", True))
-        phone_online = bool(device_group.get("phone_online", True))
-        glass_online = bool(device_group.get("glass_online", True))
-        video_link_start_mode = str(device_group.get("video_link_start_mode") or "success").strip() or "success"
-        video_link_stop_mode = str(device_group.get("video_link_stop_mode") or "success").strip() or "success"
+        参数：
+        1. `scenario_path`：场景 manifest 路径。
 
-        runtime.register_device(device_id=glass_id, role="glass")
-        if register_phone:
-            runtime.register_device(device_id=phone_id, role="phone")
-        if register_phone and bind_phone:
-            runtime.bind_devices(glass_device_id=glass_id, phone_device_id=phone_id)
-        if not glass_online:
-            runtime.mark_device_offline(glass_id)
-        if register_phone and not phone_online:
-            runtime.mark_device_offline(phone_id)
+        返回值：
+        1. 校验结果字典，包含 `ok`、`errors`、`warnings` 和场景摘要。
+        """
 
-        runtime.video_link_start_adapter = lambda **kwargs: self._on_video_link_start(
-            glass_runtime=mock_glass,
-            phone_runtime=mock_phone,
-            mode=video_link_start_mode,
-            **kwargs,
-        )
-        runtime.video_link_stop_adapter = lambda **kwargs: self._on_video_link_stop(
-            glass_runtime=mock_glass,
-            phone_runtime=mock_phone,
-            mode=video_link_stop_mode,
-            **kwargs,
-        )
+        scenario_file = Path(scenario_path).resolve()
+        errors: list[str] = []
+        warnings: list[str] = []
+        summary: dict[str, Any] = {}
+        scenario: dict[str, Any] | None = None
 
-    def _process_find_object_event(
-        self,
-        *,
-        event,
-        task_id: str,
-        task_snapshot,
-        phone_task,
-        mock_glass: MockGlassRuntime,
-        mock_phone: MockPhoneRuntime,
-        runtime,
-        sensor_providers: dict[str, ReplaySensorProvider],
-    ) -> tuple[Any, Any]:
-        """处理找物体场景中的单个时间轴事件。"""
+        try:
+            loaded = self._load_json_file(scenario_file)
+            if not isinstance(loaded, dict):
+                raise RuntimeError("场景文件根节点必须是对象")
+            scenario = loaded
+            summary = self.describe(scenario_file)
+        except Exception as exc:
+            errors.append(str(exc))
+            return {
+                "ok": False,
+                "scenario_path": str(scenario_file),
+                "errors": errors,
+                "warnings": warnings,
+                "summary": summary,
+            }
 
-        event_type = event.event_type
-        payload = event.payload
-        if event_type in {"frame", "glass.frame"}:
-            frame = payload.get("frame") if isinstance(payload, dict) and "frame" in payload else payload
-            mock_glass.push_frame(frame)
-            phone_task = self._sdk.phone_runtime.process_task_frame(
-                task_id=phone_task.task_id,
-                frame=frame,
+        try:
+            capability = self._resolve_capability(scenario)
+            self._get_capability_handler(capability)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+        for key in ["scenario_id", "title", "description"]:
+            value = scenario.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"场景字段 {key} 必须是非空字符串")
+
+        try:
+            device_group = self._require_mapping(scenario, "device_group")
+            for device_key in ["glass", "phone"]:
+                value = device_group.get(device_key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"场景字段 device_group.{device_key} 必须是非空字符串")
+        except Exception as exc:
+            errors.append(str(exc))
+
+        try:
+            inputs = self._require_mapping(scenario, "inputs")
+            expected = self._require_mapping(scenario, "expected", required=False) or {}
+            if not expected:
+                warnings.append("场景未声明 expected 断言，回放结果缺少稳定验收约束")
+            self._validate_capability_inputs(
+                scenario=scenario,
+                scenario_file=scenario_file,
+                inputs=inputs,
+                errors=errors,
+                warnings=warnings,
             )
-            if phone_task.results:
-                result = phone_task.results[-1]
-                mock_phone.emit_result(result)
-                task_snapshot = self._sdk.task_runtime.dispatch_event(
-                    task_id=task_id,
-                    event_name=str(result.get("event_name")),
-                    payload=result,
-                    source="mock_phone",
-                )
-            return task_snapshot, phone_task
+        except Exception as exc:
+            errors.append(str(exc))
 
-        if event_type == "task.cancel":
-            task_snapshot = self._sdk.task_runtime.cancel_task(task_id)
-            self._sdk.phone_runtime.stop_task(phone_task.task_id)
-            mock_phone.stop_task(phone_task.task_id)
-            return task_snapshot, phone_task
+        return {
+            "ok": not errors,
+            "scenario_path": str(scenario_file),
+            "errors": errors,
+            "warnings": warnings,
+            "summary": summary,
+        }
 
-        if event_type == "task.event":
-            if not isinstance(payload, dict):
-                raise RuntimeError("task.event 事件载荷必须是对象")
-            task_snapshot = self._sdk.task_runtime.dispatch_event(
-                task_id=task_id,
-                event_name=str(payload.get("event_name") or ""),
-                payload=dict(payload.get("payload") or {}),
-                source=str(payload.get("source") or "scenario"),
-            )
-            return task_snapshot, phone_task
+    def _collect_assets(self, *, scenario: dict[str, Any], scenario_file: Path) -> list[dict[str, Any]]:
+        """收集场景中引用的资产列表。"""
 
-        if event_type.startswith("sensor."):
-            sensor_type = event_type.split(".", 1)[1]
-            provider = sensor_providers.get(sensor_type)
-            if provider is None:
-                provider = ReplaySensorProvider(sensor_type=sensor_type)
-                sensor_providers[sensor_type] = provider
-                self._sdk.register_sensor_provider(provider)
-            reading_payload = dict(payload or {})
-            provider.append_reading(reading_payload, timestamp_ms=event.at)
-            mock_phone.receive_command(
-                "sensor.inject",
-                {
-                    "sensor_type": sensor_type,
-                    "timestamp_ms": event.at,
-                    "payload": reading_payload,
-                },
-            )
-            return task_snapshot, phone_task
+        assets: list[dict[str, Any]] = []
+        inputs = self._require_mapping(scenario, "inputs")
+        frames = inputs.get("frames")
+        if isinstance(frames, str):
+            assets.append(self._build_asset_item(scenario_file=scenario_file, asset_ref=frames, usage="frames"))
+        elif isinstance(frames, dict):
+            asset_path = frames.get("path")
+            if isinstance(asset_path, str) and asset_path.strip():
+                assets.append(self._build_asset_item(scenario_file=scenario_file, asset_ref=asset_path, usage="frames"))
 
-        if event_type == "video_link.stop":
-            runtime.stop_phone_video_link(
-                group_id=runtime.create_context(device_id=mock_glass.device_id, session_id="scenario_session").group_id,
-                reason="scenario_video_link_stop",
-            )
-            return task_snapshot, phone_task
+        timeline = inputs.get("timeline")
+        if isinstance(timeline, str):
+            assets.append(self._build_asset_item(scenario_file=scenario_file, asset_ref=timeline, usage="timeline"))
 
-        raise RuntimeError(f"暂不支持的时间轴事件类型: {event_type}")
+        sensors = inputs.get("sensors")
+        if isinstance(sensors, dict):
+            for sensor_type, asset_ref in sensors.items():
+                if isinstance(asset_ref, str) and asset_ref.strip():
+                    assets.append(
+                        self._build_asset_item(
+                            scenario_file=scenario_file,
+                            asset_ref=asset_ref,
+                            usage=f"sensor:{sensor_type}",
+                        )
+                    )
+        return assets
 
-    def _prepare_sensor_providers(
+    def _validate_capability_inputs(
         self,
         *,
         scenario: dict[str, Any],
         scenario_file: Path,
-    ) -> dict[str, ReplaySensorProvider]:
-        """根据场景配置预注册回放传感器提供者。"""
+        inputs: dict[str, Any],
+        errors: list[str],
+        warnings: list[str],
+    ) -> None:
+        """校验不同能力类型的输入字段。"""
 
-        providers: dict[str, ReplaySensorProvider] = {}
-        inputs = self._require_mapping(scenario, "inputs")
-        sensor_inputs = inputs.get("sensors")
-        if not isinstance(sensor_inputs, dict):
-            return providers
-        for sensor_type, asset_ref in sensor_inputs.items():
-            provider = ReplaySensorProvider(sensor_type=str(sensor_type))
-            asset_path = self._resolve_asset_path(scenario_file=scenario_file, asset_ref=str(asset_ref))
-            asset_data = self._load_json_file(asset_path)
-            events = []
-            if isinstance(asset_data, dict):
-                events = asset_data.get("events", [])
-            elif isinstance(asset_data, list):
-                events = asset_data
-            for item in events:
-                if isinstance(item, dict) and "payload" in item:
-                    provider.append_reading(
-                        dict(item.get("payload") or {}),
-                        timestamp_ms=int(item.get("at") or 0),
-                    )
-                elif isinstance(item, dict):
-                    provider.append_reading(dict(item), timestamp_ms=None)
-            self._sdk.register_sensor_provider(provider)
-            providers[str(sensor_type)] = provider
-        return providers
+        capability = self._resolve_capability(scenario)
+        handler = self._get_capability_handler(capability)
+        handler.validate_inputs(self, inputs, scenario_file, scenario, errors, warnings)
+
+    def _build_asset_item(self, *, scenario_file: Path, asset_ref: str, usage: str) -> dict[str, Any]:
+        """构造单个资产摘要。"""
+
+        asset_path = self._resolve_asset_path(scenario_file=scenario_file, asset_ref=asset_ref)
+        return {
+            "usage": usage,
+            "asset_ref": asset_ref,
+            "resolved_path": str(asset_path),
+        }
 
     def _load_timeline(
         self,
@@ -676,4 +608,40 @@ class ScenarioRunner:
             "glass_device_id": glass_device_id,
             "phone_device_id": phone_device_id,
             "reason": reason,
+        }
+
+    @staticmethod
+    def _on_device_command(
+        *,
+        glass_runtime: MockGlassRuntime,
+        phone_runtime: MockPhoneRuntime,
+        group_id: str,
+        role: str,
+        device_id: str,
+        session_id: str,
+        name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """记录 SDK 直接下发的设备控制消息。"""
+
+        message = {
+            "group_id": group_id,
+            "device_id": device_id,
+            "session_id": session_id,
+            **dict(payload),
+        }
+        if role == "glass":
+            glass_runtime.receive_command(name, message)
+        elif role == "phone":
+            phone_runtime.receive_command(name, message)
+        else:
+            raise RuntimeError(f"暂不支持的设备角色: {role}")
+        return {
+            "ok": True,
+            "group_id": group_id,
+            "role": role,
+            "device_id": device_id,
+            "session_id": session_id,
+            "name": name,
+            "payload": dict(payload),
         }

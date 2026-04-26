@@ -127,6 +127,66 @@ class DeviceGroupContext:
             priority=priority,
         )
 
+    def send_glass_command(self, *, name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """向当前设备组中的眼镜发送控制消息。"""
+
+        return self.runtime.send_device_command(
+            group_id=self.group_id,
+            role="glass",
+            session_id=self.session_id,
+            name=name,
+            payload=payload or {},
+        )
+
+    def send_phone_command(self, *, name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """向当前设备组中的手机发送控制消息。"""
+
+        return self.runtime.send_device_command(
+            group_id=self.group_id,
+            role="phone",
+            session_id=self.session_id,
+            name=name,
+            payload=payload or {},
+        )
+
+    def start_phone_task(self, *, task_type: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """启动当前设备组中的手机业务任务。
+
+        参数：
+        1. `task_type`：手机侧业务任务类型。
+        2. `params`：业务任务参数。
+
+        返回值：
+        1. 手机控制命令发送结果。
+
+        异常情况：
+        1. 当前上下文缺少任务编号时抛出 `RuntimeError`。
+        2. 未配置设备控制消息适配器时由运行时抛出异常。
+        """
+
+        if not self.task_id:
+            raise RuntimeError("启动手机任务需要当前 SDK 任务编号")
+        return self.runtime.start_phone_task(
+            group_id=self.group_id,
+            session_id=self.session_id,
+            sdk_task_id=self.task_id,
+            task_type=task_type,
+            params=params or {},
+        )
+
+    def stop_phone_task(self, *, task_type: str, reason: str) -> dict[str, Any]:
+        """停止当前设备组中的手机业务任务。"""
+
+        if not self.task_id:
+            raise RuntimeError("停止手机任务需要当前 SDK 任务编号")
+        return self.runtime.stop_phone_task(
+            group_id=self.group_id,
+            session_id=self.session_id,
+            sdk_task_id=self.task_id,
+            task_type=task_type,
+            reason=reason,
+        )
+
     def create_task(self, *, task_type: str, input_data: dict[str, Any] | None = None):
         """创建一个 SDK 托管任务。
 
@@ -178,10 +238,12 @@ class DeviceGroupRuntime:
     video_link_start_adapter: Callable[..., dict[str, Any]] | None = None
     video_link_stop_adapter: Callable[..., dict[str, Any]] | None = None
     notification_adapter: Callable[..., dict[str, Any]] | None = None
+    device_command_adapter: Callable[..., dict[str, Any]] | None = None
     task_runtime: Any | None = None
     _groups: dict[str, DeviceGroup] = field(default_factory=dict)
     _device_to_group: dict[str, str] = field(default_factory=dict)
     _notifications: list[dict[str, Any]] = field(default_factory=list)
+    _active_video_links: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def register_device(
         self,
@@ -349,13 +411,15 @@ class DeviceGroupRuntime:
         phone = self.require_device(group_id, "phone")
         if self.video_link_start_adapter is None:
             raise RuntimeError("未配置手机视频链路启动适配器")
-        return self.video_link_start_adapter(
+        result = self.video_link_start_adapter(
             group_id=group_id,
             glass_device_id=glass.device_id,
             phone_device_id=phone.device_id,
             reason=reason,
             params=params,
         )
+        self._active_video_links[group_id] = dict(result)
+        return result
 
     def stop_phone_video_link(self, *, group_id: str, reason: str) -> dict[str, Any]:
         """通过适配器停止手机视频链路。"""
@@ -364,12 +428,14 @@ class DeviceGroupRuntime:
         phone = self.require_device(group_id, "phone")
         if self.video_link_stop_adapter is None:
             raise RuntimeError("未配置手机视频链路停止适配器")
-        return self.video_link_stop_adapter(
+        result = self.video_link_stop_adapter(
             group_id=group_id,
             glass_device_id=glass.device_id,
             phone_device_id=phone.device_id,
             reason=reason,
         )
+        self._active_video_links.pop(group_id, None)
+        return result
 
     def submit_notification(
         self,
@@ -399,6 +465,79 @@ class DeviceGroupRuntime:
         """列出当前内存通知记录。"""
 
         return list(self._notifications)
+
+    def send_device_command(
+        self,
+        *,
+        group_id: str,
+        role: DeviceRole,
+        session_id: str,
+        name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """通过适配器向指定角色设备发送控制消息。"""
+
+        endpoint = self.require_device(group_id, role)
+        if self.device_command_adapter is None:
+            raise RuntimeError("未配置设备控制消息适配器")
+        return self.device_command_adapter(
+            group_id=group_id,
+            role=role,
+            device_id=endpoint.device_id,
+            session_id=session_id,
+            name=name,
+            payload=dict(payload),
+        )
+
+    def start_phone_task(
+        self,
+        *,
+        group_id: str,
+        session_id: str,
+        sdk_task_id: str,
+        task_type: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """向手机发送通用业务任务启动命令。"""
+
+        glass = self.require_device(group_id, "glass")
+        active_link = self._active_video_links.get(group_id, {})
+        return self.send_device_command(
+            group_id=group_id,
+            role="phone",
+            session_id=session_id,
+            name="sdk.phone.task.start",
+            payload={
+                "task_id": sdk_task_id,
+                "task_type": task_type,
+                "stream_id": str(active_link.get("stream_id") or ""),
+                "glass_device_id": glass.device_id,
+                "params": dict(params),
+            },
+        )
+
+    def stop_phone_task(
+        self,
+        *,
+        group_id: str,
+        session_id: str,
+        sdk_task_id: str,
+        task_type: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """向手机发送通用业务任务停止命令。"""
+
+        return self.send_device_command(
+            group_id=group_id,
+            role="phone",
+            session_id=session_id,
+            name="sdk.phone.task.stop",
+            payload={
+                "task_id": sdk_task_id,
+                "task_type": task_type,
+                "reason": reason,
+            },
+        )
 
     def create_task(
         self,

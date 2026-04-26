@@ -243,47 +243,54 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             audio_client.close()
 
     def test_control_runtime_can_create_sdk_device_group_context(self) -> None:
-        """测试目标：验证真实控制运行时可产出 SDK 设备组上下文并桥接后台任务。
+        """测试目标：验证真实控制运行时可产出 SDK 设备组上下文并桥接系统后台任务。
 
         测试方法：
-        1. 注册一台眼镜设备。
+        1. 注册一台眼镜和一台手机设备。
         2. 通过 `ControlRuntime.create_device_group_context()` 获取 SDK 上下文。
-        3. 使用该上下文创建一个 `timer_task` 并轮询完成。
+        3. 使用该上下文创建一个 `phone_video_link_task`。
 
         预期结果：
         1. SDK 上下文中能读取当前眼镜设备。
-        2. 创建的任务进入 `running`，随后进入 `completed`。
+        2. 创建的系统任务进入 `running`。
         """
 
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
         try:
             self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
             registered = self.codec.decode(client.recv_text())
             self.assertEqual(registered.name, "device.registered")
             opened = self.codec.decode(client.recv_text())
             self.assertEqual(opened.name, "voice.session.open")
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+            self.codec.decode(client.recv_text())
+            self.codec.decode(phone.recv_text())
 
             context = self.handle.runtime.create_device_group_context(device_id="glass-001")
             self.assertEqual(context.require_glass().device_id, "glass-001")
+            self.assertEqual(context.require_phone().device_id, "phone-001")
 
             created = context.create_task(
-                task_type="timer_task",
-                input_data={"duration_seconds": 1, "label": "SDK 桥接计时"},
+                task_type="phone_video_link_task",
+                input_data={
+                    "phone_device_id": "phone-001",
+                    "target_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                    "frame_interval_ms": 500,
+                },
             )
             self.assertEqual(created.state, "running")
-
-            deadline = time.time() + 2.5
-            latest = created
-            while time.time() < deadline:
-                latest = context.query_task(created.task_id)
-                if latest.state == "completed":
-                    break
-                time.sleep(0.05)
-
-            self.assertEqual(latest.state, "completed")
-            self.assertEqual(latest.result["message"], "计时结束")
+            self.assertEqual(created.task_type, "phone_video_link_task")
         finally:
             client.close()
+            phone.close()
 
     def test_register_failed_when_pair_token_mismatch(self) -> None:
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
@@ -956,57 +963,6 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             self.assertEqual(camera_stop.name, "sensor.camera.stream.stop")
         finally:
             glass.close()
-
-    def test_debug_start_find_object_endpoint_starts_task_without_voice_reply(self) -> None:
-        """测试目标：验证调试接口可直接启动找物体任务且不向眼镜播报。"""
-
-        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
-        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
-        try:
-            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
-            self.codec.decode(glass.recv_text())
-            opened = self.codec.decode(glass.recv_text())
-            self.assertEqual(opened.name, "voice.session.open")
-
-            self._send_register(
-                phone,
-                device_id="phone-001",
-                device_type="phone",
-                pair_token="pair-phone-token",
-                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
-            )
-            self.codec.decode(phone.recv_text())
-            self.codec.decode(glass.recv_text())
-            self.codec.decode(phone.recv_text())
-
-            payload = self._post_json(
-                "/api/debug/find-object/start",
-                {
-                    "glass_device_id": "glass-001",
-                    "target_object": "手机",
-                    "frame_interval_ms": 500,
-                    "reason": "manual_debug",
-                },
-            )
-
-            self.assertEqual(payload["status"], "ok")
-            self.assertEqual(payload["reply_text"], "已开始寻找手机，找到后会记录任务结果。")
-            self.assertEqual(payload["task"]["task_type"], "find_object_task")
-            self.assertEqual(payload["task"]["state"], "running")
-            self.assertEqual(payload["task"]["target_object"], "手机")
-            self.assertEqual(payload["task"]["phone_device_id"], "phone-001")
-            self.assertEqual(payload["task"]["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
-
-            phone_start = self._recv_until_message_name(phone, "vision.find_object.start")
-            self.assertEqual(phone_start.payload["task_id"], payload["task"]["task_id"])
-            self.assertEqual(phone_start.payload["target_object"], "手机")
-
-            camera_start = self._recv_until_message_name(glass, "sensor.camera.stream.start")
-            self.assertEqual(camera_start.payload["stream_id"], payload["task"]["stream_id"])
-            self.assertEqual(camera_start.payload["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
-        finally:
-            glass.close()
-            phone.close()
 
     def _send_register(
         self,

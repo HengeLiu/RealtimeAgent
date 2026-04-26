@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from urllib.request import urlopen
 
+import pytest
+
 from example.server.main import create_sdk, create_server_handle
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
@@ -18,6 +20,7 @@ from openaiglasses import (
     BaseSensorProvider,
     HybridTaskGateway,
     OpenAIGlassesSDK,
+    PhoneTaskContext,
     SensorReading,
     build_agent_facade_from_sdk,
 )
@@ -45,6 +48,35 @@ def test_sdk_registry_can_load_official_example() -> None:
     assert sdk.registry.list_task_types() == ["find_object_task"]
     assert sdk.registry.list_phone_processor_types() == ["yolo_find_object"]
     assert sdk.registry.list_phone_task_types() == ["find_object_phone_task"]
+    assert sdk.get_scenario_handler("find_object") is not None
+
+
+def test_sdk_registry_rejects_duplicate_tool_registration() -> None:
+    """测试目标：验证能力注册表会拒绝重复 Tool 名称。
+
+    测试方法：
+    1. 创建一个空 SDK。
+    2. 连续注册两个同名 Tool。
+
+    预期结果：
+    1. 第二次注册抛出 `ValueError`。
+    """
+
+    class DemoToolA:
+        name = "demo_tool"
+
+    class DemoToolB:
+        name = "demo_tool"
+
+    sdk = OpenAIGlassesSDK()
+    sdk.registry.register_tool(DemoToolA())
+
+    try:
+        sdk.registry.register_tool(DemoToolB())
+    except ValueError as exc:
+        assert "tool 已存在重复注册" in str(exc)
+    else:  # pragma: no cover - 防止误通过
+        raise AssertionError("重复 Tool 注册应抛出 ValueError")
 
 
 def test_device_group_runtime_hides_binding_details() -> None:
@@ -92,6 +124,7 @@ def test_example_tool_can_create_managed_task() -> None:
     runtime.register_device(device_id="phone_001", role="phone")
     runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
     runtime.video_link_start_adapter = lambda **kwargs: {"ok": True, **kwargs}
+    runtime.device_command_adapter = lambda **kwargs: {"ok": True, **kwargs}
     context = runtime.create_context(device_id="glass_001", session_id="sess_001")
 
     tool = sdk.registry.get_tool("start_find_object")
@@ -118,13 +151,117 @@ def test_official_example_replay_can_complete_find_object() -> None:
     """
 
     sdk = create_sdk()
-    result = ScenarioRunner(sdk).run_find_object(ROOT / "example/scenario/find_object_basic.json")
+    result = ScenarioRunner(sdk).run(ROOT / "example/scenario/find_object_basic.json")
 
     assert result["task_state"] == "completed"
     assert result["task_result"]["found"] is True
     assert any("找到水杯" in item["text"] for item in result["notifications"])
     assert result["assertions"]["passed"] is True
     assert "sensor.camera.stream.start" in [item["name"] for item in result["glass_commands"]]
+
+
+def test_scenario_runner_can_describe_find_object_scenario_assets() -> None:
+    """测试目标：验证场景回放器可以输出场景摘要。
+
+    测试方法：
+    1. 创建已注册官方样例能力的 SDK。
+    2. 调用 `ScenarioRunner.describe(...)` 读取 testdata 场景摘要。
+
+    预期结果：
+    1. 摘要中包含 capability、资产路径和断言字段列表。
+    """
+
+    sdk = create_sdk()
+    summary = ScenarioRunner(sdk).describe(ROOT / "testdata/scenario/find_object_with_testdata.json")
+
+    assert summary["capability"] == "find_object"
+    assert summary["scenario_id"] == "find_object_with_testdata"
+    assert "task_state" in summary["expected_assertions"]
+    assert any(item["usage"] == "frames" for item in summary["assets"])
+
+
+def test_scenario_runner_can_validate_find_object_manifest() -> None:
+    """测试目标：验证场景回放器可以校验正式场景 manifest。
+
+    测试方法：
+    1. 创建已注册官方样例能力的 SDK。
+    2. 调用 `ScenarioRunner.validate(...)` 校验 testdata 场景。
+
+    预期结果：
+    1. 校验通过。
+    2. 返回结果中包含场景摘要。
+    """
+
+    sdk = create_sdk()
+    validation = ScenarioRunner(sdk).validate(ROOT / "testdata/scenario/find_object_with_testdata.json")
+
+    assert validation["ok"] is True
+    assert validation["errors"] == []
+    assert validation["summary"]["scenario_id"] == "find_object_with_testdata"
+
+
+def test_scenario_runner_can_validate_find_object_sensor_manifest() -> None:
+    """测试目标：验证带传感器输入的找物体场景可以通过 manifest 校验。
+
+    测试方法：
+    1. 创建已注册官方样例能力的 SDK。
+    2. 调用 `ScenarioRunner.validate(...)` 校验带 heading 传感器的场景。
+
+    预期结果：
+    1. 校验通过。
+    2. 摘要中包含 `heading` 传感器类型和手机任务参数。
+    """
+
+    sdk = create_sdk()
+    validation = ScenarioRunner(sdk).validate(ROOT / "testdata/scenario/find_object_with_heading_sensor.json")
+
+    assert validation["ok"] is True
+    assert validation["summary"]["replay_inputs"]["sensor_types"] == ["heading"]
+    assert validation["summary"]["replay_inputs"]["phone_task_params"]["heading_sensor_type"] == "heading"
+
+
+def test_scenario_runner_reports_missing_asset_in_validation(tmp_path: Path) -> None:
+    """测试目标：验证场景校验会拦截缺失资产。
+
+    测试方法：
+    1. 在临时目录写入一个引用不存在帧资产的场景。
+    2. 调用 `ScenarioRunner.validate(...)` 校验该场景。
+
+    预期结果：
+    1. 校验失败。
+    2. 错误信息中包含找不到资产的提示。
+    """
+
+    scenario_path = tmp_path / "invalid_scenario.json"
+    scenario_path.write_text(
+        json.dumps(
+            {
+                "scenario_id": "invalid_find_object_missing_asset",
+                "title": "无效找物体场景",
+                "description": "引用了不存在的帧资产。",
+                "capability": "find_object",
+                "device_group": {
+                    "glass": "mock_glass_001",
+                    "phone": "mock_phone_001",
+                },
+                "inputs": {
+                    "target_object": "水杯",
+                    "frames": "text/not_exists.json",
+                },
+                "expected": {
+                    "task_state": "completed",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    sdk = create_sdk()
+    validation = ScenarioRunner(sdk, workspace_root=tmp_path).validate(scenario_path)
+
+    assert validation["ok"] is False
+    assert any("找不到场景资产文件" in item for item in validation["errors"])
 
 
 def test_scenario_runner_can_load_frames_from_testdata_manifest() -> None:
@@ -146,6 +283,29 @@ def test_scenario_runner_can_load_frames_from_testdata_manifest() -> None:
     assert result["assertions"]["passed"] is True
     assert len(result["glass_frames"]) >= 2
     assert result["phone_results"][-1]["found"] is True
+
+
+def test_scenario_runner_can_replay_find_object_with_heading_sensor() -> None:
+    """测试目标：验证官方样例回放可以消费 heading 传感器。
+
+    测试方法：
+    1. 创建已注册官方样例能力的 SDK。
+    2. 运行 `testdata/scenario/find_object_with_heading_sensor.json`。
+
+    预期结果：
+    1. 任务进入 `completed`。
+    2. 最终结构化结果中包含方向角字段。
+    3. 传感器快照中记录了回放输入。
+    """
+
+    sdk = create_sdk()
+    result = ScenarioRunner(sdk).run(ROOT / "testdata/scenario/find_object_with_heading_sensor.json")
+
+    assert result["task_state"] == "completed"
+    assert result["task_result"]["heading_degrees"] == 92
+    assert result["phone_results"][-1]["heading_degrees"] == 92
+    assert len(result["sensor_readings"]["heading"]) == 2
+    assert result["assertions"]["passed"] is True
 
 
 def test_scenario_runner_can_replay_cancelled_find_object_manifest() -> None:
@@ -247,40 +407,33 @@ def test_replay_timeline_and_sensor_provider_can_work_together() -> None:
     assert latest.payload["heading_degrees"] == 92
 
 
-def test_backend_task_gateway_adapter_exposes_sdk_snapshot() -> None:
-    """测试目标：验证旧后台任务网关可以桥接成 SDK 任务快照。
+def test_backend_task_gateway_adapter_rejects_system_task_after_sdk_boundary_move() -> None:
+    """测试目标：验证旧后台任务网关桥接器不再直接承载系统视频直连任务。
 
     测试方法：
     1. 创建一个真实 `InMemoryTaskGateway`。
     2. 用 `BackendTaskGatewayAdapter` 包装。
-    3. 创建并查询 `find_object_task`。
+    3. 尝试创建 `phone_video_link_task`。
 
     预期结果：
-    1. 适配器返回 `TaskRuntimeSnapshot` 风格字段。
-    2. `data` 中可读取旧运行态的上下文字段。
+    1. 抛出任务不存在错误。
+    2. 错误语义说明该系统任务已经转交 SDK 集成层托管。
     """
 
     gateway = InMemoryTaskGateway()
     try:
         adapter = BackendTaskGatewayAdapter(task_gateway=gateway)
-        snapshot = adapter.create_task(
-            task_type="find_object_task",
-            session_id="sess_find_object_001",
-            device_id="glass-001",
-            input_data={
-                "target_object": "水杯",
-                "phone_device_id": "phone-001",
-                "target_ws_uri": "ws://127.0.0.1:19001/ws/camera",
-                "frame_interval_ms": 500,
-            },
-        )
-
-        assert snapshot.state == "running"
-        assert snapshot.input_data["target_object"] == "水杯"
-        assert snapshot.data["phone_device_id"] == "phone-001"
-        latest = adapter.query_task(snapshot.task_id)
-        assert latest.task_id == snapshot.task_id
-        assert latest.task_type == "find_object_task"
+        with pytest.raises(Exception, match="未找到对应任务模板"):
+            adapter.create_task(
+                task_type="phone_video_link_task",
+                session_id="sess_phone_video_001",
+                device_id="glass-001",
+                input_data={
+                    "phone_device_id": "phone-001",
+                    "target_ws_uri": "ws://127.0.0.1:19001/ws/camera",
+                    "frame_interval_ms": 500,
+                },
+            )
     finally:
         gateway.shutdown()
 
@@ -315,6 +468,75 @@ def test_phone_runtime_can_run_phone_task_with_processor() -> None:
 
     assert updated.results[-1]["found"] is True
     assert updated.results[-1]["target_object"] == "水杯"
+
+
+def test_phone_runtime_can_list_task_snapshots() -> None:
+    """测试目标：验证手机运行时可以列出当前全部任务快照。
+
+    测试方法：
+    1. 创建包含官方示例手机能力的 SDK。
+    2. 连续启动两个 `find_object_phone_task`。
+    3. 调用 `phone_runtime.list_tasks()`。
+
+    预期结果：
+    1. 返回两个任务快照。
+    2. 每个快照都保留独立的任务编号和运行状态。
+    """
+
+    sdk = create_sdk()
+    first = sdk.phone_runtime.start_task(
+        task_type="find_object_phone_task",
+        params={
+            "target_object": "水杯",
+            "processor_type": "yolo_find_object",
+        },
+    )
+    second = sdk.phone_runtime.start_task(
+        task_type="find_object_phone_task",
+        params={
+            "target_object": "钥匙",
+            "processor_type": "yolo_find_object",
+        },
+    )
+
+    tasks = sdk.phone_runtime.list_tasks()
+
+    assert len(tasks) == 2
+    assert {item.task_id for item in tasks} == {first.task_id, second.task_id}
+    assert {item.state for item in tasks} == {"running"}
+
+
+def test_phone_task_context_can_query_self_snapshot() -> None:
+    """测试目标：验证手机任务上下文可以查询自身快照。
+
+    测试方法：
+    1. 注册一个在 `on_start` 中调用 `query_self()` 的手机任务。
+    2. 启动该任务并记录读取到的快照。
+
+    预期结果：
+    1. 上下文可以读取当前任务编号。
+    2. 读取到的快照包含最新状态数据。
+    """
+
+    class InspectSelfPhoneTask(BasePhoneTask):
+        task_type = "inspect_self_phone_task"
+
+        def on_start(self, context: PhoneTaskContext) -> None:
+            context.emit_state("running", {"phase": "started"})
+            snapshot = context.query_self()
+            context.update({"snapshot_task_id": snapshot.task_id, "snapshot_state": snapshot.state})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(InspectSelfPhoneTask())
+
+    snapshot = sdk.phone_runtime.start_task(
+        task_type="inspect_self_phone_task",
+        params={},
+    )
+
+    assert snapshot.state == "running"
+    assert snapshot.data["snapshot_task_id"] == snapshot.task_id
+    assert snapshot.data["snapshot_state"] == "running"
 
 
 def test_phone_runtime_can_read_registered_sensor_provider() -> None:
@@ -393,17 +615,17 @@ def test_hybrid_task_gateway_can_run_sdk_only_task() -> None:
         gateway.shutdown()
 
 
-def test_hybrid_task_gateway_can_forward_find_object_event_to_sdk_task() -> None:
-    """测试目标：验证混合任务网关可把找物体事件推进到 SDK 任务。
+def test_hybrid_task_gateway_can_forward_generic_event_to_sdk_task() -> None:
+    """测试目标：验证混合任务网关可把通用事件推进到 SDK 任务。
 
     测试方法：
-    1. 注册一个等待视觉结果的 SDK 任务。
+    1. 注册一个等待手机事件的 SDK 任务。
     2. 通过 `HybridTaskGateway` 创建该任务。
-    3. 调用 `report_find_object_result(...)` 上报一次命中结果。
+    3. 调用 `dispatch_event(...)` 上报一次通用事件。
 
     预期结果：
     1. 任务从 `running` 进入 `completed`。
-    2. 结果中包含手机侧上报的目标物体信息。
+    2. 结果中包含手机侧上报的业务字段。
     """
 
     class WaitingFindObjectTask(BaseTask):
@@ -435,14 +657,18 @@ def test_hybrid_task_gateway_can_forward_find_object_event_to_sdk_task() -> None
         )
 
         assert runtime.state == "running"
-        updated = gateway.report_find_object_result(
+        updated = gateway.dispatch_event(
             task_id=runtime.task_id,
-            found=True,
-            target_object="水杯",
-            confidence=0.91,
-            position="center",
-            frame_seq=3,
-            summary="找到水杯了",
+            event_name="phone.vision.find_object.result",
+            payload={
+                "found": True,
+                "target_object": "水杯",
+                "confidence": 0.91,
+                "position": "center",
+                "frame_seq": 3,
+                "summary": "找到水杯了",
+            },
+            source="phone",
         )
 
         assert updated.state == "completed"
@@ -469,6 +695,7 @@ def test_build_agent_facade_from_sdk_registers_sdk_tools() -> None:
     runtime.register_device(device_id="phone_001", role="phone")
     runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
     runtime.video_link_start_adapter = lambda **kwargs: {"ok": True, **kwargs}
+    runtime.device_command_adapter = lambda **kwargs: {"ok": True, **kwargs}
 
     facade = build_agent_facade_from_sdk(
         sdk=sdk,

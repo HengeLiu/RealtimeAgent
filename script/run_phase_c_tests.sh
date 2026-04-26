@@ -9,5 +9,5 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-export PYTHONPATH="$ROOT_DIR/server/src"
+export PYTHONPATH="$ROOT_DIR/sdk/python:$ROOT_DIR"
 exec uv run --python 3.11 python -m unittest discover -s server/test -p 'test_*.py' -v

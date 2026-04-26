@@ -276,7 +276,7 @@ final class PhoneControlClient {
     /// 通知服务端停止当前视频接收任务。
     func stopVideoReceiving() async {
         let glassDeviceID = store.boundGlassDeviceID ??
-            store.activeFindObjectTask?.glassDeviceID ??
+            store.activePhoneTaskState?.glassDeviceID ??
             config.desiredGlassDeviceID
         guard !glassDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             store.markError("当前缺少眼镜设备编号，无法请求服务端停止视频任务")
@@ -357,22 +357,25 @@ final class PhoneControlClient {
             let glassDeviceID = payload["glass_device_id"] as? String ?? ""
             let phoneDeviceID = payload["phone_device_id"] as? String ?? config.phoneDeviceID
             store.markBound(glassDeviceID: glassDeviceID, phoneDeviceID: phoneDeviceID)
-        case "vision.find_object.start":
+        case "sdk.phone.task.start":
             let taskID = payload["task_id"] as? String ?? ""
-            let targetObject = payload["target_object"] as? String ?? ""
+            let taskType = payload["task_type"] as? String ?? ""
             let streamID = payload["stream_id"] as? String ?? ""
             let glassDeviceID = payload["glass_device_id"] as? String ?? config.desiredGlassDeviceID
-            store.startFindObjectTask(
+            let params = payload["params"] as? [String: Any] ?? [:]
+            store.startPhoneTask(
                 taskID: taskID,
-                targetObject: targetObject,
+                taskType: taskType,
                 streamID: streamID,
                 glassDeviceID: glassDeviceID,
-                phoneDeviceID: config.phoneDeviceID
+                phoneDeviceID: config.phoneDeviceID,
+                params: params
             )
-        case "vision.find_object.stop":
+        case "sdk.phone.task.stop":
             let taskID = payload["task_id"] as? String ?? ""
+            let taskType = payload["task_type"] as? String ?? ""
             let reason = payload["reason"] as? String ?? "server_requested"
-            store.stopFindObjectTask(taskID: taskID, reason: reason)
+            store.stopPhoneTask(taskID: taskID, taskType: taskType, reason: reason)
         case "device.register.failed":
             heartbeatTimer?.invalidate()
             heartbeatTimer = nil

@@ -8,13 +8,14 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-for path in (ROOT_DIR / "sdk/python", ROOT_DIR / "server/src", ROOT_DIR):
+for path in (ROOT_DIR / "sdk/python", ROOT_DIR):
     path_text = str(path)
     if path_text not in sys.path:
         sys.path.insert(0, path_text)
 
 from example.capabilities.find_object.phone.processor import YoloFindObjectProcessor
 from example.capabilities.find_object.phone.task import FindObjectPhoneTask
+from example.capabilities.find_object.scenario import build_find_object_scenario_handler
 from example.capabilities.find_object.server.task import FindObjectTask
 from example.capabilities.find_object.server.tool import StartFindObjectTool
 from infra.config import ServerSettings
@@ -45,6 +46,7 @@ def create_sdk() -> OpenAIGlassesSDK:
     sdk.register_task(FindObjectTask())
     sdk.register_phone_processor(YoloFindObjectProcessor())
     sdk.register_phone_task(FindObjectPhoneTask())
+    sdk.register_scenario_handler("find_object", build_find_object_scenario_handler())
     return sdk
 
 

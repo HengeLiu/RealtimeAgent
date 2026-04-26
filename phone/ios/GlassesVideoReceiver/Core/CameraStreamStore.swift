@@ -10,6 +10,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class CameraStreamStore {
+    /// 手机端任务能力运行时。
+    private let capabilityRuntime: any PhoneTaskCapabilityRuntime
+
     /// 当前是否已由用户结束接收。
     var isFinished = false
 
@@ -52,32 +55,18 @@ final class CameraStreamStore {
     /// 当前手机编号。
     var phoneDeviceID: String?
 
+    /// 当前由 SDK 启动的手机端任务状态。
+    var activePhoneTaskState: PhoneTaskState?
+
     /// 当前控制连接是否处于重试等待中。
     var isServerRetryScheduled = false
 
     /// 下一次控制连接重试时间。
     var serverRetryAt: Date?
 
-    /// 当前正在运行的找物体任务。
-    var activeFindObjectTask: FindObjectTaskState?
-
-    /// 最近一次视觉检测摘要。
-    var latestVisionSummary: String?
-
-    /// 最近一次视觉检测是否命中目标。
-    var latestVisionFound = false
-
-    /// 最近一次视觉检测置信度。
-    var latestVisionConfidence: Double?
-
-    /// 找物体检测器。
-    private let objectDetector: YoloObjectDetector = HeuristicYoloObjectDetector()
-
-    /// 上次上报视觉结果的时间。
-    private var lastVisionReportAt: Date?
-
-    /// 是否已经对当前任务上报过命中。
-    private var hasReportedFindObjectHit = false
+    init(capabilityRuntime: any PhoneTaskCapabilityRuntime) {
+        self.capabilityRuntime = capabilityRuntime
+    }
 
     /// 当前页面状态文字。
     var statusText: String {
@@ -209,7 +198,7 @@ final class CameraStreamStore {
         latestReceivedAt = Date()
         lastError = nil
         appendEvent("收到视频帧：seq=\(sequence)")
-        processFindObjectFrame(image: image, sequence: sequence)
+        capabilityRuntime.processFrame(store: self, image: image, sequence: sequence)
     }
 
     /// 记录错误信息。
@@ -300,60 +289,45 @@ final class CameraStreamStore {
         boundGlassDeviceID = nil
     }
 
-    /// 开始手机端找物体任务。
-    ///
-    /// 主要逻辑：
-    /// 1. 保存服务端下发的任务编号、目标物体和视频流编号。
-    /// 2. 清空上一轮检测结果。
-    /// 3. 后续每帧视频会自动进入本地检测流程。
-    ///
-    /// 参数：
-    /// 1. `taskID`：服务端后台任务编号。
-    /// 2. `targetObject`：目标物体名称。
-    /// 3. `streamID`：视频流编号。
-    /// 4. `glassDeviceID`：眼镜设备编号。
-    /// 5. `phoneDeviceID`：手机设备编号。
-    func startFindObjectTask(
+    /// 启动一个由能力运行时处理的手机任务。
+    func startPhoneTask(
         taskID: String,
-        targetObject: String,
+        taskType: String,
         streamID: String,
         glassDeviceID: String,
-        phoneDeviceID: String
+        phoneDeviceID: String,
+        params: [String: Any]
     ) {
-        guard !taskID.isEmpty, !targetObject.isEmpty else {
-            markError("找物体任务启动参数不完整")
-            return
-        }
-        activeFindObjectTask = FindObjectTaskState(
+        activePhoneTaskState = PhoneTaskState(
             taskID: taskID,
-            targetObject: targetObject,
+            taskType: taskType,
             streamID: streamID,
             glassDeviceID: glassDeviceID,
             phoneDeviceID: phoneDeviceID
         )
-        latestVisionSummary = nil
-        latestVisionFound = false
-        latestVisionConfidence = nil
-        hasReportedFindObjectHit = false
-        lastVisionReportAt = nil
-        appendEvent("找物体任务已启动：target=\(targetObject)")
+        capabilityRuntime.startTask(
+            store: self,
+            taskID: taskID,
+            taskType: taskType,
+            streamID: streamID,
+            glassDeviceID: glassDeviceID,
+            phoneDeviceID: phoneDeviceID,
+            params: params
+        )
     }
 
-    /// 停止当前找物体任务。
-    ///
-    /// 参数：
-    /// 1. `taskID`：服务端任务编号，允许为空表示停止当前任务。
-    /// 2. `reason`：停止原因。
-    func stopFindObjectTask(taskID: String, reason: String) {
-        guard let task = activeFindObjectTask else {
-            return
+    /// 停止一个由能力运行时处理的手机任务。
+    func stopPhoneTask(taskID: String, taskType: String, reason: String) {
+        if activePhoneTaskState?.taskID == taskID || taskID.isEmpty {
+            activePhoneTaskState = nil
         }
-        if !taskID.isEmpty, task.taskID != taskID {
-            return
-        }
-        activeFindObjectTask = nil
-        finishCurrentVideoSession("找物体任务结束：\(reason)")
-        appendEvent("找物体任务已停止：\(reason)")
+        capabilityRuntime.stopTask(
+            store: self,
+            taskID: taskID,
+            taskType: taskType,
+            reason: reason
+        )
+        finishCurrentVideoSession("手机任务结束：\(reason)")
     }
 
     /// 结束当前视频会话，但保持应用继续待命。
@@ -415,233 +389,141 @@ final class CameraStreamStore {
         return 20
     }
 
-    /// 对当前视频帧执行找物体检测。
-    ///
-    /// 主要逻辑：
-    /// 1. 仅在服务端已经下发 `vision.find_object.start` 后运行。
-    /// 2. 调用本地 `YoloObjectDetector` 接口得到结构化结果。
-    /// 3. 按节流策略把检测结果上报服务端。
-    ///
-    /// 参数：
-    /// 1. `image`：最近收到的 JPEG 图像。
-    /// 2. `sequence`：视频帧序号。
-    private func processFindObjectFrame(image: UIImage, sequence: Int) {
-        guard let task = activeFindObjectTask else {
-            return
-        }
-        let detection = objectDetector.detect(image: image, targetObject: task.targetObject, frameSequence: sequence)
-        latestVisionFound = detection.found
-        latestVisionConfidence = detection.confidence
-        latestVisionSummary = detection.summary
-
-        if detection.found {
-            appendEvent("找物体命中：\(detection.summary)")
-        } else if sequence % 10 == 0 {
-            appendEvent("找物体检测：\(detection.summary)")
-        }
-
-        guard shouldReportVisionResult(detection, sequence: sequence) else {
-            return
-        }
-        if detection.found {
-            hasReportedFindObjectHit = true
-        }
-        lastVisionReportAt = Date()
-        Task {
-            do {
-                try await FindObjectReportAPI.report(task: task, detection: detection)
-            } catch {
-                await MainActor.run {
-                    self.markError("找物体结果上报失败：\(error.localizedDescription)")
-                }
-            }
-        }
+    /// 当前是否存在能力层正在运行的手机任务。
+    var activeTaskDescription: String? {
+        capabilityRuntime.activeTaskDescription
     }
 
-    /// 判断当前检测结果是否需要上报。
-    ///
-    /// 参数：
-    /// 1. `detection`：本次检测结果。
-    /// 2. `sequence`：视频帧序号。
-    ///
-    /// 返回值：
-    /// 1. `true` 表示需要上报服务端。
-    private func shouldReportVisionResult(_ detection: VisionDetection, sequence: Int) -> Bool {
-        if detection.found {
-            return !hasReportedFindObjectHit
-        }
-        if sequence % 10 != 0 {
-            return false
-        }
-        guard let lastVisionReportAt else {
-            return true
-        }
-        return Date().timeIntervalSince(lastVisionReportAt) >= 2
+    /// 最近一次能力层输出摘要。
+    var latestCapabilitySummary: String? {
+        capabilityRuntime.latestSummary
+    }
+
+    /// 最近一次能力层输出是否命中目标。
+    var latestCapabilitySuccess: Bool? {
+        capabilityRuntime.latestSuccess
     }
 }
 
-/// 手机端找物体任务状态。
+/// 手机端任务能力工厂注册器。
 ///
 /// 主要功能：
-/// 1. 保存服务端下发的找物体任务上下文。
-/// 2. 为手机端检测与结果上报提供必要标识。
-struct FindObjectTaskState: Equatable {
+/// 1. 让 SDK运行时 通过统一入口装配手机能力运行时。
+/// 2. 避免根运行时直接依赖某个具体业务样板能力。
+@MainActor
+enum PhoneCapabilityRuntimeFactory {
+    private static var builder: () -> any PhoneTaskCapabilityRuntime = {
+        NoopPhoneTaskCapabilityRuntime()
+    }
+
+    /// 注册当前应用使用的手机能力工厂。
+    static func register(_ newBuilder: @escaping () -> any PhoneTaskCapabilityRuntime) {
+        builder = newBuilder
+    }
+
+    /// 创建一个新的手机能力运行时实例。
+    static func makeRuntime() -> any PhoneTaskCapabilityRuntime {
+        builder()
+    }
+}
+
+/// 手机端能力工厂启动器。
+///
+/// 主要功能：
+/// 1. 收集各业务能力在编译期注册的安装函数。
+/// 2. 在应用启动时统一执行注册。
+@MainActor
+enum PhoneCapabilityBootstrap {
+    private static var installers: [() -> Void] = []
+
+    /// 注册一个安装函数。
+    static func registerInstaller(_ installer: @escaping () -> Void) {
+        installers.append(installer)
+    }
+
+    /// 执行全部已注册安装函数。
+    static func applyRegisteredInstallers() {
+        for installer in installers {
+            installer()
+        }
+    }
+}
+
+/// 手机端任务基础状态。
+struct PhoneTaskState: Equatable {
     let taskID: String
-    let targetObject: String
+    let taskType: String
     let streamID: String
     let glassDeviceID: String
     let phoneDeviceID: String
 }
 
-/// 单次视觉检测结果。
-///
-/// 主要功能：
-/// 1. 屏蔽底层 YOLO 或占位检测器实现细节。
-/// 2. 向服务端输出稳定的结构化语义。
-struct VisionDetection: Equatable {
-    let targetObject: String
-    let found: Bool
-    let confidence: Double
-    let position: String
-    let frameSequence: Int
-    let summary: String
+/// 手机端任务能力运行时协议。
+@MainActor
+protocol PhoneTaskCapabilityRuntime: AnyObject {
+    var activeTaskDescription: String? { get }
+    var latestSummary: String? { get }
+    var latestSuccess: Bool? { get }
+
+    func startTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        streamID: String,
+        glassDeviceID: String,
+        phoneDeviceID: String,
+        params: [String: Any]
+    )
+
+    func stopTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        reason: String
+    )
+
+    func processFrame(
+        store: CameraStreamStore,
+        image: UIImage,
+        sequence: Int
+    )
 }
 
-/// 手机端 YOLO 检测接口。
+/// 默认空实现手机任务能力运行时。
 ///
 /// 主要功能：
-/// 1. 抽象本地目标检测能力。
-/// 2. 后续接入 CoreML YOLO 时只替换该接口实现。
-protocol YoloObjectDetector {
-    /// 对单帧图像执行目标检测。
-    ///
-    /// 参数：
-    /// 1. `image`：当前视频帧。
-    /// 2. `targetObject`：要寻找的物体。
-    /// 3. `frameSequence`：视频帧序号。
-    ///
-    /// 返回值：
-    /// 1. 结构化检测结果。
-    func detect(image: UIImage, targetObject: String, frameSequence: Int) -> VisionDetection
-}
+/// 1. 在未注入任何业务能力时保持 SDK运行时 可运行。
+/// 2. 明确区分“运行时在线”与“已注入业务能力”两个概念。
+@MainActor
+final class NoopPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
+    var activeTaskDescription: String? { nil }
+    var latestSummary: String? { nil }
+    var latestSuccess: Bool? { nil }
 
-/// 最小本地 YOLO 占位检测器。
-///
-/// 主要功能：
-/// 1. 在正式 CoreML YOLO 模型接入前，提供可测试的手机端检测闭环。
-/// 2. 根据图像亮度和目标名称给出稳定结构化结果。
-/// 3. 保持与正式 YOLO 检测器相同的输出模型。
-final class HeuristicYoloObjectDetector: YoloObjectDetector {
-    /// 执行检测。
-    ///
-    /// 主要逻辑：
-    /// 1. 测试目标或调试目标直接命中，便于自动化和真机冒烟验证。
-    /// 2. 其它目标根据图像平均亮度判断是否存在明显目标。
-    func detect(image: UIImage, targetObject: String, frameSequence: Int) -> VisionDetection {
-        let normalizedTarget = targetObject.trimmingCharacters(in: .whitespacesAndNewlines)
-        let brightness = Self.averageBrightness(image: image)
-        let forcedHit = normalizedTarget.localizedCaseInsensitiveContains("test") ||
-            normalizedTarget.contains("测试") ||
-            normalizedTarget.contains("调试")
-        let found = forcedHit || brightness > 0.58
-        let confidence = found ? max(0.68, min(0.96, brightness)) : max(0.05, min(0.42, brightness))
-        let position = Self.positionSummary(for: image)
-        let summary = found
-            ? "找到\(normalizedTarget)，它在画面\(position)"
-            : "暂未找到\(normalizedTarget)"
-        return VisionDetection(
-            targetObject: normalizedTarget,
-            found: found,
-            confidence: confidence,
-            position: position,
-            frameSequence: frameSequence,
-            summary: summary
-        )
+    func startTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        streamID: String,
+        glassDeviceID: String,
+        phoneDeviceID: String,
+        params: [String: Any]
+    ) {
+        store.markError("当前 SDK运行时 未注入手机业务能力，无法处理任务类型：\(taskType)")
     }
 
-    /// 计算图像平均亮度。
-    private static func averageBrightness(image: UIImage) -> Double {
-        guard let cgImage = image.cgImage else {
-            return 0
-        }
-        let width = 1
-        let height = 1
-        var pixel = [UInt8](repeating: 0, count: 4)
-        guard let context = CGContext(
-            data: &pixel,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return 0
-        }
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let red = Double(pixel[0]) / 255.0
-        let green = Double(pixel[1]) / 255.0
-        let blue = Double(pixel[2]) / 255.0
-        return (red + green + blue) / 3.0
+    func stopTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        reason: String
+    ) {
     }
 
-    /// 生成目标方位摘要。
-    private static func positionSummary(for image: UIImage) -> String {
-        if image.size.width <= 0 {
-            return "中间"
-        }
-        return image.size.width >= image.size.height ? "中间" : "前方"
-    }
-}
-
-/// 找物体结果上报接口。
-///
-/// 主要功能：
-/// 1. 把手机端结构化检测结果上报给服务端。
-/// 2. 服务端继续负责任务状态和通知协调。
-enum FindObjectReportAPI {
-    /// 上报一次检测结果。
-    ///
-    /// 参数：
-    /// 1. `task`：当前找物体任务上下文。
-    /// 2. `detection`：当前检测结果。
-    ///
-    /// 异常情况：
-    /// 1. 配置缺失、网络失败或服务端返回错误时抛出异常。
-    static func report(task: FindObjectTaskState, detection: VisionDetection) async throws {
-        guard let config = ReceiverAppConfig.load() else {
-            throw URLError(.badURL)
-        }
-        guard let url = URL(string: "\(config.serverHTTPBaseURLString)/api/vision/find-object/report") else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "task_id": task.taskID,
-            "phone_device_id": task.phoneDeviceID,
-            "target_object": detection.targetObject,
-            "found": detection.found,
-            "confidence": detection.confidence,
-            "position": detection.position,
-            "frame_seq": detection.frameSequence,
-            "summary": detection.summary,
-        ])
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        if httpResponse.statusCode != 200 {
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let errorObject = object?["error"] as? [String: Any]
-            let message = errorObject?["message"] as? String ?? "服务端返回非成功状态"
-            throw NSError(
-                domain: "GlassesVideoReceiver.FindObjectReportAPI",
-                code: httpResponse.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: message]
-            )
-        }
+    func processFrame(
+        store: CameraStreamStore,
+        image: UIImage,
+        sequence: Int
+    ) {
     }
 }

@@ -1,5 +1,5 @@
-"""API 模块导出。"""
+"""兼容旧导入路径的 API 薄壳。"""
 
-from api.http_server import ServerHandle, build_server_handle, run_forever
+from _sdk_bridge import bridge_package
 
-__all__ = ["ServerHandle", "build_server_handle", "run_forever"]
+bridge_package(globals(), "api")

@@ -1,33 +1,5 @@
-"""agent-core 模块导出。"""
+"""兼容旧导入路径的 agent-core 薄壳。"""
 
-from agent_core.facade import AgentFacade
-from agent_core.context.models import (
-    AgentSession,
-    AgentTurn,
-    AgentTurnResult,
-    CapabilityTrace,
-    DerivedArtifact,
-    DialogState,
-    MediaAssetRef,
-    MessageContext,
-    TaskRef,
-)
-from agent_core.mcp import McpGateway, McpRegistry
-from agent_core.tools import ToolGateway, ToolRegistry
+from _sdk_bridge import bridge_package
 
-__all__ = [
-    "AgentFacade",
-    "AgentSession",
-    "AgentTurn",
-    "AgentTurnResult",
-    "CapabilityTrace",
-    "DerivedArtifact",
-    "DialogState",
-    "MediaAssetRef",
-    "MessageContext",
-    "TaskRef",
-    "ToolRegistry",
-    "ToolGateway",
-    "McpRegistry",
-    "McpGateway",
-]
+bridge_package(globals(), "agent_core")

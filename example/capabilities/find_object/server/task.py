@@ -40,6 +40,13 @@ class FindObjectTask(BaseTask):
             reason="find_object",
             params={"target_object": target_object, "processor_type": "yolo_find_object"},
         )
+        context.device_group.start_phone_task(
+            task_type="find_object_phone_task",
+            params={
+                "target_object": target_object,
+                "processor_type": "yolo_find_object",
+            },
+        )
         context.emit_state("running", {"target_object": target_object})
 
     def on_event(self, context: TaskContext, event: TaskEvent) -> None:
@@ -60,6 +67,10 @@ class FindObjectTask(BaseTask):
             return
         context.update({"last_detection": event.payload})
         if event.payload.get("found"):
+            context.device_group.stop_phone_task(
+                task_type="find_object_phone_task",
+                reason="task.completed",
+            )
             context.device_group.submit_notification(
                 text=str(event.payload.get("summary") or "找到目标了"),
                 priority="high",
@@ -86,6 +97,16 @@ class FindObjectTask(BaseTask):
             stop_result = {
                 "ok": False,
                 "message": str(exc),
+            }
+        try:
+            context.device_group.stop_phone_task(
+                task_type="find_object_phone_task",
+                reason="task.cancelled",
+            )
+        except Exception as exc:
+            stop_result = {
+                **stop_result,
+                "phone_task_stop_error": str(exc),
             }
         context.emit_state(
             "cancelled",

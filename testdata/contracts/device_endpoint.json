@@ -1,0 +1,12 @@
+{
+  "device_id": "glass-001",
+  "role": "glass",
+  "online": true,
+  "capabilities": [
+    "camera.capture",
+    "camera.stream"
+  ],
+  "metadata": {
+    "firmware_version": "0.1.0"
+  }
+}

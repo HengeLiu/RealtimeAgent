@@ -18,8 +18,11 @@ from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace,
 from agent_core.context.assembler import ContextAssembler
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
+from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
+from openaiglasses import OpenAIGlassesSDK
+from openaiglasses.server import HybridTaskGateway
 
 _FAKE_PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -48,8 +51,16 @@ class FakeCameraGateway:
         )
 
 
-def build_tooling(device_state_reader=lambda: {}, camera_gateway=None):
-    registry = ToolRegistry(device_state_reader=device_state_reader, camera_gateway=camera_gateway)
+def build_tooling(device_state_reader=lambda: {}, camera_gateway=None, task_gateway=None):
+    registry = ToolRegistry(
+        device_state_reader=device_state_reader,
+        camera_gateway=camera_gateway,
+        task_gateway=task_gateway
+        or HybridTaskGateway(
+            base_gateway=InMemoryTaskGateway(),
+            sdk_task_runtime=OpenAIGlassesSDK().task_runtime,
+        ),
+    )
     gateway = ToolGateway(registry)
     registry.bind_gateway(gateway)
     return registry, gateway
@@ -1113,16 +1124,17 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(image_asset.asset_id, "asset_new_image_001")
 
     def test_tool_registry_exposes_expected_model_facing_tools(self) -> None:
-        """测试目标：验证当前向模型暴露计时器、拍照、地图和找物体四个工具。"""
+        """测试目标：验证当前根部服务端只向模型暴露系统内置工具。"""
 
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, {"capture_photo", "timer_manage", "map_manage", "start_find_object"})
+        self.assertEqual(tool_names, {"capture_photo"})
         self.assertIsNotNone(registry.get("capture_photo"))
-        self.assertIsNotNone(registry.get("create_timer"))
-        self.assertIsNotNone(registry.get("start_find_object"))
-        self.assertIsNotNone(registry.get("amap_route_plan"))
+        self.assertIsNone(registry.get("create_timer"))
+        self.assertIsNone(registry.get("timer_manage"))
+        self.assertIsNone(registry.get("start_find_object"))
+        self.assertIsNone(registry.get("map_manage"))
 
     def test_tool_registry_device_state_reader_can_be_rebound(self) -> None:
         """测试目标：验证工具运行态读取函数可在控制面就绪后重新绑定。"""
@@ -1141,17 +1153,15 @@ class AgentCoreTestCase(unittest.TestCase):
         """测试目标：验证 SDK Tool 不再暴露宽泛 payload 字段。"""
 
         registry, _ = build_tooling()
-        sdk_tool = registry._sdk_tools["create_timer"]
+        sdk_tool = registry._sdk_tools["capture_photo"]
         if hasattr(sdk_tool, "params_json_schema"):
             properties = sdk_tool.params_json_schema.get("properties", {})
-            self.assertIn("duration_seconds", properties)
-            self.assertIn("label", properties)
+            self.assertIn("reason", properties)
             self.assertNotIn("payload", properties)
             return
 
         signature = inspect.signature(sdk_tool)
-        self.assertIn("duration_seconds", signature.parameters)
-        self.assertIn("label", signature.parameters)
+        self.assertIn("reason", signature.parameters)
         self.assertNotIn("payload", signature.parameters)
 
     def test_capture_photo_tool_uses_real_camera_gateway_result(self) -> None:
@@ -1191,73 +1201,6 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertTrue(result.data["storage_uri"].endswith(".png"))
         with open(result.data["storage_uri"], "rb") as handle:
             self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
-
-    def test_timer_manage_tool_creates_task(self) -> None:
-        """测试目标：验证 timer_manage Tool 会调用底层任务 Tool。"""
-
-        registry, gateway = build_tooling()
-        traces: list[CapabilityTrace] = []
-
-        result = registry.invoke(
-            name="timer_manage",
-            context=AgentToolContext(
-                session_id="sess_timer_001",
-                device_id="glass-001",
-                turn_id="turn_timer_001",
-                settings=ServerSettings(),
-                session_store=AgentSessionStore(),
-                device_state_reader=registry.get_device_state_reader(),
-                trace_sink=traces.append,
-                task_gateway=registry.get_task_gateway(),
-                camera_gateway=registry.get_camera_gateway(),
-                tool_gateway=gateway,
-                mcp_gateway=registry.get_mcp_gateway(),
-            ),
-            arguments={"query": "帮我定时 5 分钟"},
-        )
-
-        self.assertIn("task_id", result.data)
-        self.assertEqual(len(traces), 2)
-        self.assertEqual(traces[0].capability_name, "create_timer")
-        self.assertEqual(traces[0].capability_type, "task")
-        self.assertEqual(traces[1].capability_name, "timer_manage")
-        self.assertEqual(traces[1].capability_type, "tool")
-
-    def test_map_manage_tool_records_tool_and_mcp_trace(self) -> None:
-        """测试目标：验证地图 Tool 会通过内部 MCP 调用返回结构化结果。"""
-
-        registry, gateway = build_tooling()
-        traces: list[CapabilityTrace] = []
-
-        result = registry.invoke(
-            name="map_manage",
-            context=AgentToolContext(
-                session_id="sess_nav_001",
-                device_id="glass-001",
-                turn_id="turn_nav_001",
-                settings=ServerSettings(),
-                session_store=AgentSessionStore(),
-                device_state_reader=registry.get_device_state_reader(),
-                trace_sink=traces.append,
-                task_gateway=registry.get_task_gateway(),
-                camera_gateway=registry.get_camera_gateway(),
-                tool_gateway=gateway,
-                mcp_gateway=registry.get_mcp_gateway(),
-            ),
-            arguments={
-                "origin": "当前设备位置",
-                "destination": "最近的咖啡店",
-                "strategy": "walking",
-            },
-        )
-
-        self.assertIn("summary", result.data)
-        self.assertEqual(result.data["action"], "route")
-        self.assertEqual(len(traces), 2)
-        self.assertEqual(traces[0].capability_type, "mcp")
-        self.assertEqual(traces[0].capability_name, "amap.route_plan")
-        self.assertEqual(traces[1].capability_type, "tool")
-        self.assertEqual(traces[1].capability_name, "map_manage")
 
 
 if __name__ == "__main__":

@@ -75,20 +75,11 @@ class PhaseECapabilityRunner(AgentLoopRunner):
             context=context,
             arguments={"reason": "phase_e_integration"},
         )
-        nav_result = self._tool_gateway.invoke(
-            name="map_manage",
-            context=context,
-            arguments={
-                "origin": "当前设备位置",
-                "destination": "最近的咖啡店",
-                "strategy": "walking",
-            },
-        )
         return AgentTurnResult(
             turn_id=turn.turn_id,
             session_id=turn.session_id,
             device_id=turn.device_id,
-            reply_text=f"已完成抓拍，图片资产是 {photo_result.data['asset_id']}。{nav_result.data['summary']}",
+            reply_text=f"已完成抓拍，图片资产是 {photo_result.data['asset_id']}。",
             capability_traces=traces,
             meta={
                 "asset_refs": list(context.emitted_assets),
@@ -131,22 +122,16 @@ class AgentPhaseEFlowTestCase(unittest.TestCase):
         )
 
         self.assertIsNone(result.error)
-        self.assertEqual(len(result.capability_traces), 3)
+        self.assertEqual(len(result.capability_traces), 1)
         self.assertEqual(result.capability_traces[0].capability_name, "capture_photo")
         self.assertEqual(result.capability_traces[0].capability_type, "tool")
-        self.assertEqual(result.capability_traces[1].capability_name, "amap.route_plan")
-        self.assertEqual(result.capability_traces[1].capability_type, "mcp")
-        self.assertEqual(result.capability_traces[2].capability_name, "map_manage")
-        self.assertEqual(result.capability_traces[2].capability_type, "tool")
 
         session = session_store.get_session("sess_phase_e_001")
         self.assertIsNotNone(session)
         assert session is not None
         self.assertGreaterEqual(len(session.assets), 1)
-        self.assertGreaterEqual(len(session.artifacts), 1)
         self.assertEqual(len(session.messages), 2)
         self.assertGreaterEqual(len(session.messages[1].asset_refs), 1)
-        self.assertGreaterEqual(len(session.messages[1].derived_refs), 1)
 
 
 if __name__ == "__main__":

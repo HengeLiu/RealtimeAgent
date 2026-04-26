@@ -1,13 +1,5 @@
-"""语音运行时模块导出。"""
+"""兼容旧导入路径的运行时薄壳。"""
 
-from runtime.notifications import NotificationCoordinator, NotificationRequest, NotificationSubmitResult
-from runtime.task_event_bridge import TaskEventBridge
-from runtime.voice_runtime import VoiceRuntime
+from _sdk_bridge import bridge_package
 
-__all__ = [
-    "VoiceRuntime",
-    "NotificationCoordinator",
-    "NotificationRequest",
-    "NotificationSubmitResult",
-    "TaskEventBridge",
-]
+bridge_package(globals(), "runtime")

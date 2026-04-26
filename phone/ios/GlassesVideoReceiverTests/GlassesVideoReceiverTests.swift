@@ -3,6 +3,59 @@ import Testing
 import UIKit
 @testable import GlassesVideoReceiver
 
+private final class TestPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
+    private(set) var startedTask: PhoneTaskState?
+    private(set) var stoppedTaskID: String?
+
+    var activeTaskDescription: String? {
+        guard let startedTask else { return nil }
+        return "\(startedTask.taskType) / \(startedTask.taskID)"
+    }
+
+    var latestSummary: String? { nil }
+
+    var latestSuccess: Bool? { nil }
+
+    func startTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        streamID: String,
+        glassDeviceID: String,
+        phoneDeviceID: String,
+        params: [String: Any]
+    ) {
+        startedTask = PhoneTaskState(
+            taskID: taskID,
+            taskType: taskType,
+            streamID: streamID,
+            glassDeviceID: glassDeviceID,
+            phoneDeviceID: phoneDeviceID
+        )
+        stoppedTaskID = nil
+    }
+
+    func stopTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        reason: String
+    ) {
+        guard startedTask?.taskID == taskID else {
+            return
+        }
+        startedTask = nil
+        stoppedTaskID = taskID
+    }
+
+    func processFrame(
+        store: CameraStreamStore,
+        image: UIImage,
+        sequence: Int
+    ) {
+    }
+}
+
 /// iOS 视频回显核心逻辑测试。
 ///
 /// 主要覆盖：
@@ -134,56 +187,36 @@ struct GlassesVideoReceiverTests {
         #expect(responseText.hasSuffix("\r\n\r\n"))
     }
 
-    /// 测试目标：验证手机端最小 YOLO 检测接口可输出结构化命中结果。
+    /// 测试目标：验证通用手机任务停止消息会同步结束当前视频会话。
     ///
     /// 测试方法：
-    /// 1. 构造一张纯白测试图像。
-    /// 2. 使用 `HeuristicYoloObjectDetector` 检测目标。
+    /// 1. 构造一个正在接收视频且存在通用手机任务的页面状态。
+    /// 2. 调用 `stopPhoneTask`。
     ///
     /// 预期结果：
-    /// 1. 检测结果命中。
-    /// 2. 结果包含目标名称、置信度、位置和摘要。
-    @Test
-    func testHeuristicYoloDetectorReturnsStructuredHit() throws {
-        let image = try #require(Self.makeSolidImage(red: 1, green: 1, blue: 1))
-        let detector = HeuristicYoloObjectDetector()
-
-        let result = detector.detect(image: image, targetObject: "测试水杯", frameSequence: 3)
-
-        #expect(result.found)
-        #expect(result.targetObject == "测试水杯")
-        #expect(result.confidence > 0.6)
-        #expect(result.position.isEmpty == false)
-        #expect(result.summary.contains("测试水杯"))
-    }
-
-    /// 测试目标：验证找物体停止消息会同步结束当前视频会话。
-    ///
-    /// 测试方法：
-    /// 1. 构造一个正在接收视频且存在找物体任务的页面状态。
-    /// 2. 调用 `stopFindObjectTask`。
-    ///
-    /// 预期结果：
-    /// 1. 当前找物体任务被清空。
+    /// 1. 当前手机任务被清空。
     /// 2. 视频连接状态被重置为等待下一次接收。
     @MainActor
     @Test
-    func testStopFindObjectTaskAlsoFinishesVideoSession() {
-        let store = CameraStreamStore()
+    func testStopPhoneTaskAlsoFinishesVideoSession() {
+        let capabilityRuntime = TestPhoneCapabilityRuntime()
+        let store = CameraStreamStore(capabilityRuntime: capabilityRuntime)
         store.isConnected = true
-        store.startFindObjectTask(
+        store.startPhoneTask(
             taskID: "task-001",
-            targetObject: "水杯",
+            taskType: "mock_phone_task",
             streamID: "stream-001",
             glassDeviceID: "glass-001",
-            phoneDeviceID: "phone-001"
+            phoneDeviceID: "phone-001",
+            params: ["mode": "test"]
         )
 
-        store.stopFindObjectTask(taskID: "task-001", reason: "task.cancelled")
+        store.stopPhoneTask(taskID: "task-001", taskType: "mock_phone_task", reason: "task.cancelled")
 
-        #expect(store.activeFindObjectTask == nil)
+        #expect(store.activeTaskDescription == nil)
         #expect(store.isConnected == false)
         #expect(store.latestImage == nil)
+        #expect(capabilityRuntime.stoppedTaskID == "task-001")
     }
 
     /// 测试目标：验证统一服务端地址可正确派生控制与 HTTP 地址。

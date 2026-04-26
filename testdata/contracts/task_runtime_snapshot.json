@@ -1,0 +1,15 @@
+{
+  "task_id": "task_contract_001",
+  "task_type": "find_object_task",
+  "session_id": "sess_contract_001",
+  "device_id": "glass-001",
+  "state": "running",
+  "input_data": {
+    "target_object": "water_cup"
+  },
+  "data": {
+    "processor_type": "yolo_find_object"
+  },
+  "result": null,
+  "error": null
+}

@@ -612,9 +612,9 @@ static bool init_camera(void)
     config.frame_size = CAMERA_FRAME_SIZE;
     config.jpeg_quality = CAMERA_JPEG_QUALITY;
     /*
-     * 当前业务只需要“收到指令后抓一张图”，不需要持续视频流。
-     * 这里必须使用单缓冲 + WHEN_EMPTY，避免摄像头在空闲时持续产出帧，
-     * 但应用层又没有持续消费，最终触发 cam_hal 的 FB-OVF 日志。
+     * 当前 SDK运行时 默认按“按需抓拍”模式工作，而不是持续视频流模式。
+     * 这里使用单缓冲 + WHEN_EMPTY，避免摄像头在空闲时持续产出帧，
+     * 但上层没有持续消费，最终触发 cam_hal 的 FB-OVF 日志。
      */
     config.fb_count = CAMERA_FB_COUNT;
     config.fb_location = CAMERA_FB_IN_PSRAM;

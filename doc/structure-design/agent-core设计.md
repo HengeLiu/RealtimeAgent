@@ -466,10 +466,10 @@ system prompt 不承载：
 
 ## 15. 推荐目录结构
 
-建议继续保持：
+建议在 SDK 主体实现中保持：
 
 ```text
-server/src/agent_core/
+sdk/python/agent_core/
   facade/
   context/
   runtime/
@@ -480,8 +480,8 @@ server/src/agent_core/
 以及：
 
 ```text
-server/src/runtime/voice_runtime.py
-server/src/backend_task_core/
+sdk/python/runtime/voice_runtime.py
+sdk/python/backend_task_core/
 ```
 
 原则：

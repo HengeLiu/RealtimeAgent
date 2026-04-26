@@ -23,11 +23,13 @@ class FindObjectPhoneTask(BasePhoneTask):
         """启动手机侧找物体任务。"""
 
         processor_type = str(context.params.get("processor_type") or "yolo_find_object").strip() or "yolo_find_object"
+        heading_sensor_type = str(context.params.get("heading_sensor_type") or "").strip()
         context.emit_state(
             "running",
             {
                 "processor_type": processor_type,
                 "target_object": str(context.params.get("target_object") or "").strip(),
+                "heading_sensor_type": heading_sensor_type,
             },
         )
 
@@ -42,6 +44,11 @@ class FindObjectPhoneTask(BasePhoneTask):
             frame=frame,
             params=context.params,
         )
+        heading_sensor_type = str(context.data.get("heading_sensor_type") or "").strip()
+        if result and heading_sensor_type:
+            reading = context.read_sensor(heading_sensor_type)
+            result["heading_degrees"] = reading.payload.get("heading_degrees")
+            result["heading_timestamp_ms"] = reading.timestamp_ms
         if result:
             context.emit_result(result)
             context.update({"last_result": result})

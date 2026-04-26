@@ -1,17 +1,5 @@
-"""协议模块对外导出。"""
+"""兼容旧导入路径的协议层薄壳。"""
 
-from protocol.codec import JsonMessageCodec
-from protocol.idempotency import IdempotencyStore, InMemoryIdempotencyStore
-from protocol.media import MediaFrame
-from protocol.messages import ControlMessage, Endpoint
-from protocol.utils import create_control_message
+from _sdk_bridge import bridge_package
 
-__all__ = [
-    "JsonMessageCodec",
-    "IdempotencyStore",
-    "InMemoryIdempotencyStore",
-    "MediaFrame",
-    "ControlMessage",
-    "Endpoint",
-    "create_control_message",
-]
+bridge_package(globals(), "protocol")

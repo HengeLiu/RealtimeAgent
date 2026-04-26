@@ -12,7 +12,6 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "sdk/python"))
-sys.path.insert(0, str(REPO_ROOT / "server/src"))
 
 from example.server.main import create_sdk  # noqa: E402
 from openaiglasses.testing import ScenarioRunner  # noqa: E402
@@ -32,6 +31,26 @@ def parse_args() -> argparse.Namespace:
         "--scenario-dir",
         type=str,
         help="批量执行某个目录下的全部场景 JSON，例如 testdata/scenario",
+    )
+    group.add_argument(
+        "--describe-scenario",
+        type=str,
+        help="输出单个场景摘要，不执行回放",
+    )
+    group.add_argument(
+        "--list-scenarios",
+        type=str,
+        help="扫描目录下全部场景并输出摘要列表，不执行回放",
+    )
+    group.add_argument(
+        "--validate-scenario",
+        type=str,
+        help="校验单个场景 manifest 和资产引用，不执行回放",
+    )
+    group.add_argument(
+        "--validate-scenarios",
+        type=str,
+        help="批量校验目录下全部场景 manifest 和资产引用，不执行回放",
     )
     parser.add_argument(
         "--mode",
@@ -69,6 +88,34 @@ def run_scenario(*, scenario_path: str, mode: str) -> dict[str, Any]:
     return runner.run(scenario_file)
 
 
+def describe_scenario(*, scenario_path: str) -> dict[str, Any]:
+    """输出单个场景摘要。"""
+
+    sdk = create_sdk()
+    runner = ScenarioRunner(
+        sdk,
+        workspace_root=REPO_ROOT,
+    )
+    scenario_file = Path(scenario_path)
+    if not scenario_file.is_absolute():
+        scenario_file = (REPO_ROOT / scenario_file).resolve()
+    return runner.describe(scenario_file)
+
+
+def validate_scenario(*, scenario_path: str) -> dict[str, Any]:
+    """校验单个场景 manifest。"""
+
+    sdk = create_sdk()
+    runner = ScenarioRunner(
+        sdk,
+        workspace_root=REPO_ROOT,
+    )
+    scenario_file = Path(scenario_path)
+    if not scenario_file.is_absolute():
+        scenario_file = (REPO_ROOT / scenario_file).resolve()
+    return runner.validate(scenario_file)
+
+
 def resolve_scenarios(*, scenario: str | None, scenario_dir: str | None) -> list[Path]:
     """解析需要执行的场景列表。"""
 
@@ -93,6 +140,49 @@ def main() -> int:
     """脚本主入口。"""
 
     args = parse_args()
+    if args.describe_scenario:
+        output = describe_scenario(scenario_path=args.describe_scenario)
+        print(json.dumps(output, ensure_ascii=False, indent=2 if args.pretty else None))
+        return 0
+
+    if args.list_scenarios:
+        scenario_files = resolve_scenarios(
+            scenario=None,
+            scenario_dir=args.list_scenarios,
+        )
+        output = {
+            "scenario_count": len(scenario_files),
+            "scenarios": [
+                describe_scenario(scenario_path=str(path))
+                for path in scenario_files
+            ],
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2 if args.pretty else None))
+        return 0
+
+    if args.validate_scenario:
+        output = validate_scenario(scenario_path=args.validate_scenario)
+        print(json.dumps(output, ensure_ascii=False, indent=2 if args.pretty else None))
+        return 0 if output.get("ok", False) else 1
+
+    if args.validate_scenarios:
+        scenario_files = resolve_scenarios(
+            scenario=None,
+            scenario_dir=args.validate_scenarios,
+        )
+        results = [
+            validate_scenario(scenario_path=str(path))
+            for path in scenario_files
+        ]
+        output = {
+            "scenario_count": len(results),
+            "passed_count": sum(1 for item in results if item.get("ok", False)),
+            "failed_count": sum(1 for item in results if not item.get("ok", False)),
+            "results": results,
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2 if args.pretty else None))
+        return 0 if output["failed_count"] == 0 else 1
+
     scenario_files = resolve_scenarios(
         scenario=args.scenario,
         scenario_dir=args.scenario_dir,

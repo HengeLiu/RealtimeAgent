@@ -24,13 +24,13 @@
 
 ## 2. 现状分析
 
-当前仓库已经具备以下基础：
+第二期启动时，仓库已经具备以下基础：
 
-1. `server/src/agent_core` 中已经有 `BaseTool` 和工具注册表。
-2. `server/src/backend_task_core` 中已经有 `TaskSpec / TaskRuntime / TaskEvent / TaskGateway`。
-3. `server/src/api/ws/control_runtime.py` 中已经支持眼镜和手机注册、绑定、运行态查询、视频链路启动和停止。
-4. `server/src/runtime/voice_runtime.py` 已经承担语音会话、模型调用、回复播报和通知播放。
-5. `phone/ios` 已经有手机视频接收和找物体最小闭环。
+1. 原 `server/src/agent_core` 中已经有 `BaseTool` 和工具注册表，最终已迁入 `sdk/python/agent_core`。
+2. 原 `server/src/backend_task_core` 中已经有 `TaskSpec / TaskRuntime / TaskEvent / TaskGateway`，最终已迁入 `sdk/python/backend_task_core`。
+3. 原 `server/src/api/ws/control_runtime.py` 中已经支持眼镜和手机注册、绑定、运行态查询、视频链路启动和停止，最终已由 `sdk/python/api/ws/control_runtime.py` 承载。
+4. 原 `server/src/runtime/voice_runtime.py` 已经承担语音会话、模型调用、回复播报和通知播放，最终已由 `sdk/python/runtime/voice_runtime.py` 承载。
+5. `phone/ios` 已经有手机视频接收、回显、注册和通用手机任务承载能力；找物体业务闭环已迁入官方 `example`。
 6. `PhaseK` 已经证明 `find_object_task` 可以作为首个三端视觉样板能力。
 
 当前主要缺口：
@@ -52,22 +52,22 @@
 
 第二期可以按四个阶段推进。每个阶段都应该有独立验收结果，避免把 SDK 产品化改造成一次高风险大重构。
 
-### 3.0 当前阶段判断（2026-04-24）
+### 3.0 历史阶段判断（2026-04-24，已被 3.0.4 覆盖）
 
-结合当前仓库实现、样例目录和自动化测试结果，当前开发阶段可以判断为：
+结合当时仓库实现、样例目录和自动化测试结果，当时开发阶段判断为：
 
 | 阶段 | 当前状态 | 说明 |
 | --- | --- | --- |
 | Phase A：目录边界与 SDK 包骨架 | 已完成 | `sdk/python/openaiglasses` 包骨架、`example/` 官方案例目录、`example/server/main.py` 启动入口均已落地，依赖方向保持为 `example -> sdk`。 |
 | Phase B：DeviceGroupRuntime 与 DeviceGroupContext | 已完成 | `DeviceGroupRuntime` 与 `DeviceGroupContext` 已实现，抓拍、查询设备、启动手机视频链路、通知提交、任务创建等高层接口已经具备。 |
-| Phase C：服务器侧与手机侧扩展面 | 基本完成 | `BaseTool / BaseTask / TaskContext`、`BasePhoneProcessor / BasePhoneTask / BaseSensorProvider`、能力注册表、`OpenAIGlassesSDK` 主入口、真实服务端装配能力均已完成，当前主要是文档和边界继续收口。 |
-| Phase D：find_object 官方 example 与回放测试最小闭环 | 已完成最小闭环 | `example/capabilities/find_object` 的服务端 Tool/Task、手机端 Processor/PhoneTask 已落地，`ScenarioRunner` 与相关单元测试已可以验证最小闭环，但回放资产与场景丰富度仍需扩展。 |
+| Phase C：服务器侧与手机侧扩展面 | 主体完成，进入收口 | `BaseTool / BaseTask / TaskContext`、`BasePhoneProcessor / BasePhoneTask / BaseSensorProvider`、能力注册表、`OpenAIGlassesSDK` 主入口、真实服务端装配能力均已落地，当时根目录系统编排与 SDK 集成层的边界仍需继续收紧。 |
+| Phase D：find_object 官方 example 与回放测试最小闭环 | 最小闭环完成，等待最终 SDK 化验收 | `example/capabilities/find_object` 的服务端 Tool/Task、手机端 Processor/PhoneTask 已落地，`ScenarioRunner` 与相关单元测试已可以验证最小闭环；当时已从写死首个样板能力改为能力处理器分发机制，但整体开发者体验仍需要继续收口。 |
 
-当前整体判断：
+当时整体判断：
 
 1. 第二期已经从“方案设计阶段”进入“收口与产品化补完阶段”。
-2. 当前工作重点不再是证明 SDK 是否可行，而是继续把已实现的能力整理成更稳定的开发者使用面。
-3. 从阶段位置上看，当前已处于第二期后半段，接近 Phase D 完成后的收尾阶段，可以开始为下一期复杂能力样板做准备。
+2. 当时工作重点不是再加业务能力，而是把系统细节继续收进 SDK，并把根目录 SDK运行时 与官方样例彻底切开。
+3. 从阶段位置上看，当时处于第二期后半段，距离“开发者只围绕基类写业务”的最终验收状态仍有差距。
 
 ### 3.0.1 收口验证状态（2026-04-25）
 
@@ -85,7 +85,112 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 4. 第二期核心 pytest 通过。
 5. 服务端 `/api/health` 健康检查通过。
 
-本轮修复了运行态快照中 `diagnostics` 字段不可达的问题，使音频旁路设备诊断可以稳定出现在 `/api/runtime/devices` 响应中。当前第二期已经具备进入官方 `find_object` 真机联调验收的条件。
+本轮修复了运行态快照中 `diagnostics` 字段不可达的问题，使音频旁路设备诊断可以稳定出现在 `/api/runtime/devices` 响应中。需要注意：这些预检结果只说明“最小样例闭环可运行”，不等于第二期已经达到 SDK 化验收标准。
+
+### 3.0.2 根目录收口进展（2026-04-25）
+
+围绕“根目录只保留 SDK运行时 与系统运行时代码”这一目标，当前已经完成：
+
+1. `server/src` 已移除 `start_find_object` 内建 Tool、`find_object_task` 内建任务模板，以及 `/api/debug/find-object/start`、`/api/vision/find-object/report` 这类找物体专用服务端入口。
+2. 手机端示例能力已改为通过 SDK 高层接口 `start_phone_task()` / `stop_phone_task()` 和通用事件上报接口 `/api/tasks/report-event` 与服务端协作，不再依赖根目录中的找物体专用协议分支。
+3. `phone/ios` 根目录运行时代码已经抽成通用 `PhoneTaskCapabilityRuntime` SDK运行时；`find_object` 的业务检测与上报逻辑位于 `example/phone/ios/FindObjectPhoneCapability.swift`。
+4. `phone/ios` 中与 `find_object` 直接耦合的业务测试已迁到 `example/phone/ios/FindObjectPhoneCapabilityTests.swift`，根目录测试只保留 SDK运行时 通用行为验证。
+5. `server/src` 已移除 `timer_manage / create_timer / map_manage` 这类历史高层业务能力；根服务端默认只保留系统级硬件原语 `capture_photo` 和后台任务管理内部支撑。
+6. 根服务端默认 MCP 注册表不再内置 `AmapMcpAdapter`，外部业务项目需要通过 SDK 装配入口注册自己的 MCP adapter。
+7. 根 `phone/ios` 已不再直接调用 `makePhoneCapabilityRuntime()` 这类官方样板函数，改为通过 `PhoneCapabilityRuntimeFactory` 与 `PhoneCapabilityBootstrap` 做通用装配。
+
+按 2026-04-25 重新校准后的边界判断：
+
+1. 根目录 `server/src` 已基本不再承载 `find_object` 这类业务能力，但系统编排仍有一部分没有完全收进 SDK 集成层。
+2. 根目录 `phone/ios` 已以 SDK运行时 为主，`find_object` 业务实现已迁到 `example/phone/ios`，但 SDK运行时 无关化仍需继续验证。
+   - 当前已经去掉根页面对官方样板运行时工厂的直接调用，改为通用工厂装配。
+3. 根目录 `glass` 未发现 `find_object / timer / map / navigation` 等明确业务实现，但仍存在少量带业务假设的注释和默认行为描述，需要继续清理。
+4. 官方业务样例已集中在 `example/capabilities/find_object` 和 `example/phone/ios/FindObjectPhoneCapability.swift`，这一方向正确。
+
+### 3.0.2.2 `server/src` 迁移进展（2026-04-25）
+
+按“`server/` 只保留薄 SDK运行时，开发者不需要关心的系统实现全部进入 SDK”这一要求，当前已执行以下迁移动作：
+
+1. 先对原 `server/src` 完整实现做了目录级备份：
+   - [backup/server_src_20260425_195102](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/backup/server_src_20260425_195102)
+2. 已将以下顶层系统包整体迁入 `sdk/python`：
+   - `agent_core`
+   - `api`
+   - `app`
+   - `backend_task_core`
+   - `devtools`
+   - `infra`
+   - `protocol`
+   - `runtime`
+3. 当前根目录 [server/src](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src) 仅保留薄壳桥接层：
+   - [server/src/_sdk_bridge.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/server/src/_sdk_bridge.py:1)
+   - 各顶层包的 `__init__.py` 兼容导入壳
+4. 旧导入路径仍然可用，但真实实现已经从 `sdk/python` 目录加载。
+5. `ScenarioRunner` 已从直接写死 `find_object` 执行分支，调整为能力处理器分发机制；当前 `find_object` 的场景处理器已注册到 `example/`，SDK 回放层只保留通用框架。
+6. 根 `phone/ios` SDK运行时已从直接依赖官方样板能力工厂，调整为通用工厂与启动器模式，减少 SDK运行时 对 `find_object` 的默认认知。
+
+这一步的意义是：
+
+1. 先从目录物理形态上打破“SDK 包一层、真实实现还在 `server/src`”的过渡状态。
+2. 让后续继续清理系统边界时，不必再一边改逻辑、一边和旧目录事实冲突。
+3. 把 `server/src` 明确降级为兼容壳，而不再视为主要实现目录。
+
+### 3.0.2.1 按当前验收要求的过渡状态（2026-04-25，已被 3.0.4 覆盖）
+
+本期重新按以下三条硬要求判断：
+
+1. 所有系统细节都隐藏在 SDK 中。
+2. `example` 中只保留开发者需要关注的基类业务实现。
+3. 根目录 `server / glass / phone` 下不再含有业务代码，全部迁移到 `example` 或 `sdk` 中。
+
+当时结论：
+
+1. **第 1 条待完成**
+   - `server/src` 主体实现已经迁入 SDK，服务端方向前进明显。
+   - 但 `phone / glass` 的 SDK运行时 与部分兼容壳仍需继续收薄，所以“所有系统细节都隐藏在 SDK 中”当时还处于收口中。
+2. **第 2 条部分达到**
+   - `find_object` 样例已经基本按 `Tool / Task / PhoneTask / PhoneProcessor` 组织。
+   - 当前测试回放层已经改成能力处理器分发机制，且 `find_object` 场景处理器已迁入 `example/`；手机 SDK运行时 也已改成通用工厂装配，不再把首个官方样板直接写死在总流程分发或页面创建里；但开发者体验还需要更多样板能力和 SDK运行时 文档来验证。
+3. **第 3 条大体接近，进入最后收口**
+   - 明显业务能力大多已经迁出根目录。
+   - 但根目录 `phone / glass` 的 SDK运行时 与 SDK 的系统边界当时还没有最终收紧，因此仍需继续推进到“根目录只剩 SDK运行时、业务都在 example/sdk”的验收状态。
+
+### 3.0.3 第二期剩余收口项判断（2026-04-25）
+
+结合当前实现状态，以下事项虽然一度看起来像“下一期工作”，但本质上仍属于第二期收口范围，而不应独立定义为新一期：
+
+1. 公共契约收口
+   - 当前 `DeviceGroup`、控制消息、任务事件、手机任务事件上报等能力已经可用，但还没有形成稳定的 SDK 对外承诺面。
+   - 这仍属于“稳定 `BaseTool / BaseTask / DeviceGroupContext / PhoneTask` 开发者使用面”的工作，而不是新功能期。
+2. phone / glass 的 SDK运行时 继续去业务化
+   - 当前根目录已经完成了大部分 `find_object` 业务剥离，但手机端和眼镜端的 SDK运行时 仍需要继续收口成真正能力无关的 SDK运行时。
+   - 这仍属于第二期“目录边界与开发者扩展面产品化”的延伸。
+3. 回放测试继续提升为 SDK 级验证
+   - 当前 `ScenarioRunner` 已具备能力处理器分发机制和最小样板回放能力，但契约金样、兼容性回归、预检整合仍需继续扩展。
+   - 这仍属于第二期“建立最小样例回放测试结构”的后续补完，而不是新的业务期目标。
+
+因此，后续与“公共契约、SDK运行时产品化、契约级测试”有关的工作，应统一视为 **第二期下半程收口计划**，而不是独立的新一期。
+
+### 3.0.4 第二期最终收口状态（2026-04-26）
+
+按本期最新验收要求，当前第二期收口状态更新为：
+
+| 验收要求 | 当前状态 | 代码与测试证据 |
+| --- | --- | --- |
+| 所有系统细节隐藏在 SDK 中 | 已达到第二期验收口径 | 服务端主体实现已迁入 `sdk/python`；`server/src` 只保留兼容桥接；`DeviceGroupContext`、`TaskContext`、`PhoneRuntime` 承担开发者扩展面。 |
+| `example` 中只有开发者关注的基类业务实现 | 已达到第二期验收口径 | 官方业务能力集中在 `example/capabilities/find_object` 和 `example/phone/ios`；`ScenarioRunner` 通过能力处理器注册，不再内建样板能力。 |
+| 根目录 `server / glass / phone` 不再含业务代码 | 已达到第二期验收口径 | `script/run_sdk_preflight.py` 新增 `sdk_boundary` 检查，扫描根运行时和 Xcode 工程文件，拦截 `find_object / timer_manage / map_manage / Amap / navigation_task` 等业务词汇以及对 `example` 的反向依赖。 |
+| 公共契约有测试保护 | 已达到第二期验收口径 | `server/test/contracts` 与 `testdata/contracts` 已纳入 `run_sdk_preflight`。 |
+| 官方样例可离线验收 | 已达到第二期验收口径 | `testdata/scenario` 的 5 个场景回放和 `testdata/compat/find_object_scenarios.json` 兼容性回归已纳入预检。 |
+
+本轮关键收口动作：
+
+1. 根 iOS 工程不再默认编译 `example/phone/ios/FindObjectPhoneCapability.swift` 与对应业务测试，根目录手机工程回到通用 SDK运行时。
+2. 根 iOS 运行时仍保留 `PhoneCapabilityRuntimeFactory / PhoneCapabilityBootstrap` 通用装配入口，外部开发者或示例宿主可以显式接入自己的手机能力。
+3. 预检脚本新增 `sdk_boundary` 检查，把“根目录不能重新长业务代码”从文档要求变成自动化验收项。
+4. 手机 SDK运行时、眼镜 SDK运行时、SDK 公共契约文档已同步更新边界与验收口径。
+
+因此，从第二期目标看，当前已经达到“开发者主要围绕 `BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor` 写业务，系统层细节由 SDK 托管”的验收状态。
 
 ### 3.1 第二期 Phase A：目录边界与 SDK 包骨架
 
@@ -149,6 +254,24 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 1. `example` 中的 `find_object` 业务实现不直接处理设备绑定、WebSocket 和媒体协议。
 2. Mock 场景可以驱动任务进入 `completed`。
 3. 真机联调入口仍可使用同一个 `example` 能力。
+
+### 3.5 第二期后半程收口方向
+
+在 Phase D 最小闭环已经成立的前提下，第二期剩余工作建议继续沿以下三个方向收口：
+
+1. 公共契约收口
+   - 把当前已经被服务端、手机端、测试资产共同依赖的对象模型、消息格式和事件格式收敛成稳定公共层。
+   - 目标是让开发者知道“哪些字段和事件名可以长期依赖”。
+2. SDK运行时产品化收口
+   - 继续清理 phone / glass 的 SDK运行时 中的业务词汇和样板能力耦合。
+   - 目标是让 SDK运行时 只承载连接、路由、上报和任务托管，不承载具体业务。
+3. 测试产品化收口
+   - 把最小场景回放扩展成更稳定的 SDK 级验证入口。
+   - 目标是让第二期结束时，开发者新增能力不必依赖真机才能做第一轮验证。
+
+这部分收口工作的详细拆解，见：
+
+1. [第二期下半程-SDK公共契约与SDK运行时产品化收口计划.md](</Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期下半程-SDK公共契约与SDK运行时产品化收口计划.md>)
 
 ## 4. 目录结构设计
 
@@ -434,7 +557,10 @@ class FindObjectTask(BaseTask):
 
         target = context.input["target_object"]
         context.device_group.start_phone_video_link(reason="find_object")
-        context.phone.start_processor("yolo_find_object", {"target_object": target})
+        context.device_group.start_phone_task(
+            task_type="find_object_phone_task",
+            params={"target_object": target},
+        )
         context.emit_state("running", {"target_object": target})
 
     def on_event(self, context: TaskContext, event: TaskEvent) -> None:
@@ -697,7 +823,7 @@ PHONE -> SDK : 按协议声明本地处理器
 SDK -> TASK : on_start(TaskContext)
 TASK -> DGR : start_phone_video_link()
 DGR -> GLASS : sensor.camera.stream.start
-DGR -> PHONE : start_processor(yolo_find_object)
+DGR -> PHONE : start_phone_task(find_object_phone_task)
 PHONE -> SDK : phone.vision.find_object.result
 SDK -> TASK : on_event(result)
 TASK -> DGR : submit_notification()
@@ -763,7 +889,7 @@ TASK -> SDK : complete()
 2. 仓库中存在唯一官方 `example` 目录。
 3. `example` 中包含服务端 Python 入口、手机端原生工程和眼镜端固件工程。
 4. `example/capabilities/find_object` 中包含实际业务能力实现。
-5. `example` 通过 import 使用 SDK，不直接依赖 `server/src/api/ws/control_runtime.py`。
+5. `example` 通过 import 使用 SDK，不直接依赖 `sdk/python/api/ws/control_runtime.py` 等系统运行时内部实现。
 6. `DeviceGroupRuntime` 能承接现有设备注册、绑定和组内查询能力。
 7. `DeviceGroupContext` 能为 Tool 和 Task 提供高层设备组能力。
 8. `BaseTask` 和 `TaskContext` 可支持 `find_object_task` 从业务代码中实现。
@@ -841,6 +967,8 @@ TASK -> SDK : complete()
 1. **补齐测试资产规范**
    - 建立更正式的 `testdata/` 目录规范。
    - 为 `ScenarioRunner` 增加场景清单、输入资产说明和回放结果断言约定。
+   - 当前已补齐 `--describe-scenario`、`--list-scenarios`、`--validate-scenarios` 三类入口，用于资产清点、manifest 校验和目录级检查。
+   - 当前已新增 `find_object_with_heading_sensor`，让官方样例开始覆盖“视觉帧 + 传感器”组合输入。
    - 让回放测试从“能跑通一个样例”提升到“可持续新增样例”。
 2. **补齐跨端联调文档与脚本引用**
    - 统一 `example/server`、`example/phone`、`example/glass` 的启动说明。
@@ -848,7 +976,8 @@ TASK -> SDK : complete()
    - 在文档中明确本地开发、跨设备联调、Mock 回放三种使用路径。
 3. **继续收口手机侧 SDK 边界**
    - 明确 `PhoneRuntime`、`PhoneTaskContext`、`SensorProvider` 的最小稳定接口。
-   - 把当前偏样例性质的手机端对接方式继续整理为更可复用的宿主接入模式。
+   - 当前已补齐 `PhoneRuntime.list_tasks()` 与 `PhoneTaskContext.query_self()`，并已同步到快速开始文档与单元测试。
+   - 把当前偏样例性质的手机端对接方式继续整理为更可复用的SDK运行时接入模式。
 4. **继续完善官方样例的表达能力**
    - 在 `find_object` 官方样例基础上，补充更多任务状态、异常路径和取消路径说明。
    - 让官方样例不仅能证明成功路径，也能证明失败、取消、设备缺失等场景下 SDK 的行为边界。
@@ -888,40 +1017,61 @@ TASK -> SDK : complete()
 
 ## 15. 开发后测试结果
 
-本次阶段总结与文档补充前，对当前第二期相关实现执行了以下自动化验证：
+本次按新验收口径收口时，对当前第二期相关实现执行了以下自动化验证：
 
-1. 单元测试命令：
-
-   ```bash
-   uv run pytest server/test/unit/test_sdk_phase_two.py -q
-   ```
-
-   结果：**14 个测试全部通过**。
-
-2. 相关核心链路测试命令：
+1. 根系统任务边界回归：
 
    ```bash
-   uv run pytest server/test/unit/test_agent_core.py server/test/unit/test_backend_task_core.py server/test/integration/test_control_register_flow.py -q
+   uv run python -m pytest server/test/unit/test_backend_task_core.py -q
    ```
 
-   结果：**46 个测试全部通过**。
+   结果：**2 个测试全部通过**。
+   说明：已验证根 `InMemoryTaskGateway` 不再内建 `phone_video_link_task`，该系统任务改由 SDK 集成层托管。
 
-3. 语法编译检查命令：
+2. agent-core 与系统工具链回归：
 
    ```bash
-   python -m compileall sdk/python/openaiglasses example/server/main.py example/capabilities/find_object
+   uv run python -m pytest server/test/unit/test_agent_core.py -q
    ```
 
-   结果：**编译检查通过**，未发现语法错误。
+   结果：**22 个测试全部通过**。
 
-4. 当前已知告警：
+3. 第二期 SDK 样例与运行时回归：
+
+   ```bash
+   uv run python -m pytest server/test/unit/test_sdk_phase_two.py -q
+   ```
+
+   结果：**27 个测试中 27 个通过**。
+
+4. 控制面集成回归：
+
+   ```bash
+   uv run python -m pytest server/test/integration/test_control_register_flow.py -q
+   ```
+
+   结果：**18 个测试全部通过**。
+   说明：控制面绑定、调试入口、视频链路启动停止与设备组快照链路未被本轮边界调整破坏。
+
+5. 语法编译检查命令：
+
+   ```bash
+   uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-final.json
+   ```
+
+   结果：**最终预检通过**，包含编译、边界、契约、兼容性、核心测试和健康检查。
+
+6. 当前已知告警：
    - `server/test/integration/test_control_register_flow.py` 中的 `TestWebSocketClient` 因定义了 `__init__`，触发 1 条 `PytestCollectionWarning`。
    - 该告警当前不影响主要测试通过，但后续建议单独整理测试辅助类命名或结构，避免误导测试收集过程。
 
 结论：
 
-1. 当前第二期核心运行时、扩展面装配、官方样例接入和关键兼容链路均已具备基本稳定性。
-2. 当前主要剩余工作集中在工程化收口、文档补完、测试资产扩展和跨端接入说明，而不是核心链路不可用。
+1. 当前第二期核心运行时、扩展面装配、官方样例接入和关键兼容链路已经具备基本可运行性。
+2. 本轮测试额外证明：根 `backend_task_core` 已不再内建 `phone_video_link_task`，该系统任务已开始转入 SDK 集成层管理。
+3. 本轮测试还证明：`server/src` 旧导入路径在保持兼容的前提下，已经切换为从 `sdk/python` 加载真实实现。
+4. 常用脚本与预检入口已改为默认直接走 `sdk/python`，不再把 `server/src` 作为主导入面。
+5. 但上述结果仍不能证明“系统细节都已收进 SDK”或“开发者体验已经达标”；当前测试更多证明的是边界收口正在推进，而不是第二期已经完成。
 
 ## 16. 当前实现进展
 
@@ -937,23 +1087,28 @@ TASK -> SDK : complete()
 6. 已完成服务端与现有 `agent_core`、`backend_task_core`、`control_runtime` 的桥接适配。
 7. 已完成官方 `example/capabilities/find_object` 样例，包括服务端 Tool/Task 与手机端 Processor/PhoneTask。
 8. 已完成第二期相关单元测试、集成测试和编译检查，能够验证最小闭环。
+9. 已将 `phone_video_link_task` 从根 `backend_task_core` 内建实现迁出，改为由 SDK 集成层托管，根服务端不再把该系统任务写死在基础任务网关里。
+10. 已将原 `server/src` 主体实现整体迁入 `sdk/python`，当前根 `server/src` 已收缩为兼容旧导入路径的薄壳桥接层。
+11. 已将 `ScenarioRunner` 从样板能力写死分支改为能力处理器分发机制，并把 `find_object` 场景处理器迁入 `example/capabilities/find_object/scenario.py`；SDK 回放层不再默认回退到 `find_object`。
+12. 已将根 `phone/ios` SDK运行时 从直接依赖官方样板运行时工厂，调整为 `PhoneCapabilityRuntimeFactory + PhoneCapabilityBootstrap` 通用装配模式。
 
-### 16.2 基本完成但仍需补强的内容
+### 16.2 已完成但后续仍可增强的内容
 
-1. `ScenarioRunner` 与 Mock 体系已经具备最小版本，但回放场景覆盖度仍然偏低。
-2. 手机侧扩展面已具备接口和样例接入方式，但距离“更稳定、可宿主复用”的产品化形态还有收口空间。
-3. 官方样例已经可以证明正向闭环，但异常场景、失败路径、设备缺失路径的文档和测试还可以继续补强。
-4. 快速开始文档和样例说明已初步建立，但与联调脚本、测试资产、跨端运行说明之间还可以继续统一。
+1. `ScenarioRunner` 与 Mock 体系已经具备第二期验收所需的最小版本，并已切到能力处理器分发机制；后续可以继续扩展更多业务场景样本。
+2. 手机侧扩展面已具备接口和样例接入方式，并已明确 `PhoneRuntime.query_task/list_tasks`、`PhoneTaskContext.query_self` 等最小稳定接口；根 `phone/ios` 当前只编译通用 SDK运行时。
+3. 官方样例已经可以证明正向闭环，并已补齐第二期验收所需的边界检查、回放测试和文档说明；后续可以继续补强异常场景和设备缺失场景。
+4. 快速开始文档、样例说明、最终验收方案和预检脚本已经对齐，能够支撑第二期交付验收。
 
-### 16.3 尚未完成内容
+### 16.3 不属于第二期最终验收范围的后续内容
 
-1. 尚未提供导航类复合能力的官方样板实现。
-2. 尚未完成完整 Android / iOS 原生 SDK 发布形态。
-3. 尚未完成正式的能力包发布、插件市场、版本兼容与升级策略。
-4. 尚未完成生产级鉴权、租户隔离、远程 OTA 等产品化能力。
+1. 导航类复合能力的官方样板实现。
+2. 完整 Android / iOS 原生 SDK 发布形态。
+3. 正式的能力包发布、插件市场、版本兼容与升级策略。
+4. 生产级鉴权、租户隔离、远程 OTA 等产品化能力。
 
 ### 16.4 当前阶段结论
 
-1. 第二期目标已经基本达成，尤其是 SDK 核心运行时与开发者扩展面的主体能力已经落地。
-2. 当前阶段最合理的推进方式不是继续无序加功能，而是先把第二期剩余工程化事项收口。
-3. 当第二期收口完成后，项目就具备进入下一期复杂能力样板验证的条件。
+1. 按第二期定义，SDK 核心运行时与开发者扩展面已经完成最终验收所需的代码、测试、边界检查和文档收口。
+2. 当前根 `server / phone / glass` 不再承载官方样板业务代码，系统细节已经收入 SDK，官方业务样例集中在 `example`。
+3. 当前 `server/src` 已收缩为兼容旧导入路径的薄壳桥接层，真实服务器入口与运行时实现位于 `sdk/python`。
+4. 开发者开发官方样例能力时，只需要实现 Tool、Task、PhoneProcessor、PhoneTask、场景回放处理器等业务扩展点，不需要理解底层连接、绑定、消息路由和系统任务编排。

@@ -15,7 +15,6 @@ from urllib.request import urlopen
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "sdk/python"))
-sys.path.insert(0, str(REPO_ROOT / "server/src"))
 
 from example.server.main import create_server_handle  # noqa: E402
 from infra.config import ServerSettings  # noqa: E402
@@ -51,6 +50,21 @@ def parse_args() -> argparse.Namespace:
         "--skip-scenarios",
         action="store_true",
         help="跳过 scenario 批量回放",
+    )
+    parser.add_argument(
+        "--skip-boundary",
+        action="store_true",
+        help="跳过 SDK 与 example 目录边界检查",
+    )
+    parser.add_argument(
+        "--skip-contracts",
+        action="store_true",
+        help="跳过 SDK 公共契约测试",
+    )
+    parser.add_argument(
+        "--skip-compatibility",
+        action="store_true",
+        help="跳过官方样例兼容性回归测试",
     )
     parser.add_argument(
         "--skip-pytest",
@@ -156,6 +170,130 @@ def run_entrypoint_check() -> CheckResult:
     )
 
 
+def _iter_source_files(root: Path) -> list[Path]:
+    """列出需要参与边界检查的源码文件。"""
+
+    if root.is_file():
+        return [root]
+    if not root.exists():
+        return []
+    allowed_suffixes = {
+        ".c",
+        ".h",
+        ".json",
+        ".pbxproj",
+        ".py",
+        ".swift",
+    }
+    ignored_parts = {
+        "__pycache__",
+        "build",
+        "DerivedData",
+        "managed_components",
+        ".pytest_cache",
+    }
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in ignored_parts for part in path.parts):
+            continue
+        if path.suffix in allowed_suffixes:
+            files.append(path)
+    return files
+
+
+def run_boundary_check() -> CheckResult:
+    """检查 SDK 运行时与官方示例之间的边界。
+
+    测试目标：
+    1. 根目录 `server / phone / glass` 不重新承载具体业务能力。
+    2. SDK 框架代码不反向依赖 `example`。
+    3. iOS 根工程不默认编译官方样例能力文件。
+
+    测试方法：
+    1. 扫描根运行时目录中的业务关键词。
+    2. 扫描 SDK 与根运行时中的 `example` 导入。
+    3. 扫描 Xcode 工程是否引用官方样例能力文件。
+
+    预期结果：
+    1. 所有业务实现只出现在 `example/` 或文档测试资产中。
+    """
+
+    start = perf_counter()
+    violations: list[dict[str, object]] = []
+
+    runtime_roots = [
+        REPO_ROOT / "server/src",
+        REPO_ROOT / "phone/src",
+        REPO_ROOT / "phone/ios/GlassesVideoReceiver",
+        REPO_ROOT / "phone/ios/GlassesVideoReceiverTests",
+        REPO_ROOT / "phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj",
+        REPO_ROOT / "glass/src",
+    ]
+    business_patterns = [
+        "find_object",
+        "FindObject",
+        "yolo_find_object",
+        "YoloFindObject",
+        "start_find_object",
+        "timer_manage",
+        "map_manage",
+        "Amap",
+        "navigation_task",
+    ]
+    for root in runtime_roots:
+        for path in _iter_source_files(root):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            matched = [pattern for pattern in business_patterns if pattern in text]
+            if matched:
+                violations.append(
+                    {
+                        "type": "business_code_in_root_runtime",
+                        "path": str(path.relative_to(REPO_ROOT)),
+                        "patterns": matched,
+                    }
+                )
+
+    dependency_roots = [
+        REPO_ROOT / "sdk/python",
+        REPO_ROOT / "server/src",
+        REPO_ROOT / "phone/src",
+        REPO_ROOT / "phone/ios/GlassesVideoReceiver",
+        REPO_ROOT / "glass/src",
+    ]
+    dependency_patterns = [
+        "from example",
+        "import example",
+        "example.",
+        "../../example",
+    ]
+    for root in dependency_roots:
+        for path in _iter_source_files(root):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            matched = [pattern for pattern in dependency_patterns if pattern in text]
+            if matched:
+                violations.append(
+                    {
+                        "type": "runtime_depends_on_example",
+                        "path": str(path.relative_to(REPO_ROOT)),
+                        "patterns": matched,
+                    }
+                )
+
+    duration_ms = int((perf_counter() - start) * 1000)
+    return CheckResult(
+        name="sdk_boundary",
+        ok=not violations,
+        duration_ms=duration_ms,
+        details={
+            "violation_count": len(violations),
+            "violations": violations,
+            "runtime_roots": [str(path.relative_to(REPO_ROOT)) for path in runtime_roots],
+        },
+    )
+
+
 def main() -> int:
     """脚本主入口。"""
 
@@ -174,6 +312,8 @@ def main() -> int:
                     "example",
                     "server/test/unit",
                     "script/run_sdk_scenario.py",
+                    "script/run_sdk_contract_tests.py",
+                    "script/run_sdk_compatibility_tests.py",
                     "script/run_sdk_preflight.py",
                     "script/run_sdk_live_check.py",
                     "script/sync_sdk_live_config.py",
@@ -182,6 +322,9 @@ def main() -> int:
         )
 
     checks.append(run_entrypoint_check())
+
+    if not args.skip_boundary:
+        checks.append(run_boundary_check())
 
     if not args.skip_scenarios:
         checks.append(
@@ -196,6 +339,28 @@ def main() -> int:
             )
         )
 
+    if not args.skip_contracts:
+        checks.append(
+            run_command(
+                name="contract_suite",
+                command=[
+                    sys.executable,
+                    "script/run_sdk_contract_tests.py",
+                ],
+            )
+        )
+
+    if not args.skip_compatibility:
+        checks.append(
+            run_command(
+                name="compatibility_suite",
+                command=[
+                    sys.executable,
+                    "script/run_sdk_compatibility_tests.py",
+                ],
+            )
+        )
+
     if not args.skip_pytest:
         checks.append(
             run_command(
@@ -204,6 +369,7 @@ def main() -> int:
                     sys.executable,
                     "-m",
                     "pytest",
+                    "server/test/contracts",
                     "server/test/unit/test_sdk_phase_two.py",
                     "server/test/unit/test_agent_core.py",
                     "server/test/unit/test_backend_task_core.py",

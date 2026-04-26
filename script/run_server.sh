@@ -269,7 +269,7 @@ start_local() {
   (
     cd "${REPO_ROOT}" || exit 1
     env \
-      PYTHONPATH=server/src \
+      PYTHONPATH=sdk/python:. \
       SERVER_HOST="${HOST}" \
       SERVER_PORT="${PORT}" \
       LOG_LEVEL="${LOG_LEVEL}" \

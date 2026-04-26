@@ -116,6 +116,18 @@ class PhoneRuntime:
 
         return self._require_task(task_id).to_snapshot()
 
+    def list_tasks(self) -> list[PhoneTaskSnapshot]:
+        """列出当前全部手机任务快照。
+
+        返回值：
+        1. 当前运行时托管的全部手机任务快照列表。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        return [record.to_snapshot() for record in self._tasks.values()]
+
     def process_with_processor(
         self,
         *,

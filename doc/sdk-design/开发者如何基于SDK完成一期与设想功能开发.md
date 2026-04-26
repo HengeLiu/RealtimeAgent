@@ -266,7 +266,7 @@ SDK 应内置：
 assistant = sdk.create_voice_agent(
     name="glasses_assistant",
     system_prompt="你是盲人眼镜助手，请简短口语化回答。",
-    tools=[capture_photo_tool, timer_manage_tool, map_manage_tool],
+    tools=[capture_photo_tool],
 )
 ```
 
@@ -313,8 +313,7 @@ SDK 应统一处理：
 
 ```python
 sdk.register_tool(capture_photo_tool)
-sdk.register_tool(timer_manage_tool)
-sdk.register_tool(map_manage_tool)
+sdk.register_tool(find_object_tool)
 ```
 
 ### 5.4.2 SDK 应承担的内容
@@ -341,7 +340,7 @@ SDK 负责：
 
 ```python
 sdk.register_tool(capture_photo_tool)
-sdk.register_mcp(amap_adapter)
+sdk.register_mcp_adapter(amap_adapter)
 ```
 
 ### 5.5.2 开发者真正关注的内容

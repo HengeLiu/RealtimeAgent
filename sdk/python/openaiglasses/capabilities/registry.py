@@ -31,6 +31,34 @@ class CapabilityRegistry:
         self._phone_tasks: dict[str, BasePhoneTask] = {}
         self._sensor_providers: dict[str, BaseSensorProvider] = {}
 
+    @staticmethod
+    def _ensure_unique_registration(
+        *,
+        bucket: dict[str, Any],
+        key: str,
+        value: Any,
+        label: str,
+    ) -> None:
+        """检查注册键是否重复。
+
+        参数：
+        1. `bucket`：当前注册表字典。
+        2. `key`：即将注册的能力键。
+        3. `value`：即将注册的能力对象。
+        4. `label`：能力类别名称。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 已存在同名但不同对象时抛出 `ValueError`。
+        """
+
+        current = bucket.get(key)
+        if current is None or current is value:
+            return
+        raise ValueError(f"{label} 已存在重复注册: {key}")
+
     def register_tool(self, tool: BaseTool) -> None:
         """注册 Tool。
 
@@ -46,6 +74,12 @@ class CapabilityRegistry:
 
         if not tool.name:
             raise ValueError("tool.name 不能为空")
+        self._ensure_unique_registration(
+            bucket=self._tools,
+            key=tool.name,
+            value=tool,
+            label="tool",
+        )
         self._tools[tool.name] = tool
 
     def register_task(self, task: BaseTask) -> None:
@@ -63,6 +97,12 @@ class CapabilityRegistry:
 
         if not task.task_type:
             raise ValueError("task.task_type 不能为空")
+        self._ensure_unique_registration(
+            bucket=self._tasks,
+            key=task.task_type,
+            value=task,
+            label="task",
+        )
         self._tasks[task.task_type] = task
 
     def register_phone_processor(self, processor: Any) -> None:
@@ -81,6 +121,12 @@ class CapabilityRegistry:
         processor_type = getattr(processor, "processor_type", "")
         if not processor_type:
             raise ValueError("processor.processor_type 不能为空")
+        self._ensure_unique_registration(
+            bucket=self._phone_processors,
+            key=processor_type,
+            value=processor,
+            label="phone_processor",
+        )
         self._phone_processors[processor_type] = processor
 
     def register_phone_task(self, task: BasePhoneTask) -> None:
@@ -88,6 +134,12 @@ class CapabilityRegistry:
 
         if not task.task_type:
             raise ValueError("phone_task.task_type 不能为空")
+        self._ensure_unique_registration(
+            bucket=self._phone_tasks,
+            key=task.task_type,
+            value=task,
+            label="phone_task",
+        )
         self._phone_tasks[task.task_type] = task
 
     def register_sensor_provider(self, provider: BaseSensorProvider) -> None:
@@ -95,6 +147,12 @@ class CapabilityRegistry:
 
         if not provider.sensor_type:
             raise ValueError("sensor_provider.sensor_type 不能为空")
+        self._ensure_unique_registration(
+            bucket=self._sensor_providers,
+            key=provider.sensor_type,
+            value=provider,
+            label="sensor_provider",
+        )
         self._sensor_providers[provider.sensor_type] = provider
 
     def get_tool(self, name: str) -> BaseTool | None:

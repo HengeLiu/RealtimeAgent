@@ -2,7 +2,7 @@
 
 from openaiglasses.testing.mocks import MockGlassRuntime, MockPhoneRuntime
 from openaiglasses.testing.replay import ReplayEvent, ReplaySensorProvider, ReplayTimeline
-from openaiglasses.testing.scenario_runner import ScenarioRunner
+from openaiglasses.testing.scenario_runner import ScenarioCapabilityHandler, ScenarioRunner
 
 __all__ = [
     "MockGlassRuntime",
@@ -10,5 +10,6 @@ __all__ = [
     "ReplayEvent",
     "ReplaySensorProvider",
     "ReplayTimeline",
+    "ScenarioCapabilityHandler",
     "ScenarioRunner",
 ]

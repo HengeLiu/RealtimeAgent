@@ -201,6 +201,8 @@ testdata/
 5. `testdata/scenario/find_object_cancelled.json`
 6. `testdata/scenario/find_object_missing_phone.json`
 7. `testdata/scenario/find_object_video_link_start_failed.json`
+8. `testdata/sensor/find_object_heading.json`
+9. `testdata/scenario/find_object_with_heading_sensor.json`
 
 其中：
 
@@ -209,6 +211,7 @@ testdata/
 3. `testdata/scenario/find_object_cancelled.json` 适合演示任务取消、链路停止和回放断言。
 4. `testdata/scenario/find_object_missing_phone.json` 适合演示设备缺失类失败场景。
 5. `testdata/scenario/find_object_video_link_start_failed.json` 适合演示系统适配层异常场景。
+6. `testdata/scenario/find_object_with_heading_sensor.json` 适合演示手机任务在处理视觉帧时读取传感器，并把传感器结果写入结构化输出。
 
 ---
 
@@ -381,6 +384,10 @@ testdata/
 2. `frame`、`task.cancel`、`task.event`、`sensor.<type>` 等事件类型。
 3. 通过 `script/run_sdk_scenario.py` 执行场景并输出 JSON 报告。
 4. 通过 `script/run_sdk_preflight.py` 把回放、pytest、编译检查和服务健康检查收敛成一条预检链路。
+5. 通过 `script/run_sdk_scenario.py --describe-scenario` 输出单个场景的资产与断言摘要。
+6. 通过 `script/run_sdk_scenario.py --list-scenarios` 输出目录级场景清单，便于维护回放资产。
+7. 手机侧运行时可通过 `PhoneRuntime.query_task()`、`PhoneRuntime.list_tasks()` 和 `PhoneTaskContext.query_self()` 在回放期间读取任务快照，便于断言手机任务状态和 SDK运行时 接入行为。
+8. 通过 `script/run_sdk_scenario.py --validate-scenarios` 可在不执行回放的情况下校验场景字段、资产引用和最小断言约束。
 
 ---
 

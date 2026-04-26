@@ -1,6 +1,8 @@
 {
   "scenario_id": "find_object_basic",
   "title": "寻找物体最小闭环",
+  "description": "验证官方最小样例可以在两帧输入下完成找物体闭环。",
+  "capability": "find_object",
   "device_group": {
     "glass": "mock_glass_001",
     "phone": "mock_phone_001"
