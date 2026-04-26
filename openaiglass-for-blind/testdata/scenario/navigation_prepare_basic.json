@@ -1,0 +1,27 @@
+{
+  "scenario_id": "navigation_prepare_basic",
+  "title": "导航路线准备最小闭环",
+  "description": "验证业务 Tool 通过 SDK MCP 入口规划路线，并创建 navigation_task。",
+  "capability": "navigation",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "origin": "当前位置",
+    "destination": "桂林路地铁站",
+    "strategy": "walking",
+    "create_task": true
+  },
+  "expected": {
+    "tool_ok": true,
+    "task_state": "prepared",
+    "task_data": {
+      "destination": "桂林路地铁站",
+      "strategy": "walking"
+    },
+    "notification_contains": "导航路线已准备",
+    "mcp_trace_contains": "amap.route_plan"
+  }
+}
+

@@ -1,0 +1,47 @@
+{
+  "scenario_id": "navigation_progress_arrived",
+  "title": "导航任务进展与到达事件",
+  "description": "验证 navigation_task 可接收进展事件、提交通知，并在到达事件后完成。",
+  "capability": "navigation",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "origin": "当前位置",
+    "destination": "桂林路地铁站",
+    "strategy": "walking",
+    "create_task": true,
+    "timeline": {
+      "timeline_id": "navigation_progress_arrived",
+      "events": [
+        {
+          "at": 100,
+          "type": "navigation.progress",
+          "payload": {
+            "step_index": 1,
+            "prompt": "前方路口请等待红绿灯"
+          }
+        },
+        {
+          "at": 200,
+          "type": "navigation.arrived",
+          "payload": {
+            "source": "scenario"
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "tool_ok": true,
+    "task_state": "completed",
+    "task_result": {
+      "arrived": true,
+      "destination": "桂林路地铁站"
+    },
+    "notification_contains": ["前方路口", "已到达"],
+    "timeline_event_types": ["navigation.progress", "navigation.arrived"],
+    "mcp_trace_contains": "amap.route_plan"
+  }
+}

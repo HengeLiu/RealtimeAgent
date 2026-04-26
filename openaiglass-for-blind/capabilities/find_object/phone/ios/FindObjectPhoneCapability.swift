@@ -3,12 +3,18 @@ import UIKit
 
 @MainActor
 private let registerFindObjectPhoneCapabilityInstaller: Void = {
-    PhoneCapabilityBootstrap.registerInstaller {
-        PhoneCapabilityRuntimeFactory.register {
-            FindObjectPhoneCapabilityRuntime()
+    FindObjectPhoneCapabilityInstaller.install()
+}()
+
+enum FindObjectPhoneCapabilityInstaller {
+    static func install() {
+        PhoneCapabilityBootstrap.registerInstaller {
+            PhoneTaskCapabilityRegistry.register(taskType: "find_object_phone_task") {
+                FindObjectPhoneCapabilityRuntime()
+            }
         }
     }
-}()
+}
 
 /// 找物体能力运行时。
 ///

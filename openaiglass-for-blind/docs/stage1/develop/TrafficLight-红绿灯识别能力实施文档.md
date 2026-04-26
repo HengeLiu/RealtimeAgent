@@ -48,7 +48,7 @@
 2. `TrafficLightProcessor` 从离线回放文本中识别 `red/yellow/green/unknown`。
 3. 输出结构化事件 `phone.vision.traffic_light.result`。
 
-当前 Python 处理器是离线回放和契约验证用的最小实现，不代表真实视觉模型。真实 iOS 端插件样例已放在 `capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift`。
+当前 Python 处理器是离线回放和契约验证用的最小实现，不代表真实视觉模型。真实 iOS 端插件样例已放在 `capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift`，并已按 `sdk-v2` 的 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 方式注册。
 
 ### 3.4 宿主装配
 
@@ -199,8 +199,9 @@ uv run python scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pre
 结果：
 
 1. 编译检查通过。
-2. 场景校验通过：9 / 9。
-3. 场景回放通过：9 / 9。
+2. 场景校验通过：12 / 12。
+3. 场景回放通过：12 / 12。
+4. SDK 预检通过：9 / 9。
 
 ## 10. 当前实现进展
 

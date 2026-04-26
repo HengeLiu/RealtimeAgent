@@ -555,7 +555,7 @@ if __name__ == "__main__":
 openaiglass-for-blind/host/server/main.py
 ```
 
-它注册了 `find_object` 的 Tool、Task、PhoneProcessor、PhoneTask 和场景回放处理器。
+它注册了 `find_object`、`traffic_light`、`navigation` 等盲人业务能力的 Tool、Task、PhoneProcessor、PhoneTask、MCP adapter 和场景回放处理器。
 
 启动盲人业务服务端：
 

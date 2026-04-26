@@ -19,6 +19,10 @@ from capabilities.find_object.phone.task import FindObjectPhoneTask
 from capabilities.find_object.scenario import build_find_object_scenario_handler
 from capabilities.find_object.server.task import FindObjectTask
 from capabilities.find_object.server.tool import StartFindObjectTool
+from capabilities.navigation.mcp import MockAmapMcpAdapter
+from capabilities.navigation.scenario import build_navigation_scenario_handler
+from capabilities.navigation.server.task import NavigationTask
+from capabilities.navigation.server.tool import PrepareNavigationTool
 from capabilities.traffic_light.phone.processor import TrafficLightProcessor
 from capabilities.traffic_light.phone.task import TrafficLightPhoneTask
 from capabilities.traffic_light.scenario import build_traffic_light_scenario_handler
@@ -76,7 +80,18 @@ def create_full_sdk() -> OpenAIGlassesSDK:
     1. 注册能力名称为空时由 SDK 抛出异常。
     """
 
-    return create_sdk(include_traffic_light=True)
+    sdk = create_sdk(include_traffic_light=True)
+    register_navigation_capability(sdk)
+    return sdk
+
+
+def register_navigation_capability(sdk: OpenAIGlassesSDK) -> None:
+    """向 SDK 注册导航准备业务能力。"""
+
+    sdk.register_mcp_adapter(MockAmapMcpAdapter())
+    sdk.register_tool(PrepareNavigationTool())
+    sdk.register_task(NavigationTask())
+    sdk.register_scenario_handler("navigation", build_navigation_scenario_handler())
 
 
 def register_traffic_light_capability(sdk: OpenAIGlassesSDK) -> None:

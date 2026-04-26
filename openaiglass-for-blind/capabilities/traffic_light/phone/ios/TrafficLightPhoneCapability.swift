@@ -3,12 +3,18 @@ import UIKit
 
 @MainActor
 private let registerTrafficLightPhoneCapabilityInstaller: Void = {
-    PhoneCapabilityBootstrap.registerInstaller {
-        PhoneCapabilityRuntimeFactory.register {
-            TrafficLightPhoneCapabilityRuntime()
+    TrafficLightPhoneCapabilityInstaller.install()
+}()
+
+enum TrafficLightPhoneCapabilityInstaller {
+    static func install() {
+        PhoneCapabilityBootstrap.registerInstaller {
+            PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
+                TrafficLightPhoneCapabilityRuntime()
+            }
         }
     }
-}()
+}
 
 /// 红绿灯识别能力运行时。
 ///
@@ -239,4 +245,3 @@ final class HeuristicTrafficLightDetector: TrafficLightDetector {
         }
     }
 }
-
