@@ -141,7 +141,7 @@ uv run python script/run_sdk_scenario.py --scenario-dir testdata/scenario --pret
 执行：
 
 ```bash
-rg -n "from capabilities|import capabilities|../../capabilities" openaiglass-sdk/python openaiglass-sdk/server-compat/src openaiglass-for-blind/phone/src openaiglass-for-blind/phone/ios/GlassesVideoReceiver openaiglass-for-blind/glass/src -g '!**/__pycache__/**'
+rg -n "from capabilities|import capabilities|../../capabilities" openaiglass-sdk/python openaiglass-for-blind/phone/src openaiglass-for-blind/phone/ios/GlassesVideoReceiver openaiglass-for-blind/glass/src -g '!**/__pycache__/**'
 ```
 
 预期结果：

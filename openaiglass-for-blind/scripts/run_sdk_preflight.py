@@ -229,7 +229,6 @@ def run_boundary_check() -> CheckResult:
     violations: list[dict[str, object]] = []
 
     runtime_roots = [
-        SDK_ROOT / "server-compat/src",
         APP_ROOT / "phone/src",
         APP_ROOT / "phone/ios/GlassesVideoReceiver",
         APP_ROOT / "phone/ios/GlassesVideoReceiverTests",
@@ -262,7 +261,6 @@ def run_boundary_check() -> CheckResult:
 
     dependency_roots = [
         SDK_ROOT / "python",
-        SDK_ROOT / "server-compat/src",
         APP_ROOT / "phone/src",
         APP_ROOT / "phone/ios/GlassesVideoReceiver",
         APP_ROOT / "glass/src",

@@ -12,7 +12,6 @@
 | [testdata/contracts](./testdata/contracts) | SDK 公共对象与协议金样。 |
 | [scripts](./scripts) | SDK 打包检查、契约测试、兼容性测试和音频样例回归入口。 |
 | [config](./config) | 服务端本地配置与模板。 |
-| [server-compat](./server-compat) | 旧 `server/src` 导入路径兼容壳，真实实现仍在 `python/`。 |
 
 ## 常用命令
 
