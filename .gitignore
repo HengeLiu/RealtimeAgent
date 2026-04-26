@@ -8,6 +8,7 @@ logs
 reply
 m4a
 runs
+deprecated*
 
 # Python generated artifacts
 **/__pycache__/
