@@ -126,6 +126,18 @@
 
 SDK运行时不应对某个具体 `task_type` 写业务分支。第二期最终验收要求是：根目录 `openaiglass-sdk/phone-ios` 可以接收任意 `task_type` 并交给已注册能力处理，但自身不包含 `find_object`、导航、地图或计时器等业务分支。
 
+当前实现通过 `PhoneTaskCapabilityRegistry` 承载多能力注册：
+
+```swift
+PhoneTaskCapabilityRegistry.register(taskType: "find_object_phone_task") {
+    FindObjectPhoneCapabilityRuntime()
+}
+```
+
+`CameraStreamStore` 只持有一个组合运行时。组合运行时内部根据 `taskType` 创建业务运行时，并用 `taskID` 记录启动实例，停止任务时回到同一个实例。未知 `taskType` 交给 `NoopPhoneTaskCapabilityRuntime` 兜底并在调试页面显示错误。
+
+`PhoneCapabilityRuntimeFactory.register { ... }` 是旧式单能力兼容入口。它不能表达任务类型，不应作为新业务插件的接入方式。
+
 ### 4.4 事件上报
 
 手机 SDK运行时通过统一 HTTP 入口上报任务事件：

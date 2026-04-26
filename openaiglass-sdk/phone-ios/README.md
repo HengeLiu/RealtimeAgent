@@ -9,3 +9,19 @@ open openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj
 ```
 
 盲人产品的手机宿主说明位于 [../../openaiglass-for-blind/host/phone](../../openaiglass-for-blind/host/phone)，具体业务插件位于 [../../openaiglass-for-blind/capabilities](../../openaiglass-for-blind/capabilities)。
+
+## 手机能力注册
+
+iOS 通用运行时支持多个业务能力同时接入。业务插件按服务端下发的 `task_type` 注册：
+
+```swift
+PhoneCapabilityBootstrap.registerInstaller {
+    PhoneTaskCapabilityRegistry.register(taskType: "demo_phone_task") {
+        DemoPhoneCapabilityRuntime()
+    }
+}
+```
+
+App 启动时执行 `PhoneCapabilityBootstrap.applyRegisteredInstallers()` 后，`CameraStreamStore` 会使用 `PhoneTaskCapabilityRegistry` 创建组合运行时，并按 `taskType` 分发 `startTask`、`stopTask` 和视频帧。
+
+`PhoneCapabilityRuntimeFactory.register { ... }` 仅保留为旧式单能力接入兼容入口。新业务能力不要使用该入口，否则多个插件同时注册时无法表达各自负责的任务类型。

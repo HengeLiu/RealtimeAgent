@@ -64,6 +64,8 @@ iOS SDK 运行时位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-
 5. 将手机侧处理结果上报回服务端。
 6. 提供调试页面，展示接收地址、注册状态、最近帧和最近事件。
 
+`sdk-v2` 起，iOS 运行时已经支持多业务能力并存。业务插件应通过 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 按服务端下发的 `task_type` 注册；运行时收到 `sdk.phone.task.start` 后会按 `task_type` 选择对应业务插件。旧的 `PhoneCapabilityRuntimeFactory.register { ... }` 只作为单能力兼容入口保留，新能力不要再使用。
+
 当前配置文件：
 
 ```text
@@ -405,6 +407,40 @@ openaiglass-sdk/phone-ios/
 ```
 
 不要把具体业务识别逻辑直接写进 `openaiglass-sdk/phone-ios` 的通用运行时里。通用运行时只负责注册、接收、分发、状态展示和结果回传。
+
+### 7.4 iOS 插件如何注册到通用运行时
+
+本节是 `sdk-v2` 新增的 iOS 手机能力接入方式。
+
+每个 iOS 业务插件只注册自己负责的 `taskType`。不要在业务侧手写组合 Runtime，也不要为了支持多个能力去修改 `CameraStreamStore` 或控制连接代码。
+
+推荐写法：
+
+```swift
+enum DemoPhoneCapabilityInstaller {
+    static func install() {
+        PhoneCapabilityBootstrap.registerInstaller {
+            PhoneTaskCapabilityRegistry.register(taskType: "demo_phone_task") {
+                DemoPhoneCapabilityRuntime()
+            }
+        }
+    }
+}
+```
+
+宿主 App 启动时需要做两件事：
+
+1. 确保每个业务插件的 `install()` 被调用一次。
+2. 调用 `PhoneCapabilityBootstrap.applyRegisteredInstallers()`，让 SDK 执行所有已登记的安装函数。
+
+当前仓库仍以 Xcode 工程交付 iOS SDK。业务插件接入 target 的推荐方式是：
+
+1. 在 `openaiglass-for-blind/capabilities/<capability>/phone/ios/` 下维护业务 Swift 文件。
+2. 在 Xcode 中把这些 Swift 文件加入手机宿主 App target 的 Compile Sources。
+3. 在宿主 App 的启动入口集中调用各插件 `install()`。
+4. 多个插件同时加入 target 时，只要 `taskType` 不重复，SDK 会自动按任务类型分发。
+
+暂不建议业务团队自行封装 Swift Package 或 XCFramework。等 SDK 发布形态进一步稳定后，再由 SDK 团队统一提供包结构和版本兼容规则。
 
 ## 8. 眼镜端能力扩展方式
 

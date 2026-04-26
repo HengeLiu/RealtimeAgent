@@ -405,25 +405,108 @@ final class CameraStreamStore {
     }
 }
 
+/// 手机端任务能力注册表。
+///
+/// 主要功能：
+/// 1. 按 `taskType` 保存业务能力运行时工厂。
+/// 2. 为 `CameraStreamStore` 提供可同时承载多个业务能力的组合运行时。
+/// 3. 让通用 SDK运行时 只负责注册和分发，不感知具体业务实现。
+@MainActor
+enum PhoneTaskCapabilityRegistry {
+    private static var builders: [String: () -> any PhoneTaskCapabilityRuntime] = [:]
+
+    /// 注册指定任务类型的手机能力工厂。
+    ///
+    /// 参数：
+    /// 1. `taskType`：服务端 `start_phone_task` 下发的任务类型。
+    /// 2. `runtimeBuilder`：创建业务能力运行时的工厂。
+    ///
+    /// 异常情况：
+    /// 1. `taskType` 为空时触发断言并忽略注册。
+    static func register(taskType: String, runtimeBuilder: @escaping () -> any PhoneTaskCapabilityRuntime) {
+        let normalizedTaskType = taskType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTaskType.isEmpty else {
+            assertionFailure("PhoneTaskCapabilityRegistry.register(taskType:) 不允许为空")
+            return
+        }
+        builders[normalizedTaskType] = runtimeBuilder
+    }
+
+    /// 查询某个任务类型是否已有业务能力。
+    ///
+    /// 参数：
+    /// 1. `taskType`：服务端下发的任务类型。
+    ///
+    /// 返回值：
+    /// 1. 已注册返回 `true`，否则返回 `false`。
+    static func contains(taskType: String) -> Bool {
+        builders[taskType] != nil
+    }
+
+    /// 创建组合手机能力运行时。
+    ///
+    /// 返回值：
+    /// 1. 一个按 `taskType` 分发启动、停止和视频帧的运行时。
+    static func makeRuntime() -> any PhoneTaskCapabilityRuntime {
+        RegisteredPhoneTaskCapabilityRuntime(builders: builders)
+    }
+
+    /// 清空注册表。
+    ///
+    /// 主要用于测试隔离，业务代码不应在应用运行过程中调用。
+    static func resetForTesting() {
+        builders = [:]
+    }
+}
+
 /// 手机端任务能力工厂注册器。
 ///
 /// 主要功能：
-/// 1. 让 SDK运行时 通过统一入口装配手机能力运行时。
-/// 2. 避免根运行时直接依赖某个具体业务样板能力。
+/// 1. 兼容早期只能注入单个手机能力的装配入口。
+/// 2. 为未迁移到 `PhoneTaskCapabilityRegistry` 的宿主保留可运行路径。
+///
+/// 新业务能力应优先使用 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)`。
 @MainActor
 enum PhoneCapabilityRuntimeFactory {
-    private static var builder: () -> any PhoneTaskCapabilityRuntime = {
-        NoopPhoneTaskCapabilityRuntime()
-    }
+    private static var legacyBuilder: (() -> any PhoneTaskCapabilityRuntime)?
 
-    /// 注册当前应用使用的手机能力工厂。
+    /// 注册当前应用使用的旧式单手机能力工厂。
+    ///
+    /// 参数：
+    /// 1. `newBuilder`：创建手机能力运行时的工厂。
+    ///
+    /// 注意：
+    /// 1. 该入口无法表达 `taskType`，多个业务能力同时注册时仍会以后注册者为准。
+    /// 2. 新业务能力应改用 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)`。
     static func register(_ newBuilder: @escaping () -> any PhoneTaskCapabilityRuntime) {
-        builder = newBuilder
+        legacyBuilder = newBuilder
     }
 
     /// 创建一个新的手机能力运行时实例。
+    ///
+    /// 返回值：
+    /// 1. 优先返回按任务类型分发的组合运行时。
+    /// 2. 如果没有新式注册，则返回旧式单能力运行时。
+    /// 3. 两种注册都没有时返回空实现运行时。
     static func makeRuntime() -> any PhoneTaskCapabilityRuntime {
-        builder()
+        if PhoneTaskCapabilityRegistry.hasRegisteredRuntimes {
+            return PhoneTaskCapabilityRegistry.makeRuntime()
+        }
+        return legacyBuilder?() ?? NoopPhoneTaskCapabilityRuntime()
+    }
+
+    /// 清空旧式工厂。
+    ///
+    /// 主要用于测试隔离，业务代码不应在应用运行过程中调用。
+    static func resetForTesting() {
+        legacyBuilder = nil
+    }
+}
+
+private extension PhoneTaskCapabilityRegistry {
+    /// 当前是否已有按任务类型注册的业务运行时。
+    static var hasRegisteredRuntimes: Bool {
+        !builders.isEmpty
     }
 }
 
@@ -487,6 +570,141 @@ protocol PhoneTaskCapabilityRuntime: AnyObject {
         image: UIImage,
         sequence: Int
     )
+}
+
+/// 按任务类型分发的手机任务能力运行时。
+///
+/// 主要功能：
+/// 1. 根据服务端下发的 `taskType` 创建对应业务能力运行时。
+/// 2. 记录 `taskID` 与业务运行时的关系，保证停止任务时回到同一个实例。
+/// 3. 将视频帧投递给当前活跃任务对应的业务运行时。
+final class RegisteredPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
+    private let builders: [String: () -> any PhoneTaskCapabilityRuntime]
+    private var runtimesByTaskID: [String: any PhoneTaskCapabilityRuntime] = [:]
+    private var taskTypesByTaskID: [String: String] = [:]
+    private var activeTaskID: String?
+    private var latestRuntime: (any PhoneTaskCapabilityRuntime)?
+
+    /// 创建组合运行时。
+    ///
+    /// 参数：
+    /// 1. `builders`：按 `taskType` 保存的业务能力运行时工厂。
+    init(builders: [String: () -> any PhoneTaskCapabilityRuntime]) {
+        self.builders = builders
+    }
+
+    var activeTaskDescription: String? {
+        if let activeTaskID, let runtime = runtimesByTaskID[activeTaskID] {
+            return runtime.activeTaskDescription
+        }
+        return runtimesByTaskID.values.compactMap(\.activeTaskDescription).first
+    }
+
+    var latestSummary: String? {
+        latestRuntime?.latestSummary ?? runtimesByTaskID.values.compactMap(\.latestSummary).first
+    }
+
+    var latestSuccess: Bool? {
+        latestRuntime?.latestSuccess ?? runtimesByTaskID.values.compactMap(\.latestSuccess).first
+    }
+
+    func startTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        streamID: String,
+        glassDeviceID: String,
+        phoneDeviceID: String,
+        params: [String: Any]
+    ) {
+        guard let builder = builders[taskType] else {
+            NoopPhoneTaskCapabilityRuntime().startTask(
+                store: store,
+                taskID: taskID,
+                taskType: taskType,
+                streamID: streamID,
+                glassDeviceID: glassDeviceID,
+                phoneDeviceID: phoneDeviceID,
+                params: params
+            )
+            return
+        }
+
+        let runtime = builder()
+        runtimesByTaskID[taskID] = runtime
+        taskTypesByTaskID[taskID] = taskType
+        activeTaskID = taskID
+        latestRuntime = runtime
+        runtime.startTask(
+            store: store,
+            taskID: taskID,
+            taskType: taskType,
+            streamID: streamID,
+            glassDeviceID: glassDeviceID,
+            phoneDeviceID: phoneDeviceID,
+            params: params
+        )
+    }
+
+    func stopTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        reason: String
+    ) {
+        let targetTaskID = resolveTaskID(taskID: taskID, taskType: taskType)
+        guard let targetTaskID, let runtime = runtimesByTaskID[targetTaskID] else {
+            NoopPhoneTaskCapabilityRuntime().stopTask(
+                store: store,
+                taskID: taskID,
+                taskType: taskType,
+                reason: reason
+            )
+            return
+        }
+
+        runtime.stopTask(
+            store: store,
+            taskID: targetTaskID,
+            taskType: taskTypesByTaskID[targetTaskID] ?? taskType,
+            reason: reason
+        )
+        runtimesByTaskID.removeValue(forKey: targetTaskID)
+        taskTypesByTaskID.removeValue(forKey: targetTaskID)
+        if activeTaskID == targetTaskID {
+            activeTaskID = runtimesByTaskID.keys.first
+        }
+        latestRuntime = runtime
+    }
+
+    func processFrame(
+        store: CameraStreamStore,
+        image: UIImage,
+        sequence: Int
+    ) {
+        guard let activeTaskID, let runtime = runtimesByTaskID[activeTaskID] else {
+            return
+        }
+        latestRuntime = runtime
+        runtime.processFrame(store: store, image: image, sequence: sequence)
+    }
+
+    /// 根据停止消息中的 `taskID` 或 `taskType` 找到正在运行的任务。
+    ///
+    /// 参数：
+    /// 1. `taskID`：服务端任务编号，可能为空。
+    /// 2. `taskType`：服务端任务类型，用于旧消息兜底。
+    ///
+    /// 返回值：
+    /// 1. 找到任务时返回实际 `taskID`，否则返回 `nil`。
+    private func resolveTaskID(taskID: String, taskType: String) -> String? {
+        if !taskID.isEmpty, runtimesByTaskID[taskID] != nil {
+            return taskID
+        }
+        return taskTypesByTaskID.first { _, storedTaskType in
+            storedTaskType == taskType
+        }?.key
+    }
 }
 
 /// 默认空实现手机任务能力运行时。

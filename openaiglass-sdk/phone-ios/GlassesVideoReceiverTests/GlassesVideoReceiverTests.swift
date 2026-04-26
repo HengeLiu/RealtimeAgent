@@ -6,6 +6,7 @@ import UIKit
 private final class TestPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
     private(set) var startedTask: PhoneTaskState?
     private(set) var stoppedTaskID: String?
+    private(set) var processedSequences: [Int] = []
 
     var activeTaskDescription: String? {
         guard let startedTask else { return nil }
@@ -53,6 +54,7 @@ private final class TestPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
         image: UIImage,
         sequence: Int
     ) {
+        processedSequences.append(sequence)
     }
 }
 
@@ -217,6 +219,113 @@ struct GlassesVideoReceiverTests {
         #expect(store.isConnected == false)
         #expect(store.latestImage == nil)
         #expect(capabilityRuntime.stoppedTaskID == "task-001")
+    }
+
+    /// 测试目标：验证 iOS 手机 SDK 可按 `taskType` 同时注册多个业务能力。
+    ///
+    /// 测试方法：
+    /// 1. 向 `PhoneTaskCapabilityRegistry` 注册两个不同任务类型。
+    /// 2. 使用组合运行时分别启动两个手机任务。
+    /// 3. 停止指定任务，检查只命中对应业务运行时。
+    ///
+    /// 预期结果：
+    /// 1. 两个业务运行时都能被启动，不会互相覆盖。
+    /// 2. 停止某个任务时只停止该任务对应的运行时。
+    @MainActor
+    @Test
+    func testPhoneTaskCapabilityRegistryDispatchesMultipleTaskTypes() {
+        PhoneTaskCapabilityRegistry.resetForTesting()
+        PhoneCapabilityRuntimeFactory.resetForTesting()
+        defer {
+            PhoneTaskCapabilityRegistry.resetForTesting()
+            PhoneCapabilityRuntimeFactory.resetForTesting()
+        }
+        let findObjectRuntime = TestPhoneCapabilityRuntime()
+        let trafficLightRuntime = TestPhoneCapabilityRuntime()
+        PhoneTaskCapabilityRegistry.register(taskType: "find_object_phone_task") {
+            findObjectRuntime
+        }
+        PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
+            trafficLightRuntime
+        }
+        let store = CameraStreamStore(capabilityRuntime: PhoneCapabilityRuntimeFactory.makeRuntime())
+
+        store.startPhoneTask(
+            taskID: "task-find",
+            taskType: "find_object_phone_task",
+            streamID: "stream-find",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001",
+            params: ["target": "水杯"]
+        )
+        store.startPhoneTask(
+            taskID: "task-traffic",
+            taskType: "traffic_light_phone_task",
+            streamID: "stream-traffic",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001",
+            params: [:]
+        )
+
+        store.stopPhoneTask(taskID: "task-find", taskType: "find_object_phone_task", reason: "test.stop")
+
+        #expect(findObjectRuntime.startedTask == nil)
+        #expect(findObjectRuntime.stoppedTaskID == "task-find")
+        #expect(trafficLightRuntime.startedTask?.taskID == "task-traffic")
+        #expect(trafficLightRuntime.stoppedTaskID == nil)
+    }
+
+    /// 测试目标：验证组合运行时只把视频帧投递给当前活跃手机任务。
+    ///
+    /// 测试方法：
+    /// 1. 注册两个任务类型并依次启动。
+    /// 2. 更新一帧图像。
+    /// 3. 检查收到帧的是后启动的活跃任务运行时。
+    ///
+    /// 预期结果：
+    /// 1. 当前活跃任务收到帧。
+    /// 2. 非活跃任务不会收到该帧。
+    @MainActor
+    @Test
+    func testPhoneTaskCapabilityRegistryRoutesFramesToActiveTask() throws {
+        PhoneTaskCapabilityRegistry.resetForTesting()
+        PhoneCapabilityRuntimeFactory.resetForTesting()
+        defer {
+            PhoneTaskCapabilityRegistry.resetForTesting()
+            PhoneCapabilityRuntimeFactory.resetForTesting()
+        }
+        let findObjectRuntime = TestPhoneCapabilityRuntime()
+        let trafficLightRuntime = TestPhoneCapabilityRuntime()
+        PhoneTaskCapabilityRegistry.register(taskType: "find_object_phone_task") {
+            findObjectRuntime
+        }
+        PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
+            trafficLightRuntime
+        }
+        let store = CameraStreamStore(capabilityRuntime: PhoneTaskCapabilityRegistry.makeRuntime())
+
+        store.startPhoneTask(
+            taskID: "task-find",
+            taskType: "find_object_phone_task",
+            streamID: "stream-find",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001",
+            params: [:]
+        )
+        store.startPhoneTask(
+            taskID: "task-traffic",
+            taskType: "traffic_light_phone_task",
+            streamID: "stream-traffic",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001",
+            params: [:]
+        )
+
+        let image = try #require(Self.makeSolidImage(red: 0, green: 1, blue: 0))
+        store.updateLatestFrame(image: image, sequence: 42)
+
+        #expect(findObjectRuntime.processedSequences.isEmpty)
+        #expect(trafficLightRuntime.processedSequences == [42])
     }
 
     /// 测试目标：验证统一服务端地址可正确派生控制与 HTTP 地址。
