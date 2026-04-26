@@ -1,47 +1,38 @@
 # SDK 安装与能力开发指南
 
-## 1. 文档目标
+本文面向将要基于 OpenAI Glasses SDK 开发真实业务能力的团队。
 
-本文面向使用 SDK 的外部开发者。
+开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何完成离线验证和真机联调。
 
-开发者目标不是理解 SDK 内部系统实现，而是基于 SDK 提供的公开基类完成业务能力开发：
+## 1. 当前目录边界
 
-1. 服务端 Tool：让模型可以调用一个业务能力入口。
-2. 服务端 Task：承接长时间运行的业务流程。
-3. 手机端 PhoneProcessor：处理手机侧视频帧、传感器或本地模型结果。
-4. 手机端 PhoneTask：承接手机侧持续任务。
-5. Scenario：在没有真机设备时做离线回放验证。
+当前仓库拆成两条主线：
 
-开发者不需要直接处理：
+| 目录 | 面向对象 | 职责 |
+| --- | --- | --- |
+| [../openaiglass-sdk/server-python](../openaiglass-sdk/server-python) | 服务端 SDK 开发者 | Python SDK、协议模型、服务端运行时、Tool/Task/Skill 扩展面、测试工具。 |
+| [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-ios) | iOS 手机端 SDK 开发者 | iOS 通用手机运行时，负责注册、心跳、视频接收、手机任务承载和结果回传。 |
+| [../openaiglass-sdk/glass-esp32](../openaiglass-sdk/glass-esp32) | ESP32 眼镜端 SDK 开发者 | ESP32 通用眼镜运行时，负责 WiFi、控制连接、音频、摄像头和端侧命令处理。 |
+| [host](./host) | 盲人产品装配团队 | 服务端、手机端、眼镜端宿主配置和启动说明。 |
+| [capabilities](./capabilities) | 业务能力开发团队 | `find_object`、导航、识别等真实业务能力。 |
+| [docs](./docs) | 产品和研发团队 | 需求、阶段计划、功能设计、验收和当前实现状态。 |
+| [testdata](./testdata) | 测试和业务开发团队 | 场景回放、音频、图像、传感器和兼容性数据。 |
 
-1. 设备注册。
-2. 设备组绑定。
-3. 控制 WebSocket。
-4. 眼镜和手机之间的视频链路。
-5. 任务状态机存储。
-6. 运行上下文维护。
+业务能力开发优先修改 `openaiglass-for-blind/capabilities` 和 `openaiglass-for-blind/host`。只有当 SDK 公开抽象无法表达新业务时，才向 `openaiglass-sdk` 提交 SDK 层改造。
 
-## 2. 安装 SDK
+## 2. 三端 SDK 职责
 
-正式发布后，在开发者项目中执行：
+### 2.1 服务端 Python SDK
 
-```bash
-pip install openaiglasses-sdk
-```
+服务端 SDK 负责：
 
-当前仓库本地开发或发布前验证，可以执行：
+1. 设备注册、设备组绑定和心跳维护。
+2. 统一控制消息、媒体消息和任务事件模型。
+3. Agent、Tool、Task、Skill 和 MCP Adapter 装配。
+4. 全局上下文、任务状态、通知和异常处理。
+5. 离线场景回放、契约测试和 SDK 包验证。
 
-```bash
-pip install ./openaiglass-sdk/server-python
-```
-
-安装后，公开导入入口是：
-
-```python
-import openaiglasses
-```
-
-常用公开 API：
+开发者主要使用：
 
 ```python
 from openaiglasses import (
@@ -60,9 +51,137 @@ from openaiglasses import (
 )
 ```
 
-## 3. 推荐能力项目结构
+### 2.2 iOS 手机 SDK 运行时
 
-外部项目建议采用如下目录：
+iOS SDK 运行时位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-ios)，当前以 Xcode 工程形式交付。
+
+它负责：
+
+1. 从 `AppConfig.plist` 读取服务端地址、手机设备编号、配对令牌和目标眼镜编号。
+2. 自动连接服务端 `/ws/control`，完成手机注册和心跳。
+3. 在本机启动 `/ws/camera` 接收服务，接收眼镜推送的 JPEG 视频帧。
+4. 承载手机侧任务，执行手机侧能力插件。
+5. 将手机侧处理结果上报回服务端。
+6. 提供调试页面，展示接收地址、注册状态、最近帧和最近事件。
+
+当前配置文件：
+
+```text
+openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist
+```
+
+关键配置项：
+
+| 配置项 | 说明 |
+| --- | --- |
+| `serverBaseURLString` | 服务端 HTTP 地址，例如 `http://192.168.1.10:8765`。运行时会自动转换成控制 WebSocket 地址。 |
+| `phoneDeviceID` | 手机设备编号，例如 `phone-001`。 |
+| `pairToken` | 手机配对令牌，必须与服务端配置一致。 |
+| `desiredGlassDeviceID` | 希望绑定的眼镜设备编号，例如 `glass-001`。 |
+
+打开工程：
+
+```bash
+open openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj
+```
+
+命令行构建示例：
+
+```bash
+xcodebuild \
+  -project openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj \
+  -scheme GlassesVideoReceiver \
+  -sdk iphonesimulator \
+  -configuration Debug \
+  build CODE_SIGNING_ALLOWED=NO
+```
+
+### 2.3 ESP32 眼镜 SDK 运行时
+
+眼镜 SDK 运行时位于 [../openaiglass-sdk/glass-esp32](../openaiglass-sdk/glass-esp32)，当前以 ESP-IDF 工程形式交付。
+
+它负责：
+
+1. 读取 WiFi、服务端控制地址、眼镜设备编号和配对令牌。
+2. 连接服务端 `/ws/control`，发送 `device.register` 和 `device.heartbeat`。
+3. 连接服务端 `/ws_audio`，上传语音片段并接收播放控制。
+4. 响应 `sensor.camera.capture`，完成单次抓拍并回传 `sensor.camera.captured`。
+5. 响应 `sensor.camera.stream.start/stop`，把摄像头帧推送到手机 `/ws/camera`。
+6. 处理通知、播报、唤醒和端侧运行状态。
+
+本地私有配置：
+
+```text
+openaiglass-for-blind/host/glass/config/local_build.env
+```
+
+模板：
+
+```text
+openaiglass-for-blind/host/glass/config/local_build.env.example
+```
+
+关键配置项：
+
+| 配置项 | 说明 |
+| --- | --- |
+| `GLASS_WIFI_PRIMARY_SSID` | 主 WiFi 名称。 |
+| `GLASS_WIFI_PRIMARY_PASSWORD` | 主 WiFi 密码。 |
+| `GLASS_SERVER_WS_URI` | 服务端控制 WebSocket 地址，例如 `ws://192.168.1.10:8765/ws/control`。 |
+| `GLASS_DEVICE_ID` | 眼镜设备编号，例如 `glass-001`。 |
+| `GLASS_PAIR_TOKEN` | 眼镜配对令牌，必须与服务端配置一致。 |
+| `GLASS_HEARTBEAT_INTERVAL_MS` | 心跳间隔。 |
+
+构建示例：
+
+```bash
+PROJECT_DIR=openaiglass-sdk/glass-esp32 \
+  bash openaiglass-for-blind/scripts/run_glass.sh --build-only
+```
+
+烧录和串口监控按实际设备端口执行：
+
+```bash
+PORT=/dev/tty.usbmodemXXXX \
+  bash openaiglass-for-blind/scripts/run_glass.sh
+```
+
+## 3. 安装服务端 Python SDK
+
+正式发布后，在业务项目中安装：
+
+```bash
+pip install openaiglasses-sdk
+```
+
+当前仓库本地开发或发布前验证：
+
+```bash
+pip install ./openaiglass-sdk/server-python
+```
+
+安装后公开导入入口是：
+
+```python
+import openaiglasses
+```
+
+本仓库推荐使用 `uv` 执行命令：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
+  uv run python -c "import openaiglasses; print(openaiglasses.__all__)"
+```
+
+SDK 包验证：
+
+```bash
+uv run python openaiglass-sdk/scripts/run_sdk_package_check.py
+```
+
+## 4. 推荐业务能力工程结构
+
+外部团队开发新能力时，建议按能力聚合，而不是按设备散落业务代码：
 
 ```text
 my-glasses-capability/
@@ -76,6 +195,12 @@ my-glasses-capability/
       phone/
         processor.py
         task.py
+        ios/
+          MyPhoneCapability.swift
+      glass/
+        README.md
+        config/
+          local_build.env.example
       scenario.py
       main.py
   testdata/
@@ -83,24 +208,33 @@ my-glasses-capability/
       my_capability_basic.json
 ```
 
-最小 `pyproject.toml`：
+在本仓库内新增盲人业务能力时，建议使用：
 
-```toml
-[project]
-name = "my-glasses-capability"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "openaiglasses-sdk>=0.1.0",
-    "pydantic>=2,<3",
-]
+```text
+openaiglass-for-blind/capabilities/<capability_name>/
+  README.md
+  server/
+    tool.py
+    task.py
+  phone/
+    processor.py
+    task.py
+    ios/
+  scenario.py
 ```
 
-## 4. 开发服务端 Tool
+可以参考现有找物体能力：
 
-Tool 是模型可以调用的业务入口。它应该只表达“业务想做什么”，不要处理底层设备连接。
+1. [capabilities/find_object/server/tool.py](./capabilities/find_object/server/tool.py)
+2. [capabilities/find_object/server/task.py](./capabilities/find_object/server/task.py)
+3. [capabilities/find_object/phone/processor.py](./capabilities/find_object/phone/processor.py)
+4. [capabilities/find_object/phone/task.py](./capabilities/find_object/phone/task.py)
+5. [capabilities/find_object/phone/ios](./capabilities/find_object/phone/ios)
+6. [capabilities/find_object/scenario.py](./capabilities/find_object/scenario.py)
 
-示例：
+## 5. 开发服务端 Tool
+
+Tool 是模型可以调用的短时业务入口。它应该表达“启动什么能力”或“查询什么业务结果”，不应该直接处理 WebSocket、设备绑定表或媒体帧。
 
 ```python
 from typing import Any
@@ -134,26 +268,26 @@ class StartDemoTool(BaseTool):
         )
 ```
 
-Tool 中可以使用 `context` 提供的高层能力，例如：
+Tool 中常用的 `context` 高层能力：
 
-1. `context.require_glass()`
-2. `context.require_phone()`
-3. `context.query_devices()`
-4. `context.capture_photo()`
-5. `context.start_phone_video_link()`
-6. `context.stop_phone_video_link()`
-7. `context.create_task()`
-8. `context.query_task()`
-9. `context.cancel_task()`
-10. `context.start_phone_task()`
-11. `context.stop_phone_task()`
-12. `context.submit_notification()`
+| 方法 | 用途 |
+| --- | --- |
+| `require_glass()` | 获取当前设备组的在线眼镜。 |
+| `require_phone()` | 获取当前设备组的在线手机。 |
+| `query_devices()` | 查询当前设备组所有设备。 |
+| `capture_photo(reason=...)` | 请求眼镜单次抓拍。 |
+| `start_phone_video_link(reason=..., params=...)` | 启动眼镜到手机的视频链路。 |
+| `stop_phone_video_link(reason=...)` | 停止眼镜到手机的视频链路。 |
+| `create_task(task_type=..., input_data=...)` | 创建 SDK 托管任务。 |
+| `query_task(task_id)` | 查询任务状态。 |
+| `cancel_task(task_id)` | 取消任务。 |
+| `start_phone_task(task_type=..., params=...)` | 启动手机侧持续任务。 |
+| `stop_phone_task(task_type=..., reason=...)` | 停止手机侧持续任务。 |
+| `submit_notification(text=..., priority=...)` | 向设备侧提交播报或提示。 |
 
-## 5. 开发服务端 Task
+## 6. 开发服务端 Task
 
-Task 适合承接长流程能力，例如找物、导航、识别、持续观察。
-
-示例：
+Task 用于长流程能力，例如找物、导航、持续观察、识别或状态追踪。
 
 ```python
 from openaiglasses import BaseTask, TaskContext, TaskEvent
@@ -164,26 +298,49 @@ class DemoTask(BaseTask):
     description = "演示后台任务"
 
     def on_start(self, context: TaskContext) -> None:
-        target = str(context.input_data.get("target") or "")
+        target = str(context.input.get("target") or "")
         context.update({"target": target})
-        context.emit_state("running", {"phase": "started", "target": target})
-        context.start_phone_task(
+        context.emit_state("running", {"phase": "started"})
+        context.device_group.start_phone_video_link(
+            reason="demo",
+            params={"target": target, "processor_type": "demo_processor"},
+        )
+        context.device_group.start_phone_task(
             task_type="demo_phone_task",
-            params={"target": target},
+            params={"target": target, "processor_type": "demo_processor"},
         )
 
     def on_event(self, context: TaskContext, event: TaskEvent) -> None:
         if event.name == "phone.demo.result":
+            context.device_group.submit_notification(
+                text=str(event.payload.get("summary") or "任务已完成"),
+                priority="high",
+            )
+            context.device_group.stop_phone_task(
+                task_type="demo_phone_task",
+                reason="task.completed",
+            )
             context.complete(dict(event.payload))
+
+    def on_cancel(self, context: TaskContext) -> None:
+        context.device_group.stop_phone_task(
+            task_type="demo_phone_task",
+            reason="task.cancelled",
+        )
+        context.device_group.stop_phone_video_link(reason="task.cancelled")
+        super().on_cancel(context)
 ```
 
-Task 不应该直接处理 WebSocket、设备绑定表或 HTTP 连接对象。
+Task 中不要直接持有 WebSocket 连接，不要自己维护任务状态表。任务状态通过 `TaskContext` 更新，设备能力通过 `context.device_group` 获取。
 
-## 6. 开发手机端 PhoneProcessor
+## 7. 开发手机侧能力
 
-PhoneProcessor 负责处理手机侧输入，例如视频帧、传感器数据、本地模型结果。
+手机侧能力分为两层：
 
-示例：
+1. `BasePhoneProcessor`：处理一帧图像、一段传感器数据或一次本地模型输出。
+2. `BasePhoneTask`：组织一个持续任务，决定什么时候调用处理器、什么时候输出结果。
+
+### 7.1 PhoneProcessor
 
 ```python
 from typing import Any
@@ -200,16 +357,13 @@ class DemoProcessor(BasePhoneProcessor):
         context.emit_result(
             {
                 "event_name": "phone.demo.result",
+                "found": "目标" in text,
                 "summary": f"已处理帧：{text}",
             }
         )
 ```
 
-## 7. 开发手机端 PhoneTask
-
-PhoneTask 负责组织手机侧持续任务，例如持续处理眼镜推送的视频帧。
-
-示例：
+### 7.2 PhoneTask
 
 ```python
 from typing import Any
@@ -226,18 +380,57 @@ class DemoPhoneTask(BasePhoneTask):
 
     def on_frame(self, context: PhoneTaskContext, frame: Any) -> None:
         result = context.process_frame(
-            processor_type="demo_processor",
+            processor_type=str(context.params.get("processor_type") or "demo_processor"),
             frame=frame,
         )
         if result:
             context.emit_result(result)
+
+    def on_stop(self, context: PhoneTaskContext) -> None:
+        context.emit_state("stopped", {"reason": "server_requested"})
 ```
 
-## 8. 装配 SDK 并启动服务端
+### 7.3 iOS 插件代码放在哪里
 
-开发者项目应提供一个装配入口，只注册业务能力，然后交给 SDK 启动系统运行时。
+Python `PhoneProcessor` 和 `PhoneTask` 用于 SDK 回放、服务端装配和能力契约。真正跑在 iPhone 上的业务插件应放在业务能力目录下，例如：
 
-示例：
+```text
+openaiglass-for-blind/capabilities/find_object/phone/ios/
+```
+
+iOS 通用运行时仍然放在：
+
+```text
+openaiglass-sdk/phone-ios/
+```
+
+不要把具体业务识别逻辑直接写进 `openaiglass-sdk/phone-ios` 的通用运行时里。通用运行时只负责注册、接收、分发、状态展示和结果回传。
+
+## 8. 眼镜端能力扩展方式
+
+当前 ESP32 眼镜 SDK 运行时主要提供通用硬件能力，不建议业务团队直接在 `openaiglass-sdk/glass-esp32` 中写具体业务策略。
+
+业务能力应该优先通过服务端 Task 调用这些系统能力：
+
+| 眼镜能力 | 服务端调用方式 | 眼镜端处理 |
+| --- | --- | --- |
+| 单次抓拍 | `context.capture_photo(reason=...)` | 响应 `sensor.camera.capture`，回传 `sensor.camera.captured`。 |
+| 视频流到手机 | `context.start_phone_video_link(...)` | 响应 `sensor.camera.stream.start`，向手机 `/ws/camera` 推送帧。 |
+| 停止视频流 | `context.stop_phone_video_link(...)` | 响应 `sensor.camera.stream.stop`。 |
+| 语音输入 | SDK 服务端 `/ws_audio` | 眼镜录音、上传音频段。 |
+| 播报和通知 | `context.submit_notification(...)` | 眼镜接收通知并播放或提示。 |
+
+如果新业务必须新增眼镜硬件能力，应按下面顺序处理：
+
+1. 先在业务文档中说明新增硬件能力的输入、输出和失败情况。
+2. 在 `openaiglass-sdk/docs/structure-design` 中补 SDK 协议或运行时设计。
+3. 在服务端 SDK 中补公开上下文方法或标准控制消息。
+4. 在 `openaiglass-sdk/glass-esp32` 中实现通用能力，不写业务策略。
+5. 在 `openaiglass-for-blind/capabilities/<capability>` 中调用新能力。
+
+## 9. 装配 SDK 并启动服务端
+
+每个业务项目都应该有一个很薄的装配入口，只负责注册业务能力。
 
 ```python
 from openaiglasses import OpenAIGlassesSDK, ServerSettings
@@ -266,15 +459,30 @@ if __name__ == "__main__":
     main()
 ```
 
-启动：
+本仓库盲人业务服务端装配入口是：
 
-```bash
-python -m my_capability.main
+```text
+openaiglass-for-blind/host/server/main.py
 ```
 
-## 9. 离线回放验证
+它注册了 `find_object` 的 Tool、Task、PhoneProcessor、PhoneTask 和场景回放处理器。
 
-开发者可以先不接真机，通过 `ScenarioRunner` 验证能力逻辑。
+启动盲人业务服务端：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
+  uv run python openaiglass-for-blind/host/server/main.py --host 0.0.0.0 --port 8765
+```
+
+也可以使用封装脚本：
+
+```bash
+bash openaiglass-for-blind/scripts/run_server.sh
+```
+
+## 10. 离线回放验证
+
+业务能力开发应先通过离线回放，再进入真机联调。
 
 最小调用：
 
@@ -295,62 +503,200 @@ assert result.assertions["passed"]
 场景文件应描述：
 
 1. 设备组中有哪些 mock 设备。
-2. 要启动哪个任务或触发哪个 Tool。
+2. 要启动哪个能力或任务。
 3. 输入帧、传感器、任务事件的时间线。
 4. 期望的任务状态、结果、通知和设备命令。
 
-可以参考本仓库已有样例：
+本仓库已有场景：
 
-1. [capabilities/find_object/server/tool.py](./capabilities/find_object/server/tool.py)
-2. [capabilities/find_object/server/task.py](./capabilities/find_object/server/task.py)
-3. [capabilities/find_object/phone/processor.py](./capabilities/find_object/phone/processor.py)
-4. [capabilities/find_object/phone/task.py](./capabilities/find_object/phone/task.py)
-5. [capabilities/find_object/scenario.py](./capabilities/find_object/scenario.py)
-6. [testdata/scenario/find_object_basic.json](./testdata/scenario/find_object_basic.json)
-
-## 10. 本仓库业务工程验证命令
-
-如果开发者直接使用本仓库盲人业务工程学习，可以执行：
-
-```bash
-python ../openaiglass-sdk/scripts/run_sdk_package_check.py
-python scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
-python scripts/run_sdk_preflight.py --report ../logs/sdk-preflight-blind-dev.json
+```text
+openaiglass-for-blind/testdata/scenario/
 ```
 
-其中：
-
-1. `run_sdk_package_check.py` 验证 SDK 可以构建 wheel 并通过 pip 安装后导入。
-2. `run_sdk_scenario.py` 验证离线回放能力。
-3. `run_sdk_preflight.py` 验证 SDK 包、边界、契约、兼容性和服务健康检查。
-
-## 11. 真机联调顺序
-
-离线回放通过后，再做真机联调：
-
-1. 启动服务端能力项目。
-2. 启动手机端 SDK运行时。
-3. 启动眼镜端 SDK运行时。
-4. 确认设备注册、绑定和心跳正常。
-5. 通过语音或调试入口触发 Tool。
-6. 观察 Task 状态、手机端结果回传、眼镜端播报或提示。
-
-本仓库真机前检查命令：
+执行：
 
 ```bash
-bash scripts/sync_sdk_live_config.sh
-bash scripts/run_sdk_live_check.sh --report ../logs/sdk-live-check-blind-dev.json
+uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
+  --scenario-dir openaiglass-for-blind/testdata/scenario \
+  --pretty
 ```
 
-## 12. 开发者不要做的事
+## 11. 三端真机联调流程
 
-为了保持能力可移植，业务代码不要：
+真机联调前，先同步配置并检查：
 
-1. 修改 `openaiglass-sdk/server-python` 内部运行时。
-2. 修改 `openaiglass-sdk/server-python` 内部运行时。
-3. 直接读写设备绑定表。
-4. 直接拼控制 WebSocket 消息。
-5. 为单个能力新增专用系统接口。
-6. 在 `host/phone` 或 `host/glass` 的宿主运行时代码里写具体业务逻辑。
+```bash
+bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh
+bash openaiglass-for-blind/scripts/run_sdk_live_check.sh \
+  --report logs/sdk-live-check-current.json
+```
 
-如果一个能力需要新的系统级能力，应先把需求抽象成 SDK 的公开接口，再由 SDK 维护者实现。
+推荐启动顺序：
+
+1. 启动服务端。
+2. 启动 iOS 手机端 SDK 运行时。
+3. 启动 ESP32 眼镜端 SDK 运行时。
+4. 确认手机和眼镜都注册到服务端并绑定到同一设备组。
+5. 触发语音、调试入口或 Tool。
+6. 观察服务端任务事件、手机端检测结果、眼镜端抓拍或视频流日志。
+
+服务端：
+
+```bash
+LOG_LEVEL=DEBUG bash openaiglass-for-blind/scripts/run_server.sh
+```
+
+iOS 手机端：
+
+```bash
+open openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj
+```
+
+眼镜端：
+
+```bash
+PORT=/dev/tty.usbmodemXXXX \
+  bash openaiglass-for-blind/scripts/run_glass.sh
+```
+
+联调时优先看：
+
+| 端 | 观察点 |
+| --- | --- |
+| 服务端 | `/api/health`、`/api/runtime/devices`、设备注册、绑定、任务创建、任务事件、错误码。 |
+| iOS 手机 | 页面中的服务端状态、当前接收地址、最近帧、最近任务结果、最近错误。 |
+| ESP32 眼镜 | WiFi 连接、`device.registered`、心跳、`sensor.camera.capture`、`sensor.camera.stream.start/stop`、音频连接。 |
+
+## 12. 三端链路时序
+
+```plantuml
+@startuml
+title 基于 SDK 的业务能力启动与三端协作
+
+actor User as user
+participant "Server Host\nopenaiglass-for-blind/host/server" as host
+participant "Server SDK\nopenaiglass-sdk/server-python" as server
+participant "iOS SDK Runtime\nopenaiglass-sdk/phone-ios" as phone
+participant "ESP32 SDK Runtime\nopenaiglass-sdk/glass-esp32" as glass
+participant "Business Capability\nopenaiglass-for-blind/capabilities" as cap
+
+phone -> server: device.register(phone)
+glass -> server: device.register(glass)
+server -> server: bind phone + glass
+user -> host: 语音或调试入口触发能力
+host -> server: Tool 调用
+server -> cap: BaseTool.run()
+cap -> server: create_task()
+server -> cap: BaseTask.on_start()
+cap -> server: start_phone_video_link()
+server -> glass: sensor.camera.stream.start
+glass -> phone: /ws/camera 推送帧
+phone -> cap: PhoneTask / PhoneProcessor
+phone -> server: phone task result
+server -> cap: BaseTask.on_event()
+cap -> server: complete + notification
+server -> glass: 播报或提示
+
+@enduml
+```
+
+## 13. 功能文档与实现对齐
+
+新团队开发能力前，建议先阅读：
+
+1. [docs/当前实现状态.md](./docs/当前实现状态.md)
+2. [docs/restriction/设想的功能与实现方案.md](./docs/restriction/设想的功能与实现方案.md)
+3. [docs/restriction/软件架构设计.md](./docs/restriction/软件架构设计.md)
+4. [docs/stage1/plan/第一期功能开发计划.md](./docs/stage1/plan/第一期功能开发计划.md)
+
+如果要新增一个能力，至少补齐：
+
+1. 能力目标和验收方式。
+2. 服务端 Tool 和 Task。
+3. 手机端 Processor 和 PhoneTask。
+4. 如有必要，补 iOS 业务插件。
+5. 如有必要，提出眼镜端通用硬件能力扩展。
+6. 至少一个离线回放场景。
+7. 三端联调启动顺序和日志观察点。
+
+## 14. 预检和回归命令
+
+SDK 包检查：
+
+```bash
+uv run python openaiglass-sdk/scripts/run_sdk_package_check.py
+```
+
+SDK 契约和核心单元测试：
+
+```bash
+uv run python -m pytest \
+  openaiglass-sdk/tests/contracts \
+  openaiglass-sdk/tests/unit/test_sdk_phase_two.py \
+  -q
+```
+
+盲人业务场景回放：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
+  --scenario-dir openaiglass-for-blind/testdata/scenario \
+  --pretty
+```
+
+综合预检：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py \
+  --report logs/sdk-preflight-current.json
+```
+
+真机配置检查：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
+  --report logs/sdk-live-check-current.json
+```
+
+## 15. 开发者不要做的事
+
+为了让业务能力可以复用和迁移，开发者不要：
+
+1. 在 `openaiglass-sdk/server-python` 中写具体业务能力。
+2. 在 `openaiglass-sdk/phone-ios` 中直接写 `find_object`、导航、地图、计时器等业务策略。
+3. 在 `openaiglass-sdk/glass-esp32` 中写具体业务流程判断。
+4. 直接拼接控制 WebSocket 消息。
+5. 直接读写设备绑定表。
+6. 为单个业务能力新增专用系统接口。
+7. 跳过离线回放，直接进入真机联调。
+
+如果业务能力需要新的系统级抽象，应先写清需求、输入输出、异常情况和验收方式，再把它沉淀为 SDK 的公开接口。
+
+## 16. 常见问题
+
+### 16.1 为什么业务项目还要写手机和眼镜目录？
+
+SDK 提供通用运行时，业务项目提供业务插件、产品配置和启动说明。手机和眼镜宿主目录不应复制 SDK 主体代码，只保留业务装配和产品差异。
+
+### 16.2 iOS SDK 当前是不是已经能作为 Swift Package 引入？
+
+当前仍是可直接打开和构建的 Xcode 工程，后续可以继续收敛为 Swift Package 或 XCFramework。现在的推荐方式是复用 `openaiglass-sdk/phone-ios` 作为通用运行时，把业务插件放在 `capabilities/<name>/phone/ios`。
+
+### 16.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
+
+当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `openaiglass-for-blind/scripts/run_glass.sh` 构建 `openaiglass-sdk/glass-esp32`，业务侧只提供配置和硬件能力需求。
+
+### 16.4 新能力什么时候应该改 SDK？
+
+只有当多个业务都会用到同一种系统能力，或者现有 `DeviceGroupContext`、`TaskContext`、`PhoneTaskContext` 无法表达业务需求时，才应该改 SDK。
+
+### 16.5 如何判断路径是否又混乱了？
+
+执行：
+
+```bash
+rg -n "openaiglass-sdk/python|openaiglass-for-blind/host/phone/ios|openaiglass-for-blind/host/glass/src|openaiglass-for-blind/server|openaiglass-for-blind/phone|openaiglass-for-blind/glass|openaiglass-sdk/openaiglass-sdk|openaiglass-for-blind/openaiglass-for-blind" \
+  openaiglass-sdk openaiglass-for-blind README.md 工作边界说明.md
+```
+
+正常情况下不应命中迁移前路径。
