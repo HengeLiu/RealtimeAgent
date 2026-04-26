@@ -6,7 +6,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from agent_core.context.models import CapabilityTrace
 from openaiglasses.models import DeviceEndpoint, DeviceGroup, DeviceRole
+from openaiglasses.models import CapabilityResult as SdkCapabilityResult
 
 
 def _new_id(prefix: str) -> str:
@@ -35,6 +37,33 @@ class DeviceGroupContext:
     device_id: str
     session_id: str
     task_id: str | None = None
+
+    def mcp(self, method_name: str, arguments: dict[str, Any] | None = None) -> SdkCapabilityResult:
+        """调用 SDK 统一注册的 MCP 方法。
+
+        功能：
+        1. 为业务 Tool / Task 提供统一 MCP 调用入口。
+        2. 复用 SDK 内部 `McpGateway`，避免业务侧直接拼装 MCP 注册表。
+        3. 将调用轨迹写入设备组运行时，真实服务端中还会同步写入 agent 会话轨迹。
+
+        参数：
+        1. `method_name`：MCP 方法名，例如 `amap.route_plan`。
+        2. `arguments`：MCP 方法入参。
+
+        返回值：
+        1. `CapabilityResult`：成功时 `data` 为 MCP 结果，失败时包含结构化错误。
+
+        异常情况：
+        1. 本函数会把 MCP 调用异常转换成失败结果，不直接向业务侧抛出底层异常。
+        """
+
+        return self.runtime.invoke_mcp(
+            method_name=method_name,
+            arguments=arguments or {},
+            device_id=self.device_id,
+            session_id=self.session_id,
+            task_id=self.task_id,
+        )
 
     def require_glass(self) -> DeviceEndpoint:
         """读取当前设备组中的眼镜设备。
@@ -240,10 +269,169 @@ class DeviceGroupRuntime:
     notification_adapter: Callable[..., dict[str, Any]] | None = None
     device_command_adapter: Callable[..., dict[str, Any]] | None = None
     task_runtime: Any | None = None
+    mcp_gateway: Any | None = None
+    mcp_settings: Any | None = None
+    mcp_session_store: Any | None = None
     _groups: dict[str, DeviceGroup] = field(default_factory=dict)
     _device_to_group: dict[str, str] = field(default_factory=dict)
     _notifications: list[dict[str, Any]] = field(default_factory=list)
     _active_video_links: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _mcp_traces: list[CapabilityTrace] = field(default_factory=list)
+
+    def bind_mcp_gateway(self, gateway: Any, *, settings: Any | None = None, session_store: Any | None = None) -> None:
+        """绑定统一 MCP 调用网关。
+
+        功能：
+        1. 让开发者可见的 `DeviceGroupContext.mcp(...)` 复用 SDK 内部网关。
+        2. 可选绑定配置和会话存储，用于真实服务端写入调用轨迹。
+
+        参数：
+        1. `gateway`：SDK 内部 `McpGateway` 实例。
+        2. `settings`：服务端配置，可为空。
+        3. `session_store`：agent 会话存储，可为空。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        self.mcp_gateway = gateway
+        if settings is not None:
+            self.mcp_settings = settings
+        if session_store is not None:
+            self.mcp_session_store = session_store
+
+    def invoke_mcp(
+        self,
+        *,
+        method_name: str,
+        arguments: dict[str, Any],
+        device_id: str,
+        session_id: str,
+        task_id: str | None = None,
+    ) -> SdkCapabilityResult:
+        """通过统一网关调用 MCP 方法。
+
+        功能：
+        1. 为 `DeviceGroupContext.mcp(...)` 提供运行时实现。
+        2. 把 agent-core 的能力结果转换为业务侧统一 `CapabilityResult`。
+
+        参数：
+        1. `method_name`：MCP 方法名。
+        2. `arguments`：MCP 入参。
+        3. `device_id`：当前调用设备。
+        4. `session_id`：当前会话。
+        5. `task_id`：当前任务编号，可为空。
+
+        返回值：
+        1. 业务侧 `CapabilityResult`。
+
+        异常情况：
+        1. 底层异常会被转换成结构化失败结果。
+        """
+
+        if self.mcp_gateway is None:
+            return SdkCapabilityResult.failed(
+                code="INVALID_CONFIG",
+                message="SDK 尚未绑定 MCP 调用网关",
+                details={"method_name": method_name},
+            )
+
+        from agent_core.tools.base import AgentToolContext
+        from infra.config import ServerSettings
+        from infra.errors import AppError
+
+        turn_id = f"mcp_{uuid.uuid4().hex[:12]}"
+
+        def _trace_sink(trace: CapabilityTrace) -> None:
+            trace.meta.update({"task_id": task_id} if task_id else {})
+            self.record_mcp_trace(session_id=session_id, device_id=device_id, trace=trace)
+
+        context = AgentToolContext(
+            session_id=session_id,
+            device_id=device_id,
+            turn_id=turn_id,
+            settings=self.mcp_settings or ServerSettings(),
+            session_store=self.mcp_session_store,
+            device_state_reader=self.build_snapshot,
+            trace_sink=_trace_sink,
+            device_group_context_factory=self.create_context,
+            mcp_gateway=self.mcp_gateway,
+        )
+        try:
+            result = self.mcp_gateway.invoke(
+                name=method_name,
+                context=context,
+                arguments=dict(arguments),
+                record_trace=True,
+            )
+        except AppError as exc:
+            return SdkCapabilityResult.failed(
+                code=str(exc.code),
+                message=exc.message,
+                details={
+                    "method_name": method_name,
+                    "arguments_summary": self._summarize_mcp_arguments(arguments),
+                    **dict(exc.details),
+                },
+            )
+        except Exception as exc:
+            return SdkCapabilityResult.failed(
+                code="INTERNAL_ERROR",
+                message=f"{method_name} 调用失败",
+                details={
+                    "method_name": method_name,
+                    "arguments_summary": self._summarize_mcp_arguments(arguments),
+                    "reason": str(exc),
+                },
+            )
+
+        return SdkCapabilityResult.success(
+            data=dict(result.data),
+            message=result.message,
+            meta=dict(result.meta),
+        )
+
+    def record_mcp_trace(self, *, session_id: str, device_id: str, trace: CapabilityTrace) -> None:
+        """记录 MCP 调用轨迹。
+
+        功能：
+        1. 在内存中保留最近的 MCP 调用轨迹，方便离线测试断言。
+        2. 如果绑定了 agent 会话存储，则同步写入 session trace。
+
+        参数：
+        1. `session_id`：会话编号。
+        2. `device_id`：设备编号。
+        3. `trace`：能力调用轨迹。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 会话存储写入失败不影响业务调用，只保留内存轨迹。
+        """
+
+        self._mcp_traces.append(trace)
+        if self.mcp_session_store is None:
+            return
+        try:
+            self.mcp_session_store.get_or_create_session(session_id=session_id, device_id=device_id)
+            self.mcp_session_store.append_capability_traces(session_id=session_id, traces=[trace])
+        except Exception:
+            return
+
+    def list_mcp_traces(self) -> list[CapabilityTrace]:
+        """列出当前设备组运行时记录的 MCP 调用轨迹。"""
+
+        return list(self._mcp_traces)
+
+    @staticmethod
+    def _summarize_mcp_arguments(arguments: dict[str, Any]) -> dict[str, str]:
+        """生成 MCP 入参摘要，避免错误结果中携带过大对象。"""
+
+        return {str(key): type(value).__name__ for key, value in arguments.items()}
 
     def register_device(
         self,

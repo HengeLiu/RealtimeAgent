@@ -195,6 +195,16 @@ class AgentFacade:
 
         return self._tool_registry
 
+    def get_session_store(self) -> AgentSessionStore:
+        """返回内部会话存储。
+
+        主要逻辑：
+        1. 供 SDK 设备组上下文把旁路 MCP 调用轨迹写回同一会话。
+        2. 避免业务代码直接接触 agent-core 私有字段。
+        """
+
+        return self._session_store
+
     def _persist_result(self, *, turn: AgentTurn, result: AgentTurnResult) -> AgentTurnResult:
         """把运行结果统一写回会话上下文。"""
 

@@ -120,6 +120,11 @@ class ControlRuntime(CameraGateway):
         self._device_group_runtime.task_runtime = BackendTaskGatewayAdapter(
             task_gateway=self._voice_runtime.agent_facade.get_task_gateway(),
         )
+        self._device_group_runtime.bind_mcp_gateway(
+            self._voice_runtime.agent_facade.get_tool_registry().get_mcp_gateway(),
+            settings=settings,
+            session_store=self._voice_runtime.agent_facade.get_session_store(),
+        )
         self._voice_runtime.agent_facade.bind_device_state_reader(self.build_runtime_snapshot)
         self._voice_runtime.agent_facade.bind_device_group_context_factory(self.create_device_group_context)
         task_gateway = self._voice_runtime.agent_facade.get_task_gateway()

@@ -4,6 +4,8 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何完成离线验证和真机联调。
 
+当前指南对应 SDK 版本：`sdk-v3`。本版本新增业务上下文统一 MCP 调用入口，并清理了 SDK 预检中 iOS SDK 测试夹具误报业务关键词的问题。
+
 ## 1. 当前目录边界
 
 当前仓库拆成两条主线：
@@ -286,6 +288,58 @@ Tool 中常用的 `context` 高层能力：
 | `start_phone_task(task_type=..., params=...)` | 启动手机侧持续任务。 |
 | `stop_phone_task(task_type=..., reason=...)` | 停止手机侧持续任务。 |
 | `submit_notification(text=..., priority=...)` | 向设备侧提交播报或提示。 |
+| `mcp(method_name, arguments)` | 调用 SDK 统一注册的 MCP 方法，例如地图、搜索或导航规划。 |
+
+### 5.1 在 Tool 中调用 MCP
+
+`sdk-v3` 起，业务 Tool 可以直接通过 `context.mcp(...)` 调用 SDK 已注册的 MCP adapter。业务代码不要直接 import 具体 adapter，也不要自行构造 `McpRegistry`、`McpGateway` 或 `AgentToolContext`。
+
+推荐写法：
+
+```python
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from openaiglasses import BaseTool, CapabilityResult
+
+
+class PrepareNavigationInput(BaseModel):
+    origin: str = Field(description="起点")
+    destination: str = Field(description="终点")
+    strategy: str = Field(default="walking", description="路线策略")
+
+
+class PrepareNavigationTool(BaseTool):
+    name = "prepare_navigation"
+    description = "准备一条导航路线"
+    input_model = PrepareNavigationInput
+
+    def run(self, context, input_data: dict[str, Any]) -> CapabilityResult:
+        route = context.mcp(
+            "amap.route_plan",
+            {
+                "origin": input_data["origin"],
+                "destination": input_data["destination"],
+                "strategy": input_data.get("strategy", "walking"),
+            },
+        )
+        if not route.ok:
+            return route
+        return CapabilityResult.success(data={"route": route.data})
+```
+
+MCP adapter 仍由宿主装配入口注册：
+
+```python
+def create_sdk() -> OpenAIGlassesSDK:
+    sdk = OpenAIGlassesSDK()
+    sdk.register_mcp_adapter(AmapMcpAdapter())
+    sdk.register_tool(PrepareNavigationTool())
+    return sdk
+```
+
+`context.mcp(...)` 的失败会返回 `CapabilityResult.failed(...)`，错误结果中包含 `method_name`、输入摘要和 SDK 统一错误码。真实服务端运行时会把 MCP 调用轨迹写入 agent session trace；离线测试中可以通过 `sdk.device_groups.list_mcp_traces()` 断言调用是否发生。
 
 ## 6. 开发服务端 Task
 
@@ -761,6 +815,7 @@ uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
 5. 直接读写设备绑定表。
 6. 为单个业务能力新增专用系统接口。
 7. 跳过离线回放，直接进入真机联调。
+8. 为了调用地图、导航或外部服务而直接 import SDK 内部 MCP adapter；应使用 `context.mcp(...)`。
 
 如果业务能力需要新的系统级抽象，应先写清需求、输入输出、异常情况和验收方式，再把它沉淀为 SDK 的公开接口。
 

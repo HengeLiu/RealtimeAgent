@@ -240,10 +240,10 @@ struct GlassesVideoReceiverTests {
             PhoneTaskCapabilityRegistry.resetForTesting()
             PhoneCapabilityRuntimeFactory.resetForTesting()
         }
-        let findObjectRuntime = TestPhoneCapabilityRuntime()
+        let demoRuntime = TestPhoneCapabilityRuntime()
         let trafficLightRuntime = TestPhoneCapabilityRuntime()
-        PhoneTaskCapabilityRegistry.register(taskType: "find_object_phone_task") {
-            findObjectRuntime
+        PhoneTaskCapabilityRegistry.register(taskType: "demo_phone_task") {
+            demoRuntime
         }
         PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
             trafficLightRuntime
@@ -251,9 +251,9 @@ struct GlassesVideoReceiverTests {
         let store = CameraStreamStore(capabilityRuntime: PhoneCapabilityRuntimeFactory.makeRuntime())
 
         store.startPhoneTask(
-            taskID: "task-find",
-            taskType: "find_object_phone_task",
-            streamID: "stream-find",
+            taskID: "task-demo",
+            taskType: "demo_phone_task",
+            streamID: "stream-demo",
             glassDeviceID: "glass-001",
             phoneDeviceID: "phone-001",
             params: ["target": "水杯"]
@@ -267,10 +267,10 @@ struct GlassesVideoReceiverTests {
             params: [:]
         )
 
-        store.stopPhoneTask(taskID: "task-find", taskType: "find_object_phone_task", reason: "test.stop")
+        store.stopPhoneTask(taskID: "task-demo", taskType: "demo_phone_task", reason: "test.stop")
 
-        #expect(findObjectRuntime.startedTask == nil)
-        #expect(findObjectRuntime.stoppedTaskID == "task-find")
+        #expect(demoRuntime.startedTask == nil)
+        #expect(demoRuntime.stoppedTaskID == "task-demo")
         #expect(trafficLightRuntime.startedTask?.taskID == "task-traffic")
         #expect(trafficLightRuntime.stoppedTaskID == nil)
     }
@@ -294,10 +294,10 @@ struct GlassesVideoReceiverTests {
             PhoneTaskCapabilityRegistry.resetForTesting()
             PhoneCapabilityRuntimeFactory.resetForTesting()
         }
-        let findObjectRuntime = TestPhoneCapabilityRuntime()
+        let demoRuntime = TestPhoneCapabilityRuntime()
         let trafficLightRuntime = TestPhoneCapabilityRuntime()
-        PhoneTaskCapabilityRegistry.register(taskType: "find_object_phone_task") {
-            findObjectRuntime
+        PhoneTaskCapabilityRegistry.register(taskType: "demo_phone_task") {
+            demoRuntime
         }
         PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
             trafficLightRuntime
@@ -305,9 +305,9 @@ struct GlassesVideoReceiverTests {
         let store = CameraStreamStore(capabilityRuntime: PhoneTaskCapabilityRegistry.makeRuntime())
 
         store.startPhoneTask(
-            taskID: "task-find",
-            taskType: "find_object_phone_task",
-            streamID: "stream-find",
+            taskID: "task-demo",
+            taskType: "demo_phone_task",
+            streamID: "stream-demo",
             glassDeviceID: "glass-001",
             phoneDeviceID: "phone-001",
             params: [:]
@@ -324,7 +324,7 @@ struct GlassesVideoReceiverTests {
         let image = try #require(Self.makeSolidImage(red: 0, green: 1, blue: 0))
         store.updateLatestFrame(image: image, sequence: 42)
 
-        #expect(findObjectRuntime.processedSequences.isEmpty)
+        #expect(demoRuntime.processedSequences.isEmpty)
         #expect(trafficLightRuntime.processedSequences == [42])
     }
 

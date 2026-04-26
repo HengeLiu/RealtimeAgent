@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_core import AgentFacade, McpRegistry, ToolGateway, ToolRegistry
+from agent_core import AgentFacade, ToolGateway, ToolRegistry
 from agent_core.context import AgentSessionStore
 from agent_core.models import CapabilityResult as AgentCapabilityResult
 from agent_core.models import ToolSpec
@@ -470,7 +470,8 @@ def build_agent_facade_from_sdk(
     tool_registry = ToolRegistry(
         device_state_reader=lambda: {},
         task_gateway=hybrid_task_gateway,
-        mcp_registry=McpRegistry(adapters=sdk.mcp_adapters),
+        mcp_registry=sdk.get_mcp_registry(),
+        mcp_gateway=sdk.get_mcp_gateway(),
     )
     tool_gateway = ToolGateway(tool_registry)
     tool_registry.bind_gateway(tool_gateway)
@@ -489,6 +490,11 @@ def build_agent_facade_from_sdk(
         session_store=session_store,
         tool_registry=tool_registry,
         tool_gateway=tool_gateway,
+    )
+    sdk.device_groups.bind_mcp_gateway(
+        sdk.get_mcp_gateway(),
+        settings=settings,
+        session_store=session_store,
     )
     return AgentFacade(
         session_store=session_store,

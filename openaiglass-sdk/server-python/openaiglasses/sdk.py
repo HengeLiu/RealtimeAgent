@@ -39,16 +39,23 @@ class OpenAIGlassesSDK:
     scenario_handlers: dict[str, object] = field(default_factory=dict)
     task_runtime: TaskRuntimeManager = field(init=False)
     phone_runtime: PhoneRuntime = field(init=False)
+    _mcp_registry: object = field(init=False, repr=False)
+    _mcp_gateway: object = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """补齐运行时之间的引用关系。"""
 
+        from agent_core.mcp import McpGateway, McpRegistry
+
+        self._mcp_registry = McpRegistry()
+        self._mcp_gateway = McpGateway(self._mcp_registry)
         self.task_runtime = TaskRuntimeManager(
             registry=self.registry,
             device_groups=self.device_groups,
         )
         self.phone_runtime = PhoneRuntime(registry=self.registry)
         self.device_groups.task_runtime = self.task_runtime
+        self.device_groups.bind_mcp_gateway(self._mcp_gateway)
 
     def register_tool(self, tool: BaseTool) -> None:
         """注册 Tool。"""
@@ -127,7 +134,18 @@ class OpenAIGlassesSDK:
             raise ValueError("MCP adapter_name 不能为空")
         if any(str(getattr(item, "adapter_name", "")).strip() == adapter_name for item in self.mcp_adapters):
             raise ValueError(f"MCP Adapter 重复注册: {adapter_name}")
+        self._mcp_registry.register_adapter(adapter)
         self.mcp_adapters.append(adapter)
+
+    def get_mcp_registry(self):
+        """返回 SDK 统一 MCP 注册表。"""
+
+        return self._mcp_registry
+
+    def get_mcp_gateway(self):
+        """返回 SDK 统一 MCP 调用网关。"""
+
+        return self._mcp_gateway
 
     def build_agent_facade(self, settings: "ServerSettings") -> "AgentFacade":
         """构建真实服务端可用的 AgentFacade。"""

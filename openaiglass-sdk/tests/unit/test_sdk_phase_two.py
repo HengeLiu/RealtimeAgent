@@ -8,8 +8,12 @@ from pathlib import Path
 from urllib.request import urlopen
 
 import pytest
+from pydantic import BaseModel
 
 from host.server.main import create_sdk, create_server_handle
+from agent_core.mcp import BaseMcpAdapter
+from agent_core.models import CapabilityResult as AgentCapabilityResult
+from agent_core.models import McpMethodSpec
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
 from openaiglasses import (
@@ -104,6 +108,79 @@ def test_device_group_runtime_hides_binding_details() -> None:
     assert context.require_glass().device_id == "glass_001"
     assert context.require_phone().device_id == "phone_001"
     assert {item.role for item in context.query_devices()} == {"glass", "phone"}
+
+
+def test_device_group_context_can_call_registered_mcp_adapter() -> None:
+    """测试目标：验证业务上下文可通过 SDK 统一入口调用 MCP。
+
+    测试方法：
+    1. 创建一个 mock MCP adapter 并注册到 SDK。
+    2. 通过 `DeviceGroupContext.mcp(...)` 调用 adapter 方法。
+    3. 检查返回结果和 MCP 调用轨迹。
+
+    预期结果：
+    1. 业务侧不需要直接构造 `McpRegistry` 或 `McpGateway`。
+    2. MCP 调用返回结构化成功结果。
+    3. 设备组运行时记录 `capability_type=mcp` 的调用轨迹。
+    """
+
+    class RouteInput(BaseModel):
+        """路线规划入参。"""
+
+        origin: str
+        destination: str
+        strategy: str = "walking"
+
+    class MockMapAdapter(BaseMcpAdapter):
+        """用于测试的地图 MCP adapter。"""
+
+        adapter_name = "mock_map"
+
+        def list_methods(self) -> list[McpMethodSpec]:
+            """返回测试方法清单。"""
+
+            return [
+                McpMethodSpec(
+                    name="map.route_plan",
+                    description="测试路线规划",
+                    input_model=RouteInput,
+                )
+            ]
+
+        def invoke(self, *, method_name: str, context: AgentToolContext, input_data) -> AgentCapabilityResult:
+            """返回固定路线规划结果。"""
+
+            return AgentCapabilityResult.success(
+                data={
+                    "method_name": method_name,
+                    "summary": f"{input_data.origin}->{input_data.destination}",
+                    "strategy": input_data.strategy,
+                    "session_id": context.session_id,
+                }
+            )
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_mcp_adapter(MockMapAdapter())
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass")
+    context = runtime.create_context(device_id="glass_001", session_id="sess_mcp_001")
+
+    result = context.mcp(
+        "map.route_plan",
+        {
+            "origin": "家",
+            "destination": "地铁站",
+            "strategy": "walking",
+        },
+    )
+
+    assert result.ok is True
+    assert result.data["summary"] == "家->地铁站"
+    assert result.data["session_id"] == "sess_mcp_001"
+    traces = runtime.list_mcp_traces()
+    assert len(traces) == 1
+    assert traces[0].capability_type == "mcp"
+    assert traces[0].capability_name == "map.route_plan"
 
 
 def test_blind_business_tool_can_create_managed_task() -> None:

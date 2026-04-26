@@ -363,6 +363,7 @@ all_tasks = sdk.phone_runtime.list_tasks()
 12. `stop_phone_task()`
 13. `send_glass_command()`
 14. `send_phone_command()`
+15. `mcp(method_name, arguments)`
 
 开发者不应直接处理：
 
@@ -377,6 +378,7 @@ all_tasks = sdk.phone_runtime.list_tasks()
 2. 若手机端还需要并行启动一个业务 `PhoneTask`，服务端业务 `Task` 应通过 `start_phone_task(task_type, params)` 下发启动指令。
 3. 手机端产出的结构化业务结果，应通过 `/api/tasks/report-event` 统一回传，而不是为每个能力新增一条专用 HTTP 接口。
 4. `send_glass_command()` / `send_phone_command()` 只作为高级逃生口保留，官方 openaiglass-for-blind 不应直接拼 SDK 内部控制命令。
+5. 地图、导航、搜索等外部能力应先通过 `sdk.register_mcp_adapter(...)` 注册，再由业务 Tool 或 Task 调用 `context.mcp("adapter.method", {...})`。
 
 ---
 

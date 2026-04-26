@@ -132,6 +132,7 @@ package "测试资产契约" {
 | `DeviceGroupContext` | `start_phone_video_link()` | 稳定 | 启动眼镜到手机视频链路。 |
 | `DeviceGroupContext` | `start_phone_task()` | 稳定 | 启动手机侧业务任务。 |
 | `DeviceGroupContext` | `submit_notification()` | 稳定 | 提交面向用户的通知。 |
+| `DeviceGroupContext` | `mcp(method_name, arguments)` | 稳定 | 通过 SDK 统一 MCP 网关调用外部能力。 |
 
 非公共内容：
 
@@ -144,13 +145,15 @@ package "测试资产契约" {
 1. 不删除上述稳定字段和方法。
 2. 可以新增可选字段和可选方法。
 3. `metadata` 可以扩展，但不能要求业务开发者解析某个私有字段才能完成基础功能。
+4. 业务调用地图、导航、搜索等外部能力时，应通过 `DeviceGroupContext.mcp(...)`，不直接构造 `McpRegistry` 或 `McpGateway`。
 
 边界保护：
 
 1. `script/run_sdk_preflight.py` 已加入 `sdk_boundary` 检查。
 2. 该检查会扫描根目录 `openaiglass-sdk/server-python`、`openaiglass-for-blind/host/phone/src`、`openaiglass-sdk/phone-ios/GlassesVideoReceiver`、`openaiglass-sdk/phone-ios/GlassesVideoReceiverTests`、`openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `openaiglass-sdk/glass-esp32`。
 3. 若这些根运行时目录重新出现 `find_object`、`YoloFindObject`、`start_find_object`、`timer_manage`、`map_manage`、`Amap`、`navigation_task` 等业务词汇，预检会失败。
-4. 同一检查还会拦截 `openaiglass-sdk/server-python`、`openaiglass-sdk/server-python`、`openaiglass-for-blind/host/phone/src`、根 iOS 运行时和 `openaiglass-sdk/glass-esp32` 对 `openaiglass-for-blind` 的反向依赖。
+4. SDK 自测夹具也应使用 `demo_phone_task` / `mock_phone_task` 这类通用名称，避免边界扫描规则与 SDK 自测互相冲突。
+5. 同一检查还会拦截 `openaiglass-sdk/server-python`、`openaiglass-sdk/server-python`、`openaiglass-for-blind/host/phone/src`、根 iOS 运行时和 `openaiglass-sdk/glass-esp32` 对 `openaiglass-for-blind` 的反向依赖。
 
 ### 4.2 控制消息信封
 
