@@ -15,6 +15,9 @@ runs
 **/.pytest_cache/
 **/.mypy_cache/
 **/.ruff_cache/
+**/*.egg-info/
+dist/
+build/
 
 # ESP-IDF generated artifacts
 glass/**/build/

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openaiglasses-sdk"
+version = "0.1.0"
+description = "OpenAI Glasses multi-device capability SDK"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dashscope>=1.24.0",
+    "openai>=1.30.0,<2",
+    "openai-agents>=0.3.3",
+    "pydantic>=2,<3",
+]
+authors = [
+    { name = "OpenAI Glasses Demo Contributors" },
+]
+keywords = ["sdk", "smart-glasses", "multi-device", "agent", "capability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.scripts]
+openaiglasses-server = "app.main:main"
+openaiglasses-audio-samples = "devtools.audio_sample_batch_runner:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "agent_core*",
+    "api*",
+    "app*",
+    "backend_task_core*",
+    "devtools*",
+    "infra*",
+    "openaiglasses*",
+    "protocol*",
+    "runtime*",
+]

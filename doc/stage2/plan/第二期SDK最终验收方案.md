@@ -10,6 +10,7 @@
 2. 官方 `example` 只承载开发者需要关注的业务能力实现。
 3. 根目录 `server / phone / glass` 不再承载具体业务能力。
 4. 开发者可以基于 `BaseTool / BaseTask / BasePhoneTask / BasePhoneProcessor` 完成第一轮离线开发和验证。
+5. Python SDK 可以被构建成 wheel，并通过 `pip install` 安装后导入使用。
 
 ## 2. 验收范围
 
@@ -22,6 +23,7 @@
 5. SDK 公共契约与金样测试。
 6. 离线场景回放与兼容性回归。
 7. 真机联调前检查入口。
+8. Python SDK 包构建、安装与导入验证。
 
 本次验收不覆盖：
 
@@ -65,11 +67,33 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-fin
 7. `compatibility_suite` 通过。
 8. `pytest_core` 通过。
 9. `server_health` 通过。
+10. `sdk_package` 通过。
 
 其中 `sdk_boundary` 是第二期最终验收的关键检查项。它必须证明：
 
 1. 根目录 `server/src`、`phone/src`、`phone/ios/GlassesVideoReceiver`、`phone/ios/GlassesVideoReceiverTests`、`phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `glass/src` 中没有具体业务能力词汇。
 2. `sdk/python`、根运行时和端侧运行时没有反向依赖 `example`。
+
+其中 `sdk_package` 必须证明：
+
+1. [sdk/python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/pyproject.toml) 可以构建 `openaiglasses-sdk` wheel。
+2. 构建出的 wheel 可以通过 `pip install` 安装到临时环境。
+3. 安装后可以从 `openaiglasses` 导入 `OpenAIGlassesSDK / ServerSettings`。
+4. 安装后内部运行时模块 `agent_core.skills / infra.clock / api.http_server / runtime.voice_runtime` 可以正常导入。
+
+### 4.1.1 Python SDK 包验收
+
+单独执行：
+
+```bash
+python script/run_sdk_package_check.py
+```
+
+预期结果：
+
+1. 输出 JSON 中 `ok` 为 `true`。
+2. 生成的 wheel 名称形如 `openaiglasses_sdk-0.1.0-py3-none-any.whl`。
+3. `import_stdout` 中能看到当前 SDK 版本号。
 
 ### 4.2 公共契约验收
 
@@ -197,7 +221,8 @@ bash script/run_sdk_live_check.sh --report logs/sdk-live-check-stage2-final.json
 3. 公共契约测试全部通过。
 4. 官方样例兼容性测试全部通过。
 5. 场景回放全部通过。
-6. 人工代码边界检查无反向依赖和根目录业务能力残留。
-7. 文档与当前代码边界一致。
+6. Python SDK 包构建、安装和导入检查通过。
+7. 人工代码边界检查无反向依赖和根目录业务能力残留。
+8. 文档与当前代码边界一致。
 
 如果上述任一项失败，第二期不能判定为 100% 完成。

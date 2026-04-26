@@ -57,6 +57,11 @@ def parse_args() -> argparse.Namespace:
         help="跳过 SDK 与 example 目录边界检查",
     )
     parser.add_argument(
+        "--skip-package",
+        action="store_true",
+        help="跳过 Python SDK 包构建、安装和导入检查",
+    )
+    parser.add_argument(
         "--skip-contracts",
         action="store_true",
         help="跳过 SDK 公共契约测试",
@@ -308,13 +313,14 @@ def main() -> int:
                     sys.executable,
                     "-m",
                     "compileall",
-                    "sdk/python/openaiglasses",
+                    "sdk/python",
                     "example",
                     "server/test/unit",
                     "script/run_sdk_scenario.py",
                     "script/run_sdk_contract_tests.py",
                     "script/run_sdk_compatibility_tests.py",
                     "script/run_sdk_preflight.py",
+                    "script/run_sdk_package_check.py",
                     "script/run_sdk_live_check.py",
                     "script/sync_sdk_live_config.py",
                 ],
@@ -325,6 +331,17 @@ def main() -> int:
 
     if not args.skip_boundary:
         checks.append(run_boundary_check())
+
+    if not args.skip_package:
+        checks.append(
+            run_command(
+                name="sdk_package",
+                command=[
+                    sys.executable,
+                    "script/run_sdk_package_check.py",
+                ],
+            )
+        )
 
     if not args.skip_scenarios:
         checks.append(

@@ -4,8 +4,9 @@
 
 推荐结合以下文档一起阅读：
 
-1. [SDK开发者快速开始.md](</Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md>)
-2. [SDK真机联调前检查与联调步骤.md](</Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK真机联调前检查与联调步骤.md>)
+1. [SDK安装与能力开发指南.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/example/SDK安装与能力开发指南.md)：给外部开发者的安装、能力开发、离线回放和联调说明。
+2. [SDK开发者快速开始.md](</Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md>)：SDK 维护者视角的完整快速开始。
+3. [SDK真机联调前检查与联调步骤.md](</Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK真机联调前检查与联调步骤.md>)
 
 ## 目录说明
 
@@ -28,7 +29,11 @@ testdata/
 
 ## 启动方式
 
-1. 服务端：`python example/server/main.py`
+如果只是学习 SDK 扩展方式，优先阅读 [SDK安装与能力开发指南.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/example/SDK安装与能力开发指南.md)，再看 `capabilities/find_object` 的实现。
+
+本仓库 example 启动方式：
+
+1. 服务端：`PYTHONPATH=sdk/python:. python example/server/main.py`
 2. 手机端：`bash example/phone/run.sh`
 3. 眼镜端：`bash example/glass/run.sh`
 

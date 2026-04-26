@@ -22,6 +22,7 @@ from openaiglasses.runtime import (
 from openaiglasses.server import HybridTaskGateway, build_agent_facade_from_sdk, build_server_handle_from_sdk
 from openaiglasses.sdk import OpenAIGlassesSDK
 from openaiglasses.testing import ReplayEvent, ReplaySensorProvider, ReplayTimeline, ScenarioRunner
+from infra.config import ServerSettings
 
 __all__ = [
     "BaseTask",
@@ -47,6 +48,7 @@ __all__ = [
     "ReplaySensorProvider",
     "ReplayTimeline",
     "SensorReading",
+    "ServerSettings",
     "ScenarioRunner",
     "TaskContext",
     "TaskEvent",

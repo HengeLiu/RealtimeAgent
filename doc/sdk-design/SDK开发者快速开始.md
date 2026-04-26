@@ -4,7 +4,9 @@
 
 本文档用于说明当前仓库中已经可用的 SDK 最小接入方式。
 
-当前阶段的目标不是提供完整生产级 SDK 文档，而是明确：
+当前阶段的目标是让外部开发者可以通过 `pip install` 安装 Python SDK，并基于公开 API 完成真实系统能力扩展开发。
+
+本文档明确：
 
 1. 开发者如何注册一个 `Tool`。
 2. 开发者如何注册一个 `Task`。
@@ -12,6 +14,7 @@
 4. 开发者如何注册一个 `PhoneTask`。
 5. 开发者如何启动真实服务端。
 6. 开发者如何执行离线回放测试。
+7. SDK 包如何构建、安装和验证。
 
 ---
 
@@ -38,12 +41,86 @@
    - `run_sdk_contract_tests.py`
    - `run_sdk_compatibility_tests.py`
 
-### 2.1 当前验证状态
+---
 
-截至 2026-04-25，当前仓库已经通过 SDK 联调前预检：
+## 3. 安装 SDK
+
+### 3.1 从 PyPI 安装
+
+发布到 PyPI 后，开发者项目中使用：
 
 ```bash
-uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.json
+pip install openaiglasses-sdk
+```
+
+安装后，Python 导入包名是：
+
+```python
+import openaiglasses
+```
+
+### 3.2 从本仓库本地安装
+
+在 SDK 尚未正式发布到 PyPI 前，可以从仓库本地安装：
+
+```bash
+pip install ./sdk/python
+```
+
+也可以在外部项目中指向源码路径安装：
+
+```bash
+pip install /path/to/OpenAIglassesDemo_2/sdk/python
+```
+
+安装后不应再依赖 `PYTHONPATH=server/src:sdk/python` 这类仓库开发路径。
+
+### 3.3 开发者项目最小结构
+
+推荐外部能力项目使用如下结构：
+
+```text
+my-glasses-capability/
+  pyproject.toml
+  src/
+    my_capability/
+      __init__.py
+      server.py
+      phone.py
+      scenario.py
+  testdata/
+    scenario/
+      my_capability_basic.json
+```
+
+最小 `pyproject.toml`：
+
+```toml
+[project]
+name = "my-glasses-capability"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "openaiglasses-sdk>=0.1.0",
+]
+```
+
+### 3.4 SDK 包自检
+
+仓库内提供了包级自检脚本，会执行 wheel 构建、临时环境安装和导入验证：
+
+```bash
+python script/run_sdk_package_check.py
+```
+
+该检查通过后，才能说明 SDK 不只是源码路径可运行，而是具备 pip 安装后的基本可用性。
+
+### 3.5 当前验证状态
+
+截至 2026-04-26，当前仓库已经通过 SDK 联调前预检：
+
+```bash
+uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-final-recheck.json
 ```
 
 本次预检结果：
@@ -55,14 +132,15 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-current.js
 5. `testdata/scenario` 下 5 个回放场景全部通过。
 6. 第二期核心 pytest 通过。
 7. 服务端 `/api/health` 健康检查通过。
+8. `sdk_boundary` 检查通过，根部 `server / phone / glass` 不再包含官方样板业务代码。
 
 这表示当前可以进入官方 `find_object` 样例的三端真机联调阶段。
 
 ---
 
-## 3. 最小服务端接入
+## 4. 最小服务端接入
 
-### 3.1 创建 SDK
+### 4.1 创建 SDK
 
 ```python
 from openaiglasses import OpenAIGlassesSDK
@@ -70,7 +148,7 @@ from openaiglasses import OpenAIGlassesSDK
 sdk = OpenAIGlassesSDK()
 ```
 
-### 3.2 注册 Tool
+### 4.2 注册 Tool
 
 ```python
 from typing import Any
@@ -108,7 +186,7 @@ sdk.register_tool(MyTool())
 2. 同类型 `Task / PhoneProcessor / PhoneTask / SensorProvider` 不允许被静默覆盖。
 3. 若出现重复注册，SDK 会直接抛出 `ValueError`，避免运行时能力被后注册对象顶掉。
 
-### 3.3 注册 Task
+### 4.3 注册 Task
 
 ```python
 from openaiglasses import BaseTask, TaskContext, TaskEvent
@@ -129,10 +207,10 @@ class MyTask(BaseTask):
 sdk.register_task(MyTask())
 ```
 
-### 3.4 启动真实服务端
+### 4.4 启动真实服务端
 
 ```python
-from infra.config import ServerSettings
+from openaiglasses import ServerSettings
 
 settings = ServerSettings.from_env()
 settings.validate()
@@ -149,9 +227,9 @@ handle.start()
 
 ---
 
-## 4. 最小手机侧接入
+## 5. 最小手机侧接入
 
-### 4.1 注册 PhoneProcessor
+### 5.1 注册 PhoneProcessor
 
 ```python
 from typing import Any
@@ -175,7 +253,7 @@ class MyProcessor(BasePhoneProcessor):
 sdk.register_phone_processor(MyProcessor())
 ```
 
-### 4.2 注册 PhoneTask
+### 5.2 注册 PhoneTask
 
 ```python
 from typing import Any
@@ -202,7 +280,7 @@ class MyPhoneTask(BasePhoneTask):
 sdk.register_phone_task(MyPhoneTask())
 ```
 
-### 4.3 注册 SensorProvider
+### 5.3 注册 SensorProvider
 
 ```python
 from openaiglasses import SensorReading
@@ -222,7 +300,7 @@ class HeadingSensorProvider(BaseSensorProvider):
 sdk.register_sensor_provider(HeadingSensorProvider())
 ```
 
-### 4.4 执行手机任务
+### 5.4 执行手机任务
 
 ```python
 snapshot = sdk.phone_runtime.start_task(
@@ -239,7 +317,7 @@ latest = sdk.phone_runtime.query_task(snapshot.task_id)
 all_tasks = sdk.phone_runtime.list_tasks()
 ```
 
-### 4.5 手机侧最小稳定接口
+### 5.5 手机侧最小稳定接口
 
 当前阶段建议把下面这些接口视为手机侧扩展面的最小稳定面：
 
@@ -262,11 +340,10 @@ all_tasks = sdk.phone_runtime.list_tasks()
    - 只约定 `sensor_type` 和 `read()`，不把平台细节暴露给业务代码。
 
 建议业务代码默认只依赖上述接口，不直接触达手机 SDK运行时 的底层连接对象。
-```
 
 ---
 
-## 5. 设备组上下文使用方式
+## 6. 设备组上下文使用方式
 
 `Tool` 和 `Task` 中最重要的对象是 `DeviceGroupContext`。
 
@@ -303,7 +380,7 @@ all_tasks = sdk.phone_runtime.list_tasks()
 
 ---
 
-## 6. 离线回放测试
+## 7. 离线回放测试
 
 当前最小回放入口有两种：
 
@@ -402,7 +479,7 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 
 ---
 
-## 7. 当前官方示例
+## 8. 当前官方示例
 
 当前唯一官方示例位于：
 
@@ -417,7 +494,7 @@ uv run python script/run_sdk_live_check.py --report logs/sdk-live-check.json
 
 ---
 
-## 8. 当前边界说明
+## 9. 当前边界说明
 
 当前已经完成：
 

@@ -15,14 +15,30 @@
 | [glass/src](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/glass/src) | ESP32 眼镜端工程。 |
 | [example](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/example) | SDK 官方示例工程，包含 `find_object` 能力与回放场景。 |
 
+## Python SDK 安装
+
+SDK 已按独立 Python 包组织在 [sdk/python](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python) 下。发布后外部开发者使用：
+
+```bash
+pip install openaiglasses-sdk
+```
+
+仓库内或发布前本地验证使用：
+
+```bash
+pip install ./sdk/python
+python script/run_sdk_package_check.py
+```
+
+安装后的公开导入入口是 `openaiglasses`，开发者不需要配置 `PYTHONPATH=server/src:sdk/python`。
+
 ## 常用命令
 
 ```bash
-PYTHONPATH=server/src:sdk/python:. uv run python -m pytest
 PYTHONPATH=sdk/python:. uv run python sdk/python/app/main.py
-PYTHONPATH=server/src:sdk/python:. uv run python example/server/main.py
+PYTHONPATH=sdk/python:. uv run python example/server/main.py
 uv run python script/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
-uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-final.json
+uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-package.json
 ```
 
 跨设备联调前先看 [SDK真机联调前检查与联调步骤.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK真机联调前检查与联调步骤.md)。

@@ -12,8 +12,10 @@
 6. [stage1/plan](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/plan)：查看第一期分阶段目标。
 7. [stage1/develop](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop)：按 Phase 查看每次实施、联调和测试结果。
 8. [sdk-design/SDK开发者快速开始.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md)：进入 SDK 使用面。
-9. [stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md)：理解 SDK 产品化方向。
-10. [stage2/plan/第二期SDK最终验收方案.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期SDK最终验收方案.md)：执行第二期完成后的最终验收。
+9. [sdk-design/PythonSDK打包与发布流程.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/PythonSDK打包与发布流程.md)：查看 SDK 包构建、TestPyPI 和 PyPI 发布流程。
+10. [stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md)：理解 SDK 产品化方向。
+11. [stage2/plan/第二期SDK最终验收方案.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期SDK最终验收方案.md)：执行第二期完成后的最终验收。
+12. [../sdk/python/README.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/README.md)：查看 `pip install openaiglasses-sdk` 后的包级使用说明。
 
 ## 目录职责
 
@@ -38,6 +40,7 @@
 | agent-core 与工具面 | [sdk/python/agent_core](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/agent_core) | [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)、[PhaseE-agent输入与工具面收敛实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseE-agent输入与工具面收敛实施文档.md) |
 | backend-task-core | [sdk/python/backend_task_core](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/backend_task_core) | [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)、[PhaseF-backend-task-core最小闭环实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseF-backend-task-core最小闭环实施文档.md) |
 | SDK 与官方 example | [sdk/python/openaiglasses](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/openaiglasses)、[example](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/example) | [sdk-design](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design)、[第二期-SDK核心运行时与开发者扩展面产品化开发计划.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage2/plan/第二期-SDK核心运行时与开发者扩展面产品化开发计划.md) |
+| Python SDK 打包与安装 | [sdk/python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/pyproject.toml)、[script/run_sdk_package_check.py](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/script/run_sdk_package_check.py) | [SDK开发者快速开始.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md)、[PythonSDK打包与发布流程.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/PythonSDK打包与发布流程.md)、[sdk/python/README.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/sdk/python/README.md) |
 
 ## 文档维护规则
 
