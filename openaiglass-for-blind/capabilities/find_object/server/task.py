@@ -71,6 +71,7 @@ class FindObjectTask(BaseTask):
                 task_type="find_object_phone_task",
                 reason="task.completed",
             )
+            context.device_group.stop_phone_video_link(reason="find_object_completed")
             context.device_group.submit_notification(
                 text=str(event.payload.get("summary") or "找到目标了"),
                 priority="high",

@@ -14,7 +14,7 @@ REPO_ROOT = APP_ROOT.parent
 sys.path.insert(0, str(APP_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "openaiglass-sdk/server-python"))
 
-from host.server.main import create_sdk  # noqa: E402
+from host.server.main import create_full_sdk  # noqa: E402
 from openaiglasses.testing import ScenarioRunner  # noqa: E402
 
 
@@ -104,7 +104,7 @@ def parse_args() -> argparse.Namespace:
 def run_scenario(*, scenario_path: str, mode: str) -> dict[str, Any]:
     """执行单个场景。"""
 
-    sdk = create_sdk()
+    sdk = create_full_sdk()
     runner = ScenarioRunner(
         sdk,
         workspace_root=APP_ROOT,
@@ -117,7 +117,7 @@ def run_scenario(*, scenario_path: str, mode: str) -> dict[str, Any]:
 def describe_scenario(*, scenario_path: str) -> dict[str, Any]:
     """输出单个场景摘要。"""
 
-    sdk = create_sdk()
+    sdk = create_full_sdk()
     runner = ScenarioRunner(
         sdk,
         workspace_root=APP_ROOT,
@@ -129,7 +129,7 @@ def describe_scenario(*, scenario_path: str) -> dict[str, Any]:
 def validate_scenario(*, scenario_path: str) -> dict[str, Any]:
     """校验单个场景 manifest。"""
 
-    sdk = create_sdk()
+    sdk = create_full_sdk()
     runner = ScenarioRunner(
         sdk,
         workspace_root=APP_ROOT,

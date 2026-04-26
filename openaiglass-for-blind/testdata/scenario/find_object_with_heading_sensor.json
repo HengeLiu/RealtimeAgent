@@ -28,7 +28,12 @@
     "notification_contains": "找到水杯",
     "notification_count_at_least": 1,
     "glass_commands": [
-      "sensor.camera.stream.start"
+      "sensor.camera.stream.start",
+      "sensor.camera.stream.stop"
+    ],
+    "phone_commands": [
+      "sdk.phone.task.start",
+      "sdk.phone.task.stop"
     ]
   }
 }

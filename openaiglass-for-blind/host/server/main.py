@@ -19,21 +19,27 @@ from capabilities.find_object.phone.task import FindObjectPhoneTask
 from capabilities.find_object.scenario import build_find_object_scenario_handler
 from capabilities.find_object.server.task import FindObjectTask
 from capabilities.find_object.server.tool import StartFindObjectTool
+from capabilities.traffic_light.phone.processor import TrafficLightProcessor
+from capabilities.traffic_light.phone.task import TrafficLightPhoneTask
+from capabilities.traffic_light.scenario import build_traffic_light_scenario_handler
+from capabilities.traffic_light.server.task import TrafficLightTask
+from capabilities.traffic_light.server.tool import StartTrafficLightTool
 from infra.config import ServerSettings
 from infra.logging import LogContext, configure_root_logger, get_logger, log_debug, log_info
 from openaiglasses import OpenAIGlassesSDK
 
 
-def create_sdk() -> OpenAIGlassesSDK:
+def create_sdk(*, include_traffic_light: bool = False) -> OpenAIGlassesSDK:
     """创建并装配盲人场景业务 SDK。
 
     功能：
     1. 创建 SDK 主入口。
     2. 注册找物体 Tool、Task 和手机处理器。
+    3. 按需注册红绿灯识别能力。
     3. 返回可启动的 SDK 对象。
 
     参数：
-    1. 无。
+    1. `include_traffic_light`：是否装配红绿灯识别能力。默认保持旧 SDK 契约测试兼容。
 
     返回值：
     1. `OpenAIGlassesSDK`：已注册盲人业务能力的 SDK 对象。
@@ -48,7 +54,39 @@ def create_sdk() -> OpenAIGlassesSDK:
     sdk.register_phone_processor(YoloFindObjectProcessor())
     sdk.register_phone_task(FindObjectPhoneTask())
     sdk.register_scenario_handler("find_object", build_find_object_scenario_handler())
+    if include_traffic_light:
+        register_traffic_light_capability(sdk)
     return sdk
+
+
+def create_full_sdk() -> OpenAIGlassesSDK:
+    """创建完整盲人业务 SDK。
+
+    功能：
+    1. 装配当前业务工程全部已启用能力。
+    2. 给真实服务端、场景回放和业务预检使用。
+
+    参数：
+    1. 无。
+
+    返回值：
+    1. `OpenAIGlassesSDK`：已注册全部业务能力的 SDK 对象。
+
+    异常情况：
+    1. 注册能力名称为空时由 SDK 抛出异常。
+    """
+
+    return create_sdk(include_traffic_light=True)
+
+
+def register_traffic_light_capability(sdk: OpenAIGlassesSDK) -> None:
+    """向 SDK 注册红绿灯识别业务能力。"""
+
+    sdk.register_tool(StartTrafficLightTool())
+    sdk.register_task(TrafficLightTask())
+    sdk.register_phone_processor(TrafficLightProcessor())
+    sdk.register_phone_task(TrafficLightPhoneTask())
+    sdk.register_scenario_handler("traffic_light", build_traffic_light_scenario_handler())
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,7 +101,7 @@ def parse_args() -> argparse.Namespace:
 def create_server_handle(settings: ServerSettings):
     """创建基于盲人场景业务能力的真实服务端句柄。"""
 
-    return create_sdk().build_server_handle(settings)
+    return create_full_sdk().build_server_handle(settings)
 
 
 def main() -> None:
@@ -112,7 +150,7 @@ def main() -> None:
         LogContext(trace_id="bootstrap", fields=settings.summary()),
     )
 
-    create_sdk().run_server(settings)
+    create_full_sdk().run_server(settings)
 
 
 if __name__ == "__main__":

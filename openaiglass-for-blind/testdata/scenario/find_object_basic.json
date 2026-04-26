@@ -13,6 +13,8 @@
   },
   "expected": {
     "task_state": "completed",
-    "notification_contains": "找到水杯"
+    "notification_contains": "找到水杯",
+    "glass_commands": ["sensor.camera.stream.start", "sensor.camera.stream.stop"],
+    "phone_commands": ["sdk.phone.task.start", "sdk.phone.task.stop"]
   }
 }

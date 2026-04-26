@@ -484,6 +484,29 @@ bash openaiglass-for-blind/scripts/run_server.sh
 
 业务能力开发应先通过离线回放，再进入真机联调。
 
+这里的“回放”不是播放视频给人看，而是把一次真实多设备交互过程离线重新驱动给 SDK 和业务能力。真实设备链路里按时间发生的输入，例如眼镜帧、传感器读数、手机处理结果和任务事件，会被写成固定场景数据；测试时由 SDK 用 mock 眼镜、mock 手机和回放传感器提供者重新执行一遍。
+
+SDK 对测试的支持主要包括：
+
+| 能力 | 用途 |
+| --- | --- |
+| `ScenarioRunner.run(...)` | 执行一个场景，驱动 Tool、Task、PhoneProcessor、PhoneTask 和场景处理器完成闭环。 |
+| `ScenarioRunner.describe(...)` | 读取场景摘要，检查 capability、输入资产和期望断言。 |
+| `ScenarioRunner.validate(...)` | 校验场景 manifest 和资产引用，不执行完整业务流程。 |
+| `ReplayTimeline` | 表达按时间发生的帧、传感器和任务事件。 |
+| `ReplaySensorProvider` | 在没有真实传感器时，向业务能力提供固定传感器读数。 |
+| `MockGlassRuntime` / `MockPhoneRuntime` | 替代真实眼镜和手机，记录下发命令、手机任务和通知结果。 |
+
+离线回放适合验证：
+
+1. Tool 是否能创建正确的 SDK 托管任务。
+2. Task 是否能启动和停止手机任务、视频链路或传感器输入。
+3. 手机侧 Processor / PhoneTask 是否能处理固定输入并回传事件。
+4. 服务端是否能根据手机事件完成、失败或取消任务。
+5. 最终通知、设备命令、任务状态和结构化结果是否符合预期。
+
+离线回放不替代真机测试。它不验证真实网络抖动、摄像头权限、iOS 后台行为、ESP32 引脚、电源、音频链路和模型性能；这些仍需要进入真机联调阶段验证。
+
 最小调用：
 
 ```python
@@ -497,7 +520,7 @@ from my_capability.main import create_sdk
 result = ScenarioRunner(create_sdk()).run(
     Path("testdata/scenario/my_capability_basic.json")
 )
-assert result.assertions["passed"]
+assert result["assertions"]["passed"]
 ```
 
 场景文件应描述：
@@ -506,6 +529,16 @@ assert result.assertions["passed"]
 2. 要启动哪个能力或任务。
 3. 输入帧、传感器、任务事件的时间线。
 4. 期望的任务状态、结果、通知和设备命令。
+
+开发新能力时，建议至少准备以下场景：
+
+| 场景 | 目标 |
+| --- | --- |
+| 成功路径 | 验证能力可以从触发到完成。 |
+| 缺少设备 | 验证没有手机或眼镜时能给出结构化失败。 |
+| 启动失败 | 验证视频链路、手机任务或传感器启动失败时的任务状态。 |
+| 取消路径 | 验证任务取消后能停止手机任务和端侧链路。 |
+| 传感器组合输入 | 验证视觉帧和方向、位置等传感器输入能一起驱动能力。 |
 
 本仓库已有场景：
 
@@ -519,6 +552,29 @@ openaiglass-for-blind/testdata/scenario/
 uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
   --scenario-dir openaiglass-for-blind/testdata/scenario \
   --pretty
+```
+
+只查看场景摘要：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
+  --describe-scenario openaiglass-for-blind/testdata/scenario/find_object_with_testdata.json \
+  --pretty
+```
+
+只校验场景和资产引用：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
+  --validate-scenarios openaiglass-for-blind/testdata/scenario \
+  --pretty
+```
+
+进入真机联调前，还应执行完整预检。预检会组合 Python 编译检查、入口检查、边界检查、场景回放、SDK 契约测试、兼容性测试和健康检查：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py \
+  --report logs/sdk-preflight-current.json
 ```
 
 ## 11. 三端真机联调流程
