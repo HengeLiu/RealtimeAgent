@@ -9,7 +9,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from server.main import create_sdk, create_server_handle
+from host.server.main import create_sdk, create_server_handle
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
 from openaiglasses import (
@@ -36,7 +36,7 @@ def test_sdk_registry_can_load_blind_business_capability() -> None:
     """测试目标：验证盲人业务能力可注册到 SDK。
 
     测试方法：
-    1. 调用 `server.main.create_sdk()` 创建 SDK。
+    1. 调用 `host.server.main.create_sdk()` 创建 SDK。
     2. 检查 Tool、Task、PhoneProcessor 和 PhoneTask 注册表。
 
     预期结果：
@@ -753,7 +753,7 @@ def test_blind_server_handle_can_build_real_runtime() -> None:
     """测试目标：验证盲人业务入口已可构建真实服务端句柄。
 
     测试方法：
-    1. 调用 `server.main.create_server_handle(...)`。
+    1. 调用 `host.server.main.create_server_handle(...)`。
     2. 检查返回句柄中的运行时和任务网关类型。
 
     预期结果：

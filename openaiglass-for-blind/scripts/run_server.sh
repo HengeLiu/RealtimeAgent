@@ -287,7 +287,7 @@ start_local() {
       VOICE_MODEL_TIMEOUT_MS="${VOICE_MODEL_TIMEOUT_MS}" \
       VOICE_RUNS_ROOT="${VOICE_RUNS_ROOT}" \
       DASHSCOPE_API_KEY="${DASHSCOPE_API_KEY:-}" \
-      "${RUNNER[@]}" -m server.main --host "${HOST}" --port "${PORT}"
+      "${RUNNER[@]}" -m host.server.main --host "${HOST}" --port "${PORT}"
   ) >"${LOG_FILE}" 2>&1 < /dev/null &
 
   echo $! > "${PID_FILE}"

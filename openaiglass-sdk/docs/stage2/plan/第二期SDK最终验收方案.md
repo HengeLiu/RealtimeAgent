@@ -71,7 +71,7 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-fin
 
 其中 `sdk_boundary` 是第二期最终验收的关键检查项。它必须证明：
 
-1. 根目录 `server/src`、`phone/src`、`phone/ios/GlassesVideoReceiver`、`phone/ios/GlassesVideoReceiverTests`、`phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `glass/src` 中没有具体业务能力词汇。
+1. 宿主目录 `host/phone/src`、`host/phone/ios/GlassesVideoReceiver`、`host/phone/ios/GlassesVideoReceiverTests`、`host/phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj` 和 `host/glass/src` 中没有具体业务能力词汇。
 2. `sdk/python`、根运行时和端侧运行时没有反向依赖 `example`。
 
 其中 `sdk_package` 必须证明：
@@ -141,7 +141,7 @@ uv run python script/run_sdk_scenario.py --scenario-dir testdata/scenario --pret
 执行：
 
 ```bash
-rg -n "from capabilities|import capabilities|../../capabilities" openaiglass-sdk/python openaiglass-for-blind/phone/src openaiglass-for-blind/phone/ios/GlassesVideoReceiver openaiglass-for-blind/glass/src -g '!**/__pycache__/**'
+rg -n "from capabilities|import capabilities|../../capabilities" openaiglass-sdk/python openaiglass-for-blind/host/phone/src openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver openaiglass-for-blind/host/glass/src -g '!**/__pycache__/**'
 ```
 
 预期结果：
@@ -154,7 +154,7 @@ rg -n "from capabilities|import capabilities|../../capabilities" openaiglass-sdk
 执行：
 
 ```bash
-rg -n "find_object|FindObject|YoloFindObject|start_find_object|timer_manage|map_manage|Amap|navigation_task" server/src phone/src phone/ios/GlassesVideoReceiver phone/ios/GlassesVideoReceiverTests phone/ios/GlassesVideoReceiver.xcodeproj glass/src -g '!**/__pycache__/**'
+rg -n "find_object|FindObject|YoloFindObject|start_find_object|timer_manage|map_manage|Amap|navigation_task" openaiglass-for-blind/host/phone/src openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver openaiglass-for-blind/host/phone/ios/GlassesVideoReceiverTests openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj openaiglass-for-blind/host/glass/src -g '!**/__pycache__/**'
 ```
 
 预期结果：

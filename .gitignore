@@ -29,6 +29,15 @@ openaiglass-for-blind/glass/src/sdkconfig.local
 openaiglass-for-blind/glass/src/sdkconfig.local.old
 openaiglass-for-blind/glass/src/dependencies.lock
 openaiglass-for-blind/glass/config/local_build.env
+openaiglass-for-blind/host/glass/**/build/
+openaiglass-for-blind/host/glass/**/managed_components/
+openaiglass-for-blind/host/glass/**/*.bin
+openaiglass-for-blind/host/glass/src/sdkconfig
+openaiglass-for-blind/host/glass/src/sdkconfig.old
+openaiglass-for-blind/host/glass/src/sdkconfig.local
+openaiglass-for-blind/host/glass/src/sdkconfig.local.old
+openaiglass-for-blind/host/glass/src/dependencies.lock
+openaiglass-for-blind/host/glass/config/local_build.env
 
 # iOS generated artifacts
 openaiglass-for-blind/phone/ios/build*
@@ -39,3 +48,11 @@ openaiglass-for-blind/phone/ios/**/*.xcuserstate
 openaiglass-for-blind/phone/ios/**/ModuleCache.noindex/
 openaiglass-for-blind/phone/ios/**/SDKStatCaches.noindex/
 openaiglass-for-blind/phone/ios/**/CompilationCache.noindex/
+openaiglass-for-blind/host/phone/ios/build*
+openaiglass-for-blind/host/phone/ios/DerivedData/
+openaiglass-for-blind/host/phone/ios/**/*.xcresult
+openaiglass-for-blind/host/phone/ios/**/xcuserdata/
+openaiglass-for-blind/host/phone/ios/**/*.xcuserstate
+openaiglass-for-blind/host/phone/ios/**/ModuleCache.noindex/
+openaiglass-for-blind/host/phone/ios/**/SDKStatCaches.noindex/
+openaiglass-for-blind/host/phone/ios/**/CompilationCache.noindex/

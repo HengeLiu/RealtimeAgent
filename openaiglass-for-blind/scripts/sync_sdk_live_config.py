@@ -11,8 +11,8 @@ from pathlib import Path
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
 SERVER_CONFIG = REPO_ROOT / "openaiglass-sdk/config/local_server.env"
-PHONE_APP_CONFIG = APP_ROOT / "phone/ios/GlassesVideoReceiver/AppConfig.plist"
-GLASS_LOCAL_CONFIG = APP_ROOT / "glass/config/local_build.env"
+PHONE_APP_CONFIG = APP_ROOT / "host/phone/ios/GlassesVideoReceiver/AppConfig.plist"
+GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
 
 
 def parse_args() -> argparse.Namespace:

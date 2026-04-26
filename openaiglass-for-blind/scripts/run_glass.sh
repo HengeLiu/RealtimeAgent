@@ -13,7 +13,7 @@ APP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${APP_ROOT}/.." && pwd)"
 
 IDF_ROOT="${IDF_ROOT:-${REPO_ROOT}/.cache/esp-idf-v5.3.2}"
-PROJECT_DIR="${PROJECT_DIR:-${APP_ROOT}/glass/src}"
+PROJECT_DIR="${PROJECT_DIR:-${APP_ROOT}/host/glass/src}"
 TARGET="${TARGET:-esp32s3}"
 BAUD_RATE="${BAUD_RATE:-115200}"
 PORT="${PORT:-}"

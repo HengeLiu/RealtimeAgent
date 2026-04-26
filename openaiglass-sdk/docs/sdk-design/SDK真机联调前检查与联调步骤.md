@@ -46,8 +46,8 @@ bash script/run_sdk_live_check.sh --report logs/sdk-live-check.json
 
 并同步到：
 
-1. 手机 `phone/ios/GlassesVideoReceiver/AppConfig.plist`
-2. 眼镜 `glass/config/local_build.env`
+1. 手机 `host/phone/ios/GlassesVideoReceiver/AppConfig.plist`
+2. 眼镜 `host/glass/config/local_build.env`
 
 预检通过的最低标准：
 
@@ -80,7 +80,7 @@ bash script/sync_sdk_live_config.sh
 bash script/run_sdk_live_check.sh --report logs/sdk-live-check-before-start.json
 bash script/run_server.sh
 bash script/run_sdk_live_check.sh --require-server --report logs/sdk-live-check-after-start.json
-bash phone/ios/GlassesVideoReceiver.xcodeproj
+bash host/phone/ios/GlassesVideoReceiver.xcodeproj
 bash scripts/run_glass.sh
 ```
 
@@ -142,7 +142,7 @@ LOG_LEVEL=DEBUG bash script/run_server.sh
 如果直接使用 SDK 示例服务端，也可以执行：
 
 ```bash
-LOG_LEVEL=DEBUG uv run python -m server.main --host 0.0.0.0 --port 8765
+LOG_LEVEL=DEBUG uv run python -m host.server.main --host 0.0.0.0 --port 8765
 ```
 
 心跳超时或连接关闭时，服务端日志应至少包含：

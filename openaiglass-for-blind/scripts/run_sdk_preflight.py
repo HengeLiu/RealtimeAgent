@@ -18,7 +18,7 @@ SDK_ROOT = REPO_ROOT / "openaiglass-sdk"
 sys.path.insert(0, str(APP_ROOT))
 sys.path.insert(0, str(SDK_ROOT / "python"))
 
-from server.main import create_server_handle  # noqa: E402
+from host.server.main import create_server_handle  # noqa: E402
 from infra.config import ServerSettings  # noqa: E402
 
 
@@ -149,9 +149,9 @@ def run_entrypoint_check() -> CheckResult:
 
     start = perf_counter()
     paths = {
-        "server_entry": APP_ROOT / "server/main.py",
-        "phone_project": APP_ROOT / "phone/ios/GlassesVideoReceiver.xcodeproj",
-        "glass_project": APP_ROOT / "glass/src",
+        "server_entry": APP_ROOT / "host/server/main.py",
+        "phone_project": APP_ROOT / "host/phone/ios/GlassesVideoReceiver.xcodeproj",
+        "glass_project": APP_ROOT / "host/glass/src",
         "server_run_script": APP_ROOT / "scripts/run_server.sh",
         "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
         "sdk_live_check_shell": APP_ROOT / "scripts/run_sdk_live_check.sh",
@@ -229,11 +229,11 @@ def run_boundary_check() -> CheckResult:
     violations: list[dict[str, object]] = []
 
     runtime_roots = [
-        APP_ROOT / "phone/src",
-        APP_ROOT / "phone/ios/GlassesVideoReceiver",
-        APP_ROOT / "phone/ios/GlassesVideoReceiverTests",
-        APP_ROOT / "phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj",
-        APP_ROOT / "glass/src",
+        APP_ROOT / "host/phone/src",
+        APP_ROOT / "host/phone/ios/GlassesVideoReceiver",
+        APP_ROOT / "host/phone/ios/GlassesVideoReceiverTests",
+        APP_ROOT / "host/phone/ios/GlassesVideoReceiver.xcodeproj/project.pbxproj",
+        APP_ROOT / "host/glass/src",
     ]
     business_patterns = [
         "find_object",
@@ -261,9 +261,9 @@ def run_boundary_check() -> CheckResult:
 
     dependency_roots = [
         SDK_ROOT / "python",
-        APP_ROOT / "phone/src",
-        APP_ROOT / "phone/ios/GlassesVideoReceiver",
-        APP_ROOT / "glass/src",
+        APP_ROOT / "host/phone/src",
+        APP_ROOT / "host/phone/ios/GlassesVideoReceiver",
+        APP_ROOT / "host/glass/src",
     ]
     dependency_patterns = [
         "from capabilities",
@@ -311,7 +311,8 @@ def main() -> int:
                     "-m",
                     "compileall",
                     "openaiglass-sdk/python",
-                    "openaiglass-for-blind/server",
+                    "openaiglass-for-blind/host/server",
+                    "openaiglass-for-blind/host/phone/src",
                     "openaiglass-for-blind/capabilities",
                     "openaiglass-sdk/tests/unit",
                     "openaiglass-for-blind/scripts/run_sdk_scenario.py",

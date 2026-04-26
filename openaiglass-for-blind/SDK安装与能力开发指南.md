@@ -351,6 +351,6 @@ bash scripts/run_sdk_live_check.sh --report ../logs/sdk-live-check-blind-dev.jso
 3. 直接读写设备绑定表。
 4. 直接拼控制 WebSocket 消息。
 5. 为单个能力新增专用系统接口。
-6. 在 `phone/ios` 或 `glass/src` 的通用运行时代码里写具体业务逻辑。
+6. 在 `host/phone` 或 `host/glass` 的宿主运行时代码里写具体业务逻辑。
 
 如果一个能力需要新的系统级能力，应先把需求抽象成 SDK 的公开接口，再由 SDK 维护者实现。

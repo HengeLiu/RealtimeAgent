@@ -19,11 +19,11 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
 DEFAULT_SERVER_CONFIG = REPO_ROOT / "openaiglass-sdk/config/local_server.env"
 DEFAULT_PREFLIGHT_REPORT = REPO_ROOT / "logs/sdk-preflight-current.json"
-PHONE_APP_CONFIG = APP_ROOT / "phone/ios/GlassesVideoReceiver/AppConfig.plist"
-PHONE_PROJECT = APP_ROOT / "phone/ios/GlassesVideoReceiver.xcodeproj"
-GLASS_PROJECT = APP_ROOT / "glass/src"
-GLASS_KCONFIG = APP_ROOT / "glass/src/main/Kconfig.projbuild"
-GLASS_LOCAL_CONFIG = APP_ROOT / "glass/config/local_build.env"
+PHONE_APP_CONFIG = APP_ROOT / "host/phone/ios/GlassesVideoReceiver/AppConfig.plist"
+PHONE_PROJECT = APP_ROOT / "host/phone/ios/GlassesVideoReceiver.xcodeproj"
+GLASS_PROJECT = APP_ROOT / "host/glass/src"
+GLASS_KCONFIG = APP_ROOT / "host/glass/src/main/Kconfig.projbuild"
+GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
 
 
 @dataclass(slots=True)
@@ -342,7 +342,7 @@ def check_config_alignment(server_config_path: Path) -> LiveCheckResult:
     if expected_phone_url and phone_server_url != expected_phone_url:
         failures.append("手机 AppConfig.plist serverBaseURLString 与 SERVER_PUBLIC_HOST/PORT 不一致")
     if expected_glass_ws and glass_server_ws_uri != expected_glass_ws:
-        failures.append("眼镜 openaiglass-for-blind/glass/config/local_build.env 中 GLASS_SERVER_WS_URI 与 SERVER_PUBLIC_HOST/PORT 不一致")
+        failures.append("眼镜 openaiglass-for-blind/host/glass/config/local_build.env 中 GLASS_SERVER_WS_URI 与 SERVER_PUBLIC_HOST/PORT 不一致")
 
     return LiveCheckResult(
         name="config_alignment",

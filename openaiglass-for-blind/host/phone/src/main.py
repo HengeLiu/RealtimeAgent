@@ -1,7 +1,7 @@
 """桌面环境下的手机协议调试入口。
 
 当前文件仅用于本地协议验证与桌面联调，不作为 iOS 手机端正式实现。
-正式手机端实现请参考 `phone/ios/GlassesVideoReceiver.xcodeproj`。
+正式手机端实现请参考 `host/phone/ios/GlassesVideoReceiver.xcodeproj`。
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ import threading
 import time
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-SERVER_SRC_DIR = ROOT_DIR / "server" / "src"
-if str(SERVER_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SERVER_SRC_DIR))
+APP_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = APP_ROOT.parent
+SDK_PYTHON_DIR = REPO_ROOT / "openaiglass-sdk" / "python"
+if str(SDK_PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(SDK_PYTHON_DIR))
 
 from protocol.codec.json_codec import JsonMessageCodec
 from protocol.media import MediaFrame

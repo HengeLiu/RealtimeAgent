@@ -15,15 +15,15 @@
 | [openaiglass-sdk/docs](./openaiglass-sdk/docs) | SDK 架构、协议、模型、运行时和发布文档。 |
 | [openaiglass-sdk/tests](./openaiglass-sdk/tests) | SDK 单元、集成、公共契约和兼容性测试。 |
 | [openaiglass-for-blind](./openaiglass-for-blind) | 盲人 AI 眼镜真实场景工程，包含业务能力、三端工程、场景资产和 SDK 使用说明。 |
-| [openaiglass-for-blind/phone](./openaiglass-for-blind/phone) | 手机端工程。 |
-| [openaiglass-for-blind/glass](./openaiglass-for-blind/glass) | 眼镜端工程。 |
+| [openaiglass-for-blind/host](./openaiglass-for-blind/host) | 盲人 AI 眼镜产品宿主，包含很薄的服务端、手机端和眼镜端入口。 |
+| [openaiglass-for-blind/capabilities](./openaiglass-for-blind/capabilities) | 盲人 AI 眼镜业务能力集合。 |
 | [openaiglass-for-blind/scripts](./openaiglass-for-blind/scripts) | 真实场景启动、回放和联调脚本。 |
 
 ## 常用命令
 
 ```bash
 PYTHONPATH=openaiglass-sdk/python:openaiglass-for-blind:. uv run python -m app.main
-PYTHONPATH=openaiglass-sdk/python:openaiglass-for-blind:. uv run python openaiglass-for-blind/server/main.py
+PYTHONPATH=openaiglass-sdk/python:openaiglass-for-blind:. uv run python openaiglass-for-blind/host/server/main.py
 uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
 uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py --report logs/sdk-preflight-current.json
 uv run python openaiglass-sdk/scripts/run_sdk_package_check.py
