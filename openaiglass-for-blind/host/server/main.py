@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = ROOT_DIR.parent
-for path in (REPO_ROOT / "openaiglass-sdk/python", ROOT_DIR, REPO_ROOT):
+for path in (REPO_ROOT / "openaiglass-sdk/server-python", ROOT_DIR, REPO_ROOT):
     path_text = str(path)
     if path_text not in sys.path:
         sys.path.insert(0, path_text)

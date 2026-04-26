@@ -15,7 +15,7 @@ pip install openaiglasses-sdk
 当前仓库内本地验证使用：
 
 ```bash
-pip install ./openaiglass-sdk/python
+pip install ./openaiglass-sdk/server-python
 ```
 
 ## 最小服务端能力

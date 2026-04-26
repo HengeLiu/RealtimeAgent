@@ -19,10 +19,10 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
 DEFAULT_SERVER_CONFIG = REPO_ROOT / "openaiglass-sdk/config/local_server.env"
 DEFAULT_PREFLIGHT_REPORT = REPO_ROOT / "logs/sdk-preflight-current.json"
-PHONE_APP_CONFIG = APP_ROOT / "host/phone/ios/GlassesVideoReceiver/AppConfig.plist"
-PHONE_PROJECT = APP_ROOT / "host/phone/ios/GlassesVideoReceiver.xcodeproj"
-GLASS_PROJECT = APP_ROOT / "host/glass/src"
-GLASS_KCONFIG = APP_ROOT / "host/glass/src/main/Kconfig.projbuild"
+PHONE_APP_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
+PHONE_PROJECT = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj"
+GLASS_PROJECT = REPO_ROOT / "openaiglass-sdk/glass-esp32"
+GLASS_KCONFIG = REPO_ROOT / "openaiglass-sdk/glass-esp32/main/Kconfig.projbuild"
 GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 SDK_ROOT = Path(__file__).resolve().parents[1]
 ROOT_DIR = SDK_ROOT.parent
-SDK_DIR = SDK_ROOT / "python"
+SDK_DIR = SDK_ROOT / "server-python"
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> dict[str, object]:

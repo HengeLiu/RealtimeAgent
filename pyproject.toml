@@ -10,6 +10,6 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["openaiglass-sdk/python", "openaiglass-sdk/server-compat/src", "openaiglass-for-blind", "."]
+pythonpath = ["openaiglass-sdk/server-python", "openaiglass-for-blind", "."]
 testpaths = ["openaiglass-sdk/tests"]
 addopts = "-q"

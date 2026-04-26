@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SDK_PYTHON = REPO_ROOT / "openaiglass-sdk/python"
+SDK_PYTHON = REPO_ROOT / "openaiglass-sdk/server-python"
 BLIND_APP = REPO_ROOT / "openaiglass-for-blind"
 
 for path in (REPO_ROOT, SDK_PYTHON, BLIND_APP):

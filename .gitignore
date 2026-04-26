@@ -20,6 +20,14 @@ dist/
 build/
 
 # ESP-IDF generated artifacts
+openaiglass-sdk/glass-esp32/build/
+openaiglass-sdk/glass-esp32/managed_components/
+openaiglass-sdk/glass-esp32/**/*.bin
+openaiglass-sdk/glass-esp32/sdkconfig
+openaiglass-sdk/glass-esp32/sdkconfig.old
+openaiglass-sdk/glass-esp32/sdkconfig.local
+openaiglass-sdk/glass-esp32/sdkconfig.local.old
+openaiglass-sdk/glass-esp32/dependencies.lock
 openaiglass-for-blind/glass/**/build/
 openaiglass-for-blind/glass/**/managed_components/
 openaiglass-for-blind/glass/**/*.bin
@@ -40,6 +48,14 @@ openaiglass-for-blind/host/glass/src/dependencies.lock
 openaiglass-for-blind/host/glass/config/local_build.env
 
 # iOS generated artifacts
+openaiglass-sdk/phone-ios/build*
+openaiglass-sdk/phone-ios/DerivedData/
+openaiglass-sdk/phone-ios/**/*.xcresult
+openaiglass-sdk/phone-ios/**/xcuserdata/
+openaiglass-sdk/phone-ios/**/*.xcuserstate
+openaiglass-sdk/phone-ios/**/ModuleCache.noindex/
+openaiglass-sdk/phone-ios/**/SDKStatCaches.noindex/
+openaiglass-sdk/phone-ios/**/CompilationCache.noindex/
 openaiglass-for-blind/phone/ios/build*
 openaiglass-for-blind/phone/ios/DerivedData/
 openaiglass-for-blind/phone/ios/**/*.xcresult

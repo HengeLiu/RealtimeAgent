@@ -6,7 +6,9 @@
 
 | 目录 | 职责 |
 | --- | --- |
-| [python](./python) | Python SDK 包源码，包含协议、运行时、agent-core、backend-task-core、公开扩展面和测试工具。 |
+| [server-python](./server-python) | 服务端 Python SDK 包源码，包含协议、运行时、agent-core、backend-task-core、公开扩展面和测试工具。 |
+| [phone-ios](./phone-ios) | iOS 通用手机 SDK 运行时工程，承载注册、控制连接、视频接收和手机任务运行时。 |
+| [glass-esp32](./glass-esp32) | ESP32 通用眼镜 SDK 运行时工程，承载控制连接、音频、摄像头和端侧命令处理。 |
 | [docs](./docs) | SDK 架构、协议、模型、测试、联调、打包和发布文档。 |
 | [tests](./tests) | SDK 单元测试、集成测试、公共契约测试和盲人业务兼容性测试。 |
 | [testdata/contracts](./testdata/contracts) | SDK 公共对象与协议金样。 |

@@ -267,7 +267,7 @@ start_local() {
   (
     cd "${REPO_ROOT}" || exit 1
     env \
-      PYTHONPATH=openaiglass-sdk/python:openaiglass-for-blind:. \
+      PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
       SERVER_HOST="${HOST}" \
       SERVER_PORT="${PORT}" \
       LOG_LEVEL="${LOG_LEVEL}" \

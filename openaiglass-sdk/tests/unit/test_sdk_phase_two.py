@@ -825,7 +825,7 @@ def test_sdk_package_does_not_import_blind_business_code() -> None:
     1. SDK 源码中不存在对盲人业务代码的导入。
     """
 
-    sdk_root = ROOT / "openaiglass-sdk/python/openaiglasses"
+    sdk_root = ROOT / "openaiglass-sdk/server-python/openaiglasses"
     offenders: list[str] = []
     for path in sdk_root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))

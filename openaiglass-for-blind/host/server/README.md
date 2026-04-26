@@ -5,5 +5,5 @@
 当前入口：
 
 ```bash
-PYTHONPATH=../openaiglass-sdk/python:openaiglass-for-blind:. python openaiglass-for-blind/host/server/main.py
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. python openaiglass-for-blind/host/server/main.py
 ```

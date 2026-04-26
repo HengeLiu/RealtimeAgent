@@ -12,7 +12,7 @@ from typing import Any
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
 sys.path.insert(0, str(APP_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "openaiglass-sdk/python"))
+sys.path.insert(0, str(REPO_ROOT / "openaiglass-sdk/server-python"))
 
 from host.server.main import create_sdk  # noqa: E402
 from openaiglasses.testing import ScenarioRunner  # noqa: E402

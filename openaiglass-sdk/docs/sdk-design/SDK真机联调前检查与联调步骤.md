@@ -46,7 +46,7 @@ bash script/run_sdk_live_check.sh --report logs/sdk-live-check.json
 
 并同步到：
 
-1. 手机 `host/phone/ios/GlassesVideoReceiver/AppConfig.plist`
+1. 手机 `../../openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist`
 2. 眼镜 `host/glass/config/local_build.env`
 
 预检通过的最低标准：
@@ -80,7 +80,7 @@ bash script/sync_sdk_live_config.sh
 bash script/run_sdk_live_check.sh --report logs/sdk-live-check-before-start.json
 bash script/run_server.sh
 bash script/run_sdk_live_check.sh --require-server --report logs/sdk-live-check-after-start.json
-bash host/phone/ios/GlassesVideoReceiver.xcodeproj
+bash ../../openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj
 bash scripts/run_glass.sh
 ```
 

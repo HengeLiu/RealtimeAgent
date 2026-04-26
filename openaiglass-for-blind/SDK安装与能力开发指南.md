@@ -32,7 +32,7 @@ pip install openaiglasses-sdk
 当前仓库本地开发或发布前验证，可以执行：
 
 ```bash
-pip install ./openaiglass-sdk/python
+pip install ./openaiglass-sdk/server-python
 ```
 
 安装后，公开导入入口是：
@@ -346,8 +346,8 @@ bash scripts/run_sdk_live_check.sh --report ../logs/sdk-live-check-blind-dev.jso
 
 为了保持能力可移植，业务代码不要：
 
-1. 修改 `openaiglass-sdk/python` 内部运行时。
-2. 修改 `openaiglass-sdk/python` 内部运行时。
+1. 修改 `openaiglass-sdk/server-python` 内部运行时。
+2. 修改 `openaiglass-sdk/server-python` 内部运行时。
 3. 直接读写设备绑定表。
 4. 直接拼控制 WebSocket 消息。
 5. 为单个能力新增专用系统接口。
