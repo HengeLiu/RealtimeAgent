@@ -107,21 +107,16 @@ openaiglass-for-blind/config/local_server.env
 openaiglass-for-blind/config/local_server.env.example
 ```
 
-打开工程：
+业务开发者通过业务工程入口打开手机端，不直接进入 SDK 目录：
 
 ```bash
-open openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj
+bash openaiglass-for-blind/scripts/run_phone.sh open
 ```
 
 命令行构建示例：
 
 ```bash
-xcodebuild \
-  -project openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj \
-  -scheme GlassesVideoReceiver \
-  -sdk iphonesimulator \
-  -configuration Debug \
-  build CODE_SIGNING_ALLOWED=NO
+bash openaiglass-for-blind/scripts/run_phone.sh build-sim
 ```
 
 ### 2.3 ESP32 眼镜 SDK 运行时
@@ -719,7 +714,7 @@ LOG_LEVEL=DEBUG bash openaiglass-for-blind/scripts/run_server.sh
 iOS 手机端：
 
 ```bash
-open openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj
+bash openaiglass-for-blind/scripts/run_phone.sh open
 ```
 
 眼镜端：

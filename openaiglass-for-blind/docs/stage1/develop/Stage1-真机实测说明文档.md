@@ -199,11 +199,24 @@ rg "register|heartbeat|bind|phone|glass|task|notification|error|exception" ../lo
 
 ## 7. 启动手机端
 
-1. 打开 `../openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj`。
-2. 选择真机 iPhone。
-3. 构建并运行。
-4. 允许摄像头和局域网访问权限。
-5. 在 App 页面确认服务端地址、手机设备编号和目标眼镜编号。
+业务功能开发者不要直接进入 `openaiglass-sdk` 目录。手机端统一通过当前业务工程入口启动：
+
+```bash
+bash scripts/run_phone.sh open
+```
+
+该入口会先执行业务配置同步，再打开 iOS 手机运行时工程。后续操作：
+
+1. 选择真机 iPhone。
+2. 构建并运行。
+3. 允许摄像头和局域网访问权限。
+4. 在 App 页面确认服务端地址、手机设备编号和目标眼镜编号。
+
+如只想先验证手机端工程是否可构建，可执行：
+
+```bash
+bash scripts/run_phone.sh build-sim
+```
 
 服务端运行态应看到：
 

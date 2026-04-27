@@ -25,4 +25,4 @@ uv run python scripts/run_sdk_preflight.py --report ../logs/sdk-preflight-curren
 bash scripts/sync_sdk_live_config.sh
 ```
 
-跨设备启动顺序：先启动服务端，再启动手机端 iOS 工程，最后启动或烧录眼镜端工程。
+跨设备启动顺序：先启动服务端，再通过 `bash scripts/run_phone.sh open` 启动手机端入口，最后启动或烧录眼镜端工程。

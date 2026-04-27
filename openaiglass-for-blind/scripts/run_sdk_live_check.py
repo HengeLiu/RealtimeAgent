@@ -228,6 +228,7 @@ def check_paths() -> LiveCheckResult:
     start = perf_counter()
     paths = {
         "server_script": APP_ROOT / "scripts/run_server.sh",
+        "phone_script": APP_ROOT / "scripts/run_phone.sh",
         "sdk_preflight_script": APP_ROOT / "scripts/run_sdk_preflight.py",
         "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
         "phone_project": PHONE_PROJECT,

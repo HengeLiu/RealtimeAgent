@@ -12,3 +12,15 @@ bash scripts/sync_sdk_live_config.sh
 ```
 
 同步脚本会把业务配置写入 SDK iOS 运行时工程的 `AppConfig.plist`，该文件只是运行目标，不是业务配置源。
+
+业务开发者启动手机端时使用本目录所在业务工程提供的入口，不直接进入 SDK 目录：
+
+```bash
+bash scripts/run_phone.sh open
+```
+
+如只需要验证 iOS 工程可构建：
+
+```bash
+bash scripts/run_phone.sh build-sim
+```
