@@ -59,7 +59,7 @@ iOS SDK 运行时位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-
 
 它负责：
 
-1. 从 `AppConfig.plist` 读取服务端地址、手机设备编号、配对令牌和目标眼镜编号。
+1. 从业务工程同步生成的 `AppConfig.plist` 读取服务端地址、手机设备编号、配对令牌和目标眼镜编号。
 2. 自动连接服务端 `/ws/control`，完成手机注册和心跳。
 3. 在本机启动 `/ws/camera` 接收服务，接收眼镜推送的 JPEG 视频帧。
 4. 承载手机侧任务，执行手机侧能力插件。
@@ -68,7 +68,19 @@ iOS SDK 运行时位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-
 
 `sdk-v2` 起，iOS 运行时已经支持多业务能力并存。业务插件应通过 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 按服务端下发的 `task_type` 注册；运行时收到 `sdk.phone.task.start` 后会按 `task_type` 选择对应业务插件。旧的 `PhoneCapabilityRuntimeFactory.register { ... }` 只作为单能力兼容入口保留，新能力不要再使用。
 
-当前配置文件：
+业务侧源配置文件：
+
+```text
+openaiglass-for-blind/host/phone/config/AppConfig.plist
+```
+
+模板：
+
+```text
+openaiglass-for-blind/host/phone/config/AppConfig.plist.example
+```
+
+同步脚本会把业务侧配置写入 iOS SDK 运行时工程：
 
 ```text
 openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist
@@ -82,6 +94,18 @@ openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist
 | `phoneDeviceID` | 手机设备编号，例如 `phone-001`。 |
 | `pairToken` | 手机配对令牌，必须与服务端配置一致。 |
 | `desiredGlassDeviceID` | 希望绑定的眼镜设备编号，例如 `glass-001`。 |
+
+服务端本地配置也归属业务工程：
+
+```text
+openaiglass-for-blind/config/local_server.env
+```
+
+模板：
+
+```text
+openaiglass-for-blind/config/local_server.env.example
+```
 
 打开工程：
 

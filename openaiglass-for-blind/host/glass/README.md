@@ -7,3 +7,10 @@
 ```bash
 bash scripts/run_glass.sh
 ```
+
+眼镜端本地构建配置源放在业务工程：
+
+```bash
+cp host/glass/config/local_build.env.example host/glass/config/local_build.env
+bash scripts/sync_sdk_live_config.sh
+```

@@ -1,4 +1,4 @@
-"""同步 SDK 真机联调配置。"""
+"""同步业务真机联调配置到三端运行时。"""
 
 from __future__ import annotations
 
@@ -10,20 +10,23 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
-SERVER_CONFIG = REPO_ROOT / "openaiglass-sdk/config/local_server.env"
-PHONE_APP_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
+SERVER_CONFIG = APP_ROOT / "config/local_server.env"
+SERVER_CONFIG_TEMPLATE = APP_ROOT / "config/local_server.env.example"
+PHONE_BUSINESS_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
+PHONE_BUSINESS_CONFIG_TEMPLATE = APP_ROOT / "host/phone/config/AppConfig.plist.example"
+PHONE_RUNTIME_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
 GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
 
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="同步 SDK 真机联调配置")
+    parser = argparse.ArgumentParser(description="同步业务真机联调配置到 SDK 三端运行时")
     parser.add_argument(
         "--server-config",
         type=str,
         default=str(SERVER_CONFIG),
-        help="服务端本地配置文件，默认 config/local_server.env",
+        help="业务服务端本地配置文件，默认 openaiglass-for-blind/config/local_server.env",
     )
     parser.add_argument(
         "--dry-run",
@@ -48,7 +51,7 @@ def read_env_file(path: Path) -> dict[str, str]:
 
     values: dict[str, str] = {}
     if not path.exists():
-        raise RuntimeError(f"配置文件不存在: {path}")
+        raise RuntimeError(f"配置文件不存在: {path}，请从 {SERVER_CONFIG_TEMPLATE} 复制后修改")
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -108,19 +111,39 @@ def upsert_env_lines(existing_text: str, updates: dict[str, str]) -> str:
     return "\n".join(output) + "\n"
 
 
-def sync_phone_config(*, server_url: str, phone_device_id: str, phone_token: str, glass_device_id: str, dry_run: bool) -> None:
-    """同步手机端 AppConfig.plist。"""
+def _read_phone_business_config() -> dict[str, object]:
+    """读取业务侧手机配置。
 
-    with PHONE_APP_CONFIG.open("rb") as file:
+    返回值：
+    1. 配置字典。业务配置不存在时读取 example，仍不存在时读取 SDK 运行时配置。
+    """
+
+    source = PHONE_BUSINESS_CONFIG
+    if not source.exists() and PHONE_BUSINESS_CONFIG_TEMPLATE.exists():
+        source = PHONE_BUSINESS_CONFIG_TEMPLATE
+    if not source.exists():
+        source = PHONE_RUNTIME_CONFIG
+    with source.open("rb") as file:
         payload = plistlib.load(file)
     if not isinstance(payload, dict):
         raise RuntimeError("AppConfig.plist 根节点不是字典")
+    return payload
+
+
+def sync_phone_config(*, server_url: str, phone_device_id: str, phone_token: str, glass_device_id: str, dry_run: bool) -> None:
+    """同步手机端业务配置和 SDK 运行时配置。"""
+
+    payload = _read_phone_business_config()
     payload["serverBaseURLString"] = server_url
     payload["phoneDeviceID"] = phone_device_id
     payload["pairToken"] = phone_token
     payload["desiredGlassDeviceID"] = glass_device_id
     if not dry_run:
-        with PHONE_APP_CONFIG.open("wb") as file:
+        PHONE_BUSINESS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        with PHONE_BUSINESS_CONFIG.open("wb") as file:
+            plistlib.dump(payload, file, sort_keys=False)
+        PHONE_RUNTIME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        with PHONE_RUNTIME_CONFIG.open("wb") as file:
             plistlib.dump(payload, file, sort_keys=False)
 
 
@@ -175,7 +198,8 @@ def main() -> int:
     )
 
     action = "将同步" if args.dry_run else "已同步"
-    print(f"{action}手机 AppConfig: {PHONE_APP_CONFIG}")
+    print(f"{action}业务手机配置: {PHONE_BUSINESS_CONFIG}")
+    print(f"{action}SDK iOS 运行时配置: {PHONE_RUNTIME_CONFIG}")
     print(f"{action}眼镜本地配置: {GLASS_LOCAL_CONFIG}")
     print(f"server_url={server_url}")
     print(f"glass_ws_uri={ws_uri}")

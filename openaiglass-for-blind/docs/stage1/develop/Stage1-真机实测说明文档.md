@@ -32,13 +32,13 @@
 4. 服务端配置文件应存在：
 
 ```text
-../openaiglass-sdk/config/local_server.env
+config/local_server.env
 ```
 
 5. 手机配置文件应存在：
 
 ```text
-../openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist
+host/phone/config/AppConfig.plist
 ```
 
 6. 眼镜本地构建配置应存在：
@@ -50,6 +50,8 @@ host/glass/config/local_build.env
 如缺少眼镜配置，可从模板生成：
 
 ```bash
+cp config/local_server.env.example config/local_server.env
+cp host/phone/config/AppConfig.plist.example host/phone/config/AppConfig.plist
 cp host/glass/config/local_build.env.example host/glass/config/local_build.env
 ```
 
@@ -110,7 +112,7 @@ ifconfig | grep "inet " | grep -v 127.0.0.1
 选择 iPhone 和眼镜都能访问的 IPv4 地址，写入：
 
 ```text
-../openaiglass-sdk/config/local_server.env
+config/local_server.env
 ```
 
 关键配置示例：
@@ -129,7 +131,7 @@ DEVICE_TOKEN_MAP=glass-001=pair-demo-token,phone-001=pair-demo-token
 bash scripts/sync_sdk_live_config.sh
 ```
 
-该脚本会根据服务端配置同步 iOS `AppConfig.plist` 和眼镜本地构建配置。
+该脚本会根据业务目录下的服务端配置同步业务手机配置、SDK iOS 运行时配置和眼镜本地构建配置。配置源仍在 `openaiglass-for-blind`，SDK 目录中的 iOS plist 只是运行时工程需要的生成目标。
 
 ### 5.3 执行真机前检查
 

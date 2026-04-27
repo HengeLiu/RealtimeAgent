@@ -17,9 +17,11 @@ from urllib.request import urlopen
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
-DEFAULT_SERVER_CONFIG = REPO_ROOT / "openaiglass-sdk/config/local_server.env"
+DEFAULT_SERVER_CONFIG = APP_ROOT / "config/local_server.env"
 DEFAULT_PREFLIGHT_REPORT = REPO_ROOT / "logs/sdk-preflight-current.json"
-PHONE_APP_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
+PHONE_APP_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
+PHONE_APP_CONFIG_TEMPLATE = APP_ROOT / "host/phone/config/AppConfig.plist.example"
+PHONE_RUNTIME_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
 PHONE_PROJECT = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj"
 GLASS_PROJECT = REPO_ROOT / "openaiglass-sdk/glass-esp32"
 GLASS_KCONFIG = REPO_ROOT / "openaiglass-sdk/glass-esp32/main/Kconfig.projbuild"
@@ -61,7 +63,7 @@ def parse_args() -> argparse.Namespace:
         "--server-config",
         type=str,
         default=str(DEFAULT_SERVER_CONFIG),
-        help="本地服务端配置文件路径，默认 config/local_server.env",
+        help="业务服务端配置文件路径，默认 openaiglass-for-blind/config/local_server.env",
     )
     parser.add_argument(
         "--preflight-report",
@@ -101,7 +103,8 @@ def _resolve_path(path_text: str) -> Path:
 
     path = Path(path_text)
     if not path.is_absolute():
-        path = REPO_ROOT / path
+        repo_candidate = REPO_ROOT / path
+        path = repo_candidate if repo_candidate.exists() else APP_ROOT / path
     return path.resolve()
 
 
@@ -182,9 +185,14 @@ def _parse_token_map(token_map: str) -> dict[str, str]:
 
 
 def _read_phone_config() -> dict[str, object]:
-    """读取 iOS 手机端 AppConfig.plist。"""
+    """读取业务侧 iOS 手机端 AppConfig.plist。"""
 
-    with PHONE_APP_CONFIG.open("rb") as file:
+    source = PHONE_APP_CONFIG
+    if not source.exists() and PHONE_APP_CONFIG_TEMPLATE.exists():
+        source = PHONE_APP_CONFIG_TEMPLATE
+    if not source.exists():
+        source = PHONE_RUNTIME_CONFIG
+    with source.open("rb") as file:
         payload = plistlib.load(file)
     if not isinstance(payload, dict):
         raise RuntimeError("AppConfig.plist 根节点不是字典")
@@ -223,7 +231,9 @@ def check_paths() -> LiveCheckResult:
         "sdk_preflight_script": APP_ROOT / "scripts/run_sdk_preflight.py",
         "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
         "phone_project": PHONE_PROJECT,
-        "phone_app_config": PHONE_APP_CONFIG,
+        "phone_business_config": PHONE_APP_CONFIG,
+        "phone_business_config_template": PHONE_APP_CONFIG_TEMPLATE,
+        "phone_runtime_config": PHONE_RUNTIME_CONFIG,
         "glass_project": GLASS_PROJECT,
         "glass_kconfig": GLASS_KCONFIG,
         "glass_local_config": GLASS_LOCAL_CONFIG,
@@ -324,7 +334,9 @@ def check_config_alignment(server_config_path: Path) -> LiveCheckResult:
     failures: list[str] = []
     warnings: list[str] = []
     if not server_config_path.exists():
-        failures.append("缺少 openaiglass-sdk/config/local_server.env")
+        failures.append("缺少 openaiglass-for-blind/config/local_server.env")
+    if not PHONE_APP_CONFIG.exists():
+        failures.append("缺少 openaiglass-for-blind/host/phone/config/AppConfig.plist")
     if not token_map:
         failures.append("DEVICE_TOKEN_MAP 为空或格式非法")
     if public_host and public_host not in local_ipv4_addresses:
@@ -332,7 +344,7 @@ def check_config_alignment(server_config_path: Path) -> LiveCheckResult:
     if phone_id not in token_map:
         failures.append(f"DEVICE_TOKEN_MAP 缺少手机设备: {phone_id}")
     elif token_map[phone_id] != phone_token:
-        failures.append("手机 AppConfig.plist pairToken 与 DEVICE_TOKEN_MAP 不一致")
+        failures.append("业务手机 AppConfig.plist pairToken 与 DEVICE_TOKEN_MAP 不一致")
     if glass_id not in token_map:
         failures.append(f"DEVICE_TOKEN_MAP 缺少眼镜设备: {glass_id}")
     elif token_map[glass_id] != glass_token:
@@ -340,7 +352,7 @@ def check_config_alignment(server_config_path: Path) -> LiveCheckResult:
     if desired_glass_id and desired_glass_id != glass_id:
         failures.append("手机 desiredGlassDeviceID 与眼镜 GLASS_DEVICE_ID 默认值不一致")
     if expected_phone_url and phone_server_url != expected_phone_url:
-        failures.append("手机 AppConfig.plist serverBaseURLString 与 SERVER_PUBLIC_HOST/PORT 不一致")
+        failures.append("业务手机 AppConfig.plist serverBaseURLString 与 SERVER_PUBLIC_HOST/PORT 不一致")
     if expected_glass_ws and glass_server_ws_uri != expected_glass_ws:
         failures.append("眼镜 openaiglass-for-blind/host/glass/config/local_build.env 中 GLASS_SERVER_WS_URI 与 SERVER_PUBLIC_HOST/PORT 不一致")
 

@@ -3,3 +3,12 @@
 本目录放盲人 AI 眼镜手机端宿主装配说明和产品侧配置。通用 iOS 手机 SDK 运行时已经移到 [../../../openaiglass-sdk/phone-ios](../../../openaiglass-sdk/phone-ios)，负责设备注册、视频接收、手机侧任务承载和与服务端运行时通信。
 
 具体业务能力插件不放在手机宿主里，当前找物体能力的 iOS 插件源码位于 [../../capabilities/find_object/phone/ios](../../capabilities/find_object/phone/ios)。
+
+手机端本地配置源放在本业务工程：
+
+```bash
+cp host/phone/config/AppConfig.plist.example host/phone/config/AppConfig.plist
+bash scripts/sync_sdk_live_config.sh
+```
+
+同步脚本会把业务配置写入 SDK iOS 运行时工程的 `AppConfig.plist`，该文件只是运行目标，不是业务配置源。

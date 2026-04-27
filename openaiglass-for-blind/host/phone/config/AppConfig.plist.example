@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>serverBaseURLString</key>
+	<string>http://192.168.1.23:8765</string>
+	<key>phoneDeviceID</key>
+	<string>phone-001</string>
+	<key>pairToken</key>
+	<string>pair-phone-token</string>
+	<key>desiredGlassDeviceID</key>
+	<string>glass-001</string>
+</dict>
+</plist>
