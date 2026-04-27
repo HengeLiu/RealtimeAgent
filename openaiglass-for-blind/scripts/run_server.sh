@@ -216,29 +216,90 @@ server_running() {
   kill -0 "${pid}" >/dev/null 2>&1
 }
 
-stop_local() {
-  if ! server_running; then
-    echo "[stop] 服务端未运行"
-    rm -f "${PID_FILE}"
+port_listeners() {
+  if ! command -v lsof >/dev/null 2>&1; then
+    return 0
+  fi
+  lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true
+}
+
+pid_command() {
+  local pid="$1"
+  ps -p "${pid}" -o command= 2>/dev/null || true
+}
+
+is_project_server_pid() {
+  local pid="$1"
+  local command_text
+  command_text="$(pid_command "${pid}")"
+  [[ "${command_text}" == *"host.server.main"* || "${command_text}" == *"openaiglass-for-blind"* || "${command_text}" == *"openaiglass-sdk/server-python"* ]]
+}
+
+stop_pid_gracefully() {
+  local pid="$1"
+  local label="$2"
+  if ! kill -0 "${pid}" >/dev/null 2>&1; then
     return 0
   fi
 
-  local pid
-  pid="$(cat "${PID_FILE}")"
-  echo "[stop] 停止服务端: pid=${pid}"
+  echo "[stop] 停止${label}: pid=${pid}"
   kill "${pid}" >/dev/null 2>&1 || true
 
   for _ in $(seq 1 20); do
     if ! kill -0 "${pid}" >/dev/null 2>&1; then
-      rm -f "${PID_FILE}"
-      echo "[stop] 已停止"
+      echo "[stop] 已停止${label}: pid=${pid}"
       return 0
     fi
     sleep 0.2
   done
 
-  echo "[stop] 进程仍未退出，执行强制停止"
+  echo "[stop] ${label}仍未退出，执行强制停止: pid=${pid}"
   kill -9 "${pid}" >/dev/null 2>&1 || true
+}
+
+stop_project_port_listeners() {
+  local pids
+  pids="$(port_listeners)"
+  if [[ -z "${pids}" ]]; then
+    return 0
+  fi
+
+  local pid
+  for pid in ${pids}; do
+    if is_project_server_pid "${pid}"; then
+      stop_pid_gracefully "${pid}" "占用端口 ${PORT} 的旧服务端"
+    else
+      echo "[stop] 端口 ${PORT} 被非本项目进程占用，未自动停止: pid=${pid} command=$(pid_command "${pid}")" >&2
+    fi
+  done
+  return 0
+}
+
+ensure_port_available() {
+  local pids
+  pids="$(port_listeners)"
+  if [[ -z "${pids}" ]]; then
+    return 0
+  fi
+  echo "[start] 端口 ${PORT} 已被占用：" >&2
+  local pid
+  for pid in ${pids}; do
+    echo "  pid=${pid} command=$(pid_command "${pid}")" >&2
+  done
+  echo "[start] 请先执行 bash scripts/run_server.sh local stop" >&2
+  return 1
+}
+
+stop_local() {
+  if server_running; then
+    local pid
+    pid="$(cat "${PID_FILE}")"
+    stop_pid_gracefully "${pid}" "服务端"
+  else
+    echo "[stop] PID 文件中的服务端未运行，继续检查端口 ${PORT}"
+  fi
+
+  stop_project_port_listeners || true
   rm -f "${PID_FILE}"
 }
 
@@ -252,6 +313,8 @@ start_local() {
     echo "[start] 服务端已在运行: pid=$(cat "${PID_FILE}")"
     return 0
   fi
+  rm -f "${PID_FILE}"
+  ensure_port_available
 
   echo "[start] 启动本地服务端"
   echo "[start] host=${HOST} port=${PORT}"
@@ -266,7 +329,7 @@ start_local() {
 
   (
     cd "${REPO_ROOT}" || exit 1
-    env \
+    exec nohup env \
       PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
       SERVER_HOST="${HOST}" \
       SERVER_PORT="${PORT}" \
@@ -296,12 +359,22 @@ start_local() {
   if ! server_running; then
     echo "[start] 服务端启动失败，最近日志如下：" >&2
     tail -n 120 "${LOG_FILE}" >&2 || true
+    rm -f "${PID_FILE}"
     exit 1
   fi
 
   if ! curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
     echo "[start] 健康检查失败，最近日志如下：" >&2
     tail -n 120 "${LOG_FILE}" >&2 || true
+    rm -f "${PID_FILE}"
+    exit 1
+  fi
+
+  sleep 0.5
+  if ! server_running || ! curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+    echo "[start] 服务端启动后立即退出，最近日志如下：" >&2
+    tail -n 120 "${LOG_FILE}" >&2 || true
+    rm -f "${PID_FILE}"
     exit 1
   fi
 
