@@ -293,6 +293,7 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
                             "session_id": runtime.session_id,
                             "target_ws_uri": runtime.input.get("target_ws_uri"),
                             "frame_interval_ms": runtime.input.get("frame_interval_ms"),
+                            "context": dict(runtime.context),
                         },
                     },
                 )

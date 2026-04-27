@@ -1623,3 +1623,7 @@ class ControlRuntime(CameraGateway):
                     "stream_id": stream_id,
                 },
             )
+            return
+        if event.event_name in {"task.completed", "task.failed"}:
+            with self._lock:
+                self._active_phone_video_task_ids_by_glass.pop(event.device_id, None)

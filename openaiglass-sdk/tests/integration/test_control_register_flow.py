@@ -10,6 +10,7 @@ import struct
 import threading
 import time
 import unittest
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from api.http_server import build_server_handle
@@ -878,6 +879,172 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             self.assertEqual(camera_start.name, "sensor.camera.stream.start")
             self.assertEqual(camera_start.payload["target_ws_uri"], "ws://127.0.0.1:19001/ws/camera")
             self.assertEqual(camera_start.payload["frame_interval_ms"], 350)
+        finally:
+            glass.close()
+            phone.close()
+
+    def test_phone_video_link_report_event_updates_task_phase(self) -> None:
+        """测试目标：验证手机上报 peer-link 和视频流事件能推进系统任务阶段。
+
+        测试方法：
+        1. 注册并绑定眼镜与手机，通过调试接口创建视频直连任务。
+        2. 手机依次上报 `peer_link.ready` 与 `camera.stream.started`。
+        3. 检查接口返回的任务上下文阶段。
+
+        预期结果：
+        1. 任务阶段可从 `peer_link_preparing` 推进到 `peer_link_ready`。
+        2. 视频开始后任务阶段进入 `streaming`。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+
+            glass.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="request",
+                        name="device.bind",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "glass_device_id": "glass-001",
+                            "phone_device_id": "phone-001",
+                        },
+                    )
+                ).decode("utf-8")
+            )
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            started = self._post_json(
+                "/api/debug/phone-video-link/start",
+                {
+                    "glass_device_id": "glass-001",
+                    "frame_interval_ms": 350,
+                    "reason": "report_event_test",
+                },
+            )
+            task_id = started["task"]["task_id"]
+            self.assertEqual(started["task"]["context"]["phase"], "peer_link_preparing")
+            camera_start = self.codec.decode(glass.recv_text())
+            self.assertEqual(camera_start.name, "sensor.camera.stream.start")
+
+            ready = self._post_json(
+                "/api/tasks/report-event",
+                {
+                    "task_id": task_id,
+                    "phone_device_id": "phone-001",
+                    "event_name": "peer_link.ready",
+                    "payload": {
+                        "stream_id": camera_start.payload["stream_id"],
+                        "transport": "lan",
+                    },
+                },
+            )
+            self.assertEqual(ready["task"]["state"], "running")
+            self.assertEqual(ready["task"]["context"]["phase"], "peer_link_ready")
+
+            streaming = self._post_json(
+                "/api/tasks/report-event",
+                {
+                    "task_id": task_id,
+                    "phone_device_id": "phone-001",
+                    "event_name": "camera.stream.started",
+                    "payload": {
+                        "stream_id": camera_start.payload["stream_id"],
+                        "width": 640,
+                        "height": 480,
+                    },
+                },
+            )
+            self.assertEqual(streaming["task"]["state"], "running")
+            self.assertEqual(streaming["task"]["context"]["phase"], "streaming")
+        finally:
+            glass.close()
+            phone.close()
+
+    def test_phone_video_link_report_event_rejects_wrong_phone(self) -> None:
+        """测试目标：验证错误手机不能上报视频直连任务事件。
+
+        测试方法：
+        1. 注册并绑定眼镜与正确手机，创建视频直连任务。
+        2. 使用另一个手机编号调用 `/api/tasks/report-event`。
+
+        预期结果：
+        1. 服务端返回 400。
+        2. 错误详情中包含期望手机和实际上报手机。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(glass, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(glass.recv_text())
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                camera_sink_ws_uri="ws://127.0.0.1:19001/ws/camera",
+            )
+            self.codec.decode(phone.recv_text())
+
+            glass.send_text(
+                self.codec.encode(
+                    create_control_message(
+                        semantic="request",
+                        name="device.bind",
+                        source=self._glass_endpoint(),
+                        target=self._server_endpoint(),
+                        payload={
+                            "glass_device_id": "glass-001",
+                            "phone_device_id": "phone-001",
+                        },
+                    )
+                ).decode("utf-8")
+            )
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            started = self._post_json(
+                "/api/debug/phone-video-link/start",
+                {
+                    "glass_device_id": "glass-001",
+                    "reason": "wrong_phone_test",
+                },
+            )
+
+            with self.assertRaises(HTTPError) as caught:
+                self._post_json(
+                    "/api/tasks/report-event",
+                    {
+                        "task_id": started["task"]["task_id"],
+                        "phone_device_id": "phone-999",
+                        "event_name": "peer_link.ready",
+                        "payload": {},
+                    },
+                )
+
+            self.assertEqual(caught.exception.code, 400)
+            error_payload = json.loads(caught.exception.read().decode("utf-8"))
+            details = error_payload["error"]["details"]
+            self.assertEqual(details["expected_phone_device_id"], "phone-001")
+            self.assertEqual(details["actual_phone_device_id"], "phone-999")
         finally:
             glass.close()
             phone.close()

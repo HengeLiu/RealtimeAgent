@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何完成离线验证和真机联调。
 
-当前指南对应 SDK 版本：`sdk-v3`。本版本新增业务上下文统一 MCP 调用入口，并清理了 SDK 预检中 iOS SDK 测试夹具误报业务关键词的问题。
+当前指南对应 SDK 版本：`sdk-v4`。本版本新增 `phone_video_link_task` 最小 peer-link 生命周期语义，支持查询、取消、端侧事件回流、结构化失败和错误手机拒绝上报；实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -425,6 +425,65 @@ class DemoTask(BaseTask):
 ```
 
 Task 中不要直接持有 WebSocket 连接，不要自己维护任务状态表。任务状态通过 `TaskContext` 更新，设备能力通过 `context.device_group` 获取。
+
+### 6.1 视频直连系统任务
+
+`sdk-v4` 起，`phone_video_link_task` 是 SDK 系统任务。业务能力仍然只通过公开入口启动、查询和取消，不需要自己实现 peer-link 状态机。
+
+```python
+link = context.device_group.start_phone_video_link(
+    reason="need_live_frames",
+    params={"frame_interval_ms": 350},
+)
+
+current = context.device_group.query_task(link["task_id"])
+if current.context.get("phase") == "streaming":
+    context.device_group.submit_notification(text="视频链路已就绪")
+
+context.device_group.cancel_task(link["task_id"])
+```
+
+任务查询结果中的关键字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `state` | 统一任务状态，可为 `running`、`completed`、`cancelled`、`failed`、`timeout`。 |
+| `context.phase` | 视频链路阶段，可为 `peer_link_preparing`、`peer_link_ready`、`streaming`、`stopping`、`completed`、`cancelled`、`failed`、`timeout`。 |
+| `context.stream_id` | 本次视频流编号，眼镜推流和手机上报事件都应携带。 |
+| `context.phone_device_id` | 绑定的手机编号。手机上报事件时必须一致，否则服务端拒绝。 |
+| `context.target_ws_uri` | 眼镜应推送视频帧的手机接收地址。 |
+| `context.last_peer_link_event` | 最近一次 peer-link 事件。 |
+| `context.last_camera_event` | 最近一次 camera stream 事件。 |
+| `error` / `context.last_error` | 结构化失败信息。 |
+
+端侧标准事件如下：
+
+| 事件名 | 上报时机 | SDK 行为 |
+| --- | --- | --- |
+| `peer_link.ready` | 手机确认已准备好接收眼镜推流。 | 任务阶段进入 `peer_link_ready`。 |
+| `camera.stream.started` | 手机已经收到或确认视频流开始。 | 任务阶段进入 `streaming`。 |
+| `peer_link.failed` | 建链失败，例如地址不可达、鉴权失败。 | 任务进入 `failed`，保留结构化错误。 |
+| `peer_link.broken` | 运行中链路断开。 | 任务进入 `failed`，保留结构化错误。 |
+| `peer_link.closed` | 手机主动关闭链路。 | 任务进入 `completed`。 |
+| `camera.stream.stopped` | 手机确认视频流已停止。 | 活动任务进入 `completed`；如果任务已取消，则保持 `cancelled` 终态。 |
+
+手机或眼镜可以通过服务端 HTTP 上报事件：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/tasks/report-event \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task_id": "task_xxx",
+    "phone_device_id": "phone-001",
+    "event_name": "peer_link.ready",
+    "payload": {
+      "stream_id": "stream_xxx",
+      "transport": "lan"
+    }
+  }'
+```
+
+业务侧不要在 `openaiglass-for-blind/capabilities` 内自行维护视频任务状态表，也不要自行绕过 SDK 给眼镜发送 `sensor.camera.stream.start/stop`。真实公网/NAT 穿透、自动重试、链路健康检查仍由 SDK 后续版本统一补齐。
 
 ## 7. 开发手机侧能力
 

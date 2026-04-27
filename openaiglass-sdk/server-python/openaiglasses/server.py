@@ -107,6 +107,18 @@ def _new_stream_id() -> str:
 class SdkSystemTaskRuntime:
     """由 SDK 托管的系统级任务运行时。"""
 
+    _TERMINAL_STATES = {"cancelled", "completed", "failed", "timeout"}
+    _PEER_LINK_EVENTS = {
+        "peer_link.ready",
+        "peer_link.failed",
+        "peer_link.broken",
+        "peer_link.closed",
+    }
+    _CAMERA_STREAM_EVENTS = {
+        "camera.stream.started",
+        "camera.stream.stopped",
+    }
+
     def __init__(self) -> None:
         self._event_bus = TaskEventBus()
         self._records: dict[str, TaskRuntime] = {}
@@ -161,9 +173,17 @@ class SdkSystemTaskRuntime:
                 "frame_interval_ms 必须大于 0",
                 details={"frame_interval_ms": frame_interval_ms},
             )
+        timeout_ms = int(input_data.get("timeout_ms") or 15000)
+        if timeout_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "timeout_ms 必须大于 0",
+                details={"timeout_ms": timeout_ms},
+            )
 
         task_id = _new_system_task_id()
         stream_id = str(input_data.get("stream_id") or "").strip() or _new_stream_id()
+        created_at_ms = now_ms()
         runtime = TaskRuntime(
             task_id=task_id,
             task_type=task_type,
@@ -177,15 +197,26 @@ class SdkSystemTaskRuntime:
                 "link_mode": str(input_data.get("link_mode") or "direct").strip() or "direct",
                 "reason": str(input_data.get("reason") or "agent_requested").strip() or "agent_requested",
                 "frame_interval_ms": frame_interval_ms,
+                "timeout_ms": timeout_ms,
                 "stream_id": stream_id,
             },
             context={
-                "phase": "link_prepared",
+                "phase": "peer_link_preparing",
                 "created_by": "sdk_system_task_runtime",
                 "glass_device_id": device_id,
                 "phone_device_id": phone_device_id,
                 "target_ws_uri": target_ws_uri,
+                "link_mode": str(input_data.get("link_mode") or "direct").strip() or "direct",
+                "stream_id": stream_id,
+                "frame_interval_ms": frame_interval_ms,
+                "timeout_ms": timeout_ms,
+                "deadline_at_ms": created_at_ms + timeout_ms,
+                "last_peer_link_event": None,
+                "last_camera_event": None,
+                "last_error": None,
             },
+            created_at_ms=created_at_ms,
+            updated_at_ms=created_at_ms,
         )
         runtime.started_at_ms = runtime.created_at_ms
         self._records[task_id] = runtime
@@ -218,6 +249,7 @@ class SdkSystemTaskRuntime:
                 "目标任务不存在",
                 details={"task_id": task_id},
             )
+        self._expire_if_needed(runtime)
         runtime.updated_at_ms = now_ms()
         return runtime
 
@@ -225,11 +257,25 @@ class SdkSystemTaskRuntime:
         """取消系统任务。"""
 
         runtime = self.query_task(task_id)
-        if runtime.state in {"cancelled", "completed", "failed", "timeout"}:
+        if runtime.state in self._TERMINAL_STATES:
             return runtime
+        runtime.context["phase"] = "stopping"
+        runtime.updated_at_ms = now_ms()
+        self._publish_event(
+            runtime=runtime,
+            event_name="task.stopping",
+            payload={
+                "message": "视频直连任务正在停止",
+                "phone_device_id": runtime.input.get("phone_device_id"),
+                "target_ws_uri": runtime.input.get("target_ws_uri"),
+                "stream_id": runtime.input.get("stream_id"),
+            },
+        )
         runtime.state = "cancelled"
         runtime.updated_at_ms = now_ms()
         runtime.completed_at_ms = runtime.updated_at_ms
+        runtime.context["phase"] = "cancelled"
+        runtime.context["cancelled_at_ms"] = runtime.updated_at_ms
         self._publish_event(
             runtime=runtime,
             event_name="task.cancelled",
@@ -242,12 +288,160 @@ class SdkSystemTaskRuntime:
         )
         return runtime
 
+    def dispatch_event(
+        self,
+        *,
+        task_id: str,
+        event_name: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "system",
+    ) -> TaskRuntime:
+        """接收端侧 peer-link 或视频流事件并推进系统任务状态。
+
+        主要逻辑：
+        1. 只接受 SDK 固化的最小 peer-link 和 camera stream 事件名。
+        2. 根据事件更新 `phase/state/context/result/error`。
+        3. 发布同名任务事件，终态变化时额外发布 `task.completed/task.failed`。
+
+        参数：
+        1. `task_id`：系统任务编号。
+        2. `event_name`：端侧上报事件名。
+        3. `payload`：端侧上报的结构化数据。
+        4. `source`：事件来源，通常是 `phone` 或 `glass`。
+
+        返回值：
+        1. 更新后的任务运行态。
+
+        异常情况：
+        1. 任务不存在或事件名不在标准集合内时抛出结构化错误。
+        """
+
+        runtime = self.query_task(task_id)
+        normalized_event = event_name.strip()
+        event_payload = dict(payload or {})
+        if normalized_event not in self._PEER_LINK_EVENTS | self._CAMERA_STREAM_EVENTS:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "系统视频直连任务不支持该事件名",
+                details={
+                    "task_id": task_id,
+                    "event_name": event_name,
+                    "supported_events": sorted(self._PEER_LINK_EVENTS | self._CAMERA_STREAM_EVENTS),
+                },
+            )
+
+        if runtime.state in self._TERMINAL_STATES:
+            runtime.context["last_ignored_event"] = {
+                "event_name": normalized_event,
+                "source": source,
+                "payload": event_payload,
+                "ts": now_ms(),
+            }
+            runtime.updated_at_ms = now_ms()
+            return runtime
+
+        if normalized_event in self._PEER_LINK_EVENTS:
+            runtime.context["last_peer_link_event"] = {
+                "event_name": normalized_event,
+                "source": source,
+                "payload": event_payload,
+                "ts": now_ms(),
+            }
+        if normalized_event in self._CAMERA_STREAM_EVENTS:
+            runtime.context["last_camera_event"] = {
+                "event_name": normalized_event,
+                "source": source,
+                "payload": event_payload,
+                "ts": now_ms(),
+            }
+
+        if normalized_event == "peer_link.ready":
+            runtime.state = "running"
+            runtime.context["phase"] = "peer_link_ready"
+            self._touch_runtime(runtime)
+            self._publish_event(
+                runtime=runtime,
+                event_name=normalized_event,
+                payload={"source": source, **event_payload},
+            )
+            return runtime
+
+        if normalized_event == "camera.stream.started":
+            runtime.state = "running"
+            runtime.context["phase"] = "streaming"
+            self._touch_runtime(runtime)
+            self._publish_event(
+                runtime=runtime,
+                event_name=normalized_event,
+                payload={"source": source, **event_payload},
+            )
+            return runtime
+
+        if normalized_event in {"peer_link.failed", "peer_link.broken"}:
+            error_code = normalized_event.replace(".", "_")
+            runtime.state = "failed"
+            runtime.context["phase"] = "failed"
+            runtime.error = {
+                "code": error_code,
+                "message": str(event_payload.get("message") or event_payload.get("reason") or "视频直连链路失败"),
+                "details": {
+                    "event_name": normalized_event,
+                    "source": source,
+                    "payload": event_payload,
+                },
+            }
+            runtime.context["last_error"] = dict(runtime.error)
+            self._complete_runtime(runtime)
+            self._publish_event(
+                runtime=runtime,
+                event_name=normalized_event,
+                payload={"source": source, **event_payload},
+                priority="high",
+            )
+            self._publish_event(
+                runtime=runtime,
+                event_name="task.failed",
+                payload={
+                    **dict(runtime.error),
+                    "stream_id": runtime.input.get("stream_id"),
+                    "phone_device_id": runtime.input.get("phone_device_id"),
+                },
+                priority="high",
+            )
+            return runtime
+
+        runtime.state = "completed"
+        runtime.context["phase"] = "completed"
+        runtime.result = {
+            "event_name": normalized_event,
+            "source": source,
+            "payload": event_payload,
+            "message": "视频直连任务已结束",
+            "stream_id": runtime.input.get("stream_id"),
+            "phone_device_id": runtime.input.get("phone_device_id"),
+        }
+        self._complete_runtime(runtime)
+        self._publish_event(
+            runtime=runtime,
+            event_name=normalized_event,
+            payload={"source": source, **event_payload},
+        )
+        self._publish_event(
+            runtime=runtime,
+            event_name="task.completed",
+            payload=dict(runtime.result),
+            allow_direct_notify=True,
+        )
+        return runtime
+
     def _publish_event(
         self,
         *,
         runtime: TaskRuntime,
         event_name: str,
         payload: dict[str, Any],
+        priority: str = "normal",
+        allow_direct_notify: bool = False,
     ) -> None:
         """发布系统任务事件。"""
 
@@ -260,12 +454,58 @@ class SdkSystemTaskRuntime:
                 session_id=runtime.session_id,
                 device_id=runtime.device_id,
                 state=runtime.state,
-                priority="normal",
+                priority=priority,
                 requires_agent_decision=False,
-                allow_direct_notify=False,
+                allow_direct_notify=allow_direct_notify,
                 ts=now_ms(),
                 payload=payload,
             )
+        )
+
+    @staticmethod
+    def _touch_runtime(runtime: TaskRuntime) -> None:
+        """刷新运行态更新时间。"""
+
+        runtime.updated_at_ms = now_ms()
+
+    @staticmethod
+    def _complete_runtime(runtime: TaskRuntime) -> None:
+        """把运行态标记为已结束并写入时间戳。"""
+
+        runtime.updated_at_ms = now_ms()
+        runtime.completed_at_ms = runtime.updated_at_ms
+
+    def _expire_if_needed(self, runtime: TaskRuntime) -> None:
+        """在查询或事件派发时把超时的视频链路推进到 timeout。
+
+        当前超时只覆盖建链和等待首帧阶段；已经进入 `streaming` 后不在本轮做
+        链路健康检查，后续由 SDK 的网络治理迭代统一处理。
+        """
+
+        if runtime.state in self._TERMINAL_STATES or runtime.context.get("phase") == "streaming":
+            return
+        deadline_at_ms = int(runtime.context.get("deadline_at_ms") or 0)
+        if deadline_at_ms <= 0 or now_ms() <= deadline_at_ms:
+            return
+
+        runtime.state = "timeout"
+        runtime.context["phase"] = "timeout"
+        runtime.error = {
+            "code": "peer_link_timeout",
+            "message": "视频直连链路准备超时",
+            "details": {
+                "deadline_at_ms": deadline_at_ms,
+                "phone_device_id": runtime.input.get("phone_device_id"),
+                "stream_id": runtime.input.get("stream_id"),
+            },
+        }
+        runtime.context["last_error"] = dict(runtime.error)
+        self._complete_runtime(runtime)
+        self._publish_event(
+            runtime=runtime,
+            event_name="task.timeout",
+            payload=dict(runtime.error),
+            priority="high",
         )
 
 
@@ -375,6 +615,14 @@ class HybridTaskGateway(TaskGateway):
         source: str = "system",
     ) -> TaskRuntime:
         """向 SDK 托管任务派发通用事件。"""
+
+        if self._system_task_runtime.contains_task(task_id):
+            return self._system_task_runtime.dispatch_event(
+                task_id=task_id,
+                event_name=event_name,
+                payload=dict(payload or {}),
+                source=source,
+            )
 
         if not self._sdk_task_runtime.contains_task(task_id):
             raise build_error(
