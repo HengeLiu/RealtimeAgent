@@ -12,8 +12,10 @@ from pathlib import Path
 def build_parser() -> argparse.ArgumentParser:
     """构建手机端命令参数解析器。"""
 
-    parser = argparse.ArgumentParser(prog="openaiglass.phone.open", description="打开或构建 OpenAI Glasses 手机端工程")
-    parser.add_argument("action", nargs="?", default="open", choices=["config", "open", "build-sim", "build-device"])
+    parser = argparse.ArgumentParser(prog="openaiglass.phone", description="打开、构建或启动 OpenAI Glasses 手机端设备")
+    parser.add_argument("action", nargs="?", default="open", choices=["config", "open", "build-sim", "build-device", "mock"])
+    parser.add_argument("--repo-root", default="", help="仓库根目录；仅作为本仓库开发时的默认路径锚点")
+    parser.add_argument("--sdk-root", default="", help="SDK 源码根目录，用于查找 phone-mock 组件")
     parser.add_argument("--app-root", default="openaiglass-for-blind", help="业务工程根目录")
     parser.add_argument("--phone-project", default="", help="iOS xcodeproj 路径")
     parser.add_argument("--phone-scheme", default="GlassesVideoReceiver", help="iOS scheme")
@@ -22,6 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sync-script", default="", help="业务配置同步脚本")
     parser.add_argument("--server-config", default="", help="服务端 env 配置文件")
     parser.add_argument("--public-host", default="", help="手动指定局域网服务端地址")
+    parser.add_argument("--config", default="", help="phone-mock JSON 配置文件")
+    parser.add_argument("--timeout-seconds", type=float, default=30.0, help="phone-mock 网络超时时间")
+    parser.add_argument("--max-runtime-seconds", type=float, default=0.0, help="phone-mock 最大运行时长，0 表示持续运行")
     return parser
 
 
@@ -29,6 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     """手机端命令主入口。"""
 
     args = build_parser().parse_args(argv)
+    if args.action == "mock":
+        return run_phone_mock(args)
     app_root = Path(args.app_root).resolve()
     ensure_local_configs(app_root)
     if args.action == "config":
@@ -44,6 +51,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "build-device":
         return build_device(args, resolve_phone_project(args, app_root))
     return 2
+
+
+def run_phone_mock(args: argparse.Namespace) -> int:
+    """启动 `phone-mock` 虚拟手机设备。"""
+
+    repo_root = resolve_repo_root(args)
+    sdk_root = Path(args.sdk_root).resolve() if args.sdk_root else repo_root / "openaiglass-sdk"
+    phone_mock_root = sdk_root / "phone-mock"
+    if str(phone_mock_root) not in sys.path:
+        sys.path.insert(0, str(phone_mock_root))
+    if not args.config:
+        app_root = Path(args.app_root).resolve() if args.app_root else repo_root / "openaiglass-for-blind"
+        args.config = str(app_root / "host/phone-mock/config/phone.mock.json")
+    args.repo_root = str(repo_root)
+    from openaiglass_phone_mock.cli import run_phone_mock as run_device
+
+    return run_device(args)
+
+
+def resolve_repo_root(args: argparse.Namespace) -> Path:
+    """解析仓库根目录。"""
+
+    if args.repo_root:
+        return Path(args.repo_root).resolve()
+    current = Path.cwd().resolve()
+    if (current / "openaiglass-sdk").exists():
+        return current
+    return current
 
 
 def resolve_phone_project(args: argparse.Namespace, app_root: Path) -> Path:

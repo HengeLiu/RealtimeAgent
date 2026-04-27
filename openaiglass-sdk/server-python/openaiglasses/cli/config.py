@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import plistlib
 import socket
 import subprocess
@@ -22,10 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--app-root", default="openaiglass-for-blind", help="业务工程根目录")
     sync_parser.add_argument("--server-config", default="", help="服务端 env 配置文件")
     sync_parser.add_argument("--phone-config", default="", help="手机端 AppConfig.plist 配置文件")
+    sync_parser.add_argument("--phone-mock-config", default="", help="phone-mock JSON 配置文件")
     sync_parser.add_argument("--glass-config", default="", help="眼镜端 local_build.env 配置文件")
     sync_parser.add_argument("--public-host", default="", help="手动指定本机局域网 IPv4")
     sync_parser.add_argument("--dry-run", action="store_true", help="只打印同步结果，不写文件")
     sync_parser.add_argument("--skip-phone", action="store_true", help="不写手机端配置")
+    sync_parser.add_argument("--skip-phone-mock", action="store_true", help="不写 phone-mock 配置")
     sync_parser.add_argument("--skip-glass", action="store_true", help="不写眼镜端配置")
     return parser
 
@@ -81,6 +84,15 @@ def sync_config(args: argparse.Namespace) -> int:
             glass_device_id=glass_device_id,
             dry_run=bool(args.dry_run),
         )
+    if not args.skip_phone_mock:
+        sync_phone_mock_config(
+            phone_mock_config=paths["phone_mock_config"],
+            ws_uri=ws_uri,
+            public_host=public_host,
+            phone_device_id=phone_device_id,
+            phone_token=token_map[phone_device_id],
+            dry_run=bool(args.dry_run),
+        )
     if not args.skip_glass:
         sync_glass_config(
             glass_config=paths["glass_config"],
@@ -95,6 +107,8 @@ def sync_config(args: argparse.Namespace) -> int:
     print(f"{action}服务端本机地址: {paths['server_config']}")
     if not args.skip_phone:
         print(f"{action}业务手机配置: {paths['phone_config']}")
+    if not args.skip_phone_mock:
+        print(f"{action} phone-mock 配置: {paths['phone_mock_config']}")
     if not args.skip_glass:
         print(f"{action}眼镜本地配置: {paths['glass_config']}")
     print(f"public_host={public_host}")
@@ -125,6 +139,7 @@ def resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
         "server_template": app_root / "config/local_server.env.example",
         "phone_config": resolve_path(args.phone_config, app_root, "host/phone/config/AppConfig.plist"),
         "phone_template": app_root / "host/phone/config/AppConfig.plist.example",
+        "phone_mock_config": resolve_path(args.phone_mock_config, app_root, "host/phone-mock/config/phone.mock.json"),
         "glass_config": resolve_path(args.glass_config, app_root, "host/glass/config/local_build.env"),
         "glass_template": app_root / "host/glass/config/local_build.env.example",
     }
@@ -301,6 +316,35 @@ def sync_glass_config(
     if not dry_run:
         glass_config.parent.mkdir(parents=True, exist_ok=True)
         glass_config.write_text(updated, encoding="utf-8")
+
+
+def sync_phone_mock_config(
+    *,
+    phone_mock_config: Path,
+    ws_uri: str,
+    public_host: str,
+    phone_device_id: str,
+    phone_token: str,
+    dry_run: bool,
+) -> None:
+    """同步 `phone-mock` 设备配置。"""
+
+    if not phone_mock_config.exists():
+        return
+    payload = json.loads(phone_mock_config.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("phone-mock 配置根节点不是字典")
+    payload["device_type"] = "phone"
+    payload["device_id"] = phone_device_id
+    payload["pair_token"] = phone_token
+    payload["control_ws_url"] = ws_uri
+    camera_sink = payload.get("camera_sink")
+    if isinstance(camera_sink, dict):
+        camera_sink["public_host"] = public_host
+        if "save_dir" in camera_sink:
+            camera_sink["save_dir"] = f"openaiglass-for-blind/runs/phone-mock/{phone_device_id}/camera"
+    if not dry_run:
+        phone_mock_config.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def resolve_public_host(configured_host: str, override_host: str) -> tuple[str, list[str], str]:

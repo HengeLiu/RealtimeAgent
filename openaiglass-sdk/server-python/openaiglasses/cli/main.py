@@ -58,6 +58,7 @@ def print_usage() -> None:
   openaiglass.server.run [--app-module host.server.main --app-root openaiglass-for-blind]
   openaiglass.config.sync [--app-root openaiglass-for-blind]
   openaiglass.phone.open [--app-root openaiglass-for-blind]
+  openaiglass.phone.mock --config <phone-mock.json>
   openaiglass.glass.start [--repo-root .]
   openaiglass.glass.start --runtime playback --config <glass-playback.json>
 
@@ -65,6 +66,7 @@ Examples:
   openaiglass.config.sync --app-root openaiglass-for-blind
   openaiglass.server.start --app-module host.server.main --app-root openaiglass-for-blind
   openaiglass.phone.open --app-root openaiglass-for-blind
+  openaiglass.phone.mock --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
   openaiglass.glass.start --build-only --repo-root .
   openaiglass.glass.start --runtime playback --config openaiglass-for-blind/host/glass-playback/config/glass.water_cup.json
 """

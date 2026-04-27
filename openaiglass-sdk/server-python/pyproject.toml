@@ -41,6 +41,7 @@ openaiglass = "openaiglasses.cli:main"
 "openaiglass.sdk.audio-samples" = "openaiglasses.cli.shortcuts:sdk_audio_samples"
 "openaiglass.phone.open" = "openaiglasses.cli.shortcuts:phone_open"
 "openaiglass.phone.build-sim" = "openaiglasses.cli.shortcuts:phone_build_sim"
+"openaiglass.phone.mock" = "openaiglasses.cli.shortcuts:phone_mock"
 "openaiglass.glass.start" = "openaiglasses.cli.shortcuts:glass_start"
 "openaiglass.glass.build" = "openaiglasses.cli.shortcuts:glass_build"
 

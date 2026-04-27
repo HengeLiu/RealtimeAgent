@@ -38,14 +38,10 @@
 
 ```python
 from openaiglasses import (
-    BasePhoneProcessor,
-    BasePhoneTask,
     BaseTask,
     BaseTool,
     CapabilityResult,
     OpenAIGlassesSDK,
-    PhoneProcessorContext,
-    PhoneTaskContext,
     ServerSettings,
     TaskContext,
     TaskEvent,
@@ -171,10 +167,12 @@ uv run openaiglass --help
 
 SDK CLI 同时支持两种命令组织方式：
 
-1. 点分命令：`uv run openaiglass.config.sync`、`uv run openaiglass.server.run`、`uv run openaiglass.phone.open`、`uv run openaiglass.glass.start`。
+1. 点分命令：`uv run openaiglass.config.sync`、`uv run openaiglass.server.run`、`uv run openaiglass.phone.open`、`uv run openaiglass.phone.mock`、`uv run openaiglass.glass.start`。
 2. 根命令加子命令：`uv run openaiglass config sync`。
 
 本文后续统一使用点分命令。只有在已经激活 `.venv`，或 SDK 已安装到当前 shell 的 Python 环境中时，才可以省略 `uv run`，例如直接执行 `openaiglass.config.sync`。
+
+如果新增 CLI 后提示 `Failed to spawn` 或 `No such file or directory`，说明当前虚拟环境里的 SDK entry points 还没有刷新，重新执行一次本节的 editable 安装命令即可。
 
 ### 3.2 同步三端联调配置
 
@@ -192,6 +190,7 @@ uv run openaiglass.config.sync --app-root openaiglass-for-blind
 
 1. `openaiglass-for-blind/config/local_server.env` 的 `SERVER_PUBLIC_HOST`。
 2. `openaiglass-for-blind/host/phone/config/AppConfig.plist` 的 `serverBaseURLString`、`phoneDeviceID`、`pairToken`、`desiredGlassDeviceID`。
+3. `openaiglass-for-blind/host/phone-mock/config/phone.mock.json` 的 `control_ws_url`、`device_id`、`pair_token` 和 `camera_sink.public_host`。
 3. `openaiglass-for-blind/host/glass/config/local_build.env` 的 `GLASS_SERVER_WS_URI`、`GLASS_DEVICE_ID`、`GLASS_PAIR_TOKEN`。
 
 如果自动探测失败，手动指定一次：
@@ -224,6 +223,7 @@ uv run openaiglass.sdk.live-check \
 | --- | --- |
 | `openaiglass-for-blind/config/local_server.env` | 服务端监听地址、端口、设备令牌、模型和日志配置。 |
 | `openaiglass-for-blind/host/phone/config/AppConfig.plist` | iOS 手机端服务端地址、设备编号、配对令牌和目标眼镜编号。 |
+| `openaiglass-for-blind/host/phone-mock/config/phone.mock.json` | Python 虚拟手机设备编号、配对令牌、服务端控制地址和 mock 任务事件。 |
 | `openaiglass-for-blind/host/glass/config/local_build.env` | ESP32 眼镜端 WiFi、控制 WebSocket、设备编号和配对令牌。 |
 
 如果是首次搭建新目录，或自动同步提示本地配置文件不存在，先从模板复制：
@@ -242,7 +242,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | 配置项 | 文件 | 说明 |
 | --- | --- | --- |
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
-| `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实或 playback 设备的 `device_id=pair_token`。 |
+| `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
 ### 3.4 启动真实业务服务端
@@ -323,6 +323,15 @@ uv run openaiglass.phone.build-sim --app-root openaiglass-for-blind
 真机运行和签名配置仍在 Xcode 中完成，SDK 侧只保留统一的手机工程打开入口。
 
 不要把 `openaiglass-sdk/phone-ios` 下的 SDK 工程作为业务开发入口。
+
+如果本次只需要验证服务端下发手机任务和接收手机结果事件，可以不启动 iPhone，改为启动 `phone-mock`：
+
+```bash
+uv run openaiglass.phone.mock \
+  --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
+```
+
+`phone-mock` 会像真实 phone 一样连接服务端、注册、心跳、接收 `sdk.phone.task.start/stop`，再按配置把 mock 事件上报到 `/api/tasks/report-event`。它不是 iOS 模拟器，也不模拟 Swift UI、系统权限或真实相机。
 
 ### 3.6 构建、烧录和监看真实 ESP32 眼镜
 
@@ -710,122 +719,293 @@ sdk.task_runtime.load_snapshots("logs/sdk-task-snapshots.json")
 
 ## 7. 开发手机侧能力
 
-手机侧能力分为两层：
+手机侧能力必须先区分三个对象：
 
-1. `BasePhoneProcessor`：处理一帧图像、一段传感器数据或一次本地模型输出。
-2. `BasePhoneTask`：组织一个持续任务，决定什么时候调用处理器、什么时候输出结果。
+| 对象 | 语言 | 是否运行在真实 iPhone 上 | 定位 |
+| --- | --- | --- | --- |
+| iOS 真实手机运行时 | Swift | 是 | 承载真实 App、接收眼镜视频帧、执行手机本地能力、上报任务事件。 |
+| `phone-mock` 设备 | Python | 否 | 像一台独立的 Python 虚拟手机设备，用于 mock 测试服务端与手机任务协议。 |
+| Python `PhoneRuntime` | Python | 否 | `phone-mock` 内部可复用的本地任务执行模型，不作为业务开发者直接面对的手机开发入口。 |
 
-`sdk-v5` 起，手机侧运行时支持把同一帧分发给多个活跃任务。任务参数中如果声明 `stream_id`，SDK 会只把同一路视频流的帧交给该任务；调用方也可以用 `task_types` 限定分发范围。
+真实手机端能力开发应优先写 Swift。Python `BasePhoneProcessor` / `BasePhoneTask` 不能运行在 iPhone 上，后续统一封装到 `phone-mock` 设备内部。业务开发者不应该把它们理解为手机 App 插件，也不应该在 SDK 指南中把它们当成真机手机开发主路径。
 
-```python
-snapshots = sdk.phone_runtime.process_frame(
-    frame={"seq": 12, "image": "..."},
-    stream_id="stream_xxx",
-    task_types=["find_object_phone_task", "traffic_light_phone_task"],
-)
-```
+`phone-mock` 的定位和 `glass-playback` 类似，都是独立启动的虚拟设备；区别是当前 `phone-mock` 只用于 mock 测试，不支持回放数据编排，也不模拟真实 iOS UI。它后续应像真实 phone 一样连接真实服务端、注册、心跳、接收 `sdk.phone.task.start/stop`，并按配置或内置 Python handler 产出任务事件。
 
-每个 `PhoneTaskSnapshot` 会包含 `frames_processed`，方便测试和联调判断某个手机任务是否实际收到帧。已经 `completed`、`cancelled`、`failed` 或 `stopped` 的任务不会再收到后续帧。
+### 7.1 真机 iOS 手机能力怎么接入
 
-### 7.1 PhoneProcessor
-
-```python
-from typing import Any
-
-from openaiglasses import BasePhoneProcessor, PhoneProcessorContext
-
-
-class DemoProcessor(BasePhoneProcessor):
-    processor_type = "demo_processor"
-    description = "演示手机处理器"
-
-    def on_frame(self, context: PhoneProcessorContext, frame: Any) -> None:
-        text = str(frame)
-        context.emit_result(
-            {
-                "event_name": "phone.demo.result",
-                "found": "目标" in text,
-                "summary": f"已处理帧：{text}",
-            }
-        )
-```
-
-### 7.2 PhoneTask
-
-```python
-from typing import Any
-
-from openaiglasses import BasePhoneTask, PhoneTaskContext
-
-
-class DemoPhoneTask(BasePhoneTask):
-    task_type = "demo_phone_task"
-    description = "演示手机任务"
-
-    def on_start(self, context: PhoneTaskContext) -> None:
-        context.emit_state("running", {"phase": "waiting_frame"})
-
-    def on_frame(self, context: PhoneTaskContext, frame: Any) -> None:
-        result = context.process_frame(
-            processor_type=str(context.params.get("processor_type") or "demo_processor"),
-            frame=frame,
-        )
-        if result:
-            context.emit_result(result)
-
-    def on_stop(self, context: PhoneTaskContext) -> None:
-        context.emit_state("stopped", {"reason": "server_requested"})
-```
-
-### 7.3 iOS 插件代码放在哪里
-
-Python `PhoneProcessor` 和 `PhoneTask` 用于 SDK 回放、服务端装配和能力契约。真正跑在 iPhone 上的业务插件应放在业务能力目录下，例如：
+SDK 当前提供的是 iOS 通用运行时代码。业务手机 App 通过业务侧 Xcode 工程引用 SDK iOS 运行时代码：
 
 ```text
-openaiglass-for-blind/capabilities/find_object/phone/ios/
+openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj
 ```
 
-iOS 通用运行时仍然放在：
+iOS 通用运行时位于：
 
 ```text
 openaiglass-sdk/phone-ios/
 ```
 
-不要把具体业务识别逻辑直接写进 `openaiglass-sdk/phone-ios` 的通用运行时里。通用运行时只负责注册、接收、分发、状态展示和结果回传。
+业务 Swift 插件放在业务能力目录下，例如：
 
-### 7.4 iOS 插件如何注册到通用运行时
+```text
+openaiglass-for-blind/capabilities/find_object/phone/ios/
+openaiglass-for-blind/capabilities/traffic_light/phone/ios/
+```
 
-本节是 `sdk-v2` 新增的 iOS 手机能力接入方式。
+不要把具体业务识别逻辑直接写进 `openaiglass-sdk/phone-ios`。SDK iOS 运行时只负责：
 
-每个 iOS 业务插件只注册自己负责的 `taskType`。不要在业务侧手写组合 Runtime，也不要为了支持多个能力去修改 `CameraStreamStore` 或控制连接代码。
+1. 读取 App 配置。
+2. 连接服务端控制 WebSocket。
+3. 完成手机注册、心跳和设备绑定。
+4. 启动 `/ws/camera` 接收服务。
+5. 根据服务端下发的 `sdk.phone.task.start` 创建对应 `taskType` 的业务插件运行时。
+6. 把眼镜推来的视频帧分发给当前活跃手机任务。
+7. 通过 `PhoneTaskEventReportAPI` 把业务结果上报回服务端。
+
+### 7.2 Swift 插件接口
+
+业务插件通过 `PhoneTaskCapabilityRuntime` 接入通用运行时。最小结构如下：
+
+```swift
+@MainActor
+final class DemoPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
+    private var activeTask: PhoneTaskState?
+
+    var activeTaskDescription: String? {
+        activeTask?.taskType
+    }
+
+    var latestSummary: String?
+    var latestSuccess: Bool?
+
+    func startTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        streamID: String,
+        glassDeviceID: String,
+        phoneDeviceID: String,
+        params: [String: Any]
+    ) {
+        activeTask = PhoneTaskState(
+            taskID: taskID,
+            taskType: taskType,
+            streamID: streamID,
+            glassDeviceID: glassDeviceID,
+            phoneDeviceID: phoneDeviceID
+        )
+    }
+
+    func stopTask(
+        store: CameraStreamStore,
+        taskID: String,
+        taskType: String,
+        reason: String
+    ) {
+        activeTask = nil
+    }
+
+    func processFrame(
+        store: CameraStreamStore,
+        image: UIImage,
+        sequence: Int
+    ) {
+        guard let activeTask else {
+            return
+        }
+        latestSummary = "已处理第 \(sequence) 帧"
+        latestSuccess = true
+
+        Task {
+            try? await PhoneTaskEventReportAPI.report(
+                taskID: activeTask.taskID,
+                phoneDeviceID: activeTask.phoneDeviceID,
+                eventName: "phone.demo.result",
+                payload: [
+                    "frame_seq": sequence,
+                    "summary": latestSummary ?? "",
+                ]
+            )
+        }
+    }
+}
+```
+
+真实业务可以参考：
+
+1. [capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift](./capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift)
+2. [capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift](./capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift)
+
+### 7.3 Swift 插件如何注册到通用运行时
+
+每个 iOS 业务插件只注册自己负责的 `taskType`。这个 `taskType` 必须与服务端业务 Task 调用 `start_phone_task(task_type=...)` 时传入的值一致。
 
 推荐写法：
 
 ```swift
 enum DemoPhoneCapabilityInstaller {
     static func install() {
-        PhoneCapabilityBootstrap.registerInstaller {
-            PhoneTaskCapabilityRegistry.register(taskType: "demo_phone_task") {
-                DemoPhoneCapabilityRuntime()
-            }
+        PhoneTaskCapabilityRegistry.register(taskType: "demo_phone_task") {
+            DemoPhoneCapabilityRuntime()
         }
     }
 }
 ```
 
-宿主 App 启动时需要做两件事：
+宿主 App 启动时集中调用各业务插件的 `install()`：
 
-1. 确保每个业务插件的 `install()` 被调用一次。
-2. 调用 `PhoneCapabilityBootstrap.applyRegisteredInstallers()`，让 SDK 执行所有已登记的安装函数。
+```swift
+@main
+struct BusinessGlassesVideoReceiverApp: App {
+    init() {
+        FindObjectPhoneCapabilityInstaller.install()
+        TrafficLightPhoneCapabilityInstaller.install()
+    }
 
-当前仓库仍以业务侧 Xcode 工程承载手机端 App，工程入口为 `openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj`。它引用 SDK 通用运行时代码，业务插件接入 target 的推荐方式是：
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+```
+
+当前仓库的业务手机入口是：
+
+```text
+openaiglass-for-blind/host/phone/ios/BusinessGlassesVideoReceiverApp.swift
+```
+
+业务插件接入 target 的推荐方式：
 
 1. 在 `openaiglass-for-blind/capabilities/<capability>/phone/ios/` 下维护业务 Swift 文件。
 2. 在 Xcode 中把这些 Swift 文件加入手机宿主 App target 的 Compile Sources。
-3. 在宿主 App 的启动入口集中调用各插件 `install()`。
+3. 在宿主 App 启动入口调用每个插件的 `install()`。
 4. 多个插件同时加入 target 时，只要 `taskType` 不重复，SDK 会自动按任务类型分发。
 
-暂不建议业务团队自行封装 Swift Package 或 XCFramework。等 SDK 发布形态进一步稳定后，再由 SDK 团队统一提供包结构和版本兼容规则。
+`PhoneCapabilityRuntimeFactory.register { ... }` 只保留为旧式单能力接入兼容入口。新业务能力不要使用该入口，因为它不能表达多个 `taskType` 的并行注册关系。
+
+### 7.4 phone-mock 设备和 Python 测试代码
+
+Python 手机侧测试代码不再作为“手机侧能力开发方式”散落在业务指南里，而应封装到 `phone-mock` 设备中。
+
+当前 `phone-mock` 已经落在：
+
+```text
+openaiglass-sdk/phone-mock
+```
+
+业务侧默认配置位于：
+
+```text
+openaiglass-for-blind/host/phone-mock/config/phone.mock.json
+```
+
+`phone-mock` 的运行行为：
+
+1. 像真实 iOS phone 一样独立启动。
+2. 连接真实服务端 `/ws/control`。
+3. 发送 `device.register(device_type=phone)` 并维持心跳。
+4. 接收服务端下发的 `sdk.phone.task.start` 和 `sdk.phone.task.stop`。
+5. 启动一个最小相机帧接收 WebSocket，并在注册时上报 `camera_sink_ws_uri`，让服务端视频链路指向真实存在的 phone 地址。
+6. 根据 `task_type` 读取配置中的 mock 事件。
+7. 通过真实服务端 HTTP 任务事件接口上报 `phone.*` 结果事件。
+8. 把注册、任务启动、任务停止、相机帧接收和事件上报记录到 `outputs.event_log` 或 `camera_sink.save_dir`。
+9. 只用于 mock 测试，不承诺与 iOS 本地模型、相机、系统权限或 UI 行为一致。
+
+`phone-mock` 和 `glass-playback` 的区别：
+
+| 设备 | 当前定位 | 数据来源 | 典型用途 |
+| --- | --- | --- | --- |
+| `glass-playback` | 设备级数据回放眼镜 | 触发音频、图片、视频帧、传感器时间线和执行器配置 | 用真实服务端验证眼镜侧输入触发完整业务链路。 |
+| `phone-mock` | mock 测试手机 | Python mock handler 和固定响应策略 | 不启动 iPhone 时，验证服务端下发手机任务和接收手机结果事件的协议闭环。 |
+
+Python `BasePhoneProcessor` / `BasePhoneTask` 后续应作为 `phone-mock` 的内部实现接口或测试辅助接口。它们和真实 iOS 运行时的关系是“契约对应”，不是“代码复用”：
+
+| 概念 | `phone-mock` / Python 本地模型 | iOS 真机运行时 |
+| --- | --- | --- |
+| 手机任务类型 | `BasePhoneTask.task_type` | `PhoneTaskCapabilityRegistry.register(taskType:)` |
+| 单帧处理 | `BasePhoneProcessor.on_frame(...)` | `PhoneTaskCapabilityRuntime.processFrame(...)` |
+| 任务启动 | `phone-mock` 收到 `sdk.phone.task.start` 后触发 | 服务端下发 `sdk.phone.task.start` 后由 iOS 控制连接触发 |
+| 结果输出 | mock handler 上报 `phone.*` 事件 | `PhoneTaskEventReportAPI.report(...)` |
+
+因此，业务进入真机手机端实现阶段时，应优先补 Swift 插件；只有在补 `phone-mock` mock 行为、SDK 契约测试或设备级联调辅助时，才补 Python 手机侧测试代码。
+
+启动方式：
+
+```bash
+uv run openaiglass.phone.mock \
+  --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
+```
+
+配置示例：
+
+```json
+{
+  "device_type": "phone",
+  "device_id": "phone-001",
+  "pair_token": "pair-phone-token",
+  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "camera_sink": {
+    "enabled": true,
+    "bind_host": "0.0.0.0",
+    "public_host": "127.0.0.1",
+    "port": 0,
+    "path": "/ws/camera",
+    "save_dir": "openaiglass-for-blind/runs/phone-mock/phone-001/camera"
+  },
+  "task_handlers": {
+    "find_object_phone_task": {
+      "events": [
+        {
+          "delay_ms": 500,
+          "event_name": "phone.vision.find_object.result",
+          "payload": {
+            "target_object": "水杯",
+            "found": true,
+            "confidence": 0.9,
+            "position": "center",
+            "summary": "找到水杯了"
+          }
+        }
+      ]
+    }
+  },
+  "outputs": {
+    "event_log": "openaiglass-for-blind/runs/phone-mock/phone-001/events.jsonl"
+  }
+}
+```
+
+当前版本只支持根据配置发送固定 mock 事件，不支持断言检查、批量测试，也不支持真实视频帧回放。开发者需要根据服务端日志、SDK 任务状态和 `outputs.event_log` 判断行为是否符合预期。
+
+### 7.5 Swift Package 和 XCFramework 发布形态
+
+可以尝试把 iOS SDK 发布成 Swift Package 或 XCFramework，但两者目标不同：
+
+| 形态 | 是否需要业务方下载 SDK 源码 | 适合场景 | 主要限制 |
+| --- | --- | --- | --- |
+| Swift Package 源码包 | 需要拉取源码或源码包 | 开发期调试、源码透明、接口变化频繁 | 业务方仍会拿到 SDK 源码，不满足“不要下载源码”的目标。 |
+| Swift Package `binaryTarget` | 不需要下载源码，只下载二进制 artifact | 通过 SPM 管理版本，同时隐藏源码 | 需要稳定产出 `.xcframework` 和 checksum。 |
+| 直接发布 XCFramework | 不需要下载源码 | 企业内部分发、手动或脚本集成 | 业务工程需要手动管理 framework、资源和版本。 |
+
+如果目标是“不需要下载源码”，优先路线应是：
+
+1. 先把 `openaiglass-sdk/phone-ios/GlassesVideoReceiver` 中的通用运行时代码拆成独立 framework target。
+2. 把业务 App 入口、`AppConfig.plist`、找物体/红绿灯等业务插件从 SDK framework 中移出。
+3. 明确 SDK framework 的公开 Swift API，例如 `PhoneTaskCapabilityRuntime`、`PhoneTaskCapabilityRegistry`、`PhoneTaskEventReportAPI`、`CameraStreamStore`。
+4. 用 `xcodebuild archive` 分别构建 `iphoneos` 和 `iphonesimulator`。
+5. 用 `xcodebuild -create-xcframework` 生成 `OpenAIGlassesPhoneSDK.xcframework`。
+6. 再选择直接分发 `.xcframework`，或用 Swift Package 的 `binaryTarget` 包一层版本化发布。
+
+当前代码结构已经具备尝试拆分的基础，但还不能直接发布成干净的二进制 SDK，主要原因是：
+
+1. 当前 `phone-ios` 仍是 App 工程，不是 framework/package-first 结构。
+2. `ContentView`、`AppConfig.plist`、业务宿主入口和 SDK runtime 还没有完全分离。
+3. 部分类型的访问级别需要整理成稳定的 `public` API。
+4. 资源文件、Info.plist、网络权限说明和宿主 App 职责需要重新切边界。
+
+建议下一步先做一个最小 XCFramework 试点：只导出通用控制连接、视频接收、任务分发和事件上报能力，不包含任何业务插件。业务 App 通过 `OpenAIGlassesPhoneSDK.xcframework` 引入 SDK，再在自己的 target 中实现并注册 Swift 业务插件。
 
 ## 8. 眼镜端能力扩展方式
 
@@ -938,7 +1118,7 @@ uv run openaiglass.server.run \
 3. 如能力需要视觉或传感器输入，再准备 `camera_capture`、`camera_stream`、`heading` 等数据资产。
 4. 准备执行器策略，例如音频播放请求是只记录、保存到文件，还是立即回传 started/finished。
 5. 像真机联调一样启动真实业务 server。
-6. 如果能力需要手机端，像真机联调一样启动真实 iOS 手机端，并确认它完成注册和绑定。
+6. 如果能力需要手机端，像真机联调一样启动真实 iOS 手机端；如果只需要 mock 手机结果，可以启动 `phone-mock`，并确认它完成注册和绑定。
 7. 单独启动 `glass-playback`，确认它在 `/api/runtime/devices` 中显示为在线 glass。
 8. 等待它自动发送 `trigger_audio`，观察服务端任务、控制消息、执行器记录和最终通知。
 9. 稳定后，根据 `actuators` 输出、服务端日志和真实手机端日志判断本次行为是否符合预期。
@@ -1166,7 +1346,25 @@ uv run openaiglass.glass.start \
 | iOS 手机 | 页面中的服务端状态、当前接收地址、最近帧、最近任务结果、最近错误。 |
 | ESP32 眼镜 | WiFi 连接、`device.registered`、心跳、`sensor.camera.capture`、`sensor.camera.stream.start/stop`、音频连接。 |
 
-## 12. 三端链路时序
+## 12. 启动后状态验证
+
+三端或虚拟设备启动后，开发者不应该只看进程是否还在运行，还需要确认服务端健康、设备注册、设备绑定、语音会话、简单对话、Tool 触发、手机任务和视频链路是否处于可用状态。
+
+为避免本指南堆叠过长的接口说明，详细检查步骤统一放在独立文档中：
+
+[docs/三端启动后状态验证指南.md](./docs/三端启动后状态验证指南.md)
+
+该文档覆盖：
+
+1. `/api/health`、`/api/config-summary`、`/api/runtime/devices` 状态查询。
+2. 如何通过真实 glass 或 `glass-playback` 开启一次简单对话。
+3. 如何查看 `/api/agent/session?session_id=...` 判断模型请求、消息、Tool trace 和任务状态。
+4. 如何通过对话触发 Tool，例如“帮我找水杯”。
+5. 如何通过对话和业务 Task 建立 glass 到 phone 的连接。
+6. 如何用 `/api/debug/find-object/start`、`/api/debug/phone-video-link/start|stop` 缩小联调问题范围。
+7. 如何用 `/api/tasks/report-event` 排查手机任务事件处理。
+
+## 13. 三端链路时序
 
 ```plantuml
 @startuml
@@ -1199,7 +1397,7 @@ server -> glass: 播报或提示
 @enduml
 ```
 
-## 13. 功能文档与实现对齐
+## 14. 功能文档与实现对齐
 
 新团队开发能力前，建议先阅读：
 
@@ -1218,7 +1416,7 @@ server -> glass: 播报或提示
 6. 至少一份 `glass-playback` 配置和对应触发音频、传感器数据。
 7. 三端联调启动顺序和日志观察点。
 
-## 14. 预检和回归命令
+## 15. 预检和回归命令
 
 SDK 契约和核心单元测试：
 
@@ -1243,7 +1441,7 @@ uv run openaiglass.sdk.live-check \
   --report logs/sdk-live-check-current.json
 ```
 
-## 15. 开发者不要做的事
+## 16. 开发者不要做的事
 
 为了让业务能力可以复用和迁移，开发者不要：
 
@@ -1258,27 +1456,29 @@ uv run openaiglass.sdk.live-check \
 
 如果业务能力需要新的系统级抽象，应先写清需求、输入输出、异常情况和验收方式，再把它沉淀为 SDK 的公开接口。
 
-## 16. 常见问题
+## 17. 常见问题
 
-### 16.1 为什么业务项目还要写手机和眼镜目录？
+### 17.1 为什么业务项目还要写手机和眼镜目录？
 
 SDK 提供通用运行时，业务项目提供业务插件、产品配置和启动说明。手机和眼镜宿主目录不应复制 SDK 主体代码，只保留业务装配和产品差异。
 
-### 16.2 iOS SDK 当前是不是已经能作为 Swift Package 引入？
+### 17.2 iOS SDK 是否可以发布成 Swift Package 或 XCFramework？
 
-当前还没有收敛为 Swift Package 或 XCFramework。现在的推荐方式是：业务开发者打开 `openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj`，该工程引用 `openaiglass-sdk/phone-ios` 作为通用运行时；业务插件放在 `capabilities/<name>/phone/ios`，配置放在 `openaiglass-for-blind/host/phone/config`。
+可以尝试，但如果目标是业务方“不下载 SDK 源码”，优先应做 XCFramework 或 Swift Package `binaryTarget`，而不是源码型 Swift Package。
 
-### 16.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
+当前代码还没有达到可直接二进制发布的状态，因为 `phone-ios` 仍是 App 工程，通用运行时、宿主页面、配置资源和业务工程引用边界还需要拆开。推荐先做最小 XCFramework 试点：只导出控制连接、视频接收、任务分发和事件上报能力；业务 App 在自己的 target 中实现并注册 Swift 插件。详细路线见第 7.5 节。
+
+### 17.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
 当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start` 调度一个可编译的 ESP-IDF 固件工程。
 
 在当前仓库内开发时，可以用 `--repo-root .` 让命令按默认 monorepo 布局推导 `openaiglass-sdk/glass-esp32`。在独立业务项目中，不要求当前目录存在 `openaiglass-sdk/glass-esp32`；应使用 `--project-dir /path/to/glass-esp32` 指向真实固件工程，并用 `--app-root` 或 `--config` 指向业务侧眼镜配置。
 
-### 16.4 新能力什么时候应该改 SDK？
+### 17.4 新能力什么时候应该改 SDK？
 
-只有当多个业务都会用到同一种系统能力，或者现有 `DeviceGroupContext`、`TaskContext`、`PhoneTaskContext` 无法表达业务需求时，才应该改 SDK。
+只有当多个业务都会用到同一种系统能力，或者现有 `DeviceGroupContext`、`TaskContext`、iOS `PhoneTaskCapabilityRuntime` 等公开接口无法表达业务需求时，才应该改 SDK。
 
-### 16.5 如何判断路径是否又混乱了？
+### 17.5 如何判断路径是否又混乱了？
 
 执行：
 

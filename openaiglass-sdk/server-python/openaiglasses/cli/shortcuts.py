@@ -43,6 +43,12 @@ def phone_build_sim() -> int:
     return main(["phone", "build-sim", *sys.argv[1:]])
 
 
+def phone_mock() -> int:
+    """执行 `openaiglass.phone.mock` 命令。"""
+
+    return main(["phone", "mock", *sys.argv[1:]])
+
+
 def config_sync() -> int:
     """执行 `openaiglass.config.sync` 命令。"""
 

@@ -99,6 +99,7 @@ def run_command(*, name: str, command: list[str]) -> CheckResult:
         str(APP_ROOT),
         str(SDK_ROOT / "server-python"),
         str(SDK_ROOT / "glass-playback"),
+        str(SDK_ROOT / "phone-mock"),
         str(REPO_ROOT),
     ]
     inherited_pythonpath = os.environ.get("PYTHONPATH", "")
@@ -171,6 +172,8 @@ def run_entrypoint_check() -> CheckResult:
         "glass_sdk_project": SDK_ROOT / "glass-esp32",
         "glass_playback_runtime": SDK_ROOT / "glass-playback/openaiglass_glass_playback",
         "glass_playback_config_dir": APP_ROOT / "host/glass-playback/config",
+        "phone_mock_runtime": SDK_ROOT / "phone-mock/openaiglass_phone_mock",
+        "phone_mock_config": APP_ROOT / "host/phone-mock/config/phone.mock.json",
     }
     details = {
         key: {
@@ -329,6 +332,7 @@ def main() -> int:
                     "compileall",
                     "openaiglass-sdk/server-python",
                     "openaiglass-sdk/glass-playback",
+                    "openaiglass-sdk/phone-mock",
                     "openaiglass-for-blind/host/server",
                     "openaiglass-for-blind/host/phone/src",
                     "openaiglass-sdk/phone-ios/GlassesVideoReceiver",

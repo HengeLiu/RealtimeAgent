@@ -1,0 +1,48 @@
+{
+  "device_type": "phone",
+  "device_id": "phone-001",
+  "pair_token": "pair-phone-token",
+  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "camera_sink": {
+    "enabled": true,
+    "bind_host": "0.0.0.0",
+    "public_host": "127.0.0.1",
+    "port": 0,
+    "path": "/ws/camera",
+    "save_dir": "openaiglass-for-blind/runs/phone-mock/phone-001/camera"
+  },
+  "heartbeat_interval_seconds": 3,
+  "task_handlers": {
+    "find_object_phone_task": {
+      "events": [
+        {
+          "delay_ms": 500,
+          "event_name": "phone.vision.find_object.result",
+          "payload": {
+            "target_object": "水杯",
+            "found": true,
+            "confidence": 0.9,
+            "position": "center",
+            "summary": "找到水杯了"
+          }
+        }
+      ]
+    },
+    "traffic_light_phone_task": {
+      "events": [
+        {
+          "delay_ms": 500,
+          "event_name": "phone.vision.traffic_light.result",
+          "payload": {
+            "signal": "green",
+            "confidence": 0.88,
+            "summary": "前方绿灯，可以通行"
+          }
+        }
+      ]
+    }
+  },
+  "outputs": {
+    "event_log": "openaiglass-for-blind/runs/phone-mock/phone-001/events.jsonl"
+  }
+}
