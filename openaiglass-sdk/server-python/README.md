@@ -2,7 +2,7 @@
 
 `openaiglasses-sdk` 是面向“眼镜 + 手机 + 服务器”组合设备模式的 Python SDK。
 
-SDK 的目标是让业务开发者只关注能力实现，例如 Tool、Task、PhoneProcessor、PhoneTask 和离线回放场景，不需要直接处理设备注册、设备组绑定、WebSocket、视频链路、任务状态机和运行上下文维护。
+SDK 的目标是让业务开发者只关注能力实现，例如 Tool、Task、PhoneProcessor 和 PhoneTask，不需要直接处理设备注册、设备组绑定、WebSocket、视频链路、任务状态机和运行上下文维护。高频自测通过设备级 `glass-playback` 完成。
 
 ## 安装
 
@@ -104,16 +104,11 @@ sdk.register_phone_processor(DemoProcessor())
 sdk.register_phone_task(DemoPhoneTask())
 ```
 
-## 离线回放
+## 设备级回放
 
-```python
-from pathlib import Path
-
-from openaiglasses import OpenAIGlassesSDK, ScenarioRunner
-
-sdk = OpenAIGlassesSDK()
-result = ScenarioRunner(sdk).run(Path("testdata/scenario/my_capability.json"))
-assert result.assertions["passed"]
+```bash
+openaiglass.glass.start --runtime playback \
+  --config openaiglass-for-blind/host/glass-playback/config/glass.water_cup.json
 ```
 
 更完整的开发步骤见仓库文档：`openaiglass-sdk/docs/sdk-design/SDK开发者快速开始.md`。

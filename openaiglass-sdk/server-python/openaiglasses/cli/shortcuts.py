@@ -43,13 +43,19 @@ def phone_build_sim() -> int:
     return main(["phone", "build-sim", *sys.argv[1:]])
 
 
+def config_sync() -> int:
+    """兼容 `openaiglass.config.sync` 命令。"""
+
+    return main(["config", "sync", *sys.argv[1:]])
+
+
 def glass_start() -> int:
     """兼容 `openaiglass.glass.start` 命令。"""
 
-    return main(["glass", "firmware", *sys.argv[1:]])
+    return main(["glass", *sys.argv[1:]])
 
 
 def glass_build() -> int:
     """兼容 `openaiglass.glass.build` 命令。"""
 
-    return main(["glass", "firmware", "--build-only", *sys.argv[1:]])
+    return main(["glass", "--build-only", *sys.argv[1:]])

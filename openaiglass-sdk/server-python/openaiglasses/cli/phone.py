@@ -12,7 +12,7 @@ from pathlib import Path
 def build_parser() -> argparse.ArgumentParser:
     """构建手机端命令参数解析器。"""
 
-    parser = argparse.ArgumentParser(prog="openaiglass phone", description="打开或构建 OpenAI Glasses 手机端工程")
+    parser = argparse.ArgumentParser(prog="openaiglass.phone.open", description="打开或构建 OpenAI Glasses 手机端工程")
     parser.add_argument("action", nargs="?", default="open", choices=["config", "open", "build-sim", "build-device"])
     parser.add_argument("--app-root", default="openaiglass-for-blind", help="业务工程根目录")
     parser.add_argument("--phone-project", default="", help="iOS xcodeproj 路径")
@@ -115,26 +115,39 @@ def print_config_instructions(app_root: Path) -> None:
 
 
 def sync_config(args: argparse.Namespace, app_root: Path) -> int:
-    """执行业务配置同步脚本。"""
+    """同步三端联调配置。"""
 
-    sync_script = Path(args.sync_script).resolve() if args.sync_script else app_root / "scripts/sync_sdk_live_config.py"
-    if not sync_script.exists():
-        raise RuntimeError(f"配置同步脚本不存在: {sync_script}")
-    command = [sys.executable, str(sync_script)]
+    if args.sync_script:
+        sync_script = Path(args.sync_script).resolve()
+        if not sync_script.exists():
+            raise RuntimeError(f"配置同步脚本不存在: {sync_script}")
+        command = [sys.executable, str(sync_script)]
+        server_config = args.server_config or str(app_root / "config/local_server.env")
+        command.extend(["--server-config", server_config])
+        if args.public_host:
+            command.extend(["--public-host", args.public_host])
+        return subprocess.run(command, check=False).returncode
+
+    from openaiglasses.cli.config import main as config_main
+
+    command = ["sync", "--app-root", str(app_root)]
     server_config = args.server_config or str(app_root / "config/local_server.env")
     command.extend(["--server-config", server_config])
     if args.public_host:
         command.extend(["--public-host", args.public_host])
-    return subprocess.run(command, check=False).returncode
+    return config_main(command)
 
 
 def open_project(project: Path) -> int:
     """打开 iOS 工程。"""
 
+    if not project.exists():
+        raise RuntimeError(f"iOS 工程不存在: {project}")
+    print(f"[open] 打开 iOS 工程: {project}")
     opener = shutil.which("xed")
     if opener:
-        return subprocess.run([opener, str(project)], check=False).returncode
-    return subprocess.run(["open", str(project)], check=False).returncode
+        return subprocess.run([opener, "-p", str(project)], check=False).returncode
+    return subprocess.run(["open", "-a", "Xcode", str(project)], check=False).returncode
 
 
 def build_sim(args: argparse.Namespace, project: Path) -> int:

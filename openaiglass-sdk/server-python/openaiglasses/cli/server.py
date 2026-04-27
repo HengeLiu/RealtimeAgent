@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     1. `argparse.ArgumentParser` 实例。
     """
 
-    parser = argparse.ArgumentParser(prog="openaiglass server", description="启动和管理 OpenAI Glasses 服务端")
+    parser = argparse.ArgumentParser(prog="openaiglass.server.start", description="启动和管理 OpenAI Glasses 服务端")
     parser.add_argument("target", nargs="?", default="local", choices=["local", "remote"], help="运行目标")
     parser.add_argument("action", nargs="?", default="all", help="动作: start/logs/stop/all 或 sync/start/logs/stop/all")
     parser.add_argument("--app-module", default=os.environ.get("OPENAIGLASS_SERVER_APP", "app.main"), help="服务端入口模块")
@@ -284,7 +284,17 @@ def start_local(args: argparse.Namespace) -> int:
 
     host = env.get("SERVER_HOST", env.get("HOST", "0.0.0.0"))
     port = env.get("SERVER_PORT", env.get("PORT", "8765"))
-    command = [sys.executable, "-m", args.app_module, "--host", host, "--port", str(port)]
+    command = [
+        sys.executable,
+        "-m",
+        "openaiglasses.cli.server_runtime",
+        "--app-module",
+        args.app_module,
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
     print("[start] 启动本地服务端")
     print(f"[start] app_module={args.app_module}")
     print(f"[start] host={host} port={port}")

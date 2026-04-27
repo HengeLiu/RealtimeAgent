@@ -8,5 +8,4 @@
 4. 手机侧 `TrafficLightPhoneTask` 调用 `TrafficLightProcessor` 产出 `phone.vision.traffic_light.result`。
 5. 服务端任务收到有效信号后提交通知，并按策略停止手机任务和视频链路。
 
-当前处理器是离线回放和契约验证用的最小实现，真实 iOS 端检测插件后续应放在本能力目录下的 `phone/ios/`，不能写入 SDK 通用运行时。
-
+当前处理器是业务链路验证用的最小实现，真实 iOS 端检测插件后续应放在本能力目录下的 `phone/ios/`，不能写入 SDK 通用运行时。

@@ -27,7 +27,7 @@ class TrafficLightProcessor(BasePhoneProcessor):
 
         参数：
         1. `context`：手机处理器上下文。
-        2. `frame`：端侧适配层传入的帧对象，离线回放中可以是文本。
+        2. `frame`：端侧适配层传入的视频帧对象。
 
         返回值：
         1. 无。
@@ -77,4 +77,3 @@ class TrafficLightProcessor(BasePhoneProcessor):
         if signal == "red":
             return "前方红灯，请停下等待"
         return "暂未识别到明确红绿灯状态"
-

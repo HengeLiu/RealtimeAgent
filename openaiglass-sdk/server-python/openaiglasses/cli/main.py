@@ -37,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
             from openaiglasses.cli.glass import main as glass_main
 
             return glass_main(args)
+        if command == "config":
+            from openaiglasses.cli.config import main as config_main
+
+            return config_main(args)
     except Exception as exc:
         print(f"openaiglass 命令执行失败: {exc}", file=sys.stderr)
         return 1
@@ -50,13 +54,18 @@ def print_usage() -> None:
 
     print(
         """Usage:
-  openaiglass server [local|remote] [start|logs|stop|all]
-  openaiglass phone [config|open|build-sim|build-device]
-  openaiglass glass firmware [--build-only|--flash-only|--monitor-only]
+  openaiglass.server.start [--app-module host.server.main --app-root openaiglass-for-blind]
+  openaiglass.server.run [--app-module host.server.main --app-root openaiglass-for-blind]
+  openaiglass.config.sync [--app-root openaiglass-for-blind]
+  openaiglass.phone.open [--app-root openaiglass-for-blind]
+  openaiglass.glass.start [--repo-root .]
+  openaiglass.glass.start --runtime playback --config <glass-playback.json>
 
 Examples:
-  openaiglass server local start --app-module host.server.main --app-root openaiglass-for-blind
-  openaiglass phone open --app-root openaiglass-for-blind
-  openaiglass glass firmware --build-only --repo-root .
+  openaiglass.config.sync --app-root openaiglass-for-blind
+  openaiglass.server.start --app-module host.server.main --app-root openaiglass-for-blind
+  openaiglass.phone.open --app-root openaiglass-for-blind
+  openaiglass.glass.start --build-only --repo-root .
+  openaiglass.glass.start --runtime playback --config openaiglass-for-blind/host/glass-playback/config/glass.water_cup.json
 """
     )

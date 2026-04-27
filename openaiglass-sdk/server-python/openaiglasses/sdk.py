@@ -36,7 +36,6 @@ class OpenAIGlassesSDK:
     registry: CapabilityRegistry = field(default_factory=CapabilityRegistry)
     device_groups: DeviceGroupRuntime = field(default_factory=DeviceGroupRuntime)
     mcp_adapters: list["BaseMcpAdapter"] = field(default_factory=list)
-    scenario_handlers: dict[str, object] = field(default_factory=dict)
     task_runtime: TaskRuntimeManager = field(init=False)
     phone_runtime: PhoneRuntime = field(init=False)
     _mcp_registry: object = field(init=False, repr=False)
@@ -81,36 +80,6 @@ class OpenAIGlassesSDK:
         """注册传感器提供者。"""
 
         self.registry.register_sensor_provider(provider)
-
-    def register_scenario_handler(self, capability: str, handler: object) -> None:
-        """注册场景回放处理器。
-
-        功能：
-        1. 让 SDK 的场景回放框架只保留通用机制。
-        2. 让官方样例或外部项目把能力特定回放逻辑放在自身目录下。
-
-        参数：
-        1. `capability`：能力类型名称。
-        2. `handler`：对应能力的场景处理器对象。
-        """
-
-        normalized = str(capability).strip()
-        if not normalized:
-            raise ValueError("scenario capability 不能为空")
-        self.scenario_handlers[normalized] = handler
-
-    def get_scenario_handler(self, capability: str) -> object | None:
-        """读取已注册场景回放处理器。"""
-
-        normalized = str(capability).strip()
-        if not normalized:
-            return None
-        return self.scenario_handlers.get(normalized)
-
-    def list_scenario_capabilities(self) -> list[str]:
-        """列出当前已注册的场景能力类型。"""
-
-        return sorted(self.scenario_handlers.keys())
 
     def register_mcp_adapter(self, adapter: "BaseMcpAdapter") -> None:
         """注册 MCP Adapter。

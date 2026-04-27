@@ -46,7 +46,7 @@ class TrafficLightPhoneTask(BasePhoneTask):
 
         参数：
         1. `context`：手机任务上下文。
-        2. `frame`：视频帧或离线回放文本。
+        2. `frame`：视频帧。
 
         返回值：
         1. 无。
@@ -66,4 +66,3 @@ class TrafficLightPhoneTask(BasePhoneTask):
         if result:
             context.emit_result(result)
             context.update({"last_result": result})
-

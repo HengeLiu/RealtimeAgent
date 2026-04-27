@@ -14,8 +14,9 @@ from openaiglasses.cli.common import read_env_file
 def build_parser() -> argparse.ArgumentParser:
     """构建眼镜端命令参数解析器。"""
 
-    parser = argparse.ArgumentParser(prog="openaiglass glass", description="构建、烧录或监看 OpenAI Glasses 眼镜端工程")
-    parser.add_argument("runtime", nargs="?", default="firmware", choices=["firmware"], help="眼镜运行时类型")
+    parser = argparse.ArgumentParser(prog="openaiglass.glass.start", description="启动 OpenAI Glasses 眼镜端运行时")
+    parser.add_argument("runtime_arg", nargs="?", choices=["firmware", "playback"], help="兼容旧形式的位置运行时类型")
+    parser.add_argument("--runtime", choices=["firmware", "playback"], default="", help="眼镜运行时类型")
     parser.add_argument("--repo-root", default=".", help="项目根目录")
     parser.add_argument("--project-dir", default="", help="ESP-IDF 工程目录")
     parser.add_argument("--idf-root", default="", help="ESP-IDF 安装目录")
@@ -33,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--build-only", action="store_true", help="仅编译")
     parser.add_argument("--flash-only", action="store_true", help="仅烧录")
     parser.add_argument("--monitor-only", action="store_true", help="仅监看串口")
+    parser.add_argument("--timeout-seconds", type=float, default=30.0, help="playback 网络超时时间")
+    parser.add_argument("--max-runtime-seconds", type=float, default=30.0, help="playback 触发音频发送后继续等待控制消息的时间")
     return parser
 
 
@@ -40,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     """眼镜端命令主入口。"""
 
     args = build_parser().parse_args(argv)
+    args.runtime = args.runtime or args.runtime_arg or "firmware"
+    if args.runtime == "playback":
+        from openaiglasses.playback.cli import run_playback
+
+        return run_playback(args)
     return run_firmware(args)
 
 

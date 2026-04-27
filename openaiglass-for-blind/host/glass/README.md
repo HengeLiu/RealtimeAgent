@@ -14,5 +14,5 @@ openaiglass glass firmware --repo-root .
 
 ```bash
 cp host/glass/config/local_build.env.example host/glass/config/local_build.env
-uv run python scripts/sync_sdk_live_config.py
+openaiglass.config.sync --app-root openaiglass-for-blind
 ```

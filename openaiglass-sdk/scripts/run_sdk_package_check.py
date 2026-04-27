@@ -150,7 +150,7 @@ assert settings.port > 0
 
 for module_name in [
     "openaiglasses",
-    "openaiglasses.testing",
+    "openaiglasses.playback",
     "agent_core.skills",
     "infra.clock",
     "api.http_server",

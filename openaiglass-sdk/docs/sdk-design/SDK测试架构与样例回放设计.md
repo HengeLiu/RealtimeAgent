@@ -72,17 +72,17 @@ real iOS phone, when required
 
 一次回放的标准时序如下：
 
-1. 开发者启动真实业务服务端。
-2. 如果业务能力依赖手机，开发者启动真实 iOS phone。
-3. 开发者启动 `glass-playback --config <playback.json>`。
+1. 开发者通过 `openaiglass.server.start` 启动真实业务服务端。
+2. 如果业务能力依赖手机，开发者通过 `openaiglass.phone.open` 启动真实 iOS phone。
+3. 开发者通过 `openaiglass.glass.start --runtime playback --config <playback.json>` 启动 `glass-playback` 虚拟眼镜设备。
 4. `glass-playback` 读取配置，校验 `device_id`、`pair_token`、`control_ws_url`、`trigger_audio` 和资产路径。
 5. `glass-playback` 连接服务端 `/ws/control`。
 6. `glass-playback` 发送 `device.register(device_type=glass)`。
 7. 服务端返回 `device.registered`。
 8. `glass-playback` 开始心跳。
-9. 如果配置要求等待绑定，`glass-playback` 等待服务端 runtime 中 glass 与真实 iOS phone 形成设备组绑定。
-10. `glass-playback` 等待 `voice.session.open`，并回传 `voice.session.opened`。
-11. `glass-playback` 自动读取 `trigger_audio.path`，按 `chunk_ms` 切片，通过 `/ws_audio` 流式发送 `MediaFrame(audio_chunk)`。
+9. `glass-playback` 等待 `voice.session.open`，并回传 `voice.session.opened`。
+10. 如果配置要求等待绑定，`glass-playback` 等待服务端 runtime 中 glass 与真实 iOS phone 形成设备组绑定。
+11. 在注册、voice session 和必要绑定都完成后，`glass-playback` 自动读取 `trigger_audio.path`，按 `chunk_ms` 切片，通过 `/ws_audio` 流式发送 `MediaFrame(audio_chunk)`。
 12. 服务端按真实语音链路完成 ASR、agent 调度、Tool 调用、Task 推进和通知下发。
 13. `glass-playback` 接收服务端发给 glass 的控制消息，并按 actuator strategy 记录、保存或自动回执。
 14. 开发者查看 actuator 输出、日志和 runtime snapshot，判断本次业务行为是否符合预期。
@@ -97,9 +97,9 @@ real iOS phone, when required
 | --- | --- | --- |
 | `loaded` | 配置和资产校验完成。 | 开始连接控制 WebSocket。 |
 | `connected` | `/ws/control` 已连接。 | `device.register` 已发送。 |
-| `registered` | 收到 `device.registered`。 | 心跳启动，并按配置等待绑定或语音会话。 |
-| `bound` | 服务端 runtime 显示设备组已就绪；不需要 phone 时可跳过。 | 收到或发起 voice session ready 流程。 |
-| `voice_ready` | 收到 `voice.session.open` 并确认会话打开。 | 开始发送触发音频。 |
+| `registered` | 收到 `device.registered`。 | 心跳启动，并按配置等待语音会话和必要绑定。 |
+| `voice_ready` | 收到 `voice.session.open` 并确认会话打开。 | 等待必要绑定，或在不需要 phone 时开始发送触发音频。 |
+| `bound` | 服务端 runtime 显示设备组已就绪；不需要 phone 时可跳过。 | voice session 也准备完成后开始发送触发音频。 |
 | `streaming_audio` | 正在发送 `trigger_audio`。 | 音频发送完成或传输失败。 |
 | `running` | 触发音频已发送，等待后续控制命令和执行器输出。 | 用户中断、超时或服务端断开。 |
 | `stopped` | 工具正常结束。 | 无。 |
@@ -223,6 +223,8 @@ testdata/
 }
 ```
 
+MP4 由 `glass-playback` 在本机通过 `ffmpeg` 解为 JPEG 帧后，再按真实 `MediaFrame(camera_frame)` 发送到真实 iOS phone 上报的 `target_ws_uri`。如果开发机没有安装 `ffmpeg`，MP4 配置会启动失败，并提示安装依赖。
+
 需要逐帧控制时，可以使用图片帧序列：
 
 ```json
@@ -286,21 +288,21 @@ testdata/
 
 ## 13. SDK 模块划分
 
-建议将设备级回放能力作为 SDK devtools 能力实现，业务工程只保留薄启动脚本。
+建议将设备级回放能力作为 SDK 设备启动能力实现，业务工程只提供 `host/glass-playback/config` 下的设备配置。
 
 推荐模块：
 
 | 模块 | 职责 |
 | --- | --- |
 | `openaiglasses.playback.config` | 解析和校验 `glass-playback` 配置。 |
-| `openaiglasses.playback.assets` | 读取音频、图片、文本帧和传感器资产。 |
+| `openaiglasses.playback.assets` | 读取图片帧序列、单张图片、MP4 视频解帧和传感器资产。 |
 | `openaiglasses.playback.glass_device` | 实现虚拟 glass 设备状态机。 |
 | `openaiglasses.playback.control_client` | 连接 `/ws/control`，处理注册、心跳、控制消息和回执。 |
 | `openaiglasses.playback.audio_stream` | 将 `trigger_audio` 切片并通过 `/ws_audio` 流式发送。 |
 | `openaiglasses.playback.actuators` | 执行器策略、日志和音频保存。 |
-| `openaiglasses.playback.cli` | 提供 `run_playback_glass` 命令入口。 |
+| `openaiglasses.playback.cli` | 接入统一启动命令 `openaiglass.glass.start --runtime playback`。 |
 
-业务工程中的 `scripts/run_playback_glass.py` 只负责把本地路径、环境变量和配置文件传给 SDK CLI。
+不要在业务工程中新增 `scripts/run_playback_glass.py` 之类的独立脚本。`glass-playback` 是设备级组件，应纳入 `openaiglass.glass.start` 的统一启动规范。
 
 ## 14. 错误处理
 
@@ -345,7 +347,9 @@ testdata/
 4. 可以在无需 phone 的能力中只等待 glass 注册和 voice session。
 5. 每份配置必须包含 `trigger_audio`，缺失时启动失败。
 6. 触发音频通过 `/ws_audio` 以音频帧流式发送。
-7. 可以记录服务端下发的 audio play 和 vibrate 命令。
-8. 可以保存服务端下发的播放音频流。
-9. 不提供 `expected` 字段、不做断言、不做批量运行。
-10. SDK 指南、测试文档和业务 README 不再引导开发者使用组件级场景回放。
+7. 可以响应 `sensor.camera.capture`，按配置图片回传 `sensor.camera.captured`。
+8. 可以响应 `sensor.camera.stream.start/stop`，按配置图片帧序列或 MP4 向真实 iOS phone 推送 `MediaFrame(camera_frame)`。
+9. 可以记录服务端下发的 audio play 和 vibrate 命令。
+10. 可以保存服务端下发的播放音频流。
+11. 不提供 `expected` 字段、不做断言、不做批量运行。
+12. SDK 指南、测试文档和业务 README 不再引导开发者使用组件级场景回放。

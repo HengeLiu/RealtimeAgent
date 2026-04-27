@@ -64,11 +64,6 @@ def parse_args() -> argparse.Namespace:
         help="跳过 SDK 公共契约测试",
     )
     parser.add_argument(
-        "--skip-compatibility",
-        action="store_true",
-        help="跳过盲人业务兼容性回归测试",
-    )
-    parser.add_argument(
         "--skip-pytest",
         action="store_true",
         help="跳过核心 pytest 检查",
@@ -147,7 +142,7 @@ def run_entrypoint_check() -> CheckResult:
         "server_entry": APP_ROOT / "host/server/main.py",
         "phone_sdk_project": SDK_ROOT / "phone-ios/GlassesVideoReceiver.xcodeproj",
         "glass_sdk_project": SDK_ROOT / "glass-esp32",
-        "server_run_script": APP_ROOT / "scripts/run_server.sh",
+        "glass_playback_config_dir": APP_ROOT / "host/glass-playback/config",
         "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
         "sdk_live_config_sync_script": APP_ROOT / "scripts/sync_sdk_live_config.py",
     }
@@ -311,7 +306,6 @@ def main() -> int:
                     "openaiglass-for-blind/capabilities",
                     "openaiglass-sdk/tests/unit",
                     "openaiglass-sdk/scripts/run_sdk_contract_tests.py",
-                    "openaiglass-sdk/scripts/run_sdk_compatibility_tests.py",
                     "openaiglass-for-blind/scripts/run_sdk_preflight.py",
                     "openaiglass-sdk/scripts/run_sdk_package_check.py",
                     "openaiglass-for-blind/scripts/run_sdk_live_check.py",
@@ -347,17 +341,6 @@ def main() -> int:
             )
         )
 
-    if not args.skip_compatibility:
-        checks.append(
-            run_command(
-                name="compatibility_suite",
-                command=[
-                    sys.executable,
-                    "openaiglass-sdk/scripts/run_sdk_compatibility_tests.py",
-                ],
-            )
-        )
-
     if not args.skip_pytest:
         checks.append(
             run_command(
@@ -368,6 +351,7 @@ def main() -> int:
                     "pytest",
                     "openaiglass-sdk/tests/contracts",
                     "openaiglass-sdk/tests/unit/test_sdk_phase_two.py",
+                    "openaiglass-sdk/tests/unit/test_playback_config.py",
                     "openaiglass-sdk/tests/unit/test_agent_core.py",
                     "openaiglass-sdk/tests/unit/test_backend_task_core.py",
                     "openaiglass-sdk/tests/integration/test_control_register_flow.py",

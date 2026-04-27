@@ -21,7 +21,7 @@ host/phone/ios/GlassesVideoReceiver.xcodeproj
 
 ```bash
 cp host/phone/config/AppConfig.plist.example host/phone/config/AppConfig.plist
-uv run python scripts/sync_sdk_live_config.py
+openaiglass.config.sync --app-root openaiglass-for-blind
 ```
 
 同步脚本只写业务目录下的 `host/phone/config/AppConfig.plist`。业务侧 Xcode 工程会把这个配置文件作为 App 资源打包，不再写入 SDK 目录。

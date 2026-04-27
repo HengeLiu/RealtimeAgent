@@ -5,5 +5,4 @@
 | 子目录 | 职责 |
 | --- | --- |
 | [server](./server) | 服务端 Tool 和 Task。 |
-| [phone](./phone) | 手机侧 Python 回放处理器、手机任务，以及 iOS 能力插件源码。 |
-| [scenario.py](./scenario.py) | 离线场景回放处理器。 |
+| [phone](./phone) | 手机侧处理器、手机任务，以及 iOS 能力插件源码。 |

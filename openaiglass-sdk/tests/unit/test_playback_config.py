@@ -1,0 +1,227 @@
+"""设备级 glass-playback 配置测试。"""
+
+from __future__ import annotations
+
+import json
+import threading
+import wave
+from pathlib import Path
+
+import pytest
+
+from protocol.media import MediaFrame
+
+from openaiglasses.playback import PlaybackConfig
+from openaiglasses.playback.glass_device import PlaybackGlassDevice
+
+
+class _FakeControl:
+    """记录 glass-playback 发送的控制消息。"""
+
+    def __init__(self) -> None:
+        self.sent_texts: list[str] = []
+
+    def send_text(self, text: str) -> None:
+        self.sent_texts.append(text)
+
+
+class _FakeWsClient:
+    """记录 camera stream 发送的二进制帧。"""
+
+    sent_binaries: list[bytes] = []
+
+    def __init__(self, url: str, *, timeout_seconds: float = 30.0) -> None:
+        self.url = url
+        self.timeout_seconds = timeout_seconds
+
+    def send_binary(self, payload: bytes) -> None:
+        self.sent_binaries.append(payload)
+
+    def close(self) -> None:
+        return
+
+
+def _write_wav(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\0\0" * 160)
+
+
+def test_playback_config_loads_device_level_config(tmp_path: Path) -> None:
+    """配置从设备宿主目录读取，数据资产从 testdata 读取。"""
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    _write_wav(audio_path)
+    config_path = config_dir / "glass.water_cup.json"
+    config_dir.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "format": "wav",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+
+    assert config.device_id == "glass-playback-001"
+    assert config.audio_ws_url == "ws://127.0.0.1:8765/ws_audio"
+    assert config.trigger_audio.path == audio_path.resolve()
+    assert config.outputs is not None
+    assert config.outputs.event_log == (app_root / "runs/playback/glass-playback-001/events.jsonl").resolve()
+
+
+def test_playback_config_requires_trigger_audio(tmp_path: Path) -> None:
+    """每个 glass-playback 配置都必须显式提供触发音频。"""
+
+    config_path = tmp_path / "openaiglass-for-blind/host/glass-playback/config/missing.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sensors.trigger_audio"):
+        PlaybackConfig.load(config_path, repo_root=tmp_path)
+
+
+def test_playback_camera_capture_responds_with_configured_image(tmp_path: Path) -> None:
+    """抓拍请求从配置图片读取内容，并按真实控制协议回传。"""
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    image_path = app_root / "testdata/image/cup.jpg"
+    _write_wav(audio_path)
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"fake-jpeg-bytes")
+    config_path = config_dir / "glass.water_cup.json"
+    config_dir.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "format": "wav",
+                    },
+                    "camera_capture": {
+                        "path": "testdata/image/cup.jpg",
+                        "mime_type": "image/jpeg",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    control = _FakeControl()
+
+    device._handle_camera_capture(  # noqa: SLF001 - 单元测试直接验证设备协议回包
+        control,
+        {
+            "name": "sensor.camera.capture",
+            "session_id": "sess_001",
+            "payload": {"request_id": "capture_001"},
+        },
+    )
+
+    assert len(control.sent_texts) == 1
+    message = json.loads(control.sent_texts[0])
+    assert message["name"] == "sensor.camera.captured"
+    assert message["session_id"] == "sess_001"
+    assert message["payload"]["request_id"] == "capture_001"
+    assert message["payload"]["ok"] is True
+    assert message["payload"]["mime_type"] == "image/jpeg"
+    assert message["payload"]["image_base64"] == "ZmFrZS1qcGVnLWJ5dGVz"
+
+
+def test_playback_camera_stream_sends_configured_frames(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """视频流启动后从配置帧序列读取图片，并发送真实 MediaFrame。"""
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    frame_path = app_root / "testdata/image/cup-001.jpg"
+    _write_wav(audio_path)
+    frame_path.parent.mkdir(parents=True)
+    frame_path.write_bytes(b"frame-001")
+    config_path = config_dir / "glass.water_cup.json"
+    config_dir.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "format": "wav",
+                    },
+                    "camera_stream": {
+                        "frame_interval_ms": 10,
+                        "frames": [
+                            {
+                                "path": "testdata/image/cup-001.jpg",
+                                "codec": "jpeg",
+                                "t_ms": 0,
+                            }
+                        ],
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    _FakeWsClient.sent_binaries = []
+    monkeypatch.setattr("openaiglasses.playback.glass_device.WsClient", _FakeWsClient)
+
+    device._camera_stream_loop(  # noqa: SLF001 - 单元测试直接验证设备级推流协议
+        "camera_stream_001",
+        "ws://127.0.0.1:9000/ws/camera",
+        10,
+        threading.Event(),
+    )
+
+    assert len(_FakeWsClient.sent_binaries) == 1
+    frame = MediaFrame.decode(_FakeWsClient.sent_binaries[0])
+    assert frame.header["frame_type"] == "camera_frame"
+    assert frame.header["stream_id"] == "camera_stream_001"
+    assert frame.header["codec"] == "jpeg"
+    assert frame.payload == b"frame-001"
