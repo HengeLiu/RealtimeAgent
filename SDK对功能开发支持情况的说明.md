@@ -1,14 +1,14 @@
 # SDK 对功能开发支持情况的说明
 
 更新时间：2026-04-27  
-评估对象：`sdk-v4`
+评估对象：`sdk-v5`
 评估范围：本目录下 `第一期功能开发计划.md`、`第一期前三项开发落地计划.md`、`第二阶段第4-8项开发落地计划.md`、`第三阶段第9-10项与视觉导航迁移开发落地计划.md`。
 
 ## 1. 评估结论
 
 当前 SDK 已经从早期脚手架推进到“可支撑 Stage1 多数最小闭环业务开发”的状态。业务团队可以基于 `BaseTool`、`BaseTask`、`BasePhoneProcessor`、`BasePhoneTask`、`DeviceGroupContext`、`MCP Adapter` 和 `ScenarioRunner` 开发找物、红绿灯、计时器、导航准备等能力，不需要直接处理三端 WebSocket、设备绑定、任务状态表、视频控制消息和场景回放机制。
 
-但当前 SDK 还不是完整产品级三端运行时。第一期计划中的实时语音打断、真实地图接入、复杂导航执行期、多视觉任务并发、任务持久化恢复、手机/眼镜 SDK 包化等仍存在明显缺口。`sdk-v4` 已经把视频直连系统任务从“只发 start/stop 命令”增强为具备最小 peer-link 生命周期、失败、完成、取消和事件回流语义的 SDK 系统任务，但真实公网/NAT 穿透、重试和端侧包化仍不覆盖。这些缺口大多属于 SDK 框架问题，不适合业务团队在 `openaiglass-for-blind/capabilities` 内自行补系统层实现。
+但当前 SDK 还不是完整产品级三端运行时。第一期计划中的实时语音打断、真实地图接入、复杂导航执行期、模型资源级多视觉任务并发、手机/眼镜 SDK 包化等仍存在明显缺口。`sdk-v4` 已经把视频直连系统任务从“只发 start/stop 命令”增强为具备最小 peer-link 生命周期、失败、完成、取消和事件回流语义的 SDK 系统任务；`sdk-v5` 继续补了 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复和手机侧多任务帧分发。但真实公网/NAT 穿透、重试、数据库级任务恢复、模型资源调度和端侧包化仍不覆盖。这些缺口大多属于 SDK 框架问题，不适合业务团队在 `openaiglass-for-blind/capabilities` 内自行补系统层实现。
 
 ## 2. 已经能够支持的功能
 
@@ -23,8 +23,8 @@
 | AgentCore 调用 Tool | 已支持 | SDK 提供 `AgentFacade`、`AgentTurn`、`ToolRegistry`、`ToolGateway`，业务 Tool 可通过 `OpenAIGlassesSDK.register_tool()` 注入模型工具面。 |
 | Tool 与 MCP 基础能力 | 已支持 | `OpenAIGlassesSDK.register_mcp_adapter()` 与 `DeviceGroupContext.mcp(...)` 已可用，业务 Tool 不需要自行拼装 `McpRegistry / McpGateway`。 |
 | 单次抓拍和图片解读 | 已支持 | `capture_photo` 通过 `CameraGateway -> ControlRuntime -> sensor.camera.capture / sensor.camera.captured` 完成新抓拍，并进入图片理解链路。 |
-| 业务 Task 最小开发面 | 已支持 | 业务可扩展 `BaseTask`，通过 `context.create_task()`、`query_task()`、`cancel_task()` 和 `TaskContext` 管理任务状态。 |
-| 手机侧持续任务承载 | 已支持 | `BasePhoneProcessor`、`BasePhoneTask`、`PhoneRuntime`、iOS `PhoneTaskCapabilityRegistry` 已支持按 `taskType` 注册和分发手机业务插件。 |
+| 业务 Task 最小开发面 | 已支持 | 业务可扩展 `BaseTask`，通过 `context.create_task()`、`query_task()`、`cancel_task()` 和 `TaskContext` 管理任务状态。`sdk-v5` 已支持事件日志、超时、快照导出/恢复和 JSON 文件保存/加载。 |
+| 手机侧持续任务承载 | 已支持 | `BasePhoneProcessor`、`BasePhoneTask`、`PhoneRuntime`、iOS `PhoneTaskCapabilityRegistry` 已支持按 `taskType` 注册和分发手机业务插件。`sdk-v5` 的 Python 侧 `PhoneRuntime.process_frame(...)` 已支持按 `stream_id/task_types` 多任务分发。 |
 | 眼镜到手机视频链路最小闭环 | 已支持 | `start_phone_video_link()` / `stop_phone_video_link()` 可下发 `sensor.camera.stream.start/stop`，iOS 端可通过 `/ws/camera` 接收 JPEG 帧并回显。`sdk-v4` 支持 `peer_link.ready/failed/broken/closed` 与 `camera.stream.started/stopped` 事件回流。 |
 | 找物能力最小闭环 | 已支持 | `find_object` 已有 Tool、Task、PhoneProcessor、PhoneTask、iOS 插件样例和多条回放场景。 |
 | 红绿灯识别最小闭环 | 已支持 | `traffic_light` 已有服务端 Task、手机侧处理器、iOS 插件样例和红/绿/缺手机/取消等场景。 |
@@ -40,12 +40,12 @@
 | 功能或计划项 | 当前欠缺 | 对功能开发的影响 | 建议处理 |
 | --- | --- | --- | --- |
 | 普通语音回复的端到端流式播放 | Agent 和 TTS 都有流式相关实现，但普通文本 delta 到 TTS 播放的全链路还不够稳定 | 长回复首音频延迟和打断体验会受影响 | SDK 继续收敛 `agent-core -> voice-runtime -> TTS -> /stream.wav` 增量链路。 |
-| 后台任务运行时产品化 | 当前能支持业务 Task 最小闭环，但缺少任务持久化、自然到点调度、重启恢复、超时统一治理 | `timer` 可回放验证，真实长时间运行和重启恢复不足 | SDK 增加通用定时事件、任务持久化和恢复策略。 |
+| 后台任务运行时产品化 | `sdk-v5` 已支持 SDK 业务 Task 事件日志、超时、快照导出/恢复和 JSON 文件保存/加载，但缺少数据库级持久化、自然到点调度和跨服务补偿恢复 | `timer` 可回放验证；单进程重启可由宿主保存/加载快照兜底，生产级长时间运行和多实例恢复仍不足 | SDK 后续补通用定时事件、数据库/事件日志存储、幂等恢复和补偿执行策略。 |
 | 任务事件回流 Agent 再决策 | 当前可以发布事件和提交通知，但“任务事件回到 Agent 形成上下文决策”的策略还不完整 | 高优先级事件能通知，复杂任务总结、追问和去重仍弱 | SDK 明确事件优先级、直达端侧、回流 Agent 和上下文写入规则。 |
 | 通知抢占、排队和去重 | `submit_notification(priority=...)` 可用，服务端也有通知协调雏形，但跨任务抢播策略还不够产品化 | 手机视觉、导航和普通问答同时播报时可能互相打断或重复 | SDK 提供稳定 `NotificationCoordinator` 策略配置和回放测试夹具。 |
 | AMap 真实接入 | SDK 提供 MCP 网关，业务侧已有 mock adapter，但真实 AMap 鉴权、限流、错误码和网络超时未形成标准 | 导航准备能做 mock 闭环，不能代表真实地图验收 | 短期由业务注册真实 adapter；SDK 沉淀外部服务 adapter 配置、mock/real 切换和错误规范。 |
 | `phone_video_link_task` 产品级链路治理 | 最小 peer-link 任务语义已增强，真实网络治理仍不覆盖 | 第 10 项已经能查询、取消、上报 ready/started/failed/stopped；公网穿透、重试和端侧自动恢复仍不足 | 业务侧按 SDK 标准事件上报；SDK 后续补 NAT/公网穿透、重试、断线自动回收和持久化恢复。 |
-| 手机端视觉能力迁移 | iOS 能接帧、按任务分发和上报结果，但没有统一模型资源、YOLO 运行、性能限制和多任务帧共享框架 | `find_object`、`traffic_light` 可作为样板，盲道、避障等复杂能力迁移成本仍高 | SDK 或手机宿主补视觉执行框架、模型资源管理、帧分发和性能观测。 |
+| 手机端视觉能力迁移 | Python SDK 已提供 `PhoneRuntime.process_frame(...)` 多任务帧分发；iOS 能接帧、按任务分发和上报结果，但还没有统一模型资源、YOLO 运行和性能限制框架 | `find_object`、`traffic_light` 可作为样板，盲道、避障等复杂能力迁移成本仍高 | SDK 或手机宿主补视觉执行框架、模型资源管理、端侧多任务帧共享落地和性能观测。 |
 | 导航执行期任务 | 业务侧已有最小 `navigation_task` 和视觉事件接入，但复杂路径进度、盲道、红绿灯、避障融合还不充分 | 可以做“可运行后台任务”，但不能宣称完整室外导航产品化 | 先保持业务最小策略，SDK 补传感器、视觉事件、地图进度和通知策略的标准接口。 |
 | iOS 业务插件集成 | SDK 支持多插件注册，但业务 Swift 文件仍需要工程层加入 target | 新增能力真机验证时仍有手工工程操作 | SDK 后续提供 Swift Package、XCFramework 或插件自动纳入方案。 |
 | 眼镜端工程复用 | ESP32 工程已经是通用运行时，但还不是 ESP-IDF component | 新硬件能力不能由业务团队直接扩展，只能改 SDK 工程 | SDK 团队组件化眼镜运行时，并固化硬件能力扩展流程。 |
@@ -59,12 +59,12 @@
 | --- | --- | --- |
 | 第一项第 3 点：电话式实时语音对话和用户打断 | 这涉及眼镜持续收音、播放期 VAD、实时模型会话、半双工/全双工切换、播放抢占和恢复监听，业务 Tool/Task 无法表达 | 实时语音 runtime、实时 ASR/LLM/TTS 或全双工会话、打断控制协议、端侧状态机和回归测试。 |
 | 完整 peer-link 网络治理 | `sdk-v4` 已固化最小事件和任务阶段，但仍不包含公网/NAT 穿透、自动重试、跨网络恢复和端侧包化 | 网络协商、重试退避、链路健康检查、端侧 SDK 包化和任务持久化恢复。 |
-| 多视觉任务并发与资源仲裁 | iOS 运行时按当前活跃任务投递帧，缺少多个视觉任务共享帧、优先级、模型资源和功耗控制 | 手机端任务调度器、帧分发策略、模型资源管理、并发限制和性能保护。 |
+| 多视觉任务资源仲裁 | `sdk-v5` 已在 Python 手机运行时提供多任务帧分发模型，但还没有模型资源、帧率、优先级、功耗和端侧 iOS 完整调度策略 | 手机端任务调度器、模型资源管理、并发限制、性能保护和端侧实现对齐。 |
 | 完整室外导航产品策略 | 最后 10 米、岔路、安全过街、盲道、避障、地图进度和视觉事件融合不是单个业务 Task 能稳定兜住的问题 | 导航执行期标准状态机、视觉/地图/传感器融合接口、安全通知策略和真机验收套件。 |
 | 业务层直接新增眼镜硬件能力 | 眼镜端属于通用 SDK 运行时，业务目录不应直接改 `glass-esp32` 写业务策略或硬件协议 | SDK 公开新的 `DeviceGroupContext` 方法、控制消息、ESP32 通用硬件能力和联调测试。 |
 | SDK 发布级 iOS 集成形态 | 当前仍以源码/Xcode 工程方式复用，不具备正式包依赖、版本兼容和插件发现机制 | Swift Package 或 XCFramework、资源注入、插件发现、版本兼容规则。 |
 | SDK 发布级 ESP32 集成形态 | 当前是完整 ESP-IDF 工程，不是可被外部业务工程依赖的 component | ESP-IDF component 化、Kconfig/环境配置注入、硬件抽象边界和发布说明。 |
-| 跨服务重启的任务恢复 | 当前任务和会话主要是内存态，离线场景可以回放，但不是生产级持久恢复 | 任务事件日志、会话/任务持久化、幂等恢复和补偿执行机制。 |
+| 生产级跨服务重启恢复 | `sdk-v5` 已提供 SDK 业务 Task JSON 快照保存/恢复，但不是数据库级事件溯源，也没有多实例幂等补偿 | 会话/任务数据库持久化、事件溯源、幂等恢复和补偿执行机制。 |
 
 ## 5. 按第一期 1-10 项的支持级别
 
@@ -77,7 +77,7 @@
 | 5. 引入工具与 MCP | 已经能够支持 | Tool/MCP 注册、调用和 `context.mcp(...)` 已形成公开入口。 |
 | 6. 拍照工具和图片解读 | 已经能够支持 | `capture_photo`、图片资产引用和图片理解路径已具备。 |
 | 7. 基于 AMap MCP 的导航能力 | 存在欠缺 | mock 导航准备和任务闭环可用，真实 AMap、复杂澄清和执行期策略不足。 |
-| 8. 后台任务管理工具 | 存在欠缺 | 业务 Task 最小闭环可用；`phone_video_link_task` 已支持事件回流，通用持久化、自然调度和恢复仍不足。 |
+| 8. 后台任务管理工具 | 存在欠缺 | 业务 Task 最小闭环可用；`phone_video_link_task` 已支持事件回流；SDK 业务 Task 已有事件日志、超时和 JSON 快照恢复，通用定时调度、数据库持久化和补偿恢复仍不足。 |
 | 9. 手机设备注册、配对、绑定 | 已经能够支持 | iOS 注册、心跳、绑定、视频接收和状态查询已具备。 |
 | 10. 大模型创建手机与眼镜直连后台任务 | 已经能够支持 | `sdk-v4` 已支持创建、查询、取消、peer-link ready/failed/broken/closed、camera started/stopped 和错误手机拒绝上报；完整 NAT/公网穿透与重试恢复仍属后续 SDK 迭代。 |
 
@@ -92,8 +92,8 @@
 ## 7. 对 SDK 团队的后续优先级建议
 
 1. 优先补第一期第 3 项所需的实时语音打断 runtime，这是当前最明确的“不能支持”项。
-2. 补强后台任务运行时：定时事件、任务持久化、状态迁移校验、超时和重启恢复。
+2. 补强后台任务运行时：在 `sdk-v5` 快照恢复基础上继续补定时事件、数据库持久化、状态迁移校验和补偿恢复。
 3. 在 `sdk-v4` 最小 peer-link 语义基础上，继续补公网/NAT 穿透、断线重试、链路健康检查和持久化恢复。
-4. 抽象手机视觉执行框架，包括模型加载、帧分发、多任务仲裁、性能限制和结果上报。
+4. 抽象手机视觉执行框架，在 `sdk-v5` 多任务帧分发基础上继续补模型加载、多任务仲裁、性能限制和结果上报。
 5. 提供真实外部服务 adapter 的标准配置、鉴权、超时、错误码和 mock/real 切换规范，优先覆盖 AMap。
 6. 推进 iOS SDK 和 ESP32 SDK 的发布级包化，降低业务能力接入真机工程的人工成本。

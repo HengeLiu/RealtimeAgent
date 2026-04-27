@@ -773,6 +773,248 @@ def test_hybrid_task_gateway_can_forward_generic_event_to_sdk_task() -> None:
         gateway.shutdown()
 
 
+def test_sdk_task_runtime_records_events_and_times_out() -> None:
+    """测试目标：验证 SDK 托管任务具备事件日志和查询触发超时能力。
+
+    测试方法：
+    1. 注册一个进入 `running` 的等待任务。
+    2. 创建任务时传入 `timeout_ms`。
+    3. 人为把恢复截止时间调到过去并查询任务。
+
+    预期结果：
+    1. 任务进入 `timeout`。
+    2. 快照中包含 `task.created`、`task.started`、`task.timeout` 事件。
+    3. 快照保留结构化错误和时间戳。
+    """
+
+    class WaitingTask(BaseTask):
+        task_type = "sdk_waiting_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running", {"phase": "waiting"})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(WaitingTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_waiting_task",
+        session_id="sess_timeout_001",
+        device_id="glass_001",
+        input_data={"timeout_ms": 1000},
+    )
+    sdk.task_runtime._records[created.task_id].deadline_at_ms = 1  # noqa: SLF001
+
+    timeout = sdk.task_runtime.query_task(created.task_id)
+
+    assert timeout.state == "timeout"
+    assert timeout.error is not None
+    assert timeout.error["code"] == "task_timeout"
+    assert timeout.created_at_ms > 0
+    assert timeout.completed_at_ms is not None
+    assert [event["event_name"] for event in timeout.events] == [
+        "task.created",
+        "task.started",
+        "task.timeout",
+    ]
+
+
+def test_sdk_task_runtime_can_export_and_restore_snapshots() -> None:
+    """测试目标：验证 SDK 托管任务可通过快照导出和恢复。
+
+    测试方法：
+    1. 创建一个等待外部事件的 SDK 任务并导出快照。
+    2. 构造新的 SDK 运行时并恢复该快照。
+    3. 继续派发外部事件完成任务。
+
+    预期结果：
+    1. 恢复后可查询原任务状态和事件日志。
+    2. 已注册任务类型仍可继续接收事件并完成。
+    3. 事件日志包含 `task.restored` 与最终 `task.completed`。
+    """
+
+    class RestorableTask(BaseTask):
+        task_type = "sdk_restorable_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running", {"phase": "waiting"})
+
+        def on_event(self, context, event) -> None:
+            if event.name == "phone.demo.done":
+                context.complete({"ok": True, "source": event.source})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(RestorableTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_restorable_task",
+        session_id="sess_restore_001",
+        device_id="glass_001",
+        input_data={"target": "demo"},
+    )
+    exported = sdk.task_runtime.export_snapshots()
+
+    restored_sdk = OpenAIGlassesSDK()
+    restored_sdk.register_task(RestorableTask())
+    restored_sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    restored = restored_sdk.task_runtime.restore_snapshots(exported)
+
+    assert restored[0].task_id == created.task_id
+    assert restored[0].state == "running"
+    updated = restored_sdk.task_runtime.dispatch_event(
+        task_id=created.task_id,
+        event_name="phone.demo.done",
+        payload={},
+        source="phone",
+    )
+
+    assert updated.state == "completed"
+    assert updated.result == {"ok": True, "source": "phone"}
+    event_names = [event["event_name"] for event in updated.events]
+    assert "task.restored" in event_names
+    assert "task.completed" in event_names
+
+
+def test_sdk_task_runtime_can_save_and_load_snapshot_file(tmp_path) -> None:
+    """测试目标：验证 SDK 托管任务可保存到 JSON 文件并从文件恢复。
+
+    测试方法：
+    1. 创建一个运行中的 SDK 任务。
+    2. 调用 `save_snapshots(...)` 写入临时 JSON 文件。
+    3. 用新的 SDK 运行时调用 `load_snapshots(...)`。
+
+    预期结果：
+    1. 快照文件包含任务列表。
+    2. 新运行时可查询恢复后的原任务。
+    3. 恢复事件被追加到任务事件日志中。
+    """
+
+    class PersistedTask(BaseTask):
+        task_type = "sdk_persisted_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running", {"phase": "persisted"})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(PersistedTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_persisted_task",
+        session_id="sess_persist_001",
+        device_id="glass_001",
+        input_data={"target": "demo"},
+    )
+    snapshot_file = tmp_path / "tasks.json"
+
+    written = sdk.task_runtime.save_snapshots(snapshot_file)
+
+    assert snapshot_file.exists()
+    assert written[0]["task_id"] == created.task_id
+
+    restored_sdk = OpenAIGlassesSDK()
+    restored_sdk.register_task(PersistedTask())
+    restored_sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    restored = restored_sdk.task_runtime.load_snapshots(snapshot_file)
+
+    assert restored[0].task_id == created.task_id
+    latest = restored_sdk.task_runtime.query_task(created.task_id)
+    assert latest.data["phase"] == "persisted"
+    assert latest.events[-1]["event_name"] == "task.restored"
+
+
+def test_phone_runtime_can_fanout_frame_to_matching_active_tasks() -> None:
+    """测试目标：验证手机运行时可把同一帧分发给多个匹配的活跃任务。
+
+    测试方法：
+    1. 注册两个通用手机任务。
+    2. 启动两个绑定同一 `stream_id` 的任务和一个绑定其它流的任务。
+    3. 调用 `process_frame(...)` 分发一帧。
+
+    预期结果：
+    1. 同一路视频流上的两个任务都收到帧。
+    2. 其它视频流上的任务不会收到帧。
+    3. 每个命中任务记录 `frames_processed`。
+    """
+
+    class CountingPhoneTask(BasePhoneTask):
+        task_type = "counting_phone_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context, frame) -> None:
+            count = int(context.data.get("count") or 0) + 1
+            context.update({"count": count, "last_frame": frame})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(CountingPhoneTask())
+    first = sdk.phone_runtime.start_task(
+        task_type="counting_phone_task",
+        params={"stream_id": "stream_shared", "name": "first"},
+    )
+    second = sdk.phone_runtime.start_task(
+        task_type="counting_phone_task",
+        params={"stream_id": "stream_shared", "name": "second"},
+    )
+    other = sdk.phone_runtime.start_task(
+        task_type="counting_phone_task",
+        params={"stream_id": "stream_other", "name": "other"},
+    )
+
+    updated = sdk.phone_runtime.process_frame(frame={"seq": 1}, stream_id="stream_shared")
+
+    assert {item.task_id for item in updated} == {first.task_id, second.task_id}
+    assert all(item.frames_processed == 1 for item in updated)
+    assert sdk.phone_runtime.query_task(other.task_id).frames_processed == 0
+
+
+def test_phone_runtime_can_filter_fanout_by_task_type_and_skip_stopped_task() -> None:
+    """测试目标：验证手机帧分发支持任务类型过滤并跳过终态任务。
+
+    测试方法：
+    1. 注册两类手机任务。
+    2. 停止其中一个目标任务。
+    3. 用 `task_types` 限制分发范围。
+
+    预期结果：
+    1. 只有匹配任务类型且仍在运行的任务收到帧。
+    2. 停止任务和其它任务类型不会收到帧。
+    """
+
+    class FirstPhoneTask(BasePhoneTask):
+        task_type = "first_phone_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context, frame) -> None:
+            context.update({"frame": frame})
+
+    class SecondPhoneTask(BasePhoneTask):
+        task_type = "second_phone_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context, frame) -> None:
+            context.update({"frame": frame})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(FirstPhoneTask())
+    sdk.register_phone_task(SecondPhoneTask())
+    active = sdk.phone_runtime.start_task(task_type="first_phone_task", params={})
+    stopped = sdk.phone_runtime.start_task(task_type="first_phone_task", params={})
+    other_type = sdk.phone_runtime.start_task(task_type="second_phone_task", params={})
+    sdk.phone_runtime.stop_task(stopped.task_id)
+
+    updated = sdk.phone_runtime.process_frame(frame={"seq": 2}, task_types=["first_phone_task"])
+
+    assert [item.task_id for item in updated] == [active.task_id]
+    assert sdk.phone_runtime.query_task(active.task_id).frames_processed == 1
+    assert sdk.phone_runtime.query_task(stopped.task_id).frames_processed == 0
+    assert sdk.phone_runtime.query_task(other_type.task_id).frames_processed == 0
+
+
 def test_build_agent_facade_from_sdk_registers_sdk_tools() -> None:
     """测试目标：验证 SDK 能把自定义 Tool 注入真实 agent-core 工具面。
 

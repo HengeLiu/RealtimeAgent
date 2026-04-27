@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何完成离线验证和真机联调。
 
-当前指南对应 SDK 版本：`sdk-v4`。本版本新增 `phone_video_link_task` 最小 peer-link 生命周期语义，支持查询、取消、端侧事件回流、结构化失败和错误手机拒绝上报；实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v5`。本版本新增 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复，以及手机侧多任务帧分发；上一版本已增强 `phone_video_link_task` 最小 peer-link 生命周期语义。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -485,12 +485,56 @@ curl -X POST http://127.0.0.1:8000/api/tasks/report-event \
 
 业务侧不要在 `openaiglass-for-blind/capabilities` 内自行维护视频任务状态表，也不要自行绕过 SDK 给眼镜发送 `sensor.camera.stream.start/stop`。真实公网/NAT 穿透、自动重试、链路健康检查仍由 SDK 后续版本统一补齐。
 
+### 6.2 SDK 托管任务快照与恢复
+
+`sdk-v5` 起，SDK 业务 Task 运行时会记录任务时间戳和事件日志。业务 Task 不需要改接口，仍然使用 `context.emit_state(...)`、`context.complete(...)`、`on_event(...)` 和 `on_cancel(...)`。
+
+任务快照新增字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `created_at_ms` / `updated_at_ms` | 任务创建和最近更新时间。 |
+| `started_at_ms` / `completed_at_ms` | 任务开始和终态时间。 |
+| `timeout_ms` / `deadline_at_ms` | 可选超时配置和截止时间。 |
+| `events` | SDK 记录的 `task.created`、`task.started`、外部事件、`task.completed`、`task.failed`、`task.cancelled`、`task.timeout` 等事件。 |
+
+创建任务时可传入 `timeout_ms`。如果任务在查询、取消或事件派发前已经超过截止时间，SDK 会自动推进到 `timeout` 并写入结构化错误：
+
+```python
+runtime = context.device_group.create_task(
+    task_type="demo_task",
+    input_data={"target": "demo", "timeout_ms": 30000},
+)
+latest = context.device_group.query_task(runtime.task_id)
+```
+
+宿主服务可以把任务快照保存到 JSON 文件，并在重启后恢复：
+
+```python
+sdk.task_runtime.save_snapshots("logs/sdk-task-snapshots.json")
+sdk.task_runtime.load_snapshots("logs/sdk-task-snapshots.json")
+```
+
+恢复后的任务可继续查询；如果对应 `task_type` 仍已注册，也可以继续接收事件。生产环境如果要接数据库或对象存储，可以直接复用 `export_snapshots()` / `restore_snapshots(...)`，由宿主决定持久化介质。
+
 ## 7. 开发手机侧能力
 
 手机侧能力分为两层：
 
 1. `BasePhoneProcessor`：处理一帧图像、一段传感器数据或一次本地模型输出。
 2. `BasePhoneTask`：组织一个持续任务，决定什么时候调用处理器、什么时候输出结果。
+
+`sdk-v5` 起，手机侧运行时支持把同一帧分发给多个活跃任务。任务参数中如果声明 `stream_id`，SDK 会只把同一路视频流的帧交给该任务；调用方也可以用 `task_types` 限定分发范围。
+
+```python
+snapshots = sdk.phone_runtime.process_frame(
+    frame={"seq": 12, "image": "..."},
+    stream_id="stream_xxx",
+    task_types=["find_object_phone_task", "traffic_light_phone_task"],
+)
+```
+
+每个 `PhoneTaskSnapshot` 会包含 `frames_processed`，方便测试和联调判断某个手机任务是否实际收到帧。已经 `completed`、`cancelled`、`failed` 或 `stopped` 的任务不会再收到后续帧。
 
 ### 7.1 PhoneProcessor
 
