@@ -53,13 +53,19 @@ from openaiglasses import (
 )
 ```
 
-### 2.2 iOS 手机 SDK 运行时
+### 2.2 iOS 手机 SDK 运行时和业务入口
 
-iOS SDK 运行时位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-ios)，当前以 Xcode 工程形式交付。
+iOS SDK 运行时代码位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-ios)。业务开发者不要直接打开或修改 SDK 目录下的 Xcode 工程；盲人业务项目提供自己的手机端 Xcode 入口：
+
+```text
+openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj
+```
+
+这个业务侧 Xcode 工程引用 SDK 通用 iOS 运行时代码，并把业务目录下的配置文件打包进 App。
 
 它负责：
 
-1. 从业务工程同步生成的 `AppConfig.plist` 读取服务端地址、手机设备编号、配对令牌和目标眼镜编号。
+1. 从业务工程的 `AppConfig.plist` 读取服务端地址、手机设备编号、配对令牌和目标眼镜编号。
 2. 自动连接服务端 `/ws/control`，完成手机注册和心跳。
 3. 在本机启动 `/ws/camera` 接收服务，接收眼镜推送的 JPEG 视频帧。
 4. 承载手机侧任务，执行手机侧能力插件。
@@ -68,7 +74,7 @@ iOS SDK 运行时位于 [../openaiglass-sdk/phone-ios](../openaiglass-sdk/phone-
 
 `sdk-v2` 起，iOS 运行时已经支持多业务能力并存。业务插件应通过 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 按服务端下发的 `task_type` 注册；运行时收到 `sdk.phone.task.start` 后会按 `task_type` 选择对应业务插件。旧的 `PhoneCapabilityRuntimeFactory.register { ... }` 只作为单能力兼容入口保留，新能力不要再使用。
 
-业务侧源配置文件：
+业务侧手机配置文件：
 
 ```text
 openaiglass-for-blind/host/phone/config/AppConfig.plist
@@ -80,10 +86,10 @@ openaiglass-for-blind/host/phone/config/AppConfig.plist
 openaiglass-for-blind/host/phone/config/AppConfig.plist.example
 ```
 
-同步脚本会把业务侧配置写入 iOS SDK 运行时工程：
+同步脚本只写业务侧配置文件。业务侧 Xcode 工程会把该文件作为 App 资源打包，不再写入 SDK 目录下的 iOS 配置文件。
 
 ```text
-openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist
+openaiglass-for-blind/host/phone/config/AppConfig.plist
 ```
 
 关键配置项：
@@ -105,6 +111,18 @@ openaiglass-for-blind/config/local_server.env
 
 ```text
 openaiglass-for-blind/config/local_server.env.example
+```
+
+执行配置同步时，脚本会自动探测当前 Mac 可供手机和眼镜访问的局域网 IPv4，并回写 `SERVER_PUBLIC_HOST`：
+
+```bash
+bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh
+```
+
+如果自动探测失败，可以手动指定一次：
+
+```bash
+bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh --public-host 192.168.1.23
 ```
 
 业务开发者通过业务工程入口打开手机端，不直接进入 SDK 目录：
@@ -506,7 +524,7 @@ enum DemoPhoneCapabilityInstaller {
 1. 确保每个业务插件的 `install()` 被调用一次。
 2. 调用 `PhoneCapabilityBootstrap.applyRegisteredInstallers()`，让 SDK 执行所有已登记的安装函数。
 
-当前仓库仍以 Xcode 工程交付 iOS SDK。业务插件接入 target 的推荐方式是：
+当前仓库仍以业务侧 Xcode 工程承载手机端 App，工程入口为 `openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj`。它引用 SDK 通用运行时代码，业务插件接入 target 的推荐方式是：
 
 1. 在 `openaiglass-for-blind/capabilities/<capability>/phone/ios/` 下维护业务 Swift 文件。
 2. 在 Xcode 中把这些 Swift 文件加入手机宿主 App target 的 Compile Sources。
@@ -696,6 +714,18 @@ bash openaiglass-for-blind/scripts/run_sdk_live_check.sh \
   --report logs/sdk-live-check-current.json
 ```
 
+`sync_sdk_live_config.sh` 会在每次执行时自动探测当前本机服务端局域网 IP，并同步到：
+
+1. `openaiglass-for-blind/config/local_server.env` 的 `SERVER_PUBLIC_HOST`。
+2. `openaiglass-for-blind/host/phone/config/AppConfig.plist` 的 `serverBaseURLString`。
+3. `openaiglass-for-blind/host/glass/config/local_build.env` 的 `GLASS_SERVER_WS_URI`。
+
+如果开发机网络频繁变化，不需要手动改手机或眼镜配置；重新执行同步脚本即可。自动探测失败时再使用：
+
+```bash
+bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh --public-host 192.168.1.23
+```
+
 推荐启动顺序：
 
 1. 启动服务端。
@@ -708,7 +738,7 @@ bash openaiglass-for-blind/scripts/run_sdk_live_check.sh \
 服务端：
 
 ```bash
-LOG_LEVEL=DEBUG bash openaiglass-for-blind/scripts/run_server.sh
+bash openaiglass-for-blind/scripts/run_server.sh local start
 ```
 
 iOS 手机端：
@@ -716,6 +746,14 @@ iOS 手机端：
 ```bash
 bash openaiglass-for-blind/scripts/run_phone.sh open
 ```
+
+该命令会先同步业务配置，再打开业务侧 Xcode 工程：
+
+```text
+openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj
+```
+
+不要打开 `openaiglass-sdk/phone-ios` 下的工程作为业务开发入口。
 
 眼镜端：
 
@@ -846,7 +884,7 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 
 ### 16.2 iOS SDK 当前是不是已经能作为 Swift Package 引入？
 
-当前仍是可直接打开和构建的 Xcode 工程，后续可以继续收敛为 Swift Package 或 XCFramework。现在的推荐方式是复用 `openaiglass-sdk/phone-ios` 作为通用运行时，把业务插件放在 `capabilities/<name>/phone/ios`。
+当前还没有收敛为 Swift Package 或 XCFramework。现在的推荐方式是：业务开发者打开 `openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj`，该工程引用 `openaiglass-sdk/phone-ios` 作为通用运行时；业务插件放在 `capabilities/<name>/phone/ios`，配置放在 `openaiglass-for-blind/host/phone/config`。
 
 ### 16.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
