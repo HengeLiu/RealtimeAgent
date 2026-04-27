@@ -1,0 +1,46 @@
+{
+  "scenario_id": "find_object_external_phone_result",
+  "title": "找物体手机任务事件直达服务端",
+  "description": "验证服务端任务可直接消费手机侧结构化事件并完成任务，覆盖真实手机任务结果回流路径。",
+  "capability": "find_object",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "target_object": "背包",
+    "processor_type": "yolo_find_object",
+    "timeline": {
+      "timeline_id": "find_object_external_phone_result",
+      "events": [
+        {
+          "at": 100,
+          "type": "task.event",
+          "payload": {
+            "event_name": "phone.vision.find_object.result",
+            "source": "mock_phone",
+            "payload": {
+              "event_name": "phone.vision.find_object.result",
+              "target_object": "背包",
+              "found": true,
+              "confidence": 0.91,
+              "position": "left",
+              "summary": "在左前方找到背包"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "task_state": "completed",
+    "task_result": {
+      "found": true,
+      "target_object": "背包"
+    },
+    "notification_contains": "左前方",
+    "glass_commands": ["sensor.camera.stream.start", "sensor.camera.stream.stop"],
+    "phone_commands": ["sdk.phone.task.start", "sdk.phone.task.stop"],
+    "timeline_event_types": ["task.event"]
+  }
+}

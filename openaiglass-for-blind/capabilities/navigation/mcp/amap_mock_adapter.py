@@ -17,11 +17,25 @@ class AmapRoutePlanInput(BaseModel):
     strategy: str = Field(default="walking", description="路线策略")
 
 
+class AmapPoiSearchInput(BaseModel):
+    """AMap POI 搜索输入。"""
+
+    keyword: str = Field(description="目的地关键词")
+    city: str = Field(default="", description="城市名称，可为空")
+
+
+class AmapGeocodeInput(BaseModel):
+    """AMap 地理编码输入。"""
+
+    poi_id: str = Field(default="", description="POI 编号")
+    address: str = Field(default="", description="地址或名称")
+
+
 class MockAmapMcpAdapter(BaseMcpAdapter):
     """AMap MCP mock adapter。
 
     主要功能：
-    1. 在业务工程内提供可回放的 `amap.route_plan` 方法。
+    1. 在业务工程内提供可回放的 `amap.poi_search`、`amap.geocode` 和 `amap.route_plan` 方法。
     2. 验证业务 Tool 通过 SDK `context.mcp(...)` 入口调用 MCP。
     3. 为真实 AMap adapter 接入前提供稳定测试替身。
 
@@ -39,7 +53,7 @@ class MockAmapMcpAdapter(BaseMcpAdapter):
         1. 无。
 
         返回值：
-        1. `McpMethodSpec` 列表，目前只包含 `amap.route_plan`。
+        1. `McpMethodSpec` 列表。
 
         异常情况：
         1. 本函数不主动抛出异常。
@@ -47,11 +61,23 @@ class MockAmapMcpAdapter(BaseMcpAdapter):
 
         return [
             McpMethodSpec(
+                name="amap.poi_search",
+                description="搜索目的地候选 POI",
+                input_model=AmapPoiSearchInput,
+                tags=["navigation", "amap", "mock"],
+            ),
+            McpMethodSpec(
+                name="amap.geocode",
+                description="解析目的地坐标",
+                input_model=AmapGeocodeInput,
+                tags=["navigation", "amap", "mock"],
+            ),
+            McpMethodSpec(
                 name="amap.route_plan",
                 description="规划步行导航路线",
                 input_model=AmapRoutePlanInput,
                 tags=["navigation", "amap", "mock"],
-            )
+            ),
         ]
 
     def invoke(self, *, method_name: str, context, input_data) -> CapabilityResult:
@@ -69,12 +95,61 @@ class MockAmapMcpAdapter(BaseMcpAdapter):
         1. 方法名不支持或目的地为空时返回结构化失败结果。
         """
 
-        if method_name != "amap.route_plan":
+        if method_name == "amap.poi_search":
+            return self._invoke_poi_search(input_data)
+        if method_name == "amap.geocode":
+            return self._invoke_geocode(input_data)
+        if method_name == "amap.route_plan":
+            return self._invoke_route_plan(input_data)
+        return CapabilityResult.failed(
+            code="unsupported_mcp_method",
+            message=f"不支持的 AMap MCP 方法: {method_name}",
+            details={"method_name": method_name},
+        )
+
+    def _invoke_poi_search(self, input_data) -> CapabilityResult:
+        """执行 mock POI 搜索。"""
+
+        keyword = str(input_data.keyword or "").strip()
+        if not keyword:
             return CapabilityResult.failed(
-                code="unsupported_mcp_method",
-                message=f"不支持的 AMap MCP 方法: {method_name}",
-                details={"method_name": method_name},
+                code="invalid_input",
+                message="keyword 不能为空",
+                details={"field": "keyword"},
             )
+        city = str(input_data.city or "").strip()
+        candidates = self._build_mock_candidates(keyword=keyword, city=city)
+        return CapabilityResult.success(
+            data={
+                "keyword": keyword,
+                "city": city,
+                "candidates": candidates,
+                "candidate_count": len(candidates),
+            },
+            message=f"找到 {len(candidates)} 个目的地候选",
+            meta={"adapter": self.adapter_name, "mock": True},
+        )
+
+    def _invoke_geocode(self, input_data) -> CapabilityResult:
+        """执行 mock 地理编码。"""
+
+        poi_id = str(input_data.poi_id or "").strip()
+        address = str(input_data.address or "").strip()
+        if not poi_id and not address:
+            return CapabilityResult.failed(
+                code="invalid_input",
+                message="poi_id 和 address 不能同时为空",
+                details={"fields": ["poi_id", "address"]},
+            )
+        resolved = self._resolve_mock_location(poi_id=poi_id, address=address)
+        return CapabilityResult.success(
+            data=resolved,
+            message=f"已解析目的地坐标：{resolved['name']}",
+            meta={"adapter": self.adapter_name, "mock": True},
+        )
+
+    def _invoke_route_plan(self, input_data) -> CapabilityResult:
+        """执行 mock 路线规划。"""
 
         destination = str(input_data.destination or "").strip()
         if not destination:
@@ -92,6 +167,56 @@ class MockAmapMcpAdapter(BaseMcpAdapter):
             message=f"已规划从{origin}到{destination}的路线",
             meta={"adapter": self.adapter_name, "mock": True},
         )
+
+    @staticmethod
+    def _build_mock_candidates(*, keyword: str, city: str) -> list[dict[str, Any]]:
+        """生成稳定的 mock POI 候选。"""
+
+        normalized_city = city or "当前城市"
+        if "桂林路" in keyword:
+            return [
+                {
+                    "poi_id": "poi_guilin_road_station",
+                    "name": "桂林路地铁站",
+                    "address": f"{normalized_city} 桂林路站 1 号口",
+                    "city": normalized_city,
+                    "location": "121.418000,31.175000",
+                    "confidence": 0.96,
+                },
+                {
+                    "poi_id": "poi_guilin_road_bus",
+                    "name": "桂林路公交站",
+                    "address": f"{normalized_city} 桂林路公交站",
+                    "city": normalized_city,
+                    "location": "121.419100,31.174300",
+                    "confidence": 0.72,
+                },
+            ]
+        return [
+            {
+                "poi_id": f"poi_{sum(ord(char) for char in keyword) % 100000}",
+                "name": keyword,
+                "address": f"{normalized_city} {keyword}",
+                "city": normalized_city,
+                "location": "121.400000,31.170000",
+                "confidence": 0.86,
+            }
+        ]
+
+    @classmethod
+    def _resolve_mock_location(cls, *, poi_id: str, address: str) -> dict[str, Any]:
+        """根据 POI 编号或地址返回稳定位置。"""
+
+        candidates = cls._build_mock_candidates(keyword=address or poi_id, city="")
+        for candidate in candidates:
+            if poi_id and candidate["poi_id"] == poi_id:
+                return dict(candidate)
+        if poi_id == "poi_guilin_road_station":
+            return dict(cls._build_mock_candidates(keyword="桂林路地铁站", city="")[0])
+        first = dict(candidates[0])
+        if poi_id:
+            first["poi_id"] = poi_id
+        return first
 
     @staticmethod
     def _build_mock_route(*, origin: str, destination: str, strategy: str) -> dict[str, Any]:
@@ -125,4 +250,3 @@ class MockAmapMcpAdapter(BaseMcpAdapter):
                 {"instruction": f"继续前进到达{destination}", "distance_meters": distance_meters - distance_meters // 3 - distance_meters // 6},
             ],
         }
-

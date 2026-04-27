@@ -1,0 +1,23 @@
+{
+  "scenario_id": "timer_invalid_duration",
+  "title": "计时器非法时长",
+  "description": "验证计时时长非法时 Tool 返回结构化失败且不创建任务。",
+  "capability": "timer",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "duration_seconds": 0,
+    "label": "非法计时器"
+  },
+  "expected": {
+    "tool_ok": false,
+    "tool_error": {
+      "code": "invalid_input",
+      "message": "duration_seconds 必须大于 0"
+    },
+    "task_state": "",
+    "notification_count_equals": 0
+  }
+}

@@ -47,7 +47,10 @@ def run_navigation_manifest(runner, scenario: dict[str, Any], scenario_file: Pat
     inputs = runner._require_mapping(scenario, "inputs")
     destination = str(inputs.get("destination") or "").strip()
     origin = str(inputs.get("origin") or "当前位置").strip() or "当前位置"
+    city = str(inputs.get("city") or "").strip()
     strategy = str(inputs.get("strategy") or "walking").strip() or "walking"
+    selected_poi_id = str(inputs.get("selected_poi_id") or "").strip()
+    require_confirmation = bool(inputs.get("require_confirmation", False))
     create_task = bool(inputs.get("create_task", True))
 
     tool = runner._sdk.registry.get_tool("prepare_navigation")
@@ -71,7 +74,10 @@ def run_navigation_manifest(runner, scenario: dict[str, Any], scenario_file: Pat
         {
             "origin": origin,
             "destination": destination,
+            "city": city,
             "strategy": strategy,
+            "selected_poi_id": selected_poi_id,
+            "require_confirmation": require_confirmation,
             "create_task": create_task,
         },
     )
@@ -169,6 +175,13 @@ def process_navigation_event(*, runner, event, task_id: str, task_snapshot):
             payload=dict(event.payload or {}),
             source="scenario",
         )
+    if event.event_type == "phone.vision.traffic_light.result":
+        return runner._sdk.task_runtime.dispatch_event(
+            task_id=task_id,
+            event_name="phone.vision.traffic_light.result",
+            payload=dict(event.payload or {}),
+            source="mock_phone",
+        )
     if event.event_type == "task.cancel":
         return runner._sdk.task_runtime.cancel_task(task_id)
     raise RuntimeError(f"暂不支持的导航时间轴事件类型: {event.event_type}")
@@ -228,10 +241,14 @@ def _evaluate_navigation_expected(*, expected: dict[str, Any], result: dict[str,
                 failures.append(f"Tool 错误字段不符合预期，字段 {key} 期望 {value!r}，实际 {actual_value!r}")
 
     expected_mcp_trace = expected.get("mcp_trace_contains")
+    trace_names = [str(item.get("capability_name") or "") for item in result.get("mcp_traces", [])]
     if isinstance(expected_mcp_trace, str):
-        trace_names = [str(item.get("capability_name") or "") for item in result.get("mcp_traces", [])]
         if expected_mcp_trace not in trace_names:
             failures.append(f"MCP trace 中缺少方法: {expected_mcp_trace}")
+    elif isinstance(expected_mcp_trace, list):
+        for method_name in expected_mcp_trace:
+            if str(method_name) not in trace_names:
+                failures.append(f"MCP trace 中缺少方法: {method_name}")
 
 
 def describe_navigation_inputs(runner, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -251,7 +268,10 @@ def describe_navigation_inputs(runner, inputs: dict[str, Any]) -> dict[str, Any]
     return {
         "origin": str(inputs.get("origin") or "当前位置"),
         "destination": str(inputs.get("destination") or ""),
+        "city": str(inputs.get("city") or ""),
         "strategy": str(inputs.get("strategy") or "walking"),
+        "selected_poi_id": str(inputs.get("selected_poi_id") or ""),
+        "require_confirmation": bool(inputs.get("require_confirmation", False)),
         "create_task": bool(inputs.get("create_task", True)),
         "has_timeline": "timeline" in inputs,
     }
@@ -293,5 +313,13 @@ def validate_navigation_inputs(
     strategy = inputs.get("strategy")
     if strategy is not None and not isinstance(strategy, str):
         errors.append("navigation 场景的 inputs.strategy 必须是字符串")
+    city = inputs.get("city")
+    if city is not None and not isinstance(city, str):
+        errors.append("navigation 场景的 inputs.city 必须是字符串")
+    selected_poi_id = inputs.get("selected_poi_id")
+    if selected_poi_id is not None and not isinstance(selected_poi_id, str):
+        errors.append("navigation 场景的 inputs.selected_poi_id 必须是字符串")
+    if "require_confirmation" in inputs and not isinstance(inputs.get("require_confirmation"), bool):
+        errors.append("navigation 场景的 inputs.require_confirmation 必须是布尔值")
     if "create_task" in inputs and not isinstance(inputs.get("create_task"), bool):
         errors.append("navigation 场景的 inputs.create_task 必须是布尔值")

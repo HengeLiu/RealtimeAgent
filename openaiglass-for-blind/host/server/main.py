@@ -23,6 +23,9 @@ from capabilities.navigation.mcp import MockAmapMcpAdapter
 from capabilities.navigation.scenario import build_navigation_scenario_handler
 from capabilities.navigation.server.task import NavigationTask
 from capabilities.navigation.server.tool import PrepareNavigationTool
+from capabilities.timer.scenario import build_timer_scenario_handler
+from capabilities.timer.server.task import TimerTask
+from capabilities.timer.server.tool import StartTimerTool
 from capabilities.traffic_light.phone.processor import TrafficLightProcessor
 from capabilities.traffic_light.phone.task import TrafficLightPhoneTask
 from capabilities.traffic_light.scenario import build_traffic_light_scenario_handler
@@ -40,7 +43,7 @@ def create_sdk(*, include_traffic_light: bool = False) -> OpenAIGlassesSDK:
     1. 创建 SDK 主入口。
     2. 注册找物体 Tool、Task 和手机处理器。
     3. 按需注册红绿灯识别能力。
-    3. 返回可启动的 SDK 对象。
+    4. 返回可启动的 SDK 对象。
 
     参数：
     1. `include_traffic_light`：是否装配红绿灯识别能力。默认保持旧 SDK 契约测试兼容。
@@ -81,8 +84,17 @@ def create_full_sdk() -> OpenAIGlassesSDK:
     """
 
     sdk = create_sdk(include_traffic_light=True)
+    register_timer_capability(sdk)
     register_navigation_capability(sdk)
     return sdk
+
+
+def register_timer_capability(sdk: OpenAIGlassesSDK) -> None:
+    """向 SDK 注册计时器业务能力。"""
+
+    sdk.register_tool(StartTimerTool())
+    sdk.register_task(TimerTask())
+    sdk.register_scenario_handler("timer", build_timer_scenario_handler())
 
 
 def register_navigation_capability(sdk: OpenAIGlassesSDK) -> None:

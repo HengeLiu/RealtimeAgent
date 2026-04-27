@@ -1,0 +1,45 @@
+{
+  "scenario_id": "traffic_light_continuous_cancel",
+  "title": "红绿灯连续识别后取消",
+  "description": "验证 stop_after_first_signal=false 时任务持续运行，直到用户取消并释放视频链路。",
+  "capability": "traffic_light",
+  "device_group": {
+    "glass": "mock_glass_001",
+    "phone": "mock_phone_001"
+  },
+  "inputs": {
+    "crossing_name": "测试路口",
+    "stop_after_first_signal": false,
+    "frames": ["路口画面 红灯", "路口画面 绿灯"],
+    "timeline": {
+      "timeline_id": "traffic_light_continuous_cancel",
+      "events": [
+        {
+          "at": 100,
+          "type": "frame",
+          "payload": "路口画面 红灯"
+        },
+        {
+          "at": 200,
+          "type": "frame",
+          "payload": "路口画面 绿灯"
+        },
+        {
+          "at": 300,
+          "type": "task.cancel",
+          "payload": {}
+        }
+      ]
+    }
+  },
+  "expected": {
+    "task_state": "cancelled",
+    "task_data": {
+      "cancel_reason": "user_cancelled"
+    },
+    "notification_contains": ["红灯", "绿灯"],
+    "glass_commands": ["sensor.camera.stream.start", "sensor.camera.stream.stop"],
+    "phone_commands": ["sdk.phone.task.start", "sdk.phone.task.stop"],
+    "timeline_event_types": ["frame", "task.cancel"]
+  }
+}

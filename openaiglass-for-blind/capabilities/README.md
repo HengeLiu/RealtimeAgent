@@ -9,3 +9,4 @@
 | [find_object](./find_object) | 通过眼镜视频流和手机侧处理器完成找物体闭环。 |
 | [traffic_light](./traffic_light) | 通过眼镜视频流和手机侧处理器识别红绿灯状态，并向眼镜提交过街提示。 |
 | [navigation](./navigation) | 通过 SDK MCP 入口准备步行导航路线，并创建可查询、可取消的导航任务。 |
+| [timer](./timer) | 通过 SDK 托管任务创建、查询、取消和完成计时器。 |
