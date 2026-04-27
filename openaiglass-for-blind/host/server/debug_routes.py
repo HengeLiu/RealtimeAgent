@@ -108,6 +108,35 @@ def bind_business_device_adapters(runtime) -> None:
     device_groups.video_link_stop_adapter = stop_phone_video_link_adapter
 
 
+def _task_payload(task_runtime, *, target_object: str) -> dict:
+    """把 SDK/后台任务运行态转换成 HTTP 响应字典。
+
+    参数：
+    1. `task_runtime`：任务运行态或 SDK 任务快照。
+    2. `target_object`：本次寻找的目标物体。
+
+    返回值：
+    1. 可 JSON 序列化的任务信息。
+    """
+
+    task_data = getattr(task_runtime, "data", None)
+    if task_data is None:
+        task_data = getattr(task_runtime, "context", {})
+    task_input = getattr(task_runtime, "input_data", None)
+    if task_input is None:
+        task_input = getattr(task_runtime, "input", {})
+    return {
+        "task_id": task_runtime.task_id,
+        "task_type": task_runtime.task_type,
+        "state": task_runtime.state,
+        "device_id": task_runtime.device_id,
+        "session_id": task_runtime.session_id,
+        "target_object": target_object,
+        "task_input": dict(task_input or {}),
+        "task_data": dict(task_data or {}),
+    }
+
+
 def _handle_start_find_object(handler, runtime) -> None:
     """处理手动启动找物体任务的调试请求。"""
 
@@ -164,15 +193,7 @@ def _handle_start_find_object(handler, runtime) -> None:
         {
             "status": "ok",
             "reply_text": f"已开始寻找{target_object}",
-            "task": {
-                "task_id": task_runtime.task_id,
-                "task_type": task_runtime.task_type,
-                "state": task_runtime.state,
-                "device_id": task_runtime.device_id,
-                "session_id": task_runtime.session_id,
-                "target_object": target_object,
-                "context": dict(task_runtime.context),
-            },
+            "task": _task_payload(task_runtime, target_object=target_object),
         },
     )
 
