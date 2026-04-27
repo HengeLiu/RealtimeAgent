@@ -21,8 +21,8 @@
 推荐执行方式：
 
 ```bash
-uv run python ../openaiglass-sdk/scripts/run_sdk_contract_tests.py --pretty
-uv run python scripts/run_sdk_preflight.py --report ../logs/sdk-preflight.json
+uv run openaiglass.sdk.contract-tests --pretty
+uv run openaiglass.sdk.preflight --app-root openaiglass-for-blind --report logs/sdk-preflight.json
 ```
 
 说明：

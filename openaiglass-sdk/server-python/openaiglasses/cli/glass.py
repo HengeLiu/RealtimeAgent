@@ -18,7 +18,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(prog="openaiglass.glass.start", description="启动 OpenAI Glasses 眼镜端运行时")
     parser.add_argument("--runtime", choices=["firmware", "playback"], default="", help="眼镜运行时类型")
-    parser.add_argument("--repo-root", default=".", help="项目根目录")
+    parser.add_argument("--repo-root", default="", help="仓库根目录；仅作为本仓库开发时的默认路径锚点")
+    parser.add_argument("--app-root", default="", help="业务工程根目录，用于查找业务侧眼镜配置")
+    parser.add_argument("--sdk-root", default="", help="SDK 源码或资产根目录，用于查找眼镜固件工程")
     parser.add_argument("--project-dir", default="", help="ESP-IDF 工程目录")
     parser.add_argument("--idf-root", default="", help="ESP-IDF 安装目录")
     parser.add_argument("--target", default="esp32s3", help="ESP-IDF target")
@@ -46,8 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.runtime = args.runtime or "firmware"
     if args.runtime == "playback":
-        repo_root = Path(args.repo_root).resolve()
-        playback_root = repo_root / "openaiglass-sdk/glass-playback"
+        paths = resolve_glass_paths(args)
+        playback_root = paths["sdk_root"] / "glass-playback"
         if str(playback_root) not in sys.path:
             sys.path.insert(0, str(playback_root))
         from openaiglass_glass_playback.cli import run_playback
@@ -59,11 +61,13 @@ def main(argv: list[str] | None = None) -> int:
 def run_firmware(args: argparse.Namespace) -> int:
     """执行 ESP-IDF 固件构建、烧录和监看。"""
 
-    repo_root = Path(args.repo_root).resolve()
-    project_dir = Path(args.project_dir).resolve() if args.project_dir else repo_root / "openaiglass-sdk/glass-esp32"
-    idf_root = Path(args.idf_root).resolve() if args.idf_root else repo_root / ".cache/esp-idf-v5.3.2"
+    paths = resolve_glass_paths(args)
+    repo_root = paths["repo_root"]
+    app_root = paths["app_root"]
+    project_dir = paths["project_dir"]
+    idf_root = paths["idf_root"]
     build_dir = Path(args.build_dir).resolve() if args.build_dir else project_dir / "build"
-    config_file = Path(args.config).resolve() if args.config else repo_root / "openaiglass-for-blind/host/glass/config/local_build.env"
+    config_file = Path(args.config).resolve() if args.config else app_root / "host/glass/config/local_build.env"
     sdkconfig_file = Path(args.sdkconfig).resolve() if args.sdkconfig else project_dir / "sdkconfig.local"
     sdkconfig_defaults = (
         Path(args.sdkconfig_defaults).resolve() if args.sdkconfig_defaults else project_dir / "sdkconfig.defaults"
@@ -95,6 +99,8 @@ def run_firmware(args: argparse.Namespace) -> int:
 
     print_header(
         args,
+        repo_root,
+        app_root,
         idf_root,
         project_dir,
         build_dir,
@@ -130,6 +136,51 @@ def run_firmware(args: argparse.Namespace) -> int:
     if do_monitor:
         return idf_cmd(idf_root, project_dir, build_dir, sdkconfig_file, sdkconfig_defaults, run_env, ["-p", port, "monitor"])
     return 0
+
+
+def resolve_glass_paths(args: argparse.Namespace) -> dict[str, Path]:
+    """解析眼镜启动涉及的目录。
+
+    参数：
+    1. `args`：命令行参数。
+
+    返回值：
+    1. `repo_root`：可选仓库根目录，仅用于本仓库默认布局。
+    2. `app_root`：业务工程根目录。
+    3. `sdk_root`：SDK 源码或资产根目录。
+    4. `project_dir`：ESP-IDF 固件工程目录。
+    5. `idf_root`：ESP-IDF 安装目录。
+
+    主要逻辑：
+    1. 显式参数优先。
+    2. 其次读取环境变量。
+    3. 最后才使用当前仓库布局作为便捷默认值。
+
+    异常情况：
+    1. 目录不存在时，后续构建阶段会给出具体路径错误。
+    """
+
+    repo_root = resolve_path_arg(args.repo_root, "OPENAIGLASS_REPO_ROOT", Path.cwd())
+    app_root = resolve_path_arg(args.app_root, "OPENAIGLASS_APP_ROOT", repo_root / "openaiglass-for-blind")
+    sdk_root = resolve_path_arg(args.sdk_root, "OPENAIGLASS_SDK_ROOT", repo_root / "openaiglass-sdk")
+    project_dir = resolve_path_arg(args.project_dir, "OPENAIGLASS_GLASS_PROJECT_DIR", sdk_root / "glass-esp32")
+    idf_root = resolve_path_arg(args.idf_root, "IDF_PATH", repo_root / ".cache/esp-idf-v5.3.2")
+    return {
+        "repo_root": repo_root,
+        "app_root": app_root,
+        "sdk_root": sdk_root,
+        "project_dir": project_dir,
+        "idf_root": idf_root,
+    }
+
+
+def resolve_path_arg(value: str, env_name: str, default: Path) -> Path:
+    """按命令行、环境变量、默认值顺序解析路径。"""
+
+    raw_value = value or os.environ.get(env_name, "")
+    if raw_value:
+        return Path(raw_value).expanduser().resolve()
+    return default.expanduser().resolve()
 
 
 def resolve_actions(args: argparse.Namespace) -> tuple[bool, bool, bool]:
@@ -392,6 +443,7 @@ def idf_cmd(
         f"-DSDKCONFIG_DEFAULTS={sh_quote(str(defaults_file))} "
         + " ".join(sh_quote(item) for item in args)
     )
+    print(f"[idf] 执行: idf.py {' '.join(args)}", flush=True)
     return subprocess.run(["bash", "-lc", command], cwd=str(project_dir), env=env, check=False).returncode
 
 
@@ -405,6 +457,8 @@ def sh_quote(value: str) -> str:
 
 def print_header(
     args: argparse.Namespace,
+    repo_root: Path,
+    app_root: Path,
     idf_root: Path,
     project_dir: Path,
     build_dir: Path,
@@ -422,6 +476,8 @@ def print_header(
     print("========================================")
     print(" OpenAI Glass Build + Flash + Monitor")
     print("========================================")
+    print(f"Repo root   : {repo_root}")
+    print(f"App root    : {app_root}")
     print(f"IDF root    : {idf_root}")
     print(f"Project dir : {project_dir}")
     print(f"Target      : {args.target}")
@@ -439,3 +495,4 @@ def print_header(
     print(f"Fullclean   : {int(args.clean)}")
     print(f"Erase flash : {int(args.erase_flash)}")
     print()
+    sys.stdout.flush()

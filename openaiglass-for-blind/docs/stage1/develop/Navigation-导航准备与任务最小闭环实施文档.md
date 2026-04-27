@@ -113,15 +113,14 @@ tool --> agent: route + task_id
 
 ```bash
 python -m compileall capabilities host/server/main.py
-uv run python scripts/run_sdk_scenario.py --validate-scenarios testdata/scenario --pretty
-uv run python scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
+组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
 ```
 
 ## 6. 跨设备联调方案
 
 当前导航准备链路不依赖手机视觉；导航执行期最小策略会接收红绿灯视觉事件。真机联调时按以下顺序：
 
-1. 启动服务端：`LOG_LEVEL=DEBUG bash openaiglass-for-blind/scripts/run_server.sh`
+1. 启动服务端：`uv run openaiglass.server.run --app-module host.server.main --app-root openaiglass-for-blind`
 2. 启动 iOS 手机端 SDK 运行时，确认手机注册和绑定状态。
 3. 启动 ESP32 眼镜端 SDK 运行时，确认眼镜注册和心跳。
 4. 通过语音或调试入口触发 `prepare_navigation`。
@@ -155,9 +154,8 @@ uv run python scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pre
 
 ```bash
 python -m compileall capabilities host/server/main.py
-uv run python scripts/run_sdk_scenario.py --validate-scenarios testdata/scenario --pretty
-uv run python scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
-uv run python scripts/run_sdk_preflight.py --report logs/sdk-preflight-current.json
+组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
+uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
 
 结果：

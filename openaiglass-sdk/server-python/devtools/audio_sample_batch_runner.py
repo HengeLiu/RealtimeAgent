@@ -160,7 +160,8 @@ def build_client_command(
 
     return [
         sys.executable,
-        str(repo_root() / "openaiglass-for-blind" / "scripts" / "simple_glass_audio_client.py"),
+        "-m",
+        "devtools.simple_glass_audio_client",
         "--host",
         host,
         "--port",

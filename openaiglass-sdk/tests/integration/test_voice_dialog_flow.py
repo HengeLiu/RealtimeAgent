@@ -265,15 +265,11 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
         reply_path = os.path.join(self.temp_dir, "reply.wav")
         self._write_wav_fixture(wav_path)
 
-        script_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-            "script",
-            "simple_glass_audio_client.py",
-        )
         result = subprocess.run(
             [
                 sys.executable,
-                script_path,
+                "-m",
+                "devtools.simple_glass_audio_client",
                 "--host",
                 "127.0.0.1",
                 "--port",

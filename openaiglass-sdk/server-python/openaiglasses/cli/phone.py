@@ -144,10 +144,14 @@ def open_project(project: Path) -> int:
     if not project.exists():
         raise RuntimeError(f"iOS 工程不存在: {project}")
     print(f"[open] 打开 iOS 工程: {project}")
-    opener = shutil.which("xed")
-    if opener:
-        return subprocess.run([opener, "-p", str(project)], check=False).returncode
-    return subprocess.run(["open", "-a", "Xcode", str(project)], check=False).returncode
+    subprocess.Popen(
+        ["open", "-a", "Xcode", str(project)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return 0
 
 
 def build_sim(args: argparse.Namespace, project: Path) -> int:

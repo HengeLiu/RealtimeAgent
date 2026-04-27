@@ -15,8 +15,8 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
-APP_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = APP_ROOT.parent
+REPO_ROOT = Path.cwd().resolve()
+APP_ROOT = REPO_ROOT / "openaiglass-for-blind"
 DEFAULT_SERVER_CONFIG = APP_ROOT / "config/local_server.env"
 DEFAULT_PREFLIGHT_REPORT = REPO_ROOT / "logs/sdk-preflight-current.json"
 PHONE_APP_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
@@ -58,16 +58,18 @@ def parse_args() -> argparse.Namespace:
     """
 
     parser = argparse.ArgumentParser(description="执行 SDK 真机联调前配置检查")
+    parser.add_argument("--repo-root", type=str, default=".", help="项目根目录")
+    parser.add_argument("--app-root", type=str, default="openaiglass-for-blind", help="业务工程根目录")
     parser.add_argument(
         "--server-config",
         type=str,
-        default=str(DEFAULT_SERVER_CONFIG),
+        default="",
         help="业务服务端配置文件路径，默认 openaiglass-for-blind/config/local_server.env",
     )
     parser.add_argument(
         "--preflight-report",
         type=str,
-        default=str(DEFAULT_PREFLIGHT_REPORT),
+        default="",
         help="SDK 预检报告路径，默认 logs/sdk-preflight-current.json",
     )
     parser.add_argument(
@@ -82,6 +84,26 @@ def parse_args() -> argparse.Namespace:
         help="要求服务端已经启动并通过 /api/health 检查",
     )
     return parser.parse_args()
+
+
+def configure_paths(args: argparse.Namespace) -> None:
+    """根据命令行参数配置仓库路径。"""
+
+    global REPO_ROOT, APP_ROOT, DEFAULT_SERVER_CONFIG, DEFAULT_PREFLIGHT_REPORT
+    global PHONE_APP_CONFIG, PHONE_APP_CONFIG_TEMPLATE, PHONE_PROJECT
+    global GLASS_PROJECT, GLASS_KCONFIG, GLASS_LOCAL_CONFIG
+    REPO_ROOT = Path(args.repo_root).resolve()
+    APP_ROOT = Path(args.app_root)
+    if not APP_ROOT.is_absolute():
+        APP_ROOT = (REPO_ROOT / APP_ROOT).resolve()
+    DEFAULT_SERVER_CONFIG = APP_ROOT / "config/local_server.env"
+    DEFAULT_PREFLIGHT_REPORT = REPO_ROOT / "logs/sdk-preflight-current.json"
+    PHONE_APP_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
+    PHONE_APP_CONFIG_TEMPLATE = APP_ROOT / "host/phone/config/AppConfig.plist.example"
+    PHONE_PROJECT = APP_ROOT / "host/phone/ios/GlassesVideoReceiver.xcodeproj"
+    GLASS_PROJECT = REPO_ROOT / "openaiglass-sdk/glass-esp32"
+    GLASS_KCONFIG = REPO_ROOT / "openaiglass-sdk/glass-esp32/main/Kconfig.projbuild"
+    GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
 
 
 def _duration_ms(start: float) -> int:
@@ -226,11 +248,7 @@ def check_paths() -> LiveCheckResult:
 
     start = perf_counter()
     paths = {
-        "server_wrapper": APP_ROOT / "scripts/run_server.sh",
-        "phone_wrapper": APP_ROOT / "scripts/run_phone.sh",
-        "glass_wrapper": APP_ROOT / "scripts/run_glass.sh",
-        "sdk_preflight_script": APP_ROOT / "scripts/run_sdk_preflight.py",
-        "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
+        "server_entry": APP_ROOT / "host/server/main.py",
         "phone_project": PHONE_PROJECT,
         "phone_business_config": PHONE_APP_CONFIG,
         "phone_business_config_template": PHONE_APP_CONFIG_TEMPLATE,
@@ -272,7 +290,7 @@ def check_preflight_report(report_path: Path) -> LiveCheckResult:
             duration_ms=_duration_ms(start),
             details={
                 "path": str(report_path),
-                "message": "未找到预检报告，请先执行 uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py",
+                "message": "未找到预检报告，请先执行 uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json",
             },
         )
     try:
@@ -452,8 +470,9 @@ def main() -> int:
     """脚本主入口。"""
 
     args = parse_args()
-    server_config_path = _resolve_path(args.server_config)
-    preflight_report_path = _resolve_path(args.preflight_report)
+    configure_paths(args)
+    server_config_path = _resolve_path(args.server_config or str(DEFAULT_SERVER_CONFIG))
+    preflight_report_path = _resolve_path(args.preflight_report or str(DEFAULT_PREFLIGHT_REPORT))
 
     results = [
         check_paths(),

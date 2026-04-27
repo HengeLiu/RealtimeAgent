@@ -326,17 +326,45 @@ uv run openaiglass.phone.build-sim --app-root openaiglass-for-blind
 
 ### 3.6 构建、烧录和监看真实 ESP32 眼镜
 
+`openaiglass.glass.start` 不要求业务项目一定放在 `OpenAIglassesDemo_2` 这种 monorepo 目录结构下。它涉及四类路径：
+
+| 参数 | 含义 | 默认来源 |
+| --- | --- | --- |
+| `--repo-root` | 仓库根目录，只作为当前 monorepo 开发时的便捷路径锚点。 | 未传时为当前目录。 |
+| `--app-root` | 业务工程根目录，用来查找 `host/glass/config/local_build.env`。 | 默认 `<repo-root>/openaiglass-for-blind`。 |
+| `--sdk-root` | SDK 源码或 SDK 资产根目录，用来查找内置固件工程 `glass-esp32`。 | 默认 `<repo-root>/openaiglass-sdk`。 |
+| `--project-dir` | ESP-IDF 眼镜固件工程目录，目录下必须有 `CMakeLists.txt`。 | 默认 `<sdk-root>/glass-esp32`。 |
+| `--idf-root` | ESP-IDF 安装目录。 | 优先用环境变量 `IDF_PATH`，否则默认 `<repo-root>/.cache/esp-idf-v5.3.2`。 |
+| `--config` | 眼镜本地配置文件，包含 WiFi、服务端地址、设备编号和配对令牌。 | 默认 `<app-root>/host/glass/config/local_build.env`。 |
+| `--sdkconfig-defaults` | 固件默认配置文件。 | 默认 `<project-dir>/sdkconfig.defaults`。 |
+
+如果直接在当前仓库根目录开发，可以使用最短命令：
+
+```bash
+uv run openaiglass.glass.start \
+  --repo-root . \
+  --port '/dev/tty.usbmodem*'
+```
+
+`--repo-root .` 只表示“按当前仓库默认布局推导其他路径”，不是 SDK 对业务项目目录结构的要求。新业务项目如果不采用当前仓库布局，优先使用下面的显式路径写法。
+
 仅编译：
 
 ```bash
-uv run openaiglass.glass.start --build-only --repo-root .
+uv run openaiglass.glass.start \
+  --app-root /path/to/my-app \
+  --sdk-root /path/to/openaiglass-sdk \
+  --idf-root /path/to/esp-idf \
+  --build-only
 ```
 
 构建、烧录并进入串口监看：
 
 ```bash
 uv run openaiglass.glass.start \
-  --repo-root . \
+  --app-root /path/to/my-app \
+  --sdk-root /path/to/openaiglass-sdk \
+  --idf-root /path/to/esp-idf \
   --port '/dev/tty.usbmodem*'
 ```
 
@@ -345,9 +373,34 @@ uv run openaiglass.glass.start \
 ```bash
 uv run openaiglass.glass.start \
   --monitor-only \
-  --repo-root . \
+  --app-root /path/to/my-app \
+  --sdk-root /path/to/openaiglass-sdk \
+  --idf-root /path/to/esp-idf \
   --port '/dev/tty.usbmodem*'
 ```
+
+如果业务工程和 SDK 源码分开放，也是同样显式指定业务工程和 SDK 根目录：
+
+```bash
+uv run openaiglass.glass.start \
+  --app-root /path/to/my-app \
+  --sdk-root /path/to/openaiglass-sdk \
+  --idf-root /path/to/esp-idf \
+  --port '/dev/tty.usbmodem*'
+```
+
+如果没有下载完整 `openaiglass-sdk` 源码，但已经有可编译的 ESP-IDF 眼镜固件工程，应直接指定固件工程和配置文件：
+
+```bash
+uv run openaiglass.glass.start \
+  --app-root /path/to/my-app \
+  --project-dir /path/to/glass-esp32 \
+  --sdkconfig-defaults /path/to/glass-esp32/sdkconfig.defaults \
+  --idf-root /path/to/esp-idf \
+  --port '/dev/tty.usbmodem*'
+```
+
+这种情况下，当前目录下不需要存在 `openaiglass-sdk/glass-esp32`。但真实固件构建仍然必须能找到一个 ESP-IDF 工程目录，且该目录至少包含 `CMakeLists.txt` 和可用的 `sdkconfig.defaults`；业务工程也必须提供眼镜本地配置文件，或通过 `--config` 显式传入。
 
 `--port` 支持精确路径和通配符。通配符请加引号，避免 shell 提前展开；如果匹配到多个串口，命令会打印候选列表并要求开发者明确选择其中一个。
 
@@ -916,7 +969,7 @@ uv run openaiglass.phone.open --app-root openaiglass-for-blind
 ```bash
 uv run openaiglass.glass.start --runtime playback \
   --config openaiglass-for-blind/host/glass-playback/config/glass.water_cup.json \
-  --repo-root .
+  --sdk-root openaiglass-sdk
 ```
 
 启动后，开发者检查方式与真机相同：
@@ -1098,7 +1151,8 @@ ESP32 眼镜端：
 
 ```bash
 uv run openaiglass.glass.start \
-  --repo-root . \
+  --app-root openaiglass-for-blind \
+  --sdk-root openaiglass-sdk \
   --port '/dev/tty.usbmodem*'
 ```
 
@@ -1216,7 +1270,9 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 
 ### 16.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
-当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start --repo-root .` 构建 `openaiglass-sdk/glass-esp32`，业务侧只提供配置和硬件能力需求。
+当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start` 调度一个可编译的 ESP-IDF 固件工程。
+
+在当前仓库内开发时，可以用 `--repo-root .` 让命令按默认 monorepo 布局推导 `openaiglass-sdk/glass-esp32`。在独立业务项目中，不要求当前目录存在 `openaiglass-sdk/glass-esp32`；应使用 `--project-dir /path/to/glass-esp32` 指向真实固件工程，并用 `--app-root` 或 `--config` 指向业务侧眼镜配置。
 
 ### 16.4 新能力什么时候应该改 SDK？
 

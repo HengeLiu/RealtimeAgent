@@ -10,13 +10,14 @@ from pathlib import Path
 from time import perf_counter
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path.cwd().resolve()
 
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
 
     parser = argparse.ArgumentParser(description="执行 SDK 公共契约测试")
+    parser.add_argument("--repo-root", default=".", help="项目根目录")
     parser.add_argument(
         "--report",
         type=str,
@@ -34,7 +35,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """脚本主入口。"""
 
+    global REPO_ROOT
     args = parse_args()
+    REPO_ROOT = Path(args.repo_root).resolve()
     command = [
         sys.executable,
         "-m",

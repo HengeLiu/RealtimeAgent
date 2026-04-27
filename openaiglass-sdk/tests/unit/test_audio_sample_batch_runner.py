@@ -60,7 +60,7 @@ class AudioSampleBatchRunnerTestCase(unittest.TestCase):
             chunk_interval_ms=30,
         )
 
-        self.assertIn("openaiglass-for-blind/scripts/simple_glass_audio_client.py", command[1])
+        self.assertEqual(command[1:3], ["-m", "devtools.simple_glass_audio_client"])
         self.assertIn("/tmp/input.wav", command)
         self.assertIn("/tmp/reply.wav", command)
         self.assertIn("12.5", command)

@@ -77,8 +77,7 @@ cp host/glass/config/local_build.env.example host/glass/config/local_build.env
 
 ```bash
 python -m compileall capabilities host/server/main.py
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_scenario.py --validate-scenarios testdata/scenario --pretty
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_scenario.py --scenario-dir testdata/scenario --pretty
+组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
 ```
 
 当前预期结果：
@@ -90,15 +89,13 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sd
 如完整预检可在非沙箱环境执行，运行：
 
 ```bash
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_preflight.py --report logs/sdk-preflight-current.json
+uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
 
 如果只在当前受限沙箱执行，可先跳过需要本地端口或父级 SDK 写入的项：
 
 ```bash
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_preflight.py \
-  --report logs/sdk-preflight-current.json \
-  --skip-package --skip-pytest --skip-health
+uv run openaiglass.sdk.preflight \
 ```
 
 ## 5. 三端配置同步和检查
@@ -128,13 +125,13 @@ DEVICE_TOKEN_MAP=glass-001=pair-demo-token,phone-001=pair-demo-token
 `SERVER_PUBLIC_HOST` 不需要随着网络变化手动维护；执行同步脚本时会自动探测 Mac 当前局域网 IPv4，并回写到该配置文件。自动探测失败时再手动指定：
 
 ```bash
-bash scripts/sync_sdk_live_config.sh --public-host 192.168.1.23
+uv run openaiglass.config.sync --app-root openaiglass-for-blind --public-host 192.168.1.23
 ```
 
 ### 5.2 同步配置到手机和眼镜
 
 ```bash
-bash scripts/sync_sdk_live_config.sh
+uv run openaiglass.config.sync --app-root openaiglass-for-blind
 ```
 
 该脚本会先自动探测当前本机服务端局域网 IP，并回写 `config/local_server.env` 的 `SERVER_PUBLIC_HOST`；然后根据业务目录下的服务端配置同步业务手机配置和眼镜本地构建配置。手机 App 会从 `host/phone/ios/GlassesVideoReceiver.xcodeproj` 启动，并把 `host/phone/config/AppConfig.plist` 作为资源打包；不再写入 SDK 目录下的 iOS 配置文件。
@@ -144,16 +141,13 @@ bash scripts/sync_sdk_live_config.sh
 服务端未启动前：
 
 ```bash
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_live_check.py \
-  --report logs/sdk-live-check-before-server.json
+uv run openaiglass.sdk.live-check \
 ```
 
 服务端启动后：
 
 ```bash
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_live_check.py \
-  --require-server \
-  --report logs/sdk-live-check-after-server.json
+uv run openaiglass.sdk.live-check \
 ```
 
 检查重点：
@@ -169,19 +163,19 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sd
 本地启动：
 
 ```bash
-LOG_LEVEL=DEBUG bash scripts/run_server.sh local start
+uv run openaiglass.server.run --app-module host.server.main --app-root openaiglass-for-blind
 ```
 
 跟随日志：
 
 ```bash
-bash scripts/run_server.sh local logs
+服务端日志由 `openaiglass.server.run` 前台输出，或通过运行时日志配置查看。
 ```
 
 停止服务端：
 
 ```bash
-bash scripts/run_server.sh local stop
+使用 `Ctrl-C` 停止前台服务，或按运行环境停止对应服务进程。
 ```
 
 健康检查：
@@ -208,7 +202,7 @@ rg "register|heartbeat|bind|phone|glass|task|notification|error|exception" ../lo
 业务功能开发者不要直接进入 `openaiglass-sdk` 目录。手机端统一通过当前业务工程入口启动：
 
 ```bash
-bash scripts/run_phone.sh open
+uv run openaiglass.phone.open --app-root openaiglass-for-blind
 ```
 
 该入口会先执行业务配置同步，再打开 iOS 手机运行时工程。后续操作：
@@ -234,7 +228,7 @@ bash scripts/run_phone.sh open
 创建后脚本会停止，并打印每个配置文件里要修改的字段。按提示修改：
 
 1. `config/local_server.env`
-   - `SERVER_PUBLIC_HOST`：Mac 当前局域网 IPv4，由 `scripts/sync_sdk_live_config.sh` 自动探测并回写。
+   - `SERVER_PUBLIC_HOST`：Mac 当前局域网 IPv4，由 `openaiglass.config.sync` 自动探测并回写。
    - `DEVICE_TOKEN_MAP`：手机和眼镜设备编号对应的配对令牌。
    - `PHONE_DEVICE_ID` / `GLASS_DEVICE_ID`：可选；不填时从 `DEVICE_TOKEN_MAP` 中推断。
 2. `host/phone/config/AppConfig.plist`
@@ -243,12 +237,12 @@ bash scripts/run_phone.sh open
    - `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD`：眼镜连接的 Wi-Fi。
    - 服务器地址和设备令牌无需手动改，脚本会根据 `local_server.env` 自动写入 `GLASS_SERVER_WS_URI`、`GLASS_DEVICE_ID`、`GLASS_PAIR_TOKEN`。
 
-修改完成后重新执行 `bash scripts/run_phone.sh open`。
+修改完成后重新执行 `uv run openaiglass.phone.open --app-root openaiglass-for-blind`。
 
 如只想先验证手机端工程是否可构建，可执行：
 
 ```bash
-bash scripts/run_phone.sh build-sim
+uv run openaiglass.phone.build-sim --app-root openaiglass-for-blind
 ```
 
 服务端运行态应看到：
@@ -269,7 +263,7 @@ bash scripts/run_phone.sh build-sim
 构建并启动眼镜：
 
 ```bash
-bash scripts/run_glass.sh
+uv run openaiglass.glass.start --repo-root .
 ```
 
 服务端运行态应看到：
@@ -307,7 +301,7 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 
 失败定位：
 
-1. 如果返回 `路径不存在: /api/debug/find-object/start`，说明服务端仍是旧进程，先执行 `bash scripts/run_server.sh local stop && bash scripts/run_server.sh local start`。
+1. 如果返回 `路径不存在: /api/debug/find-object/start`，说明服务端仍是旧进程，先停止旧服务进程，再执行 `uv run openaiglass.server.run --app-module host.server.main --app-root openaiglass-for-blind`。
 2. 如果服务端返回目标设备离线，检查眼镜控制连接是否已注册且 `voice.session.opened` 已完成。
 3. 如果服务端返回缺少手机，检查手机是否在线、是否上报 `camera_sink_ws_uri`、是否和眼镜完成绑定。
 4. 如果眼镜没有推帧，检查眼镜摄像头和控制命令日志。

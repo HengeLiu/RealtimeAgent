@@ -5,14 +5,12 @@
 眼镜端启动、构建和烧录由 SDK `openaiglass` 命令提供，当前入口是：
 
 ```bash
-openaiglass glass firmware --repo-root .
+uv run openaiglass.glass.start --repo-root .
 ```
-
-[../../scripts/run_glass.sh](../../scripts/run_glass.sh) 仍可作为兼容旧习惯的薄包装使用。
 
 眼镜端本地构建配置源放在业务工程：
 
 ```bash
 cp host/glass/config/local_build.env.example host/glass/config/local_build.env
-openaiglass.config.sync --app-root openaiglass-for-blind
+uv run openaiglass.config.sync --app-root openaiglass-for-blind
 ```

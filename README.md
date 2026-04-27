@@ -19,16 +19,15 @@
 | [openaiglass-for-blind](./openaiglass-for-blind) | 盲人 AI 眼镜真实场景工程，包含业务能力、三端工程、设备级回放资产和 SDK 使用说明。 |
 | [openaiglass-for-blind/host](./openaiglass-for-blind/host) | 盲人 AI 眼镜产品宿主，包含很薄的服务端、手机端和眼镜端入口。 |
 | [openaiglass-for-blind/capabilities](./openaiglass-for-blind/capabilities) | 盲人 AI 眼镜业务能力集合。 |
-| [openaiglass-for-blind/scripts](./openaiglass-for-blind/scripts) | 业务层薄包装、配置同步和联调检查脚本；三端启动优先使用 SDK `openaiglass` 命令。 |
 
 ## 常用命令
 
 ```bash
-openaiglass server local start --app-module host.server.main --app-root openaiglass-for-blind
-openaiglass phone open --app-root openaiglass-for-blind
-openaiglass glass firmware --repo-root .
-uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py --report logs/sdk-preflight-current.json
-uv run python openaiglass-sdk/scripts/run_sdk_package_check.py
+uv run openaiglass.server.run --app-module host.server.main --app-root openaiglass-for-blind
+uv run openaiglass.phone.open --app-root openaiglass-for-blind
+uv run openaiglass.glass.start --repo-root .
+uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
+uv run openaiglass.sdk.package-check
 uv run python -m pytest openaiglass-sdk/tests -q
 ```
 

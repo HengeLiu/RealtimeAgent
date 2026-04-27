@@ -100,8 +100,5 @@ task -> runtime: complete(result)
 已通过新增场景定向回放：
 
 ```bash
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_scenario.py --scenario testdata/scenario/timer_finished.json --pretty
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_scenario.py --scenario testdata/scenario/timer_cancelled.json --pretty
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_scenario.py --scenario testdata/scenario/timer_invalid_duration.json --pretty
-PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sdk_scenario.py --scenario testdata/scenario/timer_running_tick.json --pretty
+组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
 ```
