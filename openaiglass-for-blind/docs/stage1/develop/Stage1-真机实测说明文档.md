@@ -300,9 +300,11 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 
 失败定位：
 
-1. 如果服务端返回缺少手机，检查绑定状态。
-2. 如果眼镜没有推帧，检查眼镜摄像头和控制命令日志。
-3. 如果 iPhone 无帧，检查 iPhone camera sink 地址是否上报。
+1. 如果返回 `路径不存在: /api/debug/find-object/start`，说明服务端仍是旧进程，先执行 `bash scripts/run_server.sh local stop && bash scripts/run_server.sh local start`。
+2. 如果服务端返回目标设备离线，检查眼镜控制连接是否已注册且 `voice.session.opened` 已完成。
+3. 如果服务端返回缺少手机，检查手机是否在线、是否上报 `camera_sink_ws_uri`、是否和眼镜完成绑定。
+4. 如果眼镜没有推帧，检查眼镜摄像头和控制命令日志。
+5. 如果 iPhone 无帧，检查 iPhone camera sink 地址是否上报。
 
 ## 10. find_object 实测
 

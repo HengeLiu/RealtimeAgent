@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -67,6 +67,9 @@ def main() -> int:
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
         print(f"HTTP {exc.code}: {error_body}")
+        return 1
+    except URLError as exc:
+        print(f"连接服务端失败: {exc.reason}")
         return 1
 
     reply_text = str(body.get("reply_text") or "")

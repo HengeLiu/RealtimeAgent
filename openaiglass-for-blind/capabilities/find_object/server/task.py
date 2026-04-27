@@ -36,9 +36,16 @@ class FindObjectTask(BaseTask):
         """
 
         target_object = str(context.input.get("target_object") or "").strip()
+        frame_interval_ms = int(context.input.get("frame_interval_ms") or 500)
+        target_ws_uri = str(context.input.get("target_ws_uri") or "").strip()
         context.device_group.start_phone_video_link(
             reason="find_object",
-            params={"target_object": target_object, "processor_type": "yolo_find_object"},
+            params={
+                "target_object": target_object,
+                "processor_type": "yolo_find_object",
+                "frame_interval_ms": frame_interval_ms,
+                "target_ws_uri": target_ws_uri,
+            },
         )
         context.device_group.start_phone_task(
             task_type="find_object_phone_task",
