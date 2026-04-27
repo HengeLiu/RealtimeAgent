@@ -19,7 +19,7 @@ bash scripts/sync_sdk_live_config.sh
 bash scripts/run_phone.sh open
 ```
 
-首次执行时会自动从模板创建业务本地配置，并提示修改局域网 IP、设备令牌和眼镜 Wi-Fi。修改完成后再次执行同一命令即可。
+首次执行时会自动从模板创建业务本地配置，并打印需要修改的配置文件和字段。配置项应写入 `config/local_server.env`、`host/phone/config/AppConfig.plist`、`host/glass/config/local_build.env`，不要用临时环境变量覆盖。修改完成后再次执行同一命令即可。
 
 如只需要验证 iOS 工程可构建：
 

@@ -218,7 +218,23 @@ bash scripts/run_phone.sh open
 2. `host/phone/config/AppConfig.plist`
 3. `host/glass/config/local_build.env`
 
-创建后脚本会停止，请先修改 `SERVER_PUBLIC_HOST`、`DEVICE_TOKEN_MAP` 和眼镜 Wi-Fi，再重新执行 `bash scripts/run_phone.sh open`。
+创建后脚本会停止，并打印每个配置文件里要修改的字段。按提示修改：
+
+1. `config/local_server.env`
+   - `SERVER_PUBLIC_HOST`：Mac 当前局域网 IPv4。
+   - `DEVICE_TOKEN_MAP`：手机和眼镜设备编号对应的配对令牌。
+2. `host/phone/config/AppConfig.plist`
+   - `serverBaseURLString`：`http://<SERVER_PUBLIC_HOST>:8765`。
+   - `phoneDeviceID`：手机设备编号。
+   - `pairToken`：`DEVICE_TOKEN_MAP` 中手机对应的令牌。
+   - `desiredGlassDeviceID`：目标眼镜设备编号。
+3. `host/glass/config/local_build.env`
+   - `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD`：眼镜连接的 Wi-Fi。
+   - `GLASS_SERVER_WS_URI`：`ws://<SERVER_PUBLIC_HOST>:8765/ws/control`。
+   - `GLASS_DEVICE_ID`：眼镜设备编号。
+   - `GLASS_PAIR_TOKEN`：`DEVICE_TOKEN_MAP` 中眼镜对应的令牌。
+
+修改完成后重新执行 `bash scripts/run_phone.sh open`。
 
 如只想先验证手机端工程是否可构建，可执行：
 
