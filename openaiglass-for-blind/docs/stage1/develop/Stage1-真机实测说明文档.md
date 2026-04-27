@@ -212,6 +212,14 @@ bash scripts/run_phone.sh open
 3. 允许摄像头和局域网访问权限。
 4. 在 App 页面确认服务端地址、手机设备编号和目标眼镜编号。
 
+首次执行时，如果本地配置文件不存在，脚本会自动从模板创建：
+
+1. `config/local_server.env`
+2. `host/phone/config/AppConfig.plist`
+3. `host/glass/config/local_build.env`
+
+创建后脚本会停止，请先修改 `SERVER_PUBLIC_HOST`、`DEVICE_TOKEN_MAP` 和眼镜 Wi-Fi，再重新执行 `bash scripts/run_phone.sh open`。
+
 如只想先验证手机端工程是否可构建，可执行：
 
 ```bash

@@ -9,6 +9,12 @@ PHONE_SCHEME="${PHONE_SCHEME:-GlassesVideoReceiver}"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 DESTINATION="${DESTINATION:-}"
 ACTION="${1:-open}"
+SERVER_CONFIG="${SERVER_CONFIG:-${APP_ROOT}/config/local_server.env}"
+SERVER_CONFIG_TEMPLATE="${SERVER_CONFIG_TEMPLATE:-${APP_ROOT}/config/local_server.env.example}"
+PHONE_CONFIG="${PHONE_CONFIG:-${APP_ROOT}/host/phone/config/AppConfig.plist}"
+PHONE_CONFIG_TEMPLATE="${PHONE_CONFIG_TEMPLATE:-${APP_ROOT}/host/phone/config/AppConfig.plist.example}"
+GLASS_CONFIG="${GLASS_CONFIG:-${APP_ROOT}/host/glass/config/local_build.env}"
+GLASS_CONFIG_TEMPLATE="${GLASS_CONFIG_TEMPLATE:-${APP_ROOT}/host/glass/config/local_build.env.example}"
 
 usage() {
   cat <<EOF
@@ -26,10 +32,47 @@ Environment overrides:
   PHONE_SCHEME      默认: ${PHONE_SCHEME}
   CONFIGURATION     默认: ${CONFIGURATION}
   DESTINATION       可选 xcodebuild destination，例如 'platform=iOS,id=<device-id>'
+  SERVER_CONFIG     默认: ${SERVER_CONFIG}
 EOF
 }
 
+ensure_local_configs() {
+  local initialized=0
+  if [[ ! -f "${SERVER_CONFIG}" ]]; then
+    mkdir -p "$(dirname "${SERVER_CONFIG}")"
+    cp "${SERVER_CONFIG_TEMPLATE}" "${SERVER_CONFIG}"
+    echo "[config] 已创建服务端本地配置: ${SERVER_CONFIG}"
+    initialized=1
+  fi
+  if [[ ! -f "${PHONE_CONFIG}" ]]; then
+    mkdir -p "$(dirname "${PHONE_CONFIG}")"
+    cp "${PHONE_CONFIG_TEMPLATE}" "${PHONE_CONFIG}"
+    echo "[config] 已创建手机本地配置: ${PHONE_CONFIG}"
+    initialized=1
+  fi
+  if [[ ! -f "${GLASS_CONFIG}" ]]; then
+    mkdir -p "$(dirname "${GLASS_CONFIG}")"
+    cp "${GLASS_CONFIG_TEMPLATE}" "${GLASS_CONFIG}"
+    echo "[config] 已创建眼镜本地配置: ${GLASS_CONFIG}"
+    initialized=1
+  fi
+
+  if [[ "${initialized}" == "1" ]]; then
+    cat <<EOF
+[config] 首次运行已从模板初始化配置。请确认并按当前局域网修改：
+  1. ${SERVER_CONFIG} 中的 SERVER_PUBLIC_HOST
+  2. ${SERVER_CONFIG} 中的 DEVICE_TOKEN_MAP
+  3. ${GLASS_CONFIG} 中的 GLASS_WIFI_PRIMARY_SSID / GLASS_WIFI_PRIMARY_PASSWORD
+
+修改完成后重新执行：
+  bash scripts/run_phone.sh open
+EOF
+    exit 2
+  fi
+}
+
 sync_config() {
+  ensure_local_configs
   bash "${APP_ROOT}/scripts/sync_sdk_live_config.sh"
 }
 
