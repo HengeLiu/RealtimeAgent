@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import plistlib
+import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,6 +34,12 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="只打印将要同步的内容，不写文件",
+    )
+    parser.add_argument(
+        "--public-host",
+        type=str,
+        default="",
+        help="手动指定本机作为服务端的局域网 IPv4；为空时自动探测并写回 SERVER_PUBLIC_HOST",
     )
     return parser.parse_args()
 
@@ -141,6 +149,191 @@ def upsert_env_lines(existing_text: str, updates: dict[str, str]) -> str:
     return "\n".join(output) + "\n"
 
 
+def _is_usable_ipv4(value: str) -> bool:
+    """判断 IPv4 是否适合给手机和眼镜访问。
+
+    参数：
+    1. `value`：待检查的 IP 字符串。
+
+    返回值：
+    1. 可作为局域网访问地址时返回 `True`。
+    """
+
+    text = value.strip()
+    if not text or text.startswith("127.") or text == "0.0.0.0":
+        return False
+    parts = text.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return False
+    return all(0 <= number <= 255 for number in numbers)
+
+
+def _run_command(args: list[str]) -> str:
+    """执行系统命令并返回标准输出。
+
+    参数：
+    1. `args`：命令和参数。
+
+    返回值：
+    1. 去除首尾空白后的标准输出；失败时返回空字符串。
+    """
+
+    try:
+        completed = subprocess.run(args, check=False, capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def _append_candidate(candidates: list[str], value: str) -> None:
+    """把可用 IPv4 追加到候选列表并去重。"""
+
+    text = value.strip()
+    if _is_usable_ipv4(text) and text not in candidates:
+        candidates.append(text)
+
+
+def _default_route_interface() -> str:
+    """获取当前系统默认路由接口名。
+
+    返回值：
+    1. macOS/Linux 下的接口名，无法获取时返回空字符串。
+    """
+
+    route_output = _run_command(["route", "-n", "get", "default"])
+    for line in route_output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("interface:"):
+            return stripped.split(":", 1)[1].strip()
+
+    ip_output = _run_command(["ip", "route", "show", "default"])
+    parts = ip_output.split()
+    if "dev" in parts:
+        index = parts.index("dev")
+        if index + 1 < len(parts):
+            return parts[index + 1].strip()
+    return ""
+
+
+def _detect_local_ipv4_candidates() -> list[str]:
+    """探测当前机器可给同一局域网设备访问的 IPv4 候选。
+
+    返回值：
+    1. 按优先级排序的 IPv4 列表。
+    """
+
+    candidates: list[str] = []
+
+    default_interface = _default_route_interface()
+    if default_interface:
+        _append_candidate(candidates, _run_command(["ipconfig", "getifaddr", default_interface]))
+
+    for interface in ("en0", "en1", "en2", "bridge100"):
+        _append_candidate(candidates, _run_command(["ipconfig", "getifaddr", interface]))
+
+    ifconfig_output = _run_command(["ifconfig"])
+    current_block: list[str] = []
+    for line in ifconfig_output.splitlines() + [""]:
+        if line and not line.startswith(("\t", " ")):
+            if current_block:
+                _append_ifconfig_block_candidate(candidates, current_block)
+            current_block = [line]
+        elif current_block:
+            current_block.append(line)
+
+    hostname_output = _run_command(["hostname", "-I"])
+    for item in hostname_output.split():
+        _append_candidate(candidates, item)
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
+            udp_socket.connect(("8.8.8.8", 80))
+            _append_candidate(candidates, udp_socket.getsockname()[0])
+    except OSError:
+        pass
+
+    try:
+        for item in socket.gethostbyname_ex(socket.gethostname())[2]:
+            _append_candidate(candidates, item)
+    except OSError:
+        pass
+
+    return candidates
+
+
+def _append_ifconfig_block_candidate(candidates: list[str], block: list[str]) -> None:
+    """从 ifconfig 单个网卡信息块中提取可用 IPv4。
+
+    参数：
+    1. `candidates`：候选列表。
+    2. `block`：某个网卡的 ifconfig 输出行。
+    """
+
+    header = block[0]
+    interface_name = header.split(":", 1)[0].strip()
+    if interface_name.startswith(("lo", "utun", "awdl", "llw")):
+        return
+    text = "\n".join(block)
+    if "status: active" not in text and "RUNNING" not in header:
+        return
+    for line in block:
+        stripped = line.strip()
+        if not stripped.startswith("inet "):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2:
+            _append_candidate(candidates, parts[1])
+
+
+def resolve_public_host(configured_host: str, override_host: str) -> tuple[str, list[str], str]:
+    """解析本机服务端局域网地址。
+
+    参数：
+    1. `configured_host`：配置文件里的 `SERVER_PUBLIC_HOST`。
+    2. `override_host`：命令行手动指定的地址。
+
+    返回值：
+    1. `(最终地址, 候选地址列表, 来源说明)`。
+
+    异常情况：
+    1. 手动地址非法或无法自动探测时抛出 `RuntimeError`。
+    """
+
+    if override_host.strip():
+        host = override_host.strip()
+        if not _is_usable_ipv4(host):
+            raise RuntimeError(f"--public-host 不是可用 IPv4: {host}")
+        return host, [host], "manual"
+
+    candidates = _detect_local_ipv4_candidates()
+    if not candidates:
+        if _is_usable_ipv4(configured_host):
+            return configured_host.strip(), [], "config-fallback"
+        raise RuntimeError("无法自动探测本机局域网 IPv4，请检查网络连接，或用 --public-host 手动指定")
+    return candidates[0], candidates, "auto"
+
+
+def sync_server_public_host(server_config_path: Path, public_host: str, dry_run: bool) -> None:
+    """把自动探测到的服务端地址写回业务服务端配置。
+
+    参数：
+    1. `server_config_path`：业务服务端配置路径。
+    2. `public_host`：当前本机局域网 IPv4。
+    3. `dry_run`：为真时不写文件。
+    """
+
+    if dry_run:
+        return
+    existing_text = server_config_path.read_text(encoding="utf-8")
+    server_config_path.write_text(upsert_env_lines(existing_text, {"SERVER_PUBLIC_HOST": public_host}), encoding="utf-8")
+
+
 def _read_phone_business_config() -> dict[str, object]:
     """读取业务侧手机配置。
 
@@ -214,16 +407,18 @@ def main() -> int:
     args = parse_args()
     server_config_path = resolve_path(args.server_config)
     server_config = read_env_file(server_config_path)
-    public_host = str(server_config.get("SERVER_PUBLIC_HOST") or "").strip()
+    public_host, detected_hosts, public_host_source = resolve_public_host(
+        str(server_config.get("SERVER_PUBLIC_HOST") or ""),
+        args.public_host,
+    )
     port = str(server_config.get("PORT") or "8765").strip()
     token_map = parse_token_map(str(server_config.get("DEVICE_TOKEN_MAP") or ""))
 
-    if not public_host:
-        raise RuntimeError("SERVER_PUBLIC_HOST 不能为空，否则无法同步手机和眼镜局域网地址")
     glass_device_id, phone_device_id = parse_device_ids(server_config, token_map)
 
     server_url = f"http://{public_host}:{port}"
     ws_uri = f"ws://{public_host}:{port}/ws/control"
+    sync_server_public_host(server_config_path, public_host, bool(args.dry_run))
     sync_phone_config(
         server_url=server_url,
         phone_device_id=phone_device_id,
@@ -239,8 +434,13 @@ def main() -> int:
     )
 
     action = "将同步" if args.dry_run else "已同步"
+    print(f"{action}服务端本机地址: {server_config_path}")
     print(f"{action}业务手机配置: {PHONE_BUSINESS_CONFIG}")
     print(f"{action}眼镜本地配置: {GLASS_LOCAL_CONFIG}")
+    print(f"public_host={public_host}")
+    print(f"public_host_source={public_host_source}")
+    if detected_hosts:
+        print(f"detected_ipv4_candidates={','.join(detected_hosts)}")
     print(f"server_url={server_url}")
     print(f"glass_ws_uri={ws_uri}")
     print(f"phone_device_id={phone_device_id}")

@@ -109,7 +109,7 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/run_sd
 ifconfig | grep "inet " | grep -v 127.0.0.1
 ```
 
-选择 iPhone 和眼镜都能访问的 IPv4 地址，写入：
+服务端本地配置文件为：
 
 ```text
 config/local_server.env
@@ -125,13 +125,19 @@ LOG_LEVEL=DEBUG
 DEVICE_TOKEN_MAP=glass-001=pair-demo-token,phone-001=pair-demo-token
 ```
 
+`SERVER_PUBLIC_HOST` 不需要随着网络变化手动维护；执行同步脚本时会自动探测 Mac 当前局域网 IPv4，并回写到该配置文件。自动探测失败时再手动指定：
+
+```bash
+bash scripts/sync_sdk_live_config.sh --public-host 192.168.1.23
+```
+
 ### 5.2 同步配置到手机和眼镜
 
 ```bash
 bash scripts/sync_sdk_live_config.sh
 ```
 
-该脚本会根据业务目录下的服务端配置同步业务手机配置和眼镜本地构建配置。手机 App 会从 `host/phone/ios/GlassesVideoReceiver.xcodeproj` 启动，并把 `host/phone/config/AppConfig.plist` 作为资源打包；不再写入 SDK 目录下的 iOS 配置文件。
+该脚本会先自动探测当前本机服务端局域网 IP，并回写 `config/local_server.env` 的 `SERVER_PUBLIC_HOST`；然后根据业务目录下的服务端配置同步业务手机配置和眼镜本地构建配置。手机 App 会从 `host/phone/ios/GlassesVideoReceiver.xcodeproj` 启动，并把 `host/phone/config/AppConfig.plist` 作为资源打包；不再写入 SDK 目录下的 iOS 配置文件。
 
 ### 5.3 执行真机前检查
 
@@ -221,7 +227,7 @@ bash scripts/run_phone.sh open
 创建后脚本会停止，并打印每个配置文件里要修改的字段。按提示修改：
 
 1. `config/local_server.env`
-   - `SERVER_PUBLIC_HOST`：Mac 当前局域网 IPv4。
+   - `SERVER_PUBLIC_HOST`：Mac 当前局域网 IPv4，由 `scripts/sync_sdk_live_config.sh` 自动探测并回写。
    - `DEVICE_TOKEN_MAP`：手机和眼镜设备编号对应的配对令牌。
    - `PHONE_DEVICE_ID` / `GLASS_DEVICE_ID`：可选；不填时从 `DEVICE_TOKEN_MAP` 中推断。
 2. `host/phone/config/AppConfig.plist`

@@ -64,7 +64,7 @@ print_config_instructions() {
 [config] 请在配置文件中修改真机联调参数，不要通过环境变量临时覆盖：
 
   文件 1: ${SERVER_CONFIG}
-    SERVER_PUBLIC_HOST="192.168.1.23"    # 改成 Mac 当前局域网 IPv4
+    SERVER_PUBLIC_HOST 无需手动修改，脚本会自动探测并回写 Mac 当前局域网 IPv4
     PORT="8765"
     DEVICE_TOKEN_MAP="glass-001=pair-demo-token,phone-001=pair-phone-token"
     # 可选：PHONE_DEVICE_ID="phone-001"
