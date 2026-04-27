@@ -223,16 +223,12 @@ bash scripts/run_phone.sh open
 1. `config/local_server.env`
    - `SERVER_PUBLIC_HOST`：Mac 当前局域网 IPv4。
    - `DEVICE_TOKEN_MAP`：手机和眼镜设备编号对应的配对令牌。
+   - `PHONE_DEVICE_ID` / `GLASS_DEVICE_ID`：可选；不填时从 `DEVICE_TOKEN_MAP` 中推断。
 2. `host/phone/config/AppConfig.plist`
-   - `serverBaseURLString`：`http://<SERVER_PUBLIC_HOST>:8765`。
-   - `phoneDeviceID`：手机设备编号。
-   - `pairToken`：`DEVICE_TOKEN_MAP` 中手机对应的令牌。
-   - `desiredGlassDeviceID`：目标眼镜设备编号。
+   - 基础连接配置无需手动改，脚本会根据 `local_server.env` 自动写入 `serverBaseURLString`、`phoneDeviceID`、`pairToken`、`desiredGlassDeviceID`。
 3. `host/glass/config/local_build.env`
    - `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD`：眼镜连接的 Wi-Fi。
-   - `GLASS_SERVER_WS_URI`：`ws://<SERVER_PUBLIC_HOST>:8765/ws/control`。
-   - `GLASS_DEVICE_ID`：眼镜设备编号。
-   - `GLASS_PAIR_TOKEN`：`DEVICE_TOKEN_MAP` 中眼镜对应的令牌。
+   - 服务器地址和设备令牌无需手动改，脚本会根据 `local_server.env` 自动写入 `GLASS_SERVER_WS_URI`、`GLASS_DEVICE_ID`、`GLASS_PAIR_TOKEN`。
 
 修改完成后重新执行 `bash scripts/run_phone.sh open`。
 

@@ -67,19 +67,20 @@ print_config_instructions() {
     SERVER_PUBLIC_HOST="192.168.1.23"    # 改成 Mac 当前局域网 IPv4
     PORT="8765"
     DEVICE_TOKEN_MAP="glass-001=pair-demo-token,phone-001=pair-phone-token"
+    # 可选：PHONE_DEVICE_ID="phone-001"
+    # 可选：GLASS_DEVICE_ID="glass-001"
 
   文件 2: ${PHONE_CONFIG}
-    serverBaseURLString = http://<SERVER_PUBLIC_HOST>:8765
-    phoneDeviceID = phone-001
-    pairToken = DEVICE_TOKEN_MAP 中 phone-001 对应的值
-    desiredGlassDeviceID = glass-001
+    无需手动修改基础连接配置。
+    脚本会根据 ${SERVER_CONFIG} 自动写入：
+      serverBaseURLString、phoneDeviceID、pairToken、desiredGlassDeviceID
 
   文件 3: ${GLASS_CONFIG}
     GLASS_WIFI_PRIMARY_SSID="你的 Wi-Fi 名称"
     GLASS_WIFI_PRIMARY_PASSWORD="你的 Wi-Fi 密码"
-    GLASS_SERVER_WS_URI="ws://<SERVER_PUBLIC_HOST>:8765/ws/control"
-    GLASS_DEVICE_ID="glass-001"
-    GLASS_PAIR_TOKEN="DEVICE_TOKEN_MAP 中 glass-001 对应的值"
+    无需手动修改服务器地址和设备令牌。
+    脚本会根据 ${SERVER_CONFIG} 自动写入：
+      GLASS_SERVER_WS_URI、GLASS_DEVICE_ID、GLASS_PAIR_TOKEN
 
 修改完成后重新执行：
   bash scripts/run_phone.sh open

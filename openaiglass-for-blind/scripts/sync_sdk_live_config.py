@@ -16,6 +16,7 @@ PHONE_BUSINESS_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
 PHONE_BUSINESS_CONFIG_TEMPLATE = APP_ROOT / "host/phone/config/AppConfig.plist.example"
 PHONE_RUNTIME_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
 GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
+GLASS_LOCAL_CONFIG_TEMPLATE = APP_ROOT / "host/glass/config/local_build.env.example"
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,6 +80,36 @@ def parse_token_map(token_map: str) -> dict[str, str]:
         if device_id:
             result[device_id] = token
     return result
+
+
+def parse_device_ids(values: dict[str, str], token_map: dict[str, str]) -> tuple[str, str]:
+    """从服务端配置解析眼镜和手机设备编号。
+
+    参数：
+    1. `values`：服务端 env 配置。
+    2. `token_map`：设备编号到配对令牌的映射。
+
+    返回值：
+    1. `(glass_device_id, phone_device_id)`。
+
+    异常情况：
+    1. 设备编号为空或无法从 `DEVICE_TOKEN_MAP` 推断时抛出 `RuntimeError`。
+    """
+
+    glass_device_id = str(values.get("GLASS_DEVICE_ID") or "").strip()
+    phone_device_id = str(values.get("PHONE_DEVICE_ID") or "").strip()
+    for device_id in token_map:
+        if not glass_device_id and device_id.startswith("glass"):
+            glass_device_id = device_id
+        if not phone_device_id and device_id.startswith("phone"):
+            phone_device_id = device_id
+    if not glass_device_id:
+        glass_device_id = "glass-001"
+    if not phone_device_id:
+        phone_device_id = "phone-001"
+    if glass_device_id not in token_map or phone_device_id not in token_map:
+        raise RuntimeError(f"DEVICE_TOKEN_MAP 必须包含 {glass_device_id} 和 {phone_device_id}")
+    return glass_device_id, phone_device_id
 
 
 def quote_env(value: str) -> str:
@@ -150,7 +181,12 @@ def sync_phone_config(*, server_url: str, phone_device_id: str, phone_token: str
 def sync_glass_config(*, ws_uri: str, glass_device_id: str, glass_token: str, dry_run: bool) -> None:
     """同步眼镜端本地构建配置。"""
 
-    existing_text = GLASS_LOCAL_CONFIG.read_text(encoding="utf-8") if GLASS_LOCAL_CONFIG.exists() else ""
+    if GLASS_LOCAL_CONFIG.exists():
+        existing_text = GLASS_LOCAL_CONFIG.read_text(encoding="utf-8")
+    elif GLASS_LOCAL_CONFIG_TEMPLATE.exists():
+        existing_text = GLASS_LOCAL_CONFIG_TEMPLATE.read_text(encoding="utf-8")
+    else:
+        existing_text = ""
     updated = upsert_env_lines(
         existing_text,
         {
@@ -174,12 +210,9 @@ def main() -> int:
     port = str(server_config.get("PORT") or "8765").strip()
     token_map = parse_token_map(str(server_config.get("DEVICE_TOKEN_MAP") or ""))
 
-    glass_device_id = "glass-001"
-    phone_device_id = "phone-001"
-    if glass_device_id not in token_map or phone_device_id not in token_map:
-        raise RuntimeError("DEVICE_TOKEN_MAP 必须包含 glass-001 和 phone-001")
     if not public_host:
         raise RuntimeError("SERVER_PUBLIC_HOST 不能为空，否则无法同步手机和眼镜局域网地址")
+    glass_device_id, phone_device_id = parse_device_ids(server_config, token_map)
 
     server_url = f"http://{public_host}:{port}"
     ws_uri = f"ws://{public_host}:{port}/ws/control"
@@ -203,6 +236,8 @@ def main() -> int:
     print(f"{action}眼镜本地配置: {GLASS_LOCAL_CONFIG}")
     print(f"server_url={server_url}")
     print(f"glass_ws_uri={ws_uri}")
+    print(f"phone_device_id={phone_device_id}")
+    print(f"glass_device_id={glass_device_id}")
     return 0
 
 
