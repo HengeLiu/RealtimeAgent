@@ -49,11 +49,6 @@ def parse_args() -> argparse.Namespace:
         help="跳过 compileall 检查",
     )
     parser.add_argument(
-        "--skip-scenarios",
-        action="store_true",
-        help="跳过 scenario 批量回放",
-    )
-    parser.add_argument(
         "--skip-boundary",
         action="store_true",
         help="跳过 SDK 与业务工程边界检查",
@@ -154,9 +149,7 @@ def run_entrypoint_check() -> CheckResult:
         "glass_sdk_project": SDK_ROOT / "glass-esp32",
         "server_run_script": APP_ROOT / "scripts/run_server.sh",
         "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
-        "sdk_live_check_shell": APP_ROOT / "scripts/run_sdk_live_check.sh",
         "sdk_live_config_sync_script": APP_ROOT / "scripts/sync_sdk_live_config.py",
-        "sdk_live_config_sync_shell": APP_ROOT / "scripts/sync_sdk_live_config.sh",
     }
     details = {
         key: {
@@ -317,7 +310,6 @@ def main() -> int:
                     "openaiglass-sdk/glass-esp32",
                     "openaiglass-for-blind/capabilities",
                     "openaiglass-sdk/tests/unit",
-                    "openaiglass-for-blind/scripts/run_sdk_scenario.py",
                     "openaiglass-sdk/scripts/run_sdk_contract_tests.py",
                     "openaiglass-sdk/scripts/run_sdk_compatibility_tests.py",
                     "openaiglass-for-blind/scripts/run_sdk_preflight.py",
@@ -340,19 +332,6 @@ def main() -> int:
                 command=[
                     sys.executable,
                     "openaiglass-sdk/scripts/run_sdk_package_check.py",
-                ],
-            )
-        )
-
-    if not args.skip_scenarios:
-        checks.append(
-            run_command(
-                name="scenario_suite",
-                command=[
-                    sys.executable,
-                    "openaiglass-for-blind/scripts/run_sdk_scenario.py",
-                    "--scenario-dir",
-                    "testdata/scenario",
                 ],
             )
         )

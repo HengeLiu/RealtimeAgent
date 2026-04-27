@@ -21,7 +21,7 @@ host/phone/ios/GlassesVideoReceiver.xcodeproj
 
 ```bash
 cp host/phone/config/AppConfig.plist.example host/phone/config/AppConfig.plist
-bash scripts/sync_sdk_live_config.sh
+uv run python scripts/sync_sdk_live_config.py
 ```
 
 同步脚本只写业务目录下的 `host/phone/config/AppConfig.plist`。业务侧 Xcode 工程会把这个配置文件作为 App 资源打包，不再写入 SDK 目录。
@@ -29,7 +29,7 @@ bash scripts/sync_sdk_live_config.sh
 业务开发者启动手机端时使用本目录所在业务工程提供的入口，不直接进入 SDK 目录：
 
 ```bash
-bash scripts/run_phone.sh open
+openaiglass phone open --app-root openaiglass-for-blind
 ```
 
 首次执行时会自动从模板创建业务本地配置，并打印需要修改的配置文件和字段。基础连接配置以 `config/local_server.env` 为源，脚本会自动同步到 `host/phone/config/AppConfig.plist` 和 `host/glass/config/local_build.env`；眼镜 Wi-Fi 仍在 `host/glass/config/local_build.env` 中维护。不要用临时环境变量覆盖。修改完成后再次执行同一命令即可。
@@ -37,5 +37,5 @@ bash scripts/run_phone.sh open
 如只需要验证 iOS 工程可构建：
 
 ```bash
-bash scripts/run_phone.sh build-sim
+openaiglass phone build-sim --app-root openaiglass-for-blind
 ```

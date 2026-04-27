@@ -18,7 +18,7 @@
 | [host](./host) | 盲人产品装配团队 | 服务端、手机端、眼镜端宿主配置和启动说明。 |
 | [capabilities](./capabilities) | 业务能力开发团队 | `find_object`、导航、识别等真实业务能力。 |
 | [docs](./docs) | 产品和研发团队 | 需求、阶段计划、功能设计、验收和当前实现状态。 |
-| [testdata](./testdata) | 测试和业务开发团队 | 设备级数据回放配置、音频、图像、传感器和兼容性数据。 |
+| [testdata](./testdata) | 测试和业务开发团队 | 设备级数据回放使用的音频、视频、图像、传感器和兼容性数据资产。 |
 
 业务能力开发优先修改 `openaiglass-for-blind/capabilities` 和 `openaiglass-for-blind/host`。只有当 SDK 公开抽象无法表达新业务时，才向 `openaiglass-sdk` 提交 SDK 层改造。
 
@@ -115,25 +115,25 @@ openaiglass-for-blind/config/local_server.env.example
 执行配置同步时，脚本会自动探测当前 Mac 可供手机和眼镜访问的局域网 IPv4，并回写 `SERVER_PUBLIC_HOST`：
 
 ```bash
-bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh
+uv run python openaiglass-for-blind/scripts/sync_sdk_live_config.py
 ```
 
 如果自动探测失败，可以手动指定一次：
 
 ```bash
-bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh --public-host 192.168.1.23
+uv run python openaiglass-for-blind/scripts/sync_sdk_live_config.py --public-host 192.168.1.23
 ```
 
 业务开发者通过业务工程入口打开手机端，不直接进入 SDK 目录：
 
 ```bash
-bash openaiglass-for-blind/scripts/run_phone.sh open
+openaiglass phone open --app-root openaiglass-for-blind
 ```
 
 命令行构建示例：
 
 ```bash
-bash openaiglass-for-blind/scripts/run_phone.sh build-sim
+openaiglass phone build-sim --app-root openaiglass-for-blind
 ```
 
 ### 2.3 ESP32 眼镜 SDK 运行时
@@ -175,15 +175,14 @@ openaiglass-for-blind/host/glass/config/local_build.env.example
 构建示例：
 
 ```bash
-PROJECT_DIR=openaiglass-sdk/glass-esp32 \
-  bash openaiglass-for-blind/scripts/run_glass.sh --build-only
+openaiglass glass firmware --build-only --repo-root .
 ```
 
 烧录和串口监控按实际设备端口执行：
 
 ```bash
 PORT=/dev/tty.usbmodemXXXX \
-  bash openaiglass-for-blind/scripts/run_glass.sh
+  openaiglass glass firmware --repo-root .
 ```
 
 ## 3. 安装服务端 Python SDK
@@ -218,6 +217,22 @@ SDK 包验证：
 ```bash
 uv run python openaiglass-sdk/scripts/run_sdk_package_check.py
 ```
+
+安装 SDK 后会得到统一设备命令：
+
+```bash
+openaiglass --help
+openaiglass server local start
+openaiglass phone open
+openaiglass glass firmware --build-only
+```
+
+设备启动采用两层结构：
+
+1. SDK 层提供通用命令、配置读取、进程管理、健康检查和工具链调度。
+2. 业务层只提供 profile、业务服务端入口、iOS 工程路径、ESP-IDF 本地配置和少量兼容脚本。
+
+本仓库的 `openaiglass-for-blind/scripts/run_server.sh`、`run_phone.sh`、`run_glass.sh` 仍可使用，但它们只是把盲人业务默认路径传给 `openaiglass`，不再承载主要启动逻辑。
 
 ## 4. 推荐业务能力工程结构
 
@@ -261,7 +276,7 @@ openaiglass-for-blind/capabilities/<capability_name>/
     ios/
 ```
 
-业务能力目录不再需要 `scenario.py`。测试样例统一放在 `testdata/playback` 和对应资产目录下；日常调试时由独立的 `glass-playback` 虚拟眼镜进程消费。
+业务能力目录不再需要 `scenario.py`。`glass-playback` 配置统一放在 `host/glass-playback/config`，音频、视频、图像和传感器资产放在 `testdata` 对应目录下；日常调试时由独立的 `glass-playback` 虚拟眼镜进程消费。
 
 可以参考现有找物体能力：
 
@@ -698,11 +713,13 @@ openaiglass-for-blind/host/server/main.py
 启动盲人业务服务端：
 
 ```bash
-PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
-  uv run python openaiglass-for-blind/host/server/main.py --host 0.0.0.0 --port 8765
+openaiglass server local start \
+  --app-module host.server.main \
+  --app-root openaiglass-for-blind \
+  --config openaiglass-for-blind/config/local_server.env
 ```
 
-也可以使用封装脚本：
+业务目录下仍保留兼容脚本，但它只是把业务默认路径传给 SDK CLI：
 
 ```bash
 bash openaiglass-for-blind/scripts/run_server.sh
@@ -757,7 +774,10 @@ bash openaiglass-for-blind/scripts/run_server.sh
 第一步，启动真实业务服务端：
 
 ```bash
-bash openaiglass-for-blind/scripts/run_server.sh local start
+openaiglass server local start \
+  --app-module host.server.main \
+  --app-root openaiglass-for-blind \
+  --config openaiglass-for-blind/config/local_server.env
 ```
 
 服务端配置方式与真机一致。唯一需要注意的是，`device_token_map` 中要包含虚拟眼镜的编号和配对令牌，例如 `glass-playback-001=pair_playback`。如果同时使用真实 iOS 手机，也要包含真实手机的编号和配对令牌。
@@ -765,14 +785,14 @@ bash openaiglass-for-blind/scripts/run_server.sh local start
 第二步，如果能力需要手机端，启动真实 iOS 手机端：
 
 ```bash
-bash openaiglass-for-blind/scripts/run_phone.sh open
+openaiglass phone open --app-root openaiglass-for-blind
 ```
 
 第三步，启动虚拟眼镜设备：
 
 ```bash
 uv run python openaiglass-for-blind/scripts/run_playback_glass.py \
-  --config openaiglass-for-blind/testdata/playback/glass.water_cup.json
+  --config openaiglass-for-blind/host/glass-playback/config/glass.water_cup.json
 ```
 
 启动后，开发者检查方式与真机相同：
@@ -792,7 +812,7 @@ curl http://127.0.0.1:8765/api/runtime/devices
 
 ### 10.4 glass-playback 配置文件
 
-playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据、执行器怎么处理”，不是业务组件测试脚本。
+playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据、执行器怎么处理”，不是业务组件测试脚本。配置文件属于 `glass-playback` 设备组件，统一放在 `openaiglass-for-blind/host/glass-playback/config`。
 
 `glass.water_cup.json` 示例：
 
@@ -820,8 +840,8 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
       "path": "testdata/image/cup.jpg"
     },
     "camera_stream": {
-      "path": "testdata/text/find_object_frames_water_cup.json",
-      "codec": "text",
+      "path": "testdata/video/find_object_water_cup.mp4",
+      "codec": "mp4",
       "frame_interval_ms": 100
     },
     "heading": {
@@ -853,30 +873,30 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 
 `trigger_audio` 推荐使用 WAV 文件。它应包含完整的一次用户请求，例如“帮我找一下水杯”，而不是只包含唤醒词。SDK 会把它当作唤醒成功后的麦克风录音流发送给服务端。
 
-`camera_stream` 可以先用文本帧快速验证协议闭环：
+`camera_stream` 应模拟真实摄像头视频输入，优先使用 MP4：
 
 ```json
 {
-  "frames": [
-    "桌面上有笔记本电脑",
-    "桌面上有蓝色水杯",
-    "桌面右侧有蓝色水杯"
-  ]
+  "path": "testdata/video/find_object_water_cup.mp4",
+  "codec": "mp4",
+  "frame_interval_ms": 100
 }
 ```
 
-需要更接近真实视觉输入时，改用图片帧：
+需要逐帧控制时，可以使用图片帧序列：
 
 ```json
 {
   "frames": [
     {
       "path": "image/cup-001.jpg",
-      "codec": "jpeg"
+      "codec": "jpeg",
+      "t_ms": 0
     },
     {
       "path": "image/cup-002.jpg",
-      "codec": "jpeg"
+      "codec": "jpeg",
+      "t_ms": 100
     }
   ]
 }
@@ -923,12 +943,12 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 真机联调前，先同步配置并检查：
 
 ```bash
-bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh
-bash openaiglass-for-blind/scripts/run_sdk_live_check.sh \
+uv run python openaiglass-for-blind/scripts/sync_sdk_live_config.py
+uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
   --report logs/sdk-live-check-current.json
 ```
 
-`sync_sdk_live_config.sh` 会在每次执行时自动探测当前本机服务端局域网 IP，并同步到：
+`sync_sdk_live_config.py` 会在每次执行时自动探测当前本机服务端局域网 IP，并同步到：
 
 1. `openaiglass-for-blind/config/local_server.env` 的 `SERVER_PUBLIC_HOST`。
 2. `openaiglass-for-blind/host/phone/config/AppConfig.plist` 的 `serverBaseURLString`。
@@ -937,7 +957,7 @@ bash openaiglass-for-blind/scripts/run_sdk_live_check.sh \
 如果开发机网络频繁变化，不需要手动改手机或眼镜配置；重新执行同步脚本即可。自动探测失败时再使用：
 
 ```bash
-bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh --public-host 192.168.1.23
+uv run python openaiglass-for-blind/scripts/sync_sdk_live_config.py --public-host 192.168.1.23
 ```
 
 推荐启动顺序：
@@ -952,13 +972,16 @@ bash openaiglass-for-blind/scripts/sync_sdk_live_config.sh --public-host 192.168
 服务端：
 
 ```bash
-bash openaiglass-for-blind/scripts/run_server.sh local start
+openaiglass server local start \
+  --app-module host.server.main \
+  --app-root openaiglass-for-blind \
+  --config openaiglass-for-blind/config/local_server.env
 ```
 
 iOS 手机端：
 
 ```bash
-bash openaiglass-for-blind/scripts/run_phone.sh open
+openaiglass phone open --app-root openaiglass-for-blind
 ```
 
 该命令会先同步业务配置，再打开业务侧 Xcode 工程：
@@ -973,7 +996,7 @@ openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj
 
 ```bash
 PORT=/dev/tty.usbmodemXXXX \
-  bash openaiglass-for-blind/scripts/run_glass.sh
+  openaiglass glass firmware --repo-root .
 ```
 
 联调时优先看：
@@ -1094,7 +1117,7 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 
 ### 16.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
-当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `openaiglass-for-blind/scripts/run_glass.sh` 构建 `openaiglass-sdk/glass-esp32`，业务侧只提供配置和硬件能力需求。
+当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `openaiglass glass firmware --repo-root .` 构建 `openaiglass-sdk/glass-esp32`，业务侧只提供配置和硬件能力需求。`openaiglass-for-blind/scripts/run_glass.sh` 只是兼容旧习惯的薄包装。
 
 ### 16.4 新能力什么时候应该改 SDK？
 

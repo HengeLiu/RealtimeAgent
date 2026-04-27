@@ -1,7 +1,7 @@
 """桌面环境下的手机协议调试入口。
 
 当前文件仅用于本地协议验证与桌面联调，不作为 iOS 手机端正式实现。
-正式手机端 SDK 运行时请通过业务入口 `scripts/run_phone.sh` 启动。
+正式手机端 SDK 运行时请通过 `openaiglass phone open --app-root openaiglass-for-blind` 启动。
 """
 
 from __future__ import annotations

@@ -5,7 +5,7 @@
 当前仍保留为 ESP-IDF 可构建工程，后续可以继续收敛为 ESP-IDF component：
 
 ```bash
-PROJECT_DIR=openaiglass-sdk/glass-esp32 bash openaiglass-for-blind/scripts/run_glass.sh --build-only
+openaiglass glass firmware --build-only --repo-root .
 ```
 
 盲人产品的眼镜宿主配置和硬件说明位于 [../../openaiglass-for-blind/host/glass](../../openaiglass-for-blind/host/glass)。

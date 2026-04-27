@@ -34,7 +34,7 @@
 5. 设备组绑定决策。
 6. 地图、导航、找物体等业务能力判断。
 
-当前仓库中，`openaiglass-sdk/glass-esp32` 仍是实际眼镜工程；`scripts/run_glass.sh` 先委托该工程。第二期的收口目标是明确其 SDK运行时 职责，不要求立即完成目录迁移。
+当前仓库中，`openaiglass-sdk/glass-esp32` 仍是实际眼镜工程；统一启动入口是 `openaiglass glass firmware --repo-root .`。业务侧 `scripts/run_glass.sh` 只保留为兼容旧习惯的薄包装，负责传入盲人业务默认配置路径。
 
 ## 3. 当前代码落点
 
@@ -43,7 +43,7 @@
 1. `openaiglass-sdk/glass-esp32/main/glass_main.c`
 2. `openaiglass-sdk/glass-esp32/main/test_wakenet.c`
 3. `openaiglass-for-blind/host/glass/config/local_build.env.openaiglass-for-blind`
-4. `scripts/run_glass.sh`
+4. `openaiglasses.cli.glass`
 5. `glass/README.md`
 
 当前相关设计文档：

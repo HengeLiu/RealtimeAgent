@@ -28,6 +28,15 @@ classifiers = [
 ]
 
 [project.scripts]
+openaiglass = "openaiglasses.cli:main"
+"openaiglass.server.run" = "openaiglasses.cli.shortcuts:server_run"
+"openaiglass.server.start" = "openaiglasses.cli.shortcuts:server_start"
+"openaiglass.server.stop" = "openaiglasses.cli.shortcuts:server_stop"
+"openaiglass.server.logs" = "openaiglasses.cli.shortcuts:server_logs"
+"openaiglass.phone.open" = "openaiglasses.cli.shortcuts:phone_open"
+"openaiglass.phone.build-sim" = "openaiglasses.cli.shortcuts:phone_build_sim"
+"openaiglass.glass.start" = "openaiglasses.cli.shortcuts:glass_start"
+"openaiglass.glass.build" = "openaiglasses.cli.shortcuts:glass_build"
 openaiglasses-server = "app.main:main"
 openaiglasses-audio-samples = "devtools.audio_sample_batch_runner:main"
 

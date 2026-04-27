@@ -50,18 +50,6 @@ def main() -> None:
 def convert_m4a_to_wav(repo_root: Path, source: Path, target: Path) -> None:
     """把单个 m4a 转成 16kHz/mono/16bit wav。"""
 
-    swift_converter = repo_root / "script/convert_audio_to_phase_c.swift"
-    if swift_converter.exists():
-        try:
-            subprocess.run(
-                ["swift", str(swift_converter), str(source), str(target)],
-                cwd=repo_root,
-                check=True,
-            )
-            return
-        except subprocess.CalledProcessError:
-            pass
-
     afconvert = shutil.which("afconvert")
     if afconvert:
         subprocess.run(

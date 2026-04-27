@@ -1,679 +1,351 @@
-# SDK 测试架构与样例回放设计
+# 设备级数据回放测试工具设计文档
 
 ## 1. 文档定位
 
-本文档用于补齐 SDK 产品化阶段的测试设计。
+本文档定义 SDK 后续唯一正式支持的高频业务自测方式：设备级数据回放。
 
-当前项目涉及眼镜、手机、服务器三端协同，同时服务器内部还有 `agent-core`、`backend-task-core`、`voice-runtime`、通知协调、Tool、MCP 等多个运行时模块。只依赖普通单元测试无法覆盖完整功能，只依赖真机联调又会让开发者自测成本过高。
+设备级数据回放不是组件级测试，也不是离线调用某个 `Tool`、`Task`、`PhoneProcessor` 或业务 handler。它通过一个独立启动的 `glass-playback` Python 虚拟眼镜设备，连接真实服务端，按真实眼镜协议完成注册、绑定、心跳、语音会话、音频流发送、控制消息接收和执行器处理。
 
-本文档的目标是定义一套面向 SDK 开发者的分层测试体系，使开发者可以在不启动真实三端设备的情况下，基于提前准备好的样例数据完成较完整的功能自测。
+功能开发人员使用 `glass-playback` 的方式应与使用真实 ESP32 眼镜一致。差异只在于这台设备的麦克风、摄像头、传感器和执行器行为来自预先准备好的配置和数据资产。
 
-本文档回答以下问题：
+当前只支持 `glass-playback`。需要手机能力时，回放链路仍使用真实 iOS phone。
 
-1. 哪些功能必须支持离线自测。
-2. `agent-core`、`backend-task-core`、手机侧处理器等模块如何被单独测试。
-3. 音频、图片、视频、文本、传感器数据如何组织成可回放样例。
-4. Mock Glass、Mock Phone、Scenario Runner 应该承担什么职责。
-5. 哪些测试必须真机执行，哪些应尽量用离线回放覆盖。
+## 2. 设计目标
 
----
+1. 功能开发人员可以在没有真实眼镜硬件的情况下，用同一套 SDK 服务端和同一套设备注册流程完成业务自测。
+2. `glass-playback` 在开发者视角里是一台独立设备，而不是测试 runner 内部的 mock 对象。
+3. 服务端、业务 SDK、设备绑定、语音链路、Tool、Task、通知、控制协议全部走真实实现。
+4. 每次回放都必须由配置中的触发音频驱动，模拟“眼镜端唤醒成功后开始录音并向服务端推流”的过程。
+5. 开发者通过 actuator 输出、服务端日志、真实 iOS 日志和运行态接口自行判断结果。
 
-## 2. 核心结论
+## 3. 非目标
 
-SDK 必须把“可测试性”作为系统能力的一部分，而不是开发过程中的临时脚本。
+1. 不支持组件级场景回放。
+2. 不支持 `ScenarioRunner` 式的 manifest 执行。
+3. 不支持业务断言检查。
+4. 不支持批量测试。
+5. 不支持绕过真实服务端直接调用业务模块。
+6. 不设计手机虚拟设备；需要手机能力时使用真实 iOS phone。
+7. 不测试 WakeNet 本身；触发音频表示唤醒已经成功之后的麦克风录音流。
 
-建议测试体系分为四层：
+## 4. 核心概念
 
-1. 纯单元测试
-2. 组件级样例回放测试
-3. 跨端模拟集成测试
-4. 真机验收测试
+| 概念 | 定义 |
+| --- | --- |
+| `glass-playback` | 独立 Python 进程，实现真实 glass 设备协议，用配置和数据资产替代硬件输入输出。 |
+| 触发音频 | 配置必填项，表示唤醒成功后的一次用户语音请求，会在设备注册、绑定和语音会话准备完成后自动流式发送。 |
+| sensor asset | 麦克风、摄像头、视频帧、方向角等虚拟眼镜输入数据。 |
+| actuator strategy | 虚拟眼镜收到服务端控制命令后的处理策略，例如记录、保存音频、自动回传播放完成。 |
+| device group ready | 服务端已接受 glass 注册；如果本次能力需要手机，则真实 iOS phone 已注册并与 glass 完成绑定。 |
 
-其中第二层和第三层是当前最缺失、也最应该产品化的能力。
-
-如果未来开发者新增一个 `Tool`、`Task`、`PhoneProcessor` 或 `PhoneTask`，却只能通过真实眼镜、真实手机、真实语音和真实视频来验证效果，那么 SDK 的开发体验是不合格的。
-
----
-
-## 3. 为什么现有测试不足
-
-当前已有测试覆盖了不少基础能力，例如：
-
-1. 协议编解码
-2. 注册链路
-3. 语音主链路模拟
-4. `agent-core` 最小运行时
-5. `backend-task-core` 计时器任务
-6. 真实音频样例批量回归
-
-这些测试是必要的，但还不够。
-
-当前缺口主要有四类：
-
-1. 单元测试粒度太小，无法验证复杂任务的完整状态推进。
-2. 真机测试依赖眼镜、手机、服务器同时在线，不适合高频开发回归。
-3. 视频、图片、传感器、地图、任务事件还没有统一样例回放格式。
-4. 手机侧处理器和跨端任务缺少独立测试入口。
-
-因此需要在单元测试和真机测试之间补一套正式的“样例驱动回放测试”。
-
----
-
-## 4. 四层测试体系
-
-## 4.1 第一层：纯单元测试
-
-纯单元测试用于验证没有外部依赖的确定性逻辑。
-
-适合覆盖：
-
-1. `ControlMessage` 编解码
-2. `MediaFrame` 编解码
-3. 状态机迁移
-4. Tool 参数校验
-5. Task 输入校验
-6. 通知优先级、去重、排队
-7. 上下文组装
-8. 模型请求构造
-
-这一层测试应满足：
-
-1. 不启动 HTTP 服务
-2. 不启动 WebSocket
-3. 不依赖真实模型 API
-4. 不依赖真实设备
-5. 不依赖真实时间流逝
-
-## 4.2 第二层：组件级样例回放测试
-
-组件级回放测试用于验证一个核心模块在固定输入样例下的行为。
-
-适合覆盖：
-
-1. `agent-core`
-2. `backend-task-core`
-3. `voice-runtime`
-4. `NotificationCoordinator`
-5. `NavigationTask`
-6. `FindObjectTask`
-7. `PhoneProcessor`
-8. `PhoneTask`
-
-这一层的关键是：用样例数据替代真实设备和真实外部服务。
-
-例如：
-
-1. 用一段真实音频样例替代眼镜麦克风。
-2. 用一组图片或视频帧替代眼镜摄像头。
-3. 用一段 GPS、陀螺仪、ToF 时间序列替代手机传感器。
-4. 用固定地图返回替代真实高德 API。
-5. 用固定 Tool 调用结果替代真实模型决策。
-
-## 4.3 第三层：跨端模拟集成测试
-
-跨端模拟集成测试用于验证服务器、Mock Glass、Mock Phone 之间的协议和任务协作。
-
-这一层不使用真实硬件，但运行真实服务器运行时。
-
-建议包含：
-
-1. `MockGlassRuntime`
-2. `MockPhoneRuntime`
-3. `ScenarioRunner`
-4. 真实 `server-api`
-5. 真实 `agent-core`
-6. 真实 `backend-task-core`
-
-适合覆盖：
-
-1. 设备注册与绑定
-2. 语音输入回放
-3. 图片抓拍回放
-4. 视频流回放
-5. 手机处理结果回传
-6. 后台任务创建与取消
-7. 通知直达眼镜与回流服务器
-8. 复合导航状态推进
-
-## 4.4 第四层：真机验收测试
-
-真机测试只覆盖离线模拟无法可靠验证的内容。
-
-适合覆盖：
-
-1. WakeNet 唤醒效果
-2. 麦克风采集质量
-3. 扬声器播放质量
-4. 眼镜与手机直连稳定性
-5. 手机本地模型真实性能
-6. 端到端延迟
-7. 功耗和发热
-8. 弱网、断连、重连
-9. 传感器硬件误差
-
-真机测试不应承担日常开发回归的主要职责。
-
----
-
-## 5. 样例数据目录规范
-
-建议在 SDK 阶段建立统一样例目录。
-
-推荐目录结构：
+## 5. 总体架构
 
 ```text
-testdata/
-  audio/
-  image/
-  video/
-  sensor/
-  map/
-  text/
-  task_event/
-  scenario/
+openaiglass-for-blind/host/glass-playback/config/*.json
+        |
+        v
+glass-playback process
+  - playback config loader
+  - control websocket client
+  - audio stream client
+  - sensor asset provider
+  - actuator recorder
+        |
+        | /ws/control, /ws_audio
+        v
+real SDK server
+  - device registration
+  - device binding
+  - voice runtime
+  - agent-core
+  - backend-task-core
+  - business Tool / Task
+        |
+        | real control messages / video link / task events
+        v
+real iOS phone, when required
 ```
 
-说明：
+工具不在服务端进程内部创建 mock 设备。`glass-playback` 必须像真实眼镜一样单独启动、单独注册、单独保持心跳，并通过服务端公开协议参与运行时。
 
-1. `audio`
-   - 用户语音、打断语音、噪声样例、TTS 回复样例
-2. `image`
-   - 抓拍图片、药品说明书、室内物体、路口场景
-3. `video`
-   - 寻物视频、人行道视频、红绿灯视频、障碍物视频
-4. `sensor`
-   - GPS、陀螺仪、方向角、ToF、IMU 时间序列
-5. `map`
-   - 地图搜索、地理编码、路线规划的固定返回
-6. `text`
-   - ASR 转写文本、用户输入文本、模型回复文本
-7. `task_event`
-   - 手机检测结果、导航状态、通知事件
-8. `scenario`
-   - 把多种样例组合成完整测试场景的 manifest
+## 6. 启动与运行时序
 
-当前仓库已经落地的最小版本为：
+一次回放的标准时序如下：
 
-1. `testdata/text/find_object_frames_water_cup.json`
-2. `testdata/scenario/find_object_with_testdata.json`
-3. `testdata/scenario/find_object_basic.json`
-4. `testdata/task_event/find_object_cancel_timeline.json`
-5. `testdata/scenario/find_object_cancelled.json`
-6. `testdata/scenario/find_object_missing_phone.json`
-7. `testdata/scenario/find_object_video_link_start_failed.json`
-8. `testdata/sensor/find_object_heading.json`
-9. `testdata/scenario/find_object_with_heading_sensor.json`
+1. 开发者启动真实业务服务端。
+2. 如果业务能力依赖手机，开发者启动真实 iOS phone。
+3. 开发者启动 `glass-playback --config <playback.json>`。
+4. `glass-playback` 读取配置，校验 `device_id`、`pair_token`、`control_ws_url`、`trigger_audio` 和资产路径。
+5. `glass-playback` 连接服务端 `/ws/control`。
+6. `glass-playback` 发送 `device.register(device_type=glass)`。
+7. 服务端返回 `device.registered`。
+8. `glass-playback` 开始心跳。
+9. 如果配置要求等待绑定，`glass-playback` 等待服务端 runtime 中 glass 与真实 iOS phone 形成设备组绑定。
+10. `glass-playback` 等待 `voice.session.open`，并回传 `voice.session.opened`。
+11. `glass-playback` 自动读取 `trigger_audio.path`，按 `chunk_ms` 切片，通过 `/ws_audio` 流式发送 `MediaFrame(audio_chunk)`。
+12. 服务端按真实语音链路完成 ASR、agent 调度、Tool 调用、Task 推进和通知下发。
+13. `glass-playback` 接收服务端发给 glass 的控制消息，并按 actuator strategy 记录、保存或自动回执。
+14. 开发者查看 actuator 输出、日志和 runtime snapshot，判断本次业务行为是否符合预期。
 
-其中：
+退出码只表示 `glass-playback` 工具本身是否启动、连接、读配置和传输成功，不代表业务结果通过或失败。
 
-1. `testdata/scenario/find_object_basic.json` 适合演示最小闭环。
-2. `testdata/scenario/find_object_with_testdata.json` 适合演示“场景 manifest 引用可复用资产”的推荐形态。
-3. `testdata/scenario/find_object_cancelled.json` 适合演示任务取消、链路停止和回放断言。
-4. `testdata/scenario/find_object_missing_phone.json` 适合演示设备缺失类失败场景。
-5. `testdata/scenario/find_object_video_link_start_failed.json` 适合演示系统适配层异常场景。
-6. `testdata/scenario/find_object_with_heading_sensor.json` 适合演示手机任务在处理视觉帧时读取传感器，并把传感器结果写入结构化输出。
+## 7. 状态机
 
----
+`glass-playback` 建议实现以下状态：
 
-## 6. Scenario Manifest 设计
+| 状态 | 进入条件 | 退出条件 |
+| --- | --- | --- |
+| `loaded` | 配置和资产校验完成。 | 开始连接控制 WebSocket。 |
+| `connected` | `/ws/control` 已连接。 | `device.register` 已发送。 |
+| `registered` | 收到 `device.registered`。 | 心跳启动，并按配置等待绑定或语音会话。 |
+| `bound` | 服务端 runtime 显示设备组已就绪；不需要 phone 时可跳过。 | 收到或发起 voice session ready 流程。 |
+| `voice_ready` | 收到 `voice.session.open` 并确认会话打开。 | 开始发送触发音频。 |
+| `streaming_audio` | 正在发送 `trigger_audio`。 | 音频发送完成或传输失败。 |
+| `running` | 触发音频已发送，等待后续控制命令和执行器输出。 | 用户中断、超时或服务端断开。 |
+| `stopped` | 工具正常结束。 | 无。 |
+| `failed` | 配置错误、连接失败、协议错误或资产读取失败。 | 无。 |
 
-每个复杂场景应有一个 `manifest.json`。
+## 8. 配置文件设计
+
+配置文件描述一台虚拟眼镜的设备身份、输入数据和执行器行为。它不是业务测试脚本，不包含 `expected` 断言。
 
 示例：
 
 ```json
 {
-  "scenario_id": "nav_crosswalk_wait_green",
-  "title": "导航途中遇到红灯并等待绿灯通过",
-  "description": "用户步行导航过程中到达斑马线，手机视觉先识别红灯，随后识别绿灯并提示通行。",
-  "device_group": {
-    "glass": "mock_glass_001",
-    "phone": "mock_phone_001"
+  "device_type": "glass",
+  "device_id": "glass-playback-001",
+  "pair_token": "pair_playback",
+  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "audio_ws_url": "ws://127.0.0.1:8765/ws_audio",
+  "desired_phone_device_id": "phone-001",
+  "startup": {
+    "wait_for_registration": true,
+    "wait_for_binding": true,
+    "wait_for_voice_session": true,
+    "auto_stream_trigger_audio": true,
+    "startup_timeout_ms": 30000
   },
-  "inputs": {
-    "user_text": "导航去桂林路地铁站",
-    "route": "map/route_guilin_road_station.json",
-    "video": "video/crosswalk_red_to_green.mp4",
-    "sensor": "sensor/walk_heading_crosswalk.json",
-    "tof": "sensor/tof_flat_road.json"
+  "sensors": {
+    "trigger_audio": {
+      "path": "testdata/audio/find_water_cup_trigger.wav",
+      "format": "wav",
+      "sample_rate_hz": 16000,
+      "channels": 1,
+      "chunk_ms": 40
+    },
+    "camera_capture": {
+      "path": "testdata/image/cup.jpg",
+      "mime_type": "image/jpeg"
+    },
+    "camera_stream": {
+      "path": "testdata/video/find_object_water_cup.mp4",
+      "codec": "mp4",
+      "frame_interval_ms": 100
+    },
+    "heading": {
+      "path": "testdata/sensor/find_object_heading.json"
+    }
   },
-  "mocks": {
-    "asr": "text/asr_nav_to_guilin_road_station.json",
-    "map": "map/amap_route_mock.json",
-    "model": "text/model_tool_calls_nav_confirmed.json"
+  "actuators": {
+    "audio_play": {
+      "mode": "record_and_auto_finish",
+      "save_audio_to": "runs/playback/glass-playback-001/audio"
+    },
+    "vibrate": {
+      "mode": "record"
+    }
   },
-  "expected": {
-    "task_events": [
-      "navigation.started",
-      "crosswalk.detected",
-      "traffic_light.red",
-      "traffic_light.green",
-      "navigation.crosswalk.entered"
-    ],
-    "notifications": [
-      "请在斑马线前等待",
-      "绿灯，可以通过"
-    ],
-    "final_task_state": "running"
+  "outputs": {
+    "event_log": "runs/playback/glass-playback-001/events.jsonl",
+    "actuator_log": "runs/playback/glass-playback-001/actuators.jsonl"
   }
 }
 ```
 
-设计原则：
+必填字段：
 
-1. `manifest.json` 只描述场景，不写测试代码。
-2. 样例文件可以被多个场景复用。
-3. 期望输出以结构化事件为主，少依赖完整自然语言文本。
-4. 对大模型输出应优先断言 Tool 调用、事件和状态，而不是逐字匹配回复。
+1. `device_type`：当前固定为 `glass`。
+2. `device_id`：必须与服务端 `device_token_map` 中的设备编号匹配。
+3. `pair_token`：必须与服务端 `device_token_map` 中的令牌匹配。
+4. `control_ws_url`：真实服务端控制通道地址。
+5. `sensors.trigger_audio`：必填触发音频配置。
 
----
+可选字段：
 
-## 7. 回放时间轴模型
+1. `audio_ws_url`：未配置时由 `control_ws_url` 推导。
+2. `desired_phone_device_id`：仅业务能力需要真实 iOS phone 时配置。
+3. `camera_capture`、`camera_stream`、`heading` 等传感器输入：按业务需要配置。
+4. `outputs`：用于保存工具日志和 actuator 输出。
 
-视频、音频、传感器样例都需要时间轴。
+## 9. 触发音频要求
 
-建议统一采用 `ReplayTimeline`：
+`trigger_audio` 是每次回放的触发源，必须满足：
+
+1. 包含完整用户请求，例如“帮我找一下水杯”，不是单独的唤醒词。
+2. 格式优先使用 16 kHz、单声道 WAV。
+3. 文件路径必须在启动前存在。
+4. 发送前必须完成 glass 注册。
+5. 如果配置需要手机，发送前必须完成真实 iOS phone 与 glass 的绑定。
+6. 发送前必须确认 voice session 已打开。
+7. 发送方式必须是流式音频帧，而不是一次性把文件内容作为业务输入传给服务端。
+
+这段音频不用于验证唤醒算法。它只模拟唤醒成功后，眼镜麦克风持续把用户语音推给服务端。
+
+## 10. 传感器资产
+
+传感器资产只表达虚拟眼镜能读到的数据，不表达测试期望。
+
+推荐目录：
+
+```text
+openaiglass-for-blind/
+  host/
+    glass-playback/
+      config/
+testdata/
+  audio/
+  image/
+  video/
+  sensor/
+  text/
+```
+
+`host/glass-playback/config` 存放 `glass-playback` 设备配置。`testdata` 只存放可复用数据资产，例如音频、图片、视频、传感器和文本样例。
+
+`camera_stream` 应模拟真实摄像头视频输入，优先使用 MP4：
 
 ```json
 {
-  "timeline_id": "walk_heading_crosswalk",
-  "time_unit": "ms",
-  "events": [
+  "path": "testdata/video/find_object_water_cup.mp4",
+  "codec": "mp4",
+  "frame_interval_ms": 100
+}
+```
+
+需要逐帧控制时，可以使用图片帧序列：
+
+```json
+{
+  "frames": [
     {
-      "at": 0,
-      "type": "sensor.gps",
-      "payload": {
-        "lat": 31.1742,
-        "lon": 121.4218,
-        "accuracy_m": 8.5
-      }
+      "path": "image/cup-001.jpg",
+      "codec": "jpeg",
+      "t_ms": 0
     },
     {
-      "at": 200,
-      "type": "sensor.heading",
-      "payload": {
-        "heading_deg": 92.0
-      }
-    },
-    {
-      "at": 1000,
-      "type": "vision.result",
-      "payload": {
-        "kind": "traffic_light",
-        "state": "red"
-      }
+      "path": "image/cup-002.jpg",
+      "codec": "jpeg",
+      "t_ms": 100
     }
   ]
 }
 ```
 
-回放器应支持两种模式：
+方向传感器示例：
 
-1. 实时回放
-   - 按原始时间间隔发送事件
-   - 适合测试通知节流、超时、播放抢占
-2. 快速回放
-   - 忽略真实等待，尽快推进事件
-   - 适合日常回归
+```json
+{
+  "readings": [
+    { "t_ms": 0, "heading_deg": 70.0 },
+    { "t_ms": 500, "heading_deg": 73.5 },
+    { "t_ms": 1000, "heading_deg": 76.0 }
+  ]
+}
+```
 
----
+## 11. 执行器策略
 
-## 8. 核心测试工具
+`glass-playback` 需要支持最小执行器策略，帮助开发者观察服务端是否下发了预期命令。
 
-## 8.1 ReplayRunner
+| 执行器 | 策略 | 行为 |
+| --- | --- | --- |
+| `audio_play` | `record` | 只记录播放请求和元数据。 |
+| `audio_play` | `record_and_auto_finish` | 记录请求，保存音频流，并自动回传播放 started/finished。 |
+| `vibrate` | `record` | 记录震动命令。 |
+| `display` | `record` | 如果未来 glass 协议出现显示类命令，只记录命令。 |
 
-`ReplayRunner` 负责读取样例数据并按时间轴投递输入。
+执行器输出是开发者判断结果的主要依据之一，但 SDK 当前不提供断言检查。
 
-建议拆分为：
+## 12. 日志与输出
 
-1. `AudioReplayRunner`
-2. `ImageReplayRunner`
-3. `VideoReplayRunner`
-4. `SensorReplayRunner`
-5. `TaskEventReplayRunner`
+建议输出两类 JSONL 文件：
 
-## 8.2 MockGlassRuntime
-
-`MockGlassRuntime` 模拟眼镜端。
-
-职责：
-
-1. 完成设备注册
-2. 回放麦克风音频
-3. 回放抓拍图片
-4. 回放摄像头视频流
-5. 接收播放或震动通知
-6. 记录收到的通知与控制消息
-
-不负责：
-
-1. 不调用真实麦克风
-2. 不调用真实摄像头
-3. 不执行真实播放
-
-## 8.3 MockPhoneRuntime
-
-`MockPhoneRuntime` 模拟手机端。
-
-职责：
-
-1. 完成手机注册
-2. 与 Mock Glass 建立模拟直连
-3. 回放 GPS、陀螺仪、ToF 数据
-4. 运行真实或假的 `PhoneProcessor`
-5. 回传结构化任务事件
-6. 测试手机本地通知直达眼镜的策略
-
-## 8.4 ScenarioRunner
-
-`ScenarioRunner` 负责把一个场景 manifest 编排成完整测试。
-
-职责：
-
-1. 启动或连接测试服务器
-2. 启动 Mock Glass
-3. 启动 Mock Phone
-4. 注入模型、地图、ASR、TTS mock
-5. 回放输入时间轴
-6. 收集任务事件、通知、上下文快照
-7. 与 expected 断言对比
-
-当前最小实现已经支持：
-
-1. `fast` 与 `realtime` 两种回放模式。
-2. `frame`、`task.cancel`、`task.event`、`sensor.<type>` 等事件类型。
-3. 通过 `script/run_sdk_scenario.py` 执行场景并输出 JSON 报告。
-4. 通过 `script/run_sdk_preflight.py` 把回放、pytest、编译检查和服务健康检查收敛成一条预检链路。
-5. 通过 `script/run_sdk_scenario.py --describe-scenario` 输出单个场景的资产与断言摘要。
-6. 通过 `script/run_sdk_scenario.py --list-scenarios` 输出目录级场景清单，便于维护回放资产。
-7. 手机侧运行时可通过 `PhoneRuntime.query_task()`、`PhoneRuntime.list_tasks()` 和 `PhoneTaskContext.query_self()` 在回放期间读取任务快照，便于断言手机任务状态和 SDK运行时 接入行为。
-8. 通过 `script/run_sdk_scenario.py --validate-scenarios` 可在不执行回放的情况下校验场景字段、资产引用和最小断言约束。
-
----
-
-## 9. agent-core 的可测试边界
-
-`agent-core` 必须支持脱离真实设备测试。
-
-## 9.1 输入
-
-建议测试输入包括：
-
-1. 历史消息
-2. 当前用户文本
-3. 当前图片资产
-4. 可用 Tool 列表
-5. Tool mock 返回
-6. MCP mock 返回
-7. TaskEvent 样例
-
-## 9.2 输出
-
-建议断言：
-
-1. 最终回复是否存在
-2. Tool 调用序列是否符合预期
-3. Tool 参数是否符合预期
-4. `CapabilityTrace` 是否完整
-5. 会话上下文是否正确写入
-6. 是否产生预期任务创建请求
-
-## 9.3 关键要求
-
-`agent-core` 测试不应依赖：
-
-1. 真实眼镜
-2. 真实手机
-3. 真实地图服务
-4. 真实大模型
-
-真实大模型可用于少量人工评估，但不能作为自动化回归的硬依赖。
-
----
-
-## 10. backend-task-core 的可测试边界
-
-`backend-task-core` 必须支持脱离真实设备测试。
-
-## 10.1 输入
-
-建议测试输入包括：
-
-1. `task.create`
-2. `task.cancel`
-3. 模拟时间推进
-4. 模拟手机处理结果
-5. 模拟眼镜执行状态
-6. 模拟地图结果
-7. 模拟用户确认事件
-
-## 10.2 输出
-
-建议断言：
-
-1. 状态迁移序列
-2. `TaskEvent` 序列
-3. `NotificationRequest` 序列
-4. 是否请求设备能力
-5. 是否正确完成、取消或失败
-6. 是否正确回流 `agent-core`
-
-## 10.3 导航任务离线测试示例
-
-导航任务应能在离线回放中完成如下测试：
-
-1. 输入一条固定路线。
-2. 回放 GPS 和陀螺仪方向偏差。
-3. 回放人行道识别结果。
-4. 回放红绿灯和斑马线识别结果。
-5. 回放 ToF 安全事件。
-6. 检查任务是否发出正确通知和状态事件。
-
-示例断言：
-
-1. 红灯时通知等待。
-2. 绿灯时通知通行。
-3. 方向偏移时通知微调。
-4. ToF 检测到坑洞时触发 critical 通知。
-5. 偏离路线时回流 agent 请求重规划。
-
----
-
-## 11. 手机侧能力的可测试边界
-
-手机侧 SDK 必须让开发者可以脱离真实手机做处理器测试。
-
-## 11.1 PhoneProcessor 测试
-
-输入：
-
-1. 图片帧
-2. 视频帧序列
-3. 处理器配置
-
-输出：
-
-1. 识别结果
-2. 结构化事件
-3. 置信度
-4. 方向建议
-5. 完成条件
+1. `events.jsonl`：记录注册、心跳、绑定、语音会话、音频发送进度、控制消息和错误。
+2. `actuators.jsonl`：记录服务端下发给 glass 的执行器命令和本地处理结果。
 
 示例：
 
-1. `SidewalkYoloProcessor` 输入一帧人行道图片，输出可行进区域。
-2. `TrafficLightProcessor` 输入红绿灯视频，输出红灯、绿灯状态变化。
-3. `TofSafetyProcessor` 输入 ToF 时间序列，输出安全事件。
-
-## 11.2 PhoneTask 测试
-
-输入：
-
-1. 路线数据
-2. GPS 时间序列
-3. 陀螺仪时间序列
-4. PhoneProcessor 事件
-
-输出：
-
-1. 手机本地导航事件
-2. 低延迟通知请求
-3. 回流服务器的任务事件
-
-关键要求：
-
-1. 手机侧业务逻辑可以在普通开发机上用样例数据运行。
-2. 手机端平台 API 必须通过 `BaseSensorProvider` 和 `LocalSdkAdapter` 注入。
-3. 开发者不应为了测试处理器而启动真实 Android App。
-
----
-
-## 12. 通知测试
-
-通知协调是复合任务里最容易出问题的部分。
-
-必须覆盖：
-
-1. 去重
-2. 节流
-3. 排队
-4. 高优先级抢占
-5. 手机直达眼镜后回流服务器
-6. 任务通知与 agent 回复冲突
-
-导航场景尤其需要测试：
-
-1. 普通引导提示不应过于频繁。
-2. 安全提示必须能抢占普通播报。
-3. 手机直达眼镜的提示不能在服务器侧再次重复播报。
-4. 播报失败后任务状态必须可观察。
-
----
-
-## 13. 测试数据生成与维护
-
-样例数据应被当成 SDK 资产维护。
-
-建议规则：
-
-1. 每个样例必须有来源说明。
-2. 每个样例必须脱敏。
-3. 每个样例必须有最小描述。
-4. 每个复杂样例必须有 manifest。
-5. 样例数据应尽量小，避免仓库膨胀。
-6. 大体积视频可放外部存储，但 manifest 中必须记录版本和校验值。
-
-建议每个样例目录包含：
-
-```text
-sample/
-  manifest.json
-  input.*
-  expected.json
-  README.md
+```json
+{"ts":"2026-04-27T10:00:00Z","type":"device.registered","device_id":"glass-playback-001"}
+{"ts":"2026-04-27T10:00:01Z","type":"voice.trigger_audio.started","path":"testdata/audio/find_water_cup_trigger.wav"}
+{"ts":"2026-04-27T10:00:04Z","type":"actuator.audio_play","mode":"record_and_auto_finish","saved_to":"runs/playback/glass-playback-001/audio/0001.wav"}
 ```
 
----
+这些日志只提供事实记录，不产生业务通过或失败结论。
 
-## 14. 与现有仓库的衔接
+## 13. SDK 模块划分
 
-当前仓库已经有部分基础：
+建议将设备级回放能力作为 SDK devtools 能力实现，业务工程只保留薄启动脚本。
 
-1. `server/test/unit`
-2. `server/test/integration`
-3. `server/test/data/audio-sample`
-4. 真实音频样例批量回归脚本
-5. 可注入假 `AgentLoopRunner`
-6. 可注入假 ASR、TTS、模型客户端
+推荐模块：
 
-后续建议逐步演进为：
+| 模块 | 职责 |
+| --- | --- |
+| `openaiglasses.playback.config` | 解析和校验 `glass-playback` 配置。 |
+| `openaiglasses.playback.assets` | 读取音频、图片、文本帧和传感器资产。 |
+| `openaiglasses.playback.glass_device` | 实现虚拟 glass 设备状态机。 |
+| `openaiglasses.playback.control_client` | 连接 `/ws/control`，处理注册、心跳、控制消息和回执。 |
+| `openaiglasses.playback.audio_stream` | 将 `trigger_audio` 切片并通过 `/ws_audio` 流式发送。 |
+| `openaiglasses.playback.actuators` | 执行器策略、日志和音频保存。 |
+| `openaiglasses.playback.cli` | 提供 `run_playback_glass` 命令入口。 |
 
-```text
-server/test/
-  unit/
-  component/
-  integration/
-  scenario/
-testdata/
-  audio/
-  image/
-  video/
-  sensor/
-  map/
-  scenario/
-sdk/
-  testing/
-    replay/
-    mock_device/
-    scenario_runner/
-```
+业务工程中的 `scripts/run_playback_glass.py` 只负责把本地路径、环境变量和配置文件传给 SDK CLI。
 
-其中：
+## 14. 错误处理
 
-1. `component` 用于组件级样例回放。
-2. `scenario` 用于跨端模拟集成测试。
-3. `sdk/testing` 最终成为 SDK 对外提供的测试工具包。
+工具错误分为三类：
 
----
+| 类型 | 示例 | 处理 |
+| --- | --- | --- |
+| 配置错误 | 缺少 `trigger_audio`、资产不存在、`device_type` 不是 `glass`。 | 启动前失败，退出码非 0。 |
+| 连接错误 | 服务端不可达、注册失败、认证失败。 | 写入 `events.jsonl`，退出码非 0。 |
+| 运行时错误 | 音频发送中断、控制消息无法识别、执行器保存失败。 | 写入 `events.jsonl`；严重错误退出码非 0。 |
 
-## 15. 推荐优先级
+业务结果不符合预期不属于工具错误，由开发者根据输出自行判断。
 
-下一阶段建议按以下顺序补齐测试能力：
+## 15. 与真机联调的关系
 
-1. 定义 `testdata` 目录和 `scenario manifest` 格式。
-2. 为 `agent-core` 增加 `AgentReplayHarness`。
-3. 为 `backend-task-core` 增加 `TaskReplayHarness`。
-4. 为手机侧处理器定义 `PhoneProcessorHarness`。
-5. 实现 `MockGlassRuntime` 的最小版本。
-6. 实现 `MockPhoneRuntime` 的最小版本。
-7. 用 `find_object_task` 做第一个三端模拟场景。
-8. 用 `navigation_task` 做第一个复合导航模拟场景。
+设备级回放用于降低业务开发期间的眼镜硬件依赖，但不能替代全部真机验收。
 
----
+设备级回放适合验证：
 
-## 16. 流程图（PlantUML）
+1. 服务端能否接收真实协议设备注册。
+2. 语音触发后能否进入正确业务能力。
+3. Task 和通知是否通过真实运行时推进。
+4. 手机依赖缺失、视频链路失败、取消路径等错误处理是否合理。
+5. 服务端是否向 glass 下发预期执行器命令。
 
-```plantuml
-@startuml
-title SDK 样例回放测试分层
+真机仍必须验证：
 
-skinparam shadowing false
-skinparam defaultFontName Microsoft YaHei
-skinparam rectangle {
-  RoundCorner 8
-}
+1. WakeNet 唤醒质量。
+2. 真实麦克风采集质量。
+3. 扬声器播放质量。
+4. 真实 ESP32 网络稳定性。
+5. 真实硬件按钮、震动和传感器误差。
+6. 端到端延迟、功耗和发热。
 
-top to bottom direction
+## 16. 验收标准
 
-rectangle "1. 场景样例\nscenario manifest\n音频 / 图片 / 视频\n传感器 / 地图 / 文本" as DATA
-rectangle "2. 回放编排\nScenarioRunner\nAudio / Video / Sensor\nTaskEvent Replay" as REPLAY
-rectangle "3. 模拟设备\nMockGlassRuntime\nMockPhoneRuntime" as MOCK
-rectangle "4. 被测运行时\nvoice-runtime\nagent-core\nbackend-task-core\nNotificationCoordinator" as RUNTIME
-rectangle "5. 结果断言\n任务事件序列\n通知序列\n上下文快照\n最终状态" as ASSERT
+设备级数据回放工具完成后，至少满足：
 
-DATA --> REPLAY : 读取样例与期望
-REPLAY --> MOCK : 投递媒体和传感器输入
-MOCK --> RUNTIME : 模拟控制消息和任务事件
-RUNTIME --> ASSERT : 产出可断言结果
-
-@enduml
-```
-
----
-
-## 17. 最终结论
-
-SDK 的测试架构应当服务于一个目标：
-
-**开发者在没有真实眼镜、真实手机、真实语音输入和真实视频输入的情况下，也能高频验证绝大多数业务能力。**
-
-因此：
-
-1. 单元测试只负责纯逻辑正确性。
-2. 样例回放测试负责验证核心运行时行为。
-3. 跨端模拟测试负责验证设备组协作。
-4. 真机测试只负责验证硬件和真实环境差异。
-
-可回放、可注入、可断言，是 SDK 设计必须满足的测试性要求。
-
-如果 `agent-core`、`backend-task-core`、`PhoneTask`、`PhoneProcessor` 不能独立接受样例数据测试，那么这些模块还没有真正达到 SDK 级别的可扩展性。
+1. 可以用 `glass-playback` 独立进程连接真实服务端并完成 glass 注册。
+2. `device_id` 和 `pair_token` 使用方式与真机完全一致。
+3. 可以等待真实 iOS phone 绑定后再发送触发音频。
+4. 可以在无需 phone 的能力中只等待 glass 注册和 voice session。
+5. 每份配置必须包含 `trigger_audio`，缺失时启动失败。
+6. 触发音频通过 `/ws_audio` 以音频帧流式发送。
+7. 可以记录服务端下发的 audio play 和 vibrate 命令。
+8. 可以保存服务端下发的播放音频流。
+9. 不提供 `expected` 字段、不做断言、不做批量运行。
+10. SDK 指南、测试文档和业务 README 不再引导开发者使用组件级场景回放。

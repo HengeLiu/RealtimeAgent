@@ -7,5 +7,6 @@
 | [server](./server) | 服务端宿主入口，装配 SDK 并注册能力。 |
 | [phone](./phone) | 手机端宿主工程。 |
 | [glass](./glass) | 眼镜端宿主工程。 |
+| [glass-playback](./glass-playback) | 设备级虚拟眼镜宿主，存放 `glass-playback` 配置。 |
 
 具体业务能力放在 [../capabilities](../capabilities)。

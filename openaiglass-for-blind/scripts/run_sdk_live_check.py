@@ -226,8 +226,9 @@ def check_paths() -> LiveCheckResult:
 
     start = perf_counter()
     paths = {
-        "server_script": APP_ROOT / "scripts/run_server.sh",
-        "phone_script": APP_ROOT / "scripts/run_phone.sh",
+        "server_wrapper": APP_ROOT / "scripts/run_server.sh",
+        "phone_wrapper": APP_ROOT / "scripts/run_phone.sh",
+        "glass_wrapper": APP_ROOT / "scripts/run_glass.sh",
         "sdk_preflight_script": APP_ROOT / "scripts/run_sdk_preflight.py",
         "sdk_live_check_script": APP_ROOT / "scripts/run_sdk_live_check.py",
         "phone_project": PHONE_PROJECT,
@@ -271,7 +272,7 @@ def check_preflight_report(report_path: Path) -> LiveCheckResult:
             duration_ms=_duration_ms(start),
             details={
                 "path": str(report_path),
-                "message": "未找到预检报告，请先执行 openaiglass-for-blind/scripts/run_sdk_preflight.py",
+                "message": "未找到预检报告，请先执行 uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py",
             },
         )
     try:

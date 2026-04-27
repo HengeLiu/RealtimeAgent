@@ -5,12 +5,18 @@
 当前入口：
 
 ```bash
-PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. python openaiglass-for-blind/host/server/main.py
+openaiglass server local start \
+  --app-module host.server.main \
+  --app-root openaiglass-for-blind \
+  --config openaiglass-for-blind/config/local_server.env
 ```
 
 服务端本地配置源放在业务工程：
 
 ```bash
 cp openaiglass-for-blind/config/local_server.env.example openaiglass-for-blind/config/local_server.env
-bash openaiglass-for-blind/scripts/run_server.sh local start
+openaiglass server local start \
+  --app-module host.server.main \
+  --app-root openaiglass-for-blind \
+  --config openaiglass-for-blind/config/local_server.env
 ```
