@@ -10,7 +10,12 @@ host/phone/ios/GlassesVideoReceiver.xcodeproj
 
 这个 Xcode 工程属于业务项目，内部引用 [../../../openaiglass-sdk/phone-ios](../../../openaiglass-sdk/phone-ios) 的通用 iOS 手机 SDK 运行时代码。SDK 运行时负责设备注册、视频接收、手机侧任务承载和与服务端运行时通信；业务项目负责配置、启动入口和后续业务插件集成。
 
-具体业务能力插件不放在手机宿主里，当前找物体能力的 iOS 插件源码位于 [../../capabilities/find_object/phone/ios](../../capabilities/find_object/phone/ios)。
+具体业务能力插件不放在手机宿主里。当前业务 Xcode 工程已经把以下插件编译进 App，并由 [ios/BusinessGlassesVideoReceiverApp.swift](ios/BusinessGlassesVideoReceiverApp.swift) 在启动时注册：
+
+1. 找物体：源码位于 [../../capabilities/find_object/phone/ios](../../capabilities/find_object/phone/ios)，任务类型为 `find_object_phone_task`，结果事件为 `phone.vision.find_object.result`。
+2. 红绿灯：源码位于 [../../capabilities/traffic_light/phone/ios](../../capabilities/traffic_light/phone/ios)，任务类型为 `traffic_light_phone_task`，结果事件为 `phone.vision.traffic_light.result`。
+
+注意：当前 iOS 插件已经是真实手机帧处理链路，但检测算法仍是业务侧启发式占位实现，用于验证手机任务、视频帧、结果上报和服务端通知闭环；还不是正式 YOLO 或红绿灯模型。
 
 手机端本地配置源放在本业务工程：
 

@@ -218,6 +218,13 @@ bash scripts/run_phone.sh open
 3. 允许摄像头和局域网访问权限。
 4. 在 App 页面确认服务端地址、手机设备编号和目标眼镜编号。
 
+当前业务工程的 iOS App 已在启动入口中注册两个业务插件：
+
+1. `find_object_phone_task`：接收视频帧后上报 `phone.vision.find_object.result`。
+2. `traffic_light_phone_task`：接收视频帧后上报 `phone.vision.traffic_light.result`。
+
+这说明手机端不再只是视频回显；它已经会把帧交给业务插件处理并通过 SDK 事件接口回传服务端。但当前检测算法仍是启发式占位实现，只适合验证链路，不代表正式 YOLO 或红绿灯模型效果。真机实测时应先看任务、帧处理、事件上报和通知闭环是否成立，再单独评估模型替换。
+
 首次执行时，如果本地配置文件不存在，脚本会自动从模板创建：
 
 1. `config/local_server.env`

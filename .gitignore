@@ -42,3 +42,8 @@ openaiglass-sdk/phone-ios/**/*.xcuserstate
 openaiglass-sdk/phone-ios/**/ModuleCache.noindex/
 openaiglass-sdk/phone-ios/**/SDKStatCaches.noindex/
 openaiglass-sdk/phone-ios/**/CompilationCache.noindex/
+openaiglass-for-blind/host/phone/ios/build*
+openaiglass-for-blind/host/phone/ios/DerivedData/
+openaiglass-for-blind/host/phone/ios/**/*.xcresult
+openaiglass-for-blind/host/phone/ios/**/xcuserdata/
+openaiglass-for-blind/host/phone/ios/**/*.xcuserstate

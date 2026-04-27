@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A00000010000000000000001 /* GlassesVideoReceiverApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000001 /* GlassesVideoReceiverApp.swift */; };
+		B00000010000000000000001 /* BusinessGlassesVideoReceiverApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000001 /* BusinessGlassesVideoReceiverApp.swift */; };
+		B00000010000000000000002 /* FindObjectPhoneCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000002 /* FindObjectPhoneCapability.swift */; };
+		B00000010000000000000003 /* TrafficLightPhoneCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000003 /* TrafficLightPhoneCapability.swift */; };
 		A00000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000002 /* ContentView.swift */; };
 		A00000010000000000000003 /* CameraStreamStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000003 /* CameraStreamStore.swift */; };
 		A00000010000000000000004 /* CameraSinkServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000004 /* CameraSinkServer.swift */; };
@@ -47,6 +49,9 @@
 		A0000002000000000000000C /* GlassesVideoReceiver.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlassesVideoReceiver.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0000002000000000000000D /* GlassesVideoReceiverTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GlassesVideoReceiverTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000020000000000000030 /* AppConfig.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "../config/AppConfig.plist"; sourceTree = SOURCE_ROOT; };
+		B00000020000000000000001 /* BusinessGlassesVideoReceiverApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BusinessGlassesVideoReceiverApp.swift; sourceTree = SOURCE_ROOT; };
+		B00000020000000000000002 /* FindObjectPhoneCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift"; sourceTree = SOURCE_ROOT; };
+		B00000020000000000000003 /* TrafficLightPhoneCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000010000000000000011 /* GlassesVideoReceiver */,
+				B00000030000000000000001 /* BusinessPhoneHost */,
 				A00000010000000000000012 /* GlassesVideoReceiverTests */,
 				A00000010000000000000013 /* Products */,
 			);
@@ -127,6 +133,16 @@
 			);
 			path = Networking;
 			sourceTree = "<group>";
+		};
+		B00000030000000000000001 /* BusinessPhoneHost */ = {
+			isa = PBXGroup;
+			children = (
+				B00000020000000000000001 /* BusinessGlassesVideoReceiverApp.swift */,
+				B00000020000000000000002 /* FindObjectPhoneCapability.swift */,
+				B00000020000000000000003 /* TrafficLightPhoneCapability.swift */,
+			);
+			path = ".";
+			sourceTree = SOURCE_ROOT;
 		};
 /* End PBXGroup section */
 
@@ -223,7 +239,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A00000010000000000000001 /* GlassesVideoReceiverApp.swift in Sources */,
+				B00000010000000000000001 /* BusinessGlassesVideoReceiverApp.swift in Sources */,
 				A00000010000000000000002 /* ContentView.swift in Sources */,
 				A00000010000000000000003 /* CameraStreamStore.swift in Sources */,
 				A00000010000000000000004 /* CameraSinkServer.swift in Sources */,
@@ -233,6 +249,8 @@
 				A00000010000000000000008 /* IPAddressProvider.swift in Sources */,
 				A00000010000000000000009 /* WebSocketHandshake.swift in Sources */,
 				A00000010000000000000031 /* PhoneTaskEventReportAPI.swift in Sources */,
+				B00000010000000000000002 /* FindObjectPhoneCapability.swift in Sources */,
+				B00000010000000000000003 /* TrafficLightPhoneCapability.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

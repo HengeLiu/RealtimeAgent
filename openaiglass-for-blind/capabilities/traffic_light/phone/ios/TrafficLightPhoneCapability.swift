@@ -2,16 +2,20 @@ import Foundation
 import UIKit
 
 @MainActor
-private let registerTrafficLightPhoneCapabilityInstaller: Void = {
-    TrafficLightPhoneCapabilityInstaller.install()
-}()
-
+/// 红绿灯手机端业务插件安装器。
+///
+/// 主要功能：
+/// 1. 把 `traffic_light_phone_task` 注册到 SDK 手机任务能力注册表。
+/// 2. 让业务 Xcode 入口可以在 App 启动时显式完成插件装配。
 enum TrafficLightPhoneCapabilityInstaller {
+    /// 注册红绿灯手机任务运行时。
+    ///
+    /// 参数：无。
+    /// 返回值：无。
+    /// 异常情况：当前 SDK 注册接口不抛出异常；重复注册时以 SDK 注册表行为为准。
     static func install() {
-        PhoneCapabilityBootstrap.registerInstaller {
-            PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
-                TrafficLightPhoneCapabilityRuntime()
-            }
+        PhoneTaskCapabilityRegistry.register(taskType: "traffic_light_phone_task") {
+            TrafficLightPhoneCapabilityRuntime()
         }
     }
 }
