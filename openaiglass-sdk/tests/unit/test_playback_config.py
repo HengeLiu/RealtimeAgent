@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import wave
 from pathlib import Path
 
 import pytest
 
+SDK_ROOT = Path(__file__).resolve().parents[2]
+GLASS_PLAYBACK_ROOT = SDK_ROOT / "glass-playback"
+SERVER_PYTHON_ROOT = SDK_ROOT / "server-python"
+for source_root in (GLASS_PLAYBACK_ROOT, SERVER_PYTHON_ROOT):
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+
 from protocol.media import MediaFrame
 
-from openaiglasses.playback import PlaybackConfig
-from openaiglasses.playback.glass_device import PlaybackGlassDevice
+from openaiglass_glass_playback import PlaybackConfig
+from openaiglass_glass_playback.glass_device import PlaybackGlassDevice
 
 
 class _FakeControl:
@@ -210,7 +218,7 @@ def test_playback_camera_stream_sends_configured_frames(tmp_path: Path, monkeypa
     config = PlaybackConfig.load(config_path, repo_root=tmp_path)
     device = PlaybackGlassDevice(config)
     _FakeWsClient.sent_binaries = []
-    monkeypatch.setattr("openaiglasses.playback.glass_device.WsClient", _FakeWsClient)
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.WsClient", _FakeWsClient)
 
     device._camera_stream_loop(  # noqa: SLF001 - 单元测试直接验证设备级推流协议
         "camera_stream_001",

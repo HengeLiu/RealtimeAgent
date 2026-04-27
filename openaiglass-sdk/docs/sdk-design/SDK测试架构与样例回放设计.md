@@ -286,21 +286,32 @@ MP4 由 `glass-playback` 在本机通过 `ffmpeg` 解为 JPEG 帧后，再按真
 
 这些日志只提供事实记录，不产生业务通过或失败结论。
 
-## 13. SDK 模块划分
+## 13. 设备组件模块划分
 
-建议将设备级回放能力作为 SDK 设备启动能力实现，业务工程只提供 `host/glass-playback/config` 下的设备配置。
+`glass-playback` 是 SDK 顶层设备组件，目录与 `server-python`、`phone-ios`、`glass-esp32` 同级。业务工程只提供 `host/glass-playback/config` 下的设备配置。
+
+推荐目录：
+
+```text
+openaiglass-sdk/
+  server-python/
+  phone-ios/
+  glass-esp32/
+  glass-playback/
+    openaiglass_glass_playback/
+```
+
+`server-python` 中的 `openaiglass.glass.start` 只作为统一启动入口分发到该设备组件，不承载 `glass-playback` 主体实现。
 
 推荐模块：
 
 | 模块 | 职责 |
 | --- | --- |
-| `openaiglasses.playback.config` | 解析和校验 `glass-playback` 配置。 |
-| `openaiglasses.playback.assets` | 读取图片帧序列、单张图片、MP4 视频解帧和传感器资产。 |
-| `openaiglasses.playback.glass_device` | 实现虚拟 glass 设备状态机。 |
-| `openaiglasses.playback.control_client` | 连接 `/ws/control`，处理注册、心跳、控制消息和回执。 |
-| `openaiglasses.playback.audio_stream` | 将 `trigger_audio` 切片并通过 `/ws_audio` 流式发送。 |
-| `openaiglasses.playback.actuators` | 执行器策略、日志和音频保存。 |
-| `openaiglasses.playback.cli` | 接入统一启动命令 `openaiglass.glass.start --runtime playback`。 |
+| `openaiglass_glass_playback.config` | 解析和校验 `glass-playback` 配置。 |
+| `openaiglass_glass_playback.assets` | 读取图片帧序列、单张图片、MP4 视频解帧和传感器资产。 |
+| `openaiglass_glass_playback.glass_device` | 实现虚拟 glass 设备状态机。 |
+| `openaiglass_glass_playback.ws_client` | 连接 `/ws/control`、`/ws_audio` 和手机 camera sink。 |
+| `openaiglass_glass_playback.cli` | 供统一启动命令 `openaiglass.glass.start --runtime playback` 调用。 |
 
 不要在业务工程中新增 `scripts/run_playback_glass.py` 之类的独立脚本。`glass-playback` 是设备级组件，应纳入 `openaiglass.glass.start` 的统一启动规范。
 

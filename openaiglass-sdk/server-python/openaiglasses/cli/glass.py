@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from openaiglasses.cli.common import read_env_file
@@ -15,7 +17,6 @@ def build_parser() -> argparse.ArgumentParser:
     """构建眼镜端命令参数解析器。"""
 
     parser = argparse.ArgumentParser(prog="openaiglass.glass.start", description="启动 OpenAI Glasses 眼镜端运行时")
-    parser.add_argument("runtime_arg", nargs="?", choices=["firmware", "playback"], help="兼容旧形式的位置运行时类型")
     parser.add_argument("--runtime", choices=["firmware", "playback"], default="", help="眼镜运行时类型")
     parser.add_argument("--repo-root", default=".", help="项目根目录")
     parser.add_argument("--project-dir", default="", help="ESP-IDF 工程目录")
@@ -43,9 +44,13 @@ def main(argv: list[str] | None = None) -> int:
     """眼镜端命令主入口。"""
 
     args = build_parser().parse_args(argv)
-    args.runtime = args.runtime or args.runtime_arg or "firmware"
+    args.runtime = args.runtime or "firmware"
     if args.runtime == "playback":
-        from openaiglasses.playback.cli import run_playback
+        repo_root = Path(args.repo_root).resolve()
+        playback_root = repo_root / "openaiglass-sdk/glass-playback"
+        if str(playback_root) not in sys.path:
+            sys.path.insert(0, str(playback_root))
+        from openaiglass_glass_playback.cli import run_playback
 
         return run_playback(args)
     return run_firmware(args)
@@ -72,17 +77,36 @@ def run_firmware(args: argparse.Namespace) -> int:
     validate_runtime_config(sdkconfig_file)
 
     do_build, do_flash, do_monitor = resolve_actions(args)
-    port = args.port
-    if (do_flash or do_monitor) and not port:
-        port = auto_detect_port()
+    port = ""
+    if do_flash or do_monitor:
+        port = resolve_serial_port(args.port)
         if not port:
-            raise RuntimeError("No matching serial device found under /dev/cu.usbmodem*")
+            raise RuntimeError("未找到可用串口，请使用 --port '/dev/tty.usbmodem*' 或 --port /dev/cu.usbmodemXXXX")
 
-    esp_python = select_python(args.esp_python)
+    esp_python, idf_python_env = select_python(args.esp_python, idf_root)
     run_env = dict(os.environ)
+    run_env["ESP_PYTHON"] = esp_python
+    run_env["IDF_PATH"] = str(idf_root)
+    if idf_python_env:
+        run_env["IDF_PYTHON_ENV_PATH"] = str(idf_python_env)
+    else:
+        run_env.pop("IDF_PYTHON_ENV_PATH", None)
     run_env["PATH"] = f"{Path(esp_python).parent}{os.pathsep}{run_env.get('PATH', '')}"
 
-    print_header(args, idf_root, project_dir, build_dir, config_file, sdkconfig_file, port, esp_python, do_build, do_flash, do_monitor)
+    print_header(
+        args,
+        idf_root,
+        project_dir,
+        build_dir,
+        config_file,
+        sdkconfig_file,
+        port,
+        esp_python,
+        idf_python_env,
+        do_build,
+        do_flash,
+        do_monitor,
+    )
     if args.clean:
         code = idf_cmd(idf_root, project_dir, build_dir, sdkconfig_file, sdkconfig_defaults, run_env, ["fullclean"])
         if code != 0:
@@ -214,25 +238,138 @@ def validate_runtime_config(sdkconfig_file: Path) -> None:
         raise RuntimeError(f"CONFIG_GLASS_HEARTBEAT_INTERVAL_MS 非法: {interval}")
 
 
-def auto_detect_port() -> str:
-    """自动选择第一个 ESP32-S3 串口。"""
+def resolve_serial_port(port_pattern: str) -> str:
+    """解析串口参数，支持精确路径和通配符。
 
-    ports = sorted(Path("/dev").glob("cu.usbmodem*"))
-    return str(ports[0]) if ports else ""
+    参数：
+    1. `port_pattern`：命令行传入的串口路径或通配符。
+
+    返回值：
+    1. 唯一可用串口路径；未找到或匹配多个时抛出异常。
+
+    异常情况：
+    1. 通配符匹配多个串口时，提示开发者显式选择。
+    """
+
+    pattern = port_pattern.strip() if port_pattern else "/dev/cu.usbmodem*"
+    matches = sorted(glob.glob(pattern))
+    if not matches and pattern.startswith("/dev/tty."):
+        matches = sorted(glob.glob(pattern.replace("/dev/tty.", "/dev/cu.", 1)))
+    if not matches and pattern.startswith("/dev/cu."):
+        matches = sorted(glob.glob(pattern.replace("/dev/cu.", "/dev/tty.", 1)))
+    if not matches:
+        return ""
+    if len(matches) > 1:
+        print("[port] 串口通配符匹配到多个设备，请使用 --port 明确选择其中一个：")
+        for item in matches:
+            print(f"  {item}")
+        raise RuntimeError(f"串口匹配结果不唯一: {pattern}")
+    selected = normalize_serial_port(matches[0])
+    if selected != matches[0]:
+        print(f"[port] 使用 {selected} 替代 {matches[0]}，ESP-IDF 烧录和监看优先使用 cu.* 设备")
+    return selected
 
 
-def select_python(preferred: str) -> str:
-    """选择 ESP-IDF 使用的 Python。"""
+def normalize_serial_port(port: str) -> str:
+    """把 tty.* 串口规范化为 cu.* 串口。"""
+
+    if port.startswith("/dev/tty."):
+        cu_port = port.replace("/dev/tty.", "/dev/cu.", 1)
+        if Path(cu_port).exists():
+            return cu_port
+    return port
+
+
+def select_python(preferred: str, idf_root: Path) -> tuple[str, Path | None]:
+    """选择 ESP-IDF 使用的 Python。
+
+    参数：
+    1. `preferred`：开发者通过 `--esp-python` 显式传入的 Python。
+    2. `idf_root`：当前 ESP-IDF 安装目录。
+
+    返回值：
+    1. Python 解释器路径。
+    2. 可选的 ESP-IDF 专用 Python 环境目录。
+
+    主要逻辑：
+    1. 如果开发者显式指定 Python，优先使用该解释器。
+    2. 否则优先复用 `~/.espressif/python_env` 下已经存在且版本匹配的 IDF 虚拟环境。
+    3. 最后才回退到系统可用的 `python3`。
+
+    异常情况：
+    1. 找不到可用解释器时抛出异常。
+    """
 
     if preferred and Path(preferred).exists():
-        return preferred
-    default = Path("/opt/miniconda3/bin/python3")
-    if default.exists():
-        return str(default)
+        return preferred, infer_idf_python_env(Path(preferred))
+    idf_python_env = discover_idf_python_env(idf_root)
+    if idf_python_env:
+        python = idf_python_env / "bin/python"
+        if python.exists():
+            return str(python), idf_python_env
     python3 = shutil.which("python3")
     if python3:
-        return python3
+        return python3, None
     raise RuntimeError("No usable Python found for ESP-IDF")
+
+
+def infer_idf_python_env(python_path: Path) -> Path | None:
+    """从 Python 路径推断 ESP-IDF 虚拟环境目录。"""
+
+    env_dir = python_path.parent.parent
+    if (env_dir / "idf_version.txt").exists():
+        return env_dir
+    return None
+
+
+def discover_idf_python_env(idf_root: Path) -> Path | None:
+    """查找本机已经安装的 ESP-IDF Python 虚拟环境。
+
+    参数：
+    1. `idf_root`：当前 ESP-IDF 安装目录。
+
+    返回值：
+    1. 匹配当前 ESP-IDF 主次版本的虚拟环境目录；找不到则返回 `None`。
+    """
+
+    version = idf_version_from_path(idf_root)
+    candidates: list[tuple[tuple[int, int], Path]] = []
+    for env_dir in sorted(Path.home().glob(".espressif/python_env/idf*_py*_env")):
+        python = env_dir / "bin/python"
+        version_file = env_dir / "idf_version.txt"
+        if not python.exists() or not version_file.exists():
+            continue
+        env_version = version_file.read_text(encoding="utf-8").strip()
+        if version and env_version != version:
+            continue
+        candidates.append((python_version_tuple(python), env_dir))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
+
+
+def idf_version_from_path(idf_root: Path) -> str:
+    """从 ESP-IDF 目录名推断主次版本，例如 `esp-idf-v5.3.2` -> `5.3`。"""
+
+    import re
+
+    match = re.search(r"v(\d+\.\d+)", idf_root.name)
+    return match.group(1) if match else ""
+
+
+def python_version_tuple(python: Path) -> tuple[int, int]:
+    """读取 Python 主次版本，用于选择最新可用环境。"""
+
+    completed = subprocess.run(
+        [str(python), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return (0, 0)
+    major, minor = completed.stdout.strip().split(".", 1)
+    return int(major), int(minor)
 
 
 def idf_cmd(
@@ -275,6 +412,7 @@ def print_header(
     sdkconfig_file: Path,
     port: str,
     esp_python: str,
+    idf_python_env: Path | None,
     do_build: bool,
     do_flash: bool,
     do_monitor: bool,
@@ -293,6 +431,7 @@ def print_header(
     print(f"Local config: {config_file}")
     print(f"Baud        : {args.baud}")
     print(f"Python      : {esp_python}")
+    print(f"Python env  : {idf_python_env or '<auto>'}")
     print(f"Build       : {int(do_build)}")
     print(f"Flash       : {int(do_flash)}")
     print(f"Monitor     : {int(do_monitor)}")

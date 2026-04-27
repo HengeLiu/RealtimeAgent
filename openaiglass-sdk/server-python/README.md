@@ -106,6 +106,8 @@ sdk.register_phone_task(DemoPhoneTask())
 
 ## 设备级回放
 
+`glass-playback` 是与 `server-python` 同级的设备组件，主体代码位于 `openaiglass-sdk/glass-playback`。`server-python` 只提供统一启动命令。
+
 ```bash
 openaiglass.glass.start --runtime playback \
   --config openaiglass-for-blind/host/glass-playback/config/glass.water_cup.json

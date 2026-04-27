@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from openaiglasses.playback.config import PlaybackConfig
-from openaiglasses.playback.glass_device import PlaybackGlassDevice
+from openaiglass_glass_playback.config import PlaybackConfig
+from openaiglass_glass_playback.glass_device import PlaybackGlassDevice
 
 
 def run_playback(args: argparse.Namespace) -> int:

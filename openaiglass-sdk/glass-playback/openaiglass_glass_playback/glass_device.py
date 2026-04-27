@@ -17,9 +17,9 @@ from protocol.media import MediaFrame
 from protocol.messages import Endpoint
 from protocol.utils import create_control_message
 
-from openaiglasses.playback.assets import CameraFrameAsset, load_camera_frames
-from openaiglasses.playback.config import PlaybackConfig
-from openaiglasses.playback.ws_client import WsClient
+from openaiglass_glass_playback.assets import CameraFrameAsset, load_camera_frames
+from openaiglass_glass_playback.config import PlaybackConfig
+from openaiglass_glass_playback.ws_client import WsClient
 
 
 @dataclass(slots=True)

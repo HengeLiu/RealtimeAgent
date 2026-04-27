@@ -138,7 +138,7 @@ openaiglass-for-blind/host/glass/config/local_build.env.example
 
 ## 3. 安装、同步配置和启动
 
-本节是功能开发人员日常使用 SDK 的标准流程。除非需要排查兼容问题，三端启动都优先使用 `openaiglass` 命令；`openaiglass-for-blind/scripts` 目录只保留少量业务层薄包装、配置同步和检查脚本。
+本节是功能开发人员日常使用 SDK 的标准流程。三端启动、配置同步、预检和联调检查都统一使用 `openaiglass` 命令。
 
 ### 3.1 安装 SDK 和统一命令
 
@@ -204,14 +204,14 @@ uv run openaiglass.config.sync --app-root openaiglass-for-blind \
 同步后执行配置检查：
 
 ```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
+uv run openaiglass.sdk.live-check \
   --report logs/sdk-live-check-current.json
 ```
 
 如果服务端已经启动，可以加 `--require-server`，让检查同时验证 `/api/health`：
 
 ```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
+uv run openaiglass.sdk.live-check \
   --require-server \
   --report logs/sdk-live-check-current.json
 ```
@@ -298,7 +298,7 @@ curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/runtime/devices
 ```
 
-业务薄包装 `openaiglass-for-blind/scripts/run_server.sh` 仍可用于兼容旧习惯，但新文档和新能力开发统一使用 SDK CLI 的服务端点分命令。
+新能力开发统一使用 SDK CLI 的服务端点分命令。
 
 ### 3.5 启动真实 iOS 手机端
 
@@ -335,37 +335,29 @@ uv run openaiglass.glass.start --build-only --repo-root .
 构建、烧录并进入串口监看：
 
 ```bash
-PORT=/dev/tty.usbmodemXXXX \
-  uv run openaiglass.glass.start --repo-root .
+uv run openaiglass.glass.start \
+  --repo-root . \
+  --port '/dev/tty.usbmodem*'
 ```
 
 仅串口监看：
 
 ```bash
-PORT=/dev/tty.usbmodemXXXX \
-  uv run openaiglass.glass.start --monitor-only --repo-root .
+uv run openaiglass.glass.start \
+  --monitor-only \
+  --repo-root . \
+  --port '/dev/tty.usbmodem*'
 ```
 
-业务薄包装 `openaiglass-for-blind/scripts/run_glass.sh` 仍可用于兼容旧习惯，但新文档和新能力开发统一使用 SDK CLI 的眼镜端点分命令。
+`--port` 支持精确路径和通配符。通配符请加引号，避免 shell 提前展开；如果匹配到多个串口，命令会打印候选列表并要求开发者明确选择其中一个。
+
+新能力开发统一使用 SDK CLI 的眼镜端点分命令。
 
 ### 3.7 两层启动边界
 
 1. SDK 层提供通用命令、配置读取、进程管理、健康检查和工具链调度。
-2. 业务层只提供 profile、业务服务端入口、iOS 工程路径、ESP-IDF 本地配置和少量兼容脚本。
-
-`openaiglass-for-blind/scripts` 当前只保留：
-
-```text
-run_server.sh
-run_phone.sh
-run_glass.sh
-run_sdk_preflight.py
-run_sdk_live_check.py
-sync_sdk_live_config.py
-simple_glass_audio_client.py
-```
-
-其中 `run_server.sh`、`run_phone.sh`、`run_glass.sh`、`sync_sdk_live_config.py` 是兼容旧习惯的薄包装；新文档和新能力开发优先使用 SDK CLI。
+2. 业务层只提供 profile、业务服务端装配入口、iOS 工程路径、ESP-IDF 本地配置和业务能力代码。
+3. 业务工程不再保留启动脚本；如果需要新增通用启动或检查能力，优先进入 SDK CLI。
 
 ## 4. 推荐业务能力工程结构
 
@@ -852,13 +844,15 @@ uv run openaiglass.server.run \
   --config openaiglass-for-blind/config/local_server.env
 ```
 
-安装、配置同步、日志跟随和停止命令统一见第 3 节。业务目录下仍保留 `scripts/run_server.sh` 兼容旧习惯，但新能力开发不要把它当作主要入口。
+安装、配置同步、日志跟随和停止命令统一见第 3 节。
 
 ## 10. 设备级数据回放验证
 
 业务能力开发应先通过设备级数据回放，再进入真机联调。
 
 这里的“回放”不是播放视频给人看，也不是绕过协议直接调用某个业务组件。当前支持的 playback 设备只有 `glass-playback`：它在开发者视角里就是一个独立的 Python 虚拟眼镜设备，像真实 ESP32 眼镜一样单独启动、连接真实服务端、发送 `device.register`、维持心跳、接收控制消息、发送音频流，并按配置执行或记录执行器命令。
+
+`glass-playback` 的代码位于 `openaiglass-sdk/glass-playback`，与 `server-python`、`phone-ios`、`glass-esp32` 同级。`server-python` 只保留统一命令入口，不承载 `glass-playback` 主体实现。
 
 区别只在于 `glass-playback` 的数据来源和执行器行为由配置文件决定：
 
@@ -1103,8 +1097,9 @@ uv run openaiglass.phone.open --app-root openaiglass-for-blind
 ESP32 眼镜端：
 
 ```bash
-PORT=/dev/tty.usbmodemXXXX \
-  uv run openaiglass.glass.start --repo-root .
+uv run openaiglass.glass.start \
+  --repo-root . \
+  --port '/dev/tty.usbmodem*'
 ```
 
 不要打开 `openaiglass-sdk/phone-ios` 下的工程作为业务开发入口。
@@ -1171,12 +1166,6 @@ server -> glass: 播报或提示
 
 ## 14. 预检和回归命令
 
-SDK 包检查：
-
-```bash
-uv run python openaiglass-sdk/scripts/run_sdk_package_check.py
-```
-
 SDK 契约和核心单元测试：
 
 ```bash
@@ -1189,14 +1178,14 @@ uv run python -m pytest \
 综合预检：
 
 ```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py \
+uv run openaiglass.sdk.preflight \
   --report logs/sdk-preflight-current.json
 ```
 
 真机配置检查：
 
 ```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
+uv run openaiglass.sdk.live-check \
   --report logs/sdk-live-check-current.json
 ```
 
@@ -1227,7 +1216,7 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 
 ### 16.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
-当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start --repo-root .` 构建 `openaiglass-sdk/glass-esp32`，业务侧只提供配置和硬件能力需求。`openaiglass-for-blind/scripts/run_glass.sh` 只是兼容旧习惯的薄包装。
+当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start --repo-root .` 构建 `openaiglass-sdk/glass-esp32`，业务侧只提供配置和硬件能力需求。
 
 ### 16.4 新能力什么时候应该改 SDK？
 
