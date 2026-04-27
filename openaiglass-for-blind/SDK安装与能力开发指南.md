@@ -2,7 +2,7 @@
 
 本文面向将要基于 OpenAI Glasses SDK 开发真实业务能力的团队。
 
-开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何完成离线验证和真机联调。
+开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
 当前指南对应 SDK 版本：`sdk-v5`。本版本新增 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复，以及手机侧多任务帧分发；上一版本已增强 `phone_video_link_task` 最小 peer-link 生命周期语义。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
@@ -18,7 +18,7 @@
 | [host](./host) | 盲人产品装配团队 | 服务端、手机端、眼镜端宿主配置和启动说明。 |
 | [capabilities](./capabilities) | 业务能力开发团队 | `find_object`、导航、识别等真实业务能力。 |
 | [docs](./docs) | 产品和研发团队 | 需求、阶段计划、功能设计、验收和当前实现状态。 |
-| [testdata](./testdata) | 测试和业务开发团队 | 场景回放、音频、图像、传感器和兼容性数据。 |
+| [testdata](./testdata) | 测试和业务开发团队 | 设备级数据回放配置、音频、图像、传感器和兼容性数据。 |
 
 业务能力开发优先修改 `openaiglass-for-blind/capabilities` 和 `openaiglass-for-blind/host`。只有当 SDK 公开抽象无法表达新业务时，才向 `openaiglass-sdk` 提交 SDK 层改造。
 
@@ -32,7 +32,7 @@
 2. 统一控制消息、媒体消息和任务事件模型。
 3. Agent、Tool、Task、Skill 和 MCP Adapter 装配。
 4. 全局上下文、任务状态、通知和异常处理。
-5. 离线场景回放、契约测试和 SDK 包验证。
+5. 设备级数据回放、契约测试和 SDK 包验证。
 
 开发者主要使用：
 
@@ -46,7 +46,6 @@ from openaiglasses import (
     OpenAIGlassesSDK,
     PhoneProcessorContext,
     PhoneTaskContext,
-    ScenarioRunner,
     ServerSettings,
     TaskContext,
     TaskEvent,
@@ -242,7 +241,6 @@ my-glasses-capability/
         README.md
         config/
           local_build.env.example
-      scenario.py
       main.py
   testdata/
     scenario/
@@ -261,8 +259,9 @@ openaiglass-for-blind/capabilities/<capability_name>/
     processor.py
     task.py
     ios/
-  scenario.py
 ```
+
+业务能力目录不再需要 `scenario.py`。测试样例统一放在 `testdata/playback` 和对应资产目录下；日常调试时由独立的 `glass-playback` 虚拟眼镜进程消费。
 
 可以参考现有找物体能力：
 
@@ -271,7 +270,6 @@ openaiglass-for-blind/capabilities/<capability_name>/
 3. [capabilities/find_object/phone/processor.py](./capabilities/find_object/phone/processor.py)
 4. [capabilities/find_object/phone/task.py](./capabilities/find_object/phone/task.py)
 5. [capabilities/find_object/phone/ios](./capabilities/find_object/phone/ios)
-6. [capabilities/find_object/scenario.py](./capabilities/find_object/scenario.py)
 
 ## 5. 开发服务端 Tool
 
@@ -376,7 +374,7 @@ def create_sdk() -> OpenAIGlassesSDK:
     return sdk
 ```
 
-`context.mcp(...)` 的失败会返回 `CapabilityResult.failed(...)`，错误结果中包含 `method_name`、输入摘要和 SDK 统一错误码。真实服务端运行时会把 MCP 调用轨迹写入 agent session trace；离线测试中可以通过 `sdk.device_groups.list_mcp_traces()` 断言调用是否发生。
+`context.mcp(...)` 的失败会返回 `CapabilityResult.failed(...)`，错误结果中包含 `method_name`、输入摘要和 SDK 统一错误码。真实服务端运行时会把 MCP 调用轨迹写入 agent session trace；本地调试中可以通过 `sdk.device_groups.list_mcp_traces()` 查看调用是否发生。
 
 ## 6. 开发服务端 Task
 
@@ -695,7 +693,7 @@ if __name__ == "__main__":
 openaiglass-for-blind/host/server/main.py
 ```
 
-它注册了 `find_object`、`traffic_light`、`navigation`、`timer` 等盲人业务能力的 Tool、Task、PhoneProcessor、PhoneTask、MCP adapter 和场景回放处理器。
+它注册了 `find_object`、`traffic_light`、`navigation`、`timer` 等盲人业务能力的 Tool、Task、PhoneProcessor、PhoneTask 和 MCP adapter。测试时，`glass-playback` 会像真实眼镜一样连接这个服务端完成注册、心跳、音频流和执行器回执；业务能力不再需要提供单独测试 handler。
 
 启动盲人业务服务端：
 
@@ -710,102 +708,215 @@ PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
 bash openaiglass-for-blind/scripts/run_server.sh
 ```
 
-## 10. 离线回放验证
+## 10. 设备级数据回放验证
 
-业务能力开发应先通过离线回放，再进入真机联调。
+业务能力开发应先通过设备级数据回放，再进入真机联调。
 
-这里的“回放”不是播放视频给人看，而是把一次真实多设备交互过程离线重新驱动给 SDK 和业务能力。真实设备链路里按时间发生的输入，例如眼镜帧、传感器读数、手机处理结果和任务事件，会被写成固定场景数据；测试时由 SDK 用 mock 眼镜、mock 手机和回放传感器提供者重新执行一遍。
+这里的“回放”不是播放视频给人看，也不是绕过协议直接调用某个业务组件。当前支持的 playback 设备只有 `glass-playback`：它在开发者视角里就是一个独立的 Python 虚拟眼镜设备，像真实 ESP32 眼镜一样单独启动、连接真实服务端、发送 `device.register`、维持心跳、接收控制消息、发送音频流，并按配置执行或记录执行器命令。
 
-SDK 对测试的支持主要包括：
+区别只在于 `glass-playback` 的数据来源和执行器行为由配置文件决定：
 
-| 能力 | 用途 |
+1. 真实眼镜从麦克风、摄像头和硬件按钮读取输入；`glass-playback` 从预先准备好的触发音频、抓拍图片、视频帧和传感器时间线读取输入。
+2. 真实眼镜会播放音频、震动或控制硬件；`glass-playback` 按配置记录、自动完成或保存执行器调用。
+3. 服务端、业务 Tool、Task、设备绑定、任务事件和控制协议全部使用真实实现。
+
+### 10.1 触发音频是必填项
+
+每个 `glass-playback` 配置必须包含一段 `trigger_audio`。这段音频用于模拟“眼镜端唤醒词已成功识别，并开始录音”的过程。
+
+运行时行为固定为：
+
+1. `glass-playback` 启动后连接真实服务端 `/ws/control`。
+2. 按配置发送 `device.register(device_type=glass)`。
+3. 等待 `device.registered`。
+4. 等待服务端完成设备绑定。如果本次回放需要手机，绑定对象是真实 iOS phone；如果不需要手机，可只要求 glass 注册和 voice session 打开。
+5. 等待 `voice.session.open` 并回传 `voice.session.opened`。
+6. 自动把 `trigger_audio.path` 指向的音频按流式 `MediaFrame(audio_chunk)` 发送到服务端 `/ws_audio`。
+7. 服务端按真实语音链路处理这段音频，后续 Tool、Task、通知和执行器行为都走真实运行时。
+
+`trigger_audio` 不是可选语音样例，而是启动一次设备级回放的触发源。它不测试 WakeNet 本身；它假设唤醒已经成功，只模拟唤醒后麦克风开始录音并持续向服务端推流。
+
+### 10.2 开发者日常测试流程
+
+新增或修改业务能力后，建议按下面顺序自测：
+
+1. 准备 `glass-playback` 配置，分配稳定的 `device_id`、`pair_token` 和目标服务端地址。
+2. 准备必填的 `trigger_audio`，放到 `testdata/audio`。
+3. 如能力需要视觉或传感器输入，再准备 `camera_capture`、`camera_stream`、`heading` 等数据资产。
+4. 准备执行器策略，例如音频播放请求是只记录、保存到文件，还是立即回传 started/finished。
+5. 像真机联调一样启动真实业务 server。
+6. 如果能力需要手机端，像真机联调一样启动真实 iOS 手机端，并确认它完成注册和绑定。
+7. 单独启动 `glass-playback`，确认它在 `/api/runtime/devices` 中显示为在线 glass。
+8. 等待它自动发送 `trigger_audio`，观察服务端任务、控制消息、执行器记录和最终通知。
+9. 稳定后，根据 `actuators` 输出、服务端日志和真实手机端日志判断本次行为是否符合预期。
+
+### 10.3 像真实设备一样启动 glass-playback
+
+启动顺序与真机眼镜联调一致。
+
+第一步，启动真实业务服务端：
+
+```bash
+bash openaiglass-for-blind/scripts/run_server.sh local start
+```
+
+服务端配置方式与真机一致。唯一需要注意的是，`device_token_map` 中要包含虚拟眼镜的编号和配对令牌，例如 `glass-playback-001=pair_playback`。如果同时使用真实 iOS 手机，也要包含真实手机的编号和配对令牌。
+
+第二步，如果能力需要手机端，启动真实 iOS 手机端：
+
+```bash
+bash openaiglass-for-blind/scripts/run_phone.sh open
+```
+
+第三步，启动虚拟眼镜设备：
+
+```bash
+uv run python openaiglass-for-blind/scripts/run_playback_glass.py \
+  --config openaiglass-for-blind/testdata/playback/glass.water_cup.json
+```
+
+启动后，开发者检查方式与真机相同：
+
+```bash
+curl http://127.0.0.1:8765/api/runtime/devices
+```
+
+预期能看到：
+
+1. `glass-playback-001` 已注册，`device_type=glass`。
+2. 如果使用真实 iOS 手机，runtime snapshot 中存在 glass 与 phone 的绑定关系。
+3. glass voice session 已打开。
+4. `trigger_audio` 已开始或已经完成流式发送。
+
+如果这些状态成立，后续调试方式与真实 ESP32 眼镜一致。
+
+### 10.4 glass-playback 配置文件
+
+playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据、执行器怎么处理”，不是业务组件测试脚本。
+
+`glass.water_cup.json` 示例：
+
+```json
+{
+  "device_type": "glass",
+  "device_id": "glass-playback-001",
+  "pair_token": "pair_playback",
+  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "desired_phone_device_id": "phone-001",
+  "startup": {
+    "wait_for_registration": true,
+    "wait_for_binding": true,
+    "wait_for_voice_session": true,
+    "auto_stream_trigger_audio": true
+  },
+  "sensors": {
+    "trigger_audio": {
+      "path": "testdata/audio/find_water_cup_trigger.wav",
+      "chunk_ms": 40,
+      "sample_rate_hz": 16000,
+      "format": "wav"
+    },
+    "camera_capture": {
+      "path": "testdata/image/cup.jpg"
+    },
+    "camera_stream": {
+      "path": "testdata/text/find_object_frames_water_cup.json",
+      "codec": "text",
+      "frame_interval_ms": 100
+    },
+    "heading": {
+      "path": "testdata/sensor/find_object_heading.json"
+    }
+  },
+  "actuators": {
+    "audio_play": {
+      "mode": "record_and_auto_finish",
+      "save_audio_to": "runs/playback/glass-playback-001/audio"
+    },
+    "vibrate": {
+      "mode": "record"
+    }
+  }
+}
+```
+
+配置原则：
+
+1. `device_id` 和 `pair_token` 必须与服务端 `device_token_map` 匹配，和真机一致。
+2. `trigger_audio` 必填，用于自动触发一次真实语音链路。
+3. `desired_phone_device_id` 只在能力需要真实 iOS 手机时配置。
+4. `startup.wait_for_binding=true` 表示等设备绑定完成后再发送触发音频；需要纯 glass-only 回放时可以关闭。
+5. `sensors` 只描述虚拟眼镜能读到什么输入。
+6. `actuators` 只描述虚拟眼镜收到命令后如何执行或记录。
+
+### 10.5 数据资产格式
+
+`trigger_audio` 推荐使用 WAV 文件。它应包含完整的一次用户请求，例如“帮我找一下水杯”，而不是只包含唤醒词。SDK 会把它当作唤醒成功后的麦克风录音流发送给服务端。
+
+`camera_stream` 可以先用文本帧快速验证协议闭环：
+
+```json
+{
+  "frames": [
+    "桌面上有笔记本电脑",
+    "桌面上有蓝色水杯",
+    "桌面右侧有蓝色水杯"
+  ]
+}
+```
+
+需要更接近真实视觉输入时，改用图片帧：
+
+```json
+{
+  "frames": [
+    {
+      "path": "image/cup-001.jpg",
+      "codec": "jpeg"
+    },
+    {
+      "path": "image/cup-002.jpg",
+      "codec": "jpeg"
+    }
+  ]
+}
+```
+
+### 10.6 推荐覆盖用例
+
+开发新能力时，建议至少准备以下 `glass-playback` 配置和数据资产组合：
+
+| 用例 | 目标 |
 | --- | --- |
-| `ScenarioRunner.run(...)` | 执行一个场景，驱动 Tool、Task、PhoneProcessor、PhoneTask 和场景处理器完成闭环。 |
-| `ScenarioRunner.describe(...)` | 读取场景摘要，检查 capability、输入资产和期望断言。 |
-| `ScenarioRunner.validate(...)` | 校验场景 manifest 和资产引用，不执行完整业务流程。 |
-| `ReplayTimeline` | 表达按时间发生的帧、传感器和任务事件。 |
-| `ReplaySensorProvider` | 在没有真实传感器时，向业务能力提供固定传感器读数。 |
-| `MockGlassRuntime` / `MockPhoneRuntime` | 替代真实眼镜和手机，记录下发命令、手机任务和通知结果。 |
+| 成功路径 | 验证能力可以通过真实 server 和 `glass-playback` 从触发音频走到完成。 |
+| 缺少 phone | 如果能力依赖手机，验证真实 iOS 手机未在线或未绑定时能给出结构化失败。 |
+| 视频链路失败 | 如果能力依赖视频，验证真实 iOS 手机接收地址不可用时任务状态和错误信息正确。 |
+| 取消路径 | 验证任务取消后能停止视频链路和眼镜端推流。 |
+| 传感器组合输入 | 验证触发音频、视觉帧和方向、位置等传感器输入能一起驱动能力。 |
+| 执行器输出 | 验证音频播放、震动等眼镜执行器命令符合预期。 |
 
-离线回放适合验证：
+### 10.7 如何判断回放结果
 
-1. Tool 是否能创建正确的 SDK 托管任务。
-2. Task 是否能启动和停止手机任务、视频链路或传感器输入。
-3. 手机侧 Processor / PhoneTask 是否能处理固定输入并回传事件。
-4. 服务端是否能根据手机事件完成、失败或取消任务。
-5. 最终通知、设备命令、任务状态和结构化结果是否符合预期。
+当前不支持断言检查，也不支持批量测试。开发者需要根据 `glass-playback` 的 `actuators` 输出、服务端日志、真实 iOS 手机端日志和运行态接口自行判断结果。
 
-离线回放不替代真机测试。它不验证真实网络抖动、摄像头权限、iOS 后台行为、ESP32 引脚、电源、音频链路和模型性能；这些仍需要进入真机联调阶段验证。
+重点看这些内容：
 
-最小调用：
-
-```python
-from pathlib import Path
-
-from openaiglasses import ScenarioRunner
-
-from my_capability.main import create_sdk
-
-
-result = ScenarioRunner(create_sdk()).run(
-    Path("testdata/scenario/my_capability_basic.json")
-)
-assert result["assertions"]["passed"]
-```
-
-场景文件应描述：
-
-1. 设备组中有哪些 mock 设备。
-2. 要启动哪个能力或任务。
-3. 输入帧、传感器、任务事件的时间线。
-4. 期望的任务状态、结果、通知和设备命令。
-
-开发新能力时，建议至少准备以下场景：
-
-| 场景 | 目标 |
+| 字段 | 含义 |
 | --- | --- |
-| 成功路径 | 验证能力可以从触发到完成。 |
-| 缺少设备 | 验证没有手机或眼镜时能给出结构化失败。 |
-| 启动失败 | 验证视频链路、手机任务或传感器启动失败时的任务状态。 |
-| 取消路径 | 验证任务取消后能停止手机任务和端侧链路。 |
-| 传感器组合输入 | 验证视觉帧和方向、位置等传感器输入能一起驱动能力。 |
+| `actuators.audio_play` 输出 | 服务端是否向眼镜下发了期望的语音播放内容，以及播放流是否保存到指定目录。 |
+| `actuators.vibrate` 输出 | 服务端是否下发了预期震动命令。 |
+| `glass-playback` 控制日志 | 是否完成注册、心跳、voice session 打开和 `trigger_audio` 流式发送。 |
+| 服务端任务日志 | Tool、Task、任务事件、通知和错误码是否符合预期。 |
+| `/api/runtime/devices` | 虚拟眼镜是否在线；如果使用真实手机，glass 与 phone 是否已绑定。 |
+| 真实 iOS 手机端日志 | 需要手机能力时，确认手机任务、视频接收和业务插件结果是否符合预期。 |
 
-本仓库已有场景：
+常见失败定位：
 
-```text
-openaiglass-for-blind/testdata/scenario/
-```
-
-执行：
-
-```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
-  --scenario-dir openaiglass-for-blind/testdata/scenario \
-  --pretty
-```
-
-只查看场景摘要：
-
-```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
-  --describe-scenario openaiglass-for-blind/testdata/scenario/find_object_with_testdata.json \
-  --pretty
-```
-
-只校验场景和资产引用：
-
-```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
-  --validate-scenarios openaiglass-for-blind/testdata/scenario \
-  --pretty
-```
-
-进入真机联调前，还应执行完整预检。预检会组合 Python 编译检查、入口检查、边界检查、场景回放、SDK 契约测试、兼容性测试和健康检查：
-
-```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_preflight.py \
-  --report logs/sdk-preflight-current.json
-```
+1. 虚拟眼镜未注册：检查 `device_token_map`、`pair_token` 和设备编号。
+2. voice session 未打开：检查服务端是否允许该 glass 设备注册并创建语音会话。
+3. 触发音频没有发送：检查 `trigger_audio.path`、音频格式和启动等待条件。
+4. 没有业务任务：检查触发音频内容是否能被 ASR 和 agent 识别为目标能力请求。
+5. 没有执行器调用：检查业务 Task 是否提交了通知或音频播放请求。
 
 ## 11. 三端真机联调流程
 
@@ -922,7 +1033,7 @@ server -> glass: 播报或提示
 3. 手机端 Processor 和 PhoneTask。
 4. 如有必要，补 iOS 业务插件。
 5. 如有必要，提出眼镜端通用硬件能力扩展。
-6. 至少一个离线回放场景。
+6. 至少一份 `glass-playback` 配置和对应触发音频、传感器数据。
 7. 三端联调启动顺序和日志观察点。
 
 ## 14. 预检和回归命令
@@ -940,14 +1051,6 @@ uv run python -m pytest \
   openaiglass-sdk/tests/contracts \
   openaiglass-sdk/tests/unit/test_sdk_phase_two.py \
   -q
-```
-
-盲人业务场景回放：
-
-```bash
-uv run python openaiglass-for-blind/scripts/run_sdk_scenario.py \
-  --scenario-dir openaiglass-for-blind/testdata/scenario \
-  --pretty
 ```
 
 综合预检：
@@ -974,7 +1077,7 @@ uv run python openaiglass-for-blind/scripts/run_sdk_live_check.py \
 4. 直接拼接控制 WebSocket 消息。
 5. 直接读写设备绑定表。
 6. 为单个业务能力新增专用系统接口。
-7. 跳过离线回放，直接进入真机联调。
+7. 跳过设备级数据回放，直接进入真机联调。
 8. 为了调用地图、导航或外部服务而直接 import SDK 内部 MCP adapter；应使用 `context.mcp(...)`。
 
 如果业务能力需要新的系统级抽象，应先写清需求、输入输出、异常情况和验收方式，再把它沉淀为 SDK 的公开接口。
