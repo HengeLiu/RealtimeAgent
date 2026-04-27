@@ -14,7 +14,6 @@ SERVER_CONFIG = APP_ROOT / "config/local_server.env"
 SERVER_CONFIG_TEMPLATE = APP_ROOT / "config/local_server.env.example"
 PHONE_BUSINESS_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
 PHONE_BUSINESS_CONFIG_TEMPLATE = APP_ROOT / "host/phone/config/AppConfig.plist.example"
-PHONE_RUNTIME_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
 GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
 GLASS_LOCAL_CONFIG_TEMPLATE = APP_ROOT / "host/glass/config/local_build.env.example"
 
@@ -146,14 +145,14 @@ def _read_phone_business_config() -> dict[str, object]:
     """读取业务侧手机配置。
 
     返回值：
-    1. 配置字典。业务配置不存在时读取 example，仍不存在时读取 SDK 运行时配置。
+    1. 配置字典。业务配置不存在时读取业务 example。
     """
 
     source = PHONE_BUSINESS_CONFIG
-    if not source.exists() and PHONE_BUSINESS_CONFIG_TEMPLATE.exists():
+    if not source.exists():
         source = PHONE_BUSINESS_CONFIG_TEMPLATE
     if not source.exists():
-        source = PHONE_RUNTIME_CONFIG
+        raise RuntimeError(f"手机业务配置模板不存在: {PHONE_BUSINESS_CONFIG_TEMPLATE}")
     with source.open("rb") as file:
         payload = plistlib.load(file)
     if not isinstance(payload, dict):
@@ -162,7 +161,19 @@ def _read_phone_business_config() -> dict[str, object]:
 
 
 def sync_phone_config(*, server_url: str, phone_device_id: str, phone_token: str, glass_device_id: str, dry_run: bool) -> None:
-    """同步手机端业务配置和 SDK 运行时配置。"""
+    """同步手机端业务配置。
+
+    参数：
+    1. `server_url`：服务端 HTTP 地址。
+    2. `phone_device_id`：手机设备编号。
+    3. `phone_token`：手机配对令牌。
+    4. `glass_device_id`：目标眼镜设备编号。
+    5. `dry_run`：为真时只打印计划，不写文件。
+
+    主要逻辑：
+    1. 以业务目录下的 `host/phone/config/AppConfig.plist` 为唯一配置源。
+    2. 不再写入 SDK 目录，避免功能开发入口依赖 SDK 工程内部文件。
+    """
 
     payload = _read_phone_business_config()
     payload["serverBaseURLString"] = server_url
@@ -172,9 +183,6 @@ def sync_phone_config(*, server_url: str, phone_device_id: str, phone_token: str
     if not dry_run:
         PHONE_BUSINESS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
         with PHONE_BUSINESS_CONFIG.open("wb") as file:
-            plistlib.dump(payload, file, sort_keys=False)
-        PHONE_RUNTIME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        with PHONE_RUNTIME_CONFIG.open("wb") as file:
             plistlib.dump(payload, file, sort_keys=False)
 
 
@@ -232,7 +240,6 @@ def main() -> int:
 
     action = "将同步" if args.dry_run else "已同步"
     print(f"{action}业务手机配置: {PHONE_BUSINESS_CONFIG}")
-    print(f"{action}SDK iOS 运行时配置: {PHONE_RUNTIME_CONFIG}")
     print(f"{action}眼镜本地配置: {GLASS_LOCAL_CONFIG}")
     print(f"server_url={server_url}")
     print(f"glass_ws_uri={ws_uri}")

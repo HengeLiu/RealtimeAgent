@@ -21,8 +21,7 @@ DEFAULT_SERVER_CONFIG = APP_ROOT / "config/local_server.env"
 DEFAULT_PREFLIGHT_REPORT = REPO_ROOT / "logs/sdk-preflight-current.json"
 PHONE_APP_CONFIG = APP_ROOT / "host/phone/config/AppConfig.plist"
 PHONE_APP_CONFIG_TEMPLATE = APP_ROOT / "host/phone/config/AppConfig.plist.example"
-PHONE_RUNTIME_CONFIG = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver/AppConfig.plist"
-PHONE_PROJECT = REPO_ROOT / "openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj"
+PHONE_PROJECT = APP_ROOT / "host/phone/ios/GlassesVideoReceiver.xcodeproj"
 GLASS_PROJECT = REPO_ROOT / "openaiglass-sdk/glass-esp32"
 GLASS_KCONFIG = REPO_ROOT / "openaiglass-sdk/glass-esp32/main/Kconfig.projbuild"
 GLASS_LOCAL_CONFIG = APP_ROOT / "host/glass/config/local_build.env"
@@ -191,7 +190,7 @@ def _read_phone_config() -> dict[str, object]:
     if not source.exists() and PHONE_APP_CONFIG_TEMPLATE.exists():
         source = PHONE_APP_CONFIG_TEMPLATE
     if not source.exists():
-        source = PHONE_RUNTIME_CONFIG
+        raise RuntimeError(f"手机业务配置不存在: {PHONE_APP_CONFIG}")
     with source.open("rb") as file:
         payload = plistlib.load(file)
     if not isinstance(payload, dict):
@@ -234,7 +233,6 @@ def check_paths() -> LiveCheckResult:
         "phone_project": PHONE_PROJECT,
         "phone_business_config": PHONE_APP_CONFIG,
         "phone_business_config_template": PHONE_APP_CONFIG_TEMPLATE,
-        "phone_runtime_config": PHONE_RUNTIME_CONFIG,
         "glass_project": GLASS_PROJECT,
         "glass_kconfig": GLASS_KCONFIG,
         "glass_local_config": GLASS_LOCAL_CONFIG,

@@ -131,7 +131,7 @@ DEVICE_TOKEN_MAP=glass-001=pair-demo-token,phone-001=pair-demo-token
 bash scripts/sync_sdk_live_config.sh
 ```
 
-该脚本会根据业务目录下的服务端配置同步业务手机配置、SDK iOS 运行时配置和眼镜本地构建配置。配置源仍在 `openaiglass-for-blind`，SDK 目录中的 iOS plist 只是运行时工程需要的生成目标。
+该脚本会根据业务目录下的服务端配置同步业务手机配置和眼镜本地构建配置。手机 App 会从 `host/phone/ios/GlassesVideoReceiver.xcodeproj` 启动，并把 `host/phone/config/AppConfig.plist` 作为资源打包；不再写入 SDK 目录下的 iOS 配置文件。
 
 ### 5.3 执行真机前检查
 

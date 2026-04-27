@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${APP_ROOT}/.." && pwd)"
-PHONE_PROJECT="${PHONE_PROJECT:-${REPO_ROOT}/openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj}"
+PHONE_PROJECT="${PHONE_PROJECT:-${APP_ROOT}/host/phone/ios/GlassesVideoReceiver.xcodeproj}"
 PHONE_SCHEME="${PHONE_SCHEME:-GlassesVideoReceiver}"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 DESTINATION="${DESTINATION:-}"
