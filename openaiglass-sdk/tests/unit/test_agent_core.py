@@ -924,8 +924,8 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("agent-core 运行失败", result.reply_text)
         self.assertEqual(len(result.capability_traces), 0)
 
-    def test_openai_runner_can_emit_progress_before_capture_photo(self) -> None:
-        """测试目标：验证视觉链路会在拍照前发出中间播报。
+    def test_openai_runner_does_not_emit_duplicate_progress_before_capture_photo(self) -> None:
+        """测试目标：验证视觉链路不会额外发出重复拍照播报。
 
         测试方法：
         1. 伪造 `run_streamed` 事件流，只产出 `capture_photo` 的 tool_called/tool_output。
@@ -933,7 +933,7 @@ class AgentCoreTestCase(unittest.TestCase):
         3. 收集中间播报回调与最终结果。
 
         预期结果：
-        1. 中间播报会先收到“好的，你保持别动，我拍一张帮你看。”
+        1. SDK 不再注入固定“好的，你保持别动...”播报。
         2. 最终回复来自图片续跑阶段。
         """
 
@@ -1011,7 +1011,7 @@ class AgentCoreTestCase(unittest.TestCase):
                             progress_callback=progress_messages.append,
                         )
 
-        self.assertEqual(progress_messages, ["好的，你保持别动，我拍一张帮你看。"])
+        self.assertEqual(progress_messages, [])
         self.assertEqual(result.reply_text, "我看到前方有一张桌子。")
 
     def test_openai_runner_streams_plain_text_delta_to_callback(self) -> None:

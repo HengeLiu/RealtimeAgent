@@ -283,7 +283,6 @@ class StreamedAgentTurnObserver:
 
         capture_call_id: str | None = None
         existing_image_asset_ids = self._collect_image_asset_ids(tool_context=tool_context, session=session)
-        progress_sent = False
         reply_text_parts: list[str] = []
 
         event_stream = run_result.stream_events()
@@ -310,9 +309,6 @@ class StreamedAgentTurnObserver:
                     tool_name = getattr(raw_item, "name", "")
                     if tool_name == "capture_photo":
                         capture_call_id = getattr(raw_item, "call_id", None)
-                        if not progress_sent and progress_callback is not None:
-                            progress_callback("好的，你保持别动，我拍一张帮你看。")
-                            progress_sent = True
                         image_asset = await self._wait_for_new_image_asset(
                             tool_context=tool_context,
                             session=session,
