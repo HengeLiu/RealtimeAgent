@@ -13,7 +13,7 @@ from agent_core.tools import ToolGateway, ToolRegistry
 from backend_task_core import TaskEvent
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
-from infra.logging import LogContext, get_logger, log_debug
+from infra.logging import LogContext, get_logger, log_error
 
 
 class AgentFacade:
@@ -120,7 +120,7 @@ class AgentFacade:
                 reply_text_delta_callback=reply_text_delta_callback,
             )
         except AppError as exc:
-            log_debug(
+            log_error(
                 self._logger,
                 f"agent-core 返回结构化失败: error={exc.to_dict()} input_text={turn.input_text!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
@@ -132,7 +132,7 @@ class AgentFacade:
                 "agent-core 处理当前输入失败",
                 details={"reason": str(exc)},
             )
-            log_debug(
+            log_error(
                 self._logger,
                 f"agent-core 返回非结构化失败: error={error.to_dict()} input_text={turn.input_text!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),

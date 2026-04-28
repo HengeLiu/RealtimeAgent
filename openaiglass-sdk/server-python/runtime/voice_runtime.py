@@ -1518,6 +1518,16 @@ class VoiceRuntime:
         playback_stream_id = f"reply_{uuid.uuid4().hex[:12]}"
 
         try:
+            log_info(
+                self._logger,
+                (
+                    "语音链路开始处理音频段 "
+                    f"input_stream_id={segment.stream_id} segment_id={segment.segment_id} "
+                    f"duration_ms={segment.duration_ms()} bytes={len(input_wav)} "
+                    f"asr_model={self._settings.voice_asr_model_name} agent_model={self._settings.agent_model_name}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
             user_text = self._asr_client.transcribe(settings=self._settings, input_wav=input_wav).strip()
             if not user_text:
                 raise build_error(
@@ -1528,6 +1538,15 @@ class VoiceRuntime:
             log_debug(
                 self._logger,
                 f"ASR 转写结果: {user_text}",
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+            log_info(
+                self._logger,
+                (
+                    "ASR 完成，准备进入 agent-core "
+                    f"input_stream_id={segment.stream_id} segment_id={segment.segment_id} "
+                    f"agent_model={self._settings.agent_model_name} text_length={len(user_text)}"
+                ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
             transcript_path = self._store_artifact(

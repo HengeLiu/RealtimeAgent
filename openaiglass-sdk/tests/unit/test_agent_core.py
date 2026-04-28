@@ -663,6 +663,48 @@ class AgentCoreTestCase(unittest.TestCase):
             ],
         )
 
+    def test_openai_runner_rejects_qwen_turbo_streaming_tools(self) -> None:
+        """测试目标：不支持 `stream=True + tools` 的模型应在调用前失败。
+
+        测试方法：
+        1. 使用 `AGENT_MODEL_NAME=qwen-turbo` 构造 OpenAI Agent 运行器。
+        2. 提供 `reply_text_delta_callback` 触发语音链路的流式 Agent 模式。
+        3. patch `Runner.run_streamed`，确认 SDK 不会真的发起模型调用。
+
+        预期结果：
+        1. 返回结构化配置错误。
+        2. 错误信息说明 `qwen-turbo` 不支持当前流式工具调用组合。
+        """
+
+        registry, gateway = build_tooling()
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key", agent_model_name="qwen-turbo"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_qwen_turbo", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_qwen_turbo",
+            session_id="sess_qwen_turbo",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="测试一下",
+        )
+
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_streamed") as mocked_run:
+                result = runner.run_turn(
+                    session=session,
+                    turn=turn,
+                    reply_text_delta_callback=lambda _text: None,
+                )
+
+        self.assertIsNotNone(result.error)
+        self.assertEqual(result.error["code"], ErrorCode.INVALID_CONFIG.value)
+        self.assertIn("AGENT_MODEL_NAME=qwen-turbo", result.error["message"])
+        mocked_run.assert_not_called()
+
     def test_openai_runner_uses_minimal_system_prompt(self) -> None:
         """测试目标：验证发给模型的 system prompt 只保留角色与风格约束。
 

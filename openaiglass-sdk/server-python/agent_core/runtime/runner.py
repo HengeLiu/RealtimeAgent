@@ -13,7 +13,7 @@ from agent_core.skills import SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
-from infra.logging import LogContext, get_logger, log_debug
+from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 
 
 class AgentLoopRunner(ABC):
@@ -145,10 +145,38 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             ],
         }
 
+        sdk_tools = self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names)
+        streaming_mode = progress_callback is not None or reply_text_delta_callback is not None
+        compatibility_error = self._streaming_tools_compatibility_error(
+            model_name=self._settings.agent_model_name,
+            tool_count=len(sdk_tools),
+            streaming_mode=streaming_mode,
+        )
+        if compatibility_error is not None:
+            log_error(
+                self._logger,
+                compatibility_error.message,
+                LogContext(
+                    device_id=turn.device_id,
+                    session_id=turn.session_id,
+                    message_id=turn.turn_id,
+                    fields=compatibility_error.details,
+                ),
+            )
+            return self._attach_capability_outputs(
+                result=self._build_failure_result(
+                    turn=turn,
+                    message=compatibility_error.message,
+                    traces=capability_traces,
+                    error=compatibility_error,
+                ),
+                context=tool_context,
+            )
+
         agent = Agent(
             name="OpenAIGlassesAgent",
             instructions=instructions,
-            tools=self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names),
+            tools=sdk_tools,
             model=self._settings.agent_model_name,
         )
         provider = MultiProvider(
@@ -163,9 +191,14 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             workflow_name="OpenAI Glasses Agent Loop",
             group_id=turn.session_id,
         )
-        log_debug(
+        log_info(
             self._logger,
-            f"agent-core 即将运行: model={self._settings.agent_model_name} message_count={len(run_input) + 1}",
+            (
+                "agent-core 即将运行: "
+                f"model={self._settings.agent_model_name} mode={'streamed' if streaming_mode else 'sync'} "
+                f"message_count={len(run_input) + 1} tool_count={len(sdk_tools)} "
+                f"timeout_ms={self._settings.voice_model_timeout_ms}"
+            ),
             LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
         )
 
@@ -219,10 +252,11 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     progress_callback=progress_callback,
                     reply_text_delta_callback=reply_text_delta_callback,
                     model_request=model_request,
-                )
+                ),
+                timeout_seconds=max(5.0, self._settings.voice_model_timeout_ms / 1000),
             )
         except Exception as exc:
-            log_debug(
+            log_error(
                 self._logger,
                 f"agent-core 运行异常: reason={exc!r}",
                 LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
@@ -644,6 +678,40 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         return ""
 
     @staticmethod
+    def _streaming_tools_compatibility_error(
+        *,
+        model_name: str,
+        tool_count: int,
+        streaming_mode: bool,
+    ):
+        """检查当前模型是否适合 SDK 的流式工具调用模式。
+
+        主要逻辑：
+        1. 语音链路需要流式文本增量进入 TTS，因此会使用流式 Agent。
+        2. SDK 会把公开 Tool 暴露给模型，当前等价于 `stream=True + tools`。
+        3. 对已知不支持该组合的模型直接给出结构化错误，避免设备侧等到超时。
+        """
+
+        model = model_name.strip().lower()
+        incompatible_models = {"qwen-turbo", "qwen-plus", "qwen-max"}
+        if not streaming_mode or tool_count <= 0 or model not in incompatible_models:
+            return None
+        return build_error(
+            ErrorCode.INVALID_CONFIG,
+            (
+                f"AGENT_MODEL_NAME={model_name} 不适合当前语音链路："
+                "DashScope OpenAI-compatible 的该模型不支持 stream=True 与 tools 同时使用。"
+                "请改用支持流式工具调用的模型，或等待 SDK 增加非流式工具模式。"
+            ),
+            details={
+                "agent_model_name": model_name,
+                "streaming_mode": streaming_mode,
+                "tool_count": tool_count,
+                "suggested_action": "恢复 AGENT_MODEL_NAME=qwen3.6-plus 或使用支持 stream+tools 的模型",
+            },
+        )
+
+    @staticmethod
     def _read_event_value(source: object, key: str) -> object:
         """读取事件对象或字典中的字段。"""
 
@@ -707,7 +775,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 created_loop.close()
 
     @staticmethod
-    def _run_async_with_thread_event_loop(awaitable):
+    def _run_async_with_thread_event_loop(awaitable, *, timeout_seconds: float | None = None):
         """确保当前线程存在可用 event loop 后执行协程。"""
 
         previous_loop = None
@@ -726,6 +794,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             target_loop = previous_loop
 
         try:
+            if timeout_seconds is not None:
+                awaitable = asyncio.wait_for(awaitable, timeout=timeout_seconds)
             return target_loop.run_until_complete(awaitable)
         finally:
             if created_loop is not None:
