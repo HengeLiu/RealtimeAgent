@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -240,6 +241,155 @@ class OpenAIAgentsSdkBridge:
         return self._provider
 
 
+class AgentStreamDiagnostics:
+    """记录 Agent 流式链路的关键时间点。
+
+    主要功能：
+    1. 只记录首个关键事件，避免流式增量日志刷屏。
+    2. 区分模型原始流事件与 Agents SDK 语义事件。
+    3. 帮助判断延迟发生在模型思考、工具调用增量，还是 SDK 高层事件转换阶段。
+    """
+
+    def __init__(self, *, logger, turn: AgentTurn) -> None:
+        """创建诊断器。
+
+        参数：
+        1. `logger`：当前 agent-core 日志器。
+        2. `turn`：本轮对话对象，用于补充设备、会话与消息编号。
+        """
+
+        self._logger = logger
+        self._turn = turn
+        self._started_at = time.perf_counter()
+        self._seen: set[str] = set()
+
+    def observe(self, event: object, *, stage: str) -> None:
+        """观察一个流式事件并按需打印关键耗时。
+
+        参数：
+        1. `event`：`Runner.run_streamed(...).stream_events()` 产出的事件。
+        2. `stage`：当前链路阶段名称，便于在日志中区分首轮工具选择等阶段。
+
+        异常情况：
+        1. 本方法不主动抛出异常，无法识别的事件会被忽略。
+        """
+
+        event_type = OpenAIAgentLoopRunner._read_event_value(event, "type")
+        if event_type == "raw_response_event":
+            self._observe_raw_event(event, stage=stage)
+            return
+        if event_type == "run_item_stream_event":
+            self._observe_run_item_event(event, stage=stage)
+
+    def _observe_raw_event(self, event: object, *, stage: str) -> None:
+        data = OpenAIAgentLoopRunner._read_event_value(event, "data")
+        raw_type = str(OpenAIAgentLoopRunner._read_event_value(data, "type") or "")
+        self._log_once(
+            "first_raw_event",
+            "Agent 流式诊断: 收到首个模型原始事件",
+            stage=stage,
+            raw_type=raw_type,
+        )
+        if raw_type in {"response.reasoning_text.delta", "response.reasoning_summary_text.delta"}:
+            delta = OpenAIAgentLoopRunner._read_event_value(data, "delta")
+            self._log_once(
+                "first_reasoning_delta",
+                "Agent 流式诊断: 收到首个 reasoning 增量",
+                stage=stage,
+                raw_type=raw_type,
+                delta_chars=len(delta) if isinstance(delta, str) else None,
+            )
+            return
+        if raw_type == "response.output_text.delta":
+            delta = OpenAIAgentLoopRunner._read_event_value(data, "delta")
+            self._log_once(
+                "first_text_delta",
+                "Agent 流式诊断: 收到首个文本增量",
+                stage=stage,
+                raw_type=raw_type,
+                delta_chars=len(delta) if isinstance(delta, str) else None,
+            )
+            return
+        if raw_type == "response.output_item.added":
+            item = OpenAIAgentLoopRunner._read_event_value(data, "item")
+            item_type = str(OpenAIAgentLoopRunner._read_event_value(item, "type") or "")
+            if item_type == "function_call":
+                self._log_once(
+                    "first_tool_call_added",
+                    "Agent 流式诊断: 收到首个工具调用原始 added 事件",
+                    stage=stage,
+                    raw_type=raw_type,
+                    tool_name=OpenAIAgentLoopRunner._read_event_value(item, "name"),
+                    call_id=OpenAIAgentLoopRunner._read_event_value(item, "call_id"),
+                )
+            return
+        if raw_type == "response.function_call_arguments.delta":
+            delta = OpenAIAgentLoopRunner._read_event_value(data, "delta")
+            self._log_once(
+                "first_tool_call_arguments_delta",
+                "Agent 流式诊断: 收到首个工具参数增量",
+                stage=stage,
+                raw_type=raw_type,
+                delta_chars=len(delta) if isinstance(delta, str) else None,
+            )
+            return
+        if raw_type == "response.output_item.done":
+            item = OpenAIAgentLoopRunner._read_event_value(data, "item")
+            item_type = str(OpenAIAgentLoopRunner._read_event_value(item, "type") or "")
+            if item_type == "function_call":
+                arguments = OpenAIAgentLoopRunner._read_event_value(item, "arguments")
+                self._log_once(
+                    "first_tool_call_done",
+                    "Agent 流式诊断: 收到首个工具调用原始 done 事件",
+                    stage=stage,
+                    raw_type=raw_type,
+                    tool_name=OpenAIAgentLoopRunner._read_event_value(item, "name"),
+                    call_id=OpenAIAgentLoopRunner._read_event_value(item, "call_id"),
+                    arguments_chars=len(arguments) if isinstance(arguments, str) else None,
+                )
+            return
+        if raw_type == "response.completed":
+            self._log_once(
+                "response_completed",
+                "Agent 流式诊断: 模型原始响应完成",
+                stage=stage,
+                raw_type=raw_type,
+            )
+
+    def _observe_run_item_event(self, event: object, *, stage: str) -> None:
+        event_name = str(OpenAIAgentLoopRunner._read_event_value(event, "name") or "")
+        if event_name != "tool_called":
+            return
+        item = OpenAIAgentLoopRunner._read_event_value(event, "item")
+        raw_item = OpenAIAgentLoopRunner._read_event_value(item, "raw_item")
+        self._log_once(
+            "semantic_tool_called",
+            "Agent 流式诊断: 收到 Agents SDK 语义化工具调用事件",
+            stage=stage,
+            event_name=event_name,
+            tool_name=OpenAIAgentLoopRunner._read_event_value(raw_item, "name"),
+            call_id=OpenAIAgentLoopRunner._read_event_value(raw_item, "call_id"),
+        )
+
+    def _log_once(self, key: str, message: str, **fields: object) -> None:
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        log_debug(
+            self._logger,
+            message,
+            LogContext(
+                device_id=self._turn.device_id,
+                session_id=self._turn.session_id,
+                message_id=self._turn.turn_id,
+                fields={
+                    "latency_ms": int((time.perf_counter() - self._started_at) * 1000),
+                    **fields,
+                },
+            ),
+        )
+
+
 class StreamedAgentTurnObserver:
     """观察 Agents SDK 流式事件，并把事件转换成 SDK 结果。"""
 
@@ -247,6 +397,7 @@ class StreamedAgentTurnObserver:
         self,
         *,
         sdk_bridge: OpenAIAgentsSdkBridge,
+        logger,
         wait_for_new_image_asset: Callable[..., Any],
         stream_image_followup_reply: Callable[..., Any],
         collect_image_asset_ids: Callable[..., set[str]],
@@ -254,6 +405,7 @@ class StreamedAgentTurnObserver:
         extract_reply_text: Callable[[object], str],
     ) -> None:
         self._sdk_bridge = sdk_bridge
+        self._logger = logger
         self._wait_for_new_image_asset = wait_for_new_image_asset
         self._stream_image_followup_reply = stream_image_followup_reply
         self._collect_image_asset_ids = collect_image_asset_ids
@@ -288,10 +440,12 @@ class StreamedAgentTurnObserver:
         capture_call_id: str | None = None
         existing_image_asset_ids = self._collect_image_asset_ids(tool_context=tool_context, session=session)
         reply_text_parts: list[str] = []
+        diagnostics = AgentStreamDiagnostics(logger=self._logger, turn=turn)
 
         event_stream = run_result.stream_events()
         try:
             async for event in event_stream:
+                diagnostics.observe(event, stage="agent_first_turn")
                 text_delta = self._extract_agent_stream_text_delta(event)
                 if text_delta:
                     reply_text_parts.append(text_delta)
@@ -454,6 +608,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         self._sdk_bridge = OpenAIAgentsSdkBridge(settings=settings)
         self._stream_observer = StreamedAgentTurnObserver(
             sdk_bridge=self._sdk_bridge,
+            logger=self._logger,
             wait_for_new_image_asset=lambda **kwargs: self._wait_for_new_image_asset(**kwargs),
             stream_image_followup_reply=lambda **kwargs: self._stream_image_followup_reply(**kwargs),
             collect_image_asset_ids=self._collect_image_asset_ids,
@@ -721,6 +876,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
         )
 
+        image_request_started_at = time.perf_counter()
         completion = client.chat.completions.create(
             model=self._settings.agent_model_name,
             messages=[
@@ -746,12 +902,43 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             stream=True,
             timeout=self._settings.voice_model_timeout_ms / 1000,
         )
+        log_debug(
+            self._logger,
+            "图片解读流式诊断: 模型流已打开",
+            LogContext(
+                device_id=turn.device_id,
+                session_id=turn.session_id,
+                message_id=turn.turn_id,
+                fields={
+                    "latency_ms": int((time.perf_counter() - image_request_started_at) * 1000),
+                    "stage": "image_followup",
+                    "model": self._settings.agent_model_name,
+                },
+            ),
+        )
 
         reply_parts: list[str] = []
+        first_text_logged = False
         for chunk in completion:
             text_delta = self._extract_stream_text_delta(chunk)
             if not text_delta:
                 continue
+            if not first_text_logged:
+                first_text_logged = True
+                log_debug(
+                    self._logger,
+                    "图片解读流式诊断: 收到首个文本增量",
+                    LogContext(
+                        device_id=turn.device_id,
+                        session_id=turn.session_id,
+                        message_id=turn.turn_id,
+                        fields={
+                            "latency_ms": int((time.perf_counter() - image_request_started_at) * 1000),
+                            "stage": "image_followup",
+                            "delta_chars": len(text_delta),
+                        },
+                    ),
+                )
             reply_parts.append(text_delta)
             if reply_text_delta_callback is not None:
                 reply_text_delta_callback(text_delta)
@@ -759,7 +946,15 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         log_debug(
             self._logger,
             f"主链路图片解读完成: reply_length={len(reply_text)}",
-            LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+            LogContext(
+                device_id=turn.device_id,
+                session_id=turn.session_id,
+                message_id=turn.turn_id,
+                fields={
+                    "latency_ms": int((time.perf_counter() - image_request_started_at) * 1000),
+                    "stage": "image_followup",
+                },
+            ),
         )
         return reply_text
 
