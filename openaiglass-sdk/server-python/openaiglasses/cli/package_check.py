@@ -1,4 +1,4 @@
-"""检查 Python SDK 是否可以被打包、安装和导入。"""
+"""检查三端 SDK 是否可以被打包、安装和导入。"""
 
 from __future__ import annotations
 
@@ -9,17 +9,20 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 ROOT_DIR = Path.cwd().resolve()
 SDK_ROOT = ROOT_DIR / "openaiglass-sdk"
 SDK_DIR = SDK_ROOT / "server-python"
+PHONE_IOS_DIR = SDK_ROOT / "phone-ios"
+GLASS_ESP32_DIR = SDK_ROOT / "glass-esp32"
 
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="检查 Python SDK 是否可以被打包、安装和导入")
+    parser = argparse.ArgumentParser(description="检查三端 SDK 是否可以被打包、安装和导入")
     parser.add_argument("--repo-root", default=".", help="项目根目录")
     return parser.parse_args()
 
@@ -27,10 +30,12 @@ def parse_args() -> argparse.Namespace:
 def configure_paths(args: argparse.Namespace) -> None:
     """根据命令行参数设置仓库路径。"""
 
-    global ROOT_DIR, SDK_ROOT, SDK_DIR
+    global ROOT_DIR, SDK_ROOT, SDK_DIR, PHONE_IOS_DIR, GLASS_ESP32_DIR
     ROOT_DIR = Path(args.repo_root).resolve()
     SDK_ROOT = ROOT_DIR / "openaiglass-sdk"
     SDK_DIR = SDK_ROOT / "server-python"
+    PHONE_IOS_DIR = SDK_ROOT / "phone-ios"
+    GLASS_ESP32_DIR = SDK_ROOT / "glass-esp32"
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> dict[str, object]:
@@ -187,6 +192,159 @@ print(version("openaiglasses-sdk"))
     }
 
 
+def _load_manifest(manifest_path: Path, required_fields: list[str]) -> dict[str, Any]:
+    """读取并校验 SDK 端侧包清单。
+
+    参数：
+    1. `manifest_path`：清单文件路径。
+    2. `required_fields`：必须存在的顶层字段。
+
+    返回值：
+    1. 解析后的 JSON 对象。
+
+    异常：
+    1. 文件不存在、JSON 不是对象或缺少字段时抛出 `RuntimeError`。
+    """
+
+    if not manifest_path.exists():
+        raise RuntimeError(f"缺少端侧 SDK 包清单: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"端侧 SDK 包清单 JSON 无法解析: {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"端侧 SDK 包清单必须是 JSON 对象: {manifest_path}")
+
+    missing = [field for field in required_fields if field not in manifest]
+    if missing:
+        raise RuntimeError(f"端侧 SDK 包清单缺少字段 {missing}: {manifest_path}")
+    return manifest
+
+
+def _require_relative_files(base_dir: Path, paths: list[str], *, field_name: str) -> list[str]:
+    """确认清单中声明的相对文件都存在。
+
+    参数：
+    1. `base_dir`：相对路径基准目录。
+    2. `paths`：清单中声明的相对路径列表。
+    3. `field_name`：用于错误信息的字段名。
+
+    返回值：
+    1. 归一化后的路径字符串列表。
+    """
+
+    if not isinstance(paths, list) or not all(isinstance(item, str) and item for item in paths):
+        raise RuntimeError(f"{field_name} 必须是非空字符串列表")
+
+    normalized: list[str] = []
+    missing: list[str] = []
+    for item in paths:
+        candidate = (base_dir / item).resolve()
+        if not candidate.exists():
+            missing.append(item)
+        normalized.append(item)
+    if missing:
+        raise RuntimeError(f"{field_name} 中存在缺失文件: {missing}")
+    return normalized
+
+
+def _check_ios_package_shape() -> dict[str, Any]:
+    """检查 iOS SDK 源码包形态。
+
+    主要逻辑：
+    1. 读取 `phone-ios/package-manifest.json`。
+    2. 校验 Xcode 工程、运行时代码、测试代码和示例配置是否存在。
+    3. 返回可写入 package-check 报告的结构化结果。
+    """
+
+    manifest = _load_manifest(
+        PHONE_IOS_DIR / "package-manifest.json",
+        [
+            "name",
+            "version",
+            "package_type",
+            "minimum_ios",
+            "minimum_swift",
+            "xcode_project",
+            "runtime_files",
+            "test_files",
+            "resource_files",
+            "public_capabilities",
+        ],
+    )
+    xcode_project = PHONE_IOS_DIR / str(manifest["xcode_project"])
+    if not xcode_project.exists():
+        raise RuntimeError(f"iOS SDK Xcode 工程不存在: {xcode_project}")
+
+    runtime_files = _require_relative_files(PHONE_IOS_DIR, manifest["runtime_files"], field_name="runtime_files")
+    test_files = _require_relative_files(PHONE_IOS_DIR, manifest["test_files"], field_name="test_files")
+    resource_files = _require_relative_files(PHONE_IOS_DIR, manifest["resource_files"], field_name="resource_files")
+    capabilities = manifest["public_capabilities"]
+    if not isinstance(capabilities, list) or not capabilities:
+        raise RuntimeError("public_capabilities 必须是非空列表")
+
+    return {
+        "ok": True,
+        "name": manifest["name"],
+        "version": manifest["version"],
+        "package_type": manifest["package_type"],
+        "xcode_project": str(xcode_project.relative_to(ROOT_DIR)),
+        "runtime_files": len(runtime_files),
+        "test_files": len(test_files),
+        "resource_files": len(resource_files),
+        "public_capabilities": capabilities,
+    }
+
+
+def _check_esp32_package_shape() -> dict[str, Any]:
+    """检查 ESP32 SDK 源码包形态。
+
+    主要逻辑：
+    1. 读取 `glass-esp32/component-manifest.json`。
+    2. 校验 ESP-IDF 工程入口、组件文件、默认配置和分区表是否存在。
+    3. 返回可写入 package-check 报告的结构化结果。
+    """
+
+    manifest = _load_manifest(
+        GLASS_ESP32_DIR / "component-manifest.json",
+        [
+            "name",
+            "version",
+            "package_type",
+            "idf_target",
+            "minimum_esp_idf",
+            "project_files",
+            "component_files",
+            "managed_dependencies",
+            "public_capabilities",
+        ],
+    )
+    project_files = _require_relative_files(GLASS_ESP32_DIR, manifest["project_files"], field_name="project_files")
+    component_files = _require_relative_files(
+        GLASS_ESP32_DIR,
+        manifest["component_files"],
+        field_name="component_files",
+    )
+    dependencies = manifest["managed_dependencies"]
+    capabilities = manifest["public_capabilities"]
+    if not isinstance(dependencies, dict) or not dependencies:
+        raise RuntimeError("managed_dependencies 必须是非空对象")
+    if not isinstance(capabilities, list) or not capabilities:
+        raise RuntimeError("public_capabilities 必须是非空列表")
+
+    return {
+        "ok": True,
+        "name": manifest["name"],
+        "version": manifest["version"],
+        "package_type": manifest["package_type"],
+        "idf_target": manifest["idf_target"],
+        "project_files": len(project_files),
+        "component_files": len(component_files),
+        "managed_dependencies": dependencies,
+        "public_capabilities": capabilities,
+    }
+
+
 def main() -> int:
     """CLI 入口。"""
 
@@ -204,6 +362,8 @@ def main() -> int:
             "build_python": build_python,
             "wheel": str(wheel_path),
             "import_stdout": import_result["import"]["stdout"],
+            "ios_package": _check_ios_package_shape(),
+            "esp32_package": _check_esp32_package_shape(),
         }
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

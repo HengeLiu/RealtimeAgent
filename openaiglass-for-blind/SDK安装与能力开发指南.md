@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v5`。本版本新增 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复，以及手机侧多任务帧分发；上一版本已增强 `phone_video_link_task` 最小 peer-link 生命周期语义。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v13`。本版本补齐 iOS 与 ESP32 端侧 SDK 源码包清单和 package-check 校验；上一版本补齐回放测试断言能力，音频样例批量回归可读取 JSON 期望文件并断言回复文本、模型请求和能力调用轨迹。实时语音打断、全双工语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -421,6 +421,127 @@ uv run openaiglass.glass.start \
 2. 业务层只提供 profile、业务服务端装配入口、iOS 工程路径、ESP-IDF 本地配置和业务能力代码。
 3. 业务工程不再保留启动脚本；如果需要新增通用启动或检查能力，优先进入 SDK CLI。
 
+### 3.8 普通语音回复流式和首包观测
+
+`sdk-v7` 起，普通文本回复会从 AgentCore 的流式事件中提取文本增量，并通过 `reply_text_delta_callback` 直接进入 `VoiceRuntime` 的流式 TTS 会话。普通问答不再必须等到完整 `final_output` 后才开始向 TTS 推送文本。
+
+当前运行态快照会记录首包相关字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reply_first_text_delta_at_ms` | 当前回复首个文本增量到达服务端播放流的时间。 |
+| `reply_first_audio_chunk_at_ms` | 当前回复首个 TTS 音频分片进入播放队列的时间。 |
+| `reply_first_play_request_at_ms` | 当前回复首次下发 `actuator.audio.play` 的时间。 |
+| `reply_text_to_first_audio_ms` | 首文本到首音频的耗时。 |
+| `reply_audio_to_play_request_ms` | 首音频到播放请求的耗时。 |
+
+这些字段可以通过运行态接口和联调日志观察，用于判断当前链路是否真的在流式推进。如果 `reply_text_to_first_audio_ms` 很大，优先检查当前 TTS 是否回退到了全文合成；这不应该由业务 Tool 或 Task 自行处理。
+
+注意：`sdk-v8` 仍然不是实时语音打断版本。眼镜端播放期间的麦克风策略和用户语音打断，会在后续实时语音专项中统一处理。
+
+### 3.9 通知仲裁、抢播和打断边界
+
+`sdk-v8` 起，任务通知和 Agent 回流通知会进入 SDK 通知协调器。业务侧只提交结构化通知、优先级和策略，不直接操作播放器。
+
+通知请求支持以下策略字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `interrupt_policy` | 抢播策略。可选 `never`、`higher_priority`、`critical_only`、`always`。 |
+| `resume_policy` | 被抢播内容后续处理策略。当前默认 `drop_interrupted`。 |
+
+当前兼容旧字段：如果没有显式传 `interrupt_policy`，`allow_interrupt=true` 会按 `higher_priority` 处理，否则按 `never` 处理。
+
+运行态快照中会出现：
+
+| 字段 | 说明 |
+| --- | --- |
+| `active_notification` | 当前设备正在播报或等待完成的活动通知。 |
+| `pending_notifications` | 当前设备待播通知队列。 |
+| `recent_notification_decisions` | 最近通知仲裁决策，包含直发、排队、抢播和去重原因。 |
+
+业务开发者需要注意：
+
+1. 普通任务进度建议使用 `priority=normal` 或 `low`，不要抢播。
+2. 视觉风险、导航安全类事件可以使用 `priority=critical` 和 `interrupt_policy=critical_only`。
+3. 业务 Task 不要直接发送 `actuator.audio.interrupt`。
+4. `sdk-v8` 的“打断”只表示通知播放流被更高优先级通知抢播，不等于用户语音实时打断。
+
+### 3.10 账号级设备组织和多设备绑定
+
+`sdk-v9` 起，控制面注册和 `DeviceGroupRuntime` 支持账号级设备索引。业务侧仍然只表达设备和账号关系，不自行维护绑定表、在线表或跨设备路由。
+
+注册消息可选字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `account_id` | 账号编号。同一个账号下可有多副眼镜、多台手机和多个设备组。 |
+| `user_id` | 外部用户编号。SDK 只记录和透传，不做业务授权判断。 |
+| `desired_glass_device_id` | 手机希望绑定的眼镜编号。 |
+| `desired_phone_device_id` | 眼镜希望绑定的手机编号。 |
+
+运行态快照新增：
+
+```text
+runtime.device_groups.accounts[]
+```
+
+其中每个账号条目包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `account_id/user_id` | 账号和用户编号。 |
+| `device_ids` | 账号下设备编号列表。 |
+| `group_ids` | 账号下设备组编号列表。 |
+| `online_device_count` | 当前在线设备数量。 |
+| `bindings` | 当前账号下已形成的 glass-phone 绑定关系。 |
+
+边界：
+
+1. SDK 会拒绝两个不同 `account_id` 的眼镜和手机绑定。
+2. 只有一方声明账号时，为兼容旧设备，绑定后 SDK 会把同组设备归入该账号。
+3. 账号级索引用于设备组织和运行态诊断，不等于完整权限系统、组织管理后台或远程配置中心。
+4. 功能代码需要多设备信息时，优先从 `DeviceGroupContext` 或运行态快照读取，不要在业务 Task 中自行维护全局设备表。
+
+### 3.11 Skill Runtime
+
+`sdk-v10` 起，Skill Runtime 成为正式 SDK 扩展面。Skill 用于描述一类复合任务的工作流程、工具边界和注意事项；真正执行仍然通过 Tool、Task、MCP 和设备组上下文完成。
+
+最小注册方式：
+
+```python
+from openaiglasses import OpenAIGlassesSDK, SkillDocument, SkillManifest
+
+sdk = OpenAIGlassesSDK()
+sdk.register_skill(
+    SkillDocument(
+        manifest=SkillManifest(
+            name="navigation_guide",
+            version="1.0.0",
+            description="导航引导 Skill",
+            allowed_tools=["capture_photo", "start_navigation"],
+            allowed_mcp_methods=["amap.route_plan"],
+        ),
+        content="根据当前路线、定位和视觉事件，给用户一句短导航提示。",
+    )
+)
+```
+
+运行机制：
+
+1. 未激活 Skill 时，模型会在 system prompt 中看到可用 Skill 摘要。
+2. 模型需要具体说明时，调用内置工具 `read_skill(skill_name=...)`。
+3. `read_skill` 会读取 Skill 正文，并把该 Skill 加入当前会话 active 状态。
+4. 会话存在 active Skill 后，模型可见工具会收敛到 `read_skill` 加 Skill 声明的 `allowed_tools/allowed_mcp_methods`。
+5. `ToolGateway` 在执行前也会校验当前会话工具白名单，避免模型或代码绕过策略。
+
+边界：
+
+1. Skill 不直接操作 WebSocket、摄像头、音频或任务线程。
+2. Skill 不替代 `BaseTask`，长流程状态仍应放在 Task 中。
+3. Skill 不内置具体业务算法；找物、导航、读文档等能力仍由业务目录实现。
+4. 当前 Skill 来源为业务代码显式注册，暂不支持远程动态下发、审批和权限后台。
+
 ## 4. 推荐业务能力工程结构
 
 外部团队开发新能力时，建议按能力聚合，而不是按设备散落业务代码：
@@ -685,9 +806,9 @@ curl -X POST http://127.0.0.1:8000/api/tasks/report-event \
 
 业务侧不要在 `openaiglass-for-blind/capabilities` 内自行维护视频任务状态表，也不要自行绕过 SDK 给眼镜发送 `sensor.camera.stream.start/stop`。真实公网/NAT 穿透、自动重试、链路健康检查仍由 SDK 后续版本统一补齐。
 
-### 6.2 SDK 托管任务快照与恢复
+### 6.2 SDK 托管任务持久化与恢复
 
-`sdk-v5` 起，SDK 业务 Task 运行时会记录任务时间戳和事件日志。业务 Task 不需要改接口，仍然使用 `context.emit_state(...)`、`context.complete(...)`、`on_event(...)` 和 `on_cancel(...)`。
+`sdk-v11` 起，SDK 业务 Task 运行时在原有快照恢复基础上增加文件型自动持久化、原子写入、事件幂等和终态清理。业务 Task 不需要改接口，仍然使用 `context.emit_state(...)`、`context.complete(...)`、`on_event(...)` 和 `on_cancel(...)`。
 
 任务快照新增字段：
 
@@ -708,14 +829,42 @@ runtime = context.device_group.create_task(
 latest = context.device_group.query_task(runtime.task_id)
 ```
 
-宿主服务可以把任务快照保存到 JSON 文件，并在重启后恢复：
+宿主服务可以手动保存任务快照：
 
 ```python
 sdk.task_runtime.save_snapshots("logs/sdk-task-snapshots.json")
 sdk.task_runtime.load_snapshots("logs/sdk-task-snapshots.json")
 ```
 
-恢复后的任务可继续查询；如果对应 `task_type` 仍已注册，也可以继续接收事件。生产环境如果要接数据库或对象存储，可以直接复用 `export_snapshots()` / `restore_snapshots(...)`，由宿主决定持久化介质。
+也可以启用自动文件持久化：
+
+```python
+sdk.task_runtime.enable_persistence(
+    "logs/sdk-task-store.json",
+    restore=True,
+)
+```
+
+启用后，创建任务、取消任务、派发事件、恢复快照和清理终态任务都会自动写入文件。SDK 使用临时文件加原子替换，避免写入中断留下半截 JSON。
+
+端侧或手机侧上报任务事件时，可以在 payload 中放入 `event_id` 或 `idempotency_key`。同一个任务下相同事件编号只会处理一次：
+
+```python
+context.runtime.dispatch_event(
+    task_id="task_xxx",
+    event_name="phone.demo.done",
+    payload={"event_id": "phone_evt_001", "ok": True},
+    source="phone",
+)
+```
+
+终态任务可按保留期清理：
+
+```python
+sdk.task_runtime.prune_tasks(retain_terminal_ms=24 * 60 * 60 * 1000)
+```
+
+边界：`sdk-v11` 仍是单进程单机生产化形态，不是多实例数据库任务平台。线上如果需要多实例抢占、分布式锁、数据库事务和跨进程事件消费，需要 SDK 后续接入正式任务存储。
 
 ## 7. 开发手机侧能力
 
@@ -730,6 +879,69 @@ sdk.task_runtime.load_snapshots("logs/sdk-task-snapshots.json")
 真实手机端能力开发应优先写 Swift。Python `BasePhoneProcessor` / `BasePhoneTask` 不能运行在 iPhone 上，后续统一封装到 `phone-mock` 设备内部。业务开发者不应该把它们理解为手机 App 插件，也不应该在 SDK 指南中把它们当成真机手机开发主路径。
 
 `phone-mock` 的定位和 `glass-playback` 类似，都是独立启动的虚拟设备；区别是当前 `phone-mock` 只用于 mock 测试，不支持回放数据编排，也不模拟真实 iOS UI。它后续应像真实 phone 一样连接真实服务端、注册、心跳、接收 `sdk.phone.task.start/stop`，并按配置或内置 Python handler 产出任务事件。
+
+### 7.0 手机视觉资源策略
+
+`sdk-v6` 起，Python `PhoneRuntime` 支持手机视觉任务资源策略。这个能力主要用于 `phone-mock`、设备级回放测试和服务端侧手机任务模拟，帮助功能开发团队先验证“帧率限制、过载记录、任务快照观察”这些 SDK 语义。
+
+创建手机任务时可以在参数中传入 `vision_policy`：
+
+```python
+snapshot = sdk.phone_runtime.start_task(
+    task_type="demo_phone_task",
+    params={
+        "stream_id": "stream_cam_001",
+        "vision_policy": {
+            "min_frame_interval_ms": 1000,
+            "max_frames": 30,
+            "priority": 10,
+            "emit_overload_events": True,
+        },
+    },
+)
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `min_frame_interval_ms` | 同一个手机任务两次实际处理帧之间的最小间隔。 |
+| `max_frames` | 单个任务最多处理的帧数，未设置或为 0 表示不限制。 |
+| `priority` | 任务优先级，当前先进入快照，后续用于多任务资源仲裁。 |
+| `emit_overload_events` | 是否在 SDK 丢帧时记录 `vision.task.overloaded`。 |
+
+当帧被 SDK 资源策略丢弃时，业务任务的 `on_frame(...)` 不会被调用，`PhoneTaskSnapshot` 会记录：
+
+1. `frames_dropped`
+2. `resource_events`
+3. `vision_policy`
+
+资源事件示例：
+
+```json
+{
+  "event_name": "vision.task.overloaded",
+  "reason": "frame_rate_limited",
+  "task_type": "demo_phone_task",
+  "stream_id": "stream_cam_001",
+  "frames_processed": 1,
+  "frames_dropped": 1
+}
+```
+
+当前 `reason` 包括：
+
+| reason | 含义 |
+| --- | --- |
+| `frame_rate_limited` | 当前帧与上一帧实际处理时间间隔不足。 |
+| `max_frames_reached` | 当前任务已经达到最大处理帧数。 |
+
+注意：
+
+1. 业务能力不要自行维护全局帧队列或跨任务资源优先级。
+2. 回放测试和 `phone-mock` 可以断言 `frames_dropped` 与 `resource_events`。
+3. 真 iPhone 插件在 SDK iOS 运行时补齐统一资源管理前，应读取同名 `vision_policy` 参数并保持语义一致。
+4. 具体 YOLO、盲道、红绿灯、找物等算法仍属于业务层，不进入 SDK。
 
 ### 7.1 真机 iOS 手机能力怎么接入
 
@@ -979,7 +1191,21 @@ uv run openaiglass.phone.mock \
 
 当前版本只支持根据配置发送固定 mock 事件，不支持断言检查、批量测试，也不支持真实视频帧回放。开发者需要根据服务端日志、SDK 任务状态和 `outputs.event_log` 判断行为是否符合预期。
 
-### 7.5 Swift Package 和 XCFramework 发布形态
+### 7.5 iOS 源码包清单、Swift Package 和 XCFramework 发布形态
+
+`sdk-v13` 起，iOS SDK 运行时提供源码包清单：
+
+```text
+openaiglass-sdk/phone-ios/package-manifest.json
+```
+
+该清单声明当前 SDK 可发布输入，包括 Xcode 工程、运行时代码、测试代码、资源文件、最低 iOS/Swift 版本和公开能力。SDK 包检查会校验清单字段和文件完整性：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python uv run openaiglass.sdk.package-check --repo-root .
+```
+
+这代表 iOS SDK 已经具备可检查的源码包形态，适合内部源码集成、真机调试和版本边界确认。业务开发者仍不应直接修改 `openaiglass-sdk/phone-ios`，而应在业务侧 Xcode 工程引用 SDK 运行时代码并注册自己的业务插件。
 
 可以尝试把 iOS SDK 发布成 Swift Package 或 XCFramework，但两者目标不同：
 
@@ -998,7 +1224,7 @@ uv run openaiglass.phone.mock \
 5. 用 `xcodebuild -create-xcframework` 生成 `OpenAIGlassesPhoneSDK.xcframework`。
 6. 再选择直接分发 `.xcframework`，或用 Swift Package 的 `binaryTarget` 包一层版本化发布。
 
-当前代码结构已经具备尝试拆分的基础，但还不能直接发布成干净的二进制 SDK，主要原因是：
+当前代码结构已经具备可检查的源码包清单，也具备尝试拆分的基础，但还不能直接发布成干净的二进制 SDK，主要原因是：
 
 1. 当前 `phone-ios` 仍是 App 工程，不是 framework/package-first 结构。
 2. `ContentView`、`AppConfig.plist`、业务宿主入口和 SDK runtime 还没有完全分离。
@@ -1276,7 +1502,46 @@ MP4 会由 `glass-playback` 在本机通过 `ffmpeg` 解成 JPEG 帧，再按真
 
 ### 10.7 如何判断回放结果
 
-当前不支持断言检查，也不支持批量测试。开发者需要根据 `glass-playback` 的 `actuators` 输出、服务端日志、真实 iOS 手机端日志和运行态接口自行判断结果。
+`sdk-v12` 起，真实音频样例批量回归支持声明式断言。开发者可以用 JSON 文件描述每条样例的期望回复片段、能力调用轨迹和模型请求片段。
+
+示例：
+
+```json
+{
+  "defaults": {
+    "model_request_contains": ["qwen3.6-plus"]
+  },
+  "cases": {
+    "你是谁呀": {
+      "reply_text_contains": ["乐鑫"],
+      "reply_text_not_contains": ["抱歉"],
+      "required_capability_traces": [
+        {"capability_name": "capture_photo", "status": "succeeded"}
+      ]
+    }
+  }
+}
+```
+
+运行：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind \
+uv run python -m devtools.audio_sample_batch_runner \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --expectations openaiglass-for-blind/testdata/audio-sample/expectations.json
+```
+
+每条样例的 `result.json` 会新增：
+
+| 字段 | 说明 |
+| --- | --- |
+| `assertions_ok` | 当前样例断言是否全部通过。 |
+| `assertion_failures` | 失败断言列表。 |
+| `expectations` | 当前样例实际使用的断言配置。 |
+
+当前断言能力先覆盖音频样例批量回归；`glass-playback` 的事件日志和执行器日志仍主要用于人工排障，后续会继续扩展到设备级配置内断言。
 
 重点看这些内容：
 
@@ -1466,11 +1731,11 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 
 可以尝试，但如果目标是业务方“不下载 SDK 源码”，优先应做 XCFramework 或 Swift Package `binaryTarget`，而不是源码型 Swift Package。
 
-当前代码还没有达到可直接二进制发布的状态，因为 `phone-ios` 仍是 App 工程，通用运行时、宿主页面、配置资源和业务工程引用边界还需要拆开。推荐先做最小 XCFramework 试点：只导出控制连接、视频接收、任务分发和事件上报能力；业务 App 在自己的 target 中实现并注册 Swift 插件。详细路线见第 7.5 节。
+`sdk-v13` 已经提供 `openaiglass-sdk/phone-ios/package-manifest.json`，可以通过 `openaiglass.sdk.package-check` 校验源码包输入是否齐全。当前代码还没有达到可直接二进制发布的状态，因为 `phone-ios` 仍是 App 工程，通用运行时、宿主页面、配置资源和业务工程引用边界还需要拆开。推荐先做最小 XCFramework 试点：只导出控制连接、视频接收、任务分发和事件上报能力；业务 App 在自己的 target 中实现并注册 Swift 插件。详细路线见第 7.5 节。
 
 ### 17.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
-当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start` 调度一个可编译的 ESP-IDF 固件工程。
+`sdk-v13` 已经提供 `openaiglass-sdk/glass-esp32/component-manifest.json`，可以通过 `openaiglass.sdk.package-check` 校验 ESP-IDF 源码工程输入是否齐全。当前仍是 ESP-IDF 工程，不是发布到 ESP-IDF component registry 的独立组件；后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start` 调度一个可编译的 ESP-IDF 固件工程。
 
 在当前仓库内开发时，可以用 `--repo-root .` 让命令按默认 monorepo 布局推导 `openaiglass-sdk/glass-esp32`。在独立业务项目中，不要求当前目录存在 `openaiglass-sdk/glass-esp32`；应使用 `--project-dir /path/to/glass-esp32` 指向真实固件工程，并用 `--app-root` 或 `--config` 指向业务侧眼镜配置。
 

@@ -42,6 +42,9 @@ class AudioSampleExecutionResult:
     result_json_path: str = ""
     agent_session: dict | None = None
     agent_session_fetch_error: str = ""
+    assertions_ok: bool = True
+    assertion_failures: list[str] = field(default_factory=list)
+    expectations: dict = field(default_factory=dict)
     stdout: str = ""
     stderr: str = ""
     started_at_ms: int = 0
@@ -99,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=45.0)
     parser.add_argument("--chunk-interval-ms", type=int, default=20)
     parser.add_argument("--fail-fast", action="store_true", help="首条失败后立即停止")
+    parser.add_argument("--expectations", default="", help="可选断言 JSON 文件")
     return parser
 
 
@@ -225,6 +229,87 @@ def write_summary_json(summary_path: Path, summary: AudioSampleBatchSummary) -> 
     )
 
 
+def load_expectations(path: str | Path | None) -> dict[str, dict]:
+    """加载批量回归断言配置。"""
+
+    if not path:
+        return {}
+    source = resolve_path(str(path))
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("expectations 文件必须是 JSON object")
+    defaults = payload.get("defaults", {})
+    cases = payload.get("cases", {})
+    if defaults is not None and not isinstance(defaults, dict):
+        raise ValueError("expectations.defaults 必须是 JSON object")
+    if not isinstance(cases, dict):
+        raise ValueError("expectations.cases 必须是 JSON object")
+    result = {str(name): dict(value) for name, value in cases.items() if isinstance(value, dict)}
+    if isinstance(defaults, dict) and defaults:
+        result["__defaults__"] = dict(defaults)
+    return result
+
+
+def merge_expectation(expectations: dict[str, dict] | None, sample_name: str) -> dict:
+    """合并默认断言和单样例断言。"""
+
+    source = expectations or {}
+    merged = dict(source.get("__defaults__", {}))
+    merged.update(dict(source.get(sample_name, {})))
+    return merged
+
+
+def evaluate_expectations(*, result: AudioSampleExecutionResult, expectation: dict) -> list[str]:
+    """执行单条样例断言。"""
+
+    failures: list[str] = []
+    for fragment in _as_string_list(expectation.get("reply_text_contains")):
+        if fragment not in result.reply_text:
+            failures.append(f"reply_text 缺少片段: {fragment}")
+    for fragment in _as_string_list(expectation.get("reply_text_not_contains")):
+        if fragment in result.reply_text:
+            failures.append(f"reply_text 不应包含片段: {fragment}")
+
+    agent_session = result.agent_session if isinstance(result.agent_session, dict) else {}
+    traces = agent_session.get("capability_traces", [])
+    trace_items = traces if isinstance(traces, list) else []
+    for expected_trace in expectation.get("required_capability_traces", []) or []:
+        if not isinstance(expected_trace, dict):
+            failures.append("required_capability_traces 条目必须是对象")
+            continue
+        if not _trace_matches(trace_items, expected_trace):
+            failures.append(f"缺少能力调用轨迹: {json.dumps(expected_trace, ensure_ascii=False)}")
+
+    model_request_text = json.dumps(agent_session.get("model_request", {}), ensure_ascii=False, default=str)
+    for fragment in _as_string_list(expectation.get("model_request_contains")):
+        if fragment not in model_request_text:
+            failures.append(f"model_request 缺少片段: {fragment}")
+    return failures
+
+
+def _as_string_list(value: object) -> list[str]:
+    """把断言字段归一化为字符串列表。"""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _trace_matches(trace_items: list, expected_trace: dict) -> bool:
+    """判断能力轨迹中是否存在匹配项。"""
+
+    for item in trace_items:
+        if not isinstance(item, dict):
+            continue
+        if all(item.get(key) == expected_value for key, expected_value in expected_trace.items()):
+            return True
+    return False
+
+
 def run_audio_sample_case(
     *,
     case: AudioSampleCase,
@@ -235,6 +320,7 @@ def run_audio_sample_case(
     output_root: Path,
     timeout_seconds: float,
     chunk_interval_ms: int,
+    expectation: dict | None = None,
     session_fetcher: Callable[[str, int, str, float], dict] = fetch_agent_session_snapshot,
     executor: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> AudioSampleExecutionResult:
@@ -286,7 +372,12 @@ def run_audio_sample_case(
         started_at_ms=started_at_ms,
         finished_at_ms=finished_at_ms,
         duration_ms=finished_at_ms - started_at_ms,
+        expectations=dict(expectation or {}),
     )
+    if expectation:
+        result.assertion_failures = evaluate_expectations(result=result, expectation=expectation)
+        result.assertions_ok = not result.assertion_failures
+        result.ok = result.ok and result.assertions_ok
     write_result_json(result_path, result)
     return result
 
@@ -303,6 +394,7 @@ def run_audio_sample_batch(
     timeout_seconds: float = 45.0,
     chunk_interval_ms: int = 20,
     fail_fast: bool = False,
+    expectations: dict[str, dict] | None = None,
     session_fetcher: Callable[[str, int, str, float], dict] = fetch_agent_session_snapshot,
     executor: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> AudioSampleBatchSummary:
@@ -322,6 +414,7 @@ def run_audio_sample_batch(
             output_root=output_root,
             timeout_seconds=timeout_seconds,
             chunk_interval_ms=chunk_interval_ms,
+            expectation=merge_expectation(expectations, case.sample_name),
             session_fetcher=session_fetcher,
             executor=executor,
         )
@@ -361,9 +454,12 @@ def print_summary(summary: AudioSampleBatchSummary) -> None:
         status = "OK" if result.ok else "FAIL"
         print(
             f"[{status}] sample={result.sample_name} "
+            f"assertions_ok={result.assertions_ok} "
             f"reply={result.reply_text or '<empty>'} "
             f"result_json={result.result_json_path}"
         )
+        for failure in result.assertion_failures:
+            print(f"  assertion_failure: {failure}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -385,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout_seconds=args.timeout_seconds,
         chunk_interval_ms=args.chunk_interval_ms,
         fail_fast=args.fail_fast,
+        expectations=load_expectations(args.expectations),
     )
     print_summary(summary)
     return 0 if summary.failure_count == 0 else 1

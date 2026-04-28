@@ -26,6 +26,8 @@ from openaiglasses import (
     OpenAIGlassesSDK,
     PhoneTaskContext,
     SensorReading,
+    SkillDocument,
+    SkillManifest,
     build_agent_facade_from_sdk,
 )
 from agent_core.tools.base import AgentToolContext
@@ -106,6 +108,70 @@ def test_device_group_runtime_hides_binding_details() -> None:
     assert context.require_glass().device_id == "glass_001"
     assert context.require_phone().device_id == "phone_001"
     assert {item.role for item in context.query_devices()} == {"glass", "phone"}
+
+
+def test_device_group_runtime_builds_account_level_snapshot() -> None:
+    """测试目标：验证 SDK 设备组运行时可以按账号组织多设备。
+
+    测试方法：
+    1. 在同一账号下注册一副眼镜和一台手机。
+    2. 绑定两个设备。
+    3. 读取设备组运行态快照中的账号索引。
+
+    预期结果：
+    1. 账号快照包含两个设备和一个设备组。
+    2. 账号快照记录眼镜与手机绑定关系。
+    3. 业务代码可以通过 `query_account_devices` 读取账号下所有设备。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass", account_id="acct_001", user_id="user_001")
+    runtime.register_device(device_id="phone_001", role="phone", account_id="acct_001", user_id="user_001")
+
+    group_id = runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
+    snapshot = runtime.build_snapshot()
+
+    account = snapshot["accounts"][0]
+    assert account["account_id"] == "acct_001"
+    assert account["user_id"] == "user_001"
+    assert account["device_ids"] == ["glass_001", "phone_001"]
+    assert account["group_ids"] == [group_id]
+    assert account["online_device_count"] == 2
+    assert account["bindings"] == [
+        {
+            "group_id": group_id,
+            "glass_device_id": "glass_001",
+            "phone_device_id": "phone_001",
+        }
+    ]
+    assert [item.device_id for item in runtime.query_account_devices("acct_001")] == ["glass_001", "phone_001"]
+
+
+def test_device_group_runtime_rejects_cross_account_binding() -> None:
+    """测试目标：验证 SDK 不允许跨账号绑定眼镜和手机。
+
+    测试方法：
+    1. 分别在两个账号下注册眼镜和手机。
+    2. 尝试绑定这两个设备。
+
+    预期结果：
+    1. 绑定被拒绝。
+    2. 两个设备仍停留在各自账号和设备组内。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass", account_id="acct_a")
+    runtime.register_device(device_id="phone_001", role="phone", account_id="acct_b")
+
+    with pytest.raises(RuntimeError, match="设备账号不一致"):
+        runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
+
+    snapshot = runtime.build_snapshot()
+    accounts = {item["account_id"]: item for item in snapshot["accounts"]}
+    assert accounts["acct_a"]["device_ids"] == ["glass_001"]
+    assert accounts["acct_b"]["device_ids"] == ["phone_001"]
 
 
 def test_device_group_context_can_call_registered_mcp_adapter() -> None:
@@ -377,6 +443,116 @@ def test_phone_runtime_can_read_registered_sensor_provider() -> None:
     assert reading.payload["heading_degrees"] == 87
 
 
+def test_phone_runtime_limits_vision_frames_by_interval() -> None:
+    """测试目标：验证手机视觉运行时可以按最小帧间隔限制任务处理频率。
+
+    测试方法：
+    1. 注册一个记录帧序号的手机任务。
+    2. 启动任务时传入 `vision_policy.min_frame_interval_ms`。
+    3. 连续输入三帧，其中第二帧时间间隔不足。
+
+    预期结果：
+    1. 第一帧和第三帧被任务处理。
+    2. 第二帧被 SDK 资源策略丢弃。
+    3. 任务快照中记录 `vision.task.overloaded` 资源事件。
+    """
+
+    class CountingVisionTask(BasePhoneTask):
+        task_type = "counting_vision_task"
+
+        def on_start(self, context: PhoneTaskContext) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context: PhoneTaskContext, frame) -> None:
+            context.emit_result({"seq": frame["seq"]})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(CountingVisionTask())
+    snapshot = sdk.phone_runtime.start_task(
+        task_type="counting_vision_task",
+        params={
+            "stream_id": "stream_cam_001",
+            "vision_policy": {"min_frame_interval_ms": 1000},
+        },
+    )
+
+    first = sdk.phone_runtime.process_frame(
+        frame={"seq": 1},
+        stream_id="stream_cam_001",
+        now_ms=1000,
+    )[0]
+    second = sdk.phone_runtime.process_frame(
+        frame={"seq": 2},
+        stream_id="stream_cam_001",
+        now_ms=1500,
+    )[0]
+    third = sdk.phone_runtime.process_frame(
+        frame={"seq": 3},
+        stream_id="stream_cam_001",
+        now_ms=2200,
+    )[0]
+
+    assert snapshot.vision_policy["min_frame_interval_ms"] == 1000
+    assert [item["seq"] for item in third.results] == [1, 3]
+    assert first.frames_processed == 1
+    assert second.frames_processed == 1
+    assert second.frames_dropped == 1
+    assert second.resource_events[-1]["event_name"] == "vision.task.overloaded"
+    assert second.resource_events[-1]["reason"] == "frame_rate_limited"
+    assert third.frames_processed == 2
+
+
+def test_phone_runtime_records_vision_overload_when_max_frames_reached() -> None:
+    """测试目标：验证手机视觉运行时可以在任务达到最大处理帧数后记录过载。
+
+    测试方法：
+    1. 注册一个简单手机任务。
+    2. 启动任务时配置 `vision_policy.max_frames=1`。
+    3. 连续向同一路视频流输入两帧。
+
+    预期结果：
+    1. 第一帧被处理。
+    2. 第二帧被 SDK 丢弃并记录 `max_frames_reached`。
+    3. 业务结果中不会出现第二帧，避免业务任务自行处理资源限制。
+    """
+
+    class MaxFrameVisionTask(BasePhoneTask):
+        task_type = "max_frame_vision_task"
+
+        def on_start(self, context: PhoneTaskContext) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context: PhoneTaskContext, frame) -> None:
+            context.emit_result({"seq": frame["seq"]})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(MaxFrameVisionTask())
+    sdk.phone_runtime.start_task(
+        task_type="max_frame_vision_task",
+        params={
+            "stream_id": "stream_cam_002",
+            "vision_policy": {"max_frames": 1},
+        },
+    )
+
+    first = sdk.phone_runtime.process_frame(
+        frame={"seq": 1},
+        stream_id="stream_cam_002",
+        now_ms=1000,
+    )[0]
+    second = sdk.phone_runtime.process_frame(
+        frame={"seq": 2},
+        stream_id="stream_cam_002",
+        now_ms=2000,
+    )[0]
+
+    assert [item["seq"] for item in first.results] == [1]
+    assert [item["seq"] for item in second.results] == [1]
+    assert second.frames_processed == 1
+    assert second.frames_dropped == 1
+    assert second.resource_events[-1]["reason"] == "max_frames_reached"
+
+
 def test_hybrid_task_gateway_can_run_sdk_only_task() -> None:
     """测试目标：验证混合任务网关可以承接 backend-task-core 未注册的 SDK 任务。
 
@@ -633,6 +809,100 @@ def test_sdk_task_runtime_can_save_and_load_snapshot_file(tmp_path) -> None:
     assert latest.events[-1]["event_name"] == "task.restored"
 
 
+def test_sdk_task_runtime_auto_persists_and_deduplicates_events(tmp_path) -> None:
+    """测试目标：验证 SDK 任务运行时具备自动持久化和事件幂等能力。
+
+    测试方法：
+    1. 启用文件持久化后创建一个等待事件的任务。
+    2. 使用相同 `event_id` 连续派发两次外部事件。
+    3. 读取持久化文件并检查事件日志。
+
+    预期结果：
+    1. 创建任务和事件派发都会自动写入持久化文件。
+    2. 相同 `event_id` 的事件只被处理一次。
+    3. 文件采用带版本和保存时间的任务存储结构。
+    """
+
+    class IdempotentTask(BaseTask):
+        task_type = "sdk_idempotent_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running", {"count": 0})
+
+        def on_event(self, context, event) -> None:
+            context.update({"count": int(context.data.get("count") or 0) + 1})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(IdempotentTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    store_file = tmp_path / "task-store.json"
+    sdk.task_runtime.enable_persistence(store_file)
+
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_idempotent_task",
+        session_id="sess_idem_001",
+        device_id="glass_001",
+        input_data={},
+    )
+    first = sdk.task_runtime.dispatch_event(
+        task_id=created.task_id,
+        event_name="phone.demo.tick",
+        payload={"event_id": "evt_tick_001"},
+        source="phone",
+    )
+    second = sdk.task_runtime.dispatch_event(
+        task_id=created.task_id,
+        event_name="phone.demo.tick",
+        payload={"event_id": "evt_tick_001"},
+        source="phone",
+    )
+
+    payload = json.loads(store_file.read_text(encoding="utf-8"))
+    assert payload["version"] == "sdk-task-store-v1"
+    assert payload["tasks"][0]["task_id"] == created.task_id
+    assert first.data["count"] == 1
+    assert second.data["count"] == 1
+    assert [event["event_id"] for event in second.events].count("evt_tick_001") == 1
+
+
+def test_sdk_task_runtime_can_prune_terminal_tasks_from_persistence(tmp_path) -> None:
+    """测试目标：验证终态任务可按保留期清理并同步持久化文件。
+
+    测试方法：
+    1. 创建一个立即完成的任务并启用持久化。
+    2. 调用 `prune_tasks(retain_terminal_ms=0)`。
+    3. 读取持久化文件。
+
+    预期结果：
+    1. 已完成任务被移除。
+    2. 持久化文件中的任务列表同步变为空。
+    """
+
+    class CompletedTask(BaseTask):
+        task_type = "sdk_completed_task"
+
+        def on_start(self, context) -> None:
+            context.complete({"ok": True})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(CompletedTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    store_file = tmp_path / "task-store.json"
+    sdk.task_runtime.enable_persistence(store_file)
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_completed_task",
+        session_id="sess_prune_001",
+        device_id="glass_001",
+        input_data={},
+    )
+
+    removed = sdk.task_runtime.prune_tasks(retain_terminal_ms=0, now_ms=created.completed_at_ms or 0)
+
+    assert removed == [created.task_id]
+    payload = json.loads(store_file.read_text(encoding="utf-8"))
+    assert payload["tasks"] == []
+
+
 def test_phone_runtime_can_fanout_frame_to_matching_active_tasks() -> None:
     """测试目标：验证手机运行时可把同一帧分发给多个匹配的活跃任务。
 
@@ -777,6 +1047,43 @@ def test_build_agent_facade_from_sdk_registers_sdk_tools() -> None:
     assert result.ok is True
     assert result.data["target_object"] == "水杯"
     assert result.data["task_id"].startswith("task_")
+
+
+def test_openai_glasses_sdk_registers_skill_runtime() -> None:
+    """测试目标：验证 OpenAIGlassesSDK 可注册 Skill 并注入 AgentFacade。
+
+    测试方法：
+    1. 创建 SDK 并注册一个 Skill 文档。
+    2. 基于 SDK 构建 `AgentFacade`。
+    3. 读取 facade 内部 Skill Runtime 快照和 `read_skill` 工具。
+
+    预期结果：
+    1. Skill 名称进入运行时快照。
+    2. `read_skill` 工具被注册到 agent-core 工具表。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_skill(
+        SkillDocument(
+            manifest=SkillManifest(
+                name="navigation_guide",
+                version="1.0.0",
+                description="导航引导 Skill",
+                allowed_tools=["capture_photo"],
+            ),
+            content="根据导航任务上下文输出下一步提示。",
+        )
+    )
+
+    facade = build_agent_facade_from_sdk(
+        sdk=sdk,
+        settings=ServerSettings(),
+    )
+
+    skill_runtime = facade.get_skill_runtime()
+    assert skill_runtime is sdk.skill_runtime
+    assert skill_runtime.build_snapshot()["registered_skill_names"] == ["navigation_guide"]
+    assert facade.get_tool_registry().get("read_skill") is not None
 
 
 def test_blind_server_handle_can_build_real_runtime() -> None:

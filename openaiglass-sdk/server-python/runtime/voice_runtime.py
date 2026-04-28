@@ -123,6 +123,9 @@ class PlaybackStreamContext:
     channels: int
     queue: queue.Queue[bytes | None] = field(default_factory=lambda: queue.Queue(maxsize=PLAYBACK_QUEUE_MAX))
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    first_text_delta_at_ms: int | None = None
+    first_audio_chunk_at_ms: int | None = None
+    first_play_request_at_ms: int | None = None
     play_requested: bool = False
     started: bool = False
     completed: bool = False
@@ -1199,19 +1202,47 @@ class VoiceRuntime:
     def build_runtime_snapshot(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             controllers = list(self._controllers.values())
+        notification_snapshot = self._notification_coordinator.build_snapshot()
         result: dict[str, dict[str, Any]] = {}
         for controller in controllers:
+            current_playback = controller.current_playback
             result[controller.device_id] = {
                 "session_id": controller.session_id,
                 "state": controller.state,
                 "active_segment_id": controller.current_segment.segment_id if controller.current_segment else None,
-                "reply_stream_id": controller.current_playback.stream_id if controller.current_playback else None,
+                "reply_stream_id": current_playback.stream_id if current_playback else None,
+                "reply_first_text_delta_at_ms": current_playback.first_text_delta_at_ms if current_playback else None,
+                "reply_first_audio_chunk_at_ms": current_playback.first_audio_chunk_at_ms if current_playback else None,
+                "reply_first_play_request_at_ms": current_playback.first_play_request_at_ms if current_playback else None,
+                "reply_text_to_first_audio_ms": self._latency_ms(
+                    start=current_playback.first_text_delta_at_ms if current_playback else None,
+                    end=current_playback.first_audio_chunk_at_ms if current_playback else None,
+                ),
+                "reply_audio_to_play_request_ms": self._latency_ms(
+                    start=current_playback.first_audio_chunk_at_ms if current_playback else None,
+                    end=current_playback.first_play_request_at_ms if current_playback else None,
+                ),
                 "audio_connection_online": controller.audio_connection_peer is not None,
                 "last_playback_stream_id": controller.last_playback_stream_id,
                 "last_playback_state": controller.last_playback_state,
                 "last_playback_reason": controller.last_playback_reason,
+                "active_notification": notification_snapshot["active_requests"].get(controller.device_id),
+                "pending_notifications": notification_snapshot["pending_requests"].get(controller.device_id, []),
+                "recent_notification_decisions": [
+                    decision
+                    for decision in notification_snapshot["recent_decisions"]
+                    if decision.get("device_id") == controller.device_id
+                ],
             }
         return result
+
+    @staticmethod
+    def _latency_ms(*, start: int | None, end: int | None) -> int | None:
+        """计算两个毫秒时间戳之间的延迟。"""
+
+        if start is None or end is None:
+            return None
+        return max(0, end - start)
 
     @property
     def agent_facade(self) -> AgentFacade:
@@ -1321,6 +1352,7 @@ class VoiceRuntime:
                         ),
                     )
                 assert final_tts_session is not None
+                self._mark_first_text_delta(final_synthesis_context.playback)
                 final_tts_session.push_text(text_delta)
 
             agent_result = self._agent_facade.handle_turn(
@@ -1566,6 +1598,8 @@ class VoiceRuntime:
                     "task_type": request.payload.get("task_type"),
                     "task_state": request.payload.get("task_state"),
                     "priority": request.priority,
+                    "interrupt_policy": request.interrupt_policy,
+                    "resume_policy": request.resume_policy,
                 },
             )
             self._synthesize_text_into_context(
@@ -1674,6 +1708,7 @@ class VoiceRuntime:
                     "stream_id": interrupt_stream_id,
                     "reason": "higher_priority_notification",
                     "request_id": request.request_id,
+                    "resume_policy": request.resume_policy,
                 },
             )
         try:
@@ -1706,9 +1741,22 @@ class VoiceRuntime:
                 chunk=chunk,
             ),
         )
+        self._mark_first_text_delta(context.playback)
         tts_session.push_text(text)
         tts_session.finish()
         self._finalize_synthesis_context(device_id=device_id, session_id=session_id, context=context)
+
+    @staticmethod
+    def _now_ms() -> int:
+        """返回当前毫秒时间戳。"""
+
+        return int(time.time() * 1000)
+
+    def _mark_first_text_delta(self, playback: PlaybackStreamContext) -> None:
+        """记录当前播放流收到首个文本增量的时间。"""
+
+        if playback.first_text_delta_at_ms is None:
+            playback.first_text_delta_at_ms = self._now_ms()
 
     def _open_reply_synthesis_context(self, *, device_id: str, session_id: str) -> ReplySynthesisContext:
         """创建一条新的回复播放流上下文。"""
@@ -1750,6 +1798,8 @@ class VoiceRuntime:
                 )
             if controller.current_playback is playback and not playback.play_requested and force:
                 playback.play_requested = True
+                if playback.first_play_request_at_ms is None:
+                    playback.first_play_request_at_ms = self._now_ms()
                 should_send = True
 
         if should_send:
@@ -1785,6 +1835,8 @@ class VoiceRuntime:
         pcm_chunk = context.resampler.push(chunk.audio_pcm_bytes, final=False)
         if not pcm_chunk:
             return
+        if context.playback.first_audio_chunk_at_ms is None:
+            context.playback.first_audio_chunk_at_ms = self._now_ms()
         self._enqueue_playback_chunk(context.playback, pcm_chunk)
         context.output_pcm.extend(pcm_chunk)
         self._request_playback_start(

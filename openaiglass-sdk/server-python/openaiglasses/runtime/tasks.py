@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -79,6 +80,43 @@ class TaskRuntimeSnapshot:
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
+class FileTaskPersistenceStore:
+    """文件型任务持久化存储。
+
+    主要功能：
+    1. 把任务快照保存为单个 JSON 文件。
+    2. 使用临时文件加原子替换，避免写入中断留下半截 JSON。
+    3. 为单机开发、回放和轻量部署提供生产化前置形态。
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def save(self, snapshots: list[dict[str, Any]]) -> None:
+        """保存任务快照。"""
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": "sdk-task-store-v1",
+            "saved_at_ms": _now_ms(),
+            "tasks": snapshots,
+        }
+        tmp_path = self.path.with_name(f"{self.path.name}.tmp-{uuid.uuid4().hex[:8]}")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, self.path)
+
+    def load(self) -> list[dict[str, Any]]:
+        """读取任务快照。"""
+
+        if not self.path.exists():
+            return []
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        tasks = payload.get("tasks")
+        if not isinstance(tasks, list):
+            raise RuntimeError("任务持久化文件缺少 tasks 数组")
+        return [dict(item) for item in tasks if isinstance(item, dict)]
+
+
 @dataclass(slots=True)
 class _ManagedTaskRecord:
     """运行时内部任务记录。"""
@@ -126,13 +164,14 @@ class _ManagedTaskRecord:
         event_name: str,
         source: str = "sdk",
         payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
     ) -> None:
         """追加任务事件日志并刷新更新时间。"""
 
         self.updated_at_ms = _now_ms()
         self.events.append(
             TaskRuntimeEventLog(
-                event_id=f"sdk_task_evt_{uuid.uuid4().hex[:12]}",
+                event_id=event_id or f"sdk_task_evt_{uuid.uuid4().hex[:12]}",
                 event_name=event_name,
                 state=self.context.state,
                 source=source,
@@ -159,10 +198,17 @@ class TaskRuntimeManager:
     3. 让示例能力和后续开发者能力不直接依赖旧的后台任务中心实现。
     """
 
-    def __init__(self, *, registry: CapabilityRegistry, device_groups: Any) -> None:
+    def __init__(
+        self,
+        *,
+        registry: CapabilityRegistry,
+        device_groups: Any,
+        persistence_store: FileTaskPersistenceStore | None = None,
+    ) -> None:
         self._registry = registry
         self._device_groups = device_groups
         self._records: dict[str, _ManagedTaskRecord] = {}
+        self._persistence_store = persistence_store
 
     def bind_device_groups(self, device_groups: Any) -> None:
         """重新绑定设备组运行时。"""
@@ -235,7 +281,9 @@ class TaskRuntimeManager:
             }
             record.completed_at_ms = _now_ms()
             record.append_event(event_name="task.failed", payload=dict(record.error))
-        return record.to_snapshot()
+        snapshot = record.to_snapshot()
+        self._persist_if_configured()
+        return snapshot
 
     def query_task(self, task_id: str) -> TaskRuntimeSnapshot:
         """查询任务快照。"""
@@ -250,7 +298,9 @@ class TaskRuntimeManager:
         record = self._require_record(task_id)
         self._expire_if_needed(record)
         if self._is_terminal(record.context.state):
-            return record.to_snapshot()
+            snapshot = record.to_snapshot()
+            self._persist_if_configured()
+            return snapshot
         task = self._registry.get_task(record.task_type)
         if task is None:
             raise RuntimeError(f"未注册任务类型: {record.task_type}")
@@ -268,7 +318,9 @@ class TaskRuntimeManager:
             }
             record.completed_at_ms = _now_ms()
             record.append_event(event_name="task.failed", payload=dict(record.error))
-        return record.to_snapshot()
+        snapshot = record.to_snapshot()
+        self._persist_if_configured()
+        return snapshot
 
     def dispatch_event(
         self,
@@ -277,18 +329,25 @@ class TaskRuntimeManager:
         event_name: str,
         payload: dict[str, Any] | None = None,
         source: str = "system",
+        event_id: str | None = None,
     ) -> TaskRuntimeSnapshot:
         """向任务派发一个结构化事件。"""
 
         record = self._require_record(task_id)
         self._expire_if_needed(record)
+        resolved_event_id = event_id or str((payload or {}).get("event_id") or (payload or {}).get("idempotency_key") or "")
+        if resolved_event_id and self._has_event_id(record, resolved_event_id):
+            return record.to_snapshot()
         if self._is_terminal(record.context.state):
             record.append_event(
                 event_name="task.event.ignored",
                 source=source,
                 payload={"event_name": event_name, "payload": dict(payload or {})},
+                event_id=resolved_event_id or None,
             )
-            return record.to_snapshot()
+            snapshot = record.to_snapshot()
+            self._persist_if_configured()
+            return snapshot
         task = self._registry.get_task(record.task_type)
         if task is None:
             raise RuntimeError(f"未注册任务类型: {record.task_type}")
@@ -301,6 +360,7 @@ class TaskRuntimeManager:
             event_name=event_name,
             source=source,
             payload=dict(payload or {}),
+            event_id=resolved_event_id or None,
         )
         try:
             task.on_event(record.context, event)
@@ -313,7 +373,9 @@ class TaskRuntimeManager:
             }
             record.completed_at_ms = _now_ms()
             record.append_event(event_name="task.failed", payload=dict(record.error))
-        return record.to_snapshot()
+        snapshot = record.to_snapshot()
+        self._persist_if_configured()
+        return snapshot
 
     def list_tasks(self) -> list[TaskRuntimeSnapshot]:
         """列出当前全部任务快照。"""
@@ -352,6 +414,30 @@ class TaskRuntimeManager:
             encoding="utf-8",
         )
         return snapshots
+
+    def enable_persistence(
+        self,
+        path: str | Path,
+        *,
+        restore: bool = False,
+    ) -> list[TaskRuntimeSnapshot]:
+        """启用文件持久化。
+
+        参数：
+        1. `path`：任务持久化文件路径。
+        2. `restore`：是否立即从文件恢复已有任务。
+
+        返回值：
+        1. `restore=True` 时返回恢复任务列表，否则返回空列表。
+        """
+
+        self._persistence_store = FileTaskPersistenceStore(path)
+        if not restore:
+            self._persist_if_configured()
+            return []
+        restored = self.restore_snapshots(self._persistence_store.load())
+        self._persist_if_configured()
+        return restored
 
     def load_snapshots(self, path: str | Path) -> list[TaskRuntimeSnapshot]:
         """从 JSON 文件加载任务快照并恢复运行时记录。
@@ -431,7 +517,35 @@ class TaskRuntimeManager:
             record.append_event(event_name="task.restored", source="restore", payload={"state": snapshot.state})
             self._records[record.task_id] = record
             restored.append(record.to_snapshot())
+        self._persist_if_configured()
         return restored
+
+    def prune_tasks(self, *, retain_terminal_ms: int, now_ms: int | None = None) -> list[str]:
+        """清理已结束且超过保留期的任务。
+
+        参数：
+        1. `retain_terminal_ms`：终态任务保留时长。
+        2. `now_ms`：测试注入的当前时间。
+
+        返回值：
+        1. 被清理的任务编号列表。
+        """
+
+        if retain_terminal_ms < 0:
+            raise RuntimeError("retain_terminal_ms 不能小于 0")
+        current = now_ms if now_ms is not None else _now_ms()
+        removed: list[str] = []
+        for task_id, record in list(self._records.items()):
+            if not self._is_terminal(record.context.state):
+                continue
+            completed_at_ms = record.completed_at_ms or record.updated_at_ms
+            if current - completed_at_ms < retain_terminal_ms:
+                continue
+            self._records.pop(task_id, None)
+            removed.append(task_id)
+        if removed:
+            self._persist_if_configured()
+        return removed
 
     def _require_record(self, task_id: str) -> _ManagedTaskRecord:
         """读取内部任务记录。"""
@@ -493,6 +607,19 @@ class TaskRuntimeManager:
         if record.context.state == "failed":
             record.completed_at_ms = _now_ms()
             record.append_event(event_name="task.failed", payload=dict(record.error or {}))
+
+    @staticmethod
+    def _has_event_id(record: _ManagedTaskRecord, event_id: str) -> bool:
+        """判断事件编号是否已处理过。"""
+
+        return any(event.event_id == event_id for event in record.events)
+
+    def _persist_if_configured(self) -> None:
+        """如果配置了持久化存储，则立即保存当前快照。"""
+
+        if self._persistence_store is None:
+            return
+        self._persistence_store.save(self.export_snapshots())
 
     @staticmethod
     def _coerce_snapshot(item: dict[str, Any] | TaskRuntimeSnapshot) -> TaskRuntimeSnapshot:

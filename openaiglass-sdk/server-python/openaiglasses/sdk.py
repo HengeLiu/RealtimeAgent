@@ -12,6 +12,7 @@ from openaiglasses.runtime import DeviceGroupRuntime, TaskRuntimeManager
 if TYPE_CHECKING:
     from agent_core import AgentFacade
     from agent_core.mcp import BaseMcpAdapter
+    from agent_core.skills import SkillDocument, SkillManifest
     from api.http_server import ServerHandle
     from infra.config import ServerSettings
 
@@ -38,6 +39,7 @@ class OpenAIGlassesSDK:
     mcp_adapters: list["BaseMcpAdapter"] = field(default_factory=list)
     task_runtime: TaskRuntimeManager = field(init=False)
     phone_runtime: PhoneRuntime = field(init=False)
+    skill_runtime: object = field(init=False)
     _mcp_registry: object = field(init=False, repr=False)
     _mcp_gateway: object = field(init=False, repr=False)
 
@@ -45,9 +47,11 @@ class OpenAIGlassesSDK:
         """补齐运行时之间的引用关系。"""
 
         from agent_core.mcp import McpGateway, McpRegistry
+        from agent_core.skills import SkillRuntime
 
         self._mcp_registry = McpRegistry()
         self._mcp_gateway = McpGateway(self._mcp_registry)
+        self.skill_runtime = SkillRuntime()
         self.task_runtime = TaskRuntimeManager(
             registry=self.registry,
             device_groups=self.device_groups,
@@ -105,6 +109,21 @@ class OpenAIGlassesSDK:
             raise ValueError(f"MCP Adapter 重复注册: {adapter_name}")
         self._mcp_registry.register_adapter(adapter)
         self.mcp_adapters.append(adapter)
+
+    def register_skill(self, document: "SkillDocument") -> None:
+        """注册 Skill 文档。
+
+        功能：
+        1. 让业务项目把一组能力说明、工具白名单和运行约束注入 SDK。
+        2. 后续 Agent 运行时可通过 `read_skill` 读取正文，并按 active Skill 过滤工具。
+        """
+
+        self.skill_runtime.register(document)  # type: ignore[attr-defined]
+
+    def register_skill_manifest(self, manifest: "SkillManifest", content: str = "") -> None:
+        """基于 manifest 快速注册 Skill。"""
+
+        self.skill_runtime.register_manifest(manifest, content=content)  # type: ignore[attr-defined]
 
     def get_mcp_registry(self):
         """返回 SDK 统一 MCP 注册表。"""

@@ -720,6 +720,7 @@ def build_agent_facade_from_sdk(
         task_gateway=hybrid_task_gateway,
         mcp_registry=sdk.get_mcp_registry(),
         mcp_gateway=sdk.get_mcp_gateway(),
+        skill_runtime=sdk.skill_runtime,
     )
     tool_gateway = ToolGateway(tool_registry)
     tool_registry.bind_gateway(tool_gateway)
@@ -738,6 +739,7 @@ def build_agent_facade_from_sdk(
         session_store=session_store,
         tool_registry=tool_registry,
         tool_gateway=tool_gateway,
+        skill_runtime=sdk.skill_runtime,
     )
     sdk.device_groups.bind_mcp_gateway(
         sdk.get_mcp_gateway(),

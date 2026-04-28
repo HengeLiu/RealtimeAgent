@@ -28,7 +28,32 @@ uv run openaiglass.config.sync --app-root openaiglass-for-blind
 
 这一步会把当前开发机的局域网地址、服务端端口、眼镜设备号、手机设备号和配对令牌同步到业务侧配置文件。换网络、换端口、换设备号后都重新执行一次。
 
-### 3. 启动服务端
+### 3. 配置眼镜 WiFi
+
+真实 ESP32 眼镜需要先写入可连接的 WiFi 名称和密码。编辑业务侧眼镜配置文件：
+
+```bash
+open openaiglass-for-blind/host/glass/config/local_build.env
+```
+
+至少确认下面两项是真实 WiFi：
+
+```bash
+GLASS_WIFI_PRIMARY_SSID="你的WiFi名称"
+GLASS_WIFI_PRIMARY_PASSWORD="你的WiFi密码"
+```
+
+如果配置文件不存在，先从模板复制：
+
+```bash
+cp openaiglass-for-blind/host/glass/config/local_build.env.example \
+  openaiglass-for-blind/host/glass/config/local_build.env
+```
+
+**注意眼镜和手机必须处于同一个局域网下，如果你的服务器是本地开发环境，同样要确保在同一局域网下。**
+`openaiglass.config.sync` 会同步服务端地址、设备号和配对令牌，但不会替你猜测真实 WiFi 密码。换 WiFi 后要重新修改这两项，再重新烧录眼镜端。
+
+### 4. 启动服务端
 
 ```bash
 uv run openaiglass.server.run \
@@ -38,7 +63,7 @@ uv run openaiglass.server.run \
 
 看到服务端启动后，另开一个终端继续下一步。
 
-### 4. 启动手机端
+### 5. 启动手机端
 
 有真实 iPhone 时，用 Xcode 运行业务侧手机 App：
 
@@ -61,7 +86,7 @@ uv run openaiglass.phone.mock \
   --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
 ```
 
-### 5. 启动眼镜端
+### 6. 启动眼镜端
 
 有真实 ESP32 眼镜时，连接眼镜 USB 串口后执行：
 
@@ -85,7 +110,7 @@ uv run openaiglass.glass.start \
 
 手机端和眼镜端都启动后，服务端应该能看到对应设备在线。
 
-### 6. 验证 SDK 和业务宿主
+### 7. 验证 SDK 和业务宿主
 
 ```bash
 uv run openaiglass.sdk.preflight \
@@ -104,7 +129,7 @@ curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/runtime/devices
 ```
 
-### 7. SDK 功能快速验证
+### 8. SDK 功能快速验证
 
 下面几条只用于确认设备开发环境和 SDK 主链路可用，不代表真正业务功能已经完成。
 
@@ -118,7 +143,7 @@ curl http://127.0.0.1:8765/api/runtime/devices
 
 如果服务端、手机端、眼镜端日志都能看到对应请求、工具调用或任务事件，说明 SDK 开发环境基本可用。以上测试未实现真正的业务功能，只用于设备开发环境可用性验证。
 
-### 8. 开始功能开发
+### 9. 开始功能开发
 
 新增能力优先复制一个现有样板：
 
@@ -146,9 +171,9 @@ curl http://127.0.0.1:8765/api/runtime/devices
 
 ## SDK 简要现状
 
-当前 SDK 已经能支撑功能团队继续开发：服务端可通过 `OpenAIGlassesSDK` 注册 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`BaseSensorProvider` 和 MCP Adapter；`DeviceGroupContext` 提供设备查询、抓拍、手机视频链路、手机任务、通知、MCP 和 SDK 托管任务等公开入口；CLI 提供配置同步、服务端启动、手机工程打开/构建、`phone-mock`、眼镜构建/回放、预检和包检查。
+当前 SDK 已经能支撑功能团队继续开发：服务端可通过 `OpenAIGlassesSDK` 注册 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`BaseSensorProvider`、MCP Adapter 和受控 Skill；`DeviceGroupContext` 提供设备查询、抓拍、手机视频链路、手机任务、通知、MCP 和 SDK 托管任务等公开入口；CLI 提供配置同步、服务端启动、手机工程打开/构建、`phone-mock`、眼镜构建/回放、预检和三端包检查。
 
-仍需 SDK 团队后续补齐的系统能力包括实时语音打断、普通回复端到端真流式、公网/NAT peer-link 治理、生产级任务持久化恢复、手机端模型资源仲裁、真实外部服务治理，以及 iOS/ESP32 发布级包化。详细判断见 [SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md)。
+当前版本已补齐普通文本流式 TTS、通知仲裁、账号级设备组织、最小 Skill Runtime、单机任务持久化、回放断言以及 iOS/ESP32 源码包清单。仍需 SDK 团队后续补齐的系统能力包括实时语音打断、公网/NAT peer-link 治理、分布式任务持久化、真 iOS 视觉资源池、真实外部服务治理，以及 iOS/ESP32 二进制或组件仓库发布。详细判断见 [SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md)。
 
 ## 功能开发现状
 
@@ -174,6 +199,7 @@ uv run openaiglass.server.run --app-module host.server.main --app-root openaigla
 uv run openaiglass.phone.mock --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
 uv run openaiglass.glass.start --runtime playback --config <glass-playback.json>
 uv run openaiglass.sdk.preflight --report openaiglass-for-blind/logs/sdk-preflight-current.json
+uv run openaiglass.sdk.package-check --repo-root .
 uv run python -m pytest openaiglass-sdk/tests -q
 ```
 

@@ -19,13 +19,17 @@ class SkillManifest:
     2. `version`：Skill 版本。
     3. `description`：给模型和开发者阅读的能力说明。
     4. `entrypoint`：能力入口或文档路径。
-    5. `metadata`：额外扩展信息。
+    5. `allowed_tools`：该 Skill 激活时允许模型调用的 Tool 名称。
+    6. `allowed_mcp_methods`：该 Skill 激活时允许模型调用的 MCP 方法名。
+    7. `metadata`：额外扩展信息。
     """
 
     name: str
     version: str = "0.1.0"
     description: str = ""
     entrypoint: str = ""
+    allowed_tools: list[str] = field(default_factory=list)
+    allowed_mcp_methods: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -55,3 +59,25 @@ class SkillSessionState:
     active_skill_names: list[str] = field(default_factory=list)
     context: dict[str, Any] = field(default_factory=dict)
 
+    def activate(self, skill_name: str) -> None:
+        """激活指定 Skill。
+
+        参数：
+        1. `skill_name`：Skill 名称。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        normalized = str(skill_name).strip()
+        if normalized and normalized not in self.active_skill_names:
+            self.active_skill_names.append(normalized)
+
+    def deactivate(self, skill_name: str) -> None:
+        """取消激活指定 Skill。"""
+
+        normalized = str(skill_name).strip()
+        self.active_skill_names = [item for item in self.active_skill_names if item != normalized]

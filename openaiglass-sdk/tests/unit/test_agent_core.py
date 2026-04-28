@@ -17,10 +17,11 @@ from agent_core.camera import CameraCaptureResult
 from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace, MessageContext
 from agent_core.context.assembler import ContextAssembler
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
+from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
-from infra.errors import ErrorCode, build_error
+from infra.errors import AppError, ErrorCode, build_error
 from openaiglasses import OpenAIGlassesSDK
 from openaiglasses.server import HybridTaskGateway
 
@@ -51,10 +52,11 @@ class FakeCameraGateway:
         )
 
 
-def build_tooling(device_state_reader=lambda: {}, camera_gateway=None, task_gateway=None):
+def build_tooling(device_state_reader=lambda: {}, camera_gateway=None, task_gateway=None, skill_runtime=None):
     registry = ToolRegistry(
         device_state_reader=device_state_reader,
         camera_gateway=camera_gateway,
+        skill_runtime=skill_runtime,
         task_gateway=task_gateway
         or HybridTaskGateway(
             base_gateway=InMemoryTaskGateway(),
@@ -694,6 +696,91 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertNotIn("资产", instructions)
         self.assertNotIn("请遵守以下规则", instructions)
 
+    def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:
+        """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。
+
+        测试方法：
+        1. 注册一个只允许 `capture_photo` 的 Skill。
+        2. 通过 `read_skill` 工具读取 Skill 文档。
+        3. 执行一轮 Agent，并检查 system prompt 与模型工具列表。
+
+        预期结果：
+        1. `read_skill` 会把 Skill 加入当前会话 active 状态。
+        2. system prompt 包含 active Skill 正文。
+        3. 模型可见工具只保留 `read_skill` 与 Skill 白名单中的工具。
+        """
+
+        skill_runtime = SkillRuntime()
+        skill_runtime.register(
+            SkillDocument(
+                manifest=SkillManifest(
+                    name="scene_inspection",
+                    version="1.0.0",
+                    description="看清用户眼前场景",
+                    allowed_tools=["capture_photo"],
+                ),
+                content="先拍照，再根据照片用一句话回答。",
+            )
+        )
+        registry, gateway = build_tooling(skill_runtime=skill_runtime)
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_skill_001",
+            turn_id="turn_read_skill_001",
+        )
+
+        read_result = registry.invoke(
+            name="read_skill",
+            context=context,
+            arguments={"skill_name": "scene_inspection"},
+        )
+
+        self.assertTrue(read_result.ok)
+        self.assertEqual(read_result.data["active_skill_names"], ["scene_inspection"])
+        with self.assertRaises(AppError) as blocked:
+            registry.invoke(
+                name="query_device_state",
+                context=context,
+                arguments={},
+            )
+        self.assertEqual(blocked.exception.code, ErrorCode.UNAUTHORIZED)
+
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+            skill_runtime=skill_runtime,
+        )
+        session = AgentSession(session_id="sess_skill_001", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_skill_001",
+            session_id="sess_skill_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="看一下前面有什么",
+        )
+
+        class _FakeRunResult:
+            def __init__(self) -> None:
+                self.final_output = "前面有一张桌子。"
+
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_sync", return_value=_FakeRunResult()) as mocked_run:
+                result = runner.run_turn(session=session, turn=turn)
+
+        agent = mocked_run.call_args.args[0]
+        tool_names = [
+            getattr(tool, "name", None) or getattr(tool, "_tool_name_override", "")
+            for tool in agent.kwargs["tools"]
+        ]
+        self.assertEqual(tool_names, ["capture_photo", "read_skill"])
+        self.assertIn("当前 active Skills", result.meta["model_request"]["instructions"])
+        self.assertIn("先拍照，再根据照片用一句话回答。", result.meta["model_request"]["instructions"])
+        self.assertEqual(result.meta["model_request"]["active_skills"], ["scene_inspection"])
+        self.assertEqual(result.meta["model_request"]["allowed_tool_names"], ["capture_photo", "read_skill"])
+
     def test_openai_runner_creates_event_loop_in_worker_thread(self) -> None:
         """测试目标：验证 OpenAIAgentLoopRunner 在工作线程中会自动补齐 event loop。
 
@@ -926,6 +1013,81 @@ class AgentCoreTestCase(unittest.TestCase):
 
         self.assertEqual(progress_messages, ["好的，你保持别动，我拍一张帮你看。"])
         self.assertEqual(result.reply_text, "我看到前方有一张桌子。")
+
+    def test_openai_runner_streams_plain_text_delta_to_callback(self) -> None:
+        """测试目标：验证普通文本回复会透传模型增量给上层流式 TTS。
+
+        测试方法：
+        1. 伪造 `Runner.run_streamed` 的 `raw_response_event` 文本增量事件。
+        2. 执行一轮普通问答，不触发工具调用。
+        3. 收集 `reply_text_delta_callback` 收到的文本片段。
+
+        预期结果：
+        1. 回调会收到普通文本增量。
+        2. 最终回复文本由增量拼接得到。
+        3. 这条路径不再等待 `final_output` 后才给 TTS 文本。
+        """
+
+        registry, gateway = build_tooling()
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_stream_text_001", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_stream_text_001",
+            session_id="sess_stream_text_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="你好",
+        )
+        delta_parts: list[str] = []
+
+        class _FakeStream:
+            def __init__(self, events) -> None:
+                self._events = iter(events)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._events)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        class _FakeRunResult:
+            final_output = "这段 final_output 不应覆盖已流出的文本"
+
+            def stream_events(self):
+                return _FakeStream(
+                    [
+                        types.SimpleNamespace(
+                            type="raw_response_event",
+                            data=types.SimpleNamespace(type="response.output_text.delta", delta="你好，"),
+                        ),
+                        types.SimpleNamespace(
+                            type="raw_response_event",
+                            data={"type": "response.output_text.delta", "delta": "我在。"},
+                        ),
+                    ]
+                )
+
+            def cancel(self):
+                return None
+
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_streamed", return_value=_FakeRunResult()):
+                result = runner.run_turn(
+                    session=session,
+                    turn=turn,
+                    reply_text_delta_callback=delta_parts.append,
+                )
+
+        self.assertEqual(delta_parts, ["你好，", "我在。"])
+        self.assertEqual(result.reply_text, "你好，我在。")
 
     def test_stream_image_followup_reply_uses_multimodal_request(self) -> None:
         """测试目标：验证拍照后主链路会把真实图片作为多模态输入发给模型。

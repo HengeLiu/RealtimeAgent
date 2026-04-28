@@ -195,6 +195,11 @@ class AgentFacade:
 
         return self._tool_registry
 
+    def get_skill_runtime(self):
+        """返回内部 Skill Runtime。"""
+
+        return self._tool_registry.get_skill_runtime()
+
     def get_session_store(self) -> AgentSessionStore:
         """返回内部会话存储。
 

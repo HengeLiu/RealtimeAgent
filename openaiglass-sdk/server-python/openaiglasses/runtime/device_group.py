@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent_core.context.models import CapabilityTrace
-from openaiglasses.models import DeviceEndpoint, DeviceGroup, DeviceRole
+from openaiglasses.models import DeviceAccount, DeviceEndpoint, DeviceGroup, DeviceRole
 from openaiglasses.models import CapabilityResult as SdkCapabilityResult
 
 
@@ -273,7 +273,9 @@ class DeviceGroupRuntime:
     mcp_settings: Any | None = None
     mcp_session_store: Any | None = None
     _groups: dict[str, DeviceGroup] = field(default_factory=dict)
+    _accounts: dict[str, DeviceAccount] = field(default_factory=dict)
     _device_to_group: dict[str, str] = field(default_factory=dict)
+    _device_to_account: dict[str, str] = field(default_factory=dict)
     _notifications: list[dict[str, Any]] = field(default_factory=list)
     _active_video_links: dict[str, dict[str, Any]] = field(default_factory=dict)
     _mcp_traces: list[CapabilityTrace] = field(default_factory=list)
@@ -439,6 +441,8 @@ class DeviceGroupRuntime:
         device_id: str,
         role: DeviceRole,
         group_id: str | None = None,
+        account_id: str | None = None,
+        user_id: str | None = None,
         capabilities: set[str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> DeviceEndpoint:
@@ -460,13 +464,33 @@ class DeviceGroupRuntime:
 
         if not device_id:
             raise ValueError("device_id 不能为空")
+        resolved_account_id = self._normalize_optional_id(account_id)
+        resolved_user_id = self._normalize_optional_id(user_id)
         resolved_group_id = group_id or self._device_to_group.get(device_id) or _new_id("group")
         group = self._groups.setdefault(resolved_group_id, DeviceGroup(group_id=resolved_group_id))
+        if resolved_account_id:
+            group.metadata["account_id"] = resolved_account_id
+            account = self._accounts.setdefault(
+                resolved_account_id,
+                DeviceAccount(account_id=resolved_account_id, user_id=resolved_user_id),
+            )
+            if resolved_user_id:
+                account.user_id = resolved_user_id
+            account.device_ids.add(device_id)
+            account.group_ids.add(resolved_group_id)
+            self._device_to_account[device_id] = resolved_account_id
+        else:
+            self._device_to_account.pop(device_id, None)
+        endpoint_metadata = dict(metadata or {})
+        if resolved_account_id:
+            endpoint_metadata["account_id"] = resolved_account_id
+        if resolved_user_id:
+            endpoint_metadata["user_id"] = resolved_user_id
         endpoint = DeviceEndpoint(
             device_id=device_id,
             role=role,
             capabilities=capabilities or set(),
-            metadata=metadata or {},
+            metadata=endpoint_metadata,
         )
         group.devices[device_id] = endpoint
         self._device_to_group[device_id] = resolved_group_id
@@ -492,6 +516,7 @@ class DeviceGroupRuntime:
             raise RuntimeError(f"眼镜设备未注册: {glass_device_id}")
         if not phone_group_id:
             raise RuntimeError(f"手机设备未注册: {phone_device_id}")
+        self._ensure_same_account(glass_device_id=glass_device_id, phone_device_id=phone_device_id)
         glass = self.require_device(glass_group_id, "glass")
         phone = self.require_device(phone_group_id, "phone")
         if glass.device_id != glass_device_id or phone.device_id != phone_device_id:
@@ -503,7 +528,51 @@ class DeviceGroupRuntime:
             for device_id, endpoint in source_group.devices.items():
                 target_group.devices[device_id] = endpoint
                 self._device_to_group[device_id] = glass_group_id
+                account_id = self._device_to_account.get(device_id)
+                if account_id:
+                    account = self._accounts.setdefault(account_id, DeviceAccount(account_id=account_id))
+                    account.group_ids.discard(phone_group_id)
+                    account.group_ids.add(glass_group_id)
+            account_id = self._resolve_pair_account_id(glass_device_id, phone_device_id)
+            if account_id:
+                target_group.metadata["account_id"] = account_id
+                self._assign_group_to_account(group_id=glass_group_id, account_id=account_id)
+        else:
+            account_id = self._resolve_pair_account_id(glass_device_id, phone_device_id)
+            if account_id:
+                self._groups[glass_group_id].metadata["account_id"] = account_id
+                self._assign_group_to_account(group_id=glass_group_id, account_id=account_id)
         return glass_group_id
+
+    def query_account_devices(self, account_id: str) -> list[DeviceEndpoint]:
+        """查询账号下的所有设备端点。
+
+        参数：
+        1. `account_id`：账号编号。
+
+        返回值：
+        1. 账号下设备端点列表，按设备编号排序。
+
+        异常情况：
+        1. 账号不存在时返回空列表。
+        """
+
+        account = self._accounts.get(account_id)
+        if account is None:
+            return []
+        devices: list[DeviceEndpoint] = []
+        for device_id in sorted(account.device_ids):
+            group_id = self._device_to_group.get(device_id)
+            group = self._groups.get(group_id or "")
+            endpoint = group.devices.get(device_id) if group else None
+            if endpoint is not None:
+                devices.append(endpoint)
+        return devices
+
+    def list_accounts(self) -> list[DeviceAccount]:
+        """列出 SDK 当前维护的账号索引。"""
+
+        return [self._accounts[key] for key in sorted(self._accounts)]
 
     def mark_device_offline(self, device_id: str) -> None:
         """标记设备离线。
@@ -557,6 +626,46 @@ class DeviceGroupRuntime:
             session_id=session_id,
             task_id=task_id,
         )
+
+    def _ensure_same_account(self, *, glass_device_id: str, phone_device_id: str) -> None:
+        """校验一组待绑定设备是否属于同一账号。
+
+        主要逻辑：
+        1. 双方都声明账号时必须一致。
+        2. 只有一方声明账号时允许绑定，并在绑定后由设备组元数据承载该账号。
+        """
+
+        glass_account_id = self._device_to_account.get(glass_device_id)
+        phone_account_id = self._device_to_account.get(phone_device_id)
+        if glass_account_id and phone_account_id and glass_account_id != phone_account_id:
+            raise RuntimeError(
+                f"设备账号不一致，不能绑定: glass_account_id={glass_account_id}, phone_account_id={phone_account_id}"
+            )
+
+    def _resolve_pair_account_id(self, glass_device_id: str, phone_device_id: str) -> str | None:
+        """解析绑定设备组应归属的账号编号。"""
+
+        return self._device_to_account.get(glass_device_id) or self._device_to_account.get(phone_device_id)
+
+    def _assign_group_to_account(self, *, group_id: str, account_id: str) -> None:
+        """把设备组内所有设备归入同一账号索引。"""
+
+        group = self._groups.get(group_id)
+        if group is None:
+            return
+        account = self._accounts.setdefault(account_id, DeviceAccount(account_id=account_id))
+        account.group_ids.add(group_id)
+        for device_id, endpoint in group.devices.items():
+            account.device_ids.add(device_id)
+            self._device_to_account[device_id] = account_id
+            endpoint.metadata["account_id"] = account_id
+
+    @staticmethod
+    def _normalize_optional_id(value: str | None) -> str | None:
+        """归一化可选编号字段。"""
+
+        text = str(value or "").strip()
+        return text or None
 
     def query_devices(self, group_id: str) -> list[DeviceEndpoint]:
         """查询设备组中的设备。"""
@@ -800,5 +909,45 @@ class DeviceGroupRuntime:
         return {
             "group_count": len(groups),
             "groups": groups,
+            "accounts": self._build_account_snapshot(),
             "notification_count": len(self._notifications),
         }
+
+    def _build_account_snapshot(self) -> list[dict[str, Any]]:
+        """构建账号级设备快照。"""
+
+        items: list[dict[str, Any]] = []
+        for account in self.list_accounts():
+            devices = self.query_account_devices(account.account_id)
+            bindings = []
+            for group_id in sorted(account.group_ids):
+                group = self._groups.get(group_id)
+                if group is None:
+                    continue
+                glass_ids = sorted(
+                    endpoint.device_id for endpoint in group.devices.values() if endpoint.role == "glass"
+                )
+                phone_ids = sorted(
+                    endpoint.device_id for endpoint in group.devices.values() if endpoint.role == "phone"
+                )
+                for glass_id in glass_ids:
+                    for phone_id in phone_ids:
+                        bindings.append(
+                            {
+                                "group_id": group_id,
+                                "glass_device_id": glass_id,
+                                "phone_device_id": phone_id,
+                            }
+                        )
+            items.append(
+                {
+                    "account_id": account.account_id,
+                    "user_id": account.user_id,
+                    "device_ids": sorted(account.device_ids),
+                    "group_ids": sorted(account.group_ids),
+                    "online_device_count": sum(1 for endpoint in devices if endpoint.online),
+                    "bindings": bindings,
+                    "metadata": dict(account.metadata),
+                }
+            )
+        return items

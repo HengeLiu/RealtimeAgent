@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from agent_core.context.models import AgentSession, AgentTurn, AgentTurnResult
 from agent_core.context.session_store import AgentSessionStore
+from agent_core.skills import SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
@@ -40,11 +41,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         session_store: AgentSessionStore,
         tool_registry: ToolRegistry,
         tool_gateway: ToolGateway,
+        skill_runtime: SkillRuntime | None = None,
     ) -> None:
         self._settings = settings
         self._session_store = session_store
         self._tool_registry = tool_registry
         self._tool_gateway = tool_gateway
+        self._skill_runtime = skill_runtime or tool_registry.get_skill_runtime()
         self._logger = get_logger("server.agent.runner")
 
     def run_turn(
@@ -120,11 +123,22 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 context=tool_context,
             )
 
-        instructions = self._build_instructions()
+        instructions = self._build_instructions(session_id=turn.session_id)
+        allowed_tool_names = (
+            self._skill_runtime.allowed_tool_names_for_session(session_id=turn.session_id)
+            if self._skill_runtime is not None
+            else None
+        )
         run_input = self._build_history_messages(session=session, turn=turn)
         model_request = {
             "model": self._settings.agent_model_name,
             "instructions": instructions,
+            "active_skills": (
+                self._skill_runtime.get_session_state(turn.session_id).active_skill_names
+                if self._skill_runtime is not None
+                else []
+            ),
+            "allowed_tool_names": sorted(allowed_tool_names) if allowed_tool_names is not None else None,
             "messages": [
                 {"role": "system", "content": instructions},
                 *run_input,
@@ -134,7 +148,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         agent = Agent(
             name="OpenAIGlassesAgent",
             instructions=instructions,
-            tools=self._tool_registry.list_sdk_tools(),
+            tools=self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names),
             model=self._settings.agent_model_name,
         )
         provider = MultiProvider(
@@ -272,10 +286,18 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         capture_call_id: str | None = None
         existing_image_asset_ids = self._collect_image_asset_ids(tool_context=tool_context, session=session)
         progress_sent = False
+        reply_text_parts: list[str] = []
 
         event_stream = run_result.stream_events()
         try:
             async for event in event_stream:
+                text_delta = self._extract_agent_stream_text_delta(event)
+                if text_delta:
+                    reply_text_parts.append(text_delta)
+                    if reply_text_delta_callback is not None:
+                        reply_text_delta_callback(text_delta)
+                    continue
+
                 if getattr(event, "type", "") != "run_item_stream_event":
                     continue
 
@@ -361,7 +383,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             if callable(aclose):
                 await aclose()
 
-        reply_text = self._extract_reply_text(run_result.final_output)
+        reply_text = "".join(reply_text_parts).strip() or self._extract_reply_text(run_result.final_output)
         if not reply_text:
             raise build_error(
                 ErrorCode.INTERNAL_ERROR,
@@ -578,6 +600,57 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             return "".join(parts)
         return ""
 
+    @classmethod
+    def _extract_agent_stream_text_delta(cls, event: object) -> str:
+        """从 Agents SDK 流式事件中提取普通文本增量。
+
+        主要逻辑：
+        1. 优先处理 `raw_response_event` 中的 `response.output_text.delta`。
+        2. 兼容 SDK 事件对象和字典两种结构。
+        3. 保留 Chat Completions 风格的 `choices[].delta.content` 兜底。
+
+        参数：
+        1. `event`：`Runner.run_streamed(...).stream_events()` 产出的事件。
+
+        返回值：
+        1. 本次事件中的文本增量；没有文本时返回空字符串。
+
+        异常情况：
+        1. 本函数不主动抛出异常，无法识别的事件会被忽略。
+        """
+
+        event_type = cls._read_event_value(event, "type")
+        if event_type == "raw_response_event":
+            data = cls._read_event_value(event, "data")
+            raw_type = str(cls._read_event_value(data, "type") or "")
+            if raw_type in {"response.output_text.delta", "response.refusal.delta"} or raw_type.endswith(
+                ".output_text.delta"
+            ):
+                delta = cls._read_event_value(data, "delta")
+                return delta if isinstance(delta, str) else ""
+            return cls._extract_stream_text_delta(data)
+
+        if event_type == "run_item_stream_event":
+            event_name = str(cls._read_event_value(event, "name") or "")
+            if event_name not in {"message_output_delta", "message_delta"}:
+                return ""
+            item = cls._read_event_value(event, "item")
+            delta = cls._read_event_value(item, "delta")
+            if isinstance(delta, str):
+                return delta
+            text = cls._read_event_value(item, "text")
+            return text if isinstance(text, str) else ""
+
+        return ""
+
+    @staticmethod
+    def _read_event_value(source: object, key: str) -> object:
+        """读取事件对象或字典中的字段。"""
+
+        if isinstance(source, dict):
+            return source.get(key)
+        return getattr(source, key, None)
+
     @staticmethod
     def _attach_capability_outputs(*, result: AgentTurnResult, context: AgentToolContext) -> AgentTurnResult:
         """把能力调用产生的引用对象挂到 turn result。"""
@@ -699,16 +772,22 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         )
         return messages
 
-    def _build_instructions(self) -> str:
+    def _build_instructions(self, session_id: str | None = None) -> str:
         """构造最小 Agent 指令。"""
 
-        return (
+        base = (
             f"{self._settings.voice_system_prompt}\n"
             "请使用简短、口语化、直接的中文回答。\n"
             "如果需要拍照再回答，可以先用一句很短的话安抚用户，然后立即调用拍照工具。\n"
             "必要时可以调用已提供的工具。\n"
             "不要输出代码块。\n"
         )
+        if self._skill_runtime is None or not session_id:
+            return base
+        fragment = self._skill_runtime.build_prompt_fragment(session_id=session_id)
+        if not fragment:
+            return base
+        return f"{base}\n{fragment}\n"
 
     @staticmethod
     def _build_image_followup_instructions() -> str:
