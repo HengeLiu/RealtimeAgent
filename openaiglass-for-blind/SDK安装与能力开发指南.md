@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v11`。本版本补齐任务持久化生产化的单机形态，支持文件型自动持久化、原子写入、事件幂等和终态任务清理；上一版本补齐最小 Skill Runtime。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v12`。本版本补齐回放测试断言能力，音频样例批量回归可读取 JSON 期望文件并断言回复文本、模型请求和能力调用轨迹；上一版本补齐任务持久化生产化单机形态。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -1488,7 +1488,46 @@ MP4 会由 `glass-playback` 在本机通过 `ffmpeg` 解成 JPEG 帧，再按真
 
 ### 10.7 如何判断回放结果
 
-当前不支持断言检查，也不支持批量测试。开发者需要根据 `glass-playback` 的 `actuators` 输出、服务端日志、真实 iOS 手机端日志和运行态接口自行判断结果。
+`sdk-v12` 起，真实音频样例批量回归支持声明式断言。开发者可以用 JSON 文件描述每条样例的期望回复片段、能力调用轨迹和模型请求片段。
+
+示例：
+
+```json
+{
+  "defaults": {
+    "model_request_contains": ["qwen3.6-plus"]
+  },
+  "cases": {
+    "你是谁呀": {
+      "reply_text_contains": ["乐鑫"],
+      "reply_text_not_contains": ["抱歉"],
+      "required_capability_traces": [
+        {"capability_name": "capture_photo", "status": "succeeded"}
+      ]
+    }
+  }
+}
+```
+
+运行：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind \
+uv run python -m devtools.audio_sample_batch_runner \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --expectations openaiglass-for-blind/testdata/audio-sample/expectations.json
+```
+
+每条样例的 `result.json` 会新增：
+
+| 字段 | 说明 |
+| --- | --- |
+| `assertions_ok` | 当前样例断言是否全部通过。 |
+| `assertion_failures` | 失败断言列表。 |
+| `expectations` | 当前样例实际使用的断言配置。 |
+
+当前断言能力先覆盖音频样例批量回归；`glass-playback` 的事件日志和执行器日志仍主要用于人工排障，后续会继续扩展到设备级配置内断言。
 
 重点看这些内容：
 
