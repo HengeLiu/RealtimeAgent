@@ -128,7 +128,7 @@ def create_http_server(settings: ServerSettings, runtime: ControlRuntime) -> App
             if path == "/ws/control":
                 handle_control_websocket(self, self.server.runtime)
                 return
-            if path == "/ws_audio":
+            if path in {"/ws_audio", "/ws_realtime_audio"}:
                 handle_audio_websocket(self, self.server.runtime, query)
                 return
             if path == "/stream.wav":

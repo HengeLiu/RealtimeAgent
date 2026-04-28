@@ -25,6 +25,7 @@ from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 from protocol.media import MediaFrame
 from runtime.notifications import NotificationCoordinator, NotificationRequest, NotificationSubmitResult
 from runtime.playback_arbiter import PlaybackArbiter, PlaybackIntent
+from runtime.realtime_voice import RealtimeModelAdapter, RealtimeVoiceRuntime
 from runtime.task_event_bridge import TaskEventBridge
 
 SERVER_SAMPLE_RATE_HZ = 16000
@@ -857,6 +858,7 @@ class VoiceRuntime:
         model_client: VoiceModelClient | None = None,
         asr_client: SpeechRecognitionClient | None = None,
         agent_facade: AgentFacade | None = None,
+        realtime_model_adapter: RealtimeModelAdapter | None = None,
     ) -> None:
         self._settings = settings
         self._send_control_message = send_control_message
@@ -880,6 +882,11 @@ class VoiceRuntime:
             interrupter=self._interrupt_notification_request,
         )
         self._playback_arbiter = PlaybackArbiter()
+        self._realtime_voice_runtime = RealtimeVoiceRuntime(
+            playback_arbiter=self._playback_arbiter,
+            send_control_message=self._send_control_message,
+            model_adapter=realtime_model_adapter,
+        )
 
     def open_session(self, *, device_id: str, device_type: str, session_id: str) -> None:
         with self._lock:
@@ -924,6 +931,48 @@ class VoiceRuntime:
                 "interrupt_policy": "forbid",
             },
         }
+
+    def build_realtime_open_payload(self) -> dict[str, Any]:
+        """生成全双工实时语音会话打开请求。
+
+        返回值：
+        1. 端侧可直接识别的 `voice.realtime.session.open` payload。
+        """
+
+        return self._realtime_voice_runtime.build_open_payload()
+
+    def open_realtime_session(
+        self,
+        *,
+        device_id: str,
+        device_type: str,
+        session_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """打开 SDK 全双工实时语音会话。"""
+
+        self.open_session(device_id=device_id, device_type=device_type, session_id=session_id)
+        return self._realtime_voice_runtime.open_session(
+            device_id=device_id,
+            device_type=device_type,
+            session_id=session_id,
+            payload=payload,
+        )
+
+    def on_realtime_session_opened(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """处理端侧全双工实时语音会话打开确认。"""
+
+        return self._realtime_voice_runtime.on_session_opened(
+            device_id=device_id,
+            session_id=session_id,
+            payload=payload,
+        )
 
     def on_control_connection_closed(self, device_id: str | None) -> None:
         if not device_id:
@@ -1015,6 +1064,16 @@ class VoiceRuntime:
             controller.audio_connection_peer = None
 
     def on_audio_frame(self, *, device_id: str, frame: MediaFrame) -> None:
+        try:
+            if self._realtime_voice_runtime.on_audio_frame(device_id=device_id, frame=frame):
+                return
+        except AppError as exc:
+            log_debug(
+                self._logger,
+                f"丢弃异常实时语音帧: code={exc.code} message={exc.message}",
+                LogContext(device_id=device_id),
+            )
+            return
         with self._lock:
             controller = self._controllers.get(device_id)
             if controller is None:
@@ -1169,6 +1228,71 @@ class VoiceRuntime:
             controller.last_playback_state = state
             controller.last_playback_reason = reason
 
+    def on_realtime_input_started(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """处理全双工实时语音输入开始事件。"""
+
+        self._realtime_voice_runtime.on_input_started(
+            device_id=device_id,
+            session_id=session_id,
+            payload=payload,
+        )
+
+    def on_realtime_input_committed(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """处理全双工实时语音输入提交事件。"""
+
+        return self._realtime_voice_runtime.on_input_committed(
+            device_id=device_id,
+            session_id=session_id,
+            payload=payload,
+        )
+
+    def on_realtime_user_interrupt(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """处理全双工实时语音用户插话事件。"""
+
+        result = self._realtime_voice_runtime.on_user_interrupt(
+            device_id=device_id,
+            session_id=session_id,
+            payload=payload,
+        )
+        stream_ids = [
+            stream_id
+            for stream_id in [
+                result.get("interrupted_stream_id"),
+                *result.get("dropped_stream_ids", []),
+            ]
+            if isinstance(stream_id, str) and stream_id
+        ]
+        if stream_ids:
+            self._abort_local_playback_streams_after_realtime_interrupt(
+                device_id=device_id,
+                stream_ids=stream_ids,
+                reason=str(result.get("reason") or "realtime_user_interrupt"),
+            )
+        return result
+
+    def close_realtime_session(self, *, device_id: str, session_id: str, reason: str = "client_closed") -> None:
+        """关闭全双工实时语音会话。"""
+
+        self._realtime_voice_runtime.close_session(device_id=device_id, session_id=session_id, reason=reason)
+
     def handle_user_interrupt(
         self,
         *,
@@ -1320,9 +1444,11 @@ class VoiceRuntime:
             controllers = list(self._controllers.values())
         notification_snapshot = self._notification_coordinator.build_snapshot()
         playback_snapshot = self._playback_arbiter.build_snapshot()
+        realtime_snapshot = self._realtime_voice_runtime.build_snapshot()
         result: dict[str, dict[str, Any]] = {}
         for controller in controllers:
             current_playback = controller.current_playback
+            realtime_device_snapshot = realtime_snapshot.get(controller.device_id, {})
             result[controller.device_id] = {
                 "session_id": controller.session_id,
                 "state": controller.state,
@@ -1357,6 +1483,15 @@ class VoiceRuntime:
                     for decision in notification_snapshot["recent_decisions"]
                     if decision.get("device_id") == controller.device_id
                 ],
+                "active_realtime_session": realtime_device_snapshot or None,
+                "realtime_state": realtime_device_snapshot.get("realtime_state"),
+                "active_realtime_input_stream_id": realtime_device_snapshot.get("active_input_stream_id"),
+                "active_realtime_output_stream_id": realtime_device_snapshot.get("active_output_stream_id"),
+                "recent_realtime_events": realtime_device_snapshot.get("recent_realtime_events", []),
+                "recent_realtime_interrupts": realtime_device_snapshot.get("recent_interrupts", []),
+                "realtime_latency_metrics": realtime_device_snapshot.get("latency_metrics", {}),
+                "realtime_barge_in_count": realtime_device_snapshot.get("barge_in_count", 0),
+                "realtime_echo_rejected_count": realtime_device_snapshot.get("echo_rejected_count", 0),
             }
         return result
 
@@ -2230,6 +2365,50 @@ class VoiceRuntime:
             return None, request_id
         self._mark_playback_interrupted_locked(controller=controller, playback=playback, reason=reason)
         return playback, request_id
+
+    def _abort_local_playback_streams_after_realtime_interrupt(
+        self,
+        *,
+        device_id: str,
+        stream_ids: list[str],
+        reason: str,
+    ) -> None:
+        """实时插话后同步中止本地半双工播放队列。
+
+        主要逻辑：
+        1. `RealtimeVoiceRuntime` 已经更新统一播放仲裁器并下发设备中断。
+        2. 本方法只负责清理 `VoiceRuntime` 内部仍可能存在的 HTTP 播放流。
+        3. 如果目标流不是半双工本地播放流，则静默跳过。
+        """
+
+        playbacks: list[PlaybackStreamContext] = []
+        cancelled_notification_request_ids: list[str] = []
+        with self._lock:
+            controller = self._controllers.get(device_id)
+            if controller is None:
+                return
+            for stream_id in stream_ids:
+                playback = self._playback_streams.pop((device_id, stream_id), None)
+                request_id = self._notification_stream_requests.pop((device_id, stream_id), None)
+                if request_id is not None:
+                    self._notification_request_streams.pop(request_id, None)
+                    cancelled_notification_request_ids.append(request_id)
+                if playback is None:
+                    continue
+                self._mark_playback_interrupted_locked(controller=controller, playback=playback, reason=reason)
+                playbacks.append(playback)
+        for playback in playbacks:
+            try:
+                playback.queue.put_nowait(None)
+            except queue.Full:
+                pass
+        for request_id in cancelled_notification_request_ids:
+            self._notification_coordinator.cancel_request(
+                device_id=device_id,
+                request_id=request_id,
+                reason=reason,
+                clear_queue=False,
+            )
 
     def _wait_for_playback(self, *, device_id: str, stream_id: str, timeout_s: float) -> PlaybackStreamContext:
         deadline = time.monotonic() + timeout_s

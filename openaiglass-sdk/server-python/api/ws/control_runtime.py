@@ -396,6 +396,24 @@ class ControlRuntime(CameraGateway):
         if message.name == "voice.session.opened":
             self._handle_voice_session_opened(connection, message)
             return
+        if message.name == "voice.realtime.session.open":
+            self._handle_realtime_session_open(connection, message)
+            return
+        if message.name == "voice.realtime.session.opened":
+            self._handle_realtime_session_opened(connection, message)
+            return
+        if message.name == "voice.realtime.input.started":
+            self._handle_realtime_input_started(connection, message)
+            return
+        if message.name == "voice.realtime.input.committed":
+            self._handle_realtime_input_committed(connection, message)
+            return
+        if message.name == "voice.realtime.user_interrupt":
+            self._handle_realtime_user_interrupt(connection, message)
+            return
+        if message.name == "voice.realtime.session.closed":
+            self._handle_realtime_session_closed(connection, message)
+            return
         if message.name == "device.bind":
             self._handle_device_bind(connection, message)
             return
@@ -1070,6 +1088,102 @@ class ControlRuntime(CameraGateway):
         self._voice_runtime.on_voice_session_opened(
             device_id=connection.device_id or "",
             session_id=message.session_id,
+        )
+
+    def _handle_realtime_session_open(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理端侧主动请求打开全双工实时语音会话。"""
+
+        if not connection.session_id:
+            raise build_error(ErrorCode.INVALID_MESSAGE, "当前连接不存在 session_id，不能打开实时语音会话")
+        opened_payload = self._voice_runtime.open_realtime_session(
+            device_id=connection.device_id or "",
+            device_type=connection.device_type or "glass",
+            session_id=message.session_id or connection.session_id,
+            payload=message.payload,
+        )
+        connection.touch_heartbeat()
+        self._send_message(
+            connection,
+            create_control_message(
+                semantic="notify",
+                name="voice.realtime.session.opened",
+                source=self._server_endpoint(),
+                target=self._device_endpoint(connection.device_id or "", connection.device_type or "glass"),
+                payload=opened_payload,
+                trace_id=message.trace_id,
+                session_id=message.session_id or connection.session_id,
+            ),
+        )
+
+    def _handle_realtime_session_opened(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理端侧确认全双工实时语音会话已打开。"""
+
+        if not connection.session_id:
+            raise build_error(ErrorCode.INVALID_MESSAGE, "当前连接不存在待确认的 session_id")
+        session_id = message.session_id or connection.session_id
+        self._voice_runtime.open_realtime_session(
+            device_id=connection.device_id or "",
+            device_type=connection.device_type or "glass",
+            session_id=session_id,
+            payload=self._voice_runtime.build_realtime_open_payload(),
+        )
+        self._voice_runtime.on_realtime_session_opened(
+            device_id=connection.device_id or "",
+            session_id=session_id,
+            payload=message.payload,
+        )
+        connection.touch_heartbeat()
+
+    def _handle_realtime_input_started(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理端侧实时语音输入开始事件。"""
+
+        connection.last_seen_monotonic = time.monotonic()
+        self._voice_runtime.on_realtime_input_started(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or connection.session_id or "",
+            payload=message.payload,
+        )
+
+    def _handle_realtime_input_committed(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理端侧实时语音输入提交事件。"""
+
+        connection.last_seen_monotonic = time.monotonic()
+        self._voice_runtime.on_realtime_input_committed(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or connection.session_id or "",
+            payload=message.payload,
+        )
+
+    def _handle_realtime_user_interrupt(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理全双工实时语音用户插话事件。"""
+
+        connection.last_seen_monotonic = time.monotonic()
+        result = self._voice_runtime.on_realtime_user_interrupt(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or connection.session_id or "",
+            payload=message.payload,
+        )
+        log_debug(
+            self._logger,
+            "实时语音用户插话已进入播放仲裁器",
+            self._build_connection_log_context(
+                connection,
+                fields={
+                    "reason": result.get("reason"),
+                    "interrupted_stream_id": result.get("interrupted_stream_id"),
+                    "dropped_stream_ids": result.get("dropped_stream_ids"),
+                },
+            ),
+        )
+
+    def _handle_realtime_session_closed(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理端侧关闭全双工实时语音会话。"""
+
+        connection.last_seen_monotonic = time.monotonic()
+        self._voice_runtime.close_realtime_session(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or connection.session_id or "",
+            reason=str(message.payload.get("reason") or "client_closed"),
         )
 
     def _handle_device_bind(self, connection: ControlConnection, message: ControlMessage) -> None:

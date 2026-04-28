@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v17`。本版本补齐 SQLite 任务持久化第一版，支持 SQLite 文件库、`:memory:` 测试库、任务快照恢复、事件幂等表和单机多进程任务租约；上一版本补齐账号治理、组织树、角色权限、审计事件和远程配置 Provider。全双工实时语音、公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v18`。本版本补齐全双工实时语音对话第一版，新增 `RealtimeVoiceRuntime`、实时语音协议事件、`/ws_realtime_audio` 媒体入口、实时用户插话、迟到输出丢弃、回声候选观测和运行态快照；上一版本补齐 SQLite 任务持久化第一版。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -102,7 +102,7 @@ openaiglass-for-blind/host/phone/config/AppConfig.plist.example
 
 1. 读取 WiFi、服务端控制地址、眼镜设备编号和配对令牌。
 2. 连接服务端 `/ws/control`，发送 `device.register` 和 `device.heartbeat`。
-3. 连接服务端 `/ws_audio`，上传语音片段并接收播放控制。
+3. 连接服务端 `/ws_audio`，上传半双工语音片段并接收播放控制；支持全双工的固件可改连 `/ws_realtime_audio` 上传实时媒体帧。
 4. 响应 `sensor.camera.capture`，完成单次抓拍并回传 `sensor.camera.captured`。
 5. 响应 `sensor.camera.stream.start/stop`，把摄像头帧推送到手机 `/ws/camera`。
 6. 处理通知、播报、唤醒和端侧运行状态。
@@ -437,7 +437,7 @@ uv run openaiglass.glass.start \
 
 这些字段可以通过运行态接口和联调日志观察，用于判断当前链路是否真的在流式推进。如果 `reply_text_to_first_audio_ms` 很大，优先检查当前 TTS 是否回退到了全文合成；这不应该由业务 Tool 或 Task 自行处理。
 
-注意：`sdk-v15` 支持用户主动打断播报的半双工控制语义，但仍然不是全双工实时语音版本。实时收音、回声消除和复杂 VAD 仍由后续实时语音专项统一处理。
+注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
 ### 3.9 通知仲裁、抢播和打断边界
 
@@ -497,9 +497,77 @@ SDK 收到该消息后会：
 1. 普通任务进度建议使用 `priority=normal` 或 `low`，不要抢播。
 2. 视觉风险、导航安全类事件可以使用 `priority=critical` 和 `interrupt_policy=critical_only`。
 3. 业务 Task 不要直接发送 `actuator.audio.interrupt`。
-4. 用户打断第一版是半双工控制能力，不代表已经具备全双工实时对话、回声消除或复杂 VAD。
+4. 半双工打断继续使用 `user.voice.interrupt`；全双工插话使用 `voice.realtime.user_interrupt`，两者最终都进入 SDK 播放仲裁器。
 
-### 3.10 账号级设备组织和多设备绑定
+### 3.10 全双工实时语音对话
+
+`sdk-v18` 起，SDK 服务端新增全双工实时语音第一版。它不是业务能力，而是系统运行时能力：端侧可以在播放期间持续上传实时音频，SDK 根据端侧 VAD/AEC 结果处理用户插话，并复用统一播放仲裁器取消当前实时输出。
+
+服务端公开的新增入口：
+
+| 入口 | 说明 |
+| --- | --- |
+| `VoiceRuntime.build_realtime_open_payload()` | 生成 `voice.realtime.session.open` 打开请求。 |
+| `VoiceRuntime.open_realtime_session(...)` | 在服务端创建实时语音会话。 |
+| `/ws_realtime_audio?device_id=...` | 全双工实时媒体帧入口；帧格式仍使用 SDK `MediaFrame`。 |
+| `VoiceRuntime.build_runtime_snapshot()` | 新增实时会话状态、输入流、输出流、打断、回声和延迟字段。 |
+
+端侧或手机侧需要支持以下控制事件：
+
+| 事件 | 方向 | 说明 |
+| --- | --- | --- |
+| `voice.realtime.session.open` | 服务端或端侧发起 | 打开全双工实时语音会话。端侧主动发起时，服务端会回 `voice.realtime.session.opened`。 |
+| `voice.realtime.session.opened` | 端侧到服务端 | 上报已接受模式和 AEC/VAD 能力。端侧缺少 AEC 时，SDK 会结构化降级为 `half_duplex`。 |
+| `voice.realtime.input.started` | 端侧到服务端 | 端侧 VAD 判断用户开始说话。 |
+| `voice.realtime.input.delta` | 端侧到服务端 | 实时上行媒体帧的 `frame_type`，通过 `MediaFrame` 二进制发送。 |
+| `voice.realtime.input.committed` | 端侧到服务端 | 当前用户输入可提交给模型或降级链路。 |
+| `voice.realtime.user_interrupt` | 端侧到服务端 | 用户在播放期间插话，携带 `barge_in_confidence`。 |
+| `voice.realtime.output.delta` | 服务端到端侧 | SDK 下发实时模型输出分片。 |
+| `voice.realtime.output.cancelled` | 服务端到端侧 | 用户插话后，当前输出流已取消。 |
+
+实时媒体帧头建议至少包含：
+
+```json
+{
+  "version": "v1",
+  "session_id": "sess_rt_001",
+  "stream_id": "rt_in_001",
+  "input_stream_id": "rt_in_001",
+  "frame_type": "voice.realtime.input.delta",
+  "seq": 0,
+  "chunk_index": 0,
+  "ts_ms": 1730000000000,
+  "codec": "pcm16",
+  "payload_size": 320,
+  "final": false,
+  "voice_activity": "speech",
+  "barge_in_confidence": 0.86,
+  "echo_suppressed": true
+}
+```
+
+运行态快照新增字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `active_realtime_session` | 当前设备实时语音会话完整摘要。 |
+| `realtime_state` | `opening`、`listening`、`user_speaking`、`model_streaming`、`playback_streaming`、`degraded`、`closed`。 |
+| `active_realtime_input_stream_id` | 当前实时用户输入流编号。 |
+| `active_realtime_output_stream_id` | 当前实时模型输出流编号。 |
+| `recent_realtime_events` | 最近实时语音协议事件。 |
+| `recent_realtime_interrupts` | 最近用户插话事件和仲裁结果。 |
+| `realtime_latency_metrics` | 首音频、模型首分片、输出首包、打断决策等延迟指标。 |
+| `realtime_echo_rejected_count` | 被 SDK 记录为回声候选且未触发打断的次数。 |
+
+业务开发者边界：
+
+1. 业务 Tool/Task 不直接处理 `voice.realtime.*` 协议。
+2. 业务代码不直接取消播放器，也不自行判断回声或插话。
+3. 端侧 AEC/VAD 是硬件和端侧 SDK 职责；服务端只消费结构化字段和做仲裁。
+4. 当前第一版提供 loopback/fallback Adapter 和回放级验证，真实实时模型供应商接入仍通过 `RealtimeModelAdapter` 扩展。
+5. 如果设备无法提供 AEC，SDK 会把实时会话降级到 `half_duplex`，业务能力不需要自行兜底。
+
+### 3.11 账号级设备组织和多设备绑定
 
 `sdk-v9` 起，控制面注册和 `DeviceGroupRuntime` 支持账号级设备索引。`sdk-v16` 起，SDK 在账号索引之上增加账号治理运行时，覆盖组织节点、角色绑定、权限决策、审计事件和远程配置 Provider。
 

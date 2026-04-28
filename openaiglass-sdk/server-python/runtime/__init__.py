@@ -13,11 +13,23 @@ from runtime.playback_arbiter import (
     PlaybackSubmitResult,
     UserInterruptResult,
 )
+from runtime.realtime_voice import (
+    HalfDuplexFallbackRealtimeModelAdapter,
+    LoopbackRealtimeModelAdapter,
+    RealtimeModelAdapter,
+    RealtimeModelResponse,
+    RealtimeVoiceRuntime,
+)
 from runtime.task_event_bridge import TaskEventBridge
 from runtime.voice_runtime import VoiceRuntime
 
 __all__ = [
     "VoiceRuntime",
+    "RealtimeVoiceRuntime",
+    "RealtimeModelAdapter",
+    "RealtimeModelResponse",
+    "LoopbackRealtimeModelAdapter",
+    "HalfDuplexFallbackRealtimeModelAdapter",
     "NotificationCoordinator",
     "NotificationDecision",
     "NotificationRequest",
