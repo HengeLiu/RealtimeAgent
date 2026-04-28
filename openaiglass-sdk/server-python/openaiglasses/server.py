@@ -741,6 +741,7 @@ def build_agent_facade_from_sdk(
         tool_gateway=tool_gateway,
         skill_runtime=sdk.skill_runtime,
     )
+    runner.preload_resources()
     sdk.device_groups.bind_mcp_gateway(
         sdk.get_mcp_gateway(),
         settings=settings,
@@ -783,6 +784,7 @@ def build_default_agent_facade(
         tool_registry=tool_registry,
         tool_gateway=tool_gateway,
     )
+    runner.preload_resources()
     return AgentFacade(
         session_store=session_store,
         tool_registry=tool_registry,

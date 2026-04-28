@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v27`。本版本在 `sdk-v26` 基础上收口服务端默认配置来源：`ServerSettings` 是运行时配置默认值和校验的唯一来源，服务端 CLI 只把这些默认值转换成子进程环境变量，不再维护第二份模型和语音默认配置。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v28`。本版本在 `sdk-v27` 基础上拆薄 Agent 运行热路径：真实服务端装配阶段会预热 OpenAI Agents SDK 入口和 provider，单轮请求只做会话上下文、工具白名单和模型输入的轻量装配；流式事件观察、拍照续跑和 SDK 调用桥接也已从主运行函数中拆出。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -464,6 +464,10 @@ uv run openaiglass.glass.start \
 `sdk-v22` 起，服务端在 `VoiceRuntime` 首次收到模型文本增量时会打印 `大模型返回首个 token`，并携带 `first_token_latency_ms`、`segment_id`、`input_stream_id` 和 `token_preview`。该日志用于判断 ASR 后到模型首 token 的耗时，不要求业务 Tool 自行打点。
 
 `sdk-v24` 起，服务端还会在音频段进入 ASR 前、ASR 完成准备进入 agent-core 前、agent-core 即将调用模型前打印 INFO 日志。`sdk-v25` 起，SDK 不再内置 `qwen-turbo` 等模型黑名单；如果某个模型在当前 `stream=True + tools` 链路中超时或报错，应以服务端 ERROR 日志、`VOICE_MODEL_TIMEOUT_MS` 和 `/api/agent/session` 中的 `model_request` 为准定位，而不是由业务代码绕过 SDK。
+
+`sdk-v28` 起，基于 `build_server_handle_from_sdk(...)` 或 `build_agent_facade_from_sdk(...)` 构建真实服务端时，SDK 会在装配阶段调用 `OpenAIAgentLoopRunner.preload_resources()`，提前加载 OpenAI Agents SDK 模块并创建可复用 provider。业务请求路径仍然会按当前会话动态装配 `AgentToolContext`、active Skill、工具白名单和原始历史消息，但不会在热路径里重复散落导入和 provider 创建逻辑。
+
+`first_token_latency_ms` 的起点仍然是 ASR 完成并准备进入 `AgentFacade.handle_turn(...)` 前，不包含设备注册、语音会话打开、音频上传和 ASR。它包含 agent-core 会话读写、单轮上下文装配、Agents SDK 调用和首个文本增量到达的耗时；`sdk-v28` 的预热只减少依赖加载和 provider 创建对这个指标的干扰，不改变该指标口径。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
