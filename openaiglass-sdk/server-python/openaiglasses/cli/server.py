@@ -16,9 +16,11 @@ from openaiglasses.cli.common import ensure_pythonpath, merged_env, require_comm
 
 
 SERVER_DEFAULTS = {
+    "APP_ENV": "dev",
     "HOST": "0.0.0.0",
     "PORT": "8765",
     "LOG_LEVEL": "INFO",
+    "DASHSCOPE_API_KEY": "",
     "DEVICE_TOKEN_MAP": "glass-001=pair-demo-token",
     "HEARTBEAT_INTERVAL_MS": "5000",
     "HEARTBEAT_TIMEOUT_MS": "15000",
@@ -34,6 +36,15 @@ SERVER_DEFAULTS = {
     "TTS_WEBSOCKET_API_URL": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
     "TTS_SAMPLE_RATE_HZ": "22050",
     "VOICE_MODEL_TIMEOUT_MS": "45000",
+    "VOICE_SYSTEM_PROMPT": "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。",
+    "MAX_SEGMENT_AUDIO_BYTES": "524288",
+}
+
+REMOTE_ENV_EXPORT_KEYS = set(SERVER_DEFAULTS) | {
+    "SERVER_HOST",
+    "SERVER_PORT",
+    "SERVER_PUBLIC_HOST",
+    "VOICE_RUNS_ROOT",
 }
 
 
@@ -445,7 +456,7 @@ def start_remote(args: argparse.Namespace) -> int:
     env_exports = " ".join(
         f"{key}={shell_join([value])}"
         for key, value in env.items()
-        if key in SERVER_DEFAULTS or key in {"DASHSCOPE_API_KEY", "SERVER_PUBLIC_HOST", "VOICE_RUNS_ROOT"}
+        if key in REMOTE_ENV_EXPORT_KEYS
     )
     remote_command = (
         f"cd {shell_join([remote_dir])} && "

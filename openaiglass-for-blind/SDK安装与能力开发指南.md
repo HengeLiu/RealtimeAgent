@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v22`。本版本在 `sdk-v21` 基础上补齐 `glass-playback` 命令行状态日志、服务端首个模型 token 延迟日志，以及回放眼镜收到首段下行音频的时间日志。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v23`。本版本在 `sdk-v22` 基础上把服务端大模型、ASR、TTS、系统提示词和音频上限等运行时配置显式收敛到 `config/local_server.env`，本地和远程启动都会按该文件加载。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -266,6 +266,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
+| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_ASR_MODEL_NAME` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、ASR 和 TTS 配置。`sdk-v23` 起模板显式列出，业务开发者不要在业务代码里硬编码模型名。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
 ### 3.4 启动真实业务服务端

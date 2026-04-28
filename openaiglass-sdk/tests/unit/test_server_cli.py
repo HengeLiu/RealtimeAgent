@@ -43,3 +43,62 @@ def test_server_env_disables_inner_file_handler_for_background_logs(tmp_path: Pa
 
     assert env["LOG_FILE"] == ""
     assert server._log_file(args) == log_file.resolve()  # noqa: SLF001
+
+
+def test_server_env_loads_model_config_from_local_env(tmp_path: Path) -> None:
+    """测试目标：服务端启动环境会从 `local_server.env` 读取模型相关配置。
+
+    测试方法：
+    1. 构造一个临时 env 文件，写入 Agent、ASR、TTS 和系统提示词配置。
+    2. 调用 `_server_env(...)` 合并服务端启动环境。
+
+    预期结果：
+    1. 子进程环境包含 env 文件中的模型配置。
+    2. 端口别名 `PORT` 会同步到运行时真正读取的 `SERVER_PORT`。
+    """
+
+    config_file = tmp_path / "local_server.env"
+    config_file.write_text(
+        "\n".join(
+            [
+                'PORT="9876"',
+                'DASHSCOPE_API_KEY="demo-key"',
+                'VOICE_MODEL_BASE_URL="https://example.test/v1"',
+                'VOICE_ASR_MODEL_NAME="asr-demo"',
+                'AGENT_MODEL_NAME="agent-demo"',
+                'VOICE_MODEL_NAME="voice-demo"',
+                'VOICE_MODEL_VOICE="Tina"',
+                'TTS_MODEL_NAME="tts-demo"',
+                'TTS_VOICE="longanhuan"',
+                'TTS_WEBSOCKET_API_URL="wss://example.test/tts"',
+                'TTS_SAMPLE_RATE_HZ="24000"',
+                'VOICE_MODEL_TIMEOUT_MS="12345"',
+                'VOICE_SYSTEM_PROMPT="本地提示词"',
+                'MAX_SEGMENT_AUDIO_BYTES="123456"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        repo_root=str(tmp_path),
+        sdk_python_root=str(SDK_ROOT),
+        app_root="",
+        config=str(config_file),
+        host=None,
+        port=None,
+        log_dir="",
+        log_file="",
+    )
+
+    env = server._server_env(args)  # noqa: SLF001 - CLI 回归测试需要验证内部环境拼装
+
+    assert env["SERVER_PORT"] == "9876"
+    assert env["DASHSCOPE_API_KEY"] == "demo-key"
+    assert env["VOICE_MODEL_BASE_URL"] == "https://example.test/v1"
+    assert env["VOICE_ASR_MODEL_NAME"] == "asr-demo"
+    assert env["AGENT_MODEL_NAME"] == "agent-demo"
+    assert env["VOICE_MODEL_NAME"] == "voice-demo"
+    assert env["TTS_MODEL_NAME"] == "tts-demo"
+    assert env["TTS_SAMPLE_RATE_HZ"] == "24000"
+    assert env["VOICE_SYSTEM_PROMPT"] == "本地提示词"
+    assert env["MAX_SEGMENT_AUDIO_BYTES"] == "123456"
