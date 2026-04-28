@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v15`。本版本补齐服务端统一播放仲裁和用户语音打断入口，普通 Agent 回复、任务通知、视觉告警和用户主动打断会进入 `PlaybackArbiter`，运行态快照可解释播放、排队、抢播、用户打断和队列清理原因；上一版本补齐真 iOS 手机视觉资源协调器。全双工实时语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v16`。本版本补齐账号治理、组织树、角色权限、审计事件和远程配置 Provider 第一版，`DeviceGroupRuntime` 现在暴露 `governance` 快照，业务上下文可读取作用域配置和执行权限检查；上一版本补齐服务端统一播放仲裁和用户语音打断入口。全双工实时语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -501,7 +501,9 @@ SDK 收到该消息后会：
 
 ### 3.10 账号级设备组织和多设备绑定
 
-`sdk-v9` 起，控制面注册和 `DeviceGroupRuntime` 支持账号级设备索引。业务侧仍然只表达设备和账号关系，不自行维护绑定表、在线表或跨设备路由。
+`sdk-v9` 起，控制面注册和 `DeviceGroupRuntime` 支持账号级设备索引。`sdk-v16` 起，SDK 在账号索引之上增加账号治理运行时，覆盖组织节点、角色绑定、权限决策、审计事件和远程配置 Provider。
+
+业务侧仍然只表达设备和账号关系，不自行维护绑定表、在线表或跨设备路由。
 
 注册消息可选字段：
 
@@ -532,8 +534,54 @@ runtime.device_groups.accounts[]
 
 1. SDK 会拒绝两个不同 `account_id` 的眼镜和手机绑定。
 2. 只有一方声明账号时，为兼容旧设备，绑定后 SDK 会把同组设备归入该账号。
-3. 账号级索引用于设备组织和运行态诊断，不等于完整权限系统、组织管理后台或远程配置中心。
+3. `sdk-v16` 是 SDK 内部账号治理骨架，不包含商业后台 UI、外部用户中心和云端配置服务。
 4. 功能代码需要多设备信息时，优先从 `DeviceGroupContext` 或运行态快照读取，不要在业务 Task 中自行维护全局设备表。
+5. 功能代码不要绕过 SDK 自建权限系统；如果某个权限点 SDK 还不能覆盖，应记录为 SDK 阻塞点。
+
+`sdk-v16` 运行态快照新增：
+
+| 字段 | 说明 |
+| --- | --- |
+| `device_groups.governance.organization_nodes` | SDK 维护的组织树节点。 |
+| `device_groups.governance.role_bindings` | 用户、设备或服务账号的角色绑定。 |
+| `device_groups.governance.recent_audit_events` | 最近权限、注册、绑定等审计事件。 |
+| `device_groups.governance.config` | 当前配置 Provider、版本和各作用域配置摘要。 |
+
+业务代码可以通过 `DeviceGroupContext` 读取 SDK 策略配置：
+
+```python
+priority = context.get_config(
+    "sdk.playback.default_priority",
+    default="normal",
+)
+```
+
+也可以在需要明确授权的业务入口做权限检查：
+
+```python
+context.require_permission(
+    actor_id="user-demo",
+    action="task.create",
+    resource_type="device_group",
+    resource_id=context.group_id,
+)
+```
+
+当前内置角色：
+
+| 角色 | 适合场景 | 典型权限 |
+| --- | --- | --- |
+| `owner` | 账号所有者 | 全部 SDK 动作。 |
+| `admin` | 管理员 | 设备注册、绑定、任务、工具、配置和审计读取。 |
+| `developer` | 功能开发者 | 创建/取消任务、调用工具、读取配置。 |
+| `viewer` | 观察者 | 读取配置和审计。 |
+| `device` | 设备身份 | 注册、创建任务、读取配置。 |
+
+Provider 边界：
+
+1. `MemoryConfigProvider` 用于单元测试、本地开发和默认单机模式。
+2. `FileConfigProvider` 用于单机部署、回放和可版本化配置文件。
+3. 真实云端配置服务后续应实现同一个 Provider 接口，业务代码不应直接依赖具体配置来源。
 
 ### 3.11 Skill Runtime
 

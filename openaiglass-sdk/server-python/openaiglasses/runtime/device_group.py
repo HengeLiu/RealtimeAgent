@@ -9,6 +9,7 @@ from typing import Any, Callable
 from agent_core.context.models import CapabilityTrace
 from openaiglasses.models import DeviceAccount, DeviceEndpoint, DeviceGroup, DeviceRole
 from openaiglasses.models import CapabilityResult as SdkCapabilityResult
+from openaiglasses.runtime.governance import AccountGovernanceRuntime, ConfigProvider
 
 
 def _new_id(prefix: str) -> str:
@@ -247,6 +248,45 @@ class DeviceGroupContext:
 
         return self.runtime.cancel_task(task_id)
 
+    def get_config(self, key: str, default: Any = None) -> Any:
+        """读取当前设备组上下文中的 SDK 远程配置。
+
+        参数：
+        1. `key`：配置键。
+        2. `default`：配置不存在时的默认值。
+
+        返回值：
+        1. 配置值或默认值。
+
+        异常情况：
+        1. 本函数不主动抛出异常。
+        """
+
+        return self.runtime.get_config(
+            key,
+            group_id=self.group_id,
+            device_id=self.device_id,
+            default=default,
+        )
+
+    def require_permission(
+        self,
+        *,
+        actor_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+    ):
+        """检查当前账号作用域下的权限。"""
+
+        return self.runtime.require_permission(
+            actor_id=actor_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            group_id=self.group_id,
+        )
+
 
 @dataclass(slots=True)
 class DeviceGroupRuntime:
@@ -272,6 +312,7 @@ class DeviceGroupRuntime:
     mcp_gateway: Any | None = None
     mcp_settings: Any | None = None
     mcp_session_store: Any | None = None
+    governance: AccountGovernanceRuntime = field(default_factory=AccountGovernanceRuntime)
     _groups: dict[str, DeviceGroup] = field(default_factory=dict)
     _accounts: dict[str, DeviceAccount] = field(default_factory=dict)
     _device_to_group: dict[str, str] = field(default_factory=dict)
@@ -479,6 +520,7 @@ class DeviceGroupRuntime:
             account.device_ids.add(device_id)
             account.group_ids.add(resolved_group_id)
             self._device_to_account[device_id] = resolved_account_id
+            self.governance.register_account(account_id=resolved_account_id, user_id=resolved_user_id)
         else:
             self._device_to_account.pop(device_id, None)
         endpoint_metadata = dict(metadata or {})
@@ -494,6 +536,16 @@ class DeviceGroupRuntime:
         )
         group.devices[device_id] = endpoint
         self._device_to_group[device_id] = resolved_group_id
+        self.governance.record_audit(
+            actor_id=resolved_user_id or device_id,
+            action="device.register",
+            resource_type="device",
+            resource_id=device_id,
+            allowed=True,
+            reason="device_registered",
+            account_id=resolved_account_id,
+            metadata={"role": role, "group_id": resolved_group_id},
+        )
         return endpoint
 
     def bind_devices(self, *, glass_device_id: str, phone_device_id: str) -> str:
@@ -542,6 +594,16 @@ class DeviceGroupRuntime:
             if account_id:
                 self._groups[glass_group_id].metadata["account_id"] = account_id
                 self._assign_group_to_account(group_id=glass_group_id, account_id=account_id)
+        self.governance.record_audit(
+            actor_id=glass_device_id,
+            action="device.bind",
+            resource_type="device_group",
+            resource_id=glass_group_id,
+            allowed=True,
+            reason="devices_bound",
+            account_id=self._resolve_pair_account_id(glass_device_id, phone_device_id),
+            metadata={"glass_device_id": glass_device_id, "phone_device_id": phone_device_id},
+        )
         return glass_group_id
 
     def query_account_devices(self, account_id: str) -> list[DeviceEndpoint]:
@@ -573,6 +635,106 @@ class DeviceGroupRuntime:
         """列出 SDK 当前维护的账号索引。"""
 
         return [self._accounts[key] for key in sorted(self._accounts)]
+
+    def create_organization_node(
+        self,
+        *,
+        node_id: str,
+        name: str,
+        parent_id: str | None = None,
+        account_ids: set[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
+        """创建或更新组织节点。"""
+
+        node = self.governance.create_organization_node(
+            node_id=node_id,
+            name=name,
+            parent_id=parent_id,
+            account_ids=account_ids,
+            metadata=metadata,
+        )
+        for account_id in node.account_ids:
+            account = self._accounts.setdefault(account_id, DeviceAccount(account_id=account_id))
+            account.metadata["organization_node_id"] = node.node_id
+        return node
+
+    def bind_role(
+        self,
+        *,
+        subject_id: str,
+        role: str,
+        scope_type: str,
+        scope_id: str,
+        subject_type: str = "user",
+        metadata: dict[str, Any] | None = None,
+    ):
+        """绑定账号治理角色。"""
+
+        return self.governance.bind_role(
+            subject_id=subject_id,
+            role=role,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            subject_type=subject_type,
+            metadata=metadata,
+        )
+
+    def authorize(
+        self,
+        *,
+        actor_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        account_id: str | None = None,
+        group_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
+        """执行账号治理权限检查。"""
+
+        resolved_account_id = account_id or self._resolve_group_account_id(group_id)
+        return self.governance.authorize(
+            actor_id=actor_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            account_id=resolved_account_id,
+            metadata=metadata,
+        )
+
+    def require_permission(self, **kwargs: Any):
+        """要求账号治理权限通过。"""
+
+        decision = self.authorize(**kwargs)
+        if not decision.allowed:
+            raise PermissionError(f"权限拒绝: action={decision.action} reason={decision.reason}")
+        return decision
+
+    def set_config_provider(self, provider: ConfigProvider) -> None:
+        """替换 SDK 远程配置 Provider。"""
+
+        self.governance.config_provider = provider
+
+    def get_config(
+        self,
+        key: str,
+        *,
+        account_id: str | None = None,
+        group_id: str | None = None,
+        device_id: str | None = None,
+        default: Any = None,
+    ) -> Any:
+        """读取账号、设备组或设备作用域下的配置。"""
+
+        resolved_account_id = account_id or self._resolve_group_account_id(group_id) or self._device_to_account.get(device_id or "")
+        return self.governance.get_config(
+            key,
+            account_id=resolved_account_id,
+            group_id=group_id,
+            device_id=device_id,
+            default=default,
+        )
 
     def mark_device_offline(self, device_id: str) -> None:
         """标记设备离线。
@@ -638,6 +800,16 @@ class DeviceGroupRuntime:
         glass_account_id = self._device_to_account.get(glass_device_id)
         phone_account_id = self._device_to_account.get(phone_device_id)
         if glass_account_id and phone_account_id and glass_account_id != phone_account_id:
+            self.governance.record_audit(
+                actor_id=glass_device_id,
+                action="device.bind",
+                resource_type="device_pair",
+                resource_id=f"{glass_device_id}:{phone_device_id}",
+                allowed=False,
+                reason="cross_account_binding",
+                account_id=glass_account_id,
+                metadata={"phone_account_id": phone_account_id},
+            )
             raise RuntimeError(
                 f"设备账号不一致，不能绑定: glass_account_id={glass_account_id}, phone_account_id={phone_account_id}"
             )
@@ -659,6 +831,17 @@ class DeviceGroupRuntime:
             account.device_ids.add(device_id)
             self._device_to_account[device_id] = account_id
             endpoint.metadata["account_id"] = account_id
+
+    def _resolve_group_account_id(self, group_id: str | None) -> str | None:
+        """解析设备组归属账号。"""
+
+        if not group_id:
+            return None
+        group = self._groups.get(group_id)
+        if group is None:
+            return None
+        account_id = group.metadata.get("account_id")
+        return str(account_id) if account_id else None
 
     @staticmethod
     def _normalize_optional_id(value: str | None) -> str | None:
@@ -910,6 +1093,7 @@ class DeviceGroupRuntime:
             "group_count": len(groups),
             "groups": groups,
             "accounts": self._build_account_snapshot(),
+            "governance": self.governance.build_snapshot(),
             "notification_count": len(self._notifications),
         }
 

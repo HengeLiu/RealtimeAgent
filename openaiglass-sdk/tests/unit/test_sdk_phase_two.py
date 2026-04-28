@@ -23,6 +23,7 @@ from openaiglasses import (
     BasePhoneTask,
     BaseSensorProvider,
     HybridTaskGateway,
+    MemoryConfigProvider,
     OpenAIGlassesSDK,
     PhoneTaskContext,
     SensorReading,
@@ -172,6 +173,106 @@ def test_device_group_runtime_rejects_cross_account_binding() -> None:
     accounts = {item["account_id"]: item for item in snapshot["accounts"]}
     assert accounts["acct_a"]["device_ids"] == ["glass_001"]
     assert accounts["acct_b"]["device_ids"] == ["phone_001"]
+    assert snapshot["governance"]["recent_audit_events"][-1]["decision"] == "deny"
+    assert snapshot["governance"]["recent_audit_events"][-1]["reason"] == "cross_account_binding"
+
+
+def test_device_group_runtime_supports_organization_permission_and_audit() -> None:
+    """测试目标：验证 SDK 账号治理支持组织树、角色权限和审计。
+
+    测试方法：
+    1. 注册同一账号下的眼镜和手机，并创建组织节点。
+    2. 给开发者用户绑定账号级 developer 角色。
+    3. 分别检查允许的 task.create 和拒绝的 config.write。
+
+    预期结果：
+    1. 组织节点进入运行态快照。
+    2. 允许和拒绝都会生成审计事件。
+    3. 权限拒绝会给出可解释原因。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass", account_id="acct_001", user_id="owner_001")
+    runtime.register_device(device_id="phone_001", role="phone", account_id="acct_001")
+    group_id = runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
+    runtime.create_organization_node(
+        node_id="org_root",
+        name="默认组织",
+        account_ids={"acct_001"},
+    )
+    runtime.bind_role(
+        subject_id="developer_001",
+        role="developer",
+        scope_type="account",
+        scope_id="acct_001",
+    )
+
+    allowed = runtime.authorize(
+        actor_id="developer_001",
+        action="task.create",
+        resource_type="device_group",
+        resource_id=group_id,
+        group_id=group_id,
+    )
+    denied = runtime.authorize(
+        actor_id="developer_001",
+        action="config.write",
+        resource_type="device_group",
+        resource_id=group_id,
+        group_id=group_id,
+    )
+    snapshot = runtime.build_snapshot()
+
+    assert allowed.allowed is True
+    assert denied.allowed is False
+    assert denied.reason == "no_matching_role"
+    assert snapshot["governance"]["organization_nodes"][0]["node_id"] == "org_root"
+    assert [event["decision"] for event in snapshot["governance"]["recent_audit_events"][-2:]] == [
+        "allow",
+        "deny",
+    ]
+
+
+def test_device_group_runtime_reads_scoped_remote_config() -> None:
+    """测试目标：验证 SDK 远程配置 Provider 支持作用域优先级。
+
+    测试方法：
+    1. 配置全局、账号和设备级同名配置。
+    2. 把 Provider 注入设备组运行时。
+    3. 通过业务上下文读取配置。
+
+    预期结果：
+    1. 设备级配置优先于账号级配置。
+    2. 缺失配置会返回默认值。
+    3. 运行态快照包含配置版本。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass", account_id="acct_001")
+    provider = MemoryConfigProvider(version="test-v1")
+    provider.set_value("sdk.playback.default_priority", "normal")
+    provider.set_value(
+        "sdk.playback.default_priority",
+        "high",
+        scope_type="account",
+        scope_id="acct_001",
+    )
+    provider.set_value(
+        "sdk.playback.default_priority",
+        "critical",
+        scope_type="device",
+        scope_id="glass_001",
+    )
+    runtime.set_config_provider(provider)
+
+    context = runtime.create_context(device_id="glass_001", session_id="sess_001")
+    snapshot = runtime.build_snapshot()
+
+    assert context.get_config("sdk.playback.default_priority") == "critical"
+    assert context.get_config("missing.key", default="fallback") == "fallback"
+    assert snapshot["governance"]["config"]["version"] == "test-v1"
 
 
 def test_device_group_context_can_call_registered_mcp_adapter() -> None:
