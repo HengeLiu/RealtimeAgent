@@ -76,6 +76,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         os.environ["SERVER_DEVICE_ID"] = "server-phase-b"
         os.environ["AGENT_MODEL_NAME"] = "qwen3.6-plus"
         os.environ["VOICE_MODEL_NAME"] = "qwen3.5-omni-plus"
+        os.environ["VOICE_SESSION_MODE"] = "half_duplex"
         settings = ServerSettings.from_env()
 
         self.assertEqual(settings.host, "127.0.0.1")
@@ -87,6 +88,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.server_device_id, "server-phase-b")
         self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
+        self.assertEqual(settings.voice_session_mode, "half_duplex")
 
     def test_from_env_without_overrides_uses_defaults(self) -> None:
         """测试目标：验证无环境变量覆盖时仍能回退到默认值。"""
@@ -101,6 +103,15 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.server_device_id, "server-main")
         self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
+        self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
+
+    def test_invalid_voice_session_mode_raises(self) -> None:
+        """测试目标：验证默认语音会话模式只能取半双工或全双工。"""
+
+        with self.assertRaises(AppError) as ctx:
+            ServerSettings(voice_session_mode="duplex-auto").validate()
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
 
     def test_invalid_port_raises(self) -> None:
         """测试目标：验证非法端口会触发结构化配置错误。

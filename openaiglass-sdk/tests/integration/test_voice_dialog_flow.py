@@ -23,7 +23,7 @@ from protocol.media import MediaFrame
 from protocol.messages.control_message import Endpoint
 from protocol.utils.message_factory import create_control_message
 from runtime.voice_runtime import ModelChunk, SpeechRecognitionClient, VoiceModelClient
-from server.test.integration.test_control_register_flow import TestWebSocketClient
+from .test_control_register_flow import TestWebSocketClient
 
 
 class FakeVoiceModelClient(VoiceModelClient):
@@ -96,6 +96,7 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
             heartbeat_interval_ms=120,
             heartbeat_timeout_ms=1000,
             voice_runs_root=self.temp_dir,
+            voice_session_mode="half_duplex",
         )
         self.handle = build_server_handle(
             settings,

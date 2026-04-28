@@ -23,6 +23,7 @@ SERVER_DEFAULTS = {
     "HEARTBEAT_INTERVAL_MS": "5000",
     "HEARTBEAT_TIMEOUT_MS": "15000",
     "SERVER_DEVICE_ID": "server-main",
+    "VOICE_SESSION_MODE": "full_duplex_realtime",
     "VOICE_MODEL_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "VOICE_ASR_MODEL_NAME": "qwen3-asr-flash",
     "AGENT_MODEL_NAME": "qwen3.6-plus",

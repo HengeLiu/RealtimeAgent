@@ -782,6 +782,7 @@ class ControlRuntime(CameraGateway):
             "device_groups": self._device_group_runtime.build_snapshot(),
             "skills": self._build_skill_runtime_snapshot(),
             "pending_camera_capture_count": pending_camera_capture_count,
+            "configured_voice_session_mode": self._settings.voice_session_mode,
             "voice_sessions": self._voice_runtime.build_runtime_snapshot(),
         }
         snapshot["diagnostics"] = self._build_runtime_diagnostics(snapshot)
@@ -978,12 +979,6 @@ class ControlRuntime(CameraGateway):
                     "user_id": user_id,
                 },
             )
-            if should_open_voice_session and connection.session_id is not None:
-                self._voice_runtime.open_session(
-                    device_id=device_id,
-                    device_type=device_type,
-                    session_id=connection.session_id,
-                )
 
         if old_connection is not None:
             log_warning(
@@ -1028,6 +1023,33 @@ class ControlRuntime(CameraGateway):
             ),
         )
         if should_open_voice_session and connection.session_id is not None:
+            self._send_initial_voice_session_open(
+                connection=connection,
+                trace_id=message.trace_id,
+            )
+        self._try_auto_bind_after_register(device_id=device_id)
+
+    def _send_initial_voice_session_open(self, *, connection: ControlConnection, trace_id: str | None) -> None:
+        """按配置向眼镜下发初始语音会话打开请求。
+
+        主要逻辑：
+        1. `VOICE_SESSION_MODE=half_duplex` 时保持旧半双工链路。
+        2. `VOICE_SESSION_MODE=full_duplex_realtime` 时默认打开全双工实时语音链路。
+        3. 两种模式都先在服务端创建运行时会话，再下发控制消息。
+        """
+
+        device_id = connection.device_id or ""
+        device_type = connection.device_type or "glass"
+        session_id = connection.session_id or ""
+        if not device_id or not session_id:
+            return
+
+        if self._settings.voice_session_mode == "half_duplex":
+            self._voice_runtime.open_session(
+                device_id=device_id,
+                device_type=device_type,
+                session_id=session_id,
+            )
             self._send_message(
                 connection,
                 create_control_message(
@@ -1036,11 +1058,31 @@ class ControlRuntime(CameraGateway):
                     source=self._server_endpoint(),
                     target=self._device_endpoint(device_id, device_type),
                     payload=self._voice_runtime.build_open_payload(),
-                    trace_id=message.trace_id,
-                    session_id=connection.session_id,
+                    trace_id=trace_id,
+                    session_id=session_id,
                 ),
             )
-        self._try_auto_bind_after_register(device_id=device_id)
+            return
+
+        payload = self._voice_runtime.build_realtime_open_payload()
+        self._voice_runtime.open_realtime_session(
+            device_id=device_id,
+            device_type=device_type,
+            session_id=session_id,
+            payload=payload,
+        )
+        self._send_message(
+            connection,
+            create_control_message(
+                semantic="request",
+                name="voice.realtime.session.open",
+                source=self._server_endpoint(),
+                target=self._device_endpoint(device_id, device_type),
+                payload=payload,
+                trace_id=trace_id,
+                session_id=session_id,
+            ),
+        )
 
     def _handle_heartbeat(self, connection: ControlConnection, message: ControlMessage) -> None:
         payload_device_id = str(message.payload.get("device_id", "")).strip()
@@ -1102,6 +1144,7 @@ class ControlRuntime(CameraGateway):
             payload=message.payload,
         )
         connection.touch_heartbeat()
+        connection.voice_opened = True
         self._send_message(
             connection,
             create_control_message(
@@ -1133,6 +1176,7 @@ class ControlRuntime(CameraGateway):
             payload=message.payload,
         )
         connection.touch_heartbeat()
+        connection.voice_opened = True
 
     def _handle_realtime_input_started(self, connection: ControlConnection, message: ControlMessage) -> None:
         """处理端侧实时语音输入开始事件。"""

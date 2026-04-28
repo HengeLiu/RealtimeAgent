@@ -39,8 +39,9 @@ class ServerSettings:
     18. `voice_model_timeout_ms`：模型请求超时时间。
     19. `voice_runs_root`：语音运行时资产落盘目录。
     20. `voice_asr_model_name`：语音转写模型名称。
-    21. `voice_system_prompt`：默认系统提示词。
-    22. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    21. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    22. `voice_system_prompt`：默认系统提示词。
+    23. `max_segment_audio_bytes`：单轮上行音频最大字节数。
     """
 
     host: str = "0.0.0.0"
@@ -64,6 +65,7 @@ class ServerSettings:
     voice_model_timeout_ms: int = 45000
     voice_runs_root: str = "runs/session"
     voice_asr_model_name: str = "qwen3-asr-flash"
+    voice_session_mode: str = "full_duplex_realtime"
     voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
     max_segment_audio_bytes: int = 524288
 
@@ -141,6 +143,7 @@ class ServerSettings:
             ),
             voice_runs_root=os.getenv("VOICE_RUNS_ROOT", defaults.voice_runs_root),
             voice_asr_model_name=os.getenv("VOICE_ASR_MODEL_NAME", defaults.voice_asr_model_name),
+            voice_session_mode=os.getenv("VOICE_SESSION_MODE", defaults.voice_session_mode),
             voice_system_prompt=os.getenv("VOICE_SYSTEM_PROMPT", defaults.voice_system_prompt),
             max_segment_audio_bytes=cls._parse_int_env(
                 "MAX_SEGMENT_AUDIO_BYTES",
@@ -293,6 +296,16 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_ASR_MODEL_NAME 不能为空",
             )
+        valid_voice_session_modes = {"half_duplex", "full_duplex_realtime"}
+        if self.voice_session_mode not in valid_voice_session_modes:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_SESSION_MODE 非法",
+                details={
+                    "voice_session_mode": self.voice_session_mode,
+                    "valid_modes": sorted(valid_voice_session_modes),
+                },
+            )
         if self.max_segment_audio_bytes <= 0:
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
@@ -328,6 +341,7 @@ class ServerSettings:
             "voice_model_timeout_ms": self.voice_model_timeout_ms,
             "voice_runs_root": self.voice_runs_root,
             "voice_asr_model_name": self.voice_asr_model_name,
+            "voice_session_mode": self.voice_session_mode,
             "max_segment_audio_bytes": self.max_segment_audio_bytes,
         }
 

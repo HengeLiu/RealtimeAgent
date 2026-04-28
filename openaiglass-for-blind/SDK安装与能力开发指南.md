@@ -4,14 +4,16 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v18`。本版本补齐全双工实时语音对话第一版，新增 `RealtimeVoiceRuntime`、实时语音协议事件、`/ws_realtime_audio` 媒体入口、实时用户插话、迟到输出丢弃、回声候选观测和运行态快照；上一版本补齐 SQLite 任务持久化第一版。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v19`。本版本在 `sdk-v18` 全双工实时语音第一版基础上，新增启动时语音会话模式配置 `VOICE_SESSION_MODE`，默认打开全双工实时语音；旧固件或半双工回放可以显式切回 `half_duplex`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+
+默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
 当前 SDK 能力状态：
 
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v18` 第一版可联调 | 端侧或手机侧接入 `voice.realtime.*` 协议；业务 Tool/Task 不直接处理实时语音协议。 |
+| 全双工实时语音 | `sdk-v19` 默认打开 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -144,6 +146,12 @@ openaiglass-for-blind/host/glass/config/local_build.env.example
 | `GLASS_PAIR_TOKEN` | 眼镜配对令牌，必须与服务端配置一致。 |
 | `GLASS_HEARTBEAT_INTERVAL_MS` | 心跳间隔。 |
 
+服务端控制默认语音会话模式：
+
+| 配置项 | 文件 | 说明 |
+| --- | --- | --- |
+| `VOICE_SESSION_MODE` | `config/local_server.env` | 服务端注册眼镜后默认打开的语音会话模式。默认 `full_duplex_realtime`；旧固件或半双工回放可设为 `half_duplex`。 |
+
 眼镜端配置同步、构建、烧录和串口监控统一按第 3 节的流程执行。
 
 ## 3. 安装、同步配置和启动
@@ -257,6 +265,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | --- | --- | --- |
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
+| `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
 ### 3.4 启动真实业务服务端
@@ -516,6 +525,21 @@ SDK 收到该消息后会：
 ### 3.10 全双工实时语音对话
 
 `sdk-v18` 起，SDK 服务端新增全双工实时语音第一版。它不是业务能力，而是系统运行时能力：端侧可以在播放期间持续上传实时音频，SDK 根据端侧 VAD/AEC 结果处理用户插话，并复用统一播放仲裁器取消当前实时输出。
+
+启动时通过 `VOICE_SESSION_MODE` 选择默认会话模式：
+
+```env
+VOICE_SESSION_MODE="full_duplex_realtime"
+# 或
+VOICE_SESSION_MODE="half_duplex"
+```
+
+| 配置值 | 注册后服务端行为 | 适合场景 |
+| --- | --- | --- |
+| `full_duplex_realtime` | 下发 `voice.realtime.session.open`，端侧连接 `/ws_realtime_audio`。 | 新版眼镜固件、手机音频中继、全双工真机验收。 |
+| `half_duplex` | 下发旧的 `voice.session.open`，端侧连接 `/ws_audio`。 | 旧眼镜固件、`glass-playback` 半双工触发音频、只验证普通语音问答。 |
+
+运行态快照顶层字段 `configured_voice_session_mode` 会显示当前服务端配置；设备实际接受的模式看 `active_realtime_session.accepted_mode` 或半双工 `voice_sessions[device_id].state`。
 
 服务端公开的新增入口：
 

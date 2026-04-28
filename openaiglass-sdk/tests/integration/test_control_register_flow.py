@@ -139,12 +139,48 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             device_token_map="glass-001=pair-demo-token,phone-001=pair-phone-token",
             heartbeat_interval_ms=120,
             heartbeat_timeout_ms=420,
+            voice_session_mode="half_duplex",
         )
         self.handle = build_server_handle(settings)
         self.handle.start()
 
     def tearDown(self) -> None:
         self.handle.stop()
+
+    def test_default_voice_session_mode_opens_realtime_session(self) -> None:
+        """测试目标：验证默认配置会在注册后打开全双工实时语音会话。"""
+
+        settings = ServerSettings(
+            host="127.0.0.1",
+            port=0,
+            device_token_map="glass-001=pair-demo-token",
+            heartbeat_interval_ms=120,
+            heartbeat_timeout_ms=420,
+        )
+        handle = build_server_handle(settings)
+        handle.start()
+        client = TestWebSocketClient("127.0.0.1", handle.port, "/ws/control")
+        try:
+            self._send_register(client, device_id="glass-001", device_type="glass", pair_token="pair-demo-token")
+
+            registered = self.codec.decode(client.recv_text())
+            self.assertEqual(registered.name, "device.registered")
+
+            opened = self.codec.decode(client.recv_text())
+            self.assertEqual(opened.name, "voice.realtime.session.open")
+            self.assertEqual(opened.payload["mode"], "full_duplex_realtime")
+
+            snapshot = handle.runtime.build_runtime_snapshot()
+            self.assertEqual(snapshot["configured_voice_session_mode"], "full_duplex_realtime")
+            voice_snapshot = snapshot["voice_sessions"]["glass-001"]
+            self.assertEqual(voice_snapshot["realtime_state"], "opening")
+            self.assertEqual(
+                voice_snapshot["active_realtime_session"]["requested_mode"],
+                "full_duplex_realtime",
+            )
+        finally:
+            client.close()
+            handle.stop()
 
     def test_register_success_and_runtime_snapshot(self) -> None:
         client = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
