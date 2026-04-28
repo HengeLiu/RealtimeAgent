@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from agent_core import AgentFacade
 from agent_core.camera import CameraCaptureResult, CameraGateway
@@ -119,6 +119,8 @@ class ControlRuntime(CameraGateway):
             agent_facade=agent_facade,
         )
         self._device_group_runtime.device_command_adapter = self._send_device_group_command
+        self._device_group_runtime.video_link_start_adapter = self._start_phone_video_link_from_device_group
+        self._device_group_runtime.video_link_stop_adapter = self._stop_phone_video_link_from_device_group
         self._device_group_runtime.task_runtime = BackendTaskGatewayAdapter(
             task_gateway=self._voice_runtime.agent_facade.get_task_gateway(),
         )
@@ -634,6 +636,153 @@ class ControlRuntime(CameraGateway):
             "device_id": glass_device_id,
             "session_id": connection.session_id or "",
             "noop": True,
+        }
+
+    def _start_phone_video_link_from_device_group(
+        self,
+        *,
+        group_id: str,
+        glass_device_id: str,
+        phone_device_id: str,
+        reason: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """供 `DeviceGroupRuntime` 使用的视频链路启动适配器。
+
+        主要逻辑：
+        1. 复用当前真实控制连接上的语音会话编号。
+        2. 通过同一套 `phone_video_link_task` 系统任务创建链路。
+        3. 返回业务 Task 可直接查询的任务快照字段。
+
+        参数：
+        1. `group_id`：设备组编号。
+        2. `glass_device_id`：眼镜设备编号。
+        3. `phone_device_id`：手机设备编号。
+        4. `reason`：启动原因。
+        5. `params`：业务补充参数。
+
+        返回值：
+        1. 视频链路任务快照字典，包含 `task_id/phase/stream_id/target_ws_uri/error`。
+
+        异常情况：
+        1. 眼镜或手机离线、缺少会话或缺少手机视频接收地址时抛出结构化错误。
+        """
+
+        frame_interval_ms = int(params.get("frame_interval_ms") or 500)
+        timeout_ms = int(params.get("timeout_ms") or 15000)
+        target_ws_uri = str(params.get("target_ws_uri") or "").strip()
+        if frame_interval_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "frame_interval_ms 必须大于 0",
+                details={"frame_interval_ms": frame_interval_ms},
+            )
+
+        with self._lock:
+            glass_connection = self._device_connections.get(glass_device_id)
+            phone_connection = self._device_connections.get(phone_device_id)
+        if glass_connection is None or glass_connection.closed or not glass_connection.registered:
+            raise build_error(
+                ErrorCode.STREAM_NOT_FOUND,
+                "目标眼镜当前不在线，无法启动视频直连任务",
+                details={"glass_device_id": glass_device_id, "group_id": group_id},
+            )
+        if phone_connection is None or phone_connection.closed or not phone_connection.registered:
+            raise build_error(
+                ErrorCode.STREAM_NOT_FOUND,
+                "目标手机当前不在线，无法启动视频直连任务",
+                details={"phone_device_id": phone_device_id, "group_id": group_id},
+            )
+
+        session_id = str(glass_connection.session_id or "").strip()
+        if not session_id:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "目标眼镜尚未打开语音会话，无法复用会话编号启动视频直连任务",
+                details={"glass_device_id": glass_device_id, "group_id": group_id},
+            )
+
+        if not target_ws_uri:
+            target_ws_uri = str(phone_connection.camera_sink_ws_uri or "").strip()
+        if not target_ws_uri:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "已绑定手机尚未上报视频接收地址，无法启动视频直连任务",
+                details={"glass_device_id": glass_device_id, "phone_device_id": phone_device_id, "group_id": group_id},
+            )
+
+        runtime = self._voice_runtime.agent_facade.get_task_gateway().create_task(
+            task_type="phone_video_link_task",
+            session_id=session_id,
+            device_id=glass_device_id,
+            input_data={
+                "phone_device_id": phone_device_id,
+                "target_ws_uri": target_ws_uri,
+                "link_mode": str(params.get("link_mode") or "direct").strip() or "direct",
+                "reason": reason,
+                "frame_interval_ms": frame_interval_ms,
+                "timeout_ms": timeout_ms,
+            },
+        )
+        with self._lock:
+            self._active_phone_video_task_ids_by_glass[glass_device_id] = runtime.task_id
+        return self._phone_video_link_snapshot(runtime=runtime, group_id=group_id, phone_device_id=phone_device_id)
+
+    def _stop_phone_video_link_from_device_group(
+        self,
+        *,
+        group_id: str,
+        glass_device_id: str,
+        phone_device_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """供 `DeviceGroupRuntime` 使用的视频链路停止适配器。"""
+
+        with self._lock:
+            task_id = self._active_phone_video_task_ids_by_glass.get(glass_device_id)
+        if task_id:
+            runtime = self._voice_runtime.agent_facade.get_task_gateway().cancel_task(task_id)
+            with self._lock:
+                self._active_phone_video_task_ids_by_glass.pop(glass_device_id, None)
+            return self._phone_video_link_snapshot(runtime=runtime, group_id=group_id, phone_device_id=phone_device_id)
+
+        return {
+            "ok": True,
+            "noop": True,
+            "group_id": group_id,
+            "task_id": "",
+            "task_type": "phone_video_link_task",
+            "state": "cancelled",
+            "phase": "cancelled",
+            "glass_device_id": glass_device_id,
+            "phone_device_id": phone_device_id,
+            "reason": reason,
+            "stream_id": "",
+            "target_ws_uri": "",
+            "error": None,
+        }
+
+    @staticmethod
+    def _phone_video_link_snapshot(*, runtime, group_id: str, phone_device_id: str) -> dict[str, Any]:
+        """把视频链路系统任务整理成 SDK 公开快照。"""
+
+        context = dict(runtime.context)
+        return {
+            "ok": runtime.state not in {"failed", "timeout"},
+            "group_id": group_id,
+            "task_id": runtime.task_id,
+            "task_type": runtime.task_type,
+            "state": runtime.state,
+            "phase": str(context.get("phase") or runtime.state),
+            "glass_device_id": runtime.device_id,
+            "phone_device_id": str(runtime.input.get("phone_device_id") or phone_device_id),
+            "session_id": runtime.session_id,
+            "stream_id": str(runtime.input.get("stream_id") or context.get("stream_id") or ""),
+            "target_ws_uri": str(runtime.input.get("target_ws_uri") or context.get("target_ws_uri") or ""),
+            "frame_interval_ms": int(runtime.input.get("frame_interval_ms") or 0),
+            "context": context,
+            "result": dict(runtime.result or {}),
+            "error": dict(runtime.error or {}) if runtime.error else None,
         }
 
     def report_task_event(

@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v19`。本版本在 `sdk-v18` 全双工实时语音第一版基础上，新增启动时语音会话模式配置 `VOICE_SESSION_MODE`，默认打开全双工实时语音；旧固件或半双工回放可以显式切回 `half_duplex`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v20`。本版本在 `sdk-v19` 基础上补齐真实服务端的视频链路装配、公开 MCP Adapter 类型、phone-mock Python 插件加载边界，以及 `glass-playback` 对全双工实时语音打开握手的支持。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -914,6 +914,34 @@ class PrepareNavigationTool(BaseTool):
 MCP adapter 仍由宿主装配入口注册：
 
 ```python
+from typing import Any
+
+from pydantic import BaseModel
+
+from openaiglasses import BaseMcpAdapter, CapabilityResult, McpMethodSpec, OpenAIGlassesSDK
+
+
+class RoutePlanInput(BaseModel):
+    origin: str
+    destination: str
+
+
+class AmapMcpAdapter(BaseMcpAdapter):
+    adapter_name = "amap"
+
+    def list_methods(self) -> list[McpMethodSpec]:
+        return [
+            McpMethodSpec(
+                name="amap.route_plan",
+                description="规划步行路线",
+                input_model=RoutePlanInput,
+            )
+        ]
+
+    def invoke(self, *, method_name: str, context, input_data: Any) -> CapabilityResult:
+        return CapabilityResult.success(data={"summary": "mock route"})
+
+
 def create_sdk() -> OpenAIGlassesSDK:
     sdk = OpenAIGlassesSDK()
     sdk.register_mcp_adapter(AmapMcpAdapter())
@@ -922,6 +950,8 @@ def create_sdk() -> OpenAIGlassesSDK:
 ```
 
 `context.mcp(...)` 的失败会返回 `CapabilityResult.failed(...)`，错误结果中包含 `method_name`、输入摘要和 SDK 统一错误码。真实服务端运行时会把 MCP 调用轨迹写入 agent session trace；本地调试中可以通过 `sdk.device_groups.list_mcp_traces()` 查看调用是否发生。
+
+`sdk-v20` 起，业务侧 MCP Adapter 示例应只从 `openaiglasses` 导入 `BaseMcpAdapter`、`McpMethodSpec` 和 `CapabilityResult`。业务代码仍然不要构造 `McpGateway`、`McpRegistry` 或 `AgentToolContext`。
 
 ## 6. 开发服务端 Task
 
@@ -1000,6 +1030,18 @@ context.device_group.cancel_task(link["task_id"])
 | `context.last_peer_link_event` | 最近一次 peer-link 事件。 |
 | `context.last_camera_event` | 最近一次 camera stream 事件。 |
 | `error` / `context.last_error` | 结构化失败信息。 |
+
+`sdk-v20` 起，真实服务端会在 SDK 运行时初始化时自动为 `DeviceGroupRuntime` 绑定视频链路启动和停止适配器。业务 Task 只调用：
+
+```python
+link = context.device_group.start_phone_video_link(
+    reason="need_live_frames",
+    params={"frame_interval_ms": 350},
+)
+latest = context.device_group.query_task(link["task_id"])
+```
+
+`link` 本身会包含以下稳定字段：`task_id`、`task_type`、`state`、`phase`、`session_id`、`stream_id`、`target_ws_uri`、`glass_device_id`、`phone_device_id`、`context`、`result`、`error`。业务代码不要读取或写入 `DeviceGroupRuntime.video_link_start_adapter`、`DeviceGroupRuntime.video_link_stop_adapter`，也不要调用服务端 debug 方法。
 
 端侧标准事件如下：
 
@@ -1391,6 +1433,7 @@ openaiglass-for-blind/host/phone-mock/config/phone.mock.json
 7. 通过真实服务端 HTTP 任务事件接口上报 `phone.*` 结果事件。
 8. 把注册、任务启动、任务停止、相机帧接收和事件上报记录到 `outputs.event_log` 或 `camera_sink.save_dir`。
 9. 只用于 mock 测试，不承诺与 iOS 本地模型、相机、系统权限或 UI 行为一致。
+10. `sdk-v20` 起，可按配置加载 Python `BasePhoneTask` / `BasePhoneProcessor` 子类作为 mock 插件。该机制只服务于本地 mock 和协议契约测试，不代表真实 iOS App 插件形态。
 
 `phone-mock` 和 `glass-playback` 的区别：
 
@@ -1435,6 +1478,10 @@ uv run openaiglass.phone.mock \
   },
   "task_handlers": {
     "find_object_phone_task": {
+      "task_class": "capabilities.find_object.phone.task:FindObjectPhoneTask",
+      "params": {
+        "processor_type": "yolo_find_object"
+      },
       "events": [
         {
           "delay_ms": 500,
@@ -1450,13 +1497,20 @@ uv run openaiglass.phone.mock \
       ]
     }
   },
+  "processor_plugins": {
+    "yolo_find_object": {
+      "processor_class": "capabilities.find_object.phone.processor:YoloFindObjectProcessor"
+    }
+  },
   "outputs": {
     "event_log": "openaiglass-for-blind/runs/phone-mock/phone-001/events.jsonl"
   }
 }
 ```
 
-当前版本只支持根据配置发送固定 mock 事件，不支持断言检查、批量测试，也不支持真实视频帧回放。开发者需要根据服务端日志、SDK 任务状态和 `outputs.event_log` 判断行为是否符合预期。
+`task_handlers.<task_type>.events` 仍适合固定 mock 结果；`task_class` / `processor_plugins` 适合验证 Python phone mock 插件能否按 SDK 契约加载。真实 iPhone 能力仍应通过 Swift 插件和 `PhoneTaskCapabilityRegistry.register(taskType:)` 接入，不要把 Python phone mock 当成真机插件。
+
+当前版本已能记录设备级事件日志和相机帧接收日志，但尚未内建批量断言 DSL。开发者需要根据服务端日志、SDK 任务状态、`outputs.event_log` 和 `camera_sink.save_dir/frames.jsonl` 判断行为是否符合预期；更复杂的自动断言能力由 SDK 后续版本继续补齐。
 
 ### 7.5 iOS 源码包清单、Swift Package 和 XCFramework 发布形态
 
@@ -1596,14 +1650,14 @@ uv run openaiglass.server.run \
 1. `glass-playback` 启动后连接真实服务端 `/ws/control`。
 2. 按配置发送 `device.register(device_type=glass)`。
 3. 等待 `device.registered`。
-4. 等待 `voice.session.open` 并回传 `voice.session.opened`。
+4. 等待服务端语音会话打开请求。半双工时响应 `voice.session.opened`；全双工时响应 `voice.realtime.session.opened`，并保存服务端下发的 `session_id`。
 5. 等待服务端完成必要的设备绑定。如果本次回放需要手机，绑定对象是真实 iOS phone；如果不需要手机，可只要求 glass 注册和 voice session 打开。
 6. 在注册、voice session 和必要绑定都完成后，自动把 `trigger_audio.path` 指向的音频按流式 `MediaFrame(audio_chunk)` 发送到服务端 `/ws_audio`。
 7. 服务端按真实语音链路处理这段音频，后续 Tool、Task、通知和执行器行为都走真实运行时。
 
 `trigger_audio` 不是可选语音样例，而是启动一次设备级回放的触发源。它不测试 WakeNet 本身；它假设唤醒已经成功，只模拟唤醒后麦克风开始录音并持续向服务端推流。
 
-注意：当前 `glass-playback` 主流程仍模拟半双工触发音频。`sdk-v18` 的全双工实时语音回放级验证先由 SDK 单元测试覆盖，真机或端侧中继需要按第 3.10 节主动发送 `voice.realtime.*` 事件和 `/ws_realtime_audio` 媒体帧。
+注意：`sdk-v20` 起，`glass-playback` 已支持 `VOICE_SESSION_MODE=full_duplex_realtime` 下的打开握手，并会把服务端下发的 `session_id` 带入后续 `sensor.audio.segment.started/finished`。当前触发音频仍复用 `/ws_audio` 半双工音频上传路径；需要验收真正全双工媒体帧时，仍应按第 3.10 节使用端侧或手机中继发送 `voice.realtime.*` 事件和 `/ws_realtime_audio` 媒体帧。
 
 ### 10.2 开发者日常测试流程
 

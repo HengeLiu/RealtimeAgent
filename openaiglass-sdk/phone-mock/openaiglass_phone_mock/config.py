@@ -34,6 +34,16 @@ class PhoneMockTaskHandler:
 
     task_type: str
     events: list[PhoneMockEvent] = field(default_factory=list)
+    task_class: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PhoneMockProcessorPlugin:
+    """手机 mock 处理器插件配置。"""
+
+    processor_type: str
+    processor_class: str
 
 
 @dataclass(slots=True)
@@ -72,6 +82,7 @@ class PhoneMockConfig:
     camera_sink: CameraSinkConfig
     heartbeat_interval_seconds: float
     task_handlers: dict[str, PhoneMockTaskHandler]
+    processor_plugins: dict[str, PhoneMockProcessorPlugin] = field(default_factory=dict)
     outputs: PhoneMockOutputConfig | None = None
 
     @classmethod
@@ -118,6 +129,7 @@ class PhoneMockConfig:
             camera_sink=_load_camera_sink(raw.get("camera_sink"), config_path=config_path, repo_root=Path(repo_root).resolve(), control_ws_url=control_ws_url, device_id=device_id),
             heartbeat_interval_seconds=float(raw.get("heartbeat_interval_seconds", 3.0)),
             task_handlers=_load_task_handlers(raw.get("task_handlers")),
+            processor_plugins=_load_processor_plugins(raw.get("processor_plugins")),
             outputs=_load_outputs(raw.get("outputs"), config_path=config_path, repo_root=Path(repo_root).resolve(), device_id=device_id),
         )
 
@@ -136,8 +148,39 @@ def _load_task_handlers(raw: object) -> dict[str, PhoneMockTaskHandler]:
             raise ValueError("phone-mock task_handlers 存在空任务类型")
         data = handler_raw if isinstance(handler_raw, dict) else {}
         events = [_load_event(item) for item in data.get("events", []) if isinstance(item, dict)]
-        handlers[normalized_task_type] = PhoneMockTaskHandler(task_type=normalized_task_type, events=events)
+        params = data.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        handlers[normalized_task_type] = PhoneMockTaskHandler(
+            task_type=normalized_task_type,
+            events=events,
+            task_class=str(data.get("task_class") or "").strip(),
+            params=dict(params),
+        )
     return handlers
+
+
+def _load_processor_plugins(raw: object) -> dict[str, PhoneMockProcessorPlugin]:
+    """解析手机 mock 处理器插件配置。"""
+
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("phone-mock 配置 processor_plugins 必须是 JSON object")
+    plugins: dict[str, PhoneMockProcessorPlugin] = {}
+    for processor_type, plugin_raw in raw.items():
+        normalized_processor_type = str(processor_type or "").strip()
+        if not normalized_processor_type:
+            raise ValueError("phone-mock processor_plugins 存在空处理器类型")
+        data = plugin_raw if isinstance(plugin_raw, dict) else {}
+        processor_class = str(data.get("processor_class") or data.get("class") or "").strip()
+        if not processor_class:
+            raise ValueError(f"phone-mock processor_plugins.{normalized_processor_type} 缺少 processor_class")
+        plugins[normalized_processor_type] = PhoneMockProcessorPlugin(
+            processor_type=normalized_processor_type,
+            processor_class=processor_class,
+        )
+    return plugins
 
 
 def _load_event(raw: dict[str, Any]) -> PhoneMockEvent:

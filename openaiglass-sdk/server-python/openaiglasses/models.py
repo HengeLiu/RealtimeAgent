@@ -46,6 +46,9 @@ class CapabilityResult:
     ok: bool
     data: dict[str, Any] = field(default_factory=dict)
     message: str = ""
+    asset_refs: list[Any] = field(default_factory=list)
+    derived_artifacts: list[Any] = field(default_factory=list)
+    task_refs: list[Any] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
     error: CapabilityError | None = None
 
@@ -55,6 +58,9 @@ class CapabilityResult:
         *,
         data: dict[str, Any] | None = None,
         message: str = "",
+        asset_refs: list[Any] | None = None,
+        derived_artifacts: list[Any] | None = None,
+        task_refs: list[Any] | None = None,
         meta: dict[str, Any] | None = None,
     ) -> "CapabilityResult":
         """构造成功结果。
@@ -71,7 +77,15 @@ class CapabilityResult:
         1. 本函数不主动抛出异常。
         """
 
-        return cls(ok=True, data=data or {}, message=message, meta=meta or {})
+        return cls(
+            ok=True,
+            data=data or {},
+            message=message,
+            asset_refs=asset_refs or [],
+            derived_artifacts=derived_artifacts or [],
+            task_refs=task_refs or [],
+            meta=meta or {},
+        )
 
     @classmethod
     def failed(

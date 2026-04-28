@@ -20,9 +20,12 @@ from infra.config import ServerSettings
 from openaiglasses import (
     BackendTaskGatewayAdapter,
     BaseTask,
+    BaseMcpAdapter as PublicBaseMcpAdapter,
     BasePhoneProcessor,
     BasePhoneTask,
     BaseSensorProvider,
+    CapabilityResult as PublicCapabilityResult,
+    McpMethodSpec as PublicMcpMethodSpec,
     HybridTaskGateway,
     MemoryConfigProvider,
     OpenAIGlassesSDK,
@@ -298,26 +301,26 @@ def test_device_group_context_can_call_registered_mcp_adapter() -> None:
         destination: str
         strategy: str = "walking"
 
-    class MockMapAdapter(BaseMcpAdapter):
+    class MockMapAdapter(PublicBaseMcpAdapter):
         """用于测试的地图 MCP adapter。"""
 
         adapter_name = "mock_map"
 
-        def list_methods(self) -> list[McpMethodSpec]:
+        def list_methods(self) -> list[PublicMcpMethodSpec]:
             """返回测试方法清单。"""
 
             return [
-                McpMethodSpec(
+                PublicMcpMethodSpec(
                     name="map.route_plan",
                     description="测试路线规划",
                     input_model=RouteInput,
                 )
             ]
 
-        def invoke(self, *, method_name: str, context: AgentToolContext, input_data) -> AgentCapabilityResult:
+        def invoke(self, *, method_name: str, context, input_data) -> PublicCapabilityResult:
             """返回固定路线规划结果。"""
 
-            return AgentCapabilityResult.success(
+            return PublicCapabilityResult.success(
                 data={
                     "method_name": method_name,
                     "summary": f"{input_data.origin}->{input_data.destination}",
@@ -1309,8 +1312,26 @@ def test_blind_server_handle_can_build_real_runtime() -> None:
         gateway = handle.runtime.voice_runtime.agent_facade.get_task_gateway()
         assert gateway.__class__.__name__ == "HybridTaskGateway"
         assert handle.runtime.device_group_runtime.task_runtime is not None
+        assert handle.runtime.device_group_runtime.video_link_start_adapter is not None
+        assert handle.runtime.device_group_runtime.video_link_stop_adapter is not None
     finally:
         handle.server.server_close()
+
+
+def test_openaiglasses_public_mcp_types_are_exported() -> None:
+    """测试目标：验证业务 MCP Adapter 可只依赖 `openaiglasses` 公开入口。
+
+    测试方法：
+    1. 从 `openaiglasses` 导入公开 MCP 基类和方法描述类型。
+    2. 与内部真实类型做身份比较。
+
+    预期结果：
+    1. 公开入口可直接用于业务侧 Mock MCP Adapter 类型声明。
+    2. 不需要业务导入 `agent_core.mcp` 或 `agent_core.models`。
+    """
+
+    assert PublicBaseMcpAdapter is BaseMcpAdapter
+    assert PublicMcpMethodSpec is McpMethodSpec
 
 
 def test_sdk_build_server_handle_rebinds_live_device_group_runtime() -> None:

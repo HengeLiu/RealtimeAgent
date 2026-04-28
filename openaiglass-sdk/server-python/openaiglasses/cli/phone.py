@@ -59,10 +59,12 @@ def run_phone_mock(args: argparse.Namespace) -> int:
     repo_root = resolve_repo_root(args)
     sdk_root = Path(args.sdk_root).resolve() if args.sdk_root else repo_root / "openaiglass-sdk"
     phone_mock_root = sdk_root / "phone-mock"
+    app_root = Path(args.app_root).resolve() if args.app_root else repo_root / "openaiglass-for-blind"
     if str(phone_mock_root) not in sys.path:
         sys.path.insert(0, str(phone_mock_root))
+    if str(app_root) not in sys.path:
+        sys.path.insert(0, str(app_root))
     if not args.config:
-        app_root = Path(args.app_root).resolve() if args.app_root else repo_root / "openaiglass-for-blind"
         args.config = str(app_root / "host/phone-mock/config/phone.mock.json")
     args.repo_root = str(repo_root)
     from openaiglass_phone_mock.cli import run_phone_mock as run_device

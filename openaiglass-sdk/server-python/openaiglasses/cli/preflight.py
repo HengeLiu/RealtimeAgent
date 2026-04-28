@@ -162,6 +162,52 @@ def run_health_check() -> CheckResult:
     )
 
 
+def run_video_link_adapter_check() -> CheckResult:
+    """检查真实服务端句柄是否已绑定 SDK 视频链路适配器。
+
+    测试目标：
+    1. 防止业务宿主继续手动注入 `DeviceGroupRuntime.video_link_*_adapter`。
+    2. 确认 `DeviceGroupContext.start_phone_video_link()` 可进入 SDK 系统任务入口。
+
+    测试方法：
+    1. 构建业务真实服务端句柄。
+    2. 检查 `DeviceGroupRuntime` 上的启动和停止适配器是否存在。
+
+    预期结果：
+    1. 两个适配器都由 SDK 控制运行时自动绑定。
+    """
+
+    from host.server.main import create_server_handle
+
+    start = perf_counter()
+    handle = create_server_handle(ServerSettings(host="127.0.0.1", port=0))
+    try:
+        runtime = handle.runtime.device_group_runtime
+        start_bound = runtime.video_link_start_adapter is not None
+        stop_bound = runtime.video_link_stop_adapter is not None
+        ok = start_bound and stop_bound
+        details = {
+            "video_link_start_adapter_bound": start_bound,
+            "video_link_stop_adapter_bound": stop_bound,
+            "runtime_type": runtime.__class__.__name__,
+        }
+    except Exception as exc:  # pragma: no cover - 脚本型检查，异常直接写入报告
+        ok = False
+        details = {"error": str(exc)}
+    finally:
+        try:
+            handle.server.server_close()
+        except Exception:
+            pass
+    duration_ms = int((perf_counter() - start) * 1000)
+    return CheckResult(
+        name="server_video_link_adapters",
+        ok=ok,
+        duration_ms=duration_ms,
+        details=details,
+    )
+
+
 def run_entrypoint_check() -> CheckResult:
     """检查服务端、手机端、眼镜端联调入口是否存在。"""
 
@@ -348,6 +394,7 @@ def main() -> int:
         )
 
     checks.append(run_entrypoint_check())
+    checks.append(run_video_link_adapter_check())
 
     if not args.skip_boundary:
         checks.append(run_boundary_check())

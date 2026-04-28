@@ -60,10 +60,7 @@ class PlaybackGlassDevice:
             heartbeat_interval_ms = int((registered.get("payload") or {}).get("heartbeat_interval_ms", 5000))
 
             if self.config.startup.wait_for_voice_session:
-                opened = self._wait_for_message(control, "voice.session.open")
-                self._session_id = str(opened.get("session_id") or "")
-                self._send_control(control, "voice.session.opened", "notify", {"device_id": self.config.device_id}, session_id=self._session_id)
-                self._log_event("voice.session.opened", {"session_id": self._session_id})
+                self._open_voice_session(control)
 
             heartbeat_thread = threading.Thread(
                 target=self._heartbeat_loop,
@@ -132,6 +129,67 @@ class PlaybackGlassDevice:
                 return message
             self._handle_control_message(control, message)
         raise TimeoutError(f"等待 {expected_name} 超时")
+
+    def _open_voice_session(self, control: WsClient) -> None:
+        """响应服务端下发的半双工或全双工语音会话打开请求。
+
+        主要逻辑：
+        1. 半双工模式下继续响应 `voice.session.opened`。
+        2. 全双工模式下响应 `voice.realtime.session.opened`。
+        3. 保存服务端下发的 `session_id`，后续音频段控制消息复用该编号。
+
+        参数：
+        1. `control`：控制 WebSocket 客户端。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 启动超时会抛出 `TimeoutError`。
+        """
+
+        deadline = time.monotonic() + self.config.startup.startup_timeout_ms / 1000
+        while time.monotonic() < deadline:
+            message = json.loads(control.recv_text())
+            name = str(message.get("name") or "")
+            if name == "voice.session.open":
+                self._session_id = str(message.get("session_id") or "")
+                self._send_control(
+                    control,
+                    "voice.session.opened",
+                    "notify",
+                    {"device_id": self.config.device_id},
+                    session_id=self._session_id,
+                )
+                self._log_event("voice.session.opened", {"session_id": self._session_id, "mode": "half_duplex"})
+                return
+            if name == "voice.realtime.session.open":
+                self._session_id = str(message.get("session_id") or "")
+                payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
+                accepted_mode = str(payload.get("mode") or "full_duplex_realtime")
+                self._send_control(
+                    control,
+                    "voice.realtime.session.opened",
+                    "notify",
+                    {
+                        "device_id": self.config.device_id,
+                        "accepted_mode": accepted_mode,
+                        "capabilities": {
+                            "aec": False,
+                            "vad": False,
+                            "barge_in": False,
+                            "output_cancel": True,
+                        },
+                    },
+                    session_id=self._session_id,
+                )
+                self._log_event(
+                    "voice.realtime.session.opened",
+                    {"session_id": self._session_id, "accepted_mode": accepted_mode},
+                )
+                return
+            self._handle_control_message(control, message)
+        raise TimeoutError("等待语音会话打开请求超时")
 
     def _heartbeat_loop(self, control: WsClient, interval_ms: int) -> None:
         interval = max(interval_ms / 1000, 0.1)

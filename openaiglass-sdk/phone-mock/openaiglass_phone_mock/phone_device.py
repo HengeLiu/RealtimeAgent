@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import threading
 import time
 from dataclasses import dataclass
@@ -44,6 +45,8 @@ class PhoneMockDevice:
         self._received_task_count = 0
         self._reported_event_count = 0
         self._camera_sink: CameraSinkServer | None = None
+        self._phone_runtime = None
+        self._sdk_task_ids_by_server_task_id: dict[str, str] = {}
 
     def run(self) -> PhoneMockResult:
         """启动虚拟手机并进入控制消息循环。"""
@@ -152,10 +155,113 @@ class PhoneMockDevice:
         if handler is None:
             self._log_event("sdk.phone.task.unhandled", {"task_id": task_id, "task_type": task_type})
             return
+        if handler.task_class:
+            self._handle_plugin_task_start(
+                server_task_id=task_id,
+                task_type=task_type,
+                params={**dict(handler.params), **self._params_from_payload(payload)},
+            )
         for event in handler.events:
             if event.delay_ms > 0:
                 time.sleep(event.delay_ms / 1000)
             self._report_task_event(task_id=task_id, event_name=event.event_name, payload=event.payload)
+
+    def _handle_plugin_task_start(self, *, server_task_id: str, task_type: str, params: dict[str, object]) -> None:
+        """启动配置声明的 Python phone-mock 任务插件。
+
+        主要逻辑：
+        1. 首次使用时按配置动态加载 `BasePhoneTask` 和 `BasePhoneProcessor` 子类。
+        2. 通过 SDK `PhoneRuntime` 启动任务，明确该机制只服务于 mock 和测试。
+        3. 如果任务启动阶段产生结果，则按结果中的 `event_name` 上报服务端任务事件。
+
+        参数：
+        1. `server_task_id`：服务端下发的 SDK 任务编号。
+        2. `task_type`：手机任务类型。
+        3. `params`：任务启动参数。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 插件加载或任务启动异常会写入事件日志，不会让 phone-mock 进程退出。
+        """
+
+        try:
+            runtime = self._ensure_phone_runtime()
+            snapshot = runtime.start_task(task_type=task_type, params=params)
+            self._sdk_task_ids_by_server_task_id[server_task_id] = snapshot.task_id
+            self._log_event(
+                "phone_mock.plugin_task.started",
+                {
+                    "server_task_id": server_task_id,
+                    "phone_task_id": snapshot.task_id,
+                    "task_type": task_type,
+                    "state": snapshot.state,
+                    "data": snapshot.data,
+                },
+            )
+            for result in snapshot.results:
+                self._report_result_if_event(server_task_id=server_task_id, result=result)
+        except Exception as exc:  # pragma: no cover - 真实插件异常只写入设备日志
+            self._log_event(
+                "phone_mock.plugin_task.failed",
+                {
+                    "server_task_id": server_task_id,
+                    "task_type": task_type,
+                    "error": str(exc),
+                },
+            )
+
+    def _ensure_phone_runtime(self):
+        """按配置懒加载 phone-mock 插件运行时。"""
+
+        if self._phone_runtime is not None:
+            return self._phone_runtime
+
+        from openaiglasses import CapabilityRegistry, PhoneRuntime
+
+        registry = CapabilityRegistry()
+        for handler in self.config.task_handlers.values():
+            if handler.task_class:
+                registry.register_phone_task(self._instantiate_plugin(handler.task_class))
+        for plugin in self.config.processor_plugins.values():
+            registry.register_phone_processor(self._instantiate_plugin(plugin.processor_class))
+        self._phone_runtime = PhoneRuntime(registry=registry)
+        self._log_event(
+            "phone_mock.plugins.loaded",
+            {
+                "task_types": registry.list_phone_task_types(),
+                "processor_types": registry.list_phone_processor_types(),
+            },
+        )
+        return self._phone_runtime
+
+    @staticmethod
+    def _instantiate_plugin(import_path: str):
+        """按 `module:ClassName` 或 `module.ClassName` 实例化插件。"""
+
+        module_name, _, class_name = import_path.replace(":", ".").rpartition(".")
+        if not module_name or not class_name:
+            raise ValueError(f"插件路径必须是 module:ClassName 或 module.ClassName: {import_path}")
+        module = importlib.import_module(module_name)
+        cls = getattr(module, class_name)
+        return cls()
+
+    @staticmethod
+    def _params_from_payload(payload: dict[str, object]) -> dict[str, object]:
+        """从手机任务启动控制消息中提取业务参数。"""
+
+        params = payload.get("params")
+        return dict(params) if isinstance(params, dict) else {}
+
+    def _report_result_if_event(self, *, server_task_id: str, result: dict[str, object]) -> None:
+        """把插件结果中的 `event_name` 转换为服务端任务事件。"""
+
+        event_name = str(result.get("event_name") or "").strip()
+        if not event_name:
+            return
+        payload = {key: value for key, value in result.items() if key != "event_name"}
+        self._report_task_event(task_id=server_task_id, event_name=event_name, payload=payload)
 
     def _report_task_event(self, *, task_id: str, event_name: str, payload: dict[str, object]) -> None:
         body = json.dumps(

@@ -11,8 +11,10 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 PHONE_MOCK_ROOT = ROOT_DIR / "openaiglass-sdk/phone-mock"
-if str(PHONE_MOCK_ROOT) not in sys.path:
-    sys.path.insert(0, str(PHONE_MOCK_ROOT))
+SERVER_PYTHON_ROOT = ROOT_DIR / "openaiglass-sdk/server-python"
+for source_root in (PHONE_MOCK_ROOT, SERVER_PYTHON_ROOT):
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
 
 from openaiglass_phone_mock.config import PhoneMockConfig, derive_http_base_url
 
@@ -61,6 +63,48 @@ class PhoneMockConfigTest(unittest.TestCase):
         self.assertEqual(handler.events[0].event_name, "phone.vision.find_object.result")
         self.assertEqual(handler.events[0].payload["found"], True)
         self.assertEqual(handler.events[0].delay_ms, 20)
+
+    def test_loads_python_plugin_boundaries(self) -> None:
+        """测试目标：确认 phone-mock 可声明 Python 任务和处理器插件。
+
+        测试方法：在配置中写入 `task_class` 和 `processor_plugins` 后加载。
+        预期结果：插件路径被解析到稳定配置对象，但不会在配置阶段执行插件代码。
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "phone.mock.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "device_id": "phone-001",
+                        "pair_token": "pair-phone-token",
+                        "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                        "task_handlers": {
+                            "find_object_phone_task": {
+                                "task_class": "capabilities.find_object.phone.task:FindObjectPhoneTask",
+                                "params": {"processor_type": "yolo_find_object"},
+                                "events": [],
+                            }
+                        },
+                        "processor_plugins": {
+                            "yolo_find_object": {
+                                "processor_class": "capabilities.find_object.phone.processor:YoloFindObjectProcessor"
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = PhoneMockConfig.load(config_path, repo_root=ROOT_DIR)
+
+        handler = config.task_handlers["find_object_phone_task"]
+        self.assertEqual(handler.task_class, "capabilities.find_object.phone.task:FindObjectPhoneTask")
+        self.assertEqual(handler.params["processor_type"], "yolo_find_object")
+        self.assertEqual(
+            config.processor_plugins["yolo_find_object"].processor_class,
+            "capabilities.find_object.phone.processor:YoloFindObjectProcessor",
+        )
 
     def test_derive_http_base_url(self) -> None:
         """测试目标：确认控制 WebSocket 地址能推导出 HTTP API 根地址。

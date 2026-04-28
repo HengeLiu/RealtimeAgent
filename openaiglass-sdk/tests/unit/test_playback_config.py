@@ -175,6 +175,59 @@ def test_playback_camera_capture_responds_with_configured_image(tmp_path: Path) 
     assert message["payload"]["image_base64"] == "ZmFrZS1qcGVnLWJ5dGVz"
 
 
+def test_playback_realtime_voice_open_saves_session_and_replies_opened(tmp_path: Path) -> None:
+    """全双工语音打开请求会保存 session_id 并回复 opened。"""
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    _write_wav(audio_path)
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "glass.realtime.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "format": "wav",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    control = _FakeControl()
+    messages = iter(
+        [
+            json.dumps(
+                {
+                    "name": "voice.realtime.session.open",
+                    "session_id": "sess_rt_001",
+                    "payload": {"mode": "full_duplex_realtime"},
+                }
+            )
+        ]
+    )
+    control.recv_text = lambda: next(messages)  # type: ignore[attr-defined]
+
+    device._open_voice_session(control)  # noqa: SLF001 - 单元测试直接验证协议握手
+
+    assert device._session_id == "sess_rt_001"  # noqa: SLF001
+    assert len(control.sent_texts) == 1
+    reply = json.loads(control.sent_texts[0])
+    assert reply["name"] == "voice.realtime.session.opened"
+    assert reply["session_id"] == "sess_rt_001"
+    assert reply["payload"]["capabilities"]["output_cancel"] is True
+
+
 def test_playback_camera_stream_sends_configured_frames(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """视频流启动后从配置帧序列读取图片，并发送真实 MediaFrame。"""
 
