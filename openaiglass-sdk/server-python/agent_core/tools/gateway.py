@@ -45,6 +45,15 @@ class ToolGateway:
                 "指定工具不存在",
                 details={"tool_name": name},
             )
+        if hasattr(self._registry, "is_tool_allowed_for_session") and not self._registry.is_tool_allowed_for_session(
+            session_id=context.session_id,
+            tool_name=name,
+        ):
+            raise build_error(
+                ErrorCode.UNAUTHORIZED,
+                "当前 Skill 不允许调用该工具",
+                details={"tool_name": name, "session_id": context.session_id},
+            )
 
         raw_arguments = arguments or {}
         input_data = tool.spec.input_model.model_validate(raw_arguments)

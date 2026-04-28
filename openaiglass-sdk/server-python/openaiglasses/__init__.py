@@ -22,6 +22,7 @@ from openaiglasses.runtime import (
 )
 from openaiglasses.server import HybridTaskGateway, build_agent_facade_from_sdk, build_server_handle_from_sdk
 from openaiglasses.sdk import OpenAIGlassesSDK
+from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime, SkillSessionState
 from infra.config import ServerSettings
 
 __all__ = [
@@ -47,6 +48,10 @@ __all__ = [
     "PhoneTaskSnapshot",
     "SensorReading",
     "ServerSettings",
+    "SkillDocument",
+    "SkillManifest",
+    "SkillRuntime",
+    "SkillSessionState",
     "TaskContext",
     "TaskEvent",
     "TaskRuntimeManager",

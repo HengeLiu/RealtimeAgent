@@ -1,5 +1,25 @@
 # Skill Runtime 设计
 
+当前实现版本：sdk-v10
+
+## 0. sdk-v10 实现状态
+
+sdk-v10 已完成最小 Skill Runtime：
+
+1. `SkillManifest` 支持 `allowed_tools` 和 `allowed_mcp_methods`。
+2. `SkillRuntime` 维护 Skill 注册表、会话 active Skill 和运行态快照。
+3. `read_skill` 作为内置 Tool 暴露给模型，读取正文后会激活当前会话 Skill。
+4. `OpenAIAgentLoopRunner` 会把可用 Skill 摘要或 active Skill 正文注入 system prompt。
+5. active Skill 存在时，模型可见工具会收敛到 `read_skill` 和 Skill 白名单。
+6. `ToolGateway` 会在执行前校验当前 Skill 工具白名单。
+
+尚未实现：
+
+1. 目录扫描和 `SKILL.md` frontmatter 自动解析。
+2. 远程 Skill Registry、审批、风险等级和权限后台。
+3. active Skill 的生产级持久化恢复。
+4. 复杂多 Skill 冲突解决和自动退场策略。
+
 ## 1. 文档定位
 
 本文档定义本项目后续引入 `Skill` 的设计方案。

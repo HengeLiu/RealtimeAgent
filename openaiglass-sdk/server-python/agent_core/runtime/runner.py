@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from agent_core.context.models import AgentSession, AgentTurn, AgentTurnResult
 from agent_core.context.session_store import AgentSessionStore
+from agent_core.skills import SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
@@ -40,11 +41,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         session_store: AgentSessionStore,
         tool_registry: ToolRegistry,
         tool_gateway: ToolGateway,
+        skill_runtime: SkillRuntime | None = None,
     ) -> None:
         self._settings = settings
         self._session_store = session_store
         self._tool_registry = tool_registry
         self._tool_gateway = tool_gateway
+        self._skill_runtime = skill_runtime or tool_registry.get_skill_runtime()
         self._logger = get_logger("server.agent.runner")
 
     def run_turn(
@@ -120,11 +123,22 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 context=tool_context,
             )
 
-        instructions = self._build_instructions()
+        instructions = self._build_instructions(session_id=turn.session_id)
+        allowed_tool_names = (
+            self._skill_runtime.allowed_tool_names_for_session(session_id=turn.session_id)
+            if self._skill_runtime is not None
+            else None
+        )
         run_input = self._build_history_messages(session=session, turn=turn)
         model_request = {
             "model": self._settings.agent_model_name,
             "instructions": instructions,
+            "active_skills": (
+                self._skill_runtime.get_session_state(turn.session_id).active_skill_names
+                if self._skill_runtime is not None
+                else []
+            ),
+            "allowed_tool_names": sorted(allowed_tool_names) if allowed_tool_names is not None else None,
             "messages": [
                 {"role": "system", "content": instructions},
                 *run_input,
@@ -134,7 +148,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         agent = Agent(
             name="OpenAIGlassesAgent",
             instructions=instructions,
-            tools=self._tool_registry.list_sdk_tools(),
+            tools=self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names),
             model=self._settings.agent_model_name,
         )
         provider = MultiProvider(
@@ -758,16 +772,22 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         )
         return messages
 
-    def _build_instructions(self) -> str:
+    def _build_instructions(self, session_id: str | None = None) -> str:
         """构造最小 Agent 指令。"""
 
-        return (
+        base = (
             f"{self._settings.voice_system_prompt}\n"
             "请使用简短、口语化、直接的中文回答。\n"
             "如果需要拍照再回答，可以先用一句很短的话安抚用户，然后立即调用拍照工具。\n"
             "必要时可以调用已提供的工具。\n"
             "不要输出代码块。\n"
         )
+        if self._skill_runtime is None or not session_id:
+            return base
+        fragment = self._skill_runtime.build_prompt_fragment(session_id=session_id)
+        if not fragment:
+            return base
+        return f"{base}\n{fragment}\n"
 
     @staticmethod
     def _build_image_followup_instructions() -> str:

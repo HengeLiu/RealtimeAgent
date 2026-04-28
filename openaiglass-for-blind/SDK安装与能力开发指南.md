@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v9`。本版本新增账号级设备组织索引，注册消息可携带 `account_id/user_id`，SDK 运行态会按账号输出设备、设备组和绑定关系，并拒绝跨账号绑定；上一版本新增通知仲裁策略和运行态快照。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v10`。本版本补齐最小 Skill Runtime，业务可通过 `OpenAIGlassesSDK.register_skill(...)` 注册 Skill，Agent 可用 `read_skill` 读取正文并按 active Skill 过滤工具；上一版本新增账号级设备组织索引。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -502,6 +502,45 @@ runtime.device_groups.accounts[]
 2. 只有一方声明账号时，为兼容旧设备，绑定后 SDK 会把同组设备归入该账号。
 3. 账号级索引用于设备组织和运行态诊断，不等于完整权限系统、组织管理后台或远程配置中心。
 4. 功能代码需要多设备信息时，优先从 `DeviceGroupContext` 或运行态快照读取，不要在业务 Task 中自行维护全局设备表。
+
+### 3.11 Skill Runtime
+
+`sdk-v10` 起，Skill Runtime 成为正式 SDK 扩展面。Skill 用于描述一类复合任务的工作流程、工具边界和注意事项；真正执行仍然通过 Tool、Task、MCP 和设备组上下文完成。
+
+最小注册方式：
+
+```python
+from openaiglasses import OpenAIGlassesSDK, SkillDocument, SkillManifest
+
+sdk = OpenAIGlassesSDK()
+sdk.register_skill(
+    SkillDocument(
+        manifest=SkillManifest(
+            name="navigation_guide",
+            version="1.0.0",
+            description="导航引导 Skill",
+            allowed_tools=["capture_photo", "start_navigation"],
+            allowed_mcp_methods=["amap.route_plan"],
+        ),
+        content="根据当前路线、定位和视觉事件，给用户一句短导航提示。",
+    )
+)
+```
+
+运行机制：
+
+1. 未激活 Skill 时，模型会在 system prompt 中看到可用 Skill 摘要。
+2. 模型需要具体说明时，调用内置工具 `read_skill(skill_name=...)`。
+3. `read_skill` 会读取 Skill 正文，并把该 Skill 加入当前会话 active 状态。
+4. 会话存在 active Skill 后，模型可见工具会收敛到 `read_skill` 加 Skill 声明的 `allowed_tools/allowed_mcp_methods`。
+5. `ToolGateway` 在执行前也会校验当前会话工具白名单，避免模型或代码绕过策略。
+
+边界：
+
+1. Skill 不直接操作 WebSocket、摄像头、音频或任务线程。
+2. Skill 不替代 `BaseTask`，长流程状态仍应放在 Task 中。
+3. Skill 不内置具体业务算法；找物、导航、读文档等能力仍由业务目录实现。
+4. 当前 Skill 来源为业务代码显式注册，暂不支持远程动态下发、审批和权限后台。
 
 ## 4. 推荐业务能力工程结构
 

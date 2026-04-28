@@ -1,7 +1,7 @@
 # SDK 对功能开发支持情况的说明
 
 更新时间：2026-04-28
-评估版本：sdk-v9
+评估版本：sdk-v10
 评估对象：`openaiglass-sdk` 对 `openaiglass-for-blind/docs/stage1/plan` 中第一期能力开发的支撑情况。
 
 ## 评估边界
@@ -30,9 +30,9 @@
 
 ## 总体结论
 
-sdk-v9 已经可以支撑第一期中“非实时语音交互、普通文本流式 TTS 透传、通知仲裁与高优先级通知抢播、AgentCore 工具调用、Tool/MCP 接入、抓拍图片理解、SDK 托管 Task、眼镜与手机注册绑定、账号级设备组织、手机视频链路任务最小闭环、手机视觉资源策略最小闭环、设备级回放测试”等主要基础能力。
+sdk-v10 已经可以支撑第一期中“非实时语音交互、普通文本流式 TTS 透传、通知仲裁与高优先级通知抢播、AgentCore 工具调用、Tool/MCP 接入、最小 Skill Runtime、抓拍图片理解、SDK 托管 Task、眼镜与手机注册绑定、账号级设备组织、手机视频链路任务最小闭环、手机视觉资源策略最小闭环、设备级回放测试”等主要基础能力。
 
-当前 SDK 的主要欠缺集中在：实时语音用户打断、完整播放仲裁、完整 Skill Runtime、真实地图服务适配治理、真 iOS 手机视觉资源池、导航任务通用模板、任务持久化生产化、三端 SDK 打包形态、以及更强的自动化回放断言能力。
+当前 SDK 的主要欠缺集中在：实时语音用户打断、完整播放仲裁、真实地图服务适配治理、真 iOS 手机视觉资源池、导航任务通用模板、任务持久化生产化、三端 SDK 打包形态、以及更强的自动化回放断言能力。
 
 因此，功能开发团队目前可以围绕 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`DeviceGroupContext`、`context.mcp` 和回放测试工具继续开发；但不应自行改写 WebSocket 协议、设备绑定、任务生命周期、视频链路控制、全局上下文维护等 SDK 层职责。
 
@@ -46,6 +46,7 @@ sdk-v9 已经可以支撑第一期中“非实时语音交互、普通文本流�
 | 非实时半双工语音链路 | 第 2 项；Phase C | 已有 `/ws_audio`、ASR、AgentCore、TTS `/stream.wav`、播放状态和麦克风关闭/恢复链路。 | 可用于普通问答和任务触发；不能把它当作实时打断语音。 |
 | AgentCore 工具调用 | 第 4 项；Phase D | `AgentFacade`、`OpenAIAgentLoopRunner`、`ToolRegistry`、`SdkToolAdapter` 已能把 SDK `BaseTool` 暴露给模型调用。 | 功能能力应优先实现为 `BaseTool`，由 SDK 统一注册和注入上下文。 |
 | Tool 与 MCP 基础接入 | 第 5 项；Phase E/H | SDK 已提供 `BaseTool`、`BaseMcpAdapter`、`McpRegistry`、`McpGateway` 和 `DeviceGroupContext.mcp`。 | 外部服务应通过 MCP Adapter 接入；具体地图厂商或业务服务不应硬编码进 SDK 核心。 |
+| 最小 Skill Runtime | 复合能力扩展；Phase H/L | sdk-v10 已提供 `SkillRuntime`、`SkillManifest`、`SkillDocument`、`read_skill` 工具、会话 active Skill、prompt 注入、工具白名单和执行前校验。 | Skill 只描述复合任务流程和工具边界，真实执行仍通过 Tool、Task、MCP；业务可开始注册受控 Skill。 |
 | 抓拍和图片资产主链路 | 第 6 项；Phase G | `capture_photo`、相机控制事件、图片资产回流、Agent 图片输入链路已经具备最小闭环。 | 需要拍照时使用 `context.capture_photo()` 或 SDK 工具，不要在业务层直接操作相机协议。 |
 | SDK 托管业务 Task | 第 8 项；Phase F | `BaseTask`、`TaskRuntimeManager`、`TaskContext` 支持创建、查询、取消、事件分发、事件日志、超时和 JSON 快照恢复。 | 长流程业务应实现 `BaseTask`，不要自行开线程维护任务状态。 |
 | 系统级 `phone_video_link_task` | 第 10 项；Phase J | SDK 内置 `phone_video_link_task`，支持 peer-link 准备、ready、streaming、停止、完成、取消、失败、超时等阶段。 | 功能代码通过 `context.start_phone_video_link()` 启停链路，不直接下发相机推流命令。 |
@@ -64,7 +65,7 @@ sdk-v9 已经可以支撑第一期中“非实时语音交互、普通文本流�
 | 手机视觉执行框架的资源管理 | sdk-v6 已在 Python `PhoneRuntime` / `phone-mock` 中支持 `vision_policy`、帧率限制、最大帧数和过载事件，但真 iOS 运行时还没有统一模型资源池、任务抢占和功耗治理。 | Phase K 的视觉迁移可用 mock/回放验证资源策略；真机多视觉任务并发时仍需谨慎。 | 功能开发先使用 `vision_policy` 表达资源要求；SDK 后续补 iOS 通用资源调度层。 |
 | 完整播放仲裁和用户语音打断 | sdk-v8 已支持通知层去重、排队、抢播策略和中断旧通知，但普通 Agent 回复、任务通知、视觉告警、用户语音打断之间还没有完整统一仲裁。 | 任务通知和高优先级告警已有 SDK 入口；实时语音打断和多源恢复播放仍不能承诺。 | 业务侧只发结构化事件、优先级和 `interrupt_policy`，不要直接控制播放器或实时收音。 |
 | 任务持久化生产化 | sdk-v5 支持 JSON 快照导出、保存和恢复，但不是多进程、多实例、数据库级任务持久化。 | 开发和单机回放足够，服务重启和线上长任务恢复仍有风险。 | SDK 后续应提供数据库存储、幂等事件、任务恢复和过期清理机制。 |
-| Skill Runtime | SDK 中已有 `SkillRegistry`、`SkillPolicy`、`SkillSessionState` 等骨架，但还没有成为功能开发的正式主路径。 | 现阶段不能要求功能团队优先用 Skill 搭能力，否则工具白名单、上下文、会话态和测试路径不够清晰。 | 近期功能开发优先使用 Tool、Task、MCP；SDK 后续再把 Skill 与 AgentCore 正式打通。 |
+| Skill Runtime 产品化治理 | sdk-v10 已有最小 Skill Runtime，但还没有远程 Skill Registry、审批、风险等级、目录扫描和复杂会话恢复。 | 业务可用显式注册的本地 Skill；暂不能把 Skill 当成线上动态配置平台。 | 功能团队先用 `register_skill` 注册受控 Skill；远程管理和审批写入 SDK 后续优化。 |
 | 回放测试断言能力 | 当前 `glass-playback` 和 `phone-mock` 能跑通设备级链路，但缺少更完整的批量用例、结果断言、真实视频帧回放和失败报告。 | 功能团队可以做自动化冒烟和人工判读，但难以覆盖复杂回归。 | SDK 后续应把回放升级为可声明预期结果的测试框架。 |
 | iOS 和 ESP32 SDK 打包形态 | iOS 当前更接近 App 工程内 SDK 代码，尚未形成 XCFramework/SPM；ESP32 侧也不是独立发布级组件。 | 内部联调可用，但外部开发者安装体验和版本隔离不足。 | SDK 后续应补正式包管理、版本说明和示例工程。 |
 | 账号权限、组织管理和远程配置中心 | sdk-v9 已有账号级设备索引和跨账号绑定隔离，但没有完整授权、审计、组织树和远程配置中心。 | 多设备能力开发可先按 `account_id` 使用 SDK 快照；涉及权限和后台管理仍不能承诺。 | 功能团队不要在业务 Task 中自建权限体系；需要产品级权限时写入 SDK 阻塞文档。 |
@@ -108,11 +109,11 @@ sdk-v9 已经可以支撑第一期中“非实时语音交互、普通文本流�
 
 ## SDK 后续优先优化方向
 
-1. 把 Skill Runtime 与 AgentCore、工具白名单、会话态和测试路径正式打通。
-2. 为手机视觉任务补资源调度、结果协议、帧率控制和并发策略。
-3. 提供导航类长任务模板，统一路线状态、视觉事件、提示策略和取消恢复语义。
-4. 提供地图 MCP Adapter 模板，明确配置、鉴权、超时、重试、mock 和错误分类。
-5. 把任务快照升级为生产级持久化，支持数据库存储、幂等事件和服务重启恢复。
-6. 把回放工具升级为可声明预期结果的自动化测试框架。
+1. 为手机视觉任务补资源调度、结果协议、帧率控制和并发策略。
+2. 提供导航类长任务模板，统一路线状态、视觉事件、提示策略和取消恢复语义。
+3. 提供地图 MCP Adapter 模板，明确配置、鉴权、超时、重试、mock 和错误分类。
+4. 把任务快照升级为生产级持久化，支持数据库存储、幂等事件和服务重启恢复。
+5. 把回放工具升级为可声明预期结果的自动化测试框架。
+6. 扩展 Skill Runtime 产品化治理：目录扫描、风险等级、审批、远程注册和复杂会话恢复。
 7. 以独立大版本实现实时语音、用户打断、播放中断和多源提示仲裁。
 8. 补齐 iOS、ESP32 和 Python SDK 的正式打包、安装和版本兼容说明。

@@ -17,10 +17,11 @@ from agent_core.camera import CameraCaptureResult
 from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace, MessageContext
 from agent_core.context.assembler import ContextAssembler
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
+from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
-from infra.errors import ErrorCode, build_error
+from infra.errors import AppError, ErrorCode, build_error
 from openaiglasses import OpenAIGlassesSDK
 from openaiglasses.server import HybridTaskGateway
 
@@ -51,10 +52,11 @@ class FakeCameraGateway:
         )
 
 
-def build_tooling(device_state_reader=lambda: {}, camera_gateway=None, task_gateway=None):
+def build_tooling(device_state_reader=lambda: {}, camera_gateway=None, task_gateway=None, skill_runtime=None):
     registry = ToolRegistry(
         device_state_reader=device_state_reader,
         camera_gateway=camera_gateway,
+        skill_runtime=skill_runtime,
         task_gateway=task_gateway
         or HybridTaskGateway(
             base_gateway=InMemoryTaskGateway(),
@@ -693,6 +695,91 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertNotIn("json", instructions.lower())
         self.assertNotIn("资产", instructions)
         self.assertNotIn("请遵守以下规则", instructions)
+
+    def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:
+        """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。
+
+        测试方法：
+        1. 注册一个只允许 `capture_photo` 的 Skill。
+        2. 通过 `read_skill` 工具读取 Skill 文档。
+        3. 执行一轮 Agent，并检查 system prompt 与模型工具列表。
+
+        预期结果：
+        1. `read_skill` 会把 Skill 加入当前会话 active 状态。
+        2. system prompt 包含 active Skill 正文。
+        3. 模型可见工具只保留 `read_skill` 与 Skill 白名单中的工具。
+        """
+
+        skill_runtime = SkillRuntime()
+        skill_runtime.register(
+            SkillDocument(
+                manifest=SkillManifest(
+                    name="scene_inspection",
+                    version="1.0.0",
+                    description="看清用户眼前场景",
+                    allowed_tools=["capture_photo"],
+                ),
+                content="先拍照，再根据照片用一句话回答。",
+            )
+        )
+        registry, gateway = build_tooling(skill_runtime=skill_runtime)
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_skill_001",
+            turn_id="turn_read_skill_001",
+        )
+
+        read_result = registry.invoke(
+            name="read_skill",
+            context=context,
+            arguments={"skill_name": "scene_inspection"},
+        )
+
+        self.assertTrue(read_result.ok)
+        self.assertEqual(read_result.data["active_skill_names"], ["scene_inspection"])
+        with self.assertRaises(AppError) as blocked:
+            registry.invoke(
+                name="query_device_state",
+                context=context,
+                arguments={},
+            )
+        self.assertEqual(blocked.exception.code, ErrorCode.UNAUTHORIZED)
+
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+            skill_runtime=skill_runtime,
+        )
+        session = AgentSession(session_id="sess_skill_001", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_skill_001",
+            session_id="sess_skill_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="看一下前面有什么",
+        )
+
+        class _FakeRunResult:
+            def __init__(self) -> None:
+                self.final_output = "前面有一张桌子。"
+
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_sync", return_value=_FakeRunResult()) as mocked_run:
+                result = runner.run_turn(session=session, turn=turn)
+
+        agent = mocked_run.call_args.args[0]
+        tool_names = [
+            getattr(tool, "name", None) or getattr(tool, "_tool_name_override", "")
+            for tool in agent.kwargs["tools"]
+        ]
+        self.assertEqual(tool_names, ["capture_photo", "read_skill"])
+        self.assertIn("当前 active Skills", result.meta["model_request"]["instructions"])
+        self.assertIn("先拍照，再根据照片用一句话回答。", result.meta["model_request"]["instructions"])
+        self.assertEqual(result.meta["model_request"]["active_skills"], ["scene_inspection"])
+        self.assertEqual(result.meta["model_request"]["allowed_tool_names"], ["capture_photo", "read_skill"])
 
     def test_openai_runner_creates_event_loop_in_worker_thread(self) -> None:
         """测试目标：验证 OpenAIAgentLoopRunner 在工作线程中会自动补齐 event loop。

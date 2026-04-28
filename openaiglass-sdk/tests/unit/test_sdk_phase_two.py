@@ -26,6 +26,8 @@ from openaiglasses import (
     OpenAIGlassesSDK,
     PhoneTaskContext,
     SensorReading,
+    SkillDocument,
+    SkillManifest,
     build_agent_facade_from_sdk,
 )
 from agent_core.tools.base import AgentToolContext
@@ -951,6 +953,43 @@ def test_build_agent_facade_from_sdk_registers_sdk_tools() -> None:
     assert result.ok is True
     assert result.data["target_object"] == "水杯"
     assert result.data["task_id"].startswith("task_")
+
+
+def test_openai_glasses_sdk_registers_skill_runtime() -> None:
+    """测试目标：验证 OpenAIGlassesSDK 可注册 Skill 并注入 AgentFacade。
+
+    测试方法：
+    1. 创建 SDK 并注册一个 Skill 文档。
+    2. 基于 SDK 构建 `AgentFacade`。
+    3. 读取 facade 内部 Skill Runtime 快照和 `read_skill` 工具。
+
+    预期结果：
+    1. Skill 名称进入运行时快照。
+    2. `read_skill` 工具被注册到 agent-core 工具表。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_skill(
+        SkillDocument(
+            manifest=SkillManifest(
+                name="navigation_guide",
+                version="1.0.0",
+                description="导航引导 Skill",
+                allowed_tools=["capture_photo"],
+            ),
+            content="根据导航任务上下文输出下一步提示。",
+        )
+    )
+
+    facade = build_agent_facade_from_sdk(
+        sdk=sdk,
+        settings=ServerSettings(),
+    )
+
+    skill_runtime = facade.get_skill_runtime()
+    assert skill_runtime is sdk.skill_runtime
+    assert skill_runtime.build_snapshot()["registered_skill_names"] == ["navigation_guide"]
+    assert facade.get_tool_registry().get("read_skill") is not None
 
 
 def test_blind_server_handle_can_build_real_runtime() -> None:

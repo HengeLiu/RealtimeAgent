@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from agent_core.camera import CameraGateway
 from agent_core.mcp import McpGateway, McpRegistry
 from agent_core.models import ToolSpec
+from agent_core.skills import SkillRuntime
 from agent_core.tools.base import AgentToolContext, BaseMcpTool, BaseTool
 from backend_task_core import InMemoryTaskGateway, TaskGateway
 from infra.errors import ErrorCode, build_error
@@ -76,12 +77,14 @@ class ToolRegistry:
         camera_gateway: CameraGateway | None = None,
         mcp_registry: McpRegistry | None = None,
         mcp_gateway: McpGateway | None = None,
+        skill_runtime: SkillRuntime | None = None,
     ) -> None:
         self._device_state_reader = device_state_reader
         self._task_gateway = task_gateway or InMemoryTaskGateway()
         self._camera_gateway = camera_gateway
         self._mcp_registry = mcp_registry or McpRegistry()
         self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
+        self._skill_runtime = skill_runtime
         self._device_group_context_factory = None
         self._tools: dict[str, BaseTool] = {}
         self._sdk_tools: dict[str, Any] = {}
@@ -117,6 +120,7 @@ class ToolRegistry:
             CapturePhotoTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
+            ReadSkillTool,
             StartPhoneVideoLinkTool,
         )
 
@@ -144,6 +148,12 @@ class ToolRegistry:
                 expose_to_model=False,
             )
 
+        if self._skill_runtime is not None:
+            self._register_tool(
+                ReadSkillTool(self._skill_runtime),
+                expose_to_model=bool(self._skill_runtime.list_skill_names()),
+            )
+
     def _register_tool(self, tool: BaseTool, *, expose_to_model: bool) -> None:
         self._tools[tool.spec.name] = tool
         self._sdk_tools[tool.spec.name] = self._build_sdk_tool(
@@ -166,15 +176,32 @@ class ToolRegistry:
 
         return self._tools.get(name)
 
-    def list_tools(self) -> list[BaseTool]:
+    def list_tools(self, *, allowed_names: set[str] | None = None) -> list[BaseTool]:
         """列出当前对模型暴露的 Tool。"""
 
-        return [self._tools[name] for name in self._model_tool_names]
+        names = self._filter_model_tool_names(allowed_names)
+        return [self._tools[name] for name in names]
 
-    def list_sdk_tools(self) -> list[Any]:
+    def list_sdk_tools(self, *, allowed_names: set[str] | None = None) -> list[Any]:
         """返回当前对模型暴露的 SDK Tool。"""
 
-        return [self._sdk_tools[name] for name in self._model_tool_names]
+        names = self._filter_model_tool_names(allowed_names)
+        return [self._sdk_tools[name] for name in names]
+
+    def get_skill_runtime(self) -> SkillRuntime | None:
+        """返回 Skill Runtime。"""
+
+        return self._skill_runtime
+
+    def is_tool_allowed_for_session(self, *, session_id: str, tool_name: str) -> bool:
+        """判断指定会话是否允许调用工具。"""
+
+        if self._skill_runtime is None:
+            return True
+        allowed_names = self._skill_runtime.allowed_tool_names_for_session(session_id=session_id)
+        if allowed_names is None:
+            return True
+        return tool_name in allowed_names
 
     def get_device_state_reader(self):
         """返回设备状态读取函数。"""
@@ -211,6 +238,14 @@ class ToolRegistry:
             gateway = ToolGateway(self)
             self.bind_gateway(gateway)
         return gateway.invoke(name=name, context=context, arguments=arguments)
+
+    def _filter_model_tool_names(self, allowed_names: set[str] | None) -> list[str]:
+        """按 Skill 白名单过滤模型可见工具。"""
+
+        if allowed_names is None:
+            return list(self._model_tool_names)
+        normalized = {str(item).strip() for item in allowed_names if str(item).strip()}
+        return [name for name in self._model_tool_names if name in normalized]
 
     def _build_sdk_tool(
         self,

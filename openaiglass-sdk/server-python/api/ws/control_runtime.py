@@ -759,11 +759,20 @@ class ControlRuntime(CameraGateway):
                 "phone_to_glass": phone_to_glass,
             },
             "device_groups": self._device_group_runtime.build_snapshot(),
+            "skills": self._build_skill_runtime_snapshot(),
             "pending_camera_capture_count": pending_camera_capture_count,
             "voice_sessions": self._voice_runtime.build_runtime_snapshot(),
         }
         snapshot["diagnostics"] = self._build_runtime_diagnostics(snapshot)
         return snapshot
+
+    def _build_skill_runtime_snapshot(self) -> dict[str, object]:
+        """构建 Skill Runtime 快照。"""
+
+        skill_runtime = self._voice_runtime.agent_facade.get_skill_runtime()
+        if skill_runtime is None:
+            return {"registered_skill_names": [], "sessions": []}
+        return skill_runtime.build_snapshot()
 
     def is_device_registered(self, device_id: str) -> bool:
         """判断设备是否已经完成控制面注册。
