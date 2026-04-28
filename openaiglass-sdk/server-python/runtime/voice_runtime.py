@@ -24,6 +24,7 @@ from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 from protocol.media import MediaFrame
 from runtime.notifications import NotificationCoordinator, NotificationRequest, NotificationSubmitResult
+from runtime.playback_arbiter import PlaybackArbiter, PlaybackIntent
 from runtime.task_event_bridge import TaskEventBridge
 
 SERVER_SAMPLE_RATE_HZ = 16000
@@ -121,6 +122,12 @@ class PlaybackStreamContext:
     stream_id: str
     sample_rate: int
     channels: int
+    source: str = "agent_reply"
+    priority: str = "normal"
+    interrupt_policy: str = "never"
+    resume_policy: str = "drop_interrupted"
+    task_id: str | None = None
+    intent_id: str = ""
     queue: queue.Queue[bytes | None] = field(default_factory=lambda: queue.Queue(maxsize=PLAYBACK_QUEUE_MAX))
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     first_text_delta_at_ms: int | None = None
@@ -872,6 +879,7 @@ class VoiceRuntime:
             dispatcher=self._dispatch_notification_request,
             interrupter=self._interrupt_notification_request,
         )
+        self._playback_arbiter = PlaybackArbiter()
 
     def open_session(self, *, device_id: str, device_type: str, session_id: str) -> None:
         with self._lock:
@@ -934,6 +942,7 @@ class VoiceRuntime:
                 playback.completed = True
                 playback.finished_event.set()
                 self._playback_streams.pop((device_id, playback.stream_id), None)
+                self._playback_arbiter.remove(device_id=device_id, stream_id=playback.stream_id)
                 request_id = self._notification_stream_requests.pop((device_id, playback.stream_id), None)
                 if request_id is not None:
                     self._notification_request_streams.pop(request_id, None)
@@ -1108,14 +1117,24 @@ class VoiceRuntime:
             playback.completed = True
             playback.finished_event.set()
             self._playback_streams.pop((device_id, stream_id), None)
+            next_intent = self._playback_arbiter.complete(device_id=device_id, stream_id=stream_id)
             if controller.current_playback is playback:
-                if controller.pending_playbacks:
-                    next_playback = controller.pending_playbacks.pop(0)
-                    controller.current_playback = next_playback
-                    controller.state = "reply_streaming"
+                if next_intent is not None:
+                    next_playback = self._pop_pending_playback_locked(controller, next_intent.stream_id)
+                    if next_playback is not None:
+                        controller.current_playback = next_playback
+                        controller.state = "reply_streaming"
+                    else:
+                        controller.current_playback = None
+                        controller.state = "listening"
                 else:
                     controller.current_playback = None
                     controller.state = "listening"
+            elif next_intent is not None and controller.current_playback is None:
+                next_playback = self._pop_pending_playback_locked(controller, next_intent.stream_id)
+                if next_playback is not None:
+                    controller.current_playback = next_playback
+                    controller.state = "reply_streaming"
             notification_request_id = self._notification_stream_requests.pop((device_id, stream_id), None)
             if notification_request_id is not None:
                 self._notification_request_streams.pop(notification_request_id, None)
@@ -1149,6 +1168,103 @@ class VoiceRuntime:
             controller.last_playback_stream_id = stream_id
             controller.last_playback_state = state
             controller.last_playback_reason = reason
+
+    def handle_user_interrupt(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        reason: str = "user_voice_interrupt",
+        clear_queue: bool = True,
+    ) -> dict[str, Any]:
+        """处理用户主动打断播放。
+
+        主要逻辑：
+        1. 将当前播放和可选待播队列从统一播放仲裁器中移除。
+        2. 中断本地播放流队列，并向眼镜下发 `actuator.audio.interrupt`。
+        3. 在运行态快照中保留最后一次播放终态和仲裁决策。
+
+        参数：
+        1. `device_id`：发生打断的眼镜设备编号。
+        2. `session_id`：当前语音会话编号。
+        3. `reason`：打断原因，例如 user_voice_interrupt 或 button_interrupt。
+        4. `clear_queue`：是否同时清空待播队列。
+
+        返回值：
+        1. 可序列化的打断处理结果。
+
+        异常情况：
+        1. 设备会话不存在或会话编号不匹配时抛出结构化错误。
+        """
+
+        controller = self._get_controller(device_id)
+        interrupted_playback: PlaybackStreamContext | None = None
+        dropped_playbacks: list[PlaybackStreamContext] = []
+        cancelled_notification_request_ids: list[str] = []
+        with self._lock:
+            self._ensure_session_match(controller, session_id)
+            result = self._playback_arbiter.user_interrupt(
+                device_id=device_id,
+                session_id=session_id,
+                reason=reason,
+                clear_queue=clear_queue,
+            )
+            interrupted_playback, notification_request_id = self._remove_playback_by_intent_locked(
+                controller=controller,
+                intent=result.interrupted_intent,
+                reason=reason,
+            )
+            if notification_request_id is not None:
+                cancelled_notification_request_ids.append(notification_request_id)
+            for dropped_intent in result.dropped_intents:
+                dropped_playback, notification_request_id = self._remove_playback_by_intent_locked(
+                    controller=controller,
+                    intent=dropped_intent,
+                    reason=reason,
+                )
+                if notification_request_id is not None:
+                    cancelled_notification_request_ids.append(notification_request_id)
+                if dropped_playback is not None:
+                    dropped_playbacks.append(dropped_playback)
+            if interrupted_playback is not None:
+                controller.last_playback_stream_id = interrupted_playback.stream_id
+                controller.last_playback_state = "interrupted"
+                controller.last_playback_reason = reason
+            if controller.current_playback is None:
+                controller.state = "listening"
+        for playback in [interrupted_playback, *dropped_playbacks]:
+            if playback is None:
+                continue
+            try:
+                playback.queue.put_nowait(None)
+            except queue.Full:
+                pass
+        if interrupted_playback is not None:
+            self._send_control_message(
+                device_id,
+                "request",
+                "actuator.audio.interrupt",
+                session_id,
+                {
+                    "device_id": device_id,
+                    "stream_id": interrupted_playback.stream_id,
+                    "reason": reason,
+                    "clear_queue": clear_queue,
+                },
+            )
+        for request_id in cancelled_notification_request_ids:
+            self._notification_coordinator.cancel_request(
+                device_id=device_id,
+                request_id=request_id,
+                reason=reason,
+                clear_queue=clear_queue,
+            )
+        return {
+            "decision": result.decision.to_dict(),
+            "interrupted_stream_id": interrupted_playback.stream_id if interrupted_playback else None,
+            "dropped_stream_ids": [playback.stream_id for playback in dropped_playbacks],
+            "cancelled_notification_request_ids": cancelled_notification_request_ids,
+        }
 
     def on_task_event(self, event: TaskEvent) -> None:
         """处理后台任务事件。
@@ -1203,6 +1319,7 @@ class VoiceRuntime:
         with self._lock:
             controllers = list(self._controllers.values())
         notification_snapshot = self._notification_coordinator.build_snapshot()
+        playback_snapshot = self._playback_arbiter.build_snapshot()
         result: dict[str, dict[str, Any]] = {}
         for controller in controllers:
             current_playback = controller.current_playback
@@ -1226,6 +1343,13 @@ class VoiceRuntime:
                 "last_playback_stream_id": controller.last_playback_stream_id,
                 "last_playback_state": controller.last_playback_state,
                 "last_playback_reason": controller.last_playback_reason,
+                "active_playback_intent": playback_snapshot["active_intents"].get(controller.device_id),
+                "pending_playback_intents": playback_snapshot["pending_intents"].get(controller.device_id, []),
+                "recent_playback_decisions": [
+                    decision
+                    for decision in playback_snapshot["recent_decisions"]
+                    if decision.get("device_id") == controller.device_id
+                ],
                 "active_notification": notification_snapshot["active_requests"].get(controller.device_id),
                 "pending_notifications": notification_snapshot["pending_requests"].get(controller.device_id, []),
                 "recent_notification_decisions": [
@@ -1581,7 +1705,15 @@ class VoiceRuntime:
         if not text:
             return
         try:
-            context = self._open_reply_synthesis_context(device_id=request.device_id, session_id=request.session_id)
+            context = self._open_reply_synthesis_context(
+                device_id=request.device_id,
+                session_id=request.session_id,
+                source="vision_alert" if request.notification_type.startswith("vision.") else "task_notification",
+                priority=request.priority,
+                interrupt_policy=request.interrupt_policy,
+                resume_policy=request.resume_policy,
+                task_id=request.task_id,
+            )
             with self._lock:
                 self._notification_stream_requests[(request.device_id, context.stream_id)] = request.request_id
                 self._notification_request_streams[request.request_id] = (request.device_id, context.stream_id)
@@ -1674,25 +1806,16 @@ class VoiceRuntime:
             interrupt_stream_id = stream_id
             self._notification_stream_requests.pop((device_id, stream_id), None)
             playback = self._playback_streams.pop((device_id, stream_id), None)
+            self._playback_arbiter.remove(device_id=device_id, stream_id=stream_id)
             controller = self._controllers.get(device_id)
             if playback is None or controller is None:
                 return
             interrupt_session_id = playback.session_id
-            self._interrupted_playback_streams.add((device_id, stream_id))
-            controller.last_playback_stream_id = stream_id
-            controller.last_playback_state = "interrupted"
-            controller.last_playback_reason = "higher_priority_notification"
-            playback.abort_event.set()
-            playback.failed = True
-            playback.completed = True
-            playback.finished_event.set()
-            if controller.current_playback is playback:
-                controller.current_playback = None
-                controller.state = "listening"
-            else:
-                controller.pending_playbacks = [
-                    pending for pending in controller.pending_playbacks if pending is not playback
-                ]
+            self._mark_playback_interrupted_locked(
+                controller=controller,
+                playback=playback,
+                reason="higher_priority_notification",
+            )
         if (
             interrupt_device_id is not None
             and interrupt_session_id is not None
@@ -1758,11 +1881,30 @@ class VoiceRuntime:
         if playback.first_text_delta_at_ms is None:
             playback.first_text_delta_at_ms = self._now_ms()
 
-    def _open_reply_synthesis_context(self, *, device_id: str, session_id: str) -> ReplySynthesisContext:
+    def _open_reply_synthesis_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        source: str = "agent_reply",
+        priority: str = "normal",
+        interrupt_policy: str = "never",
+        resume_policy: str = "drop_interrupted",
+        task_id: str | None = None,
+    ) -> ReplySynthesisContext:
         """创建一条新的回复播放流上下文。"""
 
         stream_id = f"reply_{uuid.uuid4().hex[:12]}"
-        playback = self._create_playback_stream(device_id=device_id, session_id=session_id, stream_id=stream_id)
+        playback = self._create_playback_stream(
+            device_id=device_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            source=source,
+            priority=priority,
+            interrupt_policy=interrupt_policy,
+            resume_policy=resume_policy,
+            task_id=task_id,
+        )
         return ReplySynthesisContext(stream_id=stream_id, playback=playback)
 
     def _request_playback_start(
@@ -1880,14 +2022,33 @@ class VoiceRuntime:
 
         self._finish_playback_stream(context.playback)
 
-    def _create_playback_stream(self, *, device_id: str, session_id: str, stream_id: str) -> PlaybackStreamContext:
+    def _create_playback_stream(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        stream_id: str,
+        source: str = "agent_reply",
+        priority: str = "normal",
+        interrupt_policy: str = "never",
+        resume_policy: str = "drop_interrupted",
+        task_id: str | None = None,
+    ) -> PlaybackStreamContext:
+        intent_id = f"{source}:{stream_id}"
         playback = PlaybackStreamContext(
             device_id=device_id,
             session_id=session_id,
             stream_id=stream_id,
             sample_rate=SERVER_SAMPLE_RATE_HZ,
             channels=SERVER_CHANNELS,
+            source=source,
+            priority=priority,
+            interrupt_policy=interrupt_policy,
+            resume_policy=resume_policy,
+            task_id=task_id,
+            intent_id=intent_id,
         )
+        interrupted_playback: PlaybackStreamContext | None = None
         with self._lock:
             controller = self._controllers.get(device_id)
             if controller is None:
@@ -1896,12 +2057,57 @@ class VoiceRuntime:
                     "未找到对应设备的语音会话控制器",
                     details={"device_id": device_id},
                 )
-            if controller.current_playback is None or controller.current_playback.completed:
+            intent = PlaybackIntent(
+                intent_id=intent_id,
+                source=source,
+                device_id=device_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                priority=priority,
+                interrupt_policy=interrupt_policy,
+                resume_policy=resume_policy,
+                task_id=task_id,
+            )
+            submit_result = self._playback_arbiter.submit(intent)
+            if submit_result.interrupted_intent is not None:
+                interrupted_stream_id = submit_result.interrupted_intent.stream_id
+                interrupted_playback = self._playback_streams.pop((device_id, interrupted_stream_id), None)
+                if interrupted_playback is not None:
+                    self._mark_playback_interrupted_locked(
+                        controller=controller,
+                        playback=interrupted_playback,
+                        reason="higher_priority_playback",
+                    )
+                    request_id = self._notification_stream_requests.pop((device_id, interrupted_stream_id), None)
+                    if request_id is not None:
+                        self._notification_request_streams.pop(request_id, None)
+            if submit_result.decision.action in {"play_now", "interrupt"}:
                 controller.current_playback = playback
             else:
                 controller.pending_playbacks.append(playback)
+                controller.pending_playbacks.sort(
+                    key=lambda item: (-self._playback_priority_value(item.priority), item.created_at_ms)
+                )
             self._playback_streams[(device_id, stream_id)] = playback
             self._playback_condition.notify_all()
+        if interrupted_playback is not None:
+            self._send_control_message(
+                device_id,
+                "request",
+                "actuator.audio.interrupt",
+                interrupted_playback.session_id,
+                {
+                    "device_id": device_id,
+                    "stream_id": interrupted_playback.stream_id,
+                    "reason": "higher_priority_playback",
+                    "incoming_stream_id": stream_id,
+                    "resume_policy": interrupted_playback.resume_policy,
+                },
+            )
+            try:
+                interrupted_playback.queue.put_nowait(None)
+            except queue.Full:
+                pass
         return playback
 
     def _enqueue_playback_chunk(self, playback: PlaybackStreamContext, chunk: bytes) -> None:
@@ -1938,6 +2144,7 @@ class VoiceRuntime:
                 pending.abort_event.set()
                 pending.finished_event.set()
                 self._playback_streams.pop((device_id, pending.stream_id), None)
+                self._playback_arbiter.remove(device_id=device_id, stream_id=pending.stream_id)
                 request_id = self._notification_stream_requests.pop((device_id, pending.stream_id), None)
                 if request_id is not None:
                     self._notification_request_streams.pop(request_id, None)
@@ -1948,6 +2155,7 @@ class VoiceRuntime:
             controller.pending_playbacks.clear()
             controller.state = "failed"
             self._playback_streams.pop((device_id, playback.stream_id), None)
+            self._playback_arbiter.remove(device_id=device_id, stream_id=playback.stream_id)
             request_id = self._notification_stream_requests.pop((device_id, playback.stream_id), None)
             if request_id is not None:
                 self._notification_request_streams.pop(request_id, None)
@@ -1955,6 +2163,73 @@ class VoiceRuntime:
             playback.queue.put_nowait(None)
         except queue.Full:
             pass
+
+    def _playback_priority_value(self, priority: str) -> int:
+        """把播放优先级转换为本地队列排序值。"""
+
+        return {
+            "low": 0,
+            "normal": 1,
+            "high": 2,
+            "critical": 3,
+        }.get(priority, 1)
+
+    def _pop_pending_playback_locked(
+        self,
+        controller: VoiceSessionController,
+        stream_id: str,
+    ) -> PlaybackStreamContext | None:
+        """按播放流编号从待播队列取出下一条播放流。"""
+
+        for index, pending in enumerate(controller.pending_playbacks):
+            if pending.stream_id == stream_id:
+                return controller.pending_playbacks.pop(index)
+        return None
+
+    def _mark_playback_interrupted_locked(
+        self,
+        *,
+        controller: VoiceSessionController,
+        playback: PlaybackStreamContext,
+        reason: str,
+    ) -> None:
+        """在持锁状态下把播放流标记为已中断。"""
+
+        playback.failed = True
+        playback.completed = True
+        playback.abort_event.set()
+        playback.finished_event.set()
+        self._interrupted_playback_streams.add((playback.device_id, playback.stream_id))
+        controller.last_playback_stream_id = playback.stream_id
+        controller.last_playback_state = "interrupted"
+        controller.last_playback_reason = reason
+        if controller.current_playback is playback:
+            controller.current_playback = None
+            controller.state = "listening"
+        else:
+            controller.pending_playbacks = [
+                pending for pending in controller.pending_playbacks if pending is not playback
+            ]
+
+    def _remove_playback_by_intent_locked(
+        self,
+        *,
+        controller: VoiceSessionController,
+        intent: PlaybackIntent | None,
+        reason: str,
+    ) -> tuple[PlaybackStreamContext | None, str | None]:
+        """按仲裁器意图移除本地播放流。"""
+
+        if intent is None:
+            return None, None
+        playback = self._playback_streams.pop((intent.device_id, intent.stream_id), None)
+        request_id = self._notification_stream_requests.pop((intent.device_id, intent.stream_id), None)
+        if request_id is not None:
+            self._notification_request_streams.pop(request_id, None)
+        if playback is None:
+            return None, request_id
+        self._mark_playback_interrupted_locked(controller=controller, playback=playback, reason=reason)
+        return playback, request_id
 
     def _wait_for_playback(self, *, device_id: str, stream_id: str, timeout_s: float) -> PlaybackStreamContext:
         deadline = time.monotonic() + timeout_s

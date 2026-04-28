@@ -382,6 +382,98 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(len(controller.pending_playbacks), 1)
         self.assertIs(controller.pending_playbacks[0], second)
 
+    def test_high_priority_playback_interrupts_current_reply(self) -> None:
+        """测试目标：验证高优先级视觉告警可以抢占普通 Agent 回复。
+
+        测试方法：
+        1. 创建一条普通 Agent 回复播放流。
+        2. 再创建一条 critical 视觉告警播放流，并设置按优先级抢占。
+        3. 检查运行态快照和下发给设备的中断控制消息。
+
+        预期结果：
+        1. 当前播放流切换为视觉告警。
+        2. 原普通回复被标记为 interrupted。
+        3. 控制面向设备发送 `actuator.audio.interrupt`。
+        """
+
+        sent_messages: list[tuple[str, str, str, str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *args: sent_messages.append(args),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-interrupt")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-interrupt")
+
+        first = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-interrupt",
+            stream_id="reply_agent_001",
+        )
+        second = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部状态机
+            device_id="glass-001",
+            session_id="sess-interrupt",
+            stream_id="reply_alert_001",
+            source="vision_alert",
+            priority="critical",
+            interrupt_policy="higher_priority",
+        )
+
+        snapshot = runtime.build_runtime_snapshot()["glass-001"]
+        self.assertTrue(first.failed)
+        self.assertEqual(snapshot["reply_stream_id"], second.stream_id)
+        self.assertEqual(snapshot["last_playback_state"], "interrupted")
+        self.assertEqual(sent_messages[-1][2], "actuator.audio.interrupt")
+        self.assertEqual(snapshot["recent_playback_decisions"][-1]["action"], "interrupt")
+
+    def test_user_interrupt_clears_current_and_pending_playback(self) -> None:
+        """测试目标：验证用户语音打断会清理当前播放和待播队列。
+
+        测试方法：
+        1. 创建当前播放流和一条待播播放流。
+        2. 调用用户打断入口并要求清空队列。
+        3. 检查播放流、快照和设备中断消息。
+
+        预期结果：
+        1. 当前播放流和待播播放流都从运行时移除。
+        2. 快照中没有活动播放和待播播放。
+        3. 运行时向设备发送 `actuator.audio.interrupt`。
+        """
+
+        sent_messages: list[tuple[str, str, str, str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *args: sent_messages.append(args),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-user-interrupt")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-user-interrupt")
+
+        current = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖用户打断路径
+            device_id="glass-001",
+            session_id="sess-user-interrupt",
+            stream_id="reply_user_interrupt_001",
+        )
+        pending = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖用户打断路径
+            device_id="glass-001",
+            session_id="sess-user-interrupt",
+            stream_id="reply_user_interrupt_002",
+        )
+
+        result = runtime.handle_user_interrupt(
+            device_id="glass-001",
+            session_id="sess-user-interrupt",
+            reason="user_voice_interrupt",
+            clear_queue=True,
+        )
+
+        snapshot = runtime.build_runtime_snapshot()["glass-001"]
+        self.assertEqual(result["interrupted_stream_id"], current.stream_id)
+        self.assertEqual(result["dropped_stream_ids"], [pending.stream_id])
+        self.assertIsNone(snapshot["reply_stream_id"])
+        self.assertEqual(snapshot["pending_playback_intents"], [])
+        self.assertEqual(snapshot["last_playback_state"], "interrupted")
+        self.assertEqual(sent_messages[-1][2], "actuator.audio.interrupt")
+        self.assertEqual(snapshot["recent_playback_decisions"][-1]["action"], "user_interrupt")
+
     def test_stream_playback_treats_broken_pipe_as_client_disconnect(self) -> None:
         """测试目标：验证播放流 HTTP 客户端提前断开时不抛出 traceback。"""
 

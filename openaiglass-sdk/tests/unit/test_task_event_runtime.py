@@ -180,6 +180,68 @@ class TaskEventRuntimeTestCase(unittest.TestCase):
         self.assertEqual(next_request.request_id, "notify_102")
         self.assertEqual([request.request_id for request in dispatched], ["notify_101", "notify_102"])
 
+    def test_notification_coordinator_cancel_does_not_dispatch_pending(self) -> None:
+        """测试目标：验证用户打断取消通知时不会立刻放行下一条通知。
+
+        测试方法：
+        1. 构造一条活动通知和一条待播通知。
+        2. 调用取消接口，并要求清空队列。
+        3. 检查通知快照和下发记录。
+
+        预期结果：
+        1. 活动通知被移除。
+        2. 待播通知被清空。
+        3. 下发器不会因为取消而播报下一条通知。
+        """
+
+        dispatched: list[NotificationRequest] = []
+        coordinator = NotificationCoordinator(dispatcher=dispatched.append)
+        first = NotificationRequest(
+            request_id="notify_cancel_001",
+            source_module="backend-task-core",
+            session_id="sess_cancel",
+            device_id="glass-001",
+            task_id="task_cancel_001",
+            priority="normal",
+            notification_type="task.progress.updated",
+            delivery_mode="audio",
+            allow_interrupt=False,
+            allow_merge=True,
+            requires_agent_context_sync=True,
+            dedupe_key="task.progress.updated:task_cancel_001",
+            payload={"text": "任务正在执行"},
+        )
+        second = NotificationRequest(
+            request_id="notify_cancel_002",
+            source_module="backend-task-core",
+            session_id="sess_cancel",
+            device_id="glass-001",
+            task_id="task_cancel_002",
+            priority="normal",
+            notification_type="task.progress.updated",
+            delivery_mode="audio",
+            allow_interrupt=False,
+            allow_merge=True,
+            requires_agent_context_sync=True,
+            dedupe_key="task.progress.updated:task_cancel_002",
+            payload={"text": "另一个任务正在执行"},
+        )
+        coordinator.submit(first)
+        coordinator.submit(second)
+
+        coordinator.cancel_request(
+            device_id="glass-001",
+            request_id="notify_cancel_001",
+            reason="user_voice_interrupt",
+            clear_queue=True,
+        )
+        snapshot = coordinator.build_snapshot()
+
+        self.assertEqual([request.request_id for request in dispatched], ["notify_cancel_001"])
+        self.assertNotIn("glass-001", snapshot["active_requests"])
+        self.assertNotIn("glass-001", snapshot["pending_requests"])
+        self.assertEqual(snapshot["recent_decisions"][-1]["action"], "cancelled")
+
     def test_notification_coordinator_interrupts_active_request_for_higher_priority(self) -> None:
         """测试目标：验证更高优先级通知会抢占当前活动通知。
 

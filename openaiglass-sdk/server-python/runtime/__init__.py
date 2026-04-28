@@ -6,6 +6,13 @@ from runtime.notifications import (
     NotificationRequest,
     NotificationSubmitResult,
 )
+from runtime.playback_arbiter import (
+    PlaybackArbiter,
+    PlaybackDecision,
+    PlaybackIntent,
+    PlaybackSubmitResult,
+    UserInterruptResult,
+)
 from runtime.task_event_bridge import TaskEventBridge
 from runtime.voice_runtime import VoiceRuntime
 
@@ -15,5 +22,10 @@ __all__ = [
     "NotificationDecision",
     "NotificationRequest",
     "NotificationSubmitResult",
+    "PlaybackArbiter",
+    "PlaybackDecision",
+    "PlaybackIntent",
+    "PlaybackSubmitResult",
+    "UserInterruptResult",
     "TaskEventBridge",
 ]

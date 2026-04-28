@@ -273,6 +273,61 @@ class NotificationCoordinator:
         self._dispatcher(next_request)
         return next_request
 
+    def cancel_request(
+        self,
+        *,
+        device_id: str,
+        request_id: str,
+        reason: str,
+        clear_queue: bool = False,
+    ) -> None:
+        """取消一条通知请求。
+
+        主要逻辑：
+        1. 用户主动打断或播放流被外部策略移除时，用取消语义清理通知协调状态。
+        2. 取消不会自动放行下一条通知，避免用户刚打断后立刻继续播报。
+        3. 可选清空同设备待播通知队列。
+        """
+
+        with self._lock:
+            active_request = self._active_requests.get(device_id)
+            if active_request is not None and active_request.request_id == request_id:
+                self._active_requests.pop(device_id, None)
+                self._decisions.append(
+                    NotificationDecision(
+                        action="cancelled",
+                        reason=reason,
+                        request_id=request_id,
+                        device_id=device_id,
+                    )
+                )
+            else:
+                pending = self._pending_requests.get(device_id, [])
+                remaining = [request for request in pending if request.request_id != request_id]
+                if len(remaining) != len(pending):
+                    self._pending_requests[device_id] = remaining
+                    self._decisions.append(
+                        NotificationDecision(
+                            action="cancelled",
+                            reason=reason,
+                            request_id=request_id,
+                            device_id=device_id,
+                        )
+                    )
+                if not self._pending_requests.get(device_id):
+                    self._pending_requests.pop(device_id, None)
+            if clear_queue:
+                dropped = self._pending_requests.pop(device_id, [])
+                for request in dropped:
+                    self._decisions.append(
+                        NotificationDecision(
+                            action="cancelled",
+                            reason=reason,
+                            request_id=request.request_id,
+                            device_id=device_id,
+                        )
+                    )
+
     def build_snapshot(self) -> dict[str, Any]:
         """导出当前通知仲裁状态。
 

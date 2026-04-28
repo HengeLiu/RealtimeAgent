@@ -17,6 +17,6 @@
 
 1. [SDK v1 迭代记录](./stage2/iteration-v1.md)
 2. [SDK v2 迭代记录](./stage2/iteration-v2.md)
-3. [SDK v3-v13 迭代记录](./stage2/)
+3. [SDK v3-v14 迭代记录](./stage2/)
 
 盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。

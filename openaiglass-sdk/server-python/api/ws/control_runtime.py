@@ -405,6 +405,9 @@ class ControlRuntime(CameraGateway):
         if message.name == "sensor.audio.segment.finished":
             self._handle_segment_finished(connection, message)
             return
+        if message.name == "user.voice.interrupt":
+            self._handle_user_voice_interrupt(connection, message)
+            return
         if message.name == "actuator.audio.started":
             self._handle_actuator_audio_started(connection, message)
             return
@@ -1301,6 +1304,32 @@ class ControlRuntime(CameraGateway):
             device_id=connection.device_id or "",
             session_id=message.session_id or "",
             payload=message.payload,
+        )
+
+    def _handle_user_voice_interrupt(self, connection: ControlConnection, message: ControlMessage) -> None:
+        """处理眼镜端用户语音打断事件。"""
+
+        connection.last_seen_monotonic = time.monotonic()
+        reason = str(message.payload.get("reason", "user_voice_interrupt")).strip() or "user_voice_interrupt"
+        clear_queue = bool(message.payload.get("clear_queue", True))
+        result = self._voice_runtime.handle_user_interrupt(
+            device_id=connection.device_id or "",
+            session_id=message.session_id or connection.session_id or "",
+            reason=reason,
+            clear_queue=clear_queue,
+        )
+        log_debug(
+            self._logger,
+            "用户语音打断已进入播放仲裁器",
+            self._build_connection_log_context(
+                connection,
+                fields={
+                    "reason": reason,
+                    "clear_queue": clear_queue,
+                    "interrupted_stream_id": result.get("interrupted_stream_id"),
+                    "dropped_stream_ids": result.get("dropped_stream_ids"),
+                },
+            ),
         )
 
     def _handle_actuator_audio_started(self, connection: ControlConnection, message: ControlMessage) -> None:

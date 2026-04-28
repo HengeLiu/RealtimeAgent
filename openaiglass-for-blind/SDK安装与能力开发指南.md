@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v14`。本版本补齐真 iOS 手机视觉资源协调器，支持 `vision_policy` 解析、帧率限制、最大帧数、独占模型资源租约、高优先级抢占、功耗降级和资源事件回流；上一版本补齐 iOS 与 ESP32 端侧 SDK 源码包清单和 package-check 校验。实时语音打断、全双工语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v15`。本版本补齐服务端统一播放仲裁和用户语音打断入口，普通 Agent 回复、任务通知、视觉告警和用户主动打断会进入 `PlaybackArbiter`，运行态快照可解释播放、排队、抢播、用户打断和队列清理原因；上一版本补齐真 iOS 手机视觉资源协调器。全双工实时语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -437,11 +437,20 @@ uv run openaiglass.glass.start \
 
 这些字段可以通过运行态接口和联调日志观察，用于判断当前链路是否真的在流式推进。如果 `reply_text_to_first_audio_ms` 很大，优先检查当前 TTS 是否回退到了全文合成；这不应该由业务 Tool 或 Task 自行处理。
 
-注意：`sdk-v8` 仍然不是实时语音打断版本。眼镜端播放期间的麦克风策略和用户语音打断，会在后续实时语音专项中统一处理。
+注意：`sdk-v15` 支持用户主动打断播报的半双工控制语义，但仍然不是全双工实时语音版本。实时收音、回声消除和复杂 VAD 仍由后续实时语音专项统一处理。
 
 ### 3.9 通知仲裁、抢播和打断边界
 
-`sdk-v8` 起，任务通知和 Agent 回流通知会进入 SDK 通知协调器。业务侧只提交结构化通知、优先级和策略，不直接操作播放器。
+`sdk-v15` 起，所有播放型输出都会先进入统一播放仲裁器：
+
+| 来源 | `source` | 说明 |
+| --- | --- | --- |
+| 普通 Agent 回复 | `agent_reply` | 语音问答、工具调用后最终回复和中间提示。 |
+| 任务通知 | `task_notification` | `TaskEventBridge` 或业务 Task 提交的结构化通知。 |
+| 视觉告警 | `vision_alert` | 手机视觉运行时产生的高优先级安全提示。 |
+| 用户主动打断 | `user_interrupt` | 眼镜端用户语音、按键或端侧打断事件。 |
+
+`sdk-v8` 的 `NotificationCoordinator` 仍然保留为通知去重、通知队列和兼容层；通过协调器批准的通知会继续转换成 `PlaybackIntent`，不再绕过统一播放策略。
 
 通知请求支持以下策略字段：
 
@@ -456,16 +465,39 @@ uv run openaiglass.glass.start \
 
 | 字段 | 说明 |
 | --- | --- |
+| `active_playback_intent` | 当前设备占用播报通道的统一播放意图。 |
+| `pending_playback_intents` | 当前设备待播意图队列，按优先级和创建时间排序。 |
+| `recent_playback_decisions` | 最近播放仲裁决策，包含 `play_now`、`queue`、`interrupt`、`user_interrupt` 等动作和原因。 |
 | `active_notification` | 当前设备正在播报或等待完成的活动通知。 |
 | `pending_notifications` | 当前设备待播通知队列。 |
 | `recent_notification_decisions` | 最近通知仲裁决策，包含直发、排队、抢播和去重原因。 |
+
+眼镜端可通过控制消息上报用户主动打断：
+
+```json
+{
+  "name": "user.voice.interrupt",
+  "semantic": "notify",
+  "session_id": "sess_xxx",
+  "payload": {
+    "reason": "user_voice_interrupt",
+    "clear_queue": true
+  }
+}
+```
+
+SDK 收到该消息后会：
+
+1. 停止当前播报并下发 `actuator.audio.interrupt`。
+2. 按 `clear_queue` 决定是否丢弃待播队列。
+3. 在 `last_playback_state`、`last_playback_reason` 和 `recent_playback_decisions` 中记录打断原因。
 
 业务开发者需要注意：
 
 1. 普通任务进度建议使用 `priority=normal` 或 `low`，不要抢播。
 2. 视觉风险、导航安全类事件可以使用 `priority=critical` 和 `interrupt_policy=critical_only`。
 3. 业务 Task 不要直接发送 `actuator.audio.interrupt`。
-4. `sdk-v8` 的“打断”只表示通知播放流被更高优先级通知抢播，不等于用户语音实时打断。
+4. 用户打断第一版是半双工控制能力，不代表已经具备全双工实时对话、回声消除或复杂 VAD。
 
 ### 3.10 账号级设备组织和多设备绑定
 
