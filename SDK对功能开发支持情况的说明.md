@@ -1,8 +1,10 @@
 # SDK 对功能开发支持情况的说明
 
 更新时间：2026-04-28  
+评估版本：`sdk-v5`（以 `openaiglass-for-blind/sdk-version` 为准）  
 评估对象：`openaiglass-sdk` 当前文档、代码与 `openaiglass-for-blind/docs/stage1/plan` 下全部阶段计划  
 评估目的：判断 SDK 当前对第一期功能开发计划的支撑程度，并明确功能开发团队遇到哪些问题应继续依赖 SDK，而不是在业务目录中重写系统能力。
+评估边界：只评估三端 SDK 框架为功能开发应提供的系统能力，不评估 `openaiglass-for-blind/capabilities` 下具体业务功能是否完成。
 
 ## 1. 评估依据
 
@@ -15,7 +17,7 @@
 
 ## 2. 总体结论
 
-当前 SDK 已经能支撑功能团队基于 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor` 和 MCP Adapter 继续做大部分第一期能力开发。设备注册绑定、三端配置同步、控制消息、媒体帧、非实时语音主链路、Agent 调用 Tool、SDK 托管 Task、单次抓拍、手机任务、眼镜到手机 JPEG 视频流、设备级回放测试等关键脚手架已经存在，业务侧不应再自行实现这些系统能力。
+当前 `sdk-v5` 已经能支撑功能团队基于 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor` 和 MCP Adapter 继续做大部分第一期能力开发。设备注册绑定、三端配置同步、控制消息、媒体帧、非实时语音主链路、Agent 调用 Tool、SDK 托管 Task、单次抓拍、手机任务、眼镜到手机 JPEG 视频流、任务事件日志、JSON 快照保存/恢复、手机多任务帧分发、设备级回放测试等关键脚手架已经存在，业务侧不应再自行实现这些系统能力。
 
 但 SDK 还不能称为完整产品级三端开发框架。实时语音打断、Skill Runtime 与 agent-core 的完整集成、真实地图服务治理、手机端多视觉模型资源仲裁、公网/NAT 直连、生产级持久化恢复、iOS/ESP32 发布级包化仍然不足。功能开发团队遇到这些问题时，应写入“架构阻塞点说明与改进建议”，不应在 `openaiglass-for-blind` 中绕过 SDK 自建协议、任务中心、连接管理或端侧资源治理。
 
@@ -31,7 +33,7 @@
 | 8. 后台任务管理工具和 SDK 托管 Task | 已支持基础闭环 | `BaseTask`、`TaskRuntimeManager` 支持创建、查询、取消、事件派发、超时、事件日志、JSON 快照保存/恢复。 | 长生命周期能力必须做成 `BaseTask`，不要用临时线程或临时协程绕过任务中心。 |
 | 9. 手机注册到服务器并与眼镜绑定 | 已支持基础闭环 | `ControlRuntime` 支持 `device_type=phone`、`device.bind`、自动绑定、绑定移除通知；iOS 运行时和 `phone-mock` 支持手机控制连接、心跳和 camera sink。 | 功能侧只声明目标手机和眼镜，不维护绑定表。 |
 | 10. 模型通过工具创建眼镜与手机直连视频任务 | 已支持最小闭环 | `start_phone_video_link`、`phone_video_link_task`、`sensor.camera.stream.start/stop`、`MediaFrame(camera_frame)`、iOS `/ws/camera` 接收和 ESP32 JPEG 推流已具备。 | 视频类能力通过 SDK 视频任务启动；业务 Task 只关心任务状态和手机侧处理结果。 |
-| 设备级数据回放测试 | 已支持基础能力 | `glass-playback` 可模拟眼镜控制、抓拍和视频流；`phone-mock` 可模拟手机注册、任务接收和事件回传；SDK 契约测试覆盖公共模型。 | 自动化优先走设备级回放，不再使用旧组件级 ScenarioRunner 思路。 |
+| 设备级数据回放测试 | 已支持基础能力 | `glass-playback` 可模拟眼镜控制、抓拍和视频流；`phone-mock` 可模拟手机注册、任务接收和事件回传；`PhoneRuntime.process_frame(...)` 支持同一路视频帧按 `stream_id` 和 `task_types` 分发给多个手机任务；SDK 契约测试覆盖公共模型。 | 自动化优先走设备级回放，不再使用旧组件级 ScenarioRunner 思路。 |
 | 三端配置、日志和预检 | 已支持日常联调 | `openaiglass.config.sync`、`openaiglass.sdk.live-check`、`openaiglass.sdk.preflight` 和结构化日志字段已存在。 | 三端联调前先同步配置和跑 live-check，日志按 `device_id/session_id/task_id/stream_id` 排查。 |
 
 ## 4. 存在欠缺但可以继续功能开发的功能
@@ -40,9 +42,9 @@
 | --- | --- | --- | --- |
 | 7. 基于 AMap MCP 的导航能力 | SDK 已有 MCP Adapter 接入面和任务运行时，但真实 AMap 鉴权、配额、超时、错误码、mock/real 切换规范还未产品化。 | 功能侧可以先实现业务侧 AMap Adapter 和 `navigation_task`，所有调用仍走 `context.mcp(...)`。 | SDK 沉淀统一 MCP 配置、错误包装、限流、重试和测试 mock 规范。 |
 | 第三阶段 Phase K 手机端视觉能力迁移 | 手机端任务和帧分发已支持，但模型加载、帧率降级、功耗、优先级、资源抢占等端侧治理不足。 | 首批视觉能力可按 `BasePhoneTask + BasePhoneProcessor` 或 iOS `PhoneTaskCapabilityRuntime` 做最小闭环。 | SDK 提供手机端模型资源管理、任务优先级、性能保护和统一检测结果模型。 |
-| Phase L 导航执行期任务 | `BaseTask` 能承载导航任务，视频和手机视觉事件也能回流，但路线准备、执行期策略、视觉事件对导航状态的影响仍需要业务样板沉淀。 | 功能侧可以做最小 `navigation_task`：创建、查询、取消、处理若干视觉事件。 | SDK 梳理导航类 Task 模板、通知策略和跨设备事件优先级。 |
+| Phase L 导航执行期任务 | `BaseTask` 能承载导航任务，视频和手机视觉事件也能回流；`sdk-v5` 已提供任务事件日志、超时和 JSON 快照恢复，但路线准备、执行期策略、视觉事件对导航状态的影响仍需要业务样板沉淀。 | 功能侧可以做最小 `navigation_task`：创建、查询、取消、处理若干视觉事件，并用任务快照验证状态推进。 | SDK 梳理导航类 Task 模板、通知策略和跨设备事件优先级。 |
 | 通知和抢播策略 | SDK 有 `NotificationCoordinator` 和 TaskEvent 桥接，但用户播报、任务通知、视觉告警、Agent 回复之间的完整优先级策略还不够稳定。 | 普通任务完成和低频提示可走 `submit_notification` 或任务事件回流。 | SDK 需要补可配置通知策略、去重、抢占和播放状态观测。 |
-| 任务持久化恢复 | `TaskRuntimeManager` 已有 JSON 快照保存和恢复，但不是数据库级事件溯源，也不覆盖多进程、多实例幂等。 | 本地开发和样板能力可用 JSON 快照做恢复验证。 | 生产化前补数据库存储、事件重放、幂等和重启补偿。 |
+| 任务持久化恢复 | `TaskRuntimeManager` 已有事件日志、超时治理、JSON 快照保存和恢复，但不是数据库级事件溯源，也不覆盖多进程、多实例幂等。 | 本地开发和样板能力可用 JSON 快照做恢复验证。 | 生产化前补数据库存储、事件重放、幂等和重启补偿。 |
 | Skill 扩展 | `SkillRegistry`、`SkillPolicy`、`SkillSessionState` 有骨架，但当前没有完整 `read_skill` Tool、active skill 工具白名单和 agent-core 集成。 | 复杂能力暂时按“高级 Tool + Task + MCP”实现，Skill 文档可先作为业务说明。 | SDK 继续实现 Skill Runtime：扫描 `SKILL.md`、模型按需读取、工具白名单、审计和测试。 |
 | 真实三端发布形态 | Python SDK 可 editable 安装，iOS/ESP32 仍以源码工程形态复用。 | 当前团队内开发可按指南打开业务宿主工程和 ESP-IDF 工程。 | 后续补 iOS SDK 包、ESP-IDF component、版本兼容和外部开发者安装流程。 |
 
