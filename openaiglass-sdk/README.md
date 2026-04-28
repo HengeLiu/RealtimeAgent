@@ -2,6 +2,14 @@
 
 本目录维护三端 SDK 开发框架，目标是隐藏眼镜、手机、服务器协作中的系统性细节，让业务开发者只扩展 Tool、Task、Skill 或手机侧处理器。
 
+Python SDK 本地开发可直接从本目录安装：
+
+```bash
+uv pip install -e openaiglass-sdk
+```
+
+顶层 `pyproject.toml` 会把 Python 包源码映射到 `server-python`；`server-python` 仍是实际的 Python 模块源码目录。
+
 ## 目录职责
 
 | 目录 | 职责 |

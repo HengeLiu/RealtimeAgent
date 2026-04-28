@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v29`。本版本在 `sdk-v28` 基础上补齐真实 ESP32 眼镜对服务端默认 `full_duplex_realtime` 打开请求的兼容：眼镜收到 `voice.realtime.session.open` 后会声明降级为 `half_duplex`，再复用现有 WakeNet 和 `/ws_audio` 半双工语音上传链路。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v30`。本版本在 `sdk-v29` 基础上为 `openaiglass-sdk/` 顶层补齐 Python 聚合安装入口，当前仓库本地开发可直接执行 `uv pip install -e openaiglass-sdk`，不再要求开发者记住内部 `server-python` 子目录。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -170,8 +170,10 @@ pip install openaiglasses-sdk
 
 ```bash
 uv sync --python 3.11
-uv pip install -e openaiglass-sdk/server-python
+uv pip install -e openaiglass-sdk
 ```
+
+`openaiglass-sdk/server-python` 仍然是 Python 包源码目录；顶层 `openaiglass-sdk/pyproject.toml` 只是把安装入口聚合到三端 SDK 根目录，便于统一安装和后续发布。
 
 安装后公开导入入口是：
 

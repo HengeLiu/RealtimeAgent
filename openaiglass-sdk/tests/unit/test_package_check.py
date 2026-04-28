@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from openaiglasses.cli import package_check
+
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_ios_and_esp32_package_manifests_are_valid() -> None:
@@ -38,6 +42,28 @@ def test_ios_and_esp32_package_manifests_are_valid() -> None:
     assert esp32_result["version"] == "sdk-v14"
     assert esp32_result["component_files"] >= 4
     assert "espressif/esp32-camera" in esp32_result["managed_dependencies"]
+
+
+def test_top_level_sdk_pyproject_installs_server_python_package() -> None:
+    """测试目标：确认顶层 openaiglass-sdk 可作为 Python SDK 安装入口。
+
+    测试方法：
+    1. 读取 `openaiglass-sdk/pyproject.toml`。
+    2. 检查包目录指向 `server-python`。
+    3. 检查公开 CLI 入口仍然存在。
+
+    预期结果：
+    1. `uv pip install -e openaiglass-sdk` 能找到 Python 打包配置。
+    2. 顶层安装入口与内部 `server-python` 包目录保持一致。
+    """
+
+    pyproject_path = ROOT / "openaiglass-sdk" / "pyproject.toml"
+    config = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    assert config["project"]["name"] == "openaiglasses-sdk"
+    assert config["tool"]["setuptools"]["package-dir"][""] == "server-python"
+    assert config["tool"]["setuptools"]["packages"]["find"]["where"] == ["server-python"]
+    assert config["project"]["scripts"]["openaiglass"] == "openaiglasses.cli:main"
 
 
 def test_manifest_loader_reports_missing_fields(tmp_path: Path) -> None:
