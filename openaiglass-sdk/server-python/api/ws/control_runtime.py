@@ -1443,6 +1443,23 @@ class ControlRuntime(CameraGateway):
                         candidate_pair = (online_glass_ids[0], online_phone_ids[0])
 
         if candidate_pair is None:
+            desired_phone_device_id = connection.desired_phone_device_id if connection.device_type == "glass" else None
+            desired_glass_device_id = connection.desired_glass_device_id if connection.device_type == "phone" else None
+            log_info(
+                self._logger,
+                "设备自动绑定尚未满足条件",
+                LogContext(
+                    device_id=connection.device_id,
+                    fields={
+                        "device_type": connection.device_type,
+                        "desired_phone_device_id": desired_phone_device_id,
+                        "desired_glass_device_id": desired_glass_device_id,
+                        "online_glass_ids": online_glass_ids,
+                        "online_phone_ids": online_phone_ids,
+                        "hint": "如果 glass-playback 配置了 wait_for_binding=true，会等到目标 phone 在线并绑定后才发送触发音频",
+                    },
+                ),
+            )
             return
         glass_device_id, phone_device_id = candidate_pair
         try:

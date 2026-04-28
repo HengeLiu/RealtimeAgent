@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v25`。本版本在 `sdk-v24` 基础上撤销对 `qwen-turbo`、`qwen-plus`、`qwen-max` 的硬编码拦截，模型兼容性不再靠 SDK 内置黑名单判断；SDK 保留 Agent 模型调用前后的可观测日志和流式调用超时保护。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v26`。本版本在 `sdk-v25` 基础上补齐设备绑定等待诊断：服务端会打印自动绑定尚未满足条件，`glass-playback` 会打印等待绑定、触发音频开始发送、发送完成和运行失败原因。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -815,7 +815,7 @@ openaiglass-for-blind/capabilities/<capability_name>/
 
 业务能力目录不再需要 `scenario.py`。`glass-playback` 配置统一放在 `host/glass-playback/config`，音频、视频、图像和传感器资产放在 `testdata` 对应目录下；日常调试时由独立的 `glass-playback` 虚拟眼镜进程消费。
 
-`sdk-v22` 起，`glass-playback` 会在命令行打印启动状态、收到的控制消息、绑定就绪状态和收到第一段下行音频的时间。设备侧只打印“收到什么消息”，不会把自身发送的 `device.register`、`voice.*.opened`、`actuator.audio.started/finished` 等控制消息打印到命令行；这些发送动作如需排查仍以事件文件和服务端日志为准。
+`sdk-v22` 起，`glass-playback` 会在命令行打印启动状态、收到的控制消息、绑定就绪状态和收到第一段下行音频的时间。`sdk-v26` 起，`glass-playback` 还会打印等待绑定、触发音频开始发送、发送完成和运行失败原因。设备侧仍不打印自身发送的控制消息正文；这些状态日志用于判断命令卡在绑定、音频上传还是执行器播放阶段。
 
 可以参考现有找物体能力：
 

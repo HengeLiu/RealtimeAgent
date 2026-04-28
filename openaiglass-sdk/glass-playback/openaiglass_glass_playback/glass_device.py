@@ -82,6 +82,7 @@ class PlaybackGlassDevice:
             heartbeat_thread.start()
 
             if self.config.startup.wait_for_binding and self.config.desired_phone_device_id:
+                self._print_status("等待设备绑定", {"phone_device_id": self.config.desired_phone_device_id})
                 self._wait_for_binding()
 
             if self.config.startup.auto_stream_trigger_audio:
@@ -95,6 +96,10 @@ class PlaybackGlassDevice:
                 actuator_count=self._actuator_count,
                 assertion_failures=assertion_failures,
             )
+        except Exception as exc:
+            self._print_status("glass-playback 运行失败", {"error": exc})
+            self._log_event("playback.failed", {"error": str(exc)})
+            raise
         finally:
             self._heartbeat_stop.set()
             self._stop_camera_streams()
@@ -258,6 +263,15 @@ class PlaybackGlassDevice:
         chunks = self._load_wav_chunks()
         stream_id = f"stream_{os.urandom(4).hex()}"
         segment_id = f"seg_{os.urandom(4).hex()}"
+        self._print_status(
+            "开始发送触发音频",
+            {
+                "stream_id": stream_id,
+                "segment_id": segment_id,
+                "path": self.config.trigger_audio.path,
+                "chunks": len(chunks),
+            },
+        )
         self._send_control(
             control,
             "sensor.audio.segment.started",
@@ -316,6 +330,7 @@ class PlaybackGlassDevice:
             session_id=self._session_id,
         )
         self._log_event("voice.trigger_audio.finished", {"stream_id": stream_id, "segment_id": segment_id})
+        self._print_status("触发音频发送完成", {"stream_id": stream_id, "segment_id": segment_id})
 
     def _load_wav_chunks(self) -> list[bytes]:
         audio = self.config.trigger_audio
