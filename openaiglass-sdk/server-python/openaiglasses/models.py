@@ -145,3 +145,26 @@ class DeviceGroup:
     group_id: str
     devices: dict[str, DeviceEndpoint] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class DeviceAccount:
+    """账号级设备组织。
+
+    主要功能：
+    1. 在 SDK 内维护账号到设备组、设备端点的索引。
+    2. 支持一个账号下存在多副眼镜、多台手机和多个绑定组。
+
+    主要属性：
+    1. `account_id`：账号编号。
+    2. `user_id`：可选用户编号，便于接入外部账号系统。
+    3. `device_ids`：账号下的设备编号集合。
+    4. `group_ids`：账号下的设备组编号集合。
+    5. `metadata`：账号补充信息。
+    """
+
+    account_id: str
+    user_id: str | None = None
+    device_ids: set[str] = field(default_factory=set)
+    group_ids: set[str] = field(default_factory=set)
+    metadata: dict[str, Any] = field(default_factory=dict)

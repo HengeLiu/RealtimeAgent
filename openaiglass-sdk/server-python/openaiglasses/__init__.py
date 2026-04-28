@@ -1,7 +1,7 @@
 """OpenAI Glasses 多设备协同 SDK 的 Python 入口。"""
 
 from openaiglasses.capabilities import BaseTask, BaseTool, CapabilityRegistry, TaskContext, TaskEvent
-from openaiglasses.models import CapabilityError, CapabilityResult, DeviceEndpoint, DeviceGroup
+from openaiglasses.models import CapabilityError, CapabilityResult, DeviceAccount, DeviceEndpoint, DeviceGroup
 from openaiglasses.phone import (
     BasePhoneProcessor,
     BasePhoneTask,
@@ -34,6 +34,7 @@ __all__ = [
     "CapabilityRegistry",
     "CapabilityResult",
     "DeviceEndpoint",
+    "DeviceAccount",
     "DeviceGroup",
     "BackendTaskGatewayAdapter",
     "DeviceGroupContext",

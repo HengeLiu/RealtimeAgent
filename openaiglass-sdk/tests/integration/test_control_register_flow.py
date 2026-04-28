@@ -520,6 +520,70 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         finally:
             client.close()
 
+    def test_register_records_account_level_device_snapshot(self) -> None:
+        """测试目标：验证控制面注册会把账号信息写入 SDK 设备组织快照。
+
+        测试方法：
+        1. 眼镜和手机使用相同 `account_id/user_id` 注册。
+        2. 服务端自动完成单眼镜单手机绑定。
+        3. 查询运行态快照中的 `device_groups.accounts`。
+
+        预期结果：
+        1. 注册响应回显账号字段。
+        2. 账号快照包含两个设备和一条绑定关系。
+        3. 设备端点 metadata 中包含账号字段，便于后续能力按账号过滤设备。
+        """
+
+        glass = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        phone = TestWebSocketClient("127.0.0.1", self.handle.port, "/ws/control")
+        try:
+            self._send_register(
+                glass,
+                device_id="glass-001",
+                device_type="glass",
+                pair_token="pair-demo-token",
+                account_id="acct-demo",
+                user_id="user-demo",
+            )
+            glass_registered = self.codec.decode(glass.recv_text())
+            self.assertEqual(glass_registered.payload["account_id"], "acct-demo")
+            self.codec.decode(glass.recv_text())
+
+            self._send_register(
+                phone,
+                device_id="phone-001",
+                device_type="phone",
+                pair_token="pair-phone-token",
+                account_id="acct-demo",
+                user_id="user-demo",
+            )
+            phone_registered = self.codec.decode(phone.recv_text())
+            self.assertEqual(phone_registered.payload["account_id"], "acct-demo")
+            self.codec.decode(glass.recv_text())
+            self.codec.decode(phone.recv_text())
+
+            runtime = self._fetch_runtime()
+            accounts = runtime["device_groups"]["accounts"]
+            self.assertEqual(len(accounts), 1)
+            account = accounts[0]
+            self.assertEqual(account["account_id"], "acct-demo")
+            self.assertEqual(account["user_id"], "user-demo")
+            self.assertEqual(account["device_ids"], ["glass-001", "phone-001"])
+            self.assertEqual(account["online_device_count"], 2)
+            self.assertEqual(account["bindings"][0]["glass_device_id"], "glass-001")
+            self.assertEqual(account["bindings"][0]["phone_device_id"], "phone-001")
+
+            device_metadata = {
+                device["device_id"]: device["metadata"]
+                for group in runtime["device_groups"]["groups"]
+                for device in group["devices"]
+            }
+            self.assertEqual(device_metadata["glass-001"]["account_id"], "acct-demo")
+            self.assertEqual(device_metadata["phone-001"]["account_id"], "acct-demo")
+        finally:
+            glass.close()
+            phone.close()
+
     def test_device_bind_creates_runtime_binding_snapshot(self) -> None:
         """测试目标：验证眼镜与手机可建立最小绑定关系。
 
@@ -1140,6 +1204,8 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
         pair_token: str,
         camera_sink_ws_uri: str | None = None,
         desired_glass_device_id: str | None = None,
+        account_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         payload = {
             "device_id": device_id,
@@ -1154,6 +1220,10 @@ class ControlRegisterFlowTestCase(unittest.TestCase):
             payload["camera_sink_ws_uri"] = camera_sink_ws_uri
         if desired_glass_device_id is not None:
             payload["desired_glass_device_id"] = desired_glass_device_id
+        if account_id is not None:
+            payload["account_id"] = account_id
+        if user_id is not None:
+            payload["user_id"] = user_id
         client.send_text(
             self.codec.encode(
                 create_control_message(

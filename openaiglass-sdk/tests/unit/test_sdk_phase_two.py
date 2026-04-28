@@ -108,6 +108,70 @@ def test_device_group_runtime_hides_binding_details() -> None:
     assert {item.role for item in context.query_devices()} == {"glass", "phone"}
 
 
+def test_device_group_runtime_builds_account_level_snapshot() -> None:
+    """测试目标：验证 SDK 设备组运行时可以按账号组织多设备。
+
+    测试方法：
+    1. 在同一账号下注册一副眼镜和一台手机。
+    2. 绑定两个设备。
+    3. 读取设备组运行态快照中的账号索引。
+
+    预期结果：
+    1. 账号快照包含两个设备和一个设备组。
+    2. 账号快照记录眼镜与手机绑定关系。
+    3. 业务代码可以通过 `query_account_devices` 读取账号下所有设备。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass", account_id="acct_001", user_id="user_001")
+    runtime.register_device(device_id="phone_001", role="phone", account_id="acct_001", user_id="user_001")
+
+    group_id = runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
+    snapshot = runtime.build_snapshot()
+
+    account = snapshot["accounts"][0]
+    assert account["account_id"] == "acct_001"
+    assert account["user_id"] == "user_001"
+    assert account["device_ids"] == ["glass_001", "phone_001"]
+    assert account["group_ids"] == [group_id]
+    assert account["online_device_count"] == 2
+    assert account["bindings"] == [
+        {
+            "group_id": group_id,
+            "glass_device_id": "glass_001",
+            "phone_device_id": "phone_001",
+        }
+    ]
+    assert [item.device_id for item in runtime.query_account_devices("acct_001")] == ["glass_001", "phone_001"]
+
+
+def test_device_group_runtime_rejects_cross_account_binding() -> None:
+    """测试目标：验证 SDK 不允许跨账号绑定眼镜和手机。
+
+    测试方法：
+    1. 分别在两个账号下注册眼镜和手机。
+    2. 尝试绑定这两个设备。
+
+    预期结果：
+    1. 绑定被拒绝。
+    2. 两个设备仍停留在各自账号和设备组内。
+    """
+
+    sdk = OpenAIGlassesSDK()
+    runtime = sdk.device_groups
+    runtime.register_device(device_id="glass_001", role="glass", account_id="acct_a")
+    runtime.register_device(device_id="phone_001", role="phone", account_id="acct_b")
+
+    with pytest.raises(RuntimeError, match="设备账号不一致"):
+        runtime.bind_devices(glass_device_id="glass_001", phone_device_id="phone_001")
+
+    snapshot = runtime.build_snapshot()
+    accounts = {item["account_id"]: item for item in snapshot["accounts"]}
+    assert accounts["acct_a"]["device_ids"] == ["glass_001"]
+    assert accounts["acct_b"]["device_ids"] == ["phone_001"]
+
+
 def test_device_group_context_can_call_registered_mcp_adapter() -> None:
     """测试目标：验证业务上下文可通过 SDK 统一入口调用 MCP。
 

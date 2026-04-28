@@ -44,6 +44,8 @@ class ControlConnection:
     camera_sink_ws_uri: str | None = None
     desired_glass_device_id: str | None = None
     desired_phone_device_id: str | None = None
+    account_id: str | None = None
+    user_id: str | None = None
     mock_capabilities: dict[str, object] = field(default_factory=dict)
 
     def touch(self) -> None:
@@ -345,6 +347,8 @@ class ControlRuntime(CameraGateway):
             "camera_sink_ws_uri": connection.camera_sink_ws_uri,
             "desired_glass_device_id": connection.desired_glass_device_id,
             "desired_phone_device_id": connection.desired_phone_device_id,
+            "account_id": connection.account_id,
+            "user_id": connection.user_id,
         }
         if fields:
             payload.update(fields)
@@ -739,6 +743,8 @@ class ControlRuntime(CameraGateway):
                     "camera_sink_ws_uri": connection.camera_sink_ws_uri,
                     "desired_glass_device_id": connection.desired_glass_device_id,
                     "desired_phone_device_id": connection.desired_phone_device_id,
+                    "account_id": connection.account_id,
+                    "user_id": connection.user_id,
                     "mock_capabilities": dict(connection.mock_capabilities),
                     "last_seen_ms_ago": int((now - connection.last_seen_monotonic) * 1000),
                     "heartbeat_age_ms": int((now - connection.last_heartbeat_monotonic) * 1000),
@@ -871,6 +877,8 @@ class ControlRuntime(CameraGateway):
         camera_sink_ws_uri = str(payload.get("camera_sink_ws_uri", "")).strip() or None
         desired_glass_device_id = str(payload.get("desired_glass_device_id", "")).strip() or None
         desired_phone_device_id = str(payload.get("desired_phone_device_id", "")).strip() or None
+        account_id = str(payload.get("account_id", "")).strip() or None
+        user_id = str(payload.get("user_id", "")).strip() or None
         mock_capabilities = payload.get("mock_capabilities")
         if not isinstance(mock_capabilities, dict):
             mock_capabilities = {}
@@ -919,12 +927,16 @@ class ControlRuntime(CameraGateway):
             connection.camera_sink_ws_uri = camera_sink_ws_uri
             connection.desired_glass_device_id = desired_glass_device_id
             connection.desired_phone_device_id = desired_phone_device_id
+            connection.account_id = account_id
+            connection.user_id = user_id
             connection.mock_capabilities = dict(mock_capabilities)
             connection.touch_heartbeat()
             self._device_connections[device_id] = connection
             self._device_group_runtime.register_device(
                 device_id=device_id,
                 role=self._normalize_device_group_role(device_type),
+                account_id=account_id,
+                user_id=user_id,
                 capabilities=set(str(item) for item in mock_capabilities.keys()),
                 metadata={
                     "device_type": device_type,
@@ -932,6 +944,8 @@ class ControlRuntime(CameraGateway):
                     "camera_sink_ws_uri": camera_sink_ws_uri,
                     "desired_glass_device_id": desired_glass_device_id,
                     "desired_phone_device_id": desired_phone_device_id,
+                    "account_id": account_id,
+                    "user_id": user_id,
                 },
             )
             if should_open_voice_session and connection.session_id is not None:
@@ -976,6 +990,8 @@ class ControlRuntime(CameraGateway):
                 target=self._device_endpoint(device_id, device_type),
                 payload={
                     "device_id": device_id,
+                    "account_id": account_id,
+                    "user_id": user_id,
                     "heartbeat_interval_ms": self._settings.heartbeat_interval_ms,
                 },
                 trace_id=message.trace_id,
@@ -1102,7 +1118,10 @@ class ControlRuntime(CameraGateway):
                     and online_glass_ids[0] not in self._glass_to_phone
                     and online_phone_ids[0] not in self._phone_to_glass
                 ):
-                    candidate_pair = (online_glass_ids[0], online_phone_ids[0])
+                    glass_connection = self._device_connections.get(online_glass_ids[0])
+                    phone_connection = self._device_connections.get(online_phone_ids[0])
+                    if self._connections_share_account(glass_connection, phone_connection):
+                        candidate_pair = (online_glass_ids[0], online_phone_ids[0])
 
         if candidate_pair is None:
             return
@@ -1182,12 +1201,12 @@ class ControlRuntime(CameraGateway):
                     details={"phone_device_id": phone_device_id, "bound_glass_id": bound_glass_id},
                 )
 
-            self._glass_to_phone[glass_device_id] = phone_device_id
-            self._phone_to_glass[phone_device_id] = glass_device_id
             self._device_group_runtime.bind_devices(
                 glass_device_id=glass_device_id,
                 phone_device_id=phone_device_id,
             )
+            self._glass_to_phone[glass_device_id] = phone_device_id
+            self._phone_to_glass[phone_device_id] = glass_device_id
 
         bind_payload = {
             "glass_device_id": glass_device_id,
@@ -1206,6 +1225,24 @@ class ControlRuntime(CameraGateway):
                 },
             ),
         )
+
+    @staticmethod
+    def _connections_share_account(
+        glass_connection: ControlConnection | None,
+        phone_connection: ControlConnection | None,
+    ) -> bool:
+        """判断两条连接是否允许按账号维度自动绑定。
+
+        主要逻辑：
+        1. 双方都声明 `account_id` 时必须一致。
+        2. 任一方未声明账号时保持向前兼容，允许单眼镜单手机兜底绑定。
+        """
+
+        if glass_connection is None or phone_connection is None:
+            return False
+        glass_account_id = str(glass_connection.account_id or "").strip()
+        phone_account_id = str(phone_connection.account_id or "").strip()
+        return not glass_account_id or not phone_account_id or glass_account_id == phone_account_id
 
     @staticmethod
     def _normalize_device_group_role(device_type: str) -> str:
