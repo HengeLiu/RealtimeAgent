@@ -6,7 +6,30 @@ import json
 from http import HTTPStatus
 from urllib.parse import urlsplit
 
-from infra.errors import AppError, ErrorCode, build_error
+
+class BusinessDebugError(Exception):
+    """业务调试路由错误。
+
+    主要功能：
+    1. 在不依赖 SDK 内部错误模块的情况下返回结构化调试错误。
+    2. 只服务于业务宿主的临时调试 HTTP 入口。
+    """
+
+    def __init__(self, *, code: str, message: str, details: dict | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+    def to_dict(self) -> dict:
+        """转换为可 JSON 序列化的错误结构。"""
+
+        return {
+            "code": self.code,
+            "message": self.message,
+            "retryable": False,
+            "details": self.details,
+        }
 
 
 def install_business_debug_routes(handle) -> None:
@@ -39,73 +62,6 @@ def install_business_debug_routes(handle) -> None:
             super().do_POST()
 
     handle.server.RequestHandlerClass = BusinessDebugRequestHandler
-
-
-def bind_business_device_adapters(runtime) -> None:
-    """把业务任务需要的设备组适配器绑定到真实运行时。
-
-    参数：
-    1. `runtime`：SDK ControlRuntime。
-
-    主要逻辑：
-    1. `find_object_task` 调用 `context.device_group.start_phone_video_link()`。
-    2. 这里把该调用转发到 SDK 已有的 `start_phone_video_link_debug()` 能力。
-    3. 停止链路时转发到 `stop_phone_video_link_debug()`。
-    """
-
-    device_groups = runtime.device_group_runtime
-
-    def start_phone_video_link_adapter(
-        *,
-        group_id: str,
-        glass_device_id: str,
-        phone_device_id: str,
-        reason: str,
-        params: dict,
-    ) -> dict:
-        """启动眼镜到手机的视频链路。"""
-
-        frame_interval_ms = int(params.get("frame_interval_ms") or 500)
-        target_ws_uri = str(params.get("target_ws_uri") or "").strip()
-        task_runtime = runtime.start_phone_video_link_debug(
-            glass_device_id=glass_device_id,
-            target_ws_uri=target_ws_uri,
-            frame_interval_ms=frame_interval_ms,
-            reason=reason,
-        )
-        return {
-            "ok": True,
-            "group_id": group_id,
-            "glass_device_id": glass_device_id,
-            "phone_device_id": phone_device_id,
-            "target_ws_uri": task_runtime.input.get("target_ws_uri"),
-            "frame_interval_ms": task_runtime.input.get("frame_interval_ms"),
-            "stream_id": task_runtime.input.get("stream_id"),
-            "task_id": task_runtime.task_id,
-            "task_type": task_runtime.task_type,
-        }
-
-    def stop_phone_video_link_adapter(
-        *,
-        group_id: str,
-        glass_device_id: str,
-        phone_device_id: str,
-        reason: str,
-    ) -> dict:
-        """停止眼镜到手机的视频链路。"""
-
-        stop_result = runtime.stop_phone_video_link_debug(glass_device_id=glass_device_id)
-        return {
-            "ok": True,
-            "group_id": group_id,
-            "glass_device_id": glass_device_id,
-            "phone_device_id": phone_device_id,
-            "reason": reason,
-            **dict(stop_result),
-        }
-
-    device_groups.video_link_start_adapter = start_phone_video_link_adapter
-    device_groups.video_link_stop_adapter = stop_phone_video_link_adapter
 
 
 def _task_payload(task_runtime, *, target_object: str) -> dict:
@@ -148,13 +104,13 @@ def _handle_start_find_object(handler, runtime) -> None:
         reason = str(body.get("reason") or "manual_debug").strip() or "manual_debug"
         target_ws_uri = str(body.get("target_ws_uri") or "").strip()
         if not glass_device_id:
-            raise build_error(ErrorCode.INVALID_MESSAGE, "glass_device_id 不能为空", details={})
+            raise BusinessDebugError(code="INVALID_MESSAGE", message="glass_device_id 不能为空")
         if not target_object:
-            raise build_error(ErrorCode.INVALID_MESSAGE, "target_object 不能为空", details={})
+            raise BusinessDebugError(code="INVALID_MESSAGE", message="target_object 不能为空")
         if frame_interval_ms <= 0:
-            raise build_error(
-                ErrorCode.INVALID_MESSAGE,
-                "frame_interval_ms 必须大于 0",
+            raise BusinessDebugError(
+                code="INVALID_MESSAGE",
+                message="frame_interval_ms 必须大于 0",
                 details={"frame_interval_ms": frame_interval_ms},
             )
 
@@ -168,7 +124,7 @@ def _handle_start_find_object(handler, runtime) -> None:
                 "reason": reason,
             },
         )
-    except AppError as exc:
+    except BusinessDebugError as exc:
         _json_response(handler, HTTPStatus.BAD_REQUEST, {"status": "error", "error": exc.to_dict()})
         return
     except (TypeError, ValueError) as exc:
@@ -205,18 +161,18 @@ def _read_json_body(handler) -> dict:
     try:
         length = int(length_text)
     except ValueError as exc:
-        raise build_error(ErrorCode.INVALID_MESSAGE, "Content-Length 不是整数", details={}) from exc
+        raise BusinessDebugError(code="INVALID_MESSAGE", message="Content-Length 不是整数") from exc
     raw = handler.rfile.read(length) if length > 0 else b"{}"
     try:
         body = json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        raise build_error(
-            ErrorCode.INVALID_MESSAGE,
-            "请求体不是合法 JSON",
+        raise BusinessDebugError(
+            code="INVALID_MESSAGE",
+            message="请求体不是合法 JSON",
             details={"reason": str(exc)},
         ) from exc
     if not isinstance(body, dict):
-        raise build_error(ErrorCode.INVALID_MESSAGE, "请求体顶层必须是 JSON 对象", details={})
+        raise BusinessDebugError(code="INVALID_MESSAGE", message="请求体顶层必须是 JSON 对象")
     return body
 
 

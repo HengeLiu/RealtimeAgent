@@ -1,17 +1,18 @@
 # Stage1 真机实测说明文档
 
-更新时间：2026-04-27
+更新时间：2026-04-28
 
 ## 1. 当前结论
 
-当前业务侧没有新的 SDK 硬阻塞，可以开始真机实测。
+当前业务侧已按 `sdk-v19` 边界完成收口，可以开始基础真机实测；但依赖眼镜到手机视频链路的能力仍存在 SDK 装配阻塞。
 
 真机实测目标不是证明所有能力都已经产品级可用，而是把离线回放中已经通过的能力放到真实三端链路里验证：
 
 1. 服务端能启动并暴露健康检查、运行态查询和调试接口。
 2. iOS 手机端能注册、心跳、绑定，并承载通用手机视频任务。
 3. ESP32 眼镜端能注册、心跳、绑定，并执行视频流、通知和语音相关命令。
-4. `find_object`、`traffic_light`、`navigation`、`timer` 能在真实设备组中触发、运行、查询、取消或完成。
+4. `timer`、`navigation` 可优先验证创建、查询、取消和通知。
+5. `find_object`、`traffic_light` 需要 SDK 补齐 `DeviceGroupContext.start_phone_video_link(...)` 的真实服务端装配后，再验证完整视频链路。
 
 ## 2. 实测前置条件
 
@@ -64,12 +65,10 @@ cp host/glass/config/local_build.env.example host/glass/config/local_build.env
 3. 服务端单独启动。
 4. 手机端注册和心跳。
 5. 眼镜端注册和心跳。
-6. 手机视频链路实测。
-7. `find_object` 实测。
-8. `traffic_light` 实测。
-9. `timer` 实测。
-10. `navigation` 准备与视觉事件最小策略实测。
-11. 语音触发完整业务能力。
+6. `timer` 实测。
+7. `navigation` 路线准备实测。
+8. SDK 补齐视频链路公开装配后，再做手机视频链路、`find_object` 和 `traffic_light` 实测。
+9. 语音触发完整业务能力。
 
 ## 4. 离线回放确认
 
@@ -83,8 +82,8 @@ python -m compileall capabilities host/server/main.py
 当前预期结果：
 
 1. 编译通过。
-2. 场景校验通过：`21 / 21`。
-3. 场景回放通过：`21 / 21`。
+2. SDK 预检通过时，说明业务宿主、配置和边界检查可进入下一步。
+3. 设备级回放应通过 `glass-playback` 和 `phone-mock` 承载，不再引用组件级场景回放数量。
 
 如完整预检可在非沙箱环境执行，运行：
 
@@ -281,6 +280,8 @@ uv run openaiglass.glass.start --repo-root .
 
 ## 9. 手机视频链路实测
 
+当前状态：业务侧不再通过宿主代码手动注入视频链路 debug adapter。若 SDK 还没有在真实服务端中标准绑定 `DeviceGroupContext.start_phone_video_link(...)`，本节只作为 SDK 修复后的验收步骤。
+
 先只测视频链路，不测业务识别：
 
 ```bash
@@ -308,6 +309,8 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 5. 如果 iPhone 无帧，检查 iPhone camera sink 地址是否上报。
 
 ## 10. find_object 实测
+
+当前状态：`find_object` 的 Tool 和 Task 仍按 SDK 公开接口实现，但完整实测依赖第 9 节视频链路能力。SDK 未补齐前，不应在业务侧恢复手写 adapter 或直接调用 debug 方法。
 
 启动找物体任务：
 
@@ -337,6 +340,8 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 3. 眼镜日志：视频流开始、视频流停止、通知播放。
 
 ## 11. traffic_light 实测
+
+当前状态：`traffic_light` 的 Tool、Task 和 iOS 插件样例仍保留；完整实测同样依赖第 9 节视频链路能力。SDK 未补齐前，可先用任务事件接口或 `phone-mock` 验证服务端任务事件处理和通知策略。
 
 当前没有单独的红绿灯启动脚本，建议先通过语音或调试入口触发 `start_traffic_light`。如需要临时调试，可参考 `scripts/start_find_object.py` 增加同类业务调试脚本，但不要改 SDK 框架。
 
