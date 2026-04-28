@@ -15,6 +15,7 @@ from host.server.main import create_sdk, create_server_handle
 from agent_core.mcp import BaseMcpAdapter
 from agent_core.models import CapabilityResult as AgentCapabilityResult
 from agent_core.models import McpMethodSpec
+from agent_core.runtime import OpenAIAgentLoopRunner
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
 from openaiglasses import (
@@ -1256,6 +1257,25 @@ def test_build_agent_facade_from_sdk_registers_sdk_tools() -> None:
     assert result.ok is True
     assert result.data["target_object"] == "水杯"
     assert result.data["task_id"].startswith("task_")
+
+
+def test_build_agent_facade_from_sdk_preloads_agent_resources(monkeypatch) -> None:
+    """测试目标：验证真实服务端装配阶段会预热 Agent 运行资源。"""
+
+    calls: list[OpenAIAgentLoopRunner] = []
+
+    def _fake_preload(self) -> None:
+        calls.append(self)
+
+    monkeypatch.setattr(OpenAIAgentLoopRunner, "preload_resources", _fake_preload)
+
+    facade = build_agent_facade_from_sdk(
+        sdk=OpenAIGlassesSDK(),
+        settings=ServerSettings(dashscope_api_key="demo-key"),
+    )
+
+    assert len(calls) == 1
+    assert facade.get_tool_registry().get("capture_photo") is not None
 
 
 def test_openai_glasses_sdk_registers_skill_runtime() -> None:

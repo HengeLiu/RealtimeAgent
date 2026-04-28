@@ -6,6 +6,8 @@ import asyncio
 import base64
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from agent_core.context.models import AgentSession, AgentTurn, AgentTurnResult
 from agent_core.context.session_store import AgentSessionStore
@@ -14,6 +16,397 @@ from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
+
+
+@dataclass(slots=True)
+class AgentTurnRuntime:
+    """单轮 Agent 运行所需的轻量上下文。"""
+
+    tool_context: AgentToolContext
+    capability_traces: list
+    instructions: str
+    active_skill_names: list[str]
+    allowed_tool_names: set[str] | None
+    run_input: list[dict[str, str]]
+    sdk_tools: list
+    model_request: dict[str, object]
+
+
+class AgentTurnRuntimeFactory:
+    """负责把会话与工具注册表装配成单轮运行上下文。"""
+
+    def __init__(
+        self,
+        *,
+        settings: ServerSettings,
+        session_store: AgentSessionStore,
+        tool_registry: ToolRegistry,
+        tool_gateway: ToolGateway,
+        skill_runtime: SkillRuntime | None,
+        instruction_builder: Callable[[str | None], str],
+        history_builder: Callable[[AgentSession, AgentTurn], list[dict[str, str]]],
+    ) -> None:
+        self._settings = settings
+        self._session_store = session_store
+        self._tool_registry = tool_registry
+        self._tool_gateway = tool_gateway
+        self._skill_runtime = skill_runtime
+        self._instruction_builder = instruction_builder
+        self._history_builder = history_builder
+
+    def build(self, *, session: AgentSession, turn: AgentTurn) -> AgentTurnRuntime:
+        """装配本轮运行态，不触发模型或外部 I/O。"""
+
+        capability_traces = []
+        tool_context = AgentToolContext(
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            turn_id=turn.turn_id,
+            settings=self._settings,
+            session_store=self._session_store,
+            device_state_reader=self._tool_registry.get_device_state_reader(),
+            device_group_context_factory=self._tool_registry.get_device_group_context_factory(),
+            trace_sink=capability_traces.append,
+            task_gateway=self._tool_registry.get_task_gateway(),
+            camera_gateway=self._tool_registry.get_camera_gateway(),
+            tool_gateway=self._tool_gateway,
+            mcp_gateway=self._tool_registry.get_mcp_gateway(),
+        )
+        instructions = self._instruction_builder(turn.session_id)
+        allowed_tool_names = (
+            self._skill_runtime.allowed_tool_names_for_session(session_id=turn.session_id)
+            if self._skill_runtime is not None
+            else None
+        )
+        active_skill_names = (
+            self._skill_runtime.get_session_state(turn.session_id).active_skill_names
+            if self._skill_runtime is not None
+            else []
+        )
+        run_input = self._history_builder(session, turn)
+        sdk_tools = self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names)
+        model_request = {
+            "model": self._settings.agent_model_name,
+            "instructions": instructions,
+            "active_skills": active_skill_names,
+            "allowed_tool_names": sorted(allowed_tool_names) if allowed_tool_names is not None else None,
+            "messages": [
+                {"role": "system", "content": instructions},
+                *run_input,
+            ],
+        }
+        return AgentTurnRuntime(
+            tool_context=tool_context,
+            capability_traces=capability_traces,
+            instructions=instructions,
+            active_skill_names=active_skill_names,
+            allowed_tool_names=allowed_tool_names,
+            run_input=run_input,
+            sdk_tools=sdk_tools,
+            model_request=model_request,
+        )
+
+
+class OpenAIAgentsSdkBridge:
+    """缓存 OpenAI Agents SDK 入口和可复用 provider。"""
+
+    def __init__(self, *, settings: ServerSettings) -> None:
+        self._settings = settings
+        self._agent_cls = None
+        self._multi_provider_cls = None
+        self._run_config_cls = None
+        self._runner_cls = None
+        self._message_output_item_cls = None
+        self._provider = None
+        self._provider_key: tuple[str, str] | None = None
+        self._last_import_error: ImportError | None = None
+
+    def preload(self) -> None:
+        """预加载 SDK 模块和 provider；失败只记录，真实调用时再返回结构化错误。"""
+
+        try:
+            self._ensure_agents_sdk()
+            if self._settings.dashscope_api_key.strip():
+                self._get_provider()
+        except ImportError as exc:
+            self._last_import_error = exc
+
+    def is_available(self) -> bool:
+        """判断 Agents SDK 依赖是否已经可用。"""
+
+        try:
+            self._ensure_agents_sdk()
+            return True
+        except ImportError as exc:
+            self._last_import_error = exc
+            return False
+
+    def build_agent(self, *, instructions: str, tools: list):
+        """创建本轮 Agent 对象。"""
+
+        self._ensure_agents_sdk()
+        return self._agent_cls(
+            name="OpenAIGlassesAgent",
+            instructions=instructions,
+            tools=tools,
+            model=self._settings.agent_model_name,
+        )
+
+    def build_run_config(self, *, session_id: str):
+        """创建本轮 RunConfig，复用已缓存的 provider。"""
+
+        self._ensure_agents_sdk()
+        return self._run_config_cls(
+            model=self._settings.agent_model_name,
+            model_provider=self._get_provider(),
+            tracing_disabled=True,
+            workflow_name="OpenAI Glasses Agent Loop",
+            group_id=session_id,
+        )
+
+    def run_sync(self, *args, **kwargs):
+        """代理 `Runner.run_sync`。"""
+
+        self._ensure_agents_sdk()
+        return self._runner_cls.run_sync(*args, **kwargs)
+
+    def run_streamed(self, *args, **kwargs):
+        """代理 `Runner.run_streamed`。"""
+
+        self._ensure_agents_sdk()
+        return self._runner_cls.run_streamed(*args, **kwargs)
+
+    @property
+    def message_output_item_cls(self):
+        """返回 Agents SDK 的 MessageOutputItem 类型。"""
+
+        self._ensure_agents_sdk()
+        return self._message_output_item_cls
+
+    @staticmethod
+    def create_openai_client(*, api_key: str, base_url: str):
+        """创建 OpenAI SDK 客户端。"""
+
+        try:
+            from openai import OpenAI
+        except ImportError as exc:  # pragma: no cover - 环境缺包时由上层集成验证
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "缺少 openai 依赖，无法执行主链路图片解读",
+                details={"hint": "请执行 uv sync 或安装 openai 依赖"},
+            ) from exc
+
+        return OpenAI(
+            api_key=api_key,
+            base_url=base_url.rstrip("/"),
+        )
+
+    def _ensure_agents_sdk(self) -> None:
+        if self._runner_cls is not None:
+            return
+        try:
+            from agents import Agent, MultiProvider, RunConfig, Runner
+        except ImportError as exc:
+            self._last_import_error = exc
+            raise
+        try:
+            from agents.items import MessageOutputItem
+        except ImportError:
+            class MessageOutputItem:  # noqa: N801 - 兼容测试替身或旧版 SDK 结构
+                pass
+
+        self._agent_cls = Agent
+        self._multi_provider_cls = MultiProvider
+        self._run_config_cls = RunConfig
+        self._runner_cls = Runner
+        self._message_output_item_cls = MessageOutputItem
+        self._last_import_error = None
+
+    def _get_provider(self):
+        key = (self._settings.dashscope_api_key, self._settings.voice_model_base_url)
+        if self._provider is not None and self._provider_key == key:
+            return self._provider
+        self._ensure_agents_sdk()
+        self._provider = self._multi_provider_cls(
+            openai_api_key=self._settings.dashscope_api_key,
+            openai_base_url=self._settings.voice_model_base_url,
+            openai_use_responses=False,
+        )
+        self._provider_key = key
+        return self._provider
+
+
+class StreamedAgentTurnObserver:
+    """观察 Agents SDK 流式事件，并把事件转换成 SDK 结果。"""
+
+    def __init__(
+        self,
+        *,
+        sdk_bridge: OpenAIAgentsSdkBridge,
+        wait_for_new_image_asset: Callable[..., Any],
+        stream_image_followup_reply: Callable[..., Any],
+        collect_image_asset_ids: Callable[..., set[str]],
+        extract_agent_stream_text_delta: Callable[[object], str],
+        extract_reply_text: Callable[[object], str],
+    ) -> None:
+        self._sdk_bridge = sdk_bridge
+        self._wait_for_new_image_asset = wait_for_new_image_asset
+        self._stream_image_followup_reply = stream_image_followup_reply
+        self._collect_image_asset_ids = collect_image_asset_ids
+        self._extract_agent_stream_text_delta = extract_agent_stream_text_delta
+        self._extract_reply_text = extract_reply_text
+
+    async def run(
+        self,
+        *,
+        agent,
+        run_input: list[dict[str, str]],
+        run_config,
+        tool_context: AgentToolContext,
+        capability_traces: list,
+        session: AgentSession,
+        turn: AgentTurn,
+        progress_callback: Callable[[str], None] | None,
+        reply_text_delta_callback: Callable[[str], None] | None,
+        model_request: dict[str, object],
+    ) -> AgentTurnResult:
+        """运行流式 Agent，并处理拍照续跑与文本增量。"""
+
+        run_result = self._sdk_bridge.run_streamed(
+            agent,
+            run_input,
+            context=tool_context,
+            max_turns=6,
+            run_config=run_config,
+            conversation_id=turn.session_id,
+        )
+
+        capture_call_id: str | None = None
+        existing_image_asset_ids = self._collect_image_asset_ids(tool_context=tool_context, session=session)
+        progress_sent = False
+        reply_text_parts: list[str] = []
+
+        event_stream = run_result.stream_events()
+        try:
+            async for event in event_stream:
+                text_delta = self._extract_agent_stream_text_delta(event)
+                if text_delta:
+                    reply_text_parts.append(text_delta)
+                    if reply_text_delta_callback is not None:
+                        reply_text_delta_callback(text_delta)
+                    continue
+
+                if getattr(event, "type", "") != "run_item_stream_event":
+                    continue
+
+                if event.name == "message_output_created" and isinstance(
+                    event.item,
+                    self._sdk_bridge.message_output_item_cls,
+                ):
+                    continue
+
+                if event.name == "tool_called":
+                    raw_item = getattr(event.item, "raw_item", None)
+                    tool_name = getattr(raw_item, "name", "")
+                    if tool_name == "capture_photo":
+                        capture_call_id = getattr(raw_item, "call_id", None)
+                        if not progress_sent and progress_callback is not None:
+                            progress_callback("好的，你保持别动，我拍一张帮你看。")
+                            progress_sent = True
+                        image_asset = await self._wait_for_new_image_asset(
+                            tool_context=tool_context,
+                            session=session,
+                            excluded_asset_ids=existing_image_asset_ids,
+                            timeout_seconds=10.0,
+                        )
+                        if image_asset is not None:
+                            return await self._run_image_followup(
+                                run_result=run_result,
+                                tool_context=tool_context,
+                                turn=turn,
+                                image_asset=image_asset,
+                                session=session,
+                                reply_text_delta_callback=reply_text_delta_callback,
+                                capability_traces=capability_traces,
+                                model_request=model_request,
+                            )
+                    continue
+
+                if event.name == "tool_output" and capture_call_id is not None:
+                    raw_item = getattr(event.item, "raw_item", None)
+                    if getattr(raw_item, "call_id", None) == capture_call_id:
+                        image_asset = await self._wait_for_new_image_asset(
+                            tool_context=tool_context,
+                            session=session,
+                            excluded_asset_ids=existing_image_asset_ids,
+                            timeout_seconds=1.0,
+                        )
+                        return await self._run_image_followup(
+                            run_result=run_result,
+                            tool_context=tool_context,
+                            turn=turn,
+                            image_asset=image_asset,
+                            session=session,
+                            reply_text_delta_callback=reply_text_delta_callback,
+                            capability_traces=capability_traces,
+                            model_request=model_request,
+                        )
+        finally:
+            aclose = getattr(event_stream, "aclose", None)
+            if callable(aclose):
+                await aclose()
+
+        reply_text = "".join(reply_text_parts).strip() or self._extract_reply_text(run_result.final_output)
+        if not reply_text:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "agent-core 返回了空回复",
+            )
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            reply_text=reply_text,
+            capability_traces=capability_traces,
+            meta={"model_request": model_request},
+        )
+
+    async def _run_image_followup(
+        self,
+        *,
+        run_result,
+        tool_context: AgentToolContext,
+        turn: AgentTurn,
+        image_asset,
+        session: AgentSession,
+        reply_text_delta_callback: Callable[[str], None] | None,
+        capability_traces: list,
+        model_request: dict[str, object],
+    ) -> AgentTurnResult:
+        run_result.cancel()
+        reply_text = await self._stream_image_followup_reply(
+            tool_context=tool_context,
+            turn=turn,
+            image_asset=image_asset,
+            history_session=session,
+            reply_text_delta_callback=reply_text_delta_callback,
+        )
+        if not reply_text:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "图片解读主链路返回空回复",
+            )
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            reply_text=reply_text,
+            capability_traces=capability_traces,
+            meta={
+                "model_request": model_request,
+                "followup_type": "image_vision_main_chain",
+            },
+        )
 
 
 class AgentLoopRunner(ABC):
@@ -49,6 +442,29 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         self._tool_gateway = tool_gateway
         self._skill_runtime = skill_runtime or tool_registry.get_skill_runtime()
         self._logger = get_logger("server.agent.runner")
+        self._turn_runtime_factory = AgentTurnRuntimeFactory(
+            settings=settings,
+            session_store=session_store,
+            tool_registry=tool_registry,
+            tool_gateway=tool_gateway,
+            skill_runtime=self._skill_runtime,
+            instruction_builder=self._build_instructions,
+            history_builder=self._build_history_messages,
+        )
+        self._sdk_bridge = OpenAIAgentsSdkBridge(settings=settings)
+        self._stream_observer = StreamedAgentTurnObserver(
+            sdk_bridge=self._sdk_bridge,
+            wait_for_new_image_asset=lambda **kwargs: self._wait_for_new_image_asset(**kwargs),
+            stream_image_followup_reply=lambda **kwargs: self._stream_image_followup_reply(**kwargs),
+            collect_image_asset_ids=self._collect_image_asset_ids,
+            extract_agent_stream_text_delta=self._extract_agent_stream_text_delta,
+            extract_reply_text=self._extract_reply_text,
+        )
+
+    def preload_resources(self) -> None:
+        """预热 Agent 运行所需的外部 SDK 入口和 provider。"""
+
+        self._sdk_bridge.preload()
 
     def run_turn(
         self,
@@ -76,101 +492,46 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         1. `AgentTurnResult`。
         """
 
-        capability_traces = []
-        tool_context = AgentToolContext(
-            session_id=turn.session_id,
-            device_id=turn.device_id,
-            turn_id=turn.turn_id,
-            settings=self._settings,
-            session_store=self._session_store,
-            device_state_reader=self._tool_registry.get_device_state_reader(),
-            device_group_context_factory=self._tool_registry.get_device_group_context_factory(),
-            trace_sink=capability_traces.append,
-            task_gateway=self._tool_registry.get_task_gateway(),
-            camera_gateway=self._tool_registry.get_camera_gateway(),
-            tool_gateway=self._tool_gateway,
-            mcp_gateway=self._tool_registry.get_mcp_gateway(),
-        )
+        runtime = self._turn_runtime_factory.build(session=session, turn=turn)
 
         if not self._settings.dashscope_api_key.strip():
             return self._attach_capability_outputs(
                 result=self._build_failure_result(
                     turn=turn,
                     message="缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
-                    traces=capability_traces,
+                    traces=runtime.capability_traces,
                     error=build_error(
                         ErrorCode.INVALID_CONFIG,
                         "缺少 DASHSCOPE_API_KEY，无法执行 agent-core 运行循环",
                     ),
                 ),
-                context=tool_context,
+                context=runtime.tool_context,
             )
 
-        try:
-            from agents import Agent, MultiProvider, RunConfig, Runner
-        except ImportError:
+        if not self._sdk_bridge.is_available():
             return self._attach_capability_outputs(
                 result=self._build_failure_result(
                     turn=turn,
                     message="缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
-                    traces=capability_traces,
+                    traces=runtime.capability_traces,
                     error=build_error(
                         ErrorCode.INVALID_CONFIG,
                         "缺少 openai-agents 依赖，无法执行 agent-core 运行循环",
                         details={"hint": "请执行 uv sync 安装 openai-agents"},
                     ),
                 ),
-                context=tool_context,
+                context=runtime.tool_context,
             )
 
-        instructions = self._build_instructions(session_id=turn.session_id)
-        allowed_tool_names = (
-            self._skill_runtime.allowed_tool_names_for_session(session_id=turn.session_id)
-            if self._skill_runtime is not None
-            else None
-        )
-        run_input = self._build_history_messages(session=session, turn=turn)
-        model_request = {
-            "model": self._settings.agent_model_name,
-            "instructions": instructions,
-            "active_skills": (
-                self._skill_runtime.get_session_state(turn.session_id).active_skill_names
-                if self._skill_runtime is not None
-                else []
-            ),
-            "allowed_tool_names": sorted(allowed_tool_names) if allowed_tool_names is not None else None,
-            "messages": [
-                {"role": "system", "content": instructions},
-                *run_input,
-            ],
-        }
-
-        sdk_tools = self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names)
         streaming_mode = progress_callback is not None or reply_text_delta_callback is not None
-        agent = Agent(
-            name="OpenAIGlassesAgent",
-            instructions=instructions,
-            tools=sdk_tools,
-            model=self._settings.agent_model_name,
-        )
-        provider = MultiProvider(
-            openai_api_key=self._settings.dashscope_api_key,
-            openai_base_url=self._settings.voice_model_base_url,
-            openai_use_responses=False,
-        )
-        run_config = RunConfig(
-            model=self._settings.agent_model_name,
-            model_provider=provider,
-            tracing_disabled=True,
-            workflow_name="OpenAI Glasses Agent Loop",
-            group_id=turn.session_id,
-        )
+        agent = self._sdk_bridge.build_agent(instructions=runtime.instructions, tools=runtime.sdk_tools)
+        run_config = self._sdk_bridge.build_run_config(session_id=turn.session_id)
         log_info(
             self._logger,
             (
                 "agent-core 即将运行: "
                 f"model={self._settings.agent_model_name} mode={'streamed' if streaming_mode else 'sync'} "
-                f"message_count={len(run_input) + 1} tool_count={len(sdk_tools)} "
+                f"message_count={len(runtime.run_input) + 1} tool_count={len(runtime.sdk_tools)} "
                 f"timeout_ms={self._settings.voice_model_timeout_ms}"
             ),
             LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
@@ -179,10 +540,10 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         try:
             if progress_callback is None and reply_text_delta_callback is None:
                 run_result = self._run_with_thread_event_loop(
-                    lambda: Runner.run_sync(
+                    lambda: self._sdk_bridge.run_sync(
                         agent,
-                        run_input,
-                        context=tool_context,
+                        runtime.run_input,
+                        context=runtime.tool_context,
                         max_turns=6,
                         run_config=run_config,
                         conversation_id=turn.session_id,
@@ -194,13 +555,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                         result=self._build_failure_result(
                             turn=turn,
                             message="agent-core 返回了空回复",
-                            traces=capability_traces,
+                            traces=runtime.capability_traces,
                             error=build_error(
                                 ErrorCode.INTERNAL_ERROR,
                                 "agent-core 返回了空回复",
                             ),
                         ),
-                        context=tool_context,
+                        context=runtime.tool_context,
                     )
                 return self._attach_capability_outputs(
                     result=AgentTurnResult(
@@ -208,24 +569,24 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                         session_id=turn.session_id,
                         device_id=turn.device_id,
                         reply_text=reply_text or "抱歉，我现在还没法稳定回答这个问题。",
-                        capability_traces=capability_traces,
-                        meta={"model_request": model_request},
+                        capability_traces=runtime.capability_traces,
+                        meta={"model_request": runtime.model_request},
                     ),
-                    context=tool_context,
+                    context=runtime.tool_context,
                 )
 
             stream_result = self._run_async_with_thread_event_loop(
                 self._run_streamed_turn(
                     agent=agent,
-                    run_input=run_input,
+                    run_input=runtime.run_input,
                     run_config=run_config,
-                    tool_context=tool_context,
-                    capability_traces=capability_traces,
+                    tool_context=runtime.tool_context,
+                    capability_traces=runtime.capability_traces,
                     session=session,
                     turn=turn,
                     progress_callback=progress_callback,
                     reply_text_delta_callback=reply_text_delta_callback,
-                    model_request=model_request,
+                    model_request=runtime.model_request,
                 ),
                 timeout_seconds=max(5.0, self._settings.voice_model_timeout_ms / 1000),
             )
@@ -239,19 +600,19 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 result=self._build_failure_result(
                     turn=turn,
                     message="agent-core 运行失败",
-                    traces=capability_traces,
+                    traces=runtime.capability_traces,
                     error=build_error(
                         ErrorCode.INTERNAL_ERROR,
                         "agent-core 运行失败",
                         details={"reason": str(exc)},
                     ),
                 ),
-                context=tool_context,
+                context=runtime.tool_context,
             )
 
         return self._attach_capability_outputs(
             result=stream_result,
-            context=tool_context,
+            context=runtime.tool_context,
         )
 
     async def _run_streamed_turn(
@@ -279,131 +640,17 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         1. 完整 `AgentTurnResult`。
         """
 
-        from agents import Runner
-        from agents.items import MessageOutputItem
-
-        run_result = Runner.run_streamed(
-            agent,
-            run_input,
-            context=tool_context,
-            max_turns=6,
+        return await self._stream_observer.run(
+            agent=agent,
+            run_input=run_input,
             run_config=run_config,
-            conversation_id=turn.session_id,
-        )
-
-        capture_call_id: str | None = None
-        existing_image_asset_ids = self._collect_image_asset_ids(tool_context=tool_context, session=session)
-        progress_sent = False
-        reply_text_parts: list[str] = []
-
-        event_stream = run_result.stream_events()
-        try:
-            async for event in event_stream:
-                text_delta = self._extract_agent_stream_text_delta(event)
-                if text_delta:
-                    reply_text_parts.append(text_delta)
-                    if reply_text_delta_callback is not None:
-                        reply_text_delta_callback(text_delta)
-                    continue
-
-                if getattr(event, "type", "") != "run_item_stream_event":
-                    continue
-
-                if event.name == "message_output_created" and isinstance(event.item, MessageOutputItem):
-                    continue
-
-                if event.name == "tool_called":
-                    raw_item = getattr(event.item, "raw_item", None)
-                    tool_name = getattr(raw_item, "name", "")
-                    if tool_name == "capture_photo":
-                        capture_call_id = getattr(raw_item, "call_id", None)
-                        if not progress_sent and progress_callback is not None:
-                            progress_callback("好的，你保持别动，我拍一张帮你看。")
-                            progress_sent = True
-                        image_asset = await self._wait_for_new_image_asset(
-                            tool_context=tool_context,
-                            session=session,
-                            excluded_asset_ids=existing_image_asset_ids,
-                            timeout_seconds=10.0,
-                        )
-                        if image_asset is not None:
-                            run_result.cancel()
-                            reply_text = await self._stream_image_followup_reply(
-                                tool_context=tool_context,
-                                turn=turn,
-                                image_asset=image_asset,
-                                history_session=session,
-                                reply_text_delta_callback=reply_text_delta_callback,
-                            )
-                            if not reply_text:
-                                raise build_error(
-                                    ErrorCode.INTERNAL_ERROR,
-                                    "图片解读主链路返回空回复",
-                                )
-                            return AgentTurnResult(
-                                turn_id=turn.turn_id,
-                                session_id=turn.session_id,
-                                device_id=turn.device_id,
-                                reply_text=reply_text,
-                                capability_traces=capability_traces,
-                                meta={
-                                    "model_request": model_request,
-                                    "followup_type": "image_vision_main_chain",
-                                },
-                            )
-                    continue
-
-                if event.name == "tool_output" and capture_call_id is not None:
-                    raw_item = getattr(event.item, "raw_item", None)
-                    if getattr(raw_item, "call_id", None) == capture_call_id:
-                        run_result.cancel()
-                        image_asset = await self._wait_for_new_image_asset(
-                            tool_context=tool_context,
-                            session=session,
-                            excluded_asset_ids=existing_image_asset_ids,
-                            timeout_seconds=1.0,
-                        )
-                        reply_text = await self._stream_image_followup_reply(
-                            tool_context=tool_context,
-                            turn=turn,
-                            image_asset=image_asset,
-                            history_session=session,
-                            reply_text_delta_callback=reply_text_delta_callback,
-                        )
-                        if not reply_text:
-                            raise build_error(
-                                ErrorCode.INTERNAL_ERROR,
-                                "图片解读主链路返回空回复",
-                            )
-                        return AgentTurnResult(
-                            turn_id=turn.turn_id,
-                            session_id=turn.session_id,
-                            device_id=turn.device_id,
-                            reply_text=reply_text,
-                            capability_traces=capability_traces,
-                            meta={
-                                "model_request": model_request,
-                                "followup_type": "image_vision_main_chain",
-                            },
-                        )
-        finally:
-            aclose = getattr(event_stream, "aclose", None)
-            if callable(aclose):
-                await aclose()
-
-        reply_text = "".join(reply_text_parts).strip() or self._extract_reply_text(run_result.final_output)
-        if not reply_text:
-            raise build_error(
-                ErrorCode.INTERNAL_ERROR,
-                "agent-core 返回了空回复",
-            )
-        return AgentTurnResult(
-            turn_id=turn.turn_id,
-            session_id=turn.session_id,
-            device_id=turn.device_id,
-            reply_text=reply_text,
+            tool_context=tool_context,
             capability_traces=capability_traces,
-            meta={"model_request": model_request},
+            session=session,
+            turn=turn,
+            progress_callback=progress_callback,
+            reply_text_delta_callback=reply_text_delta_callback,
+            model_request=model_request,
         )
 
     async def _wait_for_new_image_asset(
@@ -574,19 +821,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
     def _create_sdk_client(*, api_key: str, base_url: str):
         """创建 OpenAI SDK 客户端。"""
 
-        try:
-            from openai import OpenAI
-        except ImportError as exc:  # pragma: no cover - 环境缺包时由上层集成验证
-            raise build_error(
-                ErrorCode.INVALID_CONFIG,
-                "缺少 openai 依赖，无法执行主链路图片解读",
-                details={"hint": "请执行 uv sync 或安装 openai 依赖"},
-            ) from exc
-
-        return OpenAI(
-            api_key=api_key,
-            base_url=base_url.rstrip("/"),
-        )
+        return OpenAIAgentsSdkBridge.create_openai_client(api_key=api_key, base_url=base_url)
 
     @staticmethod
     def _extract_stream_text_delta(chunk: object) -> str:
