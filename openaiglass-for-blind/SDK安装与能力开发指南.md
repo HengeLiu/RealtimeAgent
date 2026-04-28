@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v30`。本版本在 `sdk-v29` 基础上为 `openaiglass-sdk/` 顶层补齐 Python 聚合安装入口，当前仓库本地开发可直接执行 `uv pip install -e openaiglass-sdk`，不再要求开发者记住内部 `server-python` 子目录。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v31`。本版本在 `sdk-v30` 基础上调整本地服务端命令生命周期：`openaiglass.server.run` 改为前台阻塞运行，Ctrl+C 或终端关闭时服务端一起结束；需要后台守护时继续使用 `openaiglass.server.start/stop/logs`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -290,7 +290,7 @@ uv run openaiglass.server.run \
   --config openaiglass-for-blind/config/local_server.env
 ```
 
-这个命令会先启动服务端，再直接进入日志跟随；大多数开发场景不需要再额外执行一次 `logs`。
+`sdk-v31` 起，这个命令会把服务端保持在当前前台进程中。按 Ctrl+C 或关闭当前终端时，服务端会一起退出，不需要再额外执行 `openaiglass.server.stop`。
 
 如果确实需要后台守护方式，再拆成下面三条命令。
 

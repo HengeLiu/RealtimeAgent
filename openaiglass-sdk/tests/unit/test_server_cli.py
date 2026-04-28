@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,27 @@ if str(SDK_ROOT) not in sys.path:
 
 from openaiglasses.cli import server
 from infra.config import ServerSettings
+
+
+def _server_args(tmp_path: Path, **overrides) -> argparse.Namespace:
+    """构造服务端 CLI 测试参数。"""
+
+    values = {
+        "repo_root": str(tmp_path),
+        "sdk_python_root": str(SDK_ROOT),
+        "app_root": "",
+        "config": "",
+        "host": None,
+        "port": None,
+        "log_dir": "",
+        "log_file": "",
+        "pid_file": "",
+        "app_module": "app.main",
+        "action": "all",
+        "tail_lines": 120,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
 
 
 def test_server_defaults_are_derived_from_runtime_settings() -> None:
@@ -127,3 +149,91 @@ def test_server_env_loads_model_config_from_local_env(tmp_path: Path) -> None:
     assert env["TTS_SAMPLE_RATE_HZ"] == "24000"
     assert env["VOICE_SYSTEM_PROMPT"] == "本地提示词"
     assert env["MAX_SEGMENT_AUDIO_BYTES"] == "123456"
+
+
+def test_server_run_uses_foreground_process_without_pid_or_log_redirection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """测试目标：`openaiglass.server.run` 应以前台方式运行服务端。
+
+    测试方法：
+    1. 构造 `local all` 参数。
+    2. 替换 `subprocess.Popen`，记录启动参数。
+    3. 调用 `run_local(...)`。
+
+    预期结果：
+    1. 子进程不使用 `start_new_session`，能跟随前台终端信号退出。
+    2. stdout/stderr 不重定向到日志文件。
+    3. 不写后台 PID 文件。
+    """
+
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+
+        def wait(self, timeout=None):  # noqa: ANN001 - 模拟 Popen 接口
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self) -> None:  # pragma: no cover - 本用例不应触发
+            raise AssertionError("foreground run should not terminate a completed process")
+
+        def kill(self) -> None:  # pragma: no cover - 本用例不应触发
+            raise AssertionError("foreground run should not kill a completed process")
+
+    def fake_popen(command, **kwargs):  # noqa: ANN001 - 模拟 Popen 接口
+        calls.append({"command": command, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    args = _server_args(tmp_path)
+    code = server.run_local(args)
+
+    assert code == 0
+    assert len(calls) == 1
+    kwargs = calls[0]["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert "start_new_session" not in kwargs
+    assert "stdout" not in kwargs
+    assert "stderr" not in kwargs
+    assert not server._pid_file(args).exists()  # noqa: SLF001 - 回归测试验证前台 run 不写 PID
+
+
+def test_server_run_stops_child_on_keyboard_interrupt(tmp_path: Path, monkeypatch) -> None:
+    """测试目标：前台 `run` 收到 Ctrl+C 时会停止服务端子进程。"""
+
+    events: list[str] = []
+
+    class InterruptingProcess:
+        def __init__(self) -> None:
+            self._running = True
+
+        def wait(self, timeout=None):  # noqa: ANN001 - 模拟 Popen 接口
+            if timeout is None and self._running:
+                raise KeyboardInterrupt
+            events.append("wait_after_terminate")
+            self._running = False
+            return 0
+
+        def poll(self):
+            return None if self._running else 0
+
+        def terminate(self) -> None:
+            events.append("terminate")
+            self._running = False
+
+        def kill(self) -> None:  # pragma: no cover - terminate 后应能正常退出
+            events.append("kill")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: InterruptingProcess())
+
+    code = server.run_local(_server_args(tmp_path))
+
+    assert code == 130
+    assert events == ["terminate", "wait_after_terminate"]

@@ -132,10 +132,7 @@ def run_local(args: argparse.Namespace) -> int:
     if action == "stop":
         return stop_local(args)
     if action == "all":
-        code = start_local(args)
-        if code != 0:
-            return code
-        return tail_local_logs(args)
+        return run_local_foreground(args)
     print(f"Unknown local action: {args.action}", file=sys.stderr)
     return 2
 
@@ -353,6 +350,68 @@ def start_local(args: argparse.Namespace) -> int:
         print(f"[start] 局域网控制地址: ws://{public_host}:{port}/ws/control")
         print(f"[start] 局域网运行态接口: http://{public_host}:{port}/api/runtime/devices")
     return 0
+
+
+def run_local_foreground(args: argparse.Namespace) -> int:
+    """前台运行本地服务端，当前命令退出时同步结束服务端。"""
+
+    env = _server_env(args)
+    pid_file = _pid_file(args)
+    pid = _read_pid(pid_file)
+    if pid is not None and _pid_running(pid):
+        print(f"[run] 检测到已有后台服务端在运行: pid={pid}", file=sys.stderr)
+        print("[run] 请先执行 openaiglass.server.stop，或改用 openaiglass.server.logs 查看日志", file=sys.stderr)
+        return 1
+
+    host = env.get("SERVER_HOST", env.get("HOST", "0.0.0.0"))
+    port = env.get("SERVER_PORT", env.get("PORT", "8765"))
+    command = [
+        sys.executable,
+        "-m",
+        "openaiglasses.cli.server_runtime",
+        "--app-module",
+        args.app_module,
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    print("[run] 前台启动本地服务端")
+    print(f"[run] app_module={args.app_module}")
+    print(f"[run] host={host} port={port}")
+    print(f"[run] log_level={env.get('LOG_LEVEL', '')}")
+    public_host = env.get("SERVER_PUBLIC_HOST", "").strip()
+    if public_host:
+        print(f"[run] 局域网控制地址: ws://{public_host}:{port}/ws/control")
+        print(f"[run] 局域网运行态接口: http://{public_host}:{port}/api/runtime/devices")
+    print("[run] 按 Ctrl+C 可停止服务端")
+
+    process = subprocess.Popen(
+        command,
+        cwd=str(_repo_root(args)),
+        env=env,
+    )
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        print("\n[run] 收到中断，正在停止服务端...")
+        _terminate_process(process)
+        return 130
+    finally:
+        if process.poll() is None:
+            _terminate_process(process)
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    """终止前台服务端子进程。"""
+
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
 
 
 def stop_local(args: argparse.Namespace) -> int:
