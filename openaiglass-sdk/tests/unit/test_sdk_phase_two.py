@@ -809,6 +809,100 @@ def test_sdk_task_runtime_can_save_and_load_snapshot_file(tmp_path) -> None:
     assert latest.events[-1]["event_name"] == "task.restored"
 
 
+def test_sdk_task_runtime_auto_persists_and_deduplicates_events(tmp_path) -> None:
+    """测试目标：验证 SDK 任务运行时具备自动持久化和事件幂等能力。
+
+    测试方法：
+    1. 启用文件持久化后创建一个等待事件的任务。
+    2. 使用相同 `event_id` 连续派发两次外部事件。
+    3. 读取持久化文件并检查事件日志。
+
+    预期结果：
+    1. 创建任务和事件派发都会自动写入持久化文件。
+    2. 相同 `event_id` 的事件只被处理一次。
+    3. 文件采用带版本和保存时间的任务存储结构。
+    """
+
+    class IdempotentTask(BaseTask):
+        task_type = "sdk_idempotent_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running", {"count": 0})
+
+        def on_event(self, context, event) -> None:
+            context.update({"count": int(context.data.get("count") or 0) + 1})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(IdempotentTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    store_file = tmp_path / "task-store.json"
+    sdk.task_runtime.enable_persistence(store_file)
+
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_idempotent_task",
+        session_id="sess_idem_001",
+        device_id="glass_001",
+        input_data={},
+    )
+    first = sdk.task_runtime.dispatch_event(
+        task_id=created.task_id,
+        event_name="phone.demo.tick",
+        payload={"event_id": "evt_tick_001"},
+        source="phone",
+    )
+    second = sdk.task_runtime.dispatch_event(
+        task_id=created.task_id,
+        event_name="phone.demo.tick",
+        payload={"event_id": "evt_tick_001"},
+        source="phone",
+    )
+
+    payload = json.loads(store_file.read_text(encoding="utf-8"))
+    assert payload["version"] == "sdk-task-store-v1"
+    assert payload["tasks"][0]["task_id"] == created.task_id
+    assert first.data["count"] == 1
+    assert second.data["count"] == 1
+    assert [event["event_id"] for event in second.events].count("evt_tick_001") == 1
+
+
+def test_sdk_task_runtime_can_prune_terminal_tasks_from_persistence(tmp_path) -> None:
+    """测试目标：验证终态任务可按保留期清理并同步持久化文件。
+
+    测试方法：
+    1. 创建一个立即完成的任务并启用持久化。
+    2. 调用 `prune_tasks(retain_terminal_ms=0)`。
+    3. 读取持久化文件。
+
+    预期结果：
+    1. 已完成任务被移除。
+    2. 持久化文件中的任务列表同步变为空。
+    """
+
+    class CompletedTask(BaseTask):
+        task_type = "sdk_completed_task"
+
+        def on_start(self, context) -> None:
+            context.complete({"ok": True})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(CompletedTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    store_file = tmp_path / "task-store.json"
+    sdk.task_runtime.enable_persistence(store_file)
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_completed_task",
+        session_id="sess_prune_001",
+        device_id="glass_001",
+        input_data={},
+    )
+
+    removed = sdk.task_runtime.prune_tasks(retain_terminal_ms=0, now_ms=created.completed_at_ms or 0)
+
+    assert removed == [created.task_id]
+    payload = json.loads(store_file.read_text(encoding="utf-8"))
+    assert payload["tasks"] == []
+
+
 def test_phone_runtime_can_fanout_frame_to_matching_active_tasks() -> None:
     """测试目标：验证手机运行时可把同一帧分发给多个匹配的活跃任务。
 

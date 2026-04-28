@@ -17,6 +17,7 @@ from openaiglasses.runtime import (
     BackendTaskGatewayAdapter,
     DeviceGroupContext,
     DeviceGroupRuntime,
+    FileTaskPersistenceStore,
     TaskRuntimeManager,
     TaskRuntimeSnapshot,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "BackendTaskGatewayAdapter",
     "DeviceGroupContext",
     "DeviceGroupRuntime",
+    "FileTaskPersistenceStore",
     "HybridTaskGateway",
     "OpenAIGlassesSDK",
     "PhoneProcessorContext",

@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v10`。本版本补齐最小 Skill Runtime，业务可通过 `OpenAIGlassesSDK.register_skill(...)` 注册 Skill，Agent 可用 `read_skill` 读取正文并按 active Skill 过滤工具；上一版本新增账号级设备组织索引。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v11`。本版本补齐任务持久化生产化的单机形态，支持文件型自动持久化、原子写入、事件幂等和终态任务清理；上一版本补齐最小 Skill Runtime。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -806,9 +806,9 @@ curl -X POST http://127.0.0.1:8000/api/tasks/report-event \
 
 业务侧不要在 `openaiglass-for-blind/capabilities` 内自行维护视频任务状态表，也不要自行绕过 SDK 给眼镜发送 `sensor.camera.stream.start/stop`。真实公网/NAT 穿透、自动重试、链路健康检查仍由 SDK 后续版本统一补齐。
 
-### 6.2 SDK 托管任务快照与恢复
+### 6.2 SDK 托管任务持久化与恢复
 
-`sdk-v5` 起，SDK 业务 Task 运行时会记录任务时间戳和事件日志。业务 Task 不需要改接口，仍然使用 `context.emit_state(...)`、`context.complete(...)`、`on_event(...)` 和 `on_cancel(...)`。
+`sdk-v11` 起，SDK 业务 Task 运行时在原有快照恢复基础上增加文件型自动持久化、原子写入、事件幂等和终态清理。业务 Task 不需要改接口，仍然使用 `context.emit_state(...)`、`context.complete(...)`、`on_event(...)` 和 `on_cancel(...)`。
 
 任务快照新增字段：
 
@@ -829,14 +829,42 @@ runtime = context.device_group.create_task(
 latest = context.device_group.query_task(runtime.task_id)
 ```
 
-宿主服务可以把任务快照保存到 JSON 文件，并在重启后恢复：
+宿主服务可以手动保存任务快照：
 
 ```python
 sdk.task_runtime.save_snapshots("logs/sdk-task-snapshots.json")
 sdk.task_runtime.load_snapshots("logs/sdk-task-snapshots.json")
 ```
 
-恢复后的任务可继续查询；如果对应 `task_type` 仍已注册，也可以继续接收事件。生产环境如果要接数据库或对象存储，可以直接复用 `export_snapshots()` / `restore_snapshots(...)`，由宿主决定持久化介质。
+也可以启用自动文件持久化：
+
+```python
+sdk.task_runtime.enable_persistence(
+    "logs/sdk-task-store.json",
+    restore=True,
+)
+```
+
+启用后，创建任务、取消任务、派发事件、恢复快照和清理终态任务都会自动写入文件。SDK 使用临时文件加原子替换，避免写入中断留下半截 JSON。
+
+端侧或手机侧上报任务事件时，可以在 payload 中放入 `event_id` 或 `idempotency_key`。同一个任务下相同事件编号只会处理一次：
+
+```python
+context.runtime.dispatch_event(
+    task_id="task_xxx",
+    event_name="phone.demo.done",
+    payload={"event_id": "phone_evt_001", "ok": True},
+    source="phone",
+)
+```
+
+终态任务可按保留期清理：
+
+```python
+sdk.task_runtime.prune_tasks(retain_terminal_ms=24 * 60 * 60 * 1000)
+```
+
+边界：`sdk-v11` 仍是单进程单机生产化形态，不是多实例数据库任务平台。线上如果需要多实例抢占、分布式锁、数据库事务和跨进程事件消费，需要 SDK 后续接入正式任务存储。
 
 ## 7. 开发手机侧能力
 
