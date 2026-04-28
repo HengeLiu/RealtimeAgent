@@ -1,7 +1,7 @@
 {
   "device_type": "glass",
-  "device_id": "glass-playback-acceptance-001",
-  "pair_token": "pair-playback-acceptance",
+  "device_id": "glass-001",
+  "pair_token": "pair-demo-token",
   "desired_phone_device_id": "phone-001",
   "control_ws_url": "ws://127.0.0.1:8765/ws/control",
   "startup": {
@@ -13,22 +13,14 @@
   },
   "sensors": {
     "trigger_audio": {
-      "path": "testdata/audio/find_object_real_trigger.wav",
+      "path": "testdata/audio/看一下我眼前有什么.wav",
       "format": "wav",
       "sample_rate_hz": 16000,
       "channels": 1,
       "chunk_ms": 40
     },
-    "camera_stream": {
-      "frames": [
-        {
-          "path": "testdata/image/find_object_real_frame_001.jpg",
-          "codec": "jpeg",
-          "t_ms": 0
-        }
-      ],
-      "frame_interval_ms": 500,
-      "loop": true
+    "camera_capture": {
+      "path": "testdata/image/asset_fad27318c958.jpg"
     },
     "heading": {
       "path": "testdata/sensor/find_object_heading.json"
