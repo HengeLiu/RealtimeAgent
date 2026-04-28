@@ -9,7 +9,7 @@ description = "OpenAI Glasses multi-device capability SDK"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "dashscope>=1.24.0",
+    "dashscope>=1.25.0",
     "openai>=1.30.0,<2",
     "openai-agents>=0.3.3",
     "pydantic>=2,<3",

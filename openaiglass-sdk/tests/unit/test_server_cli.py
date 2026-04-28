@@ -58,6 +58,8 @@ def test_server_defaults_are_derived_from_runtime_settings() -> None:
     assert server.SERVER_DEFAULTS["VOICE_MODEL_VOICE"] == defaults.voice_model_voice
     assert server.SERVER_DEFAULTS["AGENT_MODEL_NAME"] == defaults.agent_model_name
     assert server.SERVER_DEFAULTS["VOICE_ASR_MODEL_NAME"] == defaults.voice_asr_model_name
+    assert server.SERVER_DEFAULTS["VOICE_ASR_MODE"] == defaults.voice_asr_mode
+    assert server.SERVER_DEFAULTS["VOICE_ASR_REALTIME_MODEL_NAME"] == defaults.voice_asr_realtime_model_name
     assert server.SERVER_DEFAULTS["MAX_SEGMENT_AUDIO_BYTES"] == str(defaults.max_segment_audio_bytes)
 
 
@@ -112,6 +114,9 @@ def test_server_env_loads_model_config_from_local_env(tmp_path: Path) -> None:
                 'DASHSCOPE_API_KEY="demo-key"',
                 'VOICE_MODEL_BASE_URL="https://example.test/v1"',
                 'VOICE_ASR_MODEL_NAME="asr-demo"',
+                'VOICE_ASR_MODE="realtime"',
+                'VOICE_ASR_REALTIME_MODEL_NAME="asr-realtime-demo"',
+                'VOICE_ASR_REALTIME_TIMEOUT_MS="4321"',
                 'AGENT_MODEL_NAME="agent-demo"',
                 'VOICE_MODEL_NAME="voice-demo"',
                 'VOICE_MODEL_VOICE="Tina"',
@@ -143,6 +148,9 @@ def test_server_env_loads_model_config_from_local_env(tmp_path: Path) -> None:
     assert env["DASHSCOPE_API_KEY"] == "demo-key"
     assert env["VOICE_MODEL_BASE_URL"] == "https://example.test/v1"
     assert env["VOICE_ASR_MODEL_NAME"] == "asr-demo"
+    assert env["VOICE_ASR_MODE"] == "realtime"
+    assert env["VOICE_ASR_REALTIME_MODEL_NAME"] == "asr-realtime-demo"
+    assert env["VOICE_ASR_REALTIME_TIMEOUT_MS"] == "4321"
     assert env["AGENT_MODEL_NAME"] == "agent-demo"
     assert env["VOICE_MODEL_NAME"] == "voice-demo"
     assert env["TTS_MODEL_NAME"] == "tts-demo"

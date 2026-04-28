@@ -38,10 +38,13 @@ class ServerSettings:
     17. `tts_sample_rate_hz`：TTS 原始输出采样率。
     18. `voice_model_timeout_ms`：模型请求超时时间。
     19. `voice_runs_root`：语音运行时资产落盘目录。
-    20. `voice_asr_model_name`：语音转写模型名称。
-    21. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    22. `voice_system_prompt`：默认系统提示词。
-    23. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    20. `voice_asr_model_name`：批量语音转写模型名称。
+    21. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
+    22. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
+    23. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
+    24. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    25. `voice_system_prompt`：默认系统提示词。
+    26. `max_segment_audio_bytes`：单轮上行音频最大字节数。
     """
 
     host: str = "0.0.0.0"
@@ -65,6 +68,9 @@ class ServerSettings:
     voice_model_timeout_ms: int = 45000
     voice_runs_root: str = "runs/session"
     voice_asr_model_name: str = "qwen3-asr-flash"
+    voice_asr_mode: str = "realtime"
+    voice_asr_realtime_model_name: str = "qwen3-asr-flash-realtime"
+    voice_asr_realtime_timeout_ms: int = 5000
     voice_session_mode: str = "full_duplex_realtime"
     voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
     max_segment_audio_bytes: int = 524288
@@ -143,6 +149,15 @@ class ServerSettings:
             ),
             voice_runs_root=os.getenv("VOICE_RUNS_ROOT", defaults.voice_runs_root),
             voice_asr_model_name=os.getenv("VOICE_ASR_MODEL_NAME", defaults.voice_asr_model_name),
+            voice_asr_mode=os.getenv("VOICE_ASR_MODE", defaults.voice_asr_mode),
+            voice_asr_realtime_model_name=os.getenv(
+                "VOICE_ASR_REALTIME_MODEL_NAME",
+                defaults.voice_asr_realtime_model_name,
+            ),
+            voice_asr_realtime_timeout_ms=cls._parse_int_env(
+                "VOICE_ASR_REALTIME_TIMEOUT_MS",
+                defaults.voice_asr_realtime_timeout_ms,
+            ),
             voice_session_mode=os.getenv("VOICE_SESSION_MODE", defaults.voice_session_mode),
             voice_system_prompt=os.getenv("VOICE_SYSTEM_PROMPT", defaults.voice_system_prompt),
             max_segment_audio_bytes=cls._parse_int_env(
@@ -296,6 +311,24 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_ASR_MODEL_NAME 不能为空",
             )
+        valid_voice_asr_modes = {"batch", "realtime"}
+        if self.voice_asr_mode not in valid_voice_asr_modes:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_ASR_MODE 非法",
+                details={"voice_asr_mode": self.voice_asr_mode, "valid_modes": sorted(valid_voice_asr_modes)},
+            )
+        if not self.voice_asr_realtime_model_name.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_ASR_REALTIME_MODEL_NAME 不能为空",
+            )
+        if self.voice_asr_realtime_timeout_ms <= 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_ASR_REALTIME_TIMEOUT_MS 必须大于 0",
+                details={"voice_asr_realtime_timeout_ms": self.voice_asr_realtime_timeout_ms},
+            )
         valid_voice_session_modes = {"half_duplex", "full_duplex_realtime"}
         if self.voice_session_mode not in valid_voice_session_modes:
             raise build_error(
@@ -341,6 +374,9 @@ class ServerSettings:
             "voice_model_timeout_ms": self.voice_model_timeout_ms,
             "voice_runs_root": self.voice_runs_root,
             "voice_asr_model_name": self.voice_asr_model_name,
+            "voice_asr_mode": self.voice_asr_mode,
+            "voice_asr_realtime_model_name": self.voice_asr_realtime_model_name,
+            "voice_asr_realtime_timeout_ms": self.voice_asr_realtime_timeout_ms,
             "voice_session_mode": self.voice_session_mode,
             "max_segment_audio_bytes": self.max_segment_audio_bytes,
         }

@@ -11,9 +11,12 @@ from runtime.voice_runtime import (
     MessageEntry,
     ModelChunk,
     PCM16StreamResampler,
+    SegmentBuffer,
+    StreamingSpeechRecognitionSession,
     VoiceRuntime,
     VoiceSessionController,
     _extract_tts_event_summary,
+    _extract_realtime_asr_text,
     build_audio_data_url,
     extract_message_text,
     wav_header_unknown_size,
@@ -202,6 +205,82 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         )
 
         self.assertEqual(summary, {"kind": "task-finished", "task_id": "task-456"})
+
+    def test_extract_realtime_asr_text_reads_nested_transcript(self) -> None:
+        """测试目标：验证实时 ASR 事件中的嵌套转写文本可被提取。
+
+        测试方法：
+        1. 构造百炼实时 ASR 常见的嵌套 content 结构。
+        2. 调用实时 ASR 文本提取函数。
+
+        预期结果：
+        1. 返回嵌套字段里的 transcript 文本。
+        """
+
+        text = _extract_realtime_asr_text(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item": {
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "transcript": "看一下我眼前有什么",
+                        }
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(text, "看一下我眼前有什么")
+
+    def test_transcribe_segment_prefers_streaming_asr_result(self) -> None:
+        """测试目标：验证语音段优先使用实时 ASR 已完成的文本。
+
+        测试方法：
+        1. 构造一个带假实时 ASR 会话的 `SegmentBuffer`。
+        2. 让批量 ASR 客户端在被调用时抛错。
+        3. 调用 `_transcribe_segment`。
+
+        预期结果：
+        1. 返回实时 ASR 文本。
+        2. 不会再调用批量 ASR。
+        """
+
+        class _StreamingSession(StreamingSpeechRecognitionSession):
+            def append_audio(self, pcm_bytes: bytes) -> None:
+                return None
+
+            def finish(self) -> str:
+                return "实时转写文本"
+
+        class _BatchAsrShouldNotRun:
+            def transcribe(self, *, settings: ServerSettings, input_wav: bytes) -> str:
+                raise AssertionError("batch ASR should not be called")
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+            asr_client=_BatchAsrShouldNotRun(),
+        )
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-test",
+            segment_id="seg-test",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            streaming_asr_session=_StreamingSession(),
+        )
+
+        text = runtime._transcribe_segment(  # noqa: SLF001 - 单测覆盖实时 ASR 优先级
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+            input_wav=b"RIFFdemo",
+        )
+
+        self.assertEqual(text, "实时转写文本")
 
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。

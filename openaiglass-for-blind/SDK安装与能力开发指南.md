@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v34`。本版本在 `sdk-v33` 基础上将视觉问答改为“语音结束自动抓拍 + 模型按需读取本轮照片”：服务端在每个语音段结束后异步触发眼镜抓拍，不阻塞 ASR 和大模型链路；模型可见工具改为 `get_latest_utterance_photo`，旧 `capture_photo` 不再注册到模型工具列表。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v35`。本版本在 `sdk-v34` 基础上把语音转写热路径改为实时 ASR 优先：眼镜上传 `audio_chunk` 时，服务端会同步把 PCM 分片送入百炼实时 ASR WebSocket；用户说完后优先读取实时 ASR 已完成的文本，失败或超时再回退整段 WAV ASR。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -15,6 +15,7 @@
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
+| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`；如需排障可临时设为 `batch`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -269,7 +270,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
-| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_ASR_MODEL_NAME` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、ASR 和 TTS 配置。`sdk-v23` 起模板显式列出，业务开发者不要在业务代码里硬编码模型名。 |
+| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、ASR 和 TTS 配置。`sdk-v23` 起模板显式列出，业务开发者不要在业务代码里硬编码模型名。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
 `sdk-v32` 起，如果 `local_server.env` 里保留模板占位 `DASHSCOPE_API_KEY=""`，但启动命令所在 shell、CI secret 或远程环境已经注入了非空 `DASHSCOPE_API_KEY`，SDK 启动器会保留外部真实 key。其他普通配置仍然以 `local_server.env` 为准。若希望完全依赖配置文件，也可以直接把真实 key 写入 `local_server.env` 后重启服务端。
@@ -477,6 +478,10 @@ uv run openaiglass.glass.start \
 `sdk-v33` 起，视觉拍照链路只保留模型流式文本和图片解读主链路文本两类播报。SDK 不再在 `capture_photo` 工具调用事件上额外注入固定中间播报，避免出现先听到图片解读、随后又听到“好的，你保持别动，我拍一张帮你看”的倒序或重复播报。
 
 `sdk-v34` 起，SDK 不再让模型主动调用 `capture_photo`。语音段结束后，`VoiceRuntime` 会立即在后台触发一次 `utterance_finished` 抓拍；ASR、Agent 和流式 TTS 不等待图片上传。模型如果需要回答“我眼前有什么”这类问题，应调用 `get_latest_utterance_photo(wait_timeout_ms=5000)` 获取本轮语音结束后的自动照片。该工具只读取自动照片，不会重新拍照；如果图片仍在上传，可以短暂等待，超时后返回结构化 `TIMEOUT` 错误。
+
+`sdk-v35` 起，默认 `VOICE_ASR_MODE=realtime`。服务端收到 `sensor.audio.segment.started` 后创建实时 ASR 会话，随后每个 `/ws_audio` 的 `audio_chunk` 都会在进入本地 `SegmentBuffer` 的同时送入实时 ASR。收到 `sensor.audio.segment.finished` 后，服务端优先等待实时 ASR 最终文本；如果实时 ASR 不可用、超时或返回空文本，再回退到旧的 `VOICE_ASR_MODEL_NAME` 整段 WAV 转写。这个改动的目标是把 ASR 耗时从“用户说完后才开始”前移到“用户说话过程中持续进行”。
+
+当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答还会等待自动照片和多模态图片解读；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
