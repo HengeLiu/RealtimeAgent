@@ -75,15 +75,44 @@ cp host/glass/config/local_build.env.example host/glass/config/local_build.env
 在真机前先执行：
 
 ```bash
-python -m compileall capabilities host/server/main.py
+python3 -m compileall -q openaiglass-for-blind/capabilities openaiglass-for-blind/host/server/main.py
+```
+
 组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
+
+业务能力单元测试：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. \
+python3 -m unittest discover -s openaiglass-for-blind/tests -p 'test_*.py' -v
+```
+
+真实 iPhone + `glass-playback` 前置检查：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-sdk/glass-playback:openaiglass-for-blind:. \
+python3 openaiglass-for-blind/tests/glass_playback_acceptance.py \
+  --config openaiglass-for-blind/host/glass-playback/config/real_iphone_find_object.acceptance.example.json \
+  --phone-device-id phone-001 \
+  --check-only
+```
+
+真实 iPhone + `glass-playback` 基础回放：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-sdk/glass-playback:openaiglass-for-blind:. \
+python3 openaiglass-for-blind/tests/glass_playback_acceptance.py \
+  --config openaiglass-for-blind/host/glass-playback/config/real_iphone_find_object.acceptance.example.json \
+  --phone-device-id phone-001
 ```
 
 当前预期结果：
 
 1. 编译通过。
 2. SDK 预检通过时，说明业务宿主、配置和边界检查可进入下一步。
-3. 设备级回放应通过 `glass-playback` 和 `phone-mock` 承载，不再引用组件级场景回放数量。
+3. 业务单元测试通过，说明业务 Tool/Task 对 SDK 公开能力的调用没有基础回归。
+4. 设备级真机回放应通过 `glass-playback` 和真实 iPhone 承载，暂不使用 `phone-mock`。
+5. 找物体视频链路的完整回放需要 SDK 补齐真实服务端中的 `DeviceGroupContext.start_phone_video_link(...)` 标准装配。
 
 如完整预检可在非沙箱环境执行，运行：
 

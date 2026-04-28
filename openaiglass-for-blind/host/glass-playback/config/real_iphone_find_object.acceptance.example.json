@@ -1,0 +1,47 @@
+{
+  "device_type": "glass",
+  "device_id": "glass-playback-acceptance-001",
+  "pair_token": "pair-playback-acceptance",
+  "desired_phone_device_id": "phone-001",
+  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "startup": {
+    "wait_for_registration": true,
+    "wait_for_binding": true,
+    "wait_for_voice_session": true,
+    "auto_stream_trigger_audio": true,
+    "startup_timeout_ms": 30000
+  },
+  "sensors": {
+    "trigger_audio": {
+      "path": "testdata/audio/find_object_real_trigger.wav",
+      "format": "wav",
+      "sample_rate_hz": 16000,
+      "channels": 1,
+      "chunk_ms": 40
+    },
+    "camera_stream": {
+      "frames": [
+        {
+          "path": "testdata/image/find_object_real_frame_001.jpg",
+          "codec": "jpeg",
+          "t_ms": 0
+        }
+      ],
+      "frame_interval_ms": 500,
+      "loop": true
+    },
+    "heading": {
+      "path": "testdata/sensor/find_object_heading.json"
+    }
+  },
+  "actuators": {
+    "audio_play": {
+      "mode": "record_and_auto_finish",
+      "save_audio_to": "runs/playback/glass-playback-acceptance-001/audio"
+    }
+  },
+  "outputs": {
+    "event_log": "runs/playback/glass-playback-acceptance-001/events.jsonl",
+    "actuator_log": "runs/playback/glass-playback-acceptance-001/actuators.jsonl"
+  }
+}
