@@ -330,6 +330,40 @@ final class CameraStreamStore {
         finishCurrentVideoSession("手机任务结束：\(reason)")
     }
 
+    /// 清理指定手机任务状态。
+    ///
+    /// 主要逻辑：
+    /// 1. 当 SDK 资源层拒绝或抢占任务时，同步清空页面上的活跃任务。
+    /// 2. 只清理匹配任务，避免误伤新启动的任务。
+    ///
+    /// 参数：
+    /// 1. `taskID`：需要清理的任务编号。
+    func clearPhoneTaskState(taskID: String) {
+        if activePhoneTaskState?.taskID == taskID {
+            activePhoneTaskState = nil
+        }
+    }
+
+    /// 记录视觉资源系统事件。
+    ///
+    /// 参数：
+    /// 1. `event`：SDK 视觉资源协调器产生的结构化事件。
+    func recordVisionResourceEvent(_ event: VisionResourceEvent) {
+        appendEvent("视觉资源事件：\(event.eventName) task=\(event.taskID) reason=\(event.reason)")
+        guard let phoneDeviceID else {
+            return
+        }
+        let payload = event.payload
+        Task {
+            try? await PhoneTaskEventReportAPI.report(
+                taskID: event.taskID,
+                phoneDeviceID: phoneDeviceID,
+                eventName: event.eventName,
+                payload: payload
+            )
+        }
+    }
+
     /// 结束当前视频会话，但保持应用继续待命。
     ///
     /// 主要逻辑：
@@ -580,6 +614,7 @@ protocol PhoneTaskCapabilityRuntime: AnyObject {
 /// 3. 将视频帧投递给当前活跃任务对应的业务运行时。
 final class RegisteredPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
     private let builders: [String: () -> any PhoneTaskCapabilityRuntime]
+    private let visionResourceCoordinator: VisionResourceCoordinator
     private var runtimesByTaskID: [String: any PhoneTaskCapabilityRuntime] = [:]
     private var taskTypesByTaskID: [String: String] = [:]
     private var activeTaskID: String?
@@ -589,8 +624,12 @@ final class RegisteredPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
     ///
     /// 参数：
     /// 1. `builders`：按 `taskType` 保存的业务能力运行时工厂。
-    init(builders: [String: () -> any PhoneTaskCapabilityRuntime]) {
+    init(
+        builders: [String: () -> any PhoneTaskCapabilityRuntime],
+        visionResourceCoordinator: VisionResourceCoordinator = VisionResourceCoordinator()
+    ) {
         self.builders = builders
+        self.visionResourceCoordinator = visionResourceCoordinator
     }
 
     var activeTaskDescription: String? {
@@ -627,6 +666,34 @@ final class RegisteredPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
                 phoneDeviceID: phoneDeviceID,
                 params: params
             )
+            return
+        }
+
+        let resourceDecision = visionResourceCoordinator.startTask(
+            taskID: taskID,
+            taskType: taskType,
+            streamID: streamID,
+            params: params
+        )
+        for event in resourceDecision.events {
+            store.recordVisionResourceEvent(event)
+        }
+        for preemptedTaskID in resourceDecision.preemptedTaskIDs {
+            if let runtime = runtimesByTaskID[preemptedTaskID] {
+                runtime.stopTask(
+                    store: store,
+                    taskID: preemptedTaskID,
+                    taskType: taskTypesByTaskID[preemptedTaskID] ?? "",
+                    reason: "vision.preempted"
+                )
+            }
+            runtimesByTaskID.removeValue(forKey: preemptedTaskID)
+            taskTypesByTaskID.removeValue(forKey: preemptedTaskID)
+            store.clearPhoneTaskState(taskID: preemptedTaskID)
+        }
+        guard resourceDecision.granted else {
+            store.clearPhoneTaskState(taskID: taskID)
+            store.markError("手机视觉资源不足，任务已拒绝：task_id=\(taskID) task_type=\(taskType)")
             return
         }
 
@@ -671,6 +738,7 @@ final class RegisteredPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
         )
         runtimesByTaskID.removeValue(forKey: targetTaskID)
         taskTypesByTaskID.removeValue(forKey: targetTaskID)
+        visionResourceCoordinator.stopTask(taskID: targetTaskID)
         if activeTaskID == targetTaskID {
             activeTaskID = runtimesByTaskID.keys.first
         }
@@ -682,11 +750,22 @@ final class RegisteredPhoneTaskCapabilityRuntime: PhoneTaskCapabilityRuntime {
         image: UIImage,
         sequence: Int
     ) {
-        guard let activeTaskID, let runtime = runtimesByTaskID[activeTaskID] else {
+        let decision = visionResourceCoordinator.resolveFrameRecipients(sequence: sequence)
+        for event in decision.events {
+            store.recordVisionResourceEvent(event)
+        }
+        let targetTaskIDs = decision.targetTaskIDs.filter { runtimesByTaskID[$0] != nil }
+        guard !targetTaskIDs.isEmpty else {
             return
         }
-        latestRuntime = runtime
-        runtime.processFrame(store: store, image: image, sequence: sequence)
+        for taskID in targetTaskIDs {
+            guard let runtime = runtimesByTaskID[taskID] else {
+                continue
+            }
+            activeTaskID = taskID
+            latestRuntime = runtime
+            runtime.processFrame(store: store, image: image, sequence: sequence)
+        }
     }
 
     /// 根据停止消息中的 `taskID` 或 `taskType` 找到正在运行的任务。

@@ -1,6 +1,6 @@
 {
   "name": "openai_glasses_esp32_runtime",
-  "version": "sdk-v13",
+  "version": "sdk-v14",
   "package_type": "esp-idf-source-project",
   "idf_target": "esp32s3",
   "minimum_esp_idf": "5.4",
@@ -33,7 +33,7 @@
     "notification_playback"
   ],
   "distribution_notes": [
-    "sdk-v13 提供 ESP-IDF 源码工程清单和 package-check 校验，业务工程应通过配置和能力协议使用眼镜运行时。",
+    "sdk-v14 提供 ESP-IDF 源码工程清单和 package-check 校验，业务工程应通过配置和能力协议使用眼镜运行时。",
     "当前不是独立发布到 ESP-IDF component registry 的组件；组件仓库发布需要后续拆分 main 组件边界。"
   ]
 }

@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v13`。本版本补齐 iOS 与 ESP32 端侧 SDK 源码包清单和 package-check 校验；上一版本补齐回放测试断言能力，音频样例批量回归可读取 JSON 期望文件并断言回复文本、模型请求和能力调用轨迹。实时语音打断、全双工语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v14`。本版本补齐真 iOS 手机视觉资源协调器，支持 `vision_policy` 解析、帧率限制、最大帧数、独占模型资源租约、高优先级抢占、功耗降级和资源事件回流；上一版本补齐 iOS 与 ESP32 端侧 SDK 源码包清单和 package-check 校验。实时语音打断、全双工语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -882,7 +882,7 @@ sdk.task_runtime.prune_tasks(retain_terminal_ms=24 * 60 * 60 * 1000)
 
 ### 7.0 手机视觉资源策略
 
-`sdk-v6` 起，Python `PhoneRuntime` 支持手机视觉任务资源策略。这个能力主要用于 `phone-mock`、设备级回放测试和服务端侧手机任务模拟，帮助功能开发团队先验证“帧率限制、过载记录、任务快照观察”这些 SDK 语义。
+`sdk-v6` 起，Python `PhoneRuntime` 支持手机视觉任务资源策略。`sdk-v14` 起，真 iOS SDK 运行时也接入同名 `vision_policy`，由 SDK 通用运行时统一处理帧率限制、最大帧数、独占模型资源租约、高优先级抢占、功耗降级和资源事件回流。
 
 创建手机任务时可以在参数中传入 `vision_policy`：
 
@@ -936,11 +936,20 @@ snapshot = sdk.phone_runtime.start_task(
 | `frame_rate_limited` | 当前帧与上一帧实际处理时间间隔不足。 |
 | `max_frames_reached` | 当前任务已经达到最大处理帧数。 |
 
+真 iOS 运行时还会产生以下资源事件：
+
+| 事件名 | 含义 |
+| --- | --- |
+| `vision.resource.lease_granted` | 任务获得 SDK 视觉资源租约。 |
+| `vision.resource.denied` | 任务因独占模型槽位不足等原因被拒绝。 |
+| `vision.task.preempted` | 低优先级任务被更高优先级任务抢占。 |
+| `vision.task.degraded` | 任务因低电量、后台或过热策略被降频。 |
+
 注意：
 
 1. 业务能力不要自行维护全局帧队列或跨任务资源优先级。
 2. 回放测试和 `phone-mock` 可以断言 `frames_dropped` 与 `resource_events`。
-3. 真 iPhone 插件在 SDK iOS 运行时补齐统一资源管理前，应读取同名 `vision_policy` 参数并保持语义一致。
+3. 真 iPhone 插件应声明 `vision_policy`，不要自行实现全局帧率、抢占、功耗和模型资源池。
 4. 具体 YOLO、盲道、红绿灯、找物等算法仍属于业务层，不进入 SDK。
 
 ### 7.1 真机 iOS 手机能力怎么接入

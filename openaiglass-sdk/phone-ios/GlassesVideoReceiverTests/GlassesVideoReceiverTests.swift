@@ -328,6 +328,126 @@ struct GlassesVideoReceiverTests {
         #expect(trafficLightRuntime.processedSequences == [42])
     }
 
+    /// 测试目标：验证 iOS 视觉资源协调器会按 `vision_policy` 限制帧率。
+    ///
+    /// 测试方法：
+    /// 1. 启动一个声明 `min_frame_interval_ms=1000` 的视觉任务。
+    /// 2. 在固定时间投递三帧，其中第二帧距离第一帧不足 1000ms。
+    ///
+    /// 预期结果：
+    /// 1. 第一帧和第三帧可以投递。
+    /// 2. 第二帧被限流，并产生 `vision.task.overloaded` 事件。
+    @Test
+    func testVisionResourceCoordinatorRateLimitsFrames() {
+        let coordinator = VisionResourceCoordinator()
+        let startDecision = coordinator.startTask(
+            taskID: "task-vision",
+            taskType: "demo_phone_task",
+            streamID: "stream-001",
+            params: [
+                "vision_policy": [
+                    "min_frame_interval_ms": 1000,
+                    "emit_overload_events": true
+                ]
+            ]
+        )
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let first = coordinator.resolveFrameRecipients(sequence: 1, now: baseDate)
+        let second = coordinator.resolveFrameRecipients(sequence: 2, now: baseDate.addingTimeInterval(0.2))
+        let third = coordinator.resolveFrameRecipients(sequence: 3, now: baseDate.addingTimeInterval(1.2))
+
+        #expect(startDecision.granted)
+        #expect(first.targetTaskIDs == ["task-vision"])
+        #expect(second.targetTaskIDs.isEmpty)
+        #expect(second.events.first?.eventName == "vision.task.overloaded")
+        #expect(second.events.first?.reason == "frame_rate_limited")
+        #expect(third.targetTaskIDs == ["task-vision"])
+    }
+
+    /// 测试目标：验证 iOS 视觉资源协调器会在达到最大帧数后拒绝继续投递。
+    ///
+    /// 测试方法：
+    /// 1. 启动一个声明 `max_frames=1` 的视觉任务。
+    /// 2. 连续投递两帧。
+    ///
+    /// 预期结果：
+    /// 1. 第一帧进入任务。
+    /// 2. 第二帧被拒绝，并产生 `max_frames_reached` 过载事件。
+    @Test
+    func testVisionResourceCoordinatorStopsAtMaxFrames() {
+        let coordinator = VisionResourceCoordinator()
+        _ = coordinator.startTask(
+            taskID: "task-vision",
+            taskType: "demo_phone_task",
+            streamID: "stream-001",
+            params: ["vision_policy": ["max_frames": 1]]
+        )
+
+        let first = coordinator.resolveFrameRecipients(sequence: 1)
+        let second = coordinator.resolveFrameRecipients(sequence: 2)
+
+        #expect(first.targetTaskIDs == ["task-vision"])
+        #expect(second.targetTaskIDs.isEmpty)
+        #expect(second.events.first?.eventName == "vision.task.overloaded")
+        #expect(second.events.first?.reason == "max_frames_reached")
+    }
+
+    /// 测试目标：验证高优先级真机视觉任务可以抢占低优先级任务。
+    ///
+    /// 测试方法：
+    /// 1. 注册两个手机任务运行时。
+    /// 2. 先启动 background 任务，再启动 critical 任务。
+    /// 3. 投递一帧图片。
+    ///
+    /// 预期结果：
+    /// 1. 低优先级任务被 SDK 以 `vision.preempted` 原因停止。
+    /// 2. 后续视频帧只进入高优先级任务。
+    @MainActor
+    @Test
+    func testRegisteredRuntimePreemptsLowerPriorityVisionTask() throws {
+        PhoneTaskCapabilityRegistry.resetForTesting()
+        PhoneCapabilityRuntimeFactory.resetForTesting()
+        defer {
+            PhoneTaskCapabilityRegistry.resetForTesting()
+            PhoneCapabilityRuntimeFactory.resetForTesting()
+        }
+        let backgroundRuntime = TestPhoneCapabilityRuntime()
+        let criticalRuntime = TestPhoneCapabilityRuntime()
+        PhoneTaskCapabilityRegistry.register(taskType: "background_vision_task") {
+            backgroundRuntime
+        }
+        PhoneTaskCapabilityRegistry.register(taskType: "critical_vision_task") {
+            criticalRuntime
+        }
+        let store = CameraStreamStore(capabilityRuntime: PhoneTaskCapabilityRegistry.makeRuntime())
+
+        store.startPhoneTask(
+            taskID: "task-background",
+            taskType: "background_vision_task",
+            streamID: "stream-001",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001",
+            params: ["vision_policy": ["priority": "background"]]
+        )
+        store.startPhoneTask(
+            taskID: "task-critical",
+            taskType: "critical_vision_task",
+            streamID: "stream-001",
+            glassDeviceID: "glass-001",
+            phoneDeviceID: "phone-001",
+            params: ["vision_policy": ["priority": "critical"]]
+        )
+
+        let image = try #require(Self.makeSolidImage(red: 1, green: 0, blue: 0))
+        store.updateLatestFrame(image: image, sequence: 99)
+
+        #expect(backgroundRuntime.stoppedTaskID == "task-background")
+        #expect(backgroundRuntime.processedSequences.isEmpty)
+        #expect(criticalRuntime.processedSequences == [99])
+        #expect(store.events.contains { $0.contains("vision.task.preempted") })
+    }
+
     /// 测试目标：验证统一服务端地址可正确派生控制与 HTTP 地址。
     ///
     /// 测试方法：

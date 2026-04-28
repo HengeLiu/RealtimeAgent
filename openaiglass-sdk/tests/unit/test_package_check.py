@@ -29,13 +29,13 @@ def test_ios_and_esp32_package_manifests_are_valid() -> None:
 
     assert ios_result["ok"] is True
     assert ios_result["name"] == "OpenAIGlassesPhoneSDK"
-    assert ios_result["version"] == "sdk-v13"
+    assert ios_result["version"] == "sdk-v14"
     assert ios_result["runtime_files"] >= 8
     assert "phone_task_event_report" in ios_result["public_capabilities"]
 
     assert esp32_result["ok"] is True
     assert esp32_result["name"] == "openai_glasses_esp32_runtime"
-    assert esp32_result["version"] == "sdk-v13"
+    assert esp32_result["version"] == "sdk-v14"
     assert esp32_result["component_files"] >= 4
     assert "espressif/esp32-camera" in esp32_result["managed_dependencies"]
 
