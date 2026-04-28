@@ -226,7 +226,9 @@ def _server_env(args: argparse.Namespace) -> dict[str, str]:
     else:
         env["SERVER_PORT"] = env.get("PORT", SERVER_DEFAULTS["PORT"])
     env.setdefault("VOICE_RUNS_ROOT", str(_repo_root(args) / "runs/session"))
-    env["LOG_FILE"] = str(_log_file(args))
+    # 后台启动时 stdout/stderr 已经重定向到 _log_file(args)。这里显式关闭
+    # Python logger 的 FileHandler，避免同一条日志同时经 stdout 和 FileHandler 写入同一个文件。
+    env["LOG_FILE"] = ""
     ensure_pythonpath(
         env,
         [path for path in [_sdk_python_root(args), _app_root(args), _repo_root(args)] if path is not None],
