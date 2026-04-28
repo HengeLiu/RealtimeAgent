@@ -480,6 +480,31 @@ static void send_voice_session_opened_message(const char *session_id)
     );
 }
 
+static void send_realtime_session_opened_message(const char *session_id)
+{
+    cJSON *payload = cJSON_CreateObject();
+    cJSON *capabilities = cJSON_CreateObject();
+    if (payload == NULL || capabilities == NULL) {
+        cJSON_Delete(payload);
+        cJSON_Delete(capabilities);
+        ESP_LOGE(TAG, "构造 voice.realtime.session.opened 失败");
+        return;
+    }
+
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    cJSON_AddStringToObject(payload, "accepted_mode", "half_duplex");
+    cJSON_AddBoolToObject(capabilities, "aec", false);
+    cJSON_AddBoolToObject(capabilities, "vad", true);
+    cJSON_AddBoolToObject(capabilities, "barge_in", false);
+    cJSON_AddBoolToObject(capabilities, "output_cancel", false);
+    cJSON_AddItemToObject(payload, "capabilities", capabilities);
+
+    send_control_message_json(
+        build_control_message_json("notify", "voice.realtime.session.opened", session_id, payload),
+        "voice.realtime.session.opened"
+    );
+}
+
 static void send_audio_segment_started_message(const char *segment_id)
 {
     cJSON *payload = cJSON_CreateObject();
@@ -2451,6 +2476,32 @@ static void handle_control_message(const char *data, int data_len)
             ESP_LOGW(TAG, "WakeNet runtime not ready; wake word status reporting disabled");
         } else {
             ESP_LOGI(TAG, "WakeNet listening enabled for session_id=%s", s_current_session_id);
+        }
+        goto cleanup;
+    }
+
+    if (strcmp(name->valuestring, "voice.realtime.session.open") == 0) {
+        if (cJSON_IsString(session_id) && session_id->valuestring != NULL) {
+            strlcpy(s_current_session_id, session_id->valuestring, sizeof(s_current_session_id));
+        } else {
+            s_current_session_id[0] = '\0';
+        }
+        build_runtime_token("stream", s_current_stream_id, sizeof(s_current_stream_id));
+        s_voice_session_opened = false;
+        clear_reply_wait_state();
+        ESP_LOGI(
+            TAG,
+            "收到 voice.realtime.session.open，当前固件降级为半双工: session_id=%s",
+            s_current_session_id
+        );
+        send_realtime_session_opened_message(s_current_session_id);
+        s_voice_session_opened = true;
+        ensure_audio_transport_started();
+        s_wake_listening_enabled = s_sr_ctx.initialized;
+        if (!s_sr_ctx.initialized) {
+            ESP_LOGW(TAG, "WakeNet runtime not ready; wake word status reporting disabled");
+        } else {
+            ESP_LOGI(TAG, "WakeNet listening enabled for realtime-degraded session_id=%s", s_current_session_id);
         }
         goto cleanup;
     }

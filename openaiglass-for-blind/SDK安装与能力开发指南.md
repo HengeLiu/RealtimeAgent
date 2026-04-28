@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v28`。本版本在 `sdk-v27` 基础上拆薄 Agent 运行热路径：真实服务端装配阶段会预热 OpenAI Agents SDK 入口和 provider，单轮请求只做会话上下文、工具白名单和模型输入的轻量装配；流式事件观察、拍照续跑和 SDK 调用桥接也已从主运行函数中拆出。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v29`。本版本在 `sdk-v28` 基础上补齐真实 ESP32 眼镜对服务端默认 `full_duplex_realtime` 打开请求的兼容：眼镜收到 `voice.realtime.session.open` 后会声明降级为 `half_duplex`，再复用现有 WakeNet 和 `/ws_audio` 半双工语音上传链路。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -547,6 +547,8 @@ VOICE_SESSION_MODE="half_duplex"
 | --- | --- | --- |
 | `full_duplex_realtime` | 下发 `voice.realtime.session.open`，端侧连接 `/ws_realtime_audio`。 | 新版眼镜固件、手机音频中继、全双工真机验收。 |
 | `half_duplex` | 下发旧的 `voice.session.open`，端侧连接 `/ws_audio`。 | 旧眼镜固件、`glass-playback` 半双工触发音频、只验证普通语音问答。 |
+
+`sdk-v29` 起，当前 ESP32 真实眼镜固件已能接住服务端默认的 `voice.realtime.session.open`，但会在 `voice.realtime.session.opened` 中声明 `accepted_mode=half_duplex` 和 `capabilities.aec=false`。服务端会把实时会话降级为半双工，眼镜端随后建立 `/ws_audio`，打开 WakeNet 门控并按旧链路发送 `sensor.audio.segment.started/finished`。这解决“控制连接已注册，但默认全双工模式下真实眼镜唤醒词无效果”的问题。
 
 运行态快照顶层字段 `configured_voice_session_mode` 会显示当前服务端配置；设备实际接受的模式看 `active_realtime_session.accepted_mode` 或半双工 `voice_sessions[device_id].state`。
 
