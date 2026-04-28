@@ -12,33 +12,49 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from infra.config import ServerSettings
 from openaiglasses.cli.common import ensure_pythonpath, merged_env, require_command, shell_join
 
 
-SERVER_DEFAULTS = {
-    "APP_ENV": "dev",
-    "HOST": "0.0.0.0",
-    "PORT": "8765",
-    "LOG_LEVEL": "INFO",
-    "DASHSCOPE_API_KEY": "",
-    "DEVICE_TOKEN_MAP": "glass-001=pair-demo-token",
-    "HEARTBEAT_INTERVAL_MS": "5000",
-    "HEARTBEAT_TIMEOUT_MS": "15000",
-    "SERVER_DEVICE_ID": "server-main",
-    "VOICE_SESSION_MODE": "full_duplex_realtime",
-    "VOICE_MODEL_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "VOICE_ASR_MODEL_NAME": "qwen3-asr-flash",
-    "AGENT_MODEL_NAME": "qwen3.6-plus",
-    "VOICE_MODEL_NAME": "qwen3.5-omni-plus",
-    "VOICE_MODEL_VOICE": "Cherry",
-    "TTS_MODEL_NAME": "cosyvoice-v3-flash",
-    "TTS_VOICE": "longanhuan",
-    "TTS_WEBSOCKET_API_URL": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-    "TTS_SAMPLE_RATE_HZ": "22050",
-    "VOICE_MODEL_TIMEOUT_MS": "45000",
-    "VOICE_SYSTEM_PROMPT": "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。",
-    "MAX_SEGMENT_AUDIO_BYTES": "524288",
-}
+def _build_server_defaults() -> dict[str, str]:
+    """从 `ServerSettings` 派生 CLI 子进程默认环境变量。
+
+    主要逻辑：
+    1. `ServerSettings` 是运行时配置的唯一默认值来源。
+    2. CLI 只负责把默认值转换成 env 字符串，并保留 `HOST` / `PORT` 这两个本地配置别名。
+
+    返回值：
+    1. 可传给 `merged_env(...)` 的默认环境变量字典。
+    """
+
+    defaults = ServerSettings()
+    return {
+        "APP_ENV": defaults.environment,
+        "HOST": defaults.host,
+        "PORT": str(defaults.port),
+        "LOG_LEVEL": defaults.log_level,
+        "DASHSCOPE_API_KEY": defaults.dashscope_api_key,
+        "DEVICE_TOKEN_MAP": defaults.device_token_map,
+        "HEARTBEAT_INTERVAL_MS": str(defaults.heartbeat_interval_ms),
+        "HEARTBEAT_TIMEOUT_MS": str(defaults.heartbeat_timeout_ms),
+        "SERVER_DEVICE_ID": defaults.server_device_id,
+        "VOICE_SESSION_MODE": defaults.voice_session_mode,
+        "VOICE_MODEL_BASE_URL": defaults.voice_model_base_url,
+        "VOICE_ASR_MODEL_NAME": defaults.voice_asr_model_name,
+        "AGENT_MODEL_NAME": defaults.agent_model_name,
+        "VOICE_MODEL_NAME": defaults.voice_model_name,
+        "VOICE_MODEL_VOICE": defaults.voice_model_voice,
+        "TTS_MODEL_NAME": defaults.tts_model_name,
+        "TTS_VOICE": defaults.tts_voice,
+        "TTS_WEBSOCKET_API_URL": defaults.tts_websocket_api_url,
+        "TTS_SAMPLE_RATE_HZ": str(defaults.tts_sample_rate_hz),
+        "VOICE_MODEL_TIMEOUT_MS": str(defaults.voice_model_timeout_ms),
+        "VOICE_SYSTEM_PROMPT": defaults.voice_system_prompt,
+        "MAX_SEGMENT_AUDIO_BYTES": str(defaults.max_segment_audio_bytes),
+    }
+
+
+SERVER_DEFAULTS = _build_server_defaults()
 
 REMOTE_ENV_EXPORT_KEYS = set(SERVER_DEFAULTS) | {
     "SERVER_HOST",

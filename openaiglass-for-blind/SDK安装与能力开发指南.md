@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v26`。本版本在 `sdk-v25` 基础上补齐设备绑定等待诊断：服务端会打印自动绑定尚未满足条件，`glass-playback` 会打印等待绑定、触发音频开始发送、发送完成和运行失败原因。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v27`。本版本在 `sdk-v26` 基础上收口服务端默认配置来源：`ServerSettings` 是运行时配置默认值和校验的唯一来源，服务端 CLI 只把这些默认值转换成子进程环境变量，不再维护第二份模型和语音默认配置。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 

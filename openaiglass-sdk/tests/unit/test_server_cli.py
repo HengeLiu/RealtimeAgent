@@ -12,6 +12,31 @@ if str(SDK_ROOT) not in sys.path:
     sys.path.insert(0, str(SDK_ROOT))
 
 from openaiglasses.cli import server
+from infra.config import ServerSettings
+
+
+def test_server_defaults_are_derived_from_runtime_settings() -> None:
+    """测试目标：CLI 默认服务端环境不能再复制一份运行时默认配置。
+
+    测试方法：
+    1. 读取 `ServerSettings()` 默认值。
+    2. 检查 `server.SERVER_DEFAULTS` 中的模型、心跳和运行时默认值。
+
+    预期结果：
+    1. CLI 默认值与运行时默认值保持一致。
+    2. 以后修改 `ServerSettings` 默认值时，CLI 不需要同步修改第二份常量。
+    """
+
+    defaults = ServerSettings()
+
+    assert server.SERVER_DEFAULTS["HOST"] == defaults.host
+    assert server.SERVER_DEFAULTS["PORT"] == str(defaults.port)
+    assert server.SERVER_DEFAULTS["LOG_LEVEL"] == defaults.log_level
+    assert server.SERVER_DEFAULTS["DEVICE_TOKEN_MAP"] == defaults.device_token_map
+    assert server.SERVER_DEFAULTS["VOICE_MODEL_VOICE"] == defaults.voice_model_voice
+    assert server.SERVER_DEFAULTS["AGENT_MODEL_NAME"] == defaults.agent_model_name
+    assert server.SERVER_DEFAULTS["VOICE_ASR_MODEL_NAME"] == defaults.voice_asr_model_name
+    assert server.SERVER_DEFAULTS["MAX_SEGMENT_AUDIO_BYTES"] == str(defaults.max_segment_audio_bytes)
 
 
 def test_server_env_disables_inner_file_handler_for_background_logs(tmp_path: Path) -> None:
