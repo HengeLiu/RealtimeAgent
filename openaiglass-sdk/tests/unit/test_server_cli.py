@@ -151,6 +151,32 @@ def test_server_env_loads_model_config_from_local_env(tmp_path: Path) -> None:
     assert env["MAX_SEGMENT_AUDIO_BYTES"] == "123456"
 
 
+def test_server_env_keeps_exported_dashscope_key_when_local_env_is_blank(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """测试目标：空本地占位符不能覆盖外部已注入的真实 API Key。"""
+
+    config_file = tmp_path / "local_server.env"
+    config_file.write_text('DASHSCOPE_API_KEY=""\nAGENT_MODEL_NAME="agent-demo"\n', encoding="utf-8")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "real-exported-key")
+    args = argparse.Namespace(
+        repo_root=str(tmp_path),
+        sdk_python_root=str(SDK_ROOT),
+        app_root="",
+        config=str(config_file),
+        host=None,
+        port=None,
+        log_dir="",
+        log_file="",
+    )
+
+    env = server._server_env(args)  # noqa: SLF001 - CLI 回归测试需要验证内部环境拼装
+
+    assert env["DASHSCOPE_API_KEY"] == "real-exported-key"
+    assert env["AGENT_MODEL_NAME"] == "agent-demo"
+
+
 def test_server_run_uses_foreground_process_without_pid_or_log_redirection(
     tmp_path: Path,
     monkeypatch,

@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Mapping
 
 
+SECRET_ENV_KEYS = {"DASHSCOPE_API_KEY"}
+
+
 def read_env_file(path: Path) -> dict[str, str]:
     """读取简单 env 配置文件。
 
@@ -61,7 +64,10 @@ def merged_env(config_file: Path | None, defaults: Mapping[str, str]) -> dict[st
 
     env = dict(os.environ)
     if config_file is not None:
-        env.update(read_env_file(config_file))
+        for key, value in read_env_file(config_file).items():
+            if key in SECRET_ENV_KEYS and value == "" and env.get(key, "").strip():
+                continue
+            env[key] = value
     for key, value in defaults.items():
         env.setdefault(key, value)
     return env
