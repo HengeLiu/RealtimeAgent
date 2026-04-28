@@ -6,6 +6,17 @@
 
 当前指南对应 SDK 版本：`sdk-v18`。本版本补齐全双工实时语音对话第一版，新增 `RealtimeVoiceRuntime`、实时语音协议事件、`/ws_realtime_audio` 媒体入口、实时用户插话、迟到输出丢弃、回声候选观测和运行态快照；上一版本补齐 SQLite 任务持久化第一版。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
+当前 SDK 能力状态：
+
+| 能力 | 当前状态 | 业务开发者应如何使用 |
+| --- | --- | --- |
+| 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
+| 全双工实时语音 | `sdk-v18` 第一版可联调 | 端侧或手机侧接入 `voice.realtime.*` 协议；业务 Tool/Task 不直接处理实时语音协议。 |
+| 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
+| 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
+| SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
+| iOS/ESP32 SDK 包形态 | 源码包可检查 | 业务工程引用 SDK 源码运行时；二进制发布仍是后续工作。 |
+
 ## 1. 当前目录边界
 
 当前仓库拆成两条主线：
@@ -32,7 +43,8 @@
 2. 统一控制消息、媒体消息和任务事件模型。
 3. Agent、Tool、Task、Skill 和 MCP Adapter 装配。
 4. 全局上下文、任务状态、通知和异常处理。
-5. 设备级数据回放、契约测试和 SDK 包验证。
+5. 半双工语音、全双工实时语音、播放仲裁和用户打断。
+6. 设备级数据回放、契约测试和 SDK 包验证。
 
 开发者主要使用：
 
@@ -106,6 +118,8 @@ openaiglass-for-blind/host/phone/config/AppConfig.plist.example
 4. 响应 `sensor.camera.capture`，完成单次抓拍并回传 `sensor.camera.captured`。
 5. 响应 `sensor.camera.stream.start/stop`，把摄像头帧推送到手机 `/ws/camera`。
 6. 处理通知、播报、唤醒和端侧运行状态。
+
+全双工实时语音对眼镜端有额外要求：端侧需要持续采集麦克风并尽量提供 AEC/VAD 结果，通过 `voice.realtime.input.delta` 媒体帧和 `voice.realtime.user_interrupt` 控制事件告诉服务端“这是用户插话”还是“这是喇叭回声”。如果端侧无法提供 AEC，服务端会把实时会话降级到半双工，业务功能不需要自己做兜底。
 
 本地私有配置：
 
@@ -559,6 +573,44 @@ SDK 收到该消息后会：
 | `realtime_latency_metrics` | 首音频、模型首分片、输出首包、打断决策等延迟指标。 |
 | `realtime_echo_rejected_count` | 被 SDK 记录为回声候选且未触发打断的次数。 |
 
+最小联调流程：
+
+1. 设备完成 `/ws/control` 注册，拿到普通 SDK `session_id`。
+2. 端侧发送或响应 `voice.realtime.session.open`。
+3. 端侧回 `voice.realtime.session.opened`，payload 中声明 `capabilities.aec`、`capabilities.vad`、`barge_in` 和 `output_cancel`。
+4. 端侧连接 `/ws_realtime_audio?device_id=<glass_device_id>`。
+5. 用户开始说话时发 `voice.realtime.input.started`，随后持续发送 `MediaFrame(frame_type=voice.realtime.input.delta)`。
+6. 用户本轮输入可提交时发 `voice.realtime.input.committed`。
+7. 服务端通过 `voice.realtime.output.delta` 下发实时输出；如果用户播放中插话，端侧发 `voice.realtime.user_interrupt`。
+8. SDK 下发 `actuator.audio.interrupt` 和 `voice.realtime.output.cancelled`，并在快照中记录打断决策。
+
+端侧 `voice.realtime.user_interrupt` 示例：
+
+```json
+{
+  "name": "voice.realtime.user_interrupt",
+  "semantic": "notify",
+  "session_id": "sess_rt_001",
+  "payload": {
+    "input_stream_id": "rt_in_002",
+    "reason": "barge_in",
+    "barge_in_confidence": 0.86,
+    "clear_current_output": true,
+    "clear_pending_playback": false
+  }
+}
+```
+
+调试时优先看 `/api/runtime/devices` 中这些字段：
+
+| 现象 | 重点字段 |
+| --- | --- |
+| 实时会话没有打开 | `active_realtime_session`、`realtime_state`、`recent_realtime_events`。 |
+| 用户插话没有打断播放 | `recent_realtime_interrupts`、`recent_playback_decisions`、`active_playback_intent`。 |
+| 回声被误判为插话 | `realtime_echo_rejected_count`、`recent_realtime_events` 中的 `voice.realtime.echo.rejected`。 |
+| 模型或 TTS 首包慢 | `realtime_latency_metrics`。 |
+| 插话后旧音频继续播 | `active_realtime_session.cancelled_output_stream_ids`、`voice.realtime.output.cancelled` 控制消息。 |
+
 业务开发者边界：
 
 1. 业务 Tool/Task 不直接处理 `voice.realtime.*` 协议。
@@ -651,7 +703,7 @@ Provider 边界：
 2. `FileConfigProvider` 用于单机部署、回放和可版本化配置文件。
 3. 真实云端配置服务后续应实现同一个 Provider 接口，业务代码不应直接依赖具体配置来源。
 
-### 3.11 Skill Runtime
+### 3.12 Skill Runtime
 
 `sdk-v10` 起，Skill Runtime 成为正式 SDK 扩展面。Skill 用于描述一类复合任务的工作流程、工具边界和注意事项；真正执行仍然通过 Tool、Task、MCP 和设备组上下文完成。
 
@@ -1436,6 +1488,7 @@ PYTHONPATH=openaiglass-sdk/server-python uv run openaiglass.sdk.package-check --
 | 视频流到手机 | `context.start_phone_video_link(...)` | 响应 `sensor.camera.stream.start`，向手机 `/ws/camera` 推送帧。 |
 | 停止视频流 | `context.stop_phone_video_link(...)` | 响应 `sensor.camera.stream.stop`。 |
 | 语音输入 | SDK 服务端 `/ws_audio` | 眼镜录音、上传音频段。 |
+| 全双工实时语音 | SDK 服务端 `/ws_realtime_audio` + `voice.realtime.*` | 眼镜持续上行实时媒体帧，端侧上报 AEC/VAD 和用户插话。 |
 | 播报和通知 | `context.submit_notification(...)` | 眼镜接收通知并播放或提示。 |
 
 如果新业务必须新增眼镜硬件能力，应按下面顺序处理：
@@ -1525,6 +1578,8 @@ uv run openaiglass.server.run \
 7. 服务端按真实语音链路处理这段音频，后续 Tool、Task、通知和执行器行为都走真实运行时。
 
 `trigger_audio` 不是可选语音样例，而是启动一次设备级回放的触发源。它不测试 WakeNet 本身；它假设唤醒已经成功，只模拟唤醒后麦克风开始录音并持续向服务端推流。
+
+注意：当前 `glass-playback` 主流程仍模拟半双工触发音频。`sdk-v18` 的全双工实时语音回放级验证先由 SDK 单元测试覆盖，真机或端侧中继需要按第 3.10 节主动发送 `voice.realtime.*` 事件和 `/ws_realtime_audio` 媒体帧。
 
 ### 10.2 开发者日常测试流程
 
@@ -1690,6 +1745,8 @@ MP4 会由 `glass-playback` 在本机通过 `ffmpeg` 解成 JPEG 帧，再按真
 | 取消路径 | 验证任务取消后能停止视频链路和眼镜端推流。 |
 | 传感器组合输入 | 验证触发音频、视觉帧和方向、位置等传感器输入能一起驱动能力。 |
 | 执行器输出 | 验证音频播放、震动等眼镜执行器命令符合预期。 |
+| 全双工插话 | 端侧或测试中继播放中上报 `voice.realtime.user_interrupt`，验证当前输出被取消。 |
+| 全双工回声候选 | 注入 `voice_activity=echo` 或低置信度帧，验证只记录回声拒绝，不触发用户打断。 |
 
 ### 10.7 如何判断回放结果
 
@@ -1743,6 +1800,9 @@ uv run python -m devtools.audio_sample_batch_runner \
 | `glass-playback` 控制日志 | 是否完成注册、心跳、voice session 打开和 `trigger_audio` 流式发送。 |
 | 服务端任务日志 | Tool、Task、任务事件、通知和错误码是否符合预期。 |
 | `/api/runtime/devices` | 虚拟眼镜是否在线；如果使用真实手机，glass 与 phone 是否已绑定。 |
+| `active_realtime_session` | 全双工会话是否打开、是否降级、当前输入输出流和最近事件是否符合预期。 |
+| `recent_realtime_interrupts` | 用户插话是否进入播放仲裁，是否取消了当前输出流。 |
+| `realtime_echo_rejected_count` | 回声候选是否被识别为非用户插话。 |
 | 真实 iOS 手机端日志 | 需要手机能力时，确认手机任务、视频接收和业务插件结果是否符合预期。 |
 
 常见失败定位：
@@ -1752,6 +1812,7 @@ uv run python -m devtools.audio_sample_batch_runner \
 3. 触发音频没有发送：检查 `trigger_audio.path`、音频格式和启动等待条件。
 4. 没有业务任务：检查触发音频内容是否能被 ASR 和 agent 识别为目标能力请求。
 5. 没有执行器调用：检查业务 Task 是否提交了通知或音频播放请求。
+6. 全双工插话没有生效：检查端侧是否已打开实时会话、是否连接 `/ws_realtime_audio`、是否上报 `voice.realtime.user_interrupt`，并查看 `recent_playback_decisions`。
 
 ## 11. 三端真机联调流程
 
@@ -1802,6 +1863,24 @@ uv run openaiglass.glass.start \
 | iOS 手机 | 页面中的服务端状态、当前接收地址、最近帧、最近任务结果、最近错误。 |
 | ESP32 眼镜 | WiFi 连接、`device.registered`、心跳、`sensor.camera.capture`、`sensor.camera.stream.start/stop`、音频连接。 |
 
+全双工实时语音真机验收追加步骤：
+
+1. 服务端 `LOG_LEVEL=DEBUG` 启动，确认 `/api/runtime/devices` 中能看到 `realtime_state` 字段。
+2. 眼镜端或手机中继端打开 `voice.realtime.session.open/opened`，并声明 `capabilities.aec` 与 `capabilities.vad`。
+3. 连接 `/ws_realtime_audio` 并发送 `frame_type=voice.realtime.input.delta` 的 `MediaFrame`。
+4. 在服务端正在下发播报时，上报 `voice.realtime.user_interrupt`。
+5. 确认服务端下发 `actuator.audio.interrupt` 和 `voice.realtime.output.cancelled`。
+6. 注入喇叭回采或低置信度帧，确认 `realtime_echo_rejected_count` 增加，`recent_playback_decisions` 不出现新的 `user_interrupt`。
+7. 关闭会话后确认没有残留 `active_realtime_output_stream_id`。
+
+全双工验收时的关键观察点：
+
+| 端 | 观察点 |
+| --- | --- |
+| 服务端 | `realtime_state`、`recent_realtime_events`、`recent_realtime_interrupts`、`recent_playback_decisions`、`realtime_latency_metrics`。 |
+| 眼镜端 | AEC/VAD 状态、`barge_in_confidence`、上行帧序号、喇叭播放中是否还能继续采集。 |
+| 手机中继端 | 如果由手机承载音频中继，观察音频路由、蓝牙/扬声器模式、上行延迟和重连。 |
+
 ## 12. 启动后状态验证
 
 三端或虚拟设备启动后，开发者不应该只看进程是否还在运行，还需要确认服务端健康、设备注册、设备绑定、语音会话、简单对话、Tool 触发、手机任务和视频链路是否处于可用状态。
@@ -1819,6 +1898,7 @@ uv run openaiglass.glass.start \
 5. 如何通过对话和业务 Task 建立 glass 到 phone 的连接。
 6. 如何用 `/api/debug/find-object/start`、`/api/debug/phone-video-link/start|stop` 缩小联调问题范围。
 7. 如何用 `/api/tasks/report-event` 排查手机任务事件处理。
+8. 如何查看全双工实时语音快照字段，判断插话、回声和输出取消是否生效。
 
 ## 13. 三端链路时序
 
@@ -1877,10 +1957,27 @@ server -> glass: 播报或提示
 SDK 契约和核心单元测试：
 
 ```bash
-uv run python -m pytest \
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind \
+uv run --with pytest python -m pytest \
   openaiglass-sdk/tests/contracts \
-  openaiglass-sdk/tests/unit/test_sdk_phase_two.py \
+  openaiglass-sdk/tests/unit \
   -q
+```
+
+全双工实时语音专项测试：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind \
+uv run --with pytest python -m pytest openaiglass-sdk/tests/unit/test_realtime_voice_runtime.py -q
+```
+
+编译和 SDK 包检查：
+
+```bash
+python -m compileall -q openaiglass-sdk/server-python
+PYTHONPATH=openaiglass-sdk/server-python \
+uv run --with setuptools --with wheel openaiglass.sdk.package-check --repo-root .
+git diff --check
 ```
 
 综合预检：
@@ -1905,10 +2002,11 @@ uv run openaiglass.sdk.live-check \
 2. 在 `openaiglass-sdk/phone-ios` 中直接写 `find_object`、导航、地图、计时器等业务策略。
 3. 在 `openaiglass-sdk/glass-esp32` 中写具体业务流程判断。
 4. 直接拼接控制 WebSocket 消息。
-5. 直接读写设备绑定表。
-6. 为单个业务能力新增专用系统接口。
-7. 跳过设备级数据回放，直接进入真机联调。
-8. 为了调用地图、导航或外部服务而直接 import SDK 内部 MCP adapter；应使用 `context.mcp(...)`。
+5. 在业务 Tool/Task 中直接处理 `voice.realtime.*` 或自行取消播放器。
+6. 直接读写设备绑定表。
+7. 为单个业务能力新增专用系统接口。
+8. 跳过设备级数据回放，直接进入真机联调。
+9. 为了调用地图、导航或外部服务而直接 import SDK 内部 MCP adapter；应使用 `context.mcp(...)`。
 
 如果业务能力需要新的系统级抽象，应先写清需求、输入输出、异常情况和验收方式，再把它沉淀为 SDK 的公开接口。
 
@@ -1933,6 +2031,8 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 ### 17.4 新能力什么时候应该改 SDK？
 
 只有当多个业务都会用到同一种系统能力，或者现有 `DeviceGroupContext`、`TaskContext`、iOS `PhoneTaskCapabilityRuntime` 等公开接口无法表达业务需求时，才应该改 SDK。
+
+全双工实时语音相关问题优先按 SDK 问题处理，例如协议事件缺失、打断仲裁不完整、回声观测字段不足、实时模型 Adapter 无法表达供应商能力。业务能力只声明自己需要语音输入或通知输出，不在业务目录里补播放器、VAD、队列或全局会话状态。
 
 ### 17.5 如何判断路径是否又混乱了？
 
