@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v12`。本版本补齐回放测试断言能力，音频样例批量回归可读取 JSON 期望文件并断言回复文本、模型请求和能力调用轨迹；上一版本补齐任务持久化生产化单机形态。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v13`。本版本补齐 iOS 与 ESP32 端侧 SDK 源码包清单和 package-check 校验；上一版本补齐回放测试断言能力，音频样例批量回归可读取 JSON 期望文件并断言回复文本、模型请求和能力调用轨迹。实时语音打断、全双工语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -1191,7 +1191,21 @@ uv run openaiglass.phone.mock \
 
 当前版本只支持根据配置发送固定 mock 事件，不支持断言检查、批量测试，也不支持真实视频帧回放。开发者需要根据服务端日志、SDK 任务状态和 `outputs.event_log` 判断行为是否符合预期。
 
-### 7.5 Swift Package 和 XCFramework 发布形态
+### 7.5 iOS 源码包清单、Swift Package 和 XCFramework 发布形态
+
+`sdk-v13` 起，iOS SDK 运行时提供源码包清单：
+
+```text
+openaiglass-sdk/phone-ios/package-manifest.json
+```
+
+该清单声明当前 SDK 可发布输入，包括 Xcode 工程、运行时代码、测试代码、资源文件、最低 iOS/Swift 版本和公开能力。SDK 包检查会校验清单字段和文件完整性：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python uv run openaiglass.sdk.package-check --repo-root .
+```
+
+这代表 iOS SDK 已经具备可检查的源码包形态，适合内部源码集成、真机调试和版本边界确认。业务开发者仍不应直接修改 `openaiglass-sdk/phone-ios`，而应在业务侧 Xcode 工程引用 SDK 运行时代码并注册自己的业务插件。
 
 可以尝试把 iOS SDK 发布成 Swift Package 或 XCFramework，但两者目标不同：
 
@@ -1210,7 +1224,7 @@ uv run openaiglass.phone.mock \
 5. 用 `xcodebuild -create-xcframework` 生成 `OpenAIGlassesPhoneSDK.xcframework`。
 6. 再选择直接分发 `.xcframework`，或用 Swift Package 的 `binaryTarget` 包一层版本化发布。
 
-当前代码结构已经具备尝试拆分的基础，但还不能直接发布成干净的二进制 SDK，主要原因是：
+当前代码结构已经具备可检查的源码包清单，也具备尝试拆分的基础，但还不能直接发布成干净的二进制 SDK，主要原因是：
 
 1. 当前 `phone-ios` 仍是 App 工程，不是 framework/package-first 结构。
 2. `ContentView`、`AppConfig.plist`、业务宿主入口和 SDK runtime 还没有完全分离。
@@ -1717,11 +1731,11 @@ SDK 提供通用运行时，业务项目提供业务插件、产品配置和启�
 
 可以尝试，但如果目标是业务方“不下载 SDK 源码”，优先应做 XCFramework 或 Swift Package `binaryTarget`，而不是源码型 Swift Package。
 
-当前代码还没有达到可直接二进制发布的状态，因为 `phone-ios` 仍是 App 工程，通用运行时、宿主页面、配置资源和业务工程引用边界还需要拆开。推荐先做最小 XCFramework 试点：只导出控制连接、视频接收、任务分发和事件上报能力；业务 App 在自己的 target 中实现并注册 Swift 插件。详细路线见第 7.5 节。
+`sdk-v13` 已经提供 `openaiglass-sdk/phone-ios/package-manifest.json`，可以通过 `openaiglass.sdk.package-check` 校验源码包输入是否齐全。当前代码还没有达到可直接二进制发布的状态，因为 `phone-ios` 仍是 App 工程，通用运行时、宿主页面、配置资源和业务工程引用边界还需要拆开。推荐先做最小 XCFramework 试点：只导出控制连接、视频接收、任务分发和事件上报能力；业务 App 在自己的 target 中实现并注册 Swift 插件。详细路线见第 7.5 节。
 
 ### 17.3 ESP32 SDK 当前是不是已经能作为 ESP-IDF component 引入？
 
-当前仍是 ESP-IDF 工程，后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start` 调度一个可编译的 ESP-IDF 固件工程。
+`sdk-v13` 已经提供 `openaiglass-sdk/glass-esp32/component-manifest.json`，可以通过 `openaiglass.sdk.package-check` 校验 ESP-IDF 源码工程输入是否齐全。当前仍是 ESP-IDF 工程，不是发布到 ESP-IDF component registry 的独立组件；后续可以继续拆成 component。现在的推荐方式是通过 `uv run openaiglass.glass.start` 调度一个可编译的 ESP-IDF 固件工程。
 
 在当前仓库内开发时，可以用 `--repo-root .` 让命令按默认 monorepo 布局推导 `openaiglass-sdk/glass-esp32`。在独立业务项目中，不要求当前目录存在 `openaiglass-sdk/glass-esp32`；应使用 `--project-dir /path/to/glass-esp32` 指向真实固件工程，并用 `--app-root` 或 `--config` 指向业务侧眼镜配置。
 

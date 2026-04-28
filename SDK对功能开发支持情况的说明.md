@@ -1,7 +1,7 @@
 # SDK 对功能开发支持情况的说明
 
 更新时间：2026-04-28
-评估版本：sdk-v12
+评估版本：sdk-v13
 评估对象：`openaiglass-sdk` 对 `openaiglass-for-blind/docs/stage1/plan` 中第一期能力开发的支撑情况。
 
 ## 评估边界
@@ -30,9 +30,9 @@
 
 ## 总体结论
 
-sdk-v12 已经可以支撑第一期中“非实时语音交互、普通文本流式 TTS 透传、通知仲裁与高优先级通知抢播、AgentCore 工具调用、Tool/MCP 接入、最小 Skill Runtime、抓拍图片理解、SDK 托管 Task、任务文件型自动持久化、眼镜与手机注册绑定、账号级设备组织、手机视频链路任务最小闭环、手机视觉资源策略最小闭环、带断言的音频样例回放测试”等主要基础能力。
+sdk-v13 已经可以支撑第一期中“非实时语音交互、普通文本流式 TTS 透传、通知仲裁与高优先级通知抢播、AgentCore 工具调用、Tool/MCP 接入、最小 Skill Runtime、抓拍图片理解、SDK 托管 Task、任务文件型自动持久化、眼镜与手机注册绑定、账号级设备组织、手机视频链路任务最小闭环、手机视觉资源策略最小闭环、带断言的音频样例回放测试、iOS 与 ESP32 端侧源码包清单和 package-check 校验”等主要基础能力。
 
-当前 SDK 的主要欠缺集中在：实时语音用户打断、完整播放仲裁、真实地图服务适配治理、真 iOS 手机视觉资源池、导航任务通用模板、分布式任务持久化、三端 SDK 打包形态、以及更完整的设备级回放断言能力。
+当前 SDK 的主要欠缺集中在：实时语音用户打断、完整播放仲裁、真实地图服务适配治理、真 iOS 手机视觉资源池、导航任务通用模板、分布式任务持久化、iOS/ESP32 二进制或组件仓库发布、以及更完整的设备级回放断言能力。
 
 因此，功能开发团队目前可以围绕 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`DeviceGroupContext`、`context.mcp` 和回放测试工具继续开发；但不应自行改写 WebSocket 协议、设备绑定、任务生命周期、视频链路控制、全局上下文维护等 SDK 层职责。
 
@@ -54,6 +54,7 @@ sdk-v12 已经可以支撑第一期中“非实时语音交互、普通文本流
 | 任务事件回流与通知仲裁 | Phase F/J/K/L | `TaskEventBridge` 可把任务事件转换为会话消息或通知请求，`NotificationCoordinator` 支持去重、排队、显式抢播策略、仲裁决策快照和高优先级通知中断旧通知。 | 业务只提交结构化通知和策略；当前抢播只覆盖通知播放流，不等于实时语音用户打断。 |
 | 普通文本流式 TTS 透传与首包观测 | 第 2 项；Phase C | `OpenAIAgentLoopRunner` 已能把普通 `response.output_text.delta` 透传给 `VoiceRuntime` 的流式 TTS，会话快照记录首文本、首音频和首播放请求时间。 | 可用于普通问答降低首音频等待时间；如果 TTS 回退全文合成，首包延迟仍会如实暴露在运行态中。 |
 | 设备级回放和联调工具 | 各阶段测试要求 | `glass-playback`、`phone-mock`、preflight、协议契约测试、live-check 和音频样例批量回归已经支持基本自动化验证；sdk-v12 支持回复文本、模型请求和能力轨迹断言。 | 功能开发应优先用回放工具复现链路问题；设备级 `glass-playback` 配置内断言和真实视频断言仍需后续增强。 |
+| iOS 与 ESP32 源码包形态 | SDK 安装、端侧集成和版本边界 | sdk-v13 已提供 `phone-ios/package-manifest.json`、`glass-esp32/component-manifest.json`，并把端侧清单和文件完整性纳入 `openaiglass.sdk.package-check`。 | 功能团队可以按清单确认端侧 SDK 输入，不应复制或修改 SDK 运行时代码；当前仍不是二进制 SDK 或组件仓库发布。 |
 | 配置、日志、异常和预检 | Phase A | `ServerSettings`、日志配置、统一错误模型、CLI 预检和运行态诊断已经覆盖基础开发调试。 | 排障日志应使用 DEBUG 级别，业务不应绕过 SDK 自行散落底层诊断输出。 |
 
 ## 存在欠缺但可以继续开发的能力
@@ -67,7 +68,7 @@ sdk-v12 已经可以支撑第一期中“非实时语音交互、普通文本流
 | 分布式任务持久化 | sdk-v11 支持单机文件型自动持久化、原子写入、事件幂等和终态清理，但不是多进程、多实例、数据库级任务平台。 | 开发、单机部署和回放足够；多实例服务重启恢复、抢占和事务仍有风险。 | SDK 后续再接数据库存储、分布式锁和事件消费；功能层不要自建任务平台。 |
 | Skill Runtime 产品化治理 | sdk-v10 已有最小 Skill Runtime，但还没有远程 Skill Registry、审批、风险等级、目录扫描和复杂会话恢复。 | 业务可用显式注册的本地 Skill；暂不能把 Skill 当成线上动态配置平台。 | 功能团队先用 `register_skill` 注册受控 Skill；远程管理和审批写入 SDK 后续优化。 |
 | 设备级回放断言增强 | sdk-v12 已支持音频样例批量回归断言和失败报告，但 `glass-playback` 配置内还没有完整事件时间线断言、执行器断言和真实视频帧期望。 | 功能团队已经可以对语音入口做自动化断言；复杂多设备视觉回归仍需要人工辅助。 | SDK 后续把断言扩展到 `glass-playback` 配置、视频帧和端侧事件时间线。 |
-| iOS 和 ESP32 SDK 打包形态 | iOS 当前更接近 App 工程内 SDK 代码，尚未形成 XCFramework/SPM；ESP32 侧也不是独立发布级组件。 | 内部联调可用，但外部开发者安装体验和版本隔离不足。 | SDK 后续应补正式包管理、版本说明和示例工程。 |
+| iOS 和 ESP32 二进制/组件仓库发布 | sdk-v13 已有端侧源码包清单和 package-check 校验，但 iOS 尚未形成 XCFramework/SPM binaryTarget；ESP32 侧也不是独立发布到 component registry 的组件。 | 内部联调和源码集成可用，但外部开发者免源码安装体验和版本隔离仍不足。 | SDK 后续应补 XCFramework、Swift Package binaryTarget、ESP-IDF component registry 和示例工程。 |
 | 账号权限、组织管理和远程配置中心 | sdk-v9 已有账号级设备索引和跨账号绑定隔离，但没有完整授权、审计、组织树和远程配置中心。 | 多设备能力开发可先按 `account_id` 使用 SDK 快照；涉及权限和后台管理仍不能承诺。 | 功能团队不要在业务 Task 中自建权限体系；需要产品级权限时写入 SDK 阻塞文档。 |
 
 ## 当前不能支持的能力
@@ -116,4 +117,4 @@ sdk-v12 已经可以支撑第一期中“非实时语音交互、普通文本流
 5. 把回放断言扩展到 `glass-playback` 配置、真实视频帧和端侧事件时间线。
 6. 扩展 Skill Runtime 产品化治理：目录扫描、风险等级、审批、远程注册和复杂会话恢复。
 7. 以独立大版本实现实时语音、用户打断、播放中断和多源提示仲裁。
-8. 补齐 iOS、ESP32 和 Python SDK 的正式打包、安装和版本兼容说明。
+8. 在 sdk-v13 源码包清单基础上，继续补齐 iOS XCFramework、Swift Package binaryTarget、ESP32 component registry 和版本兼容矩阵。
