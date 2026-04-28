@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v16`。本版本补齐账号治理、组织树、角色权限、审计事件和远程配置 Provider 第一版，`DeviceGroupRuntime` 现在暴露 `governance` 快照，业务上下文可读取作用域配置和执行权限检查；上一版本补齐服务端统一播放仲裁和用户语音打断入口。全双工实时语音、公网/NAT 穿透、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v17`。本版本补齐 SQLite 任务持久化第一版，支持 SQLite 文件库、`:memory:` 测试库、任务快照恢复、事件幂等表和单机多进程任务租约；上一版本补齐账号治理、组织树、角色权限、审计事件和远程配置 Provider。全双工实时语音、公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -944,7 +944,41 @@ context.runtime.dispatch_event(
 sdk.task_runtime.prune_tasks(retain_terminal_ms=24 * 60 * 60 * 1000)
 ```
 
-边界：`sdk-v11` 仍是单进程单机生产化形态，不是多实例数据库任务平台。线上如果需要多实例抢占、分布式锁、数据库事务和跨进程事件消费，需要 SDK 后续接入正式任务存储。
+`sdk-v17` 起，也可以启用 SQLite 持久化：
+
+```python
+sdk.task_runtime.enable_sqlite_persistence(
+    "logs/sdk-task-store.sqlite3",
+    restore=True,
+    owner_id="server-worker-001",
+)
+```
+
+SQLite 存储会创建以下表：
+
+| 表 | 说明 |
+| --- | --- |
+| `schema_migrations` | SQLite schema 版本。 |
+| `tasks` | 当前任务快照和状态索引。 |
+| `task_events` | 任务事件日志，`(task_id, event_id)` 做幂等。 |
+| `task_leases` | 单机多进程任务恢复和执行归属租约。 |
+
+如果宿主需要做恢复协调，可以直接使用 store 的租约能力：
+
+```python
+from openaiglasses import SQLiteTaskPersistenceStore
+
+store = SQLiteTaskPersistenceStore(
+    "logs/sdk-task-store.sqlite3",
+    owner_id="server-worker-001",
+)
+acquired = store.acquire_lease(
+    "task_xxx",
+    ttl_ms=30000,
+)
+```
+
+边界：`sdk-v17` 的 SQLite 存储只保证单机 SQLite 文件内的多进程协调，不是跨机器分布式数据库任务平台。多台服务器部署、跨主机锁、远程任务审计后台和事件消费服务仍需要后续接入 PostgreSQL、MySQL 或专用任务平台。
 
 ## 7. 开发手机侧能力
 

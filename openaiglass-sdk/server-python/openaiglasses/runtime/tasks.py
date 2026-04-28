@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -115,6 +116,249 @@ class FileTaskPersistenceStore:
         if not isinstance(tasks, list):
             raise RuntimeError("任务持久化文件缺少 tasks 数组")
         return [dict(item) for item in tasks if isinstance(item, dict)]
+
+
+class SQLiteTaskPersistenceStore:
+    """SQLite 任务持久化存储。
+
+    主要功能：
+    1. 使用 Python 标准库 `sqlite3` 保存任务快照和事件日志。
+    2. 为单机多进程提供 WAL、事务、事件幂等和任务租约。
+    3. 保持与 `FileTaskPersistenceStore` 一致的 `save/load` 契约。
+    """
+
+    def __init__(self, path: str | Path, *, owner_id: str | None = None) -> None:
+        self.path = str(path)
+        self.owner_id = owner_id or f"task-owner-{uuid.uuid4().hex[:8]}"
+        self._memory_connection: sqlite3.Connection | None = None
+        if self.path == ":memory:":
+            self._memory_connection = sqlite3.connect(self.path)
+            self._memory_connection.row_factory = sqlite3.Row
+        self._initialize()
+
+    def save(self, snapshots: list[dict[str, Any]]) -> None:
+        """保存任务快照到 SQLite。"""
+
+        now_ms = _now_ms()
+        task_ids = [str(snapshot.get("task_id") or "") for snapshot in snapshots]
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if task_ids:
+                placeholders = ",".join("?" for _ in task_ids)
+                connection.execute(f"DELETE FROM tasks WHERE task_id NOT IN ({placeholders})", task_ids)
+            else:
+                connection.execute("DELETE FROM tasks")
+            for snapshot in snapshots:
+                task_id = str(snapshot.get("task_id") or "")
+                if not task_id:
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO tasks (
+                        task_id, task_type, session_id, device_id, state,
+                        input_json, data_json, result_json, error_json,
+                        created_at_ms, updated_at_ms, started_at_ms, completed_at_ms,
+                        timeout_ms, deadline_at_ms, snapshot_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        task_type=excluded.task_type,
+                        session_id=excluded.session_id,
+                        device_id=excluded.device_id,
+                        state=excluded.state,
+                        input_json=excluded.input_json,
+                        data_json=excluded.data_json,
+                        result_json=excluded.result_json,
+                        error_json=excluded.error_json,
+                        updated_at_ms=excluded.updated_at_ms,
+                        started_at_ms=excluded.started_at_ms,
+                        completed_at_ms=excluded.completed_at_ms,
+                        timeout_ms=excluded.timeout_ms,
+                        deadline_at_ms=excluded.deadline_at_ms,
+                        snapshot_json=excluded.snapshot_json
+                    """,
+                    (
+                        task_id,
+                        str(snapshot.get("task_type") or ""),
+                        str(snapshot.get("session_id") or ""),
+                        str(snapshot.get("device_id") or ""),
+                        str(snapshot.get("state") or ""),
+                        self._dump_json(snapshot.get("input_data") or {}),
+                        self._dump_json(snapshot.get("data") or {}),
+                        self._dump_json(snapshot.get("result")),
+                        self._dump_json(snapshot.get("error")),
+                        int(snapshot.get("created_at_ms") or now_ms),
+                        int(snapshot.get("updated_at_ms") or now_ms),
+                        snapshot.get("started_at_ms"),
+                        snapshot.get("completed_at_ms"),
+                        snapshot.get("timeout_ms"),
+                        snapshot.get("deadline_at_ms"),
+                        self._dump_json(snapshot),
+                    ),
+                )
+                for event in snapshot.get("events", []):
+                    if not isinstance(event, dict):
+                        continue
+                    event_id = str(event.get("event_id") or f"sdk_task_evt_{uuid.uuid4().hex[:12]}")
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO task_events (
+                            task_id, event_id, event_name, state, source, payload_json, ts_ms
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            task_id,
+                            event_id,
+                            str(event.get("event_name") or ""),
+                            str(event.get("state") or snapshot.get("state") or ""),
+                            str(event.get("source") or "sdk"),
+                            self._dump_json(event.get("payload") or {}),
+                            int(event.get("ts_ms") or now_ms),
+                        ),
+                    )
+            connection.commit()
+
+    def load(self) -> list[dict[str, Any]]:
+        """从 SQLite 读取任务快照。"""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT snapshot_json FROM tasks ORDER BY created_at_ms, task_id"
+            ).fetchall()
+        return [dict(json.loads(str(row["snapshot_json"]))) for row in rows]
+
+    def acquire_lease(
+        self,
+        task_id: str,
+        *,
+        ttl_ms: int,
+        owner_id: str | None = None,
+        now_ms: int | None = None,
+    ) -> bool:
+        """尝试获取或续租任务租约。"""
+
+        if ttl_ms <= 0:
+            raise RuntimeError("ttl_ms 必须大于 0")
+        current = now_ms if now_ms is not None else _now_ms()
+        owner = owner_id or self.owner_id
+        expires_at_ms = current + ttl_ms
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT owner_id, expires_at_ms FROM task_leases WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if row is not None and row["owner_id"] != owner and int(row["expires_at_ms"]) > current:
+                connection.rollback()
+                return False
+            connection.execute(
+                """
+                INSERT INTO task_leases (task_id, owner_id, expires_at_ms, renewed_at_ms)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    expires_at_ms=excluded.expires_at_ms,
+                    renewed_at_ms=excluded.renewed_at_ms
+                """,
+                (task_id, owner, expires_at_ms, current),
+            )
+            connection.commit()
+        return True
+
+    def release_lease(self, task_id: str, *, owner_id: str | None = None) -> bool:
+        """释放当前 owner 持有的任务租约。"""
+
+        owner = owner_id or self.owner_id
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM task_leases WHERE task_id=? AND owner_id=?",
+                (task_id, owner),
+            )
+        return cursor.rowcount > 0
+
+    def list_leases(self) -> list[dict[str, Any]]:
+        """列出任务租约，便于测试和诊断。"""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT task_id, owner_id, expires_at_ms, renewed_at_ms FROM task_leases ORDER BY task_id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _initialize(self) -> None:
+        """初始化 SQLite schema。"""
+
+        if self.path != ":memory:":
+            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            if self.path != ":memory:":
+                connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_ms INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (1, 0);
+
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY,
+                    task_type TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    input_json TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    result_json TEXT,
+                    error_json TEXT,
+                    created_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    started_at_ms INTEGER,
+                    completed_at_ms INTEGER,
+                    timeout_ms INTEGER,
+                    deadline_at_ms INTEGER,
+                    snapshot_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS task_events (
+                    task_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    event_name TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    ts_ms INTEGER NOT NULL,
+                    PRIMARY KEY(task_id, event_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS task_leases (
+                    task_id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    expires_at_ms INTEGER NOT NULL,
+                    renewed_at_ms INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
+                CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
+                """
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        """创建 SQLite 连接。"""
+
+        if self._memory_connection is not None:
+            return self._memory_connection
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    @staticmethod
+    def _dump_json(value: Any) -> str:
+        """序列化 JSON 字段。"""
+
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 @dataclass(slots=True)
@@ -432,6 +676,32 @@ class TaskRuntimeManager:
         """
 
         self._persistence_store = FileTaskPersistenceStore(path)
+        if not restore:
+            self._persist_if_configured()
+            return []
+        restored = self.restore_snapshots(self._persistence_store.load())
+        self._persist_if_configured()
+        return restored
+
+    def enable_sqlite_persistence(
+        self,
+        path: str | Path,
+        *,
+        restore: bool = False,
+        owner_id: str | None = None,
+    ) -> list[TaskRuntimeSnapshot]:
+        """启用 SQLite 持久化。
+
+        参数：
+        1. `path`：SQLite 文件路径，或 `:memory:`。
+        2. `restore`：是否立即从 SQLite 恢复已有任务。
+        3. `owner_id`：当前进程或 worker 的租约 owner 编号。
+
+        返回值：
+        1. `restore=True` 时返回恢复任务列表，否则返回空列表。
+        """
+
+        self._persistence_store = SQLiteTaskPersistenceStore(path, owner_id=owner_id)
         if not restore:
             self._persist_if_configured()
             return []

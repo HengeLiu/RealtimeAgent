@@ -16,6 +16,7 @@ from openaiglasses.runtime.governance import (
 from openaiglasses.runtime.tasks import (
     BackendTaskGatewayAdapter,
     FileTaskPersistenceStore,
+    SQLiteTaskPersistenceStore,
     TaskRuntimeEventLog,
     TaskRuntimeManager,
     TaskRuntimeSnapshot,
@@ -36,6 +37,7 @@ __all__ = [
     "PermissionDecision",
     "PermissionPolicy",
     "RoleBinding",
+    "SQLiteTaskPersistenceStore",
     "TaskRuntimeEventLog",
     "TaskRuntimeManager",
     "TaskRuntimeSnapshot",

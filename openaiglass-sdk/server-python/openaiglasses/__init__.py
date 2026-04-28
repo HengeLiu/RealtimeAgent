@@ -28,6 +28,7 @@ from openaiglasses.runtime import (
     PermissionDecision,
     PermissionPolicy,
     RoleBinding,
+    SQLiteTaskPersistenceStore,
     TaskRuntimeManager,
     TaskRuntimeSnapshot,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "PermissionDecision",
     "PermissionPolicy",
     "RoleBinding",
+    "SQLiteTaskPersistenceStore",
     "HybridTaskGateway",
     "OpenAIGlassesSDK",
     "PhoneProcessorContext",

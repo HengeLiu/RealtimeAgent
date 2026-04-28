@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import sqlite3
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -29,6 +30,7 @@ from openaiglasses import (
     SensorReading,
     SkillDocument,
     SkillManifest,
+    SQLiteTaskPersistenceStore,
     build_agent_facade_from_sdk,
 )
 from agent_core.tools.base import AgentToolContext
@@ -1002,6 +1004,109 @@ def test_sdk_task_runtime_can_prune_terminal_tasks_from_persistence(tmp_path) ->
     assert removed == [created.task_id]
     payload = json.loads(store_file.read_text(encoding="utf-8"))
     assert payload["tasks"] == []
+
+
+def test_sdk_task_runtime_can_restore_from_sqlite_store(tmp_path) -> None:
+    """测试目标：验证 SDK 托管任务可以通过 SQLite 文件恢复。
+
+    测试方法：
+    1. 启用 SQLite 持久化后创建运行中任务。
+    2. 创建新的 SDK 运行时并从同一个 SQLite 文件恢复。
+    3. 查询恢复后的任务状态。
+
+    预期结果：
+    1. SQLite 文件中保留任务快照。
+    2. 新运行时可以恢复并查询原任务。
+    3. 恢复事件会追加到任务事件日志。
+    """
+
+    class SQLitePersistedTask(BaseTask):
+        task_type = "sdk_sqlite_persisted_task"
+
+        def on_start(self, context) -> None:
+            context.emit_state("running", {"phase": "sqlite"})
+
+    db_path = tmp_path / "task-store.sqlite3"
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(SQLitePersistedTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    sdk.task_runtime.enable_sqlite_persistence(db_path)
+    created = sdk.task_runtime.create_task(
+        task_type="sdk_sqlite_persisted_task",
+        session_id="sess_sqlite_001",
+        device_id="glass_001",
+        input_data={"target": "demo"},
+    )
+
+    restored_sdk = OpenAIGlassesSDK()
+    restored_sdk.register_task(SQLitePersistedTask())
+    restored_sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    restored = restored_sdk.task_runtime.enable_sqlite_persistence(db_path, restore=True)
+    latest = restored_sdk.task_runtime.query_task(created.task_id)
+
+    assert restored[0].task_id == created.task_id
+    assert latest.data["phase"] == "sqlite"
+    assert latest.events[-1]["event_name"] == "task.restored"
+
+
+def test_sqlite_task_store_keeps_event_idempotency_and_leases(tmp_path) -> None:
+    """测试目标：验证 SQLite 存储具备事件幂等和租约能力。
+
+    测试方法：
+    1. 构造一个包含重复事件编号的任务快照并保存。
+    2. 用两个 owner 访问同一个 SQLite 文件并竞争租约。
+    3. 检查事件表和租约结果。
+
+    预期结果：
+    1. 重复事件只写入一条。
+    2. 未过期租约不能被其他 owner 抢占。
+    3. 过期后其他 owner 可以获得租约。
+    """
+
+    db_path = tmp_path / "task-store.sqlite3"
+    store_a = SQLiteTaskPersistenceStore(db_path, owner_id="worker-a")
+    snapshot = {
+        "task_id": "task_sqlite_001",
+        "task_type": "demo",
+        "session_id": "sess_001",
+        "device_id": "glass_001",
+        "state": "running",
+        "input_data": {},
+        "data": {},
+        "events": [
+            {
+                "event_id": "evt_same",
+                "event_name": "phone.demo.tick",
+                "state": "running",
+                "source": "phone",
+                "payload": {},
+                "ts_ms": 1000,
+            },
+            {
+                "event_id": "evt_same",
+                "event_name": "phone.demo.tick",
+                "state": "running",
+                "source": "phone",
+                "payload": {},
+                "ts_ms": 1001,
+            },
+        ],
+    }
+    store_a.save([snapshot])
+    store_b = SQLiteTaskPersistenceStore(db_path, owner_id="worker-b")
+
+    first_lease = store_a.acquire_lease("task_sqlite_001", ttl_ms=1000, now_ms=1000)
+    blocked_lease = store_b.acquire_lease("task_sqlite_001", ttl_ms=1000, now_ms=1200)
+    expired_lease = store_b.acquire_lease("task_sqlite_001", ttl_ms=1000, now_ms=2101)
+
+    with sqlite3.connect(db_path) as connection:
+        event_count = connection.execute("SELECT COUNT(*) FROM task_events").fetchone()[0]
+
+    assert event_count == 1
+    assert first_lease is True
+    assert blocked_lease is False
+    assert expired_lease is True
+    assert store_b.list_leases()[0]["owner_id"] == "worker-b"
 
 
 def test_phone_runtime_can_fanout_frame_to_matching_active_tasks() -> None:
