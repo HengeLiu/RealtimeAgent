@@ -240,6 +240,134 @@ class TaskEventRuntimeTestCase(unittest.TestCase):
         self.assertTrue(second_result.dispatched)
         self.assertTrue(second_result.interrupted_active)
 
+    def test_notification_coordinator_respects_explicit_interrupt_policy(self) -> None:
+        """测试目标：验证通知协调器会按显式抢播策略做仲裁并记录决策。
+
+        测试方法：
+        1. 先提交一条普通优先级活动通知。
+        2. 再提交一条 `critical_only` 策略的 high 通知。
+        3. 最后提交一条 `critical_only` 策略的 critical 通知。
+
+        预期结果：
+        1. high 通知不会抢占，只会排队。
+        2. critical 通知会抢占当前活动通知。
+        3. 快照中能看到活动通知、待播队列和最近仲裁原因。
+        """
+
+        dispatched: list[NotificationRequest] = []
+        interrupted: list[NotificationRequest] = []
+        coordinator = NotificationCoordinator(
+            dispatcher=dispatched.append,
+            interrupter=interrupted.append,
+        )
+        normal = NotificationRequest(
+            request_id="notify_policy_001",
+            source_module="backend-task-core",
+            session_id="sess_policy",
+            device_id="glass-001",
+            task_id="task_policy_001",
+            priority="normal",
+            notification_type="task.progress.updated",
+            delivery_mode="audio",
+            allow_interrupt=False,
+            allow_merge=True,
+            requires_agent_context_sync=True,
+            dedupe_key="task.progress.updated:task_policy_001",
+            payload={"text": "任务正在执行"},
+        )
+        high = NotificationRequest(
+            request_id="notify_policy_002",
+            source_module="backend-task-core",
+            session_id="sess_policy",
+            device_id="glass-001",
+            task_id="task_policy_002",
+            priority="high",
+            notification_type="task.warning",
+            delivery_mode="audio",
+            allow_interrupt=True,
+            allow_merge=False,
+            requires_agent_context_sync=True,
+            dedupe_key="task.warning:task_policy_002",
+            payload={"text": "普通风险"},
+            interrupt_policy="critical_only",
+        )
+        critical = NotificationRequest(
+            request_id="notify_policy_003",
+            source_module="backend-task-core",
+            session_id="sess_policy",
+            device_id="glass-001",
+            task_id="task_policy_003",
+            priority="critical",
+            notification_type="task.alert",
+            delivery_mode="audio",
+            allow_interrupt=True,
+            allow_merge=False,
+            requires_agent_context_sync=True,
+            dedupe_key="task.alert:task_policy_003",
+            payload={"text": "立即注意"},
+            interrupt_policy="critical_only",
+        )
+
+        normal_result = coordinator.submit(normal)
+        high_result = coordinator.submit(high)
+        critical_result = coordinator.submit(critical)
+        snapshot = coordinator.build_snapshot()
+
+        self.assertTrue(normal_result.dispatched)
+        self.assertTrue(high_result.queued)
+        self.assertFalse(high_result.interrupted_active)
+        self.assertTrue(critical_result.interrupted_active)
+        self.assertEqual([request.request_id for request in dispatched], ["notify_policy_001", "notify_policy_003"])
+        self.assertEqual([request.request_id for request in interrupted], ["notify_policy_001"])
+        self.assertEqual(snapshot["active_requests"]["glass-001"]["request_id"], "notify_policy_003")
+        self.assertEqual(snapshot["pending_requests"]["glass-001"][0]["request_id"], "notify_policy_002")
+        self.assertEqual(snapshot["recent_decisions"][-2]["action"], "queued")
+        self.assertEqual(snapshot["recent_decisions"][-1]["action"], "interrupted")
+
+    def test_voice_runtime_snapshot_exposes_notification_arbiter_state(self) -> None:
+        """测试目标：验证语音运行态快照会暴露通知仲裁状态。
+
+        测试方法：
+        1. 构造语音运行时并打开一个设备会话。
+        2. 替换通知协调器为同步假下发器。
+        3. 提交一条通知后读取运行态快照。
+
+        预期结果：
+        1. 快照中包含当前活动通知。
+        2. 快照中包含最近通知仲裁决策。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess_notify_snapshot")
+        runtime._notification_coordinator = NotificationCoordinator(  # noqa: SLF001 - 单测覆盖快照聚合
+            dispatcher=lambda _request: None,
+        )
+        request = NotificationRequest(
+            request_id="notify_snapshot_001",
+            source_module="backend-task-core",
+            session_id="sess_notify_snapshot",
+            device_id="glass-001",
+            task_id="task_snapshot_001",
+            priority="normal",
+            notification_type="task.progress.updated",
+            delivery_mode="audio",
+            allow_interrupt=False,
+            allow_merge=True,
+            requires_agent_context_sync=True,
+            dedupe_key="task.progress.updated:task_snapshot_001",
+            payload={"text": "任务正在执行"},
+        )
+
+        runtime._notification_coordinator.submit(request)  # noqa: SLF001
+        snapshot = runtime.build_runtime_snapshot()["glass-001"]
+
+        self.assertEqual(snapshot["active_notification"]["request_id"], "notify_snapshot_001")
+        self.assertEqual(snapshot["recent_notification_decisions"][-1]["action"], "dispatched")
+        self.assertEqual(snapshot["pending_notifications"], [])
+
     def test_task_event_bridge_can_convert_event_to_agent_turn(self) -> None:
         """测试目标：验证任务事件可转换成标准 AgentTurn。
 

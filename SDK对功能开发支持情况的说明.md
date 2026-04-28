@@ -1,7 +1,7 @@
 # SDK 对功能开发支持情况的说明
 
 更新时间：2026-04-28
-评估版本：sdk-v7
+评估版本：sdk-v8
 评估对象：`openaiglass-sdk` 对 `openaiglass-for-blind/docs/stage1/plan` 中第一期能力开发的支撑情况。
 
 ## 评估边界
@@ -30,9 +30,9 @@
 
 ## 总体结论
 
-sdk-v7 已经可以支撑第一期中“非实时语音交互、普通文本流式 TTS 透传、AgentCore 工具调用、Tool/MCP 接入、抓拍图片理解、SDK 托管 Task、眼镜与手机注册绑定、手机视频链路任务最小闭环、手机视觉资源策略最小闭环、设备级回放测试”等主要基础能力。
+sdk-v8 已经可以支撑第一期中“非实时语音交互、普通文本流式 TTS 透传、通知仲裁与高优先级通知抢播、AgentCore 工具调用、Tool/MCP 接入、抓拍图片理解、SDK 托管 Task、眼镜与手机注册绑定、手机视频链路任务最小闭环、手机视觉资源策略最小闭环、设备级回放测试”等主要基础能力。
 
-当前 SDK 的主要欠缺集中在：实时打断语音、通知抢播仲裁、完整 Skill Runtime、真实地图服务适配治理、真 iOS 手机视觉资源池、导航任务通用模板、任务持久化生产化、三端 SDK 打包形态、以及更强的自动化回放断言能力。
+当前 SDK 的主要欠缺集中在：实时语音用户打断、完整播放仲裁、完整 Skill Runtime、真实地图服务适配治理、真 iOS 手机视觉资源池、导航任务通用模板、任务持久化生产化、三端 SDK 打包形态、以及更强的自动化回放断言能力。
 
 因此，功能开发团队目前可以围绕 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`DeviceGroupContext`、`context.mcp` 和回放测试工具继续开发；但不应自行改写 WebSocket 协议、设备绑定、任务生命周期、视频链路控制、全局上下文维护等 SDK 层职责。
 
@@ -50,7 +50,7 @@ sdk-v7 已经可以支撑第一期中“非实时语音交互、普通文本流�
 | SDK 托管业务 Task | 第 8 项；Phase F | `BaseTask`、`TaskRuntimeManager`、`TaskContext` 支持创建、查询、取消、事件分发、事件日志、超时和 JSON 快照恢复。 | 长流程业务应实现 `BaseTask`，不要自行开线程维护任务状态。 |
 | 系统级 `phone_video_link_task` | 第 10 项；Phase J | SDK 内置 `phone_video_link_task`，支持 peer-link 准备、ready、streaming、停止、完成、取消、失败、超时等阶段。 | 功能代码通过 `context.start_phone_video_link()` 启停链路，不直接下发相机推流命令。 |
 | 手机端多能力注册和任务插件入口 | 第 9/10 项；Phase I/J/K | iOS 侧已有 `PhoneTaskCapabilityRegistry`，Python SDK 侧已有 `BasePhoneTask`、`BasePhoneProcessor`、`PhoneRuntime` 和按任务分发视频帧能力。 | 真 iPhone 能力应写成 Swift 插件；Python 的 `BasePhoneTask` 更适合作为服务端、模拟器和回放侧抽象。 |
-| 任务事件回流与通知基础能力 | Phase F/J/K/L | `TaskEventBridge` 可把任务事件转换为会话消息或通知请求，`NotificationCoordinator` 提供优先级、去重和队列的基础结构。 | 可用于低频结构化事件回流；复杂抢播、打断和多源仲裁仍需 SDK 后续增强。 |
+| 任务事件回流与通知仲裁 | Phase F/J/K/L | `TaskEventBridge` 可把任务事件转换为会话消息或通知请求，`NotificationCoordinator` 支持去重、排队、显式抢播策略、仲裁决策快照和高优先级通知中断旧通知。 | 业务只提交结构化通知和策略；当前抢播只覆盖通知播放流，不等于实时语音用户打断。 |
 | 普通文本流式 TTS 透传与首包观测 | 第 2 项；Phase C | `OpenAIAgentLoopRunner` 已能把普通 `response.output_text.delta` 透传给 `VoiceRuntime` 的流式 TTS，会话快照记录首文本、首音频和首播放请求时间。 | 可用于普通问答降低首音频等待时间；如果 TTS 回退全文合成，首包延迟仍会如实暴露在运行态中。 |
 | 设备级回放和联调工具 | 各阶段测试要求 | `glass-playback`、`phone-mock`、preflight、协议契约测试和 live-check 已支持基本自动化验证。 | 功能开发应优先用回放工具复现链路问题；完整断言和真实视频回放仍有不足。 |
 | 配置、日志、异常和预检 | Phase A | `ServerSettings`、日志配置、统一错误模型、CLI 预检和运行态诊断已经覆盖基础开发调试。 | 排障日志应使用 DEBUG 级别，业务不应绕过 SDK 自行散落底层诊断输出。 |
@@ -62,7 +62,7 @@ sdk-v7 已经可以支撑第一期中“非实时语音交互、普通文本流�
 | 真实地图和 AMap MCP 治理 | SDK 有 MCP Gateway 和 Adapter 机制，但没有内置真实 AMap 适配器、鉴权、限流、重试、超时和 mock 切换策略。 | 第 7 项导航可继续通过 MCP Adapter 接入，但业务团队需要明确依赖外部服务的输入输出边界。 | SDK 后续应提供地图 Adapter 模板、配置约定、错误分类和测试替身。 |
 | 导航任务通用模板 | SDK 能托管 `BaseTask`，但没有内置导航状态机、路线阶段模型、偏航处理、视觉事件融合策略。 | Phase L 可以实现业务 `navigation_task`，但不同导航能力之间可能重复维护任务状态。 | SDK 后续应沉淀导航类长任务模板和标准任务事件。 |
 | 手机视觉执行框架的资源管理 | sdk-v6 已在 Python `PhoneRuntime` / `phone-mock` 中支持 `vision_policy`、帧率限制、最大帧数和过载事件，但真 iOS 运行时还没有统一模型资源池、任务抢占和功耗治理。 | Phase K 的视觉迁移可用 mock/回放验证资源策略；真机多视觉任务并发时仍需谨慎。 | 功能开发先使用 `vision_policy` 表达资源要求；SDK 后续补 iOS 通用资源调度层。 |
-| 通知、抢播和用户打断策略 | SDK 有 `NotificationCoordinator` 基础结构，但还没有和语音播放、Agent 回复、手机视觉事件完全打通。 | 任务结果可以回流，但复杂场景下“什么时候插话、是否打断、是否合并提示”仍不稳定。 | 业务侧只发结构化事件和优先级，具体仲裁规则应由 SDK 统一实现。 |
+| 完整播放仲裁和用户语音打断 | sdk-v8 已支持通知层去重、排队、抢播策略和中断旧通知，但普通 Agent 回复、任务通知、视觉告警、用户语音打断之间还没有完整统一仲裁。 | 任务通知和高优先级告警已有 SDK 入口；实时语音打断和多源恢复播放仍不能承诺。 | 业务侧只发结构化事件、优先级和 `interrupt_policy`，不要直接控制播放器或实时收音。 |
 | 任务持久化生产化 | sdk-v5 支持 JSON 快照导出、保存和恢复，但不是多进程、多实例、数据库级任务持久化。 | 开发和单机回放足够，服务重启和线上长任务恢复仍有风险。 | SDK 后续应提供数据库存储、幂等事件、任务恢复和过期清理机制。 |
 | Skill Runtime | SDK 中已有 `SkillRegistry`、`SkillPolicy`、`SkillSessionState` 等骨架，但还没有成为功能开发的正式主路径。 | 现阶段不能要求功能团队优先用 Skill 搭能力，否则工具白名单、上下文、会话态和测试路径不够清晰。 | 近期功能开发优先使用 Tool、Task、MCP；SDK 后续再把 Skill 与 AgentCore 正式打通。 |
 | 回放测试断言能力 | 当前 `glass-playback` 和 `phone-mock` 能跑通设备级链路，但缺少更完整的批量用例、结果断言、真实视频帧回放和失败报告。 | 功能团队可以做自动化冒烟和人工判读，但难以覆盖复杂回归。 | SDK 后续应把回放升级为可声明预期结果的测试框架。 |

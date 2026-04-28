@@ -1202,6 +1202,7 @@ class VoiceRuntime:
     def build_runtime_snapshot(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             controllers = list(self._controllers.values())
+        notification_snapshot = self._notification_coordinator.build_snapshot()
         result: dict[str, dict[str, Any]] = {}
         for controller in controllers:
             current_playback = controller.current_playback
@@ -1225,6 +1226,13 @@ class VoiceRuntime:
                 "last_playback_stream_id": controller.last_playback_stream_id,
                 "last_playback_state": controller.last_playback_state,
                 "last_playback_reason": controller.last_playback_reason,
+                "active_notification": notification_snapshot["active_requests"].get(controller.device_id),
+                "pending_notifications": notification_snapshot["pending_requests"].get(controller.device_id, []),
+                "recent_notification_decisions": [
+                    decision
+                    for decision in notification_snapshot["recent_decisions"]
+                    if decision.get("device_id") == controller.device_id
+                ],
             }
         return result
 
@@ -1590,6 +1598,8 @@ class VoiceRuntime:
                     "task_type": request.payload.get("task_type"),
                     "task_state": request.payload.get("task_state"),
                     "priority": request.priority,
+                    "interrupt_policy": request.interrupt_policy,
+                    "resume_policy": request.resume_policy,
                 },
             )
             self._synthesize_text_into_context(
@@ -1698,6 +1708,7 @@ class VoiceRuntime:
                     "stream_id": interrupt_stream_id,
                     "reason": "higher_priority_notification",
                     "request_id": request.request_id,
+                    "resume_policy": request.resume_policy,
                 },
             )
         try:

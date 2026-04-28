@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v7`。本版本打通普通文本回复增量到流式 TTS 的透传路径，并在运行态快照中记录首文本、首音频和首播放请求时间；上一版本新增手机视觉任务资源策略，Python `PhoneRuntime` / `phone-mock` 可按 `vision_policy` 做帧率限制、最大处理帧数限制和过载事件记录。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v8`。本版本新增通知仲裁策略和运行态快照，通知请求可声明 `interrupt_policy`、`resume_policy`，SDK 会记录通知直发、排队、抢播和去重原因；上一版本打通普通文本回复增量到流式 TTS 的透传路径，并在运行态快照中记录首文本、首音频和首播放请求时间。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -437,7 +437,35 @@ uv run openaiglass.glass.start \
 
 这些字段可以通过运行态接口和联调日志观察，用于判断当前链路是否真的在流式推进。如果 `reply_text_to_first_audio_ms` 很大，优先检查当前 TTS 是否回退到了全文合成；这不应该由业务 Tool 或 Task 自行处理。
 
-注意：`sdk-v7` 仍然不是实时语音打断版本。眼镜端播放期间的麦克风策略、用户语音打断和通知抢播，会在后续通知仲裁与打断策略中统一处理。
+注意：`sdk-v8` 仍然不是实时语音打断版本。眼镜端播放期间的麦克风策略和用户语音打断，会在后续实时语音专项中统一处理。
+
+### 3.9 通知仲裁、抢播和打断边界
+
+`sdk-v8` 起，任务通知和 Agent 回流通知会进入 SDK 通知协调器。业务侧只提交结构化通知、优先级和策略，不直接操作播放器。
+
+通知请求支持以下策略字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `interrupt_policy` | 抢播策略。可选 `never`、`higher_priority`、`critical_only`、`always`。 |
+| `resume_policy` | 被抢播内容后续处理策略。当前默认 `drop_interrupted`。 |
+
+当前兼容旧字段：如果没有显式传 `interrupt_policy`，`allow_interrupt=true` 会按 `higher_priority` 处理，否则按 `never` 处理。
+
+运行态快照中会出现：
+
+| 字段 | 说明 |
+| --- | --- |
+| `active_notification` | 当前设备正在播报或等待完成的活动通知。 |
+| `pending_notifications` | 当前设备待播通知队列。 |
+| `recent_notification_decisions` | 最近通知仲裁决策，包含直发、排队、抢播和去重原因。 |
+
+业务开发者需要注意：
+
+1. 普通任务进度建议使用 `priority=normal` 或 `low`，不要抢播。
+2. 视觉风险、导航安全类事件可以使用 `priority=critical` 和 `interrupt_policy=critical_only`。
+3. 业务 Task 不要直接发送 `actuator.audio.interrupt`。
+4. `sdk-v8` 的“打断”只表示通知播放流被更高优先级通知抢播，不等于用户语音实时打断。
 
 ## 4. 推荐业务能力工程结构
 
