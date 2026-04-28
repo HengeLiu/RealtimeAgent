@@ -99,10 +99,22 @@ python3 openaiglass-for-blind/tests/glass_playback_acceptance.py \
 基础验收要求 `event_log` 至少出现：
 
 1. `device.registered`
-2. `voice.session.opened`
+2. `voice.session.opened` 或 `voice.realtime.session.opened`
 3. `device.binding.ready`
 4. `voice.trigger_audio.started`
 5. `voice.trigger_audio.finished`
+
+“看前方”这类拍照回放可使用 `sensors.camera_capture.path`，并追加抓拍断言：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-sdk/glass-playback:openaiglass-for-blind:. \
+python3 openaiglass-for-blind/tests/glass_playback_acceptance.py \
+  --config openaiglass-for-blind/host/glass-playback/config/look_look.json \
+  --phone-device-id phone-001 \
+  --expect-event sensor.camera.captured \
+  --expect-actuator actuator.audio.play \
+  --expect-session-image-capture
+```
 
 ### 2.5 执行找物体视频链路验收
 

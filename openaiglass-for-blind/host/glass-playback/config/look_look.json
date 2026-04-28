@@ -1,0 +1,38 @@
+{
+  "device_type": "glass",
+  "device_id": "glass-001",
+  "pair_token": "pair-demo-token",
+  "desired_phone_device_id": "phone-001",
+  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "startup": {
+    "wait_for_registration": true,
+    "wait_for_binding": true,
+    "wait_for_voice_session": true,
+    "auto_stream_trigger_audio": true,
+    "startup_timeout_ms": 30000
+  },
+  "sensors": {
+    "trigger_audio": {
+      "path": "testdata/audio/看一下我前面有什么.wav",
+      "format": "wav",
+      "sample_rate_hz": 16000,
+      "channels": 1,
+      "chunk_ms": 40
+    },
+    "camera_capture": {
+      "path": "testdata/image/asset_fad27318c958.jpg"
+    },
+    "heading": {
+      "path": "openaiglass-for-blind/testdata/sensor/find_object_heading.json"
+    }
+  },
+  "actuators": {
+    "audio_play": {
+      "mode": "record_and_auto_finish"
+    }
+  },
+  "outputs": {
+    "event_log": "runs/playback/glass-playback-acceptance-001/events.jsonl",
+    "actuator_log": "runs/playback/glass-playback-acceptance-001/actuators.jsonl"
+  }
+}

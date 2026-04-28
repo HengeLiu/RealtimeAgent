@@ -11,7 +11,7 @@
 3. 运行 PlaybackGlassDevice，并检查 event_log / actuator_log 中是否出现预期事件。
 
 预期结果：
-1. 基础验收至少出现 device.registered、voice.session.opened、device.binding.ready 和 trigger audio 事件。
+1. 基础验收至少出现 device.registered、voice session opened、device.binding.ready 和 trigger audio 事件。
 2. 找物体或红绿灯验收可额外要求 sensor.camera.stream.started、actuator.audio.play 等事件。
 3. 缺少真机、真实数据、绑定或 SDK 视频链路装配时，脚本应以非零退出并输出明确原因。
 """
@@ -45,10 +45,13 @@ from openaiglass_glass_playback.glass_device import PlaybackGlassDevice
 
 DEFAULT_EXPECT_EVENTS = [
     "device.registered",
-    "voice.session.opened",
     "device.binding.ready",
     "voice.trigger_audio.started",
     "voice.trigger_audio.finished",
+]
+
+DEFAULT_EXPECT_ANY_EVENT_GROUPS = [
+    ["voice.session.opened", "voice.realtime.session.opened"],
 ]
 
 
@@ -96,17 +99,27 @@ def main(argv: list[str] | None = None) -> int:
         events = _read_jsonl(config.outputs.event_log if config.outputs else None)
         actuators = _read_jsonl(config.outputs.actuator_log if config.outputs else None)
         missing_events = _missing_names(events, field="type", expected=args.expect_events)
+        missing_any_event_groups = _missing_any_name_groups(
+            events,
+            field="type",
+            expected_groups=args.expect_any_event_groups,
+        )
         missing_actuators = _missing_names(actuators, field="name", expected=args.expect_actuators)
-        if missing_events or missing_actuators:
+        session_capture_files = _session_capture_files(events, repo_root=Path(args.repo_root))
+        missing_session_capture = bool(args.expect_session_image_capture and not session_capture_files)
+        if missing_events or missing_any_event_groups or missing_actuators or missing_session_capture:
             _print_json(
                 {
                     "ok": False,
                     "device_id": config.device_id,
                     "phone_device_id": phone_device_id,
                     "missing_events": missing_events,
+                    "missing_any_event_groups": missing_any_event_groups,
                     "missing_actuators": missing_actuators,
+                    "missing_session_image_capture": missing_session_capture,
                     "event_types": sorted({str(item.get("type") or "") for item in events}),
                     "actuator_names": sorted({str(item.get("name") or "") for item in actuators}),
+                    "session_capture_files": [str(path) for path in session_capture_files],
                 }
             )
             return 1
@@ -119,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
                 "actuator_count": result.actuator_count,
                 "event_log": str(config.outputs.event_log) if config.outputs else "",
                 "actuator_log": str(config.outputs.actuator_log) if config.outputs else "",
+                "session_capture_files": [str(path) for path in session_capture_files],
             }
         )
         return 0 if result.ok else 1
@@ -154,6 +168,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="要求 event_log 出现的事件名，可重复传入；不传时使用基础验收事件",
     )
     parser.add_argument(
+        "--expect-any-event",
+        dest="expect_any_event_groups",
+        action="append",
+        default=None,
+        help="要求 event_log 至少出现一组事件中的任意一个，用逗号分隔，例如 voice.session.opened,voice.realtime.session.opened",
+    )
+    parser.add_argument(
         "--expect-actuator",
         dest="expect_actuators",
         action="append",
@@ -165,8 +186,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="只检查配置、真实数据、服务端和真实 phone 在线状态，不启动回放",
     )
+    parser.add_argument(
+        "--expect-session-image-capture",
+        action="store_true",
+        help="要求服务端会话目录保存至少一张抓拍图片，用于确认 capture_photo 被业务 Tool 成功消费",
+    )
     args = parser.parse_args(argv)
     args.expect_events = list(args.expect_events or DEFAULT_EXPECT_EVENTS)
+    args.expect_any_event_groups = _parse_event_groups(args.expect_any_event_groups)
     args.expect_actuators = list(args.expect_actuators or [])
     return args
 
@@ -211,11 +238,37 @@ def _assert_real_data_config(config: PlaybackConfig) -> None:
 
     if not config.trigger_audio.path.exists():
         raise FileNotFoundError(f"触发音频不存在：{config.trigger_audio.path}")
+    camera_capture = config.sensors.get("camera_capture")
     camera_stream = config.sensors.get("camera_stream")
-    if not isinstance(camera_stream, dict):
-        raise ValueError("真机场景验收应配置 sensors.camera_stream，使用真实图片帧或 MP4 视频作为眼镜摄像头输入")
-    if not camera_stream.get("path") and not camera_stream.get("frames"):
-        raise ValueError("sensors.camera_stream 必须配置 path 或 frames")
+    has_camera_capture = isinstance(camera_capture, dict) and bool(camera_capture.get("path"))
+    has_camera_stream = isinstance(camera_stream, dict) and bool(camera_stream.get("path") or camera_stream.get("frames"))
+    if not has_camera_capture and not has_camera_stream:
+        raise ValueError(
+            "真机场景验收应至少配置 sensors.camera_capture.path 或 sensors.camera_stream.path/frames"
+        )
+
+
+def _parse_event_groups(raw_groups: list[str] | None) -> list[list[str]]:
+    """解析至少命中一个事件的事件组。
+
+    参数：
+    1. `raw_groups`：命令行传入的逗号分隔事件组。
+
+    返回值：
+    1. 事件组列表；未传入时返回默认语音会话兼容组。
+
+    异常情况：
+    1. 本函数不主动抛出异常。
+    """
+
+    if not raw_groups:
+        return [list(group) for group in DEFAULT_EXPECT_ANY_EVENT_GROUPS]
+    groups: list[list[str]] = []
+    for raw in raw_groups:
+        names = [name.strip() for name in raw.split(",") if name.strip()]
+        if names:
+            groups.append(names)
+    return groups
 
 
 def _assert_server_ready(config: PlaybackConfig) -> None:
@@ -394,6 +447,56 @@ def _missing_names(rows: list[dict[str, Any]], *, field: str, expected: list[str
 
     present = {str(item.get(field) or "") for item in rows}
     return [name for name in expected if name not in present]
+
+
+def _missing_any_name_groups(rows: list[dict[str, Any]], *, field: str, expected_groups: list[list[str]]) -> list[list[str]]:
+    """计算日志中完全未命中的事件组。
+
+    参数：
+    1. `rows`：事件或执行器日志行。
+    2. `field`：用于取名称的字段。
+    3. `expected_groups`：每组至少命中一个的名称列表。
+
+    返回值：
+    1. 完全没有命中的事件组。
+
+    异常情况：
+    1. 本函数不主动抛出异常。
+    """
+
+    present = {str(item.get(field) or "") for item in rows}
+    return [group for group in expected_groups if group and not any(name in present for name in group)]
+
+
+def _session_capture_files(events: list[dict[str, Any]], *, repo_root: Path) -> list[Path]:
+    """查找本次回放对应服务端会话中的抓拍图片。
+
+    参数：
+    1. `events`：glass-playback 事件日志。
+    2. `repo_root`：仓库根目录。
+
+    返回值：
+    1. 服务端会话目录中已保存的抓拍图片路径列表。
+
+    异常情况：
+    1. 本函数不主动抛出异常。
+    """
+
+    session_ids: list[str] = []
+    for row in events:
+        if row.get("type") not in {"voice.session.opened", "voice.realtime.session.opened"}:
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        session_id = str(payload.get("session_id") or "").strip()
+        if session_id:
+            session_ids.append(session_id)
+
+    capture_files: list[Path] = []
+    for session_id in dict.fromkeys(session_ids):
+        capture_dir = repo_root / "runs" / "session" / session_id / "image" / "capture"
+        if capture_dir.exists():
+            capture_files.extend(sorted(capture_dir.glob("*")))
+    return capture_files
 
 
 def _fetch_json(url: str) -> Any:
