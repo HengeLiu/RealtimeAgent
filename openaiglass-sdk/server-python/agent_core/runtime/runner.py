@@ -272,10 +272,18 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         capture_call_id: str | None = None
         existing_image_asset_ids = self._collect_image_asset_ids(tool_context=tool_context, session=session)
         progress_sent = False
+        reply_text_parts: list[str] = []
 
         event_stream = run_result.stream_events()
         try:
             async for event in event_stream:
+                text_delta = self._extract_agent_stream_text_delta(event)
+                if text_delta:
+                    reply_text_parts.append(text_delta)
+                    if reply_text_delta_callback is not None:
+                        reply_text_delta_callback(text_delta)
+                    continue
+
                 if getattr(event, "type", "") != "run_item_stream_event":
                     continue
 
@@ -361,7 +369,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             if callable(aclose):
                 await aclose()
 
-        reply_text = self._extract_reply_text(run_result.final_output)
+        reply_text = "".join(reply_text_parts).strip() or self._extract_reply_text(run_result.final_output)
         if not reply_text:
             raise build_error(
                 ErrorCode.INTERNAL_ERROR,
@@ -577,6 +585,57 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     parts.append(text)
             return "".join(parts)
         return ""
+
+    @classmethod
+    def _extract_agent_stream_text_delta(cls, event: object) -> str:
+        """从 Agents SDK 流式事件中提取普通文本增量。
+
+        主要逻辑：
+        1. 优先处理 `raw_response_event` 中的 `response.output_text.delta`。
+        2. 兼容 SDK 事件对象和字典两种结构。
+        3. 保留 Chat Completions 风格的 `choices[].delta.content` 兜底。
+
+        参数：
+        1. `event`：`Runner.run_streamed(...).stream_events()` 产出的事件。
+
+        返回值：
+        1. 本次事件中的文本增量；没有文本时返回空字符串。
+
+        异常情况：
+        1. 本函数不主动抛出异常，无法识别的事件会被忽略。
+        """
+
+        event_type = cls._read_event_value(event, "type")
+        if event_type == "raw_response_event":
+            data = cls._read_event_value(event, "data")
+            raw_type = str(cls._read_event_value(data, "type") or "")
+            if raw_type in {"response.output_text.delta", "response.refusal.delta"} or raw_type.endswith(
+                ".output_text.delta"
+            ):
+                delta = cls._read_event_value(data, "delta")
+                return delta if isinstance(delta, str) else ""
+            return cls._extract_stream_text_delta(data)
+
+        if event_type == "run_item_stream_event":
+            event_name = str(cls._read_event_value(event, "name") or "")
+            if event_name not in {"message_output_delta", "message_delta"}:
+                return ""
+            item = cls._read_event_value(event, "item")
+            delta = cls._read_event_value(item, "delta")
+            if isinstance(delta, str):
+                return delta
+            text = cls._read_event_value(item, "text")
+            return text if isinstance(text, str) else ""
+
+        return ""
+
+    @staticmethod
+    def _read_event_value(source: object, key: str) -> object:
+        """读取事件对象或字典中的字段。"""
+
+        if isinstance(source, dict):
+            return source.get(key)
+        return getattr(source, key, None)
 
     @staticmethod
     def _attach_capability_outputs(*, result: AgentTurnResult, context: AgentToolContext) -> AgentTurnResult:

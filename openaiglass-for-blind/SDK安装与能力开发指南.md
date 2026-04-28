@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v6`。本版本新增手机视觉任务资源策略，Python `PhoneRuntime` / `phone-mock` 可按 `vision_policy` 做帧率限制、最大处理帧数限制和过载事件记录；上一版本已新增 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复，以及手机侧多任务帧分发。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v7`。本版本打通普通文本回复增量到流式 TTS 的透传路径，并在运行态快照中记录首文本、首音频和首播放请求时间；上一版本新增手机视觉任务资源策略，Python `PhoneRuntime` / `phone-mock` 可按 `vision_policy` 做帧率限制、最大处理帧数限制和过载事件记录。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -420,6 +420,24 @@ uv run openaiglass.glass.start \
 1. SDK 层提供通用命令、配置读取、进程管理、健康检查和工具链调度。
 2. 业务层只提供 profile、业务服务端装配入口、iOS 工程路径、ESP-IDF 本地配置和业务能力代码。
 3. 业务工程不再保留启动脚本；如果需要新增通用启动或检查能力，优先进入 SDK CLI。
+
+### 3.8 普通语音回复流式和首包观测
+
+`sdk-v7` 起，普通文本回复会从 AgentCore 的流式事件中提取文本增量，并通过 `reply_text_delta_callback` 直接进入 `VoiceRuntime` 的流式 TTS 会话。普通问答不再必须等到完整 `final_output` 后才开始向 TTS 推送文本。
+
+当前运行态快照会记录首包相关字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reply_first_text_delta_at_ms` | 当前回复首个文本增量到达服务端播放流的时间。 |
+| `reply_first_audio_chunk_at_ms` | 当前回复首个 TTS 音频分片进入播放队列的时间。 |
+| `reply_first_play_request_at_ms` | 当前回复首次下发 `actuator.audio.play` 的时间。 |
+| `reply_text_to_first_audio_ms` | 首文本到首音频的耗时。 |
+| `reply_audio_to_play_request_ms` | 首音频到播放请求的耗时。 |
+
+这些字段可以通过运行态接口和联调日志观察，用于判断当前链路是否真的在流式推进。如果 `reply_text_to_first_audio_ms` 很大，优先检查当前 TTS 是否回退到了全文合成；这不应该由业务 Tool 或 Task 自行处理。
+
+注意：`sdk-v7` 仍然不是实时语音打断版本。眼镜端播放期间的麦克风策略、用户语音打断和通知抢播，会在后续通知仲裁与打断策略中统一处理。
 
 ## 4. 推荐业务能力工程结构
 

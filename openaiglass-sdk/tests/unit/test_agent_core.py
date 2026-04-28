@@ -927,6 +927,81 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(progress_messages, ["好的，你保持别动，我拍一张帮你看。"])
         self.assertEqual(result.reply_text, "我看到前方有一张桌子。")
 
+    def test_openai_runner_streams_plain_text_delta_to_callback(self) -> None:
+        """测试目标：验证普通文本回复会透传模型增量给上层流式 TTS。
+
+        测试方法：
+        1. 伪造 `Runner.run_streamed` 的 `raw_response_event` 文本增量事件。
+        2. 执行一轮普通问答，不触发工具调用。
+        3. 收集 `reply_text_delta_callback` 收到的文本片段。
+
+        预期结果：
+        1. 回调会收到普通文本增量。
+        2. 最终回复文本由增量拼接得到。
+        3. 这条路径不再等待 `final_output` 后才给 TTS 文本。
+        """
+
+        registry, gateway = build_tooling()
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_stream_text_001", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_stream_text_001",
+            session_id="sess_stream_text_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="你好",
+        )
+        delta_parts: list[str] = []
+
+        class _FakeStream:
+            def __init__(self, events) -> None:
+                self._events = iter(events)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._events)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        class _FakeRunResult:
+            final_output = "这段 final_output 不应覆盖已流出的文本"
+
+            def stream_events(self):
+                return _FakeStream(
+                    [
+                        types.SimpleNamespace(
+                            type="raw_response_event",
+                            data=types.SimpleNamespace(type="response.output_text.delta", delta="你好，"),
+                        ),
+                        types.SimpleNamespace(
+                            type="raw_response_event",
+                            data={"type": "response.output_text.delta", "delta": "我在。"},
+                        ),
+                    ]
+                )
+
+            def cancel(self):
+                return None
+
+        with install_fake_agents_module():
+            with patch("agents.Runner.run_streamed", return_value=_FakeRunResult()):
+                result = runner.run_turn(
+                    session=session,
+                    turn=turn,
+                    reply_text_delta_callback=delta_parts.append,
+                )
+
+        self.assertEqual(delta_parts, ["你好，", "我在。"])
+        self.assertEqual(result.reply_text, "你好，我在。")
+
     def test_stream_image_followup_reply_uses_multimodal_request(self) -> None:
         """测试目标：验证拍照后主链路会把真实图片作为多模态输入发给模型。
 

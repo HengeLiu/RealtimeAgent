@@ -9,6 +9,7 @@ import unittest
 from infra.config import ServerSettings
 from runtime.voice_runtime import (
     MessageEntry,
+    ModelChunk,
     PCM16StreamResampler,
     VoiceRuntime,
     VoiceSessionController,
@@ -412,6 +413,48 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         )
 
         runtime.stream_playback(_Handler(), device_id="glass-001", stream_id="reply_broken_pipe")
+
+    def test_reply_synthesis_snapshot_records_first_packet_latency(self) -> None:
+        """测试目标：验证流式回复会记录首文本、首音频和首播放请求延迟。
+
+        测试方法：
+        1. 创建一条回复合成上下文。
+        2. 标记首个文本增量。
+        3. 注入一个最小音频分片触发播放请求。
+        4. 读取运行时快照。
+
+        预期结果：
+        1. 快照中包含首文本、首音频、首播放请求时间戳。
+        2. 快照中包含文本到首音频、首音频到播放请求的延迟字段。
+        """
+
+        sent_messages: list[tuple[str, str, str, str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *args: sent_messages.append(args),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-latency")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-latency")
+        context = runtime._open_reply_synthesis_context(  # noqa: SLF001 - 单测覆盖首包观测字段
+            device_id="glass-001",
+            session_id="sess-latency",
+        )
+
+        runtime._mark_first_text_delta(context.playback)  # noqa: SLF001 - 单测覆盖首包观测字段
+        runtime._emit_synthesis_chunk(  # noqa: SLF001 - 单测覆盖首包观测字段
+            device_id="glass-001",
+            session_id="sess-latency",
+            context=context,
+            chunk=ModelChunk(audio_pcm_bytes=b"\x01\x00" * 160, sample_rate_hz=16000),
+        )
+
+        snapshot = runtime.build_runtime_snapshot()["glass-001"]
+        self.assertIsNotNone(snapshot["reply_first_text_delta_at_ms"])
+        self.assertIsNotNone(snapshot["reply_first_audio_chunk_at_ms"])
+        self.assertIsNotNone(snapshot["reply_first_play_request_at_ms"])
+        self.assertIsNotNone(snapshot["reply_text_to_first_audio_ms"])
+        self.assertIsNotNone(snapshot["reply_audio_to_play_request_ms"])
+        self.assertEqual(sent_messages[-1][2], "actuator.audio.play")
 
 
 if __name__ == "__main__":
