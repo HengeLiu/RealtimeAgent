@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agent_core.camera import CameraGateway
+from agent_core.camera import CameraGateway, UtterancePhotoStore
 from agent_core.mcp import McpGateway, McpRegistry
 from agent_core.models import ToolSpec
 from agent_core.skills import SkillRuntime
@@ -85,6 +85,7 @@ class ToolRegistry:
         self._mcp_registry = mcp_registry or McpRegistry()
         self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
         self._skill_runtime = skill_runtime
+        self._utterance_photo_store = UtterancePhotoStore()
         self._device_group_context_factory = None
         self._tools: dict[str, BaseTool] = {}
         self._sdk_tools: dict[str, Any] = {}
@@ -118,6 +119,7 @@ class ToolRegistry:
         from agent_core.tools.builtins import (
             CancelTaskTool,
             CapturePhotoTool,
+            GetLatestUtterancePhotoTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
             ReadSkillTool,
@@ -126,6 +128,7 @@ class ToolRegistry:
 
         for tool in (
             QueryDeviceStateTool(),
+            GetLatestUtterancePhotoTool(),
             CapturePhotoTool(),
             QueryTaskStatusTool(),
             CancelTaskTool(),
@@ -133,7 +136,7 @@ class ToolRegistry:
         ):
             self._register_tool(
                 tool,
-                expose_to_model=tool.spec.name in {"capture_photo"},
+                expose_to_model=tool.spec.name in {"get_latest_utterance_photo"},
             )
 
         for method in self._mcp_registry.list_methods():
@@ -222,6 +225,11 @@ class ToolRegistry:
         """返回相机抓拍网关。"""
 
         return self._camera_gateway
+
+    def get_utterance_photo_store(self) -> UtterancePhotoStore:
+        """返回语音轮次自动抓拍缓存。"""
+
+        return self._utterance_photo_store
 
     def get_mcp_gateway(self) -> McpGateway:
         """返回 McpGateway。"""

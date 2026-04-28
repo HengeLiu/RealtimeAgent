@@ -17,6 +17,8 @@ from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 
+_IMAGE_FOLLOWUP_TOOL_NAMES = {"get_latest_utterance_photo"}
+
 
 @dataclass(slots=True)
 class AgentTurnRuntime:
@@ -69,8 +71,10 @@ class AgentTurnRuntimeFactory:
             trace_sink=capability_traces.append,
             task_gateway=self._tool_registry.get_task_gateway(),
             camera_gateway=self._tool_registry.get_camera_gateway(),
+            utterance_photo_store=self._tool_registry.get_utterance_photo_store(),
             tool_gateway=self._tool_gateway,
             mcp_gateway=self._tool_registry.get_mcp_gateway(),
+            turn_meta=dict(turn.meta),
         )
         instructions = self._instruction_builder(turn.session_id)
         allowed_tool_names = (
@@ -307,7 +311,7 @@ class StreamedAgentTurnObserver:
                 if event.name == "tool_called":
                     raw_item = getattr(event.item, "raw_item", None)
                     tool_name = getattr(raw_item, "name", "")
-                    if tool_name == "capture_photo":
+                    if tool_name in _IMAGE_FOLLOWUP_TOOL_NAMES:
                         capture_call_id = getattr(raw_item, "call_id", None)
                         image_asset = await self._wait_for_new_image_asset(
                             tool_context=tool_context,
@@ -475,7 +479,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         主要逻辑：
         1. 默认仍使用 Agents SDK 的标准工具循环。
         2. 当调用方提供进度回调时，切换到流式观察模式。
-        3. 若模型选择了 `capture_photo`，则在拍照完成后中止旧 loop，
+        3. 若模型选择自动照片工具，则在取得照片后中止旧 loop，
            直接进入主链路图片解读，避免再走一轮无意义的工具总结回复。
 
         参数：
@@ -629,8 +633,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         主要逻辑：
         1. 先以流式模式运行 Agents SDK，观察工具调用事件。
-        2. 若命中 `capture_photo`，在拍照后中止原 loop，改为直接进入图片解读主链路。
-        3. 若未命中拍照，则回落到 SDK 自身给出的最终回复文本。
+        2. 若命中自动照片工具，在取得照片后中止原 loop，改为直接进入图片解读主链路。
+        3. 若未命中图片工具，则回落到 SDK 自身给出的最终回复文本。
 
         返回值：
         1. 完整 `AgentTurnResult`。
@@ -657,7 +661,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         excluded_asset_ids: set[str],
         timeout_seconds: float,
     ):
-        """等待 `capture_photo` 产出本次新抓拍图片。
+        """等待自动照片工具产出本次新图片。
 
         主要逻辑：
         1. 只接受当前抓拍后新增的图片资产。
@@ -1019,7 +1023,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "请使用简短、口语化、直接的中文回答。\n"
-            "如果需要拍照再回答，可以先用一句很短的话安抚用户，然后立即调用拍照工具。\n"
+            "如果需要查看用户眼前场景，请直接调用本轮自动照片工具，不要先输出拍照提示。\n"
             "必要时可以调用已提供的工具。\n"
             "不要输出代码块。\n"
         )

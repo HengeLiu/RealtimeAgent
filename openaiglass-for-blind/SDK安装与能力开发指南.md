@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v33`。本版本在 `sdk-v32` 基础上收口视觉拍照链路的语音播报：模型触发 `capture_photo` 时，SDK 不再额外插入固定“保持别动，我拍一张”中间播报，避免与模型流式文本和图片解读结果重复排队播放。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v34`。本版本在 `sdk-v33` 基础上将视觉问答改为“语音结束自动抓拍 + 模型按需读取本轮照片”：服务端在每个语音段结束后异步触发眼镜抓拍，不阻塞 ASR 和大模型链路；模型可见工具改为 `get_latest_utterance_photo`，旧 `capture_photo` 不再注册到模型工具列表。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -14,6 +14,7 @@
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -475,6 +476,8 @@ uv run openaiglass.glass.start \
 
 `sdk-v33` 起，视觉拍照链路只保留模型流式文本和图片解读主链路文本两类播报。SDK 不再在 `capture_photo` 工具调用事件上额外注入固定中间播报，避免出现先听到图片解读、随后又听到“好的，你保持别动，我拍一张帮你看”的倒序或重复播报。
 
+`sdk-v34` 起，SDK 不再让模型主动调用 `capture_photo`。语音段结束后，`VoiceRuntime` 会立即在后台触发一次 `utterance_finished` 抓拍；ASR、Agent 和流式 TTS 不等待图片上传。模型如果需要回答“我眼前有什么”这类问题，应调用 `get_latest_utterance_photo(wait_timeout_ms=5000)` 获取本轮语音结束后的自动照片。该工具只读取自动照片，不会重新拍照；如果图片仍在上传，可以短暂等待，超时后返回结构化 `TIMEOUT` 错误。
+
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
 ### 3.9 通知仲裁、抢播和打断边界
@@ -760,7 +763,7 @@ sdk.register_skill(
             name="navigation_guide",
             version="1.0.0",
             description="导航引导 Skill",
-            allowed_tools=["capture_photo", "start_navigation"],
+            allowed_tools=["get_latest_utterance_photo", "start_navigation"],
             allowed_mcp_methods=["amap.route_plan"],
         ),
         content="根据当前路线、定位和视觉事件，给用户一句短导航提示。",
@@ -888,6 +891,8 @@ Tool 中常用的 `context` 高层能力：
 | `cancel_task(task_id)` | 取消任务。 |
 | `start_phone_task(task_type=..., params=...)` | 启动手机侧持续任务。 |
 | `stop_phone_task(task_type=..., reason=...)` | 停止手机侧持续任务。 |
+
+注意：上表中的 `capture_photo(reason=...)` 是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是 `sdk-v34` 后的模型可见内置工具。视觉问答类能力应让模型调用 `get_latest_utterance_photo` 读取本轮语音结束后自动抓拍的照片，不要在 Skill `allowed_tools` 中继续声明 `capture_photo`。
 | `submit_notification(text=..., priority=...)` | 向设备侧提交播报或提示。 |
 | `mcp(method_name, arguments)` | 调用 SDK 统一注册的 MCP 方法，例如地图、搜索或导航规划。 |
 
@@ -1868,11 +1873,11 @@ MP4 会由 `glass-playback` 在本机通过 `ffmpeg` 解成 JPEG 帧，再按真
     "model_request_contains": ["qwen3.6-plus"]
   },
   "cases": {
-    "你是谁呀": {
-      "reply_text_contains": ["乐鑫"],
+    "看一下我眼前有什么": {
+      "reply_text_contains": ["看到", "看不清"],
       "reply_text_not_contains": ["抱歉"],
       "required_capability_traces": [
-        {"capability_name": "capture_photo", "status": "succeeded"}
+        {"capability_name": "get_latest_utterance_photo", "status": "succeeded"}
       ]
     }
   }

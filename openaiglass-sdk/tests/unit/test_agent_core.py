@@ -79,8 +79,10 @@ def build_tool_context(*, registry, gateway, session_id, turn_id):
         trace_sink=lambda _trace: None,
         task_gateway=registry.get_task_gateway(),
         camera_gateway=registry.get_camera_gateway(),
+        utterance_photo_store=registry.get_utterance_photo_store(),
         tool_gateway=gateway,
         mcp_gateway=registry.get_mcp_gateway(),
+        turn_meta={"segment_id": "seg_context_001", "stream_id": "stream_context_001"},
     )
 
 
@@ -700,7 +702,7 @@ class AgentCoreTestCase(unittest.TestCase):
         """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。
 
         测试方法：
-        1. 注册一个只允许 `capture_photo` 的 Skill。
+        1. 注册一个只允许 `get_latest_utterance_photo` 的 Skill。
         2. 通过 `read_skill` 工具读取 Skill 文档。
         3. 执行一轮 Agent，并检查 system prompt 与模型工具列表。
 
@@ -717,7 +719,7 @@ class AgentCoreTestCase(unittest.TestCase):
                     name="scene_inspection",
                     version="1.0.0",
                     description="看清用户眼前场景",
-                    allowed_tools=["capture_photo"],
+                    allowed_tools=["get_latest_utterance_photo"],
                 ),
                 content="先拍照，再根据照片用一句话回答。",
             )
@@ -775,11 +777,11 @@ class AgentCoreTestCase(unittest.TestCase):
             getattr(tool, "name", None) or getattr(tool, "_tool_name_override", "")
             for tool in agent.kwargs["tools"]
         ]
-        self.assertEqual(tool_names, ["capture_photo", "read_skill"])
+        self.assertEqual(tool_names, ["get_latest_utterance_photo", "read_skill"])
         self.assertIn("当前 active Skills", result.meta["model_request"]["instructions"])
         self.assertIn("先拍照，再根据照片用一句话回答。", result.meta["model_request"]["instructions"])
         self.assertEqual(result.meta["model_request"]["active_skills"], ["scene_inspection"])
-        self.assertEqual(result.meta["model_request"]["allowed_tool_names"], ["capture_photo", "read_skill"])
+        self.assertEqual(result.meta["model_request"]["allowed_tool_names"], ["get_latest_utterance_photo", "read_skill"])
 
     def test_openai_runner_creates_event_loop_in_worker_thread(self) -> None:
         """测试目标：验证 OpenAIAgentLoopRunner 在工作线程中会自动补齐 event loop。
@@ -924,11 +926,11 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("agent-core 运行失败", result.reply_text)
         self.assertEqual(len(result.capability_traces), 0)
 
-    def test_openai_runner_does_not_emit_duplicate_progress_before_capture_photo(self) -> None:
+    def test_openai_runner_does_not_emit_duplicate_progress_before_utterance_photo(self) -> None:
         """测试目标：验证视觉链路不会额外发出重复拍照播报。
 
         测试方法：
-        1. 伪造 `run_streamed` 事件流，只产出 `capture_photo` 的 tool_called/tool_output。
+        1. 伪造 `run_streamed` 事件流，只产出 `get_latest_utterance_photo` 的 tool_called/tool_output。
         2. 将主链路图片续跑方法打桩为固定回复。
         3. 收集中间播报回调与最终结果。
 
@@ -974,7 +976,9 @@ class AgentCoreTestCase(unittest.TestCase):
                 tool_called = types.SimpleNamespace(
                     type="run_item_stream_event",
                     name="tool_called",
-                    item=types.SimpleNamespace(raw_item=types.SimpleNamespace(name="capture_photo", call_id="call_photo_001")),
+                    item=types.SimpleNamespace(
+                        raw_item=types.SimpleNamespace(name="get_latest_utterance_photo", call_id="call_photo_001")
+                    ),
                 )
                 tool_output = types.SimpleNamespace(
                     type="run_item_stream_event",
@@ -1291,7 +1295,8 @@ class AgentCoreTestCase(unittest.TestCase):
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, {"capture_photo"})
+        self.assertEqual(tool_names, {"get_latest_utterance_photo"})
+        self.assertIsNotNone(registry.get("get_latest_utterance_photo"))
         self.assertIsNotNone(registry.get("capture_photo"))
         self.assertIsNone(registry.get("create_timer"))
         self.assertIsNone(registry.get("timer_manage"))
@@ -1325,6 +1330,60 @@ class AgentCoreTestCase(unittest.TestCase):
         signature = inspect.signature(sdk_tool)
         self.assertIn("reason", signature.parameters)
         self.assertNotIn("payload", signature.parameters)
+
+    def test_get_latest_utterance_photo_reads_auto_capture_result(self) -> None:
+        """测试目标：验证模型可见图片工具读取语音结束后的自动抓拍结果。
+
+        测试方法：
+        1. 注入假相机网关并启动一条后台自动抓拍记录。
+        2. 通过 `get_latest_utterance_photo` Tool 等待并读取该记录。
+        3. 检查返回的图片资产与相机网关字节一致。
+
+        预期结果：
+        1. Tool 不会重新暴露 `capture_photo` 给模型。
+        2. 返回结果中的图片路径真实存在，文件字节等于自动抓拍字节。
+        """
+
+        settings = ServerSettings(voice_runs_root="/tmp/agent-core-utterance-photo")
+        registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
+        store = registry.get_utterance_photo_store()
+        store.start_capture(
+            camera_gateway=registry.get_camera_gateway(),
+            session_id="sess_utterance_photo_001",
+            device_id="glass-001",
+            segment_id="seg_utterance_photo_001",
+            stream_id="stream_utterance_photo_001",
+            timeout_ms=1000,
+        )
+
+        result = registry.invoke(
+            name="get_latest_utterance_photo",
+            context=AgentToolContext(
+                session_id="sess_utterance_photo_001",
+                device_id="glass-001",
+                turn_id="turn_utterance_photo_001",
+                settings=settings,
+                session_store=AgentSessionStore(),
+                device_state_reader=registry.get_device_state_reader(),
+                trace_sink=lambda _trace: None,
+                task_gateway=registry.get_task_gateway(),
+                camera_gateway=registry.get_camera_gateway(),
+                utterance_photo_store=store,
+                tool_gateway=gateway,
+                mcp_gateway=registry.get_mcp_gateway(),
+                turn_meta={
+                    "segment_id": "seg_utterance_photo_001",
+                    "stream_id": "stream_utterance_photo_001",
+                },
+            ),
+            arguments={},
+        )
+
+        self.assertEqual(result.data["mime_type"], "image/png")
+        self.assertEqual(result.data["segment_id"], "seg_utterance_photo_001")
+        self.assertTrue(result.data["storage_uri"].endswith(".png"))
+        with open(result.data["storage_uri"], "rb") as handle:
+            self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
 
     def test_capture_photo_tool_uses_real_camera_gateway_result(self) -> None:
         """测试目标：验证 capture_photo 会把相机网关返回的真实字节写成图片资产。

@@ -12,6 +12,7 @@ from infra.config import ServerSettings
 
 if TYPE_CHECKING:
     from agent_core.camera import CameraGateway
+    from agent_core.camera import UtterancePhotoStore
     from agent_core.context import AgentSessionStore
     from agent_core.mcp import McpGateway
     from agent_core.tools.gateway import ToolGateway
@@ -32,8 +33,10 @@ class AgentToolContext:
     device_group_context_factory: Callable[..., Any] | None = None
     task_gateway: "TaskGateway | None" = None
     camera_gateway: "CameraGateway | None" = None
+    utterance_photo_store: "UtterancePhotoStore | None" = None
     tool_gateway: "ToolGateway | None" = None
     mcp_gateway: "McpGateway | None" = None
+    turn_meta: dict[str, Any] = field(default_factory=dict)
     emitted_assets: list[MediaAssetRef] = field(default_factory=list)
     emitted_artifacts: list[DerivedArtifact] = field(default_factory=list)
     emitted_tasks: list[TaskRef] = field(default_factory=list)

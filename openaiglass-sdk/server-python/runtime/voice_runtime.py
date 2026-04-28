@@ -33,6 +33,7 @@ SERVER_CHANNELS = 1
 SERVER_SAMPLE_WIDTH_BYTES = 2
 MODEL_OUTPUT_SAMPLE_RATE_HZ = 24000
 PLAYBACK_QUEUE_MAX = 256
+UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
 
 
 @dataclass(slots=True)
@@ -1509,6 +1510,66 @@ class VoiceRuntime:
 
         return self._agent_facade
 
+    def _start_utterance_photo_capture(self, *, device_id: str, session_id: str, segment: SegmentBuffer) -> None:
+        """在语音段结束后启动后台自动抓拍。
+
+        主要逻辑：
+        1. 从 AgentFacade 的 ToolRegistry 读取真实相机网关和语音照片缓存。
+        2. 只启动后台任务，不等待端侧图片上传完成。
+        3. 抓拍失败只写入缓存记录，不能阻塞 ASR 和大模型链路。
+
+        参数：
+        1. `device_id`：当前眼镜设备编号。
+        2. `session_id`：当前控制会话编号。
+        3. `segment`：刚结束上传的语音段。
+
+        返回值：
+        1. 无返回值。
+
+        异常情况：
+        1. 未绑定相机网关或启动失败时只记录 DEBUG 日志，不影响语音主链路。
+        """
+
+        try:
+            tool_registry = self._agent_facade.get_tool_registry()
+            camera_gateway = tool_registry.get_camera_gateway()
+            if camera_gateway is None:
+                log_debug(
+                    self._logger,
+                    (
+                        "跳过语音结束自动抓拍: CameraGateway 未绑定 "
+                        f"segment_id={segment.segment_id} input_stream_id={segment.stream_id}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id),
+                )
+                return
+            tool_registry.get_utterance_photo_store().start_capture(
+                camera_gateway=camera_gateway,
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment.segment_id,
+                stream_id=segment.stream_id,
+                timeout_ms=UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS,
+            )
+            log_debug(
+                self._logger,
+                (
+                    "已启动语音结束自动抓拍 "
+                    f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
+                    f"timeout_ms={UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - 自动抓拍不能影响语音主链路
+            log_debug(
+                self._logger,
+                (
+                    "启动语音结束自动抓拍失败，继续语音主链路 "
+                    f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} error={exc}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+
     def _run_model_pipeline(self, device_id: str, session_id: str, segment: SegmentBuffer) -> None:
         controller = self._get_controller(device_id)
         input_wav = segment.to_wav_bytes()
@@ -1528,6 +1589,7 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
+            self._start_utterance_photo_capture(device_id=device_id, session_id=session_id, segment=segment)
             user_text = self._asr_client.transcribe(settings=self._settings, input_wav=input_wav).strip()
             if not user_text:
                 raise build_error(
