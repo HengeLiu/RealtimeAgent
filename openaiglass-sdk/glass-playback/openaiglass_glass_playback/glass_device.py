@@ -55,6 +55,13 @@ class PlaybackGlassDevice:
         """启动虚拟设备并执行一次触发音频回放。"""
 
         self._ensure_output_dirs()
+        self._print_status(
+            "启动 glass-playback",
+            {
+                "device_id": self.config.device_id,
+                "control_ws_url": self.config.control_ws_url,
+            },
+        )
         control = WsClient(self.config.control_ws_url, timeout_seconds=self.timeout_seconds)
         heartbeat_thread: threading.Thread | None = None
         try:
@@ -137,6 +144,7 @@ class PlaybackGlassDevice:
         while time.monotonic() < deadline:
             message = json.loads(control.recv_text())
             if message.get("name") == expected_name:
+                self._print_received_control_message(message)
                 return message
             self._handle_control_message(control, message)
         raise TimeoutError(f"等待 {expected_name} 超时")
@@ -162,6 +170,7 @@ class PlaybackGlassDevice:
         deadline = time.monotonic() + self.config.startup.startup_timeout_ms / 1000
         while time.monotonic() < deadline:
             message = json.loads(control.recv_text())
+            self._print_received_control_message(message)
             name = str(message.get("name") or "")
             if name == "voice.session.open":
                 self._session_id = str(message.get("session_id") or "")
@@ -199,7 +208,7 @@ class PlaybackGlassDevice:
                     {"session_id": self._session_id, "accepted_mode": accepted_mode},
                 )
                 return
-            self._handle_control_message(control, message)
+            self._handle_control_message(control, message, log_received=False)
         raise TimeoutError("等待语音会话打开请求超时")
 
     def _heartbeat_loop(self, control: WsClient, interval_ms: int) -> None:
@@ -219,6 +228,7 @@ class PlaybackGlassDevice:
                 payload = json.loads(response.read().decode("utf-8"))
             if self._is_bound(payload):
                 self._log_event("device.binding.ready", {"phone_device_id": self.config.desired_phone_device_id})
+                self._print_status("设备绑定就绪", {"phone_device_id": self.config.desired_phone_device_id})
                 return
             time.sleep(0.5)
         raise TimeoutError("等待 glass 与真实 iOS phone 绑定超时")
@@ -326,7 +336,9 @@ class PlaybackGlassDevice:
                 return
             self._handle_control_message(control, message)
 
-    def _handle_control_message(self, control: WsClient, message: dict[str, object]) -> None:
+    def _handle_control_message(self, control: WsClient, message: dict[str, object], *, log_received: bool = True) -> None:
+        if log_received:
+            self._print_received_control_message(message)
         name = str(message.get("name") or "")
         if name.startswith("actuator."):
             self._handle_actuator(control, message)
@@ -529,7 +541,7 @@ class PlaybackGlassDevice:
             mode = str(audio_play.get("mode") if isinstance(audio_play, dict) else "record").strip() or "record"
             stream_id = str(message.get("stream_id") or payload.get("stream_id") or "").strip()
             session_id = str(message.get("session_id") or self._session_id)
-            self._schedule_playback_audio_save(stream_id)
+            self._schedule_playback_audio_save(stream_id, requested_at_ms=int(time.time() * 1000))
             if mode != "record_and_auto_finish":
                 return
             self._send_control(
@@ -549,7 +561,7 @@ class PlaybackGlassDevice:
                 stream_id=stream_id,
             )
 
-    def _schedule_playback_audio_save(self, stream_id: str) -> None:
+    def _schedule_playback_audio_save(self, stream_id: str, *, requested_at_ms: int) -> None:
         """把播放音频保存任务放入后台线程。
 
         主要逻辑：
@@ -559,6 +571,7 @@ class PlaybackGlassDevice:
 
         参数：
         1. `stream_id`：服务端下发的播放流编号。
+        2. `requested_at_ms`：收到播放请求时的毫秒时间戳，用于计算首段音频到达延迟。
 
         返回值：
         1. 无。
@@ -577,7 +590,7 @@ class PlaybackGlassDevice:
             return
         thread = threading.Thread(
             target=self._save_playback_audio,
-            args=(stream_id, save_dir),
+            args=(stream_id, save_dir, requested_at_ms),
             name=f"{self.config.device_id}-audio-save-{stream_id}",
             daemon=True,
         )
@@ -587,12 +600,13 @@ class PlaybackGlassDevice:
         thread.start()
         self._log_event("actuator.audio.save_scheduled", {"stream_id": stream_id})
 
-    def _save_playback_audio(self, stream_id: str, save_dir: str) -> None:
+    def _save_playback_audio(self, stream_id: str, save_dir: str, requested_at_ms: int) -> None:
         """下载并保存服务端下行播放音频。
 
         参数：
         1. `stream_id`：服务端下发的播放流编号。
         2. `save_dir`：保存目录，可以是绝对路径，也可以相对业务工程根目录。
+        3. `requested_at_ms`：收到播放请求时的毫秒时间戳，用于打印首段音频到达时间。
 
         返回值：
         1. 无。
@@ -608,15 +622,37 @@ class PlaybackGlassDevice:
         path.mkdir(parents=True, exist_ok=True)
         target = path / f"{stream_id}.wav"
         try:
+            first_chunk_logged = False
+            total_bytes = 0
             with urlopen(
                 f"{self._http_base_url()}/stream.wav?{urlencode({'device_id': self.config.device_id, 'stream_id': stream_id})}",
                 timeout=self.timeout_seconds,
             ) as response:
-                payload = response.read()
-                target.write_bytes(payload)
+                with target.open("wb") as file:
+                    while True:
+                        chunk = response.read(64 * 1024)
+                        if not chunk:
+                            break
+                        if not first_chunk_logged:
+                            first_chunk_logged = True
+                            elapsed_ms = max(int(time.time() * 1000) - requested_at_ms, 0)
+                            self._print_status(
+                                "收到第一段下行音频",
+                                {
+                                    "stream_id": stream_id,
+                                    "elapsed_ms": elapsed_ms,
+                                    "bytes": len(chunk),
+                                },
+                            )
+                            self._log_event(
+                                "actuator.audio.first_chunk_received",
+                                {"stream_id": stream_id, "elapsed_ms": elapsed_ms, "bytes": len(chunk)},
+                            )
+                        file.write(chunk)
+                        total_bytes += len(chunk)
             self._log_event(
                 "actuator.audio.saved",
-                {"stream_id": stream_id, "path": str(target), "bytes": len(payload)},
+                {"stream_id": stream_id, "path": str(target), "bytes": total_bytes},
             )
         except Exception as exc:  # pragma: no cover - 外部服务错误只记录
             self._log_event("actuator.audio.save_failed", {"stream_id": stream_id, "error": str(exc)})
@@ -739,6 +775,46 @@ class PlaybackGlassDevice:
             if outputs is None:
                 return
             self._append_jsonl(outputs.actuator_log, {"ts": int(time.time() * 1000), "name": name, "payload": payload})
+
+    def _print_received_control_message(self, message: dict[str, object]) -> None:
+        """把 glass-playback 收到的控制消息打印到命令行。
+
+        主要逻辑：
+        1. 只打印收到的消息名称和关键链路字段。
+        2. 不在发送控制消息时打印，避免设备日志同时出现收发两份噪声。
+
+        参数：
+        1. `message`：服务端下发给虚拟眼镜的控制消息。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 无。
+        """
+
+        name = str(message.get("name") or "unknown")
+        fields: dict[str, object] = {"name": name}
+        for key in ("session_id", "stream_id", "semantic"):
+            value = message.get(key)
+            if value:
+                fields[key] = value
+        payload = message.get("payload")
+        if isinstance(payload, dict):
+            for key in ("mode", "stream_id", "request_id", "target_ws_uri"):
+                value = payload.get(key)
+                if value:
+                    fields[key] = value
+        self._print_status("收到控制消息", fields)
+
+    @staticmethod
+    def _print_status(message: str, fields: dict[str, object] | None = None) -> None:
+        """向命令行打印 glass-playback 状态。"""
+
+        suffix = ""
+        if fields:
+            suffix = " " + " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+        print(f"[glass-playback] {message}{suffix}", flush=True)
 
     @staticmethod
     def _append_jsonl(path: Path, data: dict[str, object]) -> None:

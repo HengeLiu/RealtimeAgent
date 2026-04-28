@@ -175,8 +175,17 @@ def test_playback_camera_capture_responds_with_configured_image(tmp_path: Path) 
     assert message["payload"]["image_base64"] == "ZmFrZS1qcGVnLWJ5dGVz"
 
 
-def test_playback_realtime_voice_open_saves_session_and_replies_opened(tmp_path: Path) -> None:
-    """全双工语音打开请求会保存 session_id 并回复 opened。"""
+def test_playback_realtime_voice_open_saves_session_and_replies_opened(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """测试目标：全双工语音打开请求会保存 session_id，并且命令行只打印收到的消息。
+
+    测试方法：
+    1. 构造服务端下发的 `voice.realtime.session.open`。
+    2. 执行回放眼镜握手逻辑并读取命令行输出。
+
+    预期结果：
+    1. 回放眼镜回复 `voice.realtime.session.opened`。
+    2. 命令行只出现收到的 `voice.realtime.session.open`，不打印发送的 opened 消息。
+    """
 
     app_root = tmp_path / "openaiglass-for-blind"
     config_dir = app_root / "host/glass-playback/config"
@@ -226,6 +235,9 @@ def test_playback_realtime_voice_open_saves_session_and_replies_opened(tmp_path:
     assert reply["name"] == "voice.realtime.session.opened"
     assert reply["session_id"] == "sess_rt_001"
     assert reply["payload"]["capabilities"]["output_cancel"] is True
+    output = capsys.readouterr().out
+    assert "收到控制消息 name=voice.realtime.session.open" in output
+    assert "voice.realtime.session.opened" not in output
 
 
 def test_playback_camera_stream_sends_configured_frames(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,7 +300,11 @@ def test_playback_camera_stream_sends_configured_frames(tmp_path: Path, monkeypa
     assert frame.payload == b"frame-001"
 
 
-def test_playback_audio_save_does_not_block_camera_capture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_playback_audio_save_does_not_block_camera_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """测试目标：保存播放音频时不阻塞抓拍控制消息。
 
     测试方法：
@@ -345,15 +361,21 @@ def test_playback_audio_save_does_not_block_camera_capture(tmp_path: Path, monke
     class _BlockingAudioResponse:
         """模拟会阻塞的 `/stream.wav` 下载响应。"""
 
+        def __init__(self) -> None:
+            self._sent = False
+
         def __enter__(self) -> "_BlockingAudioResponse":
             return self
 
         def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
             return None
 
-        def read(self) -> bytes:
+        def read(self, size: int = -1) -> bytes:
             download_started.set()
             assert allow_download.wait(timeout=1)
+            if self._sent:
+                return b""
+            self._sent = True
             return b"RIFF-fake-wave"
 
     def _fake_urlopen(url: str, *, timeout: float) -> _BlockingAudioResponse:
@@ -394,6 +416,10 @@ def test_playback_audio_save_does_not_block_camera_capture(tmp_path: Path, monke
     device._join_audio_save_threads(timeout_seconds=1)  # noqa: SLF001
     saved_audio = app_root / "runs/playback/glass-playback-001/audio/stream_audio_001.wav"
     assert saved_audio.read_bytes() == b"RIFF-fake-wave"
+    output = capsys.readouterr().out
+    assert "收到控制消息 name=actuator.audio.play" in output
+    assert "收到第一段下行音频 stream_id=stream_audio_001" in output
+    assert "actuator.audio.started" not in output
 
 
 def test_playback_asserts_server_artifact_generated(tmp_path: Path) -> None:

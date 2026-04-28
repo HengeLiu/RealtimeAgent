@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v21`。本版本在 `sdk-v20` 基础上把 `glass-playback` 的播放音频保存改为后台异步任务，避免阻塞控制消息读取循环，并新增设备级服务端业务产物断言。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v22`。本版本在 `sdk-v21` 基础上补齐 `glass-playback` 命令行状态日志、服务端首个模型 token 延迟日志，以及回放眼镜收到首段下行音频的时间日志。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -460,6 +460,8 @@ uv run openaiglass.glass.start \
 
 这些字段可以通过运行态接口和联调日志观察，用于判断当前链路是否真的在流式推进。如果 `reply_text_to_first_audio_ms` 很大，优先检查当前 TTS 是否回退到了全文合成；这不应该由业务 Tool 或 Task 自行处理。
 
+`sdk-v22` 起，服务端在 `VoiceRuntime` 首次收到模型文本增量时会打印 `大模型返回首个 token`，并携带 `first_token_latency_ms`、`segment_id`、`input_stream_id` 和 `token_preview`。该日志用于判断 ASR 后到模型首 token 的耗时，不要求业务 Tool 自行打点。
+
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
 ### 3.9 通知仲裁、抢播和打断边界
@@ -809,6 +811,8 @@ openaiglass-for-blind/capabilities/<capability_name>/
 ```
 
 业务能力目录不再需要 `scenario.py`。`glass-playback` 配置统一放在 `host/glass-playback/config`，音频、视频、图像和传感器资产放在 `testdata` 对应目录下；日常调试时由独立的 `glass-playback` 虚拟眼镜进程消费。
+
+`sdk-v22` 起，`glass-playback` 会在命令行打印启动状态、收到的控制消息、绑定就绪状态和收到第一段下行音频的时间。设备侧只打印“收到什么消息”，不会把自身发送的 `device.register`、`voice.*.opened`、`actuator.audio.started/finished` 等控制消息打印到命令行；这些发送动作如需排查仍以事件文件和服务端日志为准。
 
 可以参考现有找物体能力：
 

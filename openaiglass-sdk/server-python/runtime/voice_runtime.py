@@ -1580,6 +1580,8 @@ class VoiceRuntime:
             streamed_reply_parts: list[str] = []
             final_synthesis_context: ReplySynthesisContext | None = None
             final_tts_session: StreamingTtsSession | None = None
+            model_request_started_at_ms = self._now_ms()
+            first_model_token_logged = False
 
             def _handle_progress_text(text: str) -> None:
                 progress_text = text.strip()
@@ -1592,9 +1594,22 @@ class VoiceRuntime:
                 ).start()
 
             def _handle_reply_text_delta(text_delta: str) -> None:
-                nonlocal final_synthesis_context, final_tts_session
+                nonlocal final_synthesis_context, final_tts_session, first_model_token_logged
                 if not text_delta:
                     return
+                if not first_model_token_logged:
+                    first_model_token_logged = True
+                    first_token_at_ms = self._now_ms()
+                    log_info(
+                        self._logger,
+                        (
+                            "大模型返回首个 token "
+                            f"first_token_latency_ms={max(first_token_at_ms - model_request_started_at_ms, 0)} "
+                            f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
+                            f"token_preview={text_delta[:24]!r}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id),
+                    )
                 streamed_reply_parts.append(text_delta)
                 if final_synthesis_context is None:
                     final_synthesis_context = self._open_reply_synthesis_context(
