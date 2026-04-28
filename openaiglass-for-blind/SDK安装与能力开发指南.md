@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v5`。本版本新增 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复，以及手机侧多任务帧分发；上一版本已增强 `phone_video_link_task` 最小 peer-link 生命周期语义。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v6`。本版本新增手机视觉任务资源策略，Python `PhoneRuntime` / `phone-mock` 可按 `vision_policy` 做帧率限制、最大处理帧数限制和过载事件记录；上一版本已新增 SDK 业务 Task 事件日志、超时、JSON 快照保存/恢复，以及手机侧多任务帧分发。实时语音打断、全双工语音和公网/NAT 穿透暂不覆盖。
 
 ## 1. 当前目录边界
 
@@ -730,6 +730,69 @@ sdk.task_runtime.load_snapshots("logs/sdk-task-snapshots.json")
 真实手机端能力开发应优先写 Swift。Python `BasePhoneProcessor` / `BasePhoneTask` 不能运行在 iPhone 上，后续统一封装到 `phone-mock` 设备内部。业务开发者不应该把它们理解为手机 App 插件，也不应该在 SDK 指南中把它们当成真机手机开发主路径。
 
 `phone-mock` 的定位和 `glass-playback` 类似，都是独立启动的虚拟设备；区别是当前 `phone-mock` 只用于 mock 测试，不支持回放数据编排，也不模拟真实 iOS UI。它后续应像真实 phone 一样连接真实服务端、注册、心跳、接收 `sdk.phone.task.start/stop`，并按配置或内置 Python handler 产出任务事件。
+
+### 7.0 手机视觉资源策略
+
+`sdk-v6` 起，Python `PhoneRuntime` 支持手机视觉任务资源策略。这个能力主要用于 `phone-mock`、设备级回放测试和服务端侧手机任务模拟，帮助功能开发团队先验证“帧率限制、过载记录、任务快照观察”这些 SDK 语义。
+
+创建手机任务时可以在参数中传入 `vision_policy`：
+
+```python
+snapshot = sdk.phone_runtime.start_task(
+    task_type="demo_phone_task",
+    params={
+        "stream_id": "stream_cam_001",
+        "vision_policy": {
+            "min_frame_interval_ms": 1000,
+            "max_frames": 30,
+            "priority": 10,
+            "emit_overload_events": True,
+        },
+    },
+)
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `min_frame_interval_ms` | 同一个手机任务两次实际处理帧之间的最小间隔。 |
+| `max_frames` | 单个任务最多处理的帧数，未设置或为 0 表示不限制。 |
+| `priority` | 任务优先级，当前先进入快照，后续用于多任务资源仲裁。 |
+| `emit_overload_events` | 是否在 SDK 丢帧时记录 `vision.task.overloaded`。 |
+
+当帧被 SDK 资源策略丢弃时，业务任务的 `on_frame(...)` 不会被调用，`PhoneTaskSnapshot` 会记录：
+
+1. `frames_dropped`
+2. `resource_events`
+3. `vision_policy`
+
+资源事件示例：
+
+```json
+{
+  "event_name": "vision.task.overloaded",
+  "reason": "frame_rate_limited",
+  "task_type": "demo_phone_task",
+  "stream_id": "stream_cam_001",
+  "frames_processed": 1,
+  "frames_dropped": 1
+}
+```
+
+当前 `reason` 包括：
+
+| reason | 含义 |
+| --- | --- |
+| `frame_rate_limited` | 当前帧与上一帧实际处理时间间隔不足。 |
+| `max_frames_reached` | 当前任务已经达到最大处理帧数。 |
+
+注意：
+
+1. 业务能力不要自行维护全局帧队列或跨任务资源优先级。
+2. 回放测试和 `phone-mock` 可以断言 `frames_dropped` 与 `resource_events`。
+3. 真 iPhone 插件在 SDK iOS 运行时补齐统一资源管理前，应读取同名 `vision_policy` 参数并保持语义一致。
+4. 具体 YOLO、盲道、红绿灯、找物等算法仍属于业务层，不进入 SDK。
 
 ### 7.1 真机 iOS 手机能力怎么接入
 

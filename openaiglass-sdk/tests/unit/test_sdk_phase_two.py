@@ -377,6 +377,116 @@ def test_phone_runtime_can_read_registered_sensor_provider() -> None:
     assert reading.payload["heading_degrees"] == 87
 
 
+def test_phone_runtime_limits_vision_frames_by_interval() -> None:
+    """测试目标：验证手机视觉运行时可以按最小帧间隔限制任务处理频率。
+
+    测试方法：
+    1. 注册一个记录帧序号的手机任务。
+    2. 启动任务时传入 `vision_policy.min_frame_interval_ms`。
+    3. 连续输入三帧，其中第二帧时间间隔不足。
+
+    预期结果：
+    1. 第一帧和第三帧被任务处理。
+    2. 第二帧被 SDK 资源策略丢弃。
+    3. 任务快照中记录 `vision.task.overloaded` 资源事件。
+    """
+
+    class CountingVisionTask(BasePhoneTask):
+        task_type = "counting_vision_task"
+
+        def on_start(self, context: PhoneTaskContext) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context: PhoneTaskContext, frame) -> None:
+            context.emit_result({"seq": frame["seq"]})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(CountingVisionTask())
+    snapshot = sdk.phone_runtime.start_task(
+        task_type="counting_vision_task",
+        params={
+            "stream_id": "stream_cam_001",
+            "vision_policy": {"min_frame_interval_ms": 1000},
+        },
+    )
+
+    first = sdk.phone_runtime.process_frame(
+        frame={"seq": 1},
+        stream_id="stream_cam_001",
+        now_ms=1000,
+    )[0]
+    second = sdk.phone_runtime.process_frame(
+        frame={"seq": 2},
+        stream_id="stream_cam_001",
+        now_ms=1500,
+    )[0]
+    third = sdk.phone_runtime.process_frame(
+        frame={"seq": 3},
+        stream_id="stream_cam_001",
+        now_ms=2200,
+    )[0]
+
+    assert snapshot.vision_policy["min_frame_interval_ms"] == 1000
+    assert [item["seq"] for item in third.results] == [1, 3]
+    assert first.frames_processed == 1
+    assert second.frames_processed == 1
+    assert second.frames_dropped == 1
+    assert second.resource_events[-1]["event_name"] == "vision.task.overloaded"
+    assert second.resource_events[-1]["reason"] == "frame_rate_limited"
+    assert third.frames_processed == 2
+
+
+def test_phone_runtime_records_vision_overload_when_max_frames_reached() -> None:
+    """测试目标：验证手机视觉运行时可以在任务达到最大处理帧数后记录过载。
+
+    测试方法：
+    1. 注册一个简单手机任务。
+    2. 启动任务时配置 `vision_policy.max_frames=1`。
+    3. 连续向同一路视频流输入两帧。
+
+    预期结果：
+    1. 第一帧被处理。
+    2. 第二帧被 SDK 丢弃并记录 `max_frames_reached`。
+    3. 业务结果中不会出现第二帧，避免业务任务自行处理资源限制。
+    """
+
+    class MaxFrameVisionTask(BasePhoneTask):
+        task_type = "max_frame_vision_task"
+
+        def on_start(self, context: PhoneTaskContext) -> None:
+            context.emit_state("running")
+
+        def on_frame(self, context: PhoneTaskContext, frame) -> None:
+            context.emit_result({"seq": frame["seq"]})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_phone_task(MaxFrameVisionTask())
+    sdk.phone_runtime.start_task(
+        task_type="max_frame_vision_task",
+        params={
+            "stream_id": "stream_cam_002",
+            "vision_policy": {"max_frames": 1},
+        },
+    )
+
+    first = sdk.phone_runtime.process_frame(
+        frame={"seq": 1},
+        stream_id="stream_cam_002",
+        now_ms=1000,
+    )[0]
+    second = sdk.phone_runtime.process_frame(
+        frame={"seq": 2},
+        stream_id="stream_cam_002",
+        now_ms=2000,
+    )[0]
+
+    assert [item["seq"] for item in first.results] == [1]
+    assert [item["seq"] for item in second.results] == [1]
+    assert second.frames_processed == 1
+    assert second.frames_dropped == 1
+    assert second.resource_events[-1]["reason"] == "max_frames_reached"
+
+
 def test_hybrid_task_gateway_can_run_sdk_only_task() -> None:
     """测试目标：验证混合任务网关可以承接 backend-task-core 未注册的 SDK 任务。
 

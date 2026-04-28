@@ -11,6 +11,7 @@ from openaiglasses.phone import (
     PhoneTaskContext,
     PhoneTaskSnapshot,
     SensorReading,
+    VisionTaskPolicy,
 )
 from openaiglasses.runtime import (
     BackendTaskGatewayAdapter,
@@ -49,6 +50,7 @@ __all__ = [
     "TaskEvent",
     "TaskRuntimeManager",
     "TaskRuntimeSnapshot",
+    "VisionTaskPolicy",
     "build_agent_facade_from_sdk",
     "build_server_handle_from_sdk",
 ]
