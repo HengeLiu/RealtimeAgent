@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-Phase F 的目标是用真实业务能力验证 SDK `backend-task-core`：业务侧只实现 `start_timer` Tool、`timer_task` 和离线回放处理器，计时器创建、状态查询、取消、事件分发和完成通知都走 SDK 托管任务运行时。
+Phase F 的目标是用真实业务能力验证 SDK `backend-task-core`：业务侧只实现 `start_timer` Tool 和 `timer_task`，计时器创建、状态查询、取消、事件分发和完成通知都走 SDK 托管任务运行时。
 
 本实现不在业务侧创建线程，不绕过 SDK 任务运行时。计时结束由离线回放时间轴或未来真实运行时事件触发。
 
@@ -12,15 +12,14 @@ Phase F 的目标是用真实业务能力验证 SDK `backend-task-core`：业务
 
 1. `capabilities/timer/server/tool.py`
 2. `capabilities/timer/server/task.py`
-3. `capabilities/timer/scenario.py`
-4. `capabilities/timer/README.md`
-5. `host/server/main.py`
+3. `capabilities/timer/README.md`
+4. `host/server/main.py`
 
 能力注册：
 
 1. `StartTimerTool` 注册为 `start_timer`。
 2. `TimerTask` 注册为 `timer_task`。
-3. `build_timer_scenario_handler()` 注册为 `timer` 场景处理器。
+3. 不再注册组件级场景处理器；设备级回放统一由 `glass-playback` 和 SDK 测试工具承载。
 
 ## 3. 业务行为
 
@@ -97,8 +96,11 @@ task -> runtime: complete(result)
 
 ## 7. 当前测试结果
 
-已通过新增场景定向回放：
+建议执行：
 
 ```bash
-组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
+python -m compileall capabilities host/server/main.py
+uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
+
+当前组件级场景回放入口已删除；后续统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。

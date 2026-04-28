@@ -32,6 +32,12 @@ openaiglass-sdk/glass-esp32/dependencies.lock
 openaiglass-for-blind/config/local_server.env
 openaiglass-for-blind/host/glass/config/local_build.env
 openaiglass-for-blind/host/phone/config/AppConfig.plist
+openaiglass-for-blind/testdata/audio/*
+!openaiglass-for-blind/testdata/audio/.gitkeep
+openaiglass-for-blind/testdata/image/*
+!openaiglass-for-blind/testdata/image/.gitkeep
+openaiglass-for-blind/testdata/video/*
+!openaiglass-for-blind/testdata/video/.gitkeep
 
 # iOS generated artifacts
 openaiglass-sdk/phone-ios/build*

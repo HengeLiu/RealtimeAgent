@@ -11,7 +11,6 @@ Phase L 的目标是在不改 SDK 框架的前提下，让 `navigation_task` 从
 1. `capabilities/navigation/server/task.py`
 2. `capabilities/navigation/server/tool.py`
 3. `capabilities/navigation/mcp/amap_mock_adapter.py`
-4. `capabilities/navigation/scenario.py`
 
 当前任务能力：
 

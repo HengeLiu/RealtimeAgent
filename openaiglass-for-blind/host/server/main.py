@@ -26,9 +26,8 @@ from capabilities.traffic_light.phone.processor import TrafficLightProcessor
 from capabilities.traffic_light.phone.task import TrafficLightPhoneTask
 from capabilities.traffic_light.server.task import TrafficLightTask
 from capabilities.traffic_light.server.tool import StartTrafficLightTool
-from host.server.debug_routes import bind_business_device_adapters, install_business_debug_routes
-from infra.config import ServerSettings
-from openaiglasses import OpenAIGlassesSDK
+from host.server.debug_routes import install_business_debug_routes
+from openaiglasses import OpenAIGlassesSDK, ServerSettings
 
 
 def create_sdk(*, include_traffic_light: bool = False) -> OpenAIGlassesSDK:
@@ -111,6 +110,5 @@ def create_server_handle(settings: ServerSettings):
     """创建基于盲人场景业务能力的真实服务端句柄。"""
 
     handle = create_full_sdk().build_server_handle(settings)
-    bind_business_device_adapters(handle.runtime)
     install_business_debug_routes(handle)
     return handle

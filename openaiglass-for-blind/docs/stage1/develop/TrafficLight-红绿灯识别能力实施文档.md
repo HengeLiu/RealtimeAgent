@@ -13,8 +13,8 @@
 1. `BaseTool` 可创建 SDK 托管任务。
 2. `BaseTask` 可通过 `context.device_group.start_phone_video_link()` 启动眼镜到手机的视频链路。
 3. `BaseTask` 可通过 `context.device_group.start_phone_task()` 启动手机侧任务。
-4. `BasePhoneTask` 和 `BasePhoneProcessor` 可用于离线回放和业务契约验证。
-5. `ScenarioRunner` 可按能力注册场景处理器，完成功能级回放测试。
+4. Python `BasePhoneTask` 和 `BasePhoneProcessor` 只用于 `phone-mock` 或契约验证，不作为真实 iPhone 插件主路径。
+5. 组件级 `ScenarioRunner` 已退出当前业务主路径，功能验证应优先使用 `glass-playback`、`phone-mock` 和 SDK 预检。
 
 本次新增的红绿灯能力沿用同一套 SDK 扩展方式，没有直接拼接 WebSocket 消息，也没有读写设备绑定表。
 
@@ -48,7 +48,7 @@
 2. `TrafficLightProcessor` 从离线回放文本中识别 `red/yellow/green/unknown`。
 3. 输出结构化事件 `phone.vision.traffic_light.result`。
 
-当前 Python 处理器是离线回放和契约验证用的最小实现，不代表真实视觉模型。真实 iOS 端插件样例已放在 `capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift`，并已按 `sdk-v2` 的 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 方式注册。
+当前 Python 处理器是 `phone-mock` 和契约验证用的最小实现，不代表真实视觉模型。真实 iOS 端插件样例已放在 `capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift`，并已按 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 方式注册。
 
 ### 3.4 宿主装配
 
@@ -58,9 +58,9 @@
 2. `TrafficLightTask`
 3. `TrafficLightProcessor`
 4. `TrafficLightPhoneTask`
-5. `traffic_light` 场景处理器
+5. iOS 业务插件样例
 
-为兼容 SDK 侧既有契约测试，`create_sdk()` 默认仍保持旧的找物体最小装配；真实服务端和场景回放使用 `create_full_sdk()` 装配当前业务工程全部能力。
+真实服务端通过 `create_full_sdk()` 装配当前业务工程全部能力；组件级场景处理器不再作为业务主路径。
 
 ## 4. 运行流程图
 
@@ -141,7 +141,7 @@ sdk -> glass: sensor.camera.stream.stop
 
 测试方法：
 
-1. 使用 `ScenarioRunner` 的能力回放机制，构造文本帧作为视觉输入。
+1. 使用 `phone-mock` 或 SDK 契约测试构造手机结果事件。
 2. 校验任务状态、任务结果、通知内容、眼镜命令和手机命令。
 
 预期结果：
@@ -161,7 +161,7 @@ sdk -> glass: sensor.camera.stream.stop
 回归命令：
 
 ```bash
-组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
+python -m compileall capabilities host/server/main.py
 uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
 
@@ -192,15 +192,13 @@ uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 
 ```bash
 python -m compileall capabilities host/server/main.py
-组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
 ```
 
 结果：
 
 1. 编译检查通过。
-2. 场景校验通过：12 / 12。
-3. 场景回放通过：12 / 12。
-4. SDK 预检通过：9 / 9。
+2. 组件级场景回放入口已删除；当前统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。
+3. 完整视频链路实测等待 SDK 标准装配 `DeviceGroupContext.start_phone_video_link(...)`。
 
 ## 10. 当前实现进展
 

@@ -2,11 +2,11 @@
   "device_type": "phone",
   "device_id": "phone-001",
   "pair_token": "pair-phone-token",
-  "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+  "control_ws_url": "ws://172.16.213.59:8765/ws/control",
   "camera_sink": {
     "enabled": true,
     "bind_host": "0.0.0.0",
-    "public_host": "127.0.0.1",
+    "public_host": "172.16.213.59",
     "port": 0,
     "path": "/ws/camera",
     "save_dir": "openaiglass-for-blind/runs/phone-mock/phone-001/camera"

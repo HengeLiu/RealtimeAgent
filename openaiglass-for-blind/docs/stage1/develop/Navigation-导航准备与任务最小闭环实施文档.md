@@ -113,7 +113,7 @@ tool --> agent: route + task_id
 
 ```bash
 python -m compileall capabilities host/server/main.py
-组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
+uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
 
 ## 6. 跨设备联调方案
@@ -136,8 +136,8 @@ python -m compileall capabilities host/server/main.py
 2. `MockAmapMcpAdapter`。
 3. `PrepareNavigationTool`。
 4. `NavigationTask`。
-5. 宿主装配和场景回放处理器。
-6. 六个离线回放场景。
+5. 宿主装配。
+6. 设备级回放和 SDK 预检说明。
 7. POI 候选、路线确认输入和视觉事件最小策略。
 
 未完成：
@@ -154,14 +154,11 @@ python -m compileall capabilities host/server/main.py
 
 ```bash
 python -m compileall capabilities host/server/main.py
-组件级场景回放入口已删除；当前统一使用 `glass-playback` 设备级数据回放。
 uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
 
 结果：
 
 1. 编译检查通过。
-2. 场景校验通过：21 / 21。
-3. 场景回放通过：21 / 21。
-4. 沙箱可执行预检通过：6 / 6，包含编译、入口、边界、场景、契约和兼容性检查。
-5. 完整预检中的本地端口健康检查、SDK 包构建和部分核心 pytest 需要写父级 SDK 目录或绑定本地端口，本轮在当前沙箱下无法完成，未发现业务能力实现导致的 SDK 硬阻塞。
+2. 组件级场景回放入口已删除；当前统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。
+3. 当前视频链路公开装配能力仍是 SDK 阻塞点，详见 [架构阻塞点说明与改进建议.md](./架构阻塞点说明与改进建议.md)。
