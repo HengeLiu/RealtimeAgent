@@ -147,32 +147,6 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         sdk_tools = self._tool_registry.list_sdk_tools(allowed_names=allowed_tool_names)
         streaming_mode = progress_callback is not None or reply_text_delta_callback is not None
-        compatibility_error = self._streaming_tools_compatibility_error(
-            model_name=self._settings.agent_model_name,
-            tool_count=len(sdk_tools),
-            streaming_mode=streaming_mode,
-        )
-        if compatibility_error is not None:
-            log_error(
-                self._logger,
-                compatibility_error.message,
-                LogContext(
-                    device_id=turn.device_id,
-                    session_id=turn.session_id,
-                    message_id=turn.turn_id,
-                    fields=compatibility_error.details,
-                ),
-            )
-            return self._attach_capability_outputs(
-                result=self._build_failure_result(
-                    turn=turn,
-                    message=compatibility_error.message,
-                    traces=capability_traces,
-                    error=compatibility_error,
-                ),
-                context=tool_context,
-            )
-
         agent = Agent(
             name="OpenAIGlassesAgent",
             instructions=instructions,
@@ -676,40 +650,6 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             return text if isinstance(text, str) else ""
 
         return ""
-
-    @staticmethod
-    def _streaming_tools_compatibility_error(
-        *,
-        model_name: str,
-        tool_count: int,
-        streaming_mode: bool,
-    ):
-        """检查当前模型是否适合 SDK 的流式工具调用模式。
-
-        主要逻辑：
-        1. 语音链路需要流式文本增量进入 TTS，因此会使用流式 Agent。
-        2. SDK 会把公开 Tool 暴露给模型，当前等价于 `stream=True + tools`。
-        3. 对已知不支持该组合的模型直接给出结构化错误，避免设备侧等到超时。
-        """
-
-        model = model_name.strip().lower()
-        incompatible_models = {"qwen-turbo", "qwen-plus", "qwen-max"}
-        if not streaming_mode or tool_count <= 0 or model not in incompatible_models:
-            return None
-        return build_error(
-            ErrorCode.INVALID_CONFIG,
-            (
-                f"AGENT_MODEL_NAME={model_name} 不适合当前语音链路："
-                "DashScope OpenAI-compatible 的该模型不支持 stream=True 与 tools 同时使用。"
-                "请改用支持流式工具调用的模型，或等待 SDK 增加非流式工具模式。"
-            ),
-            details={
-                "agent_model_name": model_name,
-                "streaming_mode": streaming_mode,
-                "tool_count": tool_count,
-                "suggested_action": "恢复 AGENT_MODEL_NAME=qwen3.6-plus 或使用支持 stream+tools 的模型",
-            },
-        )
 
     @staticmethod
     def _read_event_value(source: object, key: str) -> object:

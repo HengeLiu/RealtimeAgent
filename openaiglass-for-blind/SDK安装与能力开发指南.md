@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v24`。本版本在 `sdk-v23` 基础上补齐 Agent 模型调用前后的可观测日志，并对 `qwen-turbo`、`qwen-plus`、`qwen-max` 这类不适合当前“流式 Agent + SDK Tools”组合的模型做启动前结构化失败，避免设备侧只看到超时。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v25`。本版本在 `sdk-v24` 基础上撤销对 `qwen-turbo`、`qwen-plus`、`qwen-max` 的硬编码拦截，模型兼容性不再靠 SDK 内置黑名单判断；SDK 保留 Agent 模型调用前后的可观测日志和流式调用超时保护。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -463,7 +463,7 @@ uv run openaiglass.glass.start \
 
 `sdk-v22` 起，服务端在 `VoiceRuntime` 首次收到模型文本增量时会打印 `大模型返回首个 token`，并携带 `first_token_latency_ms`、`segment_id`、`input_stream_id` 和 `token_preview`。该日志用于判断 ASR 后到模型首 token 的耗时，不要求业务 Tool 自行打点。
 
-`sdk-v24` 起，服务端还会在音频段进入 ASR 前、ASR 完成准备进入 agent-core 前、agent-core 即将调用模型前打印 INFO 日志。`AGENT_MODEL_NAME=qwen-turbo`、`qwen-plus`、`qwen-max` 在当前语音链路中会直接返回结构化配置错误，因为 SDK 语音链路需要 `stream=True + tools` 才能同时支持流式 TTS 和 Tool/Task 调用，而这些模型在 DashScope OpenAI-compatible 接口下不适合该组合。开发者应恢复 `AGENT_MODEL_NAME=qwen3.6-plus`，或等待 SDK 后续增加非流式工具模式。
+`sdk-v24` 起，服务端还会在音频段进入 ASR 前、ASR 完成准备进入 agent-core 前、agent-core 即将调用模型前打印 INFO 日志。`sdk-v25` 起，SDK 不再内置 `qwen-turbo` 等模型黑名单；如果某个模型在当前 `stream=True + tools` 链路中超时或报错，应以服务端 ERROR 日志、`VOICE_MODEL_TIMEOUT_MS` 和 `/api/agent/session` 中的 `model_request` 为准定位，而不是由业务代码绕过 SDK。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
