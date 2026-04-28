@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v20`。本版本在 `sdk-v19` 基础上补齐真实服务端的视频链路装配、公开 MCP Adapter 类型、phone-mock Python 插件加载边界，以及 `glass-playback` 对全双工实时语音打开握手的支持。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v21`。本版本在 `sdk-v20` 基础上把 `glass-playback` 的播放音频保存改为后台异步任务，避免阻塞控制消息读取循环，并新增设备级服务端业务产物断言。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -1763,6 +1763,15 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
     "vibrate": {
       "mode": "record"
     }
+  },
+  "assertions": {
+    "server_artifacts": [
+      {
+        "label": "业务结果",
+        "path": "runs/server/{session_id}/result.json",
+        "min_size_bytes": 2
+      }
+    ]
   }
 }
 ```
@@ -1775,6 +1784,8 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 4. `startup.wait_for_binding=true` 表示等设备绑定完成后再发送触发音频；需要纯 glass-only 回放时可以关闭。
 5. `sensors` 只描述虚拟眼镜能读到什么输入。
 6. `actuators` 只描述虚拟眼镜收到命令后如何执行或记录。
+7. `sdk-v21` 起，`audio_play.save_audio_to` 会在后台线程下载 `/stream.wav` 并保存，不会阻塞 `sensor.camera.capture` 等后续控制消息。
+8. `assertions.server_artifacts` 用于断言真实服务端业务产物是否生成；路径支持 `{session_id}` 和 `{device_id}` 占位符。相对路径中 `runs/` 开头时按业务工程根目录解析。
 
 ### 10.5 数据资产格式
 
@@ -1867,7 +1878,23 @@ uv run python -m devtools.audio_sample_batch_runner \
 | `assertion_failures` | 失败断言列表。 |
 | `expectations` | 当前样例实际使用的断言配置。 |
 
-当前断言能力先覆盖音频样例批量回归；`glass-playback` 的事件日志和执行器日志仍主要用于人工排障，后续会继续扩展到设备级配置内断言。
+`sdk-v21` 起，`glass-playback` 支持在设备配置中声明最小设备级断言：
+
+```json
+{
+  "assertions": {
+    "server_artifacts": [
+      {
+        "label": "业务结果",
+        "path": "runs/server/{session_id}/result.json",
+        "min_size_bytes": 2
+      }
+    ]
+  }
+}
+```
+
+这类断言只检查真实服务端已经生成的业务产物文件，不调用业务组件、不伪造 Tool 或 Task 状态。CLI 输出会包含 `assertions_ok` 和 `assertion_failures`；存在失败断言时退出码为 `1`。这能覆盖“回放端事件日志正常，但服务端业务结果没有真正生成”的验收缺口。
 
 重点看这些内容：
 

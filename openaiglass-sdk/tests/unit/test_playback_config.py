@@ -286,3 +286,172 @@ def test_playback_camera_stream_sends_configured_frames(tmp_path: Path, monkeypa
     assert frame.header["stream_id"] == "camera_stream_001"
     assert frame.header["codec"] == "jpeg"
     assert frame.payload == b"frame-001"
+
+
+def test_playback_audio_save_does_not_block_camera_capture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试目标：保存播放音频时不阻塞抓拍控制消息。
+
+    测试方法：
+    1. 配置 `actuators.audio_play.save_audio_to`，并把 `/stream.wav` 下载替换成可控阻塞响应。
+    2. 先处理 `actuator.audio.play`，确认保存线程已经开始但控制处理立即返回。
+    3. 在下载仍未完成时处理 `sensor.camera.capture`。
+
+    预期结果：
+    1. 抓拍回包 `sensor.camera.captured` 会先于下载结束发出。
+    2. 允许下载继续后，音频文件会落盘到配置目录。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    image_path = app_root / "testdata/image/cup.jpg"
+    _write_wav(audio_path)
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"fake-jpeg-bytes")
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "glass.audio_capture.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "format": "wav",
+                    },
+                    "camera_capture": {
+                        "path": "testdata/image/cup.jpg",
+                        "mime_type": "image/jpeg",
+                    },
+                },
+                "actuators": {
+                    "audio_play": {
+                        "mode": "record_and_auto_finish",
+                        "save_audio_to": "runs/playback/glass-playback-001/audio",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    download_started = threading.Event()
+    allow_download = threading.Event()
+
+    class _BlockingAudioResponse:
+        """模拟会阻塞的 `/stream.wav` 下载响应。"""
+
+        def __enter__(self) -> "_BlockingAudioResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            download_started.set()
+            assert allow_download.wait(timeout=1)
+            return b"RIFF-fake-wave"
+
+    def _fake_urlopen(url: str, *, timeout: float) -> _BlockingAudioResponse:
+        assert "/stream.wav" in url
+        assert timeout > 0
+        return _BlockingAudioResponse()
+
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.urlopen", _fake_urlopen)
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    control = _FakeControl()
+    device._session_id = "sess_001"  # noqa: SLF001 - 单元测试直接验证控制消息时序
+
+    device._handle_control_message(  # noqa: SLF001 - 单元测试直接验证设备协议回包
+        control,
+        {
+            "name": "actuator.audio.play",
+            "session_id": "sess_001",
+            "stream_id": "stream_audio_001",
+            "payload": {"stream_id": "stream_audio_001"},
+        },
+    )
+    assert download_started.wait(timeout=1)
+
+    device._handle_control_message(  # noqa: SLF001 - 单元测试直接验证设备协议回包
+        control,
+        {
+            "name": "sensor.camera.capture",
+            "session_id": "sess_001",
+            "payload": {"request_id": "capture_001"},
+        },
+    )
+
+    names_before_download_finished = [json.loads(text)["name"] for text in control.sent_texts]
+    assert "sensor.camera.captured" in names_before_download_finished
+
+    allow_download.set()
+    device._join_audio_save_threads(timeout_seconds=1)  # noqa: SLF001
+    saved_audio = app_root / "runs/playback/glass-playback-001/audio/stream_audio_001.wav"
+    assert saved_audio.read_bytes() == b"RIFF-fake-wave"
+
+
+def test_playback_asserts_server_artifact_generated(tmp_path: Path) -> None:
+    """测试目标：设备级回放可以断言服务端业务产物已生成。
+
+    测试方法：
+    1. 在配置中声明 `assertions.server_artifacts`。
+    2. 先创建满足大小要求的产物，再执行断言。
+    3. 删除产物后再次执行断言。
+
+    预期结果：
+    1. 产物存在时没有断言失败。
+    2. 产物不存在时返回包含产物标签的失败信息。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    artifact_path = app_root / "runs/server/sess_001/result.json"
+    _write_wav(audio_path)
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text('{"ok": true}', encoding="utf-8")
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "glass.assertion.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "format": "wav",
+                    }
+                },
+                "assertions": {
+                    "server_artifacts": [
+                        {
+                            "label": "业务结果",
+                            "path": "runs/server/{session_id}/result.json",
+                            "min_size_bytes": 2,
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    device._session_id = "sess_001"  # noqa: SLF001
+
+    assert device._evaluate_assertions() == []  # noqa: SLF001
+
+    artifact_path.unlink()
+    failures = device._evaluate_assertions()  # noqa: SLF001
+    assert len(failures) == 1
+    assert "业务结果" in failures[0]

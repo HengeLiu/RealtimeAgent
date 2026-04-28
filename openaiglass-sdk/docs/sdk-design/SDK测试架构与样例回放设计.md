@@ -16,13 +16,13 @@
 2. `glass-playback` 在开发者视角里是一台独立设备，而不是测试 runner 内部的 mock 对象。
 3. 服务端、业务 SDK、设备绑定、语音链路、Tool、Task、通知、控制协议全部走真实实现。
 4. 每次回放都必须由配置中的触发音频驱动，模拟“眼镜端唤醒成功后开始录音并向服务端推流”的过程。
-5. 开发者通过 actuator 输出、服务端日志、真实 iOS 日志和运行态接口自行判断结果。
+5. 开发者通过 actuator 输出、服务端日志、真实 iOS 日志、运行态接口和设备级产物断言判断结果。
 
 ## 3. 非目标
 
 1. 不支持组件级场景回放。
 2. 不支持 `ScenarioRunner` 式的 manifest 执行。
-3. 不支持业务断言检查。
+3. 不支持绕过真实服务端的业务断言检查；只支持对真实服务端已生成产物做设备级断言。
 4. 不支持批量测试。
 5. 不支持绕过真实服务端直接调用业务模块。
 6. 不设计手机虚拟设备；需要手机能力时使用真实 iOS phone。
@@ -87,7 +87,7 @@ real iOS phone, when required
 13. `glass-playback` 接收服务端发给 glass 的控制消息，并按 actuator strategy 记录、保存或自动回执。
 14. 开发者查看 actuator 输出、日志和 runtime snapshot，判断本次业务行为是否符合预期。
 
-退出码只表示 `glass-playback` 工具本身是否启动、连接、读配置和传输成功，不代表业务结果通过或失败。
+退出码同时表示 `glass-playback` 工具本身是否启动、连接、读配置和传输成功，以及配置中的设备级产物断言是否通过。未配置 `assertions` 时，退出码不代表业务结果通过或失败。
 
 ## 7. 状态机
 
@@ -107,7 +107,7 @@ real iOS phone, when required
 
 ## 8. 配置文件设计
 
-配置文件描述一台虚拟眼镜的设备身份、输入数据和执行器行为。它不是业务测试脚本，不包含 `expected` 断言。
+配置文件描述一台虚拟眼镜的设备身份、输入数据、执行器行为和最小设备级断言。它不是组件级业务测试脚本，不包含 `expected` 断言。
 
 示例：
 
@@ -159,6 +159,15 @@ real iOS phone, when required
   "outputs": {
     "event_log": "runs/playback/glass-playback-001/events.jsonl",
     "actuator_log": "runs/playback/glass-playback-001/actuators.jsonl"
+  },
+  "assertions": {
+    "server_artifacts": [
+      {
+        "label": "业务结果",
+        "path": "runs/server/{session_id}/result.json",
+        "min_size_bytes": 2
+      }
+    ]
   }
 }
 ```
@@ -267,7 +276,7 @@ MP4 由 `glass-playback` 在本机通过 `ffmpeg` 解为 JPEG 帧后，再按真
 | `vibrate` | `record` | 记录震动命令。 |
 | `display` | `record` | 如果未来 glass 协议出现显示类命令，只记录命令。 |
 
-执行器输出是开发者判断结果的主要依据之一，但 SDK 当前不提供断言检查。
+执行器输出是开发者判断结果的主要依据之一。需要机器判断时，应先使用 `assertions.server_artifacts` 断言真实服务端业务产物已经生成；更细粒度的业务语义断言仍放在服务端回归工具或业务测试中完成。
 
 ## 12. 日志与输出
 
@@ -361,6 +370,7 @@ openaiglass-sdk/
 7. 可以响应 `sensor.camera.capture`，按配置图片回传 `sensor.camera.captured`。
 8. 可以响应 `sensor.camera.stream.start/stop`，按配置图片帧序列或 MP4 向真实 iOS phone 推送 `MediaFrame(camera_frame)`。
 9. 可以记录服务端下发的 audio play 和 vibrate 命令。
-10. 可以保存服务端下发的播放音频流。
-11. 不提供 `expected` 字段、不做断言、不做批量运行。
-12. SDK 指南、测试文档和业务 README 不再引导开发者使用组件级场景回放。
+10. 可以异步保存服务端下发的播放音频流，保存过程不阻塞后续控制消息。
+11. 可以通过 `assertions.server_artifacts` 断言真实服务端业务产物已生成。
+12. 不提供 `expected` 字段、不做组件级断言、不做批量运行。
+13. SDK 指南、测试文档和业务 README 不再引导开发者使用组件级场景回放。

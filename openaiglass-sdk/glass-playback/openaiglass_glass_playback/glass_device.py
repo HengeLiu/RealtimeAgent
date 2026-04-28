@@ -18,7 +18,7 @@ from protocol.messages import Endpoint
 from protocol.utils import create_control_message
 
 from openaiglass_glass_playback.assets import CameraFrameAsset, load_camera_frames
-from openaiglass_glass_playback.config import PlaybackConfig
+from openaiglass_glass_playback.config import PlaybackConfig, ServerArtifactCheck
 from openaiglass_glass_playback.ws_client import WsClient
 
 
@@ -29,6 +29,7 @@ class PlaybackResult:
     ok: bool
     event_count: int
     actuator_count: int
+    assertion_failures: list[str]
 
 
 class PlaybackGlassDevice:
@@ -46,6 +47,9 @@ class PlaybackGlassDevice:
         self._session_id = ""
         self._camera_stream_stops: dict[str, threading.Event] = {}
         self._camera_stream_threads: dict[str, threading.Thread] = {}
+        self._audio_save_threads: list[threading.Thread] = []
+        self._audio_save_lock = threading.Lock()
+        self._output_lock = threading.Lock()
 
     def run(self) -> PlaybackResult:
         """启动虚拟设备并执行一次触发音频回放。"""
@@ -77,10 +81,17 @@ class PlaybackGlassDevice:
                 self._stream_trigger_audio(control)
 
             self._drain_control_messages(control)
-            return PlaybackResult(ok=True, event_count=self._event_count, actuator_count=self._actuator_count)
+            assertion_failures = self._evaluate_assertions()
+            return PlaybackResult(
+                ok=not assertion_failures,
+                event_count=self._event_count,
+                actuator_count=self._actuator_count,
+                assertion_failures=assertion_failures,
+            )
         finally:
             self._heartbeat_stop.set()
             self._stop_camera_streams()
+            self._join_audio_save_threads(timeout_seconds=2)
             if heartbeat_thread is not None:
                 heartbeat_thread.join(timeout=2)
             control.close()
@@ -518,7 +529,7 @@ class PlaybackGlassDevice:
             mode = str(audio_play.get("mode") if isinstance(audio_play, dict) else "record").strip() or "record"
             stream_id = str(message.get("stream_id") or payload.get("stream_id") or "").strip()
             session_id = str(message.get("session_id") or self._session_id)
-            self._save_playback_audio(stream_id)
+            self._schedule_playback_audio_save(stream_id)
             if mode != "record_and_auto_finish":
                 return
             self._send_control(
@@ -538,7 +549,24 @@ class PlaybackGlassDevice:
                 stream_id=stream_id,
             )
 
-    def _save_playback_audio(self, stream_id: str) -> None:
+    def _schedule_playback_audio_save(self, stream_id: str) -> None:
+        """把播放音频保存任务放入后台线程。
+
+        主要逻辑：
+        1. 只在配置了 `actuators.audio_play.save_audio_to` 且存在 `stream_id` 时启动。
+        2. 下载 `/stream.wav` 的网络和文件写入都放在线程里执行。
+        3. 控制消息循环立即返回，避免阻塞后续 `sensor.camera.capture`。
+
+        参数：
+        1. `stream_id`：服务端下发的播放流编号。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 后台下载失败只写入事件日志，不向控制消息循环抛出异常。
+        """
+
         if not stream_id:
             return
         audio_play = self.config.actuators.get("audio_play")
@@ -547,6 +575,32 @@ class PlaybackGlassDevice:
         save_dir = str(audio_play.get("save_audio_to") or "").strip()
         if not save_dir:
             return
+        thread = threading.Thread(
+            target=self._save_playback_audio,
+            args=(stream_id, save_dir),
+            name=f"{self.config.device_id}-audio-save-{stream_id}",
+            daemon=True,
+        )
+        with self._audio_save_lock:
+            self._audio_save_threads = [item for item in self._audio_save_threads if item.is_alive()]
+            self._audio_save_threads.append(thread)
+        thread.start()
+        self._log_event("actuator.audio.save_scheduled", {"stream_id": stream_id})
+
+    def _save_playback_audio(self, stream_id: str, save_dir: str) -> None:
+        """下载并保存服务端下行播放音频。
+
+        参数：
+        1. `stream_id`：服务端下发的播放流编号。
+        2. `save_dir`：保存目录，可以是绝对路径，也可以相对业务工程根目录。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 下载或写入失败时记录 `actuator.audio.save_failed` 事件。
+        """
+
         path = Path(save_dir)
         if not path.is_absolute():
             app_root = self._find_app_root() or Path.cwd()
@@ -558,9 +612,71 @@ class PlaybackGlassDevice:
                 f"{self._http_base_url()}/stream.wav?{urlencode({'device_id': self.config.device_id, 'stream_id': stream_id})}",
                 timeout=self.timeout_seconds,
             ) as response:
-                target.write_bytes(response.read())
+                payload = response.read()
+                target.write_bytes(payload)
+            self._log_event(
+                "actuator.audio.saved",
+                {"stream_id": stream_id, "path": str(target), "bytes": len(payload)},
+            )
         except Exception as exc:  # pragma: no cover - 外部服务错误只记录
             self._log_event("actuator.audio.save_failed", {"stream_id": stream_id, "error": str(exc)})
+
+    def _join_audio_save_threads(self, *, timeout_seconds: float) -> None:
+        """等待后台音频保存线程在有限时间内收尾。"""
+
+        deadline = time.monotonic() + max(timeout_seconds, 0)
+        with self._audio_save_lock:
+            threads = list(self._audio_save_threads)
+        for thread in threads:
+            remaining = max(deadline - time.monotonic(), 0)
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
+        with self._audio_save_lock:
+            self._audio_save_threads = [item for item in self._audio_save_threads if item.is_alive()]
+
+    def _evaluate_assertions(self) -> list[str]:
+        """执行设备级回放断言。
+
+        主要逻辑：
+        1. 当前先检查配置声明的服务端业务产物是否生成。
+        2. 产物路径支持 `{session_id}` 和 `{device_id}` 占位符。
+        3. 所有失败都会同时返回给 CLI 并写入事件日志。
+
+        返回值：
+        1. 断言失败信息列表；空列表表示断言全部通过。
+        """
+
+        failures: list[str] = []
+        for artifact in self.config.assertions.server_artifacts:
+            failure = self._evaluate_server_artifact(artifact)
+            if failure:
+                failures.append(failure)
+                self._log_event("playback.assertion.failed", {"message": failure})
+            else:
+                self._log_event("playback.assertion.succeeded", {"label": artifact.label, "path": str(artifact.path)})
+        return failures
+
+    def _evaluate_server_artifact(self, artifact: ServerArtifactCheck) -> str | None:
+        """检查单个服务端业务产物文件是否生成。"""
+
+        try:
+            path = Path(
+                str(artifact.path).format(
+                    session_id=self._session_id,
+                    device_id=self.config.device_id,
+                )
+            )
+        except KeyError as exc:
+            return f"{artifact.label}: 未知路径占位符 {exc}"
+        if not path.exists():
+            return f"{artifact.label}: 产物不存在 {path}"
+        if not path.is_file():
+            return f"{artifact.label}: 产物不是文件 {path}"
+        size = path.stat().st_size
+        if size < artifact.min_size_bytes:
+            return f"{artifact.label}: 产物过小 {path} size={size} min_size_bytes={artifact.min_size_bytes}"
+        return None
 
     def _resolve_sensor_path(self, value: object, *, field_name: str) -> Path:
         raw_path = str(value or "").strip()
@@ -609,18 +725,20 @@ class PlaybackGlassDevice:
         return None
 
     def _log_event(self, event_type: str, payload: dict[str, object] | None = None) -> None:
-        self._event_count += 1
-        outputs = self.config.outputs
-        if outputs is None:
-            return
-        self._append_jsonl(outputs.event_log, {"ts": int(time.time() * 1000), "type": event_type, "payload": payload or {}})
+        with self._output_lock:
+            self._event_count += 1
+            outputs = self.config.outputs
+            if outputs is None:
+                return
+            self._append_jsonl(outputs.event_log, {"ts": int(time.time() * 1000), "type": event_type, "payload": payload or {}})
 
     def _log_actuator(self, name: str, payload: dict[str, object]) -> None:
-        self._actuator_count += 1
-        outputs = self.config.outputs
-        if outputs is None:
-            return
-        self._append_jsonl(outputs.actuator_log, {"ts": int(time.time() * 1000), "name": name, "payload": payload})
+        with self._output_lock:
+            self._actuator_count += 1
+            outputs = self.config.outputs
+            if outputs is None:
+                return
+            self._append_jsonl(outputs.actuator_log, {"ts": int(time.time() * 1000), "name": name, "payload": payload})
 
     @staticmethod
     def _append_jsonl(path: Path, data: dict[str, object]) -> None:

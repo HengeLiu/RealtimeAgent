@@ -40,6 +40,22 @@ class OutputConfig:
 
 
 @dataclass(slots=True)
+class ServerArtifactCheck:
+    """服务端业务产物断言配置。"""
+
+    path: Path
+    min_size_bytes: int = 1
+    label: str = ""
+
+
+@dataclass(slots=True)
+class AssertionConfig:
+    """设备级回放断言配置。"""
+
+    server_artifacts: list[ServerArtifactCheck] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class PlaybackConfig:
     """`glass-playback` 设备配置。"""
 
@@ -55,6 +71,7 @@ class PlaybackConfig:
     sensors: dict[str, Any] = field(default_factory=dict)
     actuators: dict[str, Any] = field(default_factory=dict)
     outputs: OutputConfig | None = None
+    assertions: AssertionConfig = field(default_factory=AssertionConfig)
 
     @classmethod
     def load(cls, path: str | Path, *, repo_root: str | Path = ".") -> "PlaybackConfig":
@@ -111,6 +128,11 @@ class PlaybackConfig:
             app_root=app_root,
             device_id=device_id,
         )
+        assertions = _load_assertions(
+            raw.get("assertions"),
+            config_path=config_path,
+            app_root=app_root,
+        )
 
         return cls(
             config_path=config_path,
@@ -125,6 +147,7 @@ class PlaybackConfig:
             sensors=sensors,
             actuators=actuators,
             outputs=outputs,
+            assertions=assertions,
         )
 
 
@@ -184,6 +207,50 @@ def _load_outputs(raw: object, *, config_path: Path, app_root: Path, device_id: 
         app_root=app_root,
     )
     return OutputConfig(event_log=event_log, actuator_log=actuator_log)
+
+
+def _load_assertions(raw: object, *, config_path: Path, app_root: Path) -> AssertionConfig:
+    """加载设备级回放断言配置。
+
+    主要逻辑：
+    1. 当前先支持服务端业务产物文件断言。
+    2. 相对路径按输出文件相同规则解析，`runs/` 开头时相对业务工程根目录。
+    3. 产物路径允许保留 `{session_id}`、`{device_id}` 占位符，由运行时替换。
+
+    参数：
+    1. `raw`：配置文件中的 `assertions` 字段。
+    2. `config_path`：当前配置文件路径。
+    3. `app_root`：业务工程根目录。
+
+    返回值：
+    1. `AssertionConfig`：设备级断言配置。
+
+    异常情况：
+    1. `server_artifacts` 不是数组、数组项不是对象或缺少 path 时抛出 `ValueError`。
+    """
+
+    data = raw if isinstance(raw, dict) else {}
+    artifacts_raw = data.get("server_artifacts", [])
+    if artifacts_raw is None:
+        artifacts_raw = []
+    if not isinstance(artifacts_raw, list):
+        raise ValueError("assertions.server_artifacts 必须是数组")
+
+    artifacts: list[ServerArtifactCheck] = []
+    for index, item in enumerate(artifacts_raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"assertions.server_artifacts[{index}] 必须是 JSON object")
+        raw_path = str(item.get("path") or "").strip()
+        if not raw_path:
+            raise ValueError(f"assertions.server_artifacts[{index}].path 不能为空")
+        artifacts.append(
+            ServerArtifactCheck(
+                path=_resolve_output_path(raw_path, config_path=config_path, app_root=app_root),
+                min_size_bytes=max(int(item.get("min_size_bytes", 1)), 0),
+                label=str(item.get("label") or raw_path),
+            )
+        )
+    return AssertionConfig(server_artifacts=artifacts)
 
 
 def _validate_optional_sensor_assets(

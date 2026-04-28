@@ -28,6 +28,8 @@ def run_playback(args: argparse.Namespace) -> int:
                 "device_id": config.device_id,
                 "event_count": result.event_count,
                 "actuator_count": result.actuator_count,
+                "assertions_ok": not result.assertion_failures,
+                "assertion_failures": result.assertion_failures,
             },
             ensure_ascii=False,
         )
