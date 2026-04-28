@@ -226,3 +226,65 @@ bash script/run_sdk_live_check.sh --report logs/sdk-live-check-stage2-final.json
 8. 文档与当前代码边界一致。
 
 如果上述任一项失败，第二期不能判定为 100% 完成。
+
+## 9. sdk-v13 后续四项专项验收补充
+
+用户重新排序后的后续工作只验收以下四项，其他欠缺项暂时不纳入本轮验收。
+
+### 9.1 真 iOS 手机视觉资源管理
+
+验收目标：
+
+1. 真 iOS 运行时具备统一 `vision_policy` 解释和资源协调入口。
+2. Swift 业务插件不需要自行实现帧率限制、模型并发控制、抢占和功耗降级。
+3. 服务端能收到 `vision.resource.denied`、`vision.task.preempted`、`vision.task.degraded` 或 `vision.task.overloaded` 等结构化事件。
+
+建议验收命令：
+
+```bash
+xcodebuild test -project openaiglass-sdk/phone-ios/GlassesVideoReceiver.xcodeproj -scheme GlassesVideoReceiver -destination 'platform=iOS Simulator,name=iPhone 16'
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run --with pytest python -m pytest openaiglass-sdk/tests/unit -q
+```
+
+### 9.2 统一播放仲裁和用户打断
+
+验收目标：
+
+1. 普通 Agent 回复、Task 通知、手机视觉告警和用户打断都进入同一个播放仲裁入口。
+2. 高优先级告警和用户打断可以终止当前播报，并留下可解释决策日志。
+3. 运行态快照能展示当前播放 lease、队列、最近仲裁决策和最近用户打断。
+
+建议验收命令：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run --with pytest python -m pytest openaiglass-sdk/tests/unit/test_voice_runtime.py openaiglass-sdk/tests/unit/test_sdk_phase_two.py -q
+```
+
+### 9.3 账号权限、组织管理和配置中心
+
+验收目标：
+
+1. 本地默认账号模式保持零额外配置。
+2. 跨账号、跨组织或无权限访问被拒绝，并写入审计事件。
+3. SDK 策略配置可以通过 `ConfigProvider` 读取，且运行态快照包含配置版本。
+
+建议验收命令：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run --with pytest python -m pytest openaiglass-sdk/tests/unit/test_sdk_phase_two.py -q
+```
+
+### 9.4 SQLite 任务持久化
+
+验收目标：
+
+1. SQLite 文件库存储任务、事件和租约。
+2. 重启后任务快照和事件幂等记录可恢复。
+3. 单机多进程或多 manager 使用同一 SQLite 文件时，租约能避免同一任务被重复恢复执行。
+4. 文件型持久化仍兼容，不因 SQLite 引入而退化。
+
+建议验收命令：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run --with pytest python -m pytest openaiglass-sdk/tests/unit/test_sdk_phase_two.py -q
+```

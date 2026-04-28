@@ -9,9 +9,14 @@
 | [stage2](./stage2) | SDK 产品化阶段计划、验收方案和回归说明。 |
 | [experimental](./experimental) | SDK 相关调研、Spike 和实验 demo。 |
 
+当前高优先级计划：
+
+1. [SDK 剩余高优先级能力补全工作计划](./stage2/plan/SDK剩余高优先级能力补全工作计划.md)
+
 迭代记录：
 
 1. [SDK v1 迭代记录](./stage2/iteration-v1.md)
 2. [SDK v2 迭代记录](./stage2/iteration-v2.md)
+3. [SDK v3-v12 迭代记录](./stage2/)
 
 盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。
