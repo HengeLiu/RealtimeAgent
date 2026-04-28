@@ -95,6 +95,7 @@ class AgentTurnRuntimeFactory:
             "instructions": instructions,
             "active_skills": active_skill_names,
             "allowed_tool_names": sorted(allowed_tool_names) if allowed_tool_names is not None else None,
+            "extra_body": {"enable_thinking": False},
             "messages": [
                 {"role": "system", "content": instructions},
                 *run_input,
@@ -122,6 +123,7 @@ class OpenAIAgentsSdkBridge:
         self._run_config_cls = None
         self._runner_cls = None
         self._message_output_item_cls = None
+        self._model_settings_cls = None
         self._provider = None
         self._provider_key: tuple[str, str] | None = None
         self._last_import_error: ImportError | None = None
@@ -164,6 +166,7 @@ class OpenAIAgentsSdkBridge:
         return self._run_config_cls(
             model=self._settings.agent_model_name,
             model_provider=self._get_provider(),
+            model_settings=self._model_settings_cls(extra_body={"enable_thinking": False}),
             tracing_disabled=True,
             workflow_name="OpenAI Glasses Agent Loop",
             group_id=session_id,
@@ -219,12 +222,20 @@ class OpenAIAgentsSdkBridge:
         except ImportError:
             class MessageOutputItem:  # noqa: N801 - 兼容测试替身或旧版 SDK 结构
                 pass
+        try:
+            from agents.model_settings import ModelSettings
+        except ImportError:
+            class ModelSettings:  # noqa: N801 - 兼容测试替身或旧版 SDK 结构
+                def __init__(self, *args, **kwargs) -> None:
+                    self.args = args
+                    self.kwargs = kwargs
 
         self._agent_cls = Agent
         self._multi_provider_cls = MultiProvider
         self._run_config_cls = RunConfig
         self._runner_cls = Runner
         self._message_output_item_cls = MessageOutputItem
+        self._model_settings_cls = ModelSettings
         self._last_import_error = None
 
     def _get_provider(self):
@@ -900,6 +911,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 },
             ],
             stream=True,
+            extra_body={"enable_thinking": False},
             timeout=self._settings.voice_model_timeout_ms / 1000,
         )
         log_debug(
