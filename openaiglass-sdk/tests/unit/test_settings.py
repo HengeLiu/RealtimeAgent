@@ -76,6 +76,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         os.environ["SERVER_DEVICE_ID"] = "server-phase-b"
         os.environ["AGENT_MODEL_NAME"] = "qwen3.6-plus"
         os.environ["VOICE_MODEL_NAME"] = "qwen3.5-omni-plus"
+        os.environ["VOICE_REPLY_MODE"] = "agent_tts"
         os.environ["VOICE_INPUT_MODE"] = "asr_text"
         os.environ["VOICE_SESSION_MODE"] = "half_duplex"
         settings = ServerSettings.from_env()
@@ -89,6 +90,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.server_device_id, "server-phase-b")
         self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
+        self.assertEqual(settings.voice_reply_mode, "agent_tts")
         self.assertEqual(settings.voice_input_mode, "asr_text")
         self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "half_duplex")
@@ -107,7 +109,8 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.agent_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_input_mode, "auto")
-        self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
+        self.assertEqual(settings.voice_reply_mode, "omni_realtime")
+        self.assertEqual(settings.effective_voice_input_mode(), "raw_audio")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
 
     def test_omni_realtime_auto_input_mode_uses_raw_audio(self) -> None:

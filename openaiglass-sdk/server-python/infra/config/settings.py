@@ -32,7 +32,7 @@ class ServerSettings:
     11. `agent_model_name`：agent-core 文本与图片理解模型名称。
     12. `voice_model_name`：兼容旧链路的语音模型名称。
     13. `voice_model_voice`：兼容旧链路的语音音色。
-    14. `voice_reply_mode`：语音回复模式，默认保留 Agent + 独立 TTS。
+    14. `voice_reply_mode`：语音回复模式，默认使用 Omni Realtime 全模态语音直出。
     15. `voice_omni_realtime_model_name`：Omni Realtime 直出语音模型名称。
     16. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
     17. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
@@ -70,7 +70,7 @@ class ServerSettings:
     agent_model_name: str = "qwen3.5-omni-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Tina"
-    voice_reply_mode: str = "agent_tts"
+    voice_reply_mode: str = "omni_realtime"
     voice_omni_realtime_model_name: str = "qwen3.5-omni-plus-realtime"
     voice_omni_realtime_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     voice_omni_photo_wait_ms: int = 300

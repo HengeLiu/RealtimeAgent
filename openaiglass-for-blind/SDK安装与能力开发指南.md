@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v51`。本版本在 `sdk-v50` 基础上补齐语音输入模式配置和 Omni Realtime 日志口径：`VOICE_INPUT_MODE=auto|asr_text|raw_audio` 用于明确是否先走独立 ASR；Omni Realtime 分支默认直接使用原始音频，Agent + TTS 分支默认使用 ASR 文本；下行首包日志不再把 Omni 音频误称为 TTS。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v52`。本版本把默认语音回复分支切换为 `VOICE_REPLY_MODE=omni_realtime`，并将 Omni Realtime WebSocket 预连接和上行音频推送前移到用户说话期间；用户说完后只追加自动照片、提交输入并等待模型音频响应。需要 Tool、Task、Skill、MCP 或长期记忆编排时，可以切回 `VOICE_REPLY_MODE=agent_tts`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR | 默认 `VOICE_INPUT_MODE=auto`：`VOICE_REPLY_MODE=agent_tts` 时等价于 `asr_text`，`VOICE_REPLY_MODE=omni_realtime` 时等价于 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
@@ -272,7 +272,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
-| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_REPLY_MODE` / `VOICE_INPUT_MODE` / `VOICE_OMNI_REALTIME_MODEL_NAME` / `VOICE_OMNI_PHOTO_WAIT_MS` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、语音输入模式、语音回复分支、ASR 和 TTS 配置。`VOICE_REPLY_MODE=agent_tts` 保留 Agent + CosyVoice；`VOICE_REPLY_MODE=omni_realtime` 使用 qwen3.5-omni realtime 直出语音。`VOICE_INPUT_MODE=auto` 会按回复分支自动选择是否启用独立 ASR。业务开发者不要在业务代码里硬编码模型名。 |
+| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_REPLY_MODE` / `VOICE_INPUT_MODE` / `VOICE_OMNI_REALTIME_MODEL_NAME` / `VOICE_OMNI_PHOTO_WAIT_MS` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、语音输入模式、语音回复分支、ASR 和 TTS 配置。默认 `VOICE_REPLY_MODE=omni_realtime`，使用 qwen3.5-omni realtime 直出语音；`VOICE_REPLY_MODE=agent_tts` 保留 Agent + CosyVoice。`VOICE_INPUT_MODE=auto` 会按回复分支自动选择是否启用独立 ASR。业务开发者不要在业务代码里硬编码模型名。 |
 | `AGENT_MEMORY_ENABLED` / `AGENT_MEMORY_STORE_PATH` / `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `config/local_server.env` | `sdk-v48` 起控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
@@ -502,13 +502,15 @@ uv run openaiglass.glass.start \
 
 `sdk-v47` 起，SDK 不再只创建 `SpeechSynthesizer` 对象，而是在后台预启动 CosyVoice 流式任务。正常情况下，服务端会在 `TTS 预热已启动` 后、模型首 token 前看到 `TTS WebSocket 已打开` 和 `TTS 预热流已启动`；首个模型文本增量到达后，`TTS 首次文本已推送` 的 `first_streaming_call_cost_ms` 应显著低于 `sdk-v46` 中首次文本触发建连的耗时。如果预热流失败或过期，SDK 仍会退化为首次文本触发并保留重建重试。
 
-`sdk-v49` 起，语音回复链路新增 `VOICE_REPLY_MODE=omni_realtime`。该模式不会先进入 agent-core，也不会再调用独立 CosyVoice TTS；服务端会把当前语音段的 16k PCM 和已就绪的自动照片直接提交给 `VOICE_OMNI_REALTIME_MODEL_NAME`，收到 `response.audio.delta` 后立即复用现有播放流下发给眼镜。该模式适合低延迟视觉问答和普通语音问答；但它不会执行 SDK Tool、Task、Skill 或长期记忆工具，导航、计时器、找物体、红绿灯等需要工具编排的能力仍应使用默认 `VOICE_REPLY_MODE=agent_tts`。
+`sdk-v49` 起，语音回复链路新增 `VOICE_REPLY_MODE=omni_realtime`。该模式不会先进入 agent-core，也不会再调用独立 CosyVoice TTS；服务端会把当前语音段的 16k PCM 和已就绪的自动照片直接提交给 `VOICE_OMNI_REALTIME_MODEL_NAME`，收到 `response.audio.delta` 后立即复用现有播放流下发给眼镜。该模式适合低延迟视觉问答和普通语音问答；但它不会执行 SDK Tool、Task、Skill 或长期记忆工具，导航、计时器、找物体、红绿灯等需要工具编排的能力应显式使用 `VOICE_REPLY_MODE=agent_tts`。
 
-Omni Realtime 模式下可观察这些日志：`Omni Realtime 请求已发送`、`Omni Realtime 返回首个文本`、`Omni Realtime 返回首段音频`、`Omni Realtime 最终回复`。`VOICE_OMNI_PHOTO_WAIT_MS` 控制服务端在提交模型前最多等待本轮自动照片上传完成的时间，默认 `300` 毫秒；等待失败会继续走纯语音输入，不阻塞主链路。
+Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立`、`Omni Realtime 首段上行音频已推送`、`Omni Realtime 请求已提交`、`Omni Realtime 返回首个文本`、`Omni Realtime 返回首段音频`、`Omni Realtime 最终回复`。`VOICE_OMNI_PHOTO_WAIT_MS` 控制服务端在提交模型前最多等待本轮自动照片上传完成的时间，默认 `300` 毫秒；等待失败会继续走纯语音输入，不阻塞主链路。
 
 `sdk-v51` 起，共用下行播放流日志统一使用 `下行音频源返回首段音频`，并携带 `audio_source=tts|omni_realtime`。`agent_tts` 分支仍会看到 CosyVoice 专属日志，例如 `TTS WebSocket 已打开`、`TTS 首次文本已推送`、`TTS 服务返回首段音频`；`omni_realtime` 分支不应再出现独立 TTS 服务日志。
 
-当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答会直接走多模态模型首 token，不再先做照片工具决策；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime` 模式下虽然去掉了独立 TTS，但当前 SDK 仍按半双工语音段边界在用户说完后提交 Omni 请求，尚未把眼镜上行音频实时透传给 Omni Realtime。
+`sdk-v52` 起，`omni_realtime` 成为默认语音回复分支。服务端在 `sensor.audio.segment.started` 时预连接 Omni Realtime，并在 `/ws_audio` 每个音频 chunk 到达时同步追加到 Omni 会话；`sensor.audio.segment.finished` 后只等待自动照片、追加图片并 `commit/create_response`。新增日志包括 `Omni Realtime 预连接已建立`、`Omni Realtime 首段上行音频已推送` 和 `Omni Realtime 请求已提交`。如果需要 SDK Tool、Task、Skill、MCP 或长期记忆，请在 `local_server.env` 中显式设置 `VOICE_REPLY_MODE=agent_tts`。
+
+当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答会直接走多模态模型首 token，不再先做照片工具决策；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime` 模式下已经把建连和音频上行前移到用户说话期间，但仍按半双工语音段边界在用户说完后提交响应；更激进的 full-duplex 实时打断和服务端 VAD 模式仍需要端侧 AEC/VAD 能力继续配合。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 

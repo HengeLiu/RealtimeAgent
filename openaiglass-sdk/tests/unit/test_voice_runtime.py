@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from infra.config import ServerSettings
+from protocol.media.media_frame import MediaFrame
 from runtime.voice_runtime import (
     DashscopeRealtimeSpeechRecognitionSession,
     DashscopeCosyVoiceTtsSession,
@@ -588,6 +589,86 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(controller.state, "receiving_segment")
         assert controller.current_segment is not None
         self.assertIsNone(controller.current_segment.streaming_asr_session)
+
+    def test_omni_mode_prestreams_audio_frames(self) -> None:
+        """测试目标：验证 Omni 模式会在录音过程中预连接并推送音频。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 客户端和会话。
+        2. 上报 `sensor.audio.segment.started`。
+        3. 模拟一帧 `/ws_audio` 音频分片。
+
+        预期结果：
+        1. 启动语音段时会创建 Omni Realtime 会话。
+        2. 音频分片会立即推送给 Omni 会话。
+        3. 当前播放上下文标记为 `omni_realtime` 音频来源。
+        """
+
+        class _OmniSession:
+            def __init__(self) -> None:
+                self.audio_frames: list[bytes] = []
+                self.closed = False
+
+            def append_audio(self, pcm_bytes: bytes) -> None:
+                self.audio_frames.append(pcm_bytes)
+
+            def close(self) -> None:
+                self.closed = True
+
+        class _OmniClient:
+            def __init__(self) -> None:
+                self.session = _OmniSession()
+                self.started = False
+
+            def start_streaming_reply(self, **_kwargs):
+                self.started = True
+                return self.session
+
+        omni_client = _OmniClient()
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_reply_mode="omni_realtime"),
+            send_control_message=lambda *_args, **_kwargs: None,
+            omni_realtime_client=omni_client,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+
+        runtime.on_segment_started(
+            device_id="glass-001",
+            session_id="sess-test",
+            payload={
+                "stream_id": "stream-test",
+                "segment_id": "seg-test",
+                "sample_rate": 16000,
+                "channels": 1,
+                "codec": "pcm16",
+            },
+        )
+        runtime.on_audio_frame(
+            device_id="glass-001",
+            frame=MediaFrame(
+                header={
+                    "version": 1,
+                    "stream_id": "stream-test",
+                    "segment_id": "seg-test",
+                    "frame_type": "audio_chunk",
+                    "seq": 1,
+                    "ts_ms": 0,
+                    "codec": "pcm16",
+                    "payload_size": 2,
+                    "final": False,
+                },
+                payload=b"\x01\x02",
+            ),
+        )
+
+        self.assertTrue(omni_client.started)
+        self.assertEqual(omni_client.session.audio_frames, [b"\x01\x02"])
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        assert controller.current_segment is not None
+        self.assertIs(controller.current_segment.omni_realtime_session, omni_client.session)
+        self.assertIsNotNone(controller.current_segment.omni_realtime_context)
+        self.assertEqual(controller.current_playback.audio_source, "omni_realtime")
 
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。

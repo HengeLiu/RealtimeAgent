@@ -62,6 +62,8 @@ class SegmentBuffer:
     frame_count: int = 0
     last_seq: int | None = None
     streaming_asr_session: "StreamingSpeechRecognitionSession | None" = None
+    omni_realtime_session: "OmniRealtimeStreamingSession | None" = None
+    omni_realtime_context: "ReplySynthesisContext | None" = None
 
     def append_frame(self, frame: MediaFrame, *, max_bytes: int) -> None:
         header = frame.header
@@ -180,6 +182,191 @@ class OmniRealtimeReplyResult:
     assistant_text: str
     transcript: str
     response_id: str | None = None
+
+
+class OmniRealtimeStreamingSession:
+    """Omni Realtime 单轮流式输入会话。
+
+    主要功能：
+    1. 在用户开始说话时提前建立 Omni Realtime WebSocket。
+    2. 用户说话过程中持续追加音频分片。
+    3. 用户说完后追加可选图片、提交输入并等待模型音频响应。
+
+    主要属性：
+    1. `_conversation`：DashScope Omni Realtime 会话对象。
+    2. `_done_event`：模型响应结束或失败事件。
+    3. `_on_chunk`：模型音频分片回调。
+    """
+
+    def __init__(
+        self,
+        *,
+        settings: ServerSettings,
+        conversation: Any,
+        done_event: threading.Event,
+        error_box: list[str],
+        assistant_text_parts: list[str],
+        transcript_parts: list[str],
+        response_id_box: list[str],
+        request_started_at_ms_box: list[int],
+        metrics_lock: threading.Lock,
+        on_chunk: Callable[[ModelChunk], None],
+        logger,
+        session_id: str,
+        device_id: str,
+        segment_id: str,
+        stream_id: str,
+        connected_at_ms: int,
+        connect_ms: int,
+    ) -> None:
+        """初始化流式输入会话。
+
+        参数：
+        1. `settings`：服务端配置。
+        2. `conversation`：DashScope SDK 会话对象。
+        3. `done_event/error_box/...`：回调共享状态。
+        4. `on_chunk`：模型音频输出回调。
+        5. `logger/session_id/device_id/...`：日志上下文。
+        6. `connected_at_ms/connect_ms`：预连接完成时间和耗时。
+        """
+
+        self._settings = settings
+        self._conversation = conversation
+        self._done_event = done_event
+        self._error_box = error_box
+        self._assistant_text_parts = assistant_text_parts
+        self._transcript_parts = transcript_parts
+        self._response_id_box = response_id_box
+        self._request_started_at_ms_box = request_started_at_ms_box
+        self._metrics_lock = metrics_lock
+        self._on_chunk = on_chunk
+        self._logger = logger
+        self._session_id = session_id
+        self._device_id = device_id
+        self._segment_id = segment_id
+        self._stream_id = stream_id
+        self._connected_at_ms = connected_at_ms
+        self._connect_ms = connect_ms
+        self._request_started_at_ms: int | None = None
+        self._first_audio_append_at_ms: int | None = None
+        self._audio_bytes = 0
+        self._audio_frame_count = 0
+        self._closed = False
+
+    @property
+    def request_started_at_ms(self) -> int | None:
+        """返回本轮提交响应请求的时间戳。"""
+
+        return self._request_started_at_ms
+
+    def append_audio(self, pcm_bytes: bytes) -> None:
+        """追加一段用户上行音频。
+
+        主要逻辑：
+        1. 将 PCM 字节转成 base64。
+        2. 调用 Omni Realtime `append_audio(...)`。
+        3. 记录首段上行音频追加时间和累计字节数。
+        """
+
+        if not pcm_bytes:
+            return
+        self._conversation.append_audio(base64.b64encode(pcm_bytes).decode("ascii"))
+        self._audio_bytes += len(pcm_bytes)
+        self._audio_frame_count += 1
+        if self._first_audio_append_at_ms is None:
+            self._first_audio_append_at_ms = DashscopeOmniRealtimeReplyClient._now_ms()
+            log_debug(
+                self._logger,
+                (
+                    "Omni Realtime 首段上行音频已推送 "
+                    f"bytes={len(pcm_bytes)} frame_count={self._audio_frame_count}"
+                ),
+                LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
+            )
+
+    def finish(
+        self,
+        *,
+        image_frames: list[bytes],
+        instructions: str,
+        segment_finished_at_ms: int,
+    ) -> OmniRealtimeReplyResult:
+        """提交本轮输入并等待 Omni Realtime 响应完成。
+
+        主要逻辑：
+        1. 音频已经在录音过程中持续追加。
+        2. 语音结束后追加可选图片。
+        3. `commit()` 后调用 `create_response(...)` 并等待响应完成。
+
+        返回值：
+        1. `OmniRealtimeReplyResult`。
+        """
+
+        if self._audio_bytes <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "Omni Realtime 输入音频为空",
+                details={"segment_id": self._segment_id},
+            )
+
+        try:
+            from dashscope.audio.qwen_omni import MultiModality
+        except ImportError as exc:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "缺少 dashscope 依赖，无法启用 Omni Realtime 语音直出",
+                details={"hint": "请执行 uv sync 安装 dashscope"},
+            ) from exc
+
+        for image_bytes in image_frames:
+            self._conversation.append_video(base64.b64encode(image_bytes).decode("ascii"))
+        self._conversation.commit()
+        self._request_started_at_ms = DashscopeOmniRealtimeReplyClient._now_ms()
+        self._request_started_at_ms_box.append(self._request_started_at_ms)
+        self._conversation.create_response(
+            instructions=instructions,
+            output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
+        )
+        log_info(
+            self._logger,
+            (
+                "Omni Realtime 请求已提交 "
+                f"model={self._settings.voice_omni_realtime_model_name} "
+                f"preconnected=true connect_ms={self._connect_ms} "
+                f"finish_to_request_ms={max(self._request_started_at_ms - segment_finished_at_ms, 0)} "
+                f"audio_bytes={self._audio_bytes} audio_frame_count={self._audio_frame_count} "
+                f"image_count={len(image_frames)}"
+            ),
+            LogContext(device_id=self._device_id, session_id=self._session_id),
+        )
+        if not self._done_event.wait(max(5.0, self._settings.voice_model_timeout_ms / 1000)):
+            raise build_error(
+                ErrorCode.TIMEOUT,
+                "Omni Realtime 等待响应完成超时",
+                details={"segment_id": self._segment_id, "timeout_ms": self._settings.voice_model_timeout_ms},
+            )
+        if self._error_box:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "Omni Realtime 返回错误",
+                details={"reason": self._error_box[-1], "segment_id": self._segment_id},
+            )
+        return OmniRealtimeReplyResult(
+            assistant_text="".join(self._assistant_text_parts).strip(),
+            transcript="".join(self._transcript_parts).strip(),
+            response_id=self._response_id_box[-1] if self._response_id_box else None,
+        )
+
+    def close(self) -> None:
+        """关闭 Omni Realtime 会话。"""
+
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._conversation.close()
+        except Exception:
+            pass
 
 
 @dataclass(slots=True)
@@ -1067,51 +1254,41 @@ class DashscopeOmniRealtimeReplyClient:
         self._conversation_factory = conversation_factory
         self._logger = get_logger("server.voice")
 
-    def run_reply(
+    def start_streaming_reply(
         self,
         *,
         settings: ServerSettings,
-        input_pcm: bytes,
-        image_frames: list[bytes],
         instructions: str,
         on_chunk: Callable[[ModelChunk], None],
         session_id: str,
         device_id: str,
         segment_id: str,
         stream_id: str,
-    ) -> OmniRealtimeReplyResult:
-        """执行一次 Omni Realtime 语音直出。
+    ) -> OmniRealtimeStreamingSession:
+        """创建 Omni Realtime 流式输入会话。
 
         主要逻辑：
-        1. 创建 WebSocket 会话并关闭服务端 VAD，使用 SDK 当前语音段边界。
-        2. 发送语音 PCM 和可选图片帧，随后 `commit()` 并 `create_response()`。
-        3. 收到首段模型音频后立即调用 `on_chunk(...)`，复用现有下行播放链路。
+        1. 建立 Omni Realtime WebSocket。
+        2. 配置音频输入、音频输出、转写和手动提交。
+        3. 返回可持续追加音频的 `OmniRealtimeStreamingSession`。
 
         参数：
         1. `settings`：服务端配置。
-        2. `input_pcm`：16k 单声道 PCM 音频。
-        3. `image_frames`：本轮可选图片字节。
-        4. `instructions`：系统指令。
-        5. `on_chunk`：音频分片回调。
-        6. `session_id/device_id/segment_id/stream_id`：日志上下文。
+        2. `instructions`：系统指令。
+        3. `on_chunk`：音频分片回调。
+        4. `session_id/device_id/segment_id/stream_id`：日志上下文。
 
         返回值：
-        1. `OmniRealtimeReplyResult`，包含助手文本摘要和语音转写。
+        1. 可追加音频、提交图片并等待响应的流式输入会话。
 
         异常情况：
-        1. 缺少 API Key、缺少 dashscope 依赖或 WebSocket 调用失败时抛出结构化错误。
+        1. 缺少 API Key、缺少 dashscope 依赖或 WebSocket 建连失败时抛出结构化错误。
         """
 
         if not settings.dashscope_api_key.strip():
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
                 "缺少 DASHSCOPE_API_KEY，无法执行 Omni Realtime 语音直出",
-            )
-        if not input_pcm:
-            raise build_error(
-                ErrorCode.INVALID_MESSAGE,
-                "Omni Realtime 输入音频为空",
-                details={"segment_id": segment_id},
             )
 
         try:
@@ -1137,7 +1314,7 @@ class DashscopeOmniRealtimeReplyClient:
         transcript_parts: list[str] = []
         response_id_box: list[str] = []
         metrics_lock = threading.Lock()
-        request_started_at_ms = self._now_ms()
+        request_started_at_ms_box: list[int] = []
         response_created_at_ms: int | None = None
         first_audio_at_ms: int | None = None
         first_text_at_ms: int | None = None
@@ -1195,7 +1372,8 @@ class DashscopeOmniRealtimeReplyClient:
                                     self_logger,
                                     (
                                         "Omni Realtime 返回首个文本 "
-                                        f"first_text_latency_ms={max(now_ms - request_started_at_ms, 0)} "
+                                        f"first_text_latency_ms="
+                                        f"{DashscopeOmniRealtimeReplyClient._latency_ms(request_started_at_ms_box[-1] if request_started_at_ms_box else None, now_ms)} "
                                         f"response_create_to_first_text_ms="
                                         f"{DashscopeOmniRealtimeReplyClient._latency_ms(response_created_at_ms, now_ms)} "
                                         f"text_preview={delta[:24]!r}"
@@ -1221,7 +1399,8 @@ class DashscopeOmniRealtimeReplyClient:
                                 self_logger,
                                 (
                                     "Omni Realtime 返回首段音频 "
-                                    f"first_audio_latency_ms={max(now_ms - request_started_at_ms, 0)} "
+                                    f"first_audio_latency_ms="
+                                    f"{DashscopeOmniRealtimeReplyClient._latency_ms(request_started_at_ms_box[-1] if request_started_at_ms_box else None, now_ms)} "
                                     f"response_create_to_first_audio_ms="
                                     f"{DashscopeOmniRealtimeReplyClient._latency_ms(response_created_at_ms, now_ms)} "
                                     f"bytes={len(audio_pcm)}"
@@ -1270,40 +1449,88 @@ class DashscopeOmniRealtimeReplyClient:
                 enable_turn_detection=False,
                 instructions=instructions,
             )
-            conversation.append_audio(base64.b64encode(input_pcm).decode("ascii"))
-            for image_bytes in image_frames:
-                conversation.append_video(base64.b64encode(image_bytes).decode("ascii"))
-            conversation.commit()
-            conversation.create_response(
-                instructions=instructions,
-                output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
-            )
-            log_info(
+            log_debug(
                 self._logger,
                 (
-                    "Omni Realtime 请求已发送 "
+                    "Omni Realtime 预连接已建立 "
                     f"model={settings.voice_omni_realtime_model_name} "
-                    f"connect_ms={max(connected_at_ms - connect_started_at_ms, 0)} "
-                    f"audio_bytes={len(input_pcm)} image_count={len(image_frames)}"
+                    f"connect_ms={max(connected_at_ms - connect_started_at_ms, 0)}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            if not done_event.wait(max(5.0, settings.voice_model_timeout_ms / 1000)):
-                raise build_error(
-                    ErrorCode.TIMEOUT,
-                    "Omni Realtime 等待响应完成超时",
-                    details={"segment_id": segment_id, "timeout_ms": settings.voice_model_timeout_ms},
-                )
-            if error_box:
-                raise build_error(
-                    ErrorCode.INTERNAL_ERROR,
-                    "Omni Realtime 返回错误",
-                    details={"reason": error_box[-1], "segment_id": segment_id},
-                )
-            return OmniRealtimeReplyResult(
-                assistant_text="".join(assistant_text_parts).strip(),
-                transcript="".join(transcript_parts).strip(),
-                response_id=response_id_box[-1] if response_id_box else None,
+            session = OmniRealtimeStreamingSession(
+                settings=settings,
+                conversation=conversation,
+                done_event=done_event,
+                error_box=error_box,
+                assistant_text_parts=assistant_text_parts,
+                transcript_parts=transcript_parts,
+                response_id_box=response_id_box,
+                request_started_at_ms_box=request_started_at_ms_box,
+                metrics_lock=metrics_lock,
+                on_chunk=on_chunk,
+                logger=self._logger,
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment_id,
+                stream_id=stream_id,
+                connected_at_ms=connected_at_ms,
+                connect_ms=max(connected_at_ms - connect_started_at_ms, 0),
+            )
+            return session
+        except AppError:
+            try:
+                conversation.close()
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            try:
+                conversation.close()
+            except Exception:
+                pass
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "Omni Realtime 预连接失败",
+                details={"reason": str(exc), "segment_id": segment_id, "stream_id": stream_id},
+            ) from exc
+
+    def run_reply(
+        self,
+        *,
+        settings: ServerSettings,
+        input_pcm: bytes,
+        image_frames: list[bytes],
+        instructions: str,
+        on_chunk: Callable[[ModelChunk], None],
+        session_id: str,
+        device_id: str,
+        segment_id: str,
+        stream_id: str,
+    ) -> OmniRealtimeReplyResult:
+        """执行一次兼容旧调用方式的 Omni Realtime 语音直出。"""
+
+        if not input_pcm:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "Omni Realtime 输入音频为空",
+                details={"segment_id": segment_id},
+            )
+        session = self.start_streaming_reply(
+            settings=settings,
+            instructions=instructions,
+            on_chunk=on_chunk,
+            session_id=session_id,
+            device_id=device_id,
+            segment_id=segment_id,
+            stream_id=stream_id,
+        )
+        try:
+            session.append_audio(input_pcm)
+            return session.finish(
+                image_frames=image_frames,
+                instructions=instructions,
+                segment_finished_at_ms=self._now_ms(),
             )
         except AppError:
             raise
@@ -1314,10 +1541,7 @@ class DashscopeOmniRealtimeReplyClient:
                 details={"reason": str(exc), "segment_id": segment_id, "stream_id": stream_id},
             ) from exc
         finally:
-            try:
-                conversation.close()
-            except Exception:
-                pass
+            session.close()
 
     @staticmethod
     def _now_ms() -> int:
@@ -1986,6 +2210,8 @@ class VoiceRuntime:
             controller = self._controllers.get(device_id)
             if controller is None:
                 return
+            if controller.current_segment is not None and controller.current_segment.omni_realtime_session is not None:
+                controller.current_segment.omni_realtime_session.close()
             playback_streams = []
             if controller.current_playback is not None:
                 playback_streams.append(controller.current_playback)
@@ -2056,9 +2282,19 @@ class VoiceRuntime:
                     sample_rate_hz=segment.sample_rate,
                     channels=segment.channels,
                     codec=segment.codec,
-                )
+            )
             controller.current_segment = segment
             controller.state = "receiving_segment"
+            should_start_omni = (
+                self._settings.voice_reply_mode == "omni_realtime"
+                and self._settings.effective_voice_input_mode() == "raw_audio"
+            )
+        if should_start_omni:
+            self._start_omni_realtime_segment_session(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+            )
 
     def on_audio_connection_opened(self, *, device_id: str, peer: str) -> None:
         with self._lock:
@@ -2110,8 +2346,8 @@ class VoiceRuntime:
                 return
             try:
                 segment.append_frame(frame, max_bytes=self._settings.max_segment_audio_bytes)
-                if segment.streaming_asr_session is not None:
-                    segment.streaming_asr_session.append_audio(frame.payload)
+                streaming_asr_session = segment.streaming_asr_session
+                omni_realtime_session = segment.omni_realtime_session
             except AppError as exc:
                 log_debug(
                     self._logger,
@@ -2119,6 +2355,23 @@ class VoiceRuntime:
                     LogContext(device_id=device_id, session_id=controller.session_id or None),
                 )
                 return
+        if streaming_asr_session is not None:
+            streaming_asr_session.append_audio(frame.payload)
+        if omni_realtime_session is not None:
+            try:
+                omni_realtime_session.append_audio(frame.payload)
+            except AppError as exc:
+                log_debug(
+                    self._logger,
+                    f"Omni Realtime 上行音频推送失败: code={exc.code} message={exc.message}",
+                    LogContext(device_id=device_id, session_id=controller.session_id or None),
+                )
+            except Exception as exc:  # noqa: BLE001 - 预推音频失败时让结束阶段统一降级或报错
+                log_debug(
+                    self._logger,
+                    f"Omni Realtime 上行音频推送失败: reason={exc!r}",
+                    LogContext(device_id=device_id, session_id=controller.session_id or None),
+                )
 
     def on_segment_finished(
         self,
@@ -3014,6 +3267,91 @@ class VoiceRuntime:
                 LogContext(device_id=device_id, session_id=session_id),
             )
 
+    def _build_omni_realtime_instructions(self) -> str:
+        """构造 Omni Realtime 语音直出的系统指令。
+
+        主要逻辑：
+        1. 复用服务端语音系统提示词。
+        2. 明确本分支直接根据语音和可选图片回答。
+        3. 保持简短口语化输出，降低首包和播放总时长。
+
+        返回值：
+        1. 可直接传给 Omni Realtime 的指令文本。
+        """
+
+        return (
+            f"{self._settings.voice_system_prompt}\n"
+            "请直接根据用户语音内容回答。"
+            "如果本轮输入包含图片，请结合图片回答。"
+            "回答必须简短、口语化，不要输出代码块。"
+        )
+
+    def _start_omni_realtime_segment_session(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> None:
+        """在用户说话开始时预启动 Omni Realtime 会话。
+
+        主要逻辑：
+        1. 先建立 Omni WebSocket 并配置会话，避免语音结束后再建连。
+        2. 创建下行播放上下文，但不下发播放请求，等模型音频首包到达后再启动。
+        3. 如果建连期间已经收到音频帧，把缓冲区中的音频补推给 Omni。
+
+        异常情况：
+        1. 预启动失败只记录 DEBUG 日志，结束阶段会回退到非预连接路径。
+        """
+
+        context_box: list[ReplySynthesisContext] = []
+
+        def _handle_omni_chunk(chunk: ModelChunk) -> None:
+            if not context_box:
+                return
+            self._emit_synthesis_chunk(
+                device_id=device_id,
+                session_id=session_id,
+                context=context_box[0],
+                chunk=chunk,
+            )
+
+        try:
+            omni_session = self._omni_realtime_client.start_streaming_reply(
+                settings=self._settings,
+                instructions=self._build_omni_realtime_instructions(),
+                on_chunk=_handle_omni_chunk,
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment.segment_id,
+                stream_id=segment.stream_id,
+            )
+            context = self._open_reply_synthesis_context(
+                device_id=device_id,
+                session_id=session_id,
+                audio_source="omni_realtime",
+            )
+            context_box.append(context)
+            with self._lock:
+                controller = self._controllers.get(device_id)
+                if controller is None or controller.current_segment is not segment:
+                    omni_session.close()
+                    return
+                buffered_pcm = bytes(segment.payload)
+                segment.omni_realtime_session = omni_session
+                segment.omni_realtime_context = context
+            if buffered_pcm:
+                omni_session.append_audio(buffered_pcm)
+        except Exception as exc:  # noqa: BLE001 - 预连接失败不应阻断当前语音段采集
+            log_debug(
+                self._logger,
+                (
+                    "Omni Realtime 预连接失败，结束阶段回退普通提交 "
+                    f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} reason={exc!r}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+            )
+
     def _run_omni_realtime_reply_pipeline(
         self,
         *,
@@ -3055,39 +3393,46 @@ class VoiceRuntime:
                 },
             )
 
-        context = self._open_reply_synthesis_context(
+        context = segment.omni_realtime_context or self._open_reply_synthesis_context(
             device_id=device_id,
             session_id=session_id,
             audio_source="omni_realtime",
         )
+        segment_finished_at_ms = self._now_ms()
         image_frames = self._consume_ready_utterance_photo_bytes_for_omni(
             device_id=device_id,
             session_id=session_id,
             segment=segment,
         )
-        instructions = (
-            f"{self._settings.voice_system_prompt}\n"
-            "请直接根据用户语音内容回答。"
-            "如果本轮输入包含图片，请结合图片回答。"
-            "回答必须简短、口语化，不要输出代码块。"
-        )
-
-        result = self._omni_realtime_client.run_reply(
-            settings=self._settings,
-            input_pcm=input_pcm,
-            image_frames=image_frames,
-            instructions=instructions,
-            on_chunk=lambda chunk: self._emit_synthesis_chunk(
-                device_id=device_id,
-                session_id=session_id,
-                context=context,
-                chunk=chunk,
-            ),
-            session_id=session_id,
-            device_id=device_id,
-            segment_id=segment.segment_id,
-            stream_id=segment.stream_id,
-        )
+        instructions = self._build_omni_realtime_instructions()
+        omni_session = segment.omni_realtime_session
+        try:
+            if omni_session is not None:
+                result = omni_session.finish(
+                    image_frames=image_frames,
+                    instructions=instructions,
+                    segment_finished_at_ms=segment_finished_at_ms,
+                )
+            else:
+                result = self._omni_realtime_client.run_reply(
+                    settings=self._settings,
+                    input_pcm=input_pcm,
+                    image_frames=image_frames,
+                    instructions=instructions,
+                    on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                        device_id=device_id,
+                        session_id=session_id,
+                        context=context,
+                        chunk=chunk,
+                    ),
+                    session_id=session_id,
+                    device_id=device_id,
+                    segment_id=segment.segment_id,
+                    stream_id=segment.stream_id,
+                )
+        finally:
+            if omni_session is not None:
+                omni_session.close()
         self._finalize_synthesis_context(
             device_id=device_id,
             session_id=session_id,

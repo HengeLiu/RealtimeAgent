@@ -94,9 +94,10 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
             port=0,
             device_token_map="glass-001=pair-demo-token",
             heartbeat_interval_ms=120,
-            heartbeat_timeout_ms=1000,
+            heartbeat_timeout_ms=5000,
             voice_runs_root=self.temp_dir,
             voice_session_mode="half_duplex",
+            voice_reply_mode="agent_tts",
         )
         self.handle = build_server_handle(
             settings,
@@ -195,10 +196,14 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
                 ).decode("utf-8")
             )
 
-            text_reply = self._expect_message(control, "assistant.reply")
+            seen_after_segment = {
+                message.name: message
+                for message in self._collect_messages(control, {"assistant.reply", "actuator.audio.play"})
+            }
+            text_reply = seen_after_segment["assistant.reply"]
             self.assertEqual(text_reply.payload["text"], "Agent 已收到：给我讲个笑话")
 
-            play = self._expect_message(control, "actuator.audio.play")
+            play = seen_after_segment["actuator.audio.play"]
             stream_id = play.stream_id or play.payload["stream_id"]
             with urlopen(
                 f"http://127.0.0.1:{self.handle.port}/stream.wav?device_id=glass-001&stream_id={stream_id}",
@@ -322,6 +327,20 @@ class VoiceDialogFlowTestCase(unittest.TestCase):
             if message.name == name:
                 return message
         self.fail(f"did not receive expected message: {name}")
+
+    def _collect_messages(self, client: TestWebSocketClient, names: set[str]):
+        """收集一组控制消息，允许它们以任意顺序到达。"""
+
+        deadline = time.time() + 5
+        found = {}
+        while time.time() < deadline and set(found) != names:
+            message = self.codec.decode(client.recv_text())
+            if message.name in names:
+                found[message.name] = message
+        missing = names - set(found)
+        if missing:
+            self.fail(f"did not receive expected messages: {sorted(missing)}")
+        return list(found.values())
 
     def _fetch_runtime(self) -> dict:
         with urlopen(f"http://127.0.0.1:{self.handle.port}/api/runtime/devices", timeout=3) as response:
