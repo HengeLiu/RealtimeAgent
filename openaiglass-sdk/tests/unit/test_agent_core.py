@@ -979,11 +979,11 @@ class AgentCoreTestCase(unittest.TestCase):
         _, input_payload = mocked_run.call_args.args[:2]
         current_content = input_payload[-1]["content"]
         self.assertIsInstance(current_content, list)
-        self.assertEqual(current_content[0], {"type": "text", "text": "看一下我前面有什么"})
-        self.assertEqual(current_content[1]["type"], "image_url")
-        self.assertTrue(current_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(current_content[0], {"type": "input_text", "text": "看一下我前面有什么"})
+        self.assertEqual(current_content[1]["type"], "input_image")
+        self.assertTrue(current_content[1]["image_url"].startswith("data:image/png;base64,"))
         request_content = result.meta["model_request"]["messages"][-1]["content"]
-        self.assertEqual(request_content[1]["image_url"]["url"], "data:image/*;base64,<redacted>")
+        self.assertEqual(request_content[1]["image_url"], "data:image/*;base64,<redacted>")
         self.assertEqual(result.reply_text, "前面有一张床。")
 
     def test_openai_runner_streams_plain_text_delta_to_callback(self) -> None:

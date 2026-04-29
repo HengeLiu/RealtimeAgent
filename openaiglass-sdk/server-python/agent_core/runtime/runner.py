@@ -1224,14 +1224,15 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         主要逻辑：
         1. 没有图片时沿用纯文本输入，保持普通工具链路兼容。
-        2. 如果当前 turn 挂接了图片资产，则把文本和全部图片一起组成多模态内容。
+        2. 如果当前 turn 挂接了图片资产，则使用 OpenAI Agents SDK 支持的
+           `input_text/input_image` 内容结构。
         3. 图片使用 `data:` URL，避免额外对象存储依赖。
 
         参数：
         1. `turn`：当前用户输入轮次。
 
         返回值：
-        1. 纯文本字符串，或 Chat Completions 兼容的多模态 content 列表。
+        1. 纯文本字符串，或 OpenAI Agents SDK 兼容的多模态 content 列表。
 
         异常情况：
         1. 图片文件不存在或读取失败时会向上抛出异常，由上层统一转为 agent-core 失败。
@@ -1242,15 +1243,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         if not image_assets:
             return text
 
-        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": text}]
         for asset in image_assets:
             content.append(
                 {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": OpenAIAgentLoopRunner._build_image_data_url(asset.storage_uri, asset.mime_type),
-                        "detail": "auto",
-                    },
+                    "type": "input_image",
+                    "image_url": OpenAIAgentLoopRunner._build_image_data_url(asset.storage_uri, asset.mime_type),
+                    "detail": "auto",
                 }
             )
         return content
@@ -1278,14 +1277,26 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 continue
             sanitized_content: list[dict[str, Any]] = []
             for item in content:
-                if not isinstance(item, dict) or item.get("type") != "image_url":
+                if not isinstance(item, dict):
+                    sanitized_content.append(item)
+                    continue
+                if item.get("type") == "image_url":
+                    image_url = dict(item.get("image_url") or {})
+                    url = str(image_url.get("url") or "")
+                    if url.startswith("data:"):
+                        image_url["url"] = "data:image/*;base64,<redacted>"
+                    sanitized_content.append({**item, "image_url": image_url})
+                    continue
+                if item.get("type") == "input_image":
+                    image_url = str(item.get("image_url") or "")
+                    sanitized_item = dict(item)
+                    if image_url.startswith("data:"):
+                        sanitized_item["image_url"] = "data:image/*;base64,<redacted>"
+                    sanitized_content.append(sanitized_item)
+                    continue
+                else:
                     sanitized_content.append(dict(item) if isinstance(item, dict) else item)
                     continue
-                image_url = dict(item.get("image_url") or {})
-                url = str(image_url.get("url") or "")
-                if url.startswith("data:"):
-                    image_url["url"] = "data:image/*;base64,<redacted>"
-                sanitized_content.append({**item, "image_url": image_url})
             sanitized.append({**message, "content": sanitized_content})
         return sanitized
 
