@@ -47,10 +47,9 @@ openaiglass = "openaiglasses.cli:main"
 
 [tool.setuptools]
 include-package-data = false
-package-dir = { "" = "server-python" }
 
 [tool.setuptools.packages.find]
-where = ["server-python"]
+where = ["server-python", "glass-playback"]
 include = [
     "agent_core*",
     "api*",
@@ -58,6 +57,7 @@ include = [
     "backend_task_core*",
     "devtools*",
     "infra*",
+    "openaiglass_glass_playback*",
     "openaiglasses*",
     "protocol*",
     "runtime*",

@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime", choices=["firmware", "playback"], default="", help="眼镜运行时类型")
     parser.add_argument("--repo-root", default="", help="仓库根目录；仅作为本仓库开发时的默认路径锚点")
     parser.add_argument("--app-root", default="", help="业务工程根目录，用于查找业务侧眼镜配置")
-    parser.add_argument("--sdk-root", default="", help="SDK 源码或资产根目录，用于查找眼镜固件工程")
+    parser.add_argument("--sdk-root", default="", help="SDK 源码或资产根目录；仅源码开发态需要显式指定")
     parser.add_argument("--project-dir", default="", help="ESP-IDF 工程目录")
     parser.add_argument("--idf-root", default="", help="ESP-IDF 安装目录")
     parser.add_argument("--target", default="esp32s3", help="ESP-IDF target")
@@ -48,14 +48,44 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.runtime = args.runtime or "firmware"
     if args.runtime == "playback":
-        paths = resolve_glass_paths(args)
-        playback_root = paths["sdk_root"] / "glass-playback"
-        if str(playback_root) not in sys.path:
-            sys.path.insert(0, str(playback_root))
-        from openaiglass_glass_playback.cli import run_playback
-
+        run_playback = load_playback_runner(args)
         return run_playback(args)
     return run_firmware(args)
+
+
+def load_playback_runner(args: argparse.Namespace):
+    """加载 glass-playback 运行时入口。
+
+    主要逻辑：
+    1. 优先从已安装 SDK 包中直接导入 `openaiglass_glass_playback`。
+    2. 仅当包未安装该运行时时，才回退到源码开发态的 `sdk_root/glass-playback`。
+    3. 避免功能开发者必须下载 SDK 源码或手动指定 `--sdk-root`。
+
+    参数：
+    1. `args`：命令行参数，用于开发态回退路径解析。
+
+    返回值：
+    1. `glass-playback` 的 `run_playback(args)` 函数。
+
+    异常情况：
+    1. 若已找到运行时但其内部依赖导入失败，会继续抛出原始异常，避免掩盖真实依赖问题。
+    """
+
+    try:
+        from openaiglass_glass_playback.cli import run_playback
+
+        return run_playback
+    except ModuleNotFoundError as exc:
+        if exc.name and not exc.name.startswith("openaiglass_glass_playback"):
+            raise
+
+    paths = resolve_glass_paths(args)
+    playback_root = paths["sdk_root"] / "glass-playback"
+    if str(playback_root) not in sys.path:
+        sys.path.insert(0, str(playback_root))
+    from openaiglass_glass_playback.cli import run_playback
+
+    return run_playback
 
 
 def run_firmware(args: argparse.Namespace) -> int:

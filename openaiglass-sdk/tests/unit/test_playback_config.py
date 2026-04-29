@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import tomllib
 import wave
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ for source_root in (GLASS_PLAYBACK_ROOT, SERVER_PYTHON_ROOT):
 
 from protocol.media import MediaFrame
 
+from openaiglasses.cli.glass import load_playback_runner
 from openaiglass_glass_playback import PlaybackConfig
 from openaiglass_glass_playback.glass_device import PlaybackGlassDevice
 
@@ -56,6 +59,52 @@ def _write_wav(path: Path) -> None:
         wav_file.setsampwidth(2)
         wav_file.setframerate(16000)
         wav_file.writeframes(b"\0\0" * 160)
+
+
+def test_glass_playback_can_load_from_installed_package_without_sdk_root() -> None:
+    """测试目标：验证功能开发者不需要指定 `--sdk-root` 也能加载回放运行时。
+
+    测试方法：
+    1. 构造一个指向不存在 SDK 根目录的参数对象。
+    2. 调用统一 CLI 的 playback 入口加载函数。
+    3. 检查返回的运行函数来自已安装或当前可导入的 playback 包。
+
+    预期结果：
+    1. 加载过程不访问 `--sdk-root`。
+    2. 返回可调用的 `run_playback` 函数。
+    """
+
+    args = Namespace(
+        repo_root="",
+        app_root="",
+        sdk_root="/path/that/should/not/be/needed",
+        project_dir="",
+        idf_root="",
+    )
+
+    runner = load_playback_runner(args)
+
+    assert callable(runner)
+    assert runner.__module__ == "openaiglass_glass_playback.cli"
+
+
+def test_sdk_package_includes_glass_playback_runtime() -> None:
+    """测试目标：验证 SDK 安装包会包含 glass-playback 运行时。
+
+    测试方法：
+    1. 读取 SDK 根目录的 `pyproject.toml`。
+    2. 检查 setuptools 包发现路径和 include 列表。
+
+    预期结果：
+    1. `glass-playback` 会作为包发现根目录。
+    2. `openaiglass_glass_playback*` 会被纳入安装包。
+    """
+
+    pyproject = tomllib.loads((SDK_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    package_find = pyproject["tool"]["setuptools"]["packages"]["find"]
+
+    assert "glass-playback" in package_find["where"]
+    assert "openaiglass_glass_playback*" in package_find["include"]
 
 
 def test_playback_config_loads_device_level_config(tmp_path: Path) -> None:
