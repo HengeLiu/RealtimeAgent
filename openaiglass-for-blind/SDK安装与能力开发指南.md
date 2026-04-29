@@ -150,7 +150,7 @@ openaiglass-for-blind/host/glass/config/local_build.env.example
 | `GLASS_PAIR_TOKEN` | 眼镜配对令牌，必须与服务端配置一致。 |
 | `GLASS_HEARTBEAT_INTERVAL_MS` | 心跳间隔。 |
 
-ESP32-S3 播放中自然插话由固件 `sdkconfig` 控制，默认值在 `openaiglass-sdk/glass-esp32/sdkconfig.defaults` 中维护：`CONFIG_GLASS_ENABLE_AEC=y` 打开 ESP-SR AFE AEC；`CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS=1200` 控制播放参考环形缓冲时长。真机内存不足、扬声器参考信号不同步或误触发严重时，可先关闭 AEC 回退半双工，再继续调声学参数。
+ESP32-S3 播放中自然插话由固件 `sdkconfig` 控制，默认值在 `openaiglass-sdk/glass-esp32/sdkconfig.defaults` 中维护：`CONFIG_GLASS_ENABLE_AEC=y` 打开 ESP-SR AFE AEC；`CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS=1200` 控制播放参考环形缓冲时长；`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y` 允许播放任务栈放到 PSRAM。真机内存不足、扬声器参考信号不同步或误触发严重时，可先关闭 AEC 回退半双工，再继续调声学参数。已有旧 `sdkconfig` 时，重新烧录前要执行 `idf.py reconfigure` 或删除旧 `sdkconfig` 后重新配置，确保这些默认项进入实际构建。
 
 服务端控制默认语音会话模式：
 

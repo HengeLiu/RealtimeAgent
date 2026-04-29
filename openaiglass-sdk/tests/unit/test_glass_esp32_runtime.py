@@ -34,4 +34,5 @@ def test_glass_runtime_negotiates_realtime_voice_capabilities() -> None:
     assert "WakeNet listening enabled for realtime session_id=%s accepted_mode=%s" in source
     assert "xTaskCreateWithCaps(" in source
     assert "PLAYBACK_STREAM_TASK_STACK_SIZE" in source
-    assert "创建 playback_stream_task 失败: stack=%d" in source
+    assert "CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY" in source
+    assert "external_stack_allowed=%d" in source

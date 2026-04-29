@@ -65,6 +65,9 @@
 #ifndef CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS
 #define CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS 1200
 #endif
+#ifndef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#define CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY 0
+#endif
 #if CONFIG_GLASS_ENABLE_AEC
 #define AFE_INPUT_FORMAT "MR"
 #else
@@ -2278,8 +2281,9 @@ static void start_playback_stream(const char *stream_id)
     s_playback_task_running = true;
     s_playback_interrupt_requested = false;
     s_playback_request_started_ms = now_ms();
-    if (
-        xTaskCreateWithCaps(
+    BaseType_t task_result;
+    if (CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY) {
+        task_result = xTaskCreateWithCaps(
             playback_stream_task,
             "playback_stream_task",
             PLAYBACK_STREAM_TASK_STACK_SIZE,
@@ -2287,16 +2291,28 @@ static void start_playback_stream(const char *stream_id)
             5,
             &s_playback_task_handle,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-        ) != pdPASS
-    ) {
+        );
+    } else {
+        ESP_LOGW(TAG, "sdkconfig 未开启 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY，播放任务栈只能尝试使用内部 RAM");
+        task_result = xTaskCreate(
+            playback_stream_task,
+            "playback_stream_task",
+            PLAYBACK_STREAM_TASK_STACK_SIZE,
+            NULL,
+            5,
+            &s_playback_task_handle
+        );
+    }
+    if (task_result != pdPASS) {
         size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         size_t largest_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         ESP_LOGE(
             TAG,
-            "创建 playback_stream_task 失败: stack=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
+            "创建 playback_stream_task 失败: stack=%d external_stack_allowed=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
             PLAYBACK_STREAM_TASK_STACK_SIZE,
+            CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY,
             (unsigned)free_internal,
             (unsigned)largest_internal,
             (unsigned)free_spiram,
