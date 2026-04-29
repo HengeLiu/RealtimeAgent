@@ -42,9 +42,10 @@ class ServerSettings:
     21. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
     22. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
     23. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
-    24. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    25. `voice_system_prompt`：默认系统提示词。
-    26. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    24. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
+    25. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    26. `voice_system_prompt`：默认系统提示词。
+    27. `max_segment_audio_bytes`：单轮上行音频最大字节数。
     """
 
     host: str = "0.0.0.0"
@@ -71,6 +72,7 @@ class ServerSettings:
     voice_asr_mode: str = "realtime"
     voice_asr_realtime_model_name: str = "fun-asr-realtime"
     voice_asr_realtime_timeout_ms: int = 5000
+    voice_asr_realtime_max_sentence_silence_ms: int = 300
     voice_session_mode: str = "full_duplex_realtime"
     voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
     max_segment_audio_bytes: int = 524288
@@ -157,6 +159,10 @@ class ServerSettings:
             voice_asr_realtime_timeout_ms=cls._parse_int_env(
                 "VOICE_ASR_REALTIME_TIMEOUT_MS",
                 defaults.voice_asr_realtime_timeout_ms,
+            ),
+            voice_asr_realtime_max_sentence_silence_ms=cls._parse_int_env(
+                "VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS",
+                defaults.voice_asr_realtime_max_sentence_silence_ms,
             ),
             voice_session_mode=os.getenv("VOICE_SESSION_MODE", defaults.voice_session_mode),
             voice_system_prompt=os.getenv("VOICE_SYSTEM_PROMPT", defaults.voice_system_prompt),
@@ -329,6 +335,16 @@ class ServerSettings:
                 "VOICE_ASR_REALTIME_TIMEOUT_MS 必须大于 0",
                 details={"voice_asr_realtime_timeout_ms": self.voice_asr_realtime_timeout_ms},
             )
+        if not (200 <= self.voice_asr_realtime_max_sentence_silence_ms <= 6000):
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS 必须在 200 到 6000 之间",
+                details={
+                    "voice_asr_realtime_max_sentence_silence_ms": (
+                        self.voice_asr_realtime_max_sentence_silence_ms
+                    )
+                },
+            )
         valid_voice_session_modes = {"half_duplex", "full_duplex_realtime"}
         if self.voice_session_mode not in valid_voice_session_modes:
             raise build_error(
@@ -377,6 +393,7 @@ class ServerSettings:
             "voice_asr_mode": self.voice_asr_mode,
             "voice_asr_realtime_model_name": self.voice_asr_realtime_model_name,
             "voice_asr_realtime_timeout_ms": self.voice_asr_realtime_timeout_ms,
+            "voice_asr_realtime_max_sentence_silence_ms": self.voice_asr_realtime_max_sentence_silence_ms,
             "voice_session_mode": self.voice_session_mode,
             "max_segment_audio_bytes": self.max_segment_audio_bytes,
         }

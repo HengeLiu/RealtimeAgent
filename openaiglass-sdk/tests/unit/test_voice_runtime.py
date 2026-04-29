@@ -304,6 +304,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(_Recognition.instance.model, "fun-asr-realtime")
         self.assertEqual(_Recognition.instance.format, "pcm")
         self.assertEqual(_Recognition.instance.sample_rate, 16000)
+        self.assertEqual(_Recognition.instance.kwargs["max_sentence_silence"], 300)
         self.assertEqual(_Recognition.instance.frames, [b"\x01\x02"])
         self.assertEqual(text, "看一下。")
         self.assertIsNotNone(session.metrics()["first_asr_partial_latency_ms"])

@@ -44,6 +44,9 @@ def _build_server_defaults() -> dict[str, str]:
         "VOICE_ASR_MODE": defaults.voice_asr_mode,
         "VOICE_ASR_REALTIME_MODEL_NAME": defaults.voice_asr_realtime_model_name,
         "VOICE_ASR_REALTIME_TIMEOUT_MS": str(defaults.voice_asr_realtime_timeout_ms),
+        "VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS": str(
+            defaults.voice_asr_realtime_max_sentence_silence_ms
+        ),
         "AGENT_MODEL_NAME": defaults.agent_model_name,
         "VOICE_MODEL_NAME": defaults.voice_model_name,
         "VOICE_MODEL_VOICE": defaults.voice_model_voice,

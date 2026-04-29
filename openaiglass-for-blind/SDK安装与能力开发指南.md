@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v40`。本版本在 `sdk-v39` 基础上把实时 ASR 切到阿里云百炼官方 `dashscope.audio.asr.Recognition` 接口，默认模型为 `fun-asr-realtime`，音频 chunk 到达服务端后会直接调用 `send_audio_frame(...)` 推给 ASR 服务。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v41`。本版本在 `sdk-v40` 基础上增加实时 ASR 分段耗时日志，并把 `fun-asr-realtime` 的 VAD 断句静音阈值默认调为 `300ms`，用于减少用户说完后的 ASR 收尾等待。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -15,7 +15,7 @@
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
-| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime` 和 `VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime`；如需排障可临时设为 `batch`。 |
+| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`、`VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime` 和 `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS=300`；如需排障可临时设为 `batch`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，并支持保存或直接播放下行语音 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
@@ -271,7 +271,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
-| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、ASR 和 TTS 配置。`sdk-v23` 起模板显式列出，业务开发者不要在业务代码里硬编码模型名。 |
+| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、ASR 和 TTS 配置。`sdk-v23` 起模板显式列出，业务开发者不要在业务代码里硬编码模型名。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
 `sdk-v32` 起，如果 `local_server.env` 里保留模板占位 `DASHSCOPE_API_KEY=""`，但启动命令所在 shell、CI secret 或远程环境已经注入了非空 `DASHSCOPE_API_KEY`，SDK 启动器会保留外部真实 key。其他普通配置仍然以 `local_server.env` 为准。若希望完全依赖配置文件，也可以直接把真实 key 写入 `local_server.env` 后重启服务端。
@@ -485,6 +485,8 @@ uv run openaiglass.glass.start \
 `sdk-v39` 起，实时 ASR 日志中的 `first_asr_partial_latency_ms` 不再从 `sensor.audio.segment.started` 或实时 ASR 会话创建时间开始计算，而是从服务端收到眼镜首个音频 chunk 并送入实时 ASR session 的时刻开始，到 ASR 服务返回第一段文本为止。`实时 ASR 完成` 日志新增 `asr_total_latency_ms`，同样从首个音频 chunk 起算，到 ASR 最终文本完成为止。排查 4 秒级 ASR 耗时时，应优先看这两个字段；如果它们仍接近整段语音时长，说明 ASR 服务首文本确实晚于用户说话结束附近返回，而不是 SDK 打点把语音开始前的等待算进去了。
 
 `sdk-v40` 起，实时 ASR 实现不再使用 `dashscope.audio.qwen_omni.OmniRealtimeConversation` 的转写能力，而是使用阿里云百炼实时语音识别文档对应的 `dashscope.audio.asr.Recognition`。SDK 在创建会话后调用 `Recognition.start()`，每个眼镜上行 PCM chunk 到达后立即调用 `send_audio_frame(...)`，语音结束时调用 `Recognition.stop()`；中间结果和最终结果通过 `RecognitionCallback.on_event(...)` 读取 `get_sentence()`，并用 `end_time` 判断句尾。业务本地配置建议使用 `VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime`。
+
+`sdk-v41` 起，`实时 ASR 返回首个文本` 和 `实时 ASR 完成` 日志会额外携带 `recognition_open_latency_ms`、`session_start_to_first_audio_ms`、`first_audio_send_cost_ms`、`audio_ms_before_first_partial`、`dashscope_first_package_delay_ms`、`dashscope_last_package_delay_ms`、`stop_to_complete_ms`、`audio_frame_count` 和 `audio_bytes_sent`。这些字段用于判断 1 秒级 ASR 延迟到底发生在连接、发帧、ASR 服务首包、句尾 VAD 还是收尾阶段。`VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` 默认值为 `300`，取值范围 `200` 到 `6000`；如果误切句明显，可适当调大。
 
 当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答还会等待自动照片和多模态图片解读；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
 

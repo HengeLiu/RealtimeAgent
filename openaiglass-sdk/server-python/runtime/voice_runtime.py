@@ -959,6 +959,7 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         self._segment_id = segment_id
         self._stream_id = stream_id
         self._sample_rate_hz = sample_rate_hz
+        self._created_at_ms = int(time.time() * 1000)
         self._done_event = threading.Event()
         self._closed = threading.Event()
         self._lock = threading.Lock()
@@ -967,11 +968,22 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         self._final_text = ""
         self._latest_partial_text = ""
         self._first_audio_chunk_at_ms: int | None = None
+        self._first_audio_send_returned_at_ms: int | None = None
         self._first_partial_at_ms: int | None = None
+        self._first_sentence_end_at_ms: int | None = None
         self._final_text_at_ms: int | None = None
         self._completed_at_ms: int | None = None
+        self._start_called_at_ms: int | None = None
+        self._open_at_ms: int | None = None
+        self._stop_requested_at_ms: int | None = None
+        self._audio_frame_count = 0
+        self._audio_bytes_sent = 0
+        self._audio_bytes_before_first_partial: int | None = None
+        self._dashscope_first_package_delay_ms: int | None = None
+        self._dashscope_last_package_delay_ms: int | None = None
         self._logger = get_logger("server.voice")
         self._recognition = self._create_recognition()
+        self._start_called_at_ms = int(time.time() * 1000)
         self._recognition.start()
 
     def _create_recognition(self) -> Any:
@@ -1000,12 +1012,15 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
             """DashScope 实时 ASR 回调桥。"""
 
             def on_open(self) -> None:  # pragma: no cover - 真实联调路径
+                session._open_at_ms = int(time.time() * 1000)
                 log_debug(
                     session._logger,
                     (
                         "实时 ASR 连接已建立 "
                         f"model={session._settings.voice_asr_realtime_model_name} "
-                        f"segment_id={session._segment_id} input_stream_id={session._stream_id}"
+                        f"segment_id={session._segment_id} input_stream_id={session._stream_id} "
+                        f"recognition_open_latency_ms="
+                        f"{session._latency_ms(session._created_at_ms, session._open_at_ms)}"
                     ),
                     LogContext(device_id=session._device_id, session_id=session._session_id),
                 )
@@ -1027,6 +1042,7 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
             format="pcm",
             sample_rate=self._sample_rate_hz,
             semantic_punctuation_enabled=False,
+            max_sentence_silence=self._settings.voice_asr_realtime_max_sentence_silence_ms,
             callback=_Callback(),
         )
 
@@ -1035,10 +1051,31 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
 
         if not pcm_bytes or self._closed.is_set():
             return
-        if self._first_audio_chunk_at_ms is None:
-            self._first_audio_chunk_at_ms = int(time.time() * 1000)
+        now_ms = int(time.time() * 1000)
+        is_first_audio = False
+        with self._lock:
+            if self._first_audio_chunk_at_ms is None:
+                self._first_audio_chunk_at_ms = now_ms
+                is_first_audio = True
+            self._audio_frame_count += 1
+            self._audio_bytes_sent += len(pcm_bytes)
         try:
             self._recognition.send_audio_frame(bytes(pcm_bytes))
+            returned_at_ms = int(time.time() * 1000)
+            if is_first_audio:
+                self._first_audio_send_returned_at_ms = returned_at_ms
+                log_debug(
+                    self._logger,
+                    (
+                        "实时 ASR 首个音频分片已发送 "
+                        f"segment_id={self._segment_id} input_stream_id={self._stream_id} "
+                        f"bytes={len(pcm_bytes)} frame_count={self._audio_frame_count} "
+                        f"session_start_to_first_audio_ms="
+                        f"{self._latency_ms(self._created_at_ms, self._first_audio_chunk_at_ms)} "
+                        f"send_audio_frame_cost_ms={self._latency_ms(now_ms, returned_at_ms)}"
+                    ),
+                    LogContext(device_id=self._device_id, session_id=self._session_id),
+                )
         except Exception as exc:  # noqa: BLE001 - 真实 ASR SDK 可能抛出多类运行时异常
             self._error = build_error(
                 ErrorCode.INTERNAL_ERROR,
@@ -1052,6 +1089,7 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
 
         if not self._closed.is_set():
             self._closed.set()
+            self._stop_requested_at_ms = int(time.time() * 1000)
             threading.Thread(
                 target=self._stop_recognition,
                 name=f"asr-stop-{self._device_id}-{self._segment_id}",
@@ -1108,6 +1146,18 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
             "first_audio_chunk_at_ms": self._first_audio_chunk_at_ms,
             "first_asr_partial_latency_ms": self._latency_from_first_audio(self._first_partial_at_ms),
             "asr_total_latency_ms": self._latency_from_first_audio(total_finished_at_ms),
+            "recognition_open_latency_ms": self._latency_ms(self._created_at_ms, self._open_at_ms),
+            "session_start_to_first_audio_ms": self._latency_ms(self._created_at_ms, self._first_audio_chunk_at_ms),
+            "first_audio_send_cost_ms": self._latency_ms(
+                self._first_audio_chunk_at_ms,
+                self._first_audio_send_returned_at_ms,
+            ),
+            "stop_to_complete_ms": self._latency_ms(self._stop_requested_at_ms, self._completed_at_ms),
+            "audio_ms_before_first_partial": self._audio_duration_ms(self._audio_bytes_before_first_partial),
+            "audio_frame_count": self._audio_frame_count,
+            "audio_bytes_sent": self._audio_bytes_sent,
+            "dashscope_first_package_delay_ms": self._dashscope_first_package_delay_ms,
+            "dashscope_last_package_delay_ms": self._dashscope_last_package_delay_ms,
         }
 
     def _latency_from_first_audio(self, end_at_ms: int | None) -> int | None:
@@ -1116,6 +1166,35 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         if self._first_audio_chunk_at_ms is None or end_at_ms is None:
             return None
         return max(end_at_ms - self._first_audio_chunk_at_ms, 0)
+
+    @staticmethod
+    def _latency_ms(start_at_ms: int | None, end_at_ms: int | None) -> int | None:
+        """计算两个毫秒时间戳之间的耗时。"""
+
+        if start_at_ms is None or end_at_ms is None:
+            return None
+        return max(end_at_ms - start_at_ms, 0)
+
+    def _audio_duration_ms(self, byte_count: int | None) -> int | None:
+        """按 PCM16 单声道字节数估算已发送音频时长。"""
+
+        if byte_count is None or self._sample_rate_hz <= 0:
+            return None
+        return int(byte_count * 1000 / (self._sample_rate_hz * SERVER_SAMPLE_WIDTH_BYTES))
+
+    def _read_recognition_metric(self, method_name: str) -> int | None:
+        """读取 DashScope SDK 自带的延迟指标。"""
+
+        getter = getattr(self._recognition, method_name, None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter()
+        except Exception:
+            return None
+        if isinstance(value, (int, float)) and value >= 0:
+            return int(value)
+        return None
 
     def _handle_recognition_event(self, result: Any) -> None:
         """处理 DashScope Recognition 实时识别事件。"""
@@ -1128,23 +1207,32 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         with self._lock:
             if self._first_partial_at_ms is None:
                 self._first_partial_at_ms = now_ms
+                self._audio_bytes_before_first_partial = self._audio_bytes_sent
+                self._dashscope_first_package_delay_ms = self._read_recognition_metric("get_first_package_delay")
                 should_log_first_partial = True
             if is_sentence_end:
                 self._final_sentences.append(text)
                 self._final_text = "".join(self._final_sentences)
                 self._latest_partial_text = ""
                 self._final_text_at_ms = now_ms
+                if self._first_sentence_end_at_ms is None:
+                    self._first_sentence_end_at_ms = now_ms
             else:
                 self._latest_partial_text = text
         if should_log_first_partial:
             first_asr_partial_latency_ms = self._latency_from_first_audio(now_ms)
+            audio_ms_before_first_partial = self._audio_duration_ms(self._audio_bytes_before_first_partial)
             log_debug(
                 self._logger,
                 (
                     "实时 ASR 返回首个文本 "
                     f"first_asr_partial_latency_ms={first_asr_partial_latency_ms} "
+                    f"dashscope_first_package_delay_ms={self._dashscope_first_package_delay_ms} "
+                    f"audio_ms_before_first_partial={audio_ms_before_first_partial} "
+                    f"audio_bytes_before_first_partial={self._audio_bytes_before_first_partial} "
+                    f"frame_count={self._audio_frame_count} "
                     f"segment_id={self._segment_id} input_stream_id={self._stream_id} "
-                    f"text_preview={text[:24]!r}"
+                    f"is_sentence_end={is_sentence_end} text_preview={text[:24]!r}"
                 ),
                 LogContext(device_id=self._device_id, session_id=self._session_id),
             )
@@ -1157,6 +1245,7 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
                 self._final_text = self._latest_partial_text
             if self._completed_at_ms is None:
                 self._completed_at_ms = int(time.time() * 1000)
+            self._dashscope_last_package_delay_ms = self._read_recognition_metric("get_last_package_delay")
         self._done_event.set()
 
     def _handle_recognition_error(self, result: Any) -> None:
@@ -1941,7 +2030,16 @@ class VoiceRuntime:
                             f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
                             f"text_length={len(realtime_text)} "
                             f"first_asr_partial_latency_ms={asr_metrics.get('first_asr_partial_latency_ms')} "
-                            f"asr_total_latency_ms={asr_metrics.get('asr_total_latency_ms')}"
+                            f"asr_total_latency_ms={asr_metrics.get('asr_total_latency_ms')} "
+                            f"recognition_open_latency_ms={asr_metrics.get('recognition_open_latency_ms')} "
+                            f"session_start_to_first_audio_ms={asr_metrics.get('session_start_to_first_audio_ms')} "
+                            f"first_audio_send_cost_ms={asr_metrics.get('first_audio_send_cost_ms')} "
+                            f"audio_ms_before_first_partial={asr_metrics.get('audio_ms_before_first_partial')} "
+                            f"dashscope_first_package_delay_ms={asr_metrics.get('dashscope_first_package_delay_ms')} "
+                            f"dashscope_last_package_delay_ms={asr_metrics.get('dashscope_last_package_delay_ms')} "
+                            f"stop_to_complete_ms={asr_metrics.get('stop_to_complete_ms')} "
+                            f"audio_frame_count={asr_metrics.get('audio_frame_count')} "
+                            f"audio_bytes_sent={asr_metrics.get('audio_bytes_sent')}"
                         ),
                         LogContext(device_id=device_id, session_id=session_id),
                     )
