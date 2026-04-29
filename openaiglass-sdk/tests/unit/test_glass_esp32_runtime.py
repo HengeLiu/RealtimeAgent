@@ -60,3 +60,7 @@ def test_glass_runtime_plays_short_prompt_tone_on_wakenet() -> None:
     assert "play_wake_prompt_tone();" not in vad_branch
     assert "push_aec_reference_samples(mono_buffer" in source
     assert "唤醒成功提示音已播放" in source
+    assert "mono_buffer = heap_caps_malloc" in source
+    assert "stereo_buffer = heap_caps_malloc" in source
+    assert "int16_t mono_buffer[AUDIO_FRAME_SAMPLES]" not in source
+    assert "int32_t stereo_buffer[AUDIO_FRAME_SAMPLES * 2]" not in source

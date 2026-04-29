@@ -1513,6 +1513,8 @@ static void build_afe_feed_buffer(sr_runtime_ctx_t *ctx, size_t mic_bytes_read)
 static void play_wake_prompt_tone(void)
 {
 #if CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE
+    int16_t *mono_buffer = NULL;
+    int32_t *stereo_buffer = NULL;
     if (s_playback_active || s_playback_task_running) {
         return;
     }
@@ -1520,8 +1522,21 @@ static void play_wake_prompt_tone(void)
         return;
     }
 
-    int16_t mono_buffer[AUDIO_FRAME_SAMPLES];
-    int32_t stereo_buffer[AUDIO_FRAME_SAMPLES * 2];
+    mono_buffer = heap_caps_malloc(AUDIO_FRAME_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mono_buffer == NULL) {
+        mono_buffer = heap_caps_malloc(AUDIO_FRAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    stereo_buffer = heap_caps_malloc(AUDIO_FRAME_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (stereo_buffer == NULL) {
+        stereo_buffer = heap_caps_malloc(AUDIO_FRAME_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (mono_buffer == NULL || stereo_buffer == NULL) {
+        ESP_LOGW(TAG, "唤醒提示音缓冲分配失败，跳过提示音");
+        heap_caps_free(mono_buffer);
+        heap_caps_free(stereo_buffer);
+        return;
+    }
+
     const int total_samples = (SR_SAMPLE_RATE_HZ * CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS) / 1000;
     const int ramp_samples = total_samples < 160 ? total_samples / 2 : 80;
     uint32_t phase_q16 = 0;
@@ -1561,6 +1576,8 @@ static void play_wake_prompt_tone(void)
         );
         if (write_err != ESP_OK) {
             ESP_LOGW(TAG, "唤醒提示音写入失败: %s", esp_err_to_name(write_err));
+            heap_caps_free(mono_buffer);
+            heap_caps_free(stereo_buffer);
             return;
         }
         generated_samples += chunk_samples;
@@ -1571,6 +1588,8 @@ static void play_wake_prompt_tone(void)
         CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS,
         CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ
     );
+    heap_caps_free(mono_buffer);
+    heap_caps_free(stereo_buffer);
 #endif
 }
 
@@ -1751,7 +1770,7 @@ static void drain_and_pause_speaker(void)
 
 static bool ensure_speaker_channel_enabled(void)
 {
-    int32_t zero_buffer[AUDIO_FRAME_SAMPLES * 2] = {0};
+    int32_t *zero_buffer = NULL;
     size_t preloaded_size = 0;
 
     if (s_spk_tx_chan == NULL) {
@@ -1761,14 +1780,23 @@ static bool ensure_speaker_channel_enabled(void)
     if (s_speaker_channel_enabled) {
         return true;
     }
-    esp_err_t preload_err = i2s_channel_preload_data(
-        s_spk_tx_chan,
-        zero_buffer,
-        sizeof(zero_buffer),
-        &preloaded_size
-    );
-    if (preload_err != ESP_OK) {
-        ESP_LOGW(TAG, "预装扬声器静音帧失败: %s", esp_err_to_name(preload_err));
+    zero_buffer = heap_caps_calloc(AUDIO_FRAME_SAMPLES * 2, sizeof(int32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (zero_buffer == NULL) {
+        zero_buffer = heap_caps_calloc(AUDIO_FRAME_SAMPLES * 2, sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (zero_buffer == NULL) {
+        ESP_LOGW(TAG, "扬声器预装静音帧缓冲分配失败，继续尝试启用通道");
+    } else {
+        esp_err_t preload_err = i2s_channel_preload_data(
+            s_spk_tx_chan,
+            zero_buffer,
+            AUDIO_FRAME_SAMPLES * 2 * sizeof(int32_t),
+            &preloaded_size
+        );
+        heap_caps_free(zero_buffer);
+        if (preload_err != ESP_OK) {
+            ESP_LOGW(TAG, "预装扬声器静音帧失败: %s", esp_err_to_name(preload_err));
+        }
     }
     esp_err_t enable_err = i2s_channel_enable(s_spk_tx_chan);
     if (enable_err != ESP_OK) {
