@@ -423,14 +423,14 @@ class AgentMemoryRuntime:
         if not hot_records and not cold_records:
             return ""
         lines = [
-            "以下是系统长期记忆。热记忆可直接用于回答；冷记忆这里只提供标题，若需要详细内容请调用 memory_search(title 或 titles) 后再回答。"
+            "以下是已保存的用户信息。部分信息已直接提供；如果只看到标题且需要详细内容，请调用 memory_search(title 或 titles) 查询后再回答。"
         ]
         if hot_records:
-            lines.append("热记忆：")
+            lines.append("已提供的信息：")
             for record in hot_records:
                 lines.append(f"- {record.title}: {record.content}")
         if cold_records:
-            lines.append("冷记忆标题：")
+            lines.append("可查询的信息标题：")
             for record in cold_records:
                 lines.append(f"- {record.title}")
         return "\n".join(lines)

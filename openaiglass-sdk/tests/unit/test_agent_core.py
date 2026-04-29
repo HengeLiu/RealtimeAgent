@@ -456,6 +456,9 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("导航偏好", fragment)
         self.assertNotIn("先说方向再说距离", fragment)
         self.assertIn("memory_search", runtime.model_request["instructions"])
+        self.assertIn("manage_memory", runtime.model_request["instructions"])
+        self.assertNotIn("热记忆", runtime.model_request["instructions"])
+        self.assertNotIn("冷记忆", runtime.model_request["instructions"])
 
     def test_start_phone_video_link_tool_prefers_device_group_snapshot(self) -> None:
         """测试目标：验证视频直连 Tool 优先使用 SDK 设备组快照。
