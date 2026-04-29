@@ -143,7 +143,29 @@ curl http://127.0.0.1:8765/api/runtime/devices
 
 如果服务端、手机端、眼镜端日志都能看到对应请求、工具调用或任务事件，说明 SDK 开发环境基本可用。以上测试未实现真正的业务功能，只用于设备开发环境可用性验证。
 
-### 9. 开始功能开发
+### 9. 使用数据回放加速研发
+
+设备级数据回放是本 SDK 的核心特色之一。功能开发不必每次都依赖真实 ESP32 眼镜或真实 iPhone，可以用 `phone-mock` 模拟手机设备，用 `glass-playback` 模拟眼镜设备，并消费 `openaiglass-for-blind/testdata` 中准备好的音频、图片、视频和传感器样例，让服务端、Agent、Tool、Task、手机任务协议和眼镜执行器都跑在真实通信链路上。
+
+推荐研发闭环：
+
+1. 执行 `openaiglass.config.sync` 同步服务端、phone 和 glass-playback 的设备配置。
+2. 启动服务端，必要时设置 `LOG_LEVEL=DEBUG` 并把日志写入 `openaiglass-for-blind/logs/`。
+3. 如果能力需要手机端任务，先启动 `phone-mock` 或真实 iPhone。
+4. 使用 `glass-playback` 加载 `openaiglass-for-blind/host/glass-playback/config/*.json`，由配置中的 `trigger_audio`、`camera_capture`、`camera_stream`、`heading` 等输入驱动一次真实链路回放。
+5. 查看服务端日志、`phone-mock` 日志、`glass-playback` 日志、`runs/playback/.../events.jsonl`、`runs/playback/.../actuators.jsonl` 和业务产物，判断代码在真实样例数据上是否有效。
+
+例如“看前方”这类拍照链路可以使用当前已有配置启动回放：
+
+```bash
+uv run openaiglass.glass.start \
+  --runtime playback \
+  --config openaiglass-for-blind/host/glass-playback/config/look_look.json
+```
+
+这种回放不只是组件级 mock。它会像真实眼镜一样注册设备、等待语音会话、上传触发音频、响应抓拍或视频流命令，并记录服务端下发的播放、震动等执行器请求。单元测试通过后，建议再用数据回放确认真实链路行为，然后再进入真机联调。
+
+### 10. 开始功能开发
 
 新增能力优先复制一个现有样板：
 
@@ -198,12 +220,13 @@ uv run openaiglass.config.sync --app-root openaiglass-for-blind
 uv run openaiglass.server.run --app-module host.server.main --app-root openaiglass-for-blind
 uv run openaiglass.phone.mock --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
 uv run openaiglass.glass.start --runtime playback --config <glass-playback.json>
+uv run openaiglass.glass.start --runtime playback --config openaiglass-for-blind/host/glass-playback/config/look_look.json
 uv run openaiglass.sdk.preflight --report openaiglass-for-blind/logs/sdk-preflight-current.json
 uv run openaiglass.sdk.package-check --repo-root .
 uv run python -m pytest openaiglass-sdk/tests -q
 ```
 
-真实三端联调建议按“同步配置 -> 启动服务端 -> 启动手机或 `phone-mock` -> 启动 ESP32 眼镜或 `glass-playback` -> 触发业务能力 -> 看任务事件和端侧日志”的顺序执行。
+真实三端联调建议按“同步配置 -> 启动服务端 -> 启动手机或 `phone-mock` -> 启动 ESP32 眼镜或 `glass-playback` -> 触发业务能力 -> 看任务事件和端侧日志”的顺序执行。没有真机时，优先用 `phone-mock` + `glass-playback` + `openaiglass-for-blind/testdata` 做设备级数据回放，确认真实样例上的链路行为，再进入真机联调。
 
 ## 给功能开发者的下一步建议
 

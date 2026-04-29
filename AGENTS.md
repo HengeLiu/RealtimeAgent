@@ -104,6 +104,52 @@ uv run python -m pytest -q
 
 如果直接运行 `pytest` 遇到 Python 版本、路径或 entry point 问题，优先使用 `uv run python -m pytest`。
 
+### 设备级自动化回放验证
+
+完成服务端、Tool、Task、Skill、设备协议或业务能力代码后，不能只看单元测试结果。应尽量把本地服务真正拉起来，用 `phone-mock`、`glass-playback` 和 `openaiglass-for-blind/testdata` 中已有样例做一次设备级数据回放，观察真实链路日志和运行产物。
+
+推荐流程：
+
+1. 同步本机联调配置，确保服务端地址、设备号和配对令牌一致，不过不用每次都执行同步。
+2. 以 `DEBUG` 日志启动服务端，并把日志写入 `openaiglass-for-blind/logs/`。
+3. 启动 `phone-mock`，把 mock 手机端日志也写入文件。
+4. 启动 `glass-playback`，使用 `openaiglass-for-blind/host/glass-playback/config` 中的配置和 `openaiglass-for-blind/testdata` 中的音频、图片、视频、传感器样例完成真实数据回放。
+5. 通过 `/api/runtime/devices`、服务端日志、`phone-mock` 日志、`glass-playback` 日志、`runs/playback/.../events.jsonl`、`runs/playback/.../actuators.jsonl` 和服务端业务产物判断变更是否有效。
+6. 回放失败时，优先定位真实链路中的失败点，例如设备注册、绑定、语音会话打开、触发音频上传、ASR、Agent、Tool 调用、Task 事件、手机任务、执行器播放或通知输出，并尝试修复到可用。
+
+示例命令：
+
+```bash
+mkdir -p openaiglass-for-blind/logs
+
+uv run openaiglass.config.sync --app-root openaiglass-for-blind
+
+LOG_LEVEL=DEBUG uv run openaiglass.server.start \
+  --app-module host.server.main \
+  --app-root openaiglass-for-blind \
+  --config openaiglass-for-blind/config/local_server.env \
+  --log-file openaiglass-for-blind/logs/server-agent-check.log
+
+uv run openaiglass.phone.mock \
+  --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json \
+  > openaiglass-for-blind/logs/phone-mock-agent-check.log 2>&1 &
+
+uv run openaiglass.glass.start \
+  --runtime playback \
+  --config openaiglass-for-blind/host/glass-playback/config/look_look.json \
+  > openaiglass-for-blind/logs/glass-playback-agent-check.log 2>&1 &
+
+curl http://127.0.0.1:8765/api/runtime/devices
+```
+
+如果本次能力不适合 `look_look.json`，应选用或补充与能力匹配的 `glass-playback` 配置，但输入资产优先放在 `openaiglass-for-blind/testdata` 下。验证完成后，应停止后台服务，避免残留进程影响下一轮测试：
+
+```bash
+uv run openaiglass.server.stop
+```
+
+最终交付说明中要写明本次是否执行了设备级回放、使用了哪个配置和样例数据、关键日志文件位置、观察到的成功事件或失败点。单元测试通过但设备级回放失败时，不能把任务视为已经完成。
+
 新增或修改单元测试时，测试注释应说明：
 
 - 测试目标：要验证什么能力或异常。
