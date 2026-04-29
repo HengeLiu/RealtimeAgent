@@ -23,7 +23,8 @@ class UtterancePhotoRecord:
     1. `session_id/device_id/segment_id/stream_id`：定位语音轮次。
     2. `result`：设备回传的真实图片。
     3. `error`：后台抓拍失败时保存的异常。
-    4. `event`：通知等待方抓拍已结束。
+    4. `consumed_at_ms`：照片被装入某轮用户输入的时间。
+    5. `event`：通知等待方抓拍已结束。
     """
 
     session_id: str
@@ -35,6 +36,7 @@ class UtterancePhotoRecord:
     result: CameraCaptureResult | None = None
     error: BaseException | None = None
     completed_at_ms: int | None = None
+    consumed_at_ms: int | None = None
     event: threading.Event = field(default_factory=threading.Event)
 
 
@@ -44,7 +46,7 @@ class UtterancePhotoStore:
     主要功能：
     1. 在语音段结束后异步触发一次设备抓拍。
     2. 不阻塞 ASR、Agent 和 TTS 热路径。
-    3. 为模型可见工具提供“等待并获取本轮自动照片”的稳定入口。
+    3. 为 Agent 输入装配阶段提供“取出未使用照片”的稳定入口。
     """
 
     def __init__(self, *, max_records: int = 16) -> None:
@@ -176,9 +178,46 @@ class UtterancePhotoStore:
             "stream_id": record.stream_id,
             "requested_at_ms": record.requested_at_ms,
             "completed_at_ms": record.completed_at_ms,
+            "consumed_at_ms": record.consumed_at_ms,
             "ready": record.event.is_set() and record.result is not None,
             "error": str(record.error) if record.error is not None else "",
         }
+
+    def consume_ready_photos(self, *, session_id: str, device_id: str) -> list[UtterancePhotoRecord]:
+        """取出当前会话中尚未使用且已上传完成的自动照片。
+
+        主要逻辑：
+        1. 只返回同一会话、同一设备下 `result` 已就绪的记录。
+        2. 返回前立即写入 `consumed_at_ms`，保证每张自动照片只进入一次用户输入。
+        3. 对仍在上传、已经失败或已经消费的记录保持原状。
+
+        参数：
+        1. `session_id`：当前会话编号。
+        2. `device_id`：当前眼镜设备编号。
+
+        返回值：
+        1. 按抓拍请求时间排序的自动照片记录列表。
+
+        异常情况：
+        1. 本方法不抛出后台抓拍异常；失败记录不会被返回。
+        """
+
+        now = self._now_ms()
+        with self._lock:
+            records = [
+                record
+                for record in self._records.values()
+                if record.session_id == session_id
+                and record.device_id == device_id
+                and record.consumed_at_ms is None
+                and record.event.is_set()
+                and record.error is None
+                and record.result is not None
+            ]
+            records.sort(key=lambda item: item.requested_at_ms)
+            for record in records:
+                record.consumed_at_ms = now
+            return records
 
     def _capture_worker(
         self,

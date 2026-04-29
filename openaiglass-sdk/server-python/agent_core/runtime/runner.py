@@ -18,7 +18,7 @@ from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 
-_IMAGE_FOLLOWUP_TOOL_NAMES = {"get_latest_utterance_photo"}
+_IMAGE_FOLLOWUP_TOOL_NAMES: set[str] = set()
 
 
 @dataclass(slots=True)
@@ -30,7 +30,7 @@ class AgentTurnRuntime:
     instructions: str
     active_skill_names: list[str]
     allowed_tool_names: set[str] | None
-    run_input: list[dict[str, str]]
+    run_input: list[dict[str, Any]]
     sdk_tools: list
     model_request: dict[str, object]
 
@@ -47,7 +47,7 @@ class AgentTurnRuntimeFactory:
         tool_gateway: ToolGateway,
         skill_runtime: SkillRuntime | None,
         instruction_builder: Callable[[str | None], str],
-        history_builder: Callable[[AgentSession, AgentTurn], list[dict[str, str]]],
+        history_builder: Callable[[AgentSession, AgentTurn], list[dict[str, Any]]],
     ) -> None:
         self._settings = settings
         self._session_store = session_store
@@ -98,7 +98,7 @@ class AgentTurnRuntimeFactory:
             "extra_body": {"enable_thinking": False},
             "messages": [
                 {"role": "system", "content": instructions},
-                *run_input,
+                *OpenAIAgentLoopRunner._sanitize_model_messages(run_input),
             ],
         }
         return AgentTurnRuntime(
@@ -427,7 +427,7 @@ class StreamedAgentTurnObserver:
         self,
         *,
         agent,
-        run_input: list[dict[str, str]],
+        run_input: list[dict[str, Any]],
         run_config,
         tool_context: AgentToolContext,
         capability_traces: list,
@@ -645,8 +645,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         主要逻辑：
         1. 默认仍使用 Agents SDK 的标准工具循环。
         2. 当调用方提供进度回调时，切换到流式观察模式。
-        3. 若模型选择自动照片工具，则在取得照片后中止旧 loop，
-           直接进入主链路图片解读，避免再走一轮无意义的工具总结回复。
+        3. 当前轮自动照片已在输入装配阶段放入 user message，不再经过照片工具决策。
 
         参数：
         1. `session`：当前会话对象。
@@ -785,7 +784,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         self,
         *,
         agent,
-        run_input: list[dict[str, str]],
+        run_input: list[dict[str, Any]],
         run_config,
         tool_context: AgentToolContext,
         capability_traces: list,
@@ -799,8 +798,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         主要逻辑：
         1. 先以流式模式运行 Agents SDK，观察工具调用事件。
-        2. 若命中自动照片工具，在取得照片后中止原 loop，改为直接进入图片解读主链路。
-        3. 若未命中图片工具，则回落到 SDK 自身给出的最终回复文本。
+        2. 当前轮自动照片已作为 user message 图片输入发送给模型。
+        3. 若模型直接输出文本，则持续透传给上层流式 TTS。
 
         返回值：
         1. 完整 `AgentTurnResult`。
@@ -827,7 +826,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         excluded_asset_ids: set[str],
         timeout_seconds: float,
     ):
-        """等待自动照片工具产出本次新图片。
+        """等待工具链路产出本次新图片。
 
         主要逻辑：
         1. 只接受当前抓拍后新增的图片资产。
@@ -1185,13 +1184,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 created_loop.close()
 
     @staticmethod
-    def _build_history_messages(session: AgentSession, turn: AgentTurn) -> list[dict[str, str]]:
+    def _build_history_messages(session: AgentSession, turn: AgentTurn) -> list[dict[str, Any]]:
         """按原始历史消息构造模型输入消息列表。
 
         主要逻辑：
         1. 直接复用会话中的 `user/assistant` 历史消息，不再自行压缩成说明文本。
         2. 排除当前 turn 已经落入会话中的实时用户消息，避免重复。
-        3. 将当前轮 ASR 文本作为最后一条 `user` 消息追加。
+        3. 将当前轮 ASR 文本与本轮自动照片一起作为最后一条 `user` 消息追加。
 
         参数：
         1. `session`：当前会话对象。
@@ -1201,7 +1200,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         1. 适合直接传给 Agents SDK 的消息列表。
         """
 
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         for message in session.messages:
             if message.meta.get("turn_id") == turn.turn_id:
                 continue
@@ -1216,13 +1215,79 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     "content": text,
                 }
             )
-        messages.append(
-            {
-                "role": "user",
-                "content": turn.input_text.strip(),
-            }
-        )
+        messages.append({"role": "user", "content": OpenAIAgentLoopRunner._build_current_turn_content(turn)})
         return messages
+
+    @staticmethod
+    def _build_current_turn_content(turn: AgentTurn) -> str | list[dict[str, Any]]:
+        """构造当前轮用户消息内容。
+
+        主要逻辑：
+        1. 没有图片时沿用纯文本输入，保持普通工具链路兼容。
+        2. 如果当前 turn 挂接了图片资产，则把文本和全部图片一起组成多模态内容。
+        3. 图片使用 `data:` URL，避免额外对象存储依赖。
+
+        参数：
+        1. `turn`：当前用户输入轮次。
+
+        返回值：
+        1. 纯文本字符串，或 Chat Completions 兼容的多模态 content 列表。
+
+        异常情况：
+        1. 图片文件不存在或读取失败时会向上抛出异常，由上层统一转为 agent-core 失败。
+        """
+
+        text = turn.input_text.strip()
+        image_assets = [asset for asset in turn.asset_refs if asset.asset_type == "image"]
+        if not image_assets:
+            return text
+
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for asset in image_assets:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": OpenAIAgentLoopRunner._build_image_data_url(asset.storage_uri, asset.mime_type),
+                        "detail": "auto",
+                    },
+                }
+            )
+        return content
+
+    @staticmethod
+    def _sanitize_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """生成可持久化的模型请求快照。
+
+        主要逻辑：
+        1. 保留消息角色、文本和多模态结构，便于回归排障。
+        2. 将图片 `data:` URL 替换为占位符，避免日志和结果文件保存大段 base64。
+
+        参数：
+        1. `messages`：真实发送给模型的消息列表。
+
+        返回值：
+        1. 可写入日志或 `model_request` 的脱敏消息列表。
+        """
+
+        sanitized: list[dict[str, Any]] = []
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                sanitized.append(dict(message))
+                continue
+            sanitized_content: list[dict[str, Any]] = []
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "image_url":
+                    sanitized_content.append(dict(item) if isinstance(item, dict) else item)
+                    continue
+                image_url = dict(item.get("image_url") or {})
+                url = str(image_url.get("url") or "")
+                if url.startswith("data:"):
+                    image_url["url"] = "data:image/*;base64,<redacted>"
+                sanitized_content.append({**item, "image_url": image_url})
+            sanitized.append({**message, "content": sanitized_content})
+        return sanitized
 
     def _build_instructions(self, session_id: str | None = None) -> str:
         """构造最小 Agent 指令。"""
@@ -1230,7 +1295,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "请使用简短、口语化、直接的中文回答。\n"
-            "如果需要查看用户眼前场景，请直接调用本轮自动照片工具，不要先输出拍照提示。\n"
+            "如果当前用户消息已经包含照片，请直接结合照片回答，不要先输出拍照提示。\n"
             "必要时可以调用已提供的工具。\n"
             "不要输出代码块。\n"
         )

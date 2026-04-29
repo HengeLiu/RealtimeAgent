@@ -1298,7 +1298,7 @@ def test_openai_glasses_sdk_registers_skill_runtime() -> None:
                 name="navigation_guide",
                 version="1.0.0",
                 description="导航引导 Skill",
-                allowed_tools=["get_latest_utterance_photo"],
+                allowed_tools=[],
             ),
             content="根据导航任务上下文输出下一步提示。",
         )

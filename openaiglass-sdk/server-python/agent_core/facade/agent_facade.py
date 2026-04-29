@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import asdict
 
 from agent_core.camera import CameraGateway
+from agent_core.camera.utterance_photo import UtterancePhotoRecord
 from agent_core.context import AgentSessionStore, AgentTurn, AgentTurnResult, MessageContext, generate_id
 from agent_core.context.models import CapabilityTrace, MediaAssetRef
 from agent_core.runtime import AgentLoopRunner
@@ -13,7 +15,14 @@ from agent_core.tools import ToolGateway, ToolRegistry
 from backend_task_core import TaskEvent
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
-from infra.logging import LogContext, get_logger, log_error
+from infra.logging import LogContext, get_logger, log_debug, log_error
+
+_MIME_EXTENSION_MAP = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 
 
 class AgentFacade:
@@ -31,11 +40,13 @@ class AgentFacade:
         session_store: AgentSessionStore,
         tool_registry: ToolRegistry,
         runner: AgentLoopRunner,
+        settings: ServerSettings | None = None,
         system_prompt: str = "",
     ) -> None:
         self._session_store = session_store
         self._tool_registry = tool_registry
         self._runner = runner
+        self._settings = settings or ServerSettings()
         self._system_prompt = system_prompt
         self._logger = get_logger("server.agent")
 
@@ -91,6 +102,7 @@ class AgentFacade:
             session_id=turn.session_id,
             device_id=turn.device_id,
         )
+        turn.asset_refs.extend(self._consume_ready_utterance_photos(turn=turn))
         asset_ids = self._session_store.save_assets(session_id=turn.session_id, assets=turn.asset_refs)
         artifact_ids = self._session_store.save_artifacts(session_id=turn.session_id, artifacts=turn.derived_artifacts)
 
@@ -154,6 +166,99 @@ class AgentFacade:
         """
 
         self._tool_registry.bind_camera_gateway(camera_gateway)
+
+    def _consume_ready_utterance_photos(self, *, turn: AgentTurn) -> list[MediaAssetRef]:
+        """把已就绪自动照片转换成当前用户输入资产。
+
+        主要逻辑：
+        1. 从 `UtterancePhotoStore` 一次性取出当前会话未使用的自动照片。
+        2. 将图片字节落盘到本轮会话目录，生成 `MediaAssetRef`。
+        3. 返回的资产会挂接到当前用户消息，runner 会把它们装入多模态 user message。
+
+        参数：
+        1. `turn`：当前 Agent 输入轮次。
+
+        返回值：
+        1. 当前轮可随用户文本发送给多模态模型的图片资产列表。
+
+        异常情况：
+        1. 自动照片是低延迟辅助输入，落盘失败时只记录错误并继续文本链路。
+        """
+
+        store = self._tool_registry.get_utterance_photo_store()
+        records = store.consume_ready_photos(session_id=turn.session_id, device_id=turn.device_id)
+        if not records:
+            return []
+
+        assets: list[MediaAssetRef] = []
+        for record in records:
+            try:
+                assets.append(self._record_to_image_asset(turn=turn, record=record))
+            except Exception as exc:  # noqa: BLE001 - 自动照片失败不应打断语音问答主链路
+                log_error(
+                    self._logger,
+                    f"自动照片写入当前输入失败: reason={exc!r} segment_id={record.segment_id}",
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
+        if assets:
+            turn.meta["auto_utterance_photo_asset_ids"] = [asset.asset_id for asset in assets]
+            log_debug(
+                self._logger,
+                "自动照片已装入当前用户输入",
+                LogContext(
+                    device_id=turn.device_id,
+                    session_id=turn.session_id,
+                    message_id=turn.turn_id,
+                    fields={"asset_ids": [asset.asset_id for asset in assets], "count": len(assets)},
+                ),
+            )
+        return assets
+
+    def _record_to_image_asset(self, *, turn: AgentTurn, record: UtterancePhotoRecord) -> MediaAssetRef:
+        """将一条自动照片记录保存为会话图片资产。
+
+        参数：
+        1. `turn`：当前 Agent 输入轮次。
+        2. `record`：已就绪且已标记消费的自动照片记录。
+
+        返回值：
+        1. 可挂接到当前用户消息的 `MediaAssetRef`。
+
+        异常情况：
+        1. 若记录缺少图片结果或文件系统写入失败，会向上抛出异常，由调用方降级处理。
+        """
+
+        if record.result is None:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "自动照片记录已消费但没有图片结果",
+                details={"segment_id": record.segment_id},
+            )
+        asset_id = generate_id("asset")
+        capture_dir = os.path.join(
+            self._settings.voice_runs_root,
+            turn.session_id,
+            "image",
+            "utterance",
+        )
+        os.makedirs(capture_dir, exist_ok=True)
+        extension = _MIME_EXTENSION_MAP.get(record.result.mime_type.lower(), ".bin")
+        storage_uri = os.path.join(capture_dir, f"{asset_id}{extension}")
+        with open(storage_uri, "wb") as file:
+            file.write(record.result.image_bytes)
+
+        return MediaAssetRef(
+            asset_id=asset_id,
+            session_id=turn.session_id,
+            asset_type="image",
+            storage_uri=storage_uri,
+            mime_type=record.result.mime_type,
+            codec=record.result.codec,
+            width=record.result.width,
+            height=record.result.height,
+            bytes=len(record.result.image_bytes),
+            source_stream_id=record.stream_id or None,
+        )
 
     def bind_device_state_reader(self, device_state_reader) -> None:
         """补绑真实设备运行态读取函数。"""

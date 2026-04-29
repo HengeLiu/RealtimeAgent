@@ -59,7 +59,7 @@ class ServerSettings:
     server_device_id: str = "server-main"
     dashscope_api_key: str = ""
     voice_model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    agent_model_name: str = "qwen3.6-plus"
+    agent_model_name: str = "qwen3.5-omni-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Tina"
     tts_model_name: str = "cosyvoice-v3-flash"

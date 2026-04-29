@@ -10,7 +10,7 @@ import tempfile
 import threading
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from agent_core import AgentFacade, AgentTurn, AgentTurnResult, DerivedArtifact, MediaAssetRef
 from agent_core.camera import CameraCaptureResult
@@ -646,7 +646,7 @@ class AgentCoreTestCase(unittest.TestCase):
 
         self.assertIsNone(result.error)
         self.assertEqual(result.reply_text, "设备当前正在监听")
-        self.assertEqual(result.meta["model_request"]["model"], "qwen3.6-plus")
+        self.assertEqual(result.meta["model_request"]["model"], "qwen3.5-omni-plus")
         self.assertEqual(result.meta["model_request"]["messages"][0]["role"], "system")
         self.assertEqual(result.meta["model_request"]["messages"][1], {"role": "user", "content": "上一轮问题"})
         self.assertEqual(result.meta["model_request"]["messages"][2], {"role": "assistant", "content": "上一轮回复"})
@@ -702,7 +702,7 @@ class AgentCoreTestCase(unittest.TestCase):
         """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。
 
         测试方法：
-        1. 注册一个只允许 `get_latest_utterance_photo` 的 Skill。
+        1. 注册一个不额外允许模型工具的 Skill。
         2. 通过 `read_skill` 工具读取 Skill 文档。
         3. 执行一轮 Agent，并检查 system prompt 与模型工具列表。
 
@@ -719,9 +719,9 @@ class AgentCoreTestCase(unittest.TestCase):
                     name="scene_inspection",
                     version="1.0.0",
                     description="看清用户眼前场景",
-                    allowed_tools=["get_latest_utterance_photo"],
+                    allowed_tools=[],
                 ),
-                content="先拍照，再根据照片用一句话回答。",
+                content="如果当前输入包含照片，直接根据照片用一句话回答。",
             )
         )
         registry, gateway = build_tooling(skill_runtime=skill_runtime)
@@ -777,11 +777,11 @@ class AgentCoreTestCase(unittest.TestCase):
             getattr(tool, "name", None) or getattr(tool, "_tool_name_override", "")
             for tool in agent.kwargs["tools"]
         ]
-        self.assertEqual(tool_names, ["get_latest_utterance_photo", "read_skill"])
+        self.assertEqual(tool_names, ["read_skill"])
         self.assertIn("当前 active Skills", result.meta["model_request"]["instructions"])
-        self.assertIn("先拍照，再根据照片用一句话回答。", result.meta["model_request"]["instructions"])
+        self.assertIn("如果当前输入包含照片，直接根据照片用一句话回答。", result.meta["model_request"]["instructions"])
         self.assertEqual(result.meta["model_request"]["active_skills"], ["scene_inspection"])
-        self.assertEqual(result.meta["model_request"]["allowed_tool_names"], ["get_latest_utterance_photo", "read_skill"])
+        self.assertEqual(result.meta["model_request"]["allowed_tool_names"], ["read_skill"])
 
     def test_openai_runner_creates_event_loop_in_worker_thread(self) -> None:
         """测试目标：验证 OpenAIAgentLoopRunner 在工作线程中会自动补齐 event loop。
@@ -926,18 +926,23 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("agent-core 运行失败", result.reply_text)
         self.assertEqual(len(result.capability_traces), 0)
 
-    def test_openai_runner_does_not_emit_duplicate_progress_before_utterance_photo(self) -> None:
-        """测试目标：验证视觉链路不会额外发出重复拍照播报。
+    def test_openai_runner_puts_current_turn_images_into_user_message(self) -> None:
+        """测试目标：验证当前轮图片资产会直接进入用户多模态消息。
 
         测试方法：
-        1. 伪造 `run_streamed` 事件流，只产出 `get_latest_utterance_photo` 的 tool_called/tool_output。
-        2. 将主链路图片续跑方法打桩为固定回复。
-        3. 收集中间播报回调与最终结果。
+        1. 构造一个带图片资产的 `AgentTurn`。
+        2. 用假 Agents SDK 执行同步 Agent Loop。
+        3. 检查真实输入包含 `image_url`，而持久化 `model_request` 已脱敏。
 
         预期结果：
-        1. SDK 不再注入固定“好的，你保持别动...”播报。
-        2. 最终回复来自图片续跑阶段。
+        1. 模型输入最后一条 user message 是 `text + image_url` 结构。
+        2. `model_request` 不保存真实 base64 图片内容。
         """
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as image_file:
+            image_file.write(_FAKE_PNG_BYTES)
+            image_path = image_file.name
+        self.addCleanup(lambda: os.path.exists(image_path) and os.remove(image_path))
 
         registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
         runner = OpenAIAgentLoopRunner(
@@ -946,77 +951,40 @@ class AgentCoreTestCase(unittest.TestCase):
             tool_registry=registry,
             tool_gateway=gateway,
         )
-        session = AgentSession(session_id="sess_stream_photo_001", device_id="glass-001")
+        session = AgentSession(session_id="sess_multimodal_001", device_id="glass-001")
         turn = AgentTurn(
-            turn_id="turn_stream_photo_001",
-            session_id="sess_stream_photo_001",
+            turn_id="turn_multimodal_001",
+            session_id="sess_multimodal_001",
             device_id="glass-001",
             source="voice_asr",
-            input_text="看一下我眼前是什么",
+            input_text="看一下我前面有什么",
+            asset_refs=[
+                MediaAssetRef(
+                    asset_id="asset_image_001",
+                    session_id="sess_multimodal_001",
+                    asset_type="image",
+                    storage_uri=image_path,
+                    mime_type="image/png",
+                )
+            ],
         )
-        progress_messages: list[str] = []
-
-        class _FakeStream:
-            def __init__(self, events) -> None:
-                self._events = iter(events)
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                try:
-                    return next(self._events)
-                except StopIteration as exc:
-                    raise StopAsyncIteration from exc
 
         class _FakeRunResult:
-            final_output = ""
-
-            def stream_events(self):
-                tool_called = types.SimpleNamespace(
-                    type="run_item_stream_event",
-                    name="tool_called",
-                    item=types.SimpleNamespace(
-                        raw_item=types.SimpleNamespace(name="get_latest_utterance_photo", call_id="call_photo_001")
-                    ),
-                )
-                tool_output = types.SimpleNamespace(
-                    type="run_item_stream_event",
-                    name="tool_output",
-                    item=types.SimpleNamespace(raw_item=types.SimpleNamespace(call_id="call_photo_001")),
-                )
-                return _FakeStream([tool_called, tool_output])
-
-            def cancel(self):
-                return None
-
-        async def _fake_followup(*args, **kwargs):
-            return "我看到前方有一张桌子。"
+            final_output = "前面有一张床。"
 
         with install_fake_agents_module():
-            with patch("agents.Runner.run_streamed", return_value=_FakeRunResult()):
-                with patch.object(
-                    runner,
-                    "_wait_for_new_image_asset",
-                    new=AsyncMock(
-                        return_value=MediaAssetRef(
-                            asset_id="asset_test_001",
-                            session_id="sess_stream_photo_001",
-                            asset_type="image",
-                            storage_uri="/tmp/fake.jpg",
-                            mime_type="image/jpeg",
-                        )
-                    ),
-                ):
-                    with patch.object(runner, "_stream_image_followup_reply", side_effect=_fake_followup):
-                        result = runner.run_turn(
-                            session=session,
-                            turn=turn,
-                            progress_callback=progress_messages.append,
-                        )
+            with patch("agents.Runner.run_sync", return_value=_FakeRunResult()) as mocked_run:
+                result = runner.run_turn(session=session, turn=turn)
 
-        self.assertEqual(progress_messages, [])
-        self.assertEqual(result.reply_text, "我看到前方有一张桌子。")
+        _, input_payload = mocked_run.call_args.args[:2]
+        current_content = input_payload[-1]["content"]
+        self.assertIsInstance(current_content, list)
+        self.assertEqual(current_content[0], {"type": "text", "text": "看一下我前面有什么"})
+        self.assertEqual(current_content[1]["type"], "image_url")
+        self.assertTrue(current_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        request_content = result.meta["model_request"]["messages"][-1]["content"]
+        self.assertEqual(request_content[1]["image_url"]["url"], "data:image/*;base64,<redacted>")
+        self.assertEqual(result.reply_text, "前面有一张床。")
 
     def test_openai_runner_streams_plain_text_delta_to_callback(self) -> None:
         """测试目标：验证普通文本回复会透传模型增量给上层流式 TTS。
@@ -1198,7 +1166,7 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(delta_parts, ["前面", "有一张桌子。"])
         self.assertEqual(len(captured_requests), 1)
         request = captured_requests[0]
-        self.assertEqual(request["model"], "qwen3.6-plus")
+        self.assertEqual(request["model"], "qwen3.5-omni-plus")
         messages = request["messages"]
         assert isinstance(messages, list)
         self.assertIn("请直接结合图片回答用户刚才的问题", messages[0]["content"])
@@ -1295,8 +1263,8 @@ class AgentCoreTestCase(unittest.TestCase):
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, {"get_latest_utterance_photo"})
-        self.assertIsNotNone(registry.get("get_latest_utterance_photo"))
+        self.assertEqual(tool_names, set())
+        self.assertIsNone(registry.get("get_latest_utterance_photo"))
         self.assertIsNotNone(registry.get("capture_photo"))
         self.assertIsNone(registry.get("create_timer"))
         self.assertIsNone(registry.get("timer_manage"))
@@ -1331,59 +1299,73 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("reason", signature.parameters)
         self.assertNotIn("payload", signature.parameters)
 
-    def test_get_latest_utterance_photo_reads_auto_capture_result(self) -> None:
-        """测试目标：验证模型可见图片工具读取语音结束后的自动抓拍结果。
+    def test_agent_facade_consumes_ready_utterance_photo_as_current_input_asset(self) -> None:
+        """测试目标：验证自动抓拍照片会直接挂到当前用户输入。
 
         测试方法：
         1. 注入假相机网关并启动一条后台自动抓拍记录。
-        2. 通过 `get_latest_utterance_photo` Tool 等待并读取该记录。
-        3. 检查返回的图片资产与相机网关字节一致。
+        2. 调用 `AgentFacade.handle_turn` 处理当前语音输入。
+        3. 检查 runner 收到的 turn 和会话用户消息都带有图片资产。
 
         预期结果：
-        1. Tool 不会重新暴露 `capture_photo` 给模型。
-        2. 返回结果中的图片路径真实存在，文件字节等于自动抓拍字节。
+        1. 图片资产随当前用户输入进入 agent-core，不再依赖模型调用照片工具。
+        2. 同一张自动照片只会被消费一次。
         """
 
-        settings = ServerSettings(voice_runs_root="/tmp/agent-core-utterance-photo")
-        registry, gateway = build_tooling(camera_gateway=FakeCameraGateway())
-        store = registry.get_utterance_photo_store()
-        store.start_capture(
-            camera_gateway=registry.get_camera_gateway(),
-            session_id="sess_utterance_photo_001",
-            device_id="glass-001",
-            segment_id="seg_utterance_photo_001",
-            stream_id="stream_utterance_photo_001",
-            timeout_ms=1000,
-        )
-
-        result = registry.invoke(
-            name="get_latest_utterance_photo",
-            context=AgentToolContext(
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = ServerSettings(voice_runs_root=temp_dir)
+            registry, _gateway = build_tooling(camera_gateway=FakeCameraGateway())
+            runner = FakeAgentLoopRunner()
+            facade = AgentFacade(
+                session_store=AgentSessionStore(),
+                tool_registry=registry,
+                runner=runner,
+                settings=settings,
+            )
+            store = registry.get_utterance_photo_store()
+            store.start_capture(
+                camera_gateway=registry.get_camera_gateway(),
                 session_id="sess_utterance_photo_001",
                 device_id="glass-001",
+                segment_id="seg_utterance_photo_001",
+                stream_id="stream_utterance_photo_001",
+                timeout_ms=1000,
+            )
+            store.wait_for_photo(
+                session_id="sess_utterance_photo_001",
+                device_id="glass-001",
+                segment_id="seg_utterance_photo_001",
+                timeout_ms=1000,
+            )
+
+            turn = AgentTurn(
                 turn_id="turn_utterance_photo_001",
-                settings=settings,
-                session_store=AgentSessionStore(),
-                device_state_reader=registry.get_device_state_reader(),
-                trace_sink=lambda _trace: None,
-                task_gateway=registry.get_task_gateway(),
-                camera_gateway=registry.get_camera_gateway(),
-                utterance_photo_store=store,
-                tool_gateway=gateway,
-                mcp_gateway=registry.get_mcp_gateway(),
-                turn_meta={
+                session_id="sess_utterance_photo_001",
+                device_id="glass-001",
+                source="voice_asr",
+                input_text="看一下我前面有什么",
+                meta={
                     "segment_id": "seg_utterance_photo_001",
                     "stream_id": "stream_utterance_photo_001",
                 },
-            ),
-            arguments={},
-        )
+            )
 
-        self.assertEqual(result.data["mime_type"], "image/png")
-        self.assertEqual(result.data["segment_id"], "seg_utterance_photo_001")
-        self.assertTrue(result.data["storage_uri"].endswith(".png"))
-        with open(result.data["storage_uri"], "rb") as handle:
-            self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
+            facade.handle_turn(turn)
+
+            self.assertEqual(len(runner.turns), 1)
+            image_assets = [asset for asset in runner.turns[0].asset_refs if asset.asset_type == "image"]
+            self.assertEqual(len(image_assets), 1)
+            image_asset = image_assets[0]
+            self.assertEqual(image_asset.mime_type, "image/png")
+            self.assertTrue(image_asset.storage_uri.endswith(".png"))
+            with open(image_asset.storage_uri, "rb") as handle:
+                self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
+
+            session = facade.get_session_store().get_session("sess_utterance_photo_001")
+            assert session is not None
+            user_message = session.messages[0]
+            self.assertIn(image_asset.asset_id, user_message.asset_refs)
+            self.assertEqual(store.consume_ready_photos(session_id="sess_utterance_photo_001", device_id="glass-001"), [])
 
     def test_capture_photo_tool_uses_real_camera_gateway_result(self) -> None:
         """测试目标：验证 capture_photo 会把相机网关返回的真实字节写成图片资产。

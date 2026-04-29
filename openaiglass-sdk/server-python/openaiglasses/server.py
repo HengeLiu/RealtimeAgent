@@ -751,6 +751,7 @@ def build_agent_facade_from_sdk(
         session_store=session_store,
         tool_registry=tool_registry,
         runner=runner,
+        settings=settings,
         system_prompt=settings.voice_system_prompt,
     )
 
@@ -789,6 +790,7 @@ def build_default_agent_facade(
         session_store=session_store,
         tool_registry=tool_registry,
         runner=runner,
+        settings=settings,
         system_prompt=settings.voice_system_prompt,
     )
 

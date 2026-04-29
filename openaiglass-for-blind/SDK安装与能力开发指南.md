@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v41`。本版本在 `sdk-v40` 基础上增加实时 ASR 分段耗时日志，并把 `fun-asr-realtime` 的 VAD 断句静音阈值默认调为 `300ms`，用于减少用户说完后的 ASR 收尾等待。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v42`。本版本在 `sdk-v41` 基础上把语音结束自动照片直接装入当前用户多模态输入，移除模型可见的 `get_latest_utterance_photo` 工具，并将默认 `AGENT_MODEL_NAME` 调整为 `qwen3.5-omni-plus`，用于减少视觉问答首 token 前的一次工具决策模型调用。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
-| 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
+| 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`、`VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime` 和 `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS=300`；如需排障可临时设为 `batch`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，并支持保存或直接播放下行语音 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
@@ -478,7 +478,9 @@ uv run openaiglass.glass.start \
 
 `sdk-v33` 起，视觉拍照链路只保留模型流式文本和图片解读主链路文本两类播报。SDK 不再在 `capture_photo` 工具调用事件上额外注入固定中间播报，避免出现先听到图片解读、随后又听到“好的，你保持别动，我拍一张帮你看”的倒序或重复播报。
 
-`sdk-v34` 起，SDK 不再让模型主动调用 `capture_photo`。语音段结束后，`VoiceRuntime` 会立即在后台触发一次 `utterance_finished` 抓拍；ASR、Agent 和流式 TTS 不等待图片上传。模型如果需要回答“我眼前有什么”这类问题，应调用 `get_latest_utterance_photo(wait_timeout_ms=5000)` 获取本轮语音结束后的自动照片。该工具只读取自动照片，不会重新拍照；如果图片仍在上传，可以短暂等待，超时后返回结构化 `TIMEOUT` 错误。
+`sdk-v34` 起，SDK 不再让模型主动调用 `capture_photo`。语音段结束后，`VoiceRuntime` 会立即在后台触发一次 `utterance_finished` 抓拍；ASR、Agent 和流式 TTS 不等待图片上传。
+
+`sdk-v42` 起，自动照片不再通过模型可见工具读取。`AgentFacade` 会在处理当前语音 turn 时消费当前会话中已就绪、尚未使用的自动照片，把照片落成会话图片资产，并由 agent-core 直接组装为当前 `user` 消息的 `image_url` 内容。业务 Skill 不需要、也不应再把 `get_latest_utterance_photo` 写入 `allowed_tools`；如果当前照片尚未上传完成，本轮会先按纯文本问题进入模型，后续就绪照片会作为未使用照片进入下一轮输入。
 
 `sdk-v35` 起，默认 `VOICE_ASR_MODE=realtime`。服务端收到 `sensor.audio.segment.started` 后创建实时 ASR 会话，随后每个 `/ws_audio` 的 `audio_chunk` 都会在进入本地 `SegmentBuffer` 的同时送入实时 ASR。收到 `sensor.audio.segment.finished` 后，服务端优先等待实时 ASR 最终文本；如果实时 ASR 不可用、超时或返回空文本，再回退到旧的 `VOICE_ASR_MODEL_NAME` 整段 WAV 转写。这个改动的目标是把 ASR 耗时从“用户说完后才开始”前移到“用户说话过程中持续进行”。
 
@@ -488,7 +490,7 @@ uv run openaiglass.glass.start \
 
 `sdk-v41` 起，`实时 ASR 返回首个文本` 和 `实时 ASR 完成` 日志会额外携带 `recognition_open_latency_ms`、`session_start_to_first_audio_ms`、`first_audio_send_cost_ms`、`audio_ms_before_first_partial`、`dashscope_first_package_delay_ms`、`dashscope_last_package_delay_ms`、`stop_to_complete_ms`、`audio_frame_count` 和 `audio_bytes_sent`。这些字段用于判断 1 秒级 ASR 延迟到底发生在连接、发帧、ASR 服务首包、句尾 VAD 还是收尾阶段。`VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` 默认值为 `300`，取值范围 `200` 到 `6000`；如果误切句明显，可适当调大。
 
-当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答还会等待自动照片和多模态图片解读；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
+当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答会直接走多模态模型首 token，不再先做照片工具决策；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
@@ -775,7 +777,7 @@ sdk.register_skill(
             name="navigation_guide",
             version="1.0.0",
             description="导航引导 Skill",
-            allowed_tools=["get_latest_utterance_photo", "start_navigation"],
+            allowed_tools=["start_navigation"],
             allowed_mcp_methods=["amap.route_plan"],
         ),
         content="根据当前路线、定位和视觉事件，给用户一句短导航提示。",
@@ -904,7 +906,7 @@ Tool 中常用的 `context` 高层能力：
 | `start_phone_task(task_type=..., params=...)` | 启动手机侧持续任务。 |
 | `stop_phone_task(task_type=..., reason=...)` | 停止手机侧持续任务。 |
 
-注意：上表中的 `capture_photo(reason=...)` 是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是 `sdk-v34` 后的模型可见内置工具。视觉问答类能力应让模型调用 `get_latest_utterance_photo` 读取本轮语音结束后自动抓拍的照片，不要在 Skill `allowed_tools` 中继续声明 `capture_photo`。
+注意：上表中的 `capture_photo(reason=...)` 是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是模型可见内置工具。`sdk-v42` 起，语音结束自动照片会由 SDK 直接装入当前用户多模态输入；视觉问答类 Skill 不需要声明照片工具，也不要在 `allowed_tools` 中声明 `capture_photo`。
 | `submit_notification(text=..., priority=...)` | 向设备侧提交播报或提示。 |
 | `mcp(method_name, arguments)` | 调用 SDK 统一注册的 MCP 方法，例如地图、搜索或导航规划。 |
 
@@ -1892,15 +1894,13 @@ MP4 会由 `glass-playback` 在本机通过 `ffmpeg` 解成 JPEG 帧，再按真
 ```json
 {
   "defaults": {
-    "model_request_contains": ["qwen3.6-plus"]
+    "model_request_contains": ["qwen3.5-omni-plus"]
   },
   "cases": {
     "看一下我眼前有什么": {
       "reply_text_contains": ["看到", "看不清"],
       "reply_text_not_contains": ["抱歉"],
-      "required_capability_traces": [
-        {"capability_name": "get_latest_utterance_photo", "status": "succeeded"}
-      ]
+      "model_request_contains": ["image_url"]
     }
   }
 }

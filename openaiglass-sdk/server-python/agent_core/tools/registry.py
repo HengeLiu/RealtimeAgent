@@ -119,7 +119,6 @@ class ToolRegistry:
         from agent_core.tools.builtins import (
             CancelTaskTool,
             CapturePhotoTool,
-            GetLatestUtterancePhotoTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
             ReadSkillTool,
@@ -128,7 +127,6 @@ class ToolRegistry:
 
         for tool in (
             QueryDeviceStateTool(),
-            GetLatestUtterancePhotoTool(),
             CapturePhotoTool(),
             QueryTaskStatusTool(),
             CancelTaskTool(),
@@ -136,7 +134,7 @@ class ToolRegistry:
         ):
             self._register_tool(
                 tool,
-                expose_to_model=tool.spec.name in {"get_latest_utterance_photo"},
+                expose_to_model=False,
             )
 
         for method in self._mcp_registry.list_methods():

@@ -101,7 +101,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertTrue(settings.log_file.startswith("logs/server-"))
         self.assertTrue(settings.log_file.endswith(".log"))
         self.assertEqual(settings.server_device_id, "server-main")
-        self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
+        self.assertEqual(settings.agent_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
 
