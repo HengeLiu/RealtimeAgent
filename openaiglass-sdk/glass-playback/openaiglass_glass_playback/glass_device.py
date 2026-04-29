@@ -563,6 +563,7 @@ class PlaybackGlassDevice:
             stream_id = str(message.get("stream_id") or payload.get("stream_id") or "").strip()
             session_id = str(message.get("session_id") or self._session_id)
             requested_at_ms = int(time.time() * 1000)
+            self._warn_ignored_audio_player_config(audio_play, mode=mode)
             if mode not in {"record_and_auto_finish", "play_and_auto_finish"}:
                 self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
                 return
@@ -594,6 +595,31 @@ class PlaybackGlassDevice:
                 )
                 return
             self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
+
+    def _warn_ignored_audio_player_config(self, audio_play: object, *, mode: str) -> None:
+        """提示被忽略的本机播放器配置。
+
+        主要逻辑：
+        1. `player_command` 只在 `play_and_auto_finish` 模式中生效。
+        2. 如果开发者在其他模式配置了播放器命令，打印一次明确状态日志。
+
+        参数：
+        1. `audio_play`：`actuators.audio_play` 原始配置。
+        2. `mode`：当前播放器模式。
+        """
+
+        if mode == "play_and_auto_finish" or not isinstance(audio_play, dict):
+            return
+        player_command = str(audio_play.get("player_command") or "").strip()
+        if not player_command:
+            return
+        self._print_status(
+            "audio_play.player_command 被忽略",
+            {
+                "mode": mode,
+                "hint": "请将 audio_play.mode 改为 play_and_auto_finish",
+            },
+        )
 
     def _send_audio_finished(self, control: WsClient, *, stream_id: str, session_id: str) -> None:
         """向服务端上报当前播放流已结束。

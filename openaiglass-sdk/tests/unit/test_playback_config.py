@@ -574,6 +574,73 @@ def test_playback_audio_can_play_without_persistent_save(
     assert not (app_root / "runs/playback/glass-playback-001/audio/stream_audio_001.wav").exists()
 
 
+def test_playback_warns_when_player_command_is_ignored(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """测试目标：配置播放器命令但未启用播放模式时给出明确提示。
+
+    测试方法：
+    1. 配置 `audio_play.mode=record_and_auto_finish` 和 `player_command`。
+    2. 处理一次 `actuator.audio.play` 控制消息。
+    3. 读取命令行输出。
+
+    预期结果：
+    1. 输出包含 `player_command 被忽略`。
+    2. 提示开发者把 mode 改为 `play_and_auto_finish`。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    config_dir.mkdir(parents=True)
+    _write_wav(audio_path)
+    config_path = config_dir / "glass.audio_player_ignored.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_id": "glass-playback-001",
+                "pair_token": "pair-playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "startup": {"wait_for_binding": False},
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "chunk_ms": 20,
+                    }
+                },
+                "actuators": {
+                    "audio_play": {
+                        "mode": "record_and_auto_finish",
+                        "player_command": "ffplay -nodisp -autoexit",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    control = _FakeControl()
+    device._session_id = "sess_001"  # noqa: SLF001 - 单元测试直接验证控制消息时序
+    device._handle_control_message(  # noqa: SLF001 - 单元测试直接验证设备协议回包
+        control,
+        {
+            "name": "actuator.audio.play",
+            "session_id": "sess_001",
+            "stream_id": "stream_audio_001",
+            "payload": {"stream_id": "stream_audio_001"},
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert "audio_play.player_command 被忽略" in output
+    assert "play_and_auto_finish" in output
+
+
 def test_playback_asserts_server_artifact_generated(tmp_path: Path) -> None:
     """测试目标：设备级回放可以断言服务端业务产物已生成。
 
