@@ -338,18 +338,19 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(len(result.task_refs), 1)
         self.assertEqual(result.task_refs[0].task_type, "phone_video_link_task")
 
-    def test_manage_memory_tool_adds_searches_and_deletes_device_memory(self) -> None:
-        """测试目标：验证 SDK 内置记忆 Tool 支持新增、查询和删除。
+    def test_manage_memory_and_memory_search_use_hot_cold_memory(self) -> None:
+        """测试目标：验证 SDK 内置记忆 Tool 支持冷热记忆分层。
 
         测试方法：
         1. 构造内存版 `AgentMemoryRuntime` 并注入 `ToolRegistry`。
-        2. 通过 `ToolGateway` 依次调用 `manage_memory` 的 add、search、delete、list。
-        3. 检查同一设备作用域下记忆写入和软删除结果。
+        2. 通过 `manage_memory` 新增一条冷记忆。
+        3. 通过 `memory_search` 按标题读取冷记忆详情。
+        4. 通过 `manage_memory` 删除该记忆。
 
         预期结果：
         1. 新增记忆返回 `memory_id`。
-        2. 查询能命中刚写入的偏好。
-        3. 删除后列表不再返回该记忆。
+        2. `memory_search` 能按标题读取完整内容。
+        3. 删除后 `memory_search` 不再返回该记忆。
         """
 
         memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
@@ -365,53 +366,70 @@ class AgentCoreTestCase(unittest.TestCase):
             name="manage_memory",
             context=context,
             arguments={
-                "action": "add",
-                "text": "用户喜欢导航提示尽量简短。",
+                "operation": "add",
+                "query": "记住我的导航偏好：提示尽量简短。",
+                "preferred_memory_type": "cold",
+                "title": "导航偏好",
+                "content": "用户喜欢导航提示尽量简短。",
                 "category": "preference",
                 "source": "user_requested",
             },
         )
         memory_id = add_result.data["memory"]["memory_id"]
+        self.assertEqual(add_result.data["memory"]["memory_type"], "cold")
+        self.assertEqual(add_result.data["memory"]["title"], "导航偏好")
 
         search_result = gateway.invoke(
-            name="manage_memory",
+            name="memory_search",
             context=context,
-            arguments={"action": "search", "query": "导航 简短"},
+            arguments={"title": "导航偏好"},
         )
         self.assertEqual(search_result.data["memories"][0]["memory_id"], memory_id)
+        self.assertEqual(search_result.data["memories"][0]["content"], "用户喜欢导航提示尽量简短。")
 
         delete_result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={"action": "delete", "memory_id": memory_id},
+            arguments={"operation": "delete", "query": "忘掉导航偏好", "title": "导航偏好"},
         )
         self.assertEqual(delete_result.data["memory"]["deleted_at_ms"], delete_result.data["memory"]["updated_at_ms"])
 
         list_result = gateway.invoke(
-            name="manage_memory",
+            name="memory_search",
             context=context,
-            arguments={"action": "list"},
+            arguments={"title": "导航偏好"},
         )
         self.assertEqual(list_result.data["memories"], [])
 
-    def test_agent_runner_injects_relevant_memory_into_model_request(self) -> None:
-        """测试目标：验证 Agent 运行时会把相关长期记忆注入模型请求。
+    def test_agent_runner_injects_hot_memory_and_cold_titles(self) -> None:
+        """测试目标：验证 Agent 运行时按冷热策略注入长期记忆。
 
         测试方法：
-        1. 预先写入一条设备级长期记忆。
+        1. 预先写入一条热记忆和一条冷记忆。
         2. 构造 `OpenAIAgentLoopRunner` 的单轮运行态。
         3. 检查 `model_request` 中的系统提示词。
 
         预期结果：
-        1. 系统提示词包含记忆正文。
-        2. 记忆片段也会出现在可落盘的 `model_request.memory_prompt_fragment` 中。
+        1. 热记忆标题和内容会完整出现。
+        2. 冷记忆只出现标题，不出现详细内容。
         """
 
         memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
         memory_runtime.add_memory(
             scope_type="device",
             scope_id="glass-001",
-            text="用户喜欢导航提示尽量简短。",
+            memory_type="hot",
+            title="姓名",
+            content="用户姓名是小明。",
+            category="profile",
+            source="user_requested",
+        )
+        memory_runtime.add_memory(
+            scope_type="device",
+            scope_id="glass-001",
+            memory_type="cold",
+            title="导航偏好",
+            content="用户喜欢导航提示尽量简短，并且希望先说方向再说距离。",
             category="preference",
             source="user_requested",
         )
@@ -433,8 +451,11 @@ class AgentCoreTestCase(unittest.TestCase):
 
         runtime = runner._turn_runtime_factory.build(session=session, turn=turn)
 
-        self.assertIn("用户喜欢导航提示尽量简短", runtime.model_request["instructions"])
-        self.assertIn("用户喜欢导航提示尽量简短", runtime.model_request["memory_prompt_fragment"])
+        fragment = runtime.model_request["memory_prompt_fragment"]
+        self.assertIn("姓名: 用户姓名是小明。", fragment)
+        self.assertIn("导航偏好", fragment)
+        self.assertNotIn("先说方向再说距离", fragment)
+        self.assertIn("memory_search", runtime.model_request["instructions"])
 
     def test_start_phone_video_link_tool_prefers_device_group_snapshot(self) -> None:
         """测试目标：验证视频直连 Tool 优先使用 SDK 设备组快照。

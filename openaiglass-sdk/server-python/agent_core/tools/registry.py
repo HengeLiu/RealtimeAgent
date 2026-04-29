@@ -123,6 +123,7 @@ class ToolRegistry:
             CancelTaskTool,
             CapturePhotoTool,
             ManageMemoryTool,
+            MemorySearchTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
             ReadSkillTool,
@@ -159,6 +160,10 @@ class ToolRegistry:
                 expose_to_model=bool(self._skill_runtime.list_skill_names()),
             )
         if self._memory_runtime is not None and self._memory_runtime.enabled:
+            self._register_tool(
+                MemorySearchTool(self._memory_runtime),
+                expose_to_model=True,
+            )
             self._register_tool(
                 ManageMemoryTool(self._memory_runtime),
                 expose_to_model=True,

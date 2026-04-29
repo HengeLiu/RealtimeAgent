@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_core import AgentFacade, ToolGateway, ToolRegistry
 from agent_core.context import AgentSessionStore
-from agent_core.memory import AgentMemoryRuntime, JsonFileAgentMemoryStore
+from agent_core.memory import AgentMemoryRuntime, JsonFileAgentMemoryStore, LlmMemoryManagementAgent
 from agent_core.models import CapabilityResult as AgentCapabilityResult
 from agent_core.models import ToolSpec
 from agent_core.runtime import OpenAIAgentLoopRunner
@@ -830,4 +830,5 @@ def _build_memory_runtime_from_settings(settings: ServerSettings) -> AgentMemory
         store=JsonFileAgentMemoryStore(settings.agent_memory_store_path),
         enabled=True,
         max_prompt_memories=settings.agent_memory_max_prompt_items,
+        manager_agent=LlmMemoryManagementAgent(settings=settings),
     )

@@ -21,15 +21,22 @@
 
 ## 设计目标
 
-1. 用户可通过自然语言让 Agent 记住、查询或删除记忆。
+1. 用户可通过自然语言让 Agent 记住、更新或删除记忆。
 2. Agent 可主动保存稳定偏好、基本信息和行为习惯。
-3. 每轮 Agent 请求自动注入相关记忆，但不把所有历史都塞进上下文。
+3. 每轮 Agent 请求自动注入热记忆正文和冷记忆标题，但不把所有冷记忆详情都塞进上下文。
 4. 业务 Tool、Task、Skill 不直接操作底层记忆文件。
 5. 记忆写入、删除和注入内容在调试产物中可观察。
 
 ## 当前实现
 
-`sdk-v48` 新增以下模块：
+`sdk-v50` 的记忆模型分为两类：
+
+| 类型 | 内容 | 注入方式 | 示例 |
+| --- | --- | --- | --- |
+| 热记忆 | 短小、稳定、不太变化的信息 | 每轮完整注入 system prompt | 姓名、年龄、性别 |
+| 冷记忆 | 可能变化或内容较长的信息 | 每轮只注入标题，详情按需查询 | 住址、电话、爱好、习惯、任务设置 |
+
+相关模块：
 
 ```text
 openaiglass-sdk/server-python/agent_core/memory/
@@ -41,17 +48,16 @@ openaiglass-sdk/server-python/agent_core/memory/
 模型可见工具：
 
 ```text
-manage_memory(action, text, query, memory_id, category, source, limit)
+memory_search(title, titles)
+manage_memory(operation, query, preferred_memory_type, title, content, memory_id, category, source)
 ```
 
-当前支持动作：
+工具分工：
 
-| action | 作用 |
+| 工具 | 作用 |
 | --- | --- |
-| `add` | 新增一条短期可读的长期记忆。 |
-| `search` | 按自然语言关键词查询记忆。 |
-| `list` | 列出当前设备作用域下的记忆。 |
-| `delete` | 按 `memory_id` 软删除记忆。 |
+| `memory_search` | 按冷记忆标题读取详细内容，不负责新增、更新或删除。 |
+| `manage_memory` | 执行新增、更新或删除；内部交给记忆管理子 Agent 判断冷热分类、标题、内容和操作对象。 |
 
 记忆作用域第一版按 `device_id` 隔离。这样能避免在账号体系和用户身份仍未完全产品化时，把不同设备或不同测试账号的记忆混在一起。
 
@@ -59,17 +65,33 @@ manage_memory(action, text, query, memory_id, category, source, limit)
 
 每轮 `AgentTurnRuntimeFactory.build(...)` 会：
 
-1. 读取当前 `device_id` 对应的长期记忆。
-2. 按当前用户输入做轻量关键词检索。
-3. 若没有命中，则回退注入最近记忆。
-4. 把最多 `AGENT_MEMORY_MAX_PROMPT_ITEMS` 条记忆注入系统提示词。
-5. 将 `memory_prompt_fragment` 写入 `model_request`，方便回归排障。
+1. 读取当前 `device_id` 对应的热记忆和冷记忆。
+2. 把最多 `AGENT_MEMORY_MAX_PROMPT_ITEMS` 条热记忆完整注入 system prompt。
+3. 把最多 `AGENT_MEMORY_MAX_PROMPT_ITEMS` 条冷记忆标题注入 system prompt。
+4. 将 `memory_prompt_fragment` 写入 `model_request`，方便回归排障。
 
 系统提示词会要求模型：
 
-1. 用户明确要求记住、忘记、删除或查看信息时，必须调用 `manage_memory`。
-2. 发现稳定偏好、基本信息或行为习惯时，可以主动新增短记忆。
-3. 不记录一次性任务、敏感密钥或未经确认的隐私信息。
+1. 回答需要某项冷记忆详情时，必须先调用 `memory_search`。
+2. 用户明确要求记住、更新、忘记或删除信息时，必须调用 `manage_memory`。
+3. `manage_memory` 不用于查询详情，搜索详情只走 `memory_search`。
+4. 不记录一次性任务、敏感密钥或未经确认的隐私信息。
+
+## 记忆管理子 Agent
+
+`manage_memory` 不是直接 CRUD 工具。它会构造 `MemoryOperationRequest`，交给 `MemoryManagementAgent` 生成结构化计划：
+
+```text
+MemoryOperationPlan(
+  operation="add|update|delete",
+  memory_type="hot|cold",
+  title="记忆标题",
+  content="记忆内容",
+  memory_id="可选记忆编号"
+)
+```
+
+真实服务端默认使用 `LlmMemoryManagementAgent`。当模型 key 缺失、依赖不可用或模型返回异常时，会退回 `HeuristicMemoryManagementAgent`，保证本地测试和无模型环境仍可验证存储语义。
 
 ## 配置
 
@@ -77,15 +99,14 @@ manage_memory(action, text, query, memory_id, category, source, limit)
 | --- | --- | --- |
 | `AGENT_MEMORY_ENABLED` | `true` | 是否启用长期记忆。 |
 | `AGENT_MEMORY_STORE_PATH` | `runs/memory/agent_memories.json` | 记忆文件路径。 |
-| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入记忆条数。 |
+| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入热记忆条数和冷记忆标题条数。 |
 
 ## 边界
 
 适合写入长期记忆：
 
-1. 用户偏好，例如“导航提示尽量简短”。
-2. 用户基本信息，例如“用户习惯使用中文语音交互”。
-3. 稳定习惯，例如“用户常在早上出门前检查眼镜电量”。
+1. 热记忆：姓名、年龄、性别等短小稳定信息。
+2. 冷记忆：住址、电话、爱好、习惯、任务设置等长内容或可能变化的信息。
 
 不适合写入长期记忆：
 
@@ -96,7 +117,6 @@ manage_memory(action, text, query, memory_id, category, source, limit)
 ## 后续迭代
 
 1. 增加用户级和账号级作用域，和设备组账号模型打通。
-2. 增加 `update` 动作，支持精确修改已有记忆。
-3. 增加语义向量检索，替换当前轻量关键词检索。
-4. 增加记忆审计日志和回放断言，确认某轮是否写入、删除或注入记忆。
-5. 评估接入 Mem0、Zep / Graphiti 或 LangGraph Store 作为可选后端。
+2. 增加语义向量检索，用于冷记忆标题召回和近似标题匹配。
+3. 增加记忆审计日志和回放断言，确认某轮是否写入、删除或注入记忆。
+4. 评估接入 Mem0、Zep / Graphiti 或 LangGraph Store 作为可选后端。
