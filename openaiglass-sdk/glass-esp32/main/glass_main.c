@@ -68,6 +68,18 @@
 #ifndef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
 #define CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY 0
 #endif
+#ifndef CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE
+#define CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE 0
+#endif
+#ifndef CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS
+#define CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS 70
+#endif
+#ifndef CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ
+#define CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ 1760
+#endif
+#ifndef CONFIG_GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE
+#define CONFIG_GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE 120
+#endif
 #if CONFIG_GLASS_ENABLE_AEC
 #define AFE_INPUT_FORMAT "MR"
 #else
@@ -96,6 +108,7 @@
 #define CAMERA_CAPTURE_TASK_STACK_SIZE (6 * 1024)
 #define CAMERA_STREAM_TASK_STACK_SIZE (8 * 1024)
 #define PLAYBACK_STREAM_TASK_STACK_SIZE (8 * 1024)
+#define WAKE_PROMPT_TONE_TABLE_SIZE 32
 
 typedef struct {
     const char *ssid;
@@ -196,6 +209,12 @@ static size_t s_aec_ref_capacity = 0;
 static size_t s_aec_ref_read_index = 0;
 static size_t s_aec_ref_write_index = 0;
 static size_t s_aec_ref_available = 0;
+static const int16_t s_wake_prompt_sine_table[WAKE_PROMPT_TONE_TABLE_SIZE] = {
+    0, 6393, 12539, 18204, 23170, 27245, 30273, 32137,
+    32767, 32137, 30273, 27245, 23170, 18204, 12539, 6393,
+    0, -6393, -12539, -18204, -23170, -27245, -30273, -32137,
+    -32767, -32137, -30273, -27245, -23170, -18204, -12539, -6393
+};
 
 static const wifi_profile_t s_wifi_profiles[WIFI_PROFILE_COUNT] = {
     {
@@ -223,7 +242,9 @@ static void recover_wake_listening_after_reply_timeout(uint64_t current_ms);
 static void reset_control_session_state(void);
 static void ensure_control_transport_started(void);
 static bool init_camera(void);
+static bool ensure_speaker_channel_enabled(void);
 static void start_playback_stream(const char *stream_id);
+static void play_wake_prompt_tone(void);
 static void start_camera_stream(const char *stream_id, const char *target_ws_uri, int frame_interval_ms);
 static void stop_camera_stream(const char *stream_id);
 static void schedule_next_wifi_round(void);
@@ -1489,6 +1510,70 @@ static void build_afe_feed_buffer(sr_runtime_ctx_t *ctx, size_t mic_bytes_read)
     }
 }
 
+static void play_wake_prompt_tone(void)
+{
+#if CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE
+    if (s_playback_active || s_playback_task_running) {
+        return;
+    }
+    if (!ensure_speaker_channel_enabled()) {
+        return;
+    }
+
+    int16_t mono_buffer[AUDIO_FRAME_SAMPLES];
+    int32_t stereo_buffer[AUDIO_FRAME_SAMPLES * 2];
+    const int total_samples = (SR_SAMPLE_RATE_HZ * CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS) / 1000;
+    const int ramp_samples = total_samples < 160 ? total_samples / 2 : 80;
+    uint32_t phase_q16 = 0;
+    const uint32_t phase_step_q16 =
+        (uint32_t)(((uint64_t)CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ * WAKE_PROMPT_TONE_TABLE_SIZE * 65536ULL) /
+                   SR_SAMPLE_RATE_HZ);
+    int generated_samples = 0;
+
+    while (generated_samples < total_samples) {
+        int chunk_samples = total_samples - generated_samples;
+        if (chunk_samples > AUDIO_FRAME_SAMPLES) {
+            chunk_samples = AUDIO_FRAME_SAMPLES;
+        }
+        for (int index = 0; index < chunk_samples; index += 1) {
+            int absolute_index = generated_samples + index;
+            int envelope_permille = 1000;
+            if (ramp_samples > 0 && absolute_index < ramp_samples) {
+                envelope_permille = (absolute_index * 1000) / ramp_samples;
+            } else if (ramp_samples > 0 && (total_samples - absolute_index) < ramp_samples) {
+                envelope_permille = ((total_samples - absolute_index) * 1000) / ramp_samples;
+            }
+            uint32_t table_index = (phase_q16 >> 16) % WAKE_PROMPT_TONE_TABLE_SIZE;
+            int32_t sample = s_wake_prompt_sine_table[table_index];
+            sample = (sample * CONFIG_GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE * envelope_permille) / 1000000;
+            mono_buffer[index] = (int16_t)sample;
+            phase_q16 += phase_step_q16;
+        }
+        push_aec_reference_samples(mono_buffer, (size_t)chunk_samples);
+        mono16_to_stereo32_msb(mono_buffer, (size_t)chunk_samples, stereo_buffer, 1.0f);
+        size_t written = 0;
+        esp_err_t write_err = i2s_channel_write(
+            s_spk_tx_chan,
+            stereo_buffer,
+            (size_t)chunk_samples * 2U * sizeof(int32_t),
+            &written,
+            pdMS_TO_TICKS(100)
+        );
+        if (write_err != ESP_OK) {
+            ESP_LOGW(TAG, "唤醒提示音写入失败: %s", esp_err_to_name(write_err));
+            return;
+        }
+        generated_samples += chunk_samples;
+    }
+    ESP_LOGI(
+        TAG,
+        "唤醒成功提示音已播放: duration_ms=%d freq_hz=%d",
+        CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS,
+        CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ
+    );
+#endif
+}
+
 static void reset_segment_state(segment_state_t *state)
 {
     state->segment_active = false;
@@ -1662,6 +1747,36 @@ static void drain_and_pause_speaker(void)
         return;
     }
     s_speaker_channel_enabled = false;
+}
+
+static bool ensure_speaker_channel_enabled(void)
+{
+    int32_t zero_buffer[AUDIO_FRAME_SAMPLES * 2] = {0};
+    size_t preloaded_size = 0;
+
+    if (s_spk_tx_chan == NULL) {
+        ESP_LOGE(TAG, "扬声器通道未初始化，无法输出音频");
+        return false;
+    }
+    if (s_speaker_channel_enabled) {
+        return true;
+    }
+    esp_err_t preload_err = i2s_channel_preload_data(
+        s_spk_tx_chan,
+        zero_buffer,
+        sizeof(zero_buffer),
+        &preloaded_size
+    );
+    if (preload_err != ESP_OK) {
+        ESP_LOGW(TAG, "预装扬声器静音帧失败: %s", esp_err_to_name(preload_err));
+    }
+    esp_err_t enable_err = i2s_channel_enable(s_spk_tx_chan);
+    if (enable_err != ESP_OK) {
+        ESP_LOGE(TAG, "恢复扬声器通道失败: %s", esp_err_to_name(enable_err));
+        return false;
+    }
+    s_speaker_channel_enabled = true;
+    return true;
 }
 
 static void log_wake_gate_state(
@@ -2224,9 +2339,6 @@ cleanup:
 
 static void start_playback_stream(const char *stream_id)
 {
-    int32_t zero_buffer[AUDIO_FRAME_SAMPLES * 2] = {0};
-    size_t preloaded_size = 0;
-
     if (stream_id == NULL || stream_id[0] == '\0') {
         ESP_LOGW(TAG, "playback stream_id 为空，忽略播放请求");
         return;
@@ -2249,22 +2361,8 @@ static void start_playback_stream(const char *stream_id)
         ESP_LOGE(TAG, "扬声器通道未初始化，无法播放");
         return;
     }
-    if (!s_speaker_channel_enabled) {
-        esp_err_t preload_err = i2s_channel_preload_data(
-            s_spk_tx_chan,
-            zero_buffer,
-            sizeof(zero_buffer),
-            &preloaded_size
-        );
-        if (preload_err != ESP_OK) {
-            ESP_LOGW(TAG, "预装扬声器静音帧失败: %s", esp_err_to_name(preload_err));
-        }
-        esp_err_t enable_err = i2s_channel_enable(s_spk_tx_chan);
-        if (enable_err != ESP_OK) {
-            ESP_LOGE(TAG, "恢复扬声器通道失败: %s", esp_err_to_name(enable_err));
-            return;
-        }
-        s_speaker_channel_enabled = true;
+    if (!ensure_speaker_channel_enabled()) {
+        return;
     }
 
     strlcpy(s_current_playback_stream_id, stream_id, sizeof(s_current_playback_stream_id));
@@ -2542,6 +2640,7 @@ static void sr_pipeline_task(void *arg)
             if (start_by_wake_word) {
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
+                play_wake_prompt_tone();
             } else {
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "连续对话 VAD 触发新语音段: segment_id=%s", segment.segment_id);

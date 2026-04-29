@@ -60,4 +60,35 @@ config GLASS_AEC_REFERENCE_BUFFER_MS
         保存最近一段下行播放 PCM 作为 AEC 参考信号，单位毫秒。
         过短会导致回声参考不足；过长会增加内存占用。
 
+config GLASS_WAKE_PROMPT_TONE_ENABLE
+    bool "启用唤醒成功提示音"
+    default y
+    help
+        开启后，真实眼镜在 WakeNet 首次唤醒成功时本地播放一个短促轻提示音。
+        连续对话窗口内由 VAD 触发的后续语音段不会重复播放提示音。
+
+config GLASS_WAKE_PROMPT_TONE_DURATION_MS
+    int "唤醒提示音时长"
+    range 20 300
+    default 70
+    depends on GLASS_WAKE_PROMPT_TONE_ENABLE
+    help
+        提示音持续时间，单位毫秒。建议保持短促，避免干扰后续用户语音。
+
+config GLASS_WAKE_PROMPT_TONE_FREQ_HZ
+    int "唤醒提示音频率"
+    range 400 3000
+    default 1760
+    depends on GLASS_WAKE_PROMPT_TONE_ENABLE
+    help
+        提示音主频，单位 Hz。
+
+config GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE
+    int "唤醒提示音音量"
+    range 20 500
+    default 120
+    depends on GLASS_WAKE_PROMPT_TONE_ENABLE
+    help
+        提示音振幅，单位为千分比。默认 120 表示轻提示，避免过响。
+
 endmenu

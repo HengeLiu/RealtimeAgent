@@ -36,3 +36,27 @@ def test_glass_runtime_negotiates_realtime_voice_capabilities() -> None:
     assert "PLAYBACK_STREAM_TASK_STACK_SIZE" in source
     assert "CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY" in source
     assert "external_stack_allowed=%d" in source
+
+
+def test_glass_runtime_plays_short_prompt_tone_on_wakenet() -> None:
+    """测试目标：验证真实眼镜在首次 WakeNet 唤醒后会播放短促提示音。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 检查提示音只挂在 `start_by_wake_word` 分支，而不是连续 VAD 分支。
+    3. 检查提示音会写入 AEC 参考缓冲，降低提示音被当作用户语音的风险。
+
+    预期结果：
+    1. 首次唤醒成功后端侧有本地轻提示。
+    2. 连续对话窗口内的后续 VAD 追问不会重复播放提示音。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+    wake_branch = source[source.index("if (start_by_wake_word)") : source.index("} else {", source.index("if (start_by_wake_word)"))]
+    vad_branch = source[source.index("} else {", source.index("if (start_by_wake_word)")) : source.index("send_audio_segment_started_message", source.index("if (start_by_wake_word)"))]
+
+    assert "CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE" in source
+    assert "play_wake_prompt_tone();" in wake_branch
+    assert "play_wake_prompt_tone();" not in vad_branch
+    assert "push_aec_reference_samples(mono_buffer" in source
+    assert "唤醒成功提示音已播放" in source
