@@ -76,6 +76,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         os.environ["SERVER_DEVICE_ID"] = "server-phase-b"
         os.environ["AGENT_MODEL_NAME"] = "qwen3.6-plus"
         os.environ["VOICE_MODEL_NAME"] = "qwen3.5-omni-plus"
+        os.environ["VOICE_INPUT_MODE"] = "asr_text"
         os.environ["VOICE_SESSION_MODE"] = "half_duplex"
         settings = ServerSettings.from_env()
 
@@ -88,6 +89,8 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.server_device_id, "server-phase-b")
         self.assertEqual(settings.agent_model_name, "qwen3.6-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
+        self.assertEqual(settings.voice_input_mode, "asr_text")
+        self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "half_duplex")
 
     def test_from_env_without_overrides_uses_defaults(self) -> None:
@@ -103,7 +106,44 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.server_device_id, "server-main")
         self.assertEqual(settings.agent_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
+        self.assertEqual(settings.voice_input_mode, "auto")
+        self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
+
+    def test_omni_realtime_auto_input_mode_uses_raw_audio(self) -> None:
+        """测试目标：验证 Omni Realtime 默认直接使用原始音频输入。
+
+        测试方法：
+        1. 构造 `VOICE_REPLY_MODE=omni_realtime` 的配置对象。
+        2. 保持 `VOICE_INPUT_MODE=auto`。
+        3. 调用配置校验和实际输入模式解析。
+
+        预期结果：
+        1. 配置校验通过。
+        2. 实际输入模式为 `raw_audio`。
+        """
+
+        settings = ServerSettings(voice_reply_mode="omni_realtime")
+
+        settings.validate()
+
+        self.assertEqual(settings.effective_voice_input_mode(), "raw_audio")
+
+    def test_incompatible_voice_input_mode_raises(self) -> None:
+        """测试目标：验证回复分支和语音输入模式不兼容时会阻止启动。
+
+        测试方法：
+        1. 构造 `agent_tts + raw_audio` 组合。
+        2. 调用配置校验。
+
+        预期结果：
+        1. 抛出 `INVALID_CONFIG`，避免文本模型链路收到原始音频。
+        """
+
+        with self.assertRaises(AppError) as ctx:
+            ServerSettings(voice_reply_mode="agent_tts", voice_input_mode="raw_audio").validate()
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
 
     def test_invalid_voice_session_mode_raises(self) -> None:
         """测试目标：验证默认语音会话模式只能取半双工或全双工。"""

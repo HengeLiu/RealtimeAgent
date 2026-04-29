@@ -59,6 +59,7 @@ def test_server_defaults_are_derived_from_runtime_settings() -> None:
     assert server.SERVER_DEFAULTS["AGENT_MODEL_NAME"] == defaults.agent_model_name
     assert server.SERVER_DEFAULTS["VOICE_ASR_MODEL_NAME"] == defaults.voice_asr_model_name
     assert server.SERVER_DEFAULTS["VOICE_ASR_MODE"] == defaults.voice_asr_mode
+    assert server.SERVER_DEFAULTS["VOICE_INPUT_MODE"] == defaults.voice_input_mode
     assert server.SERVER_DEFAULTS["VOICE_ASR_REALTIME_MODEL_NAME"] == defaults.voice_asr_realtime_model_name
     assert (
         server.SERVER_DEFAULTS["VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS"]

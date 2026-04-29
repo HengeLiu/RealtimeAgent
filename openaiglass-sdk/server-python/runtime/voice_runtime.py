@@ -126,6 +126,7 @@ class PlaybackStreamContext:
     sample_rate: int
     channels: int
     source: str = "agent_reply"
+    audio_source: str = "tts"
     priority: str = "normal"
     interrupt_policy: str = "never"
     resume_policy: str = "drop_interrupted"
@@ -183,15 +184,16 @@ class OmniRealtimeReplyResult:
 
 @dataclass(slots=True)
 class ReplySynthesisContext:
-    """单条回复的语音合成上下文。
+    """单条回复的下行音频上下文。
 
     主要功能：
     1. 保存一次回复对应的播放流和重采样状态。
-    2. 把流式 TTS 产出的音频持续写入眼镜播放队列。
+    2. 把流式 TTS 或 Omni Realtime 产出的音频持续写入眼镜播放队列。
     """
 
     stream_id: str
     playback: PlaybackStreamContext
+    audio_source: str = "tts"
     output_pcm: bytearray = field(default_factory=bytearray)
     resampler: PCM16StreamResampler | None = None
 
@@ -2044,7 +2046,7 @@ class VoiceRuntime:
                 codec=str(payload.get("codec", "pcm16")).strip() or "pcm16",
                 started_at_ms=int(time.time() * 1000),
             )
-            if self._settings.voice_reply_mode != "omni_realtime":
+            if self._settings.effective_voice_input_mode() == "asr_text":
                 segment.streaming_asr_session = self._asr_client.start_streaming_session(
                     settings=self._settings,
                     session_id=session_id,
@@ -2457,9 +2459,9 @@ class VoiceRuntime:
                         self._logger,
                         (
                             "播放流写出首段音频 "
-                            f"stream_id={stream_id} bytes={len(item)} "
+                            f"stream_id={stream_id} audio_source={playback.audio_source} bytes={len(item)} "
                             f"play_request_to_http_audio_ms={self._latency_ms(start=playback.first_play_request_at_ms, end=playback.first_http_audio_chunk_at_ms)} "
-                            f"tts_audio_to_http_audio_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_http_audio_chunk_at_ms)}"
+                            f"source_audio_to_http_audio_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_http_audio_chunk_at_ms)}"
                         ),
                         LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
                     )
@@ -2488,6 +2490,7 @@ class VoiceRuntime:
                 "state": controller.state,
                 "active_segment_id": controller.current_segment.segment_id if controller.current_segment else None,
                 "reply_stream_id": current_playback.stream_id if current_playback else None,
+                "reply_audio_source": current_playback.audio_source if current_playback else None,
                 "reply_first_text_delta_at_ms": current_playback.first_text_delta_at_ms if current_playback else None,
                 "reply_first_audio_chunk_at_ms": current_playback.first_audio_chunk_at_ms if current_playback else None,
                 "reply_first_play_request_at_ms": current_playback.first_play_request_at_ms if current_playback else None,
@@ -2688,13 +2691,21 @@ class VoiceRuntime:
         playback_stream_id = f"reply_{uuid.uuid4().hex[:12]}"
 
         try:
+            voice_input_mode = self._settings.effective_voice_input_mode()
+            asr_model_label = self._settings.voice_asr_model_name if voice_input_mode == "asr_text" else "<skipped>"
+            reply_model_label = (
+                self._settings.voice_omni_realtime_model_name
+                if self._settings.voice_reply_mode == "omni_realtime"
+                else self._settings.agent_model_name
+            )
             log_info(
                 self._logger,
                 (
                     "语音链路开始处理音频段 "
                     f"input_stream_id={segment.stream_id} segment_id={segment.segment_id} "
                     f"duration_ms={segment.duration_ms()} bytes={len(input_wav)} "
-                    f"asr_model={self._settings.voice_asr_model_name} agent_model={self._settings.agent_model_name}"
+                    f"voice_input_mode={voice_input_mode} reply_mode={self._settings.voice_reply_mode} "
+                    f"asr_model={asr_model_label} reply_model={reply_model_label}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
@@ -3044,7 +3055,11 @@ class VoiceRuntime:
                 },
             )
 
-        context = self._open_reply_synthesis_context(device_id=device_id, session_id=session_id)
+        context = self._open_reply_synthesis_context(
+            device_id=device_id,
+            session_id=session_id,
+            audio_source="omni_realtime",
+        )
         image_frames = self._consume_ready_utterance_photo_bytes_for_omni(
             device_id=device_id,
             session_id=session_id,
@@ -3494,6 +3509,7 @@ class VoiceRuntime:
         interrupt_policy: str = "never",
         resume_policy: str = "drop_interrupted",
         task_id: str | None = None,
+        audio_source: str = "tts",
     ) -> ReplySynthesisContext:
         """创建一条新的回复播放流上下文。"""
 
@@ -3507,8 +3523,9 @@ class VoiceRuntime:
             interrupt_policy=interrupt_policy,
             resume_policy=resume_policy,
             task_id=task_id,
+            audio_source=audio_source,
         )
-        return ReplySynthesisContext(stream_id=stream_id, playback=playback)
+        return ReplySynthesisContext(stream_id=stream_id, playback=playback, audio_source=audio_source)
 
     def _request_playback_start(
         self,
@@ -3566,9 +3583,9 @@ class VoiceRuntime:
                 self._logger,
                 (
                     "下行播放请求已发送 "
-                    f"stream_id={playback.stream_id} "
+                    f"stream_id={playback.stream_id} audio_source={playback.audio_source} "
                     f"text_to_play_request_ms={self._latency_ms(start=playback.first_text_delta_at_ms, end=playback.first_play_request_at_ms)} "
-                    f"tts_audio_to_play_request_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_play_request_at_ms)}"
+                    f"source_audio_to_play_request_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_play_request_at_ms)}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id, message_id=playback.stream_id),
             )
@@ -3581,7 +3598,7 @@ class VoiceRuntime:
         context: ReplySynthesisContext,
         chunk: ModelChunk,
     ) -> None:
-        """把 TTS 音频分片推入当前播放流。"""
+        """把下行音频分片推入当前播放流。"""
 
         if not chunk.audio_pcm_bytes:
             return
@@ -3595,8 +3612,9 @@ class VoiceRuntime:
             log_info(
                 self._logger,
                 (
-                    "TTS 返回首段音频 "
-                    f"stream_id={context.stream_id} input_sample_rate_hz={chunk.sample_rate_hz} "
+                    "下行音频源返回首段音频 "
+                    f"stream_id={context.stream_id} audio_source={context.audio_source} "
+                    f"input_sample_rate_hz={chunk.sample_rate_hz} "
                     f"pcm_bytes={len(chunk.audio_pcm_bytes)} output_bytes={len(pcm_chunk)} "
                     f"text_to_first_audio_ms={self._latency_ms(start=context.playback.first_text_delta_at_ms, end=context.playback.first_audio_chunk_at_ms)}"
                 ),
@@ -3656,6 +3674,7 @@ class VoiceRuntime:
         interrupt_policy: str = "never",
         resume_policy: str = "drop_interrupted",
         task_id: str | None = None,
+        audio_source: str = "tts",
     ) -> PlaybackStreamContext:
         intent_id = f"{source}:{stream_id}"
         playback = PlaybackStreamContext(
@@ -3665,6 +3684,7 @@ class VoiceRuntime:
             sample_rate=SERVER_SAMPLE_RATE_HZ,
             channels=SERVER_CHANNELS,
             source=source,
+            audio_source=audio_source,
             priority=priority,
             interrupt_policy=interrupt_policy,
             resume_policy=resume_policy,

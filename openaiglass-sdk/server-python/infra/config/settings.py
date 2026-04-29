@@ -36,23 +36,24 @@ class ServerSettings:
     15. `voice_omni_realtime_model_name`：Omni Realtime 直出语音模型名称。
     16. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
     17. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
-    18. `tts_model_name`：专用流式 TTS 模型名称。
-    19. `tts_voice`：专用流式 TTS 音色。
-    20. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
-    21. `tts_sample_rate_hz`：TTS 原始输出采样率。
-    22. `voice_model_timeout_ms`：模型请求超时时间。
-    23. `voice_runs_root`：语音运行时资产落盘目录。
-    24. `voice_asr_model_name`：批量语音转写模型名称。
-    25. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
-    26. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
-    27. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
-    28. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
-    29. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    30. `voice_system_prompt`：默认系统提示词。
-    31. `max_segment_audio_bytes`：单轮上行音频最大字节数。
-    32. `agent_memory_enabled`：是否启用 Agent 长期记忆。
-    33. `agent_memory_store_path`：长期记忆本地持久化文件路径。
-    34. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
+    18. `voice_input_mode`：语音输入模式，决定是否先走独立 ASR。
+    19. `tts_model_name`：专用流式 TTS 模型名称。
+    20. `tts_voice`：专用流式 TTS 音色。
+    21. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
+    22. `tts_sample_rate_hz`：TTS 原始输出采样率。
+    23. `voice_model_timeout_ms`：模型请求超时时间。
+    24. `voice_runs_root`：语音运行时资产落盘目录。
+    25. `voice_asr_model_name`：批量语音转写模型名称。
+    26. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
+    27. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
+    28. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
+    29. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
+    30. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    31. `voice_system_prompt`：默认系统提示词。
+    32. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    33. `agent_memory_enabled`：是否启用 Agent 长期记忆。
+    34. `agent_memory_store_path`：长期记忆本地持久化文件路径。
+    35. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
     """
 
     host: str = "0.0.0.0"
@@ -73,6 +74,7 @@ class ServerSettings:
     voice_omni_realtime_model_name: str = "qwen3.5-omni-plus-realtime"
     voice_omni_realtime_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     voice_omni_photo_wait_ms: int = 300
+    voice_input_mode: str = "auto"
     tts_model_name: str = "cosyvoice-v3-flash"
     tts_voice: str = "longanhuan"
     tts_websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
@@ -168,6 +170,7 @@ class ServerSettings:
                 "VOICE_OMNI_PHOTO_WAIT_MS",
                 defaults.voice_omni_photo_wait_ms,
             ),
+            voice_input_mode=os.getenv("VOICE_INPUT_MODE", defaults.voice_input_mode),
             tts_model_name=os.getenv("TTS_MODEL_NAME", defaults.tts_model_name),
             tts_voice=os.getenv("TTS_VOICE", defaults.tts_voice),
             tts_websocket_api_url=os.getenv("TTS_WEBSOCKET_API_URL", defaults.tts_websocket_api_url),
@@ -263,6 +266,22 @@ class ServerSettings:
             f"{name} 必须是布尔值",
             details={"value": raw},
         )
+
+    def effective_voice_input_mode(self) -> str:
+        """返回当前语音链路实际使用的输入模式。
+
+        主要逻辑：
+        1. `VOICE_INPUT_MODE=auto` 时按回复分支自动选择。
+        2. `agent_tts` 分支需要文本输入，因此选择 `asr_text`。
+        3. `omni_realtime` 分支直接把原始音频交给全模态模型，因此选择 `raw_audio`。
+
+        返回值：
+        1. `asr_text` 或 `raw_audio`。
+        """
+
+        if self.voice_input_mode == "auto":
+            return "raw_audio" if self.voice_reply_mode == "omni_realtime" else "asr_text"
+        return self.voice_input_mode
 
     def validate(self) -> None:
         """校验配置合法性。
@@ -373,6 +392,34 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_OMNI_PHOTO_WAIT_MS 不能小于 0",
                 details={"voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms},
+            )
+        valid_voice_input_modes = {"auto", "asr_text", "raw_audio"}
+        if self.voice_input_mode not in valid_voice_input_modes:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_INPUT_MODE 非法",
+                details={"voice_input_mode": self.voice_input_mode, "valid_modes": sorted(valid_voice_input_modes)},
+            )
+        effective_voice_input_mode = self.effective_voice_input_mode()
+        if self.voice_reply_mode == "agent_tts" and effective_voice_input_mode != "asr_text":
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_REPLY_MODE=agent_tts 需要 VOICE_INPUT_MODE=asr_text 或 auto",
+                details={
+                    "voice_reply_mode": self.voice_reply_mode,
+                    "voice_input_mode": self.voice_input_mode,
+                    "effective_voice_input_mode": effective_voice_input_mode,
+                },
+            )
+        if self.voice_reply_mode == "omni_realtime" and effective_voice_input_mode != "raw_audio":
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_REPLY_MODE=omni_realtime 需要 VOICE_INPUT_MODE=raw_audio 或 auto",
+                details={
+                    "voice_reply_mode": self.voice_reply_mode,
+                    "voice_input_mode": self.voice_input_mode,
+                    "effective_voice_input_mode": effective_voice_input_mode,
+                },
             )
         if not self.tts_model_name.strip():
             raise build_error(
@@ -486,6 +533,8 @@ class ServerSettings:
             "voice_omni_realtime_model_name": self.voice_omni_realtime_model_name,
             "voice_omni_realtime_url": self.voice_omni_realtime_url,
             "voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms,
+            "voice_input_mode": self.voice_input_mode,
+            "effective_voice_input_mode": self.effective_voice_input_mode(),
             "tts_model_name": self.tts_model_name,
             "tts_voice": self.tts_voice,
             "tts_websocket_api_url": self.tts_websocket_api_url,

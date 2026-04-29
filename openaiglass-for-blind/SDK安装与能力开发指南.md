@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v50`。本版本在 `sdk-v49` 基础上把 Agent 长期记忆升级为冷热两层：热记忆每轮完整注入 system prompt，冷记忆每轮只注入标题目录，模型需要详细内容时通过 `memory_search` 按标题读取；`manage_memory` 保留为新增、更新、删除入口，并交给记忆管理子 Agent 判断冷热分类和具体操作。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v51`。本版本在 `sdk-v50` 基础上补齐语音输入模式配置和 Omni Realtime 日志口径：`VOICE_INPUT_MODE=auto|asr_text|raw_audio` 用于明确是否先走独立 ASR；Omni Realtime 分支默认直接使用原始音频，Agent + TTS 分支默认使用 ASR 文本；下行首包日志不再把 Omni 音频误称为 TTS。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,9 +13,9 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
-| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`、`VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime` 和 `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS=300`；如需排障可临时设为 `batch`。 |
+| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR | 默认 `VOICE_INPUT_MODE=auto`：`VOICE_REPLY_MODE=agent_tts` 时等价于 `asr_text`，`VOICE_REPLY_MODE=omni_realtime` 时等价于 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
@@ -272,7 +272,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
-| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_REPLY_MODE` / `VOICE_OMNI_REALTIME_MODEL_NAME` / `VOICE_OMNI_PHOTO_WAIT_MS` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、语音回复分支、ASR 和 TTS 配置。`VOICE_REPLY_MODE=agent_tts` 保留 Agent + CosyVoice；`VOICE_REPLY_MODE=omni_realtime` 使用 qwen3.5-omni realtime 直出语音。业务开发者不要在业务代码里硬编码模型名。 |
+| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_REPLY_MODE` / `VOICE_INPUT_MODE` / `VOICE_OMNI_REALTIME_MODEL_NAME` / `VOICE_OMNI_PHOTO_WAIT_MS` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、语音输入模式、语音回复分支、ASR 和 TTS 配置。`VOICE_REPLY_MODE=agent_tts` 保留 Agent + CosyVoice；`VOICE_REPLY_MODE=omni_realtime` 使用 qwen3.5-omni realtime 直出语音。`VOICE_INPUT_MODE=auto` 会按回复分支自动选择是否启用独立 ASR。业务开发者不要在业务代码里硬编码模型名。 |
 | `AGENT_MEMORY_ENABLED` / `AGENT_MEMORY_STORE_PATH` / `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `config/local_server.env` | `sdk-v48` 起控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
@@ -492,9 +492,11 @@ uv run openaiglass.glass.start \
 
 `sdk-v41` 起，`实时 ASR 返回首个文本` 和 `实时 ASR 完成` 日志会额外携带 `recognition_open_latency_ms`、`session_start_to_first_audio_ms`、`first_audio_send_cost_ms`、`audio_ms_before_first_partial`、`dashscope_first_package_delay_ms`、`dashscope_last_package_delay_ms`、`stop_to_complete_ms`、`audio_frame_count` 和 `audio_bytes_sent`。这些字段用于判断 1 秒级 ASR 延迟到底发生在连接、发帧、ASR 服务首包、句尾 VAD 还是收尾阶段。`VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` 默认值为 `300`，取值范围 `200` 到 `6000`；如果误切句明显，可适当调大。
 
-`sdk-v44` 起，真实 ESP32 眼镜会在收到 `actuator.audio.play` 后打印下行播放流关键时间点：`准备启动播放流`、`播放流 HTTP 已打开`、`播放流 WAV 头已读取`、`播放流收到首段 PCM`、`播放流首段音频已写入扬声器`。当前 ESP32 固件不会先完整下载 `/stream.wav` 再播放；它读取 44 字节 WAV 头后按约 20ms 的 PCM 分片写入 I2S，`actuator.audio.started` 也在首段音频写入扬声器后才上报。如果真机仍然听感延迟高，应把这些日志和服务端 `TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频` 对齐，判断延迟发生在服务端 TTS、HTTP 首包、网络读取、I2S 写入或功放实际出声阶段。
+`sdk-v51` 起，语音输入模式由 `VOICE_INPUT_MODE=auto|asr_text|raw_audio` 控制。默认 `auto` 会根据 `VOICE_REPLY_MODE` 自动选择：`agent_tts` 分支实际为 `asr_text`，会启动独立 ASR 并把文本交给 Agent；`omni_realtime` 分支实际为 `raw_audio`，不会启动独立 ASR，而是把原始 PCM 直接交给 Omni Realtime。若当前模型不支持语音输入，应使用 `VOICE_REPLY_MODE=agent_tts`，并保持 `VOICE_INPUT_MODE=auto` 或显式设为 `asr_text`。
 
-`sdk-v45` 起，CosyVoice 流式 TTS 会打印接口级首包日志：`TTS WebSocket 已打开`、`TTS 首次文本已推送`、`TTS 服务返回首段音频`。其中 `tts_first_audio_latency_ms` 从 SDK 首次调用 `streaming_call(text_delta)` 开始，到百炼 TTS 回调首段音频 `on_data(...)` 为止；`tts_first_audio_after_call_return_ms` 排除了首次 `streaming_call(...)` 本地阻塞耗时；`text_chars_before_first_audio` 和 `text_push_count_before_first_audio` 用于判断 TTS 服务是否等到足够文本后才吐首包。原有 `TTS 返回首段音频` 仍表示音频回调进入 SDK 后完成重采样并放入播放队列的时间。
+`sdk-v44` 起，真实 ESP32 眼镜会在收到 `actuator.audio.play` 后打印下行播放流关键时间点：`准备启动播放流`、`播放流 HTTP 已打开`、`播放流 WAV 头已读取`、`播放流收到首段 PCM`、`播放流首段音频已写入扬声器`。当前 ESP32 固件不会先完整下载 `/stream.wav` 再播放；它读取 44 字节 WAV 头后按约 20ms 的 PCM 分片写入 I2S，`actuator.audio.started` 也在首段音频写入扬声器后才上报。如果真机仍然听感延迟高，应把这些日志和服务端 `下行音频源返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频` 对齐，判断延迟发生在服务端音频源、HTTP 首包、网络读取、I2S 写入或功放实际出声阶段。
+
+`sdk-v45` 起，CosyVoice 流式 TTS 会打印接口级首包日志：`TTS WebSocket 已打开`、`TTS 首次文本已推送`、`TTS 服务返回首段音频`。其中 `tts_first_audio_latency_ms` 从 SDK 首次调用 `streaming_call(text_delta)` 开始，到百炼 TTS 回调首段音频 `on_data(...)` 为止；`tts_first_audio_after_call_return_ms` 排除了首次 `streaming_call(...)` 本地阻塞耗时；`text_chars_before_first_audio` 和 `text_push_count_before_first_audio` 用于判断 TTS 服务是否等到足够文本后才吐首包。`sdk-v51` 后，共用播放层日志改为 `下行音频源返回首段音频`，表示音频回调进入 SDK 后完成重采样并放入播放队列的时间。
 
 `sdk-v46` 起，最终回复的 TTS 会话会在调用 `AgentFacade.handle_turn(...)` 前创建，日志为 `TTS 预热已启动`。这样大模型首 token 产生前，CosyVoice WebSocket 可以并行建连；首个文本增量到达后直接复用已预热 session 推送文本。如果模型首 token 或工具链路耗时过长导致预热 session 推送失败，SDK 会记录 `TTS 预热会话推送失败，重建后重试` 并重建一次 TTS session。
 
@@ -503,6 +505,8 @@ uv run openaiglass.glass.start \
 `sdk-v49` 起，语音回复链路新增 `VOICE_REPLY_MODE=omni_realtime`。该模式不会先进入 agent-core，也不会再调用独立 CosyVoice TTS；服务端会把当前语音段的 16k PCM 和已就绪的自动照片直接提交给 `VOICE_OMNI_REALTIME_MODEL_NAME`，收到 `response.audio.delta` 后立即复用现有播放流下发给眼镜。该模式适合低延迟视觉问答和普通语音问答；但它不会执行 SDK Tool、Task、Skill 或长期记忆工具，导航、计时器、找物体、红绿灯等需要工具编排的能力仍应使用默认 `VOICE_REPLY_MODE=agent_tts`。
 
 Omni Realtime 模式下可观察这些日志：`Omni Realtime 请求已发送`、`Omni Realtime 返回首个文本`、`Omni Realtime 返回首段音频`、`Omni Realtime 最终回复`。`VOICE_OMNI_PHOTO_WAIT_MS` 控制服务端在提交模型前最多等待本轮自动照片上传完成的时间，默认 `300` 毫秒；等待失败会继续走纯语音输入，不阻塞主链路。
+
+`sdk-v51` 起，共用下行播放流日志统一使用 `下行音频源返回首段音频`，并携带 `audio_source=tts|omni_realtime`。`agent_tts` 分支仍会看到 CosyVoice 专属日志，例如 `TTS WebSocket 已打开`、`TTS 首次文本已推送`、`TTS 服务返回首段音频`；`omni_realtime` 分支不应再出现独立 TTS 服务日志。
 
 当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答会直接走多模态模型首 token，不再先做照片工具决策；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime` 模式下虽然去掉了独立 TTS，但当前 SDK 仍按半双工语音段边界在用户说完后提交 Omni 请求，尚未把眼镜上行音频实时透传给 Omni Realtime。
 
@@ -1880,7 +1884,7 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 }
 ```
 
-`actuator.audio.started` 在 `play_and_auto_finish` 模式下表示回放设备已经把首段音频写入本机播放器，不能再理解为“刚收到播放请求”。`本机播放器已启动，等待下行音频` 只表示 `ffplay` 进程已经启动；实际首包以 `收到第一段下行音频` 和 `下行音频已写入播放器` 为准。排查下行语音延迟时重点看服务端 `TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`，以及 glass-playback 端 `收到第一段下行音频`、`下行音频已写入播放器`、`下行音频流写入完成`、`本机播放器播放结束` 的时间差。
+`actuator.audio.started` 在 `play_and_auto_finish` 模式下表示回放设备已经把首段音频写入本机播放器，不能再理解为“刚收到播放请求”。`本机播放器已启动，等待下行音频` 只表示 `ffplay` 进程已经启动；实际首包以 `收到第一段下行音频` 和 `下行音频已写入播放器` 为准。排查下行语音延迟时重点看服务端 `下行音频源返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`，以及 glass-playback 端 `收到第一段下行音频`、`下行音频已写入播放器`、`下行音频流写入完成`、`本机播放器播放结束` 的时间差。
 
 ### 10.5 数据资产格式
 

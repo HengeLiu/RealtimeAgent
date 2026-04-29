@@ -54,6 +54,7 @@ def _build_server_defaults() -> dict[str, str]:
         "VOICE_OMNI_REALTIME_MODEL_NAME": defaults.voice_omni_realtime_model_name,
         "VOICE_OMNI_REALTIME_URL": defaults.voice_omni_realtime_url,
         "VOICE_OMNI_PHOTO_WAIT_MS": str(defaults.voice_omni_photo_wait_ms),
+        "VOICE_INPUT_MODE": defaults.voice_input_mode,
         "TTS_MODEL_NAME": defaults.tts_model_name,
         "TTS_VOICE": defaults.tts_voice,
         "TTS_WEBSOCKET_API_URL": defaults.tts_websocket_api_url,
