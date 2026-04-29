@@ -2379,6 +2379,47 @@ class VoiceRuntime:
             model_request_started_at_ms = self._now_ms()
             first_model_token_logged = False
 
+            def _create_final_tts_session() -> StreamingTtsSession:
+                """创建当前 Agent 最终回复使用的流式 TTS 会话。
+
+                主要逻辑：
+                1. 复用已经提前创建的 `final_synthesis_context`。
+                2. 把 TTS 音频回调接到当前播放流。
+                3. 该函数也用于预热 session 失效后的重建。
+
+                返回值：
+                1. 当前回复可用的 `StreamingTtsSession`。
+                """
+
+                assert final_synthesis_context is not None
+                return self._model_client.create_streaming_tts_session(
+                    settings=self._settings,
+                    on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                        device_id=device_id,
+                        session_id=session_id,
+                        context=final_synthesis_context,
+                        chunk=chunk,
+                    ),
+                )
+
+            def _push_text_to_final_tts(text_delta: str) -> None:
+                """把文本推给当前预热 TTS，会话失效时重建一次。"""
+
+                nonlocal final_tts_session
+                assert final_synthesis_context is not None
+                assert final_tts_session is not None
+                self._mark_first_text_delta(final_synthesis_context.playback)
+                try:
+                    final_tts_session.push_text(text_delta)
+                except Exception as exc:
+                    log_debug(
+                        self._logger,
+                        f"TTS 预热会话推送失败，重建后重试: reason={exc!r}",
+                        LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
+                    )
+                    final_tts_session = _create_final_tts_session()
+                    final_tts_session.push_text(text_delta)
+
             def _handle_progress_text(text: str) -> None:
                 progress_text = text.strip()
                 if not progress_text:
@@ -2407,23 +2448,22 @@ class VoiceRuntime:
                         LogContext(device_id=device_id, session_id=session_id),
                     )
                 streamed_reply_parts.append(text_delta)
-                if final_synthesis_context is None:
-                    final_synthesis_context = self._open_reply_synthesis_context(
-                        device_id=device_id,
-                        session_id=session_id,
-                    )
-                    final_tts_session = self._model_client.create_streaming_tts_session(
-                        settings=self._settings,
-                        on_chunk=lambda chunk: self._emit_synthesis_chunk(
-                            device_id=device_id,
-                            session_id=session_id,
-                            context=final_synthesis_context,
-                            chunk=chunk,
-                        ),
-                    )
-                assert final_tts_session is not None
-                self._mark_first_text_delta(final_synthesis_context.playback)
-                final_tts_session.push_text(text_delta)
+                _push_text_to_final_tts(text_delta)
+
+            final_synthesis_context = self._open_reply_synthesis_context(
+                device_id=device_id,
+                session_id=session_id,
+            )
+            final_tts_session = _create_final_tts_session()
+            log_info(
+                self._logger,
+                (
+                    "TTS 预热已启动 "
+                    f"stream_id={final_synthesis_context.stream_id} "
+                    f"before_agent_request_ms={max(self._now_ms() - model_request_started_at_ms, 0)}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
+            )
 
             agent_result = self._agent_facade.handle_turn(
                 turn,
@@ -2444,6 +2484,8 @@ class VoiceRuntime:
                 )
             assistant_text = "".join(streamed_reply_parts).strip() or agent_result.reply_text.strip() or "收到。"
             if final_synthesis_context is not None and final_tts_session is not None:
+                if not streamed_reply_parts:
+                    _push_text_to_final_tts(assistant_text)
                 final_tts_session.finish()
                 self._finalize_synthesis_context(
                     device_id=device_id,
