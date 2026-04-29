@@ -95,7 +95,7 @@ Server -> Glass : voice.realtime.session.closed
 | --- | --- | --- |
 | `VOICE_REPLY_MODE` | `omni_realtime` | 默认使用 Omni 全模态语音直出。 |
 | `VOICE_INPUT_MODE` | `auto` | `omni_realtime` 下等价于 `raw_audio`，不走独立 ASR。 |
-| `VOICE_CONVERSATION_MODE` | `segment_turn` | 当前稳定值。设为 `realtime_semantic_vad` 后启用方案二实验接线。 |
+| `VOICE_CONVERSATION_MODE` | `realtime_semantic_vad` | SDK 默认连续对话模式。设为 `segment_turn` 可回退到旧的单段提交模式。 |
 | `VOICE_REALTIME_TURN_DETECTION` | `semantic_vad` | Omni turn detection 类型，可选 `semantic_vad` 或 `server_vad`。 |
 | `VOICE_REALTIME_SEMANTIC_VAD_THRESHOLD` | `0.65` | 语义 VAD 阈值，嘈杂环境可适当调高。 |
 | `VOICE_REALTIME_SILENCE_DURATION_MS` | `800` | 判定用户说完的静音时长。 |
@@ -105,33 +105,34 @@ Server -> Glass : voice.realtime.session.closed
 
 ## 7. 本轮实现范围
 
-本轮作为方案二第一阶段，先完成不破坏现有链路的基础接线：
+当前 `sdk-v55` 已把方案二作为默认链路，完成服务端自动响应等待和真实 ESP32 连续窗口的最小可用实现：
 
 1. `ServerSettings` 增加语音对话模式和 Omni turn detection 参数。
 2. `local_server.env.example` 暴露所有新增配置。
 3. `voice.realtime.session.open` 的 `input.turn_detection` 描述服务端期望的 turn detection 策略。
 4. Omni Realtime 会话创建时，把 `enable_turn_detection`、`turn_detection_type`、`threshold`、`silence_duration_ms` 和 `prefix_padding_ms` 传入官方 SDK。
-5. 增加单元测试，保证配置校验、协议 payload 和 Omni 会话参数不会回退。
+5. 服务端在 `sensor.audio.segment.started` 时前置自动抓拍，照片就绪后在已有上行音频的前提下追加到 Omni，避免先传图片触发官方接口的顺序错误。
+6. `realtime_semantic_vad` 下服务端不再手动 `commit()` 和 `create_response(...)`，而是等待 Omni `semantic_vad` 自动提交和自动响应。
+7. 真实 `glass-esp32` 在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后继续保持窗口，下一轮语音可由本地 VAD 直接触发。
+8. 增加单元测试，保证配置校验、协议 payload、Omni 会话参数和 semantic_vad 自动响应等待不会回退。
 
-本轮还不是完整的生产级连续对话。当前稳定默认仍是 `segment_turn`：眼镜按一次用户语音段上传，服务端在语音段结束后提交 Omni 响应。
+当前仍不是完整全双工生产形态。ESP32 固件尚未启用 AEC，所以上述连续对话窗口只覆盖“助手播完后的自然追问”；播放期间麦克风不会持续参与插话判断，避免把助手自己的声音回灌给模型。需要播放中自然插话时，下一阶段必须先完成端侧 AEC 或可靠回声抑制。
 
 ## 8. 后续开发计划
 
-### Phase 1：服务端 Omni 事件桥
+### Phase 1：AEC 和播放中插话
 
-1. 在 `VoiceRuntime` 中增加独立的连续对话会话管理器。
-2. 在 `sensor.audio.segment.started` 之外支持长连接持续上行音频。
-3. 将 Omni 的 `speech_started`、`speech_stopped`、`response.audio.delta`、`response.done` 转换为 SDK 内部事件。
-4. 用户插话时调用 `cancel_response`，并通过播放仲裁下发 `actuator.audio.interrupt`。
-5. 增加 turn 级日志：首音频上行、Omni speech_started、semantic commit、首段下行音频、打断取消、会话关闭。
+1. 在 ESP32 端评估 AEC 或可靠回声抑制接入方式。
+2. 播放期间保持麦克风采集，并在检测到近场用户语音时向服务端发送 interrupt。
+3. 服务端收到插话后调用 Omni `cancel_response`，并通过播放仲裁下发 `actuator.audio.interrupt`。
+4. 增加 turn 级日志：播放中用户语音、cancel_response、下行中断、下一轮响应首包。
 
-### Phase 2：glass-esp32 全实时终端
+### Phase 2：更完整的连续会话状态
 
-1. WakeNet 命中后进入连续对话窗口，而不是每轮都要求唤醒词。
-2. 播放期间保持麦克风采集，并尽可能启用 AEC 或回声抑制。
-3. 收到下行音频首包后立即写入 I2S，不等待完整 WAV。
-4. 支持按键退出、长静音退出、网络异常退出和播放打断。
-5. 对真实眼镜增加日志：唤醒命中、开始连续收音、首个上行 chunk、收到首段下行音频、首段写入扬声器、退出原因。
+1. 在 `VoiceRuntime` 中收敛独立的连续对话会话管理器，减少每段语音重新创建上下文的开销。
+2. 支持按键退出、长静音退出、退出词、网络异常退出和运行态清理。
+3. 增加“保持会话但不响应”的等待状态，避免环境噪声频繁触发模型响应。
+4. 对真实眼镜增加日志：开始连续收音、首个上行 chunk、收到首段下行音频、首段写入扬声器、退出原因。
 
 ### Phase 3：glass-playback 验收工具
 
@@ -147,11 +148,11 @@ Server -> Glass : voice.realtime.session.closed
 
 ## 9. 验收标准
 
-1. `VOICE_CONVERSATION_MODE=segment_turn` 下，现有 Omni 语音直出回归不退化。
-2. `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 下，服务端配置摘要、`voice.realtime.session.open` payload 和 Omni `update_session` 参数一致。
-3. 真机进入连续对话后，一次唤醒至少支持两轮追问，不要求重复唤醒词。
-4. 用户在助手播放中插话时，当前播放应被取消或压低，新 turn 能进入 Omni。
-5. 长静音、退出词、按键和网络断开都能关闭会话并清理运行态。
+1. `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 下，服务端配置摘要、`voice.realtime.session.open` payload 和 Omni `update_session` 参数一致。
+2. 真机进入连续对话后，一次唤醒至少支持两轮追问，不要求重复唤醒词。
+3. `VOICE_CONVERSATION_MODE=segment_turn` 下，现有 Omni 语音直出回归不退化。
+4. 长静音、退出词、按键和网络断开都能关闭会话并清理运行态。
+5. 播放中插话验收依赖 ESP32 AEC 或同等回声抑制完成后再开启。
 
 ## 10. 风险
 

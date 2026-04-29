@@ -68,6 +68,7 @@
 #define PRE_ROLL_FRAME_COUNT 8
 #define WAKE_IDLE_SUMMARY_MS 3000
 #define SERVER_REPLY_TIMEOUT_MS 45000
+#define CONTINUOUS_DIALOG_IDLE_TIMEOUT_MS 30000
 #define AUDIO_WS_RECONNECT_INTERVAL_MS 3000
 #define PLAYBACK_HTTP_TIMEOUT_MS 5000
 #define PLAYBACK_STREAM_IDLE_TIMEOUT_MS 30000
@@ -140,6 +141,8 @@ static bool s_control_transport_started = false;
 static bool s_playback_active = false;
 static bool s_playback_task_running = false;
 static volatile bool s_playback_interrupt_requested = false;
+static bool s_realtime_semantic_dialog_enabled = false;
+static bool s_continuous_dialog_active = false;
 static bool s_speaker_channel_enabled = false;
 static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
@@ -157,6 +160,7 @@ static char s_current_camera_stream_id[64];
 static int s_camera_frame_interval_ms = 500;
 static uint32_t s_camera_frame_seq = 0;
 static uint64_t s_playback_request_started_ms = 0;
+static uint64_t s_continuous_dialog_last_activity_ms = 0;
 static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
 static TaskHandle_t s_wifi_retry_task_handle = NULL;
@@ -498,12 +502,37 @@ static void send_realtime_session_opened_message(const char *session_id)
     cJSON_AddBoolToObject(capabilities, "vad", true);
     cJSON_AddBoolToObject(capabilities, "barge_in", false);
     cJSON_AddBoolToObject(capabilities, "output_cancel", false);
+    cJSON_AddBoolToObject(capabilities, "continuous_dialog", s_realtime_semantic_dialog_enabled);
+    cJSON_AddStringToObject(
+        capabilities,
+        "turn_detection_owner",
+        s_realtime_semantic_dialog_enabled ? "omni_realtime" : "endpoint"
+    );
     cJSON_AddItemToObject(payload, "capabilities", capabilities);
 
     send_control_message_json(
         build_control_message_json("notify", "voice.realtime.session.opened", session_id, payload),
         "voice.realtime.session.opened"
     );
+}
+
+static bool payload_requests_omni_semantic_dialog(const cJSON *payload)
+{
+    const cJSON *input = payload != NULL ? cJSON_GetObjectItemCaseSensitive(payload, "input") : NULL;
+    const cJSON *conversation_mode = input != NULL
+        ? cJSON_GetObjectItemCaseSensitive(input, "conversation_mode")
+        : NULL;
+    const cJSON *turn_detection = input != NULL
+        ? cJSON_GetObjectItemCaseSensitive(input, "turn_detection")
+        : NULL;
+    const cJSON *owner = turn_detection != NULL
+        ? cJSON_GetObjectItemCaseSensitive(turn_detection, "owner")
+        : NULL;
+
+    return cJSON_IsString(conversation_mode) &&
+           strcmp(conversation_mode->valuestring, "realtime_semantic_vad") == 0 &&
+           cJSON_IsString(owner) &&
+           strcmp(owner->valuestring, "omni_realtime") == 0;
 }
 
 static void send_audio_segment_started_message(const char *segment_id)
@@ -1308,6 +1337,25 @@ static void begin_reply_wait_state(void)
     s_reply_wait_started_ms = now_ms();
 }
 
+static void deactivate_continuous_dialog(const char *reason)
+{
+    if (!s_continuous_dialog_active) {
+        return;
+    }
+    s_continuous_dialog_active = false;
+    s_continuous_dialog_last_activity_ms = 0;
+    ESP_LOGI(TAG, "连续对话窗口已关闭: reason=%s", reason != NULL ? reason : "unknown");
+}
+
+static void refresh_continuous_dialog_activity(void)
+{
+    if (!s_realtime_semantic_dialog_enabled) {
+        return;
+    }
+    s_continuous_dialog_active = true;
+    s_continuous_dialog_last_activity_ms = now_ms();
+}
+
 static bool reply_wait_timed_out(uint64_t current_ms)
 {
     return s_reply_wait_started_ms > 0 &&
@@ -1338,6 +1386,9 @@ static void reset_control_session_state(void)
     s_playback_active = false;
     s_playback_task_running = false;
     s_playback_interrupt_requested = false;
+    s_realtime_semantic_dialog_enabled = false;
+    s_continuous_dialog_active = false;
+    s_continuous_dialog_last_activity_ms = 0;
     clear_reply_wait_state();
     s_current_session_id[0] = '\0';
     s_current_stream_id[0] = '\0';
@@ -1980,6 +2031,9 @@ cleanup:
     s_playback_task_handle = NULL;
     s_current_playback_stream_id[0] = '\0';
     s_playback_request_started_ms = 0;
+    if (s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
+        s_continuous_dialog_last_activity_ms = now_ms();
+    }
     if (s_next_playback_stream_id[0] != '\0') {
         strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
         s_next_playback_stream_id[0] = '\0';
@@ -2141,6 +2195,13 @@ static void sr_pipeline_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+        if (s_continuous_dialog_active &&
+            !segment.segment_active &&
+            !s_playback_active &&
+            s_continuous_dialog_last_activity_ms > 0 &&
+            (current_ms - s_continuous_dialog_last_activity_ms) >= CONTINUOUS_DIALOG_IDLE_TIMEOUT_MS) {
+            deactivate_continuous_dialog("idle_timeout");
+        }
         if (wake_active != last_wake_active) {
             log_wake_gate_state(
                 s_registered,
@@ -2241,7 +2302,12 @@ static void sr_pipeline_task(void *arg)
             );
         }
 
-        if (!segment.segment_active && res->wakeup_state == WAKENET_DETECTED) {
+        bool start_by_wake_word = res->wakeup_state == WAKENET_DETECTED;
+        bool start_by_continuous_vad = s_realtime_semantic_dialog_enabled &&
+                                       s_continuous_dialog_active &&
+                                       res->vad_state == VAD_SPEECH;
+
+        if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
             segment.segment_active = true;
             segment.got_speech = false;
             segment.tail_silence_ms = 0;
@@ -2249,7 +2315,13 @@ static void sr_pipeline_task(void *arg)
             segment.segment_pcm_bytes = 0;
             segment.chunk_seq = 0;
             build_runtime_token("seg", segment.segment_id, sizeof(segment.segment_id));
-            ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
+            if (start_by_wake_word) {
+                refresh_continuous_dialog_activity();
+                ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
+            } else {
+                refresh_continuous_dialog_activity();
+                ESP_LOGI(TAG, "连续对话 VAD 触发新语音段: segment_id=%s", segment.segment_id);
+            }
             send_audio_segment_started_message(segment.segment_id);
             flush_pre_roll_frames(
                 pre_roll_frames,
@@ -2319,6 +2391,7 @@ static void sr_pipeline_task(void *arg)
             segment.segment_pcm_bytes,
             endpoint_by_silence ? "endpoint_detected" : "max_capture"
         );
+        refresh_continuous_dialog_activity();
         begin_reply_wait_state();
         s_wake_listening_enabled = false;
         reset_segment_state(&segment);
@@ -2500,6 +2573,8 @@ static void handle_control_message(const char *data, int data_len)
     }
 
     if (strcmp(name->valuestring, "voice.session.open") == 0) {
+        s_realtime_semantic_dialog_enabled = false;
+        deactivate_continuous_dialog("classic_voice_session_open");
         if (cJSON_IsString(session_id) && session_id->valuestring != NULL) {
             strlcpy(s_current_session_id, session_id->valuestring, sizeof(s_current_session_id));
         } else {
@@ -2522,6 +2597,8 @@ static void handle_control_message(const char *data, int data_len)
     }
 
     if (strcmp(name->valuestring, "voice.realtime.session.open") == 0) {
+        s_realtime_semantic_dialog_enabled = payload_requests_omni_semantic_dialog(payload);
+        deactivate_continuous_dialog("realtime_session_open");
         if (cJSON_IsString(session_id) && session_id->valuestring != NULL) {
             strlcpy(s_current_session_id, session_id->valuestring, sizeof(s_current_session_id));
         } else {
@@ -2532,8 +2609,9 @@ static void handle_control_message(const char *data, int data_len)
         clear_reply_wait_state();
         ESP_LOGI(
             TAG,
-            "收到 voice.realtime.session.open，当前固件降级为半双工: session_id=%s",
-            s_current_session_id
+            "收到 voice.realtime.session.open，当前固件降级为半双工: session_id=%s semantic_continuous=%d",
+            s_current_session_id,
+            s_realtime_semantic_dialog_enabled
         );
         send_realtime_session_opened_message(s_current_session_id);
         s_voice_session_opened = true;

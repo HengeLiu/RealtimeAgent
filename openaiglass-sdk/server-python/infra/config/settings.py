@@ -79,7 +79,7 @@ class ServerSettings:
     voice_omni_realtime_model_name: str = "qwen3.5-omni-plus-realtime"
     voice_omni_realtime_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     voice_omni_photo_wait_ms: int = 300
-    voice_conversation_mode: str = "segment_turn"
+    voice_conversation_mode: str = "realtime_semantic_vad"
     voice_realtime_turn_detection_type: str = "semantic_vad"
     voice_realtime_semantic_vad_threshold: float = 0.65
     voice_realtime_silence_duration_ms: int = 800
@@ -125,6 +125,7 @@ class ServerSettings:
         主要逻辑：
         1. 读取环境变量，不存在时回落到默认值。
         2. 将 `SERVER_PORT` 转换为整数并进行合法性校验。
+        3. 旧配置如果只切到 `agent_tts`，自动回退 `segment_turn`，避免默认连续对话模式拦截启动。
 
         返回值：
         1. `ServerSettings` 实例。
@@ -135,6 +136,13 @@ class ServerSettings:
         """
 
         defaults = cls()
+        voice_reply_mode = os.getenv("VOICE_REPLY_MODE", defaults.voice_reply_mode)
+        if "VOICE_CONVERSATION_MODE" in os.environ:
+            voice_conversation_mode = os.environ["VOICE_CONVERSATION_MODE"]
+        elif voice_reply_mode != "omni_realtime":
+            voice_conversation_mode = "segment_turn"
+        else:
+            voice_conversation_mode = defaults.voice_conversation_mode
 
         port_raw = os.getenv("SERVER_PORT", str(defaults.port))
         try:
@@ -167,7 +175,7 @@ class ServerSettings:
             agent_model_name=os.getenv("AGENT_MODEL_NAME", defaults.agent_model_name),
             voice_model_name=os.getenv("VOICE_MODEL_NAME", defaults.voice_model_name),
             voice_model_voice=os.getenv("VOICE_MODEL_VOICE", defaults.voice_model_voice),
-            voice_reply_mode=os.getenv("VOICE_REPLY_MODE", defaults.voice_reply_mode),
+            voice_reply_mode=voice_reply_mode,
             voice_omni_realtime_model_name=os.getenv(
                 "VOICE_OMNI_REALTIME_MODEL_NAME",
                 defaults.voice_omni_realtime_model_name,
@@ -180,7 +188,7 @@ class ServerSettings:
                 "VOICE_OMNI_PHOTO_WAIT_MS",
                 defaults.voice_omni_photo_wait_ms,
             ),
-            voice_conversation_mode=os.getenv("VOICE_CONVERSATION_MODE", defaults.voice_conversation_mode),
+            voice_conversation_mode=voice_conversation_mode,
             voice_realtime_turn_detection_type=os.getenv(
                 "VOICE_REALTIME_TURN_DETECTION",
                 defaults.voice_realtime_turn_detection_type,

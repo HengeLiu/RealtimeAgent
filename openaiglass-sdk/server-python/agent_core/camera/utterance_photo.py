@@ -219,6 +219,45 @@ class UtterancePhotoStore:
                 record.consumed_at_ms = now
             return records
 
+    def consume_ready_photo(
+        self,
+        *,
+        session_id: str,
+        device_id: str,
+        segment_id: str,
+    ) -> UtterancePhotoRecord | None:
+        """取出指定语音段已就绪且未使用的自动照片。
+
+        主要逻辑：
+        1. 只查找指定 `segment_id` 对应的抓拍记录。
+        2. 仅当照片已完成、无错误、未消费时返回记录。
+        3. 返回前立即写入 `consumed_at_ms`，保证同一张照片不会重复进入模型。
+
+        参数：
+        1. `session_id/device_id/segment_id`：要消费的语音轮次。
+
+        返回值：
+        1. 找到可用照片时返回记录；否则返回 `None`。
+
+        异常情况：
+        1. 本方法不抛出后台抓拍异常，失败记录会被视为不可用。
+        """
+
+        key = self._key(session_id=session_id, device_id=device_id, segment_id=segment_id)
+        now = self._now_ms()
+        with self._lock:
+            record = self._records.get(key)
+            if (
+                record is None
+                or record.consumed_at_ms is not None
+                or not record.event.is_set()
+                or record.error is not None
+                or record.result is None
+            ):
+                return None
+            record.consumed_at_ms = now
+            return record
+
     def _capture_worker(
         self,
         *,

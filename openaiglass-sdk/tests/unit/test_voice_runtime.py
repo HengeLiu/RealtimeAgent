@@ -389,6 +389,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             settings=ServerSettings(
                 dashscope_api_key="test-key",
                 voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                voice_conversation_mode="segment_turn",
             ),
             input_pcm=b"\x01\x02",
             image_frames=[b"jpg"],
@@ -475,6 +476,94 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(_Factory.instance.updated["prefix_padding_ms"], 320)
         session.close()
         self.assertTrue(_Factory.instance.closed)
+
+    def test_omni_semantic_vad_waits_auto_response_without_manual_commit(self) -> None:
+        """测试目标：验证 semantic VAD 模式不再手动提交 Omni 输入。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话。
+        2. 使用 `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 创建流式会话。
+        3. 追加音频和图片后，模拟 Omni 自动提交、返回音频和结束事件。
+        4. 调用 `finish(...)` 等待自动响应。
+
+        预期结果：
+        1. SDK 不调用 `commit()`。
+        2. SDK 不调用 `create_response(...)`。
+        3. 模型音频仍通过回调进入播放链路。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.committed = False
+                self.response_created = False
+                self.images: list[str] = []
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, image_b64: str) -> None:
+                self.images.append(image_b64)
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def create_response(self, **_kwargs) -> None:
+                self.response_created = True
+
+            def close(self) -> None:
+                return None
+
+        chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        session = client.start_streaming_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+            ),
+            instructions="连续对话",
+            on_chunk=chunks.append,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+        session.append_audio(b"pcm")
+        session.append_image_frames([b"jpeg"])
+        assert _Factory.instance is not None
+        _Factory.instance.callback.on_event({"type": "input_audio_buffer.speech_stopped"})
+        _Factory.instance.callback.on_event(
+            {"type": "response.audio.delta", "delta": base64.b64encode(b"audio").decode()}
+        )
+        _Factory.instance.callback.on_event({"type": "response.audio_transcript.delta", "delta": "你好"})
+        _Factory.instance.callback.on_event(
+            {"type": "conversation.item.input_audio_transcription.completed", "transcript": "看一下"}
+        )
+        _Factory.instance.callback.on_event({"type": "response.done"})
+
+        result = session.finish(image_frames=[], instructions="连续对话", segment_finished_at_ms=0)
+
+        self.assertFalse(_Factory.instance.committed)
+        self.assertFalse(_Factory.instance.response_created)
+        self.assertEqual(len(_Factory.instance.images), 1)
+        self.assertEqual(chunks[0].audio_pcm_bytes, b"audio")
+        self.assertEqual(result.assistant_text, "你好")
+        self.assertEqual(result.transcript, "看一下")
+        session.close()
 
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
         """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。

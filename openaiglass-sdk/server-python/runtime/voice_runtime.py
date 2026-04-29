@@ -64,6 +64,7 @@ class SegmentBuffer:
     streaming_asr_session: "StreamingSpeechRecognitionSession | None" = None
     omni_realtime_session: "OmniRealtimeStreamingSession | None" = None
     omni_realtime_context: "ReplySynthesisContext | None" = None
+    utterance_photo_capture_started: bool = False
 
     def append_frame(self, frame: MediaFrame, *, max_bytes: int) -> None:
         header = frame.header
@@ -251,6 +252,7 @@ class OmniRealtimeStreamingSession:
         self._first_audio_append_at_ms: int | None = None
         self._audio_bytes = 0
         self._audio_frame_count = 0
+        self._image_frame_count = 0
         self._closed = False
 
     @property
@@ -284,6 +286,56 @@ class OmniRealtimeStreamingSession:
                 LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
             )
 
+    def has_audio(self) -> bool:
+        """返回当前 Omni 会话是否已经追加过音频。
+
+        返回值：
+        1. `True` 表示已经至少向 Omni 发送过一段音频，可以追加图片。
+        2. `False` 表示还没有音频，直接追加图片会被 Omni 拒绝。
+        """
+
+        return self._audio_bytes > 0
+
+    def append_image_frames(self, image_frames: list[bytes]) -> int:
+        """向 Omni Realtime 追加图片帧。
+
+        主要逻辑：
+        1. 确保当前会话已经发送过音频，符合 Omni Realtime 的输入顺序要求。
+        2. 将图片字节转成 base64 后调用 `append_video(...)`。
+        3. 返回实际追加的图片数量，便于调用方记录日志。
+
+        参数：
+        1. `image_frames`：待追加的图片原始字节列表。
+
+        返回值：
+        1. 实际成功追加的图片帧数量。
+
+        异常情况：
+        1. 尚未发送音频时抛出 `INVALID_MESSAGE`。
+        2. 底层 WebSocket 发送失败时透传异常，由调用方决定是否降级。
+        """
+
+        if not image_frames:
+            return 0
+        if self._audio_bytes <= 0:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "Omni Realtime 追加图片前必须先追加音频",
+                details={"segment_id": self._segment_id},
+            )
+        for image_bytes in image_frames:
+            self._conversation.append_video(base64.b64encode(image_bytes).decode("ascii"))
+            self._image_frame_count += 1
+        log_debug(
+            self._logger,
+            (
+                "Omni Realtime 已追加图片输入 "
+                f"image_count={len(image_frames)} total_image_count={self._image_frame_count}"
+            ),
+            LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
+        )
+        return len(image_frames)
+
     def finish(
         self,
         *,
@@ -308,6 +360,36 @@ class OmniRealtimeStreamingSession:
                 "Omni Realtime 输入音频为空",
                 details={"segment_id": self._segment_id},
             )
+
+        if self._settings.omni_turn_detection_enabled():
+            appended_image_count = 0
+            if image_frames:
+                try:
+                    appended_image_count = self.append_image_frames(image_frames)
+                except Exception as exc:  # noqa: BLE001 - 迟到图片不能阻断 semantic_vad 响应等待
+                    log_debug(
+                        self._logger,
+                        (
+                            "Omni semantic_vad 等待阶段追加图片失败，继续等待自动响应 "
+                            f"image_count={len(image_frames)} reason={exc!r}"
+                        ),
+                        LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
+                    )
+            if not self._request_started_at_ms_box:
+                self._request_started_at_ms = segment_finished_at_ms
+                self._request_started_at_ms_box.append(segment_finished_at_ms)
+            log_info(
+                self._logger,
+                (
+                    "Omni semantic_vad 等待自动响应 "
+                    f"model={self._settings.voice_omni_realtime_model_name} "
+                    f"preconnected=true connect_ms={self._connect_ms} "
+                    f"audio_bytes={self._audio_bytes} audio_frame_count={self._audio_frame_count} "
+                    f"image_count={appended_image_count}"
+                ),
+                LogContext(device_id=self._device_id, session_id=self._session_id),
+            )
+            return self._wait_for_done()
 
         try:
             from dashscope.audio.qwen_omni import MultiModality
@@ -351,6 +433,35 @@ class OmniRealtimeStreamingSession:
                 "Omni Realtime 返回错误",
                 details={"reason": self._error_box[-1], "segment_id": self._segment_id},
             )
+        return self._build_result()
+
+    def _wait_for_done(self) -> OmniRealtimeReplyResult:
+        """等待 Omni Realtime 响应结束并构造结果。
+
+        返回值：
+        1. 当前轮 Omni 响应文本、转写和响应编号。
+
+        异常情况：
+        1. 等待超时或 Omni 返回错误时抛出结构化异常。
+        """
+
+        if not self._done_event.wait(max(5.0, self._settings.voice_model_timeout_ms / 1000)):
+            raise build_error(
+                ErrorCode.TIMEOUT,
+                "Omni Realtime 等待响应完成超时",
+                details={"segment_id": self._segment_id, "timeout_ms": self._settings.voice_model_timeout_ms},
+            )
+        if self._error_box:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "Omni Realtime 返回错误",
+                details={"reason": self._error_box[-1], "segment_id": self._segment_id},
+            )
+        return self._build_result()
+
+    def _build_result(self) -> OmniRealtimeReplyResult:
+        """根据回调累积状态构造当前轮结果。"""
+
         return OmniRealtimeReplyResult(
             assistant_text="".join(self._assistant_text_parts).strip(),
             transcript="".join(self._transcript_parts).strip(),
@@ -1350,6 +1461,8 @@ class DashscopeOmniRealtimeReplyClient:
                         response_id = str(response.get("id") or "")
                         if response_id:
                             response_id_box.append(response_id)
+                    if not request_started_at_ms_box:
+                        request_started_at_ms_box.append(now_ms)
                     response_created_at_ms = now_ms
                     log_debug(
                         self_logger,
@@ -1357,6 +1470,31 @@ class DashscopeOmniRealtimeReplyClient:
                             "Omni Realtime 响应已创建 "
                             f"response_id={response_id_box[-1] if response_id_box else '<unknown>'}"
                         ),
+                        LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                    )
+                    return
+
+                if event_type in {"input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"}:
+                    log_debug(
+                        self_logger,
+                        f"Omni Realtime 输入语音事件: {event_type}",
+                        LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                    )
+                    if event_type == "input_audio_buffer.speech_stopped" and not request_started_at_ms_box:
+                        request_started_at_ms_box.append(now_ms)
+                        log_info(
+                            self_logger,
+                            "Omni semantic_vad 检测到用户 turn 结束",
+                            LogContext(device_id=device_id, session_id=session_id),
+                        )
+                    return
+
+                if event_type == "input_audio_buffer.committed":
+                    if not request_started_at_ms_box:
+                        request_started_at_ms_box.append(now_ms)
+                    log_debug(
+                        self_logger,
+                        "Omni Realtime 输入已自动提交",
                         LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
                     )
                     return
@@ -2296,6 +2434,14 @@ class VoiceRuntime:
                 self._settings.voice_reply_mode == "omni_realtime"
                 and self._settings.effective_voice_input_mode() == "raw_audio"
             )
+            should_capture_photo_early = should_start_omni and self._settings.omni_turn_detection_enabled()
+        if should_capture_photo_early:
+            self._start_utterance_photo_capture(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                reason="realtime_semantic_turn_started",
+            )
         if should_start_omni:
             self._start_omni_realtime_segment_session(
                 device_id=device_id,
@@ -2882,8 +3028,15 @@ class VoiceRuntime:
 
         return self._asr_client.transcribe(settings=self._settings, input_wav=input_wav)
 
-    def _start_utterance_photo_capture(self, *, device_id: str, session_id: str, segment: SegmentBuffer) -> None:
-        """在语音段结束后启动后台自动抓拍。
+    def _start_utterance_photo_capture(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        reason: str = "utterance_finished",
+    ) -> None:
+        """启动本轮语音关联的后台自动抓拍。
 
         主要逻辑：
         1. 从 AgentFacade 的 ToolRegistry 读取真实相机网关和语音照片缓存。
@@ -2893,7 +3046,8 @@ class VoiceRuntime:
         参数：
         1. `device_id`：当前眼镜设备编号。
         2. `session_id`：当前控制会话编号。
-        3. `segment`：刚结束上传的语音段。
+        3. `segment`：当前语音段。
+        4. `reason`：写入端侧抓拍请求的原因。
 
         返回值：
         1. 无返回值。
@@ -2922,13 +3076,15 @@ class VoiceRuntime:
                 segment_id=segment.segment_id,
                 stream_id=segment.stream_id,
                 timeout_ms=UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS,
+                reason=reason,
             )
+            segment.utterance_photo_capture_started = True
             log_debug(
                 self._logger,
                 (
-                    "已启动语音结束自动抓拍 "
+                    "已启动语音自动抓拍 "
                     f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
-                    f"timeout_ms={UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS}"
+                    f"reason={reason} timeout_ms={UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
@@ -2969,7 +3125,8 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            self._start_utterance_photo_capture(device_id=device_id, session_id=session_id, segment=segment)
+            if not segment.utterance_photo_capture_started:
+                self._start_utterance_photo_capture(device_id=device_id, session_id=session_id, segment=segment)
             if self._settings.voice_reply_mode == "omni_realtime":
                 self._run_omni_realtime_reply_pipeline(
                     controller=controller,
@@ -3349,6 +3506,17 @@ class VoiceRuntime:
                 segment.omni_realtime_context = context
             if buffered_pcm:
                 omni_session.append_audio(buffered_pcm)
+            if self._settings.omni_turn_detection_enabled():
+                threading.Thread(
+                    target=self._append_ready_utterance_photo_to_omni_session,
+                    kwargs={
+                        "device_id": device_id,
+                        "session_id": session_id,
+                        "segment": segment,
+                        "omni_session": omni_session,
+                    },
+                    daemon=True,
+                ).start()
         except Exception as exc:  # noqa: BLE001 - 预连接失败不应阻断当前语音段采集
             log_debug(
                 self._logger,
@@ -3356,6 +3524,75 @@ class VoiceRuntime:
                     "Omni Realtime 预连接失败，结束阶段回退普通提交 "
                     f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} reason={exc!r}"
                 ),
+                LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+            )
+
+    def _append_ready_utterance_photo_to_omni_session(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        omni_session: OmniRealtimeStreamingSession,
+    ) -> None:
+        """把实时语义对话中的自动照片尽早追加到 Omni 会话。
+
+        主要逻辑：
+        1. 等待本轮提前抓拍的照片在短时间内就绪。
+        2. 等待至少一段音频已经追加到 Omni，满足官方输入顺序约束。
+        3. 追加图片失败只记录 DEBUG，不能影响语音主链路。
+
+        参数：
+        1. `device_id/session_id`：当前设备和会话。
+        2. `segment`：当前语音段。
+        3. `omni_session`：已预连接的 Omni Realtime 会话。
+
+        返回值：无。
+        """
+
+        wait_ms = max(self._settings.voice_omni_photo_wait_ms, 1000)
+        try:
+            store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
+            store.wait_for_photo(
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment.segment_id,
+                timeout_ms=wait_ms,
+            )
+            record = store.consume_ready_photo(
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment.segment_id,
+            )
+            if record is None or record.result is None:
+                return
+            deadline_ms = self._now_ms() + 500
+            while not omni_session.has_audio() and self._now_ms() < deadline_ms:
+                time.sleep(0.02)
+            if not omni_session.has_audio():
+                log_debug(
+                    self._logger,
+                    (
+                        "Omni semantic_vad 自动照片已就绪但尚无音频，跳过追加 "
+                        f"segment_id={segment.segment_id}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                )
+                return
+            omni_session.append_image_frames([record.result.image_bytes])
+        except AppError as exc:
+            log_debug(
+                self._logger,
+                (
+                    "Omni semantic_vad 未追加自动照片 "
+                    f"code={exc.code} message={exc.message} segment_id={segment.segment_id}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+            )
+        except Exception as exc:  # noqa: BLE001 - 自动照片不能阻断连续语音主链路
+            log_debug(
+                self._logger,
+                f"Omni semantic_vad 追加自动照片失败: reason={exc!r}",
                 LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
             )
 

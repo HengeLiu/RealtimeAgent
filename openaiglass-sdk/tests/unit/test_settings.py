@@ -78,6 +78,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         os.environ["VOICE_MODEL_NAME"] = "qwen3.5-omni-plus"
         os.environ["VOICE_REPLY_MODE"] = "agent_tts"
         os.environ["VOICE_INPUT_MODE"] = "asr_text"
+        os.environ["VOICE_CONVERSATION_MODE"] = "segment_turn"
         os.environ["VOICE_SESSION_MODE"] = "half_duplex"
         settings = ServerSettings.from_env()
 
@@ -92,6 +93,7 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_reply_mode, "agent_tts")
         self.assertEqual(settings.voice_input_mode, "asr_text")
+        self.assertEqual(settings.voice_conversation_mode, "segment_turn")
         self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "half_duplex")
 
@@ -125,6 +127,28 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.voice_realtime_prefix_padding_ms, 320)
         self.assertTrue(settings.omni_turn_detection_enabled())
 
+    def test_agent_tts_without_conversation_mode_falls_back_segment_turn(self) -> None:
+        """测试目标：验证旧 Agent+TTS 配置不会被默认连续对话模式拦截。
+
+        测试方法：
+        1. 只注入 `VOICE_REPLY_MODE=agent_tts` 和兼容的语音输入模式。
+        2. 不注入新增的 `VOICE_CONVERSATION_MODE`。
+        3. 调用 `ServerSettings.from_env()`。
+
+        预期结果：
+        1. 配置校验通过。
+        2. SDK 自动使用 `segment_turn`，保证旧本地配置仍可启动。
+        """
+
+        os.environ["VOICE_REPLY_MODE"] = "agent_tts"
+        os.environ["VOICE_INPUT_MODE"] = "asr_text"
+
+        settings = ServerSettings.from_env()
+
+        self.assertEqual(settings.voice_reply_mode, "agent_tts")
+        self.assertEqual(settings.voice_conversation_mode, "segment_turn")
+        self.assertFalse(settings.omni_turn_detection_enabled())
+
     def test_from_env_without_overrides_uses_defaults(self) -> None:
         """测试目标：验证无环境变量覆盖时仍能回退到默认值。"""
 
@@ -140,8 +164,8 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_input_mode, "auto")
         self.assertEqual(settings.voice_reply_mode, "omni_realtime")
-        self.assertEqual(settings.voice_conversation_mode, "segment_turn")
-        self.assertFalse(settings.omni_turn_detection_enabled())
+        self.assertEqual(settings.voice_conversation_mode, "realtime_semantic_vad")
+        self.assertTrue(settings.omni_turn_detection_enabled())
         self.assertEqual(settings.effective_voice_input_mode(), "raw_audio")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
 

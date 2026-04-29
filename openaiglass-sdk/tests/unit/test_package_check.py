@@ -49,20 +49,21 @@ def test_top_level_sdk_pyproject_installs_server_python_package() -> None:
 
     测试方法：
     1. 读取 `openaiglass-sdk/pyproject.toml`。
-    2. 检查包目录指向 `server-python`。
+    2. 检查包发现目录覆盖 `server-python` 和 `glass-playback`。
     3. 检查公开 CLI 入口仍然存在。
 
     预期结果：
     1. `uv pip install -e openaiglass-sdk` 能找到 Python 打包配置。
-    2. 顶层安装入口与内部 `server-python` 包目录保持一致。
+    2. 顶层安装入口能同时发现服务端 SDK 包和 glass-playback 包。
     """
 
     pyproject_path = ROOT / "openaiglass-sdk" / "pyproject.toml"
     config = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
     assert config["project"]["name"] == "openaiglasses-sdk"
-    assert config["tool"]["setuptools"]["package-dir"][""] == "server-python"
-    assert config["tool"]["setuptools"]["packages"]["find"]["where"] == ["server-python"]
+    assert config["tool"]["setuptools"]["packages"]["find"]["where"] == ["server-python", "glass-playback"]
+    assert "openaiglasses*" in config["tool"]["setuptools"]["packages"]["find"]["include"]
+    assert "openaiglass_glass_playback*" in config["tool"]["setuptools"]["packages"]["find"]["include"]
     assert config["project"]["scripts"]["openaiglass"] == "openaiglasses.cli:main"
 
 
