@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v37`。本版本在 `sdk-v36` 基础上统一了 `glass-playback` 命令行状态日志格式：每行状态日志都带 UTC 时间戳，并去掉固定 `[glass-playback]` 前缀，方便和服务端日志按时间对齐。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v38`。本版本在 `sdk-v37` 基础上为 `glass-playback` 增加 `audio_play.mode=play_and_auto_finish`，可以把服务端下行语音直接从开发机扬声器播出，而不是保存到 `save_audio_to` 目录。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -16,7 +16,7 @@
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`；如需排障可临时设为 `batch`。 |
-| 设备级 glass-playback | `sdk-v37` 已随 Python SDK 包安装，并带统一时间戳状态日志 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
+| 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，并支持保存或直接播放下行语音 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -1816,7 +1816,16 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 5. `sensors` 只描述虚拟眼镜能读到什么输入。
 6. `actuators` 只描述虚拟眼镜收到命令后如何执行或记录。
 7. `sdk-v21` 起，`audio_play.save_audio_to` 会在后台线程下载 `/stream.wav` 并保存，不会阻塞 `sensor.camera.capture` 等后续控制消息。
-8. `assertions.server_artifacts` 用于断言真实服务端业务产物是否生成；路径支持 `{session_id}` 和 `{device_id}` 占位符。相对路径中 `runs/` 开头时按业务工程根目录解析。
+8. `sdk-v38` 起，`audio_play.mode=play_and_auto_finish` 会把 `/stream.wav` 下载到系统临时文件并调用本机播放器直接播出，播放结束后删除临时文件并自动上报 `actuator.audio.finished`。macOS 默认使用 `afplay`，Linux 依次尝试 `paplay`、`aplay`、`ffplay`；也可以配置 `player_command` 指定播放器命令，例如 `"player_command": "ffplay -nodisp -autoexit -loglevel error"`。
+9. `assertions.server_artifacts` 用于断言真实服务端业务产物是否生成；路径支持 `{session_id}` 和 `{device_id}` 占位符。相对路径中 `runs/` 开头时按业务工程根目录解析。
+
+如果希望直接听到服务端下行语音，可以把上面的 `audio_play` 改为：
+
+```json
+"audio_play": {
+  "mode": "play_and_auto_finish"
+}
+```
 
 ### 10.5 数据资产格式
 

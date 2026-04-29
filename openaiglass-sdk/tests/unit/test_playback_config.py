@@ -471,6 +471,109 @@ def test_playback_audio_save_does_not_block_camera_capture(
     assert "actuator.audio.started" not in output
 
 
+def test_playback_audio_can_play_without_persistent_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """测试目标：验证 glass-playback 可直接播放服务端下行音频。
+
+    测试方法：
+    1. 配置 `actuators.audio_play.mode=play_and_auto_finish`，不配置 `save_audio_to`。
+    2. 将 `/stream.wav` 下载和本机播放器替换成测试替身。
+    3. 处理一次 `actuator.audio.play` 控制消息并等待后台线程结束。
+
+    预期结果：
+    1. SDK 会调用配置的播放器命令。
+    2. 播放过程只使用临时文件，结束后不生成持久化音频文件。
+    3. 设备会回报 `actuator.audio.started` 和 `actuator.audio.finished`。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    config_dir.mkdir(parents=True)
+    _write_wav(audio_path)
+    config_path = config_dir / "glass.audio_play.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_id": "glass-playback-001",
+                "pair_token": "pair-playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "startup": {"wait_for_binding": False},
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "chunk_ms": 20,
+                    }
+                },
+                "actuators": {
+                    "audio_play": {
+                        "mode": "play_and_auto_finish",
+                        "player_command": "fake-player --quiet",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _StaticAudioResponse:
+        def __init__(self) -> None:
+            self._chunks = [b"RIFF-fake-wave", b""]
+
+        def __enter__(self) -> "_StaticAudioResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            return self._chunks.pop(0)
+
+    played_commands: list[list[str]] = []
+    temp_paths_seen: list[Path] = []
+
+    def _fake_urlopen(url: str, *, timeout: float) -> _StaticAudioResponse:
+        assert "/stream.wav" in url
+        assert timeout > 0
+        return _StaticAudioResponse()
+
+    def _fake_run(command: list[str], *, check: bool) -> None:
+        assert check is True
+        played_commands.append(command)
+        temp_path = Path(command[-1])
+        temp_paths_seen.append(temp_path)
+        assert temp_path.read_bytes() == b"RIFF-fake-wave"
+
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.urlopen", _fake_urlopen)
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.subprocess.run", _fake_run)
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    control = _FakeControl()
+    device._session_id = "sess_001"  # noqa: SLF001 - 单元测试直接验证控制消息时序
+    device._handle_control_message(  # noqa: SLF001 - 单元测试直接验证设备协议回包
+        control,
+        {
+            "name": "actuator.audio.play",
+            "session_id": "sess_001",
+            "stream_id": "stream_audio_001",
+            "payload": {"stream_id": "stream_audio_001"},
+        },
+    )
+    device._join_audio_save_threads(timeout_seconds=1)  # noqa: SLF001
+
+    assert played_commands
+    assert played_commands[0][:2] == ["fake-player", "--quiet"]
+    assert temp_paths_seen and not temp_paths_seen[0].exists()
+    sent_names = [json.loads(text)["name"] for text in control.sent_texts]
+    assert sent_names == ["actuator.audio.started", "actuator.audio.finished"]
+    assert not (app_root / "runs/playback/glass-playback-001/audio/stream_audio_001.wav").exists()
+
+
 def test_playback_asserts_server_artifact_generated(tmp_path: Path) -> None:
     """测试目标：设备级回放可以断言服务端业务产物已生成。
 

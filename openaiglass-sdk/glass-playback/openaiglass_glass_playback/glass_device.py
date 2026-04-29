@@ -5,6 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import platform
+import shlex
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import wave
@@ -48,8 +53,8 @@ class PlaybackGlassDevice:
         self._session_id = ""
         self._camera_stream_stops: dict[str, threading.Event] = {}
         self._camera_stream_threads: dict[str, threading.Thread] = {}
-        self._audio_save_threads: list[threading.Thread] = []
-        self._audio_save_lock = threading.Lock()
+        self._audio_worker_threads: list[threading.Thread] = []
+        self._audio_worker_lock = threading.Lock()
         self._output_lock = threading.Lock()
 
     def run(self) -> PlaybackResult:
@@ -104,7 +109,7 @@ class PlaybackGlassDevice:
         finally:
             self._heartbeat_stop.set()
             self._stop_camera_streams()
-            self._join_audio_save_threads(timeout_seconds=2)
+            self._join_audio_worker_threads(timeout_seconds=2)
             if heartbeat_thread is not None:
                 heartbeat_thread.join(timeout=2)
             control.close()
@@ -557,8 +562,9 @@ class PlaybackGlassDevice:
             mode = str(audio_play.get("mode") if isinstance(audio_play, dict) else "record").strip() or "record"
             stream_id = str(message.get("stream_id") or payload.get("stream_id") or "").strip()
             session_id = str(message.get("session_id") or self._session_id)
-            self._schedule_playback_audio_save(stream_id, requested_at_ms=int(time.time() * 1000))
-            if mode != "record_and_auto_finish":
+            requested_at_ms = int(time.time() * 1000)
+            if mode not in {"record_and_auto_finish", "play_and_auto_finish"}:
+                self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
                 return
             self._send_control(
                 control,
@@ -568,14 +574,117 @@ class PlaybackGlassDevice:
                 session_id=session_id,
                 stream_id=stream_id,
             )
-            self._send_control(
-                control,
-                "actuator.audio.finished",
-                "notify",
-                {"device_id": self.config.device_id, "stream_id": stream_id},
-                session_id=session_id,
-                stream_id=stream_id,
-            )
+            if mode == "record_and_auto_finish":
+                self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
+                self._send_control(
+                    control,
+                    "actuator.audio.finished",
+                    "notify",
+                    {"device_id": self.config.device_id, "stream_id": stream_id},
+                    session_id=session_id,
+                    stream_id=stream_id,
+                )
+                return
+            if mode == "play_and_auto_finish":
+                self._schedule_playback_audio_play(
+                    control,
+                    stream_id=stream_id,
+                    session_id=session_id,
+                    requested_at_ms=requested_at_ms,
+                )
+                return
+            self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
+
+    def _send_audio_finished(self, control: WsClient, *, stream_id: str, session_id: str) -> None:
+        """向服务端上报当前播放流已结束。
+
+        参数：
+        1. `control`：控制 WebSocket 连接。
+        2. `stream_id`：服务端下发的播放流编号。
+        3. `session_id`：当前语音会话编号。
+        """
+
+        self._send_control(
+            control,
+            "actuator.audio.finished",
+            "notify",
+            {"device_id": self.config.device_id, "stream_id": stream_id},
+            session_id=session_id,
+            stream_id=stream_id,
+        )
+
+    def _schedule_playback_audio_play(
+        self,
+        control: WsClient,
+        *,
+        stream_id: str,
+        session_id: str,
+        requested_at_ms: int,
+    ) -> None:
+        """把下行音频真实播放任务放入后台线程。
+
+        主要逻辑：
+        1. 下载 `/stream.wav` 到系统临时文件。
+        2. 调用本机播放器直接播出，不写入配置中的 `save_audio_to` 目录。
+        3. 播放完成后回报 `actuator.audio.finished`。
+
+        异常情况：
+        1. 后台播放失败只写入事件日志，并仍会上报播放结束，避免服务端长时间等待。
+        """
+
+        if not stream_id:
+            return
+        thread = threading.Thread(
+            target=self._play_playback_audio,
+            args=(control, stream_id, session_id, requested_at_ms),
+            name=f"{self.config.device_id}-audio-play-{stream_id}",
+            daemon=True,
+        )
+        self._register_audio_worker(thread)
+        thread.start()
+        self._log_event("actuator.audio.play_scheduled", {"stream_id": stream_id})
+
+    def _play_playback_audio(
+        self,
+        control: WsClient,
+        stream_id: str,
+        session_id: str,
+        requested_at_ms: int,
+    ) -> None:
+        """下载并直接播放服务端下行播放音频。
+
+        参数：
+        1. `control`：控制 WebSocket 连接，用于播放完成后回报。
+        2. `stream_id`：服务端下发的播放流编号。
+        3. `session_id`：当前语音会话编号。
+        4. `requested_at_ms`：收到播放请求时的毫秒时间戳。
+        """
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix=f"{stream_id}-", suffix=".wav", delete=False) as temp_file:
+                temp_path = temp_file.name
+                total_bytes = self._download_playback_audio_to_file(
+                    stream_id,
+                    temp_file,
+                    requested_at_ms=requested_at_ms,
+                )
+            self._run_audio_player(temp_path)
+            self._log_event("actuator.audio.played", {"stream_id": stream_id, "bytes": total_bytes})
+        except Exception as exc:  # pragma: no cover - 依赖本机播放器，失败只记录
+            self._print_status("下行音频播放失败", {"stream_id": stream_id, "error": exc})
+            self._log_event("actuator.audio.play_failed", {"stream_id": stream_id, "error": str(exc)})
+        finally:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                self._send_audio_finished(control, stream_id=stream_id, session_id=session_id)
+            except Exception as exc:  # pragma: no cover - 控制连接已断开时只记录
+                self._log_event("actuator.audio.finish_failed", {"stream_id": stream_id, "error": str(exc)})
+            self._prune_audio_workers()
 
     def _schedule_playback_audio_save(self, stream_id: str, *, requested_at_ms: int) -> None:
         """把播放音频保存任务放入后台线程。
@@ -610,11 +719,22 @@ class PlaybackGlassDevice:
             name=f"{self.config.device_id}-audio-save-{stream_id}",
             daemon=True,
         )
-        with self._audio_save_lock:
-            self._audio_save_threads = [item for item in self._audio_save_threads if item.is_alive()]
-            self._audio_save_threads.append(thread)
+        self._register_audio_worker(thread)
         thread.start()
         self._log_event("actuator.audio.save_scheduled", {"stream_id": stream_id})
+
+    def _register_audio_worker(self, thread: threading.Thread) -> None:
+        """登记后台音频线程，便于退出时有限等待。"""
+
+        with self._audio_worker_lock:
+            self._audio_worker_threads = [item for item in self._audio_worker_threads if item.is_alive()]
+            self._audio_worker_threads.append(thread)
+
+    def _prune_audio_workers(self) -> None:
+        """清理已经结束的后台音频线程引用。"""
+
+        with self._audio_worker_lock:
+            self._audio_worker_threads = [item for item in self._audio_worker_threads if item.is_alive()]
 
     def _save_playback_audio(self, stream_id: str, save_dir: str, requested_at_ms: int) -> None:
         """下载并保存服务端下行播放音频。
@@ -638,54 +758,117 @@ class PlaybackGlassDevice:
         path.mkdir(parents=True, exist_ok=True)
         target = path / f"{stream_id}.wav"
         try:
-            first_chunk_logged = False
-            total_bytes = 0
-            with urlopen(
-                f"{self._http_base_url()}/stream.wav?{urlencode({'device_id': self.config.device_id, 'stream_id': stream_id})}",
-                timeout=self.timeout_seconds,
-            ) as response:
-                with target.open("wb") as file:
-                    while True:
-                        chunk = response.read(64 * 1024)
-                        if not chunk:
-                            break
-                        if not first_chunk_logged:
-                            first_chunk_logged = True
-                            elapsed_ms = max(int(time.time() * 1000) - requested_at_ms, 0)
-                            self._print_status(
-                                "收到第一段下行音频",
-                                {
-                                    "stream_id": stream_id,
-                                    "elapsed_ms": elapsed_ms,
-                                    "bytes": len(chunk),
-                                },
-                            )
-                            self._log_event(
-                                "actuator.audio.first_chunk_received",
-                                {"stream_id": stream_id, "elapsed_ms": elapsed_ms, "bytes": len(chunk)},
-                            )
-                        file.write(chunk)
-                        total_bytes += len(chunk)
+            with target.open("wb") as file:
+                total_bytes = self._download_playback_audio_to_file(
+                    stream_id,
+                    file,
+                    requested_at_ms=requested_at_ms,
+                )
             self._log_event(
                 "actuator.audio.saved",
                 {"stream_id": stream_id, "path": str(target), "bytes": total_bytes},
             )
         except Exception as exc:  # pragma: no cover - 外部服务错误只记录
             self._log_event("actuator.audio.save_failed", {"stream_id": stream_id, "error": str(exc)})
+        finally:
+            self._prune_audio_workers()
 
-    def _join_audio_save_threads(self, *, timeout_seconds: float) -> None:
-        """等待后台音频保存线程在有限时间内收尾。"""
+    def _download_playback_audio_to_file(self, stream_id: str, file, *, requested_at_ms: int) -> int:
+        """把服务端 `/stream.wav` 写入给定文件对象。
+
+        参数：
+        1. `stream_id`：服务端下发的播放流编号。
+        2. `file`：已打开的二进制文件对象。
+        3. `requested_at_ms`：收到播放请求时的毫秒时间戳。
+
+        返回值：
+        1. 下载的总字节数。
+        """
+
+        first_chunk_logged = False
+        total_bytes = 0
+        with urlopen(
+            f"{self._http_base_url()}/stream.wav?{urlencode({'device_id': self.config.device_id, 'stream_id': stream_id})}",
+            timeout=self.timeout_seconds,
+        ) as response:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                if not first_chunk_logged:
+                    first_chunk_logged = True
+                    elapsed_ms = max(int(time.time() * 1000) - requested_at_ms, 0)
+                    self._print_status(
+                        "收到第一段下行音频",
+                        {
+                            "stream_id": stream_id,
+                            "elapsed_ms": elapsed_ms,
+                            "bytes": len(chunk),
+                        },
+                    )
+                    self._log_event(
+                        "actuator.audio.first_chunk_received",
+                        {"stream_id": stream_id, "elapsed_ms": elapsed_ms, "bytes": len(chunk)},
+                    )
+                file.write(chunk)
+                total_bytes += len(chunk)
+        return total_bytes
+
+    def _run_audio_player(self, wav_path: str) -> None:
+        """调用本机系统播放器播放 WAV 文件。
+
+        主要逻辑：
+        1. 配置 `actuators.audio_play.player_command` 时优先使用该命令。
+        2. 未配置时，macOS 默认使用 `afplay`，Linux 依次尝试 `paplay`、`aplay`、`ffplay`。
+        3. 命令以参数列表执行，不经过 shell。
+
+        异常情况：
+        1. 找不到可用播放器时抛出 `RuntimeError`。
+        2. 播放器返回非 0 时由 `subprocess.run(..., check=True)` 抛出异常。
+        """
+
+        audio_play = self.config.actuators.get("audio_play")
+        configured = ""
+        if isinstance(audio_play, dict):
+            configured = str(audio_play.get("player_command") or "").strip()
+        if configured:
+            command = [*shlex.split(configured), wav_path]
+        else:
+            command = self._default_audio_player_command(wav_path)
+        self._print_status("开始播放下行音频", {"path": wav_path, "player": command[0]})
+        subprocess.run(command, check=True)
+
+    @staticmethod
+    def _default_audio_player_command(wav_path: str) -> list[str]:
+        """返回当前系统可用的默认音频播放命令。"""
+
+        if platform.system() == "Darwin" and shutil.which("afplay"):
+            return ["afplay", wav_path]
+        for command in ("paplay", "aplay"):
+            if shutil.which(command):
+                return [command, wav_path]
+        if shutil.which("ffplay"):
+            return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", wav_path]
+        raise RuntimeError("未找到可用音频播放器，请安装 afplay/paplay/aplay/ffplay 或配置 audio_play.player_command")
+
+    def _join_audio_worker_threads(self, *, timeout_seconds: float) -> None:
+        """等待后台音频线程在有限时间内收尾。"""
 
         deadline = time.monotonic() + max(timeout_seconds, 0)
-        with self._audio_save_lock:
-            threads = list(self._audio_save_threads)
+        with self._audio_worker_lock:
+            threads = list(self._audio_worker_threads)
         for thread in threads:
             remaining = max(deadline - time.monotonic(), 0)
             if remaining <= 0:
                 break
             thread.join(timeout=remaining)
-        with self._audio_save_lock:
-            self._audio_save_threads = [item for item in self._audio_save_threads if item.is_alive()]
+        with self._audio_worker_lock:
+            self._audio_worker_threads = [item for item in self._audio_worker_threads if item.is_alive()]
+
+    def _join_audio_save_threads(self, *, timeout_seconds: float) -> None:
+        """兼容旧单元测试名称，等待后台音频线程在有限时间内收尾。"""
+
+        self._join_audio_worker_threads(timeout_seconds=timeout_seconds)
 
     def _evaluate_assertions(self) -> list[str]:
         """执行设备级回放断言。
