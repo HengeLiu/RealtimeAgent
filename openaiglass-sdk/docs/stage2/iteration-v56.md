@@ -15,8 +15,9 @@
 3. 播放流写扬声器前同步把 mono PCM 写入 AEC 参考环形缓冲，语音前端每次 feed 时交错写入麦克风和参考音频。
 4. 真实眼镜在 AEC 初始化成功时，上报 `accepted_mode=full_duplex_realtime`、`capabilities.aec=true`、`barge_in=true` 和 `output_cancel=true`。
 5. 连续对话窗口有效时，播放期间保持 WakeNet/VAD 监听；检测到用户插话后，端侧先发送 `user.voice.interrupt`，再本地中断当前播放并开启新语音段。
-6. 服务端播放仲裁补充迟到音频保护：旧 Omni/TTS 回复被插话打断后，即使后续仍有音频分片到达，也不会重新进入播放队列。
-7. 开发指南和 Omni 连续对话设计文档更新到 `sdk-v56`。
+6. 播放任务改为 `xTaskCreateWithCaps(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`，避免 AEC 高性能模式占用内部 RAM 后播放任务无法创建；失败日志会输出 internal/PSRAM 的可用和最大连续块。
+7. 服务端播放仲裁补充迟到音频保护：旧 Omni/TTS 回复被插话打断后，即使后续仍有音频分片到达，也不会重新进入播放队列。
+8. 开发指南和 Omni 连续对话设计文档更新到 `sdk-v56`。
 
 ## 验证
 

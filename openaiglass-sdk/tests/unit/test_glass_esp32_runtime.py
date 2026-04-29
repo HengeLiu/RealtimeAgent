@@ -32,3 +32,6 @@ def test_glass_runtime_negotiates_realtime_voice_capabilities() -> None:
     assert 'cJSON_AddBoolToObject(capabilities, "output_cancel", s_aec_runtime_enabled)' in source
     assert "ensure_audio_transport_started();" in source
     assert "WakeNet listening enabled for realtime session_id=%s accepted_mode=%s" in source
+    assert "xTaskCreateWithCaps(" in source
+    assert "PLAYBACK_STREAM_TASK_STACK_SIZE" in source
+    assert "创建 playback_stream_task 失败: stack=%d" in source
