@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import base64
+import sys
 import struct
+import types
 import unittest
 from unittest.mock import patch
 
 from infra.config import ServerSettings
 from runtime.voice_runtime import (
     DashscopeRealtimeSpeechRecognitionSession,
+    DashscopeCosyVoiceTtsSession,
     MessageEntry,
     ModelChunk,
     PCM16StreamResampler,
@@ -234,6 +237,82 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertFalse(partial_end)
         self.assertEqual(final_text, "看一下。")
         self.assertTrue(final_end)
+
+    def test_dashscope_tts_session_prewarms_stream_before_first_text(self) -> None:
+        """测试目标：验证 CosyVoice TTS 会话会后台预启动流式任务。
+
+        测试方法：
+        1. 用假 DashScope SDK 替换真实 `SpeechSynthesizer`。
+        2. 创建 `DashscopeCosyVoiceTtsSession` 并等待预热线程完成。
+        3. 推送首个文本增量。
+
+        预期结果：
+        1. 预热线程会先调用一次内部 start-stream。
+        2. 首个文本增量不会再次启动同一个流式任务。
+        3. 文本仍会进入假 `SpeechSynthesizer.streaming_call(...)`。
+        """
+
+        class _AudioFormat:
+            PCM_22050HZ_MONO_16BIT = "pcm"
+
+        class _ResultCallback:
+            pass
+
+        class _SpeechSynthesizer:
+            instances: list["_SpeechSynthesizer"] = []
+
+            def __init__(self, *, model: str, voice: str, format: str, callback: _ResultCallback) -> None:
+                self.model = model
+                self.voice = voice
+                self.format = format
+                self.callback = callback
+                self.start_count = 0
+                self.streaming_calls: list[str] = []
+                self._is_first = True
+                _SpeechSynthesizer.instances.append(self)
+
+            def __start_stream(self) -> None:
+                self.start_count += 1
+                self.callback.on_open()
+
+            def streaming_call(self, text: str) -> None:
+                if self._is_first:
+                    self.__start_stream()
+                    self._is_first = False
+                self.streaming_calls.append(text)
+
+            def streaming_complete(self) -> None:
+                self.callback.on_complete()
+
+        dashscope_module = types.ModuleType("dashscope")
+        audio_module = types.ModuleType("dashscope.audio")
+        tts_module = types.ModuleType("dashscope.audio.tts_v2")
+        tts_module.AudioFormat = _AudioFormat
+        tts_module.ResultCallback = _ResultCallback
+        tts_module.SpeechSynthesizer = _SpeechSynthesizer
+
+        with patch.dict(
+            sys.modules,
+            {
+                "dashscope": dashscope_module,
+                "dashscope.audio": audio_module,
+                "dashscope.audio.tts_v2": tts_module,
+            },
+        ):
+            session = DashscopeCosyVoiceTtsSession(
+                settings=ServerSettings(dashscope_api_key="test-key"),
+                on_chunk=lambda _chunk: None,
+            )
+            self.assertTrue(session._prewarm_done.wait(timeout=1.0))  # noqa: SLF001 - 单测验证预热状态
+
+            synthesizer = _SpeechSynthesizer.instances[-1]
+            self.assertEqual(synthesizer.start_count, 1)
+            self.assertFalse(synthesizer._is_first)
+
+            session.push_text("你")
+
+        self.assertEqual(synthesizer.start_count, 1)
+        self.assertEqual(synthesizer.streaming_calls, ["你"])
 
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
         """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。

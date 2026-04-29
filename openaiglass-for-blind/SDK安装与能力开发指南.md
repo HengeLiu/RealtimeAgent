@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v46`。本版本在 `sdk-v45` 基础上把最终回复的 CosyVoice 流式 TTS 会话提前到 Agent 请求发起前创建，让 TTS WebSocket 在等待大模型首 token 时并行预热，并保留 TTS 接口级首包延迟日志。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v47`。本版本在 `sdk-v46` 基础上把最终回复的 CosyVoice 流式 TTS 预热从“提前创建 session”推进到“后台提前打开 WebSocket 并启动流式任务”，让首次模型文本增量到达后尽量只执行文本提交。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v46` 在 Agent 请求等待期间预热最终回复 TTS WebSocket | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`、`VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime` 和 `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS=300`；如需排障可临时设为 `batch`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
@@ -495,6 +495,8 @@ uv run openaiglass.glass.start \
 `sdk-v45` 起，CosyVoice 流式 TTS 会打印接口级首包日志：`TTS WebSocket 已打开`、`TTS 首次文本已推送`、`TTS 服务返回首段音频`。其中 `tts_first_audio_latency_ms` 从 SDK 首次调用 `streaming_call(text_delta)` 开始，到百炼 TTS 回调首段音频 `on_data(...)` 为止；`tts_first_audio_after_call_return_ms` 排除了首次 `streaming_call(...)` 本地阻塞耗时；`text_chars_before_first_audio` 和 `text_push_count_before_first_audio` 用于判断 TTS 服务是否等到足够文本后才吐首包。原有 `TTS 返回首段音频` 仍表示音频回调进入 SDK 后完成重采样并放入播放队列的时间。
 
 `sdk-v46` 起，最终回复的 TTS 会话会在调用 `AgentFacade.handle_turn(...)` 前创建，日志为 `TTS 预热已启动`。这样大模型首 token 产生前，CosyVoice WebSocket 可以并行建连；首个文本增量到达后直接复用已预热 session 推送文本。如果模型首 token 或工具链路耗时过长导致预热 session 推送失败，SDK 会记录 `TTS 预热会话推送失败，重建后重试` 并重建一次 TTS session。
+
+`sdk-v47` 起，SDK 不再只创建 `SpeechSynthesizer` 对象，而是在后台预启动 CosyVoice 流式任务。正常情况下，服务端会在 `TTS 预热已启动` 后、模型首 token 前看到 `TTS WebSocket 已打开` 和 `TTS 预热流已启动`；首个模型文本增量到达后，`TTS 首次文本已推送` 的 `first_streaming_call_cost_ms` 应显著低于 `sdk-v46` 中首次文本触发建连的耗时。如果预热流失败或过期，SDK 仍会退化为首次文本触发并保留重建重试。
 
 当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答会直接走多模态模型首 token，不再先做照片工具决策；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
 

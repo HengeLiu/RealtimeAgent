@@ -360,6 +360,12 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
         self._text_push_count = 0
         self._text_chars_before_first_data: int | None = None
         self._text_push_count_before_first_data: int | None = None
+        self._stream_start_lock = threading.Lock()
+        self._prewarm_done = threading.Event()
+        self._prewarm_started_at_ms: int | None = None
+        self._prewarm_completed_at_ms: int | None = None
+        self._prewarm_error: str | None = None
+        self._prewarmed_stream = False
 
         dashscope.api_key = settings.dashscope_api_key
         dashscope.base_websocket_api_url = settings.tts_websocket_api_url
@@ -401,11 +407,18 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
             format=AudioFormat.PCM_22050HZ_MONO_16BIT,
             callback=_Callback(),
         )
+        threading.Thread(
+            target=self._prewarm_stream,
+            name="dashscope-tts-prewarm",
+            daemon=True,
+        ).start()
 
     def push_text(self, text_delta: str) -> None:
         if text_delta:
+            self._wait_for_prewarm()
             started_at_ms = self._mark_text_push_started(text_delta)
-            self._synthesizer.streaming_call(text_delta)
+            with self._stream_start_lock:
+                self._synthesizer.streaming_call(text_delta)
             self._mark_text_push_returned(started_at_ms, text_delta)
 
     def finish(self) -> None:
@@ -460,6 +473,94 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
                 self._logger,
                 f"TTS 任务完成: task_id={self._task_id or '<unknown>'}",
             )
+
+    def _prewarm_stream(self) -> None:
+        """在后台提前打开 CosyVoice 流式任务。
+
+        主要逻辑：
+        1. DashScope `SpeechSynthesizer` 默认在首次 `streaming_call(...)` 时才连接
+           WebSocket 并发送 run-task 请求。
+        2. 这里复用 SDK 内部的 start-stream 能力，把连接和 run-task 握手前移到
+           Agent 请求等待期间。
+        3. 如果预热失败，不中断主链路；首次文本到来时仍按原逻辑触发建连，失败会由
+           上层重建 TTS 会话。
+
+        参数：无。
+        返回值：无。
+        异常情况：所有异常都会记录到调试日志并退化为首次文本触发。
+        """
+
+        started_at_ms = self._now_ms()
+        with self._metrics_lock:
+            self._prewarm_started_at_ms = started_at_ms
+
+        start_stream = getattr(self._synthesizer, "_SpeechSynthesizer__start_stream", None)
+        if not callable(start_stream):
+            self._prewarm_error = "dashscope_start_stream_not_available"
+            self._prewarm_done.set()
+            log_debug(
+                self._logger,
+                "TTS 预热流启动跳过: 当前 dashscope SDK 未暴露 start_stream 内部能力",
+                LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+            )
+            return
+
+        try:
+            with self._stream_start_lock:
+                start_stream()
+                # start_stream 已经发送 run-task。把首次标记改为 false，避免后续
+                # streaming_call 再次启动同一个任务。
+                setattr(self._synthesizer, "_is_first", False)
+            completed_at_ms = self._now_ms()
+            with self._metrics_lock:
+                self._prewarm_completed_at_ms = completed_at_ms
+                self._prewarmed_stream = True
+                opened_at_ms = self._opened_at_ms
+            log_info(
+                self._logger,
+                (
+                    "TTS 预热流已启动 "
+                    f"prewarm_stream_cost_ms={self._latency_ms(started_at_ms, completed_at_ms)} "
+                    f"session_create_to_prewarm_stream_ms={self._latency_ms(self._created_at_ms, completed_at_ms)} "
+                    f"session_create_to_open_ms={self._latency_ms(self._created_at_ms, opened_at_ms)} "
+                    f"model={self._settings.tts_model_name} voice={self._settings.tts_voice}"
+                ),
+                LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+            )
+        except Exception as exc:  # pragma: no cover - 真实联调容错路径
+            self._prewarm_error = repr(exc)
+            log_debug(
+                self._logger,
+                f"TTS 预热流启动失败，回退到首次文本触发: reason={exc!r}",
+                LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+            )
+        finally:
+            self._prewarm_done.set()
+
+    def _wait_for_prewarm(self) -> None:
+        """首个文本推送前等待后台预热结束，避免和预热线程重复启动任务。"""
+
+        if self._prewarm_done.is_set():
+            return
+        wait_started_at_ms = self._now_ms()
+        self._prewarm_done.wait(timeout=2.0)
+        waited_ms = self._latency_ms(wait_started_at_ms, self._now_ms())
+        if self._prewarm_done.is_set():
+            log_debug(
+                self._logger,
+                (
+                    "TTS 首次文本等待预热完成 "
+                    f"wait_ms={waited_ms} prewarmed={self._prewarmed_stream} "
+                    f"error={self._prewarm_error}"
+                ),
+                LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+            )
+            return
+        log_debug(
+            self._logger,
+            f"TTS 预热仍未完成，首次文本将等待同一启动锁: wait_ms={waited_ms}",
+            LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+        )
 
     @staticmethod
     def _now_ms() -> int:
