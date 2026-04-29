@@ -905,7 +905,7 @@ class PlaybackGlassDevice:
         1. 播放器不存在、提前退出或返回非 0 时抛出异常，由调用者记录失败并回报 finished。
         """
 
-        self._print_status("开始流式播放下行音频", {"stream_id": stream_id, "player": command[0]})
+        self._print_status("本机播放器已启动，等待下行音频", {"stream_id": stream_id, "player": command[0]})
         process = subprocess.Popen(command, stdin=subprocess.PIPE)
         if process.stdin is None:
             raise RuntimeError("播放器 stdin 不可用，无法流式播放")
@@ -913,6 +913,7 @@ class PlaybackGlassDevice:
         first_chunk_logged = False
         started = False
         total_bytes = 0
+        stream_finished_at_ms = 0
         try:
             with urlopen(
                 f"{self._http_base_url()}/stream.wav?{urlencode({'device_id': self.config.device_id, 'stream_id': stream_id})}",
@@ -952,6 +953,15 @@ class PlaybackGlassDevice:
                             },
                         )
                         on_started()
+                stream_finished_at_ms = int(time.time() * 1000)
+                self._print_status(
+                    "下行音频流写入完成",
+                    {
+                        "stream_id": stream_id,
+                        "elapsed_ms": max(stream_finished_at_ms - requested_at_ms, 0),
+                        "bytes": total_bytes,
+                    },
+                )
         except Exception:
             process.kill()
             raise
@@ -964,6 +974,16 @@ class PlaybackGlassDevice:
         return_code = process.wait()
         if return_code != 0:
             raise subprocess.CalledProcessError(return_code, command)
+        finished_at_ms = int(time.time() * 1000)
+        player_wait_ms = max(finished_at_ms - stream_finished_at_ms, 0) if stream_finished_at_ms else 0
+        self._print_status(
+            "本机播放器播放结束",
+            {
+                "stream_id": stream_id,
+                "elapsed_ms": max(finished_at_ms - requested_at_ms, 0),
+                "player_wait_ms": player_wait_ms,
+            },
+        )
         if not started:
             on_started()
         return total_bytes
@@ -1018,12 +1038,39 @@ class PlaybackGlassDevice:
             if "-" in command or "pipe:0" in command:
                 return command
             if Path(command[0]).name == "ffplay":
-                return [*command, "-i", "-"]
+                return self._ffplay_stdin_command(command)
             return None
 
         if shutil.which("ffplay"):
-            return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-i", "-"]
+            return self._ffplay_stdin_command(["ffplay", "-nodisp", "-autoexit", "-loglevel", "error"])
         return None
+
+    @staticmethod
+    def _ffplay_stdin_command(command: list[str]) -> list[str]:
+        """给 ffplay 命令补齐低延迟 stdin WAV 输入参数。
+
+        参数：
+        1. `command`：开发者配置或 SDK 默认的 ffplay 基础命令。
+
+        返回值：
+        1. 可以直接从 stdin 接收 WAV 流的 ffplay 命令。
+        """
+
+        return [
+            *command,
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-f",
+            "wav",
+            "-i",
+            "-",
+        ]
 
     @staticmethod
     def _default_audio_player_command(wav_path: str) -> list[str]:

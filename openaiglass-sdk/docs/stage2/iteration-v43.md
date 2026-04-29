@@ -7,8 +7,8 @@
 ## 变更
 
 1. `glass-playback` 的 `play_and_auto_finish` 模式优先使用支持 stdin 的播放器流式播放。
-2. 未配置播放器且本机存在 `ffplay` 时，默认使用 `ffplay -nodisp -autoexit -loglevel error -i -`。
-3. 配置 `player_command="ffplay ..."` 时，SDK 会自动补齐 `-i -`；显式包含 `{stdin}`、`-` 或 `pipe:0` 的命令会按配置使用。
+2. 未配置播放器且本机存在 `ffplay` 时，默认使用 `ffplay -nodisp -autoexit -loglevel error -fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0 -f wav -i -`。
+3. 配置 `player_command="ffplay ..."` 时，SDK 会自动补齐低延迟 stdin WAV 输入参数；显式包含 `{stdin}`、`-` 或 `pipe:0` 的命令会按配置使用。
 4. 不支持 stdin 的播放器继续回退到“整段下载到临时文件后播放”，但会打印明确状态日志。
 5. `play_and_auto_finish` 下的 `actuator.audio.started` 改为首段音频写入播放器后再上报。
 6. 服务端新增 TTS 下行链路关键日志：`TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`。
@@ -25,7 +25,7 @@
 ```
 
 2. 回放端 `actuator.audio.started` 不再表示“收到播放请求”，而表示“首段音频已经写入播放器”。
-3. 排查下行语音延迟时，可以同时对比服务端和 glass-playback 的首包日志，区分 TTS、HTTP 播放流和本机播放器缓冲耗时。
+3. 排查下行语音延迟时，可以同时对比服务端和 glass-playback 的首包日志，区分 TTS、HTTP 播放流和本机播放器缓冲耗时。`本机播放器已启动，等待下行音频` 只表示播放器进程已启动，实际首包以 `收到第一段下行音频` 和 `下行音频已写入播放器` 为准。
 
 ## 验证
 

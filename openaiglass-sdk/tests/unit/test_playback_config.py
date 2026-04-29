@@ -694,7 +694,9 @@ def test_playback_audio_uses_streaming_player_when_supported(
     device._join_audio_save_threads(timeout_seconds=1)  # noqa: SLF001
 
     assert processes
-    assert processes[0].command[-2:] == ["-i", "-"]
+    assert processes[0].command[-4:] == ["-f", "wav", "-i", "-"]
+    assert "-fflags" in processes[0].command
+    assert "-analyzeduration" in processes[0].command
     assert bytes(processes[0].stdin.data) == b"RIFF" + b"\x00" * 40 + b"audio-pcm"
     assert processes[0].stdin.closed is True
     sent_names = [json.loads(text)["name"] for text in control.sent_texts]

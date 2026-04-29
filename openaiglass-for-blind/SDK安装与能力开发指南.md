@@ -1826,7 +1826,7 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 5. `sensors` 只描述虚拟眼镜能读到什么输入。
 6. `actuators` 只描述虚拟眼镜收到命令后如何执行或记录。
 7. `sdk-v21` 起，`audio_play.save_audio_to` 会在后台线程下载 `/stream.wav` 并保存，不会阻塞 `sensor.camera.capture` 等后续控制消息。
-8. `sdk-v38` 起，`audio_play.mode=play_and_auto_finish` 支持直接调用本机播放器播出下行语音；`sdk-v43` 起，如果未配置播放器且本机存在 `ffplay`，或 `player_command` 明确配置为 `ffplay ...`，SDK 会把 `/stream.wav` 直接写入播放器 stdin，实现边下载边播放。找不到支持 stdin 的播放器时会回退到整段下载到系统临时文件后播放，播放结束后删除临时文件并自动上报 `actuator.audio.finished`。
+8. `sdk-v38` 起，`audio_play.mode=play_and_auto_finish` 支持直接调用本机播放器播出下行语音；`sdk-v43` 起，如果未配置播放器且本机存在 `ffplay`，或 `player_command` 明确配置为 `ffplay ...`，SDK 会把 `/stream.wav` 直接写入播放器 stdin，并自动补齐 `-fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0 -f wav -i -`，实现边下载边播放。找不到支持 stdin 的播放器时会回退到整段下载到系统临时文件后播放，播放结束后删除临时文件并自动上报 `actuator.audio.finished`。
 9. `assertions.server_artifacts` 用于断言真实服务端业务产物是否生成；路径支持 `{session_id}` 和 `{device_id}` 占位符。相对路径中 `runs/` 开头时按业务工程根目录解析。
 
 如果希望直接听到服务端下行语音，可以把上面的 `audio_play` 改为：
@@ -1838,7 +1838,7 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 }
 ```
 
-`actuator.audio.started` 在 `play_and_auto_finish` 模式下表示回放设备已经把首段音频写入本机播放器，不能再理解为“刚收到播放请求”。排查下行语音延迟时重点看服务端 `TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`，以及 glass-playback 端 `收到第一段下行音频`、`下行音频已写入播放器` 的时间差。
+`actuator.audio.started` 在 `play_and_auto_finish` 模式下表示回放设备已经把首段音频写入本机播放器，不能再理解为“刚收到播放请求”。`本机播放器已启动，等待下行音频` 只表示 `ffplay` 进程已经启动；实际首包以 `收到第一段下行音频` 和 `下行音频已写入播放器` 为准。排查下行语音延迟时重点看服务端 `TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`，以及 glass-playback 端 `收到第一段下行音频`、`下行音频已写入播放器`、`下行音频流写入完成`、`本机播放器播放结束` 的时间差。
 
 ### 10.5 数据资产格式
 
