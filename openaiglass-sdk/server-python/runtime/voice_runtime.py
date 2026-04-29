@@ -136,6 +136,7 @@ class PlaybackStreamContext:
     first_text_delta_at_ms: int | None = None
     first_audio_chunk_at_ms: int | None = None
     first_play_request_at_ms: int | None = None
+    first_http_audio_chunk_at_ms: int | None = None
     play_requested: bool = False
     started: bool = False
     completed: bool = False
@@ -1902,6 +1903,11 @@ class VoiceRuntime:
         try:
             self._send_chunked_headers(handler)
             self._write_chunk(handler, wav_header_unknown_size(playback.sample_rate, playback.channels))
+            log_debug(
+                self._logger,
+                f"播放流 HTTP 已建立 stream_id={stream_id} sample_rate={playback.sample_rate} channels={playback.channels}",
+                LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
+            )
 
             while True:
                 if playback.abort_event.is_set():
@@ -1914,6 +1920,18 @@ class VoiceRuntime:
                     continue
                 if item is None:
                     break
+                if playback.first_http_audio_chunk_at_ms is None:
+                    playback.first_http_audio_chunk_at_ms = self._now_ms()
+                    log_info(
+                        self._logger,
+                        (
+                            "播放流写出首段音频 "
+                            f"stream_id={stream_id} bytes={len(item)} "
+                            f"play_request_to_http_audio_ms={self._latency_ms(start=playback.first_play_request_at_ms, end=playback.first_http_audio_chunk_at_ms)} "
+                            f"tts_audio_to_http_audio_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_http_audio_chunk_at_ms)}"
+                        ),
+                        LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
+                    )
                 self._write_chunk(handler, item)
 
             self._finish_chunked(handler)
@@ -1942,6 +1960,7 @@ class VoiceRuntime:
                 "reply_first_text_delta_at_ms": current_playback.first_text_delta_at_ms if current_playback else None,
                 "reply_first_audio_chunk_at_ms": current_playback.first_audio_chunk_at_ms if current_playback else None,
                 "reply_first_play_request_at_ms": current_playback.first_play_request_at_ms if current_playback else None,
+                "reply_first_http_audio_chunk_at_ms": current_playback.first_http_audio_chunk_at_ms if current_playback else None,
                 "reply_text_to_first_audio_ms": self._latency_ms(
                     start=current_playback.first_text_delta_at_ms if current_playback else None,
                     end=current_playback.first_audio_chunk_at_ms if current_playback else None,
@@ -1949,6 +1968,10 @@ class VoiceRuntime:
                 "reply_audio_to_play_request_ms": self._latency_ms(
                     start=current_playback.first_audio_chunk_at_ms if current_playback else None,
                     end=current_playback.first_play_request_at_ms if current_playback else None,
+                ),
+                "reply_play_request_to_http_audio_ms": self._latency_ms(
+                    start=current_playback.first_play_request_at_ms if current_playback else None,
+                    end=current_playback.first_http_audio_chunk_at_ms if current_playback else None,
                 ),
                 "audio_connection_online": controller.audio_connection_peer is not None,
                 "last_playback_stream_id": controller.last_playback_stream_id,
@@ -2750,6 +2773,16 @@ class VoiceRuntime:
                     "interrupt_policy": "forbid",
                 },
             )
+            log_info(
+                self._logger,
+                (
+                    "下行播放请求已发送 "
+                    f"stream_id={playback.stream_id} "
+                    f"text_to_play_request_ms={self._latency_ms(start=playback.first_text_delta_at_ms, end=playback.first_play_request_at_ms)} "
+                    f"tts_audio_to_play_request_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_play_request_at_ms)}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id=playback.stream_id),
+            )
 
     def _emit_synthesis_chunk(
         self,
@@ -2770,6 +2803,16 @@ class VoiceRuntime:
             return
         if context.playback.first_audio_chunk_at_ms is None:
             context.playback.first_audio_chunk_at_ms = self._now_ms()
+            log_info(
+                self._logger,
+                (
+                    "TTS 返回首段音频 "
+                    f"stream_id={context.stream_id} input_sample_rate_hz={chunk.sample_rate_hz} "
+                    f"pcm_bytes={len(chunk.audio_pcm_bytes)} output_bytes={len(pcm_chunk)} "
+                    f"text_to_first_audio_ms={self._latency_ms(start=context.playback.first_text_delta_at_ms, end=context.playback.first_audio_chunk_at_ms)}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id=context.stream_id),
+            )
         self._enqueue_playback_chunk(context.playback, pcm_chunk)
         context.output_pcm.extend(pcm_chunk)
         self._request_playback_start(

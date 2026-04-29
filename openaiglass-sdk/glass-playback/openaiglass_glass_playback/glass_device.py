@@ -567,15 +567,8 @@ class PlaybackGlassDevice:
             if mode not in {"record_and_auto_finish", "play_and_auto_finish"}:
                 self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
                 return
-            self._send_control(
-                control,
-                "actuator.audio.started",
-                "notify",
-                {"device_id": self.config.device_id, "stream_id": stream_id},
-                session_id=session_id,
-                stream_id=stream_id,
-            )
             if mode == "record_and_auto_finish":
+                self._send_audio_started(control, stream_id=stream_id, session_id=session_id)
                 self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
                 self._send_control(
                     control,
@@ -595,6 +588,24 @@ class PlaybackGlassDevice:
                 )
                 return
             self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
+
+    def _send_audio_started(self, control: WsClient, *, stream_id: str, session_id: str) -> None:
+        """向服务端上报当前播放流已经进入播放状态。
+
+        参数：
+        1. `control`：控制 WebSocket 连接。
+        2. `stream_id`：服务端下发的播放流编号。
+        3. `session_id`：当前语音会话编号。
+        """
+
+        self._send_control(
+            control,
+            "actuator.audio.started",
+            "notify",
+            {"device_id": self.config.device_id, "stream_id": stream_id},
+            session_id=session_id,
+            stream_id=stream_id,
+        )
 
     def _warn_ignored_audio_player_config(self, audio_play: object, *, mode: str) -> None:
         """提示被忽略的本机播放器配置。
@@ -687,15 +698,41 @@ class PlaybackGlassDevice:
         """
 
         temp_path = ""
+        started_sent = False
+
+        def _mark_started() -> None:
+            nonlocal started_sent
+            if started_sent:
+                return
+            self._send_audio_started(control, stream_id=stream_id, session_id=session_id)
+            started_sent = True
+
         try:
-            with tempfile.NamedTemporaryFile(prefix=f"{stream_id}-", suffix=".wav", delete=False) as temp_file:
-                temp_path = temp_file.name
-                total_bytes = self._download_playback_audio_to_file(
+            streaming_command = self._streaming_audio_player_command()
+            if streaming_command is not None:
+                total_bytes = self._stream_playback_audio_to_player(
                     stream_id,
-                    temp_file,
+                    streaming_command,
                     requested_at_ms=requested_at_ms,
+                    on_started=_mark_started,
                 )
-            self._run_audio_player(temp_path)
+            else:
+                self._print_status(
+                    "下行音频回退为整段下载后播放",
+                    {
+                        "stream_id": stream_id,
+                        "reason": "当前播放器不支持 stdin 流式输入",
+                    },
+                )
+                with tempfile.NamedTemporaryFile(prefix=f"{stream_id}-", suffix=".wav", delete=False) as temp_file:
+                    temp_path = temp_file.name
+                    total_bytes = self._download_playback_audio_to_file(
+                        stream_id,
+                        temp_file,
+                        requested_at_ms=requested_at_ms,
+                    )
+                _mark_started()
+                self._run_audio_player(temp_path)
             self._log_event("actuator.audio.played", {"stream_id": stream_id, "bytes": total_bytes})
         except Exception as exc:  # pragma: no cover - 依赖本机播放器，失败只记录
             self._print_status("下行音频播放失败", {"stream_id": stream_id, "error": exc})
@@ -840,6 +877,97 @@ class PlaybackGlassDevice:
                 total_bytes += len(chunk)
         return total_bytes
 
+    def _stream_playback_audio_to_player(
+        self,
+        stream_id: str,
+        command: list[str],
+        *,
+        requested_at_ms: int,
+        on_started,
+    ) -> int:
+        """把服务端 `/stream.wav` 直接写入本机播放器 stdin。
+
+        主要逻辑：
+        1. 启动支持 stdin 的播放器，例如 `ffplay -i -`。
+        2. HTTP 流每收到一段就立刻写入播放器，避免先下载完整 WAV 文件。
+        3. 首段真实音频写入播放器后再上报 `actuator.audio.started`。
+
+        参数：
+        1. `stream_id`：服务端下发的播放流编号。
+        2. `command`：已经补齐 stdin 参数的播放器命令。
+        3. `requested_at_ms`：收到播放请求时的毫秒时间戳。
+        4. `on_started`：首次写入音频数据后调用的 started 回调。
+
+        返回值：
+        1. 从服务端读取并写入播放器的总字节数。
+
+        异常情况：
+        1. 播放器不存在、提前退出或返回非 0 时抛出异常，由调用者记录失败并回报 finished。
+        """
+
+        self._print_status("开始流式播放下行音频", {"stream_id": stream_id, "player": command[0]})
+        process = subprocess.Popen(command, stdin=subprocess.PIPE)
+        if process.stdin is None:
+            raise RuntimeError("播放器 stdin 不可用，无法流式播放")
+
+        first_chunk_logged = False
+        started = False
+        total_bytes = 0
+        try:
+            with urlopen(
+                f"{self._http_base_url()}/stream.wav?{urlencode({'device_id': self.config.device_id, 'stream_id': stream_id})}",
+                timeout=self.timeout_seconds,
+            ) as response:
+                while True:
+                    chunk = response.read(4096)
+                    if not chunk:
+                        break
+                    if not first_chunk_logged:
+                        first_chunk_logged = True
+                        elapsed_ms = max(int(time.time() * 1000) - requested_at_ms, 0)
+                        self._print_status(
+                            "收到第一段下行音频",
+                            {
+                                "stream_id": stream_id,
+                                "elapsed_ms": elapsed_ms,
+                                "bytes": len(chunk),
+                            },
+                        )
+                        self._log_event(
+                            "actuator.audio.first_chunk_received",
+                            {"stream_id": stream_id, "elapsed_ms": elapsed_ms, "bytes": len(chunk)},
+                        )
+                    process.stdin.write(chunk)
+                    process.stdin.flush()
+                    total_bytes += len(chunk)
+                    if not started and total_bytes > 44:
+                        started = True
+                        elapsed_ms = max(int(time.time() * 1000) - requested_at_ms, 0)
+                        self._print_status(
+                            "下行音频已写入播放器",
+                            {
+                                "stream_id": stream_id,
+                                "elapsed_ms": elapsed_ms,
+                                "bytes": total_bytes,
+                            },
+                        )
+                        on_started()
+        except Exception:
+            process.kill()
+            raise
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
+        return_code = process.wait()
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, command)
+        if not started:
+            on_started()
+        return total_bytes
+
     def _run_audio_player(self, wav_path: str) -> None:
         """调用本机系统播放器播放 WAV 文件。
 
@@ -863,6 +991,39 @@ class PlaybackGlassDevice:
             command = self._default_audio_player_command(wav_path)
         self._print_status("开始播放下行音频", {"path": wav_path, "player": command[0]})
         subprocess.run(command, check=True)
+
+    def _streaming_audio_player_command(self) -> list[str] | None:
+        """返回支持 stdin 的流式播放器命令。
+
+        主要逻辑：
+        1. 配置 `player_command` 时只自动识别 `ffplay` 或显式包含 `{stdin}` / `-` 的命令。
+        2. 未配置时优先使用 `ffplay`，因为 `afplay`、`aplay`、`paplay` 对 WAV stdin 的行为不够一致。
+        3. 无法确认支持流式输入时返回 `None`，调用方会回退到整段下载后播放。
+
+        返回值：
+        1. 可直接传给 `subprocess.Popen` 的命令；不支持流式时返回 `None`。
+        """
+
+        audio_play = self.config.actuators.get("audio_play")
+        configured = ""
+        if isinstance(audio_play, dict):
+            configured = str(audio_play.get("player_command") or "").strip()
+
+        if configured:
+            command = shlex.split(configured)
+            if not command:
+                return None
+            if "{stdin}" in command:
+                return ["-" if part == "{stdin}" else part for part in command]
+            if "-" in command or "pipe:0" in command:
+                return command
+            if Path(command[0]).name == "ffplay":
+                return [*command, "-i", "-"]
+            return None
+
+        if shutil.which("ffplay"):
+            return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-i", "-"]
+        return None
 
     @staticmethod
     def _default_audio_player_command(wav_path: str) -> list[str]:

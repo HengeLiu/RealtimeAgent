@@ -574,6 +574,134 @@ def test_playback_audio_can_play_without_persistent_save(
     assert not (app_root / "runs/playback/glass-playback-001/audio/stream_audio_001.wav").exists()
 
 
+def test_playback_audio_uses_streaming_player_when_supported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """测试目标：验证 glass-playback 的直接播放模式可以边下载边写入播放器。
+
+    测试方法：
+    1. 配置 `play_and_auto_finish` 和支持 stdin 的 `ffplay` 命令。
+    2. 将 `/stream.wav` 响应拆成 WAV 头和音频数据两个分片。
+    3. 替换 `subprocess.Popen`，记录播放器收到的数据和控制消息。
+
+    预期结果：
+    1. SDK 会给播放器命令补齐 `-i -`。
+    2. 服务端音频分片会直接写入播放器 stdin，不生成临时持久文件。
+    3. 设备在写入首段音频后回报 `actuator.audio.started`，结束后回报 `actuator.audio.finished`。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_path = app_root / "testdata/audio/trigger.wav"
+    config_dir.mkdir(parents=True)
+    _write_wav(audio_path)
+    config_path = config_dir / "glass.audio_stream_play.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_id": "glass-playback-001",
+                "pair_token": "pair-playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "startup": {"wait_for_binding": False},
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/trigger.wav",
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "chunk_ms": 20,
+                    }
+                },
+                "actuators": {
+                    "audio_play": {
+                        "mode": "play_and_auto_finish",
+                        "player_command": "ffplay -nodisp -autoexit -loglevel error",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _ChunkedAudioResponse:
+        def __init__(self) -> None:
+            self._chunks = [b"RIFF" + b"\x00" * 40, b"audio-pcm", b""]
+
+        def __enter__(self) -> "_ChunkedAudioResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            return self._chunks.pop(0)
+
+    class _FakeStdin:
+        def __init__(self) -> None:
+            self.data = bytearray()
+            self.closed = False
+
+        def write(self, chunk: bytes) -> None:
+            self.data.extend(chunk)
+
+        def flush(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _FakeProcess:
+        def __init__(self, command: list[str]) -> None:
+            self.command = command
+            self.stdin = _FakeStdin()
+            self.killed = False
+
+        def wait(self) -> int:
+            return 0
+
+        def kill(self) -> None:
+            self.killed = True
+
+    processes: list[_FakeProcess] = []
+
+    def _fake_urlopen(url: str, *, timeout: float) -> _ChunkedAudioResponse:
+        assert "/stream.wav" in url
+        assert timeout > 0
+        return _ChunkedAudioResponse()
+
+    def _fake_popen(command: list[str], *, stdin) -> _FakeProcess:
+        assert stdin is not None
+        process = _FakeProcess(command)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.urlopen", _fake_urlopen)
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.subprocess.Popen", _fake_popen)
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    control = _FakeControl()
+    device._session_id = "sess_001"  # noqa: SLF001 - 单元测试直接验证控制消息时序
+    device._handle_control_message(  # noqa: SLF001 - 单元测试直接验证设备协议回包
+        control,
+        {
+            "name": "actuator.audio.play",
+            "session_id": "sess_001",
+            "stream_id": "stream_audio_001",
+            "payload": {"stream_id": "stream_audio_001"},
+        },
+    )
+    device._join_audio_save_threads(timeout_seconds=1)  # noqa: SLF001
+
+    assert processes
+    assert processes[0].command[-2:] == ["-i", "-"]
+    assert bytes(processes[0].stdin.data) == b"RIFF" + b"\x00" * 40 + b"audio-pcm"
+    assert processes[0].stdin.closed is True
+    sent_names = [json.loads(text)["name"] for text in control.sent_texts]
+    assert sent_names == ["actuator.audio.started", "actuator.audio.finished"]
+    assert not (app_root / "runs/playback/glass-playback-001/audio/stream_audio_001.wav").exists()
+
+
 def test_playback_warns_when_player_command_is_ignored(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

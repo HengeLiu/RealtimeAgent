@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v42`。本版本在 `sdk-v41` 基础上把语音结束自动照片直接装入当前用户多模态输入，移除模型可见的 `get_latest_utterance_photo` 工具，并将默认 `AGENT_MODEL_NAME` 调整为 `qwen3.5-omni-plus`，用于减少视觉问答首 token 前的一次工具决策模型调用。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v43`。本版本在 `sdk-v42` 基础上修正 `glass-playback` 直接播放下行语音的启动语义，支持 `ffplay` stdin 流式播放，并补齐 TTS 首段音频、播放请求和 HTTP 播放流首段写出的延迟日志。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,10 +13,10 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐下行播放首包链路日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`、`VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime` 和 `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS=300`；如需排障可临时设为 `batch`。 |
-| 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，并支持保存或直接播放下行语音 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
+| 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -1824,16 +1824,19 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 5. `sensors` 只描述虚拟眼镜能读到什么输入。
 6. `actuators` 只描述虚拟眼镜收到命令后如何执行或记录。
 7. `sdk-v21` 起，`audio_play.save_audio_to` 会在后台线程下载 `/stream.wav` 并保存，不会阻塞 `sensor.camera.capture` 等后续控制消息。
-8. `sdk-v38` 起，`audio_play.mode=play_and_auto_finish` 会把 `/stream.wav` 下载到系统临时文件并调用本机播放器直接播出，播放结束后删除临时文件并自动上报 `actuator.audio.finished`。macOS 默认使用 `afplay`，Linux 依次尝试 `paplay`、`aplay`、`ffplay`；也可以配置 `player_command` 指定播放器命令，例如 `"player_command": "ffplay -nodisp -autoexit -loglevel error"`。
+8. `sdk-v38` 起，`audio_play.mode=play_and_auto_finish` 支持直接调用本机播放器播出下行语音；`sdk-v43` 起，如果未配置播放器且本机存在 `ffplay`，或 `player_command` 明确配置为 `ffplay ...`，SDK 会把 `/stream.wav` 直接写入播放器 stdin，实现边下载边播放。找不到支持 stdin 的播放器时会回退到整段下载到系统临时文件后播放，播放结束后删除临时文件并自动上报 `actuator.audio.finished`。
 9. `assertions.server_artifacts` 用于断言真实服务端业务产物是否生成；路径支持 `{session_id}` 和 `{device_id}` 占位符。相对路径中 `runs/` 开头时按业务工程根目录解析。
 
 如果希望直接听到服务端下行语音，可以把上面的 `audio_play` 改为：
 
 ```json
 "audio_play": {
-  "mode": "play_and_auto_finish"
+  "mode": "play_and_auto_finish",
+  "player_command": "ffplay -nodisp -autoexit -loglevel error"
 }
 ```
+
+`actuator.audio.started` 在 `play_and_auto_finish` 模式下表示回放设备已经把首段音频写入本机播放器，不能再理解为“刚收到播放请求”。排查下行语音延迟时重点看服务端 `TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`，以及 glass-playback 端 `收到第一段下行音频`、`下行音频已写入播放器` 的时间差。
 
 ### 10.5 数据资产格式
 
