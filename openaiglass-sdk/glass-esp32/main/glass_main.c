@@ -181,6 +181,8 @@ static volatile bool s_playback_interrupt_requested = false;
 static bool s_realtime_semantic_dialog_enabled = false;
 static bool s_continuous_dialog_active = false;
 static bool s_aec_runtime_enabled = false;
+static volatile bool s_local_segment_active = false;
+static volatile bool s_force_finish_active_segment_for_playback = false;
 static bool s_speaker_channel_enabled = false;
 static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
@@ -1596,6 +1598,7 @@ static void play_wake_prompt_tone(void)
 static void reset_segment_state(segment_state_t *state)
 {
     state->segment_active = false;
+    s_local_segment_active = false;
     state->got_speech = false;
     state->tail_silence_ms = 0;
     state->elapsed_ms = 0;
@@ -2351,6 +2354,7 @@ cleanup:
     if (s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
         s_continuous_dialog_last_activity_ms = now_ms();
     }
+    s_force_finish_active_segment_for_playback = false;
     if (s_next_playback_stream_id[0] != '\0') {
         strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
         s_next_playback_stream_id[0] = '\0';
@@ -2396,6 +2400,8 @@ static void start_playback_stream(const char *stream_id)
     strlcpy(s_current_playback_stream_id, stream_id, sizeof(s_current_playback_stream_id));
     s_next_playback_stream_id[0] = '\0';
     clear_reply_wait_state();
+    s_force_finish_active_segment_for_playback =
+        s_realtime_semantic_dialog_enabled && s_continuous_dialog_active && s_local_segment_active;
     s_playback_active = true;
     if (s_aec_runtime_enabled && s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
         reset_aec_reference_ring();
@@ -2659,12 +2665,14 @@ static void sr_pipeline_task(void *arg)
                 request_playback_interrupt(interrupted_stream_id);
             }
             segment.segment_active = true;
+            s_local_segment_active = true;
             segment.got_speech = false;
             segment.tail_silence_ms = 0;
             segment.elapsed_ms = 0;
             segment.segment_pcm_bytes = 0;
             segment.chunk_seq = 0;
             build_runtime_token("seg", segment.segment_id, sizeof(segment.segment_id));
+            build_runtime_token("stream", s_current_stream_id, sizeof(s_current_stream_id));
             if (start_by_wake_word) {
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
@@ -2709,6 +2717,26 @@ static void sr_pipeline_task(void *arg)
                 segment.segment_pcm_bytes += (uint32_t)res->data_size;
                 segment.chunk_seq += 1;
             }
+        }
+
+        if (s_force_finish_active_segment_for_playback) {
+            s_force_finish_active_segment_for_playback = false;
+            ESP_LOGI(
+                TAG,
+                "服务端回复已开始，提前关闭当前本地语音段: segment_id=%s elapsed=%d ms pcm_bytes=%" PRIu32,
+                segment.segment_id,
+                segment.elapsed_ms,
+                segment.segment_pcm_bytes
+            );
+            send_audio_segment_finished_message(
+                segment.segment_id,
+                segment.elapsed_ms,
+                segment.segment_pcm_bytes,
+                "server_response_started"
+            );
+            refresh_continuous_dialog_activity();
+            reset_segment_state(&segment);
+            continue;
         }
 
         if (res->vad_state == VAD_SPEECH) {
@@ -2897,6 +2925,15 @@ static void init_speech_runtime(void)
     if (s_registered && s_voice_session_opened && !s_playback_active) {
         s_wake_listening_enabled = true;
         ESP_LOGI(TAG, "WakeNet 初始化完成后已补开唤醒监听: session_id=%s", s_current_session_id);
+        if (s_realtime_semantic_dialog_enabled && s_current_session_id[0] != '\0') {
+            send_realtime_session_opened_message(s_current_session_id);
+            ESP_LOGI(
+                TAG,
+                "WakeNet 初始化完成后已补发实时语音能力: accepted_mode=%s aec=%d",
+                s_aec_runtime_enabled ? "full_duplex_realtime" : "half_duplex",
+                s_aec_runtime_enabled
+            );
+        }
     }
     ESP_LOGI(TAG, "WakeNet runtime ready; waiting for voice.session.open");
 }

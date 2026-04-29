@@ -565,6 +565,90 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(result.transcript, "看一下")
         session.close()
 
+    def test_omni_semantic_vad_manual_commit_when_no_auto_response(self) -> None:
+        """测试目标：验证 semantic VAD 没有自动提交时会在段结束后兜底提交。
+
+        测试方法：
+        1. 注入不会主动发送 `speech_stopped` 的假 Omni Realtime 会话。
+        2. 使用 `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 创建流式会话。
+        3. 追加音频后直接调用 `finish(...)`。
+
+        预期结果：
+        1. SDK 会手动调用 `commit()` 和 `create_response(...)`，避免真实链路等待到超时。
+        2. 返回结果仍包含模型文本、音频回调和输入转写。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.committed = False
+                self.response_created = False
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, _image_b64: str) -> None:
+                return None
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def create_response(self, **_kwargs) -> None:
+                self.response_created = True
+                self.callback.on_event({"type": "response.created", "response": {"id": "resp-manual"}})
+                self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "收到"})
+                self.callback.on_event(
+                    {"type": "response.audio.delta", "delta": base64.b64encode(b"manual-audio").decode()}
+                )
+                self.callback.on_event(
+                    {"type": "conversation.item.input_audio_transcription.completed", "transcript": "继续说"}
+                )
+                self.callback.on_event({"type": "response.done"})
+
+            def close(self) -> None:
+                return None
+
+        chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        session = client.start_streaming_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+            ),
+            instructions="连续对话",
+            on_chunk=chunks.append,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+        session.append_audio(b"pcm")
+
+        result = session.finish(image_frames=[], instructions="连续对话", segment_finished_at_ms=100)
+
+        assert _Factory.instance is not None
+        self.assertTrue(_Factory.instance.committed)
+        self.assertTrue(_Factory.instance.response_created)
+        self.assertEqual(chunks[0].audio_pcm_bytes, b"manual-audio")
+        self.assertEqual(result.assistant_text, "收到")
+        self.assertEqual(result.transcript, "继续说")
+        self.assertEqual(result.response_id, "resp-manual")
+        session.close()
+
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
         """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。
 

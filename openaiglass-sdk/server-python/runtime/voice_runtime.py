@@ -376,8 +376,30 @@ class OmniRealtimeStreamingSession:
                         LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
                     )
             if not self._request_started_at_ms_box:
-                self._request_started_at_ms = segment_finished_at_ms
-                self._request_started_at_ms_box.append(segment_finished_at_ms)
+                try:
+                    from dashscope.audio.qwen_omni import MultiModality
+                except ImportError as exc:
+                    raise build_error(
+                        ErrorCode.INVALID_CONFIG,
+                        "缺少 dashscope 依赖，无法启用 Omni Realtime 语音直出",
+                        details={"hint": "请执行 uv sync 安装 dashscope"},
+                    ) from exc
+                self._conversation.commit()
+                self._request_started_at_ms = DashscopeOmniRealtimeReplyClient._now_ms()
+                self._request_started_at_ms_box.append(self._request_started_at_ms)
+                self._conversation.create_response(
+                    instructions=instructions,
+                    output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
+                )
+                log_info(
+                    self._logger,
+                    (
+                        "Omni semantic_vad 未自动提交，segment.finished 后手动提交 "
+                        f"model={self._settings.voice_omni_realtime_model_name} "
+                        f"finish_to_request_ms={max(self._request_started_at_ms - segment_finished_at_ms, 0)}"
+                    ),
+                    LogContext(device_id=self._device_id, session_id=self._session_id),
+                )
             log_info(
                 self._logger,
                 (
@@ -2394,10 +2416,25 @@ class VoiceRuntime:
         payload: dict[str, Any],
     ) -> None:
         controller = self._get_controller(device_id)
+        should_interrupt_playback = False
         with self._lock:
             self._ensure_session_match(controller, session_id)
-            if controller.current_playback is not None and not controller.current_playback.completed:
+            allow_barge_in_segment = (
+                self._settings.voice_reply_mode == "omni_realtime"
+                and self._settings.effective_voice_input_mode() == "raw_audio"
+                and self._settings.omni_turn_detection_enabled()
+            )
+            if (
+                controller.current_playback is not None
+                and not controller.current_playback.completed
+                and not allow_barge_in_segment
+            ):
                 raise build_error(ErrorCode.DEVICE_BUSY, "设备正在播放回复，不能开始新一轮采集")
+            should_interrupt_playback = (
+                controller.current_playback is not None
+                and not controller.current_playback.completed
+                and allow_barge_in_segment
+            )
 
             stream_id = str(payload.get("stream_id", "")).strip()
             segment_id = str(payload.get("segment_id", "")).strip()
@@ -2448,6 +2485,16 @@ class VoiceRuntime:
                 session_id=session_id,
                 segment=segment,
             )
+        if should_interrupt_playback:
+            self.handle_user_interrupt(
+                device_id=device_id,
+                session_id=session_id,
+                reason="voice_barge_in_segment_started",
+                clear_queue=True,
+            )
+            with self._lock:
+                if controller.current_segment is segment:
+                    controller.state = "receiving_segment"
 
     def on_audio_connection_opened(self, *, device_id: str, peer: str) -> None:
         with self._lock:
