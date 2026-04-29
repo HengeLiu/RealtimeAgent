@@ -1268,9 +1268,9 @@ class DashscopeOmniRealtimeReplyClient:
                 enable_turn_detection=False,
                 instructions=instructions,
             )
+            conversation.append_audio(base64.b64encode(input_pcm).decode("ascii"))
             for image_bytes in image_frames:
                 conversation.append_video(base64.b64encode(image_bytes).decode("ascii"))
-            conversation.append_audio(base64.b64encode(input_pcm).decode("ascii"))
             conversation.commit()
             conversation.create_response(
                 instructions=instructions,
@@ -2044,16 +2044,17 @@ class VoiceRuntime:
                 codec=str(payload.get("codec", "pcm16")).strip() or "pcm16",
                 started_at_ms=int(time.time() * 1000),
             )
-            segment.streaming_asr_session = self._asr_client.start_streaming_session(
-                settings=self._settings,
-                session_id=session_id,
-                device_id=device_id,
-                segment_id=segment.segment_id,
-                stream_id=segment.stream_id,
-                sample_rate_hz=segment.sample_rate,
-                channels=segment.channels,
-                codec=segment.codec,
-            )
+            if self._settings.voice_reply_mode != "omni_realtime":
+                segment.streaming_asr_session = self._asr_client.start_streaming_session(
+                    settings=self._settings,
+                    session_id=session_id,
+                    device_id=device_id,
+                    segment_id=segment.segment_id,
+                    stream_id=segment.stream_id,
+                    sample_rate_hz=segment.sample_rate,
+                    channels=segment.channels,
+                    codec=segment.codec,
+                )
             controller.current_segment = segment
             controller.state = "receiving_segment"
 

@@ -345,6 +345,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 self.updated: dict[str, object] = {}
                 self.audio = ""
                 self.video: list[str] = []
+                self.events: list[str] = []
                 self.committed = False
                 self.closed = False
 
@@ -355,9 +356,11 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 self.updated = kwargs
 
             def append_audio(self, audio_b64: str) -> None:
+                self.events.append("audio")
                 self.audio = audio_b64
 
             def append_video(self, video_b64: str) -> None:
+                self.events.append("video")
                 self.video.append(video_b64)
 
             def commit(self) -> None:
@@ -399,6 +402,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         assert _Factory.instance is not None
         self.assertFalse(_Factory.instance.updated["enable_turn_detection"])
         self.assertTrue(_Factory.instance.committed)
+        self.assertEqual(_Factory.instance.events, ["audio", "video"])
         self.assertEqual(base64.b64decode(_Factory.instance.audio), b"\x01\x02")
         self.assertEqual([base64.b64decode(item) for item in _Factory.instance.video], [b"jpg"])
         self.assertTrue(_Factory.instance.closed)
@@ -541,6 +545,49 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(text, "实时转写文本")
         self.assertIn("first_asr_partial_latency_ms=120", "\n".join(logs.output))
         self.assertIn("asr_total_latency_ms=280", "\n".join(logs.output))
+
+    def test_on_segment_started_skips_realtime_asr_in_omni_mode(self) -> None:
+        """测试目标：验证 Omni Realtime 直出模式不会启动独立实时 ASR。
+
+        测试方法：
+        1. 构造一个调用即失败的假 ASR 客户端。
+        2. 将 `voice_reply_mode` 设置为 `omni_realtime`。
+        3. 打开语音会话并上报 `sensor.audio.segment.started`。
+
+        预期结果：
+        1. `on_segment_started` 不会调用假 ASR 客户端。
+        2. 当前语音段仍正常进入接收状态。
+        3. 当前语音段不持有实时 ASR 会话。
+        """
+
+        class _AsrShouldNotStart:
+            def start_streaming_session(self, **_kwargs):
+                raise AssertionError("streaming ASR should not start in omni_realtime mode")
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_reply_mode="omni_realtime"),
+            send_control_message=lambda *_args, **_kwargs: None,
+            asr_client=_AsrShouldNotStart(),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+
+        runtime.on_segment_started(
+            device_id="glass-001",
+            session_id="sess-test",
+            payload={
+                "stream_id": "stream-test",
+                "segment_id": "seg-test",
+                "sample_rate": 16000,
+                "channels": 1,
+                "codec": "pcm16",
+            },
+        )
+
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        self.assertEqual(controller.state, "receiving_segment")
+        assert controller.current_segment is not None
+        self.assertIsNone(controller.current_segment.streaming_asr_session)
 
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。
