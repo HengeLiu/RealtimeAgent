@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v52`。本版本把默认语音回复分支切换为 `VOICE_REPLY_MODE=omni_realtime`，并将 Omni Realtime WebSocket 预连接和上行音频推送前移到用户说话期间；用户说完后只追加自动照片、提交输入并等待模型音频响应。需要 Tool、Task、Skill、MCP 或长期记忆编排时，可以切回 `VOICE_REPLY_MODE=agent_tts`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v53`。本版本为 `glass-playback` 的 `sensors.trigger_audio` 增加 `source=microphone`，可以直接采集开发机真实麦克风并按眼镜 `/ws_audio` 协议流式发送，便于不准备 WAV 文件时做本地真实语音调试。需要稳定回归时仍推荐使用 WAV 文件。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -16,7 +16,7 @@
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR | 默认 `VOICE_INPUT_MODE=auto`：`VOICE_REPLY_MODE=agent_tts` 时等价于 `asr_text`，`VOICE_REPLY_MODE=omni_realtime` 时等价于 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
-| 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
+| 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | Agent 长期记忆 | `sdk-v50` 支持冷热两层 | 业务能力不要自建记忆表；基本信息等热记忆每轮完整注入，住址、爱好、习惯等冷记忆只注入标题，详情由模型按需调用 `memory_search`。 |
@@ -1868,7 +1868,7 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 配置原则：
 
 1. `device_id` 和 `pair_token` 必须与服务端 `device_token_map` 匹配，和真机一致。
-2. `trigger_audio` 必填，用于自动触发一次真实语音链路。
+2. `trigger_audio` 必填，用于自动触发一次真实语音链路；默认 `source=file`，也可以用 `source=microphone` 采集开发机真实麦克风。
 3. `desired_phone_device_id` 只在能力需要真实 iOS 手机时配置。
 4. `startup.wait_for_binding=true` 表示等设备绑定完成后再发送触发音频；需要纯 glass-only 回放时可以关闭。
 5. `sensors` 只描述虚拟眼镜能读到什么输入。
@@ -1886,11 +1886,25 @@ playback 配置文件描述的是“这台虚拟眼镜有哪些传感器数据�
 }
 ```
 
+如果希望直接用开发机真实麦克风作为眼镜输入，可以把 `trigger_audio` 改为：
+
+```json
+"trigger_audio": {
+  "source": "microphone",
+  "sample_rate_hz": 16000,
+  "channels": 1,
+  "chunk_ms": 40,
+  "duration_ms": 5000
+}
+```
+
+麦克风模式只用于本地手动调试，不适合作为稳定自动化回归资产。它需要可选依赖 `sounddevice`；如果启动时报缺少依赖，请执行 `uv pip install sounddevice`，macOS 如遇 PortAudio 问题可先执行 `brew install portaudio`。`duration_ms` 是固定录音时长，当前不会做本机 VAD 或唤醒词检测；SDK 会假设唤醒已经成功，并把这段麦克风输入作为一次完整用户语音段发送给服务端。
+
 `actuator.audio.started` 在 `play_and_auto_finish` 模式下表示回放设备已经把首段音频写入本机播放器，不能再理解为“刚收到播放请求”。`本机播放器已启动，等待下行音频` 只表示 `ffplay` 进程已经启动；实际首包以 `收到第一段下行音频` 和 `下行音频已写入播放器` 为准。排查下行语音延迟时重点看服务端 `下行音频源返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频`，以及 glass-playback 端 `收到第一段下行音频`、`下行音频已写入播放器`、`下行音频流写入完成`、`本机播放器播放结束` 的时间差。
 
 ### 10.5 数据资产格式
 
-`trigger_audio` 推荐使用 WAV 文件。它应包含完整的一次用户请求，例如“帮我找一下水杯”，而不是只包含唤醒词。SDK 会把它当作唤醒成功后的麦克风录音流发送给服务端。
+`trigger_audio` 推荐使用 WAV 文件。它应包含完整的一次用户请求，例如“帮我找一下水杯”，而不是只包含唤醒词。SDK 会把它当作唤醒成功后的麦克风录音流发送给服务端。`sdk-v53` 起，`trigger_audio.source=microphone` 可用于临时采集开发机真实麦克风；这条路径不产生可复现测试资产，正式验收仍应落回 WAV 样例。
 
 `camera_stream` 应模拟真实摄像头视频输入，优先使用 MP4：
 

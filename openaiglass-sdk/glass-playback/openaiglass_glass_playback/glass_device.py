@@ -266,18 +266,32 @@ class PlaybackGlassDevice:
         return False
 
     def _stream_trigger_audio(self, control: WsClient) -> None:
-        chunks = self._load_wav_chunks()
+        audio_config = self.config.trigger_audio
         stream_id = f"stream_{os.urandom(4).hex()}"
         segment_id = f"seg_{os.urandom(4).hex()}"
-        self._print_status(
-            "开始发送触发音频",
-            {
-                "stream_id": stream_id,
-                "segment_id": segment_id,
-                "path": self.config.trigger_audio.path,
-                "chunks": len(chunks),
-            },
-        )
+        if audio_config.source == "microphone":
+            self._print_status(
+                "开始采集本机麦克风触发音频",
+                {
+                    "stream_id": stream_id,
+                    "segment_id": segment_id,
+                    "duration_ms": audio_config.duration_ms,
+                    "sample_rate_hz": audio_config.sample_rate_hz,
+                    "channels": audio_config.channels,
+                    "device": audio_config.microphone_device,
+                },
+            )
+        else:
+            chunks = self._load_wav_chunks()
+            self._print_status(
+                "开始发送触发音频",
+                {
+                    "stream_id": stream_id,
+                    "segment_id": segment_id,
+                    "path": audio_config.path,
+                    "chunks": len(chunks),
+                },
+            )
         self._send_control(
             control,
             "sensor.audio.segment.started",
@@ -286,38 +300,46 @@ class PlaybackGlassDevice:
                 "device_id": self.config.device_id,
                 "stream_id": stream_id,
                 "segment_id": segment_id,
-                "sample_rate": self.config.trigger_audio.sample_rate_hz,
-                "channels": self.config.trigger_audio.channels,
+                "sample_rate": audio_config.sample_rate_hz,
+                "channels": audio_config.channels,
                 "codec": "pcm16",
             },
             session_id=self._session_id,
         )
-        self._log_event("voice.trigger_audio.started", {"path": str(self.config.trigger_audio.path), "chunks": len(chunks)})
+        event_payload: dict[str, object] = {
+            "source": audio_config.source,
+            "sample_rate_hz": audio_config.sample_rate_hz,
+            "channels": audio_config.channels,
+            "chunk_ms": audio_config.chunk_ms,
+        }
+        if audio_config.path is not None:
+            event_payload["path"] = str(audio_config.path)
+        if audio_config.source == "microphone":
+            event_payload["duration_ms"] = audio_config.duration_ms
+            if audio_config.microphone_device is not None:
+                event_payload["device"] = audio_config.microphone_device
+        else:
+            event_payload["chunks"] = len(chunks)
+        self._log_event("voice.trigger_audio.started", event_payload)
 
         audio = WsClient(
             f"{self.config.audio_ws_url}?{urlencode({'device_id': self.config.device_id})}",
             timeout_seconds=self.timeout_seconds,
         )
         try:
-            for index, chunk in enumerate(chunks):
-                frame = MediaFrame(
-                    header={
-                        "version": "v1",
-                        "stream_id": stream_id,
-                        "segment_id": segment_id,
-                        "frame_type": "audio_chunk",
-                        "seq": index,
-                        "ts_ms": int(time.time() * 1000),
-                        "codec": "pcm16le",
-                        "sample_rate": self.config.trigger_audio.sample_rate_hz,
-                        "channels": self.config.trigger_audio.channels,
-                        "payload_size": len(chunk),
-                        "final": False,
-                    },
-                    payload=chunk,
+            if audio_config.source == "microphone":
+                chunk_count, byte_count, duration_ms = self._stream_microphone_chunks(
+                    audio,
+                    stream_id=stream_id,
+                    segment_id=segment_id,
                 )
-                audio.send_binary(frame.encode())
-                time.sleep(max(self.config.trigger_audio.chunk_ms, 1) / 1000)
+            else:
+                chunk_count, byte_count, duration_ms = self._stream_file_chunks(
+                    audio,
+                    stream_id=stream_id,
+                    segment_id=segment_id,
+                    chunks=chunks,
+                )
         finally:
             audio.close()
 
@@ -329,17 +351,152 @@ class PlaybackGlassDevice:
                 "device_id": self.config.device_id,
                 "stream_id": stream_id,
                 "segment_id": segment_id,
-                "duration_ms": len(chunks) * self.config.trigger_audio.chunk_ms,
-                "bytes": sum(len(chunk) for chunk in chunks),
-                "finish_reason": "playback_trigger_audio_finished",
+                "duration_ms": duration_ms,
+                "bytes": byte_count,
+                "finish_reason": (
+                    "playback_microphone_duration_reached"
+                    if audio_config.source == "microphone"
+                    else "playback_trigger_audio_finished"
+                ),
             },
             session_id=self._session_id,
         )
-        self._log_event("voice.trigger_audio.finished", {"stream_id": stream_id, "segment_id": segment_id})
-        self._print_status("触发音频发送完成", {"stream_id": stream_id, "segment_id": segment_id})
+        self._log_event(
+            "voice.trigger_audio.finished",
+            {
+                "stream_id": stream_id,
+                "segment_id": segment_id,
+                "source": audio_config.source,
+                "chunks": chunk_count,
+                "bytes": byte_count,
+                "duration_ms": duration_ms,
+            },
+        )
+        self._print_status(
+            "触发音频发送完成",
+            {
+                "stream_id": stream_id,
+                "segment_id": segment_id,
+                "source": audio_config.source,
+                "chunks": chunk_count,
+                "bytes": byte_count,
+                "duration_ms": duration_ms,
+            },
+        )
+
+    def _stream_file_chunks(
+        self,
+        audio: WsClient,
+        *,
+        stream_id: str,
+        segment_id: str,
+        chunks: list[bytes],
+    ) -> tuple[int, int, int]:
+        """发送文件来源的触发音频分片。
+
+        参数：
+        1. `audio`：音频 WebSocket 客户端。
+        2. `stream_id/segment_id`：本轮语音流标识。
+        3. `chunks`：按配置切好的 PCM 分片。
+
+        返回值：
+        1. `(分片数, 字节数, 时长毫秒)`。
+        """
+
+        byte_count = 0
+        for index, chunk in enumerate(chunks):
+            self._send_audio_chunk(audio, stream_id=stream_id, segment_id=segment_id, seq=index, chunk=chunk)
+            byte_count += len(chunk)
+            time.sleep(max(self.config.trigger_audio.chunk_ms, 1) / 1000)
+        return len(chunks), byte_count, len(chunks) * self.config.trigger_audio.chunk_ms
+
+    def _stream_microphone_chunks(
+        self,
+        audio: WsClient,
+        *,
+        stream_id: str,
+        segment_id: str,
+    ) -> tuple[int, int, int]:
+        """采集本机真实麦克风并发送为触发音频。
+
+        主要逻辑：
+        1. 使用可选依赖 `sounddevice` 打开本机输入设备。
+        2. 以配置的采样率、声道数和 chunk 毫秒数读取 PCM16。
+        3. 每读到一个 chunk 就按 SDK 媒体帧格式写入 `/ws_audio`。
+
+        返回值：
+        1. `(分片数, 字节数, 时长毫秒)`。
+
+        异常情况：
+        1. 未安装 `sounddevice` 或系统没有可用输入设备时抛出 `RuntimeError`。
+        """
+
+        try:
+            import sounddevice as sd  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise RuntimeError(
+                "本机麦克风模式需要安装 sounddevice；请执行 `uv pip install sounddevice`，"
+                "macOS 如遇 PortAudio 问题请先执行 `brew install portaudio`"
+            ) from exc
+
+        audio_config = self.config.trigger_audio
+        frames_per_chunk = max(int(audio_config.sample_rate_hz * audio_config.chunk_ms / 1000), 1)
+        chunk_target = max((audio_config.duration_ms + audio_config.chunk_ms - 1) // audio_config.chunk_ms, 1)
+        chunk_count = 0
+        byte_count = 0
+        started_at = time.monotonic()
+        with sd.RawInputStream(
+            samplerate=audio_config.sample_rate_hz,
+            channels=audio_config.channels,
+            dtype="int16",
+            blocksize=frames_per_chunk,
+            device=audio_config.microphone_device,
+        ) as stream:
+            for seq in range(chunk_target):
+                raw_chunk, overflowed = stream.read(frames_per_chunk)
+                chunk = bytes(raw_chunk)
+                if overflowed:
+                    self._print_status("本机麦克风采集发生溢出", {"stream_id": stream_id, "seq": seq})
+                if not chunk:
+                    continue
+                self._send_audio_chunk(audio, stream_id=stream_id, segment_id=segment_id, seq=seq, chunk=chunk)
+                chunk_count += 1
+                byte_count += len(chunk)
+        duration_ms = max(int((time.monotonic() - started_at) * 1000), chunk_count * audio_config.chunk_ms)
+        return chunk_count, byte_count, duration_ms
+
+    def _send_audio_chunk(self, audio: WsClient, *, stream_id: str, segment_id: str, seq: int, chunk: bytes) -> None:
+        """按媒体帧协议发送一段 PCM16 音频。
+
+        参数：
+        1. `audio`：音频 WebSocket 客户端。
+        2. `stream_id/segment_id`：本轮语音流标识。
+        3. `seq`：分片序号。
+        4. `chunk`：PCM16LE 音频字节。
+        """
+
+        frame = MediaFrame(
+            header={
+                "version": "v1",
+                "stream_id": stream_id,
+                "segment_id": segment_id,
+                "frame_type": "audio_chunk",
+                "seq": seq,
+                "ts_ms": int(time.time() * 1000),
+                "codec": "pcm16le",
+                "sample_rate": self.config.trigger_audio.sample_rate_hz,
+                "channels": self.config.trigger_audio.channels,
+                "payload_size": len(chunk),
+                "final": False,
+            },
+            payload=chunk,
+        )
+        audio.send_binary(frame.encode())
 
     def _load_wav_chunks(self) -> list[bytes]:
         audio = self.config.trigger_audio
+        if audio.path is None:
+            raise ValueError("trigger_audio 文件来源缺少 path")
         with wave.open(str(audio.path), "rb") as wav_file:
             if wav_file.getframerate() != audio.sample_rate_hz or wav_file.getnchannels() != audio.channels or wav_file.getsampwidth() != 2:
                 raise ValueError("trigger_audio 必须是配置声明的 16-bit PCM WAV")

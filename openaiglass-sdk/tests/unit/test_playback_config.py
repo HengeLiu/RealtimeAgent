@@ -6,6 +6,7 @@ import json
 import sys
 import threading
 import tomllib
+import types
 import wave
 from argparse import Namespace
 from pathlib import Path
@@ -144,6 +145,52 @@ def test_playback_config_loads_device_level_config(tmp_path: Path) -> None:
     assert config.outputs.event_log == (app_root / "runs/playback/glass-playback-001/events.jsonl").resolve()
 
 
+def test_playback_config_supports_microphone_trigger_audio(tmp_path: Path) -> None:
+    """测试目标：验证 glass-playback 可声明本机麦克风作为触发音频来源。
+
+    测试方法：
+    1. 构造 `sensors.trigger_audio.source=microphone` 的设备级配置。
+    2. 加载配置并读取解析后的触发音频字段。
+
+    预期结果：
+    1. 麦克风模式不要求配置 WAV 文件路径。
+    2. 采样率、分片时长、录音时长和输入设备配置被保留。
+    """
+
+    config_path = tmp_path / "openaiglass-for-blind/host/glass-playback/config/glass.microphone.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "source": "microphone",
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "chunk_ms": 40,
+                        "duration_ms": 1200,
+                        "device": "MacBook Pro Microphone",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+
+    assert config.trigger_audio.source == "microphone"
+    assert config.trigger_audio.path is None
+    assert config.trigger_audio.format == "pcm16"
+    assert config.trigger_audio.duration_ms == 1200
+    assert config.trigger_audio.microphone_device == "MacBook Pro Microphone"
+
+
 def test_playback_config_requires_trigger_audio(tmp_path: Path) -> None:
     """每个 glass-playback 配置都必须显式提供触发音频。"""
 
@@ -165,6 +212,84 @@ def test_playback_config_requires_trigger_audio(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="sensors.trigger_audio"):
         PlaybackConfig.load(config_path, repo_root=tmp_path)
+
+
+def test_playback_microphone_stream_writes_media_frames(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试目标：验证本机麦克风 sensor 会按 `/ws_audio` 媒体帧协议发送音频。
+
+    测试方法：
+    1. 用假的 `sounddevice.RawInputStream` 代替真实麦克风，稳定返回两段 PCM16。
+    2. 调用 `_stream_microphone_chunks(...)`。
+    3. 解码 fake WebSocket 收到的二进制帧。
+
+    预期结果：
+    1. 发送 2 个音频分片。
+    2. 每个分片都带有正确的 `stream_id`、`segment_id`、采样率和声道数。
+    """
+
+    class _FakeRawInputStream:
+        def __init__(self, *, samplerate: int, channels: int, dtype: str, blocksize: int, device: object | None) -> None:
+            self.samplerate = samplerate
+            self.channels = channels
+            self.dtype = dtype
+            self.blocksize = blocksize
+            self.device = device
+
+        def __enter__(self) -> "_FakeRawInputStream":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            return b"\1\0" * frames * self.channels, False
+
+    monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace(RawInputStream=_FakeRawInputStream))
+
+    config_path = tmp_path / "openaiglass-for-blind/host/glass-playback/config/glass.microphone.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "source": "microphone",
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "chunk_ms": 40,
+                        "duration_ms": 80,
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    _FakeWsClient.sent_binaries = []
+    audio = _FakeWsClient("ws://127.0.0.1:8765/ws_audio")
+
+    chunk_count, byte_count, duration_ms = device._stream_microphone_chunks(  # noqa: SLF001
+        audio,
+        stream_id="stream_mic",
+        segment_id="seg_mic",
+    )
+
+    assert chunk_count == 2
+    assert byte_count == 2560
+    assert duration_ms >= 80
+    assert len(_FakeWsClient.sent_binaries) == 2
+    first_frame = MediaFrame.decode(_FakeWsClient.sent_binaries[0])
+    assert first_frame.header["stream_id"] == "stream_mic"
+    assert first_frame.header["segment_id"] == "seg_mic"
+    assert first_frame.header["sample_rate"] == 16000
+    assert first_frame.header["channels"] == 1
+    assert first_frame.payload == b"\1\0" * 640
 
 
 def test_playback_camera_capture_responds_with_configured_image(tmp_path: Path) -> None:

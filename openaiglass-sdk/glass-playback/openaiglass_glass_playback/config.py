@@ -22,13 +22,22 @@ class StartupConfig:
 
 @dataclass(slots=True)
 class TriggerAudioConfig:
-    """触发音频配置。"""
+    """触发音频配置。
 
-    path: Path
+    主要属性：
+    1. `source`：音频来源，`file` 表示 WAV 文件，`microphone` 表示本机真实麦克风。
+    2. `path`：文件来源时的 WAV 路径。
+    3. `duration_ms`：麦克风来源时的固定录音时长。
+    """
+
+    source: str = "file"
+    path: Path | None = None
     format: str = "wav"
     sample_rate_hz: int = 16000
     channels: int = 1
     chunk_ms: int = 40
+    duration_ms: int = 5000
+    microphone_device: object | None = None
 
 
 @dataclass(slots=True)
@@ -174,22 +183,35 @@ def _load_trigger_audio(
     app_root: Path,
     repo_root: Path,
 ) -> TriggerAudioConfig:
-    audio_path = _resolve_path(
-        raw.get("path"),
-        config_path=config_path,
-        app_root=app_root,
-        repo_root=repo_root,
-        field_name="sensors.trigger_audio.path",
-    )
-    fmt = str(raw.get("format") or audio_path.suffix.lstrip(".") or "wav").lower()
-    if fmt != "wav":
-        raise ValueError("trigger_audio 当前仅支持 WAV")
+    source = str(raw.get("source") or "file").strip().lower()
+    if source not in {"file", "microphone"}:
+        raise ValueError("sensors.trigger_audio.source 必须是 file 或 microphone")
+    audio_path: Path | None = None
+    fmt = str(raw.get("format") or "wav").lower()
+    if source == "file":
+        audio_path = _resolve_path(
+            raw.get("path"),
+            config_path=config_path,
+            app_root=app_root,
+            repo_root=repo_root,
+            field_name="sensors.trigger_audio.path",
+        )
+        fmt = str(raw.get("format") or audio_path.suffix.lstrip(".") or "wav").lower()
+        if fmt != "wav":
+            raise ValueError("trigger_audio 文件来源当前仅支持 WAV")
+    else:
+        fmt = str(raw.get("format") or "pcm16").lower()
+        if fmt not in {"pcm16", "pcm16le"}:
+            raise ValueError("trigger_audio 麦克风来源当前仅支持 pcm16")
     return TriggerAudioConfig(
+        source=source,
         path=audio_path,
         format=fmt,
         sample_rate_hz=int(raw.get("sample_rate_hz", 16000)),
         channels=int(raw.get("channels", 1)),
         chunk_ms=int(raw.get("chunk_ms", 40)),
+        duration_ms=max(int(raw.get("duration_ms", 5000)), 1),
+        microphone_device=raw.get("device"),
     )
 
 

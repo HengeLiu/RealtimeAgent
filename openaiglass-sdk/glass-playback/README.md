@@ -13,3 +13,5 @@ openaiglass.glass.start --runtime playback \
 ```
 
 配置文件放在业务工程 `openaiglass-for-blind/host/glass-playback/config`，音频、图片、视频和传感器资产放在 `openaiglass-for-blind/testdata`。
+
+`sensors.trigger_audio` 默认使用 WAV 文件；本地手动调试时也可以配置 `source: "microphone"` 采集开发机真实麦克风。麦克风模式需要可选依赖 `sounddevice`，并按固定 `duration_ms` 录音，不做本机 VAD 或唤醒词检测。
