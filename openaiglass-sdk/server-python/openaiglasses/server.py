@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_core import AgentFacade, ToolGateway, ToolRegistry
 from agent_core.context import AgentSessionStore
+from agent_core.memory import AgentMemoryRuntime, JsonFileAgentMemoryStore
 from agent_core.models import CapabilityResult as AgentCapabilityResult
 from agent_core.models import ToolSpec
 from agent_core.runtime import OpenAIAgentLoopRunner
@@ -715,12 +716,14 @@ def build_agent_facade_from_sdk(
         base_gateway=InMemoryTaskGateway(),
         sdk_task_runtime=sdk.task_runtime,
     )
+    memory_runtime = _build_memory_runtime_from_settings(settings)
     tool_registry = ToolRegistry(
         device_state_reader=lambda: {},
         task_gateway=hybrid_task_gateway,
         mcp_registry=sdk.get_mcp_registry(),
         mcp_gateway=sdk.get_mcp_gateway(),
         skill_runtime=sdk.skill_runtime,
+        memory_runtime=memory_runtime,
     )
     tool_gateway = ToolGateway(tool_registry)
     tool_registry.bind_gateway(tool_gateway)
@@ -776,6 +779,7 @@ def build_default_agent_facade(
     tool_registry = ToolRegistry(
         device_state_reader=device_state_reader,
         task_gateway=hybrid_task_gateway,
+        memory_runtime=_build_memory_runtime_from_settings(settings),
     )
     tool_gateway = ToolGateway(tool_registry)
     tool_registry.bind_gateway(tool_gateway)
@@ -808,3 +812,22 @@ def build_server_handle_from_sdk(
     handle = build_server_handle(settings, agent_facade=facade)
     sdk.device_groups = handle.runtime.device_group_runtime
     return handle
+
+
+def _build_memory_runtime_from_settings(settings: ServerSettings) -> AgentMemoryRuntime | None:
+    """按服务端配置创建长期记忆运行时。
+
+    参数：
+    1. `settings`：服务端配置。
+
+    返回值：
+    1. 记忆关闭时返回 `None`，否则返回 `AgentMemoryRuntime`。
+    """
+
+    if not settings.agent_memory_enabled:
+        return None
+    return AgentMemoryRuntime(
+        store=JsonFileAgentMemoryStore(settings.agent_memory_store_path),
+        enabled=True,
+        max_prompt_memories=settings.agent_memory_max_prompt_items,
+    )

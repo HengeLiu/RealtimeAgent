@@ -12,6 +12,7 @@ from typing import Any
 
 from agent_core.context.models import AgentSession, AgentTurn, AgentTurnResult
 from agent_core.context.session_store import AgentSessionStore
+from agent_core.memory import AgentMemoryRuntime
 from agent_core.skills import SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
 from infra.config import ServerSettings
@@ -30,6 +31,7 @@ class AgentTurnRuntime:
     instructions: str
     active_skill_names: list[str]
     allowed_tool_names: set[str] | None
+    memory_prompt_fragment: str
     run_input: list[dict[str, Any]]
     sdk_tools: list
     model_request: dict[str, object]
@@ -46,6 +48,7 @@ class AgentTurnRuntimeFactory:
         tool_registry: ToolRegistry,
         tool_gateway: ToolGateway,
         skill_runtime: SkillRuntime | None,
+        memory_runtime: AgentMemoryRuntime | None,
         instruction_builder: Callable[[str | None], str],
         history_builder: Callable[[AgentSession, AgentTurn], list[dict[str, Any]]],
     ) -> None:
@@ -54,6 +57,7 @@ class AgentTurnRuntimeFactory:
         self._tool_registry = tool_registry
         self._tool_gateway = tool_gateway
         self._skill_runtime = skill_runtime
+        self._memory_runtime = memory_runtime
         self._instruction_builder = instruction_builder
         self._history_builder = history_builder
 
@@ -75,9 +79,21 @@ class AgentTurnRuntimeFactory:
             utterance_photo_store=self._tool_registry.get_utterance_photo_store(),
             tool_gateway=self._tool_gateway,
             mcp_gateway=self._tool_registry.get_mcp_gateway(),
+            memory_runtime=self._memory_runtime,
             turn_meta=dict(turn.meta),
         )
+        memory_prompt_fragment = (
+            self._memory_runtime.build_prompt_fragment(
+                scope_type="device",
+                scope_id=turn.device_id,
+                query=turn.input_text,
+            )
+            if self._memory_runtime is not None
+            else ""
+        )
         instructions = self._instruction_builder(turn.session_id)
+        if memory_prompt_fragment:
+            instructions = f"{instructions}\n{memory_prompt_fragment}\n"
         allowed_tool_names = (
             self._skill_runtime.allowed_tool_names_for_session(session_id=turn.session_id)
             if self._skill_runtime is not None
@@ -95,6 +111,7 @@ class AgentTurnRuntimeFactory:
             "instructions": instructions,
             "active_skills": active_skill_names,
             "allowed_tool_names": sorted(allowed_tool_names) if allowed_tool_names is not None else None,
+            "memory_prompt_fragment": memory_prompt_fragment,
             "extra_body": {"enable_thinking": False},
             "messages": [
                 {"role": "system", "content": instructions},
@@ -107,6 +124,7 @@ class AgentTurnRuntimeFactory:
             instructions=instructions,
             active_skill_names=active_skill_names,
             allowed_tool_names=allowed_tool_names,
+            memory_prompt_fragment=memory_prompt_fragment,
             run_input=run_input,
             sdk_tools=sdk_tools,
             model_request=model_request,
@@ -606,6 +624,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         self._tool_registry = tool_registry
         self._tool_gateway = tool_gateway
         self._skill_runtime = skill_runtime or tool_registry.get_skill_runtime()
+        self._memory_runtime = tool_registry.get_memory_runtime()
         self._logger = get_logger("server.agent.runner")
         self._turn_runtime_factory = AgentTurnRuntimeFactory(
             settings=settings,
@@ -613,6 +632,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             tool_registry=tool_registry,
             tool_gateway=tool_gateway,
             skill_runtime=self._skill_runtime,
+            memory_runtime=self._memory_runtime,
             instruction_builder=self._build_instructions,
             history_builder=self._build_history_messages,
         )
@@ -1308,6 +1328,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             "请使用简短、口语化、直接的中文回答。\n"
             "如果当前用户消息已经包含照片，请直接结合照片回答，不要先输出拍照提示。\n"
             "必要时可以调用已提供的工具。\n"
+            "如果用户明确要求你记住、忘记、删除或查看某条信息，必须调用 manage_memory 工具。\n"
+            "如果用户表达了稳定的个人信息、偏好或行为习惯，可以调用 manage_memory 新增一条简短长期记忆；不要记录一次性任务、敏感密钥或未经确认的隐私信息。\n"
             "不要输出代码块。\n"
         )
         if self._skill_runtime is None or not session_id:

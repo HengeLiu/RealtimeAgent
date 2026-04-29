@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v47`。本版本在 `sdk-v46` 基础上把最终回复的 CosyVoice 流式 TTS 预热从“提前创建 session”推进到“后台提前打开 WebSocket 并启动流式任务”，让首次模型文本增量到达后尽量只执行文本提交。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v48`。本版本在 `sdk-v47` 基础上新增 Agent 长期记忆第一版：SDK 会提供本地持久化记忆运行时、模型可见的 `manage_memory` 工具、每轮相关记忆提示词注入，以及通过自然语言新增、查询、删除记忆的基础能力。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -19,6 +19,7 @@
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
+| Agent 长期记忆 | `sdk-v48` 第一版可用 | 业务能力不要自建记忆表；用户偏好、基本信息、稳定习惯由 SDK 的 `manage_memory` 工具写入和删除，每轮 Agent 会自动注入相关记忆。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
 | iOS/ESP32 SDK 包形态 | 源码包可检查 | 业务工程引用 SDK 源码运行时；二进制发布仍是后续工作。 |
 
@@ -272,6 +273,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
 | `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
 | `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` | `config/local_server.env` | 服务端模型、ASR 和 TTS 配置。`sdk-v23` 起模板显式列出，业务开发者不要在业务代码里硬编码模型名。 |
+| `AGENT_MEMORY_ENABLED` / `AGENT_MEMORY_STORE_PATH` / `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `config/local_server.env` | `sdk-v48` 起控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
 `sdk-v32` 起，如果 `local_server.env` 里保留模板占位 `DASHSCOPE_API_KEY=""`，但启动命令所在 shell、CI secret 或远程环境已经注入了非空 `DASHSCOPE_API_KEY`，SDK 启动器会保留外部真实 key。其他普通配置仍然以 `local_server.env` 为准。若希望完全依赖配置文件，也可以直接把真实 key 写入 `local_server.env` 后重启服务端。
@@ -502,7 +504,34 @@ uv run openaiglass.glass.start \
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
-### 3.9 通知仲裁、抢播和打断边界
+### 3.9 Agent 长期记忆
+
+`sdk-v48` 起，SDK 在 agent-core 中提供第一版长期记忆能力。它的定位是 SDK 系统能力，不是业务能力；业务团队不要在 `capabilities` 中自建记忆 Tool、记忆表或提示词拼接逻辑。
+
+当前记忆能力包括：
+
+1. 本地 JSON 文件持久化，默认路径为 `runs/memory/agent_memories.json`。
+2. 模型可见工具 `manage_memory`，支持 `add`、`search`、`list`、`delete`。
+3. 每轮 Agent 请求前按当前眼镜设备编号检索相关记忆，并注入系统提示词。
+4. 用户通过自然语言说“记住我喜欢简短提示”“忘掉刚才那条记忆”“查看你记住了什么”时，模型应调用 `manage_memory` 完成操作。
+
+相关服务端配置：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AGENT_MEMORY_ENABLED` | `true` | 是否启用长期记忆。关闭后 `manage_memory` 不暴露给模型。 |
+| `AGENT_MEMORY_STORE_PATH` | `runs/memory/agent_memories.json` | 记忆持久化文件。不要提交真实用户记忆文件。 |
+| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入多少条相关记忆；设为 `0` 表示保留工具但不自动注入。 |
+
+业务开发者需要注意：
+
+1. 稳定用户偏好、基本信息、行为习惯可以交给 SDK 记忆层处理，例如“导航提示尽量短”“我常去的地方是公司”。
+2. 一次性任务状态、当前路口临时观测、找物过程中的短时上下文仍应放在 Task 上下文或当前会话里，不应写入长期记忆。
+3. API Key、设备 token、WiFi 密码、真实用户音频图片视频等敏感数据不应写入长期记忆。
+4. 如果业务 Skill 激活了工具白名单，`manage_memory` 仍会保持可见，确保用户随时可以删除错误记忆。
+5. 当前版本按 `device_id` 隔离记忆，账号级和用户级记忆合并、向量检索、图记忆和云端同步属于后续 SDK 迭代范围。
+
+### 3.10 通知仲裁、抢播和打断边界
 
 `sdk-v15` 起，所有播放型输出都会先进入统一播放仲裁器：
 
@@ -2100,9 +2129,9 @@ server -> glass: 播报或提示
 新团队开发能力前，建议先阅读：
 
 1. [docs/当前实现状态.md](./docs/当前实现状态.md)
-2. [docs/restriction/设想的功能与实现方案.md](./docs/restriction/设想的功能与实现方案.md)
-3. [docs/restriction/软件架构设计.md](./docs/restriction/软件架构设计.md)
-4. [docs/stage1/plan/第一期功能开发计划.md](./docs/stage1/plan/第一期功能开发计划.md)
+2. [../SDK对功能开发支持情况的说明.md](../SDK对功能开发支持情况的说明.md)
+3. [docs/restriction/设想的功能与实现方案.md](./docs/restriction/设想的功能与实现方案.md)
+4. [docs/stage1/develop/架构阻塞点说明与改进建议.md](./docs/stage1/develop/架构阻塞点说明与改进建议.md)
 
 如果要新增一个能力，至少补齐：
 

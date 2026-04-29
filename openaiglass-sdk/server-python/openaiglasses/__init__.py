@@ -37,6 +37,7 @@ from agent_core.mcp import BaseMcpAdapter
 from agent_core.models import McpMethodSpec
 from openaiglasses.sdk import OpenAIGlassesSDK
 from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime, SkillSessionState
+from agent_core.memory import AgentMemoryRecord, AgentMemoryRuntime, JsonFileAgentMemoryStore
 from infra.config import ServerSettings
 
 __all__ = [
@@ -80,6 +81,9 @@ __all__ = [
     "SkillManifest",
     "SkillRuntime",
     "SkillSessionState",
+    "AgentMemoryRecord",
+    "AgentMemoryRuntime",
+    "JsonFileAgentMemoryStore",
     "TaskContext",
     "TaskEvent",
     "TaskRuntimeManager",

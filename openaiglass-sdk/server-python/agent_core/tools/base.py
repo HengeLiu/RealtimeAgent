@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from agent_core.camera import CameraGateway
     from agent_core.camera import UtterancePhotoStore
     from agent_core.context import AgentSessionStore
+    from agent_core.memory import AgentMemoryRuntime
     from agent_core.mcp import McpGateway
     from agent_core.tools.gateway import ToolGateway
     from backend_task_core import TaskGateway
@@ -36,6 +37,7 @@ class AgentToolContext:
     utterance_photo_store: "UtterancePhotoStore | None" = None
     tool_gateway: "ToolGateway | None" = None
     mcp_gateway: "McpGateway | None" = None
+    memory_runtime: "AgentMemoryRuntime | None" = None
     turn_meta: dict[str, Any] = field(default_factory=dict)
     emitted_assets: list[MediaAssetRef] = field(default_factory=list)
     emitted_artifacts: list[DerivedArtifact] = field(default_factory=list)

@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from agent_core.camera import CameraGateway, UtterancePhotoStore
+from agent_core.memory import AgentMemoryRuntime
 from agent_core.mcp import McpGateway, McpRegistry
 from agent_core.models import ToolSpec
 from agent_core.skills import SkillRuntime
@@ -78,6 +79,7 @@ class ToolRegistry:
         mcp_registry: McpRegistry | None = None,
         mcp_gateway: McpGateway | None = None,
         skill_runtime: SkillRuntime | None = None,
+        memory_runtime: AgentMemoryRuntime | None = None,
     ) -> None:
         self._device_state_reader = device_state_reader
         self._task_gateway = task_gateway or InMemoryTaskGateway()
@@ -85,6 +87,7 @@ class ToolRegistry:
         self._mcp_registry = mcp_registry or McpRegistry()
         self._mcp_gateway = mcp_gateway or McpGateway(self._mcp_registry)
         self._skill_runtime = skill_runtime
+        self._memory_runtime = memory_runtime
         self._utterance_photo_store = UtterancePhotoStore()
         self._device_group_context_factory = None
         self._tools: dict[str, BaseTool] = {}
@@ -119,6 +122,7 @@ class ToolRegistry:
         from agent_core.tools.builtins import (
             CancelTaskTool,
             CapturePhotoTool,
+            ManageMemoryTool,
             QueryDeviceStateTool,
             QueryTaskStatusTool,
             ReadSkillTool,
@@ -153,6 +157,11 @@ class ToolRegistry:
             self._register_tool(
                 ReadSkillTool(self._skill_runtime),
                 expose_to_model=bool(self._skill_runtime.list_skill_names()),
+            )
+        if self._memory_runtime is not None and self._memory_runtime.enabled:
+            self._register_tool(
+                ManageMemoryTool(self._memory_runtime),
+                expose_to_model=True,
             )
 
     def _register_tool(self, tool: BaseTool, *, expose_to_model: bool) -> None:
@@ -193,6 +202,11 @@ class ToolRegistry:
         """返回 Skill Runtime。"""
 
         return self._skill_runtime
+
+    def get_memory_runtime(self) -> AgentMemoryRuntime | None:
+        """返回 Agent 长期记忆运行时。"""
+
+        return self._memory_runtime
 
     def is_tool_allowed_for_session(self, *, session_id: str, tool_name: str) -> bool:
         """判断指定会话是否允许调用工具。"""
@@ -246,12 +260,20 @@ class ToolRegistry:
         return gateway.invoke(name=name, context=context, arguments=arguments)
 
     def _filter_model_tool_names(self, allowed_names: set[str] | None) -> list[str]:
-        """按 Skill 白名单过滤模型可见工具。"""
+        """按 Skill 白名单过滤模型可见工具。
+
+        记忆管理属于全局用户控制能力，不随具体 Skill 白名单关闭；否则用户在
+        某个 Skill 激活期间将无法通过自然语言删除错误记忆。
+        """
 
         if allowed_names is None:
             return list(self._model_tool_names)
         normalized = {str(item).strip() for item in allowed_names if str(item).strip()}
-        return [name for name in self._model_tool_names if name in normalized]
+        return [
+            name
+            for name in self._model_tool_names
+            if name in normalized or "memory" in self._tools[name].spec.tags
+        ]
 
     def _build_sdk_tool(
         self,

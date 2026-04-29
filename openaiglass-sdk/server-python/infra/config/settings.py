@@ -32,20 +32,27 @@ class ServerSettings:
     11. `agent_model_name`：agent-core 文本与图片理解模型名称。
     12. `voice_model_name`：兼容旧链路的语音模型名称。
     13. `voice_model_voice`：兼容旧链路的语音音色。
-    14. `tts_model_name`：专用流式 TTS 模型名称。
-    15. `tts_voice`：专用流式 TTS 音色。
-    16. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
-    17. `tts_sample_rate_hz`：TTS 原始输出采样率。
-    18. `voice_model_timeout_ms`：模型请求超时时间。
-    19. `voice_runs_root`：语音运行时资产落盘目录。
-    20. `voice_asr_model_name`：批量语音转写模型名称。
-    21. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
-    22. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
-    23. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
-    24. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
-    25. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    26. `voice_system_prompt`：默认系统提示词。
-    27. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    14. `voice_reply_mode`：语音回复模式，默认保留 Agent + 独立 TTS。
+    15. `voice_omni_realtime_model_name`：Omni Realtime 直出语音模型名称。
+    16. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
+    17. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
+    18. `tts_model_name`：专用流式 TTS 模型名称。
+    19. `tts_voice`：专用流式 TTS 音色。
+    20. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
+    21. `tts_sample_rate_hz`：TTS 原始输出采样率。
+    22. `voice_model_timeout_ms`：模型请求超时时间。
+    23. `voice_runs_root`：语音运行时资产落盘目录。
+    24. `voice_asr_model_name`：批量语音转写模型名称。
+    25. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
+    26. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
+    27. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
+    28. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
+    29. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    30. `voice_system_prompt`：默认系统提示词。
+    31. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    32. `agent_memory_enabled`：是否启用 Agent 长期记忆。
+    33. `agent_memory_store_path`：长期记忆本地持久化文件路径。
+    34. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
     """
 
     host: str = "0.0.0.0"
@@ -62,6 +69,10 @@ class ServerSettings:
     agent_model_name: str = "qwen3.5-omni-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Tina"
+    voice_reply_mode: str = "agent_tts"
+    voice_omni_realtime_model_name: str = "qwen3.5-omni-plus-realtime"
+    voice_omni_realtime_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    voice_omni_photo_wait_ms: int = 300
     tts_model_name: str = "cosyvoice-v3-flash"
     tts_voice: str = "longanhuan"
     tts_websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
@@ -76,6 +87,9 @@ class ServerSettings:
     voice_session_mode: str = "full_duplex_realtime"
     voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
     max_segment_audio_bytes: int = 524288
+    agent_memory_enabled: bool = True
+    agent_memory_store_path: str = "runs/memory/agent_memories.json"
+    agent_memory_max_prompt_items: int = 6
 
     @staticmethod
     def build_default_log_file() -> str:
@@ -141,6 +155,19 @@ class ServerSettings:
             agent_model_name=os.getenv("AGENT_MODEL_NAME", defaults.agent_model_name),
             voice_model_name=os.getenv("VOICE_MODEL_NAME", defaults.voice_model_name),
             voice_model_voice=os.getenv("VOICE_MODEL_VOICE", defaults.voice_model_voice),
+            voice_reply_mode=os.getenv("VOICE_REPLY_MODE", defaults.voice_reply_mode),
+            voice_omni_realtime_model_name=os.getenv(
+                "VOICE_OMNI_REALTIME_MODEL_NAME",
+                defaults.voice_omni_realtime_model_name,
+            ),
+            voice_omni_realtime_url=os.getenv(
+                "VOICE_OMNI_REALTIME_URL",
+                defaults.voice_omni_realtime_url,
+            ),
+            voice_omni_photo_wait_ms=cls._parse_int_env(
+                "VOICE_OMNI_PHOTO_WAIT_MS",
+                defaults.voice_omni_photo_wait_ms,
+            ),
             tts_model_name=os.getenv("TTS_MODEL_NAME", defaults.tts_model_name),
             tts_voice=os.getenv("TTS_VOICE", defaults.tts_voice),
             tts_websocket_api_url=os.getenv("TTS_WEBSOCKET_API_URL", defaults.tts_websocket_api_url),
@@ -170,6 +197,15 @@ class ServerSettings:
                 "MAX_SEGMENT_AUDIO_BYTES",
                 defaults.max_segment_audio_bytes,
             ),
+            agent_memory_enabled=cls._parse_bool_env(
+                "AGENT_MEMORY_ENABLED",
+                defaults.agent_memory_enabled,
+            ),
+            agent_memory_store_path=os.getenv("AGENT_MEMORY_STORE_PATH", defaults.agent_memory_store_path),
+            agent_memory_max_prompt_items=cls._parse_int_env(
+                "AGENT_MEMORY_MAX_PROMPT_ITEMS",
+                defaults.agent_memory_max_prompt_items,
+            ),
         )
         settings.validate()
         return settings
@@ -198,6 +234,35 @@ class ServerSettings:
                 f"{name} 必须是整数",
                 details={"value": raw},
             ) from exc
+
+    @staticmethod
+    def _parse_bool_env(name: str, default: bool) -> bool:
+        """读取布尔环境变量。
+
+        参数：
+        1. `name`：环境变量名。
+        2. `default`：默认值。
+
+        返回值：
+        1. 解析后的布尔值。
+
+        异常情况：
+        1. 值不在常见真假集合内时抛出 `AppError(INVALID_CONFIG)`。
+        """
+
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise build_error(
+            ErrorCode.INVALID_CONFIG,
+            f"{name} 必须是布尔值",
+            details={"value": raw},
+        )
 
     def validate(self) -> None:
         """校验配置合法性。
@@ -286,6 +351,29 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_MODEL_VOICE 不能为空",
             )
+        valid_voice_reply_modes = {"agent_tts", "omni_realtime"}
+        if self.voice_reply_mode not in valid_voice_reply_modes:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_REPLY_MODE 非法",
+                details={"voice_reply_mode": self.voice_reply_mode, "valid_modes": sorted(valid_voice_reply_modes)},
+            )
+        if not self.voice_omni_realtime_model_name.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_OMNI_REALTIME_MODEL_NAME 不能为空",
+            )
+        if not self.voice_omni_realtime_url.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_OMNI_REALTIME_URL 不能为空",
+            )
+        if self.voice_omni_photo_wait_ms < 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_OMNI_PHOTO_WAIT_MS 不能小于 0",
+                details={"voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms},
+            )
         if not self.tts_model_name.strip():
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
@@ -361,6 +449,17 @@ class ServerSettings:
                 "MAX_SEGMENT_AUDIO_BYTES 必须大于 0",
                 details={"max_segment_audio_bytes": self.max_segment_audio_bytes},
             )
+        if self.agent_memory_enabled and not self.agent_memory_store_path.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "AGENT_MEMORY_STORE_PATH 不能为空",
+            )
+        if self.agent_memory_max_prompt_items < 0:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "AGENT_MEMORY_MAX_PROMPT_ITEMS 不能小于 0",
+                details={"agent_memory_max_prompt_items": self.agent_memory_max_prompt_items},
+            )
 
     def summary(self) -> dict[str, str | int]:
         """生成配置摘要。
@@ -383,6 +482,10 @@ class ServerSettings:
             "agent_model_name": self.agent_model_name,
             "voice_model_name": self.voice_model_name,
             "voice_model_voice": self.voice_model_voice,
+            "voice_reply_mode": self.voice_reply_mode,
+            "voice_omni_realtime_model_name": self.voice_omni_realtime_model_name,
+            "voice_omni_realtime_url": self.voice_omni_realtime_url,
+            "voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms,
             "tts_model_name": self.tts_model_name,
             "tts_voice": self.tts_voice,
             "tts_websocket_api_url": self.tts_websocket_api_url,
@@ -396,6 +499,9 @@ class ServerSettings:
             "voice_asr_realtime_max_sentence_silence_ms": self.voice_asr_realtime_max_sentence_silence_ms,
             "voice_session_mode": self.voice_session_mode,
             "max_segment_audio_bytes": self.max_segment_audio_bytes,
+            "agent_memory_enabled": int(self.agent_memory_enabled),
+            "agent_memory_store_path": self.agent_memory_store_path,
+            "agent_memory_max_prompt_items": self.agent_memory_max_prompt_items,
         }
 
     def parse_device_token_map(self) -> dict[str, str]:

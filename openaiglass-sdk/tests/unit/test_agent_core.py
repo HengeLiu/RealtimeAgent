@@ -16,6 +16,7 @@ from agent_core import AgentFacade, AgentTurn, AgentTurnResult, DerivedArtifact,
 from agent_core.camera import CameraCaptureResult
 from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace, MessageContext
 from agent_core.context.assembler import ContextAssembler
+from agent_core.memory import AgentMemoryRuntime, InMemoryAgentMemoryStore
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
@@ -52,11 +53,18 @@ class FakeCameraGateway:
         )
 
 
-def build_tooling(device_state_reader=lambda: {}, camera_gateway=None, task_gateway=None, skill_runtime=None):
+def build_tooling(
+    device_state_reader=lambda: {},
+    camera_gateway=None,
+    task_gateway=None,
+    skill_runtime=None,
+    memory_runtime=None,
+):
     registry = ToolRegistry(
         device_state_reader=device_state_reader,
         camera_gateway=camera_gateway,
         skill_runtime=skill_runtime,
+        memory_runtime=memory_runtime,
         task_gateway=task_gateway
         or HybridTaskGateway(
             base_gateway=InMemoryTaskGateway(),
@@ -329,6 +337,104 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(result.data["state"], "running")
         self.assertEqual(len(result.task_refs), 1)
         self.assertEqual(result.task_refs[0].task_type, "phone_video_link_task")
+
+    def test_manage_memory_tool_adds_searches_and_deletes_device_memory(self) -> None:
+        """测试目标：验证 SDK 内置记忆 Tool 支持新增、查询和删除。
+
+        测试方法：
+        1. 构造内存版 `AgentMemoryRuntime` 并注入 `ToolRegistry`。
+        2. 通过 `ToolGateway` 依次调用 `manage_memory` 的 add、search、delete、list。
+        3. 检查同一设备作用域下记忆写入和软删除结果。
+
+        预期结果：
+        1. 新增记忆返回 `memory_id`。
+        2. 查询能命中刚写入的偏好。
+        3. 删除后列表不再返回该记忆。
+        """
+
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        registry, gateway = build_tooling(memory_runtime=memory_runtime)
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_memory_001",
+            turn_id="turn_memory_001",
+        )
+
+        add_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={
+                "action": "add",
+                "text": "用户喜欢导航提示尽量简短。",
+                "category": "preference",
+                "source": "user_requested",
+            },
+        )
+        memory_id = add_result.data["memory"]["memory_id"]
+
+        search_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={"action": "search", "query": "导航 简短"},
+        )
+        self.assertEqual(search_result.data["memories"][0]["memory_id"], memory_id)
+
+        delete_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={"action": "delete", "memory_id": memory_id},
+        )
+        self.assertEqual(delete_result.data["memory"]["deleted_at_ms"], delete_result.data["memory"]["updated_at_ms"])
+
+        list_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={"action": "list"},
+        )
+        self.assertEqual(list_result.data["memories"], [])
+
+    def test_agent_runner_injects_relevant_memory_into_model_request(self) -> None:
+        """测试目标：验证 Agent 运行时会把相关长期记忆注入模型请求。
+
+        测试方法：
+        1. 预先写入一条设备级长期记忆。
+        2. 构造 `OpenAIAgentLoopRunner` 的单轮运行态。
+        3. 检查 `model_request` 中的系统提示词。
+
+        预期结果：
+        1. 系统提示词包含记忆正文。
+        2. 记忆片段也会出现在可落盘的 `model_request.memory_prompt_fragment` 中。
+        """
+
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        memory_runtime.add_memory(
+            scope_type="device",
+            scope_id="glass-001",
+            text="用户喜欢导航提示尽量简短。",
+            category="preference",
+            source="user_requested",
+        )
+        registry, gateway = build_tooling(memory_runtime=memory_runtime)
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_memory_002", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_memory_002",
+            session_id="sess_memory_002",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="开始导航时怎么提醒我？",
+        )
+
+        runtime = runner._turn_runtime_factory.build(session=session, turn=turn)
+
+        self.assertIn("用户喜欢导航提示尽量简短", runtime.model_request["instructions"])
+        self.assertIn("用户喜欢导航提示尽量简短", runtime.model_request["memory_prompt_fragment"])
 
     def test_start_phone_video_link_tool_prefers_device_group_snapshot(self) -> None:
         """测试目标：验证视频直连 Tool 优先使用 SDK 设备组快照。

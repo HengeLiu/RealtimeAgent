@@ -13,6 +13,7 @@ from agent_core.context.models import (
     TaskRef,
 )
 from agent_core.mcp import McpGateway, McpRegistry
+from agent_core.memory import AgentMemoryRecord, AgentMemoryRuntime
 from agent_core.tools import ToolGateway, ToolRegistry
 
 __all__ = [
@@ -30,4 +31,6 @@ __all__ = [
     "ToolGateway",
     "McpRegistry",
     "McpGateway",
+    "AgentMemoryRecord",
+    "AgentMemoryRuntime",
 ]
