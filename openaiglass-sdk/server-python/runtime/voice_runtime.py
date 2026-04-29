@@ -1446,7 +1446,11 @@ class DashscopeOmniRealtimeReplyClient:
                 output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
                 enable_input_audio_transcription=True,
                 input_audio_transcription_model=settings.voice_asr_model_name,
-                enable_turn_detection=False,
+                enable_turn_detection=settings.omni_turn_detection_enabled(),
+                turn_detection_type=settings.voice_realtime_turn_detection_type,
+                prefix_padding_ms=settings.voice_realtime_prefix_padding_ms,
+                turn_detection_threshold=settings.voice_realtime_semantic_vad_threshold,
+                turn_detection_silence_duration_ms=settings.voice_realtime_silence_duration_ms,
                 instructions=instructions,
             )
             log_debug(
@@ -1454,7 +1458,9 @@ class DashscopeOmniRealtimeReplyClient:
                 (
                     "Omni Realtime 预连接已建立 "
                     f"model={settings.voice_omni_realtime_model_name} "
-                    f"connect_ms={max(connected_at_ms - connect_started_at_ms, 0)}"
+                    f"connect_ms={max(connected_at_ms - connect_started_at_ms, 0)} "
+                    f"turn_detection_enabled={settings.omni_turn_detection_enabled()} "
+                    f"turn_detection_type={settings.voice_realtime_turn_detection_type}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
@@ -2114,6 +2120,7 @@ class VoiceRuntime:
         self._realtime_voice_runtime = RealtimeVoiceRuntime(
             playback_arbiter=self._playback_arbiter,
             send_control_message=self._send_control_message,
+            settings=self._settings,
             model_adapter=realtime_model_adapter,
         )
 

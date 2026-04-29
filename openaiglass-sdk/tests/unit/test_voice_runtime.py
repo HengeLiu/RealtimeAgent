@@ -413,6 +413,69 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(result.transcript, "看一下")
         self.assertEqual(result.response_id, "resp-1")
 
+    def test_dashscope_omni_realtime_reply_client_enables_semantic_vad_when_configured(self) -> None:
+        """测试目标：验证实验性连续对话模式会把 semantic VAD 参数写入 Omni session。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话工厂。
+        2. 使用 `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 构造设置。
+        3. 调用 `start_streaming_reply(...)` 并检查 `update_session(...)` 参数。
+
+        预期结果：
+        1. `enable_turn_detection=True`。
+        2. turn detection 类型、阈值、静音时长和前置音频保留时长都来自配置。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.updated: dict[str, object] = {}
+                self.closed = False
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **kwargs) -> None:
+                self.updated = kwargs
+
+            def close(self) -> None:
+                self.closed = True
+
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        session = client.start_streaming_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+                voice_realtime_turn_detection_type="semantic_vad",
+                voice_realtime_semantic_vad_threshold=0.72,
+                voice_realtime_silence_duration_ms=900,
+                voice_realtime_prefix_padding_ms=320,
+            ),
+            instructions="连续对话",
+            on_chunk=lambda _chunk: None,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+
+        assert _Factory.instance is not None
+        self.assertTrue(_Factory.instance.updated["enable_turn_detection"])
+        self.assertEqual(_Factory.instance.updated["turn_detection_type"], "semantic_vad")
+        self.assertEqual(_Factory.instance.updated["turn_detection_threshold"], 0.72)
+        self.assertEqual(_Factory.instance.updated["turn_detection_silence_duration_ms"], 900)
+        self.assertEqual(_Factory.instance.updated["prefix_padding_ms"], 320)
+        session.close()
+        self.assertTrue(_Factory.instance.closed)
+
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
         """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。
 

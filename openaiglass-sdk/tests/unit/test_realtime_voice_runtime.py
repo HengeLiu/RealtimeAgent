@@ -63,6 +63,40 @@ class RealtimeVoiceRuntimeTestCase(unittest.TestCase):
     3. 覆盖回声候选不会误触发用户打断。
     """
 
+    def test_realtime_open_payload_exposes_semantic_vad_policy(self) -> None:
+        """测试目标：验证服务端会把 semantic VAD 连续对话策略下发给 glass-esp32。
+
+        测试方法：
+        1. 用 `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 创建 `VoiceRuntime`。
+        2. 调用 `build_realtime_open_payload()`。
+        3. 检查输入策略中的 turn detection 配置。
+
+        预期结果：
+        1. payload 标记当前会话为 `realtime_semantic_vad`。
+        2. turn detection owner 为 `omni_realtime`。
+        3. semantic VAD 阈值、静音时长和前置音频时长来自配置。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+                voice_realtime_semantic_vad_threshold=0.7,
+                voice_realtime_silence_duration_ms=900,
+                voice_realtime_prefix_padding_ms=320,
+            ),
+            send_control_message=lambda *_args: None,
+        )
+
+        payload = runtime.build_realtime_open_payload()
+
+        self.assertEqual(payload["input"]["conversation_mode"], "realtime_semantic_vad")
+        self.assertEqual(payload["input"]["turn_detection"]["owner"], "omni_realtime")
+        self.assertEqual(payload["input"]["turn_detection"]["type"], "semantic_vad")
+        self.assertEqual(payload["input"]["turn_detection"]["threshold"], 0.7)
+        self.assertEqual(payload["input"]["turn_detection"]["silence_duration_ms"], 900)
+        self.assertEqual(payload["input"]["turn_detection"]["prefix_padding_ms"], 320)
+
     def test_realtime_input_commit_emits_loopback_output_and_snapshot(self) -> None:
         """测试目标：验证全双工输入提交后能产生实时输出和快照。
 

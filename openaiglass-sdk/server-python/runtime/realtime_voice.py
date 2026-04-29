@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
+from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug
 from protocol.media import MediaFrame
@@ -185,9 +186,11 @@ class RealtimeVoiceRuntime:
         *,
         playback_arbiter: PlaybackArbiter,
         send_control_message: Callable[[str, str, str, str, dict[str, Any]], None],
+        settings: ServerSettings | None = None,
         model_adapter: RealtimeModelAdapter | None = None,
         max_recent_events: int = 64,
     ) -> None:
+        self._settings = settings or ServerSettings()
         self._playback_arbiter = playback_arbiter
         self._send_control_message = send_control_message
         self._model_adapter = model_adapter or LoopbackRealtimeModelAdapter()
@@ -207,6 +210,14 @@ class RealtimeVoiceRuntime:
                 "frame_ms": 20,
                 "aec_required": True,
                 "vad_required": True,
+                "conversation_mode": self._settings.voice_conversation_mode,
+                "turn_detection": {
+                    "type": self._settings.voice_realtime_turn_detection_type,
+                    "threshold": self._settings.voice_realtime_semantic_vad_threshold,
+                    "prefix_padding_ms": self._settings.voice_realtime_prefix_padding_ms,
+                    "silence_duration_ms": self._settings.voice_realtime_silence_duration_ms,
+                    "owner": "omni_realtime" if self._settings.omni_turn_detection_enabled() else "endpoint",
+                },
             },
             "output": {
                 "sample_rate": DEFAULT_REALTIME_SAMPLE_RATE_HZ,

@@ -95,6 +95,36 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "half_duplex")
 
+    def test_realtime_semantic_vad_env_success(self) -> None:
+        """测试目标：验证实验性 Omni semantic VAD 连续对话配置可从环境变量读取。
+
+        测试方法：
+        1. 注入 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。
+        2. 注入 semantic VAD 阈值和静音参数。
+        3. 调用 `ServerSettings.from_env()`。
+
+        预期结果：
+        1. 配置校验通过。
+        2. `omni_turn_detection_enabled()` 返回 True。
+        """
+
+        os.environ["VOICE_REPLY_MODE"] = "omni_realtime"
+        os.environ["VOICE_INPUT_MODE"] = "auto"
+        os.environ["VOICE_CONVERSATION_MODE"] = "realtime_semantic_vad"
+        os.environ["VOICE_REALTIME_TURN_DETECTION"] = "semantic_vad"
+        os.environ["VOICE_REALTIME_SEMANTIC_VAD_THRESHOLD"] = "0.75"
+        os.environ["VOICE_REALTIME_SILENCE_DURATION_MS"] = "900"
+        os.environ["VOICE_REALTIME_PREFIX_PADDING_MS"] = "320"
+
+        settings = ServerSettings.from_env()
+
+        self.assertEqual(settings.voice_conversation_mode, "realtime_semantic_vad")
+        self.assertEqual(settings.voice_realtime_turn_detection_type, "semantic_vad")
+        self.assertEqual(settings.voice_realtime_semantic_vad_threshold, 0.75)
+        self.assertEqual(settings.voice_realtime_silence_duration_ms, 900)
+        self.assertEqual(settings.voice_realtime_prefix_padding_ms, 320)
+        self.assertTrue(settings.omni_turn_detection_enabled())
+
     def test_from_env_without_overrides_uses_defaults(self) -> None:
         """测试目标：验证无环境变量覆盖时仍能回退到默认值。"""
 
@@ -110,6 +140,8 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_input_mode, "auto")
         self.assertEqual(settings.voice_reply_mode, "omni_realtime")
+        self.assertEqual(settings.voice_conversation_mode, "segment_turn")
+        self.assertFalse(settings.omni_turn_detection_enabled())
         self.assertEqual(settings.effective_voice_input_mode(), "raw_audio")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
 
@@ -145,6 +177,14 @@ class ServerSettingsTestCase(unittest.TestCase):
 
         with self.assertRaises(AppError) as ctx:
             ServerSettings(voice_reply_mode="agent_tts", voice_input_mode="raw_audio").validate()
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
+
+    def test_realtime_semantic_vad_requires_omni_reply_mode(self) -> None:
+        """测试目标：验证 semantic VAD 连续对话只能用于 Omni Realtime 分支。"""
+
+        with self.assertRaises(AppError) as ctx:
+            ServerSettings(voice_reply_mode="agent_tts", voice_conversation_mode="realtime_semantic_vad").validate()
 
         self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
 
