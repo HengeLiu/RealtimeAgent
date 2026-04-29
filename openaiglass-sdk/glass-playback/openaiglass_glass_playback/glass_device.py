@@ -9,6 +9,7 @@ import threading
 import time
 import wave
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import urlopen
@@ -829,7 +830,8 @@ class PlaybackGlassDevice:
         suffix = ""
         if fields:
             suffix = " " + " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
-        print(f"[glass-playback] {message}{suffix}", flush=True)
+        timestamp = datetime.now(tz=timezone.utc).isoformat()
+        print(f"{timestamp}-INFO-glass.playback---{message}{suffix}", flush=True)
 
     @staticmethod
     def _append_jsonl(path: Path, data: dict[str, object]) -> None:

@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v36`。本版本在 `sdk-v35` 基础上把 `glass-playback` 纳入 Python SDK 安装包：功能开发者通过 `openaiglass.glass.start --runtime playback --config <playback.json>` 即可启动设备级虚拟眼镜，不需要下载 SDK 源码或手动指定 `--sdk-root`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v37`。本版本在 `sdk-v36` 基础上统一了 `glass-playback` 命令行状态日志格式：每行状态日志都带 UTC 时间戳，并去掉固定 `[glass-playback]` 前缀，方便和服务端日志按时间对齐。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -16,7 +16,7 @@
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`；如需排障可临时设为 `batch`。 |
-| 设备级 glass-playback | `sdk-v36` 已随 Python SDK 包安装 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
+| 设备级 glass-playback | `sdk-v37` 已随 Python SDK 包安装，并带统一时间戳状态日志 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -836,7 +836,7 @@ openaiglass-for-blind/capabilities/<capability_name>/
 
 业务能力目录不再需要 `scenario.py`。`glass-playback` 配置统一放在 `host/glass-playback/config`，音频、视频、图像和传感器资产放在 `testdata` 对应目录下；日常调试时由独立的 `glass-playback` 虚拟眼镜进程消费。
 
-`sdk-v22` 起，`glass-playback` 会在命令行打印启动状态、收到的控制消息、绑定就绪状态和收到第一段下行音频的时间。`sdk-v26` 起，`glass-playback` 还会打印等待绑定、触发音频开始发送、发送完成和运行失败原因。设备侧仍不打印自身发送的控制消息正文；这些状态日志用于判断命令卡在绑定、音频上传还是执行器播放阶段。
+`sdk-v22` 起，`glass-playback` 会在命令行打印启动状态、收到的控制消息、绑定就绪状态和收到第一段下行音频的时间。`sdk-v26` 起，`glass-playback` 还会打印等待绑定、触发音频开始发送、发送完成和运行失败原因。`sdk-v37` 起，这些命令行状态日志统一为 `时间-级别-glass.playback---消息 key=value` 格式，不再带 `[glass-playback]` 方括号前缀。设备侧仍不打印自身发送的控制消息正文；这些状态日志用于判断命令卡在绑定、音频上传还是执行器播放阶段。
 
 可以参考现有找物体能力：
 
