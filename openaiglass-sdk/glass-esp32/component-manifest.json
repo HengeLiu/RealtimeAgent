@@ -30,7 +30,8 @@
     "audio_upload",
     "camera_capture",
     "camera_stream_to_phone",
-    "notification_playback"
+    "notification_playback",
+    "aec_barge_in"
   ],
   "distribution_notes": [
     "sdk-v14 提供 ESP-IDF 源码工程清单和 package-check 校验，业务工程应通过配置和能力协议使用眼镜运行时。",

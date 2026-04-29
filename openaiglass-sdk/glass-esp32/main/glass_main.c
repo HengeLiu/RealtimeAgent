@@ -59,12 +59,27 @@
 #define CAM_PWDN_GPIO (-1)
 #define CAM_RESET_GPIO (-1)
 #define SR_SAMPLE_RATE_HZ 16000
+#ifndef CONFIG_GLASS_ENABLE_AEC
+#define CONFIG_GLASS_ENABLE_AEC 0
+#endif
+#ifndef CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS
+#define CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS 1200
+#endif
+#if CONFIG_GLASS_ENABLE_AEC
+#define AFE_INPUT_FORMAT "MR"
+#else
 #define AFE_INPUT_FORMAT "M"
+#endif
 #define LOCAL_ENDPOINT_TAIL_MS 900
 #define LOCAL_ENDPOINT_MIN_MS 1200
 #define LOCAL_ENDPOINT_MAX_MS 8000
 #define AUDIO_FRAME_SAMPLES 320
 #define AUDIO_FRAME_BYTES (AUDIO_FRAME_SAMPLES * sizeof(int16_t))
+#if CONFIG_GLASS_ENABLE_AEC
+#define AEC_REF_RING_SAMPLES ((SR_SAMPLE_RATE_HZ * CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS) / 1000)
+#else
+#define AEC_REF_RING_SAMPLES AUDIO_FRAME_SAMPLES
+#endif
 #define PRE_ROLL_FRAME_COUNT 8
 #define WAKE_IDLE_SUMMARY_MS 3000
 #define SERVER_REPLY_TIMEOUT_MS 45000
@@ -95,10 +110,15 @@ typedef struct {
     esp_afe_sr_iface_t *afe_handle;
     esp_afe_sr_data_t *afe_data;
     int16_t *feed_buffer;
+    int16_t *mic_buffer;
+    int16_t *ref_buffer;
     size_t feed_buffer_size_bytes;
+    size_t mic_buffer_size_bytes;
+    size_t ref_buffer_size_bytes;
     int feed_chunksize;
     int feed_nch;
     int feed_chunk_ms;
+    bool aec_enabled;
     bool initialized;
     char wake_model_name[64];
 } sr_runtime_ctx_t;
@@ -143,6 +163,7 @@ static bool s_playback_task_running = false;
 static volatile bool s_playback_interrupt_requested = false;
 static bool s_realtime_semantic_dialog_enabled = false;
 static bool s_continuous_dialog_active = false;
+static bool s_aec_runtime_enabled = false;
 static bool s_speaker_channel_enabled = false;
 static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
@@ -165,6 +186,12 @@ static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
 static TaskHandle_t s_wifi_retry_task_handle = NULL;
 static sr_runtime_ctx_t s_sr_ctx;
+static portMUX_TYPE s_aec_ref_lock = portMUX_INITIALIZER_UNLOCKED;
+static int16_t *s_aec_ref_ring = NULL;
+static size_t s_aec_ref_capacity = 0;
+static size_t s_aec_ref_read_index = 0;
+static size_t s_aec_ref_write_index = 0;
+static size_t s_aec_ref_available = 0;
 
 static const wifi_profile_t s_wifi_profiles[WIFI_PROFILE_COUNT] = {
     {
@@ -497,11 +524,11 @@ static void send_realtime_session_opened_message(const char *session_id)
     }
 
     cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
-    cJSON_AddStringToObject(payload, "accepted_mode", "half_duplex");
-    cJSON_AddBoolToObject(capabilities, "aec", false);
+    cJSON_AddStringToObject(payload, "accepted_mode", s_aec_runtime_enabled ? "full_duplex_realtime" : "half_duplex");
+    cJSON_AddBoolToObject(capabilities, "aec", s_aec_runtime_enabled);
     cJSON_AddBoolToObject(capabilities, "vad", true);
-    cJSON_AddBoolToObject(capabilities, "barge_in", false);
-    cJSON_AddBoolToObject(capabilities, "output_cancel", false);
+    cJSON_AddBoolToObject(capabilities, "barge_in", s_aec_runtime_enabled);
+    cJSON_AddBoolToObject(capabilities, "output_cancel", s_aec_runtime_enabled);
     cJSON_AddBoolToObject(capabilities, "continuous_dialog", s_realtime_semantic_dialog_enabled);
     cJSON_AddStringToObject(
         capabilities,
@@ -513,6 +540,32 @@ static void send_realtime_session_opened_message(const char *session_id)
     send_control_message_json(
         build_control_message_json("notify", "voice.realtime.session.opened", session_id, payload),
         "voice.realtime.session.opened"
+    );
+}
+
+static void send_user_voice_interrupt_message(const char *stream_id, const char *reason)
+{
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "构造 user.voice.interrupt 失败");
+        return;
+    }
+    if (s_current_session_id[0] == '\0') {
+        ESP_LOGW(TAG, "session_id 为空，跳过发送 user.voice.interrupt");
+        cJSON_Delete(payload);
+        return;
+    }
+
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    if (stream_id != NULL && stream_id[0] != '\0') {
+        cJSON_AddStringToObject(payload, "stream_id", stream_id);
+    }
+    cJSON_AddStringToObject(payload, "reason", reason != NULL ? reason : "voice_barge_in");
+    cJSON_AddBoolToObject(payload, "clear_queue", true);
+
+    send_control_message_json(
+        build_control_message_json("notify", "user.voice.interrupt", s_current_session_id, payload),
+        "user.voice.interrupt"
     );
 }
 
@@ -1316,6 +1369,122 @@ static void mono16_to_stereo32_msb(const int16_t *input, size_t sample_count, in
     }
 }
 
+// 初始化 AEC 播放参考环形缓冲。失败时返回 false，让固件自动回退半双工能力上报。
+static bool init_aec_reference_ring(void)
+{
+    if (!CONFIG_GLASS_ENABLE_AEC) {
+        return false;
+    }
+    if (s_aec_ref_ring != NULL) {
+        return true;
+    }
+    s_aec_ref_capacity = AEC_REF_RING_SAMPLES > AUDIO_FRAME_SAMPLES
+        ? AEC_REF_RING_SAMPLES
+        : AUDIO_FRAME_SAMPLES;
+    s_aec_ref_ring = heap_caps_calloc(s_aec_ref_capacity, sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s_aec_ref_ring == NULL) {
+        s_aec_ref_ring = heap_caps_calloc(s_aec_ref_capacity, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (s_aec_ref_ring == NULL) {
+        ESP_LOGW(TAG, "AEC 播放参考缓冲分配失败，将回退为半双工");
+        s_aec_ref_capacity = 0;
+        return false;
+    }
+    s_aec_ref_read_index = 0;
+    s_aec_ref_write_index = 0;
+    s_aec_ref_available = 0;
+    ESP_LOGI(
+        TAG,
+        "AEC 播放参考缓冲已创建: samples=%u duration_ms=%d",
+        (unsigned)s_aec_ref_capacity,
+        CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS
+    );
+    return true;
+}
+
+// 清空播放参考缓冲。每次新的下行播放开始前调用，避免旧回复参考音频影响本轮 AEC。
+static void reset_aec_reference_ring(void)
+{
+    if (s_aec_ref_ring == NULL || s_aec_ref_capacity == 0) {
+        return;
+    }
+    portENTER_CRITICAL(&s_aec_ref_lock);
+    memset(s_aec_ref_ring, 0, s_aec_ref_capacity * sizeof(int16_t));
+    s_aec_ref_read_index = 0;
+    s_aec_ref_write_index = 0;
+    s_aec_ref_available = 0;
+    portEXIT_CRITICAL(&s_aec_ref_lock);
+}
+
+// 写入扬声器即将播放的 mono PCM，作为 AFE AEC 的 R 参考通道数据源。
+static void push_aec_reference_samples(const int16_t *samples, size_t sample_count)
+{
+    if (!s_aec_runtime_enabled || s_aec_ref_ring == NULL || s_aec_ref_capacity == 0 || samples == NULL) {
+        return;
+    }
+    portENTER_CRITICAL(&s_aec_ref_lock);
+    for (size_t index = 0; index < sample_count; index += 1) {
+        s_aec_ref_ring[s_aec_ref_write_index] = samples[index];
+        s_aec_ref_write_index = (s_aec_ref_write_index + 1U) % s_aec_ref_capacity;
+        if (s_aec_ref_available < s_aec_ref_capacity) {
+            s_aec_ref_available += 1U;
+        } else {
+            s_aec_ref_read_index = (s_aec_ref_read_index + 1U) % s_aec_ref_capacity;
+        }
+    }
+    portEXIT_CRITICAL(&s_aec_ref_lock);
+}
+
+// 按 AFE feed 粒度取出播放参考样本；参考不足时补零，避免回声参考断裂导致野值。
+static void pop_aec_reference_samples(int16_t *samples, size_t sample_count)
+{
+    size_t copied = 0;
+    if (samples == NULL || sample_count == 0) {
+        return;
+    }
+    if (!s_aec_runtime_enabled || s_aec_ref_ring == NULL || s_aec_ref_capacity == 0) {
+        memset(samples, 0, sample_count * sizeof(int16_t));
+        return;
+    }
+    portENTER_CRITICAL(&s_aec_ref_lock);
+    while (copied < sample_count && s_aec_ref_available > 0) {
+        samples[copied] = s_aec_ref_ring[s_aec_ref_read_index];
+        s_aec_ref_read_index = (s_aec_ref_read_index + 1U) % s_aec_ref_capacity;
+        s_aec_ref_available -= 1U;
+        copied += 1U;
+    }
+    portEXIT_CRITICAL(&s_aec_ref_lock);
+    if (copied < sample_count) {
+        memset(samples + copied, 0, (sample_count - copied) * sizeof(int16_t));
+    }
+}
+
+// 构造 AFE feed buffer。单通道模式直接送麦克风；AEC 模式按 ESP-SR 的 MR 格式交错写入麦克风和播放参考。
+static void build_afe_feed_buffer(sr_runtime_ctx_t *ctx, size_t mic_bytes_read)
+{
+    size_t sample_count = ctx->feed_chunksize;
+    size_t mic_samples_read = mic_bytes_read / sizeof(int16_t);
+    if (mic_samples_read < sample_count) {
+        memset(ctx->mic_buffer + mic_samples_read, 0, (sample_count - mic_samples_read) * sizeof(int16_t));
+    }
+    if (ctx->feed_nch <= 1) {
+        memcpy(ctx->feed_buffer, ctx->mic_buffer, sample_count * sizeof(int16_t));
+        return;
+    }
+    if (ctx->aec_enabled && ctx->ref_buffer != NULL) {
+        pop_aec_reference_samples(ctx->ref_buffer, sample_count);
+    } else if (ctx->ref_buffer != NULL) {
+        memset(ctx->ref_buffer, 0, sample_count * sizeof(int16_t));
+    }
+    for (size_t index = 0; index < sample_count; index += 1) {
+        ctx->feed_buffer[index * (size_t)ctx->feed_nch] = ctx->mic_buffer[index];
+        ctx->feed_buffer[index * (size_t)ctx->feed_nch + 1U] = ctx->ref_buffer != NULL ? ctx->ref_buffer[index] : 0;
+        for (int channel = 2; channel < ctx->feed_nch; channel += 1) {
+            ctx->feed_buffer[index * (size_t)ctx->feed_nch + (size_t)channel] = 0;
+        }
+    }
+}
+
 static void reset_segment_state(segment_state_t *state)
 {
     state->segment_active = false;
@@ -1961,6 +2130,7 @@ static void playback_stream_task(void *arg)
             continue;
         }
 
+        push_aec_reference_samples((const int16_t *)pcm_buffer, pcm_filled / 2U);
         mono16_to_stereo32_msb((const int16_t *)pcm_buffer, pcm_filled / 2U, stereo_buffer, 0.8f);
         size_t bytes_to_write = (pcm_filled / 2U) * 2U * sizeof(int32_t);
         size_t written_total = 0;
@@ -2097,7 +2267,13 @@ static void start_playback_stream(const char *stream_id)
     s_next_playback_stream_id[0] = '\0';
     clear_reply_wait_state();
     s_playback_active = true;
-    s_wake_listening_enabled = false;
+    if (s_aec_runtime_enabled && s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
+        reset_aec_reference_ring();
+        s_wake_listening_enabled = s_sr_ctx.initialized;
+        ESP_LOGI(TAG, "AEC 已启用，播放期间保持连续对话监听: stream_id=%s", stream_id);
+    } else {
+        s_wake_listening_enabled = false;
+    }
     s_playback_task_running = true;
     s_playback_interrupt_requested = false;
     s_playback_request_started_ms = now_ms();
@@ -2172,16 +2348,19 @@ static void sr_pipeline_task(void *arg)
     for (;;) {
         bool current_frame_flushed_from_pre_roll = false;
         bool has_session_id = s_current_session_id[0] != '\0';
+        bool playback_barge_in_enabled = s_aec_runtime_enabled &&
+                                         s_realtime_semantic_dialog_enabled &&
+                                         s_continuous_dialog_active;
         bool wake_active = s_registered &&
                            s_voice_session_opened &&
                            s_wake_listening_enabled &&
                            s_audio_ws_ready &&
-                           !s_playback_active &&
+                           (!s_playback_active || playback_barge_in_enabled) &&
                            has_session_id;
         uint64_t current_ms = now_ms();
         if (s_registered &&
             s_voice_session_opened &&
-            !s_playback_active &&
+            (!s_playback_active || playback_barge_in_enabled) &&
             !s_audio_ws_ready &&
             (current_ms - last_audio_reconnect_ms) >= AUDIO_WS_RECONNECT_INTERVAL_MS) {
             last_audio_reconnect_ms = current_ms;
@@ -2242,8 +2421,8 @@ static void sr_pipeline_task(void *arg)
         size_t bytes_read = 0;
         esp_err_t ret = i2s_channel_read(
             s_mic_rx_chan,
-            ctx->feed_buffer,
-            ctx->feed_buffer_size_bytes,
+            ctx->mic_buffer,
+            ctx->mic_buffer_size_bytes,
             &bytes_read,
             pdMS_TO_TICKS(1000)
         );
@@ -2251,9 +2430,7 @@ static void sr_pipeline_task(void *arg)
             ESP_LOGW(TAG, "mic read failed: %s", esp_err_to_name(ret));
             continue;
         }
-        if (bytes_read < ctx->feed_buffer_size_bytes) {
-            memset((uint8_t *)ctx->feed_buffer + bytes_read, 0, ctx->feed_buffer_size_bytes - bytes_read);
-        }
+        build_afe_feed_buffer(ctx, bytes_read);
 
         ctx->afe_handle->feed(ctx->afe_data, ctx->feed_buffer);
         afe_fetch_result_t *res = ctx->afe_handle->fetch(ctx->afe_data);
@@ -2308,6 +2485,14 @@ static void sr_pipeline_task(void *arg)
                                        res->vad_state == VAD_SPEECH;
 
         if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
+            bool is_playback_barge_in = s_playback_active && start_by_continuous_vad && s_aec_runtime_enabled;
+            if (is_playback_barge_in) {
+                char interrupted_stream_id[64];
+                strlcpy(interrupted_stream_id, s_current_playback_stream_id, sizeof(interrupted_stream_id));
+                ESP_LOGI(TAG, "AEC 检测到播放中用户插话，准备打断播放: stream_id=%s", interrupted_stream_id);
+                send_user_voice_interrupt_message(interrupted_stream_id, "voice_barge_in");
+                request_playback_interrupt(interrupted_stream_id);
+            }
             segment.segment_active = true;
             segment.got_speech = false;
             segment.tail_silence_ms = 0;
@@ -2430,7 +2615,12 @@ static void init_speech_runtime(void)
         return;
     }
 
-    afe_cfg = afe_config_init(AFE_INPUT_FORMAT, models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
+    afe_cfg = afe_config_init(
+        AFE_INPUT_FORMAT,
+        models,
+        AFE_TYPE_SR,
+        CONFIG_GLASS_ENABLE_AEC ? AFE_MODE_HIGH_PERF : AFE_MODE_LOW_COST
+    );
     if (!afe_cfg) {
         ESP_LOGE(TAG, "afe_config_init failed");
         return;
@@ -2438,7 +2628,7 @@ static void init_speech_runtime(void)
 
     afe_cfg->wakenet_init = true;
     afe_cfg->vad_init = true;
-    afe_cfg->aec_init = false;
+    afe_cfg->aec_init = CONFIG_GLASS_ENABLE_AEC && init_aec_reference_ring();
 
     wn_name = (char *)preferred_wakenet_model_name(models);
     if (!wn_name) {
@@ -2464,11 +2654,15 @@ static void init_speech_runtime(void)
 
     s_sr_ctx.feed_chunksize = s_sr_ctx.afe_handle->get_feed_chunksize(s_sr_ctx.afe_data);
     s_sr_ctx.feed_nch = s_sr_ctx.afe_handle->get_feed_channel_num(s_sr_ctx.afe_data);
+    s_sr_ctx.aec_enabled = afe_cfg->aec_init && s_sr_ctx.feed_nch >= 2;
+    s_aec_runtime_enabled = s_sr_ctx.aec_enabled;
     s_sr_ctx.feed_chunk_ms = (s_sr_ctx.feed_chunksize * 1000) / SR_SAMPLE_RATE_HZ;
     if (s_sr_ctx.feed_chunk_ms <= 0) {
         s_sr_ctx.feed_chunk_ms = 1;
     }
     s_sr_ctx.feed_buffer_size_bytes = s_sr_ctx.feed_chunksize * s_sr_ctx.feed_nch * sizeof(int16_t);
+    s_sr_ctx.mic_buffer_size_bytes = s_sr_ctx.feed_chunksize * sizeof(int16_t);
+    s_sr_ctx.ref_buffer_size_bytes = s_sr_ctx.feed_chunksize * sizeof(int16_t);
     s_sr_ctx.feed_buffer = heap_caps_calloc(
         1,
         s_sr_ctx.feed_buffer_size_bytes,
@@ -2485,6 +2679,38 @@ static void init_speech_runtime(void)
         ESP_LOGE(TAG, "feed buffer alloc failed");
         return;
     }
+    s_sr_ctx.mic_buffer = heap_caps_calloc(1, s_sr_ctx.mic_buffer_size_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_sr_ctx.mic_buffer) {
+        s_sr_ctx.mic_buffer = heap_caps_calloc(1, s_sr_ctx.mic_buffer_size_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!s_sr_ctx.mic_buffer) {
+        ESP_LOGE(TAG, "mic buffer alloc failed");
+        return;
+    }
+    if (s_sr_ctx.aec_enabled) {
+        s_sr_ctx.ref_buffer = heap_caps_calloc(1, s_sr_ctx.ref_buffer_size_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!s_sr_ctx.ref_buffer) {
+            s_sr_ctx.ref_buffer = heap_caps_calloc(
+                1,
+                s_sr_ctx.ref_buffer_size_bytes,
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+            );
+        }
+        if (!s_sr_ctx.ref_buffer) {
+            ESP_LOGW(TAG, "ref buffer alloc failed, AEC disabled");
+            s_sr_ctx.aec_enabled = false;
+            s_aec_runtime_enabled = false;
+        }
+    }
+    ESP_LOGI(
+        TAG,
+        "AFE ready config: format=%s feed_chunksize=%d feed_nch=%d chunk_ms=%d aec=%d",
+        AFE_INPUT_FORMAT,
+        s_sr_ctx.feed_chunksize,
+        s_sr_ctx.feed_nch,
+        s_sr_ctx.feed_chunk_ms,
+        s_sr_ctx.aec_enabled
+    );
 
     task_ret = xTaskCreatePinnedToCore(
         sr_pipeline_task,
@@ -2607,10 +2833,13 @@ static void handle_control_message(const char *data, int data_len)
         build_runtime_token("stream", s_current_stream_id, sizeof(s_current_stream_id));
         s_voice_session_opened = false;
         clear_reply_wait_state();
+        const char *accepted_mode = s_aec_runtime_enabled ? "full_duplex_realtime" : "half_duplex";
         ESP_LOGI(
             TAG,
-            "收到 voice.realtime.session.open，当前固件降级为半双工: session_id=%s semantic_continuous=%d",
+            "收到 voice.realtime.session.open: session_id=%s accepted_mode=%s aec=%d semantic_continuous=%d",
             s_current_session_id,
+            accepted_mode,
+            s_aec_runtime_enabled,
             s_realtime_semantic_dialog_enabled
         );
         send_realtime_session_opened_message(s_current_session_id);
@@ -2620,7 +2849,12 @@ static void handle_control_message(const char *data, int data_len)
         if (!s_sr_ctx.initialized) {
             ESP_LOGW(TAG, "WakeNet runtime not ready; wake word status reporting disabled");
         } else {
-            ESP_LOGI(TAG, "WakeNet listening enabled for realtime-degraded session_id=%s", s_current_session_id);
+            ESP_LOGI(
+                TAG,
+                "WakeNet listening enabled for realtime session_id=%s accepted_mode=%s",
+                s_current_session_id,
+                accepted_mode
+            );
         }
         goto cleanup;
     }

@@ -44,4 +44,20 @@ config GLASS_HEARTBEAT_INTERVAL_MS
     range 1000 60000
     default 5000
 
+config GLASS_ENABLE_AEC
+    bool "启用播放中插话 AEC"
+    default y
+    help
+        开启后，语音前端使用 MIC+播放参考信号进行 AEC，并允许 Omni 连续对话窗口在播放期间继续监听。
+        如果板子内存不足，或扬声器参考信号无法稳定同步，可关闭该选项回退半双工播放。
+
+config GLASS_AEC_REFERENCE_BUFFER_MS
+    int "AEC 播放参考缓冲时长"
+    range 200 3000
+    default 1200
+    depends on GLASS_ENABLE_AEC
+    help
+        保存最近一段下行播放 PCM 作为 AEC 参考信号，单位毫秒。
+        过短会导致回声参考不足；过长会增加内存占用。
+
 endmenu

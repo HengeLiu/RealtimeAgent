@@ -1,6 +1,6 @@
 # Omni 语义实时连续对话设计
 
-更新时间：2026-04-29
+更新时间：2026-04-30
 
 ## 1. 目标
 
@@ -44,7 +44,7 @@ RealtimeListening --> UserSpeaking : Omni input_audio_buffer.speech_started
 UserSpeaking --> OmniResponding : semantic_vad 提交用户 turn
 OmniResponding --> AssistantSpeaking : response.audio.delta 首包
 AssistantSpeaking --> RealtimeListening : response.done / 播放完成
-AssistantSpeaking --> UserSpeaking : 用户插话 / cancel_response
+AssistantSpeaking --> UserSpeaking : 用户插话 / 中断旧播放
 RealtimeListening --> Closing : 静音超时 / 退出词 / 按键 / 网络断开
 Closing --> Idle : 关闭控制和媒体状态
 
@@ -78,7 +78,7 @@ loop 连续收音窗口
 end
 
 Glass -> Server : 用户插话或端侧 interrupt
-Server -> Omni : cancel_response
+Server -> Playback : 取消当前播放 / 丢弃迟到音频
 Server -> Glass : actuator.audio.interrupt
 
 Glass -> Server : 退出词 / 按键 / 长静音
@@ -103,9 +103,9 @@ Server -> Glass : voice.realtime.session.closed
 
 `VOICE_CONVERSATION_MODE=realtime_semantic_vad` 必须配合 `VOICE_REPLY_MODE=omni_realtime`。如果使用 `agent_tts` 分支，SDK 会拒绝该配置，避免开发者误以为文本 Agent 能自动承担全实时语音 turn detection。
 
-## 7. 本轮实现范围
+## 7. 当前实现范围
 
-当前 `sdk-v55` 已把方案二作为默认链路，完成服务端自动响应等待和真实 ESP32 连续窗口的最小可用实现：
+当前 `sdk-v56` 已把方案二作为默认链路，并在 ESP32-S3 上补齐播放中自然插话的第一版端侧入口：
 
 1. `ServerSettings` 增加语音对话模式和 Omni turn detection 参数。
 2. `local_server.env.example` 暴露所有新增配置。
@@ -114,18 +114,23 @@ Server -> Glass : voice.realtime.session.closed
 5. 服务端在 `sensor.audio.segment.started` 时前置自动抓拍，照片就绪后在已有上行音频的前提下追加到 Omni，避免先传图片触发官方接口的顺序错误。
 6. `realtime_semantic_vad` 下服务端不再手动 `commit()` 和 `create_response(...)`，而是等待 Omni `semantic_vad` 自动提交和自动响应。
 7. 真实 `glass-esp32` 在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后继续保持窗口，下一轮语音可由本地 VAD 直接触发。
-8. 增加单元测试，保证配置校验、协议 payload、Omni 会话参数和 semantic_vad 自动响应等待不会回退。
+8. ESP32-S3 固件默认 `CONFIG_GLASS_ENABLE_AEC=y`，使用 ESP-SR AFE `MR` 输入格式，把麦克风音频和扬声器播放参考音频交错送入 AEC。
+9. 播放期间如果连续对话窗口仍有效，端侧保持监听；检测到用户插话时先发送 `user.voice.interrupt`，本地中断当前播放，然后开启新的语音段。
+10. 服务端收到插话后会清理当前和排队播放流，并丢弃旧 Omni/TTS 回复迟到的音频分片，避免被打断的旧回答重新入队。
+11. 增加单元测试，保证配置校验、协议 payload、Omni 会话参数、semantic_vad 自动响应等待和打断后迟到音频丢弃不会回退。
 
-当前仍不是完整全双工生产形态。ESP32 固件尚未启用 AEC，所以上述连续对话窗口只覆盖“助手播完后的自然追问”；播放期间麦克风不会持续参与插话判断，避免把助手自己的声音回灌给模型。需要播放中自然插话时，下一阶段必须先完成端侧 AEC 或可靠回声抑制。
+当前仍不是完整全双工生产形态。`sdk-v56` 已具备播放中自然插话的代码链路，但 AEC 质量依赖真实板子的扬声器参考信号、麦克风位置、音量、佩戴结构和环境噪声；`glass-playback` 不能验证这项声学能力。当前服务端先保证旧播放可被中断且迟到音频被丢弃，上游 Omni response 主动取消仍需要结合官方 SDK 能力继续补齐。
 
 ## 8. 后续开发计划
 
 ### Phase 1：AEC 和播放中插话
 
-1. 在 ESP32 端评估 AEC 或可靠回声抑制接入方式。
+状态：`sdk-v56` 已完成第一版。
+
+1. 在 ESP32-S3 端接入 ESP-SR AFE AEC，输入格式从 `M` 扩展为 `MR`。
 2. 播放期间保持麦克风采集，并在检测到近场用户语音时向服务端发送 interrupt。
-3. 服务端收到插话后调用 Omni `cancel_response`，并通过播放仲裁下发 `actuator.audio.interrupt`。
-4. 增加 turn 级日志：播放中用户语音、cancel_response、下行中断、下一轮响应首包。
+3. 服务端收到插话后通过播放仲裁下发 `actuator.audio.interrupt`，并丢弃旧回复迟到音频。
+4. 后续需要继续补齐上游 Omni response 主动取消，并增加真机声学调参日志。
 
 ### Phase 2：更完整的连续会话状态
 
@@ -152,11 +157,11 @@ Server -> Glass : voice.realtime.session.closed
 2. 真机进入连续对话后，一次唤醒至少支持两轮追问，不要求重复唤醒词。
 3. `VOICE_CONVERSATION_MODE=segment_turn` 下，现有 Omni 语音直出回归不退化。
 4. 长静音、退出词、按键和网络断开都能关闭会话并清理运行态。
-5. 播放中插话验收依赖 ESP32 AEC 或同等回声抑制完成后再开启。
+5. 播放中插话需要 ESP32-S3 真机验证：助手播放时说新问题，旧播放应立即停止，新语音段应进入下一轮 Omni 回复。
 
 ## 10. 风险
 
 1. Omni `semantic_vad` 不能替代端侧近场语音判断，嘈杂环境仍需要硬件和端侧算法配合。
-2. 真实眼镜如果没有 AEC，播放期间持续收音会把助手自己的声音送回模型。
+2. AEC 配置打开不等于声学效果稳定，播放参考信号延迟、音量、外放结构或室外噪声都会影响插话识别。
 3. Omni Realtime 直出模式暂不执行 SDK Tool、Task、Skill、MCP；需要业务编排时应使用 `agent_tts`。
 4. 连续对话会增加麦克风常开时间，必须在产品上明确唤醒、监听、等待和退出状态。
