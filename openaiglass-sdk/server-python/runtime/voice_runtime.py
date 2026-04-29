@@ -350,6 +350,16 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
         self._closed = threading.Event()
         self._logger = get_logger("server.voice")
         self._task_id: str | None = None
+        self._metrics_lock = threading.Lock()
+        self._created_at_ms = self._now_ms()
+        self._opened_at_ms: int | None = None
+        self._first_text_push_started_at_ms: int | None = None
+        self._first_text_push_returned_at_ms: int | None = None
+        self._first_data_at_ms: int | None = None
+        self._text_chars_pushed = 0
+        self._text_push_count = 0
+        self._text_chars_before_first_data: int | None = None
+        self._text_push_count_before_first_data: int | None = None
 
         dashscope.api_key = settings.dashscope_api_key
         dashscope.base_websocket_api_url = settings.tts_websocket_api_url
@@ -364,6 +374,7 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
             """CosyVoice 回调桥接器。"""
 
             def on_open(self):  # pragma: no cover - 真实联调路径
+                error_box._mark_opened()
                 return None
 
             def on_complete(self):  # pragma: no cover - 真实联调路径
@@ -381,6 +392,7 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
 
             def on_data(self, data: bytes) -> None:  # pragma: no cover - 真实联调路径
                 if data:
+                    error_box._mark_first_data(data)
                     chunk_sink(ModelChunk(audio_pcm_bytes=data, sample_rate_hz=sample_rate_hz))
 
         self._synthesizer = SpeechSynthesizer(
@@ -392,7 +404,9 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
 
     def push_text(self, text_delta: str) -> None:
         if text_delta:
+            started_at_ms = self._mark_text_push_started(text_delta)
             self._synthesizer.streaming_call(text_delta)
+            self._mark_text_push_returned(started_at_ms, text_delta)
 
     def finish(self) -> None:
         log_debug(
@@ -446,6 +460,124 @@ class DashscopeCosyVoiceTtsSession(StreamingTtsSession):
                 self._logger,
                 f"TTS 任务完成: task_id={self._task_id or '<unknown>'}",
             )
+
+    @staticmethod
+    def _now_ms() -> int:
+        """返回当前毫秒时间戳。"""
+
+        return int(time.time() * 1000)
+
+    @staticmethod
+    def _latency_ms(start: int | None, end: int | None) -> int | None:
+        """计算两个毫秒时间戳之间的非负耗时。"""
+
+        if start is None or end is None:
+            return None
+        return max(end - start, 0)
+
+    def _mark_opened(self) -> None:
+        """记录 TTS WebSocket 打开时间。"""
+
+        with self._metrics_lock:
+            if self._opened_at_ms is not None:
+                return
+            self._opened_at_ms = self._now_ms()
+            opened_at_ms = self._opened_at_ms
+            created_at_ms = self._created_at_ms
+        log_debug(
+            self._logger,
+            (
+                "TTS WebSocket 已打开 "
+                f"session_create_to_open_ms={self._latency_ms(created_at_ms, opened_at_ms)} "
+                f"model={self._settings.tts_model_name} voice={self._settings.tts_voice}"
+            ),
+            LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+        )
+
+    def _mark_text_push_started(self, text_delta: str) -> int:
+        """记录一次文本增量推送开始，并返回开始时间。"""
+
+        started_at_ms = self._now_ms()
+        with self._metrics_lock:
+            if self._first_text_push_started_at_ms is None:
+                self._first_text_push_started_at_ms = started_at_ms
+            self._text_chars_pushed += len(text_delta)
+            self._text_push_count += 1
+        return started_at_ms
+
+    def _mark_text_push_returned(self, started_at_ms: int, text_delta: str) -> None:
+        """记录首次 `streaming_call(...)` 返回耗时。"""
+
+        returned_at_ms = self._now_ms()
+        should_log = False
+        with self._metrics_lock:
+            if self._first_text_push_returned_at_ms is None:
+                self._first_text_push_returned_at_ms = returned_at_ms
+                should_log = True
+                created_at_ms = self._created_at_ms
+                opened_at_ms = self._opened_at_ms
+                first_started_at_ms = self._first_text_push_started_at_ms
+                text_chars_pushed = self._text_chars_pushed
+                text_push_count = self._text_push_count
+            else:
+                created_at_ms = None
+                opened_at_ms = None
+                first_started_at_ms = None
+                text_chars_pushed = 0
+                text_push_count = 0
+        if not should_log:
+            return
+        log_info(
+            self._logger,
+            (
+                "TTS 首次文本已推送 "
+                f"first_streaming_call_cost_ms={self._latency_ms(started_at_ms, returned_at_ms)} "
+                f"session_create_to_first_push_ms={self._latency_ms(created_at_ms, first_started_at_ms)} "
+                f"websocket_open_to_first_push_ms={self._latency_ms(opened_at_ms, first_started_at_ms)} "
+                f"text_chars={len(text_delta)} total_text_chars={text_chars_pushed} push_count={text_push_count}"
+            ),
+            LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+        )
+
+    def _mark_first_data(self, data: bytes) -> None:
+        """记录 TTS 服务返回首段音频的接口级耗时。"""
+
+        first_data_at_ms = self._now_ms()
+        should_log = False
+        with self._metrics_lock:
+            if self._first_data_at_ms is None:
+                self._first_data_at_ms = first_data_at_ms
+                self._text_chars_before_first_data = self._text_chars_pushed
+                self._text_push_count_before_first_data = self._text_push_count
+                should_log = True
+                created_at_ms = self._created_at_ms
+                opened_at_ms = self._opened_at_ms
+                first_push_started_at_ms = self._first_text_push_started_at_ms
+                first_push_returned_at_ms = self._first_text_push_returned_at_ms
+                text_chars = self._text_chars_before_first_data
+                push_count = self._text_push_count_before_first_data
+            else:
+                created_at_ms = None
+                opened_at_ms = None
+                first_push_started_at_ms = None
+                first_push_returned_at_ms = None
+                text_chars = None
+                push_count = None
+        if not should_log:
+            return
+        log_info(
+            self._logger,
+            (
+                "TTS 服务返回首段音频 "
+                f"tts_first_audio_latency_ms={self._latency_ms(first_push_started_at_ms, first_data_at_ms)} "
+                f"tts_first_audio_after_call_return_ms={self._latency_ms(first_push_returned_at_ms, first_data_at_ms)} "
+                f"session_create_to_first_audio_ms={self._latency_ms(created_at_ms, first_data_at_ms)} "
+                f"websocket_open_to_first_audio_ms={self._latency_ms(opened_at_ms, first_data_at_ms)} "
+                f"text_chars_before_first_audio={text_chars} text_push_count_before_first_audio={push_count} "
+                f"bytes={len(data)}"
+            ),
+            LogContext(session_id="tts", device_id="server", message_id="streaming_tts"),
+        )
 
 
 class VoiceModelClient:
