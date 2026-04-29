@@ -156,6 +156,7 @@ static char s_camera_stream_ws_uri[256];
 static char s_current_camera_stream_id[64];
 static int s_camera_frame_interval_ms = 500;
 static uint32_t s_camera_frame_seq = 0;
+static uint64_t s_playback_request_started_ms = 0;
 static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
 static TaskHandle_t s_wifi_retry_task_handle = NULL;
@@ -1761,6 +1762,9 @@ static void playback_stream_task(void *arg)
     bool failed = false;
     char next_stream_id[64];
     uint64_t last_stream_data_ms = now_ms();
+    uint64_t task_started_ms = now_ms();
+    uint64_t request_started_ms = s_playback_request_started_ms;
+    bool first_pcm_logged = false;
     const char *terminal_state = "completed";
     const char *terminal_reason = "stream_completed";
     esp_http_client_config_t config = {
@@ -1787,6 +1791,13 @@ static void playback_stream_task(void *arg)
         ESP_LOGE(TAG, "打开播放流失败: %s", s_stream_wav_url);
         goto cleanup;
     }
+    ESP_LOGI(
+        TAG,
+        "播放流 HTTP 已打开: stream_id=%s request_to_http_open_ms=%" PRIu64 " task_to_http_open_ms=%" PRIu64,
+        s_current_playback_stream_id,
+        request_started_ms > 0 ? now_ms() - request_started_ms : 0,
+        now_ms() - task_started_ms
+    );
     if (esp_http_client_fetch_headers(client) < 0) {
         ESP_LOGE(TAG, "获取播放流响应头失败");
         goto cleanup;
@@ -1817,6 +1828,13 @@ static void playback_stream_task(void *arg)
         last_stream_data_ms = now_ms();
         header_read += read_size;
     }
+    ESP_LOGI(
+        TAG,
+        "播放流 WAV 头已读取: stream_id=%s request_to_header_ms=%" PRIu64 " task_to_header_ms=%" PRIu64,
+        s_current_playback_stream_id,
+        request_started_ms > 0 ? now_ms() - request_started_ms : 0,
+        now_ms() - task_started_ms
+    );
     if (memcmp(wav_header, "RIFF", 4) != 0 || memcmp(wav_header + 8, "WAVE", 4) != 0) {
         failed = true;
         terminal_state = "failed";
@@ -1870,6 +1888,17 @@ static void playback_stream_task(void *arg)
             }
             last_stream_data_ms = now_ms();
             pcm_filled += (size_t)read_size;
+            if (!first_pcm_logged) {
+                first_pcm_logged = true;
+                ESP_LOGI(
+                    TAG,
+                    "播放流收到首段 PCM: stream_id=%s bytes=%d request_to_first_pcm_ms=%" PRIu64 " task_to_first_pcm_ms=%" PRIu64,
+                    s_current_playback_stream_id,
+                    read_size,
+                    request_started_ms > 0 ? now_ms() - request_started_ms : 0,
+                    now_ms() - task_started_ms
+                );
+            }
         }
         if (pcm_filled == 0) {
             break;
@@ -1910,6 +1939,14 @@ static void playback_stream_task(void *arg)
         if (!started_sent) {
             send_actuator_audio_state_message("actuator.audio.started", s_current_playback_stream_id, NULL, NULL);
             started_sent = true;
+            ESP_LOGI(
+                TAG,
+                "播放流首段音频已写入扬声器: stream_id=%s request_to_speaker_ms=%" PRIu64 " task_to_speaker_ms=%" PRIu64 " pcm_bytes=%u",
+                s_current_playback_stream_id,
+                request_started_ms > 0 ? now_ms() - request_started_ms : 0,
+                now_ms() - task_started_ms,
+                (unsigned)pcm_filled
+            );
         }
     }
 
@@ -1942,6 +1979,7 @@ cleanup:
     s_playback_interrupt_requested = false;
     s_playback_task_handle = NULL;
     s_current_playback_stream_id[0] = '\0';
+    s_playback_request_started_ms = 0;
     if (s_next_playback_stream_id[0] != '\0') {
         strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
         s_next_playback_stream_id[0] = '\0';
@@ -1969,6 +2007,7 @@ static void start_playback_stream(const char *stream_id)
         ESP_LOGE(TAG, "构造播放流地址失败");
         return;
     }
+    ESP_LOGI(TAG, "准备启动播放流: stream_id=%s url=%s", stream_id, s_stream_wav_url);
     if (s_playback_task_running) {
         if (s_playback_interrupt_requested) {
             strlcpy(s_next_playback_stream_id, stream_id, sizeof(s_next_playback_stream_id));
@@ -2007,6 +2046,7 @@ static void start_playback_stream(const char *stream_id)
     s_wake_listening_enabled = false;
     s_playback_task_running = true;
     s_playback_interrupt_requested = false;
+    s_playback_request_started_ms = now_ms();
     if (xTaskCreate(playback_stream_task, "playback_stream_task", 8192, NULL, 5, &s_playback_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "创建 playback_stream_task 失败");
         s_playback_active = false;
@@ -2014,6 +2054,7 @@ static void start_playback_stream(const char *stream_id)
         s_playback_task_running = false;
         s_playback_interrupt_requested = false;
         s_current_playback_stream_id[0] = '\0';
+        s_playback_request_started_ms = 0;
         s_playback_task_handle = NULL;
     }
 }

@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v43`。本版本在 `sdk-v42` 基础上修正 `glass-playback` 直接播放下行语音的启动语义，支持 `ffplay` stdin 流式播放，并补齐 TTS 首段音频、播放请求和 HTTP 播放流首段写出的延迟日志。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v44`。本版本在 `sdk-v43` 基础上检查真实 ESP32 眼镜下行播放链路，确认固件按 `/stream.wav` 首包流式写入 I2S 播放，不存在 `glass-playback` 曾经的整段下载后播放问题，并补齐真实眼镜播放流 HTTP、WAV 头、首段 PCM 和首段扬声器写入日志。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐下行播放首包链路日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`、`VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime` 和 `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS=300`；如需排障可临时设为 `batch`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
@@ -489,6 +489,8 @@ uv run openaiglass.glass.start \
 `sdk-v40` 起，实时 ASR 实现不再使用 `dashscope.audio.qwen_omni.OmniRealtimeConversation` 的转写能力，而是使用阿里云百炼实时语音识别文档对应的 `dashscope.audio.asr.Recognition`。SDK 在创建会话后调用 `Recognition.start()`，每个眼镜上行 PCM chunk 到达后立即调用 `send_audio_frame(...)`，语音结束时调用 `Recognition.stop()`；中间结果和最终结果通过 `RecognitionCallback.on_event(...)` 读取 `get_sentence()`，并用 `end_time` 判断句尾。业务本地配置建议使用 `VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime`。
 
 `sdk-v41` 起，`实时 ASR 返回首个文本` 和 `实时 ASR 完成` 日志会额外携带 `recognition_open_latency_ms`、`session_start_to_first_audio_ms`、`first_audio_send_cost_ms`、`audio_ms_before_first_partial`、`dashscope_first_package_delay_ms`、`dashscope_last_package_delay_ms`、`stop_to_complete_ms`、`audio_frame_count` 和 `audio_bytes_sent`。这些字段用于判断 1 秒级 ASR 延迟到底发生在连接、发帧、ASR 服务首包、句尾 VAD 还是收尾阶段。`VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` 默认值为 `300`，取值范围 `200` 到 `6000`；如果误切句明显，可适当调大。
+
+`sdk-v44` 起，真实 ESP32 眼镜会在收到 `actuator.audio.play` 后打印下行播放流关键时间点：`准备启动播放流`、`播放流 HTTP 已打开`、`播放流 WAV 头已读取`、`播放流收到首段 PCM`、`播放流首段音频已写入扬声器`。当前 ESP32 固件不会先完整下载 `/stream.wav` 再播放；它读取 44 字节 WAV 头后按约 20ms 的 PCM 分片写入 I2S，`actuator.audio.started` 也在首段音频写入扬声器后才上报。如果真机仍然听感延迟高，应把这些日志和服务端 `TTS 返回首段音频`、`下行播放请求已发送`、`播放流写出首段音频` 对齐，判断延迟发生在服务端 TTS、HTTP 首包、网络读取、I2S 写入或功放实际出声阶段。
 
 当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答会直接走多模态模型首 token，不再先做照片工具决策；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
 
