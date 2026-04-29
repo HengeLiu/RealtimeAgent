@@ -5,7 +5,7 @@
 1. [openaiglass-sdk](./openaiglass-sdk)：眼镜、手机、服务器三端开发框架，负责协议、统一模型、设备绑定、通讯、日志、异常处理、大模型运行时、Tool/Task/Skill、全局上下文、硬件能力抽象、回放测试和联调工具。
 2. [openaiglass-for-blind](./openaiglass-for-blind)：基于 SDK 的盲人 AI 眼镜真实场景工程，负责找物、红绿灯、导航、计时器等业务能力，以及业务侧三端宿主配置和功能文档。
 
-两个目录通过 [openaiglass-for-blind/SDK安装与能力开发指南.md](./openaiglass-for-blind/SDK安装与能力开发指南.md) 和 [openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md) 沟通。功能开发团队默认只改 `openaiglass-for-blind`，或者自行创建一个新的同级通结构目录，但不要在业务迭代中补 SDK 层系统能力。
+两个目录通过 [openaiglass-for-blind/SDK安装与能力开发指南.md](./openaiglass-for-blind/SDK安装与能力开发指南.md)、[SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md) 和 [openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md) 沟通。功能开发团队默认只改 `openaiglass-for-blind`，或者自行创建一个新的同级同结构目录； SDK 公开接口无法表达业务需求时，把问题提给 `openaiglass-sdk`，不要在业务迭代中补 SDK 层系统能力。
 
 ## 快速开始
 
@@ -189,13 +189,13 @@ uv run openaiglass.glass.start \
 | [openaiglass-sdk/glass-playback](./openaiglass-sdk/glass-playback)         | 按真实 glass 协议运行的眼镜回放设备。                                             |
 | [openaiglass-for-blind/capabilities](./openaiglass-for-blind/capabilities) | 当前业务能力：`find_object`、`traffic_light`、`navigation`、`timer`。     |
 | [openaiglass-for-blind/host](./openaiglass-for-blind/host)                 | 盲人业务工程的服务端、手机端、眼镜端薄宿主和本地配置。                            |
-| [openaiglass-for-blind/docs](./openaiglass-for-blind/docs)                 | 业务计划、开发记录、当前状态、真机联调和阻塞点文档。                              |
+| [openaiglass-for-blind/docs](./openaiglass-for-blind/docs)                 | 当前状态、业务能力说明、真机联调、旧项目迁移分析和阻塞点文档。                    |
 
 ## SDK 简要现状
 
 当前 SDK 已经能支撑功能团队继续开发：服务端可通过 `OpenAIGlassesSDK` 注册 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`BaseSensorProvider`、MCP Adapter 和受控 Skill；`DeviceGroupContext` 提供设备查询、抓拍、手机视频链路、手机任务、通知、MCP 和 SDK 托管任务等公开入口；CLI 提供配置同步、服务端启动、手机工程打开/构建、`phone-mock`、眼镜构建/回放、预检和三端包检查。
 
-当前版本已补齐普通文本流式 TTS、通知仲裁、账号级设备组织、最小 Skill Runtime、单机任务持久化、回放断言以及 iOS/ESP32 源码包清单。仍需 SDK 团队后续补齐的系统能力包括实时语音打断、公网/NAT peer-link 治理、分布式任务持久化、真 iOS 视觉资源池、真实外部服务治理，以及 iOS/ESP32 二进制或组件仓库发布。详细判断见 [SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md)。
+当前版本已补齐半双工语音主链路、全双工实时语音第一版、普通文本流式 TTS 和 TTS 预热、通知仲裁、账号级设备组织、最小 Skill Runtime、单机任务持久化、手机视频链路标准入口、回放断言以及 iOS/ESP32 源码包清单。仍需持续验证或后续补强的系统能力包括真实 AEC/VAD 效果、公网/NAT peer-link 治理、跨机器任务高可用、真实地图服务治理，以及 iOS/ESP32 二进制或组件仓库发布。详细判断见 [SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md)。
 
 ## 功能开发现状
 
@@ -203,7 +203,7 @@ uv run openaiglass.glass.start \
 
 | 能力              | 当前状态                                                                                                        |
 | ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| `find_object`   | 服务端 Tool/Task、手机处理器、手机任务和 iOS 插件样例已具备，可启动眼镜到手机视频链路并按手机检测事件完成任务。 |
+| `find_object`   | 服务端 Tool/Task、手机处理器、手机任务和 iOS 插件样例已具备，可通过 SDK 标准视频链路启动找物流程并按手机检测事件完成任务。 |
 | `traffic_light` | 已有红绿灯识别 Tool/Task、手机侧处理器和任务样例。                                                              |
 | `navigation`    | 已有导航准备 Tool、导航 Task、业务侧 mock AMap MCP Adapter、POI/路线准备和事件推进样板。                        |
 | `timer`         | 已有计时器 Tool/Task，用 SDK 托管任务验证创建、查询、取消和完成通知。                                           |
@@ -233,4 +233,4 @@ uv run python -m pytest openaiglass-sdk/tests -q
 1. 新能力优先复用现有四个样板目录，不要直接操作 SDK 内部运行时。
 2. 业务代码需要设备、通知、抓拍、视频链路、手机任务、MCP 或后台任务时，只通过 SDK 公开上下文调用。
 3. 测试优先使用 `phone-mock`、`glass-playback` 和 `openaiglass.sdk.preflight` 做设备级自动化闭环，再进入真机联调。
-4. 如果 SDK 公开能力不能表达业务需求，把问题写入 [架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md)，由 SDK 团队继续优化。
+4. 如果 SDK 公开能力不能表达业务需求，把问题写入 [架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md)，再由 SDK 团队继续优化。

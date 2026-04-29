@@ -8,8 +8,8 @@
 
 相关文档：
 
-- [agent-core方案调研与OpenAI Agents SDK选型说明.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/experimental/agent-core方案调研与OpenAI%20Agents%20SDK选型说明.md)
-- [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)
+- [agent-core方案调研与OpenAI Agents SDK选型说明.md](../experimental/agent-core方案调研与OpenAI%20Agents%20SDK选型说明.md)
+- [backend-task-core设计.md](./backend-task-core设计.md)
 
 ---
 

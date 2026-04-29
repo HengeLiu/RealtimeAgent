@@ -6,8 +6,8 @@
 
 本文档不展开任务状态机和任务对象模型，这些内容见：
 
-- [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)
-- [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)
+- [agent-core设计.md](./agent-core设计.md)
+- [backend-task-core设计.md](./backend-task-core设计.md)
 
 本文档重点回答以下问题：
 

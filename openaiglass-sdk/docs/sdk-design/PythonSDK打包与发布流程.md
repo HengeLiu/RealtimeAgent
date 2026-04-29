@@ -125,7 +125,6 @@ python -m venv /tmp/openaiglasses-sdk-prod
 ## 8. 版本管理规则
 
 1. 每次发布前更新 [openaiglass-sdk/server-python/pyproject.toml](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/openaiglass-sdk/server-python/pyproject.toml) 中的 `version`。
-2. 修改公开 API 时，同步更新 [SDK开发者快速开始.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/sdk-design/SDK开发者快速开始.md)。
+2. 修改公开 API 时，同步更新 [SDK开发者快速开始.md](./SDK开发者快速开始.md)。
 3. 修改系统协议或运行时契约时，同步更新 `testdata/contracts` 和契约测试。
 4. 发布前保留 `logs/sdk-preflight-release.json` 作为验收记录，但 `logs/` 不提交到 git。
-

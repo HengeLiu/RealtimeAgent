@@ -8,7 +8,7 @@
 
 最终设计定稿见：
 
-- [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)
+- [agent-core设计.md](../structure-design/agent-core设计.md)
 
 ---
 
@@ -283,4 +283,4 @@ OpenAI Agents SDK 支持：
 
 最终设计定稿见：
 
-- [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)
+- [agent-core设计.md](../structure-design/agent-core设计.md)

@@ -161,4 +161,4 @@ uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 
 1. 编译检查通过。
 2. 组件级场景回放入口已删除；当前统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。
-3. 当前视频链路公开装配能力仍是 SDK 阻塞点，详见 [架构阻塞点说明与改进建议.md](./架构阻塞点说明与改进建议.md)。
+3. 当前导航仍未接入真实 AMap 服务、偏航重算和最后 10 米策略；进入真机产品验证前应先补真实地图 adapter 和更完整的视觉事件协议。

@@ -18,7 +18,7 @@
 4. 任务实例、状态机、事件流、调度器如何设计。
 5. 后台任务结果如何回流 `agent-core`，以及何时允许直接通知端侧。
 
-本文档是 [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md) 中任务运行时部分的详细展开稿。
+本文档是 [agent-core设计.md](./agent-core设计.md) 中任务运行时部分的详细展开稿。
 
 ---
 
@@ -936,10 +936,10 @@ bind_command_to_task(command_id, task_id) -> None
 
 最终约束如下：
 
-1. [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md) 保留系统级最终边界。
+1. [agent-core设计.md](./agent-core设计.md) 保留系统级最终边界。
 2. 本文档负责详细定义 `backend-task-core` 的内部设计。
-3. 具体的任务模板落地、Agent 协作和眼镜端执行器协作方式，详见 [PhaseF-backend-task-core最小闭环实施文档.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/stage1/develop/PhaseF-backend-task-core最小闭环实施文档.md)。
-4. 通知优先级、抢占、合并、排队等细节不在本文档展开，统一放到 [agent-core与backend-task-core通知协调设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core与backend-task-core通知协调设计.md)。
+3. 具体业务任务模板落地方式见 `openaiglass-for-blind/capabilities` 下的 `timer`、`navigation`、`find_object` 和 `traffic_light` 样板。
+4. 通知优先级、抢占、合并、排队等细节不在本文档展开，统一放到 [agent-core与backend-task-core通知协调设计.md](./agent-core与backend-task-core通知协调设计.md)。
 
 ---
 

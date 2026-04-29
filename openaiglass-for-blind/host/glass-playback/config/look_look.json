@@ -28,7 +28,8 @@
   },
   "actuators": {
     "audio_play": {
-      "mode": "record_and_auto_finish"
+      "mode": "play_and_auto_finish",
+      "player_command": "ffplay -nodisp -autoexit -loglevel error"
     }
   },
   "outputs": {

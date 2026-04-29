@@ -52,7 +52,7 @@ LOG_LEVEL="DEBUG"
 说明：
 
 1. 这里的 `phone-001` 必须是真实 iPhone App 注册上来的设备，不要启动 `host/phone-mock`。
-2. 当前 `glass-playback` 等待半双工 `voice.session.open`；如服务端使用全双工实时语音，应先切到 `VOICE_SESSION_MODE=half_duplex` 做回放验收。
+2. `glass-playback` 已兼容半双工 `voice.session.open` 和全双工 `voice.realtime.session.open`。如果要排查旧半双工链路，可显式设置 `VOICE_SESSION_MODE=half_duplex`。
 3. 启动前先同步配置：
 
 ```bash

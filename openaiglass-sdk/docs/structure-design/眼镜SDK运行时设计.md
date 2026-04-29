@@ -2,7 +2,7 @@
 
 ## 1. 文档定位
 
-本文档用于明确第二期下半程中眼镜端 SDK运行时 的职责边界。
+本文档用于明确眼镜端 SDK 运行时的职责边界。
 
 它服务于以下目标：
 
@@ -48,9 +48,9 @@
 
 当前相关设计文档：
 
-1. [设备握手与注册协议设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/设备握手与注册协议设计.md)
-2. [统一通信协议信封设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/统一通信协议信封设计.md)
-3. [媒体流传输格式设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/媒体流传输格式设计.md)
+1. [设备握手与注册协议设计.md](./设备握手与注册协议设计.md)
+2. [统一通信协议信封设计.md](./统一通信协议信封设计.md)
+3. [媒体流传输格式设计.md](./媒体流传输格式设计.md)
 
 ## 4. 运行时职责
 
@@ -196,11 +196,11 @@
 3. 眼镜端所有跨端动作都通过公共控制消息或媒体流协议触发。
 4. 眼镜端调试日志能看到 `device_id / session_id / task_id / stream_id` 等关键关联字段。
 5. 真机联调失败时，可以区分是注册、控制消息、媒体链路还是业务能力问题。
-6. `script/run_sdk_preflight.py` 中的 `sdk_boundary` 检查必须通过，防止眼镜端重新出现具体业务能力分支。
+6. `openaiglass.sdk.preflight` 中的 `sdk_boundary` 检查必须通过，防止眼镜端重新出现具体业务能力分支。
 
 ## 8. 后续工作
 
-第二期下半程建议继续做：
+后续建议继续做：
 
 1. 检查 `openaiglass-sdk/glass-esp32` 中是否还有业务能力词汇。
 2. 梳理眼镜端支持的控制消息清单。

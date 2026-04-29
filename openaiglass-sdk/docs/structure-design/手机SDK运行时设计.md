@@ -2,7 +2,7 @@
 
 ## 1. 文档定位
 
-本文档用于明确第二期下半程中手机端 SDK运行时 的职责边界。
+本文档用于明确手机端 SDK 运行时的职责边界。
 
 它服务于以下目标：
 
@@ -215,13 +215,13 @@ POST /api/tasks/report-event
 1. 根目录 `openaiglass-sdk/phone-ios` 只保留 SDK运行时 逻辑。
 2. 具体业务能力位于 `capabilities/find_object/phone/ios` 或外部开发者项目。
 3. 新增业务能力时，不需要修改视频接收和控制连接底层逻辑。
-4. 手机任务启动、停止和事件上报都符合 [SDK公共契约设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/SDK公共契约设计.md)。
+4. 手机任务启动、停止和事件上报都符合 [SDK公共契约设计.md](./SDK公共契约设计.md)。
 5. 根目录手机测试只验证 SDK运行时 通用行为，不验证某个具体业务算法。
-6. `script/run_sdk_preflight.py` 中的 `sdk_boundary` 检查必须通过，防止官方样例能力重新侵入根目录手机运行时。
+6. `openaiglass.sdk.preflight` 中的 `sdk_boundary` 检查必须通过，防止官方样例能力重新侵入根目录手机运行时。
 
 ## 8. 后续工作
 
-第二期下半程建议继续做：
+后续建议继续做：
 
 1. 检查 `openaiglass-sdk/phone-ios` 中是否还有具体业务词汇。
 2. 将残留业务分支迁回 `capabilities/find_object/phone/ios`。

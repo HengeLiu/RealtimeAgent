@@ -198,7 +198,7 @@ python -m compileall capabilities host/server/main.py
 
 1. 编译检查通过。
 2. 组件级场景回放入口已删除；当前统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。
-3. 完整视频链路实测等待 SDK 标准装配 `DeviceGroupContext.start_phone_video_link(...)`。
+3. 完整视频链路应通过 SDK 标准装配的 `DeviceGroupContext.start_phone_video_link(...)` 做设备级回放或真机实测。
 
 ## 10. 当前实现进展
 
@@ -214,6 +214,6 @@ python -m compileall capabilities host/server/main.py
 
 未完成：
 
-1. 真实 iOS 工程自动集成多个业务插件。
+1. 真实 iOS 工程长期插件集成和签名配置整理。
 2. 真实 YOLO / CoreML 红绿灯模型接入。
 3. 真机端到端联调。

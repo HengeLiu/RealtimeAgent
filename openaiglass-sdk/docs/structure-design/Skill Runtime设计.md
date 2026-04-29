@@ -24,7 +24,7 @@ sdk-v10 已完成最小 Skill Runtime：
 
 本文档定义本项目后续引入 `Skill` 的设计方案。
 
-本文档参考了 [openai-skills-demo](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/experimental/openai-skills-demo) 中的实现思路，尤其是：
+本文档参考了 [openai-skills-demo](../experimental/openai-skills-demo) 中的实现思路，尤其是：
 
 1. Skill 以目录形式存在，核心入口是 `SKILL.md`。
 2. 模型先看到 Skill 摘要，只在需要时读取完整 Skill 内容。
@@ -35,10 +35,10 @@ sdk-v10 已完成最小 Skill Runtime：
 
 相关文档：
 
-- [agent-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/agent-core设计.md)
-- [backend-task-core设计.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/structure-design/backend-task-core设计.md)
-- [大模型外接能力概念的介绍.md](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/experimental/大模型外接能力概念的介绍.md)
-- [基于 OpenAI SDK 自实现 Skills Runtime 设计文档](/Users/elio/dev/llm-project/OpenAIglassesDemo_2/doc/experimental/openai-skills-demo/DESIGN.md)
+- [agent-core设计.md](./agent-core设计.md)
+- [backend-task-core设计.md](./backend-task-core设计.md)
+- [大模型外接能力概念的介绍.md](../experimental/大模型外接能力概念的介绍.md)
+- [基于 OpenAI SDK 自实现 Skills Runtime 设计文档](../experimental/openai-skills-demo/DESIGN.md)
 
 ---
 
