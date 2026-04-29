@@ -253,6 +253,13 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             def finish(self) -> str:
                 return "实时转写文本"
 
+            def metrics(self) -> dict[str, int | None]:
+                return {
+                    "first_audio_chunk_at_ms": 1000,
+                    "first_asr_partial_latency_ms": 120,
+                    "asr_total_latency_ms": 280,
+                }
+
         class _BatchAsrShouldNotRun:
             def transcribe(self, *, settings: ServerSettings, input_wav: bytes) -> str:
                 raise AssertionError("batch ASR should not be called")
@@ -273,14 +280,17 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             streaming_asr_session=_StreamingSession(),
         )
 
-        text = runtime._transcribe_segment(  # noqa: SLF001 - 单测覆盖实时 ASR 优先级
-            device_id="glass-001",
-            session_id="sess-test",
-            segment=segment,
-            input_wav=b"RIFFdemo",
-        )
+        with self.assertLogs("server.voice", level="INFO") as logs:
+            text = runtime._transcribe_segment(  # noqa: SLF001 - 单测覆盖实时 ASR 优先级
+                device_id="glass-001",
+                session_id="sess-test",
+                segment=segment,
+                input_wav=b"RIFFdemo",
+            )
 
         self.assertEqual(text, "实时转写文本")
+        self.assertIn("first_asr_partial_latency_ms=120", "\n".join(logs.output))
+        self.assertIn("asr_total_latency_ms=280", "\n".join(logs.output))
 
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。

@@ -559,6 +559,15 @@ class StreamingSpeechRecognitionSession:
 
         raise NotImplementedError
 
+    def metrics(self) -> dict[str, int | None]:
+        """返回实时 ASR 计时指标。
+
+        返回值：
+        1. 指标名到毫秒值的字典；不支持的实现可以返回空字典。
+        """
+
+        return {}
+
 
 class DashscopeVoiceModelClient(VoiceModelClient):
     """百炼兼容 Chat Completions 语音客户端。
@@ -916,8 +925,10 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         self._error: BaseException | None = None
         self._final_text = ""
         self._latest_partial_text = ""
+        self._first_audio_chunk_at_ms: int | None = None
         self._first_partial_at_ms: int | None = None
-        self._started_at_ms = int(time.time() * 1000)
+        self._final_text_at_ms: int | None = None
+        self._completed_at_ms: int | None = None
         self._logger = get_logger("server.voice")
         self._thread = threading.Thread(
             target=self._run,
@@ -931,6 +942,8 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
 
         if not pcm_bytes or self._closed.is_set():
             return
+        if self._first_audio_chunk_at_ms is None:
+            self._first_audio_chunk_at_ms = int(time.time() * 1000)
         try:
             self._audio_queue.put_nowait(bytes(pcm_bytes))
         except queue.Full:
@@ -966,7 +979,26 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
                 "实时 ASR 调用失败",
                 details={"segment_id": self._segment_id, "reason": str(self._error)},
             )
+        if self._completed_at_ms is None:
+            self._completed_at_ms = int(time.time() * 1000)
         return (self._final_text or self._latest_partial_text).strip()
+
+    def metrics(self) -> dict[str, int | None]:
+        """返回实时 ASR 首文本和总耗时指标。"""
+
+        total_finished_at_ms = self._final_text_at_ms or self._completed_at_ms
+        return {
+            "first_audio_chunk_at_ms": self._first_audio_chunk_at_ms,
+            "first_asr_partial_latency_ms": self._latency_from_first_audio(self._first_partial_at_ms),
+            "asr_total_latency_ms": self._latency_from_first_audio(total_finished_at_ms),
+        }
+
+    def _latency_from_first_audio(self, end_at_ms: int | None) -> int | None:
+        """按首个音频分片时间计算耗时。"""
+
+        if self._first_audio_chunk_at_ms is None or end_at_ms is None:
+            return None
+        return max(end_at_ms - self._first_audio_chunk_at_ms, 0)
 
     def _run(self) -> None:
         conversation = None
@@ -1049,11 +1081,12 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
             return
         if self._first_partial_at_ms is None:
             self._first_partial_at_ms = int(time.time() * 1000)
+            first_asr_partial_latency_ms = self._latency_from_first_audio(self._first_partial_at_ms)
             log_debug(
                 self._logger,
                 (
                     "实时 ASR 返回首个文本 "
-                    f"first_asr_partial_latency_ms={self._first_partial_at_ms - self._started_at_ms} "
+                    f"first_asr_partial_latency_ms={first_asr_partial_latency_ms} "
                     f"segment_id={self._segment_id} input_stream_id={self._stream_id} "
                     f"text_preview={text[:24]!r}"
                 ),
@@ -1063,6 +1096,9 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
             self._latest_partial_text += text
             return
         self._final_text = text
+        self._final_text_at_ms = int(time.time() * 1000)
+        if self._completed_at_ms is None:
+            self._completed_at_ms = self._final_text_at_ms
         self._final_event.set()
 
 
@@ -1818,13 +1854,16 @@ class VoiceRuntime:
         if segment.streaming_asr_session is not None:
             try:
                 realtime_text = segment.streaming_asr_session.finish().strip()
+                asr_metrics = segment.streaming_asr_session.metrics()
                 if realtime_text:
                     log_info(
                         self._logger,
                         (
                             "实时 ASR 完成 "
                             f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
-                            f"text_length={len(realtime_text)}"
+                            f"text_length={len(realtime_text)} "
+                            f"first_asr_partial_latency_ms={asr_metrics.get('first_asr_partial_latency_ms')} "
+                            f"asr_total_latency_ms={asr_metrics.get('asr_total_latency_ms')}"
                         ),
                         LogContext(device_id=device_id, session_id=session_id),
                     )
