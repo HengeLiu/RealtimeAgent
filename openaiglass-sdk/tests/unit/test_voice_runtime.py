@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import struct
 import unittest
+from unittest.mock import patch
 
 from infra.config import ServerSettings
 from runtime.voice_runtime import (
+    DashscopeRealtimeSpeechRecognitionSession,
     MessageEntry,
     ModelChunk,
     PCM16StreamResampler,
@@ -15,8 +17,8 @@ from runtime.voice_runtime import (
     StreamingSpeechRecognitionSession,
     VoiceRuntime,
     VoiceSessionController,
+    _extract_recognition_sentence,
     _extract_tts_event_summary,
-    _extract_realtime_asr_text,
     build_audio_data_url,
     extract_message_text,
     wav_header_unknown_size,
@@ -206,32 +208,106 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
         self.assertEqual(summary, {"kind": "task-finished", "task_id": "task-456"})
 
-    def test_extract_realtime_asr_text_reads_nested_transcript(self) -> None:
-        """测试目标：验证实时 ASR 事件中的嵌套转写文本可被提取。
+    def test_extract_recognition_sentence_reads_partial_and_final_text(self) -> None:
+        """测试目标：验证官方 Recognition 实时 ASR 事件能提取文本和句尾标记。
 
         测试方法：
-        1. 构造百炼实时 ASR 常见的嵌套 content 结构。
-        2. 调用实时 ASR 文本提取函数。
+        1. 构造两个带 `get_sentence()` 的假回调结果。
+        2. 一个只包含中间文本，一个包含 `end_time` 句尾字段。
 
         预期结果：
-        1. 返回嵌套字段里的 transcript 文本。
+        1. 中间结果返回文本且 `is_sentence_end=False`。
+        2. 句尾结果返回文本且 `is_sentence_end=True`。
         """
 
-        text = _extract_realtime_asr_text(
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "item": {
-                    "content": [
-                        {
-                            "type": "input_audio",
-                            "transcript": "看一下我眼前有什么",
-                        }
-                    ]
-                },
-            }
-        )
+        class _Result:
+            def __init__(self, sentence: dict[str, object]) -> None:
+                self._sentence = sentence
 
-        self.assertEqual(text, "看一下我眼前有什么")
+            def get_sentence(self) -> dict[str, object]:
+                return self._sentence
+
+        partial_text, partial_end = _extract_recognition_sentence(_Result({"text": "看一下"}))
+        final_text, final_end = _extract_recognition_sentence(_Result({"text": "看一下。", "end_time": 1280}))
+
+        self.assertEqual(partial_text, "看一下")
+        self.assertFalse(partial_end)
+        self.assertEqual(final_text, "看一下。")
+        self.assertTrue(final_end)
+
+    def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
+        """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。
+
+        测试方法：
+        1. 用假 `Recognition` 替换 dashscope SDK 中的真实类。
+        2. 创建实时 ASR session 并追加一个 PCM 音频分片。
+        3. 手动触发中间识别、句尾识别和完成回调。
+
+        预期结果：
+        1. SDK 会调用 `Recognition.start()`。
+        2. 音频分片会立即进入 `send_audio_frame(...)`。
+        3. `finish()` 返回句尾文本，延迟指标来自首个音频分片和回调事件。
+        """
+
+        class _Result:
+            def __init__(self, sentence: dict[str, object]) -> None:
+                self._sentence = sentence
+
+            def get_sentence(self) -> dict[str, object]:
+                return self._sentence
+
+        class _Recognition:
+            instance: "_Recognition | None" = None
+
+            def __init__(self, *, model: str, callback, format: str, sample_rate: int, **kwargs) -> None:
+                self.model = model
+                self.callback = callback
+                self.format = format
+                self.sample_rate = sample_rate
+                self.kwargs = kwargs
+                self.started = False
+                self.stopped = False
+                self.frames: list[bytes] = []
+                _Recognition.instance = self
+
+            def start(self) -> None:
+                self.started = True
+                self.callback.on_open()
+
+            def send_audio_frame(self, frame: bytes) -> None:
+                self.frames.append(frame)
+
+            def stop(self) -> None:
+                self.stopped = True
+                self.callback.on_complete()
+
+        settings = ServerSettings(dashscope_api_key="demo-key", voice_asr_realtime_model_name="fun-asr-realtime")
+        with patch("dashscope.audio.asr.Recognition", _Recognition):
+            session = DashscopeRealtimeSpeechRecognitionSession(
+                settings=settings,
+                session_id="sess-test",
+                device_id="glass-001",
+                segment_id="seg-test",
+                stream_id="stream-test",
+                sample_rate_hz=16000,
+            )
+            session.append_audio(b"\x01\x02")
+            assert _Recognition.instance is not None
+            _Recognition.instance.callback.on_event(_Result({"text": "看一下"}))
+            _Recognition.instance.callback.on_event(_Result({"text": "看一下。", "end_time": 1200}))
+
+            text = session.finish()
+
+        assert _Recognition.instance is not None
+        self.assertTrue(_Recognition.instance.started)
+        self.assertTrue(_Recognition.instance.stopped)
+        self.assertEqual(_Recognition.instance.model, "fun-asr-realtime")
+        self.assertEqual(_Recognition.instance.format, "pcm")
+        self.assertEqual(_Recognition.instance.sample_rate, 16000)
+        self.assertEqual(_Recognition.instance.frames, [b"\x01\x02"])
+        self.assertEqual(text, "看一下。")
+        self.assertIsNotNone(session.metrics()["first_asr_partial_latency_ms"])
+        self.assertIsNotNone(session.metrics()["asr_total_latency_ms"])
 
     def test_transcribe_segment_prefers_streaming_asr_result(self) -> None:
         """测试目标：验证语音段优先使用实时 ASR 已完成的文本。

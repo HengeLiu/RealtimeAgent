@@ -541,6 +541,36 @@ class SpeechRecognitionClient:
         return None
 
 
+def _extract_recognition_sentence(result: Any) -> tuple[str, bool]:
+    """从 DashScope RecognitionResult 中提取文本和句尾标记。
+
+    主要逻辑：
+    1. 读取 `result.get_sentence()` 返回的句子字典。
+    2. 提取当前识别文本。
+    3. 按官方 SDK 语义，用 `end_time` 是否存在判断当前句子是否结束。
+
+    参数：
+    1. `result`：DashScope 实时 ASR 回调传入的 RecognitionResult。
+
+    返回值：
+    1. `(text, is_sentence_end)`，文本为空表示当前事件没有可用识别结果。
+    """
+
+    sentence_getter = getattr(result, "get_sentence", None)
+    if not callable(sentence_getter):
+        return "", False
+    try:
+        sentence = sentence_getter()
+    except Exception:
+        return "", False
+    if not isinstance(sentence, dict):
+        return "", False
+    text = sentence.get("text")
+    if text is None:
+        return "", False
+    return str(text), sentence.get("end_time") is not None
+
+
 class StreamingSpeechRecognitionSession:
     """实时 ASR 会话抽象。
 
@@ -900,7 +930,18 @@ class DashscopeSpeechRecognitionClient(SpeechRecognitionClient):
 
 
 class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSession):
-    """基于百炼 Qwen ASR Realtime 的流式转写会话。"""
+    """基于百炼 Recognition SDK 的 Fun-ASR 实时转写会话。
+
+    主要功能：
+    1. 按官方实时 ASR SDK，在会话启动后持续调用 `send_audio_frame(...)`。
+    2. 通过 `RecognitionCallback.on_event(...)` 接收中间识别文本和句尾文本。
+    3. 在 `finish()` 中调用 `stop()`，等待服务端返回完整识别结果。
+
+    主要属性：
+    1. `_first_audio_chunk_at_ms`：服务端收到并送入 ASR 的首个音频 chunk 时间。
+    2. `_first_partial_at_ms`：ASR 服务返回第一段文本的时间。
+    3. `_completed_at_ms`：ASR 服务完成本轮实时识别的时间。
+    """
 
     def __init__(
         self,
@@ -918,11 +959,11 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         self._segment_id = segment_id
         self._stream_id = stream_id
         self._sample_rate_hz = sample_rate_hz
-        self._audio_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=PLAYBACK_QUEUE_MAX)
-        self._final_event = threading.Event()
         self._done_event = threading.Event()
         self._closed = threading.Event()
+        self._lock = threading.Lock()
         self._error: BaseException | None = None
+        self._final_sentences: list[str] = []
         self._final_text = ""
         self._latest_partial_text = ""
         self._first_audio_chunk_at_ms: int | None = None
@@ -930,12 +971,64 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         self._final_text_at_ms: int | None = None
         self._completed_at_ms: int | None = None
         self._logger = get_logger("server.voice")
-        self._thread = threading.Thread(
-            target=self._run,
-            name=f"asr-realtime-{device_id}-{segment_id}",
-            daemon=True,
+        self._recognition = self._create_recognition()
+        self._recognition.start()
+
+    def _create_recognition(self) -> Any:
+        """创建官方 DashScope Recognition 实时 ASR 会话。
+
+        主要逻辑：
+        1. 设置 DashScope API Key 和 WebSocket 地址。
+        2. 通过 `RecognitionCallback` 接收实时识别事件。
+        3. 创建 `Recognition` 对象，输入格式固定为裸 PCM16 音频。
+
+        返回值：
+        1. 已配置但尚未 start 的 Recognition 实例。
+
+        异常情况：
+        1. dashscope 依赖缺失或 Recognition 初始化失败时向上抛出，由上层回退批量 ASR。
+        """
+
+        import dashscope
+        from dashscope.audio.asr import Recognition, RecognitionCallback
+
+        session = self
+        dashscope.api_key = self._settings.dashscope_api_key
+        dashscope.base_websocket_api_url = self._settings.tts_websocket_api_url
+
+        class _Callback(RecognitionCallback):
+            """DashScope 实时 ASR 回调桥。"""
+
+            def on_open(self) -> None:  # pragma: no cover - 真实联调路径
+                log_debug(
+                    session._logger,
+                    (
+                        "实时 ASR 连接已建立 "
+                        f"model={session._settings.voice_asr_realtime_model_name} "
+                        f"segment_id={session._segment_id} input_stream_id={session._stream_id}"
+                    ),
+                    LogContext(device_id=session._device_id, session_id=session._session_id),
+                )
+
+            def on_close(self) -> None:  # pragma: no cover - 真实联调路径
+                return None
+
+            def on_complete(self) -> None:
+                session._handle_recognition_complete()
+
+            def on_error(self, result: Any) -> None:
+                session._handle_recognition_error(result)
+
+            def on_event(self, result: Any) -> None:
+                session._handle_recognition_event(result)
+
+        return Recognition(
+            model=self._settings.voice_asr_realtime_model_name,
+            format="pcm",
+            sample_rate=self._sample_rate_hz,
+            semantic_punctuation_enabled=False,
+            callback=_Callback(),
         )
-        self._thread.start()
 
     def append_audio(self, pcm_bytes: bytes) -> None:
         """追加实时 ASR 音频分片。"""
@@ -945,25 +1038,26 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
         if self._first_audio_chunk_at_ms is None:
             self._first_audio_chunk_at_ms = int(time.time() * 1000)
         try:
-            self._audio_queue.put_nowait(bytes(pcm_bytes))
-        except queue.Full:
+            self._recognition.send_audio_frame(bytes(pcm_bytes))
+        except Exception as exc:  # noqa: BLE001 - 真实 ASR SDK 可能抛出多类运行时异常
             self._error = build_error(
                 ErrorCode.INTERNAL_ERROR,
-                "实时 ASR 音频发送队列已满",
-                details={"segment_id": self._segment_id, "stream_id": self._stream_id},
+                "实时 ASR 音频发送失败",
+                details={"segment_id": self._segment_id, "stream_id": self._stream_id, "reason": str(exc)},
             )
-            self._final_event.set()
+            self._done_event.set()
 
     def finish(self) -> str:
         """结束实时 ASR 音频输入并返回最终文本。"""
 
         if not self._closed.is_set():
             self._closed.set()
-            try:
-                self._audio_queue.put_nowait(None)
-            except queue.Full:
-                self._audio_queue.put(None, timeout=0.5)
-        completed = self._done_event.wait(timeout=max(self._settings.voice_asr_realtime_timeout_ms / 1000, 0.1) + 2.0)
+            threading.Thread(
+                target=self._stop_recognition,
+                name=f"asr-stop-{self._device_id}-{self._segment_id}",
+                daemon=True,
+            ).start()
+        completed = self._done_event.wait(timeout=max(self._settings.voice_asr_realtime_timeout_ms / 1000, 0.1))
         if not completed:
             raise build_error(
                 ErrorCode.TIMEOUT,
@@ -979,14 +1073,37 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
                 "实时 ASR 调用失败",
                 details={"segment_id": self._segment_id, "reason": str(self._error)},
             )
-        if self._completed_at_ms is None:
-            self._completed_at_ms = int(time.time() * 1000)
-        return (self._final_text or self._latest_partial_text).strip()
+        with self._lock:
+            if self._completed_at_ms is None:
+                self._completed_at_ms = int(time.time() * 1000)
+            if not self._final_text and self._latest_partial_text:
+                self._final_text = self._latest_partial_text
+            return self._final_text.strip()
+
+    def _stop_recognition(self) -> None:
+        """在后台停止 DashScope Recognition 会话。
+
+        主要逻辑：
+        1. 调用官方 SDK 的 `stop()` 触发 ASR 收尾。
+        2. `stop()` 内部会等待服务端完成，不能阻塞语音主链路线程。
+        3. 如果停止失败，记录错误并唤醒 `finish()` 走批量 ASR 回退。
+        """
+
+        try:
+            self._recognition.stop()
+        except Exception as exc:  # noqa: BLE001 - stop 失败需要回退批量 ASR
+            if self._error is None:
+                self._error = build_error(
+                    ErrorCode.INTERNAL_ERROR,
+                    "实时 ASR 停止失败",
+                    details={"segment_id": self._segment_id, "stream_id": self._stream_id, "reason": str(exc)},
+                )
+            self._done_event.set()
 
     def metrics(self) -> dict[str, int | None]:
         """返回实时 ASR 首文本和总耗时指标。"""
 
-        total_finished_at_ms = self._final_text_at_ms or self._completed_at_ms
+        total_finished_at_ms = self._completed_at_ms or self._final_text_at_ms
         return {
             "first_audio_chunk_at_ms": self._first_audio_chunk_at_ms,
             "first_asr_partial_latency_ms": self._latency_from_first_audio(self._first_partial_at_ms),
@@ -1000,88 +1117,27 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
             return None
         return max(end_at_ms - self._first_audio_chunk_at_ms, 0)
 
-    def _run(self) -> None:
-        conversation = None
-        try:
-            from dashscope.audio.qwen_omni import AudioFormat, MultiModality, OmniRealtimeCallback, OmniRealtimeConversation
-            from dashscope.audio.qwen_omni.omni_realtime import TranscriptionParams
+    def _handle_recognition_event(self, result: Any) -> None:
+        """处理 DashScope Recognition 实时识别事件。"""
 
-            session = self
-
-            class _Callback(OmniRealtimeCallback):
-                """实时 ASR 回调桥。"""
-
-                def on_open(self) -> None:  # pragma: no cover - 真实联调路径
-                    return None
-
-                def on_close(self, close_status_code, close_msg) -> None:  # pragma: no cover - 真实联调路径
-                    return None
-
-                def on_event(self, message) -> None:  # pragma: no cover - 真实联调路径
-                    session._handle_realtime_asr_event(message)
-
-            conversation = OmniRealtimeConversation(
-                model=self._settings.voice_asr_realtime_model_name,
-                callback=_Callback(),
-                api_key=self._settings.dashscope_api_key,
-            )
-            conversation.connect()
-            conversation.update_session(
-                output_modalities=[MultiModality.TEXT],
-                input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
-                output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
-                enable_input_audio_transcription=True,
-                enable_turn_detection=False,
-                transcription_params=TranscriptionParams(
-                    language="zh",
-                    sample_rate=self._sample_rate_hz,
-                    input_audio_format="pcm",
-                ),
-            )
-            while True:
-                item = self._audio_queue.get()
-                if item is None:
-                    break
-                conversation.append_audio(base64.b64encode(item).decode("ascii"))
-            conversation.commit()
-            self._final_event.wait(timeout=max(self._settings.voice_asr_realtime_timeout_ms / 1000, 0.1))
-            if not self._final_text and not self._latest_partial_text and self._error is None:
-                self._error = build_error(
-                    ErrorCode.TIMEOUT,
-                    "实时 ASR 未返回转写文本",
-                    retryable=True,
-                    details={"segment_id": self._segment_id, "stream_id": self._stream_id},
-                )
-        except BaseException as exc:  # noqa: BLE001 - 后台线程必须回传所有异常
-            self._error = exc
-        finally:
-            try:
-                if conversation is not None:
-                    conversation.end_session_async()
-                    conversation.close()
-            except Exception:
-                pass
-            self._done_event.set()
-
-    def _handle_realtime_asr_event(self, event: Any) -> None:
-        """处理实时 ASR 事件。"""
-
-        event_type = str(read_attr_or_key(event, "type") or "")
-        if "failed" in event_type or "error" in event_type:
-            self._error = build_error(
-                ErrorCode.INTERNAL_ERROR,
-                "实时 ASR 服务返回失败事件",
-                details={"event_type": event_type, "event": event},
-            )
-            self._final_event.set()
-            return
-
-        text = _extract_realtime_asr_text(event)
+        text, is_sentence_end = _extract_recognition_sentence(result)
         if not text:
             return
-        if self._first_partial_at_ms is None:
-            self._first_partial_at_ms = int(time.time() * 1000)
-            first_asr_partial_latency_ms = self._latency_from_first_audio(self._first_partial_at_ms)
+        now_ms = int(time.time() * 1000)
+        should_log_first_partial = False
+        with self._lock:
+            if self._first_partial_at_ms is None:
+                self._first_partial_at_ms = now_ms
+                should_log_first_partial = True
+            if is_sentence_end:
+                self._final_sentences.append(text)
+                self._final_text = "".join(self._final_sentences)
+                self._latest_partial_text = ""
+                self._final_text_at_ms = now_ms
+            else:
+                self._latest_partial_text = text
+        if should_log_first_partial:
+            first_asr_partial_latency_ms = self._latency_from_first_audio(now_ms)
             log_debug(
                 self._logger,
                 (
@@ -1092,14 +1148,36 @@ class DashscopeRealtimeSpeechRecognitionSession(StreamingSpeechRecognitionSessio
                 ),
                 LogContext(device_id=self._device_id, session_id=self._session_id),
             )
-        if "delta" in event_type:
-            self._latest_partial_text += text
-            return
-        self._final_text = text
-        self._final_text_at_ms = int(time.time() * 1000)
-        if self._completed_at_ms is None:
-            self._completed_at_ms = self._final_text_at_ms
-        self._final_event.set()
+
+    def _handle_recognition_complete(self) -> None:
+        """处理 DashScope Recognition 完成事件。"""
+
+        with self._lock:
+            if not self._final_text and self._latest_partial_text:
+                self._final_text = self._latest_partial_text
+            if self._completed_at_ms is None:
+                self._completed_at_ms = int(time.time() * 1000)
+        self._done_event.set()
+
+    def _handle_recognition_error(self, result: Any) -> None:
+        """处理 DashScope Recognition 错误事件。"""
+
+        message = str(read_attr_or_key(result, "message") or result)
+        request_id = str(read_attr_or_key(result, "request_id") or "")
+        self._error = build_error(
+            ErrorCode.INTERNAL_ERROR,
+            "实时 ASR 服务返回失败事件",
+            details={
+                "segment_id": self._segment_id,
+                "stream_id": self._stream_id,
+                "request_id": request_id,
+                "message": message,
+            },
+        )
+        with self._lock:
+            if self._completed_at_ms is None:
+                self._completed_at_ms = int(time.time() * 1000)
+        self._done_event.set()
 
 
 class PCM16StreamResampler:
@@ -3051,53 +3129,6 @@ def extract_message_text(completion: Any) -> str:
     message = getattr(first_choice, "message", None)
     content = getattr(message, "content", None)
     return extract_text_delta(content)
-
-
-def _extract_realtime_asr_text(event: Any) -> str:
-    """从百炼实时 ASR 事件中提取文本。
-
-    主要逻辑：
-    1. 兼容 `delta/text/transcript` 等顶层字段。
-    2. 兼容 `item.content[]`、`response.output[]` 等嵌套结构。
-    3. 只做字段读取，不假设单一 SDK 事件版本。
-
-    返回值：
-    1. 当前事件携带的文本；没有文本时返回空字符串。
-    """
-
-    if event is None:
-        return ""
-    if isinstance(event, str):
-        try:
-            event = json.loads(event)
-        except json.JSONDecodeError:
-            return ""
-    if not isinstance(event, dict):
-        return ""
-
-    for key in ("transcript", "text", "delta"):
-        value = event.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-    def _walk(value: Any) -> str:
-        if isinstance(value, str):
-            return value.strip()
-        if isinstance(value, dict):
-            for key in ("transcript", "text", "delta"):
-                nested = value.get(key)
-                if isinstance(nested, str) and nested.strip():
-                    return nested.strip()
-            for key in ("item", "content", "response", "output", "message"):
-                nested_text = _walk(value.get(key))
-                if nested_text:
-                    return nested_text
-        if isinstance(value, list):
-            parts = [_walk(item) for item in value]
-            return "".join(part for part in parts if part)
-        return ""
-
-    return _walk(event)
 
 
 def build_audio_data_url(input_wav: bytes) -> str:

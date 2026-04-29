@@ -69,7 +69,7 @@ class ServerSettings:
     voice_runs_root: str = "runs/session"
     voice_asr_model_name: str = "qwen3-asr-flash"
     voice_asr_mode: str = "realtime"
-    voice_asr_realtime_model_name: str = "qwen3-asr-flash-realtime"
+    voice_asr_realtime_model_name: str = "fun-asr-realtime"
     voice_asr_realtime_timeout_ms: int = 5000
     voice_session_mode: str = "full_duplex_realtime"
     voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"

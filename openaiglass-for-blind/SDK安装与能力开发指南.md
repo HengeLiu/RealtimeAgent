@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v39`。本版本在 `sdk-v38` 基础上修正实时 ASR 延迟指标口径：`first_asr_partial_latency_ms` 和 `asr_total_latency_ms` 都从服务端收到眼镜首个音频 chunk 开始计算。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v40`。本版本在 `sdk-v39` 基础上把实时 ASR 切到阿里云百炼官方 `dashscope.audio.asr.Recognition` 接口，默认模型为 `fun-asr-realtime`，音频 chunk 到达服务端后会直接调用 `send_audio_frame(...)` 推给 ASR 服务。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -15,7 +15,7 @@
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。 |
 | 语音结束自动照片 | `sdk-v34` 可用 | 视觉问答类 Skill 把 `get_latest_utterance_photo` 放入 `allowed_tools`；不要再把 `capture_photo` 暴露给模型。 |
-| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime`；如需排障可临时设为 `batch`。 |
+| 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口 | `local_server.env` 保持 `VOICE_ASR_MODE=realtime` 和 `VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime`；如需排障可临时设为 `batch`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，并支持保存或直接播放下行语音 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
@@ -483,6 +483,8 @@ uv run openaiglass.glass.start \
 `sdk-v35` 起，默认 `VOICE_ASR_MODE=realtime`。服务端收到 `sensor.audio.segment.started` 后创建实时 ASR 会话，随后每个 `/ws_audio` 的 `audio_chunk` 都会在进入本地 `SegmentBuffer` 的同时送入实时 ASR。收到 `sensor.audio.segment.finished` 后，服务端优先等待实时 ASR 最终文本；如果实时 ASR 不可用、超时或返回空文本，再回退到旧的 `VOICE_ASR_MODEL_NAME` 整段 WAV 转写。这个改动的目标是把 ASR 耗时从“用户说完后才开始”前移到“用户说话过程中持续进行”。
 
 `sdk-v39` 起，实时 ASR 日志中的 `first_asr_partial_latency_ms` 不再从 `sensor.audio.segment.started` 或实时 ASR 会话创建时间开始计算，而是从服务端收到眼镜首个音频 chunk 并送入实时 ASR session 的时刻开始，到 ASR 服务返回第一段文本为止。`实时 ASR 完成` 日志新增 `asr_total_latency_ms`，同样从首个音频 chunk 起算，到 ASR 最终文本完成为止。排查 4 秒级 ASR 耗时时，应优先看这两个字段；如果它们仍接近整段语音时长，说明 ASR 服务首文本确实晚于用户说话结束附近返回，而不是 SDK 打点把语音开始前的等待算进去了。
+
+`sdk-v40` 起，实时 ASR 实现不再使用 `dashscope.audio.qwen_omni.OmniRealtimeConversation` 的转写能力，而是使用阿里云百炼实时语音识别文档对应的 `dashscope.audio.asr.Recognition`。SDK 在创建会话后调用 `Recognition.start()`，每个眼镜上行 PCM chunk 到达后立即调用 `send_audio_frame(...)`，语音结束时调用 `Recognition.stop()`；中间结果和最终结果通过 `RecognitionCallback.on_event(...)` 读取 `get_sentence()`，并用 `end_time` 判断句尾。业务本地配置建议使用 `VOICE_ASR_REALTIME_MODEL_NAME=fun-asr-realtime`。
 
 当前仍不是完整的端到端最低延迟链路：Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token；视觉问答还会等待自动照片和多模态图片解读；TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS，但不是 qwen-tts-realtime 的 `server_commit` 最低延迟链路。后续如果要接近 200ms 首音频，需要继续把 TTS 替换为实时 TTS，并对视觉问题单独做“先答一句 + 照片完成后补充”的策略。
 
