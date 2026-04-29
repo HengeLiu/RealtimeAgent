@@ -13,6 +13,7 @@ from infra.config import ServerSettings
 from runtime.voice_runtime import (
     DashscopeRealtimeSpeechRecognitionSession,
     DashscopeCosyVoiceTtsSession,
+    DashscopeOmniRealtimeReplyClient,
     MessageEntry,
     ModelChunk,
     PCM16StreamResampler,
@@ -313,6 +314,99 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
         self.assertEqual(synthesizer.start_count, 1)
         self.assertEqual(synthesizer.streaming_calls, ["你"])
+
+    def test_dashscope_omni_realtime_reply_client_streams_audio_delta(self) -> None:
+        """测试目标：验证 Omni Realtime 音频增量会直接进入播放回调。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话工厂。
+        2. 在 `create_response()` 时模拟返回文本、音频和完成事件。
+        3. 调用 `DashscopeOmniRealtimeReplyClient.run_reply(...)`。
+
+        预期结果：
+        1. SDK 会关闭服务端 VAD，手动提交音频并创建响应。
+        2. `response.audio.delta` 会被解码成 `ModelChunk.audio_pcm_bytes`。
+        3. 返回结果包含助手文本和用户语音转写。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.model = model
+                self.callback = callback
+                self.url = url
+                self.api_key = api_key
+                self.updated: dict[str, object] = {}
+                self.audio = ""
+                self.video: list[str] = []
+                self.committed = False
+                self.closed = False
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **kwargs) -> None:
+                self.updated = kwargs
+
+            def append_audio(self, audio_b64: str) -> None:
+                self.audio = audio_b64
+
+            def append_video(self, video_b64: str) -> None:
+                self.video.append(video_b64)
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def create_response(self, **_kwargs) -> None:
+                self.callback.on_event({"type": "response.created", "response": {"id": "resp-1"}})
+                self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "你好"})
+                self.callback.on_event({"type": "response.audio.delta", "delta": base64.b64encode(b"pcm").decode()})
+                self.callback.on_event(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": "看一下",
+                    }
+                )
+                self.callback.on_event({"type": "response.done"})
+
+            def close(self) -> None:
+                self.closed = True
+
+        chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+
+        result = client.run_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+            ),
+            input_pcm=b"\x01\x02",
+            image_frames=[b"jpg"],
+            instructions="简短回答",
+            on_chunk=chunks.append,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+
+        assert _Factory.instance is not None
+        self.assertFalse(_Factory.instance.updated["enable_turn_detection"])
+        self.assertTrue(_Factory.instance.committed)
+        self.assertEqual(base64.b64decode(_Factory.instance.audio), b"\x01\x02")
+        self.assertEqual([base64.b64decode(item) for item in _Factory.instance.video], [b"jpg"])
+        self.assertTrue(_Factory.instance.closed)
+        self.assertEqual(chunks[0].audio_pcm_bytes, b"pcm")
+        self.assertEqual(chunks[0].sample_rate_hz, 24000)
+        self.assertEqual(result.assistant_text, "你好")
+        self.assertEqual(result.transcript, "看一下")
+        self.assertEqual(result.response_id, "resp-1")
 
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
         """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。
