@@ -25,7 +25,7 @@ bash script/run_sdk_live_check.sh --report logs/sdk-live-check.json
 
 1. `compileall` 语法编译检查。
 2. `server`、`phone`、`glass` 及主流程脚本是否存在。
-3. `server/test/contracts` 下 SDK 公共契约测试是否通过。
+3. `openaiglass-sdk/testdata/contracts` 下 SDK 公共契约测试是否通过。
 4. `testdata/compat` 下官方样例兼容性回归是否通过。
 5. `testdata/scenario` 下全部 SDK 回放场景是否通过。
 6. 第二期核心 pytest 是否通过。

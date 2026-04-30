@@ -2185,7 +2185,7 @@ SDK 契约和核心单元测试：
 ```bash
 PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind \
 uv run --with pytest python -m pytest \
-  openaiglass-sdk/tests/contracts \
+  openaiglass-sdk/testdata/contracts \
   openaiglass-sdk/tests/unit \
   -q
 ```

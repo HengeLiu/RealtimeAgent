@@ -435,7 +435,7 @@ def main() -> int:
                     sys.executable,
                     "-m",
                     "pytest",
-                    "openaiglass-sdk/tests/contracts",
+                    "openaiglass-sdk/testdata/contracts",
                     "openaiglass-sdk/tests/unit/test_sdk_phase_two.py",
                     "openaiglass-sdk/tests/unit/test_playback_config.py",
                     "openaiglass-sdk/tests/unit/test_agent_core.py",

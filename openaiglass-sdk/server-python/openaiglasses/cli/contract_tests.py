@@ -42,7 +42,7 @@ def main() -> int:
         sys.executable,
         "-m",
         "pytest",
-        "openaiglass-sdk/tests/contracts",
+        "openaiglass-sdk/testdata/contracts",
         "-q",
     ]
     start = perf_counter()

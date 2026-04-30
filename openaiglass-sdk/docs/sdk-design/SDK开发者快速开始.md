@@ -127,7 +127,7 @@ uv run python script/run_sdk_preflight.py --report logs/sdk-preflight-stage2-fin
 
 1. `compileall` 通过。
 2. `server`、`phone`、`glass` 入口检查通过。
-3. `server/test/contracts` 下 SDK 公共契约测试通过。
+3. `openaiglass-sdk/testdata/contracts` 下 SDK 公共契约测试通过。
 4. 官方 `find_object` 样例兼容性回归通过。
 5. `testdata/scenario` 下 5 个回放场景全部通过。
 6. 第二期核心 pytest 通过。

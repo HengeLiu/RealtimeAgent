@@ -12,7 +12,7 @@ from protocol.messages.control_message import ControlMessage, Endpoint
 
 
 ROOT = Path(__file__).resolve().parents[3]
-CONTRACT_ROOT = ROOT / "openaiglass-sdk/testdata/contracts"
+CONTRACT_ROOT = Path(__file__).resolve().parent
 
 
 def _load_contract(name: str) -> dict:
