@@ -104,7 +104,6 @@
 #define CAMERA_FB_COUNT 1
 #define CAMERA_CAPTURE_TASK_STACK_SIZE (6 * 1024)
 #define CAMERA_STREAM_TASK_STACK_SIZE (8 * 1024)
-#define PLAYBACK_STREAM_TASK_STACK_SIZE (8 * 1024)
 #define WAKE_PROMPT_TONE_TABLE_SIZE 32
 
 typedef struct {
@@ -2404,30 +2403,8 @@ static void start_playback_stream(const char *stream_id)
     s_playback_task_running = true;
     s_playback_interrupt_requested = false;
     s_playback_request_started_ms = now_ms();
-    if (
-        xTaskCreateWithCaps(
-            playback_stream_task,
-            "playback_stream_task",
-            PLAYBACK_STREAM_TASK_STACK_SIZE,
-            NULL,
-            5,
-            &s_playback_task_handle,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-        ) != pdPASS
-    ) {
-        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        size_t largest_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        ESP_LOGE(
-            TAG,
-            "创建 playback_stream_task 失败: stack=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
-            PLAYBACK_STREAM_TASK_STACK_SIZE,
-            (unsigned)free_internal,
-            (unsigned)largest_internal,
-            (unsigned)free_spiram,
-            (unsigned)largest_spiram
-        );
+    if (xTaskCreate(playback_stream_task, "playback_stream_task", 8192, NULL, 5, &s_playback_task_handle) != pdPASS) {
+        ESP_LOGE(TAG, "创建 playback_stream_task 失败");
         s_playback_active = false;
         s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
         s_playback_task_running = false;
