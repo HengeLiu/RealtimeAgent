@@ -14,10 +14,22 @@ from infra.errors import ErrorCode, build_error
 class StartPhoneVideoLinkInput(BaseModel):
     """启动视频直连任务输入。"""
 
-    phone_device_id: str | None = Field(default=None, description="目标手机设备编号，不传则使用当前绑定手机")
-    link_mode: str = Field(default="direct", description="链路模式，首版默认 direct")
-    reason: str = Field(default="agent_requested", description="创建任务的原因")
-    frame_interval_ms: int = Field(default=500, description="帧发送间隔，单位毫秒")
+    phone_device_id: str | None = Field(
+        default=None,
+        description="目标手机设备编号；通常留空，表示使用当前眼镜已绑定的手机。",
+    )
+    link_mode: str = Field(
+        default="direct",
+        description="视频连接方式；一般使用默认值 direct，除非用户或上层流程明确要求其他方式。",
+    )
+    reason: str = Field(
+        default="agent_requested",
+        description="说明为什么需要启动手机视频直连，例如“持续观察前方路况”或“辅助找物”。",
+    )
+    frame_interval_ms: int = Field(
+        default=500,
+        description="手机向服务端发送视频帧的间隔，单位毫秒；数值越小越实时但资源消耗越高。",
+    )
 
 
 class StartPhoneVideoLinkOutput(BaseModel):
@@ -35,7 +47,10 @@ class StartPhoneVideoLinkTool(BaseTool):
 
     spec = ToolSpec(
         name="start_phone_video_link",
-        description="当需要创建眼镜与当前绑定手机之间的视频直连后台任务时使用。",
+        description=(
+            "当任务需要手机摄像头持续回传画面时调用，例如持续观察、找物、导航或红绿灯辅助。"
+            "只需要单张眼前照片时不要调用，应使用 capture_photo。"
+        ),
         input_model=StartPhoneVideoLinkInput,
         output_model=StartPhoneVideoLinkOutput,
         capability_type="tool",

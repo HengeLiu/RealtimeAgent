@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import os
 import sys
@@ -11,6 +12,8 @@ import threading
 import types
 import unittest
 from unittest.mock import patch
+
+from pydantic import BaseModel
 
 from agent_core import AgentFacade, AgentTurn, AgentTurnResult, DerivedArtifact, MediaAssetRef
 from agent_core.camera import CameraCaptureResult
@@ -26,7 +29,8 @@ from agent_core.memory import (
 )
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime
-from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
+from agent_core.models import CapabilityResult, ToolSpec
+from agent_core.tools import AgentToolContext, BaseTool, ToolGateway, ToolRegistry
 from backend_task_core import InMemoryTaskGateway
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
@@ -370,10 +374,10 @@ class AgentCoreTestCase(unittest.TestCase):
         测试方法：
         1. 构造内存版 `AgentMemoryRuntime` 和测试用 MemoryAgent。
         2. 让 MemoryAgent 先返回新增动作，再返回删除动作。
-        3. 通过 `memory_search` 按标题读取记忆详情。
+        3. 通过 `memory_search` 按主题读取记忆详情。
 
         预期结果：
-        1. `manage_memory` 入参只需要自然语言请求和相关上下文。
+        1. `manage_memory` 入参只需要主 Agent 摘取的 `memory_context`。
         2. 主 Agent 可见结果不包含内部 `memory_id`。
         3. 搜索未命中时会返回文本反馈。
         """
@@ -385,14 +389,14 @@ class AgentCoreTestCase(unittest.TestCase):
                         MemoryOperationAction(
                             operation="add",
                             memory_type="personalized",
-                            title="导航偏好",
+                            topic="导航偏好",
                             content="用户喜欢导航提示尽量简短。",
                         )
                     ],
                     feedback="已记住导航偏好",
                 ),
                 MemoryOperationPlan(
-                    actions=[MemoryOperationAction(operation="delete", title="导航偏好")],
+                    actions=[MemoryOperationAction(operation="delete", topic="导航偏好")],
                     feedback="已删除导航偏好",
                 ),
             ]
@@ -410,20 +414,18 @@ class AgentCoreTestCase(unittest.TestCase):
             name="manage_memory",
             context=context,
             arguments={
-                "query": "记住我的导航偏好：提示尽量简短。",
-                "memory_context": "用户刚才说导航提示尽量简短。",
+                "memory_context": "用户刚才说导航提示尽量简短，需要保存为导航偏好。",
             },
         )
         self.assertEqual(add_result.message, "已记住导航偏好")
         self.assertEqual(add_result.data["actions"][0]["operation"], "add")
         self.assertNotIn("memory_id", add_result.data["actions"][0])
-        self.assertEqual(manager.requests[0].query, "记住我的导航偏好：提示尽量简短。")
-        self.assertEqual(manager.requests[0].memory_context, "用户刚才说导航提示尽量简短。")
+        self.assertEqual(manager.requests[0].memory_context, "用户刚才说导航提示尽量简短，需要保存为导航偏好。")
 
         search_result = gateway.invoke(
             name="memory_search",
             context=context,
-            arguments={"title": "导航偏好"},
+            arguments={"topic": "导航偏好"},
         )
         self.assertNotIn("memory_id", search_result.data["memories"][0])
         self.assertEqual(search_result.data["memories"][0]["content"], "用户喜欢导航提示尽量简短。")
@@ -431,14 +433,14 @@ class AgentCoreTestCase(unittest.TestCase):
         delete_result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={"query": "忘掉导航偏好"},
+            arguments={"memory_context": "用户要求忘掉导航偏好。"},
         )
         self.assertEqual(delete_result.message, "已删除导航偏好")
 
         list_result = gateway.invoke(
             name="memory_search",
             context=context,
-            arguments={"title": "导航偏好"},
+            arguments={"topic": "导航偏好"},
         )
         self.assertEqual(list_result.data["memories"], [])
         self.assertEqual(list_result.message, "没有找到匹配的记忆")
@@ -449,11 +451,11 @@ class AgentCoreTestCase(unittest.TestCase):
         测试方法：
         1. 预先写入旧导航偏好。
         2. 让 MemoryAgent 返回先删除再新增的动作列表。
-        3. 按标题查询最终记忆。
+        3. 按主题查询最终记忆。
 
         预期结果：
         1. 旧内容被删除。
-        2. 新内容按同一标题写入。
+        2. 新内容按同一主题写入。
         3. 主 Agent 只看到动作摘要和文本反馈。
         """
 
@@ -463,18 +465,18 @@ class AgentCoreTestCase(unittest.TestCase):
             scope_type="device",
             scope_id="glass-001",
             memory_type="personalized",
-            title="导航偏好",
             content="用户喜欢导航提示详细一点。",
+            topic="导航偏好",
         )
         manager = FakeMemoryManagementAgent(
             plans=[
                 MemoryOperationPlan(
                     actions=[
-                        MemoryOperationAction(operation="delete", memory_id=old_record.memory_id, title="导航偏好"),
+                        MemoryOperationAction(operation="delete", memory_id=old_record.memory_id, topic="导航偏好"),
                         MemoryOperationAction(
                             operation="add",
                             memory_type="personalized",
-                            title="导航偏好",
+                            topic="导航偏好",
                             content="用户喜欢导航提示尽量简短。",
                         ),
                     ],
@@ -494,7 +496,7 @@ class AgentCoreTestCase(unittest.TestCase):
         result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={"query": "把导航偏好改成简短提示"},
+            arguments={"memory_context": "用户要求把导航偏好改成简短提示。"},
         )
         self.assertEqual(result.message, "已更新导航偏好")
         self.assertEqual([item["operation"] for item in result.data["actions"]], ["delete", "add"])
@@ -502,7 +504,7 @@ class AgentCoreTestCase(unittest.TestCase):
         search_result = gateway.invoke(
             name="memory_search",
             context=context,
-            arguments={"title": "导航偏好"},
+            arguments={"topic": "导航偏好"},
         )
         self.assertEqual(search_result.data["memories"][0]["content"], "用户喜欢导航提示尽量简短。")
 
@@ -524,8 +526,8 @@ class AgentCoreTestCase(unittest.TestCase):
             scope_type="device",
             scope_id="glass-001",
             memory_type="basic",
-            title="姓名",
             content="用户姓名是小明。",
+            topic="姓名",
         )
         manager = FakeMemoryManagementAgent(
             plans=[
@@ -534,7 +536,7 @@ class AgentCoreTestCase(unittest.TestCase):
                         MemoryOperationAction(
                             operation="update",
                             memory_type="basic",
-                            title="姓名",
+                            topic="姓名",
                             content="用户姓名是小李。",
                             memory_id=record.memory_id,
                         )
@@ -555,13 +557,13 @@ class AgentCoreTestCase(unittest.TestCase):
         update_result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={"query": "把我的名字更新为小李"},
+            arguments={"memory_context": "用户要求把自己的名字更新为小李。"},
         )
 
         self.assertNotIn("memory_id", update_result.data["actions"][0])
         updated = store.list_active(scope_type="device", scope_id="glass-001")[0]
         self.assertEqual(updated.memory_id, record.memory_id)
-        self.assertEqual(updated.title, "姓名")
+        self.assertEqual(updated.topic, "姓名")
         self.assertEqual(updated.content, "用户姓名是小李。")
 
     def test_agent_memory_rejects_unknown_memory_type(self) -> None:
@@ -583,13 +585,13 @@ class AgentCoreTestCase(unittest.TestCase):
                 scope_type="device",
                 scope_id="glass-001",
                 memory_type="unknown",  # type: ignore[arg-type]
-                title="非法类型",
                 content="这条记忆不应写入。",
+                topic="非法类型",
             )
 
         self.assertEqual(memory_runtime.list_memories(scope_type="device", scope_id="glass-001"), [])
 
-    def test_agent_runner_injects_basic_memory_and_personalized_titles(self) -> None:
+    def test_agent_runner_injects_basic_memory_and_personalized_topics(self) -> None:
         """测试目标：验证 Agent 运行时按基本信息和个性化信息策略注入长期记忆。
 
         测试方法：
@@ -598,8 +600,8 @@ class AgentCoreTestCase(unittest.TestCase):
         3. 检查 `model_request` 中的系统提示词。
 
         预期结果：
-        1. 基本信息标题和内容会完整出现。
-        2. 个性化信息只出现标题，不出现详细内容。
+        1. 基本信息主题和内容会完整出现。
+        2. 个性化信息只出现主题，不出现详细内容。
         """
 
         memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
@@ -607,21 +609,25 @@ class AgentCoreTestCase(unittest.TestCase):
             scope_type="device",
             scope_id="glass-001",
             memory_type="basic",
-            title="姓名",
             content="用户姓名是小明。",
+            topic="姓名",
             source="user_requested",
         )
         memory_runtime.add_memory(
             scope_type="device",
             scope_id="glass-001",
             memory_type="personalized",
-            title="导航偏好",
             content="用户喜欢导航提示尽量简短，并且希望先说方向再说距离。",
+            topic="导航偏好",
             source="user_requested",
         )
         registry, gateway = build_tooling(memory_runtime=memory_runtime)
         runner = OpenAIAgentLoopRunner(
-            settings=ServerSettings(dashscope_api_key="demo-key"),
+            settings=ServerSettings(
+                dashscope_api_key="demo-key",
+                agent_model_name="qwen3.6-plus",
+                voice_model_name="qwen3.5-omni-plus",
+            ),
             session_store=AgentSessionStore(),
             tool_registry=registry,
             tool_gateway=gateway,
@@ -644,7 +650,7 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("memory_search", runtime.model_request["instructions"])
         self.assertIn("manage_memory", runtime.model_request["instructions"])
         self.assertIn("基本信息", fragment)
-        self.assertIn("个性化信息标题", fragment)
+        self.assertIn("个性化信息主题", fragment)
 
     def test_start_phone_video_link_tool_prefers_device_group_snapshot(self) -> None:
         """测试目标：验证视频直连 Tool 优先使用 SDK 设备组快照。
@@ -981,6 +987,130 @@ class AgentCoreTestCase(unittest.TestCase):
             ],
         )
 
+    def test_openai_runner_direct_audio_path_invokes_tools(self) -> None:
+        """测试目标：验证音频原生 Omni 路径仍然能执行工具调用。
+
+        测试方法：
+        1. 注册一个模型可见测试工具。
+        2. 构造带本地 WAV 资产的 `AgentTurn`。
+        3. 用假 Chat Completions 客户端先返回工具调用，再返回最终文本。
+
+        预期结果：
+        1. 发送给模型的当前轮包含 `input_audio`。
+        2. 工具通过 `ToolGateway` 被执行一次。
+        3. 最终回复文本和模型请求快照都正常返回。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_name",
+                description="回显名字",
+                input_model=_EchoArgs,
+            )
+
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                self.calls.append(input_data.text)
+                return CapabilityResult.success(data={"name": input_data.text})
+
+        echo_tool = _EchoTool()
+        registry, gateway = build_tooling()
+        registry.register_external_tool(echo_tool)
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_audio_tool_001", device_id="glass-001")
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
+            audio_file.write(b"RIFFdemo-audio")
+            audio_file.flush()
+            turn = AgentTurn(
+                turn_id="turn_audio_tool_001",
+                session_id="sess_audio_tool_001",
+                device_id="glass-001",
+                source="voice_raw_audio",
+                input_text="用户发送了一段语音，请直接理解音频内容并执行用户意图。",
+                asset_refs=[
+                    MediaAssetRef(
+                        asset_id="asset_audio_tool_001",
+                        session_id="sess_audio_tool_001",
+                        asset_type="audio",
+                        storage_uri=audio_file.name,
+                        mime_type="audio/wav",
+                    )
+                ],
+            )
+
+            captured_requests: list[dict[str, object]] = []
+
+            class _FakeFunction:
+                name = "echo_name"
+                arguments = '{"text": "文刀"}'
+
+            class _FakeToolCall:
+                id = "call_echo_001"
+                type = "function"
+                function = _FakeFunction()
+
+            class _FakeToolMessage:
+                content = ""
+                tool_calls = [_FakeToolCall()]
+
+            class _FakeFinalMessage:
+                content = "你叫文刀。"
+                tool_calls = None
+
+            class _FakeChoice:
+                def __init__(self, message) -> None:
+                    self.message = message
+
+            class _FakeCompletion:
+                def __init__(self, message) -> None:
+                    self.choices = [_FakeChoice(message)]
+
+            class _FakeChatCompletions:
+                def __init__(self) -> None:
+                    self.responses = [_FakeCompletion(_FakeToolMessage()), _FakeCompletion(_FakeFinalMessage())]
+
+                def create(self, **kwargs):
+                    captured_requests.append(copy.deepcopy(kwargs))
+                    return self.responses.pop(0)
+
+            class _FakeChat:
+                def __init__(self) -> None:
+                    self.completions = _FakeChatCompletions()
+
+            class _FakeClient:
+                def __init__(self) -> None:
+                    self.chat = _FakeChat()
+
+            with patch.object(runner, "_create_sdk_client", return_value=_FakeClient()):
+                result = runner.run_turn(session=session, turn=turn)
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.reply_text, "你叫文刀。")
+        self.assertEqual(captured_requests[0]["model"], "qwen3.5-omni-plus")
+        self.assertEqual(result.meta["model_request"]["model"], "qwen3.5-omni-plus")
+        self.assertEqual(echo_tool.calls, ["文刀"])
+        first_user_content = captured_requests[0]["messages"][-1]["content"]  # type: ignore[index]
+        self.assertEqual(first_user_content[1]["type"], "input_audio")
+        model_messages = result.meta["model_request"]["messages"]
+        audio_model_message = next(
+            message
+            for message in model_messages
+            if isinstance(message.get("content"), list)
+            and len(message["content"]) > 1
+            and message["content"][1].get("type") == "input_audio"
+        )
+        self.assertIn("<redacted>", audio_model_message["content"][1]["input_audio"]["data"])
+
     def test_openai_runner_uses_minimal_system_prompt(self) -> None:
         """测试目标：验证发给模型的 system prompt 只保留角色与风格约束。
 
@@ -1015,7 +1145,7 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertNotIn("请遵守以下规则", instructions)
 
     def test_openai_runner_instructs_agent_to_proactively_save_user_memory(self) -> None:
-        """测试目标：验证主 Agent 提示词明确要求主动保存用户长期信息。
+        """测试目标：验证主 Agent 提示词保留主动记忆维护入口。
 
         测试方法：
         1. 构造带记忆运行时的 `OpenAIAgentLoopRunner`。
@@ -1023,9 +1153,9 @@ class AgentCoreTestCase(unittest.TestCase):
         3. 检查发给模型的系统提示词。
 
         预期结果：
-        1. 提示词要求用户自然说出值得长期保存的信息时调用 `manage_memory`。
-        2. 提示词明确列出姓名等基本信息和导航偏好等个性化信息。
-        3. 提示词同时列出不应写入长期记忆的边界。
+        1. 提示词要求调用 `manage_memory` 主动维护记忆。
+        2. 提示词保留 `manage_memory` 作为维护长期记忆的入口。
+        3. 提示词保留 `memory_search` 作为读取长期记忆的入口。
         """
 
         memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
@@ -1048,11 +1178,8 @@ class AgentCoreTestCase(unittest.TestCase):
         runtime = runner._turn_runtime_factory.build(session=session, turn=turn)
         instructions = runtime.model_request["instructions"]
 
-        self.assertIn("即使没有说“记住”", instructions)
-        self.assertIn("姓名", instructions)
-        self.assertIn("导航偏好", instructions)
         self.assertIn("manage_memory", instructions)
-        self.assertIn("不要把一次性任务", instructions)
+        self.assertIn("memory_search", instructions)
 
     def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:
         """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。

@@ -19,7 +19,7 @@
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
-| Agent 长期记忆 | `sdk-v50` 起支持两类注入策略，`sdk-v66` 收敛为 MemoryAgent 内部动作计划，`sdk-v67` 统一为基本信息和个性化信息，`sdk-v68` 补强主动记忆提示 | 业务能力不要自建记忆表；姓名、年龄等基本信息每轮完整注入，住址、爱好、习惯等个性化信息只注入标题，详情由模型按需调用 `memory_search`。 |
+| Agent 长期记忆 | `sdk-v50` 起支持两类注入策略，`sdk-v66` 收敛为 MemoryAgent 内部动作计划，`sdk-v67` 统一为基本信息和个性化信息，`sdk-v68` 补强主动记忆提示 | 业务能力不要自建记忆表；姓名、年龄等基本信息每轮完整注入，住址、爱好、习惯等个性化信息只注入主题，详情由模型按需调用 `memory_search`。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
 | iOS/ESP32 SDK 包形态 | 源码包可检查 | 业务工程引用 SDK 源码运行时；二进制发布仍是后续工作。 |
 
@@ -528,12 +528,12 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 1. 本地 JSON 文件持久化，默认路径为 `runs/memory/agent_memories.json`。
 2. 基本信息：姓名、年龄、性别等短小稳定信息，每轮完整注入 system prompt，对应 `memory_type=basic`。
-3. 个性化信息：住址、电话、爱好、习惯、任务设置等较长或可能变化的信息，每轮只注入标题，对应 `memory_type=personalized`。
-4. 模型可见工具 `memory_search`，按记忆标题读取详细内容。
+3. 个性化信息：住址、电话、爱好、习惯、任务设置等较长或可能变化的信息，每轮只注入主题，对应 `memory_type=personalized`。
+4. 模型可见工具 `memory_search`，按记忆主题读取详细内容。
 5. 模型可见工具 `manage_memory(query, memory_context)`，只接收用户原始请求和主 Agent 摘取的相关聊天上下文。
 6. 用户通过自然语言说“记住我喜欢简短提示”“更新我的住址”“忘掉刚才那条记忆”时，模型应调用 `manage_memory`，由 MemoryAgent 自行决定内部动作。
 7. 用户自然说出值得长期保存的信息时，即使没有说“记住”，主 Agent 也应调用 `manage_memory`。例如“我叫小明”“以后导航提示短一点”“我常去人民医院”。
-8. `sdk-v66` 起，主 Agent 不应传入 `operation/title/content/memory_id/category/reason` 等结构化字段；这些字段由 MemoryAgent 基于已有记忆自行判断。
+8. `sdk-v66` 起，主 Agent 不应传入 `operation/topic/content/memory_id/category/reason` 等结构化字段；这些字段由 MemoryAgent 基于已有记忆自行判断。
 9. `memory_id` 是记忆维护内部变量，只用于搜索、更新、删除和新增时定位具体记录，不会返回给主 Agent。
 
 相关服务端配置：
@@ -542,7 +542,7 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 | --- | --- | --- |
 | `AGENT_MEMORY_ENABLED` | `true` | 是否启用长期记忆。关闭后 `manage_memory` 不暴露给模型。 |
 | `AGENT_MEMORY_STORE_PATH` | `runs/memory/agent_memories.json` | 记忆持久化文件。不要提交真实用户记忆文件。 |
-| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入多少条基本信息和个性化信息标题；设为 `0` 表示保留工具但不自动注入。 |
+| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入多少条基本信息和个性化信息主题；设为 `0` 表示保留工具但不自动注入。 |
 
 业务开发者需要注意：
 

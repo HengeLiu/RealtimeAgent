@@ -13,7 +13,9 @@ from infra.errors import ErrorCode, build_error
 class CancelTaskInput(BaseModel):
     """取消任务输入。"""
 
-    task_id: str = Field(description="任务编号")
+    task_id: str = Field(
+        description="要取消的后台任务编号，通常来自此前工具返回的 task_id；没有明确任务编号时不要猜测。",
+    )
 
 
 class CancelTaskOutput(BaseModel):
@@ -29,7 +31,7 @@ class CancelTaskTool(BaseTaskTool):
 
     spec = ToolSpec(
         name="cancel_task",
-        description="取消指定后台任务",
+        description="当用户明确要求停止、取消或结束某个正在运行的后台任务时调用；只适用于已经有 task_id 的任务。",
         input_model=CancelTaskInput,
         output_model=CancelTaskOutput,
         capability_type="task",

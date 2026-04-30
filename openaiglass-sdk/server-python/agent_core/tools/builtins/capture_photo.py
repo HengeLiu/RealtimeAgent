@@ -24,7 +24,10 @@ _MIME_EXTENSION_MAP = {
 class CapturePhotoInput(BaseModel):
     """抓拍图片输入。"""
 
-    reason: str = Field(default="agent_requested", description="触发抓拍的原因")
+    reason: str = Field(
+        default="agent_requested",
+        description="说明这次拍照要帮助回答用户的哪个问题，例如“识别前方物体”或“查看路口信号”。",
+    )
 
 
 class CapturePhotoOutput(BaseModel):
@@ -42,7 +45,10 @@ class CapturePhotoTool(BaseTool):
 
     spec = ToolSpec(
         name="capture_photo",
-        description="当回答用户问题需要查看用户眼前画面时，调用相机拍下当前场景，供后续直接查看图片并回答。",
+        description=(
+            "当用户询问眼前画面、物体、文字、障碍物、路况等需要新的视觉信息才能回答的问题时调用。"
+            "普通闲聊、记忆维护或已有当前照片足够回答时不要调用。"
+        ),
         input_model=CapturePhotoInput,
         output_model=CapturePhotoOutput,
         capability_type="tool",

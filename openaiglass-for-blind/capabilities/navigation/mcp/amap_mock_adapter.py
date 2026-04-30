@@ -12,23 +12,23 @@ from pydantic import BaseModel, Field
 class AmapRoutePlanInput(BaseModel):
     """AMap 路线规划输入。"""
 
-    origin: str = Field(default="", description="起点名称或坐标")
-    destination: str = Field(description="终点名称或坐标")
-    strategy: str = Field(default="walking", description="路线策略")
+    origin: str = Field(default="", description="路线起点名称或坐标；不知道时可以留空表示当前位置。")
+    destination: str = Field(description="路线终点名称或坐标，应使用已确认的目的地。")
+    strategy: str = Field(default="walking", description="路线策略；盲人步行导航通常使用 walking。")
 
 
 class AmapPoiSearchInput(BaseModel):
     """AMap POI 搜索输入。"""
 
-    keyword: str = Field(description="目的地关键词")
-    city: str = Field(default="", description="城市名称，可为空")
+    keyword: str = Field(description="用户想去的地点关键词，例如商场、医院、地铁站或具体店名。")
+    city: str = Field(default="", description="限定搜索的城市；用户没有说明城市时可以留空。")
 
 
 class AmapGeocodeInput(BaseModel):
     """AMap 地理编码输入。"""
 
-    poi_id: str = Field(default="", description="POI 编号")
-    address: str = Field(default="", description="地址或名称")
+    poi_id: str = Field(default="", description="已确认目的地候选的 POI 编号；没有编号时可以留空。")
+    address: str = Field(default="", description="要解析坐标的地址或地点名称；没有 POI 编号时必须填写。")
 
 
 class MockAmapMcpAdapter(BaseMcpAdapter):
@@ -62,19 +62,19 @@ class MockAmapMcpAdapter(BaseMcpAdapter):
         return [
             McpMethodSpec(
                 name="amap.poi_search",
-                description="搜索目的地候选 POI",
+                description="当目的地可能有多个候选时搜索可选地点，用于让用户确认具体目的地。",
                 input_model=AmapPoiSearchInput,
                 tags=["navigation", "amap", "mock"],
             ),
             McpMethodSpec(
                 name="amap.geocode",
-                description="解析目的地坐标",
+                description="把用户确认的目的地候选或地址解析成可用于路线规划的位置。",
                 input_model=AmapGeocodeInput,
                 tags=["navigation", "amap", "mock"],
             ),
             McpMethodSpec(
                 name="amap.route_plan",
-                description="规划步行导航路线",
+                description="在起点和已确认目的地之间规划步行路线。",
                 input_model=AmapRoutePlanInput,
                 tags=["navigation", "amap", "mock"],
             ),

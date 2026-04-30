@@ -35,15 +35,15 @@ class AgentMemoryStore:
 
         raise NotImplementedError
 
-    def find_by_titles(
+    def find_by_topics(
         self,
         *,
         scope_type: MemoryScope,
         scope_id: str,
-        titles: list[str],
+        topics: list[str],
         memory_type: MemoryType | None = None,
     ) -> list[AgentMemoryRecord]:
-        """按标题读取记忆。"""
+        """按主题读取记忆。"""
 
         raise NotImplementedError
 
@@ -52,15 +52,15 @@ class AgentMemoryStore:
 
         raise NotImplementedError
 
-    def delete_by_title(
+    def delete_by_topic(
         self,
         *,
-        title: str,
+        topic: str,
         scope_type: MemoryScope,
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按标题软删除指定记忆。"""
+        """按主题软删除指定记忆。"""
 
         raise NotImplementedError
 
@@ -91,19 +91,19 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             self._records[record.memory_id] = record
             return record
 
-    def upsert_by_title(self, record: AgentMemoryRecord) -> AgentMemoryRecord:
-        """按标题覆盖同作用域同类型记忆。
+    def upsert_by_topic(self, record: AgentMemoryRecord) -> AgentMemoryRecord:
+        """按主题覆盖同作用域同类型记忆。
 
         主要逻辑：
-        1. 同一作用域下标题相同的记忆视为同一槽位。
+        1. 同一作用域下主题相同的记忆视为同一槽位。
         2. 写入时复用旧 `memory_id` 和创建时间，避免模型引用失效。
         """
 
         with self._lock:
-            existing = self._find_active_by_title_locked(
+            existing = self._find_active_by_topic_locked(
                 scope_type=record.scope_type,
                 scope_id=record.scope_id,
-                title=record.title,
+                topic=record.topic,
                 memory_type=record.memory_type,
             )
             if existing is not None:
@@ -144,7 +144,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
 
         scored: list[tuple[int, AgentMemoryRecord]] = []
         for record in candidates:
-            text = f"{record.title} {record.content}".lower()
+            text = f"{record.topic} {record.content}".lower()
             score = 10 if normalized_query in text else 0
             score += sum(3 for term in query_terms if term in text)
             if not query_terms:
@@ -154,26 +154,26 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
         scored.sort(key=lambda item: (item[0], item[1].updated_at_ms), reverse=True)
         return [record for _, record in scored[:limit]]
 
-    def find_by_titles(
+    def find_by_topics(
         self,
         *,
         scope_type: MemoryScope,
         scope_id: str,
-        titles: list[str],
+        topics: list[str],
         memory_type: MemoryType | None = None,
     ) -> list[AgentMemoryRecord]:
-        """按标题读取记忆。"""
+        """按主题读取记忆。"""
 
-        normalized_titles = [self._normalize_title(title) for title in titles if self._normalize_title(title)]
-        if not normalized_titles:
+        normalized_topics = [self._normalize_topic(topic) for topic in topics if self._normalize_topic(topic)]
+        if not normalized_topics:
             return []
         with self._lock:
             result: list[AgentMemoryRecord] = []
-            for title in normalized_titles:
-                record = self._find_active_by_title_locked(
+            for topic in normalized_topics:
+                record = self._find_active_by_topic_locked(
                     scope_type=scope_type,
                     scope_id=scope_id,
-                    title=title,
+                    topic=topic,
                     memory_type=memory_type,
                 )
                 if record is not None:
@@ -191,24 +191,24 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             record.updated_at_ms = record.deleted_at_ms
             return record
 
-    def delete_by_title(
+    def delete_by_topic(
         self,
         *,
-        title: str,
+        topic: str,
         scope_type: MemoryScope,
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按标题软删除指定记忆。"""
+        """按主题软删除指定记忆。"""
 
-        normalized_title = self._normalize_title(title)
-        if not normalized_title:
+        normalized_topic = self._normalize_topic(topic)
+        if not normalized_topic:
             return None
         with self._lock:
-            record = self._find_active_by_title_locked(
+            record = self._find_active_by_topic_locked(
                 scope_type=scope_type,
                 scope_id=scope_id,
-                title=normalized_title,
+                topic=normalized_topic,
                 memory_type=memory_type,
             )
             if record is None:
@@ -217,27 +217,27 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             record.updated_at_ms = record.deleted_at_ms
             return record
 
-    def _find_active_by_title_locked(
+    def _find_active_by_topic_locked(
         self,
         *,
         scope_type: MemoryScope,
         scope_id: str,
-        title: str,
+        topic: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        normalized_title = self._normalize_title(title)
+        normalized_topic = self._normalize_topic(topic)
         for record in self._records.values():
             if record.scope_type != scope_type or record.scope_id != scope_id or not record.active:
                 continue
             if memory_type is not None and record.memory_type != memory_type:
                 continue
-            if self._normalize_title(record.title) == normalized_title:
+            if self._normalize_topic(record.topic) == normalized_topic:
                 return record
         return None
 
     @staticmethod
-    def _normalize_title(title: str) -> str:
-        return " ".join(title.strip().lower().split())
+    def _normalize_topic(topic: str) -> str:
+        return " ".join(topic.strip().lower().split())
 
 
 class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
@@ -262,10 +262,10 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
         self._flush()
         return result
 
-    def upsert_by_title(self, record: AgentMemoryRecord) -> AgentMemoryRecord:
-        """按标题覆盖记忆并同步落盘。"""
+    def upsert_by_topic(self, record: AgentMemoryRecord) -> AgentMemoryRecord:
+        """按主题覆盖记忆并同步落盘。"""
 
-        result = super().upsert_by_title(record)
+        result = super().upsert_by_topic(record)
         self._flush()
         return result
 
@@ -277,18 +277,18 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
             self._flush()
         return result
 
-    def delete_by_title(
+    def delete_by_topic(
         self,
         *,
-        title: str,
+        topic: str,
         scope_type: MemoryScope,
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按标题软删除指定记忆并同步落盘。"""
+        """按主题软删除指定记忆并同步落盘。"""
 
-        result = super().delete_by_title(
-            title=title,
+        result = super().delete_by_topic(
+            topic=topic,
             scope_type=scope_type,
             scope_id=scope_id,
             memory_type=memory_type,
@@ -315,8 +315,8 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
                     item["memory_type"] = "personalized"
                 if item.get("memory_type") not in {"basic", "personalized"}:
                     continue
-                if "title" not in item:
-                    item["title"] = item.get("category") or "未命名记忆"
+                if "topic" not in item:
+                    item["topic"] = "未命名记忆"
                 item.pop("text", None)
                 item.pop("category", None)
                 records.append(AgentMemoryRecord(**item))

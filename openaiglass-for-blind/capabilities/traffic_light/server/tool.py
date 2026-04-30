@@ -12,8 +12,11 @@ from openaiglasses import BaseTool, CapabilityResult
 class StartTrafficLightInput(BaseModel):
     """红绿灯识别 Tool 输入。"""
 
-    crossing_name: str = Field(default="", description="路口或过街位置名称，可为空")
-    stop_after_first_signal: bool = Field(default=True, description="识别到第一个有效信号后是否结束任务")
+    crossing_name: str = Field(default="", description="用户所在或将要通过的路口名称；不知道具体名称时可以留空。")
+    stop_after_first_signal: bool = Field(
+        default=True,
+        description="识别到第一个明确的红绿灯信号后是否结束任务；需要持续观察时填 false。",
+    )
 
 
 class StartTrafficLightOutput(BaseModel):
@@ -40,7 +43,10 @@ class StartTrafficLightTool(BaseTool):
     """
 
     name = "start_traffic_light_detection"
-    description = "启动红绿灯识别任务，用于辅助用户判断当前是否可以过街"
+    description = (
+        "当用户准备过街、询问红绿灯状态或需要持续判断是否可以通行时调用。"
+        "只想看一眼当前画面时可先拍照，不一定启动持续识别任务。"
+    )
     input_model = StartTrafficLightInput
     output_model = StartTrafficLightOutput
 
@@ -78,4 +84,3 @@ class StartTrafficLightTool(BaseTool):
             },
             message="已启动红绿灯识别任务",
         )
-

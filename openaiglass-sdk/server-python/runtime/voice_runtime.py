@@ -37,6 +37,30 @@ UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
 OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
 
 
+def _format_log_text(text: str, *, max_chars: int = 240) -> str:
+    """格式化适合写入单行日志的文本。
+
+    主要逻辑：
+    1. 把换行和多余空白压缩成单个空格，避免一轮对话打散多行日志。
+    2. 控制最大长度，防止异常长回复把关键链路日志淹没。
+
+    参数：
+    1. `text`：原始文本。
+    2. `max_chars`：最多保留的字符数。
+
+    返回值：
+    1. 可直接写入日志的单行文本。
+
+    异常情况：
+    1. 本函数不抛出业务异常；空文本会返回空字符串。
+    """
+
+    compact = " ".join(text.split())
+    if max_chars <= 0 or len(compact) <= max_chars:
+        return compact
+    return f"{compact[:max_chars]}..."
+
+
 @dataclass(slots=True)
 class MessageEntry:
     """最小消息上下文条目。"""
@@ -1451,6 +1475,7 @@ class DashscopeOmniRealtimeReplyClient:
         response_created_at_ms: int | None = None
         first_audio_at_ms: int | None = None
         first_text_at_ms: int | None = None
+        assistant_text_logged = False
 
         class _Callback(OmniRealtimeCallback):
             """Omni Realtime 回调桥接器。"""
@@ -1474,7 +1499,7 @@ class DashscopeOmniRealtimeReplyClient:
                     )
 
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - 真实联调路径
-                nonlocal response_created_at_ms, first_audio_at_ms, first_text_at_ms
+                nonlocal response_created_at_ms, first_audio_at_ms, first_text_at_ms, assistant_text_logged
                 event_type = str(message.get("type") or "")
                 now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
                 if event_type == "response.created":
@@ -1570,13 +1595,40 @@ class DashscopeOmniRealtimeReplyClient:
                     on_chunk(ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
                     return
 
+                if event_type in {"response.audio_transcript.done", "response.text.done"}:
+                    final_text = str(message.get("transcript") or message.get("text") or "")
+                    if final_text and not assistant_text_parts:
+                        assistant_text_parts.append(final_text)
+                    text_for_log = final_text or "".join(assistant_text_parts).strip()
+                    if text_for_log and not assistant_text_logged:
+                        assistant_text_logged = True
+                        log_info(
+                            self_logger,
+                            f"Omni Realtime 助手文本完成 text={_format_log_text(text_for_log)!r}",
+                            LogContext(device_id=device_id, session_id=session_id),
+                        )
+                    return
+
                 if event_type == "conversation.item.input_audio_transcription.completed":
                     transcript = str(message.get("transcript") or "")
                     if transcript:
                         transcript_parts.append(transcript)
+                        log_info(
+                            self_logger,
+                            f"Omni Realtime 用户转写完成 transcript={_format_log_text(transcript)!r}",
+                            LogContext(device_id=device_id, session_id=session_id),
+                        )
                     return
 
                 if event_type in {"response.done", "response.cancelled"}:
+                    text_for_log = "".join(assistant_text_parts).strip()
+                    if event_type == "response.done" and text_for_log and not assistant_text_logged:
+                        assistant_text_logged = True
+                        log_info(
+                            self_logger,
+                            f"Omni Realtime 助手文本完成 text={_format_log_text(text_for_log)!r}",
+                            LogContext(device_id=device_id, session_id=session_id),
+                        )
                     done_event.set()
                     return
 
@@ -2439,7 +2491,8 @@ class VoiceRuntime:
                 codec=str(payload.get("codec", "pcm16")).strip() or "pcm16",
                 started_at_ms=int(time.time() * 1000),
             )
-            if self._settings.effective_voice_input_mode() == "asr_text":
+            effective_voice_input_mode = self._settings.effective_voice_input_mode()
+            if effective_voice_input_mode == "asr_text":
                 segment.streaming_asr_session = self._asr_client.start_streaming_session(
                     settings=self._settings,
                     session_id=session_id,
@@ -2449,26 +2502,18 @@ class VoiceRuntime:
                     sample_rate_hz=segment.sample_rate,
                     channels=segment.channels,
                     codec=segment.codec,
-            )
+                )
             controller.current_segment = segment
             controller.state = "receiving_segment"
-            should_start_omni = (
-                self._settings.voice_reply_mode == "omni_realtime"
-                and self._settings.effective_voice_input_mode() == "raw_audio"
+            should_capture_photo_early = (
+                effective_voice_input_mode == "raw_audio" and self._settings.omni_turn_detection_enabled()
             )
-            should_capture_photo_early = should_start_omni and self._settings.omni_turn_detection_enabled()
         if should_capture_photo_early:
             self._start_utterance_photo_capture(
                 device_id=device_id,
                 session_id=session_id,
                 segment=segment,
                 reason="realtime_semantic_turn_started",
-            )
-        if should_start_omni:
-            self._start_omni_realtime_segment_session(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
             )
 
     def on_audio_connection_opened(self, *, device_id: str, peer: str) -> None:
@@ -3130,10 +3175,14 @@ class VoiceRuntime:
 
         try:
             voice_input_mode = self._settings.effective_voice_input_mode()
-            asr_model_label = self._settings.voice_asr_model_name if voice_input_mode == "asr_text" else "<skipped>"
+            input_model_label = (
+                self._settings.voice_asr_model_name
+                if voice_input_mode == "asr_text"
+                else f"{self._settings.voice_model_name}<native_audio_input>"
+            )
             reply_model_label = (
-                self._settings.voice_omni_realtime_model_name
-                if self._settings.voice_reply_mode == "omni_realtime"
+                self._settings.voice_model_name
+                if voice_input_mode == "raw_audio"
                 else self._settings.agent_model_name
             )
             log_info(
@@ -3142,46 +3191,41 @@ class VoiceRuntime:
                     "语音链路开始处理音频段 "
                     f"input_stream_id={segment.stream_id} segment_id={segment.segment_id} "
                     f"duration_ms={segment.duration_ms()} bytes={len(input_wav)} "
-                    f"voice_input_mode={voice_input_mode} reply_mode={self._settings.voice_reply_mode} "
-                    f"asr_model={asr_model_label} reply_model={reply_model_label}"
+                    f"voice_input_mode={voice_input_mode} "
+                    f"input_model={input_model_label} reply_model={reply_model_label}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
             if not segment.utterance_photo_capture_started:
                 self._start_utterance_photo_capture(device_id=device_id, session_id=session_id, segment=segment)
-            if self._settings.voice_reply_mode == "omni_realtime":
-                self._run_omni_realtime_reply_pipeline(
-                    controller=controller,
+            if voice_input_mode == "asr_text":
+                user_text = self._transcribe_segment(
                     device_id=device_id,
                     session_id=session_id,
                     segment=segment,
-                    input_path=input_path,
-                    input_pcm=bytes(segment.payload),
-                )
-                return
-            user_text = self._transcribe_segment(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
-                input_wav=input_wav,
-            ).strip()
+                    input_wav=input_wav,
+                ).strip()
+            else:
+                user_text = "用户发送了一段语音，请直接理解音频内容并执行用户意图。"
             if not user_text:
                 raise build_error(
                     ErrorCode.INTERNAL_ERROR,
-                    "当前轮用户语音转写结果为空，无法继续调用对话模型",
+                    "当前轮用户语音输入为空，无法继续调用 agent-core",
                     details={"segment_id": segment.segment_id},
                 )
             log_debug(
                 self._logger,
-                f"ASR 转写结果: {user_text}",
+                f"语音输入文本: {user_text}",
                 LogContext(device_id=device_id, session_id=session_id),
             )
             log_info(
                 self._logger,
                 (
-                    "ASR 完成，准备进入 agent-core "
+                    "语音输入已准备进入 agent-core "
                     f"input_stream_id={segment.stream_id} segment_id={segment.segment_id} "
-                    f"agent_model={self._settings.agent_model_name} text_length={len(user_text)}"
+                    f"voice_input_mode={voice_input_mode} "
+                    f"agent_model={reply_model_label} text_length={len(user_text)} "
+                    f"audio_asset_bytes={len(input_wav)}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
@@ -3193,13 +3237,14 @@ class VoiceRuntime:
                     "segment_id": segment.segment_id,
                     "stream_id": segment.stream_id,
                     "transcript": user_text,
+                    "voice_input_mode": voice_input_mode,
                 },
             )
             turn = AgentTurn(
                 turn_id=generate_id("turn"),
                 session_id=session_id,
                 device_id=device_id,
-                source="voice_asr",
+                source=f"voice_{voice_input_mode}",
                 input_text=user_text,
                 asset_refs=[
                     MediaAssetRef(
@@ -3218,12 +3263,13 @@ class VoiceRuntime:
                     DerivedArtifact(
                         artifact_id=generate_id("artifact"),
                         session_id=session_id,
-                        artifact_type="asr_transcript",
+                        artifact_type="voice_transcript",
                         storage_uri=transcript_path,
                         text=user_text,
                         meta={
                             "segment_id": segment.segment_id,
                             "stream_id": segment.stream_id,
+                            "voice_input_mode": voice_input_mode,
                         },
                     )
                 ],
@@ -3237,6 +3283,7 @@ class VoiceRuntime:
             final_tts_session: StreamingTtsSession | None = None
             model_request_started_at_ms = self._now_ms()
             first_model_token_logged = False
+            use_streaming_tts_output = True
 
             def _create_final_tts_session() -> StreamingTtsSession:
                 """创建当前 Agent 最终回复使用的流式 TTS 会话。
@@ -3265,6 +3312,8 @@ class VoiceRuntime:
                 """把文本推给当前预热 TTS，会话失效时重建一次。"""
 
                 nonlocal final_tts_session
+                if not use_streaming_tts_output:
+                    return
                 assert final_synthesis_context is not None
                 assert final_tts_session is not None
                 self._mark_first_text_delta(final_synthesis_context.playback)
@@ -3312,6 +3361,7 @@ class VoiceRuntime:
             final_synthesis_context = self._open_reply_synthesis_context(
                 device_id=device_id,
                 session_id=session_id,
+                audio_source="tts",
             )
             final_tts_session = _create_final_tts_session()
             log_info(
@@ -3327,7 +3377,7 @@ class VoiceRuntime:
             agent_result = self._agent_facade.handle_turn(
                 turn,
                 progress_callback=_handle_progress_text,
-                reply_text_delta_callback=_handle_reply_text_delta,
+                reply_text_delta_callback=_handle_reply_text_delta if use_streaming_tts_output else None,
             )
             capability_trace_ids = [trace.trace_id for trace in agent_result.capability_traces]
             log_debug(
@@ -3380,7 +3430,7 @@ class VoiceRuntime:
                 output_pcm.extend(final_synthesis_context.output_pcm)
                 playback_stream_id = final_synthesis_context.stream_id
 
-            if final_tts_session is not None and final_synthesis_context is not None:
+            if final_synthesis_context is not None:
                 self._send_control_message(
                     device_id,
                     "notify",
@@ -3784,6 +3834,16 @@ class VoiceRuntime:
             (
                 "Omni Realtime 最终回复 "
                 f"reply_length={len(assistant_text)} transcript_length={len(transcript)} "
+                f"response_id={result.response_id}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+        log_info(
+            self._logger,
+            (
+                "Omni Realtime 文字交互 "
+                f"user={_format_log_text(transcript)!r} "
+                f"assistant={_format_log_text(assistant_text)!r} "
                 f"response_id={result.response_id}"
             ),
             LogContext(device_id=device_id, session_id=session_id),

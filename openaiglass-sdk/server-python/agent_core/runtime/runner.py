@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -693,6 +694,32 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 context=runtime.tool_context,
             )
 
+        if self._turn_has_audio_asset(turn):
+            try:
+                direct_result = self._run_direct_audio_turn(
+                    session=session,
+                    turn=turn,
+                    runtime=runtime,
+                    reply_text_delta_callback=reply_text_delta_callback,
+                )
+            except Exception as exc:
+                log_error(
+                    self._logger,
+                    f"agent-core 音频原生链路异常: reason={exc!r}",
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
+                direct_result = self._build_failure_result(
+                    turn=turn,
+                    message="agent-core 音频原生链路运行失败",
+                    traces=runtime.capability_traces,
+                    error=build_error(
+                        ErrorCode.INTERNAL_ERROR,
+                        "agent-core 音频原生链路运行失败",
+                        details={"reason": str(exc)},
+                    ),
+                )
+            return self._attach_capability_outputs(result=direct_result, context=runtime.tool_context)
+
         if not self._sdk_bridge.is_available():
             return self._attach_capability_outputs(
                 result=self._build_failure_result(
@@ -798,6 +825,143 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         return self._attach_capability_outputs(
             result=stream_result,
             context=runtime.tool_context,
+        )
+
+    def _run_direct_audio_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        runtime: AgentTurnRuntime,
+        reply_text_delta_callback: Callable[[str], None] | None,
+    ) -> AgentTurnResult:
+        """执行音频原生 Omni Agent 轮次。
+
+        主要逻辑：
+        1. 直接把当前轮 WAV 音频作为 `input_audio` 发给 Omni 主模型。
+        2. 同一请求携带本轮自动照片和模型可见工具 schema。
+        3. 如果模型返回工具调用，使用 `ToolGateway` 执行后把结果回填给模型继续推理。
+
+        参数：
+        1. `session`：当前会话快照，用于构造历史上下文。
+        2. `turn`：当前用户轮次，必须包含音频资产。
+        3. `runtime`：Agent-Core 已装配好的工具、记忆和提示词上下文。
+        4. `reply_text_delta_callback`：最终文本回调；该窄实现会在最终文本完成后一次性回调。
+
+        返回值：
+        1. 统一的 `AgentTurnResult`。
+
+        异常情况：
+        1. 模型调用、工具参数解析或工具执行失败时向上抛出，由 `run_turn` 统一转失败结果。
+        """
+
+        client = self._create_sdk_client(
+            api_key=self._settings.dashscope_api_key,
+            base_url=self._settings.voice_model_base_url,
+        )
+        messages = self._build_direct_chat_messages(
+            session=session,
+            turn=turn,
+            instructions=runtime.instructions,
+        )
+        tools = self._build_chat_completion_tools(runtime.allowed_tool_names)
+        audio_agent_model = self._settings.voice_model_name
+        model_request = {
+            "model": audio_agent_model,
+            "runner": "direct_chat_audio",
+            "active_skills": runtime.active_skill_names,
+            "allowed_tool_names": (
+                sorted(runtime.allowed_tool_names) if runtime.allowed_tool_names is not None else None
+            ),
+            "memory_prompt_fragment": runtime.memory_prompt_fragment,
+            "extra_body": {"enable_thinking": False},
+            "messages": self._sanitize_model_messages(messages),
+            "tool_count": len(tools),
+        }
+        log_info(
+            self._logger,
+            (
+                "agent-core 音频原生链路即将运行: "
+                f"model={audio_agent_model} message_count={len(messages)} "
+                f"tool_count={len(tools)} timeout_ms={self._settings.voice_model_timeout_ms}"
+            ),
+            LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+        )
+
+        for step_index in range(6):
+            request_kwargs: dict[str, Any] = {
+                "model": audio_agent_model,
+                "messages": messages,
+                "stream": False,
+                "extra_body": {"enable_thinking": False},
+                "timeout": self._settings.voice_model_timeout_ms / 1000,
+            }
+            if tools:
+                request_kwargs["tools"] = tools
+            completion = client.chat.completions.create(**request_kwargs)
+            message = self._extract_chat_completion_message(completion)
+            reply_text = self._extract_chat_message_text(message)
+            tool_calls = self._extract_chat_tool_calls(message)
+            if not tool_calls:
+                final_text = reply_text.strip()
+                if not final_text:
+                    return self._build_failure_result(
+                        turn=turn,
+                        message="agent-core 返回了空回复",
+                        traces=runtime.capability_traces,
+                        error=build_error(ErrorCode.INTERNAL_ERROR, "agent-core 返回了空回复"),
+                    )
+                if reply_text_delta_callback is not None:
+                    reply_text_delta_callback(final_text)
+                model_request["messages"] = self._sanitize_model_messages(messages)
+                return AgentTurnResult(
+                    turn_id=turn.turn_id,
+                    session_id=turn.session_id,
+                    device_id=turn.device_id,
+                    reply_text=final_text,
+                    capability_traces=runtime.capability_traces,
+                    meta={"model_request": model_request},
+                )
+
+            messages.append(self._build_assistant_tool_call_message(message, tool_calls))
+            for tool_call in tool_calls:
+                tool_name = str(tool_call["name"])
+                arguments_text = str(tool_call.get("arguments") or "{}")
+                try:
+                    arguments = json.loads(arguments_text)
+                except json.JSONDecodeError as exc:
+                    raise build_error(
+                        ErrorCode.INVALID_MESSAGE,
+                        "模型返回的工具参数不是合法 JSON",
+                        details={"tool_name": tool_name, "arguments": arguments_text},
+                    ) from exc
+                result = self._tool_gateway.invoke(
+                    name=tool_name,
+                    context=runtime.tool_context,
+                    arguments=arguments,
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(tool_call["id"]),
+                        "name": tool_name,
+                        "content": json.dumps(result.data, ensure_ascii=False, default=str),
+                    }
+                )
+            log_debug(
+                self._logger,
+                (
+                    "agent-core 音频原生链路完成一轮工具调用: "
+                    f"step={step_index + 1} tool_names={[call['name'] for call in tool_calls]}"
+                ),
+                LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+            )
+
+        return self._build_failure_result(
+            turn=turn,
+            message="agent-core 工具循环超过最大轮数",
+            traces=runtime.capability_traces,
+            error=build_error(ErrorCode.INTERNAL_ERROR, "agent-core 工具循环超过最大轮数"),
         )
 
     async def _run_streamed_turn(
@@ -1204,6 +1368,169 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 created_loop.close()
 
     @staticmethod
+    def _turn_has_audio_asset(turn: AgentTurn) -> bool:
+        """判断当前轮是否包含原生音频输入。"""
+
+        return any(asset.asset_type == "audio" for asset in turn.asset_refs)
+
+    def _build_direct_chat_messages(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        instructions: str,
+    ) -> list[dict[str, Any]]:
+        """构造直接 Chat Completions 音频请求消息。
+
+        主要逻辑：
+        1. system 消息沿用 Agent-Core 的统一提示词。
+        2. 历史只使用已经落盘的文本轮次，避免重复上传历史音频。
+        3. 当前轮同时携带说明文本、音频和本轮照片。
+        """
+
+        messages: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
+        for message in session.messages:
+            if message.meta.get("turn_id") == turn.turn_id:
+                continue
+            if message.role not in {"user", "assistant"}:
+                continue
+            text = message.text.strip()
+            if not text:
+                continue
+            messages.append({"role": message.role, "content": text})
+
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": turn.input_text.strip()
+                or "用户发送了一段语音，请直接理解音频内容并执行用户意图。",
+            }
+        ]
+        for asset in turn.asset_refs:
+            if asset.asset_type == "audio":
+                content.append(
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": self._build_audio_data_url(asset.storage_uri, asset.mime_type),
+                        },
+                    }
+                )
+            elif asset.asset_type == "image":
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": self._build_image_data_url(asset.storage_uri, asset.mime_type),
+                            "detail": "auto",
+                        },
+                    }
+                )
+        messages.append({"role": "user", "content": content})
+        return messages
+
+    def _build_chat_completion_tools(self, allowed_tool_names: set[str] | None) -> list[dict[str, Any]]:
+        """把 ToolRegistry 中的工具导出成 Chat Completions schema。"""
+
+        tools: list[dict[str, Any]] = []
+        for tool in self._tool_registry.list_tools(allowed_names=allowed_tool_names):
+            parameters = tool.spec.input_model.model_json_schema()
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.spec.name,
+                        "description": tool.spec.description,
+                        "parameters": parameters,
+                    },
+                }
+            )
+        return tools
+
+    @staticmethod
+    def _build_audio_data_url(storage_uri: str, mime_type: str) -> str:
+        """把本地 WAV 文件转成 `data:` URL。"""
+
+        with open(storage_uri, "rb") as handle:
+            payload = handle.read()
+        encoded = base64.b64encode(payload).decode("ascii")
+        return f"data:{mime_type or 'audio/wav'};base64,{encoded}"
+
+    @staticmethod
+    def _extract_chat_completion_message(completion: object) -> object:
+        """从非流式 Chat Completions 返回中取出第一条消息。"""
+
+        choices = getattr(completion, "choices", None)
+        if not isinstance(choices, list) or not choices:
+            raise build_error(ErrorCode.INTERNAL_ERROR, "模型返回缺少 choices")
+        message = getattr(choices[0], "message", None)
+        if message is None:
+            raise build_error(ErrorCode.INTERNAL_ERROR, "模型返回缺少 message")
+        return message
+
+    @staticmethod
+    def _extract_chat_message_text(message: object) -> str:
+        """从 Chat Completions message 中提取文本。"""
+
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                else:
+                    text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+            return "".join(parts)
+        return ""
+
+    @staticmethod
+    def _extract_chat_tool_calls(message: object) -> list[dict[str, str]]:
+        """把 SDK message.tool_calls 统一转成字典列表。"""
+
+        raw_tool_calls = getattr(message, "tool_calls", None)
+        if not isinstance(raw_tool_calls, list):
+            return []
+        calls: list[dict[str, str]] = []
+        for call in raw_tool_calls:
+            function = getattr(call, "function", None)
+            name = getattr(function, "name", "") if function is not None else ""
+            if not name:
+                continue
+            calls.append(
+                {
+                    "id": str(getattr(call, "id", "")),
+                    "type": str(getattr(call, "type", "function") or "function"),
+                    "name": str(name),
+                    "arguments": str(getattr(function, "arguments", "{}") or "{}"),
+                }
+            )
+        return calls
+
+    @staticmethod
+    def _build_assistant_tool_call_message(message: object, tool_calls: list[dict[str, str]]) -> dict[str, Any]:
+        """构造回填给模型的 assistant tool_calls 消息。"""
+
+        return {
+            "role": "assistant",
+            "content": OpenAIAgentLoopRunner._extract_chat_message_text(message) or "",
+            "tool_calls": [
+                {
+                    "id": call["id"],
+                    "type": call["type"],
+                    "function": {
+                        "name": call["name"],
+                        "arguments": call["arguments"],
+                    },
+                }
+                for call in tool_calls
+            ],
+        }
+
+    @staticmethod
     def _build_history_messages(session: AgentSession, turn: AgentTurn) -> list[dict[str, Any]]:
         """按原始历史消息构造模型输入消息列表。
 
@@ -1280,7 +1607,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         主要逻辑：
         1. 保留消息角色、文本和多模态结构，便于回归排障。
-        2. 将图片 `data:` URL 替换为占位符，避免日志和结果文件保存大段 base64。
+        2. 将图片和音频 `data:` URL 替换为占位符，避免日志和结果文件保存大段 base64。
 
         参数：
         1. `messages`：真实发送给模型的消息列表。
@@ -1314,6 +1641,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                         sanitized_item["image_url"] = "data:image/*;base64,<redacted>"
                     sanitized_content.append(sanitized_item)
                     continue
+                if item.get("type") == "input_audio":
+                    input_audio = dict(item.get("input_audio") or {})
+                    data = str(input_audio.get("data") or "")
+                    if data.startswith("data:"):
+                        input_audio["data"] = "data:audio/*;base64,<redacted>"
+                    sanitized_content.append({**item, "input_audio": input_audio})
+                    continue
                 else:
                     sanitized_content.append(dict(item) if isinstance(item, dict) else item)
                     continue
@@ -1325,16 +1659,12 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         base = (
             f"{self._settings.voice_system_prompt}\n"
-            "请使用简短、口语化、直接的中文回答。\n"
-            "如果当前用户消息已经包含照片，请直接结合照片回答，不要先输出拍照提示。\n"
-            "必要时可以调用已提供的工具。\n"
-            "如果回答需要读取已保存的用户信息，请调用 memory_search 查询。\n"
-            "如果用户明确要求你记住、更新、忘记或删除信息，请调用 manage_memory 处理。\n"
-            "如果用户自然说出值得长期保存的信息，即使没有说“记住”，也应调用 manage_memory 处理。\n"
-            "应主动保存的基本信息包括：姓名、年龄、性别、称呼、语言偏好、沟通偏好。\n"
-            "应主动保存的个性化信息包括：住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置。\n"
-            "不要把一次性任务、当前路况、临时找物线索、敏感密钥、设备token、WiFi密码、真实用户媒体数据或未经确认的推断写入记忆。\n"
-            "不要输出代码块。\n"
+            "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
+            "必要时可以调用已提供的工具。\n\n"
+            "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
+            "例如：姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等。\n\n"
+            "同样也要主动使用关于用户的记忆，尤其是出行规划、行动建议等话题，要主动查询用户的相关记忆主题。\n"
+            "基本信息已经直接告诉你，你还可以使用 memory_search 工具查询你关注的其他记忆主题。\n"
         )
         if self._skill_runtime is None or not session_id:
             return base

@@ -12,7 +12,10 @@ from infra.errors import ErrorCode, build_error
 class QueryDeviceStateInput(BaseModel):
     """查询设备状态输入。"""
 
-    target_device_id: str | None = Field(default=None, description="目标设备编号")
+    target_device_id: str | None = Field(
+        default=None,
+        description="要查询状态的设备编号；不填写时查询当前用户正在使用的眼镜设备。",
+    )
 
 
 class QueryDeviceStateOutput(BaseModel):
@@ -31,7 +34,7 @@ class QueryDeviceStateTool(BaseTool):
 
     spec = ToolSpec(
         name="query_device_state",
-        description="查询设备当前运行状态",
+        description="当需要确认设备是否在线、语音连接是否可用、当前是否正在播放回复等运行状态时调用。",
         input_model=QueryDeviceStateInput,
         output_model=QueryDeviceStateOutput,
         capability_type="tool",

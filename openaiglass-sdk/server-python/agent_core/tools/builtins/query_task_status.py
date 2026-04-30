@@ -14,7 +14,9 @@ from infra.errors import ErrorCode, build_error
 class QueryTaskStatusInput(BaseModel):
     """查询任务输入。"""
 
-    task_id: str = Field(description="任务编号")
+    task_id: str = Field(
+        description="要查询的后台任务编号，通常来自此前工具返回的 task_id；没有明确任务编号时不要猜测。",
+    )
 
 
 class QueryTaskStatusOutput(BaseModel):
@@ -31,7 +33,7 @@ class QueryTaskStatusTool(BaseTaskTool):
 
     spec = ToolSpec(
         name="query_task_status",
-        description="查询后台任务当前状态",
+        description="当用户询问某个已启动后台任务的进度、状态或结果时调用；只适用于已经有 task_id 的任务。",
         input_model=QueryTaskStatusInput,
         output_model=QueryTaskStatusOutput,
         capability_type="task",

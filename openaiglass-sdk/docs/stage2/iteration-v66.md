@@ -10,11 +10,11 @@
 
 1. 移除 `HeuristicMemoryManagementAgent`，模型不可用时记忆维护明确失败，不做规则降级。
 2. `ManageMemoryInput` 收敛为 `query` 和 `memory_context` 两个字段。
-3. `MemoryOperationRequest` 不再包含 `operation/title/content/memory_id/category/source` 等主 Agent 不应关心的字段。
+3. `MemoryOperationRequest` 不再包含 `operation/topic/content/memory_id/category/source` 等主 Agent 不应关心的字段。
 4. 新增 `MemoryOperationAction`，`MemoryOperationPlan` 改为动作列表，支持一次请求内串行执行多个动作，例如先删除再新增。
 5. `memory_id` 只在 MemoryAgent 与 `AgentMemoryRuntime` 内部使用；`manage_memory` 和 `memory_search` 返回给主 Agent 的结果不再包含内部编号。
 6. 记忆记录移除 `category` 字段；`reason` 不再作为计划字段。
-7. `memory_search` 改为按标题读取记忆详情，未命中时返回文本反馈“没有找到匹配的记忆”。
+7. `memory_search` 改为按主题读取记忆详情，未命中时返回文本反馈“没有找到匹配的记忆”。
 8. `AgentMemoryRuntime` 默认使用本地 JSON 文件存储，真实服务端继续通过 `AGENT_MEMORY_STORE_PATH` 配置路径。
 9. 更新 `Agent长期记忆设计.md`、`SDK安装与能力开发指南.md` 和 `sdk-version`。
 

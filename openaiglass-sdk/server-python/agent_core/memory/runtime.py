@@ -17,12 +17,11 @@ class MemoryOperationRequest:
     """记忆管理请求。
 
     主要功能：
-    1. 承载主 Agent 对记忆维护的自然语言请求。
-    2. 保留主 Agent 从历史聊天中摘取的相关上下文，让 MemoryAgent 自行决定具体动作。
+    1. 承载主 Agent 从当前对话中摘取的记忆维护上下文。
+    2. 让 MemoryAgent 根据上下文和已有记忆自行决定具体动作。
     """
 
-    query: str
-    memory_context: str = ""
+    memory_context: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -31,7 +30,7 @@ class MemoryOperationAction:
     """MemoryAgent 输出的一条内部记忆动作。"""
 
     operation: MemoryOperation
-    title: str
+    topic: str
     content: str = ""
     memory_type: MemoryType = "personalized"
     memory_id: str = ""
@@ -54,7 +53,7 @@ class MemoryManagementAgent:
     """记忆管理子 Agent 接口。
 
     主要功能：
-    1. 根据已有记忆、用户原始请求和相关聊天上下文生成维护计划。
+    1. 根据主 Agent 摘取的记忆上下文和已有记忆生成维护计划。
     2. 输出内部动作列表，真正落盘仍由 SDK 运行时执行。
     """
 
@@ -121,7 +120,7 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
             actions.append(
                 MemoryOperationAction(
                     operation=operation,  # type: ignore[arg-type]
-                    title=str(item.get("title") or "").strip(),
+                    topic=str(item.get("topic") or "").strip(),
                     content=str(item.get("content") or "").strip(),
                     memory_type=memory_type,  # type: ignore[arg-type]
                     memory_id=str(item.get("memory_id") or "").strip(),
@@ -134,14 +133,12 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
     def _build_system_prompt() -> str:
         return (
             "你是记忆管理子Agent。你只输出JSON，不输出解释。\n"
-            "你要根据用户原始请求、相关聊天上下文和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
+            "你要根据主Agent摘取的记忆上下文和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
             "基本信息用于姓名、年龄、性别、称呼等短小稳定信息；个性化信息用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
             "可以输出多条actions并按顺序执行，例如先delete再add。\n"
-            "每条action字段只能包括 operation(add/update/delete)、memory_type(basic/personalized)、title、content、memory_id。\n"
-            "memory_id只用于定位已有记忆，不能出现在feedback中。\n"
-            "如果只需要更新已有记忆，优先填写已有记忆中的memory_id；新增时不要填写memory_id。\n"
-            "删除时如果能通过memory_id定位就填写memory_id，否则填写title。\n"
-            "不要保存API Key、设备token、WiFi密码、真实用户媒体数据、一次性任务状态或未经确认的推断。\n"
+            "每条action字段只能包括 operation(add/update/delete)、memory_type(basic/personalized)、topic、content、memory_id。\n"
+            "如果只需要更新或删除已有记忆，填写已有记忆中的memory_id；新增时不要填写memory_id。\n"
+            "不要保存API Key、设备token、WiFi密码、一次性任务状态或未经确认的推断。\n"
             "输出格式：{\"actions\":[...],\"feedback\":\"给主Agent的简短中文反馈\"}"
         )
 
@@ -149,7 +146,6 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
     def _build_user_payload(request: MemoryOperationRequest, existing_memories: list[AgentMemoryRecord]) -> str:
         payload = {
             "request": {
-                "query": request.query,
                 "memory_context": request.memory_context,
             },
             "existing_memories": [AgentMemoryRuntime.record_to_internal_dict(item) for item in existing_memories],
@@ -161,8 +157,8 @@ class AgentMemoryRuntime:
     """Agent 长期记忆运行时。
 
     主要功能：
-    1. 每轮向主 Agent 注入基本信息正文和个性化信息标题目录。
-    2. 通过 `memory_search` 按记忆标题读取详细内容。
+    1. 每轮向主 Agent 注入基本信息正文和个性化信息主题目录。
+    2. 通过 `memory_search` 按记忆主题读取详细内容。
     3. 通过记忆管理子 Agent 执行一组串行新增、更新和删除动作。
     """
 
@@ -185,8 +181,8 @@ class AgentMemoryRuntime:
         scope_type: MemoryScope,
         scope_id: str,
         memory_type: MemoryType,
-        title: str,
         content: str,
+        topic: str = "",
         source: MemorySource = "agent_inferred",
         confidence: float = 1.0,
         metadata: dict | None = None,
@@ -196,29 +192,29 @@ class AgentMemoryRuntime:
         if not self.enabled:
             raise ValueError("Agent 记忆功能未启用")
         normalized_scope_id = scope_id.strip()
-        normalized_title = self._normalize_title(title)
+        normalized_topic = self._normalize_topic(topic)
         normalized_content = self._normalize_content(content)
         if not normalized_scope_id:
             raise ValueError("记忆作用域不能为空")
         if memory_type not in {"basic", "personalized"}:
             raise ValueError("记忆类型必须是 basic 或 personalized")
-        if not normalized_title:
-            raise ValueError("记忆标题不能为空")
+        if not normalized_topic:
+            raise ValueError("记忆主题不能为空")
         if not normalized_content:
             raise ValueError("记忆内容不能为空")
         record = AgentMemoryRecord.create(
             scope_type=scope_type,
             scope_id=normalized_scope_id,
             memory_type=memory_type,
-            title=normalized_title,
+            topic=normalized_topic,
             content=normalized_content,
             source=source,
             confidence=max(0.0, min(1.0, confidence)),
             metadata=metadata or {},
         )
-        upsert_by_title = getattr(self._store, "upsert_by_title", None)
-        if callable(upsert_by_title):
-            return upsert_by_title(record)
+        upsert_by_topic = getattr(self._store, "upsert_by_topic", None)
+        if callable(upsert_by_topic):
+            return upsert_by_topic(record)
         return self._store.upsert(record)
 
     def manage_memory(
@@ -253,7 +249,7 @@ class AgentMemoryRuntime:
             results.append(
                 {
                     "operation": action.operation,
-                    "title": action.title or (record.title if record is not None else ""),
+                    "topic": action.topic or (record.topic if record is not None else ""),
                     "success": record is not None,
                 }
             )
@@ -285,21 +281,21 @@ class AgentMemoryRuntime:
             limit=max(1, limit),
         )
 
-    def search_memories_by_title(
+    def search_memories_by_topic(
         self,
         *,
         scope_type: MemoryScope,
         scope_id: str,
-        titles: list[str],
+        topics: list[str],
     ) -> list[AgentMemoryRecord]:
-        """按标题读取记忆详情。"""
+        """按主题读取记忆详情。"""
 
         if not self.enabled:
             return []
-        return self._store.find_by_titles(
+        return self._store.find_by_topics(
             scope_type=scope_type,
             scope_id=scope_id.strip(),
-            titles=titles,
+            topics=topics,
             memory_type=None,
         )
 
@@ -334,18 +330,18 @@ class AgentMemoryRuntime:
             scope_id=scope_id.strip(),
         )
 
-    def delete_memory_by_title(
+    def delete_memory_by_topic(
         self,
         *,
-        title: str,
+        topic: str,
         scope_type: MemoryScope,
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按标题软删除一条长期记忆。"""
+        """按主题软删除一条长期记忆。"""
 
-        return self._store.delete_by_title(
-            title=title,
+        return self._store.delete_by_topic(
+            topic=topic,
             scope_type=scope_type,
             scope_id=scope_id.strip(),
             memory_type=memory_type,
@@ -366,8 +362,8 @@ class AgentMemoryRuntime:
                 scope_type=scope_type,
                 scope_id=scope_id,
                 memory_type=action.memory_type,
-                title=action.title,
                 content=action.content,
+                topic=action.topic,
                 source="agent_inferred",
                 metadata=request.metadata,
             )
@@ -382,9 +378,9 @@ class AgentMemoryRuntime:
             deleted = self.delete_memory(memory_id=action.memory_id, scope_type=scope_type, scope_id=scope_id)
             if deleted is not None:
                 return deleted
-        if action.title:
-            return self.delete_memory_by_title(
-                title=action.title,
+        if action.topic:
+            return self.delete_memory_by_topic(
+                topic=action.topic,
                 scope_type=scope_type,
                 scope_id=scope_id,
                 memory_type=None,
@@ -407,15 +403,15 @@ class AgentMemoryRuntime:
                 scope_type=scope_type,
                 scope_id=scope_id,
                 memory_type=action.memory_type,
-                title=action.title,
                 content=action.content,
+                topic=action.topic,
                 source="agent_inferred",
                 metadata=request.metadata,
             )
-        title = self._normalize_title(action.title or target.title)
+        topic = self._normalize_topic(action.topic or target.topic)
         content = self._normalize_content(action.content or target.content)
-        if not title:
-            raise ValueError("记忆标题不能为空")
+        if not topic:
+            raise ValueError("记忆主题不能为空")
         if not content:
             raise ValueError("记忆内容不能为空")
         updated = AgentMemoryRecord(
@@ -423,7 +419,7 @@ class AgentMemoryRuntime:
             scope_type=target.scope_type,
             scope_id=target.scope_id,
             memory_type=action.memory_type or target.memory_type,
-            title=title,
+            topic=topic,
             content=content,
             source=target.source,
             confidence=target.confidence,
@@ -440,16 +436,16 @@ class AgentMemoryRuntime:
         scope_type: MemoryScope,
         scope_id: str,
     ) -> AgentMemoryRecord | None:
-        """按编号和标题寻找要更新的记忆。"""
+        """按编号和主题寻找要更新的记忆。"""
 
         existing = self.list_memories(scope_type=scope_type, scope_id=scope_id, limit=100)
         if action.memory_id:
             matched = next((item for item in existing if item.memory_id == action.memory_id), None)
             if matched is not None:
                 return matched
-        normalized_title = self._normalize_title(action.title)
-        if normalized_title:
-            return next((item for item in existing if self._normalize_title(item.title) == normalized_title), None)
+        normalized_topic = self._normalize_topic(action.topic)
+        if normalized_topic:
+            return next((item for item in existing if self._normalize_topic(item.topic) == normalized_topic), None)
         return None
 
     def build_prompt_fragment(
@@ -478,16 +474,16 @@ class AgentMemoryRuntime:
         if not basic_records and not personalized_records:
             return ""
         lines = [
-            "以下是已保存的用户信息。基本信息已直接提供；个性化信息只提供标题，如果需要详细内容，请调用 memory_search(title 或 titles) 查询后再回答。"
+            "以下是已保存的用户信息。基本信息已直接提供；个性化信息只提供主题，如果需要详细内容，请调用 memory_search(topic 或 topics) 查询后再回答。"
         ]
         if basic_records:
             lines.append("基本信息：")
             for record in basic_records:
-                lines.append(f"- {record.title}: {record.content}")
+                lines.append(f"- {record.topic}: {record.content}")
         if personalized_records:
-            lines.append("个性化信息标题：")
+            lines.append("个性化信息主题：")
             for record in personalized_records:
-                lines.append(f"- {record.title}")
+                lines.append(f"- {record.topic}")
         return "\n".join(lines)
 
     @staticmethod
@@ -502,7 +498,7 @@ class AgentMemoryRuntime:
 
         return {
             "memory_type": record.memory_type,
-            "title": record.title,
+            "topic": record.topic,
             "content": record.content,
         }
 
@@ -524,10 +520,10 @@ class AgentMemoryRuntime:
         return "记忆已更新"
 
     @staticmethod
-    def _normalize_title(title: str) -> str:
-        """清洗记忆标题。"""
+    def _normalize_topic(topic: str) -> str:
+        """清洗记忆主题。"""
 
-        return " ".join(title.strip().split())[:60]
+        return " ".join(topic.strip().split())[:60]
 
     @staticmethod
     def _normalize_content(content: str) -> str:

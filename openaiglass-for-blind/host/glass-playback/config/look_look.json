@@ -14,14 +14,7 @@
   "sensors": {
     "trigger_audio_sequence": [
       {
-        "path": "testdata/audio/我叫文刀文字的文刀锋的刀.wav",
-        "format": "wav",
-        "sample_rate_hz": 16000,
-        "channels": 1,
-        "chunk_ms": 40
-      },
-      {
-        "path": "testdata/audio/我叫什么呀.wav",
+        "path": "testdata/audio/这周末天气很好出去玩吧.wav",
         "format": "wav",
         "sample_rate_hz": 16000,
         "channels": 1,

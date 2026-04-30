@@ -12,7 +12,7 @@ from openaiglasses import BaseTool, CapabilityResult
 class StartFindObjectInput(BaseModel):
     """找物体 Tool 输入。"""
 
-    target_object: str = Field(description="需要寻找的目标物体名称")
+    target_object: str = Field(description="用户想寻找的具体物品名称，例如“钥匙”“手机”“水杯”。")
 
 
 class StartFindObjectOutput(BaseModel):
@@ -38,7 +38,10 @@ class StartFindObjectTool(BaseTool):
     """
 
     name = "start_find_object"
-    description = "启动一个找物体任务"
+    description = (
+        "当用户要求帮忙寻找某个具体物品时调用，会启动持续找物后台任务。"
+        "如果只是询问当前画面里有什么，优先使用拍照和视觉理解，不要启动找物任务。"
+    )
     input_model = StartFindObjectInput
     output_model = StartFindObjectOutput
 

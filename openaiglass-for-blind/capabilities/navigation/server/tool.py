@@ -12,13 +12,22 @@ from openaiglasses import BaseTool, CapabilityResult
 class PrepareNavigationInput(BaseModel):
     """导航准备 Tool 输入。"""
 
-    origin: str = Field(default="", description="起点，默认为当前位置")
-    destination: str = Field(description="目的地")
-    city: str = Field(default="", description="目的地所在城市，可为空")
-    strategy: str = Field(default="walking", description="路线策略，例如 walking")
-    selected_poi_id: str = Field(default="", description="用户确认的 POI 编号")
-    require_confirmation: bool = Field(default=False, description="是否只返回候选并等待用户确认")
-    create_task: bool = Field(default=True, description="是否基于路线创建导航任务")
+    origin: str = Field(default="", description="导航起点；通常留空表示从用户当前位置出发。")
+    destination: str = Field(description="用户想去的目的地名称或地址，例如“附近地铁站”“人民医院”。")
+    city: str = Field(default="", description="用于缩小目的地搜索范围的城市；用户没有说明城市时可以留空。")
+    strategy: str = Field(default="walking", description="路线策略；盲人眼镜场景通常使用 walking。")
+    selected_poi_id: str = Field(
+        default="",
+        description="用户从候选目的地中确认的 POI 编号；首次搜索或用户未确认时留空。",
+    )
+    require_confirmation: bool = Field(
+        default=False,
+        description="如果目的地可能有多个候选且需要用户先确认，填 true；否则填 false 继续创建路线。",
+    )
+    create_task: bool = Field(
+        default=True,
+        description="是否在路线准备完成后启动导航后台任务；用户只问路线信息时可填 false。",
+    )
 
 
 class PrepareNavigationOutput(BaseModel):
@@ -45,7 +54,10 @@ class PrepareNavigationTool(BaseTool):
     """
 
     name = "prepare_navigation"
-    description = "搜索目的地、准备步行导航路线，并可创建导航任务"
+    description = (
+        "当用户要求去某个地点、准备步行导航或查询到目的地的路线时调用。"
+        "如果目的地不明确，可先要求确认候选；用户没有导航意图时不要调用。"
+    )
     input_model = PrepareNavigationInput
     output_model = PrepareNavigationOutput
 

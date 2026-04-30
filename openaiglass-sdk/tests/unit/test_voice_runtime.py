@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode
+from agent_core.context import AgentTurnResult
 from protocol.media.media_frame import MediaFrame
 from runtime.voice_runtime import (
     DashscopeRealtimeSpeechRecognitionSession,
@@ -21,6 +22,7 @@ from runtime.voice_runtime import (
     OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
     PCM16StreamResampler,
     SegmentBuffer,
+    StreamingTtsSession,
     StreamingSpeechRecognitionSession,
     VoiceRuntime,
     VoiceSessionController,
@@ -136,6 +138,101 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(messages[1], {"role": "user", "content": "给我讲个笑话"})
         self.assertEqual(messages[2], {"role": "assistant", "content": "这是上一轮回复"})
         self.assertEqual(messages[3], {"role": "user", "content": "我刚才问了你什么"})
+
+    def test_raw_audio_input_passes_audio_asset_to_agent_core(self) -> None:
+        """测试目标：验证默认语音链路把原始音频直接交给 Agent-Core。
+
+        测试方法：
+        1. 注入假的 AgentFacade，记录收到的 `AgentTurn`。
+        2. 注入假的流式 TTS，会把 Agent 回复转为测试音频。
+        3. 执行 `_run_model_pipeline(...)`。
+
+        预期结果：
+        1. AgentFacade 收到的当前轮包含 `audio/wav` 资产。
+        2. 运行时不会先调用 Omni 音频转文本适配器。
+        3. 下行音频来自 Agent-Core 回复文本的 TTS。
+        """
+
+        class _FakeTtsSession(StreamingTtsSession):
+            def __init__(self, on_chunk) -> None:
+                self.on_chunk = on_chunk
+                self.text = ""
+
+            def push_text(self, text: str) -> None:
+                self.text += text
+
+            def finish(self) -> None:
+                self.on_chunk(ModelChunk(audio_pcm_bytes=b"\x01\x02", sample_rate_hz=16000))
+
+        class _FakeModelClient:
+            def __init__(self) -> None:
+                self.tts_text = ""
+
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                session = _FakeTtsSession(on_chunk)
+                original_finish = session.finish
+
+                def _finish() -> None:
+                    self.tts_text = session.text
+                    original_finish()
+
+                session.finish = _finish  # type: ignore[method-assign]
+                return session
+
+        class _FakeToolRegistry:
+            def get_camera_gateway(self):
+                return None
+
+        class _FakeAgentFacade:
+            def __init__(self) -> None:
+                self.turns = []
+
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                return _FakeToolRegistry()
+
+            def handle_turn(self, turn, *, progress_callback=None, reply_text_delta_callback=None):
+                self.turns.append(turn)
+                if reply_text_delta_callback is not None:
+                    reply_text_delta_callback("前面有一张床。")
+                return AgentTurnResult(
+                    turn_id=turn.turn_id,
+                    session_id=turn.session_id,
+                    device_id=turn.device_id,
+                    reply_text="前面有一张床。",
+                )
+
+            def attach_assistant_asset(self, **_kwargs) -> None:
+                return None
+
+        model_client = _FakeModelClient()
+        agent_facade = _FakeAgentFacade()
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+            model_client=model_client,  # type: ignore[arg-type]
+            agent_facade=agent_facade,  # type: ignore[arg-type]
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-test",
+            segment_id="seg-test",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            payload=bytearray(b"\x01\x02"),
+        )
+
+        runtime._run_model_pipeline("glass-001", "sess-test", segment)  # noqa: SLF001 - 单测覆盖链路分层
+
+        self.assertEqual(agent_facade.turns[0].source, "voice_raw_audio")
+        self.assertEqual(agent_facade.turns[0].asset_refs[0].asset_type, "audio")
+        self.assertEqual(agent_facade.turns[0].asset_refs[0].mime_type, "audio/wav")
+        self.assertEqual(model_client.tts_text, "前面有一张床。")
 
     def test_extract_message_text_reads_non_stream_response(self) -> None:
         """测试目标：验证非流式返回能正确提取文本。
@@ -372,6 +469,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             def create_response(self, **_kwargs) -> None:
                 self.callback.on_event({"type": "response.created", "response": {"id": "resp-1"}})
                 self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "你好"})
+                self.callback.on_event({"type": "response.audio_transcript.done", "transcript": "你好"})
                 self.callback.on_event({"type": "response.audio.delta", "delta": base64.b64encode(b"pcm").decode()})
                 self.callback.on_event(
                     {
@@ -387,21 +485,22 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         chunks: list[ModelChunk] = []
         client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
 
-        result = client.run_reply(
-            settings=ServerSettings(
-                dashscope_api_key="test-key",
-                voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
-                voice_conversation_mode="segment_turn",
-            ),
-            input_pcm=b"\x01\x02",
-            image_frames=[b"jpg"],
-            instructions="简短回答",
-            on_chunk=chunks.append,
-            session_id="sess-test",
-            device_id="glass-001",
-            segment_id="seg-test",
-            stream_id="stream-test",
-        )
+        with self.assertLogs("server.voice", level="INFO") as logs:
+            result = client.run_reply(
+                settings=ServerSettings(
+                    dashscope_api_key="test-key",
+                    voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                    voice_conversation_mode="segment_turn",
+                ),
+                input_pcm=b"\x01\x02",
+                image_frames=[b"jpg"],
+                instructions="简短回答",
+                on_chunk=chunks.append,
+                session_id="sess-test",
+                device_id="glass-001",
+                segment_id="seg-test",
+                stream_id="stream-test",
+            )
 
         assert _Factory.instance is not None
         self.assertFalse(_Factory.instance.updated["enable_turn_detection"])
@@ -415,6 +514,86 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(result.assistant_text, "你好")
         self.assertEqual(result.transcript, "看一下")
         self.assertEqual(result.response_id, "resp-1")
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("Omni Realtime 用户转写完成 transcript='看一下'", joined_logs)
+        self.assertIn("Omni Realtime 助手文本完成 text='你好'", joined_logs)
+
+    def test_dashscope_omni_realtime_reply_client_uses_done_text_when_no_delta(self) -> None:
+        """测试目标：验证 Omni Realtime 只返回文本完成事件时也能记录助手文字。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话工厂。
+        2. 在 `create_response()` 中只模拟 `response.text.done`，不模拟文本增量。
+        3. 捕获 `server.voice` 的 INFO 日志。
+
+        预期结果：
+        1. 返回结果包含 `response.text.done` 中的助手文本。
+        2. 服务端日志打印用户转写和助手最终文字。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, _video_b64: str) -> None:
+                return None
+
+            def commit(self) -> None:
+                return None
+
+            def create_response(self, **_kwargs) -> None:
+                self.callback.on_event({"type": "response.created", "response": {"id": "resp-2"}})
+                self.callback.on_event({"type": "response.text.done", "text": "完整文字回复"})
+                self.callback.on_event(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": "用户问题",
+                    }
+                )
+                self.callback.on_event({"type": "response.done"})
+
+            def close(self) -> None:
+                return None
+
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        with self.assertLogs("server.voice", level="INFO") as logs:
+            result = client.run_reply(
+                settings=ServerSettings(
+                    dashscope_api_key="test-key",
+                    voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                    voice_conversation_mode="segment_turn",
+                ),
+                input_pcm=b"\x01\x02",
+                image_frames=[],
+                instructions="简短回答",
+                on_chunk=lambda _chunk: None,
+                session_id="sess-test",
+                device_id="glass-001",
+                segment_id="seg-test",
+                stream_id="stream-test",
+            )
+
+        self.assertEqual(result.assistant_text, "完整文字回复")
+        self.assertEqual(result.transcript, "用户问题")
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("Omni Realtime 用户转写完成 transcript='用户问题'", joined_logs)
+        self.assertIn("Omni Realtime 助手文本完成 text='完整文字回复'", joined_logs)
 
     def test_dashscope_omni_realtime_reply_client_enables_semantic_vad_when_configured(self) -> None:
         """测试目标：验证实验性连续对话模式会把 semantic VAD 参数写入 Omni session。
@@ -819,8 +998,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         assert controller.current_segment is not None
         self.assertIsNone(controller.current_segment.streaming_asr_session)
 
-    def test_omni_mode_prestreams_audio_frames(self) -> None:
-        """测试目标：验证 Omni 模式会在录音过程中预连接并推送音频。
+    def test_omni_mode_no_longer_prestreams_before_agent_core(self) -> None:
+        """测试目标：验证 Omni 模态输入不再绕过 Agent-Core 预连接直出。
 
         测试方法：
         1. 注入假的 Omni Realtime 客户端和会话。
@@ -828,9 +1007,9 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         3. 模拟一帧 `/ws_audio` 音频分片。
 
         预期结果：
-        1. 启动语音段时会创建 Omni Realtime 会话。
-        2. 音频分片会立即推送给 Omni 会话。
-        3. 当前播放上下文标记为 `omni_realtime` 音频来源。
+        1. 启动语音段时不会创建 Omni Realtime 直出会话。
+        2. 音频分片只缓存在当前 Segment 中，等待模态输入阶段和 Agent-Core。
+        3. 当前不会提前创建播放上下文。
         """
 
         class _OmniSession:
@@ -891,13 +1070,14 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             ),
         )
 
-        self.assertTrue(omni_client.started)
-        self.assertEqual(omni_client.session.audio_frames, [b"\x01\x02"])
+        self.assertFalse(omni_client.started)
+        self.assertEqual(omni_client.session.audio_frames, [])
         controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
         assert controller.current_segment is not None
-        self.assertIs(controller.current_segment.omni_realtime_session, omni_client.session)
-        self.assertIsNotNone(controller.current_segment.omni_realtime_context)
-        self.assertEqual(controller.current_playback.audio_source, "omni_realtime")
+        self.assertEqual(bytes(controller.current_segment.payload), b"\x01\x02")
+        self.assertIsNone(controller.current_segment.omni_realtime_session)
+        self.assertIsNone(controller.current_segment.omni_realtime_context)
+        self.assertIsNone(controller.current_playback)
 
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。

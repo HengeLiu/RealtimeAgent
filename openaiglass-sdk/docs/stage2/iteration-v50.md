@@ -8,13 +8,13 @@
 
 1. `AgentMemoryRecord` 新增信息类型模型：
    - `memory_type=basic|personalized`
-   - `title`
+   - `topic`
    - `content`
 2. 基本信息用于姓名、年龄、性别等短小稳定信息，每轮完整注入 system prompt。
-3. 个性化信息用于住址、电话、爱好、习惯、任务设置等长内容或可能变化的信息，每轮只注入标题。
+3. 个性化信息用于住址、电话、爱好、习惯、任务设置等长内容或可能变化的信息，每轮只注入主题。
 4. 新增 `memory_search` 工具：
-   - 入参为 `title` 或 `titles`。
-   - 只按记忆标题读取详细内容。
+   - 入参为 `topic` 或 `topics`。
+   - 只按记忆主题读取详细内容。
    - 不负责新增、更新或删除。
 5. `manage_memory` 改为只负责新增、更新和删除，不再承担搜索或列表功能。
 6. 新增记忆管理子 Agent 抽象：
@@ -22,12 +22,12 @@
    - `LlmMemoryManagementAgent`
    - `HeuristicMemoryManagementAgent`
 7. 真实服务端默认使用 `LlmMemoryManagementAgent`，模型不可用时退回确定性 fallback。
-8. `model_request.memory_prompt_fragment` 改为保存基本信息正文和个性化信息标题目录。
+8. `model_request.memory_prompt_fragment` 改为保存基本信息正文和个性化信息主题目录。
 9. 更新 `SDK安装与能力开发指南.md` 到 `sdk-v50`。
 
 ## 边界
 
-1. 当前个性化信息详情查询仍是标题精确匹配，不是语义召回。
+1. 当前个性化信息详情查询仍是主题精确匹配，不是语义召回。
 2. 当前记忆仍按 `device_id` 隔离，用户级和账号级作用域留到后续迭代。
 3. 记忆管理子 Agent 负责生成结构化计划，真正落盘仍由 SDK 运行时执行。
 4. `VOICE_REPLY_MODE=omni_realtime` 会绕过 agent-core，因此不会使用本轮长期记忆工具。

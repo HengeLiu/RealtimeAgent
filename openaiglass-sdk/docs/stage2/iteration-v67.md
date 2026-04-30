@@ -12,8 +12,8 @@
    - `basic`：基本信息，例如姓名、年龄、性别、称呼等短小稳定信息。
    - `personalized`：个性化信息，例如住址、电话、爱好、习惯、任务设置等较长或可能变化的信息。
 2. `LlmMemoryManagementAgent` 提示词和动作计划字段说明统一使用 `memory_type(basic/personalized)`。
-3. `AgentMemoryRuntime.build_prompt_fragment(...)` 改为完整注入基本信息，只注入个性化信息标题。
-4. `memory_search` 的输入说明改为按“记忆标题”查询，不再限定某一类记忆。
+3. `AgentMemoryRuntime.build_prompt_fragment(...)` 改为完整注入基本信息，只注入个性化信息主题。
+4. `memory_search` 的输入说明改为按“记忆主题”查询，不再限定某一类记忆。
 5. 本地 JSON 文件缺少 `memory_type` 时默认按 `personalized` 加载；不保留旧分类值兼容分支。
 6. 更新长期记忆设计文档、能力开发指南、SDK 版本记录和相关单元测试。
 

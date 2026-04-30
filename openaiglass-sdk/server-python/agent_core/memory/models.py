@@ -19,14 +19,14 @@ class AgentMemoryRecord:
     主要功能：
     1. 保存基本信息和个性化信息。
     2. 基本信息保存短小、稳定、每轮直接注入的信息。
-    3. 个性化信息保存标题和详细内容，每轮只注入标题，详情由 `memory_search` 按需读取。
+    3. 个性化信息保存主题和详细内容，每轮只注入主题，详情由 `memory_search` 按需读取。
     4. 记录作用域、更新时间和删除状态，便于审计。
 
     主要属性：
     1. `memory_id`：记忆唯一编号。
     2. `scope_type/scope_id`：记忆作用域，当前默认按设备隔离。
     3. `memory_type`：记忆类型，`basic` 表示基本信息，`personalized` 表示个性化信息。
-    4. `title`：记忆标题；个性化信息必须有标题。
+    4. `topic`：记忆主题；个性化信息必须有主题。
     5. `content`：记忆正文。
     6. `source`：记忆来源，区分用户主动要求和 Agent 主动推断。
     7. `deleted_at_ms`：删除时间，非空表示软删除。
@@ -36,7 +36,7 @@ class AgentMemoryRecord:
     scope_type: MemoryScope
     scope_id: str
     memory_type: MemoryType
-    title: str
+    topic: str
     content: str
     source: MemorySource = "agent_inferred"
     confidence: float = 1.0
@@ -52,8 +52,8 @@ class AgentMemoryRecord:
         scope_type: MemoryScope,
         scope_id: str,
         memory_type: MemoryType,
-        title: str,
         content: str,
+        topic: str = "",
         source: MemorySource = "agent_inferred",
         confidence: float = 1.0,
         metadata: dict[str, Any] | None = None,
@@ -63,7 +63,7 @@ class AgentMemoryRecord:
         参数：
         1. `scope_type/scope_id`：记忆隔离作用域。
         2. `memory_type`：基本信息或个性化信息。
-        3. `title/content`：记忆标题和正文。
+        3. `topic/content`：记忆主题和正文。
         4. `source/confidence/metadata`：记忆辅助信息。
 
         返回值：
@@ -78,7 +78,7 @@ class AgentMemoryRecord:
             scope_type=scope_type,
             scope_id=scope_id,
             memory_type=memory_type,
-            title=title,
+            topic=topic,
             content=content,
             source=source,
             confidence=confidence,

@@ -13,10 +13,11 @@ from infra.errors import ErrorCode, build_error
 class ManageMemoryInput(BaseModel):
     """长期记忆管理输入。"""
 
-    query: str = Field(description="用户关于记忆管理的原始自然语言指令")
     memory_context: str = Field(
-        default="",
-        description="主 Agent 从历史聊天中摘取的、与记忆维护有关的关键信息；没有时留空",
+        description=(
+            "请填写本轮对话中与长期记忆维护有关的信息，可以是用户原话，或者抽取出来需要记住或更新的事实、"
+            "用户要求忘记或删除的内容，以及必要的上下文。"
+        ),
     )
 
 
@@ -25,16 +26,15 @@ class ManageMemoryTool(BaseTool):
 
     主要功能：
     1. 承载除搜索之外的记忆管理能力。
-    2. 内部把自然语言请求交给记忆管理子 Agent，由子 Agent 自行决定动作列表。
+    2. 内部把主 Agent 摘取的记忆上下文交给记忆管理子 Agent，由子 Agent 自行决定动作列表。
     3. 完成后只返回简短文本反馈和不含内部编号的动作摘要。
     """
 
     spec = ToolSpec(
         name="manage_memory",
         description=(
-            "管理长期记忆。用于处理用户要求记住、更新、忘记或删除记忆的自然语言请求；"
-            "只需要传入用户原始请求和相关聊天上下文，不要自行提取memory_id或结构化字段。"
-            "查询记忆详情必须使用 memory_search。"
+            "当用户要求记住、更新、忘记或删除信息，或自然提供了姓名、偏好、习惯等值得长期保存的信息时调用。"
+            "本工具只用于维护记忆，不用于查询记忆；查询已有记忆请使用 memory_search。"
         ),
         input_model=ManageMemoryInput,
         capability_type="tool",
@@ -63,7 +63,6 @@ class ManageMemoryTool(BaseTool):
                 scope_type="device",
                 scope_id=context.device_id,
                 request=MemoryOperationRequest(
-                    query=input_data.query,
                     memory_context=input_data.memory_context,
                     metadata={"session_id": context.session_id, "turn_id": context.turn_id},
                 ),

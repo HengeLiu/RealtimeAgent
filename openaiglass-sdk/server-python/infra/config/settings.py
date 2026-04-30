@@ -32,8 +32,8 @@ class ServerSettings:
     11. `agent_model_name`：agent-core 文本与图片理解模型名称。
     12. `voice_model_name`：兼容旧链路的语音模型名称。
     13. `voice_model_voice`：兼容旧链路的语音音色。
-    14. `voice_reply_mode`：语音回复模式，默认使用 Omni Realtime 全模态语音直出。
-    15. `voice_omni_realtime_model_name`：Omni Realtime 直出语音模型名称。
+    14. `voice_reply_mode`：语音回复模式，当前默认走 Omni 音频输入。
+    15. `voice_omni_realtime_model_name`：Omni Realtime 实验性直连模型名称。
     16. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
     17. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
     18. `voice_conversation_mode`：语音对话模式，稳定分段提交或实验性 Omni 语义连续对话。
@@ -41,7 +41,7 @@ class ServerSettings:
     20. `voice_realtime_semantic_vad_threshold`：Omni 语义 VAD 阈值。
     21. `voice_realtime_silence_duration_ms`：服务端 VAD 判定句尾的静音时长。
     22. `voice_realtime_prefix_padding_ms`：服务端 VAD 句首保留音频时长。
-    23. `voice_input_mode`：语音输入模式，决定是否先走独立 ASR。
+    23. `voice_input_mode`：旧版语音输入模式，仅用于兼容配置。
     24. `tts_model_name`：专用流式 TTS 模型名称。
     25. `tts_voice`：专用流式 TTS 音色。
     26. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
@@ -97,7 +97,7 @@ class ServerSettings:
     voice_asr_realtime_timeout_ms: int = 5000
     voice_asr_realtime_max_sentence_silence_ms: int = 300
     voice_session_mode: str = "full_duplex_realtime"
-    voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
+    voice_system_prompt: str = "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。请使用简短、口语化、直接的中文回答。"
     max_segment_audio_bytes: int = 524288
     agent_memory_enabled: bool = True
     agent_memory_store_path: str = "runs/memory/agent_memories.json"
@@ -333,9 +333,9 @@ class ServerSettings:
         """返回当前语音链路实际使用的输入模式。
 
         主要逻辑：
-        1. `VOICE_INPUT_MODE=auto` 时按回复分支自动选择。
-        2. `agent_tts` 分支需要文本输入，因此选择 `asr_text`。
-        3. `omni_realtime` 分支直接把原始音频交给全模态模型，因此选择 `raw_audio`。
+        1. `VOICE_INPUT_MODE=auto` 时按当前回复分支自动选择。
+        2. Omni 分支返回 `raw_audio`，旧 Agent+TTS 分支返回 `asr_text`。
+        3. 保留旧字段是为了兼容历史配置读取和日志摘要。
 
         返回值：
         1. `asr_text` 或 `raw_audio`。
@@ -346,11 +346,11 @@ class ServerSettings:
         return self.voice_input_mode
 
     def omni_turn_detection_enabled(self) -> bool:
-        """判断 Omni Realtime 是否应启用服务端 turn detection。
+        """判断 Omni Realtime 客户端是否应启用服务端 turn detection。
 
         返回值：
-        1. `True` 表示启用实验性 `realtime_semantic_vad` 连续对话模式。
-        2. `False` 表示继续使用当前稳定的端侧分段提交模式。
+        1. `True` 表示 Omni Realtime 客户端启用语义 VAD。
+        2. 当前仅在 `omni_realtime + realtime_semantic_vad` 时启用。
         """
 
         return self.voice_reply_mode == "omni_realtime" and self.voice_conversation_mode == "realtime_semantic_vad"
@@ -520,26 +520,18 @@ class ServerSettings:
                 details={"voice_input_mode": self.voice_input_mode, "valid_modes": sorted(valid_voice_input_modes)},
             )
         effective_voice_input_mode = self.effective_voice_input_mode()
-        if self.voice_reply_mode == "agent_tts" and effective_voice_input_mode != "asr_text":
-            raise build_error(
-                ErrorCode.INVALID_CONFIG,
-                "VOICE_REPLY_MODE=agent_tts 需要 VOICE_INPUT_MODE=asr_text 或 auto",
-                details={
-                    "voice_reply_mode": self.voice_reply_mode,
-                    "voice_input_mode": self.voice_input_mode,
-                    "effective_voice_input_mode": effective_voice_input_mode,
-                },
-            )
-        if self.voice_reply_mode == "omni_realtime" and effective_voice_input_mode != "raw_audio":
-            raise build_error(
-                ErrorCode.INVALID_CONFIG,
-                "VOICE_REPLY_MODE=omni_realtime 需要 VOICE_INPUT_MODE=raw_audio 或 auto",
-                details={
-                    "voice_reply_mode": self.voice_reply_mode,
-                    "voice_input_mode": self.voice_input_mode,
-                    "effective_voice_input_mode": effective_voice_input_mode,
-                },
-            )
+        if self.voice_input_mode != "auto":
+            expected_input_mode = "raw_audio" if self.voice_reply_mode == "omni_realtime" else "asr_text"
+            if effective_voice_input_mode != expected_input_mode:
+                raise build_error(
+                    ErrorCode.INVALID_CONFIG,
+                    "VOICE_INPUT_MODE 与 VOICE_REPLY_MODE 不匹配",
+                    details={
+                        "voice_reply_mode": self.voice_reply_mode,
+                        "voice_input_mode": self.voice_input_mode,
+                        "expected_voice_input_mode": expected_input_mode,
+                    },
+                )
         if not self.tts_model_name.strip():
             raise build_error(
                 ErrorCode.INVALID_CONFIG,

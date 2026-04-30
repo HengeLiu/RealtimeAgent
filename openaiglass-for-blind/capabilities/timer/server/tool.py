@@ -12,9 +12,9 @@ from openaiglasses import BaseTool, CapabilityResult
 class StartTimerInput(BaseModel):
     """计时器 Tool 输入。"""
 
-    duration_seconds: int = Field(description="计时时长，单位秒")
-    label: str = Field(default="计时器", description="计时器名称")
-    notify_text: str = Field(default="", description="计时结束时播报文本")
+    duration_seconds: int = Field(description="用户要求计时的时长，必须换算成秒，例如 5 分钟填写 300。")
+    label: str = Field(default="计时器", description="给这个计时器起的名称；用户没有命名时使用默认值“计时器”。")
+    notify_text: str = Field(default="", description="计时结束时要播报给用户的话；用户没有指定时可以留空。")
 
 
 class StartTimerOutput(BaseModel):
@@ -41,7 +41,7 @@ class StartTimerTool(BaseTool):
     """
 
     name = "start_timer"
-    description = "创建一个计时器后台任务"
+    description = "当用户要求倒计时、计时或到时间提醒时调用；不要用于普通日程或长期提醒。"
     input_model = StartTimerInput
     output_model = StartTimerOutput
 

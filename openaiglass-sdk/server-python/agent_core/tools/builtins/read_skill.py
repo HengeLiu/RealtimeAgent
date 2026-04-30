@@ -13,7 +13,7 @@ from infra.errors import ErrorCode, build_error
 class ReadSkillInput(BaseModel):
     """读取 Skill 输入。"""
 
-    skill_name: str = Field(description="Skill 名称")
+    skill_name: str = Field(description="要读取的 Skill 名称；应填写用户当前任务可能需要的已注册 Skill 名称。")
 
 
 class ReadSkillTool(BaseTool):
@@ -23,7 +23,10 @@ class ReadSkillTool(BaseTool):
         self._skill_runtime = skill_runtime
         self.spec = ToolSpec(
             name="read_skill",
-            description="读取已注册 Skill 的详细说明，用于了解能力边界、调用步骤和可用工具。",
+            description=(
+                "当当前任务需要先了解某个已注册 Skill 的能力边界、调用步骤或可用工具时调用。"
+                "读取后再按 Skill 文档继续执行任务。"
+            ),
             input_model=ReadSkillInput,
             capability_type="skill",
             tags=["skill"],
