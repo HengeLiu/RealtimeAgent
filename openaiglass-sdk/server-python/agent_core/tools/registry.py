@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from agent_core.camera import CameraGateway, UtterancePhotoStore
 from agent_core.memory import AgentMemoryRuntime
 from agent_core.mcp import McpGateway, McpRegistry
-from agent_core.models import ToolSpec
+from agent_core.models import ToolSpec, normalize_progress_messages
 from agent_core.skills import SkillRuntime
 from agent_core.tools.base import AgentToolContext, BaseMcpTool, BaseTool
 from backend_task_core import InMemoryTaskGateway, TaskGateway
@@ -207,7 +207,7 @@ class ToolRegistry:
         """列出所有 Tool 声明的前置播报文案。
 
         返回值：
-        1. `(tool_name, progress_message)` 列表，按工具名排序。
+        1. `(tool_name, progress_message)` 列表，按工具名和候选文案顺序排序。
 
         异常情况：
         1. 本方法只读取注册表内存状态，不抛出业务异常。
@@ -215,8 +215,7 @@ class ToolRegistry:
 
         messages: list[tuple[str, str]] = []
         for name, tool in sorted(self._tools.items()):
-            message = (tool.spec.progress_message or "").strip()
-            if message:
+            for message in normalize_progress_messages(tool.spec.progress_message):
                 messages.append((name, message))
         return messages
 

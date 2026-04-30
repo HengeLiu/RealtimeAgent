@@ -1161,6 +1161,56 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(first_result.data, {"text": "一"})
         self.assertEqual(second_result.data, {"text": "二"})
 
+    def test_tool_gateway_randomizes_progress_message_candidates(self) -> None:
+        """测试目标：验证工具前置播报支持多句候选。
+
+        测试方法：
+        1. 注册一个 `progress_message` 为字符串列表的测试工具。
+        2. 构造带 `progress_callback` 的 `AgentToolContext`。
+        3. 调用工具并收集实际播报文本。
+
+        预期结果：
+        1. 实际播报文本来自候选列表。
+        2. 同一轮同一工具仍然只播报一次。
+        3. 工具执行结果不受候选列表影响。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_progress_candidates",
+                description="回显文本",
+                input_model=_EchoArgs,
+                progress_message=[
+                    "我先处理一下。",
+                    "稍等，我看一下。",
+                    "好，我来处理。",
+                ],
+            )
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                return CapabilityResult.success(data={"text": input_data.text})
+
+        registry, gateway = build_tooling()
+        registry.register_external_tool(_EchoTool())
+        progress_parts: list[str] = []
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_tool_progress_candidates_001",
+            turn_id="turn_tool_progress_candidates_001",
+        )
+        context.progress_callback = progress_parts.append
+
+        result = gateway.invoke(name="echo_progress_candidates", context=context, arguments={"text": "一"})
+        gateway.invoke(name="echo_progress_candidates", context=context, arguments={"text": "二"})
+
+        self.assertEqual(len(progress_parts), 1)
+        self.assertIn(progress_parts[0], {"我先处理一下。", "稍等，我看一下。", "好，我来处理。"})
+        self.assertEqual(result.data, {"text": "一"})
+
     def test_openai_runner_uses_minimal_system_prompt(self) -> None:
         """测试目标：验证发给模型的 system prompt 只保留角色与风格约束。
 

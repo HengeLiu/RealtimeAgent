@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 from agent_core.context.models import CapabilityTrace, DerivedArtifact, MediaAssetRef, TaskRef
-from agent_core.models import CapabilityResult, ToolSpec
+from agent_core.models import CapabilityResult, ProgressMessage, ToolSpec, normalize_progress_messages
 from infra.config import ServerSettings
 
 if TYPE_CHECKING:
@@ -52,29 +53,31 @@ class AgentToolContext:
         self._extend_unique(self.emitted_artifacts, result.derived_artifacts, "artifact_id")
         self._extend_unique(self.emitted_tasks, result.task_refs, "task_id")
 
-    def announce_tool_progress(self, *, tool_name: str, message: str | None) -> None:
+    def announce_tool_progress(self, *, tool_name: str, message: ProgressMessage | None) -> None:
         """在工具执行前向语音运行时发送一次进度播报。
 
         主要逻辑：
         1. 只在调用方提供 `progress_callback` 时生效。
-        2. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
-        3. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
+        2. 支持单句或多句候选文案；多句候选会随机选择一条。
+        3. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
+        4. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
 
         参数：
         1. `tool_name`：即将执行的工具名称。
-        2. `message`：播报文本，空文本表示不播报。
+        2. `message`：播报文本或候选文本列表，空文本表示不播报。
 
         异常情况：
         1. 回调异常会被吞掉；正式错误仍由工具执行链路返回。
         """
 
-        if self.progress_callback is None or not message:
+        messages = normalize_progress_messages(message)
+        if self.progress_callback is None or not messages:
             return
         if tool_name in self.progress_announced_tools:
             return
         self.progress_announced_tools.add(tool_name)
         try:
-            self.progress_callback(message)
+            self.progress_callback(random.choice(messages))
         except Exception:
             return
 

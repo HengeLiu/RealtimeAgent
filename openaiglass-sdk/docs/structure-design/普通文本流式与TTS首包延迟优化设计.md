@@ -1,7 +1,7 @@
 # 普通文本流式与 TTS 首包延迟优化设计
 
 更新时间：2026-04-30
-对应版本：sdk-v70
+对应版本：sdk-v71
 
 ## 1. 设计目标
 
@@ -93,7 +93,8 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 2. `ToolGateway` 在 Tool 真正执行前读取 `ToolSpec.progress_message`。
 3. `AgentToolContext.progress_callback` 把短文本交给 `VoiceRuntime` 的中间播报通道。
 4. `VoiceRuntime` 同步注册中间播报播放流，再异步执行 TTS 合成。
-5. 同一轮同一工具只播报一次，避免工具循环或重试导致重复提示。
+5. `progress_message` 支持单句或多句候选；多句候选在工具调用前随机选择一条。
+6. 同一轮同一工具只播报一次，避免工具循环或重试导致重复提示。
 
 `VoiceRuntime` 需要特别处理最终回复 TTS 预热与前置播报的顺序：TTS 会话可以在 Agent 请求前预热，但最终回复播放流不能提前注册到播放仲裁器。否则尚未产生任何最终回复音频的预热流会占住 active playback，让前置播报只能排队到最终回复之后。当前实现是在最终回复首段文本到达时才创建最终回复播放流。
 
@@ -101,12 +102,12 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 
 `progress_message` 是静态短文本，不需要每次工具调用时都请求 TTS。SDK 在 `VoiceRuntime` 初始化后异步执行一次缓存预加载：
 
-1. 从 `ToolRegistry.list_progress_messages()` 读取当前所有工具的播报文案。
+1. 从 `ToolRegistry.list_progress_messages()` 读取当前所有工具的播报文案；如果某个工具配置了多句候选，会展开为多条文案。
 2. 按 `tts_model_name`、`tts_voice`、`tts_sample_rate_hz`、目标播放采样率和文本生成稳定 hash。
 3. 缓存文件写入 `VOICE_RUNS_ROOT/progress-audio-cache/<hash>.wav`。
 4. 如果文件已存在且是 16k 单声道 16bit PCM WAV，直接读取 PCM 到内存。
 5. 如果文件不存在，调用当前配置的 TTS 生成一次音频，重采样成 16k PCM 后写入 WAV。
-6. 工具调用时优先读取内存缓存，命中后直接写入播放流；未命中或预加载失败时回退实时 TTS。
+6. 工具调用时先随机选择本次播报文案，再优先读取内存缓存，命中后直接写入播放流；未命中或预加载失败时回退实时 TTS。
 
 该缓存只优化工具前置播报，不影响最终回复 TTS。缓存目录位于 `runs/` 下，属于运行产物，不应提交。
 
@@ -126,10 +127,14 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 公开 SDK `BaseTool` 新增可选属性：
 
 ```python
-progress_message = "我先处理一下，请稍等。"
+progress_message = [
+    "我先处理一下，请稍等。",
+    "稍等，我看一下。",
+    "好，我来处理。",
+]
 ```
 
-业务 Tool 不应直接调用播放器，也不应自行写控制消息。前置播报属于 SDK 语音运行时职责，业务只声明一句适合该 Tool 的简短提示即可。
+业务 Tool 不应直接调用播放器，也不应自行写控制消息。前置播报属于 SDK 语音运行时职责，业务只声明适合该 Tool 的简短提示即可；为了避免重复感，建议配置 3 到 5 句候选。
 
 ## 7. 验收口径
 

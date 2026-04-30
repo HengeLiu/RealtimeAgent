@@ -55,7 +55,11 @@ class StartPhoneVideoLinkTool(BaseTool):
         output_model=StartPhoneVideoLinkOutput,
         capability_type="tool",
         tags=["phone", "video", "task"],
-        progress_message="我会先连接手机和眼镜摄像头。",
+        progress_message=[
+            "我先连接手机摄像头。",
+            "稍等，我把手机画面接进来。",
+            "我先建立手机和眼镜的视频连接。",
+        ],
     )
 
     def run(self, context: AgentToolContext, input_data: StartPhoneVideoLinkInput) -> CapabilityResult:

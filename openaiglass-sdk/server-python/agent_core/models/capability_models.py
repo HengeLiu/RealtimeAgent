@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 from agent_core.context.models import DerivedArtifact, MediaAssetRef, TaskRef
 
+ProgressMessage = str | list[str]
+
 
 @dataclass(slots=True)
 class CapabilityError:
@@ -84,7 +86,42 @@ class ToolSpec:
     output_model: type[BaseModel] | None = None
     capability_type: Literal["tool", "mcp", "task"] = "tool"
     tags: list[str] = field(default_factory=list)
-    progress_message: str | None = None
+    progress_message: ProgressMessage | None = None
+
+
+def normalize_progress_messages(progress_message: ProgressMessage | None) -> list[str]:
+    """规范化工具前置播报候选文案。
+
+    主要逻辑：
+    1. 兼容旧版单字符串写法。
+    2. 支持新版字符串列表写法，用于运行时随机选择。
+    3. 去掉空白文案和重复文案，避免缓存与播报重复。
+
+    参数：
+    1. `progress_message`：Tool 声明的前置播报配置。
+
+    返回值：
+    1. 清理后的播报候选列表。
+
+    异常情况：
+    1. 非字符串或非字符串列表会被忽略，不抛出业务异常。
+    """
+
+    if isinstance(progress_message, str):
+        candidates = [progress_message]
+    elif isinstance(progress_message, list):
+        candidates = [item for item in progress_message if isinstance(item, str)]
+    else:
+        return []
+    messages: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        message = candidate.strip()
+        if not message or message in seen:
+            continue
+        messages.append(message)
+        seen.add(message)
+    return messages
 
 
 @dataclass(slots=True)

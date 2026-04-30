@@ -6,7 +6,9 @@ from agent_core.models.capability_models import (
     McpCall,
     McpMethodSpec,
     McpResultRecord,
+    ProgressMessage,
     ToolSpec,
+    normalize_progress_messages,
 )
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     "McpCall",
     "McpMethodSpec",
     "McpResultRecord",
+    "ProgressMessage",
     "ToolSpec",
+    "normalize_progress_messages",
 ]

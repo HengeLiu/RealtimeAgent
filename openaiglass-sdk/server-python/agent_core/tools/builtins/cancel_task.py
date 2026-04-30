@@ -36,7 +36,11 @@ class CancelTaskTool(BaseTaskTool):
         output_model=CancelTaskOutput,
         capability_type="task",
         tags=["task", "cancel"],
-        progress_message="我先帮你停止这个任务。",
+        progress_message=[
+            "我先帮你停止这个任务。",
+            "好，我来结束这个任务。",
+            "稍等，我正在取消任务。",
+        ],
     )
 
     def run(self, context: AgentToolContext, input_data: CancelTaskInput) -> CapabilityResult:

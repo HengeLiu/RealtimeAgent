@@ -1313,6 +1313,45 @@ def test_sdk_tool_adapter_preserves_progress_message() -> None:
     assert tool.spec.progress_message == "我先处理一下。"
 
 
+def test_tool_registry_expands_progress_message_candidates() -> None:
+    """测试目标：验证工具注册表会展开多句前置播报候选。
+
+    测试方法：
+    1. 创建一个公开 SDK Tool，并设置多个 `progress_message` 候选。
+    2. 通过 SDK 构建 `AgentFacade`。
+    3. 从内部工具注册表读取前置播报文案列表。
+
+    预期结果：
+    1. 注册表会返回每一条候选文案。
+    2. 静态音频缓存可以在服务启动阶段预生成所有候选。
+    """
+
+    class DemoTool(BaseTool):
+        name = "demo_progress_candidates_tool"
+        description = "测试多句前置播报"
+        progress_message = [
+            "我先处理一下。",
+            "稍等，我看一下。",
+            "好，我来处理。",
+        ]
+
+        def run(self, context, input_data):
+            return PublicCapabilityResult.success(data={"ok": True})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_tool(DemoTool())
+
+    facade = build_agent_facade_from_sdk(
+        sdk=sdk,
+        settings=ServerSettings(),
+    )
+
+    messages = facade.get_tool_registry().list_progress_messages()
+    assert ("demo_progress_candidates_tool", "我先处理一下。") in messages
+    assert ("demo_progress_candidates_tool", "稍等，我看一下。") in messages
+    assert ("demo_progress_candidates_tool", "好，我来处理。") in messages
+
+
 def test_openai_glasses_sdk_registers_skill_runtime() -> None:
     """测试目标：验证 OpenAIGlassesSDK 可注册 Skill 并注入 AgentFacade。
 

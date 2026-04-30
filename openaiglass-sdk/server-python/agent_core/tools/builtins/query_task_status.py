@@ -38,7 +38,11 @@ class QueryTaskStatusTool(BaseTaskTool):
         output_model=QueryTaskStatusOutput,
         capability_type="task",
         tags=["task", "status"],
-        progress_message="我先查一下任务状态。",
+        progress_message=[
+            "我先查一下任务状态。",
+            "稍等，我看一下任务进度。",
+            "我确认一下这个任务现在到哪了。",
+        ],
     )
 
     def run(self, context: AgentToolContext, input_data: QueryTaskStatusInput) -> CapabilityResult:

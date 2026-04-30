@@ -53,7 +53,11 @@ class CapturePhotoTool(BaseTool):
         output_model=CapturePhotoOutput,
         capability_type="tool",
         tags=["camera", "image"],
-        progress_message="正在拍照。",
+        progress_message=[
+            "我先拍张照片看看。",
+            "稍等，我看一下眼前画面。",
+            "我先取一张当前画面。",
+        ],
     )
 
     def run(self, context: AgentToolContext, input_data: CapturePhotoInput) -> CapabilityResult:

@@ -30,7 +30,11 @@ class ReadSkillTool(BaseTool):
             input_model=ReadSkillInput,
             capability_type="skill",
             tags=["skill"],
-            progress_message="我正在翻阅能力手册。"
+            progress_message=[
+                "我先看一下能力手册。",
+                "稍等，我确认一下这个能力怎么用。",
+                "我先翻一下相关说明。",
+            ],
         )
 
     def run(self, context: AgentToolContext, input_data: ReadSkillInput) -> CapabilityResult:
