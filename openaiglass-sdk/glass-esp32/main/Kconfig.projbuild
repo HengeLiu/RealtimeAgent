@@ -60,6 +60,24 @@ config GLASS_AEC_REFERENCE_BUFFER_MS
         保存最近一段下行播放 PCM 作为 AEC 参考信号，单位毫秒。
         过短会导致回声参考不足；过长会增加内存占用。
 
+config GLASS_BARGE_IN_GRACE_MS
+    int "播放开始后的插话保护窗"
+    range 0 3000
+    default 900
+    depends on GLASS_ENABLE_AEC
+    help
+        播放首段音频真正写入扬声器后的短暂保护窗，单位毫秒。
+        保护窗内忽略 AEC/VAD 的播放中语音触发，避免播放起始瞬态或回声参考未收敛时把扬声器声音误判为用户插话。
+
+config GLASS_BARGE_IN_MIN_SPEECH_FRAMES
+    int "播放中插话最小连续语音帧数"
+    range 1 30
+    default 6
+    depends on GLASS_ENABLE_AEC
+    help
+        保护窗结束后，VAD 需要连续命中多少帧才认为是真实用户插话。
+        帧长由 ESP-SR AFE 决定，当前配置约 32ms 一帧；默认 6 帧约等于 192ms。
+
 config GLASS_WAKE_PROMPT_TONE_ENABLE
     bool "启用唤醒成功提示音"
     default y

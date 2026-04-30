@@ -35,6 +35,11 @@ def test_glass_runtime_negotiates_realtime_voice_capabilities() -> None:
     assert "xTaskCreateWithCaps(" in source
     assert "PLAYBACK_STREAM_TASK_STACK_SIZE" in source
     assert "CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY" in source
+    assert "CONFIG_GLASS_BARGE_IN_GRACE_MS" in source
+    assert "CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES" in source
+    assert "忽略播放起始保护窗内的 VAD" in source
+    assert "播放中 VAD 仍在确认用户插话" in source
+    assert "s_playback_speaker_started_ms = now_ms()" in source
     assert "external_stack_allowed=%d" in source
 
 

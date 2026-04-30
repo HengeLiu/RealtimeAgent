@@ -65,6 +65,12 @@
 #ifndef CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS
 #define CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS 1200
 #endif
+#ifndef CONFIG_GLASS_BARGE_IN_GRACE_MS
+#define CONFIG_GLASS_BARGE_IN_GRACE_MS 900
+#endif
+#ifndef CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES
+#define CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES 6
+#endif
 #ifndef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
 #define CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY 0
 #endif
@@ -200,6 +206,7 @@ static char s_current_camera_stream_id[64];
 static int s_camera_frame_interval_ms = 500;
 static uint32_t s_camera_frame_seq = 0;
 static uint64_t s_playback_request_started_ms = 0;
+static uint64_t s_playback_speaker_started_ms = 0;
 static uint64_t s_continuous_dialog_last_activity_ms = 0;
 static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
@@ -1649,6 +1656,8 @@ static void recover_wake_listening_after_reply_timeout(uint64_t current_ms)
     clear_reply_wait_state();
     s_playback_active = false;
     s_current_playback_stream_id[0] = '\0';
+    s_playback_request_started_ms = 0;
+    s_playback_speaker_started_ms = 0;
     s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
     ESP_LOGW(
         TAG,
@@ -1674,6 +1683,8 @@ static void reset_control_session_state(void)
     s_current_stream_id[0] = '\0';
     s_current_playback_stream_id[0] = '\0';
     s_next_playback_stream_id[0] = '\0';
+    s_playback_request_started_ms = 0;
+    s_playback_speaker_started_ms = 0;
     s_playback_task_handle = NULL;
     s_camera_stream_active = false;
     s_camera_stream_task_running = false;
@@ -2310,6 +2321,7 @@ static void playback_stream_task(void *arg)
         if (!started_sent) {
             send_actuator_audio_state_message("actuator.audio.started", s_current_playback_stream_id, NULL, NULL);
             started_sent = true;
+            s_playback_speaker_started_ms = now_ms();
             ESP_LOGI(
                 TAG,
                 "播放流首段音频已写入扬声器: stream_id=%s request_to_speaker_ms=%" PRIu64 " task_to_speaker_ms=%" PRIu64 " pcm_bytes=%u",
@@ -2351,6 +2363,7 @@ cleanup:
     s_playback_task_handle = NULL;
     s_current_playback_stream_id[0] = '\0';
     s_playback_request_started_ms = 0;
+    s_playback_speaker_started_ms = 0;
     if (s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
         s_continuous_dialog_last_activity_ms = now_ms();
     }
@@ -2413,6 +2426,7 @@ static void start_playback_stream(const char *stream_id)
     s_playback_task_running = true;
     s_playback_interrupt_requested = false;
     s_playback_request_started_ms = now_ms();
+    s_playback_speaker_started_ms = 0;
     BaseType_t task_result;
     if (CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY) {
         task_result = xTaskCreateWithCaps(
@@ -2456,6 +2470,7 @@ static void start_playback_stream(const char *stream_id)
         s_playback_interrupt_requested = false;
         s_current_playback_stream_id[0] = '\0';
         s_playback_request_started_ms = 0;
+        s_playback_speaker_started_ms = 0;
         s_playback_task_handle = NULL;
     }
 }
@@ -2507,6 +2522,8 @@ static void sr_pipeline_task(void *arg)
     uint64_t last_idle_summary_ms = now_ms();
     uint64_t last_gate_log_ms = 0;
     uint64_t last_audio_reconnect_ms = 0;
+    uint32_t playback_barge_in_speech_frames = 0;
+    uint64_t last_barge_in_gate_log_ms = 0;
 
     ESP_LOGD(
         TAG,
@@ -2654,6 +2671,55 @@ static void sr_pipeline_task(void *arg)
         bool start_by_continuous_vad = s_realtime_semantic_dialog_enabled &&
                                        s_continuous_dialog_active &&
                                        res->vad_state == VAD_SPEECH;
+        bool is_playback_barge_in_candidate = s_playback_active &&
+                                              start_by_continuous_vad &&
+                                              s_aec_runtime_enabled;
+        if (is_playback_barge_in_candidate) {
+            uint64_t playback_audio_age_ms = 0;
+            bool playback_audio_started = s_playback_speaker_started_ms > 0 &&
+                                          current_ms >= s_playback_speaker_started_ms;
+            if (playback_audio_started) {
+                playback_audio_age_ms = current_ms - s_playback_speaker_started_ms;
+            }
+            if (!playback_audio_started || playback_audio_age_ms < CONFIG_GLASS_BARGE_IN_GRACE_MS) {
+                if ((current_ms - last_barge_in_gate_log_ms) >= 500) {
+                    ESP_LOGD(
+                        TAG,
+                        "忽略播放起始保护窗内的 VAD: stream_id=%s audio_age_ms=%" PRIu64 " grace_ms=%d",
+                        s_current_playback_stream_id,
+                        playback_audio_age_ms,
+                        CONFIG_GLASS_BARGE_IN_GRACE_MS
+                    );
+                    last_barge_in_gate_log_ms = current_ms;
+                }
+                playback_barge_in_speech_frames = 0;
+                start_by_continuous_vad = false;
+                reset_pre_roll(
+                    pre_roll_frames,
+                    PRE_ROLL_FRAME_COUNT,
+                    &pre_roll_next_index,
+                    &pre_roll_valid_count
+                );
+            } else {
+                playback_barge_in_speech_frames += 1U;
+                if (playback_barge_in_speech_frames < CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES) {
+                    if ((current_ms - last_barge_in_gate_log_ms) >= 500) {
+                        ESP_LOGD(
+                            TAG,
+                            "播放中 VAD 仍在确认用户插话: stream_id=%s speech_frames=%" PRIu32 "/%d audio_age_ms=%" PRIu64,
+                            s_current_playback_stream_id,
+                            playback_barge_in_speech_frames,
+                            CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES,
+                            playback_audio_age_ms
+                        );
+                        last_barge_in_gate_log_ms = current_ms;
+                    }
+                    start_by_continuous_vad = false;
+                }
+            }
+        } else if (!s_playback_active || res->vad_state != VAD_SPEECH) {
+            playback_barge_in_speech_frames = 0;
+        }
 
         if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
             bool is_playback_barge_in = s_playback_active && start_by_continuous_vad && s_aec_runtime_enabled;
