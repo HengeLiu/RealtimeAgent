@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v57`。本版本继续推进“方案二”Omni 语义实时连续对话：默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`，服务端在语音开始时前置自动抓拍并异步追加到 Omni，会话不再手动 `commit/create_response`，而是等待 Omni `semantic_vad` 自动提交和自动响应；真实 `glass-esp32` 在一次 WakeNet 命中后会进入短时间连续对话窗口，后续可由本地 VAD 触发下一段语音，不再强制每轮重复唤醒词。`sdk-v56` 在 ESP32-S3 固件中默认启用 AEC 试验链路，播放期间可继续保持连续对话监听；`sdk-v57` 在首次 WakeNet 唤醒成功后增加本地轻提示音，连续对话窗口内由 VAD 触发的追问不会重复提示。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v64`。本版本将 ESP32-S3 真机语音链路回退到方案 A：一次 WakeNet 命中后进入短时间连续对话窗口，播放结束后用户可以直接继续说下一句，不强制每轮重复唤醒词；但播放期间不启动新的本地语音段，也不做自然插话。首次 WakeNet 唤醒成功后保留本地轻提示音，连续对话窗口内由 VAD 触发的追问不会重复提示。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v56` 在 ESP32-S3 上接入 AFE AEC 播放参考通道并开启播放中自然插话试验，`sdk-v57` 增加首次 WakeNet 唤醒本地轻提示音 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。ESP32-S3 默认 `CONFIG_GLASS_ENABLE_AEC=y`，真机效果仍取决于扬声器参考信号、麦克风布局和噪声环境。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR | 默认 `VOICE_INPUT_MODE=auto`：`VOICE_REPLY_MODE=agent_tts` 时等价于 `asr_text`，`VOICE_REPLY_MODE=omni_realtime` 时等价于 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
@@ -125,7 +125,7 @@ openaiglass-for-blind/host/phone/config/AppConfig.plist.example
 5. 响应 `sensor.camera.stream.start/stop`，把摄像头帧推送到手机 `/ws/camera`。
 6. 处理通知、播报、唤醒和端侧运行状态。
 
-全双工实时语音对眼镜端有额外要求：端侧需要持续采集麦克风并尽量提供 AEC/VAD 结果，通过实时音频、`user.voice.interrupt` 或后续 `voice.realtime.user_interrupt` 控制事件告诉服务端“这是用户插话”还是“这是喇叭回声”。`sdk-v56` 的 ESP32-S3 固件默认使用 ESP-SR AFE 的 `MR` 输入格式，把扬声器播放 PCM 作为 `R` 参考通道送入 AEC；如果 AEC 初始化失败或被关闭，端侧会继续上报 `accepted_mode=half_duplex`，业务功能不需要自己做兜底。
+全双工实时语音对眼镜端有额外要求：端侧需要持续采集麦克风并尽量提供 AEC/VAD 结果，通过 `voice.realtime.input.delta` 媒体帧和 `voice.realtime.user_interrupt` 控制事件告诉服务端“这是用户插话”还是“这是喇叭回声”。如果端侧无法提供 AEC，服务端会把实时会话降级到半双工，业务功能不需要自己做兜底。
 
 本地私有配置：
 
@@ -514,13 +514,9 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 `sdk-v54` 起，SDK 增加方案二的连续对话配置：`VOICE_CONVERSATION_MODE=segment_turn|realtime_semantic_vad`。`realtime_semantic_vad` 只能与 `VOICE_REPLY_MODE=omni_realtime` 一起使用；服务端会在 Omni 会话中启用 turn detection，并把 `VOICE_REALTIME_TURN_DETECTION`、`VOICE_REALTIME_SEMANTIC_VAD_THRESHOLD`、`VOICE_REALTIME_SILENCE_DURATION_MS`、`VOICE_REALTIME_PREFIX_PADDING_MS` 传入官方 SDK，同时在 `voice.realtime.session.open` 里向真实眼镜声明 `input.turn_detection.owner=omni_realtime`。这项能力面向真实 `glass-esp32` 连续对话，不要求业务能力代码修改；`glass-playback` 只能用于协议回放和验收，不代表真实唤醒、AEC 或旁人说话过滤效果。
 
-`sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
+`sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。由于当前固件没有 AEC，播放期间仍不会保持麦克风活跃；如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
 
-`sdk-v56` 起，ESP32-S3 固件默认打开 `CONFIG_GLASS_ENABLE_AEC=y`。固件会把麦克风通道和扬声器播放参考通道交错送入 ESP-SR AFE；播放期间若连续对话窗口仍有效，WakeNet/VAD 继续运行，检测到用户插话时先发送 `user.voice.interrupt` 并本地中断当前播放，再发送新的 `sensor.audio.segment.started/finished`。服务端收到插话后会清理当前和排队播放流，并丢弃旧 Omni/TTS 回复迟到的音频分片，避免旧回答重新入队。
-
-如果真机内存、扬声器参考同步或声学结构不稳定，可在 ESP32 工程的 `sdkconfig` 中关闭 `CONFIG_GLASS_ENABLE_AEC` 回退半双工；`CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS` 可调播放参考环形缓冲时长，默认 `1200` 毫秒。AEC 效果必须通过真实眼镜、真实扬声器音量和室外噪声继续校准，`glass-playback` 不能代表这项声学能力。
-
-当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token，TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime + realtime_semantic_vad` 模式已经把建连、音频上行、照片追加和 turn detection 前移到用户说话期间，由 Omni 自动提交并直出语音；`sdk-v56` 进一步让真实 ESP32-S3 具备播放中自然插话的端侧入口，但极端嘈杂场景、声学回声抑制参数和上游 Omni response 主动取消仍需要后续真机联调继续优化。
+当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token，TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime + realtime_semantic_vad` 模式已经把建连、音频上行、照片追加和 turn detection 前移到用户说话期间，由 Omni 自动提交并直出语音；但真实 ESP32 端仍因缺少 AEC 保持播放期间半双工，播放中自然插话和更激进的 full-duplex 体验需要端侧 AEC/VAD 能力继续配合。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 
@@ -612,7 +608,7 @@ SDK 收到该消息后会：
 1. 普通任务进度建议使用 `priority=normal` 或 `low`，不要抢播。
 2. 视觉风险、导航安全类事件可以使用 `priority=critical` 和 `interrupt_policy=critical_only`。
 3. 业务 Task 不要直接发送 `actuator.audio.interrupt`。
-4. 当前 ESP32-S3 AEC 插话先复用 `user.voice.interrupt` 进入统一播放仲裁器；更完整的 `/ws_realtime_audio` 全双工媒体链路仍可使用 `voice.realtime.user_interrupt`。
+4. 半双工打断继续使用 `user.voice.interrupt`；全双工插话使用 `voice.realtime.user_interrupt`，两者最终都进入 SDK 播放仲裁器。
 
 ### 3.10 全双工实时语音对话
 
@@ -631,7 +627,7 @@ VOICE_SESSION_MODE="half_duplex"
 | `full_duplex_realtime` | 下发 `voice.realtime.session.open`，端侧连接 `/ws_realtime_audio`。 | 新版眼镜固件、手机音频中继、全双工真机验收。 |
 | `half_duplex` | 下发旧的 `voice.session.open`，端侧连接 `/ws_audio`。 | 旧眼镜固件、`glass-playback` 半双工触发音频、只验证普通语音问答。 |
 
-`sdk-v29` 起，ESP32 真实眼镜固件已能接住服务端默认的 `voice.realtime.session.open`，并在缺少 AEC 时结构化回退 `accepted_mode=half_duplex`。`sdk-v56` 起，ESP32-S3 默认尝试启用 AEC：初始化成功时 `voice.realtime.session.opened` 会声明 `accepted_mode=full_duplex_realtime`、`capabilities.aec=true`、`barge_in=true` 和 `output_cancel=true`；初始化失败或关闭配置时仍按半双工能力上报。当前 ESP32-S3 固件仍复用 `/ws_audio` 分段上传语音，只是在播放期间用 AEC 维持端侧监听和本地打断；完整 `/ws_realtime_audio` 媒体帧链路仍按下方协议面向后续真全双工实现。无论哪种模式，业务代码都不需要直接判断 AEC。
+`sdk-v29` 起，当前 ESP32 真实眼镜固件已能接住服务端默认的 `voice.realtime.session.open`，但会在 `voice.realtime.session.opened` 中声明 `accepted_mode=half_duplex` 和 `capabilities.aec=false`。服务端会把实时会话降级为半双工，眼镜端随后建立 `/ws_audio`，打开 WakeNet 门控并按旧链路发送 `sensor.audio.segment.started/finished`。这解决“控制连接已注册，但默认全双工模式下真实眼镜唤醒词无效果”的问题。
 
 运行态快照顶层字段 `configured_voice_session_mode` 会显示当前服务端配置；设备实际接受的模式看 `active_realtime_session.accepted_mode` 或半双工 `voice_sessions[device_id].state`。
 
@@ -653,7 +649,6 @@ VOICE_SESSION_MODE="half_duplex"
 | `voice.realtime.input.started` | 端侧到服务端 | 端侧 VAD 判断用户开始说话。 |
 | `voice.realtime.input.delta` | 端侧到服务端 | 实时上行媒体帧的 `frame_type`，通过 `MediaFrame` 二进制发送。 |
 | `voice.realtime.input.committed` | 端侧到服务端 | 当前用户输入可提交给模型或降级链路。 |
-| `user.voice.interrupt` | 端侧到服务端 | 当前 ESP32-S3 AEC 插话使用的统一播放打断事件，随后仍通过 `sensor.audio.segment.started/finished` 发送新语音段。 |
 | `voice.realtime.user_interrupt` | 端侧到服务端 | 用户在播放期间插话，携带 `barge_in_confidence`。 |
 | `voice.realtime.output.delta` | 服务端到端侧 | SDK 下发实时模型输出分片。 |
 | `voice.realtime.output.cancelled` | 服务端到端侧 | 用户插话后，当前输出流已取消。 |
@@ -700,7 +695,7 @@ VOICE_SESSION_MODE="half_duplex"
 4. 端侧连接 `/ws_realtime_audio?device_id=<glass_device_id>`。
 5. 用户开始说话时发 `voice.realtime.input.started`，随后持续发送 `MediaFrame(frame_type=voice.realtime.input.delta)`。
 6. 用户本轮输入可提交时发 `voice.realtime.input.committed`。
-7. 服务端通过 `voice.realtime.output.delta` 或现有播放流下发实时输出；如果用户播放中插话，当前 ESP32-S3 固件先发 `user.voice.interrupt`，完整实时媒体实现可发 `voice.realtime.user_interrupt`。
+7. 服务端通过 `voice.realtime.output.delta` 下发实时输出；如果用户播放中插话，端侧发 `voice.realtime.user_interrupt`。
 8. SDK 下发 `actuator.audio.interrupt` 和 `voice.realtime.output.cancelled`，并在快照中记录打断决策。
 
 端侧 `voice.realtime.user_interrupt` 示例：
@@ -1960,7 +1955,7 @@ MP4 会由 `glass-playback` 在本机通过 `ffmpeg` 解成 JPEG 帧，再按真
 | 取消路径 | 验证任务取消后能停止视频链路和眼镜端推流。 |
 | 传感器组合输入 | 验证触发音频、视觉帧和方向、位置等传感器输入能一起驱动能力。 |
 | 执行器输出 | 验证音频播放、震动等眼镜执行器命令符合预期。 |
-| 全双工插话 | ESP32-S3 AEC 固件播放中上报 `user.voice.interrupt`，或测试中继上报 `voice.realtime.user_interrupt`，验证当前输出被取消。 |
+| 全双工插话 | 端侧或测试中继播放中上报 `voice.realtime.user_interrupt`，验证当前输出被取消。 |
 | 全双工回声候选 | 注入 `voice_activity=echo` 或低置信度帧，验证只记录回声拒绝，不触发用户打断。 |
 
 ### 10.7 如何判断回放结果
@@ -2041,7 +2036,7 @@ uv run python -m devtools.audio_sample_batch_runner \
 3. 触发音频没有发送：检查 `trigger_audio.path`、音频格式和启动等待条件。
 4. 没有业务任务：检查触发音频内容是否能被 ASR 和 agent 识别为目标能力请求。
 5. 没有执行器调用：检查业务 Task 是否提交了通知或音频播放请求。
-6. 全双工插话没有生效：ESP32-S3 AEC 固件先检查 `CONFIG_GLASS_ENABLE_AEC`、`voice.realtime.session.opened` 能力上报和 `user.voice.interrupt`；完整实时媒体中继再检查 `/ws_realtime_audio` 与 `voice.realtime.user_interrupt`，并查看 `recent_playback_decisions`。
+6. 全双工插话没有生效：检查端侧是否已打开实时会话、是否连接 `/ws_realtime_audio`、是否上报 `voice.realtime.user_interrupt`，并查看 `recent_playback_decisions`。
 
 ## 11. 三端真机联调流程
 
@@ -2096,8 +2091,8 @@ uv run openaiglass.glass.start \
 
 1. 服务端 `LOG_LEVEL=DEBUG` 启动，确认 `/api/runtime/devices` 中能看到 `realtime_state` 字段。
 2. 眼镜端或手机中继端打开 `voice.realtime.session.open/opened`，并声明 `capabilities.aec` 与 `capabilities.vad`。
-3. ESP32-S3 AEC 固件可继续复用 `/ws_audio` 分段上传；完整实时媒体中继连接 `/ws_realtime_audio` 并发送 `frame_type=voice.realtime.input.delta` 的 `MediaFrame`。
-4. 在服务端正在下发播报时，ESP32-S3 AEC 固件上报 `user.voice.interrupt`，完整实时媒体中继上报 `voice.realtime.user_interrupt`。
+3. 连接 `/ws_realtime_audio` 并发送 `frame_type=voice.realtime.input.delta` 的 `MediaFrame`。
+4. 在服务端正在下发播报时，上报 `voice.realtime.user_interrupt`。
 5. 确认服务端下发 `actuator.audio.interrupt` 和 `voice.realtime.output.cancelled`。
 6. 注入喇叭回采或低置信度帧，确认 `realtime_echo_rejected_count` 增加，`recent_playback_decisions` 不出现新的 `user_interrupt`。
 7. 关闭会话后确认没有残留 `active_realtime_output_stream_id`。

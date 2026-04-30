@@ -4189,8 +4189,6 @@ class VoiceRuntime:
     ) -> None:
         """把下行音频分片推入当前播放流。"""
 
-        if context.playback.abort_event.is_set():
-            return
         if not chunk.audio_pcm_bytes:
             return
         if context.resampler is None or chunk.sample_rate_hz != context.resampler._input_rate_hz:
@@ -4229,9 +4227,6 @@ class VoiceRuntime:
     ) -> None:
         """结束回复播放流，并补齐重采样尾巴。"""
 
-        if context.playback.abort_event.is_set():
-            self._finish_playback_stream(context.playback)
-            return
         if context.resampler is not None:
             tail_chunk = context.resampler.push(b"", final=True)
             if tail_chunk:
@@ -4348,8 +4343,6 @@ class VoiceRuntime:
         return playback
 
     def _enqueue_playback_chunk(self, playback: PlaybackStreamContext, chunk: bytes) -> None:
-        if playback.abort_event.is_set():
-            return
         while True:
             try:
                 playback.queue.put(chunk, timeout=0.5)

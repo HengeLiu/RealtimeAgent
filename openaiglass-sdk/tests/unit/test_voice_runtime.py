@@ -1093,49 +1093,6 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(sent_messages[-1][2], "actuator.audio.interrupt")
         self.assertEqual(snapshot["recent_playback_decisions"][-1]["action"], "user_interrupt")
 
-    def test_aborted_synthesis_context_drops_late_audio_chunk(self) -> None:
-        """测试目标：验证播放中插话后迟到的旧回复音频不会重新入队。
-
-        测试方法：
-        1. 创建一条回复合成上下文。
-        2. 模拟用户插话把该播放流标记为中断。
-        3. 再向旧上下文注入一段迟到的模型音频。
-
-        预期结果：
-        1. 播放队列只保留中断结束哨兵，不会追加新的音频字节。
-        2. 运行时不会再次下发旧 stream 的播放请求。
-        """
-
-        sent_messages: list[tuple[str, str, str, str, dict]] = []
-        runtime = VoiceRuntime(
-            settings=ServerSettings(),
-            send_control_message=lambda *args: sent_messages.append(args),
-        )
-        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-barge-in")
-        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-barge-in")
-        context = runtime._open_reply_synthesis_context(  # noqa: SLF001 - 单测覆盖播放打断后的迟到音频
-            device_id="glass-001",
-            session_id="sess-barge-in",
-        )
-
-        runtime.handle_user_interrupt(
-            device_id="glass-001",
-            session_id="sess-barge-in",
-            reason="voice_barge_in",
-            clear_queue=True,
-        )
-        runtime._emit_synthesis_chunk(  # noqa: SLF001 - 单测覆盖播放打断后的迟到音频
-            device_id="glass-001",
-            session_id="sess-barge-in",
-            context=context,
-            chunk=ModelChunk(audio_pcm_bytes=b"\x01\x00" * 160, sample_rate_hz=16000),
-        )
-
-        self.assertTrue(context.playback.abort_event.is_set())
-        self.assertEqual(context.output_pcm, bytearray())
-        self.assertIsNone(context.playback.first_audio_chunk_at_ms)
-        self.assertEqual(sent_messages[-1][2], "actuator.audio.interrupt")
-
     def test_stream_playback_treats_broken_pipe_as_client_disconnect(self) -> None:
         """测试目标：验证播放流 HTTP 客户端提前断开时不抛出 traceback。"""
 

@@ -31,7 +31,6 @@
     "camera_capture",
     "camera_stream_to_phone",
     "notification_playback",
-    "aec_barge_in",
     "wake_prompt_tone"
   ],
   "distribution_notes": [
