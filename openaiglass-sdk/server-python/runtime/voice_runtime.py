@@ -69,6 +69,7 @@ class SegmentBuffer:
     interrupted_playback_stream_id: str | None = None
     omni_speech_started: bool = False
     omni_input_committed: bool = False
+    omni_interrupted_playback: bool = False
     utterance_photo_capture_started: bool = False
 
     def append_frame(self, frame: MediaFrame, *, max_bytes: int) -> None:
@@ -2446,16 +2447,19 @@ class VoiceRuntime:
                 and not allow_barge_in_segment
             ):
                 raise build_error(ErrorCode.DEVICE_BUSY, "设备正在播放回复，不能开始新一轮采集")
-            active_playback_stream_id = (
+            payload_started_during_playback = bool(payload.get("started_during_playback", False))
+            payload_playback_stream_id = str(payload.get("playback_stream_id") or "").strip() or None
+            local_active_playback_stream_id = (
                 controller.current_playback.stream_id
                 if controller.current_playback is not None and not controller.current_playback.completed
                 else None
             )
-            started_during_playback = (
+            started_during_playback = payload_started_during_playback or (
                 controller.current_playback is not None
                 and not controller.current_playback.completed
                 and allow_barge_in_segment
             )
+            active_playback_stream_id = payload_playback_stream_id or local_active_playback_stream_id
 
             stream_id = str(payload.get("stream_id", "")).strip()
             segment_id = str(payload.get("segment_id", "")).strip()
@@ -3645,6 +3649,8 @@ class VoiceRuntime:
                 return
             segment.omni_speech_started = True
             should_interrupt = bool(segment.started_during_playback and controller.current_playback is not None)
+            if should_interrupt:
+                segment.omni_interrupted_playback = True
 
         if not should_interrupt:
             return
@@ -3818,11 +3824,11 @@ class VoiceRuntime:
                             LogContext(device_id=device_id, session_id=session_id),
                         )
                         return
-                    if segment.started_during_playback and not segment.omni_speech_started:
+                    if segment.started_during_playback and not segment.omni_interrupted_playback:
                         log_info(
                             self._logger,
                             (
-                                "Omni semantic_vad 未确认播放中候选语音，按回声候选丢弃 "
+                                "Omni semantic_vad 未确认有效播放中插话，按回声候选丢弃 "
                                 f"segment_id={segment.segment_id} audio_bytes={len(input_pcm)} "
                                 f"interrupted_stream_id={segment.interrupted_playback_stream_id or '<unknown>'}"
                             ),

@@ -40,6 +40,8 @@ def test_glass_runtime_negotiates_realtime_voice_capabilities() -> None:
     assert "忽略播放起始保护窗内的 VAD" in source
     assert "播放中 VAD 仍在确认用户插话" in source
     assert "播放中 VAD 触发候选语音段，等待 Omni semantic_vad 确认" in source
+    assert '"started_during_playback"' in source
+    assert '"playback_stream_id"' in source
     assert 'send_user_voice_interrupt_message(interrupted_stream_id, "voice_barge_in")' not in source
     assert "s_playback_speaker_started_ms = now_ms()" in source
     assert "external_stack_allowed=%d" in source

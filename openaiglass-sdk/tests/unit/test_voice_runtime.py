@@ -1035,6 +1035,60 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertTrue(old_context.playback.abort_event.is_set())
         self.assertIn("actuator.audio.interrupt", [message[2] for message in sent_messages])
 
+    def test_playback_candidate_payload_marks_playback_state(self) -> None:
+        """测试目标：验证端侧显式标记的播放中候选段会被服务端识别。
+
+        测试方法：
+        1. 不在服务端创建当前播放流，模拟服务端播放状态已经提前清理。
+        2. 上报带 `started_during_playback/playback_stream_id` 的候选段。
+        3. 检查当前 segment 是否保留端侧声明的播放上下文。
+
+        预期结果：
+        1. 服务端不依赖本地 `current_playback` 也能识别候选段。
+        2. 后续收尾可以按回声候选丢弃，避免误生成回复。
+        """
+
+        class _OmniSession:
+            def append_audio(self, _pcm_bytes: bytes) -> None:
+                return
+
+            def close(self) -> None:
+                return
+
+        class _OmniClient:
+            def start_streaming_reply(self, **_kwargs):
+                return _OmniSession()
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_reply_mode="omni_realtime"),
+            send_control_message=lambda *_args: None,
+            omni_realtime_client=_OmniClient(),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+
+        with patch.object(runtime, "_start_utterance_photo_capture") as capture_mock:
+            runtime.on_segment_started(
+                device_id="glass-001",
+                session_id="sess-test",
+                payload={
+                    "stream_id": "stream-echo",
+                    "segment_id": "seg-echo",
+                    "sample_rate": 16000,
+                    "channels": 1,
+                    "codec": "pcm16",
+                    "started_during_playback": True,
+                    "playback_stream_id": "reply-device-active",
+                },
+            )
+            capture_mock.assert_not_called()
+
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        assert controller.current_segment is not None
+        self.assertTrue(controller.current_segment.started_during_playback)
+        self.assertEqual(controller.current_segment.interrupted_playback_stream_id, "reply-device-active")
+        self.assertIsNone(controller.current_segment.omni_realtime_context)
+
     def test_playback_candidate_without_omni_speech_started_is_dropped(self) -> None:
         """测试目标：验证播放中误触发候选段不会走 segment_turn 兜底循环。
 

@@ -596,7 +596,7 @@ static bool payload_requests_omni_semantic_dialog(const cJSON *payload)
            strcmp(owner->valuestring, "omni_realtime") == 0;
 }
 
-static void send_audio_segment_started_message(const char *segment_id)
+static void send_audio_segment_started_message(const char *segment_id, bool started_during_playback, const char *playback_stream_id)
 {
     cJSON *payload = cJSON_CreateObject();
     cJSON *wake_word = cJSON_CreateObject();
@@ -622,6 +622,10 @@ static void send_audio_segment_started_message(const char *segment_id)
     cJSON_AddNumberToObject(payload, "sample_rate", SR_SAMPLE_RATE_HZ);
     cJSON_AddNumberToObject(payload, "channels", 1);
     cJSON_AddStringToObject(payload, "codec", "pcm16");
+    cJSON_AddBoolToObject(payload, "started_during_playback", started_during_playback);
+    if (started_during_playback && playback_stream_id != NULL && playback_stream_id[0] != '\0') {
+        cJSON_AddStringToObject(payload, "playback_stream_id", playback_stream_id);
+    }
     cJSON_AddStringToObject(wake_word, "engine", "esp-sr-wakenet");
     cJSON_AddStringToObject(
         wake_word,
@@ -2697,11 +2701,13 @@ static void sr_pipeline_task(void *arg)
 
         if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
             bool is_playback_barge_in = s_playback_active && start_by_continuous_vad && s_aec_runtime_enabled;
+            char candidate_playback_stream_id[64] = {0};
             if (is_playback_barge_in) {
+                strlcpy(candidate_playback_stream_id, s_current_playback_stream_id, sizeof(candidate_playback_stream_id));
                 ESP_LOGI(
                     TAG,
                     "播放中 VAD 触发候选语音段，等待 Omni semantic_vad 确认: stream_id=%s",
-                    s_current_playback_stream_id
+                    candidate_playback_stream_id
                 );
             }
             segment.segment_active = true;
@@ -2721,7 +2727,11 @@ static void sr_pipeline_task(void *arg)
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "连续对话 VAD 触发新语音段: segment_id=%s", segment.segment_id);
             }
-            send_audio_segment_started_message(segment.segment_id);
+            send_audio_segment_started_message(
+                segment.segment_id,
+                is_playback_barge_in,
+                candidate_playback_stream_id
+            );
             flush_pre_roll_frames(
                 pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
