@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import sys
 import struct
+import tempfile
 import time
 import types
 import unittest
@@ -333,6 +334,87 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(play_messages), 1)
         first_play_stream_id = play_messages[0]["stream_id"]
         self.assertEqual(stream_text[first_play_stream_id], "我先记一下。")
+
+    def test_progress_reply_uses_static_audio_cache_when_ready(self) -> None:
+        """测试目标：验证工具前置播报优先使用启动阶段预生成音频。
+
+        测试方法：
+        1. 构造带 `progress_message` 的假工具注册表。
+        2. 启动 `VoiceRuntime`，等待前置播报音频缓存预加载完成。
+        3. 触发同一段前置播报。
+
+        预期结果：
+        1. 启动阶段会生成一份本地 WAV 缓存。
+        2. 播报时直接读取缓存，不再创建新的 TTS 会话。
+        3. 播放请求仍正常下发。
+        """
+
+        class _FakeTtsSession(StreamingTtsSession):
+            def __init__(self, on_chunk) -> None:
+                self.on_chunk = on_chunk
+                self.text = ""
+
+            def push_text(self, text: str) -> None:
+                self.text += text
+
+            def finish(self) -> None:
+                self.on_chunk(ModelChunk(audio_pcm_bytes=b"\x01\x02", sample_rate_hz=16000))
+
+        class _FakeModelClient:
+            def __init__(self) -> None:
+                self.session_count = 0
+
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                self.session_count += 1
+                return _FakeTtsSession(on_chunk)
+
+        class _FakeToolRegistry:
+            def list_progress_messages(self):
+                return [("manage_memory", "我先记一下。")]
+
+            def get_camera_gateway(self):
+                return None
+
+        class _FakeAgentFacade:
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                return _FakeToolRegistry()
+
+        sent_messages: list[tuple[str, dict]] = []
+
+        def _send_control_message(_device_id, _semantic, name, _session_id, payload):
+            sent_messages.append((name, dict(payload)))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_client = _FakeModelClient()
+            runtime = VoiceRuntime(
+                settings=ServerSettings(
+                    dashscope_api_key="demo-key",
+                    voice_runs_root=temp_dir,
+                ),
+                send_control_message=_send_control_message,
+                model_client=model_client,  # type: ignore[arg-type]
+                agent_facade=_FakeAgentFacade(),  # type: ignore[arg-type]
+            )
+            self.assertTrue(runtime._progress_audio_cache_ready.wait(timeout=1.0))  # noqa: SLF001
+            self.assertEqual(model_client.session_count, 1)
+            runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-cache")
+            runtime._start_intermediate_reply(  # noqa: SLF001
+                device_id="glass-001",
+                session_id="sess-cache",
+                text="我先记一下。",
+            )
+
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                if any(name == "actuator.audio.play" for name, _payload in sent_messages):
+                    break
+                time.sleep(0.01)
+
+            self.assertEqual(model_client.session_count, 1)
+            self.assertTrue(any(name == "actuator.audio.play" for name, _payload in sent_messages))
 
     def test_extract_message_text_reads_non_stream_response(self) -> None:
         """测试目标：验证非流式返回能正确提取文本。

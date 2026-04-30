@@ -1,7 +1,7 @@
 # 普通文本流式与 TTS 首包延迟优化设计
 
 更新时间：2026-04-30
-对应版本：sdk-v69
+对应版本：sdk-v70
 
 ## 1. 设计目标
 
@@ -97,7 +97,20 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 
 `VoiceRuntime` 需要特别处理最终回复 TTS 预热与前置播报的顺序：TTS 会话可以在 Agent 请求前预热，但最终回复播放流不能提前注册到播放仲裁器。否则尚未产生任何最终回复音频的预热流会占住 active playback，让前置播报只能排队到最终回复之后。当前实现是在最终回复首段文本到达时才创建最终回复播放流。
 
-### 6.2 适用范围
+### 6.2 静态音频缓存
+
+`progress_message` 是静态短文本，不需要每次工具调用时都请求 TTS。SDK 在 `VoiceRuntime` 初始化后异步执行一次缓存预加载：
+
+1. 从 `ToolRegistry.list_progress_messages()` 读取当前所有工具的播报文案。
+2. 按 `tts_model_name`、`tts_voice`、`tts_sample_rate_hz`、目标播放采样率和文本生成稳定 hash。
+3. 缓存文件写入 `VOICE_RUNS_ROOT/progress-audio-cache/<hash>.wav`。
+4. 如果文件已存在且是 16k 单声道 16bit PCM WAV，直接读取 PCM 到内存。
+5. 如果文件不存在，调用当前配置的 TTS 生成一次音频，重采样成 16k PCM 后写入 WAV。
+6. 工具调用时优先读取内存缓存，命中后直接写入播放流；未命中或预加载失败时回退实时 TTS。
+
+该缓存只优化工具前置播报，不影响最终回复 TTS。缓存目录位于 `runs/` 下，属于运行产物，不应提交。
+
+### 6.3 适用范围
 
 这项能力只覆盖“模型已经决定调用工具，但工具执行需要等待”的静默段，例如：
 
@@ -108,7 +121,7 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 
 它不解决模型首轮决策前的静默等待。模型首轮决策前的延迟仍应通过 ASR 前移、Agent 资源预热、工具面收敛、模型选择和 Realtime 直出链路继续优化。
 
-### 6.3 业务扩展面
+### 6.4 业务扩展面
 
 公开 SDK `BaseTool` 新增可选属性：
 

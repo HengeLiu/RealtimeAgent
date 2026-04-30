@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import math
@@ -540,6 +541,22 @@ class ReplySynthesisContext:
     audio_source: str = "tts"
     output_pcm: bytearray = field(default_factory=bytearray)
     resampler: PCM16StreamResampler | None = None
+
+
+@dataclass(slots=True)
+class ProgressAudioCacheEntry:
+    """工具前置播报音频缓存条目。
+
+    主要功能：
+    1. 记录一段 `progress_message` 对应的本地 WAV 文件。
+    2. 保存已经解码成 16k 单声道 PCM 的音频字节，便于工具调用时直接推入播放队列。
+    """
+
+    tool_name: str
+    text: str
+    wav_path: str
+    pcm_bytes: bytes
+    created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
 
 class StreamingTtsSession:
@@ -2319,6 +2336,9 @@ class VoiceRuntime:
         self._notification_stream_requests: dict[tuple[str, str], str] = {}
         self._notification_request_streams: dict[str, tuple[str, str]] = {}
         self._interrupted_playback_streams: set[tuple[str, str]] = set()
+        self._progress_audio_cache: dict[str, ProgressAudioCacheEntry] = {}
+        self._progress_audio_cache_lock = threading.Lock()
+        self._progress_audio_cache_ready = threading.Event()
         self._agent_facade = agent_facade or AgentFacade.build_default(
             settings=settings,
             device_state_reader=self.build_runtime_snapshot,
@@ -2335,6 +2355,7 @@ class VoiceRuntime:
             settings=self._settings,
             model_adapter=realtime_model_adapter,
         )
+        self._start_progress_audio_cache_preload()
 
     def open_session(self, *, device_id: str, device_type: str, session_id: str) -> None:
         with self._lock:
@@ -2379,6 +2400,178 @@ class VoiceRuntime:
                 "interrupt_policy": "forbid",
             },
         }
+
+    def _start_progress_audio_cache_preload(self) -> None:
+        """启动工具前置播报音频缓存预生成。
+
+        主要逻辑：
+        1. 从当前 agent-core 工具注册表读取所有 `progress_message`。
+        2. 服务启动后在后台生成或加载本地 WAV 缓存。
+        3. 没有 API Key 或没有播报文案时跳过，工具调用时仍走实时 TTS 兜底。
+
+        异常情况：
+        1. 预生成失败只写 DEBUG 日志，不阻塞服务启动。
+        """
+
+        if not self._settings.dashscope_api_key.strip():
+            self._progress_audio_cache_ready.set()
+            return
+        try:
+            tool_registry = self._agent_facade.get_tool_registry()
+            list_messages = getattr(tool_registry, "list_progress_messages", None)
+            if not callable(list_messages):
+                self._progress_audio_cache_ready.set()
+                return
+            progress_messages = list_messages()
+        except Exception as exc:
+            self._progress_audio_cache_ready.set()
+            log_debug(
+                self._logger,
+                f"工具前置播报缓存读取工具列表失败，已跳过: reason={exc!r}",
+                LogContext(session_id="progress_audio_cache", device_id="server"),
+            )
+            return
+        if not progress_messages:
+            self._progress_audio_cache_ready.set()
+            return
+        threading.Thread(
+            target=self._preload_progress_audio_cache,
+            args=(progress_messages,),
+            name="progress-audio-cache-preload",
+            daemon=True,
+        ).start()
+
+    def _preload_progress_audio_cache(self, progress_messages: list[tuple[str, str]]) -> None:
+        """批量加载或生成工具前置播报音频缓存。"""
+
+        unique_messages: dict[str, str] = {}
+        for tool_name, message in progress_messages:
+            text = message.strip()
+            if text and text not in unique_messages:
+                unique_messages[text] = tool_name
+        cache_dir = self._progress_audio_cache_dir()
+        os.makedirs(cache_dir, exist_ok=True)
+        succeeded = 0
+        for text, tool_name in unique_messages.items():
+            try:
+                entry = self._load_or_create_progress_audio_cache_entry(
+                    tool_name=tool_name,
+                    text=text,
+                    cache_dir=cache_dir,
+                )
+            except Exception as exc:  # noqa: BLE001 - 启动预生成失败不应影响主服务
+                log_debug(
+                    self._logger,
+                    f"工具前置播报音频缓存生成失败: tool={tool_name} text={text!r} reason={exc!r}",
+                    LogContext(session_id="progress_audio_cache", device_id="server"),
+                )
+                continue
+            with self._progress_audio_cache_lock:
+                self._progress_audio_cache[text] = entry
+            succeeded += 1
+        self._progress_audio_cache_ready.set()
+        log_info(
+            self._logger,
+            (
+                "工具前置播报音频缓存预加载完成 "
+                f"message_count={len(unique_messages)} cached_count={succeeded} cache_dir={cache_dir}"
+            ),
+            LogContext(session_id="progress_audio_cache", device_id="server"),
+        )
+
+    def _load_or_create_progress_audio_cache_entry(
+        self,
+        *,
+        tool_name: str,
+        text: str,
+        cache_dir: str,
+    ) -> ProgressAudioCacheEntry:
+        """加载或创建单条工具前置播报音频缓存。"""
+
+        wav_path = os.path.join(cache_dir, f"{self._progress_audio_cache_key(text)}.wav")
+        pcm_bytes = self._read_cached_progress_wav(wav_path)
+        if pcm_bytes is None:
+            pcm_bytes = self._synthesize_progress_text_to_pcm(text)
+            with open(wav_path, "wb") as file:
+                file.write(build_wav_bytes(pcm_bytes, SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS))
+        return ProgressAudioCacheEntry(
+            tool_name=tool_name,
+            text=text,
+            wav_path=wav_path,
+            pcm_bytes=pcm_bytes,
+        )
+
+    def _synthesize_progress_text_to_pcm(self, text: str) -> bytes:
+        """把一段前置播报文本合成为 16k 单声道 PCM。"""
+
+        pcm_parts: list[bytes] = []
+        resampler_box: list[PCM16StreamResampler | None] = [None]
+
+        def _on_chunk(chunk: ModelChunk) -> None:
+            if not chunk.audio_pcm_bytes:
+                return
+            resampler = resampler_box[0]
+            if resampler is None or chunk.sample_rate_hz != resampler._input_rate_hz:
+                resampler = PCM16StreamResampler(chunk.sample_rate_hz, SERVER_SAMPLE_RATE_HZ)
+                resampler_box[0] = resampler
+            pcm = resampler.push(chunk.audio_pcm_bytes, final=False)
+            if pcm:
+                pcm_parts.append(pcm)
+
+        tts_session = self._model_client.create_streaming_tts_session(
+            settings=self._settings,
+            on_chunk=_on_chunk,
+        )
+        tts_session.push_text(text)
+        tts_session.finish()
+        if resampler_box[0] is not None:
+            tail = resampler_box[0].push(b"", final=True)
+            if tail:
+                pcm_parts.append(tail)
+        pcm_bytes = b"".join(pcm_parts)
+        if not pcm_bytes:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "工具前置播报 TTS 返回空音频",
+                details={"text": text},
+            )
+        return pcm_bytes
+
+    def _read_cached_progress_wav(self, wav_path: str) -> bytes | None:
+        """读取本地缓存 WAV，格式不符合当前播放要求时返回 None。"""
+
+        if not os.path.exists(wav_path):
+            return None
+        try:
+            with wave.open(wav_path, "rb") as reader:
+                if (
+                    reader.getframerate() != SERVER_SAMPLE_RATE_HZ
+                    or reader.getnchannels() != SERVER_CHANNELS
+                    or reader.getsampwidth() != SERVER_SAMPLE_WIDTH_BYTES
+                ):
+                    return None
+                return reader.readframes(reader.getnframes())
+        except Exception:
+            return None
+
+    def _progress_audio_cache_dir(self) -> str:
+        """返回工具前置播报音频缓存目录。"""
+
+        return os.path.join(self._settings.voice_runs_root, "progress-audio-cache")
+
+    def _progress_audio_cache_key(self, text: str) -> str:
+        """按 TTS 配置和文本生成稳定缓存键。"""
+
+        payload = {
+            "text": text,
+            "tts_model_name": self._settings.tts_model_name,
+            "tts_voice": self._settings.tts_voice,
+            "tts_sample_rate_hz": self._settings.tts_sample_rate_hz,
+            "playback_sample_rate_hz": SERVER_SAMPLE_RATE_HZ,
+            "channels": SERVER_CHANNELS,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:24]
 
     def build_realtime_open_payload(self) -> dict[str, Any]:
         """生成全双工实时语音会话打开请求。
@@ -4101,7 +4294,7 @@ class VoiceRuntime:
             )
             return
         threading.Thread(
-            target=self._synthesize_text_into_context,
+            target=self._play_intermediate_reply_context,
             kwargs={
                 "device_id": device_id,
                 "session_id": session_id,
@@ -4110,6 +4303,74 @@ class VoiceRuntime:
             },
             daemon=True,
         ).start()
+
+    def _play_intermediate_reply_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        context: ReplySynthesisContext,
+        text: str,
+    ) -> None:
+        """优先使用静态缓存播放中间提示，未命中时回退实时 TTS。"""
+
+        cached_pcm = self._get_cached_progress_pcm(text)
+        if cached_pcm:
+            self._emit_cached_progress_pcm(
+                device_id=device_id,
+                session_id=session_id,
+                context=context,
+                pcm_bytes=cached_pcm,
+            )
+            return
+        self._synthesize_text_into_context(
+            device_id=device_id,
+            session_id=session_id,
+            context=context,
+            text=text,
+        )
+
+    def _get_cached_progress_pcm(self, text: str) -> bytes | None:
+        """读取已预生成的前置播报 PCM。"""
+
+        normalized = text.strip()
+        if not normalized:
+            return None
+        if not self._progress_audio_cache_ready.is_set():
+            self._progress_audio_cache_ready.wait(timeout=0.05)
+        with self._progress_audio_cache_lock:
+            entry = self._progress_audio_cache.get(normalized)
+            return entry.pcm_bytes if entry is not None else None
+
+    def _emit_cached_progress_pcm(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        context: ReplySynthesisContext,
+        pcm_bytes: bytes,
+    ) -> None:
+        """把缓存 PCM 直接写入播放流。"""
+
+        if context.playback.first_audio_chunk_at_ms is None:
+            context.playback.first_audio_chunk_at_ms = self._now_ms()
+            log_info(
+                self._logger,
+                (
+                    "工具前置播报命中静态音频缓存 "
+                    f"stream_id={context.stream_id} pcm_bytes={len(pcm_bytes)}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id=context.stream_id),
+            )
+        self._enqueue_playback_chunk(context.playback, pcm_bytes)
+        context.output_pcm.extend(pcm_bytes)
+        self._request_playback_start(
+            device_id=device_id,
+            session_id=session_id,
+            playback=context.playback,
+            force=True,
+        )
+        self._finish_playback_stream(context.playback)
 
     def _create_intermediate_reply_context(
         self,

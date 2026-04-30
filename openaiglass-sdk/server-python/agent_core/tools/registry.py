@@ -203,6 +203,23 @@ class ToolRegistry:
         names = self._filter_model_tool_names(allowed_names)
         return [self._sdk_tools[name] for name in names]
 
+    def list_progress_messages(self) -> list[tuple[str, str]]:
+        """列出所有 Tool 声明的前置播报文案。
+
+        返回值：
+        1. `(tool_name, progress_message)` 列表，按工具名排序。
+
+        异常情况：
+        1. 本方法只读取注册表内存状态，不抛出业务异常。
+        """
+
+        messages: list[tuple[str, str]] = []
+        for name, tool in sorted(self._tools.items()):
+            message = (tool.spec.progress_message or "").strip()
+            if message:
+                messages.append((name, message))
+        return messages
+
     def get_skill_runtime(self) -> SkillRuntime | None:
         """返回 Skill Runtime。"""
 
