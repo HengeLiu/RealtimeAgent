@@ -1014,6 +1014,46 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertNotIn("资产", instructions)
         self.assertNotIn("请遵守以下规则", instructions)
 
+    def test_openai_runner_instructs_agent_to_proactively_save_user_memory(self) -> None:
+        """测试目标：验证主 Agent 提示词明确要求主动保存用户长期信息。
+
+        测试方法：
+        1. 构造带记忆运行时的 `OpenAIAgentLoopRunner`。
+        2. 创建一轮用户说出姓名的运行态。
+        3. 检查发给模型的系统提示词。
+
+        预期结果：
+        1. 提示词要求用户自然说出值得长期保存的信息时调用 `manage_memory`。
+        2. 提示词明确列出姓名等基本信息和导航偏好等个性化信息。
+        3. 提示词同时列出不应写入长期记忆的边界。
+        """
+
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        registry, gateway = build_tooling(memory_runtime=memory_runtime)
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_memory_prompt_001", device_id="glass-001")
+        turn = AgentTurn(
+            turn_id="turn_memory_prompt_001",
+            session_id="sess_memory_prompt_001",
+            device_id="glass-001",
+            source="voice_asr",
+            input_text="我叫小明。",
+        )
+
+        runtime = runner._turn_runtime_factory.build(session=session, turn=turn)
+        instructions = runtime.model_request["instructions"]
+
+        self.assertIn("即使没有说“记住”", instructions)
+        self.assertIn("姓名", instructions)
+        self.assertIn("导航偏好", instructions)
+        self.assertIn("manage_memory", instructions)
+        self.assertIn("不要把一次性任务", instructions)
+
     def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:
         """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。
 
