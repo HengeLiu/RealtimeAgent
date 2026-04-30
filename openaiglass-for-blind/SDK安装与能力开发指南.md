@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v71`。本版本在 `sdk-v70` 工具前置播报静态音频缓存基础上，支持把 `progress_message` 配置为 3 到 5 条候选短句；每次真实工具调用前 SDK 会随机选择一条播放，让等待提示更口语化、更有变化。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v72`。本版本在 `sdk-v71` 工具前置播报随机候选基础上，收紧真实 ESP32 连续对话门控：播放结束后增加短冷却，并要求连续多帧 VAD 语音才允许免唤醒追问，降低尾音、环境声或播放残留触发新一轮对话的概率。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效，但会先经过冷却和连续 VAD 帧确认。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR | 默认 `VOICE_INPUT_MODE=auto`：`VOICE_REPLY_MODE=agent_tts` 时等价于 `asr_text`，`VOICE_REPLY_MODE=omni_realtime` 时等价于 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
 | 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选；SDK 会在工具执行前通过语音运行时播报，同一轮同一工具只播报一次。业务代码不要自行调用播放器或 TTS。 |
@@ -152,6 +152,8 @@ openaiglass-for-blind/host/glass/config/local_build.env.example
 | `GLASS_HEARTBEAT_INTERVAL_MS` | 心跳间隔。 |
 
 ESP32-S3 当前采用方案 A：播放期间不启动新的本地语音段，也不做自然插话；播放结束后，如果连续对话窗口仍有效，用户可以直接继续说下一句，不需要重复唤醒。首次 WakeNet 唤醒提示音由 `CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE=y` 控制，可通过 `CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS`、`CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ`、`CONFIG_GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE` 调整时长、频率和音量。已有旧 `sdkconfig` 时，重新烧录前要执行 `idf.py reconfigure` 或删除旧 `sdkconfig` 后重新配置，确保这些默认项进入实际构建。
+
+`sdk-v72` 起，真实 ESP32 的连续对话追问不会在播放结束后立刻被单帧 `VAD_SPEECH` 触发。固件会先等待短冷却，再要求连续多帧 VAD 语音才启动免唤醒新语音段；日志中出现 `连续对话 VAD 触发新语音段` 时会带上 `speech_frames`，用于判断是否由稳定语音触发。
 
 服务端控制默认语音会话模式：
 
@@ -517,7 +519,7 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 `sdk-v54` 起，SDK 增加方案二的连续对话配置：`VOICE_CONVERSATION_MODE=segment_turn|realtime_semantic_vad`。`realtime_semantic_vad` 只能与 `VOICE_REPLY_MODE=omni_realtime` 一起使用；服务端会在 Omni 会话中启用 turn detection，并把 `VOICE_REALTIME_TURN_DETECTION`、`VOICE_REALTIME_SEMANTIC_VAD_THRESHOLD`、`VOICE_REALTIME_SILENCE_DURATION_MS`、`VOICE_REALTIME_PREFIX_PADDING_MS` 传入官方 SDK，同时在 `voice.realtime.session.open` 里向真实眼镜声明 `input.turn_detection.owner=omni_realtime`。这项能力面向真实 `glass-esp32` 连续对话，不要求业务能力代码修改；`glass-playback` 只能用于协议回放和验收，不代表真实唤醒、AEC 或旁人说话过滤效果。
 
-`sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。由于当前固件没有 AEC，播放期间仍不会保持麦克风活跃；如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
+`sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。`sdk-v72` 起，播放结束后的连续追问会先经过短冷却和连续 VAD 帧确认，降低尾音或环境声误触发。由于当前固件没有 AEC，播放期间仍不会保持麦克风活跃；如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
 
 当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token，TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime + realtime_semantic_vad` 模式已经把建连、音频上行、照片追加和 turn detection 前移到用户说话期间，由 Omni 自动提交并直出语音；但真实 ESP32 端仍因缺少 AEC 保持播放期间半双工，播放中自然插话和更激进的 full-duplex 体验需要端侧 AEC/VAD 能力继续配合。
 

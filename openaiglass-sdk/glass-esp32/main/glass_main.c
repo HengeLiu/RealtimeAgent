@@ -81,6 +81,8 @@
 #define WAKE_IDLE_SUMMARY_MS 3000
 #define SERVER_REPLY_TIMEOUT_MS 45000
 #define CONTINUOUS_DIALOG_IDLE_TIMEOUT_MS 30000
+#define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 900
+#define CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES 4
 #define AUDIO_WS_RECONNECT_INTERVAL_MS 3000
 #define PLAYBACK_HTTP_TIMEOUT_MS 5000
 #define PLAYBACK_STREAM_IDLE_TIMEOUT_MS 30000
@@ -174,6 +176,8 @@ static int s_camera_frame_interval_ms = 500;
 static uint32_t s_camera_frame_seq = 0;
 static uint64_t s_playback_request_started_ms = 0;
 static uint64_t s_continuous_dialog_last_activity_ms = 0;
+static uint64_t s_continuous_dialog_resume_after_ms = 0;
+static uint32_t s_continuous_dialog_vad_speech_frames = 0;
 static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
 static TaskHandle_t s_wifi_retry_task_handle = NULL;
@@ -1448,6 +1452,8 @@ static void deactivate_continuous_dialog(const char *reason)
     }
     s_continuous_dialog_active = false;
     s_continuous_dialog_last_activity_ms = 0;
+    s_continuous_dialog_resume_after_ms = 0;
+    s_continuous_dialog_vad_speech_frames = 0;
     ESP_LOGI(TAG, "连续对话窗口已关闭: reason=%s", reason != NULL ? reason : "unknown");
 }
 
@@ -1458,6 +1464,27 @@ static void refresh_continuous_dialog_activity(void)
     }
     s_continuous_dialog_active = true;
     s_continuous_dialog_last_activity_ms = now_ms();
+}
+
+static void reset_continuous_dialog_vad_gate(void)
+{
+    s_continuous_dialog_vad_speech_frames = 0;
+}
+
+static void arm_continuous_dialog_resume_cooldown(void)
+{
+    if (!s_realtime_semantic_dialog_enabled || !s_continuous_dialog_active) {
+        return;
+    }
+    uint64_t current_ms = now_ms();
+    s_continuous_dialog_last_activity_ms = current_ms;
+    s_continuous_dialog_resume_after_ms = current_ms + CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS;
+    s_continuous_dialog_vad_speech_frames = 0;
+    ESP_LOGD(
+        TAG,
+        "连续对话恢复监听冷却: cooldown_ms=%d",
+        CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS
+    );
 }
 
 static bool reply_wait_timed_out(uint64_t current_ms)
@@ -2154,9 +2181,7 @@ cleanup:
     s_playback_task_handle = NULL;
     s_current_playback_stream_id[0] = '\0';
     s_playback_request_started_ms = 0;
-    if (s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
-        s_continuous_dialog_last_activity_ms = now_ms();
-    }
+    arm_continuous_dialog_resume_cooldown();
     if (s_next_playback_stream_id[0] != '\0') {
         strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
         s_next_playback_stream_id[0] = '\0';
@@ -2426,9 +2451,18 @@ static void sr_pipeline_task(void *arg)
         }
 
         bool start_by_wake_word = res->wakeup_state == WAKENET_DETECTED;
-        bool start_by_continuous_vad = s_realtime_semantic_dialog_enabled &&
-                                       s_continuous_dialog_active &&
-                                       res->vad_state == VAD_SPEECH;
+        bool continuous_vad_ready = s_realtime_semantic_dialog_enabled &&
+                                    s_continuous_dialog_active &&
+                                    (s_continuous_dialog_resume_after_ms == 0 ||
+                                     current_ms >= s_continuous_dialog_resume_after_ms);
+        if (!segment.segment_active && continuous_vad_ready && res->vad_state == VAD_SPEECH) {
+            s_continuous_dialog_vad_speech_frames += 1U;
+        } else if (!segment.segment_active && res->vad_state != VAD_SPEECH) {
+            reset_continuous_dialog_vad_gate();
+        }
+        bool start_by_continuous_vad = continuous_vad_ready &&
+                                       s_continuous_dialog_vad_speech_frames >=
+                                           CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES;
 
         if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
             segment.segment_active = true;
@@ -2439,12 +2473,20 @@ static void sr_pipeline_task(void *arg)
             segment.chunk_seq = 0;
             build_runtime_token("seg", segment.segment_id, sizeof(segment.segment_id));
             if (start_by_wake_word) {
+                reset_continuous_dialog_vad_gate();
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
                 play_wake_prompt_tone();
             } else {
+                uint32_t speech_frames = s_continuous_dialog_vad_speech_frames;
+                reset_continuous_dialog_vad_gate();
                 refresh_continuous_dialog_activity();
-                ESP_LOGI(TAG, "连续对话 VAD 触发新语音段: segment_id=%s", segment.segment_id);
+                ESP_LOGI(
+                    TAG,
+                    "连续对话 VAD 触发新语音段: segment_id=%s speech_frames=%" PRIu32,
+                    segment.segment_id,
+                    speech_frames
+                );
             }
             send_audio_segment_started_message(segment.segment_id);
             flush_pre_roll_frames(
@@ -2516,6 +2558,7 @@ static void sr_pipeline_task(void *arg)
             endpoint_by_silence ? "endpoint_detected" : "max_capture"
         );
         refresh_continuous_dialog_activity();
+        reset_continuous_dialog_vad_gate();
         begin_reply_wait_state();
         s_wake_listening_enabled = false;
         reset_segment_state(&segment);
