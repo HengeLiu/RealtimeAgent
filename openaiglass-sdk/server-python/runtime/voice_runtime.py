@@ -263,6 +263,8 @@ class OmniRealtimeStreamingSession:
         self._audio_bytes = 0
         self._audio_frame_count = 0
         self._image_frame_count = 0
+        self._audio_push_failed = False
+        self._audio_push_error: str | None = None
         self._closed = False
 
     @property
@@ -282,7 +284,12 @@ class OmniRealtimeStreamingSession:
 
         if not pcm_bytes:
             return
-        self._conversation.append_audio(base64.b64encode(pcm_bytes).decode("ascii"))
+        try:
+            self._conversation.append_audio(base64.b64encode(pcm_bytes).decode("ascii"))
+        except Exception as exc:
+            self._audio_push_failed = True
+            self._audio_push_error = repr(exc)
+            raise
         self._audio_bytes += len(pcm_bytes)
         self._audio_frame_count += 1
         if self._first_audio_append_at_ms is None:
@@ -386,6 +393,29 @@ class OmniRealtimeStreamingSession:
                         LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
                     )
             if not self._request_started_at_ms_box:
+                if self._audio_push_failed:
+                    log_info(
+                        self._logger,
+                        (
+                            "Omni semantic_vad 流式上行失败，跳过 segment_turn 重连兜底 "
+                            f"model={self._settings.voice_omni_realtime_model_name} "
+                            f"finish_to_check_ms={max(DashscopeOmniRealtimeReplyClient._now_ms() - segment_finished_at_ms, 0)} "
+                            f"audio_bytes={self._audio_bytes} audio_frame_count={self._audio_frame_count} "
+                            f"image_count={appended_image_count} error={self._audio_push_error or '<unknown>'}"
+                        ),
+                        LogContext(device_id=self._device_id, session_id=self._session_id),
+                    )
+                    raise build_error(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Omni Realtime 流式上行失败，已跳过重连兜底",
+                        retryable=True,
+                        details={
+                            "reason": "omni_realtime_audio_push_failed",
+                            "segment_id": self._segment_id,
+                            "stream_id": self._stream_id,
+                            "error": self._audio_push_error or "",
+                        },
+                    )
                 log_info(
                     self._logger,
                     (

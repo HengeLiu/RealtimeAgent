@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import threading
 import sys
 import struct
 import types
@@ -19,6 +20,7 @@ from runtime.voice_runtime import (
     MessageEntry,
     ModelChunk,
     OmniRealtimeReplyResult,
+    OmniRealtimeStreamingSession,
     PCM16StreamResampler,
     SegmentBuffer,
     StreamingSpeechRecognitionSession,
@@ -1088,6 +1090,65 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertTrue(controller.current_segment.started_during_playback)
         self.assertEqual(controller.current_segment.interrupted_playback_stream_id, "reply-device-active")
         self.assertIsNone(controller.current_segment.omni_realtime_context)
+
+    def test_omni_streaming_push_failure_skips_segment_turn_fallback(self) -> None:
+        """测试目标：验证 Omni 流式上行断开后不会继续重连兜底。
+
+        测试方法：
+        1. 构造一个第一次追加音频成功、第二次追加音频失败的假 Omni 会话。
+        2. 调用 `finish()` 进入 semantic VAD 收尾。
+        3. 检查异常原因是否是流式上行失败，而不是 semantic VAD 未自动提交。
+
+        预期结果：
+        1. 运行时会跳过 `segment_turn` 重连兜底。
+        2. 后续不会因为上游 WebSocket 已关闭而重复创建新 Omni 连接。
+        """
+
+        class _Conversation:
+            def __init__(self) -> None:
+                self.append_count = 0
+
+            def append_audio(self, _payload: str) -> None:
+                self.append_count += 1
+                if self.append_count > 1:
+                    raise RuntimeError("Connection is already closed.")
+
+            def close(self) -> None:
+                return
+
+        session = OmniRealtimeStreamingSession(
+            settings=ServerSettings(voice_reply_mode="omni_realtime"),
+            conversation=_Conversation(),
+            done_event=threading.Event(),
+            error_box=[],
+            assistant_text_parts=[],
+            transcript_parts=[],
+            response_id_box=[],
+            request_started_at_ms_box=[],
+            metrics_lock=threading.Lock(),
+            on_chunk=lambda _chunk: None,
+            on_input_speech_started=None,
+            on_input_committed=None,
+            logger=VoiceRuntime(  # noqa: SLF001 - 单测复用运行时日志器
+                settings=ServerSettings(),
+                send_control_message=lambda *_args, **_kwargs: None,
+            )._logger,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+            connected_at_ms=0,
+            connect_ms=0,
+        )
+        session.append_audio(b"\x00\x00" * 320)
+        with self.assertRaises(RuntimeError):
+            session.append_audio(b"\x00\x00" * 320)
+
+        with self.assertRaises(AppError) as raised:
+            session.finish(image_frames=[], instructions="", segment_finished_at_ms=0)
+
+        self.assertEqual(raised.exception.code, ErrorCode.INTERNAL_ERROR)
+        self.assertEqual(raised.exception.details["reason"], "omni_realtime_audio_push_failed")
 
     def test_playback_candidate_without_omni_speech_started_is_dropped(self) -> None:
         """测试目标：验证播放中误触发候选段不会走 segment_turn 兜底循环。
