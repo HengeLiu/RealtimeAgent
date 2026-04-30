@@ -13,7 +13,7 @@
   },
   "sensors": {
     "trigger_audio": {
-      "path": "testdata/audio/看一下我前面有什么.wav",
+      "path": "testdata/audio/我叫文刀文字的文刀锋的刀.wav",
       "format": "wav",
       "sample_rate_hz": 16000,
       "channels": 1,
