@@ -3281,29 +3281,53 @@ class VoiceRuntime:
             streamed_reply_parts: list[str] = []
             final_synthesis_context: ReplySynthesisContext | None = None
             final_tts_session: StreamingTtsSession | None = None
+            final_synthesis_lock = threading.Lock()
             model_request_started_at_ms = self._now_ms()
             first_model_token_logged = False
             use_streaming_tts_output = True
+
+            def _ensure_final_synthesis_context() -> ReplySynthesisContext:
+                """在最终回复首段文本到达时再注册播放流。
+
+                主要逻辑：
+                1. TTS 会话可以在 Agent 请求前预热。
+                2. 播放流不能提前注册到播放仲裁器，否则工具前置播报会被排队。
+                3. 首个最终回复文本准备推给 TTS 时，再创建真正的最终回复播放流。
+
+                返回值：
+                1. 当前最终回复的播放流上下文。
+                """
+
+                nonlocal final_synthesis_context
+                if final_synthesis_context is not None:
+                    return final_synthesis_context
+                with final_synthesis_lock:
+                    if final_synthesis_context is None:
+                        final_synthesis_context = self._open_reply_synthesis_context(
+                            device_id=device_id,
+                            session_id=session_id,
+                            audio_source="tts",
+                        )
+                    return final_synthesis_context
 
             def _create_final_tts_session() -> StreamingTtsSession:
                 """创建当前 Agent 最终回复使用的流式 TTS 会话。
 
                 主要逻辑：
-                1. 复用已经提前创建的 `final_synthesis_context`。
-                2. 把 TTS 音频回调接到当前播放流。
+                1. 预热 TTS WebSocket，但不提前注册最终回复播放流。
+                2. 真正收到最终回复文本后，再创建播放流并接收 TTS 音频。
                 3. 该函数也用于预热 session 失效后的重建。
 
                 返回值：
                 1. 当前回复可用的 `StreamingTtsSession`。
                 """
 
-                assert final_synthesis_context is not None
                 return self._model_client.create_streaming_tts_session(
                     settings=self._settings,
                     on_chunk=lambda chunk: self._emit_synthesis_chunk(
                         device_id=device_id,
                         session_id=session_id,
-                        context=final_synthesis_context,
+                        context=_ensure_final_synthesis_context(),
                         chunk=chunk,
                     ),
                 )
@@ -3314,9 +3338,9 @@ class VoiceRuntime:
                 nonlocal final_tts_session
                 if not use_streaming_tts_output:
                     return
-                assert final_synthesis_context is not None
                 assert final_tts_session is not None
-                self._mark_first_text_delta(final_synthesis_context.playback)
+                context = _ensure_final_synthesis_context()
+                self._mark_first_text_delta(context.playback)
                 try:
                     final_tts_session.push_text(text_delta)
                 except Exception as exc:
@@ -3332,11 +3356,7 @@ class VoiceRuntime:
                 progress_text = text.strip()
                 if not progress_text:
                     return
-                threading.Thread(
-                    target=self._play_intermediate_reply,
-                    args=(device_id, session_id, progress_text),
-                    daemon=True,
-                ).start()
+                self._start_intermediate_reply(device_id=device_id, session_id=session_id, text=progress_text)
 
             def _handle_reply_text_delta(text_delta: str) -> None:
                 nonlocal final_synthesis_context, final_tts_session, first_model_token_logged
@@ -3358,17 +3378,12 @@ class VoiceRuntime:
                 streamed_reply_parts.append(text_delta)
                 _push_text_to_final_tts(text_delta)
 
-            final_synthesis_context = self._open_reply_synthesis_context(
-                device_id=device_id,
-                session_id=session_id,
-                audio_source="tts",
-            )
             final_tts_session = _create_final_tts_session()
             log_info(
                 self._logger,
                 (
                     "TTS 预热已启动 "
-                    f"stream_id={final_synthesis_context.stream_id} "
+                    "stream_id=pending_until_first_text "
                     f"before_agent_request_ms={max(self._now_ms() - model_request_started_at_ms, 0)}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id, message_id=turn.turn_id),
@@ -4045,18 +4060,7 @@ class VoiceRuntime:
         """异步播报一段中间提示语。"""
 
         try:
-            context = self._open_reply_synthesis_context(device_id=device_id, session_id=session_id)
-            self._send_control_message(
-                device_id,
-                "notify",
-                "assistant.reply",
-                session_id,
-                {
-                    "device_id": device_id,
-                    "text": text,
-                    "stream_id": context.stream_id,
-                },
-            )
+            context = self._create_intermediate_reply_context(device_id=device_id, session_id=session_id, text=text)
             self._synthesize_text_into_context(
                 device_id=device_id,
                 session_id=session_id,
@@ -4069,6 +4073,70 @@ class VoiceRuntime:
                 f"中间播报失败，已忽略: reason={exc!r}",
                 LogContext(device_id=device_id, session_id=session_id),
             )
+
+    def _start_intermediate_reply(self, *, device_id: str, session_id: str, text: str) -> None:
+        """同步注册中间播报播放流，并异步执行 TTS 合成。
+
+        主要逻辑：
+        1. 先同步创建播放流，让播放仲裁器立刻知道有一条前置播报。
+        2. 再把 TTS 合成放到后台线程，避免阻塞工具执行。
+        3. 这样最终回复首 token 到达时，会排在前置播报之后，而不是抢先占用播放通道。
+
+        参数：
+        1. `device_id`：目标眼镜设备编号。
+        2. `session_id`：当前语音会话编号。
+        3. `text`：要播报的短提示。
+
+        异常情况：
+        1. 创建播放流失败时只记录 DEBUG 日志，不打断工具调用。
+        """
+
+        try:
+            context = self._create_intermediate_reply_context(device_id=device_id, session_id=session_id, text=text)
+        except Exception as exc:  # pragma: no cover - 真实联调路径
+            log_debug(
+                self._logger,
+                f"中间播报启动失败，已忽略: reason={exc!r}",
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+            return
+        threading.Thread(
+            target=self._synthesize_text_into_context,
+            kwargs={
+                "device_id": device_id,
+                "session_id": session_id,
+                "context": context,
+                "text": text,
+            },
+            daemon=True,
+        ).start()
+
+    def _create_intermediate_reply_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        text: str,
+    ) -> ReplySynthesisContext:
+        """创建中间播报播放流并发送文本控制消息。"""
+
+        context = self._open_reply_synthesis_context(
+            device_id=device_id,
+            session_id=session_id,
+            source="agent_progress",
+        )
+        self._send_control_message(
+            device_id,
+            "notify",
+            "assistant.reply",
+            session_id,
+            {
+                "device_id": device_id,
+                "text": text,
+                "stream_id": context.stream_id,
+            },
+        )
+        return context
 
     def _dispatch_notification_request(self, request: NotificationRequest) -> None:
         """把通过裁决的通知申请转成实际播报。"""

@@ -40,6 +40,7 @@ class MemorySearchTool(BaseTool):
         input_model=MemorySearchInput,
         capability_type="tool",
         tags=["memory"],
+        progress_message="我先查一下记忆。",
     )
 
     def __init__(self, memory_runtime: AgentMemoryRuntime) -> None:

@@ -503,6 +503,8 @@ uv run openaiglass.glass.start \
 
 `sdk-v46` 起，最终回复的 TTS 会话会在调用 `AgentFacade.handle_turn(...)` 前创建，日志为 `TTS 预热已启动`。这样大模型首 token 产生前，CosyVoice WebSocket 可以并行建连；首个文本增量到达后直接复用已预热 session 推送文本。如果模型首 token 或工具链路耗时过长导致预热 session 推送失败，SDK 会记录 `TTS 预热会话推送失败，重建后重试` 并重建一次 TTS session。
 
+`sdk-v69` 起，TTS 预热只预热 TTS 会话，不再提前注册最终回复播放流。最终回复播放流会延迟到首个最终回复文本到达时创建，避免一个尚未产生音频的预热流占住播放仲裁器，导致工具前置播报排到最终回复后面。
+
 `sdk-v47` 起，SDK 不再只创建 `SpeechSynthesizer` 对象，而是在后台预启动 CosyVoice 流式任务。正常情况下，服务端会在 `TTS 预热已启动` 后、模型首 token 前看到 `TTS WebSocket 已打开` 和 `TTS 预热流已启动`；首个模型文本增量到达后，`TTS 首次文本已推送` 的 `first_streaming_call_cost_ms` 应显著低于 `sdk-v46` 中首次文本触发建连的耗时。如果预热流失败或过期，SDK 仍会退化为首次文本触发并保留重建重试。
 
 `sdk-v49` 起，语音回复链路新增 `VOICE_REPLY_MODE=omni_realtime`。该模式不会先进入 agent-core，也不会再调用独立 CosyVoice TTS；服务端会把当前语音段的 16k PCM 和已就绪的自动照片直接提交给 `VOICE_OMNI_REALTIME_MODEL_NAME`，收到 `response.audio.delta` 后立即复用现有播放流下发给眼镜。该模式适合低延迟视觉问答和普通语音问答；但它不会执行 SDK Tool、Task、Skill 或长期记忆工具，导航、计时器、找物体、红绿灯等需要工具编排的能力应显式使用 `VOICE_REPLY_MODE=agent_tts`。

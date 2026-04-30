@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import sys
 import struct
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -233,6 +234,105 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(agent_facade.turns[0].asset_refs[0].asset_type, "audio")
         self.assertEqual(agent_facade.turns[0].asset_refs[0].mime_type, "audio/wav")
         self.assertEqual(model_client.tts_text, "前面有一张床。")
+
+    def test_progress_reply_plays_before_final_reply_when_tts_is_prewarmed(self) -> None:
+        """测试目标：验证工具前置播报不会被最终回复 TTS 预热流挡住。
+
+        测试方法：
+        1. 注入假的 AgentFacade，先触发 `progress_callback`，再返回最终文本增量。
+        2. 注入同步返回音频的假 TTS。
+        3. 执行 `_run_model_pipeline(...)` 并观察控制消息顺序。
+
+        预期结果：
+        1. 第一条 `actuator.audio.play` 对应前置播报文本。
+        2. 最终回复播放流不会在工具等待提示前抢占播放仲裁器。
+        """
+
+        class _FakeTtsSession(StreamingTtsSession):
+            def __init__(self, on_chunk) -> None:
+                self.on_chunk = on_chunk
+                self.text = ""
+
+            def push_text(self, text: str) -> None:
+                self.text += text
+
+            def finish(self) -> None:
+                self.on_chunk(ModelChunk(audio_pcm_bytes=b"\x01\x02", sample_rate_hz=16000))
+
+        class _FakeModelClient:
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                return _FakeTtsSession(on_chunk)
+
+        class _FakeToolRegistry:
+            def get_camera_gateway(self):
+                return None
+
+        class _FakeAgentFacade:
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                return _FakeToolRegistry()
+
+            def handle_turn(self, turn, *, progress_callback=None, reply_text_delta_callback=None):
+                if progress_callback is not None:
+                    progress_callback("我先记一下。")
+                if reply_text_delta_callback is not None:
+                    reply_text_delta_callback("已经记好了。")
+                return AgentTurnResult(
+                    turn_id=turn.turn_id,
+                    session_id=turn.session_id,
+                    device_id=turn.device_id,
+                    reply_text="已经记好了。",
+                )
+
+            def attach_assistant_asset(self, **_kwargs) -> None:
+                return None
+
+        sent_messages: list[tuple[str, dict]] = []
+
+        def _send_control_message(_device_id, _semantic, name, _session_id, payload):
+            sent_messages.append((name, dict(payload)))
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=_send_control_message,
+            model_client=_FakeModelClient(),  # type: ignore[arg-type]
+            agent_facade=_FakeAgentFacade(),  # type: ignore[arg-type]
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-progress")
+        segment = SegmentBuffer(
+            session_id="sess-progress",
+            stream_id="stream-progress",
+            segment_id="seg-progress",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            payload=bytearray(b"\x01\x02"),
+        )
+
+        runtime._run_model_pipeline("glass-001", "sess-progress", segment)  # noqa: SLF001 - 单测覆盖播放顺序
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if any(name == "actuator.audio.play" for name, _payload in sent_messages):
+                break
+            time.sleep(0.01)
+
+        stream_text = {
+            payload["stream_id"]: payload["text"]
+            for name, payload in sent_messages
+            if name == "assistant.reply"
+        }
+        play_messages = [
+            payload
+            for name, payload in sent_messages
+            if name == "actuator.audio.play"
+        ]
+        self.assertGreaterEqual(len(play_messages), 1)
+        first_play_stream_id = play_messages[0]["stream_id"]
+        self.assertEqual(stream_text[first_play_stream_id], "我先记一下。")
 
     def test_extract_message_text_reads_non_stream_response(self) -> None:
         """测试目标：验证非流式返回能正确提取文本。

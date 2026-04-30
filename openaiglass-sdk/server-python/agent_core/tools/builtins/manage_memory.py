@@ -39,6 +39,7 @@ class ManageMemoryTool(BaseTool):
         input_model=ManageMemoryInput,
         capability_type="tool",
         tags=["memory"],
+        progress_message="我先记一下。",
     )
 
     def __init__(self, memory_runtime: AgentMemoryRuntime) -> None:

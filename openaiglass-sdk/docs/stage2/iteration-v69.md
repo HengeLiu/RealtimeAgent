@@ -13,7 +13,10 @@
 3. `ToolGateway` 在工具真正执行前触发一次 `progress_message`，同一轮同一工具只播报一次。
 4. 公开 SDK `BaseTool` 新增 `progress_message`，`SdkToolAdapter` 会透传到 agent-core。
 5. 内置工具 `query_device_state`、`query_task_status`、`cancel_task`、`capture_photo` 和 `start_phone_video_link` 增加默认前置播报。
-6. 更新 `普通文本流式与TTS首包延迟优化设计.md`、`SDK安装与能力开发指南.md` 和 `sdk-version`。
+6. `manage_memory` 和 `memory_search` 增加默认前置播报，避免记忆管理子 Agent 请求期间静默等待。
+7. 最终回复 TTS 仍在 Agent 请求前预热，但最终回复播放流延迟到首个最终回复文本到达时才注册，避免预热流占住播放仲裁器。
+8. 中间播报改为先同步注册播放流，再异步执行 TTS 合成，确保后续最终回复排在前置播报之后。
+9. 更新 `普通文本流式与TTS首包延迟优化设计.md`、`SDK安装与能力开发指南.md` 和 `sdk-version`。
 
 ## 业务开发边界
 
@@ -22,6 +25,7 @@
 ## 验证
 
 1. `PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run python -m unittest openaiglass-sdk/tests/unit/test_agent_core.py -v`
-2. `PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run --with pytest python -m pytest openaiglass-sdk/tests/unit/test_sdk_phase_two.py -q`
+2. `PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run python -m unittest openaiglass-sdk/tests/unit/test_voice_runtime.py -v`
+3. `PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind uv run --with pytest python -m pytest openaiglass-sdk/tests/unit/test_sdk_phase_two.py -q`
 
 本轮未执行设备级回放。改动集中在 agent-core ToolGateway、公开 Tool 适配和语音中间播报触发点；后续真实链路验证时应重点观察 `tool.call` 日志、前置播报播放流和最终回复是否按顺序进入播放仲裁。

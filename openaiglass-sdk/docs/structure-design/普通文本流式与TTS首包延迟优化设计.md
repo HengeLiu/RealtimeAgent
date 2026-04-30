@@ -92,8 +92,10 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 1. 模型仍只负责理解用户意图和选择 Tool。
 2. `ToolGateway` 在 Tool 真正执行前读取 `ToolSpec.progress_message`。
 3. `AgentToolContext.progress_callback` 把短文本交给 `VoiceRuntime` 的中间播报通道。
-4. `VoiceRuntime` 继续通过播放仲裁和 TTS 播放这段提示。
+4. `VoiceRuntime` 同步注册中间播报播放流，再异步执行 TTS 合成。
 5. 同一轮同一工具只播报一次，避免工具循环或重试导致重复提示。
+
+`VoiceRuntime` 需要特别处理最终回复 TTS 预热与前置播报的顺序：TTS 会话可以在 Agent 请求前预热，但最终回复播放流不能提前注册到播放仲裁器。否则尚未产生任何最终回复音频的预热流会占住 active playback，让前置播报只能排队到最终回复之后。当前实现是在最终回复首段文本到达时才创建最终回复播放流。
 
 ### 6.2 适用范围
 
