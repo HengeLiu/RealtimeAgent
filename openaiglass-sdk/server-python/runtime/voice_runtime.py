@@ -65,6 +65,10 @@ class SegmentBuffer:
     streaming_asr_session: "StreamingSpeechRecognitionSession | None" = None
     omni_realtime_session: "OmniRealtimeStreamingSession | None" = None
     omni_realtime_context: "ReplySynthesisContext | None" = None
+    started_during_playback: bool = False
+    interrupted_playback_stream_id: str | None = None
+    omni_speech_started: bool = False
+    omni_input_committed: bool = False
     utterance_photo_capture_started: bool = False
 
     def append_frame(self, frame: MediaFrame, *, max_bytes: int) -> None:
@@ -213,6 +217,8 @@ class OmniRealtimeStreamingSession:
         request_started_at_ms_box: list[int],
         metrics_lock: threading.Lock,
         on_chunk: Callable[[ModelChunk], None],
+        on_input_speech_started: Callable[[], None] | None,
+        on_input_committed: Callable[[], None] | None,
         logger,
         session_id: str,
         device_id: str,
@@ -242,6 +248,8 @@ class OmniRealtimeStreamingSession:
         self._request_started_at_ms_box = request_started_at_ms_box
         self._metrics_lock = metrics_lock
         self._on_chunk = on_chunk
+        self._on_input_speech_started = on_input_speech_started
+        self._on_input_committed = on_input_committed
         self._logger = logger
         self._session_id = session_id
         self._device_id = device_id
@@ -1396,6 +1404,8 @@ class DashscopeOmniRealtimeReplyClient:
         device_id: str,
         segment_id: str,
         stream_id: str,
+        on_input_speech_started: Callable[[], None] | None = None,
+        on_input_committed: Callable[[], None] | None = None,
     ) -> OmniRealtimeStreamingSession:
         """创建 Omni Realtime 流式输入会话。
 
@@ -1408,7 +1418,8 @@ class DashscopeOmniRealtimeReplyClient:
         1. `settings`：服务端配置。
         2. `instructions`：系统指令。
         3. `on_chunk`：音频分片回调。
-        4. `session_id/device_id/segment_id/stream_id`：日志上下文。
+        4. `on_input_speech_started/on_input_committed`：Omni turn detection 事件回调。
+        5. `session_id/device_id/segment_id/stream_id`：日志上下文。
 
         返回值：
         1. 可追加音频、提交图片并等待响应的流式输入会话。
@@ -1501,6 +1512,8 @@ class DashscopeOmniRealtimeReplyClient:
                         f"Omni Realtime 输入语音事件: {event_type}",
                         LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
                     )
+                    if event_type == "input_audio_buffer.speech_started" and on_input_speech_started is not None:
+                        on_input_speech_started()
                     if event_type == "input_audio_buffer.speech_stopped" and not request_started_at_ms_box:
                         request_started_at_ms_box.append(now_ms)
                         log_info(
@@ -1513,6 +1526,8 @@ class DashscopeOmniRealtimeReplyClient:
                 if event_type == "input_audio_buffer.committed":
                     if not request_started_at_ms_box:
                         request_started_at_ms_box.append(now_ms)
+                    if on_input_committed is not None:
+                        on_input_committed()
                     log_debug(
                         self_logger,
                         "Omni Realtime 输入已自动提交",
@@ -1634,6 +1649,8 @@ class DashscopeOmniRealtimeReplyClient:
                 request_started_at_ms_box=request_started_at_ms_box,
                 metrics_lock=metrics_lock,
                 on_chunk=on_chunk,
+                on_input_speech_started=on_input_speech_started,
+                on_input_committed=on_input_committed,
                 logger=self._logger,
                 session_id=session_id,
                 device_id=device_id,
@@ -2429,7 +2446,12 @@ class VoiceRuntime:
                 and not allow_barge_in_segment
             ):
                 raise build_error(ErrorCode.DEVICE_BUSY, "设备正在播放回复，不能开始新一轮采集")
-            should_interrupt_playback = (
+            active_playback_stream_id = (
+                controller.current_playback.stream_id
+                if controller.current_playback is not None and not controller.current_playback.completed
+                else None
+            )
+            started_during_playback = (
                 controller.current_playback is not None
                 and not controller.current_playback.completed
                 and allow_barge_in_segment
@@ -2452,6 +2474,8 @@ class VoiceRuntime:
                 channels=int(payload.get("channels", SERVER_CHANNELS)),
                 codec=str(payload.get("codec", "pcm16")).strip() or "pcm16",
                 started_at_ms=int(time.time() * 1000),
+                started_during_playback=started_during_playback,
+                interrupted_playback_stream_id=active_playback_stream_id if started_during_playback else None,
             )
             if self._settings.effective_voice_input_mode() == "asr_text":
                 segment.streaming_asr_session = self._asr_client.start_streaming_session(
@@ -2470,7 +2494,11 @@ class VoiceRuntime:
                 self._settings.voice_reply_mode == "omni_realtime"
                 and self._settings.effective_voice_input_mode() == "raw_audio"
             )
-            should_capture_photo_early = should_start_omni and self._settings.omni_turn_detection_enabled()
+            should_capture_photo_early = (
+                should_start_omni
+                and self._settings.omni_turn_detection_enabled()
+                and not segment.started_during_playback
+            )
         if should_capture_photo_early:
             self._start_utterance_photo_capture(
                 device_id=device_id,
@@ -2484,17 +2512,6 @@ class VoiceRuntime:
                 session_id=session_id,
                 segment=segment,
             )
-        if should_interrupt_playback:
-            self.handle_user_interrupt(
-                device_id=device_id,
-                session_id=session_id,
-                reason="voice_barge_in_segment_started",
-                clear_queue=True,
-            )
-            with self._lock:
-                if controller.current_segment is segment:
-                    controller.state = "receiving_segment"
-
     def on_audio_connection_opened(self, *, device_id: str, peer: str) -> None:
         with self._lock:
             controller = self._controllers.get(device_id)
@@ -3516,15 +3533,43 @@ class VoiceRuntime:
 
         context_box: list[ReplySynthesisContext] = []
 
+        def _ensure_context() -> ReplySynthesisContext:
+            """确保当前 Omni 回复有可写入的下行播放上下文。"""
+
+            if context_box:
+                return context_box[0]
+            context = self._open_reply_synthesis_context(
+                device_id=device_id,
+                session_id=session_id,
+                audio_source="omni_realtime",
+            )
+            context_box.append(context)
+            with self._lock:
+                if segment.omni_realtime_context is None:
+                    segment.omni_realtime_context = context
+            return context
+
         def _handle_omni_chunk(chunk: ModelChunk) -> None:
-            if not context_box:
-                return
+            context = _ensure_context()
             self._emit_synthesis_chunk(
                 device_id=device_id,
                 session_id=session_id,
-                context=context_box[0],
+                context=context,
                 chunk=chunk,
             )
+
+        def _handle_omni_speech_started() -> None:
+            self._confirm_omni_semantic_barge_in(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                reason="omni_semantic_speech_started",
+            )
+
+        def _handle_omni_input_committed() -> None:
+            with self._lock:
+                if segment.omni_realtime_session is not None:
+                    segment.omni_input_committed = True
 
         try:
             omni_session = self._omni_realtime_client.start_streaming_reply(
@@ -3535,13 +3580,11 @@ class VoiceRuntime:
                 device_id=device_id,
                 segment_id=segment.segment_id,
                 stream_id=segment.stream_id,
+                on_input_speech_started=_handle_omni_speech_started,
+                on_input_committed=_handle_omni_input_committed,
             )
-            context = self._open_reply_synthesis_context(
-                device_id=device_id,
-                session_id=session_id,
-                audio_source="omni_realtime",
-            )
-            context_box.append(context)
+            if not segment.started_during_playback:
+                _ensure_context()
             with self._lock:
                 controller = self._controllers.get(device_id)
                 if controller is None or controller.current_segment is not segment:
@@ -3549,7 +3592,6 @@ class VoiceRuntime:
                     return
                 buffered_pcm = bytes(segment.payload)
                 segment.omni_realtime_session = omni_session
-                segment.omni_realtime_context = context
             if buffered_pcm:
                 omni_session.append_audio(buffered_pcm)
             if self._settings.omni_turn_detection_enabled():
@@ -3572,6 +3614,63 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
             )
+
+    def _confirm_omni_semantic_barge_in(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        reason: str,
+    ) -> None:
+        """根据 Omni Realtime 的语音开始事件确认播放中插话。
+
+        主要逻辑：
+        1. 播放中本地 VAD 只负责启动候选语音段，不直接打断播放。
+        2. 只有 Omni `input_audio_buffer.speech_started` 证明这段音频像真实用户语音时，才停止当前播放。
+        3. 普通非播放中的语音段只记录状态，不触发打断。
+
+        参数：
+        1. `device_id/session_id`：设备和会话编号。
+        2. `segment`：当前候选语音段。
+        3. `reason`：触发确认的 Omni 事件原因。
+        """
+
+        should_interrupt = False
+        with self._lock:
+            controller = self._controllers.get(device_id)
+            if controller is None or controller.current_segment is not segment:
+                return
+            if segment.omni_speech_started:
+                return
+            segment.omni_speech_started = True
+            should_interrupt = bool(segment.started_during_playback and controller.current_playback is not None)
+
+        if not should_interrupt:
+            return
+
+        log_info(
+            self._logger,
+            (
+                "Omni semantic_vad 确认播放中用户插话，准备打断播放 "
+                f"candidate_segment_id={segment.segment_id} "
+                f"interrupted_stream_id={segment.interrupted_playback_stream_id or '<current>'} "
+                f"reason={reason}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+        self._start_utterance_photo_capture(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+            reason="omni_semantic_barge_in_confirmed",
+        )
+        self.handle_user_interrupt(
+            device_id=device_id,
+            session_id=session_id,
+            reason="omni_semantic_barge_in",
+            clear_queue=True,
+        )
 
     def _append_ready_utterance_photo_to_omni_session(
         self,
@@ -3683,11 +3782,7 @@ class VoiceRuntime:
                 },
             )
 
-        context = segment.omni_realtime_context or self._open_reply_synthesis_context(
-            device_id=device_id,
-            session_id=session_id,
-            audio_source="omni_realtime",
-        )
+        context = segment.omni_realtime_context
         segment_finished_at_ms = self._now_ms()
         image_frames = self._consume_ready_utterance_photo_bytes_for_omni(
             device_id=device_id,
@@ -3708,7 +3803,7 @@ class VoiceRuntime:
                 except AppError as exc:
                     if not self._is_omni_semantic_vad_no_auto_response(exc):
                         raise
-                    if context.playback.abort_event.is_set():
+                    if context is not None and context.playback.abort_event.is_set():
                         self._finalize_synthesis_context(
                             device_id=device_id,
                             session_id=session_id,
@@ -3723,8 +3818,25 @@ class VoiceRuntime:
                             LogContext(device_id=device_id, session_id=session_id),
                         )
                         return
+                    if segment.started_during_playback and not segment.omni_speech_started:
+                        log_info(
+                            self._logger,
+                            (
+                                "Omni semantic_vad 未确认播放中候选语音，按回声候选丢弃 "
+                                f"segment_id={segment.segment_id} audio_bytes={len(input_pcm)} "
+                                f"interrupted_stream_id={segment.interrupted_playback_stream_id or '<unknown>'}"
+                            ),
+                            LogContext(device_id=device_id, session_id=session_id),
+                        )
+                        return
                     omni_session.close()
                     omni_session = None
+                    if context is None:
+                        context = self._open_reply_synthesis_context(
+                            device_id=device_id,
+                            session_id=session_id,
+                            audio_source="omni_realtime",
+                        )
                     log_info(
                         self._logger,
                         (
@@ -3744,6 +3856,12 @@ class VoiceRuntime:
                         context=context,
                     )
             else:
+                if context is None:
+                    context = self._open_reply_synthesis_context(
+                        device_id=device_id,
+                        session_id=session_id,
+                        audio_source="omni_realtime",
+                    )
                 result = self._run_omni_segment_turn_fallback(
                     device_id=device_id,
                     session_id=session_id,
@@ -3756,6 +3874,12 @@ class VoiceRuntime:
         finally:
             if omni_session is not None:
                 omni_session.close()
+        if context is None:
+            context = self._open_reply_synthesis_context(
+                device_id=device_id,
+                session_id=session_id,
+                audio_source="omni_realtime",
+            )
         if context.playback.abort_event.is_set():
             self._finalize_synthesis_context(
                 device_id=device_id,

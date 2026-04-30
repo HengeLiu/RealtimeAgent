@@ -968,6 +968,131 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertIsNotNone(controller.current_segment.omni_realtime_context)
         self.assertEqual(controller.current_playback.audio_source, "omni_realtime")
 
+    def test_playback_candidate_waits_for_omni_speech_started_before_interrupt(self) -> None:
+        """测试目标：验证播放中的候选语音段不会被端侧 VAD 直接打断。
+
+        测试方法：
+        1. 先创建一条正在播放的 Omni 回复流。
+        2. 播放期间上报新的 `segment.started`，模拟 ESP32 本地 VAD 候选段。
+        3. 再手动触发 Omni `speech_started` 回调。
+
+        预期结果：
+        1. `segment.started` 本身不会下发 `actuator.audio.interrupt`。
+        2. 只有 Omni 确认用户开始说话后，服务端才中断旧播放。
+        """
+
+        class _OmniSession:
+            def append_audio(self, _pcm_bytes: bytes) -> None:
+                return
+
+            def close(self) -> None:
+                return
+
+        class _OmniClient:
+            def __init__(self) -> None:
+                self.on_input_speech_started = None
+
+            def start_streaming_reply(self, **kwargs):
+                self.on_input_speech_started = kwargs.get("on_input_speech_started")
+                return _OmniSession()
+
+        sent_messages: list[tuple[str, str, str, str, dict]] = []
+        omni_client = _OmniClient()
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_reply_mode="omni_realtime"),
+            send_control_message=lambda *args: sent_messages.append(args),
+            omni_realtime_client=omni_client,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        old_context = runtime._open_reply_synthesis_context(  # noqa: SLF001 - 单测需要构造正在播放状态
+            device_id="glass-001",
+            session_id="sess-test",
+            audio_source="omni_realtime",
+        )
+
+        runtime.on_segment_started(
+            device_id="glass-001",
+            session_id="sess-test",
+            payload={
+                "stream_id": "stream-barge",
+                "segment_id": "seg-barge",
+                "sample_rate": 16000,
+                "channels": 1,
+                "codec": "pcm16",
+            },
+        )
+
+        self.assertEqual([message[2] for message in sent_messages], [])
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        assert controller.current_segment is not None
+        self.assertTrue(controller.current_segment.started_during_playback)
+        self.assertIsNone(controller.current_segment.omni_realtime_context)
+
+        assert omni_client.on_input_speech_started is not None
+        omni_client.on_input_speech_started()
+
+        self.assertTrue(old_context.playback.abort_event.is_set())
+        self.assertIn("actuator.audio.interrupt", [message[2] for message in sent_messages])
+
+    def test_playback_candidate_without_omni_speech_started_is_dropped(self) -> None:
+        """测试目标：验证播放中误触发候选段不会走 segment_turn 兜底循环。
+
+        测试方法：
+        1. 构造一个播放期间启动的候选语音段。
+        2. 注入假的 Omni 会话，让 `finish()` 返回 semantic_vad 未自动提交错误。
+        3. 调用 Omni 回复分支收尾。
+
+        预期结果：
+        1. 运行时直接丢弃候选段。
+        2. 不会创建新的下行播放上下文，也不会发送 `assistant.reply`。
+        """
+
+        class _OmniSession:
+            def finish(self, **_kwargs):
+                raise AppError(
+                    ErrorCode.TIMEOUT,
+                    "Omni semantic_vad 未自动提交",
+                    retryable=True,
+                    details={"reason": "semantic_vad_no_auto_response"},
+                )
+
+            def close(self) -> None:
+                return
+
+        sent_messages: list[tuple[str, str, str, str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_reply_mode="omni_realtime"),
+            send_control_message=lambda *args: sent_messages.append(args),
+        )
+        controller = VoiceSessionController(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime._controllers["glass-001"] = controller  # noqa: SLF001 - 单测构造运行态
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-echo",
+            segment_id="seg-echo",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            payload=bytearray(b"\x01\x00" * 1600),
+            started_during_playback=True,
+            interrupted_playback_stream_id="reply-old",
+            omni_realtime_session=_OmniSession(),
+        )
+
+        runtime._run_omni_realtime_reply_pipeline(  # noqa: SLF001 - 单测覆盖 Omni 收尾分支
+            controller=controller,
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+            input_path="/tmp/input.wav",
+            input_pcm=bytes(segment.payload),
+        )
+
+        self.assertEqual(sent_messages, [])
+        self.assertIsNone(controller.current_playback)
+
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。
 

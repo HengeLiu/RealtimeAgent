@@ -577,32 +577,6 @@ static void send_realtime_session_opened_message(const char *session_id)
     );
 }
 
-static void send_user_voice_interrupt_message(const char *stream_id, const char *reason)
-{
-    cJSON *payload = cJSON_CreateObject();
-    if (payload == NULL) {
-        ESP_LOGE(TAG, "构造 user.voice.interrupt 失败");
-        return;
-    }
-    if (s_current_session_id[0] == '\0') {
-        ESP_LOGW(TAG, "session_id 为空，跳过发送 user.voice.interrupt");
-        cJSON_Delete(payload);
-        return;
-    }
-
-    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
-    if (stream_id != NULL && stream_id[0] != '\0') {
-        cJSON_AddStringToObject(payload, "stream_id", stream_id);
-    }
-    cJSON_AddStringToObject(payload, "reason", reason != NULL ? reason : "voice_barge_in");
-    cJSON_AddBoolToObject(payload, "clear_queue", true);
-
-    send_control_message_json(
-        build_control_message_json("notify", "user.voice.interrupt", s_current_session_id, payload),
-        "user.voice.interrupt"
-    );
-}
-
 static bool payload_requests_omni_semantic_dialog(const cJSON *payload)
 {
     const cJSON *input = payload != NULL ? cJSON_GetObjectItemCaseSensitive(payload, "input") : NULL;
@@ -2724,11 +2698,11 @@ static void sr_pipeline_task(void *arg)
         if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
             bool is_playback_barge_in = s_playback_active && start_by_continuous_vad && s_aec_runtime_enabled;
             if (is_playback_barge_in) {
-                char interrupted_stream_id[64];
-                strlcpy(interrupted_stream_id, s_current_playback_stream_id, sizeof(interrupted_stream_id));
-                ESP_LOGI(TAG, "AEC 检测到播放中用户插话，准备打断播放: stream_id=%s", interrupted_stream_id);
-                send_user_voice_interrupt_message(interrupted_stream_id, "voice_barge_in");
-                request_playback_interrupt(interrupted_stream_id);
+                ESP_LOGI(
+                    TAG,
+                    "播放中 VAD 触发候选语音段，等待 Omni semantic_vad 确认: stream_id=%s",
+                    s_current_playback_stream_id
+                );
             }
             segment.segment_active = true;
             s_local_segment_active = true;
