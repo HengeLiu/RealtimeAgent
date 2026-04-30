@@ -20,7 +20,7 @@ class AgentMemoryRecord:
     1. 保存热记忆和冷记忆。
     2. 热记忆保存短小、稳定、每轮直接注入的信息。
     3. 冷记忆保存标题和详细内容，每轮只注入标题，详情由 `memory_search` 按需读取。
-    4. 记录记忆来源、作用域、更新时间和删除状态，便于审计。
+    4. 记录作用域、更新时间和删除状态，便于审计。
 
     主要属性：
     1. `memory_id`：记忆唯一编号。
@@ -28,9 +28,8 @@ class AgentMemoryRecord:
     3. `memory_type`：记忆类型，`hot` 表示热记忆，`cold` 表示冷记忆。
     4. `title`：记忆标题；冷记忆必须有标题。
     5. `content`：记忆正文。
-    6. `category`：记忆类别，例如 `profile/preference/habit`。
-    7. `source`：记忆来源，区分用户主动要求和 Agent 主动推断。
-    8. `deleted_at_ms`：删除时间，非空表示软删除。
+    6. `source`：记忆来源，区分用户主动要求和 Agent 主动推断。
+    7. `deleted_at_ms`：删除时间，非空表示软删除。
     """
 
     memory_id: str
@@ -39,7 +38,6 @@ class AgentMemoryRecord:
     memory_type: MemoryType
     title: str
     content: str
-    category: str = "general"
     source: MemorySource = "agent_inferred"
     confidence: float = 1.0
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -56,7 +54,6 @@ class AgentMemoryRecord:
         memory_type: MemoryType,
         title: str,
         content: str,
-        category: str = "general",
         source: MemorySource = "agent_inferred",
         confidence: float = 1.0,
         metadata: dict[str, Any] | None = None,
@@ -67,7 +64,7 @@ class AgentMemoryRecord:
         1. `scope_type/scope_id`：记忆隔离作用域。
         2. `memory_type`：热记忆或冷记忆。
         3. `title/content`：记忆标题和正文。
-        4. `category/source/confidence/metadata`：记忆辅助信息。
+        4. `source/confidence/metadata`：记忆辅助信息。
 
         返回值：
         1. `AgentMemoryRecord`。
@@ -83,7 +80,6 @@ class AgentMemoryRecord:
             memory_type=memory_type,
             title=title,
             content=content,
-            category=category,
             source=source,
             confidence=confidence,
             metadata=metadata or {},

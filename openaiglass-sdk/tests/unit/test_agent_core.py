@@ -16,7 +16,14 @@ from agent_core import AgentFacade, AgentTurn, AgentTurnResult, DerivedArtifact,
 from agent_core.camera import CameraCaptureResult
 from agent_core.context import AgentSession, AgentSessionStore, CapabilityTrace, MessageContext
 from agent_core.context.assembler import ContextAssembler
-from agent_core.memory import AgentMemoryRuntime, InMemoryAgentMemoryStore
+from agent_core.memory import (
+    AgentMemoryRuntime,
+    InMemoryAgentMemoryStore,
+    MemoryManagementAgent,
+    MemoryOperationAction,
+    MemoryOperationPlan,
+    MemoryOperationRequest,
+)
 from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
 from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime
 from agent_core.tools import AgentToolContext, ToolGateway, ToolRegistry
@@ -198,6 +205,25 @@ class AskUserAgentLoopRunner(AgentLoopRunner):
         )
 
 
+class FakeMemoryManagementAgent(MemoryManagementAgent):
+    """测试用记忆管理 Agent。"""
+
+    def __init__(self, plans: list[MemoryOperationPlan]) -> None:
+        self._plans = list(plans)
+        self.requests: list[MemoryOperationRequest] = []
+
+    def plan(
+        self,
+        *,
+        request: MemoryOperationRequest,
+        existing_memories,
+    ) -> MemoryOperationPlan:
+        self.requests.append(request)
+        if not self._plans:
+            return MemoryOperationPlan(actions=[], feedback="没有需要更新的记忆")
+        return self._plans.pop(0)
+
+
 class AgentCoreTestCase(unittest.TestCase):
     """验证 Phase D 的最小 agent-core。"""
 
@@ -338,22 +364,40 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(len(result.task_refs), 1)
         self.assertEqual(result.task_refs[0].task_type, "phone_video_link_task")
 
-    def test_manage_memory_and_memory_search_use_hot_cold_memory(self) -> None:
-        """测试目标：验证 SDK 内置记忆 Tool 支持冷热记忆分层。
+    def test_manage_memory_and_memory_search_use_agent_plan(self) -> None:
+        """测试目标：验证 SDK 内置记忆 Tool 使用 MemoryAgent 动作计划。
 
         测试方法：
-        1. 构造内存版 `AgentMemoryRuntime` 并注入 `ToolRegistry`。
-        2. 通过 `manage_memory` 新增一条冷记忆。
-        3. 通过 `memory_search` 按标题读取冷记忆详情。
-        4. 通过 `manage_memory` 删除该记忆。
+        1. 构造内存版 `AgentMemoryRuntime` 和测试用 MemoryAgent。
+        2. 让 MemoryAgent 先返回新增动作，再返回删除动作。
+        3. 通过 `memory_search` 按标题读取记忆详情。
 
         预期结果：
-        1. 新增记忆返回 `memory_id`。
-        2. `memory_search` 能按标题读取完整内容。
-        3. 删除后 `memory_search` 不再返回该记忆。
+        1. `manage_memory` 入参只需要自然语言请求和相关上下文。
+        2. 主 Agent 可见结果不包含内部 `memory_id`。
+        3. 搜索未命中时会返回文本反馈。
         """
 
-        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        manager = FakeMemoryManagementAgent(
+            plans=[
+                MemoryOperationPlan(
+                    actions=[
+                        MemoryOperationAction(
+                            operation="add",
+                            memory_type="cold",
+                            title="导航偏好",
+                            content="用户喜欢导航提示尽量简短。",
+                        )
+                    ],
+                    feedback="已记住导航偏好",
+                ),
+                MemoryOperationPlan(
+                    actions=[MemoryOperationAction(operation="delete", title="导航偏好")],
+                    feedback="已删除导航偏好",
+                ),
+            ]
+        )
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore(), manager_agent=manager)
         registry, gateway = build_tooling(memory_runtime=memory_runtime)
         context = build_tool_context(
             registry=registry,
@@ -366,33 +410,30 @@ class AgentCoreTestCase(unittest.TestCase):
             name="manage_memory",
             context=context,
             arguments={
-                "operation": "add",
                 "query": "记住我的导航偏好：提示尽量简短。",
-                "preferred_memory_type": "cold",
-                "title": "导航偏好",
-                "content": "用户喜欢导航提示尽量简短。",
-                "category": "preference",
-                "source": "user_requested",
+                "memory_context": "用户刚才说导航提示尽量简短。",
             },
         )
-        memory_id = add_result.data["memory"]["memory_id"]
-        self.assertEqual(add_result.data["memory"]["memory_type"], "cold")
-        self.assertEqual(add_result.data["memory"]["title"], "导航偏好")
+        self.assertEqual(add_result.message, "已记住导航偏好")
+        self.assertEqual(add_result.data["actions"][0]["operation"], "add")
+        self.assertNotIn("memory_id", add_result.data["actions"][0])
+        self.assertEqual(manager.requests[0].query, "记住我的导航偏好：提示尽量简短。")
+        self.assertEqual(manager.requests[0].memory_context, "用户刚才说导航提示尽量简短。")
 
         search_result = gateway.invoke(
             name="memory_search",
             context=context,
             arguments={"title": "导航偏好"},
         )
-        self.assertEqual(search_result.data["memories"][0]["memory_id"], memory_id)
+        self.assertNotIn("memory_id", search_result.data["memories"][0])
         self.assertEqual(search_result.data["memories"][0]["content"], "用户喜欢导航提示尽量简短。")
 
         delete_result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={"operation": "delete", "query": "忘掉导航偏好", "title": "导航偏好"},
+            arguments={"query": "忘掉导航偏好"},
         )
-        self.assertEqual(delete_result.data["memory"]["deleted_at_ms"], delete_result.data["memory"]["updated_at_ms"])
+        self.assertEqual(delete_result.message, "已删除导航偏好")
 
         list_result = gateway.invoke(
             name="memory_search",
@@ -400,87 +441,109 @@ class AgentCoreTestCase(unittest.TestCase):
             arguments={"title": "导航偏好"},
         )
         self.assertEqual(list_result.data["memories"], [])
+        self.assertEqual(list_result.message, "没有找到匹配的记忆")
 
-    def test_manage_memory_deletes_recent_or_natural_language_target_without_llm(self) -> None:
-        """测试目标：验证无模型兜底下也能按自然语言删除记忆。
+    def test_manage_memory_executes_multiple_actions_in_order(self) -> None:
+        """测试目标：验证一次记忆维护可以串行执行多个动作。
 
         测试方法：
-        1. 使用确定性的内存版 `AgentMemoryRuntime`。
-        2. 先新增两条冷记忆。
-        3. 分别使用“忘掉刚才那条记忆”和“删除我的导航偏好”调用 `manage_memory`。
+        1. 预先写入旧导航偏好。
+        2. 让 MemoryAgent 返回先删除再新增的动作列表。
+        3. 按标题查询最终记忆。
 
         预期结果：
-        1. “刚才”会删除最近写入的记忆。
-        2. 带中文删除动词的自然语言指令能匹配到真实标题。
-        3. 删除后的冷记忆无法再通过 `memory_search` 读出。
+        1. 旧内容被删除。
+        2. 新内容按同一标题写入。
+        3. 主 Agent 只看到动作摘要和文本反馈。
         """
 
-        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        store = InMemoryAgentMemoryStore()
+        memory_runtime = AgentMemoryRuntime(store=store, manager_agent=None)
+        old_record = memory_runtime.add_memory(
+            scope_type="device",
+            scope_id="glass-001",
+            memory_type="cold",
+            title="导航偏好",
+            content="用户喜欢导航提示详细一点。",
+        )
+        manager = FakeMemoryManagementAgent(
+            plans=[
+                MemoryOperationPlan(
+                    actions=[
+                        MemoryOperationAction(operation="delete", memory_id=old_record.memory_id, title="导航偏好"),
+                        MemoryOperationAction(
+                            operation="add",
+                            memory_type="cold",
+                            title="导航偏好",
+                            content="用户喜欢导航提示尽量简短。",
+                        ),
+                    ],
+                    feedback="已更新导航偏好",
+                )
+            ]
+        )
+        memory_runtime = AgentMemoryRuntime(store=store, manager_agent=manager)
         registry, gateway = build_tooling(memory_runtime=memory_runtime)
         context = build_tool_context(
             registry=registry,
             gateway=gateway,
-            session_id="sess_memory_delete_001",
-            turn_id="turn_memory_delete_001",
+            session_id="sess_memory_multi_001",
+            turn_id="turn_memory_multi_001",
         )
 
-        gateway.invoke(
+        result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={
-                "operation": "add",
-                "query": "记住我的导航偏好：提示尽量简短。",
-                "preferred_memory_type": "cold",
-                "title": "导航偏好",
-                "content": "用户喜欢导航提示尽量简短。",
-            },
+            arguments={"query": "把导航偏好改成简短提示"},
         )
-        recent_result = gateway.invoke(
-            name="manage_memory",
-            context=context,
-            arguments={
-                "operation": "add",
-                "query": "记住我的咖啡偏好：不喝咖啡。",
-                "preferred_memory_type": "cold",
-                "title": "咖啡偏好",
-                "content": "用户不喝咖啡。",
-            },
-        )
-
-        delete_recent = gateway.invoke(
-            name="manage_memory",
-            context=context,
-            arguments={"operation": "delete", "query": "忘掉刚才那条记忆"},
-        )
-        self.assertEqual(delete_recent.data["memory"]["memory_id"], recent_result.data["memory"]["memory_id"])
-
-        delete_by_text = gateway.invoke(
-            name="manage_memory",
-            context=context,
-            arguments={"operation": "delete", "query": "删除我的导航偏好"},
-        )
-        self.assertEqual(delete_by_text.data["memory"]["title"], "导航偏好")
+        self.assertEqual(result.message, "已更新导航偏好")
+        self.assertEqual([item["operation"] for item in result.data["actions"]], ["delete", "add"])
 
         search_result = gateway.invoke(
             name="memory_search",
             context=context,
-            arguments={"titles": ["咖啡偏好", "导航偏好"]},
+            arguments={"title": "导航偏好"},
         )
-        self.assertEqual(search_result.data["memories"], [])
+        self.assertEqual(search_result.data["memories"][0]["content"], "用户喜欢导航提示尽量简短。")
 
-    def test_manage_memory_update_preserves_memory_id(self) -> None:
+    def test_manage_memory_update_preserves_internal_memory_id(self) -> None:
         """测试目标：验证更新记忆时复用原有 `memory_id`。
 
         测试方法：
-        1. 先通过 `manage_memory` 新增一条热记忆。
-        2. 再通过 `memory_id` 更新同一条记忆的标题和内容。
+        1. 先通过 runtime 内部接口新增一条热记忆。
+        2. MemoryAgent 返回带内部 `memory_id` 的更新动作。
 
         预期结果：
         1. 更新后的记忆仍使用原 `memory_id`。
-        2. 新标题和新内容会覆盖旧值。
+        2. 主 Agent 可见结果不暴露 `memory_id`。
         """
 
-        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        store = InMemoryAgentMemoryStore()
+        memory_runtime = AgentMemoryRuntime(store=store, manager_agent=None)
+        record = memory_runtime.add_memory(
+            scope_type="device",
+            scope_id="glass-001",
+            memory_type="hot",
+            title="姓名",
+            content="用户姓名是小明。",
+        )
+        manager = FakeMemoryManagementAgent(
+            plans=[
+                MemoryOperationPlan(
+                    actions=[
+                        MemoryOperationAction(
+                            operation="update",
+                            memory_type="hot",
+                            title="姓名",
+                            content="用户姓名是小李。",
+                            memory_id=record.memory_id,
+                        )
+                    ],
+                    feedback="已更新姓名",
+                )
+            ]
+        )
+        memory_runtime = AgentMemoryRuntime(store=store, manager_agent=manager)
         registry, gateway = build_tooling(memory_runtime=memory_runtime)
         context = build_tool_context(
             registry=registry,
@@ -489,35 +552,17 @@ class AgentCoreTestCase(unittest.TestCase):
             turn_id="turn_memory_update_001",
         )
 
-        add_result = gateway.invoke(
-            name="manage_memory",
-            context=context,
-            arguments={
-                "operation": "add",
-                "query": "记住我的名字叫小明",
-                "preferred_memory_type": "hot",
-                "title": "姓名",
-                "content": "用户姓名是小明。",
-            },
-        )
-        memory_id = add_result.data["memory"]["memory_id"]
-
         update_result = gateway.invoke(
             name="manage_memory",
             context=context,
-            arguments={
-                "operation": "update",
-                "query": "把我的名字更新为小李",
-                "preferred_memory_type": "hot",
-                "title": "姓名",
-                "content": "用户姓名是小李。",
-                "memory_id": memory_id,
-            },
+            arguments={"query": "把我的名字更新为小李"},
         )
 
-        self.assertEqual(update_result.data["memory"]["memory_id"], memory_id)
-        self.assertEqual(update_result.data["memory"]["title"], "姓名")
-        self.assertEqual(update_result.data["memory"]["content"], "用户姓名是小李。")
+        self.assertNotIn("memory_id", update_result.data["actions"][0])
+        updated = store.list_active(scope_type="device", scope_id="glass-001")[0]
+        self.assertEqual(updated.memory_id, record.memory_id)
+        self.assertEqual(updated.title, "姓名")
+        self.assertEqual(updated.content, "用户姓名是小李。")
 
     def test_agent_runner_injects_hot_memory_and_cold_titles(self) -> None:
         """测试目标：验证 Agent 运行时按冷热策略注入长期记忆。
@@ -539,7 +584,6 @@ class AgentCoreTestCase(unittest.TestCase):
             memory_type="hot",
             title="姓名",
             content="用户姓名是小明。",
-            category="profile",
             source="user_requested",
         )
         memory_runtime.add_memory(
@@ -548,7 +592,6 @@ class AgentCoreTestCase(unittest.TestCase):
             memory_type="cold",
             title="导航偏好",
             content="用户喜欢导航提示尽量简短，并且希望先说方向再说距离。",
-            category="preference",
             source="user_requested",
         )
         registry, gateway = build_tooling(memory_runtime=memory_runtime)

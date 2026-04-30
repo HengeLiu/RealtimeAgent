@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v65`。本版本在 `sdk-v64` 的 ESP32-S3 方案 A 基础上，增强 Agent 长期记忆的自然语言更新和删除兜底能力：无模型或记忆管理子 Agent 解析不准时，SDK 仍会尽量按 `memory_id`、标题、中文删除指令和“刚才/上一条”等最近记忆指代找到目标。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v66`。本版本在 `sdk-v64` 的 ESP32-S3 方案 A 基础上，收敛 Agent 长期记忆维护语义：主 Agent 只向 `manage_memory` 传入用户原始请求和相关聊天上下文，由 MemoryAgent 自行决定新增、更新、删除等内部动作；`memory_id` 不对主 Agent 暴露；服务端默认使用本地 JSON 文件按 user/device 隔离持久化记忆。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -19,7 +19,7 @@
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
-| Agent 长期记忆 | `sdk-v50` 支持冷热两层，`sdk-v65` 增强自然语言更新和删除兜底 | 业务能力不要自建记忆表；基本信息等热记忆每轮完整注入，住址、爱好、习惯等冷记忆只注入标题，详情由模型按需调用 `memory_search`。 |
+| Agent 长期记忆 | `sdk-v50` 支持冷热两层，`sdk-v66` 收敛为 MemoryAgent 内部动作计划 | 业务能力不要自建记忆表；基本信息等热记忆每轮完整注入，住址、爱好、习惯等冷记忆只注入标题，详情由模型按需调用 `memory_search`。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
 | iOS/ESP32 SDK 包形态 | 源码包可检查 | 业务工程引用 SDK 源码运行时；二进制发布仍是后续工作。 |
 
@@ -530,9 +530,10 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 2. 热记忆：姓名、年龄、性别等短小稳定信息，每轮完整注入 system prompt。
 3. 冷记忆：住址、电话、爱好、习惯、任务设置等较长或可能变化的信息，每轮只注入标题。
 4. 模型可见工具 `memory_search`，按冷记忆标题读取详细内容。
-5. 模型可见工具 `manage_memory`，只负责新增、更新和删除，不负责搜索详情。
-6. 用户通过自然语言说“记住我喜欢简短提示”“更新我的住址”“忘掉刚才那条记忆”时，模型应调用 `manage_memory` 完成操作。
-7. `sdk-v65` 起，SDK 在无模型兜底路径下也会处理常见中文删除指令，例如“删除我的导航偏好”“忘掉刚才那条记忆”；更新时如果传入 `memory_id`，会复用原记忆编号，避免后续引用失效。
+5. 模型可见工具 `manage_memory(query, memory_context)`，只接收用户原始请求和主 Agent 摘取的相关聊天上下文。
+6. 用户通过自然语言说“记住我喜欢简短提示”“更新我的住址”“忘掉刚才那条记忆”时，模型应调用 `manage_memory`，由 MemoryAgent 自行决定内部动作。
+7. `sdk-v66` 起，主 Agent 不应传入 `operation/title/content/memory_id/category/reason` 等结构化字段；这些字段由 MemoryAgent 基于已有记忆自行判断。
+8. `memory_id` 是记忆维护内部变量，只用于搜索、更新、删除和新增时定位具体记录，不会返回给主 Agent。
 
 相关服务端配置：
 
@@ -549,7 +550,7 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 3. 一次性任务状态、当前路口临时观测、找物过程中的短时上下文仍应放在 Task 上下文或当前会话里，不应写入长期记忆。
 4. API Key、设备 token、WiFi 密码、真实用户音频图片视频等敏感数据不应写入长期记忆。
 5. 如果业务 Skill 激活了工具白名单，`memory_search` 和 `manage_memory` 仍会保持可见，确保用户随时可以查询或删除错误记忆。
-6. 当前版本按 `device_id` 隔离记忆，账号级和用户级记忆合并、向量检索、图记忆和云端同步属于后续 SDK 迭代范围。
+6. 当前版本按 `user_id` 隔离记忆；在账号体系产品化前，`user_id=device_id`。账号级和用户级记忆合并、向量检索、图记忆和云端同步属于后续 SDK 迭代范围。
 
 ### 3.10 通知仲裁、抢播和打断边界
 

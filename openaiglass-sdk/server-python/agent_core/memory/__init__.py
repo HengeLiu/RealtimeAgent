@@ -3,9 +3,9 @@
 from agent_core.memory.models import AgentMemoryRecord, MemoryScope, MemorySource, MemoryType
 from agent_core.memory.runtime import (
     AgentMemoryRuntime,
-    HeuristicMemoryManagementAgent,
     LlmMemoryManagementAgent,
     MemoryManagementAgent,
+    MemoryOperationAction,
     MemoryOperationPlan,
     MemoryOperationRequest,
 )
@@ -15,11 +15,11 @@ __all__ = [
     "AgentMemoryRecord",
     "AgentMemoryRuntime",
     "AgentMemoryStore",
-    "HeuristicMemoryManagementAgent",
     "InMemoryAgentMemoryStore",
     "JsonFileAgentMemoryStore",
     "LlmMemoryManagementAgent",
     "MemoryManagementAgent",
+    "MemoryOperationAction",
     "MemoryOperationPlan",
     "MemoryOperationRequest",
     "MemoryScope",

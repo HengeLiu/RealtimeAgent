@@ -49,17 +49,17 @@ openaiglass-sdk/server-python/agent_core/memory/
 
 ```text
 memory_search(title, titles)
-manage_memory(operation, query, preferred_memory_type, title, content, memory_id, category, source)
+manage_memory(query, memory_context)
 ```
 
 工具分工：
 
 | 工具 | 作用 |
 | --- | --- |
-| `memory_search` | 按冷记忆标题读取详细内容，不负责新增、更新或删除。 |
-| `manage_memory` | 执行新增、更新或删除；内部交给记忆管理子 Agent 判断冷热分类、标题、内容和操作对象。 |
+| `memory_search` | 按标题读取记忆详细内容，不负责新增、更新或删除；未命中时也会返回文本反馈。 |
+| `manage_memory` | 接收用户原始记忆请求和相关聊天上下文；内部交给 MemoryAgent 判断并执行一组新增、更新或删除动作。 |
 
-记忆作用域第一版按 `device_id` 隔离。这样能避免在账号体系和用户身份仍未完全产品化时，把不同设备或不同测试账号的记忆混在一起。
+记忆作用域第一版按 `user_id` 隔离；当前 `user_id=device_id`。这样能避免在账号体系和用户身份仍未完全产品化时，把不同设备或不同测试账号的记忆混在一起。服务端默认使用本地 JSON 文件持久化，默认路径为 `runs/memory/agent_memories.json`，重启程序不会丢失记忆；未来用户规模变大后再替换为数据库或外部记忆服务。
 
 ## Agent 请求装配
 
@@ -79,26 +79,113 @@ manage_memory(operation, query, preferred_memory_type, title, content, memory_id
 
 ## 记忆管理子 Agent
 
-`manage_memory` 不是直接 CRUD 工具。它会构造 `MemoryOperationRequest`，交给 `MemoryManagementAgent` 生成结构化计划：
+`manage_memory` 不是直接 CRUD 工具。它只接收主 Agent 传入的自然语言请求和相关上下文：
 
 ```text
-MemoryOperationPlan(
-  operation="add|update|delete",
-  memory_type="hot|cold",
-  title="记忆标题",
-  content="记忆内容",
-  memory_id="可选记忆编号"
+MemoryOperationRequest(
+  query="用户原始请求",
+  memory_context="历史聊天中与记忆相关的关键信息"
 )
 ```
 
-真实服务端默认使用 `LlmMemoryManagementAgent`。当模型 key 缺失、依赖不可用或模型返回异常时，会退回 `HeuristicMemoryManagementAgent`，保证本地测试和无模型环境仍可验证存储语义。
+真实服务端默认使用 `LlmMemoryManagementAgent`。本轮取消 `HeuristicMemoryManagementAgent`：如果大模型不可用，长期记忆维护明确失败，不做启发式降级。原因是本产品主链路本身依赖大模型；启发式规则会让记忆维护在最需要准确理解用户意图的地方产生不可控误判。
 
-`sdk-v65` 增强了无模型兜底语义：
+MemoryAgent 会输出一组内部动作和给主 Agent 的简短反馈：
 
-1. 删除时会识别“删除我的导航偏好”“忘掉刚才那条记忆”等常见中文指令。
-2. 记忆按更新时间和写入顺序共同排序，避免同一毫秒内多条写入导致“刚才/上一条”目标不稳定。
-3. 更新时如果有 `memory_id`，SDK 会复用原记忆编号和创建时间，只覆盖标题、内容、类型和元数据。
-4. 删除时如果按 `memory_id` 或标题没有命中，会用原始自然语言查询做一次兜底匹配；仍无法定位时返回结构化错误，由主 Agent 向用户追问。
+```text
+MemoryOperationPlan(
+  actions=[
+    MemoryOperationAction(operation="delete", title="旧标题", memory_id="内部编号"),
+    MemoryOperationAction(operation="add", memory_type="cold", title="新标题", content="新内容")
+  ],
+  feedback="已更新相关记忆"
+)
+```
+
+`memory_id` 只在 MemoryAgent 和 `AgentMemoryRuntime` 内部使用，用于定位已有记忆。主 Agent 调用 `manage_memory` 不需要、也不应该传入或看到 `memory_id`。
+
+## 新增、更新和删除方案
+
+长期记忆维护采用“主 Agent 提意图、记忆管理子 Agent 出计划、SDK runtime 执行计划”的三段式流程。这样可以让自然语言理解保持灵活，同时把真正的写入、覆盖、软删除和作用域隔离控制在 SDK 里。
+
+### 1. 统一请求和执行入口
+
+主 Agent 不直接读写 JSON 文件。用户说“记住我喜欢简短提示”“更新我的住址”“忘掉刚才那条记忆”时，主 Agent 只能调用模型可见工具 `manage_memory(...)`。工具只接受：
+
+1. `query`：用户关于记忆管理的原始自然语言。
+2. `memory_context`：主 Agent 从历史聊天中摘取的、与记忆维护有关的关键信息；没有时留空。
+3. `metadata`：SDK 自动补充 `session_id`、`turn_id` 等审计信息。
+
+`AgentMemoryRuntime.manage_memory(...)` 每次执行前会读取当前 user/device 作用域下最多 100 条有效记忆，并交给 `LlmMemoryManagementAgent.plan(...)` 生成动作计划。主 Agent 不传 `operation/title/content/memory_id/category/reason`，这些都由 MemoryAgent 根据自然语言和已有记忆自行判断。
+
+### 2. 新增记忆
+
+新增路径用于用户明确要求记录信息，或 Agent 判断某个稳定偏好、基本资料、行为习惯值得长期保存。
+
+执行流程：
+
+1. MemoryAgent 根据 `query`、`memory_context` 和现有记忆生成 `add` 动作，决定 `memory_type`、`title` 和 `content`。
+2. `AgentMemoryRuntime.add_memory(...)` 清洗 `scope_id`、`title` 和 `content`，标题最长保留 60 个字符，正文最长保留 4000 个字符。
+3. SDK 校验作用域、标题和正文不能为空；`confidence` 会被限制在 `0.0` 到 `1.0`。
+4. 创建新的 `AgentMemoryRecord`，记录内部 `memory_id`、`scope_type/scope_id`、冷热类型、标题、正文、来源、创建时间和更新时间。
+5. 存储层优先调用 `upsert_by_title(...)`：同一作用域、同一冷热类型、同一标题视为同一个记忆槽位。如果已有同标题记忆，则复用原 `memory_id` 和创建时间，避免重复记忆堆积。
+6. `JsonFileAgentMemoryStore` 会在写入后把完整记忆列表刷新到 JSON 文件；写入采用临时文件加原子替换，降低异常退出造成半文件的概率。
+
+新增策略的含义是：标题相同的信息默认是覆盖而不是追加。例如用户多次说“记住我的导航偏好”，SDK 会尽量维护同一条“导航偏好”记忆，而不是产生多条相互冲突的偏好。
+
+### 3. 更新记忆
+
+更新路径用于用户明确修改已有事实或偏好，例如“把我的名字更新为小李”“我的住址改成……”。更新不是简单新增一条新记录，而是尽量找到旧记录并复用其 `memory_id`。
+
+执行流程：
+
+1. MemoryAgent 输出 `update` 动作，并尽量给出内部 `memory_id` 或标题。
+2. `AgentMemoryRuntime._find_update_target(...)` 按以下顺序寻找目标：
+   - 先按 `memory_id` 精确匹配。
+   - 再按动作标题匹配当前作用域下的有效记忆。
+3. 如果找到目标，SDK 创建新的 `AgentMemoryRecord` 对象，但复用旧 `memory_id`、`scope_type/scope_id` 和 `created_at_ms`。
+4. 新动作中的 `title`、`content`、`memory_type` 和请求元数据会覆盖或合并到旧记录上。
+5. 存储层调用 `upsert(...)` 写回同一个 `memory_id`，更新时间刷新。
+6. 如果找不到目标，当前实现会退化为一次新增。这个选择是为了不丢失用户明确要求保存的新信息；但如果用户表达的是“修改某条旧记忆”而目标不清楚，后续应考虑让主 Agent 追问确认。
+
+更新策略的核心是保证引用稳定：只要能定位到旧记忆，就不换 `memory_id`。这样后续模型、调试产物或审计日志引用这条记忆时不会因为更新而失效。
+
+### 4. 删除记忆
+
+删除路径用于用户要求“忘掉”“删除”“别记住”某条信息。当前 SDK 使用软删除，不从 JSON 中物理移除记录，而是写入 `deleted_at_ms` 并刷新 `updated_at_ms`。软删除便于后续审计和问题回溯。
+
+执行流程：
+
+1. MemoryAgent 输出 `delete` 动作，尽量给出内部 `memory_id` 或标题。
+2. 对“忘掉刚才那条记忆”“删除上一条信息”这类指代，由 MemoryAgent 根据传入的已有记忆列表自行判断目标，而不是由 SDK 启发式猜测。
+3. `AgentMemoryRuntime.manage_memory(...)` 按以下顺序执行删除：
+   - 按 `memory_id` 精确软删除。
+   - 按标题但不限制冷热类型软删除。
+4. 如果所有路径都找不到目标，动作摘要会标记 `success=false`，反馈文本由 MemoryAgent 决定；主 Agent 应按反馈向用户说明未找到或需要更明确的信息。
+
+删除策略必须保守：不能因为一句模糊表达删除多条记忆。当前一次 `manage_memory(delete)` 最多删除一条记录；批量删除、按类别删除和按时间范围删除应在后续引入确认机制后再开放。
+
+### 5. 存储、排序和检索语义
+
+当前第一版存储使用 `JsonFileAgentMemoryStore`，接口层抽象为 `AgentMemoryStore`，后续可替换为 SQLite、向量库、图数据库或外部记忆服务。
+
+存储语义：
+
+1. 有效记忆通过 `active` 判断，`deleted_at_ms is None` 表示有效。
+2. 列表读取只返回当前 `scope_type/scope_id` 下的有效记忆；当前 `scope_id` 使用 `device_id` 作为 `user_id`。
+3. 记忆列表按 `updated_at_ms` 倒序排列；如果多条记忆在同一毫秒写入，则按进程内写入顺序倒序排列，保证“刚才/上一条”指代稳定。
+4. 搜索当前是轻量关键词检索：先做整句包含匹配，再做空格分词匹配；中文无空格时会用字符重叠做兜底打分。
+5. `memory_search(title, titles)` 按标题读取记忆详情，不暴露内部 `memory_id`；未命中时返回“没有找到匹配的记忆”。
+
+### 6. 当前风险和后续改进
+
+当前方案已经能支撑本地可审计、可回放的长期记忆维护，但还不是完整生产级记忆系统：
+
+1. 记忆维护完全依赖 MemoryAgent 的模型判断，模型不可用时不会降级执行。
+2. 搜索不是语义向量检索，对同义表达、错别字和复杂中文标题召回有限。
+3. 记忆作用域当前默认按 `device_id` 隔离，尚未升级到账号级、用户级或家庭成员级。
+4. 删除目前是软删除，暂不做物理清理；批量删除必须由 MemoryAgent 输出多条动作并配合确认策略。
+5. Agent 主动写入仍依赖主 Agent 按提示调用 `manage_memory`，后续可以增加独立记忆抽取器、用户确认策略和审计日志。
 
 ## 配置
 

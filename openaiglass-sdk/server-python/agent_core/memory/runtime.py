@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from agent_core.memory.models import AgentMemoryRecord, MemoryScope, MemorySource, MemoryType
-from agent_core.memory.store import AgentMemoryStore, InMemoryAgentMemoryStore
+from agent_core.memory.store import AgentMemoryStore, JsonFileAgentMemoryStore
 
 MemoryOperation = Literal["add", "update", "delete"]
 
@@ -17,40 +17,45 @@ class MemoryOperationRequest:
     """记忆管理请求。
 
     主要功能：
-    1. 承载主 Agent 对记忆管理子 Agent 的请求。
-    2. 保留用户原始指令，避免主 Agent 过早决定冷热分类和具体字段。
+    1. 承载主 Agent 对记忆维护的自然语言请求。
+    2. 保留主 Agent 从历史聊天中摘取的相关上下文，让 MemoryAgent 自行决定具体动作。
     """
 
-    operation: MemoryOperation
     query: str
-    preferred_memory_type: MemoryType | None = None
-    title: str = ""
-    content: str = ""
-    memory_id: str = ""
-    category: str = "general"
-    source: MemorySource = "user_requested"
+    memory_context: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
-class MemoryOperationPlan:
-    """记忆管理子 Agent 输出的结构化计划。"""
+class MemoryOperationAction:
+    """MemoryAgent 输出的一条内部记忆动作。"""
 
     operation: MemoryOperation
-    memory_type: MemoryType
     title: str
     content: str = ""
+    memory_type: MemoryType = "cold"
     memory_id: str = ""
-    category: str = "general"
-    reason: str = ""
+
+
+@dataclass(slots=True)
+class MemoryOperationPlan:
+    """MemoryAgent 输出的结构化维护计划。
+
+    主要功能：
+    1. 支持一次自然语言请求拆成多条内部动作串行执行。
+    2. `feedback` 是返回给主 Agent 的简短文本，不暴露内部 `memory_id`。
+    """
+
+    actions: list[MemoryOperationAction]
+    feedback: str = "记忆已处理"
 
 
 class MemoryManagementAgent:
     """记忆管理子 Agent 接口。
 
     主要功能：
-    1. 根据已有记忆、期望操作和用户原始指令决定冷热分类。
-    2. 输出结构化操作计划，真正落盘仍由 SDK 运行时执行。
+    1. 根据已有记忆、用户原始请求和相关聊天上下文生成维护计划。
+    2. 输出内部动作列表，真正落盘仍由 SDK 运行时执行。
     """
 
     def plan(
@@ -64,119 +69,16 @@ class MemoryManagementAgent:
         raise NotImplementedError
 
 
-class HeuristicMemoryManagementAgent(MemoryManagementAgent):
-    """本地确定性记忆管理 Agent。
-
-    主要功能：
-    1. 为单元测试、离线开发和模型不可用场景提供稳定 fallback。
-    2. 按标题、正文长度和操作参数推断冷热记忆。
-    """
-
-    _HOT_TITLES = {"姓名", "名字", "年龄", "性别", "生日", "语言", "称呼"}
-    _DELETE_PREFIXES = (
-        "请忘掉",
-        "帮我忘掉",
-        "忘掉",
-        "删除关于",
-        "删除",
-        "移除关于",
-        "移除",
-        "不要记住",
-        "别记住",
-        "忘记",
-    )
-    _RECENT_MARKERS = ("刚才", "最近", "上一条", "前一条", "最后一条", "最后")
-
-    def plan(
-        self,
-        *,
-        request: MemoryOperationRequest,
-        existing_memories: list[AgentMemoryRecord],
-    ) -> MemoryOperationPlan:
-        """生成确定性记忆操作计划。"""
-
-        title = request.title.strip()
-        if not title and request.operation == "delete":
-            title = self._infer_delete_title(request.query)
-        if not title:
-            title = self._infer_title(request.query)
-        content = request.content.strip() or request.query.strip()
-        memory_type = request.preferred_memory_type or self._infer_memory_type(title=title, content=content)
-        if request.operation == "delete" and not title and request.memory_id:
-            matched = next((item for item in existing_memories if item.memory_id == request.memory_id), None)
-            if matched is not None:
-                title = matched.title
-                memory_type = matched.memory_type
-        if request.operation == "delete" and not request.memory_id.strip() and self._is_recent_reference(request.query):
-            matched = next(iter(existing_memories), None)
-            if matched is not None:
-                title = matched.title
-                memory_type = matched.memory_type
-                memory_id = matched.memory_id
-            else:
-                memory_id = ""
-        else:
-            memory_id = request.memory_id.strip()
-        return MemoryOperationPlan(
-            operation=request.operation,
-            memory_type=memory_type,
-            title=title,
-            content=content,
-            memory_id=memory_id,
-            category=request.category.strip() or "general",
-            reason="heuristic",
-        )
-
-    def _infer_memory_type(self, *, title: str, content: str) -> MemoryType:
-        if title in self._HOT_TITLES and len(content) <= 80:
-            return "hot"
-        return "hot" if len(content) <= 40 and title in self._HOT_TITLES else "cold"
-
-    @staticmethod
-    def _infer_title(query: str) -> str:
-        text = " ".join(query.strip().replace("：", ":").split())
-        if ":" in text:
-            return text.split(":", 1)[0].strip()[:30] or "未命名记忆"
-        for marker in ("是", "为", "叫"):
-            if marker in text and len(text.split(marker, 1)[0]) <= 12:
-                return text.split(marker, 1)[0].strip()[:30] or "未命名记忆"
-        return text[:20] or "未命名记忆"
-
-    @classmethod
-    def _infer_delete_title(cls, query: str) -> str:
-        """从中文删除指令中提取候选记忆标题。"""
-
-        text = " ".join(query.strip().replace("：", ":").split())
-        for prefix in cls._DELETE_PREFIXES:
-            if text.startswith(prefix):
-                text = text[len(prefix) :].strip()
-                break
-        for suffix in ("这条记忆", "这条信息", "这条", "记忆", "信息", "内容", "。", ".", "吧"):
-            if text.endswith(suffix):
-                text = text[: -len(suffix)].strip()
-        for prefix in ("我的", "我这条", "关于"):
-            if text.startswith(prefix):
-                text = text[len(prefix) :].strip()
-        return text[:30]
-
-    @classmethod
-    def _is_recent_reference(cls, query: str) -> bool:
-        """判断用户是否在指代最近一条记忆。"""
-
-        return any(marker in query for marker in cls._RECENT_MARKERS)
-
-
 class LlmMemoryManagementAgent(MemoryManagementAgent):
     """基于大模型的记忆管理子 Agent。
 
     主要功能：
-    1. 使用主服务端模型把用户原始指令转换成结构化记忆操作计划。
-    2. 模型不可用或返回异常时，退回确定性 fallback，避免阻塞主链路。
+    1. 使用服务端模型把自然语言请求转换成一组结构化记忆动作。
+    2. 不提供启发式降级；模型不可用时，记忆维护也应明确失败。
     """
 
-    def __init__(self, *, settings, fallback: MemoryManagementAgent | None = None) -> None:
+    def __init__(self, *, settings) -> None:
         self._settings = settings
-        self._fallback = fallback or HeuristicMemoryManagementAgent()
 
     def plan(
         self,
@@ -187,63 +89,70 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
         """调用大模型生成记忆操作计划。"""
 
         if not getattr(self._settings, "dashscope_api_key", "").strip():
-            return self._fallback.plan(request=request, existing_memories=existing_memories)
-        try:
-            from openai import OpenAI
-        except ImportError:
-            return self._fallback.plan(request=request, existing_memories=existing_memories)
+            raise ValueError("记忆管理需要可用的大模型配置")
+        from openai import OpenAI
 
-        try:
-            client = OpenAI(
-                api_key=self._settings.dashscope_api_key,
-                base_url=self._settings.voice_model_base_url.rstrip("/"),
+        client = OpenAI(
+            api_key=self._settings.dashscope_api_key,
+            base_url=self._settings.voice_model_base_url.rstrip("/"),
+        )
+        completion = client.chat.completions.create(
+            model=self._settings.agent_model_name,
+            messages=[
+                {"role": "system", "content": self._build_system_prompt()},
+                {"role": "user", "content": self._build_user_payload(request, existing_memories)},
+            ],
+            temperature=0,
+            extra_body={"enable_thinking": False},
+            timeout=self._settings.voice_model_timeout_ms / 1000,
+        )
+        raw = completion.choices[0].message.content or ""
+        payload = json.loads(raw)
+        actions: list[MemoryOperationAction] = []
+        for item in payload.get("actions") or []:
+            if not isinstance(item, dict):
+                continue
+            operation = str(item.get("operation") or "").strip()
+            if operation not in {"add", "update", "delete"}:
+                continue
+            memory_type = str(item.get("memory_type") or "cold").strip()
+            if memory_type not in {"hot", "cold"}:
+                memory_type = "cold"
+            actions.append(
+                MemoryOperationAction(
+                    operation=operation,  # type: ignore[arg-type]
+                    title=str(item.get("title") or "").strip(),
+                    content=str(item.get("content") or "").strip(),
+                    memory_type=memory_type,  # type: ignore[arg-type]
+                    memory_id=str(item.get("memory_id") or "").strip(),
+                )
             )
-            completion = client.chat.completions.create(
-                model=self._settings.agent_model_name,
-                messages=[
-                    {"role": "system", "content": self._build_system_prompt()},
-                    {"role": "user", "content": self._build_user_payload(request, existing_memories)},
-                ],
-                temperature=0,
-                extra_body={"enable_thinking": False},
-                timeout=self._settings.voice_model_timeout_ms / 1000,
-            )
-            raw = completion.choices[0].message.content or ""
-            payload = json.loads(raw)
-            return MemoryOperationPlan(
-                operation=payload.get("operation") or request.operation,
-                memory_type=payload.get("memory_type") or request.preferred_memory_type or "cold",
-                title=str(payload.get("title") or request.title or "").strip(),
-                content=str(payload.get("content") or request.content or "").strip(),
-                memory_id=str(payload.get("memory_id") or request.memory_id or "").strip(),
-                category=str(payload.get("category") or request.category or "general").strip(),
-                reason=str(payload.get("reason") or "llm").strip(),
-            )
-        except Exception:
-            return self._fallback.plan(request=request, existing_memories=existing_memories)
+        feedback = str(payload.get("feedback") or "").strip() or "记忆已处理"
+        return MemoryOperationPlan(actions=actions, feedback=feedback)
 
     @staticmethod
     def _build_system_prompt() -> str:
         return (
             "你是记忆管理子Agent。你只输出JSON，不输出解释。\n"
-            "热记忆用于姓名、年龄、性别等短小且稳定的信息；冷记忆用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
-            "字段包括 operation(add/update/delete)、memory_type(hot/cold)、title、content、memory_id、category、reason。\n"
-            "删除时如果能通过标题定位，就填写 title；能通过 memory_id 定位就填写 memory_id。"
+            "你要根据用户原始请求、相关聊天上下文和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
+            "热记忆用于姓名、年龄、性别、称呼等短小稳定信息；冷记忆用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
+            "可以输出多条actions并按顺序执行，例如先delete再add。\n"
+            "每条action字段只能包括 operation(add/update/delete)、memory_type(hot/cold)、title、content、memory_id。\n"
+            "memory_id只用于定位已有记忆，不能出现在feedback中。\n"
+            "如果只需要更新已有记忆，优先填写已有记忆中的memory_id；新增时不要填写memory_id。\n"
+            "删除时如果能通过memory_id定位就填写memory_id，否则填写title。\n"
+            "不要保存API Key、设备token、WiFi密码、真实用户媒体数据、一次性任务状态或未经确认的推断。\n"
+            "输出格式：{\"actions\":[...],\"feedback\":\"给主Agent的简短中文反馈\"}"
         )
 
     @staticmethod
     def _build_user_payload(request: MemoryOperationRequest, existing_memories: list[AgentMemoryRecord]) -> str:
         payload = {
             "request": {
-                "operation": request.operation,
                 "query": request.query,
-                "preferred_memory_type": request.preferred_memory_type,
-                "title": request.title,
-                "content": request.content,
-                "memory_id": request.memory_id,
-                "category": request.category,
+                "memory_context": request.memory_context,
             },
-            "existing_memories": [asdict(item) for item in existing_memories],
+            "existing_memories": [AgentMemoryRuntime.record_to_internal_dict(item) for item in existing_memories],
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -253,8 +162,8 @@ class AgentMemoryRuntime:
 
     主要功能：
     1. 每轮向主 Agent 注入热记忆正文和冷记忆标题目录。
-    2. 通过 `memory_search` 按冷记忆标题读取详细内容。
-    3. 通过记忆管理子 Agent 执行新增、更新和删除。
+    2. 通过 `memory_search` 按记忆标题读取详细内容。
+    3. 通过记忆管理子 Agent 执行一组串行新增、更新和删除动作。
     """
 
     def __init__(
@@ -265,8 +174,8 @@ class AgentMemoryRuntime:
         max_prompt_memories: int = 6,
         manager_agent: MemoryManagementAgent | None = None,
     ) -> None:
-        self._store = store or InMemoryAgentMemoryStore()
-        self._manager_agent = manager_agent or HeuristicMemoryManagementAgent()
+        self._store = store or JsonFileAgentMemoryStore("runs/memory/agent_memories.json")
+        self._manager_agent = manager_agent
         self.enabled = enabled
         self.max_prompt_memories = max(0, max_prompt_memories)
 
@@ -278,7 +187,6 @@ class AgentMemoryRuntime:
         memory_type: MemoryType,
         title: str,
         content: str,
-        category: str = "general",
         source: MemorySource = "agent_inferred",
         confidence: float = 1.0,
         metadata: dict | None = None,
@@ -302,7 +210,6 @@ class AgentMemoryRuntime:
             memory_type=memory_type,
             title=normalized_title,
             content=normalized_content,
-            category=category.strip() or "general",
             source=source,
             confidence=max(0.0, min(1.0, confidence)),
             metadata=metadata or {},
@@ -322,63 +229,36 @@ class AgentMemoryRuntime:
         """执行记忆管理请求。
 
         主要逻辑：
-        1. 读取当前已有记忆交给记忆管理子 Agent。
-        2. 子 Agent 决定冷热分类、标题、内容和具体操作对象。
-        3. SDK 负责执行计划并返回完成结果。
+        1. 读取当前已有记忆交给 MemoryAgent。
+        2. MemoryAgent 自行决定一组内部动作。
+        3. SDK 按顺序执行动作并返回给主 Agent 的文本反馈。
         """
 
         if not self.enabled:
             raise ValueError("Agent 记忆功能未启用")
+        if self._manager_agent is None:
+            raise ValueError("记忆管理需要可用的大模型管理 Agent")
         existing = self.list_memories(scope_type=scope_type, scope_id=scope_id, limit=100)
         plan = self._manager_agent.plan(request=request, existing_memories=existing)
-        if plan.operation == "add":
-            record = self.add_memory(
+        results: list[dict[str, Any]] = []
+        for action in plan.actions:
+            record = self._execute_action(
                 scope_type=scope_type,
                 scope_id=scope_id,
-                memory_type=plan.memory_type,
-                title=plan.title,
-                content=plan.content,
-                category=plan.category,
-                source=request.source,
-                metadata=request.metadata,
-            )
-            return {"operation": plan.operation, "memory": self.record_to_dict(record), "plan": asdict(plan)}
-        if plan.operation == "update":
-            record = self._apply_update_plan(
-                scope_type=scope_type,
-                scope_id=scope_id,
-                plan=plan,
+                action=action,
                 request=request,
-                existing=existing,
             )
-            return {"operation": plan.operation, "memory": self.record_to_dict(record), "plan": asdict(plan)}
-        deleted = None
-        if plan.memory_id:
-            deleted = self.delete_memory(memory_id=plan.memory_id, scope_type=scope_type, scope_id=scope_id)
-        if deleted is None and plan.title:
-            deleted = self.delete_memory_by_title(
-                title=plan.title,
-                scope_type=scope_type,
-                scope_id=scope_id,
-                memory_type=plan.memory_type,
+            results.append(
+                {
+                    "operation": action.operation,
+                    "title": action.title or (record.title if record is not None else ""),
+                    "success": record is not None,
+                }
             )
-        if deleted is None and plan.title:
-            deleted = self.delete_memory_by_title(
-                title=plan.title,
-                scope_type=scope_type,
-                scope_id=scope_id,
-                memory_type=None,
-            )
-        if deleted is None:
-            deleted = self._delete_best_effort_by_query(
-                scope_type=scope_type,
-                scope_id=scope_id,
-                query=request.query,
-            )
+        feedback = plan.feedback.strip() or self._build_feedback(results)
         return {
-            "operation": "delete",
-            "memory": self.record_to_dict(deleted) if deleted is not None else None,
-            "plan": asdict(plan),
+            "feedback": feedback,
+            "actions": results,
         }
 
     def search_memories(
@@ -403,14 +283,14 @@ class AgentMemoryRuntime:
             limit=max(1, limit),
         )
 
-    def search_cold_memories_by_title(
+    def search_memories_by_title(
         self,
         *,
         scope_type: MemoryScope,
         scope_id: str,
         titles: list[str],
     ) -> list[AgentMemoryRecord]:
-        """按标题读取冷记忆详情。"""
+        """按标题读取记忆详情。"""
 
         if not self.enabled:
             return []
@@ -418,8 +298,19 @@ class AgentMemoryRuntime:
             scope_type=scope_type,
             scope_id=scope_id.strip(),
             titles=titles,
-            memory_type="cold",
+            memory_type=None,
         )
+
+    def search_cold_memories_by_title(
+        self,
+        *,
+        scope_type: MemoryScope,
+        scope_id: str,
+        titles: list[str],
+    ) -> list[AgentMemoryRecord]:
+        """兼容旧调用面，按标题读取记忆详情。"""
+
+        return self.search_memories_by_title(scope_type=scope_type, scope_id=scope_id, titles=titles)
 
     def list_memories(
         self,
@@ -469,31 +360,69 @@ class AgentMemoryRuntime:
             memory_type=memory_type,
         )
 
-    def _apply_update_plan(
+    def _execute_action(
         self,
         *,
         scope_type: MemoryScope,
         scope_id: str,
-        plan: MemoryOperationPlan,
+        action: MemoryOperationAction,
         request: MemoryOperationRequest,
-        existing: list[AgentMemoryRecord],
-    ) -> AgentMemoryRecord:
-        """执行更新计划，尽量复用已有记忆编号。"""
+    ) -> AgentMemoryRecord | None:
+        """执行单条内部记忆动作。"""
 
-        target = self._find_update_target(plan=plan, request=request, existing=existing)
+        if action.operation == "add":
+            return self.add_memory(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                memory_type=action.memory_type,
+                title=action.title,
+                content=action.content,
+                source="agent_inferred",
+                metadata=request.metadata,
+            )
+        if action.operation == "update":
+            return self._apply_update_action(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                action=action,
+                request=request,
+            )
+        if action.memory_id:
+            deleted = self.delete_memory(memory_id=action.memory_id, scope_type=scope_type, scope_id=scope_id)
+            if deleted is not None:
+                return deleted
+        if action.title:
+            return self.delete_memory_by_title(
+                title=action.title,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                memory_type=None,
+            )
+        return None
+
+    def _apply_update_action(
+        self,
+        *,
+        scope_type: MemoryScope,
+        scope_id: str,
+        action: MemoryOperationAction,
+        request: MemoryOperationRequest,
+    ) -> AgentMemoryRecord:
+        """执行更新动作，尽量复用已有记忆编号。"""
+
+        target = self._find_update_target(action=action, scope_type=scope_type, scope_id=scope_id)
         if target is None:
             return self.add_memory(
                 scope_type=scope_type,
                 scope_id=scope_id,
-                memory_type=plan.memory_type,
-                title=plan.title,
-                content=plan.content,
-                category=plan.category,
-                source=request.source,
+                memory_type=action.memory_type,
+                title=action.title,
+                content=action.content,
+                source="agent_inferred",
                 metadata=request.metadata,
             )
-        title = self._normalize_title(plan.title or target.title)
-        content = self._normalize_content(plan.content or target.content)
+        title = self._normalize_title(action.title or target.title)
+        content = self._normalize_content(action.content or target.content)
         if not title:
             raise ValueError("记忆标题不能为空")
         if not content:
@@ -502,11 +431,10 @@ class AgentMemoryRuntime:
             memory_id=target.memory_id,
             scope_type=target.scope_type,
             scope_id=target.scope_id,
-            memory_type=plan.memory_type or target.memory_type,
+            memory_type=action.memory_type or target.memory_type,
             title=title,
             content=content,
-            category=(plan.category or target.category or "general"),
-            source=request.source,
+            source=target.source,
             confidence=target.confidence,
             metadata={**target.metadata, **request.metadata},
             created_at_ms=target.created_at_ms,
@@ -517,44 +445,21 @@ class AgentMemoryRuntime:
     def _find_update_target(
         self,
         *,
-        plan: MemoryOperationPlan,
-        request: MemoryOperationRequest,
-        existing: list[AgentMemoryRecord],
-    ) -> AgentMemoryRecord | None:
-        """按编号、标题和自然语言查询寻找要更新的记忆。"""
-
-        if plan.memory_id:
-            matched = next((item for item in existing if item.memory_id == plan.memory_id), None)
-            if matched is not None:
-                return matched
-        for title in (plan.title, request.title):
-            normalized_title = self._normalize_title(title)
-            if not normalized_title:
-                continue
-            matched = next((item for item in existing if self._normalize_title(item.title) == normalized_title), None)
-            if matched is not None:
-                return matched
-        query_matches = self.search_memories(
-            scope_type=existing[0].scope_type if existing else "device",
-            scope_id=existing[0].scope_id if existing else "",
-            query=request.query,
-            limit=1,
-        )
-        return query_matches[0] if query_matches else None
-
-    def _delete_best_effort_by_query(
-        self,
-        *,
+        action: MemoryOperationAction,
         scope_type: MemoryScope,
         scope_id: str,
-        query: str,
     ) -> AgentMemoryRecord | None:
-        """按自然语言查询兜底删除最匹配的一条记忆。"""
+        """按编号和标题寻找要更新的记忆。"""
 
-        matches = self.search_memories(scope_type=scope_type, scope_id=scope_id, query=query, limit=1)
-        if not matches:
-            return None
-        return self.delete_memory(memory_id=matches[0].memory_id, scope_type=scope_type, scope_id=scope_id)
+        existing = self.list_memories(scope_type=scope_type, scope_id=scope_id, limit=100)
+        if action.memory_id:
+            matched = next((item for item in existing if item.memory_id == action.memory_id), None)
+            if matched is not None:
+                return matched
+        normalized_title = self._normalize_title(action.title)
+        if normalized_title:
+            return next((item for item in existing if self._normalize_title(item.title) == normalized_title), None)
+        return None
 
     def build_prompt_fragment(
         self,
@@ -595,10 +500,37 @@ class AgentMemoryRuntime:
         return "\n".join(lines)
 
     @staticmethod
-    def record_to_dict(record: AgentMemoryRecord) -> dict[str, Any]:
-        """把记忆对象转换成可返回给 Tool 的字典。"""
+    def record_to_internal_dict(record: AgentMemoryRecord) -> dict[str, Any]:
+        """把记忆对象转换成 MemoryAgent 可见的内部字典。"""
 
         return asdict(record)
+
+    @staticmethod
+    def record_to_public_dict(record: AgentMemoryRecord) -> dict[str, Any]:
+        """把记忆对象转换成主 Agent 可见的公开字典。"""
+
+        return {
+            "memory_type": record.memory_type,
+            "title": record.title,
+            "content": record.content,
+        }
+
+    @staticmethod
+    def record_to_dict(record: AgentMemoryRecord) -> dict[str, Any]:
+        """兼容旧调用面，返回不含内部编号的公开字典。"""
+
+        return AgentMemoryRuntime.record_to_public_dict(record)
+
+    @staticmethod
+    def _build_feedback(results: list[dict[str, Any]]) -> str:
+        """根据动作结果生成简短反馈。"""
+
+        if not results:
+            return "没有需要更新的记忆"
+        succeeded = [item for item in results if item.get("success")]
+        if not succeeded:
+            return "没有找到需要处理的记忆"
+        return "记忆已更新"
 
     @staticmethod
     def _normalize_title(title: str) -> str:

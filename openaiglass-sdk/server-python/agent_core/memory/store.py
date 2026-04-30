@@ -318,6 +318,7 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
                 if "title" not in item:
                     item["title"] = item.get("category") or "未命名记忆"
                 item.pop("text", None)
+                item.pop("category", None)
                 records.append(AgentMemoryRecord(**item))
             except TypeError:
                 continue
