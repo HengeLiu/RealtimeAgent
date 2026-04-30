@@ -119,14 +119,16 @@ class PlaybackConfig:
         if not isinstance(sensors, dict):
             raise ValueError("glass-playback 配置缺少 sensors")
         trigger_raw = sensors.get("trigger_audio")
-        if not isinstance(trigger_raw, dict):
-            raise ValueError("glass-playback 配置必须包含 sensors.trigger_audio")
         _validate_optional_sensor_assets(sensors, config_path=config_path, app_root=app_root, repo_root=repo)
-        trigger_audio = _load_trigger_audio(
-            trigger_raw,
-            config_path=config_path,
-            app_root=app_root,
-            repo_root=repo,
+        trigger_audio = (
+            _load_trigger_audio(
+                trigger_raw,
+                config_path=config_path,
+                app_root=app_root,
+                repo_root=repo,
+            )
+            if isinstance(trigger_raw, dict)
+            else None
         )
         trigger_audio_sequence = _load_trigger_audio_sequence(
             sensors.get("trigger_audio_sequence"),
@@ -135,6 +137,8 @@ class PlaybackConfig:
             app_root=app_root,
             repo_root=repo,
         )
+        if trigger_audio is None:
+            trigger_audio = trigger_audio_sequence[0]
 
         actuators = raw.get("actuators")
         if not isinstance(actuators, dict):
@@ -229,7 +233,7 @@ def _load_trigger_audio(
 def _load_trigger_audio_sequence(
     raw: object,
     *,
-    fallback: TriggerAudioConfig,
+    fallback: TriggerAudioConfig | None,
     config_path: Path,
     app_root: Path,
     repo_root: Path,
@@ -239,6 +243,7 @@ def _load_trigger_audio_sequence(
     主要逻辑：
     1. 未配置 `sensors.trigger_audio_sequence` 时，使用单条 `trigger_audio` 保持旧行为。
     2. 配置后按数组顺序加载每一条触发音频。
+    3. 只配置队列、不配置旧版单条字段时，也把队列作为合法输入。
 
     参数：
     1. `raw`：配置文件中的 `sensors.trigger_audio_sequence`。
@@ -253,6 +258,8 @@ def _load_trigger_audio_sequence(
     """
 
     if raw is None:
+        if fallback is None:
+            raise ValueError("glass-playback 配置必须包含 sensors.trigger_audio 或 sensors.trigger_audio_sequence")
         return [fallback]
     if not isinstance(raw, list):
         raise ValueError("sensors.trigger_audio_sequence 必须是数组")

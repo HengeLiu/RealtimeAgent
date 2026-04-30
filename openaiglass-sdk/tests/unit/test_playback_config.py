@@ -276,6 +276,54 @@ def test_playback_config_loads_trigger_audio_sequence(tmp_path: Path) -> None:
     assert [item.chunk_ms for item in config.trigger_audio_sequence] == [20, 20]
 
 
+def test_playback_config_allows_sequence_without_legacy_trigger_audio(tmp_path: Path) -> None:
+    """测试目标：验证多轮回放配置可以只声明 `trigger_audio_sequence`。
+
+    测试方法：
+    1. 构造不包含旧版 `sensors.trigger_audio` 的配置。
+    2. 只在 `sensors.trigger_audio_sequence` 中声明两条音频。
+    3. 加载配置。
+
+    预期结果：
+    1. 配置加载成功。
+    2. `config.trigger_audio` 自动指向队列第一条，兼容旧代码路径。
+    3. `config.trigger_audio_sequence_enabled` 为真。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_a = app_root / "testdata/audio/a.wav"
+    audio_b = app_root / "testdata/audio/b.wav"
+    _write_wav(audio_a)
+    _write_wav(audio_b)
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "glass.sequence_only.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio_sequence": [
+                        {"path": "testdata/audio/a.wav", "format": "wav"},
+                        {"path": "testdata/audio/b.wav", "format": "wav"},
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+
+    assert config.trigger_audio.path == audio_a.resolve()
+    assert [item.path for item in config.trigger_audio_sequence] == [audio_a.resolve(), audio_b.resolve()]
+    assert config.trigger_audio_sequence_enabled is True
+
+
 def test_playback_config_supports_microphone_trigger_audio(tmp_path: Path) -> None:
     """测试目标：验证 glass-playback 可声明本机麦克风作为触发音频来源。
 
