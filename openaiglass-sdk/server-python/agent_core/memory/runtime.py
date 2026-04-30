@@ -33,7 +33,7 @@ class MemoryOperationAction:
     operation: MemoryOperation
     title: str
     content: str = ""
-    memory_type: MemoryType = "cold"
+    memory_type: MemoryType = "personalized"
     memory_id: str = ""
 
 
@@ -115,9 +115,9 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
             operation = str(item.get("operation") or "").strip()
             if operation not in {"add", "update", "delete"}:
                 continue
-            memory_type = str(item.get("memory_type") or "cold").strip()
-            if memory_type not in {"hot", "cold"}:
-                memory_type = "cold"
+            memory_type = str(item.get("memory_type") or "personalized").strip()
+            if memory_type not in {"basic", "personalized"}:
+                memory_type = "personalized"
             actions.append(
                 MemoryOperationAction(
                     operation=operation,  # type: ignore[arg-type]
@@ -135,9 +135,9 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
         return (
             "你是记忆管理子Agent。你只输出JSON，不输出解释。\n"
             "你要根据用户原始请求、相关聊天上下文和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
-            "热记忆用于姓名、年龄、性别、称呼等短小稳定信息；冷记忆用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
+            "基本信息用于姓名、年龄、性别、称呼等短小稳定信息；个性化信息用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
             "可以输出多条actions并按顺序执行，例如先delete再add。\n"
-            "每条action字段只能包括 operation(add/update/delete)、memory_type(hot/cold)、title、content、memory_id。\n"
+            "每条action字段只能包括 operation(add/update/delete)、memory_type(basic/personalized)、title、content、memory_id。\n"
             "memory_id只用于定位已有记忆，不能出现在feedback中。\n"
             "如果只需要更新已有记忆，优先填写已有记忆中的memory_id；新增时不要填写memory_id。\n"
             "删除时如果能通过memory_id定位就填写memory_id，否则填写title。\n"
@@ -161,7 +161,7 @@ class AgentMemoryRuntime:
     """Agent 长期记忆运行时。
 
     主要功能：
-    1. 每轮向主 Agent 注入热记忆正文和冷记忆标题目录。
+    1. 每轮向主 Agent 注入基本信息正文和个性化信息标题目录。
     2. 通过 `memory_search` 按记忆标题读取详细内容。
     3. 通过记忆管理子 Agent 执行一组串行新增、更新和删除动作。
     """
@@ -200,6 +200,8 @@ class AgentMemoryRuntime:
         normalized_content = self._normalize_content(content)
         if not normalized_scope_id:
             raise ValueError("记忆作用域不能为空")
+        if memory_type not in {"basic", "personalized"}:
+            raise ValueError("记忆类型必须是 basic 或 personalized")
         if not normalized_title:
             raise ValueError("记忆标题不能为空")
         if not normalized_content:
@@ -300,17 +302,6 @@ class AgentMemoryRuntime:
             titles=titles,
             memory_type=None,
         )
-
-    def search_cold_memories_by_title(
-        self,
-        *,
-        scope_type: MemoryScope,
-        scope_id: str,
-        titles: list[str],
-    ) -> list[AgentMemoryRecord]:
-        """兼容旧调用面，按标题读取记忆详情。"""
-
-        return self.search_memories_by_title(scope_type=scope_type, scope_id=scope_id, titles=titles)
 
     def list_memories(
         self,
@@ -468,34 +459,34 @@ class AgentMemoryRuntime:
         scope_id: str,
         query: str,
     ) -> str:
-        """构造可注入系统提示词的冷热记忆片段。"""
+        """构造可注入系统提示词的长期记忆片段。"""
 
         if not self.enabled or self.max_prompt_memories <= 0:
             return ""
-        hot_records = self.list_memories(
+        basic_records = self.list_memories(
             scope_type=scope_type,
             scope_id=scope_id,
             limit=self.max_prompt_memories,
-            memory_type="hot",
+            memory_type="basic",
         )
-        cold_records = self.list_memories(
+        personalized_records = self.list_memories(
             scope_type=scope_type,
             scope_id=scope_id,
             limit=self.max_prompt_memories,
-            memory_type="cold",
+            memory_type="personalized",
         )
-        if not hot_records and not cold_records:
+        if not basic_records and not personalized_records:
             return ""
         lines = [
-            "以下是已保存的用户信息。部分信息已直接提供；如果只看到标题且需要详细内容，请调用 memory_search(title 或 titles) 查询后再回答。"
+            "以下是已保存的用户信息。基本信息已直接提供；个性化信息只提供标题，如果需要详细内容，请调用 memory_search(title 或 titles) 查询后再回答。"
         ]
-        if hot_records:
-            lines.append("已提供的信息：")
-            for record in hot_records:
+        if basic_records:
+            lines.append("基本信息：")
+            for record in basic_records:
                 lines.append(f"- {record.title}: {record.content}")
-        if cold_records:
-            lines.append("可查询的信息标题：")
-            for record in cold_records:
+        if personalized_records:
+            lines.append("个性化信息标题：")
+            for record in personalized_records:
                 lines.append(f"- {record.title}")
         return "\n".join(lines)
 

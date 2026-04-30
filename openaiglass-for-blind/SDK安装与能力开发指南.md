@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v66`。本版本在 `sdk-v64` 的 ESP32-S3 方案 A 基础上，收敛 Agent 长期记忆维护语义：主 Agent 只向 `manage_memory` 传入用户原始请求和相关聊天上下文，由 MemoryAgent 自行决定新增、更新、删除等内部动作；`memory_id` 不对主 Agent 暴露；服务端默认使用本地 JSON 文件按 user/device 隔离持久化记忆。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v67`。本版本在 `sdk-v66` 的长期记忆维护语义基础上，统一长期记忆分类描述：`basic` 表示基本信息，`personalized` 表示个性化信息。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -19,7 +19,7 @@
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
-| Agent 长期记忆 | `sdk-v50` 支持冷热两层，`sdk-v66` 收敛为 MemoryAgent 内部动作计划 | 业务能力不要自建记忆表；基本信息等热记忆每轮完整注入，住址、爱好、习惯等冷记忆只注入标题，详情由模型按需调用 `memory_search`。 |
+| Agent 长期记忆 | `sdk-v50` 起支持两类注入策略，`sdk-v66` 收敛为 MemoryAgent 内部动作计划，`sdk-v67` 统一为基本信息和个性化信息 | 业务能力不要自建记忆表；姓名、年龄等基本信息每轮完整注入，住址、爱好、习惯等个性化信息只注入标题，详情由模型按需调用 `memory_search`。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
 | iOS/ESP32 SDK 包形态 | 源码包可检查 | 业务工程引用 SDK 源码运行时；二进制发布仍是后续工作。 |
 
@@ -522,14 +522,14 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 ### 3.9 Agent 长期记忆
 
-`sdk-v48` 起，SDK 在 agent-core 中提供长期记忆能力。`sdk-v50` 起，长期记忆升级为冷热两层。它的定位是 SDK 系统能力，不是业务能力；业务团队不要在 `capabilities` 中自建记忆 Tool、记忆表或提示词拼接逻辑。
+`sdk-v48` 起，SDK 在 agent-core 中提供长期记忆能力。`sdk-v67` 起，长期记忆统一描述为基本信息和个性化信息两类。它的定位是 SDK 系统能力，不是业务能力；业务团队不要在 `capabilities` 中自建记忆 Tool、记忆表或提示词拼接逻辑。
 
 当前记忆能力包括：
 
 1. 本地 JSON 文件持久化，默认路径为 `runs/memory/agent_memories.json`。
-2. 热记忆：姓名、年龄、性别等短小稳定信息，每轮完整注入 system prompt。
-3. 冷记忆：住址、电话、爱好、习惯、任务设置等较长或可能变化的信息，每轮只注入标题。
-4. 模型可见工具 `memory_search`，按冷记忆标题读取详细内容。
+2. 基本信息：姓名、年龄、性别等短小稳定信息，每轮完整注入 system prompt，对应 `memory_type=basic`。
+3. 个性化信息：住址、电话、爱好、习惯、任务设置等较长或可能变化的信息，每轮只注入标题，对应 `memory_type=personalized`。
+4. 模型可见工具 `memory_search`，按记忆标题读取详细内容。
 5. 模型可见工具 `manage_memory(query, memory_context)`，只接收用户原始请求和主 Agent 摘取的相关聊天上下文。
 6. 用户通过自然语言说“记住我喜欢简短提示”“更新我的住址”“忘掉刚才那条记忆”时，模型应调用 `manage_memory`，由 MemoryAgent 自行决定内部动作。
 7. `sdk-v66` 起，主 Agent 不应传入 `operation/title/content/memory_id/category/reason` 等结构化字段；这些字段由 MemoryAgent 基于已有记忆自行判断。
@@ -541,12 +541,12 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 | --- | --- | --- |
 | `AGENT_MEMORY_ENABLED` | `true` | 是否启用长期记忆。关闭后 `manage_memory` 不暴露给模型。 |
 | `AGENT_MEMORY_STORE_PATH` | `runs/memory/agent_memories.json` | 记忆持久化文件。不要提交真实用户记忆文件。 |
-| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入多少条热记忆和冷记忆标题；设为 `0` 表示保留工具但不自动注入。 |
+| `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `6` | 每轮最多注入多少条基本信息和个性化信息标题；设为 `0` 表示保留工具但不自动注入。 |
 
 业务开发者需要注意：
 
-1. 稳定且短小的基本信息适合热记忆，例如姓名、年龄、性别。
-2. 可能变化或内容较长的信息适合冷记忆，例如住址、电话、喜欢的食物列表、导航习惯、任务设置。
+1. 稳定且短小的信息应保存为基本信息，例如姓名、年龄、性别。
+2. 可能变化或内容较长的信息应保存为个性化信息，例如住址、电话、喜欢的食物列表、导航习惯、任务设置。
 3. 一次性任务状态、当前路口临时观测、找物过程中的短时上下文仍应放在 Task 上下文或当前会话里，不应写入长期记忆。
 4. API Key、设备 token、WiFi 密码、真实用户音频图片视频等敏感数据不应写入长期记忆。
 5. 如果业务 Skill 激活了工具白名单，`memory_search` 和 `manage_memory` 仍会保持可见，确保用户随时可以查询或删除错误记忆。

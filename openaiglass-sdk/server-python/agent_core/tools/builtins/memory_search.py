@@ -12,8 +12,8 @@ from agent_core.tools.base import AgentToolContext, BaseTool
 class MemorySearchInput(BaseModel):
     """记忆详情查询输入。"""
 
-    title: str = Field(default="", description="单个冷记忆标题")
-    titles: list[str] = Field(default_factory=list, description="多个冷记忆标题")
+    title: str = Field(default="", description="单个记忆标题")
+    titles: list[str] = Field(default_factory=list, description="多个记忆标题")
 
 
 class MemorySearchTool(BaseTool):

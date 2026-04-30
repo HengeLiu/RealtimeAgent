@@ -144,9 +144,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
 
         scored: list[tuple[int, AgentMemoryRecord]] = []
         for record in candidates:
-            text = record.text.lower()
-            if record.memory_type == "cold":
-                text = f"{record.title} {record.content}".lower()
+            text = f"{record.title} {record.content}".lower()
             score = 10 if normalized_query in text else 0
             score += sum(3 for term in query_terms if term in text)
             if not query_terms:
@@ -314,7 +312,9 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
                 if "content" not in item and "text" in item:
                     item["content"] = item.get("text") or ""
                 if "memory_type" not in item:
-                    item["memory_type"] = "cold"
+                    item["memory_type"] = "personalized"
+                if item.get("memory_type") not in {"basic", "personalized"}:
+                    continue
                 if "title" not in item:
                     item["title"] = item.get("category") or "未命名记忆"
                 item.pop("text", None)

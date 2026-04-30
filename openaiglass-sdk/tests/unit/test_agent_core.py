@@ -384,7 +384,7 @@ class AgentCoreTestCase(unittest.TestCase):
                     actions=[
                         MemoryOperationAction(
                             operation="add",
-                            memory_type="cold",
+                            memory_type="personalized",
                             title="导航偏好",
                             content="用户喜欢导航提示尽量简短。",
                         )
@@ -462,7 +462,7 @@ class AgentCoreTestCase(unittest.TestCase):
         old_record = memory_runtime.add_memory(
             scope_type="device",
             scope_id="glass-001",
-            memory_type="cold",
+            memory_type="personalized",
             title="导航偏好",
             content="用户喜欢导航提示详细一点。",
         )
@@ -473,7 +473,7 @@ class AgentCoreTestCase(unittest.TestCase):
                         MemoryOperationAction(operation="delete", memory_id=old_record.memory_id, title="导航偏好"),
                         MemoryOperationAction(
                             operation="add",
-                            memory_type="cold",
+                            memory_type="personalized",
                             title="导航偏好",
                             content="用户喜欢导航提示尽量简短。",
                         ),
@@ -510,7 +510,7 @@ class AgentCoreTestCase(unittest.TestCase):
         """测试目标：验证更新记忆时复用原有 `memory_id`。
 
         测试方法：
-        1. 先通过 runtime 内部接口新增一条热记忆。
+        1. 先通过 runtime 内部接口新增一条基本信息。
         2. MemoryAgent 返回带内部 `memory_id` 的更新动作。
 
         预期结果：
@@ -523,7 +523,7 @@ class AgentCoreTestCase(unittest.TestCase):
         record = memory_runtime.add_memory(
             scope_type="device",
             scope_id="glass-001",
-            memory_type="hot",
+            memory_type="basic",
             title="姓名",
             content="用户姓名是小明。",
         )
@@ -533,7 +533,7 @@ class AgentCoreTestCase(unittest.TestCase):
                     actions=[
                         MemoryOperationAction(
                             operation="update",
-                            memory_type="hot",
+                            memory_type="basic",
                             title="姓名",
                             content="用户姓名是小李。",
                             memory_id=record.memory_id,
@@ -564,24 +564,49 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(updated.title, "姓名")
         self.assertEqual(updated.content, "用户姓名是小李。")
 
-    def test_agent_runner_injects_hot_memory_and_cold_titles(self) -> None:
-        """测试目标：验证 Agent 运行时按冷热策略注入长期记忆。
+    def test_agent_memory_rejects_unknown_memory_type(self) -> None:
+        """测试目标：验证长期记忆运行时拒绝未知记忆类型。
 
         测试方法：
-        1. 预先写入一条热记忆和一条冷记忆。
+        1. 构造内存版 `AgentMemoryRuntime`。
+        2. 直接调用内部写入接口传入非法 `memory_type`。
+
+        预期结果：
+        1. SDK 明确抛出 `ValueError`。
+        2. 存储中不会写入非法类型记忆。
+        """
+
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+
+        with self.assertRaises(ValueError):
+            memory_runtime.add_memory(
+                scope_type="device",
+                scope_id="glass-001",
+                memory_type="unknown",  # type: ignore[arg-type]
+                title="非法类型",
+                content="这条记忆不应写入。",
+            )
+
+        self.assertEqual(memory_runtime.list_memories(scope_type="device", scope_id="glass-001"), [])
+
+    def test_agent_runner_injects_basic_memory_and_personalized_titles(self) -> None:
+        """测试目标：验证 Agent 运行时按基本信息和个性化信息策略注入长期记忆。
+
+        测试方法：
+        1. 预先写入一条基本信息和一条个性化信息。
         2. 构造 `OpenAIAgentLoopRunner` 的单轮运行态。
         3. 检查 `model_request` 中的系统提示词。
 
         预期结果：
-        1. 热记忆标题和内容会完整出现。
-        2. 冷记忆只出现标题，不出现详细内容。
+        1. 基本信息标题和内容会完整出现。
+        2. 个性化信息只出现标题，不出现详细内容。
         """
 
         memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
         memory_runtime.add_memory(
             scope_type="device",
             scope_id="glass-001",
-            memory_type="hot",
+            memory_type="basic",
             title="姓名",
             content="用户姓名是小明。",
             source="user_requested",
@@ -589,7 +614,7 @@ class AgentCoreTestCase(unittest.TestCase):
         memory_runtime.add_memory(
             scope_type="device",
             scope_id="glass-001",
-            memory_type="cold",
+            memory_type="personalized",
             title="导航偏好",
             content="用户喜欢导航提示尽量简短，并且希望先说方向再说距离。",
             source="user_requested",
@@ -618,8 +643,8 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertNotIn("先说方向再说距离", fragment)
         self.assertIn("memory_search", runtime.model_request["instructions"])
         self.assertIn("manage_memory", runtime.model_request["instructions"])
-        self.assertNotIn("热记忆", runtime.model_request["instructions"])
-        self.assertNotIn("冷记忆", runtime.model_request["instructions"])
+        self.assertIn("基本信息", fragment)
+        self.assertIn("个性化信息标题", fragment)
 
     def test_start_phone_video_link_tool_prefers_device_group_snapshot(self) -> None:
         """测试目标：验证视频直连 Tool 优先使用 SDK 设备组快照。
