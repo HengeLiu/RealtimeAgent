@@ -1582,6 +1582,25 @@ static void flush_pre_roll_frames(
     }
 }
 
+// 确保扬声器通道处于可写状态。用于本地提示音，避免播放任务结束后通道被暂停导致提示音写入失败。
+static bool ensure_speaker_channel_enabled(void)
+{
+    if (s_spk_tx_chan == NULL) {
+        ESP_LOGW(TAG, "扬声器通道未初始化，跳过本地提示音");
+        return false;
+    }
+    if (s_speaker_channel_enabled) {
+        return true;
+    }
+    esp_err_t enable_err = i2s_channel_enable(s_spk_tx_chan);
+    if (enable_err != ESP_OK) {
+        ESP_LOGW(TAG, "恢复扬声器通道失败，跳过本地提示音: %s", esp_err_to_name(enable_err));
+        return false;
+    }
+    s_speaker_channel_enabled = true;
+    return true;
+}
+
 static void drain_and_pause_speaker(void)
 {
     if (s_spk_tx_chan == NULL || !s_speaker_channel_enabled) {

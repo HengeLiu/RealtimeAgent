@@ -11,9 +11,8 @@
 1. `glass-esp32` 增加本地唤醒提示音，只在 `WakeNet detected` 分支播放。
 2. 连续对话窗口内由本地 VAD 触发的新语音段不会重复播放提示音，避免每轮追问都打扰用户。
 3. 提示音由端侧直接生成短 PCM 写入扬声器 I2S，不走服务端播放链路，不产生额外网络延迟。
-4. 提示音 PCM 同步写入 AEC 播放参考缓冲，降低提示音被麦克风采集后误入用户语音的风险。
-5. 提示音和扬声器预装静音帧使用堆内存缓冲，不占用 `sr_pipeline_task` 栈，避免 WakeNet 命中后栈溢出重启。
-6. 新增 Kconfig 配置：
+4. 提示音和扬声器预装静音帧使用堆内存缓冲，不占用 `sr_pipeline_task` 栈，避免 WakeNet 命中后栈溢出重启。
+5. 新增 Kconfig 配置：
    - `CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE`
    - `CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS`
    - `CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ`
@@ -22,7 +21,7 @@
 ## 验证
 
 1. 单元测试静态检查提示音只挂在 WakeNet 分支，不挂在连续 VAD 分支。
-2. 单元测试检查提示音会写入 AEC 参考缓冲。
+2. 单元测试检查提示音不依赖 AEC 参考缓冲，避免回退方案 A 时重新引入播放中插话链路。
 3. 单元测试检查提示音缓冲不使用 SR 任务栈上的大数组。
 4. 真机仍需要听感验证：提示音应短促、轻微，不应盖住用户开始说话的前几个字。
 

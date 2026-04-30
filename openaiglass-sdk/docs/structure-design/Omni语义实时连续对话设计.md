@@ -4,9 +4,9 @@
 
 ## 1. 目标
 
-本文描述“方案二”：以真实 `glass-esp32` 眼镜为目标终端，使用 Qwen Omni Realtime 的 `semantic_vad` 承担连续对话的 turn detection，让用户在一次唤醒后可以自然追问、插话和等待，不必每轮都重复唤醒词。
+本文描述“方案二”的当前落地形态：以真实 `glass-esp32` 眼镜为目标终端，使用 Qwen Omni Realtime 的 `semantic_vad` 承担连续对话的 turn detection，让用户在一次唤醒后可以在助手播放结束后自然追问和等待，不必每轮都重复唤醒词。
 
-`glass-playback` 只作为协议回放、延迟观测和回归验收工具，不作为真实声学能力的判断依据。真实体验仍以 ESP32 眼镜的麦克风、扬声器、WakeNet、AEC/VAD 和网络条件为准。
+`glass-playback` 只作为协议回放、延迟观测和回归验收工具，不作为真实声学能力的判断依据。真实体验仍以 ESP32 眼镜的麦克风、扬声器、WakeNet、VAD 和网络条件为准。
 
 ## 2. 官方能力依据
 
@@ -27,7 +27,7 @@ https://help.aliyun.com/zh/model-studio/realtime
 1. 唤醒仍由眼镜端负责。服务端不尝试在远端原始音频里做 WakeNet。
 2. 一次唤醒后进入连续会话窗口，后续 turn 由 Omni `semantic_vad` 判断。
 3. 眼镜侧必须提供本地退出条件，例如按键退出、长静音超时、用户明确说“退出对话”。
-4. 服务端不做声纹识别。嘈杂环境和旁人说话先通过端侧近场拾音、AEC、VAD 阈值、方向性麦克风和交互策略降低误触发。
+4. 服务端不做声纹识别。嘈杂环境和旁人说话先通过端侧近场拾音、VAD 阈值、方向性麦克风和交互策略降低误触发。
 5. SDK 保留现有 `agent_tts` 和 `segment_turn` 链路。业务需要 Tool、Task、Skill、MCP 编排时仍可回退。
 
 ## 4. 状态机
@@ -44,7 +44,6 @@ RealtimeListening --> UserSpeaking : Omni input_audio_buffer.speech_started
 UserSpeaking --> OmniResponding : semantic_vad 提交用户 turn
 OmniResponding --> AssistantSpeaking : response.audio.delta 首包
 AssistantSpeaking --> RealtimeListening : response.done / 播放完成
-AssistantSpeaking --> UserSpeaking : 用户插话 / cancel_response
 RealtimeListening --> Closing : 静音超时 / 退出词 / 按键 / 网络断开
 Closing --> Idle : 关闭控制和媒体状态
 
@@ -56,7 +55,7 @@ Closing --> Idle : 关闭控制和媒体状态
 ```plantuml
 @startuml
 skinparam monochrome true
-participant "glass-esp32\nWakeNet/AEC/Mic/Speaker" as Glass
+participant "glass-esp32\nWakeNet/Mic/Speaker" as Glass
 participant "Server\nRealtimeVoiceRuntime" as Server
 participant "Omni Realtime" as Omni
 participant "PlaybackStream" as Playback
@@ -76,10 +75,6 @@ loop 连续收音窗口
   Server -> Playback : 写入音频增量
   Server -> Glass : actuator.audio.play / HTTP stream
 end
-
-Glass -> Server : 用户插话或端侧 interrupt
-Server -> Omni : cancel_response
-Server -> Glass : actuator.audio.interrupt
 
 Glass -> Server : 退出词 / 按键 / 长静音
 Server -> Omni : close
@@ -116,7 +111,7 @@ Server -> Glass : voice.realtime.session.closed
 7. 真实 `glass-esp32` 在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后继续保持窗口，下一轮语音可由本地 VAD 直接触发。
 8. 增加单元测试，保证配置校验、协议 payload、Omni 会话参数和 semantic_vad 自动响应等待不会回退。
 
-当前仍不是完整全双工生产形态。ESP32 固件尚未启用 AEC，所以上述连续对话窗口只覆盖“助手播完后的自然追问”；播放期间麦克风不会持续参与插话判断，避免把助手自己的声音回灌给模型。需要播放中自然插话时，下一阶段必须先完成端侧 AEC 或可靠回声抑制。
+当前仍不是完整全双工生产形态。`sdk-v64` 已回退 ESP32 播放中自然插话试验，上述连续对话窗口只覆盖“助手播完后的自然追问”；播放期间麦克风不会持续参与插话判断，避免把助手自己的声音回灌给模型。需要播放中自然插话时，下一阶段必须先完成端侧 AEC 或可靠回声抑制，并经过真机稳定性验证后再重新开启。
 
 ## 8. 后续开发计划
 
