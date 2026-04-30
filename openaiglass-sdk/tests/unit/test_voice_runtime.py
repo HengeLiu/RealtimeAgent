@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from infra.config import ServerSettings
+from infra.errors import AppError, ErrorCode
 from protocol.media.media_frame import MediaFrame
 from runtime.voice_runtime import (
     DashscopeRealtimeSpeechRecognitionSession,
@@ -17,6 +18,7 @@ from runtime.voice_runtime import (
     DashscopeOmniRealtimeReplyClient,
     MessageEntry,
     ModelChunk,
+    OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
     PCM16StreamResampler,
     SegmentBuffer,
     StreamingSpeechRecognitionSession,
@@ -563,6 +565,81 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(chunks[0].audio_pcm_bytes, b"audio")
         self.assertEqual(result.assistant_text, "你好")
         self.assertEqual(result.transcript, "看一下")
+        session.close()
+
+    def test_omni_semantic_vad_without_auto_commit_requests_segment_turn_fallback(self) -> None:
+        """测试目标：验证 semantic VAD 没有自动提交时不会一直等待超时。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话。
+        2. 追加一段音频，但不模拟 `speech_stopped`、`committed` 或 `response` 事件。
+        3. 调用 `finish(...)`。
+
+        预期结果：
+        1. `finish(...)` 立即抛出带兜底标记的 `TIMEOUT`。
+        2. 上层运行时可根据该标记切换到 `segment_turn` 重连兜底。
+        3. 当前 semantic VAD 会话本身不手动 `commit/create_response`。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.committed = False
+                self.response_created = False
+
+            def connect(self) -> None:
+                return None
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, _image_b64: str) -> None:
+                return None
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def create_response(self, **_kwargs) -> None:
+                self.response_created = True
+
+            def close(self) -> None:
+                return None
+
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        session = client.start_streaming_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+            ),
+            instructions="连续对话",
+            on_chunk=lambda _chunk: None,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+        session.append_audio(b"pcm")
+
+        with self.assertRaises(AppError) as raised:
+            session.finish(image_frames=[], instructions="连续对话", segment_finished_at_ms=0)
+
+        assert _Factory.instance is not None
+        self.assertEqual(raised.exception.code, ErrorCode.TIMEOUT)
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.details["reason"], OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE)
+        self.assertEqual(raised.exception.details["fallback"], "segment_turn_reconnect")
+        self.assertFalse(_Factory.instance.committed)
+        self.assertFalse(_Factory.instance.response_created)
         session.close()
 
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:

@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 import wave
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable
 
 from agent_core import AgentFacade, AgentTurn, DerivedArtifact, MediaAssetRef
@@ -34,6 +34,7 @@ SERVER_SAMPLE_WIDTH_BYTES = 2
 MODEL_OUTPUT_SAMPLE_RATE_HZ = 24000
 PLAYBACK_QUEUE_MAX = 256
 UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
+OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
 
 
 @dataclass(slots=True)
@@ -376,8 +377,29 @@ class OmniRealtimeStreamingSession:
                         LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
                     )
             if not self._request_started_at_ms_box:
-                self._request_started_at_ms = segment_finished_at_ms
-                self._request_started_at_ms_box.append(segment_finished_at_ms)
+                log_info(
+                    self._logger,
+                    (
+                        "Omni semantic_vad 未自动提交，准备改用 segment_turn 重连兜底 "
+                        f"model={self._settings.voice_omni_realtime_model_name} "
+                        f"finish_to_check_ms="
+                        f"{max(DashscopeOmniRealtimeReplyClient._now_ms() - segment_finished_at_ms, 0)} "
+                        f"audio_bytes={self._audio_bytes} audio_frame_count={self._audio_frame_count} "
+                        f"image_count={appended_image_count}"
+                    ),
+                    LogContext(device_id=self._device_id, session_id=self._session_id),
+                )
+                raise build_error(
+                    ErrorCode.TIMEOUT,
+                    "Omni semantic_vad 未自动提交",
+                    retryable=True,
+                    details={
+                        "reason": OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
+                        "segment_id": self._segment_id,
+                        "stream_id": self._stream_id,
+                        "fallback": "segment_turn_reconnect",
+                    },
+                )
             log_info(
                 self._logger,
                 (
@@ -3652,11 +3674,35 @@ class VoiceRuntime:
         omni_session = segment.omni_realtime_session
         try:
             if omni_session is not None:
-                result = omni_session.finish(
-                    image_frames=image_frames,
-                    instructions=instructions,
-                    segment_finished_at_ms=segment_finished_at_ms,
-                )
+                try:
+                    result = omni_session.finish(
+                        image_frames=image_frames,
+                        instructions=instructions,
+                        segment_finished_at_ms=segment_finished_at_ms,
+                    )
+                except AppError as exc:
+                    if not self._should_use_omni_segment_turn_fallback(exc):
+                        raise
+                    omni_session.close()
+                    omni_session = None
+                    log_info(
+                        self._logger,
+                        (
+                            "Omni semantic_vad 未生成自动响应，改用 segment_turn 重连兜底 "
+                            f"segment_id={segment.segment_id} audio_bytes={len(input_pcm)} "
+                            f"image_count={len(image_frames)}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id),
+                    )
+                    result = self._run_omni_segment_turn_fallback(
+                        device_id=device_id,
+                        session_id=session_id,
+                        segment=segment,
+                        input_pcm=input_pcm,
+                        image_frames=image_frames,
+                        instructions=instructions,
+                        context=context,
+                    )
             else:
                 result = self._omni_realtime_client.run_reply(
                     settings=self._settings,
@@ -3749,6 +3795,74 @@ class VoiceRuntime:
                 f"input={input_path} transcript_artifact={transcript_path} output={output_path}"
             ),
             LogContext(device_id=device_id, session_id=session_id),
+        )
+
+    def _run_omni_segment_turn_fallback(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        input_pcm: bytes,
+        image_frames: list[bytes],
+        instructions: str,
+        context: ReplySynthesisContext,
+    ) -> OmniRealtimeReplyResult:
+        """使用分段提交模式兜底执行 Omni Realtime。
+
+        主要逻辑：
+        1. 复制当前配置，只把对话模式切到 `segment_turn`。
+        2. 重新建立一个不启用 semantic VAD 的 Omni Realtime 会话。
+        3. 把完整 PCM 与本轮图片一次性提交，避免在未自动提交的 semantic VAD 会话中一直等待。
+
+        参数：
+        1. `device_id/session_id`：设备和会话编号。
+        2. `segment`：当前语音段，用于日志和请求标识。
+        3. `input_pcm`：完整用户语音 PCM。
+        4. `image_frames`：本轮自动照片。
+        5. `instructions`：Omni 回复指令。
+        6. `context`：当前下行播放上下文。
+
+        返回值：
+        1. Omni Realtime 回复结果。
+
+        异常情况：
+        1. 底层 Omni Realtime 建连或调用失败时透传结构化 `AppError`。
+        """
+
+        fallback_settings = replace(self._settings, voice_conversation_mode="segment_turn")
+        return self._omni_realtime_client.run_reply(
+            settings=fallback_settings,
+            input_pcm=input_pcm,
+            image_frames=image_frames,
+            instructions=instructions,
+            on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                device_id=device_id,
+                session_id=session_id,
+                context=context,
+                chunk=chunk,
+            ),
+            session_id=session_id,
+            device_id=device_id,
+            segment_id=segment.segment_id,
+            stream_id=segment.stream_id,
+        )
+
+    @staticmethod
+    def _should_use_omni_segment_turn_fallback(exc: AppError) -> bool:
+        """判断 Omni semantic VAD 失败是否可以切换到分段提交兜底。
+
+        参数：
+        1. `exc`：待判断的结构化异常。
+
+        返回值：
+        1. `True` 表示可以切到 `segment_turn` 重连兜底。
+        """
+
+        return (
+            exc.code == ErrorCode.TIMEOUT
+            and exc.details.get("reason") == OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE
+            and exc.details.get("fallback") == "segment_turn_reconnect"
         )
 
     def _consume_ready_utterance_photo_bytes_for_omni(

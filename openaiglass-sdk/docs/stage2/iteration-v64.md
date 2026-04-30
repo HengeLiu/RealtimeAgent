@@ -14,12 +14,14 @@ ESP32-S3 上的 AEC 播放中自然插话试验会在真实播放期间把扬声
 4. 播放结束后刷新连续对话窗口，用户仍可直接继续说下一句，不需要重复唤醒词。
 5. 保留首次 WakeNet 唤醒轻提示音，但提示音不再依赖 AEC 参考缓冲。
 6. 更新 SDK 开发指南和 Omni 连续对话设计文档，明确当前真机默认形态是方案 A。
+7. 保留 `glass-playback` 和半双工有限语音段的稳定性兜底：当 Omni `semantic_vad` 在 `sensor.audio.segment.finished` 后仍未自动提交时，服务端关闭该实时会话并改用 `segment_turn` 重连提交完整 PCM，避免一直等待到 45 秒超时。
 
 ## 验证
 
 1. 单元测试静态检查 ESP32 固件不包含 AEC 配置、播放中候选段字段和播放中 VAD 候选日志。
 2. 单元测试静态检查首次 WakeNet 唤醒提示音仍只挂在唤醒词分支。
 3. 真机联调观察点：播放期间不应再出现“播放中 VAD 触发候选语音段”，服务端也不应收到带 `started_during_playback` 的语音段。
+4. 回放联调观察点：如果日志出现“Omni semantic_vad 未自动提交，准备改用 segment_turn 重连兜底”，后续应继续出现“Omni Realtime 返回首段音频”和 `actuator.audio.play`，不应停在“Omni semantic_vad 等待自动响应”直到超时。
 
 ## 后续
 
