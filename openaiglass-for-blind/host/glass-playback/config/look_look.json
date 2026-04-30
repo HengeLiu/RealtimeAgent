@@ -12,13 +12,22 @@
     "startup_timeout_ms": 30000
   },
   "sensors": {
-    "trigger_audio": {
-      "path": "testdata/audio/我叫文刀文字的文刀锋的刀.wav",
-      "format": "wav",
-      "sample_rate_hz": 16000,
-      "channels": 1,
-      "chunk_ms": 40
-    },
+    "trigger_audio_sequence": [
+      {
+        "path": "testdata/audio/我叫文刀文字的文刀锋的刀.wav",
+        "format": "wav",
+        "sample_rate_hz": 16000,
+        "channels": 1,
+        "chunk_ms": 40
+      },
+      {
+        "path": "testdata/audio/我叫什么呀.wav",
+        "format": "wav",
+        "sample_rate_hz": 16000,
+        "channels": 1,
+        "chunk_ms": 40
+      }
+    ],
     "camera_capture": {
       "path": "testdata/image/asset_fad27318c958.jpg"
     },
