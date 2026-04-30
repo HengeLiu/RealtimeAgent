@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from infra.config import ServerSettings
+from infra.errors import AppError, ErrorCode
 from protocol.media.media_frame import MediaFrame
 from runtime.voice_runtime import (
     DashscopeRealtimeSpeechRecognitionSession,
@@ -17,6 +18,7 @@ from runtime.voice_runtime import (
     DashscopeOmniRealtimeReplyClient,
     MessageEntry,
     ModelChunk,
+    OmniRealtimeReplyResult,
     PCM16StreamResampler,
     SegmentBuffer,
     StreamingSpeechRecognitionSession,
@@ -565,8 +567,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(result.transcript, "看一下")
         session.close()
 
-    def test_omni_semantic_vad_manual_commit_when_no_auto_response(self) -> None:
-        """测试目标：验证 semantic VAD 没有自动提交时会在段结束后兜底提交。
+    def test_omni_semantic_vad_reports_no_auto_response_for_reconnect_fallback(self) -> None:
+        """测试目标：验证 semantic VAD 没有自动提交时不再原会话手动提交。
 
         测试方法：
         1. 注入不会主动发送 `speech_stopped` 的假 Omni Realtime 会话。
@@ -574,8 +576,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         3. 追加音频后直接调用 `finish(...)`。
 
         预期结果：
-        1. SDK 会手动调用 `commit()` 和 `create_response(...)`，避免真实链路等待到超时。
-        2. 返回结果仍包含模型文本、音频回调和输入转写。
+        1. SDK 不在 semantic VAD 会话中手动 `commit()`。
+        2. SDK 抛出可识别的兜底信号，外层可以重连 `segment_turn` 模式。
         """
 
         class _Factory:
@@ -608,20 +610,10 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
             def create_response(self, **_kwargs) -> None:
                 self.response_created = True
-                self.callback.on_event({"type": "response.created", "response": {"id": "resp-manual"}})
-                self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "收到"})
-                self.callback.on_event(
-                    {"type": "response.audio.delta", "delta": base64.b64encode(b"manual-audio").decode()}
-                )
-                self.callback.on_event(
-                    {"type": "conversation.item.input_audio_transcription.completed", "transcript": "继续说"}
-                )
-                self.callback.on_event({"type": "response.done"})
 
             def close(self) -> None:
                 return None
 
-        chunks: list[ModelChunk] = []
         client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
         session = client.start_streaming_reply(
             settings=ServerSettings(
@@ -630,7 +622,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 voice_conversation_mode="realtime_semantic_vad",
             ),
             instructions="连续对话",
-            on_chunk=chunks.append,
+            on_chunk=lambda _chunk: None,
             session_id="sess-test",
             device_id="glass-001",
             segment_id="seg-test",
@@ -638,16 +630,86 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         )
         session.append_audio(b"pcm")
 
-        result = session.finish(image_frames=[], instructions="连续对话", segment_finished_at_ms=100)
+        with self.assertRaises(AppError) as captured:
+            session.finish(image_frames=[], instructions="连续对话", segment_finished_at_ms=100)
 
         assert _Factory.instance is not None
-        self.assertTrue(_Factory.instance.committed)
-        self.assertTrue(_Factory.instance.response_created)
-        self.assertEqual(chunks[0].audio_pcm_bytes, b"manual-audio")
-        self.assertEqual(result.assistant_text, "收到")
-        self.assertEqual(result.transcript, "继续说")
-        self.assertEqual(result.response_id, "resp-manual")
+        self.assertFalse(_Factory.instance.committed)
+        self.assertFalse(_Factory.instance.response_created)
+        self.assertEqual(captured.exception.code, ErrorCode.TIMEOUT)
+        self.assertEqual(captured.exception.details["reason"], "semantic_vad_no_auto_response")
+        self.assertEqual(captured.exception.details["fallback"], "segment_turn_reconnect")
         session.close()
+
+    def test_omni_segment_turn_fallback_disables_semantic_vad(self) -> None:
+        """测试目标：验证 semantic VAD 兜底会改用分段提交模式。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 客户端，记录收到的配置。
+        2. 使用 `realtime_semantic_vad` 默认配置创建运行时。
+        3. 调用内部兜底方法并注入一段模型音频。
+
+        预期结果：
+        1. 兜底请求里的 `voice_conversation_mode` 被改成 `segment_turn`。
+        2. 模型音频仍进入下行播放流，复用原播放链路。
+        """
+
+        class _OmniClient:
+            seen_mode: str | None = None
+
+            def run_reply(self, *, settings, input_pcm, image_frames, instructions, on_chunk, **_kwargs):
+                self.seen_mode = settings.voice_conversation_mode
+                self.assert_input = input_pcm
+                self.assert_images = image_frames
+                self.assert_instructions = instructions
+                on_chunk(ModelChunk(audio_pcm_bytes=b"\x01\x00" * 160, sample_rate_hz=16000))
+                return OmniRealtimeReplyResult(
+                    assistant_text="收到",
+                    transcript="继续说",
+                    response_id="resp-fallback",
+                )
+
+        sent_messages: list[tuple[str, str, str, str, dict]] = []
+        client = _OmniClient()
+        runtime = VoiceRuntime(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+            ),
+            send_control_message=lambda *args: sent_messages.append(args),
+            omni_realtime_client=client,  # type: ignore[arg-type]
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-fallback")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-fallback")
+        segment = SegmentBuffer(
+            session_id="sess-fallback",
+            stream_id="stream-fallback",
+            segment_id="seg-fallback",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+        )
+        context = runtime._open_reply_synthesis_context(  # noqa: SLF001 - 单测覆盖兜底播放链路
+            device_id="glass-001",
+            session_id="sess-fallback",
+            audio_source="omni_realtime",
+        )
+
+        result = runtime._run_omni_segment_turn_fallback(  # noqa: SLF001 - 单测覆盖兜底模式切换
+            device_id="glass-001",
+            session_id="sess-fallback",
+            segment=segment,
+            input_pcm=b"pcm",
+            image_frames=[b"jpeg"],
+            instructions="继续对话",
+            context=context,
+        )
+
+        self.assertEqual(client.seen_mode, "segment_turn")
+        self.assertEqual(result.response_id, "resp-fallback")
+        self.assertEqual(sent_messages[-1][2], "actuator.audio.play")
 
     def test_dashscope_realtime_asr_sends_chunks_to_recognition(self) -> None:
         """测试目标：验证实时 ASR 使用官方 Recognition 会话逐帧发送音频。
