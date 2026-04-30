@@ -25,7 +25,7 @@ from protocol.messages import Endpoint
 from protocol.utils import create_control_message
 
 from openaiglass_glass_playback.assets import CameraFrameAsset, load_camera_frames
-from openaiglass_glass_playback.config import PlaybackConfig, ServerArtifactCheck
+from openaiglass_glass_playback.config import PlaybackConfig, ServerArtifactCheck, TriggerAudioConfig
 from openaiglass_glass_playback.ws_client import WsClient
 
 
@@ -57,6 +57,9 @@ class PlaybackGlassDevice:
         self._audio_worker_threads: list[threading.Thread] = []
         self._audio_worker_lock = threading.Lock()
         self._output_lock = threading.Lock()
+        self._control_send_lock = threading.Lock()
+        self._trigger_sequence_lock = threading.Lock()
+        self._next_trigger_audio_index = 0
 
     def run(self) -> PlaybackResult:
         """启动虚拟设备并执行一次触发音频回放。"""
@@ -93,7 +96,7 @@ class PlaybackGlassDevice:
                 self._wait_for_binding()
 
             if self.config.startup.auto_stream_trigger_audio:
-                self._stream_trigger_audio(control)
+                self._stream_next_trigger_audio(control, reason="startup")
 
             self._drain_control_messages(control)
             assertion_failures = self._evaluate_assertions()
@@ -149,7 +152,8 @@ class PlaybackGlassDevice:
             session_id=session_id,
             stream_id=stream_id,
         )
-        control.send_text(json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":")))
+        with self._control_send_lock:
+            control.send_text(json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":")))
 
     def _wait_for_message(self, control: WsClient, expected_name: str) -> dict[str, object]:
         deadline = time.monotonic() + self.config.startup.startup_timeout_ms / 1000
@@ -266,8 +270,65 @@ class PlaybackGlassDevice:
                 return True
         return False
 
-    def _stream_trigger_audio(self, control: WsClient) -> None:
-        audio_config = self.config.trigger_audio
+    def _stream_next_trigger_audio(self, control: WsClient, *, reason: str) -> bool:
+        """提交连续回放队列中的下一条触发音频。
+
+        主要逻辑：
+        1. 从 `trigger_audio_sequence` 中取下一条音频配置。
+        2. 发送完成后推进队列下标。
+        3. 队列耗尽时只记录事件，不再关闭控制连接。
+
+        参数：
+        1. `control`：控制 WebSocket 客户端。
+        2. `reason`：触发提交的原因，用于排障日志。
+
+        返回值：
+        1. `True` 表示成功提交了一条音频；`False` 表示队列已经耗尽。
+
+        异常情况：
+        1. 音频文件读取、麦克风采集或 WebSocket 发送失败时抛出异常。
+        """
+
+        with self._trigger_sequence_lock:
+            sequence = self.config.trigger_audio_sequence or [self.config.trigger_audio]
+            if reason != "startup" and not self.config.trigger_audio_sequence_enabled:
+                self._log_event(
+                    "voice.trigger_audio.sequence_disabled",
+                    {"count": len(sequence), "reason": reason},
+                )
+                return False
+            if self._next_trigger_audio_index >= len(sequence):
+                self._log_event(
+                    "voice.trigger_audio.sequence_finished",
+                    {"count": len(sequence), "reason": reason},
+                )
+                self._print_status("连续触发音频队列已完成", {"count": len(sequence), "reason": reason})
+                return False
+            index = self._next_trigger_audio_index
+            audio_config = sequence[index]
+            self._next_trigger_audio_index += 1
+        self._stream_trigger_audio(control, audio_config=audio_config, trigger_index=index, trigger_count=len(sequence), reason=reason)
+        return True
+
+    def _stream_trigger_audio(
+        self,
+        control: WsClient,
+        *,
+        audio_config: TriggerAudioConfig | None = None,
+        trigger_index: int = 0,
+        trigger_count: int = 1,
+        reason: str = "manual",
+    ) -> None:
+        """提交一条触发音频。
+
+        参数：
+        1. `control`：控制 WebSocket 客户端。
+        2. `audio_config`：本次要提交的音频配置；为空时使用旧版单条配置。
+        3. `trigger_index/trigger_count`：本轮在连续队列中的位置。
+        4. `reason`：本次提交原因。
+        """
+
+        audio_config = audio_config or self.config.trigger_audio
         stream_id = f"stream_{os.urandom(4).hex()}"
         segment_id = f"seg_{os.urandom(4).hex()}"
         if audio_config.source == "microphone":
@@ -280,10 +341,13 @@ class PlaybackGlassDevice:
                     "sample_rate_hz": audio_config.sample_rate_hz,
                     "channels": audio_config.channels,
                     "device": audio_config.microphone_device,
+                    "index": trigger_index + 1,
+                    "total": trigger_count,
+                    "reason": reason,
                 },
             )
         else:
-            chunks = self._load_wav_chunks()
+            chunks = self._load_wav_chunks(audio_config)
             self._print_status(
                 "开始发送触发音频",
                 {
@@ -291,6 +355,9 @@ class PlaybackGlassDevice:
                     "segment_id": segment_id,
                     "path": audio_config.path,
                     "chunks": len(chunks),
+                    "index": trigger_index + 1,
+                    "total": trigger_count,
+                    "reason": reason,
                 },
             )
         self._send_control(
@@ -312,6 +379,9 @@ class PlaybackGlassDevice:
             "sample_rate_hz": audio_config.sample_rate_hz,
             "channels": audio_config.channels,
             "chunk_ms": audio_config.chunk_ms,
+            "index": trigger_index,
+            "count": trigger_count,
+            "reason": reason,
         }
         if audio_config.path is not None:
             event_payload["path"] = str(audio_config.path)
@@ -333,6 +403,7 @@ class PlaybackGlassDevice:
                     audio,
                     stream_id=stream_id,
                     segment_id=segment_id,
+                    audio_config=audio_config,
                 )
             else:
                 chunk_count, byte_count, duration_ms = self._stream_file_chunks(
@@ -340,6 +411,7 @@ class PlaybackGlassDevice:
                     stream_id=stream_id,
                     segment_id=segment_id,
                     chunks=chunks,
+                    audio_config=audio_config,
                 )
         finally:
             audio.close()
@@ -371,6 +443,8 @@ class PlaybackGlassDevice:
                 "chunks": chunk_count,
                 "bytes": byte_count,
                 "duration_ms": duration_ms,
+                "index": trigger_index,
+                "count": trigger_count,
             },
         )
         self._print_status(
@@ -382,6 +456,8 @@ class PlaybackGlassDevice:
                 "chunks": chunk_count,
                 "bytes": byte_count,
                 "duration_ms": duration_ms,
+                "index": trigger_index + 1,
+                "total": trigger_count,
             },
         )
 
@@ -392,6 +468,7 @@ class PlaybackGlassDevice:
         stream_id: str,
         segment_id: str,
         chunks: list[bytes],
+        audio_config: TriggerAudioConfig,
     ) -> tuple[int, int, int]:
         """发送文件来源的触发音频分片。
 
@@ -406,10 +483,17 @@ class PlaybackGlassDevice:
 
         byte_count = 0
         for index, chunk in enumerate(chunks):
-            self._send_audio_chunk(audio, stream_id=stream_id, segment_id=segment_id, seq=index, chunk=chunk)
+            self._send_audio_chunk(
+                audio,
+                stream_id=stream_id,
+                segment_id=segment_id,
+                seq=index,
+                chunk=chunk,
+                audio_config=audio_config,
+            )
             byte_count += len(chunk)
-            time.sleep(max(self.config.trigger_audio.chunk_ms, 1) / 1000)
-        return len(chunks), byte_count, len(chunks) * self.config.trigger_audio.chunk_ms
+            time.sleep(max(audio_config.chunk_ms, 1) / 1000)
+        return len(chunks), byte_count, len(chunks) * audio_config.chunk_ms
 
     def _stream_microphone_chunks(
         self,
@@ -417,6 +501,7 @@ class PlaybackGlassDevice:
         *,
         stream_id: str,
         segment_id: str,
+        audio_config: TriggerAudioConfig | None = None,
     ) -> tuple[int, int, int]:
         """采集本机真实麦克风并发送为触发音频。
 
@@ -440,7 +525,7 @@ class PlaybackGlassDevice:
                 "macOS 如遇 PortAudio 问题请先执行 `brew install portaudio`"
             ) from exc
 
-        audio_config = self.config.trigger_audio
+        audio_config = audio_config or self.config.trigger_audio
         frames_per_chunk = max(int(audio_config.sample_rate_hz * audio_config.chunk_ms / 1000), 1)
         chunk_target = max((audio_config.duration_ms + audio_config.chunk_ms - 1) // audio_config.chunk_ms, 1)
         chunk_count = 0
@@ -460,13 +545,29 @@ class PlaybackGlassDevice:
                     self._print_status("本机麦克风采集发生溢出", {"stream_id": stream_id, "seq": seq})
                 if not chunk:
                     continue
-                self._send_audio_chunk(audio, stream_id=stream_id, segment_id=segment_id, seq=seq, chunk=chunk)
+                self._send_audio_chunk(
+                    audio,
+                    stream_id=stream_id,
+                    segment_id=segment_id,
+                    seq=seq,
+                    chunk=chunk,
+                    audio_config=audio_config,
+                )
                 chunk_count += 1
                 byte_count += len(chunk)
         duration_ms = max(int((time.monotonic() - started_at) * 1000), chunk_count * audio_config.chunk_ms)
         return chunk_count, byte_count, duration_ms
 
-    def _send_audio_chunk(self, audio: WsClient, *, stream_id: str, segment_id: str, seq: int, chunk: bytes) -> None:
+    def _send_audio_chunk(
+        self,
+        audio: WsClient,
+        *,
+        stream_id: str,
+        segment_id: str,
+        seq: int,
+        chunk: bytes,
+        audio_config: TriggerAudioConfig | None = None,
+    ) -> None:
         """按媒体帧协议发送一段 PCM16 音频。
 
         参数：
@@ -476,6 +577,7 @@ class PlaybackGlassDevice:
         4. `chunk`：PCM16LE 音频字节。
         """
 
+        audio_config = audio_config or self.config.trigger_audio
         frame = MediaFrame(
             header={
                 "version": "v1",
@@ -485,8 +587,8 @@ class PlaybackGlassDevice:
                 "seq": seq,
                 "ts_ms": int(time.time() * 1000),
                 "codec": "pcm16le",
-                "sample_rate": self.config.trigger_audio.sample_rate_hz,
-                "channels": self.config.trigger_audio.channels,
+                "sample_rate": audio_config.sample_rate_hz,
+                "channels": audio_config.channels,
                 "payload_size": len(chunk),
                 "final": False,
             },
@@ -494,8 +596,8 @@ class PlaybackGlassDevice:
         )
         audio.send_binary(frame.encode())
 
-    def _load_wav_chunks(self) -> list[bytes]:
-        audio = self.config.trigger_audio
+    def _load_wav_chunks(self, audio: TriggerAudioConfig | None = None) -> list[bytes]:
+        audio = audio or self.config.trigger_audio
         if audio.path is None:
             raise ValueError("trigger_audio 文件来源缺少 path")
         data, sample_rate_hz, channels = _read_pcm16_wav(audio.path)
@@ -511,7 +613,8 @@ class PlaybackGlassDevice:
         return [data[offset : offset + chunk_size] for offset in range(0, len(data), chunk_size) if data[offset : offset + chunk_size]]
 
     def _drain_control_messages(self, control: WsClient) -> None:
-        deadline = time.monotonic() + self.max_runtime_seconds
+        sequence_count = len(self.config.trigger_audio_sequence or [self.config.trigger_audio])
+        deadline = time.monotonic() + self.max_runtime_seconds * max(sequence_count, 1)
         while time.monotonic() < deadline:
             try:
                 message = json.loads(control.recv_text())
@@ -732,14 +835,8 @@ class PlaybackGlassDevice:
             if mode == "record_and_auto_finish":
                 self._send_audio_started(control, stream_id=stream_id, session_id=session_id)
                 self._schedule_playback_audio_save(stream_id, requested_at_ms=requested_at_ms)
-                self._send_control(
-                    control,
-                    "actuator.audio.finished",
-                    "notify",
-                    {"device_id": self.config.device_id, "stream_id": stream_id},
-                    session_id=session_id,
-                    stream_id=stream_id,
-                )
+                self._send_audio_finished(control, stream_id=stream_id, session_id=session_id)
+                self._stream_next_trigger_audio(control, reason="reply_playback_finished")
                 return
             if mode == "play_and_auto_finish":
                 self._schedule_playback_audio_play(
@@ -861,6 +958,7 @@ class PlaybackGlassDevice:
 
         temp_path = ""
         started_sent = False
+        played_ok = False
 
         def _mark_started() -> None:
             nonlocal started_sent
@@ -896,6 +994,7 @@ class PlaybackGlassDevice:
                 _mark_started()
                 self._run_audio_player(temp_path)
             self._log_event("actuator.audio.played", {"stream_id": stream_id, "bytes": total_bytes})
+            played_ok = True
         except Exception as exc:  # pragma: no cover - 依赖本机播放器，失败只记录
             self._print_status("下行音频播放失败", {"stream_id": stream_id, "error": exc})
             self._log_event("actuator.audio.play_failed", {"stream_id": stream_id, "error": str(exc)})
@@ -909,6 +1008,12 @@ class PlaybackGlassDevice:
                 self._send_audio_finished(control, stream_id=stream_id, session_id=session_id)
             except Exception as exc:  # pragma: no cover - 控制连接已断开时只记录
                 self._log_event("actuator.audio.finish_failed", {"stream_id": stream_id, "error": str(exc)})
+            if played_ok:
+                try:
+                    self._stream_next_trigger_audio(control, reason="reply_playback_finished")
+                except Exception as exc:  # pragma: no cover - 后续触发音频失败写事件，主线程会继续按超时退出
+                    self._log_event("voice.trigger_audio.next_failed", {"stream_id": stream_id, "error": str(exc)})
+                    self._print_status("连续触发音频提交失败", {"stream_id": stream_id, "error": exc})
             self._prune_audio_workers()
 
     def _schedule_playback_audio_save(self, stream_id: str, *, requested_at_ms: int) -> None:

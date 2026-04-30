@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import sys
 import threading
 import tomllib
@@ -63,6 +64,30 @@ def _write_wav(path: Path) -> None:
         wav_file.writeframes(b"\0\0" * 160)
 
 
+def _write_extensible_wav(path: Path) -> None:
+    """写入一个 48kHz/mono/16bit 的 WAVE_FORMAT_EXTENSIBLE 测试文件。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pcm = b"\0\0" * 4800
+    pcm_subformat = b"\x01\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
+    fmt_payload = struct.pack(
+        "<HHIIHHHHI16s",
+        0xFFFE,
+        1,
+        48000,
+        48000 * 2,
+        2,
+        16,
+        22,
+        16,
+        0,
+        pcm_subformat,
+    )
+    data_chunk = b"data" + struct.pack("<I", len(pcm)) + pcm
+    riff_payload = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt_payload)) + fmt_payload + data_chunk
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(riff_payload)) + riff_payload)
+
+
 def test_glass_playback_can_load_from_installed_package_without_sdk_root() -> None:
     """测试目标：验证功能开发者不需要指定 `--sdk-root` 也能加载回放运行时。
 
@@ -109,7 +134,7 @@ def test_sdk_package_includes_glass_playback_runtime() -> None:
     assert "openaiglass_glass_playback*" in package_find["include"]
 
 
-def test_glass_playback_loads_wave_format_extensible_audio_sample() -> None:
+def test_glass_playback_loads_wave_format_extensible_audio_sample(tmp_path: Path) -> None:
     """测试目标：验证 glass-playback 能读取常见录音工具导出的扩展 WAV。
 
     测试方法：
@@ -122,7 +147,8 @@ def test_glass_playback_loads_wave_format_extensible_audio_sample() -> None:
     2. 输出分片符合 16kHz/mono/16bit/40ms 的 1280 字节大小。
     """
 
-    audio_path = SDK_ROOT / "tests/data/audio-sample/wav/我叫文刀文字的文刀锋的刀.wav"
+    audio_path = tmp_path / "extensible.wav"
+    _write_extensible_wav(audio_path)
     config = PlaybackConfig(
         config_path=SDK_ROOT / "tests/data/audio-sample/playback.json",
         device_type="glass",
@@ -190,6 +216,64 @@ def test_playback_config_loads_device_level_config(tmp_path: Path) -> None:
     assert config.trigger_audio.path == audio_path.resolve()
     assert config.outputs is not None
     assert config.outputs.event_log == (app_root / "runs/playback/glass-playback-001/events.jsonl").resolve()
+
+
+def test_playback_config_loads_trigger_audio_sequence(tmp_path: Path) -> None:
+    """测试目标：验证 glass-playback 可以声明连续触发音频队列。
+
+    测试方法：
+    1. 在配置中同时保留旧版 `trigger_audio` 和新版 `trigger_audio_sequence`。
+    2. 加载配置并检查队列顺序。
+
+    预期结果：
+    1. `trigger_audio_sequence` 中的音频按配置顺序解析为绝对路径。
+    2. 旧版 `trigger_audio` 仍可作为兼容字段读取。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_a = app_root / "testdata/audio/a.wav"
+    audio_b = app_root / "testdata/audio/b.wav"
+    _write_wav(audio_a)
+    _write_wav(audio_b)
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "glass.sequence.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/a.wav",
+                        "format": "wav",
+                    },
+                    "trigger_audio_sequence": [
+                        {
+                            "path": "testdata/audio/a.wav",
+                            "format": "wav",
+                            "chunk_ms": 20,
+                        },
+                        {
+                            "path": "testdata/audio/b.wav",
+                            "format": "wav",
+                            "chunk_ms": 20,
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+
+    assert config.trigger_audio.path == audio_a.resolve()
+    assert [item.path for item in config.trigger_audio_sequence] == [audio_a.resolve(), audio_b.resolve()]
+    assert [item.chunk_ms for item in config.trigger_audio_sequence] == [20, 20]
 
 
 def test_playback_config_supports_microphone_trigger_audio(tmp_path: Path) -> None:
@@ -337,6 +421,95 @@ def test_playback_microphone_stream_writes_media_frames(tmp_path: Path, monkeypa
     assert first_frame.header["sample_rate"] == 16000
     assert first_frame.header["channels"] == 1
     assert first_frame.payload == b"\1\0" * 640
+
+
+def test_playback_sends_next_trigger_audio_after_reply_finished(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """测试目标：验证上一轮回复播放完成后会自动提交下一条触发音频。
+
+    测试方法：
+    1. 配置两条 `trigger_audio_sequence`。
+    2. 模拟第一条音频已经提交。
+    3. 替换下行播放器为立即成功的假实现，并触发 `_play_playback_audio(...)` 收尾逻辑。
+
+    预期结果：
+    1. 设备先上报本轮 `actuator.audio.finished`。
+    2. 随后提交第二条音频的 `sensor.audio.segment.started/finished`。
+    3. 第二条音频通过 `/ws_audio` 发送成媒体帧。
+    """
+
+    app_root = tmp_path / "openaiglass-for-blind"
+    config_dir = app_root / "host/glass-playback/config"
+    audio_a = app_root / "testdata/audio/a.wav"
+    audio_b = app_root / "testdata/audio/b.wav"
+    _write_wav(audio_a)
+    _write_wav(audio_b)
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "glass.sequence.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "device_type": "glass",
+                "device_id": "glass-playback-001",
+                "pair_token": "pair_playback",
+                "control_ws_url": "ws://127.0.0.1:8765/ws/control",
+                "sensors": {
+                    "trigger_audio": {
+                        "path": "testdata/audio/a.wav",
+                        "format": "wav",
+                        "chunk_ms": 20,
+                    },
+                    "trigger_audio_sequence": [
+                        {
+                            "path": "testdata/audio/a.wav",
+                            "format": "wav",
+                            "chunk_ms": 20,
+                        },
+                        {
+                            "path": "testdata/audio/b.wav",
+                            "format": "wav",
+                            "chunk_ms": 20,
+                        },
+                    ],
+                },
+                "actuators": {
+                    "audio_play": {
+                        "mode": "play_and_auto_finish",
+                        "player_command": "ffplay -nodisp -autoexit -loglevel error",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = PlaybackConfig.load(config_path, repo_root=tmp_path)
+    device = PlaybackGlassDevice(config)
+    device._session_id = "sess_001"  # noqa: SLF001
+    device._next_trigger_audio_index = 1  # noqa: SLF001 - 第一条音频视为已经提交
+    control = _FakeControl()
+    _FakeWsClient.sent_binaries = []
+    monkeypatch.setattr("openaiglass_glass_playback.glass_device.WsClient", _FakeWsClient)
+    monkeypatch.setattr(device, "_streaming_audio_player_command", lambda: ["fake-player"])
+    monkeypatch.setattr(
+        device,
+        "_stream_playback_audio_to_player",
+        lambda stream_id, command, requested_at_ms, on_started: (on_started(), 1280)[1],
+    )
+
+    device._play_playback_audio(control, "reply_001", "sess_001", 0)  # noqa: SLF001
+
+    sent_names = [json.loads(item)["name"] for item in control.sent_texts]
+    assert sent_names[0] == "actuator.audio.started"
+    assert sent_names[1] == "actuator.audio.finished"
+    assert sent_names[2] == "sensor.audio.segment.started"
+    assert sent_names[3] == "sensor.audio.segment.finished"
+    assert len(_FakeWsClient.sent_binaries) > 0
+    next_audio_frame = MediaFrame.decode(_FakeWsClient.sent_binaries[0])
+    assert next_audio_frame.header["stream_id"].startswith("stream_")
+    assert next_audio_frame.header["sample_rate"] == 16000
 
 
 def test_playback_camera_capture_responds_with_configured_image(tmp_path: Path) -> None:

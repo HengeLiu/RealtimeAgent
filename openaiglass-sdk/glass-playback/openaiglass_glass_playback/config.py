@@ -81,6 +81,8 @@ class PlaybackConfig:
     actuators: dict[str, Any] = field(default_factory=dict)
     outputs: OutputConfig | None = None
     assertions: AssertionConfig = field(default_factory=AssertionConfig)
+    trigger_audio_sequence: list[TriggerAudioConfig] = field(default_factory=list)
+    trigger_audio_sequence_enabled: bool = False
 
     @classmethod
     def load(cls, path: str | Path, *, repo_root: str | Path = ".") -> "PlaybackConfig":
@@ -126,6 +128,13 @@ class PlaybackConfig:
             app_root=app_root,
             repo_root=repo,
         )
+        trigger_audio_sequence = _load_trigger_audio_sequence(
+            sensors.get("trigger_audio_sequence"),
+            fallback=trigger_audio,
+            config_path=config_path,
+            app_root=app_root,
+            repo_root=repo,
+        )
 
         actuators = raw.get("actuators")
         if not isinstance(actuators, dict):
@@ -157,6 +166,8 @@ class PlaybackConfig:
             actuators=actuators,
             outputs=outputs,
             assertions=assertions,
+            trigger_audio_sequence=trigger_audio_sequence,
+            trigger_audio_sequence_enabled=sensors.get("trigger_audio_sequence") is not None,
         )
 
 
@@ -213,6 +224,53 @@ def _load_trigger_audio(
         duration_ms=max(int(raw.get("duration_ms", 5000)), 1),
         microphone_device=raw.get("device"),
     )
+
+
+def _load_trigger_audio_sequence(
+    raw: object,
+    *,
+    fallback: TriggerAudioConfig,
+    config_path: Path,
+    app_root: Path,
+    repo_root: Path,
+) -> list[TriggerAudioConfig]:
+    """加载连续语音回放队列。
+
+    主要逻辑：
+    1. 未配置 `sensors.trigger_audio_sequence` 时，使用单条 `trigger_audio` 保持旧行为。
+    2. 配置后按数组顺序加载每一条触发音频。
+
+    参数：
+    1. `raw`：配置文件中的 `sensors.trigger_audio_sequence`。
+    2. `fallback`：旧版单条触发音频配置。
+    3. `config_path/app_root/repo_root`：路径解析上下文。
+
+    返回值：
+    1. 按提交顺序排列的触发音频配置列表。
+
+    异常情况：
+    1. 字段不是数组、数组为空或元素不是 JSON object 时抛出 `ValueError`。
+    """
+
+    if raw is None:
+        return [fallback]
+    if not isinstance(raw, list):
+        raise ValueError("sensors.trigger_audio_sequence 必须是数组")
+    if not raw:
+        raise ValueError("sensors.trigger_audio_sequence 不能为空")
+    sequence: list[TriggerAudioConfig] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"sensors.trigger_audio_sequence[{index}] 必须是 JSON object")
+        sequence.append(
+            _load_trigger_audio(
+                item,
+                config_path=config_path,
+                app_root=app_root,
+                repo_root=repo_root,
+            )
+        )
+    return sequence
 
 
 def _load_outputs(raw: object, *, config_path: Path, app_root: Path, device_id: str) -> OutputConfig:
