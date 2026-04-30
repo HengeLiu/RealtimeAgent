@@ -24,6 +24,7 @@ from protocol.media import MediaFrame
 
 from openaiglasses.cli.glass import load_playback_runner
 from openaiglass_glass_playback import PlaybackConfig
+from openaiglass_glass_playback.config import StartupConfig, TriggerAudioConfig
 from openaiglass_glass_playback.glass_device import PlaybackGlassDevice
 
 
@@ -106,6 +107,52 @@ def test_sdk_package_includes_glass_playback_runtime() -> None:
 
     assert "glass-playback" in package_find["where"]
     assert "openaiglass_glass_playback*" in package_find["include"]
+
+
+def test_glass_playback_loads_wave_format_extensible_audio_sample() -> None:
+    """测试目标：验证 glass-playback 能读取常见录音工具导出的扩展 WAV。
+
+    测试方法：
+    1. 使用测试样例中的 `WAVE_FORMAT_EXTENSIBLE`/48kHz/mono/16bit WAV。
+    2. 构造 16kHz/mono 的触发音频配置。
+    3. 调用 `_load_wav_chunks()` 走真实文件读取、声道检查和重采样路径。
+
+    预期结果：
+    1. 不再出现 `unknown format: 65534`。
+    2. 输出分片符合 16kHz/mono/16bit/40ms 的 1280 字节大小。
+    """
+
+    audio_path = SDK_ROOT / "tests/data/audio-sample/wav/我叫文刀文字的文刀锋的刀.wav"
+    config = PlaybackConfig(
+        config_path=SDK_ROOT / "tests/data/audio-sample/playback.json",
+        device_type="glass",
+        device_id="glass-playback-001",
+        pair_token="pair-demo-token",
+        control_ws_url="ws://127.0.0.1:8765/ws/control",
+        audio_ws_url="ws://127.0.0.1:8765/ws_audio",
+        desired_phone_device_id=None,
+        startup=StartupConfig(
+            wait_for_registration=True,
+            wait_for_binding=False,
+            wait_for_voice_session=False,
+            auto_stream_trigger_audio=True,
+            startup_timeout_ms=30000,
+        ),
+        trigger_audio=TriggerAudioConfig(
+            source="file",
+            path=audio_path,
+            format="wav",
+            sample_rate_hz=16000,
+            channels=1,
+            chunk_ms=40,
+        ),
+    )
+
+    chunks = PlaybackGlassDevice(config)._load_wav_chunks()  # noqa: SLF001
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 1280 for chunk in chunks)
+    assert all(len(chunk) == 1280 for chunk in chunks[:-1])
 
 
 def test_playback_config_loads_device_level_config(tmp_path: Path) -> None:

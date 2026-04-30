@@ -8,11 +8,12 @@ import os
 import platform
 import shlex
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
 import time
-import wave
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -497,10 +498,14 @@ class PlaybackGlassDevice:
         audio = self.config.trigger_audio
         if audio.path is None:
             raise ValueError("trigger_audio 文件来源缺少 path")
-        with wave.open(str(audio.path), "rb") as wav_file:
-            if wav_file.getframerate() != audio.sample_rate_hz or wav_file.getnchannels() != audio.channels or wav_file.getsampwidth() != 2:
-                raise ValueError("trigger_audio 必须是配置声明的 16-bit PCM WAV")
-            data = wav_file.readframes(wav_file.getnframes())
+        data, sample_rate_hz, channels = _read_pcm16_wav(audio.path)
+        data = _convert_pcm16_for_trigger_audio(
+            data,
+            source_sample_rate_hz=sample_rate_hz,
+            source_channels=channels,
+            target_sample_rate_hz=audio.sample_rate_hz,
+            target_channels=audio.channels,
+        )
         bytes_per_ms = audio.sample_rate_hz * audio.channels * 2 / 1000
         chunk_size = max(int(bytes_per_ms * audio.chunk_ms), 1)
         return [data[offset : offset + chunk_size] for offset in range(0, len(data), chunk_size) if data[offset : offset + chunk_size]]
@@ -1412,3 +1417,130 @@ class PlaybackGlassDevice:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _read_pcm16_wav(path: Path) -> tuple[bytes, int, int]:
+    """读取常见 WAV 文件并返回 PCM16LE 数据。
+
+    主要逻辑：
+    1. 直接解析 RIFF/WAVE chunk，避免旧版 Python `wave` 模块不认识 `WAVE_FORMAT_EXTENSIBLE`。
+    2. 支持普通 PCM 与 `WAVE_FORMAT_EXTENSIBLE` 中的 PCM 子格式。
+    3. 只接受 16bit PCM，其他压缩格式交给调用方先转换。
+
+    参数：
+    1. `path`：待读取的 WAV 文件路径。
+
+    返回值：
+    1. `(pcm_bytes, sample_rate_hz, channels)`。
+
+    异常情况：
+    1. 文件不是 WAV、缺少 `fmt/data` chunk 或不是 16bit PCM 时抛出 `ValueError`。
+    """
+
+    raw = path.read_bytes()
+    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        raise ValueError(f"trigger_audio 不是有效 WAV 文件: {path}")
+
+    fmt_chunk: bytes | None = None
+    data_chunks: list[bytes] = []
+    offset = 12
+    while offset + 8 <= len(raw):
+        chunk_id = raw[offset : offset + 4]
+        chunk_size = struct.unpack_from("<I", raw, offset + 4)[0]
+        payload_start = offset + 8
+        payload_end = payload_start + chunk_size
+        if payload_end > len(raw):
+            raise ValueError(f"trigger_audio WAV chunk 长度异常: {path}")
+        payload = raw[payload_start:payload_end]
+        if chunk_id == b"fmt ":
+            fmt_chunk = payload
+        elif chunk_id == b"data":
+            data_chunks.append(payload)
+        offset = payload_end + (chunk_size % 2)
+
+    if fmt_chunk is None or not data_chunks:
+        raise ValueError(f"trigger_audio WAV 缺少 fmt 或 data chunk: {path}")
+    if len(fmt_chunk) < 16:
+        raise ValueError(f"trigger_audio WAV fmt chunk 过短: {path}")
+
+    audio_format, channels, sample_rate_hz, _byte_rate, _block_align, bits_per_sample = struct.unpack_from(
+        "<HHIIHH",
+        fmt_chunk,
+        0,
+    )
+    if audio_format == 0xFFFE:
+        if len(fmt_chunk) < 40:
+            raise ValueError(f"trigger_audio WAVE_FORMAT_EXTENSIBLE fmt chunk 过短: {path}")
+        valid_bits_per_sample = struct.unpack_from("<H", fmt_chunk, 18)[0]
+        subformat = fmt_chunk[24:40]
+        pcm_subformat = b"\x01\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
+        if subformat != pcm_subformat:
+            raise ValueError(f"trigger_audio WAVE_FORMAT_EXTENSIBLE 仅支持 PCM 子格式: {path}")
+        if valid_bits_per_sample not in {0, bits_per_sample}:
+            raise ValueError(f"trigger_audio WAV 有效位宽与采样位宽不一致: {path}")
+        audio_format = 1
+    if audio_format != 1 or bits_per_sample != 16:
+        raise ValueError("trigger_audio 仅支持 16-bit PCM WAV")
+    if channels <= 0 or sample_rate_hz <= 0:
+        raise ValueError(f"trigger_audio WAV 声道数或采样率异常: {path}")
+    return b"".join(data_chunks), sample_rate_hz, channels
+
+
+def _convert_pcm16_for_trigger_audio(
+    pcm_bytes: bytes,
+    *,
+    source_sample_rate_hz: int,
+    source_channels: int,
+    target_sample_rate_hz: int,
+    target_channels: int,
+) -> bytes:
+    """把 PCM16LE 转成回放配置声明的采样率和声道数。
+
+    主要逻辑：
+    1. 若声道数不同，使用标准库 `audioop` 做单声道/双声道转换。
+    2. 若采样率不同，使用 `audioop.ratecv` 做轻量重采样。
+    3. 输出仍保持 PCM16LE，后续按 `chunk_ms` 切片发送。
+
+    参数：
+    1. `pcm_bytes`：源 PCM16LE 数据。
+    2. `source_sample_rate_hz/source_channels`：源音频格式。
+    3. `target_sample_rate_hz/target_channels`：配置要求的目标格式。
+
+    返回值：
+    1. 转换后的 PCM16LE 数据。
+
+    异常情况：
+    1. 目标或源格式非法、声道转换不支持时抛出 `ValueError`。
+    """
+
+    if source_sample_rate_hz <= 0 or target_sample_rate_hz <= 0 or source_channels <= 0 or target_channels <= 0:
+        raise ValueError("trigger_audio WAV 声道数或采样率异常")
+    if not pcm_bytes:
+        return pcm_bytes
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        import audioop  # type: ignore[deprecated]
+
+    converted = pcm_bytes
+    current_channels = source_channels
+    if current_channels != target_channels:
+        if current_channels == 2 and target_channels == 1:
+            converted = audioop.tomono(converted, 2, 0.5, 0.5)
+            current_channels = 1
+        elif current_channels == 1 and target_channels == 2:
+            converted = audioop.tostereo(converted, 2, 1.0, 1.0)
+            current_channels = 2
+        else:
+            raise ValueError(
+                f"trigger_audio WAV 不支持从 {source_channels} 声道转换到 {target_channels} 声道"
+            )
+    if source_sample_rate_hz != target_sample_rate_hz:
+        converted, _state = audioop.ratecv(
+            converted,
+            2,
+            current_channels,
+            source_sample_rate_hz,
+            target_sample_rate_hz,
+            None,
+        )
+    return converted
