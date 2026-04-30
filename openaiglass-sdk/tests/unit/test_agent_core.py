@@ -401,6 +401,124 @@ class AgentCoreTestCase(unittest.TestCase):
         )
         self.assertEqual(list_result.data["memories"], [])
 
+    def test_manage_memory_deletes_recent_or_natural_language_target_without_llm(self) -> None:
+        """测试目标：验证无模型兜底下也能按自然语言删除记忆。
+
+        测试方法：
+        1. 使用确定性的内存版 `AgentMemoryRuntime`。
+        2. 先新增两条冷记忆。
+        3. 分别使用“忘掉刚才那条记忆”和“删除我的导航偏好”调用 `manage_memory`。
+
+        预期结果：
+        1. “刚才”会删除最近写入的记忆。
+        2. 带中文删除动词的自然语言指令能匹配到真实标题。
+        3. 删除后的冷记忆无法再通过 `memory_search` 读出。
+        """
+
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        registry, gateway = build_tooling(memory_runtime=memory_runtime)
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_memory_delete_001",
+            turn_id="turn_memory_delete_001",
+        )
+
+        gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={
+                "operation": "add",
+                "query": "记住我的导航偏好：提示尽量简短。",
+                "preferred_memory_type": "cold",
+                "title": "导航偏好",
+                "content": "用户喜欢导航提示尽量简短。",
+            },
+        )
+        recent_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={
+                "operation": "add",
+                "query": "记住我的咖啡偏好：不喝咖啡。",
+                "preferred_memory_type": "cold",
+                "title": "咖啡偏好",
+                "content": "用户不喝咖啡。",
+            },
+        )
+
+        delete_recent = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={"operation": "delete", "query": "忘掉刚才那条记忆"},
+        )
+        self.assertEqual(delete_recent.data["memory"]["memory_id"], recent_result.data["memory"]["memory_id"])
+
+        delete_by_text = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={"operation": "delete", "query": "删除我的导航偏好"},
+        )
+        self.assertEqual(delete_by_text.data["memory"]["title"], "导航偏好")
+
+        search_result = gateway.invoke(
+            name="memory_search",
+            context=context,
+            arguments={"titles": ["咖啡偏好", "导航偏好"]},
+        )
+        self.assertEqual(search_result.data["memories"], [])
+
+    def test_manage_memory_update_preserves_memory_id(self) -> None:
+        """测试目标：验证更新记忆时复用原有 `memory_id`。
+
+        测试方法：
+        1. 先通过 `manage_memory` 新增一条热记忆。
+        2. 再通过 `memory_id` 更新同一条记忆的标题和内容。
+
+        预期结果：
+        1. 更新后的记忆仍使用原 `memory_id`。
+        2. 新标题和新内容会覆盖旧值。
+        """
+
+        memory_runtime = AgentMemoryRuntime(store=InMemoryAgentMemoryStore())
+        registry, gateway = build_tooling(memory_runtime=memory_runtime)
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_memory_update_001",
+            turn_id="turn_memory_update_001",
+        )
+
+        add_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={
+                "operation": "add",
+                "query": "记住我的名字叫小明",
+                "preferred_memory_type": "hot",
+                "title": "姓名",
+                "content": "用户姓名是小明。",
+            },
+        )
+        memory_id = add_result.data["memory"]["memory_id"]
+
+        update_result = gateway.invoke(
+            name="manage_memory",
+            context=context,
+            arguments={
+                "operation": "update",
+                "query": "把我的名字更新为小李",
+                "preferred_memory_type": "hot",
+                "title": "姓名",
+                "content": "用户姓名是小李。",
+                "memory_id": memory_id,
+            },
+        )
+
+        self.assertEqual(update_result.data["memory"]["memory_id"], memory_id)
+        self.assertEqual(update_result.data["memory"]["title"], "姓名")
+        self.assertEqual(update_result.data["memory"]["content"], "用户姓名是小李。")
+
     def test_agent_runner_injects_hot_memory_and_cold_titles(self) -> None:
         """测试目标：验证 Agent 运行时按冷热策略注入长期记忆。
 

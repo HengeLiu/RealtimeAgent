@@ -75,13 +75,19 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
 
     def __init__(self, records: Iterable[AgentMemoryRecord] | None = None) -> None:
         self._lock = threading.Lock()
-        self._records: dict[str, AgentMemoryRecord] = {record.memory_id: record for record in records or []}
+        initial_records = list(records or [])
+        self._records: dict[str, AgentMemoryRecord] = {record.memory_id: record for record in initial_records}
+        self._record_order: dict[str, int] = {
+            record.memory_id: index for index, record in enumerate(initial_records)
+        }
 
     def upsert(self, record: AgentMemoryRecord) -> AgentMemoryRecord:
         """新增或覆盖一条记忆。"""
 
         with self._lock:
             record.updated_at_ms = now_ms()
+            if record.memory_id not in self._record_order:
+                self._record_order[record.memory_id] = len(self._record_order)
             self._records[record.memory_id] = record
             return record
 
@@ -103,6 +109,8 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             if existing is not None:
                 record.memory_id = existing.memory_id
                 record.created_at_ms = existing.created_at_ms
+            if record.memory_id not in self._record_order:
+                self._record_order[record.memory_id] = len(self._record_order)
             record.updated_at_ms = now_ms()
             self._records[record.memory_id] = record
             return record
@@ -117,7 +125,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
                     for record in self._records.values()
                     if record.scope_type == scope_type and record.scope_id == scope_id and record.active
                 ],
-                key=lambda item: item.updated_at_ms,
+                key=lambda item: (item.updated_at_ms, self._record_order.get(item.memory_id, -1)),
                 reverse=True,
             )
 

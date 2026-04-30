@@ -73,6 +73,19 @@ class HeuristicMemoryManagementAgent(MemoryManagementAgent):
     """
 
     _HOT_TITLES = {"姓名", "名字", "年龄", "性别", "生日", "语言", "称呼"}
+    _DELETE_PREFIXES = (
+        "请忘掉",
+        "帮我忘掉",
+        "忘掉",
+        "删除关于",
+        "删除",
+        "移除关于",
+        "移除",
+        "不要记住",
+        "别记住",
+        "忘记",
+    )
+    _RECENT_MARKERS = ("刚才", "最近", "上一条", "前一条", "最后一条", "最后")
 
     def plan(
         self,
@@ -82,7 +95,11 @@ class HeuristicMemoryManagementAgent(MemoryManagementAgent):
     ) -> MemoryOperationPlan:
         """生成确定性记忆操作计划。"""
 
-        title = request.title.strip() or self._infer_title(request.query)
+        title = request.title.strip()
+        if not title and request.operation == "delete":
+            title = self._infer_delete_title(request.query)
+        if not title:
+            title = self._infer_title(request.query)
         content = request.content.strip() or request.query.strip()
         memory_type = request.preferred_memory_type or self._infer_memory_type(title=title, content=content)
         if request.operation == "delete" and not title and request.memory_id:
@@ -90,12 +107,22 @@ class HeuristicMemoryManagementAgent(MemoryManagementAgent):
             if matched is not None:
                 title = matched.title
                 memory_type = matched.memory_type
+        if request.operation == "delete" and not request.memory_id.strip() and self._is_recent_reference(request.query):
+            matched = next(iter(existing_memories), None)
+            if matched is not None:
+                title = matched.title
+                memory_type = matched.memory_type
+                memory_id = matched.memory_id
+            else:
+                memory_id = ""
+        else:
+            memory_id = request.memory_id.strip()
         return MemoryOperationPlan(
             operation=request.operation,
             memory_type=memory_type,
             title=title,
             content=content,
-            memory_id=request.memory_id.strip(),
+            memory_id=memory_id,
             category=request.category.strip() or "general",
             reason="heuristic",
         )
@@ -114,6 +141,29 @@ class HeuristicMemoryManagementAgent(MemoryManagementAgent):
             if marker in text and len(text.split(marker, 1)[0]) <= 12:
                 return text.split(marker, 1)[0].strip()[:30] or "未命名记忆"
         return text[:20] or "未命名记忆"
+
+    @classmethod
+    def _infer_delete_title(cls, query: str) -> str:
+        """从中文删除指令中提取候选记忆标题。"""
+
+        text = " ".join(query.strip().replace("：", ":").split())
+        for prefix in cls._DELETE_PREFIXES:
+            if text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                break
+        for suffix in ("这条记忆", "这条信息", "这条", "记忆", "信息", "内容", "。", ".", "吧"):
+            if text.endswith(suffix):
+                text = text[: -len(suffix)].strip()
+        for prefix in ("我的", "我这条", "关于"):
+            if text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+        return text[:30]
+
+    @classmethod
+    def _is_recent_reference(cls, query: str) -> bool:
+        """判断用户是否在指代最近一条记忆。"""
+
+        return any(marker in query for marker in cls._RECENT_MARKERS)
 
 
 class LlmMemoryManagementAgent(MemoryManagementAgent):
@@ -281,7 +331,7 @@ class AgentMemoryRuntime:
             raise ValueError("Agent 记忆功能未启用")
         existing = self.list_memories(scope_type=scope_type, scope_id=scope_id, limit=100)
         plan = self._manager_agent.plan(request=request, existing_memories=existing)
-        if plan.operation in {"add", "update"}:
+        if plan.operation == "add":
             record = self.add_memory(
                 scope_type=scope_type,
                 scope_id=scope_id,
@@ -293,6 +343,15 @@ class AgentMemoryRuntime:
                 metadata=request.metadata,
             )
             return {"operation": plan.operation, "memory": self.record_to_dict(record), "plan": asdict(plan)}
+        if plan.operation == "update":
+            record = self._apply_update_plan(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                plan=plan,
+                request=request,
+                existing=existing,
+            )
+            return {"operation": plan.operation, "memory": self.record_to_dict(record), "plan": asdict(plan)}
         deleted = None
         if plan.memory_id:
             deleted = self.delete_memory(memory_id=plan.memory_id, scope_type=scope_type, scope_id=scope_id)
@@ -302,6 +361,19 @@ class AgentMemoryRuntime:
                 scope_type=scope_type,
                 scope_id=scope_id,
                 memory_type=plan.memory_type,
+            )
+        if deleted is None and plan.title:
+            deleted = self.delete_memory_by_title(
+                title=plan.title,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                memory_type=None,
+            )
+        if deleted is None:
+            deleted = self._delete_best_effort_by_query(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                query=request.query,
             )
         return {
             "operation": "delete",
@@ -396,6 +468,93 @@ class AgentMemoryRuntime:
             scope_id=scope_id.strip(),
             memory_type=memory_type,
         )
+
+    def _apply_update_plan(
+        self,
+        *,
+        scope_type: MemoryScope,
+        scope_id: str,
+        plan: MemoryOperationPlan,
+        request: MemoryOperationRequest,
+        existing: list[AgentMemoryRecord],
+    ) -> AgentMemoryRecord:
+        """执行更新计划，尽量复用已有记忆编号。"""
+
+        target = self._find_update_target(plan=plan, request=request, existing=existing)
+        if target is None:
+            return self.add_memory(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                memory_type=plan.memory_type,
+                title=plan.title,
+                content=plan.content,
+                category=plan.category,
+                source=request.source,
+                metadata=request.metadata,
+            )
+        title = self._normalize_title(plan.title or target.title)
+        content = self._normalize_content(plan.content or target.content)
+        if not title:
+            raise ValueError("记忆标题不能为空")
+        if not content:
+            raise ValueError("记忆内容不能为空")
+        updated = AgentMemoryRecord(
+            memory_id=target.memory_id,
+            scope_type=target.scope_type,
+            scope_id=target.scope_id,
+            memory_type=plan.memory_type or target.memory_type,
+            title=title,
+            content=content,
+            category=(plan.category or target.category or "general"),
+            source=request.source,
+            confidence=target.confidence,
+            metadata={**target.metadata, **request.metadata},
+            created_at_ms=target.created_at_ms,
+            deleted_at_ms=None,
+        )
+        return self._store.upsert(updated)
+
+    def _find_update_target(
+        self,
+        *,
+        plan: MemoryOperationPlan,
+        request: MemoryOperationRequest,
+        existing: list[AgentMemoryRecord],
+    ) -> AgentMemoryRecord | None:
+        """按编号、标题和自然语言查询寻找要更新的记忆。"""
+
+        if plan.memory_id:
+            matched = next((item for item in existing if item.memory_id == plan.memory_id), None)
+            if matched is not None:
+                return matched
+        for title in (plan.title, request.title):
+            normalized_title = self._normalize_title(title)
+            if not normalized_title:
+                continue
+            matched = next((item for item in existing if self._normalize_title(item.title) == normalized_title), None)
+            if matched is not None:
+                return matched
+        query_matches = self.search_memories(
+            scope_type=existing[0].scope_type if existing else "device",
+            scope_id=existing[0].scope_id if existing else "",
+            query=request.query,
+            limit=1,
+        )
+        return query_matches[0] if query_matches else None
+
+    def _delete_best_effort_by_query(
+        self,
+        *,
+        scope_type: MemoryScope,
+        scope_id: str,
+        query: str,
+    ) -> AgentMemoryRecord | None:
+        """按自然语言查询兜底删除最匹配的一条记忆。"""
+
+        matches = self.search_memories(scope_type=scope_type, scope_id=scope_id, query=query, limit=1)
+        if not matches:
+            return None
+        return self.delete_memory(memory_id=matches[0].memory_id, scope_type=scope_type, scope_id=scope_id)
 
     def build_prompt_fragment(
         self,
