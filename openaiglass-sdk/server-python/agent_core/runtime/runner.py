@@ -869,7 +869,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         1. `session`：当前会话快照，用于构造历史上下文。
         2. `turn`：当前用户轮次，必须包含音频资产。
         3. `runtime`：Agent-Core 已装配好的工具、记忆和提示词上下文。
-        4. `reply_text_delta_callback`：最终文本回调；该窄实现会在最终文本完成后一次性回调。
+        4. `reply_text_delta_callback`：最终文本增量回调；流式响应时会随模型文本分片触发。
 
         返回值：
         1. 统一的 `AgentTurnResult`。
@@ -916,16 +916,17 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             request_kwargs: dict[str, Any] = {
                 "model": audio_agent_model,
                 "messages": messages,
-                "stream": False,
+                "stream": True,
                 "extra_body": {"enable_thinking": False},
                 "timeout": self._settings.voice_model_timeout_ms / 1000,
             }
             if tools:
                 request_kwargs["tools"] = tools
             completion = client.chat.completions.create(**request_kwargs)
-            message = self._extract_chat_completion_message(completion)
-            reply_text = self._extract_chat_message_text(message)
-            tool_calls = self._extract_chat_tool_calls(message)
+            reply_text, tool_calls = self._consume_direct_chat_stream(
+                completion=completion,
+                reply_text_delta_callback=reply_text_delta_callback,
+            )
             if not tool_calls:
                 final_text = reply_text.strip()
                 if not final_text:
@@ -935,8 +936,6 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                         traces=runtime.capability_traces,
                         error=build_error(ErrorCode.INTERNAL_ERROR, "agent-core 返回了空回复"),
                     )
-                if reply_text_delta_callback is not None:
-                    reply_text_delta_callback(final_text)
                 model_request["messages"] = self._sanitize_model_messages(messages)
                 return AgentTurnResult(
                     turn_id=turn.turn_id,
@@ -947,7 +946,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     meta={"model_request": model_request},
                 )
 
-            messages.append(self._build_assistant_tool_call_message(message, tool_calls))
+            messages.append(self._build_assistant_tool_call_message({"content": reply_text}, tool_calls))
             for tool_call in tool_calls:
                 tool_name = str(tool_call["name"])
                 arguments_text = str(tool_call.get("arguments") or "{}")
@@ -1516,7 +1515,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
     def _extract_chat_message_text(message: object) -> str:
         """从 Chat Completions message 中提取文本。"""
 
-        content = getattr(message, "content", "")
+        content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
         if isinstance(content, str):
             return content
         if isinstance(content, list):
@@ -1553,6 +1552,101 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 }
             )
         return calls
+
+    def _consume_direct_chat_stream(
+        self,
+        *,
+        completion: object,
+        reply_text_delta_callback: Callable[[str], None] | None,
+    ) -> tuple[str, list[dict[str, str]]]:
+        """消费音频原生 Chat Completions 流式响应。
+
+        主要逻辑：
+        1. 持续提取 `delta.content` 文本并透传给上层 TTS。
+        2. 累积 `delta.tool_calls` 分片，直到流结束后得到完整工具调用。
+        3. 同时兼容对象和字典两种 OpenAI-compatible SDK 结构。
+
+        参数：
+        1. `completion`：`chat.completions.create(stream=True)` 返回的可迭代对象。
+        2. `reply_text_delta_callback`：文本增量回调，可为空。
+
+        返回值：
+        1. `(reply_text, tool_calls)`，其中 `tool_calls` 为统一字典结构。
+
+        异常情况：
+        1. 流式分片缺少 choices 时会跳过该分片；工具名为空的调用会被过滤。
+        """
+
+        reply_parts: list[str] = []
+        tool_call_parts: dict[int, dict[str, str]] = {}
+        for chunk in completion:
+            text_delta = self._extract_stream_text_delta(chunk)
+            if text_delta:
+                reply_parts.append(text_delta)
+                if reply_text_delta_callback is not None:
+                    reply_text_delta_callback(text_delta)
+            for tool_delta in self._extract_stream_tool_call_deltas(chunk):
+                index = self._coerce_tool_call_index(self._get_value(tool_delta, "index"), len(tool_call_parts))
+                current = tool_call_parts.setdefault(
+                    index,
+                    {"id": "", "type": "function", "name": "", "arguments": ""},
+                )
+                call_id = self._get_value(tool_delta, "id")
+                call_type = self._get_value(tool_delta, "type")
+                if isinstance(call_id, str) and call_id:
+                    current["id"] = call_id
+                if isinstance(call_type, str) and call_type:
+                    current["type"] = call_type
+                function = self._get_value(tool_delta, "function")
+                name = self._get_value(function, "name") if function is not None else None
+                arguments = self._get_value(function, "arguments") if function is not None else None
+                if isinstance(name, str) and name:
+                    current["name"] += name
+                if isinstance(arguments, str) and arguments:
+                    current["arguments"] += arguments
+        tool_calls: list[dict[str, str]] = []
+        for index in sorted(tool_call_parts):
+            call = tool_call_parts[index]
+            if not call["name"]:
+                continue
+            tool_calls.append(
+                {
+                    "id": call["id"] or f"call_{index}",
+                    "type": call["type"] or "function",
+                    "name": call["name"],
+                    "arguments": call["arguments"] or "{}",
+                }
+            )
+        return "".join(reply_parts), tool_calls
+
+    @classmethod
+    def _extract_stream_tool_call_deltas(cls, chunk: object) -> list[object]:
+        """从 Chat Completions 流式分片里提取工具调用增量。"""
+
+        choices = cls._get_value(chunk, "choices")
+        if not isinstance(choices, list) or not choices:
+            return []
+        delta = cls._get_value(choices[0], "delta")
+        tool_calls = cls._get_value(delta, "tool_calls") if delta is not None else None
+        return tool_calls if isinstance(tool_calls, list) else []
+
+    @staticmethod
+    def _get_value(source: object, key: str) -> object:
+        """同时兼容对象属性和字典字段读取。"""
+
+        if isinstance(source, dict):
+            return source.get(key)
+        return getattr(source, key, None)
+
+    @staticmethod
+    def _coerce_tool_call_index(value: object, fallback: int) -> int:
+        """把工具调用 index 转成整数，缺失时使用当前累积顺序。"""
+
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return fallback
 
     @staticmethod
     def _build_assistant_tool_call_message(message: object, tool_calls: list[dict[str, str]]) -> dict[str, Any]:
@@ -1729,7 +1823,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
-            "必要时可以调用已提供的工具。\n\n"
+            "需要时可以调用已提供的工具，因为工具的调用需要时间，调用前请简单回复一段文本表示要做什么。\n\n"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
             "例如：姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等。\n\n"
             "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。\n"

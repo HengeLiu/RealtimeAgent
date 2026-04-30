@@ -1,7 +1,7 @@
 # 普通文本流式与 TTS 首包延迟优化设计
 
 更新时间：2026-04-30
-对应版本：sdk-v71
+对应版本：sdk-v74
 
 ## 1. 设计目标
 
@@ -29,7 +29,7 @@
 2. AgentCore 通过 `reply_text_delta_callback(text_delta)` 透传给 `VoiceRuntime`。
 3. `VoiceRuntime` 将文本增量推入 `StreamingTtsSession`，TTS 音频分片通过播放队列下发给眼镜。
 
-本轮改造只处理普通文本 delta 透传和首包观测。图片解读主链路原本已经能把 Chat Completions 的文本 delta 透传给 TTS，本轮保持兼容。
+当前改造覆盖普通 Agents SDK 文本 delta、图片解读 Chat Completions 文本 delta，以及音频原生 Chat Completions 最终回复文本 delta。工具调用分片只用于组装工具调用参数，不会被当成最终回复文本。
 
 ## 3. AgentCore 文本增量提取
 
@@ -49,6 +49,12 @@ SDK 新增普通文本增量提取逻辑：
 4. 只处理文本增量，不把工具调用参数或工具结果当成最终回复。
 
 如果流式事件已经产生文本增量，最终 `AgentTurnResult.reply_text` 优先使用增量拼接结果；如果没有增量，再回退到 `run_result.final_output`。
+
+`sdk-v74` 起，音频原生 Chat Completions 链路也使用 `stream=True`。该链路会：
+
+1. 从 `choices[].delta.content` 提取最终回复文本增量，并立即调用 `reply_text_delta_callback`。
+2. 从 `choices[].delta.tool_calls` 累积工具调用分片，流结束后统一执行 Tool。
+3. 工具结果回填后继续以流式方式请求下一轮模型输出，直到得到最终文本或超过工具循环上限。
 
 ## 4. VoiceRuntime 首包观测
 

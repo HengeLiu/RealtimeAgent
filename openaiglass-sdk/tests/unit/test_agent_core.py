@@ -989,17 +989,18 @@ class AgentCoreTestCase(unittest.TestCase):
         )
 
     def test_openai_runner_direct_audio_path_invokes_tools(self) -> None:
-        """测试目标：验证音频原生 Omni 路径仍然能执行工具调用。
+        """测试目标：验证音频原生 Omni 路径以流式模式执行工具调用。
 
         测试方法：
         1. 注册一个模型可见测试工具。
         2. 构造带本地 WAV 资产的 `AgentTurn`。
-        3. 用假 Chat Completions 客户端先返回工具调用，再返回最终文本。
+        3. 用假 Chat Completions 流式客户端先返回工具调用，再返回最终文本增量。
 
         预期结果：
         1. 发送给模型的当前轮包含 `input_audio`。
         2. 工具通过 `ToolGateway` 被执行一次。
-        3. 最终回复文本和模型请求快照都正常返回。
+        3. 模型请求使用 `stream=True`。
+        4. 最终回复文本增量会透传给回调。
         """
 
         class _EchoArgs(BaseModel):
@@ -1052,34 +1053,34 @@ class AgentCoreTestCase(unittest.TestCase):
 
             captured_requests: list[dict[str, object]] = []
 
-            class _FakeFunction:
-                name = "echo_name"
-                arguments = '{"text": "文刀"}'
-
-            class _FakeToolCall:
-                id = "call_echo_001"
-                type = "function"
-                function = _FakeFunction()
-
-            class _FakeToolMessage:
-                content = ""
-                tool_calls = [_FakeToolCall()]
-
-            class _FakeFinalMessage:
-                content = "你叫文刀。"
-                tool_calls = None
-
             class _FakeChoice:
-                def __init__(self, message) -> None:
-                    self.message = message
+                def __init__(self, delta) -> None:
+                    self.delta = delta
 
-            class _FakeCompletion:
-                def __init__(self, message) -> None:
-                    self.choices = [_FakeChoice(message)]
+            class _FakeChunk:
+                def __init__(self, *, content="", tool_calls=None) -> None:
+                    self.choices = [_FakeChoice(types.SimpleNamespace(content=content, tool_calls=tool_calls))]
 
             class _FakeChatCompletions:
                 def __init__(self) -> None:
-                    self.responses = [_FakeCompletion(_FakeToolMessage()), _FakeCompletion(_FakeFinalMessage())]
+                    self.responses = [
+                        [
+                            _FakeChunk(
+                                tool_calls=[
+                                    types.SimpleNamespace(
+                                        index=0,
+                                        id="call_echo_001",
+                                        type="function",
+                                        function=types.SimpleNamespace(
+                                            name="echo_name",
+                                            arguments='{"text": "文刀"}',
+                                        ),
+                                    )
+                                ]
+                            )
+                        ],
+                        [_FakeChunk(content="你叫"), _FakeChunk(content="文刀。")],
+                    ]
 
                 def create(self, **kwargs):
                     captured_requests.append(copy.deepcopy(kwargs))
@@ -1094,13 +1095,22 @@ class AgentCoreTestCase(unittest.TestCase):
                     self.chat = _FakeChat()
 
             progress_parts: list[str] = []
+            delta_parts: list[str] = []
             with patch.object(runner, "_create_sdk_client", return_value=_FakeClient()):
-                result = runner.run_turn(session=session, turn=turn, progress_callback=progress_parts.append)
+                result = runner.run_turn(
+                    session=session,
+                    turn=turn,
+                    progress_callback=progress_parts.append,
+                    reply_text_delta_callback=delta_parts.append,
+                )
 
         self.assertIsNone(result.error)
         self.assertEqual(result.reply_text, "你叫文刀。")
+        self.assertEqual(delta_parts, ["你叫", "文刀。"])
         self.assertEqual(progress_parts, ["我先查一下你的名字。"])
         self.assertEqual(captured_requests[0]["model"], "qwen3.5-omni-plus")
+        self.assertTrue(captured_requests[0]["stream"])
+        self.assertTrue(captured_requests[1]["stream"])
         self.assertEqual(result.meta["model_request"]["model"], "qwen3.5-omni-plus")
         self.assertEqual(echo_tool.calls, ["文刀"])
         first_user_content = captured_requests[0]["messages"][-1]["content"]  # type: ignore[index]
@@ -1237,7 +1247,7 @@ class AgentCoreTestCase(unittest.TestCase):
 
         self.assertIn("乐鑫", instructions)
         self.assertIn("简短、口语化、直接的中文回答", instructions)
-        self.assertIn("必要时可以调用已提供的工具", instructions)
+        self.assertIn("需要时可以调用已提供的工具", instructions)
         self.assertNotIn("final_answer", instructions)
         self.assertNotIn("ask_user", instructions)
         self.assertNotIn("json", instructions.lower())
