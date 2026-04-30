@@ -65,15 +65,6 @@
 #ifndef CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS
 #define CONFIG_GLASS_AEC_REFERENCE_BUFFER_MS 1200
 #endif
-#ifndef CONFIG_GLASS_BARGE_IN_GRACE_MS
-#define CONFIG_GLASS_BARGE_IN_GRACE_MS 900
-#endif
-#ifndef CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES
-#define CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES 6
-#endif
-#ifndef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
-#define CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY 0
-#endif
 #ifndef CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE
 #define CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE 0
 #endif
@@ -187,8 +178,6 @@ static volatile bool s_playback_interrupt_requested = false;
 static bool s_realtime_semantic_dialog_enabled = false;
 static bool s_continuous_dialog_active = false;
 static bool s_aec_runtime_enabled = false;
-static volatile bool s_local_segment_active = false;
-static volatile bool s_force_finish_active_segment_for_playback = false;
 static bool s_speaker_channel_enabled = false;
 static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
@@ -206,7 +195,6 @@ static char s_current_camera_stream_id[64];
 static int s_camera_frame_interval_ms = 500;
 static uint32_t s_camera_frame_seq = 0;
 static uint64_t s_playback_request_started_ms = 0;
-static uint64_t s_playback_speaker_started_ms = 0;
 static uint64_t s_continuous_dialog_last_activity_ms = 0;
 static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
@@ -577,6 +565,32 @@ static void send_realtime_session_opened_message(const char *session_id)
     );
 }
 
+static void send_user_voice_interrupt_message(const char *stream_id, const char *reason)
+{
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "构造 user.voice.interrupt 失败");
+        return;
+    }
+    if (s_current_session_id[0] == '\0') {
+        ESP_LOGW(TAG, "session_id 为空，跳过发送 user.voice.interrupt");
+        cJSON_Delete(payload);
+        return;
+    }
+
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    if (stream_id != NULL && stream_id[0] != '\0') {
+        cJSON_AddStringToObject(payload, "stream_id", stream_id);
+    }
+    cJSON_AddStringToObject(payload, "reason", reason != NULL ? reason : "voice_barge_in");
+    cJSON_AddBoolToObject(payload, "clear_queue", true);
+
+    send_control_message_json(
+        build_control_message_json("notify", "user.voice.interrupt", s_current_session_id, payload),
+        "user.voice.interrupt"
+    );
+}
+
 static bool payload_requests_omni_semantic_dialog(const cJSON *payload)
 {
     const cJSON *input = payload != NULL ? cJSON_GetObjectItemCaseSensitive(payload, "input") : NULL;
@@ -596,7 +610,7 @@ static bool payload_requests_omni_semantic_dialog(const cJSON *payload)
            strcmp(owner->valuestring, "omni_realtime") == 0;
 }
 
-static void send_audio_segment_started_message(const char *segment_id, bool started_during_playback, const char *playback_stream_id)
+static void send_audio_segment_started_message(const char *segment_id)
 {
     cJSON *payload = cJSON_CreateObject();
     cJSON *wake_word = cJSON_CreateObject();
@@ -622,10 +636,6 @@ static void send_audio_segment_started_message(const char *segment_id, bool star
     cJSON_AddNumberToObject(payload, "sample_rate", SR_SAMPLE_RATE_HZ);
     cJSON_AddNumberToObject(payload, "channels", 1);
     cJSON_AddStringToObject(payload, "codec", "pcm16");
-    cJSON_AddBoolToObject(payload, "started_during_playback", started_during_playback);
-    if (started_during_playback && playback_stream_id != NULL && playback_stream_id[0] != '\0') {
-        cJSON_AddStringToObject(payload, "playback_stream_id", playback_stream_id);
-    }
     cJSON_AddStringToObject(wake_word, "engine", "esp-sr-wakenet");
     cJSON_AddStringToObject(
         wake_word,
@@ -1583,7 +1593,6 @@ static void play_wake_prompt_tone(void)
 static void reset_segment_state(segment_state_t *state)
 {
     state->segment_active = false;
-    s_local_segment_active = false;
     state->got_speech = false;
     state->tail_silence_ms = 0;
     state->elapsed_ms = 0;
@@ -1634,8 +1643,6 @@ static void recover_wake_listening_after_reply_timeout(uint64_t current_ms)
     clear_reply_wait_state();
     s_playback_active = false;
     s_current_playback_stream_id[0] = '\0';
-    s_playback_request_started_ms = 0;
-    s_playback_speaker_started_ms = 0;
     s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
     ESP_LOGW(
         TAG,
@@ -1661,8 +1668,6 @@ static void reset_control_session_state(void)
     s_current_stream_id[0] = '\0';
     s_current_playback_stream_id[0] = '\0';
     s_next_playback_stream_id[0] = '\0';
-    s_playback_request_started_ms = 0;
-    s_playback_speaker_started_ms = 0;
     s_playback_task_handle = NULL;
     s_camera_stream_active = false;
     s_camera_stream_task_running = false;
@@ -2299,7 +2304,6 @@ static void playback_stream_task(void *arg)
         if (!started_sent) {
             send_actuator_audio_state_message("actuator.audio.started", s_current_playback_stream_id, NULL, NULL);
             started_sent = true;
-            s_playback_speaker_started_ms = now_ms();
             ESP_LOGI(
                 TAG,
                 "播放流首段音频已写入扬声器: stream_id=%s request_to_speaker_ms=%" PRIu64 " task_to_speaker_ms=%" PRIu64 " pcm_bytes=%u",
@@ -2341,11 +2345,9 @@ cleanup:
     s_playback_task_handle = NULL;
     s_current_playback_stream_id[0] = '\0';
     s_playback_request_started_ms = 0;
-    s_playback_speaker_started_ms = 0;
     if (s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
         s_continuous_dialog_last_activity_ms = now_ms();
     }
-    s_force_finish_active_segment_for_playback = false;
     if (s_next_playback_stream_id[0] != '\0') {
         strlcpy(next_stream_id, s_next_playback_stream_id, sizeof(next_stream_id));
         s_next_playback_stream_id[0] = '\0';
@@ -2391,8 +2393,6 @@ static void start_playback_stream(const char *stream_id)
     strlcpy(s_current_playback_stream_id, stream_id, sizeof(s_current_playback_stream_id));
     s_next_playback_stream_id[0] = '\0';
     clear_reply_wait_state();
-    s_force_finish_active_segment_for_playback =
-        s_realtime_semantic_dialog_enabled && s_continuous_dialog_active && s_local_segment_active;
     s_playback_active = true;
     if (s_aec_runtime_enabled && s_realtime_semantic_dialog_enabled && s_continuous_dialog_active) {
         reset_aec_reference_ring();
@@ -2404,10 +2404,8 @@ static void start_playback_stream(const char *stream_id)
     s_playback_task_running = true;
     s_playback_interrupt_requested = false;
     s_playback_request_started_ms = now_ms();
-    s_playback_speaker_started_ms = 0;
-    BaseType_t task_result;
-    if (CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY) {
-        task_result = xTaskCreateWithCaps(
+    if (
+        xTaskCreateWithCaps(
             playback_stream_task,
             "playback_stream_task",
             PLAYBACK_STREAM_TASK_STACK_SIZE,
@@ -2415,28 +2413,16 @@ static void start_playback_stream(const char *stream_id)
             5,
             &s_playback_task_handle,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-        );
-    } else {
-        ESP_LOGW(TAG, "sdkconfig 未开启 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY，播放任务栈只能尝试使用内部 RAM");
-        task_result = xTaskCreate(
-            playback_stream_task,
-            "playback_stream_task",
-            PLAYBACK_STREAM_TASK_STACK_SIZE,
-            NULL,
-            5,
-            &s_playback_task_handle
-        );
-    }
-    if (task_result != pdPASS) {
+        ) != pdPASS
+    ) {
         size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         size_t largest_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         ESP_LOGE(
             TAG,
-            "创建 playback_stream_task 失败: stack=%d external_stack_allowed=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
+            "创建 playback_stream_task 失败: stack=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
             PLAYBACK_STREAM_TASK_STACK_SIZE,
-            CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY,
             (unsigned)free_internal,
             (unsigned)largest_internal,
             (unsigned)free_spiram,
@@ -2448,7 +2434,6 @@ static void start_playback_stream(const char *stream_id)
         s_playback_interrupt_requested = false;
         s_current_playback_stream_id[0] = '\0';
         s_playback_request_started_ms = 0;
-        s_playback_speaker_started_ms = 0;
         s_playback_task_handle = NULL;
     }
 }
@@ -2500,8 +2485,6 @@ static void sr_pipeline_task(void *arg)
     uint64_t last_idle_summary_ms = now_ms();
     uint64_t last_gate_log_ms = 0;
     uint64_t last_audio_reconnect_ms = 0;
-    uint32_t playback_barge_in_speech_frames = 0;
-    uint64_t last_barge_in_gate_log_ms = 0;
 
     ESP_LOGD(
         TAG,
@@ -2649,76 +2632,23 @@ static void sr_pipeline_task(void *arg)
         bool start_by_continuous_vad = s_realtime_semantic_dialog_enabled &&
                                        s_continuous_dialog_active &&
                                        res->vad_state == VAD_SPEECH;
-        bool is_playback_barge_in_candidate = s_playback_active &&
-                                              start_by_continuous_vad &&
-                                              s_aec_runtime_enabled;
-        if (is_playback_barge_in_candidate) {
-            uint64_t playback_audio_age_ms = 0;
-            bool playback_audio_started = s_playback_speaker_started_ms > 0 &&
-                                          current_ms >= s_playback_speaker_started_ms;
-            if (playback_audio_started) {
-                playback_audio_age_ms = current_ms - s_playback_speaker_started_ms;
-            }
-            if (!playback_audio_started || playback_audio_age_ms < CONFIG_GLASS_BARGE_IN_GRACE_MS) {
-                if ((current_ms - last_barge_in_gate_log_ms) >= 500) {
-                    ESP_LOGD(
-                        TAG,
-                        "忽略播放起始保护窗内的 VAD: stream_id=%s audio_age_ms=%" PRIu64 " grace_ms=%d",
-                        s_current_playback_stream_id,
-                        playback_audio_age_ms,
-                        CONFIG_GLASS_BARGE_IN_GRACE_MS
-                    );
-                    last_barge_in_gate_log_ms = current_ms;
-                }
-                playback_barge_in_speech_frames = 0;
-                start_by_continuous_vad = false;
-                reset_pre_roll(
-                    pre_roll_frames,
-                    PRE_ROLL_FRAME_COUNT,
-                    &pre_roll_next_index,
-                    &pre_roll_valid_count
-                );
-            } else {
-                playback_barge_in_speech_frames += 1U;
-                if (playback_barge_in_speech_frames < CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES) {
-                    if ((current_ms - last_barge_in_gate_log_ms) >= 500) {
-                        ESP_LOGD(
-                            TAG,
-                            "播放中 VAD 仍在确认用户插话: stream_id=%s speech_frames=%" PRIu32 "/%d audio_age_ms=%" PRIu64,
-                            s_current_playback_stream_id,
-                            playback_barge_in_speech_frames,
-                            CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES,
-                            playback_audio_age_ms
-                        );
-                        last_barge_in_gate_log_ms = current_ms;
-                    }
-                    start_by_continuous_vad = false;
-                }
-            }
-        } else if (!s_playback_active || res->vad_state != VAD_SPEECH) {
-            playback_barge_in_speech_frames = 0;
-        }
 
         if (!segment.segment_active && (start_by_wake_word || start_by_continuous_vad)) {
             bool is_playback_barge_in = s_playback_active && start_by_continuous_vad && s_aec_runtime_enabled;
-            char candidate_playback_stream_id[64] = {0};
             if (is_playback_barge_in) {
-                strlcpy(candidate_playback_stream_id, s_current_playback_stream_id, sizeof(candidate_playback_stream_id));
-                ESP_LOGI(
-                    TAG,
-                    "播放中 VAD 触发候选语音段，等待 Omni semantic_vad 确认: stream_id=%s",
-                    candidate_playback_stream_id
-                );
+                char interrupted_stream_id[64];
+                strlcpy(interrupted_stream_id, s_current_playback_stream_id, sizeof(interrupted_stream_id));
+                ESP_LOGI(TAG, "AEC 检测到播放中用户插话，准备打断播放: stream_id=%s", interrupted_stream_id);
+                send_user_voice_interrupt_message(interrupted_stream_id, "voice_barge_in");
+                request_playback_interrupt(interrupted_stream_id);
             }
             segment.segment_active = true;
-            s_local_segment_active = true;
             segment.got_speech = false;
             segment.tail_silence_ms = 0;
             segment.elapsed_ms = 0;
             segment.segment_pcm_bytes = 0;
             segment.chunk_seq = 0;
             build_runtime_token("seg", segment.segment_id, sizeof(segment.segment_id));
-            build_runtime_token("stream", s_current_stream_id, sizeof(s_current_stream_id));
             if (start_by_wake_word) {
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "WakeNet detected: segment_id=%s", segment.segment_id);
@@ -2727,11 +2657,7 @@ static void sr_pipeline_task(void *arg)
                 refresh_continuous_dialog_activity();
                 ESP_LOGI(TAG, "连续对话 VAD 触发新语音段: segment_id=%s", segment.segment_id);
             }
-            send_audio_segment_started_message(
-                segment.segment_id,
-                is_playback_barge_in,
-                candidate_playback_stream_id
-            );
+            send_audio_segment_started_message(segment.segment_id);
             flush_pre_roll_frames(
                 pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
@@ -2767,26 +2693,6 @@ static void sr_pipeline_task(void *arg)
                 segment.segment_pcm_bytes += (uint32_t)res->data_size;
                 segment.chunk_seq += 1;
             }
-        }
-
-        if (s_force_finish_active_segment_for_playback) {
-            s_force_finish_active_segment_for_playback = false;
-            ESP_LOGI(
-                TAG,
-                "服务端回复已开始，提前关闭当前本地语音段: segment_id=%s elapsed=%d ms pcm_bytes=%" PRIu32,
-                segment.segment_id,
-                segment.elapsed_ms,
-                segment.segment_pcm_bytes
-            );
-            send_audio_segment_finished_message(
-                segment.segment_id,
-                segment.elapsed_ms,
-                segment.segment_pcm_bytes,
-                "server_response_started"
-            );
-            refresh_continuous_dialog_activity();
-            reset_segment_state(&segment);
-            continue;
         }
 
         if (res->vad_state == VAD_SPEECH) {
@@ -2975,15 +2881,6 @@ static void init_speech_runtime(void)
     if (s_registered && s_voice_session_opened && !s_playback_active) {
         s_wake_listening_enabled = true;
         ESP_LOGI(TAG, "WakeNet 初始化完成后已补开唤醒监听: session_id=%s", s_current_session_id);
-        if (s_realtime_semantic_dialog_enabled && s_current_session_id[0] != '\0') {
-            send_realtime_session_opened_message(s_current_session_id);
-            ESP_LOGI(
-                TAG,
-                "WakeNet 初始化完成后已补发实时语音能力: accepted_mode=%s aec=%d",
-                s_aec_runtime_enabled ? "full_duplex_realtime" : "half_duplex",
-                s_aec_runtime_enabled
-            );
-        }
     }
     ESP_LOGI(TAG, "WakeNet runtime ready; waiting for voice.session.open");
 }

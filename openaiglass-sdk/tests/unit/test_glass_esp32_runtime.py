@@ -34,17 +34,6 @@ def test_glass_runtime_negotiates_realtime_voice_capabilities() -> None:
     assert "WakeNet listening enabled for realtime session_id=%s accepted_mode=%s" in source
     assert "xTaskCreateWithCaps(" in source
     assert "PLAYBACK_STREAM_TASK_STACK_SIZE" in source
-    assert "CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY" in source
-    assert "CONFIG_GLASS_BARGE_IN_GRACE_MS" in source
-    assert "CONFIG_GLASS_BARGE_IN_MIN_SPEECH_FRAMES" in source
-    assert "忽略播放起始保护窗内的 VAD" in source
-    assert "播放中 VAD 仍在确认用户插话" in source
-    assert "播放中 VAD 触发候选语音段，等待 Omni semantic_vad 确认" in source
-    assert '"started_during_playback"' in source
-    assert '"playback_stream_id"' in source
-    assert 'send_user_voice_interrupt_message(interrupted_stream_id, "voice_barge_in")' not in source
-    assert "s_playback_speaker_started_ms = now_ms()" in source
-    assert "external_stack_allowed=%d" in source
 
 
 def test_glass_runtime_plays_short_prompt_tone_on_wakenet() -> None:
@@ -73,11 +62,3 @@ def test_glass_runtime_plays_short_prompt_tone_on_wakenet() -> None:
     assert "stereo_buffer = heap_caps_malloc" in source
     assert "int16_t mono_buffer[AUDIO_FRAME_SAMPLES]" not in source
     assert "int32_t stereo_buffer[AUDIO_FRAME_SAMPLES * 2]" not in source
-    assert "WakeNet 初始化完成后已补发实时语音能力" in source
-    assert "服务端回复已开始，提前关闭当前本地语音段" in source
-    assert "s_local_segment_active = true" in source
-    assert "s_local_segment_active = false" in source
-    assert "s_continuous_dialog_active && s_local_segment_active" in source
-    assert 'finish_reason", finish_reason' in source
-    assert '"server_response_started"' in source
-    assert 'build_runtime_token("stream", s_current_stream_id' in source

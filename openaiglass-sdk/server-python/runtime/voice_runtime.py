@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 import wave
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from agent_core import AgentFacade, AgentTurn, DerivedArtifact, MediaAssetRef
@@ -34,7 +34,6 @@ SERVER_SAMPLE_WIDTH_BYTES = 2
 MODEL_OUTPUT_SAMPLE_RATE_HZ = 24000
 PLAYBACK_QUEUE_MAX = 256
 UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
-OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
 
 
 @dataclass(slots=True)
@@ -65,11 +64,6 @@ class SegmentBuffer:
     streaming_asr_session: "StreamingSpeechRecognitionSession | None" = None
     omni_realtime_session: "OmniRealtimeStreamingSession | None" = None
     omni_realtime_context: "ReplySynthesisContext | None" = None
-    started_during_playback: bool = False
-    interrupted_playback_stream_id: str | None = None
-    omni_speech_started: bool = False
-    omni_input_committed: bool = False
-    omni_interrupted_playback: bool = False
     utterance_photo_capture_started: bool = False
 
     def append_frame(self, frame: MediaFrame, *, max_bytes: int) -> None:
@@ -218,8 +212,6 @@ class OmniRealtimeStreamingSession:
         request_started_at_ms_box: list[int],
         metrics_lock: threading.Lock,
         on_chunk: Callable[[ModelChunk], None],
-        on_input_speech_started: Callable[[], None] | None,
-        on_input_committed: Callable[[], None] | None,
         logger,
         session_id: str,
         device_id: str,
@@ -249,8 +241,6 @@ class OmniRealtimeStreamingSession:
         self._request_started_at_ms_box = request_started_at_ms_box
         self._metrics_lock = metrics_lock
         self._on_chunk = on_chunk
-        self._on_input_speech_started = on_input_speech_started
-        self._on_input_committed = on_input_committed
         self._logger = logger
         self._session_id = session_id
         self._device_id = device_id
@@ -263,8 +253,6 @@ class OmniRealtimeStreamingSession:
         self._audio_bytes = 0
         self._audio_frame_count = 0
         self._image_frame_count = 0
-        self._audio_push_failed = False
-        self._audio_push_error: str | None = None
         self._closed = False
 
     @property
@@ -284,12 +272,7 @@ class OmniRealtimeStreamingSession:
 
         if not pcm_bytes:
             return
-        try:
-            self._conversation.append_audio(base64.b64encode(pcm_bytes).decode("ascii"))
-        except Exception as exc:
-            self._audio_push_failed = True
-            self._audio_push_error = repr(exc)
-            raise
+        self._conversation.append_audio(base64.b64encode(pcm_bytes).decode("ascii"))
         self._audio_bytes += len(pcm_bytes)
         self._audio_frame_count += 1
         if self._first_audio_append_at_ms is None:
@@ -393,51 +376,8 @@ class OmniRealtimeStreamingSession:
                         LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
                     )
             if not self._request_started_at_ms_box:
-                if self._audio_push_failed:
-                    log_info(
-                        self._logger,
-                        (
-                            "Omni semantic_vad 流式上行失败，跳过 segment_turn 重连兜底 "
-                            f"model={self._settings.voice_omni_realtime_model_name} "
-                            f"finish_to_check_ms={max(DashscopeOmniRealtimeReplyClient._now_ms() - segment_finished_at_ms, 0)} "
-                            f"audio_bytes={self._audio_bytes} audio_frame_count={self._audio_frame_count} "
-                            f"image_count={appended_image_count} error={self._audio_push_error or '<unknown>'}"
-                        ),
-                        LogContext(device_id=self._device_id, session_id=self._session_id),
-                    )
-                    raise build_error(
-                        ErrorCode.INTERNAL_ERROR,
-                        "Omni Realtime 流式上行失败，已跳过重连兜底",
-                        retryable=True,
-                        details={
-                            "reason": "omni_realtime_audio_push_failed",
-                            "segment_id": self._segment_id,
-                            "stream_id": self._stream_id,
-                            "error": self._audio_push_error or "",
-                        },
-                    )
-                log_info(
-                    self._logger,
-                    (
-                        "Omni semantic_vad 未自动提交，准备改用 segment_turn 重连兜底 "
-                        f"model={self._settings.voice_omni_realtime_model_name} "
-                        f"finish_to_check_ms={max(DashscopeOmniRealtimeReplyClient._now_ms() - segment_finished_at_ms, 0)} "
-                        f"audio_bytes={self._audio_bytes} audio_frame_count={self._audio_frame_count} "
-                        f"image_count={appended_image_count}"
-                    ),
-                    LogContext(device_id=self._device_id, session_id=self._session_id),
-                )
-                raise build_error(
-                    ErrorCode.TIMEOUT,
-                    "Omni semantic_vad 未自动提交",
-                    retryable=True,
-                    details={
-                        "reason": OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
-                        "segment_id": self._segment_id,
-                        "stream_id": self._stream_id,
-                        "fallback": "segment_turn_reconnect",
-                    },
-                )
+                self._request_started_at_ms = segment_finished_at_ms
+                self._request_started_at_ms_box.append(segment_finished_at_ms)
             log_info(
                 self._logger,
                 (
@@ -1435,8 +1375,6 @@ class DashscopeOmniRealtimeReplyClient:
         device_id: str,
         segment_id: str,
         stream_id: str,
-        on_input_speech_started: Callable[[], None] | None = None,
-        on_input_committed: Callable[[], None] | None = None,
     ) -> OmniRealtimeStreamingSession:
         """创建 Omni Realtime 流式输入会话。
 
@@ -1449,8 +1387,7 @@ class DashscopeOmniRealtimeReplyClient:
         1. `settings`：服务端配置。
         2. `instructions`：系统指令。
         3. `on_chunk`：音频分片回调。
-        4. `on_input_speech_started/on_input_committed`：Omni turn detection 事件回调。
-        5. `session_id/device_id/segment_id/stream_id`：日志上下文。
+        4. `session_id/device_id/segment_id/stream_id`：日志上下文。
 
         返回值：
         1. 可追加音频、提交图片并等待响应的流式输入会话。
@@ -1543,8 +1480,6 @@ class DashscopeOmniRealtimeReplyClient:
                         f"Omni Realtime 输入语音事件: {event_type}",
                         LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
                     )
-                    if event_type == "input_audio_buffer.speech_started" and on_input_speech_started is not None:
-                        on_input_speech_started()
                     if event_type == "input_audio_buffer.speech_stopped" and not request_started_at_ms_box:
                         request_started_at_ms_box.append(now_ms)
                         log_info(
@@ -1557,8 +1492,6 @@ class DashscopeOmniRealtimeReplyClient:
                 if event_type == "input_audio_buffer.committed":
                     if not request_started_at_ms_box:
                         request_started_at_ms_box.append(now_ms)
-                    if on_input_committed is not None:
-                        on_input_committed()
                     log_debug(
                         self_logger,
                         "Omni Realtime 输入已自动提交",
@@ -1680,8 +1613,6 @@ class DashscopeOmniRealtimeReplyClient:
                 request_started_at_ms_box=request_started_at_ms_box,
                 metrics_lock=metrics_lock,
                 on_chunk=on_chunk,
-                on_input_speech_started=on_input_speech_started,
-                on_input_committed=on_input_committed,
                 logger=self._logger,
                 session_id=session_id,
                 device_id=device_id,
@@ -2463,33 +2394,10 @@ class VoiceRuntime:
         payload: dict[str, Any],
     ) -> None:
         controller = self._get_controller(device_id)
-        should_interrupt_playback = False
         with self._lock:
             self._ensure_session_match(controller, session_id)
-            allow_barge_in_segment = (
-                self._settings.voice_reply_mode == "omni_realtime"
-                and self._settings.effective_voice_input_mode() == "raw_audio"
-                and self._settings.omni_turn_detection_enabled()
-            )
-            if (
-                controller.current_playback is not None
-                and not controller.current_playback.completed
-                and not allow_barge_in_segment
-            ):
+            if controller.current_playback is not None and not controller.current_playback.completed:
                 raise build_error(ErrorCode.DEVICE_BUSY, "设备正在播放回复，不能开始新一轮采集")
-            payload_started_during_playback = bool(payload.get("started_during_playback", False))
-            payload_playback_stream_id = str(payload.get("playback_stream_id") or "").strip() or None
-            local_active_playback_stream_id = (
-                controller.current_playback.stream_id
-                if controller.current_playback is not None and not controller.current_playback.completed
-                else None
-            )
-            started_during_playback = payload_started_during_playback or (
-                controller.current_playback is not None
-                and not controller.current_playback.completed
-                and allow_barge_in_segment
-            )
-            active_playback_stream_id = payload_playback_stream_id or local_active_playback_stream_id
 
             stream_id = str(payload.get("stream_id", "")).strip()
             segment_id = str(payload.get("segment_id", "")).strip()
@@ -2508,8 +2416,6 @@ class VoiceRuntime:
                 channels=int(payload.get("channels", SERVER_CHANNELS)),
                 codec=str(payload.get("codec", "pcm16")).strip() or "pcm16",
                 started_at_ms=int(time.time() * 1000),
-                started_during_playback=started_during_playback,
-                interrupted_playback_stream_id=active_playback_stream_id if started_during_playback else None,
             )
             if self._settings.effective_voice_input_mode() == "asr_text":
                 segment.streaming_asr_session = self._asr_client.start_streaming_session(
@@ -2528,11 +2434,7 @@ class VoiceRuntime:
                 self._settings.voice_reply_mode == "omni_realtime"
                 and self._settings.effective_voice_input_mode() == "raw_audio"
             )
-            should_capture_photo_early = (
-                should_start_omni
-                and self._settings.omni_turn_detection_enabled()
-                and not segment.started_during_playback
-            )
+            should_capture_photo_early = should_start_omni and self._settings.omni_turn_detection_enabled()
         if should_capture_photo_early:
             self._start_utterance_photo_capture(
                 device_id=device_id,
@@ -2546,6 +2448,7 @@ class VoiceRuntime:
                 session_id=session_id,
                 segment=segment,
             )
+
     def on_audio_connection_opened(self, *, device_id: str, peer: str) -> None:
         with self._lock:
             controller = self._controllers.get(device_id)
@@ -3567,43 +3470,15 @@ class VoiceRuntime:
 
         context_box: list[ReplySynthesisContext] = []
 
-        def _ensure_context() -> ReplySynthesisContext:
-            """确保当前 Omni 回复有可写入的下行播放上下文。"""
-
-            if context_box:
-                return context_box[0]
-            context = self._open_reply_synthesis_context(
-                device_id=device_id,
-                session_id=session_id,
-                audio_source="omni_realtime",
-            )
-            context_box.append(context)
-            with self._lock:
-                if segment.omni_realtime_context is None:
-                    segment.omni_realtime_context = context
-            return context
-
         def _handle_omni_chunk(chunk: ModelChunk) -> None:
-            context = _ensure_context()
+            if not context_box:
+                return
             self._emit_synthesis_chunk(
                 device_id=device_id,
                 session_id=session_id,
-                context=context,
+                context=context_box[0],
                 chunk=chunk,
             )
-
-        def _handle_omni_speech_started() -> None:
-            self._confirm_omni_semantic_barge_in(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
-                reason="omni_semantic_speech_started",
-            )
-
-        def _handle_omni_input_committed() -> None:
-            with self._lock:
-                if segment.omni_realtime_session is not None:
-                    segment.omni_input_committed = True
 
         try:
             omni_session = self._omni_realtime_client.start_streaming_reply(
@@ -3614,11 +3489,13 @@ class VoiceRuntime:
                 device_id=device_id,
                 segment_id=segment.segment_id,
                 stream_id=segment.stream_id,
-                on_input_speech_started=_handle_omni_speech_started,
-                on_input_committed=_handle_omni_input_committed,
             )
-            if not segment.started_during_playback:
-                _ensure_context()
+            context = self._open_reply_synthesis_context(
+                device_id=device_id,
+                session_id=session_id,
+                audio_source="omni_realtime",
+            )
+            context_box.append(context)
             with self._lock:
                 controller = self._controllers.get(device_id)
                 if controller is None or controller.current_segment is not segment:
@@ -3626,6 +3503,7 @@ class VoiceRuntime:
                     return
                 buffered_pcm = bytes(segment.payload)
                 segment.omni_realtime_session = omni_session
+                segment.omni_realtime_context = context
             if buffered_pcm:
                 omni_session.append_audio(buffered_pcm)
             if self._settings.omni_turn_detection_enabled():
@@ -3648,65 +3526,6 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
             )
-
-    def _confirm_omni_semantic_barge_in(
-        self,
-        *,
-        device_id: str,
-        session_id: str,
-        segment: SegmentBuffer,
-        reason: str,
-    ) -> None:
-        """根据 Omni Realtime 的语音开始事件确认播放中插话。
-
-        主要逻辑：
-        1. 播放中本地 VAD 只负责启动候选语音段，不直接打断播放。
-        2. 只有 Omni `input_audio_buffer.speech_started` 证明这段音频像真实用户语音时，才停止当前播放。
-        3. 普通非播放中的语音段只记录状态，不触发打断。
-
-        参数：
-        1. `device_id/session_id`：设备和会话编号。
-        2. `segment`：当前候选语音段。
-        3. `reason`：触发确认的 Omni 事件原因。
-        """
-
-        should_interrupt = False
-        with self._lock:
-            controller = self._controllers.get(device_id)
-            if controller is None or controller.current_segment is not segment:
-                return
-            if segment.omni_speech_started:
-                return
-            segment.omni_speech_started = True
-            should_interrupt = bool(segment.started_during_playback and controller.current_playback is not None)
-            if should_interrupt:
-                segment.omni_interrupted_playback = True
-
-        if not should_interrupt:
-            return
-
-        log_info(
-            self._logger,
-            (
-                "Omni semantic_vad 确认播放中用户插话，准备打断播放 "
-                f"candidate_segment_id={segment.segment_id} "
-                f"interrupted_stream_id={segment.interrupted_playback_stream_id or '<current>'} "
-                f"reason={reason}"
-            ),
-            LogContext(device_id=device_id, session_id=session_id),
-        )
-        self._start_utterance_photo_capture(
-            device_id=device_id,
-            session_id=session_id,
-            segment=segment,
-            reason="omni_semantic_barge_in_confirmed",
-        )
-        self.handle_user_interrupt(
-            device_id=device_id,
-            session_id=session_id,
-            reason="omni_semantic_barge_in",
-            clear_queue=True,
-        )
 
     def _append_ready_utterance_photo_to_omni_session(
         self,
@@ -3818,7 +3637,11 @@ class VoiceRuntime:
                 },
             )
 
-        context = segment.omni_realtime_context
+        context = segment.omni_realtime_context or self._open_reply_synthesis_context(
+            device_id=device_id,
+            session_id=session_id,
+            audio_source="omni_realtime",
+        )
         segment_finished_at_ms = self._now_ms()
         image_frames = self._consume_ready_utterance_photo_bytes_for_omni(
             device_id=device_id,
@@ -3827,127 +3650,38 @@ class VoiceRuntime:
         )
         instructions = self._build_omni_realtime_instructions()
         omni_session = segment.omni_realtime_session
-        result: OmniRealtimeReplyResult
         try:
             if omni_session is not None:
-                try:
-                    result = omni_session.finish(
-                        image_frames=image_frames,
-                        instructions=instructions,
-                        segment_finished_at_ms=segment_finished_at_ms,
-                    )
-                except AppError as exc:
-                    if not self._is_omni_semantic_vad_no_auto_response(exc):
-                        raise
-                    if context is not None and context.playback.abort_event.is_set():
-                        self._finalize_synthesis_context(
-                            device_id=device_id,
-                            session_id=session_id,
-                            context=context,
-                        )
-                        log_info(
-                            self._logger,
-                            (
-                                "Omni Realtime 回复已被用户插话打断，跳过 segment_turn 兜底 "
-                                f"stream_id={context.stream_id} segment_id={segment.segment_id}"
-                            ),
-                            LogContext(device_id=device_id, session_id=session_id),
-                        )
-                        return
-                    if segment.started_during_playback and not segment.omni_interrupted_playback:
-                        log_info(
-                            self._logger,
-                            (
-                                "Omni semantic_vad 未确认有效播放中插话，按回声候选丢弃 "
-                                f"segment_id={segment.segment_id} audio_bytes={len(input_pcm)} "
-                                f"interrupted_stream_id={segment.interrupted_playback_stream_id or '<unknown>'}"
-                            ),
-                            LogContext(device_id=device_id, session_id=session_id),
-                        )
-                        return
-                    omni_session.close()
-                    omni_session = None
-                    if context is None:
-                        context = self._open_reply_synthesis_context(
-                            device_id=device_id,
-                            session_id=session_id,
-                            audio_source="omni_realtime",
-                        )
-                    log_info(
-                        self._logger,
-                        (
-                            "Omni semantic_vad 未生成自动响应，改用 segment_turn 重连兜底 "
-                            f"segment_id={segment.segment_id} audio_bytes={len(input_pcm)} "
-                            f"image_count={len(image_frames)}"
-                        ),
-                        LogContext(device_id=device_id, session_id=session_id),
-                    )
-                    result = self._run_omni_segment_turn_fallback(
-                        device_id=device_id,
-                        session_id=session_id,
-                        segment=segment,
-                        input_pcm=input_pcm,
-                        image_frames=image_frames,
-                        instructions=instructions,
-                        context=context,
-                    )
+                result = omni_session.finish(
+                    image_frames=image_frames,
+                    instructions=instructions,
+                    segment_finished_at_ms=segment_finished_at_ms,
+                )
             else:
-                if context is None:
-                    context = self._open_reply_synthesis_context(
-                        device_id=device_id,
-                        session_id=session_id,
-                        audio_source="omni_realtime",
-                    )
-                result = self._run_omni_segment_turn_fallback(
-                    device_id=device_id,
-                    session_id=session_id,
-                    segment=segment,
+                result = self._omni_realtime_client.run_reply(
+                    settings=self._settings,
                     input_pcm=input_pcm,
                     image_frames=image_frames,
                     instructions=instructions,
-                    context=context,
+                    on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                        device_id=device_id,
+                        session_id=session_id,
+                        context=context,
+                        chunk=chunk,
+                    ),
+                    session_id=session_id,
+                    device_id=device_id,
+                    segment_id=segment.segment_id,
+                    stream_id=segment.stream_id,
                 )
         finally:
             if omni_session is not None:
                 omni_session.close()
-        if context is None:
-            context = self._open_reply_synthesis_context(
-                device_id=device_id,
-                session_id=session_id,
-                audio_source="omni_realtime",
-            )
-        if context.playback.abort_event.is_set():
-            self._finalize_synthesis_context(
-                device_id=device_id,
-                session_id=session_id,
-                context=context,
-            )
-            log_info(
-                self._logger,
-                (
-                    "Omni Realtime 回复已被用户插话打断，丢弃最终回复 "
-                    f"stream_id={context.stream_id} segment_id={segment.segment_id} "
-                    f"response_id={result.response_id}"
-                ),
-                LogContext(device_id=device_id, session_id=session_id),
-            )
-            return
         self._finalize_synthesis_context(
             device_id=device_id,
             session_id=session_id,
             context=context,
         )
-        if context.playback.abort_event.is_set():
-            log_info(
-                self._logger,
-                (
-                    "Omni Realtime 回复收尾期间被用户插话打断，丢弃最终回复 "
-                    f"stream_id={context.stream_id} segment_id={segment.segment_id} "
-                    f"response_id={result.response_id}"
-                ),
-                LogContext(device_id=device_id, session_id=session_id),
-            )
-            return
 
         assistant_text = result.assistant_text.strip() or "收到。"
         transcript = result.transcript.strip() or "<omni_realtime_transcript_unavailable>"
@@ -4015,77 +3749,6 @@ class VoiceRuntime:
                 f"input={input_path} transcript_artifact={transcript_path} output={output_path}"
             ),
             LogContext(device_id=device_id, session_id=session_id),
-        )
-
-    def _run_omni_segment_turn_fallback(
-        self,
-        *,
-        device_id: str,
-        session_id: str,
-        segment: SegmentBuffer,
-        input_pcm: bytes,
-        image_frames: list[bytes],
-        instructions: str,
-        context: ReplySynthesisContext,
-    ) -> OmniRealtimeReplyResult:
-        """使用分段提交模式兜底执行 Omni Realtime。
-
-        主要逻辑：
-        1. 复制当前配置，只把对话模式切到 `segment_turn`。
-        2. 重新建立一个不启用 semantic VAD 的 Omni Realtime 会话。
-        3. 把完整 PCM 与本轮图片一次性提交，避免在 semantic VAD 会话中手动提交造成服务端异常。
-
-        参数：
-        1. `device_id/session_id`：设备和会话编号。
-        2. `segment`：当前语音段，用于日志和模型请求标识。
-        3. `input_pcm`：本轮完整用户语音 PCM。
-        4. `image_frames`：本轮自动抓拍图片。
-        5. `instructions`：Omni 系统指令。
-        6. `context`：下行播放合成上下文。
-
-        返回值：
-        1. Omni Realtime 分段模式返回的文本、转写和响应编号。
-
-        异常情况：
-        1. 底层 Omni Realtime 建连或调用失败时透传结构化 `AppError`。
-        """
-
-        fallback_settings = replace(self._settings, voice_conversation_mode="segment_turn")
-        return self._omni_realtime_client.run_reply(
-            settings=fallback_settings,
-            input_pcm=input_pcm,
-            image_frames=image_frames,
-            instructions=instructions,
-            on_chunk=lambda chunk: self._emit_synthesis_chunk(
-                device_id=device_id,
-                session_id=session_id,
-                context=context,
-                chunk=chunk,
-            ),
-            session_id=session_id,
-            device_id=device_id,
-            segment_id=segment.segment_id,
-            stream_id=segment.stream_id,
-        )
-
-    @staticmethod
-    def _is_omni_semantic_vad_no_auto_response(exc: AppError) -> bool:
-        """判断 Omni semantic VAD 是否没有生成自动响应。
-
-        主要逻辑：
-        1. 只识别本运行时主动抛出的兜底信号。
-        2. 避免把真实模型错误误判为可重连兜底。
-
-        参数：
-        1. `exc`：待判断的结构化异常。
-
-        返回值：
-        1. `True` 表示可以切到 `segment_turn` 重连兜底。
-        """
-
-        return (
-            exc.code == ErrorCode.TIMEOUT
-            and exc.details.get("reason") == OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE
         )
 
     def _consume_ready_utterance_photo_bytes_for_omni(
