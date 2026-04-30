@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from agent_core.memory.models import AgentMemoryRecord, MemoryScope, MemorySource, MemoryType
 from agent_core.memory.store import AgentMemoryStore, JsonFileAgentMemoryStore
+from infra.logging import LogContext, get_logger, log_debug
 
 MemoryOperation = Literal["add", "update", "delete"]
 
@@ -133,11 +134,22 @@ class LlmMemoryManagementAgent(MemoryManagementAgent):
     def _build_system_prompt() -> str:
         return (
             "你是记忆管理子Agent。你只输出JSON，不输出解释。\n"
-            "你要根据主Agent摘取的记忆上下文和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
-            "基本信息用于姓名、年龄、性别、称呼等短小稳定信息；个性化信息用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
+            "你要根据用户提供的上下文信息和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
+            "已有记忆分两种类型 memory_type(basic/personalized)："
+            "basic 用于姓名、年龄、性别、称呼等短小稳定信息；"
+            "personalized 用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
+            "同一作用域下，memory_type + topic 表示一个记忆主题槽位；"
+            "每条已有记忆都有唯一的 memory_id 和一个 topic，content 是这个主题的完整详细记录。\n"
+            "你每次操作都应面向整条记忆：如果更新已有记忆，content 必须写出更新后的完整内容，"
+            "不能只写增量片段或只写需要修改的部分。\n\n"
+            "关于操作类型的说明：\n"
+            "更新：新信息属于已有 topic，或者可以补充已有 content，或者与已有 content 部分冲突但仍能修正为一条完整记忆；\n"
+            "新增：新信息在已有记忆中不存在，也没有可合并的 topic，需要新增一个主题；\n"
+            "删除：用户明确否认某条记忆，且没有提供可替换的新内容；或者新信息与现有条目整体冲突，无法合并成可靠内容。\n\n"
+            "如果用户更正基本信息，例如姓名、年龄、性别、称呼发生冲突，即使用户没有提供新的正确值，也可以删除原有错误记忆。\n"
             "可以输出多条actions并按顺序执行，例如先delete再add。\n"
             "每条action字段只能包括 operation(add/update/delete)、memory_type(basic/personalized)、topic、content、memory_id。\n"
-            "如果只需要更新或删除已有记忆，填写已有记忆中的memory_id；新增时不要填写memory_id。\n"
+            "更新或删除已有记忆时必须填写已有记忆中的 memory_id；新增时不要填写 memory_id。\n"
             "不要保存API Key、设备token、WiFi密码、一次性任务状态或未经确认的推断。\n"
             "输出格式：{\"actions\":[...],\"feedback\":\"给主Agent的简短中文反馈\"}"
         )
@@ -174,6 +186,7 @@ class AgentMemoryRuntime:
         self._manager_agent = manager_agent
         self.enabled = enabled
         self.max_prompt_memories = max(0, max_prompt_memories)
+        self._logger = get_logger("server.agent.memory")
 
     def add_memory(
         self,
@@ -236,13 +249,38 @@ class AgentMemoryRuntime:
             raise ValueError("Agent 记忆功能未启用")
         if self._manager_agent is None:
             raise ValueError("记忆管理需要可用的大模型管理 Agent")
-        existing = self.list_memories(scope_type=scope_type, scope_id=scope_id, limit=100)
+        normalized_scope_id = scope_id.strip()
+        existing = self._store.list_records(scope_type=scope_type, scope_id=normalized_scope_id)[:100]
+        log_debug(
+            self._logger,
+            (
+                "记忆管理读取现有记忆: "
+                f"record_count={len(existing)} topics={self._summarize_topics(existing)}"
+            ),
+            LogContext(
+                session_id=str(request.metadata.get("session_id") or ""),
+                device_id=normalized_scope_id,
+                message_id=str(request.metadata.get("turn_id") or ""),
+            ),
+        )
         plan = self._manager_agent.plan(request=request, existing_memories=existing)
+        log_debug(
+            self._logger,
+            (
+                "记忆管理子Agent返回动作: "
+                f"action_count={len(plan.actions)} actions={self._summarize_actions(plan.actions)}"
+            ),
+            LogContext(
+                session_id=str(request.metadata.get("session_id") or ""),
+                device_id=normalized_scope_id,
+                message_id=str(request.metadata.get("turn_id") or ""),
+            ),
+        )
         results: list[dict[str, Any]] = []
         for action in plan.actions:
             record = self._execute_action(
                 scope_type=scope_type,
-                scope_id=scope_id,
+                scope_id=normalized_scope_id,
                 action=action,
                 request=request,
             )
@@ -292,12 +330,21 @@ class AgentMemoryRuntime:
 
         if not self.enabled:
             return []
-        return self._store.find_by_topics(
+        records = self._store.find_by_topics(
             scope_type=scope_type,
             scope_id=scope_id.strip(),
             topics=topics,
             memory_type=None,
         )
+        log_debug(
+            self._logger,
+            (
+                "按主题读取记忆详情: "
+                f"topics={topics} hit_count={len(records)} hit_topics={self._summarize_topics(records)}"
+            ),
+            LogContext(device_id=scope_id.strip()),
+        )
+        return records
 
     def list_memories(
         self,
@@ -311,13 +358,13 @@ class AgentMemoryRuntime:
 
         if not self.enabled:
             return []
-        records = self._store.list_active(scope_type=scope_type, scope_id=scope_id.strip())
+        records = self._store.list_records(scope_type=scope_type, scope_id=scope_id.strip())
         if memory_type is not None:
             records = [record for record in records if record.memory_type == memory_type]
         return records[: max(1, limit)]
 
     def delete_memory(self, *, memory_id: str, scope_type: MemoryScope, scope_id: str) -> AgentMemoryRecord | None:
-        """按编号软删除一条长期记忆。"""
+        """按编号删除一条长期记忆。"""
 
         if not self.enabled:
             raise ValueError("Agent 记忆功能未启用")
@@ -338,7 +385,7 @@ class AgentMemoryRuntime:
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按主题软删除一条长期记忆。"""
+        """按主题删除一条长期记忆。"""
 
         return self._store.delete_by_topic(
             topic=topic,
@@ -425,7 +472,6 @@ class AgentMemoryRuntime:
             confidence=target.confidence,
             metadata={**target.metadata, **request.metadata},
             created_at_ms=target.created_at_ms,
-            deleted_at_ms=None,
         )
         return self._store.upsert(updated)
 
@@ -507,6 +553,39 @@ class AgentMemoryRuntime:
         """兼容旧调用面，返回不含内部编号的公开字典。"""
 
         return AgentMemoryRuntime.record_to_public_dict(record)
+
+    @staticmethod
+    def _summarize_topics(records: list[AgentMemoryRecord], *, limit: int = 12) -> list[str]:
+        """生成记忆主题摘要，便于 DEBUG 日志排查。"""
+
+        topics = [f"{record.memory_type}:{record.topic}" for record in records[:limit]]
+        if len(records) > limit:
+            topics.append(f"...({len(records) - limit} more)")
+        return topics
+
+    @staticmethod
+    def _summarize_actions(actions: list[MemoryOperationAction], *, limit: int = 12) -> list[dict[str, str]]:
+        """生成记忆动作摘要，避免日志输出完整正文。"""
+
+        summaries = [
+            {
+                "operation": action.operation,
+                "memory_type": action.memory_type,
+                "topic": action.topic,
+                "memory_id": action.memory_id,
+            }
+            for action in actions[:limit]
+        ]
+        if len(actions) > limit:
+            summaries.append(
+                {
+                    "operation": "summary",
+                    "memory_type": "",
+                    "topic": f"...({len(actions) - limit} more)",
+                    "memory_id": "",
+                }
+            )
+        return summaries
 
     @staticmethod
     def _build_feedback(results: list[dict[str, Any]]) -> str:

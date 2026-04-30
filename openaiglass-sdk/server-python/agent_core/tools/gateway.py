@@ -71,6 +71,10 @@ class ToolGateway:
             f"tool.call name={tool.spec.name} arguments={summarize_payload(raw_arguments)}",
             LogContext(session_id=context.session_id, device_id=context.device_id, message_id=context.turn_id),
         )
+        context.announce_tool_progress(
+            tool_name=tool.spec.name,
+            message=tool.spec.progress_message,
+        )
 
         try:
             result = tool.run(context, input_data)

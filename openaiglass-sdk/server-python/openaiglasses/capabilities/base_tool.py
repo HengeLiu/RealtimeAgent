@@ -30,6 +30,7 @@ class BaseTool(ABC):
     input_model: type[BaseModel] | None = None
     output_model: type[BaseModel] | None = None
     expose_to_model: bool = True
+    progress_message: str | None = None
 
     @abstractmethod
     def run(self, context, input_data: dict[str, Any]) -> CapabilityResult:

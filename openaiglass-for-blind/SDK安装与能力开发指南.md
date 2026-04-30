@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v68`。本版本在 `sdk-v67` 的长期记忆分类语义基础上，补强主 Agent 主动记忆提示：用户自然说出姓名、称呼、导航偏好等值得长期保存的信息时，即使没有说“记住”，主 Agent 也应调用 `manage_memory`。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v69`。本版本在 `agent_tts` 工具链路中增加 SDK 级工具执行前置播报：当模型已经决定调用带 `progress_message` 的 Tool，但 Tool 尚未执行完成时，SDK 会先播放一段短提示，减少用户在耗时工具调用期间听到的静默等待。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
 
@@ -16,6 +16,7 @@
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR | 默认 `VOICE_INPUT_MODE=auto`：`VOICE_REPLY_MODE=agent_tts` 时等价于 `asr_text`，`VOICE_REPLY_MODE=omni_realtime` 时等价于 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
+| 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message` | 业务 Tool 可声明一句简短等待提示；SDK 会在工具执行前通过语音运行时播报，同一轮同一工具只播报一次。业务代码不要自行调用播放器。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
@@ -517,6 +518,38 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 `sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。由于当前固件没有 AEC，播放期间仍不会保持麦克风活跃；如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
 
 当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token，TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime + realtime_semantic_vad` 模式已经把建连、音频上行、照片追加和 turn detection 前移到用户说话期间，由 Omni 自动提交并直出语音；但真实 ESP32 端仍因缺少 AEC 保持播放期间半双工，播放中自然插话和更激进的 full-duplex 体验需要端侧 AEC/VAD 能力继续配合。
+
+#### 3.8.1 工具调用前置播报
+
+`sdk-v69` 起，`agent_tts` 链路支持 SDK 级工具调用前置播报。调研 OpenAI Realtime/Responses 工具调用事件后，当前不应依赖模型在返回工具调用前稳定先生成一段等待语：工具调用本身是模型响应里的决策事件，前置提示更适合由 SDK 在工具即将执行时统一插入。
+
+业务 Tool 可以在公开 `BaseTool` 上声明 `progress_message`：
+
+```python
+from openaiglasses import BaseTool, CapabilityResult
+
+
+class StartDemoTool(BaseTool):
+    """启动一个可能耗时的业务能力。"""
+
+    name = "start_demo"
+    description = "当用户要求启动 demo 能力时调用。"
+    input_model = StartDemoInput
+    progress_message = "我先处理一下，请稍等。"
+
+    def run(self, context, input_data):
+        """执行 demo 能力并返回结果。"""
+
+        return CapabilityResult.success(data={"ok": True})
+```
+
+使用边界：
+
+1. `progress_message` 应该短、口语化，不要包含最终结论，例如“我先连接手机摄像头看一下”。
+2. 同一轮同一工具只会播报一次，避免工具循环中重复提示。
+3. SDK 内置的设备状态查询、任务状态查询、取消任务、抓拍和手机视频链路工具已经带有默认前置播报。
+4. 这项能力只解决“模型已决定调用工具后，工具执行期间的静默等待”。如果模型首轮决策本身很慢，仍需通过 ASR 前移、模型/工具面收敛、TTS 预热和 Realtime 直出链路继续优化。
+5. `VOICE_REPLY_MODE=omni_realtime` 语音直出链路当前不执行 SDK Tool、Task、Skill 或长期记忆工具，因此也不会触发这类工具前置播报；需要工具编排时应使用 `VOICE_REPLY_MODE=agent_tts`。
 
 注意：`sdk-v18` 已新增全双工实时语音第一版。普通半双工链路仍然保留，播放期间暂停麦克风；全双工链路需要端侧或手机侧提供 AEC/VAD 能力，并通过实时语音协议上报用户插话、回声候选和输入提交事件。
 

@@ -39,6 +39,7 @@ class QueryDeviceStateTool(BaseTool):
         output_model=QueryDeviceStateOutput,
         capability_type="tool",
         tags=["device", "status"],
+        progress_message="我先看一下设备状态。",
     )
 
     def run(self, context: AgentToolContext, input_data: QueryDeviceStateInput) -> CapabilityResult:

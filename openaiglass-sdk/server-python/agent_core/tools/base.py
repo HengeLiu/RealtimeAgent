@@ -39,6 +39,8 @@ class AgentToolContext:
     mcp_gateway: "McpGateway | None" = None
     memory_runtime: "AgentMemoryRuntime | None" = None
     turn_meta: dict[str, Any] = field(default_factory=dict)
+    progress_callback: Callable[[str], None] | None = None
+    progress_announced_tools: set[str] = field(default_factory=set)
     emitted_assets: list[MediaAssetRef] = field(default_factory=list)
     emitted_artifacts: list[DerivedArtifact] = field(default_factory=list)
     emitted_tasks: list[TaskRef] = field(default_factory=list)
@@ -49,6 +51,32 @@ class AgentToolContext:
         self._extend_unique(self.emitted_assets, result.asset_refs, "asset_id")
         self._extend_unique(self.emitted_artifacts, result.derived_artifacts, "artifact_id")
         self._extend_unique(self.emitted_tasks, result.task_refs, "task_id")
+
+    def announce_tool_progress(self, *, tool_name: str, message: str | None) -> None:
+        """在工具执行前向语音运行时发送一次进度播报。
+
+        主要逻辑：
+        1. 只在调用方提供 `progress_callback` 时生效。
+        2. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
+        3. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
+
+        参数：
+        1. `tool_name`：即将执行的工具名称。
+        2. `message`：播报文本，空文本表示不播报。
+
+        异常情况：
+        1. 回调异常会被吞掉；正式错误仍由工具执行链路返回。
+        """
+
+        if self.progress_callback is None or not message:
+            return
+        if tool_name in self.progress_announced_tools:
+            return
+        self.progress_announced_tools.add(tool_name)
+        try:
+            self.progress_callback(message)
+        except Exception:
+            return
 
     @staticmethod
     def _extend_unique(target: list[Any], source: list[Any], id_field: str) -> None:

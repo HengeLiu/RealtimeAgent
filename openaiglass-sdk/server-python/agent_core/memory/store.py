@@ -25,8 +25,8 @@ class AgentMemoryStore:
 
         raise NotImplementedError
 
-    def list_active(self, *, scope_type: MemoryScope, scope_id: str) -> list[AgentMemoryRecord]:
-        """列出指定作用域下未删除的记忆。"""
+    def list_records(self, *, scope_type: MemoryScope, scope_id: str) -> list[AgentMemoryRecord]:
+        """列出指定作用域下的全部记忆。"""
 
         raise NotImplementedError
 
@@ -48,7 +48,7 @@ class AgentMemoryStore:
         raise NotImplementedError
 
     def delete(self, *, memory_id: str, scope_type: MemoryScope, scope_id: str) -> AgentMemoryRecord | None:
-        """软删除指定记忆。"""
+        """删除指定记忆。"""
 
         raise NotImplementedError
 
@@ -60,7 +60,7 @@ class AgentMemoryStore:
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按主题软删除指定记忆。"""
+        """按主题删除指定记忆。"""
 
         raise NotImplementedError
 
@@ -70,7 +70,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
 
     主要功能：
     1. 为单元测试和无持久化场景提供轻量实现。
-    2. 保持与文件存储相同的软删除语义。
+    2. 保持与文件存储相同的删除语义。
     """
 
     def __init__(self, records: Iterable[AgentMemoryRecord] | None = None) -> None:
@@ -100,7 +100,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
         """
 
         with self._lock:
-            existing = self._find_active_by_topic_locked(
+            existing = self._find_by_topic_locked(
                 scope_type=record.scope_type,
                 scope_id=record.scope_id,
                 topic=record.topic,
@@ -115,15 +115,15 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             self._records[record.memory_id] = record
             return record
 
-    def list_active(self, *, scope_type: MemoryScope, scope_id: str) -> list[AgentMemoryRecord]:
-        """列出指定作用域下未删除的记忆。"""
+    def list_records(self, *, scope_type: MemoryScope, scope_id: str) -> list[AgentMemoryRecord]:
+        """列出指定作用域下的全部记忆。"""
 
         with self._lock:
             return sorted(
                 [
                     record
                     for record in self._records.values()
-                    if record.scope_type == scope_type and record.scope_id == scope_id and record.active
+                    if record.scope_type == scope_type and record.scope_id == scope_id
                 ],
                 key=lambda item: (item.updated_at_ms, self._record_order.get(item.memory_id, -1)),
                 reverse=True,
@@ -137,7 +137,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
         """
 
         normalized_query = query.strip().lower()
-        candidates = self.list_active(scope_type=scope_type, scope_id=scope_id)
+        candidates = self.list_records(scope_type=scope_type, scope_id=scope_id)
         if not normalized_query:
             return candidates[:limit]
         query_terms = {term for term in normalized_query.split() if term}
@@ -170,7 +170,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
         with self._lock:
             result: list[AgentMemoryRecord] = []
             for topic in normalized_topics:
-                record = self._find_active_by_topic_locked(
+                record = self._find_by_topic_locked(
                     scope_type=scope_type,
                     scope_id=scope_id,
                     topic=topic,
@@ -181,14 +181,14 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             return result
 
     def delete(self, *, memory_id: str, scope_type: MemoryScope, scope_id: str) -> AgentMemoryRecord | None:
-        """软删除指定记忆。"""
+        """删除指定记忆。"""
 
         with self._lock:
             record = self._records.get(memory_id)
             if record is None or record.scope_type != scope_type or record.scope_id != scope_id:
                 return None
-            record.deleted_at_ms = now_ms()
-            record.updated_at_ms = record.deleted_at_ms
+            self._records.pop(memory_id, None)
+            self._record_order.pop(memory_id, None)
             return record
 
     def delete_by_topic(
@@ -199,13 +199,13 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按主题软删除指定记忆。"""
+        """按主题删除指定记忆。"""
 
         normalized_topic = self._normalize_topic(topic)
         if not normalized_topic:
             return None
         with self._lock:
-            record = self._find_active_by_topic_locked(
+            record = self._find_by_topic_locked(
                 scope_type=scope_type,
                 scope_id=scope_id,
                 topic=normalized_topic,
@@ -213,11 +213,11 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
             )
             if record is None:
                 return None
-            record.deleted_at_ms = now_ms()
-            record.updated_at_ms = record.deleted_at_ms
+            self._records.pop(record.memory_id, None)
+            self._record_order.pop(record.memory_id, None)
             return record
 
-    def _find_active_by_topic_locked(
+    def _find_by_topic_locked(
         self,
         *,
         scope_type: MemoryScope,
@@ -227,7 +227,7 @@ class InMemoryAgentMemoryStore(AgentMemoryStore):
     ) -> AgentMemoryRecord | None:
         normalized_topic = self._normalize_topic(topic)
         for record in self._records.values():
-            if record.scope_type != scope_type or record.scope_id != scope_id or not record.active:
+            if record.scope_type != scope_type or record.scope_id != scope_id:
                 continue
             if memory_type is not None and record.memory_type != memory_type:
                 continue
@@ -270,7 +270,7 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
         return result
 
     def delete(self, *, memory_id: str, scope_type: MemoryScope, scope_id: str) -> AgentMemoryRecord | None:
-        """软删除指定记忆并同步落盘。"""
+        """删除指定记忆并同步落盘。"""
 
         result = super().delete(memory_id=memory_id, scope_type=scope_type, scope_id=scope_id)
         if result is not None:
@@ -285,7 +285,7 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
         scope_id: str,
         memory_type: MemoryType | None = None,
     ) -> AgentMemoryRecord | None:
-        """按主题软删除指定记忆并同步落盘。"""
+        """按主题删除指定记忆并同步落盘。"""
 
         result = super().delete_by_topic(
             topic=topic,
@@ -309,16 +309,8 @@ class JsonFileAgentMemoryStore(InMemoryAgentMemoryStore):
             if not isinstance(item, dict):
                 continue
             try:
-                if "content" not in item and "text" in item:
-                    item["content"] = item.get("text") or ""
-                if "memory_type" not in item:
-                    item["memory_type"] = "personalized"
                 if item.get("memory_type") not in {"basic", "personalized"}:
                     continue
-                if "topic" not in item:
-                    item["topic"] = "未命名记忆"
-                item.pop("text", None)
-                item.pop("category", None)
                 records.append(AgentMemoryRecord(**item))
             except TypeError:
                 continue

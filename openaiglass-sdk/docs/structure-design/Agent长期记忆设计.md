@@ -109,7 +109,7 @@ MemoryOperationPlan(
 
 ## 新增、更新和删除方案
 
-长期记忆维护采用“主 Agent 提意图、记忆管理子 Agent 出计划、SDK runtime 执行计划”的三段式流程。这样可以让自然语言理解保持灵活，同时把真正的写入、覆盖、软删除和作用域隔离控制在 SDK 里。
+长期记忆维护采用“主 Agent 提意图、记忆管理子 Agent 出计划、SDK runtime 执行计划”的三段式流程。这样可以让自然语言理解保持灵活，同时把真正的写入、覆盖、删除和作用域隔离控制在 SDK 里。
 
 ### 1. 统一请求和执行入口
 
@@ -119,7 +119,7 @@ MemoryOperationPlan(
 2. `memory_context`：主 Agent 从历史聊天中摘取的、与记忆维护有关的关键信息；没有时留空。
 3. `metadata`：SDK 自动补充 `session_id`、`turn_id` 等审计信息。
 
-`AgentMemoryRuntime.manage_memory(...)` 每次执行前会读取当前 user/device 作用域下最多 100 条有效记忆，并交给 `LlmMemoryManagementAgent.plan(...)` 生成动作计划。主 Agent 不传 `operation/topic/content/memory_id/category/reason`，这些都由 MemoryAgent 根据自然语言和已有记忆自行判断。
+`AgentMemoryRuntime.manage_memory(...)` 每次执行前会读取当前 user/device 作用域下最多 100 条记忆，并交给 `LlmMemoryManagementAgent.plan(...)` 生成动作计划。主 Agent 不传 `operation/memory_type/topic/content/memory_id/reason`，这些都由 MemoryAgent 根据自然语言和已有记忆自行判断。
 
 ### 2. 新增记忆
 
@@ -145,7 +145,7 @@ MemoryOperationPlan(
 1. MemoryAgent 输出 `update` 动作，并尽量给出内部 `memory_id` 或主题。
 2. `AgentMemoryRuntime._find_update_target(...)` 按以下顺序寻找目标：
    - 先按 `memory_id` 精确匹配。
-   - 再按动作主题匹配当前作用域下的有效记忆。
+   - 再按动作主题匹配当前作用域下的记忆。
 3. 如果找到目标，SDK 创建新的 `AgentMemoryRecord` 对象，但复用旧 `memory_id`、`scope_type/scope_id` 和 `created_at_ms`。
 4. 新动作中的 `topic`、`content`、`memory_type` 和请求元数据会覆盖或合并到旧记录上。
 5. 存储层调用 `upsert(...)` 写回同一个 `memory_id`，更新时间刷新。
@@ -155,15 +155,15 @@ MemoryOperationPlan(
 
 ### 4. 删除记忆
 
-删除路径用于用户要求“忘掉”“删除”“别记住”某条信息。当前 SDK 使用软删除，不从 JSON 中物理移除记录，而是写入 `deleted_at_ms` 并刷新 `updated_at_ms`。软删除便于后续审计和问题回溯。
+删除路径用于用户要求“忘掉”“删除”“别记住”某条信息。当前 SDK 会从存储中物理移除记录，JSON 文件中不再保留已删除条目。
 
 执行流程：
 
 1. MemoryAgent 输出 `delete` 动作，尽量给出内部 `memory_id` 或主题。
 2. 对“忘掉刚才那条记忆”“删除上一条信息”这类指代，由 MemoryAgent 根据传入的已有记忆列表自行判断目标，而不是由 SDK 启发式猜测。
 3. `AgentMemoryRuntime.manage_memory(...)` 按以下顺序执行删除：
-   - 按 `memory_id` 精确软删除。
-   - 按主题但不限制信息类型软删除。
+   - 按 `memory_id` 精确删除。
+   - 按主题但不限制信息类型删除。
 4. 如果所有路径都找不到目标，动作摘要会标记 `success=false`，反馈文本由 MemoryAgent 决定；主 Agent 应按反馈向用户说明未找到或需要更明确的信息。
 
 删除策略必须保守：不能因为一句模糊表达删除多条记忆。当前一次 `manage_memory(delete)` 最多删除一条记录；批量删除、按类别删除和按时间范围删除应在后续引入确认机制后再开放。
@@ -174,8 +174,7 @@ MemoryOperationPlan(
 
 存储语义：
 
-1. 有效记忆通过 `active` 判断，`deleted_at_ms is None` 表示有效。
-2. 列表读取只返回当前 `scope_type/scope_id` 下的有效记忆；当前 `scope_id` 使用 `device_id` 作为 `user_id`。
+1. 列表读取只返回当前 `scope_type/scope_id` 下仍存在的记忆；当前 `scope_id` 使用 `device_id` 作为 `user_id`。
 3. 记忆列表按 `updated_at_ms` 倒序排列；如果多条记忆在同一毫秒写入，则按进程内写入顺序倒序排列，保证“刚才/上一条”指代稳定。
 4. 搜索当前是轻量关键词检索：先做整句包含匹配，再做空格分词匹配；中文无空格时会用字符重叠做兜底打分。
 5. `memory_search(topic, topics)` 按主题读取记忆详情，不暴露内部 `memory_id`；未命中时返回“没有找到匹配的记忆”。
@@ -187,7 +186,7 @@ MemoryOperationPlan(
 1. 记忆维护完全依赖 MemoryAgent 的模型判断，模型不可用时不会降级执行。
 2. 搜索不是语义向量检索，对同义表达、错别字和复杂中文主题召回有限。
 3. 记忆作用域当前默认按 `device_id` 隔离，尚未升级到账号级、用户级或家庭成员级。
-4. 删除目前是软删除，暂不做物理清理；批量删除必须由 MemoryAgent 输出多条动作并配合确认策略。
+4. 删除会物理移除记录；批量删除必须由 MemoryAgent 输出多条动作并配合确认策略。
 5. Agent 主动写入仍依赖主 Agent 按提示调用 `manage_memory`，后续可以增加独立记忆抽取器、用户确认策略和审计日志。
 
 ## 配置

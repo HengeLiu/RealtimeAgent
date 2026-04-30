@@ -69,6 +69,7 @@ class SdkToolAdapter(AgentBaseTool):
             output_model=output_model,
             capability_type="tool",
             tags=["sdk"],
+            progress_message=getattr(self.sdk_tool, "progress_message", None),
         )
 
     def run(self, context: AgentToolContext, input_data) -> AgentCapabilityResult:

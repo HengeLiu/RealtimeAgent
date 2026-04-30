@@ -25,6 +25,7 @@ from openaiglasses import (
     BasePhoneProcessor,
     BasePhoneTask,
     BaseSensorProvider,
+    BaseTool,
     CapabilityResult as PublicCapabilityResult,
     McpMethodSpec as PublicMcpMethodSpec,
     HybridTaskGateway,
@@ -1276,6 +1277,40 @@ def test_build_agent_facade_from_sdk_preloads_agent_resources(monkeypatch) -> No
 
     assert len(calls) == 1
     assert facade.get_tool_registry().get("capture_photo") is not None
+
+
+def test_sdk_tool_adapter_preserves_progress_message() -> None:
+    """测试目标：验证业务 Tool 的前置播报文案会进入 agent-core。
+
+    测试方法：
+    1. 创建一个公开 SDK Tool，并设置 `progress_message`。
+    2. 通过 SDK 构建 `AgentFacade`。
+    3. 从内部工具注册表读取适配后的 ToolSpec。
+
+    预期结果：
+    1. 适配后的 Tool 保留业务声明的前置播报文案。
+    2. 业务开发者不需要直接构造 agent-core 的 `ToolSpec`。
+    """
+
+    class DemoTool(BaseTool):
+        name = "demo_progress_tool"
+        description = "测试前置播报"
+        progress_message = "我先处理一下。"
+
+        def run(self, context, input_data):
+            return PublicCapabilityResult.success(data={"ok": True})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_tool(DemoTool())
+
+    facade = build_agent_facade_from_sdk(
+        sdk=sdk,
+        settings=ServerSettings(),
+    )
+
+    tool = facade.get_tool_registry().get("demo_progress_tool")
+    assert tool is not None
+    assert tool.spec.progress_message == "我先处理一下。"
 
 
 def test_openai_glasses_sdk_registers_skill_runtime() -> None:

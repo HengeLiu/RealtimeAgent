@@ -84,6 +84,7 @@ class ToolSpec:
     output_model: type[BaseModel] | None = None
     capability_type: Literal["tool", "mcp", "task"] = "tool"
     tags: list[str] = field(default_factory=list)
+    progress_message: str | None = None
 
 
 @dataclass(slots=True)

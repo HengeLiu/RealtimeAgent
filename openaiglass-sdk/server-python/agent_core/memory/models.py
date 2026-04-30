@@ -20,7 +20,7 @@ class AgentMemoryRecord:
     1. 保存基本信息和个性化信息。
     2. 基本信息保存短小、稳定、每轮直接注入的信息。
     3. 个性化信息保存主题和详细内容，每轮只注入主题，详情由 `memory_search` 按需读取。
-    4. 记录作用域、更新时间和删除状态，便于审计。
+    4. 记录作用域和更新时间，便于审计。
 
     主要属性：
     1. `memory_id`：记忆唯一编号。
@@ -29,7 +29,6 @@ class AgentMemoryRecord:
     4. `topic`：记忆主题；个性化信息必须有主题。
     5. `content`：记忆正文。
     6. `source`：记忆来源，区分用户主动要求和 Agent 主动推断。
-    7. `deleted_at_ms`：删除时间，非空表示软删除。
     """
 
     memory_id: str
@@ -43,7 +42,6 @@ class AgentMemoryRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at_ms: int = field(default_factory=now_ms)
     updated_at_ms: int = field(default_factory=now_ms)
-    deleted_at_ms: int | None = None
 
     @classmethod
     def create(
@@ -84,15 +82,3 @@ class AgentMemoryRecord:
             confidence=confidence,
             metadata=metadata or {},
         )
-
-    @property
-    def active(self) -> bool:
-        """判断记忆是否仍然有效。"""
-
-        return self.deleted_at_ms is None
-
-    @property
-    def text(self) -> str:
-        """兼容旧版本统一记忆字段。"""
-
-        return self.content

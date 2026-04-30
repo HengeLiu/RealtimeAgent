@@ -495,8 +495,18 @@ class StreamedAgentTurnObserver:
                 if event.name == "tool_called":
                     raw_item = getattr(event.item, "raw_item", None)
                     tool_name = getattr(raw_item, "name", "")
+                    call_id = getattr(raw_item, "call_id", None)
+                    log_debug(
+                        self._logger,
+                        (
+                            "agent-core 工具调用请求: "
+                            f"tool_name={tool_name} call_id={call_id} "
+                            f"arguments={OpenAIAgentLoopRunner._summarize_for_log(getattr(raw_item, 'arguments', ''))}"
+                        ),
+                        LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                    )
                     if tool_name in _IMAGE_FOLLOWUP_TOOL_NAMES:
-                        capture_call_id = getattr(raw_item, "call_id", None)
+                        capture_call_id = call_id
                         image_asset = await self._wait_for_new_image_asset(
                             tool_context=tool_context,
                             session=session,
@@ -516,9 +526,18 @@ class StreamedAgentTurnObserver:
                             )
                     continue
 
-                if event.name == "tool_output" and capture_call_id is not None:
+                if event.name == "tool_output":
                     raw_item = getattr(event.item, "raw_item", None)
-                    if getattr(raw_item, "call_id", None) == capture_call_id:
+                    log_debug(
+                        self._logger,
+                        (
+                            "agent-core 工具调用结果: "
+                            f"call_id={getattr(raw_item, 'call_id', None)} "
+                            f"output={OpenAIAgentLoopRunner._summarize_for_log(getattr(raw_item, 'output', event.item))}"
+                        ),
+                        LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                    )
+                    if capture_call_id is not None and getattr(raw_item, "call_id", None) == capture_call_id:
                         image_asset = await self._wait_for_new_image_asset(
                             tool_context=tool_context,
                             session=session,
@@ -535,6 +554,7 @@ class StreamedAgentTurnObserver:
                             capability_traces=capability_traces,
                             model_request=model_request,
                         )
+                    continue
         finally:
             aclose = getattr(event_stream, "aclose", None)
             if callable(aclose):
@@ -679,6 +699,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         """
 
         runtime = self._turn_runtime_factory.build(session=session, turn=turn)
+        runtime.tool_context.progress_callback = progress_callback
 
         if not self._settings.dashscope_api_key.strip():
             return self._attach_capability_outputs(
@@ -700,6 +721,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     session=session,
                     turn=turn,
                     runtime=runtime,
+                    progress_callback=progress_callback,
                     reply_text_delta_callback=reply_text_delta_callback,
                 )
             except Exception as exc:
@@ -833,6 +855,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         session: AgentSession,
         turn: AgentTurn,
         runtime: AgentTurnRuntime,
+        progress_callback: Callable[[str], None] | None,
         reply_text_delta_callback: Callable[[str], None] | None,
     ) -> AgentTurnResult:
         """执行音频原生 Omni Agent 轮次。
@@ -878,6 +901,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             "messages": self._sanitize_model_messages(messages),
             "tool_count": len(tools),
         }
+        runtime.tool_context.progress_callback = progress_callback
         log_info(
             self._logger,
             (
@@ -935,10 +959,30 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                         "模型返回的工具参数不是合法 JSON",
                         details={"tool_name": tool_name, "arguments": arguments_text},
                     ) from exc
+                log_debug(
+                    self._logger,
+                    (
+                        "agent-core 音频原生链路工具调用请求: "
+                        f"step={step_index + 1} tool_name={tool_name} tool_call_id={tool_call['id']} "
+                        f"arguments={self._summarize_for_log(arguments)}"
+                    ),
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
                 result = self._tool_gateway.invoke(
                     name=tool_name,
                     context=runtime.tool_context,
                     arguments=arguments,
+                )
+                log_debug(
+                    self._logger,
+                    (
+                        "agent-core 音频原生链路工具调用结果: "
+                        f"step={step_index + 1} tool_name={tool_name} tool_call_id={tool_call['id']} "
+                        f"ok={result.ok} data={self._summarize_for_log(result.data)} "
+                        f"assets={len(result.asset_refs)} artifacts={len(result.derived_artifacts)} "
+                        f"tasks={len(result.task_refs)}"
+                    ),
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
                 )
                 messages.append(
                     {
@@ -1566,6 +1610,31 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         return messages
 
     @staticmethod
+    def _summarize_for_log(value: Any, *, max_chars: int = 2000) -> str:
+        """生成适合 DEBUG 日志的短摘要。
+
+        主要逻辑：
+        1. 优先转成 JSON，便于排查工具入参和返回值。
+        2. 对不可序列化对象退回 `str()`。
+        3. 限制最大长度，避免图片、音频或长文本结果刷屏。
+
+        参数：
+        1. `value`：需要写入日志的任意对象。
+        2. `max_chars`：日志摘要最大字符数。
+
+        返回值：
+        1. 截断后的字符串摘要。
+        """
+
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except TypeError:
+            text = str(value)
+        if len(text) <= max_chars:
+            return text
+        return f"{text[:max_chars]}...(truncated, chars={len(text)})"
+
+    @staticmethod
     def _build_current_turn_content(turn: AgentTurn) -> str | list[dict[str, Any]]:
         """构造当前轮用户消息内容。
 
@@ -1663,8 +1732,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             "必要时可以调用已提供的工具。\n\n"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
             "例如：姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等。\n\n"
-            "同样也要主动使用关于用户的记忆，尤其是出行规划、行动建议等话题，要主动查询用户的相关记忆主题。\n"
-            "基本信息已经直接告诉你，你还可以使用 memory_search 工具查询你关注的其他记忆主题。\n"
+            "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。\n"
         )
         if self._skill_runtime is None or not session_id:
             return base

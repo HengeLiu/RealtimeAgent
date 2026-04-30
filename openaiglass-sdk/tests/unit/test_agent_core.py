@@ -444,6 +444,7 @@ class AgentCoreTestCase(unittest.TestCase):
         )
         self.assertEqual(list_result.data["memories"], [])
         self.assertEqual(list_result.message, "没有找到匹配的记忆")
+        self.assertEqual(memory_runtime.list_memories(scope_type="device", scope_id="glass-001"), [])
 
     def test_manage_memory_executes_multiple_actions_in_order(self) -> None:
         """测试目标：验证一次记忆维护可以串行执行多个动作。
@@ -561,7 +562,7 @@ class AgentCoreTestCase(unittest.TestCase):
         )
 
         self.assertNotIn("memory_id", update_result.data["actions"][0])
-        updated = store.list_active(scope_type="device", scope_id="glass-001")[0]
+        updated = store.list_records(scope_type="device", scope_id="glass-001")[0]
         self.assertEqual(updated.memory_id, record.memory_id)
         self.assertEqual(updated.topic, "姓名")
         self.assertEqual(updated.content, "用户姓名是小李。")
@@ -1009,6 +1010,7 @@ class AgentCoreTestCase(unittest.TestCase):
                 name="echo_name",
                 description="回显名字",
                 input_model=_EchoArgs,
+                progress_message="我先查一下你的名字。",
             )
 
             def __init__(self) -> None:
@@ -1091,11 +1093,13 @@ class AgentCoreTestCase(unittest.TestCase):
                 def __init__(self) -> None:
                     self.chat = _FakeChat()
 
+            progress_parts: list[str] = []
             with patch.object(runner, "_create_sdk_client", return_value=_FakeClient()):
-                result = runner.run_turn(session=session, turn=turn)
+                result = runner.run_turn(session=session, turn=turn, progress_callback=progress_parts.append)
 
         self.assertIsNone(result.error)
         self.assertEqual(result.reply_text, "你叫文刀。")
+        self.assertEqual(progress_parts, ["我先查一下你的名字。"])
         self.assertEqual(captured_requests[0]["model"], "qwen3.5-omni-plus")
         self.assertEqual(result.meta["model_request"]["model"], "qwen3.5-omni-plus")
         self.assertEqual(echo_tool.calls, ["文刀"])
@@ -1110,6 +1114,52 @@ class AgentCoreTestCase(unittest.TestCase):
             and message["content"][1].get("type") == "input_audio"
         )
         self.assertIn("<redacted>", audio_model_message["content"][1]["input_audio"]["data"])
+
+    def test_tool_gateway_announces_progress_once_before_tool_run(self) -> None:
+        """测试目标：验证 SDK 在工具执行前可以发出一次前置语音播报。
+
+        测试方法：
+        1. 注册一个带 `progress_message` 的测试工具。
+        2. 构造带 `progress_callback` 的 `AgentToolContext`。
+        3. 连续调用同一个工具两次。
+
+        预期结果：
+        1. 工具第一次执行前会触发前置播报。
+        2. 同一轮同一工具不会重复播报。
+        3. 工具执行结果不受播报影响。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_progress",
+                description="回显文本",
+                input_model=_EchoArgs,
+                progress_message="我先处理一下。",
+            )
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                return CapabilityResult.success(data={"text": input_data.text})
+
+        registry, gateway = build_tooling()
+        registry.register_external_tool(_EchoTool())
+        progress_parts: list[str] = []
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_tool_progress_001",
+            turn_id="turn_tool_progress_001",
+        )
+        context.progress_callback = progress_parts.append
+
+        first_result = gateway.invoke(name="echo_progress", context=context, arguments={"text": "一"})
+        second_result = gateway.invoke(name="echo_progress", context=context, arguments={"text": "二"})
+
+        self.assertEqual(progress_parts, ["我先处理一下。"])
+        self.assertEqual(first_result.data, {"text": "一"})
+        self.assertEqual(second_result.data, {"text": "二"})
 
     def test_openai_runner_uses_minimal_system_prompt(self) -> None:
         """测试目标：验证发给模型的 system prompt 只保留角色与风格约束。

@@ -20,9 +20,9 @@
 
 迭代记录：
 
-1. [SDK v47 迭代记录](./stage2/iteration-v47.md)：TTS 预热流，降低首段音频可见延迟。
-2. [SDK v46 迭代记录](./stage2/iteration-v46.md)：Agent 请求前预创建最终回复 TTS session。
-3. [SDK v45 迭代记录](./stage2/iteration-v45.md)：TTS 接口级首包延迟日志。
+1. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
+2. [SDK v68 迭代记录](./stage2/iteration-v68.md)：主 Agent 主动记忆提示补强。
+3. [SDK v67 迭代记录](./stage2/iteration-v67.md)：长期记忆分类描述统一。
 4. [全部迭代记录](./stage2/)
 
 盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。
