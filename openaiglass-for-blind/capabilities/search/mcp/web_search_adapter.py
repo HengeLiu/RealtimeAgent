@@ -26,8 +26,9 @@ class WebSearchMcpAdapter(BaseMcpAdapter):
 
     主要功能：
     1. 在业务层注册 `web.search` MCP 方法。
-    2. 默认通过 DuckDuckGo HTML 页面做轻量网页搜索。
-    3. 网络不可用时返回结构化错误，便于 Agent 告知用户稍后再试。
+    2. 优先通过博查 AI Search API 做正式搜索。
+    3. 未配置正式搜索 API Key 时，可回退到 DuckDuckGo HTML 页面用于本地开发验证。
+    4. 网络不可用时返回结构化错误，便于 Agent 告知用户稍后再试。
 
     主要方法：
     1. `list_methods`：声明搜索方法。
@@ -73,20 +74,157 @@ class WebSearchMcpAdapter(BaseMcpAdapter):
         if not query:
             return CapabilityResult.failed(code="invalid_input", message="query 不能为空")
         max_results = max(1, min(8, int(input_data.max_results or 5)))
+        provider = self._resolve_provider()
         try:
-            results = self._search_duckduckgo(query=query, max_results=max_results)
+            results = self._search(query=query, max_results=max_results, provider=provider)
         except Exception as exc:
             return CapabilityResult.failed(
                 code="web_search_failed",
                 message="网页搜索失败",
-                details={"query": query, "reason": str(exc)},
-                meta={"adapter": self.adapter_name, "provider": "duckduckgo_html"},
+                details={"query": query, "provider": provider, "reason": str(exc)},
+                meta={"adapter": self.adapter_name, "provider": provider},
             )
         return CapabilityResult.success(
             data={"query": query, "results": results, "result_count": len(results)},
             message=f"找到 {len(results)} 条搜索结果",
-            meta={"adapter": self.adapter_name, "provider": "duckduckgo_html"},
+            meta={"adapter": self.adapter_name, "provider": provider},
         )
+
+    def _resolve_provider(self) -> str:
+        """解析搜索服务提供方。
+
+        参数：
+        1. 无。
+
+        返回值：
+        1. `bocha`：使用博查 AI Search 正式 API。
+        2. `duckduckgo_html`：使用 DuckDuckGo HTML 开发 fallback。
+
+        异常情况：
+        1. 当显式要求 `bocha` 但未配置 API Key 时，后续调用会返回结构化失败。
+        """
+
+        provider = str(os.getenv("WEB_SEARCH_PROVIDER") or "auto").strip().lower()
+        if provider in {"", "auto"}:
+            return "bocha" if self._bocha_api_key() else "duckduckgo_html"
+        return provider
+
+    def _search(self, *, query: str, max_results: int, provider: str) -> list[dict[str, Any]]:
+        """按 provider 执行搜索。
+
+        参数：
+        1. `query`：搜索关键词。
+        2. `max_results`：最大结果数。
+        3. `provider`：搜索服务提供方。
+
+        返回值：
+        1. 统一结构的搜索结果列表。
+
+        异常情况：
+        1. 不支持的 provider 会抛出 `ValueError`。
+        """
+
+        if provider == "bocha":
+            return self._search_bocha(query=query, max_results=max_results)
+        if provider == "duckduckgo_html":
+            return self._search_duckduckgo(query=query, max_results=max_results)
+        raise ValueError(f"不支持的搜索服务 provider: {provider}")
+
+    def _search_bocha(self, *, query: str, max_results: int) -> list[dict[str, Any]]:
+        """调用博查 AI Search API 并解析结果。
+
+        参数：
+        1. `query`：搜索关键词。
+        2. `max_results`：最大结果数。
+
+        返回值：
+        1. 搜索结果列表，每项包含标题、摘要、链接和来源信息。
+
+        异常情况：
+        1. 未配置 API Key、HTTP 请求失败或接口返回错误时抛出异常，由 `invoke` 转成结构化失败。
+        """
+
+        api_key = self._bocha_api_key()
+        if not api_key:
+            raise RuntimeError("未配置 BOCHA_SEARCH_API_KEY 或 BOCHA_API_KEY")
+        url = os.getenv("BOCHA_SEARCH_API_URL") or "https://api.bochaai.com/v1/web-search"
+        payload = {
+            "query": query,
+            "summary": True,
+            "freshness": os.getenv("BOCHA_SEARCH_FRESHNESS") or "noLimit",
+            "count": max_results,
+        }
+        request = Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "openaiglasses-business-search/0.1",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=float(os.getenv("WEB_SEARCH_TIMEOUT_SECONDS") or "8")) as response:
+            body = response.read().decode("utf-8", errors="replace")
+        return self._parse_bocha_response(json.loads(body), max_results=max_results)
+
+    @staticmethod
+    def _bocha_api_key() -> str:
+        """读取博查搜索 API Key。
+
+        参数：
+        1. 无。
+
+        返回值：
+        1. 配置的 API Key；未配置时返回空字符串。
+        """
+
+        return str(os.getenv("BOCHA_SEARCH_API_KEY") or os.getenv("BOCHA_API_KEY") or "").strip()
+
+    @staticmethod
+    def _parse_bocha_response(payload: dict[str, Any], *, max_results: int) -> list[dict[str, Any]]:
+        """解析博查 AI Search API 返回结果。
+
+        参数：
+        1. `payload`：接口 JSON 响应。
+        2. `max_results`：最大结果数。
+
+        返回值：
+        1. 统一结构的搜索结果列表。
+
+        异常情况：
+        1. 当接口 code 非 200 时抛出 `RuntimeError`。
+        """
+
+        code = payload.get("code")
+        if code not in (None, 200):
+            raise RuntimeError(str(payload.get("msg") or payload.get("message") or f"Bocha API 返回错误 code={code}"))
+        data = payload.get("data") or {}
+        web_pages = data.get("webPages") or {}
+        values = web_pages.get("value") or []
+        results: list[dict[str, Any]] = []
+        for item in values:
+            title = str(item.get("name") or item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            snippet = str(item.get("summary") or item.get("snippet") or "").strip()
+            if not title or not url:
+                continue
+            result = {
+                "title": title,
+                "snippet": snippet,
+                "url": url,
+            }
+            site_name = str(item.get("siteName") or "").strip()
+            display_url = str(item.get("displayUrl") or "").strip()
+            if site_name:
+                result["source"] = site_name
+            if display_url:
+                result["display_url"] = display_url
+            results.append(result)
+            if len(results) >= max_results:
+                break
+        return results
 
     def _search_duckduckgo(self, *, query: str, max_results: int) -> list[dict[str, Any]]:
         """调用 DuckDuckGo HTML 搜索并解析结果。
@@ -97,6 +235,9 @@ class WebSearchMcpAdapter(BaseMcpAdapter):
 
         返回值：
         1. 搜索结果列表，每项包含标题、摘要和链接。
+
+        异常情况：
+        1. 网络异常或页面结构变化时可能抛出异常，由 `invoke` 转成结构化失败。
         """
 
         url = "https://duckduckgo.com/html/?" + urlencode({"q": query, "kl": "cn-zh"})

@@ -419,6 +419,46 @@ class SearchCapabilityTests(unittest.TestCase):
 
         self.assertEqual(results, [{"title": "标题 & 测试", "snippet": "这是摘要", "url": "https://example.com"}])
 
+    def test_web_search_adapter_parses_bocha_response(self) -> None:
+        """测试目标：搜索 adapter 能把博查 AI Search 响应解析成统一结果。
+
+        测试方法：传入最小博查 Web Search JSON 响应。
+        预期结果：优先使用 summary，并保留来源和展示链接。
+        """
+
+        payload = {
+            "code": 200,
+            "data": {
+                "webPages": {
+                    "value": [
+                        {
+                            "name": "大模型是什么",
+                            "url": "https://example.cn/llm",
+                            "displayUrl": "example.cn/llm",
+                            "summary": "大模型是一类参数规模较大的模型。",
+                            "snippet": "旧摘要",
+                            "siteName": "示例站点",
+                        }
+                    ]
+                }
+            },
+        }
+
+        results = WebSearchMcpAdapter._parse_bocha_response(payload, max_results=3)
+
+        self.assertEqual(
+            results,
+            [
+                {
+                    "title": "大模型是什么",
+                    "snippet": "大模型是一类参数规模较大的模型。",
+                    "url": "https://example.cn/llm",
+                    "source": "示例站点",
+                    "display_url": "example.cn/llm",
+                }
+            ],
+        )
+
 
 class NavigationCapabilityTests(unittest.TestCase):
     """导航能力单元测试。"""

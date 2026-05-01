@@ -458,8 +458,9 @@ docs/stage1/develop/架构阻塞点说明与改进建议.md
 
 当前边界：
 
-1. 搜索 adapter 默认使用 DuckDuckGo HTML 页面，网络不可用或被限流时会返回结构化失败。
-2. 当前不抓取全文网页正文。
+1. 正式搜索 provider 为博查 AI Search，需在服务端环境配置 `WEB_SEARCH_PROVIDER=bocha` 和 `BOCHA_SEARCH_API_KEY`。
+2. 未配置 API Key 时，`WEB_SEARCH_PROVIDER=auto` 会回退 DuckDuckGo HTML，仅用于本地开发验证。
+3. 当前不抓取全文网页正文。
 
 ### 13.2 视觉事件最小策略
 
