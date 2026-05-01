@@ -1,7 +1,7 @@
 # 普通文本流式与 TTS 首包延迟优化设计
 
 更新时间：2026-04-30
-对应版本：sdk-v74
+对应版本：sdk-v75
 
 ## 1. 设计目标
 
@@ -91,9 +91,9 @@ SDK 新增普通文本增量提取逻辑：
 
 ### 6.1 调研结论
 
-OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先输出一段普通文本，再稳定返回工具调用”不应作为 SDK 的可靠交互契约。工具调用本身是模型响应中的决策事件；如果强行要求模型先说等待语，再调用工具，会引入模型行为不稳定、重复播报和与最终回答倒序的问题。
+OpenAI Realtime / Responses API 都支持工具调用和流式事件。`agent_tts` 链路默认不把“模型先输出一段普通文本，再稳定返回工具调用”作为唯一交互契约，因为工具调用本身是模型响应中的决策事件；如果强行要求模型先说等待语，再调用工具，会引入模型行为不稳定、重复播报和与最终回答倒序的问题。
 
-因此 SDK 采用框架级前置播报：
+因此 SDK 默认采用框架级前置播报：
 
 1. 模型仍只负责理解用户意图和选择 Tool。
 2. `ToolGateway` 在 Tool 真正执行前读取 `ToolSpec.progress_message`。
@@ -101,6 +101,8 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件，但“先
 4. `VoiceRuntime` 同步注册中间播报播放流，再异步执行 TTS 合成。
 5. `progress_message` 支持单句或多句候选；多句候选在工具调用前随机选择一条。
 6. 同一轮同一工具只播报一次，避免工具循环或重试导致重复提示。
+
+`sdk-v75` 起可以通过 `ENABLE_PROGRESS_MESSAGE=false` 关闭框架级前置播报。关闭后，SDK 不再触发 `ToolSpec.progress_message`，并在 Agent/Omni system prompt 中要求模型调用工具前自然输出一句等待反馈。Omni Realtime 音频直出链路允许模型已经播出的前置语音继续播放，随后由 SDK 执行工具、回填结果并继续接收最终 `response.audio.delta`。
 
 `VoiceRuntime` 需要特别处理最终回复 TTS 预热与前置播报的顺序：TTS 会话可以在 Agent 请求前预热，但最终回复播放流不能提前注册到播放仲裁器。否则尚未产生任何最终回复音频的预热流会占住 active playback，让前置播报只能排队到最终回复之后。当前实现是在最终回复首段文本到达时才创建最终回复播放流。
 

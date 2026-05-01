@@ -71,6 +71,8 @@ class AgentToolContext:
         """
 
         messages = normalize_progress_messages(message)
+        if not self.settings.enable_progress_message:
+            return
         if self.progress_callback is None or not messages:
             return
         if tool_name in self.progress_announced_tools:

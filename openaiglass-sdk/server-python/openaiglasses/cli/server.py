@@ -66,6 +66,7 @@ def _build_server_defaults() -> dict[str, str]:
         "TTS_SAMPLE_RATE_HZ": str(defaults.tts_sample_rate_hz),
         "VOICE_MODEL_TIMEOUT_MS": str(defaults.voice_model_timeout_ms),
         "VOICE_SYSTEM_PROMPT": defaults.voice_system_prompt,
+        "ENABLE_PROGRESS_MESSAGE": "true" if defaults.enable_progress_message else "false",
         "MAX_SEGMENT_AUDIO_BYTES": str(defaults.max_segment_audio_bytes),
     }
 

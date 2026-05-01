@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable
 
 from agent_core import AgentFacade, AgentTurn, DerivedArtifact, MediaAssetRef
 from agent_core.context import generate_id
+from agent_core.tools import AgentToolContext
 from backend_task_core import TaskEvent
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode, build_error
@@ -1434,6 +1435,8 @@ class DashscopeOmniRealtimeReplyClient:
         settings: ServerSettings,
         instructions: str,
         on_chunk: Callable[[ModelChunk], None],
+        tools: list[dict[str, Any]] | None = None,
+        tool_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         session_id: str,
         device_id: str,
         segment_id: str,
@@ -1450,7 +1453,9 @@ class DashscopeOmniRealtimeReplyClient:
         1. `settings`：服务端配置。
         2. `instructions`：系统指令。
         3. `on_chunk`：音频分片回调。
-        4. `session_id/device_id/segment_id/stream_id`：日志上下文。
+        4. `tools`：可选的 Realtime function calling 工具 schema。
+        5. `tool_handler`：工具调用处理函数，负责执行 SDK Tool 并返回可 JSON 序列化结果。
+        6. `session_id/device_id/segment_id/stream_id`：日志上下文。
 
         返回值：
         1. 可追加音频、提交图片并等待响应的流式输入会话。
@@ -1488,11 +1493,55 @@ class DashscopeOmniRealtimeReplyClient:
         transcript_parts: list[str] = []
         response_id_box: list[str] = []
         metrics_lock = threading.Lock()
+        pending_tool_lock = threading.Lock()
+        pending_tool_count = 0
         request_started_at_ms_box: list[int] = []
         response_created_at_ms: int | None = None
         first_audio_at_ms: int | None = None
         first_text_at_ms: int | None = None
         assistant_text_logged = False
+
+        def _complete_tool_call(*, call_id: str, tool_name: str, arguments_text: str) -> None:
+            """执行 Realtime 工具调用并把结果回填给 Omni。"""
+
+            nonlocal pending_tool_count
+            try:
+                if tool_handler is None:
+                    output_payload = {
+                        "ok": False,
+                        "error": {
+                            "code": "TOOL_HANDLER_NOT_CONFIGURED",
+                            "message": "当前运行时没有配置工具调用处理器",
+                        },
+                    }
+                else:
+                    output_payload = tool_handler(
+                        {
+                            "call_id": call_id,
+                            "name": tool_name,
+                            "arguments": arguments_text,
+                        }
+                    )
+                conversation.create_item(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(output_payload, ensure_ascii=False, default=str),
+                    }
+                )
+                with pending_tool_lock:
+                    pending_tool_count = max(pending_tool_count - 1, 0)
+                conversation.create_response(output_modalities=[MultiModality.TEXT, MultiModality.AUDIO])
+                log_debug(
+                    self_logger,
+                    f"Omni Realtime 工具结果已回填 tool_name={tool_name} call_id={call_id}",
+                    LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                )
+            except Exception as exc:  # noqa: BLE001 - 工具桥异常需要结束当前 Realtime 响应
+                with pending_tool_lock:
+                    pending_tool_count = max(pending_tool_count - 1, 0)
+                error_box.append(f"Omni Realtime 工具调用处理失败: {exc}")
+                done_event.set()
 
         class _Callback(OmniRealtimeCallback):
             """Omni Realtime 回调桥接器。"""
@@ -1517,6 +1566,7 @@ class DashscopeOmniRealtimeReplyClient:
 
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - 真实联调路径
                 nonlocal response_created_at_ms, first_audio_at_ms, first_text_at_ms, assistant_text_logged
+                nonlocal pending_tool_count
                 event_type = str(message.get("type") or "")
                 now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
                 if event_type == "response.created":
@@ -1612,6 +1662,33 @@ class DashscopeOmniRealtimeReplyClient:
                     on_chunk(ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
                     return
 
+                if event_type == "response.function_call_arguments.done":
+                    call_id = str(message.get("call_id") or message.get("item_id") or "")
+                    tool_name = str(message.get("name") or "").strip()
+                    arguments_text = str(message.get("arguments") or "{}")
+                    if not tool_name:
+                        error_box.append(f"Omni Realtime 工具调用缺少 name: {message}")
+                        done_event.set()
+                        return
+                    with pending_tool_lock:
+                        pending_tool_count += 1
+                    threading.Thread(
+                        target=_complete_tool_call,
+                        kwargs={
+                            "call_id": call_id,
+                            "tool_name": tool_name,
+                            "arguments_text": arguments_text,
+                        },
+                        name=f"omni-realtime-tool-{tool_name}",
+                        daemon=True,
+                    ).start()
+                    log_info(
+                        self_logger,
+                        f"Omni Realtime 工具调用请求 tool_name={tool_name} call_id={call_id}",
+                        LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                    )
+                    return
+
                 if event_type in {"response.audio_transcript.done", "response.text.done"}:
                     final_text = str(message.get("transcript") or message.get("text") or "")
                     if final_text and not assistant_text_parts:
@@ -1638,6 +1715,10 @@ class DashscopeOmniRealtimeReplyClient:
                     return
 
                 if event_type in {"response.done", "response.cancelled"}:
+                    with pending_tool_lock:
+                        has_pending_tool = pending_tool_count > 0
+                    if has_pending_tool:
+                        return
                     text_for_log = "".join(assistant_text_parts).strip()
                     if event_type == "response.done" and text_for_log and not assistant_text_logged:
                         assistant_text_logged = True
@@ -1668,6 +1749,7 @@ class DashscopeOmniRealtimeReplyClient:
             connect_started_at_ms = self._now_ms()
             conversation.connect()
             connected_at_ms = self._now_ms()
+            tool_session_kwargs = {"tools": tools, "tool_choice": "auto"} if tools else {}
             conversation.update_session(
                 output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
                 voice=settings.voice_model_voice,
@@ -1681,6 +1763,7 @@ class DashscopeOmniRealtimeReplyClient:
                 turn_detection_threshold=settings.voice_realtime_semantic_vad_threshold,
                 turn_detection_silence_duration_ms=settings.voice_realtime_silence_duration_ms,
                 instructions=instructions,
+                **tool_session_kwargs,
             )
             log_debug(
                 self._logger,
@@ -1738,6 +1821,8 @@ class DashscopeOmniRealtimeReplyClient:
         image_frames: list[bytes],
         instructions: str,
         on_chunk: Callable[[ModelChunk], None],
+        tools: list[dict[str, Any]] | None = None,
+        tool_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         session_id: str,
         device_id: str,
         segment_id: str,
@@ -1755,6 +1840,8 @@ class DashscopeOmniRealtimeReplyClient:
             settings=settings,
             instructions=instructions,
             on_chunk=on_chunk,
+            tools=tools,
+            tool_handler=tool_handler,
             session_id=session_id,
             device_id=device_id,
             segment_id=segment_id,
@@ -2413,6 +2500,9 @@ class VoiceRuntime:
         1. 预生成失败只写 DEBUG 日志，不阻塞服务启动。
         """
 
+        if not self._settings.enable_progress_message:
+            self._progress_audio_cache_ready.set()
+            return
         if not self._settings.dashscope_api_key.strip():
             self._progress_audio_cache_ready.set()
             return
@@ -2701,12 +2791,21 @@ class VoiceRuntime:
             should_capture_photo_early = (
                 effective_voice_input_mode == "raw_audio" and self._settings.omni_turn_detection_enabled()
             )
+            should_start_omni_realtime = (
+                effective_voice_input_mode == "raw_audio" and self._settings.voice_reply_mode == "omni_realtime"
+            )
         if should_capture_photo_early:
             self._start_utterance_photo_capture(
                 device_id=device_id,
                 session_id=session_id,
                 segment=segment,
                 reason="realtime_semantic_turn_started",
+            )
+        if should_start_omni_realtime:
+            self._start_omni_realtime_segment_session(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
             )
 
     def on_audio_connection_opened(self, *, device_id: str, peer: str) -> None:
@@ -3391,6 +3490,16 @@ class VoiceRuntime:
             )
             if not segment.utterance_photo_capture_started:
                 self._start_utterance_photo_capture(device_id=device_id, session_id=session_id, segment=segment)
+            if self._settings.voice_reply_mode == "omni_realtime":
+                self._run_omni_realtime_reply_pipeline(
+                    controller=controller,
+                    device_id=device_id,
+                    session_id=session_id,
+                    segment=segment,
+                    input_path=input_path,
+                    input_pcm=bytes(segment.payload),
+                )
+                return
             if voice_input_mode == "asr_text":
                 user_text = self._transcribe_segment(
                     device_id=device_id,
@@ -3723,12 +3832,123 @@ class VoiceRuntime:
         1. 可直接传给 Omni Realtime 的指令文本。
         """
 
+        if self._settings.enable_progress_message:
+            tool_prompt = "需要时可以调用已提供的工具；工具执行前 SDK 会按配置播报等待提示，你不要重复输出等待提示。"
+        else:
+            tool_prompt = (
+                "需要时可以调用已提供的工具，因为工具的执行需要时间，"
+                "调用前请先用自然口语简单告诉用户你要做什么；不要提及工具名称或参数，"
+                "也不要提前说已经完成，因为工具执行可能失败。"
+            )
         return (
             f"{self._settings.voice_system_prompt}\n"
             "请直接根据用户语音内容回答。"
             "如果本轮输入包含图片，请结合图片回答。"
             "回答必须简短、口语化，不要输出代码块。"
+            f"{tool_prompt}"
         )
+
+    def _build_omni_realtime_tools(self, *, session_id: str) -> list[dict[str, Any]]:
+        """把当前 SDK Tool 导出为 Omni Realtime function calling schema。"""
+
+        tool_registry = self._agent_facade.get_tool_registry()
+        skill_runtime = tool_registry.get_skill_runtime()
+        allowed_tool_names = (
+            skill_runtime.allowed_tool_names_for_session(session_id=session_id)
+            if skill_runtime is not None
+            else None
+        )
+        tools: list[dict[str, Any]] = []
+        for tool in tool_registry.list_tools(allowed_names=allowed_tool_names):
+            tools.append(
+                {
+                    "type": "function",
+                    "name": tool.spec.name,
+                    "description": tool.spec.description,
+                    "parameters": tool.spec.input_model.model_json_schema(),
+                }
+            )
+        return tools
+
+    def _build_omni_realtime_tool_handler(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        """构造 Omni Realtime 工具调用处理器。"""
+
+        tool_registry = self._agent_facade.get_tool_registry()
+
+        def _trace_sink(trace) -> None:
+            log_debug(
+                self._logger,
+                f"Omni Realtime 工具轨迹: name={trace.capability_name} status={trace.status}",
+                LogContext(device_id=device_id, session_id=session_id, message_id=segment.segment_id),
+            )
+
+        def _progress_callback(text: str) -> None:
+            progress_text = text.strip()
+            if progress_text:
+                self._start_intermediate_reply(device_id=device_id, session_id=session_id, text=progress_text)
+
+        context = AgentToolContext(
+            session_id=session_id,
+            device_id=device_id,
+            turn_id=segment.segment_id,
+            settings=self._settings,
+            session_store=self._agent_facade.get_session_store(),
+            device_state_reader=tool_registry.get_device_state_reader(),
+            trace_sink=_trace_sink,
+            device_group_context_factory=tool_registry.get_device_group_context_factory(),
+            task_gateway=tool_registry.get_task_gateway(),
+            camera_gateway=tool_registry.get_camera_gateway(),
+            utterance_photo_store=tool_registry.get_utterance_photo_store(),
+            tool_gateway=getattr(tool_registry, "_gateway", None),
+            mcp_gateway=tool_registry.get_mcp_gateway(),
+            memory_runtime=tool_registry.get_memory_runtime(),
+            turn_meta={"segment_id": segment.segment_id, "stream_id": segment.stream_id},
+            progress_callback=_progress_callback if self._settings.enable_progress_message else None,
+        )
+
+        def _handle_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+            tool_name = str(call.get("name") or "").strip()
+            arguments_text = str(call.get("arguments") or "{}")
+            try:
+                arguments = json.loads(arguments_text)
+            except json.JSONDecodeError as exc:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": ErrorCode.INVALID_MESSAGE,
+                        "message": "模型返回的工具参数不是合法 JSON",
+                        "details": {"tool_name": tool_name, "arguments": arguments_text, "reason": str(exc)},
+                    },
+                }
+            try:
+                result = tool_registry.invoke(name=tool_name, context=context, arguments=arguments)
+            except AppError as exc:
+                return {"ok": False, "error": exc.to_dict()}
+            except Exception as exc:  # noqa: BLE001 - 工具异常回填给模型生成错误播报
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": ErrorCode.INTERNAL_ERROR,
+                        "message": f"{tool_name} 调用失败",
+                        "details": {"reason": str(exc)},
+                    },
+                }
+            return {
+                "ok": True,
+                "data": result.data,
+                "message": result.message,
+                "assets": [asset.asset_id for asset in result.asset_refs],
+                "artifacts": [artifact.artifact_id for artifact in result.derived_artifacts],
+                "tasks": [task.task_id for task in result.task_refs],
+            }
+
+        return _handle_tool_call
 
     def _start_omni_realtime_segment_session(
         self,
@@ -3761,10 +3981,17 @@ class VoiceRuntime:
             )
 
         try:
+            tools = self._build_omni_realtime_tools(session_id=session_id)
             omni_session = self._omni_realtime_client.start_streaming_reply(
                 settings=self._settings,
                 instructions=self._build_omni_realtime_instructions(),
                 on_chunk=_handle_omni_chunk,
+                tools=tools,
+                tool_handler=self._build_omni_realtime_tool_handler(
+                    device_id=device_id,
+                    session_id=session_id,
+                    segment=segment,
+                ),
                 session_id=session_id,
                 device_id=device_id,
                 segment_id=segment.segment_id,
@@ -3929,6 +4156,12 @@ class VoiceRuntime:
             segment=segment,
         )
         instructions = self._build_omni_realtime_instructions()
+        tools = self._build_omni_realtime_tools(session_id=session_id)
+        tool_handler = self._build_omni_realtime_tool_handler(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+        )
         omni_session = segment.omni_realtime_session
         try:
             if omni_session is not None:
@@ -3959,6 +4192,8 @@ class VoiceRuntime:
                         input_pcm=input_pcm,
                         image_frames=image_frames,
                         instructions=instructions,
+                        tools=tools,
+                        tool_handler=tool_handler,
                         context=context,
                     )
             else:
@@ -3973,6 +4208,8 @@ class VoiceRuntime:
                         context=context,
                         chunk=chunk,
                     ),
+                    tools=tools,
+                    tool_handler=tool_handler,
                     session_id=session_id,
                     device_id=device_id,
                     segment_id=segment.segment_id,
@@ -4074,6 +4311,8 @@ class VoiceRuntime:
         input_pcm: bytes,
         image_frames: list[bytes],
         instructions: str,
+        tools: list[dict[str, Any]],
+        tool_handler: Callable[[dict[str, Any]], dict[str, Any]],
         context: ReplySynthesisContext,
     ) -> OmniRealtimeReplyResult:
         """使用分段提交模式兜底执行 Omni Realtime。
@@ -4110,6 +4349,8 @@ class VoiceRuntime:
                 context=context,
                 chunk=chunk,
             ),
+            tools=tools,
+            tool_handler=tool_handler,
             session_id=session_id,
             device_id=device_id,
             segment_id=segment.segment_id,

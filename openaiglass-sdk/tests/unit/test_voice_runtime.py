@@ -141,8 +141,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(messages[2], {"role": "assistant", "content": "这是上一轮回复"})
         self.assertEqual(messages[3], {"role": "user", "content": "我刚才问了你什么"})
 
-    def test_raw_audio_input_passes_audio_asset_to_agent_core(self) -> None:
-        """测试目标：验证默认语音链路把原始音频直接交给 Agent-Core。
+    def test_agent_tts_input_passes_audio_asset_to_agent_core(self) -> None:
+        """测试目标：验证 Agent+TTS 语音链路把音频资产交给 Agent-Core。
 
         测试方法：
         1. 注入假的 AgentFacade，记录收到的 `AgentTurn`。
@@ -151,7 +151,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
         预期结果：
         1. AgentFacade 收到的当前轮包含 `audio/wav` 资产。
-        2. 运行时不会先调用 Omni 音频转文本适配器。
+        2. 运行时会先使用 ASR 文本进入 Agent-Core。
         3. 下行音频来自 Agent-Core 回复文本的 TTS。
         """
 
@@ -185,6 +185,10 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             def get_camera_gateway(self):
                 return None
 
+        class _FakeAsrClient:
+            def transcribe(self, *, settings: ServerSettings, input_wav: bytes) -> str:
+                return "看一下"
+
         class _FakeAgentFacade:
             def __init__(self) -> None:
                 self.turns = []
@@ -212,9 +216,10 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         model_client = _FakeModelClient()
         agent_facade = _FakeAgentFacade()
         runtime = VoiceRuntime(
-            settings=ServerSettings(),
+            settings=ServerSettings(voice_reply_mode="agent_tts", voice_conversation_mode="segment_turn"),
             send_control_message=lambda *_args, **_kwargs: None,
             model_client=model_client,  # type: ignore[arg-type]
+            asr_client=_FakeAsrClient(),  # type: ignore[arg-type]
             agent_facade=agent_facade,  # type: ignore[arg-type]
         )
         runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
@@ -231,7 +236,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
         runtime._run_model_pipeline("glass-001", "sess-test", segment)  # noqa: SLF001 - 单测覆盖链路分层
 
-        self.assertEqual(agent_facade.turns[0].source, "voice_raw_audio")
+        self.assertEqual(agent_facade.turns[0].source, "voice_asr_text")
         self.assertEqual(agent_facade.turns[0].asset_refs[0].asset_type, "audio")
         self.assertEqual(agent_facade.turns[0].asset_refs[0].mime_type, "audio/wav")
         self.assertEqual(model_client.tts_text, "前面有一张床。")
@@ -268,6 +273,10 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             def get_camera_gateway(self):
                 return None
 
+        class _FakeAsrClient:
+            def transcribe(self, *, settings: ServerSettings, input_wav: bytes) -> str:
+                return "记一下"
+
         class _FakeAgentFacade:
             def get_session_store(self):
                 return object()
@@ -296,9 +305,10 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             sent_messages.append((name, dict(payload)))
 
         runtime = VoiceRuntime(
-            settings=ServerSettings(),
+            settings=ServerSettings(voice_reply_mode="agent_tts", voice_conversation_mode="segment_turn"),
             send_control_message=_send_control_message,
             model_client=_FakeModelClient(),  # type: ignore[arg-type]
+            asr_client=_FakeAsrClient(),  # type: ignore[arg-type]
             agent_facade=_FakeAgentFacade(),  # type: ignore[arg-type]
         )
         runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-progress")
@@ -777,6 +787,111 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertIn("Omni Realtime 用户转写完成 transcript='用户问题'", joined_logs)
         self.assertIn("Omni Realtime 助手文本完成 text='完整文字回复'", joined_logs)
 
+    def test_dashscope_omni_realtime_reply_client_handles_tool_call_before_audio_done(self) -> None:
+        """测试目标：验证 Omni Realtime 音频直出链路可以处理工具调用。
+
+        测试方法：
+        1. 注入假 Realtime 会话，第一轮响应返回工具调用事件。
+        2. 工具处理器返回结构化数据后，假会话继续返回最终音频和文本。
+        3. 调用 `run_reply(...)` 并检查工具结果回填。
+
+        预期结果：
+        1. Realtime session 会收到工具 schema。
+        2. SDK 会创建 `function_call_output` item。
+        3. 最终音频仍从 `response.audio.delta` 进入播放回调。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.updated: dict[str, object] = {}
+                self.items: list[dict] = []
+                self.response_count = 0
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **kwargs) -> None:
+                self.updated = kwargs
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, _video_b64: str) -> None:
+                return None
+
+            def commit(self) -> None:
+                return None
+
+            def create_item(self, item: dict) -> None:
+                self.items.append(item)
+
+            def create_response(self, **_kwargs) -> None:
+                self.response_count += 1
+                if self.response_count == 1:
+                    self.callback.on_event({"type": "response.created", "response": {"id": "resp-tool"}})
+                    self.callback.on_event(
+                        {
+                            "type": "response.function_call_arguments.done",
+                            "call_id": "call-query",
+                            "name": "query_device_state",
+                            "arguments": '{"scope":"current"}',
+                        }
+                    )
+                    self.callback.on_event({"type": "response.done"})
+                    return
+                self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "设备在线。"})
+                self.callback.on_event(
+                    {"type": "response.audio.delta", "delta": base64.b64encode(b"voice").decode()}
+                )
+                self.callback.on_event({"type": "response.done"})
+
+            def close(self) -> None:
+                return None
+
+        tool_calls: list[dict] = []
+        chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        result = client.run_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                voice_conversation_mode="segment_turn",
+            ),
+            input_pcm=b"\x01\x02",
+            image_frames=[],
+            instructions="简短回答",
+            on_chunk=chunks.append,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "query_device_state",
+                    "description": "查询设备状态",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+            tool_handler=lambda call: tool_calls.append(call) or {"ok": True, "data": {"online": True}},
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+
+        assert _Factory.instance is not None
+        self.assertEqual(_Factory.instance.updated["tools"][0]["name"], "query_device_state")
+        self.assertEqual(tool_calls[0]["name"], "query_device_state")
+        self.assertEqual(_Factory.instance.items[0]["type"], "function_call_output")
+        self.assertIn('"online": true', _Factory.instance.items[0]["output"])
+        self.assertEqual(chunks[0].audio_pcm_bytes, b"voice")
+        self.assertEqual(result.assistant_text, "设备在线。")
+
     def test_dashscope_omni_realtime_reply_client_enables_semantic_vad_when_configured(self) -> None:
         """测试目标：验证实验性连续对话模式会把 semantic VAD 参数写入 Omni session。
 
@@ -1180,8 +1295,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         assert controller.current_segment is not None
         self.assertIsNone(controller.current_segment.streaming_asr_session)
 
-    def test_omni_mode_no_longer_prestreams_before_agent_core(self) -> None:
-        """测试目标：验证 Omni 模态输入不再绕过 Agent-Core 预连接直出。
+    def test_omni_mode_prestreams_realtime_audio_direct_session(self) -> None:
+        """测试目标：验证 Omni 模式会预启动 Realtime 音频直出会话。
 
         测试方法：
         1. 注入假的 Omni Realtime 客户端和会话。
@@ -1189,9 +1304,9 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         3. 模拟一帧 `/ws_audio` 音频分片。
 
         预期结果：
-        1. 启动语音段时不会创建 Omni Realtime 直出会话。
-        2. 音频分片只缓存在当前 Segment 中，等待模态输入阶段和 Agent-Core。
-        3. 当前不会提前创建播放上下文。
+        1. 启动语音段时会创建 Omni Realtime 直出会话。
+        2. 音频分片会在进入本地 Segment 的同时预推给 Omni。
+        3. 当前会提前创建 `omni_realtime` 播放上下文，等待模型音频首包。
         """
 
         class _OmniSession:
@@ -1252,14 +1367,15 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             ),
         )
 
-        self.assertFalse(omni_client.started)
-        self.assertEqual(omni_client.session.audio_frames, [])
+        self.assertTrue(omni_client.started)
+        self.assertEqual(omni_client.session.audio_frames, [b"\x01\x02"])
         controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
         assert controller.current_segment is not None
         self.assertEqual(bytes(controller.current_segment.payload), b"\x01\x02")
-        self.assertIsNone(controller.current_segment.omni_realtime_session)
-        self.assertIsNone(controller.current_segment.omni_realtime_context)
-        self.assertIsNone(controller.current_playback)
+        self.assertIs(controller.current_segment.omni_realtime_session, omni_client.session)
+        self.assertIsNotNone(controller.current_segment.omni_realtime_context)
+        assert controller.current_segment.omni_realtime_context is not None
+        self.assertEqual(controller.current_segment.omni_realtime_context.audio_source, "omni_realtime")
 
     def test_on_playback_finished_allows_old_stream_to_finish(self) -> None:
         """测试目标：验证旧播放流完成时不会误伤当前新播放流。

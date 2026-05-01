@@ -168,6 +168,16 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertTrue(settings.omni_turn_detection_enabled())
         self.assertEqual(settings.effective_voice_input_mode(), "raw_audio")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
+        self.assertTrue(settings.enable_progress_message)
+
+    def test_enable_progress_message_can_be_disabled_from_env(self) -> None:
+        """测试目标：验证工具前置播报配置可通过环境变量关闭。"""
+
+        os.environ["ENABLE_PROGRESS_MESSAGE"] = "false"
+
+        settings = ServerSettings.from_env()
+
+        self.assertFalse(settings.enable_progress_message)
 
     def test_omni_realtime_auto_input_mode_uses_raw_audio(self) -> None:
         """测试目标：验证 Omni Realtime 默认直接使用原始音频输入。

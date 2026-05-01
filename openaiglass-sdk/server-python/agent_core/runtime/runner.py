@@ -1820,10 +1820,21 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
     def _build_instructions(self, session_id: str | None = None) -> str:
         """构造最小 Agent 指令。"""
 
+        if self._settings.enable_progress_message:
+            tool_prompt = (
+                "需要时可以调用已提供的工具。工具执行前 SDK 会按工具配置播报等待提示，"
+                "你不要重复输出等待提示。\n\n"
+            )
+        else:
+            tool_prompt = (
+                "需要时可以调用已提供的工具，因为工具的执行需要时间，调用前请先简单回复用户，"
+                "注意不要提及工具名称、参数等，并且不要提前说已经完成，因为工具的执行可能失败。\n\n"
+            )
+
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
-            "需要时可以调用已提供的工具，因为工具的调用需要时间，调用前请简单回复一段文本表示要做什么。\n\n"
+            f"{tool_prompt}"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
             "例如：姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等。\n\n"
             "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。\n"

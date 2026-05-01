@@ -49,4 +49,4 @@ VOICE_INPUT_MODE="asr_text"
 
 ## 边界
 
-`VOICE_INPUT_MODE` 目前只控制服务端是否启动独立 ASR。`omni_realtime` 分支仍会使用 Omni Realtime 的原始音频输入能力，并通过模型返回的转写文本记录本轮 transcript；它不会执行 SDK Tool、Task、Skill 或长期记忆工具。
+`VOICE_INPUT_MODE` 目前只控制服务端是否启动独立 ASR。`omni_realtime` 分支仍会使用 Omni Realtime 的原始音频输入能力，并通过模型返回的转写文本记录本轮 transcript；`sdk-v75` 起该分支已支持 SDK Tool 调用和工具结果回填。

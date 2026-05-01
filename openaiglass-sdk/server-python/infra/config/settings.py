@@ -59,6 +59,7 @@ class ServerSettings:
     38. `agent_memory_enabled`：是否启用 Agent 长期记忆。
     39. `agent_memory_store_path`：长期记忆本地持久化文件路径。
     40. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
+    41. `enable_progress_message`：是否使用 SDK 预置工具前置播报。
     """
 
     host: str = "0.0.0.0"
@@ -102,6 +103,7 @@ class ServerSettings:
     agent_memory_enabled: bool = True
     agent_memory_store_path: str = "runs/memory/agent_memories.json"
     agent_memory_max_prompt_items: int = 6
+    enable_progress_message: bool = True
 
     @staticmethod
     def build_default_log_file() -> str:
@@ -243,6 +245,10 @@ class ServerSettings:
             agent_memory_max_prompt_items=cls._parse_int_env(
                 "AGENT_MEMORY_MAX_PROMPT_ITEMS",
                 defaults.agent_memory_max_prompt_items,
+            ),
+            enable_progress_message=cls._parse_bool_env(
+                "ENABLE_PROGRESS_MESSAGE",
+                defaults.enable_progress_message,
             ),
         )
         settings.validate()
@@ -667,6 +673,7 @@ class ServerSettings:
             "agent_memory_enabled": int(self.agent_memory_enabled),
             "agent_memory_store_path": self.agent_memory_store_path,
             "agent_memory_max_prompt_items": self.agent_memory_max_prompt_items,
+            "enable_progress_message": int(self.enable_progress_message),
         }
 
     def parse_device_token_map(self) -> dict[str, str]:
