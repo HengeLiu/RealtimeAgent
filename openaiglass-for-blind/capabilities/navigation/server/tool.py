@@ -131,7 +131,8 @@ class PrepareNavigationTool(BaseTool):
             "amap.route_plan",
             {
                 "origin": origin,
-                "destination": resolved_destination,
+                "destination": str(geocode_result.data.get("location") or resolved_destination),
+                "destination_name": resolved_destination,
                 "strategy": strategy,
             },
         )

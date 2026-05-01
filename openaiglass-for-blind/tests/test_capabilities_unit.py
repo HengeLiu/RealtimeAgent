@@ -39,6 +39,8 @@ from openaiglasses import CapabilityResult, TaskContext, TaskEvent
 from capabilities.find_object.server.task import FindObjectTask
 from capabilities.navigation.server.task import NavigationTask
 from capabilities.navigation.server.tool import PrepareNavigationTool
+from capabilities.search.mcp.web_search_adapter import WebSearchMcpAdapter
+from capabilities.search.server.tool import SearchWebTool
 from capabilities.timer.server.task import TimerTask
 from capabilities.timer.server.tool import StartTimerTool
 from capabilities.traffic_light.server.task import TrafficLightTask
@@ -289,7 +291,12 @@ class TimerCapabilityTests(unittest.TestCase):
         context = FakeToolContext()
         result = StartTimerTool().run(
             context,
-            {"duration_seconds": 30, "label": "喝水提醒", "notify_text": "该喝水了"},
+            {
+                "duration_seconds": 30,
+                "label": "喝水提醒",
+                "notify_text": "该喝水了",
+                "enable_background_timer": False,
+            },
         )
 
         self.assertTrue(result.ok)
@@ -308,7 +315,12 @@ class TimerCapabilityTests(unittest.TestCase):
         group = FakeDeviceGroup()
         context = TaskContext(
             task_id="timer-001",
-            input={"duration_seconds": 10, "label": "厨房计时", "notify_text": "关火"},
+            input={
+                "duration_seconds": 10,
+                "label": "厨房计时",
+                "notify_text": "关火",
+                "enable_background_timer": False,
+            },
             device_group=group,
         )
         task = TimerTask()
@@ -328,13 +340,84 @@ class TimerCapabilityTests(unittest.TestCase):
 
         cancel_context = TaskContext(
             task_id="timer-002",
-            input={"duration_seconds": 10, "label": "备用计时"},
+            input={"duration_seconds": 10, "label": "备用计时", "enable_background_timer": False},
             device_group=group,
             data={"label": "备用计时"},
         )
         task.on_cancel(cancel_context)
         self.assertEqual(cancel_context.state, "cancelled")
         self.assertEqual(group.notifications[-1], {"text": "备用计时已取消", "priority": "normal"})
+
+    def test_timer_task_background_finish_notifies_user(self) -> None:
+        """测试目标：计时器到点后应由后台倒计时推进完成并通知用户。
+
+        测试方法：启动 1 秒计时器，等待后台 Timer 触发。
+        预期结果：任务进入 completed，最后一条通知为自定义完成提示。
+        """
+
+        import time
+
+        group = FakeDeviceGroup()
+        context = TaskContext(
+            task_id="timer-bg-001",
+            input={"duration_seconds": 1, "label": "测试计时", "notify_text": "测试时间到了"},
+            device_group=group,
+        )
+
+        TimerTask().on_start(context)
+        time.sleep(1.2)
+
+        self.assertEqual(context.state, "completed")
+        self.assertEqual(context.result["finished"], True)
+        self.assertEqual(group.notifications[-1], {"text": "测试时间到了", "priority": "high"})
+
+
+class SearchCapabilityTests(unittest.TestCase):
+    """搜索能力单元测试。"""
+
+    def test_search_web_tool_calls_mcp(self) -> None:
+        """测试目标：搜索 Tool 应通过 SDK MCP 入口执行搜索。
+
+        测试方法：配置 fake `web.search` 返回结果后直接调用 Tool。
+        预期结果：MCP 调用参数正确，Tool 输出搜索结果。
+        """
+
+        context = FakeToolContext(
+            {
+                "web.search": CapabilityResult.success(
+                    data={
+                        "query": "大模型是什么",
+                        "results": [{"title": "大模型介绍", "url": "https://example.com"}],
+                        "result_count": 1,
+                    },
+                    message="找到 1 条搜索结果",
+                )
+            }
+        )
+
+        result = SearchWebTool().run(context, {"query": "大模型是什么", "max_results": 3})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(context.mcp_calls, [("web.search", {"query": "大模型是什么", "max_results": 3})])
+        self.assertEqual(result.data["result_count"], 1)
+
+    def test_web_search_adapter_parses_duckduckgo_html(self) -> None:
+        """测试目标：搜索 adapter 能把 HTML 搜索结果解析成结构化列表。
+
+        测试方法：传入最小 DuckDuckGo HTML 片段。
+        预期结果：返回标题、摘要和链接。
+        """
+
+        body = """
+        <div class="result__body">
+          <a rel="nofollow" class="result__a" href="https://example.com">标题 &amp; 测试</a>
+          <a class="result__snippet">这是摘要</a>
+        </div></div>
+        """
+
+        results = WebSearchMcpAdapter._parse_duckduckgo_html(body, max_results=2)
+
+        self.assertEqual(results, [{"title": "标题 & 测试", "snippet": "这是摘要", "url": "https://example.com"}])
 
 
 class NavigationCapabilityTests(unittest.TestCase):

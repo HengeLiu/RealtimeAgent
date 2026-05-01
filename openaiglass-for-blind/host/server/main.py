@@ -17,9 +17,11 @@ from capabilities.find_object.phone.processor import YoloFindObjectProcessor
 from capabilities.find_object.phone.task import FindObjectPhoneTask
 from capabilities.find_object.server.task import FindObjectTask
 from capabilities.find_object.server.tool import StartFindObjectTool
-from capabilities.navigation.mcp import MockAmapMcpAdapter
+from capabilities.navigation.mcp import AmapMcpAdapter
 from capabilities.navigation.server.task import NavigationTask
 from capabilities.navigation.server.tool import PrepareNavigationTool
+from capabilities.search.mcp import WebSearchMcpAdapter
+from capabilities.search.server.tool import SearchWebTool
 from capabilities.timer.server.task import TimerTask
 from capabilities.timer.server.tool import StartTimerTool
 from capabilities.traffic_light.phone.processor import TrafficLightProcessor
@@ -79,6 +81,7 @@ def create_full_sdk() -> OpenAIGlassesSDK:
     sdk = create_sdk(include_traffic_light=True)
     register_timer_capability(sdk)
     register_navigation_capability(sdk)
+    register_search_capability(sdk)
     return sdk
 
 
@@ -92,9 +95,16 @@ def register_timer_capability(sdk: OpenAIGlassesSDK) -> None:
 def register_navigation_capability(sdk: OpenAIGlassesSDK) -> None:
     """向 SDK 注册导航准备业务能力。"""
 
-    sdk.register_mcp_adapter(MockAmapMcpAdapter())
+    sdk.register_mcp_adapter(AmapMcpAdapter())
     sdk.register_tool(PrepareNavigationTool())
     sdk.register_task(NavigationTask())
+
+
+def register_search_capability(sdk: OpenAIGlassesSDK) -> None:
+    """向 SDK 注册搜索业务能力。"""
+
+    sdk.register_mcp_adapter(WebSearchMcpAdapter())
+    sdk.register_tool(SearchWebTool())
 
 
 def register_traffic_light_capability(sdk: OpenAIGlassesSDK) -> None:
