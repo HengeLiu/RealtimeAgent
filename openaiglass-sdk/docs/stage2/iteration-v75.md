@@ -15,10 +15,7 @@
 3. Omni Realtime session 会携带当前模型可见 SDK Tool schema。
 4. 新增 Realtime 工具桥，监听 `response.function_call_arguments.done`，执行 SDK `ToolGateway`，再以 `function_call_output` 回填给 Omni 并继续请求文本与音频输出。
 5. 工具执行不默认取消已经播放的模型音频；工具成功或失败都作为后续上下文交给模型继续播报。
-6. 新增 `ENABLE_PROGRESS_MESSAGE` 配置：
-   - `true`：SDK 使用 `ToolSpec.progress_message` 和静态音频缓存播报工具前置提示。
-   - `false`：SDK 不播预置提示，由模型在调用工具前自然输出等待反馈。
-7. 更新功能开发指南、配置模板和相关单元测试。
+6. 更新功能开发指南、配置模板和相关单元测试。
 
 ## 验证
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
@@ -42,6 +43,8 @@ class AgentToolContext:
     turn_meta: dict[str, Any] = field(default_factory=dict)
     progress_callback: Callable[[str], None] | None = None
     progress_announced_tools: set[str] = field(default_factory=set)
+    progress_first_model_output: str | None = None
+    progress_first_model_output_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     emitted_assets: list[MediaAssetRef] = field(default_factory=list)
     emitted_artifacts: list[DerivedArtifact] = field(default_factory=list)
     emitted_tasks: list[TaskRef] = field(default_factory=list)
@@ -53,14 +56,60 @@ class AgentToolContext:
         self._extend_unique(self.emitted_artifacts, result.derived_artifacts, "artifact_id")
         self._extend_unique(self.emitted_tasks, result.task_refs, "task_id")
 
+    def note_model_output(self, kind: str) -> None:
+        """记录本轮模型最先返回的输出类型。
+
+        主要逻辑：
+        1. 只接受 `tool_call`、`text`、`audio` 三类首输出。
+        2. 只记录第一次出现的类型，后续输出不会覆盖。
+        3. 该状态用于决定是否自动播报工具前置提示。
+
+        参数：
+            kind: 模型输出类型，`tool_call` 表示首输出为工具调用，`text` 表示文本增量，
+                `audio` 表示音频增量。
+
+        返回值：
+            无。
+
+        异常情况：
+            未知类型会被忽略，避免模型适配器异常事件影响工具执行。
+        """
+
+        if kind not in {"tool_call", "text", "audio"}:
+            return
+        with self.progress_first_model_output_lock:
+            if self.progress_first_model_output is None:
+                self.progress_first_model_output = kind
+
+    def should_announce_tool_progress(self) -> bool:
+        """判断当前工具调用是否需要自动播报前置提示。
+
+        主要逻辑：
+        1. 如果模型首输出尚未记录，说明当前工具调用就是首输出，记录为 `tool_call`。
+        2. 只有首输出为 `tool_call` 时才允许播报。
+        3. 首输出为文本或音频时不播报，避免用户已经听到/看到回复后再插入等待提示。
+
+        返回值：
+            `True` 表示允许播报工具前置提示，否则返回 `False`。
+
+        异常情况：
+            无。
+        """
+
+        with self.progress_first_model_output_lock:
+            if self.progress_first_model_output is None:
+                self.progress_first_model_output = "tool_call"
+            return self.progress_first_model_output == "tool_call"
+
     def announce_tool_progress(self, *, tool_name: str, message: ProgressMessage | None) -> None:
         """在工具执行前向语音运行时发送一次进度播报。
 
         主要逻辑：
         1. 只在调用方提供 `progress_callback` 时生效。
         2. 支持单句或多句候选文案；多句候选会随机选择一条。
-        3. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
-        4. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
+        3. 只有模型首个输出是工具调用时才播报；首个输出是文本或音频时不播报。
+        4. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
+        5. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
 
         参数：
         1. `tool_name`：即将执行的工具名称。
@@ -71,9 +120,9 @@ class AgentToolContext:
         """
 
         messages = normalize_progress_messages(message)
-        if not self.settings.enable_progress_message:
-            return
         if self.progress_callback is None or not messages:
+            return
+        if not self.should_announce_tool_progress():
             return
         if tool_name in self.progress_announced_tools:
             return

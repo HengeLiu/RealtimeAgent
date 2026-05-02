@@ -10,7 +10,9 @@ from agent_core.camera import CameraGateway
 from agent_core.camera.utterance_photo import UtterancePhotoRecord
 from agent_core.context import AgentSessionStore, AgentTurn, AgentTurnResult, MessageContext, generate_id
 from agent_core.context.models import CapabilityTrace, MediaAssetRef
-from agent_core.runtime import AgentLoopRunner
+from agent_core.modality import AgentInputPlanner, ImageInputPlan, ImageInputPolicy, ModelCapability
+from agent_core.runtime import AgentLoopRunner, NativeAudioReplyResult, PreparedNativeAudioReply
+from agent_core.streaming import TurnCoordinator
 from agent_core.tools import ToolGateway, ToolRegistry
 from backend_task_core import TaskEvent
 from infra.config import ServerSettings
@@ -42,12 +44,16 @@ class AgentFacade:
         runner: AgentLoopRunner,
         settings: ServerSettings | None = None,
         system_prompt: str = "",
+        turn_coordinator: TurnCoordinator | None = None,
+        image_policy: ImageInputPolicy = ImageInputPolicy.DIRECT_WHEN_SUPPORTED,
     ) -> None:
         self._session_store = session_store
         self._tool_registry = tool_registry
         self._runner = runner
         self._settings = settings or ServerSettings()
         self._system_prompt = system_prompt
+        self._turn_coordinator = turn_coordinator or TurnCoordinator()
+        self._image_policy = image_policy
         self._logger = get_logger("server.agent")
 
     @classmethod
@@ -80,6 +86,8 @@ class AgentFacade:
         *,
         progress_callback: Callable[[str], None] | None = None,
         reply_text_delta_callback: Callable[[str], None] | None = None,
+        reply_audio_chunk_callback: Callable[[object], None] | None = None,
+        native_audio_reply_runner: Callable[..., object] | None = None,
     ) -> AgentTurnResult:
         """处理一轮 Agent 输入。
 
@@ -102,14 +110,35 @@ class AgentFacade:
             session_id=turn.session_id,
             device_id=turn.device_id,
         )
+        stream_id = str(turn.meta.get("stream_id") or "")
+        start_event = self._turn_coordinator.start_turn(
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            turn_id=turn.turn_id,
+            stream_id=stream_id,
+            payload={"source": turn.source},
+        )
+        turn.meta["generation_id"] = start_event.generation_id
+        turn.meta["turn_started_event_id"] = start_event.event_id
         turn.asset_refs.extend(self._consume_ready_utterance_photos(turn=turn))
         asset_ids = self._session_store.save_assets(session_id=turn.session_id, assets=turn.asset_refs)
         artifact_ids = self._session_store.save_artifacts(session_id=turn.session_id, artifacts=turn.derived_artifacts)
+        self._turn_coordinator.emit(
+            event_type="input.assets.saved",
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            turn_id=turn.turn_id,
+            generation_id=start_event.generation_id,
+            stream_id=stream_id,
+            causation_id=start_event.event_id,
+            payload={"asset_ids": asset_ids, "artifact_ids": artifact_ids},
+        )
 
+        user_message_id = generate_id("msg")
         self._session_store.append_message(
             session_id=turn.session_id,
             message=MessageContext(
-                message_id=generate_id("msg"),
+                message_id=user_message_id,
                 session_id=turn.session_id,
                 role="user",
                 kind="audio_input",
@@ -130,6 +159,8 @@ class AgentFacade:
                 turn=turn,
                 progress_callback=progress_callback,
                 reply_text_delta_callback=reply_text_delta_callback,
+                reply_audio_chunk_callback=reply_audio_chunk_callback,
+                native_audio_reply_runner=native_audio_reply_runner,
             )
         except AppError as exc:
             log_error(
@@ -151,8 +182,229 @@ class AgentFacade:
             )
             result = self._build_failure_result(turn=turn, error=error, traces=[])
 
+        user_text_override = str(result.meta.get("user_text_override") or "").strip()
+        if user_text_override:
+            self._session_store.update_message_text(
+                session_id=turn.session_id,
+                message_id=user_message_id,
+                text=user_text_override,
+            )
+
+        if result.error is None:
+            self._turn_coordinator.emit(
+                event_type="text.final",
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                turn_id=turn.turn_id,
+                generation_id=start_event.generation_id,
+                stream_id=stream_id,
+                payload={
+                    "reply_length": len(result.reply_text),
+                    "user_text_override": bool(user_text_override),
+                },
+            )
+            self._turn_coordinator.finish_turn(
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                turn_id=turn.turn_id,
+                generation_id=start_event.generation_id,
+                stream_id=stream_id,
+            )
+        else:
+            self._turn_coordinator.fail_turn(
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                turn_id=turn.turn_id,
+                generation_id=start_event.generation_id,
+                stream_id=stream_id,
+                payload={"error": result.error},
+            )
+        result.meta["generation_id"] = start_event.generation_id
+        result.meta["turn_events"] = self._turn_coordinator.snapshot(turn_id=turn.turn_id)
         result = self._persist_result(turn=turn, result=result)
         return result
+
+    def prepare_native_audio_turn(
+        self,
+        turn: AgentTurn,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> PreparedNativeAudioReply:
+        """提前准备原生音频 Realtime 轮次。
+
+        主要逻辑：
+        1. 获取或创建当前 Agent 会话。
+        2. 委托 runner 构造 instructions、工具 schema 和工具处理器。
+        3. 不保存用户消息、不调用模型，用于语音段开始时提前建立 Omni WebSocket。
+
+        参数：
+            turn: 当前语音轮次占位对象。
+            progress_callback: 工具前置播报回调。
+
+        返回值：
+            `PreparedNativeAudioReply`，供 voice-runtime 逐帧转发音频。
+        """
+
+        session = self._session_store.get_or_create_session(
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+        )
+        prepare = getattr(self._runner, "prepare_native_audio_reply", None)
+        if not callable(prepare):
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "当前 Agent runner 不支持原生音频 Realtime 预备运行态",
+            )
+        return prepare(session=session, turn=turn, progress_callback=progress_callback)
+
+    def consume_ready_utterance_photos(self, turn: AgentTurn) -> list[MediaAssetRef]:
+        """消费当前语音轮次已经完成的自动抓拍照片。
+
+        主要逻辑：
+        1. 复用统一图片策略，决定图片是直接传给模型还是延后由工具处理。
+        2. 将照片保存为当前轮资产，供 Realtime 提交和后续会话记录使用。
+
+        参数：
+            turn: 当前语音轮次。
+
+        返回值：
+            可挂接到当前用户输入的图片资产列表。
+        """
+
+        return self._consume_ready_utterance_photos(turn=turn)
+
+    def complete_prepared_native_audio_turn(
+        self,
+        *,
+        turn: AgentTurn,
+        prepared: PreparedNativeAudioReply,
+        native_result: NativeAudioReplyResult,
+    ) -> AgentTurnResult:
+        """把已完成的原生音频 Realtime 结果写回 Agent-Core 会话。
+
+        主要逻辑：
+        1. 保存当前轮音频、图片资产和用户消息。
+        2. 使用 Realtime 返回的文本转写更新用户消息。
+        3. 保存助手回复、能力轨迹和模型请求摘要。
+
+        参数：
+            turn: 当前语音轮次。
+            prepared: 语音段开始时准备好的运行态。
+            native_result: Omni Realtime 完成后返回的文本、转写和响应编号。
+
+        返回值：
+            标准 `AgentTurnResult`。
+        """
+
+        self._session_store.get_or_create_session(session_id=turn.session_id, device_id=turn.device_id)
+        stream_id = str(turn.meta.get("stream_id") or "")
+        start_event = self._turn_coordinator.start_turn(
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            turn_id=turn.turn_id,
+            stream_id=stream_id,
+            payload={"source": turn.source},
+        )
+        turn.meta["generation_id"] = start_event.generation_id
+        turn.meta["turn_started_event_id"] = start_event.event_id
+        turn.asset_refs.extend(self._consume_ready_utterance_photos(turn=turn))
+        asset_ids = self._session_store.save_assets(session_id=turn.session_id, assets=turn.asset_refs)
+        artifact_ids = self._session_store.save_artifacts(session_id=turn.session_id, artifacts=turn.derived_artifacts)
+        self._turn_coordinator.emit(
+            event_type="input.assets.saved",
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            turn_id=turn.turn_id,
+            generation_id=start_event.generation_id,
+            stream_id=stream_id,
+            causation_id=start_event.event_id,
+            payload={"asset_ids": asset_ids, "artifact_ids": artifact_ids},
+        )
+
+        user_message_id = generate_id("msg")
+        user_text = native_result.transcript.strip() or turn.input_text
+        self._session_store.append_message(
+            session_id=turn.session_id,
+            message=MessageContext(
+                message_id=user_message_id,
+                session_id=turn.session_id,
+                role="user",
+                kind="audio_input",
+                text=user_text,
+                asset_refs=asset_ids,
+                derived_refs=artifact_ids,
+                meta={
+                    "turn_id": turn.turn_id,
+                    "source": turn.source,
+                    **turn.meta,
+                },
+            ),
+        )
+
+        assistant_text = native_result.assistant_text.strip()
+        if not assistant_text:
+            result = self._build_failure_result(
+                turn=turn,
+                error=build_error(ErrorCode.INTERNAL_ERROR, "agent-core 原生音频回复链路返回了空文本"),
+                traces=prepared.runtime.capability_traces,
+            )
+        else:
+            model_request = dict(prepared.model_request)
+            model_request["audio_bytes"] = next(
+                (asset.bytes for asset in turn.asset_refs if asset.asset_type == "audio"),
+                model_request.get("audio_bytes"),
+            )
+            model_request["image_count"] = len([asset for asset in turn.asset_refs if asset.asset_type == "image"])
+            result = AgentTurnResult(
+                turn_id=turn.turn_id,
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                reply_text=assistant_text,
+                capability_traces=prepared.runtime.capability_traces,
+                meta={
+                    "model_request": model_request,
+                    "user_text_override": native_result.transcript.strip(),
+                    "native_audio_response_id": native_result.response_id,
+                    "asset_refs": list(prepared.runtime.tool_context.emitted_assets),
+                    "derived_artifacts": list(prepared.runtime.tool_context.emitted_artifacts),
+                    "task_refs": list(prepared.runtime.tool_context.emitted_tasks),
+                    **(native_result.meta or {}),
+                },
+            )
+        result.meta["user_message_id"] = user_message_id
+
+        if result.error is None:
+            self._turn_coordinator.emit(
+                event_type="text.final",
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                turn_id=turn.turn_id,
+                generation_id=start_event.generation_id,
+                stream_id=stream_id,
+                payload={
+                    "reply_length": len(result.reply_text),
+                    "user_text_override": bool(native_result.transcript.strip()),
+                },
+            )
+            self._turn_coordinator.finish_turn(
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                turn_id=turn.turn_id,
+                generation_id=start_event.generation_id,
+                stream_id=stream_id,
+            )
+        else:
+            self._turn_coordinator.fail_turn(
+                session_id=turn.session_id,
+                device_id=turn.device_id,
+                turn_id=turn.turn_id,
+                generation_id=start_event.generation_id,
+                stream_id=stream_id,
+                payload={"error": result.error},
+            )
+        result.meta["generation_id"] = start_event.generation_id
+        result.meta["turn_events"] = self._turn_coordinator.snapshot(turn_id=turn.turn_id)
+        return self._persist_result(turn=turn, result=result)
 
     def bind_camera_gateway(self, camera_gateway: CameraGateway) -> None:
         """补绑真实相机网关。
@@ -201,7 +453,15 @@ class AgentFacade:
                     LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
                 )
         if assets:
+            image_plan = self._plan_image_assets(assets)
             turn.meta["auto_utterance_photo_asset_ids"] = [asset.asset_id for asset in assets]
+            turn.meta["direct_image_asset_ids"] = [asset.asset_id for asset in image_plan.direct_assets]
+            turn.meta["deferred_image_asset_ids"] = [asset.asset_id for asset in image_plan.deferred_assets]
+            turn.meta["image_input_policy"] = image_plan.policy.value
+            turn.meta["image_model_capability"] = {
+                "model_name": image_plan.model_capability.model_name,
+                "supports_image_input": image_plan.model_capability.supports_image_input,
+            }
             log_debug(
                 self._logger,
                 "自动照片已装入当前用户输入",
@@ -209,10 +469,41 @@ class AgentFacade:
                     device_id=turn.device_id,
                     session_id=turn.session_id,
                     message_id=turn.turn_id,
-                    fields={"asset_ids": [asset.asset_id for asset in assets], "count": len(assets)},
+                    fields={
+                        "asset_ids": [asset.asset_id for asset in assets],
+                        "direct_asset_ids": [asset.asset_id for asset in image_plan.direct_assets],
+                        "deferred_asset_ids": [asset.asset_id for asset in image_plan.deferred_assets],
+                        "policy": image_plan.policy.value,
+                        "count": len(assets),
+                    },
                 ),
             )
         return assets
+
+    def _plan_image_assets(self, assets: list[MediaAssetRef]) -> ImageInputPlan:
+        """规划当前轮图片资产的直传或后置处理方式。
+
+        参数：
+        1. `assets`：当前轮自动抓拍得到的图片资产。
+
+        返回值：
+        1. `ImageInputPlan`，包含直传图片和后置图片列表。
+
+        异常情况：
+        1. 只基于配置和内存对象规划，不主动抛出业务异常。
+        """
+
+        reply_mode = self._settings.voice_reply_mode
+        model_name = (
+            self._settings.voice_omni_realtime_model_name
+            if reply_mode == "omni_realtime"
+            else self._settings.agent_model_name
+        )
+        planner = AgentInputPlanner(
+            model_capability=ModelCapability.from_model_name(model_name),
+            image_policy=self._image_policy,
+        )
+        return planner.plan_images([asset for asset in assets if asset.asset_type == "image"])
 
     def _record_to_image_asset(self, *, turn: AgentTurn, record: UtterancePhotoRecord) -> MediaAssetRef:
         """将一条自动照片记录保存为会话图片资产。

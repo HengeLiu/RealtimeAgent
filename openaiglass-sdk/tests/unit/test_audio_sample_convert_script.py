@@ -8,7 +8,7 @@ import wave
 from pathlib import Path
 
 SDK_ROOT = Path(__file__).resolve().parents[2]
-CONVERT_SCRIPT = SDK_ROOT / "tests/data/audio-sample/convert_audio_samples.py"
+CONVERT_SCRIPT = SDK_ROOT / "testdata/audio-sample/convert_audio_samples.py"
 
 
 def _load_convert_module():
@@ -43,7 +43,7 @@ def test_normalize_existing_wav_rewrites_extensible_header(tmp_path: Path) -> No
     """
 
     module = _load_convert_module()
-    source = SDK_ROOT / "tests/data/audio-sample/wav/我叫文刀文字的文刀锋的刀.wav"
+    source = SDK_ROOT / "testdata/audio-sample/wav/我叫文刀文字的文刀锋的刀.wav"
     target = tmp_path / source.name
     target.write_bytes(source.read_bytes())
 

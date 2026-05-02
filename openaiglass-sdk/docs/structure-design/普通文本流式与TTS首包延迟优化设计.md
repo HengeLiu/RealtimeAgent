@@ -102,22 +102,27 @@ OpenAI Realtime / Responses API 都支持工具调用和流式事件。`agent_tt
 5. `progress_message` 支持单句或多句候选；多句候选在工具调用前随机选择一条。
 6. 同一轮同一工具只播报一次，避免工具循环或重试导致重复提示。
 
-`sdk-v75` 起可以通过 `ENABLE_PROGRESS_MESSAGE=false` 关闭框架级前置播报。关闭后，SDK 不再触发 `ToolSpec.progress_message`，并在 Agent/Omni system prompt 中要求模型调用工具前自然输出一句等待反馈。Omni Realtime 音频直出链路允许模型已经播出的前置语音继续播放，随后由 SDK 执行工具、回填结果并继续接收最终 `response.audio.delta`。
+`sdk-v80` 起，框架级前置播报由模型首输出类型自动判定：首输出是工具调用时，SDK 触发 `ToolSpec.progress_message`；首输出是文本或音频时，SDK 不再额外插入等待提示。Omni Realtime 音频直出链路允许模型已经播出的语音继续播放，随后由 SDK 执行工具、回填结果并继续接收最终 `response.audio.delta`。
 
 `VoiceRuntime` 需要特别处理最终回复 TTS 预热与前置播报的顺序：TTS 会话可以在 Agent 请求前预热，但最终回复播放流不能提前注册到播放仲裁器。否则尚未产生任何最终回复音频的预热流会占住 active playback，让前置播报只能排队到最终回复之后。当前实现是在最终回复首段文本到达时才创建最终回复播放流。
 
-### 6.2 静态音频缓存
+### 6.2 前置播报音频来源
 
-`progress_message` 是静态短文本，不需要每次工具调用时都请求 TTS。SDK 在 `VoiceRuntime` 初始化后异步执行一次缓存预加载：
+`progress_message` 是静态短文本，但不同产品对首包延迟和音色一致性的优先级不同。`TOOL_PROGRESS_AUDIO_MODE` 用于控制工具前置播报音频来源：
+
+1. `cached`：SDK 在 `VoiceRuntime` 初始化后异步执行一次缓存预加载，工具调用时读取本地 PCM。
+2. `realtime`：SDK 不预加载缓存，工具调用前把选中的固定提示文本发送给当前 TTS 服务，边生成边写入同一条下行播放流。
+
+`cached` 模式的缓存流程：
 
 1. 从 `ToolRegistry.list_progress_messages()` 读取当前所有工具的播报文案；如果某个工具配置了多句候选，会展开为多条文案。
 2. 按 `tts_model_name`、`tts_voice`、`tts_sample_rate_hz`、目标播放采样率和文本生成稳定 hash。
 3. 缓存文件写入 `VOICE_RUNS_ROOT/progress-audio-cache/<hash>.wav`。
 4. 如果文件已存在且是 16k 单声道 16bit PCM WAV，直接读取 PCM 到内存。
 5. 如果文件不存在，调用当前配置的 TTS 生成一次音频，重采样成 16k PCM 后写入 WAV。
-6. 工具调用时先随机选择本次播报文案，再优先读取内存缓存，命中后直接写入播放流；未命中或预加载失败时回退实时 TTS。
+6. 工具调用时先随机选择本次播报文案，再优先读取内存缓存，命中后仍通过统一播放流写出；未命中或预加载失败时回退实时 TTS。
 
-该缓存只优化工具前置播报，不影响最终回复 TTS。缓存目录位于 `runs/` 下，属于运行产物，不应提交。
+两种模式只影响工具前置播报，不影响最终回复 TTS 或 Omni Realtime 音频直出。缓存目录位于 `runs/` 下，属于运行产物，不应提交。
 
 ### 6.3 适用范围
 
