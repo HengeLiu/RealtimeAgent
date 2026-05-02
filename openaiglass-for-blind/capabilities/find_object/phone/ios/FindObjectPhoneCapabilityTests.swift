@@ -28,7 +28,37 @@ struct FindObjectPhoneCapabilityTests {
         #expect(result.targetObject == "测试水杯")
         #expect(result.confidence > 0.6)
         #expect(result.position.isEmpty == false)
+        #expect(result.source == "heuristic")
         #expect(result.summary.contains("测试水杯"))
+    }
+
+    /// 测试目标：验证中文找物目标能匹配常见 YOLO 英文标签。
+    ///
+    /// 测试方法：
+    /// 1. 直接调用标签匹配器。
+    /// 2. 使用“手机”和 `cell phone` 这组真实 COCO 标签。
+    ///
+    /// 预期结果：
+    /// 1. 中文目标和英文检测标签匹配成功。
+    @Test
+    func testFindObjectLabelMatcherMapsChineseTargetToYoloLabel() {
+        #expect(FindObjectLabelMatcher.matches(targetObject: "手机", label: "cell phone"))
+        #expect(FindObjectLabelMatcher.matches(targetObject: "水杯", label: "cup"))
+        #expect(!FindObjectLabelMatcher.matches(targetObject: "钱包", label: "traffic light"))
+    }
+
+    /// 测试目标：验证检测框中心点能生成稳定的中文方向。
+    ///
+    /// 测试方法：
+    /// 1. 构造偏左、偏右和居中的归一化中心点。
+    ///
+    /// 预期结果：
+    /// 1. 返回的方向词可直接进入服务端播报摘要。
+    @Test
+    func testFindObjectGuidanceBuildsPositionSummary() {
+        #expect(FindObjectGuidance.positionSummary(normalizedCenterX: 0.2, normalizedCenterYFromBottom: 0.5) == "左侧")
+        #expect(FindObjectGuidance.positionSummary(normalizedCenterX: 0.8, normalizedCenterYFromBottom: 0.5) == "右侧")
+        #expect(FindObjectGuidance.positionSummary(normalizedCenterX: 0.51, normalizedCenterYFromBottom: 0.49) == "中间")
     }
 
     private static func makeSolidImage(red: CGFloat, green: CGFloat, blue: CGFloat) -> UIImage? {

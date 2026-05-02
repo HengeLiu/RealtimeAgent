@@ -245,7 +245,7 @@ uv run openaiglass.phone.open --app-root openaiglass-for-blind
 1. `find_object_phone_task`：接收视频帧后上报 `phone.vision.find_object.result`。
 2. `traffic_light_phone_task`：接收视频帧后上报 `phone.vision.traffic_light.result`。
 
-这说明手机端不再只是视频回显；它已经会把帧交给业务插件处理并通过 SDK 事件接口回传服务端。但当前检测算法仍是启发式占位实现，只适合验证链路，不代表正式 YOLO 或红绿灯模型效果。真机实测时应先看任务、帧处理、事件上报和通知闭环是否成立，再单独评估模型替换。
+这说明手机端不再只是视频回显；它已经会把帧交给业务插件处理并通过 SDK 事件接口回传服务端。`find_object_phone_task` 已支持优先加载业务 App 资源中的 CoreML YOLO 模型；如果手机端上报 `source=heuristic`，说明当前构建没有打包模型，只能验证链路，不能代表正式识别效果。红绿灯当前仍是启发式占位实现。真机实测时应先看任务、帧处理、事件上报和通知闭环是否成立，再单独评估模型效果。
 
 首次执行时，如果本地配置文件不存在，脚本会自动从模板创建：
 
@@ -358,14 +358,15 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 1. 服务端创建 `find_object` 任务。
 2. 眼镜视频链路启动。
 3. 手机端开始处理视频帧。
-4. 找到目标后服务端提交高优先级通知。
-5. 眼镜端播报或展示“找到水杯”类提示。
-6. 服务端停止手机任务和视频链路。
+4. 手机端真实 YOLO 模型命中时，上报 `source=coreml_yolo`、`label`、`bbox` 和 `confidence`；无模型构建只会上报 `source=heuristic`。
+5. 找到目标后服务端提交高优先级通知。
+6. 眼镜端播报或展示“找到水杯”类提示。
+7. 服务端停止手机任务和视频链路。
 
 观察点：
 
 1. 服务端日志：`find_object`、`phone.vision.find_object.result`、`task.completed`。
-2. 手机日志：视频帧接收、处理器输出。
+2. 手机日志：视频帧接收、处理器输出、检测来源 `source=coreml_yolo|heuristic`。
 3. 眼镜日志：视频流开始、视频流停止、通知播放。
 
 ## 11. traffic_light 实测

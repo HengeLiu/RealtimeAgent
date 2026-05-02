@@ -587,7 +587,13 @@ class VisionCapabilityTests(unittest.TestCase):
         group = FakeDeviceGroup()
         context = TaskContext(
             task_id="find-001",
-            input={"target_object": "水杯", "frame_interval_ms": 300},
+            input={
+                "target_object": "水杯",
+                "frame_interval_ms": 300,
+                "model_name": "FindObjectYOLO",
+                "score_threshold": 0.31,
+                "frame_stride": 2,
+            },
             device_group=group,
         )
         task = FindObjectTask()
@@ -596,6 +602,9 @@ class VisionCapabilityTests(unittest.TestCase):
         self.assertEqual(context.state, "running")
         self.assertEqual(group.video_link_starts[0]["reason"], "find_object")
         self.assertEqual(group.phone_task_starts[0]["task_type"], "find_object_phone_task")
+        self.assertEqual(group.phone_task_starts[0]["params"]["model_name"], "FindObjectYOLO")
+        self.assertEqual(group.phone_task_starts[0]["params"]["score_threshold"], 0.31)
+        self.assertEqual(group.phone_task_starts[0]["params"]["frame_stride"], 2)
 
         result_payload = {"found": True, "summary": "在正前方找到水杯", "direction": "front"}
         task.on_event(context, TaskEvent(name="phone.vision.find_object.result", payload=result_payload))

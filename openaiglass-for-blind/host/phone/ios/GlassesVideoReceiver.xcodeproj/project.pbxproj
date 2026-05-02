@@ -10,6 +10,7 @@
 		B00000010000000000000001 /* BusinessGlassesVideoReceiverApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000001 /* BusinessGlassesVideoReceiverApp.swift */; };
 		B00000010000000000000002 /* FindObjectPhoneCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000002 /* FindObjectPhoneCapability.swift */; };
 		B00000010000000000000003 /* TrafficLightPhoneCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000003 /* TrafficLightPhoneCapability.swift */; };
+		B00000010000000000000004 /* FindObjectPhoneCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000020000000000000004 /* FindObjectPhoneCapabilityTests.swift */; };
 		A00000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000002 /* ContentView.swift */; };
 		A00000010000000000000003 /* CameraStreamStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000003 /* CameraStreamStore.swift */; };
 		A00000010000000000000004 /* CameraSinkServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000020000000000000004 /* CameraSinkServer.swift */; };
@@ -54,6 +55,7 @@
 		B00000020000000000000001 /* BusinessGlassesVideoReceiverApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BusinessGlassesVideoReceiverApp.swift; sourceTree = SOURCE_ROOT; };
 		B00000020000000000000002 /* FindObjectPhoneCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../capabilities/find_object/phone/ios/FindObjectPhoneCapability.swift"; sourceTree = SOURCE_ROOT; };
 		B00000020000000000000003 /* TrafficLightPhoneCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift"; sourceTree = SOURCE_ROOT; };
+		B00000020000000000000004 /* FindObjectPhoneCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../capabilities/find_object/phone/ios/FindObjectPhoneCapabilityTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +103,7 @@
 			isa = PBXGroup;
 			children = (
 				A0000002000000000000000B /* GlassesVideoReceiverTests.swift */,
+				B00000020000000000000004 /* FindObjectPhoneCapabilityTests.swift */,
 			);
 			path = "../../../../openaiglass-sdk/phone-ios/GlassesVideoReceiverTests";
 			sourceTree = SOURCE_ROOT;
@@ -263,6 +266,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0000001000000000000000A /* GlassesVideoReceiverTests.swift in Sources */,
+				B00000010000000000000004 /* FindObjectPhoneCapabilityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

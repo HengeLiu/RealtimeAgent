@@ -38,6 +38,19 @@ class FindObjectTask(BaseTask):
         target_object = str(context.input.get("target_object") or "").strip()
         frame_interval_ms = int(context.input.get("frame_interval_ms") or 500)
         target_ws_uri = str(context.input.get("target_ws_uri") or "").strip()
+        model_name = str(context.input.get("model_name") or "").strip()
+        score_threshold = context.input.get("score_threshold")
+        frame_stride = context.input.get("frame_stride")
+        phone_params = {
+            "target_object": target_object,
+            "processor_type": "yolo_find_object",
+        }
+        if model_name:
+            phone_params["model_name"] = model_name
+        if score_threshold is not None:
+            phone_params["score_threshold"] = float(score_threshold)
+        if frame_stride is not None:
+            phone_params["frame_stride"] = max(1, int(frame_stride))
         context.device_group.start_phone_video_link(
             reason="find_object",
             params={
@@ -49,10 +62,7 @@ class FindObjectTask(BaseTask):
         )
         context.device_group.start_phone_task(
             task_type="find_object_phone_task",
-            params={
-                "target_object": target_object,
-                "processor_type": "yolo_find_object",
-            },
+            params=phone_params,
         )
         context.emit_state("running", {"target_object": target_object})
 

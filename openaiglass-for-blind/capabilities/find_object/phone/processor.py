@@ -46,6 +46,7 @@ class YoloFindObjectProcessor(BasePhoneProcessor):
                 "found": found,
                 "confidence": 0.9 if found else 0.0,
                 "position": "center" if found else "unknown",
+                "source": "phone_mock_text_frame",
                 "summary": f"找到{target_object}了" if found else f"暂未找到{target_object}",
             }
         )

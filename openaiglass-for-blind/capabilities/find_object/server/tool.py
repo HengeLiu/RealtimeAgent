@@ -13,6 +13,9 @@ class StartFindObjectInput(BaseModel):
     """找物体 Tool 输入。"""
 
     target_object: str = Field(description="用户想寻找的具体物品名称，例如“钥匙”“手机”“水杯”。")
+    model_name: str | None = Field(default=None, description="可选的手机端 CoreML YOLO 模型资源名，不带扩展名。")
+    score_threshold: float | None = Field(default=None, description="可选的手机端检测置信度阈值。")
+    frame_stride: int | None = Field(default=None, description="可选的手机端推理抽帧间隔，1 表示每帧处理。")
 
 
 class StartFindObjectOutput(BaseModel):
@@ -62,10 +65,18 @@ class StartFindObjectTool(BaseTool):
         target_object = str(input_data.get("target_object") or "").strip()
         if not target_object:
             return CapabilityResult.failed(code="invalid_input", message="target_object 不能为空")
+        task_input: dict[str, Any] = {"target_object": target_object}
+        model_name = str(input_data.get("model_name") or "").strip()
+        if model_name:
+            task_input["model_name"] = model_name
+        if input_data.get("score_threshold") is not None:
+            task_input["score_threshold"] = float(input_data["score_threshold"])
+        if input_data.get("frame_stride") is not None:
+            task_input["frame_stride"] = max(1, int(input_data["frame_stride"]))
 
         task_runtime = context.create_task(
             task_type="find_object_task",
-            input_data={"target_object": target_object},
+            input_data=task_input,
         )
         return CapabilityResult.success(
             data={
