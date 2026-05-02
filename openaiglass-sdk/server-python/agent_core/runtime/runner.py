@@ -200,9 +200,29 @@ def _native_audio_model_request(
         可保存到 `AgentTurnResult.meta` 的请求摘要。
     """
 
+    user_content: list[dict[str, object]] = [
+        {
+            "type": "input_audio_stream",
+            "audio_bytes": audio_bytes,
+            "note": "原生 Realtime 链路实际以音频字节流发送；这里记录等价请求视图。",
+        }
+    ]
+    if image_count is not None:
+        user_content.append(
+            {
+                "type": "input_image_batch",
+                "image_count": image_count,
+                "note": "原生 Realtime 链路实际以图片帧发送；这里记录等价请求视图。",
+            }
+        )
+
     return {
         "model": settings.voice_omni_realtime_model_name,
         "runner": "agent_core_native_audio",
+        "messages": [
+            {"role": "system", "content": runtime.instructions},
+            {"role": "user", "content": user_content},
+        ],
         "active_skills": runtime.active_skill_names,
         "allowed_tool_names": (
             sorted(runtime.allowed_tool_names) if runtime.allowed_tool_names is not None else None
@@ -928,6 +948,11 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             ),
             LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
         )
+        self._log_model_request_messages(
+            model_request=runtime.model_request,
+            turn=turn,
+            stage="agent_sdk",
+        )
 
         try:
             if progress_callback is None and reply_text_delta_callback is None:
@@ -1047,6 +1072,11 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             ),
             LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
         )
+        self._log_model_request_messages(
+            model_request=model_request,
+            turn=turn,
+            stage="native_audio_realtime",
+        )
         result = native_audio_reply_runner(
             input_pcm=input_pcm,
             sample_rate_hz=sample_rate_hz,
@@ -1160,6 +1190,12 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         )
 
         for step_index in range(6):
+            model_request["messages"] = self._sanitize_model_messages(messages)
+            self._log_model_request_messages(
+                model_request=model_request,
+                turn=turn,
+                stage=f"direct_chat_audio_step_{step_index + 1}",
+            )
             request_kwargs: dict[str, Any] = {
                 "model": audio_agent_model,
                 "messages": messages,
@@ -2285,6 +2321,53 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         messages.append({"role": "user", "content": OpenAIAgentLoopRunner._build_current_turn_content(turn)})
         return messages
 
+    def _log_model_request_messages(
+        self,
+        *,
+        model_request: dict[str, object],
+        turn: AgentTurn,
+        stage: str,
+    ) -> None:
+        """打印本轮发给大模型的完整消息视图。
+
+        主要逻辑：
+        1. 从 `model_request` 读取已经脱敏后的 `messages`。
+        2. 使用 DEBUG 级别输出，避免生产环境默认刷屏。
+        3. 对原生 Realtime 音频链路，打印的是等价请求视图，不代表底层 API 真的使用
+           Chat Completions 的 `messages` 参数。
+
+        参数：
+        1. `model_request`：Agent-Core 为本轮准备的模型请求摘要。
+        2. `turn`：当前用户输入轮次，用于补充日志上下文。
+        3. `stage`：调用阶段，便于区分普通 Agent、原生音频和多轮工具调用。
+
+        返回值：
+        无返回值。
+
+        异常情况：
+        不主动抛出异常；如果 `messages` 缺失，会打印空列表用于排查。
+        """
+
+        messages = model_request.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        log_debug(
+            self._logger,
+            "agent-core 模型请求完整 messages",
+            LogContext(
+                device_id=turn.device_id,
+                session_id=turn.session_id,
+                message_id=turn.turn_id,
+                fields={
+                    "stage": stage,
+                    "model": model_request.get("model"),
+                    "runner": model_request.get("runner") or "agent_sdk",
+                    "message_count": len(messages),
+                    "messages": messages,
+                },
+            ),
+        )
+
     @staticmethod
     def _summarize_for_log(value: Any, *, max_chars: int = 2000) -> str:
         """生成适合 DEBUG 日志的短摘要。
@@ -2411,12 +2494,9 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
-            "需要时可以调用已提供的工具。工具调用前的等待提示由系统自动播报，你不要为了调用工具而先输出一段解释。\n"
+            "需要时可以调用已提供的工具。工具调用前的等待提示由系统自动播报，你不要为了调用工具而先输出一段解释。\n\n"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
-            "如果用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好等基本信息，必须调用 manage_memory 保存或更新，"
-            "不要只用文字声称已经记住。\n"
-            "如果用户自然说出住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等个性化信息，"
-            "也应调用 manage_memory 保存或更新。\n\n"
+            "当用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等长期信息时，必须调用 manage_memory 保存或更新，不要只用文字声称已经记住。\n\n"
             "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。\n"
         )
         if self._skill_runtime is None or not session_id:

@@ -105,11 +105,12 @@ class AgentToolContext:
         """在工具执行前向语音运行时发送一次进度播报。
 
         主要逻辑：
-        1. 只在调用方提供 `progress_callback` 时生效。
-        2. 支持单句或多句候选文案；多句候选会随机选择一条。
-        3. 只有模型首个输出是工具调用时才播报；首个输出是文本或音频时不播报。
-        4. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
-        5. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
+        1. 只有全局工具前置播报开关开启时才生效。
+        2. 只在调用方提供 `progress_callback` 时生效。
+        3. 支持单句或多句候选文案；多句候选会随机选择一条。
+        4. 只有模型首个输出是工具调用时才播报；首个输出是文本或音频时不播报。
+        5. 同一轮同一工具只播报一次，避免多工具循环里重复提示。
+        6. 播报失败不影响工具本身执行，避免提示语成为业务阻塞点。
 
         参数：
         1. `tool_name`：即将执行的工具名称。
@@ -120,6 +121,8 @@ class AgentToolContext:
         """
 
         messages = normalize_progress_messages(message)
+        if not self.settings.tool_progress_audio_enabled:
+            return
         if self.progress_callback is None or not messages:
             return
         if not self.should_announce_tool_progress():

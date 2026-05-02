@@ -38,3 +38,10 @@ heartbeat:
   interval_ms: 5000
   # 心跳超时时间。超过该时间未收到设备消息时，服务端会认为连接失活并清理运行态。
   timeout_ms: 15000
+
+tools:
+  progress_audio:
+    # 是否全局启用工具调用前置播报。false 时即使 Tool 配置了 progress_message 也不会播放提示。
+    enabled: true
+    # 工具前置播报音频来源。cached 表示 TTS 主链路启动时生成离线缓存；realtime 表示工具调用时实时生成。
+    mode: cached

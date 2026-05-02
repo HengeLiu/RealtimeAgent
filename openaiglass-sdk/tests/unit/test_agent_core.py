@@ -1431,6 +1431,14 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(echo_tool.calls, ["文刀"])
         self.assertEqual(progress_parts, ["我先查一下。"])
         self.assertEqual(audio_chunks, ["pcm-chunk"])
+        model_messages = result.meta["model_request"]["messages"]
+        self.assertEqual(model_messages[0]["role"], "system")
+        self.assertIn("你的名字是", model_messages[0]["content"])
+        self.assertEqual(model_messages[1]["role"], "user")
+        self.assertEqual(model_messages[1]["content"][0]["type"], "input_audio_stream")
+        self.assertEqual(model_messages[1]["content"][0]["audio_bytes"], 320)
+        self.assertEqual(model_messages[1]["content"][1]["type"], "input_image_batch")
+        self.assertEqual(model_messages[1]["content"][1]["image_count"], 1)
 
     def test_native_audio_manage_memory_runs_in_background(self) -> None:
         """测试目标：验证原生音频链路不会被长期记忆写入阻塞。
@@ -1675,6 +1683,54 @@ class AgentCoreTestCase(unittest.TestCase):
         context.note_model_output("text")
 
         result = gateway.invoke(name="echo_progress_after_text", context=context, arguments={"text": "一"})
+
+        self.assertEqual(progress_parts, [])
+        self.assertEqual(result.data, {"text": "一"})
+
+    def test_tool_gateway_suppresses_progress_when_global_switch_disabled(self) -> None:
+        """测试目标：验证全局关闭工具前置播报后不会播放任何提示音。
+
+        测试方法：
+        1. 注册一个带 `progress_message` 的测试工具。
+        2. 构造工具上下文并把 `tool_progress_audio_enabled` 设置为 False。
+        3. 调用工具并收集进度播报回调。
+
+        预期结果：
+        1. 工具仍正常执行。
+        2. 即使工具配置了提示词，也不会触发前置播报。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_progress_global_disabled",
+                description="回显文本",
+                input_model=_EchoArgs,
+                progress_message="我先处理一下。",
+            )
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                return CapabilityResult.success(data={"text": input_data.text})
+
+        registry, gateway = build_tooling()
+        registry.register_external_tool(_EchoTool())
+        progress_parts: list[str] = []
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_tool_progress_disabled_001",
+            turn_id="turn_tool_progress_disabled_001",
+        )
+        context.settings = ServerSettings(tool_progress_audio_enabled=False)
+        context.progress_callback = progress_parts.append
+
+        result = gateway.invoke(
+            name="echo_progress_global_disabled",
+            context=context,
+            arguments={"text": "一"},
+        )
 
         self.assertEqual(progress_parts, [])
         self.assertEqual(result.data, {"text": "一"})

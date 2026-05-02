@@ -109,9 +109,11 @@ voice:
 
 tools:
   progress_audio:
+    # 是否全局启用工具调用前置播报。false 时即使 Tool 配置了 progress_message 也不会播放提示。
+    enabled: true
     # realtime：每次工具调用前实时生成；Omni 主链路用 Omni 模型，TTS 主链路用 TTS 模型。
     # cached：仅 TTS 主链路会启动时预生成或复用本地缓存；Omni 主链路仍实时调用 Omni，避免音色不一致。
-    # 这个配置只控制工具前置播报音频来源；是否播报由模型首个输出类型自动判定。
+    # 这个配置只控制工具前置播报音频来源；是否播报还会受 enabled 和模型首个输出类型共同控制。
     mode: realtime
 
 agent:

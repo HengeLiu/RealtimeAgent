@@ -59,6 +59,7 @@ YAML_ENV_KEY_MAP: dict[tuple[str, ...], str] = {
     ("voice", "realtime_turn_detection", "prefix_padding_ms"): (
         "VOICE_REALTIME_PREFIX_PADDING_MS"
     ),
+    ("tools", "progress_audio", "enabled"): "TOOL_PROGRESS_AUDIO_ENABLED",
     ("tools", "progress_audio", "mode"): "TOOL_PROGRESS_AUDIO_MODE",
     ("agent", "memory", "enabled"): "AGENT_MEMORY_ENABLED",
     ("agent", "memory", "store_path"): "AGENT_MEMORY_STORE_PATH",

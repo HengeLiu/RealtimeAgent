@@ -12,6 +12,7 @@ SDK_ROOT = Path(__file__).resolve().parents[2] / "server-python"
 if str(SDK_ROOT) not in sys.path:
     sys.path.insert(0, str(SDK_ROOT))
 
+from openaiglasses.cli import config as config_cli
 from openaiglasses.cli import server
 from infra.config import ServerSettings
 
@@ -164,6 +165,152 @@ def test_server_env_loads_model_config_from_local_env(tmp_path: Path) -> None:
     assert env["TTS_SAMPLE_RATE_HZ"] == "24000"
     assert env["VOICE_SYSTEM_PROMPT"] == "本地提示词"
     assert env["MAX_SEGMENT_AUDIO_BYTES"] == "123456"
+
+
+def test_server_env_loads_grouped_yaml_and_secret_env(tmp_path: Path, monkeypatch) -> None:
+    """测试目标：验证服务端启动器支持分组 YAML 配置和同目录 `.env` 密钥。
+
+    测试方法：
+    1. 写入一个包含服务端、设备、模型、语音、工具和记忆分组的 YAML。
+    2. 在同目录 `.env` 写入 `DASHSCOPE_API_KEY`。
+    3. 调用 `_server_env(...)` 合并服务端启动环境。
+
+    预期结果：
+    1. YAML 分组会转换为现有运行时环境变量。
+    2. 敏感密钥来自 `.env`，不需要写入 YAML。
+    """
+
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    config_file = tmp_path / "local_server.yaml"
+    config_file.write_text(
+        """
+app:
+  environment: dev
+server:
+  host: "127.0.0.1"
+  port: 9876
+  public_host: "127.0.0.1"
+logging:
+  level: DEBUG
+devices:
+  server_device_id: server-test
+  glass_device_id: glass-001
+  phone_device_id: phone-001
+  tokens:
+    glass-001: pair-glass
+    phone-001: pair-phone
+heartbeat:
+  interval_ms: 3000
+  timeout_ms: 9000
+models:
+  base_url: "https://example.test/v1"
+  agent:
+    model: agent-yaml
+  voice:
+    model: voice-yaml
+    voice: Tina
+  omni_realtime:
+    model: realtime-yaml
+    url: "wss://example.test/realtime"
+    photo_wait_ms: 250
+  asr:
+    mode: realtime
+    batch_model: asr-yaml
+    realtime:
+      model: asr-realtime-yaml
+      timeout_ms: 3456
+      max_sentence_silence_ms: 260
+  tts:
+    model: tts-yaml
+    voice: longanhuan
+    websocket_api_url: "wss://example.test/tts"
+    sample_rate_hz: 24000
+voice:
+  session_mode: full_duplex_realtime
+  reply_mode: omni_realtime
+  input_mode: auto
+  conversation_mode: realtime_semantic_vad
+  runs_root: runs/yaml-session
+  max_segment_audio_bytes: 654321
+  system_prompt: "YAML 提示词"
+  realtime_turn_detection:
+    type: semantic_vad
+    semantic_vad_threshold: 0.7
+    silence_duration_ms: 900
+    prefix_padding_ms: 320
+tools:
+  progress_audio:
+    enabled: false
+    mode: realtime
+agent:
+  memory:
+    enabled: true
+    store_path: runs/yaml-memory.json
+    max_prompt_items: 8
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text('DASHSCOPE_API_KEY="secret-from-env-file"\n', encoding="utf-8")
+    args = _server_args(tmp_path, config=str(config_file))
+
+    env = server._server_env(args)  # noqa: SLF001 - CLI 回归测试需要验证内部环境拼装
+
+    assert env["SERVER_HOST"] == "127.0.0.1"
+    assert env["SERVER_PORT"] == "9876"
+    assert env["SERVER_PUBLIC_HOST"] == "127.0.0.1"
+    assert env["DEVICE_TOKEN_MAP"] == "glass-001=pair-glass,phone-001=pair-phone"
+    assert env["DASHSCOPE_API_KEY"] == "secret-from-env-file"
+    assert env["AGENT_MODEL_NAME"] == "agent-yaml"
+    assert env["VOICE_MODEL_NAME"] == "voice-yaml"
+    assert env["VOICE_OMNI_REALTIME_MODEL_NAME"] == "realtime-yaml"
+    assert env["VOICE_ASR_REALTIME_TIMEOUT_MS"] == "3456"
+    assert env["TTS_SAMPLE_RATE_HZ"] == "24000"
+    assert env["TOOL_PROGRESS_AUDIO_ENABLED"] == "false"
+    assert env["TOOL_PROGRESS_AUDIO_MODE"] == "realtime"
+    assert env["VOICE_SYSTEM_PROMPT"] == "YAML 提示词"
+    assert env["AGENT_MEMORY_STORE_PATH"] == "runs/yaml-memory.json"
+    assert env["AGENT_MEMORY_MAX_PROMPT_ITEMS"] == "8"
+
+
+def test_config_sync_reads_and_updates_yaml_public_host(tmp_path: Path) -> None:
+    """测试目标：验证配置同步命令能读取 YAML 并回写服务端公开地址。
+
+    测试方法：
+    1. 写入包含端口和设备令牌的最小 YAML。
+    2. 调用 `read_server_config(...)` 读取旧 env 等价键。
+    3. 调用 `sync_server_public_host(...)` 回写 `server.public_host`。
+
+    预期结果：
+    1. `devices.tokens` 能转换为 `DEVICE_TOKEN_MAP`。
+    2. `server.public_host` 被原位更新。
+    """
+
+    config_file = tmp_path / "local_server.yaml"
+    template_file = tmp_path / "local_server.yaml.example"
+    template_file.write_text("", encoding="utf-8")
+    config_file.write_text(
+        """
+server:
+  host: "0.0.0.0"
+  port: 8765
+  public_host: "192.168.1.23"
+devices:
+  glass_device_id: glass-001
+  phone_device_id: phone-001
+  tokens:
+    glass-001: pair-glass
+    phone-001: pair-phone
+""",
+        encoding="utf-8",
+    )
+
+    values = config_cli.read_server_config(config_file, template_file)
+    config_cli.sync_server_public_host(config_file, "10.0.0.8", dry_run=False)
+
+    self_text = config_file.read_text(encoding="utf-8")
+    assert values["PORT"] == "8765"
+    assert values["DEVICE_TOKEN_MAP"] == "glass-001=pair-glass,phone-001=pair-phone"
+    assert 'public_host: "10.0.0.8"' in self_text
 
 
 def test_server_env_keeps_exported_dashscope_key_when_local_env_is_blank(

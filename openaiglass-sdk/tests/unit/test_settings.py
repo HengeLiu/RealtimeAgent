@@ -96,7 +96,26 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.voice_conversation_mode, "segment_turn")
         self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "half_duplex")
+        self.assertTrue(settings.tool_progress_audio_enabled)
         self.assertEqual(settings.tool_progress_audio_mode, "cached")
+
+    def test_tool_progress_audio_enabled_can_be_disabled_from_env(self) -> None:
+        """测试目标：验证工具前置播报全局开关可通过环境变量关闭。
+
+        测试方法：
+        1. 注入 `TOOL_PROGRESS_AUDIO_ENABLED=false`。
+        2. 调用 `ServerSettings.from_env()`。
+
+        预期结果：
+        1. 配置校验通过。
+        2. 工具前置播报全局开关为关闭状态。
+        """
+
+        os.environ["TOOL_PROGRESS_AUDIO_ENABLED"] = "false"
+
+        settings = ServerSettings.from_env()
+
+        self.assertFalse(settings.tool_progress_audio_enabled)
 
     def test_tool_progress_audio_mode_can_use_realtime_from_env(self) -> None:
         """测试目标：验证工具前置播报音频模式可通过环境变量切到实时生成。

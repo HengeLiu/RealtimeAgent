@@ -409,6 +409,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 settings=ServerSettings(
                     dashscope_api_key="demo-key",
                     voice_runs_root=temp_dir,
+                    voice_reply_mode="agent_tts",
                 ),
                 send_control_message=_send_control_message,
                 model_client=model_client,  # type: ignore[arg-type]
@@ -433,10 +434,10 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             self.assertTrue(any(name == "actuator.audio.play" for name, _payload in sent_messages))
 
     def test_progress_reply_uses_realtime_tts_when_configured(self) -> None:
-        """测试目标：验证工具前置播报可配置为每次实时流式生成。
+        """测试目标：验证 Agent+TTS 链路的工具前置播报可配置为每次实时流式生成。
 
         测试方法：
-        1. 使用 `tool_progress_audio_mode=realtime` 启动 `VoiceRuntime`。
+        1. 使用 `voice_reply_mode=agent_tts` 和 `tool_progress_audio_mode=realtime` 启动 `VoiceRuntime`。
         2. 构造带 `progress_message` 的假工具注册表。
         3. 触发前置播报并统计 TTS 会话创建次数。
 
@@ -498,6 +499,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 settings=ServerSettings(
                     dashscope_api_key="demo-key",
                     voice_runs_root=temp_dir,
+                    voice_reply_mode="agent_tts",
                     tool_progress_audio_mode="realtime",
                 ),
                 send_control_message=_send_control_message,
@@ -521,6 +523,99 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 time.sleep(0.01)
 
             self.assertEqual(model_client.session_count, 1)
+            self.assertTrue(any(name == "actuator.audio.play" for name, _payload in sent_messages))
+
+    def test_progress_reply_uses_omni_realtime_when_main_reply_is_omni(self) -> None:
+        """测试目标：验证 Omni 直出链路的工具前置播报也使用 Omni 模型生成音频。
+
+        测试方法：
+        1. 使用 `voice_reply_mode=omni_realtime` 和 `tool_progress_audio_mode=realtime` 启动运行时。
+        2. 注入假 Omni Realtime 客户端和假 TTS 客户端。
+        3. 触发工具前置播报，统计两个音频生成入口的调用次数。
+
+        预期结果：
+        1. 前置播报会调用 Omni Realtime 客户端。
+        2. 不会创建独立 TTS 会话。
+        3. 播放请求仍通过统一下行播放流发出。
+        """
+
+        class _FakeModelClient:
+            def __init__(self) -> None:
+                self.session_count = 0
+
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                self.session_count += 1
+                raise AssertionError("Omni 主链路不应该调用独立 TTS 生成工具前置播报")
+
+        class _FakeOmniClient:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def synthesize_text_audio(self, *, settings, text, on_chunk, session_id, device_id, stream_id):
+                self.calls.append(
+                    {
+                        "model": settings.voice_omni_realtime_model_name,
+                        "voice": settings.voice_model_voice,
+                        "text": text,
+                        "stream_id": stream_id,
+                    }
+                )
+                on_chunk(ModelChunk(audio_pcm_bytes=b"\x01\x02", sample_rate_hz=16000))
+                return object()
+
+        class _FakeToolRegistry:
+            def list_progress_messages(self):
+                return [("manage_memory", "我先记一下。")]
+
+            def get_camera_gateway(self):
+                return None
+
+        class _FakeAgentFacade:
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                return _FakeToolRegistry()
+
+        sent_messages: list[tuple[str, dict]] = []
+
+        def _send_control_message(_device_id, _semantic, name, _session_id, payload):
+            sent_messages.append((name, dict(payload)))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_client = _FakeModelClient()
+            omni_client = _FakeOmniClient()
+            runtime = VoiceRuntime(
+                settings=ServerSettings(
+                    dashscope_api_key="demo-key",
+                    voice_runs_root=temp_dir,
+                    voice_reply_mode="omni_realtime",
+                    voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                    voice_model_voice="Tina",
+                    tool_progress_audio_mode="realtime",
+                ),
+                send_control_message=_send_control_message,
+                model_client=model_client,  # type: ignore[arg-type]
+                omni_realtime_client=omni_client,  # type: ignore[arg-type]
+                agent_facade=_FakeAgentFacade(),  # type: ignore[arg-type]
+            )
+            runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-omni-progress")
+            runtime._start_intermediate_reply(  # noqa: SLF001
+                device_id="glass-001",
+                session_id="sess-omni-progress",
+                text="我先记一下。",
+            )
+
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                if any(name == "actuator.audio.play" for name, _payload in sent_messages):
+                    break
+                time.sleep(0.01)
+
+            self.assertEqual(model_client.session_count, 0)
+            self.assertEqual(len(omni_client.calls), 1)
+            self.assertEqual(omni_client.calls[0]["model"], "qwen3.5-omni-plus-realtime")
+            self.assertEqual(omni_client.calls[0]["voice"], "Tina")
             self.assertTrue(any(name == "actuator.audio.play" for name, _payload in sent_messages))
 
     def test_progress_audio_cache_prunes_stale_profile_on_startup(self) -> None:
@@ -579,7 +674,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 settings=ServerSettings(
                     dashscope_api_key="demo-key",
                     voice_runs_root=temp_dir,
-                    voice_reply_mode="omni_realtime",
+                    voice_reply_mode="agent_tts",
                     voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
                     voice_model_voice="Tina",
                     tts_model_name="cosyvoice-v3-flash",
@@ -600,9 +695,215 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             with open(os.path.join(cache_dir, meta_files[0]), "r", encoding="utf-8") as file:
                 metadata = json.load(file)
             self.assertEqual(metadata["progress_audio_provider"], "tts")
-            self.assertEqual(metadata["reply_audio_provider"], "omni_realtime")
-            self.assertEqual(metadata["reply_model_name"], "qwen3.5-omni-plus-realtime")
-            self.assertEqual(metadata["reply_voice"], "Tina")
+            self.assertEqual(metadata["reply_audio_provider"], "tts")
+            self.assertEqual(metadata["reply_model_name"], "cosyvoice-v3-flash")
+            self.assertEqual(metadata["reply_voice"], "longanhuan")
+
+    def test_progress_audio_cache_clears_when_no_tool_progress_messages(self) -> None:
+        """测试目标：验证工具删除调用提示词后，启动阶段会清理离线提示音缓存。
+
+        测试方法：
+        1. 在缓存目录中预先写入一组旧 WAV 和 JSON 元数据。
+        2. 构造工具注册表，让 `list_progress_messages()` 返回空列表。
+        3. 启动 `VoiceRuntime` 并等待缓存检查结束。
+
+        预期结果：
+        1. 旧缓存文件被删除。
+        2. 不会创建新的 TTS 会话。
+        3. 预加载状态被正常置为完成。
+        """
+
+        class _FakeModelClient:
+            def __init__(self) -> None:
+                self.session_count = 0
+
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                self.session_count += 1
+                raise AssertionError("没有工具提示词时不应该生成新缓存")
+
+        class _FakeToolRegistry:
+            def list_progress_messages(self):
+                return []
+
+            def get_camera_gateway(self):
+                return None
+
+        class _FakeAgentFacade:
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                return _FakeToolRegistry()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = os.path.join(temp_dir, "progress-audio-cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            stale_wav = os.path.join(cache_dir, "deleted-message.wav")
+            stale_meta = os.path.join(cache_dir, "deleted-message.json")
+            with open(stale_wav, "wb") as file:
+                file.write(build_wav_bytes(b"\x00\x00", SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS))
+            with open(stale_meta, "w", encoding="utf-8") as file:
+                json.dump({"cache_schema": 1, "text": "旧提示"}, file)
+
+            model_client = _FakeModelClient()
+            runtime = VoiceRuntime(
+                settings=ServerSettings(
+                    dashscope_api_key="demo-key",
+                    voice_runs_root=temp_dir,
+                    voice_reply_mode="agent_tts",
+                    tool_progress_audio_mode="cached",
+                ),
+                send_control_message=lambda *_args, **_kwargs: None,
+                model_client=model_client,  # type: ignore[arg-type]
+                agent_facade=_FakeAgentFacade(),  # type: ignore[arg-type]
+            )
+
+            self.assertTrue(runtime._progress_audio_cache_ready.wait(timeout=1.0))  # noqa: SLF001
+            self.assertEqual(model_client.session_count, 0)
+            self.assertFalse(os.path.exists(stale_wav))
+            self.assertFalse(os.path.exists(stale_meta))
+
+    def test_progress_audio_cache_regenerates_when_progress_message_changes(self) -> None:
+        """测试目标：验证工具调用提示词变化后会生成新的离线提示音缓存。
+
+        测试方法：
+        1. 在缓存目录中写入旧提示词对应的缓存文件。
+        2. 工具注册表返回新的 `progress_message`。
+        3. 启动 `VoiceRuntime` 并读取生成后的缓存元数据。
+
+        预期结果：
+        1. 旧提示词缓存被清理。
+        2. 新提示词会生成新的 WAV 和 JSON 元数据。
+        3. 新元数据中的 `text` 等于当前工具配置的提示词。
+        """
+
+        class _FakeTtsSession(StreamingTtsSession):
+            def __init__(self, on_chunk) -> None:
+                self.on_chunk = on_chunk
+
+            def push_text(self, _text: str) -> None:
+                return None
+
+            def finish(self) -> None:
+                self.on_chunk(ModelChunk(audio_pcm_bytes=b"\x01\x02", sample_rate_hz=16000))
+
+        class _FakeModelClient:
+            def __init__(self) -> None:
+                self.session_count = 0
+
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                self.session_count += 1
+                return _FakeTtsSession(on_chunk)
+
+        class _FakeToolRegistry:
+            def list_progress_messages(self):
+                return [("manage_memory", "新提示，我来处理。")]
+
+            def get_camera_gateway(self):
+                return None
+
+        class _FakeAgentFacade:
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                return _FakeToolRegistry()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = os.path.join(temp_dir, "progress-audio-cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            stale_wav = os.path.join(cache_dir, "old-message.wav")
+            stale_meta = os.path.join(cache_dir, "old-message.json")
+            with open(stale_wav, "wb") as file:
+                file.write(build_wav_bytes(b"\x00\x00", SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS))
+            with open(stale_meta, "w", encoding="utf-8") as file:
+                json.dump({"cache_schema": 2, "text": "旧提示，我来处理。"}, file)
+
+            model_client = _FakeModelClient()
+            runtime = VoiceRuntime(
+                settings=ServerSettings(
+                    dashscope_api_key="demo-key",
+                    voice_runs_root=temp_dir,
+                    voice_reply_mode="agent_tts",
+                    tool_progress_audio_mode="cached",
+                ),
+                send_control_message=lambda *_args, **_kwargs: None,
+                model_client=model_client,  # type: ignore[arg-type]
+                agent_facade=_FakeAgentFacade(),  # type: ignore[arg-type]
+            )
+
+            self.assertTrue(runtime._progress_audio_cache_ready.wait(timeout=1.0))  # noqa: SLF001
+            self.assertEqual(model_client.session_count, 1)
+            self.assertFalse(os.path.exists(stale_wav))
+            self.assertFalse(os.path.exists(stale_meta))
+            meta_files = [name for name in os.listdir(cache_dir) if name.endswith(".json")]
+            self.assertEqual(len(meta_files), 1)
+            with open(os.path.join(cache_dir, meta_files[0]), "r", encoding="utf-8") as file:
+                metadata = json.load(file)
+            self.assertEqual(metadata["text"], "新提示，我来处理。")
+
+    def test_progress_audio_cache_clears_when_global_switch_disabled(self) -> None:
+        """测试目标：验证全局关闭工具前置播报后，启动阶段会清理离线缓存。
+
+        测试方法：
+        1. 在缓存目录中写入旧提示音文件。
+        2. 使用 `tool_progress_audio_enabled=False` 启动 `VoiceRuntime`。
+        3. 等待缓存检查结束。
+
+        预期结果：
+        1. 旧缓存文件被删除。
+        2. 不读取工具注册表，也不创建新的 TTS 会话。
+        """
+
+        class _FakeModelClient:
+            def __init__(self) -> None:
+                self.session_count = 0
+
+            def create_streaming_tts_session(self, *, settings: ServerSettings, on_chunk):
+                self.session_count += 1
+                raise AssertionError("全局关闭时不应该生成提示音")
+
+        class _FakeAgentFacade:
+            def __init__(self) -> None:
+                self.registry_lookups = 0
+
+            def get_session_store(self):
+                return object()
+
+            def get_tool_registry(self):
+                self.registry_lookups += 1
+                raise AssertionError("全局关闭时不应该读取工具提示词")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = os.path.join(temp_dir, "progress-audio-cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            stale_wav = os.path.join(cache_dir, "disabled.wav")
+            stale_meta = os.path.join(cache_dir, "disabled.json")
+            with open(stale_wav, "wb") as file:
+                file.write(build_wav_bytes(b"\x00\x00", SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS))
+            with open(stale_meta, "w", encoding="utf-8") as file:
+                json.dump({"cache_schema": 1, "text": "旧提示"}, file)
+
+            model_client = _FakeModelClient()
+            agent_facade = _FakeAgentFacade()
+            runtime = VoiceRuntime(
+                settings=ServerSettings(
+                    dashscope_api_key="demo-key",
+                    voice_runs_root=temp_dir,
+                    voice_reply_mode="agent_tts",
+                    tool_progress_audio_enabled=False,
+                    tool_progress_audio_mode="cached",
+                ),
+                send_control_message=lambda *_args, **_kwargs: None,
+                model_client=model_client,  # type: ignore[arg-type]
+                agent_facade=agent_facade,  # type: ignore[arg-type]
+            )
+
+            self.assertTrue(runtime._progress_audio_cache_ready.wait(timeout=1.0))  # noqa: SLF001
+            self.assertEqual(model_client.session_count, 0)
+            self.assertEqual(agent_facade.registry_lookups, 0)
+            self.assertFalse(os.path.exists(stale_wav))
+            self.assertFalse(os.path.exists(stale_meta))
 
     def test_omni_final_audio_does_not_jump_ahead_of_progress_reply(self) -> None:
         """测试目标：验证 Omni 最终回复音频不会抢在工具前置播报之前播放。
@@ -637,7 +938,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             sent_messages.append((name, dict(payload)))
 
         runtime = VoiceRuntime(
-            settings=ServerSettings(),
+            settings=ServerSettings(voice_reply_mode="agent_tts"),
             send_control_message=_send_control_message,
             model_client=_FakeModelClient(),  # type: ignore[arg-type]
         )
@@ -967,6 +1268,90 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         joined_logs = "\n".join(logs.output)
         self.assertIn("Omni Realtime 用户转写完成 transcript='看一下'", joined_logs)
         self.assertIn("Omni Realtime 助手文本完成 text='你好'", joined_logs)
+
+    def test_dashscope_omni_realtime_client_synthesizes_progress_text_audio(self) -> None:
+        """测试目标：验证工具前置播报可以由 Omni Realtime 直接生成音频。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话工厂。
+        2. 调用 `synthesize_text_audio(...)` 生成一段固定提示语。
+        3. 检查会话参数、响应指令和音频分片。
+
+        预期结果：
+        1. 不会追加用户音频，也不会提交 input audio buffer。
+        2. 使用配置中的 Omni Realtime 模型和 voice。
+        3. `response.audio.delta` 会通过回调输出为音频分片。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.model = model
+                self.callback = callback
+                self.url = url
+                self.api_key = api_key
+                self.updated: dict[str, object] = {}
+                self.response_kwargs: dict[str, object] = {}
+                self.appended_audio = False
+                self.committed = False
+                self.closed = False
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **kwargs) -> None:
+                self.updated = kwargs
+
+            def append_audio(self, _audio_b64: str) -> None:
+                self.appended_audio = True
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def create_response(self, **kwargs) -> None:
+                self.response_kwargs = kwargs
+                self.callback.on_event({"type": "response.created", "response": {"id": "resp-progress"}})
+                self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "我先记一下。"})
+                self.callback.on_event(
+                    {"type": "response.audio.delta", "delta": base64.b64encode(b"progress-pcm").decode()}
+                )
+                self.callback.on_event({"type": "response.done"})
+
+            def close(self) -> None:
+                self.closed = True
+
+        chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        result = client.synthesize_text_audio(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                voice_model_voice="Tina",
+            ),
+            text="我先记一下。",
+            on_chunk=chunks.append,
+            session_id="sess-progress",
+            device_id="glass-001",
+            stream_id="reply-progress",
+        )
+
+        assert _Factory.instance is not None
+        self.assertEqual(_Factory.instance.model, "qwen3.5-omni-plus-realtime")
+        self.assertEqual(_Factory.instance.updated["voice"], "Tina")
+        self.assertIn("我先记一下。", str(_Factory.instance.response_kwargs["instructions"]))
+        self.assertFalse(_Factory.instance.appended_audio)
+        self.assertFalse(_Factory.instance.committed)
+        self.assertTrue(_Factory.instance.closed)
+        self.assertEqual(chunks[0].audio_pcm_bytes, b"progress-pcm")
+        self.assertEqual(chunks[0].sample_rate_hz, 24000)
+        self.assertEqual(result.assistant_text, "我先记一下。")
+        self.assertEqual(result.response_id, "resp-progress")
 
     def test_dashscope_omni_realtime_reply_client_uses_done_text_when_no_delta(self) -> None:
         """测试目标：验证 Omni Realtime 只返回文本完成事件时也能记录助手文字。

@@ -46,20 +46,21 @@ class ServerSettings:
     25. `tts_voice`：专用流式 TTS 音色。
     26. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
     27. `tts_sample_rate_hz`：TTS 原始输出采样率。
-    28. `tool_progress_audio_mode`：工具前置播报音频来源，`cached` 或 `realtime`。
-    29. `voice_model_timeout_ms`：模型请求超时时间。
-    30. `voice_runs_root`：语音运行时资产落盘目录。
-    31. `voice_asr_model_name`：批量语音转写模型名称。
-    32. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
-    33. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
-    34. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
-    35. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
-    36. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    37. `voice_system_prompt`：默认系统提示词。
-    38. `max_segment_audio_bytes`：单轮上行音频最大字节数。
-    39. `agent_memory_enabled`：是否启用 Agent 长期记忆。
-    40. `agent_memory_store_path`：长期记忆本地持久化文件路径。
-    41. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
+    28. `tool_progress_audio_enabled`：是否全局启用工具调用前置播报。
+    29. `tool_progress_audio_mode`：工具前置播报音频来源，`cached` 或 `realtime`。
+    30. `voice_model_timeout_ms`：模型请求超时时间。
+    31. `voice_runs_root`：语音运行时资产落盘目录。
+    32. `voice_asr_model_name`：批量语音转写模型名称。
+    33. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
+    34. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
+    35. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
+    36. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
+    37. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    38. `voice_system_prompt`：默认系统提示词。
+    39. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    40. `agent_memory_enabled`：是否启用 Agent 长期记忆。
+    41. `agent_memory_store_path`：长期记忆本地持久化文件路径。
+    42. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
     """
 
     host: str = "0.0.0.0"
@@ -90,6 +91,7 @@ class ServerSettings:
     tts_voice: str = "longanhuan"
     tts_websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
     tts_sample_rate_hz: int = 22050
+    tool_progress_audio_enabled: bool = True
     tool_progress_audio_mode: str = "cached"
     voice_model_timeout_ms: int = 45000
     voice_runs_root: str = "runs/session"
@@ -212,6 +214,10 @@ class ServerSettings:
             tts_voice=os.getenv("TTS_VOICE", defaults.tts_voice),
             tts_websocket_api_url=os.getenv("TTS_WEBSOCKET_API_URL", defaults.tts_websocket_api_url),
             tts_sample_rate_hz=cls._parse_int_env("TTS_SAMPLE_RATE_HZ", defaults.tts_sample_rate_hz),
+            tool_progress_audio_enabled=cls._parse_bool_env(
+                "TOOL_PROGRESS_AUDIO_ENABLED",
+                defaults.tool_progress_audio_enabled,
+            ),
             tool_progress_audio_mode=os.getenv(
                 "TOOL_PROGRESS_AUDIO_MODE",
                 defaults.tool_progress_audio_mode,
@@ -671,6 +677,7 @@ class ServerSettings:
             "tts_voice": self.tts_voice,
             "tts_websocket_api_url": self.tts_websocket_api_url,
             "tts_sample_rate_hz": self.tts_sample_rate_hz,
+            "tool_progress_audio_enabled": int(self.tool_progress_audio_enabled),
             "tool_progress_audio_mode": self.tool_progress_audio_mode,
             "voice_model_timeout_ms": self.voice_model_timeout_ms,
             "voice_runs_root": self.voice_runs_root,

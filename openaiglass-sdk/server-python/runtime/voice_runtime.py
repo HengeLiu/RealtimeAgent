@@ -1913,6 +1913,210 @@ class DashscopeOmniRealtimeReplyClient:
         finally:
             session.close()
 
+    def synthesize_text_audio(
+        self,
+        *,
+        settings: ServerSettings,
+        text: str,
+        on_chunk: Callable[[ModelChunk], None],
+        session_id: str,
+        device_id: str,
+        stream_id: str,
+    ) -> OmniRealtimeReplyResult:
+        """使用当前 Omni Realtime 模型生成一段提示文本的语音。
+
+        主要逻辑：
+        1. 创建独立的 Omni Realtime WebSocket 会话，避免干扰正在进行的用户回复会话。
+        2. 不追加用户音频，只通过 `create_response(instructions=...)` 请求模型朗读固定提示语。
+        3. 将 `response.audio.delta` 直接转换为 `ModelChunk`，复用统一下行播放流。
+
+        参数：
+            settings: 服务端模型和音色配置。
+            text: 需要朗读的工具前置提示文本。
+            on_chunk: 音频分片回调。
+            session_id/device_id/stream_id: 日志上下文。
+
+        返回值：
+            Omni 生成的文本摘要和响应编号。
+
+        异常情况：
+            缺少 API Key、DashScope 依赖、WebSocket 调用失败或没有返回音频时抛出结构化错误。
+        """
+
+        prompt_text = text.strip()
+        if not prompt_text:
+            raise build_error(ErrorCode.INVALID_MESSAGE, "Omni Realtime 工具前置播报文本为空")
+        if not settings.dashscope_api_key.strip():
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "缺少 DASHSCOPE_API_KEY，无法执行 Omni Realtime 工具前置播报",
+            )
+
+        try:
+            import dashscope
+            from dashscope.audio.qwen_omni import (
+                AudioFormat,
+                MultiModality,
+                OmniRealtimeCallback,
+                OmniRealtimeConversation,
+            )
+        except ImportError as exc:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "缺少 dashscope 依赖，无法启用 Omni Realtime 工具前置播报",
+                details={"hint": "请执行 uv sync 安装 dashscope"},
+            ) from exc
+
+        dashscope.api_key = settings.dashscope_api_key
+        done_event = threading.Event()
+        error_box: list[str] = []
+        assistant_text_parts: list[str] = []
+        response_id_box: list[str] = []
+        audio_bytes_box: list[int] = []
+        created_at_ms_box: list[int] = []
+        first_audio_at_ms_box: list[int] = []
+        self_logger = self._logger
+
+        class _Callback(OmniRealtimeCallback):
+            """工具前置播报专用 Omni Realtime 回调桥。"""
+
+            def on_open(self) -> None:  # pragma: no cover - 真实联调路径
+                log_debug(
+                    self_logger,
+                    (
+                        "Omni Realtime 工具前置播报 WebSocket 已打开 "
+                        f"model={settings.voice_omni_realtime_model_name}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id, message_id=stream_id),
+                )
+
+            def on_close(self, close_status_code, close_msg) -> None:  # pragma: no cover - 真实联调路径
+                if not done_event.is_set():
+                    log_debug(
+                        self_logger,
+                        (
+                            "Omni Realtime 工具前置播报 WebSocket 已关闭 "
+                            f"code={close_status_code} message={close_msg}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id, message_id=stream_id),
+                    )
+
+            def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - 真实联调路径
+                event_type = str(message.get("type") or "")
+                now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
+                if event_type == "response.created":
+                    response = message.get("response")
+                    if isinstance(response, dict):
+                        response_id = str(response.get("id") or "")
+                        if response_id:
+                            response_id_box.append(response_id)
+                    created_at_ms_box.append(now_ms)
+                    return
+                if event_type in {"response.audio_transcript.delta", "response.text.delta"}:
+                    delta = str(message.get("delta") or "")
+                    if delta:
+                        assistant_text_parts.append(delta)
+                    return
+                if event_type in {"response.audio_transcript.done", "response.text.done"}:
+                    final_text = str(message.get("transcript") or message.get("text") or "")
+                    if final_text and not assistant_text_parts:
+                        assistant_text_parts.append(final_text)
+                    return
+                if event_type == "response.audio.delta":
+                    delta = str(message.get("delta") or "")
+                    if not delta:
+                        return
+                    try:
+                        audio_pcm = base64.b64decode(delta)
+                    except Exception as exc:
+                        error_box.append(f"工具前置播报 response.audio.delta base64 解码失败: {exc}")
+                        done_event.set()
+                        return
+                    if audio_pcm and not first_audio_at_ms_box:
+                        first_audio_at_ms_box.append(now_ms)
+                        log_info(
+                            self_logger,
+                            (
+                                "Omni Realtime 工具前置播报返回首段音频 "
+                                f"model={settings.voice_omni_realtime_model_name} "
+                                f"voice={settings.voice_model_voice} bytes={len(audio_pcm)} "
+                                f"response_create_to_first_audio_ms="
+                                f"{DashscopeOmniRealtimeReplyClient._latency_ms(created_at_ms_box[-1] if created_at_ms_box else None, now_ms)}"
+                            ),
+                            LogContext(device_id=device_id, session_id=session_id, message_id=stream_id),
+                        )
+                    if audio_pcm:
+                        audio_bytes_box.append(len(audio_pcm))
+                        on_chunk(ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
+                    return
+                if event_type in {"response.done", "response.cancelled"}:
+                    done_event.set()
+                    return
+                if event_type == "error":
+                    error = message.get("error")
+                    error_box.append(str(error if error is not None else message))
+                    done_event.set()
+
+        callback = _Callback()
+        factory = self._conversation_factory or OmniRealtimeConversation
+        conversation = factory(
+            model=settings.voice_omni_realtime_model_name,
+            callback=callback,
+            url=settings.voice_omni_realtime_url.rstrip("/"),
+            api_key=settings.dashscope_api_key,
+        )
+        try:
+            conversation.connect()
+            conversation.update_session(
+                output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
+                voice=settings.voice_model_voice,
+                output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+                instructions="你只负责把系统给出的工具等待提示自然朗读出来，不要添加解释。",
+            )
+            conversation.create_response(
+                instructions=(
+                    "请只朗读下面这句中文提示，不要添加任何其他内容："
+                    f"{prompt_text}"
+                ),
+                output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
+            )
+            if not done_event.wait(max(5.0, settings.voice_model_timeout_ms / 1000)):
+                raise build_error(
+                    ErrorCode.TIMEOUT,
+                    "Omni Realtime 工具前置播报等待响应完成超时",
+                    details={"stream_id": stream_id, "timeout_ms": settings.voice_model_timeout_ms},
+                )
+            if error_box:
+                raise build_error(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Omni Realtime 工具前置播报返回错误",
+                    details={"reason": error_box[-1], "stream_id": stream_id},
+                )
+            if not audio_bytes_box:
+                raise build_error(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Omni Realtime 工具前置播报没有返回音频",
+                    details={"stream_id": stream_id, "text": prompt_text},
+                )
+            return OmniRealtimeReplyResult(
+                assistant_text="".join(assistant_text_parts).strip(),
+                transcript="",
+                response_id=response_id_box[-1] if response_id_box else None,
+            )
+        except AppError:
+            raise
+        except Exception as exc:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "Omni Realtime 工具前置播报调用失败",
+                details={"reason": str(exc), "stream_id": stream_id},
+            ) from exc
+        finally:
+            try:
+                conversation.close()
+            except Exception:
+                pass
+
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
@@ -2540,21 +2744,26 @@ class VoiceRuntime:
         """启动工具前置播报音频缓存预生成。
 
         主要逻辑：
-        1. 从当前 agent-core 工具注册表读取所有 `progress_message`。
-        2. 服务启动后在后台生成或加载本地 WAV 缓存。
-        3. 没有 API Key 或没有播报文案时跳过，工具调用时仍走实时 TTS 兜底。
+        1. 先检查全局工具前置播报开关。
+        2. 从当前 agent-core 工具注册表读取所有 `progress_message`。
+        3. 离线缓存模式下，服务启动后在后台生成或加载本地 WAV 缓存。
+        4. 没有播报文案、文案被删除或文案变化时，同步清理旧缓存，避免下次误用。
 
         异常情况：
         1. 预生成失败只写 DEBUG 日志，不阻塞服务启动。
         """
 
-        if self._settings.tool_progress_audio_mode != "cached":
+        if not self._settings.tool_progress_audio_enabled:
+            self._clear_progress_audio_cache_on_startup(reason="disabled")
+            return
+        progress_provider = self._progress_audio_provider()
+        if self._settings.tool_progress_audio_mode != "cached" or progress_provider != "tts":
             self._progress_audio_cache_ready.set()
             log_info(
                 self._logger,
                 (
                     "工具前置播报音频缓存已跳过 "
-                    f"mode={self._settings.tool_progress_audio_mode}"
+                    f"mode={self._settings.tool_progress_audio_mode} provider={progress_provider}"
                 ),
                 LogContext(session_id="progress_audio_cache", device_id="server"),
             )
@@ -2578,7 +2787,7 @@ class VoiceRuntime:
             )
             return
         if not progress_messages:
-            self._progress_audio_cache_ready.set()
+            self._clear_progress_audio_cache_on_startup(reason="no_progress_messages")
             return
         threading.Thread(
             target=self._preload_progress_audio_cache,
@@ -2586,6 +2795,35 @@ class VoiceRuntime:
             name="progress-audio-cache-preload",
             daemon=True,
         ).start()
+
+    def _clear_progress_audio_cache_on_startup(self, *, reason: str) -> None:
+        """启动时把工具前置播报缓存收敛为空。
+
+        主要逻辑：
+        1. 当全局关闭或当前工具没有播报文案时，旧的离线缓存已经不再可靠。
+        2. 清理缓存目录中的旧 WAV 和元数据，避免后续配置恢复时误读过期提示音。
+        3. 无论清理是否成功，都标记预加载结束，避免工具调用链路等待启动任务。
+
+        参数：
+        1. `reason`：清理原因，用于 DEBUG/INFO 日志排查启动行为。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 缓存目录不存在或无法读取时静默跳过，不阻塞服务启动。
+        """
+
+        cache_dir = self._progress_audio_cache_dir()
+        self._prune_stale_progress_audio_cache(cache_dir=cache_dir, expected_profiles={})
+        with self._progress_audio_cache_lock:
+            self._progress_audio_cache.clear()
+        self._progress_audio_cache_ready.set()
+        log_info(
+            self._logger,
+            f"工具前置播报音频缓存已收敛为空 reason={reason}",
+            LogContext(session_id="progress_audio_cache", device_id="server"),
+        )
 
     def _preload_progress_audio_cache(self, progress_messages: list[tuple[str, str]]) -> None:
         """批量加载或生成工具前置播报音频缓存。"""
@@ -2839,6 +3077,19 @@ class VoiceRuntime:
             "playback_sample_rate_hz": SERVER_SAMPLE_RATE_HZ,
             "channels": SERVER_CHANNELS,
         }
+
+    def _progress_audio_provider(self) -> str:
+        """返回工具前置播报应该使用的音频生成方。
+
+        主要逻辑：
+        1. 主回复是 Omni Realtime 音频直出时，前置播报也必须使用同一个 Omni Realtime 模型和音色。
+        2. 主回复是 Agent 文本加独立 TTS 时，前置播报继续使用同一个 TTS 服务。
+
+        返回值：
+            `omni_realtime` 或 `tts`。
+        """
+
+        return "omni_realtime" if self._settings.voice_reply_mode == "omni_realtime" else "tts"
 
     def build_realtime_open_payload(self) -> dict[str, Any]:
         """生成全双工实时语音会话打开请求。
@@ -5019,10 +5270,30 @@ class VoiceRuntime:
         """按配置播放中间提示，保持统一的下行播放流框架。
 
         主要逻辑：
-        1. `cached` 模式优先读取启动阶段预生成音频，未命中时回退实时流式 TTS。
-        2. `realtime` 模式跳过缓存，每次工具调用时创建流式 TTS 会话。
-        3. 两种模式最终都写入同一个 `ReplySynthesisContext` 和播放队列。
+        1. 主回复是 Omni Realtime 音频直出时，前置播报也调用同一个 Omni Realtime 模型和音色。
+        2. 主回复是独立 TTS 时，`cached` 模式优先读取启动阶段预生成音频。
+        3. TTS `realtime` 模式跳过缓存，每次工具调用时创建流式 TTS 会话。
+        4. 所有模式最终都写入同一个 `ReplySynthesisContext` 和播放队列。
         """
+
+        progress_provider = self._progress_audio_provider()
+        if progress_provider == "omni_realtime":
+            log_info(
+                self._logger,
+                (
+                    "工具前置播报使用 Omni Realtime "
+                    f"stream_id={context.stream_id} mode={self._settings.tool_progress_audio_mode} "
+                    f"model={self._settings.voice_omni_realtime_model_name} voice={self._settings.voice_model_voice}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id, message_id=context.stream_id),
+            )
+            self._synthesize_omni_text_into_context(
+                device_id=device_id,
+                session_id=session_id,
+                context=context,
+                text=text,
+            )
+            return
 
         if self._settings.tool_progress_audio_mode == "cached":
             cached_pcm = self._get_cached_progress_pcm(text)
@@ -5039,7 +5310,8 @@ class VoiceRuntime:
                 self._logger,
                 (
                     "工具前置播报使用实时流式 TTS "
-                    f"stream_id={context.stream_id} mode={self._settings.tool_progress_audio_mode}"
+                    f"stream_id={context.stream_id} mode={self._settings.tool_progress_audio_mode} "
+                    f"model={self._settings.tts_model_name} voice={self._settings.tts_voice}"
                 ),
                 LogContext(device_id=device_id, session_id=session_id, message_id=context.stream_id),
             )
@@ -5102,6 +5374,7 @@ class VoiceRuntime:
             device_id=device_id,
             session_id=session_id,
             source="agent_progress",
+            audio_source=self._progress_audio_provider(),
         )
         self._send_control_message(
             device_id,
@@ -5294,6 +5567,41 @@ class VoiceRuntime:
         self._mark_first_text_delta(context.playback)
         tts_session.push_text(text)
         tts_session.finish()
+        self._finalize_synthesis_context(device_id=device_id, session_id=session_id, context=context)
+
+    def _synthesize_omni_text_into_context(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        context: ReplySynthesisContext,
+        text: str,
+    ) -> None:
+        """用 Omni Realtime 生成工具前置播报并写入播放流。
+
+        主要逻辑：
+        1. 当前主回复链路如果是 Omni Realtime 音频直出，前置提示也必须由同一个 Omni 模型生成。
+        2. 这里只把固定提示文本交给 Omni 朗读，不追加用户音频、不暴露工具。
+        3. Omni 返回的音频分片继续走 `_emit_synthesis_chunk`，保持与最终回复相同的播放框架。
+
+        异常情况：
+            Omni 调用失败时向上抛出结构化错误，由调用线程记录失败；不会影响工具本身继续执行。
+        """
+
+        self._mark_first_text_delta(context.playback)
+        self._omni_realtime_client.synthesize_text_audio(
+            settings=replace(self._settings, voice_conversation_mode="segment_turn"),
+            text=text,
+            on_chunk=lambda chunk: self._emit_synthesis_chunk(
+                device_id=device_id,
+                session_id=session_id,
+                context=context,
+                chunk=chunk,
+            ),
+            session_id=session_id,
+            device_id=device_id,
+            stream_id=context.stream_id,
+        )
         self._finalize_synthesis_context(device_id=device_id, session_id=session_id, context=context)
 
     @staticmethod

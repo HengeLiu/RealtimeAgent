@@ -16,7 +16,7 @@
 | 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `voice.session_mode: half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效，但会先经过冷却和连续 VAD 帧确认。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR；`sdk-v74` 音频原生 Chat Completions 链路优先使用流式返回 | 默认 `VOICE_INPUT_MODE=auto`：`agent_tts` 分支实际为 `asr_text`，`omni_realtime` 分支实际为 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
-| 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `tools.progress_audio.mode` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
+| 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源；`sdk-v83` 增加全局开关和启动缓存校验 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `tools.progress_audio.enabled` 全局启停，通过 `tools.progress_audio.mode` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
@@ -282,7 +282,7 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `server.port` | `config/local_server.yaml` | 服务端端口，默认 `8765`。 |
 | `devices.tokens` | `config/local_server.yaml` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id: pair_token`。 |
 | `voice.session_mode` | `config/local_server.yaml` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
-| `models.*` / `voice.*` / `tools.progress_audio.mode` | `config/local_server.yaml` | 服务端模型、语音输入模式、语音回复分支、连续对话、ASR、TTS 和工具前置播报配置。默认 `voice.reply_mode=omni_realtime`，使用 qwen3.5-omni realtime 直出语音并允许 SDK Tool 调用；默认 `voice.conversation_mode=realtime_semantic_vad`。需要回到旧稳定分段提交时设为 `segment_turn`。`tools.progress_audio.mode=realtime` 会跟随主回复音频来源：Omni 主链路调用同一个 Omni Realtime 模型生成提示音，TTS 主链路调用同一个 TTS 服务。`cached` 仅对 TTS 主链路预生成缓存。 |
+| `models.*` / `voice.*` / `tools.progress_audio.*` | `config/local_server.yaml` | 服务端模型、语音输入模式、语音回复分支、连续对话、ASR、TTS 和工具前置播报配置。默认 `voice.reply_mode=omni_realtime`，使用 qwen3.5-omni realtime 直出语音并允许 SDK Tool 调用；默认 `voice.conversation_mode=realtime_semantic_vad`。需要回到旧稳定分段提交时设为 `segment_turn`。`tools.progress_audio.enabled=false` 会全局关闭工具前置播报。`tools.progress_audio.mode=realtime` 会跟随主回复音频来源：Omni 主链路调用同一个 Omni Realtime 模型生成提示音，TTS 主链路调用同一个 TTS 服务。`cached` 仅对 TTS 主链路预生成缓存。 |
 | `agent.memory.*` | `config/local_server.yaml` | 控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
 | `DASHSCOPE_API_KEY` | `config/.env` 或 shell export | 百炼 API Key，不能写入 YAML，也不要提交 Git。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
@@ -527,7 +527,7 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 `sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。`sdk-v72` 起，播放结束后的连续追问会先经过短冷却和连续 VAD 帧确认，降低尾音或环境声误触发。由于当前固件没有 AEC，播放期间仍不会保持麦克风活跃；如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
 
-`sdk-v80` 起，工具前置提示由模型首输出类型自动判定。首输出是工具调用时，SDK 使用 `ToolSpec.progress_message` 播报；首输出是文本或音频时，SDK 不会再额外插入等待提示。`sdk-v81` 起，播报音频来源由 `tools.progress_audio.mode` 控制：`cached` 在 TTS 主链路中使用启动阶段静态音频缓存，`realtime` 在工具调用前按当前主回复音频来源实时生成提示音。主回复是 Omni Realtime 音频直出时，提示音也由同一个 Omni Realtime 模型和 voice 生成；主回复是 Agent 文本加 TTS 时，提示音也由同一个 TTS 服务生成。工具调用失败会以结构化错误回填给模型或由 SDK 失败链路播报，不需要业务 Tool 自行播放错误语音。
+`sdk-v80` 起，工具前置提示由模型首输出类型自动判定。首输出是工具调用时，SDK 使用 `ToolSpec.progress_message` 播报；首输出是文本或音频时，SDK 不会再额外插入等待提示。`sdk-v81` 起，播报音频来源由 `tools.progress_audio.mode` 控制：`cached` 在 TTS 主链路中使用启动阶段静态音频缓存，`realtime` 在工具调用前按当前主回复音频来源实时生成提示音。主回复是 Omni Realtime 音频直出时，提示音也由同一个 Omni Realtime 模型和 voice 生成；主回复是 Agent 文本加 TTS 时，提示音也由同一个 TTS 服务生成。`sdk-v83` 起，`tools.progress_audio.enabled=false` 会全局关闭工具前置播报；`cached` 模式会在 Server 启动时校验当前工具提示词，删除已移除文案的旧缓存，并在文案变化后重新生成离线提示音。工具调用失败会以结构化错误回填给模型或由 SDK 失败链路播报，不需要业务 Tool 自行播放错误语音。
 
 当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token，TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime + realtime_semantic_vad` 模式已经把建连、音频上行、照片追加和 turn detection 前移到用户说话期间，由 Omni 自动提交并直出语音；但真实 ESP32 端仍因缺少 AEC 保持播放期间半双工，播放中自然插话和更激进的 full-duplex 体验需要端侧 AEC/VAD 能力继续配合。
 
@@ -545,6 +545,16 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 | `realtime` | 工具调用前把选中的固定提示文本发送给当前主回复音频提供方。Omni 主链路发送给 Omni Realtime；TTS 主链路发送给当前 TTS 服务。 | 更关注提示音与实时回复的模型、音色和情感一致性，能接受每次工具调用多一次模型请求。 |
 
 无论使用哪种模式，眼镜端都只接收同一种 `actuator.audio.play` 和 `/stream.wav` 下行播放流，业务代码不需要区分音频来源。
+
+如果需要彻底关闭工具调用前的提示音，可以在 `config/local_server.yaml` 中设置：
+
+```yaml
+tools:
+  progress_audio:
+    enabled: false
+```
+
+关闭后，`progress_message` 仍可保留在 Tool 规格里作为业务说明，但运行时不会播放提示音。重新开启并使用 `cached` 模式时，Server 会按当前工具提示词重新检查本地缓存。
 
 `sdk-v71` 起，`progress_message` 可以继续写成单句，也可以写成字符串列表。建议业务 Tool 配置 3 到 5 条短句，SDK 会在每次工具调用前随机选择一条；静态音频缓存会在启动阶段为所有候选句预生成或预加载。
 

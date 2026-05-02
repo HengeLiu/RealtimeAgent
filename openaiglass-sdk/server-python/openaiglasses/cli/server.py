@@ -64,6 +64,7 @@ def _build_server_defaults() -> dict[str, str]:
         "TTS_VOICE": defaults.tts_voice,
         "TTS_WEBSOCKET_API_URL": defaults.tts_websocket_api_url,
         "TTS_SAMPLE_RATE_HZ": str(defaults.tts_sample_rate_hz),
+        "TOOL_PROGRESS_AUDIO_ENABLED": str(defaults.tool_progress_audio_enabled).lower(),
         "TOOL_PROGRESS_AUDIO_MODE": defaults.tool_progress_audio_mode,
         "VOICE_MODEL_TIMEOUT_MS": str(defaults.voice_model_timeout_ms),
         "VOICE_SYSTEM_PROMPT": defaults.voice_system_prompt,

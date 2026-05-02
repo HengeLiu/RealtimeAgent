@@ -350,11 +350,44 @@ class AgentFacade:
             )
         else:
             model_request = dict(prepared.model_request)
-            model_request["audio_bytes"] = next(
+            audio_bytes = next(
                 (asset.bytes for asset in turn.asset_refs if asset.asset_type == "audio"),
                 model_request.get("audio_bytes"),
             )
-            model_request["image_count"] = len([asset for asset in turn.asset_refs if asset.asset_type == "image"])
+            image_count = len([asset for asset in turn.asset_refs if asset.asset_type == "image"])
+            model_request["audio_bytes"] = audio_bytes
+            model_request["image_count"] = image_count
+            messages = model_request.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if not isinstance(message, dict) or message.get("role") != "user":
+                        continue
+                    content = message.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("type") == "input_audio_stream":
+                            item["audio_bytes"] = audio_bytes
+                        if item.get("type") == "input_image_batch":
+                            item["image_count"] = image_count
+            log_debug(
+                self._logger,
+                "agent-core 模型请求完整 messages",
+                LogContext(
+                    device_id=turn.device_id,
+                    session_id=turn.session_id,
+                    message_id=turn.turn_id,
+                    fields={
+                        "stage": "native_audio_realtime_completed",
+                        "model": model_request.get("model"),
+                        "runner": model_request.get("runner"),
+                        "message_count": len(messages) if isinstance(messages, list) else 0,
+                        "messages": messages if isinstance(messages, list) else [],
+                    },
+                ),
+            )
             result = AgentTurnResult(
                 turn_id=turn.turn_id,
                 session_id=turn.session_id,

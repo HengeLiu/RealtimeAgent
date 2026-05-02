@@ -23,7 +23,7 @@ devices             服务端、眼镜、手机设备编号和配对令牌
 heartbeat           心跳间隔和超时
 models              base_url、Agent、Omni Realtime、ASR、TTS
 voice               会话模式、回复模式、连续对话、turn detection、落盘目录
-tools               工具前置播报音频模式
+tools               工具前置播报全局开关和音频模式
 agent.memory        长期记忆开关、路径和提示词注入数量
 ```
 
@@ -54,6 +54,7 @@ DASHSCOPE_API_KEY=""
 | `models.asr.*` | `VOICE_ASR_*` |
 | `models.tts.*` | `TTS_*` |
 | `voice.*` | `VOICE_*` 和 `MAX_SEGMENT_AUDIO_BYTES` |
+| `tools.progress_audio.enabled` | `TOOL_PROGRESS_AUDIO_ENABLED` |
 | `tools.progress_audio.mode` | `TOOL_PROGRESS_AUDIO_MODE` |
 | `agent.memory.*` | `AGENT_MEMORY_*` |
 
@@ -72,3 +73,14 @@ DASHSCOPE_API_KEY=""
 1. `voice.reply_mode=omni_realtime` 时，工具前置播报使用 `models.omni_realtime.model` 和 `models.voice.voice` 创建独立 Omni Realtime 会话生成音频。
 2. `voice.reply_mode=agent_tts` 时，工具前置播报使用 `models.tts.model` 和 `models.tts.voice` 创建流式 TTS 会话生成音频。
 3. `cached` 缓存只服务于 TTS 主链路；Omni 主链路不会复用 TTS 缓存，避免提示音和最终回复音色、情感不一致。
+
+## 后续修正：工具前置播报全局开关与缓存校验
+
+`tools.progress_audio.enabled` 是工具前置播报的全局开关：
+
+1. `true` 时，SDK 仍按模型首输出类型自动判定是否播报：首输出为工具调用才播，首输出为文本或音频不播。
+2. `false` 时，即使 Tool 配置了 `progress_message`，调用工具前也不会插入任何提示音。
+3. `tools.progress_audio.mode=cached` 且主链路为 TTS 时，Server 启动会读取当前工具注册表的所有 `progress_message`，按当前文本、TTS 模型、音色、采样率生成缓存指纹。
+4. 如果某个 Tool 删除了 `progress_message`，对应旧缓存会在启动阶段被清理。
+5. 如果某个 Tool 修改了 `progress_message`，旧文案缓存会被清理，新文案会重新生成离线音频。
+6. `mode=realtime` 或 Omni 主链路不依赖离线提示音缓存，启动时不需要更新提示音文件。
