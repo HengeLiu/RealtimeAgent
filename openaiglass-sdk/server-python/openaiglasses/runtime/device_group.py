@@ -248,6 +248,47 @@ class DeviceGroupContext:
 
         return self.runtime.cancel_task(task_id)
 
+    def schedule_task_event(
+        self,
+        *,
+        task_id: str,
+        delay_ms: int,
+        event_name: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "scheduler",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """安排一次延迟任务事件。
+
+        功能：
+        1. 为业务 Tool 或 Task 暴露 SDK 通用定时调度入口。
+        2. 到点后 SDK 会把事件派发给目标 Task，不要求业务侧自建线程。
+        3. 可用于计时器、超时检查、延迟确认等通用后台任务场景。
+
+        参数：
+        1. `task_id`：目标任务编号。
+        2. `delay_ms`：延迟毫秒数。
+        3. `event_name`：到点后派发的事件名。
+        4. `payload`：事件载荷。
+        5. `source`：事件来源。
+        6. `event_id`：可选幂等事件编号。
+
+        返回值：
+        1. 调度记录字典。
+
+        异常情况：
+        1. 任务运行时未绑定或参数非法时由 SDK 运行时抛出异常。
+        """
+
+        return self.runtime.schedule_task_event(
+            task_id=task_id,
+            delay_ms=delay_ms,
+            event_name=event_name,
+            payload=payload or {},
+            source=source,
+            event_id=event_id,
+        )
+
     def get_config(self, key: str, default: Any = None) -> Any:
         """读取当前设备组上下文中的 SDK 远程配置。
 
@@ -1051,6 +1092,32 @@ class DeviceGroupRuntime:
         if self.task_runtime is None:
             raise RuntimeError("未配置任务运行时")
         return self.task_runtime.cancel_task(task_id)
+
+    def schedule_task_event(
+        self,
+        *,
+        task_id: str,
+        delay_ms: int,
+        event_name: str,
+        payload: dict[str, Any],
+        source: str = "scheduler",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """通过任务运行时安排延迟事件。"""
+
+        if self.task_runtime is None:
+            raise RuntimeError("未配置任务运行时")
+        scheduler = getattr(self.task_runtime, "schedule_event", None)
+        if scheduler is None:
+            raise RuntimeError("当前任务运行时不支持通用定时调度")
+        return scheduler(
+            task_id=task_id,
+            delay_ms=delay_ms,
+            event_name=event_name,
+            payload=dict(payload),
+            source=source,
+            event_id=event_id,
+        )
 
     def build_snapshot(self) -> dict[str, Any]:
         """构建设备组快照。

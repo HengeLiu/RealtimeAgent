@@ -22,6 +22,8 @@ from openaiglasses import (
     BackendTaskGatewayAdapter,
     BaseTask,
     BaseMcpAdapter as PublicBaseMcpAdapter,
+    ExternalMcpAdapter,
+    ExternalMcpServerConfig,
     BasePhoneProcessor,
     BasePhoneTask,
     BaseSensorProvider,
@@ -116,6 +118,117 @@ def test_device_group_runtime_hides_binding_details() -> None:
     assert context.require_glass().device_id == "glass_001"
     assert context.require_phone().device_id == "phone_001"
     assert {item.role for item in context.query_devices()} == {"glass", "phone"}
+
+
+def test_external_mcp_adapter_maps_server_tools_to_sdk_methods() -> None:
+    """测试目标：验证 SDK 可把外部 MCP Server 工具映射为公开 MCP 方法。
+
+    测试方法：
+    1. 构造一个 `ExternalMcpAdapter`，并用假异步 tools/list 结果替代真实网络连接。
+    2. 调用 `list_methods()` 读取方法清单。
+    3. 检查方法名前缀、描述和输入模型校验。
+
+    预期结果：
+    1. 外部 MCP tool 会变成 SDK `McpMethodSpec`。
+    2. 配置的 `method_prefix` 会生效，便于业务侧避免工具名冲突。
+    3. MCP JSON Schema 的必填字段会被 Pydantic 输入模型校验。
+    """
+
+    class FakeTool:
+        name = "maps_geo"
+        description = "地理编码"
+        inputSchema = {
+            "type": "object",
+            "properties": {
+                "address": {"type": "string", "description": "地址"},
+            },
+            "required": ["address"],
+        }
+
+    adapter = ExternalMcpAdapter(
+        ExternalMcpServerConfig(
+            name="amap",
+            transport="stdio",
+            command="fake-amap-mcp",
+            method_prefix="amap",
+        )
+    )
+
+    from agent_core.mcp.external_client import _build_input_model
+
+    input_model = _build_input_model(method_name="amap.maps_geo", schema=FakeTool.inputSchema)
+
+    async def _fake_specs():
+        return [
+            PublicMcpMethodSpec(
+                name="amap.maps_geo",
+                description="地理编码",
+                input_model=input_model,
+            )
+        ]
+
+    adapter._list_methods_async = _fake_specs  # noqa: SLF001
+    methods = adapter.list_methods()
+
+    assert methods[0].name == "amap.maps_geo"
+    assert methods[0].description == "地理编码"
+    assert methods[0].input_model.model_validate({"address": "杭州西湖"}).address == "杭州西湖"
+
+
+def test_sdk_task_context_can_schedule_event_and_publish_agent_first_terminal_policy() -> None:
+    """测试目标：验证 SDK 自定义 Task 支持通用定时调度和终态回流策略。
+
+    测试方法：
+    1. 定义一个启动后通过 `TaskContext.schedule_event(...)` 安排到点事件的 Task。
+    2. Task 收到到点事件后进入 completed。
+    3. 监听 SDK 任务运行时发布的终态事件。
+
+    预期结果：
+    1. 定时事件会自动派发到 `on_event(...)`。
+    2. 任务最终进入 completed。
+    3. 终态事件声明 `requires_agent_decision=true` 且 `allow_direct_notify=false`。
+    """
+
+    class ScheduledTask(BaseTask):
+        task_type = "scheduled_task"
+        description = "调度测试任务"
+        terminal_event_requires_agent_decision = True
+        terminal_event_allow_direct_notify = False
+
+        def on_start(self, context):
+            context.emit_state("running")
+            context.schedule_event(delay_ms=20, event_name="timer.fired", payload={"message": "到点了"})
+
+        def on_event(self, context, event):
+            if event.name == "timer.fired":
+                context.complete({"message": event.payload["message"]})
+
+    sdk = OpenAIGlassesSDK()
+    sdk.register_task(ScheduledTask())
+    sdk.device_groups.register_device(device_id="glass_001", role="glass")
+    events = []
+    fired = __import__("threading").Event()
+
+    def _listener(event):
+        events.append(event)
+        fired.set()
+
+    sdk.task_runtime.subscribe_events(_listener)
+    snapshot = sdk.task_runtime.create_task(
+        task_type="scheduled_task",
+        device_id="glass_001",
+        session_id="sess_001",
+        input_data={},
+    )
+
+    assert snapshot.state == "running"
+    assert fired.wait(timeout=1.0)
+    final_snapshot = sdk.task_runtime.query_task(snapshot.task_id)
+    assert final_snapshot.state == "completed"
+    assert final_snapshot.result == {"message": "到点了"}
+    assert events[-1].event_name == "task.completed"
+    assert events[-1].requires_agent_decision is True
+    assert events[-1].allow_direct_notify is False
 
 
 def test_device_group_runtime_builds_account_level_snapshot() -> None:

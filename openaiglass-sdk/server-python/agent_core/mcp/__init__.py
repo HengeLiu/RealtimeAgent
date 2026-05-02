@@ -1,6 +1,6 @@
 """MCP 层导出。"""
 
-__all__ = ["BaseMcpAdapter", "McpGateway", "McpRegistry"]
+__all__ = ["BaseMcpAdapter", "ExternalMcpAdapter", "ExternalMcpServerConfig", "McpGateway", "McpRegistry"]
 
 
 def __getattr__(name: str):
@@ -8,6 +8,14 @@ def __getattr__(name: str):
         from agent_core.mcp.base import BaseMcpAdapter
 
         return BaseMcpAdapter
+    if name == "ExternalMcpAdapter":
+        from agent_core.mcp.external_client import ExternalMcpAdapter
+
+        return ExternalMcpAdapter
+    if name == "ExternalMcpServerConfig":
+        from agent_core.mcp.external_client import ExternalMcpServerConfig
+
+        return ExternalMcpServerConfig
     if name == "McpGateway":
         from agent_core.mcp.gateway import McpGateway
 
@@ -17,4 +25,3 @@ def __getattr__(name: str):
 
         return McpRegistry
     raise AttributeError(name)
-

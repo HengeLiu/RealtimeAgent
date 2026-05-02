@@ -20,9 +20,9 @@
 
 迭代记录：
 
-1. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
-2. [SDK v68 迭代记录](./stage2/iteration-v68.md)：主 Agent 主动记忆提示补强。
-3. [SDK v67 迭代记录](./stage2/iteration-v67.md)：长期记忆分类描述统一。
+1. [SDK v84 迭代记录](./stage2/iteration-v84.md)：外部 MCP Server client、Task 通用调度、终态回流策略和设备组通知播报链路修复。
+2. [SDK v82 迭代记录](./stage2/iteration-v82.md)：服务端配置分层与 YAML 化。
+3. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
 4. [全部迭代记录](./stage2/)
 
 盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。

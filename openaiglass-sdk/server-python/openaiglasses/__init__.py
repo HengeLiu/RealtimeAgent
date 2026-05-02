@@ -33,7 +33,7 @@ from openaiglasses.runtime import (
     TaskRuntimeSnapshot,
 )
 from openaiglasses.server import HybridTaskGateway, build_agent_facade_from_sdk, build_server_handle_from_sdk
-from agent_core.mcp import BaseMcpAdapter
+from agent_core.mcp import BaseMcpAdapter, ExternalMcpAdapter, ExternalMcpServerConfig
 from agent_core.models import McpMethodSpec
 from openaiglasses.sdk import OpenAIGlassesSDK
 from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime, SkillSessionState
@@ -46,6 +46,8 @@ __all__ = [
     "BasePhoneProcessor",
     "BasePhoneTask",
     "BaseMcpAdapter",
+    "ExternalMcpAdapter",
+    "ExternalMcpServerConfig",
     "BaseSensorProvider",
     "CapabilityError",
     "CapabilityRegistry",

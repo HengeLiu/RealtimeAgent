@@ -110,6 +110,28 @@ class OpenAIGlassesSDK:
         self._mcp_registry.register_adapter(adapter)
         self.mcp_adapters.append(adapter)
 
+    def register_external_mcp_server(self, config) -> None:
+        """注册一个外部 MCP Server。
+
+        功能：
+        1. 基于 `ExternalMcpServerConfig` 创建官方 MCP client adapter。
+        2. 支持 stdio、SSE 和 Streamable HTTP MCP Server。
+        3. 让业务侧通过配置连接外部 MCP Server，而不是手写 SDK 内部 adapter。
+
+        参数：
+        1. `config`：外部 MCP Server 配置对象。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. 配置无效、外部 Server 无法连接或工具名重复时抛出异常。
+        """
+
+        from agent_core.mcp import ExternalMcpAdapter
+
+        self.register_mcp_adapter(ExternalMcpAdapter(config))
+
     def register_skill(self, document: "SkillDocument") -> None:
         """注册 Skill 文档。
 

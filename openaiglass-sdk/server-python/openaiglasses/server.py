@@ -525,6 +525,9 @@ class HybridTaskGateway(TaskGateway):
         self._sdk_task_runtime = sdk_task_runtime
         self._system_task_runtime = system_task_runtime or SdkSystemTaskRuntime()
         self._sdk_event_bus = TaskEventBus()
+        subscribe_sdk_events = getattr(self._sdk_task_runtime, "subscribe_events", None)
+        if subscribe_sdk_events is not None:
+            subscribe_sdk_events(self._sdk_event_bus.publish)
 
     def bind_device_groups(self, device_groups: Any) -> None:
         """把 SDK 任务运行时绑定到真实设备组运行时。"""
@@ -575,7 +578,7 @@ class HybridTaskGateway(TaskGateway):
                 runtime=runtime,
                 event_name="task.completed",
                 payload=dict(runtime.result or {}),
-                allow_direct_notify=True,
+                **self._sdk_terminal_policy(runtime.task_type),
             )
         return runtime
 
@@ -644,9 +647,36 @@ class HybridTaskGateway(TaskGateway):
                 runtime=runtime,
                 event_name="task.completed",
                 payload=dict(runtime.result or {}),
-                allow_direct_notify=True,
+                **self._sdk_terminal_policy(runtime.task_type),
             )
         return runtime
+
+    def schedule_event(
+        self,
+        *,
+        task_id: str,
+        delay_ms: int,
+        event_name: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "scheduler",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """为 SDK 自定义任务安排延迟事件。"""
+
+        if not self._sdk_task_runtime.contains_task(task_id):
+            raise build_error(
+                ErrorCode.TASK_NOT_FOUND,
+                "目标任务不存在或不支持 SDK 调度",
+                details={"task_id": task_id},
+            )
+        return self._sdk_task_runtime.schedule_event(
+            task_id=task_id,
+            delay_ms=delay_ms,
+            event_name=event_name,
+            payload=dict(payload or {}),
+            source=source,
+            event_id=event_id,
+        )
 
     def subscribe_events(self, listener) -> None:
         """订阅任务事件。"""
@@ -667,6 +697,8 @@ class HybridTaskGateway(TaskGateway):
         event_name: str,
         payload: dict[str, Any],
         allow_direct_notify: bool = False,
+        requires_agent_decision: bool = False,
+        priority: str = "normal",
     ) -> None:
         """发布 SDK 任务事件。"""
 
@@ -679,13 +711,30 @@ class HybridTaskGateway(TaskGateway):
                 session_id=runtime.session_id,
                 device_id=runtime.device_id,
                 state=runtime.state,
-                priority="normal",
-                requires_agent_decision=False,
+                priority=priority,
+                requires_agent_decision=requires_agent_decision,
                 allow_direct_notify=allow_direct_notify,
                 ts=0,
                 payload=payload,
             )
         )
+
+    def _sdk_terminal_policy(self, task_type: str) -> dict[str, Any]:
+        """读取 SDK 自定义任务终态事件策略。"""
+
+        policy_reader = getattr(self._sdk_task_runtime, "get_terminal_event_policy", None)
+        if policy_reader is None:
+            return {
+                "allow_direct_notify": True,
+                "requires_agent_decision": False,
+                "priority": "normal",
+            }
+        policy = policy_reader(task_type)
+        return {
+            "allow_direct_notify": bool(policy.get("allow_direct_notify", True)),
+            "requires_agent_decision": bool(policy.get("requires_agent_decision", False)),
+            "priority": str(policy.get("priority") or "normal"),
+        }
 
 
 def _sdk_result_to_agent_result(result: SdkCapabilityResult) -> AgentCapabilityResult:

@@ -3647,6 +3647,82 @@ class VoiceRuntime:
                 daemon=True,
             ).start()
 
+    def submit_notification(
+        self,
+        *,
+        request_id: str,
+        source_module: str,
+        session_id: str,
+        device_id: str,
+        task_id: str | None,
+        text: str,
+        priority: str = "normal",
+        notification_type: str = "sdk.notification",
+        allow_interrupt: bool | None = None,
+        allow_merge: bool | None = None,
+        requires_agent_context_sync: bool = False,
+        dedupe_key: str | None = None,
+    ) -> dict[str, Any]:
+        """提交一条外部结构化通知到统一语音播报链路。
+
+        功能：
+        1. 供 `DeviceGroupRuntime.notification_adapter` 和后续 SDK 模块复用。
+        2. 统一进入 `NotificationCoordinator`、`PlaybackArbiter` 和 TTS/Omni 播放链路。
+        3. 避免业务侧通知只进入设备组内存记录，却没有真实下发到眼镜端。
+
+        参数：
+        1. `request_id`：通知请求编号。
+        2. `source_module`：通知来源模块。
+        3. `session_id/device_id/task_id`：通知归属上下文。
+        4. `text`：需要播报的文本。
+        5. `priority`：通知优先级。
+        6. `notification_type`：通知类型。
+        7. `allow_interrupt/allow_merge/requires_agent_context_sync/dedupe_key`：通知仲裁策略。
+
+        返回值：
+        1. 提交结果字典，包含是否接受、是否已直发、是否排队和原因。
+
+        异常情况：
+        1. 空文本不会抛异常，会返回 `accepted=false`。
+        """
+
+        resolved_text = text.strip()
+        if not resolved_text:
+            return {
+                "accepted": False,
+                "dispatched": False,
+                "queued": False,
+                "reason": "empty_notification_text",
+            }
+        resolved_allow_interrupt = priority in {"high", "critical"} if allow_interrupt is None else allow_interrupt
+        resolved_allow_merge = priority in {"low", "normal"} if allow_merge is None else allow_merge
+        result = self._notification_coordinator.submit(
+            NotificationRequest(
+                request_id=request_id,
+                source_module=source_module,
+                session_id=session_id,
+                device_id=device_id,
+                task_id=task_id,
+                priority=priority,
+                notification_type=notification_type,
+                delivery_mode="audio",
+                allow_interrupt=resolved_allow_interrupt,
+                allow_merge=resolved_allow_merge,
+                requires_agent_context_sync=requires_agent_context_sync,
+                dedupe_key=dedupe_key or f"{notification_type}:{task_id or request_id}:{resolved_text}",
+                payload={"text": resolved_text},
+            )
+        )
+        return {
+            "accepted": result.accepted,
+            "dispatched": result.dispatched,
+            "queued": result.queued,
+            "interrupted_active": result.interrupted_active,
+            "reason": result.reason,
+            "active_request_id": result.active_request_id,
+            "queued_position": result.queued_position,
+        }
+
     def stream_playback(self, handler, *, device_id: str, stream_id: str) -> None:
         playback = self._wait_for_playback(device_id=device_id, stream_id=stream_id, timeout_s=10.0)
         try:

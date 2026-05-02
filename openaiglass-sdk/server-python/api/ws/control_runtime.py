@@ -119,6 +119,7 @@ class ControlRuntime(CameraGateway):
             agent_facade=agent_facade,
         )
         self._device_group_runtime.device_command_adapter = self._send_device_group_command
+        self._device_group_runtime.notification_adapter = self._submit_notification_from_device_group
         self._device_group_runtime.video_link_start_adapter = self._start_phone_video_link_from_device_group
         self._device_group_runtime.video_link_stop_adapter = self._stop_phone_video_link_from_device_group
         self._device_group_runtime.task_runtime = BackendTaskGatewayAdapter(
@@ -848,6 +849,56 @@ class ControlRuntime(CameraGateway):
             "session_id": session_id,
             "name": name,
             "payload": dict(payload),
+        }
+
+    def _submit_notification_from_device_group(
+        self,
+        *,
+        notification_id: str,
+        group_id: str,
+        session_id: str,
+        task_id: str | None,
+        text: str,
+        priority: str,
+    ) -> dict[str, Any]:
+        """供 `DeviceGroupRuntime` 使用的通知播报适配器。
+
+        主要逻辑：
+        1. 从设备组中解析在线眼镜设备。
+        2. 把业务提交的结构化通知转交给 `VoiceRuntime` 统一仲裁和播报。
+        3. 返回通知记录与播报提交结果，便于运行态快照和回放断言。
+
+        参数：
+        1. `notification_id/group_id/session_id/task_id/text/priority`：设备组通知记录字段。
+
+        返回值：
+        1. 包含原通知字段和 `voice_submit_result` 的字典。
+
+        异常情况：
+        1. 设备组缺少在线眼镜时由 `DeviceGroupRuntime.require_device(...)` 抛出异常。
+        """
+
+        glass = self._device_group_runtime.require_device(group_id, "glass")
+        submit_result = self._voice_runtime.submit_notification(
+            request_id=notification_id,
+            source_module="device-group-runtime",
+            session_id=session_id,
+            device_id=glass.device_id,
+            task_id=task_id,
+            text=text,
+            priority=priority,
+            notification_type="device_group.notification",
+            requires_agent_context_sync=False,
+            dedupe_key=f"device_group.notification:{task_id or notification_id}:{text}",
+        )
+        return {
+            "notification_id": notification_id,
+            "group_id": group_id,
+            "session_id": session_id,
+            "task_id": task_id,
+            "text": text,
+            "priority": priority,
+            "voice_submit_result": submit_result,
         }
 
     def _resolve_phone_video_target(

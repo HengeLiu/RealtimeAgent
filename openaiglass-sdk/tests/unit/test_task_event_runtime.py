@@ -599,6 +599,47 @@ class TaskEventRuntimeTestCase(unittest.TestCase):
         self.assertEqual(sent_messages[0][2], "actuator.audio.interrupt")
         self.assertEqual(sent_messages[0][4]["stream_id"], "reply_interrupt_001")
 
+    def test_voice_runtime_submit_notification_enters_coordinator(self) -> None:
+        """测试目标：验证外部通知会进入语音运行时通知协调器。
+
+        测试方法：
+        1. 构造 `VoiceRuntime` 并替换通知协调器为假 dispatcher。
+        2. 调用公开的 `submit_notification(...)`。
+        3. 检查通知请求和提交结果。
+
+        预期结果：
+        1. 通知请求会被提交到 `NotificationCoordinator`。
+        2. 返回结果显示通知已被接受并立即下发。
+        3. 通知文本、设备、任务编号和优先级保持不变。
+        """
+
+        dispatched_requests: list[NotificationRequest] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime._notification_coordinator = NotificationCoordinator(  # noqa: SLF001
+            dispatcher=dispatched_requests.append,
+        )
+
+        result = runtime.submit_notification(
+            request_id="notify_device_group_001",
+            source_module="device-group-runtime",
+            session_id="sess_401",
+            device_id="glass-001",
+            task_id="task_401",
+            text="计时结束",
+            priority="normal",
+            notification_type="device_group.notification",
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertTrue(result["dispatched"])
+        self.assertEqual(dispatched_requests[0].payload["text"], "计时结束")
+        self.assertEqual(dispatched_requests[0].device_id, "glass-001")
+        self.assertEqual(dispatched_requests[0].task_id, "task_401")
+        self.assertEqual(dispatched_requests[0].priority, "normal")
+
 
 if __name__ == "__main__":
     unittest.main()

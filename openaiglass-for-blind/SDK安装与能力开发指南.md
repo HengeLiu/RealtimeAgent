@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v82`。本版本在 Omni Realtime 音频直出和 Realtime function calling 基础上，工具前置播报继续由模型首个输出类型自动判定，并将服务端运行配置整理到 `config/local_server.yaml`；敏感信息写入同目录 `.env` 或通过 shell `export` 注入。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v84`。本版本在 Omni Realtime 音频直出和 Realtime function calling 基础上，补齐外部 MCP Server client、SDK 自定义 Task 通用定时调度、终态事件回流 Agent 决策策略，以及 `DeviceGroupContext.submit_notification(...)` 到真实眼镜播报链路的绑定。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.yaml` 中设置 `voice.session_mode: half_duplex`。
 
@@ -17,8 +17,11 @@
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR；`sdk-v74` 音频原生 Chat Completions 链路优先使用流式返回 | 默认 `VOICE_INPUT_MODE=auto`：`agent_tts` 分支实际为 `asr_text`，`omni_realtime` 分支实际为 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
 | 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源；`sdk-v83` 增加全局开关和启动缓存校验 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `tools.progress_audio.enabled` 全局启停，通过 `tools.progress_audio.mode` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
+| 外部 MCP Server client | `sdk-v84` 支持通过 `ExternalMcpServerConfig` 连接 stdio、SSE、Streamable HTTP MCP Server | 业务宿主可注册官方 AMap MCP Server 或第三方 MCP Server；业务 Tool/Task 继续使用 `context.mcp(...)`，不要自行创建 MCP 进程或 SDK 内部网关。 |
+| SDK 自定义 Task 定时调度 | `sdk-v84` 支持 `TaskContext.schedule_event(...)` 和 `DeviceGroupContext.schedule_task_event(...)` | 计时器、超时检查、延迟确认等场景不要自建线程；在 Task 中安排延迟事件，到点后由 SDK 调用 `on_event(...)`。 |
+| Task 终态事件回流策略 | `sdk-v84` 支持 `terminal_event_requires_agent_decision`、`terminal_event_allow_direct_notify` 和 `terminal_event_priority` | 如果终态必须先交给 Agent 决策再通知用户，Task 类上声明 `terminal_event_requires_agent_decision=True` 且 `terminal_event_allow_direct_notify=False`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
-| 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
+| 播放仲裁和用户打断 | `sdk-v84` 修复设备组通知到真实语音播报链路的绑定 | 业务只提交通知优先级和策略，不直接控制播放器。`context.submit_notification(...)` 会进入 `VoiceRuntime` 通知协调器，并下发 `assistant.reply` / `actuator.audio.play`。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | Agent 长期记忆 | `sdk-v50` 起支持两类注入策略，`sdk-v66` 收敛为 MemoryAgent 内部动作计划，`sdk-v67` 统一为基本信息和个性化信息，`sdk-v68` 补强主动记忆提示 | 业务能力不要自建记忆表；姓名、年龄等基本信息每轮完整注入，住址、爱好、习惯等个性化信息只注入主题，详情由模型按需调用 `memory_search`。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -48,7 +51,7 @@
 
 1. 设备注册、设备组绑定和心跳维护。
 2. 统一控制消息、媒体消息和任务事件模型。
-3. Agent、Tool、Task、Skill 和 MCP Adapter 装配。
+3. Agent、Tool、Task、Skill、MCP Adapter 和外部 MCP Server 装配。
 4. 全局上下文、任务状态、通知和异常处理。
 5. 半双工语音、全双工实时语音、播放仲裁和用户打断。
 6. 设备级数据回放、契约测试和 SDK 包验证。
@@ -60,6 +63,7 @@ from openaiglasses import (
     BaseTask,
     BaseTool,
     CapabilityResult,
+    ExternalMcpServerConfig,
     OpenAIGlassesSDK,
     ServerSettings,
     TaskContext,
@@ -1041,12 +1045,13 @@ Tool 中常用的 `context` 高层能力：
 | `create_task(task_type=..., input_data=...)` | 创建 SDK 托管任务。 |
 | `query_task(task_id)` | 查询任务状态。 |
 | `cancel_task(task_id)` | 取消任务。 |
+| `schedule_task_event(task_id=..., delay_ms=..., event_name=...)` | 安排一次延迟任务事件。 |
 | `start_phone_task(task_type=..., params=...)` | 启动手机侧持续任务。 |
 | `stop_phone_task(task_type=..., reason=...)` | 停止手机侧持续任务。 |
-
-注意：上表中的 `capture_photo(reason=...)` 是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是模型可见内置工具。`sdk-v42` 起，语音结束自动照片会由 SDK 直接装入当前用户多模态输入；视觉问答类 Skill 不需要声明照片工具，也不要在 `allowed_tools` 中声明 `capture_photo`。
 | `submit_notification(text=..., priority=...)` | 向设备侧提交播报或提示。 |
 | `mcp(method_name, arguments)` | 调用 SDK 统一注册的 MCP 方法，例如地图、搜索或导航规划。 |
+
+注意：上表中的 `capture_photo(reason=...)` 是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是模型可见内置工具。`sdk-v42` 起，语音结束自动照片会由 SDK 直接装入当前用户多模态输入；视觉问答类 Skill 不需要声明照片工具，也不要在 `allowed_tools` 中声明 `capture_photo`。
 
 ### 5.1 在 Tool 中调用 MCP
 
@@ -1127,6 +1132,48 @@ def create_sdk() -> OpenAIGlassesSDK:
 
 `context.mcp(...)` 的失败会返回 `CapabilityResult.failed(...)`，错误结果中包含 `method_name`、输入摘要和 SDK 统一错误码。真实服务端运行时会把 MCP 调用轨迹写入 agent session trace；本地调试中可以通过 `sdk.device_groups.list_mcp_traces()` 查看调用是否发生。
 
+`sdk-v84` 起，如果要连接官方或第三方 MCP Server，优先使用 SDK 外部 MCP client，而不是在业务 adapter 里重写 Web API 调用。stdio 示例：
+
+```python
+from openaiglasses import ExternalMcpServerConfig, OpenAIGlassesSDK
+
+
+def create_sdk() -> OpenAIGlassesSDK:
+    sdk = OpenAIGlassesSDK()
+    sdk.register_external_mcp_server(
+        ExternalMcpServerConfig(
+            name="amap",
+            transport="stdio",
+            command="npx",
+            args=["-y", "@amap/amap-maps-mcp-server"],
+            env={"AMAP_MAPS_API_KEY": "..."},
+            method_prefix="amap",
+        )
+    )
+    return sdk
+```
+
+SSE 或 Streamable HTTP 示例：
+
+```python
+sdk.register_external_mcp_server(
+    ExternalMcpServerConfig(
+        name="amap_http",
+        transport="sse",
+        url="http://127.0.0.1:3000/sse",
+        method_prefix="amap",
+    )
+)
+```
+
+外部 MCP 依赖官方 MCP Python SDK。独立项目安装时使用：
+
+```bash
+pip install "openaiglasses-sdk[mcp]"
+```
+
+注册后，业务 Tool/Task 仍然只调用 `context.mcp("amap.xxx", {...})`。如果外部 MCP Server 的工具名和现有方法冲突，使用 `method_prefix` 分组；业务代码不要直接创建 `ClientSession`、stdio 进程、SSE 连接或 SDK 内部 `McpGateway`。
+
 `sdk-v20` 起，业务侧 MCP Adapter 示例应只从 `openaiglasses` 导入 `BaseMcpAdapter`、`McpMethodSpec` 和 `CapabilityResult`。业务代码仍然不要构造 `McpGateway`、`McpRegistry` 或 `AgentToolContext`。
 
 ## 6. 开发服务端 Task
@@ -1140,6 +1187,8 @@ from openaiglasses import BaseTask, TaskContext, TaskEvent
 class DemoTask(BaseTask):
     task_type = "demo_task"
     description = "演示后台任务"
+    terminal_event_requires_agent_decision = True
+    terminal_event_allow_direct_notify = False
 
     def on_start(self, context: TaskContext) -> None:
         target = str(context.input.get("target") or "")
@@ -1176,6 +1225,33 @@ class DemoTask(BaseTask):
 ```
 
 Task 中不要直接持有 WebSocket 连接，不要自己维护任务状态表。任务状态通过 `TaskContext` 更新，设备能力通过 `context.device_group` 获取。
+
+`sdk-v84` 起，Task 可以使用 SDK 通用调度器，不要为计时、超时检查或延迟确认自建线程：
+
+```python
+class TimerTask(BaseTask):
+    task_type = "timer_task"
+    description = "计时器任务"
+    terminal_event_requires_agent_decision = True
+    terminal_event_allow_direct_notify = False
+
+    def on_start(self, context: TaskContext) -> None:
+        delay_ms = int(context.input["delay_ms"])
+        context.emit_state("running", {"phase": "counting", "delay_ms": delay_ms})
+        context.schedule_event(
+            delay_ms=delay_ms,
+            event_name="timer.fired",
+            payload={"message": "计时结束"},
+        )
+
+    def on_event(self, context: TaskContext, event: TaskEvent) -> None:
+        if event.name == "timer.fired":
+            context.complete({"message": event.payload.get("message", "计时结束")})
+```
+
+其中 `terminal_event_requires_agent_decision=True` 表示任务完成、失败、取消或超时时，终态事件需要先回流给 Agent，由 Agent 结合当前会话决定是否通知用户；`terminal_event_allow_direct_notify=False` 表示 SDK 不直接用任务 payload 播报，避免任务直发和 Agent 回复重复。若业务确实需要安全告警类直发，再把 `terminal_event_allow_direct_notify=True` 并设置更高 `terminal_event_priority`。
+
+真实运行态中，`context.device_group.submit_notification(...)` 已在 `sdk-v84` 接入 `VoiceRuntime` 通知协调器。它不只是增加 `notification_count`，还会触发 `assistant.reply` 和下行 `actuator.audio.play`。业务仍只提交文本和优先级，不直接调用 TTS、播放器或控制消息。
 
 ### 6.1 视频直连系统任务
 

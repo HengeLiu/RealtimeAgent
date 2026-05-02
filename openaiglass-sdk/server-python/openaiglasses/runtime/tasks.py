@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -453,6 +454,9 @@ class TaskRuntimeManager:
         self._device_groups = device_groups
         self._records: dict[str, _ManagedTaskRecord] = {}
         self._persistence_store = persistence_store
+        self._event_listeners: list[Any] = []
+        self._scheduled_events: dict[str, threading.Timer] = {}
+        self._schedule_lock = threading.Lock()
 
     def bind_device_groups(self, device_groups: Any) -> None:
         """重新绑定设备组运行时。"""
@@ -495,6 +499,7 @@ class TaskRuntimeManager:
             task_id=task_id,
             input=dict(input_data or {}),
             device_group=device_group,
+            scheduler=self.schedule_event,
         )
         record = _ManagedTaskRecord(
             task_id=task_id,
@@ -574,6 +579,7 @@ class TaskRuntimeManager:
         payload: dict[str, Any] | None = None,
         source: str = "system",
         event_id: str | None = None,
+        publish_terminal_event: bool = False,
     ) -> TaskRuntimeSnapshot:
         """向任务派发一个结构化事件。"""
 
@@ -619,7 +625,119 @@ class TaskRuntimeManager:
             record.append_event(event_name="task.failed", payload=dict(record.error))
         snapshot = record.to_snapshot()
         self._persist_if_configured()
+        if publish_terminal_event and self._is_terminal(record.context.state):
+            self._publish_terminal_event(record)
         return snapshot
+
+    def schedule_event(
+        self,
+        *,
+        task_id: str,
+        delay_ms: int,
+        event_name: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "scheduler",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """安排一次性延迟任务事件。
+
+        功能：
+        1. 为 SDK 自定义 Task 提供公开、通用的定时调度接口。
+        2. 到点后自动调用 `dispatch_event(...)` 推进任务。
+        3. 如果任务已经终止，到点事件会按既有终态保护被忽略。
+
+        参数：
+        1. `task_id`：目标任务编号。
+        2. `delay_ms`：延迟毫秒数，必须大于 0。
+        3. `event_name`：到点后派发的事件名。
+        4. `payload`：事件载荷。
+        5. `source`：事件来源。
+        6. `event_id`：可选幂等编号。
+
+        返回值：
+        1. 调度记录字典。
+
+        异常情况：
+        1. 任务不存在、延迟时间非法或事件名为空时抛出 `RuntimeError`。
+        """
+
+        self._require_record(task_id)
+        if delay_ms <= 0:
+            raise RuntimeError("delay_ms 必须大于 0")
+        normalized_event_name = event_name.strip()
+        if not normalized_event_name:
+            raise RuntimeError("event_name 不能为空")
+        schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+        due_at_ms = _now_ms() + delay_ms
+
+        def _fire() -> None:
+            with self._schedule_lock:
+                self._scheduled_events.pop(schedule_id, None)
+            self.dispatch_event(
+                task_id=task_id,
+                event_name=normalized_event_name,
+                payload=dict(payload or {}),
+                source=source,
+                event_id=event_id or schedule_id,
+                publish_terminal_event=True,
+            )
+
+        timer = threading.Timer(delay_ms / 1000, _fire)
+        timer.daemon = True
+        with self._schedule_lock:
+            self._scheduled_events[schedule_id] = timer
+        timer.start()
+        record = self._require_record(task_id)
+        record.append_event(
+            event_name="task.event.scheduled",
+            source="scheduler",
+            payload={
+                "schedule_id": schedule_id,
+                "event_name": normalized_event_name,
+                "delay_ms": delay_ms,
+                "due_at_ms": due_at_ms,
+                "source": source,
+            },
+        )
+        self._persist_if_configured()
+        return {
+            "schedule_id": schedule_id,
+            "task_id": task_id,
+            "event_name": normalized_event_name,
+            "delay_ms": delay_ms,
+            "due_at_ms": due_at_ms,
+        }
+
+    def cancel_scheduled_event(self, schedule_id: str) -> bool:
+        """取消尚未触发的一次性调度事件。"""
+
+        with self._schedule_lock:
+            timer = self._scheduled_events.pop(schedule_id, None)
+        if timer is None:
+            return False
+        timer.cancel()
+        return True
+
+    def list_scheduled_events(self) -> list[dict[str, Any]]:
+        """列出当前仍在等待触发的调度事件。"""
+
+        with self._schedule_lock:
+            return [
+                {
+                    "schedule_id": schedule_id,
+                    "alive": timer.is_alive(),
+                }
+                for schedule_id, timer in sorted(self._scheduled_events.items())
+            ]
+
+    def subscribe_events(self, listener) -> None:
+        """订阅 SDK 任务运行时内部发布的事件。
+
+        当前主要用于调度器到点后触发的终态事件回流。普通外部派发路径仍由
+        `HybridTaskGateway` 负责发布，避免重复事件。
+        """
+
+        self._event_listeners.append(listener)
 
     def list_tasks(self) -> list[TaskRuntimeSnapshot]:
         """列出当前全部任务快照。"""
@@ -755,6 +873,7 @@ class TaskRuntimeManager:
                 task_id=snapshot.task_id,
                 input=dict(snapshot.input_data),
                 device_group=device_group,
+                scheduler=self.schedule_event,
                 state=snapshot.state,
                 data=dict(snapshot.data),
                 result=dict(snapshot.result) if snapshot.result is not None else None,
@@ -878,6 +997,54 @@ class TaskRuntimeManager:
             record.completed_at_ms = _now_ms()
             record.append_event(event_name="task.failed", payload=dict(record.error or {}))
 
+    def _publish_terminal_event(self, record: _ManagedTaskRecord) -> None:
+        """把调度器触发的终态任务事件发布给外部监听器。"""
+
+        if record.context.state == "completed":
+            self._emit_task_event(record=record, event_name="task.completed", payload=dict(record.context.result or {}))
+            return
+        if record.context.state == "cancelled":
+            self._emit_task_event(record=record, event_name="task.cancelled", payload={"message": "任务已取消"})
+            return
+        if record.context.state == "failed":
+            self._emit_task_event(record=record, event_name="task.failed", payload=dict(record.error or {}))
+            return
+        if record.context.state == "timeout":
+            self._emit_task_event(record=record, event_name="task.timeout", payload=dict(record.error or {}))
+
+    def _emit_task_event(self, *, record: _ManagedTaskRecord, event_name: str, payload: dict[str, Any]) -> None:
+        """按 Task 声明的终态策略发布 backend-task-core 事件。"""
+
+        from backend_task_core import TaskEvent as BackendTaskEvent
+
+        policy = self.get_terminal_event_policy(record.task_type)
+        event = BackendTaskEvent(
+            event_id=f"sdk_evt_{record.task_id}_{event_name}_{uuid.uuid4().hex[:8]}",
+            event_name=event_name,
+            task_id=record.task_id,
+            task_type=record.task_type,
+            session_id=record.session_id,
+            device_id=record.device_id,
+            state=record.context.state,
+            priority=policy["priority"],
+            requires_agent_decision=policy["requires_agent_decision"],
+            allow_direct_notify=policy["allow_direct_notify"],
+            ts=_now_ms(),
+            payload=payload,
+        )
+        for listener in list(self._event_listeners):
+            listener(event)
+
+    def get_terminal_event_policy(self, task_type: str) -> dict[str, Any]:
+        """读取任务声明的终态事件策略。"""
+
+        task = self._registry.get_task(task_type)
+        return {
+            "requires_agent_decision": bool(getattr(task, "terminal_event_requires_agent_decision", False)),
+            "allow_direct_notify": bool(getattr(task, "terminal_event_allow_direct_notify", True)),
+            "priority": str(getattr(task, "terminal_event_priority", "normal") or "normal"),
+        }
+
     @staticmethod
     def _has_event_id(record: _ManagedTaskRecord, event_id: str) -> bool:
         """判断事件编号是否已处理过。"""
@@ -956,6 +1123,30 @@ class BackendTaskGatewayAdapter:
         """通过旧任务网关取消任务。"""
 
         return self._to_snapshot(self._task_gateway.cancel_task(task_id))
+
+    def schedule_event(
+        self,
+        *,
+        task_id: str,
+        delay_ms: int,
+        event_name: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "scheduler",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """通过旧任务网关安排 SDK 自定义任务延迟事件。"""
+
+        scheduler = getattr(self._task_gateway, "schedule_event", None)
+        if scheduler is None:
+            raise RuntimeError("当前任务网关不支持通用定时调度")
+        return scheduler(
+            task_id=task_id,
+            delay_ms=delay_ms,
+            event_name=event_name,
+            payload=dict(payload or {}),
+            source=source,
+            event_id=event_id,
+        )
 
     @staticmethod
     def _to_snapshot(runtime: Any) -> TaskRuntimeSnapshot:
