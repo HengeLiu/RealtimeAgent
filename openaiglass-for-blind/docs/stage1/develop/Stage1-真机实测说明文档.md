@@ -438,7 +438,7 @@ docs/stage1/develop/架构阻塞点说明与改进建议.md
 
 当前边界：
 
-1. AMap 当前是业务侧 adapter；配置 `AMAP_API_KEY`、`AMAP_DEFAULT_ORIGIN` 后调用真实高德 Web 服务。
+1. AMap 当前是业务侧 adapter；在 `config/.env` 配置 `AMAP_API_KEY`，并在 `local_server.yaml` 配置 `business.navigation.amap.default_origin` 后调用真实高德 Web 服务。
 2. 没有真实 AMap key/config 时，自动回退 mock，不验证真实地图服务。
 3. POI 候选确认已在离线回放验证，真机多轮 Agent 澄清话术仍需后续实测。
 
@@ -458,8 +458,8 @@ docs/stage1/develop/架构阻塞点说明与改进建议.md
 
 当前边界：
 
-1. 正式搜索 provider 为博查 AI Search，需在服务端环境配置 `WEB_SEARCH_PROVIDER=bocha` 和 `BOCHA_SEARCH_API_KEY`。
-2. 未配置 API Key 时，`WEB_SEARCH_PROVIDER=auto` 会回退 DuckDuckGo HTML，仅用于本地开发验证。
+1. 正式搜索 provider 为博查 AI Search，需在 `local_server.yaml` 配置 `business.search.web.provider=bocha`，并在 `config/.env` 配置 `BOCHA_SEARCH_API_KEY`。
+2. 未配置 API Key 且 provider 为 `auto` 时，会回退 DuckDuckGo HTML，仅用于本地开发验证。
 3. 当前不抓取全文网页正文。
 
 ### 13.2 视觉事件最小策略

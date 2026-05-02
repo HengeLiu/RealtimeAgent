@@ -10,15 +10,18 @@
 
 配置方式：
 
-```env
-WEB_SEARCH_PROVIDER="auto"
-BOCHA_SEARCH_API_KEY="你的博查 API Key"
-BOCHA_SEARCH_API_URL="https://api.bochaai.com/v1/web-search"
-BOCHA_SEARCH_FRESHNESS="noLimit"
-WEB_SEARCH_TIMEOUT_SECONDS="8"
+```yaml
+business:
+  search:
+    web:
+      provider: bocha
+      timeout_seconds: 8
+    bocha:
+      api_url: "https://api.bochaai.com/v1/web-search"
+      freshness: noLimit
 ```
 
-`WEB_SEARCH_PROVIDER=auto` 时，如果配置了 `BOCHA_SEARCH_API_KEY` 或 `BOCHA_API_KEY`，会使用博查 AI Search；未配置时会退回 DuckDuckGo HTML，仅用于本地开发验证。正式环境建议显式设置 `WEB_SEARCH_PROVIDER=bocha`。
+`BOCHA_SEARCH_API_KEY` 属于敏感信息，建议写入 `config/.env` 或通过 shell `export` 注入，不要写入 `local_server.yaml`。`provider=auto` 时，如果配置了 `BOCHA_SEARCH_API_KEY` 或 `BOCHA_API_KEY`，会使用博查 AI Search；未配置时会退回 DuckDuckGo HTML，仅用于本地开发验证。正式环境建议设置 `provider=bocha`。
 
 当前不做的事情：
 

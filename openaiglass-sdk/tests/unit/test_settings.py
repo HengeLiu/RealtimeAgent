@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from infra.config import ServerSettings
 from infra.errors import AppError, ErrorCode
+from openaiglasses.cli.common import read_yaml_config_file
 
 
 class ServerSettingsTestCase(unittest.TestCase):
@@ -115,6 +118,55 @@ class ServerSettingsTestCase(unittest.TestCase):
         settings = ServerSettings.from_env()
 
         self.assertEqual(settings.tool_progress_audio_mode, "realtime")
+
+    def test_yaml_business_config_maps_to_env(self) -> None:
+        """测试目标：验证业务 YAML 配置能映射到现有 adapter 使用的环境变量。
+
+        测试方法：
+        1. 写入包含导航和搜索配置的最小 YAML 文件。
+        2. 调用 `read_yaml_config_file` 读取配置。
+        3. 断言输出包含 `AMAP_*`、`WEB_SEARCH_*` 和 `BOCHA_*` 变量。
+
+        预期结果：
+        1. 功能开发者把配置迁入 YAML 后，导航和搜索 adapter 仍能通过环境变量读取配置。
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "local_server.yaml"
+            config_path.write_text(
+                """
+business:
+  navigation:
+    amap:
+      api_key: "amap-test-key"
+      default_city: "上海"
+      default_origin: "121.412000,31.169000"
+      disable_mock_fallback: true
+      http_timeout_seconds: 6
+  search:
+    web:
+      provider: bocha
+      timeout_seconds: 8
+    bocha:
+      api_key: "bocha-test-key"
+      api_url: "https://api.bochaai.com/v1/web-search"
+      freshness: noLimit
+""",
+                encoding="utf-8",
+            )
+
+            values = read_yaml_config_file(config_path)
+
+        self.assertEqual(values["AMAP_API_KEY"], "amap-test-key")
+        self.assertEqual(values["AMAP_DEFAULT_CITY"], "上海")
+        self.assertEqual(values["AMAP_DEFAULT_ORIGIN"], "121.412000,31.169000")
+        self.assertEqual(values["AMAP_DISABLE_MOCK_FALLBACK"], "true")
+        self.assertEqual(values["AMAP_HTTP_TIMEOUT_SECONDS"], "6")
+        self.assertEqual(values["WEB_SEARCH_PROVIDER"], "bocha")
+        self.assertEqual(values["WEB_SEARCH_TIMEOUT_SECONDS"], "8")
+        self.assertEqual(values["BOCHA_SEARCH_API_KEY"], "bocha-test-key")
+        self.assertEqual(values["BOCHA_SEARCH_API_URL"], "https://api.bochaai.com/v1/web-search")
+        self.assertEqual(values["BOCHA_SEARCH_FRESHNESS"], "noLimit")
 
     def test_realtime_semantic_vad_env_success(self) -> None:
         """测试目标：验证实验性 Omni semantic VAD 连续对话配置可从环境变量读取。

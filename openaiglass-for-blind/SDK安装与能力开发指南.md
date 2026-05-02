@@ -284,10 +284,14 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 | `voice.session_mode` | `config/local_server.yaml` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
 | `models.*` / `voice.*` / `tools.progress_audio.mode` | `config/local_server.yaml` | 服务端模型、语音输入模式、语音回复分支、连续对话、ASR、TTS 和工具前置播报配置。默认 `voice.reply_mode=omni_realtime`，使用 qwen3.5-omni realtime 直出语音并允许 SDK Tool 调用；默认 `voice.conversation_mode=realtime_semantic_vad`。需要回到旧稳定分段提交时设为 `segment_turn`。`tools.progress_audio.mode=realtime` 会跟随主回复音频来源：Omni 主链路调用同一个 Omni Realtime 模型生成提示音，TTS 主链路调用同一个 TTS 服务。`cached` 仅对 TTS 主链路预生成缓存。 |
 | `agent.memory.*` | `config/local_server.yaml` | 控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
+| `business.navigation.amap.*` | `config/local_server.yaml` | 导航业务的高德 Web 服务非敏感配置，例如默认城市、临时起点坐标、超时和 mock fallback 策略。 |
+| `business.search.*` | `config/local_server.yaml` | 搜索业务 provider、博查 API 地址、freshness 和请求超时配置。正式环境建议 `business.search.web.provider=bocha`。 |
 | `DASHSCOPE_API_KEY` | `config/.env` 或 shell export | 百炼 API Key，不能写入 YAML，也不要提交 Git。 |
+| `AMAP_API_KEY` | `config/.env` 或 shell export | 高德 Web 服务 Key，真实导航地址搜索和路线规划需要。 |
+| `BOCHA_SEARCH_API_KEY` | `config/.env` 或 shell export | 博查 AI Search API Key，正式搜索 provider 需要。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
-旧的 `local_server.env` 仍可作为兼容格式传给 `--config`，但新的本地配置应优先使用 `local_server.yaml + .env`。如果 shell 已经 export 非空 `DASHSCOPE_API_KEY`，启动器会优先使用外部真实 key。
+旧的 `local_server.env` 仍可作为兼容格式传给 `--config`，但新的本地配置应优先使用 `local_server.yaml + .env`。如果 shell 已经 export 非空 `DASHSCOPE_API_KEY`、`AMAP_API_KEY` 或 `BOCHA_SEARCH_API_KEY`，启动器会优先使用外部真实 key。
 
 ### 3.4 启动真实业务服务端
 

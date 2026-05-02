@@ -34,10 +34,10 @@
 
 真实调用需要：
 
-1. `AMAP_API_KEY`：高德 Web 服务 Key。
-2. `AMAP_DEFAULT_CITY`：可选，缩小地理编码范围。
-3. `AMAP_DEFAULT_ORIGIN`：没有端侧定位时的临时起点坐标，格式为 `经度,纬度`。
-4. `AMAP_DISABLE_MOCK_FALLBACK=true`：可选，真实调用失败时不回退 mock，便于暴露鉴权、配额和网络问题。
+1. `config/.env` 中的 `AMAP_API_KEY`：高德 Web 服务 Key。
+2. `local_server.yaml` 中的 `business.navigation.amap.default_city`：可选，缩小地理编码范围。
+3. `local_server.yaml` 中的 `business.navigation.amap.default_origin`：没有端侧定位时的临时起点坐标，格式为 `经度,纬度`。
+4. `local_server.yaml` 中的 `business.navigation.amap.disable_mock_fallback=true`：可选，真实调用失败时不回退 mock，便于暴露鉴权、配额和网络问题。
 
 ### 3.2 Tool
 

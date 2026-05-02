@@ -30,18 +30,20 @@
 
 配置项：
 
-```env
-WEB_SEARCH_PROVIDER="auto"
-BOCHA_SEARCH_API_KEY="你的博查 API Key"
-BOCHA_SEARCH_API_URL="https://api.bochaai.com/v1/web-search"
-BOCHA_SEARCH_FRESHNESS="noLimit"
-WEB_SEARCH_TIMEOUT_SECONDS="8"
+```yaml
+business:
+  search:
+    web:
+      provider: auto
+      timeout_seconds: 8
+    bocha:
+      api_url: "https://api.bochaai.com/v1/web-search"
+      freshness: noLimit
 ```
 
-正式环境建议设置：
+`BOCHA_SEARCH_API_KEY` 属于敏感信息，正式环境建议写入 `config/.env`：
 
 ```env
-WEB_SEARCH_PROVIDER="bocha"
 BOCHA_SEARCH_API_KEY="你的博查 API Key"
 ```
 

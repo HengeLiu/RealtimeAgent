@@ -16,12 +16,16 @@
 3. 不实现最后 10 米导航策略；当前只接入红绿灯视觉事件的最小策略。
 4. 不修改眼镜端或手机端 SDK 框架代码。
 
-真实高德调用需要在 `config/local_server.env` 或启动 shell 中配置：
+真实高德调用需要在 `config/local_server.yaml` 中配置非敏感参数，并把 `AMAP_API_KEY` 写入 `config/.env` 或启动 shell：
 
-```env
-AMAP_API_KEY="..."
-AMAP_DEFAULT_CITY="上海"
-AMAP_DEFAULT_ORIGIN="121.412000,31.169000"
+```yaml
+business:
+  navigation:
+    amap:
+      default_city: "上海"
+      default_origin: "121.412000,31.169000"
+      disable_mock_fallback: false
+      http_timeout_seconds: 6
 ```
 
 其中 `AMAP_DEFAULT_ORIGIN` 是没有端侧定位时的临时起点坐标。真实产品应由 SDK 设备上下文提供当前位置。
