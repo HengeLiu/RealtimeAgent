@@ -11,6 +11,7 @@ import tempfile
 import threading
 import types
 import unittest
+import wave
 from unittest.mock import patch
 
 from pydantic import BaseModel
@@ -27,7 +28,8 @@ from agent_core.memory import (
     MemoryOperationPlan,
     MemoryOperationRequest,
 )
-from agent_core.runtime import AgentLoopRunner, OpenAIAgentLoopRunner
+from agent_core.modality import AgentInputPlanner, ImageInputPolicy, ModelCapability
+from agent_core.runtime import AgentLoopRunner, NativeAudioReplyResult, OpenAIAgentLoopRunner
 from agent_core.skills import SkillDocument, SkillManifest, SkillRuntime
 from agent_core.models import CapabilityResult, ToolSpec
 from agent_core.tools import AgentToolContext, BaseTool, ToolGateway, ToolRegistry
@@ -152,6 +154,8 @@ class FakeAgentLoopRunner(AgentLoopRunner):
         turn: AgentTurn,
         progress_callback=None,
         reply_text_delta_callback=None,
+        reply_audio_chunk_callback=None,
+        native_audio_reply_runner=None,
     ) -> AgentTurnResult:
         self.turns.append(turn)
         return AgentTurnResult(
@@ -183,6 +187,8 @@ class ErrorAgentLoopRunner(AgentLoopRunner):
         turn: AgentTurn,
         progress_callback=None,
         reply_text_delta_callback=None,
+        reply_audio_chunk_callback=None,
+        native_audio_reply_runner=None,
     ) -> AgentTurnResult:
         raise build_error(
             ErrorCode.INTERNAL_ERROR,
@@ -200,6 +206,8 @@ class AskUserAgentLoopRunner(AgentLoopRunner):
         turn: AgentTurn,
         progress_callback=None,
         reply_text_delta_callback=None,
+        reply_audio_chunk_callback=None,
+        native_audio_reply_runner=None,
     ) -> AgentTurnResult:
         return AgentTurnResult(
             turn_id=turn.turn_id,
@@ -291,6 +299,11 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(session.messages[0].derived_refs, ["artifact_001"])
         self.assertEqual(session.messages[1].role, "assistant")
         self.assertEqual(len(session.capability_traces), 1)
+        self.assertTrue(result.meta["generation_id"].startswith("gen_"))
+        self.assertEqual(
+            [event["event_type"] for event in result.meta["turn_events"]],
+            ["turn.started", "input.assets.saved", "text.final", "turn.finished"],
+        )
 
     def test_agent_facade_wraps_runner_error(self) -> None:
         """测试目标：验证 AgentFacade 会把运行失败包装为统一失败结果。
@@ -319,6 +332,40 @@ class AgentCoreTestCase(unittest.TestCase):
                 input_text="你好",
             )
         )
+
+        self.assertIsNotNone(result.error)
+        self.assertTrue(result.meta["generation_id"].startswith("gen_"))
+        self.assertEqual(result.meta["turn_events"][-1]["event_type"], "turn.failed")
+
+    def test_image_input_planner_defers_images_when_model_lacks_vision(self) -> None:
+        """测试目标：验证图片规划会把不支持视觉的模型切到后置图片路径。
+
+        测试方法：
+        1. 构造一个不支持图片输入的模型能力。
+        2. 提供一张图片资产并执行 `AgentInputPlanner.plan_images`。
+
+        预期结果：
+        1. 直传图片列表为空。
+        2. 后置图片列表保留原资产，供未来视觉工具读取。
+        """
+
+        image_asset = MediaAssetRef(
+            asset_id="asset_image_deferred_001",
+            session_id="sess_image_policy_001",
+            asset_type="image",
+            storage_uri="/tmp/fake.png",
+            mime_type="image/png",
+        )
+        planner = AgentInputPlanner(
+            model_capability=ModelCapability(model_name="qwen3.6-plus", supports_image_input=False),
+            image_policy=ImageInputPolicy.DIRECT_WHEN_SUPPORTED,
+        )
+
+        plan = planner.plan_images([image_asset])
+
+        self.assertEqual(plan.direct_assets, [])
+        self.assertEqual(plan.deferred_assets, [image_asset])
+        self.assertEqual(plan.policy, ImageInputPolicy.DIRECT_WHEN_SUPPORTED)
 
     def test_start_phone_video_link_tool_creates_task_with_bound_phone(self) -> None:
         """测试目标：验证视频直连 Tool 会基于绑定关系创建后台任务。
@@ -1125,6 +1172,373 @@ class AgentCoreTestCase(unittest.TestCase):
         )
         self.assertIn("<redacted>", audio_model_message["content"][1]["input_audio"]["data"])
 
+    def test_openai_runner_direct_audio_path_suppresses_progress_after_text_delta(self) -> None:
+        """测试目标：验证音频原生 Chat 流先返回文本后再调用工具时不播报前置提示。
+
+        测试方法：
+        1. 注册一个带 `progress_message` 的测试工具。
+        2. 假模型第一轮先返回文本增量，再返回工具调用增量。
+        3. 工具执行后第二轮返回最终文本。
+
+        预期结果：
+        1. 首个文本增量会透传给回调。
+        2. 工具仍会被执行。
+        3. 因为本轮首输出是文本，不会再插入工具等待播报。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_name_after_text",
+                description="回显名字",
+                input_model=_EchoArgs,
+                progress_message="我先查一下你的名字。",
+            )
+
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                self.calls.append(input_data.text)
+                return CapabilityResult.success(data={"name": input_data.text})
+
+        echo_tool = _EchoTool()
+        registry, gateway = build_tooling()
+        registry.register_external_tool(echo_tool)
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_audio_tool_text_first_001", device_id="glass-001")
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
+            audio_file.write(b"RIFFdemo-audio")
+            audio_file.flush()
+            turn = AgentTurn(
+                turn_id="turn_audio_tool_text_first_001",
+                session_id="sess_audio_tool_text_first_001",
+                device_id="glass-001",
+                source="voice_raw_audio",
+                input_text="用户发送了一段语音，请直接理解音频内容并执行用户意图。",
+                asset_refs=[
+                    MediaAssetRef(
+                        asset_id="asset_audio_tool_text_first_001",
+                        session_id="sess_audio_tool_text_first_001",
+                        asset_type="audio",
+                        storage_uri=audio_file.name,
+                        mime_type="audio/wav",
+                    )
+                ],
+            )
+
+            class _FakeChoice:
+                def __init__(self, delta) -> None:
+                    self.delta = delta
+
+            class _FakeChunk:
+                def __init__(self, *, content="", tool_calls=None) -> None:
+                    self.choices = [_FakeChoice(types.SimpleNamespace(content=content, tool_calls=tool_calls))]
+
+            class _FakeChatCompletions:
+                def __init__(self) -> None:
+                    self.responses = [
+                        [
+                            _FakeChunk(content="我来看看。"),
+                            _FakeChunk(
+                                tool_calls=[
+                                    types.SimpleNamespace(
+                                        index=0,
+                                        id="call_echo_after_text_001",
+                                        type="function",
+                                        function=types.SimpleNamespace(
+                                            name="echo_name_after_text",
+                                            arguments='{"text": "文刀"}',
+                                        ),
+                                    )
+                                ]
+                            ),
+                        ],
+                        [_FakeChunk(content="你叫文刀。")],
+                    ]
+
+                def create(self, **_kwargs):
+                    return self.responses.pop(0)
+
+            class _FakeChat:
+                def __init__(self) -> None:
+                    self.completions = _FakeChatCompletions()
+
+            class _FakeClient:
+                def __init__(self) -> None:
+                    self.chat = _FakeChat()
+
+            progress_parts: list[str] = []
+            delta_parts: list[str] = []
+            with patch.object(runner, "_create_sdk_client", return_value=_FakeClient()):
+                result = runner.run_turn(
+                    session=session,
+                    turn=turn,
+                    progress_callback=progress_parts.append,
+                    reply_text_delta_callback=delta_parts.append,
+                )
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.reply_text, "你叫文刀。")
+        self.assertEqual(delta_parts, ["我来看看。", "你叫文刀。"])
+        self.assertEqual(progress_parts, [])
+        self.assertEqual(echo_tool.calls, ["文刀"])
+
+    def test_openai_runner_native_audio_reply_enters_agent_core_tools(self) -> None:
+        """测试目标：验证 Omni 音频直出仍通过 agent-core 上下文和工具面。
+
+        测试方法：
+        1. 注册一个测试工具，并构造 16k 单声道 WAV 音频资产。
+        2. 调用 `run_turn` 时注入原生音频回复执行器。
+        3. 在执行器内部读取 instructions、音频、工具列表，并主动调用工具处理器。
+
+        预期结果：
+        1. 原生音频执行器能拿到 agent-core 构造的系统提示词、音频和工具定义。
+        2. 工具调用仍通过 `ToolGateway` 执行。
+        3. 返回的用户转写和助手文本进入统一 `AgentTurnResult.meta`。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_name",
+                description="回显名字",
+                input_model=_EchoArgs,
+                progress_message="我先查一下。",
+            )
+
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                self.calls.append(input_data.text)
+                return CapabilityResult.success(data={"name": input_data.text})
+
+        echo_tool = _EchoTool()
+        registry, gateway = build_tooling()
+        registry.register_external_tool(echo_tool)
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_native_audio_001", device_id="glass-001")
+        progress_parts: list[str] = []
+        audio_chunks: list[object] = []
+        captured: dict[str, object] = {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = os.path.join(temp_dir, "input.wav")
+            direct_image_path = os.path.join(temp_dir, "direct.png")
+            deferred_image_path = os.path.join(temp_dir, "deferred.png")
+            with wave.open(audio_path, "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(b"\x01\x02" * 160)
+            with open(direct_image_path, "wb") as handle:
+                handle.write(b"direct-image-bytes")
+            with open(deferred_image_path, "wb") as handle:
+                handle.write(b"deferred-image-bytes")
+
+            turn = AgentTurn(
+                turn_id="turn_native_audio_001",
+                session_id="sess_native_audio_001",
+                device_id="glass-001",
+                source="voice_raw_audio",
+                input_text="用户发送了一段语音，请直接理解音频内容并执行用户意图。",
+                meta={"direct_image_asset_ids": ["asset_direct_image_001"]},
+                asset_refs=[
+                    MediaAssetRef(
+                        asset_id="asset_native_audio_001",
+                        session_id="sess_native_audio_001",
+                        asset_type="audio",
+                        storage_uri=audio_path,
+                        mime_type="audio/wav",
+                    ),
+                    MediaAssetRef(
+                        asset_id="asset_direct_image_001",
+                        session_id="sess_native_audio_001",
+                        asset_type="image",
+                        storage_uri=direct_image_path,
+                        mime_type="image/png",
+                    ),
+                    MediaAssetRef(
+                        asset_id="asset_deferred_image_001",
+                        session_id="sess_native_audio_001",
+                        asset_type="image",
+                        storage_uri=deferred_image_path,
+                        mime_type="image/png",
+                    ),
+                ],
+            )
+
+            def _native_audio_reply_runner(
+                *,
+                instructions,
+                input_pcm,
+                sample_rate_hz,
+                image_frames,
+                on_audio_chunk,
+                tools,
+                tool_handler,
+                **_kwargs,
+            ) -> NativeAudioReplyResult:
+                captured["instructions"] = instructions
+                captured["input_pcm_len"] = len(input_pcm)
+                captured["sample_rate_hz"] = sample_rate_hz
+                captured["image_frames"] = image_frames
+                captured["tools"] = tools
+                tool_result = tool_handler({"name": "echo_name", "arguments": '{"text": "文刀"}'})
+                captured["tool_result"] = tool_result
+                on_audio_chunk("pcm-chunk")
+                return NativeAudioReplyResult(
+                    assistant_text="你叫文刀。",
+                    transcript="我叫文刀。",
+                    response_id="resp_native_audio_001",
+                    meta={"native": True},
+                )
+
+            result = runner.run_turn(
+                session=session,
+                turn=turn,
+                progress_callback=progress_parts.append,
+                reply_audio_chunk_callback=audio_chunks.append,
+                native_audio_reply_runner=_native_audio_reply_runner,
+            )
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.reply_text, "你叫文刀。")
+        self.assertEqual(result.meta["user_text_override"], "我叫文刀。")
+        self.assertEqual(result.meta["native_audio_response_id"], "resp_native_audio_001")
+        self.assertEqual(result.meta["native"], True)
+        self.assertIn("你的名字是", captured["instructions"])
+        self.assertEqual(captured["input_pcm_len"], 320)
+        self.assertEqual(captured["sample_rate_hz"], 16000)
+        self.assertEqual(captured["image_frames"], [b"direct-image-bytes"])
+        self.assertEqual(captured["tools"][0]["name"], "echo_name")
+        self.assertEqual(captured["tool_result"]["ok"], True)
+        self.assertEqual(echo_tool.calls, ["文刀"])
+        self.assertEqual(progress_parts, ["我先查一下。"])
+        self.assertEqual(audio_chunks, ["pcm-chunk"])
+
+    def test_native_audio_manage_memory_runs_in_background(self) -> None:
+        """测试目标：验证原生音频链路不会被长期记忆写入阻塞。
+
+        测试方法：
+        1. 注册一个会等待事件释放的 `manage_memory` 测试工具。
+        2. 在原生音频执行器中触发工具调用。
+        3. 检查工具调用立即返回已受理，再释放后台工具。
+
+        预期结果：
+        1. 模型工具处理器无需等待真实记忆写入完成。
+        2. 后台线程最终会执行真实工具逻辑。
+        """
+
+        class _MemoryArgs(BaseModel):
+            memory_context: str
+
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        calls: list[str] = []
+
+        class _SlowManageMemoryTool(BaseTool):
+            spec = ToolSpec(
+                name="manage_memory",
+                description="后台记录记忆",
+                input_model=_MemoryArgs,
+                tags=["memory"],
+                progress_message="后台记录记忆",
+            )
+
+            def run(self, context: AgentToolContext, input_data: _MemoryArgs) -> CapabilityResult:
+                started.set()
+                release.wait(timeout=2)
+                calls.append(input_data.memory_context)
+                finished.set()
+                return CapabilityResult.success(data={"done": True}, message="已记录")
+
+        registry, gateway = build_tooling()
+        registry.register_external_tool(_SlowManageMemoryTool())
+        runner = OpenAIAgentLoopRunner(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            session_store=AgentSessionStore(),
+            tool_registry=registry,
+            tool_gateway=gateway,
+        )
+        session = AgentSession(session_id="sess_bg_memory_001", device_id="glass-001")
+        captured: dict[str, object] = {}
+        progress_parts: list[str] = []
+
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
+            with wave.open(audio_file.name, "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(b"\x01\x02" * 160)
+
+            turn = AgentTurn(
+                turn_id="turn_bg_memory_001",
+                session_id="sess_bg_memory_001",
+                device_id="glass-001",
+                source="voice_raw_audio",
+                input_text="用户发送了一段语音，请直接理解音频内容并执行用户意图。",
+                asset_refs=[
+                    MediaAssetRef(
+                        asset_id="asset_bg_audio_001",
+                        session_id="sess_bg_memory_001",
+                        asset_type="audio",
+                        storage_uri=audio_file.name,
+                        mime_type="audio/wav",
+                    )
+                ],
+            )
+
+            def _native_audio_reply_runner(
+                *,
+                tool_handler,
+                **_kwargs,
+            ) -> NativeAudioReplyResult:
+                tool_result = tool_handler(
+                    {"name": "manage_memory", "arguments": '{"memory_context": "用户姓名是文刀。"}'}
+                )
+                captured["tool_result"] = tool_result
+                captured["calls_before_release"] = list(calls)
+                return NativeAudioReplyResult(
+                    assistant_text="我先记下了。",
+                    transcript="我叫文刀。",
+                    response_id="resp_bg_memory_001",
+                )
+
+            result = runner.run_turn(
+                session=session,
+                turn=turn,
+                progress_callback=progress_parts.append,
+                native_audio_reply_runner=_native_audio_reply_runner,
+            )
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.reply_text, "我先记下了。")
+        self.assertEqual(captured["tool_result"]["ok"], True)
+        self.assertEqual(captured["tool_result"]["data"]["scheduled"], True)
+        self.assertEqual(captured["calls_before_release"], [])
+        self.assertEqual(progress_parts, ["后台记录记忆"])
+        self.assertTrue(started.wait(timeout=1))
+        release.set()
+        self.assertTrue(finished.wait(timeout=2))
+        self.assertEqual(calls, ["用户姓名是文刀。"])
+
     def test_tool_gateway_announces_progress_once_before_tool_run(self) -> None:
         """测试目标：验证 SDK 在工具执行前可以发出一次前置语音播报。
 
@@ -1221,6 +1635,50 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn(progress_parts[0], {"我先处理一下。", "稍等，我看一下。", "好，我来处理。"})
         self.assertEqual(result.data, {"text": "一"})
 
+    def test_tool_gateway_suppresses_progress_when_text_is_first_model_output(self) -> None:
+        """测试目标：验证模型先返回文本后再调用工具时不会插入前置播报。
+
+        测试方法：
+        1. 注册一个带 `progress_message` 的测试工具。
+        2. 构造工具上下文并先记录模型首输出为 `text`。
+        3. 调用工具并收集进度播报回调。
+
+        预期结果：
+        1. 工具仍正常执行。
+        2. 因为首输出不是工具调用，所以不会触发前置播报。
+        """
+
+        class _EchoArgs(BaseModel):
+            text: str
+
+        class _EchoTool(BaseTool):
+            spec = ToolSpec(
+                name="echo_progress_after_text",
+                description="回显文本",
+                input_model=_EchoArgs,
+                progress_message="我先处理一下。",
+            )
+
+            def run(self, context: AgentToolContext, input_data: _EchoArgs) -> CapabilityResult:
+                return CapabilityResult.success(data={"text": input_data.text})
+
+        registry, gateway = build_tooling()
+        registry.register_external_tool(_EchoTool())
+        progress_parts: list[str] = []
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_tool_progress_text_first_001",
+            turn_id="turn_tool_progress_text_first_001",
+        )
+        context.progress_callback = progress_parts.append
+        context.note_model_output("text")
+
+        result = gateway.invoke(name="echo_progress_after_text", context=context, arguments={"text": "一"})
+
+        self.assertEqual(progress_parts, [])
+        self.assertEqual(result.data, {"text": "一"})
+
     def test_openai_runner_uses_minimal_system_prompt(self) -> None:
         """测试目标：验证发给模型的 system prompt 只保留角色与风格约束。
 
@@ -1248,6 +1706,8 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("乐鑫", instructions)
         self.assertIn("简短、口语化、直接的中文回答", instructions)
         self.assertIn("需要时可以调用已提供的工具", instructions)
+        self.assertIn("工具调用前的等待提示由系统自动播报", instructions)
+        self.assertNotIn("在调用任何工具前，都要先简单回复用户", instructions)
         self.assertNotIn("final_answer", instructions)
         self.assertNotIn("ask_user", instructions)
         self.assertNotIn("json", instructions.lower())
@@ -1289,6 +1749,8 @@ class AgentCoreTestCase(unittest.TestCase):
         instructions = runtime.model_request["instructions"]
 
         self.assertIn("manage_memory", instructions)
+        self.assertIn("必须调用 manage_memory", instructions)
+        self.assertIn("不要只用文字声称已经记住", instructions)
         self.assertIn("memory_search", instructions)
 
     def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:

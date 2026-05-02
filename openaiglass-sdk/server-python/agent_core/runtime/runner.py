@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
+import threading
 import time
+import wave
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,6 +38,50 @@ class AgentTurnRuntime:
     memory_prompt_fragment: str
     run_input: list[dict[str, Any]]
     sdk_tools: list
+    model_request: dict[str, object]
+
+
+@dataclass(slots=True)
+class NativeAudioReplyResult:
+    """模型原生音频回复结果。
+
+    主要功能：
+    1. 让 Agent-Core 以统一结果承接 Omni/Realtime 等音频直出模型。
+    2. 保留文本版助手回复和用户转写，便于日志、记忆和后续上下文。
+
+    主要属性：
+    1. `assistant_text`：助手最终文本输出，必须有值。
+    2. `transcript`：模型识别到的用户语音文本，可为空。
+    3. `response_id`：底层模型响应编号，便于排查。
+    4. `meta`：底层适配器返回的补充信息。
+    """
+
+    assistant_text: str
+    transcript: str = ""
+    response_id: str | None = None
+    meta: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class PreparedNativeAudioReply:
+    """原生音频 Realtime 预备运行态。
+
+    主要功能：
+    1. 在用户语音段开始时提前准备系统提示词、工具列表和工具处理器。
+    2. 让 voice-runtime 能先建立 Omni WebSocket，再逐帧转发上行音频。
+
+    主要属性：
+    1. `runtime`：本轮 Agent-Core 运行上下文，保存工具上下文和能力轨迹。
+    2. `instructions`：发送给 Realtime 模型的系统提示词。
+    3. `tools`：Realtime function calling 工具 schema。
+    4. `tool_handler`：Realtime 工具调用回调。
+    5. `model_request`：用于调试落盘的模型请求摘要。
+    """
+
+    runtime: "AgentTurnRuntime"
+    instructions: str
+    tools: list[dict[str, Any]]
+    tool_handler: Callable[[dict[str, Any]], dict[str, Any]]
     model_request: dict[str, object]
 
 
@@ -130,6 +177,41 @@ class AgentTurnRuntimeFactory:
             sdk_tools=sdk_tools,
             model_request=model_request,
         )
+
+
+def _native_audio_model_request(
+    *,
+    settings: ServerSettings,
+    runtime: AgentTurnRuntime,
+    audio_bytes: int | None,
+    image_count: int | None,
+    tool_count: int,
+) -> dict[str, object]:
+    """构造原生音频 Realtime 调试请求摘要。
+
+    参数：
+        settings: 服务端配置。
+        runtime: 当前 Agent-Core 运行上下文。
+        audio_bytes: 已知音频字节数；语音段开始阶段尚未知时可为 None。
+        image_count: 已知图片数量；语音段开始阶段尚未知时可为 None。
+        tool_count: 暴露给模型的工具数量。
+
+    返回值：
+        可保存到 `AgentTurnResult.meta` 的请求摘要。
+    """
+
+    return {
+        "model": settings.voice_omni_realtime_model_name,
+        "runner": "agent_core_native_audio",
+        "active_skills": runtime.active_skill_names,
+        "allowed_tool_names": (
+            sorted(runtime.allowed_tool_names) if runtime.allowed_tool_names is not None else None
+        ),
+        "memory_prompt_fragment": runtime.memory_prompt_fragment,
+        "audio_bytes": audio_bytes,
+        "image_count": image_count,
+        "tool_count": tool_count,
+    }
 
 
 class OpenAIAgentsSdkBridge:
@@ -478,6 +560,7 @@ class StreamedAgentTurnObserver:
                 diagnostics.observe(event, stage="agent_first_turn")
                 text_delta = self._extract_agent_stream_text_delta(event)
                 if text_delta:
+                    tool_context.note_model_output("text")
                     reply_text_parts.append(text_delta)
                     if reply_text_delta_callback is not None:
                         reply_text_delta_callback(text_delta)
@@ -493,6 +576,7 @@ class StreamedAgentTurnObserver:
                     continue
 
                 if event.name == "tool_called":
+                    tool_context.note_model_output("tool_call")
                     raw_item = getattr(event.item, "raw_item", None)
                     tool_name = getattr(raw_item, "name", "")
                     call_id = getattr(raw_item, "call_id", None)
@@ -624,6 +708,8 @@ class AgentLoopRunner(ABC):
         turn: AgentTurn,
         progress_callback: Callable[[str], None] | None = None,
         reply_text_delta_callback: Callable[[str], None] | None = None,
+        reply_audio_chunk_callback: Callable[[Any], None] | None = None,
+        native_audio_reply_runner: Callable[..., NativeAudioReplyResult] | None = None,
     ) -> AgentTurnResult:
         """执行一轮 AgentTurn。"""
 
@@ -673,6 +759,48 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         self._sdk_bridge.preload()
 
+    def prepare_native_audio_reply(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> PreparedNativeAudioReply:
+        """提前准备原生音频 Realtime 回复所需的 Agent-Core 运行态。
+
+        主要逻辑：
+        1. 在语音段开始时构造 instructions、记忆提示、Skill 策略和工具 schema。
+        2. 构造与标准 Agent-Core 一致的工具处理器，保证工具调用、进度播报和轨迹记录不绕过 SDK。
+        3. 不读取音频文件、不调用模型，也不写入用户/助手消息。
+
+        参数：
+            session: 当前 Agent 会话。
+            turn: 当前语音轮次占位对象。
+            progress_callback: 工具前置播报回调。
+
+        返回值：
+            可交给 voice-runtime 建立 Omni Realtime WebSocket 的预备运行态。
+        """
+
+        runtime = self._turn_runtime_factory.build(session=session, turn=turn)
+        runtime.tool_context.progress_callback = progress_callback
+        tools = self._build_realtime_audio_tools(runtime.allowed_tool_names)
+        tool_handler = self._build_native_audio_tool_handler(runtime=runtime, turn=turn)
+        model_request = _native_audio_model_request(
+            settings=self._settings,
+            runtime=runtime,
+            audio_bytes=None,
+            image_count=None,
+            tool_count=len(tools),
+        )
+        return PreparedNativeAudioReply(
+            runtime=runtime,
+            instructions=runtime.instructions,
+            tools=tools,
+            tool_handler=tool_handler,
+            model_request=model_request,
+        )
+
     def run_turn(
         self,
         *,
@@ -680,6 +808,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         turn: AgentTurn,
         progress_callback: Callable[[str], None] | None = None,
         reply_text_delta_callback: Callable[[str], None] | None = None,
+        reply_audio_chunk_callback: Callable[[Any], None] | None = None,
+        native_audio_reply_runner: Callable[..., NativeAudioReplyResult] | None = None,
     ) -> AgentTurnResult:
         """执行一轮 AgentTurn。
 
@@ -714,6 +844,34 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 ),
                 context=runtime.tool_context,
             )
+
+        if self._turn_has_audio_asset(turn) and native_audio_reply_runner is not None:
+            try:
+                native_result = self._run_native_audio_reply_turn(
+                    session=session,
+                    turn=turn,
+                    runtime=runtime,
+                    progress_callback=progress_callback,
+                    reply_audio_chunk_callback=reply_audio_chunk_callback,
+                    native_audio_reply_runner=native_audio_reply_runner,
+                )
+            except Exception as exc:
+                log_error(
+                    self._logger,
+                    f"agent-core 原生音频回复链路异常: reason={exc!r}",
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
+                native_result = self._build_failure_result(
+                    turn=turn,
+                    message="agent-core 原生音频回复链路运行失败",
+                    traces=runtime.capability_traces,
+                    error=build_error(
+                        ErrorCode.INTERNAL_ERROR,
+                        "agent-core 原生音频回复链路运行失败",
+                        details={"reason": str(exc)},
+                    ),
+                )
+            return self._attach_capability_outputs(result=native_result, context=runtime.tool_context)
 
         if self._turn_has_audio_asset(turn):
             try:
@@ -849,6 +1007,95 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             context=runtime.tool_context,
         )
 
+    def _run_native_audio_reply_turn(
+        self,
+        *,
+        session: AgentSession,
+        turn: AgentTurn,
+        runtime: AgentTurnRuntime,
+        progress_callback: Callable[[str], None] | None,
+        reply_audio_chunk_callback: Callable[[Any], None] | None,
+        native_audio_reply_runner: Callable[..., NativeAudioReplyResult],
+    ) -> AgentTurnResult:
+        """执行模型原生音频输出轮次。
+
+        主要逻辑：
+        1. Agent-Core 仍负责 instructions、记忆、Skill、工具 schema 和工具处理器。
+        2. 底层 native runner 只负责把音频、图片、工具事件提交给具体模型适配器。
+        3. 模型返回的音频分片通过 `reply_audio_chunk_callback` 进入上层播放流。
+        """
+
+        input_pcm, sample_rate_hz = self._read_current_turn_audio_pcm(turn)
+        image_frames = self._read_current_turn_image_frames(turn)
+        tools = self._build_realtime_audio_tools(runtime.allowed_tool_names)
+        tool_handler = self._build_native_audio_tool_handler(runtime=runtime, turn=turn)
+        runtime.tool_context.progress_callback = progress_callback
+        model_request = _native_audio_model_request(
+            settings=self._settings,
+            runtime=runtime,
+            audio_bytes=len(input_pcm),
+            image_count=len(image_frames),
+            tool_count=len(tools),
+        )
+        log_info(
+            self._logger,
+            (
+                "agent-core 原生音频回复链路即将运行: "
+                f"model={self._settings.voice_omni_realtime_model_name} "
+                f"audio_bytes={len(input_pcm)} image_count={len(image_frames)} "
+                f"tool_count={len(tools)} timeout_ms={self._settings.voice_model_timeout_ms}"
+            ),
+            LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+        )
+        result = native_audio_reply_runner(
+            input_pcm=input_pcm,
+            sample_rate_hz=sample_rate_hz,
+            image_frames=image_frames,
+            instructions=runtime.instructions,
+            tools=tools,
+            tool_handler=tool_handler,
+            on_audio_chunk=reply_audio_chunk_callback,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            turn_id=turn.turn_id,
+            stream_id=str(turn.meta.get("stream_id") or ""),
+            segment_id=str(turn.meta.get("segment_id") or ""),
+            on_model_first_output=runtime.tool_context.note_model_output,
+        )
+        assistant_text = result.assistant_text.strip()
+        if not assistant_text:
+            return self._build_failure_result(
+                turn=turn,
+                message="agent-core 原生音频回复链路返回了空文本",
+                traces=runtime.capability_traces,
+                error=build_error(ErrorCode.INTERNAL_ERROR, "agent-core 原生音频回复链路返回了空文本"),
+            )
+        transcript = result.transcript.strip()
+        if transcript:
+            log_info(
+                self._logger,
+                (
+                    "agent-core 原生音频文字交互: "
+                    f"user={self._summarize_for_log(transcript, max_chars=240)!r} "
+                    f"assistant={self._summarize_for_log(assistant_text, max_chars=240)!r} "
+                    f"response_id={result.response_id}"
+                ),
+                LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+            )
+        return AgentTurnResult(
+            turn_id=turn.turn_id,
+            session_id=turn.session_id,
+            device_id=turn.device_id,
+            reply_text=assistant_text,
+            capability_traces=runtime.capability_traces,
+            meta={
+                "model_request": model_request,
+                "user_text_override": transcript,
+                "native_audio_response_id": result.response_id,
+                **(result.meta or {}),
+            },
+        )
+
     def _run_direct_audio_turn(
         self,
         *,
@@ -923,10 +1170,12 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             if tools:
                 request_kwargs["tools"] = tools
             completion = client.chat.completions.create(**request_kwargs)
-            reply_text, tool_calls = self._consume_direct_chat_stream(
+            reply_text, tool_calls, first_output_kind = self._consume_direct_chat_stream(
                 completion=completion,
                 reply_text_delta_callback=reply_text_delta_callback,
             )
+            if first_output_kind is not None:
+                runtime.tool_context.note_model_output(first_output_kind)
             if not tool_calls:
                 final_text = reply_text.strip()
                 if not final_text:
@@ -1449,6 +1698,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 or "用户发送了一段语音，请直接理解音频内容并执行用户意图。",
             }
         ]
+        direct_image_asset_ids = self._direct_image_asset_ids(turn)
         for asset in turn.asset_refs:
             if asset.asset_type == "audio":
                 content.append(
@@ -1460,6 +1710,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     }
                 )
             elif asset.asset_type == "image":
+                if direct_image_asset_ids is not None and asset.asset_id not in direct_image_asset_ids:
+                    continue
                 content.append(
                     {
                         "type": "image_url",
@@ -1489,6 +1741,330 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 }
             )
         return tools
+
+    def _build_realtime_audio_tools(self, allowed_tool_names: set[str] | None) -> list[dict[str, Any]]:
+        """把 ToolRegistry 中的工具导出成 Realtime function calling schema。
+
+        参数：
+            allowed_tool_names: 当前 Skill 策略允许暴露的工具名称集合；为空时暴露全部已注册工具。
+
+        返回值：
+            可传给 Realtime 模型的 function calling schema 列表。
+
+        异常情况：
+            本方法只读取本地注册表，不主动抛出业务异常。
+        """
+
+        tools: list[dict[str, Any]] = []
+        for tool in self._tool_registry.list_tools(allowed_names=allowed_tool_names):
+            tools.append(
+                {
+                    "type": "function",
+                    "name": tool.spec.name,
+                    "description": tool.spec.description,
+                    "parameters": tool.spec.input_model.model_json_schema(),
+                }
+            )
+        return tools
+
+    def _build_native_audio_tool_handler(
+        self,
+        *,
+        runtime: AgentTurnRuntime,
+        turn: AgentTurn,
+    ) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        """构造原生音频模型工具处理器。
+
+        功能：
+            将 Realtime 模型返回的工具调用事件转换为 SDK ToolGateway 调用。
+
+        参数：
+            runtime: 当前 Agent 轮次的运行上下文，包含工具上下文、trace sink 和权限策略。
+            turn: 当前用户轮次，用于日志字段和错误归因。
+
+        返回值：
+            一个接收 `{"name": ..., "arguments": ...}` 的处理函数，返回可 JSON 序列化的工具结果。
+
+        异常情况：
+            工具参数 JSON 解析失败或工具执行失败时，返回结构化错误给模型，不向外抛出。
+        """
+
+        def _handle_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+            tool_name = str(call.get("name") or "").strip()
+            arguments_text = str(call.get("arguments") or "{}")
+            try:
+                arguments = json.loads(arguments_text)
+            except json.JSONDecodeError as exc:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": ErrorCode.INVALID_MESSAGE,
+                        "message": "模型返回的工具参数不是合法 JSON",
+                        "details": {"tool_name": tool_name, "arguments": arguments_text, "reason": str(exc)},
+                    },
+                }
+            try:
+                if self._should_run_native_audio_tool_in_background(tool_name):
+                    return self._schedule_native_audio_background_tool(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        runtime=runtime,
+                        turn=turn,
+                    )
+                result = self._tool_gateway.invoke(
+                    name=tool_name,
+                    context=runtime.tool_context,
+                    arguments=arguments,
+                )
+            except Exception as exc:  # noqa: BLE001 - 工具异常回填给模型生成错误播报
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": ErrorCode.INTERNAL_ERROR,
+                        "message": f"{tool_name} 调用失败",
+                        "details": {"reason": str(exc)},
+                    },
+                }
+            log_debug(
+                self._logger,
+                (
+                    "agent-core 原生音频链路工具调用完成: "
+                    f"tool_name={tool_name} ok={result.ok} data={self._summarize_for_log(result.data)}"
+                ),
+                LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+            )
+            return {
+                "ok": result.ok,
+                "data": result.data,
+                "message": result.message,
+                "assets": [asset.asset_id for asset in result.asset_refs],
+                "artifacts": [artifact.artifact_id for artifact in result.derived_artifacts],
+                "tasks": [task.task_id for task in result.task_refs],
+            }
+
+        return _handle_tool_call
+
+    def _should_run_native_audio_tool_in_background(self, tool_name: str) -> bool:
+        """判断原生音频链路中的工具是否可后台执行。
+
+        参数：
+            tool_name: 模型请求调用的工具名称。
+
+        返回值：
+            `True` 表示该工具是非阻塞副作用工具，可先给模型返回已受理，再后台完成。
+
+        异常情况：
+            本方法只读取本地工具注册表，不主动抛出业务异常。
+        """
+
+        tool = self._tool_registry.get(tool_name)
+        if tool is None:
+            return False
+        return tool_name == "manage_memory" and "memory" in tool.spec.tags
+
+    def _schedule_native_audio_background_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        runtime: AgentTurnRuntime,
+        turn: AgentTurn,
+    ) -> dict[str, Any]:
+        """把原生音频链路中的低优先级副作用工具放到后台执行。
+
+        主要逻辑：
+        1. 只用于 `manage_memory` 这类不会影响当前回答内容的副作用工具。
+        2. 立即向模型返回“已受理”，避免工具内部子 Agent 阻塞首段音频。
+        3. 后台真实执行工具，并把能力轨迹尽量写回会话存储。
+
+        参数：
+            tool_name: 工具名称。
+            arguments: 工具参数。
+            runtime: 当前 Agent 运行态。
+            turn: 当前用户轮次。
+
+        返回值：
+            可直接回填给 Realtime 模型的工具结果。
+
+        异常情况：
+            后台执行失败只写日志，不影响当前语音回复。
+        """
+
+        scheduled_at = time.perf_counter()
+        tool = self._tool_registry.get(tool_name)
+        if tool is not None:
+            runtime.tool_context.announce_tool_progress(
+                tool_name=tool.spec.name,
+                message=tool.spec.progress_message,
+            )
+
+        def _persist_traces(traces: list) -> None:
+            if not traces:
+                return
+            try:
+                self._session_store.append_capability_traces(session_id=turn.session_id, traces=traces)
+            except Exception as exc:  # noqa: BLE001 - 后台轨迹失败不影响语音主链路
+                log_debug(
+                    self._logger,
+                    f"agent-core 原生音频后台工具轨迹写入失败: tool_name={tool_name} reason={exc!r}",
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
+
+        def _run_background_tool() -> None:
+            trace_buffer: list = []
+            background_context = AgentToolContext(
+                session_id=runtime.tool_context.session_id,
+                device_id=runtime.tool_context.device_id,
+                turn_id=runtime.tool_context.turn_id,
+                settings=runtime.tool_context.settings,
+                session_store=runtime.tool_context.session_store,
+                device_state_reader=runtime.tool_context.device_state_reader,
+                trace_sink=trace_buffer.append,
+                device_group_context_factory=runtime.tool_context.device_group_context_factory,
+                task_gateway=runtime.tool_context.task_gateway,
+                camera_gateway=runtime.tool_context.camera_gateway,
+                utterance_photo_store=runtime.tool_context.utterance_photo_store,
+                tool_gateway=runtime.tool_context.tool_gateway,
+                mcp_gateway=runtime.tool_context.mcp_gateway,
+                memory_runtime=runtime.tool_context.memory_runtime,
+                turn_meta={**runtime.tool_context.turn_meta, "background_tool": True},
+            )
+            try:
+                result = self._tool_gateway.invoke(
+                    name=tool_name,
+                    context=background_context,
+                    arguments=arguments,
+                )
+                _persist_traces(trace_buffer)
+                log_info(
+                    self._logger,
+                    (
+                        "agent-core 原生音频后台工具完成: "
+                        f"tool_name={tool_name} ok={result.ok} "
+                        f"latency_ms={int((time.perf_counter() - scheduled_at) * 1000)}"
+                    ),
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
+            except Exception as exc:  # noqa: BLE001 - 后台副作用失败不应打断已开始的回复
+                _persist_traces(trace_buffer)
+                log_error(
+                    self._logger,
+                    (
+                        "agent-core 原生音频后台工具失败: "
+                        f"tool_name={tool_name} reason={exc!r} "
+                        f"latency_ms={int((time.perf_counter() - scheduled_at) * 1000)}"
+                    ),
+                    LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+                )
+
+        threading.Thread(
+            target=_run_background_tool,
+            name=f"agent-native-audio-bg-{tool_name}",
+            daemon=True,
+        ).start()
+        log_info(
+            self._logger,
+            f"agent-core 原生音频后台工具已受理: tool_name={tool_name}",
+            LogContext(device_id=turn.device_id, session_id=turn.session_id, message_id=turn.turn_id),
+        )
+        return {
+            "ok": True,
+            "data": {
+                "scheduled": True,
+                "tool_name": tool_name,
+                "background": True,
+            },
+            "message": "已收到，正在后台记录。",
+            "assets": [],
+            "artifacts": [],
+            "tasks": [],
+        }
+
+    @staticmethod
+    def _read_current_turn_audio_pcm(turn: AgentTurn) -> tuple[bytes, int]:
+        """读取当前轮音频资产，并转换为 16bit PCM。
+
+        参数：
+            turn: 当前用户轮次，必须包含一个 16k 单声道 WAV 音频资产。
+
+        返回：
+            二元组，第一项是原始 PCM 字节，第二项是采样率。
+
+        异常：
+            当缺少音频资产或 WAV 格式不符合当前链路要求时抛出结构化错误。
+        """
+
+        audio_assets = [asset for asset in turn.asset_refs if asset.asset_type == "audio"]
+        if not audio_assets:
+            raise build_error(ErrorCode.INVALID_MESSAGE, "当前轮缺少音频资产")
+        asset = audio_assets[0]
+        with open(asset.storage_uri, "rb") as handle:
+            payload = handle.read()
+        try:
+            with wave.open(io.BytesIO(payload), "rb") as reader:
+                if reader.getsampwidth() != 2 or reader.getnchannels() != 1 or reader.getframerate() != 16000:
+                    raise build_error(
+                        ErrorCode.INVALID_MESSAGE,
+                        "原生音频回复链路当前只支持 16k 单声道 PCM WAV",
+                        details={
+                            "sample_rate": reader.getframerate(),
+                            "channels": reader.getnchannels(),
+                            "sample_width": reader.getsampwidth(),
+                        },
+                    )
+                return reader.readframes(reader.getnframes()), reader.getframerate()
+        except wave.Error as exc:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "音频资产不是合法 WAV",
+                details={"storage_uri": asset.storage_uri, "reason": str(exc)},
+            ) from exc
+
+    @staticmethod
+    def _read_current_turn_image_frames(turn: AgentTurn) -> list[bytes]:
+        """读取当前轮图片资产字节。
+
+        参数：
+            turn: 当前用户轮次，可能包含零个或多个图片资产。
+
+        返回值：
+            图片原始字节列表，顺序与 `turn.asset_refs` 中的图片资产顺序一致。
+
+        异常情况：
+            图片文件不存在或读取失败时，沿用文件系统异常向外抛出。
+        """
+
+        frames: list[bytes] = []
+        direct_image_asset_ids = OpenAIAgentLoopRunner._direct_image_asset_ids(turn)
+        for asset in turn.asset_refs:
+            if asset.asset_type != "image":
+                continue
+            if direct_image_asset_ids is not None and asset.asset_id not in direct_image_asset_ids:
+                continue
+            with open(asset.storage_uri, "rb") as handle:
+                frames.append(handle.read())
+        return frames
+
+    @staticmethod
+    def _direct_image_asset_ids(turn: AgentTurn) -> set[str] | None:
+        """读取当前轮允许直接传给模型的图片资产编号。
+
+        参数：
+            turn: 当前用户轮次。
+
+        返回值：
+            `None` 表示没有显式规划，保持兼容并直传全部图片；集合表示只直传集合内图片。
+
+        异常情况：
+            元数据格式异常时返回空集合，避免错误地把后置图片直传给模型。
+        """
+
+        if "direct_image_asset_ids" not in turn.meta:
+            return None
+        raw_value = turn.meta.get("direct_image_asset_ids")
+        if not isinstance(raw_value, list):
+            return set()
+        return {str(item) for item in raw_value if str(item).strip()}
 
     @staticmethod
     def _build_audio_data_url(storage_uri: str, mime_type: str) -> str:
@@ -1558,7 +2134,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         *,
         completion: object,
         reply_text_delta_callback: Callable[[str], None] | None,
-    ) -> tuple[str, list[dict[str, str]]]:
+    ) -> tuple[str, list[dict[str, str]], str | None]:
         """消费音频原生 Chat Completions 流式响应。
 
         主要逻辑：
@@ -1571,7 +2147,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         2. `reply_text_delta_callback`：文本增量回调，可为空。
 
         返回值：
-        1. `(reply_text, tool_calls)`，其中 `tool_calls` 为统一字典结构。
+        1. `(reply_text, tool_calls, first_output_kind)`，其中 `tool_calls` 为统一字典结构。
+        2. `first_output_kind` 为模型首个可见输出类型，取值为 `text`、`tool_call` 或 `None`。
 
         异常情况：
         1. 流式分片缺少 choices 时会跳过该分片；工具名为空的调用会被过滤。
@@ -1579,13 +2156,18 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
 
         reply_parts: list[str] = []
         tool_call_parts: dict[int, dict[str, str]] = {}
+        first_output_kind: str | None = None
         for chunk in completion:
             text_delta = self._extract_stream_text_delta(chunk)
             if text_delta:
+                if first_output_kind is None:
+                    first_output_kind = "text"
                 reply_parts.append(text_delta)
                 if reply_text_delta_callback is not None:
                     reply_text_delta_callback(text_delta)
             for tool_delta in self._extract_stream_tool_call_deltas(chunk):
+                if first_output_kind is None:
+                    first_output_kind = "tool_call"
                 index = self._coerce_tool_call_index(self._get_value(tool_delta, "index"), len(tool_call_parts))
                 current = tool_call_parts.setdefault(
                     index,
@@ -1617,7 +2199,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                     "arguments": call["arguments"] or "{}",
                 }
             )
-        return "".join(reply_parts), tool_calls
+        return "".join(reply_parts), tool_calls, first_output_kind
 
     @classmethod
     def _extract_stream_tool_call_deltas(cls, chunk: object) -> list[object]:
@@ -1749,7 +2331,13 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         """
 
         text = turn.input_text.strip()
-        image_assets = [asset for asset in turn.asset_refs if asset.asset_type == "image"]
+        direct_image_asset_ids = OpenAIAgentLoopRunner._direct_image_asset_ids(turn)
+        image_assets = [
+            asset
+            for asset in turn.asset_refs
+            if asset.asset_type == "image"
+            and (direct_image_asset_ids is None or asset.asset_id in direct_image_asset_ids)
+        ]
         if not image_assets:
             return text
 
@@ -1820,23 +2408,15 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
     def _build_instructions(self, session_id: str | None = None) -> str:
         """构造最小 Agent 指令。"""
 
-        if self._settings.enable_progress_message:
-            tool_prompt = (
-                "需要时可以调用已提供的工具。工具执行前 SDK 会按工具配置播报等待提示，"
-                "你不要重复输出等待提示。\n\n"
-            )
-        else:
-            tool_prompt = (
-                "需要时可以调用已提供的工具，因为工具的执行需要时间，调用前请先简单回复用户，"
-                "注意不要提及工具名称、参数等，并且不要提前说已经完成，因为工具的执行可能失败。\n\n"
-            )
-
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
-            f"{tool_prompt}"
+            "需要时可以调用已提供的工具。工具调用前的等待提示由系统自动播报，你不要为了调用工具而先输出一段解释。\n"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
-            "例如：姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等。\n\n"
+            "如果用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好等基本信息，必须调用 manage_memory 保存或更新，"
+            "不要只用文字声称已经记住。\n"
+            "如果用户自然说出住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等个性化信息，"
+            "也应调用 manage_memory 保存或更新。\n\n"
             "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。\n"
         )
         if self._skill_runtime is None or not session_id:

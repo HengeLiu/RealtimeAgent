@@ -96,6 +96,25 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.voice_conversation_mode, "segment_turn")
         self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
         self.assertEqual(settings.voice_session_mode, "half_duplex")
+        self.assertEqual(settings.tool_progress_audio_mode, "cached")
+
+    def test_tool_progress_audio_mode_can_use_realtime_from_env(self) -> None:
+        """测试目标：验证工具前置播报音频模式可通过环境变量切到实时生成。
+
+        测试方法：
+        1. 注入 `TOOL_PROGRESS_AUDIO_MODE=realtime`。
+        2. 调用 `ServerSettings.from_env()`。
+
+        预期结果：
+        1. 配置校验通过。
+        2. 工具前置播报音频模式为 `realtime`。
+        """
+
+        os.environ["TOOL_PROGRESS_AUDIO_MODE"] = "realtime"
+
+        settings = ServerSettings.from_env()
+
+        self.assertEqual(settings.tool_progress_audio_mode, "realtime")
 
     def test_realtime_semantic_vad_env_success(self) -> None:
         """测试目标：验证实验性 Omni semantic VAD 连续对话配置可从环境变量读取。
@@ -168,16 +187,6 @@ class ServerSettingsTestCase(unittest.TestCase):
         self.assertTrue(settings.omni_turn_detection_enabled())
         self.assertEqual(settings.effective_voice_input_mode(), "raw_audio")
         self.assertEqual(settings.voice_session_mode, "full_duplex_realtime")
-        self.assertTrue(settings.enable_progress_message)
-
-    def test_enable_progress_message_can_be_disabled_from_env(self) -> None:
-        """测试目标：验证工具前置播报配置可通过环境变量关闭。"""
-
-        os.environ["ENABLE_PROGRESS_MESSAGE"] = "false"
-
-        settings = ServerSettings.from_env()
-
-        self.assertFalse(settings.enable_progress_message)
 
     def test_omni_realtime_auto_input_mode_uses_raw_audio(self) -> None:
         """测试目标：验证 Omni Realtime 默认直接使用原始音频输入。
@@ -227,6 +236,14 @@ class ServerSettingsTestCase(unittest.TestCase):
 
         with self.assertRaises(AppError) as ctx:
             ServerSettings(voice_session_mode="duplex-auto").validate()
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
+
+    def test_invalid_tool_progress_audio_mode_raises(self) -> None:
+        """测试目标：验证非法工具前置播报音频模式会阻止服务启动。"""
+
+        with self.assertRaises(AppError) as ctx:
+            ServerSettings(tool_progress_audio_mode="memory-only").validate()
 
         self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
 

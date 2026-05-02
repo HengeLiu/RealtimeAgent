@@ -128,6 +128,36 @@ class AgentSessionStore:
                 session.updated_at_ms = now_ms()
                 return
 
+    def update_message_text(self, *, session_id: str, message_id: str, text: str) -> None:
+        """更新指定消息的文本内容。
+
+        功能：
+            用于原生音频模型先占位写入用户消息，再在模型返回转写文本后回填真实文本。
+
+        主要逻辑：
+            在指定会话中按 `message_id` 查找消息，命中后替换 `text` 并更新会话时间戳。
+
+        参数：
+            session_id: 会话编号。
+            message_id: 要更新的消息编号。
+            text: 新的消息文本。
+
+        返回值：
+            无。
+
+        异常情况：
+            当 `session_id` 不存在时会沿用字典访问行为抛出 `KeyError`；未找到消息时不做修改。
+        """
+
+        with self._lock:
+            session = self._sessions[session_id]
+            for message in session.messages:
+                if message.message_id != message_id:
+                    continue
+                message.text = text
+                session.updated_at_ms = now_ms()
+                return
+
     def append_capability_traces(self, *, session_id: str, traces: Iterable[CapabilityTrace]) -> None:
         """追加能力调用轨迹。
 

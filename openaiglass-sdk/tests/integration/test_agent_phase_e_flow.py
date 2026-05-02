@@ -54,6 +54,8 @@ class PhaseECapabilityRunner(AgentLoopRunner):
         turn: AgentTurn,
         progress_callback=None,
         reply_text_delta_callback=None,
+        reply_audio_chunk_callback=None,
+        native_audio_reply_runner=None,
     ) -> AgentTurnResult:
         traces = []
         context = AgentToolContext(

@@ -8,15 +8,18 @@
 openaiglass server local start \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
 
 服务端本地配置源放在业务工程：
 
 ```bash
-cp openaiglass-for-blind/config/local_server.env.example openaiglass-for-blind/config/local_server.env
+cp openaiglass-for-blind/config/local_server.yaml.example openaiglass-for-blind/config/local_server.yaml
+cp openaiglass-for-blind/config/.env.example openaiglass-for-blind/config/.env
 openaiglass server local start \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
+
+`local_server.yaml` 只保存非敏感运行配置；`DASHSCOPE_API_KEY` 等密钥写入同目录 `.env` 或通过 shell `export` 注入。

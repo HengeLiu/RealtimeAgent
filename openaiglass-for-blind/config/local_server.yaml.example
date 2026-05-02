@@ -1,0 +1,124 @@
+# 盲人业务本地服务端配置示例。
+# 使用方式：
+# 1. 复制为 openaiglass-for-blind/config/local_server.yaml
+# 2. 复制 .env.example 为 .env，并在 .env 或 shell export 中配置 DASHSCOPE_API_KEY
+# 3. 执行 openaiglass.config.sync --app-root openaiglass-for-blind
+
+app:
+  # 当前运行环境标识。用于日志、诊断和后续区分 dev/staging/prod 行为。
+  environment: dev
+
+server:
+  # 服务端监听地址。0.0.0.0 表示接受局域网设备连接；本机调试可改成 127.0.0.1。
+  host: "0.0.0.0"
+  # 服务端 HTTP/WebSocket 端口。手机、眼镜、回放工具都要连接到这个端口。
+  port: 8765
+  # 设备可访问的服务端局域网 IP。config.sync 会自动探测并更新这个值。
+  public_host: "192.168.1.23"
+
+logging:
+  # 全局日志级别。开发排障建议 DEBUG，稳定运行可改为 INFO。
+  level: DEBUG
+  # 服务端日志文件路径。留空表示只输出到控制台；后台启动时可通过 CLI 指定 log-file。
+  file: ""
+
+devices:
+  # 服务端自身设备编号，用于内部事件、日志和系统消息标识。
+  server_device_id: server-main
+  # 默认眼镜设备编号。自动绑定和配置同步会使用这个设备。
+  glass_device_id: glass-001
+  # 默认手机设备编号。自动绑定和 phone-mock 配置同步会使用这个设备。
+  phone_device_id: phone-001
+  # 设备配对令牌表。key 是 device_id，value 是该设备注册时必须携带的 pair_token。
+  tokens:
+    # 眼镜或 glass-playback 的配对令牌。
+    glass-001: pair-demo-token
+    # 手机 App 或 phone-mock 的配对令牌。
+    phone-001: pair-phone-token
+
+heartbeat:
+  # 服务端要求设备上报心跳的间隔。设备长连接会按这个周期发送 heartbeat。
+  interval_ms: 5000
+  # 心跳超时时间。超过该时间未收到设备消息时，服务端会认为连接失活并清理运行态。
+  timeout_ms: 15000
+
+models:
+  # OpenAI-compatible 模型接口基础地址。当前默认指向阿里云百炼 compatible-mode。
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  agent:
+    # Agent-Core 主模型。负责上下文、记忆、工具调用和最终语义决策。
+    model: qwen3.5-omni-plus
+  voice:
+    # 非 Realtime 分支使用的语音/多模态模型名，主要用于兼容旧配置和非直出链路。
+    model: qwen3.5-omni-plus
+    # Omni 语音直出或兼容语音模型的默认音色名。
+    voice: Tina
+  omni_realtime:
+    # Realtime 原生音频链路使用的模型。支持音频输入、文本/音频输出和 function calling。
+    model: qwen3.5-omni-plus-realtime
+    # Realtime WebSocket 接入地址。
+    url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    # 用户语音结束后等待本轮自动照片上传完成的时间；超时则继续纯语音处理。
+    photo_wait_ms: 300
+  asr:
+    # ASR 模式。realtime 表示旁路实时转写；batch 表示整段音频结束后再识别。
+    mode: realtime
+    # 批量 ASR 模型。实时 ASR 不可用或显式使用 batch 时生效。
+    batch_model: qwen3-asr-flash
+    realtime:
+      # 旁路实时 ASR 模型。用于生成文字日志和需要文本输入的下游节点。
+      model: fun-asr-realtime
+      # 实时 ASR 等待最终结果的超时时间。
+      timeout_ms: 5000
+      # 实时 ASR 断句静音阈值；值越小越快断句，误断风险越高。
+      max_sentence_silence_ms: 300
+  tts:
+    # 文本转语音模型。用于 agent_tts 回复；当主回复也是 TTS 链路时，工具前置播报复用该模型。
+    model: cosyvoice-v3-flash
+    # TTS 音色。当主回复是 TTS 链路时，工具前置播报复用这个音色。
+    voice: longanhuan
+    # TTS WebSocket 接入地址。
+    websocket_api_url: "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    # TTS 服务返回音频采样率。下行播放流会按眼镜需要重采样。
+    sample_rate_hz: 22050
+
+voice:
+  # 服务端注册眼镜后默认打开的语音会话模式。full_duplex_realtime 表示实时会话；half_duplex 表示旧半双工。
+  session_mode: full_duplex_realtime
+  # 回复链路。omni_realtime 表示 Omni Realtime 音频直出；agent_tts 表示 Agent 文本输出后再 TTS。
+  reply_mode: omni_realtime
+  # 语音输入处理方式。auto 会按 reply_mode 自动选择 raw_audio 或 asr_text。
+  input_mode: auto
+  # 连续对话模式。realtime_semantic_vad 交给 Omni 语义 VAD 判定 turn；segment_turn 使用本地分段结束触发。
+  conversation_mode: realtime_semantic_vad
+  # 每轮语音输入、输出、转写和调试产物的保存根目录。
+  runs_root: runs/session
+  # 单个语音段允许缓存的最大音频字节数，防止异常长录音拖垮内存。
+  max_segment_audio_bytes: 524288
+  # 默认系统提示词。业务可以在这里控制助手身份、回答风格和核心行为边界。
+  system_prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等，请用简短口语回答用户问题。"
+  realtime_turn_detection:
+    # Realtime turn detection 类型。semantic_vad 表示由模型侧语义 VAD 判断用户是否说完。
+    type: semantic_vad
+    # 语义 VAD 阈值。值越高越保守，越不容易提前提交用户输入。
+    semantic_vad_threshold: 0.65
+    # 判定语音结束所需静音时长。
+    silence_duration_ms: 800
+    # VAD 提交时向前保留的音频前缀，避免吃掉开头字。
+    prefix_padding_ms: 300
+
+tools:
+  progress_audio:
+    # realtime：每次工具调用前实时生成；Omni 主链路用 Omni 模型，TTS 主链路用 TTS 模型。
+    # cached：仅 TTS 主链路会启动时预生成或复用本地缓存；Omni 主链路仍实时调用 Omni，避免音色不一致。
+    # 这个配置只控制工具前置播报音频来源；是否播报由模型首个输出类型自动判定。
+    mode: realtime
+
+agent:
+  memory:
+    # 是否启用长期记忆。关闭后不会注入已保存记忆，也不会写入新记忆。
+    enabled: true
+    # 长期记忆本地存储文件路径。
+    store_path: runs/memory/agent_memories.json
+    # 每轮最多注入到系统提示词里的记忆条数，避免上下文过长。
+    max_prompt_items: 6
