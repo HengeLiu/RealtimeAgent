@@ -98,6 +98,14 @@ task -> runtime: complete(result)
 
 当前业务侧倒计时只服务最小验证，不具备进程重启恢复和多实例防重能力。真实时间推进如果需要由 SDK 统一调度，应由 SDK 团队提供通用定时事件能力后再接入。
 
+2026-05-02 设备级验证补充：
+
+1. 使用 `register_only.json` 让 `glass-playback` 注册眼镜并保持语音会话在线。
+2. 临时调试入口创建 3 秒 `timer_task`，任务成功进入 `running`。
+3. 计时到点后，`/api/runtime/devices` 中 `device_groups.notification_count` 增加，说明 `timer_task` 已调用 `DeviceGroupContext.submit_notification(...)`。
+4. 服务端日志和眼镜回放产物中没有出现 `assistant.reply` / `actuator.audio.play`，说明通知没有进入真实语音播报链路。
+5. 根因是当前 SDK 未把 `DeviceGroupRuntime.notification_adapter` 绑定到 `VoiceRuntime` 的通知播报入口；该问题已同步到 `架构阻塞点说明与改进建议.md`。
+
 ## 7. 当前测试结果
 
 建议执行：
@@ -116,3 +124,5 @@ PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. uv run python -
 ```
 
 结果：通过，覆盖后台倒计时自然完成路径。
+
+设备级语音播报验证结果：未通过。计时器到点通知被记录，但用户暂时无法收到语音播报。
