@@ -9,6 +9,8 @@ import socket
 import subprocess
 from pathlib import Path
 
+from openaiglasses.cli.common import is_yaml_config_path, read_config_file
+
 
 def build_parser() -> argparse.ArgumentParser:
     """构建配置命令参数解析器。
@@ -62,12 +64,12 @@ def sync_config(args: argparse.Namespace) -> int:
     """
 
     paths = resolve_paths(args)
-    server_config = read_env_file(paths["server_config"], paths["server_template"])
+    server_config = read_server_config(paths["server_config"], paths["server_template"])
     public_host, detected_hosts, public_host_source = resolve_public_host(
         str(server_config.get("SERVER_PUBLIC_HOST") or ""),
         str(args.public_host or ""),
     )
-    port = str(server_config.get("PORT") or "8765").strip()
+    port = str(server_config.get("PORT") or server_config.get("SERVER_PORT") or "8765").strip()
     token_map = parse_token_map(str(server_config.get("DEVICE_TOKEN_MAP") or ""))
     glass_device_id, phone_device_id = parse_device_ids(server_config, token_map)
 
@@ -133,10 +135,11 @@ def resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
     """
 
     app_root = Path(args.app_root).resolve()
+    server_config = resolve_server_config_path(args.server_config, app_root)
     return {
         "app_root": app_root,
-        "server_config": resolve_path(args.server_config, app_root, "config/local_server.env"),
-        "server_template": app_root / "config/local_server.env.example",
+        "server_config": server_config,
+        "server_template": resolve_server_template_path(server_config, app_root),
         "phone_config": resolve_path(args.phone_config, app_root, "host/phone/config/AppConfig.plist"),
         "phone_template": app_root / "host/phone/config/AppConfig.plist.example",
         "phone_mock_config": resolve_path(args.phone_mock_config, app_root, "host/phone-mock/config/phone.mock.json"),
@@ -163,30 +166,40 @@ def resolve_path(path_text: str, app_root: Path, default_relative: str) -> Path:
     return path.resolve()
 
 
-def read_env_file(path: Path, template: Path) -> dict[str, str]:
-    """读取简单 env 配置文件。
+def resolve_server_config_path(path_text: str, app_root: Path) -> Path:
+    """解析服务端配置文件路径，优先使用 YAML。
 
     参数：
-    1. `path`：配置文件路径。
-    2. `template`：用于错误提示的模板路径。
+    1. `path_text`：命令行传入的配置路径。
+    2. `app_root`：业务工程根目录。
 
     返回值：
-    1. 配置键值字典。
+    1. 服务端配置文件绝对路径。
     """
+
+    if path_text:
+        return resolve_path(path_text, app_root, "config/local_server.yaml")
+    yaml_path = app_root / "config/local_server.yaml"
+    env_path = app_root / "config/local_server.env"
+    if yaml_path.exists() or not env_path.exists():
+        return yaml_path.resolve()
+    return env_path.resolve()
+
+
+def resolve_server_template_path(server_config: Path, app_root: Path) -> Path:
+    """按服务端配置格式解析对应模板文件。"""
+
+    if is_yaml_config_path(server_config):
+        return app_root / "config/local_server.yaml.example"
+    return app_root / "config/local_server.env.example"
+
+
+def read_server_config(path: Path, template: Path) -> dict[str, str]:
+    """读取服务端配置文件，支持 YAML 和旧 env 格式。"""
 
     if not path.exists():
         raise RuntimeError(f"配置文件不存在: {path}，请从 {template} 复制后修改")
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        value = value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-            value = value[1:-1]
-        values[key.strip()] = value
-    return values
+    return read_config_file(path)
 
 
 def parse_token_map(token_map: str) -> dict[str, str]:
@@ -256,7 +269,49 @@ def sync_server_public_host(server_config: Path, public_host: str, dry_run: bool
     if dry_run:
         return
     existing_text = server_config.read_text(encoding="utf-8")
-    server_config.write_text(upsert_env_lines(existing_text, {"SERVER_PUBLIC_HOST": public_host}), encoding="utf-8")
+    if is_yaml_config_path(server_config):
+        updated_text = upsert_yaml_scalar(existing_text, ("server", "public_host"), public_host)
+    else:
+        updated_text = upsert_env_lines(existing_text, {"SERVER_PUBLIC_HOST": public_host})
+    server_config.write_text(updated_text, encoding="utf-8")
+
+
+def upsert_yaml_scalar(existing_text: str, path: tuple[str, str], value: str) -> str:
+    """更新两级 YAML 标量配置。
+
+    当前仅用于回写 `server.public_host`，避免配置同步命令破坏 YAML 分组结构。
+    """
+
+    parent_key, child_key = path
+    lines = existing_text.splitlines()
+    output: list[str] = []
+    in_parent = False
+    parent_seen = False
+    child_seen = False
+    inserted_child = False
+    for line in lines:
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0 and stripped == f"{parent_key}:":
+            in_parent = True
+            parent_seen = True
+            output.append(line)
+            continue
+        if in_parent and indent == 0 and stripped and not stripped.startswith("#"):
+            if not child_seen and not inserted_child:
+                output.append(f"  {child_key}: \"{value}\"")
+                inserted_child = True
+            in_parent = False
+        if in_parent and indent == 2 and stripped.startswith(f"{child_key}:"):
+            output.append(f"  {child_key}: \"{value}\"")
+            child_seen = True
+            continue
+        output.append(line)
+    if parent_seen and in_parent and not child_seen and not inserted_child:
+        output.append(f"  {child_key}: \"{value}\"")
+    if not parent_seen:
+        output.extend([f"{parent_key}:", f"  {child_key}: \"{value}\""])
+    return "\n".join(output) + "\n"
 
 
 def sync_phone_config(

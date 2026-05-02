@@ -109,8 +109,8 @@ def ensure_local_configs(app_root: Path) -> None:
 
     initialized = False
     initialized |= ensure_file_from_template(
-        app_root / "config/local_server.env",
-        app_root / "config/local_server.env.example",
+        app_root / "config/local_server.yaml",
+        app_root / "config/local_server.yaml.example",
         "服务端本地配置",
     )
     initialized |= ensure_file_from_template(
@@ -133,12 +133,13 @@ def print_config_instructions(app_root: Path) -> None:
     """打印三端联调配置说明。"""
 
     print(
-        f"""[config] 请在配置文件中修改真机联调参数，不要通过环境变量临时覆盖：
+        f"""[config] 请在配置文件中修改真机联调参数：
 
-  文件 1: {app_root / "config/local_server.env"}
-    SERVER_PUBLIC_HOST 无需手动修改，命令会自动探测并回写 Mac 当前局域网 IPv4
-    PORT="8765"
-    DEVICE_TOKEN_MAP="glass-001=pair-demo-token,phone-001=pair-phone-token"
+  文件 1: {app_root / "config/local_server.yaml"}
+    server.public_host 无需手动修改，命令会自动探测并回写 Mac 当前局域网 IPv4
+    server.port: 8765
+    devices.tokens.glass-001 / phone-001 分别填写配对令牌
+    DASHSCOPE_API_KEY 等密钥放在 {app_root / "config/.env"} 或 shell export 中，不写入 YAML
 
   文件 2: {app_root / "host/phone/config/AppConfig.plist"}
     命令会根据服务端配置自动写入 serverBaseURLString、phoneDeviceID、pairToken、desiredGlassDeviceID
@@ -159,7 +160,7 @@ def sync_config(args: argparse.Namespace, app_root: Path) -> int:
         if not sync_script.exists():
             raise RuntimeError(f"配置同步脚本不存在: {sync_script}")
         command = [sys.executable, str(sync_script)]
-        server_config = args.server_config or str(app_root / "config/local_server.env")
+        server_config = args.server_config or str(resolve_default_server_config(app_root))
         command.extend(["--server-config", server_config])
         if args.public_host:
             command.extend(["--public-host", args.public_host])
@@ -168,11 +169,21 @@ def sync_config(args: argparse.Namespace, app_root: Path) -> int:
     from openaiglasses.cli.config import main as config_main
 
     command = ["sync", "--app-root", str(app_root)]
-    server_config = args.server_config or str(app_root / "config/local_server.env")
+    server_config = args.server_config or str(resolve_default_server_config(app_root))
     command.extend(["--server-config", server_config])
     if args.public_host:
         command.extend(["--public-host", args.public_host])
     return config_main(command)
+
+
+def resolve_default_server_config(app_root: Path) -> Path:
+    """解析业务侧默认服务端配置，优先使用 YAML。"""
+
+    yaml_path = app_root / "config/local_server.yaml"
+    env_path = app_root / "config/local_server.env"
+    if yaml_path.exists() or not env_path.exists():
+        return yaml_path
+    return env_path
 
 
 def open_project(project: Path) -> int:

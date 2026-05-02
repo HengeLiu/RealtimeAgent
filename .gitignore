@@ -30,6 +30,11 @@ openaiglass-sdk/glass-esp32/sdkconfig.local
 openaiglass-sdk/glass-esp32/sdkconfig.local.old
 openaiglass-sdk/glass-esp32/dependencies.lock
 openaiglass-for-blind/config/local_server.env
+openaiglass-for-blind/config/local_server.yaml
+openaiglass-for-blind/config/.env
+openaiglass-sdk/config/local_server.env
+openaiglass-sdk/config/local_server.yaml
+openaiglass-sdk/config/.env
 openaiglass-for-blind/host/glass/config/local_build.env
 openaiglass-for-blind/host/phone/config/AppConfig.plist
 openaiglass-for-blind/testdata/audio/*

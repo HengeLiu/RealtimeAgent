@@ -1,0 +1,40 @@
+# SDK 本地服务端配置示例。
+# 真实密钥放在同目录 .env 或 shell export 中，不要写入 YAML。
+
+app:
+  # 当前运行环境标识。用于日志、诊断和后续区分 dev/staging/prod 行为。
+  environment: dev
+
+server:
+  # 服务端监听地址。0.0.0.0 表示接受局域网设备连接；本机调试可改成 127.0.0.1。
+  host: "0.0.0.0"
+  # 服务端 HTTP/WebSocket 端口。手机、眼镜、回放工具都要连接到这个端口。
+  port: 8765
+  # 设备可访问的服务端局域网 IP。config.sync 会自动探测并更新这个值。
+  public_host: "172.20.10.12"
+
+logging:
+  # 全局日志级别。开发排障建议 DEBUG，稳定运行可改为 INFO。
+  level: DEBUG
+  # 服务端日志文件路径。留空表示只输出到控制台；后台启动时可通过 CLI 指定 log-file。
+  file: ""
+
+devices:
+  # 服务端自身设备编号，用于内部事件、日志和系统消息标识。
+  server_device_id: server-main
+  # 默认眼镜设备编号。自动绑定和配置同步会使用这个设备。
+  glass_device_id: glass-001
+  # 默认手机设备编号。自动绑定和 phone-mock 配置同步会使用这个设备。
+  phone_device_id: phone-001
+  # 设备配对令牌表。key 是 device_id，value 是该设备注册时必须携带的 pair_token。
+  tokens:
+    # 眼镜或 glass-playback 的配对令牌。
+    glass-001: pair-demo-token
+    # 手机 App 或 phone-mock 的配对令牌。
+    phone-001: pair-phone-token
+
+heartbeat:
+  # 服务端要求设备上报心跳的间隔。设备长连接会按这个周期发送 heartbeat。
+  interval_ms: 5000
+  # 心跳超时时间。超过该时间未收到设备消息时，服务端会认为连接失活并清理运行态。
+  timeout_ms: 15000

@@ -4,19 +4,19 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v81`。本版本在 Omni Realtime 音频直出和 Realtime function calling 基础上，工具前置播报继续由模型首个输出类型自动判定，并新增 `TOOL_PROGRESS_AUDIO_MODE=cached|realtime` 控制音频来源：`cached` 使用启动阶段预生成缓存，`realtime` 在工具调用前用当前 TTS 配置实时流式生成。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v82`。本版本在 Omni Realtime 音频直出和 Realtime function calling 基础上，工具前置播报继续由模型首个输出类型自动判定，并将服务端运行配置整理到 `config/local_server.yaml`；敏感信息写入同目录 `.env` 或通过 shell `export` 注入。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
-默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.env` 中设置 `VOICE_SESSION_MODE=half_duplex`。
+默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.yaml` 中设置 `voice.session_mode: half_duplex`。
 
 当前 SDK 能力状态：
 
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `VOICE_SESSION_MODE=half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效，但会先经过冷却和连续 VAD 帧确认。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `voice.session_mode: half_duplex` 回退。ESP32-S3 当前采用方案 A：播放期间仍保持半双工，播放结束后连续对话窗口继续有效，但会先经过冷却和连续 VAD 帧确认。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR；`sdk-v74` 音频原生 Chat Completions 链路优先使用流式返回 | 默认 `VOICE_INPUT_MODE=auto`：`agent_tts` 分支实际为 `asr_text`，`omni_realtime` 分支实际为 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
-| 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `TOOL_PROGRESS_AUDIO_MODE` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
+| 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `tools.progress_audio.mode` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
 | 播放仲裁和用户打断 | 可用 | 业务只提交通知优先级和策略，不直接控制播放器。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
@@ -161,7 +161,7 @@ ESP32-S3 当前采用方案 A：播放期间不启动新的本地语音段，也
 
 | 配置项 | 文件 | 说明 |
 | --- | --- | --- |
-| `VOICE_SESSION_MODE` | `config/local_server.env` | 服务端注册眼镜后默认打开的语音会话模式。默认 `full_duplex_realtime`；旧固件或半双工回放可设为 `half_duplex`。 |
+| `voice.session_mode` | `config/local_server.yaml` | 服务端注册眼镜后默认打开的语音会话模式。默认 `full_duplex_realtime`；旧固件或半双工回放可设为 `half_duplex`。 |
 
 眼镜端配置同步、构建、烧录和串口监控统一按第 3 节的流程执行。
 
@@ -223,7 +223,7 @@ uv run openaiglass.config.sync --app-root openaiglass-for-blind
 
 同步命令会自动探测当前 Mac 可供手机和眼镜访问的局域网 IPv4，并写入：
 
-1. `openaiglass-for-blind/config/local_server.env` 的 `SERVER_PUBLIC_HOST`。
+1. `openaiglass-for-blind/config/local_server.yaml` 的 `server.public_host`。
 2. `openaiglass-for-blind/host/phone/config/AppConfig.plist` 的 `serverBaseURLString`、`phoneDeviceID`、`pairToken`、`desiredGlassDeviceID`。
 3. `openaiglass-for-blind/host/phone-mock/config/phone.mock.json` 的 `control_ws_url`、`device_id`、`pair_token` 和 `camera_sink.public_host`。
 3. `openaiglass-for-blind/host/glass/config/local_build.env` 的 `GLASS_SERVER_WS_URI`、`GLASS_DEVICE_ID`、`GLASS_PAIR_TOKEN`。
@@ -256,7 +256,8 @@ uv run openaiglass.sdk.live-check \
 
 | 配置文件 | 作用 |
 | --- | --- |
-| `openaiglass-for-blind/config/local_server.env` | 服务端监听地址、端口、设备令牌、模型和日志配置。 |
+| `openaiglass-for-blind/config/local_server.yaml` | 服务端监听地址、端口、设备令牌、模型、语音链路、工具前置播报、记忆和日志配置。 |
+| `openaiglass-for-blind/config/.env` | 服务端敏感信息，例如 `DASHSCOPE_API_KEY`。该文件不提交 Git。 |
 | `openaiglass-for-blind/host/phone/config/AppConfig.plist` | iOS 手机端服务端地址、设备编号、配对令牌和目标眼镜编号。 |
 | `openaiglass-for-blind/host/phone-mock/config/phone.mock.json` | Python 虚拟手机设备编号、配对令牌、服务端控制地址和 mock 任务事件。 |
 | `openaiglass-for-blind/host/glass/config/local_build.env` | ESP32 眼镜端 WiFi、控制 WebSocket、设备编号和配对令牌。 |
@@ -264,8 +265,10 @@ uv run openaiglass.sdk.live-check \
 如果是首次搭建新目录，或自动同步提示本地配置文件不存在，先从模板复制：
 
 ```bash
-cp openaiglass-for-blind/config/local_server.env.example \
-  openaiglass-for-blind/config/local_server.env
+cp openaiglass-for-blind/config/local_server.yaml.example \
+  openaiglass-for-blind/config/local_server.yaml
+cp openaiglass-for-blind/config/.env.example \
+  openaiglass-for-blind/config/.env
 cp openaiglass-for-blind/host/phone/config/AppConfig.plist.example \
   openaiglass-for-blind/host/phone/config/AppConfig.plist
 cp openaiglass-for-blind/host/glass/config/local_build.env.example \
@@ -276,14 +279,15 @@ cp openaiglass-for-blind/host/glass/config/local_build.env.example \
 
 | 配置项 | 文件 | 说明 |
 | --- | --- | --- |
-| `PORT` | `config/local_server.env` | 服务端端口，默认 `8765`。 |
-| `DEVICE_TOKEN_MAP` | `config/local_server.env` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id=pair_token`。 |
-| `VOICE_SESSION_MODE` | `config/local_server.env` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
-| `DASHSCOPE_API_KEY` / `AGENT_MODEL_NAME` / `VOICE_REPLY_MODE` / `VOICE_INPUT_MODE` / `VOICE_OMNI_REALTIME_MODEL_NAME` / `VOICE_OMNI_PHOTO_WAIT_MS` / `VOICE_CONVERSATION_MODE` / `VOICE_REALTIME_TURN_DETECTION` / `VOICE_REALTIME_SEMANTIC_VAD_THRESHOLD` / `VOICE_REALTIME_SILENCE_DURATION_MS` / `VOICE_REALTIME_PREFIX_PADDING_MS` / `VOICE_ASR_MODEL_NAME` / `VOICE_ASR_MODE` / `VOICE_ASR_REALTIME_MODEL_NAME` / `VOICE_ASR_REALTIME_MAX_SENTENCE_SILENCE_MS` / `TTS_MODEL_NAME` / `TOOL_PROGRESS_AUDIO_MODE` | `config/local_server.env` | 服务端模型、语音输入模式、语音回复分支、连续对话、ASR、TTS 和工具前置播报配置。默认 `VOICE_REPLY_MODE=omni_realtime`，使用 qwen3.5-omni realtime 直出语音并允许 SDK Tool 调用；默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`，由 Omni `semantic_vad` 自动提交 turn。需要回到旧稳定分段提交时设为 `segment_turn`。`VOICE_REPLY_MODE=agent_tts` 保留 Agent + CosyVoice。`VOICE_INPUT_MODE=auto` 会按回复分支自动选择是否启用独立 ASR。`TOOL_PROGRESS_AUDIO_MODE=cached` 使用启动阶段缓存，`realtime` 在工具调用前用当前 TTS 配置实时流式生成。业务开发者不要在业务代码里硬编码模型名。 |
-| `AGENT_MEMORY_ENABLED` / `AGENT_MEMORY_STORE_PATH` / `AGENT_MEMORY_MAX_PROMPT_ITEMS` | `config/local_server.env` | `sdk-v48` 起控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
+| `server.port` | `config/local_server.yaml` | 服务端端口，默认 `8765`。 |
+| `devices.tokens` | `config/local_server.yaml` | 必须包含真实设备、`glass-playback` 或 `phone-mock` 的 `device_id: pair_token`。 |
+| `voice.session_mode` | `config/local_server.yaml` | 默认 `full_duplex_realtime`。旧设备不支持全双工时改为 `half_duplex`。 |
+| `models.*` / `voice.*` / `tools.progress_audio.mode` | `config/local_server.yaml` | 服务端模型、语音输入模式、语音回复分支、连续对话、ASR、TTS 和工具前置播报配置。默认 `voice.reply_mode=omni_realtime`，使用 qwen3.5-omni realtime 直出语音并允许 SDK Tool 调用；默认 `voice.conversation_mode=realtime_semantic_vad`。需要回到旧稳定分段提交时设为 `segment_turn`。`tools.progress_audio.mode=realtime` 会跟随主回复音频来源：Omni 主链路调用同一个 Omni Realtime 模型生成提示音，TTS 主链路调用同一个 TTS 服务。`cached` 仅对 TTS 主链路预生成缓存。 |
+| `agent.memory.*` | `config/local_server.yaml` | 控制 Agent 长期记忆。默认启用，记忆文件默认写入 `runs/memory/agent_memories.json`，每轮最多注入 6 条相关记忆。 |
+| `DASHSCOPE_API_KEY` | `config/.env` 或 shell export | 百炼 API Key，不能写入 YAML，也不要提交 Git。 |
 | `GLASS_WIFI_PRIMARY_SSID` / `GLASS_WIFI_PRIMARY_PASSWORD` | `host/glass/config/local_build.env` | 真实 ESP32 眼镜联网所需 WiFi。 |
 
-`sdk-v32` 起，如果 `local_server.env` 里保留模板占位 `DASHSCOPE_API_KEY=""`，但启动命令所在 shell、CI secret 或远程环境已经注入了非空 `DASHSCOPE_API_KEY`，SDK 启动器会保留外部真实 key。其他普通配置仍然以 `local_server.env` 为准。若希望完全依赖配置文件，也可以直接把真实 key 写入 `local_server.env` 后重启服务端。
+旧的 `local_server.env` 仍可作为兼容格式传给 `--config`，但新的本地配置应优先使用 `local_server.yaml + .env`。如果 shell 已经 export 非空 `DASHSCOPE_API_KEY`，启动器会优先使用外部真实 key。
 
 ### 3.4 启动真实业务服务端
 
@@ -301,7 +305,7 @@ openaiglass-for-blind/host/server/main.py
 uv run openaiglass.server.run \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
 
 `sdk-v31` 起，这个命令会把服务端保持在当前前台进程中。按 Ctrl+C 或关闭当前终端时，服务端会一起退出，不需要再额外执行 `openaiglass.server.stop`。
@@ -314,7 +318,7 @@ uv run openaiglass.server.run \
 uv run openaiglass.server.start \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
 
 跟随日志：
@@ -523,7 +527,7 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 `sdk-v55` 起，默认 `VOICE_CONVERSATION_MODE=realtime_semantic_vad`。服务端在 `sensor.audio.segment.started` 时前置自动抓拍，并在 Omni 会话已有上行音频后尽快追加图片，避免 VAD 自动提交后再追加图片导致图片错过当前 turn；`OmniRealtimeStreamingSession.finish(...)` 在该模式下只等待 `semantic_vad` 自动响应，不再手动调用 `commit()` 和 `create_response(...)`。真实 `glass-esp32` 会在一次 WakeNet 命中后打开 30 秒连续对话窗口，播放结束后窗口继续保留，后续用户开口可由本地 VAD 直接触发下一段语音。`sdk-v72` 起，播放结束后的连续追问会先经过短冷却和连续 VAD 帧确认，降低尾音或环境声误触发。由于当前固件没有 AEC，播放期间仍不会保持麦克风活跃；如果需要旧行为，可设置 `VOICE_CONVERSATION_MODE=segment_turn`。
 
-`sdk-v80` 起，工具前置提示由模型首输出类型自动判定。首输出是工具调用时，SDK 使用 `ToolSpec.progress_message` 播报；首输出是文本或音频时，SDK 不会再额外插入等待提示。`sdk-v81` 起，播报音频来源由 `TOOL_PROGRESS_AUDIO_MODE` 控制：`cached` 使用启动阶段静态音频缓存，`realtime` 在工具调用前实时创建 TTS 流并通过同一套下行播放框架发送给眼镜。工具调用失败会以结构化错误回填给模型或由 SDK 失败链路播报，不需要业务 Tool 自行播放错误语音。
+`sdk-v80` 起，工具前置提示由模型首输出类型自动判定。首输出是工具调用时，SDK 使用 `ToolSpec.progress_message` 播报；首输出是文本或音频时，SDK 不会再额外插入等待提示。`sdk-v81` 起，播报音频来源由 `tools.progress_audio.mode` 控制：`cached` 在 TTS 主链路中使用启动阶段静态音频缓存，`realtime` 在工具调用前按当前主回复音频来源实时生成提示音。主回复是 Omni Realtime 音频直出时，提示音也由同一个 Omni Realtime 模型和 voice 生成；主回复是 Agent 文本加 TTS 时，提示音也由同一个 TTS 服务生成。工具调用失败会以结构化错误回填给模型或由 SDK 失败链路播报，不需要业务 Tool 自行播放错误语音。
 
 当前仍不是完整的端到端最低延迟链路：`agent_tts` 模式下 Agent 首 token 前仍要经过 agent-core 工具装配和模型首 token，TTS 仍使用 CosyVoice 流式 WebSocket，会边收模型文本边推 TTS。`omni_realtime + realtime_semantic_vad` 模式已经把建连、音频上行、照片追加和 turn detection 前移到用户说话期间，由 Omni 自动提交并直出语音；但真实 ESP32 端仍因缺少 AEC 保持播放期间半双工，播放中自然插话和更激进的 full-duplex 体验需要端侧 AEC/VAD 能力继续配合。
 
@@ -533,12 +537,12 @@ Omni Realtime 模式下可观察这些日志：`Omni Realtime 预连接已建立
 
 `sdk-v70` 补充了前置播报静态音频缓存：服务端启动后，SDK 会读取当前工具注册表里的 `progress_message`，按当前 `TTS_MODEL_NAME`、`TTS_VOICE` 和采样率生成或复用本地 WAV 文件。默认缓存目录为 `VOICE_RUNS_ROOT/progress-audio-cache`，默认即 `runs/session/progress-audio-cache`。后续工具调用命中缓存时，SDK 会直接读取本地 PCM，并从同一套下行播放框架写出；缓存未生成、生成失败或服务刚启动尚未完成预加载时，会自动回退到实时 TTS。
 
-`sdk-v81` 起，`TOOL_PROGRESS_AUDIO_MODE` 可以控制前置播报音频来源：
+`sdk-v81` 起，`tools.progress_audio.mode` 可以控制前置播报音频来源：
 
 | 取值 | 行为 | 适用场景 |
 | --- | --- | --- |
-| `cached` | 启动时预生成或复用本地 WAV，工具调用时直接读取 PCM，并通过统一播放流发送。 | 更关注首包延迟和 TTS 调用成本，能接受预生成音频和实时回复有轻微听感差异。 |
-| `realtime` | 不预加载缓存；工具调用前把选中的固定提示文本发送给当前 TTS 服务，边生成边通过统一播放流发送。 | 更关注提示音与实时回复的一致性，能接受每次工具调用多一次 TTS 请求。 |
+| `cached` | TTS 主链路启动时预生成或复用本地 WAV，工具调用时直接读取 PCM，并通过统一播放流发送。Omni 主链路不会使用 TTS 缓存，会改为实时调用 Omni 生成。 | 更关注 Agent+TTS 链路的首包延迟和 TTS 调用成本。 |
+| `realtime` | 工具调用前把选中的固定提示文本发送给当前主回复音频提供方。Omni 主链路发送给 Omni Realtime；TTS 主链路发送给当前 TTS 服务。 | 更关注提示音与实时回复的模型、音色和情感一致性，能接受每次工具调用多一次模型请求。 |
 
 无论使用哪种模式，眼镜端都只接收同一种 `actuator.audio.play` 和 `/stream.wav` 下行播放流，业务代码不需要区分音频来源。
 
@@ -676,12 +680,14 @@ SDK 收到该消息后会：
 
 `sdk-v18` 起，SDK 服务端新增全双工实时语音第一版。它不是业务能力，而是系统运行时能力：端侧可以在播放期间持续上传实时音频，SDK 根据端侧 VAD/AEC 结果处理用户插话，并复用统一播放仲裁器取消当前实时输出。
 
-启动时通过 `VOICE_SESSION_MODE` 选择默认会话模式：
+启动时通过 `voice.session_mode` 选择默认会话模式：
 
-```env
-VOICE_SESSION_MODE="full_duplex_realtime"
+```yaml
+voice:
+  session_mode: full_duplex_realtime
 # 或
-VOICE_SESSION_MODE="half_duplex"
+voice:
+  session_mode: half_duplex
 ```
 
 | 配置值 | 注册后服务端行为 | 适合场景 |
@@ -1778,7 +1784,7 @@ openaiglass-for-blind/host/server/main.py
 uv run openaiglass.server.run \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
 
 安装、配置同步、日志跟随和停止命令统一见第 3 节。
@@ -1813,7 +1819,7 @@ uv run openaiglass.server.run \
 
 `trigger_audio` 不是可选语音样例，而是启动一次设备级回放的触发源。它不测试 WakeNet 本身；它假设唤醒已经成功，只模拟唤醒后麦克风开始录音并持续向服务端推流。
 
-注意：`sdk-v20` 起，`glass-playback` 已支持 `VOICE_SESSION_MODE=full_duplex_realtime` 下的打开握手，并会把服务端下发的 `session_id` 带入后续 `sensor.audio.segment.started/finished`。当前触发音频仍复用 `/ws_audio` 半双工音频上传路径；需要验收真正全双工媒体帧时，仍应按第 3.10 节使用端侧或手机中继发送 `voice.realtime.*` 事件和 `/ws_realtime_audio` 媒体帧。
+注意：`sdk-v20` 起，`glass-playback` 已支持 `voice.session_mode: full_duplex_realtime` 下的打开握手，并会把服务端下发的 `session_id` 带入后续 `sensor.audio.segment.started/finished`。当前触发音频仍复用 `/ws_audio` 半双工音频上传路径；需要验收真正全双工媒体帧时，仍应按第 3.10 节使用端侧或手机中继发送 `voice.realtime.*` 事件和 `/ws_realtime_audio` 媒体帧。
 
 ### 10.2 开发者日常测试流程
 
@@ -1839,7 +1845,7 @@ uv run openaiglass.server.run \
 uv run openaiglass.server.run \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
 
 服务端配置方式与真机一致。唯一需要注意的是，`device_token_map` 中要包含虚拟眼镜的编号和配对令牌，例如 `glass-playback-001=pair_playback`。如果同时使用真实 iOS 手机，也要包含真实手机的编号和配对令牌。
@@ -2121,7 +2127,7 @@ uv run python -m devtools.audio_sample_batch_runner \
 uv run openaiglass.server.run \
   --app-module host.server.main \
   --app-root openaiglass-for-blind \
-  --config openaiglass-for-blind/config/local_server.env
+  --config openaiglass-for-blind/config/local_server.yaml
 ```
 
 iOS 手机端：

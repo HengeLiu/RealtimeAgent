@@ -95,7 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo-root", default=os.environ.get("REPO_ROOT", "."), help="项目根目录")
     parser.add_argument("--sdk-python-root", default="", help="SDK Python 源码目录")
     parser.add_argument("--app-root", default="", help="业务工程源码目录")
-    parser.add_argument("--config", default=os.environ.get("LOCAL_SERVER_CONFIG_FILE", ""), help="本地 env 配置文件")
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("LOCAL_SERVER_CONFIG_FILE", ""),
+        help="本地服务端配置文件，支持 YAML 或旧 env 格式",
+    )
     parser.add_argument("--host", default=None, help="监听地址")
     parser.add_argument("--port", type=int, default=None, help="监听端口")
     parser.add_argument("--log-dir", default=os.environ.get("LOG_DIR", ""), help="日志目录")
