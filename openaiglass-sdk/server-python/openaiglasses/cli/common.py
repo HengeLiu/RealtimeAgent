@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-SECRET_ENV_KEYS = {"DASHSCOPE_API_KEY"}
+SECRET_ENV_KEYS = {
+    "AMAP_API_KEY",
+    "AMAP_MAPS_API_KEY",
+    "BOCHA_API_KEY",
+    "BOCHA_SEARCH_API_KEY",
+    "DASHSCOPE_API_KEY",
+}
 
 YAML_ENV_KEY_MAP: dict[tuple[str, ...], str] = {
     ("app", "environment"): "APP_ENV",
@@ -64,6 +70,16 @@ YAML_ENV_KEY_MAP: dict[tuple[str, ...], str] = {
     ("agent", "memory", "enabled"): "AGENT_MEMORY_ENABLED",
     ("agent", "memory", "store_path"): "AGENT_MEMORY_STORE_PATH",
     ("agent", "memory", "max_prompt_items"): "AGENT_MEMORY_MAX_PROMPT_ITEMS",
+    ("business", "navigation", "amap", "api_key"): "AMAP_API_KEY",
+    ("business", "navigation", "amap", "default_city"): "AMAP_DEFAULT_CITY",
+    ("business", "navigation", "amap", "default_origin"): "AMAP_DEFAULT_ORIGIN",
+    ("business", "navigation", "amap", "disable_mock_fallback"): "AMAP_DISABLE_MOCK_FALLBACK",
+    ("business", "navigation", "amap", "http_timeout_seconds"): "AMAP_HTTP_TIMEOUT_SECONDS",
+    ("business", "search", "web", "provider"): "WEB_SEARCH_PROVIDER",
+    ("business", "search", "web", "timeout_seconds"): "WEB_SEARCH_TIMEOUT_SECONDS",
+    ("business", "search", "bocha", "api_key"): "BOCHA_SEARCH_API_KEY",
+    ("business", "search", "bocha", "api_url"): "BOCHA_SEARCH_API_URL",
+    ("business", "search", "bocha", "freshness"): "BOCHA_SEARCH_FRESHNESS",
 }
 
 

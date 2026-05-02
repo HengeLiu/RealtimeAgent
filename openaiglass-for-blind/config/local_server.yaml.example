@@ -124,3 +124,32 @@ agent:
     store_path: runs/memory/agent_memories.json
     # 每轮最多注入到系统提示词里的记忆条数，避免上下文过长。
     max_prompt_items: 6
+
+business:
+  navigation:
+    amap:
+      # 高德 Web 服务 Key 属于敏感信息，建议放在 config/.env 的 AMAP_API_KEY 中。
+      # 这里保留空值，便于没有真实 Key 时使用可回放 mock 数据。
+      api_key: ""
+      # 可选，缩小地址搜索和地理编码范围，例如 "上海"。
+      default_city: ""
+      # 步行路线规划需要起点坐标；没有端侧定位时可临时填入“经度,纬度”。
+      default_origin: ""
+      # true 表示真实高德调用失败时不回退 mock，便于暴露鉴权、配额和网络问题。
+      disable_mock_fallback: false
+      # 高德 HTTP 请求超时时间。
+      http_timeout_seconds: 6
+  search:
+    web:
+      # auto：配置 BOCHA_SEARCH_API_KEY 时使用博查，否则回退 DuckDuckGo HTML 开发模式。
+      # bocha：正式环境建议使用，未配置 Key 时会直接失败。
+      provider: auto
+      # 搜索 HTTP 请求超时时间。
+      timeout_seconds: 8
+    bocha:
+      # 博查 API Key 属于敏感信息，建议放在 config/.env 的 BOCHA_SEARCH_API_KEY 中。
+      api_key: ""
+      # 博查 Web Search API 地址。
+      api_url: "https://api.bochaai.com/v1/web-search"
+      # noLimit 表示不限制时间范围。
+      freshness: noLimit

@@ -2,14 +2,14 @@
 
 ## 1. 需求理解
 
-导航能力对应第一期第二阶段 Phase H 的最小闭环：用户提出目的地后，业务 Tool 通过 SDK 统一 MCP 入口调用地图能力，得到结构化路线，并把路线沉淀为 SDK 托管 `navigation_task`。本轮在原有路线准备基础上补齐 POI 候选、地理编码和路线确认输入，并为 Phase L 导航执行期接入最小视觉事件策略。
+导航能力对应第一期第二阶段 Phase H 的最小闭环：用户提出目的地后，业务 Tool 通过 SDK 统一 MCP 入口调用地图能力，得到结构化路线，并把路线沉淀为 SDK 托管 `navigation_task`。当前版本在原有路线准备基础上补齐真实高德 Web 服务调用、POI 候选、地理编码和路线确认输入，并为 Phase L 导航执行期接入最小视觉事件策略。
 
 ## 2. 实现边界
 
 当前实现只做业务能力层：
 
 1. 业务代码放在 `capabilities/navigation`。
-2. AMap mock adapter 通过 `sdk.register_mcp_adapter(...)` 注册。
+2. AMap adapter 通过 `sdk.register_mcp_adapter(...)` 注册。
 3. `PrepareNavigationTool` 只通过 `context.mcp(...)` 调用 `amap.poi_search`、`amap.geocode` 和 `amap.route_plan`，不直接 import SDK 内部 gateway 或 adapter。
 4. `NavigationTask` 只使用 `TaskContext` 和 `context.device_group.submit_notification(...)`。
 5. 宿主入口 `host/server/main.py` 只做装配注册。
@@ -18,19 +18,26 @@
 
 1. 不修改 `openaiglass-sdk`。
 2. 不直接处理 WebSocket、设备绑定表、MCP gateway 构造和 agent trace 细节。
-3. 不接真实 AMap key，不实现复杂最后 10 米策略。
+3. 不实现复杂最后 10 米策略。
 
 ## 3. 实现方案
 
 ### 3.1 MCP Adapter
 
-`MockAmapMcpAdapter` 提供三个 mock MCP 方法：
+`AmapMcpAdapter` 提供三个 MCP 方法：
 
 1. `amap.poi_search`：根据关键词返回候选 POI。
 2. `amap.geocode`：把选中的 POI 或地址解析为经纬度。
 3. `amap.route_plan`：返回路线摘要、距离、耗时和步骤。
 
-用途：为离线回放和 SDK MCP 入口验证提供稳定替身。真实 AMap key/config 当前未接入，后续真实联调应以业务侧 adapter 替换 mock adapter。
+用途：配置 `AMAP_API_KEY` 时调用高德 Web 服务完成真实地址搜索、地理编码和步行路线规划；未配置或允许 fallback 时使用稳定 mock 数据，保证离线回放可重复。
+
+真实调用需要：
+
+1. `config/.env` 中的 `AMAP_API_KEY`：高德 Web 服务 Key。
+2. `local_server.yaml` 中的 `business.navigation.amap.default_city`：可选，缩小地理编码范围。
+3. `local_server.yaml` 中的 `business.navigation.amap.default_origin`：没有端侧定位时的临时起点坐标，格式为 `经度,纬度`。
+4. `local_server.yaml` 中的 `business.navigation.amap.disable_mock_fallback=true`：可选，真实调用失败时不回退 mock，便于暴露鉴权、配额和网络问题。
 
 ### 3.2 Tool
 
@@ -63,7 +70,7 @@ actor User as user
 participant "Agent / 调试入口" as agent
 participant "PrepareNavigationTool" as tool
 participant "DeviceGroupContext" as ctx
-participant "MockAmapMcpAdapter" as amap
+participant "AmapMcpAdapter" as amap
 participant "SDK TaskRuntime" as runtime
 participant "NavigationTask" as task
 participant "Glass Notification" as glass
@@ -133,7 +140,7 @@ uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 已完成：
 
 1. 导航业务目录和 README。
-2. `MockAmapMcpAdapter`。
+2. `AmapMcpAdapter`，支持真实高德 Web 服务和 mock fallback。
 3. `PrepareNavigationTool`。
 4. `NavigationTask`。
 5. 宿主装配。
@@ -142,7 +149,7 @@ uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 
 未完成：
 
-1. 真实 AMap adapter 和真实 key/config。
+1. 官方 AMap MCP Server stdio/SSE 进程接入；当前 SDK 只有业务 adapter 扩展面。
 2. 真实多轮 Agent 澄清话术。
 3. 真实 iOS 红绿灯插件与导航任务的端到端联合验证。
 4. 复杂最后 10 米策略。
@@ -153,12 +160,14 @@ uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 已执行：
 
 ```bash
-python -m compileall capabilities host/server/main.py
-uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. uv run python -m pytest openaiglass-for-blind/tests -q
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. uv run python -m compileall openaiglass-for-blind/capabilities openaiglass-for-blind/host/server
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. uv run openaiglass.sdk.preflight --app-root openaiglass-for-blind --report openaiglass-for-blind/logs/sdk-preflight-current.json
 ```
 
 结果：
 
-1. 编译检查通过。
-2. 组件级场景回放入口已删除；当前统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。
-3. 当前导航仍未接入真实 AMap 服务、偏航重算和最后 10 米策略；进入真机产品验证前应先补真实地图 adapter 和更完整的视觉事件协议。
+1. 业务能力单元测试通过。
+2. 编译检查通过。
+3. SDK 预检 8 项通过 7 项，失败项为 SDK glass-playback 在当前 Python 3.13 环境缺少 `audioop`，与导航业务代码无关。
+4. 当前导航已支持配置真实高德 Web 服务，但仍未接入官方 MCP Server、偏航重算和最后 10 米策略；进入真机产品验证前应继续补更完整的视觉事件协议。

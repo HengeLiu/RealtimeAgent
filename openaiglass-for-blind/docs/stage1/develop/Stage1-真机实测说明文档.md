@@ -404,13 +404,14 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 1. 服务端调用 `start_timer`。
 2. SDK 创建 `timer_task`。
 3. 眼镜端收到“计时器已开始”通知。
-4. 取消时收到“计时器已取消”通知。
+4. 自然到点时收到“时间到了”或用户自定义完成提示。
+5. 取消时收到“计时器已取消”通知。
 
 当前边界：
 
-1. 业务侧没有私建计时线程。
-2. 离线回放用 `timer.tick` 和 `timer.finished` 推进。
-3. 真机自然到点如果没有 SDK 通用定时事件调度，可能只能验证创建、查询和取消，不能验证自动完成。这不是业务侧应绕过实现的问题。
+1. 当前自然到点由业务侧轻量 `threading.Timer` 验证。
+2. 离线回放仍可用 `timer.tick` 和 `timer.finished` 推进。
+3. SDK 尚未提供生产级通用定时调度和“到点先回流 Agent 决策”的公开接口，详见阻塞点文档。
 
 如果真机测试确认缺少自然到点事件调度，应把它作为 SDK 改进建议记录到：
 
@@ -437,9 +438,29 @@ docs/stage1/develop/架构阻塞点说明与改进建议.md
 
 当前边界：
 
-1. AMap 当前是业务侧 mock adapter。
-2. 没有真实 AMap key/config 时，不验证真实地图服务。
+1. AMap 当前是业务侧 adapter；在 `config/.env` 配置 `AMAP_API_KEY`，并在 `local_server.yaml` 配置 `business.navigation.amap.default_origin` 后调用真实高德 Web 服务。
+2. 没有真实 AMap key/config 时，自动回退 mock，不验证真实地图服务。
 3. POI 候选确认已在离线回放验证，真机多轮 Agent 澄清话术仍需后续实测。
+
+### 13.3 search 搜索工具实测
+
+建议通过语音触发：
+
+```text
+帮我查一下大模型是什么
+```
+
+预期现象：
+
+1. 服务端调用 `search_web`。
+2. MCP trace 中出现 `web.search`。
+3. Agent 基于搜索结果标题、摘要和链接组织回答。
+
+当前边界：
+
+1. 正式搜索 provider 为博查 AI Search，需在 `local_server.yaml` 配置 `business.search.web.provider=bocha`，并在 `config/.env` 配置 `BOCHA_SEARCH_API_KEY`。
+2. 未配置 API Key 且 provider 为 `auto` 时，会回退 DuckDuckGo HTML，仅用于本地开发验证。
+3. 当前不抓取全文网页正文。
 
 ### 13.2 视觉事件最小策略
 

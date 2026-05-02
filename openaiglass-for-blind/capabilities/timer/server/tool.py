@@ -15,6 +15,10 @@ class StartTimerInput(BaseModel):
     duration_seconds: int = Field(description="用户要求计时的时长，必须换算成秒，例如 5 分钟填写 300。")
     label: str = Field(default="计时器", description="给这个计时器起的名称；用户没有命名时使用默认值“计时器”。")
     notify_text: str = Field(default="", description="计时结束时要播报给用户的话；用户没有指定时可以留空。")
+    enable_background_timer: bool = Field(
+        default=True,
+        description="是否在服务端启动真实倒计时；正常语音使用保持 true，单元测试可设为 false。",
+    )
 
 
 class StartTimerOutput(BaseModel):
@@ -74,6 +78,7 @@ class StartTimerTool(BaseTool):
                 "duration_seconds": duration_seconds,
                 "label": label,
                 "notify_text": notify_text,
+                "enable_background_timer": bool(input_data.get("enable_background_timer", True)),
             },
         )
         return CapabilityResult.success(

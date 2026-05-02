@@ -4,7 +4,7 @@
 
 Phase F 的目标是用真实业务能力验证 SDK `backend-task-core`：业务侧只实现 `start_timer` Tool 和 `timer_task`，计时器创建、状态查询、取消、事件分发和完成通知都走 SDK 托管任务运行时。
 
-本实现不在业务侧创建线程，不绕过 SDK 任务运行时。计时结束由离线回放时间轴或未来真实运行时事件触发。
+当前实现为了验证自然到点效果，在业务侧 `timer_task` 内使用轻量 `threading.Timer` 触发完成事件；任务仍由 SDK 创建、查询、取消和保存状态。严格的生产级定时调度、进程重启恢复、多实例租约，以及“到点事件必须先回流 Agent 决策”仍需要 SDK 提供公共能力。
 
 ## 2. 实现范围
 
@@ -34,8 +34,9 @@ Phase F 的目标是用真实业务能力验证 SDK `backend-task-core`：业务
 
 1. `on_start` 进入 `running`，记录总时长和剩余时长，并提交启动通知。
 2. `timer.tick` 更新 `remaining_seconds`。
-3. `timer.finished` 提交完成通知并 `complete`。
-4. `on_cancel` 进入 `cancelled` 并提交取消通知。
+3. `enable_background_timer=true` 时，业务侧轻量倒计时会在到点后触发 `timer.finished`。
+4. `timer.finished` 提交完成通知并 `complete`。
+5. `on_cancel` 进入 `cancelled`、取消后台倒计时并提交取消通知。
 
 ## 4. 流程图
 
@@ -58,7 +59,9 @@ ctx -> runtime: create_task()
 runtime -> task: on_start()
 task -> glass: submit_notification("计时器已开始")
 agent -> runtime: dispatch_event("timer.tick")
-agent -> runtime: dispatch_event("timer.finished")
+... 到点 ...
+task -> task: background timer
+task -> runtime: timer.finished
 runtime -> task: on_event()
 task -> glass: submit_notification("时间到了")
 task -> runtime: complete(result)
@@ -81,6 +84,7 @@ task -> runtime: complete(result)
 2. 失败路径不创建任务，返回 `invalid_input`。
 3. 取消路径能进入 `cancelled` 并通知用户。
 4. 事件推进路径能更新任务数据，便于后续查询。
+5. 后台倒计时到点后任务能进入 `completed` 并提交通知。
 
 ## 6. 联调说明
 
@@ -92,7 +96,15 @@ task -> runtime: complete(result)
 4. 服务端观察 `timer_task` 创建、状态变化和通知记录。
 5. 眼镜端观察启动通知、取消通知或完成通知。
 
-当前业务侧没有私建计时线程。真实时间推进如果需要由 SDK 统一调度，应由 SDK 团队提供通用定时事件能力后再接入。
+当前业务侧倒计时只服务最小验证，不具备进程重启恢复和多实例防重能力。真实时间推进如果需要由 SDK 统一调度，应由 SDK 团队提供通用定时事件能力后再接入。
+
+2026-05-02 设备级验证补充：
+
+1. 使用 `register_only.json` 让 `glass-playback` 注册眼镜并保持语音会话在线。
+2. 临时调试入口创建 3 秒 `timer_task`，任务成功进入 `running`。
+3. 计时到点后，`/api/runtime/devices` 中 `device_groups.notification_count` 增加，说明 `timer_task` 已调用 `DeviceGroupContext.submit_notification(...)`。
+4. 服务端日志和眼镜回放产物中没有出现 `assistant.reply` / `actuator.audio.play`，说明通知没有进入真实语音播报链路。
+5. 根因是当前 SDK 未把 `DeviceGroupRuntime.notification_adapter` 绑定到 `VoiceRuntime` 的通知播报入口；该问题已同步到 `架构阻塞点说明与改进建议.md`。
 
 ## 7. 当前测试结果
 
@@ -104,3 +116,13 @@ uv run openaiglass.sdk.preflight --report logs/sdk-preflight-current.json
 ```
 
 当前组件级场景回放入口已删除；后续统一使用 `glass-playback`、`phone-mock` 和 SDK 预检做设备级验证。
+
+本轮已执行：
+
+```bash
+PYTHONPATH=openaiglass-sdk/server-python:openaiglass-for-blind:. uv run python -m pytest openaiglass-for-blind/tests/test_capabilities_unit.py -q
+```
+
+结果：通过，覆盖后台倒计时自然完成路径。
+
+设备级语音播报验证结果：未通过。计时器到点通知被记录，但用户暂时无法收到语音播报。
