@@ -85,6 +85,7 @@ class SegmentBuffer:
     channels: int
     codec: str
     started_at_ms: int
+    start_trigger: str = "unknown"
     payload: bytearray = field(default_factory=bytearray)
     frame_count: int = 0
     last_seq: int | None = None
@@ -3186,6 +3187,9 @@ class VoiceRuntime:
 
             stream_id = str(payload.get("stream_id", "")).strip()
             segment_id = str(payload.get("segment_id", "")).strip()
+            start_trigger = str(payload.get("trigger") or "").strip()
+            if not start_trigger:
+                start_trigger = "wake_word" if isinstance(payload.get("wake_word"), dict) else "unknown"
             if not stream_id or not segment_id:
                 raise build_error(
                     ErrorCode.INVALID_MESSAGE,
@@ -3201,6 +3205,7 @@ class VoiceRuntime:
                 channels=int(payload.get("channels", SERVER_CHANNELS)),
                 codec=str(payload.get("codec", "pcm16")).strip() or "pcm16",
                 started_at_ms=int(time.time() * 1000),
+                start_trigger=start_trigger,
             )
             effective_voice_input_mode = self._settings.effective_voice_input_mode()
             if effective_voice_input_mode == "asr_text":
@@ -4106,6 +4111,106 @@ class VoiceRuntime:
             return fallback_text, "omni_fallback"
         return "", "unavailable"
 
+    def _discard_utterance_photo(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> None:
+        """丢弃当前语音段关联的自动抓拍。
+
+        主要逻辑：
+        1. 从自动照片缓存中找到当前 `segment_id` 对应的记录。
+        2. 将记录标记为已消费，避免空语音轮次的图片进入下一次真实对话。
+        3. 缓存不存在或丢弃失败时仅写 DEBUG 日志，不影响语音状态恢复。
+
+        参数：
+            device_id/session_id: 当前设备和会话编号。
+            segment: 需要丢弃自动照片的语音段。
+
+        返回值：
+            无。
+        """
+
+        try:
+            store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
+            discarded = store.discard_photo(
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment.segment_id,
+            )
+            if discarded:
+                log_debug(
+                    self._logger,
+                    (
+                        "已丢弃空语音段自动抓拍 "
+                        f"segment_id={segment.segment_id} input_stream_id={segment.stream_id}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id),
+                )
+        except Exception as exc:  # noqa: BLE001 - 丢弃照片失败不应阻断语音状态恢复
+            log_debug(
+                self._logger,
+                (
+                    "丢弃空语音段自动抓拍失败 "
+                    f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} reason={exc!r}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+
+    def _should_suppress_empty_continuous_segment(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> bool:
+        """判断连续 VAD 触发的空语音段是否应在进模型前丢弃。
+
+        主要逻辑：
+        1. 只处理端侧明确标记为 `continuous_vad` 的免唤醒后续段。
+        2. 等待旁路 ASR 给出最终结果；如果结果仍为空，认为这轮不是用户真实语音。
+        3. 丢弃本轮自动抓拍并关闭预连接 Omni 会话，避免触发“空语音 + 图片”的自循环。
+
+        参数：
+            device_id/session_id: 当前设备和会话编号。
+            segment: 当前已结束的语音段。
+
+        返回值：
+            需要抑制时返回 `True`。
+        """
+
+        if segment.start_trigger != "continuous_vad":
+            return False
+        if segment.sidecar_transcript_done.wait(1.5):
+            transcript = segment.sidecar_transcript_text.strip()
+            if transcript:
+                return False
+        self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
+        if segment.omni_realtime_session is not None:
+            try:
+                segment.omni_realtime_session.close()
+            except Exception as exc:  # noqa: BLE001 - 关闭预连接失败只影响资源回收
+                log_debug(
+                    self._logger,
+                    (
+                        "关闭空语音段 Omni Realtime 预连接失败 "
+                        f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} reason={exc!r}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id),
+                )
+        log_info(
+            self._logger,
+            (
+                "已抑制连续 VAD 空语音段 "
+                f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
+                f"duration_ms={segment.duration_ms()} audio_bytes={len(segment.payload)}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+        return True
+
     def _schedule_sidecar_transcript_backfill(
         self,
         *,
@@ -4443,6 +4548,15 @@ class VoiceRuntime:
                         segment=segment,
                         input_wav=input_wav,
                     )
+                    if self._should_suppress_empty_continuous_segment(
+                        device_id=device_id,
+                        session_id=session_id,
+                        segment=segment,
+                    ):
+                        with self._lock:
+                            if controller.state == "model_running":
+                                controller.state = "listening"
+                        return
                 if (
                     segment.omni_realtime_session is not None
                     and segment.omni_realtime_prepared is not None

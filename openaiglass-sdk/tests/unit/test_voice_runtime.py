@@ -2052,6 +2052,115 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         assert controller.current_segment is not None
         self.assertIsNone(controller.current_segment.streaming_asr_session)
 
+    def test_on_segment_started_records_trigger_source(self) -> None:
+        """测试目标：验证服务端会记录眼镜上报的语音段触发来源。
+
+        测试方法：
+        1. 构造一个最小 `VoiceRuntime` 并打开语音会话。
+        2. 上报带 `trigger=continuous_vad` 的 `sensor.audio.segment.started`。
+        3. 读取当前 `SegmentBuffer` 内部状态。
+
+        预期结果：
+        1. 当前语音段记录为连续 VAD 触发。
+        2. 后续空转写抑制逻辑可以基于该字段判断是否进入模型。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+
+        runtime.on_segment_started(
+            device_id="glass-001",
+            session_id="sess-test",
+            payload={
+                "stream_id": "stream-test",
+                "segment_id": "seg-test",
+                "sample_rate": 16000,
+                "channels": 1,
+                "codec": "pcm16",
+                "trigger": "continuous_vad",
+            },
+        )
+
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        assert controller.current_segment is not None
+        self.assertEqual(controller.current_segment.start_trigger, "continuous_vad")
+
+    def test_empty_continuous_vad_segment_is_suppressed_before_model(self) -> None:
+        """测试目标：验证连续 VAD 触发的空语音段不会进入 Omni Realtime 回复链路。
+
+        测试方法：
+        1. 构造一个连续 VAD 触发的 `SegmentBuffer`。
+        2. 注入返回空文本的旁路 ASR 和调用即失败的 Omni 会话。
+        3. 直接执行语音模型流水线。
+
+        预期结果：
+        1. 旁路 ASR 返回空文本后，本轮被抑制。
+        2. Omni `finish` 不会被调用，避免发送 `assistant.reply` 和播放流。
+        3. 控制器状态恢复为 `listening`。
+        """
+
+        class _EmptySidecarAsrSession:
+            def finish(self) -> str:
+                return ""
+
+            def metrics(self) -> dict[str, int | None]:
+                return {"audio_frame_count": 1}
+
+        class _OmniSessionShouldNotFinish:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def finish(self, **_kwargs):
+                raise AssertionError("empty continuous VAD segment should be suppressed before Omni finish")
+
+            def close(self) -> None:
+                self.closed = True
+
+        sent_messages: list[str] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(
+                voice_reply_mode="omni_realtime",
+                voice_asr_mode="realtime",
+                dashscope_api_key="demo-key",
+            ),
+            send_control_message=lambda _device_id, _semantic, name, *_args, **_kwargs: sent_messages.append(name),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        controller.state = "model_running"
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-test",
+            segment_id="seg-test",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="continuous_vad",
+            sidecar_asr_session=_EmptySidecarAsrSession(),
+            omni_realtime_session=_OmniSessionShouldNotFinish(),
+        )
+        segment.payload.extend(b"\x00\x00" * 320)
+
+        runtime._run_model_pipeline(  # noqa: SLF001 - 单测覆盖空连续 VAD 抑制路径
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+        )
+
+        self.assertTrue(segment.sidecar_transcript_done.is_set())
+        self.assertEqual(segment.sidecar_transcript_source, "sidecar_realtime_asr_empty")
+        assert isinstance(segment.omni_realtime_session, _OmniSessionShouldNotFinish)
+        self.assertTrue(segment.omni_realtime_session.closed)
+        self.assertNotIn("assistant.reply", sent_messages)
+        self.assertNotIn("actuator.audio.play", sent_messages)
+        self.assertEqual(controller.state, "listening")
+
     def test_omni_mode_prestreams_realtime_audio_direct_session(self) -> None:
         """测试目标：验证 Omni 模式会在语音段开始时建立原生字节流会话。
 

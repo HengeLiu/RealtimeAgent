@@ -561,11 +561,11 @@ static bool payload_requests_omni_semantic_dialog(const cJSON *payload)
            strcmp(owner->valuestring, "omni_realtime") == 0;
 }
 
-static void send_audio_segment_started_message(const char *segment_id)
+static void send_audio_segment_started_message(const char *segment_id, bool started_by_wake_word)
 {
     cJSON *payload = cJSON_CreateObject();
-    cJSON *wake_word = cJSON_CreateObject();
-    if (payload == NULL || wake_word == NULL) {
+    cJSON *wake_word = started_by_wake_word ? cJSON_CreateObject() : NULL;
+    if (payload == NULL || (started_by_wake_word && wake_word == NULL)) {
         cJSON_Delete(payload);
         cJSON_Delete(wake_word);
         ESP_LOGE(TAG, "构造 sensor.audio.segment.started 失败");
@@ -587,13 +587,16 @@ static void send_audio_segment_started_message(const char *segment_id)
     cJSON_AddNumberToObject(payload, "sample_rate", SR_SAMPLE_RATE_HZ);
     cJSON_AddNumberToObject(payload, "channels", 1);
     cJSON_AddStringToObject(payload, "codec", "pcm16");
-    cJSON_AddStringToObject(wake_word, "engine", "esp-sr-wakenet");
-    cJSON_AddStringToObject(
-        wake_word,
-        "model",
-        s_sr_ctx.wake_model_name[0] != '\0' ? s_sr_ctx.wake_model_name : "unknown"
-    );
-    cJSON_AddItemToObject(payload, "wake_word", wake_word);
+    cJSON_AddStringToObject(payload, "trigger", started_by_wake_word ? "wake_word" : "continuous_vad");
+    if (wake_word != NULL) {
+        cJSON_AddStringToObject(wake_word, "engine", "esp-sr-wakenet");
+        cJSON_AddStringToObject(
+            wake_word,
+            "model",
+            s_sr_ctx.wake_model_name[0] != '\0' ? s_sr_ctx.wake_model_name : "unknown"
+        );
+        cJSON_AddItemToObject(payload, "wake_word", wake_word);
+    }
 
     send_control_message_json(
         build_control_message_json("notify", "sensor.audio.segment.started", s_current_session_id, payload),
@@ -2520,7 +2523,7 @@ static void sr_pipeline_task(void *arg)
                     speech_frames
                 );
             }
-            send_audio_segment_started_message(segment.segment_id);
+            send_audio_segment_started_message(segment.segment_id, start_by_wake_word);
             flush_pre_roll_frames(
                 pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
@@ -2796,7 +2799,14 @@ static void handle_control_message(const char *data, int data_len)
     }
 
     if (strcmp(name->valuestring, "voice.realtime.session.open") == 0) {
-        s_realtime_semantic_dialog_enabled = payload_requests_omni_semantic_dialog(payload);
+        bool semantic_dialog_requested = payload_requests_omni_semantic_dialog(payload);
+        /*
+         * 当前 ESP32 固件没有端侧 AEC，只能把服务端的全双工实时语音请求降级为半双工。
+         * 半双工播放结束后的免唤醒连续 VAD 容易把扬声器残留、环境噪声或用户未说话的空段
+         * 当成下一轮请求，进而触发“空语音 + 自动抓拍”的自循环。因此在该降级模式下明确关闭
+         * 端侧连续对话窗口，要求后续轮次重新通过 WakeNet 唤醒。
+         */
+        s_realtime_semantic_dialog_enabled = false;
         deactivate_continuous_dialog("realtime_session_open");
         if (cJSON_IsString(session_id) && session_id->valuestring != NULL) {
             strlcpy(s_current_session_id, session_id->valuestring, sizeof(s_current_session_id));
@@ -2808,8 +2818,9 @@ static void handle_control_message(const char *data, int data_len)
         clear_reply_wait_state();
         ESP_LOGI(
             TAG,
-            "收到 voice.realtime.session.open，当前固件降级为半双工: session_id=%s semantic_continuous=%d",
+            "收到 voice.realtime.session.open，当前固件降级为半双工: session_id=%s semantic_continuous_requested=%d semantic_continuous_enabled=%d",
             s_current_session_id,
+            semantic_dialog_requested,
             s_realtime_semantic_dialog_enabled
         );
         send_realtime_session_opened_message(s_current_session_id);
