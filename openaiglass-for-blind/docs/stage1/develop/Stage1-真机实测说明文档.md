@@ -410,11 +410,11 @@ PYTHONPATH=../openaiglass-sdk/server-python:. ../.venv/bin/python scripts/start_
 
 当前边界：
 
-1. 当前自然到点由业务侧轻量 `threading.Timer` 验证。
-2. 离线回放仍可用 `timer.tick` 和 `timer.finished` 推进。
-3. SDK 尚未提供生产级通用定时调度和“到点先回流 Agent 决策”的公开接口，详见阻塞点文档。
+1. 当前自然到点已使用 SDK v84 `TaskContext.schedule_event(...)` 验证。
+2. `timer.finished` 完成任务后会按 `terminal_event_requires_agent_decision=True` 先回流 Agent，再由 Agent 触发语音播报。
+3. 2026-05-02 已用临时合成音频“帮我设置一个三秒钟的计时器”完成设备级回放验证，眼镜回放端收到到点后的 `assistant.reply` 和 `actuator.audio.play`。
 
-如果真机测试确认缺少自然到点事件调度，应把它作为 SDK 改进建议记录到：
+如果后续真机测试发现多实例、重启恢复或长时间计时漂移问题，应把它作为 SDK 改进建议记录到：
 
 ```text
 docs/stage1/develop/架构阻塞点说明与改进建议.md

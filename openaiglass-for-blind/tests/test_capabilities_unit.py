@@ -336,7 +336,8 @@ class TimerCapabilityTests(unittest.TestCase):
         task.on_event(context, TaskEvent(name="timer.finished", payload={}))
         self.assertEqual(context.state, "completed")
         self.assertEqual(context.result["label"], "厨房计时")
-        self.assertEqual(group.notifications[-1], {"text": "关火", "priority": "high"})
+        self.assertEqual(context.result["message"], "关火")
+        self.assertEqual(group.notifications[-1], {"text": "厨房计时已开始，时长 10 秒", "priority": "normal"})
 
         cancel_context = TaskContext(
             task_id="timer-002",
@@ -348,28 +349,51 @@ class TimerCapabilityTests(unittest.TestCase):
         self.assertEqual(cancel_context.state, "cancelled")
         self.assertEqual(group.notifications[-1], {"text": "备用计时已取消", "priority": "normal"})
 
-    def test_timer_task_background_finish_notifies_user(self) -> None:
-        """测试目标：计时器到点后应由后台倒计时推进完成并通知用户。
+    def test_timer_task_uses_sdk_scheduler(self) -> None:
+        """测试目标：计时器启动时应使用 SDK 调度器安排到点事件。
 
-        测试方法：启动 1 秒计时器，等待后台 Timer 触发。
-        预期结果：任务进入 completed，最后一条通知为自定义完成提示。
+        测试方法：给 TaskContext 注入 fake scheduler 后启动 1 秒计时器。
+        预期结果：调度参数正确，任务完成时只写入 message，终态交给 SDK 回流 Agent。
         """
 
-        import time
-
         group = FakeDeviceGroup()
+        schedules: list[dict[str, Any]] = []
+
+        def fake_scheduler(**kwargs: Any) -> dict[str, Any]:
+            """记录 SDK 调度请求。"""
+
+            schedule = {"schedule_id": "sched-test", **kwargs}
+            schedules.append(schedule)
+            return schedule
+
         context = TaskContext(
             task_id="timer-bg-001",
             input={"duration_seconds": 1, "label": "测试计时", "notify_text": "测试时间到了"},
             device_group=group,
+            scheduler=fake_scheduler,
         )
 
         TimerTask().on_start(context)
-        time.sleep(1.2)
+        self.assertEqual(len(schedules), 1)
+        self.assertEqual(schedules[0]["task_id"], "timer-bg-001")
+        self.assertEqual(schedules[0]["delay_ms"], 1000)
+        self.assertEqual(schedules[0]["event_name"], "timer.finished")
+        self.assertEqual(context.data["finish_schedule"]["schedule_id"], "sched-test")
 
+        TimerTask().on_event(
+            context,
+            TaskEvent(
+                name="timer.finished",
+                payload={"notify_text": "测试时间到了"},
+                source="timer_task",
+            ),
+        )
         self.assertEqual(context.state, "completed")
         self.assertEqual(context.result["finished"], True)
-        self.assertEqual(group.notifications[-1], {"text": "测试时间到了", "priority": "high"})
+        self.assertEqual(context.result["message"], "测试时间到了")
+        self.assertEqual(TimerTask.terminal_event_requires_agent_decision, True)
+        self.assertEqual(TimerTask.terminal_event_allow_direct_notify, False)
+        self.assertEqual(TimerTask.terminal_event_priority, "high")
 
 
 class SearchCapabilityTests(unittest.TestCase):
