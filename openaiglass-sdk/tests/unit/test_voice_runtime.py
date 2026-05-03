@@ -2234,6 +2234,169 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertNotIn("actuator.audio.play", sent_messages)
         self.assertEqual(controller.state, "listening")
 
+    def test_continuous_vad_assistant_echo_is_ignored_before_model(self) -> None:
+        """测试目标：验证连续 VAD 把助手播报回声转成文本时不会进入模型。
+
+        测试方法：
+        1. 在短期上下文中放入上一轮助手回复。
+        2. 构造一个连续 VAD 语音段，旁路 ASR 返回助手回复中的短文本。
+        3. 注入调用即失败的 Omni 会话，确保回声不会继续触发看图回复。
+
+        预期结果：
+        1. 本轮被系统层意图裁决为忽略。
+        2. 服务端下发 `voice.dialog.close` 关闭连续窗口。
+        3. 不发送 `assistant.reply` 或 `actuator.audio.play`。
+        """
+
+        class _EchoSidecarAsrSession:
+            def finish(self) -> str:
+                return "文刀"
+
+            def metrics(self) -> dict[str, int | None]:
+                return {"audio_frame_count": 2}
+
+        class _OmniSessionShouldNotFinish:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def finish(self, **_kwargs):
+                raise AssertionError("assistant echo should not reach Omni finish")
+
+            def close(self) -> None:
+                self.closed = True
+
+        sent_messages: list[str] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(
+                voice_reply_mode="omni_realtime",
+                voice_asr_mode="realtime",
+                dashscope_api_key="demo-key",
+            ),
+            send_control_message=lambda _device_id, _semantic, name, *_args, **_kwargs: sent_messages.append(name),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        controller.state = "model_running"
+        controller.message_context.append(
+            MessageEntry(role="assistant", kind="voice", text="文刀，我看到你面前是白色的窗帘。")
+        )
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-echo",
+            segment_id="seg-echo",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="continuous_vad",
+            sidecar_asr_session=_EchoSidecarAsrSession(),
+            omni_realtime_session=_OmniSessionShouldNotFinish(),
+        )
+        segment.payload.extend(b"\x01\x00" * 640)
+
+        runtime._run_model_pipeline(  # noqa: SLF001 - 单测覆盖系统层意图裁决
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+        )
+
+        self.assertEqual(segment.turn_intent, "ignore")
+        self.assertEqual(segment.turn_intent_reason, "assistant_echo")
+        assert isinstance(segment.omni_realtime_session, _OmniSessionShouldNotFinish)
+        self.assertTrue(segment.omni_realtime_session.closed)
+        self.assertIn("voice.dialog.close", sent_messages)
+        self.assertNotIn("assistant.reply", sent_messages)
+        self.assertNotIn("actuator.audio.play", sent_messages)
+        self.assertEqual(controller.state, "listening")
+
+    def test_voice_turn_intent_requires_photo_only_for_visual_query(self) -> None:
+        """测试目标：验证系统层意图裁决只为视觉问答打开照片输入。
+
+        测试方法：
+        1. 直接构造普通语音和视觉问答两类文本。
+        2. 调用 SDK 内部意图裁决函数。
+        3. 检查照片开关和意图类型。
+
+        预期结果：
+        1. “今天天气怎么样”不会触发自动照片。
+        2. “帮我看看前面有什么”会触发自动照片。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-intent",
+            segment_id="seg-intent",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="wake_word",
+        )
+
+        voice_decision = runtime._decide_voice_turn_intent(  # noqa: SLF001 - 单测覆盖 SDK 意图裁决
+            controller=controller,
+            segment=segment,
+            transcript="今天天气怎么样",
+        )
+        visual_decision = runtime._decide_voice_turn_intent(  # noqa: SLF001 - 单测覆盖 SDK 意图裁决
+            controller=controller,
+            segment=segment,
+            transcript="帮我看看前面有什么",
+        )
+
+        self.assertEqual(voice_decision.intent, "voice_query")
+        self.assertFalse(voice_decision.requires_photo)
+        self.assertEqual(visual_decision.intent, "visual_query")
+        self.assertTrue(visual_decision.requires_photo)
+
+    def test_short_pending_sidecar_segment_is_ignored_before_omni(self) -> None:
+        """测试目标：验证短误触发语音段不会在旁路 ASR 未完成时抢先提交 Omni。
+
+        测试方法：
+        1. 构造一个 1 秒左右的短语音段。
+        2. 不设置旁路 ASR 完成事件，模拟 ASR 仍在等待或卡住。
+        3. 调用提交 Omni 前的系统层意图裁决。
+
+        预期结果：
+        1. 该短段被裁决为忽略。
+        2. 需要关闭连续对话窗口，避免继续自循环。
+        """
+
+        runtime = VoiceRuntime(
+            settings=ServerSettings(dashscope_api_key="demo-key"),
+            send_control_message=lambda *_args, **_kwargs: None,
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-short",
+            segment_id="seg-short",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="wake_word",
+        )
+        segment.payload.extend(b"\x00\x00" * 8000)
+
+        with patch("runtime.voice_runtime.VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS", 0.01):
+            decision = runtime._decide_raw_audio_turn_intent_before_omni(  # noqa: SLF001
+                controller=controller,
+                segment=segment,
+            )
+
+        self.assertEqual(decision.intent, "ignore")
+        self.assertEqual(decision.reason, "short_segment_without_asr")
+        self.assertTrue(decision.close_continuous_dialog)
+
     def test_omni_mode_prestreams_realtime_audio_direct_session(self) -> None:
         """测试目标：验证 Omni 模式会在语音段开始时建立原生字节流会话。
 

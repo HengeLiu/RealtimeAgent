@@ -20,11 +20,12 @@
 
 迭代记录：
 
-1. [SDK v86 迭代记录](./stage2/iteration-v86.md)：真实眼镜恢复受限连续对话，支持停止指令关闭窗口和播放中唤醒词打断。
-2. [SDK v85 迭代记录](./stage2/iteration-v85.md)：真实眼镜半双工降级下关闭免唤醒连续 VAD，并在服务端抑制连续 VAD 空语音段。
-3. [SDK v84 迭代记录](./stage2/iteration-v84.md)：外部 MCP Server client、Task 通用调度、终态回流策略和设备组通知播报链路修复。
-4. [SDK v82 迭代记录](./stage2/iteration-v82.md)：服务端配置分层与 YAML 化。
-5. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
-6. [全部迭代记录](./stage2/)
+1. [SDK v87 迭代记录](./stage2/iteration-v87.md)：增加语音轮次意图裁决，阻断非视觉问题自动抓拍和短误触发自回复。
+2. [SDK v86 迭代记录](./stage2/iteration-v86.md)：真实眼镜恢复受限连续对话，支持停止指令关闭窗口和播放中唤醒词打断。
+3. [SDK v85 迭代记录](./stage2/iteration-v85.md)：真实眼镜半双工降级下关闭免唤醒连续 VAD，并在服务端抑制连续 VAD 空语音段。
+4. [SDK v84 迭代记录](./stage2/iteration-v84.md)：外部 MCP Server client、Task 通用调度、终态回流策略和设备组通知播报链路修复。
+5. [SDK v82 迭代记录](./stage2/iteration-v82.md)：服务端配置分层与 YAML 化。
+6. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
+7. [全部迭代记录](./stage2/)
 
 盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。

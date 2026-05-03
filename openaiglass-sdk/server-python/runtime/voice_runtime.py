@@ -37,6 +37,8 @@ MODEL_OUTPUT_SAMPLE_RATE_HZ = 24000
 PLAYBACK_QUEUE_MAX = 256
 UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
 OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
+VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS = 3.0
+VOICE_TURN_SHORT_PENDING_ASR_MAX_MS = 1800
 CONVERSATION_STOP_PHRASES = (
     "结束对话",
     "停止对话",
@@ -48,6 +50,48 @@ CONVERSATION_STOP_PHRASES = (
     "先别说",
     "静音",
 )
+VISION_INTENT_KEYWORDS = (
+    "看",
+    "看看",
+    "看下",
+    "看一下",
+    "识别",
+    "拍",
+    "照片",
+    "图片",
+    "画面",
+    "镜头",
+    "前面",
+    "前方",
+    "周围",
+    "旁边",
+    "左边",
+    "右边",
+    "身边",
+    "这个",
+    "那个",
+    "这里",
+    "那里",
+    "什么东西",
+    "是什么",
+    "红绿灯",
+    "斑马线",
+    "障碍",
+    "路况",
+)
+CONTINUOUS_DIALOG_FILLER_TEXTS = {
+    "嗯",
+    "啊",
+    "哦",
+    "噢",
+    "呃",
+    "额",
+    "喂",
+    "好",
+    "好的",
+    "没事",
+    "没有",
+}
 
 
 def _format_log_text(text: str, *, max_chars: int = 240) -> str:
@@ -86,6 +130,23 @@ class MessageEntry:
 
 
 @dataclass(slots=True)
+class VoiceTurnIntentDecision:
+    """单轮语音的系统层意图裁决结果。
+
+    主要属性：
+    1. `intent`：当前轮系统意图，取值包括普通语音、视觉问答、停止对话和忽略。
+    2. `reason`：裁决原因，用于日志和回放分析。
+    3. `requires_photo`：是否允许本轮触发并上传自动照片。
+    4. `close_continuous_dialog`：是否应关闭端侧连续对话窗口。
+    """
+
+    intent: str
+    reason: str
+    requires_photo: bool = False
+    close_continuous_dialog: bool = False
+
+
+@dataclass(slots=True)
 class SegmentBuffer:
     """单轮上行音频缓冲。"""
 
@@ -112,6 +173,8 @@ class SegmentBuffer:
     omni_realtime_prepared: PreparedNativeAudioReply | None = None
     agent_turn: AgentTurn | None = None
     utterance_photo_capture_started: bool = False
+    turn_intent: str = "unknown"
+    turn_intent_reason: str = ""
 
     def append_frame(self, frame: MediaFrame, *, max_bytes: int) -> None:
         header = frame.header
@@ -3232,20 +3295,10 @@ class VoiceRuntime:
                 )
             controller.current_segment = segment
             controller.state = "receiving_segment"
-            should_capture_photo_early = (
-                effective_voice_input_mode == "raw_audio" and self._settings.omni_turn_detection_enabled()
-            )
             should_start_omni_realtime = (
                 effective_voice_input_mode == "raw_audio" and self._settings.voice_reply_mode == "omni_realtime"
             )
             should_start_asr_sidecar = should_start_omni_realtime
-        if should_capture_photo_early:
-            self._start_utterance_photo_capture(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
-                reason="realtime_semantic_turn_started",
-            )
         if should_start_omni_realtime:
             self._start_agent_core_omni_realtime_segment_session(
                 device_id=device_id,
@@ -4240,6 +4293,284 @@ class VoiceRuntime:
             return False
         return any(phrase in normalized for phrase in CONVERSATION_STOP_PHRASES)
 
+    def _normalize_voice_intent_text(self, text: str) -> str:
+        """归一化语音意图文本。
+
+        主要逻辑：
+        1. 去掉空白和常见标点。
+        2. 保留中文和普通字符顺序，便于做确定性关键词判断。
+
+        参数：
+            text: ASR 或 Omni 返回的原始转写文本。
+
+        返回值：
+            可用于意图规则匹配的短文本。
+        """
+
+        return "".join(
+            char
+            for char in text.strip()
+            if char not in " \t\r\n，。！？!?、,.；;：:（）()【】[]“”\"'‘’"
+        )
+
+    def _is_visual_query_text(self, text: str) -> bool:
+        """判断文本是否明确需要当前画面。
+
+        主要逻辑：
+        1. 命中看图、拍照、画面、前方、红绿灯、障碍物等关键词时判为视觉问答。
+        2. 该判断只决定是否上传自动照片，不决定业务 Tool 是否可继续调用摄像头。
+
+        参数：
+            text: 已转写的用户文本。
+
+        返回值：
+            True 表示本轮允许触发并上传自动照片。
+        """
+
+        normalized = self._normalize_voice_intent_text(text)
+        if not normalized:
+            return False
+        return any(keyword in normalized for keyword in VISION_INTENT_KEYWORDS)
+
+    def _is_likely_assistant_echo(self, controller: VoiceSessionController, text: str) -> bool:
+        """判断连续 VAD 文本是否像上一轮助手播报回声。
+
+        主要逻辑：
+        1. 只检查最近几条助手消息。
+        2. 如果短文本完整出现在助手回复里，认为更可能是扬声器回灌，而不是用户新意图。
+
+        参数：
+            controller: 当前设备语音控制器。
+            text: 本轮 ASR 文本。
+
+        返回值：
+            True 表示应按噪声/回声忽略。
+        """
+
+        normalized = self._normalize_voice_intent_text(text)
+        if len(normalized) < 2:
+            return False
+        for entry in reversed(controller.message_context[-4:]):
+            if entry.role != "assistant":
+                continue
+            assistant_text = self._normalize_voice_intent_text(entry.text)
+            if normalized and normalized in assistant_text:
+                return True
+        return False
+
+    def _decide_voice_turn_intent(
+        self,
+        *,
+        controller: VoiceSessionController,
+        segment: SegmentBuffer,
+        transcript: str,
+    ) -> VoiceTurnIntentDecision:
+        """裁决一轮语音是否进入 Agent、是否需要照片。
+
+        主要逻辑：
+        1. 停止指令优先，直接关闭连续对话窗口。
+        2. 连续 VAD 的空文本、语气词和疑似助手回声按噪声忽略，并关闭连续窗口。
+        3. 明确视觉问答才允许上传自动照片。
+        4. 其他文本作为普通语音进入 Agent，但不携带照片。
+
+        参数：
+            controller: 当前设备语音控制器。
+            segment: 当前语音段。
+            transcript: 旁路 ASR 或 Omni 选出的用户文本。
+
+        返回值：
+            `VoiceTurnIntentDecision`，供后续管线控制拍照、回复和会话窗口。
+        """
+
+        normalized = self._normalize_voice_intent_text(transcript)
+        if self._is_conversation_stop_command(transcript):
+            return VoiceTurnIntentDecision(
+                intent="stop_conversation",
+                reason="conversation_stop_command",
+                close_continuous_dialog=True,
+            )
+        if not normalized:
+            return VoiceTurnIntentDecision(
+                intent="ignore",
+                reason="empty_transcript",
+                close_continuous_dialog=True,
+            )
+        if normalized in CONTINUOUS_DIALOG_FILLER_TEXTS:
+            return VoiceTurnIntentDecision(
+                intent="ignore",
+                reason="filler_transcript",
+                close_continuous_dialog=True,
+            )
+        if self._is_likely_assistant_echo(controller, transcript):
+            return VoiceTurnIntentDecision(
+                intent="ignore",
+                reason="assistant_echo",
+                close_continuous_dialog=True,
+            )
+        if segment.start_trigger == "continuous_vad":
+            if len(normalized) == 1:
+                return VoiceTurnIntentDecision(
+                    intent="ignore",
+                    reason="short_continuous_vad",
+                    close_continuous_dialog=True,
+                )
+        if self._is_visual_query_text(transcript):
+            return VoiceTurnIntentDecision(intent="visual_query", reason="visual_keyword", requires_photo=True)
+        return VoiceTurnIntentDecision(intent="voice_query", reason="default_voice")
+
+    def _close_segment_without_reply(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        reason: str,
+        close_continuous_dialog: bool,
+    ) -> None:
+        """结束当前语音段且不进入模型回复。
+
+        主要逻辑：
+        1. 关闭可能已经预连接的 Omni 会话。
+        2. 丢弃本轮自动照片，避免后续轮次误消费。
+        3. 可选下发 `voice.dialog.close`，让眼镜回到必须唤醒词触发的待命状态。
+
+        参数：
+            device_id/session_id: 当前设备和语音会话编号。
+            segment: 当前语音段。
+            reason: 本轮被忽略或关闭的原因。
+            close_continuous_dialog: 是否关闭端侧连续对话窗口。
+        """
+
+        if segment.omni_realtime_session is not None:
+            try:
+                segment.omni_realtime_session.close()
+            except Exception as exc:  # noqa: BLE001 - 清理失败只记录
+                log_debug(
+                    self._logger,
+                    f"关闭忽略语音段 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
+                    LogContext(device_id=device_id, session_id=session_id),
+                )
+        if segment.turn_intent == "unknown":
+            segment.turn_intent = "ignore"
+            segment.turn_intent_reason = reason
+        self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
+        if close_continuous_dialog:
+            self._send_control_message(
+                device_id,
+                "request",
+                "voice.dialog.close",
+                session_id,
+                {
+                    "device_id": device_id,
+                    "reason": reason,
+                    "source": "voice_turn_intent",
+                },
+            )
+        log_info(
+            self._logger,
+            (
+                "语音段已由系统意图裁决忽略 "
+                f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
+                f"reason={reason} close_continuous_dialog={close_continuous_dialog}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+
+    def _prepare_utterance_photo_for_intent(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        decision: VoiceTurnIntentDecision,
+    ) -> None:
+        """按意图裁决准备自动照片。
+
+        主要逻辑：
+        1. 非视觉意图不触发照片，已触发的本轮照片也会被丢弃。
+        2. 视觉意图才启动抓拍，并等待配置的短时间窗口。
+        3. 拍照失败或超时只影响视觉上下文，不阻断语音主链路。
+
+        参数：
+            device_id/session_id: 当前设备和语音会话编号。
+            segment: 当前语音段。
+            decision: 系统层意图裁决结果。
+        """
+
+        segment.turn_intent = decision.intent
+        segment.turn_intent_reason = decision.reason
+        if not decision.requires_photo:
+            self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
+            return
+        if not segment.utterance_photo_capture_started:
+            self._start_utterance_photo_capture(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                reason="voice_turn_intent_visual_query",
+            )
+        wait_ms = self._settings.voice_omni_photo_wait_ms
+        if wait_ms <= 0:
+            return
+        try:
+            store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
+            store.wait_for_photo(
+                session_id=session_id,
+                device_id=device_id,
+                segment_id=segment.segment_id,
+                timeout_ms=wait_ms,
+            )
+        except AppError as exc:
+            log_debug(
+                self._logger,
+                (
+                    "视觉意图未等到本轮自动照片，继续语音链路 "
+                    f"code={exc.code} message={exc.message} wait_ms={wait_ms}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - 测试替身或宿主未启用照片缓存时继续语音主链路
+            log_debug(
+                self._logger,
+                (
+                    "视觉意图照片缓存不可用，继续语音链路 "
+                    f"segment_id={segment.segment_id} reason={exc!r}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+
+    def _decide_raw_audio_turn_intent_before_omni(
+        self,
+        *,
+        controller: VoiceSessionController,
+        segment: SegmentBuffer,
+    ) -> VoiceTurnIntentDecision:
+        """在提交 Omni 前完成系统层意图裁决。
+
+        主要逻辑：
+        1. 优先等待旁路 ASR 给出最终文本，用文本判断停止、忽略、视觉和普通语音。
+        2. 如果短语音段在等待窗口内仍没有 ASR 结果，认为更可能是噪声或回声，直接忽略。
+        3. 较长语音段 ASR 仍未完成时允许进入 Omni，避免误杀真实长问题。
+
+        参数：
+            controller: 当前设备语音控制器。
+            segment: 当前待提交 Omni 的音频段。
+
+        返回值：
+            本轮系统层意图裁决结果。
+        """
+
+        if segment.sidecar_transcript_done.wait(VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS):
+            transcript = segment.sidecar_transcript_text.strip()
+            return self._decide_voice_turn_intent(controller=controller, segment=segment, transcript=transcript)
+        if segment.duration_ms() <= VOICE_TURN_SHORT_PENDING_ASR_MAX_MS:
+            return VoiceTurnIntentDecision(
+                intent="ignore",
+                reason="short_segment_without_asr",
+                close_continuous_dialog=True,
+            )
+        return VoiceTurnIntentDecision(intent="voice_query", reason="sidecar_asr_pending")
+
     def _close_continuous_dialog_for_stop_command(
         self,
         *,
@@ -4652,8 +4983,6 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            if not segment.utterance_photo_capture_started:
-                self._start_utterance_photo_capture(device_id=device_id, session_id=session_id, segment=segment)
             if self._settings.voice_reply_mode == "omni_realtime":
                 if voice_input_mode == "raw_audio":
                     self._finish_sidecar_transcript_async(
@@ -4680,6 +5009,28 @@ class VoiceRuntime:
                             if controller.state == "model_running":
                                 controller.state = "listening"
                         return
+                    decision = self._decide_raw_audio_turn_intent_before_omni(
+                        controller=controller,
+                        segment=segment,
+                    )
+                    if decision.intent == "ignore":
+                        self._close_segment_without_reply(
+                            device_id=device_id,
+                            session_id=session_id,
+                            segment=segment,
+                            reason=decision.reason,
+                            close_continuous_dialog=decision.close_continuous_dialog,
+                        )
+                        with self._lock:
+                            if controller.state == "model_running":
+                                controller.state = "listening"
+                        return
+                    self._prepare_utterance_photo_for_intent(
+                        device_id=device_id,
+                        session_id=session_id,
+                        segment=segment,
+                        decision=decision,
+                    )
                 if (
                     segment.omni_realtime_session is not None
                     and segment.omni_realtime_prepared is not None
@@ -4718,6 +5069,37 @@ class VoiceRuntime:
                     "当前轮用户语音输入为空，无法继续调用 agent-core",
                     details={"segment_id": segment.segment_id},
                 )
+            decision = self._decide_voice_turn_intent(controller=controller, segment=segment, transcript=user_text)
+            if decision.intent == "stop_conversation":
+                self._close_continuous_dialog_for_stop_command(
+                    device_id=device_id,
+                    session_id=session_id,
+                    segment=segment,
+                    transcript=user_text,
+                    source="asr_text",
+                )
+                with self._lock:
+                    if controller.state == "model_running":
+                        controller.state = "listening"
+                return
+            if decision.intent == "ignore":
+                self._close_segment_without_reply(
+                    device_id=device_id,
+                    session_id=session_id,
+                    segment=segment,
+                    reason=decision.reason,
+                    close_continuous_dialog=decision.close_continuous_dialog,
+                )
+                with self._lock:
+                    if controller.state == "model_running":
+                        controller.state = "listening"
+                return
+            self._prepare_utterance_photo_for_intent(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                decision=decision,
+            )
             log_debug(
                 self._logger,
                 f"语音输入文本: {user_text}",
@@ -5075,7 +5457,7 @@ class VoiceRuntime:
         )
 
         wait_ms = self._settings.voice_omni_photo_wait_ms
-        if wait_ms > 0:
+        if segment.turn_intent == "visual_query" and wait_ms > 0:
             try:
                 store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
                 store.wait_for_photo(
@@ -5094,7 +5476,11 @@ class VoiceRuntime:
                     LogContext(device_id=device_id, session_id=session_id),
                 )
 
-        image_assets = self._agent_facade.consume_ready_utterance_photos(turn)
+        image_assets = (
+            self._agent_facade.consume_ready_utterance_photos(turn)
+            if segment.turn_intent == "visual_query"
+            else []
+        )
         if image_assets:
             turn.asset_refs.extend(image_assets)
         direct_image_asset_ids = set(turn.meta.get("direct_image_asset_ids") or [])
@@ -5130,7 +5516,12 @@ class VoiceRuntime:
             segment=segment,
             omni_transcript=result.transcript,
         )
-        if self._is_conversation_stop_command(transcript):
+        late_decision = self._decide_voice_turn_intent(
+            controller=controller,
+            segment=segment,
+            transcript=transcript,
+        )
+        if late_decision.intent == "stop_conversation":
             self._close_continuous_dialog_for_stop_command(
                 device_id=device_id,
                 session_id=session_id,
@@ -5142,6 +5533,20 @@ class VoiceRuntime:
                 if controller.state == "model_running":
                     controller.state = "listening"
             return
+        if late_decision.intent == "ignore":
+            self._close_segment_without_reply(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                reason=late_decision.reason,
+                close_continuous_dialog=late_decision.close_continuous_dialog,
+            )
+            with self._lock:
+                if controller.state == "model_running":
+                    controller.state = "listening"
+            return
+        segment.turn_intent = late_decision.intent
+        segment.turn_intent_reason = late_decision.reason
         context = segment.omni_realtime_context
         if context is None:
             context = self._open_reply_synthesis_context(
@@ -5162,6 +5567,8 @@ class VoiceRuntime:
                 "omni_transcript": result.transcript,
                 "sidecar_transcript_source": segment.sidecar_transcript_source,
                 "sidecar_transcript_error": segment.sidecar_transcript_error,
+                "voice_turn_intent": segment.turn_intent,
+                "voice_turn_intent_reason": segment.turn_intent_reason,
             },
         )
         agent_result = self._agent_facade.complete_prepared_native_audio_turn(
@@ -5366,7 +5773,7 @@ class VoiceRuntime:
             },
         )
         wait_ms = self._settings.voice_omni_photo_wait_ms
-        if wait_ms > 0:
+        if segment.turn_intent == "visual_query" and wait_ms > 0:
             try:
                 store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
                 store.wait_for_photo(
