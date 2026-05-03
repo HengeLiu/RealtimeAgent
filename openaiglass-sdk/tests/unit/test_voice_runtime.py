@@ -2157,6 +2157,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(segment.sidecar_transcript_source, "sidecar_realtime_asr_empty")
         assert isinstance(segment.omni_realtime_session, _OmniSessionShouldNotFinish)
         self.assertTrue(segment.omni_realtime_session.closed)
+        self.assertIn("voice.dialog.close", sent_messages)
         self.assertNotIn("assistant.reply", sent_messages)
         self.assertNotIn("actuator.audio.play", sent_messages)
         self.assertEqual(controller.state, "listening")

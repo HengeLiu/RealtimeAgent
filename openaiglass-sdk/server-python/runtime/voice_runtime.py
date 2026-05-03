@@ -4251,19 +4251,13 @@ class VoiceRuntime:
             transcript = segment.sidecar_transcript_text.strip()
             if transcript:
                 return False
-        self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
-        if segment.omni_realtime_session is not None:
-            try:
-                segment.omni_realtime_session.close()
-            except Exception as exc:  # noqa: BLE001 - 关闭预连接失败只影响资源回收
-                log_debug(
-                    self._logger,
-                    (
-                        "关闭空语音段 Omni Realtime 预连接失败 "
-                        f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} reason={exc!r}"
-                    ),
-                    LogContext(device_id=device_id, session_id=session_id),
-                )
+        self._close_segment_without_reply(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+            reason="empty_continuous_vad",
+            close_continuous_dialog=True,
+        )
         log_info(
             self._logger,
             (
