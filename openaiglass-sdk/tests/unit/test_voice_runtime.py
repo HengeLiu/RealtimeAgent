@@ -2161,6 +2161,79 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertNotIn("actuator.audio.play", sent_messages)
         self.assertEqual(controller.state, "listening")
 
+    def test_stop_command_closes_continuous_dialog_before_model(self) -> None:
+        """测试目标：验证“结束对话/安静”这类短指令会被运行时拦截。
+
+        测试方法：
+        1. 构造一个连续 VAD 触发的语音段。
+        2. 注入返回“结束对话”的旁路 ASR。
+        3. 注入调用即失败的 Omni 会话，确保停止指令不会进入模型回复。
+
+        预期结果：
+        1. 运行时下发 `voice.dialog.close` 给眼镜。
+        2. 不发送 `assistant.reply` 或 `actuator.audio.play`。
+        3. 控制器恢复到 listening 状态。
+        """
+
+        class _StopSidecarAsrSession:
+            def finish(self) -> str:
+                return "结束对话"
+
+            def metrics(self) -> dict[str, int | None]:
+                return {"audio_frame_count": 2}
+
+        class _OmniSessionShouldNotFinish:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def finish(self, **_kwargs):
+                raise AssertionError("stop command should not reach Omni finish")
+
+            def close(self) -> None:
+                self.closed = True
+
+        sent_messages: list[str] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(
+                voice_reply_mode="omni_realtime",
+                voice_asr_mode="realtime",
+                dashscope_api_key="demo-key",
+            ),
+            send_control_message=lambda _device_id, _semantic, name, *_args, **_kwargs: sent_messages.append(name),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
+        controller.state = "model_running"
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-stop",
+            segment_id="seg-stop",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="continuous_vad",
+            sidecar_asr_session=_StopSidecarAsrSession(),
+            omni_realtime_session=_OmniSessionShouldNotFinish(),
+        )
+        segment.payload.extend(b"\x01\x00" * 640)
+
+        runtime._run_model_pipeline(  # noqa: SLF001 - 单测覆盖停止指令运行时拦截
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+        )
+
+        self.assertTrue(segment.sidecar_transcript_done.is_set())
+        self.assertEqual(segment.sidecar_transcript_text, "结束对话")
+        assert isinstance(segment.omni_realtime_session, _OmniSessionShouldNotFinish)
+        self.assertTrue(segment.omni_realtime_session.closed)
+        self.assertIn("voice.dialog.close", sent_messages)
+        self.assertNotIn("assistant.reply", sent_messages)
+        self.assertNotIn("actuator.audio.play", sent_messages)
+        self.assertEqual(controller.state, "listening")
+
     def test_omni_mode_prestreams_realtime_audio_direct_session(self) -> None:
         """测试目标：验证 Omni 模式会在语音段开始时建立原生字节流会话。
 

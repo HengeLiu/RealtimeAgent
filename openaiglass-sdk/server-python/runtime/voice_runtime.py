@@ -37,6 +37,17 @@ MODEL_OUTPUT_SAMPLE_RATE_HZ = 24000
 PLAYBACK_QUEUE_MAX = 256
 UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
 OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
+CONVERSATION_STOP_PHRASES = (
+    "结束对话",
+    "停止对话",
+    "退出对话",
+    "关闭对话",
+    "安静",
+    "别说了",
+    "不要说了",
+    "先别说",
+    "静音",
+)
 
 
 def _format_log_text(text: str, *, max_chars: int = 240) -> str:
@@ -4211,6 +4222,109 @@ class VoiceRuntime:
         )
         return True
 
+    def _is_conversation_stop_command(self, text: str) -> bool:
+        """判断用户文本是否是连续对话控制指令。
+
+        主要逻辑：
+        1. 去除常见标点和空白，降低 ASR 断句差异影响。
+        2. 只匹配短句，避免把包含这些词的正常长问题误判为控制指令。
+        3. 命中后由运行时关闭连续对话窗口，不再进入 Agent。
+        """
+
+        normalized = "".join(
+            char
+            for char in text.strip()
+            if char not in " \t\r\n，。！？!?、,.；;：:"
+        )
+        if not normalized or len(normalized) > 12:
+            return False
+        return any(phrase in normalized for phrase in CONVERSATION_STOP_PHRASES)
+
+    def _close_continuous_dialog_for_stop_command(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+        transcript: str,
+        source: str,
+    ) -> None:
+        """关闭端侧连续对话窗口并清理本轮预连接资源。
+
+        主要逻辑：
+        1. 向眼镜下发 `voice.dialog.close`，让端侧回到必须 WakeNet 唤醒的待命状态。
+        2. 关闭本轮 Omni 预连接，避免停止指令继续生成模型回复。
+        3. 如果已有播放流被模型提前创建，则通过用户打断路径中断播放。
+        """
+
+        if segment.omni_realtime_session is not None:
+            try:
+                segment.omni_realtime_session.close()
+            except Exception as exc:  # noqa: BLE001 - 停止指令清理失败只写日志
+                log_debug(
+                    self._logger,
+                    f"关闭停止指令 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
+                    LogContext(device_id=device_id, session_id=session_id),
+                )
+        if segment.omni_realtime_context is not None:
+            self.handle_user_interrupt(
+                device_id=device_id,
+                session_id=session_id,
+                reason="conversation_stop_command",
+                clear_queue=True,
+            )
+        self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
+        self._send_control_message(
+            device_id,
+            "request",
+            "voice.dialog.close",
+            session_id,
+            {
+                "device_id": device_id,
+                "reason": "conversation_stop_command",
+                "transcript": transcript,
+                "source": source,
+            },
+        )
+        log_info(
+            self._logger,
+            (
+                "已按用户指令关闭连续对话 "
+                f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
+                f"source={source} transcript={_format_log_text(transcript)!r}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+
+    def _should_stop_conversation_from_sidecar(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> bool:
+        """在进入 Omni 回复前用旁路 ASR 拦截停止指令。
+
+        主要逻辑：
+        1. 等待短时间旁路 ASR 最终文本。
+        2. 如果文本是停止连续对话指令，则关闭端侧窗口并返回 True。
+        3. 没有文本或不是停止指令时返回 False，让正常语音链路继续。
+        """
+
+        if not segment.sidecar_transcript_done.wait(1.5):
+            return False
+        transcript = segment.sidecar_transcript_text.strip()
+        if not self._is_conversation_stop_command(transcript):
+            return False
+        self._close_continuous_dialog_for_stop_command(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+            transcript=transcript,
+            source=segment.sidecar_transcript_source or "sidecar_asr",
+        )
+        return True
+
     def _schedule_sidecar_transcript_backfill(
         self,
         *,
@@ -4548,6 +4662,15 @@ class VoiceRuntime:
                         segment=segment,
                         input_wav=input_wav,
                     )
+                    if self._should_stop_conversation_from_sidecar(
+                        device_id=device_id,
+                        session_id=session_id,
+                        segment=segment,
+                    ):
+                        with self._lock:
+                            if controller.state == "model_running":
+                                controller.state = "listening"
+                        return
                     if self._should_suppress_empty_continuous_segment(
                         device_id=device_id,
                         session_id=session_id,
@@ -5007,6 +5130,18 @@ class VoiceRuntime:
             segment=segment,
             omni_transcript=result.transcript,
         )
+        if self._is_conversation_stop_command(transcript):
+            self._close_continuous_dialog_for_stop_command(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                transcript=transcript,
+                source=transcript_source,
+            )
+            with self._lock:
+                if controller.state == "model_running":
+                    controller.state = "listening"
+            return
         context = segment.omni_realtime_context
         if context is None:
             context = self._open_reply_synthesis_context(

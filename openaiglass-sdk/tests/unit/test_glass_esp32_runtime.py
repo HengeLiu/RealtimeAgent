@@ -28,17 +28,41 @@ def test_glass_runtime_degrades_realtime_voice_open_to_half_duplex() -> None:
     assert "voice.realtime.session.opened" in source
     assert 'cJSON_AddStringToObject(payload, "accepted_mode", "half_duplex")' in source
     assert 'cJSON_AddBoolToObject(capabilities, "aec", false)' in source
-    assert 'cJSON_AddBoolToObject(capabilities, "barge_in", false)' in source
-    assert 'cJSON_AddBoolToObject(capabilities, "output_cancel", false)' in source
-    assert "s_realtime_semantic_dialog_enabled = false;" in source
+    assert 'cJSON_AddBoolToObject(capabilities, "barge_in", true)' in source
+    assert 'cJSON_AddBoolToObject(capabilities, "output_cancel", true)' in source
+    assert 'cJSON_AddStringToObject(capabilities, "barge_in_mode", "wake_word")' in source
+    assert "s_realtime_semantic_dialog_enabled = semantic_dialog_requested;" in source
     assert "semantic_continuous_requested=%d semantic_continuous_enabled=%d" in source
     assert "ensure_audio_transport_started();" in source
     assert "WakeNet listening enabled for realtime-degraded session_id=%s" in source
-    assert "!s_playback_active" in source
+    assert "播放中检测到 WakeNet，触发用户打断" in source
+    assert "user.voice.interrupt" in source
     assert "CONFIG_GLASS_ENABLE_AEC" not in source
-    assert "started_during_playback" not in source
     assert '"playback_stream_id"' not in source
     assert "播放中 VAD 触发候选语音段" not in source
+
+
+def test_glass_runtime_supports_server_dialog_close() -> None:
+    """测试目标：验证服务端可以关闭端侧连续对话窗口。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 检查是否处理 `voice.dialog.close`。
+    3. 检查关闭后会重置连续 VAD 并恢复 WakeNet 待命。
+
+    预期结果：
+    1. 用户说“结束对话/安静”后，服务端能让眼镜回到必须唤醒词触发的状态。
+    2. 后续背景音不能继续沿用上一轮连续对话窗口触发图片解读。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+
+    assert "voice.dialog.close" in source
+    assert "deactivate_continuous_dialog(" in source
+    assert "reset_continuous_dialog_vad_gate();" in source
+    assert "收到 voice.dialog.close，已关闭连续对话窗口并恢复 WakeNet 待命" in source
+    assert "#define CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES 10" in source
+    assert "#define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 1500" in source
 
 
 def test_glass_runtime_marks_audio_segment_trigger_source() -> None:

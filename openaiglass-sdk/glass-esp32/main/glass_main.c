@@ -81,8 +81,8 @@
 #define WAKE_IDLE_SUMMARY_MS 3000
 #define SERVER_REPLY_TIMEOUT_MS 45000
 #define CONTINUOUS_DIALOG_IDLE_TIMEOUT_MS 30000
-#define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 900
-#define CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES 4
+#define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 1500
+#define CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES 10
 #define AUDIO_WS_RECONNECT_INTERVAL_MS 3000
 #define PLAYBACK_HTTP_TIMEOUT_MS 5000
 #define PLAYBACK_STREAM_IDLE_TIMEOUT_MS 30000
@@ -496,6 +496,24 @@ static void send_heartbeat_message(void)
     );
 }
 
+static void send_user_voice_interrupt_message(const char *reason_text)
+{
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "构造 user.voice.interrupt 失败");
+        return;
+    }
+    cJSON_AddStringToObject(payload, "device_id", s_runtime_config.device_id);
+    cJSON_AddStringToObject(payload, "reason", reason_text != NULL ? reason_text : "wake_word_barge_in");
+    if (s_current_playback_stream_id[0] != '\0') {
+        cJSON_AddStringToObject(payload, "stream_id", s_current_playback_stream_id);
+    }
+    send_control_message_json(
+        build_control_message_json("notify", "user.voice.interrupt", s_current_session_id, payload),
+        "user.voice.interrupt"
+    );
+}
+
 static void send_voice_session_opened_message(const char *session_id)
 {
     cJSON *payload = cJSON_CreateObject();
@@ -526,8 +544,9 @@ static void send_realtime_session_opened_message(const char *session_id)
     cJSON_AddStringToObject(payload, "accepted_mode", "half_duplex");
     cJSON_AddBoolToObject(capabilities, "aec", false);
     cJSON_AddBoolToObject(capabilities, "vad", true);
-    cJSON_AddBoolToObject(capabilities, "barge_in", false);
-    cJSON_AddBoolToObject(capabilities, "output_cancel", false);
+    cJSON_AddBoolToObject(capabilities, "barge_in", true);
+    cJSON_AddBoolToObject(capabilities, "output_cancel", true);
+    cJSON_AddStringToObject(capabilities, "barge_in_mode", "wake_word");
     cJSON_AddBoolToObject(capabilities, "continuous_dialog", s_realtime_semantic_dialog_enabled);
     cJSON_AddStringToObject(
         capabilities,
@@ -2359,7 +2378,6 @@ static void sr_pipeline_task(void *arg)
                            s_voice_session_opened &&
                            s_wake_listening_enabled &&
                            s_audio_ws_ready &&
-                           !s_playback_active &&
                            has_session_id;
         uint64_t current_ms = now_ms();
         if (s_registered &&
@@ -2490,7 +2508,19 @@ static void sr_pipeline_task(void *arg)
                                     s_continuous_dialog_active &&
                                     (s_continuous_dialog_resume_after_ms == 0 ||
                                      current_ms >= s_continuous_dialog_resume_after_ms);
-        if (!segment.segment_active && continuous_vad_ready && res->vad_state == VAD_SPEECH) {
+        if (s_playback_active && !segment.segment_active && res->wakeup_state == WAKENET_DETECTED) {
+            ESP_LOGI(
+                TAG,
+                "播放中检测到 WakeNet，触发用户打断: stream_id=%s",
+                s_current_playback_stream_id[0] != '\0' ? s_current_playback_stream_id : "<current>"
+            );
+            request_playback_interrupt(NULL);
+            send_user_voice_interrupt_message("wake_word_barge_in");
+            reset_continuous_dialog_vad_gate();
+            continue;
+        }
+
+        if (!segment.segment_active && !s_playback_active && continuous_vad_ready && res->vad_state == VAD_SPEECH) {
             s_continuous_dialog_vad_speech_frames += 1U;
         } else if (!segment.segment_active && res->vad_state != VAD_SPEECH) {
             reset_continuous_dialog_vad_gate();
@@ -2802,11 +2832,10 @@ static void handle_control_message(const char *data, int data_len)
         bool semantic_dialog_requested = payload_requests_omni_semantic_dialog(payload);
         /*
          * 当前 ESP32 固件没有端侧 AEC，只能把服务端的全双工实时语音请求降级为半双工。
-         * 半双工播放结束后的免唤醒连续 VAD 容易把扬声器残留、环境噪声或用户未说话的空段
-         * 当成下一轮请求，进而触发“空语音 + 自动抓拍”的自循环。因此在该降级模式下明确关闭
-         * 端侧连续对话窗口，要求后续轮次重新通过 WakeNet 唤醒。
+         * 如果服务端请求 Omni 语义连续对话，端侧仍打开一个受限的免唤醒窗口；窗口只在播放结束后
+         * 冷却一段时间才允许 VAD 触发，并由服务端继续抑制空语音段，避免“空语音 + 自动抓拍”自循环。
          */
-        s_realtime_semantic_dialog_enabled = false;
+        s_realtime_semantic_dialog_enabled = semantic_dialog_requested;
         deactivate_continuous_dialog("realtime_session_open");
         if (cJSON_IsString(session_id) && session_id->valuestring != NULL) {
             strlcpy(s_current_session_id, session_id->valuestring, sizeof(s_current_session_id));
@@ -2870,6 +2899,17 @@ static void handle_control_message(const char *data, int data_len)
             interrupt_stream_id != NULL ? interrupt_stream_id : "<current>"
         );
         request_playback_interrupt(interrupt_stream_id);
+        goto cleanup;
+    }
+
+    if (strcmp(name->valuestring, "voice.dialog.close") == 0) {
+        deactivate_continuous_dialog(
+            cJSON_IsString(reason) && reason->valuestring != NULL ? reason->valuestring : "server_dialog_close"
+        );
+        reset_continuous_dialog_vad_gate();
+        clear_reply_wait_state();
+        s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+        ESP_LOGI(TAG, "收到 voice.dialog.close，已关闭连续对话窗口并恢复 WakeNet 待命");
         goto cleanup;
     }
 

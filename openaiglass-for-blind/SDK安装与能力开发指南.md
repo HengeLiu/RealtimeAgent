@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v85`。本版本在 `sdk-v84` 外部 MCP、Task 调度和通知播报链路基础上，修复真实 ESP32 半双工降级时免唤醒连续 VAD 误触发导致的“空语音 + 自动抓拍 + 模型看图回复”自循环问题。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v86`。本版本在 `sdk-v85` 连续 VAD 空段保护基础上，恢复真实 ESP32 的受限连续对话窗口，补齐“结束对话/安静”停止指令拦截和播放中唤醒词打断。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.yaml` 中设置 `voice.session_mode: half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填，`sdk-v85` 在 ESP32 半双工降级下关闭端侧免唤醒连续 VAD，并在服务端抑制连续 VAD 空语音段 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `voice.session_mode: half_duplex` 回退。ESP32-S3 当前因没有端侧 AEC，播放结束后需要重新通过 WakeNet 唤醒，不能依赖免唤醒连续追问。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填，`sdk-v85` 在服务端抑制连续 VAD 空语音段，`sdk-v86` 恢复受限连续对话、停止指令关闭窗口和播放中唤醒词打断 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `voice.session_mode: half_duplex` 回退。ESP32-S3 当前因没有端侧 AEC，只开放播放结束后的受限连续追问和播放中的唤醒词打断，不开放无唤醒词自然插话。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR；`sdk-v74` 音频原生 Chat Completions 链路优先使用流式返回 | 默认 `VOICE_INPUT_MODE=auto`：`agent_tts` 分支实际为 `asr_text`，`omni_realtime` 分支实际为 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。 |
 | 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源；`sdk-v83` 增加全局开关和启动缓存校验 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `tools.progress_audio.enabled` 全局启停，通过 `tools.progress_audio.mode` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
@@ -21,7 +21,7 @@
 | SDK 自定义 Task 定时调度 | `sdk-v84` 支持 `TaskContext.schedule_event(...)` 和 `DeviceGroupContext.schedule_task_event(...)` | 计时器、超时检查、延迟确认等场景不要自建线程；在 Task 中安排延迟事件，到点后由 SDK 调用 `on_event(...)`。 |
 | Task 终态事件回流策略 | `sdk-v84` 支持 `terminal_event_requires_agent_decision`、`terminal_event_allow_direct_notify` 和 `terminal_event_priority` | 如果终态必须先交给 Agent 决策再通知用户，Task 类上声明 `terminal_event_requires_agent_decision=True` 且 `terminal_event_allow_direct_notify=False`。 |
 | 设备级 glass-playback | `sdk-v38` 已随 Python SDK 包安装，`sdk-v43` 起直接播放模式优先使用 `ffplay` stdin 流式播放，`sdk-v53` 起 `trigger_audio` 支持本机真实麦克风 | 业务只提供 `host/glass-playback/config/*.json` 和 `testdata` 资产；启动时不传 `--sdk-root`。 |
-| 播放仲裁和用户打断 | `sdk-v84` 修复设备组通知到真实语音播报链路的绑定 | 业务只提交通知优先级和策略，不直接控制播放器。`context.submit_notification(...)` 会进入 `VoiceRuntime` 通知协调器，并下发 `assistant.reply` / `actuator.audio.play`。 |
+| 播放仲裁和用户打断 | `sdk-v84` 修复设备组通知到真实语音播报链路的绑定；`sdk-v86` 真实 ESP32 播放期间可用 WakeNet 上报 `user.voice.interrupt` | 业务只提交通知优先级和策略，不直接控制播放器。`context.submit_notification(...)` 会进入 `VoiceRuntime` 通知协调器，并下发 `assistant.reply` / `actuator.audio.play`。 |
 | 账号、组织、权限和配置 | 可用 | 业务通过 `DeviceGroupContext` 读取配置和做权限检查，不自建绑定表。 |
 | Agent 长期记忆 | `sdk-v50` 起支持两类注入策略，`sdk-v66` 收敛为 MemoryAgent 内部动作计划，`sdk-v67` 统一为基本信息和个性化信息，`sdk-v68` 补强主动记忆提示 | 业务能力不要自建记忆表；姓名、年龄等基本信息每轮完整注入，住址、爱好、习惯等个性化信息只注入主题，详情由模型按需调用 `memory_search`。 |
 | SQLite 任务持久化 | 可用 | 单机多进程可用 SQLite；跨机器部署仍需后续外部数据库方案。 |
@@ -155,11 +155,15 @@ openaiglass-for-blind/host/glass/config/local_build.env.example
 | `GLASS_PAIR_TOKEN` | 眼镜配对令牌，必须与服务端配置一致。 |
 | `GLASS_HEARTBEAT_INTERVAL_MS` | 心跳间隔。 |
 
-ESP32-S3 当前采用稳定半双工方案：播放期间不启动新的本地语音段，也不做自然插话；`sdk-v85` 起，由于当前固件没有端侧 AEC，服务端请求 `realtime_semantic_vad` 时眼镜仍会降级为半双工，并明确关闭播放结束后的免唤醒连续 VAD。用户每次继续对话都需要重新呼叫“嗨乐鑫”。首次 WakeNet 唤醒提示音由 `CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE=y` 控制，可通过 `CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS`、`CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ`、`CONFIG_GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE` 调整时长、频率和音量。已有旧 `sdkconfig` 时，重新烧录前要执行 `idf.py reconfigure` 或删除旧 `sdkconfig` 后重新配置，确保这些默认项进入实际构建。
+ESP32-S3 当前采用受限半双工连续对话方案：播放期间不启动普通本地语音段，也不做无唤醒词自然插话；`sdk-v86` 起，服务端请求 `realtime_semantic_vad` 时眼镜仍降级为半双工，但会打开播放结束后的受限连续对话窗口。首次 WakeNet 唤醒提示音由 `CONFIG_GLASS_WAKE_PROMPT_TONE_ENABLE=y` 控制，可通过 `CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS`、`CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ`、`CONFIG_GLASS_WAKE_PROMPT_TONE_GAIN_PERMILLE` 调整时长、频率和音量。已有旧 `sdkconfig` 时，重新烧录前要执行 `idf.py reconfigure` 或删除旧 `sdkconfig` 后重新配置，确保这些默认项进入实际构建。
 
 `sdk-v72` 起，真实 ESP32 的连续对话追问不会在播放结束后立刻被单帧 `VAD_SPEECH` 触发。固件会先等待短冷却，再要求连续多帧 VAD 语音才启动免唤醒新语音段；日志中出现 `连续对话 VAD 触发新语音段` 时会带上 `speech_frames`，用于判断是否由稳定语音触发。
 
-`sdk-v85` 起，真实 ESP32 半双工降级模式不再启用上述免唤醒连续 VAD。正常日志应显示 `semantic_continuous_requested=1 semantic_continuous_enabled=0`，且一次播放结束后不应再自动出现 `连续对话 VAD 触发新语音段`。如果旧固件或自定义端侧仍上报 `trigger=continuous_vad`，服务端会等待旁路 ASR；无转写文本时记录 `已抑制连续 VAD 空语音段`，并丢弃本轮自动抓拍，避免模型把空语音段当成看图请求自问自答。
+`sdk-v86` 起，真实 ESP32 半双工降级模式会启用受限连续对话。正常日志应显示 `semantic_continuous_requested=1 semantic_continuous_enabled=1`。播放结束后固件会等待更长冷却，并要求连续 10 帧 VAD 语音才启动免唤醒新段；服务端仍会等待旁路 ASR，无转写文本时记录 `已抑制连续 VAD 空语音段`，并丢弃本轮自动抓拍，避免模型把空语音段当成看图请求自问自答。
+
+用户说“结束对话”“停止对话”“安静”“别说了”等短控制指令时，服务端会在旁路 ASR 阶段拦截，不进入 Agent 回复链路，并下发 `voice.dialog.close`。眼镜收到后会关闭连续对话窗口，恢复必须通过“嗨乐鑫”唤醒的待命状态。
+
+播放期间如果用户需要打断当前播报，应再次说“嗨乐鑫”。端侧会在播放中继续运行 WakeNet，命中后上报 `user.voice.interrupt`，服务端进入统一播放仲裁器并下发中断播放。由于当前 ESP32 端侧仍没有可用 AEC，`barge_in_mode` 为 `wake_word`；普通无唤醒词插话不会作为默认能力开放。
 
 `sdk-v73` 起，真实 ESP32 播放任务栈优先分配到 PSRAM。若仍然出现 `创建 playback_stream_task 失败`，日志会同时打印 `free_internal`、`largest_internal`、`free_spiram` 和 `largest_spiram`，并向服务端回报 `playback_task_create_failed`，便于判断是堆内存不足还是连续块碎片化。
 
