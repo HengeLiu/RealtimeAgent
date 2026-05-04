@@ -180,6 +180,8 @@ for module_name in [
     "runtime.voice_gateway",
     "runtime.voice_constants",
     "runtime.voice_models",
+    "runtime.voice_state",
+    "runtime.audio_utils",
     "runtime.model_payloads",
     "runtime.omni.realtime_client",
     "runtime.omni.omni_voice_server",

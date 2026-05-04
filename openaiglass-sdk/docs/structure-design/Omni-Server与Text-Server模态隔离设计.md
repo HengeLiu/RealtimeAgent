@@ -529,6 +529,7 @@ audio-samples/
 1. `sdk-v97` 已完成 Phase 1 的配置与内部协议边界。
 2. `sdk-v98` 已完成 Phase 2/3/4 的第一轮代码落点：新增 `OmniVoiceServer`、`TextVoiceServer`、`TextDialogStateMachine` 和 package-check 导入覆盖。为保护已验证的真机语音链路，DashScope Realtime 客户端和 TTS/ASR 热路径暂时仍由 `VoiceRuntime` 承载，再由两个 server adapter 委托；后续只做低风险迁移，不改变设备协议。
 3. `sdk-v99` 已完成第一轮物理拆分：Omni Realtime 客户端迁入 `runtime/omni/realtime_client.py`，ASR/TTS/兼容语音模型客户端迁入 `runtime/text/speech_clients.py`，共享常量、模型分片和模型载荷解析迁入独立模块；`VoiceRuntime` 保留兼容导入并继续承载设备会话编排。
+4. `sdk-v100` 已完成共享状态与音频工具拆分：`runtime/voice_state.py` 承载语音段、播放流、会话控制器和回复合成上下文；`runtime/audio_utils.py` 承载 PCM/WAV 工具和流式重采样器。
 
 ### Phase 1：抽象边界
 
@@ -560,7 +561,7 @@ audio-samples/
 2. `VoiceGateway.from_runtime(...)` 在 `voice.server_mode=omni_server` 时选择 `OmniVoiceServer`。
 3. `VoiceRuntime` snapshot 增加 `voice_server_mode`，方便联调确认当前模型服务。
 4. `DashscopeOmniRealtimeReplyClient`、`OmniRealtimeStreamingSession`、`OmniRealtimeReplyResult` 和 Omni server event 摘要逻辑已迁入 `runtime/omni/realtime_client.py`。
-5. `VoiceRuntime` 仍负责设备会话、播放流和 Task/通知编排；下一轮再继续拆播放、通知和会话状态。
+5. 共享状态模型已迁入 `runtime/voice_state.py`；`VoiceRuntime` 仍负责设备会话、播放流和 Task/通知编排，下一轮再继续拆播放和通知。
 
 ### Phase 3：抽出 Text Server
 
@@ -580,6 +581,7 @@ audio-samples/
 2. 新增 `runtime/text/text_dialog_state_machine.py`，把停止指令、空文本、语气词、助手回声和短连续 VAD 文本规则收敛到 Text Server 状态机。
 3. `VoiceRuntime` 的文本裁决路径改为调用 `TextDialogStateMachine`，Omni 主链路仍不等待完整 ASR 做主裁决。
 4. `VoiceModelClient`、`DashscopeVoiceModelClient`、`SpeechRecognitionClient`、`DashscopeSpeechRecognitionClient`、`StreamingTtsSession`、`DashscopeCosyVoiceTtsSession` 和实时 ASR 会话已迁入 `runtime/text/speech_clients.py`。
+5. Text Server 可复用 `runtime/audio_utils.py` 的 WAV 封装和重采样能力，不再需要从 `VoiceRuntime` 反向取工具函数。
 
 ### Phase 4：清理旧分支
 
@@ -599,6 +601,7 @@ audio-samples/
 2. `VOICE_REPLY_MODE` 保留为迁移兼容字段；如果和 `VOICE_SERVER_MODE` 同时配置且不一致，启动会失败。
 3. package-check 增加新 server 边界模块和物理拆分模块导入验证。
 4. `runtime.voice_runtime` 保留旧类名 re-export，避免业务测试替身和已有单测在迁移期被迫改导入路径。
+5. `runtime.voice_state` 和 `runtime.audio_utils` 加入 package-check 导入验证；后续会继续加入播放、进度播报和通知拆分模块。
 
 ## 14. 风险与取舍
 
