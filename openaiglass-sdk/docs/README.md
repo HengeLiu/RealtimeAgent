@@ -21,15 +21,15 @@
 
 迭代记录：
 
-1. [SDK v93 迭代记录](./stage2/iteration-v93.md)：模型可见工具默认不再要求 `reason`，运行时原因由 SDK 系统字段生成。
-2. [SDK v92 迭代记录](./stage2/iteration-v92.md)：Omni Realtime 默认改为设备语音会话级 persistent 长连接，普通轮次只收口播放流，不关闭模型连接。
-3. [SDK v91 迭代记录](./stage2/iteration-v91.md)：打印 Omni server event 摘要，并把 Realtime 会话关闭改为后台执行，避免底层 close 阻塞播放流收口。
-4. [SDK v90 迭代记录](./stage2/iteration-v90.md)：使用 `response.audio.done` 收口 Omni 下行播放流，避免只等 `response.done` 导致眼镜播放卡住。
-5. [SDK v89 迭代记录](./stage2/iteration-v89.md)：恢复 Omni `semantic_vad` 主链路，旁路 ASR 非阻塞化，并新增模型工具关闭连续对话。
-6. [SDK v88 迭代记录](./stage2/iteration-v88.md)：连续 VAD 空段被抑制时同步关闭端侧连续窗口，避免眼镜等待回复超时。
-7. [SDK v87 迭代记录](./stage2/iteration-v87.md)：增加语音轮次意图裁决，阻断非视觉问题自动抓拍和短误触发自回复。
-8. [SDK v86 迭代记录](./stage2/iteration-v86.md)：真实眼镜恢复受限连续对话，支持停止指令关闭窗口和播放中唤醒词打断。
-9. [SDK v85 迭代记录](./stage2/iteration-v85.md)：真实眼镜半双工降级下关闭免唤醒连续 VAD，并在服务端抑制连续 VAD 空语音段。
+1. [SDK v96 迭代记录](./stage2/iteration-v96.md)：收敛 Omni Realtime server event 日志，避免逐帧音频 delta 淹没关键事件。
+2. [SDK v95 迭代记录](./stage2/iteration-v95.md)：移除视觉前置关键词裁决，改由 Omni 模型调用 `capture_photo` 自行获取照片并回答。
+3. [SDK v93 迭代记录](./stage2/iteration-v93.md)：模型可见工具默认不再要求 `reason`，运行时原因由 SDK 系统字段生成。
+4. [SDK v92 迭代记录](./stage2/iteration-v92.md)：Omni Realtime 默认改为设备语音会话级 persistent 长连接，普通轮次只收口播放流，不关闭模型连接。
+5. [SDK v91 迭代记录](./stage2/iteration-v91.md)：打印 Omni server event 摘要，并把 Realtime 会话关闭改为后台执行，避免底层 close 阻塞播放流收口。
+6. [SDK v90 迭代记录](./stage2/iteration-v90.md)：使用 `response.audio.done` 收口 Omni 下行播放流，避免只等 `response.done` 导致眼镜播放卡住。
+7. [SDK v89 迭代记录](./stage2/iteration-v89.md)：恢复 Omni `semantic_vad` 主链路，旁路 ASR 非阻塞化，并新增模型工具关闭连续对话。
+8. [SDK v88 迭代记录](./stage2/iteration-v88.md)：连续 VAD 空段被抑制时同步关闭端侧连续窗口，避免眼镜等待回复超时。
+9. [SDK v87 迭代记录](./stage2/iteration-v87.md)：增加语音轮次意图裁决，阻断非视觉问题自动抓拍和短误触发自回复。
 10. [SDK v84 迭代记录](./stage2/iteration-v84.md)：外部 MCP Server client、Task 通用调度、终态回流策略和设备组通知播报链路修复。
 11. [SDK v82 迭代记录](./stage2/iteration-v82.md)：服务端配置分层与 YAML 化。
 12. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。

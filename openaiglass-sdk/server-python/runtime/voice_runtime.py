@@ -51,35 +51,6 @@ CONVERSATION_STOP_PHRASES = (
     "先别说",
     "静音",
 )
-VISION_INTENT_KEYWORDS = (
-    "看",
-    "看看",
-    "看下",
-    "看一下",
-    "识别",
-    "拍",
-    "照片",
-    "图片",
-    "画面",
-    "镜头",
-    "前面",
-    "前方",
-    "周围",
-    "旁边",
-    "左边",
-    "右边",
-    "身边",
-    "这个",
-    "那个",
-    "这里",
-    "那里",
-    "什么东西",
-    "是什么",
-    "红绿灯",
-    "斑马线",
-    "障碍",
-    "路况",
-)
 CONTINUOUS_DIALOG_FILLER_TEXTS = {
     "嗯",
     "啊",
@@ -141,11 +112,46 @@ def _summarize_omni_server_event(message: dict[str, Any]) -> str:
                 "status": value.get("status"),
                 "output_count": len(value.get("output") or []) if isinstance(value.get("output"), list) else None,
             }
+        elif key == "session" and isinstance(value, dict):
+            tools = value.get("tools")
+            instructions = str(value.get("instructions") or "")
+            summary[key] = {
+                "id": value.get("id"),
+                "model": value.get("model"),
+                "modalities": value.get("modalities"),
+                "voice": value.get("voice"),
+                "turn_detection": value.get("turn_detection"),
+                "tool_count": len(tools) if isinstance(tools, list) else None,
+                "instructions_len": len(instructions),
+            }
         elif key == "error":
             summary[key] = _format_log_text(json.dumps(value, ensure_ascii=False, default=str), max_chars=300)
         elif key != "type":
             summary[key] = value
     return json.dumps(summary, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _should_log_omni_server_event(event_type: str) -> bool:
+    """判断 Omni Realtime server event 是否需要逐事件 DEBUG 日志。"""
+
+    return event_type not in {
+        "response.audio.delta",
+    }
+
+
+def _read_capture_photo_tool_image(output_payload: dict[str, Any]) -> bytes | None:
+    """从 `capture_photo` 工具结果中读取图片字节，供 Omni Realtime 继续视觉回答。"""
+
+    if not output_payload.get("ok"):
+        return None
+    data = output_payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    storage_uri = str(data.get("storage_uri") or "").strip()
+    if not storage_uri or not os.path.isfile(storage_uri):
+        return None
+    with open(storage_uri, "rb") as image_file:
+        return image_file.read()
 
 
 @dataclass(slots=True)
@@ -164,9 +170,9 @@ class VoiceTurnIntentDecision:
     """单轮语音的系统层意图裁决结果。
 
     主要属性：
-    1. `intent`：当前轮系统意图，取值包括普通语音、视觉问答、停止对话和忽略。
+    1. `intent`：当前轮系统意图，取值包括普通语音、停止对话和忽略。
     2. `reason`：裁决原因，用于日志和回放分析。
-    3. `requires_photo`：是否允许本轮触发并上传自动照片。
+    3. `requires_photo`：兼容字段；视觉是否需要照片由模型通过 `capture_photo` 工具决定。
     4. `close_continuous_dialog`：是否应关闭端侧连续对话窗口。
     """
 
@@ -1838,6 +1844,18 @@ class DashscopeOmniRealtimeReplyClient:
                         "output": json.dumps(output_payload, ensure_ascii=False, default=str),
                     }
                 )
+                if tool_name == "capture_photo":
+                    image_bytes = _read_capture_photo_tool_image(output_payload)
+                    if image_bytes:
+                        conversation.append_video(base64.b64encode(image_bytes).decode("ascii"))
+                        log_debug(
+                            self_logger,
+                            (
+                                "Omni Realtime 已追加 capture_photo 工具图片 "
+                                f"tool_name={tool_name} call_id={call_id} bytes={len(image_bytes)}"
+                            ),
+                            LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                        )
                 with pending_tool_lock:
                     pending_tool_count_box[0] = max(pending_tool_count_box[0] - 1, 0)
                 conversation.create_response(output_modalities=[MultiModality.TEXT, MultiModality.AUDIO])
@@ -1876,14 +1894,15 @@ class DashscopeOmniRealtimeReplyClient:
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - 真实联调路径
                 event_type = str(message.get("type") or "")
                 now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
-                log_debug(
-                    self_logger,
-                    (
-                        "Omni Realtime server event "
-                        f"type={event_type} payload={_summarize_omni_server_event(message)}"
-                    ),
-                    LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
-                )
+                if _should_log_omni_server_event(event_type):
+                    log_debug(
+                        self_logger,
+                        (
+                            "Omni Realtime server event "
+                            f"type={event_type} payload={_summarize_omni_server_event(message)}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                    )
                 if event_type == "response.created":
                     callback_state["current_response_has_tool_call"] = False
                     response = message.get("response")
@@ -4563,25 +4582,6 @@ class VoiceRuntime:
             if char not in " \t\r\n，。！？!?、,.；;：:（）()【】[]“”\"'‘’"
         )
 
-    def _is_visual_query_text(self, text: str) -> bool:
-        """判断文本是否明确需要当前画面。
-
-        主要逻辑：
-        1. 命中看图、拍照、画面、前方、红绿灯、障碍物等关键词时判为视觉问答。
-        2. 该判断只决定是否上传自动照片，不决定业务 Tool 是否可继续调用摄像头。
-
-        参数：
-            text: 已转写的用户文本。
-
-        返回值：
-            True 表示本轮允许触发并上传自动照片。
-        """
-
-        normalized = self._normalize_voice_intent_text(text)
-        if not normalized:
-            return False
-        return any(keyword in normalized for keyword in VISION_INTENT_KEYWORDS)
-
     def _is_likely_assistant_echo(self, controller: VoiceSessionController, text: str) -> bool:
         """判断连续 VAD 文本是否像上一轮助手播报回声。
 
@@ -4620,8 +4620,7 @@ class VoiceRuntime:
         主要逻辑：
         1. 停止指令优先，直接关闭连续对话窗口。
         2. 连续 VAD 的空文本、语气词和疑似助手回声按噪声忽略，并关闭连续窗口。
-        3. 明确视觉问答才允许上传自动照片。
-        4. 其他文本作为普通语音进入 Agent，但不携带照片。
+        3. 其他文本作为普通语音进入 Agent；是否需要照片由模型通过 `capture_photo` 工具决定。
 
         参数：
             controller: 当前设备语音控制器。
@@ -4664,8 +4663,6 @@ class VoiceRuntime:
                     reason="short_continuous_vad",
                     close_continuous_dialog=True,
                 )
-        if self._is_visual_query_text(transcript):
-            return VoiceTurnIntentDecision(intent="visual_query", reason="visual_keyword", requires_photo=True)
         return VoiceTurnIntentDecision(intent="voice_query", reason="default_voice")
 
     def _close_segment_without_reply(
@@ -4748,9 +4745,9 @@ class VoiceRuntime:
         """按意图裁决准备自动照片。
 
         主要逻辑：
-        1. 非视觉意图不触发照片，已触发的本轮照片也会被丢弃。
-        2. 视觉意图才启动抓拍，并等待配置的短时间窗口。
-        3. 拍照失败或超时只影响视觉上下文，不阻断语音主链路。
+        1. 当前主链路不再通过系统前置意图触发照片。
+        2. 是否需要照片统一交给模型通过 `capture_photo` 工具决定。
+        3. 非工具路径上的旧自动照片记录会被丢弃，避免误进入后续 turn。
 
         参数：
             device_id/session_id: 当前设备和语音会话编号。
@@ -4760,45 +4757,7 @@ class VoiceRuntime:
 
         segment.turn_intent = decision.intent
         segment.turn_intent_reason = decision.reason
-        if not decision.requires_photo:
-            self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
-            return
-        if not segment.utterance_photo_capture_started:
-            self._start_utterance_photo_capture(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
-                reason="voice_turn_intent_visual_query",
-            )
-        wait_ms = self._settings.voice_omni_photo_wait_ms
-        if wait_ms <= 0:
-            return
-        try:
-            store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
-            store.wait_for_photo(
-                session_id=session_id,
-                device_id=device_id,
-                segment_id=segment.segment_id,
-                timeout_ms=wait_ms,
-            )
-        except AppError as exc:
-            log_debug(
-                self._logger,
-                (
-                    "视觉意图未等到本轮自动照片，继续语音链路 "
-                    f"code={exc.code} message={exc.message} wait_ms={wait_ms}"
-                ),
-                LogContext(device_id=device_id, session_id=session_id),
-            )
-        except Exception as exc:  # noqa: BLE001 - 测试替身或宿主未启用照片缓存时继续语音主链路
-            log_debug(
-                self._logger,
-                (
-                    "视觉意图照片缓存不可用，继续语音链路 "
-                    f"segment_id={segment.segment_id} reason={exc!r}"
-                ),
-                LogContext(device_id=device_id, session_id=session_id),
-            )
+        self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
 
     def _decide_raw_audio_turn_intent_before_omni(
         self,
@@ -4809,7 +4768,7 @@ class VoiceRuntime:
         """在提交 Omni 前完成系统层意图裁决。
 
         主要逻辑：
-        1. 优先等待旁路 ASR 给出最终文本，用文本判断停止、忽略、视觉和普通语音。
+        1. 优先等待旁路 ASR 给出最终文本，用文本判断停止、忽略和普通语音。
         2. 如果短语音段在等待窗口内仍没有 ASR 结果，认为更可能是噪声或回声，直接忽略。
         3. 较长语音段 ASR 仍未完成时允许进入 Omni，避免误杀真实长问题。
 
@@ -4842,7 +4801,7 @@ class VoiceRuntime:
 
         主要逻辑：
         1. 不等待旁路 ASR，避免在模型调用前增加固定尾延迟。
-        2. 已经就绪时只处理三类低风险控制：停止指令、助手回声、视觉照片准备。
+        2. 已经就绪时只处理两类低风险控制：停止指令、助手回声。
         3. 空文本、语气词和背景音不再由 ASR 前置裁决承担，交给 Omni semantic_vad。
 
         参数：
@@ -4870,8 +4829,6 @@ class VoiceRuntime:
                 reason="assistant_echo",
                 close_continuous_dialog=True,
             )
-        if self._is_visual_query_text(transcript):
-            return VoiceTurnIntentDecision(intent="visual_query", reason="visual_keyword", requires_photo=True)
         return VoiceTurnIntentDecision(intent="voice_query", reason="sidecar_asr_ready_default")
 
     def _should_drop_invalid_raw_audio_segment(
@@ -5996,33 +5953,6 @@ class VoiceRuntime:
             )
         )
 
-        wait_ms = self._settings.voice_omni_photo_wait_ms
-        if segment.turn_intent == "visual_query" and wait_ms > 0:
-            try:
-                store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
-                store.wait_for_photo(
-                    session_id=session_id,
-                    device_id=device_id,
-                    segment_id=segment.segment_id,
-                    timeout_ms=wait_ms,
-                )
-            except AppError as exc:
-                log_debug(
-                    self._logger,
-                    (
-                        "Agent-Core Omni 字节流未等到本轮自动照片，继续纯语音 "
-                        f"code={exc.code} message={exc.message} wait_ms={wait_ms}"
-                    ),
-                    LogContext(device_id=device_id, session_id=session_id),
-                )
-
-        image_assets = (
-            self._agent_facade.consume_ready_utterance_photos(turn)
-            if segment.turn_intent == "visual_query"
-            else []
-        )
-        if image_assets:
-            turn.asset_refs.extend(image_assets)
         direct_image_asset_ids = set(turn.meta.get("direct_image_asset_ids") or [])
         image_frames: list[bytes] = []
         for asset in turn.asset_refs:
@@ -6308,26 +6238,6 @@ class VoiceRuntime:
                 "reply_mode": "omni_realtime",
             },
         )
-        wait_ms = self._settings.voice_omni_photo_wait_ms
-        if segment.turn_intent == "visual_query" and wait_ms > 0:
-            try:
-                store = self._agent_facade.get_tool_registry().get_utterance_photo_store()
-                store.wait_for_photo(
-                    session_id=session_id,
-                    device_id=device_id,
-                    segment_id=segment.segment_id,
-                    timeout_ms=wait_ms,
-                )
-            except AppError as exc:
-                log_debug(
-                    self._logger,
-                    (
-                        "Agent-Core Omni 直出未等到本轮自动照片，继续纯语音 "
-                        f"code={exc.code} message={exc.message} wait_ms={wait_ms}"
-                    ),
-                    LogContext(device_id=device_id, session_id=session_id),
-                )
-
         def _handle_progress_text(text: str) -> None:
             progress_text = text.strip()
             if not progress_text:

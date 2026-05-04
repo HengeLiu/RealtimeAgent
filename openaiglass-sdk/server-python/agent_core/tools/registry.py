@@ -141,7 +141,7 @@ class ToolRegistry:
         ):
             self._register_tool(
                 tool,
-                expose_to_model=tool.spec.name == "close_continuous_dialog",
+                expose_to_model=tool.spec.name in {"capture_photo", "close_continuous_dialog"},
             )
 
         for method in self._mcp_registry.list_methods():
@@ -285,8 +285,8 @@ class ToolRegistry:
     def _filter_model_tool_names(self, allowed_names: set[str] | None) -> list[str]:
         """按 Skill 白名单过滤模型可见工具。
 
-        记忆管理和连续对话关闭属于全局用户控制能力，不随具体 Skill 白名单关闭；
-        否则用户在某个 Skill 激活期间将无法删除错误记忆或退出连续对话。
+        记忆管理、拍照和连续对话关闭属于全局用户控制能力，不随具体 Skill 白名单关闭；
+        否则用户在某个 Skill 激活期间将无法删除错误记忆、获取当前画面或退出连续对话。
         """
 
         if allowed_names is None:

@@ -1927,7 +1927,7 @@ class AgentCoreTestCase(unittest.TestCase):
             getattr(tool, "name", None) or getattr(tool, "_tool_name_override", "")
             for tool in agent.kwargs["tools"]
         ]
-        self.assertEqual(tool_names, ["close_continuous_dialog", "read_skill"])
+        self.assertEqual(tool_names, ["capture_photo", "close_continuous_dialog", "read_skill"])
         self.assertIn("当前 active Skills", result.meta["model_request"]["instructions"])
         self.assertIn("如果当前输入包含照片，直接根据照片用一句话回答。", result.meta["model_request"]["instructions"])
         self.assertEqual(result.meta["model_request"]["active_skills"], ["scene_inspection"])
@@ -2413,7 +2413,7 @@ class AgentCoreTestCase(unittest.TestCase):
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, {"close_continuous_dialog"})
+        self.assertEqual(tool_names, {"capture_photo", "close_continuous_dialog"})
         self.assertIsNone(registry.get("get_latest_utterance_photo"))
         self.assertIsNotNone(registry.get("capture_photo"))
         self.assertIsNone(registry.get("create_timer"))

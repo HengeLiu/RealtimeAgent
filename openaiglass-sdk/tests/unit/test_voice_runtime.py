@@ -1346,7 +1346,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(result.response_id, "resp-audio-done")
         joined_logs = "\n".join(logs.output)
         self.assertIn("Omni Realtime server event type=response.audio.done", joined_logs)
-        self.assertIn("delta_base64_len", joined_logs)
+        self.assertNotIn("Omni Realtime server event type=response.audio.delta", joined_logs)
+        self.assertNotIn("delta_base64_len", joined_logs)
 
     def test_omni_streaming_session_close_can_run_in_background(self) -> None:
         """测试目标：验证 Realtime 会话关闭可以后台执行，不阻塞播放流收口。
@@ -1791,6 +1792,105 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(chunks[0].audio_pcm_bytes, b"voice-final")
         self.assertEqual(result.assistant_text, "好的，已记住。")
         self.assertEqual(result.response_id, "resp-final")
+
+    def test_dashscope_omni_realtime_appends_capture_photo_tool_image(self) -> None:
+        """测试目标：验证 Omni 调用 `capture_photo` 后会把照片追加到同一 Realtime 会话。"""
+
+        image_bytes = b"fake-jpeg-bytes"
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as image_file:
+            image_file.write(image_bytes)
+            image_path = image_file.name
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.items: list[dict] = []
+                self.videos: list[str] = []
+                self.response_count = 0
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, video_b64: str) -> None:
+                self.videos.append(video_b64)
+
+            def commit(self) -> None:
+                return None
+
+            def create_item(self, item: dict) -> None:
+                self.items.append(item)
+
+            def create_response(self, **_kwargs) -> None:
+                self.response_count += 1
+                if self.response_count == 1:
+                    self.callback.on_event({"type": "response.created", "response": {"id": "resp-tool"}})
+                    self.callback.on_event(
+                        {
+                            "type": "response.function_call_arguments.done",
+                            "call_id": "call-capture",
+                            "name": "capture_photo",
+                            "arguments": "{}",
+                        }
+                    )
+                    self.callback.on_event({"type": "response.done"})
+                    return
+                self.callback.on_event({"type": "response.audio_transcript.delta", "delta": "前方有一把椅子。"})
+                self.callback.on_event(
+                    {"type": "response.audio.delta", "delta": base64.b64encode(b"voice").decode()}
+                )
+                self.callback.on_event({"type": "response.done"})
+
+            def close(self) -> None:
+                return None
+
+        try:
+            client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+            result = client.run_reply(
+                settings=ServerSettings(
+                    dashscope_api_key="test-key",
+                    voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                    voice_conversation_mode="segment_turn",
+                ),
+                input_pcm=b"\x01\x02",
+                image_frames=[],
+                instructions="简短回答",
+                on_chunk=lambda _chunk: None,
+                tools=[
+                    {
+                        "type": "function",
+                        "name": "capture_photo",
+                        "description": "抓拍当前画面",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+                tool_handler=lambda _call: {
+                    "ok": True,
+                    "data": {"storage_uri": image_path, "mime_type": "image/jpeg"},
+                },
+                session_id="sess-test",
+                device_id="glass-001",
+                segment_id="seg-test",
+                stream_id="stream-test",
+            )
+        finally:
+            os.unlink(image_path)
+
+        assert _Factory.instance is not None
+        self.assertEqual(base64.b64decode(_Factory.instance.videos[0]), image_bytes)
+        self.assertEqual(result.assistant_text, "前方有一把椅子。")
 
     def test_dashscope_omni_realtime_reply_client_enables_semantic_vad_when_configured(self) -> None:
         """测试目标：验证实验性连续对话模式会把 semantic VAD 参数写入 Omni session。
@@ -2558,17 +2658,17 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertNotIn("actuator.audio.play", sent_messages)
         self.assertEqual(controller.state, "listening")
 
-    def test_voice_turn_intent_requires_photo_only_for_visual_query(self) -> None:
-        """测试目标：验证系统层意图裁决只为视觉问答打开照片输入。
+    def test_voice_turn_intent_does_not_preclassify_visual_query(self) -> None:
+        """测试目标：验证系统层不再前置判断视觉问答。
 
         测试方法：
         1. 直接构造普通语音和视觉问答两类文本。
         2. 调用 SDK 内部意图裁决函数。
-        3. 检查照片开关和意图类型。
+        3. 检查两类文本都不会触发系统层自动照片。
 
         预期结果：
         1. “今天天气怎么样”不会触发自动照片。
-        2. “帮我看看前面有什么”会触发自动照片。
+        2. “帮我看看前面有什么”也作为普通语音进入 Omni，由模型自行决定是否调用 `capture_photo`。
         """
 
         runtime = VoiceRuntime(
@@ -2601,8 +2701,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
         self.assertEqual(voice_decision.intent, "voice_query")
         self.assertFalse(voice_decision.requires_photo)
-        self.assertEqual(visual_decision.intent, "visual_query")
-        self.assertTrue(visual_decision.requires_photo)
+        self.assertEqual(visual_decision.intent, "voice_query")
+        self.assertFalse(visual_decision.requires_photo)
 
     def test_pending_sidecar_segment_does_not_block_omni(self) -> None:
         """测试目标：验证旁路 ASR 未完成时不会阻塞正常 Omni 主链路。

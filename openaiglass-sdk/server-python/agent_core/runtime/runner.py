@@ -23,7 +23,7 @@ from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 
-_IMAGE_FOLLOWUP_TOOL_NAMES: set[str] = set()
+_IMAGE_FOLLOWUP_TOOL_NAMES: set[str] = {"capture_photo"}
 
 
 @dataclass(slots=True)
@@ -611,23 +611,6 @@ class StreamedAgentTurnObserver:
                     )
                     if tool_name in _IMAGE_FOLLOWUP_TOOL_NAMES:
                         capture_call_id = call_id
-                        image_asset = await self._wait_for_new_image_asset(
-                            tool_context=tool_context,
-                            session=session,
-                            excluded_asset_ids=existing_image_asset_ids,
-                            timeout_seconds=10.0,
-                        )
-                        if image_asset is not None:
-                            return await self._run_image_followup(
-                                run_result=run_result,
-                                tool_context=tool_context,
-                                turn=turn,
-                                image_asset=image_asset,
-                                session=session,
-                                reply_text_delta_callback=reply_text_delta_callback,
-                                capability_traces=capability_traces,
-                                model_request=model_request,
-                            )
                     continue
 
                 if event.name == "tool_output":
@@ -2495,7 +2478,9 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
         base = (
             f"{self._settings.voice_system_prompt}\n"
             "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
-            "需要时可以调用已提供的工具。工具调用前的等待提示由系统自动播报，你不要为了调用工具而先输出一段解释。\n\n"
+            "需要时可以调用已提供的工具。工具调用前的等待提示由系统自动播报，你不要为了调用工具而先输出一段解释。\n"
+            "当用户询问眼前画面、物体、文字、障碍物、路况、红绿灯等需要当前视觉信息的问题时，应调用 capture_photo 获取当前照片，再结合照片直接回答。\n"
+            "普通聊天、时间天气、记忆维护、导航规划等不需要当前画面的请求，不要调用 capture_photo。\n\n"
             "当用户表达结束连续对话、希望你安静、先这样、不用继续听、等会儿再说等意图时，"
             "应调用 close_continuous_dialog 工具。调用后可以用一句很短的话确认，例如“好的，我先安静了”。\n\n"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
