@@ -1784,6 +1784,19 @@ class DashscopeOmniRealtimeReplyClient:
                     on_chunk(ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
                     return
 
+                if event_type == "response.audio.done":
+                    with pending_tool_lock:
+                        has_pending_tool = pending_tool_count > 0
+                    if has_pending_tool or current_response_has_tool_call:
+                        return
+                    log_debug(
+                        self_logger,
+                        "Omni Realtime 音频输出完成",
+                        LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                    )
+                    done_event.set()
+                    return
+
                 if event_type == "response.function_call_arguments.done":
                     call_id = str(message.get("call_id") or message.get("item_id") or "")
                     tool_name = str(message.get("name") or "").strip()
@@ -2126,6 +2139,9 @@ class DashscopeOmniRealtimeReplyClient:
                     if audio_pcm:
                         audio_bytes_box.append(len(audio_pcm))
                         on_chunk(ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
+                    return
+                if event_type == "response.audio.done":
+                    done_event.set()
                     return
                 if event_type in {"response.done", "response.cancelled"}:
                     done_event.set()

@@ -20,14 +20,15 @@
 
 迭代记录：
 
-1. [SDK v89 迭代记录](./stage2/iteration-v89.md)：恢复 Omni `semantic_vad` 主链路，旁路 ASR 非阻塞化，并新增模型工具关闭连续对话。
-2. [SDK v88 迭代记录](./stage2/iteration-v88.md)：连续 VAD 空段被抑制时同步关闭端侧连续窗口，避免眼镜等待回复超时。
-3. [SDK v87 迭代记录](./stage2/iteration-v87.md)：增加语音轮次意图裁决，阻断非视觉问题自动抓拍和短误触发自回复。
-4. [SDK v86 迭代记录](./stage2/iteration-v86.md)：真实眼镜恢复受限连续对话，支持停止指令关闭窗口和播放中唤醒词打断。
-5. [SDK v85 迭代记录](./stage2/iteration-v85.md)：真实眼镜半双工降级下关闭免唤醒连续 VAD，并在服务端抑制连续 VAD 空语音段。
-6. [SDK v84 迭代记录](./stage2/iteration-v84.md)：外部 MCP Server client、Task 通用调度、终态回流策略和设备组通知播报链路修复。
-7. [SDK v82 迭代记录](./stage2/iteration-v82.md)：服务端配置分层与 YAML 化。
-8. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
-9. [全部迭代记录](./stage2/)
+1. [SDK v90 迭代记录](./stage2/iteration-v90.md)：使用 `response.audio.done` 收口 Omni 下行播放流，避免只等 `response.done` 导致眼镜播放卡住。
+2. [SDK v89 迭代记录](./stage2/iteration-v89.md)：恢复 Omni `semantic_vad` 主链路，旁路 ASR 非阻塞化，并新增模型工具关闭连续对话。
+3. [SDK v88 迭代记录](./stage2/iteration-v88.md)：连续 VAD 空段被抑制时同步关闭端侧连续窗口，避免眼镜等待回复超时。
+4. [SDK v87 迭代记录](./stage2/iteration-v87.md)：增加语音轮次意图裁决，阻断非视觉问题自动抓拍和短误触发自回复。
+5. [SDK v86 迭代记录](./stage2/iteration-v86.md)：真实眼镜恢复受限连续对话，支持停止指令关闭窗口和播放中唤醒词打断。
+6. [SDK v85 迭代记录](./stage2/iteration-v85.md)：真实眼镜半双工降级下关闭免唤醒连续 VAD，并在服务端抑制连续 VAD 空语音段。
+7. [SDK v84 迭代记录](./stage2/iteration-v84.md)：外部 MCP Server client、Task 通用调度、终态回流策略和设备组通知播报链路修复。
+8. [SDK v82 迭代记录](./stage2/iteration-v82.md)：服务端配置分层与 YAML 化。
+9. [SDK v69 迭代记录](./stage2/iteration-v69.md)：工具调用前置播报，减少耗时 Tool 执行期间静默等待。
+10. [全部迭代记录](./stage2/)
 
 盲人 AI 眼镜业务文档放在 [../../openaiglass-for-blind/docs](../../openaiglass-for-blind/docs)。

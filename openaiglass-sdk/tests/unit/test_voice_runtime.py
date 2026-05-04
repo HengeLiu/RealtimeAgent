@@ -1225,7 +1225,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                         "transcript": "看一下",
                     }
                 )
-                self.callback.on_event({"type": "response.done"})
+                self.callback.on_event({"type": "response.audio.done"})
 
             def close(self) -> None:
                 self.closed = True
@@ -1268,6 +1268,81 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         joined_logs = "\n".join(logs.output)
         self.assertIn("Omni Realtime 用户转写完成 transcript='看一下'", joined_logs)
         self.assertIn("Omni Realtime 助手文本完成 text='你好'", joined_logs)
+
+    def test_dashscope_omni_realtime_reply_client_finishes_on_audio_done_without_response_done(self) -> None:
+        """测试目标：验证 Omni Realtime 可用 `response.audio.done` 收口播放流。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话。
+        2. 只发送 `response.audio.delta`、`response.audio_transcript.done` 和 `response.audio.done`。
+        3. 不发送 `response.done`。
+
+        预期结果：
+        1. SDK 不会等待到模型超时。
+        2. 音频分片正常进入播放回调。
+        3. 当前轮结果可正常返回助手文本。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, _video_b64: str) -> None:
+                return None
+
+            def commit(self) -> None:
+                return None
+
+            def create_response(self, **_kwargs) -> None:
+                self.callback.on_event({"type": "response.created", "response": {"id": "resp-audio-done"}})
+                self.callback.on_event(
+                    {"type": "response.audio.delta", "delta": base64.b64encode(b"voice").decode()}
+                )
+                self.callback.on_event({"type": "response.audio_transcript.done", "transcript": "好的。"})
+                self.callback.on_event({"type": "response.audio.done"})
+
+            def close(self) -> None:
+                return None
+
+        chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+
+        result = client.run_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                voice_conversation_mode="segment_turn",
+                voice_model_timeout_ms=1000,
+            ),
+            input_pcm=b"\x01\x02",
+            image_frames=[],
+            instructions="简短回答",
+            on_chunk=chunks.append,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-test",
+            stream_id="stream-test",
+        )
+
+        self.assertEqual(chunks[0].audio_pcm_bytes, b"voice")
+        self.assertEqual(result.assistant_text, "好的。")
+        self.assertEqual(result.response_id, "resp-audio-done")
 
     def test_dashscope_omni_realtime_client_synthesizes_progress_text_audio(self) -> None:
         """测试目标：验证工具前置播报可以由 Omni Realtime 直接生成音频。
@@ -1321,7 +1396,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
                 self.callback.on_event(
                     {"type": "response.audio.delta", "delta": base64.b64encode(b"progress-pcm").decode()}
                 )
-                self.callback.on_event({"type": "response.done"})
+                self.callback.on_event({"type": "response.audio.done"})
 
             def close(self) -> None:
                 self.closed = True
@@ -1788,7 +1863,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         _Factory.instance.callback.on_event(
             {"type": "conversation.item.input_audio_transcription.completed", "transcript": "看一下"}
         )
-        _Factory.instance.callback.on_event({"type": "response.done"})
+        _Factory.instance.callback.on_event({"type": "response.audio.done"})
 
         result = session.finish(image_frames=[], instructions="连续对话", segment_finished_at_ms=0)
 
