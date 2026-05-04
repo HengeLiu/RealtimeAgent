@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import queue
 import threading
 import time
 import uuid
-import wave
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -35,7 +33,6 @@ from runtime.voice_constants import (
     PLAYBACK_QUEUE_MAX,
     SERVER_CHANNELS,
     SERVER_SAMPLE_RATE_HZ,
-    SERVER_SAMPLE_WIDTH_BYTES,
     UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS,
     VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS,
     VOICE_TURN_SHORT_PENDING_ASR_MAX_MS,
@@ -62,6 +59,7 @@ from runtime.playback_streams import (
     wait_for_playback,
     write_chunked_payload,
 )
+from runtime.progress_audio_cache import ProgressAudioCacheManager
 from runtime.text.speech_clients import (
     BufferedStreamingTtsSession,
     DashscopeCosyVoiceTtsSession,
@@ -137,13 +135,19 @@ class VoiceRuntime:
         self._notification_stream_requests: dict[tuple[str, str], str] = {}
         self._notification_request_streams: dict[str, tuple[str, str]] = {}
         self._interrupted_playback_streams: set[tuple[str, str]] = set()
-        self._progress_audio_cache: dict[str, ProgressAudioCacheEntry] = {}
-        self._progress_audio_cache_lock = threading.Lock()
-        self._progress_audio_cache_ready = threading.Event()
         self._agent_facade = agent_facade or AgentFacade.build_default(
             settings=settings,
             device_state_reader=self.build_runtime_snapshot,
         )
+        self._progress_audio_cache_manager = ProgressAudioCacheManager(
+            settings=self._settings,
+            model_client=self._model_client,
+            agent_facade=self._agent_facade,
+            logger=self._logger,
+        )
+        self._progress_audio_cache = self._progress_audio_cache_manager.cache
+        self._progress_audio_cache_lock = self._progress_audio_cache_manager.cache_lock
+        self._progress_audio_cache_ready = self._progress_audio_cache_manager.ready
         self._task_event_bridge = TaskEventBridge(session_store=self._agent_facade.get_session_store())
         self._notification_coordinator = NotificationCoordinator(
             dispatcher=self._dispatch_notification_request,
@@ -219,48 +223,7 @@ class VoiceRuntime:
         1. 预生成失败只写 DEBUG 日志，不阻塞服务启动。
         """
 
-        if not self._settings.tool_progress_audio_enabled:
-            self._clear_progress_audio_cache_on_startup(reason="disabled")
-            return
-        progress_provider = self._progress_audio_provider()
-        if self._settings.tool_progress_audio_mode != "cached" or progress_provider != "tts":
-            self._progress_audio_cache_ready.set()
-            log_info(
-                self._logger,
-                (
-                    "工具前置播报音频缓存已跳过 "
-                    f"mode={self._settings.tool_progress_audio_mode} provider={progress_provider}"
-                ),
-                LogContext(session_id="progress_audio_cache", device_id="server"),
-            )
-            return
-        if not self._settings.dashscope_api_key.strip():
-            self._progress_audio_cache_ready.set()
-            return
-        try:
-            tool_registry = self._agent_facade.get_tool_registry()
-            list_messages = getattr(tool_registry, "list_progress_messages", None)
-            if not callable(list_messages):
-                self._progress_audio_cache_ready.set()
-                return
-            progress_messages = list_messages()
-        except Exception as exc:
-            self._progress_audio_cache_ready.set()
-            log_debug(
-                self._logger,
-                f"工具前置播报缓存读取工具列表失败，已跳过: reason={exc!r}",
-                LogContext(session_id="progress_audio_cache", device_id="server"),
-            )
-            return
-        if not progress_messages:
-            self._clear_progress_audio_cache_on_startup(reason="no_progress_messages")
-            return
-        threading.Thread(
-            target=self._preload_progress_audio_cache,
-            args=(progress_messages,),
-            name="progress-audio-cache-preload",
-            daemon=True,
-        ).start()
+        self._progress_audio_cache_manager.start_preload()
 
     def _clear_progress_audio_cache_on_startup(self, *, reason: str) -> None:
         """启动时把工具前置播报缓存收敛为空。
@@ -280,59 +243,12 @@ class VoiceRuntime:
         1. 缓存目录不存在或无法读取时静默跳过，不阻塞服务启动。
         """
 
-        cache_dir = self._progress_audio_cache_dir()
-        self._prune_stale_progress_audio_cache(cache_dir=cache_dir, expected_profiles={})
-        with self._progress_audio_cache_lock:
-            self._progress_audio_cache.clear()
-        self._progress_audio_cache_ready.set()
-        log_info(
-            self._logger,
-            f"工具前置播报音频缓存已收敛为空 reason={reason}",
-            LogContext(session_id="progress_audio_cache", device_id="server"),
-        )
+        self._progress_audio_cache_manager.clear_on_startup(reason=reason)
 
     def _preload_progress_audio_cache(self, progress_messages: list[tuple[str, str]]) -> None:
         """批量加载或生成工具前置播报音频缓存。"""
 
-        unique_messages: dict[str, str] = {}
-        for tool_name, message in progress_messages:
-            text = message.strip()
-            if text and text not in unique_messages:
-                unique_messages[text] = tool_name
-        cache_dir = self._progress_audio_cache_dir()
-        os.makedirs(cache_dir, exist_ok=True)
-        expected_profiles = {
-            self._progress_audio_cache_key(text): self._progress_audio_cache_profile(text)
-            for text in unique_messages
-        }
-        self._prune_stale_progress_audio_cache(cache_dir=cache_dir, expected_profiles=expected_profiles)
-        succeeded = 0
-        for text, tool_name in unique_messages.items():
-            try:
-                entry = self._load_or_create_progress_audio_cache_entry(
-                    tool_name=tool_name,
-                    text=text,
-                    cache_dir=cache_dir,
-                )
-            except Exception as exc:  # noqa: BLE001 - 启动预生成失败不应影响主服务
-                log_debug(
-                    self._logger,
-                    f"工具前置播报音频缓存生成失败: tool={tool_name} text={text!r} reason={exc!r}",
-                    LogContext(session_id="progress_audio_cache", device_id="server"),
-                )
-                continue
-            with self._progress_audio_cache_lock:
-                self._progress_audio_cache[text] = entry
-            succeeded += 1
-        self._progress_audio_cache_ready.set()
-        log_info(
-            self._logger,
-            (
-                "工具前置播报音频缓存预加载完成 "
-                f"message_count={len(unique_messages)} cached_count={succeeded} cache_dir={cache_dir}"
-            ),
-            LogContext(session_id="progress_audio_cache", device_id="server"),
-        )
+        self._progress_audio_cache_manager.preload(progress_messages)
 
     def _load_or_create_progress_audio_cache_entry(
         self,
@@ -343,64 +259,16 @@ class VoiceRuntime:
     ) -> ProgressAudioCacheEntry:
         """加载或创建单条工具前置播报音频缓存。"""
 
-        profile = self._progress_audio_cache_profile(text)
-        cache_key = self._progress_audio_cache_key(text)
-        wav_path = os.path.join(cache_dir, f"{cache_key}.wav")
-        metadata_path = os.path.join(cache_dir, f"{cache_key}.json")
-        pcm_bytes = self._read_cached_progress_wav(
-            wav_path,
-            metadata_path=metadata_path,
-            expected_profile=profile,
-        )
-        if pcm_bytes is None:
-            pcm_bytes = self._synthesize_progress_text_to_pcm(text)
-            with open(wav_path, "wb") as file:
-                file.write(build_wav_bytes(pcm_bytes, SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS))
-            self._write_progress_audio_cache_metadata(metadata_path, profile)
-        return ProgressAudioCacheEntry(
+        return self._progress_audio_cache_manager.load_or_create_entry(
             tool_name=tool_name,
             text=text,
-            wav_path=wav_path,
-            metadata_path=metadata_path,
-            profile=profile,
-            pcm_bytes=pcm_bytes,
+            cache_dir=cache_dir,
         )
 
     def _synthesize_progress_text_to_pcm(self, text: str) -> bytes:
         """把一段前置播报文本合成为 16k 单声道 PCM。"""
 
-        pcm_parts: list[bytes] = []
-        resampler_box: list[PCM16StreamResampler | None] = [None]
-
-        def _on_chunk(chunk: ModelChunk) -> None:
-            if not chunk.audio_pcm_bytes:
-                return
-            resampler = resampler_box[0]
-            if resampler is None or chunk.sample_rate_hz != resampler._input_rate_hz:
-                resampler = PCM16StreamResampler(chunk.sample_rate_hz, SERVER_SAMPLE_RATE_HZ)
-                resampler_box[0] = resampler
-            pcm = resampler.push(chunk.audio_pcm_bytes, final=False)
-            if pcm:
-                pcm_parts.append(pcm)
-
-        tts_session = self._model_client.create_streaming_tts_session(
-            settings=self._settings,
-            on_chunk=_on_chunk,
-        )
-        tts_session.push_text(text)
-        tts_session.finish()
-        if resampler_box[0] is not None:
-            tail = resampler_box[0].push(b"", final=True)
-            if tail:
-                pcm_parts.append(tail)
-        pcm_bytes = b"".join(pcm_parts)
-        if not pcm_bytes:
-            raise build_error(
-                ErrorCode.INTERNAL_ERROR,
-                "工具前置播报 TTS 返回空音频",
-                details={"text": text},
-            )
-        return pcm_bytes
+        return self._progress_audio_cache_manager.synthesize_text_to_pcm(text)
 
     def _read_cached_progress_wav(
         self,
@@ -411,24 +279,11 @@ class VoiceRuntime:
     ) -> bytes | None:
         """读取本地缓存 WAV，格式不符合当前播放要求时返回 None。"""
 
-        if not os.path.exists(wav_path):
-            return None
-        if not self._progress_audio_cache_metadata_matches(metadata_path, expected_profile):
-            self._remove_progress_audio_cache_files(wav_path, metadata_path)
-            return None
-        try:
-            with wave.open(wav_path, "rb") as reader:
-                if (
-                    reader.getframerate() != SERVER_SAMPLE_RATE_HZ
-                    or reader.getnchannels() != SERVER_CHANNELS
-                    or reader.getsampwidth() != SERVER_SAMPLE_WIDTH_BYTES
-                ):
-                    self._remove_progress_audio_cache_files(wav_path, metadata_path)
-                    return None
-                return reader.readframes(reader.getnframes())
-        except Exception:
-            self._remove_progress_audio_cache_files(wav_path, metadata_path)
-            return None
+        return self._progress_audio_cache_manager.read_cached_wav(
+            wav_path,
+            metadata_path=metadata_path,
+            expected_profile=expected_profile,
+        )
 
     def _progress_audio_cache_metadata_matches(self, metadata_path: str, expected_profile: dict[str, Any]) -> bool:
         """检查工具前置播报缓存元数据是否与当前模型和音色配置一致。
@@ -439,32 +294,17 @@ class VoiceRuntime:
         3. 任意字段不一致都会触发删除并重新生成。
         """
 
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as file:
-                metadata = json.load(file)
-        except Exception:
-            return False
-        return metadata == expected_profile
+        return self._progress_audio_cache_manager.metadata_matches(metadata_path, expected_profile)
 
     def _write_progress_audio_cache_metadata(self, metadata_path: str, profile: dict[str, Any]) -> None:
         """写入工具前置播报缓存元数据。"""
 
-        with open(metadata_path, "w", encoding="utf-8") as file:
-            json.dump(profile, file, ensure_ascii=False, sort_keys=True, indent=2)
+        self._progress_audio_cache_manager.write_metadata(metadata_path, profile)
 
     def _remove_progress_audio_cache_files(self, wav_path: str, metadata_path: str) -> None:
         """删除一组过期或损坏的工具前置播报缓存文件。"""
 
-        for path in (wav_path, metadata_path):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError as exc:
-                log_debug(
-                    self._logger,
-                    f"工具前置播报缓存删除失败，已忽略: path={path} reason={exc!r}",
-                    LogContext(session_id="progress_audio_cache", device_id="server"),
-                )
+        self._progress_audio_cache_manager.remove_files(wav_path, metadata_path)
 
     def _prune_stale_progress_audio_cache(
         self,
@@ -474,43 +314,20 @@ class VoiceRuntime:
     ) -> None:
         """启动时清理与当前播报模型、生成方式或音色不一致的旧缓存。"""
 
-        removed = 0
-        try:
-            names = os.listdir(cache_dir)
-        except OSError:
-            return
-        basenames = {name.rsplit(".", 1)[0] for name in names if name.endswith((".wav", ".json"))}
-        for basename in basenames:
-            wav_path = os.path.join(cache_dir, f"{basename}.wav")
-            metadata_path = os.path.join(cache_dir, f"{basename}.json")
-            expected_profile = expected_profiles.get(basename)
-            should_remove = expected_profile is None
-            if expected_profile is not None and not self._progress_audio_cache_metadata_matches(
-                metadata_path,
-                expected_profile,
-            ):
-                should_remove = True
-            if should_remove:
-                self._remove_progress_audio_cache_files(wav_path, metadata_path)
-                removed += 1
-        if removed:
-            log_info(
-                self._logger,
-                f"工具前置播报旧缓存已清理 removed_count={removed} cache_dir={cache_dir}",
-                LogContext(session_id="progress_audio_cache", device_id="server"),
-            )
+        self._progress_audio_cache_manager.prune_stale(
+            cache_dir=cache_dir,
+            expected_profiles=expected_profiles,
+        )
 
     def _progress_audio_cache_dir(self) -> str:
         """返回工具前置播报音频缓存目录。"""
 
-        return os.path.join(self._settings.voice_runs_root, "progress-audio-cache")
+        return self._progress_audio_cache_manager.cache_dir()
 
     def _progress_audio_cache_key(self, text: str) -> str:
         """按当前前置播报与最终播报配置生成稳定缓存键。"""
 
-        payload = self._progress_audio_cache_profile(text)
-        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        return hashlib.sha256(raw).hexdigest()[:24]
+        return self._progress_audio_cache_manager.cache_key(text)
 
     def _progress_audio_cache_profile(self, text: str) -> dict[str, Any]:
         """生成工具前置播报缓存指纹。
@@ -521,28 +338,7 @@ class VoiceRuntime:
         3. 采样率和播放格式也纳入指纹，防止格式不一致的 WAV 被误用。
         """
 
-        if self._settings.effective_voice_server_mode() == "omni_server":
-            reply_audio_provider = "omni_realtime"
-            reply_model_name = self._settings.voice_omni_realtime_model_name
-            reply_voice = self._settings.voice_model_voice
-        else:
-            reply_audio_provider = "tts"
-            reply_model_name = self._settings.tts_model_name
-            reply_voice = self._settings.tts_voice
-        return {
-            "cache_schema": 2,
-            "text": text,
-            "tool_progress_audio_mode": self._settings.tool_progress_audio_mode,
-            "progress_audio_provider": "tts",
-            "tts_model_name": self._settings.tts_model_name,
-            "tts_voice": self._settings.tts_voice,
-            "tts_sample_rate_hz": self._settings.tts_sample_rate_hz,
-            "reply_audio_provider": reply_audio_provider,
-            "reply_model_name": reply_model_name,
-            "reply_voice": reply_voice,
-            "playback_sample_rate_hz": SERVER_SAMPLE_RATE_HZ,
-            "channels": SERVER_CHANNELS,
-        }
+        return self._progress_audio_cache_manager.cache_profile(text)
 
     def _progress_audio_provider(self) -> str:
         """返回工具前置播报应该使用的音频生成方。
@@ -555,7 +351,7 @@ class VoiceRuntime:
             `omni_realtime` 或 `tts`。
         """
 
-        return "omni_realtime" if self._settings.effective_voice_server_mode() == "omni_server" else "tts"
+        return self._progress_audio_cache_manager.provider()
 
     def build_realtime_open_payload(self) -> dict[str, Any]:
         """生成全双工实时语音会话打开请求。
@@ -3566,14 +3362,7 @@ class VoiceRuntime:
     def _get_cached_progress_pcm(self, text: str) -> bytes | None:
         """读取已预生成的前置播报 PCM。"""
 
-        normalized = text.strip()
-        if not normalized:
-            return None
-        if not self._progress_audio_cache_ready.is_set():
-            self._progress_audio_cache_ready.wait(timeout=0.05)
-        with self._progress_audio_cache_lock:
-            entry = self._progress_audio_cache.get(normalized)
-            return entry.pcm_bytes if entry is not None else None
+        return self._progress_audio_cache_manager.get_cached_pcm(text)
 
     def _emit_cached_progress_pcm(
         self,
