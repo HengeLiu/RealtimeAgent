@@ -187,8 +187,10 @@ for module_name in [
     "runtime.playback_streams",
     "runtime.progress_audio_cache",
     "runtime.omni.realtime_client",
+    "runtime.omni.tool_bridge",
     "runtime.omni.omni_voice_server",
     "runtime.text.speech_clients",
+    "runtime.text.text_agent_adapter",
     "runtime.text.text_voice_server",
     "runtime.text.text_dialog_state_machine",
 ]:

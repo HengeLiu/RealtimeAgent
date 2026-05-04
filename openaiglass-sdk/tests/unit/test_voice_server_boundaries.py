@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 import unittest
 
 from infra.config import ServerSettings
@@ -13,7 +15,49 @@ from runtime.voice_gateway import VoiceGateway
 from runtime.voice_runtime import VoiceRuntime
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SDK_SOURCE_ROOT = REPO_ROOT / "server-python"
+
+
+def _imported_modules(path: Path) -> set[str]:
+    """读取 Python 文件中的显式 import 目标。
+
+    测试目标：检查 Omni Server 与 Text Server 拆分后的模块边界。
+    测试方法：用 AST 读取 import/import-from 语句，不执行被测模块。
+    预期结果：模态子模块不能互相依赖，也不能反向依赖聚合运行时。
+    """
+
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
 class VoiceServerBoundaryTestCase(unittest.TestCase):
+    def test_modal_adapters_do_not_cross_import_each_other(self) -> None:
+        """测试目标、方法、预期结果见 `_imported_modules` 的说明。"""
+
+        checked_files = [
+            SDK_SOURCE_ROOT / "runtime" / "omni" / "tool_bridge.py",
+            SDK_SOURCE_ROOT / "runtime" / "text" / "text_agent_adapter.py",
+        ]
+
+        for path in checked_files:
+            imports = _imported_modules(path)
+            self.assertNotIn("runtime.voice_runtime", imports)
+        self.assertFalse(
+            any(module.startswith("runtime.text") for module in _imported_modules(checked_files[0])),
+            "Omni 工具桥不能依赖 Text Server 模块",
+        )
+        self.assertFalse(
+            any(module.startswith("runtime.omni") for module in _imported_modules(checked_files[1])),
+            "Text Agent 适配器不能依赖 Omni Server 模块",
+        )
+
     def test_gateway_selects_omni_server(self) -> None:
         settings = ServerSettings(voice_server_mode="omni_server", voice_reply_mode="omni_realtime")
         runtime = VoiceRuntime(settings=settings, send_control_message=lambda *_args, **_kwargs: None)

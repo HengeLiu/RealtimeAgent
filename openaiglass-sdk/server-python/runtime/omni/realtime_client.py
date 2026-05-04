@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from runtime.voice_constants import (
     OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
 )
 from runtime.voice_models import ModelChunk
+from runtime.omni.tool_bridge import OmniToolBridge
 
 
 def _format_log_text(text: str, *, max_chars: int = 240) -> str:
@@ -71,21 +71,6 @@ def _should_log_omni_server_event(event_type: str) -> bool:
     return event_type not in {
         "response.audio.delta",
     }
-
-
-def _read_capture_photo_tool_image(output_payload: dict[str, Any]) -> bytes | None:
-    """从 `capture_photo` 工具结果中读取图片字节，供 Omni Realtime 继续视觉回答。"""
-
-    if not output_payload.get("ok"):
-        return None
-    data = output_payload.get("data")
-    if not isinstance(data, dict):
-        return None
-    storage_uri = str(data.get("storage_uri") or "").strip()
-    if not storage_uri or not os.path.isfile(storage_uri):
-        return None
-    with open(storage_uri, "rb") as image_file:
-        return image_file.read()
 
 
 @dataclass(slots=True)
@@ -696,59 +681,28 @@ class DashscopeOmniRealtimeReplyClient:
                 error_box.append(f"Omni Realtime 音频完成回调失败: {exc}")
                 done_event.set()
 
+        self_logger = self._logger
+        tool_bridge = OmniToolBridge(
+            tool_handler_getter=lambda: tool_handler_box[0],
+            pending_tool_lock=pending_tool_lock,
+            pending_tool_count_box=pending_tool_count_box,
+            error_box=error_box,
+            done_event=done_event,
+            logger=self_logger,
+            device_id=device_id,
+            session_id=session_id,
+        )
+
         def _complete_tool_call(*, call_id: str, tool_name: str, arguments_text: str) -> None:
             """执行 Realtime 工具调用并把结果回填给 Omni。"""
 
-            try:
-                handler = tool_handler_box[0]
-                if handler is None:
-                    output_payload = {
-                        "ok": False,
-                        "error": {
-                            "code": "TOOL_HANDLER_NOT_CONFIGURED",
-                            "message": "当前运行时没有配置工具调用处理器",
-                        },
-                    }
-                else:
-                    output_payload = handler(
-                        {
-                            "call_id": call_id,
-                            "name": tool_name,
-                            "arguments": arguments_text,
-                        }
-                    )
-                conversation.create_item(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(output_payload, ensure_ascii=False, default=str),
-                    }
-                )
-                if tool_name == "capture_photo":
-                    image_bytes = _read_capture_photo_tool_image(output_payload)
-                    if image_bytes:
-                        conversation.append_video(base64.b64encode(image_bytes).decode("ascii"))
-                        log_debug(
-                            self_logger,
-                            (
-                                "Omni Realtime 已追加 capture_photo 工具图片 "
-                                f"tool_name={tool_name} call_id={call_id} bytes={len(image_bytes)}"
-                            ),
-                            LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
-                        )
-                with pending_tool_lock:
-                    pending_tool_count_box[0] = max(pending_tool_count_box[0] - 1, 0)
-                conversation.create_response(output_modalities=[MultiModality.TEXT, MultiModality.AUDIO])
-                log_debug(
-                    self_logger,
-                    f"Omni Realtime 工具结果已回填 tool_name={tool_name} call_id={call_id}",
-                    LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
-                )
-            except Exception as exc:  # noqa: BLE001 - 工具桥异常需要结束当前 Realtime 响应
-                with pending_tool_lock:
-                    pending_tool_count_box[0] = max(pending_tool_count_box[0] - 1, 0)
-                error_box.append(f"Omni Realtime 工具调用处理失败: {exc}")
-                done_event.set()
+            tool_bridge.complete_tool_call(
+                conversation=conversation,
+                multimodality=MultiModality,
+                call_id=call_id,
+                tool_name=tool_name,
+                arguments_text=arguments_text,
+            )
 
         class _Callback(OmniRealtimeCallback):
             """Omni Realtime 回调桥接器。"""
@@ -979,7 +933,6 @@ class DashscopeOmniRealtimeReplyClient:
                     error_box.append(str(error if error is not None else message))
                     done_event.set()
 
-        self_logger = self._logger
         callback = _Callback()
         factory = self._conversation_factory or OmniRealtimeConversation
         conversation = factory(

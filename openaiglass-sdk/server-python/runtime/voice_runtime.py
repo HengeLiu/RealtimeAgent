@@ -24,6 +24,7 @@ from runtime.notifications import NotificationCoordinator, NotificationRequest
 from runtime.playback_arbiter import PlaybackArbiter, PlaybackIntent
 from runtime.realtime_voice import RealtimeModelAdapter, RealtimeVoiceRuntime
 from runtime.task_event_bridge import TaskEventBridge
+from runtime.text.text_agent_adapter import TextAgentAdapter
 from runtime.text.text_dialog_state_machine import TextDialogStateMachine
 
 from runtime.voice_constants import (
@@ -172,6 +173,7 @@ class VoiceRuntime:
             logger=self._logger,
         )
         self._text_dialog_state_machine = TextDialogStateMachine()
+        self._text_agent_adapter = TextAgentAdapter(store_artifact=self._store_artifact)
         self._realtime_voice_runtime = RealtimeVoiceRuntime(
             playback_arbiter=self._playback_arbiter,
             send_control_message=self._send_control_message,
@@ -2450,54 +2452,14 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            transcript_path = self._store_artifact(
-                session_id,
-                "transcript",
-                f"{segment.segment_id}.json",
-                {
-                    "segment_id": segment.segment_id,
-                    "stream_id": segment.stream_id,
-                    "transcript": user_text,
-                    "voice_input_mode": voice_input_mode,
-                },
-            )
-            turn = AgentTurn(
-                turn_id=generate_id("turn"),
+            turn, transcript_path = self._text_agent_adapter.build_voice_text_turn(
                 session_id=session_id,
                 device_id=device_id,
-                source=f"voice_{voice_input_mode}",
-                input_text=user_text,
-                asset_refs=[
-                    MediaAssetRef(
-                        asset_id=generate_id("asset"),
-                        session_id=session_id,
-                        asset_type="audio",
-                        storage_uri=input_path,
-                        mime_type="audio/wav",
-                        codec="pcm16le",
-                        duration_ms=segment.duration_ms(),
-                        bytes=len(input_wav),
-                        source_stream_id=segment.stream_id,
-                    )
-                ],
-                derived_artifacts=[
-                    DerivedArtifact(
-                        artifact_id=generate_id("artifact"),
-                        session_id=session_id,
-                        artifact_type="voice_transcript",
-                        storage_uri=transcript_path,
-                        text=user_text,
-                        meta={
-                            "segment_id": segment.segment_id,
-                            "stream_id": segment.stream_id,
-                            "voice_input_mode": voice_input_mode,
-                        },
-                    )
-                ],
-                meta={
-                    "segment_id": segment.segment_id,
-                    "stream_id": segment.stream_id,
-                },
+                segment=segment,
+                voice_input_mode=voice_input_mode,
+                user_text=user_text,
+                input_path=input_path,
+                input_wav=input_wav,
             )
             streamed_reply_parts: list[str] = []
             final_synthesis_context: ReplySynthesisContext | None = None
