@@ -92,6 +92,7 @@
 #define CAMERA_CAPTURE_TASK_STACK_SIZE (6 * 1024)
 #define CAMERA_STREAM_TASK_STACK_SIZE (8 * 1024)
 #define PLAYBACK_STREAM_TASK_STACK_SIZE (8 * 1024)
+#define SR_PIPELINE_TASK_STACK_SIZE (12 * 1024)
 #define WAKE_PROMPT_TONE_TABLE_SIZE 32
 
 typedef struct {
@@ -183,6 +184,8 @@ static TaskHandle_t s_playback_task_handle = NULL;
 static TaskHandle_t s_camera_stream_task_handle = NULL;
 static TaskHandle_t s_wifi_retry_task_handle = NULL;
 static sr_runtime_ctx_t s_sr_ctx;
+static pre_roll_frame_t s_sr_pre_roll_frames[PRE_ROLL_FRAME_COUNT];
+static const int32_t s_speaker_silence_frame[AUDIO_FRAME_SAMPLES * 2] = {0};
 static const int16_t s_wake_prompt_sine_table[WAKE_PROMPT_TONE_TABLE_SIZE] = {
     0, 6393, 12539, 18204, 23170, 27245, 30273, 32137,
     32767, 32137, 30273, 27245, 23170, 18204, 12539, 6393,
@@ -1635,7 +1638,6 @@ static void flush_pre_roll_frames(
 // 确保扬声器通道处于可写状态。用于本地提示音，避免播放任务结束后通道被暂停导致提示音写入失败。
 static bool ensure_speaker_channel_enabled(void)
 {
-    int32_t zero_buffer[AUDIO_FRAME_SAMPLES * 2] = {0};
     size_t preloaded_size = 0;
 
     if (s_spk_tx_chan == NULL) {
@@ -1647,8 +1649,8 @@ static bool ensure_speaker_channel_enabled(void)
     }
     esp_err_t preload_err = i2s_channel_preload_data(
         s_spk_tx_chan,
-        zero_buffer,
-        sizeof(zero_buffer),
+        s_speaker_silence_frame,
+        sizeof(s_speaker_silence_frame),
         &preloaded_size
     );
     if (preload_err != ESP_OK) {
@@ -2233,7 +2235,6 @@ cleanup:
 
 static void start_playback_stream(const char *stream_id)
 {
-    int32_t zero_buffer[AUDIO_FRAME_SAMPLES * 2] = {0};
     size_t preloaded_size = 0;
 
     if (stream_id == NULL || stream_id[0] == '\0') {
@@ -2261,8 +2262,8 @@ static void start_playback_stream(const char *stream_id)
     if (!s_speaker_channel_enabled) {
         esp_err_t preload_err = i2s_channel_preload_data(
             s_spk_tx_chan,
-            zero_buffer,
-            sizeof(zero_buffer),
+            s_speaker_silence_frame,
+            sizeof(s_speaker_silence_frame),
             &preloaded_size
         );
         if (preload_err != ESP_OK) {
@@ -2364,7 +2365,6 @@ static void sr_pipeline_task(void *arg)
 {
     sr_runtime_ctx_t *ctx = (sr_runtime_ctx_t *)arg;
     segment_state_t segment = {0};
-    pre_roll_frame_t pre_roll_frames[PRE_ROLL_FRAME_COUNT] = {0};
     size_t pre_roll_next_index = 0;
     size_t pre_roll_valid_count = 0;
     bool last_wake_active = false;
@@ -2381,6 +2381,12 @@ static void sr_pipeline_task(void *arg)
         ctx->feed_chunksize,
         ctx->feed_nch,
         ctx->feed_chunk_ms
+    );
+    reset_pre_roll(
+        s_sr_pre_roll_frames,
+        PRE_ROLL_FRAME_COUNT,
+        &pre_roll_next_index,
+        &pre_roll_valid_count
     );
 
     for (;;) {
@@ -2443,7 +2449,7 @@ static void sr_pipeline_task(void *arg)
                 reset_segment_state(&segment);
             }
             reset_pre_roll(
-                pre_roll_frames,
+                s_sr_pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
                 &pre_roll_next_index,
                 &pre_roll_valid_count
@@ -2506,7 +2512,7 @@ static void sr_pipeline_task(void *arg)
 
         if (res->data && res->data_size > 0) {
             store_pre_roll_frame(
-                pre_roll_frames,
+                s_sr_pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
                 &pre_roll_next_index,
                 &pre_roll_valid_count,
@@ -2567,7 +2573,7 @@ static void sr_pipeline_task(void *arg)
             }
             send_audio_segment_started_message(segment.segment_id, start_by_wake_word);
             flush_pre_roll_frames(
-                pre_roll_frames,
+                s_sr_pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
                 pre_roll_next_index,
                 pre_roll_valid_count,
@@ -2575,7 +2581,7 @@ static void sr_pipeline_task(void *arg)
             );
             current_frame_flushed_from_pre_roll = res->data && res->data_size > 0;
             reset_pre_roll(
-                pre_roll_frames,
+                s_sr_pre_roll_frames,
                 PRE_ROLL_FRAME_COUNT,
                 &pre_roll_next_index,
                 &pre_roll_valid_count
@@ -2733,7 +2739,7 @@ static void init_speech_runtime(void)
     task_ret = xTaskCreatePinnedToCore(
         sr_pipeline_task,
         "sr_pipeline_task",
-        8 * 1024,
+        SR_PIPELINE_TASK_STACK_SIZE,
         &s_sr_ctx,
         5,
         NULL,
