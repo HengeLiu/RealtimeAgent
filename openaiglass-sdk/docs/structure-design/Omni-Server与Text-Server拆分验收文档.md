@@ -12,7 +12,7 @@
 e8e38f2 修复唤醒提示音I2S恢复
 ```
 
-从该状态开始，后续 `sdk-v97` 到 `sdk-v100` 都属于本轮 Omni Server / Text Server 拆分和语音运行时瘦身过程。
+从该状态开始，后续 `sdk-v97` 到 `sdk-v101` 都属于本轮 Omni Server / Text Server 拆分和语音运行时瘦身过程。
 
 ## 2. 总体验收目标
 
@@ -120,37 +120,34 @@ e8e38f2 修复唤醒提示音I2S恢复
 
 ## 5. 当前实现阶段评估
 
-当前最新 SDK 文档版本为 `sdk-v100`。
+当前最新 SDK 文档版本为 `sdk-v101`。
 
 | 阶段 | 目标 | 当前状态 | 完成度 |
 | --- | --- | --- | --- |
 | Phase 1 抽象边界 | `VoiceServer`、`VoiceGateway`、`voice.server_mode` | 已落地；旧 `VOICE_REPLY_MODE` 兼容映射仍保留 | 90% |
-| Phase 2 抽出 Omni Server | Omni 客户端、工具桥、会话生命周期进入 `runtime/omni` | Omni Realtime 客户端已迁出；`OmniVoiceServer` 仍主要委托 `VoiceRuntime`；Realtime tool bridge 仍在客户端回调中；播放和 turn recorder 仍在 `VoiceRuntime` | 45% |
+| Phase 2 抽出 Omni Server | Omni 客户端、工具桥、会话生命周期进入 `runtime/omni` | Omni Realtime 客户端已迁出；播放流队列和 HTTP 输出已迁入共享播放模块；`OmniVoiceServer` 仍主要委托 `VoiceRuntime`；Realtime tool bridge 仍在客户端回调中；turn recorder 仍在 `VoiceRuntime` | 50% |
 | Phase 3 抽出 Text Server | ASR、Text 状态机、Text Agent、TTS 进入 `runtime/text` | ASR/TTS 客户端和 TextDialogStateMachine 已迁出；Text Agent Adapter 尚未独立；`TextVoiceServer` 仍委托 `VoiceRuntime` | 45% |
-| Phase 4 清理旧分支 | 废弃旧 reply mode 分支，收紧 import 隔离 | 主分支已使用 `effective_voice_server_mode()`；旧配置和旧导入仍保留；package-check 已覆盖新模块但未做 import 规则断言 | 35% |
+| Phase 4 清理旧分支 | 废弃旧 reply mode 分支，收紧 import 隔离 | 主分支已使用 `effective_voice_server_mode()`；播放模块已进入 package-check；旧配置和旧导入仍保留；尚未做 import 规则断言 | 45% |
 
-总体评估：当前属于“物理拆分中段”。最危险的客户端代码已经迁出，但最核心的设备会话、播放、通知、Task 事件和模型管线编排仍集中在 `VoiceRuntime`。距离最终验收大约还剩 45% 到 55% 的拆分工作，其中真正需要谨慎验证的是播放、通知和真机连续对话行为。
+总体评估：当前属于“物理拆分中后段”。最危险的客户端代码和播放子系统基础逻辑已经迁出，但设备会话、进度播报缓存、通知、Task 事件和模型管线编排仍集中在 `VoiceRuntime`。距离最终验收大约还剩 40% 到 45% 的拆分工作，其中真正需要谨慎验证的是通知、Task 事件和真机连续对话行为。
 
 ## 6. 距离最终验收的剩余工作
 
 ### 6.1 必做
 
-1. 拆播放子系统。
-   - 迁出播放流创建、播放请求、chunked WAV 输出、队列收尾、中断清理、优先级出队。
-   - 风险：影响 `actuator.audio.play`、`actuator.audio.finished`、通知播报和用户打断。
-2. 拆进度播报缓存。
+1. 拆进度播报缓存。
    - 迁出工具前置播报音频缓存预热、读取、metadata 校验和淘汰。
    - 风险：影响工具调用前置提示首响。
-3. 拆通知和 Task 事件。
+2. 拆通知和 Task 事件。
    - 迁出 `submit_notification`、TaskEvent -> AgentTurn、直接播报和回流决策。
    - 风险：影响计时器、任务终态、通知优先级和播放打断。
-4. 拆 Omni tool bridge。
+3. 拆 Omni tool bridge。
    - 把 Realtime function calling 的工具执行、`capture_photo` 图片追加、`close_continuous_dialog` 处理从 Realtime 客户端回调中收敛为 `OmniToolBridge`。
    - 风险：影响视觉问答和工具调用。
-5. 拆 Text Agent Adapter。
+4. 拆 Text Agent Adapter。
    - 把 ASR 文本后的 Agent 消息构造、Text Agent 调用、TTS 合成收敛到 Text Server。
    - 风险：影响 text_server 兼容纯文本模型。
-6. 增加 import 边界测试。
+5. 增加 import 边界测试。
    - 用单测或 package-check 断言 Omni/Text 不互相 import 对方热路径。
    - 风险低。
 
@@ -163,19 +160,19 @@ e8e38f2 修复唤醒提示音I2S恢复
 
 ## 7. 下一步工作计划
 
-### Milestone A：播放子系统独立
+### Milestone A：播放子系统独立（sdk-v101 已完成）
 
 目标：
 
-1. 新增 `runtime/playback_streams.py` 或 `runtime/playback_service.py`。
-2. `VoiceRuntime` 只调用播放 service，不直接操作所有播放队列细节。
-3. 保证普通回复、工具前置播报、通知播报、用户打断和播放完成事件行为不变。
+1. 已新增 `runtime/playback_streams.py`。
+2. 播放流创建、播放请求、优先级排序、待播出队、中断标记、chunked WAV 输出和等待逻辑已迁出。
+3. 普通回复、工具前置播报、通知播报、用户打断和播放完成事件行为通过单测保持不变。
 
 建议验收：
 
-1. `test_voice_runtime.py` 和 `test_task_event_runtime.py` 通过。
-2. 增加播放 service 的单元测试。
-3. 回放验证能看到 `assistant.reply`、`actuator.audio.play`、`actuator.audio.finished`。
+1. `test_voice_runtime.py`、`test_realtime_voice_runtime.py` 和 `test_task_event_runtime.py` 已通过。
+2. package-check 已覆盖 `runtime.playback_streams`。
+3. 设备级回放仍归入 Milestone E 的最终验收矩阵统一执行。
 
 ### Milestone B：进度播报缓存独立
 
@@ -236,4 +233,3 @@ e8e38f2 修复唤醒提示音I2S恢复
 | `text_server` | 停止对话 | TextDialogStateMachine 生效 |
 | 两种模式 | 通知播报 | `submit_notification` 进入真实播放 |
 | 两种模式 | Task 终态 | 终态回流策略生效 |
-

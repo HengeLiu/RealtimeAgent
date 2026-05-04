@@ -47,6 +47,21 @@ from runtime.omni.realtime_client import (
     OmniRealtimeReplyResult,
     OmniRealtimeStreamingSession,
 )
+from runtime.playback_streams import (
+    create_playback_stream,
+    enqueue_playback_chunk,
+    finish_chunked_payload,
+    finish_playback_stream,
+    mark_playback_interrupted,
+    playback_priority_value,
+    pop_pending_playback,
+    remove_playback_by_intent,
+    request_playback_start,
+    send_chunked_wav_headers,
+    stream_playback_to_http,
+    wait_for_playback,
+    write_chunked_payload,
+)
 from runtime.text.speech_clients import (
     BufferedStreamingTtsSession,
     DashscopeCosyVoiceTtsSession,
@@ -1178,47 +1193,15 @@ class VoiceRuntime:
 
     def stream_playback(self, handler, *, device_id: str, stream_id: str) -> None:
         playback = self._wait_for_playback(device_id=device_id, stream_id=stream_id, timeout_s=10.0)
-        try:
-            self._send_chunked_headers(handler)
-            self._write_chunk(handler, wav_header_unknown_size(playback.sample_rate, playback.channels))
-            log_debug(
-                self._logger,
-                f"播放流 HTTP 已建立 stream_id={stream_id} sample_rate={playback.sample_rate} channels={playback.channels}",
-                LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
-            )
-
-            while True:
-                if playback.abort_event.is_set():
-                    break
-                try:
-                    item = playback.queue.get(timeout=0.5)
-                except queue.Empty:
-                    if playback.completed:
-                        break
-                    continue
-                if item is None:
-                    break
-                if playback.first_http_audio_chunk_at_ms is None:
-                    playback.first_http_audio_chunk_at_ms = self._now_ms()
-                    log_info(
-                        self._logger,
-                        (
-                            "播放流写出首段音频 "
-                            f"stream_id={stream_id} audio_source={playback.audio_source} bytes={len(item)} "
-                            f"play_request_to_http_audio_ms={self._latency_ms(start=playback.first_play_request_at_ms, end=playback.first_http_audio_chunk_at_ms)} "
-                            f"source_audio_to_http_audio_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_http_audio_chunk_at_ms)}"
-                        ),
-                        LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
-                    )
-                self._write_chunk(handler, item)
-
-            self._finish_chunked(handler)
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError) as exc:
-            log_debug(
-                self._logger,
-                f"播放流 HTTP 客户端已断开: device_id={device_id} stream_id={stream_id} reason={exc.__class__.__name__}",
-                LogContext(device_id=device_id, session_id=playback.session_id, message_id=stream_id),
-            )
+        stream_playback_to_http(
+            handler=handler,
+            playback=playback,
+            device_id=device_id,
+            stream_id=stream_id,
+            logger=self._logger,
+            now_ms=self._now_ms,
+            latency_ms=self._latency_ms,
+        )
 
     def build_runtime_snapshot(self) -> dict[str, dict[str, Any]]:
         with self._lock:
@@ -3924,46 +3907,20 @@ class VoiceRuntime:
         4. `force`：是否在已有音频时立即启动。
         """
 
-        should_send = False
-        with self._lock:
-            controller = self._controllers.get(device_id)
-            if controller is None:
-                raise build_error(
-                    ErrorCode.STREAM_NOT_FOUND,
-                    "未找到对应设备的语音会话控制器",
-                    details={"device_id": device_id},
-                )
-            if controller.current_playback is playback and not playback.play_requested and force:
-                playback.play_requested = True
-                if playback.first_play_request_at_ms is None:
-                    playback.first_play_request_at_ms = self._now_ms()
-                should_send = True
-
-        if should_send:
-            self._send_control_message(
-                device_id,
-                "request",
-                "actuator.audio.play",
-                session_id,
-                {
-                    "mode": "stream",
-                    "stream_id": playback.stream_id,
-                    "format": "pcm16",
-                    "sample_rate": SERVER_SAMPLE_RATE_HZ,
-                    "channels": SERVER_CHANNELS,
-                    "interrupt_policy": "forbid",
-                },
-            )
-            log_info(
-                self._logger,
-                (
-                    "下行播放请求已发送 "
-                    f"stream_id={playback.stream_id} audio_source={playback.audio_source} "
-                    f"text_to_play_request_ms={self._latency_ms(start=playback.first_text_delta_at_ms, end=playback.first_play_request_at_ms)} "
-                    f"source_audio_to_play_request_ms={self._latency_ms(start=playback.first_audio_chunk_at_ms, end=playback.first_play_request_at_ms)}"
-                ),
-                LogContext(device_id=device_id, session_id=session_id, message_id=playback.stream_id),
-            )
+        request_playback_start(
+            controllers=self._controllers,
+            lock=self._lock,
+            send_control_message=self._send_control_message,
+            logger=self._logger,
+            now_ms=self._now_ms,
+            latency_ms=self._latency_ms,
+            device_id=device_id,
+            session_id=session_id,
+            playback=playback,
+            force=force,
+            sample_rate=SERVER_SAMPLE_RATE_HZ,
+            channels=SERVER_CHANNELS,
+        )
 
     def _emit_synthesis_chunk(
         self,
@@ -4055,99 +4012,34 @@ class VoiceRuntime:
         task_id: str | None = None,
         audio_source: str = "tts",
     ) -> PlaybackStreamContext:
-        intent_id = f"{source}:{stream_id}"
-        playback = PlaybackStreamContext(
+        return create_playback_stream(
+            controllers=self._controllers,
+            lock=self._lock,
+            playback_condition=self._playback_condition,
+            playback_arbiter=self._playback_arbiter,
+            playback_streams=self._playback_streams,
+            notification_stream_requests=self._notification_stream_requests,
+            notification_request_streams=self._notification_request_streams,
+            interrupted_playback_streams=self._interrupted_playback_streams,
+            send_control_message=self._send_control_message,
             device_id=device_id,
             session_id=session_id,
             stream_id=stream_id,
-            sample_rate=SERVER_SAMPLE_RATE_HZ,
-            channels=SERVER_CHANNELS,
             source=source,
-            audio_source=audio_source,
             priority=priority,
             interrupt_policy=interrupt_policy,
             resume_policy=resume_policy,
             task_id=task_id,
-            intent_id=intent_id,
+            audio_source=audio_source,
+            sample_rate=SERVER_SAMPLE_RATE_HZ,
+            channels=SERVER_CHANNELS,
         )
-        interrupted_playback: PlaybackStreamContext | None = None
-        with self._lock:
-            controller = self._controllers.get(device_id)
-            if controller is None:
-                raise build_error(
-                    ErrorCode.STREAM_NOT_FOUND,
-                    "未找到对应设备的语音会话控制器",
-                    details={"device_id": device_id},
-                )
-            intent = PlaybackIntent(
-                intent_id=intent_id,
-                source=source,
-                device_id=device_id,
-                session_id=session_id,
-                stream_id=stream_id,
-                priority=priority,
-                interrupt_policy=interrupt_policy,
-                resume_policy=resume_policy,
-                task_id=task_id,
-            )
-            submit_result = self._playback_arbiter.submit(intent)
-            if submit_result.interrupted_intent is not None:
-                interrupted_stream_id = submit_result.interrupted_intent.stream_id
-                interrupted_playback = self._playback_streams.pop((device_id, interrupted_stream_id), None)
-                if interrupted_playback is not None:
-                    self._mark_playback_interrupted_locked(
-                        controller=controller,
-                        playback=interrupted_playback,
-                        reason="higher_priority_playback",
-                    )
-                    request_id = self._notification_stream_requests.pop((device_id, interrupted_stream_id), None)
-                    if request_id is not None:
-                        self._notification_request_streams.pop(request_id, None)
-            if submit_result.decision.action in {"play_now", "interrupt"}:
-                controller.current_playback = playback
-            else:
-                controller.pending_playbacks.append(playback)
-                controller.pending_playbacks.sort(
-                    key=lambda item: (-self._playback_priority_value(item.priority), item.created_at_ms)
-                )
-            self._playback_streams[(device_id, stream_id)] = playback
-            self._playback_condition.notify_all()
-        if interrupted_playback is not None:
-            self._send_control_message(
-                device_id,
-                "request",
-                "actuator.audio.interrupt",
-                interrupted_playback.session_id,
-                {
-                    "device_id": device_id,
-                    "stream_id": interrupted_playback.stream_id,
-                    "reason": "higher_priority_playback",
-                    "incoming_stream_id": stream_id,
-                    "resume_policy": interrupted_playback.resume_policy,
-                },
-            )
-            try:
-                interrupted_playback.queue.put_nowait(None)
-            except queue.Full:
-                pass
-        return playback
 
     def _enqueue_playback_chunk(self, playback: PlaybackStreamContext, chunk: bytes) -> None:
-        while True:
-            try:
-                playback.queue.put(chunk, timeout=0.5)
-                return
-            except queue.Full:
-                if playback.abort_event.is_set():
-                    return
+        enqueue_playback_chunk(playback, chunk)
 
     def _finish_playback_stream(self, playback: PlaybackStreamContext) -> None:
-        playback.completed = True
-        playback.finished_event.set()
-        try:
-            playback.queue.put_nowait(None)
-        except queue.Full:
-            pass
+        finish_playback_stream(playback)
 
     def _fail_current_playback(self, device_id: str) -> None:
         with self._lock:
@@ -4189,12 +4081,7 @@ class VoiceRuntime:
     def _playback_priority_value(self, priority: str) -> int:
         """把播放优先级转换为本地队列排序值。"""
 
-        return {
-            "low": 0,
-            "normal": 1,
-            "high": 2,
-            "critical": 3,
-        }.get(priority, 1)
+        return playback_priority_value(priority)
 
     def _pop_pending_playback_locked(
         self,
@@ -4203,10 +4090,7 @@ class VoiceRuntime:
     ) -> PlaybackStreamContext | None:
         """按播放流编号从待播队列取出下一条播放流。"""
 
-        for index, pending in enumerate(controller.pending_playbacks):
-            if pending.stream_id == stream_id:
-                return controller.pending_playbacks.pop(index)
-        return None
+        return pop_pending_playback(controller, stream_id)
 
     def _mark_playback_interrupted_locked(
         self,
@@ -4217,21 +4101,12 @@ class VoiceRuntime:
     ) -> None:
         """在持锁状态下把播放流标记为已中断。"""
 
-        playback.failed = True
-        playback.completed = True
-        playback.abort_event.set()
-        playback.finished_event.set()
-        self._interrupted_playback_streams.add((playback.device_id, playback.stream_id))
-        controller.last_playback_stream_id = playback.stream_id
-        controller.last_playback_state = "interrupted"
-        controller.last_playback_reason = reason
-        if controller.current_playback is playback:
-            controller.current_playback = None
-            controller.state = "listening"
-        else:
-            controller.pending_playbacks = [
-                pending for pending in controller.pending_playbacks if pending is not playback
-            ]
+        mark_playback_interrupted(
+            controller=controller,
+            playback=playback,
+            reason=reason,
+            interrupted_playback_streams=self._interrupted_playback_streams,
+        )
 
     def _remove_playback_by_intent_locked(
         self,
@@ -4242,16 +4117,15 @@ class VoiceRuntime:
     ) -> tuple[PlaybackStreamContext | None, str | None]:
         """按仲裁器意图移除本地播放流。"""
 
-        if intent is None:
-            return None, None
-        playback = self._playback_streams.pop((intent.device_id, intent.stream_id), None)
-        request_id = self._notification_stream_requests.pop((intent.device_id, intent.stream_id), None)
-        if request_id is not None:
-            self._notification_request_streams.pop(request_id, None)
-        if playback is None:
-            return None, request_id
-        self._mark_playback_interrupted_locked(controller=controller, playback=playback, reason=reason)
-        return playback, request_id
+        return remove_playback_by_intent(
+            controller=controller,
+            intent=intent,
+            playback_streams=self._playback_streams,
+            notification_stream_requests=self._notification_stream_requests,
+            notification_request_streams=self._notification_request_streams,
+            interrupted_playback_streams=self._interrupted_playback_streams,
+            reason=reason,
+        )
 
     def _abort_local_playback_streams_after_realtime_interrupt(
         self,
@@ -4298,20 +4172,13 @@ class VoiceRuntime:
             )
 
     def _wait_for_playback(self, *, device_id: str, stream_id: str, timeout_s: float) -> PlaybackStreamContext:
-        deadline = time.monotonic() + timeout_s
-        with self._playback_condition:
-            while True:
-                playback = self._playback_streams.get((device_id, stream_id))
-                if playback is not None:
-                    return playback
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise build_error(
-                        ErrorCode.TIMEOUT,
-                        "等待播放流超时",
-                        details={"device_id": device_id, "stream_id": stream_id},
-                    )
-                self._playback_condition.wait(timeout=remaining)
+        return wait_for_playback(
+            playback_streams=self._playback_streams,
+            playback_condition=self._playback_condition,
+            device_id=device_id,
+            stream_id=stream_id,
+            timeout_s=timeout_s,
+        )
 
     def _store_asset(self, session_id: str, kind: str, filename: str, data: bytes) -> str:
         directory = os.path.join(self._settings.voice_runs_root, session_id, "audio", kind)
@@ -4343,26 +4210,15 @@ class VoiceRuntime:
 
     @staticmethod
     def _send_chunked_headers(handler) -> None:
-        handler.send_response(200)
-        handler.send_header("Content-Type", "audio/wav")
-        handler.send_header("Cache-Control", "no-cache")
-        handler.send_header("Transfer-Encoding", "chunked")
-        handler.send_header("Connection", "close")
-        handler.end_headers()
+        send_chunked_wav_headers(handler)
 
     @staticmethod
     def _write_chunk(handler, payload: bytes) -> None:
-        if not payload:
-            return
-        handler.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
-        handler.wfile.write(payload)
-        handler.wfile.write(b"\r\n")
-        handler.wfile.flush()
+        write_chunked_payload(handler, payload)
 
     @staticmethod
     def _finish_chunked(handler) -> None:
-        handler.wfile.write(b"0\r\n\r\n")
-        handler.wfile.flush()
+        finish_chunked_payload(handler)
 
     def _get_controller(self, device_id: str) -> VoiceSessionController:
         with self._lock:

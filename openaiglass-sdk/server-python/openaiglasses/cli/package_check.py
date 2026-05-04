@@ -183,6 +183,7 @@ for module_name in [
     "runtime.voice_state",
     "runtime.audio_utils",
     "runtime.model_payloads",
+    "runtime.playback_streams",
     "runtime.omni.realtime_client",
     "runtime.omni.omni_voice_server",
     "runtime.text.speech_clients",

@@ -530,6 +530,7 @@ audio-samples/
 2. `sdk-v98` 已完成 Phase 2/3/4 的第一轮代码落点：新增 `OmniVoiceServer`、`TextVoiceServer`、`TextDialogStateMachine` 和 package-check 导入覆盖。为保护已验证的真机语音链路，DashScope Realtime 客户端和 TTS/ASR 热路径暂时仍由 `VoiceRuntime` 承载，再由两个 server adapter 委托；后续只做低风险迁移，不改变设备协议。
 3. `sdk-v99` 已完成第一轮物理拆分：Omni Realtime 客户端迁入 `runtime/omni/realtime_client.py`，ASR/TTS/兼容语音模型客户端迁入 `runtime/text/speech_clients.py`，共享常量、模型分片和模型载荷解析迁入独立模块；`VoiceRuntime` 保留兼容导入并继续承载设备会话编排。
 4. `sdk-v100` 已完成共享状态与音频工具拆分：`runtime/voice_state.py` 承载语音段、播放流、会话控制器和回复合成上下文；`runtime/audio_utils.py` 承载 PCM/WAV 工具和流式重采样器。
+5. `sdk-v101` 已完成播放子系统基础拆分：`runtime/playback_streams.py` 承载播放流创建、播放请求、优先级队列、中断清理、HTTP chunked WAV 输出和播放等待逻辑。
 
 ### Phase 1：抽象边界
 
