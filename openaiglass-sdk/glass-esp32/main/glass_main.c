@@ -220,6 +220,7 @@ static void reset_control_session_state(void);
 static void ensure_control_transport_started(void);
 static bool init_camera(void);
 static bool ensure_speaker_channel_enabled(void);
+static void drain_and_pause_speaker(void);
 static void start_playback_stream(const char *stream_id);
 static void play_wake_prompt_tone(void);
 static void start_camera_stream(const char *stream_id, const char *target_ws_uri, int frame_interval_ms);
@@ -1433,6 +1434,7 @@ static void play_wake_prompt_tone(void)
         );
         if (write_err != ESP_OK) {
             ESP_LOGW(TAG, "唤醒提示音写入失败: %s", esp_err_to_name(write_err));
+            drain_and_pause_speaker();
             heap_caps_free(mono_buffer);
             heap_caps_free(stereo_buffer);
             return;
@@ -1445,6 +1447,7 @@ static void play_wake_prompt_tone(void)
         CONFIG_GLASS_WAKE_PROMPT_TONE_DURATION_MS,
         CONFIG_GLASS_WAKE_PROMPT_TONE_FREQ_HZ
     );
+    drain_and_pause_speaker();
     heap_caps_free(mono_buffer);
     heap_caps_free(stereo_buffer);
 #endif
@@ -1645,7 +1648,12 @@ static bool ensure_speaker_channel_enabled(void)
         return false;
     }
     if (s_speaker_channel_enabled) {
-        return true;
+        esp_err_t disable_err = i2s_channel_disable(s_spk_tx_chan);
+        if (disable_err != ESP_OK) {
+            ESP_LOGW(TAG, "重置本地提示音扬声器通道失败: %s", esp_err_to_name(disable_err));
+        }
+        s_speaker_channel_enabled = false;
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     esp_err_t preload_err = i2s_channel_preload_data(
         s_spk_tx_chan,
