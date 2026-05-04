@@ -20,7 +20,7 @@ from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 from protocol.media import MediaFrame
 from runtime.audio_utils import PCM16StreamResampler, build_wav_bytes, wav_header_unknown_size
-from runtime.notifications import NotificationCoordinator, NotificationRequest, NotificationSubmitResult
+from runtime.notifications import NotificationCoordinator, NotificationRequest
 from runtime.playback_arbiter import PlaybackArbiter, PlaybackIntent
 from runtime.realtime_voice import RealtimeModelAdapter, RealtimeVoiceRuntime
 from runtime.task_event_bridge import TaskEventBridge
@@ -39,6 +39,7 @@ from runtime.voice_constants import (
 )
 from runtime.voice_models import ModelChunk
 from runtime.model_payloads import build_audio_data_url, extract_message_text, extract_text_delta, read_attr_or_key
+from runtime.notification_voice_bridge import NotificationVoiceBridge
 from runtime.omni.realtime_client import (
     DashscopeOmniRealtimeReplyClient,
     OmniRealtimeReplyResult,
@@ -154,6 +155,22 @@ class VoiceRuntime:
             interrupter=self._interrupt_notification_request,
         )
         self._playback_arbiter = PlaybackArbiter()
+        self._notification_voice_bridge = NotificationVoiceBridge(
+            agent_facade=self._agent_facade,
+            task_event_bridge=self._task_event_bridge,
+            notification_coordinator=self._notification_coordinator,
+            lock=self._lock,
+            controllers=self._controllers,
+            playback_streams=self._playback_streams,
+            notification_stream_requests=self._notification_stream_requests,
+            notification_request_streams=self._notification_request_streams,
+            playback_arbiter=self._playback_arbiter,
+            send_control_message=self._send_control_message,
+            open_reply_synthesis_context=self._open_reply_synthesis_context,
+            synthesize_text_into_context=self._synthesize_text_into_context,
+            mark_playback_interrupted_locked=self._mark_playback_interrupted_locked,
+            logger=self._logger,
+        )
         self._text_dialog_state_machine = TextDialogStateMachine()
         self._realtime_voice_runtime = RealtimeVoiceRuntime(
             playback_arbiter=self._playback_arbiter,
@@ -898,18 +915,8 @@ class VoiceRuntime:
         3. 对要求回流决策的事件，再转换成 `AgentTurn` 交给 `agent-core`。
         """
 
-        request = self._task_event_bridge.handle_event(event)
-        if request is None:
-            dispatched = False
-        else:
-            submit_result = self._notification_coordinator.submit(request)
-            dispatched = submit_result.dispatched
-        if event.requires_agent_decision:
-            threading.Thread(
-                target=self._run_task_event_agent_turn,
-                args=(event, dispatched),
-                daemon=True,
-            ).start()
+        self._sync_notification_voice_bridge()
+        self._notification_voice_bridge.on_task_event(event)
 
     def submit_notification(
         self,
@@ -950,42 +957,21 @@ class VoiceRuntime:
         1. 空文本不会抛异常，会返回 `accepted=false`。
         """
 
-        resolved_text = text.strip()
-        if not resolved_text:
-            return {
-                "accepted": False,
-                "dispatched": False,
-                "queued": False,
-                "reason": "empty_notification_text",
-            }
-        resolved_allow_interrupt = priority in {"high", "critical"} if allow_interrupt is None else allow_interrupt
-        resolved_allow_merge = priority in {"low", "normal"} if allow_merge is None else allow_merge
-        result = self._notification_coordinator.submit(
-            NotificationRequest(
-                request_id=request_id,
-                source_module=source_module,
-                session_id=session_id,
-                device_id=device_id,
-                task_id=task_id,
-                priority=priority,
-                notification_type=notification_type,
-                delivery_mode="audio",
-                allow_interrupt=resolved_allow_interrupt,
-                allow_merge=resolved_allow_merge,
-                requires_agent_context_sync=requires_agent_context_sync,
-                dedupe_key=dedupe_key or f"{notification_type}:{task_id or request_id}:{resolved_text}",
-                payload={"text": resolved_text},
-            )
+        self._sync_notification_voice_bridge()
+        return self._notification_voice_bridge.submit_notification(
+            request_id=request_id,
+            source_module=source_module,
+            session_id=session_id,
+            device_id=device_id,
+            task_id=task_id,
+            text=text,
+            priority=priority,
+            notification_type=notification_type,
+            allow_interrupt=allow_interrupt,
+            allow_merge=allow_merge,
+            requires_agent_context_sync=requires_agent_context_sync,
+            dedupe_key=dedupe_key,
         )
-        return {
-            "accepted": result.accepted,
-            "dispatched": result.dispatched,
-            "queued": result.queued,
-            "interrupted_active": result.interrupted_active,
-            "reason": result.reason,
-            "active_request_id": result.active_request_id,
-            "queued_position": result.queued_position,
-        }
 
     def stream_playback(self, handler, *, device_id: str, stream_id: str) -> None:
         playback = self._wait_for_playback(device_id=device_id, stream_id=stream_id, timeout_s=10.0)
@@ -3422,97 +3408,20 @@ class VoiceRuntime:
     def _dispatch_notification_request(self, request: NotificationRequest) -> None:
         """把通过裁决的通知申请转成实际播报。"""
 
-        threading.Thread(
-            target=self._play_notification_request,
-            args=(request,),
-            daemon=True,
-        ).start()
+        self._sync_notification_voice_bridge()
+        self._notification_voice_bridge.dispatch_notification_request(request)
 
     def _play_notification_request(self, request: NotificationRequest) -> None:
         """播报通知协调器批准的通知。"""
 
-        text = str(request.payload.get("text", "")).strip()
-        if not text:
-            return
-        try:
-            context = self._open_reply_synthesis_context(
-                device_id=request.device_id,
-                session_id=request.session_id,
-                source="vision_alert" if request.notification_type.startswith("vision.") else "task_notification",
-                priority=request.priority,
-                interrupt_policy=request.interrupt_policy,
-                resume_policy=request.resume_policy,
-                task_id=request.task_id,
-            )
-            with self._lock:
-                self._notification_stream_requests[(request.device_id, context.stream_id)] = request.request_id
-                self._notification_request_streams[request.request_id] = (request.device_id, context.stream_id)
-            self._send_control_message(
-                request.device_id,
-                "notify",
-                "assistant.reply",
-                request.session_id,
-                {
-                    "device_id": request.device_id,
-                    "text": text,
-                    "stream_id": context.stream_id,
-                    "task_id": request.task_id,
-                    "task_type": request.payload.get("task_type"),
-                    "task_state": request.payload.get("task_state"),
-                    "priority": request.priority,
-                    "interrupt_policy": request.interrupt_policy,
-                    "resume_policy": request.resume_policy,
-                },
-            )
-            self._synthesize_text_into_context(
-                device_id=request.device_id,
-                session_id=request.session_id,
-                context=context,
-                text=text,
-            )
-        except Exception as exc:  # pragma: no cover - 真机联调路径
-            log_debug(
-                self._logger,
-                f"通知播报失败，已忽略: reason={exc!r}",
-                LogContext(device_id=request.device_id, session_id=request.session_id, message_id=request.request_id),
-            )
+        self._sync_notification_voice_bridge()
+        self._notification_voice_bridge.play_notification_request(request)
 
     def _run_task_event_agent_turn(self, event: TaskEvent, dispatched_direct_notify: bool) -> None:
         """执行后台任务事件的 Agent 回流主路径。"""
 
-        try:
-            turn = self._task_event_bridge.convert_event_to_agent_turn(event)
-            agent_result = self._agent_facade.handle_turn(turn)
-            reply_text = agent_result.reply_text.strip()
-            if not reply_text or dispatched_direct_notify:
-                return
-            self._notification_coordinator.submit(
-                NotificationRequest(
-                    request_id=generate_id("notify_req"),
-                    source_module="agent-core",
-                    session_id=event.session_id,
-                    device_id=event.device_id,
-                    task_id=event.task_id,
-                    priority=event.priority,
-                    notification_type=f"{event.event_name}.agent_reply",
-                    delivery_mode="audio",
-                    allow_interrupt=event.priority in {"high", "critical"},
-                    allow_merge=event.priority in {"low", "normal"},
-                    requires_agent_context_sync=False,
-                    dedupe_key=f"{event.event_name}:{event.task_id}:agent_reply",
-                    payload={
-                        "text": reply_text,
-                        "task_type": event.task_type,
-                        "task_state": event.state,
-                    },
-                )
-            )
-        except Exception as exc:  # pragma: no cover - 真机联调路径
-            log_debug(
-                self._logger,
-                f"任务事件回流 agent-core 失败，已忽略: reason={exc!r}",
-                LogContext(device_id=event.device_id, session_id=event.session_id, message_id=event.event_id),
-            )
+        self._sync_notification_voice_bridge()
+        self._notification_voice_bridge.run_task_event_agent_turn(event, dispatched_direct_notify)
 
     def _interrupt_notification_request(self, request: NotificationRequest) -> None:
         """中断当前活动的通知播报流。
@@ -3523,51 +3432,24 @@ class VoiceRuntime:
         3. 先向设备显式下发 `actuator.audio.interrupt`，再让新的高优先级通知接管活动位置。
         """
 
-        playback: PlaybackStreamContext | None = None
-        interrupt_device_id: str | None = None
-        interrupt_session_id: str | None = None
-        interrupt_stream_id: str | None = None
-        with self._lock:
-            stream_ref = self._notification_request_streams.pop(request.request_id, None)
-            if stream_ref is None:
-                return
-            device_id, stream_id = stream_ref
-            interrupt_device_id = device_id
-            interrupt_stream_id = stream_id
-            self._notification_stream_requests.pop((device_id, stream_id), None)
-            playback = self._playback_streams.pop((device_id, stream_id), None)
-            self._playback_arbiter.remove(device_id=device_id, stream_id=stream_id)
-            controller = self._controllers.get(device_id)
-            if playback is None or controller is None:
-                return
-            interrupt_session_id = playback.session_id
-            self._mark_playback_interrupted_locked(
-                controller=controller,
-                playback=playback,
-                reason="higher_priority_notification",
-            )
-        if (
-            interrupt_device_id is not None
-            and interrupt_session_id is not None
-            and interrupt_stream_id is not None
-        ):
-            self._send_control_message(
-                interrupt_device_id,
-                "request",
-                "actuator.audio.interrupt",
-                interrupt_session_id,
-                {
-                    "device_id": interrupt_device_id,
-                    "stream_id": interrupt_stream_id,
-                    "reason": "higher_priority_notification",
-                    "request_id": request.request_id,
-                    "resume_policy": request.resume_policy,
-                },
-            )
-        try:
-            playback.queue.put_nowait(None)
-        except queue.Full:
-            pass
+        self._sync_notification_voice_bridge()
+        self._notification_voice_bridge.interrupt_notification_request(request)
+
+    def _sync_notification_voice_bridge(self) -> None:
+        """同步迁移期可能被测试替换的通知协调器引用。
+
+        主要逻辑：
+        1. 旧单测和少量诊断代码可能直接替换 `_notification_coordinator`。
+        2. 通知语音桥接层需要使用同一个协调器对象，避免提交和快照分裂。
+
+        返回值：
+        1. 无返回值。
+
+        异常情况：
+        1. 本函数不抛出业务异常。
+        """
+
+        self._notification_voice_bridge.set_notification_coordinator(self._notification_coordinator)
 
     def _synthesize_text_into_context(
         self,

@@ -532,6 +532,7 @@ audio-samples/
 4. `sdk-v100` 已完成共享状态与音频工具拆分：`runtime/voice_state.py` 承载语音段、播放流、会话控制器和回复合成上下文；`runtime/audio_utils.py` 承载 PCM/WAV 工具和流式重采样器。
 5. `sdk-v101` 已完成播放子系统基础拆分：`runtime/playback_streams.py` 承载播放流创建、播放请求、优先级队列、中断清理、HTTP chunked WAV 输出和播放等待逻辑。
 6. `sdk-v102` 已完成进度播报缓存拆分：`runtime/progress_audio_cache.py` 承载 Tool 前置播报缓存预热、缓存指纹、WAV/metadata 读写和运行时 PCM 查询。
+7. `sdk-v103` 已完成通知与 Task 事件语音桥接拆分：`runtime/notification_voice_bridge.py` 承载通知提交、TaskEvent 回流 Agent、通知播报和高优先级通知中断。
 
 ### Phase 1：抽象边界
 
