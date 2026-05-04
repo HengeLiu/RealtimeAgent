@@ -54,6 +54,7 @@ def _build_server_defaults() -> dict[str, str]:
         "VOICE_OMNI_REALTIME_MODEL_NAME": defaults.voice_omni_realtime_model_name,
         "VOICE_OMNI_REALTIME_URL": defaults.voice_omni_realtime_url,
         "VOICE_OMNI_PHOTO_WAIT_MS": str(defaults.voice_omni_photo_wait_ms),
+        "VOICE_OMNI_SESSION_LIFECYCLE": defaults.voice_omni_session_lifecycle,
         "VOICE_CONVERSATION_MODE": defaults.voice_conversation_mode,
         "VOICE_REALTIME_TURN_DETECTION": defaults.voice_realtime_turn_detection_type,
         "VOICE_REALTIME_SEMANTIC_VAD_THRESHOLD": str(defaults.voice_realtime_semantic_vad_threshold),

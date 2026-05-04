@@ -37,6 +37,7 @@ MODEL_OUTPUT_SAMPLE_RATE_HZ = 24000
 PLAYBACK_QUEUE_MAX = 256
 UTTERANCE_PHOTO_CAPTURE_TIMEOUT_MS = 10000
 OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
+OMNI_SEMANTIC_VAD_AUTO_RESPONSE_GRACE_SECONDS = 3.0
 VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS = 3.0
 VOICE_TURN_SHORT_PENDING_ASR_MAX_MS = 1800
 CONVERSATION_STOP_PHRASES = (
@@ -307,6 +308,7 @@ class VoiceSessionController:
     close_continuous_dialog_after_stream_id: str | None = None
     close_continuous_dialog_after_reason: str | None = None
     close_continuous_dialog_after_source: str | None = None
+    persistent_omni_realtime_session: "OmniRealtimeStreamingSession | None" = None
 
 
 @dataclass(slots=True)
@@ -353,6 +355,14 @@ class OmniRealtimeStreamingSession:
         response_id_box: list[str],
         request_started_at_ms_box: list[int],
         metrics_lock: threading.Lock,
+        callback_state: dict[str, Any],
+        pending_tool_count_box: list[int],
+        on_chunk_box: list[Callable[[ModelChunk], None]],
+        on_audio_done_box: list[Callable[[], None] | None],
+        tool_handler_box: list[Callable[[dict[str, Any]], dict[str, Any]] | None],
+        on_model_first_output_box: list[Callable[[str], None] | None],
+        segment_id_box: list[str],
+        stream_id_box: list[str],
         on_chunk: Callable[[ModelChunk], None],
         logger,
         session_id: str,
@@ -382,6 +392,14 @@ class OmniRealtimeStreamingSession:
         self._response_id_box = response_id_box
         self._request_started_at_ms_box = request_started_at_ms_box
         self._metrics_lock = metrics_lock
+        self._callback_state = callback_state
+        self._pending_tool_count_box = pending_tool_count_box
+        self._on_chunk_box = on_chunk_box
+        self._on_audio_done_box = on_audio_done_box
+        self._tool_handler_box = tool_handler_box
+        self._on_model_first_output_box = on_model_first_output_box
+        self._segment_id_box = segment_id_box
+        self._stream_id_box = stream_id_box
         self._on_chunk = on_chunk
         self._logger = logger
         self._session_id = session_id
@@ -396,6 +414,111 @@ class OmniRealtimeStreamingSession:
         self._audio_frame_count = 0
         self._image_frame_count = 0
         self._closed = False
+
+    def begin_turn(
+        self,
+        *,
+        segment_id: str,
+        stream_id: str,
+        instructions: str,
+        tools: list[dict[str, Any]] | None,
+        tool_handler: Callable[[dict[str, Any]], dict[str, Any]] | None,
+        on_chunk: Callable[[ModelChunk], None],
+        on_audio_done: Callable[[], None] | None = None,
+        on_model_first_output: Callable[[str], None] | None,
+    ) -> None:
+        """在同一条 Omni Realtime 长连接上开始新的用户轮次。
+
+        主要逻辑：
+        1. 重置上一轮的等待事件、文本累积、响应编号和首包指标。
+        2. 更新本轮的播放回调、工具处理器和日志 segment/stream 标识。
+        3. 通过 `session.update` 刷新当前 Agent-Core 生成的指令和工具 schema。
+
+        参数：
+        1. `segment_id/stream_id`：当前端侧语音段标识。
+        2. `instructions/tools/tool_handler`：当前轮 Agent-Core 准备出的模型上下文。
+        3. `on_chunk`：当前轮下行音频分片回调。
+        4. `on_model_first_output`：当前轮模型首输出类型回调。
+
+        异常情况：
+        1. 长连接已关闭时抛出 `INVALID_MESSAGE`。
+        2. 底层 `session.update` 失败时透传异常，由调用方关闭长连接并降级。
+        """
+
+        if self._closed:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "Omni Realtime 长连接已经关闭，不能开始新轮次",
+                details={"segment_id": segment_id, "stream_id": stream_id},
+            )
+        self._done_event.clear()
+        self._error_box.clear()
+        self._assistant_text_parts.clear()
+        self._transcript_parts.clear()
+        self._response_id_box.clear()
+        self._request_started_at_ms_box.clear()
+        self._callback_state.update(
+            {
+                "response_created_at_ms": None,
+                "first_audio_at_ms": None,
+                "first_text_at_ms": None,
+                "assistant_text_logged": False,
+                "current_response_has_tool_call": False,
+                "first_output_kind": None,
+                "audio_done_notified": False,
+            }
+        )
+        self._pending_tool_count_box[0] = 0
+        self._on_chunk_box[0] = on_chunk
+        self._on_audio_done_box[0] = on_audio_done
+        self._tool_handler_box[0] = tool_handler
+        self._on_model_first_output_box[0] = on_model_first_output
+        self._segment_id_box[0] = segment_id
+        self._stream_id_box[0] = stream_id
+        self._segment_id = segment_id
+        self._stream_id = stream_id
+        self._request_started_at_ms = None
+        self._first_audio_append_at_ms = None
+        self._audio_bytes = 0
+        self._audio_frame_count = 0
+        self._image_frame_count = 0
+        self._refresh_session(instructions=instructions, tools=tools)
+
+    def _refresh_session(self, *, instructions: str, tools: list[dict[str, Any]] | None) -> None:
+        """刷新当前 Omni Realtime session 的系统指令和工具列表。"""
+
+        try:
+            from dashscope.audio.qwen_omni import AudioFormat, MultiModality
+        except ImportError as exc:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "缺少 dashscope 依赖，无法刷新 Omni Realtime 长连接",
+                details={"hint": "请执行 uv sync 安装 dashscope"},
+            ) from exc
+        tool_session_kwargs = {"tools": tools, "tool_choice": "auto"} if tools else {}
+        self._conversation.update_session(
+            output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
+            voice=self._settings.voice_model_voice,
+            input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
+            output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+            enable_input_audio_transcription=True,
+            input_audio_transcription_model=self._settings.voice_asr_model_name,
+            enable_turn_detection=self._settings.omni_turn_detection_enabled(),
+            turn_detection_type=self._settings.voice_realtime_turn_detection_type,
+            prefix_padding_ms=self._settings.voice_realtime_prefix_padding_ms,
+            turn_detection_threshold=self._settings.voice_realtime_semantic_vad_threshold,
+            turn_detection_silence_duration_ms=self._settings.voice_realtime_silence_duration_ms,
+            instructions=instructions,
+            **tool_session_kwargs,
+        )
+        log_debug(
+            self._logger,
+            (
+                "Omni Realtime 长连接已刷新当前轮上下文 "
+                f"segment_id={self._segment_id} stream_id={self._stream_id} tool_count={len(tools or [])}"
+            ),
+            LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
+        )
 
     @property
     def request_started_at_ms(self) -> int | None:
@@ -518,6 +641,8 @@ class OmniRealtimeStreamingSession:
                         LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
                     )
             if not self._request_started_at_ms_box:
+                self._done_event.wait(OMNI_SEMANTIC_VAD_AUTO_RESPONSE_GRACE_SECONDS)
+            if not self._request_started_at_ms_box and not self._done_event.is_set():
                 log_info(
                     self._logger,
                     (
@@ -677,6 +802,7 @@ class ReplySynthesisContext:
     audio_source: str = "tts"
     output_pcm: bytearray = field(default_factory=bytearray)
     resampler: PCM16StreamResampler | None = None
+    finalized: bool = False
 
 
 @dataclass(slots=True)
@@ -1574,6 +1700,7 @@ class DashscopeOmniRealtimeReplyClient:
         on_chunk: Callable[[ModelChunk], None],
         tools: list[dict[str, Any]] | None = None,
         tool_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        on_audio_done: Callable[[], None] | None = None,
         on_model_first_output: Callable[[str], None] | None = None,
         session_id: str,
         device_id: str,
@@ -1633,38 +1760,62 @@ class DashscopeOmniRealtimeReplyClient:
         response_id_box: list[str] = []
         metrics_lock = threading.Lock()
         pending_tool_lock = threading.Lock()
-        pending_tool_count = 0
+        pending_tool_count_box = [0]
         request_started_at_ms_box: list[int] = []
-        response_created_at_ms: int | None = None
-        first_audio_at_ms: int | None = None
-        first_text_at_ms: int | None = None
-        assistant_text_logged = False
-        current_response_has_tool_call = False
+        callback_state: dict[str, Any] = {
+            "response_created_at_ms": None,
+            "first_audio_at_ms": None,
+            "first_text_at_ms": None,
+            "assistant_text_logged": False,
+            "current_response_has_tool_call": False,
+            "first_output_kind": None,
+            "audio_done_notified": False,
+        }
         first_output_lock = threading.Lock()
-        first_output_kind: str | None = None
+        on_chunk_box = [on_chunk]
+        on_audio_done_box = [on_audio_done]
+        tool_handler_box = [tool_handler]
+        on_model_first_output_box = [on_model_first_output]
+        segment_id_box = [segment_id]
+        stream_id_box = [stream_id]
 
         def _mark_first_model_output(kind: str) -> None:
             """记录 Omni 本轮第一个模型输出类型，并通知 Agent-Core 工具上下文。"""
 
-            nonlocal first_output_kind
             if kind not in {"tool_call", "text", "audio"}:
                 return
             with first_output_lock:
-                if first_output_kind is not None:
+                if callback_state.get("first_output_kind") is not None:
                     return
-                first_output_kind = kind
-            if on_model_first_output is not None:
+                callback_state["first_output_kind"] = kind
+            callback = on_model_first_output_box[0]
+            if callback is not None:
                 try:
-                    on_model_first_output(kind)
+                    callback(kind)
                 except Exception:
                     return
+
+        def _notify_audio_done_once() -> None:
+            """在 Omni 音频结束事件到达时只通知一次下行播放流收尾。"""
+
+            if callback_state.get("audio_done_notified"):
+                return
+            callback_state["audio_done_notified"] = True
+            callback = on_audio_done_box[0]
+            if callback is None:
+                return
+            try:
+                callback()
+            except Exception as exc:  # noqa: BLE001 - 播放收尾失败要让等待方转入错误处理
+                error_box.append(f"Omni Realtime 音频完成回调失败: {exc}")
+                done_event.set()
 
         def _complete_tool_call(*, call_id: str, tool_name: str, arguments_text: str) -> None:
             """执行 Realtime 工具调用并把结果回填给 Omni。"""
 
-            nonlocal pending_tool_count
             try:
-                if tool_handler is None:
+                handler = tool_handler_box[0]
+                if handler is None:
                     output_payload = {
                         "ok": False,
                         "error": {
@@ -1673,7 +1824,7 @@ class DashscopeOmniRealtimeReplyClient:
                         },
                     }
                 else:
-                    output_payload = tool_handler(
+                    output_payload = handler(
                         {
                             "call_id": call_id,
                             "name": tool_name,
@@ -1688,7 +1839,7 @@ class DashscopeOmniRealtimeReplyClient:
                     }
                 )
                 with pending_tool_lock:
-                    pending_tool_count = max(pending_tool_count - 1, 0)
+                    pending_tool_count_box[0] = max(pending_tool_count_box[0] - 1, 0)
                 conversation.create_response(output_modalities=[MultiModality.TEXT, MultiModality.AUDIO])
                 log_debug(
                     self_logger,
@@ -1697,7 +1848,7 @@ class DashscopeOmniRealtimeReplyClient:
                 )
             except Exception as exc:  # noqa: BLE001 - 工具桥异常需要结束当前 Realtime 响应
                 with pending_tool_lock:
-                    pending_tool_count = max(pending_tool_count - 1, 0)
+                    pending_tool_count_box[0] = max(pending_tool_count_box[0] - 1, 0)
                 error_box.append(f"Omni Realtime 工具调用处理失败: {exc}")
                 done_event.set()
 
@@ -1723,9 +1874,6 @@ class DashscopeOmniRealtimeReplyClient:
                     )
 
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - 真实联调路径
-                nonlocal response_created_at_ms, first_audio_at_ms, first_text_at_ms, assistant_text_logged
-                nonlocal pending_tool_count
-                nonlocal current_response_has_tool_call
                 event_type = str(message.get("type") or "")
                 now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
                 log_debug(
@@ -1737,7 +1885,7 @@ class DashscopeOmniRealtimeReplyClient:
                     LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
                 )
                 if event_type == "response.created":
-                    current_response_has_tool_call = False
+                    callback_state["current_response_has_tool_call"] = False
                     response = message.get("response")
                     if isinstance(response, dict):
                         response_id = str(response.get("id") or "")
@@ -1745,7 +1893,7 @@ class DashscopeOmniRealtimeReplyClient:
                             response_id_box.append(response_id)
                     if not request_started_at_ms_box:
                         request_started_at_ms_box.append(now_ms)
-                    response_created_at_ms = now_ms
+                    callback_state["response_created_at_ms"] = now_ms
                     log_debug(
                         self_logger,
                         (
@@ -1782,17 +1930,17 @@ class DashscopeOmniRealtimeReplyClient:
                     return
 
                 if event_type in {"response.audio_transcript.delta", "response.text.delta"}:
-                    if current_response_has_tool_call:
+                    if callback_state.get("current_response_has_tool_call"):
                         with pending_tool_lock:
-                            if pending_tool_count <= 0:
-                                current_response_has_tool_call = False
+                            if pending_tool_count_box[0] <= 0:
+                                callback_state["current_response_has_tool_call"] = False
                     delta = str(message.get("delta") or "")
                     if delta:
                         _mark_first_model_output("text")
                         assistant_text_parts.append(delta)
                         with metrics_lock:
-                            if first_text_at_ms is None:
-                                first_text_at_ms = now_ms
+                            if callback_state.get("first_text_at_ms") is None:
+                                callback_state["first_text_at_ms"] = now_ms
                                 log_info(
                                     self_logger,
                                     (
@@ -1800,7 +1948,7 @@ class DashscopeOmniRealtimeReplyClient:
                                         f"first_text_latency_ms="
                                         f"{DashscopeOmniRealtimeReplyClient._latency_ms(request_started_at_ms_box[-1] if request_started_at_ms_box else None, now_ms)} "
                                         f"response_create_to_first_text_ms="
-                                        f"{DashscopeOmniRealtimeReplyClient._latency_ms(response_created_at_ms, now_ms)} "
+                                        f"{DashscopeOmniRealtimeReplyClient._latency_ms(callback_state.get('response_created_at_ms'), now_ms)} "
                                         f"text_preview={delta[:24]!r}"
                                     ),
                                     LogContext(device_id=device_id, session_id=session_id),
@@ -1808,10 +1956,10 @@ class DashscopeOmniRealtimeReplyClient:
                     return
 
                 if event_type == "response.audio.delta":
-                    if current_response_has_tool_call:
+                    if callback_state.get("current_response_has_tool_call"):
                         with pending_tool_lock:
-                            if pending_tool_count <= 0:
-                                current_response_has_tool_call = False
+                            if pending_tool_count_box[0] <= 0:
+                                callback_state["current_response_has_tool_call"] = False
                     delta = str(message.get("delta") or "")
                     if not delta:
                         return
@@ -1824,8 +1972,8 @@ class DashscopeOmniRealtimeReplyClient:
                     if audio_pcm:
                         _mark_first_model_output("audio")
                     with metrics_lock:
-                        if first_audio_at_ms is None:
-                            first_audio_at_ms = now_ms
+                        if callback_state.get("first_audio_at_ms") is None:
+                            callback_state["first_audio_at_ms"] = now_ms
                             log_info(
                                 self_logger,
                                 (
@@ -1833,24 +1981,25 @@ class DashscopeOmniRealtimeReplyClient:
                                     f"first_audio_latency_ms="
                                     f"{DashscopeOmniRealtimeReplyClient._latency_ms(request_started_at_ms_box[-1] if request_started_at_ms_box else None, now_ms)} "
                                     f"response_create_to_first_audio_ms="
-                                    f"{DashscopeOmniRealtimeReplyClient._latency_ms(response_created_at_ms, now_ms)} "
+                                    f"{DashscopeOmniRealtimeReplyClient._latency_ms(callback_state.get('response_created_at_ms'), now_ms)} "
                                     f"bytes={len(audio_pcm)}"
                                 ),
                                 LogContext(device_id=device_id, session_id=session_id),
                             )
-                    on_chunk(ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
+                    on_chunk_box[0](ModelChunk(audio_pcm_bytes=audio_pcm, sample_rate_hz=MODEL_OUTPUT_SAMPLE_RATE_HZ))
                     return
 
                 if event_type == "response.audio.done":
                     with pending_tool_lock:
-                        has_pending_tool = pending_tool_count > 0
-                    if has_pending_tool or current_response_has_tool_call:
+                        has_pending_tool = pending_tool_count_box[0] > 0
+                    if has_pending_tool or callback_state.get("current_response_has_tool_call"):
                         return
                     log_debug(
                         self_logger,
                         "Omni Realtime 音频输出完成",
                         LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
                     )
+                    _notify_audio_done_once()
                     done_event.set()
                     return
 
@@ -1863,9 +2012,9 @@ class DashscopeOmniRealtimeReplyClient:
                         done_event.set()
                         return
                     _mark_first_model_output("tool_call")
-                    current_response_has_tool_call = True
+                    callback_state["current_response_has_tool_call"] = True
                     with pending_tool_lock:
-                        pending_tool_count += 1
+                        pending_tool_count_box[0] += 1
                     threading.Thread(
                         target=_complete_tool_call,
                         kwargs={
@@ -1888,8 +2037,8 @@ class DashscopeOmniRealtimeReplyClient:
                     if final_text and not assistant_text_parts:
                         assistant_text_parts.append(final_text)
                     text_for_log = final_text or "".join(assistant_text_parts).strip()
-                    if text_for_log and not assistant_text_logged:
-                        assistant_text_logged = True
+                    if text_for_log and not callback_state.get("assistant_text_logged"):
+                        callback_state["assistant_text_logged"] = True
                         log_info(
                             self_logger,
                             f"Omni Realtime 助手文本完成 text={_format_log_text(text_for_log)!r}",
@@ -1910,17 +2059,19 @@ class DashscopeOmniRealtimeReplyClient:
 
                 if event_type in {"response.done", "response.cancelled"}:
                     with pending_tool_lock:
-                        has_pending_tool = pending_tool_count > 0
-                    if has_pending_tool or current_response_has_tool_call:
+                        has_pending_tool = pending_tool_count_box[0] > 0
+                    if has_pending_tool or callback_state.get("current_response_has_tool_call"):
                         return
                     text_for_log = "".join(assistant_text_parts).strip()
-                    if event_type == "response.done" and text_for_log and not assistant_text_logged:
-                        assistant_text_logged = True
+                    if event_type == "response.done" and text_for_log and not callback_state.get("assistant_text_logged"):
+                        callback_state["assistant_text_logged"] = True
                         log_info(
                             self_logger,
                             f"Omni Realtime 助手文本完成 text={_format_log_text(text_for_log)!r}",
                             LogContext(device_id=device_id, session_id=session_id),
                         )
+                    if callback_state.get("first_audio_at_ms") is not None:
+                        _notify_audio_done_once()
                     done_event.set()
                     return
 
@@ -1980,6 +2131,14 @@ class DashscopeOmniRealtimeReplyClient:
                 response_id_box=response_id_box,
                 request_started_at_ms_box=request_started_at_ms_box,
                 metrics_lock=metrics_lock,
+                callback_state=callback_state,
+                pending_tool_count_box=pending_tool_count_box,
+                on_chunk_box=on_chunk_box,
+                on_audio_done_box=on_audio_done_box,
+                tool_handler_box=tool_handler_box,
+                on_model_first_output_box=on_model_first_output_box,
+                segment_id_box=segment_id_box,
+                stream_id_box=stream_id_box,
                 on_chunk=on_chunk,
                 logger=self._logger,
                 session_id=session_id,
@@ -2866,6 +3025,8 @@ class VoiceRuntime:
                 )
                 self._controllers[device_id] = controller
             else:
+                if controller.persistent_omni_realtime_session is not None:
+                    controller.persistent_omni_realtime_session.close(blocking=False)
                 controller.device_type = device_type
                 controller.session_id = session_id
                 controller.state = "opened"
@@ -2875,6 +3036,7 @@ class VoiceRuntime:
                 controller.last_playback_stream_id = None
                 controller.last_playback_state = None
                 controller.last_playback_reason = None
+                controller.persistent_omni_realtime_session = None
 
     def build_open_payload(self) -> dict[str, Any]:
         return {
@@ -3301,6 +3463,9 @@ class VoiceRuntime:
                 return
             if controller.current_segment is not None and controller.current_segment.omni_realtime_session is not None:
                 controller.current_segment.omni_realtime_session.close()
+            if controller.persistent_omni_realtime_session is not None:
+                controller.persistent_omni_realtime_session.close(blocking=False)
+                controller.persistent_omni_realtime_session = None
             playback_streams = []
             if controller.current_playback is not None:
                 playback_streams.append(controller.current_playback)
@@ -3939,6 +4104,8 @@ class VoiceRuntime:
                 "session_id": controller.session_id,
                 "state": controller.state,
                 "active_segment_id": controller.current_segment.segment_id if controller.current_segment else None,
+                "omni_session_lifecycle": self._settings.voice_omni_session_lifecycle,
+                "omni_persistent_connected": controller.persistent_omni_realtime_session is not None,
                 "reply_stream_id": current_playback.stream_id if current_playback else None,
                 "reply_audio_source": current_playback.audio_source if current_playback else None,
                 "reply_first_text_delta_at_ms": current_playback.first_text_delta_at_ms if current_playback else None,
@@ -4536,6 +4703,14 @@ class VoiceRuntime:
                     f"关闭忽略语音段 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
                     LogContext(device_id=device_id, session_id=session_id),
                 )
+            if close_continuous_dialog:
+                with self._lock:
+                    controller = self._controllers.get(device_id)
+                    if (
+                        controller is not None
+                        and controller.persistent_omni_realtime_session is segment.omni_realtime_session
+                    ):
+                        controller.persistent_omni_realtime_session = None
         if segment.turn_intent == "unknown":
             segment.turn_intent = "ignore"
             segment.turn_intent_reason = reason
@@ -4756,13 +4931,20 @@ class VoiceRuntime:
 
         if segment.omni_realtime_session is not None:
             try:
-                segment.omni_realtime_session.close()
+                try:
+                    segment.omni_realtime_session.close(blocking=False)
+                except TypeError:
+                    segment.omni_realtime_session.close()
             except Exception as exc:  # noqa: BLE001 - 停止指令清理失败只写日志
                 log_debug(
                     self._logger,
                     f"关闭停止指令 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
                     LogContext(device_id=device_id, session_id=session_id),
                 )
+            with self._lock:
+                controller = self._controllers.get(device_id)
+                if controller is not None and controller.persistent_omni_realtime_session is segment.omni_realtime_session:
+                    controller.persistent_omni_realtime_session = None
         if segment.omni_realtime_context is not None:
             self.handle_user_interrupt(
                 device_id=device_id,
@@ -4817,6 +4999,13 @@ class VoiceRuntime:
         }
         if stream_id:
             payload["stream_id"] = stream_id
+        with self._lock:
+            controller = self._controllers.get(device_id)
+            persistent_session = controller.persistent_omni_realtime_session if controller else None
+            if controller is not None:
+                controller.persistent_omni_realtime_session = None
+        if persistent_session is not None:
+            persistent_session.close(blocking=False)
         self._send_control_message(
             device_id,
             "request",
@@ -5174,18 +5363,79 @@ class VoiceRuntime:
                     chunk=chunk,
                 )
 
-            session = self._omni_realtime_client.start_streaming_reply(
-                settings=self._settings,
-                instructions=prepared.instructions,
-                on_chunk=_handle_omni_audio_chunk,
-                tools=prepared.tools,
-                tool_handler=prepared.tool_handler,
-                on_model_first_output=prepared.runtime.tool_context.note_model_output,
-                session_id=session_id,
-                device_id=device_id,
-                segment_id=segment.segment_id,
-                stream_id=segment.stream_id,
-            )
+            def _handle_omni_audio_done() -> None:
+                current_context = context
+                if current_context is None:
+                    return
+                self._finalize_synthesis_context(
+                    device_id=device_id,
+                    session_id=session_id,
+                    context=current_context,
+                )
+
+            use_persistent_omni = self._settings.voice_omni_session_lifecycle == "persistent"
+            session: OmniRealtimeStreamingSession | None = None
+            if use_persistent_omni:
+                with self._lock:
+                    controller = self._controllers.get(device_id)
+                    session = controller.persistent_omni_realtime_session if controller else None
+                if session is not None:
+                    try:
+                        session.begin_turn(
+                            segment_id=segment.segment_id,
+                            stream_id=segment.stream_id,
+                            instructions=prepared.instructions,
+                            tools=prepared.tools,
+                            tool_handler=prepared.tool_handler,
+                            on_chunk=_handle_omni_audio_chunk,
+                            on_audio_done=_handle_omni_audio_done,
+                            on_model_first_output=prepared.runtime.tool_context.note_model_output,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - 长连接刷新失败时重建
+                        log_debug(
+                            self._logger,
+                            (
+                                "Omni Realtime 长连接刷新失败，准备重建 "
+                                f"segment_id={segment.segment_id} reason={exc!r}"
+                            ),
+                            LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                        )
+                        try:
+                            session.close(blocking=False)
+                        except Exception:
+                            pass
+                        with self._lock:
+                            controller = self._controllers.get(device_id)
+                            if controller is not None and controller.persistent_omni_realtime_session is session:
+                                controller.persistent_omni_realtime_session = None
+                        session = None
+            if session is None:
+                session = self._omni_realtime_client.start_streaming_reply(
+                    settings=self._settings,
+                    instructions=prepared.instructions,
+                    on_chunk=_handle_omni_audio_chunk,
+                    on_audio_done=_handle_omni_audio_done,
+                    tools=prepared.tools,
+                    tool_handler=prepared.tool_handler,
+                    on_model_first_output=prepared.runtime.tool_context.note_model_output,
+                    session_id=session_id,
+                    device_id=device_id,
+                    segment_id=segment.segment_id,
+                    stream_id=segment.stream_id,
+                )
+                if use_persistent_omni:
+                    with self._lock:
+                        controller = self._controllers.get(device_id)
+                        if controller is not None:
+                            controller.persistent_omni_realtime_session = session
+                    log_info(
+                        self._logger,
+                        (
+                            "Omni Realtime 长连接已建立 "
+                            f"segment_id={segment.segment_id} stream_id={segment.stream_id}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                    )
         except Exception as exc:  # noqa: BLE001 - 预连接失败时回退整段提交路径
             log_debug(
                 self._logger,
@@ -5203,7 +5453,9 @@ class VoiceRuntime:
                 with self._lock:
                     controller = self._controllers.get(device_id)
                     if controller is None or controller.current_segment is not segment:
-                        session.close()
+                        session.close(blocking=False)
+                        if self._settings.voice_omni_session_lifecycle == "persistent" and controller is not None:
+                            controller.persistent_omni_realtime_session = None
                         return
                     pending = bytes(segment.payload[sent_bytes:])
                     if not pending:
@@ -5813,7 +6065,8 @@ class VoiceRuntime:
                 return
             raise
         finally:
-            omni_session.close(blocking=False)
+            if self._settings.voice_omni_session_lifecycle != "persistent":
+                omni_session.close(blocking=False)
 
         transcript, transcript_source = self._select_transcript_for_agent(
             segment=segment,
@@ -6777,6 +7030,10 @@ class VoiceRuntime:
         context: ReplySynthesisContext,
     ) -> None:
         """结束回复播放流，并补齐重采样尾巴。"""
+
+        if context.finalized:
+            return
+        context.finalized = True
 
         if context.resampler is not None:
             tail_chunk = context.resampler.push(b"", final=True)

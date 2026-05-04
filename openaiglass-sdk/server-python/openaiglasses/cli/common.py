@@ -37,6 +37,7 @@ YAML_ENV_KEY_MAP: dict[tuple[str, ...], str] = {
     ("models", "omni_realtime", "model"): "VOICE_OMNI_REALTIME_MODEL_NAME",
     ("models", "omni_realtime", "url"): "VOICE_OMNI_REALTIME_URL",
     ("models", "omni_realtime", "photo_wait_ms"): "VOICE_OMNI_PHOTO_WAIT_MS",
+    ("models", "omni_realtime", "session_lifecycle"): "VOICE_OMNI_SESSION_LIFECYCLE",
     ("models", "asr", "mode"): "VOICE_ASR_MODE",
     ("models", "asr", "batch_model"): "VOICE_ASR_MODEL_NAME",
     ("models", "asr", "realtime", "model"): "VOICE_ASR_REALTIME_MODEL_NAME",

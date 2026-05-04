@@ -36,31 +36,32 @@ class ServerSettings:
     15. `voice_omni_realtime_model_name`：Omni Realtime 实验性直连模型名称。
     16. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
     17. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
-    18. `voice_conversation_mode`：语音对话模式，稳定分段提交或实验性 Omni 语义连续对话。
-    19. `voice_realtime_turn_detection_type`：实时对话 turn detection 类型。
-    20. `voice_realtime_semantic_vad_threshold`：Omni 语义 VAD 阈值。
-    21. `voice_realtime_silence_duration_ms`：服务端 VAD 判定句尾的静音时长。
-    22. `voice_realtime_prefix_padding_ms`：服务端 VAD 句首保留音频时长。
-    23. `voice_input_mode`：旧版语音输入模式，仅用于兼容配置。
-    24. `tts_model_name`：专用流式 TTS 模型名称。
-    25. `tts_voice`：专用流式 TTS 音色。
-    26. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
-    27. `tts_sample_rate_hz`：TTS 原始输出采样率。
-    28. `tool_progress_audio_enabled`：是否全局启用工具调用前置播报。
-    29. `tool_progress_audio_mode`：工具前置播报音频来源，`cached` 或 `realtime`。
-    30. `voice_model_timeout_ms`：模型请求超时时间。
-    31. `voice_runs_root`：语音运行时资产落盘目录。
-    32. `voice_asr_model_name`：批量语音转写模型名称。
-    33. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
-    34. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
-    35. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
-    36. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
-    37. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    38. `voice_system_prompt`：默认系统提示词。
-    39. `max_segment_audio_bytes`：单轮上行音频最大字节数。
-    40. `agent_memory_enabled`：是否启用 Agent 长期记忆。
-    41. `agent_memory_store_path`：长期记忆本地持久化文件路径。
-    42. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
+    18. `voice_omni_session_lifecycle`：Omni Realtime 会话生命周期，`persistent` 表示连续对话长连接。
+    19. `voice_conversation_mode`：语音对话模式，稳定分段提交或实验性 Omni 语义连续对话。
+    20. `voice_realtime_turn_detection_type`：实时对话 turn detection 类型。
+    21. `voice_realtime_semantic_vad_threshold`：Omni 语义 VAD 阈值。
+    22. `voice_realtime_silence_duration_ms`：服务端 VAD 判定句尾的静音时长。
+    23. `voice_realtime_prefix_padding_ms`：服务端 VAD 句首保留音频时长。
+    24. `voice_input_mode`：旧版语音输入模式，仅用于兼容配置。
+    25. `tts_model_name`：专用流式 TTS 模型名称。
+    26. `tts_voice`：专用流式 TTS 音色。
+    27. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
+    28. `tts_sample_rate_hz`：TTS 原始输出采样率。
+    29. `tool_progress_audio_enabled`：是否全局启用工具调用前置播报。
+    30. `tool_progress_audio_mode`：工具前置播报音频来源，`cached` 或 `realtime`。
+    31. `voice_model_timeout_ms`：模型请求超时时间。
+    32. `voice_runs_root`：语音运行时资产落盘目录。
+    33. `voice_asr_model_name`：批量语音转写模型名称。
+    34. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
+    35. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
+    36. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
+    37. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
+    38. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    39. `voice_system_prompt`：默认系统提示词。
+    40. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    41. `agent_memory_enabled`：是否启用 Agent 长期记忆。
+    42. `agent_memory_store_path`：长期记忆本地持久化文件路径。
+    43. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
     """
 
     host: str = "0.0.0.0"
@@ -81,6 +82,7 @@ class ServerSettings:
     voice_omni_realtime_model_name: str = "qwen3.5-omni-plus-realtime"
     voice_omni_realtime_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     voice_omni_photo_wait_ms: int = 300
+    voice_omni_session_lifecycle: str = "persistent"
     voice_conversation_mode: str = "realtime_semantic_vad"
     voice_realtime_turn_detection_type: str = "semantic_vad"
     voice_realtime_semantic_vad_threshold: float = 0.65
@@ -192,6 +194,10 @@ class ServerSettings:
                 "VOICE_OMNI_PHOTO_WAIT_MS",
                 defaults.voice_omni_photo_wait_ms,
             ),
+            voice_omni_session_lifecycle=os.getenv(
+                "VOICE_OMNI_SESSION_LIFECYCLE",
+                defaults.voice_omni_session_lifecycle,
+            ).strip().lower(),
             voice_conversation_mode=voice_conversation_mode,
             voice_realtime_turn_detection_type=os.getenv(
                 "VOICE_REALTIME_TURN_DETECTION",
@@ -477,6 +483,16 @@ class ServerSettings:
                 "VOICE_OMNI_PHOTO_WAIT_MS 不能小于 0",
                 details={"voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms},
             )
+        valid_omni_session_lifecycles = {"per_turn", "persistent"}
+        if self.voice_omni_session_lifecycle not in valid_omni_session_lifecycles:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_OMNI_SESSION_LIFECYCLE 非法",
+                details={
+                    "voice_omni_session_lifecycle": self.voice_omni_session_lifecycle,
+                    "valid_lifecycles": sorted(valid_omni_session_lifecycles),
+                },
+            )
         valid_voice_conversation_modes = {"segment_turn", "realtime_semantic_vad"}
         if self.voice_conversation_mode not in valid_voice_conversation_modes:
             raise build_error(
@@ -666,6 +682,7 @@ class ServerSettings:
             "voice_omni_realtime_model_name": self.voice_omni_realtime_model_name,
             "voice_omni_realtime_url": self.voice_omni_realtime_url,
             "voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms,
+            "voice_omni_session_lifecycle": self.voice_omni_session_lifecycle,
             "voice_conversation_mode": self.voice_conversation_mode,
             "voice_realtime_turn_detection_type": self.voice_realtime_turn_detection_type,
             "voice_realtime_semantic_vad_threshold": self.voice_realtime_semantic_vad_threshold,

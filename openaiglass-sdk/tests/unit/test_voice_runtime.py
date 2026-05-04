@@ -1943,6 +1943,110 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(result.transcript, "看一下")
         session.close()
 
+    def test_omni_streaming_session_reuses_connection_for_next_turn(self) -> None:
+        """测试目标：验证 Omni 长连接可以在同一 WebSocket 上承载多轮语音。
+
+        测试方法：
+        1. 注入假的 Omni Realtime 会话，记录 `update_session` 和 `close` 调用。
+        2. 第一轮返回音频和文本后不关闭会话。
+        3. 调用 `begin_turn(...)` 开始第二轮，并模拟第二轮响应。
+
+        预期结果：
+        1. 两轮音频分别进入各自回调。
+        2. 第二轮会刷新当前轮 instructions/tools。
+        3. 普通轮次完成不会关闭底层 WebSocket。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.update_count = 0
+                self.closed = False
+
+            def connect(self) -> None:
+                return None
+
+            def update_session(self, **_kwargs) -> None:
+                self.update_count += 1
+
+            def append_audio(self, _audio_b64: str) -> None:
+                return None
+
+            def append_video(self, _image_b64: str) -> None:
+                return None
+
+            def create_item(self, _item) -> None:
+                return None
+
+            def create_response(self, **_kwargs) -> None:
+                return None
+
+            def close(self) -> None:
+                self.closed = True
+
+        first_chunks: list[ModelChunk] = []
+        second_chunks: list[ModelChunk] = []
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        session = client.start_streaming_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+                voice_omni_session_lifecycle="persistent",
+            ),
+            instructions="第一轮",
+            on_chunk=first_chunks.append,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-1",
+            stream_id="stream-1",
+        )
+        assert _Factory.instance is not None
+        session.append_audio(b"pcm-1")
+        _Factory.instance.callback.on_event({"type": "input_audio_buffer.speech_stopped"})
+        _Factory.instance.callback.on_event(
+            {"type": "response.audio.delta", "delta": base64.b64encode(b"audio-1").decode()}
+        )
+        _Factory.instance.callback.on_event({"type": "response.audio_transcript.delta", "delta": "第一轮"})
+        _Factory.instance.callback.on_event({"type": "response.audio.done"})
+
+        first_result = session.finish(image_frames=[], instructions="第一轮", segment_finished_at_ms=0)
+
+        session.begin_turn(
+            segment_id="seg-2",
+            stream_id="stream-2",
+            instructions="第二轮",
+            tools=[],
+            tool_handler=None,
+            on_chunk=second_chunks.append,
+            on_model_first_output=None,
+        )
+        session.append_audio(b"pcm-2")
+        _Factory.instance.callback.on_event({"type": "input_audio_buffer.speech_stopped"})
+        _Factory.instance.callback.on_event(
+            {"type": "response.audio.delta", "delta": base64.b64encode(b"audio-2").decode()}
+        )
+        _Factory.instance.callback.on_event({"type": "response.audio_transcript.delta", "delta": "第二轮"})
+        _Factory.instance.callback.on_event({"type": "response.audio.done"})
+
+        second_result = session.finish(image_frames=[], instructions="第二轮", segment_finished_at_ms=0)
+
+        self.assertEqual(first_chunks[0].audio_pcm_bytes, b"audio-1")
+        self.assertEqual(second_chunks[0].audio_pcm_bytes, b"audio-2")
+        self.assertEqual(first_result.assistant_text, "第一轮")
+        self.assertEqual(second_result.assistant_text, "第二轮")
+        self.assertEqual(_Factory.instance.update_count, 2)
+        self.assertFalse(_Factory.instance.closed)
+        session.close()
+        self.assertTrue(_Factory.instance.closed)
+
     def test_omni_semantic_vad_without_auto_commit_requests_segment_turn_fallback(self) -> None:
         """测试目标：验证 semantic VAD 没有自动提交时不会一直等待超时。
 
