@@ -528,6 +528,7 @@ audio-samples/
 
 1. `sdk-v97` 已完成 Phase 1 的配置与内部协议边界。
 2. `sdk-v98` 已完成 Phase 2/3/4 的第一轮代码落点：新增 `OmniVoiceServer`、`TextVoiceServer`、`TextDialogStateMachine` 和 package-check 导入覆盖。为保护已验证的真机语音链路，DashScope Realtime 客户端和 TTS/ASR 热路径暂时仍由 `VoiceRuntime` 承载，再由两个 server adapter 委托；后续只做低风险迁移，不改变设备协议。
+3. `sdk-v99` 已完成第一轮物理拆分：Omni Realtime 客户端迁入 `runtime/omni/realtime_client.py`，ASR/TTS/兼容语音模型客户端迁入 `runtime/text/speech_clients.py`，共享常量、模型分片和模型载荷解析迁入独立模块；`VoiceRuntime` 保留兼容导入并继续承载设备会话编排。
 
 ### Phase 1：抽象边界
 
@@ -553,12 +554,13 @@ audio-samples/
 1. `omni_server` 下多轮连续对话复用同一 Omni 连接。
 2. `capture_photo` Realtime 工具图片追加仍通过。
 
-`sdk-v98` 当前落地：
+`sdk-v99` 当前落地：
 
 1. 新增 `runtime/omni/omni_voice_server.py`，建立 Omni Server 适配器。
 2. `VoiceGateway.from_runtime(...)` 在 `voice.server_mode=omni_server` 时选择 `OmniVoiceServer`。
 3. `VoiceRuntime` snapshot 增加 `voice_server_mode`，方便联调确认当前模型服务。
-4. DashScope Realtime 客户端仍在 `VoiceRuntime` 文件中，属于下一轮物理迁移项。
+4. `DashscopeOmniRealtimeReplyClient`、`OmniRealtimeStreamingSession`、`OmniRealtimeReplyResult` 和 Omni server event 摘要逻辑已迁入 `runtime/omni/realtime_client.py`。
+5. `VoiceRuntime` 仍负责设备会话、播放流和 Task/通知编排；下一轮再继续拆播放、通知和会话状态。
 
 ### Phase 3：抽出 Text Server
 
@@ -572,11 +574,12 @@ audio-samples/
 1. `text_server` 下普通问答、视觉问答、停止对话和工具调用通过。
 2. Text Server 可以用不支持音频输入的纯文本模型。
 
-`sdk-v98` 当前落地：
+`sdk-v99` 当前落地：
 
 1. 新增 `runtime/text/text_voice_server.py`，建立 Text Server 适配器。
 2. 新增 `runtime/text/text_dialog_state_machine.py`，把停止指令、空文本、语气词、助手回声和短连续 VAD 文本规则收敛到 Text Server 状态机。
 3. `VoiceRuntime` 的文本裁决路径改为调用 `TextDialogStateMachine`，Omni 主链路仍不等待完整 ASR 做主裁决。
+4. `VoiceModelClient`、`DashscopeVoiceModelClient`、`SpeechRecognitionClient`、`DashscopeSpeechRecognitionClient`、`StreamingTtsSession`、`DashscopeCosyVoiceTtsSession` 和实时 ASR 会话已迁入 `runtime/text/speech_clients.py`。
 
 ### Phase 4：清理旧分支
 
@@ -590,11 +593,12 @@ audio-samples/
 1. 新增 SDK package-check 确认 Omni 代码不 import Text ASR/TTS。
 2. Text 代码不 import Omni Realtime SDK。
 
-`sdk-v98` 当前落地：
+`sdk-v99` 当前落地：
 
 1. 内部热路径继续以 `effective_voice_server_mode()` 作为主分支。
 2. `VOICE_REPLY_MODE` 保留为迁移兼容字段；如果和 `VOICE_SERVER_MODE` 同时配置且不一致，启动会失败。
-3. package-check 增加新 server 边界模块导入验证。物理 import 隔离会在 DashScope/TTS/ASR 热路径迁移完成后收紧。
+3. package-check 增加新 server 边界模块和物理拆分模块导入验证。
+4. `runtime.voice_runtime` 保留旧类名 re-export，避免业务测试替身和已有单测在迁移期被迫改导入路径。
 
 ## 14. 风险与取舍
 

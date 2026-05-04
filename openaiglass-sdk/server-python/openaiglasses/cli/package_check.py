@@ -178,7 +178,12 @@ for module_name in [
     "api.http_server",
     "runtime.voice_runtime",
     "runtime.voice_gateway",
+    "runtime.voice_constants",
+    "runtime.voice_models",
+    "runtime.model_payloads",
+    "runtime.omni.realtime_client",
     "runtime.omni.omni_voice_server",
+    "runtime.text.speech_clients",
     "runtime.text.text_voice_server",
     "runtime.text.text_dialog_state_machine",
 ]:
