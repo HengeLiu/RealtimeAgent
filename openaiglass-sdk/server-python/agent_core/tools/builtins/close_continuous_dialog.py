@@ -17,10 +17,6 @@ class CloseContinuousDialogInput(BaseModel):
         default="after_reply",
         description="关闭方式。当前 SDK 固定为 after_reply，表示等当前回复播报完成后关闭连续对话。",
     )
-    reason: str = Field(
-        default="user_requested",
-        description="关闭原因，例如用户说结束对话、安静、先这样或不用继续等。",
-    )
 
 
 class CloseContinuousDialogOutput(BaseModel):
@@ -28,7 +24,6 @@ class CloseContinuousDialogOutput(BaseModel):
 
     scheduled: bool
     mode: str
-    reason: str
 
 
 class CloseContinuousDialogTool(BaseTool):
@@ -57,20 +52,18 @@ class CloseContinuousDialogTool(BaseTool):
 
         参数：
             context: 当前 Agent 工具上下文。
-            input_data: 模型声明的关闭方式和原因。
+            input_data: 模型声明的关闭方式。
 
         返回值：
             `CapabilityResult`，其中 `scheduled=True` 表示关闭意图已记录。
 
         异常情况：
-            本工具不抛出业务异常；空原因会降级为 `user_requested`。
+            本工具不抛出业务异常。
         """
 
-        reason = input_data.reason.strip() or "user_requested"
         request = {
             "scheduled": True,
             "mode": input_data.mode,
-            "reason": reason,
             "source": "model_tool",
             "tool_name": self.spec.name,
         }
@@ -79,7 +72,6 @@ class CloseContinuousDialogTool(BaseTool):
             data={
                 "scheduled": True,
                 "mode": input_data.mode,
-                "reason": reason,
             },
             message="已安排在当前回复结束后关闭连续对话。",
         )

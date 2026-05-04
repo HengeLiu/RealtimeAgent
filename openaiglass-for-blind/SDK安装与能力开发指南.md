@@ -4,7 +4,7 @@
 
 开发者不需要理解 SDK 内部的 WebSocket、设备绑定、任务状态机和媒体协议细节，但必须知道三端 SDK 各自负责什么、业务代码应该写在哪里，以及如何使用设备级数据回放完成高效自测，再进入真机联调。
 
-当前指南对应 SDK 版本：`sdk-v92`。本版本把 Omni Realtime 连续对话默认改为设备语音会话级 persistent 长连接：普通每轮回复完成后只根据 `response.audio.done` 收口当前播放流，不关闭模型连接；用户主动结束、模型工具请求关闭、长静音、设备断连或不可恢复错误时才关闭连续对话窗口和 Omni 长连接。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
+当前指南对应 SDK 版本：`sdk-v93`。本版本在 `sdk-v92` 的 Omni Realtime persistent 长连接基础上收紧模型工具契约：SDK 内置模型工具默认不要求也不暴露 `reason` 字段，运行时日志或控制消息中的关闭原因由 SDK 使用系统默认值生成，业务提示词不需要再要求大模型解释工具调用原因。公网/NAT 穿透、跨机器分布式任务平台、iOS 二进制 XCFramework 和 ESP32 component registry 发布暂不覆盖。
 
 默认语音会话模式为 `full_duplex_realtime`。如果当前设备或回放工具只支持半双工，请在 `config/local_server.yaml` 中设置 `voice.session_mode: half_duplex`。
 
@@ -13,7 +13,7 @@
 | 能力 | 当前状态 | 业务开发者应如何使用 |
 | --- | --- | --- |
 | 半双工语音问答 | 可用 | 继续按 `/ws_audio`、`voice.session.open` 和普通 Tool/Task 开发业务能力。 |
-| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填，`sdk-v85` 在服务端抑制连续 VAD 空语音段，`sdk-v86` 恢复受限连续对话、停止指令关闭窗口和播放中唤醒词打断，`sdk-v87` 增加语音轮次意图裁决，`sdk-v88` 补齐空段抑制后的端侧收口，`sdk-v89` 恢复 Omni `semantic_vad` 主裁决链路并新增模型工具关闭连续对话，`sdk-v90` 使用 `response.audio.done` 收口 Omni 下行播放流，`sdk-v91` 打印 Omni server event 摘要并后台关闭 Realtime 会话，`sdk-v92` 默认使用 Omni Realtime persistent 长连接承载连续多轮对话 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `voice.session_mode: half_duplex` 回退。ESP32-S3 当前因没有端侧 AEC，只开放播放结束后的受限连续追问和播放中的唤醒词打断，不开放无唤醒词自然插话。 |
+| 全双工实时语音 | `sdk-v19` 默认打开，`sdk-v20` 回放端已补齐打开握手，`sdk-v21` 回放端保存播放音频不会阻塞控制消息，`sdk-v22` 补齐首 token 和首段音频观测日志，`sdk-v43` 补齐服务端和回放端下行播放首包链路日志，`sdk-v44` 补齐 ESP32 真实眼镜首包播放日志，`sdk-v45` 补齐 TTS 接口级首包延迟日志，`sdk-v47` 在 Agent 请求等待期间后台预启动最终回复 TTS 流，`sdk-v49` 新增 Omni Realtime 语音直出分支，`sdk-v51` 补齐语音输入模式配置和下行音频日志口径，`sdk-v52` 默认启用 Omni 并在说话期间预连接和预推音频，`sdk-v54` 增加 Omni `semantic_vad` 连续对话配置和协议声明，`sdk-v55` 默认启用 `realtime_semantic_vad` 并补齐服务端自动响应等待与 ESP32 连续窗口，`sdk-v64` 回退 ESP32 播放中自然插话试验并保留首次唤醒轻提示，`sdk-v72` 收紧 ESP32 连续对话 VAD 追问门控，`sdk-v73` 增强 ESP32 播放任务创建失败诊断和回报，`sdk-v75` Realtime 音频直出链路支持 SDK Tool 调用和工具结果回填，`sdk-v85` 在服务端抑制连续 VAD 空语音段，`sdk-v86` 恢复受限连续对话、停止指令关闭窗口和播放中唤醒词打断，`sdk-v87` 增加语音轮次意图裁决，`sdk-v88` 补齐空段抑制后的端侧收口，`sdk-v89` 恢复 Omni `semantic_vad` 主裁决链路并新增模型工具关闭连续对话，`sdk-v90` 使用 `response.audio.done` 收口 Omni 下行播放流，`sdk-v91` 打印 Omni server event 摘要并后台关闭 Realtime 会话，`sdk-v92` 默认使用 Omni Realtime persistent 长连接承载连续多轮对话，`sdk-v93` 去掉模型工具默认 `reason` 参数 | 端侧或手机侧接入 `voice.realtime.*` 协议；旧设备通过 `voice.session_mode: half_duplex` 回退。ESP32-S3 当前因没有端侧 AEC，只开放播放结束后的受限连续追问和播放中的唤醒词打断，不开放无唤醒词自然插话。 |
 | 语音结束自动照片 | `sdk-v42` 默认进入当前用户多模态输入 | 视觉问答不再声明照片工具；SDK 会把已就绪、尚未使用的自动照片作为 `image_url` 放进当前 user message。 |
 | 实时 ASR | `sdk-v35` 默认启用，异常自动回退批量 ASR；`sdk-v39` 修正首文本和总耗时日志口径；`sdk-v40` 使用官方 `Recognition` 实时 ASR 接口；`sdk-v41` 增加分段耗时日志并降低 VAD 断句静音阈值；`sdk-v51` 通过 `VOICE_INPUT_MODE` 明确是否启用独立 ASR；`sdk-v74` 音频原生 Chat Completions 链路优先使用流式返回；`sdk-v89` 起 Omni 主链路中的旁路 ASR 默认不阻塞模型调用 | 默认 `VOICE_INPUT_MODE=auto`：`agent_tts` 分支实际为 `asr_text`，`omni_realtime` 分支实际为 `raw_audio`。文本模型或不支持语音输入的模型应使用 `agent_tts + asr_text`。Omni Realtime 模式下旁路 ASR 主要用于日志、会话回填和已经就绪时的低风险控制，不作为误触发主判定。 |
 | 工具调用前置播报 | `sdk-v69` 在 Tool 执行前支持 `ToolSpec.progress_message`；`sdk-v70` 增加静态音频缓存；`sdk-v71` 支持多句候选随机播报；`sdk-v80` 改为按模型首输出类型自动判定；`sdk-v81` 支持缓存或实时流式生成两种音频来源；`sdk-v83` 增加全局开关和启动缓存校验 | 业务 Tool 可声明一句简短等待提示，或声明 3 到 5 句候选。首输出是工具调用时 SDK 播预置提示；首输出是文本或音频时不额外插入等待提示。通过 `tools.progress_audio.enabled` 全局启停，通过 `tools.progress_audio.mode` 选择低延迟缓存或实时生成，业务代码不要自行调用播放器或 TTS。 |
@@ -161,7 +161,7 @@ ESP32-S3 当前采用受限半双工连续对话方案：播放期间不启动�
 
 `sdk-v86` 起，真实 ESP32 半双工降级模式会启用受限连续对话。正常日志应显示 `semantic_continuous_requested=1 semantic_continuous_enabled=1`。播放结束后固件会等待更长冷却，并要求连续 10 帧 VAD 语音才启动免唤醒新段。`sdk-v89` 起，Omni Realtime 主链路不再等待旁路 ASR 判断空转写或背景音，而是把已接入的音频流交给 Omni `semantic_vad` 判断是否需要自动响应；SDK 只保留空音频、没有音频帧、极短异常段这类本地确定事实的硬保护。
 
-用户说“结束对话”“停止对话”“安静”“别说了”等控制指令时，`sdk-v89` 起优先由大模型调用 SDK 内置系统工具 `close_continuous_dialog`。SDK 会允许模型播报一句很短的确认语，并在当前回复播放完成后下发 `voice.dialog.close`。如果旁路 ASR 在模型调用前已经完成且明确识别到停止指令，SDK 仍会做一次低风险快速拦截；但不会为了等待 ASR 额外增加正常问答首响延迟。
+用户说“结束对话”“停止对话”“安静”“别说了”等控制指令时，`sdk-v89` 起优先由大模型调用 SDK 内置系统工具 `close_continuous_dialog`。SDK 会允许模型播报一句很短的确认语，并在当前回复播放完成后下发 `voice.dialog.close`。`sdk-v93` 起，该工具不再要求或返回 `reason` 字段；日志中的关闭原因由 SDK 使用 `model_requested` 等系统默认值生成。如果旁路 ASR 在模型调用前已经完成且明确识别到停止指令，SDK 仍会做一次低风险快速拦截；但不会为了等待 ASR 额外增加正常问答首响延迟。
 
 播放期间如果用户需要打断当前播报，应再次说“嗨乐鑫”。端侧会在播放中继续运行 WakeNet，命中后上报 `user.voice.interrupt`，服务端进入统一播放仲裁器并下发中断播放。由于当前 ESP32 端侧仍没有可用 AEC，`barge_in_mode` 为 `wake_word`；普通无唤醒词插话不会作为默认能力开放。
 
@@ -1053,19 +1053,19 @@ Tool 中常用的 `context` 高层能力：
 | `require_glass()` | 获取当前设备组的在线眼镜。 |
 | `require_phone()` | 获取当前设备组的在线手机。 |
 | `query_devices()` | 查询当前设备组所有设备。 |
-| `capture_photo(reason=...)` | 请求眼镜单次抓拍。 |
-| `start_phone_video_link(reason=..., params=...)` | 启动眼镜到手机的视频链路。 |
-| `stop_phone_video_link(reason=...)` | 停止眼镜到手机的视频链路。 |
+| `capture_photo()` | 请求眼镜单次抓拍。 |
+| `start_phone_video_link(params=...)` | 启动眼镜到手机的视频链路。 |
+| `stop_phone_video_link()` | 停止眼镜到手机的视频链路。 |
 | `create_task(task_type=..., input_data=...)` | 创建 SDK 托管任务。 |
 | `query_task(task_id)` | 查询任务状态。 |
 | `cancel_task(task_id)` | 取消任务。 |
 | `schedule_task_event(task_id=..., delay_ms=..., event_name=...)` | 安排一次延迟任务事件。 |
 | `start_phone_task(task_type=..., params=...)` | 启动手机侧持续任务。 |
-| `stop_phone_task(task_type=..., reason=...)` | 停止手机侧持续任务。 |
+| `stop_phone_task(task_type=...)` | 停止手机侧持续任务。 |
 | `submit_notification(text=..., priority=...)` | 向设备侧提交播报或提示。 |
 | `mcp(method_name, arguments)` | 调用 SDK 统一注册的 MCP 方法，例如地图、搜索或导航规划。 |
 
-注意：上表中的 `capture_photo(reason=...)` 是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是模型可见内置工具。`sdk-v42` 起，语音结束自动照片会由 SDK 直接装入当前用户多模态输入；视觉问答类 Skill 不需要声明照片工具，也不要在 `allowed_tools` 中声明 `capture_photo`。
+注意：上表中的设备控制方法是业务 Tool/Task 通过 `DeviceGroupContext` 主动控制设备时使用的 SDK 能力，不是模型可见内置工具。`sdk-v93` 起，SDK 内置模型工具默认不需要业务侧提示词提供 `reason`；如果底层运行时日志或协议事件需要原因，SDK 会使用系统默认值。`sdk-v42` 起，语音结束自动照片会由 SDK 直接装入当前用户多模态输入；视觉问答类 Skill 不需要声明照片工具，也不要在 `allowed_tools` 中声明 `capture_photo`。
 
 ### 5.1 在 Tool 中调用 MCP
 
@@ -1225,16 +1225,14 @@ class DemoTask(BaseTask):
             )
             context.device_group.stop_phone_task(
                 task_type="demo_phone_task",
-                reason="task.completed",
             )
             context.complete(dict(event.payload))
 
     def on_cancel(self, context: TaskContext) -> None:
         context.device_group.stop_phone_task(
             task_type="demo_phone_task",
-            reason="task.cancelled",
         )
-        context.device_group.stop_phone_video_link(reason="task.cancelled")
+        context.device_group.stop_phone_video_link()
         super().on_cancel(context)
 ```
 
@@ -1828,7 +1826,7 @@ PYTHONPATH=openaiglass-sdk/server-python uv run openaiglass.sdk.package-check --
 
 | 眼镜能力 | 服务端调用方式 | 眼镜端处理 |
 | --- | --- | --- |
-| 单次抓拍 | `context.capture_photo(reason=...)` | 响应 `sensor.camera.capture`，回传 `sensor.camera.captured`。 |
+| 单次抓拍 | `context.capture_photo()` | 响应 `sensor.camera.capture`，回传 `sensor.camera.captured`。 |
 | 视频流到手机 | `context.start_phone_video_link(...)` | 响应 `sensor.camera.stream.start`，向手机 `/ws/camera` 推送帧。 |
 | 停止视频流 | `context.stop_phone_video_link(...)` | 响应 `sensor.camera.stream.stop`。 |
 | 语音输入 | SDK 服务端 `/ws_audio` | 眼镜录音、上传音频段。 |

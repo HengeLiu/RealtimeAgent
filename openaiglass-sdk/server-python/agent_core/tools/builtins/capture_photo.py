@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from agent_core.context import generate_id
 from agent_core.context.models import MediaAssetRef
@@ -23,11 +23,6 @@ _MIME_EXTENSION_MAP = {
 
 class CapturePhotoInput(BaseModel):
     """抓拍图片输入。"""
-
-    reason: str = Field(
-        default="agent_requested",
-        description="说明这次拍照要帮助回答用户的哪个问题，例如“识别前方物体”或“查看路口信号”。",
-    )
 
 
 class CapturePhotoOutput(BaseModel):
@@ -71,7 +66,7 @@ class CapturePhotoTool(BaseTool):
 
         参数：
         1. `context`：能力调用上下文。
-        2. `input_data`：抓拍原因。
+        2. `input_data`：抓拍参数；当前默认不需要模型提供参数。
 
         返回值：
         1. `CapabilityResult`，其中包含真实图片资产引用。
@@ -90,7 +85,7 @@ class CapturePhotoTool(BaseTool):
         capture = context.camera_gateway.capture_photo(
             device_id=context.device_id,
             session_id=context.session_id,
-            reason=input_data.reason,
+            reason="agent_requested",
             timeout_ms=_DEFAULT_CAMERA_CAPTURE_TIMEOUT_MS,
         )
         asset_id = generate_id("asset")
@@ -124,7 +119,6 @@ class CapturePhotoTool(BaseTool):
                 "mime_type": capture.mime_type,
                 "width": capture.width,
                 "height": capture.height,
-                "reason": input_data.reason,
                 "capture_request_id": capture.request_id,
                 "image_bytes": len(capture.image_bytes),
             },

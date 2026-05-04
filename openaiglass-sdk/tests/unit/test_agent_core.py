@@ -1837,7 +1837,7 @@ class AgentCoreTestCase(unittest.TestCase):
         result = registry.invoke(
             name="close_continuous_dialog",
             context=context,
-            arguments={"mode": "after_reply", "reason": "用户说先这样"},
+            arguments={"mode": "after_reply"},
         )
 
         self.assertTrue(result.ok)
@@ -1845,7 +1845,7 @@ class AgentCoreTestCase(unittest.TestCase):
         request = context.turn_meta["close_continuous_dialog"]
         self.assertTrue(request["scheduled"])
         self.assertEqual(request["mode"], "after_reply")
-        self.assertEqual(request["reason"], "用户说先这样")
+        self.assertNotIn("reason", request)
         self.assertIn("close_continuous_dialog", [tool.spec.name for tool in registry.list_tools()])
 
     def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:
@@ -2435,18 +2435,18 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("device_bindings", snapshot)
 
     def test_sdk_tool_signature_uses_explicit_input_fields(self) -> None:
-        """测试目标：验证 SDK Tool 不再暴露宽泛 payload 字段。"""
+        """测试目标：验证 SDK Tool 不再暴露宽泛 payload 字段，也不要求 reason 参数。"""
 
         registry, _ = build_tooling()
         sdk_tool = registry._sdk_tools["capture_photo"]
         if hasattr(sdk_tool, "params_json_schema"):
             properties = sdk_tool.params_json_schema.get("properties", {})
-            self.assertIn("reason", properties)
+            self.assertNotIn("reason", properties)
             self.assertNotIn("payload", properties)
             return
 
         signature = inspect.signature(sdk_tool)
-        self.assertIn("reason", signature.parameters)
+        self.assertNotIn("reason", signature.parameters)
         self.assertNotIn("payload", signature.parameters)
 
     def test_agent_facade_consumes_ready_utterance_photo_as_current_input_asset(self) -> None:
@@ -2547,11 +2547,12 @@ class AgentCoreTestCase(unittest.TestCase):
                 tool_gateway=gateway,
                 mcp_gateway=registry.get_mcp_gateway(),
             ),
-            arguments={"reason": "unit_test"},
+            arguments={},
         )
 
         self.assertEqual(result.data["mime_type"], "image/png")
         self.assertTrue(result.data["storage_uri"].endswith(".png"))
+        self.assertNotIn("reason", result.data)
         with open(result.data["storage_uri"], "rb") as handle:
             self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
 

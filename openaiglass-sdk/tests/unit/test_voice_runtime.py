@@ -2948,7 +2948,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         预期结果：
         1. 登记时不会立刻下发 `voice.dialog.close`。
         2. 播放完成后才下发 `voice.dialog.close`。
-        3. 控制消息携带模型工具来源和关闭原因。
+        3. 控制消息携带模型工具来源，关闭原因由运行时使用系统默认值。
         """
 
         sent_messages: list[tuple[str, dict]] = []
@@ -2970,7 +2970,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             device_id="glass-001",
             session_id="sess-test",
             playback=playback,
-            request={"scheduled": True, "reason": "用户说先这样", "source": "model_tool"},
+            request={"scheduled": True, "source": "model_tool"},
         )
 
         self.assertEqual(sent_messages, [])
@@ -2983,7 +2983,7 @@ class VoiceRuntimeTestCase(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertEqual(sent_messages[0][0], "voice.dialog.close")
-        self.assertEqual(sent_messages[0][1]["reason"], "用户说先这样")
+        self.assertEqual(sent_messages[0][1]["reason"], "model_requested")
         self.assertEqual(sent_messages[0][1]["source"], "model_tool")
         self.assertEqual(sent_messages[0][1]["stream_id"], "reply_close_001")
 

@@ -75,7 +75,7 @@ class PhaseECapabilityRunner(AgentLoopRunner):
         photo_result = self._tool_gateway.invoke(
             name="capture_photo",
             context=context,
-            arguments={"reason": "phase_e_integration"},
+            arguments={},
         )
         return AgentTurnResult(
             turn_id=turn.turn_id,
