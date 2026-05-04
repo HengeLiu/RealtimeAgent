@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 from infra.config import ServerSettings
 from infra.errors import ErrorCode, build_error
+from runtime.omni.omni_voice_server import OmniVoiceServer
+from runtime.text.text_voice_server import TextVoiceServer
+from runtime.voice_runtime import VoiceRuntime
 from runtime.voice_server_base import VoiceServer
 
 
@@ -32,3 +35,18 @@ class VoiceGateway:
                 details={"voice_server_mode": voice_server_mode},
             )
         return self.server
+
+    @classmethod
+    def from_runtime(cls, *, settings: ServerSettings, runtime: VoiceRuntime) -> "VoiceGateway":
+        """按配置把现有 `VoiceRuntime` 包装成具体 VoiceServer。"""
+
+        voice_server_mode = settings.effective_voice_server_mode()
+        if voice_server_mode == "omni_server":
+            return cls(settings=settings, server=OmniVoiceServer(settings=settings, runtime=runtime))
+        if voice_server_mode == "text_server":
+            return cls(settings=settings, server=TextVoiceServer(settings=settings, runtime=runtime))
+        raise build_error(
+            ErrorCode.INVALID_CONFIG,
+            "VOICE_SERVER_MODE 非法",
+            details={"voice_server_mode": voice_server_mode},
+        )

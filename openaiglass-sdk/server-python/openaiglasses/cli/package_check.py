@@ -177,6 +177,10 @@ for module_name in [
     "infra.clock",
     "api.http_server",
     "runtime.voice_runtime",
+    "runtime.voice_gateway",
+    "runtime.omni.omni_voice_server",
+    "runtime.text.text_voice_server",
+    "runtime.text.text_dialog_state_machine",
 ]:
     importlib.import_module(module_name)
 

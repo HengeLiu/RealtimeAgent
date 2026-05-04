@@ -29,6 +29,7 @@ from runtime.notifications import NotificationCoordinator, NotificationRequest, 
 from runtime.playback_arbiter import PlaybackArbiter, PlaybackIntent
 from runtime.realtime_voice import RealtimeModelAdapter, RealtimeVoiceRuntime
 from runtime.task_event_bridge import TaskEventBridge
+from runtime.text.text_dialog_state_machine import TextDialogStateMachine
 
 SERVER_SAMPLE_RATE_HZ = 16000
 SERVER_CHANNELS = 1
@@ -40,32 +41,6 @@ OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE = "semantic_vad_no_auto_response"
 OMNI_SEMANTIC_VAD_AUTO_RESPONSE_GRACE_SECONDS = 3.0
 VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS = 3.0
 VOICE_TURN_SHORT_PENDING_ASR_MAX_MS = 1800
-CONVERSATION_STOP_PHRASES = (
-    "结束对话",
-    "停止对话",
-    "退出对话",
-    "关闭对话",
-    "安静",
-    "别说了",
-    "不要说了",
-    "先别说",
-    "静音",
-)
-CONTINUOUS_DIALOG_FILLER_TEXTS = {
-    "嗯",
-    "啊",
-    "哦",
-    "噢",
-    "呃",
-    "额",
-    "喂",
-    "好",
-    "好的",
-    "没事",
-    "没有",
-}
-
-
 def _format_log_text(text: str, *, max_chars: int = 240) -> str:
     """格式化适合写入单行日志的文本。
 
@@ -3025,6 +3000,7 @@ class VoiceRuntime:
             interrupter=self._interrupt_notification_request,
         )
         self._playback_arbiter = PlaybackArbiter()
+        self._text_dialog_state_machine = TextDialogStateMachine()
         self._realtime_voice_runtime = RealtimeVoiceRuntime(
             playback_arbiter=self._playback_arbiter,
             send_control_message=self._send_control_message,
@@ -4122,6 +4098,7 @@ class VoiceRuntime:
             result[controller.device_id] = {
                 "session_id": controller.session_id,
                 "state": controller.state,
+                "voice_server_mode": self._settings.effective_voice_server_mode(),
                 "active_segment_id": controller.current_segment.segment_id if controller.current_segment else None,
                 "omni_session_lifecycle": self._settings.voice_omni_session_lifecycle,
                 "omni_persistent_connected": controller.persistent_omni_realtime_session is not None,
@@ -4553,14 +4530,7 @@ class VoiceRuntime:
         3. 命中后由运行时关闭连续对话窗口，不再进入 Agent。
         """
 
-        normalized = "".join(
-            char
-            for char in text.strip()
-            if char not in " \t\r\n，。！？!?、,.；;：:"
-        )
-        if not normalized or len(normalized) > 12:
-            return False
-        return any(phrase in normalized for phrase in CONVERSATION_STOP_PHRASES)
+        return self._text_dialog_state_machine.is_stop_command(text)
 
     def _normalize_voice_intent_text(self, text: str) -> str:
         """归一化语音意图文本。
@@ -4576,11 +4546,7 @@ class VoiceRuntime:
             可用于意图规则匹配的短文本。
         """
 
-        return "".join(
-            char
-            for char in text.strip()
-            if char not in " \t\r\n，。！？!?、,.；;：:（）()【】[]“”\"'‘’"
-        )
+        return self._text_dialog_state_machine.normalize(text)
 
     def _is_likely_assistant_echo(self, controller: VoiceSessionController, text: str) -> bool:
         """判断连续 VAD 文本是否像上一轮助手播报回声。
@@ -4597,16 +4563,10 @@ class VoiceRuntime:
             True 表示应按噪声/回声忽略。
         """
 
-        normalized = self._normalize_voice_intent_text(text)
-        if len(normalized) < 2:
-            return False
-        for entry in reversed(controller.message_context[-4:]):
-            if entry.role != "assistant":
-                continue
-            assistant_text = self._normalize_voice_intent_text(entry.text)
-            if normalized and normalized in assistant_text:
-                return True
-        return False
+        return self._text_dialog_state_machine.is_assistant_echo(
+            text=text,
+            recent_assistant_texts=[entry.text for entry in controller.message_context if entry.role == "assistant"],
+        )
 
     def _decide_voice_turn_intent(
         self,
@@ -4631,39 +4591,16 @@ class VoiceRuntime:
             `VoiceTurnIntentDecision`，供后续管线控制拍照、回复和会话窗口。
         """
 
-        normalized = self._normalize_voice_intent_text(transcript)
-        if self._is_conversation_stop_command(transcript):
-            return VoiceTurnIntentDecision(
-                intent="stop_conversation",
-                reason="conversation_stop_command",
-                close_continuous_dialog=True,
-            )
-        if not normalized:
-            return VoiceTurnIntentDecision(
-                intent="ignore",
-                reason="empty_transcript",
-                close_continuous_dialog=True,
-            )
-        if normalized in CONTINUOUS_DIALOG_FILLER_TEXTS:
-            return VoiceTurnIntentDecision(
-                intent="ignore",
-                reason="filler_transcript",
-                close_continuous_dialog=True,
-            )
-        if self._is_likely_assistant_echo(controller, transcript):
-            return VoiceTurnIntentDecision(
-                intent="ignore",
-                reason="assistant_echo",
-                close_continuous_dialog=True,
-            )
-        if segment.start_trigger == "continuous_vad":
-            if len(normalized) == 1:
-                return VoiceTurnIntentDecision(
-                    intent="ignore",
-                    reason="short_continuous_vad",
-                    close_continuous_dialog=True,
-                )
-        return VoiceTurnIntentDecision(intent="voice_query", reason="default_voice")
+        text_decision = self._text_dialog_state_machine.decide(
+            transcript=transcript,
+            start_trigger=segment.start_trigger,
+            recent_assistant_texts=[entry.text for entry in controller.message_context if entry.role == "assistant"],
+        )
+        return VoiceTurnIntentDecision(
+            intent=text_decision.intent,
+            reason=text_decision.reason,
+            close_continuous_dialog=text_decision.close_continuous_dialog,
+        )
 
     def _close_segment_without_reply(
         self,

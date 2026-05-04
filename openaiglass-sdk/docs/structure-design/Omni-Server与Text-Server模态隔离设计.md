@@ -524,6 +524,11 @@ audio-samples/
 
 ## 13. 分阶段实施计划
 
+实施状态：
+
+1. `sdk-v97` 已完成 Phase 1 的配置与内部协议边界。
+2. `sdk-v98` 已完成 Phase 2/3/4 的第一轮代码落点：新增 `OmniVoiceServer`、`TextVoiceServer`、`TextDialogStateMachine` 和 package-check 导入覆盖。为保护已验证的真机语音链路，DashScope Realtime 客户端和 TTS/ASR 热路径暂时仍由 `VoiceRuntime` 承载，再由两个 server adapter 委托；后续只做低风险迁移，不改变设备协议。
+
 ### Phase 1：抽象边界
 
 1. 新增 `VoiceServer` 协议和 `VoiceGateway`。
@@ -548,6 +553,13 @@ audio-samples/
 1. `omni_server` 下多轮连续对话复用同一 Omni 连接。
 2. `capture_photo` Realtime 工具图片追加仍通过。
 
+`sdk-v98` 当前落地：
+
+1. 新增 `runtime/omni/omni_voice_server.py`，建立 Omni Server 适配器。
+2. `VoiceGateway.from_runtime(...)` 在 `voice.server_mode=omni_server` 时选择 `OmniVoiceServer`。
+3. `VoiceRuntime` snapshot 增加 `voice_server_mode`，方便联调确认当前模型服务。
+4. DashScope Realtime 客户端仍在 `VoiceRuntime` 文件中，属于下一轮物理迁移项。
+
 ### Phase 3：抽出 Text Server
 
 1. 将 ASR、文本意图、Text Agent、TTS 移入 `runtime/text`。
@@ -560,6 +572,12 @@ audio-samples/
 1. `text_server` 下普通问答、视觉问答、停止对话和工具调用通过。
 2. Text Server 可以用不支持音频输入的纯文本模型。
 
+`sdk-v98` 当前落地：
+
+1. 新增 `runtime/text/text_voice_server.py`，建立 Text Server 适配器。
+2. 新增 `runtime/text/text_dialog_state_machine.py`，把停止指令、空文本、语气词、助手回声和短连续 VAD 文本规则收敛到 Text Server 状态机。
+3. `VoiceRuntime` 的文本裁决路径改为调用 `TextDialogStateMachine`，Omni 主链路仍不等待完整 ASR 做主裁决。
+
 ### Phase 4：清理旧分支
 
 1. 废弃 `VOICE_REPLY_MODE` 内部主分支。
@@ -571,6 +589,12 @@ audio-samples/
 
 1. 新增 SDK package-check 确认 Omni 代码不 import Text ASR/TTS。
 2. Text 代码不 import Omni Realtime SDK。
+
+`sdk-v98` 当前落地：
+
+1. 内部热路径继续以 `effective_voice_server_mode()` 作为主分支。
+2. `VOICE_REPLY_MODE` 保留为迁移兼容字段；如果和 `VOICE_SERVER_MODE` 同时配置且不一致，启动会失败。
+3. package-check 增加新 server 边界模块导入验证。物理 import 隔离会在 DashScope/TTS/ASR 热路径迁移完成后收紧。
 
 ## 14. 风险与取舍
 

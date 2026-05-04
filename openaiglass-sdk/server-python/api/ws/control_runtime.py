@@ -18,6 +18,7 @@ from protocol.codec.json_codec import JsonMessageCodec
 from protocol.messages.control_message import ControlMessage, Endpoint
 from protocol.utils.message_factory import create_control_message
 from runtime import VoiceRuntime
+from runtime.voice_gateway import VoiceGateway
 from runtime.voice_runtime import SpeechRecognitionClient, VoiceModelClient
 from backend_task_core import TaskEvent
 from openaiglasses.runtime import BackendTaskGatewayAdapter
@@ -118,6 +119,7 @@ class ControlRuntime(CameraGateway):
             asr_client=asr_client,
             agent_facade=agent_facade,
         )
+        self._voice_gateway = VoiceGateway.from_runtime(settings=settings, runtime=self._voice_runtime)
         self._device_group_runtime.device_command_adapter = self._send_device_group_command
         self._device_group_runtime.notification_adapter = self._submit_notification_from_device_group
         self._device_group_runtime.video_link_start_adapter = self._start_phone_video_link_from_device_group

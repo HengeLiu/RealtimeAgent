@@ -4,8 +4,12 @@
 Realtime 热路径整体迁入本包。
 """
 
-from runtime.voice_runtime import (  # noqa: F401
-    DashscopeOmniRealtimeReplyClient,
-    OmniRealtimeReplyResult,
-    OmniRealtimeStreamingSession,
-)
+from runtime.omni.omni_voice_server import OmniVoiceServer
+from runtime.voice_runtime import DashscopeOmniRealtimeReplyClient, OmniRealtimeReplyResult, OmniRealtimeStreamingSession
+
+__all__ = [
+    "DashscopeOmniRealtimeReplyClient",
+    "OmniRealtimeReplyResult",
+    "OmniRealtimeStreamingSession",
+    "OmniVoiceServer",
+]
