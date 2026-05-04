@@ -275,6 +275,9 @@ class VoiceSessionController:
     last_playback_stream_id: str | None = None
     last_playback_state: str | None = None
     last_playback_reason: str | None = None
+    close_continuous_dialog_after_stream_id: str | None = None
+    close_continuous_dialog_after_reason: str | None = None
+    close_continuous_dialog_after_source: str | None = None
 
 
 @dataclass(slots=True)
@@ -3513,6 +3516,11 @@ class VoiceRuntime:
                 playback=next_playback,
                 force=not next_playback.queue.empty() or next_playback.completed,
             )
+        self._close_continuous_dialog_after_playback_if_needed(
+            device_id=device_id,
+            session_id=session_id,
+            stream_id=stream_id,
+        )
 
     def on_playback_state(
         self,
@@ -4565,6 +4573,86 @@ class VoiceRuntime:
             )
         return VoiceTurnIntentDecision(intent="voice_query", reason="sidecar_asr_pending")
 
+    def _decide_ready_sidecar_intent_before_omni(
+        self,
+        *,
+        controller: VoiceSessionController,
+        segment: SegmentBuffer,
+    ) -> VoiceTurnIntentDecision:
+        """仅在旁路 ASR 已经就绪时做非阻塞系统裁决。
+
+        主要逻辑：
+        1. 不等待旁路 ASR，避免在模型调用前增加固定尾延迟。
+        2. 已经就绪时只处理三类低风险控制：停止指令、助手回声、视觉照片准备。
+        3. 空文本、语气词和背景音不再由 ASR 前置裁决承担，交给 Omni semantic_vad。
+
+        参数：
+            controller: 当前设备语音控制器。
+            segment: 当前待进入 Omni 的语音段。
+
+        返回值：
+            非阻塞裁决结果；默认放行为 `voice_query`。
+        """
+
+        if not segment.sidecar_transcript_done.is_set():
+            return VoiceTurnIntentDecision(intent="voice_query", reason="sidecar_asr_not_ready")
+        transcript = segment.sidecar_transcript_text.strip()
+        if not transcript:
+            return VoiceTurnIntentDecision(intent="voice_query", reason="sidecar_asr_empty")
+        if self._is_conversation_stop_command(transcript):
+            return VoiceTurnIntentDecision(
+                intent="stop_conversation",
+                reason="conversation_stop_command",
+                close_continuous_dialog=True,
+            )
+        if self._is_likely_assistant_echo(controller, transcript):
+            return VoiceTurnIntentDecision(
+                intent="ignore",
+                reason="assistant_echo",
+                close_continuous_dialog=True,
+            )
+        if self._is_visual_query_text(transcript):
+            return VoiceTurnIntentDecision(intent="visual_query", reason="visual_keyword", requires_photo=True)
+        return VoiceTurnIntentDecision(intent="voice_query", reason="sidecar_asr_ready_default")
+
+    def _should_drop_invalid_raw_audio_segment(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> bool:
+        """在进入 Omni 前丢弃明显异常的本地音频段。
+
+        主要逻辑：
+        1. 只检查本地确定事实，例如没有音频帧、没有 PCM 字节或时长极短。
+        2. 不等待 ASR，也不依据 ASR 文本判断背景音，避免影响正常首响。
+        3. 命中后关闭连续窗口，防止端侧继续等待本轮回复。
+
+        参数：
+            device_id/session_id: 当前设备和会话编号。
+            segment: 当前语音段。
+
+        返回值：
+            `True` 表示已丢弃本轮，不应继续进入 Omni。
+        """
+
+        reason = ""
+        if segment.frame_count <= 0 or not segment.payload:
+            reason = "empty_audio_segment"
+        elif segment.duration_ms() < 250:
+            reason = "too_short_audio_segment"
+        if not reason:
+            return False
+        self._close_segment_without_reply(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+            reason=reason,
+            close_continuous_dialog=True,
+        )
+        return True
+
     def _close_continuous_dialog_for_stop_command(
         self,
         *,
@@ -4621,6 +4709,129 @@ class VoiceRuntime:
             LogContext(device_id=device_id, session_id=session_id),
         )
 
+    def _send_close_continuous_dialog_control(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        reason: str,
+        source: str,
+        stream_id: str | None = None,
+    ) -> None:
+        """向眼镜下发关闭连续对话窗口控制消息。
+
+        主要逻辑：
+        1. 统一封装 `voice.dialog.close` 的 payload，避免各路径字段不一致。
+        2. 不修改播放队列，仅让端侧在当前窗口结束后回到 WakeNet 待命。
+        3. 调用方负责决定关闭时机，例如模型工具请求可等当前播放结束后再调用。
+        """
+
+        payload: dict[str, Any] = {
+            "device_id": device_id,
+            "reason": reason,
+            "source": source,
+        }
+        if stream_id:
+            payload["stream_id"] = stream_id
+        self._send_control_message(
+            device_id,
+            "request",
+            "voice.dialog.close",
+            session_id,
+            payload,
+        )
+
+    @staticmethod
+    def _extract_close_continuous_dialog_request(meta: dict[str, Any]) -> dict[str, Any] | None:
+        """从 Agent 结果中读取模型工具声明的连续对话关闭意图。"""
+
+        turn_meta = meta.get("turn_meta")
+        if not isinstance(turn_meta, dict):
+            return None
+        request = turn_meta.get("close_continuous_dialog")
+        return request if isinstance(request, dict) and request.get("scheduled") else None
+
+    def _schedule_close_continuous_dialog_after_reply(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        playback: PlaybackStreamContext,
+        request: dict[str, Any],
+    ) -> None:
+        """根据模型工具请求安排当前回复播报结束后关闭连续对话。
+
+        主要逻辑：
+        1. 当前播放尚未结束时，只在控制器上记录待关闭信息。
+        2. 如果播放已经结束，立即下发 `voice.dialog.close`。
+        3. 关闭请求不打断当前回复，符合“当前响应播报完后退出”的交互预期。
+        """
+
+        reason = str(request.get("reason") or "model_requested").strip() or "model_requested"
+        source = str(request.get("source") or "model_tool").strip() or "model_tool"
+        if playback.finished_event.is_set() or playback.completed:
+            self._send_close_continuous_dialog_control(
+                device_id=device_id,
+                session_id=session_id,
+                reason=reason,
+                source=source,
+                stream_id=playback.stream_id,
+            )
+            return
+        with self._lock:
+            controller = self._controllers.get(device_id)
+            if controller is None:
+                return
+            controller.close_continuous_dialog_after_stream_id = playback.stream_id
+            controller.close_continuous_dialog_after_reason = reason
+            controller.close_continuous_dialog_after_source = source
+        log_info(
+            self._logger,
+            (
+                "模型工具已请求回复后关闭连续对话 "
+                f"stream_id={playback.stream_id} reason={reason} source={source}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+
+    def _close_continuous_dialog_after_playback_if_needed(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        stream_id: str,
+    ) -> None:
+        """在指定播放流结束后执行延迟关闭连续对话。"""
+
+        reason: str | None = None
+        source: str | None = None
+        with self._lock:
+            controller = self._controllers.get(device_id)
+            if controller is None:
+                return
+            if controller.close_continuous_dialog_after_stream_id != stream_id:
+                return
+            reason = controller.close_continuous_dialog_after_reason or "model_requested"
+            source = controller.close_continuous_dialog_after_source or "model_tool"
+            controller.close_continuous_dialog_after_stream_id = None
+            controller.close_continuous_dialog_after_reason = None
+            controller.close_continuous_dialog_after_source = None
+        self._send_close_continuous_dialog_control(
+            device_id=device_id,
+            session_id=session_id,
+            reason=reason,
+            source=source,
+            stream_id=stream_id,
+        )
+        log_info(
+            self._logger,
+            (
+                "当前回复播报完成后已关闭连续对话 "
+                f"stream_id={stream_id} reason={reason} source={source}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+
     def _should_stop_conversation_from_sidecar(
         self,
         *,
@@ -4631,12 +4842,12 @@ class VoiceRuntime:
         """在进入 Omni 回复前用旁路 ASR 拦截停止指令。
 
         主要逻辑：
-        1. 等待短时间旁路 ASR 最终文本。
+        1. 只读取已经完成的旁路 ASR 最终文本，不等待 ASR。
         2. 如果文本是停止连续对话指令，则关闭端侧窗口并返回 True。
         3. 没有文本或不是停止指令时返回 False，让正常语音链路继续。
         """
 
-        if not segment.sidecar_transcript_done.wait(1.5):
+        if not segment.sidecar_transcript_done.is_set():
             return False
         transcript = segment.sidecar_transcript_text.strip()
         if not self._is_conversation_stop_command(transcript):
@@ -4879,9 +5090,8 @@ class VoiceRuntime:
                     chunk=chunk,
                 )
 
-            effective_settings = replace(self._settings, voice_conversation_mode="segment_turn")
             session = self._omni_realtime_client.start_streaming_reply(
-                settings=effective_settings,
+                settings=self._settings,
                 instructions=prepared.instructions,
                 on_chunk=_handle_omni_audio_chunk,
                 tools=prepared.tools,
@@ -4979,6 +5189,15 @@ class VoiceRuntime:
             )
             if self._settings.voice_reply_mode == "omni_realtime":
                 if voice_input_mode == "raw_audio":
+                    if self._should_drop_invalid_raw_audio_segment(
+                        device_id=device_id,
+                        session_id=session_id,
+                        segment=segment,
+                    ):
+                        with self._lock:
+                            if controller.state == "model_running":
+                                controller.state = "listening"
+                        return
                     self._finish_sidecar_transcript_async(
                         device_id=device_id,
                         session_id=session_id,
@@ -4994,16 +5213,7 @@ class VoiceRuntime:
                             if controller.state == "model_running":
                                 controller.state = "listening"
                         return
-                    if self._should_suppress_empty_continuous_segment(
-                        device_id=device_id,
-                        session_id=session_id,
-                        segment=segment,
-                    ):
-                        with self._lock:
-                            if controller.state == "model_running":
-                                controller.state = "listening"
-                        return
-                    decision = self._decide_raw_audio_turn_intent_before_omni(
+                    decision = self._decide_ready_sidecar_intent_before_omni(
                         controller=controller,
                         segment=segment,
                     )
@@ -5503,6 +5713,21 @@ class VoiceRuntime:
                 instructions=prepared.instructions,
                 segment_finished_at_ms=self._now_ms(),
             )
+        except AppError as exc:
+            details = getattr(exc, "details", {}) or {}
+            if details.get("reason") == OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE:
+                self._close_segment_without_reply(
+                    device_id=device_id,
+                    session_id=session_id,
+                    segment=segment,
+                    reason=OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
+                    close_continuous_dialog=True,
+                )
+                with self._lock:
+                    if controller.state == "model_running":
+                        controller.state = "listening"
+                return
+            raise
         finally:
             omni_session.close()
 
@@ -5510,37 +5735,9 @@ class VoiceRuntime:
             segment=segment,
             omni_transcript=result.transcript,
         )
-        late_decision = self._decide_voice_turn_intent(
-            controller=controller,
-            segment=segment,
-            transcript=transcript,
-        )
-        if late_decision.intent == "stop_conversation":
-            self._close_continuous_dialog_for_stop_command(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
-                transcript=transcript,
-                source=transcript_source,
-            )
-            with self._lock:
-                if controller.state == "model_running":
-                    controller.state = "listening"
-            return
-        if late_decision.intent == "ignore":
-            self._close_segment_without_reply(
-                device_id=device_id,
-                session_id=session_id,
-                segment=segment,
-                reason=late_decision.reason,
-                close_continuous_dialog=late_decision.close_continuous_dialog,
-            )
-            with self._lock:
-                if controller.state == "model_running":
-                    controller.state = "listening"
-            return
-        segment.turn_intent = late_decision.intent
-        segment.turn_intent_reason = late_decision.reason
+        if segment.turn_intent == "unknown":
+            segment.turn_intent = "omni_semantic_vad"
+            segment.turn_intent_reason = "model_turn_detection"
         context = segment.omni_realtime_context
         if context is None:
             context = self._open_reply_synthesis_context(
@@ -5571,6 +5768,14 @@ class VoiceRuntime:
             native_result=native_result,
         )
         assistant_text = agent_result.reply_text.strip() or "收到。"
+        close_dialog_request = self._extract_close_continuous_dialog_request(agent_result.meta)
+        if close_dialog_request is not None:
+            self._schedule_close_continuous_dialog_after_reply(
+                device_id=device_id,
+                session_id=session_id,
+                playback=context.playback,
+                request=close_dialog_request,
+            )
         transcript_path = self._store_artifact(
             session_id,
             "transcript",
@@ -5799,6 +6004,14 @@ class VoiceRuntime:
             reply_audio_chunk_callback=_handle_omni_audio_chunk,
         )
         assistant_text = agent_result.reply_text.strip() or "收到。"
+        close_dialog_request = self._extract_close_continuous_dialog_request(agent_result.meta)
+        if close_dialog_request is not None:
+            self._schedule_close_continuous_dialog_after_reply(
+                device_id=device_id,
+                session_id=session_id,
+                playback=context.playback,
+                request=close_dialog_request,
+            )
         transcript = str(agent_result.meta.get("user_text_override") or "").strip()
         transcript_path = self._store_artifact(
             session_id,

@@ -401,6 +401,7 @@ class AgentFacade:
                     "asset_refs": list(prepared.runtime.tool_context.emitted_assets),
                     "derived_artifacts": list(prepared.runtime.tool_context.emitted_artifacts),
                     "task_refs": list(prepared.runtime.tool_context.emitted_tasks),
+                    "turn_meta": dict(prepared.runtime.tool_context.turn_meta),
                     **(native_result.meta or {}),
                 },
             )

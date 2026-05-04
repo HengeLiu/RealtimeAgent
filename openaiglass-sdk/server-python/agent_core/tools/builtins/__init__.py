@@ -2,6 +2,7 @@
 
 from agent_core.tools.builtins.cancel_task import CancelTaskTool
 from agent_core.tools.builtins.capture_photo import CapturePhotoTool
+from agent_core.tools.builtins.close_continuous_dialog import CloseContinuousDialogTool
 from agent_core.tools.builtins.manage_memory import ManageMemoryTool
 from agent_core.tools.builtins.memory_search import MemorySearchTool
 from agent_core.tools.builtins.query_device_state import QueryDeviceStateTool
@@ -12,6 +13,7 @@ from agent_core.tools.builtins.start_phone_video_link import StartPhoneVideoLink
 __all__ = [
     "CancelTaskTool",
     "CapturePhotoTool",
+    "CloseContinuousDialogTool",
     "ManageMemoryTool",
     "MemorySearchTool",
     "QueryDeviceStateTool",

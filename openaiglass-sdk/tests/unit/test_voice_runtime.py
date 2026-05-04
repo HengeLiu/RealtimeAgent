@@ -2090,25 +2090,19 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(controller.current_segment.start_trigger, "continuous_vad")
 
     def test_empty_continuous_vad_segment_is_suppressed_before_model(self) -> None:
-        """测试目标：验证连续 VAD 触发的空语音段不会进入 Omni Realtime 回复链路。
+        """测试目标：验证连续 VAD 触发的本地空语音段不会进入 Omni Realtime 回复链路。
 
         测试方法：
         1. 构造一个连续 VAD 触发的 `SegmentBuffer`。
-        2. 注入返回空文本的旁路 ASR 和调用即失败的 Omni 会话。
+        2. 不追加任何音频帧，模拟端侧明确异常的空段。
+        3. 注入调用即失败的 Omni 会话。
         3. 直接执行语音模型流水线。
 
         预期结果：
-        1. 旁路 ASR 返回空文本后，本轮被抑制。
+        1. 本地空段保护直接抑制本轮。
         2. Omni `finish` 不会被调用，避免发送 `assistant.reply` 和播放流。
         3. 控制器状态恢复为 `listening`。
         """
-
-        class _EmptySidecarAsrSession:
-            def finish(self) -> str:
-                return ""
-
-            def metrics(self) -> dict[str, int | None]:
-                return {"audio_frame_count": 1}
 
         class _OmniSessionShouldNotFinish:
             def __init__(self) -> None:
@@ -2142,10 +2136,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             codec="pcm16",
             started_at_ms=0,
             start_trigger="continuous_vad",
-            sidecar_asr_session=_EmptySidecarAsrSession(),
             omni_realtime_session=_OmniSessionShouldNotFinish(),
         )
-        segment.payload.extend(b"\x00\x00" * 320)
 
         runtime._run_model_pipeline(  # noqa: SLF001 - 单测覆盖空连续 VAD 抑制路径
             device_id="glass-001",
@@ -2153,8 +2145,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             segment=segment,
         )
 
-        self.assertTrue(segment.sidecar_transcript_done.is_set())
-        self.assertEqual(segment.sidecar_transcript_source, "sidecar_realtime_asr_empty")
+        self.assertEqual(segment.turn_intent, "ignore")
+        self.assertEqual(segment.turn_intent_reason, "empty_audio_segment")
         assert isinstance(segment.omni_realtime_session, _OmniSessionShouldNotFinish)
         self.assertTrue(segment.omni_realtime_session.closed)
         self.assertIn("voice.dialog.close", sent_messages)
@@ -2218,7 +2210,11 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             sidecar_asr_session=_StopSidecarAsrSession(),
             omni_realtime_session=_OmniSessionShouldNotFinish(),
         )
-        segment.payload.extend(b"\x01\x00" * 640)
+        segment.payload.extend(b"\x01\x00" * 8000)
+        segment.frame_count = 1
+        segment.sidecar_transcript_text = "结束对话"
+        segment.sidecar_transcript_source = "sidecar_realtime_asr"
+        segment.sidecar_transcript_done.set()
 
         runtime._run_model_pipeline(  # noqa: SLF001 - 单测覆盖停止指令运行时拦截
             device_id="glass-001",
@@ -2294,7 +2290,11 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             sidecar_asr_session=_EchoSidecarAsrSession(),
             omni_realtime_session=_OmniSessionShouldNotFinish(),
         )
-        segment.payload.extend(b"\x01\x00" * 640)
+        segment.payload.extend(b"\x01\x00" * 8000)
+        segment.frame_count = 1
+        segment.sidecar_transcript_text = "文刀"
+        segment.sidecar_transcript_source = "sidecar_realtime_asr"
+        segment.sidecar_transcript_done.set()
 
         runtime._run_model_pipeline(  # noqa: SLF001 - 单测覆盖系统层意图裁决
             device_id="glass-001",
@@ -2357,17 +2357,17 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(visual_decision.intent, "visual_query")
         self.assertTrue(visual_decision.requires_photo)
 
-    def test_short_pending_sidecar_segment_is_ignored_before_omni(self) -> None:
-        """测试目标：验证短误触发语音段不会在旁路 ASR 未完成时抢先提交 Omni。
+    def test_pending_sidecar_segment_does_not_block_omni(self) -> None:
+        """测试目标：验证旁路 ASR 未完成时不会阻塞正常 Omni 主链路。
 
         测试方法：
         1. 构造一个 1 秒左右的短语音段。
         2. 不设置旁路 ASR 完成事件，模拟 ASR 仍在等待或卡住。
-        3. 调用提交 Omni 前的系统层意图裁决。
+        3. 调用非阻塞 sidecar 裁决。
 
         预期结果：
-        1. 该短段被裁决为忽略。
-        2. 需要关闭连续对话窗口，避免继续自循环。
+        1. 该短段不再因为 ASR 未完成而被忽略。
+        2. 裁决结果是普通语音，后续交给 Omni semantic_vad 判断。
         """
 
         runtime = VoiceRuntime(
@@ -2388,15 +2388,14 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         )
         segment.payload.extend(b"\x00\x00" * 8000)
 
-        with patch("runtime.voice_runtime.VOICE_TURN_INTENT_SIDECAR_WAIT_SECONDS", 0.01):
-            decision = runtime._decide_raw_audio_turn_intent_before_omni(  # noqa: SLF001
-                controller=controller,
-                segment=segment,
-            )
+        decision = runtime._decide_ready_sidecar_intent_before_omni(  # noqa: SLF001
+            controller=controller,
+            segment=segment,
+        )
 
-        self.assertEqual(decision.intent, "ignore")
-        self.assertEqual(decision.reason, "short_segment_without_asr")
-        self.assertTrue(decision.close_continuous_dialog)
+        self.assertEqual(decision.intent, "voice_query")
+        self.assertEqual(decision.reason, "sidecar_asr_not_ready")
+        self.assertFalse(decision.close_continuous_dialog)
 
     def test_omni_mode_prestreams_realtime_audio_direct_session(self) -> None:
         """测试目标：验证 Omni 模式会在语音段开始时建立原生字节流会话。
@@ -2427,9 +2426,11 @@ class VoiceRuntimeTestCase(unittest.TestCase):
             def __init__(self) -> None:
                 self.session = _OmniSession()
                 self.started = False
+                self.settings = None
 
-            def start_streaming_reply(self, **_kwargs):
+            def start_streaming_reply(self, **kwargs):
                 self.started = True
+                self.settings = kwargs["settings"]
                 return self.session
 
         omni_client = _OmniClient()
@@ -2471,6 +2472,8 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         )
 
         self.assertTrue(omni_client.started)
+        self.assertEqual(omni_client.settings.voice_conversation_mode, "realtime_semantic_vad")
+        self.assertTrue(omni_client.settings.omni_turn_detection_enabled())
         self.assertEqual(omni_client.session.audio_frames, [b"\x01\x02"])
         controller = runtime._controllers["glass-001"]  # noqa: SLF001 - 单测检查运行时内部状态
         assert controller.current_segment is not None
@@ -2686,6 +2689,56 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         )
 
         self.assertNotIn(("glass-001", "stream_interrupt"), runtime._interrupted_playback_streams)  # noqa: SLF001 - 单测检查内部状态
+
+    def test_model_tool_close_dialog_runs_after_playback_finished(self) -> None:
+        """测试目标：验证模型工具请求会在当前回复播放完成后关闭连续对话。
+
+        测试方法：
+        1. 创建一个播放流并记录 `close_continuous_dialog` 工具请求。
+        2. 调用运行时的延迟关闭登记函数。
+        3. 上报该播放流完成。
+
+        预期结果：
+        1. 登记时不会立刻下发 `voice.dialog.close`。
+        2. 播放完成后才下发 `voice.dialog.close`。
+        3. 控制消息携带模型工具来源和关闭原因。
+        """
+
+        sent_messages: list[tuple[str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda _device_id, _semantic, name, _session_id, payload: sent_messages.append(
+                (name, payload)
+            ),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        playback = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部延迟关闭状态
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_close_001",
+        )
+
+        runtime._schedule_close_continuous_dialog_after_reply(  # noqa: SLF001 - 单测覆盖模型工具关闭路径
+            device_id="glass-001",
+            session_id="sess-test",
+            playback=playback,
+            request={"scheduled": True, "reason": "用户说先这样", "source": "model_tool"},
+        )
+
+        self.assertEqual(sent_messages, [])
+
+        runtime.on_playback_finished(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_close_001",
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(sent_messages[0][0], "voice.dialog.close")
+        self.assertEqual(sent_messages[0][1]["reason"], "用户说先这样")
+        self.assertEqual(sent_messages[0][1]["source"], "model_tool")
+        self.assertEqual(sent_messages[0][1]["stream_id"], "reply_close_001")
 
     def test_on_playback_state_records_terminal_result(self) -> None:
         """测试目标：验证结构化播放终态会进入运行时快照。

@@ -1122,6 +1122,7 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
                 "model_request": model_request,
                 "user_text_override": transcript,
                 "native_audio_response_id": result.response_id,
+                "turn_meta": dict(runtime.tool_context.turn_meta),
                 **(result.meta or {}),
             },
         )
@@ -2495,6 +2496,8 @@ class OpenAIAgentLoopRunner(AgentLoopRunner):
             f"{self._settings.voice_system_prompt}\n"
             "如果用户的问题不包含关于图片的问题，请不要专门对图片的内容给出解释。\n"
             "需要时可以调用已提供的工具。工具调用前的等待提示由系统自动播报，你不要为了调用工具而先输出一段解释。\n\n"
+            "当用户表达结束连续对话、希望你安静、先这样、不用继续听、等会儿再说等意图时，"
+            "应调用 close_continuous_dialog 工具。调用后可以用一句很短的话确认，例如“好的，我先安静了”。\n\n"
             "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。\n"
             "当用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等长期信息时，必须调用 manage_memory 保存或更新，不要只用文字声称已经记住。\n\n"
             "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。\n"
