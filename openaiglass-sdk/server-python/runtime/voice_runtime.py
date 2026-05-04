@@ -20,9 +20,12 @@ from infra.errors import AppError, ErrorCode, build_error
 from infra.logging import LogContext, get_logger, log_debug, log_error, log_info
 from protocol.media import MediaFrame
 from runtime.audio_utils import PCM16StreamResampler, build_wav_bytes, wav_header_unknown_size
+from runtime.continuous_dialog import ContinuousDialogManager
+from runtime.message_builder import VoiceMessageBuilder
 from runtime.notifications import NotificationCoordinator, NotificationRequest
 from runtime.playback_arbiter import PlaybackArbiter, PlaybackIntent
 from runtime.realtime_voice import RealtimeModelAdapter, RealtimeVoiceRuntime
+from runtime.sidecar_transcript import SidecarTranscriptBackfiller
 from runtime.task_event_bridge import TaskEventBridge
 from runtime.text.text_agent_adapter import TextAgentAdapter
 from runtime.text.text_dialog_state_machine import TextDialogStateMachine
@@ -179,6 +182,19 @@ class VoiceRuntime:
             store_artifact=self._store_artifact,
             store_asset=self._store_asset,
             agent_facade=self._agent_facade,
+        )
+        self._message_builder = VoiceMessageBuilder(system_prompt=self._settings.voice_system_prompt)
+        self._sidecar_transcript_backfiller = SidecarTranscriptBackfiller(
+            session_store=self._agent_facade.get_session_store(),
+            logger=self._logger,
+        )
+        self._continuous_dialog_manager = ContinuousDialogManager(
+            lock=self._lock,
+            controllers=self._controllers,
+            send_control_message=self._send_control_message,
+            handle_user_interrupt=self.handle_user_interrupt,
+            discard_utterance_photo=self._discard_utterance_photo,
+            logger=self._logger,
         )
         self._realtime_voice_runtime = RealtimeVoiceRuntime(
             playback_arbiter=self._playback_arbiter,
@@ -1731,50 +1747,12 @@ class VoiceRuntime:
         3. 如果已有播放流被模型提前创建，则通过用户打断路径中断播放。
         """
 
-        if segment.omni_realtime_session is not None:
-            try:
-                try:
-                    segment.omni_realtime_session.close(blocking=False)
-                except TypeError:
-                    segment.omni_realtime_session.close()
-            except Exception as exc:  # noqa: BLE001 - 停止指令清理失败只写日志
-                log_debug(
-                    self._logger,
-                    f"关闭停止指令 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
-                    LogContext(device_id=device_id, session_id=session_id),
-                )
-            with self._lock:
-                controller = self._controllers.get(device_id)
-                if controller is not None and controller.persistent_omni_realtime_session is segment.omni_realtime_session:
-                    controller.persistent_omni_realtime_session = None
-        if segment.omni_realtime_context is not None:
-            self.handle_user_interrupt(
-                device_id=device_id,
-                session_id=session_id,
-                reason="conversation_stop_command",
-                clear_queue=True,
-            )
-        self._discard_utterance_photo(device_id=device_id, session_id=session_id, segment=segment)
-        self._send_control_message(
-            device_id,
-            "request",
-            "voice.dialog.close",
-            session_id,
-            {
-                "device_id": device_id,
-                "reason": "conversation_stop_command",
-                "transcript": transcript,
-                "source": source,
-            },
-        )
-        log_info(
-            self._logger,
-            (
-                "已按用户指令关闭连续对话 "
-                f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
-                f"source={source} transcript={_format_log_text(transcript)!r}"
-            ),
-            LogContext(device_id=device_id, session_id=session_id),
+        self._continuous_dialog_manager.close_for_stop_command(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+            transcript=transcript,
+            source=source,
         )
 
     def _send_close_continuous_dialog_control(
@@ -1794,37 +1772,19 @@ class VoiceRuntime:
         3. 调用方负责决定关闭时机，例如模型工具请求可等当前播放结束后再调用。
         """
 
-        payload: dict[str, Any] = {
-            "device_id": device_id,
-            "reason": reason,
-            "source": source,
-        }
-        if stream_id:
-            payload["stream_id"] = stream_id
-        with self._lock:
-            controller = self._controllers.get(device_id)
-            persistent_session = controller.persistent_omni_realtime_session if controller else None
-            if controller is not None:
-                controller.persistent_omni_realtime_session = None
-        if persistent_session is not None:
-            persistent_session.close(blocking=False)
-        self._send_control_message(
-            device_id,
-            "request",
-            "voice.dialog.close",
-            session_id,
-            payload,
+        self._continuous_dialog_manager.send_close_control(
+            device_id=device_id,
+            session_id=session_id,
+            reason=reason,
+            source=source,
+            stream_id=stream_id,
         )
 
     @staticmethod
     def _extract_close_continuous_dialog_request(meta: dict[str, Any]) -> dict[str, Any] | None:
         """从 Agent 结果中读取模型工具声明的连续对话关闭意图。"""
 
-        turn_meta = meta.get("turn_meta")
-        if not isinstance(turn_meta, dict):
-            return None
-        request = turn_meta.get("close_continuous_dialog")
-        return request if isinstance(request, dict) and request.get("scheduled") else None
+        return ContinuousDialogManager.extract_close_request(meta)
 
     def _schedule_close_continuous_dialog_after_reply(
         self,
@@ -1842,31 +1802,11 @@ class VoiceRuntime:
         3. 关闭请求不打断当前回复，符合“当前响应播报完后退出”的交互预期。
         """
 
-        reason = str(request.get("reason") or "model_requested").strip() or "model_requested"
-        source = str(request.get("source") or "model_tool").strip() or "model_tool"
-        if playback.finished_event.is_set() or playback.completed:
-            self._send_close_continuous_dialog_control(
-                device_id=device_id,
-                session_id=session_id,
-                reason=reason,
-                source=source,
-                stream_id=playback.stream_id,
-            )
-            return
-        with self._lock:
-            controller = self._controllers.get(device_id)
-            if controller is None:
-                return
-            controller.close_continuous_dialog_after_stream_id = playback.stream_id
-            controller.close_continuous_dialog_after_reason = reason
-            controller.close_continuous_dialog_after_source = source
-        log_info(
-            self._logger,
-            (
-                "模型工具已请求回复后关闭连续对话 "
-                f"stream_id={playback.stream_id} reason={reason} source={source}"
-            ),
-            LogContext(device_id=device_id, session_id=session_id),
+        self._continuous_dialog_manager.schedule_after_reply(
+            device_id=device_id,
+            session_id=session_id,
+            playback=playback,
+            request=request,
         )
 
     def _close_continuous_dialog_after_playback_if_needed(
@@ -1878,33 +1818,10 @@ class VoiceRuntime:
     ) -> None:
         """在指定播放流结束后执行延迟关闭连续对话。"""
 
-        reason: str | None = None
-        source: str | None = None
-        with self._lock:
-            controller = self._controllers.get(device_id)
-            if controller is None:
-                return
-            if controller.close_continuous_dialog_after_stream_id != stream_id:
-                return
-            reason = controller.close_continuous_dialog_after_reason or "model_requested"
-            source = controller.close_continuous_dialog_after_source or "model_tool"
-            controller.close_continuous_dialog_after_stream_id = None
-            controller.close_continuous_dialog_after_reason = None
-            controller.close_continuous_dialog_after_source = None
-        self._send_close_continuous_dialog_control(
+        self._continuous_dialog_manager.close_after_playback_if_needed(
             device_id=device_id,
             session_id=session_id,
-            reason=reason,
-            source=source,
             stream_id=stream_id,
-        )
-        log_info(
-            self._logger,
-            (
-                "当前回复播报完成后已关闭连续对话 "
-                f"stream_id={stream_id} reason={reason} source={source}"
-            ),
-            LogContext(device_id=device_id, session_id=session_id),
         )
 
     def _should_stop_conversation_from_sidecar(
@@ -1954,60 +1871,15 @@ class VoiceRuntime:
         3. 同步重写本轮 transcript artifact，便于离线排障看到最终文本来源。
         """
 
-        if segment.sidecar_transcript_done.is_set():
-            return
-        user_message_id = str(agent_result_meta.get("user_message_id") or "")
-        if not user_message_id:
-            return
-
-        def _worker() -> None:
-            if not segment.sidecar_transcript_done.wait(max(5.0, self._settings.voice_model_timeout_ms / 1000)):
-                return
-            sidecar_text = segment.sidecar_transcript_text.strip()
-            if not sidecar_text or sidecar_text == current_transcript.strip():
-                return
-            try:
-                self._agent_facade.get_session_store().update_message_text(
-                    session_id=session_id,
-                    message_id=user_message_id,
-                    text=sidecar_text,
-                )
-                with open(transcript_path, "w", encoding="utf-8") as file:
-                    json.dump(
-                        {
-                            "segment_id": segment.segment_id,
-                            "stream_id": segment.stream_id,
-                            "transcript": sidecar_text,
-                            "reply_mode": "omni_realtime",
-                            "input_audio_streaming": True,
-                            "transcript_source": segment.sidecar_transcript_source or "sidecar_asr",
-                            "backfilled": True,
-                        },
-                        file,
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                log_info(
-                    self._logger,
-                    (
-                        "旁路 ASR 转写已回填 Agent 会话 "
-                        f"segment_id={segment.segment_id} source={segment.sidecar_transcript_source} "
-                        f"text={_format_log_text(sidecar_text)!r}"
-                    ),
-                    LogContext(device_id=device_id, session_id=session_id),
-                )
-            except Exception as exc:  # noqa: BLE001 - 回填失败不能影响已完成回复
-                log_debug(
-                    self._logger,
-                    f"旁路 ASR 转写回填失败: segment_id={segment.segment_id} reason={exc!r}",
-                    LogContext(device_id=device_id, session_id=session_id),
-                )
-
-        threading.Thread(
-            target=_worker,
-            name=f"sidecar-asr-backfill-{segment.segment_id}",
-            daemon=True,
-        ).start()
+        self._sidecar_transcript_backfiller.schedule(
+            device_id=device_id,
+            session_id=session_id,
+            segment=segment,
+            current_transcript=current_transcript,
+            agent_result_meta=agent_result_meta,
+            transcript_path=transcript_path,
+            wait_timeout_seconds=self._settings.voice_model_timeout_ms / 1000,
+        )
 
     def _start_utterance_photo_capture(
         self,
@@ -3114,58 +2986,9 @@ class VoiceRuntime:
         )
 
     def _build_model_messages(self, controller: VoiceSessionController, user_text: str) -> list[dict[str, Any]]:
-        """组装模型消息列表。
+        """兼容旧单测和迁移期调用的模型消息构造入口。"""
 
-        主要逻辑：
-        1. 固定注入系统提示词。
-        2. 回放最近若干轮短期上下文，把历史用户音频从 `asset_refs` 解析成模型可读的 `input_audio`。
-        3. 把当前轮用户输入追加到末尾。
-
-        参数：
-        1. `controller`：当前设备语音会话控制器。
-        2. `user_text`：当前轮用户语音经 ASR 转写后的文本。
-
-        返回值：
-        1. 可直接提交给多模态模型的 `messages`。
-        """
-
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": self._settings.voice_system_prompt,
-            }
-        ]
-        history = controller.message_context[-6:]
-        for entry in history:
-            built_message = self._build_history_message(entry)
-            if built_message is not None:
-                messages.append(built_message)
-        messages.append(
-            {
-                "role": "user",
-                "content": user_text,
-            }
-        )
-        return messages
-
-    def _build_history_message(self, entry: MessageEntry) -> dict[str, Any] | None:
-        """把单条历史消息转换为模型可读格式。
-
-        主要逻辑：
-        1. 对历史用户语音消息，回读最近一份输入 WAV 并组装为 `input_audio`。
-        2. 对历史助手回复，直接传递文本。
-        3. 对无有效内容的消息返回 `None`。
-
-        参数：
-        1. `entry`：消息上下文条目。
-
-        返回值：
-        1. 可直接放进 `messages` 的字典；若无有效内容则返回 `None`。
-        """
-
-        if entry.text:
-            return {"role": entry.role, "content": entry.text}
-        return None
+        return self._message_builder.build_model_messages(controller, user_text)
 
     def _play_intermediate_reply(self, device_id: str, session_id: str, text: str) -> None:
         """异步播报一段中间提示语。"""

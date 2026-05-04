@@ -535,6 +535,7 @@ audio-samples/
 7. `sdk-v103` 已完成通知与 Task 事件语音桥接拆分：`runtime/notification_voice_bridge.py` 承载通知提交、TaskEvent 回流 Agent、通知播报和高优先级通知中断。
 8. `sdk-v104` 已完成 Omni 工具桥和 Text Agent Adapter 拆分：`runtime/omni/tool_bridge.py` 承载 Realtime function calling 执行、工具结果回填和 `capture_photo` 图片追加；`runtime/text/text_agent_adapter.py` 承载 Text 链路转写产物和 `AgentTurn` 构造；边界测试开始断言 Omni/Text 模块不得互相 import。
 9. `sdk-v105` 已完成语音轮次记录器拆分：`runtime/turn_recorder.py` 承载 transcript artifact、输出 WAV 和 assistant 音频资产挂载，作为 Omni/Text 共享记录层；本轮四阶段代码边界进入收口状态。
+10. `sdk-v106` 继续拆出系统辅助职责：`runtime/message_builder.py` 承载会话消息构造，`runtime/sidecar_transcript.py` 承载旁路 ASR 回填，`runtime/continuous_dialog.py` 承载连续对话关闭状态机和 `voice.dialog.close` 下发。
 
 ### Phase 1：抽象边界
 

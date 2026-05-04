@@ -45,6 +45,9 @@ class VoiceServerBoundaryTestCase(unittest.TestCase):
             SDK_SOURCE_ROOT / "runtime" / "omni" / "tool_bridge.py",
             SDK_SOURCE_ROOT / "runtime" / "text" / "text_agent_adapter.py",
             SDK_SOURCE_ROOT / "runtime" / "turn_recorder.py",
+            SDK_SOURCE_ROOT / "runtime" / "continuous_dialog.py",
+            SDK_SOURCE_ROOT / "runtime" / "message_builder.py",
+            SDK_SOURCE_ROOT / "runtime" / "sidecar_transcript.py",
         ]
 
         for path in checked_files:
