@@ -50,6 +50,7 @@ YAML_ENV_KEY_MAP: dict[tuple[str, ...], str] = {
     ("models", "tts", "websocket_api_url"): "TTS_WEBSOCKET_API_URL",
     ("models", "tts", "sample_rate_hz"): "TTS_SAMPLE_RATE_HZ",
     ("voice", "session_mode"): "VOICE_SESSION_MODE",
+    ("voice", "server_mode"): "VOICE_SERVER_MODE",
     ("voice", "reply_mode"): "VOICE_REPLY_MODE",
     ("voice", "input_mode"): "VOICE_INPUT_MODE",
     ("voice", "conversation_mode"): "VOICE_CONVERSATION_MODE",

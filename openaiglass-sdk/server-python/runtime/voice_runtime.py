@@ -3395,7 +3395,7 @@ class VoiceRuntime:
         3. 采样率和播放格式也纳入指纹，防止格式不一致的 WAV 被误用。
         """
 
-        if self._settings.voice_reply_mode == "omni_realtime":
+        if self._settings.effective_voice_server_mode() == "omni_server":
             reply_audio_provider = "omni_realtime"
             reply_model_name = self._settings.voice_omni_realtime_model_name
             reply_voice = self._settings.voice_model_voice
@@ -3429,7 +3429,7 @@ class VoiceRuntime:
             `omni_realtime` 或 `tts`。
         """
 
-        return "omni_realtime" if self._settings.voice_reply_mode == "omni_realtime" else "tts"
+        return "omni_realtime" if self._settings.effective_voice_server_mode() == "omni_server" else "tts"
 
     def build_realtime_open_payload(self) -> dict[str, Any]:
         """生成全双工实时语音会话打开请求。
@@ -3564,7 +3564,7 @@ class VoiceRuntime:
             controller.current_segment = segment
             controller.state = "receiving_segment"
             should_start_omni_realtime = (
-                effective_voice_input_mode == "raw_audio" and self._settings.voice_reply_mode == "omni_realtime"
+                effective_voice_input_mode == "raw_audio" and self._settings.effective_voice_server_mode() == "omni_server"
             )
             should_start_asr_sidecar = should_start_omni_realtime
         if should_start_omni_realtime:
@@ -5480,7 +5480,7 @@ class VoiceRuntime:
                 ),
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            if self._settings.voice_reply_mode == "omni_realtime":
+            if self._settings.effective_voice_server_mode() == "omni_server":
                 if voice_input_mode == "raw_audio":
                     if self._should_drop_invalid_raw_audio_segment(
                         device_id=device_id,

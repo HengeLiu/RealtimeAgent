@@ -21,10 +21,14 @@ from runtime.realtime_voice import (
     RealtimeVoiceRuntime,
 )
 from runtime.task_event_bridge import TaskEventBridge
+from runtime.voice_gateway import VoiceGateway
 from runtime.voice_runtime import VoiceRuntime
+from runtime.voice_server_base import VoiceServer
 
 __all__ = [
     "VoiceRuntime",
+    "VoiceGateway",
+    "VoiceServer",
     "RealtimeVoiceRuntime",
     "RealtimeModelAdapter",
     "RealtimeModelResponse",

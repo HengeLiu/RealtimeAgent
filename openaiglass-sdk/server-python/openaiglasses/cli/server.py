@@ -50,6 +50,7 @@ def _build_server_defaults() -> dict[str, str]:
         "AGENT_MODEL_NAME": defaults.agent_model_name,
         "VOICE_MODEL_NAME": defaults.voice_model_name,
         "VOICE_MODEL_VOICE": defaults.voice_model_voice,
+        "VOICE_SERVER_MODE": defaults.voice_server_mode,
         "VOICE_REPLY_MODE": defaults.voice_reply_mode,
         "VOICE_OMNI_REALTIME_MODEL_NAME": defaults.voice_omni_realtime_model_name,
         "VOICE_OMNI_REALTIME_URL": defaults.voice_omni_realtime_url,

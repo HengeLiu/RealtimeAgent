@@ -58,6 +58,7 @@ def test_server_defaults_are_derived_from_runtime_settings() -> None:
     assert server.SERVER_DEFAULTS["DEVICE_TOKEN_MAP"] == defaults.device_token_map
     assert server.SERVER_DEFAULTS["VOICE_MODEL_VOICE"] == defaults.voice_model_voice
     assert server.SERVER_DEFAULTS["AGENT_MODEL_NAME"] == defaults.agent_model_name
+    assert server.SERVER_DEFAULTS["VOICE_SERVER_MODE"] == defaults.voice_server_mode
     assert server.SERVER_DEFAULTS["VOICE_ASR_MODEL_NAME"] == defaults.voice_asr_model_name
     assert server.SERVER_DEFAULTS["VOICE_ASR_MODE"] == defaults.voice_asr_mode
     assert server.SERVER_DEFAULTS["VOICE_INPUT_MODE"] == defaults.voice_input_mode
