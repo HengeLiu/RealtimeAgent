@@ -16,7 +16,8 @@
 3. [SDK 公共契约设计](./structure-design/SDK公共契约设计.md)
 4. [语音对话协议与时序设计](./structure-design/语音对话协议与时序设计.md)
 5. [全双工实时语音对话设计](./structure-design/全双工实时语音对话设计.md)
-6. [SDK 真机联调前检查与联调步骤](./sdk-design/SDK真机联调前检查与联调步骤.md)
+6. [Omni Realtime 长连接连续对话重构设计](./structure-design/Omni-Realtime长连接连续对话重构设计.md)
+7. [SDK 真机联调前检查与联调步骤](./sdk-design/SDK真机联调前检查与联调步骤.md)
 
 迭代记录：
 
