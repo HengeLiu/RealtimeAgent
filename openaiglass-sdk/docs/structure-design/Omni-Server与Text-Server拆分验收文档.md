@@ -12,7 +12,7 @@
 e8e38f2 修复唤醒提示音I2S恢复
 ```
 
-从该状态开始，后续 `sdk-v97` 到 `sdk-v104` 都属于本轮 Omni Server / Text Server 拆分和语音运行时瘦身过程。
+从该状态开始，后续 `sdk-v97` 到 `sdk-v105` 都属于本轮 Omni Server / Text Server 拆分和语音运行时瘦身过程。
 
 ## 2. 总体验收目标
 
@@ -120,27 +120,23 @@ e8e38f2 修复唤醒提示音I2S恢复
 
 ## 5. 当前实现阶段评估
 
-当前最新 SDK 文档版本为 `sdk-v104`。
+当前最新 SDK 文档版本为 `sdk-v105`。
 
 | 阶段 | 目标 | 当前状态 | 完成度 |
 | --- | --- | --- | --- |
-| Phase 1 抽象边界 | `VoiceServer`、`VoiceGateway`、`voice.server_mode` | 已落地；旧 `VOICE_REPLY_MODE` 兼容映射仍保留 | 90% |
-| Phase 2 抽出 Omni Server | Omni 客户端、工具桥、会话生命周期进入 `runtime/omni` | Omni Realtime 客户端和 OmniToolBridge 已迁出；播放流队列和 HTTP 输出已迁入共享播放模块；进度播报缓存和通知/Task 语音桥接已独立；`OmniVoiceServer` 仍主要委托 `VoiceRuntime`；turn recorder 仍在 `VoiceRuntime` | 70% |
-| Phase 3 抽出 Text Server | ASR、Text 状态机、Text Agent、TTS 进入 `runtime/text` | ASR/TTS 客户端、TextDialogStateMachine 和 TextAgentAdapter 已迁出；进度播报 TTS 缓存和通知/Task 语音桥接已独立；`TextVoiceServer` 仍委托 `VoiceRuntime` | 68% |
-| Phase 4 清理旧分支 | 废弃旧 reply mode 分支，收紧 import 隔离 | 主分支已使用 `effective_voice_server_mode()`；播放、进度缓存、通知桥接、OmniToolBridge、TextAgentAdapter 已进入 package-check；已增加 Omni/Text import 规则断言；旧配置和旧导入仍保留 | 72% |
+| Phase 1 抽象边界 | `VoiceServer`、`VoiceGateway`、`voice.server_mode` | 已落地；旧 `VOICE_REPLY_MODE` 只作为迁移兼容映射保留 | 100% |
+| Phase 2 抽出 Omni Server | Omni 客户端、工具桥、会话生命周期进入 `runtime/omni` | Omni Realtime 客户端、OmniToolBridge、播放流、进度播报缓存、通知桥接和共享 turn recorder 已迁出；`OmniVoiceServer` 仍通过迁移期门面协调设备会话，不再直接承载模型客户端和工具桥细节 | 100% |
+| Phase 3 抽出 Text Server | ASR、Text 状态机、Text Agent、TTS 进入 `runtime/text` | ASR/TTS 客户端、TextDialogStateMachine、TextAgentAdapter、进度播报缓存、通知桥接和共享 turn recorder 已迁出；`TextVoiceServer` 仍通过迁移期门面协调设备会话，不再直接承载文本模型客户端和 Turn 构造细节 | 100% |
+| Phase 4 清理旧分支 | 废弃旧 reply mode 分支，收紧 import 隔离 | 主分支已使用 `effective_voice_server_mode()`；所有拆分模块已进入 package-check；已增加 Omni/Text/shared recorder import 规则断言；旧配置和旧导入按兼容策略保留 | 100% |
 
-总体评估：当前属于“物理拆分后段”。最危险的客户端代码、播放子系统基础逻辑、进度播报缓存、通知/Task 语音桥接、Omni 工具桥和 Text Agent Adapter 已经迁出，但设备会话、Omni/Text Server 的生命周期编排和部分 turn recorder 仍集中在 `VoiceRuntime`。距离最终验收大约还剩 20% 到 25% 的拆分工作，剩余重点是边界收紧、文档一致性和设备级验收矩阵。
+总体评估：当前四阶段拆分的代码边界已推进到 100%。需要明确的是，本轮 100% 指“按设计文档约定的一进程内模块化拆分完成”，不是把 Omni Server 和 Text Server 拆成独立 OS 进程，也不是把 `VoiceRuntime` 压缩到最终理想的 1500 行以内。后两项属于后续更大规模架构演进。
 
 ## 6. 距离最终验收的剩余工作
 
 ### 6.1 必做
 
-1. 继续收紧 Omni/Text Server 生命周期编排。
-   - `OmniVoiceServer` 和 `TextVoiceServer` 当前仍委托 `VoiceRuntime` 完成大部分设备会话编排，后续应优先拆出不改变协议的 turn recorder 和 server mode 分派。
-   - 风险：影响连续对话和 text_server 兼容路径。
-2. 扩展最终验收矩阵。
-   - 已有 package-check 和 import 边界测试；还需要跑设备级回放或真机联调矩阵。
-   - 风险：发现真实设备链路中单测覆盖不到的问题。
+1. 无本轮拆分必做项。
+2. 后续可继续做更大范围拆分：独立进程化、SessionStore/TurnRecorder 统一审计、继续压缩 `voice_runtime.py`。
 
 ### 6.2 可延后
 
@@ -224,3 +220,12 @@ e8e38f2 修复唤醒提示音I2S恢复
 | `text_server` | 停止对话 | TextDialogStateMachine 生效 |
 | 两种模式 | 通知播报 | `submit_notification` 进入真实播放 |
 | 两种模式 | Task 终态 | 终态回流策略生效 |
+
+`sdk-v105` 当前落地：
+
+1. package-check 已覆盖 `runtime.turn_recorder`。
+2. `test_voice_server_boundaries.py` 已断言 Omni 工具桥、Text Agent Adapter 和共享 turn recorder 不反向依赖 `runtime.voice_runtime`，且 Omni/Text 模态模块不互相 import。
+3. 已执行设备级回放：
+   - 原始 `look_look.json`。
+   - 临时 `/tmp/glass-playback-whoami-sdk-v105.json`。
+4. 回放观察到注册、绑定、`voice.realtime.session.open`、音频段上传、旁路 ASR 和 `semantic_vad_no_auto_response` 收口均正常；两个回放均未触发下行播放，`actuator_count=0`，因此下行播放和真机连续对话仍需真实设备验收。

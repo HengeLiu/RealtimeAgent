@@ -534,6 +534,7 @@ audio-samples/
 6. `sdk-v102` 已完成进度播报缓存拆分：`runtime/progress_audio_cache.py` 承载 Tool 前置播报缓存预热、缓存指纹、WAV/metadata 读写和运行时 PCM 查询。
 7. `sdk-v103` 已完成通知与 Task 事件语音桥接拆分：`runtime/notification_voice_bridge.py` 承载通知提交、TaskEvent 回流 Agent、通知播报和高优先级通知中断。
 8. `sdk-v104` 已完成 Omni 工具桥和 Text Agent Adapter 拆分：`runtime/omni/tool_bridge.py` 承载 Realtime function calling 执行、工具结果回填和 `capture_photo` 图片追加；`runtime/text/text_agent_adapter.py` 承载 Text 链路转写产物和 `AgentTurn` 构造；边界测试开始断言 Omni/Text 模块不得互相 import。
+9. `sdk-v105` 已完成语音轮次记录器拆分：`runtime/turn_recorder.py` 承载 transcript artifact、输出 WAV 和 assistant 音频资产挂载，作为 Omni/Text 共享记录层；本轮四阶段代码边界进入收口状态。
 
 ### Phase 1：抽象边界
 
@@ -572,6 +573,11 @@ audio-samples/
 1. 新增 `runtime/omni/tool_bridge.py`，Omni Realtime 工具执行、`function_call_output` 回填和 `capture_photo` 图片追加已从客户端回调中抽离。
 2. Realtime 客户端仍负责 server event 解析和音频流收口，但不再直接持有工具执行细节。
 
+`sdk-v105` 当前补充落地：
+
+1. Omni persistent prepared turn 和 Omni segment_turn 兼容路径的 transcript、输出 WAV、assistant 音频资产挂载已委托 `runtime.turn_recorder`。
+2. Omni Server 的模型调用、工具桥、播放流、通知桥接和轮次记录均已从单体 `VoiceRuntime` 中拆出为独立模块；会话编排仍由迁移期门面协调。
+
 ### Phase 3：抽出 Text Server
 
 1. 将 ASR、文本意图、Text Agent、TTS 移入 `runtime/text`。
@@ -597,6 +603,11 @@ audio-samples/
 1. 新增 `runtime/text/text_agent_adapter.py`，Text ASR 链路进入 Agent Core 前的转写产物保存和 `AgentTurn` 构造已从 `VoiceRuntime` 抽离。
 2. `runtime/text/__init__.py` 对外暴露 `TextAgentAdapter`，后续 Text Server 可以继续接管 Agent 调用和 TTS 编排。
 
+`sdk-v105` 当前补充落地：
+
+1. Text Agent + TTS 路径的输出 WAV 和 assistant 音频资产挂载已委托 `runtime.turn_recorder`。
+2. Text Server 的 ASR/TTS 客户端、文本状态机、Text Agent Turn 构造和轮次记录已从单体 `VoiceRuntime` 中拆出为独立模块；会话编排仍由迁移期门面协调。
+
 ### Phase 4：清理旧分支
 
 1. 废弃 `VOICE_REPLY_MODE` 内部主分支。
@@ -621,6 +632,11 @@ audio-samples/
 
 1. package-check 增加 `runtime.omni.tool_bridge` 和 `runtime.text.text_agent_adapter` 导入验证。
 2. `test_voice_server_boundaries.py` 增加 AST import 规则，断言 Omni 工具桥不依赖 Text 模块，Text Agent Adapter 不依赖 Omni 模块，两者都不反向依赖 `runtime.voice_runtime`。
+
+`sdk-v105` 当前补充落地：
+
+1. package-check 增加 `runtime.turn_recorder` 导入验证。
+2. `test_voice_server_boundaries.py` 的 import 规则覆盖 `runtime.turn_recorder`，断言共享记录层不反向依赖 `runtime.voice_runtime`。
 
 ## 14. 风险与取舍
 

@@ -44,6 +44,7 @@ class VoiceServerBoundaryTestCase(unittest.TestCase):
         checked_files = [
             SDK_SOURCE_ROOT / "runtime" / "omni" / "tool_bridge.py",
             SDK_SOURCE_ROOT / "runtime" / "text" / "text_agent_adapter.py",
+            SDK_SOURCE_ROOT / "runtime" / "turn_recorder.py",
         ]
 
         for path in checked_files:

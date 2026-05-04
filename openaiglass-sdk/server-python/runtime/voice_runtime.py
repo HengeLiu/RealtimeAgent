@@ -26,6 +26,7 @@ from runtime.realtime_voice import RealtimeModelAdapter, RealtimeVoiceRuntime
 from runtime.task_event_bridge import TaskEventBridge
 from runtime.text.text_agent_adapter import TextAgentAdapter
 from runtime.text.text_dialog_state_machine import TextDialogStateMachine
+from runtime.turn_recorder import VoiceTurnRecorder
 
 from runtime.voice_constants import (
     MODEL_OUTPUT_SAMPLE_RATE_HZ,
@@ -174,6 +175,11 @@ class VoiceRuntime:
         )
         self._text_dialog_state_machine = TextDialogStateMachine()
         self._text_agent_adapter = TextAgentAdapter(store_artifact=self._store_artifact)
+        self._turn_recorder = VoiceTurnRecorder(
+            store_artifact=self._store_artifact,
+            store_asset=self._store_asset,
+            agent_facade=self._agent_facade,
+        )
         self._realtime_voice_runtime = RealtimeVoiceRuntime(
             playback_arbiter=self._playback_arbiter,
             send_control_message=self._send_control_message,
@@ -2640,32 +2646,25 @@ class VoiceRuntime:
                         "stream_id": playback_stream_id,
                     },
                 )
-            output_path = self._store_asset(
-                session_id,
-                "output",
-                f"{playback_stream_id}.wav",
-                build_wav_bytes(bytes(output_pcm), SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS),
+            output_path = self._turn_recorder.store_output_audio(
+                session_id=session_id,
+                stream_id=playback_stream_id,
+                output_pcm=bytes(output_pcm),
+                sample_rate_hz=SERVER_SAMPLE_RATE_HZ,
+                channels=SERVER_CHANNELS,
             )
             log_info(
                 self._logger,
                 f"Agent 最终回复: {assistant_text}",
                 LogContext(device_id=device_id, session_id=session_id),
             )
-            if agent_result.assistant_message_id:
-                self._agent_facade.attach_assistant_asset(
-                    session_id=session_id,
-                    assistant_message_id=agent_result.assistant_message_id,
-                    asset=MediaAssetRef(
-                        asset_id=generate_id("asset"),
-                        session_id=session_id,
-                        asset_type="audio",
-                        storage_uri=output_path,
-                        mime_type="audio/wav",
-                        codec="pcm16le",
-                        bytes=len(output_pcm),
-                        source_stream_id=playback_stream_id,
-                    ),
-                )
+            self._turn_recorder.attach_assistant_audio(
+                session_id=session_id,
+                assistant_message_id=agent_result.assistant_message_id,
+                output_path=output_path,
+                output_pcm=bytes(output_pcm),
+                source_stream_id=playback_stream_id,
+            )
 
             with self._lock:
                 if (
@@ -2739,16 +2738,11 @@ class VoiceRuntime:
             )
 
         turn.asset_refs.append(
-            MediaAssetRef(
-                asset_id=generate_id("asset"),
+            self._turn_recorder.build_input_audio_asset(
                 session_id=session_id,
-                asset_type="audio",
-                storage_uri=input_path,
-                mime_type="audio/wav",
-                codec="pcm16le",
-                duration_ms=segment.duration_ms(),
-                bytes=len(input_wav),
-                source_stream_id=segment.stream_id,
+                segment=segment,
+                input_path=input_path,
+                input_wav=input_wav,
             )
         )
 
@@ -2842,11 +2836,10 @@ class VoiceRuntime:
                 playback=context.playback,
                 request=close_dialog_request,
             )
-        transcript_path = self._store_artifact(
-            session_id,
-            "transcript",
-            f"{segment.segment_id}.json",
-            {
+        transcript_path = self._turn_recorder.store_transcript_artifact(
+            session_id=session_id,
+            segment=segment,
+            payload={
                 "segment_id": segment.segment_id,
                 "stream_id": segment.stream_id,
                 "transcript": transcript,
@@ -2871,11 +2864,12 @@ class VoiceRuntime:
 
         self._finalize_synthesis_context(device_id=device_id, session_id=session_id, context=context)
         output_pcm = bytes(context.output_pcm)
-        output_path = self._store_asset(
-            session_id,
-            "output",
-            f"{context.stream_id}.wav",
-            build_wav_bytes(output_pcm, SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS),
+        output_path = self._turn_recorder.store_output_audio(
+            session_id=session_id,
+            stream_id=context.stream_id,
+            output_pcm=output_pcm,
+            sample_rate_hz=SERVER_SAMPLE_RATE_HZ,
+            channels=SERVER_CHANNELS,
         )
         self._send_control_message(
             device_id,
@@ -2888,21 +2882,13 @@ class VoiceRuntime:
                 "stream_id": context.stream_id,
             },
         )
-        if agent_result.assistant_message_id:
-            self._agent_facade.attach_assistant_asset(
-                session_id=session_id,
-                assistant_message_id=agent_result.assistant_message_id,
-                asset=MediaAssetRef(
-                    asset_id=generate_id("asset"),
-                    session_id=session_id,
-                    asset_type="audio",
-                    storage_uri=output_path,
-                    mime_type="audio/wav",
-                    codec="pcm16le",
-                    bytes=len(output_pcm),
-                    source_stream_id=context.stream_id,
-                ),
-            )
+        self._turn_recorder.attach_assistant_audio(
+            session_id=session_id,
+            assistant_message_id=agent_result.assistant_message_id,
+            output_path=output_path,
+            output_pcm=output_pcm,
+            source_stream_id=context.stream_id,
+        )
         with self._lock:
             if controller.current_playback is context.playback:
                 controller.state = "reply_streaming"
@@ -3059,11 +3045,10 @@ class VoiceRuntime:
                 request=close_dialog_request,
             )
         transcript = str(agent_result.meta.get("user_text_override") or "").strip()
-        transcript_path = self._store_artifact(
-            session_id,
-            "transcript",
-            f"{segment.segment_id}.json",
-            {
+        transcript_path = self._turn_recorder.store_transcript_artifact(
+            session_id=session_id,
+            segment=segment,
+            payload={
                 "segment_id": segment.segment_id,
                 "stream_id": segment.stream_id,
                 "transcript": transcript,
@@ -3077,11 +3062,12 @@ class VoiceRuntime:
             context=context,
         )
         output_pcm.extend(context.output_pcm)
-        output_path = self._store_asset(
-            session_id,
-            "output",
-            f"{context.stream_id}.wav",
-            build_wav_bytes(bytes(output_pcm), SERVER_SAMPLE_RATE_HZ, SERVER_CHANNELS),
+        output_path = self._turn_recorder.store_output_audio(
+            session_id=session_id,
+            stream_id=context.stream_id,
+            output_pcm=bytes(output_pcm),
+            sample_rate_hz=SERVER_SAMPLE_RATE_HZ,
+            channels=SERVER_CHANNELS,
         )
         self._send_control_message(
             device_id,
@@ -3094,21 +3080,13 @@ class VoiceRuntime:
                 "stream_id": context.stream_id,
             },
         )
-        if agent_result.assistant_message_id:
-            self._agent_facade.attach_assistant_asset(
-                session_id=session_id,
-                assistant_message_id=agent_result.assistant_message_id,
-                asset=MediaAssetRef(
-                    asset_id=generate_id("asset"),
-                    session_id=session_id,
-                    asset_type="audio",
-                    storage_uri=output_path,
-                    mime_type="audio/wav",
-                    codec="pcm16le",
-                    bytes=len(output_pcm),
-                    source_stream_id=context.stream_id,
-                ),
-            )
+        self._turn_recorder.attach_assistant_audio(
+            session_id=session_id,
+            assistant_message_id=agent_result.assistant_message_id,
+            output_path=output_path,
+            output_pcm=bytes(output_pcm),
+            source_stream_id=context.stream_id,
+        )
         with self._lock:
             if controller.current_playback is context.playback:
                 controller.state = "reply_streaming"
