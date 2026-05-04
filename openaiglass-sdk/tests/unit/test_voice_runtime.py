@@ -1323,26 +1323,94 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         chunks: list[ModelChunk] = []
         client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
 
-        result = client.run_reply(
-            settings=ServerSettings(
-                dashscope_api_key="test-key",
-                voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
-                voice_conversation_mode="segment_turn",
-                voice_model_timeout_ms=1000,
-            ),
-            input_pcm=b"\x01\x02",
-            image_frames=[],
-            instructions="简短回答",
-            on_chunk=chunks.append,
-            session_id="sess-test",
-            device_id="glass-001",
-            segment_id="seg-test",
-            stream_id="stream-test",
-        )
+        with self.assertLogs("server.voice", level="DEBUG") as logs:
+            result = client.run_reply(
+                settings=ServerSettings(
+                    dashscope_api_key="test-key",
+                    voice_omni_realtime_model_name="qwen3.5-omni-plus-realtime",
+                    voice_conversation_mode="segment_turn",
+                    voice_model_timeout_ms=1000,
+                ),
+                input_pcm=b"\x01\x02",
+                image_frames=[],
+                instructions="简短回答",
+                on_chunk=chunks.append,
+                session_id="sess-test",
+                device_id="glass-001",
+                segment_id="seg-test",
+                stream_id="stream-test",
+            )
 
         self.assertEqual(chunks[0].audio_pcm_bytes, b"voice")
         self.assertEqual(result.assistant_text, "好的。")
         self.assertEqual(result.response_id, "resp-audio-done")
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("Omni Realtime server event type=response.audio.done", joined_logs)
+        self.assertIn("delta_base64_len", joined_logs)
+
+    def test_omni_streaming_session_close_can_run_in_background(self) -> None:
+        """测试目标：验证 Realtime 会话关闭可以后台执行，不阻塞播放流收口。
+
+        测试方法：
+        1. 注入一个 `close()` 会等待事件释放的假 Omni 会话。
+        2. 创建流式会话并调用 `close(blocking=False)`。
+        3. 检查调用能快速返回，随后释放后台关闭线程。
+
+        预期结果：
+        1. 非阻塞关闭不会等待底层 SDK 关闭完成。
+        2. 后台线程最终仍会调用真实 `close()`。
+        """
+
+        class _Factory:
+            instance: "_Conversation | None" = None
+
+            def __call__(self, **kwargs):
+                _Factory.instance = _Conversation(**kwargs)
+                return _Factory.instance
+
+        release_close = threading.Event()
+
+        class _Conversation:
+            def __init__(self, *, model: str, callback, url: str, api_key: str) -> None:
+                self.callback = callback
+                self.close_started = threading.Event()
+                self.close_finished = threading.Event()
+
+            def connect(self) -> None:
+                self.callback.on_open()
+
+            def update_session(self, **_kwargs) -> None:
+                return None
+
+            def close(self) -> None:
+                self.close_started.set()
+                release_close.wait(timeout=1)
+                self.close_finished.set()
+
+        client = DashscopeOmniRealtimeReplyClient(conversation_factory=_Factory())
+        session = client.start_streaming_reply(
+            settings=ServerSettings(
+                dashscope_api_key="test-key",
+                voice_reply_mode="omni_realtime",
+                voice_conversation_mode="realtime_semantic_vad",
+            ),
+            instructions="连续对话",
+            on_chunk=lambda _chunk: None,
+            session_id="sess-test",
+            device_id="glass-001",
+            segment_id="seg-close",
+            stream_id="stream-close",
+        )
+        started_at = time.time()
+
+        session.close(blocking=False)
+
+        assert _Factory.instance is not None
+        self.assertLess(time.time() - started_at, 0.2)
+        self.assertTrue(_Factory.instance.close_started.wait(timeout=1))
+        self.assertFalse(_Factory.instance.close_finished.is_set())
+        release_close.set()
+        self.assertTrue(_Factory.instance.close_finished.wait(timeout=1))
 
     def test_dashscope_omni_realtime_client_synthesizes_progress_text_audio(self) -> None:
         """测试目标：验证工具前置播报可以由 Omni Realtime 直接生成音频。

@@ -118,6 +118,35 @@ def _format_log_text(text: str, *, max_chars: int = 240) -> str:
     return f"{compact[:max_chars]}..."
 
 
+def _summarize_omni_server_event(message: dict[str, Any]) -> str:
+    """生成 Omni Realtime 服务端事件的安全日志摘要。
+
+    主要逻辑：
+    1. 保留事件类型、响应编号、调用编号、工具名、文本等排障关键字段。
+    2. 对音频 base64 分片只记录长度，避免 DEBUG 日志被大块音频数据淹没。
+    3. 对嵌套对象做 JSON 压缩和截断，便于对照官方 server events 文档。
+    """
+
+    event_type = str(message.get("type") or "")
+    summary: dict[str, Any] = {}
+    for key, value in message.items():
+        if key == "delta" and event_type == "response.audio.delta":
+            summary["delta_base64_len"] = len(str(value or ""))
+        elif key in {"delta", "text", "transcript", "arguments", "call_id", "item_id", "name"}:
+            summary[key] = _format_log_text(str(value or ""), max_chars=160)
+        elif key == "response" and isinstance(value, dict):
+            summary[key] = {
+                "id": value.get("id"),
+                "status": value.get("status"),
+                "output_count": len(value.get("output") or []) if isinstance(value.get("output"), list) else None,
+            }
+        elif key == "error":
+            summary[key] = _format_log_text(json.dumps(value, ensure_ascii=False, default=str), max_chars=300)
+        elif key != "type":
+            summary[key] = value
+    return json.dumps(summary, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
 @dataclass(slots=True)
 class MessageEntry:
     """最小消息上下文条目。"""
@@ -602,16 +631,36 @@ class OmniRealtimeStreamingSession:
             response_id=self._response_id_box[-1] if self._response_id_box else None,
         )
 
-    def close(self) -> None:
-        """关闭 Omni Realtime 会话。"""
+    def close(self, *, blocking: bool = True) -> None:
+        """关闭 Omni Realtime 会话。
+
+        参数：
+            blocking: 是否在当前线程等待 DashScope SDK 的 `close()` 返回。播放流收口路径应使用
+                `False`，避免底层 SDK 等待服务端超时而阻塞 HTTP 下行流 finalize。
+        """
 
         if self._closed:
             return
         self._closed = True
-        try:
-            self._conversation.close()
-        except Exception:
-            pass
+
+        def _close_conversation() -> None:
+            try:
+                self._conversation.close()
+            except Exception as exc:  # noqa: BLE001 - 关闭失败不能阻塞主链路
+                log_debug(
+                    self._logger,
+                    f"Omni Realtime 会话关闭失败: reason={exc!r}",
+                    LogContext(device_id=self._device_id, session_id=self._session_id, message_id="omni_realtime"),
+                )
+
+        if blocking:
+            _close_conversation()
+            return
+        threading.Thread(
+            target=_close_conversation,
+            name=f"omni-realtime-close-{self._segment_id}",
+            daemon=True,
+        ).start()
 
 
 @dataclass(slots=True)
@@ -1679,6 +1728,14 @@ class DashscopeOmniRealtimeReplyClient:
                 nonlocal current_response_has_tool_call
                 event_type = str(message.get("type") or "")
                 now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
+                log_debug(
+                    self_logger,
+                    (
+                        "Omni Realtime server event "
+                        f"type={event_type} payload={_summarize_omni_server_event(message)}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id, message_id="omni_realtime"),
+                )
                 if event_type == "response.created":
                     current_response_has_tool_call = False
                     response = message.get("response")
@@ -2095,6 +2152,14 @@ class DashscopeOmniRealtimeReplyClient:
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - 真实联调路径
                 event_type = str(message.get("type") or "")
                 now_ms = DashscopeOmniRealtimeReplyClient._now_ms()
+                log_debug(
+                    self_logger,
+                    (
+                        "Omni Realtime 工具前置播报 server event "
+                        f"type={event_type} payload={_summarize_omni_server_event(message)}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id, message_id=stream_id),
+                )
                 if event_type == "response.created":
                     response = message.get("response")
                     if isinstance(response, dict):
@@ -4461,7 +4526,10 @@ class VoiceRuntime:
 
         if segment.omni_realtime_session is not None:
             try:
-                segment.omni_realtime_session.close()
+                try:
+                    segment.omni_realtime_session.close(blocking=False)
+                except TypeError:
+                    segment.omni_realtime_session.close()
             except Exception as exc:  # noqa: BLE001 - 清理失败只记录
                 log_debug(
                     self._logger,
@@ -5745,7 +5813,7 @@ class VoiceRuntime:
                 return
             raise
         finally:
-            omni_session.close()
+            omni_session.close(blocking=False)
 
         transcript, transcript_source = self._select_transcript_for_agent(
             segment=segment,
