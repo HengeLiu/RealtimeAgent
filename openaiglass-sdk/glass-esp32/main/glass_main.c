@@ -84,6 +84,7 @@
 #define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 1500
 #define CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES 10
 #define AUDIO_WS_RECONNECT_INTERVAL_MS 3000
+#define CONTROL_WS_RECREATE_AFTER_MS 25000
 #define PLAYBACK_HTTP_TIMEOUT_MS 5000
 #define PLAYBACK_STREAM_IDLE_TIMEOUT_MS 30000
 #define CAMERA_FRAME_SIZE FRAMESIZE_VGA
@@ -177,6 +178,7 @@ static char s_current_camera_stream_id[64];
 static int s_camera_frame_interval_ms = 500;
 static uint32_t s_camera_frame_seq = 0;
 static uint64_t s_playback_request_started_ms = 0;
+static uint64_t s_control_ws_disconnected_since_ms = 0;
 static uint64_t s_continuous_dialog_last_activity_ms = 0;
 static uint64_t s_continuous_dialog_resume_after_ms = 0;
 static uint32_t s_continuous_dialog_vad_speech_frames = 0;
@@ -3152,6 +3154,7 @@ static void websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_CONNECTED) {
         ESP_LOGI(TAG, "控制连接已建立");
+        s_control_ws_disconnected_since_ms = 0;
         reset_control_session_state();
         send_register_message();
         return;
@@ -3159,6 +3162,9 @@ static void websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
         ESP_LOGW(TAG, "控制连接已断开");
+        if (s_control_ws_disconnected_since_ms == 0) {
+            s_control_ws_disconnected_since_ms = now_ms();
+        }
         reset_control_session_state();
         return;
     }
@@ -3170,6 +3176,9 @@ static void websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_ERROR) {
         ESP_LOGE(TAG, "控制连接发生错误");
+        if (s_control_ws_disconnected_since_ms == 0) {
+            s_control_ws_disconnected_since_ms = now_ms();
+        }
         reset_control_session_state();
     }
 }
@@ -3198,7 +3207,14 @@ static void start_control_connection(void)
             NULL
         )
     );
-    ESP_ERROR_CHECK(esp_websocket_client_start(s_ws_client));
+    esp_err_t start_ret = esp_websocket_client_start(s_ws_client);
+    if (start_ret != ESP_OK) {
+        ESP_LOGE(TAG, "启动控制连接客户端失败: %s", esp_err_to_name(start_ret));
+        esp_websocket_client_destroy(s_ws_client);
+        s_ws_client = NULL;
+        s_control_transport_started = false;
+        return;
+    }
     s_control_transport_started = true;
 }
 
@@ -3206,7 +3222,30 @@ static void ensure_control_transport_started(void)
 {
     if (s_control_transport_started) {
         if (s_ws_client != NULL && !esp_websocket_client_is_connected(s_ws_client)) {
-            ESP_LOGW(TAG, "控制连接未就绪，等待 WebSocket 自动重连");
+            uint64_t current_ms = now_ms();
+            if (s_control_ws_disconnected_since_ms == 0) {
+                s_control_ws_disconnected_since_ms = current_ms;
+            }
+            uint64_t disconnected_ms = current_ms - s_control_ws_disconnected_since_ms;
+            if (disconnected_ms < CONTROL_WS_RECREATE_AFTER_MS) {
+                ESP_LOGW(
+                    TAG,
+                    "控制连接未就绪，等待 WebSocket 自动重连: disconnected_ms=%" PRIu64,
+                    disconnected_ms
+                );
+                return;
+            }
+            ESP_LOGW(
+                TAG,
+                "控制连接自动重连超时，重新创建 WebSocket client: disconnected_ms=%" PRIu64,
+                disconnected_ms
+            );
+            esp_websocket_client_stop(s_ws_client);
+            esp_websocket_client_destroy(s_ws_client);
+            s_ws_client = NULL;
+            s_control_transport_started = false;
+            s_control_ws_disconnected_since_ms = 0;
+            start_control_connection();
         }
         return;
     }

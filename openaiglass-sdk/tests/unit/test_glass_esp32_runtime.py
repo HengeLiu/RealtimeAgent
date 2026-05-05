@@ -91,17 +91,19 @@ def test_glass_runtime_supports_ignored_turn_without_closing_dialog() -> None:
     assert "收到 voice.turn.ignored，已忽略本轮并保持连续对话窗口" in source
 
 
-def test_glass_control_reconnect_uses_websocket_auto_reconnect() -> None:
-    """测试目标：控制连接断开后不要和 ESP-IDF WebSocket 自动重连打架。
+def test_glass_control_reconnect_waits_before_recreating_client() -> None:
+    """测试目标：控制连接断开后先等 IDF 自动重连，再做 recreate 兜底。
 
     测试方法：
     1. 静态读取 ESP32 主运行时源码。
     2. 截取 `ensure_control_transport_started`。
-    3. 检查已启动的控制 client 断开时只等待自动重连，不再 stop/start 同一个 handle。
+    3. 检查已启动的控制 client 断开后，不会立即 stop/start 同一个 handle。
+    4. 检查超过兜底窗口后会 destroy 旧 client 并重新创建。
 
     预期结果：
-    1. 服务端重启后由 `reconnect_timeout_ms` 驱动重连。
-    2. heartbeat 任务不会反复触发 `Client was not started` / `Error create websocket task`。
+    1. 服务端短暂重启时由 `reconnect_timeout_ms` 驱动自动重连。
+    2. 自动重连卡死时，端侧不会无限等待。
+    3. heartbeat 任务不会每 5 秒反复触发 `Client was not started` / `Error create websocket task`。
     """
 
     source = GLASS_MAIN.read_text(encoding="utf-8")
@@ -109,9 +111,16 @@ def test_glass_control_reconnect_uses_websocket_auto_reconnect() -> None:
     ensure_block = ensure_block[: ensure_block.index("static void heartbeat_task", source.index("static void ensure_control_transport_started(void)"))]
 
     assert ".reconnect_timeout_ms = 10000" in source
+    assert "#define CONTROL_WS_RECREATE_AFTER_MS 25000" in source
     assert "控制连接未就绪，等待 WebSocket 自动重连" in ensure_block
-    assert "esp_websocket_client_stop(s_ws_client)" not in ensure_block
-    assert "重新启动控制连接失败" not in ensure_block
+    assert "disconnected_ms < CONTROL_WS_RECREATE_AFTER_MS" in ensure_block
+    assert "控制连接自动重连超时，重新创建 WebSocket client" in ensure_block
+    assert "esp_websocket_client_destroy(s_ws_client)" in ensure_block
+    assert "start_control_connection();" in ensure_block
+    wait_branch = ensure_block[ensure_block.index("disconnected_ms < CONTROL_WS_RECREATE_AFTER_MS") :]
+    wait_branch = wait_branch[: wait_branch.index("控制连接自动重连超时，重新创建 WebSocket client")]
+    assert "esp_websocket_client_stop(s_ws_client)" not in wait_branch
+    assert "esp_websocket_client_destroy(s_ws_client)" not in wait_branch
 
 
 def test_glass_runtime_marks_audio_segment_trigger_source() -> None:
