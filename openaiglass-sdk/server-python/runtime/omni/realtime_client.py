@@ -540,6 +540,44 @@ class OmniRealtimeStreamingSession:
             daemon=True,
         ).start()
 
+    def discard_pending_input(self) -> None:
+        """丢弃当前长连接上已经 append 但未提交的输入音频。
+
+        主要用途：
+        1. Omni semantic VAD 没有为一段连续 VAD 音频自动提交响应时，服务端需要忽略该 turn。
+        2. persistent 长连接不能因此关闭，否则端侧连续窗口仍在但模型连接已断。
+        3. DashScope SDK 提供 `clear_appended_audio()` 清理未提交 input buffer。
+
+        异常情况：
+        1. 会话已经关闭或 SDK 清理失败时抛出结构化异常，由调用方决定是否重建长连接。
+        """
+
+        if self._closed:
+            raise build_error(
+                ErrorCode.INVALID_MESSAGE,
+                "Omni Realtime 长连接已经关闭，不能清理未提交输入",
+                details={"segment_id": self._segment_id, "stream_id": self._stream_id},
+            )
+        clear_appended_audio = getattr(self._conversation, "clear_appended_audio", None)
+        if not callable(clear_appended_audio):
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "当前 DashScope SDK 不支持清理 Omni Realtime 未提交输入",
+                details={"method": "clear_appended_audio"},
+            )
+        try:
+            clear_appended_audio()
+        except Exception as exc:
+            raise build_error(
+                ErrorCode.INTERNAL_ERROR,
+                "清理 Omni Realtime 未提交输入失败",
+                details={"reason": str(exc), "segment_id": self._segment_id, "stream_id": self._stream_id},
+            ) from exc
+        self._audio_bytes = 0
+        self._audio_frame_count = 0
+        self._image_frame_count = 0
+        self._first_audio_append_at_ms = None
+
 class DashscopeOmniRealtimeReplyClient:
     """基于 Qwen Omni Realtime 的语音直出客户端。
 

@@ -3087,6 +3087,205 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         self.assertEqual(sent_messages[0][1]["source"], "model_tool")
         self.assertEqual(sent_messages[0][1]["stream_id"], "reply_close_001")
 
+    def test_model_tool_close_dialog_requires_stop_transcript(self) -> None:
+        """测试目标：验证模型误调用关闭工具时不会退出连续对话。
+
+        测试方法：
+        1. 创建一个播放流并构造模型工具关闭请求。
+        2. 使用“现在几点了”这类普通用户文本调用带校验的登记函数。
+        3. 上报播放完成。
+
+        预期结果：
+        1. SDK 拒绝本次关闭请求。
+        2. 播放完成后不会下发 `voice.dialog.close`。
+        """
+
+        sent_messages: list[tuple[str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda _device_id, _semantic, name, _session_id, payload: sent_messages.append(
+                (name, payload)
+            ),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        playback = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部延迟关闭状态
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_close_rejected",
+        )
+
+        accepted = runtime._schedule_model_close_dialog_after_reply_if_confirmed(  # noqa: SLF001
+            device_id="glass-001",
+            session_id="sess-test",
+            playback=playback,
+            request={"scheduled": True, "source": "model_tool"},
+            transcript="现在几点了？",
+            transcript_source="omni_realtime",
+        )
+        runtime.on_playback_finished(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_close_rejected",
+        )
+
+        self.assertFalse(accepted)
+        self.assertEqual(sent_messages, [])
+
+    def test_model_tool_close_dialog_accepts_stop_transcript(self) -> None:
+        """测试目标：验证用户明确要求停止时模型工具关闭请求仍然生效。
+
+        测试方法：
+        1. 创建一个播放流并构造模型工具关闭请求。
+        2. 使用“安静”这类停止指令调用带校验的登记函数。
+        3. 上报播放完成。
+
+        预期结果：
+        1. SDK 接受本次关闭请求。
+        2. 播放完成后下发 `voice.dialog.close`。
+        """
+
+        sent_messages: list[tuple[str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda _device_id, _semantic, name, _session_id, payload: sent_messages.append(
+                (name, payload)
+            ),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        runtime.on_voice_session_opened(device_id="glass-001", session_id="sess-test")
+        playback = runtime._create_playback_stream(  # noqa: SLF001 - 单测覆盖内部延迟关闭状态
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_close_accepted",
+        )
+
+        accepted = runtime._schedule_model_close_dialog_after_reply_if_confirmed(  # noqa: SLF001
+            device_id="glass-001",
+            session_id="sess-test",
+            playback=playback,
+            request={"scheduled": True, "source": "model_tool"},
+            transcript="安静",
+            transcript_source="omni_realtime",
+        )
+        runtime.on_playback_finished(
+            device_id="glass-001",
+            session_id="sess-test",
+            stream_id="reply_close_accepted",
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(sent_messages[0][0], "voice.dialog.close")
+        self.assertEqual(sent_messages[0][1]["stream_id"], "reply_close_accepted")
+
+    def test_ignored_turn_keeps_continuous_dialog_window(self) -> None:
+        """测试目标：验证 Omni 未自动响应时只清理本轮等待，不退出连续对话。
+
+        测试方法：
+        1. 构造一个连续 VAD 语音段。
+        2. 直接调用“忽略本轮”收口函数，并设置 `close_continuous_dialog=False`。
+        3. 检查下发给端侧的控制消息。
+
+        预期结果：
+        1. SDK 下发 `voice.turn.ignored`。
+        2. 不下发 `voice.dialog.close`。
+        """
+
+        sent_messages: list[tuple[str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(),
+            send_control_message=lambda _device_id, _semantic, name, _session_id, payload: sent_messages.append(
+                (name, payload)
+            ),
+        )
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-ignored",
+            segment_id="seg-ignored",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="continuous_vad",
+        )
+
+        runtime._close_segment_without_reply(  # noqa: SLF001 - 单测覆盖服务端无回复收口协议
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+            reason=OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
+            close_continuous_dialog=False,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(sent_messages[0][0], "voice.turn.ignored")
+        self.assertEqual(sent_messages[0][1]["reason"], OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE)
+
+    def test_ignored_turn_preserves_persistent_omni_connection(self) -> None:
+        """测试目标：验证忽略当前 turn 时不会误关闭 persistent Omni 长连接。
+
+        测试方法：
+        1. 构造一个带 persistent Omni 会话的控制器。
+        2. 调用“忽略本轮”收口函数，并设置 `close_continuous_dialog=False`。
+        3. 检查只清理未提交输入，不关闭 WebSocket。
+
+        预期结果：
+        1. SDK 下发 `voice.turn.ignored`。
+        2. persistent 会话调用 `discard_pending_input()`。
+        3. persistent 会话仍保存在 controller 上，供下一轮连续对话复用。
+        """
+
+        class _FakePersistentOmniSession:
+            def __init__(self) -> None:
+                self.discard_count = 0
+                self.close_count = 0
+
+            def discard_pending_input(self) -> None:
+                self.discard_count += 1
+
+            def close(self, *, blocking: bool = True) -> None:
+                del blocking
+                self.close_count += 1
+
+        sent_messages: list[tuple[str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_omni_session_lifecycle="persistent"),
+            send_control_message=lambda _device_id, _semantic, name, _session_id, payload: sent_messages.append(
+                (name, payload)
+            ),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        fake_session = _FakePersistentOmniSession()
+        with runtime._lock:  # noqa: SLF001 - 单测直接布置运行态
+            controller = runtime._controllers["glass-001"]  # noqa: SLF001
+            controller.persistent_omni_realtime_session = fake_session  # type: ignore[assignment]
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-ignored",
+            segment_id="seg-ignored",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="continuous_vad",
+            omni_realtime_session=fake_session,  # type: ignore[arg-type]
+        )
+
+        runtime._close_segment_without_reply(  # noqa: SLF001 - 单测覆盖服务端无回复收口协议
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+            reason=OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
+            close_continuous_dialog=False,
+        )
+
+        self.assertEqual(sent_messages[0][0], "voice.turn.ignored")
+        self.assertEqual(fake_session.discard_count, 1)
+        self.assertEqual(fake_session.close_count, 0)
+        with runtime._lock:  # noqa: SLF001
+            self.assertIs(runtime._controllers["glass-001"].persistent_omni_realtime_session, fake_session)  # noqa: SLF001
+
     def test_on_playback_state_records_terminal_result(self) -> None:
         """测试目标：验证结构化播放终态会进入运行时快照。
 

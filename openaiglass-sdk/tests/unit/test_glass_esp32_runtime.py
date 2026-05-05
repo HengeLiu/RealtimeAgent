@@ -65,6 +65,32 @@ def test_glass_runtime_supports_server_dialog_close() -> None:
     assert "#define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 1500" in source
 
 
+def test_glass_runtime_supports_ignored_turn_without_closing_dialog() -> None:
+    """测试目标：验证服务端可以忽略当前 turn 但保留端侧连续对话窗口。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 检查是否处理 `voice.turn.ignored`。
+    3. 检查该路径只清理回复等待和 VAD 门控，不调用 `deactivate_continuous_dialog`。
+
+    预期结果：
+    1. Omni semantic VAD 没有自动响应时，端侧不会等待 45 秒。
+    2. 连续对话窗口仍可继续接收用户追问。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+    ignored_block = source[source.index('if (strcmp(name->valuestring, "voice.turn.ignored") == 0)') :]
+    ignored_block = ignored_block[: ignored_block.index('if (strcmp(name->valuestring, "sensor.camera.capture") == 0)')]
+
+    assert "voice.turn.ignored" in source
+    assert "clear_reply_wait_state();" in ignored_block
+    assert "reset_continuous_dialog_vad_gate();" in ignored_block
+    assert "refresh_continuous_dialog_activity();" in ignored_block
+    assert "arm_continuous_dialog_resume_cooldown();" in ignored_block
+    assert "deactivate_continuous_dialog(" not in ignored_block
+    assert "收到 voice.turn.ignored，已忽略本轮并保持连续对话窗口" in source
+
+
 def test_glass_runtime_marks_audio_segment_trigger_source() -> None:
     """测试目标：验证眼镜上报语音段时会区分 WakeNet 和连续 VAD 触发来源。
 

@@ -2744,18 +2744,43 @@ static void init_speech_runtime(void)
         return;
     }
 
-    task_ret = xTaskCreatePinnedToCore(
+    task_ret = xTaskCreatePinnedToCoreWithCaps(
         sr_pipeline_task,
         "sr_pipeline_task",
         SR_PIPELINE_TASK_STACK_SIZE,
         &s_sr_ctx,
         5,
         NULL,
-        1
+        1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
     );
     if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "failed to create sr_pipeline_task");
-        return;
+        ESP_LOGW(TAG, "failed to create sr_pipeline_task in PSRAM, fallback to internal stack");
+        task_ret = xTaskCreatePinnedToCore(
+            sr_pipeline_task,
+            "sr_pipeline_task",
+            SR_PIPELINE_TASK_STACK_SIZE,
+            &s_sr_ctx,
+            5,
+            NULL,
+            1
+        );
+        if (task_ret != pdPASS) {
+            size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            size_t largest_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            ESP_LOGE(
+                TAG,
+                "failed to create sr_pipeline_task: stack=%d free_internal=%u largest_internal=%u free_spiram=%u largest_spiram=%u",
+                SR_PIPELINE_TASK_STACK_SIZE,
+                (unsigned)free_internal,
+                (unsigned)largest_internal,
+                (unsigned)free_spiram,
+                (unsigned)largest_spiram
+            );
+            return;
+        }
     }
 
     s_sr_task_started = true;
@@ -2936,6 +2961,16 @@ static void handle_control_message(const char *data, int data_len)
         clear_reply_wait_state();
         s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
         ESP_LOGI(TAG, "收到 voice.dialog.close，已关闭连续对话窗口并恢复 WakeNet 待命");
+        goto cleanup;
+    }
+
+    if (strcmp(name->valuestring, "voice.turn.ignored") == 0) {
+        clear_reply_wait_state();
+        reset_continuous_dialog_vad_gate();
+        refresh_continuous_dialog_activity();
+        arm_continuous_dialog_resume_cooldown();
+        s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+        ESP_LOGI(TAG, "收到 voice.turn.ignored，已忽略本轮并保持连续对话窗口");
         goto cleanup;
     }
 

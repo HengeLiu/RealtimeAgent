@@ -32,7 +32,8 @@ class CloseContinuousDialogTool(BaseTool):
     spec = ToolSpec(
         name="close_continuous_dialog",
         description=(
-            "当用户表达结束连续对话、希望助手安静、先不用继续听、先这样、等会儿再说等意图时调用。"
+            "只能在用户明确表达结束连续对话、希望助手安静、先不用继续听、先这样、等会儿再说等意图时调用。"
+            "不要因为一次普通问题已经回答完成就调用，也不要用它表示本轮回复结束。"
             "调用后运行时会在当前回复播报完成后关闭连续对话窗口，让眼镜回到需要唤醒词的待命状态。"
         ),
         input_model=CloseContinuousDialogInput,

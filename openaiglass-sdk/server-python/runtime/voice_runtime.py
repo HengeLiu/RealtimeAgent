@@ -1540,7 +1540,8 @@ class VoiceRuntime:
         主要逻辑：
         1. 关闭可能已经预连接的 Omni 会话。
         2. 丢弃本轮自动照片，避免后续轮次误消费。
-        3. 可选下发 `voice.dialog.close`，让眼镜回到必须唤醒词触发的待命状态。
+        3. 如果需要结束连续对话，下发 `voice.dialog.close`。
+        4. 如果只是忽略当前 turn，下发 `voice.turn.ignored`，让端侧清理本轮等待并保留连续窗口。
 
         参数：
             device_id/session_id: 当前设备和语音会话编号。
@@ -1550,18 +1551,48 @@ class VoiceRuntime:
         """
 
         if segment.omni_realtime_session is not None:
-            try:
-                try:
-                    segment.omni_realtime_session.close(blocking=False)
-                except TypeError:
-                    segment.omni_realtime_session.close()
-            except Exception as exc:  # noqa: BLE001 - 清理失败只记录
-                log_debug(
-                    self._logger,
-                    f"关闭忽略语音段 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
-                    LogContext(device_id=device_id, session_id=session_id),
+            should_close_omni = close_continuous_dialog
+            persistent_session_kept = False
+            with self._lock:
+                controller = self._controllers.get(device_id)
+                is_persistent_session = (
+                    controller is not None
+                    and controller.persistent_omni_realtime_session is segment.omni_realtime_session
                 )
-            if close_continuous_dialog:
+            if not should_close_omni and is_persistent_session:
+                try:
+                    segment.omni_realtime_session.discard_pending_input()
+                    persistent_session_kept = True
+                    log_debug(
+                        self._logger,
+                        (
+                            "已清理忽略语音段的 Omni 未提交输入并保留长连接 "
+                            f"segment_id={segment.segment_id} input_stream_id={segment.stream_id}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id),
+                    )
+                except Exception as exc:  # noqa: BLE001 - 清理失败时关闭并允许下一轮重建
+                    log_debug(
+                        self._logger,
+                        (
+                            "清理忽略语音段 Omni 未提交输入失败，准备重建长连接 "
+                            f"segment_id={segment.segment_id} reason={exc!r}"
+                        ),
+                        LogContext(device_id=device_id, session_id=session_id),
+                    )
+                    should_close_omni = True
+            if should_close_omni and not persistent_session_kept:
+                try:
+                    try:
+                        segment.omni_realtime_session.close(blocking=False)
+                    except TypeError:
+                        segment.omni_realtime_session.close()
+                except Exception as exc:  # noqa: BLE001 - 清理失败只记录
+                    log_debug(
+                        self._logger,
+                        f"关闭忽略语音段 Omni 会话失败: segment_id={segment.segment_id} reason={exc!r}",
+                        LogContext(device_id=device_id, session_id=session_id),
+                    )
                 with self._lock:
                     controller = self._controllers.get(device_id)
                     if (
@@ -1578,6 +1609,18 @@ class VoiceRuntime:
                 device_id,
                 "request",
                 "voice.dialog.close",
+                session_id,
+                {
+                    "device_id": device_id,
+                    "reason": reason,
+                    "source": "voice_turn_intent",
+                },
+            )
+        else:
+            self._send_control_message(
+                device_id,
+                "notify",
+                "voice.turn.ignored",
                 session_id,
                 {
                     "device_id": device_id,
@@ -1808,6 +1851,53 @@ class VoiceRuntime:
             playback=playback,
             request=request,
         )
+
+    def _schedule_model_close_dialog_after_reply_if_confirmed(
+        self,
+        *,
+        device_id: str,
+        session_id: str,
+        playback: PlaybackStreamContext,
+        request: dict[str, Any],
+        transcript: str,
+        transcript_source: str,
+    ) -> bool:
+        """校验模型工具关闭请求并安排连续对话关闭。
+
+        主要逻辑：
+        1. 模型只有在识别到用户明确停止连续对话时才应调用关闭工具。
+        2. SDK 仍用最终用户转写做一次确定性校验，防止模型在普通回答后误调用工具。
+        3. 校验通过后才登记“当前回复播报完成后关闭连续窗口”。
+
+        参数：
+            device_id/session_id: 当前设备与会话编号。
+            playback: 当前回复播放流上下文。
+            request: Agent meta 中的关闭请求。
+            transcript: 本轮用户文本，优先使用 Omni 或旁路 ASR 最终转写。
+            transcript_source: `transcript` 的来源，用于日志排障。
+
+        返回值：
+            True 表示已接受关闭请求；False 表示请求被 SDK 拦截。
+        """
+
+        if not self._is_conversation_stop_command(transcript):
+            log_info(
+                self._logger,
+                (
+                    "已忽略模型连续对话关闭请求：用户文本不是停止指令 "
+                    f"transcript={transcript!r} transcript_source={transcript_source} "
+                    f"request_source={request.get('source')}"
+                ),
+                LogContext(device_id=device_id, session_id=session_id),
+            )
+            return False
+        self._schedule_close_continuous_dialog_after_reply(
+            device_id=device_id,
+            session_id=session_id,
+            playback=playback,
+            request=request,
+        )
+        return True
 
     def _close_continuous_dialog_after_playback_if_needed(
         self,
@@ -2652,7 +2742,7 @@ class VoiceRuntime:
                     session_id=session_id,
                     segment=segment,
                     reason=OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE,
-                    close_continuous_dialog=True,
+                    close_continuous_dialog=False,
                 )
                 with self._lock:
                     if controller.state == "model_running":
@@ -2702,11 +2792,13 @@ class VoiceRuntime:
         assistant_text = agent_result.reply_text.strip() or "收到。"
         close_dialog_request = self._extract_close_continuous_dialog_request(agent_result.meta)
         if close_dialog_request is not None:
-            self._schedule_close_continuous_dialog_after_reply(
+            self._schedule_model_close_dialog_after_reply_if_confirmed(
                 device_id=device_id,
                 session_id=session_id,
                 playback=context.playback,
                 request=close_dialog_request,
+                transcript=transcript,
+                transcript_source=transcript_source,
             )
         transcript_path = self._turn_recorder.store_transcript_artifact(
             session_id=session_id,
@@ -2908,15 +3000,17 @@ class VoiceRuntime:
             reply_audio_chunk_callback=_handle_omni_audio_chunk,
         )
         assistant_text = agent_result.reply_text.strip() or "收到。"
+        transcript = str(agent_result.meta.get("user_text_override") or "").strip()
         close_dialog_request = self._extract_close_continuous_dialog_request(agent_result.meta)
         if close_dialog_request is not None:
-            self._schedule_close_continuous_dialog_after_reply(
+            self._schedule_model_close_dialog_after_reply_if_confirmed(
                 device_id=device_id,
                 session_id=session_id,
                 playback=context.playback,
                 request=close_dialog_request,
+                transcript=transcript,
+                transcript_source=str(agent_result.meta.get("transcript_source") or "agent_meta"),
             )
-        transcript = str(agent_result.meta.get("user_text_override") or "").strip()
         transcript_path = self._turn_recorder.store_transcript_artifact(
             session_id=session_id,
             segment=segment,
