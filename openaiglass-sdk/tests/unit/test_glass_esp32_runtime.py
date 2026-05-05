@@ -91,6 +91,29 @@ def test_glass_runtime_supports_ignored_turn_without_closing_dialog() -> None:
     assert "收到 voice.turn.ignored，已忽略本轮并保持连续对话窗口" in source
 
 
+def test_glass_control_reconnect_uses_websocket_auto_reconnect() -> None:
+    """测试目标：控制连接断开后不要和 ESP-IDF WebSocket 自动重连打架。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 截取 `ensure_control_transport_started`。
+    3. 检查已启动的控制 client 断开时只等待自动重连，不再 stop/start 同一个 handle。
+
+    预期结果：
+    1. 服务端重启后由 `reconnect_timeout_ms` 驱动重连。
+    2. heartbeat 任务不会反复触发 `Client was not started` / `Error create websocket task`。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+    ensure_block = source[source.index("static void ensure_control_transport_started(void)") :]
+    ensure_block = ensure_block[: ensure_block.index("static void heartbeat_task", source.index("static void ensure_control_transport_started(void)"))]
+
+    assert ".reconnect_timeout_ms = 10000" in source
+    assert "控制连接未就绪，等待 WebSocket 自动重连" in ensure_block
+    assert "esp_websocket_client_stop(s_ws_client)" not in ensure_block
+    assert "重新启动控制连接失败" not in ensure_block
+
+
 def test_glass_runtime_marks_audio_segment_trigger_source() -> None:
     """测试目标：验证眼镜上报语音段时会区分 WakeNet 和连续 VAD 触发来源。
 
