@@ -136,6 +136,7 @@ class StreamChunk:
     timestamp_ms: int = field(default_factory=now_ms)
     version: str = PROTOCOL_VERSION
     final: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class StreamChunkCodec:
@@ -155,6 +156,7 @@ class StreamChunkCodec:
             "duration_ms": chunk.duration_ms,
             "payload_size": len(chunk.payload),
             "final": chunk.final,
+            "metadata": chunk.metadata,
         }
         header_bytes = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
         return len(header_bytes).to_bytes(4, "big") + header_bytes + chunk.payload
@@ -184,5 +186,6 @@ class StreamChunkCodec:
             channels=int(header["channels"]),
             duration_ms=int(header["duration_ms"]),
             final=bool(header.get("final", False)),
+            metadata=dict(header.get("metadata") or {}),
             payload=payload,
         )

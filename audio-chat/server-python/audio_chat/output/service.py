@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import queue
 import time
+import audioop
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -73,9 +74,10 @@ class MockStreamingTTS:
     provider_name = "mock"
     streaming = True
 
-    def __init__(self, model: str = "mock-tts", voice: str = "mock") -> None:
+    def __init__(self, model: str = "mock-tts", voice: str = "mock", sample_rate_hz: int = 16000) -> None:
         self.model = model
         self.voice = voice
+        self.sample_rate_hz = sample_rate_hz
 
     def synthesize_delta(self, text: str) -> bytes:
         if not text:
@@ -84,7 +86,13 @@ class MockStreamingTTS:
         return (b"\x01\x00" * samples)[: samples * 2]
 
     def metrics(self) -> dict:
-        return {"provider": self.provider_name, "model": self.model, "voice": self.voice, "mock": True}
+        return {
+            "provider": self.provider_name,
+            "model": self.model,
+            "voice": self.voice,
+            "sample_rate_hz": self.sample_rate_hz,
+            "mock": True,
+        }
 
     def finish(self) -> None:
         return None
@@ -130,12 +138,14 @@ class DashScopeStreamingTTS:
                 if data:
                     if sink._first_audio_at is None:
                         sink._first_audio_at = time.time()
-                    sink._audio.put(bytes(data))
+                    sink._audio.put(sink._normalize_sample_rate(bytes(data)))
 
             def on_error(self, message: str):  # pragma: no cover - exercised in integration
                 sink._audio.put(b"")
 
-        fmt = AudioFormat.PCM_22050HZ_MONO_16BIT
+        attr = f"PCM_{sample_rate_hz}HZ_MONO_16BIT"
+        fmt = getattr(AudioFormat, attr, AudioFormat.PCM_22050HZ_MONO_16BIT)
+        self._source_sample_rate_hz = sample_rate_hz if hasattr(AudioFormat, attr) else 22050
         self._synthesizer = SpeechSynthesizer(model=model, voice=voice, format=fmt, callback=_Callback())
 
     def synthesize_delta(self, text: str) -> bytes:
@@ -146,7 +156,7 @@ class DashScopeStreamingTTS:
         self._text_push_count += 1
         self._text_chars += len(text)
         self._synthesizer.streaming_call(text)
-        deadline = time.time() + 0.8
+        deadline = time.time() + 3.0
         chunks: list[bytes] = []
         while time.time() < deadline:
             try:
@@ -169,6 +179,7 @@ class DashScopeStreamingTTS:
             "model": self.model,
             "voice": self.voice,
             "sample_rate_hz": self.sample_rate_hz,
+            "source_sample_rate_hz": self._source_sample_rate_hz,
             "tts_first_audio_latency_ms": first_audio_latency_ms,
             "text_push_count": self._text_push_count,
             "text_chars": self._text_chars,
@@ -177,11 +188,17 @@ class DashScopeStreamingTTS:
     def finish(self) -> None:
         self._synthesizer.streaming_complete()
 
+    def _normalize_sample_rate(self, pcm: bytes) -> bytes:
+        if self._source_sample_rate_hz == self.sample_rate_hz:
+            return pcm
+        converted, _state = audioop.ratecv(pcm, 2, 1, self._source_sample_rate_hz, self.sample_rate_hz, None)
+        return converted
+
 
 def build_tts_provider(config: TtsProviderConfig) -> tuple[StreamingTTS, str | None]:
     try:
         if config.provider == "mock":
-            return MockStreamingTTS(model=config.model, voice=config.voice), None
+            return MockStreamingTTS(model=config.model, voice=config.voice, sample_rate_hz=config.sample_rate_hz), None
         if config.provider == "dashscope":
             return DashScopeStreamingTTS(
                 model=config.model,
@@ -193,7 +210,7 @@ def build_tts_provider(config: TtsProviderConfig) -> tuple[StreamingTTS, str | N
     except RuntimeError as exc:
         if not config.allow_mock_fallback:
             raise
-        return MockStreamingTTS(), str(exc)
+        return MockStreamingTTS(sample_rate_hz=config.sample_rate_hz), str(exc)
 
 
 @dataclass
@@ -210,10 +227,10 @@ class PlaybackArbiter:
         self._active_by_user: dict[str, tuple[OutputIntent, str]] = {}
         self._queue_by_user: dict[str, list[QueuedPlayback]] = {}
 
-    def submit(self, intent: OutputIntent) -> tuple[PlaybackDecision, str | None]:
+    def submit(self, intent: OutputIntent, *, format: StreamFormat | None = None) -> tuple[PlaybackDecision, str | None]:
         active = self._active_by_user.get(intent.user_id)
         if active is None:
-            stream_id = self._open_output_stream(intent)
+            stream_id = self._open_output_stream(intent, format=format)
             decision = PlaybackDecision(action="play_now", reason="no_active_playback", active_stream_id=stream_id)
             self._record(intent.session_id, decision)
             return decision, stream_id
@@ -224,7 +241,7 @@ class PlaybackArbiter:
                 self._queue_by_user.setdefault(intent.user_id, []).append(
                     QueuedPlayback(intent=active_intent, source_stream_id=active_stream_id)
                 )
-            stream_id = self._open_output_stream(intent)
+            stream_id = self._open_output_stream(intent, format=format)
             decision = PlaybackDecision(
                 action="interrupt",
                 reason="higher_priority",
@@ -270,13 +287,13 @@ class PlaybackArbiter:
             return queued.intent
         return None
 
-    def _open_output_stream(self, intent: OutputIntent) -> str:
+    def _open_output_stream(self, intent: OutputIntent, *, format: StreamFormat | None = None) -> str:
         handle = self.stream_service.open_stream(
             user_id=intent.user_id,
             session_id=intent.session_id,
             stream_type="actuator.speaker",
             producer_id=SERVER_PRODUCER_ID,
-            format=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
+            format=format or StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
             stream_id=new_id("stream_out"),
         )
         self._active_by_user[intent.user_id] = (intent, handle.stream_id)
@@ -297,17 +314,13 @@ class OutputRouter:
     ) -> None:
         self.stream_service = stream_service
         self.recorder = recorder
-        self.tts = tts
-        if self.tts is None:
-            self.tts, downgrade_reason = build_tts_provider(tts_config or TtsProviderConfig())
-            if downgrade_reason:
-                self.recorder.record_system_event(
-                    {"event": "system.degradation.raised", "component": "StreamingTTS", "reason": downgrade_reason}
-                )
+        self.tts_config = tts_config or TtsProviderConfig()
+        self._injected_tts = tts
         self.arbiter = PlaybackArbiter(stream_service=stream_service, recorder=recorder)
         self._stream_by_session: dict[str, str] = {}
         self._seq_by_stream: dict[str, int] = {}
         self._text_by_session: dict[str, str] = {}
+        self._tts_by_stream: dict[str, StreamingTTS] = {}
 
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
         if delta.text:
@@ -318,11 +331,21 @@ class OutputRouter:
             stream_id = None
         if stream_id is None:
             intent = delta.intent or OutputIntent(user_id=delta.user_id, session_id=delta.session_id)
-            decision, stream_id = self.arbiter.submit(intent)
+            tts = self._new_tts()
+            tts_metrics = tts.metrics()
+            stream_format = StreamFormat(
+                codec="pcm16le",
+                sample_rate=int(tts_metrics.get("sample_rate_hz") or self.tts_config.sample_rate_hz),
+                channels=1,
+                chunk_ms=40,
+            )
+            decision, stream_id = self.arbiter.submit(intent, format=stream_format)
             if decision.action in {"drop", "queue"} or stream_id is None:
                 return
             self._stream_by_session[delta.session_id] = stream_id
-        payload = self.tts.synthesize_delta(delta.text)
+            self._tts_by_stream[stream_id] = tts
+        tts = self._tts_by_stream[stream_id]
+        payload = tts.synthesize_delta(delta.text)
         seq = self._seq_by_stream.get(stream_id, 0)
         if payload:
             chunk = StreamChunk(
@@ -332,6 +355,7 @@ class OutputRouter:
                 stream_type="actuator.speaker",
                 seq=seq,
                 payload=payload,
+                sample_rate=self.stream_service.registry.get(stream_id).format.sample_rate,
                 duration_ms=40,
                 final=False,
             )
@@ -342,14 +366,16 @@ class OutputRouter:
                     "event": "assistant_audio.delta",
                     "stream_id": stream_id,
                     "payload_size": len(payload),
-                    "tts": self.tts.metrics(),
+                    "tts": tts.metrics(),
+                    "stream_format": self.stream_service.registry.get(stream_id).format.__dict__,
                 },
             )
             self._seq_by_stream[stream_id] = seq + 1
         if delta.final:
-            self.tts.finish()
+            tts.finish()
             self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
             self._stream_by_session.pop(delta.session_id, None)
+            self._tts_by_stream.pop(stream_id, None)
             next_intent = self.arbiter.on_playback_finished(delta.user_id, stream_id)
             if next_intent is not None:
                 text = self._text_by_session.pop(next_intent.session_id, "")
@@ -372,6 +398,16 @@ class OutputRouter:
                             intent=next_intent,
                         )
                     )
+
+    def _new_tts(self) -> StreamingTTS:
+        if self._injected_tts is not None:
+            return self._injected_tts
+        tts, downgrade_reason = build_tts_provider(self.tts_config)
+        if downgrade_reason:
+            self.recorder.record_system_event(
+                {"event": "system.degradation.raised", "component": "StreamingTTS", "reason": downgrade_reason}
+            )
+        return tts
 
 
 class OutputService:
@@ -396,4 +432,10 @@ class OutputService:
         )
 
     def interrupt_user(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
-        return self.router.arbiter.cancel_current(user_id, session_id=session_id, reason=reason)
+        decision = self.router.arbiter.cancel_current(user_id, session_id=session_id, reason=reason)
+        if decision.interrupted_stream_id:
+            self.router._tts_by_stream.pop(decision.interrupted_stream_id, None)
+            for stored_session, stream_id in list(self.router._stream_by_session.items()):
+                if stream_id == decision.interrupted_stream_id:
+                    self.router._stream_by_session.pop(stored_session, None)
+        return decision

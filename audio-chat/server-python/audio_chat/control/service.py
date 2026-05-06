@@ -228,6 +228,24 @@ class ControlService:
             failed_device_ids=tuple(failed),
         )
 
+    def publish_to_device(self, device_id: str, event: Event) -> PublishResult:
+        self._validate_event(event)
+        self.recorder.record_event(event)
+        device = self._devices.get(device_id)
+        if device is None or device.user_id != event.user_id or device.connection_state != "online":
+            return PublishResult(matched_count=0, delivered_count=0, failed_device_ids=(device_id,))
+        if not any(self.matcher.match(event, subscription, device) for subscription in device.subscriptions):
+            return PublishResult(matched_count=0, delivered_count=0)
+        connection = self._connections.get(device_id)
+        if connection is None:
+            return PublishResult(matched_count=1, delivered_count=0, failed_device_ids=(device_id,))
+        try:
+            connection.push_event(event)
+        except Exception:
+            device.connection_state = "offline"
+            return PublishResult(matched_count=1, delivered_count=0, failed_device_ids=(device_id,))
+        return PublishResult(matched_count=1, delivered_count=1)
+
     def resolve_subscribers(self, event: Event) -> list[DeviceRecord]:
         result: list[DeviceRecord] = []
         for device in self._devices.values():

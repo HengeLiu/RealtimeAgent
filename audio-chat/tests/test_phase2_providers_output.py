@@ -1,5 +1,6 @@
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta, OutputIntent
+from audio_chat.output.service import MockStreamingTTS, OutputService, TtsProviderConfig
 from audio_chat.protocol import Event, StreamChunk
 
 
@@ -178,3 +179,38 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
     queued_decisions = (tmp_path / "runs" / "sessions" / "sess-queued" / "playback-decisions.jsonl").read_text()
     assert "queue" in queued_decisions
     assert "ttl_expired" in queued_decisions
+
+
+def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app.output_service = OutputService(
+        stream_service=app.stream_service,
+        recorder=app.recorder,
+        tts_config=TtsProviderConfig(provider="mock", sample_rate_hz=22050),
+    )
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-format", text="format check")
+    )
+
+    chunk = connection.chunks[0]
+    stream_id = chunk.stream_id
+    handle = app.stream_service.registry.get(stream_id)
+    model_events = (tmp_path / "runs" / "sessions" / "sess-format" / "model-events.jsonl").read_text()
+    assert handle.format.sample_rate == 22050
+    assert chunk.sample_rate == 22050
+    assert '"sample_rate_hz": 22050' in model_events
+
+
+def test_each_output_stream_gets_independent_tts_session(tmp_path) -> None:
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+
+    app.output_service.submit_output(OutputIntent(user_id="user-001", session_id="sess-one"), "one")
+    app.output_service.submit_output(OutputIntent(user_id="user-001", session_id="sess-two"), "two")
+
+    stream_ids = {chunk.stream_id for chunk in connection.chunks}
+    assert len(stream_ids) == 2

@@ -1,10 +1,10 @@
-# audio-chat 第二阶段补强验收记录
+# audio-chat 第二阶段 / Phase 2.5 验收记录
 
 日期：2026-05-06
 
 ## 验收范围
 
-本轮把第二阶段从 mock/provider 边界基线补强到“真实 provider 可用、配置完整、端侧设备操作闭环可验证”。仍不进入第三阶段业务迁移、ToolGateway、TaskEngine、Skill Service 或 MCP Gateway 完整落地。
+本记录覆盖第二阶段补强和 Phase 2.5 “真实端侧与 Provider 稳定化”。本轮仍不进入第三阶段业务迁移、ToolGateway、TaskEngine、Skill Service 或 MCP Gateway 完整落地。
 
 已完成模块：
 
@@ -18,6 +18,15 @@
 8. 用户打断：`control.user.interrupt.detected` 会 cancel TextAgentCore 当前响应、取消当前 output stream，并写入 Playback Arbiter 决策。
 9. 播放回执：playback endpoint 上报 `stream.output.started`、`stream.output.finished`、`stream.output.closed`。
 10. ESP32 AEC 试验端侧状态模型：声明 `audio.aec=endpoint`，保留 AEC reference ring buffer、mic send queue、playback ring buffer。
+
+Phase 2.5 新增完成项：
+
+1. Output Service 音频格式协商：`DashScopeStreamingTTS` 和 `MockStreamingTTS` 都暴露 `sample_rate_hz` metrics；Output Router 按 TTS provider 实际输出格式打开 `actuator.speaker` stream，`StreamFormat`、`assistant_audio.delta` chunk 和 metrics 保持一致。DashScope provider 在目标采样率不被 SDK 直接支持时会把 PCM 重采样到配置采样率。
+2. TTS 生命周期收紧：Output Router 按 output stream 创建 TTS session，`final` 只关闭当前 stream 绑定的 TTS，不影响其他用户或后续排队输出。
+3. DeviceHandle 语义收紧：`DeviceHandle.configure_stream()`、`open_stream()`、`start_task()`、`EndpointTaskRef.stop()` 都作用于 `UserDeviceContext.find_device(...)` 选中的设备；内部按已解析连接定向投递，不在业务事件格式里暴露 `target_device_id`。
+4. Asset Service request_id 关联：pending request 生成 request_id 并写入 `stream.control.configure.requested` payload；端侧通过 asset stream 回传时带回 request_id，Asset Service 只完成匹配请求，并使用锁保护 pending 表。
+5. Asset TTL 和并发隔离：过期资产不会被缓存命中；两个并发 `sensor.rgb` 请求不会因为上传顺序不同而串包。
+6. 稳定 provider 样本：新增脱敏/合成 16 kHz PCM 样本 `audio-chat/testdata/provider/dashscope-nihao-16k.pcm` 和期望文本 `dashscope-nihao-expected.txt`，真实 DashScope ASR integration 会断言 transcript 包含期望片段。
 
 ## Provider 配置
 
@@ -60,7 +69,7 @@ audio-chat/examples/minimal/server.yaml
 uv run python -m pytest audio-chat/tests -q
 ```
 
-结果：`19 passed`
+结果：`24 passed`
 
 ```bash
 git diff --check
@@ -69,7 +78,7 @@ git diff --check
 结果：通过。
 
 ```bash
-uv run audio-chat.dev.preflight --report runs/audio-chat/preflight-phase2.json
+uv run audio-chat.dev.preflight --report runs/audio-chat/preflight-phase25.json
 ```
 
 结果：通过。
@@ -87,15 +96,16 @@ rg -n "VoiceRuntime|DeviceGroupContext|MediaFrame|group_id|source_device_id|targ
 本机环境存在 `DASHSCOPE_API_KEY`，因此本次 integration 测试实际执行，不是 skip。
 
 ```bash
-DASHSCOPE_API_KEY=... uv run python -m pytest audio-chat/tests/integration -q
+DASHSCOPE_API_KEY=... uv run python -m pytest audio-chat/tests/integration -q -rs
 ```
 
 结果：`2 passed`
 
 覆盖：
 
-1. `DashScopeAsrProviderAdapter` 可启动真实 Recognition session，接收 PCM chunk 并收尾。
-2. `DashScopeStreamingTTS` 可启动真实 SpeechSynthesizer session，接收文本 delta，返回 metrics。
+1. `DashScopeAsrProviderAdapter` 可启动真实 Recognition session，接收 16 kHz PCM 样本，并断言 final transcript 包含 `audio-chat/testdata/provider/dashscope-nihao-expected.txt` 中的期望片段。
+2. `DashScopeStreamingTTS` 可启动真实 SpeechSynthesizer session，按配置返回非空 PCM，metrics 包含 provider、model、voice、`sample_rate_hz=16000` 和 `tts_first_audio_latency_ms`。
+3. 无 `DASHSCOPE_API_KEY` 时 integration 测试会 skip，不会用 mock 冒充真实 provider 验收。
 
 ## Playback 回放
 
@@ -108,7 +118,7 @@ uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.y
 结果：
 
 1. `passed=true`
-2. session：`sess_ffd20ebd10e1`
+2. session：`sess_0bcf0f985cf8`
 3. `output_chunk_count=3`
 4. `output_bytes=3360`
 5. 端侧回执包含 `stream.output.started`、`stream.output.finished`、`stream.output.closed`
@@ -116,14 +126,20 @@ uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.y
 流式 TTS 顺序检查：
 
 ```text
-runs/audio-chat/sessions/sess_ffd20ebd10e1/model-events.jsonl
+runs/audio-chat/sessions/sess_0bcf0f985cf8/model-events.jsonl
 ```
 
 `assistant_audio.delta` 出现在最终 `assistant_text.delta final=true` 之前，说明首个 TTS audio delta 没有等待完整文本结束。
 
+Phase 2.5 格式协商检查：
+
+1. 单元测试覆盖 TTS provider metrics、`StreamFormat` 和 output chunk `sample_rate` 一致。
+2. Playback mock 配置仍使用 16 kHz，真实 DashScope TTS integration 使用 16 kHz 配置并断言 metrics 一致。
+3. 如果后续端侧声明 22050 Hz 播放能力，Output Router 会用 provider metrics 打开 22050 Hz `actuator.speaker` stream；如果配置要求 16000 Hz，provider adapter 会产出或重采样为 16000 Hz。
+
 ## 端侧联调结果
 
-本轮仍未连接物理 ESP32-S3，真实端侧联调用 Python playback endpoint 和 ESP32 AEC 状态模型覆盖协议语义。
+本轮仍未连接物理 ESP32-S3，真实端侧联调用 Python playback endpoint 覆盖协议语义，并补充了 ESP32-S3 endpoint bridge 联调说明：`audio-chat/docs/esp32-s3-endpoint-bridge.md`。
 
 已验证：
 
@@ -133,11 +149,11 @@ runs/audio-chat/sessions/sess_ffd20ebd10e1/model-events.jsonl
 4. endpoint 收到 speaker chunk 后上报 `stream.output.started`。
 5. output close request 后 endpoint 上报 `stream.output.finished` 和 `stream.output.closed`。
 6. `control.user.interrupt.detected` 可取消当前 output stream，并记录 `cancel_current` 决策。
-7. ESP32 AEC 状态模型声明 `audio.aec=endpoint`，并维护 AEC reference ring buffer、mic send queue、playback ring buffer。
+7. ESP32 AEC 试验代码中已有 reference ring buffer、mic send queue、playback ring buffer 的写入时机：server 下发 speaker audio 后，端侧写入播放缓冲，并在实际写 I2S 时同步写入 AEC reference。
 
 未完成：
 
-1. 未连接物理 ESP32-S3 固件。
+1. 未连接物理 ESP32-S3 固件，因此没有真实注册事件、wake 事件、`sensor.mic` chunk、`actuator.speaker` started/finished/closed 和 AEC reference 统计的真机日志。
 2. 未验证真实端侧 AEC 算法效果。
 3. 未验证真实硬件播放器时钟、reference delay 和播放失败回执。
 
@@ -154,13 +170,13 @@ runs/audio-chat/sessions/sess_ffd20ebd10e1/model-events.jsonl
 
 ## 已知问题
 
-1. DashScope integration 当前只做可用性级验证，没有纳入稳定音频样本的语义准确率断言。
-2. DashScope TTS adapter 已是真实 streaming session，但同步 `synthesize_delta()` 只等待短窗口内首批音频，后续仍可继续优化成后台队列驱动。
+1. 物理 ESP32-S3 endpoint bridge 尚未真机验收；当前只有 bridge 联调说明和旧 AEC 试验链路代码证据。
+2. DashScope TTS adapter 已是真实 streaming session，但同步 `synthesize_delta()` 仍是短窗口取音频，后续可优化成后台队列驱动以降低首包抖动。
 3. Playback Arbiter 的 `requeue` 已能重新打开 output stream，但不实现断点 resume。
 4. Asset Service 支持 TTL 和 window，但还没有质量评分、多设备选择策略和连续视频编码。
-5. ESP32 仍是 server SDK 中的 endpoint bridge/state model，物理固件接入说明和真机验收仍需继续补。
+5. ESP32 真机还需要按 `audio-chat/docs/esp32-s3-endpoint-bridge.md` 补充实际刷写命令、串口日志、server 日志和 runs 产物。
 6. ToolGateway、TaskEngine、Skill Service、MCP Gateway 尚未完整落地。
 
 ## 结论
 
-第二阶段补强通过当前验收：真实 DashScope ASR/TTS provider adapter 可用，YAML 配置模型已补齐，Context/DeviceHandle、Asset Service 和 Playback Arbiter 的关键闭环已可测试。下一步仍应先做物理 ESP32 endpoint bridge 和稳定 provider 样本测试，再进入第三阶段业务能力迁移。
+Phase 2.5 的 provider、stream 格式、DeviceHandle、Asset request_id、playback 和 preflight 验收通过。真实 DashScope ASR/TTS 已可用，真实输出音频格式协商已落地；物理 ESP32-S3 endpoint bridge 仍是阻塞项，不能描述为已真机完成。下一步应先完成 ESP32 真机验收，再进入第三阶段业务能力迁移。

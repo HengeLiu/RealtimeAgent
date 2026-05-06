@@ -80,6 +80,7 @@ class PythonPlaybackEndpoint:
                 )
             )
         elif event.event_name == "stream.control.configure.requested" and event.stream_type == "sensor.rgb":
+            request_id = event.payload.get("request_id")
             handle = self.app.open_input_stream(
                 user_id=self.user_id,
                 producer_id=self.device_id,
@@ -94,6 +95,7 @@ class PythonPlaybackEndpoint:
                     seq=0,
                     payload=b"\xff\xd8mock-rgb\xff\xd9",
                     final=True,
+                    metadata={"request_id": request_id} if request_id else {},
                 )
             )
             self.app.stream_service.close_stream(handle.stream_id, reason="asset_uploaded")
