@@ -26,6 +26,9 @@ build-backend = "setuptools.build_meta"
 where = ["audio-chat/server-python"]
 include = ["audio_chat*"]
 
+[tool.setuptools.package-data]
+audio_chat = ["endpoints/web_glass_static/*.html"]
+
 [tool.pytest.ini_options]
 pythonpath = ["audio-chat/server-python", "openaiglass-sdk/server-python", "openaiglass-sdk/glass-playback", "openaiglass-for-blind", "."]
 testpaths = ["audio-chat/tests", "openaiglass-sdk/tests", "openaiglass-for-blind/tests"]

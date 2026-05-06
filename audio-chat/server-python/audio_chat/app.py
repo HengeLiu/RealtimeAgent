@@ -5,6 +5,7 @@ from pathlib import Path
 
 from audio_chat.agent_core import AgentCoreRouter
 from audio_chat.agent_core.providers import AsrProviderConfig, TextModelProviderConfig
+from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
 from audio_chat.audio_pipeline import AudioPipeline
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config
@@ -51,6 +52,11 @@ class AudioChatConfig:
     output_default_on_interrupted: str = "drop"
     output_max_queue_size: int = 32
     agent_mode: str = "text"
+    realtime_provider: str = "qwen"
+    realtime_model: str = "qwen3.5-omni-plus-realtime"
+    realtime_turn_detection: str = "provider"
+    realtime_voice: str = "Tina"
+    realtime_session_idle_timeout_seconds: int = 60
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AudioChatConfig":
@@ -60,6 +66,7 @@ class AudioChatConfig:
     @classmethod
     def from_loaded_config(cls, loaded: AudioChatYamlConfig) -> "AudioChatConfig":
         text = loaded.agent.text
+        realtime = loaded.agent.realtime
         return cls(
             server_host=loaded.server.host,
             server_port=loaded.server.port,
@@ -94,6 +101,11 @@ class AudioChatConfig:
             output_default_on_interrupted=loaded.output.default_on_interrupted,
             output_max_queue_size=loaded.output.max_queue_size,
             agent_mode=loaded.agent.mode,
+            realtime_provider=realtime.provider,
+            realtime_model=realtime.model,
+            realtime_turn_detection=realtime.turn_detection,
+            realtime_voice=realtime.voice,
+            realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
         )
 
 
@@ -143,11 +155,18 @@ class AudioChatApp:
             default_on_interrupted=self.config.output_default_on_interrupted,
             max_queue_size=self.config.output_max_queue_size,
         )
-        self.text_agent_core = AgentCoreRouter.build(
+        self.agent_core = AgentCoreRouter.build(
             mode=self.config.agent_mode,
             control_service=self.control_service,
             output_service=self.output_service,
             recorder=self.recorder,
+            realtime_config=RealtimeProviderConfig(
+                provider=self.config.realtime_provider,
+                model=self.config.realtime_model,
+                turn_detection=self.config.realtime_turn_detection,
+                voice=self.config.realtime_voice,
+                session_idle_timeout_seconds=self.config.realtime_session_idle_timeout_seconds,
+            ),
             asr_config=AsrProviderConfig(
                 provider=self.config.asr_provider,
                 model=self.config.asr_model,
@@ -159,7 +178,8 @@ class AudioChatApp:
                 allow_mock_fallback=self.config.allow_mock_fallback,
             ),
         )
-        self.audio_pipeline = AudioPipeline(text_agent_core=self.text_agent_core)
+        self.text_agent_core = self.agent_core
+        self.audio_pipeline = AudioPipeline(agent_core=self.agent_core)
         self.stream_service.set_dispatcher(self)
         self._active_session_by_user: dict[str, str] = {}
 
@@ -186,7 +206,7 @@ class AudioChatApp:
             return
         if event.event_name == "control.user.interrupt.detected":
             self.control_service.publish(event)
-            self.text_agent_core.interrupt(event.user_id, reason=event.payload.get("reason", "user_interrupt"))
+            self.agent_core.interrupt(event.user_id, reason=event.payload.get("reason", "user_interrupt"))
             self.output_service.interrupt_user(
                 event.user_id,
                 session_id=event.session_id,
@@ -195,10 +215,12 @@ class AudioChatApp:
             return
         if event.event_name == "control.audio_session.opened":
             self.control_service.publish(event)
+            self._open_agent_session(event.user_id, event.session_id)
             return
         if event.event_name == "control.audio_session.closed":
             self.control_service.publish(event)
             self._active_session_by_user.pop(event.user_id, None)
+            self._close_agent_session(event.user_id, reason=event.payload.get("reason", "endpoint_closed"))
             return
         self.control_service.publish(event)
 
@@ -265,6 +287,33 @@ class AudioChatApp:
                 payload={"reason": reason},
             )
         )
+        self._close_agent_session(user_id, reason=reason)
+
+    def _open_agent_session(self, user_id: str, session_id: str | None) -> None:
+        """打开当前 Agent Core 的会话。
+
+        主要逻辑：RealtimeAudioAgentCore 需要提前建立 provider session；TextAgentCore
+        没有 `open()` 时跳过。
+        参数：`user_id` 为用户标识，`session_id` 为当前音频会话。
+        返回值：无。
+        异常情况：provider 打开失败时异常继续抛出，便于联调时 fail fast。
+        """
+        if not session_id or not hasattr(self.agent_core, "open"):
+            return
+        self.agent_core.open(user_id, session_id)
+
+    def _close_agent_session(self, user_id: str, *, reason: str) -> None:
+        """关闭当前 Agent Core 的会话。
+
+        主要逻辑：RealtimeAudioAgentCore 需要释放 provider session；TextAgentCore
+        没有 `close()` 时跳过。
+        参数：`user_id` 为用户标识，`reason` 为关闭原因。
+        返回值：无。
+        异常情况：provider 关闭异常由 core 自行记录。
+        """
+        if not hasattr(self.agent_core, "close"):
+            return
+        self.agent_core.close(user_id, reason=reason)
 
     def _handle_wake_detected(self, event: Event) -> None:
         session_id = self._active_session_by_user.get(event.user_id) or new_id("sess")

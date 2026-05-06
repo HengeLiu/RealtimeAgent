@@ -2174,6 +2174,8 @@ audio-chat/endpoints/
 
 研发流程必须允许开发者先用回放和 mock 快速闭环，再进入真机。真机联调不应该是验证 Tool / Task 业务逻辑的唯一方式。
 
+当前 Phase 2.5 之后，端侧优先验证目标是 `web-glass`：浏览器用 WebRTC AEC / NS / AGC 采集麦克风，并在同一页面播放 server 下行音频。`web-glass + Omni Realtime` 链路不需要页面提交 turn，也不依赖浏览器发送 `final:true` 触发回复；turn 判断交给 provider 的 turn detection / semantic VAD。
+
 ### 15.2 安装 SDK 和 CLI
 
 正式发布后安装：
@@ -2200,9 +2202,10 @@ import audio_chat
 ```bash
 uv run audio-chat.dev.preflight --help
 uv run audio-chat.playback.glass --help
+uv run audio-chat.server.run --help
 ```
 
-`audio-chat.server.run` 当前仍是第一阶段占位入口，正式可用前应补齐 `--config`、`--app-module`、健康检查和日志能力。完整 CLI 目标如下：
+`audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control`、`/ws/stream` 和 `/web-glass` 静态参考端侧入口。完整 CLI 目标如下：
 
 | 命令 | 说明 |
 | --- | --- |
@@ -2281,6 +2284,21 @@ uv run audio-chat.server.run \
 curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/debug/devices
 ```
+
+Omni Realtime 联调启动：
+
+```bash
+DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
+  --config audio-chat/examples/minimal/server-omni.yaml
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:8765/web-glass
+```
+
+页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
 
 后台启动、日志和停止是可选增强，但建议保留：
 
@@ -2628,7 +2646,7 @@ agent:
     # 可选 provider / server / endpoint。
     turn_detection: "provider"
     # 模型输出音色。取值由 provider 决定。
-    voice: "Chelsie"
+    voice: "Tina"
     # Realtime 会话空闲超时秒数。
     session_idle_timeout_seconds: 60
     # 自定义 provider adapter 导入路径，仅 provider=custom 时使用。
@@ -2756,6 +2774,13 @@ observability:
   # 单个运行目录保留天数，0 表示不自动清理。
   retention_days: 7
 ```
+
+当前实现说明：
+
+1. `agent.mode=text` 已落地为 TextAgentCore。
+2. `agent.mode=realtime_audio` 已落地最小 Qwen Omni Realtime 链路，输入为 `sensor.mic` PCM 16 kHz，输出为 native `assistant_audio.delta`，再下发到 `actuator.speaker`。
+3. `agent.mode=auto` 当前保守默认走 text；后续稳定读取端侧 `audio.aec=browser_webrtc` 或 `endpoint` 后再自动优先 realtime。
+4. `agent.mode=custom` 当前 fail fast，需要业务 `--app-module` 提供自定义 core 工厂后才能启用。
 
 ## 17. 可观测性
 

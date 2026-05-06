@@ -98,7 +98,7 @@ class AgentRealtimeConfig:
     provider: str = "qwen"
     model: str = "qwen3.5-omni-plus-realtime"
     turn_detection: str = "provider"
-    voice: str = "Chelsie"
+    voice: str = "Tina"
     session_idle_timeout_seconds: int = 60
     custom_adapter: str = ""
 
@@ -208,6 +208,11 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "AUDIO_CHAT_TTS_PROVIDER": ("agent", "text", "tts_provider"),
         "AUDIO_CHAT_TTS_MODEL": ("agent", "text", "tts_model"),
         "AUDIO_CHAT_TTS_VOICE": ("agent", "text", "tts_voice"),
+        "AUDIO_CHAT_AGENT_MODE": ("agent", "mode"),
+        "AUDIO_CHAT_REALTIME_PROVIDER": ("agent", "realtime", "provider"),
+        "AUDIO_CHAT_REALTIME_MODEL": ("agent", "realtime", "model"),
+        "AUDIO_CHAT_REALTIME_VOICE": ("agent", "realtime", "voice"),
+        "AUDIO_CHAT_REALTIME_TURN_DETECTION": ("agent", "realtime", "turn_detection"),
     }
     for env_name, path in mapping.items():
         value = os.getenv(env_name)

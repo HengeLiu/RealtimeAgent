@@ -9,15 +9,6 @@ server:
 auth:
   mode: "disabled"
   device_tokens: {}
-  signed_token_secret_env: "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
-  token_clock_skew_seconds: 60
-
-user:
-  active_device_set_policy: "single"
-  message_store:
-    type: "jsonl"
-    root: "runs/audio-chat/users"
-  recent_message_limit: 200
 
 control:
   transport: "websocket"
@@ -39,20 +30,16 @@ stream:
     chunk_ms: 20
   default_actuator_speaker:
     codec: "pcm16le"
-    sample_rate: 16000
+    sample_rate: 24000
     channels: 1
-    chunk_ms: 40
-  sensors:
-    rgb_ttl_seconds: 30
-    depth_ttl_seconds: 10
-    imu_ttl_seconds: 10
+    chunk_ms: 20
 
 audio_pipeline:
   aec: "endpoint_only"
   resample: "auto"
   volume_normalize: true
-  vad: "endpoint_or_server"
-  asr_sidecar: "optional"
+  vad: "provider"
+  asr_sidecar: "disabled"
   silence_close_seconds: 15
   max_session_seconds: 0
 
@@ -65,8 +52,7 @@ asset:
   selection_policy: "latest"
 
 agent:
-  mode: "text"
-  custom_core: ""
+  mode: "realtime_audio"
   realtime:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"
@@ -96,31 +82,22 @@ output:
 
 tools:
   enabled: true
-  builtin_enabled: true
-  allowlist: []
-  denylist: []
-  default_timeout_seconds: 30
-  allow_parallel_calls: true
 
 tasks:
   enabled: false
-  max_running_per_user: 16
 
 memory:
   enabled: false
 
 skill:
   enabled: false
-  roots:
-    - "audio-chat/skills"
 
 mcp:
   enabled: false
-  config_path: "audio-chat/mcp.json"
 
 endpoint_defaults:
-  wake_word: "endpoint"
-  aec: "endpoint"
+  wake_word: "browser"
+  aec: "browser_webrtc"
   subscriptions:
     - event: "control.audio_session.*"
     - event: "stream.output.*"

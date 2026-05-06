@@ -32,6 +32,16 @@ class StreamRegistry:
         self._streams[handle.stream_id] = handle
 
     def get(self, stream_id: str) -> StreamHandle:
+        """按 stream_id 读取已注册 stream。
+
+        主要逻辑：把内部字典的 `KeyError` 转成可读协议错误，方便 WebSocket 端返回
+        明确的 unknown stream 诊断。
+        参数：`stream_id` 为端侧或服务端声明的 stream 标识。
+        返回值：对应 `StreamHandle`。
+        异常情况：stream 未注册时抛出 `ValueError`。
+        """
+        if stream_id not in self._streams:
+            raise ValueError(f"unknown stream_id: {stream_id}")
         return self._streams[stream_id]
 
     def has(self, stream_id: str) -> bool:

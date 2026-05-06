@@ -20,8 +20,8 @@ class OutputIntent:
     session_id: str
     source: str = "agent_reply"
     priority: str = "normal"
-    on_interrupted: str = "drop"
-    on_blocked: str = "drop"
+    on_interrupted: str | None = None
+    on_blocked: str | None = None
     ttl_seconds: int = 0
     dedupe_key: str | None = None
 
@@ -261,13 +261,14 @@ class StreamingTtsOutputSource:
 
 @dataclass
 class NativeAudioOutputSource:
-    """原生音频输出源占位。
+    """原生音频输出源。
 
-    主要功能：为后续模型直接输出 audio delta 预留边界；当前阶段不主动使用。
+    主要功能：保存 Omni / realtime provider 直接输出的 audio delta，不经过 TTS。
     主要属性：`format` 描述原生音频格式，`chunks` 保存待播放音频。
     """
 
     format: StreamFormat
+    metadata: dict = field(default_factory=dict)
     chunks: list[bytes] = field(default_factory=list)
     final_requested: bool = False
 
@@ -286,10 +287,22 @@ class NativeAudioOutputSource:
         return self.chunks.pop(0)
 
     def metrics(self) -> dict:
-        return {"provider": "native_audio", "sample_rate_hz": self.format.sample_rate}
+        return {"provider": "native_audio", "sample_rate_hz": self.format.sample_rate, **self.metadata}
 
     def finish(self) -> None:
         return None
+
+    def chunk_bytes(self) -> int:
+        """计算当前格式下每个 stream chunk 的字节数。
+
+        主要逻辑：当前只支持 pcm16le，按采样率、通道数和 chunk_ms 计算单片大小。
+        参数：无。
+        返回值：每个音频 chunk 的字节数，至少为 2 字节。
+        异常情况：无。
+        """
+        if self.format.codec != "pcm16le":
+            return max(1, self.format.sample_rate * self.format.channels * self.format.chunk_ms // 1000)
+        return max(2, self.format.sample_rate * self.format.channels * self.format.chunk_ms // 1000 * 2)
 
 
 @dataclass
@@ -434,6 +447,7 @@ class OutputRouter:
         self._seq_by_stream: dict[str, int] = {}
         self._source_by_session: dict[str, StreamingTtsOutputSource] = {}
         self._source_by_stream: dict[str, StreamingTtsOutputSource | NativeAudioOutputSource] = {}
+        self._native_source_by_session: dict[str, NativeAudioOutputSource] = {}
         self._queued_sessions: set[str] = set()
 
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
@@ -490,6 +504,115 @@ class OutputRouter:
         if delta.final:
             self._finish_stream(delta.user_id, delta.session_id, stream_id, source)
 
+    def on_assistant_audio_delta(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        final: bool = False,
+        intent: OutputIntent | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        """处理 provider 原生 audio delta。
+
+        主要逻辑：首包到达时通过 Playback Arbiter 打开 actuator.speaker stream；
+        后续 audio delta 写入同一 stream；final=True 时关闭 stream。
+        参数：`audio` 为 provider PCM payload，`format` 为 provider 输出格式。
+        返回值：无。
+        异常情况：stream 服务写入失败时抛出异常。
+        """
+        resolved_intent = self._intent_with_defaults(intent or OutputIntent(user_id=user_id, session_id=session_id))
+        source = self._native_source_by_session.get(session_id)
+        if source is None:
+            source = NativeAudioOutputSource(format=format, metadata=dict(metadata or {}))
+            self._native_source_by_session[session_id] = source
+        elif metadata:
+            source.metadata.update(metadata)
+        if audio:
+            source.chunks.append(audio)
+        if final:
+            source.mark_final()
+        if session_id in self._queued_sessions:
+            if final:
+                self.recorder.record_agent_event(
+                    session_id,
+                    {"event": "assistant_audio.done", "native_audio": source.metrics(), "queued": True},
+                )
+            return
+        stream_id = self._stream_by_session.get(session_id)
+        if stream_id is not None and self.stream_service.registry.get(stream_id).state != "open":
+            self._stream_by_session.pop(session_id, None)
+            stream_id = None
+        if stream_id is None and final and not audio and not source.chunks:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.done",
+                    "stream_id": None,
+                    "native_audio": source.metrics(),
+                    "empty_output": True,
+                },
+            )
+            self._native_source_by_session.pop(session_id, None)
+            return
+        if stream_id is None and audio:
+            decision, stream_id = self.arbiter.submit(source=source, intent=resolved_intent, format=source.stream_format())
+            if decision.action == "queue":
+                self._queued_sessions.add(session_id)
+                return
+            if decision.action == "drop" or stream_id is None:
+                return
+            self._stream_by_session[session_id] = stream_id
+            self._source_by_stream[stream_id] = source
+        if stream_id is None:
+            return
+        payload = source.synthesize_pending()
+        seq = self._seq_by_stream.get(stream_id, 0)
+        if payload:
+            handle_format = self.stream_service.registry.get(stream_id).format
+            written_bytes = 0
+            chunk_count = 0
+            for part in self._split_native_audio_payload(payload, source=source):
+                chunk = StreamChunk(
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    stream_type="actuator.speaker",
+                    seq=seq,
+                    payload=part,
+                    codec=handle_format.codec,
+                    sample_rate=handle_format.sample_rate,
+                    channels=handle_format.channels,
+                    duration_ms=handle_format.chunk_ms,
+                    final=False,
+                    metadata={"source": "native_audio", **dict(metadata or {})},
+                )
+                self.stream_service.write_chunk(chunk)
+                written_bytes += len(part)
+                chunk_count += 1
+                seq += 1
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.delta",
+                    "stream_id": stream_id,
+                    "payload_size": written_bytes,
+                    "chunk_count": chunk_count,
+                    "native_audio": source.metrics(),
+                    "stream_format": handle_format.__dict__,
+                },
+            )
+            self._seq_by_stream[stream_id] = seq
+        if final:
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "assistant_audio.done", "stream_id": stream_id, "native_audio": source.metrics()},
+            )
+            self._finish_stream(user_id, session_id, stream_id, source)
+            self._native_source_by_session.pop(session_id, None)
+
     def _finish_stream(
         self,
         user_id: str,
@@ -501,6 +624,7 @@ class OutputRouter:
         self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
         self._stream_by_session.pop(session_id, None)
         self._source_by_stream.pop(stream_id, None)
+        self._native_source_by_session.pop(session_id, None)
         next_output = self.arbiter.on_playback_finished(user_id, stream_id)
         if next_output is not None:
             self._queued_sessions.discard(next_output.intent.session_id)
@@ -544,11 +668,29 @@ class OutputRouter:
             session_id=intent.session_id,
             source=intent.source,
             priority=intent.priority or self.default_priority,
-            on_interrupted=intent.on_interrupted if intent.on_interrupted != "drop" else self.default_on_interrupted,
-            on_blocked=intent.on_blocked if intent.on_blocked != "drop" else self.default_on_blocked,
+            on_interrupted=intent.on_interrupted if intent.on_interrupted is not None else self.default_on_interrupted,
+            on_blocked=intent.on_blocked if intent.on_blocked is not None else self.default_on_blocked,
             ttl_seconds=intent.ttl_seconds,
             dedupe_key=intent.dedupe_key,
         )
+
+    def _split_native_audio_payload(self, payload: bytes, *, source: NativeAudioOutputSource) -> list[bytes]:
+        """把 provider 原生音频拆成协议 chunk。
+
+        主要逻辑：Omni 可能一次返回数百毫秒音频，而 `StreamChunk` 的 header 需要声明
+        真实 chunk_ms，且每片不能超过 `stream.max_chunk_bytes`。这里按输出格式的
+        chunk_ms 计算目标大小，再受 max_chunk_bytes 约束拆分。
+        参数：`payload` 为 provider 原始 PCM；`source` 提供输出音频格式。
+        返回值：拆分后的 payload 列表。
+        异常情况：无。
+        """
+        target_size = min(source.chunk_bytes(), self.stream_service.max_chunk_bytes)
+        if source.format.codec == "pcm16le":
+            frame_bytes = max(2, source.format.channels * 2)
+            target_size = max(frame_bytes, target_size - (target_size % frame_bytes))
+        if target_size <= 0:
+            target_size = len(payload)
+        return [payload[offset : offset + target_size] for offset in range(0, len(payload), target_size)]
 
     def _new_tts(self) -> StreamingTTS:
         if self._injected_tts is not None:
@@ -586,6 +728,35 @@ class OutputService:
     def on_assistant_text_delta(self, delta: AssistantTextDelta) -> None:
         self.router.on_agent_text_delta(delta)
 
+    def on_assistant_audio_delta(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        final: bool = False,
+        intent: OutputIntent | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        """接收原生 assistant_audio.delta。
+
+        主要逻辑：Omni Realtime 直接返回 audio delta 时调用本入口，不走 TTS。
+        参数：`audio` 为 PCM payload，`format` 为输出流格式，`final` 表示 provider
+        audio done。
+        返回值：无。
+        异常情况：stream 写入失败时抛出异常。
+        """
+        self.router.on_assistant_audio_delta(
+            user_id=user_id,
+            session_id=session_id,
+            audio=audio,
+            format=format,
+            final=final,
+            intent=intent,
+            metadata=metadata,
+        )
+
     def submit_output(self, intent: OutputIntent, text: str) -> None:
         self.router.on_agent_text_delta(
             AssistantTextDelta(user_id=intent.user_id, session_id=intent.session_id, text=text, final=False, intent=intent)
@@ -601,4 +772,5 @@ class OutputService:
             for stored_session, stream_id in list(self.router._stream_by_session.items()):
                 if stream_id == decision.interrupted_stream_id:
                     self.router._stream_by_session.pop(stored_session, None)
+                    self.router._native_source_by_session.pop(stored_session, None)
         return decision

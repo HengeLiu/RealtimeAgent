@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib
 import json
+from importlib import resources
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -111,6 +112,8 @@ class AudioChatHttpServer:
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/debug/devices", self.debug_devices)
         app.router.add_get("/api/debug/users/{user_id}", self.debug_user)
+        app.router.add_get("/web-glass", self.web_glass)
+        app.router.add_get("/endpoints/web-glass/", self.web_glass)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
         return app
@@ -145,6 +148,17 @@ class AudioChatHttpServer:
         异常情况：无。
         """
         return web.json_response(self.audio_app.control_service.build_user_snapshot(request.match_info["user_id"]))
+
+    async def web_glass(self, _request: web.Request) -> web.Response:
+        """返回 web-glass 参考端侧页面。
+
+        主要逻辑：从包内静态资源读取原生 HTML/JS，不引入前端构建系统。
+        参数：aiohttp request。
+        返回值：HTML response。
+        异常情况：资源缺失时 aiohttp 返回 500。
+        """
+        html = resources.files("audio_chat.endpoints.web_glass_static").joinpath("index.html").read_text(encoding="utf-8")
+        return web.Response(text=html, content_type="text/html")
 
     async def control_ws(self, request: web.Request) -> web.WebSocketResponse:
         """处理控制 WebSocket。
@@ -216,6 +230,7 @@ class AudioChatHttpServer:
         ws = web.WebSocketResponse(heartbeat=15)
         await ws.prepare(request)
         connection.bind_stream_ws(ws)
+        reported_errors: set[str] = set()
 
         async def sender() -> None:
             while not ws.closed:
@@ -231,10 +246,25 @@ class AudioChatHttpServer:
                     chunk = StreamChunkCodec.decode(message.data)
                     self.audio_app.write_input_chunk(chunk)
                 except Exception as exc:
+                    chunk_info = locals().get("chunk")
+                    if chunk_info is not None:
+                        user_id = getattr(chunk_info, "user_id", "unknown")
+                        session_id = getattr(chunk_info, "session_id", None)
+                        stream_id = getattr(chunk_info, "stream_id", None)
+                        stream_type = getattr(chunk_info, "stream_type", None)
+                    else:
+                        user_id = "unknown"
+                        session_id = None
+                        stream_id = None
+                        stream_type = None
+                    dedupe_key = f"{device_id}:{stream_id}:{type(exc).__name__}:{str(exc)}"
                     error = Event(
                         event_name="system.error.raised",
-                        user_id="unknown",
+                        user_id=user_id,
                         producer_id="server-main",
+                        session_id=session_id,
+                        stream_id=stream_id,
+                        stream_type=stream_type,
                         payload={
                             "message": str(exc),
                             "transport": "stream_ws",
@@ -243,7 +273,9 @@ class AudioChatHttpServer:
                     )
                     self.audio_app.recorder.record_event(error)
                     self.audio_app.recorder.record_system_event(error.to_dict())
-                    await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
+                    if dedupe_key not in reported_errors:
+                        reported_errors.add(dedupe_key)
+                        await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
         finally:
             sender_task.cancel()
         return ws

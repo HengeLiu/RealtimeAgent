@@ -1,7 +1,9 @@
+import json
+
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta, OutputIntent
 from audio_chat.output.service import MockStreamingTTS, OutputService, TtsProviderConfig
-from audio_chat.protocol import Event, StreamChunk
+from audio_chat.protocol import Event, StreamChunk, StreamFormat
 
 
 class Connection:
@@ -216,6 +218,95 @@ def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> N
     queued_decisions = (tmp_path / "runs" / "sessions" / "sess-queued" / "playback-decisions.jsonl").read_text()
     assert "queued_playback_ready" in queued_decisions
     assert sum(len(chunk.payload) for chunk in queued_chunks) >= 880
+
+
+def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_path) -> None:
+    """测试目标：验证显式 `on_blocked="drop"` 不会被全局默认 queue 覆盖。
+
+    测试方法：先启动 active 输出，再提交同优先级且显式 drop 的 blocked 输出。
+    预期结果：blocked 输出被 drop，不进入队列，也不会产生第二条 speaker stream。
+    """
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            output_default_on_blocked="queue",
+        )
+    )
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    active = OutputIntent(user_id="user-001", session_id="sess-active", priority="normal")
+    blocked = OutputIntent(user_id="user-001", session_id="sess-blocked", priority="normal", on_blocked="drop")
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-blocked", text="blocked", intent=blocked)
+    )
+
+    blocked_decisions = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / "sessions" / "sess-blocked" / "playback-decisions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert blocked_decisions[-1]["action"] == "drop"
+    assert blocked_decisions[-1]["reason"] == "active_playback_not_preempted"
+    assert {chunk.session_id for chunk in connection.chunks} == {"sess-active"}
+
+
+def test_native_audio_empty_done_does_not_open_output_stream(tmp_path) -> None:
+    """测试目标：验证原生音频只有 done、没有 delta 时不会打开空播放流。
+
+    测试方法：直接调用 Output Service 的 native audio 入口，传入 `final=True` 和空
+    audio payload。
+    预期结果：端侧不会收到 `stream.output.open.requested`，runs 中记录 empty_output。
+    """
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id="sess-native-empty",
+        audio=b"",
+        format=StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20),
+        final=True,
+        metadata={"provider": "fake"},
+    )
+
+    assert not any(event.event_name == "stream.output.open.requested" for event in connection.events)
+    model_events = (tmp_path / "runs" / "sessions" / "sess-native-empty" / "model-events.jsonl").read_text()
+    assert "assistant_audio.done" in model_events
+    assert '"empty_output": true' in model_events
+
+
+def test_native_audio_delta_is_split_by_stream_format_chunk_size(tmp_path) -> None:
+    """测试目标：验证 Omni 原生大音频包会按 StreamFormat 拆成多片下发。
+
+    测试方法：提交 15360 bytes 的 24k PCM 原生音频，等价于 provider 一次返回约
+    320ms 音频。
+    预期结果：Output Service 按 20ms/960 bytes 拆分，避免超过 stream.max_chunk_bytes，
+    并且每片都声明 24k/20ms。
+    """
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=8192))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id="sess-native-large",
+        audio=b"\x01\x00" * 7680,
+        format=StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20),
+        final=False,
+        metadata={"provider": "fake"},
+    )
+
+    assert len(connection.chunks) == 16
+    assert {len(chunk.payload) for chunk in connection.chunks} == {960}
+    assert {chunk.sample_rate for chunk in connection.chunks} == {24000}
+    assert {chunk.duration_ms for chunk in connection.chunks} == {20}
+    model_events = (tmp_path / "runs" / "sessions" / "sess-native-large" / "model-events.jsonl").read_text()
+    assert '"chunk_count": 16' in model_events
 
 
 def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:

@@ -6,6 +6,8 @@
 
 Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮没有连接物理 ESP32-S3。因此本文件记录最小真机联调入口、事件检查点和 AEC reference 写入要求；真机日志尚未产生，不能把 ESP32 真机能力描述为已完成。
 
+2026-05-07 更新：ESP32-S3 真机 AEC 验收暂时后置。下一阶段优先使用 `web-glass` 浏览器参考端侧验证全双工语音链路，因为浏览器 WebRTC AEC 能在同一页面拿到真实麦克风输入和 server 下行播放参考。ESP32-S3 bridge 文档保留，等 `web-glass` 链路稳定后继续。
+
 可复用的旧试验代码：
 
 1. `openaiglass-sdk/glass-esp32/main/test_official_aec.c`
