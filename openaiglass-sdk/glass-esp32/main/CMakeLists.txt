@@ -4,6 +4,10 @@ if(CONFIG_GLASS_ENABLE_WAKENET_TEST_APP)
     set(APP_SRCS "test_wakenet.c")
 endif()
 
+if(CONFIG_GLASS_ENABLE_OFFICIAL_AEC_TEST_APP)
+    set(APP_SRCS "test_official_aec.c")
+endif()
+
 idf_component_register(
     SRCS ${APP_SRCS}
     INCLUDE_DIRS "."

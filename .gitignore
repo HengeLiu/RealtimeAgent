@@ -22,12 +22,15 @@ build/
 
 # ESP-IDF generated artifacts
 openaiglass-sdk/glass-esp32/build/
+openaiglass-sdk/glass-esp32/build-*/
 openaiglass-sdk/glass-esp32/managed_components/
 openaiglass-sdk/glass-esp32/**/*.bin
 openaiglass-sdk/glass-esp32/sdkconfig
 openaiglass-sdk/glass-esp32/sdkconfig.old
 openaiglass-sdk/glass-esp32/sdkconfig.local
 openaiglass-sdk/glass-esp32/sdkconfig.local.old
+openaiglass-sdk/glass-esp32/sdkconfig.*.local
+openaiglass-sdk/glass-esp32/sdkconfig.*.local.old
 openaiglass-sdk/glass-esp32/dependencies.lock
 openaiglass-for-blind/config/local_server.env
 openaiglass-for-blind/config/local_server.yaml

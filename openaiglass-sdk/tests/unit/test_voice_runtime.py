@@ -3286,6 +3286,75 @@ class VoiceRuntimeTestCase(unittest.TestCase):
         with runtime._lock:  # noqa: SLF001
             self.assertIs(runtime._controllers["glass-001"].persistent_omni_realtime_session, fake_session)  # noqa: SLF001
 
+    def test_semantic_vad_miss_with_valid_sidecar_transcript_uses_segment_turn_fallback(self) -> None:
+        """测试目标：验证 Omni 没有自动提交但 ASR 明确有效时走整段提交兜底。
+
+        测试方法：
+        1. 构造 persistent Omni 长连接和一段已完成旁路 ASR 的唤醒语音。
+        2. 调用 semantic VAD miss 兜底裁决。
+        3. 检查不会下发 `voice.turn.ignored`，并清理长连接未提交输入。
+
+        预期结果：
+        1. 返回 `fallback`。
+        2. persistent 会话只调用 `discard_pending_input()`，不关闭。
+        3. segment 上的预连接字段被清空，后续可走 `segment_turn` 整段提交。
+        """
+
+        class _FakePersistentOmniSession:
+            def __init__(self) -> None:
+                self.discard_count = 0
+                self.close_count = 0
+
+            def discard_pending_input(self) -> None:
+                self.discard_count += 1
+
+            def close(self, *, blocking: bool = True) -> None:
+                del blocking
+                self.close_count += 1
+
+        sent_messages: list[tuple[str, dict]] = []
+        runtime = VoiceRuntime(
+            settings=ServerSettings(voice_omni_session_lifecycle="persistent"),
+            send_control_message=lambda _device_id, _semantic, name, _session_id, payload: sent_messages.append(
+                (name, payload)
+            ),
+        )
+        runtime.open_session(device_id="glass-001", device_type="glass", session_id="sess-test")
+        fake_session = _FakePersistentOmniSession()
+        with runtime._lock:  # noqa: SLF001 - 单测直接布置运行态
+            controller = runtime._controllers["glass-001"]  # noqa: SLF001
+            controller.persistent_omni_realtime_session = fake_session  # type: ignore[assignment]
+        segment = SegmentBuffer(
+            session_id="sess-test",
+            stream_id="stream-fallback",
+            segment_id="seg-fallback",
+            sample_rate=16000,
+            channels=1,
+            codec="pcm16",
+            started_at_ms=0,
+            start_trigger="wake_word",
+            omni_realtime_session=fake_session,  # type: ignore[arg-type]
+        )
+        segment.sidecar_transcript_text = "现在几点？"
+        segment.sidecar_transcript_source = "sidecar_realtime_asr"
+        segment.sidecar_transcript_done.set()
+
+        decision = runtime._prepare_segment_turn_fallback_after_semantic_vad_miss(  # noqa: SLF001
+            controller=controller,
+            device_id="glass-001",
+            session_id="sess-test",
+            segment=segment,
+        )
+
+        self.assertEqual(decision, "fallback")
+        self.assertEqual(sent_messages, [])
+        self.assertEqual(fake_session.discard_count, 1)
+        self.assertEqual(fake_session.close_count, 0)
+        self.assertIsNone(segment.omni_realtime_session)
+        self.assertEqual(segment.turn_intent, "omni_segment_turn_fallback")
+        with runtime._lock:  # noqa: SLF001
+            self.assertIs(runtime._controllers["glass-001"].persistent_omni_realtime_session, fake_session)  # noqa: SLF001
+
     def test_on_playback_state_records_terminal_result(self) -> None:
         """测试目标：验证结构化播放终态会进入运行时快照。
 

@@ -1638,6 +1638,106 @@ class VoiceRuntime:
             LogContext(device_id=device_id, session_id=session_id),
         )
 
+    def _prepare_segment_turn_fallback_after_semantic_vad_miss(
+        self,
+        *,
+        controller: VoiceSessionController,
+        device_id: str,
+        session_id: str,
+        segment: SegmentBuffer,
+    ) -> str:
+        """在 Omni semantic VAD 未自动响应时判断是否改走整段提交兜底。
+
+        主要逻辑：
+        1. 只在旁路 ASR 已经拿到明确可回答文本时触发，避免把背景音、回声和语气词强行提交。
+        2. 停止指令仍按系统控制处理，不进入模型问答。
+        3. 触发兜底前清理 persistent Omni 长连接上未提交的 input buffer，保留长连接给后续连续对话复用。
+
+        返回值：
+            `fallback` 表示调用方应使用 `segment_turn` 兜底继续处理当前语音段；
+            `handled` 表示本函数已经完成停止或忽略收口；
+            `unhandled` 表示调用方应按原 semantic_vad_no_auto_response 路径忽略。
+        """
+
+        if not segment.sidecar_transcript_done.is_set():
+            segment.sidecar_transcript_done.wait(0.5)
+        transcript = segment.sidecar_transcript_text.strip()
+        if not transcript:
+            return "unhandled"
+        decision = self._decide_voice_turn_intent(controller=controller, segment=segment, transcript=transcript)
+        if decision.intent == "stop_conversation":
+            self._close_continuous_dialog_for_stop_command(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                transcript=transcript,
+                source=segment.sidecar_transcript_source or "sidecar_asr",
+            )
+            return "handled"
+        if decision.intent == "ignore":
+            self._close_segment_without_reply(
+                device_id=device_id,
+                session_id=session_id,
+                segment=segment,
+                reason=decision.reason,
+                close_continuous_dialog=decision.close_continuous_dialog,
+            )
+            return "handled"
+
+        omni_session = segment.omni_realtime_session
+        if omni_session is not None:
+            with self._lock:
+                current_controller = self._controllers.get(device_id)
+                is_persistent_session = (
+                    current_controller is not None
+                    and current_controller.persistent_omni_realtime_session is omni_session
+                )
+            try:
+                if is_persistent_session:
+                    omni_session.discard_pending_input()
+                else:
+                    try:
+                        omni_session.close(blocking=False)
+                    except TypeError:
+                        omni_session.close()
+            except Exception as exc:  # noqa: BLE001 - 清理失败时让下一轮重建长连接
+                log_debug(
+                    self._logger,
+                    (
+                        "Omni semantic_vad 兜底前清理原会话失败 "
+                        f"segment_id={segment.segment_id} reason={exc!r}"
+                    ),
+                    LogContext(device_id=device_id, session_id=session_id),
+                )
+                if is_persistent_session:
+                    try:
+                        omni_session.close(blocking=False)
+                    except Exception:
+                        pass
+                    with self._lock:
+                        current_controller = self._controllers.get(device_id)
+                        if (
+                            current_controller is not None
+                            and current_controller.persistent_omni_realtime_session is omni_session
+                        ):
+                            current_controller.persistent_omni_realtime_session = None
+        segment.omni_realtime_session = None
+        segment.omni_realtime_context = None
+        segment.omni_realtime_prepared = None
+        segment.agent_turn = None
+        segment.turn_intent = "omni_segment_turn_fallback"
+        segment.turn_intent_reason = OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE
+        log_info(
+            self._logger,
+            (
+                "Omni semantic_vad 未自动响应，但旁路 ASR 确认为有效用户请求，改用 segment_turn 兜底 "
+                f"segment_id={segment.segment_id} input_stream_id={segment.stream_id} "
+                f"transcript={_format_log_text(transcript)!r}"
+            ),
+            LogContext(device_id=device_id, session_id=session_id),
+        )
+        return "fallback"
+
     def _prepare_utterance_photo_for_intent(
         self,
         *,
@@ -2737,6 +2837,27 @@ class VoiceRuntime:
         except AppError as exc:
             details = getattr(exc, "details", {}) or {}
             if details.get("reason") == OMNI_SEMANTIC_VAD_NO_AUTO_RESPONSE:
+                fallback_decision = self._prepare_segment_turn_fallback_after_semantic_vad_miss(
+                    controller=controller,
+                    device_id=device_id,
+                    session_id=session_id,
+                    segment=segment,
+                )
+                if fallback_decision == "handled":
+                    with self._lock:
+                        if controller.state == "model_running":
+                            controller.state = "listening"
+                    return
+                if fallback_decision == "fallback":
+                    self._run_agent_core_omni_realtime_reply_pipeline(
+                        controller=controller,
+                        device_id=device_id,
+                        session_id=session_id,
+                        segment=segment,
+                        input_path=input_path,
+                        input_wav=input_wav,
+                    )
+                    return
                 self._close_segment_without_reply(
                     device_id=device_id,
                     session_id=session_id,
