@@ -32,35 +32,37 @@ class ServerSettings:
     11. `agent_model_name`：agent-core 文本与图片理解模型名称。
     12. `voice_model_name`：兼容旧链路的语音模型名称。
     13. `voice_model_voice`：兼容旧链路的语音音色。
-    14. `voice_reply_mode`：语音回复模式，当前默认走 Omni 音频输入。
-    15. `voice_omni_realtime_model_name`：Omni Realtime 实验性直连模型名称。
-    16. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
-    17. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
-    18. `voice_conversation_mode`：语音对话模式，稳定分段提交或实验性 Omni 语义连续对话。
-    19. `voice_realtime_turn_detection_type`：实时对话 turn detection 类型。
-    20. `voice_realtime_semantic_vad_threshold`：Omni 语义 VAD 阈值。
-    21. `voice_realtime_silence_duration_ms`：服务端 VAD 判定句尾的静音时长。
-    22. `voice_realtime_prefix_padding_ms`：服务端 VAD 句首保留音频时长。
-    23. `voice_input_mode`：旧版语音输入模式，仅用于兼容配置。
-    24. `tts_model_name`：专用流式 TTS 模型名称。
-    25. `tts_voice`：专用流式 TTS 音色。
-    26. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
-    27. `tts_sample_rate_hz`：TTS 原始输出采样率。
-    28. `tool_progress_audio_enabled`：是否全局启用工具调用前置播报。
-    29. `tool_progress_audio_mode`：工具前置播报音频来源，`cached` 或 `realtime`。
-    30. `voice_model_timeout_ms`：模型请求超时时间。
-    31. `voice_runs_root`：语音运行时资产落盘目录。
-    32. `voice_asr_model_name`：批量语音转写模型名称。
-    33. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
-    34. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
-    35. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
-    36. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
-    37. `voice_session_mode`：设备注册后默认打开的语音会话模式。
-    38. `voice_system_prompt`：默认系统提示词。
-    39. `max_segment_audio_bytes`：单轮上行音频最大字节数。
-    40. `agent_memory_enabled`：是否启用 Agent 长期记忆。
-    41. `agent_memory_store_path`：长期记忆本地持久化文件路径。
-    42. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
+    14. `voice_server_mode`：语音模型服务模式，`omni_server` 或 `text_server`。
+    15. `voice_reply_mode`：旧版语音回复模式，当前只作为兼容映射来源。
+    16. `voice_omni_realtime_model_name`：Omni Realtime 实验性直连模型名称。
+    17. `voice_omni_realtime_url`：Omni Realtime WebSocket 地址。
+    18. `voice_omni_photo_wait_ms`：Omni 分支等待自动照片就绪的最长时间。
+    19. `voice_omni_session_lifecycle`：Omni Realtime 会话生命周期，`persistent` 表示连续对话长连接。
+    20. `voice_conversation_mode`：语音对话模式，稳定分段提交或实验性 Omni 语义连续对话。
+    21. `voice_realtime_turn_detection_type`：实时对话 turn detection 类型。
+    22. `voice_realtime_semantic_vad_threshold`：Omni 语义 VAD 阈值。
+    23. `voice_realtime_silence_duration_ms`：服务端 VAD 判定句尾的静音时长。
+    24. `voice_realtime_prefix_padding_ms`：服务端 VAD 句首保留音频时长。
+    25. `voice_input_mode`：旧版语音输入模式，仅用于兼容配置。
+    26. `tts_model_name`：专用流式 TTS 模型名称。
+    27. `tts_voice`：专用流式 TTS 音色。
+    28. `tts_websocket_api_url`：专用流式 TTS 的 WebSocket 地址。
+    29. `tts_sample_rate_hz`：TTS 原始输出采样率。
+    30. `tool_progress_audio_enabled`：是否全局启用工具调用前置播报。
+    31. `tool_progress_audio_mode`：工具前置播报音频来源，`cached` 或 `realtime`。
+    32. `voice_model_timeout_ms`：模型请求超时时间。
+    33. `voice_runs_root`：语音运行时资产落盘目录。
+    34. `voice_asr_model_name`：批量语音转写模型名称。
+    35. `voice_asr_mode`：ASR 模式，`realtime` 表示边收音频边送 ASR。
+    36. `voice_asr_realtime_model_name`：实时 ASR 模型名称。
+    37. `voice_asr_realtime_timeout_ms`：语音结束后等待实时 ASR 最终文本的时间。
+    38. `voice_asr_realtime_max_sentence_silence_ms`：实时 ASR VAD 断句静音阈值。
+    39. `voice_session_mode`：设备注册后默认打开的语音会话模式。
+    40. `voice_system_prompt`：默认系统提示词。
+    41. `max_segment_audio_bytes`：单轮上行音频最大字节数。
+    42. `agent_memory_enabled`：是否启用 Agent 长期记忆。
+    43. `agent_memory_store_path`：长期记忆本地持久化文件路径。
+    44. `agent_memory_max_prompt_items`：每轮最多注入多少条长期记忆。
     """
 
     host: str = "0.0.0.0"
@@ -77,10 +79,12 @@ class ServerSettings:
     agent_model_name: str = "qwen3.5-omni-plus"
     voice_model_name: str = "qwen3.5-omni-plus"
     voice_model_voice: str = "Tina"
+    voice_server_mode: str = "omni_server"
     voice_reply_mode: str = "omni_realtime"
     voice_omni_realtime_model_name: str = "qwen3.5-omni-plus-realtime"
     voice_omni_realtime_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     voice_omni_photo_wait_ms: int = 300
+    voice_omni_session_lifecycle: str = "persistent"
     voice_conversation_mode: str = "realtime_semantic_vad"
     voice_realtime_turn_detection_type: str = "semantic_vad"
     voice_realtime_semantic_vad_threshold: float = 0.65
@@ -140,10 +144,29 @@ class ServerSettings:
         """
 
         defaults = cls()
+        voice_server_mode_env = os.getenv("VOICE_SERVER_MODE")
         voice_reply_mode = os.getenv("VOICE_REPLY_MODE", defaults.voice_reply_mode)
+        if voice_server_mode_env is None:
+            voice_server_mode = "omni_server" if voice_reply_mode == "omni_realtime" else "text_server"
+        else:
+            voice_server_mode = voice_server_mode_env.strip().lower()
+            if "VOICE_REPLY_MODE" in os.environ:
+                expected_reply_mode = "omni_realtime" if voice_server_mode == "omni_server" else "agent_tts"
+                if voice_reply_mode != expected_reply_mode:
+                    raise build_error(
+                        ErrorCode.INVALID_CONFIG,
+                        "VOICE_SERVER_MODE 与 VOICE_REPLY_MODE 不匹配",
+                        details={
+                            "voice_server_mode": voice_server_mode,
+                            "voice_reply_mode": voice_reply_mode,
+                            "expected_voice_reply_mode": expected_reply_mode,
+                        },
+                    )
+        if "VOICE_REPLY_MODE" not in os.environ:
+            voice_reply_mode = "omni_realtime" if voice_server_mode == "omni_server" else "agent_tts"
         if "VOICE_CONVERSATION_MODE" in os.environ:
             voice_conversation_mode = os.environ["VOICE_CONVERSATION_MODE"]
-        elif voice_reply_mode != "omni_realtime":
+        elif voice_server_mode != "omni_server":
             voice_conversation_mode = "segment_turn"
         else:
             voice_conversation_mode = defaults.voice_conversation_mode
@@ -179,6 +202,7 @@ class ServerSettings:
             agent_model_name=os.getenv("AGENT_MODEL_NAME", defaults.agent_model_name),
             voice_model_name=os.getenv("VOICE_MODEL_NAME", defaults.voice_model_name),
             voice_model_voice=os.getenv("VOICE_MODEL_VOICE", defaults.voice_model_voice),
+            voice_server_mode=voice_server_mode,
             voice_reply_mode=voice_reply_mode,
             voice_omni_realtime_model_name=os.getenv(
                 "VOICE_OMNI_REALTIME_MODEL_NAME",
@@ -192,6 +216,10 @@ class ServerSettings:
                 "VOICE_OMNI_PHOTO_WAIT_MS",
                 defaults.voice_omni_photo_wait_ms,
             ),
+            voice_omni_session_lifecycle=os.getenv(
+                "VOICE_OMNI_SESSION_LIFECYCLE",
+                defaults.voice_omni_session_lifecycle,
+            ).strip().lower(),
             voice_conversation_mode=voice_conversation_mode,
             voice_realtime_turn_detection_type=os.getenv(
                 "VOICE_REALTIME_TURN_DETECTION",
@@ -354,8 +382,19 @@ class ServerSettings:
         """
 
         if self.voice_input_mode == "auto":
-            return "raw_audio" if self.voice_reply_mode == "omni_realtime" else "asr_text"
+            return "raw_audio" if self.effective_voice_server_mode() == "omni_server" else "asr_text"
         return self.voice_input_mode
+
+    def effective_voice_server_mode(self) -> str:
+        """返回兼容旧构造方式后的语音服务模式。
+
+        直接在单测或旧业务代码中构造 `ServerSettings(voice_reply_mode="agent_tts")`
+        时，通常不会同步传入新字段。这里把这种旧写法映射为 `text_server`。
+        """
+
+        if self.voice_server_mode == "omni_server" and self.voice_reply_mode == "agent_tts":
+            return "text_server"
+        return self.voice_server_mode
 
     def omni_turn_detection_enabled(self) -> bool:
         """判断 Omni Realtime 客户端是否应启用服务端 turn detection。
@@ -365,7 +404,7 @@ class ServerSettings:
         2. 当前仅在 `omni_realtime + realtime_semantic_vad` 时启用。
         """
 
-        return self.voice_reply_mode == "omni_realtime" and self.voice_conversation_mode == "realtime_semantic_vad"
+        return self.effective_voice_server_mode() == "omni_server" and self.voice_conversation_mode == "realtime_semantic_vad"
 
     def validate(self) -> None:
         """校验配置合法性。
@@ -461,6 +500,27 @@ class ServerSettings:
                 "VOICE_REPLY_MODE 非法",
                 details={"voice_reply_mode": self.voice_reply_mode, "valid_modes": sorted(valid_voice_reply_modes)},
             )
+        valid_voice_server_modes = {"omni_server", "text_server"}
+        if self.voice_server_mode not in valid_voice_server_modes:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_SERVER_MODE 非法",
+                details={
+                    "voice_server_mode": self.voice_server_mode,
+                    "valid_modes": sorted(valid_voice_server_modes),
+                },
+            )
+        expected_reply_mode = "omni_realtime" if self.effective_voice_server_mode() == "omni_server" else "agent_tts"
+        if self.voice_reply_mode != expected_reply_mode:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_SERVER_MODE 与 VOICE_REPLY_MODE 不匹配",
+                details={
+                    "voice_server_mode": self.voice_server_mode,
+                    "voice_reply_mode": self.voice_reply_mode,
+                    "expected_voice_reply_mode": expected_reply_mode,
+                },
+            )
         if not self.voice_omni_realtime_model_name.strip():
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
@@ -476,6 +536,16 @@ class ServerSettings:
                 ErrorCode.INVALID_CONFIG,
                 "VOICE_OMNI_PHOTO_WAIT_MS 不能小于 0",
                 details={"voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms},
+            )
+        valid_omni_session_lifecycles = {"per_turn", "persistent"}
+        if self.voice_omni_session_lifecycle not in valid_omni_session_lifecycles:
+            raise build_error(
+                ErrorCode.INVALID_CONFIG,
+                "VOICE_OMNI_SESSION_LIFECYCLE 非法",
+                details={
+                    "voice_omni_session_lifecycle": self.voice_omni_session_lifecycle,
+                    "valid_lifecycles": sorted(valid_omni_session_lifecycles),
+                },
             )
         valid_voice_conversation_modes = {"segment_turn", "realtime_semantic_vad"}
         if self.voice_conversation_mode not in valid_voice_conversation_modes:
@@ -515,13 +585,13 @@ class ServerSettings:
                 "VOICE_REALTIME_PREFIX_PADDING_MS 必须在 0 到 2000 之间",
                 details={"voice_realtime_prefix_padding_ms": self.voice_realtime_prefix_padding_ms},
             )
-        if self.voice_conversation_mode == "realtime_semantic_vad" and self.voice_reply_mode != "omni_realtime":
+        if self.voice_conversation_mode == "realtime_semantic_vad" and self.effective_voice_server_mode() != "omni_server":
             raise build_error(
                 ErrorCode.INVALID_CONFIG,
-                "VOICE_CONVERSATION_MODE=realtime_semantic_vad 需要 VOICE_REPLY_MODE=omni_realtime",
+                "VOICE_CONVERSATION_MODE=realtime_semantic_vad 需要 VOICE_SERVER_MODE=omni_server",
                 details={
                     "voice_conversation_mode": self.voice_conversation_mode,
-                    "voice_reply_mode": self.voice_reply_mode,
+                    "voice_server_mode": self.effective_voice_server_mode(),
                 },
             )
         valid_voice_input_modes = {"auto", "asr_text", "raw_audio"}
@@ -533,13 +603,13 @@ class ServerSettings:
             )
         effective_voice_input_mode = self.effective_voice_input_mode()
         if self.voice_input_mode != "auto":
-            expected_input_mode = "raw_audio" if self.voice_reply_mode == "omni_realtime" else "asr_text"
+            expected_input_mode = "raw_audio" if self.effective_voice_server_mode() == "omni_server" else "asr_text"
             if effective_voice_input_mode != expected_input_mode:
                 raise build_error(
                     ErrorCode.INVALID_CONFIG,
                     "VOICE_INPUT_MODE 与 VOICE_REPLY_MODE 不匹配",
                     details={
-                        "voice_reply_mode": self.voice_reply_mode,
+                        "voice_server_mode": self.effective_voice_server_mode(),
                         "voice_input_mode": self.voice_input_mode,
                         "expected_voice_input_mode": expected_input_mode,
                     },
@@ -662,10 +732,12 @@ class ServerSettings:
             "agent_model_name": self.agent_model_name,
             "voice_model_name": self.voice_model_name,
             "voice_model_voice": self.voice_model_voice,
+            "voice_server_mode": self.effective_voice_server_mode(),
             "voice_reply_mode": self.voice_reply_mode,
             "voice_omni_realtime_model_name": self.voice_omni_realtime_model_name,
             "voice_omni_realtime_url": self.voice_omni_realtime_url,
             "voice_omni_photo_wait_ms": self.voice_omni_photo_wait_ms,
+            "voice_omni_session_lifecycle": self.voice_omni_session_lifecycle,
             "voice_conversation_mode": self.voice_conversation_mode,
             "voice_realtime_turn_detection_type": self.voice_realtime_turn_detection_type,
             "voice_realtime_semantic_vad_threshold": self.voice_realtime_semantic_vad_threshold,

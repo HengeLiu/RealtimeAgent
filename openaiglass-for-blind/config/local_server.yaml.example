@@ -60,6 +60,8 @@ models:
     url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     # 用户语音结束后等待本轮自动照片上传完成的时间；超时则继续纯语音处理。
     photo_wait_ms: 300
+    # Omni Realtime 会话生命周期。persistent 表示一次连续对话窗口复用长连接；per_turn 表示每轮重建。
+    session_lifecycle: persistent
   asr:
     # ASR 模式。realtime 表示旁路实时转写；batch 表示整段音频结束后再识别。
     mode: realtime

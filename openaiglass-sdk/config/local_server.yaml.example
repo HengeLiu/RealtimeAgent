@@ -39,6 +39,16 @@ heartbeat:
   # 心跳超时时间。超过该时间未收到设备消息时，服务端会认为连接失活并清理运行态。
   timeout_ms: 15000
 
+voice:
+  # 语音模型服务模式。omni_server 使用百炼 Omni Realtime 长连接；text_server 使用 ASR -> 文本 Agent -> TTS。
+  server_mode: omni_server
+  # 旧版兼容字段。server_mode=omni_server 时等价于 omni_realtime；text_server 时等价于 agent_tts。
+  reply_mode: omni_realtime
+  # 默认 auto：omni_server 使用 raw_audio，text_server 使用 asr_text。
+  input_mode: auto
+  # omni_server 默认使用 Omni semantic_vad 做 turn detection。
+  conversation_mode: realtime_semantic_vad
+
 tools:
   progress_audio:
     # 是否全局启用工具调用前置播报。false 时即使 Tool 配置了 progress_message 也不会播放提示。

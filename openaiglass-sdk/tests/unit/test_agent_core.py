@@ -1426,7 +1426,9 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertEqual(captured["input_pcm_len"], 320)
         self.assertEqual(captured["sample_rate_hz"], 16000)
         self.assertEqual(captured["image_frames"], [b"direct-image-bytes"])
-        self.assertEqual(captured["tools"][0]["name"], "echo_name")
+        captured_tool_names = [tool["name"] for tool in captured["tools"]]
+        self.assertIn("close_continuous_dialog", captured_tool_names)
+        self.assertIn("echo_name", captured_tool_names)
         self.assertEqual(captured["tool_result"]["ok"], True)
         self.assertEqual(echo_tool.calls, ["文刀"])
         self.assertEqual(progress_parts, ["我先查一下。"])
@@ -1808,6 +1810,43 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("必须调用 manage_memory", instructions)
         self.assertIn("不要只用文字声称已经记住", instructions)
         self.assertIn("memory_search", instructions)
+        self.assertIn("close_continuous_dialog", instructions)
+
+    def test_close_continuous_dialog_tool_sets_turn_meta(self) -> None:
+        """测试目标：验证 SDK 内置关闭连续对话工具只记录系统关闭意图。
+
+        测试方法：
+        1. 构造默认 ToolRegistry 和 AgentToolContext。
+        2. 调用 `close_continuous_dialog` 工具。
+        3. 检查工具结果和 `turn_meta` 中的运行时关闭请求。
+
+        预期结果：
+        1. 工具调用成功。
+        2. `turn_meta.close_continuous_dialog` 标记为已安排。
+        3. 默认工具列表会向模型暴露该系统工具。
+        """
+
+        registry, gateway = build_tooling()
+        context = build_tool_context(
+            registry=registry,
+            gateway=gateway,
+            session_id="sess_close_dialog_001",
+            turn_id="turn_close_dialog_001",
+        )
+
+        result = registry.invoke(
+            name="close_continuous_dialog",
+            context=context,
+            arguments={"mode": "after_reply"},
+        )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.data["scheduled"])
+        request = context.turn_meta["close_continuous_dialog"]
+        self.assertTrue(request["scheduled"])
+        self.assertEqual(request["mode"], "after_reply")
+        self.assertNotIn("reason", request)
+        self.assertIn("close_continuous_dialog", [tool.spec.name for tool in registry.list_tools()])
 
     def test_skill_runtime_read_skill_activates_session_and_filters_tools(self) -> None:
         """测试目标：验证 Skill Runtime 可以读取 Skill、激活会话并限制模型工具。
@@ -1888,7 +1927,7 @@ class AgentCoreTestCase(unittest.TestCase):
             getattr(tool, "name", None) or getattr(tool, "_tool_name_override", "")
             for tool in agent.kwargs["tools"]
         ]
-        self.assertEqual(tool_names, ["read_skill"])
+        self.assertEqual(tool_names, ["capture_photo", "close_continuous_dialog", "read_skill"])
         self.assertIn("当前 active Skills", result.meta["model_request"]["instructions"])
         self.assertIn("如果当前输入包含照片，直接根据照片用一句话回答。", result.meta["model_request"]["instructions"])
         self.assertEqual(result.meta["model_request"]["active_skills"], ["scene_inspection"])
@@ -2374,7 +2413,7 @@ class AgentCoreTestCase(unittest.TestCase):
         registry, gateway = build_tooling()
         tool_names = {tool.spec.name for tool in registry.list_tools()}
 
-        self.assertEqual(tool_names, set())
+        self.assertEqual(tool_names, {"capture_photo", "close_continuous_dialog"})
         self.assertIsNone(registry.get("get_latest_utterance_photo"))
         self.assertIsNotNone(registry.get("capture_photo"))
         self.assertIsNone(registry.get("create_timer"))
@@ -2396,18 +2435,18 @@ class AgentCoreTestCase(unittest.TestCase):
         self.assertIn("device_bindings", snapshot)
 
     def test_sdk_tool_signature_uses_explicit_input_fields(self) -> None:
-        """测试目标：验证 SDK Tool 不再暴露宽泛 payload 字段。"""
+        """测试目标：验证 SDK Tool 不再暴露宽泛 payload 字段，也不要求 reason 参数。"""
 
         registry, _ = build_tooling()
         sdk_tool = registry._sdk_tools["capture_photo"]
         if hasattr(sdk_tool, "params_json_schema"):
             properties = sdk_tool.params_json_schema.get("properties", {})
-            self.assertIn("reason", properties)
+            self.assertNotIn("reason", properties)
             self.assertNotIn("payload", properties)
             return
 
         signature = inspect.signature(sdk_tool)
-        self.assertIn("reason", signature.parameters)
+        self.assertNotIn("reason", signature.parameters)
         self.assertNotIn("payload", signature.parameters)
 
     def test_agent_facade_consumes_ready_utterance_photo_as_current_input_asset(self) -> None:
@@ -2508,11 +2547,12 @@ class AgentCoreTestCase(unittest.TestCase):
                 tool_gateway=gateway,
                 mcp_gateway=registry.get_mcp_gateway(),
             ),
-            arguments={"reason": "unit_test"},
+            arguments={},
         )
 
         self.assertEqual(result.data["mime_type"], "image/png")
         self.assertTrue(result.data["storage_uri"].endswith(".png"))
+        self.assertNotIn("reason", result.data)
         with open(result.data["storage_uri"], "rb") as handle:
             self.assertEqual(handle.read(), _FAKE_PNG_BYTES)
 

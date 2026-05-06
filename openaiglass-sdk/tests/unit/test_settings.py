@@ -210,6 +210,8 @@ business:
 
         settings = ServerSettings.from_env()
 
+        self.assertEqual(settings.voice_server_mode, "omni_server")
+        self.assertEqual(settings.effective_voice_server_mode(), "omni_server")
         self.assertEqual(settings.voice_conversation_mode, "realtime_semantic_vad")
         self.assertEqual(settings.voice_realtime_turn_detection_type, "semantic_vad")
         self.assertEqual(settings.voice_realtime_semantic_vad_threshold, 0.75)
@@ -235,9 +237,36 @@ business:
 
         settings = ServerSettings.from_env()
 
+        self.assertEqual(settings.voice_server_mode, "text_server")
+        self.assertEqual(settings.effective_voice_server_mode(), "text_server")
         self.assertEqual(settings.voice_reply_mode, "agent_tts")
         self.assertEqual(settings.voice_conversation_mode, "segment_turn")
         self.assertFalse(settings.omni_turn_detection_enabled())
+
+    def test_voice_server_mode_env_selects_text_server(self) -> None:
+        """测试目标：验证新 `VOICE_SERVER_MODE` 可以直接选择 Text Server。"""
+
+        os.environ["VOICE_SERVER_MODE"] = "text_server"
+        os.environ["VOICE_INPUT_MODE"] = "auto"
+
+        settings = ServerSettings.from_env()
+
+        self.assertEqual(settings.voice_server_mode, "text_server")
+        self.assertEqual(settings.voice_reply_mode, "agent_tts")
+        self.assertEqual(settings.voice_conversation_mode, "segment_turn")
+        self.assertEqual(settings.effective_voice_input_mode(), "asr_text")
+
+    def test_incompatible_voice_server_and_reply_mode_raises(self) -> None:
+        """测试目标：验证新旧语音服务配置冲突时会阻止启动。"""
+
+        os.environ["VOICE_SERVER_MODE"] = "omni_server"
+        os.environ["VOICE_REPLY_MODE"] = "agent_tts"
+        os.environ["VOICE_CONVERSATION_MODE"] = "segment_turn"
+
+        with self.assertRaises(AppError) as ctx:
+            ServerSettings.from_env()
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_CONFIG)
 
     def test_from_env_without_overrides_uses_defaults(self) -> None:
         """测试目标：验证无环境变量覆盖时仍能回退到默认值。"""
@@ -253,6 +282,7 @@ business:
         self.assertEqual(settings.agent_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_model_name, "qwen3.5-omni-plus")
         self.assertEqual(settings.voice_input_mode, "auto")
+        self.assertEqual(settings.voice_server_mode, "omni_server")
         self.assertEqual(settings.voice_reply_mode, "omni_realtime")
         self.assertEqual(settings.voice_conversation_mode, "realtime_semantic_vad")
         self.assertTrue(settings.omni_turn_detection_enabled())

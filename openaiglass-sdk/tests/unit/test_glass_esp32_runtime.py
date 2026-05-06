@@ -28,15 +28,119 @@ def test_glass_runtime_degrades_realtime_voice_open_to_half_duplex() -> None:
     assert "voice.realtime.session.opened" in source
     assert 'cJSON_AddStringToObject(payload, "accepted_mode", "half_duplex")' in source
     assert 'cJSON_AddBoolToObject(capabilities, "aec", false)' in source
-    assert 'cJSON_AddBoolToObject(capabilities, "barge_in", false)' in source
-    assert 'cJSON_AddBoolToObject(capabilities, "output_cancel", false)' in source
+    assert 'cJSON_AddBoolToObject(capabilities, "barge_in", true)' in source
+    assert 'cJSON_AddBoolToObject(capabilities, "output_cancel", true)' in source
+    assert 'cJSON_AddStringToObject(capabilities, "barge_in_mode", "wake_word")' in source
+    assert "s_realtime_semantic_dialog_enabled = semantic_dialog_requested;" in source
+    assert "semantic_continuous_requested=%d semantic_continuous_enabled=%d" in source
     assert "ensure_audio_transport_started();" in source
     assert "WakeNet listening enabled for realtime-degraded session_id=%s" in source
-    assert "!s_playback_active" in source
+    assert "播放中检测到 WakeNet，触发用户打断" in source
+    assert "user.voice.interrupt" in source
     assert "CONFIG_GLASS_ENABLE_AEC" not in source
-    assert "started_during_playback" not in source
     assert '"playback_stream_id"' not in source
     assert "播放中 VAD 触发候选语音段" not in source
+
+
+def test_glass_runtime_supports_server_dialog_close() -> None:
+    """测试目标：验证服务端可以关闭端侧连续对话窗口。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 检查是否处理 `voice.dialog.close`。
+    3. 检查关闭后会重置连续 VAD 并恢复 WakeNet 待命。
+
+    预期结果：
+    1. 用户说“结束对话/安静”后，服务端能让眼镜回到必须唤醒词触发的状态。
+    2. 后续背景音不能继续沿用上一轮连续对话窗口触发图片解读。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+
+    assert "voice.dialog.close" in source
+    assert "deactivate_continuous_dialog(" in source
+    assert "reset_continuous_dialog_vad_gate();" in source
+    assert "收到 voice.dialog.close，已关闭连续对话窗口并恢复 WakeNet 待命" in source
+    assert "#define CONTINUOUS_DIALOG_TRIGGER_SPEECH_FRAMES 10" in source
+    assert "#define CONTINUOUS_DIALOG_RESUME_COOLDOWN_MS 1500" in source
+
+
+def test_glass_runtime_supports_ignored_turn_without_closing_dialog() -> None:
+    """测试目标：验证服务端可以忽略当前 turn 但保留端侧连续对话窗口。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 检查是否处理 `voice.turn.ignored`。
+    3. 检查该路径只清理回复等待和 VAD 门控，不调用 `deactivate_continuous_dialog`。
+
+    预期结果：
+    1. Omni semantic VAD 没有自动响应时，端侧不会等待 45 秒。
+    2. 连续对话窗口仍可继续接收用户追问。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+    ignored_block = source[source.index('if (strcmp(name->valuestring, "voice.turn.ignored") == 0)') :]
+    ignored_block = ignored_block[: ignored_block.index('if (strcmp(name->valuestring, "sensor.camera.capture") == 0)')]
+
+    assert "voice.turn.ignored" in source
+    assert "clear_reply_wait_state();" in ignored_block
+    assert "reset_continuous_dialog_vad_gate();" in ignored_block
+    assert "refresh_continuous_dialog_activity();" in ignored_block
+    assert "arm_continuous_dialog_resume_cooldown();" in ignored_block
+    assert "deactivate_continuous_dialog(" not in ignored_block
+    assert "收到 voice.turn.ignored，已忽略本轮并保持连续对话窗口" in source
+
+
+def test_glass_control_reconnect_waits_before_recreating_client() -> None:
+    """测试目标：控制连接断开后先等 IDF 自动重连，再做 recreate 兜底。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 截取 `ensure_control_transport_started`。
+    3. 检查已启动的控制 client 断开后，不会立即 stop/start 同一个 handle。
+    4. 检查超过兜底窗口后会 destroy 旧 client 并重新创建。
+
+    预期结果：
+    1. 服务端短暂重启时由 `reconnect_timeout_ms` 驱动自动重连。
+    2. 自动重连卡死时，端侧不会无限等待。
+    3. heartbeat 任务不会每 5 秒反复触发 `Client was not started` / `Error create websocket task`。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+    ensure_block = source[source.index("static void ensure_control_transport_started(void)") :]
+    ensure_block = ensure_block[: ensure_block.index("static void heartbeat_task", source.index("static void ensure_control_transport_started(void)"))]
+
+    assert ".reconnect_timeout_ms = 10000" in source
+    assert "#define CONTROL_WS_RECREATE_AFTER_MS 25000" in source
+    assert "控制连接未就绪，等待 WebSocket 自动重连" in ensure_block
+    assert "disconnected_ms < CONTROL_WS_RECREATE_AFTER_MS" in ensure_block
+    assert "控制连接自动重连超时，重新创建 WebSocket client" in ensure_block
+    assert "esp_websocket_client_destroy(s_ws_client)" in ensure_block
+    assert "start_control_connection();" in ensure_block
+    wait_branch = ensure_block[ensure_block.index("disconnected_ms < CONTROL_WS_RECREATE_AFTER_MS") :]
+    wait_branch = wait_branch[: wait_branch.index("控制连接自动重连超时，重新创建 WebSocket client")]
+    assert "esp_websocket_client_stop(s_ws_client)" not in wait_branch
+    assert "esp_websocket_client_destroy(s_ws_client)" not in wait_branch
+
+
+def test_glass_runtime_marks_audio_segment_trigger_source() -> None:
+    """测试目标：验证眼镜上报语音段时会区分 WakeNet 和连续 VAD 触发来源。
+
+    测试方法：
+    1. 静态读取 ESP32 主运行时源码。
+    2. 检查 `sensor.audio.segment.started` 会写入 `trigger` 字段。
+    3. 检查 WakeNet 分支保留 `wake_word` 元信息，连续 VAD 分支不会伪装成唤醒词触发。
+
+    预期结果：
+    1. 服务端能识别连续 VAD 产生的后续段。
+    2. 服务端可以对无转写的连续 VAD 空段做抑制，避免进入自动看图自循环。
+    """
+
+    source = GLASS_MAIN.read_text(encoding="utf-8")
+
+    assert 'cJSON_AddStringToObject(payload, "trigger", started_by_wake_word ? "wake_word" : "continuous_vad")' in source
+    assert "cJSON *wake_word = started_by_wake_word ? cJSON_CreateObject() : NULL;" in source
+    assert "send_audio_segment_started_message(segment.segment_id, start_by_wake_word);" in source
 
 
 def test_glass_runtime_plays_short_prompt_tone_on_wakenet() -> None:

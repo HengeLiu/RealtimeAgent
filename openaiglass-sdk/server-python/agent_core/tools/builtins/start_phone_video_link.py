@@ -22,10 +22,6 @@ class StartPhoneVideoLinkInput(BaseModel):
         default="direct",
         description="视频连接方式；一般使用默认值 direct，除非用户或上层流程明确要求其他方式。",
     )
-    reason: str = Field(
-        default="agent_requested",
-        description="说明为什么需要启动手机视频直连，例如“持续观察前方路况”或“辅助找物”。",
-    )
     frame_interval_ms: int = Field(
         default=500,
         description="手机向服务端发送视频帧的间隔，单位毫秒；数值越小越实时但资源消耗越高。",
@@ -98,7 +94,6 @@ class StartPhoneVideoLinkTool(BaseTool):
                 "phone_device_id": bound_phone_id,
                 "target_ws_uri": target_ws_uri,
                 "link_mode": input_data.link_mode,
-                "reason": input_data.reason,
                 "frame_interval_ms": input_data.frame_interval_ms,
             },
         )

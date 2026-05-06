@@ -258,6 +258,40 @@ class UtterancePhotoStore:
             record.consumed_at_ms = now
             return record
 
+    def discard_photo(
+        self,
+        *,
+        session_id: str,
+        device_id: str,
+        segment_id: str,
+    ) -> bool:
+        """丢弃指定语音段的自动抓拍记录。
+
+        主要逻辑：
+        1. 查找指定语音段对应的抓拍记录。
+        2. 不论图片是否已经上传完成，都标记为已消费。
+        3. 后续输入装配不会再把这张照片带入模型。
+
+        参数：
+        1. `session_id/device_id/segment_id`：要丢弃的语音轮次。
+
+        返回值：
+        1. 找到并标记记录时返回 `True`；记录不存在时返回 `False`。
+
+        异常情况：
+        1. 本方法不抛出后台抓拍异常，只改变缓存消费状态。
+        """
+
+        key = self._key(session_id=session_id, device_id=device_id, segment_id=segment_id)
+        now = self._now_ms()
+        with self._lock:
+            record = self._records.get(key)
+            if record is None:
+                return False
+            if record.consumed_at_ms is None:
+                record.consumed_at_ms = now
+            return True
+
     def _capture_worker(
         self,
         *,

@@ -401,6 +401,7 @@ class AgentFacade:
                     "asset_refs": list(prepared.runtime.tool_context.emitted_assets),
                     "derived_artifacts": list(prepared.runtime.tool_context.emitted_artifacts),
                     "task_refs": list(prepared.runtime.tool_context.emitted_tasks),
+                    "turn_meta": dict(prepared.runtime.tool_context.turn_meta),
                     **(native_result.meta or {}),
                 },
             )
@@ -526,7 +527,7 @@ class AgentFacade:
         1. 只基于配置和内存对象规划，不主动抛出业务异常。
         """
 
-        reply_mode = self._settings.voice_reply_mode
+        reply_mode = "omni_realtime" if self._settings.effective_voice_server_mode() == "omni_server" else "agent_tts"
         model_name = (
             self._settings.voice_omni_realtime_model_name
             if reply_mode == "omni_realtime"

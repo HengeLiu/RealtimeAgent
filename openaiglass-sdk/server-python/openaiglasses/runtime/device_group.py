@@ -204,7 +204,7 @@ class DeviceGroupContext:
             params=params or {},
         )
 
-    def stop_phone_task(self, *, task_type: str, reason: str) -> dict[str, Any]:
+    def stop_phone_task(self, *, task_type: str, reason: str = "") -> dict[str, Any]:
         """停止当前设备组中的手机业务任务。"""
 
         if not self.task_id:

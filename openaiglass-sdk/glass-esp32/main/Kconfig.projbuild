@@ -7,6 +7,89 @@ config GLASS_ENABLE_WAKENET_TEST_APP
         开启后，main 组件会编译并运行 test_wakenet.c，而不是 glass_main.c。
         该模式只测试唤醒词成功率，不连接服务端，不进行语音对话。
 
+config GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+    bool "启用独立 ESP-SR 官方 AEC 测试入口"
+    default n
+    help
+        开启后，main 组件会编译并运行 test_official_aec.c，而不是 glass_main.c。
+        该模式直接使用 ESP32-S3 官方 ESP-SR esp_aec.h，把服务端下发的播放音频同时送入喇叭和 AEC refdata，
+        再把 aec_process 输出上传到测试 relay，用来验证端侧 AEC 是否足够可靠。
+        请不要和 GLASS_ENABLE_WAKENET_TEST_APP 同时开启；如果同时开启，本测试入口优先。
+
+config GLASS_AEC_TEST_RELAY_WS_URI
+    string "ESP-SR AEC 测试 Relay WebSocket 地址"
+    default "ws://192.168.1.10:9886/ws"
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+    help
+        Python 测试 relay 的 WebSocket 地址。建议配合 devtools/omni_esp32_aec_relay.py 使用。
+
+config GLASS_AEC_TEST_FILTER_LENGTH
+    int "ESP-SR AEC 滤波长度"
+    range 1 8
+    default 4
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+    help
+        传给 aec_create 的 filter_length。官方建议默认 4；值越大资源消耗越高。
+
+choice GLASS_AEC_TEST_MODE
+    prompt "ESP-SR AEC 工作模式"
+    default GLASS_AEC_TEST_MODE_SR_LOW_COST
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+
+config GLASS_AEC_TEST_MODE_SR_LOW_COST
+    bool "语音识别低资源模式"
+
+config GLASS_AEC_TEST_MODE_SR_HIGH_PERF
+    bool "语音识别高性能模式"
+
+config GLASS_AEC_TEST_MODE_VOIP_LOW_COST
+    bool "通话低资源模式"
+
+config GLASS_AEC_TEST_MODE_VOIP_HIGH_PERF
+    bool "通话高性能模式"
+
+endchoice
+
+config GLASS_AEC_TEST_PLAYBACK_GAIN_PERMILLE
+    int "ESP-SR AEC 测试播放音量"
+    range 50 1500
+    default 700
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+    help
+        播放下行音频时的增益，单位为千分比。默认 700 表示 0.7 倍，避免扬声器过响造成非线性失真。
+
+choice GLASS_AEC_TEST_SPK_FORMAT
+    prompt "ESP-SR AEC 测试扬声器 I2S 格式"
+    default GLASS_AEC_TEST_SPK_FORMAT_32BIT_MSB_SHIFTED
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+
+config GLASS_AEC_TEST_SPK_FORMAT_32BIT_MSB_SHIFTED
+    bool "32-bit stereo MSB, PCM16 左移 16 位"
+
+config GLASS_AEC_TEST_SPK_FORMAT_16BIT_STEREO
+    bool "16-bit stereo MSB, PCM16 原样输出"
+
+config GLASS_AEC_TEST_SPK_FORMAT_32BIT_MSB_RAW
+    bool "32-bit stereo MSB, PCM16 不左移"
+
+endchoice
+
+config GLASS_AEC_TEST_LOCAL_TONE_ONLY
+    bool "只播放本地测试音"
+    default n
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP
+    help
+        开启后不连接 WiFi、不连接 Omni relay，只通过同一条 I2S 扬声器路径循环播放本地正弦测试音。
+        用于隔离排查电流音、爆破音是否来自 ESP32 I2S/功放输出链路。
+
+config GLASS_AEC_TEST_LOCAL_TONE_HZ
+    int "本地测试音频率"
+    range 100 3000
+    default 440
+    depends on GLASS_ENABLE_OFFICIAL_AEC_TEST_APP && GLASS_AEC_TEST_LOCAL_TONE_ONLY
+    help
+        本地测试音频率，默认 440Hz。测试时应听到稳定、干净、无爆破的纯音。
+
 config GLASS_WIFI_PRIMARY_SSID
     string "主 WiFi 名称"
     default ""
