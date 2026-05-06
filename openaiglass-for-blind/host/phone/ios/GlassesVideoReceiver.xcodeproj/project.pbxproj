@@ -160,6 +160,7 @@
 				A00000010000000000000017 /* Sources */,
 				A0000001000000000000000E /* Frameworks */,
 				A00000010000000000000018 /* Resources */,
+				B00000040000000000000001 /* Copy Local CoreML Models */,
 			);
 			buildRules = (
 			);
@@ -239,6 +240,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		B00000040000000000000001 /* Copy Local CoreML Models */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Local CoreML Models";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "MODEL_DIR=\"${PROJECT_DIR}/../models\"\nRESOURCE_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -d \"${MODEL_DIR}\" ]; then\n  for model in \"${MODEL_DIR}\"/*.mlmodelc; do\n    [ -d \"${model}\" ] || continue\n    /usr/bin/rsync -a --delete \"${model}\" \"${RESOURCE_DIR}/\"\n  done\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A00000010000000000000017 /* Sources */ = {

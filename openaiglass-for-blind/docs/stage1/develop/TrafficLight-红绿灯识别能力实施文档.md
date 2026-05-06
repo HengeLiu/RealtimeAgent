@@ -48,7 +48,16 @@
 2. `TrafficLightProcessor` 从离线回放文本中识别 `red/yellow/green/unknown`。
 3. 输出结构化事件 `phone.vision.traffic_light.result`。
 
-当前 Python 处理器是 `phone-mock` 和契约验证用的最小实现，不代表真实视觉模型。真实 iOS 端插件样例已放在 `capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift`，并已按 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 方式注册。
+当前 Python 处理器是 `phone-mock` 和契约验证用的最小实现。真实 iOS 端插件已放在 `capabilities/traffic_light/phone/ios/TrafficLightPhoneCapability.swift`，并已按 `PhoneTaskCapabilityRegistry.register(taskType:runtimeBuilder:)` 方式注册。iOS 端会优先加载 App Bundle 中的 `TrafficLightYOLO.mlmodelc`，缺少模型资源时才回退启发式颜色检测。
+
+本地模型转换命令：
+
+```bash
+uv run --with ultralytics --with coremltools \
+  python openaiglass-for-blind/tools/convert_navigation_models.py
+```
+
+脚本默认把 ModelScope 缓存中的 `trafficlight.pt` 转成 `openaiglass-for-blind/host/phone/models/TrafficLightYOLO.mlmodelc`。业务 Xcode 工程构建时会把该目录下的 `.mlmodelc` 复制进 App Bundle。模型文件属于本地生成产物，不提交 Git。
 
 ### 3.4 宿主装配
 

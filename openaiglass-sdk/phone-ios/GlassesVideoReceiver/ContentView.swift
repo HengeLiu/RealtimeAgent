@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// 手机 SDK运行时 主页面。
@@ -156,6 +157,13 @@ struct ContentView: View {
                         .scaledToFit()
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .padding(8)
+                    if let latestVisionOverlay = store.latestVisionOverlay {
+                        DetectionOverlayView(
+                            overlay: latestVisionOverlay,
+                            imageSize: latestImage.size,
+                            contentInset: 8
+                        )
+                    }
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "video.slash")
@@ -234,5 +242,97 @@ struct ContentView: View {
         await controlClient?.stopVideoReceiving()
         try? await Task.sleep(for: .milliseconds(800))
         store.finishCurrentVideoSession("用户点击完成按钮")
+    }
+}
+
+/// 视频预览检测框叠加层。
+///
+/// 主要功能：
+/// 1. 按照图片在预览容器中的实际 aspect-fit 区域换算检测框坐标。
+/// 2. 绘制检测框、标签和置信度，便于真机调试 YOLO 输出。
+private struct DetectionOverlayView: View {
+    let overlay: VisionFrameOverlay
+    let imageSize: CGSize
+    let contentInset: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let imageRect = Self.aspectFitRect(
+                imageSize: imageSize,
+                containerSize: proxy.size,
+                contentInset: contentInset
+            )
+            ZStack(alignment: .topLeading) {
+                ForEach(overlay.boxes) { box in
+                    let rect = Self.overlayRect(for: box, in: imageRect)
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(box.isTarget ? Color.green : Color.orange, lineWidth: 3)
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+
+                    Text("\(box.label) \(Self.percentText(box.confidence))")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(box.isTarget ? Color.green.opacity(0.9) : Color.orange.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .position(
+                            x: min(max(rect.minX + 42, imageRect.minX + 42), imageRect.maxX - 42),
+                            y: max(rect.minY - 10, imageRect.minY + 12)
+                        )
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// 计算图片在预览容器中的实际显示区域。
+    ///
+    /// 参数：
+    /// 1. `imageSize`：原始图片尺寸。
+    /// 2. `containerSize`：预览容器尺寸。
+    /// 3. `contentInset`：图片四周内边距。
+    ///
+    /// 返回值：
+    /// 1. 图片 aspect-fit 后的显示矩形。
+    private static func aspectFitRect(imageSize: CGSize, containerSize: CGSize, contentInset: CGFloat) -> CGRect {
+        let availableWidth = max(1, containerSize.width - contentInset * 2)
+        let availableHeight = max(1, containerSize.height - contentInset * 2)
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return CGRect(x: contentInset, y: contentInset, width: availableWidth, height: availableHeight)
+        }
+        let scale = min(availableWidth / imageSize.width, availableHeight / imageSize.height)
+        let width = imageSize.width * scale
+        let height = imageSize.height * scale
+        return CGRect(
+            x: (containerSize.width - width) / 2,
+            y: (containerSize.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    /// 将 Vision 归一化检测框转换为 SwiftUI 显示坐标。
+    ///
+    /// 参数：
+    /// 1. `box`：归一化检测框，原点在左下角。
+    /// 2. `imageRect`：图片实际显示区域。
+    ///
+    /// 返回值：
+    /// 1. SwiftUI 坐标系下的检测框。
+    private static func overlayRect(for box: VisionOverlayBox, in imageRect: CGRect) -> CGRect {
+        let x = imageRect.minX + CGFloat(box.x) * imageRect.width
+        let y = imageRect.minY + CGFloat(1 - box.y - box.height) * imageRect.height
+        let width = CGFloat(box.width) * imageRect.width
+        let height = CGFloat(box.height) * imageRect.height
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// 格式化置信度百分比。
+    private static func percentText(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
     }
 }

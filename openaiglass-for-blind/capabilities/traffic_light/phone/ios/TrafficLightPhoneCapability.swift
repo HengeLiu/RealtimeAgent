@@ -1,4 +1,5 @@
 import Foundation
+import CoreML
 import UIKit
 
 @MainActor
@@ -29,9 +30,10 @@ enum TrafficLightPhoneCapabilityInstaller {
 @MainActor
 final class TrafficLightPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
     private var activeTask: TrafficLightPhoneTaskState?
-    private let detector: TrafficLightDetector = HeuristicTrafficLightDetector()
+    private var detector: TrafficLightDetector = TrafficLightDetectorFactory.makeDetector(params: [:])
     private var lastReportedSignal: TrafficSignal = .unknown
     private var lastReportAt: Date?
+    private var frameStride = 1
 
     var activeTaskDescription: String? {
         guard let activeTask else {
@@ -73,6 +75,8 @@ final class TrafficLightPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
             crossingName: params["crossing_name"] as? String ?? "",
             stopAfterFirstSignal: params["stop_after_first_signal"] as? Bool ?? true
         )
+        detector = TrafficLightDetectorFactory.makeDetector(params: params)
+        frameStride = max(1, params["frame_stride"] as? Int ?? 1)
         latestSummary = nil
         latestSuccess = nil
         lastReportedSignal = .unknown
@@ -105,6 +109,9 @@ final class TrafficLightPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
         guard let activeTask else {
             return
         }
+        if frameStride > 1, sequence % frameStride != 0 {
+            return
+        }
         let detection = detector.detect(image: image, frameSequence: sequence)
         latestSummary = detection.summary
         latestSuccess = detection.signal != .unknown
@@ -113,19 +120,24 @@ final class TrafficLightPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
         }
         lastReportedSignal = detection.signal
         lastReportAt = Date()
+        var payload: [String: Any] = [
+            "signal": detection.signal.rawValue,
+            "confidence": detection.confidence,
+            "frame_seq": detection.frameSequence,
+            "summary": detection.summary,
+            "crossing_name": activeTask.crossingName,
+            "source": detection.source,
+        ]
+        if let label = detection.label {
+            payload["label"] = label
+        }
         Task {
             do {
                 try await PhoneTaskEventReportAPI.report(
                     taskID: activeTask.base.taskID,
                     phoneDeviceID: activeTask.base.phoneDeviceID,
                     eventName: "phone.vision.traffic_light.result",
-                    payload: [
-                        "signal": detection.signal.rawValue,
-                        "confidence": detection.confidence,
-                        "frame_seq": detection.frameSequence,
-                        "summary": detection.summary,
-                        "crossing_name": activeTask.crossingName,
-                    ]
+                    payload: payload
                 )
             } catch {
                 await MainActor.run {
@@ -164,10 +176,253 @@ struct TrafficLightDetection: Equatable {
     let confidence: Double
     let frameSequence: Int
     let summary: String
+    let source: String
+    let label: String?
 }
 
 protocol TrafficLightDetector {
     func detect(image: UIImage, frameSequence: Int) -> TrafficLightDetection
+}
+
+enum TrafficLightDetectorFactory {
+    /// 创建红绿灯检测器。
+    ///
+    /// 主要逻辑：
+    /// 1. 优先加载 App Bundle 中已编译的 CoreML YOLO 模型。
+    /// 2. 模型资源不存在或加载失败时回退启发式检测，保证手机任务链路仍能自测。
+    /// 3. 支持服务端后续通过 `model_name` 和 `score_threshold` 覆盖默认配置。
+    ///
+    /// 参数：
+    /// 1. `params`：服务端下发的手机任务参数。
+    ///
+    /// 返回值：
+    /// 1. 可执行单帧红绿灯检测的检测器。
+    ///
+    /// 异常情况：
+    /// 1. 本函数不向外抛出异常；模型失败时回退启发式检测。
+    static func makeDetector(params: [String: Any]) -> TrafficLightDetector {
+        let modelName = (params["model_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scoreThreshold = params["score_threshold"] as? Double ?? 0.35
+        if let detector = CoreMLTrafficLightDetector.makeDefault(
+            preferredModelName: modelName,
+            scoreThreshold: scoreThreshold
+        ) {
+            return detector
+        }
+        return HeuristicTrafficLightDetector()
+    }
+}
+
+final class CoreMLTrafficLightDetector: TrafficLightDetector {
+    private let model: MLModel
+    private let scoreThreshold: Double
+    private let inputSize = 640
+    private let outputName = "var_1363"
+    private let labels = ["blank", "countdown_blank", "countdown_go", "countdown_stop", "crossing", "go", "stop"]
+
+    /// 创建 CoreML 红绿灯检测器。
+    ///
+    /// 主要功能：加载本地 `TrafficLightYOLO.mlmodelc`，并解析未内置 NMS 的 YOLO 原始输出。
+    /// 主要属性：`model` 保存 CoreML 模型，`scoreThreshold` 控制最低置信度。
+    init(compiledModelURL: URL, scoreThreshold: Double) throws {
+        model = try MLModel(contentsOf: compiledModelURL)
+        self.scoreThreshold = scoreThreshold
+    }
+
+    /// 按约定加载业务 App 内置红绿灯模型。
+    ///
+    /// 参数：
+    /// 1. `preferredModelName`：可选模型名，不带扩展名，例如 `TrafficLightYOLO`。
+    /// 2. `scoreThreshold`：最低置信度阈值。
+    ///
+    /// 返回值：
+    /// 1. 成功加载时返回 CoreML 检测器；否则返回 `nil`。
+    ///
+    /// 异常情况：
+    /// 1. 模型不存在或加载失败时返回 `nil`，由调用方回退启发式检测。
+    static func makeDefault(preferredModelName: String?, scoreThreshold: Double) -> CoreMLTrafficLightDetector? {
+        let names = [
+            preferredModelName,
+            "TrafficLightYOLO",
+            "traffic_light_yolo",
+            "trafficlight",
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+        for name in names {
+            if let url = Bundle.main.url(forResource: name, withExtension: "mlmodelc") {
+                return try? CoreMLTrafficLightDetector(compiledModelURL: url, scoreThreshold: scoreThreshold)
+            }
+        }
+        return nil
+    }
+
+    func detect(image: UIImage, frameSequence: Int) -> TrafficLightDetection {
+        guard let pixelBuffer = Self.makePixelBuffer(image: image, size: inputSize) else {
+            return TrafficLightDetection(
+                signal: .unknown,
+                confidence: 0,
+                frameSequence: frameSequence,
+                summary: "无法解码当前画面",
+                source: "coreml_yolo_error",
+                label: nil
+            )
+        }
+        do {
+            let input = try MLDictionaryFeatureProvider(dictionary: ["image": pixelBuffer])
+            let result = try model.prediction(from: input)
+            guard let output = result.featureValue(for: outputName)?.multiArrayValue else {
+                return TrafficLightDetection(
+                    signal: .unknown,
+                    confidence: 0,
+                    frameSequence: frameSequence,
+                    summary: "红绿灯模型输出格式不符合预期",
+                    source: "coreml_yolo_error",
+                    label: nil
+                )
+            }
+            return decode(output: output, frameSequence: frameSequence)
+        } catch {
+            return TrafficLightDetection(
+                signal: .unknown,
+                confidence: 0,
+                frameSequence: frameSequence,
+                summary: "红绿灯模型推理失败：\(error.localizedDescription)",
+                source: "coreml_yolo_error",
+                label: nil
+            )
+        }
+    }
+
+    private func decode(output: MLMultiArray, frameSequence: Int) -> TrafficLightDetection {
+        guard output.shape.count == 3, output.shape[1].intValue >= 11 else {
+            return TrafficLightDetection(
+                signal: .unknown,
+                confidence: 0,
+                frameSequence: frameSequence,
+                summary: "红绿灯模型输出维度不符合预期",
+                source: "coreml_yolo_error",
+                label: nil
+            )
+        }
+        let candidateCount = output.shape[2].intValue
+        var best: (labelIndex: Int, confidence: Double)?
+        for candidate in 0..<candidateCount {
+            for labelIndex in 0..<labels.count {
+                let signal = Self.signal(for: labels[labelIndex])
+                if signal == .unknown {
+                    continue
+                }
+                let confidence = value(output, channel: 4 + labelIndex, candidate: candidate)
+                if confidence < scoreThreshold {
+                    continue
+                }
+                if best == nil || confidence > best!.confidence {
+                    best = (labelIndex, confidence)
+                }
+            }
+        }
+        guard let best else {
+            return TrafficLightDetection(
+                signal: .unknown,
+                confidence: 0,
+                frameSequence: frameSequence,
+                summary: "暂未识别到明确红绿灯状态",
+                source: "coreml_yolo",
+                label: nil
+            )
+        }
+        let label = labels[best.labelIndex]
+        let signal = Self.signal(for: label)
+        return TrafficLightDetection(
+            signal: signal,
+            confidence: best.confidence,
+            frameSequence: frameSequence,
+            summary: Self.summary(signal: signal, label: label),
+            source: "coreml_yolo",
+            label: label
+        )
+    }
+
+    private func value(_ output: MLMultiArray, channel: Int, candidate: Int) -> Double {
+        let strides = output.strides.map(\.intValue)
+        let offset = channel * strides[1] + candidate * strides[2]
+        return output.dataPointer.advanced(by: offset * MemoryLayout<Float32>.stride)
+            .assumingMemoryBound(to: Float32.self)
+            .pointee
+            .isFiniteValue
+    }
+
+    private static func signal(for label: String) -> TrafficSignal {
+        switch label {
+        case "go", "countdown_go":
+            return .green
+        case "stop", "countdown_stop":
+            return .red
+        default:
+            return .unknown
+        }
+    }
+
+    private static func summary(signal: TrafficSignal, label: String) -> String {
+        switch signal {
+        case .green:
+            return "前方绿灯，可以谨慎通过"
+        case .red:
+            return "前方红灯，请停下等待"
+        case .yellow:
+            return "前方黄灯，请暂缓通过"
+        case .unknown:
+            return "识别到\(label)，但不是明确通行信号"
+        }
+    }
+
+    private static func makePixelBuffer(image: UIImage, size: Int) -> CVPixelBuffer? {
+        let attrs = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+        ] as CFDictionary
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            size,
+            size,
+            kCVPixelFormatType_32BGRA,
+            attrs,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else {
+            return nil
+        }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        }
+        guard let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(pixelBuffer),
+            width: size,
+            height: size,
+            bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            return nil
+        }
+        context.clear(CGRect(x: 0, y: 0, width: size, height: size))
+        guard let cgImage = image.cgImage else {
+            return nil
+        }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return pixelBuffer
+    }
+}
+
+private extension Float32 {
+    var isFiniteValue: Double {
+        if isFinite {
+            return Double(self)
+        }
+        return 0
+    }
 }
 
 final class HeuristicTrafficLightDetector: TrafficLightDetector {
@@ -179,7 +434,9 @@ final class HeuristicTrafficLightDetector: TrafficLightDetector {
             signal: signal,
             confidence: confidence,
             frameSequence: frameSequence,
-            summary: Self.summary(signal: signal)
+            summary: Self.summary(signal: signal),
+            source: "heuristic",
+            label: nil
         )
     }
 

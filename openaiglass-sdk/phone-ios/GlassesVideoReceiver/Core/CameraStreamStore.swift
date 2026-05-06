@@ -40,6 +40,9 @@ final class CameraStreamStore {
     /// 最近错误信息。
     var lastError: String?
 
+    /// 最近视觉检测叠加层。
+    var latestVisionOverlay: VisionFrameOverlay?
+
     /// 最近事件日志。
     var events: [String] = []
 
@@ -199,6 +202,18 @@ final class CameraStreamStore {
         lastError = nil
         appendEvent("收到视频帧：seq=\(sequence)")
         capabilityRuntime.processFrame(store: self, image: image, sequence: sequence)
+    }
+
+    /// 更新视频预览上的视觉检测叠加层。
+    ///
+    /// 主要逻辑：
+    /// 1. 保存手机端能力输出的检测框、标签和摘要。
+    /// 2. 让 SwiftUI 预览层在最新图像上实时绘制检测结果。
+    ///
+    /// 参数：
+    /// 1. `overlay`：检测叠加层；传入 `nil` 表示当前帧没有可绘制目标。
+    func updateVisionOverlay(_ overlay: VisionFrameOverlay?) {
+        latestVisionOverlay = overlay
     }
 
     /// 记录错误信息。
@@ -379,6 +394,7 @@ final class CameraStreamStore {
         latestImage = nil
         latestSequence = nil
         latestReceivedAt = nil
+        latestVisionOverlay = nil
         appendEvent("当前视频会话已结束：\(reason)")
     }
 
@@ -437,6 +453,33 @@ final class CameraStreamStore {
     var latestCapabilitySuccess: Bool? {
         capabilityRuntime.latestSuccess
     }
+}
+
+/// 视频帧上的视觉检测叠加层。
+///
+/// 主要功能：
+/// 1. 保存当前帧的检测摘要。
+/// 2. 保存一个或多个归一化检测框，供手机预览层绘制。
+struct VisionFrameOverlay: Equatable {
+    let frameSequence: Int
+    let summary: String
+    let boxes: [VisionOverlayBox]
+}
+
+/// 单个视觉检测框。
+///
+/// 主要功能：
+/// 1. 使用 Vision 常见的归一化坐标保存检测框，原点在左下角。
+/// 2. 保存标签、置信度和命中状态，便于 UI 区分目标和非目标。
+struct VisionOverlayBox: Equatable, Identifiable {
+    let id: String
+    let label: String
+    let confidence: Double
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+    let isTarget: Bool
 }
 
 /// 手机端任务能力注册表。

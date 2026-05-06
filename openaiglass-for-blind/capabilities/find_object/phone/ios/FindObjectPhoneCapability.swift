@@ -118,6 +118,7 @@ final class FindObjectPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
         )
         latestSummary = detection.summary
         latestSuccess = detection.found
+        store.updateVisionOverlay(Self.makeOverlay(from: detection))
 
         if !shouldReport(detection: detection, sequence: sequence) {
             return
@@ -168,6 +169,45 @@ final class FindObjectPhoneCapabilityRuntime: PhoneTaskCapabilityRuntime {
             return true
         }
         return Date().timeIntervalSince(lastReportAt) >= 2
+    }
+
+    /// 把找物检测结果转换为手机视频预览叠加层。
+    ///
+    /// 主要逻辑：
+    /// 1. 有检测框时绘制目标框、标签和置信度。
+    /// 2. 没有检测框时清空叠加层，只保留页面上的最近任务结果文字。
+    ///
+    /// 参数：
+    /// 1. `detection`：当前帧的找物检测结果。
+    ///
+    /// 返回值：
+    /// 1. 可绘制叠加层；没有检测框时返回 `nil`。
+    private static func makeOverlay(from detection: VisionDetection) -> VisionFrameOverlay? {
+        guard
+            let boundingBox = detection.boundingBox,
+            let x = boundingBox["x"],
+            let y = boundingBox["y"],
+            let width = boundingBox["width"],
+            let height = boundingBox["height"]
+        else {
+            return nil
+        }
+        let label = detection.label ?? detection.targetObject
+        let box = VisionOverlayBox(
+            id: "\(detection.frameSequence)-\(label)",
+            label: label,
+            confidence: detection.confidence,
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            isTarget: detection.found
+        )
+        return VisionFrameOverlay(
+            frameSequence: detection.frameSequence,
+            summary: detection.summary,
+            boxes: [box]
+        )
     }
 }
 

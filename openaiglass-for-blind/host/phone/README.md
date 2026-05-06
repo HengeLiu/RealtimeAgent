@@ -15,7 +15,28 @@ host/phone/ios/GlassesVideoReceiver.xcodeproj
 1. 找物体：源码位于 [../../capabilities/find_object/phone/ios](../../capabilities/find_object/phone/ios)，任务类型为 `find_object_phone_task`，结果事件为 `phone.vision.find_object.result`。
 2. 红绿灯：源码位于 [../../capabilities/traffic_light/phone/ios](../../capabilities/traffic_light/phone/ios)，任务类型为 `traffic_light_phone_task`，结果事件为 `phone.vision.traffic_light.result`。
 
-注意：当前 iOS 插件已经是真实手机帧处理链路，但检测算法仍是业务侧启发式占位实现，用于验证手机任务、视频帧、结果上报和服务端通知闭环；还不是正式 YOLO 或红绿灯模型。
+注意：当前 iOS 插件已经是真实手机帧处理链路。找物能力在 App 资源中存在 `FindObjectYOLO.mlmodelc` 时会优先使用 CoreML YOLO，否则回退启发式检测；红绿灯能力在 App 资源中存在 `TrafficLightYOLO.mlmodelc` 时会优先使用本地 YOLO 模型，否则回退启发式颜色检测。`source=heuristic` 只表示链路自测，不代表正式识别效果。
+
+本地红绿灯模型转换流程：
+
+```bash
+uv run --with ultralytics --with coremltools \
+  python openaiglass-for-blind/tools/convert_navigation_models.py
+```
+
+脚本默认读取：
+
+```text
+~/.cache/modelscope/hub/models/archifancy/AIGlasses_for_navigation/trafficlight.pt
+```
+
+并生成：
+
+```text
+openaiglass-for-blind/host/phone/models/TrafficLightYOLO.mlmodelc
+```
+
+业务 Xcode 工程构建时会把 `host/phone/models/*.mlmodelc` 复制进 App Bundle。模型权重、`.mlpackage` 和 `.mlmodelc` 都是本地生成产物，不提交到 Git。
 
 手机端本地配置源放在本业务工程：
 

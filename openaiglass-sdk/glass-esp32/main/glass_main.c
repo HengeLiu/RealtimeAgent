@@ -92,6 +92,10 @@
 #define CAMERA_CAPTURE_TASK_STACK_SIZE (6 * 1024)
 #define CAMERA_STREAM_TASK_STACK_SIZE (8 * 1024)
 #define PLAYBACK_STREAM_TASK_STACK_SIZE (8 * 1024)
+#define CAMERA_STREAM_WS_BUFFER_SIZE 4096
+#define CAMERA_STREAM_WS_TASK_STACK_SIZE 4096
+#define CAMERA_STREAM_WS_NETWORK_TIMEOUT_MS 5000
+#define CAMERA_STREAM_WS_RECONNECT_TIMEOUT_MS 10000
 #define WAKE_PROMPT_TONE_TABLE_SIZE 32
 
 typedef struct {
@@ -164,6 +168,7 @@ static bool s_camera_initialized = false;
 static bool s_camera_capture_busy = false;
 static bool s_camera_stream_active = false;
 static bool s_camera_stream_task_running = false;
+static bool s_wake_listening_before_camera_stream = false;
 static uint64_t s_reply_wait_started_ms = 0;
 static char s_current_session_id[64];
 static char s_current_stream_id[64];
@@ -1501,7 +1506,12 @@ static void recover_wake_listening_after_reply_timeout(uint64_t current_ms)
     clear_reply_wait_state();
     s_playback_active = false;
     s_current_playback_stream_id[0] = '\0';
-    s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+    s_wake_listening_enabled =
+        s_registered &&
+        s_voice_session_opened &&
+        s_sr_ctx.initialized &&
+        !s_camera_stream_active &&
+        !s_camera_stream_task_running;
     ESP_LOGW(
         TAG,
         "等待服务端回复超时，自动恢复待命监听: waited_ms=%" PRIu64 " timeout_ms=%d",
@@ -1533,6 +1543,7 @@ static void reset_control_session_state(void)
     s_current_camera_stream_id[0] = '\0';
     s_camera_frame_seq = 0;
     s_camera_stream_task_handle = NULL;
+    s_wake_listening_before_camera_stream = false;
     if (s_camera_ws_client != NULL) {
         esp_websocket_client_stop(s_camera_ws_client);
         esp_websocket_client_destroy(s_camera_ws_client);
@@ -1701,7 +1712,7 @@ static void audio_websocket_event_handler(
 
     if (event_id == WEBSOCKET_EVENT_CONNECTED) {
         s_audio_ws_ready = true;
-        if (!s_playback_active) {
+        if (!s_playback_active && !s_camera_stream_active && !s_camera_stream_task_running) {
             s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
         }
         ESP_LOGI(TAG, "音频上行连接已建立");
@@ -1838,6 +1849,13 @@ static void camera_stream_task(void *arg)
     s_camera_stream_ws_uri[0] = '\0';
     s_camera_frame_seq = 0;
     s_camera_stream_task_handle = NULL;
+    s_wake_listening_enabled =
+        s_wake_listening_before_camera_stream &&
+        s_registered &&
+        s_voice_session_opened &&
+        s_sr_ctx.initialized &&
+        !s_playback_active;
+    s_wake_listening_before_camera_stream = false;
     vTaskDelete(NULL);
 }
 
@@ -1866,17 +1884,22 @@ static void start_camera_stream(const char *stream_id, const char *target_ws_uri
     strlcpy(s_camera_stream_ws_uri, target_ws_uri, sizeof(s_camera_stream_ws_uri));
     s_camera_frame_interval_ms = frame_interval_ms > 0 ? frame_interval_ms : 500;
     s_camera_frame_seq = 0;
+    s_wake_listening_before_camera_stream = s_wake_listening_enabled;
+    s_wake_listening_enabled = false;
 
     websocket_config.uri = s_camera_stream_ws_uri;
-    websocket_config.buffer_size = 16384;
-    websocket_config.network_timeout_ms = 5000;
-    websocket_config.task_stack = 8192;
+    websocket_config.buffer_size = CAMERA_STREAM_WS_BUFFER_SIZE;
+    websocket_config.network_timeout_ms = CAMERA_STREAM_WS_NETWORK_TIMEOUT_MS;
+    websocket_config.task_stack = CAMERA_STREAM_WS_TASK_STACK_SIZE;
+    websocket_config.reconnect_timeout_ms = CAMERA_STREAM_WS_RECONNECT_TIMEOUT_MS;
 
     s_camera_ws_client = esp_websocket_client_init(&websocket_config);
     if (s_camera_ws_client == NULL) {
         ESP_LOGE(TAG, "创建相机流客户端失败");
         s_current_camera_stream_id[0] = '\0';
         s_camera_stream_ws_uri[0] = '\0';
+        s_wake_listening_enabled = s_wake_listening_before_camera_stream;
+        s_wake_listening_before_camera_stream = false;
         return;
     }
     ESP_ERROR_CHECK(
@@ -1909,6 +1932,8 @@ static void start_camera_stream(const char *stream_id, const char *target_ws_uri
         s_camera_stream_task_handle = NULL;
         s_current_camera_stream_id[0] = '\0';
         s_camera_stream_ws_uri[0] = '\0';
+        s_wake_listening_enabled = s_wake_listening_before_camera_stream;
+        s_wake_listening_before_camera_stream = false;
         esp_websocket_client_destroy(s_camera_ws_client);
         s_camera_ws_client = NULL;
         ESP_LOGE(
@@ -1930,6 +1955,8 @@ static void start_camera_stream(const char *stream_id, const char *target_ws_uri
         s_camera_stream_task_handle = NULL;
         s_current_camera_stream_id[0] = '\0';
         s_camera_stream_ws_uri[0] = '\0';
+        s_wake_listening_enabled = s_wake_listening_before_camera_stream;
+        s_wake_listening_before_camera_stream = false;
         esp_websocket_client_destroy(s_camera_ws_client);
         s_camera_ws_client = NULL;
         return;
@@ -2176,7 +2203,12 @@ cleanup:
     }
     clear_reply_wait_state();
     s_playback_active = false;
-    s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+    s_wake_listening_enabled =
+        s_registered &&
+        s_voice_session_opened &&
+        s_sr_ctx.initialized &&
+        !s_camera_stream_active &&
+        !s_camera_stream_task_running;
     s_playback_task_running = false;
     s_playback_interrupt_requested = false;
     s_playback_task_handle = NULL;
@@ -2283,7 +2315,12 @@ static void start_playback_stream(const char *stream_id)
         send_actuator_audio_state_message("actuator.audio.finished", s_current_playback_stream_id, NULL, NULL);
         drain_and_pause_speaker();
         s_playback_active = false;
-        s_wake_listening_enabled = s_registered && s_voice_session_opened && s_sr_ctx.initialized;
+        s_wake_listening_enabled =
+            s_registered &&
+            s_voice_session_opened &&
+            s_sr_ctx.initialized &&
+            !s_camera_stream_active &&
+            !s_camera_stream_task_running;
         s_playback_task_running = false;
         s_playback_interrupt_requested = false;
         s_current_playback_stream_id[0] = '\0';
@@ -2701,7 +2738,13 @@ static void init_speech_runtime(void)
 
     s_sr_task_started = true;
     s_sr_ctx.initialized = true;
-    if (s_registered && s_voice_session_opened && !s_playback_active) {
+    if (
+        s_registered &&
+        s_voice_session_opened &&
+        !s_playback_active &&
+        !s_camera_stream_active &&
+        !s_camera_stream_task_running
+    ) {
         s_wake_listening_enabled = true;
         ESP_LOGI(TAG, "WakeNet 初始化完成后已补开唤醒监听: session_id=%s", s_current_session_id);
     }
