@@ -135,6 +135,44 @@ def test_device_handle_operation_only_reaches_selected_device(tmp_path) -> None:
     assert [event.event_name for event in second.events].count("task.state.changed") == 0
 
 
+def test_device_handle_uses_device_command_service_not_control_private_api(tmp_path) -> None:
+    """测试目标：确保 Tool/Task 只能通过 DeviceHandle 和内部 DeviceCommandService 操作设备。
+
+    测试方法：替换 app.device_command_service 为 spy，调用 DeviceHandle.configure_stream。
+    预期结果：spy 收到设备命令；业务上下文没有调用 ControlService 私有投递方法。
+    """
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    endpoint = PythonPlaybackEndpoint(app=app, user_id="user-spy", device_id="dev-spy")
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-spy",
+            producer_id="dev-spy",
+            payload={
+                "device_id": "dev-spy",
+                "auth": {"mode": "disabled"},
+                "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
+                "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+            },
+        ),
+        endpoint,
+    )
+    calls = []
+
+    class SpyDeviceCommandService:
+        def send_to_device(self, *, device_id: str, event: Event):
+            calls.append((device_id, event.event_name))
+
+    app.device_command_service = SpyDeviceCommandService()
+    context = UserDeviceContext(user_id="user-spy", app=app)
+    handle = context.find_device("sensor.rgb")
+    assert handle is not None
+
+    handle.configure_stream(stream_type="sensor.rgb", mode="single")
+
+    assert calls == [("dev-spy", "stream.control.configure.requested")]
+
+
 def test_asset_request_id_prevents_concurrent_rgb_cross_talk(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=1))
 

@@ -902,6 +902,7 @@ name = "openaiglasses-for-navigation"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "dashscope" },
     { name = "openai" },
     { name = "openai-agents" },
@@ -910,6 +911,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "dashscope", specifier = ">=1.25.0" },
     { name = "openai", specifier = ">=1.30.0,<2" },
     { name = "openai-agents", specifier = ">=0.3.3" },

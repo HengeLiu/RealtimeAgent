@@ -181,6 +181,43 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
     assert "ttl_expired" in queued_decisions
 
 
+def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> None:
+    """测试目标：验证排队输出保存完整 OutputSource，不丢后续 text delta。
+
+    测试方法：先启动 active 输出，再提交同优先级 queue 输出，并在排队期间继续追加文本；
+    active final 后，queued 输出应播放完整文本产生的音频。
+    预期结果：queued session 有 `queued_playback_ready` 决策，输出音频大小覆盖两段文本。
+    """
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    active = OutputIntent(user_id="user-001", session_id="sess-active", priority="normal")
+    queued = OutputIntent(user_id="user-001", session_id="sess-queued", priority="normal", on_blocked="queue")
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
+    )
+    before = len(connection.chunks)
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="hello ", intent=queued)
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="world", intent=queued)
+    )
+    assert len(connection.chunks) == before
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="", final=True, intent=queued)
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-active", text="", final=True, intent=active)
+    )
+
+    queued_chunks = [chunk for chunk in connection.chunks if chunk.session_id == "sess-queued"]
+    queued_decisions = (tmp_path / "runs" / "sessions" / "sess-queued" / "playback-decisions.jsonl").read_text()
+    assert "queued_playback_ready" in queued_decisions
+    assert sum(len(chunk.payload) for chunk in queued_chunks) >= 880
+
+
 def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     app.output_service = OutputService(

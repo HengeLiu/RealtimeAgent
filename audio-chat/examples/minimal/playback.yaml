@@ -1,4 +1,5 @@
 runs_root: runs/audio-chat
+server_url: http://127.0.0.1:8765
 user_id: user-playback-001
 device_id: dev-python-playback-001
 asr_provider: mock

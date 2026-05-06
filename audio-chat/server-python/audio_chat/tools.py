@@ -44,9 +44,9 @@ class DeviceHandle:
         异常情况：底层连接不可用时由 Control Service 按订阅和连接状态处理。
         """
         payload = {"stream_type": stream_type, **request}
-        self._context._app.control_service.publish_to_device(
-            self.snapshot.device_id,
-            Event(
+        self._context._app.device_command_service.send_to_device(
+            device_id=self.snapshot.device_id,
+            event=Event(
                 event_name="stream.control.configure.requested",
                 user_id=self._context.user_id,
                 producer_id=SERVER_PRODUCER_ID,
@@ -81,9 +81,9 @@ class DeviceHandle:
         异常情况：端侧未订阅任务事件时不会收到该请求。
         """
         task = EndpointTaskRef(task_id=new_id("endpoint_task"), device=self)
-        self._context._app.control_service.publish_to_device(
-            self.snapshot.device_id,
-            Event(
+        self._context._app.device_command_service.send_to_device(
+            device_id=self.snapshot.device_id,
+            event=Event(
                 event_name="task.state.changed",
                 user_id=self._context.user_id,
                 producer_id=SERVER_PRODUCER_ID,
@@ -120,9 +120,9 @@ class EndpointTaskRef:
         异常情况：如果端侧连接已失效，请求只会记录为未投递事件。
         """
         context = self.device._context
-        context._app.control_service.publish_to_device(
-            self.device.snapshot.device_id,
-            Event(
+        context._app.device_command_service.send_to_device(
+            device_id=self.device.snapshot.device_id,
+            event=Event(
                 event_name="task.state.changed",
                 user_id=context.user_id,
                 producer_id=SERVER_PRODUCER_ID,

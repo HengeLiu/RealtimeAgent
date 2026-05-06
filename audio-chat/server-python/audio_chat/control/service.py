@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -22,6 +23,8 @@ class DeviceConnection(Protocol):
 
     def push_stream_chunk(self, chunk: object) -> None: ...
 
+    def close(self, *, reason: str) -> None: ...
+
 
 @dataclass
 class DeviceRecord:
@@ -34,6 +37,7 @@ class DeviceRecord:
     subscriptions: list[Subscription]
     connection_state: str = "online"
     connection_id: str = field(default_factory=lambda: new_id("conn"))
+    last_seen_at: float = field(default_factory=time.time)
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,17 @@ class DeviceAuthenticator:
 
 
 class RegistrationValidator:
+    def __init__(
+        self,
+        *,
+        max_subscriptions_per_device: int = 64,
+        allow_subscribe_all: bool = False,
+        subscription_filter_mode: str = "exact",
+    ) -> None:
+        self.max_subscriptions_per_device = max_subscriptions_per_device
+        self.allow_subscribe_all = allow_subscribe_all
+        self.subscription_filter_mode = subscription_filter_mode
+
     def validate_payload(self, event: Event) -> None:
         if event.event_name != "control.device.register.requested":
             raise ValueError("registration must use control.device.register.requested")
@@ -89,14 +104,20 @@ class RegistrationValidator:
                     raise ValueError(f"unknown stream_type capability: {stream_type}")
 
     def validate_subscriptions(self, subscriptions: list[dict[str, Any]]) -> None:
+        if len(subscriptions) > self.max_subscriptions_per_device:
+            raise ValueError("too many subscriptions for device")
         for item in subscriptions:
             event_name = item.get("event")
             if not isinstance(event_name, str) or not event_name:
                 raise ValueError("subscription.event is required")
+            if event_name == "*" and not self.allow_subscribe_all:
+                raise ValueError("subscription '*' is disabled by config")
             if event_name != "*" and not event_name.endswith("*") and event_name not in CONTROL_EVENTS:
                 raise ValueError(f"unknown subscription event: {event_name}")
             if not isinstance(item.get("filter", {}), dict):
                 raise ValueError("subscription.filter must be an object")
+            if self.subscription_filter_mode != "exact":
+                raise ValueError(f"unsupported subscription_filter_mode: {self.subscription_filter_mode}")
 
 
 class SubscriptionMatcher:
@@ -143,9 +164,16 @@ class ControlService:
         authenticator: DeviceAuthenticator | None = None,
         recorder: RunRecorder | None = None,
         exclude_producer_by_default: bool = True,
+        max_subscriptions_per_device: int = 64,
+        allow_subscribe_all: bool = False,
+        subscription_filter_mode: str = "exact",
     ) -> None:
         self.authenticator = authenticator or DeviceAuthenticator(mode="disabled")
-        self.validator = RegistrationValidator()
+        self.validator = RegistrationValidator(
+            max_subscriptions_per_device=max_subscriptions_per_device,
+            allow_subscribe_all=allow_subscribe_all,
+            subscription_filter_mode=subscription_filter_mode,
+        )
         self.matcher = SubscriptionMatcher()
         self.recorder = recorder or RunRecorder()
         self.exclude_producer_by_default = exclude_producer_by_default
@@ -177,6 +205,12 @@ class ControlService:
                 subscriptions=subscriptions,
             )
             self._bindings[device_id] = registration.user_id
+            old_connection = self._connections.get(device_id)
+            if old_connection is not None and old_connection is not connection:
+                try:
+                    old_connection.close(reason="replaced_by_new_connection")
+                except Exception:
+                    pass
             self._devices[device_id] = record
             if connection is not None:
                 self._connections[device_id] = connection
@@ -228,7 +262,7 @@ class ControlService:
             failed_device_ids=tuple(failed),
         )
 
-    def publish_to_device(self, device_id: str, event: Event) -> PublishResult:
+    def _push_to_resolved_device(self, device_id: str, event: Event) -> PublishResult:
         self._validate_event(event)
         self.recorder.record_event(event)
         device = self._devices.get(device_id)
@@ -245,6 +279,58 @@ class ControlService:
             device.connection_state = "offline"
             return PublishResult(matched_count=1, delivered_count=0, failed_device_ids=(device_id,))
         return PublishResult(matched_count=1, delivered_count=1)
+
+    def push_stream_chunk_to_devices(self, device_ids: tuple[str, ...], chunk: object) -> PublishResult:
+        failed: list[str] = []
+        delivered = 0
+        for device_id in device_ids:
+            device = self._devices.get(device_id)
+            connection = self._connections.get(device_id)
+            if device is None or connection is None or device.connection_state != "online":
+                failed.append(device_id)
+                continue
+            try:
+                connection.push_stream_chunk(chunk)
+                delivered += 1
+            except Exception:
+                device.connection_state = "offline"
+                failed.append(device_id)
+        return PublishResult(
+            matched_count=len(device_ids),
+            delivered_count=delivered,
+            failed_device_ids=tuple(failed),
+        )
+
+    def record_heartbeat(self, event: Event) -> Event:
+        device = self._devices.get(event.producer_id)
+        if device is not None and device.user_id == event.user_id:
+            device.last_seen_at = time.time()
+            device.connection_state = "online"
+        self.recorder.record_event(event)
+        return event
+
+    def mark_connection_offline(self, device_id: str, *, connection_id: str | None = None, reason: str = "disconnected") -> None:
+        device = self._devices.get(device_id)
+        if device is None:
+            return
+        if connection_id is not None and device.connection_id != connection_id:
+            return
+        device.connection_state = "offline"
+        device.last_seen_at = time.time()
+        self._connections.pop(device_id, None)
+        self.recorder.record_event(
+            Event(
+                event_name="control.device.state.changed",
+                user_id=device.user_id,
+                producer_id=SERVER_PRODUCER_ID,
+                payload={
+                    "device_id": device.device_id,
+                    "connection_id": device.connection_id,
+                    "connection_state": "offline",
+                    "reason": reason,
+                },
+            )
+        )
 
     def resolve_subscribers(self, event: Event) -> list[DeviceRecord]:
         result: list[DeviceRecord] = []
@@ -269,18 +355,31 @@ class ControlService:
         self.recorder.record_message(user_id, message)
 
     def build_user_snapshot(self, user_id: str) -> dict[str, Any]:
-        active = self.get_active_device_set(user_id)
         return {
             "user_id": user_id,
             "devices": [
-                {
-                    "device_id": device.device_id,
-                    "capabilities": device.capabilities,
-                    "subscriptions": [subscription.__dict__ for subscription in device.subscriptions],
-                    "connection_state": device.connection_state,
-                }
-                for device in active.devices
+                self._device_snapshot(device)
+                for device in self._devices.values()
+                if device.user_id == user_id
             ],
+        }
+
+    def build_devices_snapshot(self) -> dict[str, Any]:
+        return {"devices": [self._device_snapshot(device) for device in self._devices.values()]}
+
+    @staticmethod
+    def _device_snapshot(device: DeviceRecord) -> dict[str, Any]:
+        return {
+            "user_id": device.user_id,
+            "device_id": device.device_id,
+            "device_name": device.device_name,
+            "client_type": device.client_type,
+            "sdk_version": device.sdk_version,
+            "connection_id": device.connection_id,
+            "last_seen_at": device.last_seen_at,
+            "connection_state": device.connection_state,
+            "capabilities": device.capabilities,
+            "subscriptions": [subscription.__dict__ for subscription in device.subscriptions],
         }
 
     @staticmethod

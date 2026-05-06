@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Server-side Python SDK for audio-chat stream-based voice sessions."
 requires-python = ">=3.11"
 dependencies = [
+    "aiohttp>=3.9.0",
     "dashscope>=1.25.0",
     "openai>=1.30.0,<2",
     "pyyaml>=6.0.0",
