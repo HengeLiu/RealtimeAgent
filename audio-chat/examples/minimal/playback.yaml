@@ -1,0 +1,10 @@
+runs_root: runs/audio-chat
+user_id: user-playback-001
+device_id: dev-python-playback-001
+asr_provider: mock
+asr_model: mock-asr
+text_model_provider: mock
+text_model: mock-text
+tts_provider: mock
+tts_model: mock-tts
+tts_voice: mock

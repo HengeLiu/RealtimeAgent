@@ -1,0 +1,28 @@
+[project]
+name = "audio-chat"
+version = "0.1.0"
+description = "Server-side Python SDK for audio-chat stream-based voice sessions."
+requires-python = ">=3.11"
+dependencies = [
+    "dashscope>=1.25.0",
+    "openai>=1.30.0,<2",
+    "pyyaml>=6.0.0",
+]
+
+[project.scripts]
+"audio-chat.playback.glass" = "audio_chat.endpoints.python_playback:main"
+"audio-chat.dev.preflight" = "audio_chat.preflight:main"
+"audio-chat.server.run" = "audio_chat.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["server-python"]
+include = ["audio_chat*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["server-python"]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    host: str = "0.0.0.0"
+    port: int = 8765
+    public_url: str = "http://127.0.0.1:8765"
+    log_level: str = "DEBUG"
+    debug_api_enabled: bool = True
+    shutdown_grace_seconds: int = 10
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    mode: str = "disabled"
+    device_tokens: dict[str, str] = field(default_factory=dict)
+    signed_token_secret_env: str = "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
+    token_clock_skew_seconds: int = 60
+
+
+@dataclass(frozen=True)
+class UserConfig:
+    active_device_set_policy: str = "single"
+    message_store: dict[str, Any] = field(default_factory=lambda: {"type": "jsonl", "root": "runs/audio-chat/users"})
+    recent_message_limit: int = 200
+
+
+@dataclass(frozen=True)
+class ControlConfig:
+    transport: str = "websocket"
+    heartbeat_timeout_seconds: int = 30
+    heartbeat_check_interval_seconds: int = 5
+    max_subscriptions_per_device: int = 64
+    allow_subscribe_all: bool = False
+    subscription_filter_mode: str = "exact"
+    exclude_producer_by_default: bool = True
+
+
+@dataclass(frozen=True)
+class StreamConfig:
+    transport: str = "websocket_binary"
+    max_chunk_bytes: int = 8192
+    idle_timeout_seconds: int = 20
+    default_sensor_mic: dict[str, Any] = field(
+        default_factory=lambda: {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}
+    )
+    default_actuator_speaker: dict[str, Any] = field(
+        default_factory=lambda: {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 40}
+    )
+    sensors: dict[str, Any] = field(
+        default_factory=lambda: {"rgb_ttl_seconds": 30, "depth_ttl_seconds": 10, "imu_ttl_seconds": 10}
+    )
+
+
+@dataclass(frozen=True)
+class AudioPipelineConfig:
+    aec: str = "endpoint_only"
+    resample: str = "auto"
+    volume_normalize: bool = True
+    vad: str = "endpoint_or_server"
+    asr_sidecar: str = "optional"
+    silence_close_seconds: int = 15
+    max_session_seconds: int = 0
+
+
+@dataclass(frozen=True)
+class AssetConfig:
+    store_type: str = "filesystem"
+    root: str = "runs/audio-chat/assets"
+    max_asset_bytes: int = 10485760
+    default_ttl_seconds: int = 60
+    request_timeout_seconds: float = 5.0
+    selection_policy: str = "latest"
+
+
+@dataclass(frozen=True)
+class AgentTextConfig:
+    model_provider: str = "mock"
+    model: str = "mock-text"
+    asr_provider: str = "mock"
+    asr_model: str = "mock-asr"
+    tts_provider: str = "mock"
+    tts_model: str = "mock-tts"
+    tts_voice: str = "mock"
+    streaming_tts: bool = True
+    max_context_messages: int = 30
+    allow_mock_fallback: bool = True
+
+
+@dataclass(frozen=True)
+class AgentRealtimeConfig:
+    provider: str = "qwen"
+    model: str = "qwen3.5-omni-plus-realtime"
+    turn_detection: str = "provider"
+    voice: str = "Chelsie"
+    session_idle_timeout_seconds: int = 60
+    custom_adapter: str = ""
+
+
+@dataclass(frozen=True)
+class AgentConfig:
+    mode: str = "text"
+    custom_core: str = ""
+    realtime: AgentRealtimeConfig = field(default_factory=AgentRealtimeConfig)
+    text: AgentTextConfig = field(default_factory=AgentTextConfig)
+
+
+@dataclass(frozen=True)
+class OutputConfig:
+    default_priority: str = "normal"
+    default_ttl_seconds: int = 10
+    allow_same_priority_interrupt: bool = False
+    default_on_interrupted: str = "drop"
+    default_on_blocked: str = "queue"
+    max_queue_size: int = 32
+
+
+@dataclass(frozen=True)
+class GenericEnabledConfig:
+    enabled: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ObservabilityConfig:
+    runs_root: str = "runs/audio-chat"
+    record_input_streams: bool = True
+    record_output_streams: bool = True
+    record_model_events: bool = True
+    record_control_events: bool = True
+    record_stream_events: bool = True
+    max_debug_sessions: int = 100
+    retention_days: int = 7
+
+
+@dataclass(frozen=True)
+class AudioChatYamlConfig:
+    server: ServerConfig = field(default_factory=ServerConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
+    user: UserConfig = field(default_factory=UserConfig)
+    control: ControlConfig = field(default_factory=ControlConfig)
+    stream: StreamConfig = field(default_factory=StreamConfig)
+    audio_pipeline: AudioPipelineConfig = field(default_factory=AudioPipelineConfig)
+    asset: AssetConfig = field(default_factory=AssetConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+    tools: GenericEnabledConfig = field(default_factory=lambda: GenericEnabledConfig(enabled=True))
+    tasks: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
+    memory: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
+    skill: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
+    mcp: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
+    endpoint_defaults: dict[str, Any] = field(default_factory=dict)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+
+
+def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
+    import yaml
+
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    data = _apply_env_overrides(data)
+    text = data.get("agent", {}).get("text", {})
+    return AudioChatYamlConfig(
+        server=ServerConfig(**data.get("server", {})),
+        auth=AuthConfig(**data.get("auth", {})),
+        user=UserConfig(**data.get("user", {})),
+        control=ControlConfig(**data.get("control", {})),
+        stream=StreamConfig(**data.get("stream", {})),
+        audio_pipeline=AudioPipelineConfig(**data.get("audio_pipeline", {})),
+        asset=AssetConfig(**data.get("asset", {})),
+        agent=AgentConfig(
+            mode=data.get("agent", {}).get("mode", "text"),
+            custom_core=data.get("agent", {}).get("custom_core", ""),
+            realtime=AgentRealtimeConfig(**data.get("agent", {}).get("realtime", {})),
+            text=AgentTextConfig(**text),
+        ),
+        output=OutputConfig(**data.get("output", {})),
+        tools=GenericEnabledConfig(**_generic(data.get("tools", {"enabled": True}))),
+        tasks=GenericEnabledConfig(**_generic(data.get("tasks", {}))),
+        memory=GenericEnabledConfig(**_generic(data.get("memory", {}))),
+        skill=GenericEnabledConfig(**_generic(data.get("skill", {}))),
+        mcp=GenericEnabledConfig(**_generic(data.get("mcp", {}))),
+        endpoint_defaults=data.get("endpoint_defaults", {}),
+        observability=ObservabilityConfig(**data.get("observability", {})),
+    )
+
+
+def _generic(data: dict[str, Any]) -> dict[str, Any]:
+    data = dict(data)
+    enabled = bool(data.pop("enabled", False))
+    return {"enabled": enabled, "extra": data}
+
+
+def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    text = data.setdefault("agent", {}).setdefault("text", {})
+    mapping = {
+        "AUDIO_CHAT_RUNS_ROOT": ("observability", "runs_root"),
+        "AUDIO_CHAT_AUTH_MODE": ("auth", "mode"),
+        "AUDIO_CHAT_ASR_PROVIDER": ("agent", "text", "asr_provider"),
+        "AUDIO_CHAT_ASR_MODEL": ("agent", "text", "asr_model"),
+        "AUDIO_CHAT_TEXT_MODEL_PROVIDER": ("agent", "text", "model_provider"),
+        "AUDIO_CHAT_TEXT_MODEL": ("agent", "text", "model"),
+        "AUDIO_CHAT_TTS_PROVIDER": ("agent", "text", "tts_provider"),
+        "AUDIO_CHAT_TTS_MODEL": ("agent", "text", "tts_model"),
+        "AUDIO_CHAT_TTS_VOICE": ("agent", "text", "tts_voice"),
+    }
+    for env_name, path in mapping.items():
+        value = os.getenv(env_name)
+        if value is None:
+            continue
+        cursor = data
+        for part in path[:-1]:
+            cursor = cursor.setdefault(part, {})
+        cursor[path[-1]] = value
+    if os.getenv("AUDIO_CHAT_ALLOW_MOCK_FALLBACK") is not None:
+        text["allow_mock_fallback"] = os.getenv("AUDIO_CHAT_ALLOW_MOCK_FALLBACK", "").lower() in {"1", "true", "yes"}
+    return data

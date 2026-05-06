@@ -7,9 +7,25 @@ dependencies = [
     "dashscope>=1.25.0",
     "openai>=1.30.0,<2",
     "openai-agents>=0.3.3",
+    "pyyaml>=6.0.0",
 ]
 
+[project.scripts]
+"audio-chat.server.run" = "audio_chat.server:main"
+"audio-chat.config.sync" = "audio_chat.preflight:main"
+"audio-chat.dev.preflight" = "audio_chat.preflight:main"
+"audio-chat.playback.glass" = "audio_chat.endpoints.python_playback:main"
+"audio-chat.mock.phone" = "audio_chat.endpoints.python_playback:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["audio-chat/server-python"]
+include = ["audio_chat*"]
+
 [tool.pytest.ini_options]
-pythonpath = ["openaiglass-sdk/server-python", "openaiglass-sdk/glass-playback", "openaiglass-for-blind", "."]
-testpaths = ["openaiglass-sdk/tests", "openaiglass-for-blind/tests"]
+pythonpath = ["audio-chat/server-python", "openaiglass-sdk/server-python", "openaiglass-sdk/glass-playback", "openaiglass-for-blind", "."]
+testpaths = ["audio-chat/tests", "openaiglass-sdk/tests", "openaiglass-for-blind/tests"]
 addopts = "-q"
