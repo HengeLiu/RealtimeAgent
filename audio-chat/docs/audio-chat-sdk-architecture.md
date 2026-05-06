@@ -2157,7 +2157,316 @@ audio-chat/endpoints/
 3. 返回结构化事件。
 4. 用于业务能力在无真实设备时闭环。
 
-## 15. 配置设计
+## 15. 安装、启动与研发联调
+
+启动链路必须作为 SDK 设计的一部分，而不是业务项目各自写脚本解决。上一版 SDK 的经验是：能力开发人员真正需要的是一套稳定命令，能在同一台开发机上完成 server 启动、配置同步、mock 设备、回放设备、真机入口和预检报告。
+
+### 15.1 日常研发目标
+
+`audio-chat` 第一版应支持四种研发模式：
+
+| 模式 | 用途 | 需要真实设备 |
+| --- | --- | --- |
+| 最小回放闭环 | 验证协议、Agent Core、TTS、输出仲裁和 runs 产物。 | 不需要 |
+| Python Mock 多设备 | 验证多设备注册、订阅、资产请求和端侧 task。 | 不需要 |
+| Web / iOS 调试 | 验证手机或浏览器端麦克风、播放器、相机和 UI task。 | 可选 |
+| ESP32 真机联调 | 验证 WiFi、唤醒、AEC、I2S 播放、相机和传感器 stream。 | 需要 |
+
+研发流程必须允许开发者先用回放和 mock 快速闭环，再进入真机。真机联调不应该是验证 Tool / Task 业务逻辑的唯一方式。
+
+### 15.2 安装 SDK 和 CLI
+
+正式发布后安装：
+
+```bash
+pip install audio-chat
+```
+
+当前仓库开发时使用 editable 安装：
+
+```bash
+uv sync --python 3.11
+uv pip install -e audio-chat
+```
+
+公开导入入口：
+
+```python
+import audio_chat
+```
+
+统一 CLI 入口使用点分命令。当前仓库已经落地的最小命令是：
+
+```bash
+uv run audio-chat.dev.preflight --help
+uv run audio-chat.playback.glass --help
+```
+
+`audio-chat.server.run` 当前仍是第一阶段占位入口，正式可用前应补齐 `--config`、`--app-module`、健康检查和日志能力。完整 CLI 目标如下：
+
+| 命令 | 说明 |
+| --- | --- |
+| `audio-chat.server.run` | 前台启动 server，适合日常开发。 |
+| `audio-chat.server.start` | 后台启动 server，写入 PID 和日志。 |
+| `audio-chat.server.stop` | 停止后台 server。 |
+| `audio-chat.server.logs` | 跟随后台 server 日志。 |
+| `audio-chat.config.sync` | 同步 server、mock、iOS、ESP32 的本地联调配置。 |
+| `audio-chat.dev.preflight` | 生成预检报告，验证协议事件、stream 类型、配置和依赖。 |
+| `audio-chat.playback.glass` | 启动 Python 回放端，上传 testdata 并断言输出。 |
+| `audio-chat.mock.phone` | 启动 Python 手机 mock，用于验证手机端 task 和资产回传。 |
+| `audio-chat.web.open` | 打开 Web JS endpoint 调试页。 |
+| `audio-chat.ios.open` | 打开 iOS endpoint 工程。 |
+| `audio-chat.ios.build-sim` | 验证 iOS 模拟器构建。 |
+| `audio-chat.esp32.start` | 构建、烧录并监看 ESP32 endpoint。 |
+
+CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、健康检查、端侧参考工程启动和工具链调度。业务项目只提供配置、Tool / Task 代码和可选端侧工程路径。
+
+### 15.3 本地配置同步
+
+多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此需要 `audio-chat.config.sync`。
+
+建议命令：
+
+```bash
+uv run audio-chat.config.sync \
+  --app-root examples/minimal \
+  --config audio-chat/examples/minimal/server.yaml
+```
+
+同步命令应做这些事：
+
+1. 探测当前开发机可被端侧访问的局域网 IPv4。
+2. 写入 server YAML 的 `server.public_url`。
+3. 为参考端侧配置写入 `user_id`、`device_id`、`pair_token`、控制连接地址和 stream 连接地址。
+4. 校验 `auth.device_tokens` 中存在对应 `device_id`。
+5. 输出本次同步后的启动命令提示。
+
+如果自动探测失败，允许显式指定：
+
+```bash
+uv run audio-chat.config.sync \
+  --config audio-chat/examples/minimal/server.yaml \
+  --public-url http://192.168.1.23:8765
+```
+
+同步边界：
+
+1. `config.sync` 不生成业务代码。
+2. `config.sync` 不修改密钥文件中的真实 provider API key。
+3. `config.sync` 不假设设备类型，只写入端侧参考实现需要的本地配置。
+4. 生产部署可以不用 `config.sync`，直接由部署系统生成配置。
+
+### 15.4 启动 server
+
+最小 server 前台启动：
+
+```bash
+uv run audio-chat.server.run \
+  --config audio-chat/examples/minimal/server.yaml
+```
+
+业务项目启动时应允许指定业务装配入口：
+
+```bash
+uv run audio-chat.server.run \
+  --app-module my_app.server:build_app \
+  --config /path/to/my-app/audio-chat.yaml
+```
+
+`--app-module` 的职责是注册 Tool、Task、Skill、MCP 配置和自定义 Agent Core。server CLI 负责读取 YAML、创建 SDK 基础服务、执行业务装配入口并启动 HTTP / WebSocket 服务。
+
+启动后检查：
+
+```bash
+curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:8765/api/debug/devices
+```
+
+后台启动、日志和停止是可选增强，但建议保留：
+
+```bash
+uv run audio-chat.server.start --config audio-chat/examples/minimal/server.yaml
+uv run audio-chat.server.logs
+uv run audio-chat.server.stop
+```
+
+### 15.5 最小回放闭环
+
+回放端是新 SDK 的第一优先级研发入口。它应该像真实设备一样注册、订阅事件、上报唤醒、打开 `sensor.mic` stream、接收 `actuator.speaker` stream，并写出断言报告。
+
+推荐命令：
+
+```bash
+uv run audio-chat.dev.preflight \
+  --report audio-chat/runs/preflight.json
+
+uv run audio-chat.playback.glass \
+  --config audio-chat/examples/minimal/playback.yaml
+```
+
+回放配置至少包含：
+
+```yaml
+server_url: "http://127.0.0.1:8765"
+user_id: "user-playback-001"
+device_id: "dev-python-playback-001"
+pair_token: "pair-playback-token"
+input:
+  stream_type: "sensor.mic"
+  file: "audio-chat/testdata/provider/dashscope-nihao-16k.pcm"
+  codec: "pcm16le"
+  sample_rate: 16000
+  channels: 1
+assertions:
+  - "control.device.registered"
+  - "stream.input.opened"
+  - "stream.output.open.requested"
+  - "stream.output.closed"
+```
+
+回放必须产出：
+
+1. 设备注册结果。
+2. 控制事件 JSONL。
+3. 输入和输出 stream 元数据。
+4. Agent 事件。
+5. Playback Arbiter 决策。
+6. 断言结果。
+
+### 15.6 Python Mock 多设备联调
+
+Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅”的协议设计。例如一个 mock 设备只提供 `sensor.rgb`，另一个 mock 设备只消费 `actuator.speaker`。
+
+推荐命令：
+
+```bash
+uv run audio-chat.mock.phone \
+  --config audio-chat/examples/minimal/phone-mock.yaml
+```
+
+mock 配置应允许声明能力和订阅：
+
+```yaml
+user_id: "user-dev-001"
+device_id: "dev-python-phone-mock-001"
+pair_token: "pair-phone-token"
+capabilities:
+  streams.produce: ["sensor.rgb", "sensor.imu"]
+  streams.consume: []
+subscriptions:
+  - event: "stream.control.*"
+    filter:
+      stream_type: "sensor.rgb"
+mock_actions:
+  stream.control.configure.requested:
+    upload_asset:
+      stream_type: "sensor.rgb"
+      file: "audio-chat/testdata/assets/desk.jpg"
+```
+
+mock 不模拟 iOS 系统权限、真实摄像头或真实播放器。它只验证协议、订阅、Tool / Task 和资产链路。
+
+### 15.7 iOS、Web 和 ESP32 启动入口
+
+端侧参考实现不是 Python server SDK 核心包，但 SDK CLI 应提供统一入口，降低研发成本。
+
+iOS：
+
+```bash
+uv run audio-chat.ios.open --app-root /path/to/my-app
+uv run audio-chat.ios.build-sim --app-root /path/to/my-app
+```
+
+Web JS：
+
+```bash
+uv run audio-chat.web.open \
+  --config audio-chat/examples/minimal/web.yaml
+```
+
+ESP32：
+
+```bash
+uv run audio-chat.esp32.start \
+  --app-root /path/to/my-app \
+  --project-dir /path/to/audio-chat/endpoints/esp32-glass \
+  --idf-root /path/to/esp-idf \
+  --port '/dev/tty.usbmodem*'
+```
+
+ESP32 命令需要支持：
+
+1. `--build-only`：只编译。
+2. `--flash-only`：只烧录已构建产物。
+3. `--monitor-only`：只打开串口监看。
+4. `--port` 通配符：匹配多个串口时提示开发者选择。
+5. `--config`：显式指定端侧本地配置。
+
+这些命令不改变 SDK 边界：真实录音、播放、唤醒、AEC、相机和传感器驱动仍然由端侧实现负责。
+
+### 15.8 推荐启动顺序
+
+本地研发：
+
+1. `uv pip install -e audio-chat`
+2. `uv run audio-chat.config.sync --config audio-chat/examples/minimal/server.yaml`
+3. `uv run audio-chat.dev.preflight --report audio-chat/runs/preflight.json`
+4. `uv run audio-chat.server.run --config audio-chat/examples/minimal/server.yaml`
+5. 另一个终端运行 `uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml`
+6. 查看 `runs/audio-chat` 和 `/api/debug/*`
+
+多设备 mock：
+
+1. 启动 server。
+2. 启动 `audio-chat.playback.glass` 作为语音输入和 speaker 消费设备。
+3. 启动 `audio-chat.mock.phone` 作为 RGB / IMU 资产设备。
+4. 触发需要资产的 Tool，确认事件订阅和资产回传。
+
+真机联调：
+
+1. 执行 `audio-chat.config.sync`，确保端侧连接 server 的局域网地址正确。
+2. 启动 server。
+3. 启动 iOS / Web / phone mock 中至少一个端侧算力或资产设备。
+4. 构建、烧录并监看 ESP32。
+5. 端侧唤醒后观察 `control.audio_session.open.requested`、`stream.input.opened`、`stream.output.open.requested` 和 `control.audio_session.close.requested`。
+6. 对齐 server runs 产物、端侧日志和 provider 事件。
+
+### 15.9 研发预检和 live check
+
+`audio-chat.dev.preflight` 应在不启动真实 server 的情况下检查：
+
+1. Python 版本和包安装状态。
+2. YAML 是否可解析。
+3. 事件名和 stream 类型是否合法。
+4. `auth.device_tokens` 是否覆盖回放和 mock 配置中的设备。
+5. provider API key 是否存在；如果不存在，是否允许 mock fallback。
+6. runs 目录是否可写。
+7. 端侧参考工程路径是否存在。
+
+如果 server 已经启动，预检应支持在线检查：
+
+```bash
+uv run audio-chat.dev.preflight \
+  --config audio-chat/examples/minimal/server.yaml \
+  --require-server \
+  --report audio-chat/runs/preflight-live.json
+```
+
+在线检查应验证：
+
+1. `/api/health` 可访问。
+2. `/api/debug/devices` 可访问。
+3. 当前注册设备、订阅和 active device set 符合预期。
+4. 最近一次回放是否通过断言。
+
+### 15.10 与旧 SDK 启动方式的关系
+
+旧 SDK 的 `openaiglass.config.sync`、`openaiglass.server.run`、`openaiglass.phone.mock`、`openaiglass.glass.start` 已经证明统一 CLI 能显著降低联调成本。`audio-chat` 应保留这个经验，但做两点收敛：
+
+1. 新 SDK 只提供 server SDK 和端侧参考实现的启动入口，不把业务项目和端侧工程塞进同一个 Python 包边界。
+2. 所有启动命令都围绕 `user_id`、设备注册、订阅和 stream 协议工作，不再以固定 glass / phone 类型作为协议前提。
+
+## 16. 配置设计
 
 建议从环境变量迁移到 YAML 为主、环境变量覆盖为辅。YAML 用来表达 SDK 行为，环境变量只用于覆盖部署差异和密钥。
 
@@ -2448,11 +2757,11 @@ observability:
   retention_days: 7
 ```
 
-## 16. 可观测性
+## 17. 可观测性
 
 `audio-chat` 必须把“能联调”作为第一等能力。
 
-### 16.1 日志要求
+### 17.1 日志要求
 
 日志必须结构化，并支持 DEBUG：
 
@@ -2468,7 +2777,7 @@ observability:
 10. `latency_ms`
 11. `decision_reason`
 
-### 16.2 调试快照
+### 17.2 调试快照
 
 内置 HTTP debug API：
 
@@ -2485,7 +2794,7 @@ observability:
 | `/api/debug/tasks` | 任务运行态。 |
 | `/api/debug/session/{session_id}` | 单会话调试快照。 |
 
-### 16.3 运行产物
+### 17.3 运行产物
 
 每个用户和会话建议落盘：
 
@@ -2506,9 +2815,9 @@ runs/audio-chat/sessions/<session_id>/
   result.json
 ```
 
-## 17. 测试与验收
+## 18. 测试与验收
 
-### 17.1 单元测试
+### 18.1 单元测试
 
 覆盖：
 
@@ -2523,7 +2832,7 @@ runs/audio-chat/sessions/<session_id>/
 9. Task Engine。
 10. Tool schema 生成。
 
-### 17.2 契约测试
+### 18.2 契约测试
 
 每个端侧参考实现必须通过同一套契约：
 
@@ -2536,7 +2845,7 @@ runs/audio-chat/sessions/<session_id>/
 7. 用户打断可上报。
 8. server 释放 stream 可执行。
 
-### 17.3 回放测试
+### 18.3 回放测试
 
 必须保留 Python playback endpoint：
 
@@ -2557,7 +2866,7 @@ audio-chat.playback.glass \
 8. `stream.output.closed`
 9. `control.audio_session.closed`
 
-### 17.4 真机联调
+### 18.4 真机联调
 
 真机联调顺序：
 
@@ -2569,9 +2878,9 @@ audio-chat.playback.glass \
 6. 观察音频 stream 建立、连续对话、输出播放和 stream 释放。
 7. 查看 server 日志、端侧日志和 runs 产物。
 
-## 18. 迁移策略
+## 19. 迁移策略
 
-### 18.1 并存期
+### 19.1 并存期
 
 `openaiglass-sdk` 和 `audio-chat` 并存：
 
@@ -2583,7 +2892,7 @@ audio-chat/
 
 旧业务继续使用旧 SDK。新能力或重构试验优先使用 `audio-chat`。
 
-### 18.2 兼容适配
+### 19.2 兼容适配
 
 提供最小兼容层：
 
@@ -2601,7 +2910,7 @@ audio-chat/
 4. 旧端侧硬编码的 control message 名称。
 5. 旧 `group_id` 对外协议。
 
-### 18.3 推荐迁移顺序
+### 19.3 推荐迁移顺序
 
 1. 先实现 `audio-chat` 最小 server。
 2. 实现 Control Service 和 `user_id` active device set。
@@ -2614,7 +2923,7 @@ audio-chat/
 9. 迁移 iOS endpoint。
 10. 再迁移找物、红绿灯、导航等业务样板。
 
-## 19. 第一阶段最小闭环
+## 20. 第一阶段最小闭环
 
 第一阶段目标不是一次性重建全部旧 SDK，而是打通正确边界。
 
@@ -2641,7 +2950,7 @@ uv run audio-chat.dev.preflight --report audio-chat/runs/preflight.json
 uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
 ```
 
-## 20. 第二阶段能力
+## 21. 第二阶段能力
 
 第二阶段引入真实模型和真实端侧：
 
@@ -2655,7 +2964,7 @@ uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.y
 8. 支持 `sensor.rgb` 单帧和连续 stream。
 9. 支持最小 Task。
 
-## 21. 第三阶段能力
+## 22. 第三阶段能力
 
 第三阶段迁移业务样板：
 
@@ -2668,7 +2977,7 @@ uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.y
 7. MCP Gateway。
 8. 长期记忆。
 
-## 22. 主要风险
+## 23. 主要风险
 
 | 风险 | 说明 | 缓解 |
 | --- | --- | --- |
@@ -2680,7 +2989,7 @@ uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.y
 | Tool 副作用和用户打断冲突 | 用户打断时工具可能已执行。 | 引入 `generation_id`、工具副作用日志和可取消任务策略。 |
 | 过早抽象 provider | 支持太多模型会拖慢落地。 | 第一阶段只做 mock/text，第二阶段只优先 Qwen Omni + 一套文本模型。 |
 
-## 23. 参考资料
+## 24. 参考资料
 
 1. OpenAI Realtime API 概览：说明 Realtime API 支持低延迟多模态、原生 speech-to-speech，以及音频和文本输入输出。
    <https://platform.openai.com/docs/guides/realtime/overview>
