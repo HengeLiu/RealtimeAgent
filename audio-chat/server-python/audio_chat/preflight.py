@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> None:
         checks.append(_skipped("recent_playback", "disabled by dev_checks.require_recent_playback_ok"))
     checks.append(_provider_key_check(loaded))
     checks.append(_endpoint_config_check(loaded))
+    checks.append(_audio_pipeline_check(loaded))
 
     ok = all(check["ok"] for check in checks)
     report = {
@@ -67,9 +68,7 @@ def main(argv: list[str] | None = None) -> None:
         "stream_types": sorted(STREAM_TYPES),
         "checks": checks,
         "not_implemented": {
-            "audio_pipeline.resample": "loaded but not implemented beyond format validation",
-            "audio_pipeline.volume_normalize": "loaded but not implemented",
-            "audio_pipeline.vad": "TextAgentCore owns turn boundary; server VAD is not implemented",
+            "audio_pipeline.vad": "server VAD is diagnostic only; Agent/provider still owns turn boundary",
             "audio_pipeline.asr_sidecar": "not implemented",
         },
     }
@@ -256,6 +255,56 @@ def _endpoint_config_check(config: AudioChatYamlConfig) -> dict:
     if aec is not None and aec not in {"browser_webrtc", "endpoint", "endpoint_only", "disabled"}:
         errors.append(f"unsupported endpoint_defaults.aec: {aec}")
     return {"name": "endpoint_config", "ok": not errors, "endpoint_defaults": defaults, "errors": errors}
+
+
+def _audio_pipeline_check(config: AudioChatYamlConfig) -> dict:
+    """检查 Audio Pipeline 处理器启用和降级状态。
+
+    主要逻辑：resample、volume probe 和 VAD 都必须有明确状态；配置声明启用但代码不支持
+    时返回失败或降级原因，避免静默跳过。
+    """
+
+    audio = config.audio_pipeline
+    stream_format = config.stream.default_sensor_mic
+    errors: list[str] = []
+    degradations: list[str] = []
+    processors = ["format_validator", "pcm16_resampler"]
+    if audio.volume_normalize:
+        processors.append("volume_probe")
+        degradations.append("audio_pipeline.volume_normalize currently records volume metrics only; it does not change PCM samples")
+    if audio.vad in {"", "disabled", "off", "false"}:
+        degradations.append("audio_pipeline.vad disabled by config")
+    elif audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"}:
+        processors.append("quality_vad_probe")
+        degradations.append("audio_pipeline.vad is diagnostic only; Agent/provider still owns turn boundary")
+    else:
+        errors.append(f"unsupported audio_pipeline.vad: {audio.vad}")
+    if audio.resample in {"auto", "enabled", "server"}:
+        if stream_format.get("codec", "pcm16le") != "pcm16le":
+            errors.append("audio_pipeline.resample only supports pcm16le")
+    elif audio.resample in {"disabled", "off", "false"}:
+        degradations.append("audio_pipeline.resample disabled by config")
+    else:
+        errors.append(f"unsupported audio_pipeline.resample: {audio.resample}")
+    if audio.aec != "endpoint_only":
+        errors.append("audio_pipeline.aec must stay endpoint_only; server-side AEC is not implemented")
+    return {
+        "name": "audio_pipeline",
+        "ok": not errors,
+        "processors": processors,
+        "resample": {
+            "mode": audio.resample,
+            "status": "enabled" if audio.resample in {"auto", "enabled", "server"} else "disabled",
+        },
+        "volume_probe": {"enabled": bool(audio.volume_normalize), "changes_audio": False},
+        "vad": {
+            "mode": audio.vad,
+            "status": "diagnostic" if audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"} else "disabled",
+            "owns_turn_boundary": False,
+        },
+        "degradations": degradations,
+        "errors": errors,
+    }
 
 
 def _live_server_check(config: AudioChatYamlConfig) -> dict:

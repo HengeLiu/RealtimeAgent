@@ -13,6 +13,7 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunkCodec
 
 AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
+AUDIO_CHAT_SWEEPER_TASK_KEY = web.AppKey("audio_chat_sweeper_task", asyncio.Task)
 
 
 @dataclass
@@ -117,7 +118,38 @@ class AudioChatHttpServer:
         app.router.add_get("/api/debug/playback", self.debug_playback)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
+        app.on_startup.append(self._on_startup)
+        app.on_cleanup.append(self._on_cleanup)
         return app
+
+    async def _on_startup(self, app: web.Application) -> None:
+        """注册 server 后台清理任务。
+
+        主要逻辑：周期性触发 heartbeat timeout、stream idle 和 audio session max duration
+        清理；业务逻辑仍集中在 `AudioChatApp.run_maintenance_once()`。
+        """
+
+        app[AUDIO_CHAT_SWEEPER_TASK_KEY] = asyncio.create_task(self._sweeper_loop())
+
+    async def _on_cleanup(self, app: web.Application) -> None:
+        """停止 server 后台清理任务。"""
+
+        task = app.get(AUDIO_CHAT_SWEEPER_TASK_KEY)
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _sweeper_loop(self) -> None:
+        """后台清理循环。"""
+
+        interval = max(0.1, float(self.audio_app.config.control_heartbeat_check_interval_seconds))
+        while True:
+            self.audio_app.run_maintenance_once()
+            await asyncio.sleep(interval)
 
     async def health(self, _request: web.Request) -> web.Response:
         """返回服务健康状态。

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from audio_chat.agent_core import AgentCoreRouter
 from audio_chat.agent_core.providers import AsrProviderConfig, TextModelProviderConfig
 from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
-from audio_chat.audio_pipeline import AudioPipeline
+from audio_chat.audio_pipeline import AudioPipeline, AudioPipelineConfig as RuntimeAudioPipelineConfig
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
 from audio_chat.observability import RunRecorder
@@ -33,6 +34,8 @@ class AudioChatConfig:
     control_max_subscriptions_per_device: int = 64
     control_allow_subscribe_all: bool = False
     control_subscription_filter_mode: str = "exact"
+    control_heartbeat_timeout_seconds: float = 30.0
+    control_heartbeat_check_interval_seconds: float = 5.0
     stream_max_chunk_bytes: int = 8192
     stream_idle_timeout_seconds: float = 20.0
     default_sensor_mic: StreamFormat = StreamFormat()
@@ -40,6 +43,8 @@ class AudioChatConfig:
     audio_pipeline_aec: str = "endpoint_only"
     audio_pipeline_resample: str = "auto"
     audio_pipeline_volume_normalize: bool = True
+    audio_pipeline_vad: str = "endpoint_or_server"
+    audio_session_max_duration_seconds: float = 0.0
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
     text_model_provider: str = "mock"
@@ -99,6 +104,8 @@ class AudioChatConfig:
             control_max_subscriptions_per_device=loaded.control.max_subscriptions_per_device,
             control_allow_subscribe_all=loaded.control.allow_subscribe_all,
             control_subscription_filter_mode=loaded.control.subscription_filter_mode,
+            control_heartbeat_timeout_seconds=loaded.control.heartbeat_timeout_seconds,
+            control_heartbeat_check_interval_seconds=loaded.control.heartbeat_check_interval_seconds,
             stream_max_chunk_bytes=loaded.stream.max_chunk_bytes,
             stream_idle_timeout_seconds=loaded.stream.idle_timeout_seconds,
             default_sensor_mic=_stream_format_from_dict(loaded.stream.default_sensor_mic),
@@ -106,6 +113,8 @@ class AudioChatConfig:
             audio_pipeline_aec=loaded.audio_pipeline.aec,
             audio_pipeline_resample=loaded.audio_pipeline.resample,
             audio_pipeline_volume_normalize=loaded.audio_pipeline.volume_normalize,
+            audio_pipeline_vad=loaded.audio_pipeline.vad,
+            audio_session_max_duration_seconds=loaded.audio_pipeline.max_session_seconds,
             asr_provider=text.asr_provider,
             asr_model=text.asr_model,
             text_model_provider=text.model_provider,
@@ -142,6 +151,30 @@ class AudioChatConfig:
             tasks_store_type=str(loaded.tasks.store.get("type") or "memory"),
             tasks_store_root=loaded.tasks.store.get("root"),
         )
+
+
+@dataclass
+class AudioSessionState:
+    """用户音频会话运行态。
+
+    主要功能：记录 server 侧对音频会话生命周期的最小状态。
+    主要属性：`state` 表示 requested/opened/closing/closed；`close_mode` 区分立即关闭
+    和等待当前回复结束后关闭。
+    """
+
+    user_id: str
+    session_id: str
+    state: str = "requested"
+    opened_at: float = field(default_factory=time.time)
+    last_activity_at: float = field(default_factory=time.time)
+    close_pending: bool = False
+    close_mode: str = ""
+    close_reason: str = ""
+
+    def touch(self) -> None:
+        """刷新会话最近活跃时间。"""
+
+        self.last_activity_at = time.time()
 
 
 class AudioChatApp:
@@ -256,9 +289,21 @@ class AudioChatApp:
         if hasattr(self.agent_core, "bind_tool_gateway"):
             self.agent_core.bind_tool_gateway(self.tool_gateway)
         self.text_agent_core = self.agent_core
-        self.audio_pipeline = AudioPipeline(agent_core=self.agent_core)
+        self.audio_pipeline = AudioPipeline(
+            agent_core=self.agent_core,
+            config=RuntimeAudioPipelineConfig(
+                expected_codec=self.config.default_sensor_mic.codec,
+                expected_sample_rate=self.config.default_sensor_mic.sample_rate,
+                expected_channels=self.config.default_sensor_mic.channels,
+                resample=self.config.audio_pipeline_resample,
+                volume_probe=self.config.audio_pipeline_volume_normalize,
+                vad=self.config.audio_pipeline_vad,
+            ),
+        )
         self.stream_service.set_dispatcher(self)
         self._active_session_by_user: dict[str, str] = {}
+        self._audio_sessions_by_user: dict[str, AudioSessionState] = {}
+        self.output_service.add_output_finished_listener(self._handle_output_finished)
 
     def register_device(self, registration: Event, connection: DeviceConnection | None = None) -> Event:
         return self.control_service.register_device(registration, connection)
@@ -279,7 +324,11 @@ class AudioChatApp:
             self.control_service.publish(event)
             return
         if event.event_name == "control.user.dialog.close.requested":
-            self.close_audio_session(event.user_id, reason="user_requested")
+            self.close_audio_session(
+                event.user_id,
+                reason=event.payload.get("reason", "user_requested"),
+                mode=event.payload.get("close_mode", event.payload.get("mode", "close_now")),
+            )
             return
         if event.event_name == "control.user.interrupt.detected":
             self.control_service.publish(event)
@@ -292,17 +341,22 @@ class AudioChatApp:
             return
         if event.event_name == "control.audio_session.opened":
             self.control_service.publish(event)
+            self._mark_audio_session_opened(event.user_id, event.session_id)
             self._open_agent_session(event.user_id, event.session_id)
             return
         if event.event_name == "control.audio_session.closed":
             self.control_service.publish(event)
-            self._active_session_by_user.pop(event.user_id, None)
-            self._close_agent_session(event.user_id, reason=event.payload.get("reason", "endpoint_closed"))
+            self._finalize_audio_session(event.user_id, reason=event.payload.get("reason", "endpoint_closed"))
+            return
+        if event.event_name in {"stream.output.finished", "stream.output.closed"}:
+            self.control_service.publish(event)
+            self._maybe_close_pending_audio_session(event.user_id, event.session_id)
             return
         self.control_service.publish(event)
 
     def dispatch(self, chunk: StreamChunk) -> None:
         if chunk.stream_type == "sensor.mic":
+            self._touch_audio_session(chunk.user_id, chunk.session_id)
             self.audio_pipeline.dispatch(chunk)
             return
         if chunk.stream_type in {"sensor.rgb", "sensor.depth", "sensor.imu"}:
@@ -320,6 +374,7 @@ class AudioChatApp:
     ) -> StreamHandle:
         session_id = self._active_session_by_user.get(user_id) or new_id("sess")
         self._active_session_by_user[user_id] = session_id
+        self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
         handle = self.stream_service.open_stream(
             user_id=user_id,
             session_id=session_id,
@@ -354,14 +409,31 @@ class AudioChatApp:
         if session_id is None:
             session_id = new_id("sess")
             self._active_session_by_user[user_id] = session_id
+        self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
         return session_id
 
     def write_input_chunk(self, chunk: StreamChunk) -> None:
         self.stream_service.on_chunk(chunk)
 
-    def close_audio_session(self, user_id: str, *, reason: str = "completed") -> None:
+    def close_audio_session(self, user_id: str, *, reason: str = "completed", mode: str = "close_now") -> None:
         session_id = self._active_session_by_user.get(user_id)
         if session_id is None:
+            return
+        state = self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
+        state.close_pending = True
+        state.close_mode = mode
+        state.close_reason = reason
+        state.state = "closing"
+        if mode == "close_after_reply" and self.output_service.active_output_stream_id(user_id, session_id) is not None:
+            self.recorder.record_event(
+                Event(
+                    event_name="control.audio_session.close.requested",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    session_id=session_id,
+                    payload={"reason": reason, "close_mode": mode, "deferred": True},
+                )
+            )
             return
         self.control_service.publish(
             Event(
@@ -369,10 +441,9 @@ class AudioChatApp:
                 user_id=user_id,
                 producer_id=SERVER_PRODUCER_ID,
                 session_id=session_id,
-                payload={"reason": reason},
+                payload={"reason": reason, "close_mode": mode},
             )
         )
-        self._close_agent_session(user_id, reason=reason)
 
     def _open_agent_session(self, user_id: str, session_id: str | None) -> None:
         """打开当前 Agent Core 的会话。
@@ -403,6 +474,7 @@ class AudioChatApp:
     def _handle_wake_detected(self, event: Event) -> None:
         session_id = self._active_session_by_user.get(event.user_id) or new_id("sess")
         self._active_session_by_user[event.user_id] = session_id
+        self._audio_sessions_by_user[event.user_id] = AudioSessionState(user_id=event.user_id, session_id=session_id)
         self.control_service.publish(
             Event(
                 event_name="control.user.wake.detected",
@@ -437,6 +509,10 @@ class AudioChatApp:
             stream_id=event.stream_id,
         )
         self._active_session_by_user[event.user_id] = handle.session_id
+        self._audio_sessions_by_user.setdefault(
+            event.user_id,
+            AudioSessionState(user_id=event.user_id, session_id=handle.session_id, state="opened"),
+        ).touch()
 
     def _mark_endpoint_input_closed(self, event: Event) -> None:
         if not event.stream_id:
@@ -454,6 +530,94 @@ class AudioChatApp:
                 "reason": event.payload.get("reason", "endpoint_closed"),
             },
         )
+
+    def _mark_audio_session_opened(self, user_id: str, session_id: str | None) -> None:
+        """标记 endpoint 已确认打开音频会话。"""
+
+        if not session_id:
+            return
+        self._active_session_by_user[user_id] = session_id
+        state = self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
+        state.session_id = session_id
+        state.state = "opened"
+        state.close_pending = False
+        state.touch()
+
+    def _touch_audio_session(self, user_id: str, session_id: str | None) -> None:
+        """刷新音频会话活跃时间。"""
+
+        state = self._audio_sessions_by_user.get(user_id)
+        if state is None or (session_id is not None and state.session_id != session_id):
+            return
+        state.touch()
+
+    def _handle_output_finished(self, user_id: str, session_id: str, stream_id: str) -> None:
+        """处理 Output Service 当前输出完成事件。"""
+
+        self._maybe_close_pending_audio_session(user_id, session_id)
+
+    def _maybe_close_pending_audio_session(self, user_id: str, session_id: str | None) -> None:
+        """在 `close_after_reply` 条件满足时请求关闭音频会话。"""
+
+        state = self._audio_sessions_by_user.get(user_id)
+        if state is None or not state.close_pending or state.close_mode != "close_after_reply":
+            return
+        if session_id is not None and state.session_id != session_id:
+            return
+        if self.output_service.active_output_stream_id(user_id, state.session_id) is not None:
+            return
+        self.control_service.publish(
+            Event(
+                event_name="control.audio_session.close.requested",
+                user_id=user_id,
+                producer_id=SERVER_PRODUCER_ID,
+                session_id=state.session_id,
+                payload={"reason": state.close_reason or "close_after_reply", "close_mode": "close_after_reply"},
+            )
+        )
+
+    def _finalize_audio_session(self, user_id: str, *, reason: str) -> None:
+        """释放 endpoint 已确认关闭的音频会话。"""
+
+        state = self._audio_sessions_by_user.pop(user_id, None)
+        self._active_session_by_user.pop(user_id, None)
+        self._close_agent_session(user_id, reason=reason)
+        if state is not None:
+            self.recorder.record_agent_event(
+                state.session_id,
+                {"event": "audio_session.closed", "reason": reason, "close_mode": state.close_mode or "endpoint_closed"},
+            )
+
+    def run_maintenance_once(self, *, now: float | None = None) -> dict:
+        """执行一次后台清理任务。
+
+        主要逻辑：统一触发心跳超时、stream idle 和音频会话最大时长清理；测试可以直接
+        调用本方法，不需要启动 aiohttp。
+        参数：`now` 为可选时间戳。
+        返回值：本轮清理结果。
+        异常情况：无。
+        """
+
+        current = time.time() if now is None else now
+        expired_devices = self.control_service.expire_stale_devices(
+            now=current,
+            timeout_seconds=self.config.control_heartbeat_timeout_seconds,
+        )
+        closed_streams = self.stream_service.close_idle_streams(now=current)
+        closed_sessions: list[str] = []
+        if self.config.audio_session_max_duration_seconds > 0:
+            for user_id, state in list(self._audio_sessions_by_user.items()):
+                if state.close_pending:
+                    continue
+                if current - state.opened_at <= self.config.audio_session_max_duration_seconds:
+                    continue
+                self.close_audio_session(user_id, reason="audio_session_max_duration", mode="close_now")
+                closed_sessions.append(state.session_id)
+        return {
+            "expired_devices": list(expired_devices),
+            "closed_streams": [handle.stream_id for handle in closed_streams],
+            "closed_audio_sessions": closed_sessions,
+        }
 
 
 def _stream_format_from_dict(data: dict) -> StreamFormat:
