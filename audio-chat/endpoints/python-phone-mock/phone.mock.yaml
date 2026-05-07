@@ -1,0 +1,28 @@
+mode: register_only
+server_url: http://127.0.0.1:8765
+user_id: user-endpoint-001
+device_id: dev-python-phone-mock-001
+auth:
+  mode: disabled
+capabilities:
+  streams.produce:
+    - sensor.rgb
+    - sensor.depth
+    - sensor.imu
+  streams.consume:
+    - actuator.speaker
+    - actuator.haptic
+  sensor.rgb: true
+  sensor.depth: true
+  sensor.imu: true
+  actuator.haptic: true
+subscriptions:
+  - event: stream.control.*
+    filter:
+      stream_type: sensor.rgb
+  - event: stream.output.*
+    filter:
+      stream_type: actuator.speaker
+  - event: stream.output.*
+    filter:
+      stream_type: actuator.haptic

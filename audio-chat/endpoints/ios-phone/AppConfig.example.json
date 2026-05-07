@@ -1,0 +1,28 @@
+{
+  "server_url": "http://127.0.0.1:8765",
+  "user_id": "user-endpoint-001",
+  "device_id": "dev-ios-phone-001",
+  "auth": {
+    "mode": "disabled"
+  },
+  "protocol_version": "audio-chat.v1",
+  "capabilities": {
+    "streams.produce": ["sensor.rgb"],
+    "streams.consume": ["actuator.speaker", "actuator.haptic"],
+    "sensor.rgb": true
+  },
+  "subscriptions": [
+    {
+      "event": "stream.control.*",
+      "filter": {
+        "stream_type": "sensor.rgb"
+      }
+    },
+    {
+      "event": "stream.output.*",
+      "filter": {
+        "stream_type": "actuator.speaker"
+      }
+    }
+  ]
+}

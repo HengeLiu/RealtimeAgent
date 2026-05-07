@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -48,6 +50,7 @@ def test_docs_entry_points_exist_in_pyproject() -> None:
         "audio-chat.server.stop",
         "audio-chat.server.logs",
         "audio-chat.phone.mock",
+        "audio-chat.web.open",
         "audio-chat.playback.glass",
         "audio-chat.dev.preflight",
         "audio-chat.sdk.package-check",
@@ -81,3 +84,40 @@ def test_readme_public_classes_import_from_audio_chat() -> None:
     assert imported_names
     assert not [name for name in sorted(imported_names) if not hasattr(audio_chat, name)]
 
+
+def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) -> None:
+    """测试目标：确认 preflight 报告能定位配置、provider 和 endpoint 问题。
+
+    测试方法：执行 `audio-chat.dev.preflight` 到临时报告路径。
+    预期结果：报告包含 G 线要求的 config validation、provider key 和 endpoint config 检查。
+    """
+
+    report = tmp_path / "preflight.json"
+    completed = subprocess.run(
+        [
+            "uv",
+            "run",
+            "audio-chat.dev.preflight",
+            "--config",
+            "examples/minimal/server.yaml",
+            "--report",
+            str(report),
+        ],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    data = json.loads(report.read_text(encoding="utf-8"))
+    names = {check["name"] for check in data["checks"]}
+    assert {
+        "config_validation",
+        "contract_tests",
+        "package_import",
+        "boundary",
+        "recent_playback",
+        "provider_keys",
+        "endpoint_config",
+    } <= names

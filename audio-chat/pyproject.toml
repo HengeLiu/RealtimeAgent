@@ -20,6 +20,7 @@ dependencies = [
 "audio-chat.server.stop" = "audio_chat.cli.server:stop"
 "audio-chat.server.logs" = "audio_chat.cli.server:logs"
 "audio-chat.sdk.package-check" = "audio_chat.cli.sdk:package_check"
+"audio-chat.web.open" = "audio_chat.cli.web:open_web"
 
 [dependency-groups]
 dev = [

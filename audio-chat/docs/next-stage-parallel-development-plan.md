@@ -694,6 +694,27 @@ audio-chat/tests/test_endpoint_config_sync.py
    - 生成 server、web、python mock、iOS、ESP32 的本地配置。
    - 避免手改 public_url、user_id、device_id、token。
 
+当前落地状态：
+
+1. `web-glass` 已有静态页面和协议检查，覆盖 control ws、stream ws、WebRTC
+   AEC / NS / AGC、持续 `sensor.mic`、speaker 播放回执、用户打断和 Realtime
+   模式不发送 final。
+2. `python-phone-mock` 已有网络 endpoint，能通过真实 `/ws/control` 注册，按
+   capability/subscription 接收 `sensor.rgb` 采集请求，使用 `/ws/stream` 上传 RGB
+   资产，并消费 `actuator.speaker` / `actuator.haptic` 输出 stream。
+3. `ios-phone` 和 `esp32-s3` 已提交目录、README 和最小配置样例，作为后续端侧小组
+   的协议锚点；本阶段不阻塞 simulator build 或真机固件。
+4. `audio-chat.config.sync` 已生成 server、web-glass、python phone mock、glass
+   playback、iOS 和 ESP32-S3 本地配置，统一 `server_url`、`user_id` 和可选 token，
+   并保证各端 `device_id` 不重复。
+5. `endpoint-reference` lane 已覆盖上述最小闭环：
+
+```bash
+cd audio-chat
+uv run python scripts/acceptance_check.py endpoint-reference \
+  --report runs/acceptance/endpoint-reference.json
+```
+
 验收命令：
 
 ```bash
@@ -739,8 +760,8 @@ audio-chat/tests/test_docs_commands.py
 任务清单：
 
 1. CLI，以下命令是下一阶段目标：
-   - 未来 developer-experience 线路会继续补齐下列 CLI，其中 P0-A 已落地
-     `server.*`、`config.sync` 和 `phone.mock`，`web.open` 仍属于后续目标。
+   - developer-experience 线路补齐下列 CLI，其中 P0-A 已落地
+     `server.*`、`config.sync` 和 `phone.mock`，本线路补齐 `web.open` 的无副作用检查入口。
    - `audio-chat.server.start`。
    - `audio-chat.server.stop`。
    - `audio-chat.server.logs`。

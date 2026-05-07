@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 
 def sync(argv: list[str] | None = None) -> None:
@@ -23,6 +24,9 @@ def sync(argv: list[str] | None = None) -> None:
     parser.add_argument("--app-root", default="examples/basic-app", help="业务应用根目录")
     parser.add_argument("--server-config", default="examples/minimal/server.yaml", help="源 server YAML")
     parser.add_argument("--playback-config", default="examples/minimal/playback.yaml", help="源 playback YAML")
+    parser.add_argument("--server-url", default="http://127.0.0.1:8765", help="各参考端侧使用的 server URL")
+    parser.add_argument("--user-id", default="user-playback-001", help="各参考端侧使用的 user_id")
+    parser.add_argument("--auth-token", default="", help="可选静态鉴权 token；为空时使用 disabled auth")
     parser.add_argument("--output-dir", default="", help="配置输出目录，默认 app-root/config/generated")
     args = parser.parse_args(argv)
 
@@ -35,23 +39,97 @@ def sync(argv: list[str] | None = None) -> None:
     server_target = output_dir / "server.local.yaml"
     glass_target = output_dir / "glass.playback.yaml"
     phone_target = output_dir / "phone.mock.yaml"
+    web_target = output_dir / "web-glass.yaml"
+    ios_target = output_dir / "ios-phone.local.json"
+    esp32_target = output_dir / "esp32-s3.local.env"
     shutil.copyfile(server_config, server_target)
-    shutil.copyfile(playback_config, glass_target)
-    phone_target.write_text(
-        "mode: python-mock\n"
-        "server_url: http://127.0.0.1:8765\n"
-        "user_id: user-playback-001\n"
-        "device_id: dev-python-phone-mock-001\n",
+    _write_yaml(
+        glass_target,
+        {
+            **_read_yaml(playback_config),
+            "server_url": args.server_url,
+            "user_id": args.user_id,
+            "device_id": "dev-python-playback-001",
+            "auth": _auth(args.auth_token),
+        },
+    )
+    _write_yaml(
+        phone_target,
+        {
+            "mode": "register_only",
+            "server_url": args.server_url,
+            "user_id": args.user_id,
+            "device_id": "dev-python-phone-mock-001",
+            "auth": _auth(args.auth_token),
+            "capabilities": {
+                "streams.produce": ["sensor.rgb", "sensor.depth", "sensor.imu"],
+                "streams.consume": ["actuator.speaker", "actuator.haptic"],
+                "sensor.rgb": True,
+                "sensor.depth": True,
+                "sensor.imu": True,
+                "actuator.haptic": True,
+            },
+            "subscriptions": [
+                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+                {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+                {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
+            ],
+        },
+    )
+    _write_yaml(
+        web_target,
+        {
+            "server_url": args.server_url,
+            "user_id": args.user_id,
+            "device_id": "dev-web-glass-001",
+            "client_type": "web-glass",
+            "auth": _auth(args.auth_token),
+            "audio": {"aec": "browser_webrtc", "wake_word": "manual"},
+            "stream": {"sensor_mic": {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}},
+        },
+    )
+    ios_target.write_text(
+        json.dumps(
+            {
+                "server_url": args.server_url,
+                "user_id": args.user_id,
+                "device_id": "dev-ios-phone-001",
+                "auth": _auth(args.auth_token),
+                "protocol_version": "audio-chat.v1",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    esp32_target.write_text(
+        "\n".join(
+            [
+                f"AUDIO_CHAT_SERVER_URL={args.server_url}",
+                f"AUDIO_CHAT_USER_ID={args.user_id}",
+                "AUDIO_CHAT_DEVICE_ID=dev-esp32-s3-001",
+                f"AUDIO_CHAT_AUTH_TOKEN={args.auth_token}",
+                "AUDIO_CHAT_WAKE_WORD_MODE=endpoint",
+                "AUDIO_CHAT_AEC_MODE=endpoint",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
     report = {
         "ok": True,
         "app_root": str(app_root),
+        "server_url": args.server_url,
+        "user_id": args.user_id,
         "output_dir": str(output_dir),
         "files": {
             "server": str(server_target),
             "phone_mock": str(phone_target),
             "glass_playback": str(glass_target),
+            "web_glass": str(web_target),
+            "ios_phone": str(ios_target),
+            "esp32_s3": str(esp32_target),
         },
     }
     report_path = output_dir / "sync-result.json"
@@ -69,3 +147,20 @@ def _resolve_input(raw: str) -> Path:
         return candidate
     raise FileNotFoundError(raw)
 
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    import yaml
+
+    return dict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+
+
+def _write_yaml(path: Path, data: dict[str, Any]) -> None:
+    import yaml
+
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _auth(token: str) -> dict[str, str]:
+    if token:
+        return {"mode": "static_token", "token": token}
+    return {"mode": "disabled"}

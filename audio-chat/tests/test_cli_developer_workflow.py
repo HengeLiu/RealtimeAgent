@@ -15,6 +15,7 @@ DEVELOPER_COMMANDS = [
     "audio-chat.server.stop",
     "audio-chat.server.logs",
     "audio-chat.phone.mock",
+    "audio-chat.web.open",
     "audio-chat.playback.glass",
     "audio-chat.dev.preflight",
     "audio-chat.sdk.package-check",
@@ -106,6 +107,25 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
     assert stop.returncode == 0
 
 
+def test_web_open_print_url_is_side_effect_free() -> None:
+    """测试目标：确认 web-glass 打开命令支持无副作用检查模式。
+
+    测试方法：执行 `audio-chat.web.open --print-url`。
+    预期结果：命令不启动浏览器，只输出可打开的 file URL。
+    """
+
+    completed = subprocess.run(
+        ["uv", "run", "audio-chat.web.open", "--print-url"],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().startswith("file://")
+
+
 def test_package_check_can_write_report(tmp_path) -> None:
     """测试目标：确认 SDK 包检查入口能生成 JSON 报告。
 
@@ -124,4 +144,3 @@ def test_package_check_can_write_report(tmp_path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert report.exists()
     assert '"ok": true' in report.read_text(encoding="utf-8")
-

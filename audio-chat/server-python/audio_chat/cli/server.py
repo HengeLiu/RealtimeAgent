@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -52,6 +53,7 @@ def start(argv: list[str] | None = None) -> None:
         command.extend(["--app-module", args.app_module])
     log_handle = log_file.open("ab")
     process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT)
+    log_handle.close()
     _write_pid_file(pid_file, {"status": "running", "pid": process.pid, "config": args.config, "log_file": str(log_file)})
     print(f"server started pid={process.pid} log={log_file}")
 
@@ -75,6 +77,7 @@ def stop(argv: list[str] | None = None) -> None:
     if pid:
         try:
             os.kill(int(pid), signal.SIGTERM)
+            _wait_for_exit(int(pid), timeout_seconds=5.0)
         except ProcessLookupError:
             pass
     pid_file.unlink(missing_ok=True)
@@ -99,3 +102,25 @@ def logs(argv: list[str] | None = None) -> None:
 def _write_pid_file(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+
+def _wait_for_exit(pid: int, *, timeout_seconds: float) -> None:
+    """等待后台 server 退出。
+
+    主要逻辑：`SIGTERM` 后短暂轮询进程是否还存在；超时则升级为 `SIGKILL`，
+    避免开发者反复 start/stop 后残留后台进程。
+    参数：`pid` 为进程号，`timeout_seconds` 为等待秒数。
+    返回值：无。
+    异常情况：进程不存在时直接返回。
+    """
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return

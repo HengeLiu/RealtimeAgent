@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -33,6 +34,7 @@ def main(argv: list[str] | None = None) -> None:
     report_path = Path(args.report or loaded.dev_checks.report_path)
     checks = []
     checks.append(_protocol_summary_check())
+    checks.append(_config_validation_check(loaded))
     if loaded.dev_checks.run_contract_tests:
         checks.append(_contract_tests_check(loaded.dev_checks.contract_tests_path))
     else:
@@ -53,6 +55,8 @@ def main(argv: list[str] | None = None) -> None:
         checks.append(_recent_playback_check())
     else:
         checks.append(_skipped("recent_playback", "disabled by dev_checks.require_recent_playback_ok"))
+    checks.append(_provider_key_check(loaded))
+    checks.append(_endpoint_config_check(loaded))
 
     ok = all(check["ok"] for check in checks)
     report = {
@@ -153,6 +157,36 @@ def _package_import_check() -> dict:
     return {"name": "package_import", "ok": not errors, "required_names": required_names, "errors": errors}
 
 
+def _config_validation_check(config: AudioChatYamlConfig) -> dict:
+    """检查 YAML 配置中的关键开发者入口字段。
+
+    参数：`config` 为已加载配置。
+    返回值：结构化检查结果。
+    异常情况：本函数只收集错误，不抛出异常。
+    """
+
+    errors: list[str] = []
+    if not str(config.server.public_url).startswith(("http://", "https://")):
+        errors.append("server.public_url must start with http:// or https://")
+    if int(config.server.port) <= 0:
+        errors.append("server.port must be positive")
+    if config.auth.mode not in {"disabled", "static_token", "signed_token"}:
+        errors.append(f"unsupported auth.mode: {config.auth.mode}")
+    if config.control.transport != "websocket":
+        errors.append(f"unsupported control.transport: {config.control.transport}")
+    if config.stream.transport != "websocket_binary":
+        errors.append(f"unsupported stream.transport: {config.stream.transport}")
+    if config.audio_pipeline.aec != "endpoint_only":
+        errors.append("audio_pipeline.aec must be endpoint_only; server cannot replace endpoint AEC")
+    if config.agent.mode not in {"text", "realtime_audio"}:
+        errors.append(f"unsupported agent.mode: {config.agent.mode}")
+    if config.tools.discover.enabled and not config.tools.discover.recursive:
+        errors.append("tools.discover.recursive should be true for developer app roots")
+    if config.tasks.discover.enabled and not config.tasks.discover.recursive:
+        errors.append("tasks.discover.recursive should be true for developer app roots")
+    return {"name": "config_validation", "ok": not errors, "errors": errors}
+
+
 def _boundary_check() -> dict:
     """检查 server SDK 核心包没有把 endpoint 参考实现混进顶层公开 API。"""
 
@@ -165,6 +199,63 @@ def _boundary_check() -> dict:
     except Exception as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
     return {"name": "boundary", "ok": not errors, "errors": errors}
+
+
+def _provider_key_check(config: AudioChatYamlConfig) -> dict:
+    """检查真实 provider 相关环境变量是否可解释。
+
+    主要逻辑：mock provider 不需要 key；DashScope provider 缺 key 时，如果允许 mock
+    fallback 则记录降级，否则预检失败。
+    """
+
+    required: list[str] = []
+    text = config.agent.text
+    if text.asr_provider == "dashscope" or text.model_provider == "dashscope" or text.tts_provider == "dashscope":
+        required.append("DASHSCOPE_API_KEY")
+    if config.agent.mode == "realtime_audio" and config.agent.realtime.provider in {"qwen", "dashscope"}:
+        required.append("DASHSCOPE_API_KEY")
+    required = sorted(set(required))
+    missing = [env_name for env_name in required if not os.getenv(env_name)]
+    allow_fallback = bool(text.allow_mock_fallback)
+    errors = []
+    degradations = []
+    if missing and allow_fallback:
+        degradations.append(f"missing provider keys {missing}; mock fallback is enabled")
+    elif missing:
+        errors.append(f"missing provider keys {missing}; set key or enable agent.text.allow_mock_fallback")
+    return {
+        "name": "provider_keys",
+        "ok": not errors,
+        "required_env": required,
+        "missing_env": missing,
+        "allow_mock_fallback": allow_fallback,
+        "degradations": degradations,
+        "errors": errors,
+    }
+
+
+def _endpoint_config_check(config: AudioChatYamlConfig) -> dict:
+    """检查参考端侧默认配置是否具备可联调的最低字段。"""
+
+    defaults = dict(config.endpoint_defaults or {})
+    errors: list[str] = []
+    subscriptions = defaults.get("subscriptions")
+    if subscriptions is not None and not isinstance(subscriptions, list):
+        errors.append("endpoint_defaults.subscriptions must be a list")
+    if isinstance(subscriptions, list):
+        has_output_subscription = any(
+            isinstance(item, dict) and str(item.get("event", "")).startswith("stream.output")
+            for item in subscriptions
+        )
+        if not has_output_subscription:
+            errors.append("endpoint_defaults.subscriptions should include stream.output.*")
+    wake_word = defaults.get("wake_word")
+    if wake_word is not None and wake_word not in {"manual", "browser", "endpoint", "disabled"}:
+        errors.append(f"unsupported endpoint_defaults.wake_word: {wake_word}")
+    aec = defaults.get("aec")
+    if aec is not None and aec not in {"browser_webrtc", "endpoint", "endpoint_only", "disabled"}:
+        errors.append(f"unsupported endpoint_defaults.aec: {aec}")
+    return {"name": "endpoint_config", "ok": not errors, "endpoint_defaults": defaults, "errors": errors}
 
 
 def _live_server_check(config: AudioChatYamlConfig) -> dict:

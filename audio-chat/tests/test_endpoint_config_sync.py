@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import yaml
+
+
+AUDIO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path: Path) -> None:
+    """测试目标：验证 config sync 能生成多端参考配置。
+
+    测试方法：执行 `audio-chat.config.sync`，指定统一 server_url、user_id 和静态 token。
+    预期结果：server、glass playback、python phone mock、web-glass、iOS、ESP32-S3
+    配置全部生成，且共享同一组 server_url、user_id 和鉴权 token。
+    """
+
+    output_dir = tmp_path / "generated"
+    completed = subprocess.run(
+        [
+            "uv",
+            "run",
+            "audio-chat.config.sync",
+            "--app-root",
+            str(tmp_path / "app"),
+            "--output-dir",
+            str(output_dir),
+            "--server-url",
+            "http://10.0.0.2:8765",
+            "--user-id",
+            "user-sync",
+            "--auth-token",
+            "token-sync",
+        ],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    report = json.loads((output_dir / "sync-result.json").read_text(encoding="utf-8"))
+    assert report["ok"] is True
+    expected_keys = {"server", "phone_mock", "glass_playback", "web_glass", "ios_phone", "esp32_s3"}
+    assert expected_keys.issubset(report["files"])
+    for path in report["files"].values():
+        assert Path(path).exists()
+
+    phone = yaml.safe_load(Path(report["files"]["phone_mock"]).read_text(encoding="utf-8"))
+    glass = yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8"))
+    web = yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+    esp32 = Path(report["files"]["esp32_s3"]).read_text(encoding="utf-8")
+
+    for config in (phone, glass, web, ios):
+        assert config["server_url"] == "http://10.0.0.2:8765"
+        assert config["user_id"] == "user-sync"
+        assert config["auth"]["mode"] == "static_token"
+        assert config["auth"]["token"] == "token-sync"
+    assert "AUDIO_CHAT_SERVER_URL=http://10.0.0.2:8765" in esp32
+    assert "AUDIO_CHAT_USER_ID=user-sync" in esp32
+    assert "AUDIO_CHAT_AUTH_TOKEN=token-sync" in esp32
+
+
+def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path: Path) -> None:
+    """测试目标：验证同步配置不依赖固定 glass / phone 角色，也不复用 device_id。
+
+    测试方法：读取生成的各端配置，比较 user_id 和 device_id。
+    预期结果：所有参考端侧共享同一 user_id，但 device_id 各自唯一，路由仍由
+    capability/subscription 决定。
+    """
+
+    output_dir = tmp_path / "generated"
+    subprocess.run(
+        ["uv", "run", "audio-chat.config.sync", "--output-dir", str(output_dir), "--user-id", "user-shared"],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    report = json.loads((output_dir / "sync-result.json").read_text(encoding="utf-8"))
+    phone = yaml.safe_load(Path(report["files"]["phone_mock"]).read_text(encoding="utf-8"))
+    glass = yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8"))
+    web = yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+
+    configs = [phone, glass, web, ios]
+    assert {config["user_id"] for config in configs} == {"user-shared"}
+    assert len({config["device_id"] for config in configs}) == len(configs)
+    assert "sensor.rgb" in phone["capabilities"]["streams.produce"]
+    assert "actuator.speaker" in phone["capabilities"]["streams.consume"]

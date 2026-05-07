@@ -33,6 +33,12 @@ Run the current minimal checks:
 uv run audio-chat.dev.preflight --report audio-chat/runs/preflight.json
 ```
 
+Run a single-process mock playback:
+
+```bash
+uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+```
+
 Run the network SDK loop with two terminals:
 
 ```bash
@@ -45,6 +51,25 @@ uv run audio-chat.dev.preflight \
   --require-server \
   --report audio-chat/runs/preflight-live.json
 uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+```
+
+Run the Python phone mock as an independent reference endpoint:
+
+```bash
+uv run audio-chat.phone.mock --config audio-chat/endpoints/python-phone-mock/phone.mock.yaml
+```
+
+Open the browser reference endpoint:
+
+```bash
+uv run audio-chat.web.open --print-url
+```
+
+Provider smoke tests are separate from local mock playback. Without provider keys
+they are skipped instead of silently pretending to use a real provider:
+
+```bash
+uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py -q
 ```
 
 For background development workflows, the SDK also exposes these entry points:
@@ -63,6 +88,7 @@ Useful debug endpoints:
 curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/users/user-playback-001
+curl http://127.0.0.1:8765/api/debug/playback
 ```
 
 The startup and multi-endpoint development plan is documented in
