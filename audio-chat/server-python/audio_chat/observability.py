@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,42 @@ class RunRecorder:
 
     def record_playback_decision(self, session_id: str, record: dict[str, Any]) -> None:
         self._append_jsonl(self.session_dir(session_id) / "playback-decisions.jsonl", record)
+
+    def write_playback_snapshot(self, record: dict[str, Any]) -> None:
+        """写入播放仲裁调试快照。
+
+        主要逻辑：把当前 active、queue 和最近决策写入固定文件，便于调试接口和回放对比读取。
+        参数：`record` 为播放仲裁快照。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        path = self.runs_root / "debug" / "playback.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+    def record_output_wav(
+        self,
+        *,
+        session_id: str,
+        stream_id: str,
+        pcm: bytes,
+        sample_rate: int,
+        channels: int,
+    ) -> None:
+        """记录服务端下发的 PCM 输出音频。
+
+        主要逻辑：把 actuator.speaker 的 pcm16le 载荷封装为 wav，作为回放和人工听检入口。
+        参数：`session_id` 为会话，`stream_id` 为输出流，`pcm` 为原始音频字节。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        path = self.session_dir(session_id) / f"output-{stream_id}.wav"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(channels)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm)
 
     def record_message(self, user_id: str, record: dict[str, Any]) -> None:
         self._append_jsonl(self.user_dir(user_id) / "messages.jsonl", record)

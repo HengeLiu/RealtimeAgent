@@ -1,5 +1,6 @@
 from audio_chat.output.service import (
     AssistantTextDelta,
+    CachedAudioOutputSource,
     DashScopeStreamingTTS,
     MockStreamingTTS,
     NotificationCoordinator,
@@ -13,6 +14,7 @@ from audio_chat.output.service import (
 
 __all__ = [
     "AssistantTextDelta",
+    "CachedAudioOutputSource",
     "DashScopeStreamingTTS",
     "MockStreamingTTS",
     "NotificationCoordinator",

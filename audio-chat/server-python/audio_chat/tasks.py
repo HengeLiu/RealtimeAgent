@@ -263,14 +263,26 @@ class TaskEventBridge:
     def handle_event(self, event: TaskEvent) -> None:
         """处理任务事件。
 
-        主要逻辑：记录 task event，并在配置输出服务时交给通知协调层。
+        主要逻辑：记录 task event；需要 Agent 决策的事件写入上下文同步记录；允许直
+        发的事件才交给通知协调层。
         参数：`event` 为任务事件。
         返回值：无。
         异常情况：底层记录或输出失败时向上抛出。
         """
         if self.recorder and hasattr(self.recorder, "record_task_event"):
             self.recorder.record_task_event(event.session_id or event.task_id, event.__dict__)
-        if self.output_service and hasattr(self.output_service, "notify_task_event"):
+        if event.requires_agent_decision and self.recorder and hasattr(self.recorder, "record_agent_event"):
+            self.recorder.record_agent_event(
+                event.session_id or event.task_id,
+                {
+                    "event": "task.requires_agent_context_sync",
+                    "task_id": event.task_id,
+                    "task_type": event.task_type,
+                    "task_event_name": event.event_name,
+                    "payload": event.payload,
+                },
+            )
+        if event.allow_direct_notify and self.output_service and hasattr(self.output_service, "notify_task_event"):
             self.output_service.notify_task_event(event)
 
     def convert_event_to_agent_turn(self, event: TaskEvent) -> dict:

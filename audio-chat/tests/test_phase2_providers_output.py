@@ -1,9 +1,11 @@
 import json
+import wave
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta
-from audio_chat.output.service import OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
+from audio_chat.output.service import NotificationRequest, OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
+from audio_chat.tasks import TaskEvent, TaskEventBridge
 
 
 class Connection:
@@ -342,3 +344,163 @@ def test_each_output_stream_gets_independent_tts_session(tmp_path) -> None:
 
     stream_ids = {chunk.stream_id for chunk in connection.chunks}
     assert len(stream_ids) == 2
+
+
+def test_cached_prompt_audio_reuses_audio_and_records_wav(tmp_path) -> None:
+    """测试目标：验证缓存提示音复用音频，并沉淀为可回放 wav。
+
+    测试方法：两次使用同一个 cache_key 提交提示音，读取端侧 chunk、agent 事件和 wav 文件。
+    预期结果：两次输出字节一致，第二次命中缓存，两个会话都生成 wav 回放产物。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    fmt = StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40)
+
+    first = app.output_service.submit_cached_prompt_audio(
+        user_id="user-001",
+        session_id="sess-cache-one",
+        cache_key="timer-done",
+        text="timer done",
+        format=fmt,
+    )
+    second = app.output_service.submit_cached_prompt_audio(
+        user_id="user-001",
+        session_id="sess-cache-two",
+        cache_key="timer-done",
+        text="changed text should not regenerate",
+        format=fmt,
+    )
+
+    assert first.action == "play_now"
+    assert second.action == "play_now"
+    assert len(connection.chunks) == 2
+    assert connection.chunks[0].payload == connection.chunks[1].payload
+    first_events = (tmp_path / "runs" / "sessions" / "sess-cache-one" / "model-events.jsonl").read_text()
+    second_events = (tmp_path / "runs" / "sessions" / "sess-cache-two" / "model-events.jsonl").read_text()
+    assert '"cached": false' in first_events
+    assert '"cached": true' in second_events
+    wavs = list((tmp_path / "runs" / "sessions" / "sess-cache-two").glob("output-*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0]), "rb") as handle:
+        assert handle.getframerate() == 16000
+        assert handle.getnchannels() == 1
+        assert handle.getnframes() > 0
+
+
+def test_notification_coordinator_respects_task_event_notify_and_agent_sync(tmp_path) -> None:
+    """测试目标：验证 TaskEvent 能区分直接通知和 Agent 上下文同步。
+
+    测试方法：构造一个禁止直接播报、但要求 Agent 决策的任务事件，经 TaskEventBridge 处理。
+    预期结果：不产生端侧音频，task event 和 agent sync 事件都会写入 runs。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    bridge = TaskEventBridge(recorder=app.recorder, output_service=app.output_service)
+    event = TaskEvent(
+        task_id="task-nav-001",
+        task_type="navigation",
+        event_name="reroute_required",
+        user_id="user-001",
+        session_id="sess-task",
+        payload={"text": "需要重新规划路线"},
+        requires_agent_decision=True,
+        allow_direct_notify=False,
+    )
+
+    bridge.handle_event(event)
+
+    assert connection.chunks == []
+    task_events = (tmp_path / "runs" / "sessions" / "sess-task" / "task-events.jsonl").read_text()
+    agent_events = (tmp_path / "runs" / "sessions" / "sess-task" / "agent-events.jsonl").read_text()
+    assert "reroute_required" in task_events
+    assert "task.requires_agent_context_sync" in agent_events
+
+
+def test_notification_dedupe_and_merge_decisions_are_observable(tmp_path) -> None:
+    """测试目标：验证通知协调层的去重、合并和可观测决策。
+
+    测试方法：提交重复 dedupe_key 通知，再提交两个 merge_key 相同的通知并 flush。
+    预期结果：重复通知被丢弃，合并通知只播报一次，debug snapshot 暴露通知决策。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    coordinator = app.output_service.notification_coordinator
+
+    first = coordinator.submit(
+        NotificationRequest(
+            user_id="user-001",
+            session_id="sess-notify-one",
+            text="first",
+            dedupe_key="notify-1",
+        )
+    )
+    duplicate = coordinator.submit(
+        NotificationRequest(
+            user_id="user-001",
+            session_id="sess-notify-one",
+            text="duplicate",
+            dedupe_key="notify-1",
+        )
+    )
+    coordinator.submit(
+        NotificationRequest(
+            user_id="user-001",
+            session_id="sess-notify-merge",
+            text="left",
+            merge_key="traffic",
+            merge_window_seconds=5,
+        )
+    )
+    merged = coordinator.submit(
+        NotificationRequest(
+            user_id="user-001",
+            session_id="sess-notify-merge",
+            text="right",
+            merge_key="traffic",
+            merge_window_seconds=5,
+        )
+    )
+    flushed = coordinator.flush_merge("traffic")
+
+    assert first.action == "route"
+    assert duplicate.action == "drop"
+    assert merged.action == "merge"
+    assert flushed is not None and flushed.action == "route"
+    assert any(chunk.session_id == "sess-notify-merge" for chunk in connection.chunks)
+    snapshot = app.output_service.debug_snapshot()
+    actions = [decision["action"] for decision in snapshot["notifications"]["recent_decisions"]]
+    assert {"route", "drop", "merge"}.issubset(actions)
+
+
+def test_playback_debug_snapshot_records_active_queue_and_decisions(tmp_path) -> None:
+    """测试目标：验证播放仲裁调试快照包含 active、queue 和最近决策。
+
+    测试方法：让一个 normal 输出占用播放，再提交同优先级 queue 输出后读取 debug snapshot。
+    预期结果：快照和磁盘文件都包含当前 active 与排队输出。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    active = OutputItem(user_id="user-001", session_id="sess-active-debug", priority="normal")
+    queued = OutputItem(user_id="user-001", session_id="sess-queued-debug", priority="normal", on_blocked="queue")
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-active-debug", text="active", intent=active)
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-queued-debug", text="queued", intent=queued)
+    )
+
+    snapshot = app.output_service.debug_snapshot()
+    assert snapshot["active"]["user-001"]["session_id"] == "sess-active-debug"
+    assert snapshot["queued"]["user-001"][0]["session_id"] == "sess-queued-debug"
+    assert any(decision["action"] == "queue" for decision in snapshot["recent_decisions"])
+    saved = json.loads((tmp_path / "runs" / "debug" / "playback.json").read_text())
+    assert saved["active"]["user-001"]["session_id"] == "sess-active-debug"

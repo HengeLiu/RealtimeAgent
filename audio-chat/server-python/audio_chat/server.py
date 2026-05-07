@@ -112,6 +112,7 @@ class AudioChatHttpServer:
         app.router.add_get("/api/debug/devices", self.debug_devices)
         app.router.add_get("/api/debug/devices/{device_id}", self.debug_device)
         app.router.add_get("/api/debug/users/{user_id}", self.debug_user)
+        app.router.add_get("/api/debug/playback", self.debug_playback)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
         return app
@@ -154,6 +155,11 @@ class AudioChatHttpServer:
         异常情况：无。
         """
         return web.json_response(self.audio_app.control_service.build_user_snapshot(request.match_info["user_id"]))
+
+    async def debug_playback(self, _request: web.Request) -> web.Response:
+        """返回播放仲裁快照。"""
+
+        return web.json_response(self.audio_app.output_service.debug_snapshot())
 
     async def control_ws(self, request: web.Request) -> web.WebSocketResponse:
         """处理控制 WebSocket。

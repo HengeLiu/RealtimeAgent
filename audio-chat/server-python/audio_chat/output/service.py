@@ -31,6 +31,7 @@ class OutputItem:
     on_blocked: str | None = None
     ttl_seconds: int = 0
     dedupe_key: str | None = None
+    cached_prompt_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,10 @@ class PlaybackDecision:
     active_stream_id: str | None = None
     interrupted_stream_id: str | None = None
     queued_intent_id: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    priority: str | None = None
+    created_at: float = field(default_factory=time.time)
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,10 @@ class NotificationRequest:
     priority: str = "normal"
     ttl_seconds: int = 0
     dedupe_key: str | None = None
+    merge_key: str | None = None
+    merge_window_seconds: float = 1.0
+    allow_direct_notify: bool = True
+    requires_agent_context_sync: bool = False
     metadata: dict = field(default_factory=dict)
 
 
@@ -78,6 +87,8 @@ class NotificationDecision:
     action: str
     reason: str
     dedupe_key: str | None = None
+    merge_key: str | None = None
+    requires_agent_context_sync: bool = False
 
 
 class NotificationCoordinator:
@@ -89,6 +100,8 @@ class NotificationCoordinator:
     def __init__(self, *, output_service: "OutputService | None" = None) -> None:
         self.output_service = output_service
         self._seen_dedupe_keys: set[str] = set()
+        self._pending_merge: dict[str, tuple[float, NotificationRequest]] = {}
+        self._decisions: list[NotificationDecision] = []
 
     def submit(self, request: NotificationRequest) -> NotificationDecision:
         """提交通知。
@@ -99,9 +112,58 @@ class NotificationCoordinator:
         异常情况：下游输出失败时向上抛出。
         """
         if request.dedupe_key and request.dedupe_key in self._seen_dedupe_keys:
-            return NotificationDecision(action="drop", reason="dedupe", dedupe_key=request.dedupe_key)
+            decision = NotificationDecision(
+                action="drop",
+                reason="dedupe",
+                dedupe_key=request.dedupe_key,
+                merge_key=request.merge_key,
+                requires_agent_context_sync=request.requires_agent_context_sync,
+            )
+            self._record_decision(decision)
+            return decision
         if request.dedupe_key:
             self._seen_dedupe_keys.add(request.dedupe_key)
+        if request.merge_key:
+            now = time.time()
+            existing = self._pending_merge.get(request.merge_key)
+            if existing is not None and now - existing[0] <= request.merge_window_seconds:
+                previous = existing[1]
+                merged = NotificationRequest(
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    text=f"{previous.text}\n{request.text}".strip(),
+                    priority=_higher_priority(previous.priority, request.priority),
+                    ttl_seconds=max(previous.ttl_seconds, request.ttl_seconds),
+                    dedupe_key=request.dedupe_key,
+                    merge_key=request.merge_key,
+                    merge_window_seconds=request.merge_window_seconds,
+                    allow_direct_notify=request.allow_direct_notify and previous.allow_direct_notify,
+                    requires_agent_context_sync=(
+                        request.requires_agent_context_sync or previous.requires_agent_context_sync
+                    ),
+                    metadata={**previous.metadata, **request.metadata, "merged": True},
+                )
+                self._pending_merge[request.merge_key] = (now, merged)
+                decision = NotificationDecision(
+                    action="merge",
+                    reason="merge_window",
+                    dedupe_key=request.dedupe_key,
+                    merge_key=request.merge_key,
+                    requires_agent_context_sync=merged.requires_agent_context_sync,
+                )
+                self._record_decision(decision)
+                return decision
+            self._pending_merge[request.merge_key] = (now, request)
+        if not request.allow_direct_notify:
+            decision = NotificationDecision(
+                action="hold",
+                reason="direct_notify_disabled",
+                dedupe_key=request.dedupe_key,
+                merge_key=request.merge_key,
+                requires_agent_context_sync=request.requires_agent_context_sync,
+            )
+            self._record_decision(decision)
+            return decision
         if self.output_service is not None and request.text:
             self.output_service.submit_text(
                 user_id=request.user_id,
@@ -110,7 +172,56 @@ class NotificationCoordinator:
                 priority=request.priority,
                 ttl_seconds=request.ttl_seconds,
             )
-        return NotificationDecision(action="route", reason="accepted", dedupe_key=request.dedupe_key)
+        decision = NotificationDecision(
+            action="route",
+            reason="accepted",
+            dedupe_key=request.dedupe_key,
+            merge_key=request.merge_key,
+            requires_agent_context_sync=request.requires_agent_context_sync,
+        )
+        self._record_decision(decision)
+        return decision
+
+    def flush_merge(self, merge_key: str) -> NotificationDecision | None:
+        """提交一条合并后的通知。"""
+
+        item = self._pending_merge.pop(merge_key, None)
+        if item is None:
+            return None
+        _created_at, request = item
+        if self.output_service is not None and request.text and request.allow_direct_notify:
+            self.output_service.submit_text(
+                user_id=request.user_id,
+                session_id=request.session_id,
+                text=request.text,
+                priority=request.priority,
+                ttl_seconds=request.ttl_seconds,
+            )
+        decision = NotificationDecision(
+            action="route" if request.allow_direct_notify else "hold",
+            reason="merged_flush" if request.allow_direct_notify else "direct_notify_disabled",
+            dedupe_key=request.dedupe_key,
+            merge_key=request.merge_key,
+            requires_agent_context_sync=request.requires_agent_context_sync,
+        )
+        self._record_decision(decision)
+        return decision
+
+    def recent_decisions(self, limit: int = 20) -> list[dict]:
+        """返回最近通知决策快照。"""
+
+        return [decision.__dict__ for decision in self._decisions[-limit:]]
+
+    def _record_decision(self, decision: NotificationDecision) -> None:
+        self._decisions.append(decision)
+        if len(self._decisions) > 100:
+            self._decisions = self._decisions[-100:]
+
+
+def _higher_priority(left: str, right: str) -> str:
+    """返回两种优先级中更高的一项。"""
+
+    return left if PRIORITY_ORDER.get(left, 0) >= PRIORITY_ORDER.get(right, 0) else right
 
 
 @dataclass(frozen=True)
@@ -375,8 +486,39 @@ class NativeAudioOutputSource:
 
 
 @dataclass
+class CachedAudioOutputSource:
+    """缓存提示音输出源。"""
+
+    cache_key: str
+    audio: bytes
+    format: StreamFormat
+    metadata: dict = field(default_factory=dict)
+    final_requested: bool = True
+
+    def append_text(self, text: str) -> None:
+        return None
+
+    def mark_final(self) -> None:
+        self.final_requested = True
+
+    def stream_format(self) -> StreamFormat:
+        return self.format
+
+    def synthesize_pending(self) -> bytes:
+        payload = self.audio
+        self.audio = b""
+        return payload
+
+    def metrics(self) -> dict:
+        return {"provider": "cached_prompt_audio", "cache_key": self.cache_key, **self.metadata}
+
+    def finish(self) -> None:
+        return None
+
+
+@dataclass
 class QueuedOutput:
-    source: StreamingTtsOutputSource | NativeAudioOutputSource
+    source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource
     intent: OutputItem
     created_at: float = field(default_factory=time.time)
     source_stream_id: str | None = None
@@ -387,20 +529,24 @@ class PlaybackArbiter:
         self.stream_service = stream_service
         self.recorder = recorder
         self.max_queue_size = max_queue_size
-        self._active_by_user: dict[str, tuple[OutputItem, str, StreamingTtsOutputSource | NativeAudioOutputSource]] = {}
+        self._active_by_user: dict[
+            str,
+            tuple[OutputItem, str, StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource],
+        ] = {}
         self._queue_by_user: dict[str, list[QueuedOutput]] = {}
+        self._recent_decisions: list[PlaybackDecision] = []
 
     def submit(
         self,
         *,
-        source: StreamingTtsOutputSource | NativeAudioOutputSource,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
         intent: OutputItem,
         format: StreamFormat | None = None,
     ) -> tuple[PlaybackDecision, str | None]:
         active = self._active_by_user.get(intent.user_id)
         if active is None:
             stream_id = self._open_output_stream(intent, source=source, format=format)
-            decision = PlaybackDecision(action="play_now", reason="no_active_playback", active_stream_id=stream_id)
+            decision = PlaybackDecision(action="play_now", reason="no_active_playback", active_stream_id=stream_id, user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
             self._record(intent.session_id, decision)
             return decision, stream_id
         active_intent, active_stream_id, active_source = active
@@ -416,20 +562,23 @@ class PlaybackArbiter:
                 reason="higher_priority",
                 active_stream_id=stream_id,
                 interrupted_stream_id=active_stream_id,
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                priority=intent.priority,
             )
             self._record(intent.session_id, decision)
             return decision, stream_id
         if intent.on_blocked == "queue":
             queue = self._queue_by_user.setdefault(intent.user_id, [])
             if len(queue) >= self.max_queue_size:
-                decision = PlaybackDecision(action="drop", reason="queue_full")
+                decision = PlaybackDecision(action="drop", reason="queue_full", user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
                 self._record(intent.session_id, decision)
                 return decision, None
             queue.append(QueuedOutput(source=source, intent=intent))
-            decision = PlaybackDecision(action="queue", reason="active_playback_not_preempted")
+            decision = PlaybackDecision(action="queue", reason="active_playback_not_preempted", queued_intent_id=intent.dedupe_key or intent.session_id, user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
             self._record(intent.session_id, decision)
             return decision, None
-        decision = PlaybackDecision(action="drop", reason="active_playback_not_preempted")
+        decision = PlaybackDecision(action="drop", reason="active_playback_not_preempted", user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
         self._record(intent.session_id, decision)
         return decision, None
 
@@ -442,12 +591,12 @@ class PlaybackArbiter:
     def cancel_current(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
         active = self._active_by_user.pop(user_id, None)
         if active is None:
-            decision = PlaybackDecision(action="cancel_current", reason="no_active_playback")
+            decision = PlaybackDecision(action="cancel_current", reason="no_active_playback", user_id=user_id, session_id=session_id)
             self._record(session_id or "interruptions", decision)
             return decision
         _intent, stream_id, _source = active
         self.stream_service.cancel_stream(stream_id, reason=reason)
-        decision = PlaybackDecision(action="cancel_current", reason=reason, interrupted_stream_id=stream_id)
+        decision = PlaybackDecision(action="cancel_current", reason=reason, interrupted_stream_id=stream_id, user_id=user_id, session_id=session_id, priority=_intent.priority)
         self._record(session_id or "interruptions", decision)
         return decision
 
@@ -456,7 +605,7 @@ class PlaybackArbiter:
         while queue:
             queued = queue.pop(0)
             if queued.intent.ttl_seconds and time.time() - queued.created_at > queued.intent.ttl_seconds:
-                self._record(queued.intent.session_id, PlaybackDecision(action="drop", reason="ttl_expired"))
+                self._record(queued.intent.session_id, PlaybackDecision(action="drop", reason="ttl_expired", user_id=queued.intent.user_id, session_id=queued.intent.session_id, priority=queued.intent.priority))
                 continue
             return queued
         return None
@@ -465,7 +614,7 @@ class PlaybackArbiter:
         stream_id = self._open_output_stream(queued.intent, source=queued.source, format=format)
         self._record(
             queued.intent.session_id,
-            PlaybackDecision(action="play_now", reason="queued_playback_ready", active_stream_id=stream_id),
+            PlaybackDecision(action="play_now", reason="queued_playback_ready", active_stream_id=stream_id, user_id=queued.intent.user_id, session_id=queued.intent.session_id, priority=queued.intent.priority),
         )
         return stream_id
 
@@ -473,7 +622,7 @@ class PlaybackArbiter:
         self,
         intent: OutputItem,
         *,
-        source: StreamingTtsOutputSource | NativeAudioOutputSource,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
         format: StreamFormat | None = None,
     ) -> str:
         handle = self.stream_service.open_stream(
@@ -488,7 +637,43 @@ class PlaybackArbiter:
         return handle.stream_id
 
     def _record(self, session_id: str, decision: PlaybackDecision) -> None:
+        self._recent_decisions.append(decision)
+        if len(self._recent_decisions) > 100:
+            self._recent_decisions = self._recent_decisions[-100:]
         self.recorder.record_playback_decision(session_id, decision.__dict__)
+
+    def debug_snapshot(self, *, recent_limit: int = 20) -> dict:
+        """返回播放仲裁调试快照。"""
+
+        snapshot = {
+            "active": {
+                user_id: {
+                    "session_id": intent.session_id,
+                    "stream_id": stream_id,
+                    "priority": intent.priority,
+                    "source": intent.source,
+                    "on_interrupted": intent.on_interrupted,
+                    "on_blocked": intent.on_blocked,
+                }
+                for user_id, (intent, stream_id, _source) in self._active_by_user.items()
+            },
+            "queued": {
+                user_id: [
+                    {
+                        "session_id": queued.intent.session_id,
+                        "priority": queued.intent.priority,
+                        "source": queued.intent.source,
+                        "ttl_seconds": queued.intent.ttl_seconds,
+                        "age_ms": int((time.time() - queued.created_at) * 1000),
+                    }
+                    for queued in queue
+                ]
+                for user_id, queue in self._queue_by_user.items()
+            },
+            "recent_decisions": [decision.__dict__ for decision in self._recent_decisions[-recent_limit:]],
+        }
+        self.recorder.write_playback_snapshot(snapshot)
+        return snapshot
 
 
 class OutputRouter:
@@ -515,8 +700,10 @@ class OutputRouter:
         self._stream_by_session: dict[str, str] = {}
         self._seq_by_stream: dict[str, int] = {}
         self._source_by_session: dict[str, StreamingTtsOutputSource] = {}
-        self._source_by_stream: dict[str, StreamingTtsOutputSource | NativeAudioOutputSource] = {}
+        self._source_by_stream: dict[str, StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource] = {}
         self._native_source_by_session: dict[str, NativeAudioOutputSource] = {}
+        self._cached_audio_by_key: dict[tuple[str, int, int], bytes] = {}
+        self._payload_by_stream: dict[str, bytearray] = {}
         self._queued_sessions: set[str] = set()
 
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
@@ -559,6 +746,7 @@ class OutputRouter:
                 final=False,
             )
             self.stream_service.write_chunk(chunk)
+            self._payload_by_stream.setdefault(stream_id, bytearray()).extend(payload)
             self.recorder.record_agent_event(
                 delta.session_id,
                 {
@@ -659,6 +847,7 @@ class OutputRouter:
                     metadata={"source": "native_audio", **dict(metadata or {})},
                 )
                 self.stream_service.write_chunk(chunk)
+                self._payload_by_stream.setdefault(stream_id, bytearray()).extend(part)
                 written_bytes += len(part)
                 chunk_count += 1
                 seq += 1
@@ -687,9 +876,29 @@ class OutputRouter:
         user_id: str,
         session_id: str,
         stream_id: str,
-        source: StreamingTtsOutputSource | NativeAudioOutputSource,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
     ) -> None:
         source.finish()
+        handle = self.stream_service.registry.get(stream_id)
+        payload = bytes(self._payload_by_stream.pop(stream_id, bytearray()))
+        if payload and handle.format.codec == "pcm16le":
+            self.recorder.record_output_wav(
+                session_id=session_id,
+                stream_id=stream_id,
+                pcm=payload,
+                sample_rate=handle.format.sample_rate,
+                channels=handle.format.channels,
+            )
+        self.recorder.record_stream_event(
+            session_id,
+            {
+                "event": "stream.output.summary",
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+                "payload_size": len(payload),
+                "source": source.metrics(),
+            },
+        )
         self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
         self._stream_by_session.pop(session_id, None)
         self._source_by_stream.pop(stream_id, None)
@@ -717,6 +926,7 @@ class OutputRouter:
                 final=False,
             )
             self.stream_service.write_chunk(chunk)
+            self._payload_by_stream.setdefault(stream_id, bytearray()).extend(payload)
             self.recorder.record_agent_event(
                 queued.intent.session_id,
                 {
@@ -741,6 +951,7 @@ class OutputRouter:
             on_blocked=intent.on_blocked if intent.on_blocked is not None else self.default_on_blocked,
             ttl_seconds=intent.ttl_seconds,
             dedupe_key=intent.dedupe_key,
+            cached_prompt_key=intent.cached_prompt_key,
         )
 
     def _split_native_audio_payload(self, payload: bytes, *, source: NativeAudioOutputSource) -> list[bytes]:
@@ -769,7 +980,83 @@ class OutputRouter:
             self.recorder.record_system_event(
                 {"event": "system.degradation.raised", "component": "StreamingTTS", "reason": downgrade_reason}
             )
+        if not self.tts_config.streaming or not getattr(tts, "streaming", True):
+            self.recorder.record_system_event(
+                {
+                    "event": "system.degradation.raised",
+                    "component": "StreamingTTS",
+                    "reason": "tts_provider_streaming_disabled",
+                    "provider": getattr(tts, "provider_name", "unknown"),
+                    "model": getattr(tts, "model", "unknown"),
+                }
+            )
         return tts
+
+    def submit_cached_prompt_audio(
+        self,
+        *,
+        intent: OutputItem,
+        cache_key: str,
+        text: str,
+        format: StreamFormat,
+    ) -> PlaybackDecision:
+        """提交缓存提示音。"""
+
+        key = (cache_key, format.sample_rate, format.channels)
+        audio = self._cached_audio_by_key.get(key)
+        cached_hit = audio is not None
+        if audio is None:
+            audio = MockStreamingTTS(sample_rate_hz=format.sample_rate).synthesize_delta(text)
+            self._cached_audio_by_key[key] = audio
+        source = CachedAudioOutputSource(cache_key=cache_key, audio=audio, format=format, metadata={"cached": cached_hit})
+        resolved_intent = self._intent_with_defaults(
+            OutputItem(
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                source=intent.source or "cached_prompt_audio",
+                priority=intent.priority,
+                on_interrupted=intent.on_interrupted,
+                on_blocked=intent.on_blocked,
+                ttl_seconds=intent.ttl_seconds,
+                dedupe_key=intent.dedupe_key,
+                cached_prompt_key=cache_key,
+            )
+        )
+        decision, stream_id = self.arbiter.submit(source=source, intent=resolved_intent, format=format)
+        if decision.action in {"drop", "queue"} or stream_id is None:
+            return decision
+        self._stream_by_session[resolved_intent.session_id] = stream_id
+        self._source_by_stream[stream_id] = source
+        payload = source.synthesize_pending()
+        if payload:
+            chunk = StreamChunk(
+                user_id=resolved_intent.user_id,
+                session_id=resolved_intent.session_id,
+                stream_id=stream_id,
+                stream_type="actuator.speaker",
+                seq=self._seq_by_stream.get(stream_id, 0),
+                payload=payload,
+                codec=format.codec,
+                sample_rate=format.sample_rate,
+                channels=format.channels,
+                duration_ms=format.chunk_ms,
+                final=False,
+                metadata={"source": "cached_prompt_audio", "cache_key": cache_key},
+            )
+            self.stream_service.write_chunk(chunk)
+            self._payload_by_stream.setdefault(stream_id, bytearray()).extend(payload)
+            self.recorder.record_agent_event(
+                resolved_intent.session_id,
+                {
+                    "event": "assistant_audio.delta",
+                    "stream_id": stream_id,
+                    "payload_size": len(payload),
+                    "cached_prompt_audio": source.metrics(),
+                    "stream_format": format.__dict__,
+                },
+            )
+        self._finish_stream(resolved_intent.user_id, resolved_intent.session_id, stream_id, source)
+        return decision
 
 
 class OutputService:
@@ -865,6 +1152,33 @@ class OutputService:
             metadata={"source": "tool_audio", **dict(metadata or {})},
         )
 
+    def submit_cached_prompt_audio(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        cache_key: str,
+        text: str,
+        priority: str = "low",
+        ttl_seconds: int = 10,
+        format: StreamFormat | None = None,
+    ) -> PlaybackDecision:
+        """提交缓存提示音。"""
+
+        return self.router.submit_cached_prompt_audio(
+            intent=OutputItem(
+                user_id=user_id,
+                session_id=session_id,
+                source="cached_prompt_audio",
+                priority=priority,
+                ttl_seconds=ttl_seconds,
+                cached_prompt_key=cache_key,
+            ),
+            cache_key=cache_key,
+            text=text,
+            format=format or StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
+        )
+
     def notify_task_event(self, event: Any) -> NotificationDecision:
         """接收任务事件通知。
 
@@ -883,7 +1197,14 @@ class OutputService:
                 priority=getattr(event, "priority", "normal"),
                 ttl_seconds=getattr(event, "ttl_seconds", 0),
                 dedupe_key=getattr(event, "dedupe_key", None),
-                metadata={"task_id": getattr(event, "task_id", ""), "task_type": getattr(event, "task_type", "")},
+                merge_key=payload.get("merge_key") or payload.get("notification_group"),
+                allow_direct_notify=bool(getattr(event, "allow_direct_notify", True)),
+                requires_agent_context_sync=bool(getattr(event, "requires_agent_decision", False)),
+                metadata={
+                    "task_id": getattr(event, "task_id", ""),
+                    "task_type": getattr(event, "task_type", ""),
+                    "event_name": getattr(event, "event_name", ""),
+                },
             )
         )
 
@@ -904,3 +1225,10 @@ class OutputService:
                     self.router._stream_by_session.pop(stored_session, None)
                     self.router._native_source_by_session.pop(stored_session, None)
         return decision
+
+    def debug_snapshot(self) -> dict:
+        """返回 Output Service 调试快照。"""
+
+        snapshot = self.router.arbiter.debug_snapshot()
+        snapshot["notifications"] = {"recent_decisions": self.notification_coordinator.recent_decisions()}
+        return snapshot
