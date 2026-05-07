@@ -27,5 +27,6 @@ def test_python_playback_minimal_loop_writes_runs_artifacts(tmp_path: Path) -> N
     assert (session_dir / "agent-events.jsonl").exists()
     assert (session_dir / "model-events.jsonl").exists()
     assert (session_dir / "playback-result.json").exists()
+    assert (session_dir / "result.json").exists()
     assert list(session_dir.glob("input-*.pcm"))
     assert list(session_dir.glob("output-*.pcm"))

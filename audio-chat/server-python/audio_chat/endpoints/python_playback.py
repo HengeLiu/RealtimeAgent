@@ -193,6 +193,10 @@ class PythonPlaybackEndpoint:
         }
         result["passed"] = all(result["assertions"].values()) and result["output_chunk_count"] > 0
         self.app.recorder.record_playback_result(handle.session_id, result)
+        self.app.recorder.write_result(
+            handle.session_id,
+            {"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result},
+        )
         return result
 
 
@@ -212,20 +216,80 @@ class NetworkPythonPlaybackEndpoint:
         device_id: str,
         runs_root: str = "runs/audio-chat",
         auth: dict[str, Any] | None = None,
+        device_name: str = "python-playback",
+        client_type: str = "python-playback",
+        capabilities: dict[str, Any] | None = None,
+        subscriptions: list[dict[str, Any]] | None = None,
+        rgb_payload: bytes | None = None,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.user_id = user_id
         self.device_id = device_id
         self.runs_root = Path(runs_root)
         self.auth = auth or {"mode": "disabled"}
+        self.device_name = device_name
+        self.client_type = client_type
+        self.capabilities = capabilities or {
+            "streams.produce": ["sensor.mic", "sensor.rgb"],
+            "streams.consume": ["actuator.speaker"],
+            "audio.wake_word": "endpoint",
+            "audio.aec": "endpoint",
+            "sensor.rgb": True,
+        }
+        self.subscriptions = subscriptions or [
+            {"event": "control.audio_session.*"},
+            {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+            {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+        ]
+        self.rgb_payload = rgb_payload or b"\xff\xd8mock-rgb-network\xff\xd9"
         self.sent_events: list[Event] = []
         self.received_events: list[Event] = []
         self.output_chunks: list[StreamChunk] = []
+        self.asset_uploads: list[dict[str, Any]] = []
         self._started_output_streams: set[str] = set()
         self._session_id: str | None = None
         self._input_stream_id: str | None = None
         self._output_closed = asyncio.Event()
         self._session_closed = asyncio.Event()
+        self._registered = asyncio.Event()
+
+    async def run_until_registered(self, *, session: ClientSession | None = None):
+        """建立控制连接并完成注册，返回控制 WebSocket。
+
+        功能：
+        1. 供多设备 mock 先注册不同能力设备。
+        2. 复用真实 `/ws/control` 路径，不走 server 内部 mock。
+
+        参数：
+        1. `session`：可选 aiohttp ClientSession；为空时由调用方不应使用本方法。
+
+        返回值：
+        1. 已完成注册的控制 WebSocket。
+
+        异常情况：
+        1. server 未启动、注册失败或协议响应异常时抛出 RuntimeError。
+        """
+
+        if session is None:
+            raise ValueError("run_until_registered requires an existing ClientSession")
+        control_ws = await session.ws_connect(self._control_url())
+        await self._send_event(control_ws, self._registration_event())
+        registered = await self._receive_event(control_ws)
+        self.received_events.append(registered)
+        if registered.event_name != "control.device.registered":
+            await control_ws.close()
+            raise RuntimeError(f"device registration failed: {registered.payload}")
+        await self._send_event(
+            control_ws,
+            Event(
+                event_name="control.device.heartbeat.received",
+                user_id=self.user_id,
+                producer_id=self.device_id,
+                payload={"connection_id": registered.payload.get("connection_id")},
+            ),
+        )
+        self._registered.set()
+        return control_ws
 
     async def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
         """执行一次网络 playback 闭环。
@@ -237,27 +301,9 @@ class NetworkPythonPlaybackEndpoint:
         异常情况：server 未启动、协议错误或断言超时会抛出异常。
         """
         async with ClientSession() as session:
-            control_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://") + "/ws/control"
-            stream_url = (
-                self.server_url.replace("http://", "ws://").replace("https://", "wss://")
-                + f"/ws/stream?device_id={self.device_id}"
-            )
-            async with session.ws_connect(control_url) as control_ws:
-                await self._send_event(control_ws, self._registration_event())
-                registered = await self._receive_event(control_ws)
-                self.received_events.append(registered)
-                if registered.event_name != "control.device.registered":
-                    raise RuntimeError(f"device registration failed: {registered.payload}")
-                await self._send_event(
-                    control_ws,
-                    Event(
-                        event_name="control.device.heartbeat.received",
-                        user_id=self.user_id,
-                        producer_id=self.device_id,
-                        payload={"connection_id": registered.payload.get("connection_id")},
-                    ),
-                )
-                async with session.ws_connect(stream_url) as stream_ws:
+            control_ws = await self.run_until_registered(session=session)
+            try:
+                async with session.ws_connect(self._stream_url()) as stream_ws:
                     control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, audio_payload))
                     stream_task = asyncio.create_task(self._stream_loop(control_ws, stream_ws))
                     await self._send_event(
@@ -283,6 +329,8 @@ class NetworkPythonPlaybackEndpoint:
                     await asyncio.wait_for(self._session_closed.wait(), timeout=10)
                     control_task.cancel()
                     stream_task.cancel()
+            finally:
+                await control_ws.close()
         return self._build_result()
 
     async def _control_loop(self, control_ws, stream_ws, audio_payload: bytes | None) -> None:
@@ -342,6 +390,8 @@ class NetworkPythonPlaybackEndpoint:
                     ),
                 )
                 self._session_closed.set()
+            elif event.event_name == "stream.control.configure.requested" and event.stream_type == "sensor.rgb":
+                await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
         async for message in stream_ws:
@@ -414,6 +464,69 @@ class NetworkPythonPlaybackEndpoint:
             ),
         )
 
+    async def _open_and_send_rgb_asset(self, control_ws, stream_ws, event: Event) -> None:
+        """按控制事件上传一帧 `sensor.rgb` 资产。
+
+        主要逻辑：端侧收到 `stream.control.configure.requested` 后，使用真实 stream
+        WebSocket 打开 `sensor.rgb` 输入流并携带 request_id 回传 JPEG bytes，避免把图片
+        放进控制事件 payload。
+        参数：`control_ws` 和 `stream_ws` 是当前端侧网络连接，`event` 是配置请求。
+        返回值：无。
+        异常情况：WebSocket 写入失败时向上传递异常。
+        """
+
+        request_id = str(event.payload.get("request_id") or "")
+        stream_id = new_id("stream_rgb")
+        session_id = event.session_id or self._session_id or new_id("sess")
+        metadata = {"request_id": request_id} if request_id else {}
+        await self._send_event(
+            control_ws,
+            Event(
+                event_name="stream.input.opened",
+                user_id=self.user_id,
+                producer_id=self.device_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                stream_type="sensor.rgb",
+                payload={
+                    "stream_type": "sensor.rgb",
+                    "format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
+                },
+            ),
+        )
+        await stream_ws.send_bytes(
+            StreamChunkCodec.encode(
+                StreamChunk(
+                    user_id=self.user_id,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    stream_type="sensor.rgb",
+                    seq=0,
+                    payload=self.rgb_payload,
+                    codec="jpeg",
+                    sample_rate=1,
+                    channels=1,
+                    duration_ms=1,
+                    final=True,
+                    metadata=metadata,
+                )
+            )
+        )
+        await asyncio.sleep(0.05)
+        await self._send_event(
+            control_ws,
+            Event(
+                event_name="stream.input.closed",
+                user_id=self.user_id,
+                producer_id=self.device_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                stream_type="sensor.rgb",
+                payload={"stream_type": "sensor.rgb", "reason": "asset_uploaded"},
+            ),
+        )
+        self.asset_uploads.append({"stream_id": stream_id, "request_id": request_id, "payload_size": len(self.rgb_payload)})
+
     async def _send_event(self, ws, event: Event) -> None:
         self.sent_events.append(event)
         await ws.send_str(json.dumps(event.to_dict(), ensure_ascii=False))
@@ -431,23 +544,22 @@ class NetworkPythonPlaybackEndpoint:
             producer_id=self.device_id,
             payload={
                 "device_id": self.device_id,
-                "device_name": "python-playback",
-                "client_type": "python-playback",
+                "device_name": self.device_name,
+                "client_type": self.client_type,
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": self.auth,
-                "capabilities": {
-                    "streams.produce": ["sensor.mic", "sensor.rgb"],
-                    "streams.consume": ["actuator.speaker"],
-                    "audio.wake_word": "endpoint",
-                    "audio.aec": "endpoint",
-                    "sensor.rgb": True,
-                },
-                "subscriptions": [
-                    {"event": "control.audio_session.*"},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                ],
+                "capabilities": self.capabilities,
+                "subscriptions": self.subscriptions,
             },
+        )
+
+    def _control_url(self) -> str:
+        return self.server_url.replace("http://", "ws://").replace("https://", "wss://") + "/ws/control"
+
+    def _stream_url(self) -> str:
+        return (
+            self.server_url.replace("http://", "ws://").replace("https://", "wss://")
+            + f"/ws/stream?device_id={self.device_id}"
         )
 
     def _build_result(self) -> dict[str, Any]:
@@ -469,6 +581,7 @@ class NetworkPythonPlaybackEndpoint:
             "endpoint_sent_event_names": [event.event_name for event in self.sent_events],
             "output_chunk_count": len(self.output_chunks),
             "output_bytes": sum(len(chunk.payload) for chunk in self.output_chunks),
+            "asset_uploads": list(self.asset_uploads),
             "transport": "network",
         }
         result["assertions"] = {event_name: event_name in result["event_names"] for event_name in PLAYBACK_REQUIRED_EVENTS}
@@ -478,6 +591,11 @@ class NetworkPythonPlaybackEndpoint:
             session_dir.mkdir(parents=True, exist_ok=True)
             (session_dir / "playback-result.json").write_text(
                 json.dumps(result, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            result_record = {"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result}
+            (session_dir / "result.json").write_text(
+                json.dumps(result_record, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         return result

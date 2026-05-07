@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from aiohttp import web
+from aiohttp import ClientSession, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint
@@ -47,6 +47,109 @@ def test_network_playback_over_real_websocket_transport(tmp_path: Path) -> None:
         assert (session_dir / "agent-events.jsonl").exists()
         assert (session_dir / "playback-decisions.jsonl").exists()
         assert (session_dir / "playback-result.json").exists()
+        assert (session_dir / "result.json").exists()
+
+    asyncio.run(run())
+
+
+def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path) -> None:
+    """测试目标：验证同一 user_id 下多设备按 capability/subscription 分发。
+
+    测试方法：启动真实 aiohttp server，注册一台只产 `sensor.rgb` 的设备和一台只消费
+    `actuator.speaker` 的设备；server 侧分别触发资产请求和播报输出。
+    预期结果：RGB 控制请求只到相机设备，speaker chunk 只到播放器设备，不依赖固定设备类型。
+    """
+
+    async def run() -> None:
+        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+        server = AudioChatHttpServer(audio_app)
+        runner = web.AppRunner(server.create_web_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001
+        server_url = f"http://127.0.0.1:{port}"
+        user_id = "user-multi"
+        session_id = "sess-multi"
+        rgb = NetworkPythonPlaybackEndpoint(
+            server_url=server_url,
+            user_id=user_id,
+            device_id="dev-rgb-only",
+            runs_root=str(tmp_path / "runs"),
+            device_name="rgb-only",
+            client_type="python-mock-rgb",
+            capabilities={
+                "streams.produce": ["sensor.rgb"],
+                "streams.consume": [],
+                "sensor.rgb": True,
+            },
+            subscriptions=[
+                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+            ],
+        )
+        speaker = NetworkPythonPlaybackEndpoint(
+            server_url=server_url,
+            user_id=user_id,
+            device_id="dev-speaker-only",
+            runs_root=str(tmp_path / "runs"),
+            device_name="speaker-only",
+            client_type="python-mock-speaker",
+            capabilities={
+                "streams.produce": [],
+                "streams.consume": ["actuator.speaker"],
+            },
+            subscriptions=[
+                {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+            ],
+        )
+        tasks = []
+        try:
+            async with ClientSession() as session:
+                rgb_control = await rgb.run_until_registered(session=session)
+                speaker_control = await speaker.run_until_registered(session=session)
+                rgb_stream = await session.ws_connect(rgb._stream_url())  # noqa: SLF001 - 端侧参考测试复用网络端点内部 URL
+                speaker_stream = await session.ws_connect(speaker._stream_url())  # noqa: SLF001
+                tasks.extend(
+                    [
+                        asyncio.create_task(rgb._control_loop(rgb_control, rgb_stream, None)),  # noqa: SLF001
+                        asyncio.create_task(rgb._stream_loop(rgb_control, rgb_stream)),  # noqa: SLF001
+                        asyncio.create_task(speaker._control_loop(speaker_control, speaker_stream, None)),  # noqa: SLF001
+                        asyncio.create_task(speaker._stream_loop(speaker_control, speaker_stream)),  # noqa: SLF001
+                    ]
+                )
+                asset = await asyncio.to_thread(
+                    audio_app.asset_service.request_asset,
+                    user_id=user_id,
+                    stream_type="sensor.rgb",
+                    freshness_seconds=0,
+                    session_id=session_id,
+                    timeout_seconds=2,
+                )
+                assert asset is not None
+                for _ in range(20):
+                    if rgb.asset_uploads:
+                        break
+                    await asyncio.sleep(0.02)
+                audio_app.output_service.submit_text(user_id=user_id, session_id=session_id, text="multi device route")
+                await asyncio.wait_for(speaker._output_closed.wait(), timeout=5)  # noqa: SLF001
+                await rgb_control.close()
+                await speaker_control.close()
+                await rgb_stream.close()
+                await speaker_stream.close()
+        finally:
+            for task in tasks:
+                task.cancel()
+            await runner.cleanup()
+
+        rgb_received = [event.event_name for event in rgb.received_events]
+        speaker_received = [event.event_name for event in speaker.received_events]
+        assert "stream.control.configure.requested" in rgb_received
+        assert "stream.control.configure.requested" not in speaker_received
+        assert rgb.asset_uploads and rgb.asset_uploads[0]["payload_size"] > 0
+        assert speaker.output_chunks
+        assert not rgb.output_chunks
+        snapshot = audio_app.control_service.build_user_snapshot(user_id)
+        assert {device["device_id"] for device in snapshot["devices"]} == {"dev-rgb-only", "dev-speaker-only"}
 
     asyncio.run(run())
 
