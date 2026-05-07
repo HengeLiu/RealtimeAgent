@@ -1,0 +1,13 @@
+{
+  "event_id": "evt-contract-control-device-heartbeat-received",
+  "event_name": "control.device.heartbeat.received",
+  "payload": {
+    "contract_case": "control.device.heartbeat.received",
+    "device_id": "dev-contract",
+    "status": "online"
+  },
+  "producer_id": "server-main",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

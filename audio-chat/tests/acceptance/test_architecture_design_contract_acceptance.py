@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import re
 from pathlib import Path
+import tomllib
 
 from audio_chat.config import load_yaml_config
+from audio_chat.protocol import CONTROL_EVENTS, STREAM_TYPES
 
 
 def test_public_extension_contract_exports_required_developer_api() -> None:
@@ -171,3 +174,56 @@ def test_contract_golden_assets_exist_for_protocol_and_playback() -> None:
     for directory in required_dirs:
         assert directory.is_dir(), str(directory)
         assert any(path.is_file() for path in directory.iterdir()), str(directory)
+
+
+def test_release_gate_contracts_cover_builtin_events_and_streams() -> None:
+    """测试目标：确认每个内置事件和 stream 类型都有契约文件。
+
+    测试方法：按运行时代码中的 `CONTROL_EVENTS` 和 `STREAM_TYPES` 枚举查找 golden JSON。
+    预期结果：新增事件或 stream 类型时，必须同步契约样例。
+    """
+
+    contracts_root = Path(__file__).resolve().parents[2] / "testdata/contracts"
+    missing_events = [
+        event_name
+        for event_name in sorted(CONTROL_EVENTS)
+        if not (contracts_root / "events" / f"{event_name.replace('.', '_')}.json").exists()
+    ]
+    missing_streams = [
+        stream_type
+        for stream_type in sorted(STREAM_TYPES)
+        if not (contracts_root / "streams" / f"{stream_type.replace('.', '_')}.json").exists()
+    ]
+
+    assert missing_events == []
+    assert missing_streams == []
+
+
+def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
+    """测试目标：确认 README 只写真实 CLI，设计文档中未来 CLI 明确标注。
+
+    测试方法：读取 pyproject entry point 并扫描 README / docs 的 audio-chat 点分命令。
+    预期结果：当前入口可执行；未落地入口必须在附近标注后续目标或未落地。
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    scripts = set(pyproject["project"]["scripts"])
+    readme_commands = set(re.findall(r"\baudio-chat\.[a-z0-9.-]+", (root / "README.md").read_text(encoding="utf-8")))
+    assert readme_commands <= scripts
+
+    markers = ("后续目标", "未落地", "建议", "目标", "可选增强", "下一阶段", "应", "未来", "旧 SDK")
+    prefixes = ("server.", "dev.", "playback.", "config.", "mock.", "web.", "ios.", "esp32.")
+    offenders = []
+    for path in sorted((root / "docs").glob("*.md")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            for command in re.findall(r"\baudio-chat\.[a-z0-9.-]+", line):
+                if not command.removeprefix("audio-chat.").startswith(prefixes) or command in scripts:
+                    continue
+                window = "\n".join(lines[max(0, index - 6) : min(len(lines), index + 3)])
+                if not any(marker in window for marker in markers):
+                    offenders.append(f"{path.relative_to(root)}:{index + 1}:{command}")
+
+    assert offenders == []
+

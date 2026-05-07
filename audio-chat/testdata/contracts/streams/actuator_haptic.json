@@ -1,0 +1,10 @@
+{
+  "channels": null,
+  "chunk_ms": null,
+  "codec": "application/octet-stream",
+  "contract_case": "actuator.haptic",
+  "direction": "output",
+  "sample_rate": null,
+  "stream_type": "actuator.haptic",
+  "version": "audio-chat.v1"
+}

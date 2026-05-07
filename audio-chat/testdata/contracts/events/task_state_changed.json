@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-contract-task-state-changed",
+  "event_name": "task.state.changed",
+  "payload": {
+    "contract_case": "task.state.changed",
+    "state": "running",
+    "task_id": "task-contract"
+  },
+  "producer_id": "server-main",
+  "session_id": "sess-contract",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

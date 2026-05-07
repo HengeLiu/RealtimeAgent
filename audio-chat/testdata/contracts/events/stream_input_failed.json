@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-contract-stream-input-failed",
+  "event_name": "stream.input.failed",
+  "payload": {
+    "contract_case": "stream.input.failed",
+    "stream_type": "sensor.mic"
+  },
+  "producer_id": "server-main",
+  "stream_id": "stream-contract",
+  "stream_type": "sensor.mic",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

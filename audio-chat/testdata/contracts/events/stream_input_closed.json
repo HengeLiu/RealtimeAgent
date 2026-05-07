@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-contract-stream-input-closed",
+  "event_name": "stream.input.closed",
+  "payload": {
+    "contract_case": "stream.input.closed",
+    "stream_type": "sensor.mic"
+  },
+  "producer_id": "server-main",
+  "stream_id": "stream-contract",
+  "stream_type": "sensor.mic",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

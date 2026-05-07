@@ -1,0 +1,10 @@
+{
+  "channels": null,
+  "chunk_ms": null,
+  "codec": "application/octet-stream",
+  "contract_case": "sensor.depth",
+  "direction": "input",
+  "sample_rate": null,
+  "stream_type": "sensor.depth",
+  "version": "audio-chat.v1"
+}

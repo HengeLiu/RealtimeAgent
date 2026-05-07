@@ -1,0 +1,13 @@
+{
+  "event_id": "evt-contract-agent-response-completed",
+  "event_name": "agent.response.completed",
+  "payload": {
+    "contract_case": "agent.response.completed",
+    "response_id": "resp-contract"
+  },
+  "producer_id": "server-main",
+  "session_id": "sess-contract",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

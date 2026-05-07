@@ -464,10 +464,10 @@ audio-chat/tests/test_web_glass_endpoint.py
    - 模拟唤醒。
    - 可配置 server_url。
 4. CLI：
-   - `audio-chat.server.start/stop/logs`。
-   - `audio-chat.config.sync`。
-   - `audio-chat.mock.phone`。
-   - `audio-chat.web.open`。
+   - 后续目标，当前未落地：`audio-chat.server.start/stop/logs`。
+   - 后续目标，当前未落地：`audio-chat.config.sync`。
+   - 后续目标，当前未落地：`audio-chat.mock.phone`。
+   - 后续目标，当前未落地：`audio-chat.web.open`。
 5. 网络联调：
    - server 启动后 playback CLI 能跑通。
    - require-server preflight 能读 health 和 debug devices。

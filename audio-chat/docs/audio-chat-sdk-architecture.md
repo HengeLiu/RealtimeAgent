@@ -60,13 +60,15 @@ audio-chat
 import audio_chat
 ```
 
-建议 CLI：
+建议 CLI，其中 `audio-chat.config.sync` 和 `audio-chat.mock.phone` 属于后续目标，当前未落地：
 
 ```bash
 audio-chat.server.run
+# 后续目标，当前未落地
 audio-chat.config.sync
 audio-chat.dev.preflight
 audio-chat.playback.glass
+# 后续目标，当前未落地
 audio-chat.mock.phone
 ```
 
@@ -3160,25 +3162,27 @@ uv run audio-chat.server.run --help
 | 命令 | 说明 |
 | --- | --- |
 | `audio-chat.server.run` | 前台启动 server，适合日常开发。 |
-| `audio-chat.server.start` | 后台启动 server，写入 PID 和日志。 |
-| `audio-chat.server.stop` | 停止后台 server。 |
-| `audio-chat.server.logs` | 跟随后台 server 日志。 |
-| `audio-chat.config.sync` | 同步 server、mock、iOS、ESP32 的本地联调配置。 |
+| `audio-chat.server.start` | 后续目标，当前未落地：后台启动 server，写入 PID 和日志。 |
+| `audio-chat.server.stop` | 后续目标，当前未落地：停止后台 server。 |
+| `audio-chat.server.logs` | 后续目标，当前未落地：跟随后台 server 日志。 |
+| `audio-chat.config.sync` | 后续目标，当前未落地：同步 server、mock、iOS、ESP32 的本地联调配置。 |
 | `audio-chat.dev.preflight` | 生成预检报告，验证协议事件、stream 类型、配置和依赖。 |
 | `audio-chat.playback.glass` | 启动 Python 回放端，上传 testdata 并断言输出。 |
-| `audio-chat.mock.phone` | 启动 Python 手机 mock，用于验证手机端 task 和资产回传。 |
-| `audio-chat.web.open` | 打开 Web JS endpoint 调试页。 |
-| `audio-chat.ios.open` | 打开 iOS endpoint 工程。 |
-| `audio-chat.ios.build-sim` | 验证 iOS 模拟器构建。 |
-| `audio-chat.esp32.start` | 构建、烧录并监看 ESP32 endpoint。 |
+| `audio-chat.mock.phone` | 后续目标，当前未落地：启动 Python 手机 mock，用于验证手机端 task 和资产回传。 |
+| `audio-chat.web.open` | 后续目标，当前未落地：打开 Web JS endpoint 调试页。 |
+| `audio-chat.ios.open` | 后续目标，当前未落地：打开 iOS endpoint 工程。 |
+| `audio-chat.ios.build-sim` | 后续目标，当前未落地：验证 iOS 模拟器构建。 |
+| `audio-chat.esp32.start` | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。 |
 
 CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、健康检查、端侧参考工程启动和工具链调度。业务项目只提供配置、Tool / Task 代码和可选端侧工程路径。
 
 ### 15.3 本地配置同步
 
-多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此需要 `audio-chat.config.sync`。
+后续目标命令形态，当前未落地。
 
-建议命令：
+多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此后续目标需要提供 `audio-chat.config.sync`，当前未落地。
+
+后续目标命令形态，当前未落地：
 
 ```bash
 uv run audio-chat.config.sync \
@@ -3194,7 +3198,7 @@ uv run audio-chat.config.sync \
 4. 校验 `auth.device_tokens` 中存在对应 `device_id`。
 5. 输出本次同步后的启动命令提示。
 
-如果自动探测失败，允许显式指定：
+如果自动探测失败，后续目标允许显式指定：
 
 ```bash
 uv run audio-chat.config.sync \
@@ -3259,7 +3263,7 @@ audio-chat/endpoints/web-glass/index.html
 
 如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/endpoints/web-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
 
-后台启动、日志和停止是可选增强，但建议保留：
+后台启动、日志和停止是可选增强，属于后续目标，当前未落地：
 
 ```bash
 uv run audio-chat.server.start --config audio-chat/examples/minimal/server.yaml
@@ -3314,7 +3318,7 @@ assertions:
 
 Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅”的协议设计。例如一个 mock 设备只提供 `sensor.rgb`，另一个 mock 设备只消费 `actuator.speaker`。
 
-推荐命令：
+后续目标命令形态，当前未落地：
 
 ```bash
 uv run audio-chat.mock.phone \
@@ -3347,21 +3351,21 @@ mock 不模拟 iOS 系统权限、真实摄像头或真实播放器。它只验�
 
 端侧参考实现不是 Python server SDK 核心包，但 SDK CLI 应提供统一入口，降低研发成本。
 
-iOS：
+iOS 后续目标命令形态，当前未落地：
 
 ```bash
 uv run audio-chat.ios.open --app-root /path/to/my-app
 uv run audio-chat.ios.build-sim --app-root /path/to/my-app
 ```
 
-Web JS：
+Web JS 后续目标命令形态，当前未落地：
 
 ```bash
 uv run audio-chat.web.open \
   --config audio-chat/examples/minimal/web.yaml
 ```
 
-ESP32：
+ESP32 后续目标命令形态，当前未落地：
 
 ```bash
 uv run audio-chat.esp32.start \
@@ -3386,7 +3390,7 @@ ESP32 命令需要支持：
 本地研发：
 
 1. `uv pip install -e audio-chat`
-2. `uv run audio-chat.config.sync --config audio-chat/examples/minimal/server.yaml`
+2. 后续目标，当前未落地：`uv run audio-chat.config.sync --config audio-chat/examples/minimal/server.yaml`
 3. `uv run audio-chat.dev.preflight --report audio-chat/runs/preflight.json`
 4. `uv run audio-chat.server.run --config audio-chat/examples/minimal/server.yaml`
 5. 另一个终端运行 `uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml`
@@ -3396,12 +3400,12 @@ ESP32 命令需要支持：
 
 1. 启动 server。
 2. 启动 `audio-chat.playback.glass` 作为语音输入和 speaker 消费设备。
-3. 启动 `audio-chat.mock.phone` 作为 RGB / IMU 资产设备。
+3. 后续目标，当前未落地：启动 `audio-chat.mock.phone` 作为 RGB / IMU 资产设备。
 4. 触发需要资产的 Tool，确认事件订阅和资产回传。
 
 真机联调：
 
-1. 执行 `audio-chat.config.sync`，确保端侧连接 server 的局域网地址正确。
+1. 后续目标，当前未落地：执行 `audio-chat.config.sync`，确保端侧连接 server 的局域网地址正确。
 2. 启动 server。
 3. 启动 iOS / Web / phone mock 中至少一个端侧算力或资产设备。
 4. 构建、烧录并监看 ESP32。
@@ -3444,10 +3448,10 @@ uv run audio-chat.dev.preflight \
 
 | 命令 | 目标 |
 | --- | --- |
-| `audio-chat.dev.contract-tests` | 只跑公共协议和公开对象契约测试。 |
-| `audio-chat.dev.package-check` | 构建 wheel、安装到临时目录、验证公开导入和 CLI。 |
-| `audio-chat.dev.boundary-check` | 扫描 SDK 主包是否依赖业务目录、真实本地配置或固定设备实例。 |
-| `audio-chat.dev.live-check` | server 已启动时检查健康、设备、订阅和最近回放结果。 |
+| `audio-chat.dev.contract-tests` | 后续目标，当前未落地：只跑公共协议和公开对象契约测试。 |
+| `audio-chat.dev.package-check` | 后续目标，当前未落地：构建 wheel、安装到临时目录、验证公开导入和 CLI。 |
+| `audio-chat.dev.boundary-check` | 后续目标，当前未落地：扫描 SDK 主包是否依赖业务目录、真实本地配置或固定设备实例。 |
+| `audio-chat.dev.live-check` | 后续目标，当前未落地：server 已启动时检查健康、设备、订阅和最近回放结果。 |
 
 这些检查吸收旧 SDK 的 package-check、contract-tests、preflight 和 live-check 经验。它们的职责是防止“单元测试能过，但 SDK 装不上、端侧协议不一致、业务代码绕过公开契约”的问题进入下一阶段。
 

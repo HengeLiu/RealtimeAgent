@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-contract-tool-call-completed",
+  "event_name": "tool.call.completed",
+  "payload": {
+    "contract_case": "tool.call.completed",
+    "tool_call_id": "tool-call-contract",
+    "tool_name": "contract_tool"
+  },
+  "producer_id": "server-main",
+  "session_id": "sess-contract",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}
