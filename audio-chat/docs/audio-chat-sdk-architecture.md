@@ -60,17 +60,22 @@ audio-chat
 import audio_chat
 ```
 
-建议 CLI，其中 `audio-chat.config.sync` 和 `audio-chat.mock.phone` 属于后续目标，当前未落地：
+当前已落地 CLI：
 
 ```bash
 audio-chat.server.run
-# 后续目标，当前未落地
+audio-chat.server.start
+audio-chat.server.stop
+audio-chat.server.logs
 audio-chat.config.sync
 audio-chat.dev.preflight
 audio-chat.playback.glass
-# 后续目标，当前未落地
-audio-chat.mock.phone
+audio-chat.phone.mock
+audio-chat.sdk.package-check
+audio-chat.web.open
 ```
+
+roadmap 中如继续出现 `audio-chat.ios.*`、`audio-chat.esp32.*` 等命令，必须明确标注为未实现或后续目标，不能写进 README 的可复制命令区。
 
 ### 3.2 仓库目录
 
@@ -142,6 +147,51 @@ audio-chat/
 | 控制面和媒体面 | 改成 Control Service 和 Stream Service，开发者只理解 event 和 stream。 |
 | 回放端、mock 端、preflight | 保留并提升为第一阶段验收入口。 |
 | Task 事件、通知和播放仲裁 | 收敛进 Task Engine 与 Output Service，避免业务能力直接控制播放。 |
+
+### 3.5 当前实现状态矩阵
+
+本节按 2026-05-07 当前代码标注真实状态。状态口径：
+
+1. `已实现`：已有代码、测试或验收 lane 覆盖，可作为开发者当前能力使用。
+2. `部分实现`：已有最小骨架或 mock 闭环，但仍缺生产能力、真实 provider 或完整生命周期。
+3. `未实现`：只在设计或下一阶段计划中存在，不能写成当前可用能力。
+
+| 模块 | 状态 | 当前依据 |
+| --- | --- | --- |
+| Control Service | 已实现 | 设备注册、订阅匹配、事件发布和 debug API 已由 `tests/test_control_service.py`、`tests/acceptance/test_protocol_routing_acceptance.py` 覆盖。 |
+| Stream Service | 已实现 | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `tests/test_stream_and_audio_pipeline.py`、`tests/test_network_server_playback.py` 覆盖。 |
+| Audio Pipeline | 部分实现 | 已有格式校验、mock provider 和最小音频链路；完整 wake 后会话生命周期、打断和清理属于 A 线路。 |
+| Asset Service | 已实现 | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。 |
+| Agent Core | 部分实现 | Text / Realtime mock 链路、工具发现和 provider schema 已覆盖；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。 |
+| ToolGateway | 已实现 | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `tests/acceptance/test_protocol_native_tool_task_contract.py` 与 `tests/test_agent_core_router.py` 覆盖。 |
+| Task Engine | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。 |
+| Output Service | 已实现 | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `tests/test_phase2_providers_output.py` 覆盖。 |
+| Endpoint references | 已实现 | Python playback、Python phone mock 和 web-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS / ESP32 目前只有参考目录和配置样例。 |
+| Memory / Skill / MCP | 未实现 | 仍处于 C 线路计划；任何需要设备能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
+| Signed token / Pairing | 未实现 | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。 |
+
+### 3.6 已实现能力验收索引
+
+文档里标记为 `已实现` 的能力必须能落到测试、契约或样板上。当前索引如下：
+
+| 能力 | 验收依据 |
+| --- | --- |
+| CLI 和开发者入口 | `tests/test_cli_developer_workflow.py`、`tests/test_docs_commands.py` |
+| 自动发现 Tool / Task | `tests/acceptance/test_auto_discovery_developer_contract.py` |
+| 设备注册与订阅分发 | `tests/test_control_service.py`、`testdata/contracts/events/control_device_register_requested.json` |
+| stream chunk 协议 | `tests/test_protocol_contracts.py`、`testdata/contracts/streams/stream_chunk_pcm16le.json` |
+| 资产缓存与能力回放 | `tests/acceptance/test_capability_template_playback.py`、`testdata/contracts/scenarios/playback_minimal.json` |
+| Tool / Task 协议原生扩展 | `tests/acceptance/test_protocol_native_tool_task_contract.py` |
+| Output Service 与播放仲裁 | `tests/test_phase2_providers_output.py`、`testdata/contracts/output/output_arbitration_preempt_low_priority.json` |
+| H 线路迁移样板 | `examples/migration-templates`、`tests/acceptance/test_migration_template_contract.py` |
+
+### 3.7 公开扩展 API
+
+业务代码应优先从 `audio_chat` 顶层导入扩展类，不依赖内部服务模块路径：
+
+```python
+from audio_chat import BaseTool, ToolContext, ToolResult, BaseTask, TaskContext, TaskEvent, UserDeviceContext
+```
 
 ## 4. 设计原则
 
@@ -3155,21 +3205,25 @@ import audio_chat
 uv run audio-chat.dev.preflight --help
 uv run audio-chat.playback.glass --help
 uv run audio-chat.server.run --help
+uv run audio-chat.config.sync --help
+uv run audio-chat.phone.mock --help
+uv run audio-chat.web.open --help
 ```
 
-`audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control` 和 `/ws/stream`。server SDK 不内置任何具体端侧页面或端侧类型预判；参考端侧以独立工程或独立文件形式存在，设备类型只在 `control.device.register.requested` 中声明。完整 CLI 目标如下：
+`audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control` 和 `/ws/stream`。server SDK 不内置任何具体端侧页面或端侧类型预判；参考端侧以独立工程或独立文件形式存在，设备类型只在 `control.device.register.requested` 中声明。当前 CLI 状态如下：
 
 | 命令 | 说明 |
 | --- | --- |
 | `audio-chat.server.run` | 前台启动 server，适合日常开发。 |
-| `audio-chat.server.start` | 后续目标，当前未落地：后台启动 server，写入 PID 和日志。 |
-| `audio-chat.server.stop` | 后续目标，当前未落地：停止后台 server。 |
-| `audio-chat.server.logs` | 后续目标，当前未落地：跟随后台 server 日志。 |
-| `audio-chat.config.sync` | 后续目标，当前未落地：同步 server、mock、iOS、ESP32 的本地联调配置。 |
+| `audio-chat.server.start` | 后台启动 server，写入 PID 和日志；支持 `--dry-run` 做无副作用检查。 |
+| `audio-chat.server.stop` | 停止后台 server；支持 `--dry-run`。 |
+| `audio-chat.server.logs` | 输出或跟随后台 server 日志。 |
+| `audio-chat.config.sync` | 同步 server、mock、iOS、ESP32 的本地联调配置。 |
 | `audio-chat.dev.preflight` | 生成预检报告，验证协议事件、stream 类型、配置和依赖。 |
 | `audio-chat.playback.glass` | 启动 Python 回放端，上传 testdata 并断言输出。 |
-| `audio-chat.mock.phone` | 后续目标，当前未落地：启动 Python 手机 mock，用于验证手机端 task 和资产回传。 |
-| `audio-chat.web.open` | 后续目标，当前未落地：打开 Web JS endpoint 调试页。 |
+| `audio-chat.phone.mock` | 启动 Python 手机 mock，用于验证多设备、端侧 task 和资产回传。 |
+| `audio-chat.sdk.package-check` | 执行 SDK 包边界、公开导入和入口命令检查。 |
+| `audio-chat.web.open` | 打开或打印 Web JS endpoint 调试页地址。 |
 | `audio-chat.ios.open` | 后续目标，当前未落地：打开 iOS endpoint 工程。 |
 | `audio-chat.ios.build-sim` | 后续目标，当前未落地：验证 iOS 模拟器构建。 |
 | `audio-chat.esp32.start` | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。 |
@@ -3178,11 +3232,9 @@ CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、�
 
 ### 15.3 本地配置同步
 
-后续目标命令形态，当前未落地。
+多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此当前提供 `audio-chat.config.sync` 生成参考端侧本地配置。
 
-多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此后续目标需要提供 `audio-chat.config.sync`，当前未落地。
-
-后续目标命令形态，当前未落地：
+当前命令形态：
 
 ```bash
 uv run audio-chat.config.sync \
@@ -3263,7 +3315,7 @@ audio-chat/endpoints/web-glass/index.html
 
 如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/endpoints/web-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
 
-后台启动、日志和停止是可选增强，属于后续目标，当前未落地：
+后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
 ```bash
 uv run audio-chat.server.start --config audio-chat/examples/minimal/server.yaml
@@ -3318,11 +3370,11 @@ assertions:
 
 Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅”的协议设计。例如一个 mock 设备只提供 `sensor.rgb`，另一个 mock 设备只消费 `actuator.speaker`。
 
-后续目标命令形态，当前未落地：
+当前命令形态：
 
 ```bash
-uv run audio-chat.mock.phone \
-  --config audio-chat/examples/minimal/phone-mock.yaml
+uv run audio-chat.phone.mock \
+  --config audio-chat/endpoints/python-phone-mock/phone.mock.yaml
 ```
 
 mock 配置应允许声明能力和订阅：
@@ -3358,11 +3410,10 @@ uv run audio-chat.ios.open --app-root /path/to/my-app
 uv run audio-chat.ios.build-sim --app-root /path/to/my-app
 ```
 
-Web JS 后续目标命令形态，当前未落地：
+Web JS 当前命令形态：
 
 ```bash
-uv run audio-chat.web.open \
-  --config audio-chat/examples/minimal/web.yaml
+uv run audio-chat.web.open --print-url
 ```
 
 ESP32 后续目标命令形态，当前未落地：
@@ -3400,7 +3451,7 @@ ESP32 命令需要支持：
 
 1. 启动 server。
 2. 启动 `audio-chat.playback.glass` 作为语音输入和 speaker 消费设备。
-3. 后续目标，当前未落地：启动 `audio-chat.mock.phone` 作为 RGB / IMU 资产设备。
+3. 启动 `audio-chat.phone.mock` 作为 RGB / IMU 资产设备。
 4. 触发需要资产的 Tool，确认事件订阅和资产回传。
 
 真机联调：

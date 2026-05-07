@@ -807,6 +807,14 @@ uv run python scripts/acceptance_check.py developer-experience
 
 目标：让设计文档、实现、测试和业务迁移入口保持一致，为后续业务能力迁移做准备。
 
+当前落地状态：
+
+1. 架构文档已补充真实状态矩阵，按已实现、部分实现、未实现区分当前能力和 roadmap。
+2. `phase3-migration-guide.md` 已提供旧 SDK 到 `audio-chat` 的概念映射、迁移约束、样板路径和联调观察点。
+3. `testdata/contracts` 已补齐 auth 注册 golden、task lifecycle golden 和 output arbitration golden；事件 golden 与 stream chunk golden 继续沿用上一阶段契约。
+4. `examples/migration-templates` 已提供 `find_object` Tool、`continuous_rgb_analyze` Task 和 `notification_task` Task 样板，均只通过 `UserDeviceContext` 使用设备能力。
+5. `next-docs-contract` lane 已接入文档、契约和迁移样板自动验收。
+
 写入范围：
 
 ```text

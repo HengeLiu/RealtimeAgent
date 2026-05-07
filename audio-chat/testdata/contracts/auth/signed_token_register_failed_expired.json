@@ -1,0 +1,33 @@
+{
+  "name": "signed_token_register_failed_expired",
+  "status": "planned_contract",
+  "event": {
+    "version": "audio-chat.v1",
+    "event_id": "evt-auth-expired-001",
+    "event_name": "control.device.register.requested",
+    "timestamp_ms": 1760000000000,
+    "user_id": "user-auth-001",
+    "producer_id": "dev-web-glass-001",
+    "payload": {
+      "device_id": "dev-web-glass-001",
+      "client_type": "web-glass",
+      "auth": {
+        "mode": "signed_token",
+        "token_claims": {
+          "user_id": "user-auth-001",
+          "device_id": "dev-web-glass-001",
+          "expires_at": 1759990000000,
+          "nonce": "nonce-auth-expired-001"
+        }
+      },
+      "capabilities": {},
+      "subscriptions": []
+    }
+  },
+  "expected": {
+    "event_name": "control.device.register.failed",
+    "error_code": "AUTH_TOKEN_EXPIRED",
+    "active_device_unchanged": true,
+    "must_not_log": ["token"]
+  }
+}
