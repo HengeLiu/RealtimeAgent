@@ -11,9 +11,15 @@ dependencies = [
 ]
 
 [project.scripts]
+"audio-chat.config.sync" = "audio_chat.cli.config:sync"
+"audio-chat.phone.mock" = "audio_chat.cli.phone:mock"
 "audio-chat.playback.glass" = "audio_chat.endpoints.python_playback:main"
 "audio-chat.dev.preflight" = "audio_chat.preflight:main"
 "audio-chat.server.run" = "audio_chat.server:main"
+"audio-chat.server.start" = "audio_chat.cli.server:start"
+"audio-chat.server.stop" = "audio_chat.cli.server:stop"
+"audio-chat.server.logs" = "audio_chat.cli.server:logs"
+"audio-chat.sdk.package-check" = "audio_chat.cli.sdk:package_check"
 
 [dependency-groups]
 dev = [

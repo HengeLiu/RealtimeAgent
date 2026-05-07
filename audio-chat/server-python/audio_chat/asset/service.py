@@ -240,6 +240,18 @@ class AssetService:
                 "request_id": request_id or None,
             },
         )
+        if hasattr(self.recorder, "record_asset_event"):
+            self.recorder.record_asset_event(
+                chunk.session_id,
+                {
+                    "event": "asset.stored",
+                    "asset_id": ref.asset_id,
+                    "stream_type": ref.stream_type,
+                    "path": ref.path,
+                    "request_id": request_id or None,
+                    "metadata": dict(ref.metadata),
+                },
+            )
         return ref
 
     def request_asset(

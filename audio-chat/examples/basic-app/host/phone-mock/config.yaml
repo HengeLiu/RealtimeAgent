@@ -1,0 +1,9 @@
+user_id: user-basic-app
+device_id: dev-basic-phone-mock
+capabilities:
+  streams.consume:
+    - actuator.speaker
+subscriptions:
+  - event: stream.output.*
+    filter:
+      stream_type: actuator.speaker

@@ -37,11 +37,13 @@ class RunRecorder:
     def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
         """记录 Tool 调用轨迹。
 
-        主要逻辑：写入稳定 `tool-trace.jsonl`，供回放和排障读取。
+        主要逻辑：写入稳定 `tool-events.jsonl`，并保留旧 `tool-trace.jsonl`
+        兼容入口，供回放和排障读取。
         参数：`session_id` 为会话，`record` 为工具调用结构。
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
+        self._append_jsonl(self.session_dir(session_id) / "tool-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "tool-trace.jsonl", record)
 
     def record_task_event(self, session_id: str, record: dict[str, Any]) -> None:
@@ -53,6 +55,17 @@ class RunRecorder:
         异常情况：文件写入失败时抛出 IO 异常。
         """
         self._append_jsonl(self.session_dir(session_id) / "task-events.jsonl", record)
+
+    def record_asset_event(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录 Asset Service 事件。
+
+        主要逻辑：写入 `assets.jsonl`，让回放产物能直接解释资产写入、request_id
+        和 stream 类型。
+        参数：`session_id` 为会话，`record` 为资产事件。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        self._append_jsonl(self.session_dir(session_id) / "assets.jsonl", record)
 
     def record_model_request(self, session_id: str, record: dict[str, Any]) -> None:
         """记录模型请求。
@@ -84,6 +97,7 @@ class RunRecorder:
         self._append_jsonl(self.runs_root / "system-events.jsonl", record)
 
     def record_playback_decision(self, session_id: str, record: dict[str, Any]) -> None:
+        self._append_jsonl(self.session_dir(session_id) / "output-decisions.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "playback-decisions.jsonl", record)
 
     def write_playback_snapshot(self, record: dict[str, Any]) -> None:

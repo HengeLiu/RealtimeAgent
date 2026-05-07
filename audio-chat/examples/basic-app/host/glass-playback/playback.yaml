@@ -1,0 +1,11 @@
+mode: in_process
+runs_root: runs/audio-chat/basic-app
+user_id: user-basic-app
+device_id: dev-basic-glass-playback
+asr_provider: mock
+asr_model: mock-asr
+text_model_provider: mock
+text_model: mock-text
+tts_provider: mock
+tts_model: mock-tts
+tts_voice: mock
