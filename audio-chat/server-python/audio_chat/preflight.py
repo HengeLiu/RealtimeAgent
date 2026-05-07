@@ -79,6 +79,54 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1)
 
 
+def live_check(argv: list[str] | None = None) -> None:
+    """运行面向本地联调的 live-check。
+
+    主要逻辑：
+    1. 检查 server health 和 debug devices，但 server 未启动时不把命令本身变成失败。
+    2. 汇总最近注册失败、最近 playback、provider key/fallback 和参考端侧配置一致性。
+    3. 输出稳定 JSON，帮助开发者判断下一步该启动 server、同步配置还是补 provider key。
+
+    参数：`argv` 为命令行参数。
+    返回值：无。
+    异常情况：报告文件不可写或配置文件不可解析时抛出异常。
+    """
+
+    parser = argparse.ArgumentParser(prog="audio-chat.dev.live-check", description="检查 audio-chat 本地联调状态")
+    parser.add_argument("--config", default="examples/minimal/server.yaml")
+    parser.add_argument("--generated-dir", default="examples/basic-app/config/generated")
+    parser.add_argument("--report", default="runs/audio-chat/live-check.json")
+    args = parser.parse_args(argv)
+
+    loaded = load_yaml_config(args.config)
+    checks = [
+        _live_server_check(loaded),
+        _recent_registration_failures_check(),
+        _recent_playback_observation(),
+        _provider_key_check(loaded),
+        _reference_endpoint_config_consistency_check(Path(args.generated_dir), loaded),
+    ]
+    blocking_failures = [
+        check
+        for check in checks
+        if not check["ok"] and check["name"] not in {"live_server", "recent_playback", "recent_registration_failures"}
+    ]
+    report = {
+        "ok": not blocking_failures,
+        "status": "ok" if not blocking_failures else "failed",
+        "server_url": loaded.server.public_url,
+        "generated_dir": str(Path(args.generated_dir)),
+        "checks": checks,
+        "next_actions": _live_check_next_actions(checks),
+    }
+    report_path = Path(args.report)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if blocking_failures:
+        raise SystemExit(1)
+
+
 def _protocol_summary_check() -> dict:
     """检查协议事件和 stream 类型基础集合。"""
 
@@ -327,6 +375,7 @@ def _live_server_check(config: AudioChatYamlConfig) -> dict:
         "ok": not errors,
         "server_health": server_health,
         "server_debug_devices": server_debug,
+        "action": "" if not errors else f"启动 server: uv run audio-chat.server.run --config <server.yaml>，当前检查地址 {config.server.public_url}",
         "errors": errors,
     }
 
@@ -351,6 +400,152 @@ def _recent_playback_check() -> dict:
         return {"name": "recent_playback", "ok": False, "path": str(latest), "errors": [f"{type(exc).__name__}: {exc}"]}
     ok = bool(data.get("ok") is True or data.get("status") == "ok")
     return {"name": "recent_playback", "ok": ok, "path": str(latest), "result": data, "errors": [] if ok else ["latest playback result is not ok"]}
+
+
+def _recent_playback_observation() -> dict:
+    """读取最近 playback 结果；没有结果时只作为诊断，不阻塞 live-check。"""
+
+    result = _recent_playback_check()
+    if result["ok"]:
+        return result
+    return {
+        **result,
+        "ok": True,
+        "observed": False,
+        "action": "运行一次 playback: uv run audio-chat.playback.glass --config examples/minimal/playback.yaml",
+    }
+
+
+def _recent_registration_failures_check() -> dict:
+    """扫描最近控制事件中的注册失败。
+
+    主要逻辑：读取常见 runs 目录下的 control-events.jsonl，寻找
+    `control.device.register.failed` 或注册阶段 `system.error.raised`。
+    """
+
+    candidates = [Path("runs/audio-chat/control-events.jsonl"), Path("runs/control-events.jsonl")]
+    failures: list[dict] = []
+    for path in candidates:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_name = str(event.get("event_name") or event.get("event") or "")
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            if event_name == "control.device.register.failed" or (
+                event_name == "system.error.raised" and "register" in json.dumps(payload, ensure_ascii=False).lower()
+            ):
+                failures.append({"path": str(path), "event": event})
+    return {
+        "name": "recent_registration_failures",
+        "ok": True,
+        "failure_count": len(failures),
+        "recent_failures": failures[-5:],
+    }
+
+
+def _reference_endpoint_config_consistency_check(generated_dir: Path, config: AudioChatYamlConfig) -> dict:
+    """检查 config.sync 生成的多端配置是否与 server 配置一致。
+
+    参数：`generated_dir` 为 `audio-chat.config.sync` 输出目录。
+    返回值：结构化检查结果。
+    异常情况：本函数只记录错误，不抛出异常。
+    """
+
+    import yaml
+
+    errors: list[str] = []
+    expected_server_url = config.server.public_url
+    files = {
+        "server": generated_dir / "server.local.yaml",
+        "phone_mock": generated_dir / "phone.mock.yaml",
+        "glass_playback": generated_dir / "glass.playback.yaml",
+        "web_glass": generated_dir / "web-glass.yaml",
+        "ios_phone": generated_dir / "ios-phone.local.json",
+        "esp32_s3": generated_dir / "esp32-s3.local.env",
+    }
+    missing = [name for name, path in files.items() if not path.exists()]
+    if missing:
+        return {
+            "name": "endpoint_config_consistency",
+            "ok": False,
+            "generated_dir": str(generated_dir),
+            "missing": missing,
+            "errors": [f"missing generated endpoint config: {', '.join(missing)}"],
+            "action": "先运行 audio-chat.config.sync --output-dir examples/basic-app/config/generated",
+        }
+
+    user_ids: set[str] = set()
+    device_ids: set[str] = set()
+    try:
+        server = yaml.safe_load(files["server"].read_text(encoding="utf-8")) or {}
+        if server.get("server", {}).get("public_url") != expected_server_url:
+            errors.append("server.local.yaml server.public_url differs from live-check config")
+        for name in ("phone_mock", "glass_playback", "web_glass"):
+            data = yaml.safe_load(files[name].read_text(encoding="utf-8")) or {}
+            if data.get("server_url") != expected_server_url:
+                errors.append(f"{name} server_url differs from live-check config")
+            user_ids.add(str(data.get("user_id", "")))
+            device_ids.add(str(data.get("device_id", "")))
+        ios = json.loads(files["ios_phone"].read_text(encoding="utf-8"))
+        if ios.get("server_url") != expected_server_url:
+            errors.append("ios_phone server_url differs from live-check config")
+        user_ids.add(str(ios.get("user_id", "")))
+        device_ids.add(str(ios.get("device_id", "")))
+        esp32_values = _read_env_values(files["esp32_s3"])
+        if esp32_values.get("AUDIO_CHAT_SERVER_URL") != expected_server_url:
+            errors.append("esp32_s3 AUDIO_CHAT_SERVER_URL differs from live-check config")
+        user_ids.add(str(esp32_values.get("AUDIO_CHAT_USER_ID", "")))
+        device_ids.add(str(esp32_values.get("AUDIO_CHAT_DEVICE_ID", "")))
+    except Exception as exc:
+        errors.append(f"{type(exc).__name__}: {exc}")
+
+    if "" in user_ids:
+        errors.append("some endpoint config has empty user_id")
+    if "" in device_ids:
+        errors.append("some endpoint config has empty device_id")
+    if len(user_ids) > 1:
+        errors.append(f"endpoint user_id mismatch: {sorted(user_ids)}")
+    if len(device_ids) != 5:
+        errors.append("endpoint device_id must be unique across phone/playback/web/iOS/ESP32")
+    return {
+        "name": "endpoint_config_consistency",
+        "ok": not errors,
+        "generated_dir": str(generated_dir),
+        "server_url": expected_server_url,
+        "user_ids": sorted(user_ids),
+        "device_ids": sorted(device_ids),
+        "errors": errors,
+    }
+
+
+def _read_env_values(path: Path) -> dict[str, str]:
+    """读取 KEY=VALUE 格式 env 文件。"""
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _live_check_next_actions(checks: list[dict]) -> list[str]:
+    """根据检查结果生成可操作下一步。"""
+
+    actions: list[str] = []
+    for check in checks:
+        action = check.get("action")
+        if action:
+            actions.append(str(action))
+        if check["name"] == "provider_keys" and check.get("missing_env") and check.get("allow_mock_fallback"):
+            actions.append("当前缺 provider key 但 mock fallback 已启用；真实 provider 验收前补齐 DASHSCOPE_API_KEY")
+    return actions
 
 
 def _skipped(name: str, reason: str) -> dict:

@@ -352,6 +352,48 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "old-sdk-parity-cli": (
+        CheckCommand(
+            "old_sdk_parity_cli_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_cli_old_sdk_parity.py",
+                "tests/test_cli_developer_workflow.py",
+                "tests/test_config_sync_multidevice.py",
+                "tests/test_live_check.py",
+                "tests/test_package_check_release_inputs.py",
+                "-q",
+            ),
+        ),
+        CheckCommand(
+            "old_sdk_parity_config_sync",
+            (
+                "uv",
+                "run",
+                "audio-chat.config.sync",
+                "--output-dir",
+                "runs/acceptance/old-sdk-parity-cli-generated",
+            ),
+        ),
+        CheckCommand(
+            "old_sdk_parity_live_check_down",
+            (
+                "uv",
+                "run",
+                "audio-chat.dev.live-check",
+                "--config",
+                "examples/minimal/server.yaml",
+                "--generated-dir",
+                "runs/acceptance/old-sdk-parity-cli-generated",
+                "--report",
+                "runs/acceptance/old-sdk-parity-cli-live-check.json",
+            ),
+        ),
+    ),
 }
 
 CHECKS: dict[str, tuple[CheckCommand, ...]] = {

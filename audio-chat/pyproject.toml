@@ -21,6 +21,13 @@ dependencies = [
 "audio-chat.server.logs" = "audio_chat.cli.server:logs"
 "audio-chat.sdk.package-check" = "audio_chat.cli.sdk:package_check"
 "audio-chat.web.open" = "audio_chat.cli.web:open_web"
+"audio-chat.ios.open" = "audio_chat.cli.ios:open_ios"
+"audio-chat.ios.build-sim" = "audio_chat.cli.ios:build_sim"
+"audio-chat.esp32.config" = "audio_chat.cli.esp32:config"
+"audio-chat.esp32.build" = "audio_chat.cli.esp32:build"
+"audio-chat.esp32.flash" = "audio_chat.cli.esp32:flash"
+"audio-chat.esp32.monitor" = "audio_chat.cli.esp32:monitor"
+"audio-chat.dev.live-check" = "audio_chat.preflight:live_check"
 
 [dependency-groups]
 dev = [

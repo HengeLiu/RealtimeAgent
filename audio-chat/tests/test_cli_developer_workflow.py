@@ -11,13 +11,21 @@ AUDIO_ROOT = Path(__file__).resolve().parents[1]
 
 DEVELOPER_COMMANDS = [
     "audio-chat.config.sync",
+    "audio-chat.server.run",
     "audio-chat.server.start",
     "audio-chat.server.stop",
     "audio-chat.server.logs",
     "audio-chat.phone.mock",
     "audio-chat.web.open",
+    "audio-chat.ios.open",
+    "audio-chat.ios.build-sim",
+    "audio-chat.esp32.config",
+    "audio-chat.esp32.build",
+    "audio-chat.esp32.flash",
+    "audio-chat.esp32.monitor",
     "audio-chat.playback.glass",
     "audio-chat.dev.preflight",
+    "audio-chat.dev.live-check",
     "audio-chat.sdk.package-check",
 ]
 

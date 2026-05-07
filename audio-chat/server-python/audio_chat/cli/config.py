@@ -43,13 +43,25 @@ def sync(argv: list[str] | None = None) -> None:
 
     server_config = _resolve_input(args.server_config)
     playback_config = _resolve_input(args.playback_config)
+    auth_config = _auth(args.auth_mode, args.auth_token, args.signed_token)
     server_target = output_dir / "server.local.yaml"
     glass_target = output_dir / "glass.playback.yaml"
     phone_target = output_dir / "phone.mock.yaml"
     web_target = output_dir / "web-glass.yaml"
     ios_target = output_dir / "ios-phone.local.json"
     esp32_target = output_dir / "esp32-s3.local.env"
-    shutil.copyfile(server_config, server_target)
+    server_data = _read_yaml(server_config)
+    server_data.setdefault("server", {})["public_url"] = args.server_url
+    server_data.setdefault("auth", {})["mode"] = auth_config["mode"]
+    if args.auth_token:
+        server_data.setdefault("auth", {})["device_tokens"] = {
+            "dev-python-playback-001": args.auth_token,
+            "dev-python-phone-mock-001": args.auth_token,
+            "dev-web-glass-001": args.auth_token,
+            "dev-ios-phone-001": args.auth_token,
+            "dev-esp32-s3-001": args.auth_token,
+        }
+    _write_yaml(server_target, server_data)
     _write_yaml(
         glass_target,
         {
@@ -57,7 +69,7 @@ def sync(argv: list[str] | None = None) -> None:
             "server_url": args.server_url,
             "user_id": args.user_id,
             "device_id": "dev-python-playback-001",
-            "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
+            "auth": auth_config,
         },
     )
     _write_yaml(
@@ -67,7 +79,7 @@ def sync(argv: list[str] | None = None) -> None:
             "server_url": args.server_url,
             "user_id": args.user_id,
             "device_id": "dev-python-phone-mock-001",
-            "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
+            "auth": auth_config,
             "capabilities": {
                 "streams.produce": ["sensor.rgb", "sensor.depth", "sensor.imu"],
                 "streams.consume": ["actuator.speaker", "actuator.haptic"],
@@ -90,7 +102,7 @@ def sync(argv: list[str] | None = None) -> None:
             "user_id": args.user_id,
             "device_id": "dev-web-glass-001",
             "client_type": "web-glass",
-            "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
+            "auth": auth_config,
             "audio": {"aec": "browser_webrtc", "wake_word": "manual"},
             "stream": {"sensor_mic": {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}},
         },
@@ -101,7 +113,7 @@ def sync(argv: list[str] | None = None) -> None:
                 "server_url": args.server_url,
                 "user_id": args.user_id,
                 "device_id": "dev-ios-phone-001",
-                "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
+                "auth": auth_config,
                 "protocol_version": "audio-chat.v1",
                 "capabilities": {
                     "streams.produce": ["sensor.rgb", "sensor.mic"],
@@ -130,8 +142,8 @@ def sync(argv: list[str] | None = None) -> None:
                 f"AUDIO_CHAT_STREAM_WS_URL={args.server_url.replace('http://', 'ws://').replace('https://', 'wss://')}/ws/stream",
                 f"AUDIO_CHAT_USER_ID={args.user_id}",
                 "AUDIO_CHAT_DEVICE_ID=dev-esp32-s3-001",
-                f"AUDIO_CHAT_AUTH_MODE={'static_token' if args.auth_token else 'disabled'}",
-                f"AUDIO_CHAT_AUTH_TOKEN={args.auth_token}",
+                f"AUDIO_CHAT_AUTH_MODE={auth_config['mode']}",
+                f"AUDIO_CHAT_AUTH_TOKEN={auth_config.get('token') or auth_config.get('signed_token') or args.auth_token}",
                 "AUDIO_CHAT_WAKE_WORD_MODE=endpoint",
                 "AUDIO_CHAT_AEC_MODE=endpoint",
                 "AUDIO_CHAT_PLAYBACK_REFERENCE=endpoint_ring_buffer",
