@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from audio_chat.agent_core.realtime import RealtimeAudioAgentCore, RealtimeProviderCallbacks, RealtimeProviderConfig
+from audio_chat.agent_core.realtime import (
+    MockRealtimeProviderAdapter,
+    RealtimeAudioAgentCore,
+    RealtimeProviderCallbacks,
+    RealtimeProviderConfig,
+)
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
 
@@ -101,6 +106,10 @@ class FakeRealtimeProvider:
         """
         assert self.callbacks is not None
         self.callbacks.audio_done({"provider": "fake", "model": self.config.model})
+
+    def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """记录输入提交并模拟 provider 输出完成。"""
+        self.emit_done()
 
     def cancel(self, *, user_id: str, reason: str) -> None:
         """记录 cancel 调用。"""
@@ -282,6 +291,101 @@ def test_realtime_provider_failure_suppresses_repeated_append_errors(tmp_path) -
     assert instances[0].append_calls == 1
     model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text()
     assert model_events.count("realtime.session.failed") == 1
+
+
+def test_realtime_mode_uses_builtin_mock_provider_for_local_chain(tmp_path) -> None:
+    """测试目标：验证 realtime_audio 模式具备稳定 mock provider 链路。
+
+    测试方法：配置 `realtime_provider=mock` 创建 app，发送一片 final mic chunk。
+    预期结果：端侧收到 speaker chunk 和 close 事件，core events 记录 session 与响应事件。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="realtime_audio",
+            realtime_provider="mock",
+            realtime_model="mock-realtime",
+        )
+    )
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=True,
+        )
+    )
+
+    assert connection.chunks
+    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event == "session.opened" for event in app.agent_core.events())
+    assert any(event.event == "mock_realtime.input.committed" for event in app.agent_core.events())
+
+
+def test_realtime_commit_input_forwards_to_provider_and_records_event(tmp_path) -> None:
+    """测试目标：验证 RealtimeAudioAgentCore 的公共 `commit_input` 接口。
+
+    测试方法：注入 fake provider，先 append 音频打开会话，再显式 commit。
+    预期结果：fake 输出 done，端侧收到 close 事件，core events 记录 input.committed。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+
+    app.agent_core.commit_input("user-001", handle.session_id, reason="unit_commit")
+
+    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event == "input.committed" for event in app.agent_core.events())
+
+
+def test_mock_realtime_provider_cancel_and_close_are_observable() -> None:
+    """测试目标：验证内置 mock realtime provider 可被测试直接观测。
+
+    测试方法：直接实例化 provider，调用 open、cancel、close。
+    预期结果：provider 不访问网络，并记录 cancelled / closed 状态。
+    """
+
+    provider = MockRealtimeProviderAdapter(RealtimeProviderConfig(provider="mock", model="mock-realtime"))
+    records = []
+    provider.open(
+        user_id="user-001",
+        session_id="sess-001",
+        callbacks=RealtimeProviderCallbacks(
+            audio_delta=lambda audio, fmt, metadata: None,
+            audio_done=lambda metadata: None,
+            provider_event=records.append,
+            error=lambda message, record: None,
+        ),
+    )
+
+    provider.cancel(user_id="user-001", reason="unit")
+    provider.close(user_id="user-001", reason="unit")
+
+    assert provider.cancelled is True
+    assert provider.closed is True
+    assert records[0]["event"] == "mock_realtime.session.opened"
 
 
 def _new_failing_fake(config: RealtimeProviderConfig, instances: list[FailingRealtimeProvider]) -> FailingRealtimeProvider:
