@@ -70,6 +70,20 @@ class AudioPipelineConfig:
 
 
 @dataclass(frozen=True)
+class VoiceConfig:
+    """旧 SDK 语音配置兼容层。
+
+    主要功能：把旧 SDK 常用的 server_mode、conversation_mode 和 session_lifecycle
+    映射到新版 audio-chat 的 Agent Core 与音频会话语义。
+    主要属性：`server_mode` 控制 text/realtime 选择；`session_lifecycle` 控制音频会话复用。
+    """
+
+    server_mode: str = ""
+    conversation_mode: str = "continuous"
+    session_lifecycle: str = "persistent"
+
+
+@dataclass(frozen=True)
 class AssetConfig:
     store_type: str = "filesystem"
     root: str = "runs/audio-chat/assets"
@@ -119,6 +133,9 @@ class OutputConfig:
     default_on_interrupted: str = "drop"
     default_on_blocked: str = "queue"
     max_queue_size: int = 32
+    tool_progress_audio_mode: str = "cached"
+    tool_progress_priority: str = "low"
+    tool_progress_ttl_seconds: int = 10
 
 
 @dataclass(frozen=True)
@@ -207,6 +224,7 @@ class AudioChatYamlConfig:
     control: ControlConfig = field(default_factory=ControlConfig)
     stream: StreamConfig = field(default_factory=StreamConfig)
     audio_pipeline: AudioPipelineConfig = field(default_factory=AudioPipelineConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     asset: AssetConfig = field(default_factory=AssetConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -227,6 +245,9 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     data = _apply_env_overrides(data)
     text = data.get("agent", {}).get("text", {})
+    voice = VoiceConfig(**_known(data.get("voice", {}), {"server_mode", "conversation_mode", "session_lifecycle"}))
+    agent_data = dict(data.get("agent", {}))
+    agent_mode = str(agent_data.get("mode") or "").strip() or _agent_mode_from_voice_server_mode(voice.server_mode)
     return AudioChatYamlConfig(
         server=ServerConfig(**data.get("server", {})),
         auth=AuthConfig(**data.get("auth", {})),
@@ -234,11 +255,12 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         control=ControlConfig(**data.get("control", {})),
         stream=StreamConfig(**data.get("stream", {})),
         audio_pipeline=AudioPipelineConfig(**data.get("audio_pipeline", {})),
+        voice=voice,
         asset=AssetConfig(**data.get("asset", {})),
         agent=AgentConfig(
-            mode=data.get("agent", {}).get("mode", "text"),
-            custom_core=data.get("agent", {}).get("custom_core", ""),
-            realtime=AgentRealtimeConfig(**data.get("agent", {}).get("realtime", {})),
+            mode=agent_mode or "text",
+            custom_core=agent_data.get("custom_core", ""),
+            realtime=AgentRealtimeConfig(**agent_data.get("realtime", {})),
             text=AgentTextConfig(**text),
         ),
         output=OutputConfig(**data.get("output", {})),
@@ -316,6 +338,22 @@ def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
     else:
         raw.pop("require_recent_playback", None)
     return raw
+
+
+def _agent_mode_from_voice_server_mode(server_mode: str) -> str:
+    """把旧 SDK voice.server_mode 映射为新版 agent.mode。
+
+    参数：`server_mode` 为旧配置值，例如 `omni_server` 或 `text_server`。
+    返回值：新版 `agent.mode`；未知或空值返回 `text`。
+    异常情况：无。
+    """
+
+    normalized = str(server_mode or "").strip().lower()
+    if normalized in {"omni_server", "realtime", "realtime_audio", "omni_realtime"}:
+        return "realtime"
+    if normalized in {"text_server", "text"}:
+        return "text"
+    return "text"
 
 
 def _known(data: dict[str, Any], keys: set[str]) -> dict[str, Any]:

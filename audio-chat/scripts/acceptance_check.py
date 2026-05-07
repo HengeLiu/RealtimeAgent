@@ -495,6 +495,24 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "old-sdk-parity-voice": (
+        CheckCommand(
+            "old_sdk_parity_voice_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_voice_session_modes.py",
+                "tests/test_progress_audio.py",
+                "tests/test_continuous_dialog_state.py",
+                "tests/test_playback_interrupt_policy.py",
+                "tests/acceptance/test_voice_old_sdk_parity.py",
+                "-q",
+            ),
+        ),
+    ),
 }
 
 CHECKS: dict[str, tuple[CheckCommand, ...]] = {

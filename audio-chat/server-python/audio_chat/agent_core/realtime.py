@@ -580,6 +580,7 @@ class RealtimeAudioAgentCore:
         self.tool_bridge = RealtimeToolBridge(tool_gateway=tool_gateway, recorder=recorder)
         self._sessions: dict[str, tuple[str, RealtimeProviderAdapter]] = {}
         self._failed_sessions: set[str] = set()
+        self._sessions_with_provider_output: set[str] = set()
         self._event_buffer = AgentEventBuffer()
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
@@ -764,7 +765,8 @@ class RealtimeAudioAgentCore:
                 audio=audio,
                 format=fmt,
                 metadata=metadata,
-            ),
+            )
+            or self._sessions_with_provider_output.add(session_id),
             audio_done=lambda metadata: self.output_adapter.emit_audio_done(
                 user_id=user_id,
                 session_id=session_id,
@@ -818,6 +820,13 @@ class RealtimeAudioAgentCore:
             name=record.get("name"),
             arguments=record.get("arguments"),
         )
+        if session_id not in self._sessions_with_provider_output and self.tool_bridge.tool_gateway is not None:
+            self.tool_bridge.tool_gateway.emit_progress_once(
+                name=str(result.get("name") or record.get("name") or ""),
+                user_id=user_id,
+                session_id=session_id,
+                output_service=self.output_service,
+            )
         self.recorder.record_agent_event(
             session_id,
             {

@@ -711,6 +711,9 @@ class OutputRouter:
         default_on_blocked: str = "queue",
         default_on_interrupted: str = "drop",
         max_queue_size: int = 32,
+        tool_progress_audio_mode: str = "cached",
+        tool_progress_priority: str = "low",
+        tool_progress_ttl_seconds: int = 10,
     ) -> None:
         self.stream_service = stream_service
         self.recorder = recorder
@@ -719,6 +722,9 @@ class OutputRouter:
         self.default_priority = default_priority
         self.default_on_blocked = default_on_blocked
         self.default_on_interrupted = default_on_interrupted
+        self.tool_progress_audio_mode = tool_progress_audio_mode
+        self.tool_progress_priority = tool_progress_priority
+        self.tool_progress_ttl_seconds = tool_progress_ttl_seconds
         self.arbiter = PlaybackArbiter(stream_service=stream_service, recorder=recorder, max_queue_size=max_queue_size)
         self._stream_by_session: dict[str, str] = {}
         self._seq_by_stream: dict[str, int] = {}
@@ -1096,6 +1102,84 @@ class OutputRouter:
         self._finish_stream(resolved_intent.user_id, resolved_intent.session_id, stream_id, source)
         return decision
 
+    def submit_tool_progress_audio(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        tool_name: str,
+        messages: list[str],
+        generation_mode: str | None = None,
+    ) -> PlaybackDecision | None:
+        """提交工具前置播报音频。
+
+        主要逻辑：`cached` 模式复用提示音缓存；`realtime` 模式走当前 TTS 流式输出。
+        参数：`messages` 为 Tool 声明的候选文案，当前选择第一条可用文案。
+        返回值：播放仲裁决策；没有文案时返回 None。
+        异常情况：下游 stream 写入失败时继续抛出，便于验收暴露链路问题。
+        """
+
+        text = next((str(item).strip() for item in messages if str(item).strip()), "")
+        if not text:
+            return None
+        mode = (generation_mode or self.tool_progress_audio_mode or "cached").strip().lower()
+        cache_key = f"tool-progress:{tool_name}:{text}"
+        intent = OutputItem(
+            user_id=user_id,
+            session_id=session_id,
+            source="tool_progress_audio",
+            priority=self.tool_progress_priority,
+            ttl_seconds=self.tool_progress_ttl_seconds,
+            dedupe_key=cache_key,
+            cached_prompt_key=cache_key,
+        )
+        if mode == "realtime":
+            self.on_agent_text_delta(
+                AssistantTextDelta(user_id=user_id, session_id=session_id, text=text, final=False, intent=intent)
+            )
+            self.on_agent_text_delta(
+                AssistantTextDelta(user_id=user_id, session_id=session_id, text="", final=True, intent=intent)
+            )
+            active_stream_id = self._stream_by_session.get(session_id)
+            decision = PlaybackDecision(
+                action="submitted",
+                reason="tool_progress_realtime_tts",
+                active_stream_id=active_stream_id,
+                user_id=user_id,
+                session_id=session_id,
+                priority=self.tool_progress_priority,
+            )
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool.progress_audio.submitted",
+                    "source": "tool_progress_audio",
+                    "tool_name": tool_name,
+                    "generation_mode": mode,
+                    "message": text,
+                    "decision": decision.__dict__,
+                },
+            )
+            return decision
+        decision = self.submit_cached_prompt_audio(
+            intent=intent,
+            cache_key=cache_key,
+            text=text,
+            format=StreamFormat(codec="pcm16le", sample_rate=self.tts_config.sample_rate_hz, channels=1, chunk_ms=40),
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "tool.progress_audio.submitted",
+                "source": "tool_progress_audio",
+                "tool_name": tool_name,
+                "generation_mode": mode,
+                "message": text,
+                "decision": decision.__dict__,
+            },
+        )
+        return decision
+
 
 class OutputService:
     def __init__(
@@ -1108,6 +1192,9 @@ class OutputService:
         default_on_blocked: str = "queue",
         default_on_interrupted: str = "drop",
         max_queue_size: int = 32,
+        tool_progress_audio_mode: str = "cached",
+        tool_progress_priority: str = "low",
+        tool_progress_ttl_seconds: int = 10,
     ) -> None:
         self.router = OutputRouter(
             stream_service=stream_service,
@@ -1117,6 +1204,9 @@ class OutputService:
             default_on_blocked=default_on_blocked,
             default_on_interrupted=default_on_interrupted,
             max_queue_size=max_queue_size,
+            tool_progress_audio_mode=tool_progress_audio_mode,
+            tool_progress_priority=tool_progress_priority,
+            tool_progress_ttl_seconds=tool_progress_ttl_seconds,
         )
         self.notification_coordinator = NotificationCoordinator(output_service=self)
 
@@ -1220,6 +1310,32 @@ class OutputService:
             cache_key=cache_key,
             text=text,
             format=format or StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
+        )
+
+    def submit_tool_progress(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        tool_name: str,
+        messages: list[str],
+        generation_mode: str | None = None,
+    ) -> PlaybackDecision | None:
+        """提交 Tool 前置播报。
+
+        主要逻辑：供 Agent Core 在确认模型首输出是 tool call 后调用，避免普通文本回复
+        被插入提示音。
+        参数：`messages` 为候选提示文案；`generation_mode` 支持 cached/realtime。
+        返回值：播放决策或 None。
+        异常情况：无文案时返回 None。
+        """
+
+        return self.router.submit_tool_progress_audio(
+            user_id=user_id,
+            session_id=session_id,
+            tool_name=tool_name,
+            messages=messages,
+            generation_mode=generation_mode,
         )
 
     def notify_task_event(self, event: Any) -> NotificationDecision:

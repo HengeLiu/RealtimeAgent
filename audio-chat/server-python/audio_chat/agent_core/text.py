@@ -78,6 +78,7 @@ class TextAgentCore:
         tool_gateway: ToolGateway | None = None,
     ) -> None:
         self.control_service = control_service
+        self.output_service = output_service
         self.output_adapter = TextOutputAdapter(output_service=output_service, recorder=recorder)
         self.recorder = recorder
         self.asr_pipeline = AsrPipeline(config=asr_config or AsrProviderConfig(), recorder=recorder)
@@ -200,10 +201,15 @@ class TextAgentCore:
         )
         for _ in range(4):
             tool_calls: list[dict[str, Any]] = []
+            model_output_started = False
+            first_output_was_tool_call = False
             for item in self._stream_model(messages=messages, transcript=transcript, tools=tools):
                 if user_id in self._cancelled_users:
                     return "".join(assistant_parts)
                 if isinstance(item, dict) and item.get("type") == "tool_call":
+                    if not model_output_started:
+                        model_output_started = True
+                        first_output_was_tool_call = True
                     tool_calls.append(item)
                     self._record_event(
                         "tool_call.delta",
@@ -216,6 +222,8 @@ class TextAgentCore:
                 text_delta = self._extract_text_delta(item)
                 if not text_delta:
                     continue
+                if not model_output_started:
+                    model_output_started = True
                 assistant_parts.append(text_delta)
                 self.output_adapter.emit_text_delta(
                     user_id=user_id,
@@ -227,6 +235,13 @@ class TextAgentCore:
                 break
             messages.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
             for tool_call in tool_calls:
+                if first_output_was_tool_call:
+                    self.tool_gateway.emit_progress_once(
+                        name=str(tool_call.get("name") or ""),
+                        user_id=user_id,
+                        session_id=session_id,
+                        output_service=self.output_service,
+                    )
                 result = self._call_tool(
                     name=str(tool_call.get("name") or ""),
                     user_id=user_id,

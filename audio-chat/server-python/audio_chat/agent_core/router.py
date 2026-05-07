@@ -53,13 +53,14 @@ class AgentCoreRouter:
         异常情况：未知模式抛出异常。
         """
 
-        if mode == "text":
+        normalized = _normalize_mode(mode)
+        if normalized == "text":
             return TextAgentCore(**_text_kwargs(kwargs))
-        if mode == "realtime_audio":
+        if normalized == "realtime_audio":
             return RealtimeAudioAgentCore(**kwargs)
-        if mode == "auto":
+        if normalized == "auto":
             return TextAgentCore(**_text_kwargs(kwargs))
-        factory = self.factories.get(mode)
+        factory = self.factories.get(normalized)
         if factory is not None:
             return factory(**kwargs)
         raise ValueError(f"unsupported agent.mode: {mode}")
@@ -82,3 +83,12 @@ def _text_kwargs(kwargs: dict) -> dict:
         for key, value in kwargs.items()
         if key in {"control_service", "output_service", "recorder", "asr_config", "text_model_config", "tool_gateway"}
     }
+
+
+def _normalize_mode(mode: str) -> str:
+    """规范化 Agent Core 模式别名。"""
+
+    normalized = str(mode or "text").strip().lower()
+    if normalized in {"realtime", "omni", "omni_realtime"}:
+        return "realtime_audio"
+    return normalized

@@ -149,6 +149,8 @@ class BaseTool:
     description: str = ""
     input_model: Any = dict
     timeout_seconds: float | None = None
+    progress_message: str = ""
+    progress_messages: tuple[str, ...] = ()
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行 Tool。
@@ -316,6 +318,7 @@ class ToolSchemaBuilder:
             "description": tool.description,
             "parameters": self._input_schema(tool.input_model),
             "progress_message": getattr(tool, "progress_message", None),
+            "progress_messages": list(getattr(tool, "progress_messages", ()) or ()),
             "timeout_seconds": getattr(tool, "timeout_seconds", None),
         }
 
@@ -461,7 +464,6 @@ class ToolGateway:
             result = ToolResult.failed(exc)
             self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
             return result
-        self._emit_progress_once(tool=tool, session_id=session_id)
         result = await self.executor.execute(
             tool,
             self.context_factory.create(user_id=user_id, session_id=session_id),
@@ -469,6 +471,68 @@ class ToolGateway:
         )
         self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
         return result
+
+    def emit_progress_once(
+        self,
+        *,
+        name: str,
+        user_id: str,
+        session_id: str,
+        output_service: Any = None,
+        mode: str | None = None,
+    ) -> bool:
+        """在模型首输出为 Tool 调用时触发工具前置播报。
+
+        主要逻辑：
+        1. 读取 Tool 声明的 `progress_message` 或 `progress_messages`。
+        2. 同一 session 内同一 Tool 只触发一次。
+        3. 如果注入了 Output Service，同时下发 cached 或 realtime 提示音。
+
+        参数：`name` 为工具名；`user_id/session_id` 定位当前轮次；`mode` 为提示音生成模式。
+        返回值：实际触发时返回 True。
+        异常情况：未知 Tool 或无提示文案时返回 False，不打断工具调用。
+        """
+
+        try:
+            tool = self.registry.get(name)
+        except ToolError:
+            return False
+        messages = self._progress_candidates(tool)
+        if not messages:
+            return False
+        tool_name = tool.name or tool.__class__.__name__
+        key = (session_id, tool_name)
+        if key in self._progress_emitted:
+            return False
+        self._progress_emitted.add(key)
+        message = messages[0]
+        resolved_mode = str(
+            mode
+            or getattr(getattr(output_service, "router", None), "tool_progress_audio_mode", "")
+            or "cached"
+        )
+        decision = None
+        if output_service is not None and hasattr(output_service, "submit_tool_progress"):
+            decision = output_service.submit_tool_progress(
+                user_id=user_id,
+                session_id=session_id,
+                tool_name=tool_name,
+                messages=messages,
+                generation_mode=resolved_mode,
+            )
+        if self.recorder and hasattr(self.recorder, "record_agent_event"):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool.progress_message.emitted",
+                    "tool_name": tool_name,
+                    "message": message,
+                    "candidates": messages,
+                    "generation_mode": resolved_mode,
+                    "playback_decision": getattr(decision, "__dict__", decision),
+                },
+            )
+        return True
 
     def call_sync_safe(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
         """从同步 Agent 热路径安全调用异步 Tool。
@@ -507,22 +571,19 @@ class ToolGateway:
         assert result is not None
         return result
 
-    def _emit_progress_once(self, *, tool: BaseTool, session_id: str) -> None:
-        progress_message = str(getattr(tool, "progress_message", "") or "").strip()
-        tool_name = tool.name or tool.__class__.__name__
-        key = (session_id, tool_name)
-        if not progress_message or key in self._progress_emitted:
-            return
-        self._progress_emitted.add(key)
-        if self.recorder and hasattr(self.recorder, "record_agent_event"):
-            self.recorder.record_agent_event(
-                session_id,
-                {
-                    "event": "tool.progress_message.emitted",
-                    "tool_name": tool_name,
-                    "message": progress_message,
-                },
-            )
+    @staticmethod
+    def _progress_candidates(tool: BaseTool) -> list[str]:
+        """读取 Tool 的候选前置播报文案。"""
+
+        candidates: list[str] = []
+        for item in getattr(tool, "progress_messages", ()) or ():
+            text = str(item or "").strip()
+            if text:
+                candidates.append(text)
+        single = str(getattr(tool, "progress_message", "") or "").strip()
+        if single and single not in candidates:
+            candidates.insert(0, single)
+        return candidates
 
     def _record_trace(
         self,
