@@ -23,9 +23,6 @@ build-backend = "setuptools.build_meta"
 where = ["server-python"]
 include = ["audio_chat*"]
 
-[tool.setuptools.package-data]
-audio_chat = ["endpoints/web_glass_static/*.html"]
-
 [tool.pytest.ini_options]
 pythonpath = ["server-python"]
 testpaths = ["tests"]

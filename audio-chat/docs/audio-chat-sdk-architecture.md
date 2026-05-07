@@ -2205,7 +2205,7 @@ uv run audio-chat.playback.glass --help
 uv run audio-chat.server.run --help
 ```
 
-`audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control`、`/ws/stream` 和 `/web-glass` 静态参考端侧入口。完整 CLI 目标如下：
+`audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control` 和 `/ws/stream`。server SDK 不内置任何具体端侧页面或端侧类型预判；参考端侧以独立工程或独立文件形式存在，设备类型只在 `control.device.register.requested` 中声明。完整 CLI 目标如下：
 
 | 命令 | 说明 |
 | --- | --- |
@@ -2292,13 +2292,13 @@ DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
   --config audio-chat/examples/minimal/server-omni.yaml
 ```
 
-然后打开：
+然后直接打开独立参考端侧页面：
 
 ```text
-http://127.0.0.1:8765/web-glass
+audio-chat/endpoints/web-glass/index.html
 ```
 
-页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
+如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/endpoints/web-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
 
 后台启动、日志和停止是可选增强，但建议保留：
 

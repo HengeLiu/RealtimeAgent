@@ -1,14 +1,8 @@
-import asyncio
-from importlib import resources
-
-from aiohttp import ClientSession, web
-
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.server import AudioChatHttpServer
+from pathlib import Path
 
 
 def _html() -> str:
-    return resources.files("audio_chat.endpoints.web_glass_static").joinpath("index.html").read_text(encoding="utf-8")
+    return Path(__file__).resolve().parents[1].joinpath("endpoints/web-glass/index.html").read_text(encoding="utf-8")
 
 
 def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
@@ -72,28 +66,15 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "MediaFrame" not in html
 
 
-def test_web_glass_static_entry_returns_200(tmp_path) -> None:
-    """测试目标：验证 `audio-chat.server.run` 暴露 web-glass 静态入口。
+def test_web_glass_is_not_served_by_sdk_server() -> None:
+    """测试目标：验证 web-glass 不作为 SDK server 内置静态路由。
 
-    测试方法：启动临时 aiohttp app，请求 `/web-glass`。
-    预期结果：返回 200 和 HTML 内容。
+    测试方法：检查 server 源码不包含 `/web-glass` 路由和 `web_glass` handler。
+    预期结果：server 只暴露协议和 debug API，不预判具体端侧类型。
     """
+    server_source = Path(__file__).resolve().parents[1].joinpath("server-python/audio_chat/server.py").read_text(
+        encoding="utf-8"
+    )
 
-    async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
-        server = AudioChatHttpServer(audio_app)
-        runner = web.AppRunner(server.create_web_app())
-        await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001
-        try:
-            async with ClientSession() as session:
-                async with session.get(f"http://127.0.0.1:{port}/web-glass") as response:
-                    text = await response.text()
-                    assert response.status == 200
-                    assert "audio-chat web-glass" in text
-        finally:
-            await runner.cleanup()
-
-    asyncio.run(run())
+    assert '"/web-glass"' not in server_source
+    assert "def web_glass" not in server_source

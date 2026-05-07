@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import importlib
 import json
-from importlib import resources
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -112,8 +111,6 @@ class AudioChatHttpServer:
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/debug/devices", self.debug_devices)
         app.router.add_get("/api/debug/users/{user_id}", self.debug_user)
-        app.router.add_get("/web-glass", self.web_glass)
-        app.router.add_get("/endpoints/web-glass/", self.web_glass)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
         return app
@@ -148,17 +145,6 @@ class AudioChatHttpServer:
         异常情况：无。
         """
         return web.json_response(self.audio_app.control_service.build_user_snapshot(request.match_info["user_id"]))
-
-    async def web_glass(self, _request: web.Request) -> web.Response:
-        """返回 web-glass 参考端侧页面。
-
-        主要逻辑：从包内静态资源读取原生 HTML/JS，不引入前端构建系统。
-        参数：aiohttp request。
-        返回值：HTML response。
-        异常情况：资源缺失时 aiohttp 返回 500。
-        """
-        html = resources.files("audio_chat.endpoints.web_glass_static").joinpath("index.html").read_text(encoding="utf-8")
-        return web.Response(text=html, content_type="text/html")
 
     async def control_ws(self, request: web.Request) -> web.WebSocketResponse:
         """处理控制 WebSocket。

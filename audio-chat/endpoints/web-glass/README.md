@@ -35,17 +35,21 @@ DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
   --config audio-chat/examples/minimal/server-omni.yaml
 ```
 
-浏览器打开：
+浏览器直接打开本地页面文件，例如在 macOS 上：
 
-```text
-http://127.0.0.1:8765/web-glass
+```bash
+open audio-chat/endpoints/web-glass/index.html
 ```
 
 可选 query 参数：
 
 ```text
-http://127.0.0.1:8765/web-glass?user_id=user-web&device_id=dev-web&server_url=http://127.0.0.1:8765
+file:///.../audio-chat/endpoints/web-glass/index.html?user_id=user-web&device_id=dev-web&server_url=http://127.0.0.1:8765
 ```
+
+`web-glass` 是独立参考端侧，不由 `audio-chat.server.run` 通过 `/web-glass`
+返回页面。server SDK 只暴露 `/ws/control`、`/ws/stream` 和 debug API；端侧类型只在设备
+注册事件中声明。
 
 ## 手动验收
 
