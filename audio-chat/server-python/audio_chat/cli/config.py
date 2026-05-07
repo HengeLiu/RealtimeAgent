@@ -26,7 +26,14 @@ def sync(argv: list[str] | None = None) -> None:
     parser.add_argument("--playback-config", default="examples/minimal/playback.yaml", help="源 playback YAML")
     parser.add_argument("--server-url", default="http://127.0.0.1:8765", help="各参考端侧使用的 server URL")
     parser.add_argument("--user-id", default="user-playback-001", help="各参考端侧使用的 user_id")
+    parser.add_argument(
+        "--auth-mode",
+        choices=["disabled", "static_token", "signed_token"],
+        default="",
+        help="端侧注册鉴权模式；默认根据 --auth-token 自动选择",
+    )
     parser.add_argument("--auth-token", default="", help="可选静态鉴权 token；为空时使用 disabled auth")
+    parser.add_argument("--signed-token", default="", help="可选 signed_token；仅 --auth-mode signed_token 时写入")
     parser.add_argument("--output-dir", default="", help="配置输出目录，默认 app-root/config/generated")
     args = parser.parse_args(argv)
 
@@ -50,7 +57,7 @@ def sync(argv: list[str] | None = None) -> None:
             "server_url": args.server_url,
             "user_id": args.user_id,
             "device_id": "dev-python-playback-001",
-            "auth": _auth(args.auth_token),
+            "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
         },
     )
     _write_yaml(
@@ -60,7 +67,7 @@ def sync(argv: list[str] | None = None) -> None:
             "server_url": args.server_url,
             "user_id": args.user_id,
             "device_id": "dev-python-phone-mock-001",
-            "auth": _auth(args.auth_token),
+            "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
             "capabilities": {
                 "streams.produce": ["sensor.rgb", "sensor.depth", "sensor.imu"],
                 "streams.consume": ["actuator.speaker", "actuator.haptic"],
@@ -83,7 +90,7 @@ def sync(argv: list[str] | None = None) -> None:
             "user_id": args.user_id,
             "device_id": "dev-web-glass-001",
             "client_type": "web-glass",
-            "auth": _auth(args.auth_token),
+            "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
             "audio": {"aec": "browser_webrtc", "wake_word": "manual"},
             "stream": {"sensor_mic": {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}},
         },
@@ -94,8 +101,20 @@ def sync(argv: list[str] | None = None) -> None:
                 "server_url": args.server_url,
                 "user_id": args.user_id,
                 "device_id": "dev-ios-phone-001",
-                "auth": _auth(args.auth_token),
+                "auth": _auth(args.auth_mode, args.auth_token, args.signed_token),
                 "protocol_version": "audio-chat.v1",
+                "capabilities": {
+                    "streams.produce": ["sensor.rgb", "sensor.mic"],
+                    "streams.consume": ["actuator.speaker", "actuator.haptic"],
+                    "sensor.rgb": True,
+                    "audio.aec": "replaceable",
+                    "audio.wake_word": "manual",
+                },
+                "subscriptions": [
+                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+                    {"event": "control.audio_session.*"},
+                ],
             },
             ensure_ascii=False,
             indent=2,
@@ -171,7 +190,15 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
-def _auth(token: str) -> dict[str, str]:
-    if token:
+def _auth(mode: str, token: str, signed_token: str = "") -> dict[str, str]:
+    resolved_mode = mode or ("static_token" if token else "disabled")
+    if resolved_mode == "static_token":
         return {"mode": "static_token", "token": token}
+    if resolved_mode == "signed_token":
+        data = {"mode": "signed_token"}
+        if signed_token:
+            data["signed_token"] = signed_token
+        else:
+            data["hint"] = "generate signed_token with the pairing service before registering this endpoint"
+        return data
     return {"mode": "disabled"}

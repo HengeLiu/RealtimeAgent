@@ -817,6 +817,15 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 4. iOS 可上传至少一种输入 stream，优先 `sensor.rgb` 或测试 PCM `sensor.mic`。
 5. 无 Xcode 环境时，contract test 必须仍能校验配置、协议和文档；有 Xcode 环境时，build 不应失败。
 
+当前落地状态：
+
+1. `endpoints/ios-phone/AudioChatPhone.xcodeproj` 已提供最小 SwiftUI App。
+2. `AudioChatEndpointRuntime` 已实现 `/ws/control` 注册、`/ws/stream` 连接、`sensor.rgb`
+   测试 JPEG 上传、测试 `sensor.mic` PCM 上传和 `actuator.speaker` buffer 消费回执。
+3. `testdata/contracts/endpoints/ios_phone_register_requested.json` 已记录 iOS 注册 golden。
+4. `tests/test_ios_phone_endpoint_contract.py` 和 `tests/test_endpoint_config_sync.py` 覆盖无 Xcode
+   环境下的配置、协议和文档验收；有 Xcode 时仍需补跑上面的 `xcodebuild` 命令。
+
 ### 13.2 F-ESP32：ESP32-S3 真机桥接与验收
 
 目标：把 `endpoints/esp32-s3` 从 AEC bridge、README 和配置样例推进到可真机联调的

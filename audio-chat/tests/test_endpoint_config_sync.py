@@ -106,3 +106,28 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     assert "sensor.rgb" in phone["capabilities"]["streams.produce"]
     assert "actuator.speaker" in phone["capabilities"]["streams.consume"]
     assert esp32.device_id == "dev-esp32-s3-001"
+    assert "sensor.rgb" in ios["capabilities"]["streams.produce"]
+    assert "actuator.speaker" in ios["capabilities"]["streams.consume"]
+    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in ios["subscriptions"]
+
+
+def test_endpoint_config_sync_can_emit_signed_token_hint_for_ios(tmp_path: Path) -> None:
+    """测试目标：验证 signed_token 模式下 iOS 配置不会静默退回 disabled。
+
+    测试方法：执行 config sync 并显式指定 `--auth-mode signed_token`，不提供实际 token。
+    预期结果：生成的 iOS 配置保留 signed_token 模式，并写入开发者生成 token 的提示。
+    """
+
+    output_dir = tmp_path / "generated"
+    subprocess.run(
+        ["uv", "run", "audio-chat.config.sync", "--output-dir", str(output_dir), "--auth-mode", "signed_token"],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    report = json.loads((output_dir / "sync-result.json").read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+
+    assert ios["auth"]["mode"] == "signed_token"
+    assert "generate signed_token" in ios["auth"]["hint"]

@@ -1,0 +1,47 @@
+{
+  "event_id": "evt-contract-ios-phone-register-requested",
+  "event_name": "control.device.register.requested",
+  "payload": {
+    "auth": {
+      "mode": "disabled"
+    },
+    "capabilities": {
+      "audio.aec": "replaceable",
+      "audio.wake_word": "manual",
+      "sensor.rgb": true,
+      "streams.consume": [
+        "actuator.speaker",
+        "actuator.haptic"
+      ],
+      "streams.produce": [
+        "sensor.rgb",
+        "sensor.mic"
+      ]
+    },
+    "client_type": "ios-phone",
+    "device_id": "dev-ios-phone-001",
+    "device_name": "ios-phone-reference",
+    "sdk_version": "audio-chat-ios-reference-0.1.0",
+    "subscriptions": [
+      {
+        "event": "stream.control.*",
+        "filter": {
+          "stream_type": "sensor.rgb"
+        }
+      },
+      {
+        "event": "stream.output.*",
+        "filter": {
+          "stream_type": "actuator.speaker"
+        }
+      },
+      {
+        "event": "control.audio_session.*"
+      }
+    ]
+  },
+  "producer_id": "dev-ios-phone-001",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-endpoint-001",
+  "version": "audio-chat.v1"
+}
