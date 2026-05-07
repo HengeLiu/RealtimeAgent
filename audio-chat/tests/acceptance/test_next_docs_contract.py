@@ -48,7 +48,7 @@ def test_architecture_doc_has_current_status_matrix() -> None:
     assert "| Control Service | 已实现 |" in document
     assert "| Stream Service | 已实现 |" in document
     assert "| Audio Pipeline | 部分实现 |" in document
-    assert "| Memory / Skill / MCP | 未实现 |" in document
+    assert "| Memory / Skill / MCP | 已实现 |" in document
 
 
 def test_architecture_and_readme_cli_commands_are_real_or_roadmap() -> None:

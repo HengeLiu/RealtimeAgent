@@ -4,7 +4,7 @@
 
 ## 1. 当前基线
 
-上一阶段并行开发已经完成，当前 `audio-chat` 可以进入下一阶段并行开发。
+上一阶段并行开发已经完成，当前 `audio-chat` 已完成第一批和第二批并行线路，可以进入第三批并行开发。
 
 已确认通过的基线验收：
 
@@ -23,6 +23,8 @@ uv run python scripts/acceptance_check.py all --keep-going \
 5. `ToolGateway`、`BaseTool`、`BaseTask`、`TaskEngine`、自动发现和 `UserDeviceContext`。
 6. `OutputService`、流式 TTS 入口、原生 audio delta 入口、播放仲裁。
 7. aiohttp server、Python playback、web-glass 基础端侧、preflight 和 acceptance 脚本。
+8. 开发者可用入口、示例 App、能力回放、下一阶段 lane 注册、Python phone mock 和 web-glass 最小闭环。
+9. 音频会话生命周期、轻量音频处理器链、正式设备注册鉴权、signed_token、Task Engine 生产化、Provider 工具桥和输出实时性。
 
 下一阶段目标先不追求完整复刻老版 SDK，而是把 SDK 从“协议骨架可运行”推进到“功能开发者可用”。这里的可用不是指内部模块存在，而是指开发者能安装 SDK、创建应用目录、编写 Tool / Task、启动 mock 端侧、跑一次回放验收，并能从日志和运行产物判断能力是否真的生效。
 
@@ -478,6 +480,14 @@ uv run python scripts/acceptance_check.py auth-device-management
 
 目标：实现设计文档中仍停留在配置层的 Memory Service、Skill Service 和 MCP Gateway，并且全部通过 Tool 间接接入 Agent。
 
+当前实现状态：
+
+1. `MemoryService` 已提供 `MemoryRecord`、jsonl store、`write/search/delete` 和 `memory_search` / `manage_memory` 内置 Tool。
+2. `SkillService` 已支持从配置 roots 读取 `SKILL.md` / metadata，输出 description、tool allowlist 和 prompt snippets，并通过 `read_skill` Tool 暴露给 Agent。
+3. `McpGateway` 已支持从 yaml/json 配置读取 MCP tool 描述、本地 mock 调用、默认超时和 `mcp_call` Tool。
+4. `ToolContextFactory` 已注入 memory / skills / mcp；三者不持有 `UserDeviceContext`，设备能力仍只能经普通 Tool / Task 使用。
+5. `memory-skill-mcp` lane 已有独立自动验收。
+
 写入范围：
 
 ```text
@@ -740,6 +750,142 @@ curl http://127.0.0.1:8765/api/debug/playback
 3. 多设备订阅分发由注册策略决定，不按设备类型硬编码。
 4. 配置同步后各端使用同一组 server_url、user_id、device_id 和 token。
 
+### 13.1 F-iOS：iOS phone 参考端可运行客户端
+
+目标：把 `endpoints/ios-phone` 从协议锚点、README 和配置样例推进到可在
+Simulator 或真机上运行的参考客户端。该客户端不是生产 App，但必须能验证
+`audio-chat` 的设备注册、事件订阅、stream 打开、基础传感器上传和执行器消费。
+
+写入范围：
+
+```text
+audio-chat/endpoints/ios-phone/
+audio-chat/endpoints/ios-phone/AppConfig.example.json
+audio-chat/endpoints/ios-phone/README.md
+audio-chat/server-python/audio_chat/cli/config.py
+audio-chat/tests/test_ios_phone_endpoint_contract.py
+audio-chat/tests/test_endpoint_config_sync.py
+```
+
+任务清单：
+
+1. iOS 项目骨架：
+   - 提供可打开的 Xcode project 或 Swift Package。
+   - 配置读取 `AppConfig.json`，字段与 `audio-chat.config.sync` 生成结果一致。
+   - README 写清楚 Simulator 和真机的启动方式。
+2. Control WebSocket：
+   - 连接 `/ws/control`。
+   - 发送 `control.device.register.requested`。
+   - 携带 `user_id`、`device_id`、capabilities、subscriptions 和 auth。
+   - 接收并处理 `control.device.registered`、`stream.output.*`、`stream.control.*`。
+3. Stream WebSocket：
+   - 支持上传 `sensor.mic` 或测试 PCM stream。
+   - 支持上传 `sensor.rgb` 测试图片或相册图片。
+   - 支持消费 `actuator.speaker` 输出 stream，至少能写入本地 buffer 并上报播放完成。
+4. 端侧能力：
+   - 声明 `streams.produce` 和 `streams.consume`。
+   - 唤醒、AEC、相机、播放器能力先以 capability 声明和可替换接口表达。
+   - 真实麦克风、相机和播放器接入可以分阶段推进，但不能改变协议。
+5. 配置同步：
+   - `audio-chat.config.sync` 能生成 iOS 使用的 `AppConfig.json`。
+   - 多端配置中的 `device_id` 不重复。
+   - signed_token 开启时能写入 token 或明确提示开发者生成方式。
+
+验收命令：
+
+```bash
+cd audio-chat
+uv run python -m pytest \
+  tests/test_ios_phone_endpoint_contract.py \
+  tests/test_endpoint_config_sync.py \
+  -q
+```
+
+如果本地安装 Xcode，还需要补充并运行：
+
+```bash
+cd audio-chat/endpoints/ios-phone
+xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
+```
+
+通过条件：
+
+1. iOS 配置 schema 与 server、web-glass、python-phone-mock 使用同一套字段语义。
+2. iOS 注册事件符合协议 golden，不引入 iOS 专用 RPC。
+3. iOS 可订阅并处理输出 stream 事件，能消费或模拟消费 `actuator.speaker`。
+4. iOS 可上传至少一种输入 stream，优先 `sensor.rgb` 或测试 PCM `sensor.mic`。
+5. 无 Xcode 环境时，contract test 必须仍能校验配置、协议和文档；有 Xcode 环境时，build 不应失败。
+
+### 13.2 F-ESP32：ESP32-S3 真机桥接与验收
+
+目标：把 `endpoints/esp32-s3` 从 AEC bridge、README 和配置样例推进到可真机联调的
+参考端。ESP32-S3 必须遵守端侧职责边界：端侧负责唤醒、AEC、麦克风采集和喇叭播放，
+server 只通过 event 和 stream 管理会话、输入、输出和关闭。
+
+写入范围：
+
+```text
+audio-chat/endpoints/esp32-s3/
+audio-chat/endpoints/esp32-s3/local.env.example
+audio-chat/docs/esp32-s3-endpoint-bridge.md
+audio-chat/server-python/audio_chat/endpoints/esp32_aec.py
+audio-chat/server-python/audio_chat/cli/config.py
+audio-chat/tests/test_esp32_s3_endpoint_contract.py
+audio-chat/tests/test_endpoint_config_sync.py
+```
+
+任务清单：
+
+1. 固件协议适配：
+   - 连接 `/ws/control` 完成设备注册。
+   - wake 后才打开 `/ws/stream` 上传 `sensor.mic`。
+   - 连续对话关闭后释放音频 stream 连接。
+   - 接收 `actuator.speaker` 输出 stream 并写入播放器。
+2. AEC bridge：
+   - 保留并整理现有 ESP32-S3 AEC 测试经验。
+   - 明确端侧 playback reference、采样率、chunk 时长和延迟配置。
+   - server preflight 只诊断能力声明，不假装替代端侧 AEC。
+3. 会话生命周期：
+   - 处理 `control.audio_session.open.requested`。
+   - 回传 `control.audio_session.opened`。
+   - 处理 `control.audio_session.close.requested`。
+   - 回传 `control.audio_session.closed`。
+   - 支持用户打断时取消当前播放，但不默认关闭整个 audio session。
+4. 配置同步：
+   - `audio-chat.config.sync` 能生成 ESP32-S3 使用的本地配置或 `.env`。
+   - 包含 server URL、user_id、device_id、auth 和音频格式。
+   - 不要求开发者手写与 server 不一致的 device_id。
+5. 诊断与验收产物：
+   - 固件或 bridge 输出注册、订阅、stream open、chunk count、播放完成、关闭原因。
+   - server runs 产物能对应同一 session_id。
+   - 失败时能区分 Wi-Fi、auth、control ws、stream ws、音频格式和播放回执问题。
+
+验收命令：
+
+```bash
+cd audio-chat
+uv run python -m pytest \
+  tests/test_esp32_s3_endpoint_contract.py \
+  tests/test_endpoint_config_sync.py \
+  -q
+```
+
+有真机环境时补充运行硬件 smoke：
+
+```bash
+cd audio-chat
+uv run audio-chat.server.run --config examples/minimal/server-omni.yaml
+# 另一个终端刷写或启动 ESP32-S3，并保留串口日志和 runs/audio-chat/sessions/<session_id>/ 产物
+```
+
+通过条件：
+
+1. ESP32-S3 注册事件、订阅和 capability 与协议契约一致。
+2. wake 前不建立持续音频 stream；wake 后上传 `sensor.mic`；连续对话结束后释放连接。
+3. `actuator.speaker` 输出能被端侧消费，并能上报播放完成或失败。
+4. AEC 相关能力由端侧声明和实现，server 只做诊断和会话控制。
+5. 无硬件环境时，contract test 必须覆盖协议、配置和文档；有硬件环境时，真机 smoke 需要保留串口日志与 server runs 产物。
+
 ## 14. 并行线路 G：开发者体验、CLI 与发布闸门
 
 目标：让 SDK 具备开发者可安装、可启动、可预检、可排障的完整体验。
@@ -863,7 +1009,7 @@ uv run python scripts/acceptance_check.py next-docs-contract
 
 ## 16. 推荐并行顺序
 
-第一批，立即执行：
+已完成的第一批：
 
 1. P0-A 开发者可用验收入口。
 2. P0-B 示例 App 与能力回放闭环。
@@ -871,7 +1017,7 @@ uv run python scripts/acceptance_check.py next-docs-contract
 4. G 开发者体验、CLI 与发布闸门。
 5. F 参考端侧与多端联调中的 Python playback、Python phone mock 和 web-glass 最小闭环。
 
-第一批完成后，应先冻结一个开发者可用基线：
+第一批完成后，已冻结开发者可用基线。需要复核时运行：
 
 ```bash
 cd audio-chat
@@ -881,9 +1027,9 @@ uv run python scripts/acceptance_check.py capability-template-playback --keep-go
   --report runs/acceptance/capability-template-playback-baseline.json
 ```
 
-这两个报告通过前，不建议把团队主要精力投入 iOS、ESP32 真机或复杂 provider 适配，因为功能开发者还没有稳定入口。
+这两个报告通过前，不建议把团队主要精力投入 iOS、ESP32 真机或复杂 provider 适配，因为功能开发者还没有稳定入口。当前这部分已经通过，可作为后续开发入口。
 
-第二批，依赖第一批部分结果：
+已完成的第二批：
 
 1. A Audio Pipeline 与会话生命周期。
 2. B 正式设备注册、鉴权与绑定管理。
@@ -891,20 +1037,21 @@ uv run python scripts/acceptance_check.py capability-template-playback --keep-go
 4. D Task Engine 生产化。
 5. H 文档、契约和迁移样板。
 
-第三批，开发者闭环稳定后推进：
+第三批，当前应立即推进：
 
 1. C Memory / Skill / MCP 能力面。
-2. F 中的 iOS phone 参考端。
-3. F 中的 ESP32-S3 真机桥接。
+2. F 线后续子任务：iOS phone 参考端从协议骨架推进到可运行客户端。
+3. F 线后续子任务：ESP32-S3 真机桥接从 AEC bridge 和配置样例推进到真机验收。
 4. 业务能力从老 SDK 迁移到 `audio-chat` 示例项目。
+5. 全量验收稳定性，尤其是 `acceptance_check.py all --keep-going` 中 C 线缺失测试和真实 provider 集成测试的可重复性。
 
 依赖关系：
 
 1. C 依赖 ToolGateway 当前稳定契约，但不强依赖真实端侧。
-2. D 依赖 Asset Service 和 Output Service 当前契约，可与 A/F 并行，但最终联调需要 F。
-3. E 需要尽早做，因为当前 `TextAgentCore` 工具调用如果在 aiohttp event loop 内触发，存在同步调用风险。
-4. F 的 Python playback / Python phone mock 是功能开发者最小闭环，优先级高于 iOS 和 ESP32 真机。
-5. H 应持续跟随所有线路，不应等最后统一补文档。
+2. D 已完成，后续 C 和业务迁移可以依赖 Task Engine 的持久化、恢复、取消、超时和任务事件桥。
+3. E 已完成，后续真实 provider 问题应优先补集成测试稳定性和诊断，而不是重新设计 Agent Core 工具桥。
+4. F 的 Python playback / Python phone mock / web-glass 最小闭环已完成；iOS phone 和 ESP32-S3 在 F 线中只完成了协议锚点、配置样例和文档骨架，下一步端侧重点转向可运行客户端与真机验收。
+5. H 已完成第一轮，后续每条线路仍必须同步更新文档、契约和迁移样板。
 
 ## 17. 合并要求
 
@@ -965,4 +1112,4 @@ server DEBUG 日志
 1. 所有老版 SDK 能力迁移完成。
 2. iOS 和 ESP32 真机达到生产可用。
 3. Memory / Skill / MCP 达到完整生态能力。
-4. signed_token、设备配对和多 active device set 达到生产级管理后台能力。
+4. 设备配对和多 active device set 达到生产级管理后台能力。

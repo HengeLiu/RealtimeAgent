@@ -118,15 +118,19 @@ tasks:
 
 memory:
   enabled: false
+  store_type: "jsonl"
+  path: "runs/audio-chat/memory"
 
 skill:
   enabled: false
   roots:
-    - "audio-chat/skills"
+    - "examples/minimal/skills"
+  allow_tool_policy: true
 
 mcp:
   enabled: false
-  config_path: "audio-chat/mcp.json"
+  config_path: "examples/minimal/mcp.yaml"
+  default_timeout_seconds: 30
 
 endpoint_defaults:
   wake_word: "endpoint"

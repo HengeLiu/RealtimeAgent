@@ -1,0 +1,10 @@
+tools:
+  - name: demo.echo
+    description: 最小 MCP mock tool，用于本地无外部服务验收。
+    parameters:
+      type: object
+      properties:
+        text:
+          type: string
+    mock_result:
+      text: ok

@@ -115,8 +115,10 @@ uv run python scripts/acceptance_check.py capability-template-playback \
 Application code should import extension classes from the top-level package:
 
 ```python
-from audio_chat import BaseTask, BaseTool, TaskEvent, ToolResult, UserDeviceContext
+from audio_chat import BaseTask, BaseTool, McpGateway, MemoryService, SkillService, TaskEvent, ToolResult, UserDeviceContext
 ```
 
 Tool and Task code must use `UserDeviceContext` for endpoint capabilities. Do not send
 large media bytes in control event payloads; use `sensor.*` and `actuator.*` streams.
+Memory, Skill, and MCP services do not receive `UserDeviceContext` directly; when they
+need endpoint capabilities, expose that behavior through a normal Tool or Task.

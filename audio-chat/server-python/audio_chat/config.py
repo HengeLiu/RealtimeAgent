@@ -128,6 +128,27 @@ class GenericEnabledConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+    enabled: bool = False
+    store_type: str = "jsonl"
+    path: str = "runs/audio-chat/memory"
+
+
+@dataclass(frozen=True)
+class SkillConfig:
+    enabled: bool = False
+    roots: list[str] = field(default_factory=list)
+    allow_tool_policy: bool = True
+
+
+@dataclass(frozen=True)
+class McpConfig:
+    enabled: bool = False
+    config_path: str = "audio-chat/mcp.json"
+    default_timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
 class DiscoveryConfig:
     enabled: bool = False
     packages: list[str] = field(default_factory=list)
@@ -191,9 +212,9 @@ class AudioChatYamlConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
     tasks: TaskConfig = field(default_factory=TaskConfig)
-    memory: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
-    skill: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
-    mcp: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    skill: SkillConfig = field(default_factory=SkillConfig)
+    mcp: McpConfig = field(default_factory=McpConfig)
     endpoint_defaults: dict[str, Any] = field(default_factory=dict)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     dev_checks: DevChecksConfig = field(default_factory=DevChecksConfig)
@@ -223,9 +244,9 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         output=OutputConfig(**data.get("output", {})),
         tools=_tool_config(data.get("tools", {"enabled": True})),
         tasks=_task_config(data.get("tasks", {})),
-        memory=GenericEnabledConfig(**_generic(data.get("memory", {}))),
-        skill=GenericEnabledConfig(**_generic(data.get("skill", {}))),
-        mcp=GenericEnabledConfig(**_generic(data.get("mcp", {}))),
+        memory=MemoryConfig(**_known(data.get("memory", {}), {"enabled", "store_type", "path"})),
+        skill=SkillConfig(**_known(data.get("skill", {}), {"enabled", "roots", "allow_tool_policy"})),
+        mcp=McpConfig(**_known(data.get("mcp", {}), {"enabled", "config_path", "default_timeout_seconds"})),
         endpoint_defaults=data.get("endpoint_defaults", {}),
         observability=ObservabilityConfig(**data.get("observability", {})),
         dev_checks=DevChecksConfig(**_dev_checks(data.get("dev_checks", {}))),
@@ -297,10 +318,9 @@ def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
-def _generic(data: dict[str, Any]) -> dict[str, Any]:
-    data = dict(data)
-    enabled = bool(data.pop("enabled", False))
-    return {"enabled": enabled, "extra": data}
+def _known(data: dict[str, Any], keys: set[str]) -> dict[str, Any]:
+    raw = dict(data or {})
+    return {key: raw[key] for key in keys if key in raw}
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:

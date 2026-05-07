@@ -125,6 +125,9 @@ class ToolContext:
     session_id: str
     devices: "UserDeviceContext"
     tasks: Any = None
+    memory: Any = None
+    skills: Any = None
+    mcp: Any = None
     metadata: dict = None
 
     def __post_init__(self) -> None:
@@ -346,12 +349,31 @@ class ToolContextFactory:
     主要功能：集中创建 Tool 执行上下文，确保设备能力只通过 UserDeviceContext 注入。
     """
 
-    def __init__(self, *, app, task_engine: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        app,
+        task_engine: Any = None,
+        memory_service: Any = None,
+        skill_service: Any = None,
+        mcp_gateway: Any = None,
+    ) -> None:
         self.app = app
         self.task_engine = task_engine
+        self.memory_service = memory_service
+        self.skill_service = skill_service
+        self.mcp_gateway = mcp_gateway
 
     def create(self, *, user_id: str, session_id: str) -> ToolContext:
-        return ToolContext(user_id=user_id, session_id=session_id, devices=UserDeviceContext(user_id=user_id, app=self.app), tasks=self.task_engine)
+        return ToolContext(
+            user_id=user_id,
+            session_id=session_id,
+            devices=UserDeviceContext(user_id=user_id, app=self.app),
+            tasks=self.task_engine,
+            memory=self.memory_service,
+            skills=self.skill_service,
+            mcp=self.mcp_gateway,
+        )
 
 
 class ToolExecutor:
@@ -369,7 +391,7 @@ class ToolExecutor:
             return await coroutine
         except TimeoutError:
             return ToolResult.failed(ToolError("tool execution timeout", code=ErrorCode.TIMEOUT))
-        except ToolError as exc:
+        except AudioChatError as exc:
             return ToolResult.failed(exc)
         except Exception as exc:
             return ToolResult.failed(ToolError(str(exc), code=ErrorCode.UNKNOWN))
@@ -390,6 +412,7 @@ class ToolGateway:
         executor: ToolExecutor | None = None,
         context_factory: ToolContextFactory | None = None,
         recorder: Any = None,
+        skill_service: Any = None,
     ) -> None:
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy()
@@ -397,6 +420,7 @@ class ToolGateway:
         self.executor = executor or ToolExecutor()
         self.context_factory = context_factory
         self.recorder = recorder
+        self.skill_service = skill_service
         self._progress_emitted: set[tuple[str, str]] = set()
 
     def list_tools(self) -> list[BaseTool]:
@@ -406,6 +430,7 @@ class ToolGateway:
             tool
             for tool in self.registry.list_tools()
             if self.policy.allowed(tool.name or tool.__class__.__name__)
+            and self._skill_allowed(tool.name or tool.__class__.__name__)
         ]
 
     def schemas(self) -> list[dict]:
@@ -521,6 +546,12 @@ class ToolGateway:
             created_at=started,
         )
         self.recorder.record_tool_trace(session_id, asdict(trace))
+
+    def _skill_allowed(self, tool_name: str) -> bool:
+        if self.skill_service is None:
+            return True
+        tool_allowlist = getattr(self.skill_service, "tool_allowlist", lambda: set())()
+        return not tool_allowlist or tool_name in tool_allowlist
 
 
 @dataclass(frozen=True)
@@ -935,6 +966,73 @@ class CancelTaskTool(BaseTool):
         return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
 
 
+class MemorySearchTool(BaseTool):
+    """搜索长期记忆的内置 Tool。"""
+
+    name = "memory_search"
+    description = "搜索当前用户的长期记忆。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if context.memory is None:
+            return ToolResult.failed(ToolError("memory service is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        records = context.memory.search(
+            user_id=context.user_id,
+            query=str(input_data.get("query") or ""),
+            limit=int(input_data.get("limit") or 5),
+        )
+        return ToolResult.success(
+            data=[asdict(record) for record in records],
+            message=f"{len(records)} memory records matched",
+        )
+
+
+class ManageMemoryTool(BaseTool):
+    """写入长期记忆的内置 Tool。"""
+
+    name = "manage_memory"
+    description = "写入当前用户长期记忆。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if context.memory is None:
+            return ToolResult.failed(ToolError("memory service is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        record = context.memory.write(
+            user_id=context.user_id,
+            content=str(input_data.get("content") or ""),
+            metadata=dict(input_data.get("metadata") or {}),
+        )
+        return ToolResult.success(data=asdict(record), message="memory written")
+
+
+class ReadSkillTool(BaseTool):
+    """读取受控 Skill 的内置 Tool。"""
+
+    name = "read_skill"
+    description = "读取配置 Skill roots 下的受控 Skill 文档。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if context.skills is None:
+            return ToolResult.failed(ToolError("skill service is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        document = context.skills.read_skill(str(input_data.get("name") or ""))
+        return ToolResult.success(data=asdict(document), message=document.description)
+
+
+class McpCallTool(BaseTool):
+    """通过 MCP Gateway 调用 MCP tool 的内置 Tool。"""
+
+    name = "mcp_call"
+    description = "调用配置中的 MCP tool。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if context.mcp is None:
+            return ToolResult.failed(ToolError("mcp gateway is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        result = context.mcp.call(
+            tool_name=str(input_data.get("tool_name") or ""),
+            arguments=dict(input_data.get("arguments") or {}),
+            timeout_seconds=input_data.get("timeout_seconds"),
+        )
+        return ToolResult.success(data=result, message="mcp tool called")
+
+
 BUILTIN_TOOLS = (
     RequestAssetTool,
     ConfigureAssetStreamTool,
@@ -942,4 +1040,11 @@ BUILTIN_TOOLS = (
     QueryDeviceStateTool,
     QueryTaskStatusTool,
     CancelTaskTool,
+)
+
+EXTENSION_BUILTIN_TOOLS = (
+    MemorySearchTool,
+    ManageMemoryTool,
+    ReadSkillTool,
+    McpCallTool,
 )

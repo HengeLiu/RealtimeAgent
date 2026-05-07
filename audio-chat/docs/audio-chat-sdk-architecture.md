@@ -167,7 +167,7 @@ audio-chat/
 | Task Engine | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。 |
 | Output Service | 已实现 | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `tests/test_phase2_providers_output.py` 覆盖。 |
 | Endpoint references | 已实现 | Python playback、Python phone mock 和 web-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS / ESP32 目前只有参考目录和配置样例。 |
-| Memory / Skill / MCP | 未实现 | 仍处于 C 线路计划；任何需要设备能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
+| Memory / Skill / MCP | 已实现 | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
 | Signed token / Pairing | 未实现 | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。 |
 
 ### 3.6 已实现能力验收索引
@@ -184,6 +184,7 @@ audio-chat/
 | Tool / Task 协议原生扩展 | `tests/acceptance/test_protocol_native_tool_task_contract.py` |
 | Output Service 与播放仲裁 | `tests/test_phase2_providers_output.py`、`testdata/contracts/output/output_arbitration_preempt_low_priority.json` |
 | H 线路迁移样板 | `examples/migration-templates`、`tests/acceptance/test_migration_template_contract.py` |
+| Memory / Skill / MCP 能力面 | `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` |
 
 ### 3.7 公开扩展 API
 

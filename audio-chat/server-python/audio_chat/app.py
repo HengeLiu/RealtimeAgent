@@ -11,12 +11,15 @@ from audio_chat.asset import AssetService
 from audio_chat.audio_pipeline import AudioPipeline, AudioPipelineConfig as RuntimeAudioPipelineConfig
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
+from audio_chat.mcp import McpGateway
+from audio_chat.memory import JsonlMemoryStore, MemoryService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
+from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
 from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskEventBridge, TaskStore
-from audio_chat.tools import BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
+from audio_chat.tools import BUILTIN_TOOLS, EXTENSION_BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,15 @@ class AudioChatConfig:
     tasks_max_running_per_user: int = 16
     tasks_store_type: str = "memory"
     tasks_store_root: str | None = None
+    memory_enabled: bool = False
+    memory_store_type: str = "jsonl"
+    memory_path: str = "runs/audio-chat/memory"
+    skill_enabled: bool = False
+    skill_roots: tuple[str, ...] = ()
+    skill_allow_tool_policy: bool = True
+    mcp_enabled: bool = False
+    mcp_config_path: str = "audio-chat/mcp.json"
+    mcp_default_timeout_seconds: float = 30.0
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AudioChatConfig":
@@ -150,6 +162,15 @@ class AudioChatConfig:
             tasks_max_running_per_user=loaded.tasks.max_running_per_user,
             tasks_store_type=str(loaded.tasks.store.get("type") or "memory"),
             tasks_store_root=loaded.tasks.store.get("root"),
+            memory_enabled=loaded.memory.enabled,
+            memory_store_type=loaded.memory.store_type,
+            memory_path=loaded.memory.path,
+            skill_enabled=loaded.skill.enabled,
+            skill_roots=tuple(loaded.skill.roots),
+            skill_allow_tool_policy=loaded.skill.allow_tool_policy,
+            mcp_enabled=loaded.mcp.enabled,
+            mcp_config_path=loaded.mcp.config_path,
+            mcp_default_timeout_seconds=loaded.mcp.default_timeout_seconds,
         )
 
 
@@ -244,9 +265,27 @@ class AudioChatApp:
                 self.task_engine.register(task_cls)
             self.discovery_errors.extend(task_discovery.errors)
         self.task_engine.restore_unfinished()
+        self.memory_service = MemoryService(
+            enabled=self.config.memory_enabled,
+            store=JsonlMemoryStore(self.config.memory_path),
+        )
+        self.skill_service = SkillService(
+            enabled=self.config.skill_enabled,
+            roots=list(self.config.skill_roots),
+            allow_tool_policy=self.config.skill_allow_tool_policy,
+        )
+        self.mcp_gateway = McpGateway(
+            enabled=self.config.mcp_enabled,
+            config_path=self.config.mcp_config_path,
+            default_timeout_seconds=self.config.mcp_default_timeout_seconds,
+        )
         self.tool_registry = ToolRegistry()
         for tool_cls in BUILTIN_TOOLS:
             self.tool_registry.register(tool_cls())
+        for tool_cls in EXTENSION_BUILTIN_TOOLS:
+            tool = tool_cls()
+            if self._extension_tool_enabled(tool.name):
+                self.tool_registry.register(tool)
         if self.config.tools_discover_enabled:
             tool_discovery = ToolAutoDiscovery()
             for tool in tool_discovery.discover(
@@ -259,8 +298,15 @@ class AudioChatApp:
         self.tool_gateway = ToolGateway(
             registry=self.tool_registry,
             policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),
-            context_factory=ToolContextFactory(app=self, task_engine=self.task_engine),
+            context_factory=ToolContextFactory(
+                app=self,
+                task_engine=self.task_engine,
+                memory_service=self.memory_service,
+                skill_service=self.skill_service,
+                mcp_gateway=self.mcp_gateway,
+            ),
             recorder=self.recorder,
+            skill_service=self.skill_service,
         )
         self.agent_core = AgentCoreRouter.build(
             mode=self.config.agent_mode,
@@ -304,6 +350,17 @@ class AudioChatApp:
         self._active_session_by_user: dict[str, str] = {}
         self._audio_sessions_by_user: dict[str, AudioSessionState] = {}
         self.output_service.add_output_finished_listener(self._handle_output_finished)
+
+    def _extension_tool_enabled(self, tool_name: str) -> bool:
+        """判断 C 线内置扩展工具是否启用。"""
+
+        if tool_name in {"memory_search", "manage_memory"}:
+            return self.config.memory_enabled
+        if tool_name == "read_skill":
+            return self.config.skill_enabled
+        if tool_name == "mcp_call":
+            return self.config.mcp_enabled
+        return False
 
     def register_device(self, registration: Event, connection: DeviceConnection | None = None) -> Event:
         return self.control_service.register_device(registration, connection)
