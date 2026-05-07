@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import pkgutil
-from dataclasses import dataclass
+import time
+from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator
 
 from audio_chat.asset import ArtifactRef, AssetRef
@@ -90,6 +92,26 @@ class ToolError(AudioChatError):
     """
 
 
+@dataclass(frozen=True)
+class ToolTrace:
+    """Tool 调用轨迹。
+
+    主要功能：记录 Agent Core 通过 ToolGateway 看到的工具名、入参、耗时、结果和错误。
+    主要属性：`trace_id` 用于串联一次调用，`ok` 表示调用是否成功。
+    """
+
+    trace_id: str
+    tool_name: str
+    user_id: str
+    session_id: str
+    input_data: dict
+    ok: bool
+    duration_ms: int
+    result_message: str = ""
+    error: dict | None = None
+    created_at: float = 0.0
+
+
 @dataclass
 class ToolContext:
     """Tool 执行上下文。
@@ -164,6 +186,11 @@ class ToolRegistry:
 
     def list_tools(self) -> list[BaseTool]:
         return list(self._tools.values())
+
+    def list_names(self) -> list[str]:
+        """列出已注册 Tool 名称。"""
+
+        return sorted(self._tools)
 
 
 class ToolAutoDiscovery:
@@ -269,7 +296,47 @@ class ToolSchemaBuilder:
     """
 
     def build(self, tool: BaseTool) -> dict:
-        return {"name": tool.name or tool.__class__.__name__, "description": tool.description, "input_model": str(tool.input_model)}
+        """构造 SDK 内部工具 schema。
+
+        主要逻辑：优先读取 Pydantic `model_json_schema()`，否则使用通用 object schema。
+        参数：`tool` 为工具实例。
+        返回值：包含 `name/description/parameters` 的字典。
+        异常情况：schema 构造失败时降级为空 object schema。
+        """
+
+        return {
+            "name": tool.name or tool.__class__.__name__,
+            "description": tool.description,
+            "parameters": self._input_schema(tool.input_model),
+            "progress_message": getattr(tool, "progress_message", None),
+            "timeout_seconds": getattr(tool, "timeout_seconds", None),
+        }
+
+    def build_provider_schema(self, tool: BaseTool) -> dict:
+        """构造 provider function calling schema。"""
+
+        schema = self.build(tool)
+        return {
+            "type": "function",
+            "function": {
+                "name": schema["name"],
+                "description": schema["description"],
+                "parameters": schema["parameters"],
+            },
+        }
+
+    def _input_schema(self, input_model: Any) -> dict:
+        if isinstance(input_model, dict):
+            return dict(input_model)
+        schema_builder = getattr(input_model, "model_json_schema", None)
+        if callable(schema_builder):
+            try:
+                return dict(schema_builder())
+            except Exception:
+                return {"type": "object", "properties": {}, "additionalProperties": True}
+        if input_model is dict or input_model is None:
+            return {"type": "object", "properties": {}, "additionalProperties": True}
+        return {"type": "object", "properties": {}, "additionalProperties": True}
 
 
 class ToolContextFactory:
@@ -294,7 +361,13 @@ class ToolExecutor:
 
     async def execute(self, tool: BaseTool, context: ToolContext, input_data: dict) -> ToolResult:
         try:
-            return await tool.run(context, input_data)
+            coroutine = tool.run(context, input_data)
+            timeout_seconds = getattr(tool, "timeout_seconds", None)
+            if timeout_seconds:
+                return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
+            return await coroutine
+        except TimeoutError:
+            return ToolResult.failed(ToolError("tool execution timeout", code=ErrorCode.TIMEOUT))
         except ToolError as exc:
             return ToolResult.failed(exc)
         except Exception as exc:
@@ -315,22 +388,101 @@ class ToolGateway:
         schema_builder: ToolSchemaBuilder | None = None,
         executor: ToolExecutor | None = None,
         context_factory: ToolContextFactory | None = None,
+        recorder: Any = None,
     ) -> None:
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy()
         self.schema_builder = schema_builder or ToolSchemaBuilder()
         self.executor = executor or ToolExecutor()
         self.context_factory = context_factory
+        self.recorder = recorder
+        self._progress_emitted: set[tuple[str, str]] = set()
+
+    def list_tools(self) -> list[BaseTool]:
+        """返回当前策略允许暴露给 Agent Core 的 Tool。"""
+
+        return [
+            tool
+            for tool in self.registry.list_tools()
+            if self.policy.allowed(tool.name or tool.__class__.__name__)
+        ]
 
     def schemas(self) -> list[dict]:
-        return [self.schema_builder.build(tool) for tool in self.registry.list_tools() if self.policy.allowed(tool.name or tool.__class__.__name__)]
+        return [self.schema_builder.build(tool) for tool in self.list_tools()]
+
+    def provider_schemas(self) -> list[dict]:
+        """返回 provider function calling schema。"""
+
+        return [self.schema_builder.build_provider_schema(tool) for tool in self.list_tools()]
 
     async def call(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
+        started = time.time()
+        trace_id = new_id("tool_trace")
         if not self.policy.allowed(name):
-            return ToolResult.failed(ToolError(f"tool is not allowed: {name}", code=ErrorCode.PERMISSION_DENIED))
+            result = ToolResult.failed(ToolError(f"tool is not allowed: {name}", code=ErrorCode.PERMISSION_DENIED))
+            self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
+            return result
         if self.context_factory is None:
-            return ToolResult.failed(ToolError("tool context factory is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        return await self.executor.execute(self.registry.get(name), self.context_factory.create(user_id=user_id, session_id=session_id), input_data)
+            result = ToolResult.failed(ToolError("tool context factory is not configured", code=ErrorCode.PROTOCOL_ERROR))
+            self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
+            return result
+        try:
+            tool = self.registry.get(name)
+        except ToolError as exc:
+            result = ToolResult.failed(exc)
+            self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
+            return result
+        self._emit_progress_once(tool=tool, session_id=session_id)
+        result = await self.executor.execute(
+            tool,
+            self.context_factory.create(user_id=user_id, session_id=session_id),
+            input_data,
+        )
+        self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
+        return result
+
+    def _emit_progress_once(self, *, tool: BaseTool, session_id: str) -> None:
+        progress_message = str(getattr(tool, "progress_message", "") or "").strip()
+        tool_name = tool.name or tool.__class__.__name__
+        key = (session_id, tool_name)
+        if not progress_message or key in self._progress_emitted:
+            return
+        self._progress_emitted.add(key)
+        if self.recorder and hasattr(self.recorder, "record_agent_event"):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool.progress_message.emitted",
+                    "tool_name": tool_name,
+                    "message": progress_message,
+                },
+            )
+
+    def _record_trace(
+        self,
+        trace_id: str,
+        name: str,
+        user_id: str,
+        session_id: str,
+        input_data: dict,
+        result: ToolResult,
+        started: float,
+    ) -> None:
+        if not self.recorder or not hasattr(self.recorder, "record_tool_trace"):
+            return
+        trace = ToolTrace(
+            trace_id=trace_id,
+            tool_name=name,
+            user_id=user_id,
+            session_id=session_id,
+            input_data=dict(input_data),
+            ok=result.ok,
+            duration_ms=int((time.time() - started) * 1000),
+            result_message=result.message,
+            error=result.error,
+            created_at=started,
+        )
+        self.recorder.record_tool_trace(session_id, asdict(trace))
 
 
 @dataclass(frozen=True)
@@ -616,7 +768,7 @@ class UserDeviceContext:
         return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
 
 
-class RequestAssetTool:
+class RequestAssetTool(BaseTool):
     """请求对话资产的协议原生 Tool 门面。
 
     主要功能：让 Agent 工具调用通过 `UserDeviceContext.request_asset()` 获取资产引用。
@@ -624,16 +776,14 @@ class RequestAssetTool:
     """
 
     name = "request_asset"
+    description = "请求端侧上传指定类型的传感器资产。"
 
     def run(
         self,
-        context: UserDeviceContext,
-        *,
-        stream_type: str,
-        freshness_seconds: float = 0,
-        configure_payload: dict | None = None,
-        timeout_seconds: float | None = None,
-    ) -> AssetRef | None:
+        context: ToolContext | UserDeviceContext,
+        input_data: dict | None = None,
+        **kwargs,
+    ):
         """执行资产请求工具。
 
         主要逻辑：直接转调协议原生 Context API。
@@ -642,9 +792,116 @@ class RequestAssetTool:
         返回值：`AssetRef` 或 `None`。
         异常情况：同 Context 方法。
         """
-        return context.request_asset(
-            stream_type=stream_type,
-            freshness_seconds=freshness_seconds,
-            configure_payload=configure_payload,
-            timeout_seconds=timeout_seconds,
+        if isinstance(context, UserDeviceContext):
+            return context.request_asset(
+                stream_type=str(kwargs.get("stream_type") or ""),
+                freshness_seconds=float(kwargs.get("freshness_seconds") or 0),
+                configure_payload=kwargs.get("configure_payload"),
+                timeout_seconds=kwargs.get("timeout_seconds"),
+            )
+        return self._run_tool_context(context, dict(input_data or {}))
+
+    async def _run_tool_context(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """按 ToolGateway 调用形态执行资产请求。"""
+
+        asset = context.devices.request_asset(
+            stream_type=str(input_data.get("stream_type") or ""),
+            freshness_seconds=float(input_data.get("freshness_seconds") or 0),
+            configure_payload=input_data.get("configure_payload"),
+            timeout_seconds=input_data.get("timeout_seconds"),
         )
+        return ToolResult.success(
+            data=asset.__dict__ if asset is not None else None,
+            assets=[asset] if asset is not None else [],
+            message="asset requested" if asset is not None else "asset unavailable",
+        )
+
+
+class ConfigureAssetStreamTool(BaseTool):
+    """配置端侧传感器 stream 的内置 Tool。"""
+
+    name = "configure_asset_stream"
+    description = "通过控制事件请求端侧配置 sensor.* stream。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        stream_type = str(input_data.get("stream_type") or "")
+        payload = dict(input_data.get("payload") or {})
+        result = context.devices.publish_event(
+            "stream.control.configure.requested",
+            stream_type=stream_type,
+            payload=payload,
+            require_capability=input_data.get("require_capability") or stream_type,
+            selection=str(input_data.get("selection") or "first_available"),
+        )
+        return ToolResult.success(data=result.__dict__, message="asset stream configure event published")
+
+
+class PublishDeviceCommandTool(BaseTool):
+    """发布端侧命令事件的内置 Tool。"""
+
+    name = "publish_device_command"
+    description = "按订阅和能力发布 control.device.command.requested 事件。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        payload = {
+            "command_name": str(input_data.get("command_name") or ""),
+            "params": dict(input_data.get("params") or {}),
+        }
+        result = context.devices.publish_event(
+            "control.device.command.requested",
+            payload=payload,
+            require_capability=input_data.get("require_capability"),
+            selection=str(input_data.get("selection") or "first_available"),
+        )
+        return ToolResult.success(data=result.__dict__, message="device command event published")
+
+
+class QueryDeviceStateTool(BaseTool):
+    """查询当前用户 active device set 的内置 Tool。"""
+
+    name = "query_device_state"
+    description = "查询当前用户在线设备和能力摘要。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        capability = input_data.get("capability")
+        devices = context.devices.get_devices(str(capability) if capability else None)
+        return ToolResult.success(
+            data=[device.__dict__ for device in devices],
+            message=f"{len(devices)} active devices matched",
+        )
+
+
+class QueryTaskStatusTool(BaseTool):
+    """查询 TaskEngine 任务状态的内置 Tool。"""
+
+    name = "query_task_status"
+    description = "查询一个 server 侧任务的状态。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if context.tasks is None:
+            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        ref = context.tasks.query(str(input_data.get("task_id") or ""))
+        return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+
+
+class CancelTaskTool(BaseTool):
+    """取消 TaskEngine 任务的内置 Tool。"""
+
+    name = "cancel_task"
+    description = "取消一个 server 侧任务。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if context.tasks is None:
+            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        ref = await context.tasks.cancel(str(input_data.get("task_id") or ""), reason=str(input_data.get("reason") or "tool_requested"))
+        return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+
+
+BUILTIN_TOOLS = (
+    RequestAssetTool,
+    ConfigureAssetStreamTool,
+    PublishDeviceCommandTool,
+    QueryDeviceStateTool,
+    QueryTaskStatusTool,
+    CancelTaskTool,
+)

@@ -14,8 +14,8 @@ from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from audio_chat.stream import StreamHandle, StreamService
-from audio_chat.tasks import TaskAutoDiscovery, TaskEngine
-from audio_chat.tools import ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry
+from audio_chat.tasks import TaskAutoDiscovery, TaskEngine, TaskEventBridge
+from audio_chat.tools import BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
 
 
 @dataclass(frozen=True)
@@ -179,6 +179,38 @@ class AudioChatApp:
             default_on_interrupted=self.config.output_default_on_interrupted,
             max_queue_size=self.config.output_max_queue_size,
         )
+        self.task_engine = TaskEngine(
+            bridge=TaskEventBridge(recorder=self.recorder, output_service=self.output_service),
+            device_context_factory=lambda user_id: UserDeviceContext(user_id=user_id, app=self),
+        )
+        self.discovery_errors: list[dict[str, str]] = []
+        if self.config.tasks_discover_enabled:
+            task_discovery = TaskAutoDiscovery()
+            for task_cls in task_discovery.discover(
+                list(self.config.tasks_discover_packages),
+                recursive=self.config.tasks_discover_recursive,
+                fail_fast=self.config.tasks_discover_fail_fast,
+            ):
+                self.task_engine.register(task_cls)
+            self.discovery_errors.extend(task_discovery.errors)
+        self.tool_registry = ToolRegistry()
+        for tool_cls in BUILTIN_TOOLS:
+            self.tool_registry.register(tool_cls())
+        if self.config.tools_discover_enabled:
+            tool_discovery = ToolAutoDiscovery()
+            for tool in tool_discovery.discover(
+                list(self.config.tools_discover_packages),
+                recursive=self.config.tools_discover_recursive,
+                fail_fast=self.config.tools_discover_fail_fast,
+            ):
+                self.tool_registry.register(tool)
+            self.discovery_errors.extend(tool_discovery.errors)
+        self.tool_gateway = ToolGateway(
+            registry=self.tool_registry,
+            policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),
+            context_factory=ToolContextFactory(app=self, task_engine=self.task_engine),
+            recorder=self.recorder,
+        )
         self.agent_core = AgentCoreRouter.build(
             mode=self.config.agent_mode,
             control_service=self.control_service,
@@ -201,35 +233,12 @@ class AudioChatApp:
                 model=self.config.text_model,
                 allow_mock_fallback=self.config.allow_mock_fallback,
             ),
+            tool_gateway=self.tool_gateway,
         )
+        if hasattr(self.agent_core, "bind_tool_gateway"):
+            self.agent_core.bind_tool_gateway(self.tool_gateway)
         self.text_agent_core = self.agent_core
         self.audio_pipeline = AudioPipeline(agent_core=self.agent_core)
-        self.task_engine = TaskEngine()
-        self.discovery_errors: list[dict[str, str]] = []
-        if self.config.tasks_discover_enabled:
-            task_discovery = TaskAutoDiscovery()
-            for task_cls in task_discovery.discover(
-                list(self.config.tasks_discover_packages),
-                recursive=self.config.tasks_discover_recursive,
-                fail_fast=self.config.tasks_discover_fail_fast,
-            ):
-                self.task_engine.register(task_cls)
-            self.discovery_errors.extend(task_discovery.errors)
-        self.tool_registry = ToolRegistry()
-        if self.config.tools_discover_enabled:
-            tool_discovery = ToolAutoDiscovery()
-            for tool in tool_discovery.discover(
-                list(self.config.tools_discover_packages),
-                recursive=self.config.tools_discover_recursive,
-                fail_fast=self.config.tools_discover_fail_fast,
-            ):
-                self.tool_registry.register(tool)
-            self.discovery_errors.extend(tool_discovery.errors)
-        self.tool_gateway = ToolGateway(
-            registry=self.tool_registry,
-            policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),
-            context_factory=ToolContextFactory(app=self, task_engine=self.task_engine),
-        )
         self.stream_service.set_dispatcher(self)
         self._active_session_by_user: dict[str, str] = {}
 

@@ -4,8 +4,8 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.asset import ArtifactRef, AssetRef
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.protocol import Event, StreamChunk, StreamFormat, Subscription
-from audio_chat.tasks import BaseTask, TaskContext, TaskEvent, TaskRef
-from audio_chat.tools import BaseTool, DeviceHandle, DeviceSnapshot, ToolContext, ToolError, ToolResult, UserDeviceContext
+from audio_chat.tasks import BaseTask, TaskContext, TaskEngine, TaskEvent, TaskEventBridge, TaskRef
+from audio_chat.tools import BaseTool, DeviceHandle, DeviceSnapshot, ToolContext, ToolError, ToolGateway, ToolResult, ToolTrace, UserDeviceContext
 
 __all__ = [
     "ArtifactRef",
@@ -23,10 +23,14 @@ __all__ = [
     "StreamFormat",
     "Subscription",
     "TaskContext",
+    "TaskEngine",
     "TaskEvent",
+    "TaskEventBridge",
     "TaskRef",
     "ToolContext",
     "ToolError",
+    "ToolGateway",
     "ToolResult",
+    "ToolTrace",
     "UserDeviceContext",
 ]

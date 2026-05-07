@@ -4,11 +4,12 @@ import importlib
 import inspect
 import pkgutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from audio_chat.asset import ArtifactRef
 from audio_chat.errors import AudioChatError, ErrorCode
+from audio_chat.protocol import new_id
 
 TASK_STATES = (
     "scheduled",
@@ -142,10 +143,18 @@ class TaskStore:
         self._tasks[ref.task_id] = ref
 
     def get(self, task_id: str) -> TaskRef:
-        return self._tasks[task_id]
+        try:
+            return self._tasks[task_id]
+        except KeyError as exc:
+            raise AudioChatError(f"unknown task: {task_id}", code=ErrorCode.NOT_FOUND) from exc
 
     def append_event(self, event: TaskEvent) -> None:
         self._events.append(event)
+
+    def events_for_task(self, task_id: str) -> list[TaskEvent]:
+        """返回某个任务的事件列表。"""
+
+        return [event for event in self._events if event.task_id == task_id]
 
 
 class TaskRegistry:
@@ -166,6 +175,11 @@ class TaskRegistry:
         if task_type not in self._tasks:
             raise AudioChatError(f"unknown task: {task_type}", code=ErrorCode.NOT_FOUND)
         return self._tasks[task_type]
+
+    def list_task_types(self) -> list[str]:
+        """列出已注册 Task 类型。"""
+
+        return sorted(self._tasks)
 
 
 class TaskAutoDiscovery:
@@ -308,6 +322,12 @@ class TaskExecutor:
     async def start(self, task: BaseTask, context: TaskContext) -> None:
         await task.on_start(context)
 
+    async def event(self, task: BaseTask, context: TaskContext, event: TaskEvent) -> None:
+        await task.on_event(context, event)
+
+    async def cancel(self, task: BaseTask, context: TaskContext) -> None:
+        await task.on_cancel(context)
+
 
 class TaskEngine:
     """Task Engine 最小实现。
@@ -323,12 +343,162 @@ class TaskEngine:
         state_machine: TaskStateMachine | None = None,
         executor: TaskExecutor | None = None,
         bridge: TaskEventBridge | None = None,
+        device_context_factory: Any = None,
     ) -> None:
         self.registry = registry or TaskRegistry()
         self.store = store or TaskStore()
         self.state_machine = state_machine or TaskStateMachine()
         self.executor = executor or TaskExecutor()
         self.bridge = bridge or TaskEventBridge()
+        self.device_context_factory = device_context_factory
+        self._instances: dict[str, BaseTask] = {}
 
     def register(self, task_cls: type[BaseTask]) -> None:
         self.registry.register(task_cls)
+
+    def query(self, task_id: str) -> TaskRef:
+        """查询任务引用。
+
+        主要逻辑：从 TaskStore 返回稳定 TaskRef，不暴露 Task 实例。
+        参数：`task_id` 为任务 ID。
+        返回值：TaskRef。
+        异常情况：任务不存在时抛出 `AudioChatError`。
+        """
+
+        return self.store.get(task_id)
+
+    async def create(
+        self,
+        *,
+        task_type: str,
+        user_id: str,
+        session_id: str | None = None,
+        input_data: dict | None = None,
+        summary: str = "",
+    ) -> TaskRef:
+        """创建并启动任务。
+
+        主要逻辑：创建 `scheduled` 引用，立即流转为 `running`，执行 Task.on_start，
+        并通过 TaskEventBridge 记录启动或失败事件。
+        参数：`task_type/user_id/session_id/input_data` 描述任务请求。
+        返回值：最新 TaskRef。
+        异常情况：未知任务、非法状态流转或 Task 启动异常会抛出结构化异常。
+        """
+
+        task_cls = self.registry.get(task_type)
+        task_id = new_id("task")
+        ref = TaskRef(
+            task_id=task_id,
+            task_type=task_type,
+            state="scheduled",
+            summary=summary,
+            metadata={"user_id": user_id, "session_id": session_id, "input": dict(input_data or {})},
+        )
+        self.store.put(ref)
+        task = task_cls()
+        self._instances[task_id] = task
+        ref = self._transition(ref, "running")
+        context = self._context(user_id=user_id, session_id=session_id, ref=ref)
+        try:
+            await self.executor.start(task, context)
+        except Exception as exc:
+            self._transition(ref, "failed")
+            self.emit_event(
+                TaskEvent(
+                    task_id=task_id,
+                    task_type=task_type,
+                    event_name="task.failed",
+                    user_id=user_id,
+                    session_id=session_id,
+                    payload={"message": str(exc)},
+                    priority="high",
+                    requires_agent_decision=True,
+                    allow_direct_notify=True,
+                )
+            )
+            raise
+        self.emit_event(
+            TaskEvent(
+                task_id=task_id,
+                task_type=task_type,
+                event_name="task.started",
+                user_id=user_id,
+                session_id=session_id,
+                payload={"state": ref.state, "input": dict(input_data or {})},
+                allow_direct_notify=False,
+            )
+        )
+        return ref
+
+    async def handle_event(self, event: TaskEvent) -> TaskRef:
+        """把外部 TaskEvent 送回对应 Task 实例。
+
+        主要逻辑：先记录事件，再调用 Task.on_event；是否通知或回流 Agent 由 bridge
+        根据事件字段决定。
+        参数：`event` 为任务事件。
+        返回值：当前 TaskRef。
+        异常情况：任务不存在时抛出 `AudioChatError`。
+        """
+
+        ref = self.store.get(event.task_id)
+        task = self._instances.get(event.task_id)
+        self.emit_event(event)
+        if task is not None:
+            await self.executor.event(
+                task,
+                self._context(user_id=event.user_id, session_id=event.session_id, ref=ref),
+                event,
+            )
+        return self.store.get(event.task_id)
+
+    async def cancel(self, task_id: str, *, reason: str = "cancelled") -> TaskRef:
+        """取消任务。
+
+        主要逻辑：执行 Task.on_cancel，状态流转到 cancelled，并记录 `task.cancelled`。
+        参数：`task_id` 为任务 ID，`reason` 为取消原因。
+        返回值：取消后的 TaskRef。
+        异常情况：非法状态流转或任务不存在时抛出 `AudioChatError`。
+        """
+
+        ref = self.store.get(task_id)
+        task = self._instances.get(task_id)
+        if task is not None:
+            await self.executor.cancel(
+                task,
+                self._context(user_id=str(ref.metadata.get("user_id") or ""), session_id=None, ref=ref),
+            )
+        ref = self._transition(ref, "cancelled")
+        self.emit_event(
+            TaskEvent(
+                task_id=ref.task_id,
+                task_type=ref.task_type,
+                event_name="task.cancelled",
+                user_id=str(ref.metadata.get("user_id") or ""),
+                payload={"reason": reason},
+                allow_direct_notify=True,
+            )
+        )
+        return ref
+
+    def emit_event(self, event: TaskEvent) -> None:
+        """记录并桥接任务事件。"""
+
+        self.store.append_event(event)
+        self.bridge.handle_event(event)
+
+    def _transition(self, ref: TaskRef, target: str) -> TaskRef:
+        state = self.state_machine.transition(ref.state, target)
+        updated = replace(ref, state=state)
+        self.store.put(updated)
+        return updated
+
+    def _context(self, *, user_id: str, session_id: str | None, ref: TaskRef) -> TaskContext:
+        devices = self.device_context_factory(user_id=user_id) if callable(self.device_context_factory) else None
+        return TaskContext(
+            user_id=user_id,
+            session_id=session_id,
+            task_ref=ref,
+            devices=devices,
+            bridge=self.bridge,
+            metadata=dict(ref.metadata),
+        )

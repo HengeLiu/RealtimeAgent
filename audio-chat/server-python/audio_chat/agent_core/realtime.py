@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
+from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService
 from audio_chat.output.service import OutputItem
 from audio_chat.protocol import StreamChunk, StreamFormat
+from audio_chat.tools import ToolGateway
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,9 @@ class RealtimeProviderAdapter(Protocol):
         ...
 
     def append_audio(self, chunk: StreamChunk) -> None:
+        ...
+
+    def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         ...
 
     def cancel(self, *, user_id: str, reason: str) -> None:
@@ -167,6 +173,26 @@ class QwenOmniRealtimeAdapter:
             raise RuntimeError("Realtime provider session is not opened")
         self._conversation.append_audio(base64.b64encode(chunk.payload).decode("ascii"))
 
+    def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """提交 provider 输入边界。
+
+        主要逻辑：Qwen Omni 当前主要由 provider turn detection 决定边界；
+        如果 SDK 版本暴露 commit 方法则调用，否则只记录为 no-op。
+        参数：`user_id`、`session_id` 用于关联日志；`reason` 为提交原因。
+        返回值：无。
+        异常情况：provider 异常会转成 callbacks.error。
+        """
+
+        if self._conversation is None:
+            return
+        try:
+            commit = getattr(self._conversation, "commit_input_audio", None)
+            if callable(commit):
+                commit()
+        except Exception as exc:  # noqa: BLE001
+            if self._callbacks:
+                self._callbacks.error(str(exc), {"event": "omni.input.commit.failed", "reason": reason})
+
     def cancel(self, *, user_id: str, reason: str) -> None:
         """取消当前 Omni 响应。
 
@@ -245,6 +271,79 @@ class QwenOmniRealtimeAdapter:
         callbacks.provider_event(_summarize_omni_event(message))
 
 
+class MockRealtimeProviderAdapter:
+    """稳定 mock realtime provider。
+
+    主要功能：
+    1. 不访问网络，供 `agent.mode=realtime_audio` 的单元测试和本地预检使用。
+    2. 每次收到输入音频后回调一片原生音频 delta。
+    3. `commit_input` 时回调 audio done，模拟 provider 完成一轮响应。
+
+    主要属性：
+    1. `config`：provider 配置。
+    2. `_callbacks`：RealtimeAudioAgentCore 注入的回调集合。
+    3. `appended`：测试可读取的输入 chunk 列表。
+    """
+
+    def __init__(self, config: RealtimeProviderConfig | None = None) -> None:
+        self.config = config or RealtimeProviderConfig(provider="mock", model="mock-realtime")
+        self._callbacks: RealtimeProviderCallbacks | None = None
+        self.appended: list[StreamChunk] = []
+        self.cancelled = False
+        self.closed = False
+
+    def open(self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks) -> None:
+        """打开 mock 会话。"""
+
+        self._callbacks = callbacks
+        callbacks.provider_event(
+            {
+                "event": "mock_realtime.session.opened",
+                "provider": "mock",
+                "model": self.config.model,
+            }
+        )
+
+    def append_audio(self, chunk: StreamChunk) -> None:
+        """接收音频并生成一片 mock 原生音频。"""
+
+        if self._callbacks is None:
+            raise RuntimeError("mock realtime session is not opened")
+        self.appended.append(chunk)
+        if chunk.payload:
+            self._callbacks.audio_delta(
+                b"\x01\x00" * 320,
+                StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20),
+                {"provider": "mock", "model": self.config.model},
+            )
+        if chunk.final:
+            self.commit_input(user_id=chunk.user_id, session_id=chunk.session_id, reason="final_chunk")
+
+    def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """提交 mock 输入边界并结束音频输出。"""
+
+        if self._callbacks is None:
+            return
+        self._callbacks.provider_event(
+            {
+                "event": "mock_realtime.input.committed",
+                "provider": "mock",
+                "reason": reason,
+            }
+        )
+        self._callbacks.audio_done({"provider": "mock", "model": self.config.model, "reason": reason})
+
+    def cancel(self, *, user_id: str, reason: str) -> None:
+        """记录取消状态。"""
+
+        self.cancelled = True
+
+    def close(self, *, user_id: str, reason: str) -> None:
+        """关闭 mock 会话。"""
+
+        self.closed = True
+
+
 class RealtimeOutputAdapter:
     """Realtime 输出适配器。
 
@@ -303,6 +402,75 @@ class RealtimeOutputAdapter:
         )
 
 
+class RealtimeToolBridge:
+    """Realtime provider 工具桥。
+
+    主要功能：把 ToolGateway 暴露为 provider function calling schema，并聚合
+    realtime tool call 参数后调用工具，再把 ToolResult 转成 provider 可回填结构。
+    主要方法：`tool_schemas()`、`append_tool_call_delta()`、`commit_tool_call()`。
+    """
+
+    def __init__(self, *, tool_gateway: ToolGateway | None = None, recorder: RunRecorder | None = None) -> None:
+        self.tool_gateway = tool_gateway
+        self.recorder = recorder
+        self._pending: dict[str, dict[str, Any]] = {}
+
+    def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
+        """绑定工具网关。"""
+
+        self.tool_gateway = tool_gateway
+
+    def tool_schemas(self) -> list[dict]:
+        """返回 provider 可用的工具 schema。"""
+
+        return self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
+
+    def append_tool_call_delta(
+        self,
+        *,
+        tool_call_id: str,
+        name: str | None = None,
+        arguments_delta: dict | None = None,
+    ) -> None:
+        """聚合 provider 工具调用参数增量。"""
+
+        record = self._pending.setdefault(tool_call_id, {"name": name or "", "arguments": {}})
+        if name:
+            record["name"] = name
+        record["arguments"].update(arguments_delta or {})
+
+    def commit_tool_call(self, *, tool_call_id: str, user_id: str, session_id: str) -> dict:
+        """提交完整工具调用并返回 provider 回填数据。"""
+
+        if self.tool_gateway is None:
+            return {"tool_call_id": tool_call_id, "ok": False, "error": {"message": "tool gateway is not configured"}}
+        record = self._pending.pop(tool_call_id, {"name": "", "arguments": {}})
+        name = str(record.get("name") or "")
+        arguments = dict(record.get("arguments") or {})
+        if self.recorder is not None:
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "realtime.tool_call.committed", "tool_call_id": tool_call_id, "tool_name": name},
+            )
+        result = asyncio.run(
+            self.tool_gateway.call(
+                name=name,
+                user_id=user_id,
+                session_id=session_id,
+                input_data=arguments,
+            )
+        )
+        return {
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "ok": result.ok,
+            "data": result.data,
+            "message": result.message,
+            "error": result.error,
+            "meta": result.meta or {},
+        }
+
+
 class RealtimeAudioAgentCore:
     """Realtime audio agent core 最小实现。
 
@@ -319,6 +487,7 @@ class RealtimeAudioAgentCore:
         recorder: RunRecorder,
         realtime_config: RealtimeProviderConfig | None = None,
         provider_factory: Callable[[RealtimeProviderConfig], RealtimeProviderAdapter] | None = None,
+        tool_gateway: ToolGateway | None = None,
         **_: Any,
     ) -> None:
         self.output_service = output_service
@@ -326,8 +495,15 @@ class RealtimeAudioAgentCore:
         self.realtime_config = realtime_config or RealtimeProviderConfig()
         self.provider_factory = provider_factory or self._default_provider_factory
         self.output_adapter = RealtimeOutputAdapter(output_service=output_service, recorder=recorder)
+        self.tool_bridge = RealtimeToolBridge(tool_gateway=tool_gateway, recorder=recorder)
         self._sessions: dict[str, tuple[str, RealtimeProviderAdapter]] = {}
         self._failed_sessions: set[str] = set()
+        self._event_buffer = AgentEventBuffer()
+
+    def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
+        """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
+
+        self.tool_bridge.bind_tool_gateway(tool_gateway)
 
     def open(self, user_id: str, session_id: str) -> None:
         """打开用户 realtime provider 会话。
@@ -348,17 +524,21 @@ class RealtimeAudioAgentCore:
         try:
             provider.open(user_id=user_id, session_id=session_id, callbacks=callbacks)
         except Exception as exc:
-            self.recorder.record_system_event(
-                {
-                    "event": "system.error.raised",
-                    "component": "RealtimeAudioAgentCore",
-                    "reason": str(exc),
-                    "user_id": user_id,
-                    "session_id": session_id,
-                }
+            self._record_system_error(
+                user_id=user_id,
+                session_id=session_id,
+                message=str(exc),
+                record={"event": "realtime.provider.open.failed", "component": "RealtimeAudioAgentCore"},
             )
             raise
         self._sessions[user_id] = (session_id, provider)
+        self._record_event(
+            "session.opened",
+            user_id=user_id,
+            session_id=session_id,
+            provider=self.realtime_config.provider,
+            model=self.realtime_config.model,
+        )
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         """追加 Audio Pipeline 归一后的 sensor.mic chunk。
@@ -396,6 +576,50 @@ class RealtimeAudioAgentCore:
                 "duration_ms": chunk.duration_ms,
             },
         )
+        self._event_buffer.record_event(
+            "input_audio.appended",
+            user_id=chunk.user_id,
+            session_id=chunk.session_id,
+            payload={"payload_size": len(chunk.payload), "final": chunk.final},
+        )
+
+    def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
+        """提交 realtime provider 输入边界。
+
+        主要逻辑：把显式输入提交转发给当前 provider；provider 不支持时记录降级事件。
+        参数：`user_id`、`session_id` 定位会话；`reason` 为提交来源。
+        返回值：无。
+        异常情况：provider 异常转为 system error 和 agent event，不向上刷屏。
+        """
+
+        existing = self._sessions.get(user_id)
+        if not existing or existing[0] != session_id:
+            self._record_event("input.commit.skipped", user_id=user_id, session_id=session_id, reason="session_not_open")
+            return
+        provider = existing[1]
+        try:
+            commit = getattr(provider, "commit_input", None)
+            if callable(commit):
+                commit(user_id=user_id, session_id=session_id, reason=reason)
+            else:
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.degradation.raised",
+                        "component": "RealtimeProviderAdapter",
+                        "reason": "provider does not implement commit_input",
+                        "user_id": user_id,
+                        "session_id": session_id,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._mark_session_failed(
+                user_id=user_id,
+                session_id=session_id,
+                message=str(exc),
+                record={"event": "realtime.provider.commit_input.failed"},
+            )
+            return
+        self._record_event("input.committed", user_id=user_id, session_id=session_id, reason=reason)
 
     def interrupt(self, user_id: str, reason: str) -> None:
         """处理用户打断。
@@ -413,6 +637,12 @@ class RealtimeAudioAgentCore:
         self.recorder.record_agent_event(
             session_id or "realtime-interruptions",
             {"event": "realtime.response.cancelled", "user_id": user_id, "reason": reason},
+        )
+        self._event_buffer.record_event(
+            "response.cancelled",
+            user_id=user_id,
+            session_id=session_id or "",
+            payload={"reason": reason},
         )
 
     def close(self, user_id: str, reason: str) -> None:
@@ -432,6 +662,17 @@ class RealtimeAudioAgentCore:
         self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         if session_id:
             self.recorder.record_agent_event(session_id, {"event": "realtime.session.closed", "reason": reason})
+        self._event_buffer.record_event(
+            "session.closed",
+            user_id=user_id,
+            session_id=session_id or "",
+            payload={"reason": reason},
+        )
+
+    def events(self) -> list[AgentCoreEvent]:
+        """返回 realtime Agent 统一事件快照。"""
+
+        return self._event_buffer.events()
 
     def _callbacks(self, *, user_id: str, session_id: str) -> RealtimeProviderCallbacks:
         return RealtimeProviderCallbacks(
@@ -447,7 +688,11 @@ class RealtimeAudioAgentCore:
                 session_id=session_id,
                 metadata=metadata,
             ),
-            provider_event=lambda record: self.recorder.record_agent_event(session_id, record),
+            provider_event=lambda record: self._record_provider_event(
+                user_id=user_id,
+                session_id=session_id,
+                record=record,
+            ),
             error=lambda message, record: self._mark_session_failed(
                 user_id=user_id,
                 session_id=session_id,
@@ -457,6 +702,8 @@ class RealtimeAudioAgentCore:
         )
 
     def _default_provider_factory(self, config: RealtimeProviderConfig) -> RealtimeProviderAdapter:
+        if config.provider == "mock":
+            return MockRealtimeProviderAdapter(config)
         if config.provider == "qwen":
             return QwenOmniRealtimeAdapter(config)
         raise ValueError(f"unsupported realtime provider: {config.provider}")
@@ -479,15 +726,11 @@ class RealtimeAudioAgentCore:
             except Exception:
                 pass
         if first_failure:
-            self.recorder.record_system_event(
-                {
-                    "event": "system.error.raised",
-                    "component": "RealtimeProviderAdapter",
-                    "message": message,
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    **record,
-                }
+            self._record_system_error(
+                user_id=user_id,
+                session_id=session_id,
+                message=message,
+                record={"component": "RealtimeProviderAdapter", **record},
             )
             self.recorder.record_agent_event(
                 session_id,
@@ -498,6 +741,55 @@ class RealtimeAudioAgentCore:
                     "message": message,
                 },
             )
+            self._event_buffer.record_event(
+                "session.error",
+                user_id=user_id,
+                session_id=session_id,
+                payload={"message": message, **record},
+            )
+
+    def _record_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """记录 provider 事件到 runs 和统一事件缓存。"""
+
+        self.recorder.record_agent_event(session_id, record)
+        self._event_buffer.record_event(
+            str(record.get("event") or "provider.event"),
+            user_id=user_id,
+            session_id=session_id,
+            payload=dict(record),
+        )
+
+    def _record_event(self, event: str, *, user_id: str, session_id: str, **payload) -> None:
+        """记录统一 Agent 事件到内存和 runs。"""
+
+        self._event_buffer.record_event(event, user_id=user_id, session_id=session_id, payload=payload)
+        self.recorder.record_agent_event(session_id, {"event": event, "user_id": user_id, **payload})
+
+    def _record_system_error(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message: str,
+        record: dict[str, Any],
+    ) -> None:
+        """写入 provider/system 错误，避免异常在热路径重复刷屏。"""
+
+        self.recorder.record_system_event(
+            {
+                "event": "system.error.raised",
+                "message": message,
+                "user_id": user_id,
+                "session_id": session_id,
+                **record,
+            }
+        )
+        self._event_buffer.record_event(
+            "session.error",
+            user_id=user_id,
+            session_id=session_id,
+            payload={"message": message, **record},
+        )
 
 
 def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
