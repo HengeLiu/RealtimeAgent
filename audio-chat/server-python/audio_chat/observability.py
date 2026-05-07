@@ -100,6 +100,18 @@ class RunRecorder:
         self._append_jsonl(self.session_dir(session_id) / "output-decisions.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "playback-decisions.jsonl", record)
 
+    def record_actuator_event(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录端侧执行器回放事件。
+
+        主要逻辑：把 playback 端点收到的 speaker / haptic 输出、播放回执和保存路径
+        写入 `actuators.jsonl`，让设备级回放能解释 server 下发内容是否被端侧消费。
+        参数：`session_id` 为会话，`record` 为执行器事件。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+
+        self._append_jsonl(self.session_dir(session_id) / "actuators.jsonl", record)
+
     def write_playback_snapshot(self, record: dict[str, Any]) -> None:
         """写入播放仲裁调试快照。
 

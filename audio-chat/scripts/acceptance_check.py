@@ -336,6 +336,26 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
 }
 
 OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
+    "old-sdk-parity-playback": (
+        CheckCommand(
+            "old_sdk_parity_playback_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/playback/test_python_playback.py",
+                "tests/test_network_server_playback.py",
+                "tests/acceptance/test_old_sdk_playback_parity.py",
+                "-q",
+            ),
+        ),
+        CheckCommand(
+            "old_sdk_parity_playback_cli",
+            ("uv", "run", "audio-chat.playback.glass", "--config", "examples/basic-app/host/glass-playback/old-sdk-parity.yaml"),
+        ),
+    ),
     "old-sdk-parity-api": (
         CheckCommand(
             "old_sdk_parity_api_tests",

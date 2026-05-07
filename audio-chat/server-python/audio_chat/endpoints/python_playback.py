@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
+import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -27,19 +30,117 @@ PLAYBACK_REQUIRED_EVENTS = (
     "control.audio_session.closed",
 )
 
+PLAYBACK_ARTIFACT_FILES = (
+    "events.jsonl",
+    "stream-events.jsonl",
+    "agent-events.jsonl",
+    "tool-events.jsonl",
+    "task-events.jsonl",
+    "assets.jsonl",
+    "output-decisions.jsonl",
+    "actuators.jsonl",
+    "result.json",
+)
+
+ASSET_STREAM_TYPES = {"sensor.rgb", "sensor.depth", "sensor.imu"}
+
+DEFAULT_SENSOR_PROFILES: dict[str, dict[str, Any]] = {
+    "sensor.rgb": {
+        "codec": "jpeg",
+        "sample_rate": 1,
+        "channels": 1,
+        "chunk_ms": 1,
+        "payload_prefix": b"\xff\xd8playback-rgb-frame-",
+        "payload_suffix": b"\xff\xd9",
+    },
+    "sensor.depth": {
+        "codec": "raw",
+        "sample_rate": 1,
+        "channels": 1,
+        "chunk_ms": 1,
+        "payload_prefix": b"playback-depth-frame-",
+        "payload_suffix": b"",
+    },
+    "sensor.imu": {
+        "codec": "raw",
+        "sample_rate": 50,
+        "channels": 6,
+        "chunk_ms": 20,
+        "payload_prefix": b"playback-imu-frame-",
+        "payload_suffix": b"",
+    },
+}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """递归合并配置字典。"""
+
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _bytes_from_config(value: Any, *, default: bytes) -> bytes:
+    """从配置中读取 bytes，支持文本和十六进制字符串。"""
+
+    if value is None:
+        return default
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        if value.startswith("hex:"):
+            return bytes.fromhex(value[4:])
+        path = Path(value)
+        if path.exists():
+            return path.read_bytes()
+        return value.encode("utf-8")
+    return json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """读取 JSONL 文件，不存在时返回空列表。"""
+
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
 
 class PythonPlaybackEndpoint:
-    def __init__(self, *, app: AudioChatApp, user_id: str, device_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        app: AudioChatApp,
+        user_id: str,
+        device_id: str,
+        sensor_profiles: dict[str, dict[str, Any]] | None = None,
+        heading: dict[str, Any] | None = None,
+        location: dict[str, Any] | None = None,
+    ) -> None:
         self.app = app
         self.user_id = user_id
         self.device_id = device_id
+        self.sensor_profiles = {
+            stream_type: _deep_merge(DEFAULT_SENSOR_PROFILES[stream_type], dict((sensor_profiles or {}).get(stream_type) or {}))
+            for stream_type in DEFAULT_SENSOR_PROFILES
+        }
+        self.heading = dict(heading or {})
+        self.location = dict(location or {})
         self.events: list[Event] = []
         self.output_chunks: list[StreamChunk] = []
+        self.actuator_events: list[dict[str, Any]] = []
+        self.asset_uploads: list[dict[str, Any]] = []
         self._started_output_streams: set[str] = set()
+        self._registered = False
+        self._last_session_id: str | None = None
 
     def push_event(self, event: Event) -> None:
         self.events.append(event)
         if event.event_name == "control.audio_session.open.requested":
+            self._last_session_id = event.session_id
             self.app.publish_control_event(
                 Event(
                     event_name="control.audio_session.opened",
@@ -50,6 +151,15 @@ class PythonPlaybackEndpoint:
                 )
             )
         elif event.event_name == "stream.output.close.requested":
+            self._record_actuator_event(
+                event.session_id,
+                {
+                    "event": "actuator.output.close.requested",
+                    "stream_id": event.stream_id,
+                    "stream_type": event.stream_type,
+                    "reason": event.payload.get("reason"),
+                },
+            )
             self.app.publish_control_event(
                 Event(
                     event_name="stream.output.finished",
@@ -82,26 +192,8 @@ class PythonPlaybackEndpoint:
                     payload={"reason": "playback_closed"},
                 )
             )
-        elif event.event_name == "stream.control.configure.requested" and event.stream_type == "sensor.rgb":
-            request_id = event.payload.get("request_id")
-            handle = self.app.open_input_stream(
-                user_id=self.user_id,
-                producer_id=self.device_id,
-                stream_type="sensor.rgb",
-            )
-            self.app.write_input_chunk(
-                StreamChunk(
-                    user_id=self.user_id,
-                    session_id=handle.session_id,
-                    stream_id=handle.stream_id,
-                    stream_type="sensor.rgb",
-                    seq=0,
-                    payload=b"\xff\xd8mock-rgb\xff\xd9",
-                    final=True,
-                    metadata={"request_id": request_id} if request_id else {},
-                )
-            )
-            self.app.stream_service.close_stream(handle.stream_id, reason="asset_uploaded")
+        elif event.event_name == "stream.control.configure.requested" and event.stream_type in ASSET_STREAM_TYPES:
+            self._handle_sensor_configure(event)
 
     def push_stream_chunk(self, chunk: StreamChunk) -> None:
         if chunk.stream_id not in self._started_output_streams:
@@ -118,34 +210,21 @@ class PythonPlaybackEndpoint:
                 )
             )
         self.output_chunks.append(chunk)
-
-    def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
-        registration = Event(
-            event_name="control.device.register.requested",
-            user_id=self.user_id,
-            producer_id=self.device_id,
-            payload={
-                "device_id": self.device_id,
-                "device_name": "python-playback",
-                "client_type": "python-playback",
-                "sdk_version": "audio-chat-endpoint-0.1.0",
-                "auth": {"mode": "disabled"},
-                "capabilities": {
-                    "streams.produce": ["sensor.mic", "sensor.rgb"],
-                    "streams.consume": ["actuator.speaker"],
-                    "audio.wake_word": "endpoint",
-                    "audio.aec": "endpoint",
-                    "sensor.rgb": True,
-                },
-                "subscriptions": [
-                    {"event": "control.audio_session.*"},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                ],
+        self._record_actuator_event(
+            chunk.session_id,
+            {
+                "event": "actuator.chunk.received",
+                "stream_id": chunk.stream_id,
+                "stream_type": chunk.stream_type,
+                "seq": chunk.seq,
+                "payload_size": len(chunk.payload),
+                "final": chunk.final,
+                "codec": chunk.codec,
             },
         )
-        registered = self.app.register_device(registration, self)
-        self.events.append(registered)
+
+    def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
+        self.register()
         self.app.publish_control_event(
             Event(
                 event_name="control.user.wake.detected",
@@ -155,6 +234,7 @@ class PythonPlaybackEndpoint:
             )
         )
         handle = self.app.open_input_stream(user_id=self.user_id, producer_id=self.device_id)
+        self._last_session_id = handle.session_id
         payload = audio_payload if audio_payload is not None else b"\x00\x00" * 320
         self.app.write_input_chunk(
             StreamChunk(
@@ -169,7 +249,271 @@ class PythonPlaybackEndpoint:
         )
         self.app.stream_service.close_stream(handle.stream_id, reason="playback_input_done")
         self.app.close_audio_session(self.user_id, reason="mock_response_completed")
-        session_events_path = self.app.recorder.session_dir(handle.session_id) / "events.jsonl"
+        return self._build_result(handle.session_id)
+
+    def register(self) -> Event:
+        """注册 playback 设备。
+
+        主要逻辑：声明可生产 mic/rgb/depth/imu，可消费 speaker/haptic，并订阅对应
+        event，避免端侧按固定 glass/phone 类型建模。
+        返回值：注册成功事件。
+        异常情况：注册失败由 app 返回非 registered 事件，调用方可据此断言。
+        """
+
+        if self._registered:
+            return self.events[0]
+        registration = Event(
+            event_name="control.device.register.requested",
+            user_id=self.user_id,
+            producer_id=self.device_id,
+            payload={
+                "device_id": self.device_id,
+                "device_name": "python-playback",
+                "client_type": "python-playback",
+                "sdk_version": "audio-chat-endpoint-0.1.0",
+                "auth": {"mode": "disabled"},
+                "capabilities": {
+                    "streams.produce": ["sensor.mic", "sensor.rgb", "sensor.depth", "sensor.imu"],
+                    "streams.consume": ["actuator.speaker", "actuator.haptic"],
+                    "audio.wake_word": "endpoint",
+                    "audio.aec": "endpoint",
+                    "sensor.rgb": True,
+                    "sensor.depth": True,
+                    "sensor.imu": True,
+                    "sensor.heading": True,
+                    "sensor.location": True,
+                },
+                "subscriptions": [
+                    {"event": "control.audio_session.*"},
+                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
+                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.depth"}},
+                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}},
+                ],
+            },
+        )
+        registered = self.app.register_device(registration, self)
+        self.events.append(registered)
+        self._registered = registered.event_name == "control.device.registered"
+        return registered
+
+    def run_scripted(self, scenario: dict[str, Any]) -> dict[str, Any]:
+        """执行配置化设备级回放场景。
+
+        主要逻辑：按 `actions` 依次执行 trigger audio、Tool、Task、通知或 stream 配置，
+        最后用内置断言 DSL 检查事件、stream、asset、tool、task 和 output 产物。
+        参数：`scenario` 为 playback YAML/JSON 中的场景配置。
+        返回值：结构化回放结果。
+        异常情况：业务 Tool / Task 抛错时向上传递，便于验收快速失败。
+        """
+
+        self.register()
+        session_id = self.app.active_session_id(self.user_id)
+        self._last_session_id = session_id
+        action_results: list[dict[str, Any]] = []
+        actions = list(scenario.get("actions") or [])
+        if not actions and scenario.get("trigger_audio", True):
+            actions.append({"type": "trigger_audio"})
+        for action in actions:
+            action_type = str(action.get("type") or action.get("action") or "").strip()
+            if action_type == "trigger_audio":
+                audio_payload = _bytes_from_config(action.get("payload"), default=b"\x00\x00" * 320)
+                result = self.run_once(audio_payload=audio_payload)
+                session_id = result.get("session_id") or session_id
+                action_results.append({"type": action_type, "session_id": session_id})
+            elif action_type == "call_tool":
+                result = asyncio.run(
+                    self.app.tool_gateway.call(
+                        name=str(action.get("name") or action.get("tool") or ""),
+                        user_id=self.user_id,
+                        session_id=session_id,
+                        input_data=dict(action.get("input") or {}),
+                    )
+                )
+                action_results.append(
+                    {
+                        "type": action_type,
+                        "name": action.get("name") or action.get("tool"),
+                        "ok": result.ok,
+                        "asset_count": len(result.assets or []),
+                    }
+                )
+            elif action_type == "start_task":
+                ref = asyncio.run(
+                    self.app.task_engine.create(
+                        task_type=str(action.get("task_type") or ""),
+                        user_id=self.user_id,
+                        session_id=session_id,
+                        input_data=dict(action.get("input") or {}),
+                    )
+                )
+                action_results.append(
+                    {
+                        "type": action_type,
+                        "task_type": ref.task_type,
+                        "task_id": ref.task_id,
+                        "state": ref.state,
+                    }
+                )
+            elif action_type == "notify":
+                self.app.output_service.submit_text(
+                    user_id=self.user_id,
+                    session_id=session_id,
+                    text=str(action.get("text") or ""),
+                    priority=str(action.get("priority") or "normal"),
+                    ttl_seconds=int(action.get("ttl_seconds") or 0),
+                )
+                action_results.append({"type": action_type, "text": action.get("text")})
+            elif action_type == "configure_stream":
+                self.app.control_service.publish_matching(
+                    Event(
+                        event_name="stream.control.configure.requested",
+                        user_id=self.user_id,
+                        producer_id="server-main",
+                        session_id=session_id,
+                        stream_type=str(action.get("stream_type") or ""),
+                        payload=dict(action.get("payload") or {}),
+                    ),
+                    require_capability=str(action.get("require_capability") or action.get("stream_type") or ""),
+                    selection=str(action.get("selection") or "first_available"),
+                )
+                action_results.append({"type": action_type, "stream_type": action.get("stream_type")})
+            elif action_type:
+                raise ValueError(f"unknown playback scenario action: {action_type}")
+        result = self._build_result(session_id, assertion_spec=dict(scenario.get("assert") or {}))
+        result["actions"] = action_results
+        self.app.recorder.record_playback_result(session_id, result)
+        self.app.recorder.write_result(
+            session_id,
+            {"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result},
+        )
+        return result
+
+    def _handle_sensor_configure(self, event: Event) -> None:
+        mode = str(event.payload.get("mode") or "single")
+        if mode == "stop":
+            self.asset_uploads.append(
+                {"event": "sensor.configure.stop", "stream_type": event.stream_type, "correlation_id": event.payload.get("correlation_id")}
+            )
+            return
+        count = self._sample_count(event)
+        self._upload_sensor_stream(
+            stream_type=event.stream_type or "",
+            session_id=event.session_id,
+            request_id=event.payload.get("request_id"),
+            correlation_id=event.payload.get("correlation_id"),
+            count=count,
+        )
+
+    def _sample_count(self, event: Event) -> int:
+        payload = dict(event.payload)
+        if payload.get("max_samples") is not None:
+            return max(1, int(payload.get("max_samples") or 1))
+        if payload.get("frame_limit") is not None:
+            return max(1, int(payload.get("frame_limit") or 1))
+        rate = float(payload.get("rate_hz") or payload.get("fps") or self.sensor_profiles[event.stream_type or "sensor.rgb"].get("sample_rate") or 1)
+        duration = float(payload.get("duration_seconds") or payload.get("duration") or 0)
+        if duration > 0:
+            return max(1, int(math.ceil(rate * duration)))
+        return 3 if payload.get("mode") == "continuous" else 1
+
+    def _upload_sensor_stream(
+        self,
+        *,
+        stream_type: str,
+        session_id: str | None,
+        request_id: str | None,
+        correlation_id: str | None,
+        count: int,
+    ) -> None:
+        profile = self.sensor_profiles.get(stream_type) or DEFAULT_SENSOR_PROFILES[stream_type]
+        handle = self.app.open_input_stream(
+            user_id=self.user_id,
+            producer_id=self.device_id,
+            stream_type=stream_type,
+            format=StreamFormat(
+                codec=str(profile.get("codec") or "raw"),
+                sample_rate=int(profile.get("sample_rate") or 1),
+                channels=int(profile.get("channels") or 1),
+                chunk_ms=int(profile.get("chunk_ms") or 1),
+            ),
+        )
+        if session_id and handle.session_id != session_id:
+            handle.session_id = session_id
+            self._last_session_id = session_id
+        for seq in range(count):
+            metadata: dict[str, Any] = {}
+            if request_id:
+                metadata["request_id"] = request_id
+            if correlation_id:
+                metadata["correlation_id"] = correlation_id
+            if self.heading:
+                metadata["heading"] = self.heading
+            if self.location:
+                metadata["location"] = self.location
+            payload = self._sensor_payload(stream_type=stream_type, seq=seq, profile=profile)
+            self.app.write_input_chunk(
+                StreamChunk(
+                    user_id=self.user_id,
+                    session_id=handle.session_id,
+                    stream_id=handle.stream_id,
+                    stream_type=stream_type,
+                    seq=seq,
+                    payload=payload,
+                    codec=handle.format.codec,
+                    sample_rate=handle.format.sample_rate,
+                    channels=handle.format.channels,
+                    duration_ms=handle.format.chunk_ms,
+                    final=seq == count - 1,
+                    metadata=metadata,
+                )
+            )
+        self.app.stream_service.close_stream(handle.stream_id, reason="playback_sensor_uploaded")
+        self.asset_uploads.append(
+            {
+                "stream_id": handle.stream_id,
+                "stream_type": stream_type,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "sample_count": count,
+            }
+        )
+
+    def _sensor_payload(self, *, stream_type: str, seq: int, profile: dict[str, Any]) -> bytes:
+        if "payloads" in profile:
+            payloads = list(profile.get("payloads") or [])
+            if payloads:
+                return _bytes_from_config(payloads[min(seq, len(payloads) - 1)], default=b"")
+        prefix = _bytes_from_config(profile.get("payload_prefix"), default=b"")
+        suffix = _bytes_from_config(profile.get("payload_suffix"), default=b"")
+        if stream_type == "sensor.imu":
+            body = json.dumps(
+                {
+                    "seq": seq,
+                    "heading": self.heading,
+                    "location": self.location,
+                    "accel": [0.0, 0.0, 9.8],
+                    "gyro": [0.0, 0.0, 0.0],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        else:
+            body = str(seq).encode("ascii")
+        return prefix + body + suffix
+
+    def _record_actuator_event(self, session_id: str | None, record: dict[str, Any]) -> None:
+        if not session_id:
+            return
+        self.actuator_events.append(record)
+        if hasattr(self.app.recorder, "record_actuator_event"):
+            self.app.recorder.record_actuator_event(session_id, record)
+
+    def _build_result(self, session_id: str, assertion_spec: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._ensure_artifacts(session_id)
+        session_dir = self.app.recorder.session_dir(session_id)
+        session_events_path = session_dir / "events.jsonl"
         session_event_names = [
             json.loads(line)["event_name"]
             for line in session_events_path.read_text(encoding="utf-8").splitlines()
@@ -178,26 +522,76 @@ class PythonPlaybackEndpoint:
         event_names = [event.event_name for event in self.events] + [
             event_name for event_name in session_event_names if event_name not in {event.event_name for event in self.events}
         ]
+        stream_records = _read_jsonl(session_dir / "stream-events.jsonl")
+        tool_records = _read_jsonl(session_dir / "tool-events.jsonl")
+        task_records = _read_jsonl(session_dir / "task-events.jsonl")
+        asset_records = _read_jsonl(session_dir / "assets.jsonl")
+        output_records = _read_jsonl(session_dir / "output-decisions.jsonl")
         result = {
             "user_id": self.user_id,
             "device_id": self.device_id,
-            "session_id": handle.session_id,
+            "session_id": session_id,
             "event_names": event_names,
             "endpoint_received_event_names": [event.event_name for event in self.events],
             "output_chunk_count": len(self.output_chunks),
             "output_bytes": sum(len(chunk.payload) for chunk in self.output_chunks),
+            "asset_uploads": list(self.asset_uploads),
+            "actuator_event_count": len(self.actuator_events),
+            "stream_types": sorted({record.get("stream_type") for record in stream_records if record.get("stream_type")}),
+            "asset_count": len(asset_records),
+            "tool_event_count": len(tool_records),
+            "task_event_count": len(task_records),
+            "output_decision_count": len(output_records),
+            "artifacts": {name: str(session_dir / name) for name in PLAYBACK_ARTIFACT_FILES},
         }
-        result["assertions"] = {
-            event_name: event_name in result["event_names"]
-            for event_name in PLAYBACK_REQUIRED_EVENTS
-        }
-        result["passed"] = all(result["assertions"].values()) and result["output_chunk_count"] > 0
-        self.app.recorder.record_playback_result(handle.session_id, result)
-        self.app.recorder.write_result(
-            handle.session_id,
-            {"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result},
+        result["assertions"] = self._evaluate_assertions(
+            assertion_spec or {},
+            result=result,
+            tool_records=tool_records,
+            task_records=task_records,
         )
+        result["passed"] = all(result["assertions"].values())
+        self.app.recorder.record_playback_result(session_id, result)
+        self.app.recorder.write_result(session_id, {"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result})
         return result
+
+    def _evaluate_assertions(
+        self,
+        spec: dict[str, Any],
+        *,
+        result: dict[str, Any],
+        tool_records: list[dict[str, Any]],
+        task_records: list[dict[str, Any]],
+    ) -> dict[str, bool]:
+        expected_events = list(spec.get("expected_events") or PLAYBACK_REQUIRED_EVENTS)
+        expected_stream_types = list(spec.get("expected_stream_types") or ["sensor.mic", "actuator.speaker"])
+        expected_tool_events = list(spec.get("expected_tool_events") or [])
+        expected_task_events = list(spec.get("expected_task_events") or [])
+        expected_asset_count = int(spec.get("expected_asset_count", 0))
+        expected_output_chunks = int(spec.get("expected_output_chunks", 1))
+        tool_text = "\n".join(json.dumps(record, ensure_ascii=False, sort_keys=True) for record in tool_records)
+        task_text = "\n".join(json.dumps(record, ensure_ascii=False, sort_keys=True) for record in task_records)
+        assertions: dict[str, bool] = {}
+        for event_name in expected_events:
+            assertions[f"event:{event_name}"] = event_name in result["event_names"]
+        for stream_type in expected_stream_types:
+            assertions[f"stream:{stream_type}"] = stream_type in result["stream_types"]
+        for event_name in expected_tool_events:
+            assertions[f"tool:{event_name}"] = event_name in tool_text
+        for event_name in expected_task_events:
+            assertions[f"task:{event_name}"] = event_name in task_text
+        assertions["asset_count"] = result["asset_count"] >= expected_asset_count
+        assertions["output_chunks"] = result["output_chunk_count"] >= expected_output_chunks
+        assertions["artifact_files"] = all(Path(path).exists() for path in result["artifacts"].values())
+        return assertions
+
+    def _ensure_artifacts(self, session_id: str) -> None:
+        session_dir = self.app.recorder.session_dir(session_id)
+        for name in PLAYBACK_ARTIFACT_FILES:
+            path = session_dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("" if name.endswith(".jsonl") else "{}\n", encoding="utf-8")
 
 
 class NetworkPythonPlaybackEndpoint:
@@ -601,8 +995,40 @@ class NetworkPythonPlaybackEndpoint:
         return result
 
 
+def _coerce_package_names(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
+    """将配置中的包名归一化为元组。
+
+    函数功能：兼容 YAML/JSON 中常见的字符串、列表和空值写法。
+    主要逻辑：空值使用默认包名，单个字符串包装成单元素元组，列表或元组逐项转为字符串。
+    参数：
+        value：用户配置中的包名字段。
+        default：没有配置时使用的默认包名。
+    返回值：可传给 AppConfig 的包名元组。
+    异常情况：本函数不主动抛出异常，异常值会被转换为字符串以便后续发现导入问题。
+    """
+
+    if value is None or value == "":
+        return default
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Iterable):
+        return tuple(str(item) for item in value)
+    return (str(value),)
+
+
 def run_playback(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
+    app_root = str(config.get("app_root") or "").strip()
+    if app_root:
+        app_path = Path(app_root).resolve()
+        if str(app_path) not in sys.path:
+            sys.path.insert(0, str(app_path))
+        for name in list(sys.modules):
+            if name == "capabilities" or name.startswith("capabilities."):
+                sys.modules.pop(name, None)
+    discover_enabled = bool(config.get("discover_capabilities") or app_root)
+    tools_discover_packages = _coerce_package_names(config.get("tools_discover_packages"), ("capabilities",))
+    tasks_discover_packages = _coerce_package_names(config.get("tasks_discover_packages"), ("capabilities",))
     app = AudioChatApp(
         AudioChatConfig(
             runs_root=config.get("runs_root", "runs/audio-chat"),
@@ -613,13 +1039,28 @@ def run_playback(config: dict[str, Any] | None = None) -> dict[str, Any]:
             tts_provider=config.get("tts_provider", "mock"),
             tts_model=config.get("tts_model", "mock-tts"),
             tts_voice=config.get("tts_voice", "mock"),
+            asset_root=config.get("asset_root"),
+            tools_discover_enabled=discover_enabled,
+            tools_discover_packages=tools_discover_packages,
+            tools_discover_recursive=bool(config.get("tools_discover_recursive", True)),
+            tasks_discover_enabled=discover_enabled,
+            tasks_discover_packages=tasks_discover_packages,
+            tasks_discover_recursive=bool(config.get("tasks_discover_recursive", True)),
         )
     )
     endpoint = PythonPlaybackEndpoint(
         app=app,
         user_id=config.get("user_id", "user-playback-001"),
         device_id=config.get("device_id", "dev-python-playback-001"),
+        sensor_profiles=dict(config.get("sensor_profiles") or {}),
+        heading=dict(config.get("heading") or {}),
+        location=dict(config.get("location") or {}),
     )
+    scenario = dict(config.get("scenario") or {})
+    if scenario or config.get("actions"):
+        if not scenario:
+            scenario = {"actions": list(config.get("actions") or []), "assert": dict(config.get("assert") or {})}
+        return endpoint.run_scripted(scenario)
     return endpoint.run_once()
 
 
