@@ -39,3 +39,6 @@ include = ["audio_chat*"]
 pythonpath = ["server-python"]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning",
+]

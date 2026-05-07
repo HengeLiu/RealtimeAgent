@@ -1,11 +1,13 @@
 import asyncio
+import json
 from pathlib import Path
 
-from aiohttp import ClientSession, web
+import pytest
+from aiohttp import ClientSession, WSServerHandshakeError, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint
-from audio_chat.protocol import StreamFormat
+from audio_chat.protocol import Event, StreamFormat
 from audio_chat.server import AudioChatHttpServer
 
 
@@ -189,5 +191,68 @@ def test_network_playback_static_token_auth(tmp_path: Path) -> None:
             await runner.cleanup()
 
         assert result["passed"] is True
+
+    asyncio.run(run())
+
+
+def test_failed_network_registration_does_not_allow_stream_connection(tmp_path: Path) -> None:
+    """测试目标：验证注册失败不会留下可建流的网络连接。
+
+    测试方法：启动静态 token 鉴权的真实 aiohttp server，端侧使用错误 token
+    发送注册事件，然后继续尝试用同一 device_id 连接 `/ws/stream`。
+    预期结果：注册响应为 `control.device.register.failed`，stream WebSocket
+    握手返回 404，server 连接表中不会保留该 device_id。
+    """
+
+    async def run() -> None:
+        audio_app = AudioChatApp(
+            AudioChatConfig(
+                runs_root=str(tmp_path / "runs"),
+                auth_mode="static_token",
+                device_tokens={"dev-token-denied": "token-ok"},
+            )
+        )
+        server = AudioChatHttpServer(audio_app)
+        runner = web.AppRunner(server.create_web_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001
+        server_url = f"http://127.0.0.1:{port}"
+        try:
+            async with ClientSession() as session:
+                control_ws = await session.ws_connect(f"{server_url}/ws/control")
+                await control_ws.send_str(
+                    json.dumps(
+                        Event(
+                            event_name="control.device.register.requested",
+                            user_id="user-token-denied",
+                            producer_id="dev-token-denied",
+                            payload={
+                                "device_id": "dev-token-denied",
+                                "device_name": "denied-playback",
+                                "client_type": "python-playback",
+                                "sdk_version": "audio-chat-test",
+                                "auth": {"mode": "static_token", "token": "token-bad"},
+                                "capabilities": {
+                                    "streams.produce": ["sensor.mic"],
+                                    "streams.consume": ["actuator.speaker"],
+                                },
+                                "subscriptions": [{"event": "stream.output.*"}],
+                            },
+                        ).to_dict(),
+                        ensure_ascii=False,
+                    )
+                )
+                message = await control_ws.receive_json()
+                assert message["event_name"] == "control.device.register.failed"
+                with pytest.raises(WSServerHandshakeError) as exc_info:
+                    await session.ws_connect(f"{server_url}/ws/stream?device_id=dev-token-denied")
+                assert exc_info.value.status == 404
+                await control_ws.close()
+        finally:
+            await runner.cleanup()
+
+        assert "dev-token-denied" not in server.connections
 
     asyncio.run(run())

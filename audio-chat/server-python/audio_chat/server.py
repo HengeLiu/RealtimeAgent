@@ -12,6 +12,8 @@ from aiohttp import WSMsgType, web
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunkCodec
 
+AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
+
 
 @dataclass
 class NetworkDeviceConnection:
@@ -107,7 +109,7 @@ class AudioChatHttpServer:
         异常情况：无。
         """
         app = web.Application()
-        app["audio_chat_server"] = self
+        app[AUDIO_CHAT_SERVER_KEY] = self
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/debug/devices", self.debug_devices)
         app.router.add_get("/api/debug/devices/{device_id}", self.debug_device)
@@ -190,13 +192,15 @@ class AudioChatHttpServer:
                     event = Event.from_dict(json.loads(message.data))
                     if event.event_name == "control.device.register.requested":
                         device_id = str(event.payload.get("device_id") or event.producer_id)
-                        connection = NetworkDeviceConnection(device_id=device_id, loop=loop)
-                        connection.bind_control_ws(ws)
-                        registered = self.audio_app.register_device(event, connection)
-                        connection.connection_id = registered.payload.get("connection_id")
-                        self.connections[device_id] = connection
+                        pending_connection = NetworkDeviceConnection(device_id=device_id, loop=loop)
+                        pending_connection.bind_control_ws(ws)
+                        registered = self.audio_app.register_device(event, pending_connection)
                         await ws.send_str(json.dumps(registered.to_dict(), ensure_ascii=False))
-                        sender_task = asyncio.create_task(sender(connection))
+                        if registered.event_name == "control.device.registered":
+                            pending_connection.connection_id = registered.payload.get("connection_id")
+                            self.connections[device_id] = pending_connection
+                            connection = pending_connection
+                            sender_task = asyncio.create_task(sender(connection))
                     else:
                         self.audio_app.publish_control_event(event)
                 except Exception as exc:
