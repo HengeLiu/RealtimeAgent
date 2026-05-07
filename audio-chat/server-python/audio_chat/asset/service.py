@@ -191,6 +191,7 @@ class AssetService:
         root: str | Path | None = None,
         request_timeout_seconds: float = 5.0,
         default_ttl_seconds: float = 60.0,
+        max_asset_bytes: int = 10485760,
     ) -> None:
         self.control_service = control_service
         self.stream_service = stream_service
@@ -198,6 +199,7 @@ class AssetService:
         self.store = AssetStore(root or recorder.runs_root / "assets")
         self.request_timeout_seconds = request_timeout_seconds
         self.default_ttl_seconds = default_ttl_seconds
+        self.max_asset_bytes = max_asset_bytes
         self._pending: dict[str, _PendingAssetCapture] = {}
         self._lock = Lock()
 
@@ -210,6 +212,8 @@ class AssetService:
         返回值：保存后的 `AssetRef`。
         异常情况：stream 不存在时使用 stream_id 作为诊断兜底；文件写入失败会抛出异常。
         """
+        if len(chunk.payload) > self.max_asset_bytes:
+            raise ValueError("asset exceeds asset.max_asset_bytes")
         ref = self.store.put(
             chunk=chunk,
             device_id=self._producer_from_stream(chunk.stream_id),
@@ -257,6 +261,7 @@ class AssetService:
         返回值：`AssetRef` 或 `None`。
         异常情况：发布控制事件或文件写入失败时向上抛出。
         """
+        self._reject_media_bytes(configure_payload or {})
         cached = self.store.query(user_id=user_id, stream_type=stream_type, freshness_seconds=freshness_seconds, limit=1)
         if cached:
             return cached[-1]
@@ -266,6 +271,7 @@ class AssetService:
             self._pending[request_id] = pending
         payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(configure_payload or {})}
         payload["request_id"] = request_id
+        self._reject_media_bytes(payload)
         self.control_service.publish_matching(
             Event(
                 event_name="stream.control.configure.requested",
@@ -361,3 +367,24 @@ class AssetService:
             return self.stream_service.registry.get(stream_id).producer_id
         except (KeyError, ValueError):
             return stream_id
+
+    @staticmethod
+    def _reject_media_bytes(value) -> None:
+        """拒绝把媒体字节塞进控制事件 payload。
+
+        主要逻辑：递归检查 dict/list/tuple/set 中的 bytes-like 对象；Asset Service 只
+        允许控制事件携带采集策略，真实图片、音频和传感器窗口必须通过 stream 上传。
+        参数：`value` 为待检查的配置 payload。
+        返回值：无。
+        异常情况：发现 bytes-like 对象时抛出 `ValueError`。
+        """
+
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raise ValueError("asset request control payload must not contain media bytes")
+        if isinstance(value, dict):
+            for item in value.values():
+                AssetService._reject_media_bytes(item)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                AssetService._reject_media_bytes(item)

@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 
@@ -290,3 +291,113 @@ def test_expired_asset_is_not_returned(tmp_path) -> None:
     )
 
     assert app.asset_service.store.latest(user_id="user-expire", stream_type="sensor.rgb") is None
+
+
+def test_asset_service_rejects_oversized_asset_payload(tmp_path) -> None:
+    """测试目标：验证 Asset Service 执行 max_asset_bytes。
+
+    测试方法：配置 4 字节资产上限，然后通过 sensor.rgb stream 上传 5 字节 payload。
+    预期结果：服务拒绝缓存资产，避免大媒体绕过资产大小治理。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_max_asset_bytes=4))
+    handle = app.open_input_stream(user_id="user-asset-limit", producer_id="dev-camera", stream_type="sensor.rgb")
+
+    try:
+        app.write_input_chunk(
+            StreamChunk(
+                user_id="user-asset-limit",
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.rgb",
+                seq=0,
+                payload=b"12345",
+                final=True,
+            )
+        )
+    except ValueError as exc:
+        assert "max_asset_bytes" in str(exc)
+    else:
+        raise AssertionError("oversized asset payload was accepted")
+
+
+def test_asset_request_rejects_media_bytes_in_control_payload(tmp_path) -> None:
+    """测试目标：确认资产请求不会把图片字节塞进控制事件。
+
+    测试方法：调用 `request_asset()` 时在 configure_payload 中传入 bytes。
+    预期结果：Asset Service 在发布事件前拒绝请求，端侧不会收到包含媒体字节的控制事件。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=0.01))
+    endpoint = PythonPlaybackEndpoint(app=app, user_id="user-no-bytes", device_id="dev-camera")
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-no-bytes",
+            producer_id="dev-camera",
+            payload={
+                "device_id": "dev-camera",
+                "auth": {"mode": "disabled"},
+                "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
+                "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+            },
+        ),
+        endpoint,
+    )
+
+    try:
+        app.asset_service.request_asset(
+            user_id="user-no-bytes",
+            stream_type="sensor.rgb",
+            freshness_seconds=0,
+            configure_payload={"inline_image": b"\xff\xd8bad\xff\xd9"},
+        )
+    except ValueError as exc:
+        assert "media bytes" in str(exc)
+    else:
+        raise AssertionError("media bytes were accepted in control payload")
+
+    assert endpoint.events == []
+
+
+def test_watch_assets_yields_continuous_rgb_frames_by_correlation_id(tmp_path) -> None:
+    """测试目标：验证连续 sensor.rgb 资产可按 correlation_id 被 Task 逐帧读取。
+
+    测试方法：写入同一用户下两条相关帧和一条干扰帧，再通过 `watch_assets()` 监听
+    指定 correlation_id。
+    预期结果：只按写入顺序返回匹配 correlation_id 的两帧。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+
+    def write_frame(seq: int, correlation_id: str) -> None:
+        handle = app.open_input_stream(user_id="user-watch", producer_id="dev-camera", stream_type="sensor.rgb")
+        app.write_input_chunk(
+            StreamChunk(
+                user_id="user-watch",
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.rgb",
+                seq=seq,
+                payload=f"frame-{seq}".encode(),
+                final=True,
+                metadata={"correlation_id": correlation_id},
+            )
+        )
+
+    write_frame(1, "task-rgb-window")
+    write_frame(99, "other-task")
+    write_frame(2, "task-rgb-window")
+
+    async def collect() -> list[int]:
+        refs = []
+        async for ref in app.asset_service.watch_assets(
+            user_id="user-watch",
+            stream_type="sensor.rgb",
+            correlation_id="task-rgb-window",
+            timeout_seconds=0.03,
+        ):
+            refs.append(ref)
+        return [int(ref.metadata["seq"]) for ref in refs]
+
+    assert asyncio.run(collect()) == [1, 2]

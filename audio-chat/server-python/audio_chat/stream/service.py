@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -14,6 +15,13 @@ class StreamDispatcher(Protocol):
 
 @dataclass
 class StreamHandle:
+    """Stream 运行时句柄。
+
+    主要功能：记录一条输入或输出 stream 的生命周期、格式和冻结消费者。
+    主要属性：`consumer_device_ids` 只在 output stream 打开时计算一次，后续 chunk、
+    close 和 cancel 都复用这组冻结消费者，避免插播或设备重连改变旧 stream 语义。
+    """
+
     user_id: str
     session_id: str
     stream_id: str
@@ -22,6 +30,22 @@ class StreamHandle:
     format: StreamFormat
     state: str = "open"
     consumer_device_ids: tuple[str, ...] = ()
+    opened_at: float = 0.0
+    last_activity_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        """初始化生命周期时间戳。"""
+
+        now = time.time()
+        if not self.opened_at:
+            self.opened_at = now
+        if not self.last_activity_at:
+            self.last_activity_at = now
+
+    def touch(self) -> None:
+        """刷新 stream 最近活跃时间。"""
+
+        self.last_activity_at = time.time()
 
 
 class StreamRegistry:
@@ -59,6 +83,7 @@ class StreamService:
         dispatcher: StreamDispatcher | None = None,
         recorder: RunRecorder | None = None,
         max_chunk_bytes: int = 8192,
+        idle_timeout_seconds: float = 20.0,
         default_sensor_mic: StreamFormat | None = None,
         default_actuator_speaker: StreamFormat | None = None,
     ) -> None:
@@ -67,6 +92,7 @@ class StreamService:
         self.recorder = recorder or control_service.recorder
         self.registry = StreamRegistry()
         self.max_chunk_bytes = max_chunk_bytes
+        self.idle_timeout_seconds = idle_timeout_seconds
         self.default_sensor_mic = default_sensor_mic or StreamFormat()
         self.default_actuator_speaker = default_actuator_speaker or StreamFormat(chunk_ms=40)
 
@@ -145,6 +171,7 @@ class StreamService:
         self._validate_chunk(chunk, handle=handle)
         if handle.state != "open":
             raise ValueError("stream is not open")
+        handle.touch()
         self.recorder.record_stream_payload(chunk)
         self.recorder.record_stream_event(
             chunk.session_id,
@@ -165,6 +192,7 @@ class StreamService:
         self._validate_chunk(chunk, handle=handle)
         if handle.state != "open":
             raise ValueError("stream is not open")
+        handle.touch()
         self.recorder.record_stream_payload(chunk)
         self.recorder.record_stream_event(
             chunk.session_id,
@@ -181,6 +209,8 @@ class StreamService:
 
     def close_stream(self, stream_id: str, *, reason: str = "completed") -> None:
         handle = self.registry.get(stream_id)
+        if handle.state == "closed":
+            return
         handle.state = "closed"
         event_name = "stream.output.close.requested" if handle.stream_type.startswith("actuator.") else "stream.input.closed"
         event = Event(
@@ -208,6 +238,8 @@ class StreamService:
 
     def cancel_stream(self, stream_id: str, *, reason: str) -> None:
         handle = self.registry.get(stream_id)
+        if handle.state == "cancelled":
+            return
         handle.state = "cancelled"
         request = Event(
             event_name="stream.output.cancel.requested",
@@ -239,6 +271,67 @@ class StreamService:
                 "state": "cancelled",
             },
         )
+
+    def fail_stream(self, stream_id: str, *, reason: str) -> None:
+        """标记 stream 失败并发布对应生命周期事件。
+
+        主要逻辑：输入 stream 发布 `stream.input.failed`；输出 stream 按冻结消费者推送
+        `stream.output.failed`，不重新按订阅匹配设备。
+        参数：`stream_id` 为目标 stream，`reason` 为失败原因。
+        返回值：无。
+        异常情况：stream 不存在时由 registry 抛出 `ValueError`。
+        """
+
+        handle = self.registry.get(stream_id)
+        if handle.state == "failed":
+            return
+        handle.state = "failed"
+        event_name = "stream.output.failed" if handle.stream_type.startswith("actuator.") else "stream.input.failed"
+        event = Event(
+            event_name=event_name,
+            user_id=handle.user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type=handle.stream_type,
+            payload={"stream_type": handle.stream_type, "reason": reason},
+        )
+        if handle.stream_type.startswith("actuator."):
+            self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
+        else:
+            self.control_service.publish(event)
+        self.recorder.record_stream_event(
+            handle.session_id,
+            {
+                "event": "stream.failed",
+                "stream_id": handle.stream_id,
+                "stream_type": handle.stream_type,
+                "reason": reason,
+            },
+        )
+
+    def close_idle_streams(self, *, now: float | None = None) -> list[StreamHandle]:
+        """关闭超过空闲阈值的 stream。
+
+        主要逻辑：扫描所有 open stream；超过 `idle_timeout_seconds` 时按普通关闭流程
+        发布生命周期事件，并返回被关闭的句柄列表，便于上层 sweeper 或测试确认结果。
+        参数：`now` 为可选当前时间，测试可传入固定时间。
+        返回值：被关闭的 `StreamHandle` 列表。
+        异常情况：无。
+        """
+
+        if self.idle_timeout_seconds <= 0:
+            return []
+        current = now if now is not None else time.time()
+        closed: list[StreamHandle] = []
+        for handle in list(self.registry._streams.values()):
+            if handle.state != "open":
+                continue
+            if current - handle.last_activity_at < self.idle_timeout_seconds:
+                continue
+            self.close_stream(handle.stream_id, reason="idle_timeout")
+            closed.append(handle)
+        return closed
 
     def default_format_for(self, stream_type: str) -> StreamFormat:
         if stream_type == "sensor.mic":

@@ -31,6 +31,7 @@ class AudioChatConfig:
     control_allow_subscribe_all: bool = False
     control_subscription_filter_mode: str = "exact"
     stream_max_chunk_bytes: int = 8192
+    stream_idle_timeout_seconds: float = 20.0
     default_sensor_mic: StreamFormat = StreamFormat()
     default_actuator_speaker: StreamFormat = StreamFormat(chunk_ms=40)
     audio_pipeline_aec: str = "endpoint_only"
@@ -90,6 +91,7 @@ class AudioChatConfig:
             control_allow_subscribe_all=loaded.control.allow_subscribe_all,
             control_subscription_filter_mode=loaded.control.subscription_filter_mode,
             stream_max_chunk_bytes=loaded.stream.max_chunk_bytes,
+            stream_idle_timeout_seconds=loaded.stream.idle_timeout_seconds,
             default_sensor_mic=_stream_format_from_dict(loaded.stream.default_sensor_mic),
             default_actuator_speaker=_stream_format_from_dict(loaded.stream.default_actuator_speaker),
             audio_pipeline_aec=loaded.audio_pipeline.aec,
@@ -149,6 +151,7 @@ class AudioChatApp:
             control_service=self.control_service,
             recorder=self.recorder,
             max_chunk_bytes=self.config.stream_max_chunk_bytes,
+            idle_timeout_seconds=self.config.stream_idle_timeout_seconds,
             default_sensor_mic=self.config.default_sensor_mic,
             default_actuator_speaker=self.config.default_actuator_speaker,
         )
@@ -159,6 +162,7 @@ class AudioChatApp:
             root=self.config.asset_root,
             request_timeout_seconds=self.config.asset_request_timeout_seconds,
             default_ttl_seconds=self.config.asset_default_ttl_seconds,
+            max_asset_bytes=self.config.asset_max_asset_bytes,
         )
         self.output_service = OutputService(
             stream_service=self.stream_service,
