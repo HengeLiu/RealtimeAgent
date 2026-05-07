@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -273,13 +272,11 @@ class TextAgentCore:
     def _call_tool(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
         if self.tool_gateway is None:
             return ToolResult.failed(ToolError("tool gateway is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        return asyncio.run(
-            self.tool_gateway.call(
-                name=name,
-                user_id=user_id,
-                session_id=session_id,
-                input_data=input_data,
-            )
+        return self.tool_gateway.call_sync_safe(
+            name=name,
+            user_id=user_id,
+            session_id=session_id,
+            input_data=input_data,
         )
 
     @staticmethod

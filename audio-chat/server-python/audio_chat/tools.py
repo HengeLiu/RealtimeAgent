@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import inspect
 import pkgutil
+import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator
@@ -439,6 +440,43 @@ class ToolGateway:
             input_data,
         )
         self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
+        return result
+
+    def call_sync_safe(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
+        """从同步 Agent 热路径安全调用异步 Tool。
+
+        主要逻辑：
+        1. 普通同步上下文中直接用 `asyncio.run()` 执行 `call()`。
+        2. 如果当前线程已有事件循环，改在线程内创建独立事件循环执行，避免 aiohttp
+           WebSocket 热路径触发 `asyncio.run() cannot be called from a running event loop`。
+
+        参数：`name`、`user_id`、`session_id` 和 `input_data` 与 `call()` 保持一致。
+        返回值：`ToolResult`。
+        异常情况：worker 线程中出现的未捕获异常会重新抛给调用方。
+        """
+
+        coroutine = self.call(name=name, user_id=user_id, session_id=session_id, input_data=input_data)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coroutine)
+
+        result: ToolResult | None = None
+        error: BaseException | None = None
+
+        def _worker() -> None:
+            nonlocal result, error
+            try:
+                result = asyncio.run(coroutine)
+            except BaseException as exc:  # noqa: BLE001 - 需要把 worker 异常带回主线程
+                error = exc
+
+        thread = threading.Thread(target=_worker, name=f"tool-call-{name}", daemon=True)
+        thread.start()
+        thread.join()
+        if error is not None:
+            raise error
+        assert result is not None
         return result
 
     def _emit_progress_once(self, *, tool: BaseTool, session_id: str) -> None:

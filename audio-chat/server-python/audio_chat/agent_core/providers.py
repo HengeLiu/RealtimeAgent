@@ -4,6 +4,7 @@ import os
 import queue
 import threading
 import time
+import json
 from dataclasses import dataclass
 from typing import Iterable, Protocol
 
@@ -205,21 +206,70 @@ class OpenAICompatibleTextModelAdapter:
         self._client = OpenAI(api_key=api_key, base_url=os.getenv(base_url_env) or None)
 
     def stream_text(self, transcript: str) -> Iterable[str]:
+        for item in self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[]):
+            if isinstance(item, str):
+                yield item
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]) -> Iterable[str | dict]:
+        """按 OpenAI-compatible chat completions 协议流式生成文本和工具调用。
+
+        主要逻辑：
+        1. 普通 `content` delta 立即 yield，保证 TTS 可以边生成边播放。
+        2. `tool_calls` delta 按 index/id/name/arguments 聚合，stream 结束后 yield
+           SDK 内部统一的 `{"type": "tool_call", ...}` 结构。
+        3. arguments 片段按 JSON 解析，解析失败时保留原始字符串，方便日志排查。
+
+        参数：`messages` 为已包含 tool 回填的对话历史；`tools` 为 provider schema。
+        返回值：字符串文本 delta 或内部 tool_call 字典。
+        异常情况：provider SDK 异常向上传递，由调用方决定是否降级。
+        """
+
         self._cancelled = False
         stream = self._client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": "You are the audio-chat TextAgentCore."},
-                {"role": "user", "content": transcript},
+                *messages,
             ],
+            tools=tools or None,
             stream=True,
         )
+        pending_tool_calls: dict[int, dict[str, str]] = {}
         for item in stream:
             if self._cancelled:
                 return
-            delta = item.choices[0].delta.content or ""
-            if delta:
-                yield delta
+            choice = item.choices[0]
+            delta = choice.delta
+            text_delta = getattr(delta, "content", None) or ""
+            if text_delta:
+                yield text_delta
+            for tool_call in getattr(delta, "tool_calls", None) or []:
+                index = int(getattr(tool_call, "index", 0) or 0)
+                record = pending_tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                call_id = getattr(tool_call, "id", None)
+                if call_id:
+                    record["id"] = str(call_id)
+                function = getattr(tool_call, "function", None)
+                if function is not None:
+                    name = getattr(function, "name", None)
+                    arguments = getattr(function, "arguments", None)
+                    if name:
+                        record["name"] = str(name)
+                    if arguments:
+                        record["arguments"] += str(arguments)
+        for index in sorted(pending_tool_calls):
+            record = pending_tool_calls[index]
+            arguments_text = record.get("arguments", "")
+            try:
+                arguments = json.loads(arguments_text) if arguments_text else {}
+            except json.JSONDecodeError:
+                arguments = {"_raw_arguments": arguments_text}
+            yield {
+                "type": "tool_call",
+                "id": record.get("id") or f"tool_call_{index}",
+                "name": record.get("name") or "",
+                "arguments": arguments,
+            }
 
     def cancel(self) -> None:
         self._cancelled = True

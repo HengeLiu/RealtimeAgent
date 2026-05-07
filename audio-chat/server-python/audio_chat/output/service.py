@@ -5,7 +5,7 @@ import queue
 import time
 import audioop
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from audio_chat.observability import RunRecorder
 from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, new_id
@@ -258,19 +258,39 @@ class MockStreamingTTS:
         self.model = model
         self.voice = voice
         self.sample_rate_hz = sample_rate_hz
+        self._first_text_at: float | None = None
+        self._first_audio_at: float | None = None
+        self._text_push_count = 0
+        self._text_chars = 0
 
     def synthesize_delta(self, text: str) -> bytes:
         if not text:
             return b""
+        now = time.time()
+        if self._first_text_at is None:
+            self._first_text_at = now
+        self._text_push_count += 1
+        self._text_chars += len(text)
         samples = max(320, len(text.encode("utf-8")) * 40)
+        if self._first_audio_at is None:
+            self._first_audio_at = time.time()
         return (b"\x01\x00" * samples)[: samples * 2]
 
     def metrics(self) -> dict:
+        first_chunk_latency_ms = None
+        if self._first_text_at is not None and self._first_audio_at is not None:
+            first_chunk_latency_ms = int((self._first_audio_at - self._first_text_at) * 1000)
         return {
             "provider": self.provider_name,
             "model": self.model,
             "voice": self.voice,
             "sample_rate_hz": self.sample_rate_hz,
+            "first_text_at": self._first_text_at,
+            "first_audio_at": self._first_audio_at,
+            "first_chunk_latency_ms": first_chunk_latency_ms,
+            "tts_first_audio_latency_ms": first_chunk_latency_ms,
+            "text_push_count": self._text_push_count,
+            "text_chars": self._text_chars,
             "mock": True,
         }
 
@@ -360,6 +380,9 @@ class DashScopeStreamingTTS:
             "voice": self.voice,
             "sample_rate_hz": self.sample_rate_hz,
             "source_sample_rate_hz": self._source_sample_rate_hz,
+            "first_text_at": self._first_text_at,
+            "first_audio_at": self._first_audio_at,
+            "first_chunk_latency_ms": first_audio_latency_ms,
             "tts_first_audio_latency_ms": first_audio_latency_ms,
             "text_push_count": self._text_push_count,
             "text_chars": self._text_chars,
@@ -705,6 +728,19 @@ class OutputRouter:
         self._cached_audio_by_key: dict[tuple[str, int, int], bytes] = {}
         self._payload_by_stream: dict[str, bytearray] = {}
         self._queued_sessions: set[str] = set()
+        self._finish_listeners: list[Callable[[str, str, str], None]] = []
+
+    def add_finish_listener(self, listener: Callable[[str, str, str], None]) -> None:
+        """注册 output stream 完成回调。
+
+        主要逻辑：让 App 能在当前回复播放结束后处理 `close_after_reply`，但不让
+        Output Service 直接持有音频会话状态。
+        参数：`listener` 接收 user_id、session_id、stream_id。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._finish_listeners.append(listener)
 
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
         intent = self._intent_with_defaults(delta.intent or OutputItem(user_id=delta.user_id, session_id=delta.session_id))
@@ -904,6 +940,8 @@ class OutputRouter:
         self._source_by_stream.pop(stream_id, None)
         self._native_source_by_session.pop(session_id, None)
         next_output = self.arbiter.on_playback_finished(user_id, stream_id)
+        for listener in list(self._finish_listeners):
+            listener(user_id, session_id, stream_id)
         if next_output is not None:
             self._queued_sessions.discard(next_output.intent.session_id)
             self._play_queued_output(next_output)
@@ -1085,6 +1123,11 @@ class OutputService:
     def on_assistant_text_delta(self, delta: AssistantTextDelta) -> None:
         self.router.on_agent_text_delta(delta)
 
+    def add_output_finished_listener(self, listener: Callable[[str, str, str], None]) -> None:
+        """注册当前输出完成回调。"""
+
+        self.router.add_finish_listener(listener)
+
     def on_assistant_audio_delta(
         self,
         *,
@@ -1225,6 +1268,24 @@ class OutputService:
                     self.router._stream_by_session.pop(stored_session, None)
                     self.router._native_source_by_session.pop(stored_session, None)
         return decision
+
+    def active_output_stream_id(self, user_id: str, session_id: str | None = None) -> str | None:
+        """查询用户当前活跃 output stream。
+
+        主要逻辑：只暴露只读状态，供音频会话生命周期判断是否可以执行
+        `close_after_reply`。
+        参数：`user_id` 为用户标识，`session_id` 可选用于进一步限定当前会话。
+        返回值：活跃 stream_id；没有活跃输出时返回 None。
+        异常情况：无。
+        """
+
+        active = self.router.arbiter._active_by_user.get(user_id)
+        if active is None:
+            return None
+        intent, stream_id, _source = active
+        if session_id is not None and intent.session_id != session_id:
+            return None
+        return stream_id
 
     def debug_snapshot(self) -> dict:
         """返回 Output Service 调试快照。"""

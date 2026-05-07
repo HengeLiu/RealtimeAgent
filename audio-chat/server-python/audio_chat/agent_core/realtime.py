@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import base64
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
@@ -44,6 +44,8 @@ class RealtimeProviderCallbacks:
     audio_done: Callable[[dict[str, Any]], None]
     provider_event: Callable[[dict[str, Any]], None]
     error: Callable[[str, dict[str, Any]], None]
+    tool_call_delta: Callable[[dict[str, Any]], None] | None = None
+    tool_call_done: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 class RealtimeProviderAdapter(Protocol):
@@ -265,6 +267,60 @@ class QwenOmniRealtimeAdapter:
             callbacks.provider_event({"event": "omni.response.audio.done", "provider": "qwen"})
             callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type})
             return
+        if event_type in {"response.function_call_arguments.delta", "response.tool_call_arguments.delta"}:
+            callbacks.provider_event(_summarize_omni_event(message))
+            if callbacks.tool_call_delta is not None:
+                callbacks.tool_call_delta(
+                    {
+                        "tool_call_id": str(message.get("call_id") or message.get("item_id") or message.get("id") or ""),
+                        "name": message.get("name"),
+                        "arguments_delta": message.get("delta") or message.get("arguments_delta") or "",
+                    }
+                )
+            return
+        if event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
+            callbacks.provider_event(_summarize_omni_event(message))
+            if callbacks.tool_call_done is not None:
+                result = callbacks.tool_call_done(
+                    {
+                        "tool_call_id": str(message.get("call_id") or message.get("item_id") or message.get("id") or ""),
+                        "name": message.get("name"),
+                        "arguments": message.get("arguments") or "",
+                    }
+                )
+                callbacks.provider_event(
+                    {
+                        "event": "omni.tool_result.ready",
+                        "provider": "qwen",
+                        "tool_call_id": result.get("tool_call_id"),
+                        "tool_name": result.get("name"),
+                        "ok": result.get("ok"),
+                        "degradation": "provider_tool_result_injection_not_supported",
+                    }
+                )
+            return
+        if event_type == "response.output_item.done":
+            item = message.get("item") if isinstance(message.get("item"), dict) else {}
+            if item.get("type") in {"function_call", "tool_call"} and callbacks.tool_call_done is not None:
+                callbacks.provider_event(_summarize_omni_event(message))
+                result = callbacks.tool_call_done(
+                    {
+                        "tool_call_id": str(item.get("call_id") or item.get("id") or ""),
+                        "name": item.get("name"),
+                        "arguments": item.get("arguments") or "",
+                    }
+                )
+                callbacks.provider_event(
+                    {
+                        "event": "omni.tool_result.ready",
+                        "provider": "qwen",
+                        "tool_call_id": result.get("tool_call_id"),
+                        "tool_name": result.get("name"),
+                        "ok": result.get("ok"),
+                        "degradation": "provider_tool_result_injection_not_supported",
+                    }
+                )
+                return
         if event_type == "error":
             callbacks.error(str(message.get("message") or message), {"provider": "qwen", "raw": message})
             return
@@ -430,35 +486,61 @@ class RealtimeToolBridge:
         *,
         tool_call_id: str,
         name: str | None = None,
-        arguments_delta: dict | None = None,
+        arguments_delta: dict | str | None = None,
     ) -> None:
         """聚合 provider 工具调用参数增量。"""
 
-        record = self._pending.setdefault(tool_call_id, {"name": name or "", "arguments": {}})
+        record = self._pending.setdefault(tool_call_id, {"name": name or "", "arguments": {}, "arguments_text": ""})
         if name:
             record["name"] = name
-        record["arguments"].update(arguments_delta or {})
+        if isinstance(arguments_delta, str):
+            record["arguments_text"] = str(record.get("arguments_text") or "") + arguments_delta
+        else:
+            record["arguments"].update(arguments_delta or {})
 
-    def commit_tool_call(self, *, tool_call_id: str, user_id: str, session_id: str) -> dict:
+    def commit_tool_call(
+        self,
+        *,
+        tool_call_id: str,
+        user_id: str,
+        session_id: str,
+        name: str | None = None,
+        arguments: dict | str | None = None,
+    ) -> dict:
         """提交完整工具调用并返回 provider 回填数据。"""
 
         if self.tool_gateway is None:
             return {"tool_call_id": tool_call_id, "ok": False, "error": {"message": "tool gateway is not configured"}}
-        record = self._pending.pop(tool_call_id, {"name": "", "arguments": {}})
+        record = self._pending.pop(tool_call_id, {"name": "", "arguments": {}, "arguments_text": ""})
+        if name:
+            record["name"] = name
+        if arguments is not None:
+            if isinstance(arguments, str):
+                record["arguments_text"] = str(record.get("arguments_text") or "") + arguments
+            else:
+                record["arguments"].update(arguments)
         name = str(record.get("name") or "")
-        arguments = dict(record.get("arguments") or {})
+        resolved_arguments = dict(record.get("arguments") or {})
+        arguments_text = str(record.get("arguments_text") or "").strip()
+        if arguments_text:
+            try:
+                decoded = json.loads(arguments_text)
+                if isinstance(decoded, dict):
+                    resolved_arguments.update(decoded)
+                else:
+                    resolved_arguments["_raw_arguments"] = decoded
+            except json.JSONDecodeError:
+                resolved_arguments["_raw_arguments"] = arguments_text
         if self.recorder is not None:
             self.recorder.record_agent_event(
                 session_id,
                 {"event": "realtime.tool_call.committed", "tool_call_id": tool_call_id, "tool_name": name},
             )
-        result = asyncio.run(
-            self.tool_gateway.call(
-                name=name,
-                user_id=user_id,
-                session_id=session_id,
-                input_data=arguments,
-            )
+        result = self.tool_gateway.call_sync_safe(
+            name=name,
+            user_id=user_id,
+            session_id=session_id,
+            input_data=resolved_arguments,
         )
         return {
             "tool_call_id": tool_call_id,
@@ -699,7 +781,65 @@ class RealtimeAudioAgentCore:
                 message=message,
                 record=record,
             ),
+            tool_call_delta=lambda record: self._handle_provider_tool_call_delta(record),
+            tool_call_done=lambda record: self._handle_provider_tool_call_done(
+                user_id=user_id,
+                session_id=session_id,
+                record=record,
+            ),
         )
+
+    def _handle_provider_tool_call_delta(self, record: dict[str, Any]) -> None:
+        """处理 provider function call 参数增量。"""
+
+        self.tool_bridge.append_tool_call_delta(
+            tool_call_id=str(record.get("tool_call_id") or ""),
+            name=record.get("name"),
+            arguments_delta=record.get("arguments_delta"),
+        )
+
+    def _handle_provider_tool_call_done(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        """提交 provider 工具调用并记录结果回填降级。
+
+        主要逻辑：当前 Qwen adapter 能解析工具调用并执行 ToolGateway，但 provider SDK
+        尚无稳定的 tool result injection 封装，因此先把结果写入 runs，并记录明确降级。
+        """
+
+        result = self.tool_bridge.commit_tool_call(
+            tool_call_id=str(record.get("tool_call_id") or ""),
+            user_id=user_id,
+            session_id=session_id,
+            name=record.get("name"),
+            arguments=record.get("arguments"),
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.tool_result.ready",
+                "tool_call_id": result.get("tool_call_id"),
+                "tool_name": result.get("name"),
+                "ok": result.get("ok"),
+                "degradation": "provider_tool_result_injection_not_supported",
+            },
+        )
+        self.recorder.record_system_event(
+            {
+                "event": "system.degradation.raised",
+                "component": "RealtimeProviderAdapter",
+                "reason": "provider_tool_result_injection_not_supported",
+                "user_id": user_id,
+                "session_id": session_id,
+                "tool_call_id": result.get("tool_call_id"),
+                "tool_name": result.get("name"),
+            }
+        )
+        return result
 
     def _default_provider_factory(self, config: RealtimeProviderConfig) -> RealtimeProviderAdapter:
         if config.provider == "mock":
@@ -804,4 +944,15 @@ def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
     elif event_type == "response.done":
         response = message.get("response") if isinstance(message.get("response"), dict) else {}
         record["status"] = response.get("status")
+    elif event_type in {"response.function_call_arguments.delta", "response.tool_call_arguments.delta"}:
+        record["tool_call_id"] = message.get("call_id") or message.get("item_id") or message.get("id")
+        record["delta_len"] = len(str(message.get("delta") or message.get("arguments_delta") or ""))
+    elif event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
+        record["tool_call_id"] = message.get("call_id") or message.get("item_id") or message.get("id")
+        record["tool_name"] = message.get("name")
+    elif event_type == "response.output_item.done":
+        item = message.get("item") if isinstance(message.get("item"), dict) else {}
+        record["item_type"] = item.get("type")
+        record["tool_call_id"] = item.get("call_id") or item.get("id")
+        record["tool_name"] = item.get("name")
     return record
