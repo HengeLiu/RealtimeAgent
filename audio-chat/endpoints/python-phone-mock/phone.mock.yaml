@@ -16,6 +16,8 @@ capabilities:
   sensor.depth: true
   sensor.imu: true
   actuator.haptic: true
+  phone.task.find_object_phone_task: true
+  phone.task.traffic_light_phone_task: true
 subscriptions:
   - event: stream.control.*
     filter:
@@ -26,3 +28,9 @@ subscriptions:
   - event: stream.output.*
     filter:
       stream_type: actuator.haptic
+  - event: control.device.command.*
+vision_frames:
+  find_object_phone_task:
+    - "mock-find-object-frame"
+  traffic_light_phone_task:
+    - "mock-traffic-light-frame"

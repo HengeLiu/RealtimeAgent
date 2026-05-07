@@ -10,6 +10,8 @@
     "streams.produce": ["sensor.rgb", "sensor.mic"],
     "streams.consume": ["actuator.speaker", "actuator.haptic"],
     "sensor.rgb": true,
+    "phone.task.find_object_phone_task": true,
+    "phone.task.traffic_light_phone_task": true,
     "audio.aec": "replaceable",
     "audio.wake_word": "manual"
   },
@@ -25,6 +27,9 @@
       "filter": {
         "stream_type": "actuator.speaker"
       }
+    },
+    {
+      "event": "control.device.command.*"
     },
     {
       "event": "control.audio_session.*"

@@ -162,12 +162,15 @@ struct AppConfig: Codable, Equatable {
             "streams.produce": .array([.string("sensor.rgb"), .string("sensor.mic")]),
             "streams.consume": .array([.string("actuator.speaker"), .string("actuator.haptic")]),
             "sensor.rgb": .bool(true),
+            "phone.task.find_object_phone_task": .bool(true),
+            "phone.task.traffic_light_phone_task": .bool(true),
             "audio.aec": .string("replaceable"),
             "audio.wake_word": .string("manual"),
         ],
         subscriptions: [
             SubscriptionConfig(event: "stream.control.*", filter: ["stream_type": .string("sensor.rgb")]),
             SubscriptionConfig(event: "stream.output.*", filter: ["stream_type": .string("actuator.speaker")]),
+            SubscriptionConfig(event: "control.device.command.*", filter: nil),
             SubscriptionConfig(event: "control.audio_session.*", filter: nil),
         ]
     )

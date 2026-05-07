@@ -45,8 +45,11 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert "sensor.rgb" in config["capabilities"]["streams.produce"]
     assert "sensor.mic" in config["capabilities"]["streams.produce"]
     assert "actuator.speaker" in config["capabilities"]["streams.consume"]
+    assert config["capabilities"]["phone.task.find_object_phone_task"] is True
+    assert config["capabilities"]["phone.task.traffic_light_phone_task"] is True
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
+    assert {"event": "control.device.command.*"} in config["subscriptions"]
 
 
 def test_ios_phone_registration_event_matches_contract_golden() -> None:
@@ -99,11 +102,18 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
         "stream.output.started",
         "stream.output.finished",
         "stream.output.closed",
+        "control.device.command.requested",
+        "control.device.command.started",
+        "control.device.command.progress",
+        "control.device.command.completed",
         "stream.input.opened",
         "stream.input.closed",
         "sensor.rgb",
         "sensor.mic",
         "actuator.speaker",
+        "PhoneTaskRegistry",
+        "FindObjectPhoneTaskHandler",
+        "TrafficLightPhoneTaskHandler",
         "payload_size",
         "UInt32(headerData.count).bigEndian",
     ]

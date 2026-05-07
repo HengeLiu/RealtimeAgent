@@ -19,6 +19,7 @@ from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFo
 from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
 from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskEventBridge, TaskStore
+from audio_chat.tasks import TaskEvent
 from audio_chat.tools import BUILTIN_TOOLS, EXTENSION_BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
 
 
@@ -64,7 +65,13 @@ class AudioChatConfig:
     output_default_on_blocked: str = "queue"
     output_default_on_interrupted: str = "drop"
     output_max_queue_size: int = 32
+    output_tool_progress_audio_mode: str = "cached"
+    output_tool_progress_priority: str = "low"
+    output_tool_progress_ttl_seconds: int = 10
     agent_mode: str = "text"
+    voice_server_mode: str = ""
+    voice_conversation_mode: str = "continuous"
+    voice_session_lifecycle: str = "persistent"
     realtime_provider: str = "qwen"
     realtime_model: str = "qwen3.5-omni-plus-realtime"
     realtime_turn_detection: str = "provider"
@@ -143,7 +150,13 @@ class AudioChatConfig:
             output_default_on_blocked=loaded.output.default_on_blocked,
             output_default_on_interrupted=loaded.output.default_on_interrupted,
             output_max_queue_size=loaded.output.max_queue_size,
-            agent_mode=loaded.agent.mode,
+            output_tool_progress_audio_mode=loaded.output.tool_progress_audio_mode,
+            output_tool_progress_priority=loaded.output.tool_progress_priority,
+            output_tool_progress_ttl_seconds=loaded.output.tool_progress_ttl_seconds,
+            agent_mode=_normalize_agent_mode(loaded.agent.mode),
+            voice_server_mode=loaded.voice.server_mode,
+            voice_conversation_mode=loaded.voice.conversation_mode,
+            voice_session_lifecycle=loaded.voice.session_lifecycle,
             realtime_provider=realtime.provider,
             realtime_model=realtime.model,
             realtime_turn_detection=realtime.turn_detection,
@@ -247,6 +260,9 @@ class AudioChatApp:
             default_on_blocked=self.config.output_default_on_blocked,
             default_on_interrupted=self.config.output_default_on_interrupted,
             max_queue_size=self.config.output_max_queue_size,
+            tool_progress_audio_mode=self.config.output_tool_progress_audio_mode,
+            tool_progress_priority=self.config.output_tool_progress_priority,
+            tool_progress_ttl_seconds=self.config.output_tool_progress_ttl_seconds,
         )
         self.task_engine = TaskEngine(
             store=_build_task_store(self.config),
@@ -309,7 +325,7 @@ class AudioChatApp:
             skill_service=self.skill_service,
         )
         self.agent_core = AgentCoreRouter.build(
-            mode=self.config.agent_mode,
+            mode=_normalize_agent_mode(self.config.agent_mode),
             control_service=self.control_service,
             output_service=self.output_service,
             recorder=self.recorder,
@@ -381,10 +397,27 @@ class AudioChatApp:
             self.control_service.publish(event)
             return
         if event.event_name == "control.user.dialog.close.requested":
+            if self._should_ignore_model_close_request(event):
+                self._record_turn_ignored(
+                    event.user_id,
+                    event.session_id or self._active_session_by_user.get(event.user_id),
+                    reason=event.payload.get("reason", "model_close_protected"),
+                    source=event.payload.get("source", event.producer_id),
+                )
+                return
             self.close_audio_session(
                 event.user_id,
                 reason=event.payload.get("reason", "user_requested"),
                 mode=event.payload.get("close_mode", event.payload.get("mode", "close_now")),
+            )
+            return
+        if event.event_name in {"voice.turn.ignored", "control.audio_session.turn.ignored"}:
+            self.control_service.publish(event)
+            self._record_turn_ignored(
+                event.user_id,
+                event.session_id or self._active_session_by_user.get(event.user_id),
+                reason=event.payload.get("reason", "turn_ignored"),
+                source=event.payload.get("source", event.producer_id),
             )
             return
         if event.event_name == "control.user.interrupt.detected":
@@ -395,6 +428,15 @@ class AudioChatApp:
                 session_id=event.session_id,
                 reason=event.payload.get("reason", "user_interrupt"),
             )
+            return
+        if event.event_name in {
+            "control.device.command.started",
+            "control.device.command.progress",
+            "control.device.command.completed",
+            "control.device.command.failed",
+        }:
+            self.control_service.publish(event)
+            self._handle_device_command_report(event)
             return
         if event.event_name == "control.audio_session.opened":
             self.control_service.publish(event)
@@ -633,6 +675,98 @@ class AudioChatApp:
             )
         )
 
+    def _should_ignore_model_close_request(self, event: Event) -> bool:
+        """判断是否应拦截模型误触发的连续对话关闭。
+
+        主要逻辑：端侧用户关闭可以直接生效；来自模型、Tool 或 server 内部且没有显式
+        `allow_model_close=true` 的关闭请求只记录 ignored，不释放 persistent realtime session。
+        参数：`event` 为关闭请求。
+        返回值：需要忽略时返回 True。
+        异常情况：无。
+        """
+
+        source = str(event.payload.get("source") or event.producer_id or "").strip().lower()
+        if source not in {"model", "tool", "agent", "server", SERVER_PRODUCER_ID.lower()}:
+            return False
+        return not bool(event.payload.get("allow_model_close", False))
+
+    def _record_turn_ignored(self, user_id: str, session_id: str | None, *, reason: str, source: object = "") -> None:
+        """记录被忽略的连续对话 turn 或关闭请求。
+
+        主要逻辑：只写观测事件，不调用 Agent close，避免误关闭 persistent realtime 会话。
+        参数：`user_id/session_id` 定位会话；`reason/source` 说明忽略原因。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if not session_id:
+            return
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "control.audio_session.turn.ignored",
+                "user_id": user_id,
+                "reason": str(reason or "turn_ignored"),
+                "source": str(source or ""),
+            },
+        )
+
+    def _handle_device_command_report(self, event: Event) -> None:
+        """把端侧命令回报转换为 server 侧 TaskEvent。
+
+        主要逻辑：phone 视觉任务等端侧执行能力只通过
+        `control.device.command.*` 事件回报 started / progress / completed /
+        failed。这里根据 payload.task_id 把回报写入 TaskEngine，而不暴露
+        device_id 点对点 RPC。
+        参数：`event` 为端侧上报的命令事件。
+        返回值：无。
+        异常情况：找不到 task 时忽略，避免普通端侧命令回执影响控制面。
+        """
+
+        payload = dict(event.payload or {})
+        task_id = str(payload.get("task_id") or "").strip()
+        if not task_id:
+            return
+        try:
+            ref = self.task_engine.query(task_id)
+        except Exception:
+            return
+
+        task_type = str(payload.get("task_type") or ref.task_type)
+        state_event_name = {
+            "control.device.command.started": "phone_task.started",
+            "control.device.command.progress": "phone_task.progress",
+            "control.device.command.completed": "phone_task.completed",
+            "control.device.command.failed": "phone_task.failed",
+        }[event.event_name]
+        self.task_engine.emit_event(
+            TaskEvent(
+                task_id=task_id,
+                task_type=task_type,
+                event_name=state_event_name,
+                user_id=event.user_id,
+                session_id=event.session_id or str(ref.metadata.get("session_id") or "") or None,
+                payload={
+                    "producer_id": event.producer_id,
+                    "command_event_name": event.event_name,
+                    **payload,
+                },
+                allow_direct_notify=False,
+            )
+        )
+        if event.event_name == "control.device.command.completed":
+            self.task_engine.complete(
+                task_id,
+                payload=dict(payload.get("result") or payload),
+                summary=str(payload.get("summary") or payload.get("message") or "phone task completed"),
+            )
+        elif event.event_name == "control.device.command.failed":
+            self.task_engine.fail(
+                task_id,
+                message=str(payload.get("message") or "phone task failed"),
+                payload=payload,
+            )
+
     def _finalize_audio_session(self, user_id: str, *, reason: str) -> None:
         """释放 endpoint 已确认关闭的音频会话。"""
 
@@ -684,6 +818,17 @@ def _stream_format_from_dict(data: dict) -> StreamFormat:
         channels=int(data.get("channels", 1)),
         chunk_ms=int(data.get("chunk_ms", 20)),
     )
+
+
+def _normalize_agent_mode(mode: str) -> str:
+    """规范化新版和旧文档中的 Agent 模式别名。"""
+
+    normalized = str(mode or "text").strip().lower()
+    if normalized in {"realtime", "omni", "omni_realtime"}:
+        return "realtime_audio"
+    if normalized in {"text", "auto", "custom", "realtime_audio"}:
+        return normalized
+    return normalized
 
 
 def _build_task_store(config: AudioChatConfig) -> TaskStore:

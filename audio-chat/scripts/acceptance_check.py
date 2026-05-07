@@ -460,6 +460,24 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "old-sdk-parity-phone": (
+        CheckCommand(
+            "old_sdk_parity_phone_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_phone_task_contract.py",
+                "tests/test_python_phone_mock_vision_task.py",
+                "tests/test_ios_phone_contract.py",
+                "tests/test_ios_phone_endpoint_contract.py",
+                "tests/acceptance/test_phone_visual_task_playback.py",
+                "-q",
+            ),
+        ),
+    ),
     "old-sdk-parity-docs": (
         CheckCommand(
             "old_sdk_parity_docs_tests",

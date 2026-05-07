@@ -15,6 +15,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
     @Published private(set) var eventLog: [String] = []
     @Published private(set) var speakerBytesBuffered = 0
     @Published private(set) var rgbUploadCount = 0
+    @Published private(set) var phoneTaskEventLog: [String] = []
 
     let config: AppConfig
 
@@ -23,6 +24,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
     private var outputStreamsStarted = Set<String>()
     private var speakerBuffer = Data()
     private var sequenceByStream: [String: Int] = [:]
+    private let phoneTaskRegistry = PhoneTaskRegistry()
 
     init(config: AppConfig) {
         self.config = config
@@ -199,6 +201,8 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 requestID: event.payload["request_id"] as? String,
                 reason: "server_requested"
             )
+        case "control.device.command.requested":
+            await handlePhoneTaskCommand(event)
         case "stream.output.close.requested":
             await finishOutputStream(event)
         case "stream.output.cancel.requested":
@@ -216,6 +220,61 @@ final class AudioChatEndpointRuntime: ObservableObject {
             )
         default:
             break
+        }
+    }
+
+    private func handlePhoneTaskCommand(_ event: AudioChatEvent) async {
+        let taskType = event.payload["task_type"] as? String ?? ""
+        let taskID = event.payload["task_id"] as? String ?? AudioChatIDs.make(prefix: "ios_phone_task")
+        guard let handler = phoneTaskRegistry.handler(taskType: taskType) else {
+            try? await sendPhoneTaskEvent(
+                "control.device.command.failed",
+                command: event,
+                payload: ["task_id": taskID, "task_type": taskType, "message": "unknown phone task"]
+            )
+            return
+        }
+        try? await sendPhoneTaskEvent(
+            "control.device.command.started",
+            command: event,
+            payload: ["task_id": taskID, "task_type": taskType, "state": "started"]
+        )
+        await uploadRGBFrame(
+            sessionID: event.payload["session_id"] as? String ?? event.sessionID ?? AudioChatIDs.make(prefix: "sess_ios_task"),
+            requestID: taskID,
+            reason: "phone_task"
+        )
+        try? await sendPhoneTaskEvent(
+            "control.device.command.progress",
+            command: event,
+            payload: ["task_id": taskID, "task_type": taskType, "progress": 1.0]
+        )
+        let result = handler.result(command: event, frameCount: 1)
+        try? await sendPhoneTaskEvent(
+            "control.device.command.completed",
+            command: event,
+            payload: [
+                "task_id": taskID,
+                "task_type": taskType,
+                "summary": result.summary,
+                "result": result.payload,
+            ]
+        )
+    }
+
+    private func sendPhoneTaskEvent(_ eventName: String, command: AudioChatEvent, payload: [String: Any]) async throws {
+        let event = AudioChatEvent(
+            eventName: eventName,
+            userID: config.userID,
+            producerID: config.deviceID,
+            payload: payload,
+            sessionID: command.payload["session_id"] as? String ?? command.sessionID,
+            version: config.protocolVersion
+        )
+        try await sendControlEvent(event)
+        phoneTaskEventLog.insert(eventName, at: 0)
+        if phoneTaskEventLog.count > 30 {
+            phoneTaskEventLog.removeLast(phoneTaskEventLog.count - 30)
         }
     }
 
@@ -394,5 +453,72 @@ final class AudioChatEndpointRuntime: ObservableObject {
         data.append(Data("audio-chat-ios-rgb".utf8))
         data.append(contentsOf: [0xFF, 0xD9])
         return data
+    }
+}
+
+/// iOS phone 参考端任务 handler 结果。
+struct PhoneTaskCommandResult {
+    var summary: String
+    var payload: [String: Any]
+}
+
+/// iOS phone 参考端任务 handler 协议。
+protocol PhoneTaskHandler {
+    var taskType: String { get }
+    func result(command: AudioChatEvent, frameCount: Int) -> PhoneTaskCommandResult
+}
+
+/// 找物任务 handler 样板。
+struct FindObjectPhoneTaskHandler: PhoneTaskHandler {
+    let taskType = "find_object_phone_task"
+
+    func result(command: AudioChatEvent, frameCount: Int) -> PhoneTaskCommandResult {
+        let input = command.payload["input"] as? [String: Any] ?? [:]
+        let target = input["target"] as? String ?? "目标物"
+        return PhoneTaskCommandResult(
+            summary: "找到\(target)",
+            payload: [
+                "target": target,
+                "found": true,
+                "frame_count": frameCount,
+                "source": "ios-phone-reference",
+            ]
+        )
+    }
+}
+
+/// 红绿灯任务 handler 样板。
+struct TrafficLightPhoneTaskHandler: PhoneTaskHandler {
+    let taskType = "traffic_light_phone_task"
+
+    func result(command: AudioChatEvent, frameCount: Int) -> PhoneTaskCommandResult {
+        let input = command.payload["input"] as? [String: Any] ?? [:]
+        let color = input["expected_color"] as? String ?? "green"
+        return PhoneTaskCommandResult(
+            summary: "红绿灯识别结果：\(color)",
+            payload: [
+                "color": color,
+                "confidence": 0.9,
+                "frame_count": frameCount,
+                "source": "ios-phone-reference",
+            ]
+        )
+    }
+}
+
+/// iOS phone 参考端任务注册表。
+final class PhoneTaskRegistry {
+    private let handlers: [String: PhoneTaskHandler]
+
+    init() {
+        let builtins: [PhoneTaskHandler] = [
+            FindObjectPhoneTaskHandler(),
+            TrafficLightPhoneTaskHandler(),
+        ]
+        self.handlers = Dictionary(uniqueKeysWithValues: builtins.map { ($0.taskType, $0) })
+    }
+
+    func handler(taskType: String) -> PhoneTaskHandler? {
+        handlers[taskType]
     }
 }
