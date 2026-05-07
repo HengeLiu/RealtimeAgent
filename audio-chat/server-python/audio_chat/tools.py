@@ -113,6 +113,9 @@ class ToolTrace:
     created_at: float = 0.0
 
 
+CapabilityTrace = ToolTrace
+
+
 @dataclass
 class ToolContext:
     """Tool 执行上下文。
@@ -735,10 +738,49 @@ class UserDeviceContext:
         )
         return OutputStreamWriter(context=self, stream_id=handle.stream_id, session_id=session_id, stream_type=stream_type, format=format)
 
+    def capture_photo(
+        self,
+        *,
+        reason: str = "",
+        timeout_seconds: float | None = None,
+        freshness_seconds: float = 0,
+        configure_payload: dict | None = None,
+    ) -> AssetRef | None:
+        """请求端侧采集一张 RGB 图片资产。
+
+        主要逻辑：这是旧 SDK `capture_photo()` 的迁移便捷入口，底层仍然调用
+        `request_asset("sensor.rgb")`，由控制事件触发端侧通过 stream 上传 JPEG。
+        参数：`reason` 为抓拍原因，`timeout_seconds` 为等待超时，`freshness_seconds`
+        为允许复用缓存的最大秒数，`configure_payload` 为端侧补充配置。
+        返回值：命中或采集成功时返回 `AssetRef`，超时时返回 `None`。
+        异常情况：端侧配置 payload 包含媒体字节或控制事件非法时抛出异常。
+        """
+
+        payload = {"reason": reason} if reason else {}
+        payload.update(dict(configure_payload or {}))
+        return self.request_asset(
+            stream_type="sensor.rgb",
+            freshness_seconds=freshness_seconds,
+            configure_payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def latest_asset(self, stream_type: str, *, freshness_seconds: float | None = None) -> AssetRef | None:
+        """读取指定 stream 类型的最新缓存资产。
+
+        主要逻辑：只查询 Asset Service 缓存，不主动发布控制事件。
+        参数：`stream_type` 为资产 stream 类型，`freshness_seconds` 为可选最大年龄。
+        返回值：存在时返回最新 `AssetRef`，否则返回 `None`。
+        异常情况：无。
+        """
+
+        refs = self.query_assets(stream_type=stream_type, freshness_seconds=freshness_seconds)
+        return refs[-1] if refs else None
+
     def request_asset(
         self,
         stream_type: str,
-        freshness_seconds: float,
+        freshness_seconds: float = 0,
         configure_payload: dict | None = None,
         timeout_seconds: float | None = None,
     ) -> AssetRef | None:
@@ -756,6 +798,44 @@ class UserDeviceContext:
             stream_type=stream_type,
             freshness_seconds=freshness_seconds,
             configure_payload=configure_payload,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def configure_stream(
+        self,
+        stream_type: str,
+        *,
+        mode: str,
+        rate_hz: float | None = None,
+        duration_seconds: float | None = None,
+        payload: dict | None = None,
+        require_capability: str | None = None,
+        selection: str = "first_available",
+        timeout_seconds: float | None = None,
+    ) -> PublishResult:
+        """通过协议事件配置端侧 sensor stream。
+
+        主要逻辑：发布 `stream.control.configure.requested`，让订阅并具备能力的端侧
+        自行打开、调整或停止对应 stream；不会新增隐藏 RPC。
+        参数：`stream_type` 为 stream 类型，`mode` 为 single/continuous/stop 等模式，
+        `rate_hz` 和 `duration_seconds` 是常用采样配置，`payload` 可携带业务补充配置。
+        返回值：`PublishResult`。
+        异常情况：事件名、payload 或 selection 非法时由协议层抛出异常。
+        """
+
+        event_payload = dict(payload or {})
+        event_payload["stream_type"] = stream_type
+        event_payload["mode"] = mode
+        if rate_hz is not None:
+            event_payload["rate_hz"] = rate_hz
+        if duration_seconds is not None:
+            event_payload["duration_seconds"] = duration_seconds
+        return self.publish_event(
+            "stream.control.configure.requested",
+            stream_type=stream_type,
+            payload=event_payload,
+            require_capability=require_capability or stream_type,
+            selection=selection,
             timeout_seconds=timeout_seconds,
         )
 
@@ -778,6 +858,7 @@ class UserDeviceContext:
         stream_type: str,
         correlation_id: str | None = None,
         timeout_seconds: float | None = None,
+        since: float | str | None = None,
     ) -> AsyncIterator[AssetRef]:
         """持续读取资产 stream 写入的资产引用。
 
@@ -788,11 +869,11 @@ class UserDeviceContext:
         返回值：异步迭代器。
         异常情况：无。
         """
-        return self._app.asset_service.watch_assets(
-            user_id=self.user_id,
+        return self._watch_assets_filtered(
             stream_type=stream_type,
             correlation_id=correlation_id,
             timeout_seconds=timeout_seconds,
+            since=since,
         )
 
     def submit_text(self, text: str, priority: str = "normal", ttl_seconds: int = 0) -> None:
@@ -813,6 +894,18 @@ class UserDeviceContext:
             ttl_seconds=ttl_seconds,
         )
 
+    def notify(self, text: str, *, priority: str = "normal", ttl_seconds: int = 0) -> None:
+        """提交用户可感知通知。
+
+        主要逻辑：作为旧 SDK `submit_notification()` 的迁移便捷入口，底层进入
+        Output Service，由 TTS、播放仲裁和输出 stream 统一处理。
+        参数：`text` 为通知文本，`priority` 为优先级，`ttl_seconds` 为通知有效期。
+        返回值：无。
+        异常情况：同 `submit_text()`。
+        """
+
+        self.submit_text(text=text, priority=priority, ttl_seconds=ttl_seconds)
+
     def submit_audio(self, audio: bytes, codec: str, priority: str = "normal") -> None:
         """提交原生音频输出。
 
@@ -829,6 +922,31 @@ class UserDeviceContext:
             format=StreamFormat(codec=codec),
             priority=priority,
         )
+
+    async def _watch_assets_filtered(
+        self,
+        *,
+        stream_type: str,
+        correlation_id: str | None,
+        timeout_seconds: float | None,
+        since: float | str | None,
+    ) -> AsyncIterator[AssetRef]:
+        """按 since 过滤 Asset Service 返回的资产迭代器。"""
+
+        async for ref in self._app.asset_service.watch_assets(
+            user_id=self.user_id,
+            stream_type=stream_type,
+            correlation_id=correlation_id,
+            timeout_seconds=timeout_seconds,
+        ):
+            if since is None:
+                yield ref
+                continue
+            if isinstance(since, (int, float)) and ref.created_at <= float(since):
+                continue
+            if isinstance(since, str) and ref.asset_id <= since:
+                continue
+            yield ref
 
     @staticmethod
     def _has_capability(capabilities: dict, capability: str) -> bool:

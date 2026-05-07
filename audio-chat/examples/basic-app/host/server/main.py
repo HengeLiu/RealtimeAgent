@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
+from audio_chat import AudioChatApp, AudioChatConfig
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]

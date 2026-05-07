@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.protocol import new_id
-from audio_chat.tasks import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskEvent
 
 
 class ContinuousRgbAnalyzeTask(BaseTask):
@@ -30,7 +29,7 @@ class ContinuousRgbAnalyzeTask(BaseTask):
             return
         input_data = dict(context.metadata.get("input") or {})
         frame_limit = int(input_data.get("frame_limit") or 2)
-        correlation_id = str(input_data.get("correlation_id") or context.task_ref.task_id or new_id("rgb_task"))
+        correlation_id = str(input_data.get("correlation_id") or context.task_ref.task_id)
         context.devices.publish_event(
             "stream.control.configure.requested",
             stream_type="sensor.rgb",

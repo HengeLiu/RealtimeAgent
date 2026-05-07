@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.tasks import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskEvent
 
 
 class TimerTask(BaseTask):

@@ -8,7 +8,8 @@ from audio_chat.memory import MemoryRecord, MemoryService, MemoryStore
 from audio_chat.protocol import Event, StreamChunk, StreamFormat, Subscription
 from audio_chat.skills import SkillDocument, SkillService
 from audio_chat.tasks import BaseTask, JsonlTaskStore, TaskContext, TaskEngine, TaskEvent, TaskEventBridge, TaskRef, TaskSpec, TaskStore
-from audio_chat.tools import BaseTool, DeviceHandle, DeviceSnapshot, ToolContext, ToolError, ToolGateway, ToolResult, ToolTrace, UserDeviceContext
+from audio_chat.context import CapabilityTrace, UserDeviceContext
+from audio_chat.tools import BaseTool, DeviceHandle, DeviceSnapshot, ToolContext, ToolError, ToolGateway, ToolResult, ToolTrace
 
 __all__ = [
     "ArtifactRef",
@@ -18,6 +19,7 @@ __all__ = [
     "AudioChatError",
     "BaseTask",
     "BaseTool",
+    "CapabilityTrace",
     "DeviceHandle",
     "DeviceSnapshot",
     "ErrorCode",

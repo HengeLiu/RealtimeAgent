@@ -335,9 +335,29 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
     ),
 }
 
+OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
+    "old-sdk-parity-api": (
+        CheckCommand(
+            "old_sdk_parity_api_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_public_api_parity.py",
+                "tests/test_user_device_context_developer_api.py",
+                "tests/acceptance/test_no_internal_service_usage_contract.py",
+                "-q",
+            ),
+        ),
+    ),
+}
+
 CHECKS: dict[str, tuple[CheckCommand, ...]] = {
     **FOUNDATION_CHECKS,
     **NEXT_STAGE_CHECKS,
+    **OLD_SDK_PARITY_CHECKS,
 }
 
 
