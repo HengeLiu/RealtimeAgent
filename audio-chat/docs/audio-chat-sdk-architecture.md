@@ -1,6 +1,6 @@
 # audio-chat 新 SDK 总体架构设计
 
-更新时间：2026-05-06
+更新时间：2026-05-07
 
 ## 1. 文档目的
 
@@ -171,9 +171,11 @@ server 内部可以建立 capability 和 subscription 索引，用来选择“�
 
 说明：
 
-1. 端侧 task 支持不再是单独概念，统一表达为设备订阅并响应控制事件。
-2. 例如拍照不应是特殊 RPC。server 只需要向具备 `sensor.rgb=true` 且订阅了 `stream.control.* + filter(stream_type=sensor.rgb)` 的设备发送采集策略事件，真实图片仍由端侧通过 `sensor.rgb` stream 上传。
-3. server 侧 `Task Engine` 仍然存在，它负责长流程状态机；端侧只看到与自己有关的 command/result 事件。
+1. 设备注册前只是一个未知控制连接和一份注册请求；注册成功后才会变成 server 内部的 `Device` 对象。
+2. `Device` 是运行态设备抽象，负责维护该设备的身份、能力、订阅、连接、心跳、stream 状态、端侧控制状态和最近错误。
+3. 端侧执行能力不再设计成单独 task 概念，统一表达为设备订阅并响应控制事件；协议层不新增 `start_task`、RPC 或第三种通讯方式。
+4. 例如拍照不应是特殊 RPC。server 只需要向具备 `sensor.rgb=true` 且订阅了 `stream.control.* + filter(stream_type=sensor.rgb)` 的设备发送采集策略事件，真实图片仍由端侧通过 `sensor.rgb` stream 上传。
+5. server 侧 `Task Engine` 仍然存在，它负责长流程状态机；端侧只看到与自己有关的 command/result 事件。
 
 ### 4.3 控制信令和 stream 数据分离
 
@@ -556,6 +558,15 @@ Stream：
 | `stream.output.failed` | device | 端侧播放或执行失败。 |
 | `stream.control.configure.requested` | server | server 请求端侧调整某类 stream 策略，例如通过 `stream_type=sensor.rgb` 请求 RGB 相机单帧或连续上传。 |
 
+端侧控制：
+
+| 事件 | 生产者 | 说明 |
+| --- | --- | --- |
+| `control.device.command.requested` | server | server 请求具备某项能力且订阅该事件的端侧执行控制动作，例如启动或停止导航、本地推理。 |
+| `control.device.command.started` | device | 端侧确认控制动作已开始。 |
+| `control.device.command.completed` | device | 端侧确认控制动作已完成。 |
+| `control.device.command.failed` | device | 端侧控制动作失败。 |
+
 Agent、Tool、Task 和系统事件：
 
 | 事件 | 生产者 | 说明 |
@@ -645,9 +656,9 @@ Control Service 是控制面入口，负责设备注册、鉴权、在线状态�
 
 职责：
 
-1. 处理 `control.device.register.requested`，建立 `user_id` 下的在线设备记录。
-2. 保存设备能力和订阅策略。
-3. 维护控制连接和心跳。
+1. 处理 `control.device.register.requested`，建立 `user_id` 下的在线 `Device` 对象。
+2. 保存设备身份、能力、订阅策略和运行态快照。
+3. 维护控制连接、心跳、在线状态和最近错误。
 4. 校验并发布控制事件。
 5. 根据订阅策略解析接收设备，并推送事件。
 6. 维护用户消息索引和必要的控制面调试快照。
@@ -702,17 +713,46 @@ class ActiveDeviceSet {
 
 class DeviceRegistry {
   +register(device)
+  +get(device_id)
+  +list_online(user_id)
   +update_heartbeat(device_id)
   +find_by_capability(user_id, capability)
   +build_snapshot(user_id)
 }
 
-class DeviceRecord {
+class Device {
   +user_id
   +device_id
+  +device_name
+  +client_type
   +capabilities
+  +subscriptions
+  +connection
+  +stream_states
+  +control_states
+  +last_seen_at
+  +last_error
+  +mark_online(connection)
+  +mark_offline(reason)
+  +update_registration(registration)
+  +update_heartbeat(now)
+  +can_produce(stream_type)
+  +can_consume(stream_type)
+  +snapshot()
+}
+
+class DeviceSnapshot {
+  +user_id
+  +device_id
+  +device_name
+  +client_type
+  +capabilities
+  +subscriptions
   +connection_state
-  +stream_state
+  +stream_states
+  +control_states
+  +last_seen_at
+  +last_error
 }
 
 class SubscriptionIndex {
@@ -760,11 +800,88 @@ ControlService --> DeviceConnectionRegistry
 ControlService --> EventPusher
 ControlService --> PublishResult
 ControlService --> UserMessageStore
-DeviceRegistry --> DeviceRecord
+DeviceRegistry --> Device
+Device --> DeviceSnapshot
 @enduml
 ```
 
-### 7.3 设备注册、验证与用户绑定
+### 7.3 Device 抽象与运行态快照
+
+`Device` 是 server 注册成功后的运行态设备对象。它不是端侧硬件驱动，也不是固定设备类型；它是 server 对某个已注册端侧连接的统一管理入口。
+
+注册前：
+
+1. server 只看到一个控制连接和 `control.device.register.requested`。
+2. 此时不能把连接加入用户设备集合，也不能参与订阅分发。
+3. 鉴权、协议版本、能力声明和订阅声明都通过后，才创建或刷新 `Device`。
+
+注册后：
+
+1. `DeviceRegistry` 按 `device_id` 保存 `Device`。
+2. `ActiveDeviceSet` 按 `user_id` 保存当前在线 `Device` 集合。
+3. `SubscriptionIndex` 从 `Device.subscriptions` 建立订阅索引。
+4. `DeviceConnectionRegistry` 保存 `Device` 到控制连接的映射。
+5. `Stream Service` 记录与 `Device` 相关的 stream 状态；`Task Engine` 只记录 server 侧任务状态，不反向拥有设备身份。
+
+`Device` 负责维护：
+
+| 状态 | 说明 |
+| --- | --- |
+| identity | `user_id`、`device_id`、`device_name`、`client_type`、`sdk_version`。 |
+| capabilities | 设备声明的感知器、执行器、音频处理、本地算力和扩展能力。 |
+| subscriptions | 设备注册时提交的订阅策略。 |
+| connection | 当前控制连接、连接时间、心跳时间、在线 / 离线状态。 |
+| stream_states | 该设备正在生产或消费的 stream 摘要。 |
+| control_states | 该设备通过控制事件上报的长流程状态摘要，例如导航中、本地推理中、传感器策略已启用。 |
+| health | 最近错误、协议降级、丢包或心跳异常等诊断信息。 |
+
+`DeviceSnapshot` 是 `Device` 的只读快照，用于 Tool / Task、调试接口、日志和观测数据。业务代码只能读取快照，不能直接修改 `Device` 内部状态。
+
+`Device` 对外不提供“向这个 `device_id` 推送任意事件”的能力。控制事件仍然必须经过 Control Service 的发布与订阅匹配；业务代码如果需要操作设备，应通过 `UserDeviceContext.publish_event()` 发布当前用户范围内的协议事件，或通过 `open_output_stream()` 打开输出 stream，而不是绕过订阅分发。
+
+运行态关系：
+
+```plantuml
+@startuml
+title Device 运行态关系
+
+class Device {
+  +snapshot()
+  +can_produce(stream_type)
+  +can_consume(stream_type)
+}
+
+class DeviceSnapshot
+class DeviceHandle
+class UserDeviceContext
+class ActiveDeviceSet
+class DeviceRegistry
+class SubscriptionIndex
+class ControlService
+class StreamService
+class TaskEngine
+
+ControlService --> DeviceRegistry
+ControlService --> ActiveDeviceSet
+ControlService --> SubscriptionIndex
+DeviceRegistry --> Device
+ActiveDeviceSet --> Device
+Device --> DeviceSnapshot
+UserDeviceContext --> DeviceHandle
+DeviceHandle --> DeviceSnapshot
+DeviceHandle --> ControlService
+DeviceHandle --> StreamService
+@enduml
+```
+
+这里的边界是：
+
+1. `Device` 是 SDK 内部运行态对象。
+2. `DeviceSnapshot` 是只读数据。
+3. `DeviceHandle` 是 Tool / Task 可使用的受限操作句柄。
+4. `UserDeviceContext` 负责在当前 `user_id` 的 active device set 中选择设备，并返回 `DeviceSnapshot` 或 `DeviceHandle`。
+
+### 7.4 设备注册、验证与用户绑定
 
 设备注册是 Control Service 的第一步。注册成功后，设备才会进入某个 `user_id` 的 active device set，并参与后续事件订阅、stream 打开、任务执行和输出播放。
 
@@ -832,7 +949,7 @@ DeviceRegistry --> DeviceRecord
    - 已绑定同一 user_id：刷新在线状态和能力。
    - 已绑定其他 user_id：拒绝注册，返回 control.device.register.failed。
 8. 如果 user.active_device_set_policy=single，确保该 user_id 只有一个 active device set；新设备加入当前集合，不创建第二个集合。
-9. 写入 DeviceRegistry、SubscriptionIndex、DeviceConnectionRegistry。
+9. 创建或刷新 `Device`，并写入 DeviceRegistry、SubscriptionIndex、DeviceConnectionRegistry。
 10. 返回 control.device.registered，payload 包含 server 分配的 connection_id、心跳间隔和生效配置。
 ```
 
@@ -896,7 +1013,7 @@ DeviceRegistry --> DeviceRecord
 | `GET /api/debug/users/{user_id}` | 查看某个用户的 active device set、订阅和消息状态。 |
 | `POST /api/admin/devices/{device_id}/unbind` | 显式解绑设备。第一版可只提供本地开发接口，正式部署应接入管理鉴权。 |
 
-### 7.4 事件发布与分发
+### 7.5 事件发布与分发
 
 Control Service 的公开接口保持简单：
 
@@ -910,9 +1027,9 @@ class ControlService:
 ```text
 输入：event
 1. 校验 event.user_id、event.event_name、event.producer_id。
-2. 读取 user_id 下在线设备。
+2. 读取 user_id 下在线 `Device` 集合。
 3. 排除 producer 自身，除非订阅声明 allow_self=true。
-4. 对每个设备读取注册时提交的 subscriptions。
+4. 对每个 `Device` 读取注册时提交的 subscriptions。
 5. 先匹配 event 名称。
 6. 再匹配 filter 字段。
 7. 将事件推送给所有匹配设备。
@@ -938,14 +1055,14 @@ result = control_service.publish(Event(
 3. 第一版不做离线控制事件持久队列；需要持久化的长期任务状态由 Task Engine 记录。
 4. Control Service 调试日志只记录事件元数据和匹配结果，不记录音频、图片等大字节内容。
 
-### 7.5 与其他模块的边界
+### 7.6 与其他模块的边界
 
 | 模块 | 边界 |
 | --- | --- |
 | Stream Service | 负责字节 stream，不通过 Control Service 传输媒体大字节。 |
 | Audio Pipeline | 消费 `sensor.mic` stream，不负责设备注册和事件订阅。 |
 | Asset Service | 通过 Control Service 请求端侧上传资产，资产数据仍走 Stream Service。 |
-| Tool / Task | 只通过 `UserDeviceContext`、`DeviceHandle`、`EndpointTaskRef` 或 `OutputIntent` 提交业务意图，不直接找设备连接，也不手写控制事件。 |
+| Tool / Task | 只通过 `UserDeviceContext` 发布协议事件、打开 stream、查询资产或提交输出，不直接找设备连接，也不按 `device_id` 点对点发送。 |
 | Output Service | 生成并仲裁输出音频，最终通过 Stream Service 写入 `actuator.speaker`。 |
 
 ## 8. Stream Service
@@ -1241,7 +1358,8 @@ stream:
 3. 写入 `Asset Store`，按 `user_id`、`device_id`、`stream_type`、`session_id`、时间戳建立索引。
 4. 为 Tool、Task 和模型上下文提供查询接口。
 5. 当缓存没有满足条件的资产时，通过 Control Service 发布控制事件，请求端侧上传。
-6. 根据 TTL、容量和隐私策略淘汰资产。
+6. 为持续采集任务提供 `watch_assets()` 式观察能力，让 Task 可以按 `stream_type`、`correlation_id`、时间窗口逐个读取新资产。
+7. 根据 TTL、容量和隐私策略淘汰资产。
 
 不负责：
 
@@ -1285,14 +1403,14 @@ class AssetAssembler {
   +complete()
 }
 
-class AssetRequestCoordinator {
+class AssetFetchCoordinator {
   +request(stream_type, filter)
   +await_result(request_id)
 }
 
 AssetService --> AssetStore
 AssetService --> AssetAssembler
-AssetService --> AssetRequestCoordinator
+AssetService --> AssetFetchCoordinator
 AssetStore --> AssetRef
 @enduml
 ```
@@ -1642,7 +1760,7 @@ app.register_agent_core(
 
 `Output Service` 是独立服务，负责所有 server 到端侧可听输出。它内部包含：
 
-1. `Output Router`：输出生成层，把统一 assistant delta 或 `OutputIntent` 转成可播放音频来源。
+1. `Output Router`：输出生成层，把统一 assistant delta 或内部 `OutputItem` 转成可播放音频来源。
 2. `Playback Arbiter`：播放仲裁层，决定同一用户或同一端侧当前应该播放哪条输出。
 
 Agent Core 内部的 `RealtimeOutputAdapter`、`TextOutputAdapter` 不属于 `Output Service`。它们只是各自 Agent Core 的内部适配器，负责把模型/provider 的原始输出事件归一化为 SDK 统一事件。
@@ -1675,7 +1793,7 @@ server 可能同时产生多类输出：
 
 职责：
 
-1. 接收统一 `OutputIntent`。
+1. 接收 Agent Core 的统一 assistant delta，或 Tool / Task 通过 `submit_text()` / `submit_audio()` 提交后生成的内部 `OutputItem`。
 2. 根据输出来源选择输出生成方式。
 3. 对 Realtime 模型原生 `audio_delta` 直接透传。
 4. 对文本模型 `text_delta` 实时调用 Streaming TTS。
@@ -1688,7 +1806,7 @@ server 可能同时产生多类输出：
 | --- | --- | --- |
 | `RealtimeOutputAdapter` | 把 provider 原生 realtime 事件映射成统一 `assistant_audio.delta` / `assistant_text.delta`。 | 不决定播放优先级，不直接写端侧 speaker stream。 |
 | `TextOutputAdapter` | 把文本模型返回的 delta 映射成统一 `assistant_text.delta`。 | 不持有 TTS，不决定播放优先级。 |
-| `Output Router` | 把统一输出事件或 `OutputIntent` 转成可播放的音频来源；native audio 透传，text delta 进入 Streaming TTS，短提示可走缓存音频。 | 不决定是否打断当前播放，不直接选择端侧硬件连接。 |
+| `Output Router` | 把统一输出事件或内部 `OutputItem` 转成可播放的音频来源；native audio 透传，text delta 进入 Streaming TTS，短提示可走缓存音频。 | 不决定是否打断当前播放，不直接选择端侧硬件连接。 |
 | `Playback Arbiter` | 对同一用户或同一端侧的播放资源做优先级仲裁，决定立即播放、排队、打断或丢弃。 | 不做 TTS，不理解 provider 原始事件。 |
 
 因此链路是：
@@ -1741,8 +1859,8 @@ class OutputRouter {
   +on_agent_text_delta(delta)
 }
 
-class OutputIntent {
-  +intent_id
+class OutputItem {
+  +item_id
   +user_id
   +session_id
   +source
@@ -1767,7 +1885,7 @@ class CachedAudioOutputSource {
 
 class PlaybackArbiter
 
-OutputRouter --> OutputIntent
+OutputRouter --> OutputItem
 OutputRouter --> NativeAudioOutputSource
 OutputRouter --> StreamingTtsOutputSource
 OutputRouter --> CachedAudioOutputSource
@@ -1780,7 +1898,7 @@ OutputRouter --> PlaybackArbiter
 1. native audio delta 不等待 response done，立即进入 output stream。
 2. text delta 不等待完整文本，立即进入 Streaming TTS。
 3. TTS audio delta 不等待完整 WAV，立即进入 output stream。
-4. 如果 provider 不支持流式 TTS，才允许在 `OutputIntent` 中标记 `streaming=false`，并在日志中记录延迟原因。
+4. 如果 provider 不支持流式 TTS，才允许在内部 `OutputItem` 中标记 `streaming=false`，并在日志中记录延迟原因。
 
 ### 12.3 Playback Arbiter
 
@@ -1917,9 +2035,9 @@ class BaseTool:
 
 | Tool | 说明 |
 | --- | --- |
-| `get_or_request_asset` | 优先读取资产缓存；缓存未命中时请求端侧上传资产，例如 `sensor.rgb` 单帧图像。 |
+| `request_asset` | 优先读取资产缓存；缓存未命中时请求端侧上传资产，例如 `sensor.rgb` 单帧图像。 |
 | `configure_asset_stream` | 请求端侧调整某类资产 stream 的上传策略，例如单帧、连续、低频或停止。 |
-| `start_endpoint_task` | 按 capability 选择端侧设备，并通过 `DeviceHandle` 启动端侧算力任务。 |
+| `request_device_control` | 按 capability 发布受控控制意图；真实下发仍然是匹配订阅后的控制事件。 |
 | `query_device_state` | 查询用户当前设备集合状态。 |
 | `query_task_status` | 查询任务状态。 |
 | `cancel_task` | 取消任务。 |
@@ -1949,47 +2067,174 @@ class BaseTask:
 
 | Task | 说明 |
 | --- | --- |
-| `endpoint_compute_task` | 管理端侧算力任务生命周期。 |
+| `endpoint_control_task` | 管理需要端侧配合的 server 侧长流程；端侧只接收控制事件，不存在独立 task 协议。 |
 | `sensor_stream_task` | 管理传感器 stream 生命周期，例如相机、深度相机、IMU。 |
 | `timer_task` | 最小通用定时任务样板。 |
 | `notification_task` | 后台通知和播放请求样板。 |
 
 ### 13.3 UserDeviceContext
 
-`UserDeviceContext` 是业务能力访问设备的唯一入口，替代旧文档中的 `DeviceGroupContext` 对外命名：
+`UserDeviceContext` 是 Tool / Task 访问当前用户设备集合的唯一入口，替代旧文档中的 `DeviceGroupContext` 对外命名。它面向业务开发者，不暴露 server 内部的可变 `Device` 对象。
+
+三层概念：
+
+| 概念 | 使用者 | 说明 |
+| --- | --- | --- |
+| `Device` | SDK 内部 | 注册成功后的运行态设备对象，维护连接、心跳、能力、订阅、stream 状态和端侧控制状态。 |
+| `DeviceSnapshot` | Tool / Task / 调试接口 | `Device` 的只读快照，用于查询当前设备状态。 |
+| `DeviceHandle` | Tool / Task | 对某个已选择设备的受限操作句柄，只提供 SDK 允许的操作，不允许任意点对点发事件。 |
+
+业务代码不直接构造或保存 `Device`。如果需要跨异步步骤保存设备引用，应保存 `StreamHandle`、`AssetRef`、server 侧 `TaskRef` 或重新通过 capability 查询设备；不要长期缓存 `DeviceHandle` 后假设连接永远有效。
 
 ```python
 class UserDeviceContext:
     def get_devices(self, capability: str | None = None) -> list[DeviceSnapshot]: ...
     def find_device(self, capability: str) -> DeviceHandle | None: ...
-    def open_stream(self, request: StreamOpenRequest) -> StreamHandle: ...
-    def configure_stream(self, request: StreamControlRequest) -> None: ...
-    def get_or_request_asset(self, request: AssetRequest) -> AssetRef: ...
-    def query_assets(self, query: AssetQuery) -> list[AssetRef]: ...
-    def submit_output(self, intent: OutputIntent) -> OutputSubmitResult: ...
+    def publish_event(
+        self,
+        event_name: str,
+        *,
+        payload: dict | None = None,
+        stream_type: str | None = None,
+        require_capability: str | None = None,
+        selection: str = "all",
+        timeout_seconds: float | None = None,
+    ) -> EventPublishResult: ...
+    def open_output_stream(
+        self,
+        stream_type: str,
+        *,
+        codec: str,
+        metadata: dict | None = None,
+        require_capability: str | None = None,
+        selection: str = "all",
+    ) -> StreamWriter: ...
+    def request_asset(
+        self,
+        stream_type: str,
+        *,
+        freshness_seconds: float,
+        configure_payload: dict | None = None,
+        timeout_seconds: float,
+    ) -> AssetRef: ...
+    def query_assets(self, *, stream_type: str, freshness_seconds: float | None = None) -> list[AssetRef]: ...
+    def watch_assets(
+        self,
+        *,
+        stream_type: str,
+        correlation_id: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AsyncIterator[AssetRef]: ...
+    def submit_text(self, text: str, *, priority: str = "normal", ttl_seconds: int = 0) -> OutputSubmitResult: ...
+    def submit_audio(self, audio: AsyncIterable[bytes], *, codec: str, priority: str = "normal") -> OutputSubmitResult: ...
 
 class DeviceHandle:
     snapshot: DeviceSnapshot
 
-    def open_stream(self, request: StreamOpenRequest) -> StreamHandle: ...
-    def configure_stream(self, request: StreamControlRequest) -> None: ...
-    def start_task(self, *, task_type: str, params: dict) -> EndpointTaskRef: ...
-
-class EndpointTaskRef:
-    task_id: str
-    device: DeviceHandle
-
-    def stop(self, *, reason: str) -> None: ...
+    def refresh_snapshot(self) -> DeviceSnapshot: ...
 ```
 
 业务能力不得直接拼控制事件或 stream chunk。
+
+`UserDeviceContext` 的 API 必须贴近协议，不引入 `DeviceControlRequest`、`AssetRequest`、`StreamControlRequest`、`StreamOpenRequest`、`OutputIntent` 这类第二套业务对象。开发者已经在设备注册时按事件协议声明订阅，Tool / Task 也应该继续使用同一套事件名、payload 和 stream_type。
+
+API 命名约定：
+
+1. `publish_event()` 发布当前 `user_id` 范围内的协议事件，由 Control Service 补齐信封、校验事件名、按订阅分发。
+2. `open_output_stream()` 打开 `actuator.*` 输出 stream，用于向设备发送真实字节。
+3. `request_asset()` 是资产链路的便捷方法；它仍然使用 `stream.control.configure.requested` 和 `sensor.*` stream，不引入新协议。
+4. `watch_assets()` 读取 Asset Service 已缓存的资产变化，用于 Task 持续处理 `sensor.rgb`、`sensor.depth`、`sensor.imu` 等输入。
+5. `submit_text()` / `submit_audio()` 是输出链路的便捷方法；它们进入 Output Service，再落到 `actuator.speaker` stream。
+6. `StreamWriter`、`AssetRef`、`EventPublishResult` 只是返回值或引用，不是端侧协议对象。
+
+#### 13.3.1 Tool / Task 如何与设备通讯
+
+开发者扩展 Tool 或 Task 时，只能使用当前协议框架下的两种通讯能力：
+
+1. 控制事件：用于表达“请某类设备做某件事”。
+2. stream：用于上传或下发真实字节数据。
+
+选择规则：
+
+1. 如果数据很小、一次性、没有持续吞吐，例如导航目的地、控制参数、开关状态、执行结果摘要，直接放在事件 `payload` 里。
+2. 如果数据是音频、图片、视频帧、深度图、IMU 窗口、文件或任何持续产生的大字节数据，事件只负责配置和生命周期，真实数据必须走 stream。
+3. 事件可以触发 stream，但事件本身不承载 stream 数据。典型做法是发布 `stream.control.configure.requested`，端侧收到后打开或调整 `sensor.*` stream。
+4. Task 需要连续处理传感器数据时，优先从 Asset Service 的 `watch_assets()` 读取已组装资产；只有音频主链路才默认直接进入 Audio Pipeline / Agent Core。
+
+`UserDeviceContext` 提供的是业务 API，不是第三种通讯协议。每个 API 都会落到控制事件或 stream：
+
+| 开发者意图 | 推荐 API | 底层协议 | 适合场景 |
+| --- | --- | --- | --- |
+| 控制设备执行动作 | `publish_event("control.device.command.requested", payload=...)` | 发布协议事件，由订阅策略分发。 | 启动导航、停止导航、开始本地推理、切换端侧模式。 |
+| 请求设备采集数据 | `publish_event("stream.control.configure.requested", stream_type=...)` 或 `request_asset(...)` | 发布协议事件，端侧再打开 `sensor.*` stream 上传数据。 | 拍一张照片、上传一段 IMU 窗口、开启低频深度图采样。 |
+| 向设备发送数据 | `open_output_stream(...)` 或 `submit_text()` / `submit_audio()` | 打开 `actuator.*` output stream，再写入字节。 | 播放音频、振动模式、未来其他执行器字节流。 |
+| 持续处理传感器数据 | `publish_event("stream.control.configure.requested", ...)` + `watch_assets(...)` | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。 |
+| 查询设备状态 | `get_devices()` / `find_device()` | 读取 server 内部 `DeviceSnapshot`。 | 判断当前是否有相机、IMU、本地导航能力。 |
+
+Tool / Task 能否找到设备，取决于端侧注册时声明的 capability 和 subscription。端侧至少要声明两类信息：
+
+```json
+{
+  "capabilities": {
+    "streams.produce": ["sensor.rgb", "sensor.imu"],
+    "streams.consume": ["actuator.speaker", "actuator.haptic"],
+    "navigation.endpoint": true
+  },
+  "subscriptions": [
+    {
+      "event": "stream.control.*",
+      "filter": {"stream_type": "sensor.rgb"}
+    },
+    {
+      "event": "stream.control.*",
+      "filter": {"stream_type": "sensor.imu"}
+    },
+    {
+      "event": "stream.output.*",
+      "filter": {"stream_type": "actuator.haptic"}
+    },
+    {
+      "event": "control.device.command.requested",
+      "filter": {"payload.command_name": "navigation.start"}
+    }
+  ]
+}
+```
+
+含义：
+
+1. `capabilities` 说明设备理论上能做什么。
+2. `subscriptions` 说明设备愿意接收哪些控制事件。
+3. 两者必须同时满足，SDK 才会把某个 Tool / Task 的意图匹配到这台设备。
+4. 如果设备只声明能力但没有订阅对应事件，server 不会把控制事件推给它。
+
+代码不能写死 `device_id`。`device_id` 是运行时设备实例标识，只能出现在注册、日志、调试快照和回执里。Tool / Task 应该按下面这些条件表达需求：
+
+1. `capability`：需要哪类能力，例如 `sensor.rgb`、`sensor.imu`、`navigation.endpoint`。
+2. `stream_type`：需要哪类 stream，例如 `sensor.rgb`、`actuator.speaker`。
+3. `command_name`：需要哪类控制动作，例如 `navigation.start`、`local_inference.stop`。
+4. `selection`：多个设备都满足时如何选择，例如 `all`、`first_available`、`freshest_asset`、`highest_quality`。第一版可先内置少量策略，复杂策略由业务 Tool 自己在多个结果中选择。
+
+设备实例选择由 SDK 在运行时完成：
+
+```text
+Tool / Task 提交意图
+1. Control Service 读取当前 user_id 的 active device set。
+2. 过滤在线设备。
+3. 按 capability、stream_type、command_name 和订阅 filter 匹配候选设备。
+4. 按 selection 策略选择一个或多个设备。
+5. 对控制意图发布事件；对 stream 意图打开对应 stream。
+6. 返回匹配数量、stream handle、asset ref 或错误。
+```
+
+这保证 Tool / Task 面向“能力”编程，而不是面向“某一台设备实例”编程。
 
 使用场景：
 
 1. Tool 需要读取或请求某个端侧资产，例如“看一下前方有什么”需要 `sensor.rgb` 单帧图像。
 2. Tool 需要查询当前用户有哪些在线设备、这些设备声明了哪些能力。
-3. Task 需要启动或停止端侧长流程，例如持续低频上传 IMU、启动手机侧导航、启动端侧本地推理。
-4. Tool 或 Task 需要向用户发出可听输出，但不应直接打开播放器 stream，而应提交 `OutputIntent` 给 Output Service。
+3. Task 需要调整端侧长流程，例如持续低频上传 IMU、启动或停止手机侧导航、启用或关闭端侧本地推理。对端侧而言，这些都只是订阅到的控制事件和后续 stream，不是新的 task 通讯方式。
+4. Tool 或 Task 需要向用户发出可听输出，但不应直接打开播放器 stream，而应调用 `submit_text()` 或 `submit_audio()` 交给 Output Service。
 5. Tool 或 Task 需要组合 MCP、Skill、Memory 等能力，并且这些能力需要间接使用当前用户设备能力。
 
 不适合使用的场景：
@@ -2000,22 +2245,57 @@ class EndpointTaskRef:
 
 推荐用法：
 
+控制设备动作：
+
+```python
+class StartNavigationTool(BaseTool):
+    name = "start_navigation"
+    description = "请求具备导航能力的端侧开始导航。"
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        result = await context.devices.publish_event(
+            "control.device.command.requested",
+            payload={
+                "command_name": "navigation.start",
+                "params": {
+                    "destination": input_data["destination"],
+                    "mode": "walking",
+                },
+            },
+            require_capability="navigation.endpoint",
+            selection="first_available",
+            timeout_seconds=3,
+        )
+        if result.matched_count == 0:
+            return ToolResult(error="当前没有可执行导航的在线设备")
+        return ToolResult(data={"status": "requested"})
+```
+
+这段代码不会指定 `device_id`。底层会发布 `control.device.command.requested`，只有注册时声明了对应能力并订阅了该控制事件的在线设备才会收到。
+
+采集设备数据：
+
 ```python
 class LookAroundTool(BaseTool):
     name = "look_around"
     description = "获取用户当前视野中的一张图片，并返回可供模型分析的资产引用。"
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        asset = await context.devices.get_or_request_asset(
-            AssetRequest(
-                stream_type="sensor.rgb",
-                freshness_seconds=3,
-                timeout_seconds=5,
-                request={"mode": "single", "max_samples": 1},
-            )
+        asset = await context.devices.request_asset(
+            "sensor.rgb",
+            freshness_seconds=3,
+            timeout_seconds=5,
+            configure_payload={"mode": "single", "max_samples": 1},
         )
         return ToolResult(data={"asset_id": asset.asset_id, "mime_type": asset.mime_type})
 ```
+
+`request_asset()` 的语义是：
+
+1. 先查 `Asset Store` 中是否已有满足 `freshness_seconds` 的 `sensor.rgb` 资产。
+2. 如果缓存未命中，SDK 发布 `stream.control.configure.requested(stream_type=sensor.rgb)`。
+3. 匹配设备收到事件后自行决定如何打开相机，并通过 `sensor.rgb` stream 上传图片。
+4. Asset Service 写入资产缓存并返回 `AssetRef`。
 
 后台任务示例：
 
@@ -2028,42 +2308,106 @@ class MotionWindowTask(BaseTask):
         if device is None:
             raise TaskFailed("当前没有可提供 IMU 的在线设备")
 
-        await device.configure_stream(
-            StreamControlRequest(
-                stream_type="sensor.imu",
-                mode="window",
-                sample_rate_hz=50,
-                window_seconds=2,
-            )
+        await context.devices.publish_event(
+            "stream.control.configure.requested",
+            stream_type="sensor.imu",
+            payload={
+                "mode": "window",
+                "sample_rate_hz": 50,
+                "window_seconds": 2,
+            },
+            require_capability="sensor.imu",
+            selection="first_available",
         )
 ```
+
+这段代码仍然不是点对点通讯。`find_device(capability="sensor.imu")` 只是提前判断当前是否有具备 IMU 能力的在线设备；真正下发时仍然发布 `stream.control.configure.requested` 事件，端侧后续上传的数据仍然走 `sensor.imu` stream。
+
+持续视频帧处理示例：
+
+```python
+class VideoFrameAnalyzeTask(BaseTask):
+    task_type = "video_frame_analyze"
+
+    async def on_start(self, context: TaskContext) -> None:
+        correlation_id = context.task_id
+
+        result = await context.devices.publish_event(
+            "stream.control.configure.requested",
+            stream_type="sensor.rgb",
+            payload={
+                "mode": "continuous",
+                "fps": 2,
+                "format": "jpeg",
+                "asset_policy": "cache",
+                "correlation_id": correlation_id,
+                "max_duration_seconds": 60,
+            },
+            require_capability="sensor.rgb",
+            selection="first_available",
+        )
+        if result.matched_count == 0:
+            raise TaskFailed("当前没有可上传 RGB 视频帧的在线设备")
+
+        async for frame in context.devices.watch_assets(
+            stream_type="sensor.rgb",
+            correlation_id=correlation_id,
+            timeout_seconds=65,
+        ):
+            await self.process_frame(context, frame)
+            if context.cancelled:
+                break
+
+    async def on_cancel(self, context: TaskContext) -> None:
+        await context.devices.publish_event(
+            "stream.control.configure.requested",
+            stream_type="sensor.rgb",
+            payload={
+                "mode": "stop",
+                "correlation_id": context.task_id,
+            },
+            require_capability="sensor.rgb",
+            selection="first_available",
+        )
+```
+
+这条链路的协议含义：
+
+1. Task 发布 `stream.control.configure.requested`，payload 里说明 `mode=continuous`、`fps=2`、`format=jpeg`、`asset_policy=cache`。
+2. 匹配设备收到事件后按端侧能力打开摄像头，并通过 `sensor.rgb` stream 连续上传帧。
+3. Stream Service 接收字节，Asset Service 把每一帧组装成 `AssetRef`，并按 `correlation_id` 建立索引。
+4. Task 通过 `watch_assets(stream_type="sensor.rgb", correlation_id=...)` 逐帧读取资产并处理。
+5. Task 结束或取消时发布 `mode=stop` 的 `stream.control.configure.requested`，端侧停止上传并关闭相关 stream。
+
+如果只是让设备震动一次、切换一个模式、返回一个很小的状态摘要，不需要 stream，直接使用控制事件 payload 即可。只有当数据需要持续传输或体积明显超过控制事件合理范围时，才建立 stream。
+
+向设备发送数据：
+
+```python
+class HapticNotifyTask(BaseTask):
+    task_type = "haptic_notify"
+
+    async def on_start(self, context: TaskContext) -> None:
+        stream = await context.devices.open_output_stream(
+            "actuator.haptic",
+            codec="haptic-pattern.v1",
+            selection="all",
+            metadata={"reason": "timer_due"},
+        )
+        await stream.write(b"\x01\x80\x40")
+        await stream.close()
+```
+
+如果是用户可听输出，优先使用 `submit_text()` 或 `submit_audio()`，让 Output Service 和 Playback Arbiter 处理 TTS、优先级、插播和取消：
 
 输出示例：
 
 ```python
-await context.devices.submit_output(
-    OutputIntent(
-        text="我正在查看前方环境。",
-        priority="normal",
-        ttl_seconds=10,
-    )
+await context.devices.submit_text(
+    "我正在查看前方环境。",
+    priority="normal",
+    ttl_seconds=10,
 )
-```
-
-端侧任务示例：
-
-```python
-async def start_navigation_task(context: ToolContext, params: dict) -> ToolResult:
-    navigation_device = context.devices.find_device(capability="navigation.endpoint")
-    if navigation_device is None:
-        return ToolResult(error="当前没有可执行导航的在线设备")
-
-    task = await navigation_device.start_task(task_type="navigation", params=params)
-    return ToolResult(data={"task_id": task.task_id})
-
-
-async def stop_navigation_task(context: TaskContext, task: EndpointTaskRef) -> None:
-    await task.stop(reason="user_cancelled")
 ```
 
 设计约束：
@@ -2071,8 +2415,11 @@ async def stop_navigation_task(context: TaskContext, task: EndpointTaskRef) -> N
 1. `UserDeviceContext` 由 SDK 在每次 Tool / Task 执行时注入，业务开发者不手动构造。
 2. 它只暴露“当前 `user_id` 的 active device set”，不会跨用户访问设备。
 3. 它内部通过 Control Service、Stream Service、Asset Service、Output Service 完成实际工作；业务开发者不需要理解事件分发细节。
-4. `UserDeviceContext` 不提供“向某个 `device_id` 发送事件”的接口。业务代码只能先通过 capability、subscription、stream_type 查询得到 `DeviceHandle`，再通过 `DeviceHandle` 或 `EndpointTaskRef` 执行动作。
-5. MCP 和 Skill 不允许直接接收或持有 `UserDeviceContext`。如果 MCP 或 Skill 需要影响设备行为，必须封装成 Tool 或 Task，由 Tool / Task 使用 `UserDeviceContext` 完成设备访问。
+4. `UserDeviceContext` 不提供“向某个 `device_id` 发送事件”的接口。业务代码只能按 capability、subscription、stream_type 表达意图，最终由 Control Service 根据订阅策略分发。
+5. `publish_event()` 不是点对点发送。它只能在当前 `user_id` 范围内发布协议事件，接收方仍然由设备注册时提交的订阅策略决定。
+6. `DeviceHandle` 不暴露底层控制连接，也不允许写入任意 Event。第一版建议 Tool / Task 优先使用 `UserDeviceContext.publish_event()` 和 `open_output_stream()`，减少对单个设备实例的依赖。
+7. `DeviceSnapshot` 是某个时刻的快照，不保证实时同步。执行关键操作前，SDK 应在内部重新检查设备是否仍在线、能力是否仍匹配、订阅是否仍满足。
+8. MCP 和 Skill 不允许直接接收或持有 `UserDeviceContext`。如果 MCP 或 Skill 需要影响设备行为，必须封装成 Tool 或 Task，由 Tool / Task 使用 `UserDeviceContext` 完成设备访问。
 
 ## 14. 端侧参考实现
 
@@ -2130,8 +2477,8 @@ audio-chat/endpoints/
 
 1. 可产生音频输入 stream。
 2. 可消费音频输出 stream。
-3. 可执行相机、本地 CoreML 和手机 UI task。
-4. 支持注册、心跳、任务执行、stream 回执和本地推理结果事件。
+3. 可响应相机、本地 CoreML 和手机 UI 控制事件。
+4. 支持注册、心跳、控制事件处理、stream 回执和本地推理结果事件。
 
 ### 14.4 Python Playback Endpoint
 
@@ -2144,7 +2491,7 @@ audio-chat/endpoints/
 5. 支持断言：
    - 是否收到输出 stream。
    - 是否收到 `stream.control.configure.requested(stream_type=sensor.rgb)` 并上传对应 `sensor.rgb` 样本。
-   - 是否启动端侧任务。
+   - 是否收到并响应端侧控制事件。
    - 是否触发工具。
    - 是否完成 Task。
 
