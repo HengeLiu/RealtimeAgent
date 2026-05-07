@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+
+AUDIO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_release_package_check_reports_release_candidate_gate(tmp_path: Path) -> None:
+    """测试目标：确认发布候选 package-check 输出完整 release candidate 报告。
+
+    测试方法：运行 `audio-chat.sdk.package-check`，读取报告中的版本、wheel、
+    端侧源码和边界检查结果。
+    预期结果：报告为通过状态，版本带 rc 标识，wheel 安装导入和源码边界检查都通过。
+    """
+
+    report = tmp_path / "package-check.json"
+    completed = subprocess.run(
+        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["ok"] is True
+    assert data["package"]["release_candidate"] is True
+    assert data["package"]["version"].endswith("rc1")
+    assert data["checks"]["release_candidate"]["ok"] is True
+    assert data["checks"]["wheel_install"]["ok"] is True
+    assert data["checks"]["wheel_contents"]["ok"] is True
+    assert data["checks"]["endpoint_sources"]["ok"] is True
+    assert data["checks"]["source_boundary"]["ok"] is True
+
+
+def test_basic_app_can_be_copied_to_temp_project_and_playback_runs(tmp_path: Path) -> None:
+    """测试目标：验证发布候选能支撑新项目复制 basic-app 后跑设备级回放。
+
+    测试方法：把 `examples/basic-app` 复制到临时目录，用当前 SDK 命令运行其
+    playback 配置。
+    预期结果：回放命令成功，输出摘要里 `passed` 为 true。
+    """
+
+    app_copy = tmp_path / "basic-app"
+    shutil.copytree(AUDIO_ROOT / "examples" / "basic-app", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    config = app_copy / "host" / "glass-playback" / "playback.yaml"
+
+    completed = subprocess.run(
+        ["uv", "run", "audio-chat.playback.glass", "--config", str(config)],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    result = json.loads(completed.stdout)
+    assert result["passed"] is True
+    assert "sensor.mic" in result["stream_types"]
+    assert "actuator.speaker" in result["stream_types"]
+

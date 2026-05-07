@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
 from pathlib import Path
 
 
@@ -9,6 +11,24 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _load_acceptance_module():
+    """从文件路径加载验收脚本。
+
+    测试目标：让文档契约测试在仓库根目录和 `audio-chat` 目录下都能运行。
+    测试方法：用 importlib 加载 `scripts/acceptance_check.py`。
+    预期结果：返回可读取 lane 注册表的模块对象。
+    """
+
+    script_path = ROOT / "scripts" / "acceptance_check.py"
+    spec = importlib.util.spec_from_file_location("audio_chat_acceptance_docs", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_current_state_docs_do_not_claim_unbacked_old_sdk_parity() -> None:
@@ -82,10 +102,7 @@ def test_old_sdk_parity_doc_lane_is_registered() -> None:
     预期结果：本线路能独立执行，也会进入 `all`。
     """
 
-    import sys
-
-    sys.path.insert(0, str(ROOT))
-    from scripts import acceptance_check
+    acceptance_check = _load_acceptance_module()
 
     assert "old-sdk-parity-docs" in acceptance_check.CHECKS
     commands = acceptance_check.CHECKS["old-sdk-parity-docs"]

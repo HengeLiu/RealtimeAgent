@@ -28,9 +28,37 @@ def test_package_check_covers_wheel_editable_public_api_and_boundary(tmp_path) -
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["ok"] is True
     assert data["checks"]["wheel_build"]["ok"] is True
+    assert data["checks"]["wheel_install"]["ok"] is True
+    assert data["checks"]["wheel_contents"]["ok"] is True
     assert data["checks"]["editable_install"]["ok"] is True
     assert data["checks"]["public_api"]["ok"] is True
     assert data["checks"]["boundary"]["ok"] is True
+    assert data["checks"]["source_boundary"]["ok"] is True
+    assert data["checks"]["endpoint_sources"]["ok"] is True
+    assert data["checks"]["release_candidate"]["ok"] is True
+
+
+def test_release_wheel_does_not_include_private_or_endpoint_sources(tmp_path) -> None:
+    """测试目标：确认 server SDK wheel 不混入端侧源码、样例、运行产物或本地私密配置。
+
+    测试方法：读取 package-check 报告中的 wheel 内容检查结果。
+    预期结果：`forbidden` 清单为空，且 `py.typed` 作为 package data 被包含。
+    """
+
+    report = tmp_path / "package-check.json"
+    completed = subprocess.run(
+        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    wheel_contents = json.loads(report.read_text(encoding="utf-8"))["checks"]["wheel_contents"]
+    assert wheel_contents["ok"] is True
+    assert wheel_contents["forbidden"] == []
+    assert wheel_contents["missing_required"] == []
 
 
 def test_endpoint_reference_modules_are_importable_but_not_top_level_exports() -> None:

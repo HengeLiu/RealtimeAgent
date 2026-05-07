@@ -15,6 +15,16 @@ uv pip install -e audio-chat
 
 如果 `uv run audio-chat.*` 找不到命令，重新执行 editable 安装。
 
+当前可试用发布候选版本为 `0.1.0rc1`。发布前闸门使用：
+
+```bash
+cd audio-chat
+uv run python scripts/acceptance_check.py old-sdk-parity-release \
+  --report runs/acceptance/old-sdk-parity-release.json
+uv run audio-chat.sdk.package-check \
+  --report runs/acceptance/old-sdk-parity-package-check.json
+```
+
 ## 2. 同步配置
 
 最小样例：

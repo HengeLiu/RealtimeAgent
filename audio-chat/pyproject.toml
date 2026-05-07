@@ -1,6 +1,6 @@
 [project]
 name = "audio-chat"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Server-side Python SDK for audio-chat stream-based voice sessions."
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -41,6 +41,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["server-python"]
 include = ["audio_chat*"]
+
+[tool.setuptools.package-data]
+audio_chat = ["py.typed"]
 
 [tool.pytest.ini_options]
 pythonpath = ["server-python"]

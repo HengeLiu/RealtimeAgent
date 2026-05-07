@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-contract-control-audio-session-turn-ignored",
+  "event_name": "control.audio_session.turn.ignored",
+  "payload": {
+    "contract_case": "control.audio_session.turn.ignored",
+    "reason": "assistant_speaking",
+    "session_id": "sess-contract"
+  },
+  "producer_id": "server-main",
+  "session_id": "sess-contract",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}
