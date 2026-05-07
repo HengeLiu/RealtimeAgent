@@ -13,6 +13,8 @@ from audio_chat.protocol import (
     Event,
     Subscription,
     new_id,
+    validate_control_event_payload,
+    validate_event_name,
 )
 
 
@@ -27,7 +29,9 @@ class DeviceConnection(Protocol):
 
 
 @dataclass
-class DeviceRecord:
+class Device:
+    """Control Service 内部运行态设备对象。"""
+
     user_id: str
     device_id: str
     device_name: str
@@ -38,12 +42,53 @@ class DeviceRecord:
     connection_state: str = "online"
     connection_id: str = field(default_factory=lambda: new_id("conn"))
     last_seen_at: float = field(default_factory=time.time)
+    last_error: dict[str, Any] | None = None
+    register_failed_reason: str | None = None
+
+
+DeviceRecord = Device
+
+
+@dataclass(frozen=True)
+class DeviceSnapshot:
+    """只读设备快照。"""
+
+    user_id: str
+    device_id: str
+    device_name: str
+    client_type: str
+    sdk_version: str
+    connection_id: str
+    last_seen_at: float
+    connection_state: str
+    capabilities: dict[str, Any]
+    subscriptions: tuple[Subscription, ...]
+    last_error: dict[str, Any] | None = None
+    register_failed_reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """转换为 debug API JSON 字典。"""
+
+        return {
+            "user_id": self.user_id,
+            "device_id": self.device_id,
+            "device_name": self.device_name,
+            "client_type": self.client_type,
+            "sdk_version": self.sdk_version,
+            "connection_id": self.connection_id,
+            "last_seen_at": self.last_seen_at,
+            "connection_state": self.connection_state,
+            "capabilities": dict(self.capabilities),
+            "subscriptions": [subscription.__dict__ for subscription in self.subscriptions],
+            "last_error": self.last_error,
+            "register_failed_reason": self.register_failed_reason,
+        }
 
 
 @dataclass(frozen=True)
 class ActiveDeviceSet:
     user_id: str
-    devices: tuple[DeviceRecord, ...]
+    devices: tuple[Device, ...]
 
 
 @dataclass(frozen=True)
@@ -62,7 +107,7 @@ class DeviceAuthenticator:
     def verify_token(self, registration: Event) -> tuple[bool, str | None]:
         auth = registration.payload.get("auth") or {}
         device_id = registration.payload.get("device_id")
-        if self.mode == "disabled" or auth.get("mode") == "disabled":
+        if self.mode == "disabled":
             return True, None
         if self.mode == "static_token":
             if auth.get("mode") != "static_token":
@@ -70,6 +115,8 @@ class DeviceAuthenticator:
             if self.device_tokens.get(device_id) != auth.get("token"):
                 return False, "invalid_token"
             return True, None
+        if self.mode == "signed_token":
+            return False, "signed_token_not_implemented"
         return False, "unsupported_auth_mode"
 
 
@@ -86,6 +133,8 @@ class RegistrationValidator:
         self.subscription_filter_mode = subscription_filter_mode
 
     def validate_payload(self, event: Event) -> None:
+        validate_event_name(event.event_name)
+        validate_control_event_payload(event.payload)
         if event.event_name != "control.device.register.requested":
             raise ValueError("registration must use control.device.register.requested")
         device_id = event.payload.get("device_id")
@@ -117,18 +166,49 @@ class RegistrationValidator:
                 raise ValueError(f"unknown subscription event: {event_name}")
             if not isinstance(item.get("filter", {}), dict):
                 raise ValueError("subscription.filter must be an object")
+            self.validate_filter(dict(item.get("filter") or {}))
             if self.subscription_filter_mode != "exact":
                 raise ValueError(f"unsupported subscription_filter_mode: {self.subscription_filter_mode}")
 
+    def validate_filter(self, filter_data: dict[str, Any]) -> None:
+        """校验订阅 filter 只使用协议支持的简单精确匹配。"""
+
+        allowed_envelope_fields = {
+            "version",
+            "event_id",
+            "event_name",
+            "timestamp_ms",
+            "user_id",
+            "producer_id",
+            "session_id",
+            "stream_id",
+            "stream_type",
+        }
+        for path, expected in filter_data.items():
+            if not isinstance(path, str) or not path:
+                raise ValueError("subscription.filter path must be a non-empty string")
+            if any(token in path for token in ("$", "[", "]", "(", ")", "|", "^")):
+                raise ValueError(f"unsupported subscription filter expression: {path}")
+            if not (path.startswith(("payload.", "capabilities.")) or path in allowed_envelope_fields):
+                raise ValueError(f"unsupported subscription filter path: {path}")
+            if isinstance(expected, dict):
+                raise ValueError(f"subscription filter value must be scalar or list: {path}")
+
 
 class SubscriptionMatcher:
-    def match(self, event: Event, subscription: Subscription, device: DeviceRecord | None = None) -> bool:
+    def match(self, event: Event, subscription: Subscription, device: Device | None = None) -> bool:
         if not self._event_name_matches(event.event_name, subscription.event):
             return False
         for path, expected in subscription.filter.items():
             actual = self._lookup(event, path, device)
             if isinstance(actual, list):
-                if expected not in actual:
+                if isinstance(expected, list):
+                    if not all(item in actual for item in expected):
+                        return False
+                elif expected not in actual:
+                    return False
+            elif isinstance(expected, list):
+                if actual not in expected:
                     return False
             elif actual != expected:
                 return False
@@ -143,11 +223,7 @@ class SubscriptionMatcher:
         return event_name == pattern
 
     @staticmethod
-    def _lookup(event: Event, path: str, device: DeviceRecord | None) -> Any:
-        if path == "stream_type":
-            return event.stream_type or event.payload.get("stream_type")
-        if path == "producer_id":
-            return event.producer_id
+    def _lookup(event: Event, path: str, device: Device | None) -> Any:
         if path.startswith("payload."):
             value: Any = event.payload
             for part in path.split(".")[1:]:
@@ -155,7 +231,7 @@ class SubscriptionMatcher:
             return value
         if path.startswith("capabilities.") and device is not None:
             return device.capabilities.get(path.removeprefix("capabilities."))
-        return getattr(event, path, event.payload.get(path))
+        return getattr(event, path, None)
 
 
 class ControlService:
@@ -179,8 +255,9 @@ class ControlService:
         self.recorder = recorder or RunRecorder()
         self.exclude_producer_by_default = exclude_producer_by_default
         self._bindings: dict[str, str] = {}
-        self._devices: dict[str, DeviceRecord] = {}
+        self._devices: dict[str, Device] = {}
         self._connections: dict[str, DeviceConnection] = {}
+        self._registration_failures: dict[str, DeviceSnapshot] = {}
 
     def register_device(self, registration: Event, connection: DeviceConnection | None = None) -> Event:
         try:
@@ -196,7 +273,7 @@ class ControlService:
                 Subscription(event=item["event"], filter=dict(item.get("filter") or {}))
                 for item in registration.payload.get("subscriptions", [])
             ]
-            record = DeviceRecord(
+            record = Device(
                 user_id=registration.user_id,
                 device_id=device_id,
                 device_name=registration.payload.get("device_name", device_id),
@@ -227,6 +304,29 @@ class ControlService:
                 },
             )
         except Exception as exc:
+            failed_device_id = str(registration.payload.get("device_id") or registration.producer_id or "unknown")
+            reason = str(exc)
+            previous_user = self._bindings.get(failed_device_id)
+            snapshot = DeviceSnapshot(
+                user_id=registration.user_id,
+                device_id=failed_device_id,
+                device_name=str(registration.payload.get("device_name") or failed_device_id),
+                client_type=str(registration.payload.get("client_type") or "unknown"),
+                sdk_version=str(registration.payload.get("sdk_version") or "unknown"),
+                connection_id="",
+                last_seen_at=time.time(),
+                connection_state="offline",
+                capabilities=dict(registration.payload.get("capabilities") or {}),
+                subscriptions=tuple(
+                    Subscription(event=str(item.get("event", "")), filter=dict(item.get("filter") or {}))
+                    for item in registration.payload.get("subscriptions", [])
+                    if isinstance(item, dict)
+                ),
+                last_error={"code": "registration_failed", "message": reason},
+                register_failed_reason=reason,
+            )
+            if previous_user is None or previous_user == registration.user_id:
+                self._registration_failures[failed_device_id] = snapshot
             event = Event(
                 event_name="control.device.register.failed",
                 user_id=registration.user_id,
@@ -280,7 +380,7 @@ class ControlService:
         *,
         require_capability: str | None = None,
         selection: str = "all",
-    ) -> list[DeviceRecord]:
+    ) -> list[Device]:
         """按订阅、能力和选择策略解析目标设备。
 
         主要逻辑：先使用协议订阅匹配候选设备，再按 capability 过滤，最后应用
@@ -301,7 +401,7 @@ class ControlService:
             return candidates[:1]
         raise ValueError(f"unsupported device selection: {selection}")
 
-    def _deliver_to_devices(self, event: Event, devices: list[DeviceRecord]) -> PublishResult:
+    def _deliver_to_devices(self, event: Event, devices: list[Device]) -> PublishResult:
         failed: list[str] = []
         delivered = 0
         for device in devices:
@@ -312,9 +412,10 @@ class ControlService:
             try:
                 connection.push_event(event)
                 delivered += 1
-            except Exception:
+            except Exception as exc:
                 failed.append(device.device_id)
                 device.connection_state = "offline"
+                self._record_device_error(device, "event_delivery_failed", str(exc))
         return PublishResult(
             matched_count=len(devices),
             delivered_count=delivered,
@@ -349,8 +450,9 @@ class ControlService:
             try:
                 connection.push_stream_chunk(chunk)
                 delivered += 1
-            except Exception:
+            except Exception as exc:
                 device.connection_state = "offline"
+                self._record_device_error(device, "stream_delivery_failed", str(exc))
                 failed.append(device_id)
         return PublishResult(
             matched_count=len(device_ids),
@@ -360,6 +462,7 @@ class ControlService:
         )
 
     def record_heartbeat(self, event: Event) -> Event:
+        self._validate_event(event)
         device = self._devices.get(event.producer_id)
         if device is not None and device.user_id == event.user_id:
             device.last_seen_at = time.time()
@@ -375,6 +478,7 @@ class ControlService:
             return
         device.connection_state = "offline"
         device.last_seen_at = time.time()
+        self._record_device_error(device, "connection_offline", reason)
         self._connections.pop(device_id, None)
         self.recorder.record_event(
             Event(
@@ -390,8 +494,37 @@ class ControlService:
             )
         )
 
-    def resolve_subscribers(self, event: Event) -> list[DeviceRecord]:
-        result: list[DeviceRecord] = []
+    def expire_stale_devices(self, *, now: float | None = None, timeout_seconds: float = 30.0) -> tuple[str, ...]:
+        """按心跳超时标记离线设备。"""
+
+        current = time.time() if now is None else now
+        expired: list[str] = []
+        for device in self._devices.values():
+            if device.connection_state != "online":
+                continue
+            if current - device.last_seen_at <= timeout_seconds:
+                continue
+            device.connection_state = "offline"
+            self._connections.pop(device.device_id, None)
+            self._record_device_error(device, "heartbeat_timeout", "heartbeat timeout")
+            expired.append(device.device_id)
+            self.recorder.record_event(
+                Event(
+                    event_name="control.device.state.changed",
+                    user_id=device.user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    payload={
+                        "device_id": device.device_id,
+                        "connection_id": device.connection_id,
+                        "connection_state": "offline",
+                        "reason": "heartbeat_timeout",
+                    },
+                )
+            )
+        return tuple(expired)
+
+    def resolve_subscribers(self, event: Event) -> list[Device]:
+        result: list[Device] = []
         for device in self._devices.values():
             if device.user_id != event.user_id or device.connection_state != "online":
                 continue
@@ -422,33 +555,57 @@ class ControlService:
         return {
             "user_id": user_id,
             "devices": [
-                self._device_snapshot(device)
+                self._device_snapshot(device).to_dict()
                 for device in self._devices.values()
                 if device.user_id == user_id
+            ],
+            "registration_failures": [
+                snapshot.to_dict()
+                for snapshot in self._registration_failures.values()
+                if snapshot.user_id == user_id
             ],
         }
 
     def build_devices_snapshot(self) -> dict[str, Any]:
-        return {"devices": [self._device_snapshot(device) for device in self._devices.values()]}
+        return {"devices": [self._device_snapshot(device).to_dict() for device in self._devices.values()]}
+
+    def build_device_snapshot(self, device_id: str) -> dict[str, Any] | None:
+        """返回单设备 debug 快照。"""
+
+        device = self._devices.get(device_id)
+        if device is not None:
+            return self._device_snapshot(device).to_dict()
+        failure = self._registration_failures.get(device_id)
+        return failure.to_dict() if failure is not None else None
 
     @staticmethod
-    def _device_snapshot(device: DeviceRecord) -> dict[str, Any]:
-        return {
-            "user_id": device.user_id,
-            "device_id": device.device_id,
-            "device_name": device.device_name,
-            "client_type": device.client_type,
-            "sdk_version": device.sdk_version,
-            "connection_id": device.connection_id,
-            "last_seen_at": device.last_seen_at,
-            "connection_state": device.connection_state,
-            "capabilities": device.capabilities,
-            "subscriptions": [subscription.__dict__ for subscription in device.subscriptions],
-        }
+    def _device_snapshot(device: Device) -> DeviceSnapshot:
+        return DeviceSnapshot(
+            user_id=device.user_id,
+            device_id=device.device_id,
+            device_name=device.device_name,
+            client_type=device.client_type,
+            sdk_version=device.sdk_version,
+            connection_id=device.connection_id,
+            last_seen_at=device.last_seen_at,
+            connection_state=device.connection_state,
+            capabilities=dict(device.capabilities),
+            subscriptions=tuple(device.subscriptions),
+            last_error=dict(device.last_error) if device.last_error is not None else None,
+            register_failed_reason=device.register_failed_reason,
+        )
 
     @staticmethod
     def _validate_event(event: Event) -> None:
+        validate_event_name(event.event_name)
+        validate_control_event_payload(event.payload)
         if event.event_name not in CONTROL_EVENTS:
             raise ValueError(f"unknown event_name: {event.event_name}")
         if not event.user_id or not event.producer_id:
             raise ValueError("event requires user_id and producer_id")
+        if any(key in event.payload for key in ("target_device", "target_device_id", "source_device", "source_device_id")):
+            raise ValueError("event payload must not contain target/source device fields")
+
+    @staticmethod
+    def _record_device_error(device: Device, code: str, message: str) -> None:
+        device.last_error = {"code": code, "message": message, "timestamp_ms": int(time.time() * 1000)}

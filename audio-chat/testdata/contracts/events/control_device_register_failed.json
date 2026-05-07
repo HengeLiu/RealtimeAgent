@@ -1,0 +1,29 @@
+{
+  "event_id": "evt-contract-control-device-register-failed",
+  "event_name": "control.device.register.failed",
+  "payload": {
+    "capabilities": {
+      "streams.consume": [
+        "actuator.speaker"
+      ],
+      "streams.produce": [
+        "sensor.mic"
+      ]
+    },
+    "client_type": "contract-endpoint",
+    "connection_id": "conn-contract",
+    "device_id": "dev-contract",
+    "subscriptions": [
+      {
+        "event": "stream.output.*",
+        "filter": {
+          "stream_type": "actuator.speaker"
+        }
+      }
+    ]
+  },
+  "producer_id": "server-main",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

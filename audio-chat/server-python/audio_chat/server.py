@@ -110,6 +110,7 @@ class AudioChatHttpServer:
         app["audio_chat_server"] = self
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/debug/devices", self.debug_devices)
+        app.router.add_get("/api/debug/devices/{device_id}", self.debug_device)
         app.router.add_get("/api/debug/users/{user_id}", self.debug_user)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
@@ -135,6 +136,14 @@ class AudioChatHttpServer:
         异常情况：无。
         """
         return web.json_response(self.audio_app.control_service.build_devices_snapshot())
+
+    async def debug_device(self, request: web.Request) -> web.Response:
+        """返回单个设备的 debug 快照。"""
+
+        snapshot = self.audio_app.control_service.build_device_snapshot(request.match_info["device_id"])
+        if snapshot is None:
+            raise web.HTTPNotFound(text="device not found")
+        return web.json_response(snapshot)
 
     async def debug_user(self, request: web.Request) -> web.Response:
         """返回指定用户的设备快照。

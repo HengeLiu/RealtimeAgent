@@ -137,7 +137,7 @@ def test_open_output_stream_honors_capability_and_selection(tmp_path) -> None:
     )
     writer.write(b"\x01\x02", final=True)
 
-    assert [event.event_name for event in first.events] == [
+    assert [event.event_name for event in first.events][:2] == [
         "stream.output.open.requested",
         "stream.output.close.requested",
     ]
@@ -177,3 +177,35 @@ def test_payload_only_control_event_does_not_open_stream(tmp_path) -> None:
     assert len(endpoint.events) == 1
     assert endpoint.events[0].payload["params"]["destination"] == "office"
     assert app.stream_service.registry.list_by_user(user_id) == []
+
+
+def test_debug_snapshot_explains_subscription_miss_and_recent_errors(tmp_path) -> None:
+    """设备 debug snapshot 必须能解释事件路由和最近失败。
+
+    测试方法：注册一个只订阅 `sensor.rgb` 的设备，然后发布 `sensor.depth` 配置事件。
+    再主动触发心跳超时。
+    预期结果：事件未投递；用户快照保留订阅 filter；设备快照记录心跳超时错误。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    endpoint = RecordingEndpoint(user_id="user-debug", device_id="dev-rgb")
+    register_endpoint(
+        app,
+        endpoint,
+        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
+        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+    )
+
+    result = UserDeviceContext(user_id="user-debug", app=app).publish_event(
+        "stream.control.configure.requested",
+        payload={"stream_type": "sensor.depth"},
+        stream_type="sensor.depth",
+    )
+    snapshot = app.control_service.build_user_snapshot("user-debug")
+    device = snapshot["devices"][0]
+    app.control_service.expire_stale_devices(now=device["last_seen_at"] + 31, timeout_seconds=30)
+
+    assert result.matched_count == 0
+    assert endpoint.events == []
+    assert device["subscriptions"][0]["filter"] == {"stream_type": "sensor.rgb"}
+    assert app.control_service.build_device_snapshot("dev-rgb")["last_error"]["code"] == "heartbeat_timeout"

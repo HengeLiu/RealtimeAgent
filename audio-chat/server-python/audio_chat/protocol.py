@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -55,6 +56,26 @@ STREAM_TYPES = {
     "actuator.haptic",
 }
 
+EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+FORBIDDEN_EVENT_FIELDS = {"target_device", "target_device_id", "source_device", "source_device_id"}
+MEDIA_PAYLOAD_KEYS = {
+    "audio",
+    "audio_bytes",
+    "audio_base64",
+    "image",
+    "image_bytes",
+    "image_base64",
+    "video",
+    "video_bytes",
+    "video_base64",
+    "media",
+    "media_bytes",
+    "media_base64",
+    "payload_bytes",
+    "raw_bytes",
+}
+MAX_CONTROL_PAYLOAD_TEXT_CHARS = 16384
+
 
 def now_ms() -> int:
     return int(time.time() * 1000)
@@ -62,6 +83,54 @@ def now_ms() -> int:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def validate_event_name(event_name: str) -> None:
+    """校验事件名是否符合公共协议命名规范。"""
+
+    if not isinstance(event_name, str) or not event_name:
+        raise ValueError("event_name is required")
+    if "*" in event_name or not EVENT_NAME_PATTERN.fullmatch(event_name):
+        raise ValueError(f"invalid event_name format: {event_name}")
+
+
+def validate_control_event_payload(payload: dict[str, Any]) -> None:
+    """拒绝把媒体大字节塞进控制事件 payload。"""
+
+    def walk(value: Any, path: str) -> None:
+        key = path.rsplit(".", 1)[-1]
+        if key in MEDIA_PAYLOAD_KEYS:
+            raise ValueError(f"control event payload must not contain media bytes: {path}")
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raise ValueError(f"control event payload must not contain bytes: {path}")
+        if isinstance(value, str) and len(value) > MAX_CONTROL_PAYLOAD_TEXT_CHARS:
+            raise ValueError(f"control event payload text is too large: {path}")
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                if not isinstance(child_key, str):
+                    raise ValueError(f"control event payload key must be string: {path}")
+                walk(child_value, f"{path}.{child_key}" if path else child_key)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+
+    walk(payload, "payload")
+
+
+def validate_event_envelope_dict(data: dict[str, Any]) -> None:
+    """校验公共事件信封不含点对点设备字段。"""
+
+    forbidden = FORBIDDEN_EVENT_FIELDS.intersection(data)
+    if forbidden:
+        raise ValueError(f"event envelope contains forbidden device routing fields: {sorted(forbidden)}")
+    validate_event_name(str(data.get("event_name", "")))
+    payload = data.get("payload") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("event payload must be an object")
+    payload_forbidden = FORBIDDEN_EVENT_FIELDS.intersection(payload)
+    if payload_forbidden:
+        raise ValueError(f"event payload contains forbidden device routing fields: {sorted(payload_forbidden)}")
+    validate_control_event_payload(payload)
 
 
 @dataclass(frozen=True)
@@ -84,6 +153,8 @@ class Event:
     stream_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        validate_event_name(self.event_name)
+        validate_control_event_payload(dict(self.payload))
         data = {
             "version": self.version,
             "event_id": self.event_id,
@@ -99,10 +170,12 @@ class Event:
             data["stream_id"] = self.stream_id
         if self.stream_type is not None:
             data["stream_type"] = self.stream_type
+        validate_event_envelope_dict(data)
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Event":
+        validate_event_envelope_dict(data)
         return cls(
             version=data.get("version", PROTOCOL_VERSION),
             event_id=data.get("event_id", new_id("evt")),
