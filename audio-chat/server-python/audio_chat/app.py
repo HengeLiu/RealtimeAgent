@@ -14,7 +14,7 @@ from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from audio_chat.stream import StreamHandle, StreamService
-from audio_chat.tasks import TaskAutoDiscovery, TaskEngine, TaskEventBridge
+from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskEventBridge, TaskStore
 from audio_chat.tools import BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
 
 
@@ -72,6 +72,9 @@ class AudioChatConfig:
     tasks_discover_packages: tuple[str, ...] = ()
     tasks_discover_recursive: bool = False
     tasks_discover_fail_fast: bool = True
+    tasks_max_running_per_user: int = 16
+    tasks_store_type: str = "memory"
+    tasks_store_root: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AudioChatConfig":
@@ -135,6 +138,9 @@ class AudioChatConfig:
             tasks_discover_packages=tuple(loaded.tasks.discover.packages),
             tasks_discover_recursive=loaded.tasks.discover.recursive,
             tasks_discover_fail_fast=loaded.tasks.discover.fail_fast,
+            tasks_max_running_per_user=loaded.tasks.max_running_per_user,
+            tasks_store_type=str(loaded.tasks.store.get("type") or "memory"),
+            tasks_store_root=loaded.tasks.store.get("root"),
         )
 
 
@@ -189,8 +195,10 @@ class AudioChatApp:
             max_queue_size=self.config.output_max_queue_size,
         )
         self.task_engine = TaskEngine(
+            store=_build_task_store(self.config),
             bridge=TaskEventBridge(recorder=self.recorder, output_service=self.output_service),
             device_context_factory=lambda user_id: UserDeviceContext(user_id=user_id, app=self),
+            max_running_per_user=self.config.tasks_max_running_per_user,
         )
         self.discovery_errors: list[dict[str, str]] = []
         if self.config.tasks_discover_enabled:
@@ -202,6 +210,7 @@ class AudioChatApp:
             ):
                 self.task_engine.register(task_cls)
             self.discovery_errors.extend(task_discovery.errors)
+        self.task_engine.restore_unfinished()
         self.tool_registry = ToolRegistry()
         for tool_cls in BUILTIN_TOOLS:
             self.tool_registry.register(tool_cls())
@@ -454,3 +463,21 @@ def _stream_format_from_dict(data: dict) -> StreamFormat:
         channels=int(data.get("channels", 1)),
         chunk_ms=int(data.get("chunk_ms", 20)),
     )
+
+
+def _build_task_store(config: AudioChatConfig) -> TaskStore:
+    """按配置创建 TaskStore。
+
+    主要逻辑：默认使用内存 store；配置为 `jsonl` 时写入可恢复任务日志。
+    参数：`config` 为 AudioChatConfig。
+    返回值：TaskStore 实例。
+    异常情况：未知类型时抛出 ValueError。
+    """
+
+    store_type = (config.tasks_store_type or "memory").strip().lower()
+    if store_type == "memory":
+        return TaskStore()
+    if store_type == "jsonl":
+        root = config.tasks_store_root or str(Path(config.runs_root) / "tasks")
+        return JsonlTaskStore(root)
+    raise ValueError(f"unsupported task store type: {config.tasks_store_type}")

@@ -151,6 +151,7 @@ class ToolConfig:
 class TaskConfig:
     enabled: bool = False
     max_running_per_user: int = 16
+    store: dict[str, Any] = field(default_factory=lambda: {"type": "memory", "root": "runs/audio-chat/tasks"})
     discover: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -275,7 +276,7 @@ def _tool_config(data: dict[str, Any]) -> ToolConfig:
 def _task_config(data: dict[str, Any]) -> TaskConfig:
     raw = dict(data or {})
     discover = _discovery(raw.pop("discover", {}))
-    known = {"enabled", "max_running_per_user"}
+    known = {"enabled", "max_running_per_user", "store"}
     values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}
     extra = dict(raw)
     extra["discover"] = {

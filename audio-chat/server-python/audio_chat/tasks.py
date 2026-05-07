@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import pkgutil
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from audio_chat.asset import ArtifactRef
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.protocol import new_id
+
+TERMINAL_TASK_STATES = {"completed", "cancelled", "failed", "timeout"}
 
 TASK_STATES = (
     "scheduled",
@@ -23,6 +27,8 @@ TASK_STATES = (
 
 TASK_TRANSITIONS = {
     ("scheduled", "running"),
+    ("scheduled", "failed"),
+    ("scheduled", "timeout"),
     ("running", "waiting_external"),
     ("waiting_external", "running"),
     ("waiting_external", "completed"),
@@ -34,6 +40,21 @@ TASK_TRANSITIONS = {
     ("running", "timeout"),
     ("waiting_external", "timeout"),
 }
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    """Task 运行规格。
+
+    主要功能：把 Task 类型、版本、超时、取消能力和用户级并发限制收敛成稳定描述。
+    主要属性：`task_type/version/timeout_seconds/cancel_supported/max_running_per_user`。
+    """
+
+    task_type: str
+    version: str = "v1"
+    timeout_seconds: float | None = None
+    cancel_supported: bool = True
+    max_running_per_user: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,7 +107,28 @@ class TaskContext:
     task_ref: TaskRef
     devices: Any = None
     bridge: "TaskEventBridge | None" = None
+    engine: "TaskEngine | None" = None
     metadata: dict = field(default_factory=dict)
+
+    async def complete(self, payload: dict | None = None, *, summary: str = "") -> TaskRef:
+        """把当前任务标记为完成。
+
+        主要逻辑：委托 TaskEngine 完成状态流转并写入 `task.completed` 事件。
+        参数：`payload` 为完成事件载荷，`summary` 为任务摘要。
+        返回值：完成后的 `TaskRef`。
+        异常情况：上下文未绑定 TaskEngine 时抛出协议错误。
+        """
+
+        if self.engine is None:
+            raise AudioChatError("task context has no engine", code=ErrorCode.PROTOCOL_ERROR)
+        return self.engine.complete(self.task_ref.task_id, payload=payload or {}, summary=summary)
+
+    async def fail(self, message: str, *, payload: dict | None = None) -> TaskRef:
+        """把当前任务标记为失败。"""
+
+        if self.engine is None:
+            raise AudioChatError("task context has no engine", code=ErrorCode.PROTOCOL_ERROR)
+        return self.engine.fail(self.task_ref.task_id, message=message, payload=payload or {})
 
 
 class BaseTask:
@@ -97,6 +139,28 @@ class BaseTask:
 
     task_type: str = ""
     description: str = ""
+    version: str = "v1"
+    timeout_seconds: float | None = None
+    cancel_supported: bool = True
+    max_running_per_user: int | None = None
+
+    @classmethod
+    def spec(cls) -> TaskSpec:
+        """返回 Task 运行规格。
+
+        主要逻辑：从类属性读取稳定字段，注册表和调度器统一使用该描述。
+        参数：无。
+        返回值：`TaskSpec`。
+        异常情况：`task_type` 为空时由注册表负责报错。
+        """
+
+        return TaskSpec(
+            task_type=cls.task_type or cls.__name__,
+            version=str(getattr(cls, "version", "v1") or "v1"),
+            timeout_seconds=getattr(cls, "timeout_seconds", None),
+            cancel_supported=bool(getattr(cls, "cancel_supported", True)),
+            max_running_per_user=getattr(cls, "max_running_per_user", None),
+        )
 
     async def on_start(self, context: TaskContext) -> None:
         """任务启动回调。
@@ -132,7 +196,7 @@ class TaskStateMachine:
 class TaskStore:
     """进程内任务存储。
 
-    主要功能：保存 TaskRef 和事件，后续可替换为持久化实现。
+    主要功能：保存 TaskRef 和事件，可作为持久化 store 的内存基类。
     """
 
     def __init__(self) -> None:
@@ -156,6 +220,61 @@ class TaskStore:
 
         return [event for event in self._events if event.task_id == task_id]
 
+    def list_tasks(self) -> list[TaskRef]:
+        """列出全部任务快照。"""
+
+        return list(self._tasks.values())
+
+    def list_unfinished(self) -> list[TaskRef]:
+        """列出未进入终态的任务快照。"""
+
+        return [ref for ref in self._tasks.values() if ref.state not in TERMINAL_TASK_STATES]
+
+
+class JsonlTaskStore(TaskStore):
+    """JSONL 持久化任务存储。
+
+    主要功能：把 TaskRef 快照和 TaskEvent 追加写入 jsonl，重启后可重放恢复。
+    主要属性：`root` 为存储目录，`tasks_path/events_path` 为落地文件。
+    """
+
+    def __init__(self, root: str | Path) -> None:
+        super().__init__()
+        self.root = Path(root)
+        self.tasks_path = self.root / "tasks.jsonl"
+        self.events_path = self.root / "task-events.jsonl"
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._load()
+
+    def put(self, ref: TaskRef) -> None:
+        super().put(ref)
+        self._append_jsonl(self.tasks_path, {"record_type": "task.snapshot", "task": _task_ref_to_dict(ref)})
+
+    def append_event(self, event: TaskEvent) -> None:
+        super().append_event(event)
+        self._append_jsonl(self.events_path, {"record_type": "task.event", "event": _task_event_to_dict(event)})
+
+    def _load(self) -> None:
+        """重放 jsonl 文件，恢复任务和事件内存索引。"""
+
+        if self.tasks_path.exists():
+            for record in _read_jsonl(self.tasks_path):
+                task_data = record.get("task") if isinstance(record, dict) else None
+                if isinstance(task_data, dict):
+                    ref = _task_ref_from_dict(task_data)
+                    self._tasks[ref.task_id] = ref
+        if self.events_path.exists():
+            for record in _read_jsonl(self.events_path):
+                event_data = record.get("event") if isinstance(record, dict) else None
+                if isinstance(event_data, dict):
+                    self._events.append(_task_event_from_dict(event_data))
+
+    @staticmethod
+    def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
 
 class TaskRegistry:
     """Task 注册表。"""
@@ -175,6 +294,11 @@ class TaskRegistry:
         if task_type not in self._tasks:
             raise AudioChatError(f"unknown task: {task_type}", code=ErrorCode.NOT_FOUND)
         return self._tasks[task_type]
+
+    def spec(self, task_type: str) -> TaskSpec:
+        """返回指定 Task 的运行规格。"""
+
+        return self.get(task_type).spec()
 
     def list_task_types(self) -> list[str]:
         """列出已注册 Task 类型。"""
@@ -284,7 +408,7 @@ class TaskEventBridge:
         异常情况：底层记录或输出失败时向上抛出。
         """
         if self.recorder and hasattr(self.recorder, "record_task_event"):
-            self.recorder.record_task_event(event.session_id or event.task_id, event.__dict__)
+            self.recorder.record_task_event(event.session_id or event.task_id, _task_event_to_dict(event))
         if event.requires_agent_decision and self.recorder and hasattr(self.recorder, "record_agent_event"):
             self.recorder.record_agent_event(
                 event.session_id or event.task_id,
@@ -329,6 +453,37 @@ class TaskExecutor:
         await task.on_cancel(context)
 
 
+class TaskScheduler:
+    """Task 调度器。
+
+    主要功能：集中处理恢复、超时判定和终态判断。当前实现采用查询时惰性扫
+    描，避免测试和 CLI 中因后台事件循环生命周期不同产生残留任务。
+    """
+
+    def __init__(self, *, now: Any = None) -> None:
+        self._now = now or time.time
+
+    def deadline_for(self, *, started_at: float, timeout_seconds: float | None) -> float | None:
+        """根据启动时间和超时配置计算 deadline。"""
+
+        if timeout_seconds is None or timeout_seconds <= 0:
+            return None
+        return started_at + timeout_seconds
+
+    def expired(self, ref: TaskRef) -> bool:
+        """判断任务是否已超时。"""
+
+        if ref.state in TERMINAL_TASK_STATES:
+            return False
+        deadline_at = ref.metadata.get("deadline_at")
+        return isinstance(deadline_at, (int, float)) and deadline_at <= self._now()
+
+    def recoverable(self, ref: TaskRef) -> bool:
+        """判断任务是否需要恢复 Task 实例。"""
+
+        return ref.state not in TERMINAL_TASK_STATES
+
+
 class TaskEngine:
     """Task Engine 最小实现。
 
@@ -343,14 +498,18 @@ class TaskEngine:
         state_machine: TaskStateMachine | None = None,
         executor: TaskExecutor | None = None,
         bridge: TaskEventBridge | None = None,
+        scheduler: TaskScheduler | None = None,
         device_context_factory: Any = None,
+        max_running_per_user: int = 16,
     ) -> None:
         self.registry = registry or TaskRegistry()
         self.store = store or TaskStore()
         self.state_machine = state_machine or TaskStateMachine()
         self.executor = executor or TaskExecutor()
         self.bridge = bridge or TaskEventBridge()
+        self.scheduler = scheduler or TaskScheduler()
         self.device_context_factory = device_context_factory
+        self.max_running_per_user = max_running_per_user
         self._instances: dict[str, BaseTask] = {}
 
     def register(self, task_cls: type[BaseTask]) -> None:
@@ -365,7 +524,30 @@ class TaskEngine:
         异常情况：任务不存在时抛出 `AudioChatError`。
         """
 
-        return self.store.get(task_id)
+        ref = self.store.get(task_id)
+        return self._expire_if_needed(ref)
+
+    def restore_unfinished(self) -> list[TaskRef]:
+        """恢复未完成任务快照。
+
+        主要逻辑：从 store 读取未终态任务，为仍存在注册类型的任务补回实例，并
+        对已过期任务立即流转到 timeout。
+        参数：无。
+        返回值：恢复后仍未进入终态的任务列表。
+        异常情况：未知 Task 类型会保留快照但不会创建实例。
+        """
+
+        restored: list[TaskRef] = []
+        for ref in self.store.list_unfinished():
+            ref = self._expire_if_needed(ref)
+            if ref.state in TERMINAL_TASK_STATES:
+                continue
+            try:
+                self._instances.setdefault(ref.task_id, self.registry.get(ref.task_type)())
+            except AudioChatError:
+                continue
+            restored.append(ref)
+        return restored
 
     async def create(
         self,
@@ -386,23 +568,51 @@ class TaskEngine:
         """
 
         task_cls = self.registry.get(task_type)
+        spec = task_cls.spec()
+        self._reject_if_concurrency_exceeded(user_id=user_id, spec=spec)
         task_id = new_id("task")
+        now = time.time()
+        timeout_seconds = _resolve_timeout_seconds(spec, input_data or {})
+        deadline_at = self.scheduler.deadline_for(started_at=now, timeout_seconds=timeout_seconds)
         ref = TaskRef(
             task_id=task_id,
             task_type=task_type,
             state="scheduled",
             summary=summary,
-            metadata={"user_id": user_id, "session_id": session_id, "input": dict(input_data or {})},
+            metadata={
+                "user_id": user_id,
+                "session_id": session_id,
+                "input": dict(input_data or {}),
+                "version": spec.version,
+                "timeout_seconds": timeout_seconds,
+                "deadline_at": deadline_at,
+                "cancel_supported": spec.cancel_supported,
+                "max_running_per_user": spec.max_running_per_user or self.max_running_per_user,
+                "created_at": now,
+                "started_at": None,
+                "updated_at": now,
+            },
         )
         self.store.put(ref)
         task = task_cls()
         self._instances[task_id] = task
-        ref = self._transition(ref, "running")
+        ref = self._transition(ref, "running", metadata={"started_at": time.time()})
+        self.emit_event(
+            TaskEvent(
+                task_id=task_id,
+                task_type=task_type,
+                event_name="task.started",
+                user_id=user_id,
+                session_id=session_id,
+                payload={"state": ref.state, "input": dict(input_data or {})},
+                allow_direct_notify=False,
+            )
+        )
         context = self._context(user_id=user_id, session_id=session_id, ref=ref)
         try:
             await self.executor.start(task, context)
         except Exception as exc:
-            self._transition(ref, "failed")
+            self._transition(ref, "failed", metadata={"error": str(exc)})
             self.emit_event(
                 TaskEvent(
                     task_id=task_id,
@@ -417,18 +627,7 @@ class TaskEngine:
                 )
             )
             raise
-        self.emit_event(
-            TaskEvent(
-                task_id=task_id,
-                task_type=task_type,
-                event_name="task.started",
-                user_id=user_id,
-                session_id=session_id,
-                payload={"state": ref.state, "input": dict(input_data or {})},
-                allow_direct_notify=False,
-            )
-        )
-        return ref
+        return self.query(task_id)
 
     async def handle_event(self, event: TaskEvent) -> TaskRef:
         """把外部 TaskEvent 送回对应 Task 实例。
@@ -440,7 +639,7 @@ class TaskEngine:
         异常情况：任务不存在时抛出 `AudioChatError`。
         """
 
-        ref = self.store.get(event.task_id)
+        ref = self.query(event.task_id)
         task = self._instances.get(event.task_id)
         self.emit_event(event)
         if task is not None:
@@ -449,7 +648,7 @@ class TaskEngine:
                 self._context(user_id=event.user_id, session_id=event.session_id, ref=ref),
                 event,
             )
-        return self.store.get(event.task_id)
+        return self.query(event.task_id)
 
     async def cancel(self, task_id: str, *, reason: str = "cancelled") -> TaskRef:
         """取消任务。
@@ -460,12 +659,20 @@ class TaskEngine:
         异常情况：非法状态流转或任务不存在时抛出 `AudioChatError`。
         """
 
-        ref = self.store.get(task_id)
+        ref = self.query(task_id)
+        if ref.state in TERMINAL_TASK_STATES:
+            return ref
+        if ref.metadata.get("cancel_supported") is False:
+            raise AudioChatError(f"task does not support cancel: {task_id}", code=ErrorCode.PROTOCOL_ERROR)
         task = self._instances.get(task_id)
         if task is not None:
             await self.executor.cancel(
                 task,
-                self._context(user_id=str(ref.metadata.get("user_id") or ""), session_id=None, ref=ref),
+                self._context(
+                    user_id=str(ref.metadata.get("user_id") or ""),
+                    session_id=str(ref.metadata.get("session_id") or "") or None,
+                    ref=ref,
+                ),
             )
         ref = self._transition(ref, "cancelled")
         self.emit_event(
@@ -474,7 +681,50 @@ class TaskEngine:
                 task_type=ref.task_type,
                 event_name="task.cancelled",
                 user_id=str(ref.metadata.get("user_id") or ""),
+                session_id=str(ref.metadata.get("session_id") or "") or None,
                 payload={"reason": reason},
+                allow_direct_notify=True,
+            )
+        )
+        return ref
+
+    def complete(self, task_id: str, *, payload: dict | None = None, summary: str = "") -> TaskRef:
+        """完成任务并写入 `task.completed` 事件。"""
+
+        ref = self.query(task_id)
+        if ref.state in TERMINAL_TASK_STATES:
+            return ref
+        ref = self._transition(ref, "completed", summary=summary or ref.summary)
+        self.emit_event(
+            TaskEvent(
+                task_id=ref.task_id,
+                task_type=ref.task_type,
+                event_name="task.completed",
+                user_id=str(ref.metadata.get("user_id") or ""),
+                session_id=str(ref.metadata.get("session_id") or "") or None,
+                payload={"state": ref.state, **dict(payload or {})},
+                allow_direct_notify=False,
+            )
+        )
+        return ref
+
+    def fail(self, task_id: str, *, message: str, payload: dict | None = None) -> TaskRef:
+        """失败任务并写入 `task.failed` 事件。"""
+
+        ref = self.query(task_id)
+        if ref.state in TERMINAL_TASK_STATES:
+            return ref
+        ref = self._transition(ref, "failed", metadata={"error": message})
+        self.emit_event(
+            TaskEvent(
+                task_id=ref.task_id,
+                task_type=ref.task_type,
+                event_name="task.failed",
+                user_id=str(ref.metadata.get("user_id") or ""),
+                session_id=str(ref.metadata.get("session_id") or "") or None,
+                payload={"message": message, **dict(payload or {})},
+                priority="high",
+                requires_agent_decision=True,
                 allow_direct_notify=True,
             )
         )
@@ -486,9 +736,10 @@ class TaskEngine:
         self.store.append_event(event)
         self.bridge.handle_event(event)
 
-    def _transition(self, ref: TaskRef, target: str) -> TaskRef:
+    def _transition(self, ref: TaskRef, target: str, *, metadata: dict | None = None, summary: str | None = None) -> TaskRef:
         state = self.state_machine.transition(ref.state, target)
-        updated = replace(ref, state=state)
+        merged_metadata = {**dict(ref.metadata), **dict(metadata or {}), "updated_at": time.time()}
+        updated = replace(ref, state=state, metadata=merged_metadata, summary=ref.summary if summary is None else summary)
         self.store.put(updated)
         return updated
 
@@ -500,5 +751,120 @@ class TaskEngine:
             task_ref=ref,
             devices=devices,
             bridge=self.bridge,
+            engine=self,
             metadata=dict(ref.metadata),
         )
+
+    def _expire_if_needed(self, ref: TaskRef) -> TaskRef:
+        if not self.scheduler.expired(ref):
+            return ref
+        ref = self._transition(ref, "timeout", metadata={"timeout_at": time.time()})
+        self.emit_event(
+            TaskEvent(
+                task_id=ref.task_id,
+                task_type=ref.task_type,
+                event_name="task.timeout",
+                user_id=str(ref.metadata.get("user_id") or ""),
+                session_id=str(ref.metadata.get("session_id") or "") or None,
+                payload={"timeout_seconds": ref.metadata.get("timeout_seconds")},
+                priority="high",
+                requires_agent_decision=True,
+                allow_direct_notify=True,
+            )
+        )
+        return ref
+
+    def _reject_if_concurrency_exceeded(self, *, user_id: str, spec: TaskSpec) -> None:
+        limit = spec.max_running_per_user or self.max_running_per_user
+        if limit <= 0:
+            return
+        running = [
+            self._expire_if_needed(ref)
+            for ref in self.store.list_tasks()
+            if ref.metadata.get("user_id") == user_id and ref.state not in TERMINAL_TASK_STATES
+        ]
+        active_count = sum(1 for ref in running if ref.state not in TERMINAL_TASK_STATES)
+        if active_count >= limit:
+            raise AudioChatError(
+                "task running concurrency exceeded",
+                code=ErrorCode.PROTOCOL_ERROR,
+                details={"user_id": user_id, "limit": limit, "task_type": spec.task_type},
+            )
+
+
+def _resolve_timeout_seconds(spec: TaskSpec, input_data: dict) -> float | None:
+    raw = input_data.get("timeout_seconds", spec.timeout_seconds)
+    if raw is None:
+        return None
+    value = float(raw)
+    return value if value > 0 else None
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            records.append(json.loads(stripped))
+    return records
+
+
+def _task_ref_to_dict(ref: TaskRef) -> dict[str, Any]:
+    return {
+        "task_id": ref.task_id,
+        "task_type": ref.task_type,
+        "state": ref.state,
+        "summary": ref.summary,
+        "metadata": dict(ref.metadata),
+    }
+
+
+def _task_ref_from_dict(data: dict[str, Any]) -> TaskRef:
+    return TaskRef(
+        task_id=str(data.get("task_id") or ""),
+        task_type=str(data.get("task_type") or ""),
+        state=str(data.get("state") or "scheduled"),
+        summary=str(data.get("summary") or ""),
+        metadata=dict(data.get("metadata") or {}),
+    )
+
+
+def _task_event_to_dict(event: TaskEvent) -> dict[str, Any]:
+    data = asdict(event)
+    data["artifacts"] = [_ref_to_dict(item) for item in event.artifacts]
+    return data
+
+
+def _task_event_from_dict(data: dict[str, Any]) -> TaskEvent:
+    return TaskEvent(
+        task_id=str(data.get("task_id") or ""),
+        task_type=str(data.get("task_type") or ""),
+        event_name=str(data.get("event_name") or ""),
+        user_id=str(data.get("user_id") or ""),
+        session_id=data.get("session_id"),
+        payload=dict(data.get("payload") or {}),
+        priority=str(data.get("priority") or "normal"),
+        dedupe_key=data.get("dedupe_key"),
+        ttl_seconds=int(data.get("ttl_seconds") or 0),
+        requires_agent_decision=bool(data.get("requires_agent_decision", False)),
+        allow_direct_notify=bool(data.get("allow_direct_notify", True)),
+        artifacts=[_artifact_from_dict(item) for item in data.get("artifacts", []) if isinstance(item, dict)],
+        created_at=float(data.get("created_at") or time.time()),
+    )
+
+
+def _ref_to_dict(ref: Any) -> dict[str, Any]:
+    if hasattr(ref, "__dict__"):
+        return dict(ref.__dict__)
+    return dict(ref)
+
+
+def _artifact_from_dict(data: dict[str, Any]) -> ArtifactRef:
+    return ArtifactRef(
+        artifact_id=str(data.get("artifact_id") or new_id("artifact")),
+        kind=str(data.get("kind") or "unknown"),
+        uri=str(data.get("uri") or ""),
+        metadata=dict(data.get("metadata") or {}),
+    )
