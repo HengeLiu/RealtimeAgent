@@ -435,6 +435,31 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ("uv", "run", "audio-chat.esp32.build", "--dry-run", "--build-only"),
         ),
     ),
+    "old-sdk-parity-capabilities": (
+        CheckCommand(
+            "old_sdk_parity_capability_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/acceptance/test_for_blind_capabilities_playback.py",
+                "tests/acceptance/test_old_sdk_capability_migration_contract.py",
+                "-q",
+            ),
+        ),
+        CheckCommand(
+            "old_sdk_parity_capability_playback_cli",
+            (
+                "uv",
+                "run",
+                "audio-chat.playback.glass",
+                "--config",
+                "examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
+            ),
+        ),
+    ),
     "old-sdk-parity-docs": (
         CheckCommand(
             "old_sdk_parity_docs_tests",

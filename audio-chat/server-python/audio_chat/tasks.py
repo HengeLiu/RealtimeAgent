@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import asyncio
 import json
 import pkgutil
 import time
@@ -129,6 +130,62 @@ class TaskContext:
         if self.engine is None:
             raise AudioChatError("task context has no engine", code=ErrorCode.PROTOCOL_ERROR)
         return self.engine.fail(self.task_ref.task_id, message=message, payload=payload or {})
+
+    async def schedule_event(
+        self,
+        event_name: str,
+        *,
+        payload: dict | None = None,
+        delay_seconds: float = 0,
+        priority: str = "normal",
+        requires_agent_decision: bool = False,
+        allow_direct_notify: bool = False,
+    ) -> TaskRef | None:
+        """调度一个任务事件。
+
+        功能：
+        1. 给业务 Task 提供稳定的延时事件入口，避免业务代码自建线程或定时器。
+        2. 延时到达后把事件重新送回 TaskEngine，使 `on_event()` 能处理到点、超时前提醒等状态。
+
+        主要逻辑：
+        1. `delay_seconds` 大于 0 时先异步等待。
+        2. 构造 `TaskEvent`，复用当前任务编号、任务类型、用户和会话。
+        3. 优先通过 TaskEngine 回流；没有绑定 engine 时退化为只通过 bridge 记录。
+
+        参数：
+        1. `event_name`：任务事件名，例如 `timer.due`。
+        2. `payload`：事件载荷。
+        3. `delay_seconds`：延时秒数；小于等于 0 表示立即回流。
+        4. `priority`：事件优先级。
+        5. `requires_agent_decision`：是否需要进入 Agent 上下文同步。
+        6. `allow_direct_notify`：是否允许事件桥直接转成通知输出。
+
+        返回值：
+        1. 绑定 TaskEngine 时返回事件处理后的 `TaskRef`。
+        2. 仅绑定 bridge 时返回 `None`。
+
+        异常情况：
+        1. 事件处理失败时由 TaskEngine 或 bridge 抛出结构化异常。
+        """
+
+        if delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+        event = TaskEvent(
+            task_id=self.task_ref.task_id,
+            task_type=self.task_ref.task_type,
+            event_name=event_name,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            payload=dict(payload or {}),
+            priority=priority,
+            requires_agent_decision=requires_agent_decision,
+            allow_direct_notify=allow_direct_notify,
+        )
+        if self.engine is not None:
+            return await self.engine.handle_event(event)
+        if self.bridge is not None:
+            self.bridge.handle_event(event)
+        return None
 
 
 class BaseTask:

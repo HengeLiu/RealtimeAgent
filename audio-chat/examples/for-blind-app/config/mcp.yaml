@@ -1,0 +1,26 @@
+tools:
+  - name: "amap.route_plan"
+    description: "本地 mock 高德路线规划，用于导航迁移验收。"
+    mock_result:
+      provider: "amap-mock"
+      origin: "当前位置"
+      destination: "盲人服务中心"
+      route_id: "route_mock_001"
+      distance_meters: 420
+      duration_seconds: 360
+      steps:
+        - instruction: "向前直行 80 米"
+          distance_meters: 80
+        - instruction: "路口右转后继续直行"
+          distance_meters: 120
+        - instruction: "接近目的地，需要视觉确认入口"
+          distance_meters: 20
+  - name: "web.search"
+    description: "本地 mock 搜索，用于搜索能力迁移验收。"
+    mock_result:
+      provider: "web-search-mock"
+      fallback: true
+      items:
+        - title: "盲人导航安全提示"
+          snippet: "过路口前确认红绿灯状态，并结合听觉和触觉反馈。"
+          url: "mock://search/blind-navigation-safety"

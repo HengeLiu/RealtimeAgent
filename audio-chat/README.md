@@ -178,6 +178,8 @@ uv run python scripts/acceptance_check.py developer-usability \
   --report runs/acceptance/developer-usability.json
 uv run python scripts/acceptance_check.py capability-template-playback \
   --report runs/acceptance/capability-template-playback.json
+uv run python scripts/acceptance_check.py old-sdk-parity-capabilities \
+  --report runs/acceptance/old-sdk-parity-capabilities.json
 uv run python scripts/acceptance_check.py old-sdk-parity-docs \
   --report runs/acceptance/old-sdk-parity-docs.json
 ```
@@ -216,7 +218,7 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 
 - `docs/phase3-migration-guide.md`
 - `examples/migration-templates`
-- `examples/for-blind-app`
+- `examples/for-blind-app`：已经包含 find_object、traffic_light、navigation、search、timer 的可执行迁移样板。
 - `docs/old-sdk-parity-development-plan.md`
 
 老 SDK 到 `audio-chat` 的主要入口映射：

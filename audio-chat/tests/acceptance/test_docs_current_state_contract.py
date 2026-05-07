@@ -15,20 +15,22 @@ def test_current_state_docs_do_not_claim_unbacked_old_sdk_parity() -> None:
     """测试目标：防止文档把本阶段后续线路误写成已完成。
 
     测试方法：检查 README、迁移指南和 for-blind 样板中对 iOS、ESP32、五类老业务能力
-    的状态表述，要求使用参考端、样板或后续 lane 口径。
-    预期结果：没有测试或样板支撑的能力不会被写成已完成产品能力。
+    的状态表述，要求使用参考端、可执行样板或后续 lane 口径。
+    预期结果：样板能力有验收支撑，但不会被写成真实产品/真机效果已完成。
     """
 
     docs = "\n".join(
         [
             _read("README.md"),
+            _read("docs/audio-chat-sdk-architecture.md"),
             _read("docs/phase3-migration-guide.md"),
             _read("examples/for-blind-app/README.md"),
         ]
     )
     for expected in [
         "iOS / ESP32 目录目前是参考端和契约入口",
-        "真正成功路径由后续 `old-sdk-parity-capabilities` lane 补代码和设备级回放",
+        "当前已提供可执行 Tool / Task、MCP mock、playback 配置和 `old-sdk-parity-capabilities` lane",
+        "tests/acceptance/test_for_blind_capabilities_playback.py",
         "当前为 iOS 参考端目录",
         "当前为 ESP32-S3 参考端目录",
     ]:
@@ -67,6 +69,7 @@ def test_old_sdk_parity_docs_reference_existing_acceptance_materials() -> None:
     for lane in [
         "developer-usability",
         "capability-template-playback",
+        "old-sdk-parity-capabilities",
         "old-sdk-parity-docs",
     ]:
         assert f"scripts/acceptance_check.py {lane}" in readme

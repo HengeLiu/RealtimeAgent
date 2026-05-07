@@ -1046,6 +1046,9 @@ def run_playback(config: dict[str, Any] | None = None) -> dict[str, Any]:
             tasks_discover_enabled=discover_enabled,
             tasks_discover_packages=tasks_discover_packages,
             tasks_discover_recursive=bool(config.get("tasks_discover_recursive", True)),
+            mcp_enabled=bool(config.get("mcp_enabled", False)),
+            mcp_config_path=str(config.get("mcp_config_path") or "audio-chat/mcp.json"),
+            mcp_default_timeout_seconds=float(config.get("mcp_default_timeout_seconds") or 30),
         )
     )
     endpoint = PythonPlaybackEndpoint(

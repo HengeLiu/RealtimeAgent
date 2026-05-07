@@ -1,0 +1,55 @@
+server:
+  host: "127.0.0.1"
+  port: 8765
+  public_url: "http://127.0.0.1:8765"
+
+auth:
+  mode: "disabled"
+
+agent:
+  mode: "text"
+  text:
+    model_provider: "mock"
+    model: "mock-text"
+    asr_provider: "mock"
+    asr_model: "mock-asr"
+    tts_provider: "mock"
+    tts_model: "mock-tts"
+    tts_voice: "mock"
+    allow_mock_fallback: true
+
+asset:
+  root: "runs/audio-chat/for-blind-app/assets"
+  request_timeout_seconds: 2
+
+observability:
+  runs_root: "runs/audio-chat/for-blind-app"
+
+tools:
+  enabled: true
+  builtin_enabled: true
+  discover:
+    enabled: true
+    packages:
+      - "capabilities"
+    recursive: true
+    fail_fast: true
+
+tasks:
+  enabled: true
+  max_running_per_user: 32
+  discover:
+    enabled: true
+    packages:
+      - "capabilities"
+    recursive: true
+    fail_fast: true
+
+mcp:
+  enabled: true
+  config_path: "examples/for-blind-app/config/mcp.yaml"
+  default_timeout_seconds: 5
+
+dev_checks:
+  report_path: "runs/audio-chat/for-blind-app/preflight.json"
+  require_recent_playback_ok: false
