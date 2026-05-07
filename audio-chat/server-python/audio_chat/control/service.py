@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -44,6 +49,8 @@ class Device:
     last_seen_at: float = field(default_factory=time.time)
     last_error: dict[str, Any] | None = None
     register_failed_reason: str | None = None
+    auth_diagnostics: dict[str, Any] = field(default_factory=dict)
+    binding_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 DeviceRecord = Device
@@ -65,6 +72,8 @@ class DeviceSnapshot:
     subscriptions: tuple[Subscription, ...]
     last_error: dict[str, Any] | None = None
     register_failed_reason: str | None = None
+    auth_diagnostics: dict[str, Any] = field(default_factory=dict)
+    binding_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为 debug API JSON 字典。"""
@@ -82,6 +91,8 @@ class DeviceSnapshot:
             "subscriptions": [subscription.__dict__ for subscription in self.subscriptions],
             "last_error": self.last_error,
             "register_failed_reason": self.register_failed_reason,
+            "auth": dict(self.auth_diagnostics),
+            "binding": dict(self.binding_diagnostics),
         }
 
 
@@ -99,10 +110,92 @@ class PublishResult:
     matched_device_ids: tuple[str, ...] = ()
 
 
+class PairingTokenIssuer(Protocol):
+    """配对 token 签发接口。
+
+    主要功能：为后续管理端或配对服务预留正式 token 签发边界。
+    主要方法：`issue_token()` 接收用户、设备、过期时间和 nonce，返回端侧注册使用的 token。
+    """
+
+    def issue_token(self, *, user_id: str, device_id: str, expires_at: int, nonce: str) -> str: ...
+
+
+class HmacSignedTokenIssuer:
+    """基于 HMAC-SHA256 的 signed_token 签发器。
+
+    主要功能：给单元测试、本地配对服务和后续管理端提供一致 token 格式。
+    主要属性：`secret` 是签名密钥，必须由调用方从安全配置或环境变量传入。
+    """
+
+    def __init__(self, secret: str) -> None:
+        if not secret:
+            raise ValueError("signed token secret is required")
+        self.secret = secret
+
+    def issue_token(self, *, user_id: str, device_id: str, expires_at: int, nonce: str) -> str:
+        """签发设备注册 token。
+
+        主要逻辑：把 `user_id`、`device_id`、`expires_at`、`nonce` 组成规范 JSON，
+        用 HMAC-SHA256 签名后编码成 `payload.signature`。
+        参数：用户编号、设备编号、过期 Unix 秒和随机 nonce。
+        返回值：URL 安全的 token 字符串。
+        异常情况：参数为空时抛出 `ValueError`。
+        """
+
+        if not user_id or not device_id or not nonce:
+            raise ValueError("user_id, device_id and nonce are required")
+        payload = {
+            "user_id": user_id,
+            "device_id": device_id,
+            "expires_at": int(expires_at),
+            "nonce": nonce,
+        }
+        payload_raw = _canonical_json(payload).encode("utf-8")
+        signature = hmac.new(self.secret.encode("utf-8"), payload_raw, hashlib.sha256).digest()
+        return f"{_b64url_encode(payload_raw)}.{_b64url_encode(signature)}"
+
+
+def _canonical_json(data: dict[str, Any]) -> str:
+    """生成签名使用的规范 JSON 字符串。"""
+
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _b64url_encode(raw: bytes) -> str:
+    """生成不带等号填充的 URL 安全 base64。"""
+
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(text: str) -> bytes:
+    """解码不带等号填充的 URL 安全 base64。"""
+
+    padding = "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode(f"{text}{padding}".encode("ascii"))
+
+
 class DeviceAuthenticator:
-    def __init__(self, *, mode: str = "disabled", device_tokens: dict[str, str] | None = None) -> None:
+    """设备注册鉴权器。
+
+    主要功能：校验 disabled、static_token 和 signed_token 三种注册模式。
+    主要属性：`signed_token_secret_env` 指向签名密钥环境变量，`token_clock_skew_seconds`
+    控制正式 token 的时钟偏差容忍。
+    """
+
+    def __init__(
+        self,
+        *,
+        mode: str = "disabled",
+        device_tokens: dict[str, str] | None = None,
+        signed_token_secret_env: str = "AUDIO_CHAT_DEVICE_TOKEN_SECRET",
+        token_clock_skew_seconds: int = 60,
+        now: Any | None = None,
+    ) -> None:
         self.mode = mode
         self.device_tokens = device_tokens or {}
+        self.signed_token_secret_env = signed_token_secret_env
+        self.token_clock_skew_seconds = int(token_clock_skew_seconds)
+        self._now = now or time.time
 
     def verify_token(self, registration: Event) -> tuple[bool, str | None]:
         auth = registration.payload.get("auth") or {}
@@ -116,8 +209,53 @@ class DeviceAuthenticator:
                 return False, "invalid_token"
             return True, None
         if self.mode == "signed_token":
-            return False, "signed_token_not_implemented"
+            return self._verify_signed_token(registration, auth)
         return False, "unsupported_auth_mode"
+
+    def _verify_signed_token(self, registration: Event, auth: dict[str, Any]) -> tuple[bool, str | None]:
+        """校验正式 signed_token。
+
+        主要逻辑：从环境变量读取密钥，解析 `payload.signature`，校验签名、过期时间、
+        user_id 和 device_id 是否与注册事件一致。
+        参数：注册事件和 payload.auth。
+        返回值：`(True, None)` 或 `(False, reason)`。
+        异常情况：解析错误会转换为明确 reason，不向外抛出底层异常。
+        """
+
+        if auth.get("mode") != "signed_token":
+            return False, "invalid_auth_mode"
+        secret = os.environ.get(self.signed_token_secret_env, "")
+        if not secret:
+            return False, "signed_token_secret_missing"
+        token = str(auth.get("token") or "")
+        if not token or token.count(".") != 1:
+            return False, "malformed_signed_token"
+        payload_part, signature_part = token.split(".", 1)
+        try:
+            payload_raw = _b64url_decode(payload_part)
+            payload = json.loads(payload_raw.decode("utf-8"))
+            signature = _b64url_decode(signature_part)
+        except Exception:
+            return False, "malformed_signed_token"
+        expected = hmac.new(secret.encode("utf-8"), payload_raw, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            return False, "invalid_signed_token_signature"
+        token_user_id = str(payload.get("user_id") or "")
+        token_device_id = str(payload.get("device_id") or "")
+        if token_user_id != registration.user_id:
+            return False, "signed_token_user_mismatch"
+        if token_device_id != registration.payload.get("device_id"):
+            return False, "signed_token_device_mismatch"
+        try:
+            expires_at = int(payload.get("expires_at"))
+        except Exception:
+            return False, "malformed_signed_token"
+        if expires_at + self.token_clock_skew_seconds < int(self._now()):
+            return False, "signed_token_expired"
+        nonce = str(payload.get("nonce") or "")
+        if not nonce:
+            return False, "malformed_signed_token"
+        return True, None
 
 
 class RegistrationValidator:
@@ -244,6 +382,7 @@ class ControlService:
         max_subscriptions_per_device: int = 64,
         allow_subscribe_all: bool = False,
         subscription_filter_mode: str = "exact",
+        active_device_set_policy: str = "single",
     ) -> None:
         self.authenticator = authenticator or DeviceAuthenticator(mode="disabled")
         self.validator = RegistrationValidator(
@@ -254,13 +393,18 @@ class ControlService:
         self.matcher = SubscriptionMatcher()
         self.recorder = recorder or RunRecorder()
         self.exclude_producer_by_default = exclude_producer_by_default
+        self.active_device_set_policy = active_device_set_policy
         self._bindings: dict[str, str] = {}
         self._devices: dict[str, Device] = {}
         self._connections: dict[str, DeviceConnection] = {}
         self._registration_failures: dict[str, DeviceSnapshot] = {}
 
     def register_device(self, registration: Event, connection: DeviceConnection | None = None) -> Event:
+        auth_mode = str((registration.payload.get("auth") or {}).get("mode") or self.authenticator.mode)
+        failed_device_id = str(registration.payload.get("device_id") or registration.producer_id or "unknown")
         try:
+            if self.active_device_set_policy != "single":
+                raise ValueError(f"unsupported active_device_set_policy: {self.active_device_set_policy}")
             self.validator.validate_payload(registration)
             ok, reason = self.authenticator.verify_token(registration)
             if not ok:
@@ -269,6 +413,7 @@ class ControlService:
             bound_user = self._bindings.get(device_id)
             if bound_user is not None and bound_user != registration.user_id:
                 raise PermissionError("device_bound_to_other_user")
+            old_connection = self._connections.get(device_id)
             subscriptions = [
                 Subscription(event=item["event"], filter=dict(item.get("filter") or {}))
                 for item in registration.payload.get("subscriptions", [])
@@ -281,14 +426,42 @@ class ControlService:
                 sdk_version=registration.payload.get("sdk_version", "unknown"),
                 capabilities=dict(registration.payload.get("capabilities") or {}),
                 subscriptions=subscriptions,
+                auth_diagnostics={
+                    "mode": self.authenticator.mode,
+                    "request_mode": auth_mode,
+                    "status": "passed",
+                    "token_present": bool((registration.payload.get("auth") or {}).get("token")),
+                    "signed_token_secret_env": (
+                        self.authenticator.signed_token_secret_env
+                        if self.authenticator.mode == "signed_token"
+                        else None
+                    ),
+                },
+                binding_diagnostics={
+                    "policy": self.active_device_set_policy,
+                    "bound_user_id": registration.user_id,
+                    "replaced_connection": old_connection is not None and old_connection is not connection,
+                    "conflict_user_id": None,
+                },
             )
             self._bindings[device_id] = registration.user_id
-            old_connection = self._connections.get(device_id)
             if old_connection is not None and old_connection is not connection:
                 try:
                     old_connection.close(reason="replaced_by_new_connection")
                 except Exception:
                     pass
+                self.recorder.record_event(
+                    Event(
+                        event_name="control.device.state.changed",
+                        user_id=registration.user_id,
+                        producer_id=SERVER_PRODUCER_ID,
+                        payload={
+                            "device_id": device_id,
+                            "connection_state": "replaced",
+                            "reason": "replaced_by_new_connection",
+                        },
+                    )
+                )
             self._devices[device_id] = record
             if connection is not None:
                 self._connections[device_id] = connection
@@ -304,7 +477,6 @@ class ControlService:
                 },
             )
         except Exception as exc:
-            failed_device_id = str(registration.payload.get("device_id") or registration.producer_id or "unknown")
             reason = str(exc)
             previous_user = self._bindings.get(failed_device_id)
             snapshot = DeviceSnapshot(
@@ -324,9 +496,32 @@ class ControlService:
                 ),
                 last_error={"code": "registration_failed", "message": reason},
                 register_failed_reason=reason,
+                auth_diagnostics={
+                    "mode": self.authenticator.mode,
+                    "request_mode": auth_mode,
+                    "status": "failed",
+                    "reason": reason,
+                    "token_present": bool((registration.payload.get("auth") or {}).get("token")),
+                    "signed_token_secret_env": (
+                        self.authenticator.signed_token_secret_env
+                        if self.authenticator.mode == "signed_token"
+                        else None
+                    ),
+                },
+                binding_diagnostics={
+                    "policy": self.active_device_set_policy,
+                    "bound_user_id": previous_user,
+                    "conflict_user_id": registration.user_id if previous_user not in {None, registration.user_id} else None,
+                },
             )
             if previous_user is None or previous_user == registration.user_id:
                 self._registration_failures[failed_device_id] = snapshot
+            else:
+                self._registration_failures[f"{failed_device_id}:{registration.user_id}"] = snapshot
+                existing = self._devices.get(failed_device_id)
+                if existing is not None:
+                    existing.binding_diagnostics["last_conflict_user_id"] = registration.user_id
+                    existing.binding_diagnostics["last_conflict_reason"] = reason
             event = Event(
                 event_name="control.device.register.failed",
                 user_id=registration.user_id,
@@ -593,6 +788,8 @@ class ControlService:
             subscriptions=tuple(device.subscriptions),
             last_error=dict(device.last_error) if device.last_error is not None else None,
             register_failed_reason=device.register_failed_reason,
+            auth_diagnostics=dict(device.auth_diagnostics),
+            binding_diagnostics=dict(device.binding_diagnostics),
         )
 
     @staticmethod

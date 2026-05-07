@@ -6,6 +6,8 @@ from audio_chat.control.service import (
     DeviceConnection,
     DeviceRecord,
     DeviceSnapshot,
+    HmacSignedTokenIssuer,
+    PairingTokenIssuer,
     PublishResult,
     SubscriptionMatcher,
 )
@@ -18,6 +20,8 @@ __all__ = [
     "DeviceConnection",
     "DeviceRecord",
     "DeviceSnapshot",
+    "HmacSignedTokenIssuer",
+    "PairingTokenIssuer",
     "PublishResult",
     "SubscriptionMatcher",
 ]

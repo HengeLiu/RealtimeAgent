@@ -26,6 +26,9 @@ class AudioChatConfig:
     runs_root: str = "runs/audio-chat"
     auth_mode: str = "disabled"
     device_tokens: dict[str, str] | None = None
+    signed_token_secret_env: str = "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
+    token_clock_skew_seconds: int = 60
+    active_device_set_policy: str = "single"
     control_exclude_producer_by_default: bool = True
     control_max_subscriptions_per_device: int = 64
     control_allow_subscribe_all: bool = False
@@ -86,6 +89,9 @@ class AudioChatConfig:
             runs_root=loaded.observability.runs_root,
             auth_mode=loaded.auth.mode,
             device_tokens=loaded.auth.device_tokens,
+            signed_token_secret_env=loaded.auth.signed_token_secret_env,
+            token_clock_skew_seconds=loaded.auth.token_clock_skew_seconds,
+            active_device_set_policy=loaded.user.active_device_set_policy,
             control_exclude_producer_by_default=loaded.control.exclude_producer_by_default,
             control_max_subscriptions_per_device=loaded.control.max_subscriptions_per_device,
             control_allow_subscribe_all=loaded.control.allow_subscribe_all,
@@ -140,12 +146,15 @@ class AudioChatApp:
             authenticator=DeviceAuthenticator(
                 mode=self.config.auth_mode,
                 device_tokens=self.config.device_tokens,
+                signed_token_secret_env=self.config.signed_token_secret_env,
+                token_clock_skew_seconds=self.config.token_clock_skew_seconds,
             ),
             recorder=self.recorder,
             exclude_producer_by_default=self.config.control_exclude_producer_by_default,
             max_subscriptions_per_device=self.config.control_max_subscriptions_per_device,
             allow_subscribe_all=self.config.control_allow_subscribe_all,
             subscription_filter_mode=self.config.control_subscription_filter_mode,
+            active_device_set_policy=self.config.active_device_set_policy,
         )
         self.stream_service = StreamService(
             control_service=self.control_service,

@@ -1,0 +1,13 @@
+{
+  "event_id": "evt-contract-control-device-register-failed-signed-token",
+  "event_name": "control.device.register.failed",
+  "payload": {
+    "device_id": "dev-contract",
+    "message": "signed_token_expired",
+    "reason": "signed_token_expired"
+  },
+  "producer_id": "server-main",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

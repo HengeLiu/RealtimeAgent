@@ -263,11 +263,11 @@ def test_static_token_binding_reconnect_and_cross_user_rejection() -> None:
     assert "device_bound_to_other_user" in denied.payload["reason"]
 
 
-def test_signed_token_reports_explicit_not_implemented_reason() -> None:
-    """测试目标：为 signed_token 预留接口并给出明确失败提示。
+def test_signed_token_reports_missing_secret_reason() -> None:
+    """测试目标：验证 signed_token 缺少服务端签名密钥时给出明确失败提示。
 
-    测试方法：开启 signed_token 鉴权后注册设备。
-    预期结果：注册失败原因是 `signed_token_not_implemented`，不是静默降级。
+    测试方法：开启 signed_token 鉴权但不设置密钥环境变量。
+    预期结果：注册失败原因是 `signed_token_secret_missing`，不是静默降级。
     """
 
     service = ControlService(authenticator=DeviceAuthenticator(mode="signed_token"))
@@ -282,7 +282,7 @@ def test_signed_token_reports_explicit_not_implemented_reason() -> None:
     )
 
     assert response.event_name == "control.device.register.failed"
-    assert response.payload["reason"] == "signed_token_not_implemented"
+    assert response.payload["reason"] == "signed_token_secret_missing"
 
 
 def test_heartbeat_timeout_marks_device_offline_and_records_recent_error() -> None:
