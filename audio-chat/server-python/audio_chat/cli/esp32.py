@@ -4,6 +4,7 @@ import argparse
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 
 def config(argv: list[str] | None = None) -> None:
@@ -70,6 +71,10 @@ def _run_idf_action(prog: str, action: str, argv: list[str] | None) -> None:
     parser.add_argument("--port", default="", help="串口端口，flash/monitor 时使用")
     parser.add_argument("--idf-py", default="idf.py", help="idf.py 命令路径")
     parser.add_argument("--dry-run", action="store_true", help="只输出诊断，不执行 idf.py")
+    if action == "build":
+        parser.add_argument("--build-only", action="store_true", help="兼容老 SDK 启动口径；等价于 build")
+    if action == "monitor":
+        parser.add_argument("--monitor-only", action="store_true", help="兼容老 SDK 启动口径；等价于 monitor")
     args = parser.parse_args(argv)
 
     project_dir = _resolve_audio_root_path(args.project_dir)
@@ -78,6 +83,9 @@ def _run_idf_action(prog: str, action: str, argv: list[str] | None) -> None:
             f"ESP-IDF project not found: {project_dir}. "
             "当前仓库只提供 ESP32-S3 参考协议和配置；真机 smoke 需要指定实际固件工程 --project-dir"
         )
+    manifest_check = _esp32_project_manifest_check(project_dir)
+    if not manifest_check["ok"]:
+        raise RuntimeError("ESP32-S3 project manifest check failed: " + "; ".join(manifest_check["errors"]))
     command = [args.idf_py]
     if action in {"flash", "monitor"} and args.port:
         command.extend(["-p", args.port])
@@ -88,6 +96,43 @@ def _run_idf_action(prog: str, action: str, argv: list[str] | None) -> None:
     if shutil.which(args.idf_py) is None and not Path(args.idf_py).exists():
         raise RuntimeError("idf.py not found；请先安装 ESP-IDF，或用 --idf-py 指定完整路径")
     subprocess.run(command, cwd=project_dir, check=True)
+
+
+def _esp32_project_manifest_check(project_dir: Path) -> dict[str, Any]:
+    """检查 ESP32-S3 参考工程的最小文件集合。
+
+    功能：
+    1. 给 `audio-chat.esp32.*` 命令和 package-check 复用同一套工程文件校验。
+    2. 在没有 ESP-IDF 或真机时，也能先确认参考端目录结构没有缺文件。
+
+    参数：
+    1. `project_dir`：ESP-IDF 工程目录。
+
+    返回值：
+    1. 结构化检查结果，包含 `ok`、`files` 和 `errors`。
+
+    异常情况：
+    1. 不抛出异常；调用方决定是否把错误升级为命令失败。
+    """
+
+    required = [
+        "CMakeLists.txt",
+        "main/CMakeLists.txt",
+        "main/idf_component.yml",
+        "main/audio_chat_reference_main.c",
+        "sdkconfig.defaults",
+    ]
+    files = {name: str(project_dir / name) for name in required}
+    errors = [f"missing ESP32 project file: {name}" for name in required if not (project_dir / name).exists()]
+    manifest = project_dir / "main/idf_component.yml"
+    if manifest.exists():
+        manifest_text = manifest.read_text(encoding="utf-8")
+        if "esp_websocket_client" not in manifest_text:
+            errors.append("idf_component.yml missing dependency token: esp_websocket_client")
+    main_cmake = project_dir / "main/CMakeLists.txt"
+    if main_cmake.exists() and "json" not in main_cmake.read_text(encoding="utf-8"):
+        errors.append("main/CMakeLists.txt missing component token: json")
+    return {"ok": not errors, "files": files, "errors": errors}
 
 
 def _resolve_audio_root_path(raw: str) -> Path:

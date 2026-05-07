@@ -156,6 +156,8 @@ class Esp32AecEndpointState:
     wake_word_mode: str = "endpoint"
     aec_mode: str = "endpoint"
     playback_reference: str = "endpoint_ring_buffer"
+    rgb_capture_enabled: bool = True
+    rgb_payload: bytes = b"\xff\xd8esp32-s3-reference-rgb\xff\xd9"
     mic_send_queue: deque[bytes] = field(default_factory=deque)
     aec_reference_ring: RingBuffer = field(default_factory=lambda: RingBuffer(max_bytes=DEFAULT_SAMPLE_RATE * 2 * 4))
     playback_ring: RingBuffer = field(default_factory=lambda: RingBuffer(max_bytes=DEFAULT_SAMPLE_RATE * 2 * 4))
@@ -173,6 +175,9 @@ class Esp32AecEndpointState:
     playback_started_count: int = 0
     playback_finished_count: int = 0
     playback_failed_count: int = 0
+    rgb_capture_requests: int = 0
+    rgb_frames_sent: int = 0
+    rgb_bytes_sent: int = 0
     control_events_received: int = 0
     last_error_phase: str | None = None
 
@@ -203,18 +208,21 @@ class Esp32AecEndpointState:
             "sdk_version": "audio-chat-endpoint-0.3.0",
             "auth": dict(self.auth),
             "capabilities": {
-                "streams.produce": ["sensor.mic"],
+                "streams.produce": ["sensor.mic", "sensor.rgb"],
                 "streams.consume": ["actuator.speaker"],
                 "audio.wake_word": self.wake_word_mode,
                 "audio.aec": self.aec_mode,
                 "audio.playback_reference": self.playback_reference,
                 "audio.input": stream_format.__dict__,
                 "audio.output": stream_format.__dict__,
+                "sensor.rgb": self.rgb_capture_enabled,
+                "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
             },
             "subscriptions": [
                 {"event": "control.audio_session.*"},
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}},
+                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
             ],
         }
 
@@ -314,6 +322,40 @@ class Esp32AecEndpointState:
         self.playback_failed_count += 1
         self.last_error_phase = phase
 
+    def on_rgb_configure_requested(self, payload: dict[str, Any] | None = None) -> bytes | None:
+        """处理 server 下发的 `sensor.rgb` 抓拍或配置请求。
+
+        功能：
+        1. 记录 RGB 请求次数，方便真机 smoke 对照串口日志。
+        2. 在 Python 参考端中返回一帧 JPEG；真实固件应在这里触发摄像头抓拍。
+        3. 摄像头不可用时返回 `None` 并写入诊断阶段。
+
+        主要逻辑：
+        1. `mode=stop` 只记录配置事件，不上传新帧。
+        2. 非 stop 请求返回 `rgb_payload`，大字节后续必须走 stream。
+
+        参数：
+        1. `payload`：`stream.control.configure.requested` 的 payload。
+
+        返回值：
+        1. JPEG bytes；`None` 表示失败；空 bytes 表示 stop 不上传。
+
+        异常情况：
+        1. 不抛出异常；失败原因写入 `last_error_phase`。
+        """
+
+        self.control_events_received += 1
+        self.rgb_capture_requests += 1
+        if not self.rgb_capture_enabled:
+            self.last_error_phase = "sensor_rgb_unavailable"
+            return None
+        if str((payload or {}).get("mode") or "single") == "stop":
+            return b""
+        frame = bytes(self.rgb_payload)
+        self.rgb_frames_sent += 1
+        self.rgb_bytes_sent += len(frame)
+        return frame
+
     def diagnostics(self) -> dict[str, Any]:
         """输出真机联调和 contract test 共用的诊断摘要。"""
 
@@ -335,6 +377,9 @@ class Esp32AecEndpointState:
             "playback_started_count": self.playback_started_count,
             "playback_finished_count": self.playback_finished_count,
             "playback_failed_count": self.playback_failed_count,
+            "rgb_capture_requests": self.rgb_capture_requests,
+            "rgb_frames_sent": self.rgb_frames_sent,
+            "rgb_bytes_sent": self.rgb_bytes_sent,
             "close_reason": self.close_reason,
             "last_error_phase": self.last_error_phase,
             "audio_format": self.stream_format().__dict__,
@@ -461,6 +506,8 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                     ),
                 )
                 self._session_closed.set()
+            elif event.event_name == "stream.control.configure.requested" and event.stream_type == "sensor.rgb":
+                await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
         async for message in stream_ws:
@@ -544,6 +591,98 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                 payload={"stream_type": "sensor.mic", "reason": "esp32_input_done"},
             ),
         )
+
+    async def _open_and_send_rgb_asset(self, control_ws, stream_ws, event: Event) -> None:
+        """按 `sensor.rgb` 控制事件上传一帧 JPEG 资产。
+
+        功能：
+        1. 模拟 ESP32-S3 收到抓拍或采样配置后的端侧行为。
+        2. 使用 `/ws/stream` 上传图片字节，避免在控制事件 payload 中塞媒体大字节。
+
+        参数：
+        1. `control_ws`：控制 WebSocket。
+        2. `stream_ws`：stream WebSocket。
+        3. `event`：server 下发的 `stream.control.configure.requested`。
+
+        返回值：
+        1. 无。
+
+        异常情况：
+        1. WebSocket 写入失败时由 aiohttp 向上传递。
+        """
+
+        frame = self.state.on_rgb_configure_requested(dict(event.payload))
+        if frame is None:
+            await self._send_event(
+                control_ws,
+                Event(
+                    event_name="stream.input.failed",
+                    user_id=self.user_id,
+                    producer_id=self.device_id,
+                    session_id=event.session_id,
+                    stream_type="sensor.rgb",
+                    payload={"stream_type": "sensor.rgb", "reason": self.state.last_error_phase},
+                ),
+            )
+            return
+        if frame == b"":
+            return
+        request_id = str(event.payload.get("request_id") or "")
+        correlation_id = str(event.payload.get("correlation_id") or "")
+        stream_id = new_id("stream_rgb")
+        session_id = event.session_id or self._session_id or new_id("sess")
+        metadata: dict[str, Any] = {}
+        if request_id:
+            metadata["request_id"] = request_id
+        if correlation_id:
+            metadata["correlation_id"] = correlation_id
+        await self._send_event(
+            control_ws,
+            Event(
+                event_name="stream.input.opened",
+                user_id=self.user_id,
+                producer_id=self.device_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                stream_type="sensor.rgb",
+                payload={
+                    "stream_type": "sensor.rgb",
+                    "format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
+                },
+            ),
+        )
+        await stream_ws.send_bytes(
+            StreamChunkCodec.encode(
+                StreamChunk(
+                    user_id=self.user_id,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    stream_type="sensor.rgb",
+                    seq=0,
+                    payload=frame,
+                    codec="jpeg",
+                    sample_rate=1,
+                    channels=1,
+                    duration_ms=1,
+                    final=True,
+                    metadata=metadata,
+                )
+            )
+        )
+        await asyncio.sleep(0.05)
+        await self._send_event(
+            control_ws,
+            Event(
+                event_name="stream.input.closed",
+                user_id=self.user_id,
+                producer_id=self.device_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                stream_type="sensor.rgb",
+                payload={"stream_type": "sensor.rgb", "reason": "esp32_rgb_uploaded"},
+            ),
+        )
+        self.asset_uploads.append({"stream_id": stream_id, "request_id": request_id, "payload_size": len(frame)})
 
     async def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
         """执行一次 ESP32-S3 网络协议 smoke。"""

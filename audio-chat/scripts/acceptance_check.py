@@ -414,6 +414,27 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "old-sdk-parity-esp32": (
+        CheckCommand(
+            "old_sdk_parity_esp32_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_esp32_s3_endpoint_contract.py",
+                "tests/test_esp32_package_manifest.py",
+                "tests/test_endpoint_config_sync.py",
+                "tests/acceptance/test_esp32_s3_old_sdk_parity_contract.py",
+                "-q",
+            ),
+        ),
+        CheckCommand(
+            "old_sdk_parity_esp32_build_dry_run",
+            ("uv", "run", "audio-chat.esp32.build", "--dry-run", "--build-only"),
+        ),
+    ),
     "old-sdk-parity-docs": (
         CheckCommand(
             "old_sdk_parity_docs_tests",

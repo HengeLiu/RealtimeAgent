@@ -151,9 +151,9 @@ def sync(argv: list[str] | None = None) -> None:
                 "AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000",
                 "AUDIO_CHAT_AUDIO_CHANNELS=1",
                 "AUDIO_CHAT_AUDIO_CHUNK_MS=20",
-                'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic"]',
+                'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]',
                 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]',
-                'AUDIO_CHAT_SUBSCRIPTIONS=[{"event":"control.audio_session.*"},{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.output.cancel.*","filter":{"stream_type":"actuator.speaker"}}]',
+                'AUDIO_CHAT_SUBSCRIPTIONS=[{"event":"control.audio_session.*"},{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.output.cancel.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}]',
                 "",
             ]
         ),

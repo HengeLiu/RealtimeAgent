@@ -69,8 +69,9 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
     assert "AUDIO_CHAT_AUTH_MODE=static_token" in esp32
     assert "AUDIO_CHAT_AUTH_TOKEN=token-sync" in esp32
     assert "AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000" in esp32
-    assert 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic"]' in esp32
+    assert 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]' in esp32
     assert 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]' in esp32
+    assert '"stream_type":"sensor.rgb"' in esp32
     esp32_config = Esp32S3EndpointConfig.from_env_file(report["files"]["esp32_s3"])
     assert esp32_config.server_url == "http://10.0.0.2:8765"
     assert esp32_config.user_id == "user-sync"

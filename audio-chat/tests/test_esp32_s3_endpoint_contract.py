@@ -21,8 +21,8 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
 
     测试方法：构造 `Esp32AecEndpointState`，把 registration payload 放入正式 Event
     校验流程。
-    预期结果：capability 只表达 `sensor.mic` 和 `actuator.speaker`，订阅使用
-    event/filter，不出现固定 glass/phone 类型或 target_device 字段。
+    预期结果：capability 表达 `sensor.mic`、`sensor.rgb` 和 `actuator.speaker`，
+    订阅使用 event/filter，不出现固定 glass/phone 类型或 target_device 字段。
     """
 
     state = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32")
@@ -35,12 +35,14 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     )
 
     assert event.to_dict()["payload"]["client_type"] == "esp32-s3"
-    assert payload["capabilities"]["streams.produce"] == ["sensor.mic"]
+    assert payload["capabilities"]["streams.produce"] == ["sensor.mic", "sensor.rgb"]
     assert payload["capabilities"]["streams.consume"] == ["actuator.speaker"]
     assert payload["capabilities"]["audio.aec"] == "endpoint"
     assert payload["capabilities"]["audio.playback_reference"] == "endpoint_ring_buffer"
+    assert payload["capabilities"]["sensor.rgb"] is True
     assert {"event": "control.audio_session.*"} in payload["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["subscriptions"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["subscriptions"]
     assert "target_device" not in str(payload)
     assert "phone" not in payload["client_type"]
     assert "glass" not in payload["client_type"]
@@ -81,6 +83,28 @@ def test_esp32_s3_state_opens_mic_only_after_wake_and_session_request() -> None:
     assert state.audio_session_open is False
     assert not state.mic_send_queue
     assert state.diagnostics()["close_reason"] == "server_closed"
+
+
+def test_esp32_s3_state_handles_rgb_capture_as_stream_asset() -> None:
+    """测试目标：验证 ESP32-S3 参考端响应 `sensor.rgb` 配置请求。
+
+    测试方法：直接推进端侧状态机中的 RGB 配置处理。
+    预期结果：端侧只返回 JPEG bytes 供 stream 发送，并把请求次数、帧数和字节数写入
+    诊断摘要；禁用摄像头时返回失败诊断而不是假成功。
+    """
+
+    state = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32")
+
+    frame = state.on_rgb_configure_requested({"mode": "single", "request_id": "req-rgb"})
+    diagnostics = state.diagnostics()
+    assert frame and frame.startswith(b"\xff\xd8")
+    assert diagnostics["rgb_capture_requests"] == 1
+    assert diagnostics["rgb_frames_sent"] == 1
+    assert diagnostics["rgb_bytes_sent"] == len(frame)
+
+    state.rgb_capture_enabled = False
+    assert state.on_rgb_configure_requested({"mode": "single"}) is None
+    assert state.diagnostics()["last_error_phase"] == "sensor_rgb_unavailable"
 
 
 def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
@@ -165,5 +189,6 @@ def test_network_esp32_s3_endpoint_completes_protocol_smoke(tmp_path: Path) -> N
         assert snapshot is not None
         assert snapshot["client_type"] == "esp32-s3"
         assert snapshot["capabilities"]["audio.aec"] == "endpoint"
+        assert snapshot["capabilities"]["sensor.rgb"] is True
 
     asyncio.run(run())

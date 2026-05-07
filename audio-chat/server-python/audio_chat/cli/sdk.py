@@ -50,6 +50,8 @@ def package_check(argv: list[str] | None = None) -> None:
         if hasattr(package, name)
     ]
     errors.extend(f"endpoint reference leaked from audio_chat: {name}" for name in endpoint_leaks)
+    esp32_check = _esp32_reference_check(audio_root)
+    errors.extend(esp32_check["errors"])
 
     wheel_check = _wheel_build_check(audio_root) if not args.skip_wheel_build else _skipped("wheel_build", "disabled by --skip-wheel-build")
     editable_check = (
@@ -68,6 +70,7 @@ def package_check(argv: list[str] | None = None) -> None:
             "entry_points": {"ok": not [error for error in errors if error.startswith("entry point")], "script_count": len(scripts)},
             "public_api": {"ok": not missing, "missing": missing},
             "boundary": {"ok": not endpoint_leaks, "endpoint_leaks": endpoint_leaks},
+            "esp32_reference": esp32_check,
             "wheel_build": wheel_check,
             "editable_install": editable_check,
         },
@@ -158,6 +161,30 @@ def _editable_install_check(audio_root: Path, public_names: list[str]) -> dict:
         "ok": not errors,
         "stdout_tail": completed.stdout.splitlines()[-20:],
         "stderr_tail": completed.stderr.splitlines()[-20:],
+        "errors": errors,
+    }
+
+
+def _esp32_reference_check(audio_root: Path) -> dict:
+    """检查 ESP32-S3 参考端随包输入。
+
+    主要逻辑：package-check 不要求本机安装 ESP-IDF，也不假装真机构建成功；它只检查
+    参考目录、README、本地 env 模板和 ESP-IDF 工程骨架是否齐全。
+    """
+
+    from audio_chat.cli.esp32 import _esp32_project_manifest_check
+
+    endpoint_root = audio_root / "endpoints" / "esp32-s3"
+    errors = []
+    for relative in ("README.md", "local.env.example"):
+        if not (endpoint_root / relative).exists():
+            errors.append(f"missing ESP32 endpoint file: {relative}")
+    firmware_check = _esp32_project_manifest_check(endpoint_root / "firmware")
+    errors.extend(firmware_check["errors"])
+    return {
+        "ok": not errors,
+        "endpoint_root": str(endpoint_root),
+        "firmware": firmware_check,
         "errors": errors,
     }
 

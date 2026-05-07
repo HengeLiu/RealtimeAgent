@@ -17,6 +17,8 @@
 6. 下行 `actuator.speaker` stream 播放开始后上报 `stream.output.started`；播放完成后
    上报 `stream.output.finished` 和 `stream.output.closed`；用户打断时上报
    `control.user.interrupt.detected` 和对应 output cancel 回执。
+7. 收到 `sensor.rgb` 的 `stream.control.configure.requested` 后，打开输入 stream
+   上传 JPEG bytes；控制事件只保存 request_id、correlation_id、采样模式等语义字段。
 
 最小注册能力：
 
@@ -24,16 +26,18 @@
 {
   "client_type": "esp32-s3",
   "capabilities": {
-    "streams.produce": ["sensor.mic"],
+    "streams.produce": ["sensor.mic", "sensor.rgb"],
     "streams.consume": ["actuator.speaker"],
     "audio.wake_word": "endpoint",
     "audio.aec": "endpoint",
-    "audio.playback_reference": "endpoint_ring_buffer"
+    "audio.playback_reference": "endpoint_ring_buffer",
+    "sensor.rgb": true
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}}
+    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}},
+    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
   ]
 }
 ```
@@ -54,6 +58,29 @@ device_id、auth、音频格式、wake/AEC 模式、stream capability 和订阅�
 
 ```bash
 uv run python -m pytest tests/test_esp32_s3_endpoint_contract.py tests/test_endpoint_config_sync.py -q
+uv run python scripts/acceptance_check.py old-sdk-parity-esp32 \
+  --report runs/acceptance/old-sdk-parity-esp32.json
 ```
 
 已有实验桥接说明见 [esp32-s3-endpoint-bridge.md](../../docs/esp32-s3-endpoint-bridge.md)。
+
+## 参考固件工程
+
+`firmware/` 目录提供最小 ESP-IDF 工程骨架，用于 package-check、dry-run build 和真机工程
+迁移入口检查。它不是完整产品固件；真实硬件代码需要在该骨架上补齐 WiFi、WebSocket、
+I2S、AEC、摄像头和串口诊断。
+
+无 ESP-IDF 或无硬件时可以先做无副作用检查：
+
+```bash
+uv run audio-chat.esp32.build --dry-run --build-only
+uv run audio-chat.esp32.monitor --dry-run --monitor-only --port /dev/tty.usbmodemXXXX
+```
+
+有 ESP-IDF 与真机时再执行：
+
+```bash
+uv run audio-chat.esp32.build
+uv run audio-chat.esp32.flash --port /dev/tty.usbmodemXXXX
+uv run audio-chat.esp32.monitor --port /dev/tty.usbmodemXXXX
+```

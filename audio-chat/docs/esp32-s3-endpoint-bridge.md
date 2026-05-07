@@ -8,9 +8,10 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 
 2026-05-07 更新：本轮已补齐 `audio_chat.endpoints.esp32_aec` 中的 ESP32-S3
 协议参考状态机、网络参考端和自动契约测试。它能覆盖注册 payload、wake 后才打开
-`sensor.mic`、speaker output 回执、AEC reference ring 诊断和 config sync 字段。物理
-ESP32-S3 固件仍未在本机连接，因此本文不能把真机能力描述为完成；真机 smoke 需要继续
-保留串口日志和 server runs 产物。
+`sensor.mic`、speaker output 回执、AEC reference ring 诊断、`sensor.rgb` stream 抓拍
+语义和 config sync 字段。`endpoints/esp32-s3/firmware` 也提供最小 ESP-IDF 工程骨架，
+用于 package-check 和 dry-run build。物理 ESP32-S3 固件仍未在本机连接，因此本文不能把
+真机能力描述为完成；真机 smoke 需要继续保留串口日志和 server runs 产物。
 
 可复用的旧试验代码：
 
@@ -54,14 +55,16 @@ ESP32-S3 端最小 bridge 固件需要声明：
   "capabilities": {
     "audio.aec": "endpoint",
     "audio.playback_reference": "endpoint_ring_buffer",
-    "streams.produce": ["sensor.mic"],
+    "streams.produce": ["sensor.mic", "sensor.rgb"],
     "streams.consume": ["actuator.speaker"],
-    "audio.wake_word": "endpoint"
+    "audio.wake_word": "endpoint",
+    "sensor.rgb": true
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}}
+    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}},
+    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
   ]
 }
 ```
@@ -118,6 +121,8 @@ ESP32 端不应在启动后保持 24 小时 `sensor.mic` 常驻上传。最小�
 5. 端侧播放失败时上报 `stream.output.failed`，不要静默丢 chunk。
 6. 用户打断只取消当前 output stream；除非 server 或用户明确关闭对话，不默认关闭整个
    audio session。
+7. `sensor.rgb` 抓拍或连续配置请求必须通过 `stream.control.configure.requested` 接收，
+   并通过 `/ws/stream` 上传 JPEG；不得把图片 bytes 放进控制事件 payload。
 
 ## AEC Reference 观察点
 
@@ -156,9 +161,9 @@ aec_output_bytes=<n>
 
 ```bash
 uv run python -m pytest tests/test_esp32_s3_endpoint_contract.py tests/test_endpoint_config_sync.py -q
-uv run python scripts/acceptance_check.py esp32-s3-endpoint \
-  --report runs/acceptance/esp32-s3-endpoint.json
+uv run python scripts/acceptance_check.py old-sdk-parity-esp32 \
+  --report runs/acceptance/old-sdk-parity-esp32.json
 ```
 
-该验收只证明协议、配置和参考状态机正确，不替代真机 Wi-Fi、I2S、AEC、功放和串口日志
-检查。
+该验收只证明协议、配置、参考状态机和 ESP-IDF 工程骨架正确，不替代真机 Wi-Fi、I2S、
+AEC、摄像头、功放和串口日志检查。
