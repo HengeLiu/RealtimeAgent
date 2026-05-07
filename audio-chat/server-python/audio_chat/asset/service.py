@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,21 @@ class AssetRef:
     metadata: dict
     created_at: float = field(default_factory=time.time)
     expires_at: float | None = None
+
+
+@dataclass(frozen=True)
+class ArtifactRef:
+    """运行产物引用。
+
+    主要功能：让 Tool / Task / 观测产物用稳定对象引用文件、模型请求、任务输出等
+    server 侧 artifact，而不是传递本地临时路径语义。
+    主要属性：`artifact_id` 为标识，`kind` 为产物类型，`uri` 为存储位置。
+    """
+
+    artifact_id: str
+    kind: str
+    uri: str
+    metadata: dict = field(default_factory=dict)
 
 
 class AssetStore:
@@ -72,7 +88,7 @@ class AssetStore:
             metadata={
                 "seq": chunk.seq,
                 "payload_size": len(chunk.payload),
-                **({"request_id": chunk.metadata["request_id"]} if "request_id" in chunk.metadata else {}),
+                **dict(chunk.metadata),
             },
             expires_at=time.time() + ttl_seconds if ttl_seconds else None,
         )
@@ -107,13 +123,42 @@ class AssetStore:
         ]
         return refs[-limit:]
 
+    def query(
+        self,
+        *,
+        user_id: str,
+        stream_type: str,
+        freshness_seconds: float | None = None,
+        correlation_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AssetRef]:
+        """查询资产窗口，并按新鲜度和 correlation_id 过滤。
+
+        主要逻辑：用于 Tool / Task 查询或 watch 连续 sensor 资产。
+        参数：`user_id`、`stream_type` 定位资产，`freshness_seconds` 限制最大年龄，
+        `correlation_id` 限制任务关联 ID，`limit` 限制返回数量。
+        返回值：匹配的 `AssetRef` 列表。
+        异常情况：无。
+        """
+        now = time.time()
+        refs = []
+        for asset in self._assets:
+            if asset.user_id != user_id or asset.stream_type != stream_type or self._expired(asset):
+                continue
+            if freshness_seconds is not None and now - asset.created_at > freshness_seconds:
+                continue
+            if correlation_id is not None and asset.metadata.get("correlation_id") != correlation_id:
+                continue
+            refs.append(asset)
+        return refs[-limit:]
+
     @staticmethod
     def _expired(asset: AssetRef) -> bool:
         return asset.expires_at is not None and asset.expires_at < time.time()
 
 
-class PendingAssetRequest:
-    """等待端侧回传的资产请求。
+class _PendingAssetCapture:
+    """等待端侧回传的内部资产捕获状态。
 
     主要功能：用 request_id 把控制请求和后续 asset stream chunk 精确关联起来。
     主要属性：`event` 用于阻塞等待，`asset` 保存匹配 request_id 的返回资产。
@@ -132,7 +177,8 @@ class AssetService:
 
     主要功能：管理 sensor.rgb 等非主音频流资产，提供缓存命中、端侧上传请求、
     request_id 关联、超时等待和 TTL 过滤。
-    主要方法：`get_or_request_asset()` 请求资产，`store_chunk()` 接收端侧上传，
+    主要方法：`request_asset()` 请求资产，`watch_assets()` 监听连续资产，
+    `store_chunk()` 接收端侧上传，
     `get_asset_window()` 查询连续 stream 的最小缓存窗口。
     """
 
@@ -152,7 +198,7 @@ class AssetService:
         self.store = AssetStore(root or recorder.runs_root / "assets")
         self.request_timeout_seconds = request_timeout_seconds
         self.default_ttl_seconds = default_ttl_seconds
-        self._pending: dict[str, PendingAssetRequest] = {}
+        self._pending: dict[str, _PendingAssetCapture] = {}
         self._lock = Lock()
 
     def store_chunk(self, chunk: StreamChunk) -> AssetRef:
@@ -192,44 +238,105 @@ class AssetService:
         )
         return ref
 
-    def get_or_request_asset(
+    def request_asset(
         self,
         *,
         user_id: str,
         stream_type: str,
+        freshness_seconds: float,
+        configure_payload: dict | None = None,
         session_id: str | None = None,
         timeout_seconds: float | None = None,
     ) -> AssetRef | None:
-        """获取缓存资产，或请求端侧上传单帧资产。
+        """协议原生单资产请求。
 
-        主要逻辑：先查未过期缓存；缓存未命中时生成 request_id，发布
-        `stream.control.configure.requested`，等待带同一 request_id 的 stream chunk。
-        参数：`user_id` 为用户标识，`stream_type` 为资产 stream，`session_id` 为可选会话，
-        `timeout_seconds` 为本次等待超时。
-        返回值：命中或回传成功时返回 `AssetRef`，超时返回 `None`。
+        主要逻辑：先按 freshness 查询缓存；未命中时沿用
+        `stream.control.configure.requested` 请求端侧上传，不引入第二套 Request 对象。
+        参数：`user_id`、`stream_type` 定位资产，`freshness_seconds` 为缓存最大年龄，
+        `configure_payload` 为端侧配置，`session_id` 为可选会话，`timeout_seconds` 为等待超时。
+        返回值：`AssetRef` 或 `None`。
         异常情况：发布控制事件或文件写入失败时向上抛出。
         """
-        cached = self.store.latest(user_id=user_id, stream_type=stream_type)
-        if cached is not None:
-            return cached
+        cached = self.store.query(user_id=user_id, stream_type=stream_type, freshness_seconds=freshness_seconds, limit=1)
+        if cached:
+            return cached[-1]
         request_id = new_id("asset_req")
-        pending = PendingAssetRequest(user_id=user_id, stream_type=stream_type, request_id=request_id)
+        pending = _PendingAssetCapture(user_id=user_id, stream_type=stream_type, request_id=request_id)
         with self._lock:
             self._pending[request_id] = pending
-        self.control_service.publish(
+        payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(configure_payload or {})}
+        payload["request_id"] = request_id
+        self.control_service.publish_matching(
             Event(
                 event_name="stream.control.configure.requested",
                 user_id=user_id,
                 producer_id=SERVER_PRODUCER_ID,
                 session_id=session_id,
                 stream_type=stream_type,
-                payload={"stream_type": stream_type, "mode": "single", "max_samples": 1, "request_id": request_id},
-            )
+                payload=payload,
+            ),
+            require_capability=stream_type,
+            selection="first_available",
         )
         pending.event.wait(timeout=timeout_seconds or self.request_timeout_seconds)
         with self._lock:
             self._pending.pop(request_id, None)
         return pending.asset
+
+    def query_assets(
+        self,
+        *,
+        user_id: str,
+        stream_type: str,
+        freshness_seconds: float | None = None,
+    ) -> list[AssetRef]:
+        """查询协议原生资产窗口。
+
+        主要逻辑：按用户、stream_type 和 freshness 读取缓存。
+        参数：`user_id` 为用户，`stream_type` 为资产 stream，`freshness_seconds` 为最大年龄。
+        返回值：`AssetRef` 列表。
+        异常情况：无。
+        """
+        return self.store.query(user_id=user_id, stream_type=stream_type, freshness_seconds=freshness_seconds)
+
+    async def watch_assets(
+        self,
+        *,
+        user_id: str,
+        stream_type: str,
+        correlation_id: str | None = None,
+        timeout_seconds: float | None = None,
+    ):
+        """异步监听连续资产。
+
+        主要逻辑：先返回已有匹配资产，再短轮询等待新资产；按 `stream_type` 和
+        `correlation_id` 过滤，适合持续 sensor.rgb / sensor.imu Task。
+        参数：`user_id`、`stream_type` 定位资产，`correlation_id` 为可选任务关联 ID，
+        `timeout_seconds` 为无新资产时退出时间。
+        返回值：异步生成器，逐个 yield `AssetRef`。
+        异常情况：无。
+        """
+        seen: set[str] = set()
+        deadline = time.time() + timeout_seconds if timeout_seconds is not None else None
+        while True:
+            refs = self.store.query(
+                user_id=user_id,
+                stream_type=stream_type,
+                correlation_id=correlation_id,
+            )
+            emitted = False
+            for ref in refs:
+                if ref.asset_id in seen:
+                    continue
+                seen.add(ref.asset_id)
+                emitted = True
+                yield ref
+            if deadline is not None and time.time() >= deadline:
+                break
+            if emitted and timeout_seconds is None:
+                await asyncio.sleep(0)
+            else:
+                await asyncio.sleep(0.02)
 
     def get_asset_window(self, *, user_id: str, stream_type: str, limit: int = 10) -> list[AssetRef]:
         """返回连续资产 stream 的最小缓存窗口。
@@ -252,5 +359,5 @@ class AssetService:
         """
         try:
             return self.stream_service.registry.get(stream_id).producer_id
-        except KeyError:
+        except (KeyError, ValueError):
             return stream_id

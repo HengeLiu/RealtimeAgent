@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from audio_chat.observability import RunRecorder
-from audio_chat.output import OutputIntent, OutputService
+from audio_chat.output import OutputService
+from audio_chat.output.service import OutputItem
 from audio_chat.protocol import StreamChunk, StreamFormat
 
 
@@ -267,7 +268,7 @@ class RealtimeOutputAdapter:
     ) -> None:
         """下发一片 provider 原生音频。
 
-        主要逻辑：构造高优先级 OutputIntent，交给 Output Service 打开或复用
+        主要逻辑：构造内部输出意图，交给 Output Service 打开或复用
         actuator.speaker stream。
         参数：`audio` 为 PCM payload，`format` 为 provider 输出格式。
         返回值：无。
@@ -279,7 +280,7 @@ class RealtimeOutputAdapter:
             audio=audio,
             format=format,
             final=False,
-            intent=OutputIntent(user_id=user_id, session_id=session_id, source="realtime_audio", priority="normal"),
+            intent=OutputItem(user_id=user_id, session_id=session_id, source="realtime_audio", priority="normal"),
             metadata=metadata,
         )
 
@@ -297,7 +298,7 @@ class RealtimeOutputAdapter:
             audio=b"",
             format=StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20),
             final=True,
-            intent=OutputIntent(user_id=user_id, session_id=session_id, source="realtime_audio", priority="normal"),
+            intent=OutputItem(user_id=user_id, session_id=session_id, source="realtime_audio", priority="normal"),
             metadata=metadata,
         )
 

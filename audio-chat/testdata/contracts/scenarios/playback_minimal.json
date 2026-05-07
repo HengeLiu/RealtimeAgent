@@ -1,0 +1,13 @@
+{
+  "name": "playback-minimal",
+  "required_events": [
+    "control.device.registered",
+    "control.user.wake.detected",
+    "stream.output.open.requested",
+    "stream.output.close.requested"
+  ],
+  "required_streams": [
+    "sensor.mic",
+    "actuator.speaker"
+  ]
+}

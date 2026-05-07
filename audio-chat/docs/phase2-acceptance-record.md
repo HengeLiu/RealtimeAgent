@@ -12,8 +12,8 @@
 2. TextAgentCore 内部 `TextModelAdapter`：支持 `mock`、`openai-compatible`、`dashscope-compatible` 流式 text delta。
 3. Output Service 内部 Streaming TTS：`DashScopeStreamingTTS` 使用 `dashscope.audio.tts_v2.SpeechSynthesizer`，`assistant_text.delta` 实时进入 TTS，生成 `assistant_audio.delta`。
 4. 完整 YAML 配置加载：新增 `audio-chat/examples/minimal/server.yaml` 和 `playback.yaml`，覆盖文档第 15 章的主要配置段，并支持环境变量覆盖。
-5. `UserDeviceContext` / `DeviceHandle` 补强：`DeviceHandle.configure_stream()`、`open_stream()`、`start_task()` 和 `EndpointTaskRef.stop()` 已落地；`UserDeviceContext.submit_output()` 由 Context 内部通过 app 门面提交。
-6. Asset Service 补强：`get_or_request_asset()` 支持 pending request、timeout、等待端侧上传、TTL、producer device_id 记录和最小 window 缓存。
+5. `UserDeviceContext` 协议原生 API：Tool / Task 通过 `publish_event()`、`request_asset()`、`watch_assets()`、`submit_text()`、`submit_audio()` 和 `open_output_stream()` 表达业务意图，不面向设备实例编程。
+6. Asset Service 补强：`request_asset()` 支持 pending request、timeout、等待端侧上传、TTL、producer device_id 记录和最小 window 缓存；`watch_assets()` 支持按 `stream_type + correlation_id` 连续读取资产。
 7. Playback Arbiter 补强：覆盖 queue TTL、同优先级不抢占、interrupt、drop/requeue，以及 queued intent 继续播放路径。
 8. 用户打断：`control.user.interrupt.detected` 会 cancel TextAgentCore 当前响应、取消当前 output stream，并写入 Playback Arbiter 决策。
 9. 播放回执：playback endpoint 上报 `stream.output.started`、`stream.output.finished`、`stream.output.closed`。
@@ -23,7 +23,7 @@ Phase 2.5 新增完成项：
 
 1. Output Service 音频格式协商：`DashScopeStreamingTTS` 和 `MockStreamingTTS` 都暴露 `sample_rate_hz` metrics；Output Router 按 TTS provider 实际输出格式打开 `actuator.speaker` stream，`StreamFormat`、`assistant_audio.delta` chunk 和 metrics 保持一致。DashScope provider 在目标采样率不被 SDK 直接支持时会把 PCM 重采样到配置采样率。
 2. TTS 生命周期收紧：Output Router 按 output stream 创建 TTS session，`final` 只关闭当前 stream 绑定的 TTS，不影响其他用户或后续排队输出。
-3. DeviceHandle 语义收紧：`DeviceHandle.configure_stream()`、`open_stream()`、`start_task()`、`EndpointTaskRef.stop()` 都作用于 `UserDeviceContext.find_device(...)` 选中的设备；内部按已解析连接定向投递，不在业务事件格式里暴露 `target_device_id`。
+3. Tool / Task 设备通讯语义收紧：旧 `DeviceHandle.configure_stream()`、`open_stream()`、`start_task()`、`EndpointTaskRef.stop()` 不再作为业务 API 暴露；`publish_event()` 按 user、订阅、能力和 selection 做协议分发，不在业务事件格式里暴露 `target_device_id`。
 4. Asset Service request_id 关联：pending request 生成 request_id 并写入 `stream.control.configure.requested` payload；端侧通过 asset stream 回传时带回 request_id，Asset Service 只完成匹配请求，并使用锁保护 pending 表。
 5. Asset TTL 和并发隔离：过期资产不会被缓存命中；两个并发 `sensor.rgb` 请求不会因为上传顺序不同而串包。
 6. 稳定 provider 样本：新增脱敏/合成 16 kHz PCM 样本 `audio-chat/testdata/provider/dashscope-nihao-16k.pcm` 和期望文本 `dashscope-nihao-expected.txt`，真实 DashScope ASR integration 会断言 transcript 包含期望片段。
@@ -169,7 +169,7 @@ Phase 2.5 格式协商检查：
 
 结果：
 
-1. Tool 通过 `UserDeviceContext.get_or_request_asset(...)` 请求 `sensor.rgb`。
+1. Tool 通过 `UserDeviceContext.request_asset(...)` 请求 `sensor.rgb`。
 2. Asset Service 缓存未命中后创建 pending request，并发布 `stream.control.configure.requested`。
 3. playback endpoint 通过 `sensor.rgb` stream 上传 JPEG mock 样本。
 4. Asset Service 等待端侧回传后返回 `AssetRef`。

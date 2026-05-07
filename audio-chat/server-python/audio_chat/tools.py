@@ -1,19 +1,252 @@
 from __future__ import annotations
 
+import importlib
+import inspect
 from dataclasses import dataclass
+from typing import Any, AsyncIterator
 
-from audio_chat.asset import AssetRef
-from audio_chat.output import OutputIntent
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamFormat, new_id
+from audio_chat.asset import ArtifactRef, AssetRef
+from audio_chat.control import PublishResult
+from audio_chat.errors import AudioChatError, ErrorCode
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """Tool 执行结果。
+
+    主要功能：作为 ToolGateway 返回给 Agent Core 的稳定结构，避免直接暴露任意异常或
+    内部对象。
+    主要属性：`content` 为模型可读结果，`artifacts` 为可引用产物，`error` 为结构化错误。
+    """
+
+    content: Any = None
+    artifacts: list[ArtifactRef] | None = None
+    error: dict | None = None
+    metadata: dict | None = None
+
+    @classmethod
+    def ok(cls, content: Any = None, *, artifacts: list[ArtifactRef] | None = None, metadata: dict | None = None) -> "ToolResult":
+        """创建成功结果。
+
+        主要逻辑：把可选产物和元数据归一成 `ToolResult`。
+        参数：`content` 为模型可读内容。
+        返回值：`ToolResult`。
+        异常情况：无。
+        """
+        return cls(content=content, artifacts=artifacts or [], metadata=metadata or {})
+
+    @classmethod
+    def failed(cls, error: AudioChatError) -> "ToolResult":
+        """创建失败结果。
+
+        主要逻辑：把 SDK 异常转成稳定错误字典。
+        参数：`error` 为 `AudioChatError`。
+        返回值：`ToolResult`。
+        异常情况：无。
+        """
+        return cls(error=error.to_dict(), artifacts=[], metadata={})
+
+
+class ToolError(AudioChatError):
+    """Tool 执行异常。
+
+    主要功能：让业务 Tool 用稳定错误码表达参数错误、能力缺失或外部依赖失败。
+    """
+
+
+@dataclass
+class ToolContext:
+    """Tool 执行上下文。
+
+    主要功能：由 SDK 注入用户、会话、设备上下文和 Task Engine；Tool 不自行构造。
+    主要属性：`devices` 是 `UserDeviceContext`，`tasks` 为可选 Task Engine。
+    """
+
+    user_id: str
+    session_id: str
+    devices: "UserDeviceContext"
+    tasks: Any = None
+    metadata: dict = None
+
+    def __post_init__(self) -> None:
+        if self.metadata is None:
+            self.metadata = {}
+
+
+class BaseTool:
+    """业务 Tool 基类。
+
+    主要功能：定义稳定 Tool 扩展面，自动发现只注册继承该类的具体子类。
+    主要方法：`run()` 由 ToolExecutor 调用，子类必须覆盖。
+    """
+
+    name: str = ""
+    description: str = ""
+    input_model: Any = dict
+    timeout_seconds: float | None = None
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行 Tool。
+
+        主要逻辑：基类只声明接口，具体业务 Tool 覆盖实现。
+        参数：`context` 为 SDK 注入上下文，`input_data` 为模型参数。
+        返回值：`ToolResult`。
+        异常情况：未覆盖时抛出 `ToolError`。
+        """
+        raise ToolError(f"tool {self.__class__.__name__} does not implement run()", code=ErrorCode.PROTOCOL_ERROR)
+
+
+class ToolRegistry:
+    """Tool 注册表。
+
+    主要功能：保存工具名到 Tool 实例的映射，供 ToolGateway 发现和执行。
+    主要方法：`register()`、`get()`、`list_tools()`。
+    """
+
+    def __init__(self) -> None:
+        self._tools: dict[str, BaseTool] = {}
+
+    def register(self, tool: BaseTool) -> None:
+        """注册 Tool 实例。
+
+        主要逻辑：使用 tool.name 或类名作为稳定名称。
+        参数：`tool` 为 BaseTool 子类实例。
+        返回值：无。
+        异常情况：名称为空时抛出 `ToolError`。
+        """
+        name = tool.name or tool.__class__.__name__
+        if not name:
+            raise ToolError("tool name is required", code=ErrorCode.INVALID_ARGUMENT)
+        self._tools[name] = tool
+
+    def get(self, name: str) -> BaseTool:
+        if name not in self._tools:
+            raise ToolError(f"unknown tool: {name}", code=ErrorCode.NOT_FOUND)
+        return self._tools[name]
+
+    def list_tools(self) -> list[BaseTool]:
+        return list(self._tools.values())
+
+
+class ToolAutoDiscovery:
+    """Tool 自动发现器。
+
+    主要功能：扫描配置包中继承 `BaseTool` 的具体类并注册。
+    """
+
+    def discover(self, packages: list[str]) -> list[BaseTool]:
+        """扫描 Tool 包。
+
+        主要逻辑：导入每个包，注册模块里直接定义的 BaseTool 具体子类。
+        参数：`packages` 为模块路径列表。
+        返回值：Tool 实例列表。
+        异常情况：导入失败向上抛出，便于 preflight 暴露配置错误。
+        """
+        tools: list[BaseTool] = []
+        for package in packages:
+            module = importlib.import_module(package)
+            for _name, obj in inspect.getmembers(module, inspect.isclass):
+                if obj is BaseTool or not issubclass(obj, BaseTool) or inspect.isabstract(obj):
+                    continue
+                tools.append(obj())
+        return tools
+
+
+class ToolPolicy:
+    """Tool 调用策略。
+
+    主要功能：按 allowlist / denylist 判断当前工具是否允许执行。
+    """
+
+    def __init__(self, *, allowlist: list[str] | None = None, denylist: list[str] | None = None) -> None:
+        self.allowlist = set(allowlist or [])
+        self.denylist = set(denylist or [])
+
+    def allowed(self, tool_name: str) -> bool:
+        if tool_name in self.denylist:
+            return False
+        return not self.allowlist or tool_name in self.allowlist
+
+
+class ToolSchemaBuilder:
+    """Tool schema 构造器。
+
+    主要功能：把 BaseTool 元数据转换成 Agent Core 可传给 provider 的工具说明。
+    """
+
+    def build(self, tool: BaseTool) -> dict:
+        return {"name": tool.name or tool.__class__.__name__, "description": tool.description, "input_model": str(tool.input_model)}
+
+
+class ToolContextFactory:
+    """ToolContext 工厂。
+
+    主要功能：集中创建 Tool 执行上下文，确保设备能力只通过 UserDeviceContext 注入。
+    """
+
+    def __init__(self, *, app, task_engine: Any = None) -> None:
+        self.app = app
+        self.task_engine = task_engine
+
+    def create(self, *, user_id: str, session_id: str) -> ToolContext:
+        return ToolContext(user_id=user_id, session_id=session_id, devices=UserDeviceContext(user_id=user_id, app=self.app), tasks=self.task_engine)
+
+
+class ToolExecutor:
+    """Tool 执行器。
+
+    主要功能：封装 Tool.run 调用和错误转换，后续可接入超时、并发和取消策略。
+    """
+
+    async def execute(self, tool: BaseTool, context: ToolContext, input_data: dict) -> ToolResult:
+        try:
+            return await tool.run(context, input_data)
+        except ToolError as exc:
+            return ToolResult.failed(exc)
+        except Exception as exc:
+            return ToolResult.failed(ToolError(str(exc), code=ErrorCode.UNKNOWN))
+
+
+class ToolGateway:
+    """Agent Core 访问 Tool 的统一网关。
+
+    主要功能：提供工具发现、schema 生成、策略校验、执行和 trace 记录入口。
+    """
+
+    def __init__(
+        self,
+        *,
+        registry: ToolRegistry | None = None,
+        policy: ToolPolicy | None = None,
+        schema_builder: ToolSchemaBuilder | None = None,
+        executor: ToolExecutor | None = None,
+        context_factory: ToolContextFactory | None = None,
+    ) -> None:
+        self.registry = registry or ToolRegistry()
+        self.policy = policy or ToolPolicy()
+        self.schema_builder = schema_builder or ToolSchemaBuilder()
+        self.executor = executor or ToolExecutor()
+        self.context_factory = context_factory
+
+    def schemas(self) -> list[dict]:
+        return [self.schema_builder.build(tool) for tool in self.registry.list_tools() if self.policy.allowed(tool.name or tool.__class__.__name__)]
+
+    async def call(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
+        if not self.policy.allowed(name):
+            return ToolResult.failed(ToolError(f"tool is not allowed: {name}", code=ErrorCode.PERMISSION_DENIED))
+        if self.context_factory is None:
+            return ToolResult.failed(ToolError("tool context factory is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        return await self.executor.execute(self.registry.get(name), self.context_factory.create(user_id=user_id, session_id=session_id), input_data)
 
 
 @dataclass(frozen=True)
 class DeviceSnapshot:
     """端侧设备的只读快照。
 
-    主要功能：向 Tool / Task 暴露设备能力摘要，而不是暴露可写连接对象。
-    主要属性：`device_id` 仅用于构造受控句柄，业务事件不能携带该字段做点对点路由；
-    `capabilities` 描述端侧声明的输入、输出和本地能力。
+    主要功能：向 Tool / Task 暴露当前用户 active device set 的能力摘要。
+    主要属性：`device_id` 只用于 debug 和只读展示，协议原生 Tool / Task API 不接受
+    业务代码传入 device_id 做点对点投递。
     """
 
     device_id: str
@@ -21,124 +254,77 @@ class DeviceSnapshot:
 
 
 class DeviceHandle:
-    """被 `UserDeviceContext` 选中的设备操作句柄。
+    """设备只读句柄。
 
-    主要功能：把业务侧的设备操作意图转为服务端内部定向投递，避免业务代码手写
-    `device_id` 或直接发布控制事件。
-    主要方法：`configure_stream()` 请求端侧配置输入流，`open_stream()` 打开该设备
-    作为 producer 的输入流，`start_task()` 创建端侧任务引用。
+    主要功能：保留兼容性的只读设备快照容器，不能承载命令、stream 配置或端侧任务 RPC。
+    主要属性：`snapshot` 是 `DeviceSnapshot`。
     """
 
-    def __init__(self, snapshot: DeviceSnapshot, *, context: "UserDeviceContext") -> None:
+    def __init__(self, snapshot: DeviceSnapshot) -> None:
         self.snapshot = snapshot
-        self._context = context
-
-    def configure_stream(self, *, stream_type: str, session_id: str | None = None, **request) -> None:
-        """请求当前句柄对应的设备配置指定 stream。
-
-        主要逻辑：通过 Control Service 的内部定向投递把配置事件送到已选择设备；
-        事件 payload 只表达业务请求，不暴露 target device 字段。
-        参数：`stream_type` 为目标 stream 类型，`session_id` 为可选会话，`request`
-        为端侧可理解的配置参数。
-        返回值：无。
-        异常情况：底层连接不可用时由 Control Service 按订阅和连接状态处理。
-        """
-        payload = {"stream_type": stream_type, **request}
-        self._context._app.device_command_service.send_to_device(
-            device_id=self.snapshot.device_id,
-            event=Event(
-                event_name="stream.control.configure.requested",
-                user_id=self._context.user_id,
-                producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
-                stream_type=stream_type,
-                payload=payload,
-            ),
-        )
-
-    def open_stream(self, *, stream_type: str, session_id: str | None = None, format: StreamFormat | None = None):
-        """打开当前设备作为 producer 的输入流。
-
-        主要逻辑：由 app 门面创建 stream 生命周期，业务侧只拿到 stream 对象，不需要也不应
-        构造设备定向事件。
-        参数：`stream_type` 为输入流类型，`session_id` 为可选会话，`format` 为可选格式声明。
-        返回值：`StreamHandle`。
-        异常情况：stream 类型或格式非法时由 Stream Service 抛出异常。
-        """
-        return self._context._app.open_input_stream(
-            user_id=self._context.user_id,
-            producer_id=self.snapshot.device_id,
-            stream_type=stream_type,
-            format=format,
-        )
-
-    def start_task(self, *, task_type: str, params: dict | None = None, session_id: str | None = None) -> "EndpointTaskRef":
-        """请求当前设备启动一个端侧任务。
-
-        主要逻辑：创建 `EndpointTaskRef`，再把任务请求投递到当前句柄绑定的端侧连接。
-        参数：`task_type` 为任务类型，`params` 为任务参数，`session_id` 为可选会话。
-        返回值：可用于停止任务的 `EndpointTaskRef`。
-        异常情况：端侧未订阅任务事件时不会收到该请求。
-        """
-        task = EndpointTaskRef(task_id=new_id("endpoint_task"), device=self)
-        self._context._app.device_command_service.send_to_device(
-            device_id=self.snapshot.device_id,
-            event=Event(
-                event_name="task.state.changed",
-                user_id=self._context.user_id,
-                producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
-                payload={
-                    "task_id": task.task_id,
-                    "task_type": task_type,
-                    "state": "requested",
-                    "params": params or {},
-                    "capabilities": self.snapshot.capabilities,
-                },
-            ),
-        )
-        return task
 
 
-@dataclass(frozen=True)
-class EndpointTaskRef:
-    """端侧任务引用。
+class OutputStreamWriter:
+    """协议原生 output stream 写入器。
 
-    主要功能：让 Tool / Task 能表达“停止刚才启动的端侧任务”，而不是自行拼控制事件。
-    主要属性：`task_id` 是服务端生成的任务标识，`device` 是启动任务时选中的设备句柄。
+    主要功能：让 Tool / Task 写入 `actuator.*` output stream，而不是直接操作端侧播放器。
+    主要方法：`write()` 写入一片音频或触觉 payload，`close()` 请求关闭 output stream。
+    主要属性：`stream_id`、`session_id` 标识服务端创建的 output stream。
     """
 
-    task_id: str
-    device: DeviceHandle
+    def __init__(self, *, context: "UserDeviceContext", stream_id: str, session_id: str, stream_type: str, format: StreamFormat) -> None:
+        self._context = context
+        self.stream_id = stream_id
+        self.session_id = session_id
+        self.stream_type = stream_type
+        self.format = format
+        self._seq = 0
 
-    def stop(self, *, reason: str = "cancelled", session_id: str | None = None) -> None:
-        """请求停止当前引用对应的端侧任务。
+    def write(self, payload: bytes, *, final: bool = False, metadata: dict | None = None) -> None:
+        """写入 output stream chunk。
 
-        主要逻辑：仍通过绑定的 `DeviceHandle` 做内部定向投递，保证停止请求落到同一台设备。
-        参数：`reason` 为停止原因，`session_id` 为可选会话。
+        主要逻辑：构造 SDK `StreamChunk`，由 Stream Service 通过订阅分发到端侧。
+        参数：`payload` 为二进制内容，`final` 表示是否最后一片，`metadata` 为附加诊断。
         返回值：无。
-        异常情况：如果端侧连接已失效，请求只会记录为未投递事件。
+        异常情况：stream 已关闭或格式不匹配时由 Stream Service 抛出异常。
         """
-        context = self.device._context
-        context._app.device_command_service.send_to_device(
-            device_id=self.device.snapshot.device_id,
-            event=Event(
-                event_name="task.state.changed",
-                user_id=context.user_id,
-                producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
-                payload={"task_id": self.task_id, "state": "cancel_requested", "reason": reason},
-            ),
+        chunk = StreamChunk(
+            user_id=self._context.user_id,
+            session_id=self.session_id,
+            stream_id=self.stream_id,
+            stream_type=self.stream_type,
+            seq=self._seq,
+            payload=payload,
+            codec=self.format.codec,
+            sample_rate=self.format.sample_rate,
+            channels=self.format.channels,
+            duration_ms=self.format.chunk_ms,
+            final=final,
+            metadata=dict(metadata or {}),
         )
+        self._context._app.stream_service.write_chunk(chunk)
+        self._seq += 1
+        if final:
+            self.close(reason="final")
+
+    def close(self, *, reason: str = "completed") -> None:
+        """请求关闭当前 output stream。
+
+        主要逻辑：调用 Stream Service 发布 `stream.output.close.requested`。
+        参数：`reason` 为关闭原因。
+        返回值：无。
+        异常情况：stream 不存在时由 Stream Service 抛出异常。
+        """
+        self._context._app.stream_service.close_stream(self.stream_id, reason=reason)
 
 
 class UserDeviceContext:
-    """业务代码访问用户端侧能力的唯一上下文门面。
+    """业务代码访问用户端侧能力的协议原生上下文门面。
 
-    主要功能：按 capability 查询 active device set，获取受控 `DeviceHandle`，
-    请求对话资产，以及提交输出意图。
-    主要方法：`find_device()` 选择设备，`get_or_request_asset()` 请求资产，
-    `submit_output()` 把输出交给 Output Service。
+    主要功能：Tool / Task 只能通过事件、资产、输出意图和 stream 写入器表达业务意图；
+    不面向某个 device_id 编程，也不暴露端侧 RPC。
+    主要方法：`publish_event()`、`open_output_stream()`、`request_asset()`、
+    `query_assets()`、`watch_assets()`、`submit_text()`、`submit_audio()`。
     """
 
     def __init__(self, *, user_id: str, app) -> None:
@@ -146,12 +332,12 @@ class UserDeviceContext:
         self._app = app
 
     def get_devices(self, capability: str | None = None) -> list[DeviceSnapshot]:
-        """返回用户当前 active device set 中匹配 capability 的设备快照。
+        """返回当前用户 active device set 的只读快照。
 
-        主要逻辑：读取 Control Service 的 active device set，并用端侧声明能力做过滤。
-        参数：`capability` 为空时返回全部设备，否则只返回支持该能力的设备。
+        主要逻辑：从 Control Service 读取在线设备，并按 capability 可选过滤。
+        参数：`capability` 为空时返回全部设备，否则只返回声明该能力的设备。
         返回值：`DeviceSnapshot` 列表。
-        异常情况：用户没有 active device 时返回空列表。
+        异常情况：无在线设备时返回空列表。
         """
         devices = []
         for record in self._app.control_service.get_active_device_set(self.user_id).devices:
@@ -160,36 +346,175 @@ class UserDeviceContext:
         return devices
 
     def find_device(self, capability: str) -> DeviceHandle | None:
-        """按 capability 选择一台设备并返回受控句柄。
+        """按 capability 返回只读设备句柄。
 
-        主要逻辑：第一版采用 active device set 中的首个匹配设备；后续可替换为更完整的选择策略。
-        参数：`capability` 为业务需要的端侧能力。
+        主要逻辑：仅用于能力检查和 debug，不提供命令方法；真实通讯必须走协议原生 API。
+        参数：`capability` 为能力名。
         返回值：匹配时返回 `DeviceHandle`，否则返回 `None`。
         异常情况：无。
         """
         devices = self.get_devices(capability)
-        return DeviceHandle(devices[0], context=self) if devices else None
+        return DeviceHandle(devices[0]) if devices else None
 
-    def get_or_request_asset(self, *, stream_type: str, session_id: str | None = None) -> AssetRef | None:
-        """获取或请求一个对话资产。
+    def publish_event(
+        self,
+        event_name: str,
+        payload: dict | None = None,
+        stream_type: str | None = None,
+        require_capability: str | None = None,
+        selection: str = "all",
+        timeout_seconds: float | None = None,
+    ) -> PublishResult:
+        """发布协议控制事件。
 
-        主要逻辑：委托 Asset Service 处理缓存、pending request、端侧上传等待和超时。
-        参数：`stream_type` 为资产来源 stream，`session_id` 为可选会话。
-        返回值：命中或上传成功时返回 `AssetRef`，超时时返回 `None`。
-        异常情况：底层存储异常会向上抛出。
+        主要逻辑：事件按 user_id、订阅、stream_type、require_capability 和 selection
+        匹配端侧；业务代码不能指定 device_id。
+        参数：`event_name` 为协议事件名，`payload` 为事件载荷，`stream_type` 为可选
+        stream 过滤，`require_capability` 为可选能力条件，`selection` 为选择策略，
+        `timeout_seconds` 预留给未来 ACK 等待，本阶段不阻塞。
+        返回值：`PublishResult`。
+        异常情况：事件非法或 selection 非法时抛出 `ValueError`。
         """
-        return self._app.get_or_request_asset(user_id=self.user_id, stream_type=stream_type, session_id=session_id)
+        _ = timeout_seconds
+        event = Event(
+            event_name=event_name,
+            user_id=self.user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            stream_type=stream_type,
+            payload=dict(payload or {}),
+        )
+        return self._app.control_service.publish_matching(
+            event,
+            require_capability=require_capability,
+            selection=selection,
+        )
 
-    def submit_output(self, intent: OutputIntent, text: str) -> None:
-        """提交输出意图。
+    def open_output_stream(
+        self,
+        stream_type: str,
+        codec: str,
+        metadata: dict | None = None,
+        require_capability: str | None = None,
+        selection: str = "all",
+    ) -> OutputStreamWriter:
+        """打开 output stream 并返回写入器。
 
-        主要逻辑：业务代码只表达 `OutputIntent` 和文本内容，由 Output Service 完成 TTS、
-        播放仲裁和 actuator stream 下发。
-        参数：`intent` 为输出意图，`text` 为要播报的文本。
+        主要逻辑：创建 `actuator.*` stream，底层按订阅、capability 和 selection
+        选出消费端，并把后续 chunk 固定投递到这批设备。
+        参数：`stream_type` 为 output stream 类型，`codec` 为编码，`metadata` 为可选
+        元信息，`require_capability` 和 `selection` 为设备匹配策略。
+        返回值：`OutputStreamWriter`。
+        异常情况：stream 类型或格式非法时由 Stream Service 抛出异常。
+        """
+        _ = metadata
+        session_id = self._app.active_session_id(self.user_id)
+        format = StreamFormat(codec=codec)
+        handle = self._app.stream_service.open_stream(
+            user_id=self.user_id,
+            session_id=session_id,
+            stream_type=stream_type,
+            producer_id=SERVER_PRODUCER_ID,
+            format=format,
+            stream_id=new_id("stream_out"),
+            require_capability=require_capability,
+            selection=selection,
+        )
+        return OutputStreamWriter(context=self, stream_id=handle.stream_id, session_id=session_id, stream_type=stream_type, format=format)
+
+    def request_asset(
+        self,
+        stream_type: str,
+        freshness_seconds: float,
+        configure_payload: dict | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AssetRef | None:
+        """请求单个传感器资产。
+
+        主要逻辑：委托 Asset Service 先查 freshness 缓存，未命中时发布
+        `stream.control.configure.requested`，等待端侧通过 `sensor.*` stream 上传。
+        参数：`stream_type` 为资产 stream，`freshness_seconds` 为缓存新鲜度，
+        `configure_payload` 为配置载荷，`timeout_seconds` 为等待超时。
+        返回值：`AssetRef` 或 `None`。
+        异常情况：底层事件发布或文件存储失败时向上抛出。
+        """
+        return self._app.asset_service.request_asset(
+            user_id=self.user_id,
+            stream_type=stream_type,
+            freshness_seconds=freshness_seconds,
+            configure_payload=configure_payload,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def query_assets(self, stream_type: str, freshness_seconds: float | None = None) -> list[AssetRef]:
+        """查询缓存资产窗口。
+
+        主要逻辑：读取 Asset Service 缓存窗口，并按 freshness_seconds 可选过滤。
+        参数：`stream_type` 为资产 stream，`freshness_seconds` 为最大年龄。
+        返回值：`AssetRef` 列表。
+        异常情况：无。
+        """
+        return self._app.asset_service.query_assets(
+            user_id=self.user_id,
+            stream_type=stream_type,
+            freshness_seconds=freshness_seconds,
+        )
+
+    def watch_assets(
+        self,
+        stream_type: str,
+        correlation_id: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AsyncIterator[AssetRef]:
+        """持续读取资产 stream 写入的资产引用。
+
+        主要逻辑：返回 Asset Service 的 async iterator，按 stream_type 和 correlation_id
+        过滤，适合 Task 消费连续 sensor.rgb 帧。
+        参数：`stream_type` 为资产 stream，`correlation_id` 为可选任务关联 ID，
+        `timeout_seconds` 为无新资产时的退出时间。
+        返回值：异步迭代器。
+        异常情况：无。
+        """
+        return self._app.asset_service.watch_assets(
+            user_id=self.user_id,
+            stream_type=stream_type,
+            correlation_id=correlation_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def submit_text(self, text: str, priority: str = "normal", ttl_seconds: int = 0) -> None:
+        """提交文本输出。
+
+        主要逻辑：业务只提交文本和优先级，TTS、播放仲裁和 speaker stream 由 Output
+        Service 负责。
+        参数：`text` 为要播报的文本，`priority` 为播放优先级，`ttl_seconds` 为排队 TTL。
         返回值：无。
-        异常情况：Output Service 初始化或 stream 写入失败时向上抛出。
+        异常情况：Output Service 写入失败时向上抛出。
         """
-        self._app.output_service.submit_output(intent, text)
+        session_id = self._app.active_session_id(self.user_id)
+        self._app.output_service.submit_text(
+            user_id=self.user_id,
+            session_id=session_id,
+            text=text,
+            priority=priority,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def submit_audio(self, audio: bytes, codec: str, priority: str = "normal") -> None:
+        """提交原生音频输出。
+
+        主要逻辑：音频不经过 TTS，直接走 Output Service 原生 audio 入口和播放仲裁。
+        参数：`audio` 为二进制音频，`codec` 为编码，`priority` 为播放优先级。
+        返回值：无。
+        异常情况：Output Service 写入失败时向上抛出。
+        """
+        session_id = self._app.active_session_id(self.user_id)
+        self._app.output_service.submit_audio(
+            user_id=self.user_id,
+            session_id=session_id,
+            audio=audio,
+            format=StreamFormat(codec=codec),
+            priority=priority,
+        )
 
     @staticmethod
     def _has_capability(capabilities: dict, capability: str) -> bool:
@@ -198,21 +523,35 @@ class UserDeviceContext:
         return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
 
 
-class GetOrRequestAssetTool:
-    """获取对话资产的最小 Tool 门面。
+class RequestAssetTool:
+    """请求对话资产的协议原生 Tool 门面。
 
-    主要功能：让 Agent 工具调用通过 `UserDeviceContext` 请求资产，避免直接持有端侧连接。
+    主要功能：让 Agent 工具调用通过 `UserDeviceContext.request_asset()` 获取资产引用。
     主要方法：`run()`。
     """
 
-    name = "get_or_request_asset"
+    name = "request_asset"
 
-    def run(self, context: UserDeviceContext, *, stream_type: str, session_id: str | None = None) -> AssetRef | None:
+    def run(
+        self,
+        context: UserDeviceContext,
+        *,
+        stream_type: str,
+        freshness_seconds: float = 0,
+        configure_payload: dict | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AssetRef | None:
         """执行资产请求工具。
 
-        主要逻辑：直接转调 `UserDeviceContext.get_or_request_asset()`。
-        参数：`context` 为用户设备上下文，`stream_type` 为资产 stream，`session_id` 为可选会话。
+        主要逻辑：直接转调协议原生 Context API。
+        参数：`context` 为用户设备上下文，`stream_type` 为资产 stream，
+        `freshness_seconds` 为缓存新鲜度，`configure_payload` 为端侧配置。
         返回值：`AssetRef` 或 `None`。
         异常情况：同 Context 方法。
         """
-        return context.get_or_request_asset(stream_type=stream_type, session_id=session_id)
+        return context.request_asset(
+            stream_type=stream_type,
+            freshness_seconds=freshness_seconds,
+            configure_payload=configure_payload,
+            timeout_seconds=timeout_seconds,
+        )

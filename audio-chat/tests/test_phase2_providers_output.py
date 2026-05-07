@@ -1,8 +1,8 @@
 import json
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.output import AssistantTextDelta, OutputIntent
-from audio_chat.output.service import MockStreamingTTS, OutputService, TtsProviderConfig
+from audio_chat.output import AssistantTextDelta
+from audio_chat.output.service import OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
 
 
@@ -71,14 +71,14 @@ def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
-    low = OutputIntent(
+    low = OutputItem(
         user_id="user-001",
         session_id="sess-output",
         priority="low",
         on_interrupted="drop",
         on_blocked="drop",
     )
-    high = OutputIntent(
+    high = OutputItem(
         user_id="user-001",
         session_id="sess-output",
         priority="critical",
@@ -102,7 +102,7 @@ def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
-    intent = OutputIntent(user_id="user-001", session_id="sess-interrupt", priority="normal")
+    intent = OutputItem(user_id="user-001", session_id="sess-interrupt", priority="normal")
 
     app.output_service.on_assistant_text_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-interrupt", text="playing", intent=intent)
@@ -128,7 +128,7 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
-    low = OutputIntent(
+    low = OutputItem(
         user_id="user-001",
         session_id="sess-low",
         priority="low",
@@ -136,7 +136,7 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
         on_blocked="drop",
         ttl_seconds=30,
     )
-    high = OutputIntent(user_id="user-001", session_id="sess-high", priority="critical")
+    high = OutputItem(user_id="user-001", session_id="sess-high", priority="critical")
 
     app.output_service.on_assistant_text_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-low", text="low", intent=low)
@@ -159,8 +159,8 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
-    active = OutputIntent(user_id="user-001", session_id="sess-active", priority="normal")
-    queued = OutputIntent(
+    active = OutputItem(user_id="user-001", session_id="sess-active", priority="normal")
+    queued = OutputItem(
         user_id="user-001",
         session_id="sess-queued",
         priority="normal",
@@ -193,8 +193,8 @@ def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> N
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
-    active = OutputIntent(user_id="user-001", session_id="sess-active", priority="normal")
-    queued = OutputIntent(user_id="user-001", session_id="sess-queued", priority="normal", on_blocked="queue")
+    active = OutputItem(user_id="user-001", session_id="sess-active", priority="normal")
+    queued = OutputItem(user_id="user-001", session_id="sess-queued", priority="normal", on_blocked="queue")
 
     app.output_service.on_assistant_text_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
@@ -234,8 +234,8 @@ def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_
     )
     connection = Connection("dev-playback")
     register_speaker(app, connection)
-    active = OutputIntent(user_id="user-001", session_id="sess-active", priority="normal")
-    blocked = OutputIntent(user_id="user-001", session_id="sess-blocked", priority="normal", on_blocked="drop")
+    active = OutputItem(user_id="user-001", session_id="sess-active", priority="normal")
+    blocked = OutputItem(user_id="user-001", session_id="sess-blocked", priority="normal", on_blocked="drop")
 
     app.output_service.on_assistant_text_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
@@ -337,8 +337,8 @@ def test_each_output_stream_gets_independent_tts_session(tmp_path) -> None:
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
-    app.output_service.submit_output(OutputIntent(user_id="user-001", session_id="sess-one"), "one")
-    app.output_service.submit_output(OutputIntent(user_id="user-001", session_id="sess-two"), "two")
+    app.output_service.submit_output(OutputItem(user_id="user-001", session_id="sess-one"), "one")
+    app.output_service.submit_output(OutputItem(user_id="user-001", session_id="sess-two"), "two")
 
     stream_ids = {chunk.stream_id for chunk in connection.chunks}
     assert len(stream_ids) == 2

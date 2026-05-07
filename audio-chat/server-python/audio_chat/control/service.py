@@ -51,6 +51,7 @@ class PublishResult:
     matched_count: int
     delivered_count: int
     failed_device_ids: tuple[str, ...] = ()
+    matched_device_ids: tuple[str, ...] = ()
 
 
 class DeviceAuthenticator:
@@ -245,7 +246,65 @@ class ControlService:
         failed: list[str] = []
         delivered = 0
         subscribers = self.resolve_subscribers(event)
-        for device in subscribers:
+        return self._deliver_to_devices(event, subscribers)
+
+    def publish_matching(
+        self,
+        event: Event,
+        *,
+        require_capability: str | None = None,
+        selection: str = "all",
+    ) -> PublishResult:
+        """按协议订阅、能力和选择策略发布事件。
+
+        主要逻辑：先按当前事件订阅找到候选设备，再按 capability 过滤，最后按 selection
+        选择全部或第一台可用设备。调用方不能传入 device_id，因此不会形成业务层点对点
+        发送事件接口。
+        参数：`event` 为协议事件，`require_capability` 为可选能力条件，`selection` 为
+        `all` 或 `first_available`。
+        返回值：投递统计。
+        异常情况：事件名或 selection 非法时抛出 `ValueError`。
+        """
+        self._validate_event(event)
+        self.recorder.record_event(event)
+        selected = self.resolve_matching_devices(
+            event,
+            require_capability=require_capability,
+            selection=selection,
+        )
+        return self._deliver_to_devices(event, selected)
+
+    def resolve_matching_devices(
+        self,
+        event: Event,
+        *,
+        require_capability: str | None = None,
+        selection: str = "all",
+    ) -> list[DeviceRecord]:
+        """按订阅、能力和选择策略解析目标设备。
+
+        主要逻辑：先使用协议订阅匹配候选设备，再按 capability 过滤，最后应用
+        `all` 或 `first_available`。该方法不投递事件，供 Stream Service 在创建
+        output stream 前冻结 consumer 列表。
+        参数：`event` 为协议事件，`require_capability` 为可选能力，`selection` 为
+        选择策略。
+        返回值：最终匹配的设备记录列表。
+        异常情况：事件名或 selection 非法时抛出 `ValueError`。
+        """
+        self._validate_event(event)
+        candidates = self.resolve_subscribers(event)
+        if require_capability is not None:
+            candidates = [device for device in candidates if self._has_capability(device.capabilities, require_capability)]
+        if selection == "all":
+            return candidates
+        if selection == "first_available":
+            return candidates[:1]
+        raise ValueError(f"unsupported device selection: {selection}")
+
+    def _deliver_to_devices(self, event: Event, devices: list[DeviceRecord]) -> PublishResult:
+        failed: list[str] = []
+        delivered = 0
+        for device in devices:
             connection = self._connections.get(device.device_id)
             if connection is None:
                 failed.append(device.device_id)
@@ -257,28 +316,26 @@ class ControlService:
                 failed.append(device.device_id)
                 device.connection_state = "offline"
         return PublishResult(
-            matched_count=len(subscribers),
+            matched_count=len(devices),
             delivered_count=delivered,
             failed_device_ids=tuple(failed),
+            matched_device_ids=tuple(device.device_id for device in devices),
         )
 
-    def _push_to_resolved_device(self, device_id: str, event: Event) -> PublishResult:
+    def _push_event_to_device_ids(self, event: Event, device_ids: tuple[str, ...]) -> PublishResult:
+        """向已冻结的内部设备集合推送事件。
+
+        主要逻辑：仅供 Stream Service 关闭或取消已打开的 output stream 时使用，
+        目标列表来自打开 stream 时的协议匹配结果，不向 Tool / Task 暴露 device_id
+        点对点发送接口。
+        参数：`event` 为协议事件，`device_ids` 为内部冻结 consumer 列表。
+        返回值：投递统计。
+        异常情况：事件非法时抛出 `ValueError`。
+        """
         self._validate_event(event)
         self.recorder.record_event(event)
-        device = self._devices.get(device_id)
-        if device is None or device.user_id != event.user_id or device.connection_state != "online":
-            return PublishResult(matched_count=0, delivered_count=0, failed_device_ids=(device_id,))
-        if not any(self.matcher.match(event, subscription, device) for subscription in device.subscriptions):
-            return PublishResult(matched_count=0, delivered_count=0)
-        connection = self._connections.get(device_id)
-        if connection is None:
-            return PublishResult(matched_count=1, delivered_count=0, failed_device_ids=(device_id,))
-        try:
-            connection.push_event(event)
-        except Exception:
-            device.connection_state = "offline"
-            return PublishResult(matched_count=1, delivered_count=0, failed_device_ids=(device_id,))
-        return PublishResult(matched_count=1, delivered_count=1)
+        devices = [self._devices[device_id] for device_id in device_ids if device_id in self._devices]
+        return self._deliver_to_devices(event, devices)
 
     def push_stream_chunk_to_devices(self, device_ids: tuple[str, ...], chunk: object) -> PublishResult:
         failed: list[str] = []
@@ -299,6 +356,7 @@ class ControlService:
             matched_count=len(device_ids),
             delivered_count=delivered,
             failed_device_ids=tuple(failed),
+            matched_device_ids=device_ids,
         )
 
     def record_heartbeat(self, event: Event) -> Event:
@@ -342,6 +400,12 @@ class ControlService:
             if any(self.matcher.match(event, subscription, device) for subscription in device.subscriptions):
                 result.append(device)
         return result
+
+    @staticmethod
+    def _has_capability(capabilities: dict[str, Any], capability: str) -> bool:
+        if capabilities.get(capability):
+            return True
+        return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
 
     def get_active_device_set(self, user_id: str) -> ActiveDeviceSet:
         devices = tuple(

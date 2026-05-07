@@ -1,0 +1,10 @@
+{
+  "version": "audio-chat.v1",
+  "event_name": "control.device.registered",
+  "user_id": "user-contract",
+  "producer_id": "server-main",
+  "payload": {
+    "device_id": "dev-contract",
+    "connection_id": "conn_contract"
+  }
+}

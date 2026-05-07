@@ -97,13 +97,19 @@ output:
 tools:
   enabled: true
   builtin_enabled: true
+  discover:
+    enabled: true
+    packages: []
   allowlist: []
   denylist: []
   default_timeout_seconds: 30
   allow_parallel_calls: true
 
 tasks:
-  enabled: false
+  enabled: true
+  discover:
+    enabled: true
+    packages: []
   max_running_per_user: 16
 
 memory:
@@ -136,3 +142,10 @@ observability:
   record_stream_events: true
   max_debug_sessions: 100
   retention_days: 7
+
+dev_checks:
+  run_contract_tests: true
+  run_package_check: true
+  run_boundary_check: true
+  contract_tests_path: "audio-chat/testdata/contracts"
+  require_recent_playback: false

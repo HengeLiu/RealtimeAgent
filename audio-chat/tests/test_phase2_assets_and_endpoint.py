@@ -6,8 +6,7 @@ from audio_chat.config import load_yaml_config
 from audio_chat.endpoints import Esp32AecEndpointState, PythonPlaybackEndpoint
 from audio_chat.protocol import Event
 from audio_chat.protocol import StreamChunk
-from audio_chat.output import OutputIntent
-from audio_chat.tools import GetOrRequestAssetTool, UserDeviceContext
+from audio_chat.tools import RequestAssetTool, UserDeviceContext
 
 
 def test_user_device_context_requests_sensor_rgb_asset_without_direct_device_target(tmp_path) -> None:
@@ -33,7 +32,7 @@ def test_user_device_context_requests_sensor_rgb_asset_without_direct_device_tar
     app.register_device(registration, endpoint)
 
     context = UserDeviceContext(user_id="user-asset", app=app)
-    asset = GetOrRequestAssetTool().run(context, stream_type="sensor.rgb")
+    asset = RequestAssetTool().run(context, stream_type="sensor.rgb")
 
     assert asset is not None
     assert asset.stream_type == "sensor.rgb"
@@ -57,7 +56,7 @@ def test_esp32_aec_endpoint_declares_endpoint_aec_and_buffers_playback_reference
 
 
 def test_yaml_config_loads_documented_sections() -> None:
-    config = load_yaml_config("audio-chat/examples/minimal/server.yaml")
+    config = load_yaml_config("examples/minimal/server.yaml")
 
     assert config.server.port == 8765
     assert config.auth.mode == "disabled"
@@ -66,7 +65,7 @@ def test_yaml_config_loads_documented_sections() -> None:
     assert config.asset.request_timeout_seconds == 5
 
 
-def test_device_handle_configure_stream_start_task_and_context_output(tmp_path) -> None:
+def test_protocol_native_context_publish_event_and_submit_text(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     endpoint = PythonPlaybackEndpoint(app=app, user_id="user-device", device_id="dev-device")
     app.register_device(
@@ -80,6 +79,7 @@ def test_device_handle_configure_stream_start_task_and_context_output(tmp_path) 
                 "capabilities": {"streams.produce": ["sensor.rgb"], "streams.consume": ["actuator.speaker"]},
                 "subscriptions": [
                     {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+                    {"event": "control.device.command.requested"},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
             },
@@ -87,20 +87,30 @@ def test_device_handle_configure_stream_start_task_and_context_output(tmp_path) 
         endpoint,
     )
     context = UserDeviceContext(user_id="user-device", app=app)
-    handle = context.find_device("sensor.rgb")
-    assert handle is not None
 
-    handle.configure_stream(stream_type="sensor.rgb", mode="single")
-    task = handle.start_task(task_type="rgb_window", params={"mode": "window"})
-    task.stop(reason="test_done")
-    context.submit_output(OutputIntent(user_id="user-device", session_id="sess-device"), "hello")
+    result = context.publish_event(
+        "stream.control.configure.requested",
+        stream_type="sensor.rgb",
+        payload={"mode": "single"},
+        require_capability="sensor.rgb",
+        selection="first_available",
+    )
+    context.publish_event(
+        "control.device.command.requested",
+        payload={"command_name": "rgb_window.start", "params": {"mode": "window"}},
+        require_capability="sensor.rgb",
+        selection="first_available",
+    )
+    context.submit_text("hello")
 
     event_names = [event.event_name for event in endpoint.events]
+    assert result.delivered_count == 1
     assert "stream.control.configure.requested" in event_names
+    assert "control.device.command.requested" in event_names
     assert "stream.output.open.requested" in event_names
 
 
-def test_device_handle_operation_only_reaches_selected_device(tmp_path) -> None:
+def test_publish_event_first_available_reaches_one_matching_subscriber(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     first = PythonPlaybackEndpoint(app=app, user_id="user-two", device_id="dev-first")
     second = PythonPlaybackEndpoint(app=app, user_id="user-two", device_id="dev-second")
@@ -113,10 +123,10 @@ def test_device_handle_operation_only_reaches_selected_device(tmp_path) -> None:
                 payload={
                     "device_id": endpoint.device_id,
                     "auth": {"mode": "disabled"},
-                    "capabilities": {"streams.produce": ["sensor.rgb"]},
+                    "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
                     "subscriptions": [
                         {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                        {"event": "task.state.changed"},
+                        {"event": "control.device.command.requested"},
                     ],
                 },
             ),
@@ -124,22 +134,31 @@ def test_device_handle_operation_only_reaches_selected_device(tmp_path) -> None:
         )
 
     context = UserDeviceContext(user_id="user-two", app=app)
-    handle = context.find_device("sensor.rgb")
-    assert handle is not None
-    handle.configure_stream(stream_type="sensor.rgb", mode="single")
-    handle.start_task(task_type="selected-only")
+    context.publish_event(
+        "stream.control.configure.requested",
+        stream_type="sensor.rgb",
+        payload={"mode": "single"},
+        require_capability="sensor.rgb",
+        selection="first_available",
+    )
+    context.publish_event(
+        "control.device.command.requested",
+        payload={"command_name": "selected-only"},
+        require_capability="sensor.rgb",
+        selection="first_available",
+    )
 
     assert [event.event_name for event in first.events].count("stream.control.configure.requested") == 1
     assert [event.event_name for event in second.events].count("stream.control.configure.requested") == 0
-    assert [event.event_name for event in first.events].count("task.state.changed") == 1
-    assert [event.event_name for event in second.events].count("task.state.changed") == 0
+    assert [event.event_name for event in first.events].count("control.device.command.requested") == 1
+    assert [event.event_name for event in second.events].count("control.device.command.requested") == 0
 
 
-def test_device_handle_uses_device_command_service_not_control_private_api(tmp_path) -> None:
-    """测试目标：确保 Tool/Task 只能通过 DeviceHandle 和内部 DeviceCommandService 操作设备。
+def test_context_publish_event_uses_protocol_matching_not_device_command_service(tmp_path) -> None:
+    """测试目标：确保 Tool/Task 只能通过协议原生 Context API 操作端侧。
 
-    测试方法：替换 app.device_command_service 为 spy，调用 DeviceHandle.configure_stream。
-    预期结果：spy 收到设备命令；业务上下文没有调用 ControlService 私有投递方法。
+    测试方法：通过 `publish_event()` 发布 stream 配置请求。
+    预期结果：端侧按订阅和能力收到事件；app 不再暴露旧 `device_command_service`。
     """
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     endpoint = PythonPlaybackEndpoint(app=app, user_id="user-spy", device_id="dev-spy")
@@ -157,20 +176,19 @@ def test_device_handle_uses_device_command_service_not_control_private_api(tmp_p
         ),
         endpoint,
     )
-    calls = []
-
-    class SpyDeviceCommandService:
-        def send_to_device(self, *, device_id: str, event: Event):
-            calls.append((device_id, event.event_name))
-
-    app.device_command_service = SpyDeviceCommandService()
     context = UserDeviceContext(user_id="user-spy", app=app)
-    handle = context.find_device("sensor.rgb")
-    assert handle is not None
 
-    handle.configure_stream(stream_type="sensor.rgb", mode="single")
+    result = context.publish_event(
+        "stream.control.configure.requested",
+        stream_type="sensor.rgb",
+        payload={"mode": "single"},
+        require_capability="sensor.rgb",
+        selection="first_available",
+    )
 
-    assert calls == [("dev-spy", "stream.control.configure.requested")]
+    assert result.delivered_count == 1
+    assert not hasattr(app, "device_command_service")
+    assert [event.event_name for event in endpoint.events] == ["stream.control.configure.requested"]
 
 
 def test_asset_request_id_prevents_concurrent_rgb_cross_talk(tmp_path) -> None:
@@ -207,9 +225,10 @@ def test_asset_request_id_prevents_concurrent_rgb_cross_talk(tmp_path) -> None:
     results = [None, None]
 
     def request(index: int) -> None:
-        results[index] = app.asset_service.get_or_request_asset(
+        results[index] = app.asset_service.request_asset(
             user_id="user-concurrent",
             stream_type="sensor.rgb",
+            freshness_seconds=0,
             timeout_seconds=2,
         )
 

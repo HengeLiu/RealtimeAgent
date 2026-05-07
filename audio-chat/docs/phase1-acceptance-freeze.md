@@ -28,7 +28,7 @@ rg -n "VoiceRuntime|DeviceGroupContext|MediaFrame|group_id|source_device_id|targ
 
 1. 旧概念只出现在 `audio-chat/docs/audio-chat-sdk-architecture.md` 的迁移背景和禁用说明中。
 2. `audio-chat/server-python`、`audio-chat/tests`、`audio-chat/examples` 没有使用 `VoiceRuntime`、`DeviceGroupContext`、`MediaFrame`、`group_id` 或定向设备字段。
-3. 第一阶段尚未实现 Tool / Task、MCP、Skill，因此不存在绕过 `UserDeviceContext` / `DeviceHandle` / `EndpointTaskRef` 的业务调用路径。
+3. 第一阶段尚未实现 Tool / Task、MCP、Skill，因此不存在绕过 `UserDeviceContext` 协议原生 API 的业务调用路径。
 4. 当前 server 不采集麦克风、不驱动喇叭、不控制端侧硬件；端侧只以 `device_id`、capabilities 和 subscriptions 注册。
 
 ## 测试命令和结果

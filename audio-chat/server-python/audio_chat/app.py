@@ -10,11 +10,12 @@ from audio_chat.asset import AssetService
 from audio_chat.audio_pipeline import AudioPipeline
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
-from audio_chat.device_command import DeviceCommandService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from audio_chat.stream import StreamHandle, StreamService
+from audio_chat.tasks import TaskAutoDiscovery, TaskEngine
+from audio_chat.tools import ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,12 @@ class AudioChatConfig:
     realtime_turn_detection: str = "provider"
     realtime_voice: str = "Tina"
     realtime_session_idle_timeout_seconds: int = 60
+    tools_discover_enabled: bool = False
+    tools_discover_packages: tuple[str, ...] = ()
+    tools_allowlist: tuple[str, ...] = ()
+    tools_denylist: tuple[str, ...] = ()
+    tasks_discover_enabled: bool = False
+    tasks_discover_packages: tuple[str, ...] = ()
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AudioChatConfig":
@@ -106,6 +113,12 @@ class AudioChatConfig:
             realtime_turn_detection=realtime.turn_detection,
             realtime_voice=realtime.voice,
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
+            tools_discover_enabled=loaded.tools.discover.enabled,
+            tools_discover_packages=tuple(loaded.tools.discover.packages),
+            tools_allowlist=tuple(loaded.tools.allowlist),
+            tools_denylist=tuple(loaded.tools.denylist),
+            tasks_discover_enabled=loaded.tasks.discover.enabled,
+            tasks_discover_packages=tuple(loaded.tasks.discover.packages),
         )
 
 
@@ -124,7 +137,6 @@ class AudioChatApp:
             allow_subscribe_all=self.config.control_allow_subscribe_all,
             subscription_filter_mode=self.config.control_subscription_filter_mode,
         )
-        self.device_command_service = DeviceCommandService(control_service=self.control_service)
         self.stream_service = StreamService(
             control_service=self.control_service,
             recorder=self.recorder,
@@ -180,6 +192,19 @@ class AudioChatApp:
         )
         self.text_agent_core = self.agent_core
         self.audio_pipeline = AudioPipeline(agent_core=self.agent_core)
+        self.task_engine = TaskEngine()
+        if self.config.tasks_discover_enabled:
+            for task_cls in TaskAutoDiscovery().discover(list(self.config.tasks_discover_packages)):
+                self.task_engine.register(task_cls)
+        self.tool_registry = ToolRegistry()
+        if self.config.tools_discover_enabled:
+            for tool in ToolAutoDiscovery().discover(list(self.config.tools_discover_packages)):
+                self.tool_registry.register(tool)
+        self.tool_gateway = ToolGateway(
+            registry=self.tool_registry,
+            policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),
+            context_factory=ToolContextFactory(app=self, task_engine=self.task_engine),
+        )
         self.stream_service.set_dispatcher(self)
         self._active_session_by_user: dict[str, str] = {}
 
@@ -264,15 +289,23 @@ class AudioChatApp:
         )
         return handle
 
+    def active_session_id(self, user_id: str) -> str:
+        """返回用户当前会话 ID，没有则创建一个轻量会话 ID。
+
+        主要逻辑：Tool / Task 提交输出或打开 output stream 时需要 session_id 关联 runs
+        产物；如果用户尚未唤醒，则创建一个本地 session 作为输出上下文。
+        参数：`user_id` 为用户标识。
+        返回值：session_id。
+        异常情况：无。
+        """
+        session_id = self._active_session_by_user.get(user_id)
+        if session_id is None:
+            session_id = new_id("sess")
+            self._active_session_by_user[user_id] = session_id
+        return session_id
+
     def write_input_chunk(self, chunk: StreamChunk) -> None:
         self.stream_service.on_chunk(chunk)
-
-    def get_or_request_asset(self, *, user_id: str, stream_type: str, session_id: str | None = None):
-        return self.asset_service.get_or_request_asset(
-            user_id=user_id,
-            stream_type=stream_type,
-            session_id=session_id or self._active_session_by_user.get(user_id),
-        )
 
     def close_audio_session(self, user_id: str, *, reason: str = "completed") -> None:
         session_id = self._active_session_by_user.get(user_id)

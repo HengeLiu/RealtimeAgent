@@ -1,4 +1,5 @@
 import os
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -9,13 +10,13 @@ from audio_chat.output.service import build_tts_provider
 from audio_chat.protocol import StreamChunk
 
 EXPECTED_TEXT = "你好"
-TESTDATA_DIR = Path("audio-chat/testdata/provider")
+TESTDATA_DIR = Path(__file__).resolve().parents[2] / "testdata/provider"
 ASR_SAMPLE = TESTDATA_DIR / "dashscope-nihao-16k.pcm"
 ASR_EXPECTED = TESTDATA_DIR / "dashscope-nihao-expected.txt"
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("DASHSCOPE_API_KEY"),
-    reason="DASHSCOPE_API_KEY is required for real provider integration tests",
+    not os.getenv("DASHSCOPE_API_KEY") or importlib.util.find_spec("dashscope") is None,
+    reason="DASHSCOPE_API_KEY and dashscope package are required for real provider integration tests",
 )
 
 

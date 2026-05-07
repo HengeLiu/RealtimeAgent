@@ -84,14 +84,13 @@ def test_publish_resolves_by_subscription() -> None:
 def test_control_service_public_publish_does_not_accept_target_device_id() -> None:
     """测试目标：确认业务侧不能通过 ControlService 公共 API 点对点发送事件。
 
-    测试方法：检查公共对象没有 `publish_to_device` 方法，普通 publish 只接收 Event；
-    受控定向能力保留在内部 `_push_to_resolved_device`，只供 DeviceCommandService 协作使用。
-    预期结果：公共点对点方法不存在，内部协作方法存在。
+    测试方法：检查公共对象没有 `publish_to_device` 方法，普通 publish 只接收 Event。
+    预期结果：公共点对点方法不存在；协议原生选择分发由 `publish_matching()` 承担。
     """
     service = ControlService()
 
     assert not hasattr(service, "publish_to_device")
-    assert hasattr(service, "_push_to_resolved_device")
+    assert hasattr(service, "publish_matching")
 
 
 def test_heartbeat_and_disconnect_update_debug_snapshot() -> None:

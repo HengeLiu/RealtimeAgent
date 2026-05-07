@@ -5,7 +5,7 @@ import queue
 import time
 import audioop
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from audio_chat.observability import RunRecorder
 from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, new_id
@@ -15,7 +15,14 @@ PRIORITY_ORDER = {"low": 0, "normal": 1, "high": 2, "critical": 3}
 
 
 @dataclass(frozen=True)
-class OutputIntent:
+class OutputItem:
+    """Output Service 内部输出项。
+
+    主要功能：表示一条已经进入输出链路、等待 TTS、播放仲裁或端侧播放的内容。
+    主要属性：`priority`、`on_interrupted`、`on_blocked` 和 `ttl_seconds` 只服务
+    Output Service 内部调度，不作为 Tool / Task 公开协议对象。
+    """
+
     user_id: str
     session_id: str
     source: str = "agent_reply"
@@ -32,7 +39,7 @@ class AssistantTextDelta:
     session_id: str
     text: str
     final: bool = False
-    intent: OutputIntent | None = None
+    intent: OutputItem | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,68 @@ class PlaybackDecision:
     active_stream_id: str | None = None
     interrupted_stream_id: str | None = None
     queued_intent_id: str | None = None
+
+
+@dataclass(frozen=True)
+class NotificationRequest:
+    """通知请求。
+
+    主要功能：Output Service 内部接收 TaskEvent、系统提醒或业务通知后的统一入口对象。
+    主要属性：`text` 为可播报内容，`priority`、`ttl_seconds`、`dedupe_key` 参与通知决策。
+    """
+
+    user_id: str
+    session_id: str
+    text: str
+    priority: str = "normal"
+    ttl_seconds: int = 0
+    dedupe_key: str | None = None
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NotificationDecision:
+    """通知决策。
+
+    主要功能：记录通知协调层是否放行、合并或丢弃通知。
+    """
+
+    action: str
+    reason: str
+    dedupe_key: str | None = None
+
+
+class NotificationCoordinator:
+    """通知协调器。
+
+    主要功能：接收 TaskEvent 和系统通知，做最小去重决策后进入 Output Router。
+    """
+
+    def __init__(self, *, output_service: "OutputService | None" = None) -> None:
+        self.output_service = output_service
+        self._seen_dedupe_keys: set[str] = set()
+
+    def submit(self, request: NotificationRequest) -> NotificationDecision:
+        """提交通知。
+
+        主要逻辑：相同 dedupe_key 只放行一次；放行后转为 Output Service 文本提交。
+        参数：`request` 为通知请求。
+        返回值：通知决策。
+        异常情况：下游输出失败时向上抛出。
+        """
+        if request.dedupe_key and request.dedupe_key in self._seen_dedupe_keys:
+            return NotificationDecision(action="drop", reason="dedupe", dedupe_key=request.dedupe_key)
+        if request.dedupe_key:
+            self._seen_dedupe_keys.add(request.dedupe_key)
+        if self.output_service is not None and request.text:
+            self.output_service.submit_text(
+                user_id=request.user_id,
+                session_id=request.session_id,
+                text=request.text,
+                priority=request.priority,
+                ttl_seconds=request.ttl_seconds,
+            )
+        return NotificationDecision(action="route", reason="accepted", dedupe_key=request.dedupe_key)
 
 
 @dataclass(frozen=True)
@@ -308,7 +377,7 @@ class NativeAudioOutputSource:
 @dataclass
 class QueuedOutput:
     source: StreamingTtsOutputSource | NativeAudioOutputSource
-    intent: OutputIntent
+    intent: OutputItem
     created_at: float = field(default_factory=time.time)
     source_stream_id: str | None = None
 
@@ -318,14 +387,14 @@ class PlaybackArbiter:
         self.stream_service = stream_service
         self.recorder = recorder
         self.max_queue_size = max_queue_size
-        self._active_by_user: dict[str, tuple[OutputIntent, str, StreamingTtsOutputSource | NativeAudioOutputSource]] = {}
+        self._active_by_user: dict[str, tuple[OutputItem, str, StreamingTtsOutputSource | NativeAudioOutputSource]] = {}
         self._queue_by_user: dict[str, list[QueuedOutput]] = {}
 
     def submit(
         self,
         *,
         source: StreamingTtsOutputSource | NativeAudioOutputSource,
-        intent: OutputIntent,
+        intent: OutputItem,
         format: StreamFormat | None = None,
     ) -> tuple[PlaybackDecision, str | None]:
         active = self._active_by_user.get(intent.user_id)
@@ -402,7 +471,7 @@ class PlaybackArbiter:
 
     def _open_output_stream(
         self,
-        intent: OutputIntent,
+        intent: OutputItem,
         *,
         source: StreamingTtsOutputSource | NativeAudioOutputSource,
         format: StreamFormat | None = None,
@@ -451,7 +520,7 @@ class OutputRouter:
         self._queued_sessions: set[str] = set()
 
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
-        intent = self._intent_with_defaults(delta.intent or OutputIntent(user_id=delta.user_id, session_id=delta.session_id))
+        intent = self._intent_with_defaults(delta.intent or OutputItem(user_id=delta.user_id, session_id=delta.session_id))
         source = self._source_by_session.get(delta.session_id)
         if source is None:
             source = StreamingTtsOutputSource(tts=self._new_tts())
@@ -512,7 +581,7 @@ class OutputRouter:
         audio: bytes,
         format: StreamFormat,
         final: bool = False,
-        intent: OutputIntent | None = None,
+        intent: OutputItem | None = None,
         metadata: dict | None = None,
     ) -> None:
         """处理 provider 原生 audio delta。
@@ -523,7 +592,7 @@ class OutputRouter:
         返回值：无。
         异常情况：stream 服务写入失败时抛出异常。
         """
-        resolved_intent = self._intent_with_defaults(intent or OutputIntent(user_id=user_id, session_id=session_id))
+        resolved_intent = self._intent_with_defaults(intent or OutputItem(user_id=user_id, session_id=session_id))
         source = self._native_source_by_session.get(session_id)
         if source is None:
             source = NativeAudioOutputSource(format=format, metadata=dict(metadata or {}))
@@ -662,8 +731,8 @@ class OutputRouter:
         if queued.source.final_requested:
             self._finish_stream(queued.intent.user_id, queued.intent.session_id, stream_id, queued.source)
 
-    def _intent_with_defaults(self, intent: OutputIntent) -> OutputIntent:
-        return OutputIntent(
+    def _intent_with_defaults(self, intent: OutputItem) -> OutputItem:
+        return OutputItem(
             user_id=intent.user_id,
             session_id=intent.session_id,
             source=intent.source,
@@ -724,6 +793,7 @@ class OutputService:
             default_on_interrupted=default_on_interrupted,
             max_queue_size=max_queue_size,
         )
+        self.notification_coordinator = NotificationCoordinator(output_service=self)
 
     def on_assistant_text_delta(self, delta: AssistantTextDelta) -> None:
         self.router.on_agent_text_delta(delta)
@@ -736,7 +806,7 @@ class OutputService:
         audio: bytes,
         format: StreamFormat,
         final: bool = False,
-        intent: OutputIntent | None = None,
+        intent: OutputItem | None = None,
         metadata: dict | None = None,
     ) -> None:
         """接收原生 assistant_audio.delta。
@@ -757,7 +827,67 @@ class OutputService:
             metadata=metadata,
         )
 
-    def submit_output(self, intent: OutputIntent, text: str) -> None:
+    def submit_text(self, *, user_id: str, session_id: str, text: str, priority: str = "normal", ttl_seconds: int = 0) -> None:
+        """提交文本到 Output Service。
+
+        主要逻辑：由服务内部创建 `OutputItem`，避免 Tool / Task 直接接触输出调度对象。
+        参数：`user_id`、`session_id` 定位会话，`text` 为文本，`priority` 和
+        `ttl_seconds` 为内部调度提示。
+        返回值：无。
+        异常情况：下游 stream 写入失败时向上抛出。
+        """
+        self.submit_output(OutputItem(user_id=user_id, session_id=session_id, priority=priority, ttl_seconds=ttl_seconds), text)
+
+    def submit_audio(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        priority: str = "normal",
+        metadata: dict | None = None,
+    ) -> None:
+        """提交原生音频到 Output Service。
+
+        主要逻辑：由服务内部创建 `OutputItem`，再走 native audio 输出链路。
+        参数：`audio` 为音频 payload，`format` 为音频格式，`priority` 为调度优先级。
+        返回值：无。
+        异常情况：下游 stream 写入失败时向上抛出。
+        """
+        self.on_assistant_audio_delta(
+            user_id=user_id,
+            session_id=session_id,
+            audio=audio,
+            format=format,
+            final=True,
+            intent=OutputItem(user_id=user_id, session_id=session_id, source="tool_audio", priority=priority),
+            metadata={"source": "tool_audio", **dict(metadata or {})},
+        )
+
+    def notify_task_event(self, event: Any) -> NotificationDecision:
+        """接收任务事件通知。
+
+        主要逻辑：从 TaskEvent 中提取文本、优先级和 TTL，交给 NotificationCoordinator。
+        参数：`event` 为 TaskEvent 或同形对象。
+        返回值：`NotificationDecision`。
+        异常情况：下游输出失败时向上抛出。
+        """
+        payload = getattr(event, "payload", {}) or {}
+        text = str(payload.get("text") or payload.get("message") or "")
+        return self.notification_coordinator.submit(
+            NotificationRequest(
+                user_id=getattr(event, "user_id"),
+                session_id=getattr(event, "session_id") or getattr(event, "task_id"),
+                text=text,
+                priority=getattr(event, "priority", "normal"),
+                ttl_seconds=getattr(event, "ttl_seconds", 0),
+                dedupe_key=getattr(event, "dedupe_key", None),
+                metadata={"task_id": getattr(event, "task_id", ""), "task_type": getattr(event, "task_type", "")},
+            )
+        )
+
+    def submit_output(self, intent: OutputItem, text: str) -> None:
         self.router.on_agent_text_delta(
             AssistantTextDelta(user_id=intent.user_id, session_id=intent.session_id, text=text, final=False, intent=intent)
         )

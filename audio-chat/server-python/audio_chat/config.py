@@ -128,6 +128,41 @@ class GenericEnabledConfig:
 
 
 @dataclass(frozen=True)
+class DiscoveryConfig:
+    enabled: bool = False
+    packages: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ToolConfig:
+    enabled: bool = True
+    builtin_enabled: bool = True
+    allowlist: list[str] = field(default_factory=list)
+    denylist: list[str] = field(default_factory=list)
+    default_timeout_seconds: int = 30
+    allow_parallel_calls: bool = True
+    discover: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TaskConfig:
+    enabled: bool = False
+    max_running_per_user: int = 16
+    discover: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DevChecksConfig:
+    run_contract_tests: bool = True
+    run_package_check: bool = True
+    run_boundary_check: bool = True
+    contract_tests_path: str = "audio-chat/testdata/contracts"
+    require_recent_playback: bool = False
+
+
+@dataclass(frozen=True)
 class ObservabilityConfig:
     runs_root: str = "runs/audio-chat"
     record_input_streams: bool = True
@@ -150,19 +185,21 @@ class AudioChatYamlConfig:
     asset: AssetConfig = field(default_factory=AssetConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    tools: GenericEnabledConfig = field(default_factory=lambda: GenericEnabledConfig(enabled=True))
-    tasks: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
+    tools: ToolConfig = field(default_factory=ToolConfig)
+    tasks: TaskConfig = field(default_factory=TaskConfig)
     memory: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
     skill: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
     mcp: GenericEnabledConfig = field(default_factory=GenericEnabledConfig)
     endpoint_defaults: dict[str, Any] = field(default_factory=dict)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+    dev_checks: DevChecksConfig = field(default_factory=DevChecksConfig)
 
 
 def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     import yaml
 
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    config_path = _resolve_config_path(path)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     data = _apply_env_overrides(data)
     text = data.get("agent", {}).get("text", {})
     return AudioChatYamlConfig(
@@ -180,14 +217,58 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
             text=AgentTextConfig(**text),
         ),
         output=OutputConfig(**data.get("output", {})),
-        tools=GenericEnabledConfig(**_generic(data.get("tools", {"enabled": True}))),
-        tasks=GenericEnabledConfig(**_generic(data.get("tasks", {}))),
+        tools=_tool_config(data.get("tools", {"enabled": True})),
+        tasks=_task_config(data.get("tasks", {})),
         memory=GenericEnabledConfig(**_generic(data.get("memory", {}))),
         skill=GenericEnabledConfig(**_generic(data.get("skill", {}))),
         mcp=GenericEnabledConfig(**_generic(data.get("mcp", {}))),
         endpoint_defaults=data.get("endpoint_defaults", {}),
         observability=ObservabilityConfig(**data.get("observability", {})),
+        dev_checks=DevChecksConfig(**data.get("dev_checks", {})),
     )
+
+
+def _resolve_config_path(path: str | Path) -> Path:
+    raw = Path(path)
+    if raw.exists():
+        return raw
+    parts = raw.parts
+    if parts and parts[0] == "audio-chat":
+        trimmed = Path(*parts[1:])
+        if trimmed.exists():
+            return trimmed
+    return raw
+
+
+def _discovery(data: dict[str, Any]) -> DiscoveryConfig:
+    return DiscoveryConfig(**dict(data or {}))
+
+
+def _tool_config(data: dict[str, Any]) -> ToolConfig:
+    raw = dict(data or {})
+    discover = _discovery(raw.pop("discover", {}))
+    known = {
+        "enabled",
+        "builtin_enabled",
+        "allowlist",
+        "denylist",
+        "default_timeout_seconds",
+        "allow_parallel_calls",
+    }
+    values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}
+    extra = dict(raw)
+    extra["discover"] = {"enabled": discover.enabled, "packages": list(discover.packages)}
+    return ToolConfig(**values, discover=discover, extra=extra)
+
+
+def _task_config(data: dict[str, Any]) -> TaskConfig:
+    raw = dict(data or {})
+    discover = _discovery(raw.pop("discover", {}))
+    known = {"enabled", "max_running_per_user"}
+    values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}
+    extra = dict(raw)
+    extra["discover"] = {"enabled": discover.enabled, "packages": list(discover.packages)}
+    return TaskConfig(**values, discover=discover, extra=extra)
 
 
 def _generic(data: dict[str, Any]) -> dict[str, Any]:

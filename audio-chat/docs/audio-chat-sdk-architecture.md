@@ -25,6 +25,9 @@
 5. `phone-mock` 和 `glass-playback` 对开发效率非常关键，不能只依赖真机。
 6. 播放仲裁和任务通知不能放在业务层，各业务能力只应提交结构化输出请求。
 7. Omni 全模态模型和普通文本模型的 Agent Loop 差异很大，旧版强行塞进一套 `VoiceRuntime` 会导致概念混杂。
+8. `CapabilityResult`、`CapabilityTrace`、`MediaAssetRef`、`TaskRef` 这类结构化对象能显著降低排障成本，应该保留并改成更清晰的新命名。
+9. 旧版 Task 事件回流到会话、产物和通知的方向是正确的；新版应把它设计为 Task Engine、Agent Core、Output Service 之间的稳定桥接。
+10. 旧版 preflight、package-check、contract test 和回放断言已经证明“能启动、能联调、能解释失败”是 SDK 产品能力，不是附属脚本。
 
 上一版主要困难：
 
@@ -34,6 +37,8 @@
 4. 对外暴露了过多 frame、path、设备类型等低层细节，开发者需要理解太多历史兼容概念。
 5. 旧 SDK 同时包含 server、phone、glass 三端产品化职责，导致 Python 包、端侧工程、业务样板和打包发布边界不够干净。
 6. 文档里有多条阶段性设计，后续开发者容易分不清哪些是当前真实链路，哪些只是历史方案。
+7. `DeviceGroupContext` 对业务开发友好，但名字和 group_id 绑定过深；新版应保留“按能力使用设备”的体验，去掉固定 group 和端侧角色前提。
+8. 旧版内置工具和任务覆盖了查询设备、抓拍、任务状态、取消任务、读 Skill、记忆检索等常见能力；新版应继续提供这些能力，但必须通过事件和 stream 实现，不能保留特殊 RPC。
 
 `audio-chat` 的设计目标是把这些经验收敛为更小、更明确、更可替换的模块。
 
@@ -113,6 +118,28 @@ audio-chat/
 6. 不负责端侧振动器或双声道播放器驱动。
 7. 不负责 iOS/ESP32 的正式二进制分发。
 8. 不把某个业务能力硬编码进 SDK 主包。
+
+### 3.4 新 SDK 的准确定位
+
+`audio-chat` 的交付物是 server 侧 Python SDK，但它不是孤立的 Python 工具包。更准确的定位是：
+
+1. `audio-chat/server-python` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
+2. `audio-chat/docs` 和 `audio-chat/testdata/contracts` 定义多端必须共同遵守的公共协议、对象模型和契约测试。
+3. `audio-chat/endpoints` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧可以由开发者自行实现。
+4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
+
+因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备能力写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
+
+和旧版三端 SDK 的差异是：
+
+| 旧 SDK 经验 | audio-chat 取舍 |
+| --- | --- |
+| 多端协同运行模型 | 保留为公共协议和参考端侧，不把端侧正式工程塞进 server Python 包。 |
+| glass / phone / server 固定角色 | 改成能力和订阅驱动；`client_type` 只用于调试、兼容和默认配置。 |
+| `DeviceGroupContext` | 改成 `UserDeviceContext`，以 `user_id` 的 active device set 为边界。 |
+| 控制面和媒体面 | 改成 Control Service 和 Stream Service，开发者只理解 event 和 stream。 |
+| 回放端、mock 端、preflight | 保留并提升为第一阶段验收入口。 |
+| Task 事件、通知和播放仲裁 | 收敛进 Task Engine 与 Output Service，避免业务能力直接控制播放。 |
 
 ## 4. 设计原则
 
@@ -415,6 +442,22 @@ server 可以释放音频会话的情况：
 2. 对仍打开的输入 stream 下发或记录 `stream.input.closed`
 3. 对仍打开的输出 stream 下发 `stream.output.close.requested`，最终记录 `stream.output.closed` 或 `stream.output.cancelled`
 
+旧 SDK 的连续对话关闭逻辑说明了一个细节：释放音频会话不总是“立刻断开”。新版需要区分三种关闭：
+
+| 类型 | 场景 | 行为 |
+| --- | --- | --- |
+| `close_now` | 端侧断开、用户强打断、provider session 失败。 | 立即取消当前响应、关闭输入输出 stream，并释放 provider 会话。 |
+| `close_after_reply` | 用户说“结束对话”，但当前回复已经开始。 | 停止接收新输入，允许当前输出完成，然后关闭音频会话。 |
+| `idle_timeout_close` | 连续静默超过阈值。 | 如果没有活动输出和工具调用，关闭会话；否则等活动项结束后关闭。 |
+
+关闭时还需要清理：
+
+1. provider realtime session。
+2. 当前 turn 的临时音频缓冲。
+3. 因本轮输入自动请求但未被 Tool 使用的临时资产。
+4. Output Service 中属于该会话且不应继续播放的低优先级输出。
+5. runs 产物中的会话结束事件和关闭原因。
+
 ## 6. 协议与约定
 
 本章只定义对外协议契约，不描述 server 内部实现。Control Service、Stream Service、Audio Pipeline、Asset Service、Agent Core、Output Service 的内部实现分别放在后续模块章节中。
@@ -648,6 +691,55 @@ subscriptions=[
 2. OpenAI Realtime PCM 输出常见为 24 kHz，server 可按端侧声明重采样。
 3. Qwen Omni Realtime 的音频输入输出可通过 session 配置声明。
 
+### 6.5 公共契约与稳定性边界
+
+旧 SDK 的一个重要经验是：真正需要稳定的不是所有内部类，而是开发者会直接使用、端侧必须共同理解、测试和回放必须长期复用的公共契约。`audio-chat` 第一版把公共契约分成三类。
+
+Python 扩展契约：
+
+| 契约 | 使用者 | 稳定要求 |
+| --- | --- | --- |
+| `BaseTool` / `ToolContext` / `ToolResult` | Tool 开发者 | 字段可向后兼容增加，不随内部服务重构改名。 |
+| `BaseTask` / `TaskContext` / `TaskEvent` / `TaskRef` | Task 开发者 | 状态机和事件语义稳定，允许增加可选字段。 |
+| `UserDeviceContext` / `DeviceSnapshot` / `AssetRef` | Tool / Task | 只暴露按能力使用设备的接口，不暴露连接对象。 |
+| `Skill` / `Memory` / `MCPGateway` 的 Tool 封装入口 | 能力包开发者 | MCP 和 Skill 不直接拿设备上下文，必须通过 Tool / Task 间接使用设备。 |
+| `AudioChatError` / `ErrorCode` | 所有扩展点 | 所有 SDK 失败都应该返回结构化错误，避免只抛底层异常字符串。 |
+
+跨端协议契约：
+
+| 契约 | 说明 |
+| --- | --- |
+| Event 信封和内置事件名 | Python、ESP32、iOS、Web、回放端必须一致。 |
+| 订阅声明和 filter 规则 | 决定事件如何被投递，不能让业务代码绕过。 |
+| Stream 元数据和 `StreamChunk` 二进制封装 | 用于真实字节传输、回放和端侧兼容测试。 |
+| 设备注册、鉴权、绑定和心跳 | 决定设备何时进入 `user_id` active device set。 |
+| Stream 类型命名 | `sensor.*` / `actuator.*` 是跨端约定，不按具体端侧角色命名。 |
+
+测试资产契约：
+
+| 契约 | 说明 |
+| --- | --- |
+| 回放场景 YAML | 描述设备能力、订阅、输入音频、资产样本、执行器记录和断言。 |
+| golden event JSON | 验证 Event 信封、订阅 filter、错误响应和 stream 生命周期。 |
+| golden stream chunk | 验证二进制切片 header、payload_size、seq、timestamp 和 stream 元数据。 |
+| 回放 result.json | 固定断言结果、失败原因、工具轨迹、任务事件和播放决策字段。 |
+
+非公共实现包括：
+
+1. Control Service 内部连接表。
+2. Stream Service 的具体队列、锁和缓冲实现。
+3. Agent Core provider adapter 的私有事件结构。
+4. Output Service 内部的 `OutputItem`、播放租约和队列实现。
+5. 模型 prompt 组装细节。
+6. 调试页面和参考端侧的内部文件结构。
+
+公共契约变更规则：
+
+1. 新增可选字段可以进入 minor 版本。
+2. 删除字段、改名、改变事件语义、改变状态机转移都必须进入 major 版本或提供兼容适配。
+3. 每次协议或公开对象变更都要新增或更新契约测试。
+4. 参考端侧和 Python 回放端必须优先跟随契约测试，而不是依赖 server 内部实现。
+
 ## 7. Control Service
 
 ### 7.1 职责
@@ -858,7 +950,6 @@ class ActiveDeviceSet
 class DeviceRegistry
 class SubscriptionIndex
 class ControlService
-class StreamService
 class TaskEngine
 
 ControlService --> DeviceRegistry
@@ -869,8 +960,6 @@ ActiveDeviceSet --> Device
 Device --> DeviceSnapshot
 UserDeviceContext --> DeviceHandle
 DeviceHandle --> DeviceSnapshot
-DeviceHandle --> ControlService
-DeviceHandle --> StreamService
 @enduml
 ```
 
@@ -1546,7 +1635,240 @@ TextAgentCore --> OutputService
 | `response.done` | 当前模型响应完成。 |
 | `session.error` | 会话异常。 |
 
-### 11.2 RealtimeAudioAgentCore
+### 11.2 工具注册、发现与调用
+
+Agent Core 不直接持有业务 Tool，也不直接 import 业务模块。工具能力统一通过 `ToolGateway` 暴露给不同 Agent Core：
+
+1. server 启动时自动发现并注册 Tool。
+2. `ToolGateway` 按当前用户、Skill、配置、模型能力和会话状态生成可用工具清单。
+3. Agent Core 把工具清单转换成 provider 所需的 tool schema。
+4. 模型产生工具调用时，Agent Core 把 provider 原始事件转换成统一 `ToolCall`。
+5. `ToolGateway` 校验、执行、记录和返回 `ToolResult`。
+6. Agent Core 把 `ToolResult` 回填给 provider 或文本模型循环。
+
+这条链路对 `RealtimeAudioAgentCore` 和 `TextAgentCore` 必须一致。差异只在 provider 工具协议适配，不在 Tool 本身。
+
+#### 11.2.1 自动发现与注册
+
+业务开发者不需要接触 server `app.py`，也不需要在装配入口里手动调用 `app.register_tool(...)`。SDK 默认使用自动发现：
+
+```text
+1. 读取 YAML 中的 tools.discover.packages。
+2. import 这些 Python package。
+3. 遍历 package 下的模块。
+4. 找到所有继承 BaseTool 的具体类。
+5. 实例化并注册到 ToolRegistry。
+6. 同理，tasks.discover.packages 下所有继承 BaseTask 的具体类自动注册到 TaskRegistry。
+```
+
+开发者只需要把 Tool / Task 放进配置指定的包里：
+
+```text
+my_app/
+  tools/
+    look_around.py
+    navigation.py
+  tasks/
+    video_frame_analyze.py
+```
+
+示例 Tool：
+
+```python
+from audio_chat import BaseTool, ToolContext, ToolResult
+
+class LookAroundTool(BaseTool):
+    name = "look_around"
+    description = "获取用户当前视野中的一张图片。"
+    input_model = LookAroundInput
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        asset = await context.devices.request_asset(
+            "sensor.rgb",
+            freshness_seconds=3,
+            timeout_seconds=5,
+            configure_payload={"mode": "single", "max_samples": 1},
+        )
+        return ToolResult.success(data={"asset_id": asset.asset_id})
+```
+
+自动发现进入 `ToolRegistry`，而不是进入某个 Agent Core：
+
+```plantuml
+@startuml
+title Tool 注册、发现与调用类图
+
+class ToolAutoDiscovery {
+  +discover(packages)
+  +load_module(module)
+  +find_tool_classes()
+}
+
+class ToolRegistry {
+  +register(tool)
+  +get(name)
+  +list()
+}
+
+class ToolPolicy {
+  +filter_tools(user_id, session, tools)
+}
+
+class ToolSchemaBuilder {
+  +build_sdk_schema(tool)
+  +build_provider_schema(tool, provider)
+}
+
+class ToolGateway {
+  +list_tools(context)
+  +build_provider_tools(context, provider)
+  +invoke(call, context)
+}
+
+class ToolExecutor {
+  +run(tool, context, input_data)
+}
+
+class ToolContextFactory {
+  +create(user_id, session, generation_id)
+}
+
+class BaseTool {
+  +name
+  +description
+  +input_model
+  +output_model
+  +side_effect
+  +timeout_seconds
+  +run(context, input_data)
+}
+
+class UserDeviceContext
+class TaskEngine
+class MemoryService
+class MCPGateway
+class SkillService
+class UserMessageStore
+
+ToolAutoDiscovery --> ToolRegistry
+ToolRegistry --> BaseTool
+ToolGateway --> ToolRegistry
+ToolGateway --> ToolPolicy
+ToolGateway --> ToolSchemaBuilder
+ToolGateway --> ToolExecutor
+ToolGateway --> ToolContextFactory
+ToolGateway --> UserMessageStore
+ToolContextFactory --> UserDeviceContext
+ToolContextFactory --> TaskEngine
+ToolContextFactory --> MemoryService
+ToolContextFactory --> MCPGateway
+ToolContextFactory --> SkillService
+ToolExecutor --> BaseTool
+@enduml
+```
+
+注册时 SDK 必须校验：
+
+1. `name` 全局唯一，使用小写 snake_case，不与内置工具冲突。
+2. `description` 面向模型描述工具用途，不写端侧实例细节。
+3. `input_model` 可生成 JSON Schema。
+4. `output_model` 或 `ToolResult` 可序列化为模型可读结果。
+5. 工具声明的副作用、超时、并发策略符合 `tools` 配置。
+6. 工具不能在注册阶段持有某个 `device_id` 或控制连接。
+7. 抽象基类、测试夹具和以下划线开头的内部类默认不注册。
+8. 模块 import 失败时，如果 `tools.discover.fail_fast=true`，server 启动失败并输出具体模块、异常和修复建议。
+
+显式注册只作为高级能力保留，用于测试、动态插件或自定义装配；常规业务项目不应依赖它。
+
+#### 11.2.2 发现
+
+Agent Core 每次打开会话或准备模型请求时，通过 `ToolGateway` 发现当前可用工具：
+
+```python
+tools = tool_gateway.build_provider_tools(
+    context=AgentToolContext(user_id=user_id, session_id=session_id),
+    provider=provider_name,
+)
+```
+
+发现流程：
+
+```text
+1. 从 ToolRegistry 读取全部已注册 Tool。
+2. 应用 tools.allowlist / tools.blocklist。
+3. 应用 SkillService 的工具策略，例如某个 Skill 只开放部分工具。
+4. 应用模型能力，例如 provider 不支持工具调用时返回空列表。
+5. 应用会话策略，例如只读模式禁用有副作用工具。
+6. 根据 provider 能力生成 tool schema。
+7. 返回 provider 可接受的工具定义。
+```
+
+说明：
+
+1. 设备能力不应在工具发现阶段硬编码成“有设备才暴露工具”。例如 `look_around` 可以始终暴露，执行时如果没有 `sensor.rgb` 设备，再返回可解释错误。
+2. 如果某个业务希望动态隐藏工具，可以通过 Skill 或 ToolPolicy 实现，但不应让 Agent Core 直接查询设备列表来拼工具清单。
+3. Realtime 模型通常在 session 配置时提交 tool schema；文本模型通常在每次模型请求时提交 tool schema。
+
+#### 11.2.3 调用
+
+模型产生工具调用时，Agent Core 只负责把 provider 事件归一成统一调用，不直接执行业务代码：
+
+```python
+ToolCall(
+    call_id="call_01H...",
+    tool_name="look_around",
+    arguments={"freshness_seconds": 3},
+    generation_id="gen_01H...",
+)
+```
+
+调用流程：
+
+```text
+1. Agent Core 收到 provider tool call 事件。
+2. RealtimeToolBridge 或 TextToolLoop 解析 tool_name、call_id 和 arguments。
+3. ToolGateway 校验工具是否存在、当前会话是否允许、参数是否符合 input_model。
+4. ToolContextFactory 创建 ToolContext，注入 UserDeviceContext、TaskEngine、MemoryService、MCPGateway、SkillService。
+5. ToolExecutor 按超时、并发、取消策略调用 BaseTool.run()。
+6. Tool 可以通过 context.devices 发布协议事件、打开 stream、读取资产或提交输出。
+7. ToolGateway 记录 tool.call.started / completed / failed，写入 UserMessageStore 和 runs 产物。
+8. ToolGateway 返回 ToolResult。
+9. Agent Core 把 ToolResult 转换为 provider 所需格式并继续模型循环。
+```
+
+`ToolContext` 示例：
+
+```python
+class ToolContext:
+    user_id: str
+    session_id: str
+    generation_id: str
+    devices: UserDeviceContext
+    tasks: TaskEngine
+    memory: MemoryService
+    mcp: MCPGateway
+    skills: SkillService
+```
+
+约束：
+
+1. Tool 只能通过 `context.devices` 使用设备能力，不能直接拿 Control Service 或 Stream Service。
+2. MCP 和 Skill 不直接拿 `UserDeviceContext`。如果需要设备能力，必须封装为 Tool 或 Task。
+3. Tool 结果里可以返回 `AssetRef`、文本、结构化 JSON 或错误；不要返回大媒体字节。
+4. 如果工具执行会产生长流程，应创建 server 侧 Task，并返回 `task_id` 或状态摘要。
+5. 用户打断时，Agent Core 取消当前模型响应；已开始执行的 Tool 是否取消由 ToolExecutor 和 TaskEngine 根据工具声明决定。
+
+#### 11.2.4 Realtime 与 Text 的差异
+
+| 环节 | RealtimeAudioAgentCore | TextAgentCore |
+| --- | --- | --- |
+| 工具 schema 提交 | `RealtimeToolBridge` 在 provider session update 时提交。 | `TextToolLoop` 在每次模型请求时提交。 |
+| 工具调用来源 | provider realtime tool call event。 | 文本模型流式响应中的 tool call。 |
+| 参数增量 | 可能以 delta 形式到达，需要聚合完整 JSON。 | 可能是完整 JSON，也可能是流式 delta。 |
+| 结果回填 | `RealtimeToolBridge.submit_tool_result()` 回写 provider session。 | `TextToolLoop` 把结果追加到 messages 后继续模型循环。 |
+| 输出提示 | 工具进度提示走 `context.devices.submit_text()` 或 Output Service。 | 同左。 |
+
+### 11.3 RealtimeAudioAgentCore
 
 定位：
 
@@ -1604,6 +1926,7 @@ class RealtimeOutputAdapter {
 }
 
 class AgentEventRecorder
+class ToolGateway
 
 RealtimeAudioAgentCore --> RealtimeSessionManager
 RealtimeAudioAgentCore --> RealtimeInputAdapter
@@ -1614,6 +1937,7 @@ RealtimeAudioAgentCore --> AgentEventRecorder
 RealtimeSessionManager --> RealtimeProviderAdapter
 RealtimeInputAdapter --> RealtimeProviderAdapter
 RealtimeToolBridge --> RealtimeProviderAdapter
+RealtimeToolBridge --> ToolGateway
 RealtimeOutputAdapter --> RealtimeProviderAdapter
 @enduml
 ```
@@ -1629,7 +1953,7 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 处理流程：
 
 1. `RealtimeSessionManager` 打开 provider realtime session。
-2. `RealtimeProviderAdapter` 发送 session 配置，包括 instructions、voice、音频格式、tool schema、turn detection。
+2. `RealtimeToolBridge` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema；`RealtimeProviderAdapter` 发送 session 配置，包括 instructions、voice、音频格式、tool schema、turn detection。
 3. `RealtimeInputAdapter` 将 `sensor.mic` stream chunk 映射为 provider audio append 事件。
 4. 如果工具结果或上下文包含图片资产，按 provider 能力将 `AssetRef` 映射为 image input；不直接把相机 stream 全量接入实时模型。
 5. `RealtimeTurnBoundary` 监听 provider VAD、input committed、response started、response done 等事件。
@@ -1646,7 +1970,7 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 3. `AgentEventRecorder` 可被所有 Agent Core 复用。
 4. `RealtimeOutputAdapter` 的 provider 输出事件到统一 assistant delta 的映射可复用。
 
-### 11.3 TextAgentCore
+### 11.4 TextAgentCore
 
 定位：
 
@@ -1700,6 +2024,7 @@ class TextOutputAdapter {
 }
 
 class AgentEventRecorder
+class ToolGateway
 
 TextAgentCore --> AsrPipeline
 TextAgentCore --> TextTurnBoundary
@@ -1709,6 +2034,7 @@ TextAgentCore --> TextToolLoop
 TextAgentCore --> TextOutputAdapter
 TextAgentCore --> AgentEventRecorder
 TextToolLoop --> TextModelAdapter
+TextToolLoop --> ToolGateway
 @enduml
 ```
 
@@ -1718,11 +2044,12 @@ TextToolLoop --> TextModelAdapter
 2. `TextTurnBoundary` 根据端侧 commit、server VAD 或最大静音时间决定提交一轮输入。
 3. `AsrPipeline` 输出最终 transcript，也可输出转写增量用于日志。
 4. `MessageBuilder` 将 transcript、近期 messages、memory、skill、设备上下文组装成模型输入。
-5. `TextModelAdapter` 以流式方式调用文本模型。
-6. `TextToolLoop` 观察工具调用，调用 `ToolGateway`，再继续模型循环。
-7. 模型产生 `text_delta` 时，`TextOutputAdapter` 立即映射为统一 `assistant_text.delta`。
-8. `assistant_text.delta` 交给 Output Service，由其内部 Output Router 调用 Streaming TTS 并生成 `assistant_audio.delta`。
-9. 完整文本和音频索引写入 `UserMessageStore` 和 runs 产物。
+5. `TextToolLoop` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema。
+6. `TextModelAdapter` 以流式方式调用文本模型。
+7. `TextToolLoop` 观察工具调用，调用 `ToolGateway`，再继续模型循环。
+8. 模型产生 `text_delta` 时，`TextOutputAdapter` 立即映射为统一 `assistant_text.delta`。
+9. `assistant_text.delta` 交给 Output Service，由其内部 Output Router 调用 Streaming TTS 并生成 `assistant_audio.delta`。
+10. 完整文本和音频索引写入 `UserMessageStore` 和 runs 产物。
 
 可复用组件：
 
@@ -1731,7 +2058,7 @@ TextToolLoop --> TextModelAdapter
 3. `TextToolLoop` 可给文本、视觉文本、多 agent 编排复用。
 4. Streaming TTS 能力由 Output Router 统一持有，可给 task notification、tool progress 复用。
 
-### 11.4 未来 Agent Core 扩展
+### 11.5 未来 Agent Core 扩展
 
 自定义 Agent Core 只需要实现 `AgentCore` 接口，并在 `AgentCoreRouter` 注册：
 
@@ -1762,6 +2089,7 @@ app.register_agent_core(
 
 1. `Output Router`：输出生成层，把统一 assistant delta 或内部 `OutputItem` 转成可播放音频来源。
 2. `Playback Arbiter`：播放仲裁层，决定同一用户或同一端侧当前应该播放哪条输出。
+3. `Notification Coordinator`：任务通知、系统提醒和安全提醒的去重、合并、上下文同步和提交入口。
 
 Agent Core 内部的 `RealtimeOutputAdapter`、`TextOutputAdapter` 不属于 `Output Service`。它们只是各自 Agent Core 的内部适配器，负责把模型/provider 的原始输出事件归一化为 SDK 统一事件。
 
@@ -1773,6 +2101,7 @@ Agent Core 内部的 `RealtimeOutputAdapter`、`TextOutputAdapter` 不属于 `Ou
 | `TextOutputAdapter` | `TextAgentCore` 内部 | 将文本模型的 `text_delta` 映射成统一 `assistant_text.delta`。 |
 | `Streaming TTS` | `Output Router` 内部依赖 | 将文本 delta 实时转成音频 delta，可被 agent reply、tool progress、task notification 复用。 |
 | `Output Router` | `Output Service` 内部 | 选择 native audio、Streaming TTS 或缓存音频。 |
+| `Notification Coordinator` | `Output Service` 内部 | 接收 TaskEvent、系统提醒和业务通知，做去重、合并和是否直发判断。 |
 | `Playback Arbiter` | `Output Service` 内部 | 根据优先级和打断策略仲裁播放资源。 |
 
 ### 12.1 输出来源
@@ -1900,7 +2229,74 @@ OutputRouter --> PlaybackArbiter
 3. TTS audio delta 不等待完整 WAV，立即进入 output stream。
 4. 如果 provider 不支持流式 TTS，才允许在内部 `OutputItem` 中标记 `streaming=false`，并在日志中记录延迟原因。
 
-### 12.3 Playback Arbiter
+### 12.3 Notification Coordinator
+
+Notification Coordinator 吸收旧 SDK 中 `NotificationCoordinator` 和任务通知桥接的经验，但作为 Output Service 的内部入口，不再成为业务开发者需要理解的独立模块。
+
+输入来源：
+
+1. Task Engine 产生的 `TaskEvent`。
+2. Tool 通过 `context.devices.submit_text()` 提交的用户可听提示。
+3. 系统健康、设备断开、权限失败等系统提醒。
+4. 安全类 Task 或 Tool 产生的紧急提醒。
+
+职责：
+
+1. 按 `dedupe_key` 去重，避免同一任务反复播放同一句通知。
+2. 按通知类型选择是否允许合并，例如低优先级状态更新可以合并，高优先级安全提醒不能合并。
+3. 把 `TaskEvent.priority` 映射到 Output Service 的 `priority`。
+4. 判断是否需要先写入会话上下文或回流 Agent Core。
+5. 将可直发通知提交给 Output Router，后续由 Playback Arbiter 决定播放、排队、打断或丢弃。
+6. 记录最近通知决策，供 `/api/debug/playback` 和回放断言使用。
+
+类图：
+
+```plantuml
+@startuml
+title Notification Coordinator 类图
+
+class NotificationCoordinator {
+  +submit(notification)
+  +dedupe(notification)
+  +merge_if_allowed(notification)
+  +build_snapshot(user_id)
+}
+
+class NotificationRequest {
+  +source
+  +user_id
+  +session_id
+  +task_id
+  +priority
+  +dedupe_key
+  +requires_agent_context_sync
+  +payload
+}
+
+class NotificationDecision {
+  +action
+  +reason
+  +dedupe_key
+}
+
+class OutputRouter
+class TaskEventBridge
+
+TaskEventBridge --> NotificationCoordinator
+NotificationCoordinator --> NotificationRequest
+NotificationCoordinator --> NotificationDecision
+NotificationCoordinator --> OutputRouter
+@enduml
+```
+
+对开发者的规则：
+
+1. Tool / Task 不直接操作 Notification Coordinator。
+2. Tool / Task 只设置 `priority`、`dedupe_key`、`ttl_seconds` 等业务语义。
+3. 任务事件是否直发由 `allow_direct_notify` 控制；是否回流模型由 `requires_agent_decision` 控制。
+4. 真实播放边界仍由 Playback Arbiter 决定。
+
+### 12.4 Playback Arbiter
 
 Playback Arbiter 的决策类型是内部输出，不是给用户直接配置的值。开发者配置的是：
 
@@ -1994,7 +2390,7 @@ PlaybackArbiter --> StreamService
 4. 排队输出必须设置 `ttl_seconds`。队列弹出时如果已过期，Playback Arbiter 产生 `drop` 决策并记录原因。
 5. 同级优先级默认不抢占，除非后续显式增加更细的策略字段；第一版不增加，避免 `priority` 和策略字段冲突。
 
-### 12.4 插播和 stream 生命周期
+### 12.5 插播和 stream 生命周期
 
 插播不能直接把新音频写入已经打开的旧 output stream。原因：
 
@@ -2015,6 +2411,18 @@ PlaybackArbiter --> StreamService
 
 ## 13. Tool、Task 和内置能力
 
+Tool 和 Task 是业务开发者最主要的扩展点。它们必须面向能力和协议编程，而不是面向某台设备实例、某个 WebSocket 连接或某个 provider 私有事件编程。
+
+公共引用对象：
+
+| 对象 | 说明 |
+| --- | --- |
+| `AssetRef` | 资产引用，包含 `asset_id`、`stream_type`、`mime_type`、`codec`、`storage_uri`、大小、时间戳、来源 stream 和设备快照信息。 |
+| `ArtifactRef` | 派生产物引用，包含 `artifact_id`、类型、文本摘要、存储路径和元数据。用于转写、分析报告、任务事件等结构化产物。 |
+| `TaskRef` | 任务引用，包含 `task_id`、`task_type`、状态和摘要。 |
+| `ToolTrace` | 工具调用轨迹，写入调试产物，不要求业务开发者手动构造。 |
+| `AudioChatError` | SDK 统一结构化错误，包含 `code`、`message`、`retryable` 和 `details`。 |
+
 ### 13.1 Tool 模板
 
 新 SDK 继续保留 Tool 概念，但简化开发者感知：
@@ -2026,10 +2434,91 @@ class BaseTool:
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None
     default_priority: str = "normal"
+    timeout_seconds: float | None = None
+    side_effect: str = "none"  # none, read_only, user_visible, external_write
+    cancellable: bool = False
 
     def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         ...
+
+class ToolResult:
+    ok: bool = True
+    data: dict = {}
+    message: str = ""
+    assets: list[AssetRef] = []
+    artifacts: list[ArtifactRef] = []
+    tasks: list[TaskRef] = []
+    meta: dict = {}
+    error: ToolError | None = None
+
+    @classmethod
+    def success(cls, *, data=None, message="", assets=None, artifacts=None, tasks=None, meta=None):
+        ...
+
+    @classmethod
+    def failed(cls, *, code: str, message: str, retryable: bool = False, details=None):
+        ...
+
+class ToolError:
+    code: str
+    message: str
+    retryable: bool = False
+    details: dict = {}
 ```
+
+Tool 的 `input_model` 是 Agent Core 发现工具时生成 provider tool schema 的来源。Tool 的执行入口只有 `run()`；设备通讯、资产读取、输出提示都通过注入的 `ToolContext` 完成。
+
+`ToolResult` 吸收旧 SDK `CapabilityResult` 的经验，但命名更贴近 Tool 开发者：
+
+| 字段 | 说明 |
+| --- | --- |
+| `ok` | 是否成功。失败时仍然可以返回可读 `message`。 |
+| `data` | 模型可读的结构化结果，不放大媒体字节。 |
+| `message` | 面向用户或模型的简短结果说明。 |
+| `assets` | Tool 产生或引用的资产，例如图片、音频、IMU 时间片。 |
+| `artifacts` | 派生调试产物或结构化文档，例如转写 JSON、分析报告。 |
+| `tasks` | Tool 创建或关联的 server 侧长任务引用。 |
+| `meta` | 只用于调试和观测的附加字段。 |
+| `error` | 结构化错误，包含 `code`、`message`、`retryable` 和 `details`。 |
+
+便捷构造：
+
+```python
+return ToolResult.success(
+    data={"object": "chair"},
+    message="前方检测到一把椅子。",
+    assets=[image_asset],
+)
+
+return ToolResult.failed(
+    code="device.unavailable",
+    message="当前没有可提供 RGB 图像的在线设备。",
+    retryable=True,
+)
+```
+
+ToolGateway 在每次调用时必须记录 `ToolTrace`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `trace_id` | 调用轨迹编号。 |
+| `generation_id` | 当前模型生成编号。 |
+| `tool_name` | 工具名。 |
+| `status` | `started`、`completed`、`failed`、`cancelled`。 |
+| `input_summary` | 脱敏后的输入摘要。 |
+| `output_summary` | 脱敏后的输出摘要。 |
+| `error_code` | 失败时的结构化错误码。 |
+| `latency_ms` | 工具耗时。 |
+
+这些 trace 写入 `UserMessageStore` 和 runs 产物，供回放断言和排障使用。业务 Tool 不需要自己写 trace 文件。
+
+工具进度提示也由 SDK 统一处理，吸收旧版 `progress_message` 的经验：
+
+1. Tool 可以声明 `progress_message`，类型为字符串或字符串列表。
+2. ToolGateway 在当前模型响应第一个可见输出是 tool call 时，才允许播报进度提示，避免模型已经开始回答后又插入“我先看一下”。
+3. 同一轮同一 Tool 的进度提示最多播报一次。
+4. 进度提示通过 Output Service 提交，默认 `priority=low`、`on_blocked=drop`，不会打断安全提醒或正在播放的关键回复。
+5. 进度提示失败不影响 Tool 主流程，但必须记录到 `tool-traces.jsonl`。
 
 内置 Tool：
 
@@ -2037,7 +2526,7 @@ class BaseTool:
 | --- | --- |
 | `request_asset` | 优先读取资产缓存；缓存未命中时请求端侧上传资产，例如 `sensor.rgb` 单帧图像。 |
 | `configure_asset_stream` | 请求端侧调整某类资产 stream 的上传策略，例如单帧、连续、低频或停止。 |
-| `request_device_control` | 按 capability 发布受控控制意图；真实下发仍然是匹配订阅后的控制事件。 |
+| `publish_device_command` | 按 capability 发布受控控制事件；真实下发仍然是匹配订阅后的控制事件。 |
 | `query_device_state` | 查询用户当前设备集合状态。 |
 | `query_task_status` | 查询任务状态。 |
 | `cancel_task` | 取消任务。 |
@@ -2050,8 +2539,11 @@ class BaseTool:
 ```python
 class BaseTask:
     task_type: str
+    version: str = "1.0.0"
     description: str
     default_priority: str = "normal"
+    supports_cancel: bool = True
+    timeout_seconds: int = 0
 
     def on_start(self, context: TaskContext) -> None:
         ...
@@ -2063,12 +2555,119 @@ class BaseTask:
         ...
 ```
 
+Task 只表示 server 侧长流程，不表示端侧有第三种通讯协议。端侧仍然只通过事件和 stream 与 server 通讯。
+
+Task Engine 吸收旧版 backend-task-core 的状态机经验，第一版内置统一状态：
+
+| 状态 | 说明 |
+| --- | --- |
+| `scheduled` | 已创建，尚未开始执行。 |
+| `running` | 正在执行。 |
+| `waiting_external` | 等待端侧事件、stream 资产、MCP 或其他外部结果。 |
+| `completed` | 正常完成。 |
+| `cancelled` | 被用户、Tool 或系统取消。 |
+| `failed` | 执行失败。 |
+| `timeout` | 超时结束。 |
+
+允许状态转移：
+
+```text
+scheduled -> running / cancelled
+running -> waiting_external / completed / cancelled / failed / timeout
+waiting_external -> running / completed / cancelled / failed / timeout
+completed / cancelled / failed / timeout -> terminal
+```
+
+Task 公共对象：
+
+| 对象 | 说明 |
+| --- | --- |
+| `TaskSpec` | 某类任务模板，包含 `task_type`、`version`、取消能力和超时设置。 |
+| `TaskInstance` | 某个任务实例，包含 `task_id`、`user_id`、`session_id`、状态、输入、结果和错误。 |
+| `TaskEvent` | 任务生命周期事件，用于状态回流、通知、Agent 决策和回放断言。 |
+| `TaskRef` | 返回给 Tool、模型或消息历史的任务引用。 |
+
+Task 自动发现规则和 Tool 保持一致：
+
+1. 只扫描 `tasks.discover.packages` 中的具体 `BaseTask` 子类。
+2. `task_type` 必须全局唯一，使用小写 snake_case。
+3. 抽象基类、测试夹具和以下划线开头的内部类默认不注册。
+4. import 失败、重复 `task_type` 或状态机声明非法时，按 `tasks.discover.fail_fast` 决定启动失败或跳过并记录错误。
+5. Task 类不能在注册阶段保存某个 `device_id`、控制连接或 stream writer。
+
+Task Event 必须包含：
+
+```python
+class TaskEvent:
+    event_name: str
+    task_id: str
+    task_type: str
+    user_id: str
+    session_id: str | None
+    state: str
+    priority: str
+    requires_agent_decision: bool = False
+    allow_direct_notify: bool = False
+    payload: dict = {}
+```
+
+其中：
+
+1. `requires_agent_decision=True` 表示事件应作为一轮特殊输入回流到 Agent Core，由模型结合上下文决定回复或下一步动作。
+2. `allow_direct_notify=True` 表示事件可以直接进入 Output Service 播放，不必等待模型决策。
+3. 两者可以同时为 true；此时先写入会话和产物，再由策略决定是否立即通知和是否补一轮 Agent 决策。
+4. `priority` 直接进入 Output Service，用于任务通知和安全提醒的播放仲裁。
+
+Task Engine 内部组件：
+
+```plantuml
+@startuml
+title Task Engine 类图
+
+class TaskEngine {
+  +create(task_type, input)
+  +query(task_id)
+  +cancel(task_id)
+  +publish_event(event)
+  +subscribe_events(filter)
+}
+
+class TaskAutoDiscovery
+class TaskRegistry
+class TaskStore
+class TaskStateMachine
+class TaskExecutor
+class TaskEventBridge
+class UserMessageStore
+class OutputService
+class AgentCoreRouter
+
+TaskEngine --> TaskAutoDiscovery
+TaskEngine --> TaskRegistry
+TaskEngine --> TaskStore
+TaskEngine --> TaskStateMachine
+TaskEngine --> TaskExecutor
+TaskEngine --> TaskEventBridge
+TaskEventBridge --> UserMessageStore
+TaskEventBridge --> OutputService
+TaskEventBridge --> AgentCoreRouter
+@enduml
+```
+
+`TaskEventBridge` 是旧 SDK 中值得保留的设计：Task 不直接写消息、不直接播放、不直接重入 Agent Core，而是发布结构化 `TaskEvent`。桥接层统一完成：
+
+1. 写入 `UserMessageStore`，让历史消息能看到任务摘要。
+2. 写入 `ArtifactRef` 和 `TaskRef`，让调试产物、回放和模型上下文能引用任务事件。
+3. 对 `allow_direct_notify=True` 的事件提交到 Output Service。
+4. 对 `requires_agent_decision=True` 的事件生成 Agent Core 输入。
+5. 记录 `task-events.jsonl`，供回放断言和线上排障。
+
 内置 Task：
 
 | Task | 说明 |
 | --- | --- |
-| `endpoint_control_task` | 管理需要端侧配合的 server 侧长流程；端侧只接收控制事件，不存在独立 task 协议。 |
-| `sensor_stream_task` | 管理传感器 stream 生命周期，例如相机、深度相机、IMU。 |
+| `device_command_task` | 管理需要端侧配合的 server 侧长流程；端侧只接收控制事件，不存在独立 task 协议。 |
+| `sensor_stream_watch_task` | 管理传感器 stream 生命周期，例如相机、深度相机、IMU。 |
 | `timer_task` | 最小通用定时任务样板。 |
 | `notification_task` | 后台通知和播放请求样板。 |
 
@@ -2134,7 +2733,7 @@ class DeviceHandle:
     def refresh_snapshot(self) -> DeviceSnapshot: ...
 ```
 
-业务能力不得直接拼控制事件或 stream chunk。
+业务能力可以使用协议事件名和 payload 表达意图，但不得直接构造完整事件信封、绕过订阅投递，也不得直接拼接底层 `StreamChunk` 二进制切片。
 
 `UserDeviceContext` 的 API 必须贴近协议，不引入 `DeviceControlRequest`、`AssetRequest`、`StreamControlRequest`、`StreamOpenRequest`、`OutputIntent` 这类第二套业务对象。开发者已经在设备注册时按事件协议声明订阅，Tool / Task 也应该继续使用同一套事件名、payload 和 stream_type。
 
@@ -2267,8 +2866,12 @@ class StartNavigationTool(BaseTool):
             timeout_seconds=3,
         )
         if result.matched_count == 0:
-            return ToolResult(error="当前没有可执行导航的在线设备")
-        return ToolResult(data={"status": "requested"})
+            return ToolResult.failed(
+                code="device.unavailable",
+                message="当前没有可执行导航的在线设备",
+                retryable=True,
+            )
+        return ToolResult.success(data={"status": "requested"})
 ```
 
 这段代码不会指定 `device_id`。底层会发布 `control.device.command.requested`，只有注册时声明了对应能力并订阅了该控制事件的在线设备才会收到。
@@ -2287,7 +2890,7 @@ class LookAroundTool(BaseTool):
             timeout_seconds=5,
             configure_payload={"mode": "single", "max_samples": 1},
         )
-        return ToolResult(data={"asset_id": asset.asset_id, "mime_type": asset.mime_type})
+        return ToolResult.success(data={"asset_id": asset.asset_id, "mime_type": asset.mime_type})
 ```
 
 `request_asset()` 的语义是：
@@ -2615,15 +3218,24 @@ uv run audio-chat.server.run \
   --config audio-chat/examples/minimal/server.yaml
 ```
 
-业务项目启动时应允许指定业务装配入口：
+业务项目启动时默认不需要指定业务装配入口。Tool / Task 由 YAML 中的自动发现配置加载：
 
 ```bash
 uv run audio-chat.server.run \
-  --app-module my_app.server:build_app \
   --config /path/to/my-app/audio-chat.yaml
 ```
 
-`--app-module` 的职责是注册 Tool、Task、Skill、MCP 配置和自定义 Agent Core。server CLI 负责读取 YAML、创建 SDK 基础服务、执行业务装配入口并启动 HTTP / WebSocket 服务。
+server CLI 负责读取 YAML、创建 SDK 基础服务、自动发现 Tool / Task，并启动 HTTP / WebSocket 服务。
+
+只有在需要自定义 Agent Core、替换 SDK 内部服务或加载动态插件时，才使用高级装配入口：
+
+```bash
+uv run audio-chat.server.run \
+  --config /path/to/my-app/audio-chat.yaml \
+  --app-module my_app.server:configure
+```
+
+`--app-module` 不再承担常规 Tool / Task 注册职责。
 
 启动后检查：
 
@@ -2807,6 +3419,10 @@ ESP32 命令需要支持：
 5. provider API key 是否存在；如果不存在，是否允许 mock fallback。
 6. runs 目录是否可写。
 7. 端侧参考工程路径是否存在。
+8. Python 包是否能在脱离源码目录的临时目录中安装和导入。
+9. CLI entry point 是否存在。
+10. 公共契约测试是否通过。
+11. SDK 主包是否错误依赖业务项目名称、业务能力名称或端侧固定角色。
 
 如果 server 已经启动，预检应支持在线检查：
 
@@ -2823,6 +3439,17 @@ uv run audio-chat.dev.preflight \
 2. `/api/debug/devices` 可访问。
 3. 当前注册设备、订阅和 active device set 符合预期。
 4. 最近一次回放是否通过断言。
+
+建议拆成四个命令，但 `audio-chat.dev.preflight` 可以聚合调用：
+
+| 命令 | 目标 |
+| --- | --- |
+| `audio-chat.dev.contract-tests` | 只跑公共协议和公开对象契约测试。 |
+| `audio-chat.dev.package-check` | 构建 wheel、安装到临时目录、验证公开导入和 CLI。 |
+| `audio-chat.dev.boundary-check` | 扫描 SDK 主包是否依赖业务目录、真实本地配置或固定设备实例。 |
+| `audio-chat.dev.live-check` | server 已启动时检查健康、设备、订阅和最近回放结果。 |
+
+这些检查吸收旧 SDK 的 package-check、contract-tests、preflight 和 live-check 经验。它们的职责是防止“单元测试能过，但 SDK 装不上、端侧协议不一致、业务代码绕过公开契约”的问题进入下一阶段。
 
 ### 15.10 与旧 SDK 启动方式的关系
 
@@ -3039,6 +3666,16 @@ output:
 tools:
   # 是否启用内置工具。
   builtin_enabled: true
+  discover:
+    # 是否启用自动发现。true 表示扫描 packages 中继承 BaseTool 的具体类并自动注册。
+    enabled: true
+    # 需要扫描的业务工具包。开发者只需要把 BaseTool 子类放在这些包下。
+    packages:
+      - "my_app.tools"
+    # 是否递归扫描子模块。true 表示扫描 my_app.tools 下所有 py 文件和子包。
+    recursive: true
+    # 自动发现失败时是否中止启动。生产环境建议 true；本地探索可设 false。
+    fail_fast: true
   # 允许注册的工具名。空数组表示不限制，由 Skill 或业务配置决定。
   allowlist: []
   # 禁止注册的工具名，优先级高于 allowlist。
@@ -3050,6 +3687,16 @@ tools:
 
 # tasks 控制 server 侧长任务。
 tasks:
+  discover:
+    # 是否启用自动发现。true 表示扫描 packages 中继承 BaseTask 的具体类并自动注册。
+    enabled: true
+    # 需要扫描的业务任务包。
+    packages:
+      - "my_app.tasks"
+    # 是否递归扫描子模块。
+    recursive: true
+    # 自动发现失败时是否中止启动。
+    fail_fast: true
   # 同一 user_id 下最大同时运行任务数。
   max_running_per_user: 16
   # 默认任务超时秒数。0 表示不限制。
@@ -3120,6 +3767,23 @@ observability:
   max_debug_sessions: 100
   # 单个运行目录保留天数，0 表示不自动清理。
   retention_days: 7
+
+# dev_checks 控制本地预检、契约测试和包检查。
+dev_checks:
+  # 是否在 preflight 中执行公共契约测试。
+  run_contract_tests: true
+  # 契约测试目录。
+  contract_tests_path: "audio-chat/testdata/contracts"
+  # 是否在 preflight 中执行包安装和导入检查。
+  run_package_check: true
+  # 是否扫描 SDK 主包边界，防止依赖业务项目、真实本地配置或固定 device_id。
+  run_boundary_check: true
+  # 是否在 preflight 中要求最近一次 playback result.json 通过。
+  require_recent_playback_ok: false
+  # 最近回放结果路径。为空时自动读取 runs_root 下最新 playback。
+  recent_playback_result: ""
+  # preflight JSON 报告默认输出路径。
+  report_path: "runs/audio-chat/preflight.json"
 ```
 
 当前实现说明：
@@ -3187,6 +3851,55 @@ runs/audio-chat/sessions/<session_id>/
   result.json
 ```
 
+### 17.4 Turn Recorder
+
+`Turn Recorder` 是 runs 产物的写入门面，吸收旧版 `VoiceTurnRecorder` 的经验。它不参与业务决策，只负责把一轮交互里可复现、可排障的证据保存下来。
+
+职责：
+
+1. 保存输入 `sensor.mic` 片段，必要时封装成 WAV。
+2. 保存 ASR transcript、provider transcript delta 和最终文本。
+3. 保存模型请求快照、模型响应事件和 tool call 轨迹。
+4. 保存输出音频，包含 native audio 和 TTS audio。
+5. 把 assistant 输出音频、资产和任务引用挂回用户消息历史。
+6. 为回放 result.json 汇总断言所需字段。
+
+类图：
+
+```plantuml
+@startuml
+title Turn Recorder 类图
+
+class TurnRecorder {
+  +record_input_stream(stream)
+  +record_transcript(event)
+  +record_model_request(request)
+  +record_agent_event(event)
+  +record_tool_trace(trace)
+  +record_task_event(event)
+  +record_output_stream(stream)
+  +write_result(summary)
+}
+
+class RunStore {
+  +write_jsonl(path, event)
+  +write_asset(path, bytes)
+  +write_json(path, payload)
+}
+
+class UserMessageStore
+
+TurnRecorder --> RunStore
+TurnRecorder --> UserMessageStore
+@enduml
+```
+
+隐私边界：
+
+1. `record_input_streams=false` 时不保存用户原始音频，只保存元数据。
+2. `record_output_streams=false` 时不保存 assistant 音频，只保存 stream 生命周期。
+3. 线上默认不暴露 `/api/debug/session/{session_id}` 的原始媒体下载能力。
+
 ## 18. 测试与验收
 
 ### 18.1 单元测试
@@ -3217,6 +3930,16 @@ runs/audio-chat/sessions/<session_id>/
 7. 用户打断可上报。
 8. server 释放 stream 可执行。
 
+契约测试必须覆盖三类 golden：
+
+| golden | 验证内容 |
+| --- | --- |
+| `events/*.json` | Event 信封字段、事件命名、注册响应、失败响应、订阅 filter 匹配。 |
+| `streams/*.bin` | `StreamChunk` 二进制 header、payload_size、seq、timestamp、stream 元数据。 |
+| `scenarios/*.yaml` | 回放端按真实协议完成注册、唤醒、stream 上传、资产回传和输出接收。 |
+
+契约测试只依赖公共协议和公开对象，不 import server 内部连接表、队列或 provider adapter。
+
 ### 18.3 回放测试
 
 必须保留 Python playback endpoint：
@@ -3237,6 +3960,33 @@ audio-chat.playback.glass \
 7. `stream.output.open.requested`
 8. `stream.output.closed`
 9. `control.audio_session.closed`
+
+回放断言不应只检查“有没有音频输出”。第一版至少支持：
+
+| 断言 | 说明 |
+| --- | --- |
+| `events_contains` | 是否出现指定控制事件或 stream 生命周期事件。 |
+| `reply_text_contains` | assistant 文本或转写产物是否包含指定内容。 |
+| `reply_text_not_contains` | assistant 文本不应包含指定内容。 |
+| `required_tool_traces` | 必须调用哪些 Tool，以及状态是否成功。 |
+| `required_task_events` | 必须产生哪些 TaskEvent。 |
+| `model_request_contains` | 模型请求快照是否包含指定上下文、资产或工具 schema。 |
+| `playback_decisions` | 是否产生预期播放仲裁结果，例如 `play_now`、`interrupt`、`drop`。 |
+
+每次回放都必须写出：
+
+```text
+runs/audio-chat/playback/<run_id>/
+  events.jsonl
+  stream-events.jsonl
+  agent-events.jsonl
+  tool-traces.jsonl
+  task-events.jsonl
+  playback-decisions.jsonl
+  result.json
+```
+
+`result.json` 至少包含 `ok`、`assertions_ok`、`assertion_failures`、`expectations`、`run_id`、`config_path` 和关键产物路径。测试通过不是唯一目标；断言失败时要把失败点写清楚，方便继续定位真实链路问题。
 
 ### 18.4 真机联调
 
@@ -3268,9 +4018,9 @@ audio-chat/
 
 提供最小兼容层：
 
-1. `OpenAIGlassesSDK.register_tool(...)` -> `AudioChatApp.register_tool(...)`
-2. `BaseTool` 兼容导入。
-3. `BaseTask` 兼容导入。
+1. `BaseTool` 兼容导入。
+2. `BaseTask` 兼容导入。
+3. 旧 `register_tool(...)` 适配为把 Tool 类加入自动发现注册流程；不要求业务继续写 server app 装配。
 4. `DeviceGroupContext` -> `UserDeviceContext` 能力映射。
 5. 旧 `phone-mock` 和 `glass-playback` 配置转新配置脚本。
 

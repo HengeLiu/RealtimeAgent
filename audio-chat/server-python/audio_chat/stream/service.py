@@ -82,7 +82,18 @@ class StreamService:
         producer_id: str,
         format: StreamFormat | None = None,
         stream_id: str | None = None,
+        require_capability: str | None = None,
+        selection: str = "all",
     ) -> StreamHandle:
+        """打开输入或输出 stream。
+
+        主要逻辑：输入 stream 只注册本地句柄；输出 stream 先按订阅、capability 和
+        selection 选出 consumer，再发布 `stream.output.open.requested`，后续 chunk 和
+        close/cancel 事件都只发送给这批 consumer。
+        参数：`require_capability` 为空时，`actuator.*` 默认要求设备声明同名消费能力。
+        返回值：`StreamHandle`。
+        异常情况：stream 类型、格式或 selection 非法时抛出 `ValueError`。
+        """
         stream_id = stream_id or new_id("stream")
         stream_format = format or self.default_format_for(stream_type)
         self._validate_stream(stream_type=stream_type, format=stream_format)
@@ -109,9 +120,14 @@ class StreamService:
                     "format": stream_format.__dict__,
                 },
             )
-            consumers = tuple(device.device_id for device in self.control_service.resolve_subscribers(event))
+            matched = self.control_service.resolve_matching_devices(
+                event,
+                require_capability=require_capability or stream_type,
+                selection=selection,
+            )
+            consumers = tuple(device.device_id for device in matched)
             handle.consumer_device_ids = consumers
-            self.control_service.publish(event)
+            self.control_service._push_event_to_device_ids(event, consumers)
         self.recorder.record_stream_event(
             session_id,
             {
@@ -176,7 +192,10 @@ class StreamService:
             stream_type=handle.stream_type,
             payload={"stream_type": handle.stream_type, "reason": reason},
         )
-        self.control_service.publish(event)
+        if handle.stream_type.startswith("actuator."):
+            self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
+        else:
+            self.control_service.publish(event)
         self.recorder.record_stream_event(
             handle.session_id,
             {
@@ -199,7 +218,7 @@ class StreamService:
             stream_type=handle.stream_type,
             payload={"stream_type": handle.stream_type, "reason": reason},
         )
-        self.control_service.publish(request)
+        self.control_service._push_event_to_device_ids(request, handle.consumer_device_ids)
         event = Event(
             event_name="stream.output.cancelled",
             user_id=handle.user_id,
@@ -209,7 +228,7 @@ class StreamService:
             stream_type=handle.stream_type,
             payload={"stream_type": handle.stream_type, "reason": reason},
         )
-        self.control_service.publish(event)
+        self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
         self.recorder.record_stream_event(
             handle.session_id,
             {

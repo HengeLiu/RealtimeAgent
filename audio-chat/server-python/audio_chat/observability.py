@@ -33,6 +33,48 @@ class RunRecorder:
         self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
 
+    def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录 Tool 调用轨迹。
+
+        主要逻辑：写入稳定 `tool-trace.jsonl`，供回放和排障读取。
+        参数：`session_id` 为会话，`record` 为工具调用结构。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        self._append_jsonl(self.session_dir(session_id) / "tool-trace.jsonl", record)
+
+    def record_task_event(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录 TaskEvent。
+
+        主要逻辑：写入 `task-events.jsonl`。
+        参数：`session_id` 为会话或任务标识，`record` 为任务事件结构。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        self._append_jsonl(self.session_dir(session_id) / "task-events.jsonl", record)
+
+    def record_model_request(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录模型请求。
+
+        主要逻辑：写入 `model-request.json`，保留一轮交互发给模型的稳定请求快照。
+        参数：`session_id` 为会话，`record` 为模型请求。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        path = self.session_dir(session_id) / "model-request.json"
+        path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+    def write_result(self, session_id: str, record: dict[str, Any]) -> None:
+        """写入会话结果。
+
+        主要逻辑：输出稳定 `result.json`，作为回放断言入口。
+        参数：`session_id` 为会话，`record` 为结果。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+        path = self.session_dir(session_id) / "result.json"
+        path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
     def record_playback_result(self, session_id: str, record: dict[str, Any]) -> None:
         path = self.session_dir(session_id) / "playback-result.json"
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
@@ -57,3 +99,38 @@ class RunRecorder:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+class TurnRecorder:
+    """单轮交互记录器。
+
+    主要功能：吸收 RunRecorder 的写入能力，为回放提供输入流、转写、模型请求、
+    Tool trace、TaskEvent、输出流和 result 的稳定入口。
+    """
+
+    def __init__(self, runs_root: str | Path = "runs/audio-chat") -> None:
+        self.recorder = RunRecorder(runs_root)
+
+    def record_input_stream(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_stream_event(session_id, {"direction": "input", **record})
+
+    def record_transcript(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_agent_event(session_id, {"event": "transcript", **record})
+
+    def record_model_request(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_model_request(session_id, record)
+
+    def record_agent_event(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_agent_event(session_id, record)
+
+    def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_tool_trace(session_id, record)
+
+    def record_task_event(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_task_event(session_id, record)
+
+    def record_output_stream(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_stream_event(session_id, {"direction": "output", **record})
+
+    def write_result(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.write_result(session_id, record)
