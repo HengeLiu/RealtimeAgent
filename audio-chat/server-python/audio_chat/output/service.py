@@ -233,6 +233,8 @@ class TtsProviderConfig:
     allow_mock_fallback: bool = True
     websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
     sample_rate_hz: int = 22050
+    request_timeout_seconds: float = 5.0
+    max_retries: int = 1
 
 
 class StreamingTTS(Protocol):
@@ -309,6 +311,8 @@ class DashScopeStreamingTTS:
         *,
         websocket_api_url: str,
         sample_rate_hz: int,
+        request_timeout_seconds: float = 5.0,
+        max_retries: int = 1,
     ) -> None:
         api_key = os.getenv("DASHSCOPE_API_KEY")
         if not api_key:
@@ -322,6 +326,8 @@ class DashScopeStreamingTTS:
         self.model = model
         self.voice = voice
         self.sample_rate_hz = sample_rate_hz
+        self.request_timeout_seconds = request_timeout_seconds
+        self.max_retries = max_retries
         self._audio: queue.Queue[bytes] = queue.Queue()
         self._created_at = time.time()
         self._first_text_at: float | None = None
@@ -356,7 +362,7 @@ class DashScopeStreamingTTS:
         self._text_push_count += 1
         self._text_chars += len(text)
         self._synthesizer.streaming_call(text)
-        deadline = time.time() + 3.0
+        deadline = time.time() + max(0.1, self.request_timeout_seconds)
         chunks: list[bytes] = []
         while time.time() < deadline:
             try:
@@ -380,6 +386,10 @@ class DashScopeStreamingTTS:
             "voice": self.voice,
             "sample_rate_hz": self.sample_rate_hz,
             "source_sample_rate_hz": self._source_sample_rate_hz,
+            "endpoint": "dashscope.tts_v2.websocket",
+            "timeout_seconds": self.request_timeout_seconds,
+            "max_retries": self.max_retries,
+            "fallback_policy": "fail_after_provider_created",
             "first_text_at": self._first_text_at,
             "first_audio_at": self._first_audio_at,
             "first_chunk_latency_ms": first_audio_latency_ms,
@@ -408,6 +418,8 @@ def build_tts_provider(config: TtsProviderConfig) -> tuple[StreamingTTS, str | N
                 voice=config.voice,
                 websocket_api_url=config.websocket_api_url,
                 sample_rate_hz=config.sample_rate_hz,
+                request_timeout_seconds=config.request_timeout_seconds,
+                max_retries=config.max_retries,
             ), None
         raise RuntimeError(f"unsupported TTS provider: {config.provider}")
     except RuntimeError as exc:

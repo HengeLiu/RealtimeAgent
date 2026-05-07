@@ -105,6 +105,8 @@ class AgentTextConfig:
     streaming_tts: bool = True
     max_context_messages: int = 30
     allow_mock_fallback: bool = True
+    request_timeout_seconds: float = 5.0
+    max_retries: int = 1
 
 
 @dataclass(frozen=True)

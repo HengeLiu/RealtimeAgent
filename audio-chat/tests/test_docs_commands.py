@@ -119,5 +119,8 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
         "boundary",
         "recent_playback",
         "provider_keys",
+        "provider_runtime_profile",
+        "mcp_config",
+        "memory_skill",
         "endpoint_config",
     } <= names

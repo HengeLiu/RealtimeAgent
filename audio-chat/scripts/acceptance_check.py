@@ -513,6 +513,36 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "old-sdk-parity-provider": (
+        CheckCommand(
+            "old_sdk_parity_provider_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_provider_degradation_policy.py",
+                "tests/test_mcp_external_server_smoke.py",
+                "tests/test_docs_commands.py",
+                "tests/acceptance/test_provider_old_sdk_parity_contract.py",
+                "tests/integration/test_dashscope_providers.py",
+                "-q",
+            ),
+        ),
+        CheckCommand(
+            "old_sdk_parity_provider_preflight",
+            (
+                "uv",
+                "run",
+                "audio-chat.dev.preflight",
+                "--config",
+                "examples/minimal/server.yaml",
+                "--report",
+                "runs/acceptance/old-sdk-parity-provider-preflight.json",
+            ),
+        ),
+    ),
 }
 
 CHECKS: dict[str, tuple[CheckCommand, ...]] = {

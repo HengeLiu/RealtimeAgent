@@ -6,7 +6,7 @@ import threading
 import time
 import json
 from dataclasses import dataclass
-from typing import Iterable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 
 from audio_chat.protocol import StreamChunk, new_id
 
@@ -16,12 +16,111 @@ class ProviderUnavailable(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ProviderCallDiagnostic:
+    """真实 provider 调用诊断。
+
+    主要功能：把 provider、model、endpoint、timeout、retry 和 fallback policy
+    统一记录成可测试结构，避免真实服务偶发失败时只看到模糊异常。
+    主要属性：`ok` 表示调用是否成功，`error` 保存最后一次失败原因。
+    """
+
+    provider: str
+    model: str
+    endpoint: str
+    timeout_seconds: float
+    max_retries: int
+    fallback_policy: str
+    attempts: int
+    ok: bool
+    elapsed_ms: int
+    error: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        """返回可写入 JSON 报告的诊断字典。"""
+
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "endpoint": self.endpoint,
+            "timeout_seconds": self.timeout_seconds,
+            "max_retries": self.max_retries,
+            "fallback_policy": self.fallback_policy,
+            "attempts": self.attempts,
+            "ok": self.ok,
+            "elapsed_ms": self.elapsed_ms,
+            "error": self.error,
+        }
+
+
+def run_provider_call_with_policy(
+    *,
+    provider: str,
+    model: str,
+    endpoint: str,
+    timeout_seconds: float,
+    max_retries: int,
+    allow_mock_fallback: bool,
+    operation: Callable[[], Any],
+) -> tuple[Any | None, ProviderCallDiagnostic]:
+    """按统一稳定性策略执行一次真实 provider 调用。
+
+    主要逻辑：同步执行 `operation`，失败后按 `max_retries` 重试；每次调用后检查
+    总耗时是否超过 `timeout_seconds`，并把 provider、model、endpoint、timeout、
+    retry 和 fallback policy 写入诊断对象。
+    参数：provider/model/endpoint 用于定位外部服务；`operation` 为实际调用。
+    返回值：调用结果和诊断对象；失败时结果为 None。
+    异常情况：本函数不抛出 provider 异常，由调用方根据 `diagnostic.ok` 和
+    fallback policy 决定降级或失败。
+    """
+
+    started = time.monotonic()
+    attempts = 0
+    last_error = ""
+    max_attempts = max(1, int(max_retries) + 1)
+    for _ in range(max_attempts):
+        attempts += 1
+        try:
+            result = operation()
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            if timeout_seconds > 0 and elapsed_ms > int(timeout_seconds * 1000):
+                raise TimeoutError(f"provider call exceeded timeout {timeout_seconds}s")
+            return result, ProviderCallDiagnostic(
+                provider=provider,
+                model=model,
+                endpoint=endpoint,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                fallback_policy="mock" if allow_mock_fallback else "fail",
+                attempts=attempts,
+                ok=True,
+                elapsed_ms=elapsed_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 - provider SDK 会抛出自定义异常
+            last_error = f"{type(exc).__name__}: {exc}"
+            if timeout_seconds > 0 and time.monotonic() - started >= timeout_seconds:
+                break
+    return None, ProviderCallDiagnostic(
+        provider=provider,
+        model=model,
+        endpoint=endpoint,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        fallback_policy="mock" if allow_mock_fallback else "fail",
+        attempts=attempts,
+        ok=False,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+        error=last_error,
+    )
+
+
+@dataclass(frozen=True)
 class AsrProviderConfig:
     provider: str = "mock"
     model: str = "mock-asr"
     allow_mock_fallback: bool = True
     realtime_timeout_seconds: float = 5.0
     max_sentence_silence_ms: int = 800
+    max_retries: int = 1
 
 
 @dataclass(frozen=True)
@@ -29,6 +128,8 @@ class TextModelProviderConfig:
     provider: str = "mock"
     model: str = "mock-text"
     allow_mock_fallback: bool = True
+    request_timeout_seconds: float = 5.0
+    max_retries: int = 1
 
 
 @dataclass(frozen=True)
@@ -195,15 +296,34 @@ class MockTextModelAdapter:
 class OpenAICompatibleTextModelAdapter:
     provider_name = "openai-compatible"
 
-    def __init__(self, model: str, *, api_key_env: str = "OPENAI_API_KEY", base_url_env: str = "OPENAI_BASE_URL") -> None:
+    def __init__(
+        self,
+        model: str,
+        *,
+        api_key_env: str = "OPENAI_API_KEY",
+        base_url_env: str = "OPENAI_BASE_URL",
+        request_timeout_seconds: float = 5.0,
+        max_retries: int = 1,
+    ) -> None:
         api_key = os.getenv(api_key_env)
         if not api_key:
             raise ProviderUnavailable(f"{api_key_env} is not set; text model provider downgraded to mock")
-        from openai import OpenAI
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ProviderUnavailable("openai package is not installed; text model provider downgraded to mock") from exc
 
         self.model = model
+        self.request_timeout_seconds = request_timeout_seconds
+        self.max_retries = max_retries
+        self.endpoint = os.getenv(base_url_env) or "https://api.openai.com/v1"
         self._cancelled = False
-        self._client = OpenAI(api_key=api_key, base_url=os.getenv(base_url_env) or None)
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv(base_url_env) or None,
+            timeout=request_timeout_seconds,
+            max_retries=max_retries,
+        )
 
     def stream_text(self, transcript: str) -> Iterable[str]:
         for item in self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[]):
@@ -278,9 +398,15 @@ class OpenAICompatibleTextModelAdapter:
 class DashScopeCompatibleTextModelAdapter(OpenAICompatibleTextModelAdapter):
     provider_name = "dashscope-compatible"
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, *, request_timeout_seconds: float = 5.0, max_retries: int = 1) -> None:
         os.environ.setdefault("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        super().__init__(model=model, api_key_env="DASHSCOPE_API_KEY", base_url_env="OPENAI_BASE_URL")
+        super().__init__(
+            model=model,
+            api_key_env="DASHSCOPE_API_KEY",
+            base_url_env="OPENAI_BASE_URL",
+            request_timeout_seconds=request_timeout_seconds,
+            max_retries=max_retries,
+        )
 
 
 def build_asr_provider(config: AsrProviderConfig) -> tuple[AsrProviderAdapter, str | None]:
@@ -305,9 +431,17 @@ def build_text_model(config: TextModelProviderConfig) -> tuple[TextModelAdapter,
         if config.provider == "mock":
             return MockTextModelAdapter(model=config.model), None
         if config.provider == "openai-compatible":
-            return OpenAICompatibleTextModelAdapter(model=config.model), None
+            return OpenAICompatibleTextModelAdapter(
+                model=config.model,
+                request_timeout_seconds=config.request_timeout_seconds,
+                max_retries=config.max_retries,
+            ), None
         if config.provider == "dashscope-compatible":
-            return DashScopeCompatibleTextModelAdapter(model=config.model), None
+            return DashScopeCompatibleTextModelAdapter(
+                model=config.model,
+                request_timeout_seconds=config.request_timeout_seconds,
+                max_retries=config.max_retries,
+            ), None
         raise ProviderUnavailable(f"unsupported text model provider: {config.provider}")
     except ProviderUnavailable as exc:
         if not config.allow_mock_fallback:

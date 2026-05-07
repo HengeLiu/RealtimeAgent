@@ -57,6 +57,8 @@ class AudioChatConfig:
     tts_model: str = "mock-tts"
     tts_voice: str = "mock"
     allow_mock_fallback: bool = True
+    provider_request_timeout_seconds: float = 5.0
+    provider_max_retries: int = 1
     asset_root: str | None = None
     asset_request_timeout_seconds: float = 5.0
     asset_default_ttl_seconds: float = 60.0
@@ -142,6 +144,8 @@ class AudioChatConfig:
             tts_model=text.tts_model,
             tts_voice=text.tts_voice,
             allow_mock_fallback=text.allow_mock_fallback,
+            provider_request_timeout_seconds=text.request_timeout_seconds,
+            provider_max_retries=text.max_retries,
             asset_root=loaded.asset.root,
             asset_request_timeout_seconds=loaded.asset.request_timeout_seconds,
             asset_default_ttl_seconds=loaded.asset.default_ttl_seconds,
@@ -255,6 +259,8 @@ class AudioChatApp:
                 voice=self.config.tts_voice,
                 allow_mock_fallback=self.config.allow_mock_fallback,
                 sample_rate_hz=self.config.default_actuator_speaker.sample_rate,
+                request_timeout_seconds=self.config.provider_request_timeout_seconds,
+                max_retries=self.config.provider_max_retries,
             ),
             default_priority=self.config.output_default_priority,
             default_on_blocked=self.config.output_default_on_blocked,
@@ -340,11 +346,15 @@ class AudioChatApp:
                 provider=self.config.asr_provider,
                 model=self.config.asr_model,
                 allow_mock_fallback=self.config.allow_mock_fallback,
+                realtime_timeout_seconds=self.config.provider_request_timeout_seconds,
+                max_retries=self.config.provider_max_retries,
             ),
             text_model_config=TextModelProviderConfig(
                 provider=self.config.text_model_provider,
                 model=self.config.text_model,
                 allow_mock_fallback=self.config.allow_mock_fallback,
+                request_timeout_seconds=self.config.provider_request_timeout_seconds,
+                max_retries=self.config.provider_max_retries,
             ),
             tool_gateway=self.tool_gateway,
         )

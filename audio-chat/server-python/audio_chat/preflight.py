@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config
+from audio_chat.mcp import McpGateway
 from audio_chat.protocol import CONTROL_EVENTS, STREAM_TYPES
 
 
@@ -56,6 +57,9 @@ def main(argv: list[str] | None = None) -> None:
     else:
         checks.append(_skipped("recent_playback", "disabled by dev_checks.require_recent_playback_ok"))
     checks.append(_provider_key_check(loaded))
+    checks.append(_provider_runtime_profile_check(loaded))
+    checks.append(_mcp_config_check(loaded))
+    checks.append(_memory_skill_config_check(loaded))
     checks.append(_endpoint_config_check(loaded))
     checks.append(_audio_pipeline_check(loaded))
 
@@ -104,6 +108,9 @@ def live_check(argv: list[str] | None = None) -> None:
         _recent_registration_failures_check(),
         _recent_playback_observation(),
         _provider_key_check(loaded),
+        _provider_runtime_profile_check(loaded),
+        _mcp_config_check(loaded),
+        _memory_skill_config_check(loaded),
         _reference_endpoint_config_consistency_check(Path(args.generated_dir), loaded),
     ]
     blocking_failures = [
@@ -257,8 +264,14 @@ def _provider_key_check(config: AudioChatYamlConfig) -> dict:
 
     required: list[str] = []
     text = config.agent.text
-    if text.asr_provider == "dashscope" or text.model_provider == "dashscope" or text.tts_provider == "dashscope":
+    if (
+        text.asr_provider == "dashscope"
+        or text.model_provider in {"dashscope", "dashscope-compatible"}
+        or text.tts_provider == "dashscope"
+    ):
         required.append("DASHSCOPE_API_KEY")
+    if text.model_provider == "openai-compatible":
+        required.append("OPENAI_API_KEY")
     if config.agent.mode == "realtime_audio" and config.agent.realtime.provider in {"qwen", "dashscope"}:
         required.append("DASHSCOPE_API_KEY")
     required = sorted(set(required))
@@ -276,6 +289,131 @@ def _provider_key_check(config: AudioChatYamlConfig) -> dict:
         "required_env": required,
         "missing_env": missing,
         "allow_mock_fallback": allow_fallback,
+        "degradations": degradations,
+        "errors": errors,
+    }
+
+
+def _provider_runtime_profile_check(config: AudioChatYamlConfig) -> dict:
+    """解释当前 provider 环境适合哪类联调。
+
+    主要逻辑：根据真实 key、mock fallback、timeout 和 retry 配置输出 profile，
+    让开发者区分 mock、本地联调和真实 provider smoke。
+    """
+
+    key_check = _provider_key_check(config)
+    text = config.agent.text
+    real_provider_requested = any(
+        provider not in {"mock", ""}
+        for provider in (text.asr_provider, text.model_provider, text.tts_provider)
+    ) or (config.agent.mode == "realtime_audio" and config.agent.realtime.provider not in {"mock", ""})
+    if not real_provider_requested:
+        profile = "mock"
+    elif key_check["missing_env"] and text.allow_mock_fallback:
+        profile = "local_with_mock_fallback"
+    elif key_check["missing_env"]:
+        profile = "blocked_missing_provider_key"
+    else:
+        profile = "real_provider_smoke_ready"
+    return {
+        "name": "provider_runtime_profile",
+        "ok": profile != "blocked_missing_provider_key",
+        "profile": profile,
+        "providers": {
+            "asr": text.asr_provider,
+            "text": text.model_provider,
+            "tts": text.tts_provider,
+            "realtime": config.agent.realtime.provider if config.agent.mode == "realtime_audio" else "",
+        },
+        "timeout_seconds": text.request_timeout_seconds,
+        "max_retries": text.max_retries,
+        "allow_mock_fallback": text.allow_mock_fallback,
+        "missing_env": key_check["missing_env"],
+        "errors": [] if profile != "blocked_missing_provider_key" else key_check["errors"],
+    }
+
+
+def _mcp_config_check(config: AudioChatYamlConfig) -> dict:
+    """检查 MCP 配置文件和外部 server smoke 状态。"""
+
+    path = _resolve_audio_chat_path(config.mcp.config_path)
+    if not config.mcp.enabled:
+        return {
+            "name": "mcp_config",
+            "ok": True,
+            "enabled": False,
+            "config_path": str(path),
+            "degradations": ["mcp disabled by config"],
+            "errors": [],
+        }
+    if not path.exists():
+        return {
+            "name": "mcp_config",
+            "ok": False,
+            "enabled": True,
+            "config_path": str(path),
+            "server_smoke": [],
+            "errors": [f"missing MCP config file: {path}"],
+        }
+    try:
+        gateway = McpGateway(enabled=True, config_path=path, default_timeout_seconds=config.mcp.default_timeout_seconds)
+        server_smoke = gateway.smoke_external_servers()
+    except Exception as exc:
+        return {
+            "name": "mcp_config",
+            "ok": False,
+            "enabled": True,
+            "config_path": str(path),
+            "server_smoke": [],
+            "errors": [f"{type(exc).__name__}: {exc}"],
+        }
+    errors = [
+        f"{item['name']}: {', '.join(item.get('errors') or [])}"
+        for item in server_smoke
+        if not item.get("ok")
+    ]
+    return {
+        "name": "mcp_config",
+        "ok": not errors,
+        "enabled": True,
+        "config_path": str(path),
+        "server_smoke": server_smoke,
+        "errors": errors,
+    }
+
+
+def _memory_skill_config_check(config: AudioChatYamlConfig) -> dict:
+    """检查 Memory store 和 Skill roots 的配置可解释性。"""
+
+    errors: list[str] = []
+    degradations: list[str] = []
+    memory_path = _resolve_audio_chat_path(config.memory.path)
+    if config.memory.enabled:
+        if config.memory.store_type != "jsonl":
+            errors.append(f"unsupported memory.store_type: {config.memory.store_type}")
+        parent = memory_path.parent if memory_path.suffix else memory_path
+        if not parent.exists():
+            degradations.append(f"memory path parent will be created at runtime: {parent}")
+    else:
+        degradations.append("memory disabled by config")
+    skill_roots = [_resolve_audio_chat_path(root) for root in config.skill.roots]
+    if config.skill.enabled:
+        missing = [str(root) for root in skill_roots if not root.exists()]
+        errors.extend(f"missing skill root: {root}" for root in missing)
+    else:
+        degradations.append("skill disabled by config")
+    return {
+        "name": "memory_skill",
+        "ok": not errors,
+        "memory": {
+            "enabled": config.memory.enabled,
+            "store_type": config.memory.store_type,
+            "path": str(memory_path),
+        },
+        "skill": {
+            "enabled": config.skill.enabled,
+            "roots": [str(root) for root in skill_roots],
+        },
         "degradations": degradations,
         "errors": errors,
     }

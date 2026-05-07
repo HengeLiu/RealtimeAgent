@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,24 @@ class McpToolSpec:
     description: str = ""
     parameters: dict[str, Any] = field(default_factory=dict)
     mock_result: Any = None
+    server: str = "local"
+
+
+@dataclass(frozen=True)
+class McpServerSpec:
+    """MCP 外部 server 描述。
+
+    主要功能：记录 stdio、SSE 和 Streamable HTTP 三类 MCP server 的启动或连接信息。
+    主要属性：`transport` 决定 smoke 检查方式，`command`/`url` 分别服务本地进程和远端服务。
+    """
+
+    name: str
+    transport: str
+    command: str = ""
+    args: list[str] = field(default_factory=list)
+    url: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    enabled: bool = True
 
 
 class McpError(AudioChatError):
@@ -49,6 +68,7 @@ class McpGateway:
         self.config_path = Path(config_path).resolve() if config_path else None
         self.default_timeout_seconds = default_timeout_seconds
         self._tools: dict[str, McpToolSpec] = {}
+        self._servers: dict[str, McpServerSpec] = {}
         if self.config_path and self.config_path.exists():
             self.load_config(self.config_path)
 
@@ -63,12 +83,25 @@ class McpGateway:
         config_path = Path(path).resolve()
         raw_text = config_path.read_text(encoding="utf-8")
         data = json.loads(raw_text) if config_path.suffix == ".json" else yaml.safe_load(raw_text)
-        for item in dict(data or {}).get("tools", []):
+        root = dict(data or {})
+        for name, item in _iter_server_items(root):
+            spec = McpServerSpec(
+                name=name,
+                transport=str(item.get("transport") or item.get("type") or "stdio"),
+                command=str(item.get("command") or ""),
+                args=[str(value) for value in item.get("args", [])],
+                url=str(item.get("url") or ""),
+                env={str(key): str(value) for key, value in dict(item.get("env") or {}).items()},
+                enabled=bool(item.get("enabled", True)),
+            )
+            self.register_server(spec)
+        for item in root.get("tools", []):
             spec = McpToolSpec(
                 name=str(item.get("name") or "").strip(),
                 description=str(item.get("description") or ""),
                 parameters=dict(item.get("parameters") or {}),
                 mock_result=item.get("mock_result"),
+                server=str(item.get("server") or "local"),
             )
             self.register_tool(spec)
 
@@ -81,11 +114,71 @@ class McpGateway:
             raise McpError("duplicate mcp tool", code=ErrorCode.PROTOCOL_ERROR, details={"name": spec.name})
         self._tools[spec.name] = spec
 
+    def register_server(self, spec: McpServerSpec) -> None:
+        """注册一个 MCP 外部 server 描述。"""
+
+        if not spec.name:
+            raise McpError("mcp server name is required", code=ErrorCode.INVALID_ARGUMENT)
+        if spec.transport not in {"stdio", "sse", "streamable_http"}:
+            raise McpError(
+                "unsupported mcp transport",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"name": spec.name, "transport": spec.transport},
+            )
+        if spec.name in self._servers:
+            raise McpError("duplicate mcp server", code=ErrorCode.PROTOCOL_ERROR, details={"name": spec.name})
+        self._servers[spec.name] = spec
+
     def list_tools(self) -> list[McpToolSpec]:
         """列出 MCP tool 描述。"""
 
         self._ensure_enabled()
         return list(self._tools.values())
+
+    def smoke_external_servers(self) -> list[dict[str, Any]]:
+        """对外部 MCP server 配置做轻量 smoke。
+
+        主要逻辑：stdio 检查命令是否存在；SSE 和 Streamable HTTP 检查 URL
+        是否可解释。本函数不主动建立长连接，避免本地预检因网络抖动阻塞。
+        参数：无。
+        返回值：每个 server 的结构化检查结果。
+        异常情况：MCP 未启用时抛出 `McpError`。
+        """
+
+        self._ensure_enabled()
+        results: list[dict[str, Any]] = []
+        for spec in self._servers.values():
+            result = {
+                "name": spec.name,
+                "transport": spec.transport,
+                "enabled": spec.enabled,
+                "ok": True,
+                "errors": [],
+                "degradations": [],
+            }
+            if not spec.enabled:
+                result["degradations"].append("mcp server disabled by config")
+                results.append(result)
+                continue
+            if spec.transport == "stdio":
+                if not spec.command:
+                    result["ok"] = False
+                    result["errors"].append("stdio mcp server command is required")
+                elif shutil.which(spec.command) is None and not Path(spec.command).exists():
+                    result["ok"] = False
+                    result["errors"].append(f"stdio mcp server command not found: {spec.command}")
+                result["command"] = spec.command
+                result["args"] = list(spec.args)
+            else:
+                if not spec.url:
+                    result["ok"] = False
+                    result["errors"].append(f"{spec.transport} mcp server url is required")
+                elif not spec.url.startswith(("http://", "https://")):
+                    result["ok"] = False
+                    result["errors"].append(f"{spec.transport} mcp server url must start with http:// or https://")
+                result["url"] = spec.url
+            results.append(result)
+        return results
 
     def call(self, *, tool_name: str, arguments: dict[str, Any] | None = None, timeout_seconds: float | None = None) -> dict[str, Any]:
         """调用 MCP tool。
@@ -109,6 +202,7 @@ class McpGateway:
             raise McpError("mcp call timeout", code=ErrorCode.TIMEOUT, details={"tool_name": tool_name})
         return {
             "tool_name": spec.name,
+            "server": spec.server,
             "arguments": dict(arguments or {}),
             "result": spec.mock_result if spec.mock_result is not None else {"ok": True},
         }
@@ -118,4 +212,18 @@ class McpGateway:
             raise McpError("mcp gateway is disabled", code=ErrorCode.PERMISSION_DENIED)
 
 
-__all__ = ["McpError", "McpGateway", "McpToolSpec"]
+def _iter_server_items(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """兼容常见 MCP 配置格式，提取 server 条目。"""
+
+    servers = config.get("servers")
+    if isinstance(servers, list):
+        return [(str(item.get("name") or ""), dict(item)) for item in servers if isinstance(item, dict)]
+    if isinstance(servers, dict):
+        return [(str(name), dict(item or {})) for name, item in servers.items()]
+    mcp_servers = config.get("mcpServers")
+    if isinstance(mcp_servers, dict):
+        return [(str(name), dict(item or {})) for name, item in mcp_servers.items()]
+    return []
+
+
+__all__ = ["McpError", "McpGateway", "McpServerSpec", "McpToolSpec"]
