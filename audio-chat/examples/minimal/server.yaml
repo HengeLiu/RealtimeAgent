@@ -100,6 +100,8 @@ tools:
   discover:
     enabled: true
     packages: []
+    recursive: true
+    fail_fast: true
   allowlist: []
   denylist: []
   default_timeout_seconds: 30
@@ -110,6 +112,8 @@ tasks:
   discover:
     enabled: true
     packages: []
+    recursive: true
+    fail_fast: true
   max_running_per_user: 16
 
 memory:
@@ -148,4 +152,5 @@ dev_checks:
   run_package_check: true
   run_boundary_check: true
   contract_tests_path: "audio-chat/testdata/contracts"
-  require_recent_playback: false
+  require_recent_playback_ok: false
+  report_path: "runs/audio-chat/preflight.json"

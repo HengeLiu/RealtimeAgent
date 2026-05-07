@@ -1,3 +1,4 @@
+mode: in_process
 runs_root: runs/audio-chat
 server_url: http://127.0.0.1:8765
 user_id: user-playback-001

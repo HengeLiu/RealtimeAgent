@@ -131,6 +131,8 @@ class GenericEnabledConfig:
 class DiscoveryConfig:
     enabled: bool = False
     packages: list[str] = field(default_factory=list)
+    recursive: bool = False
+    fail_fast: bool = True
 
 
 @dataclass(frozen=True)
@@ -159,7 +161,8 @@ class DevChecksConfig:
     run_package_check: bool = True
     run_boundary_check: bool = True
     contract_tests_path: str = "audio-chat/testdata/contracts"
-    require_recent_playback: bool = False
+    report_path: str = "runs/audio-chat/preflight.json"
+    require_recent_playback_ok: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,7 +227,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         mcp=GenericEnabledConfig(**_generic(data.get("mcp", {}))),
         endpoint_defaults=data.get("endpoint_defaults", {}),
         observability=ObservabilityConfig(**data.get("observability", {})),
-        dev_checks=DevChecksConfig(**data.get("dev_checks", {})),
+        dev_checks=DevChecksConfig(**_dev_checks(data.get("dev_checks", {}))),
     )
 
 
@@ -237,6 +240,9 @@ def _resolve_config_path(path: str | Path) -> Path:
         trimmed = Path(*parts[1:])
         if trimmed.exists():
             return trimmed
+    audio_chat_prefixed = Path("audio-chat") / raw
+    if audio_chat_prefixed.exists():
+        return audio_chat_prefixed
     return raw
 
 
@@ -257,7 +263,12 @@ def _tool_config(data: dict[str, Any]) -> ToolConfig:
     }
     values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}
     extra = dict(raw)
-    extra["discover"] = {"enabled": discover.enabled, "packages": list(discover.packages)}
+    extra["discover"] = {
+        "enabled": discover.enabled,
+        "packages": list(discover.packages),
+        "recursive": discover.recursive,
+        "fail_fast": discover.fail_fast,
+    }
     return ToolConfig(**values, discover=discover, extra=extra)
 
 
@@ -267,8 +278,22 @@ def _task_config(data: dict[str, Any]) -> TaskConfig:
     known = {"enabled", "max_running_per_user"}
     values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}
     extra = dict(raw)
-    extra["discover"] = {"enabled": discover.enabled, "packages": list(discover.packages)}
+    extra["discover"] = {
+        "enabled": discover.enabled,
+        "packages": list(discover.packages),
+        "recursive": discover.recursive,
+        "fail_fast": discover.fail_fast,
+    }
     return TaskConfig(**values, discover=discover, extra=extra)
+
+
+def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
+    raw = dict(data or {})
+    if "require_recent_playback" in raw and "require_recent_playback_ok" not in raw:
+        raw["require_recent_playback_ok"] = raw.pop("require_recent_playback")
+    else:
+        raw.pop("require_recent_playback", None)
+    return raw
 
 
 def _generic(data: dict[str, Any]) -> dict[str, Any]:

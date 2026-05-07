@@ -60,10 +60,14 @@ class AudioChatConfig:
     realtime_session_idle_timeout_seconds: int = 60
     tools_discover_enabled: bool = False
     tools_discover_packages: tuple[str, ...] = ()
+    tools_discover_recursive: bool = False
+    tools_discover_fail_fast: bool = True
     tools_allowlist: tuple[str, ...] = ()
     tools_denylist: tuple[str, ...] = ()
     tasks_discover_enabled: bool = False
     tasks_discover_packages: tuple[str, ...] = ()
+    tasks_discover_recursive: bool = False
+    tasks_discover_fail_fast: bool = True
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AudioChatConfig":
@@ -115,10 +119,14 @@ class AudioChatConfig:
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
             tools_discover_enabled=loaded.tools.discover.enabled,
             tools_discover_packages=tuple(loaded.tools.discover.packages),
+            tools_discover_recursive=loaded.tools.discover.recursive,
+            tools_discover_fail_fast=loaded.tools.discover.fail_fast,
             tools_allowlist=tuple(loaded.tools.allowlist),
             tools_denylist=tuple(loaded.tools.denylist),
             tasks_discover_enabled=loaded.tasks.discover.enabled,
             tasks_discover_packages=tuple(loaded.tasks.discover.packages),
+            tasks_discover_recursive=loaded.tasks.discover.recursive,
+            tasks_discover_fail_fast=loaded.tasks.discover.fail_fast,
         )
 
 
@@ -193,13 +201,26 @@ class AudioChatApp:
         self.text_agent_core = self.agent_core
         self.audio_pipeline = AudioPipeline(agent_core=self.agent_core)
         self.task_engine = TaskEngine()
+        self.discovery_errors: list[dict[str, str]] = []
         if self.config.tasks_discover_enabled:
-            for task_cls in TaskAutoDiscovery().discover(list(self.config.tasks_discover_packages)):
+            task_discovery = TaskAutoDiscovery()
+            for task_cls in task_discovery.discover(
+                list(self.config.tasks_discover_packages),
+                recursive=self.config.tasks_discover_recursive,
+                fail_fast=self.config.tasks_discover_fail_fast,
+            ):
                 self.task_engine.register(task_cls)
+            self.discovery_errors.extend(task_discovery.errors)
         self.tool_registry = ToolRegistry()
         if self.config.tools_discover_enabled:
-            for tool in ToolAutoDiscovery().discover(list(self.config.tools_discover_packages)):
+            tool_discovery = ToolAutoDiscovery()
+            for tool in tool_discovery.discover(
+                list(self.config.tools_discover_packages),
+                recursive=self.config.tools_discover_recursive,
+                fail_fast=self.config.tools_discover_fail_fast,
+            ):
                 self.tool_registry.register(tool)
+            self.discovery_errors.extend(tool_discovery.errors)
         self.tool_gateway = ToolGateway(
             registry=self.tool_registry,
             policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),

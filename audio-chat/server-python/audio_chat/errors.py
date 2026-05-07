@@ -26,9 +26,17 @@ class AudioChatError(Exception):
     主要方法：`to_dict()` 将异常转换为可记录到 runs 的结构化对象。
     """
 
-    def __init__(self, message: str, *, code: ErrorCode = ErrorCode.UNKNOWN, details: dict | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: ErrorCode = ErrorCode.UNKNOWN,
+        retryable: bool = False,
+        details: dict | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
         self.details = dict(details or {})
 
     def to_dict(self) -> dict:
@@ -39,4 +47,9 @@ class AudioChatError(Exception):
         返回值：可 JSON 序列化的字典。
         异常情况：无。
         """
-        return {"code": self.code.value, "message": str(self), "details": self.details}
+        return {
+            "code": self.code.value,
+            "message": str(self),
+            "retryable": self.retryable,
+            "details": self.details,
+        }

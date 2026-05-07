@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import pkgutil
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
@@ -15,26 +16,48 @@ from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFo
 class ToolResult:
     """Tool 执行结果。
 
-    主要功能：作为 ToolGateway 返回给 Agent Core 的稳定结构，避免直接暴露任意异常或
-    内部对象。
-    主要属性：`content` 为模型可读结果，`artifacts` 为可引用产物，`error` 为结构化错误。
+    主要功能：作为 ToolGateway 返回给 Agent Core 的稳定结构，避免直接暴露任意异常。
+    主要属性：`ok` 标识成功与否，`data/message/assets/artifacts/tasks/meta/error`
+    是公开冻结字段。
     """
 
-    content: Any = None
+    ok: bool
+    data: Any = None
+    message: str = ""
+    assets: list[AssetRef] | None = None
     artifacts: list[ArtifactRef] | None = None
+    tasks: list[Any] | None = None
+    meta: dict | None = None
     error: dict | None = None
-    metadata: dict | None = None
 
     @classmethod
-    def ok(cls, content: Any = None, *, artifacts: list[ArtifactRef] | None = None, metadata: dict | None = None) -> "ToolResult":
+    def success(
+        cls,
+        data: Any = None,
+        *,
+        message: str = "",
+        assets: list[AssetRef] | None = None,
+        artifacts: list[ArtifactRef] | None = None,
+        tasks: list[Any] | None = None,
+        meta: dict | None = None,
+    ) -> "ToolResult":
         """创建成功结果。
 
-        主要逻辑：把可选产物和元数据归一成 `ToolResult`。
-        参数：`content` 为模型可读内容。
+        主要逻辑：把 Tool 的业务数据、资产、产物、任务引用和元数据归一成公开结构。
+        参数：`data` 为模型或后续组件可读取的业务数据。
         返回值：`ToolResult`。
         异常情况：无。
         """
-        return cls(content=content, artifacts=artifacts or [], metadata=metadata or {})
+        return cls(
+            ok=True,
+            data=data,
+            message=message,
+            assets=assets or [],
+            artifacts=artifacts or [],
+            tasks=tasks or [],
+            meta=meta or {},
+            error=None,
+        )
 
     @classmethod
     def failed(cls, error: AudioChatError) -> "ToolResult":
@@ -45,7 +68,19 @@ class ToolResult:
         返回值：`ToolResult`。
         异常情况：无。
         """
-        return cls(error=error.to_dict(), artifacts=[], metadata={})
+        return cls(ok=False, assets=[], artifacts=[], tasks=[], meta={}, error=error.to_dict())
+
+    @property
+    def content(self) -> Any:
+        """兼容旧测试和旧调用方读取的 `content` 字段。"""
+
+        return self.data
+
+    @property
+    def metadata(self) -> dict:
+        """兼容旧测试和旧调用方读取的 `metadata` 字段。"""
+
+        return dict(self.meta or {})
 
 
 class ToolError(AudioChatError):
@@ -118,6 +153,8 @@ class ToolRegistry:
         name = tool.name or tool.__class__.__name__
         if not name:
             raise ToolError("tool name is required", code=ErrorCode.INVALID_ARGUMENT)
+        if name in self._tools:
+            raise ToolError(f"duplicate tool name: {name}", code=ErrorCode.PROTOCOL_ERROR)
         self._tools[name] = tool
 
     def get(self, name: str) -> BaseTool:
@@ -135,22 +172,78 @@ class ToolAutoDiscovery:
     主要功能：扫描配置包中继承 `BaseTool` 的具体类并注册。
     """
 
-    def discover(self, packages: list[str]) -> list[BaseTool]:
+    def __init__(self) -> None:
+        self.errors: list[dict[str, str]] = []
+
+    def discover(self, packages: list[str], *, recursive: bool = False, fail_fast: bool = True) -> list[BaseTool]:
         """扫描 Tool 包。
 
-        主要逻辑：导入每个包，注册模块里直接定义的 BaseTool 具体子类。
+        主要逻辑：导入每个包，按需递归扫描子模块，注册非内部、非抽象的 Tool 类。
         参数：`packages` 为模块路径列表。
         返回值：Tool 实例列表。
-        异常情况：导入失败向上抛出，便于 preflight 暴露配置错误。
+        异常情况：导入失败和重复名称按 `fail_fast` 决定抛出或记录到 `errors`。
         """
         tools: list[BaseTool] = []
+        seen: dict[str, str] = {}
         for package in packages:
-            module = importlib.import_module(package)
-            for _name, obj in inspect.getmembers(module, inspect.isclass):
-                if obj is BaseTool or not issubclass(obj, BaseTool) or inspect.isabstract(obj):
-                    continue
-                tools.append(obj())
+            for module in self._iter_modules(package, recursive=recursive, fail_fast=fail_fast):
+                for name, obj in inspect.getmembers(module, inspect.isclass):
+                    if not self._is_concrete_tool(name, obj):
+                        continue
+                    tool = obj()
+                    tool_name = tool.name or tool.__class__.__name__
+                    owner = f"{obj.__module__}.{obj.__name__}"
+                    previous = seen.get(tool_name)
+                    if previous is not None:
+                        error = {
+                            "package": package,
+                            "module": obj.__module__,
+                            "error": f"duplicate tool name: {tool_name}",
+                            "previous": previous,
+                            "current": owner,
+                        }
+                        if fail_fast:
+                            raise ToolError(error["error"], code=ErrorCode.PROTOCOL_ERROR, details=error)
+                        self.errors.append(error)
+                        continue
+                    seen[tool_name] = owner
+                    tools.append(tool)
         return tools
+
+    def _iter_modules(self, package: str, *, recursive: bool, fail_fast: bool):
+        try:
+            root = importlib.import_module(package)
+            yield root
+        except Exception as exc:
+            self._handle_import_error(package, package, exc, fail_fast)
+            return
+        if not recursive:
+            return
+        package_paths = getattr(root, "__path__", None)
+        if package_paths is None:
+            return
+        prefix = f"{root.__name__}."
+        for info in pkgutil.walk_packages(package_paths, prefix):
+            try:
+                yield importlib.import_module(info.name)
+            except Exception as exc:
+                self._handle_import_error(package, info.name, exc, fail_fast)
+
+    def _handle_import_error(self, package: str, module: str, exc: Exception, fail_fast: bool) -> None:
+        error = {"package": package, "module": module, "error": f"{type(exc).__name__}: {exc}"}
+        if fail_fast:
+            raise ToolError("tool discovery import failed", code=ErrorCode.PROTOCOL_ERROR, details=error) from exc
+        self.errors.append(error)
+
+    @staticmethod
+    def _is_concrete_tool(name: str, obj: type) -> bool:
+        return (
+            name
+            and not name.startswith("_")
+            and obj is not BaseTool
+            and issubclass(obj, BaseTool)
+            and not inspect.isabstract(obj)
+        )
 
 
 class ToolPolicy:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import pkgutil
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -66,6 +67,8 @@ class TaskEvent:
     priority: str = "normal"
     dedupe_key: str | None = None
     ttl_seconds: int = 0
+    requires_agent_decision: bool = False
+    allow_direct_notify: bool = True
     artifacts: list[ArtifactRef] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
@@ -153,6 +156,10 @@ class TaskRegistry:
 
     def register(self, task_cls: type[BaseTask]) -> None:
         task_type = task_cls.task_type or task_cls.__name__
+        if not task_type:
+            raise AudioChatError("task_type is required", code=ErrorCode.INVALID_ARGUMENT)
+        if task_type in self._tasks:
+            raise AudioChatError(f"duplicate task_type: {task_type}", code=ErrorCode.PROTOCOL_ERROR)
         self._tasks[task_type] = task_cls
 
     def get(self, task_type: str) -> type[BaseTask]:
@@ -164,15 +171,83 @@ class TaskRegistry:
 class TaskAutoDiscovery:
     """Task 自动发现器。"""
 
-    def discover(self, packages: list[str]) -> list[type[BaseTask]]:
+    def __init__(self) -> None:
+        self.errors: list[dict[str, str]] = []
+
+    def discover(
+        self,
+        packages: list[str],
+        *,
+        recursive: bool = False,
+        fail_fast: bool = True,
+    ) -> list[type[BaseTask]]:
+        """扫描 Task 包。
+
+        主要逻辑：导入配置包，按需递归扫描子模块，发现非内部、非抽象的 Task 类。
+        参数：`packages` 为模块路径列表，`recursive` 控制递归扫描，`fail_fast` 控制错误策略。
+        返回值：Task 类列表。
+        异常情况：导入失败和 `task_type` 重复时按 `fail_fast` 决定抛出或记录。
+        """
         tasks: list[type[BaseTask]] = []
+        seen: dict[str, str] = {}
         for package in packages:
-            module = importlib.import_module(package)
-            for _name, obj in inspect.getmembers(module, inspect.isclass):
-                if obj is BaseTask or not issubclass(obj, BaseTask) or inspect.isabstract(obj):
-                    continue
-                tasks.append(obj)
+            for module in self._iter_modules(package, recursive=recursive, fail_fast=fail_fast):
+                for name, obj in inspect.getmembers(module, inspect.isclass):
+                    if not self._is_concrete_task(name, obj):
+                        continue
+                    task_type = obj.task_type or obj.__name__
+                    owner = f"{obj.__module__}.{obj.__name__}"
+                    previous = seen.get(task_type)
+                    if previous is not None:
+                        error = {
+                            "package": package,
+                            "module": obj.__module__,
+                            "error": f"duplicate task_type: {task_type}",
+                            "previous": previous,
+                            "current": owner,
+                        }
+                        if fail_fast:
+                            raise AudioChatError(error["error"], code=ErrorCode.PROTOCOL_ERROR, details=error)
+                        self.errors.append(error)
+                        continue
+                    seen[task_type] = owner
+                    tasks.append(obj)
         return tasks
+
+    def _iter_modules(self, package: str, *, recursive: bool, fail_fast: bool):
+        try:
+            root = importlib.import_module(package)
+            yield root
+        except Exception as exc:
+            self._handle_import_error(package, package, exc, fail_fast)
+            return
+        if not recursive:
+            return
+        package_paths = getattr(root, "__path__", None)
+        if package_paths is None:
+            return
+        prefix = f"{root.__name__}."
+        for info in pkgutil.walk_packages(package_paths, prefix):
+            try:
+                yield importlib.import_module(info.name)
+            except Exception as exc:
+                self._handle_import_error(package, info.name, exc, fail_fast)
+
+    def _handle_import_error(self, package: str, module: str, exc: Exception, fail_fast: bool) -> None:
+        error = {"package": package, "module": module, "error": f"{type(exc).__name__}: {exc}"}
+        if fail_fast:
+            raise AudioChatError("task discovery import failed", code=ErrorCode.PROTOCOL_ERROR, details=error) from exc
+        self.errors.append(error)
+
+    @staticmethod
+    def _is_concrete_task(name: str, obj: type) -> bool:
+        return (
+            name
+            and not name.startswith("_")
+            and obj is not BaseTask
+            and issubclass(obj, BaseTask)
+            and not inspect.isabstract(obj)
+        )
 
 
 class TaskEventBridge:
