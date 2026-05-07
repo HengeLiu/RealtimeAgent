@@ -107,11 +107,22 @@ def sync(argv: list[str] | None = None) -> None:
         "\n".join(
             [
                 f"AUDIO_CHAT_SERVER_URL={args.server_url}",
+                f"AUDIO_CHAT_CONTROL_WS_URL={args.server_url.replace('http://', 'ws://').replace('https://', 'wss://')}/ws/control",
+                f"AUDIO_CHAT_STREAM_WS_URL={args.server_url.replace('http://', 'ws://').replace('https://', 'wss://')}/ws/stream",
                 f"AUDIO_CHAT_USER_ID={args.user_id}",
                 "AUDIO_CHAT_DEVICE_ID=dev-esp32-s3-001",
+                f"AUDIO_CHAT_AUTH_MODE={'static_token' if args.auth_token else 'disabled'}",
                 f"AUDIO_CHAT_AUTH_TOKEN={args.auth_token}",
                 "AUDIO_CHAT_WAKE_WORD_MODE=endpoint",
                 "AUDIO_CHAT_AEC_MODE=endpoint",
+                "AUDIO_CHAT_PLAYBACK_REFERENCE=endpoint_ring_buffer",
+                "AUDIO_CHAT_AUDIO_CODEC=pcm16le",
+                "AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000",
+                "AUDIO_CHAT_AUDIO_CHANNELS=1",
+                "AUDIO_CHAT_AUDIO_CHUNK_MS=20",
+                'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic"]',
+                'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]',
+                'AUDIO_CHAT_SUBSCRIPTIONS=[{"event":"control.audio_session.*"},{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.output.cancel.*","filter":{"stream_type":"actuator.speaker"}}]',
                 "",
             ]
         ),

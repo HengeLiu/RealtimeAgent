@@ -287,6 +287,21 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "esp32-s3-endpoint": (
+        CheckCommand(
+            "esp32_s3_endpoint_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_esp32_s3_endpoint_contract.py",
+                "tests/test_endpoint_config_sync.py",
+                "-q",
+            ),
+        ),
+    ),
     "developer-experience": (
         CheckCommand(
             "developer_experience_tests",

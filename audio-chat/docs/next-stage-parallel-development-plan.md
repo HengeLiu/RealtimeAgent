@@ -87,6 +87,7 @@ memory-skill-mcp
 task-engine-production
 provider-output-runtime
 endpoint-reference
+esp32-s3-endpoint
 developer-experience
 next-docs-contract
 ```
@@ -868,6 +869,9 @@ uv run python -m pytest \
   tests/test_esp32_s3_endpoint_contract.py \
   tests/test_endpoint_config_sync.py \
   -q
+
+uv run python scripts/acceptance_check.py esp32-s3-endpoint \
+  --report runs/acceptance/esp32-s3-endpoint.json
 ```
 
 有真机环境时补充运行硬件 smoke：

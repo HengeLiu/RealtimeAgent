@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from audio_chat.endpoints.esp32_aec import Esp32S3EndpointConfig
+
 
 AUDIO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,8 +63,18 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
         assert config["auth"]["mode"] == "static_token"
         assert config["auth"]["token"] == "token-sync"
     assert "AUDIO_CHAT_SERVER_URL=http://10.0.0.2:8765" in esp32
+    assert "AUDIO_CHAT_CONTROL_WS_URL=ws://10.0.0.2:8765/ws/control" in esp32
+    assert "AUDIO_CHAT_STREAM_WS_URL=ws://10.0.0.2:8765/ws/stream" in esp32
     assert "AUDIO_CHAT_USER_ID=user-sync" in esp32
+    assert "AUDIO_CHAT_AUTH_MODE=static_token" in esp32
     assert "AUDIO_CHAT_AUTH_TOKEN=token-sync" in esp32
+    assert "AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000" in esp32
+    assert 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic"]' in esp32
+    assert 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]' in esp32
+    esp32_config = Esp32S3EndpointConfig.from_env_file(report["files"]["esp32_s3"])
+    assert esp32_config.server_url == "http://10.0.0.2:8765"
+    assert esp32_config.user_id == "user-sync"
+    assert esp32_config.auth_payload() == {"mode": "static_token", "token": "token-sync"}
 
 
 def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path: Path) -> None:
@@ -86,9 +98,11 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     glass = yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8"))
     web = yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8"))
     ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+    esp32 = Esp32S3EndpointConfig.from_env_file(report["files"]["esp32_s3"])
 
-    configs = [phone, glass, web, ios]
+    configs = [phone, glass, web, ios, {"user_id": esp32.user_id, "device_id": esp32.device_id}]
     assert {config["user_id"] for config in configs} == {"user-shared"}
     assert len({config["device_id"] for config in configs}) == len(configs)
     assert "sensor.rgb" in phone["capabilities"]["streams.produce"]
     assert "actuator.speaker" in phone["capabilities"]["streams.consume"]
+    assert esp32.device_id == "dev-esp32-s3-001"

@@ -47,6 +47,8 @@ def test_esp32_aec_endpoint_declares_endpoint_aec_and_buffers_playback_reference
 
     payload = state.registration_payload()
     state.on_wake_detected()
+    assert state.sensor_mic_open is False
+    state.on_audio_session_open_requested("sess-001", stream_id="stream-mic-001")
     state.on_playback_pcm(b"abc")
     state.enqueue_aec_mic_pcm(b"mic")
 

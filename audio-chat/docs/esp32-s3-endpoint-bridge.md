@@ -6,7 +6,11 @@
 
 Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮没有连接物理 ESP32-S3。因此本文件记录最小真机联调入口、事件检查点和 AEC reference 写入要求；真机日志尚未产生，不能把 ESP32 真机能力描述为已完成。
 
-2026-05-07 更新：ESP32-S3 真机 AEC 验收暂时后置。下一阶段优先使用 `web-glass` 浏览器参考端侧验证全双工语音链路，因为浏览器 WebRTC AEC 能在同一页面拿到真实麦克风输入和 server 下行播放参考。ESP32-S3 bridge 文档保留，等 `web-glass` 链路稳定后继续。
+2026-05-07 更新：本轮已补齐 `audio_chat.endpoints.esp32_aec` 中的 ESP32-S3
+协议参考状态机、网络参考端和自动契约测试。它能覆盖注册 payload、wake 后才打开
+`sensor.mic`、speaker output 回执、AEC reference ring 诊断和 config sync 字段。物理
+ESP32-S3 固件仍未在本机连接，因此本文不能把真机能力描述为完成；真机 smoke 需要继续
+保留串口日志和 server runs 产物。
 
 可复用的旧试验代码：
 
@@ -45,25 +49,45 @@ ESP32-S3 端最小 bridge 固件需要声明：
 
 ```json
 {
-  "device_id": "dev-esp32-glass-001",
-  "client_type": "esp32-glass",
+  "device_id": "dev-esp32-s3-001",
+  "client_type": "esp32-s3",
   "capabilities": {
     "audio.aec": "endpoint",
+    "audio.playback_reference": "endpoint_ring_buffer",
     "streams.produce": ["sensor.mic"],
     "streams.consume": ["actuator.speaker"],
-    "wake": true
+    "audio.wake_word": "endpoint"
   },
   "subscriptions": [
-    "control.audio_session.open.requested",
-    "control.audio_session.close.requested",
-    "stream.input.open.requested",
-    "stream.output.open.requested",
-    "stream.output.close.requested"
+    {"event": "control.audio_session.*"},
+    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}}
   ]
 }
 ```
 
-旧 AEC 试验固件刷写入口仍以 `openaiglass-sdk/glass-esp32` 为准；迁移到 audio-chat bridge 后，刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备 token。真实命令应在真机联调时补入本文件，避免提交本地 WiFi 或 token。
+本地配置不应手写。先执行：
+
+```bash
+uv run audio-chat.config.sync \
+  --server-url http://<server-lan-ip>:8765 \
+  --user-id <user-id>
+```
+
+然后把生成的 `config/generated/esp32-s3.local.env` 写入固件配置或 Kconfig。该文件包含：
+
+1. `AUDIO_CHAT_CONTROL_WS_URL`
+2. `AUDIO_CHAT_STREAM_WS_URL`
+3. `AUDIO_CHAT_USER_ID`
+4. `AUDIO_CHAT_DEVICE_ID`
+5. `AUDIO_CHAT_AUTH_MODE` / `AUDIO_CHAT_AUTH_TOKEN`
+6. `AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000`
+7. `AUDIO_CHAT_AUDIO_CHUNK_MS=20`
+8. stream capability 和 subscriptions JSON
+
+旧 AEC 试验固件刷写入口仍可参考 `openaiglass-sdk/glass-esp32`；迁移到 audio-chat
+bridge 后，刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备
+token。真实命令应在真机联调时补入本文件，避免提交本地 WiFi 或 token。
 
 ## 成功事件链
 
@@ -92,6 +116,8 @@ ESP32 端不应在启动后保持 24 小时 `sensor.mic` 常驻上传。最小�
 3. 收到 audio session open / stream open 后才上传 `sensor.mic`。
 4. 连续对话结束、server 关闭会话或端侧超时后关闭 `sensor.mic`。
 5. 端侧播放失败时上报 `stream.output.failed`，不要静默丢 chunk。
+6. 用户打断只取消当前 output stream；除非 server 或用户明确关闭对话，不默认关闭整个
+   audio session。
 
 ## AEC Reference 观察点
 
@@ -123,3 +149,16 @@ aec_output_bytes=<n>
 5. AEC reference 写入统计。
 
 完成真机联调后，应把 server 启动命令、固件刷写命令、串口日志路径、runs 目录路径和失败点补回 `phase2-acceptance-record.md`。
+
+## 自动契约验收
+
+无硬件环境时先运行：
+
+```bash
+uv run python -m pytest tests/test_esp32_s3_endpoint_contract.py tests/test_endpoint_config_sync.py -q
+uv run python scripts/acceptance_check.py esp32-s3-endpoint \
+  --report runs/acceptance/esp32-s3-endpoint.json
+```
+
+该验收只证明协议、配置和参考状态机正确，不替代真机 Wi-Fi、I2S、AEC、功放和串口日志
+检查。
