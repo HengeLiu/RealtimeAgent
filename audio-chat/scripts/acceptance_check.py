@@ -37,7 +37,7 @@ class CheckCommand:
     cwd: Path = AUDIO_CHAT_ROOT
 
 
-CHECKS: dict[str, tuple[CheckCommand, ...]] = {
+FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
     "p0-foundation": (
         CheckCommand("unit_all_from_audio_chat", ("uv", "run", "python", "-m", "pytest", "tests", "-q")),
         CheckCommand(
@@ -154,6 +154,175 @@ CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+}
+
+NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
+    "developer-usability": (
+        CheckCommand(
+            "developer_usability_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_cli_developer_workflow.py",
+                "tests/test_config_sync.py",
+                "tests/test_docs_commands.py",
+                "tests/acceptance/test_developer_usable_gate.py",
+                "-q",
+            ),
+        ),
+    ),
+    "capability-template-playback": (
+        CheckCommand(
+            "capability_template_playback_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/acceptance/test_capability_template_playback.py",
+                "tests/acceptance/test_auto_discovery_developer_contract.py",
+                "-q",
+            ),
+        ),
+    ),
+    "audio-session-lifecycle": (
+        CheckCommand(
+            "audio_pipeline_session_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_audio_session_lifecycle.py",
+                "tests/test_audio_pipeline_processors.py",
+                "tests/acceptance/test_audio_session_contract.py",
+                "-q",
+            ),
+        ),
+    ),
+    "auth-device-management": (
+        CheckCommand(
+            "auth_device_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_device_registration_management.py",
+                "tests/test_signed_token_auth.py",
+                "-q",
+            ),
+        ),
+    ),
+    "memory-skill-mcp": (
+        CheckCommand(
+            "memory_skill_mcp_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_memory_service.py",
+                "tests/test_skill_service.py",
+                "tests/test_mcp_gateway.py",
+                "tests/acceptance/test_indirect_device_context_contract.py",
+                "-q",
+            ),
+        ),
+    ),
+    "task-engine-production": (
+        CheckCommand(
+            "task_engine_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_task_engine_persistence.py",
+                "tests/test_task_engine_scheduler.py",
+                "tests/test_task_event_bridge.py",
+                "tests/acceptance/test_task_device_stream_contract.py",
+                "-q",
+            ),
+        ),
+    ),
+    "provider-output-runtime": (
+        CheckCommand(
+            "provider_output_runtime_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_text_agent_tool_loop_async.py",
+                "tests/test_realtime_provider_tool_bridge.py",
+                "tests/test_streaming_tts_runtime.py",
+                "tests/integration/test_dashscope_providers.py",
+                "-q",
+            ),
+        ),
+    ),
+    "endpoint-reference": (
+        CheckCommand(
+            "endpoint_reference_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_web_glass_endpoint.py",
+                "tests/test_python_phone_mock_endpoint.py",
+                "tests/test_endpoint_config_sync.py",
+                "-q",
+            ),
+        ),
+    ),
+    "developer-experience": (
+        CheckCommand(
+            "developer_experience_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_cli_server_process.py",
+                "tests/test_package_boundary.py",
+                "tests/test_docs_commands.py",
+                "-q",
+            ),
+        ),
+    ),
+    "next-docs-contract": (
+        CheckCommand(
+            "next_docs_contract_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/acceptance/test_next_docs_contract.py",
+                "tests/acceptance/test_migration_template_contract.py",
+                "-q",
+            ),
+        ),
+    ),
+}
+
+CHECKS: dict[str, tuple[CheckCommand, ...]] = {
+    **FOUNDATION_CHECKS,
+    **NEXT_STAGE_CHECKS,
 }
 
 
