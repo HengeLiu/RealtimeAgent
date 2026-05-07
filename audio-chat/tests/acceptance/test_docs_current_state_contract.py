@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_current_state_docs_do_not_claim_unbacked_old_sdk_parity() -> None:
+    """测试目标：防止文档把本阶段后续线路误写成已完成。
+
+    测试方法：检查 README、迁移指南和 for-blind 样板中对 iOS、ESP32、五类老业务能力
+    的状态表述，要求使用参考端、样板或后续 lane 口径。
+    预期结果：没有测试或样板支撑的能力不会被写成已完成产品能力。
+    """
+
+    docs = "\n".join(
+        [
+            _read("README.md"),
+            _read("docs/phase3-migration-guide.md"),
+            _read("examples/for-blind-app/README.md"),
+        ]
+    )
+    for expected in [
+        "iOS / ESP32 目录目前是参考端和契约入口",
+        "真正成功路径由后续 `old-sdk-parity-capabilities` lane 补代码和设备级回放",
+        "当前为 iOS 参考端目录",
+        "当前为 ESP32-S3 参考端目录",
+    ]:
+        assert expected in docs
+
+    forbidden_patterns = [
+        r"find_object.*已完成端到端",
+        r"traffic_light.*已完成端到端",
+        r"navigation.*已完成端到端",
+        r"iOS.*真机.*已完成",
+        r"ESP32.*真机.*已完成",
+    ]
+    offenders = [pattern for pattern in forbidden_patterns if re.search(pattern, docs)]
+    assert offenders == []
+
+
+def test_old_sdk_parity_docs_reference_existing_acceptance_materials() -> None:
+    """测试目标：确认文档中的“已实现”口径能落到现有测试、样板或验收 lane。
+
+    测试方法：检查架构文档的验收索引、README 的验收命令和样板目录。
+    预期结果：文档状态和可执行材料同步。
+    """
+
+    architecture = _read("docs/audio-chat-sdk-architecture.md")
+    required_refs = [
+        "tests/test_docs_old_sdk_parity.py",
+        "tests/acceptance/test_docs_current_state_contract.py",
+        "examples/for-blind-app",
+        "docs/old-sdk-parity-troubleshooting.md",
+    ]
+    for ref in required_refs:
+        assert ref in architecture
+        assert (ROOT / ref).exists()
+
+    readme = _read("README.md")
+    for lane in [
+        "developer-usability",
+        "capability-template-playback",
+        "old-sdk-parity-docs",
+    ]:
+        assert f"scripts/acceptance_check.py {lane}" in readme
+
+
+def test_old_sdk_parity_doc_lane_is_registered() -> None:
+    """测试目标：确认文档线路已注册到自动验收入口。
+
+    测试方法：导入 `scripts.acceptance_check`，检查 `old-sdk-parity-docs` lane。
+    预期结果：本线路能独立执行，也会进入 `all`。
+    """
+
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    from scripts import acceptance_check
+
+    assert "old-sdk-parity-docs" in acceptance_check.CHECKS
+    commands = acceptance_check.CHECKS["old-sdk-parity-docs"]
+    assert commands
+    command_text = " ".join(commands[0].command)
+    assert "tests/test_docs_old_sdk_parity.py" in command_text
+    assert "tests/acceptance/test_docs_current_state_contract.py" in command_text
+
+
+def test_docs_list_all_for_blind_capability_templates() -> None:
+    """测试目标：确认能力样板文档覆盖五类老业务能力。
+
+    测试方法：检查 README、迁移指南和 for-blind 样板 README 都提到五类能力。
+    预期结果：迁移入口完整覆盖 find_object、traffic_light、navigation、search、timer。
+    """
+
+    docs = "\n".join(
+        [
+            _read("README.md"),
+            _read("docs/phase3-migration-guide.md"),
+            _read("examples/for-blind-app/README.md"),
+        ]
+    )
+    for capability in ["find_object", "traffic_light", "navigation", "search", "timer"]:
+        assert capability in docs
+        assert (ROOT / "examples" / "for-blind-app" / "capabilities" / capability / "README.md").exists()

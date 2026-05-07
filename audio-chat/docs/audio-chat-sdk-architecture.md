@@ -185,6 +185,7 @@ audio-chat/
 | Output Service 与播放仲裁 | `tests/test_phase2_providers_output.py`、`testdata/contracts/output/output_arbitration_preempt_low_priority.json` |
 | H 线路迁移样板 | `examples/migration-templates`、`tests/acceptance/test_migration_template_contract.py` |
 | Memory / Skill / MCP 能力面 | `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` |
+| 老 SDK 可用性文档入口 | `README.md`、`docs/phase3-migration-guide.md`、`docs/old-sdk-parity-troubleshooting.md`、`examples/for-blind-app`、`tests/test_docs_old_sdk_parity.py`、`tests/acceptance/test_docs_current_state_contract.py` |
 
 ### 3.7 公开扩展 API
 

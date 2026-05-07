@@ -394,6 +394,23 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "old-sdk-parity-docs": (
+        CheckCommand(
+            "old_sdk_parity_docs_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_docs_old_sdk_parity.py",
+                "tests/acceptance/test_docs_current_state_contract.py",
+                "tests/acceptance/test_next_docs_contract.py",
+                "tests/acceptance/test_migration_template_contract.py",
+                "-q",
+            ),
+        ),
+    ),
 }
 
 CHECKS: dict[str, tuple[CheckCommand, ...]] = {
