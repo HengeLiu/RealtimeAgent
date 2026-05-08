@@ -289,7 +289,7 @@ class RegistrationValidator:
             raise ValueError("producer_id must equal payload.device_id")
         if event.version != PROTOCOL_VERSION:
             raise ValueError("unsupported protocol version")
-        # capabilities 是旧示例兼容字段，新协议的设备能力事实由 subscriptions 推导。
+        # capabilities 是旧示例兼容字段，新协议路由只依赖 subscriptions 的 event/filter。
         self.validate_capabilities(dict(event.payload.get("capabilities") or {}))
         self.validate_subscriptions(event.payload.get("subscriptions") or [])
 
@@ -605,16 +605,13 @@ class ControlService:
         self,
         event: Event,
         *,
-        require_capability: str | None = None,
         selection: str = "all",
     ) -> PublishResult:
-        """按协议订阅、能力和选择策略发布事件。
+        """按协议订阅和选择策略发布事件。
 
-        主要逻辑：先按当前事件订阅找到候选设备，再按 capability 过滤，最后按 selection
-        选择全部或第一台可用设备。调用方不能传入 device_id，因此不会形成业务层点对点
-        发送事件接口。
-        参数：`event` 为协议事件，`require_capability` 为可选能力条件，`selection` 为
-        `all` 或 `first_available`。
+        主要逻辑：先按当前事件订阅找到候选设备，再按 selection 选择全部或第一台
+        可用设备。调用方不能传入 device_id，因此不会形成业务层点对点发送事件接口。
+        参数：`event` 为协议事件，`selection` 为 `all` 或 `first_available`。
         返回值：投递统计。
         异常情况：事件名或 selection 非法时抛出 `ValueError`。
         """
@@ -622,7 +619,6 @@ class ControlService:
         self.recorder.record_event(event)
         selected, route = self._resolve_matching_devices_with_diagnostics(
             event,
-            require_capability=require_capability,
             selection=selection,
         )
         result = self._deliver_to_devices(event, selected, route_diagnostics=route)
@@ -633,23 +629,20 @@ class ControlService:
         self,
         event: Event,
         *,
-        require_capability: str | None = None,
         selection: str = "all",
     ) -> list[Device]:
-        """按订阅、能力和选择策略解析目标设备。
+        """按订阅和选择策略解析目标设备。
 
-        主要逻辑：先使用协议订阅匹配候选设备，再按 capability 过滤，最后应用
-        `all` 或 `first_available`。该方法不投递事件，供 Stream Service 在创建
-        output stream 前冻结 consumer 列表。
-        参数：`event` 为协议事件，`require_capability` 为可选能力，`selection` 为
-        选择策略。
+        主要逻辑：使用协议订阅匹配候选设备，再应用 `all` 或 `first_available`。
+        该方法不投递事件，供 Stream Service 在创建 output stream 前冻结 consumer
+        列表。
+        参数：`event` 为协议事件，`selection` 为选择策略。
         返回值：最终匹配的设备记录列表。
         异常情况：事件名或 selection 非法时抛出 `ValueError`。
         """
         self._validate_event(event)
         selected, _ = self._resolve_matching_devices_with_diagnostics(
             event,
-            require_capability=require_capability,
             selection=selection,
         )
         return selected
@@ -855,32 +848,21 @@ class ControlService:
         self,
         event: Event,
         *,
-        require_capability: str | None,
         selection: str,
     ) -> tuple[list[Device], list[dict[str, Any]]]:
-        """按订阅、能力和选择策略解析设备，并保留每一步诊断。"""
+        """按订阅和选择策略解析设备，并保留每一步诊断。"""
 
         if selection not in {"all", "first_available"}:
             raise ValueError(f"unsupported device selection: {selection}")
         candidates, diagnostics = self._resolve_subscribers_with_diagnostics(event)
         selected: list[Device] = []
         for device in candidates:
-            if require_capability is not None and not self.device_supports_capability(device, require_capability):
-                self._mark_route_selected(
-                    diagnostics,
-                    device.device_id,
-                    selected=False,
-                    reason="capability_mismatch",
-                    required_capability=require_capability,
-                )
-                continue
             if selection == "first_available" and selected:
                 self._mark_route_selected(
                     diagnostics,
                     device.device_id,
                     selected=False,
                     reason="selection_skipped",
-                    required_capability=require_capability,
                 )
                 continue
             selected.append(device)
@@ -889,7 +871,6 @@ class ControlService:
                 device.device_id,
                 selected=True,
                 reason="selected",
-                required_capability=require_capability,
             )
         return selected, diagnostics
 
@@ -944,7 +925,6 @@ class ControlService:
         *,
         selected: bool,
         reason: str,
-        required_capability: str | None,
     ) -> None:
         """更新某台设备的选择结果。"""
 
@@ -953,8 +933,6 @@ class ControlService:
                 continue
             item["selected"] = selected
             item["reason"] = reason
-            if required_capability is not None:
-                item["required_capability"] = required_capability
             return
 
     @staticmethod
@@ -974,18 +952,16 @@ class ControlService:
         item["delivery_reason"] = reason
 
     def device_supports_capability(self, device: Device, capability: str) -> bool:
-        """按订阅推导设备是否支持某类交互，旧能力字段只作为兼容补充。
+        """兼容旧设备能力查询。
 
-        主要逻辑：`sensor.*` 能力由设备是否订阅对应 `stream.control.*` 事件决定；
-        `actuator.*` 能力由设备是否订阅对应 `stream.output.*` 事件决定。历史
-        `capabilities/properties` 字段只用于不能从订阅表达的附加能力和旧示例兼容。
+        主要逻辑：事件分发不再调用本方法。这里仅供旧调试 API 或旧业务查询
+        `properties/capabilities` 中的非协议能力，避免把 stream 订阅解释成第二套
+        capability 概念。
         参数：运行态设备对象和能力名。
         返回值：支持时返回 True。
         异常情况：无。
         """
 
-        if self._subscription_supports_capability(device.subscriptions, capability):
-            return True
         return self._has_legacy_capability(device.properties, capability) or self._has_legacy_capability(
             device.capabilities,
             capability,
@@ -1009,33 +985,6 @@ class ControlService:
                 "route_diagnostics": list(result.route_diagnostics),
             },
         )
-
-    @classmethod
-    def _subscription_supports_capability(cls, subscriptions: list[Subscription] | tuple[Subscription, ...], capability: str) -> bool:
-        if capability.startswith("sensor."):
-            return any(
-                SubscriptionMatcher._event_name_matches("stream.control.configure.requested", subscription.event)
-                and cls._stream_filter_matches(subscription.filter, capability)
-                for subscription in subscriptions
-            )
-        if capability.startswith("actuator."):
-            return any(
-                SubscriptionMatcher._event_name_matches("stream.output.open.requested", subscription.event)
-                and cls._stream_filter_matches(subscription.filter, capability)
-                for subscription in subscriptions
-            )
-        return False
-
-    @staticmethod
-    def _stream_filter_matches(filter_data: dict[str, Any], stream_type: str) -> bool:
-        expected = filter_data.get("stream_type")
-        if expected is None:
-            expected = filter_data.get("payload.stream_type")
-        if expected is None:
-            return True
-        if isinstance(expected, list):
-            return stream_type in expected
-        return expected == stream_type
 
     @staticmethod
     def _has_legacy_capability(capabilities: dict[str, Any], capability: str) -> bool:

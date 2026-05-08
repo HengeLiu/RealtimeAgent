@@ -129,7 +129,6 @@ def test_open_output_stream_honors_capability_and_selection(tmp_path) -> None:
     writer = UserDeviceContext(user_id=user_id, app=app).open_output_stream(
         "actuator.haptic",
         codec="raw",
-        require_capability="actuator.haptic",
         selection="first_available",
     )
     writer.write(b"\x01\x02", final=True)
@@ -165,7 +164,6 @@ def test_payload_only_control_event_does_not_open_stream(tmp_path) -> None:
     result = UserDeviceContext(user_id=user_id, app=app).publish_event(
         "control.device.command.requested",
         payload={"command_name": "navigation.start", "params": {"destination": "office"}},
-        require_capability="navigation.endpoint",
         selection="first_available",
     )
 

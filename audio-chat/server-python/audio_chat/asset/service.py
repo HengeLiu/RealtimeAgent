@@ -294,7 +294,6 @@ class AssetService:
                 stream_type=stream_type,
                 payload=payload,
             ),
-            require_capability=stream_type,
             selection="first_available",
         )
         if session_id and hasattr(self.recorder, "record_asset_event"):

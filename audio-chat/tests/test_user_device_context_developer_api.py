@@ -382,12 +382,12 @@ def test_notify_enters_output_service_and_find_device_is_read_only(tmp_path) -> 
     assert endpoint.chunks
 
 
-def test_find_device_infers_stream_support_from_subscription(tmp_path) -> None:
-    """测试目标：验证能力开发者查询设备时不依赖设备重复声明 capabilities。
+def test_stream_output_routes_from_subscription_without_find_device_capability(tmp_path) -> None:
+    """测试目标：验证 stream 输出路由不依赖 `find_device(capability=...)`。
 
     测试方法：注册只订阅 `actuator.speaker` 输出事件的设备，不提供 capabilities，
-    再通过 `find_device(capability="actuator.speaker")` 查询。
-    预期结果：设备仍能被找到，说明 Tool / Task 的能力判断来自订阅。
+    直接通过 `submit_audio()` 输出。
+    预期结果：设备收到 output stream 事件和音频 chunk。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
@@ -402,7 +402,10 @@ def test_find_device_infers_stream_support_from_subscription(tmp_path) -> None:
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
     )
 
-    handle = UserDeviceContext(user_id="user-subscription-only", app=app).find_device("actuator.speaker")
+    context = UserDeviceContext(user_id="user-subscription-only", app=app)
+    handle = context.find_device("actuator.speaker")
+    context.submit_audio(b"\x00\x00\x01\x00", codec="pcm16le")
 
-    assert handle is not None
-    assert handle.snapshot.name == "仅订阅扬声器设备"
+    assert handle is None
+    assert any(event.event_name == "stream.output.open.requested" for event in endpoint.events)
+    assert endpoint.chunks

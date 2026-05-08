@@ -133,7 +133,6 @@ def test_publish_event_broadcasts_by_capability_and_subscription_not_device_id(t
         "stream.control.configure.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single", "max_samples": 1},
-        require_capability="sensor.rgb",
         selection="all",
     )
 
@@ -166,7 +165,6 @@ def test_payload_only_control_event_does_not_open_stream(tmp_path) -> None:
             "command_name": "navigation.start",
             "params": {"destination": "office", "mode": "walking"},
         },
-        require_capability="navigation.endpoint",
         selection="first_available",
     )
 
@@ -199,7 +197,6 @@ def test_continuous_sensor_stream_is_read_via_asset_watch(tmp_path) -> None:
             "asset_policy": "cache",
             "correlation_id": correlation_id,
         },
-        require_capability="sensor.rgb",
         selection="first_available",
     )
     assert result.delivered_count == 1

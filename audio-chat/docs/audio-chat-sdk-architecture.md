@@ -718,12 +718,14 @@ filter 字段路径只推荐引用事件信封字段和 `payload` 内字段：
 | `stream_type` | 事件信封或 stream 元数据中的 `stream_type`。 |
 | `payload.mode` | `payload.mode`。 |
 
-`capabilities.*` 是旧示例的兼容字段，不作为新协议推荐写法。新协议中，设备是否能生产
-`sensor.*` 或消费 `actuator.*`，由设备注册时提交的 `subscriptions` 推导。
-例如订阅 `{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}`
-表示设备可以接收 RGB 采集配置事件；订阅
+`capabilities.*` 是旧示例的兼容字段，不作为新协议推荐写法。新协议中，事件分发
+只看订阅的 `event` 和 `filter`。例如订阅
+`{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}`
+表示当 server 发布 `stream.control.configure.requested` 且 `stream_type=sensor.rgb`
+时，该设备会收到 RGB 采集配置事件；订阅
 `{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}}`
-表示设备可以接收扬声器输出 stream。
+表示当 server 发布 `stream.output.open.requested` 且
+`stream_type=actuator.speaker` 时，该设备会收到扬声器输出 stream 事件。
 
 示例：
 
@@ -2768,9 +2770,11 @@ TaskEventBridge --> AgentCoreRouter
 | --- | --- | --- |
 | `Device` | SDK 内部 | 注册成功后的运行态设备对象，维护连接、心跳、能力、订阅、stream 状态和端侧控制状态。 |
 | `DeviceSnapshot` | Tool / Task / 调试接口 | `Device` 的只读快照，用于查询当前设备状态。 |
-| `DeviceHandle` | Tool / Task | 对某个已选择设备的受限操作句柄，只提供 SDK 允许的操作，不允许任意点对点发事件。 |
+| `DeviceHandle` | Tool / Task | 旧兼容只读句柄，不提供任意点对点发事件能力。 |
 
-业务代码不直接构造或保存 `Device`。如果需要跨异步步骤保存设备引用，应保存 `StreamHandle`、`AssetRef`、server 侧 `TaskRef` 或重新通过 capability 查询设备；不要长期缓存 `DeviceHandle` 后假设连接永远有效。
+业务代码不直接构造或保存 `Device`。如果需要跨异步步骤保存引用，应保存
+`StreamHandle`、`AssetRef` 或 server 侧 `TaskRef`；不要长期缓存 `DeviceHandle`
+后假设连接永远有效。
 
 ```python
 class UserDeviceContext:
@@ -2782,7 +2786,6 @@ class UserDeviceContext:
         *,
         payload: dict | None = None,
         stream_type: str | None = None,
-        require_capability: str | None = None,
         selection: str = "all",
         timeout_seconds: float | None = None,
     ) -> EventPublishResult: ...
@@ -2792,7 +2795,6 @@ class UserDeviceContext:
         *,
         codec: str,
         metadata: dict | None = None,
-        require_capability: str | None = None,
         selection: str = "all",
     ) -> StreamWriter: ...
     def request_asset(
@@ -2889,17 +2891,16 @@ Tool / Task 能否找到设备，取决于端侧注册时声明的 capability �
 
 含义：
 
-1. `capabilities` 说明设备理论上能做什么。
-2. `subscriptions` 说明设备愿意接收哪些控制事件。
-3. 两者必须同时满足，SDK 才会把某个 Tool / Task 的意图匹配到这台设备。
-4. 如果设备只声明能力但没有订阅对应事件，server 不会把控制事件推给它。
+1. `subscriptions` 说明设备愿意接收哪些控制事件。
+2. 事件分发只看 `event` 和 `filter` 是否命中。
+3. `capabilities` 是旧字段或调试字段，不参与新协议的事件分发。
+4. 如果设备没有订阅对应事件，server 不会把控制事件推给它。
 
 代码不能写死 `device_id`。`device_id` 是运行时设备实例标识，只能出现在注册、日志、调试快照和回执里。Tool / Task 应该按下面这些条件表达需求：
 
-1. `capability`：需要哪类能力，例如 `sensor.rgb`、`sensor.imu`、`navigation.endpoint`。
-2. `stream_type`：需要哪类 stream，例如 `sensor.rgb`、`actuator.speaker`。
-3. `command_name`：需要哪类控制动作，例如 `navigation.start`、`local_inference.stop`。
-4. `selection`：多个设备都满足时如何选择，例如 `all`、`first_available`、`freshest_asset`、`highest_quality`。第一版可先内置少量策略，复杂策略由业务 Tool 自己在多个结果中选择。
+1. `stream_type`：需要哪类 stream，例如 `sensor.rgb`、`actuator.speaker`。
+2. `command_name`：需要哪类控制动作，例如 `navigation.start`、`local_inference.stop`。
+3. `selection`：多个设备都满足时如何选择，例如 `all`、`first_available`。复杂策略由业务 Tool 自己在多个结果中选择。
 
 设备实例选择由 SDK 在运行时完成：
 
@@ -2907,7 +2908,7 @@ Tool / Task 能否找到设备，取决于端侧注册时声明的 capability �
 Tool / Task 提交意图
 1. Control Service 读取当前 user_id 的 active device set。
 2. 过滤在线设备。
-3. 按 capability、stream_type、command_name 和订阅 filter 匹配候选设备。
+3. 按事件名、stream_type、command_name 和订阅 filter 匹配候选设备。
 4. 按 selection 策略选择一个或多个设备。
 5. 对控制意图发布事件；对 stream 意图打开对应 stream。
 6. 返回匹配数量、stream handle、asset ref 或错误。
@@ -2918,7 +2919,7 @@ Tool / Task 提交意图
 使用场景：
 
 1. Tool 需要读取或请求某个端侧资产，例如“看一下前方有什么”需要 `sensor.rgb` 单帧图像。
-2. Tool 需要查询当前用户有哪些在线设备、这些设备声明了哪些能力。
+2. Tool 需要查询当前用户有哪些在线设备，用于调试或给用户解释设备状态。
 3. Task 需要调整端侧长流程，例如持续低频上传 IMU、启动或停止手机侧导航、启用或关闭端侧本地推理。对端侧而言，这些都只是订阅到的控制事件和后续 stream，不是新的 task 通讯方式。
 4. Tool 或 Task 需要向用户发出可听输出，但不应直接打开播放器 stream，而应调用 `submit_text()` 或 `submit_audio()` 交给 Output Service。
 5. Tool 或 Task 需要组合 MCP、Skill、Memory 等能力，并且这些能力需要间接使用当前用户设备能力。
@@ -2960,7 +2961,6 @@ class StartNavigationTool(BaseTool):
                     "mode": "walking",
                 },
             },
-            require_capability="navigation.endpoint",
             selection="first_available",
             timeout_seconds=3,
         )
@@ -2973,7 +2973,8 @@ class StartNavigationTool(BaseTool):
         return ToolResult.success(data={"status": "requested"})
 ```
 
-这段代码不会指定 `device_id`。底层会发布 `control.device.command.requested`，只有注册时声明了对应能力并订阅了该控制事件的在线设备才会收到。
+这段代码不会指定 `device_id`。底层会发布
+`control.device.command.requested`，只有订阅命中的在线设备才会收到。
 
 采集设备数据：
 
@@ -3013,10 +3014,6 @@ class MotionWindowTask(BaseTask):
     task_type = "motion_window"
 
     async def on_start(self, context: TaskContext) -> None:
-        device = context.devices.find_device(capability="sensor.imu")
-        if device is None:
-            raise TaskFailed("当前没有可提供 IMU 的在线设备")
-
         context.devices.publish_event(
             "stream.control.configure.requested",
             stream_type="sensor.imu",
@@ -3025,12 +3022,13 @@ class MotionWindowTask(BaseTask):
                 "sample_rate_hz": 50,
                 "window_seconds": 2,
             },
-            require_capability="sensor.imu",
             selection="first_available",
         )
 ```
 
-这段代码仍然不是点对点通讯。`find_device(capability="sensor.imu")` 只是提前判断当前是否有具备 IMU 能力的在线设备；真正下发时仍然发布 `stream.control.configure.requested` 事件，端侧后续上传的数据仍然走 `sensor.imu` stream。
+这段代码仍然不是点对点通讯。server 只发布
+`stream.control.configure.requested` 事件；是否下发成功由订阅匹配结果决定，
+端侧后续上传的数据仍然走 `sensor.imu` stream。
 
 持续视频帧处理示例：
 
@@ -3052,7 +3050,6 @@ class VideoFrameAnalyzeTask(BaseTask):
                 "correlation_id": correlation_id,
                 "max_duration_seconds": 60,
             },
-            require_capability="sensor.rgb",
             selection="first_available",
         )
         if result.matched_count == 0:
@@ -3075,7 +3072,6 @@ class VideoFrameAnalyzeTask(BaseTask):
                 "mode": "stop",
                 "correlation_id": context.task_id,
             },
-            require_capability="sensor.rgb",
             selection="first_available",
         )
 ```

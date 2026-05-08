@@ -64,7 +64,7 @@ class ContinuousVisionTask(BaseTask):
 - `get_devices(capability=...)`：查询只读设备快照，可用于判断当前是否有设备具备某项能力。
 - `find_device(capability=...)`：按能力查找只读设备句柄；句柄不提供点对点发送方法。
 - `publish_event(...)`：发布协议事件，由订阅匹配分发。
-- `configure_stream(...)`：请求具备能力并订阅事件的设备打开、调整或停止 `sensor.*` stream。
+- `configure_stream(...)`：请求订阅命中的设备打开、调整或停止 `sensor.*` stream。
 - `request_asset(...)`：请求某类 `sensor.*` stream 的最新结果，例如一张 `sensor.rgb` 图片。
 - `query_assets(...)` / `watch_assets(...)`：读取 server 内部缓存的 stream 结果。
 - `open_output_stream(...)`：打开 `actuator.*` 输出 stream。
@@ -133,7 +133,7 @@ class ContinuousVisionTask(BaseTask):
 1. server 只在同一个 `user_id` 当前在线设备中查找订阅者。
 2. 默认不把事件回发给事件生产者自己。
 3. 先匹配订阅的 `event`，再匹配 `filter`。
-4. 对 `sensor.*` 和 `actuator.*`，server 直接从订阅中推导设备是否支持该 stream，不要求设备额外声明 `capabilities`。
+4. 对 `sensor.*` 和 `actuator.*`，只要事件名和 `stream_type` filter 命中就发送，不再额外判断 `capabilities`。
 5. Tool / Task 可以指定 `selection="first_available"` 或 `selection="all"`，但不能指定某个 `device_id`。
 
 `filter` 只过滤事件字段，例如 `stream_type`、`payload.command_name`、`payload.mode`。`properties` 不参与事件路由，只用于日志、debug、硬件参数说明或业务偏好。

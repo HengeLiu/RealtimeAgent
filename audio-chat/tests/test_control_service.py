@@ -96,12 +96,12 @@ def test_publish_resolves_by_subscription() -> None:
     assert sensor.events == []
 
 
-def test_stream_capability_is_inferred_from_subscription_without_capabilities() -> None:
-    """测试目标：验证 stream 能力判断以订阅为准，不要求设备重复声明 capabilities。
+def test_stream_event_routes_by_subscription_without_capabilities() -> None:
+    """测试目标：验证 stream 事件只按订阅命中，不要求设备重复声明 capabilities。
 
     测试方法：注册一个只声明 `stream.control.* sensor.rgb` 订阅的设备，然后用
-    `require_capability=sensor.rgb` 发布匹配事件。
-    预期结果：设备可以被选中并收到事件，说明订阅就是设备能力事实。
+    `stream_type=sensor.rgb` 发布匹配事件。
+    预期结果：设备可以被选中并收到事件。
     """
 
     service = ControlService()
@@ -119,7 +119,6 @@ def test_stream_capability_is_inferred_from_subscription_without_capabilities() 
             stream_type="sensor.rgb",
             payload={"stream_type": "sensor.rgb"},
         ),
-        require_capability="sensor.rgb",
     )
 
     assert result.delivered_count == 1
@@ -254,7 +253,6 @@ def test_route_diagnostics_explain_subscription_miss() -> None:
             stream_type="sensor.depth",
             payload={"stream_type": "sensor.depth"},
         ),
-        require_capability="sensor.depth",
     )
 
     assert result.matched_count == 0

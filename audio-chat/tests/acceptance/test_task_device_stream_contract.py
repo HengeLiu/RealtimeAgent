@@ -78,7 +78,6 @@ class ContinuousRgbProductionTask(BaseTask):
             "stream.control.configure.requested",
             stream_type="sensor.rgb",
             payload={"mode": "continuous", "correlation_id": correlation_id, "fps": 2},
-            require_capability="sensor.rgb",
             selection="first_available",
         )
         refs = []
@@ -110,7 +109,6 @@ class ContinuousRgbProductionTask(BaseTask):
             "stream.control.configure.requested",
             stream_type="sensor.rgb",
             payload={"mode": "stop", "correlation_id": context.task_ref.task_id},
-            require_capability="sensor.rgb",
             selection="first_available",
         )
 
@@ -127,7 +125,6 @@ class CancellableRgbTask(ContinuousRgbProductionTask):
             "stream.control.configure.requested",
             stream_type="sensor.rgb",
             payload={"mode": "continuous", "correlation_id": context.task_ref.task_id, "fps": 1},
-            require_capability="sensor.rgb",
             selection="first_available",
         )
 

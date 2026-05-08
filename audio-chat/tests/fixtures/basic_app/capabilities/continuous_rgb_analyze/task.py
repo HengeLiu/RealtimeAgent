@@ -16,7 +16,6 @@ class ContinuousRgbAnalyzeTask(BaseTask):
             "stream.control.configure.requested",
             stream_type="sensor.rgb",
             payload={"mode": "continuous", "correlation_id": correlation_id, "fps": 2},
-            require_capability="sensor.rgb",
             selection="first_available",
         )
         refs = []

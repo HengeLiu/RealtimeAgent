@@ -7,7 +7,7 @@
 1. 设备开发者只需要在注册事件中声明 `subscriptions`。
 2. Tool / Task 开发者只通过 `context.devices` 发布事件、配置 stream 或读取资产。
 3. 业务代码不能按 `device_id` 点对点发送事件。
-4. `sensor.*` 和 `actuator.*` 的能力事实由订阅推导，不要求设备重复声明 `capabilities`。
+4. `sensor.*` 和 `actuator.*` 只按事件名和 `stream_type` filter 命中，不再额外判断 `capabilities`。
 5. 路由失败必须可观察，不能只表现为“没有响应”。
 
 ## 当前链路
@@ -26,7 +26,7 @@ Context -> Control: publish_matching(Event)
 Control -> Control: validate event
 Control -> Matcher: event + subscriptions + filter
 Matcher --> Control: match / miss reason
-Control -> Control: require_capability / selection
+Control -> Control: selection
 Control -> Device: push_event(Event)
 Control -> Recorder: control-routes.jsonl
 @enduml
@@ -50,8 +50,8 @@ Stream 输出链路仍然遵守同一规则。`StreamService` 只在打开 `actu
 
 含义：
 
-- `stream.control.* + sensor.rgb`：设备愿意接收 RGB 采集配置事件，因此 server 可以推导它支持 `sensor.rgb`。
-- `stream.output.* + actuator.speaker`：设备愿意接收扬声器输出事件，因此 server 可以推导它支持 `actuator.speaker`。
+- `stream.control.* + sensor.rgb`：当 server 发布 `stream.control.configure.requested` 且 `stream_type=sensor.rgb` 时，该设备会因为订阅命中而收到事件。
+- `stream.output.* + actuator.speaker`：当 server 发布 `stream.output.open.requested` 且 `stream_type=actuator.speaker` 时，该设备会因为订阅命中而收到事件。
 - `control.audio_session.*`：设备愿意接收语音会话生命周期事件。
 
 `filter` 只推荐匹配事件字段，例如：
@@ -154,7 +154,6 @@ async for asset in context.devices.watch_assets(
 | `producer_excluded` | 默认不把事件回发给生产该事件的设备。 |
 | `event_name_mismatch` | 订阅事件名没有命中。 |
 | `filter_mismatch` | 订阅 filter 没有命中。 |
-| `capability_mismatch` | Tool / Task 要求的 stream 能力无法从订阅推导。 |
 | `selection_skipped` | `first_available` 已经选中前面的设备。 |
 | `delivered` | 已成功推送到设备连接。 |
 | `connection_missing` | 设备状态在线，但连接对象不存在。 |
@@ -169,11 +168,10 @@ async for asset in context.devices.watch_assets(
 
 ## 与旧 capabilities 字段的关系
 
-旧 SDK 和部分早期示例会在注册 payload 中提交 `capabilities`。新版 SDK 仍保留读取能力，作为历史兼容和非 stream 能力的兜底，但新设备不需要再声明它。
+旧 SDK 和部分早期示例会在注册 payload 中提交 `capabilities`。新版 SDK 仍保留读取能力，作为历史兼容和 debug 展示字段，但事件分发不会再因为它额外过滤设备。新设备不需要再声明它。
 
 推荐写法是：
 
 - 用 `subscriptions` 表达设备愿意处理哪些事件。
 - 用 `properties` 表达便于人观察的硬件和调试信息。
 - 用 stream 类型本身表达传感器和执行器能力。
-

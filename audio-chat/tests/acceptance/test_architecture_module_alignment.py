@@ -99,7 +99,6 @@ def test_payload_only_device_command_uses_event_without_stream(tmp_path) -> None
             "command_name": "navigation.start",
             "params": {"destination": "gate-a", "mode": "walking"},
         },
-        require_capability="navigation.endpoint",
         selection="first_available",
     )
 
@@ -131,7 +130,6 @@ def test_continuous_sensor_task_uses_config_event_stream_and_asset_watch(tmp_pat
             "asset_policy": "cache",
             "correlation_id": "task-video-42",
         },
-        require_capability="sensor.rgb",
         selection="first_available",
     )
 
@@ -158,7 +156,6 @@ def test_continuous_sensor_task_uses_config_event_stream_and_asset_watch(tmp_pat
         "stream.control.configure.requested",
         stream_type="sensor.rgb",
         payload={"mode": "stop", "correlation_id": "task-video-42"},
-        require_capability="sensor.rgb",
         selection="first_available",
     )
     assert stop.delivered_count == 1
@@ -178,7 +175,6 @@ def test_actuator_bytes_use_output_stream_not_event_payload(tmp_path) -> None:
     writer = UserDeviceContext(user_id="user-haptic", app=app).open_output_stream(
         "actuator.haptic",
         codec="raw",
-        require_capability="actuator.haptic",
         selection="first_available",
     )
     writer.write(b"\x01\x80\x40", final=True)

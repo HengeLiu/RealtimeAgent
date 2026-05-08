@@ -108,7 +108,6 @@ class StreamService:
         producer_id: str,
         format: StreamFormat | None = None,
         stream_id: str | None = None,
-        require_capability: str | None = None,
         selection: str = "all",
     ) -> StreamHandle:
         """打开输入或输出 stream。
@@ -116,7 +115,7 @@ class StreamService:
         主要逻辑：输入 stream 只注册本地句柄；输出 stream 先按订阅和
         selection 选出 consumer，再发布 `stream.output.open.requested`，后续 chunk 和
         close/cancel 事件都只发送给这批 consumer。
-        参数：`require_capability` 为空时，`actuator.*` 默认要求设备订阅同名 stream 输出事件。
+        参数：`selection` 控制多个订阅命中设备时的选择策略。
         返回值：`StreamHandle`。
         异常情况：stream 类型、格式或 selection 非法时抛出 `ValueError`。
         """
@@ -148,7 +147,6 @@ class StreamService:
             )
             matched = self.control_service.resolve_matching_devices(
                 event,
-                require_capability=require_capability or stream_type,
                 selection=selection,
             )
             consumers = tuple(device.device_id for device in matched)

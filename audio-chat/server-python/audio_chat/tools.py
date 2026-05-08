@@ -845,8 +845,9 @@ class UserDeviceContext:
     def get_devices(self, capability: str | None = None) -> list[DeviceSnapshot]:
         """返回当前用户 active device set 的只读快照。
 
-        主要逻辑：从 Control Service 读取在线设备，并按 capability 可选过滤。
-        参数：`capability` 为空时返回全部设备，否则只返回声明该能力的设备。
+        主要逻辑：从 Control Service 读取在线设备。`capability` 仅作为旧
+        properties/capabilities 调试过滤参数；stream 通讯不要用它选路。
+        参数：`capability` 为空时返回全部设备，否则只返回旧属性中声明该能力的设备。
         返回值：`DeviceSnapshot` 列表。
         异常情况：无在线设备时返回空列表。
         """
@@ -863,9 +864,10 @@ class UserDeviceContext:
         return devices
 
     def find_device(self, capability: str) -> DeviceHandle | None:
-        """按 capability 返回只读设备句柄。
+        """按旧能力字段返回只读设备句柄。
 
-        主要逻辑：仅用于能力检查和 debug，不提供命令方法；真实通讯必须走协议原生 API。
+        主要逻辑：仅用于旧能力检查和 debug，不提供命令方法；真实通讯必须走协议
+        原生 API 的事件和 stream。
         参数：`capability` 为能力名。
         返回值：匹配时返回 `DeviceHandle`，否则返回 `None`。
         异常情况：无。
@@ -878,17 +880,16 @@ class UserDeviceContext:
         event_name: str,
         payload: dict | None = None,
         stream_type: str | None = None,
-        require_capability: str | None = None,
         selection: str = "all",
         timeout_seconds: float | None = None,
     ) -> PublishResult:
         """发布协议控制事件。
 
-        主要逻辑：事件按 user_id、订阅、stream_type、require_capability 和 selection
-        匹配端侧；业务代码不能指定 device_id。
+        主要逻辑：事件按 user_id、订阅、stream_type 和 selection 匹配端侧；
+        业务代码不能指定 device_id。
         参数：`event_name` 为协议事件名，`payload` 为事件载荷，`stream_type` 为可选
-        stream 过滤，`require_capability` 为可选能力条件，`selection` 为选择策略，
-        `timeout_seconds` 预留给未来 ACK 等待，本阶段不阻塞。
+        stream 过滤，`selection` 为选择策略，`timeout_seconds` 预留给未来 ACK 等待，
+        本阶段不阻塞。
         返回值：`PublishResult`。
         异常情况：事件非法或 selection 非法时抛出 `ValueError`。
         """
@@ -902,7 +903,6 @@ class UserDeviceContext:
         )
         return self._app.control_service.publish_matching(
             event,
-            require_capability=require_capability,
             selection=selection,
         )
 
@@ -911,15 +911,14 @@ class UserDeviceContext:
         stream_type: str,
         codec: str,
         metadata: dict | None = None,
-        require_capability: str | None = None,
         selection: str = "all",
     ) -> OutputStreamWriter:
         """打开 output stream 并返回写入器。
 
-        主要逻辑：创建 `actuator.*` stream，底层按订阅、capability 和 selection
-        选出消费端，并把后续 chunk 固定投递到这批设备。
+        主要逻辑：创建 `actuator.*` stream，底层按订阅和 selection 选出消费端，
+        并把后续 chunk 固定投递到这批设备。
         参数：`stream_type` 为 output stream 类型，`codec` 为编码，`metadata` 为可选
-        元信息，`require_capability` 和 `selection` 为设备匹配策略。
+        元信息，`selection` 为设备匹配策略。
         返回值：`OutputStreamWriter`。
         异常情况：stream 类型或格式非法时由 Stream Service 抛出异常。
         """
@@ -933,7 +932,6 @@ class UserDeviceContext:
             producer_id=SERVER_PRODUCER_ID,
             format=format,
             stream_id=new_id("stream_out"),
-            require_capability=require_capability,
             selection=selection,
         )
         return OutputStreamWriter(context=self, stream_id=handle.stream_id, session_id=session_id, stream_type=stream_type, format=format)
@@ -1010,14 +1008,13 @@ class UserDeviceContext:
         rate_hz: float | None = None,
         duration_seconds: float | None = None,
         payload: dict | None = None,
-        require_capability: str | None = None,
         selection: str = "first_available",
         timeout_seconds: float | None = None,
     ) -> PublishResult:
         """通过协议事件配置端侧 sensor stream。
 
-        主要逻辑：发布 `stream.control.configure.requested`，让订阅并具备能力的端侧
-        自行打开、调整或停止对应 stream；不会新增隐藏 RPC。
+        主要逻辑：发布 `stream.control.configure.requested`，让订阅命中的端侧自行
+        打开、调整或停止对应 stream；不会新增隐藏 RPC。
         参数：`stream_type` 为 stream 类型，`mode` 为 single/continuous/stop 等模式，
         `rate_hz` 和 `duration_seconds` 是常用采样配置，`payload` 可携带业务补充配置。
         返回值：`PublishResult`。
@@ -1035,7 +1032,6 @@ class UserDeviceContext:
             "stream.control.configure.requested",
             stream_type=stream_type,
             payload=event_payload,
-            require_capability=require_capability or stream_type,
             selection=selection,
             timeout_seconds=timeout_seconds,
         )
@@ -1255,11 +1251,10 @@ class ConfigureAssetStreamTool(BaseTool):
         stream_type: str = Field(description="要配置的 sensor.* stream 类型，例如 sensor.rgb 或 sensor.imu。")
         mode: str = Field(default="single", description="stream 模式，例如 single、continuous 或 stop。")
         payload: dict = Field(default_factory=dict, description="端侧配置参数，不允许包含媒体字节。")
-        require_capability: str | None = Field(default=None, description="可选设备能力要求；为空时使用 stream_type。")
         selection: Literal["first_available", "all"] = Field(default="first_available", description="匹配多台设备时的选择策略。")
 
     class Output(BaseModel):
-        matched_count: int = Field(description="订阅和能力匹配的设备数量。")
+        matched_count: int = Field(description="订阅匹配并经过选择策略后的设备数量。")
         delivered_count: int = Field(description="实际投递成功的设备数量。")
 
     spec = ToolSpec(
@@ -1279,7 +1274,6 @@ class ConfigureAssetStreamTool(BaseTool):
             "stream.control.configure.requested",
             stream_type=stream_type,
             payload=payload,
-            require_capability=input_data.get("require_capability") or stream_type,
             selection=str(input_data.get("selection") or "first_available"),
         )
         return ToolResult.success(data=result.__dict__, message="asset stream configure event published")
@@ -1369,16 +1363,15 @@ class PublishDeviceCommandTool(BaseTool):
     class Input(BaseModel):
         command_name: str = Field(description="命令名称，例如 actuator.haptic.pulse 或 phone.task.start。")
         params: dict = Field(default_factory=dict, description="命令参数，只放小型结构化数据。")
-        require_capability: str | None = Field(default=None, description="可选设备能力要求。")
         selection: Literal["first_available", "all"] = Field(default="first_available", description="匹配多台设备时的选择策略。")
 
     class Output(BaseModel):
-        matched_count: int = Field(description="订阅和能力匹配的设备数量。")
+        matched_count: int = Field(description="订阅匹配并经过选择策略后的设备数量。")
         delivered_count: int = Field(description="实际投递成功的设备数量。")
 
     spec = ToolSpec(
         name="publish_device_command",
-        description="按订阅和能力发布 control.device.command.requested 控制事件，不接受 device_id。",
+        description="按订阅发布 control.device.command.requested 控制事件，不接受 device_id。",
         input_model=Input,
         output_model=Output,
         capability_type="tool",
@@ -1393,7 +1386,6 @@ class PublishDeviceCommandTool(BaseTool):
         result = context.devices.publish_event(
             "control.device.command.requested",
             payload=payload,
-            require_capability=input_data.get("require_capability"),
             selection=str(input_data.get("selection") or "first_available"),
         )
         return ToolResult.success(data=result.__dict__, message="device command event published")
@@ -1446,8 +1438,8 @@ class StartPhoneVideoLinkTool(BaseTool):
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """请求端侧开始连续上传 RGB 资产。
 
-        主要逻辑：发布 `stream.control.configure.requested`，由设备订阅策略和能力匹配
-        决定具体端侧；不接受 device_id 参数。
+        主要逻辑：发布 `stream.control.configure.requested`，由设备订阅策略决定具体
+        端侧；不接受 device_id 参数。
         参数：`frame_interval_ms` 控制上传间隔，`duration_seconds` 控制端侧自行停止。
         返回值：配置事件投递摘要。
         异常情况：无匹配订阅设备时仍返回 delivered_count=0，供 Agent 解释。
@@ -1472,7 +1464,6 @@ class StartPhoneVideoLinkTool(BaseTool):
             rate_hz=float(payload["rate_hz"]),
             duration_seconds=payload.get("duration_seconds"),
             payload=payload,
-            require_capability="sensor.rgb",
             selection="first_available",
         )
         state = "running" if result.delivered_count > 0 else "unavailable"

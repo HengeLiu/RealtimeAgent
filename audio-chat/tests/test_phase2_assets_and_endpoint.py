@@ -96,13 +96,11 @@ def test_protocol_native_context_publish_event_and_submit_text(tmp_path) -> None
         "stream.control.configure.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single"},
-        require_capability="sensor.rgb",
         selection="first_available",
     )
     context.publish_event(
         "control.device.command.requested",
         payload={"command_name": "rgb_window.start", "params": {"mode": "window"}},
-        require_capability="sensor.rgb",
         selection="first_available",
     )
     context.submit_text("hello")
@@ -142,13 +140,11 @@ def test_publish_event_first_available_reaches_one_matching_subscriber(tmp_path)
         "stream.control.configure.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single"},
-        require_capability="sensor.rgb",
         selection="first_available",
     )
     context.publish_event(
         "control.device.command.requested",
         payload={"command_name": "selected-only"},
-        require_capability="sensor.rgb",
         selection="first_available",
     )
 
@@ -186,7 +182,6 @@ def test_context_publish_event_uses_protocol_matching_not_device_command_service
         "stream.control.configure.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single"},
-        require_capability="sensor.rgb",
         selection="first_available",
     )
 
