@@ -44,6 +44,20 @@ control.device.command.failed
 RGB 帧来自 `vision_frames` 配置或默认测试 JPEG，并始终通过 `sensor.rgb` stream
 上传。事件日志、任务日志和帧日志会进入运行结果，便于对照真实 iOS 插件行为。
 
+## 视频显示端设计
+
+下一阶段会把 Python 手机端扩展成可长驻运行的视频显示端，用来显示眼镜端传到同一
+`user_id` 设备组内的 `sensor.rgb` 视频流，并为后续 YOLO 等本地视觉算法预留扩展点。
+
+设计文档见 [VIDEO_DISPLAY_DESIGN.md](VIDEO_DISPLAY_DESIGN.md)。
+
+本地视频窗口使用 OpenCV 实现。启动后会注册为一台普通设备，订阅 `sensor.rgb`
+输入流，并把收到的最近一帧保存到 `runs/audio-chat/python-phone/latest-rgb.jpg`。
+
+```bash
+uv run audio-chat.phone.mock --config device-examples/python-phone/phone.preview.yaml
+```
+
 ## 启动
 
 终端 1：

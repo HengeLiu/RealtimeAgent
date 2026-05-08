@@ -56,6 +56,16 @@ Python phone mock：
 uv run audio-chat.phone.mock --config device-examples/python-phone/phone.mock.yaml
 ```
 
+Python 手机视频显示端：
+
+```bash
+uv run audio-chat.phone.mock --config device-examples/python-phone/phone.preview.yaml
+```
+
+该端侧会打开 OpenCV 视频窗口，注册到 server，并订阅同一 `user_id` 下的
+`sensor.rgb` 输入流。眼镜端或浏览器端上传 RGB stream 后，画面会回显到这个窗口，
+最近一帧会写入 `runs/audio-chat/python-phone/latest-rgb.jpg`。
+
 Python glass playback：
 
 ```bash
@@ -83,11 +93,161 @@ uv run audio-chat.esp32.config
 uv run audio-chat.esp32.build --dry-run --build-only
 ```
 
-## 应用开发
+## 开发者工作模型
 
-功能扩展开发者只依赖 `audio_chat` 顶层公开 API，不直接 import SDK 内部服务对象，也不硬编码 `device_id` 点对点发送事件。
+`audio-chat` 的业务开发不是直接操作 WebSocket，也不是在代码里写死某一台设备。开发者需要理解四个稳定概念：
 
-Tool 用于一次性能力，例如拍照、搜索、准备路线：
+| 概念 | 谁来实现 | 作用 |
+| --- | --- | --- |
+| 设备 | 端侧开发者 | 注册到某个 `user_id`，声明自己订阅哪些事件、具备哪些属性，并负责麦克风、摄像头、播放器、振动器等硬件。 |
+| 事件 | 设备和 server 都会产生 | 小体积控制信令，例如注册、唤醒、打开音频会话、请求相机上传、请求振动、任务状态变化。 |
+| stream | 设备和 server 都会读写 | 大字节或连续数据，例如 `sensor.mic`、`sensor.rgb`、`sensor.imu`、`actuator.speaker`。 |
+| Tool / Task | 应用开发者 | Tool 做一次性能力，Task 做长流程能力；它们通过 `context.devices` 发布事件、请求 stream 资产、提交输出。 |
+
+一次完整链路通常是：
+
+```text
+设备注册并提交订阅
+  -> 用户语音唤醒并上传 sensor.mic stream
+  -> Agent Core 理解用户意图
+  -> 模型调用 Tool 或启动 Task
+  -> Tool / Task 通过 context.devices 发布控制事件或请求资产
+  -> Control Service 按订阅策略选择在线设备
+  -> 设备收到事件后执行硬件动作，并按需上传 sensor.* stream
+  -> Asset Service 缓存图片、IMU、深度图等资产
+  -> Tool / Task 读取资产或收到事件，返回结果或继续运行
+  -> Agent / Task 输出进入 Output Service
+  -> Output Service 经过播放仲裁后下发 actuator.speaker stream
+```
+
+这套模型的关键点是：业务代码面向“当前用户有哪些在线设备能响应这个事件或 stream 类型”，而不是面向“某个固定 device_id”。`device_id` 只用于注册、日志、调试快照和端侧回执，不能作为业务逻辑里的固定目标。
+
+### 设备如何接入能力
+
+设备注册时提交 `subscriptions`。订阅表达“我愿意处理哪些事件”，server 根据这些订阅决定某个事件应该投递给谁。
+
+例如，一个浏览器设备既能播放声音，也能按需上传照片：
+
+```python
+from audio_chat import EventPattern, StreamType, Subscription
+
+
+subscriptions = [
+    Subscription(EventPattern.CONTROL_AUDIO_SESSION_ALL).to_dict(),
+    Subscription.for_stream(EventPattern.STREAM_OUTPUT_ALL, StreamType.ACTUATOR_SPEAKER).to_dict(),
+    Subscription.for_stream(EventPattern.STREAM_CONTROL_ALL, StreamType.SENSOR_RGB).to_dict(),
+]
+```
+
+注册事件中的 JSON 最终仍然是标准协议格式：
+
+```json
+{
+  "event_name": "control.device.register.requested",
+  "user_id": "user-demo-001",
+  "producer_id": "dev-browser-001",
+  "payload": {
+    "device_id": "dev-browser-001",
+    "name": "浏览器调试设备",
+    "subscriptions": [
+      {"event": "control.audio_session.*"},
+      {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+      {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
+    ],
+    "properties": {
+      "audio.aec": "browser_webrtc",
+      "camera.facing": "front"
+    }
+  }
+}
+```
+
+当 Tool 发布 `EventName.STREAM_CONTROL_CONFIGURE_REQUESTED + stream_type=StreamType.SENSOR_RGB` 时，只有订阅命中的在线设备会收到；业务 Tool 不需要知道它最后投递给了 `dev-browser-001` 还是另一台 iOS 设备。
+
+### Tool 如何使用设备
+
+Tool 适合“用户问一句，系统完成一次动作”的场景，例如抓拍、搜索、查询设备、准备路线。Tool 的输入参数通过 Pydantic 模型定义，SDK 会把 schema 暴露给大模型。
+
+Tool 与设备交互有三种常见方式：
+
+| 场景 | 推荐方法 | 数据如何流动 |
+| --- | --- | --- |
+| 控制一个小动作 | `context.devices.publish_event(...)` | payload 里放小体积控制参数，例如振动模式、导航目的地、本地模式切换。 |
+| 获取一张图片或一次传感器数据 | `context.devices.request_asset(...)` | Tool 发布 stream 控制事件，设备打开 `sensor.*` stream 上传，server 缓存为 AssetRef。 |
+| 给用户播报结果 | `context.devices.submit_text(...)` 或返回 ToolResult 交给 Agent | 文本进入 Output Service，经 TTS 和播放仲裁后下发 `actuator.speaker`。 |
+
+示例：请求具备 RGB 能力的设备上传一张当前图片。这里不把“拍照”建模成设备方法，Tool 只表达“需要一个 `sensor.rgb` 资产”；具体是浏览器相机、手机相机、眼镜相机，还是未来其他视觉传感器，由订阅命中的端侧自己处理。
+
+```python
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ErrorCode, StreamType, ToolContext, ToolError, ToolResult, ToolSpec
+
+
+class CurrentImageInput(BaseModel):
+    reason: str = Field(default="agent_requested", description="请求端侧上传当前图片的原因。")
+    timeout_seconds: float = Field(default=10, gt=0, description="等待 sensor.rgb 资产返回的超时时间。")
+
+
+class GetCurrentImageTool(BaseTool):
+    spec = ToolSpec(
+        name="get_current_image",
+        description="当用户需要了解眼前画面时，请求当前用户设备上传一张 sensor.rgb 图片资产。",
+        input_model=CurrentImageInput,
+        progress_message="我先获取一张当前画面。",
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        asset = context.devices.request_asset(
+            StreamType.SENSOR_RGB,
+            freshness_seconds=0,
+            configure_payload={
+                "reason": str(input_data.get("reason") or "agent_requested"),
+                "mode": "single",
+                "format": "jpeg",
+            },
+            timeout_seconds=float(input_data.get("timeout_seconds") or 10),
+        )
+        if asset is None:
+            return ToolResult.failed(ToolError("获取当前图片超时", code=ErrorCode.TIMEOUT))
+        return ToolResult.success({"asset_id": asset.asset_id, "path": asset.path}, assets=[asset])
+```
+
+示例：给端侧发送一个不需要 stream 的执行器控制事件。
+
+```python
+from audio_chat import BaseTool, EventName, ToolContext, ToolResult, ToolSpec
+
+
+class VibrateTool(BaseTool):
+    spec = ToolSpec(
+        name="vibrate",
+        description="请求当前用户的在线端侧设备执行一次短振动提醒。",
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        result = context.devices.publish_event(
+            EventName.CONTROL_DEVICE_COMMAND_REQUESTED,
+            payload={"command": "haptic.vibrate", "pattern": "short"},
+            selection="first_available",
+        )
+        return ToolResult.success({"delivered_count": result.delivered_count})
+```
+
+### Task 如何串起复杂流程
+
+Task 适合“启动后持续一段时间”的能力，例如连续视觉分析、导航执行期、计时器、后台提醒。Task 不代表端侧也有一个同名任务；对端侧来说，它只是在收到控制事件后打开或关闭某些 stream，或者上报事件。
+
+Task 常见模式：
+
+1. `on_start()` 发布控制事件，要求设备启动某种连续 stream。
+2. 设备按订阅收到事件，打开摄像头、IMU、深度相机等传感器。
+3. 设备持续上传 `sensor.*` stream，server 把每帧或每段缓存成资产。
+4. Task 用 `watch_assets()` 逐个读取资产，做分析、调用模型或更新状态。
+5. Task 需要提示用户时调用 `context.devices.submit_text()`，不要直接写播放器。
+6. Task 结束或取消时发布 `mode=stop` 控制事件，要求端侧关闭对应 stream。
+
+如果用户说“开始帮我持续看前方”或“边走边观察红绿灯”，推荐做法是 Tool 只负责启动一个视频/连续视觉 Task，真正的连续帧处理放在 Task 里。
 
 ```python
 from pydantic import BaseModel, Field
@@ -95,45 +255,109 @@ from pydantic import BaseModel, Field
 from audio_chat import BaseTool, ErrorCode, ToolContext, ToolError, ToolResult, ToolSpec
 
 
-class CaptureInput(BaseModel):
-    reason: str = Field(default="agent_requested", description="请求端侧上传图片的原因。")
+class StartVideoInput(BaseModel):
+    fps: float = Field(default=1, gt=0, le=10, description="期望端侧上传 sensor.rgb 的频率。")
+    frame_limit: int = Field(default=10, ge=1, le=300, description="本轮最多处理多少帧。")
 
 
-class CapturePhotoTool(BaseTool):
+class StartVideoStreamTool(BaseTool):
     spec = ToolSpec(
-        name="capture_photo",
-        description="当用户需要了解眼前画面时，请求当前用户设备上传一张 sensor.rgb 图片。",
-        input_model=CaptureInput,
-        progress_message="我先拍张照片看看。",
+        name="start_video_stream_analyze",
+        description="当用户需要持续观察画面、持续找物或连续识别红绿灯时，启动 sensor.rgb 连续分析任务。",
+        input_model=StartVideoInput,
+        progress_message="我开始持续观察画面。",
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        asset = context.devices.capture_photo(
-            reason=str(input_data.get("reason") or "agent_requested"),
-            freshness_seconds=0,
-            timeout_seconds=10,
-        )
-        if asset is None:
-            return ToolResult.failed(ToolError("拍照超时", code=ErrorCode.TIMEOUT))
-        return ToolResult.success({"asset_id": asset.asset_id, "path": asset.path}, assets=[asset])
-```
+        if context.tasks is None:
+            return ToolResult.failed(
+                ToolError("当前应用没有启用 Task Engine", code=ErrorCode.PROVIDER_UNAVAILABLE)
+            )
 
-Task 用于长流程能力，例如连续视觉分析、导航执行期、计时器和后台通知：
+        ref = await context.tasks.create(
+            task_type="video_stream_analyze",
+            user_id=context.user_id,
+            session_id=context.session_id,
+            input_data=input_data,
+            summary="连续 RGB 视频流分析",
+        )
+        return ToolResult.success({"task_id": ref.task_id, "state": ref.state})
+```
 
 ```python
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, StreamType, TaskContext
 
 
-class ContinuousVisionTask(BaseTask):
-    task_type = "continuous_vision"
-    description = "连续读取 sensor.rgb 资产并分析。"
+class VideoStreamAnalyzeTask(BaseTask):
+    task_type = "video_stream_analyze"
+    description = "请求端侧持续上传 sensor.rgb，并逐帧读取资产进行分析。"
 
     async def on_start(self, context: TaskContext) -> None:
-        context.devices.configure_stream("sensor.rgb", mode="continuous", rate_hz=1)
+        input_data = dict(context.metadata.get("input") or {})
+        correlation_id = context.task_ref.task_id
 
-    async def on_event(self, context: TaskContext, event: TaskEvent) -> None:
-        await context.emit_progress("视觉任务正在运行")
+        context.devices.configure_stream(
+            StreamType.SENSOR_RGB,
+            mode="continuous",
+            rate_hz=float(input_data.get("fps") or 1),
+            payload={
+                "reason": "video_stream_analyze",
+                "format": "jpeg",
+                "asset_policy": "cache",
+                "correlation_id": correlation_id,
+            },
+        )
+
+        frame_limit = int(input_data.get("frame_limit") or 10)
+        frame_count = 0
+        async for asset in context.devices.watch_assets(
+            StreamType.SENSOR_RGB,
+            correlation_id=correlation_id,
+            timeout_seconds=30,
+        ):
+            frame_count += 1
+            # 这里可以调用视觉模型、规则判断或业务服务处理当前帧。
+            if frame_count >= frame_limit:
+                break
+
+        await context.complete(
+            {"frame_count": frame_count},
+            summary=f"已处理 {frame_count} 帧 sensor.rgb 画面",
+        )
+
+    async def on_cancel(self, context: TaskContext) -> None:
+        context.devices.configure_stream(StreamType.SENSOR_RGB, mode="stop")
 ```
+
+如果只是让设备执行一个小动作，例如震动一次、切换本地模式、返回一个小状态摘要，不需要建立 stream，直接发控制事件即可。只有图片、音频、视频、IMU 窗口、深度图这类大字节或连续数据才走 stream。
+
+## 应用开发
+
+功能扩展开发者只依赖 `audio_chat` 顶层公开 API，不直接 import SDK 内部服务对象，也不硬编码 `device_id` 点对点发送事件。
+
+默认应用目录结构如下：
+
+```text
+app-examples/<your-app>/
+  server.yaml
+  capabilities/
+    your_tool/
+      tool.py      # 继承 BaseTool，会被自动发现
+    your_task/
+      task.py      # 继承 BaseTask，会被自动发现
+  skills/
+  config/
+```
+
+`server.yaml` 中配置自动发现包后，开发者只需要把 `BaseTool` / `BaseTask` 子类放进对应 package。SDK 启动时会扫描这些类，把 Tool schema 注册给 Agent Core，把 Task 类型注册给 Task Engine。业务代码不需要在 `app.py` 里手写注册逻辑。
+
+新增一个能力时，推荐按这个顺序设计：
+
+1. 先判断能力是一次性动作还是长流程：一次性动作写 Tool，长流程写 Task。
+2. 列出它需要哪些端侧能力：例如 `sensor.rgb`、`sensor.imu`、`actuator.speaker`、`haptic.vibrate`。
+3. 约定端侧需要订阅哪些事件：例如 `stream.control.* + filter(stream_type=sensor.rgb)`。
+4. 在 Tool / Task 中通过 `context.devices` 发布控制事件或请求资产。
+5. 用 `runs/audio-chat/...` 中的 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`task-events.jsonl` 验证链路。
 
 业务样例：
 

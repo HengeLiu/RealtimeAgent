@@ -61,7 +61,7 @@ def test_yaml_config_loads_documented_sections() -> None:
     assert config.server.port == 8765
     assert config.auth.mode == "disabled"
     assert config.agent.text.asr_provider == "mock"
-    assert config.observability.runs_root == "runs/audio-chat"
+    assert config.observability.runs_root == "runs/audio-chat/basic-app"
     assert config.asset.request_timeout_seconds == 5
 
 

@@ -30,7 +30,7 @@ class StreamHandle:
     """Stream 运行时句柄。
 
     主要功能：记录一条输入或输出 stream 的生命周期、格式和冻结消费者。
-    主要属性：`consumer_device_ids` 只在 output stream 打开时计算一次，后续 chunk、
+    主要属性：`consumer_device_ids` 在需要转发的 stream 打开时计算一次，后续 chunk、
     close 和 cancel 都复用这组冻结消费者，避免插播或设备重连改变旧 stream 语义。
     """
 
@@ -124,9 +124,11 @@ class StreamService:
     ) -> StreamHandle:
         """打开输入或输出 stream。
 
-        主要逻辑：输入 stream 只注册本地句柄；输出 stream 先按订阅和
-        selection 选出 consumer，再发布 `stream.output.open.requested`，后续 chunk 和
-        close/cancel 事件都只发送给这批 consumer。
+        主要逻辑：输入 stream 注册本地句柄；非麦克风传感器输入 stream 会按
+        `stream.input.opened` 订阅冻结消费者，用于把眼镜 RGB 等上行数据转发给手机
+        端侧；输出 stream 先按订阅和 selection 选出 consumer，再发布
+        `stream.output.open.requested`，后续 chunk 和 close/cancel 事件都只发送给这批
+        consumer。
         参数：`selection` 控制多个订阅命中设备时的选择策略。
         返回值：`StreamHandle`。
         异常情况：stream 类型、格式或 selection 非法时抛出 `ValueError`。
@@ -144,6 +146,25 @@ class StreamService:
             format=stream_format,
         )
         self.registry.register(handle)
+        if stream_type.startswith("sensor.") and stream_type != "sensor.mic":
+            match_event = Event(
+                event_name="stream.input.opened",
+                user_id=user_id,
+                producer_id=producer_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                stream_type=stream_type,
+                payload={
+                    "stream_type": stream_type,
+                    "format": stream_format.__dict__,
+                },
+            )
+            matched = self.control_service.resolve_matching_devices(
+                match_event,
+                selection=selection,
+            )
+            consumers = tuple(device.device_id for device in matched)
+            handle.consumer_device_ids = consumers
         if stream_type.startswith("actuator."):
             match_event = Event(
                 event_name="stream.output.open.requested",
@@ -204,6 +225,8 @@ class StreamService:
                 "final": chunk.final,
             },
         )
+        if handle.consumer_device_ids:
+            self.control_service.push_stream_chunk_to_devices(handle.consumer_device_ids, chunk)
         if self.dispatcher is not None:
             self.dispatcher.dispatch(chunk)
 
@@ -363,7 +386,7 @@ class StreamService:
     def _validate_stream(self, *, stream_type: str, format: StreamFormat) -> None:
         if stream_type not in {"sensor.mic", "sensor.rgb", "sensor.depth", "sensor.imu", "actuator.speaker", "actuator.haptic"}:
             raise ValueError(f"unknown stream_type: {stream_type}")
-        if format.codec not in {"pcm16le", "jpeg", "raw"}:
+        if format.codec not in {"pcm16le", "jpeg", "png", "raw"}:
             raise ValueError(f"unsupported codec: {format.codec}")
         if format.sample_rate <= 0:
             raise ValueError("sample_rate must be positive")

@@ -7,12 +7,30 @@ import inspect
 import json
 import pkgutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from aiohttp import ClientSession
+
 from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, new_id
+
+
+def _resolve_output_path(raw_path: str | Path) -> Path:
+    """解析端侧输出文件路径。
+
+    主要逻辑：绝对路径直接使用；相对路径优先相对当前工作目录，便于从仓库根目录启动
+    CLI 时把最近一帧写入 `runs/audio-chat/...`。
+    参数：`raw_path` 为配置路径。
+    返回值：解析后的绝对路径。
+    异常情况：无。
+    """
+
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
 
 
 def _payload_bytes(value: Any, *, default: bytes) -> bytes:
@@ -179,6 +197,179 @@ class PhoneTaskHandlerRegistry:
                 self.register(obj())
 
 
+@dataclass(frozen=True)
+class DecodedVideoFrame:
+    """Python 手机端解码后的 RGB 视频帧。
+
+    主要功能：把协议 chunk 的元数据和 OpenCV 图像对象放在一起传递。
+    主要属性：`image` 是 OpenCV BGR 图像，`stream_id` / `seq` 用于日志和验收。
+    """
+
+    stream_id: str
+    stream_type: str
+    seq: int
+    codec: str
+    image: Any
+    received_at: float = field(default_factory=time.time)
+
+    @property
+    def width(self) -> int:
+        """返回图像宽度。"""
+
+        return int(self.image.shape[1])
+
+    @property
+    def height(self) -> int:
+        """返回图像高度。"""
+
+        return int(self.image.shape[0])
+
+
+class StreamChunkImageDecoder:
+    """把 `sensor.rgb` stream chunk 解码成 OpenCV 图像。
+
+    主要功能：支持 JPEG / PNG 图像帧，供 Python 手机端显示和后续视觉算法使用。
+    主要方法：`decode()`。
+    异常情况：缺少 OpenCV、codec 不支持或图像数据无法解码时抛出 RuntimeError。
+    """
+
+    def __init__(self) -> None:
+        try:
+            import cv2  # type: ignore
+            import numpy as np  # type: ignore
+        except Exception as exc:  # noqa: BLE001 - 需要给端侧开发者明确安装提示
+            raise RuntimeError(
+                "Python 手机视频显示需要安装 OpenCV：uv add opencv-python，"
+                "或执行 uv sync 以安装项目依赖。"
+            ) from exc
+        self._cv2 = cv2
+        self._np = np
+
+    def decode(self, chunk: StreamChunk) -> DecodedVideoFrame:
+        """解码单个 `sensor.rgb` chunk。
+
+        参数：`chunk` 为 server 转发过来的 stream 数据。
+        返回值：`DecodedVideoFrame`。
+        异常情况：非 RGB stream、codec 不支持或解码失败时抛出 RuntimeError。
+        """
+
+        if chunk.stream_type != "sensor.rgb":
+            raise RuntimeError(f"unsupported preview stream_type: {chunk.stream_type}")
+        codec = (chunk.codec or "jpeg").lower()
+        if codec not in {"jpeg", "jpg", "png"}:
+            raise RuntimeError(f"unsupported preview codec: {chunk.codec}")
+        data = self._np.frombuffer(chunk.payload, dtype=self._np.uint8)
+        image = self._cv2.imdecode(data, self._cv2.IMREAD_COLOR)
+        if image is None:
+            raise RuntimeError(f"failed to decode {codec} frame: stream_id={chunk.stream_id} seq={chunk.seq}")
+        return DecodedVideoFrame(
+            stream_id=chunk.stream_id,
+            stream_type=chunk.stream_type,
+            seq=chunk.seq,
+            codec=codec,
+            image=image,
+        )
+
+
+class FrameStore:
+    """Python 手机端最近帧缓存。
+
+    主要功能：保存最近一帧到内存，并可选写到文件，方便开发者核对实际收到的画面。
+    主要方法：`update()`、`summary()`。
+    """
+
+    def __init__(self, *, save_latest_frame: str | None = None) -> None:
+        self.save_latest_frame = _resolve_output_path(save_latest_frame) if save_latest_frame else None
+        self.latest_frame: DecodedVideoFrame | None = None
+        self.frame_count = 0
+        self.first_frame_at: float | None = None
+        self.last_frame_at: float | None = None
+
+    def update(self, frame: DecodedVideoFrame, *, cv2_module: Any) -> None:
+        """保存最近一帧。
+
+        参数：`frame` 为已解码帧，`cv2_module` 为 OpenCV 模块。
+        返回值：无。
+        异常情况：写文件失败时由 OpenCV 或文件系统抛出异常。
+        """
+
+        now = time.time()
+        self.latest_frame = frame
+        self.frame_count += 1
+        self.first_frame_at = self.first_frame_at or now
+        self.last_frame_at = now
+        if self.save_latest_frame is not None:
+            self.save_latest_frame.parent.mkdir(parents=True, exist_ok=True)
+            ok = cv2_module.imwrite(str(self.save_latest_frame), frame.image)
+            if not ok:
+                raise RuntimeError(f"failed to save latest frame: {self.save_latest_frame}")
+
+    def summary(self) -> dict[str, Any]:
+        """返回帧缓存摘要。"""
+
+        frame = self.latest_frame
+        return {
+            "frame_count": self.frame_count,
+            "latest_frame_path": str(self.save_latest_frame) if self.save_latest_frame else "",
+            "first_frame_at": self.first_frame_at,
+            "last_frame_at": self.last_frame_at,
+            "latest": None
+            if frame is None
+            else {
+                "stream_id": frame.stream_id,
+                "stream_type": frame.stream_type,
+                "seq": frame.seq,
+                "codec": frame.codec,
+                "width": frame.width,
+                "height": frame.height,
+            },
+        }
+
+
+class OpenCvVideoPreview:
+    """OpenCV 图形化视频窗口。
+
+    主要功能：用最轻量的方式把眼镜端 `sensor.rgb` 帧显示到本地窗口。
+    主要方法：`show()` 刷新一帧，`close()` 释放窗口。
+    """
+
+    def __init__(self, *, cv2_module: Any, enabled: bool = True, window_title: str = "audio-chat python phone", max_fps: float = 15.0) -> None:
+        self._cv2 = cv2_module
+        self.enabled = enabled
+        self.window_title = window_title
+        self.max_fps = max(1.0, float(max_fps or 15.0))
+        self._last_show_at = 0.0
+        self.closed_by_user = False
+        if self.enabled:
+            self._cv2.namedWindow(self.window_title, self._cv2.WINDOW_NORMAL)
+
+    def show(self, frame: DecodedVideoFrame) -> None:
+        """显示一帧图像。
+
+        参数：`frame` 为已解码帧。
+        返回值：无。
+        异常情况：GUI 环境不可用时 OpenCV 会抛出异常。
+        """
+
+        if not self.enabled or self.closed_by_user:
+            return
+        now = time.time()
+        if now - self._last_show_at < 1.0 / self.max_fps:
+            return
+        self._last_show_at = now
+        self._cv2.imshow(self.window_title, frame.image)
+        key = self._cv2.waitKey(1) & 0xFF
+        if key in {ord("q"), 27}:
+            self.closed_by_user = True
+            self.close()
+
+    def close(self) -> None:
+        """关闭视频窗口。"""
+
+        if self.enabled:
+            self._cv2.destroyWindow(self.window_title)
+
+
 class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
     """基于真实网络协议的 Python 手机参考端。
 
@@ -216,7 +407,11 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         task_handlers: PhoneTaskHandlerRegistry | None = None,
         task_event_scripts: dict[str, list[dict[str, Any]]] | None = None,
         vision_frames: dict[str, list[bytes]] | None = None,
+        display: dict[str, Any] | None = None,
     ) -> None:
+        display_config = dict(display or {})
+        display_enabled = bool(display_config.get("enabled", False))
+        save_latest_frame = str(display_config.get("save_latest_frame") or "") or None
         super().__init__(
             server_url=server_url,
             user_id=user_id,
@@ -232,6 +427,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             },
             subscriptions=subscriptions
             or [
+                {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}},
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.depth"}},
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}},
@@ -248,6 +444,20 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         self.vision_frames = dict(vision_frames or {})
         self.task_events: list[dict[str, Any]] = []
         self.frame_log: list[dict[str, Any]] = []
+        self.video_frames: list[dict[str, Any]] = []
+        self.video_errors: list[dict[str, Any]] = []
+        self.video_decoder: StreamChunkImageDecoder | None = None
+        self.frame_store: FrameStore | None = None
+        self.video_preview: OpenCvVideoPreview | None = None
+        if display_enabled or save_latest_frame:
+            self.video_decoder = StreamChunkImageDecoder()
+            self.frame_store = FrameStore(save_latest_frame=save_latest_frame)
+            self.video_preview = OpenCvVideoPreview(
+                cv2_module=self.video_decoder._cv2,
+                enabled=display_enabled,
+                window_title=str(display_config.get("window_title") or "audio-chat python phone"),
+                max_fps=float(display_config.get("max_fps") or 15.0),
+            )
 
     async def _control_loop(self, control_ws, stream_ws, audio_payload: bytes | None) -> None:
         async for message in control_ws:
@@ -493,6 +703,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             from audio_chat.protocol import StreamChunkCodec
 
             chunk = StreamChunkCodec.decode(message.data)
+            if chunk.stream_type == "sensor.rgb":
+                self._handle_video_chunk(chunk)
+                continue
             if chunk.stream_id not in self._started_output_streams:
                 self._started_output_streams.add(chunk.stream_id)
                 await self._send_event(
@@ -510,6 +723,70 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             self.output_chunks.append(chunk)
             self.actuator_streams.append(_chunk_summary(chunk))
 
+    def _handle_video_chunk(self, chunk: StreamChunk) -> None:
+        """处理 server 转发给手机端的 RGB 视频帧。
+
+        主要逻辑：解码 JPEG/PNG，更新最近帧缓存，并在启用 GUI 时刷新 OpenCV 窗口。
+        参数：`chunk` 为 `sensor.rgb` stream chunk。
+        返回值：无。
+        异常情况：解码失败会记录到 `video_errors`，不让单帧坏数据断开设备。
+        """
+
+        if self.video_decoder is None:
+            self.video_frames.append(_chunk_summary(chunk))
+            return
+        try:
+            frame = self.video_decoder.decode(chunk)
+            if self.frame_store is not None:
+                self.frame_store.update(frame, cv2_module=self.video_decoder._cv2)
+            if self.video_preview is not None:
+                self.video_preview.show(frame)
+            self.video_frames.append(
+                {
+                    **_chunk_summary(chunk),
+                    "width": frame.width,
+                    "height": frame.height,
+                    "codec": frame.codec,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - 端侧视频预览应记录坏帧并继续收流
+            self.video_errors.append(
+                {
+                    "stream_id": chunk.stream_id,
+                    "seq": chunk.seq,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+
+    async def run_forever(self) -> dict[str, Any]:
+        """长驻运行 Python 手机视频显示端。
+
+        主要逻辑：建立控制和 stream WebSocket，注册设备后持续接收 server 转发的
+        `sensor.rgb` chunk，并在本地窗口刷新画面。该方法通常由 CLI 启动，直到用户
+        Ctrl-C 或连接断开。
+        参数：无。
+        返回值：退出时的运行摘要。
+        异常情况：server 未启动、注册失败或 WebSocket 异常时向上抛出。
+        """
+
+        async with ClientSession() as session:
+            control_ws = await self.run_until_registered(session=session)
+            try:
+                async with session.ws_connect(self._stream_url()) as stream_ws:
+                    control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, None))
+                    stream_task = asyncio.create_task(self._stream_loop(control_ws, stream_ws))
+                    try:
+                        await asyncio.gather(control_task, stream_task)
+                    finally:
+                        control_task.cancel()
+                        stream_task.cancel()
+            finally:
+                if self.video_preview is not None:
+                    self.video_preview.close()
+                await control_ws.close()
+        return self._build_result()
+
     def _build_result(self) -> dict[str, Any]:
         result = super()._build_result()
         result["endpoint"] = "python-phone"
@@ -520,6 +797,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["task_handlers"] = self.task_handlers.list_task_types()
         result["task_events"] = list(self.task_events)
         result["frame_log"] = list(self.frame_log)
+        result["video_frames"] = list(self.video_frames)
+        result["video_errors"] = list(self.video_errors)
+        result["video_frame_store"] = self.frame_store.summary() if self.frame_store else {}
         return result
 
 
@@ -541,6 +821,7 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
     config = config or {}
     handler_registry = PhoneTaskHandlerRegistry.with_builtins(list(config.get("handler_packages") or []))
     vision_frames = _vision_frames_from_config(dict(config.get("vision_frames") or {}))
+    display_config = dict(config.get("display") or {})
     endpoint = NetworkPythonPhoneMockEndpoint(
         server_url=config.get("server_url", "http://127.0.0.1:8765"),
         user_id=config.get("user_id", "user-phone-mock-001"),
@@ -553,10 +834,10 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         task_handlers=handler_registry,
         task_event_scripts=dict(config.get("task_event_scripts") or {}),
         vision_frames=vision_frames,
+        display=display_config,
     )
-    if config.get("mode", "register_only") in {"register_only", "network_register"}:
-        from aiohttp import ClientSession
-
+    mode = str(config.get("mode") or "").strip()
+    if mode in {"register_only", "network_register"} or (not mode and not display_config):
         async with ClientSession() as session:
             control_ws = await endpoint.run_until_registered(session=session)
             try:
@@ -567,7 +848,9 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         result["passed"] = "control.device.registered" in result["event_names"]
         result["mode"] = "register_only"
         return result
-    return await endpoint.run_once()
+    if mode in {"once", "network_once"}:
+        return await endpoint.run_once()
+    return await endpoint.run_forever()
 
 
 def _vision_frames_from_config(config: dict[str, Any]) -> dict[str, list[bytes]]:
