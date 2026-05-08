@@ -54,6 +54,52 @@ def test_network_playback_over_real_websocket_transport(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
+    """测试目标：验证网络模式 python-glass 会按真实协议分片上传录制 WAV。
+
+    测试方法：启动真实 aiohttp server，使用 `NetworkPythonPlaybackEndpoint` 上传
+    老 SDK 的 WAV 样例。
+    预期结果：回放通过，input PCM 落盘内容与原 WAV 数据区一致，且 chunk 数大于 1。
+    """
+
+    async def run() -> None:
+        wav_path = Path("openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav")
+        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+        server = AudioChatHttpServer(audio_app)
+        app = server.create_web_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001
+        try:
+            endpoint = NetworkPythonPlaybackEndpoint(
+                server_url=f"http://127.0.0.1:{port}",
+                user_id="user-net-wav",
+                device_id="dev-net-wav",
+                runs_root=str(tmp_path / "runs"),
+            )
+            from audio_chat.endpoints.python_playback import load_wav_audio
+
+            audio = load_wav_audio(wav_path)
+            result = await endpoint.run_once(audio=audio)
+        finally:
+            await runner.cleanup()
+
+        assert result["passed"] is True
+        assert result["transport"] == "network"
+        assert result["input_audio"]["chunk_count"] > 1
+        session_dir = tmp_path / "runs" / "sessions" / result["session_id"]
+        input_pcm = b"".join(path.read_bytes() for path in session_dir.glob("input-*.pcm"))
+        import wave
+
+        with wave.open(audio.source_path, "rb") as wav_file:
+            expected_pcm = wav_file.readframes(wav_file.getnframes())
+        assert input_pcm == expected_pcm
+
+    asyncio.run(run())
+
+
 def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path) -> None:
     """测试目标：验证同一 user_id 下多设备按 capability/subscription 分发。
 

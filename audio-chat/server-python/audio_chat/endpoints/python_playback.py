@@ -5,7 +5,10 @@ import asyncio
 import json
 import math
 import sys
+import time
+import wave
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +46,7 @@ PLAYBACK_ARTIFACT_FILES = (
 )
 
 ASSET_STREAM_TYPES = {"sensor.rgb", "sensor.depth", "sensor.imu"}
+DEFAULT_MIC_CHUNK_MS = 20
 
 DEFAULT_SENSOR_PROFILES: dict[str, dict[str, Any]] = {
     "sensor.rgb": {
@@ -72,6 +76,130 @@ DEFAULT_SENSOR_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+@dataclass(frozen=True)
+class PlaybackAudio:
+    """Playback 输入音频。
+
+    主要功能：保存从录音 WAV 或原始 PCM 解析出的麦克风输入。
+    主要属性：`chunks` 是按端侧发送粒度切好的 PCM16 数据，`format` 是 stream
+    声明格式，`source_path` 记录原始 WAV 路径用于回放产物追踪。
+    """
+
+    chunks: list[bytes]
+    format: StreamFormat
+    source_path: str = ""
+    duration_ms: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        """返回输入 PCM 总字节数。"""
+
+        return sum(len(chunk) for chunk in self.chunks)
+
+    @property
+    def chunk_count(self) -> int:
+        """返回输入 chunk 数量。"""
+
+        return len(self.chunks)
+
+
+def _repo_root() -> Path:
+    """返回仓库根目录。
+
+    主要逻辑：`python_playback.py` 位于 `audio-chat/server-python/audio_chat/endpoints`，
+    向上四层是仓库根目录。
+    返回值：仓库根目录路径。
+    异常情况：无。
+    """
+
+    return Path(__file__).resolve().parents[4]
+
+
+def _audio_chat_root() -> Path:
+    """返回 audio-chat 子工程根目录。"""
+
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_existing_path(raw_path: str | Path) -> Path:
+    """解析配置中的本地文件路径。
+
+    主要逻辑：依次按绝对路径、当前工作目录、`audio-chat` 根目录和仓库根目录查找，
+    兼容从仓库根目录或 `audio-chat` 目录启动 CLI。
+    参数：`raw_path` 为 YAML/命令行中的路径。
+    返回值：存在的绝对路径。
+    异常情况：文件不存在时抛出 `FileNotFoundError`。
+    """
+
+    path = Path(raw_path).expanduser()
+    candidates = [path]
+    if not path.is_absolute():
+        candidates.extend([Path.cwd() / path, _audio_chat_root() / path, _repo_root() / path])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(f"playback audio file not found: {raw_path}")
+
+
+def load_wav_audio(path: str | Path, *, chunk_ms: int = DEFAULT_MIC_CHUNK_MS) -> PlaybackAudio:
+    """读取录制 WAV 并切成端侧麦克风 stream chunk。
+
+    主要逻辑：
+    1. 使用标准库 `wave` 读取本地 WAV。
+    2. 只接受 16kHz、单声道、16bit PCM，和真实端侧上传给 server 的格式一致。
+    3. 按 `chunk_ms` 切片，默认 20ms，即每包 640 字节。
+
+    参数：
+    1. `path`：WAV 文件路径，可为相对路径。
+    2. `chunk_ms`：每个 stream chunk 对应的音频时长。
+
+    返回值：`PlaybackAudio`。
+
+    异常情况：
+    1. 文件不存在时抛出 `FileNotFoundError`。
+    2. WAV 格式不符合 16kHz/mono/16bit PCM 时抛出 `ValueError`。
+    """
+
+    source = _resolve_existing_path(path)
+    with wave.open(str(source), "rb") as wav_file:
+        sample_rate = wav_file.getframerate()
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        frame_count = wav_file.getnframes()
+        if sample_rate != 16000 or channels != 1 or sample_width != 2:
+            raise ValueError(
+                f"playback wav must be 16kHz/mono/16bit PCM: path={source} "
+                f"sample_rate={sample_rate} channels={channels} sample_width={sample_width}"
+            )
+        pcm = wav_file.readframes(frame_count)
+    bytes_per_chunk = max(1, int(sample_rate * channels * sample_width * chunk_ms / 1000))
+    chunks = [pcm[offset : offset + bytes_per_chunk] for offset in range(0, len(pcm), bytes_per_chunk)]
+    chunks = [chunk for chunk in chunks if chunk]
+    return PlaybackAudio(
+        chunks=chunks,
+        format=StreamFormat(codec="pcm16le", sample_rate=sample_rate, channels=channels, chunk_ms=chunk_ms),
+        source_path=str(source),
+        duration_ms=int(frame_count * 1000 / sample_rate),
+    )
+
+
+def _pcm_audio(payload: bytes | None, *, chunk_ms: int = DEFAULT_MIC_CHUNK_MS) -> PlaybackAudio:
+    """把测试用 PCM bytes 归一成 PlaybackAudio。
+
+    主要逻辑：兼容旧测试直接传入一段 PCM bytes 的调用方式，并保持默认静音输入。
+    参数：`payload` 为 PCM16 原始字节。
+    返回值：`PlaybackAudio`。
+    异常情况：无。
+    """
+
+    pcm = payload if payload is not None else b"\x00\x00" * 320
+    return PlaybackAudio(
+        chunks=[pcm],
+        format=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=chunk_ms),
+        duration_ms=chunk_ms if pcm else 0,
+    )
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """递归合并配置字典。"""
 
@@ -99,6 +227,34 @@ def _bytes_from_config(value: Any, *, default: bytes) -> bytes:
             return path.read_bytes()
         return value.encode("utf-8")
     return json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
+def _audio_from_action(action: dict[str, Any]) -> PlaybackAudio | None:
+    """从 playback action 中解析 WAV 输入。
+
+    主要逻辑：支持 `audio_wav`、`wav_path` 和 `wav` 三种配置名，方便复用老 SDK
+    音频样例路径。
+    参数：`action` 为场景中的单个 action。
+    返回值：命中 WAV 时返回 `PlaybackAudio`，否则返回 None。
+    异常情况：WAV 不存在或格式不符合要求时由 `load_wav_audio` 抛出。
+    """
+
+    raw_path = action.get("audio_wav") or action.get("wav_path") or action.get("wav")
+    if not raw_path:
+        return None
+    return load_wav_audio(raw_path, chunk_ms=int(action.get("chunk_ms") or DEFAULT_MIC_CHUNK_MS))
+
+
+def _audio_result(audio: PlaybackAudio) -> dict[str, Any]:
+    """构造回放结果中的输入音频摘要。"""
+
+    return {
+        "source_path": audio.source_path,
+        "chunk_count": audio.chunk_count,
+        "total_bytes": audio.total_bytes,
+        "duration_ms": audio.duration_ms,
+        "format": audio.format.__dict__,
+    }
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -223,7 +379,25 @@ class PythonPlaybackEndpoint:
             },
         )
 
-    def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
+    def run_once(
+        self,
+        audio_payload: bytes | None = None,
+        *,
+        audio: PlaybackAudio | None = None,
+        chunk_interval_ms: int = 0,
+    ) -> dict[str, Any]:
+        """执行一次内存模式 playback。
+
+        主要逻辑：模拟端侧唤醒、打开 `sensor.mic` stream，并把录制音频按 chunk
+        写入 server；不绕过 AudioChatApp 的公开协议入口。
+        参数：
+        1. `audio_payload`：兼容旧测试的一段 PCM bytes。
+        2. `audio`：从 WAV 读取出的分片音频。
+        3. `chunk_interval_ms`：可选发送间隔，用于模拟真实端侧节奏。
+        返回值：结构化回放结果。
+        异常情况：底层 app 处理异常会直接抛出，便于测试暴露问题。
+        """
+
         self.register()
         self.app.publish_control_event(
             Event(
@@ -233,23 +407,38 @@ class PythonPlaybackEndpoint:
                 payload={"wake_source": "playback"},
             )
         )
-        handle = self.app.open_input_stream(user_id=self.user_id, producer_id=self.device_id)
+        playback_audio = audio or _pcm_audio(audio_payload)
+        handle = self.app.open_input_stream(user_id=self.user_id, producer_id=self.device_id, format=playback_audio.format)
         self._last_session_id = handle.session_id
-        payload = audio_payload if audio_payload is not None else b"\x00\x00" * 320
-        self.app.write_input_chunk(
-            StreamChunk(
-                user_id=self.user_id,
-                session_id=handle.session_id,
-                stream_id=handle.stream_id,
-                stream_type="sensor.mic",
-                seq=0,
-                payload=payload,
-                final=True,
+        for seq, payload in enumerate(playback_audio.chunks):
+            self.app.write_input_chunk(
+                StreamChunk(
+                    user_id=self.user_id,
+                    session_id=handle.session_id,
+                    stream_id=handle.stream_id,
+                    stream_type="sensor.mic",
+                    seq=seq,
+                    payload=payload,
+                    final=seq == len(playback_audio.chunks) - 1,
+                    codec=playback_audio.format.codec,
+                    sample_rate=playback_audio.format.sample_rate,
+                    channels=playback_audio.format.channels,
+                    duration_ms=playback_audio.format.chunk_ms,
+                    metadata={"source_path": playback_audio.source_path} if playback_audio.source_path else {},
+                )
             )
-        )
+            if chunk_interval_ms > 0 and seq < len(playback_audio.chunks) - 1:
+                time.sleep(chunk_interval_ms / 1000)
         self.app.stream_service.close_stream(handle.stream_id, reason="playback_input_done")
         self.app.close_audio_session(self.user_id, reason="mock_response_completed")
-        return self._build_result(handle.session_id)
+        result = self._build_result(handle.session_id)
+        result["input_audio"] = _audio_result(playback_audio)
+        self.app.recorder.record_playback_result(handle.session_id, result)
+        self.app.recorder.write_result(
+            handle.session_id,
+            {"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result},
+        )
+        return result
 
     def register(self) -> Event:
         """注册 playback 设备。
@@ -318,10 +507,15 @@ class PythonPlaybackEndpoint:
         for action in actions:
             action_type = str(action.get("type") or action.get("action") or "").strip()
             if action_type == "trigger_audio":
-                audio_payload = _bytes_from_config(action.get("payload"), default=b"\x00\x00" * 320)
-                result = self.run_once(audio_payload=audio_payload)
+                audio = _audio_from_action(action)
+                audio_payload = None if audio is not None else _bytes_from_config(action.get("payload"), default=b"\x00\x00" * 320)
+                result = self.run_once(
+                    audio_payload=audio_payload,
+                    audio=audio,
+                    chunk_interval_ms=int(action.get("chunk_interval_ms") or 0),
+                )
                 session_id = result.get("session_id") or session_id
-                action_results.append({"type": action_type, "session_id": session_id})
+                action_results.append({"type": action_type, "session_id": session_id, "input_audio": result.get("input_audio")})
             elif action_type == "call_tool":
                 result = asyncio.run(
                     self.app.tool_gateway.call(
@@ -615,6 +809,7 @@ class NetworkPythonPlaybackEndpoint:
         capabilities: dict[str, Any] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
+        chunk_interval_ms: int = 0,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.user_id = user_id
@@ -636,6 +831,7 @@ class NetworkPythonPlaybackEndpoint:
             {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
         ]
         self.rgb_payload = rgb_payload or b"\xff\xd8mock-rgb-network\xff\xd9"
+        self.chunk_interval_ms = chunk_interval_ms
         self.sent_events: list[Event] = []
         self.received_events: list[Event] = []
         self.output_chunks: list[StreamChunk] = []
@@ -685,20 +881,21 @@ class NetworkPythonPlaybackEndpoint:
         self._registered.set()
         return control_ws
 
-    async def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
+    async def run_once(self, audio_payload: bytes | None = None, *, audio: PlaybackAudio | None = None) -> dict[str, Any]:
         """执行一次网络 playback 闭环。
 
         主要逻辑：建立控制和 stream WebSocket，注册设备，唤醒后按 server 请求打开
         `sensor.mic`，收到 speaker chunk 后上报 started / finished / closed。
-        参数：`audio_payload` 为可选 PCM 输入。
+        参数：`audio_payload` 为可选 PCM 输入，`audio` 为可选 WAV 分片输入。
         返回值：包含事件链、输出字节数和断言结果的 dict。
         异常情况：server 未启动、协议错误或断言超时会抛出异常。
         """
+        playback_audio = audio or _pcm_audio(audio_payload)
         async with ClientSession() as session:
             control_ws = await self.run_until_registered(session=session)
             try:
                 async with session.ws_connect(self._stream_url()) as stream_ws:
-                    control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, audio_payload))
+                    control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, playback_audio))
                     stream_task = asyncio.create_task(self._stream_loop(control_ws, stream_ws))
                     await self._send_event(
                         control_ws,
@@ -725,9 +922,18 @@ class NetworkPythonPlaybackEndpoint:
                     stream_task.cancel()
             finally:
                 await control_ws.close()
-        return self._build_result()
+        result = self._build_result()
+        result["input_audio"] = _audio_result(playback_audio)
+        if self._session_id:
+            session_dir = self.runs_root / "sessions" / self._session_id
+            (session_dir / "playback-result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            (session_dir / "result.json").write_text(
+                json.dumps({"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return result
 
-    async def _control_loop(self, control_ws, stream_ws, audio_payload: bytes | None) -> None:
+    async def _control_loop(self, control_ws, stream_ws, audio: PlaybackAudio) -> None:
         async for message in control_ws:
             if message.type != WSMsgType.TEXT:
                 continue
@@ -745,7 +951,7 @@ class NetworkPythonPlaybackEndpoint:
                         payload={"reason": "playback_opened"},
                     ),
                 )
-                await self._open_and_send_mic(control_ws, stream_ws, event.session_id, audio_payload)
+                await self._open_and_send_mic(control_ws, stream_ws, event.session_id, audio)
             elif event.event_name == "stream.output.close.requested":
                 await self._send_event(
                     control_ws,
@@ -808,10 +1014,10 @@ class NetworkPythonPlaybackEndpoint:
                 )
             self.output_chunks.append(chunk)
 
-    async def _open_and_send_mic(self, control_ws, stream_ws, session_id: str | None, audio_payload: bytes | None) -> None:
+    async def _open_and_send_mic(self, control_ws, stream_ws, session_id: str | None, audio: PlaybackAudio) -> None:
         stream_id = new_id("stream_in")
         self._input_stream_id = stream_id
-        stream_format = StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20)
+        stream_format = audio.format
         await self._send_event(
             control_ws,
             Event(
@@ -824,24 +1030,27 @@ class NetworkPythonPlaybackEndpoint:
                 payload={"stream_type": "sensor.mic", "format": stream_format.__dict__},
             ),
         )
-        payload = audio_payload if audio_payload is not None else b"\x00\x00" * 320
-        await stream_ws.send_bytes(
-            StreamChunkCodec.encode(
-                StreamChunk(
-                    user_id=self.user_id,
-                    session_id=session_id or "",
-                    stream_id=stream_id,
-                    stream_type="sensor.mic",
-                    seq=0,
-                    payload=payload,
-                    final=True,
-                    codec=stream_format.codec,
-                    sample_rate=stream_format.sample_rate,
-                    channels=stream_format.channels,
-                    duration_ms=stream_format.chunk_ms,
+        for seq, payload in enumerate(audio.chunks):
+            await stream_ws.send_bytes(
+                StreamChunkCodec.encode(
+                    StreamChunk(
+                        user_id=self.user_id,
+                        session_id=session_id or "",
+                        stream_id=stream_id,
+                        stream_type="sensor.mic",
+                        seq=seq,
+                        payload=payload,
+                        final=seq == len(audio.chunks) - 1,
+                        codec=stream_format.codec,
+                        sample_rate=stream_format.sample_rate,
+                        channels=stream_format.channels,
+                        duration_ms=stream_format.chunk_ms,
+                        metadata={"source_path": audio.source_path} if audio.source_path else {},
+                    )
                 )
             )
-        )
+            if self.chunk_interval_ms > 0 and seq < len(audio.chunks) - 1:
+                await asyncio.sleep(self.chunk_interval_ms / 1000)
         # 控制和 stream 使用两条 WebSocket，端侧先给 server 一个极短处理窗口，避免
         # `stream.input.closed` 在二进制 chunk 前到达导致 server 提前关闭输入流。
         await asyncio.sleep(0.05)
@@ -1064,7 +1273,8 @@ def run_playback(config: dict[str, Any] | None = None) -> dict[str, Any]:
         if not scenario:
             scenario = {"actions": list(config.get("actions") or []), "assert": dict(config.get("assert") or {})}
         return endpoint.run_scripted(scenario)
-    return endpoint.run_once()
+    audio = _audio_from_action(config)
+    return endpoint.run_once(audio=audio, chunk_interval_ms=int(config.get("chunk_interval_ms") or 0))
 
 
 async def run_network_playback(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1075,13 +1285,22 @@ async def run_network_playback(config: dict[str, Any] | None = None) -> dict[str
         device_id=config.get("device_id", "dev-python-playback-001"),
         runs_root=config.get("runs_root", "runs/audio-chat"),
         auth=dict(config.get("auth") or {"mode": "disabled"}),
+        chunk_interval_ms=int(config.get("chunk_interval_ms") or 0),
     )
-    return await endpoint.run_once()
+    audio = _audio_from_action(config)
+    return await endpoint.run_once(audio=audio)
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="")
+    parser.add_argument("--server-url", default="")
+    parser.add_argument("--audio-wav", default="")
+    parser.add_argument("--user-id", default="")
+    parser.add_argument("--device-id", default="")
+    parser.add_argument("--runs-root", default="")
+    parser.add_argument("--chunk-interval-ms", type=int, default=None)
+    parser.add_argument("--mode", choices=["network", "in_process"], default="")
     args = parser.parse_args(argv)
     config: dict[str, Any] = {}
     if args.config:
@@ -1092,6 +1311,20 @@ def main(argv: list[str] | None = None) -> None:
             import yaml
 
             config = yaml.safe_load(text) or {}
+    if args.server_url:
+        config["server_url"] = args.server_url
+    if args.audio_wav:
+        config["audio_wav"] = args.audio_wav
+    if args.user_id:
+        config["user_id"] = args.user_id
+    if args.device_id:
+        config["device_id"] = args.device_id
+    if args.runs_root:
+        config["runs_root"] = args.runs_root
+    if args.chunk_interval_ms is not None:
+        config["chunk_interval_ms"] = args.chunk_interval_ms
+    if args.mode:
+        config["mode"] = args.mode
     if config.get("mode") == "in_process":
         result = run_playback(config)
     else:

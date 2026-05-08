@@ -9,7 +9,7 @@ from typing import Any
 
 from aiohttp import WSMsgType
 
-from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint
+from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint, PlaybackAudio
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat, new_id
 
 
@@ -534,7 +534,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             self.state.on_playback_pcm(chunk.payload)
             self.output_chunks.append(chunk)
 
-    async def _open_and_send_mic(self, control_ws, stream_ws, session_id: str | None, audio_payload: bytes | None) -> None:
+    async def _open_and_send_mic(self, control_ws, stream_ws, session_id: str | None, audio_payload: bytes | PlaybackAudio | None) -> None:
         stream_id = self.state.input_stream_id or new_id("stream_mic")
         self._input_stream_id = stream_id
         stream_format = self.state.stream_format()
@@ -554,8 +554,12 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                 },
             ),
         )
-        payload = audio_payload if audio_payload is not None else b"\x00" * DEFAULT_CHUNK_BYTES
-        self.state.enqueue_aec_mic_pcm(payload)
+        if isinstance(audio_payload, PlaybackAudio):
+            payloads = audio_payload.chunks or [b""]
+        else:
+            payloads = [audio_payload if audio_payload is not None else b"\x00" * DEFAULT_CHUNK_BYTES]
+        for payload in payloads:
+            self.state.enqueue_aec_mic_pcm(payload)
         seq = 0
         while self.state.mic_send_queue:
             chunk_payload = self.state.mic_send_queue.popleft()

@@ -91,6 +91,14 @@ Glass playback：
 uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
 ```
 
+使用已录制 WAV 作为 python-glass 麦克风输入：
+
+```bash
+uv run audio-chat.playback.glass \
+  --server-url http://127.0.0.1:8765 \
+  --audio-wav openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav
+```
+
 Web glass：
 
 ```bash
