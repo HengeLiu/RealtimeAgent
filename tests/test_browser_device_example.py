@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BROWSER_DEVICE_ROOT = ROOT / "device-examples" / "browser-glass"
@@ -12,20 +14,41 @@ def _html() -> str:
 def test_browser_device_uses_simplified_device_registration_protocol() -> None:
     """测试目标：验证 browser-glass 按 README 的简化设备协议注册。
 
-    测试方法：静态读取 HTML，检查注册 payload 使用 name、subscriptions 和 properties，
-    不再通过 capabilities 表达路由能力。
-    预期结果：页面作为普通 Device 注册，事件路由只依赖 subscriptions。
+    测试方法：静态读取 HTML，检查注册 payload 使用 supports 表达设备能力，
+    只保留广播日志使用的 debug subscriptions，不再手写业务路由订阅。
+    预期结果：页面作为普通 Device 注册，业务事件路由由 server 根据 supports 编译。
     """
 
     html = _html()
 
     assert "control.device.register.requested" in html
     assert "client_type: \"browser-glass\"" in html
+    assert "supports: DEVICE_SUPPORTS" in html
+    assert "DEBUG_EVENT_SUBSCRIPTIONS" in html
     assert "properties: {" in html
-    assert "subscriptions: [" in html
+    assert "subscriptions: DEBUG_EVENT_SUBSCRIPTIONS" in html
+    assert '{event: "stream.control.*", filter: {stream_type: "sensor.rgb"}}' not in html
+    assert '{event: "stream.output.*", filter: {stream_type: "actuator.speaker"}}' not in html
     assert "capabilities: {" not in html
     assert "streams.produce" not in html
     assert "streams.consume" not in html
+
+
+def test_browser_device_supports_match_checked_capability_file() -> None:
+    """测试目标：验证页面内置 supports 与设备能力文件保持同一套语义 ID。
+
+    测试方法：读取 `device.audio-chat.yaml`，并静态检查页面注册能力覆盖浏览器已实现能力。
+    预期结果：浏览器页面和能力文件都使用 `sensor.mic`、`sensor.rgb`、
+    `actuator.speaker`、`actuator.haptic`，避免示例互相矛盾。
+    """
+
+    html = _html()
+    capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.audio-chat.yaml").read_text(encoding="utf-8"))
+    support_ids = {item["id"] for item in capability_file["supports"]}
+
+    for support_id in ("sensor.mic", "sensor.rgb", "actuator.speaker", "actuator.haptic"):
+        assert support_id in support_ids
+        assert f'id: "{support_id}"' in html
 
 
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:

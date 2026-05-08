@@ -167,8 +167,8 @@ uv run python scripts/acceptance_check.py old-sdk-parity-api
 pyproject.toml
 audio-chat-sdk/audio_chat/cli/
 audio-chat-sdk/audio_chat/preflight.py
-app-examples/basic-app/
-app-examples/basic-app/
+app-examples/for-blind-app/
+app-examples/for-blind-app/
 tests/test_cli_old_sdk_parity.py
 tests/test_live_check.py
 tests/test_config_sync_multidevice.py
@@ -233,7 +233,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-cli
 
 ```text
 device-examples/python-glass/audio_chat_python_glass/playback.py
-app-examples/basic-app/host/glass-playback/
+app-examples/for-blind-app/host/glass-playback/
 testdata/playback/
 testdata/contracts/scenarios/
 tests/playback/
@@ -296,7 +296,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-playback
 device-examples/python-phone/
 device-examples/native-ios-phone/
 device-examples/python-phone/audio_chat_python_phone_mock/phone_mock.py
-app-examples/basic-app/capabilities/
+app-examples/for-blind-app/capabilities/
 tests/test_phone_task_contract.py
 tests/test_python_phone_mock_vision_task.py
 tests/test_ios_phone_contract.py
@@ -622,7 +622,7 @@ README.md
 docs/audio-chat-sdk-architecture.md
 docs/phase3-migration-guide.md
 docs/old-sdk-parity-development-plan.md
-app-examples/basic-app/
+app-examples/for-blind-app/
 app-examples/for-blind-app/
 app-examples/for-blind-app/templates/
 tests/test_docs_old_sdk_parity.py
@@ -727,7 +727,7 @@ tests/acceptance/test_release_candidate_gate.py
    - all acceptance。
    - package-check。
    - docs contract。
-   - basic app playback。
+   - for-blind app playback。
    - for-blind app playback。
 
 验收命令：
@@ -740,7 +740,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-release
 通过条件：
 
 1. 新建临时项目安装 wheel 后可以 `import audio_chat`。
-2. 新建临时项目可以复制 `app-examples/basic-app` 并跑通 playback。
+2. 新建临时项目可以复制 `app-examples/for-blind-app` 并跑通 playback。
 3. `audio-chat.sdk.package-check` 输出 release candidate 报告。
 4. 包内不包含本地私密配置和运行产物。
 
@@ -775,7 +775,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-release
 
 本阶段完成时，应满足：
 
-1. `app-examples/basic-app` 和 `app-examples/for-blind-app` 都能按 README 从零启动和回放。
+1. `app-examples/for-blind-app` 能按 README 从零启动和回放，并同时覆盖 SDK 基础样板与旧 SDK 业务能力。
 2. `find_object`、`traffic_light`、`navigation`、`search`、`timer` 五类能力都有 `audio-chat` 版本样板。
 3. Tool / Task 开发者只使用 `audio_chat` 公开 API。
 4. phone mock 能跑视觉任务。

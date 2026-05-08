@@ -11,9 +11,13 @@
 | `capabilities/navigation` | 路线准备和执行期导航 | MCP 路线准备 + 偏航、接近终点、视觉确认事件样板。 |
 | `capabilities/search` | 搜索和问答资料查询 | MCP wrapper Tool，缺真实 provider 时明确 mock/fallback。 |
 | `capabilities/timer` | 计时器和后台通知 | `TaskContext.schedule_event()` + 查询、取消、到点通知。 |
+| `capabilities/continuous_rgb_analyze` | SDK 连续视觉样板 | 控制事件请求端侧持续上传 RGB 资产。 |
+| `capabilities/find_object_phone_task` | 端侧找物任务样板 | 通过 `control.device.command.requested` 请求手机或眼镜端执行视觉任务。 |
+| `capabilities/traffic_light_phone_task` | 端侧红绿灯任务样板 | 通过事件和 RGB stream 对接端侧视觉任务。 |
+| `capabilities/sample_tool` / `capabilities/sample_task` | SDK 最小扩展样板 | 用于验证 Tool / Task 自动发现和公开上下文。 |
 | `host/server` | 业务 app factory | 真实代码读取 YAML 并启用自动发现。 |
 | `host/phone-mock` | 视觉任务 mock 端 | 真实配置可复制 `device-examples/python-phone/phone.mock.yaml`。 |
-| `host/glass-playback` | 设备级回放入口 | 真实配置可复制 `app-examples/basic-app/host/glass-playback/playback.yaml`。 |
+| `host/glass-playback` | 设备级回放入口 | 真实配置可复制 `app-examples/for-blind-app/host/glass-playback/playback.yaml`。 |
 
 ## 开发顺序
 
@@ -40,7 +44,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-capabilities \
 
 ## 边界
 
-- 不新增 `start_phone_task`、`capture_photo` 或点对点 device RPC。
+- 不新增点对点 device RPC；抓拍优先使用 SDK 内置 `capture_photo`，开发参考代码放在 `templates/capture_photo`。
 - 找物、红绿灯这类手机视觉能力只能由 `UserDeviceContext` 发布
   `control.device.command.requested`，端侧通过 `control.device.command.*` 回报；
   业务代码不得直接操作 phone 连接或导入内部 service。

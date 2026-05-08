@@ -183,7 +183,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 1. `scripts/acceptance_check.py` 已新增 `developer-usability` lane。
 2. `pyproject.toml` 已补齐 P0-A 要求的开发者入口命令。
 3. README、entry point 和 `audio_chat` 顶层公开 API 已加入自动一致性检查。
-4. `app-examples/basic-app` 提供最小 app-root、Tool 样板和 Task 样板，用于冻结开发者闭环的最低门槛。
+4. `app-examples/for-blind-app` 提供最小 app-root、Tool 样板和 Task 样板，用于冻结开发者闭环的最低门槛。
 5. `testdata/contracts/run_artifacts.schema.json` 记录 playback 运行产物的最小 schema。
 
 写入范围：
@@ -241,9 +241,9 @@ uv run python scripts/acceptance_check.py developer-usability \
 写入范围：
 
 ```text
-app-examples/basic-app/
+app-examples/for-blind-app/
 audio-chat-sdk/audio_chat/cli/
-tests/fixtures/basic_app/
+tests/fixtures/for_blind_app/
 tests/acceptance/test_capability_template_playback.py
 tests/acceptance/test_auto_discovery_developer_contract.py
 README.md
@@ -252,7 +252,7 @@ README.md
 建议目录：
 
 ```text
-app-examples/basic-app/
+app-examples/for-blind-app/
   README.md
   config/
     server.yaml
@@ -432,7 +432,7 @@ audio-chat-sdk/audio_chat/control/
 audio-chat-sdk/audio_chat/config.py
 audio-chat-sdk/audio_chat/server.py
 audio-chat-sdk/audio_chat/errors.py
-app-examples/basic-app/server.yaml
+app-examples/for-blind-app/server.yaml
 tests/test_device_registration_management.py
 tests/test_signed_token_auth.py
 testdata/contracts/events/
@@ -502,7 +502,7 @@ tests/test_memory_service.py
 tests/test_skill_service.py
 tests/test_mcp_gateway.py
 tests/acceptance/test_indirect_device_context_contract.py
-app-examples/basic-app/server.yaml
+app-examples/for-blind-app/server.yaml
 ```
 
 任务清单：
@@ -674,7 +674,7 @@ device-examples/browser-glass/
 device-examples/python-phone/
 device-examples/native-ios-phone/
 device-examples/native-esp32-glass/
-app-examples/basic-app/
+app-examples/for-blind-app/
 docs/esp32-s3-endpoint-bridge.md
 tests/test_web_glass_endpoint.py
 tests/test_python_phone_mock_endpoint.py
@@ -737,7 +737,7 @@ uv run python scripts/acceptance_check.py endpoint-reference
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config app-examples/basic-app/server-omni.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server-omni.yaml
 # 另一个终端或浏览器打开 browser-glass
 # 触发页面注册、唤醒、麦克风上传、speaker 播放
 curl http://127.0.0.1:8765/api/debug/devices
@@ -887,7 +887,7 @@ uv run python scripts/acceptance_check.py esp32-s3-endpoint \
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config app-examples/basic-app/server-omni.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server-omni.yaml
 # 另一个终端刷写或启动 ESP32-S3，并保留串口日志和 runs/audio-chat/sessions/<session_id>/ 产物
 ```
 
@@ -1074,7 +1074,7 @@ uv run python scripts/acceptance_check.py capability-template-playback --keep-go
 2. 对应测试。
 3. 对应 lane 验收报告。
 4. 涉及协议时更新 golden。
-5. 涉及配置时更新 `app-examples/basic-app/server.yaml`。
+5. 涉及配置时更新 `app-examples/for-blind-app/server.yaml`。
 6. 涉及跨端时更新启动顺序和观察点。
 
 最终合并前必须通过：
@@ -1112,7 +1112,7 @@ server DEBUG 日志
 下一阶段完成时，应达到：
 
 1. 功能开发者可以按照 README 从零安装、同步配置、启动 server、启动 mock 设备并完成一次回放。
-2. 功能开发者可以复制 `app-examples/basic-app` 新增 Tool / Task，且无需修改 SDK 内部代码即可自动发现。
+2. 功能开发者可以复制 `app-examples/for-blind-app` 新增 Tool / Task，且无需修改 SDK 内部代码即可自动发现。
 3. Tool / Task 能通过 `UserDeviceContext` 使用事件和 stream 控制设备、读取资产和输出结果。
 4. Python playback、Python phone mock 和 browser-glass 至少有两个端侧参考实现可跑通。
 5. TextAgentCore 和 RealtimeAudioAgentCore 在 mock provider 下都能跑通工具发现、工具调用和输出链路。

@@ -497,7 +497,7 @@ def main(argv: list[str] | None = None) -> None:
         config, launch = load_app_config(args.app_name, app_root=args.app_root)
         resolved_config_path = str(launch.config_path)
     else:
-        config_path = args.config or "app-examples/basic-app/server.yaml"
+        config_path = args.config or "app-examples/for-blind-app/server.yaml"
         config, launch = load_config_as_app(config_path)
         resolved_config_path = str(launch.config_path)
     configure_console_logging(config.log_level)

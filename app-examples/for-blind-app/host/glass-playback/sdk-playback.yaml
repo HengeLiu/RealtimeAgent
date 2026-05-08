@@ -1,7 +1,8 @@
 mode: in_process
-runs_root: runs/audio-chat/basic-app
-user_id: user-basic-app
-device_id: dev-basic-glass-playback
+runs_root: runs/audio-chat/for-blind-app
+server_url: http://127.0.0.1:8765
+user_id: user-playback-001
+device_id: dev-python-playback-001
 asr_provider: mock
 asr_model: mock-asr
 text_model_provider: mock

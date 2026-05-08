@@ -3268,8 +3268,8 @@ CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、�
 
 ```bash
 uv run audio-chat.config.sync \
-  --app-root app-examples/basic-app \
-  --config app-examples/basic-app/server.yaml
+  --app-root app-examples/for-blind-app \
+  --config app-examples/for-blind-app/server.yaml
 ```
 
 同步命令应做这些事：
@@ -3284,7 +3284,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 uv run audio-chat.config.sync \
-  --config app-examples/basic-app/server.yaml \
+  --config app-examples/for-blind-app/server.yaml \
   --public-url http://192.168.1.23:8765
 ```
 
@@ -3301,7 +3301,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 uv run audio-chat.server.run \
-  --config app-examples/basic-app/server.yaml
+  --config app-examples/for-blind-app/server.yaml
 ```
 
 业务项目启动时默认不需要指定业务装配入口。Tool / Task 由 YAML 中的自动发现配置加载：
@@ -3334,7 +3334,7 @@ Omni Realtime 联调启动：
 
 ```bash
 DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
-  --config app-examples/basic-app/server-omni.yaml
+  --config app-examples/for-blind-app/server-omni.yaml
 ```
 
 然后直接打开独立参考端侧页面：
@@ -3348,7 +3348,7 @@ device-examples/browser-glass/index.html
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
 ```bash
-uv run audio-chat.server.start --config app-examples/basic-app/server.yaml
+uv run audio-chat.server.start --config app-examples/for-blind-app/server.yaml
 uv run audio-chat.server.logs
 uv run audio-chat.server.stop
 ```
@@ -3364,7 +3364,7 @@ uv run audio-chat.dev.preflight \
   --report runs/preflight.json
 
 uv run audio-chat.playback.glass \
-  --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+  --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
 
 回放配置至少包含：
@@ -3470,10 +3470,10 @@ ESP32 命令需要支持：
 本地研发：
 
 1. `uv pip install -e audio-chat`
-2. 后续目标，当前未落地：`uv run audio-chat.config.sync --config app-examples/basic-app/server.yaml`
+2. 后续目标，当前未落地：`uv run audio-chat.config.sync --config app-examples/for-blind-app/server.yaml`
 3. `uv run audio-chat.dev.preflight --report runs/preflight.json`
-4. `uv run audio-chat.server.run --config app-examples/basic-app/server.yaml`
-5. 另一个终端运行 `uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml`
+4. `uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml`
+5. 另一个终端运行 `uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml`
 6. 查看 `runs/audio-chat` 和 `/api/debug/*`
 
 多设备 mock：
@@ -3512,7 +3512,7 @@ ESP32 命令需要支持：
 
 ```bash
 uv run audio-chat.dev.preflight \
-  --config app-examples/basic-app/server.yaml \
+  --config app-examples/for-blind-app/server.yaml \
   --require-server \
   --report runs/preflight-live.json
 ```
@@ -4155,7 +4155,7 @@ device-examples/
 ```bash
 uv run python -m pytest tests -q
 uv run audio-chat.dev.preflight --report runs/preflight.json
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
 
 ## 21. 第二阶段能力

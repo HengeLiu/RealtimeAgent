@@ -10,7 +10,7 @@ from audio_chat.tasks import BaseTask, TaskAutoDiscovery
 from audio_chat.tools import BaseTool, ToolAutoDiscovery, ToolError
 
 
-FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "basic_app"
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "for_blind_app"
 
 
 def clear_capabilities_modules() -> None:
@@ -21,7 +21,7 @@ def clear_capabilities_modules() -> None:
             sys.modules.pop(name, None)
 
 
-def test_basic_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_path) -> None:
+def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_path) -> None:
     """测试目标：确认开发者新增能力后不修改 server 内部代码即可自动注册。
 
     测试方法：把测试 app-root 加入 sys.path，配置 Tool / Task 递归发现 `capabilities`。
@@ -49,8 +49,8 @@ def test_basic_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_path
     assert app.discovery_errors == []
 
 
-def test_basic_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_path, monkeypatch) -> None:
-    """测试目标：冻结 basic-app 开发者自动发现契约。
+def test_for_blind_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_path, monkeypatch) -> None:
+    """测试目标：冻结 for-blind-app 开发者自动发现契约。
 
     测试方法：临时生成能力包，包含内部类和重复名称。
     预期结果：内部类不注册，重复 Tool / Task 名称 fail fast。
@@ -99,18 +99,18 @@ def test_basic_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_pa
         TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
 
-def test_example_basic_app_files_are_copyable() -> None:
+def test_example_for_blind_app_files_are_copyable() -> None:
     """测试目标：确认仓库内提供可复制的最小 app-root 示例。
 
     测试方法：检查示例 README、配置、Tool、Task 和宿主入口文件存在。
-    预期结果：功能开发者能从 `app-examples/basic-app` 开始复制开发。
+    预期结果：功能开发者能从 `app-examples/for-blind-app` 开始复制开发。
     """
 
-    root = Path(__file__).resolve().parents[2] / "app-examples" / "basic-app"
+    root = Path(__file__).resolve().parents[2] / "app-examples" / "for-blind-app"
     expected = [
         "README.md",
         "server.yaml",
-        "capabilities/capture_photo/tool.py",
+        "templates/capture_photo/tool.py",
         "capabilities/timer/task.py",
         "capabilities/continuous_rgb_analyze/task.py",
         "host/server/main.py",

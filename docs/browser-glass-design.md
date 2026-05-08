@@ -481,7 +481,7 @@ Client --> Haptic
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
 ```
 
 然后打开浏览器设备页面：

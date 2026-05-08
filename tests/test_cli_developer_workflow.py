@@ -97,7 +97,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
             "run",
             "audio-chat.server.start",
             "--config",
-            "app-examples/basic-app/server.yaml",
+            "app-examples/for-blind-app/server.yaml",
             "--pid-file",
             str(pid_file),
             "--log-file",

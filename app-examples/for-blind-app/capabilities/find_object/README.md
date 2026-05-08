@@ -11,7 +11,7 @@ audio-chat 迁移路径：
 
 参考：
 
-- `app-examples/basic-app/capabilities/capture_photo/tool.py`
+- `app-examples/for-blind-app/capabilities/capture_photo/tool.py`
 - `app-examples/for-blind-app/templates/find_object/tool.py`
 
 验收要求：

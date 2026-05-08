@@ -19,7 +19,7 @@
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
 ```
 
 打开页面：
@@ -50,7 +50,7 @@ uv run audio-chat.web.open --print-url
 uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml --json
 ```
 
-校验命令会把 `supports` 编译成注册事件里的 `subscriptions`。页面不依赖旧能力字段做路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
+校验命令会把 `supports` 编译成注册事件里的 `subscriptions`。页面运行时也按同一口径提交 `supports`，server 负责生成业务路由订阅；页面只额外提交广播日志页签使用的 debug 订阅。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
 
 ## 音频测试模式
 

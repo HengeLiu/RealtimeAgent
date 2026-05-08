@@ -31,7 +31,7 @@ def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
     """测试目标：确认 J 线发布候选 lane 已进入统一验收入口。
 
     测试方法：读取 `OLD_SDK_PARITY_CHECKS` 中的 `old-sdk-parity-release` 命令。
-    预期结果：lane 同时覆盖 release tests、package-check、docs contract、basic app
+    预期结果：lane 同时覆盖 release tests、package-check、docs contract、for-blind app
     playback 和 for-blind app playback。
     """
 
@@ -46,7 +46,7 @@ def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
         "tests/acceptance/test_release_candidate_gate.py",
         "audio-chat.sdk.package-check",
         "tests/acceptance/test_docs_current_state_contract.py",
-        "app-examples/basic-app/host/glass-playback/playback.yaml",
+        "app-examples/for-blind-app/host/glass-playback/playback.yaml",
         "app-examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
     ]:
         assert expected in command_text

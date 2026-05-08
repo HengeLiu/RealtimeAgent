@@ -103,7 +103,7 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
             "run",
             "audio-chat.dev.preflight",
             "--config",
-            "app-examples/basic-app/server.yaml",
+            "app-examples/for-blind-app/server.yaml",
             "--report",
             str(report),
         ],

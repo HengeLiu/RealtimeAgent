@@ -20,7 +20,7 @@
 命令：
 
 ```bash
-uv run audio-chat.dev.preflight --config app-examples/basic-app/server.yaml \
+uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml \
   --report runs/preflight.json
 curl http://127.0.0.1:8765/api/debug/devices
 ```
@@ -82,7 +82,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 修复：
 
-- 先用 `app-examples/basic-app/capabilities/capture_photo/tool.py` 验证单帧资产链路。
+- 先用 `app-examples/for-blind-app/capabilities/capture_photo/tool.py` 验证单帧资产链路。
 - 再用 `continuous_rgb_analyze` 验证连续资产消费。
 
 ## 5. Tool 未注册
@@ -103,7 +103,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --app-name basic-app
+uv run audio-chat.server.run --app-name for-blind-app
 ```
 
 ## 6. Task 未恢复
@@ -183,7 +183,7 @@ DASHSCOPE_API_KEY=... uv run python -m pytest tests/integration/test_dashscope_p
 修复：
 
 ```bash
-uv run audio-chat.config.sync --app-root app-examples/basic-app
+uv run audio-chat.config.sync --app-root app-examples/for-blind-app
 ```
 
 然后重新打开 iOS 参考端或重新配置 ESP32-S3 参考端。真机命令缺本地依赖时必须结构化失败，不能当作联调通过。

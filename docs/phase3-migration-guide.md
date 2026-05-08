@@ -240,13 +240,13 @@ asset = context.devices.request_asset(
 最小回放入口：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
 
 业务迁移样板入口：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/playback.yaml
 ```
 
 ## 14. 老业务能力样板映射

@@ -41,7 +41,7 @@ App 启动时优先读取 bundle 内的 `AppConfig.json`，找不到时读取
 ```bash
 # 在项目根目录执行
 uv run audio-chat.config.sync \
-  --output-dir app-examples/basic-app/config/generated \
+  --output-dir app-examples/for-blind-app/config/generated \
   --server-url http://127.0.0.1:8765 \
   --user-id user-endpoint-001
 ```
@@ -49,7 +49,7 @@ uv run audio-chat.config.sync \
 然后把生成的 iOS 配置覆盖到 App 资源目录：
 
 ```bash
-cp app-examples/basic-app/config/generated/ios-phone.local.json \
+cp app-examples/for-blind-app/config/generated/ios-phone.local.json \
   device-examples/native-ios-phone/AudioChatPhone/Resources/AppConfig.json
 ```
 
@@ -75,7 +75,7 @@ properties。ESP32 端配置该地址后，可按 `audio_chat.direct_frame.v1` �
 uv run audio-chat.config.sync \
   --auth-mode signed_token \
   --signed-token '<pairing-service-generated-token>' \
-  --output-dir app-examples/basic-app/config/generated
+  --output-dir app-examples/for-blind-app/config/generated
 ```
 
 如果只传 `--auth-mode signed_token` 而不传 `--signed-token`，生成配置会保留
@@ -85,7 +85,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
 ```
 
 确认 server 可访问：

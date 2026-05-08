@@ -136,6 +136,52 @@
     const BARGE_IN_REQUIRED_FRAMES = 8;
     const BARGE_IN_MAX_PEAK = 0.72;
     const BARGE_IN_COOLDOWN_MS = 1800;
+    const DEVICE_SUPPORTS = [
+      {
+        id: "sensor.mic",
+        modes: ["continuous"],
+        sample_rate_hz: 48000,
+        channels: 1,
+        frequency_hz: 50,
+        duration_seconds: 0,
+        codecs: ["pcm16le"],
+        options: {
+          aec: "browser_webrtc",
+          noise_suppression: "browser_webrtc",
+          wake: "manual",
+        },
+      },
+      {
+        id: "sensor.rgb",
+        modes: ["single", "continuous"],
+        formats: ["jpeg"],
+        frequency_hz: 1,
+        sample_count: 1,
+        duration_seconds: 0,
+        width: RGB_CAPTURE_MAX_WIDTH,
+        height: RGB_CAPTURE_MAX_HEIGHT,
+        options: {facing: "environment"},
+      },
+      {
+        id: "actuator.speaker",
+        codecs: ["pcm16le"],
+        sample_rates_hz: [16000, 24000],
+        channels: 1,
+      },
+      {
+        id: "actuator.haptic",
+        commands: ["vibrate"],
+      },
+    ];
+    const DEBUG_EVENT_SUBSCRIPTIONS = [
+      {event: "control.*"},
+      {event: "stream.*"},
+      {event: "agent.*"},
+      {event: "tool.*"},
+      {event: "task.*"},
+      {event: "memory.*"},
+      {event: "system.*"},
+    ];
     const logEl = document.getElementById("log");
     const broadcastLogEl = document.getElementById("broadcastLog");
     const runtimeLogTab = document.getElementById("runtimeLogTab");
@@ -610,6 +656,27 @@
       }, {session_id: currentDeviceId()}));
     }
 
+    function buildRegistrationPayload(deviceId) {
+      return {
+        device_id: deviceId,
+        name: document.getElementById("deviceName").value || "浏览器调试设备",
+        device_name: "browser-glass",
+        client_type: "browser-glass",
+        sdk_version: "audio-chat-browser-glass-0.1.0",
+        auth: {mode: "disabled"},
+        supports: DEVICE_SUPPORTS,
+        subscriptions: DEBUG_EVENT_SUBSCRIPTIONS,
+        properties: {
+          "audio.aec": "browser_webrtc",
+          "audio.input.sample_rate": INPUT_RATE,
+          "audio.input.chunk_ms": DEFAULT_CHUNK_MS,
+          "camera.facing": "environment",
+          "debug.manual_events": true,
+          "debug.file_upload": true,
+        },
+      };
+    }
+
     async function connect() {
       const deviceId = document.getElementById("deviceId").value;
       const controlUrl = wsUrl("/ws/control");
@@ -631,35 +698,7 @@
           reject(new Error("control websocket error"));
         };
       });
-      sendEvent(event("control.device.register.requested", {
-        device_id: deviceId,
-        name: document.getElementById("deviceName").value || "浏览器调试设备",
-        device_name: "browser-glass",
-        client_type: "browser-glass",
-        sdk_version: "audio-chat-browser-glass-0.1.0",
-        auth: {mode: "disabled"},
-        subscriptions: [
-          {event: "control.*"},
-          {event: "stream.*"},
-          {event: "agent.*"},
-          {event: "tool.*"},
-          {event: "task.*"},
-          {event: "memory.*"},
-          {event: "system.*"},
-          {event: "control.audio_session.*"},
-          {event: "stream.output.*", filter: {stream_type: "actuator.speaker"}},
-          {event: "stream.output.*", filter: {stream_type: "actuator.haptic"}},
-          {event: "stream.control.*", filter: {stream_type: "sensor.rgb"}},
-        ],
-        properties: {
-          "audio.aec": "browser_webrtc",
-          "audio.input.sample_rate": INPUT_RATE,
-          "audio.input.chunk_ms": DEFAULT_CHUNK_MS,
-          "camera.facing": "environment",
-          "debug.manual_events": true,
-          "debug.file_upload": true,
-        },
-      }));
+      sendEvent(event("control.device.register.requested", buildRegistrationPayload(deviceId)));
     }
 
     function startHeartbeat() {

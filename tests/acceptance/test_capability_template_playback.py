@@ -8,7 +8,7 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
 
 
-class BasicAppPlaybackEndpoint:
+class ForBlindAppPlaybackEndpoint:
     """测试用端侧回放端点。
 
     主要功能：模拟具备 `sensor.rgb` 上传和 `actuator.speaker` 消费能力的端侧设备。
@@ -65,7 +65,7 @@ class BasicAppPlaybackEndpoint:
                     stream_id=handle.stream_id,
                     stream_type="sensor.rgb",
                     seq=seq,
-                    payload=b"\xff\xd8basic-app-frame-%d\xff\xd9" % seq,
+                    payload=b"\xff\xd8for-blind-app-frame-%d\xff\xd9" % seq,
                     codec="jpeg",
                     sample_rate=1,
                     channels=1,
@@ -77,7 +77,7 @@ class BasicAppPlaybackEndpoint:
         self.app.stream_service.close_stream(handle.stream_id, reason="fixture_upload_done")
 
 
-def register_basic_endpoint(app: AudioChatApp, endpoint: BasicAppPlaybackEndpoint) -> None:
+def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlaybackEndpoint) -> None:
     response = app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -86,7 +86,7 @@ def register_basic_endpoint(app: AudioChatApp, endpoint: BasicAppPlaybackEndpoin
             payload={
                 "device_id": endpoint.device_id,
                 "device_name": endpoint.device_id,
-                "client_type": "basic-app-playback",
+                "client_type": "for-blind-app-playback",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
                 "subscriptions": [
@@ -100,8 +100,8 @@ def register_basic_endpoint(app: AudioChatApp, endpoint: BasicAppPlaybackEndpoin
     assert response.event_name == "control.device.registered"
 
 
-def build_basic_app(tmp_path, monkeypatch) -> AudioChatApp:
-    fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "basic_app"
+def build_for_blind_app(tmp_path, monkeypatch) -> AudioChatApp:
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "for_blind_app"
     for name in list(__import__("sys").modules):
         if name == "capabilities" or name.startswith("capabilities."):
             __import__("sys").modules.pop(name, None)
@@ -121,24 +121,24 @@ def build_basic_app(tmp_path, monkeypatch) -> AudioChatApp:
     )
 
 
-def test_basic_app_tool_and_task_playback_writes_explainable_artifacts(tmp_path, monkeypatch) -> None:
+def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_path, monkeypatch) -> None:
     """测试目标：验证“新增能力 -> 自动发现 -> 设备回放 -> 产物可检查”的闭环。
 
-    测试方法：启动测试 basic app，注册回放端点，依次调用 `capture_photo` Tool、
+    测试方法：启动测试 for-blind app，注册回放端点，依次调用 `capture_photo` Tool、
     `timer` Task 和 `continuous_rgb_analyze` Task。
     预期结果：能力无需修改 SDK 内部代码即可执行，runs 目录写入事件、stream、asset、
     tool、task、output 和 result 产物。
     """
 
-    app = build_basic_app(tmp_path, monkeypatch)
-    endpoint = BasicAppPlaybackEndpoint(app=app, user_id="user-basic", device_id="dev-basic")
-    register_basic_endpoint(app, endpoint)
-    session_id = app.active_session_id("user-basic")
+    app = build_for_blind_app(tmp_path, monkeypatch)
+    endpoint = ForBlindAppPlaybackEndpoint(app=app, user_id="user-for-blind", device_id="dev-for-blind")
+    register_for_blind_endpoint(app, endpoint)
+    session_id = app.active_session_id("user-for-blind")
 
     capture = asyncio.run(
         app.tool_gateway.call(
             name="capture_photo",
-            user_id="user-basic",
+            user_id="user-for-blind",
             session_id=session_id,
             input_data={"reason": "acceptance"},
         )
@@ -146,7 +146,7 @@ def test_basic_app_tool_and_task_playback_writes_explainable_artifacts(tmp_path,
     timer_ref = asyncio.run(
         app.task_engine.create(
             task_type="timer",
-            user_id="user-basic",
+            user_id="user-for-blind",
             session_id=session_id,
             input_data={"seconds": 1},
         )
@@ -154,7 +154,7 @@ def test_basic_app_tool_and_task_playback_writes_explainable_artifacts(tmp_path,
     rgb_ref = asyncio.run(
         app.task_engine.create(
             task_type="continuous_rgb_analyze",
-            user_id="user-basic",
+            user_id="user-for-blind",
             session_id=session_id,
             input_data={"frame_limit": 2, "timeout_seconds": 1},
         )
@@ -170,11 +170,11 @@ def test_basic_app_tool_and_task_playback_writes_explainable_artifacts(tmp_path,
         ],
         "endpoint_received_events": [event.event_name for event in endpoint.events],
         "output_chunk_count": len(endpoint.output_chunks),
-        "asset_count": len(app.asset_service.query_assets(user_id="user-basic", stream_type="sensor.rgb")),
+        "asset_count": len(app.asset_service.query_assets(user_id="user-for-blind", stream_type="sensor.rgb")),
     }
     app.recorder.write_result(session_id, result)
 
-    session_dir = tmp_path / "runs" / "sessions" / session_id
+    session_dir = app.recorder.session_dir(session_id, user_id="user-for-blind")
     required = [
         "events.jsonl",
         "stream-events.jsonl",

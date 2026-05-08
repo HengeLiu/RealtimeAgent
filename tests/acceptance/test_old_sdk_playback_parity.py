@@ -9,7 +9,7 @@ from audio_chat_python_glass.playback import run_playback
 def test_old_sdk_parity_playback_runs_tool_task_and_timer_scenarios(tmp_path: Path) -> None:
     """测试目标：验证设备级回放能覆盖老 SDK 常用的抓拍、连续视觉和计时器输出场景。
 
-    测试方法：加载 basic-app 能力样板，使用 in-process playback 注册一台通用设备，
+    测试方法：加载 for-blind-app 能力样板，使用 in-process playback 注册一台通用设备，
     依次调用 `capture_photo` Tool、`continuous_rgb_analyze` Task 和 `timer` Task。
     预期结果：回放通过事件和 stream 写入资产与播放产物，并生成可解释的标准文件。
     """
@@ -20,7 +20,7 @@ def test_old_sdk_parity_playback_runs_tool_task_and_timer_scenarios(tmp_path: Pa
             "mode": "in_process",
             "runs_root": str(tmp_path / "runs"),
             "asset_root": str(tmp_path / "assets"),
-            "app_root": str(audio_chat_root / "tests" / "fixtures" / "basic_app"),
+            "app_root": str(audio_chat_root / "tests" / "fixtures" / "for_blind_app"),
             "user_id": "user-old-sdk-parity",
             "device_id": "dev-old-sdk-parity-playback",
             "scenario": {
@@ -56,7 +56,7 @@ def test_old_sdk_parity_playback_runs_tool_task_and_timer_scenarios(tmp_path: Pa
     assert result["task_event_count"] > 0
     assert result["actuator_event_count"] > 0
 
-    session_dir = tmp_path / "runs" / "sessions" / result["session_id"]
+    session_dir = Path(result["artifacts"]["result.json"]).parent
     required = [
         "events.jsonl",
         "stream-events.jsonl",
@@ -118,7 +118,7 @@ def test_old_sdk_parity_playback_supports_depth_imu_heading_and_location(tmp_pat
     )
 
     assert result["passed"] is True, result["assertions"]
-    session_dir = tmp_path / "runs" / "sessions" / result["session_id"]
+    session_dir = Path(result["artifacts"]["result.json"]).parent
     assets_text = (session_dir / "assets.jsonl").read_text(encoding="utf-8")
     assert "sensor.depth" in assets_text
     assert "sensor.imu" in assets_text

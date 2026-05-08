@@ -435,7 +435,7 @@ uv run python -m pytest tests/integration/test_dashscope_providers.py -q
 device-examples/python-glass/
 device-examples/python-phone/
 device-examples/browser-glass/
-app-examples/basic-app/
+app-examples/for-blind-app/
 audio-chat-sdk/audio_chat/server.py
 audio-chat-sdk/audio_chat/preflight.py
 tests/test_network_server_playback.py

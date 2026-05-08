@@ -356,7 +356,7 @@ uv run audio-chat.device.sim \
 兼容 CLI：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 uv run python -m audio_chat_python_phone_mock --config device-examples/python-device-sim/scenarios/vision-task.yaml
 ```
 
@@ -368,7 +368,7 @@ uv run python -m audio_chat_python_phone_mock --config device-examples/python-de
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
 uv run audio-chat.device.sim \
   --config device-examples/python-device-sim/scenarios/audio-playback.yaml
 ```

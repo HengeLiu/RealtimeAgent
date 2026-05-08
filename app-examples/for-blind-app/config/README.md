@@ -2,7 +2,7 @@
 
 业务 app-root 的配置应以 YAML 为主、环境变量覆盖为辅。最小配置可复制：
 
-- `app-examples/basic-app/server.yaml`
+- `app-examples/for-blind-app/server.yaml`
 
 本地同步使用：
 

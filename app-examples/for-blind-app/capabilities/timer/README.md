@@ -11,7 +11,7 @@ audio-chat 迁移路径：
 
 参考：
 
-- `app-examples/basic-app/capabilities/timer/task.py`
+- `app-examples/for-blind-app/capabilities/timer/task.py`
 - `app-examples/for-blind-app/templates/notification_task/task.py`
 
 验收要求：

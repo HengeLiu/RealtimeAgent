@@ -97,8 +97,8 @@ def live_check(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.dev.live-check", description="检查 audio-chat 本地联调状态")
-    parser.add_argument("--config", default="app-examples/basic-app/server.yaml")
-    parser.add_argument("--generated-dir", default="app-examples/basic-app/config/generated")
+    parser.add_argument("--config", default="app-examples/for-blind-app/server.yaml")
+    parser.add_argument("--generated-dir", default="app-examples/for-blind-app/config/generated")
     parser.add_argument("--report", default="runs/audio-chat/live-check.json")
     args = parser.parse_args(argv)
 
@@ -463,6 +463,8 @@ def _audio_pipeline_check(config: AudioChatYamlConfig) -> dict:
     elif audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"}:
         processors.append("quality_vad_probe")
         degradations.append("audio_pipeline.vad is diagnostic only; Agent/provider still owns turn boundary")
+    elif audio.vad == "provider":
+        degradations.append("audio_pipeline.vad delegated to realtime provider")
     else:
         errors.append(f"unsupported audio_pipeline.vad: {audio.vad}")
     if audio.resample in {"auto", "enabled", "server"}:
@@ -485,7 +487,13 @@ def _audio_pipeline_check(config: AudioChatYamlConfig) -> dict:
         "volume_probe": {"enabled": bool(audio.volume_normalize), "changes_audio": False},
         "vad": {
             "mode": audio.vad,
-            "status": "diagnostic" if audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"} else "disabled",
+            "status": (
+                "diagnostic"
+                if audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"}
+                else "provider"
+                if audio.vad == "provider"
+                else "disabled"
+            ),
             "owns_turn_boundary": False,
         },
         "degradations": degradations,
@@ -550,7 +558,7 @@ def _recent_playback_observation() -> dict:
         **result,
         "ok": True,
         "observed": False,
-        "action": "运行一次 playback: uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml",
+        "action": "运行一次 playback: uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml",
     }
 
 
@@ -613,7 +621,7 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Au
             "generated_dir": str(generated_dir),
             "missing": missing,
             "errors": [f"missing generated endpoint config: {', '.join(missing)}"],
-            "action": "先运行 audio-chat.config.sync --output-dir app-examples/basic-app/config/generated",
+            "action": "先运行 audio-chat.config.sync --output-dir app-examples/for-blind-app/config/generated",
         }
 
     user_ids: set[str] = set()

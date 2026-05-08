@@ -32,14 +32,14 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 
 ```bash
 uv run audio-chat.dev.preflight --report runs/audio-chat/preflight-phase25.json
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
 
 接真机时应使用 server YAML 配置作为入口，并把日志级别调到 DEBUG：
 
 ```bash
 LOG_LEVEL=DEBUG uv run audio-chat.server.run \
-  --config app-examples/basic-app/server.yaml
+  --config app-examples/for-blind-app/server.yaml
 ```
 
 如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、TextAgentCore 和 Output Service，不允许回退到旧 `MediaFrame` 公开协议。

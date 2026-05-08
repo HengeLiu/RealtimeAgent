@@ -63,7 +63,7 @@ uv run python -m audio_chat_python_phone_mock --config device-examples/python-ph
 终端 1：
 
 ```bash
-uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
+uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
 ```
 
 终端 2：

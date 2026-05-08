@@ -52,7 +52,7 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "run",
                 "audio-chat.dev.preflight",
                 "--config",
-                "app-examples/basic-app/server.yaml",
+                "app-examples/for-blind-app/server.yaml",
                 "--report",
                 "runs/acceptance/p0-preflight.json",
             ),
@@ -136,7 +136,7 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
         ),
         CheckCommand(
             "playback_cli_config",
-            ("uv", "run", "audio-chat.playback.glass", "--config", "app-examples/basic-app/host/glass-playback/sdk-playback.yaml"),
+            ("uv", "run", "audio-chat.playback.glass", "--config", "app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml"),
         ),
     ),
     "docs-contract": (
@@ -367,7 +367,7 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
         ),
         CheckCommand(
             "old_sdk_parity_playback_cli",
-            ("uv", "run", "audio-chat.playback.glass", "--config", "app-examples/basic-app/host/glass-playback/old-sdk-parity.yaml"),
+            ("uv", "run", "audio-chat.playback.glass", "--config", "app-examples/for-blind-app/host/glass-playback/old-sdk-parity.yaml"),
         ),
     ),
     "old-sdk-parity-api": (
@@ -420,7 +420,7 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "run",
                 "audio-chat.dev.live-check",
                 "--config",
-                "app-examples/basic-app/server.yaml",
+                "app-examples/for-blind-app/server.yaml",
                 "--generated-dir",
                 "runs/acceptance/old-sdk-parity-cli-generated",
                 "--report",
@@ -551,7 +551,7 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "run",
                 "audio-chat.dev.preflight",
                 "--config",
-                "app-examples/basic-app/server.yaml",
+                "app-examples/for-blind-app/server.yaml",
                 "--report",
                 "runs/acceptance/old-sdk-parity-provider-preflight.json",
             ),
@@ -596,13 +596,13 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
         CheckCommand(
-            "old_sdk_parity_release_basic_app_playback",
+            "old_sdk_parity_release_for_blind_app_playback",
             (
                 "uv",
                 "run",
                 "audio-chat.playback.glass",
                 "--config",
-                "app-examples/basic-app/host/glass-playback/playback.yaml",
+                "app-examples/for-blind-app/host/glass-playback/playback.yaml",
             ),
         ),
         CheckCommand(

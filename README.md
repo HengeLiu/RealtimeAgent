@@ -22,13 +22,7 @@ uv pip install -e .
 
 如果 `uv run audio-chat.*` 找不到命令，重新执行 editable 安装。
 
-启动基础应用 server：
-
-```bash
-uv run audio-chat.server.run --app-name basic-app
-```
-
-启动盲人眼镜业务样例 server：
+启动统一示例应用 server：
 
 ```bash
 uv run audio-chat.server.run --app-name for-blind-app
@@ -69,8 +63,11 @@ uv run python -m audio_chat_python_phone_mock --config device-examples/python-ph
 Python glass playback：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
+
+发布候选版本当前为 `0.1.0rc1`。发布前使用 `audio-chat.sdk.package-check` 和
+`old-sdk-parity-release` 验收，确认统一示例应用、包边界、文档和旧 SDK 等价回放仍然一致。
 
 使用录制音频驱动 playback：
 
@@ -392,7 +389,7 @@ app-examples/<your-app>/
 
 业务样例：
 
-- `app-examples/basic-app`：最小 Tool / Task / playback 样板。
+- `app-examples/for-blind-app`：最小 Tool / Task / playback 样板。
 - `app-examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器迁移版本。
 - `app-examples/for-blind-app/templates`：新能力开发模板。
 
@@ -426,13 +423,13 @@ uv run audio-chat.device.validate device-examples/browser-glass/device.audio-cha
 生成本地联调配置：
 
 ```bash
-uv run audio-chat.config.sync --app-root app-examples/basic-app
+uv run audio-chat.config.sync --app-root app-examples/for-blind-app
 ```
 
 预检：
 
 ```bash
-uv run audio-chat.dev.preflight --config app-examples/basic-app/server.yaml
+uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
 ```
 
 发布包检查：

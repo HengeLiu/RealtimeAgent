@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=./server.schema.json
+app-name: "for-blind-app"
 
 server:
   host: "0.0.0.0"
@@ -11,6 +12,15 @@ server:
 auth:
   mode: "disabled"
   device_tokens: {}
+  signed_token_secret_env: "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
+  token_clock_skew_seconds: 60
+
+user:
+  active_device_set_policy: "single"
+  message_store:
+    type: "jsonl"
+    root: "runs/audio-chat/for-blind-app/users"
+  recent_message_limit: 200
 
 control:
   transport: "websocket"
@@ -35,6 +45,10 @@ stream:
     sample_rate: 24000
     channels: 1
     chunk_ms: 20
+  sensors:
+    rgb_ttl_seconds: 30
+    depth_ttl_seconds: 10
+    imu_ttl_seconds: 10
 
 audio_pipeline:
   aec: "endpoint_only"
@@ -47,7 +61,7 @@ audio_pipeline:
 
 asset:
   store_type: "filesystem"
-  root: "runs/audio-chat/assets"
+  root: "runs/audio-chat/for-blind-app/assets"
   max_asset_bytes: 10485760
   default_ttl_seconds: 60
   request_timeout_seconds: 5
@@ -86,19 +100,41 @@ output:
 
 tools:
   enabled: true
+  builtin_enabled: true
+  discover:
+    enabled: true
+    packages: []
+    recursive: true
+    fail_fast: true
+  allowlist: []
+  denylist: []
+  default_timeout_seconds: 30
+  allow_parallel_calls: true
 
 tasks:
-  enabled: false
+  enabled: true
+  discover:
+    enabled: true
+    packages: []
+    recursive: true
+    fail_fast: true
+  max_running_per_user: 16
 
 memory:
   enabled: true
   store_type: "jsonl"
+  path: "runs/audio-chat/for-blind-app/memory"
 
 skill:
   enabled: false
+  roots:
+    - "app-examples/for-blind-app/skills"
+  allow_tool_policy: true
 
 mcp:
-  enabled: false
+  enabled: true
+  config_path: "app-examples/for-blind-app/config/mcp.yaml"
+  default_timeout_seconds: 30
 
 endpoint_defaults:
   wake_word: "browser"
@@ -110,7 +146,7 @@ endpoint_defaults:
         stream_type: "actuator.speaker"
 
 observability:
-  runs_root: "runs/audio-chat"
+  runs_root: "runs/audio-chat/for-blind-app"
   record_input_streams: true
   record_output_streams: true
   record_model_events: true
@@ -118,3 +154,11 @@ observability:
   record_stream_events: true
   max_debug_sessions: 100
   retention_days: 7
+
+dev_checks:
+  run_contract_tests: true
+  run_package_check: true
+  run_boundary_check: true
+  contract_tests_path: "testdata/contracts"
+  require_recent_playback_ok: false
+  report_path: "runs/audio-chat/for-blind-app/preflight.json"

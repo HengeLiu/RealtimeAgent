@@ -11,7 +11,7 @@ from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoi
 from audio_chat.server import AudioChatHttpServer
 
 
-BASIC_APP_ROOT = Path(__file__).resolve().parents[1] / "app-examples" / "basic-app"
+FOR_BLIND_APP_ROOT = Path(__file__).resolve().parents[1] / "app-examples" / "for-blind-app"
 
 
 def test_python_phone_mock_discovers_builtin_vision_task_handlers() -> None:
@@ -30,15 +30,15 @@ def test_python_phone_mock_discovers_builtin_vision_task_handlers() -> None:
 def test_python_phone_mock_executes_find_object_and_traffic_light_tasks(tmp_path: Path) -> None:
     """测试目标：验证 phone mock 可作为独立设备执行视觉任务。
 
-    测试方法：启动真实 aiohttp server，注册 Python phone mock，然后通过 basic-app
+    测试方法：启动真实 aiohttp server，注册 Python phone mock，然后通过 for-blind-app
     TaskEngine 创建 `find_object_phone_task` 和 `traffic_light_phone_task`。
     预期结果：phone mock 收到 command 事件、上传 RGB stream、上报 completed，两个
     server 侧任务都进入 completed。
     """
 
     async def run() -> None:
-        if str(BASIC_APP_ROOT) not in sys.path:
-            sys.path.insert(0, str(BASIC_APP_ROOT))
+        sys.path = [path for path in sys.path if path != str(FOR_BLIND_APP_ROOT)]
+        sys.path.insert(0, str(FOR_BLIND_APP_ROOT))
         for name in list(sys.modules):
             if name == "capabilities" or name.startswith("capabilities."):
                 sys.modules.pop(name, None)

@@ -11,7 +11,7 @@
 1. TextAgentCore 内部 `AsrPipeline` provider adapter：`DashScopeAsrProviderAdapter` 使用 `dashscope.audio.asr.Recognition`，支持真实 PCM chunk 输入、transcript delta 和 final transcript。
 2. TextAgentCore 内部 `TextModelAdapter`：支持 `mock`、`openai-compatible`、`dashscope-compatible` 流式 text delta。
 3. Output Service 内部 Streaming TTS：`DashScopeStreamingTTS` 使用 `dashscope.audio.tts_v2.SpeechSynthesizer`，`assistant_text.delta` 实时进入 TTS，生成 `assistant_audio.delta`。
-4. 完整 YAML 配置加载：新增 `app-examples/basic-app/server.yaml` 和 `playback.yaml`，覆盖文档第 15 章的主要配置段，并支持环境变量覆盖。
+4. 完整 YAML 配置加载：新增 `app-examples/for-blind-app/server.yaml` 和 `playback.yaml`，覆盖文档第 15 章的主要配置段，并支持环境变量覆盖。
 5. `UserDeviceContext` 协议原生 API：Tool / Task 通过 `publish_event()`、`request_asset()`、`watch_assets()`、`submit_text()`、`submit_audio()` 和 `open_output_stream()` 表达业务意图，不面向设备实例编程。
 6. Asset Service 补强：`request_asset()` 支持 pending request、timeout、等待端侧上传、TTL、producer device_id 记录和最小 window 缓存；`watch_assets()` 支持按 `stream_type + correlation_id` 连续读取资产。
 7. Playback Arbiter 补强：覆盖 queue TTL、同优先级不抢占、interrupt、drop/requeue，以及 queued intent 继续播放路径。
@@ -33,7 +33,7 @@ Phase 2.5 新增完成项：
 mock playback 配置：
 
 ```text
-app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
 
 关键字段：
@@ -54,7 +54,7 @@ tts_voice: mock
 server YAML 配置：
 
 ```text
-app-examples/basic-app/server.yaml
+app-examples/for-blind-app/server.yaml
 ```
 
 真实 provider adapter 状态：
@@ -112,7 +112,7 @@ DASHSCOPE_API_KEY=... uv run python -m pytest tests/integration -q -rs
 命令：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
 ```
 
 结果：
@@ -199,14 +199,14 @@ Phase 2.5 的 provider、stream 格式、Asset request_id、playback 和 preflig
 2. `QwenOmniRealtimeAdapter` 按 16 kHz PCM 输入、24 kHz PCM 输出配置 DashScope Omni Realtime，并监听 `response.audio.delta`、`response.audio.done`、transcript、done 和 error 事件。
 3. Output Service 新增原生音频入口 `on_assistant_audio_delta(...)`，Omni audio delta 不经过 TTS，首包到达时打开 `actuator.speaker` output stream。
 4. `browser-glass` 持续上传 16 kHz PCM16 20ms chunk；页面没有“提交本轮”按钮，也不依赖 `final:true` 触发回复。
-5. 新增 `app-examples/basic-app/server-omni.yaml`，用于显式启动 realtime audio 链路。
+5. 新增 `app-examples/for-blind-app/server-omni.yaml`，用于显式启动 realtime audio 链路。
 6. 单元测试用 fake Omni adapter 覆盖：append audio 不要求 final、audio delta 打开 speaker stream、audio done 关闭 output stream、用户 interrupt 调用 provider cancel 并取消当前播放。
 7. 根据真实联调日志修正 Qwen Omni 默认音色：`Chelsie` 会被 DashScope 返回 `Voice 'Chelsie' is not supported.`，当前示例和默认配置改为旧实验验证过的 `Tina`。
 8. Realtime provider 失败后，同一 session 后续 mic chunk 不再继续 append，避免页面每 20ms 刷 `Connection is already closed.`。
 
 待真实验收：
 
-1. 使用 `DASHSCOPE_API_KEY` 启动 `audio-chat.server.run --config app-examples/basic-app/server-omni.yaml`。
+1. 使用 `DASHSCOPE_API_KEY` 启动 `audio-chat.server.run --config app-examples/for-blind-app/server-omni.yaml`。
 2. 直接打开 `device-examples/browser-glass/index.html` 完成注册、唤醒、持续说话和播放；如从 `file://` 打开，通过 query 参数指定 `server_url=http://127.0.0.1:8765`。
 3. 确认 runs 中出现 `omni.*` provider 事件、`assistant_audio.delta`、输入输出 stream 产物。
 4. 观察播放期间继续说话时，浏览器 AEC 是否避免明显回灌。

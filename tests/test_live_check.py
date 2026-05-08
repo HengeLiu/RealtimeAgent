@@ -19,7 +19,7 @@ def _free_port() -> int:
 
 
 def _write_server_config(path: Path, *, port: int) -> None:
-    data = yaml.safe_load((AUDIO_ROOT / "app-examples/basic-app/server.yaml").read_text(encoding="utf-8"))
+    data = yaml.safe_load((AUDIO_ROOT / "app-examples/for-blind-app/server.yaml").read_text(encoding="utf-8"))
     data["server"]["host"] = "127.0.0.1"
     data["server"]["port"] = port
     data["server"]["public_url"] = f"http://127.0.0.1:{port}"

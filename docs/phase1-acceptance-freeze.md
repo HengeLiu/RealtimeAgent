@@ -50,7 +50,7 @@ git diff --check
 配置文件：
 
 ```text
-app-examples/basic-app/host/glass-playback/sdk-playback.json
+app-examples/for-blind-app/host/glass-playback/sdk-playback.json
 ```
 
 关键配置：
@@ -66,7 +66,7 @@ app-examples/basic-app/host/glass-playback/sdk-playback.json
 运行命令：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.json
+uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.json
 ```
 
 结果：

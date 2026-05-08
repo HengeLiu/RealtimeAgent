@@ -21,9 +21,9 @@ def sync(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.config.sync", description="同步 audio-chat 本地开发配置")
-    parser.add_argument("--app-root", default="app-examples/basic-app", help="业务应用根目录")
-    parser.add_argument("--server-config", default="app-examples/basic-app/server.yaml", help="源 server YAML")
-    parser.add_argument("--playback-config", default="app-examples/basic-app/host/glass-playback/sdk-playback.yaml", help="源 playback YAML")
+    parser.add_argument("--app-root", default="app-examples/for-blind-app", help="业务应用根目录")
+    parser.add_argument("--server-config", default="app-examples/for-blind-app/server.yaml", help="源 server YAML")
+    parser.add_argument("--playback-config", default="app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml", help="源 playback YAML")
     parser.add_argument("--server-url", default="http://127.0.0.1:8765", help="各参考端侧使用的 server URL")
     parser.add_argument("--user-id", default="user-playback-001", help="各参考端侧使用的 user_id")
     parser.add_argument(

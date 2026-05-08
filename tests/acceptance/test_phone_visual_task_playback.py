@@ -11,7 +11,7 @@ from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoi
 from audio_chat.server import AudioChatHttpServer
 
 
-BASIC_APP_ROOT = Path(__file__).resolve().parents[2] / "app-examples" / "basic-app"
+FOR_BLIND_APP_ROOT = Path(__file__).resolve().parents[2] / "app-examples" / "for-blind-app"
 
 
 def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Path) -> None:
@@ -25,8 +25,8 @@ def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Pat
     """
 
     async def run() -> None:
-        if str(BASIC_APP_ROOT) not in sys.path:
-            sys.path.insert(0, str(BASIC_APP_ROOT))
+        sys.path = [path for path in sys.path if path != str(FOR_BLIND_APP_ROOT)]
+        sys.path.insert(0, str(FOR_BLIND_APP_ROOT))
         for name in list(sys.modules):
             if name == "capabilities" or name.startswith("capabilities."):
                 sys.modules.pop(name, None)
@@ -92,7 +92,13 @@ def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Pat
         control_payload_text = "\n".join(event.to_dict()["payload"].__repr__() for event in endpoint.sent_events)
         assert "image_base64" not in control_payload_text
         assert "raw_bytes" not in control_payload_text
-        task_events = (tmp_path / "runs/sessions/sess-accept-phone/task-events.jsonl").read_text(encoding="utf-8")
+        session_task_events = (
+            app.recorder.session_dir("sess-accept-phone", user_id="user-accept-phone") / "task-events.jsonl"
+        ).read_text(encoding="utf-8")
+        device_task_events = (
+            app.recorder.session_dir("dev-accept-phone", user_id="user-accept-phone") / "task-events.jsonl"
+        ).read_text(encoding="utf-8")
+        task_events = session_task_events + device_task_events
         assert "phone_task.started" in task_events
         assert "phone_task.progress" in task_events
         assert "phone_task.completed" in task_events

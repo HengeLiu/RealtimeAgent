@@ -1,4 +1,13 @@
 tools:
+  - name: "demo.echo"
+    description: "最小 MCP mock tool，用于本地无外部服务验收。"
+    parameters:
+      type: object
+      properties:
+        text:
+          type: string
+    mock_result:
+      text: ok
   - name: "amap.route_plan"
     description: "本地 mock 高德路线规划，用于导航迁移验收。"
     mock_result:

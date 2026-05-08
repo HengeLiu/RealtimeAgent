@@ -55,7 +55,7 @@ def test_audio_pipeline_contract_exposes_processors_and_preflight_status(tmp_pat
             "run",
             "audio-chat.dev.preflight",
             "--config",
-            "app-examples/basic-app/server.yaml",
+            "app-examples/for-blind-app/server.yaml",
             "--report",
             str(report),
         ],
