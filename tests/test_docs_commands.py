@@ -3,9 +3,14 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+
+import yaml
+
+from audio_chat import AudioChatConfig
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[1]
@@ -123,3 +128,44 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
         "memory_skill",
         "endpoint_config",
     } <= names
+
+
+def test_for_blind_server_example_documents_text_model_route(tmp_path) -> None:
+    """测试目标：确认 for-blind-app 的示例配置能指导开发者启动 Text 大模型路线。
+
+    测试方法：读取 `server.yaml.example` 和配套 JSON Schema，检查 schema 引用、关键 provider
+    取值，并把示例复制为临时 `server.yaml` 后交给真实配置加载器解析。
+    预期结果：示例配置默认进入 text 路线，ASR / 文本模型 / TTS 都使用当前代码支持的真实 provider。
+    """
+
+    example = AUDIO_ROOT / "app-examples" / "for-blind-app" / "server.yaml.example"
+    schema = AUDIO_ROOT / "app-examples" / "for-blind-app" / "server.schema.json"
+
+    example_text = example.read_text(encoding="utf-8")
+    assert example_text.splitlines()[0] == "# yaml-language-server: $schema=./server.schema.json"
+
+    schema_data = json.loads(schema.read_text(encoding="utf-8"))
+    text_config_schema = schema_data["$defs"]["agentText"]["properties"]
+    assert text_config_schema["model_provider"]["enum"] == ["mock", "openai-compatible", "dashscope-compatible"]
+    assert text_config_schema["asr_provider"]["enum"] == ["mock", "dashscope"]
+    assert text_config_schema["tts_provider"]["enum"] == ["mock", "dashscope"]
+
+    data = yaml.safe_load(example_text)
+    assert data["agent"]["mode"] == "text"
+    assert data["agent"]["text"]["model_provider"] == "dashscope-compatible"
+    assert data["agent"]["text"]["model"]
+    assert data["agent"]["text"]["asr_provider"] == "dashscope"
+    assert data["agent"]["text"]["tts_provider"] == "dashscope"
+    assert data["agent"]["text"]["allow_mock_fallback"] is False
+
+    app_dir = tmp_path / "for-blind-app"
+    app_dir.mkdir()
+    shutil.copyfile(example, app_dir / "server.yaml")
+    config = AudioChatConfig.from_yaml(app_dir / "server.yaml")
+
+    assert config.agent_mode == "text"
+    assert config.text_model_provider == "dashscope-compatible"
+    assert config.text_model == data["agent"]["text"]["model"]
+    assert config.asr_provider == "dashscope"
+    assert config.tts_provider == "dashscope"
+    assert config.allow_mock_fallback is False
