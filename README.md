@@ -1,236 +1,237 @@
-# OpenAI Glasses Demo
+# audio-chat
 
-本项目现在按两个边界清晰的方向组织：
+`audio-chat` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
 
-1. [openaiglass-sdk](./openaiglass-sdk)：眼镜、手机、服务器三端开发框架，负责协议、统一模型、设备绑定、通讯、日志、异常处理、大模型运行时、Tool/Task/Skill、全局上下文、硬件能力抽象、回放测试和联调工具。
-2. [openaiglass-for-blind](./openaiglass-for-blind)：基于 SDK 的盲人 AI 眼镜真实场景工程，负责找物、红绿灯、导航、计时器等业务能力，以及业务侧三端宿主配置和功能文档。
+- `audio-chat-sdk/`：Python server SDK 源码，发布包名为 `audio-chat`，导入名为 `audio_chat`。
+- `app-examples/`：基于 SDK 的应用样例，新的业务应用从这里开始。
+- `device-examples/`：浏览器、Python、iOS、ESP32-S3 等参考端侧实现。端侧实现已经从 SDK 子目录中独立出来，体现 SDK 只承担 server-side 职责。
+- `docs/`：架构设计、迁移说明、联调和排障文档。
+- `testdata/`、`tests/`、`scripts/`：契约样例、自动化测试和验收脚本。
+- `legacy/`：旧 `openaiglass-sdk`、旧 `openaiglass-for-blind`、旧根目录文档和历史运行资产。它们只作为迁移参考，不再作为新开发入口。
 
-两个目录通过 [openaiglass-for-blind/SDK安装与能力开发指南.md](./openaiglass-for-blind/SDK安装与能力开发指南.md)、[SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md) 和 [openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md) 沟通。功能开发团队默认只改 `openaiglass-for-blind`，或者自行创建一个新的同级同结构目录； SDK 公开接口无法表达业务需求时，把问题提给 `openaiglass-sdk`，不要在业务迭代中补 SDK 层系统能力。
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备通过注册事件声明 `user_id`、`device_id`、订阅策略和属性；业务 Tool / Task 通过 `UserDeviceContext` 表达设备通讯意图；server 根据事件订阅和 stream 元数据完成路由。
 
 ## 快速开始
 
-本节面向功能开发者，不要求先理解三端架构。按下面流程完成本地配置、启动、验证后，就可以基于现有样板开始写业务能力。
-
-### 1. 准备环境
+准备环境：
 
 ```bash
 uv sync --python 3.11
-uv pip install -e openaiglass-sdk/server-python
+uv pip install -e .
 ```
 
-如果 `uv run openaiglass...` 提示找不到命令，重新执行一次 editable 安装命令。
+如果 `uv run audio-chat.*` 找不到命令，重新执行 editable 安装。
 
-### 2. 同步本机联调配置
+启动基础应用 server：
 
 ```bash
-uv run openaiglass.config.sync --app-root openaiglass-for-blind
+uv run audio-chat.server.run --app-name basic-app
 ```
 
-这一步会把当前开发机的局域网地址、服务端端口、眼镜设备号、手机设备号和配对令牌同步到业务侧配置文件。换网络、换端口、换设备号后都重新执行一次。
-
-### 3. 配置眼镜 WiFi
-
-真实 ESP32 眼镜需要先写入可连接的 WiFi 名称和密码。编辑业务侧眼镜配置文件：
+启动盲人眼镜业务样例 server：
 
 ```bash
-open openaiglass-for-blind/host/glass/config/local_build.env
+uv run audio-chat.server.run --app-name for-blind-app
 ```
 
-至少确认下面两项是真实 WiFi：
-
-```bash
-GLASS_WIFI_PRIMARY_SSID="你的WiFi名称"
-GLASS_WIFI_PRIMARY_PASSWORD="你的WiFi密码"
-```
-
-如果配置文件不存在，先从模板复制：
-
-```bash
-cp openaiglass-for-blind/host/glass/config/local_build.env.example \
-  openaiglass-for-blind/host/glass/config/local_build.env
-```
-
-**注意眼镜和手机必须处于同一个局域网下，如果你的服务器是本地开发环境，同样要确保在同一局域网下。**
-`openaiglass.config.sync` 会同步服务端地址、设备号和配对令牌，但不会替你猜测真实 WiFi 密码。换 WiFi 后要重新修改这两项，再重新烧录眼镜端。
-
-### 4. 启动服务端
-
-```bash
-uv run openaiglass.server.run \
-  --app-module host.server.main \
-  --app-root openaiglass-for-blind
-```
-
-看到服务端启动后，另开一个终端继续下一步。
-
-### 5. 启动手机端
-
-有真实 iPhone 时，用 Xcode 运行业务侧手机 App：
-
-```bash
-uv run openaiglass.phone.open --app-root openaiglass-for-blind
-```
-
-上面命令会打开业务侧工程：
-
-```text
-openaiglass-for-blind/host/phone/ios/GlassesVideoReceiver.xcodeproj
-```
-
-在 Xcode 中选择你的 iPhone 作为运行目标，按 `Run`。如果是第一次真机运行，先在 Xcode 里完成 Team、Bundle Identifier 和签名配置。不要打开 `openaiglass-sdk/phone-ios` 目录下的 SDK 工程作为业务入口。
-
-没有真实 iPhone 时，先用 `phone-mock` 完成服务端到手机任务的设备级闭环：
-
-```bash
-uv run openaiglass.phone.mock \
-  --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
-```
-
-### 6. 启动眼镜端
-
-有真实 ESP32 眼镜时，连接眼镜 USB 串口后执行：
-
-```bash
-uv run openaiglass.glass.start \
-  --app-root openaiglass-for-blind \
-  --sdk-root openaiglass-sdk \
-  --port '/dev/tty.usbmodem*'
-```
-
-这条命令会按业务侧 `host/glass/config/local_build.env` 写入的 WiFi、服务端地址、设备号和配对令牌构建、烧录并进入串口监看。只想编译不烧录时加 `--build-only`；只想看串口时加 `--monitor-only`。
-
-没有真实眼镜时，可以用 `glass-playback` 启动虚拟眼镜。先在 `openaiglass-for-blind/host/glass-playback/config/` 放一个回放配置 JSON，然后执行：
-
-```bash
-uv run openaiglass.glass.start \
-  --runtime playback \
-  --config <glass-playback.json> \
-  --sdk-root openaiglass-sdk
-```
-
-手机端和眼镜端都启动后，服务端应该能看到对应设备在线。
-
-### 7. 验证 SDK 和业务宿主
-
-```bash
-uv run openaiglass.sdk.preflight \
-  --report openaiglass-for-blind/logs/sdk-preflight-current.json
-```
-
-只想确认服务端是否活着，可以访问：
+常用调试接口：
 
 ```bash
 curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:8765/api/debug/devices
+curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-确认设备是否在线：
+## 启动参考设备
+
+浏览器设备：
 
 ```bash
-curl http://127.0.0.1:8765/api/runtime/devices
+uv run audio-chat.web.open --print-url
 ```
 
-### 8. SDK 功能快速验证
-
-下面几条只用于确认设备开发环境和 SDK 主链路可用，不代表真正业务功能已经完成。
-
-唤醒词暂时使用 ESP32 自带的“嗨，乐鑫”。当前每句话前都要说一次唤醒词。
-
-| 验证目标                 | 说法                               | 备注                                                                                            |
-| ------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| 简单对话测试             | “嗨，乐鑫，自我介绍一下”         | 目前相应较慢且不能打断播放过程，持续优化中                                                      |
-| 工具调用测试             | “嗨，乐鑫，看一下我眼前有什么”   | 会主动调用拍照工具从眼镜采集一张照片，目的是为了测试工具调用，不是真实功能的流程                |
-| 眼镜手机直连视频链路测试 | “嗨，乐鑫，帮我找一下手机在哪里” | 需要真实iPhone或者XCode中的模拟iPhone，并且保持App在前台运行，点击手机App上的完成按钮结束视频流 |
-
-如果服务端、手机端、眼镜端日志都能看到对应请求、工具调用或任务事件，说明 SDK 开发环境基本可用。以上测试未实现真正的业务功能，只用于设备开发环境可用性验证。
-
-### 9. 使用数据回放加速研发
-
-设备级数据回放是本 SDK 的核心特色之一。功能开发不必每次都依赖真实 ESP32 眼镜或真实 iPhone，可以用 `phone-mock` 模拟手机设备，用 `glass-playback` 模拟眼镜设备，并消费 `openaiglass-for-blind/testdata` 中准备好的音频、图片、视频和传感器样例，让服务端、Agent、Tool、Task、手机任务协议和眼镜执行器都跑在真实通信链路上。
-
-推荐研发闭环：
-
-1. 执行 `openaiglass.config.sync` 同步服务端、phone 和 glass-playback 的设备配置。
-2. 启动服务端，必要时设置 `LOG_LEVEL=DEBUG` 并把日志写入 `openaiglass-for-blind/logs/`。
-3. 如果能力需要手机端任务，先启动 `phone-mock` 或真实 iPhone。
-4. 使用 `glass-playback` 加载 `openaiglass-for-blind/host/glass-playback/config/*.json`，由配置中的 `trigger_audio`、`camera_capture`、`camera_stream`、`heading` 等输入驱动一次真实链路回放。
-5. 查看服务端日志、`phone-mock` 日志、`glass-playback` 日志、`runs/playback/.../events.jsonl`、`runs/playback/.../actuators.jsonl` 和业务产物，判断代码在真实样例数据上是否有效。
-
-例如“看前方”这类拍照链路可以使用当前已有配置启动回放：
+Python phone mock：
 
 ```bash
-uv run openaiglass.glass.start \
-  --runtime playback \
-  --config openaiglass-for-blind/host/glass-playback/config/look_look.json
+uv run audio-chat.phone.mock --config device-examples/python-phone/phone.mock.yaml
 ```
 
-这种回放不只是组件级 mock。它会像真实眼镜一样注册设备、等待语音会话、上传触发音频、响应抓拍或视频流命令，并记录服务端下发的播放、震动等执行器请求。单元测试通过后，建议再用数据回放确认真实链路行为，然后再进入真机联调。
-
-### 10. 开始功能开发
-
-新增能力优先复制一个现有样板：
-
-| 目标           | 建议参考                                                                                                                      |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 一次性工具能力 | [openaiglass-for-blind/capabilities/find_object/server/tool.py](./openaiglass-for-blind/capabilities/find_object/server/tool.py) |
-| 后台任务能力   | [openaiglass-for-blind/capabilities/timer/server/task.py](./openaiglass-for-blind/capabilities/timer/server/task.py)             |
-| 手机视觉任务   | [openaiglass-for-blind/capabilities/traffic_light](./openaiglass-for-blind/capabilities/traffic_light)                           |
-| 地图或外部服务 | [openaiglass-for-blind/capabilities/navigation](./openaiglass-for-blind/capabilities/navigation)                                 |
-
-功能代码放在 `openaiglass-for-blind/capabilities/<能力名>`。如果开发中发现 SDK 公开接口不够用，不要直接改 SDK 内部实现，先写入 [架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md)。
-
-## 目录概览
-
-| 目录                                                                    | 说明                                                                              |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| [openaiglass-sdk/server-python](./openaiglass-sdk/server-python)           | Python SDK 包源码，发布包名为 `openaiglasses-sdk`，导入名为 `openaiglasses`。 |
-| [openaiglass-sdk/phone-ios](./openaiglass-sdk/phone-ios)                   | iOS 通用手机运行时，负责注册、心跳、视频接收、手机任务承载和结果上报。            |
-| [openaiglass-sdk/glass-esp32](./openaiglass-sdk/glass-esp32)               | ESP32 通用眼镜运行时，负责 WiFi、控制连接、音频、摄像头和端侧命令。               |
-| [openaiglass-sdk/phone-mock](./openaiglass-sdk/phone-mock)                 | 按真实 phone 协议运行的 Python 虚拟手机设备。                                     |
-| [openaiglass-sdk/glass-playback](./openaiglass-sdk/glass-playback)         | 按真实 glass 协议运行的眼镜回放设备。                                             |
-| [openaiglass-for-blind/capabilities](./openaiglass-for-blind/capabilities) | 当前业务能力：`find_object`、`traffic_light`、`navigation`、`timer`。     |
-| [openaiglass-for-blind/host](./openaiglass-for-blind/host)                 | 盲人业务工程的服务端、手机端、眼镜端薄宿主和本地配置。                            |
-| [openaiglass-for-blind/docs](./openaiglass-for-blind/docs)                 | 当前状态、业务能力说明、真机联调、旧项目迁移分析和阻塞点文档。                    |
-
-## SDK 简要现状
-
-当前 SDK 已经能支撑功能团队继续开发：服务端可通过 `OpenAIGlassesSDK` 注册 `BaseTool`、`BaseTask`、`BasePhoneTask`、`BasePhoneProcessor`、`BaseSensorProvider`、MCP Adapter 和受控 Skill；`DeviceGroupContext` 提供设备查询、抓拍、手机视频链路、手机任务、通知、MCP 和 SDK 托管任务等公开入口；CLI 提供配置同步、服务端启动、手机工程打开/构建、`phone-mock`、眼镜构建/回放、预检和三端包检查。
-
-当前版本已补齐半双工语音主链路、全双工实时语音第一版、普通文本流式 TTS 和 TTS 预热、通知仲裁、账号级设备组织、最小 Skill Runtime、单机任务持久化、手机视频链路标准入口、回放断言以及 iOS/ESP32 源码包清单。仍需持续验证或后续补强的系统能力包括真实 AEC/VAD 效果、公网/NAT peer-link 治理、跨机器任务高可用、真实地图服务治理，以及 iOS/ESP32 二进制或组件仓库发布。详细判断见 [SDK对功能开发支持情况的说明.md](./SDK对功能开发支持情况的说明.md)。
-
-## 功能开发现状
-
-`openaiglass-for-blind` 已经基于 SDK 完成四类样板能力：
-
-| 能力              | 当前状态                                                                                                        |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| `find_object`   | 服务端 Tool/Task、手机处理器、手机任务和 iOS 插件样例已具备，可通过 SDK 标准视频链路启动找物流程并按手机检测事件完成任务。 |
-| `traffic_light` | 已有红绿灯识别 Tool/Task、手机侧处理器和任务样例。                                                              |
-| `navigation`    | 已有导航准备 Tool、导航 Task、业务侧 mock AMap MCP Adapter、POI/路线准备和事件推进样板。                        |
-| `timer`         | 已有计时器 Tool/Task，用 SDK 托管任务验证创建、查询、取消和完成通知。                                           |
-
-功能开发的详细入口见 [openaiglass-for-blind/SDK安装与能力开发指南.md](./openaiglass-for-blind/SDK安装与能力开发指南.md)，当前真实实现面见 [openaiglass-for-blind/docs/当前实现状态.md](./openaiglass-for-blind/docs/当前实现状态.md)。
-
-## 常用命令
+Python glass playback：
 
 ```bash
-uv sync --python 3.11
-uv pip install -e openaiglass-sdk/server-python
-
-uv run openaiglass.config.sync --app-root openaiglass-for-blind
-uv run openaiglass.server.run --app-module host.server.main --app-root openaiglass-for-blind
-uv run openaiglass.phone.mock --config openaiglass-for-blind/host/phone-mock/config/phone.mock.json
-uv run openaiglass.glass.start --runtime playback --config <glass-playback.json>
-uv run openaiglass.glass.start --runtime playback --config openaiglass-for-blind/host/glass-playback/config/look_look.json
-uv run openaiglass.sdk.preflight --report openaiglass-for-blind/logs/sdk-preflight-current.json
-uv run openaiglass.sdk.package-check --repo-root .
-uv run python -m pytest openaiglass-sdk/tests -q
+uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
-真实三端联调建议按“同步配置 -> 启动服务端 -> 启动手机或 `phone-mock` -> 启动 ESP32 眼镜或 `glass-playback` -> 触发业务能力 -> 看任务事件和端侧日志”的顺序执行。没有真机时，优先用 `phone-mock` + `glass-playback` + `openaiglass-for-blind/testdata` 做设备级数据回放，确认真实样例上的链路行为，再进入真机联调。
+使用录制音频驱动 playback：
 
-## 给功能开发者的下一步建议
+```bash
+uv run audio-chat.playback.glass \
+  --server-url http://127.0.0.1:8765 \
+  --audio-wav legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav
+```
 
-1. 新能力优先复用现有四个样板目录，不要直接操作 SDK 内部运行时。
-2. 业务代码需要设备、通知、抓拍、视频链路、手机任务、MCP 或后台任务时，只通过 SDK 公开上下文调用。
-3. 测试优先使用 `phone-mock`、`glass-playback` 和 `openaiglass.sdk.preflight` 做设备级自动化闭环，再进入真机联调。
-4. 如果 SDK 公开能力不能表达业务需求，把问题写入 [架构阻塞点说明与改进建议.md](./openaiglass-for-blind/docs/stage1/develop/架构阻塞点说明与改进建议.md)，再由 SDK 团队继续优化。
+iOS 参考端：
+
+```bash
+uv run audio-chat.ios.open
+```
+
+ESP32-S3 参考端：
+
+```bash
+uv run audio-chat.esp32.config
+uv run audio-chat.esp32.build --dry-run --build-only
+```
+
+## 应用开发
+
+功能扩展开发者只依赖 `audio_chat` 顶层公开 API，不直接 import SDK 内部服务对象，也不硬编码 `device_id` 点对点发送事件。
+
+Tool 用于一次性能力，例如拍照、搜索、准备路线：
+
+```python
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ErrorCode, ToolContext, ToolError, ToolResult, ToolSpec
+
+
+class CaptureInput(BaseModel):
+    reason: str = Field(default="agent_requested", description="请求端侧上传图片的原因。")
+
+
+class CapturePhotoTool(BaseTool):
+    spec = ToolSpec(
+        name="capture_photo",
+        description="当用户需要了解眼前画面时，请求当前用户设备上传一张 sensor.rgb 图片。",
+        input_model=CaptureInput,
+        progress_message="我先拍张照片看看。",
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        asset = context.devices.capture_photo(
+            reason=str(input_data.get("reason") or "agent_requested"),
+            freshness_seconds=0,
+            timeout_seconds=10,
+        )
+        if asset is None:
+            return ToolResult.failed(ToolError("拍照超时", code=ErrorCode.TIMEOUT))
+        return ToolResult.success({"asset_id": asset.asset_id, "path": asset.path}, assets=[asset])
+```
+
+Task 用于长流程能力，例如连续视觉分析、导航执行期、计时器和后台通知：
+
+```python
+from audio_chat import BaseTask, TaskContext, TaskEvent
+
+
+class ContinuousVisionTask(BaseTask):
+    task_type = "continuous_vision"
+    description = "连续读取 sensor.rgb 资产并分析。"
+
+    async def on_start(self, context: TaskContext) -> None:
+        context.devices.configure_stream("sensor.rgb", mode="continuous", rate_hz=1)
+
+    async def on_event(self, context: TaskContext, event: TaskEvent) -> None:
+        await context.emit_progress("视觉任务正在运行")
+```
+
+业务样例：
+
+- `app-examples/basic-app`：最小 Tool / Task / playback 样板。
+- `app-examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器迁移版本。
+- `app-examples/for-blind-app/templates`：新能力开发模板。
+
+关键约束：
+
+- Tool / Task 只能通过 `context.devices` 访问设备通讯能力。
+- 不直接把图片、音频、视频或文件字节放进控制事件 payload，大字节数据必须走 `sensor.*` / `actuator.*` stream。
+- Memory / Skill / MCP 不直接持有设备上下文；需要设备通讯能力时封装成 Tool 或 Task。
+- 设备开发者只实现事件和 stream 协议，不需要理解 Agent Core、Tool、Task 或 Asset Service。
+
+## 设备开发
+
+设备注册时提交订阅策略。server 只在同一个 `user_id` 当前在线设备中投递事件，先匹配事件名，再匹配 `filter` 字段。
+
+最小注册事件：
+
+```json
+{
+  "event_name": "control.device.register.requested",
+  "user_id": "user-demo-001",
+  "producer_id": "dev-browser-001",
+  "payload": {
+    "device_id": "dev-browser-001",
+    "name": "浏览器调试设备",
+    "client_type": "browser",
+    "subscriptions": [
+      {"event": "control.audio_session.*"},
+      {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+      {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
+    ],
+    "properties": {
+      "audio.aec": "browser_webrtc",
+      "camera.facing": "front"
+    }
+  }
+}
+```
+
+端侧实现入口：
+
+- `device-examples/browser-glass`
+- `device-examples/python-glass`
+- `device-examples/python-phone`
+- `device-examples/native-ios-phone`
+- `device-examples/native-esp32-glass`
+
+## 配置同步与检查
+
+生成本地联调配置：
+
+```bash
+uv run audio-chat.config.sync --app-root app-examples/basic-app
+```
+
+预检：
+
+```bash
+uv run audio-chat.dev.preflight --config app-examples/basic-app/server.yaml
+```
+
+发布包检查：
+
+```bash
+uv run audio-chat.sdk.package-check --report runs/audio-chat/package-check.json
+```
+
+自动验收：
+
+```bash
+uv run python scripts/acceptance_check.py old-sdk-parity-release \
+  --report runs/acceptance/old-sdk-parity-release.json
+```
+
+## 测试
+
+```bash
+uv run python -m pytest tests -q
+```
+
+真实 provider 集成测试需要配置对应 API Key：
+
+```bash
+uv run python -m pytest tests/integration/test_dashscope_providers.py -q
+```
+
+当前代码仍可能有开发中测试失败；目录升级不隐藏这些问题，后续修复应继续在新的根目录结构下进行。
+
+## 文档
+
+- [SDK 架构设计](docs/audio-chat-sdk-architecture.md)
+- [迁移指南](docs/phase3-migration-guide.md)
+- [运行产物说明](docs/runs-artifacts-guide.md)
+- [浏览器设备设计](docs/browser-glass-design.md)
+- [ESP32-S3 参考端说明](docs/esp32-s3-endpoint-bridge.md)
+- [历史 SDK 可用性对齐计划](docs/old-sdk-parity-development-plan.md)
+
+历史资料在 `legacy/` 下保留。需要查旧实现时优先看 `legacy/openaiglass-sdk` 和 `legacy/openaiglass-for-blind`，新开发不要再从这些目录复制入口命令或导入路径。

@@ -1,0 +1,90 @@
+[
+  {
+    "shortDescription" : "Ultralytics trafficlight model trained on C:\\Users\\Administrator\\Desktop\\aiglass\\yolov8_dataset\\data.yaml",
+    "metadataOutputVersion" : "3.0",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 11 × 8400)",
+        "shortDescription" : "",
+        "shape" : "[1, 11, 8400]",
+        "name" : "var_1363",
+        "type" : "MultiArray"
+      }
+    ],
+    "version" : "8.4.46",
+    "modelParameters" : [
+
+    ],
+    "author" : "Ultralytics",
+    "specificationVersion" : 6,
+    "storagePrecision" : "Float16",
+    "license" : "AGPL-3.0 License (https:\/\/ultralytics.com\/license)",
+    "mlProgramOperationTypeHistogram" : {
+      "Concat" : 17,
+      "Silu" : 97,
+      "Sub" : 2,
+      "Transpose" : 1,
+      "UpsampleNearestNeighbor" : 2,
+      "Softmax" : 1,
+      "Mul" : 3,
+      "Cast" : 2,
+      "Reshape" : 8,
+      "Add" : 20,
+      "MaxPool" : 3,
+      "Sigmoid" : 1,
+      "Split" : 9,
+      "Conv" : 104
+    },
+    "computePrecision" : "Mixed (Float16, Float32, Int32)",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "12.0",
+      "tvOS" : "15.0",
+      "visionOS" : "1.0",
+      "watchOS" : "8.0",
+      "iOS" : "15.0",
+      "macCatalyst" : "15.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "height" : "640",
+        "colorspace" : "RGB",
+        "isOptional" : "0",
+        "width" : "640",
+        "isColor" : "1",
+        "formattedType" : "Image (Color 640 × 640)",
+        "hasSizeFlexibility" : "0",
+        "type" : "Image",
+        "shortDescription" : "",
+        "name" : "image"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "batch" : "1",
+      "docs" : "https:\/\/docs.ultralytics.com",
+      "com.github.apple.coremltools.version" : "9.0",
+      "names" : "{0: 'blank', 1: 'countdown_blank', 2: 'countdown_go', 3: 'countdown_stop', 4: 'crossing', 5: 'go', 6: 'stop'}",
+      "imgsz" : "[640, 640]",
+      "com.github.apple.coremltools.conversion_date" : "2026-05-03",
+      "channels" : "3",
+      "stride" : "32",
+      "args" : "{'batch': 1, 'half': False, 'int8': False, 'dynamic': False, 'nms': False}",
+      "date" : "2026-05-03T11:24:15.611269",
+      "com.github.apple.coremltools.source_dialect" : "TorchScript",
+      "com.github.apple.coremltools.source" : "torch==2.11.0",
+      "task" : "detect",
+      "end2end" : "False"
+    },
+    "generatedClassName" : "TrafficLightYOLO",
+    "method" : "predict"
+  }
+]
