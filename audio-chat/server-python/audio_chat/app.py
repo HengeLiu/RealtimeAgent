@@ -58,6 +58,7 @@ class AudioChatConfig:
     asr_model: str = "mock-asr"
     text_model_provider: str = "mock"
     text_model: str = "mock-text"
+    text_system_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     tts_provider: str = "mock"
     tts_model: str = "mock-tts"
     tts_voice: str = "mock"
@@ -174,6 +175,7 @@ class AudioChatConfig:
             asr_model=text.asr_model,
             text_model_provider=text.model_provider,
             text_model=text.model,
+            text_system_prompt=text.system_prompt,
             tts_provider=text.tts_provider,
             tts_model=text.tts_model,
             tts_voice=text.tts_voice,
@@ -391,6 +393,7 @@ class AudioChatApp:
             text_model_config=TextModelProviderConfig(
                 provider=self.config.text_model_provider,
                 model=self.config.text_model,
+                system_prompt=self.config.text_system_prompt,
                 allow_mock_fallback=self.config.allow_mock_fallback,
                 request_timeout_seconds=self.config.provider_request_timeout_seconds,
                 max_retries=self.config.provider_max_retries,

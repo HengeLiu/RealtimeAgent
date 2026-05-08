@@ -8,7 +8,7 @@ from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
 class StartTrafficLightInput(BaseModel):
     """红绿灯识别任务输入参数。"""
 
-    expected_state: str | None = Field(default=None, description="用户期望关注的红绿灯状态，例如 green 或 red。")
+    expected_state: str | None = Field(default=None, description="用户期望关注的红绿灯状态，例如 green 或 red；不确定可留空。")
     frame_limit: int = Field(default=3, ge=1, le=60, description="本次任务最多分析的图片帧数。")
 
 
@@ -26,10 +26,10 @@ class StartTrafficLightTool(BaseTool):
 
     spec = ToolSpec(
         name="start_traffic_light",
-        description="启动红绿灯识别任务。",
+        description="当用户在路口、准备过马路，或询问红绿灯状态时调用。",
         input_model=StartTrafficLightInput,
         output_model=StartTrafficLightOutput,
-        progress_message="正在启动红绿灯识别",
+        progress_message=("我帮你看一下红绿灯。", "稍等，我观察一下信号灯。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:

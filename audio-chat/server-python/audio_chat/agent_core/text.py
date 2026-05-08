@@ -192,6 +192,7 @@ class TextAgentCore:
         messages: list[dict[str, Any]] = [{"role": "user", "content": transcript}]
         assistant_parts: list[str] = []
         tools = self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
+        system_prompt = str(getattr(self.text_model, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT))
         self.recorder.record_model_request(
             session_id,
             {
@@ -200,8 +201,8 @@ class TextAgentCore:
                 "runner": "agent_core_text",
                 "user_id": user_id,
                 "session_id": session_id,
-                "system_prompt": TEXT_AGENT_SYSTEM_PROMPT,
-                "messages": [{"role": "system", "content": TEXT_AGENT_SYSTEM_PROMPT}, *list(messages)],
+                "system_prompt": system_prompt,
+                "messages": [{"role": "system", "content": system_prompt}, *list(messages)],
                 "tools": tools,
                 "tool_count": len(tools),
             },

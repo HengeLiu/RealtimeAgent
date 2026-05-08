@@ -10,9 +10,9 @@ from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
 class TimerInput(BaseModel):
     """计时器 Tool 输入参数。"""
 
-    action: Literal["create", "query", "cancel"] = Field(default="create", description="计时器操作类型。")
-    seconds: int = Field(default=60, ge=0, le=86400, description="创建计时器时的秒数，0 用于回放立即到点。")
-    task_id: str | None = Field(default=None, description="查询或取消时使用的任务 ID。")
+    action: Literal["create", "query", "cancel"] = Field(default="create", description="计时器操作：创建、查询或取消。")
+    seconds: int = Field(default=60, ge=0, le=86400, description="创建计时器时的秒数，例如 5 分钟填写 300。")
+    task_id: str | None = Field(default=None, description="查询或取消时使用的任务编号；没有明确编号时不要猜测。")
     auto_fire: bool = Field(default=True, description="是否在创建后立即调度到点事件，回放测试可关闭。")
 
 
@@ -33,10 +33,10 @@ class TimerTool(BaseTool):
 
     spec = ToolSpec(
         name="timer",
-        description="创建、查询或取消计时器。",
+        description="当用户要求倒计时、计时或到时间提醒时调用；不要用于普通日程或长期提醒。",
         input_model=TimerInput,
         output_model=TimerOutput,
-        progress_message="正在处理计时器",
+        progress_message=("好的，我处理一下计时器。", "我看一下这个计时器。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:

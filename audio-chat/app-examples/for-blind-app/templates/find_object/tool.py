@@ -10,16 +10,16 @@ class FindObjectInput(BaseModel):
 
     object_name: str = Field(default="目标物", description="用户想要查找的物品名称。")
     freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存图片的最长秒数。")
-    timeout_seconds: float = Field(default=2, gt=0, description="等待端侧上传图片资产的超时时间，单位秒。")
+    timeout_seconds: float = Field(default=2, gt=0, description="等待图片返回的超时时间，单位秒。")
 
 
 class FindObjectOutput(BaseModel):
     """找物 Tool 输出结构。"""
 
-    captured: bool = Field(description="是否收到端侧画面。")
+    captured: bool = Field(description="是否收到画面。")
     object_name: str = Field(description="要查找的物品名称。")
     asset_id: str | None = Field(default=None, description="图片资产 ID。")
-    stream_type: str | None = Field(default=None, description="资产来源 stream 类型。")
+    stream_type: str | None = Field(default=None, description="资产来源类型。")
     path: str | None = Field(default=None, description="本地调试路径。")
 
 
@@ -34,10 +34,10 @@ class FindObjectTool(BaseTool):
 
     spec = ToolSpec(
         name="find_object",
-        description="请求端侧采集图片，并准备一次找物分析。",
+        description="当用户想确认眼前是否有某个物品时调用。只做一次画面检查。",
         input_model=FindObjectInput,
         output_model=FindObjectOutput,
-        progress_message="正在请求端侧画面",
+        progress_message=("我先看一下有没有这个东西。", "稍等，我看一下前面。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -74,7 +74,7 @@ class FindObjectTool(BaseTool):
         if asset is None:
             return ToolResult.success(
                 data={"captured": False, "object_name": object_name},
-                message="未收到端侧画面，无法开始找物",
+                message="未收到画面，无法开始找物",
             )
         return ToolResult.success(
             data={

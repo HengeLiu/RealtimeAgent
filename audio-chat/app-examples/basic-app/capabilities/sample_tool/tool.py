@@ -35,7 +35,7 @@ class EchoTool(BaseTool):
 
     spec = ToolSpec(
         name="echo_text",
-        description="返回输入文本，并附带当前用户在线设备数量。",
+        description="原样返回输入文本，并附带当前用户在线设备数量。仅用于开发示例和联调。",
         input_model=EchoInput,
         output_model=EchoOutput,
     )

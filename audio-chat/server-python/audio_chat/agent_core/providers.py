@@ -15,7 +15,7 @@ class ProviderUnavailable(RuntimeError):
     pass
 
 
-TEXT_AGENT_SYSTEM_PROMPT = "You are the audio-chat TextAgentCore."
+TEXT_AGENT_SYSTEM_PROMPT = "你是中文语音助手。请用简短口语回答用户。"
 
 
 @dataclass(frozen=True)
@@ -130,6 +130,7 @@ class AsrProviderConfig:
 class TextModelProviderConfig:
     provider: str = "mock"
     model: str = "mock-text"
+    system_prompt: str = TEXT_AGENT_SYSTEM_PROMPT
     allow_mock_fallback: bool = True
     request_timeout_seconds: float = 5.0
     max_retries: int = 1
@@ -281,8 +282,9 @@ class TextModelAdapter(Protocol):
 class MockTextModelAdapter:
     provider_name = "mock"
 
-    def __init__(self, model: str = "mock-text") -> None:
+    def __init__(self, model: str = "mock-text", *, system_prompt: str = TEXT_AGENT_SYSTEM_PROMPT) -> None:
         self.model = model
+        self.system_prompt = system_prompt
         self._cancelled = False
 
     def stream_text(self, transcript: str) -> Iterable[str]:
@@ -307,6 +309,7 @@ class OpenAICompatibleTextModelAdapter:
         base_url_env: str = "OPENAI_BASE_URL",
         request_timeout_seconds: float = 5.0,
         max_retries: int = 1,
+        system_prompt: str = TEXT_AGENT_SYSTEM_PROMPT,
     ) -> None:
         api_key = os.getenv(api_key_env)
         if not api_key:
@@ -317,6 +320,7 @@ class OpenAICompatibleTextModelAdapter:
             raise ProviderUnavailable("openai package is not installed; text model provider downgraded to mock") from exc
 
         self.model = model
+        self.system_prompt = system_prompt
         self.request_timeout_seconds = request_timeout_seconds
         self.max_retries = max_retries
         self.endpoint = os.getenv(base_url_env) or "https://api.openai.com/v1"
@@ -351,7 +355,7 @@ class OpenAICompatibleTextModelAdapter:
         stream = self._client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": TEXT_AGENT_SYSTEM_PROMPT},
+                {"role": "system", "content": getattr(self, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT)},
                 *messages,
             ],
             tools=tools or None,
@@ -401,7 +405,14 @@ class OpenAICompatibleTextModelAdapter:
 class DashScopeCompatibleTextModelAdapter(OpenAICompatibleTextModelAdapter):
     provider_name = "dashscope-compatible"
 
-    def __init__(self, model: str, *, request_timeout_seconds: float = 5.0, max_retries: int = 1) -> None:
+    def __init__(
+        self,
+        model: str,
+        *,
+        request_timeout_seconds: float = 5.0,
+        max_retries: int = 1,
+        system_prompt: str = TEXT_AGENT_SYSTEM_PROMPT,
+    ) -> None:
         os.environ.setdefault("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         super().__init__(
             model=model,
@@ -409,6 +420,7 @@ class DashScopeCompatibleTextModelAdapter(OpenAICompatibleTextModelAdapter):
             base_url_env="OPENAI_BASE_URL",
             request_timeout_seconds=request_timeout_seconds,
             max_retries=max_retries,
+            system_prompt=system_prompt,
         )
 
 
@@ -432,24 +444,26 @@ def build_asr_provider(config: AsrProviderConfig) -> tuple[AsrProviderAdapter, s
 def build_text_model(config: TextModelProviderConfig) -> tuple[TextModelAdapter, str | None]:
     try:
         if config.provider == "mock":
-            return MockTextModelAdapter(model=config.model), None
+            return MockTextModelAdapter(model=config.model, system_prompt=config.system_prompt), None
         if config.provider == "openai-compatible":
             return OpenAICompatibleTextModelAdapter(
                 model=config.model,
                 request_timeout_seconds=config.request_timeout_seconds,
                 max_retries=config.max_retries,
+                system_prompt=config.system_prompt,
             ), None
         if config.provider == "dashscope-compatible":
             return DashScopeCompatibleTextModelAdapter(
                 model=config.model,
                 request_timeout_seconds=config.request_timeout_seconds,
                 max_retries=config.max_retries,
+                system_prompt=config.system_prompt,
             ), None
         raise ProviderUnavailable(f"unsupported text model provider: {config.provider}")
     except ProviderUnavailable as exc:
         if not config.allow_mock_fallback:
             raise
-        return MockTextModelAdapter(model="mock-text"), str(exc)
+        return MockTextModelAdapter(model="mock-text", system_prompt=config.system_prompt), str(exc)
 
 
 def _extract_recognition_sentence(result) -> tuple[str, bool]:

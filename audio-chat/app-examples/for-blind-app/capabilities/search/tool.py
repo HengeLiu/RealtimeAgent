@@ -10,7 +10,7 @@ class SearchWebInput(BaseModel):
 
     query: str = Field(default="盲人导航安全提示", description="要搜索的问题或关键词。")
     limit: int = Field(default=3, ge=1, le=10, description="最多返回的搜索结果数量。")
-    timeout_seconds: float = Field(default=5, gt=0, description="等待搜索 provider 的超时时间，单位秒。")
+    timeout_seconds: float = Field(default=5, gt=0, description="等待搜索结果的超时时间，单位秒。")
 
 
 class SearchWebOutput(BaseModel):
@@ -20,7 +20,7 @@ class SearchWebOutput(BaseModel):
     fallback: bool | None = Field(default=None, description="是否使用 fallback。")
     query: str = Field(description="实际搜索词。")
     items: list[dict] | None = Field(default=None, description="搜索结果列表。")
-    search: dict | None = Field(default=None, description="MCP 返回的原始结构化结果。")
+    search: dict | None = Field(default=None, description="搜索返回的原始结构化结果。")
     error: str | None = Field(default=None, description="fallback 错误说明。")
 
 
@@ -29,10 +29,10 @@ class SearchWebTool(BaseTool):
 
     spec = ToolSpec(
         name="search_web",
-        description="调用搜索 MCP mock，返回可引用摘要。",
+        description="当用户明确要求搜索、查询资料、查最新公开信息，或问题需要外部资料时调用。",
         input_model=SearchWebInput,
         output_model=SearchWebOutput,
-        progress_message="正在搜索资料",
+        progress_message=("我查一下资料。", "稍等，我搜索一下。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -48,7 +48,7 @@ class SearchWebTool(BaseTool):
         if context.mcp is None:
             return ToolResult.success(
                 data={"provider": "fallback", "fallback": True, "query": query, "items": []},
-                message="MCP 未配置，搜索使用空 fallback",
+                message="搜索服务未配置，暂时没有搜索结果",
             )
         try:
             result = context.mcp.call(
@@ -59,6 +59,6 @@ class SearchWebTool(BaseTool):
         except Exception as exc:
             return ToolResult.success(
                 data={"provider": "fallback", "fallback": True, "query": query, "error": str(exc), "items": []},
-                message="搜索 provider 不可用，已返回 fallback",
+                message="搜索服务暂时不可用",
             )
         return ToolResult.success(data={"query": query, "search": result}, message="搜索完成")

@@ -97,6 +97,7 @@ class AssetConfig:
 class AgentTextConfig:
     model_provider: str = "mock"
     model: str = "mock-text"
+    system_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
     tts_provider: str = "mock"

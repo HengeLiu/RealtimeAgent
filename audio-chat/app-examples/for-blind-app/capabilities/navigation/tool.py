@@ -8,9 +8,9 @@ from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
 class PrepareNavigationInput(BaseModel):
     """路线准备 Tool 输入参数。"""
 
-    destination: str = Field(default="盲人服务中心", description="导航目的地。")
-    origin: str = Field(default="当前位置", description="导航起点。")
-    timeout_seconds: float = Field(default=5, gt=0, description="等待路线 provider 的超时时间，单位秒。")
+    destination: str = Field(default="盲人服务中心", description="用户想去的目的地名称或地址。")
+    origin: str = Field(default="当前位置", description="导航起点；通常使用当前位置。")
+    timeout_seconds: float = Field(default=5, gt=0, description="等待路线结果的超时时间，单位秒。")
 
 
 class PrepareNavigationOutput(BaseModel):
@@ -49,10 +49,10 @@ class PrepareNavigationTool(BaseTool):
 
     spec = ToolSpec(
         name="prepare_navigation",
-        description="准备导航目的地、POI 和路线。",
+        description="当用户想去某个地点、询问怎么走或需要路线时调用。目的地不明确时，先向用户确认。",
         input_model=PrepareNavigationInput,
         output_model=PrepareNavigationOutput,
-        progress_message="正在规划路线",
+        progress_message=("我先规划一下路线。", "稍等，我查一下怎么走。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -69,7 +69,7 @@ class PrepareNavigationTool(BaseTool):
         if context.mcp is None:
             return ToolResult.success(
                 data={"provider": "fallback", "destination": destination, "route_ready": False},
-                message="MCP 未配置，无法规划真实路线",
+                message="路线服务未配置，无法规划真实路线",
             )
         try:
             route = context.mcp.call(
@@ -90,10 +90,10 @@ class StartNavigationTool(BaseTool):
 
     spec = ToolSpec(
         name="start_navigation",
-        description="启动导航执行期任务。",
+        description="当用户已确认目的地并希望开始导航时调用。",
         input_model=StartNavigationInput,
         output_model=StartNavigationOutput,
-        progress_message="正在启动导航",
+        progress_message=("好的，我开始导航。", "我来帮你启动导航。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:

@@ -1144,17 +1144,17 @@ class UserDeviceContext:
 class RequestAssetInput(BaseModel):
     """请求传感器资产输入。"""
 
-    stream_type: str = Field(description="要请求的 sensor.* stream 类型，例如 sensor.rgb。")
+    stream_type: str = Field(description="要获取的传感器数据类型，例如 sensor.rgb。")
     freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存资产的最大秒数；0 表示必须请求新资产。")
-    configure_payload: dict = Field(default_factory=dict, description="发给端侧的 stream 配置参数，不允许包含媒体字节。")
-    timeout_seconds: float | None = Field(default=None, gt=0, description="等待端侧上传资产的超时时间，单位秒。")
+    configure_payload: dict = Field(default_factory=dict, description="可选采集参数，不要放入媒体字节。")
+    timeout_seconds: float | None = Field(default=None, gt=0, description="等待资产返回的超时时间，单位秒。")
 
 
 class RequestAssetOutput(BaseModel):
     """请求传感器资产输出。"""
 
     asset_id: str | None = Field(default=None, description="资产 ID；超时或不可用时为空。")
-    stream_type: str | None = Field(default=None, description="资产来源 stream 类型。")
+    stream_type: str | None = Field(default=None, description="资产来源类型。")
     path: str | None = Field(default=None, description="本地调试路径。")
     mime_type: str | None = Field(default=None, description="资产 MIME 类型。")
 
@@ -1168,7 +1168,7 @@ class RequestAssetTool(BaseTool):
 
     spec = ToolSpec(
         name="request_asset",
-        description="请求端侧上传指定类型的传感器资产。需要抓拍照片时优先使用 capture_photo。",
+        description="获取指定类型的传感器资产。需要当前照片时优先使用 capture_photo。",
         input_model=RequestAssetInput,
         output_model=RequestAssetOutput,
         capability_type="tool",
@@ -1218,10 +1218,10 @@ class ConfigureAssetStreamTool(BaseTool):
     """配置端侧传感器 stream 的内置 Tool。"""
 
     class Input(BaseModel):
-        stream_type: str = Field(description="要配置的 sensor.* stream 类型，例如 sensor.rgb 或 sensor.imu。")
-        mode: str = Field(default="single", description="stream 模式，例如 single、continuous 或 stop。")
-        payload: dict = Field(default_factory=dict, description="端侧配置参数，不允许包含媒体字节。")
-        selection: Literal["first_available", "all"] = Field(default="first_available", description="匹配多台设备时的选择策略。")
+        stream_type: str = Field(description="要配置的传感器类型，例如 sensor.rgb 或 sensor.imu。")
+        mode: str = Field(default="single", description="采集模式，例如 single、continuous 或 stop。")
+        payload: dict = Field(default_factory=dict, description="可选采集参数，不要放入媒体字节。")
+        selection: Literal["first_available", "all"] = Field(default="first_available", description="使用第一台可用设备，或所有可用设备。")
 
     class Output(BaseModel):
         matched_count: int = Field(description="订阅匹配并经过选择策略后的设备数量。")
@@ -1229,7 +1229,7 @@ class ConfigureAssetStreamTool(BaseTool):
 
     spec = ToolSpec(
         name="configure_asset_stream",
-        description="通过控制事件请求端侧配置 sensor.* stream，适合启动或停止连续传感器上传。",
+        description="启动、调整或停止传感器采集。适合需要连续画面、IMU 或其他传感器数据的任务。",
         input_model=Input,
         output_model=Output,
         capability_type="tool",
@@ -1246,14 +1246,14 @@ class ConfigureAssetStreamTool(BaseTool):
             payload=payload,
             selection=str(input_data.get("selection") or "first_available"),
         )
-        return ToolResult.success(data=result.__dict__, message="asset stream configure event published")
+        return ToolResult.success(data=result.__dict__, message="已提交传感器采集配置。")
 
 
 class CapturePhotoInput(BaseModel):
     """抓拍图片输入。"""
 
-    reason: str = Field(default="agent_requested", description="抓拍原因，会写入端侧 stream 配置事件。")
-    timeout_seconds: float | None = Field(default=10, description="等待端侧上传图片的超时时间。")
+    reason: str = Field(default="agent_requested", description="抓拍原因，用简短中文说明即可。")
+    timeout_seconds: float | None = Field(default=10, description="等待图片返回的超时时间，单位秒。")
     freshness_seconds: float = Field(default=0, description="可复用缓存图片的最大秒数；需要新图时填 0。")
 
 
@@ -1280,8 +1280,6 @@ class CapturePhotoTool(BaseTool):
         name="capture_photo",
         description=(
             "当用户询问眼前画面、物体、文字、障碍物、路况等需要新的视觉信息才能回答的问题时调用。"
-            "在 Realtime/Omni Agent Core 中，本工具会获取端侧最新照片并追加到当前多模态 conversation，"
-            "让模型基于这张新照片继续回答；"
             "普通闲聊、记忆维护或已有当前照片足够回答时不要调用。"
         ),
         input_model=CapturePhotoInput,
@@ -1333,7 +1331,7 @@ class PublishDeviceCommandTool(BaseTool):
     class Input(BaseModel):
         command_name: str = Field(description="命令名称，例如 actuator.haptic.pulse 或 phone.task.start。")
         params: dict = Field(default_factory=dict, description="命令参数，只放小型结构化数据。")
-        selection: Literal["first_available", "all"] = Field(default="first_available", description="匹配多台设备时的选择策略。")
+        selection: Literal["first_available", "all"] = Field(default="first_available", description="使用第一台可用设备，或所有可用设备。")
 
     class Output(BaseModel):
         matched_count: int = Field(description="订阅匹配并经过选择策略后的设备数量。")
@@ -1341,7 +1339,7 @@ class PublishDeviceCommandTool(BaseTool):
 
     spec = ToolSpec(
         name="publish_device_command",
-        description="按订阅发布 control.device.command.requested 控制事件，不接受 device_id。",
+        description="让可用设备执行一个轻量命令，例如震动、提示音或启动设备侧动作。",
         input_model=Input,
         output_model=Output,
         capability_type="tool",
@@ -1364,9 +1362,9 @@ class PublishDeviceCommandTool(BaseTool):
 class StartPhoneVideoLinkInput(BaseModel):
     """启动视频画面连接输入。"""
 
-    link_mode: str = Field(default="direct", description="兼容字段；新版 SDK 仅记录到 payload。")
-    frame_interval_ms: int = Field(default=500, ge=1, description="期望上传间隔，单位毫秒。")
-    duration_seconds: float | None = Field(default=None, description="可选持续时间，由端侧自行停止。")
+    link_mode: str = Field(default="direct", description="视频连接方式；通常保持默认值。")
+    frame_interval_ms: int = Field(default=500, ge=1, description="期望画面间隔，单位毫秒；越小越实时。")
+    duration_seconds: float | None = Field(default=None, description="可选持续时间，单位秒。")
 
 
 class StartPhoneVideoLinkOutput(BaseModel):
@@ -1391,7 +1389,7 @@ class StartPhoneVideoLinkTool(BaseTool):
     spec = ToolSpec(
         name="start_phone_video_link",
         description=(
-            "当任务需要手机或其他端侧摄像头持续回传画面时调用，例如持续观察、找物、导航或红绿灯辅助。"
+            "当任务需要手机或其他摄像头持续提供画面时调用，例如持续观察、找物、导航或红绿灯辅助。"
             "只需要单张眼前照片时不要调用，应使用 capture_photo。"
         ),
         input_model=StartPhoneVideoLinkInput,
@@ -1447,7 +1445,7 @@ class StartPhoneVideoLinkTool(BaseTool):
                 "delivered_count": result.delivered_count,
                 "frame_interval_ms": frame_interval_ms,
             },
-            message="已请求端侧建立视频画面连接。" if result.delivered_count else "没有找到可建立视频画面连接的端侧。",
+            message="已请求建立视频画面连接。" if result.delivered_count else "没有找到可建立视频画面连接的设备。",
         )
 
 
@@ -1482,6 +1480,11 @@ class CloseContinuousDialogTool(BaseTool):
         output_model=CloseContinuousDialogOutput,
         capability_type="tool",
         tags=["voice", "dialog", "system"],
+        progress_message=(
+            "好的，我退下了。",
+            "好的，我等你再呼叫我。",
+            "好，我先安静下来。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1498,7 +1501,7 @@ class QueryDeviceStateTool(BaseTool):
     """查询当前用户 active device set 的内置 Tool。"""
 
     class Input(BaseModel):
-        include_subscriptions: bool = Field(default=True, description="是否返回设备订阅摘要。")
+        include_subscriptions: bool = Field(default=True, description="是否返回设备可接收的事件摘要。")
 
     class Output(BaseModel):
         devices: list[dict] = Field(description="当前用户在线设备快照列表。")
@@ -1506,11 +1509,15 @@ class QueryDeviceStateTool(BaseTool):
 
     spec = ToolSpec(
         name="query_device_state",
-        description="查询当前用户在线设备、名称、properties 和订阅摘要。用户询问有哪些设备在线或设备状态时调用。",
+        description="查询当前用户有哪些设备在线，以及设备名称、能力、连接状态或播放状态。",
         input_model=Input,
         output_model=Output,
         capability_type="tool",
         tags=["device", "debug", "system"],
+        progress_message=(
+            "我查一下当前设备状态。",
+            "稍等，我看一下有哪些设备在线。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1533,14 +1540,18 @@ class QueryTaskStatusTool(BaseTool):
     """查询 TaskEngine 任务状态的内置 Tool。"""
 
     class Input(BaseModel):
-        task_id: str = Field(description="要查询的 Task ID。")
+        task_id: str = Field(description="要查询的任务编号；没有明确任务编号时不要猜测。")
 
     spec = ToolSpec(
         name="query_task_status",
-        description="查询一个 server 侧任务的状态。",
+        description="当用户询问已启动任务的进度、状态或结果时调用；只适用于已经有任务编号的任务。",
         input_model=Input,
         capability_type="tool",
         tags=["task"],
+        progress_message=(
+            "我查一下任务状态。",
+            "稍等，我看一下任务进度。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1554,15 +1565,19 @@ class CancelTaskTool(BaseTool):
     """取消 TaskEngine 任务的内置 Tool。"""
 
     class Input(BaseModel):
-        task_id: str = Field(description="要取消的 Task ID。")
+        task_id: str = Field(description="要取消的任务编号；没有明确任务编号时不要猜测。")
         reason: str = Field(default="tool_requested", description="取消原因。")
 
     spec = ToolSpec(
         name="cancel_task",
-        description="取消一个 server 侧任务。只能在用户明确要求停止某个任务时调用。",
+        description="当用户明确要求停止、取消或结束某个正在运行的任务时调用；只适用于已经有任务编号的任务。",
         input_model=Input,
         capability_type="tool",
         tags=["task"],
+        progress_message=(
+            "我帮你停止这个任务。",
+            "好的，我正在取消任务。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1581,10 +1596,14 @@ class MemorySearchTool(BaseTool):
 
     spec = ToolSpec(
         name="memory_search",
-        description="搜索当前用户的长期记忆。",
+        description="当回答需要读取已保存的长期记忆时调用。本工具只查询记忆，不新增、更新或删除记忆。",
         input_model=Input,
         capability_type="tool",
         tags=["memory"],
+        progress_message=(
+            "我查一下记忆。",
+            "稍等，我看看之前记了什么。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1605,15 +1624,19 @@ class ManageMemoryTool(BaseTool):
     """写入长期记忆的内置 Tool。"""
 
     class Input(BaseModel):
-        content: str = Field(description="要写入长期记忆的内容。")
+        content: str = Field(description="要写入或更新的长期记忆内容，应是稳定偏好、身份信息或长期事实。")
         metadata: dict = Field(default_factory=dict, description="可选结构化元数据。")
 
     spec = ToolSpec(
         name="manage_memory",
-        description="写入当前用户长期记忆。只有用户明确提供稳定偏好、身份信息或长期事实时调用。",
+        description="当用户要求记住、更新、忘记信息，或明确提供稳定偏好、身份信息、长期事实时调用。不要保存密码、令牌等敏感信息。",
         input_model=Input,
         capability_type="tool",
         tags=["memory"],
+        progress_message=(
+            "好，我帮你记一下。",
+            "明白，我先记录下来。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1635,10 +1658,14 @@ class ReadSkillTool(BaseTool):
 
     spec = ToolSpec(
         name="read_skill",
-        description="读取配置 Skill roots 下的受控 Skill 文档。",
+        description="当当前任务需要了解某个 Skill 的能力边界、调用步骤或可用工具时调用。",
         input_model=Input,
         capability_type="tool",
         tags=["skill"],
+        progress_message=(
+            "我先看一下这个技能说明。",
+            "稍等，我读取一下技能文档。",
+        ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1652,13 +1679,13 @@ class McpCallTool(BaseTool):
     """通过 MCP Gateway 调用 MCP tool 的内置 Tool。"""
 
     class Input(BaseModel):
-        tool_name: str = Field(description="MCP tool 名称，例如 web.search 或 amap.route_plan。")
-        arguments: dict = Field(default_factory=dict, description="传给 MCP tool 的结构化参数。")
+        tool_name: str = Field(description="外部工具名称，例如 web.search 或 amap.route_plan。")
+        arguments: dict = Field(default_factory=dict, description="传给外部工具的结构化参数。")
         timeout_seconds: float | None = Field(default=None, gt=0, description="调用超时时间，单位秒。")
 
     spec = ToolSpec(
         name="mcp_call",
-        description="调用配置中的 MCP tool。业务推荐封装成更具体的 Tool 后再暴露给模型。",
+        description="调用已配置的外部工具。优先使用更具体的业务工具；只有没有专用工具时才调用本工具。",
         input_model=Input,
         capability_type="mcp",
         tags=["mcp"],

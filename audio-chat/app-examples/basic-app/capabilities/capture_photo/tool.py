@@ -10,16 +10,16 @@ class CapturePhotoInput(BaseModel):
 
     reason: str = Field(default="developer_capture_photo", description="请求抓拍的业务原因。")
     freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存图片的最长秒数，0 表示必须新采集。")
-    timeout_seconds: float = Field(default=2, gt=0, description="等待端侧上传图片资产的超时时间，单位秒。")
+    timeout_seconds: float = Field(default=2, gt=0, description="等待图片返回的超时时间，单位秒。")
 
 
 class CapturePhotoOutput(BaseModel):
     """抓拍 Tool 输出结构。"""
 
-    captured: bool = Field(description="是否收到端侧图片资产。")
+    captured: bool = Field(description="是否收到图片资产。")
     reason: str | None = Field(default=None, description="失败或请求原因。")
     asset_id: str | None = Field(default=None, description="图片资产 ID。")
-    stream_type: str | None = Field(default=None, description="资产来源 stream 类型。")
+    stream_type: str | None = Field(default=None, description="资产来源类型。")
     path: str | None = Field(default=None, description="本地调试路径。")
 
 
@@ -34,10 +34,10 @@ class CapturePhotoTool(BaseTool):
 
     spec = ToolSpec(
         name="capture_photo",
-        description="请求端侧采集一张 RGB 图片并返回资产引用。",
+        description="采集一张当前 RGB 图片并返回资产引用。适合需要看当前画面的简单示例。",
         input_model=CapturePhotoInput,
         output_model=CapturePhotoOutput,
-        progress_message="正在请求端侧拍照",
+        progress_message=("我先拍张照片。", "稍等，我看一下当前画面。"),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -72,6 +72,6 @@ class CapturePhotoTool(BaseTool):
                 "stream_type": asset.stream_type,
                 "path": asset.path,
             },
-            message="已收到端侧图片资产",
+            message="已收到图片资产",
             assets=[asset],
         )
