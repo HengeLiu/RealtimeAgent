@@ -12,7 +12,7 @@ def test_package_check_covers_old_sdk_parity_entry_points(tmp_path: Path) -> Non
     """测试目标：确认 package-check 覆盖老 SDK 可用性对齐阶段新增 CLI。
 
     测试方法：运行 package-check 并读取报告中的 entry point 数量。
-    预期结果：报告通过，且脚本数量覆盖 config/server/phone/playback/web/iOS/ESP32/dev/sdk。
+    预期结果：报告通过，且脚本数量覆盖 config/server/playback/web/iOS/ESP32/dev/sdk。
     """
 
     report = tmp_path / "package-check.json"
@@ -27,4 +27,4 @@ def test_package_check_covers_old_sdk_parity_entry_points(tmp_path: Path) -> Non
     assert completed.returncode == 0, f"stdout={completed.stdout}\nstderr={completed.stderr}"
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["ok"] is True
-    assert data["script_count"] >= 17
+    assert data["script_count"] >= 16

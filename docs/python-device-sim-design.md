@@ -357,7 +357,7 @@ uv run audio-chat.device.sim \
 
 ```bash
 uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
-uv run audio-chat.phone.mock --config device-examples/python-device-sim/scenarios/vision-task.yaml
+uv run python -m audio_chat_python_phone_mock --config device-examples/python-device-sim/scenarios/vision-task.yaml
 ```
 
 兼容 CLI 后续可以标记为旧入口，但不应立刻删除。

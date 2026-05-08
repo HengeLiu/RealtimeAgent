@@ -49,7 +49,6 @@ def test_docs_entry_points_exist_in_pyproject() -> None:
         "audio-chat.server.start",
         "audio-chat.server.stop",
         "audio-chat.server.logs",
-        "audio-chat.phone.mock",
         "audio-chat.web.open",
         "audio-chat.playback.glass",
         "audio-chat.dev.preflight",

@@ -311,7 +311,7 @@ vision:
 
 ```bash
 uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
-uv run audio-chat.phone.mock --config device-examples/python-phone/phone.preview.yaml
+uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.preview.yaml
 ```
 
 预期结果：

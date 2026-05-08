@@ -869,7 +869,7 @@ def _vision_frames_from_config(config: dict[str, Any]) -> dict[str, list[bytes]]
 def main(argv: list[str] | None = None) -> None:
     """Python phone mock CLI 入口。"""
 
-    parser = argparse.ArgumentParser(prog="audio-chat.phone.mock", description="启动 audio-chat Python phone mock")
+    parser = argparse.ArgumentParser(prog="python -m audio_chat_python_phone_mock", description="启动 audio-chat Python phone mock")
     parser.add_argument("--config", default="")
     args = parser.parse_args(argv)
     config: dict[str, Any] = {}

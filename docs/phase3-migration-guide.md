@@ -303,7 +303,7 @@ uv run python scripts/acceptance_check.py next-docs-contract \
 | --- | --- | --- |
 | `openaiglass.config.sync` | `audio-chat.config.sync` | 已有 CLI 和开发样例配置。 |
 | `openaiglass.server.run` | `audio-chat.server.run` | 已有 YAML server 启动入口。 |
-| `openaiglass.phone.mock` | `audio-chat.phone.mock` | 已有 Python phone mock 参考端。 |
+| `openaiglass.phone.mock` | `python -m audio_chat_python_phone_mock` | 已有 Python phone mock 参考端。 |
 | `openaiglass.glass.start --runtime playback` | `audio-chat.playback.glass` | 已有 Python playback 入口。 |
 | `openaiglass.phone.open` | `device-examples/native-ios-phone` | 当前为 iOS 参考端目录，CLI 由 `old-sdk-parity-cli` 补齐。 |
 | `openaiglass.glass.start` | `device-examples/native-esp32-glass` | 当前为 ESP32-S3 参考端目录，构建烧录由 `old-sdk-parity-esp32` 补齐。 |

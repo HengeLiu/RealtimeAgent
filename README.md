@@ -53,13 +53,13 @@ uv run audio-chat.web.open --print-url
 Python phone mock：
 
 ```bash
-uv run audio-chat.phone.mock --config device-examples/python-phone/phone.mock.yaml
+uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
 ```
 
 Python 手机视频显示端：
 
 ```bash
-uv run audio-chat.phone.mock --config device-examples/python-phone/phone.preview.yaml
+uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.preview.yaml
 ```
 
 该端侧会打开 OpenCV 视频窗口，注册到 server，并订阅同一 `user_id` 下的

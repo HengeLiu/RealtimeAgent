@@ -200,18 +200,18 @@ docs/next-stage-parallel-development-plan.md
 任务清单：
 
 1. 新增 `developer-usability` lane。
-2. lane 必须覆盖以下命令是否存在、是否能输出帮助信息、是否能在测试目录下生成预期文件：
+2. lane 必须覆盖以下 SDK 命令或端侧模块入口是否存在、是否能输出帮助信息、是否能在测试目录下生成预期文件：
    - `audio-chat.config.sync`
    - `audio-chat.server.start`
    - `audio-chat.server.stop`
    - `audio-chat.server.logs`
-   - `audio-chat.phone.mock`
+   - `python -m audio_chat_python_phone_mock`
    - `audio-chat.playback.glass`
    - `audio-chat.dev.preflight`
    - `audio-chat.sdk.package-check`
 3. 增加 docs command check：
    - README 中的非 roadmap 命令必须能被测试解析。
-   - 文档中出现的 entry point 必须存在于 `pyproject.toml`。
+   - 文档中出现的 `audio-chat.*` entry point 必须存在于 `pyproject.toml`；端侧模块入口用 `python -m ...` 单独验收。
    - 文档中出现的公开类必须能从 `audio_chat` 导入。
 4. 增加开发者可用 gate：
    - 没有 app-root 示例时失败。
@@ -925,7 +925,7 @@ tests/test_docs_commands.py
    - `audio-chat.server.stop`。
    - `audio-chat.server.logs`。
    - `audio-chat.config.sync`。
-   - `audio-chat.phone.mock`。
+   - `python -m audio_chat_python_phone_mock`。
    - `audio-chat.web.open`。
 2. package check：
    - editable install。

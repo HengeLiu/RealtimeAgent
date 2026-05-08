@@ -37,7 +37,7 @@
 | --- | --- |
 | `openaiglass.config.sync` | `audio-chat.config.sync` 能同步 server、playback、phone mock、web、iOS、ESP32 配置。 |
 | `openaiglass.server.run` | `audio-chat.server.run` 支持 app-root、YAML、自动发现和 debug API。 |
-| `openaiglass.phone.mock` | `audio-chat.phone.mock` 支持手机任务、视觉帧、执行器和事件日志。 |
+| `openaiglass.phone.mock` | `python -m audio_chat_python_phone_mock` 支持手机任务、视觉帧、执行器和事件日志。 |
 | `openaiglass.glass.start --runtime playback` | `audio-chat.playback.glass` 支持触发音频、抓拍、视频流、传感器时间线和执行器断言。 |
 | `openaiglass.phone.open` | `audio-chat.ios.open` 或文档化等价命令能打开 iOS 参考端工程。 |
 | `openaiglass.glass.start` | ESP32 相关后续目标命令或文档化等价流程能完成 ESP32 配置、构建、烧录、监看。 |
@@ -183,7 +183,7 @@ tests/test_package_check_release_inputs.py
    - `audio-chat.server.start`
    - `audio-chat.server.stop`
    - `audio-chat.server.logs`
-   - `audio-chat.phone.mock`
+   - `python -m audio_chat_python_phone_mock`
    - `audio-chat.playback.glass`
    - `audio-chat.web.open`
    - `audio-chat.ios.open`

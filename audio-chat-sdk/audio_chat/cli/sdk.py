@@ -355,7 +355,9 @@ def _endpoint_source_check(audio_root: Path) -> dict:
         "python_phone_mock": [
             "device-examples/python-phone/README.md",
             "device-examples/python-phone/phone.mock.yaml",
+            "device-examples/python-phone/phone.preview.yaml",
             "device-examples/python-phone/audio_chat_python_phone_mock/phone_mock.py",
+            "device-examples/python-phone/audio_chat_python_phone_mock/__main__.py",
         ],
         "python_glass": [
             "device-examples/python-glass/audio_chat_python_glass/playback.py",

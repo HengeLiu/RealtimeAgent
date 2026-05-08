@@ -15,7 +15,6 @@ DEVELOPER_COMMANDS = [
     "audio-chat.server.start",
     "audio-chat.server.stop",
     "audio-chat.server.logs",
-    "audio-chat.phone.mock",
     "audio-chat.web.open",
     "audio-chat.ios.open",
     "audio-chat.ios.build-sim",
@@ -62,6 +61,25 @@ def test_developer_entry_points_show_help() -> None:
         assert completed.returncode == 0, f"{command}\nstdout={completed.stdout}\nstderr={completed.stderr}"
         output = f"{completed.stdout}\n{completed.stderr}".lower()
         assert "usage" in output or "help" in output
+
+
+def test_python_phone_endpoint_module_shows_help() -> None:
+    """测试目标：确认 Python 手机参考端通过自身 module 入口启动，而不是 SDK CLI。
+
+    测试方法：执行 `uv run python -m audio_chat_python_phone_mock --help`。
+    预期结果：命令输出帮助文本，说明端侧入口不依赖 `audio_chat` SDK 命令命名空间。
+    """
+
+    completed = subprocess.run(
+        ["uv", "run", "python", "-m", "audio_chat_python_phone_mock", "--help"],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    output = f"{completed.stdout}\n{completed.stderr}".lower()
+    assert "usage" in output or "help" in output
 
 
 def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:

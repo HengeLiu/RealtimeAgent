@@ -14,7 +14,6 @@ dependencies = [
 
 [project.scripts]
 "audio-chat.config.sync" = "audio_chat.cli.config:sync"
-"audio-chat.phone.mock" = "audio_chat.cli.phone:mock"
 "audio-chat.playback.glass" = "audio_chat_python_glass.playback:main"
 "audio-chat.dev.preflight" = "audio_chat.preflight:main"
 "audio-chat.server.run" = "audio_chat.server:main"

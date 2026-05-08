@@ -14,7 +14,6 @@ OLD_SDK_PARITY_COMMANDS = [
     "audio-chat.server.start",
     "audio-chat.server.stop",
     "audio-chat.server.logs",
-    "audio-chat.phone.mock",
     "audio-chat.playback.glass",
     "audio-chat.web.open",
     "audio-chat.ios.open",
