@@ -103,8 +103,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 ```bash
 cd audio-chat
-PYTHONPATH=examples/basic-app uv run audio-chat.server.run \
-  --config examples/basic-app/config/server.yaml
+uv run audio-chat.server.run --app-name basic-app
 ```
 
 ## 6. Task 未恢复

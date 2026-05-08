@@ -10,7 +10,7 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.app_loader import load_app_config, prepare_app_imports
+from audio_chat.app_loader import load_app_config, load_config_as_app
 from audio_chat.observability import LogContext, configure_console_logging, get_logger, log_debug, log_error, log_info, log_warning
 from audio_chat.protocol import Event, StreamChunkCodec
 from audio_chat.stream.service import StreamNotOpenError
@@ -479,10 +479,8 @@ def main(argv: list[str] | None = None) -> None:
         resolved_config_path = str(launch.config_path)
     else:
         config_path = args.config or "app-examples/minimal/server.yaml"
-        prepare_app_imports(".")
-        config = AudioChatConfig.from_yaml(config_path)
-        launch = None
-        resolved_config_path = config_path
+        config, launch = load_config_as_app(config_path)
+        resolved_config_path = str(launch.config_path)
     configure_console_logging(config.log_level)
     logger = get_logger("audio_chat.server")
     log_info(

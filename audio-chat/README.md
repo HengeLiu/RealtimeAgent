@@ -205,7 +205,7 @@ cd audio-chat
 uv run audio-chat.server.run --app-name basic-app
 ```
 
-`--app-name` 会自动解析 `app-examples/<app-name>`，加载该目录下的 `server.yaml` 或 `config/server.yaml`，并把 `capabilities` 目录加入 Tool / Task 自动发现。
+`--app-name` 会自动解析 `app-examples/<app-name>`，加载该目录根部的 `server.yaml`，并把 `capabilities` 目录加入 Tool / Task 自动发现。`server.yaml` 必须放在 app 根目录；如果没有显式配置 `app_name`，SDK 会使用 `server.yaml` 的父目录名作为应用名称。
 
 也可以显式指定应用根目录：
 

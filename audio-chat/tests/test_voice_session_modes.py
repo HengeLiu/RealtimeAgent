@@ -24,15 +24,20 @@ def test_agent_mode_realtime_alias_builds_realtime_core(tmp_path) -> None:
 def test_voice_server_mode_text_and_omni_map_to_agent_modes(tmp_path) -> None:
     """测试目标：验证旧 SDK `voice.server_mode` 可以迁移到新版 Agent Core。
 
-    测试方法：分别写入 text_server 和 omni_server YAML，再通过 `AudioChatConfig.from_yaml()` 加载。
+    测试方法：分别创建 app 根目录，把 text_server 和 omni_server 配置写入根目录 `server.yaml`，
+    再通过 `AudioChatConfig.from_yaml()` 加载。
     预期结果：text_server 构建 TextAgentCore，omni_server 构建 RealtimeAudioAgentCore。
     """
 
-    text_config = tmp_path / "text.yaml"
+    text_app_dir = tmp_path / "text-app"
+    text_app_dir.mkdir()
+    text_config = text_app_dir / "server.yaml"
     text_config.write_text("voice:\n  server_mode: text_server\nobservability:\n  runs_root: runs-text\n", encoding="utf-8")
     text_app = AudioChatApp(AudioChatConfig.from_yaml(text_config))
 
-    omni_config = tmp_path / "omni.yaml"
+    omni_app_dir = tmp_path / "omni-app"
+    omni_app_dir.mkdir()
+    omni_config = omni_app_dir / "server.yaml"
     omni_config.write_text(
         "voice:\n  server_mode: omni_server\nagent:\n  realtime:\n    provider: mock\nobservability:\n  runs_root: runs-omni\n",
         encoding="utf-8",
@@ -47,11 +52,13 @@ def test_voice_server_mode_text_and_omni_map_to_agent_modes(tmp_path) -> None:
 def test_voice_session_lifecycle_config_is_exposed(tmp_path) -> None:
     """测试目标：验证 `voice.session_lifecycle` 进入运行配置。
 
-    测试方法：加载包含 persistent/per_turn 语义的 YAML。
+    测试方法：加载 app 根目录下包含 persistent/per_turn 语义的 `server.yaml`。
     预期结果：配置对象保留该语义，后续 App 生命周期判断可读取。
     """
 
-    config_path = tmp_path / "voice.yaml"
+    app_dir = tmp_path / "voice-app"
+    app_dir.mkdir()
+    config_path = app_dir / "server.yaml"
     config_path.write_text(
         "\n".join(
             [

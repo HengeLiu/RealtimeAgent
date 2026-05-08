@@ -797,7 +797,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 uv run audio-chat.sdk.package-check \
   --report runs/acceptance/old-sdk-parity-package-check.json
 uv run audio-chat.dev.preflight \
-  --config examples/for-blind-app/config/server.yaml \
+  --config app-examples/for-blind-app/server.yaml \
   --report runs/acceptance/old-sdk-parity-preflight.json
 uv run audio-chat.playback.glass \
   --config examples/for-blind-app/host/glass-playback/look-around.yaml

@@ -17,9 +17,6 @@ from audio_chat.protocol import StreamChunk, StreamFormat
 from audio_chat.tools import ToolGateway
 
 
-_IMAGE_CONTEXT_SILENCE_PCM16 = b"\x00\x00" * 1600
-
-
 @dataclass(frozen=True)
 class RealtimeProviderConfig:
     """Realtime provider 配置。
@@ -53,6 +50,7 @@ class RealtimeProviderCallbacks:
     error: Callable[[str, dict[str, Any]], None]
     tool_call_delta: Callable[[dict[str, Any]], None] | None = None
     tool_call_done: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    replay_audio_for_tool_result: Callable[[dict[str, Any]], list[bytes]] | None = None
 
 
 class RealtimeProviderAdapter(Protocol):
@@ -423,36 +421,53 @@ class QwenOmniRealtimeAdapter:
             )
             image_path = _resolve_capture_photo_tool_image_path(result)
             image_bytes = image_path.read_bytes() if image_path is not None else None
+            create_followup_response = True
             response_instructions = self.config.instructions
             if image_bytes:
                 append_video = getattr(self._conversation, "append_video", None)
                 if callable(append_video):
-                    clear_buffer = getattr(self._conversation, "clear_appended_audio", None)
-                    if callable(clear_buffer):
-                        clear_buffer()
+                    replay_audio = self._callbacks.replay_audio_for_tool_result(result) if self._callbacks and self._callbacks.replay_audio_for_tool_result else []
                     append_audio = getattr(self._conversation, "append_audio", None)
-                    if callable(append_audio):
-                        append_audio(base64.b64encode(_IMAGE_CONTEXT_SILENCE_PCM16).decode("ascii"))
-                    append_video(base64.b64encode(image_bytes).decode("ascii"))
-                    commit = getattr(self._conversation, "commit", None)
-                    if callable(commit):
-                        commit()
-                    if self._callbacks:
-                        self._callbacks.provider_event(
-                            {
-                                "event": "omni.capture_photo.image_appended",
-                                "provider": "qwen",
-                                "tool_call_id": call_id,
-                                "tool_name": result.get("name"),
-                                "image_bytes": len(image_bytes),
-                                "image_path": str(image_path),
-                                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
-                                "cleared_buffer": callable(clear_buffer),
-                                "prepended_audio_bytes": len(_IMAGE_CONTEXT_SILENCE_PCM16) if callable(append_audio) else 0,
-                                "committed": callable(commit),
-                            }
-                        )
-                    response_instructions = _capture_photo_response_instructions(self.config.instructions)
+                    if not replay_audio or not callable(append_audio):
+                        if self._callbacks:
+                            self._callbacks.provider_event(
+                                {
+                                    "event": "omni.capture_photo.audio_replay.missing",
+                                    "provider": "qwen",
+                                    "call_id": call_id,
+                                    "tool_name": result.get("name"),
+                                    "image_path": str(image_path),
+                                    "has_append_audio": callable(append_audio),
+                                    "replay_chunk_count": len(replay_audio),
+                                    "message": "capture_photo image cannot be replayed because user audio is unavailable",
+                                }
+                            )
+                    else:
+                        for audio in replay_audio:
+                            if audio:
+                                append_audio(base64.b64encode(audio).decode("ascii"))
+                        append_video(base64.b64encode(image_bytes).decode("ascii"))
+                        commit = getattr(self._conversation, "commit", None)
+                        if callable(commit):
+                            commit()
+                        if self._callbacks:
+                            self._callbacks.provider_event(
+                                {
+                                    "event": "omni.capture_photo.image_appended",
+                                    "provider": "qwen",
+                                    "tool_call_id": call_id,
+                                    "tool_name": result.get("name"),
+                                    "image_bytes": len(image_bytes),
+                                    "image_path": str(image_path),
+                                    "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+                                    "replayed_audio_bytes": sum(len(audio) for audio in replay_audio),
+                                    "replayed_audio_chunk_count": len(replay_audio),
+                                    "committed": callable(commit),
+                                    "response_create": "provider_auto_after_commit",
+                                }
+                            )
+                        response_instructions = _capture_photo_response_instructions(self.config.instructions)
+                        create_followup_response = False
                 elif self._callbacks:
                     self._callbacks.error(
                         "Realtime provider does not support append_video",
@@ -473,10 +488,11 @@ class QwenOmniRealtimeAdapter:
                         "storage_uri": (result.get("data") or {}).get("storage_uri") if isinstance(result.get("data"), dict) else None,
                     },
                 )
-            self._conversation.create_response(
-                instructions=response_instructions,
-                output_modalities=self._output_modalities or None,
-            )
+            if create_followup_response:
+                self._conversation.create_response(
+                    instructions=response_instructions,
+                    output_modalities=self._output_modalities or None,
+                )
         except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.tool_result.inject.failed", "call_id": call_id})
@@ -787,6 +803,8 @@ class RealtimeAudioAgentCore:
         self._event_buffer = AgentEventBuffer()
         self._assistant_text_by_session: dict[str, list[str]] = {}
         self._recorded_user_transcripts: set[tuple[str, str]] = set()
+        self._active_user_audio_by_session: dict[str, list[bytes]] = {}
+        self._last_user_audio_by_session: dict[str, list[bytes]] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -848,6 +866,7 @@ class RealtimeAudioAgentCore:
             raise ValueError("RealtimeAudioAgentCore only accepts sensor.mic")
         if chunk.session_id in self._failed_sessions:
             return
+        self._cache_replay_audio(chunk)
         self.open(chunk.user_id, chunk.session_id)
         _session_id, provider = self._sessions[chunk.user_id]
         try:
@@ -1001,7 +1020,43 @@ class RealtimeAudioAgentCore:
                 session_id=session_id,
                 record=record,
             ),
+            replay_audio_for_tool_result=lambda result: self._replay_audio_for_tool_result(
+                session_id=session_id,
+                result=result,
+            ),
         )
+
+    def _cache_replay_audio(self, chunk: StreamChunk) -> None:
+        """缓存最近一轮用户原始 PCM，供 capture_photo 后和图片一起重放。"""
+
+        active = self._active_user_audio_by_session.setdefault(chunk.session_id, [])
+        if chunk.seq == 0 and active:
+            active = []
+            self._active_user_audio_by_session[chunk.session_id] = active
+        if chunk.payload:
+            active.append(bytes(chunk.payload))
+        if chunk.final and active:
+            self._last_user_audio_by_session[chunk.session_id] = list(active)
+            self._active_user_audio_by_session[chunk.session_id] = []
+
+    def _replay_audio_for_tool_result(self, *, session_id: str, result: dict[str, Any]) -> list[bytes]:
+        """返回 capture_photo 对应的上一轮用户音频。"""
+
+        if result.get("name") != "capture_photo" or not result.get("ok"):
+            return []
+        active = self._active_user_audio_by_session.get(session_id) or []
+        chunks = active if active else self._last_user_audio_by_session.get(session_id, [])
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.input_audio.replay.prepared",
+                "tool_call_id": result.get("tool_call_id"),
+                "tool_name": result.get("name"),
+                "chunk_count": len(chunks),
+                "payload_size": sum(len(chunk) for chunk in chunks),
+            },
+        )
+        return list(chunks)
 
     def _handle_provider_tool_call_delta(self, record: dict[str, Any]) -> None:
         """处理 provider function call 参数增量。"""

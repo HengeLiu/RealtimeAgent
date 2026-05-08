@@ -14,7 +14,7 @@ from audio_chat_python_glass.playback import PythonPlaybackEndpoint
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APP_ROOT = ROOT / "examples" / "for-blind-app"
+APP_ROOT = ROOT / "app-examples" / "for-blind-app"
 
 
 def _clear_capability_modules() -> None:
@@ -35,7 +35,7 @@ def _build_app(tmp_path, monkeypatch) -> AudioChatApp:
 
     _clear_capability_modules()
     monkeypatch.syspath_prepend(str(APP_ROOT))
-    config = AudioChatConfig.from_yaml(APP_ROOT / "config/server.yaml")
+    config = AudioChatConfig.from_yaml(APP_ROOT / "server.yaml")
     return AudioChatApp(
         replace(
             config,

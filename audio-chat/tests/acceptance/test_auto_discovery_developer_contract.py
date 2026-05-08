@@ -103,13 +103,13 @@ def test_example_basic_app_files_are_copyable() -> None:
     """测试目标：确认仓库内提供可复制的最小 app-root 示例。
 
     测试方法：检查示例 README、配置、Tool、Task 和宿主入口文件存在。
-    预期结果：功能开发者能从 `examples/basic-app` 开始复制开发。
+    预期结果：功能开发者能从 `app-examples/basic-app` 开始复制开发。
     """
 
-    root = Path(__file__).resolve().parents[2] / "examples" / "basic-app"
+    root = Path(__file__).resolve().parents[2] / "app-examples" / "basic-app"
     expected = [
         "README.md",
-        "config/server.yaml",
+        "server.yaml",
         "capabilities/capture_photo/tool.py",
         "capabilities/timer/task.py",
         "capabilities/continuous_rgb_analyze/task.py",

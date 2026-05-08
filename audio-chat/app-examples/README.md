@@ -18,7 +18,7 @@ cd audio-chat
 uv run audio-chat.server.run --app-name for-blind-app
 ```
 
-`--app-name for-blind-app` 会自动解析 `app-examples/for-blind-app`，加载 `config/server.yaml`，并把 `capabilities` 目录加入 Tool / Task 自动发现。应用如果使用根目录 `server.yaml`，例如 `basic-app`，同样可以通过 `--app-name basic-app` 启动。
+`--app-name for-blind-app` 会自动解析 `app-examples/for-blind-app`，加载根目录 `server.yaml`，并把 `capabilities` 目录加入 Tool / Task 自动发现。所有 app 的 `server.yaml` 都必须放在 app 根目录；如果 YAML 没有显式配置 `app_name`，SDK 会使用父目录名。
 
 推荐验收：
 

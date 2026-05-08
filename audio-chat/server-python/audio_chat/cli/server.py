@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+from audio_chat.app_loader import load_app_config, load_config_as_app
+
 
 def start(argv: list[str] | None = None) -> None:
     """后台启动 server。
@@ -37,13 +39,14 @@ def start(argv: list[str] | None = None) -> None:
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     log_file.parent.mkdir(parents=True, exist_ok=True)
     if args.dry_run:
+        config, launch = _resolve_launch_metadata(args)
         _write_pid_file(
             pid_file,
             {
                 "status": "dry_run",
                 "pid": None,
-                "config": args.config,
-                "app_name": args.app_name,
+                "config": str(launch.config_path),
+                "app_name": config.app_name,
                 "app_root": args.app_root,
                 "log_file": str(log_file),
             },
@@ -125,6 +128,20 @@ def logs(argv: list[str] | None = None) -> None:
 
 def _write_pid_file(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _resolve_launch_metadata(args: argparse.Namespace):
+    """解析 dry-run 使用的 app 启动元数据。
+
+    主要逻辑：dry-run 也复用真实启动的 app-name/config 解析规则，提前暴露配置路径错误。
+    参数：`args` 为命令行参数。
+    返回值：`AudioChatConfig` 和 `AppLaunch`。
+    异常情况：配置缺失、旧路径或非法 app-name 时由 app_loader 抛出。
+    """
+
+    if args.app_name:
+        return load_app_config(args.app_name, app_root=args.app_root)
+    return load_config_as_app(args.config or "app-examples/minimal/server.yaml")
 
 
 def _wait_for_exit(pid: int, *, timeout_seconds: float) -> None:

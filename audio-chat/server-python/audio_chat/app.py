@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from audio_chat.agent_core import AgentCoreRouter
@@ -9,7 +10,7 @@ from audio_chat.agent_core.providers import AsrProviderConfig, TextModelProvider
 from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
 from audio_chat.audio_pipeline import AudioPipeline, AudioPipelineConfig as RuntimeAudioPipelineConfig
-from audio_chat.config import AudioChatYamlConfig, load_yaml_config
+from audio_chat.config import AudioChatYamlConfig, load_yaml_config, resolve_config_path
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
 from audio_chat.mcp import McpGateway
 from audio_chat.memory import JsonlMemoryStore, MemoryService
@@ -110,7 +111,33 @@ class AudioChatConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AudioChatConfig":
         loaded = load_yaml_config(path)
-        return cls.from_loaded_config(loaded)
+        config = cls.from_loaded_config(loaded)
+        config_path = resolve_config_path(path).resolve()
+        if config_path.name != "server.yaml":
+            raise ValueError(f"app config file must be named server.yaml: {config_path}")
+        if config_path.parent.name == "config":
+            raise ValueError(f"server.yaml must be placed at app root, not under config/: {config_path}")
+        app_dir = config_path.parent
+        _prepare_app_imports(app_dir)
+        capabilities_dir = app_dir / "capabilities"
+        updates = {
+            "app_name": config.app_name or app_dir.name,
+            "app_dir": str(app_dir),
+            "config_path": str(config_path),
+        }
+        if capabilities_dir.is_dir():
+            packages = ("capabilities",)
+            updates.update(
+                {
+                    "tools_discover_enabled": True,
+                    "tools_discover_packages": packages,
+                    "tools_discover_recursive": True,
+                    "tasks_discover_enabled": True,
+                    "tasks_discover_packages": packages,
+                    "tasks_discover_recursive": True,
+                }
+            )
+        return replace(config, **updates)
 
     @classmethod
     def from_loaded_config(cls, loaded: AudioChatYamlConfig) -> "AudioChatConfig":
@@ -869,3 +896,21 @@ def _build_task_store(config: AudioChatConfig) -> TaskStore:
         root = config.tasks_store_root or str(Path(config.runs_root) / "tasks")
         return JsonlTaskStore(root)
     raise ValueError(f"unsupported task store type: {config.tasks_store_type}")
+
+
+def _prepare_app_imports(app_dir: Path) -> None:
+    """准备 app 根目录导入路径。
+
+    主要逻辑：清理旧的 `capabilities` 模块缓存，并把当前 app 根目录放到 `sys.path`
+    前部，避免切换不同 app 时复用上一套能力模块。
+    参数：`app_dir` 为 app 根目录。
+    返回值：无。
+    异常情况：无。
+    """
+
+    for name in list(sys.modules):
+        if name == "capabilities" or name.startswith("capabilities."):
+            sys.modules.pop(name, None)
+    path = str(app_dir.resolve())
+    if path not in sys.path:
+        sys.path.insert(0, path)

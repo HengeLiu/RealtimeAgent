@@ -88,7 +88,7 @@ class TextAgentCore:
             self.recorder.record_system_event(
                 {"event": "system.degradation.raised", "component": "TextModelAdapter", "reason": downgrade_reason}
             )
-        self._responded_sessions: set[str] = set()
+        self._responded_input_streams: set[str] = set()
         self._cancelled_users: set[str] = set()
         self._event_buffer = AgentEventBuffer()
         self.tool_gateway = tool_gateway
@@ -118,9 +118,10 @@ class TextAgentCore:
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         transcript = self.asr_pipeline.append_audio(chunk)
-        if transcript is None or chunk.session_id in self._responded_sessions:
+        turn_key = chunk.stream_id or chunk.session_id
+        if transcript is None or turn_key in self._responded_input_streams:
             return
-        self._responded_sessions.add(chunk.session_id)
+        self._responded_input_streams.add(turn_key)
         self._cancelled_users.discard(chunk.user_id)
         self.control_service.append_message(
             chunk.user_id,

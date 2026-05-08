@@ -191,6 +191,70 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
     assert connection.chunks
 
 
+def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_path) -> None:
+    """测试目标：验证连续对话同一 session 内的多轮麦克风输入都能触发回复。
+
+    测试方法：注册一个浏览器式端侧，在同一 active session 下依次打开两条
+    `sensor.mic` stream，并分别发送 final chunk。
+    预期结果：两条不同输入 stream 都会触发 `agent.response.started` 和音频输出，
+    不会因为 session_id 已响应过而跳过第二轮。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+
+    class Connection:
+        device_id = "dev-continuous"
+
+        def __init__(self) -> None:
+            self.events = []
+            self.chunks = []
+
+        def push_event(self, event: Event) -> None:
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            self.chunks.append(chunk)
+
+    connection = Connection()
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-continuous",
+            producer_id="dev-continuous",
+            payload={
+                "device_id": "dev-continuous",
+                "auth": {"mode": "disabled"},
+                "subscriptions": [
+                    {"event": "agent.response.*"},
+                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+                ],
+            },
+        ),
+        connection,
+    )
+    first = app.open_input_stream(user_id="user-continuous", producer_id="dev-continuous")
+    second = app.open_input_stream(user_id="user-continuous", producer_id="dev-continuous")
+    assert first.session_id == second.session_id
+
+    for index, handle in enumerate((first, second)):
+        app.write_input_chunk(
+            StreamChunk(
+                user_id="user-continuous",
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.mic",
+                seq=index,
+                payload=b"\x00\x00" * 320,
+                final=True,
+            )
+        )
+
+    event_names = [event.event_name for event in connection.events]
+    assert event_names.count("agent.response.started") == 2
+    assert event_names.count("stream.output.open.requested") == 2
+    assert len(connection.chunks) >= 2
+
+
 def test_stream_lifecycle_idle_timeout_and_input_failed_events(tmp_path) -> None:
     """测试目标：覆盖输入 stream 的 failed、idle timeout 生命周期。
 

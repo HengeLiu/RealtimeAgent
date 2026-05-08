@@ -574,7 +574,6 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
             self.audios = []
             self.videos = []
             self.commits = 0
-            self.clears = 0
             self.responses = []
 
         def create_item(self, item: dict) -> None:
@@ -585,9 +584,6 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
 
         def append_audio(self, audio_base64: str) -> None:
             self.audios.append(audio_base64)
-
-        def clear_appended_audio(self) -> None:
-            self.clears += 1
 
         def commit(self) -> None:
             self.commits += 1
@@ -605,6 +601,7 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
         audio_done=lambda metadata: None,
         provider_event=records.append,
         error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        replay_audio_for_tool_result=lambda result: [b"\x01\x02", b"\x03\x04"],
     )
 
     provider._submit_tool_result(
@@ -621,18 +618,17 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     )
 
     assert conversation.items[0]["type"] == "function_call_output"
-    assert conversation.audios
+    assert conversation.audios == ["AQI=", "AwQ="]
     assert conversation.videos == ["/9hicm93c2VyLXBob3Rv/9k="]
-    assert conversation.clears == 1
     assert conversation.commits == 1
-    assert "结合图片回答" in conversation.responses[0]["instructions"]
-    assert "刚提交的新照片" in conversation.responses[0]["instructions"]
+    assert conversation.responses == []
     append_record = next(record for record in records if record.get("event") == "omni.capture_photo.image_appended")
     assert append_record["image_path"] == str(image_path.resolve())
     assert append_record["image_sha256"] == "4c84c82bf54f47daa25a64cc46cb553c7c073ecc64c9f8b40287301cc3bf3407"
-    assert append_record["cleared_buffer"] is True
-    assert append_record["prepended_audio_bytes"] > 0
+    assert append_record["replayed_audio_bytes"] == 4
+    assert append_record["replayed_audio_chunk_count"] == 2
     assert append_record["committed"] is True
+    assert append_record["response_create"] == "provider_auto_after_commit"
 
 
 def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
@@ -799,6 +795,49 @@ def test_realtime_tool_call_is_persisted_to_user_messages(tmp_path) -> None:
     assert "tool_result.done" in messages
     assert "echo_realtime" in messages
     assert "call-001" in messages
+
+
+def test_realtime_core_replays_last_user_audio_for_capture_photo(tmp_path) -> None:
+    """测试目标：验证 capture_photo 后重放的是上一轮用户原始音频。
+
+    测试方法：向 RealtimeAudioAgentCore 写入两片音频和 final 边界，再请求
+    capture_photo 工具结果的 replay audio。
+    预期结果：返回上一轮非空 PCM 片段，不包含 final 空 chunk。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: FakeRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
+    )
+
+    for seq, payload, final in [(0, b"\x01\x02", False), (1, b"\x03\x04", False), (2, b"", True)]:
+        core.append_audio_event(
+            StreamChunk(
+                user_id="user-001",
+                session_id="sess-replay",
+                stream_id="stream-in",
+                stream_type="sensor.mic",
+                seq=seq,
+                payload=payload,
+                final=final,
+            )
+        )
+
+    chunks = core._replay_audio_for_tool_result(
+        session_id="sess-replay",
+        result={"name": "capture_photo", "ok": True, "tool_call_id": "call-photo"},
+    )
+
+    assert chunks == [b"\x01\x02", b"\x03\x04"]
+    model_events = (tmp_path / "runs" / "sessions" / "sess-replay" / "model-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "realtime.input_audio.replay.prepared" in model_events
 
 
 def test_mock_realtime_provider_cancel_and_close_are_observable() -> None:

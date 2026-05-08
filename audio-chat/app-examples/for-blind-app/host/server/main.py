@@ -20,7 +20,7 @@ def create_app(config: AudioChatConfig | None = None) -> AudioChatApp:
     3. 依赖 SDK 自动发现注册 `capabilities` 下的 Tool、Task 和 MCP wrapper。
 
     参数：
-    1. `config`：可选 SDK 配置；为空时读取 `config/server.yaml`。
+    1. `config`：可选 SDK 配置；为空时读取 app 根目录 `server.yaml`。
 
     返回值：
     1. `AudioChatApp`：已装配样板能力的应用实例。
@@ -29,4 +29,4 @@ def create_app(config: AudioChatConfig | None = None) -> AudioChatApp:
     1. 配置读取、Tool/Task 自动发现或 MCP 配置异常时由 SDK 抛出。
     """
 
-    return AudioChatApp(config or AudioChatConfig.from_yaml(APP_ROOT / "config/server.yaml"))
+    return AudioChatApp(config or AudioChatConfig.from_yaml(APP_ROOT / "server.yaml"))

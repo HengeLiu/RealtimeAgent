@@ -21,4 +21,4 @@ def create_app(config: AudioChatConfig | None = None) -> AudioChatApp:
     异常情况：配置加载或自动发现失败时向上抛出。
     """
 
-    return AudioChatApp(config or AudioChatConfig.from_yaml(APP_ROOT / "config/server.yaml"))
+    return AudioChatApp(config or AudioChatConfig.from_yaml(APP_ROOT / "server.yaml"))

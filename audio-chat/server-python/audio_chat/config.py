@@ -295,6 +295,18 @@ def _resolve_config_path(path: str | Path) -> Path:
     return raw
 
 
+def resolve_config_path(path: str | Path) -> Path:
+    """解析配置文件路径。
+
+    主要逻辑：复用内部路径兼容规则，支持从仓库根目录或 `audio-chat/` 前缀路径加载。
+    参数：`path` 为用户传入的配置路径。
+    返回值：实际存在时返回可用路径；不存在时返回原始路径，交给调用方报错。
+    异常情况：无。
+    """
+
+    return _resolve_config_path(path)
+
+
 def _discovery(data: dict[str, Any]) -> DiscoveryConfig:
     return DiscoveryConfig(**dict(data or {}))
 

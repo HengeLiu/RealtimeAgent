@@ -78,6 +78,35 @@ def load_app_config(app_name: str, *, app_root: str | Path = "app-examples") -> 
     return apply_app_launch(config, launch), launch
 
 
+def load_config_as_app(config_path: str | Path) -> tuple[AudioChatConfig, AppLaunch]:
+    """按根目录 `server.yaml` 加载 app 配置。
+
+    主要逻辑：把 `server.yaml` 的父目录视为 app 根目录；当 YAML 没有配置 app_name
+    时使用父目录名；同时准备 `capabilities` 自动发现元数据。
+    参数：`config_path` 为 app 根目录下的 `server.yaml`。
+    返回值：补齐 app 元数据后的配置和启动描述。
+    异常情况：文件名不是 `server.yaml` 或路径位于 `config/` 下时抛出 ValueError。
+    """
+
+    path = _resolve_server_yaml_path(config_path)
+    if path.name != "server.yaml":
+        raise ValueError(f"app config file must be named server.yaml: {path}")
+    if path.parent.name == "config":
+        raise ValueError(f"server.yaml must be placed at app root, not under config/: {path}")
+    app_dir = path.parent.resolve()
+    prepare_app_imports(app_dir)
+    config = AudioChatConfig.from_yaml(path)
+    app_name = config.app_name or app_dir.name
+    capabilities_dir = app_dir / "capabilities"
+    launch = AppLaunch(
+        app_name=app_name,
+        app_dir=app_dir,
+        config_path=path,
+        capabilities_dir=capabilities_dir if capabilities_dir.is_dir() else None,
+    )
+    return apply_app_launch(config, launch), launch
+
+
 def _resolve_app_root(app_root: str | Path) -> Path:
     raw = Path(app_root)
     if raw.is_dir():
@@ -89,11 +118,24 @@ def _resolve_app_root(app_root: str | Path) -> Path:
 
 
 def _resolve_app_config(app_dir: Path) -> Path:
-    candidates = [
-        app_dir / "server.yaml",
-        app_dir / "config" / "server.yaml",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+    config_path = app_dir / "server.yaml"
+    if config_path.is_file():
+        return config_path
+    legacy_path = app_dir / "config" / "server.yaml"
+    if legacy_path.exists():
+        raise FileNotFoundError(f"server.yaml must be placed at app root: {config_path}")
     raise FileNotFoundError(f"server.yaml not found under app directory: {app_dir}")
+
+
+def _resolve_server_yaml_path(path: str | Path) -> Path:
+    raw = Path(path)
+    if raw.is_file():
+        return raw.resolve()
+    if raw.parts and raw.parts[0] == "audio-chat":
+        trimmed = Path(*raw.parts[1:])
+        if trimmed.is_file():
+            return trimmed.resolve()
+    prefixed = Path("audio-chat") / raw
+    if prefixed.is_file():
+        return prefixed.resolve()
+    return raw.resolve()

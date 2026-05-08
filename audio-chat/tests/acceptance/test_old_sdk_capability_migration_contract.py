@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APP_ROOT = ROOT / "examples" / "for-blind-app"
+APP_ROOT = ROOT / "app-examples" / "for-blind-app"
 
 
 def test_for_blind_migration_sample_has_required_structure() -> None:
@@ -16,7 +16,7 @@ def test_for_blind_migration_sample_has_required_structure() -> None:
 
     required = [
         APP_ROOT / "README.md",
-        APP_ROOT / "config/server.yaml",
+        APP_ROOT / "server.yaml",
         APP_ROOT / "config/mcp.yaml",
         APP_ROOT / "host/server/main.py",
         APP_ROOT / "host/glass-playback/old-sdk-parity-capabilities.yaml",
