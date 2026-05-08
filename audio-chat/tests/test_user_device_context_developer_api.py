@@ -76,6 +76,164 @@ def test_capture_photo_uses_sensor_rgb_asset_stream(tmp_path) -> None:
     assert request_events
     assert request_events[-1].payload["reason"] == "parity-test"
     assert "request_id" in asset.metadata
+    asset_events = (tmp_path / "runs" / "sessions" / app.active_session_id("user-photo") / "assets.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "asset.requested" in asset_events
+    assert "asset.stored" in asset_events
+    assert '"delivered_count": 1' in asset_events
+
+
+def test_capture_photo_timeout_is_visible_in_session_asset_events(tmp_path) -> None:
+    """测试目标：验证抓拍超时时能在当前会话产物中看到明确诊断。
+
+    测试方法：不注册任何 `sensor.rgb` 设备，直接调用 `capture_photo()` 并等待短超时。
+    预期结果：返回 None，`assets.jsonl` 包含 request_id、delivered_count=0 和超时事件。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    session_id = app.active_session_id("user-photo-timeout")
+
+    asset = UserDeviceContext(user_id="user-photo-timeout", app=app).capture_photo(
+        reason="timeout-test",
+        timeout_seconds=0.01,
+    )
+
+    assert asset is None
+    asset_events = (tmp_path / "runs" / "sessions" / session_id / "assets.jsonl").read_text(encoding="utf-8")
+    assert "asset.requested" in asset_events
+    assert "asset.request.timeout" in asset_events
+    assert '"delivered_count": 0' in asset_events
+
+
+def test_old_sdk_builtin_tool_names_are_registered_by_default(tmp_path) -> None:
+    """测试目标：确认老 SDK 内置工具名在新版 SDK 中默认可见。
+
+    测试方法：创建默认 AudioChatApp，读取 ToolRegistry 名称。
+    预期结果：`capture_photo`、`start_phone_video_link` 和
+    `close_continuous_dialog` 都无需业务包自动发现即可注册。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+
+    assert {
+        "capture_photo",
+        "start_phone_video_link",
+        "close_continuous_dialog",
+    } <= set(app.tool_registry.list_names())
+
+
+def test_builtin_capture_photo_tool_uses_sensor_rgb_asset_stream(tmp_path) -> None:
+    """测试目标：验证内置 `capture_photo` Tool 兼容老工具名。
+
+    测试方法：注册可生产 `sensor.rgb` 的 playback 端侧，通过 ToolGateway 调用
+    `capture_photo`。
+    预期结果：Tool 返回资产引用，端侧收到 stream 配置事件。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    endpoint = PythonPlaybackEndpoint(app=app, user_id="user-photo-tool", device_id="dev-camera-tool")
+    _register_device(
+        app,
+        endpoint=endpoint,
+        user_id="user-photo-tool",
+        device_id="dev-camera-tool",
+        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
+        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+    )
+    session_id = app.active_session_id("user-photo-tool")
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="capture_photo",
+            user_id="user-photo-tool",
+            session_id=session_id,
+            input_data={"reason": "builtin-parity", "timeout_seconds": 1},
+        )
+    )
+
+    assert result.ok is True
+    assert result.assets
+    assert result.data["stream_type"] == "sensor.rgb"
+    assert any(event.event_name == "stream.control.configure.requested" for event in endpoint.events)
+
+
+def test_start_phone_video_link_tool_publishes_continuous_rgb_config(tmp_path) -> None:
+    """测试目标：验证 `start_phone_video_link` 不引入点对点 RPC。
+
+    测试方法：注册订阅 sensor.rgb 配置事件的端侧，通过 ToolGateway 调用工具。
+    预期结果：端侧收到 `stream.control.configure.requested`，payload 只包含 stream
+    配置和 link_id，不包含 target device 字段。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    endpoint = PassiveEndpoint("dev-video")
+    _register_device(
+        app,
+        endpoint=endpoint,
+        user_id="user-video-link",
+        device_id="dev-video",
+        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
+        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+    )
+    session_id = app.active_session_id("user-video-link")
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="start_phone_video_link",
+            user_id="user-video-link",
+            session_id=session_id,
+            input_data={"frame_interval_ms": 250},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["state"] == "running"
+    event = endpoint.events[-1]
+    assert event.event_name == "stream.control.configure.requested"
+    assert event.stream_type == "sensor.rgb"
+    assert event.payload["mode"] == "continuous"
+    assert event.payload["frame_interval_ms"] == 250
+    assert "target_device_id" not in event.payload
+    assert "phone_device_id" not in event.payload
+
+
+def test_close_continuous_dialog_tool_requests_close_after_reply(tmp_path) -> None:
+    """测试目标：验证 `close_continuous_dialog` 复用新版音频会话生命周期。
+
+    测试方法：注册订阅 audio_session 事件的端侧，先打开用户会话，再调用 Tool。
+    预期结果：端侧收到 `control.audio_session.close.requested`，close_mode 为
+    `close_after_reply`。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    endpoint = PassiveEndpoint("dev-dialog")
+    _register_device(
+        app,
+        endpoint=endpoint,
+        user_id="user-dialog",
+        device_id="dev-dialog",
+        capabilities={"streams.consume": ["actuator.speaker"]},
+        subscriptions=[{"event": "control.audio_session.*"}],
+    )
+    session_id = app.active_session_id("user-dialog")
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="close_continuous_dialog",
+            user_id="user-dialog",
+            session_id=session_id,
+            input_data={"mode": "after_reply"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["close_mode"] == "close_after_reply"
+    assert any(
+        event.event_name == "control.audio_session.close.requested"
+        and event.payload.get("close_mode") == "close_after_reply"
+        for event in endpoint.events
+    )
 
 
 def test_latest_asset_and_request_asset_share_asset_cache(tmp_path) -> None:

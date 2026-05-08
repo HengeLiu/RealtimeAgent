@@ -45,7 +45,7 @@ class ControlConfig:
 @dataclass(frozen=True)
 class StreamConfig:
     transport: str = "websocket_binary"
-    max_chunk_bytes: int = 8192
+    max_chunk_bytes: int = 1048576
     idle_timeout_seconds: int = 20
     default_sensor_mic: dict[str, Any] = field(
         default_factory=lambda: {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}

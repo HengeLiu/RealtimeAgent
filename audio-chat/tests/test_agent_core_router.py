@@ -204,10 +204,13 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
 
     message_text = (tmp_path / "runs" / "users" / "user-tool" / "messages.jsonl").read_text(encoding="utf-8")
     trace_text = (tmp_path / "runs" / "sessions" / session_id / "tool-trace.jsonl").read_text(encoding="utf-8")
+    model_request = (tmp_path / "runs" / "sessions" / session_id / "model-request.json").read_text(encoding="utf-8")
 
     assert "tool.result" in message_text
     assert "上海天气已查询。" in message_text
     assert "lookup_weather" in trace_text
+    assert "You are the audio-chat TextAgentCore." in model_request
+    assert "lookup_weather" in model_request
 
 
 class DemoTask(BaseTask):

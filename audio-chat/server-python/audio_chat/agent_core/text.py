@@ -10,6 +10,7 @@ from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from audio_chat.agent_core.providers import (
     AsrProviderConfig,
+    TEXT_AGENT_SYSTEM_PROMPT,
     TextModelProviderConfig,
     build_asr_provider,
     build_text_model,
@@ -195,8 +196,13 @@ class TextAgentCore:
             {
                 "provider": getattr(self.text_model, "provider_name", "unknown"),
                 "model": getattr(self.text_model, "model", "unknown"),
-                "messages": list(messages),
+                "runner": "agent_core_text",
+                "user_id": user_id,
+                "session_id": session_id,
+                "system_prompt": TEXT_AGENT_SYSTEM_PROMPT,
+                "messages": [{"role": "system", "content": TEXT_AGENT_SYSTEM_PROMPT}, *list(messages)],
                 "tools": tools,
+                "tool_count": len(tools),
             },
         )
         for _ in range(4):

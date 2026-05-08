@@ -193,7 +193,7 @@ audio-chat/
 业务代码应优先从 `audio_chat` 顶层导入扩展类，不依赖内部服务模块路径：
 
 ```python
-from audio_chat import BaseTool, ToolContext, ToolResult, BaseTask, TaskContext, TaskEvent, UserDeviceContext
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec, BaseTask, TaskContext, TaskEvent, UserDeviceContext
 ```
 
 ## 4. 设计原则
@@ -1111,7 +1111,7 @@ DeviceHandle --> DeviceSnapshot
     "server_time_ms": 1760000000000,
     "effective_config": {
       "control.heartbeat_timeout_seconds": 30,
-      "stream.max_chunk_bytes": 8192
+      "stream.max_chunk_bytes": 1048576
     }
   }
 }
@@ -1730,18 +1730,31 @@ my_app/
 示例 Tool：
 
 ```python
-from audio_chat import BaseTool, ToolContext, ToolResult
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+
+
+class LookAroundInput(BaseModel):
+    """看一下周围 Tool 输入参数。"""
+
+    freshness_seconds: float = Field(default=3, ge=0, description="允许复用缓存图片的最长秒数。")
+    timeout_seconds: float = Field(default=5, gt=0, description="等待端侧上传图片资产的超时时间，单位秒。")
+
 
 class LookAroundTool(BaseTool):
-    name = "look_around"
-    description = "获取用户当前视野中的一张图片。"
-    input_model = LookAroundInput
+    spec = ToolSpec(
+        name="look_around",
+        description="获取用户当前视野中的一张图片。",
+        input_model=LookAroundInput,
+        progress_message="正在获取画面",
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        asset = await context.devices.request_asset(
+        asset = context.devices.request_asset(
             "sensor.rgb",
-            freshness_seconds=3,
-            timeout_seconds=5,
+            freshness_seconds=input_data["freshness_seconds"],
+            timeout_seconds=input_data["timeout_seconds"],
             configure_payload={"mode": "single", "max_samples": 1},
         )
         return ToolResult.success(data={"asset_id": asset.asset_id})
@@ -1788,13 +1801,19 @@ class ToolContextFactory {
   +create(user_id, session, generation_id)
 }
 
-class BaseTool {
+class ToolSpec {
   +name
   +description
   +input_model
   +output_model
-  +side_effect
+  +progress_message
   +timeout_seconds
+  +tags
+}
+
+class BaseTool {
+  +spec
+  +resolved_spec()
   +run(context, input_data)
 }
 
@@ -1807,6 +1826,7 @@ class UserMessageStore
 
 ToolAutoDiscovery --> ToolRegistry
 ToolRegistry --> BaseTool
+BaseTool --> ToolSpec
 ToolGateway --> ToolRegistry
 ToolGateway --> ToolPolicy
 ToolGateway --> ToolSchemaBuilder
@@ -1826,12 +1846,13 @@ ToolExecutor --> BaseTool
 
 1. `name` 全局唯一，使用小写 snake_case，不与内置工具冲突。
 2. `description` 面向模型描述工具用途，不写端侧实例细节。
-3. `input_model` 可生成 JSON Schema。
-4. `output_model` 或 `ToolResult` 可序列化为模型可读结果。
-5. 工具声明的副作用、超时、并发策略符合 `tools` 配置。
-6. 工具不能在注册阶段持有某个 `device_id` 或控制连接。
-7. 抽象基类、测试夹具和以下划线开头的内部类默认不注册。
-8. 模块 import 失败时，如果 `tools.discover.fail_fast=true`，server 启动失败并输出具体模块、异常和修复建议。
+3. 推荐通过 `ToolSpec` 统一声明 `name`、`description`、`input_model`、`output_model`、`progress_message` 和 `timeout_seconds`。
+4. `input_model` 推荐使用 Pydantic `BaseModel`，必须可生成 JSON Schema；字段类型、默认值、取值范围和 `Field(description=...)` 是传给模型的参数约束。
+5. `output_model` 或 `ToolResult` 可序列化为模型可读结果。
+6. 工具声明的副作用、超时、并发策略符合 `tools` 配置。
+7. 工具不能在注册阶段持有某个 `device_id` 或控制连接。
+8. 抽象基类、测试夹具和以下划线开头的内部类默认不注册。
+9. 模块 import 失败时，如果 `tools.discover.fail_fast=true`，server 启动失败并输出具体模块、异常和修复建议。
 
 显式注册只作为高级能力保留，用于测试、动态插件或自定义装配；常规业务项目不应依赖它。
 
@@ -2483,15 +2504,20 @@ Tool 和 Task 是业务开发者最主要的扩展点。它们必须面向能力
 新 SDK 继续保留 Tool 概念，但简化开发者感知：
 
 ```python
-class BaseTool:
+class ToolSpec:
     name: str
     description: str
-    input_model: type[BaseModel]
-    output_model: type[BaseModel] | None
-    default_priority: str = "normal"
+    input_model: type[BaseModel] | dict = dict
+    output_model: type[BaseModel] | dict | None = None
+    progress_message: str | tuple[str, ...] | None = None
     timeout_seconds: float | None = None
-    side_effect: str = "none"  # none, read_only, user_visible, external_write
-    cancellable: bool = False
+    tags: list[str] = []
+
+class BaseTool:
+    spec: ToolSpec
+
+    def resolved_spec(self) -> ToolSpec:
+        ...
 
     def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         ...
@@ -2521,7 +2547,7 @@ class ToolError:
     details: dict = {}
 ```
 
-Tool 的 `input_model` 是 Agent Core 发现工具时生成 provider tool schema 的来源。Tool 的执行入口只有 `run()`；设备通讯、资产读取、输出提示都通过注入的 `ToolContext` 完成。
+Tool 的 `ToolSpec.input_model` 是 Agent Core 发现工具时生成 provider tool schema 的来源。推荐使用 Pydantic `BaseModel` 表达参数，字段类型、必填项、默认值、范围约束和 `Field(description=...)` 会自动传给模型。SDK 在进入 `run()` 前完成参数校验和默认值填充；为了让业务代码简单稳定，`run()` 收到的仍然是校验后的 `dict`。Tool 的执行入口只有 `run()`；设备通讯、资产读取、输出提示都通过注入的 `ToolContext` 完成。
 
 `ToolResult` 吸收旧 SDK `CapabilityResult` 的经验，但命名更贴近 Tool 开发者：
 
@@ -2902,12 +2928,24 @@ Tool / Task 提交意图
 控制设备动作：
 
 ```python
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+
+
+class StartNavigationInput(BaseModel):
+    destination: str = Field(description="导航目的地。")
+
+
 class StartNavigationTool(BaseTool):
-    name = "start_navigation"
-    description = "请求具备导航能力的端侧开始导航。"
+    spec = ToolSpec(
+        name="start_navigation",
+        description="请求具备导航能力的端侧开始导航。",
+        input_model=StartNavigationInput,
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        result = await context.devices.publish_event(
+        result = context.devices.publish_event(
             "control.device.command.requested",
             payload={
                 "command_name": "navigation.start",
@@ -2934,14 +2972,21 @@ class StartNavigationTool(BaseTool):
 采集设备数据：
 
 ```python
+class LookAroundInput(BaseModel):
+    freshness_seconds: float = Field(default=3, ge=0, description="允许复用缓存图片的最长秒数。")
+
+
 class LookAroundTool(BaseTool):
-    name = "look_around"
-    description = "获取用户当前视野中的一张图片，并返回可供模型分析的资产引用。"
+    spec = ToolSpec(
+        name="look_around",
+        description="获取用户当前视野中的一张图片，并返回可供模型分析的资产引用。",
+        input_model=LookAroundInput,
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        asset = await context.devices.request_asset(
+        asset = context.devices.request_asset(
             "sensor.rgb",
-            freshness_seconds=3,
+            freshness_seconds=input_data["freshness_seconds"],
             timeout_seconds=5,
             configure_payload={"mode": "single", "max_samples": 1},
         )
@@ -2966,7 +3011,7 @@ class MotionWindowTask(BaseTask):
         if device is None:
             raise TaskFailed("当前没有可提供 IMU 的在线设备")
 
-        await context.devices.publish_event(
+        context.devices.publish_event(
             "stream.control.configure.requested",
             stream_type="sensor.imu",
             payload={
@@ -2990,7 +3035,7 @@ class VideoFrameAnalyzeTask(BaseTask):
     async def on_start(self, context: TaskContext) -> None:
         correlation_id = context.task_id
 
-        result = await context.devices.publish_event(
+        result = context.devices.publish_event(
             "stream.control.configure.requested",
             stream_type="sensor.rgb",
             payload={
@@ -3017,7 +3062,7 @@ class VideoFrameAnalyzeTask(BaseTask):
                 break
 
     async def on_cancel(self, context: TaskContext) -> None:
-        await context.devices.publish_event(
+        context.devices.publish_event(
             "stream.control.configure.requested",
             stream_type="sensor.rgb",
             payload={
@@ -3592,7 +3637,7 @@ stream:
   # 可选 websocket_binary / http_chunked_experimental。
   transport: "websocket_binary"
   # 单个 stream chunk 最大字节数。过大影响延迟，过小增加协议开销。
-  max_chunk_bytes: 8192
+  max_chunk_bytes: 1048576
   # 空闲 stream 超时秒数。超过后 Stream Service 可主动关闭。
   idle_timeout_seconds: 20
   # 输入 stream 默认格式，主要用于 sensor.mic。

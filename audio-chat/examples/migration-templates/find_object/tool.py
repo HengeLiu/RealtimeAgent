@@ -1,6 +1,26 @@
 from __future__ import annotations
 
-from audio_chat import BaseTool, ToolContext, ToolResult
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+
+
+class FindObjectInput(BaseModel):
+    """找物 Tool 输入参数。"""
+
+    object_name: str = Field(default="目标物", description="用户想要查找的物品名称。")
+    freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存图片的最长秒数。")
+    timeout_seconds: float = Field(default=2, gt=0, description="等待端侧上传图片资产的超时时间，单位秒。")
+
+
+class FindObjectOutput(BaseModel):
+    """找物 Tool 输出结构。"""
+
+    captured: bool = Field(description="是否收到端侧画面。")
+    object_name: str = Field(description="要查找的物品名称。")
+    asset_id: str | None = Field(default=None, description="图片资产 ID。")
+    stream_type: str | None = Field(default=None, description="资产来源 stream 类型。")
+    path: str | None = Field(default=None, description="本地调试路径。")
 
 
 class FindObjectTool(BaseTool):
@@ -12,9 +32,13 @@ class FindObjectTool(BaseTool):
     3. 保持业务代码只使用 `UserDeviceContext`，不指定具体设备。
     """
 
-    name = "find_object"
-    description = "请求端侧采集图片，并准备一次找物分析"
-    progress_message = "正在请求端侧画面"
+    spec = ToolSpec(
+        name="find_object",
+        description="请求端侧采集图片，并准备一次找物分析。",
+        input_model=FindObjectInput,
+        output_model=FindObjectOutput,
+        progress_message="正在请求端侧画面",
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行找物 Tool。
@@ -36,16 +60,16 @@ class FindObjectTool(BaseTool):
         1. 事件发布、stream 或资产缓存异常由 SDK 统一转换为 ToolResult 失败。
         """
 
-        object_name = str(input_data.get("object_name") or "目标物").strip()
+        object_name = input_data["object_name"].strip()
         asset = context.devices.request_asset(
             "sensor.rgb",
-            freshness_seconds=float(input_data.get("freshness_seconds") or 0),
+            freshness_seconds=float(input_data["freshness_seconds"]),
             configure_payload={
                 "reason": "find_object",
                 "format": "jpeg",
                 "object_name": object_name,
             },
-            timeout_seconds=float(input_data.get("timeout_seconds") or 2),
+            timeout_seconds=float(input_data["timeout_seconds"]),
         )
         if asset is None:
             return ToolResult.success(

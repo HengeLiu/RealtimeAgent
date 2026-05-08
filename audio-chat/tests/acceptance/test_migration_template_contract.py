@@ -40,11 +40,12 @@ def test_migration_templates_are_valid_python_and_use_public_api() -> None:
     allowed_public_imports = {
         "BaseTask",
         "BaseTool",
-        "TaskContext",
-        "TaskEvent",
-        "ToolContext",
-        "ToolResult",
-    }
+            "TaskContext",
+            "TaskEvent",
+            "ToolContext",
+            "ToolResult",
+            "ToolSpec",
+        }
     assert _python_files()
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

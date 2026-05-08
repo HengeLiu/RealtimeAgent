@@ -501,6 +501,130 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
 
 
+def test_qwen_omni_final_audio_chunk_commits_input_boundary() -> None:
+    """测试目标：验证 Qwen Omni 收到 endpoint final chunk 时会提交输入边界。
+
+    测试方法：给 `QwenOmniRealtimeAdapter` 注入 fake conversation，发送一片
+    `final=true` 的 sensor.mic chunk。
+    预期结果：conversation 收到音频 append，并调用 DashScope SDK 的 `commit()`。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    class FakeConversation:
+        """记录 Omni 输入追加和提交调用。"""
+
+        def __init__(self) -> None:
+            self.audios = []
+            self.commits = 0
+
+        def append_audio(self, audio_base64: str) -> None:
+            self.audios.append(audio_base64)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni"))
+    provider._conversation = conversation
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+
+    provider.append_audio(
+        StreamChunk(
+            user_id="user-001",
+            session_id="sess-001",
+            stream_id="stream-mic",
+            stream_type="sensor.mic",
+            payload=b"\x01\x02",
+            codec="pcm16le",
+            sample_rate=16000,
+            channels=1,
+            duration_ms=20,
+            seq=1,
+            final=True,
+        )
+    )
+
+    assert conversation.audios == ["AQI="]
+    assert conversation.commits == 1
+    assert any(record.get("event") == "omni.input.committed" for record in records)
+
+
+def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
+    """测试目标：验证 Omni Realtime 的 `capture_photo` 工具成功后会追加真实图片。
+
+    测试方法：构造包含本地 JPEG 路径的工具结果，注入 fake conversation 后调用
+    `_submit_tool_result()`。
+    预期结果：conversation 先收到 base64 图片，再收到 `function_call_output`，最后
+    创建下一段文本和音频响应，保证工具完成前图片已经进入 Realtime 上文。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"\xff\xd8browser-photo\xff\xd9")
+
+    class FakeConversation:
+        """记录 provider adapter 写回的会话操作。"""
+
+        def __init__(self) -> None:
+            self.items = []
+            self.videos = []
+            self.commits = 0
+            self.responses = []
+
+        def create_item(self, item: dict) -> None:
+            self.items.append(item)
+
+        def append_video(self, image_base64: str) -> None:
+            self.videos.append(image_base64)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def create_response(self, **kwargs) -> None:
+            self.responses.append(kwargs)
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="结合图片回答"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+
+    provider._submit_tool_result(
+        call_id="call-photo",
+        result={
+            "tool_call_id": "call-photo",
+            "name": "capture_photo",
+            "ok": True,
+            "data": {"storage_uri": str(image_path), "mime_type": "image/jpeg"},
+            "message": "已完成一次抓拍。",
+            "error": None,
+            "meta": {},
+        },
+    )
+
+    assert conversation.items[0]["type"] == "function_call_output"
+    assert conversation.videos == ["/9hicm93c2VyLXBob3Rv/9k="]
+    assert conversation.commits == 1
+    assert conversation.responses[0]["instructions"] == "结合图片回答"
+    append_record = next(record for record in records if record.get("event") == "omni.capture_photo.image_appended")
+    assert append_record["image_path"] == str(image_path.resolve())
+    assert append_record["committed"] is True
+
+
 def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
     """测试目标：验证 Qwen Omni 同一个工具调用只执行并回填一次。
 
@@ -584,6 +708,87 @@ def test_realtime_tool_bridge_prefers_done_arguments_over_delta_copy() -> None:
     )
 
     assert gateway.input_data == {}
+
+
+def test_realtime_provider_text_is_persisted_to_user_messages(tmp_path) -> None:
+    """测试目标：验证 Omni Realtime 的文本转写会写入用户级 messages。
+
+    测试方法：直接向 RealtimeAudioAgentCore 注入用户输入转写、assistant 文本 delta
+    和 assistant done 事件。
+    预期结果：`runs/users/<user_id>/messages.jsonl` 同时包含 user 和 assistant 文本。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: FakeRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={
+            "event": "omni.conversation.item.input_audio_transcription.completed",
+            "transcript": "帮我查一下有哪些设备在线。",
+        },
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": "当前有"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": " 1 台设备在线。"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.done", "transcript": ""},
+    )
+
+    messages = (tmp_path / "runs" / "users" / "user-001" / "messages.jsonl").read_text(encoding="utf-8")
+    assert '"role": "user"' in messages
+    assert "帮我查一下有哪些设备在线。" in messages
+    assert '"role": "assistant"' in messages
+    assert "当前有 1 台设备在线。" in messages
+
+
+def test_realtime_tool_call_is_persisted_to_user_messages(tmp_path) -> None:
+    """测试目标：验证 Omni Realtime 工具调用和结果会写入用户级 messages。
+
+    测试方法：注册测试工具后，直接提交 provider tool done 记录。
+    预期结果：messages 中包含 assistant tool_call 和 tool result 两类消息。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.tool_registry.register(EchoRealtimeTool())
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: FakeRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
+    )
+
+    result = core._handle_provider_tool_call_done(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"tool_call_id": "call-001", "name": "echo_realtime", "arguments": '{"value":"ok"}'},
+    )
+
+    assert result["ok"] is True
+    messages = (tmp_path / "runs" / "users" / "user-001" / "messages.jsonl").read_text(encoding="utf-8")
+    assert "assistant_tool_call.done" in messages
+    assert "tool_result.done" in messages
+    assert "echo_realtime" in messages
+    assert "call-001" in messages
 
 
 def test_mock_realtime_provider_cancel_and_close_are_observable() -> None:

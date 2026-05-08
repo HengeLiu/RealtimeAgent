@@ -76,6 +76,72 @@ def test_format_normalizer_accepts_default_sensor_mic_format() -> None:
     assert normalizer.process(chunk) == chunk
 
 
+def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
+    """测试目标：验证默认 stream 限制可以承载浏览器抓拍 JPEG。
+
+    测试方法：使用默认 `AudioChatConfig` 打开 `sensor.rgb` 输入流，并上传一个明显
+    大于 8KiB 的 JPEG payload。
+    预期结果：服务端不再按音频小包限制拒绝图片，资产能进入缓存。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    handle = app.open_input_stream(
+        user_id="user-browser-photo",
+        producer_id="dev-web-glass",
+        stream_type="sensor.rgb",
+        format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+    )
+    payload = b"\xff\xd8" + (b"browser-photo" * 2048) + b"\xff\xd9"
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-browser-photo",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=payload,
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"request_id": "asset_req_browser"},
+        )
+    )
+
+    asset = app.asset_service.query_assets(user_id="user-browser-photo", stream_type="sensor.rgb")[-1]
+    assert asset.metadata["payload_size"] == len(payload)
+    assert Path(asset.path).is_absolute()
+    assert Path(asset.path).read_bytes() == payload
+
+
+def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
+    """测试目标：验证设备注册回执展示真实生效的 stream 单包限制。
+
+    测试方法：用自定义 `stream_max_chunk_bytes` 创建 app，再注册设备。
+    预期结果：`control.device.registered` 中的 `effective_config` 与 app 配置一致，
+    不再固定返回旧的 8192。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=123456))
+    response = app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-effective-config",
+            producer_id="dev-effective-config",
+            payload={
+                "device_id": "dev-effective-config",
+                "auth": {"mode": "disabled"},
+                "capabilities": {"streams.produce": ["sensor.rgb"]},
+                "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+            },
+        )
+    )
+
+    assert response.payload["effective_config"]["stream.max_chunk_bytes"] == 123456
+
+
 def test_text_agent_core_final_mic_chunk_emits_output() -> None:
     app = AudioChatApp(AudioChatConfig(runs_root="audio-chat/runs/test-agent-core"))
 

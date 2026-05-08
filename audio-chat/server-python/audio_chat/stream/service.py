@@ -82,7 +82,7 @@ class StreamService:
         control_service: ControlService,
         dispatcher: StreamDispatcher | None = None,
         recorder: RunRecorder | None = None,
-        max_chunk_bytes: int = 8192,
+        max_chunk_bytes: int = 1048576,
         idle_timeout_seconds: float = 20.0,
         default_sensor_mic: StreamFormat | None = None,
         default_actuator_speaker: StreamFormat | None = None,

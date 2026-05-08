@@ -77,13 +77,14 @@ class AssetStore:
         path = self.root / chunk.user_id / f"{asset_id}{suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(chunk.payload)
+        storage_path = path.resolve()
         ref = AssetRef(
             asset_id=asset_id,
             user_id=chunk.user_id,
             device_id=device_id,
             stream_type=chunk.stream_type,
             mime_type="image/jpeg" if chunk.stream_type == "sensor.rgb" else "application/octet-stream",
-            path=str(path),
+            path=str(storage_path),
             session_id=chunk.session_id,
             metadata={
                 "seq": chunk.seq,
@@ -284,7 +285,7 @@ class AssetService:
         payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(configure_payload or {})}
         payload["request_id"] = request_id
         self._reject_media_bytes(payload)
-        self.control_service.publish_matching(
+        publish_result = self.control_service.publish_matching(
             Event(
                 event_name="stream.control.configure.requested",
                 user_id=user_id,
@@ -296,9 +297,37 @@ class AssetService:
             require_capability=stream_type,
             selection="first_available",
         )
+        if session_id and hasattr(self.recorder, "record_asset_event"):
+            self.recorder.record_asset_event(
+                session_id,
+                {
+                    "event": "asset.requested",
+                    "request_id": request_id,
+                    "stream_type": stream_type,
+                    "matched_count": publish_result.matched_count,
+                    "delivered_count": publish_result.delivered_count,
+                    "matched_device_ids": list(publish_result.matched_device_ids),
+                    "failed_device_ids": list(publish_result.failed_device_ids),
+                    "timeout_seconds": timeout_seconds or self.request_timeout_seconds,
+                },
+            )
         pending.event.wait(timeout=timeout_seconds or self.request_timeout_seconds)
         with self._lock:
             self._pending.pop(request_id, None)
+        if pending.asset is None and session_id and hasattr(self.recorder, "record_asset_event"):
+            self.recorder.record_asset_event(
+                session_id,
+                {
+                    "event": "asset.request.timeout",
+                    "request_id": request_id,
+                    "stream_type": stream_type,
+                    "matched_count": publish_result.matched_count,
+                    "delivered_count": publish_result.delivered_count,
+                    "matched_device_ids": list(publish_result.matched_device_ids),
+                    "failed_device_ids": list(publish_result.failed_device_ids),
+                    "timeout_seconds": timeout_seconds or self.request_timeout_seconds,
+                },
+            )
         return pending.asset
 
     def query_assets(

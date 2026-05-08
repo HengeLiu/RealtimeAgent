@@ -4,9 +4,11 @@ import base64
 import json
 import os
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
+from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService
 from audio_chat.output.service import OutputItem
@@ -175,14 +177,18 @@ class QwenOmniRealtimeAdapter:
     def append_audio(self, chunk: StreamChunk) -> None:
         """追加一片麦克风 PCM。
 
-        主要逻辑：不检查 `chunk.final`，直接把 payload base64 后交给 Omni。
+        主要逻辑：普通 chunk 直接把 payload base64 后交给 Omni；endpoint 发送
+        `final=true` 时同步提交输入边界，确保图片和工具回填能进入下一轮响应。
         参数：`chunk` 为 Audio Pipeline 归一后的 sensor.mic StreamChunk。
         返回值：无。
         异常情况：provider 会话未打开时抛出 `RuntimeError`。
         """
         if self._conversation is None:
             raise RuntimeError("Realtime provider session is not opened")
-        self._conversation.append_audio(base64.b64encode(chunk.payload).decode("ascii"))
+        if chunk.payload:
+            self._conversation.append_audio(base64.b64encode(chunk.payload).decode("ascii"))
+        if chunk.final:
+            self.commit_input(user_id=chunk.user_id, session_id=chunk.session_id, reason="final_chunk")
 
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """提交 provider 输入边界。
@@ -197,9 +203,28 @@ class QwenOmniRealtimeAdapter:
         if self._conversation is None:
             return
         try:
-            commit = getattr(self._conversation, "commit_input_audio", None)
+            commit = getattr(self._conversation, "commit", None)
+            if not callable(commit):
+                commit = getattr(self._conversation, "commit_input_audio", None)
             if callable(commit):
                 commit()
+                if self._callbacks:
+                    self._callbacks.provider_event(
+                        {
+                            "event": "omni.input.committed",
+                            "provider": "qwen",
+                            "reason": reason,
+                        }
+                    )
+            elif self._callbacks:
+                self._callbacks.provider_event(
+                    {
+                        "event": "omni.input.commit.skipped",
+                        "provider": "qwen",
+                        "reason": reason,
+                        "message": "provider conversation has no commit method",
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.input.commit.failed", "reason": reason})
@@ -375,7 +400,8 @@ class QwenOmniRealtimeAdapter:
         """把 ToolResult 回填给当前 Omni Realtime 会话。
 
         主要逻辑：使用 provider conversation 的 `conversation.item.create`
-        写入 `function_call_output`，随后创建下一段文本和音频响应。
+        写入 `function_call_output`；如果是 `capture_photo` 且结果包含本地图片，则把
+        JPEG bytes 追加到同一条 Realtime 会话，随后创建下一段文本和音频响应。
         参数：`call_id` 为 provider 工具调用 ID，`result` 为 SDK ToolGateway 的结果。
         返回值：无。
         异常情况：provider SDK 异常通过 callbacks.error 记录，不向上破坏回调线程。
@@ -391,6 +417,47 @@ class QwenOmniRealtimeAdapter:
                     "output": json.dumps(result, ensure_ascii=False, default=str),
                 }
             )
+            image_path = _resolve_capture_photo_tool_image_path(result)
+            image_bytes = image_path.read_bytes() if image_path is not None else None
+            if image_bytes:
+                append_video = getattr(self._conversation, "append_video", None)
+                if callable(append_video):
+                    append_video(base64.b64encode(image_bytes).decode("ascii"))
+                    commit = getattr(self._conversation, "commit", None)
+                    if callable(commit):
+                        commit()
+                    if self._callbacks:
+                        self._callbacks.provider_event(
+                            {
+                                "event": "omni.capture_photo.image_appended",
+                                "provider": "qwen",
+                                "tool_call_id": call_id,
+                                "tool_name": result.get("name"),
+                                "image_bytes": len(image_bytes),
+                                "image_path": str(image_path),
+                                "committed": callable(commit),
+                            }
+                        )
+                elif self._callbacks:
+                    self._callbacks.error(
+                        "Realtime provider does not support append_video",
+                        {
+                            "event": "omni.capture_photo.image_append.unsupported",
+                            "call_id": call_id,
+                            "tool_name": result.get("name"),
+                            "image_path": str(image_path),
+                        },
+                    )
+            elif result.get("name") == "capture_photo" and result.get("ok") and self._callbacks:
+                self._callbacks.error(
+                    "capture_photo succeeded but image file was not found",
+                    {
+                        "event": "omni.capture_photo.image_append.missing_image",
+                        "call_id": call_id,
+                        "tool_name": result.get("name"),
+                        "storage_uri": (result.get("data") or {}).get("storage_uri") if isinstance(result.get("data"), dict) else None,
+                    },
+                )
             self._conversation.create_response(
                 instructions=self.config.instructions,
                 output_modalities=self._output_modalities or None,
@@ -398,6 +465,41 @@ class QwenOmniRealtimeAdapter:
         except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.tool_result.inject.failed", "call_id": call_id})
+
+
+def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | None:
+    """从 `capture_photo` 工具结果解析本地图片路径。
+
+    主要逻辑：只处理成功的 `capture_photo` 结果，优先从 `data.storage_uri/path` 读取
+    本地文件；兼容旧运行产物里的相对路径，避免 server 启动目录不同导致图片追加失败。
+    参数：`result` 为 RealtimeToolBridge 生成的工具回填结果。
+    返回值：存在的图片路径；不满足条件或文件不存在时返回 None。
+    异常情况：无。
+    """
+
+    if result.get("name") != "capture_photo" or not result.get("ok"):
+        return None
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return None
+    raw_path = str(data.get("storage_uri") or data.get("path") or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    candidates = [path]
+    if not path.is_absolute():
+        audio_chat_root = Path(__file__).resolve().parents[3]
+        candidates.extend(
+            [
+                Path.cwd() / path,
+                audio_chat_root / path,
+                audio_chat_root.parent / path,
+            ]
+        )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
 
 
 class MockRealtimeProviderAdapter:
@@ -640,6 +742,7 @@ class RealtimeAudioAgentCore:
         *,
         output_service: OutputService,
         recorder: RunRecorder,
+        control_service: ControlService | None = None,
         realtime_config: RealtimeProviderConfig | None = None,
         provider_factory: Callable[[RealtimeProviderConfig], RealtimeProviderAdapter] | None = None,
         tool_gateway: ToolGateway | None = None,
@@ -647,6 +750,7 @@ class RealtimeAudioAgentCore:
     ) -> None:
         self.output_service = output_service
         self.recorder = recorder
+        self.control_service = control_service
         self.realtime_config = realtime_config or RealtimeProviderConfig()
         self.provider_factory = provider_factory or self._default_provider_factory
         self.output_adapter = RealtimeOutputAdapter(output_service=output_service, recorder=recorder)
@@ -655,6 +759,8 @@ class RealtimeAudioAgentCore:
         self._failed_sessions: set[str] = set()
         self._sessions_with_provider_output: set[str] = set()
         self._event_buffer = AgentEventBuffer()
+        self._assistant_text_by_session: dict[str, list[str]] = {}
+        self._recorded_user_transcripts: set[tuple[str, str]] = set()
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -900,6 +1006,14 @@ class RealtimeAudioAgentCore:
             name=record.get("name"),
             arguments=record.get("arguments"),
         )
+        self._append_tool_messages(
+            user_id=user_id,
+            session_id=session_id,
+            tool_call_id=str(result.get("tool_call_id") or record.get("tool_call_id") or ""),
+            tool_name=str(result.get("name") or record.get("name") or ""),
+            arguments=record.get("arguments"),
+            result=result,
+        )
         if session_id not in self._sessions_with_provider_output and self.tool_bridge.tool_gateway is not None:
             self.tool_bridge.tool_gateway.emit_progress_once(
                 name=str(result.get("name") or record.get("name") or ""),
@@ -1039,11 +1153,119 @@ class RealtimeAudioAgentCore:
         """记录 provider 事件到 runs 和统一事件缓存。"""
 
         self.recorder.record_agent_event(session_id, record)
+        self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
             str(record.get("event") or "provider.event"),
             user_id=user_id,
             session_id=session_id,
             payload=dict(record),
+        )
+
+    def _capture_provider_message(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """把 Omni provider 的可读文本同步进用户级 messages。
+
+        主要逻辑：Realtime 对话虽然输入输出是音频流，但 provider 仍会返回用户语音转写
+        和助手输出 transcript/text。这里把这些文本保存到 `messages.jsonl`，便于开发者
+        调试完整 messages，而不是只看音频事件。
+        参数：`user_id/session_id/record` 描述 provider 事件。
+        返回值：无。
+        异常情况：未注入 ControlService 时跳过。
+        """
+
+        if self.control_service is None:
+            return
+        event = str(record.get("event") or "")
+        if event == "omni.conversation.item.input_audio_transcription.completed":
+            transcript = str(record.get("transcript") or "").strip()
+            if not transcript:
+                return
+            key = (session_id, transcript)
+            if key in self._recorded_user_transcripts:
+                return
+            self._recorded_user_transcripts.add(key)
+            self.control_service.append_message(
+                user_id,
+                {
+                    "session_id": session_id,
+                    "role": "user",
+                    "content": transcript,
+                    "event": "input_transcript.done",
+                    "source": "omni_realtime",
+                },
+            )
+            return
+        if event in {"omni.response.audio_transcript.delta", "omni.response.text.delta", "omni.response.output_text.delta"}:
+            delta = str(record.get("delta") or record.get("text") or "")
+            if delta:
+                self._assistant_text_by_session.setdefault(session_id, []).append(delta)
+            return
+        if event in {"omni.response.audio_transcript.done", "omni.response.text.done", "omni.response.output_text.done"}:
+            content = str(record.get("transcript") or record.get("text") or "").strip()
+            if not content:
+                content = "".join(self._assistant_text_by_session.get(session_id, [])).strip()
+            if not content:
+                return
+            self._assistant_text_by_session.pop(session_id, None)
+            self.control_service.append_message(
+                user_id,
+                {
+                    "session_id": session_id,
+                    "role": "assistant",
+                    "content": content,
+                    "event": "assistant_text.done",
+                    "source": "omni_realtime",
+                },
+            )
+
+    def _append_tool_messages(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        arguments: Any,
+        result: dict[str, Any],
+    ) -> None:
+        """把 Realtime 工具调用和工具结果写入用户级 messages。
+
+        主要逻辑：Omni 的 function call 不走 TextAgentCore 的 message builder，
+        因此需要在工具调用完成时补齐 assistant tool_call 和 tool result 两类消息。
+        参数：工具调用 ID、名称、参数和结果。
+        返回值：无。
+        异常情况：未注入 ControlService 时跳过。
+        """
+
+        if self.control_service is None:
+            return
+        self.control_service.append_message(
+            user_id,
+            {
+                "session_id": session_id,
+                "role": "assistant",
+                "content": "",
+                "event": "assistant_tool_call.done",
+                "source": "omni_realtime",
+                "tool_calls": [
+                    {
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "arguments": arguments,
+                    }
+                ],
+            },
+        )
+        self.control_service.append_message(
+            user_id,
+            {
+                "session_id": session_id,
+                "role": "tool",
+                "content": result,
+                "event": "tool_result.done",
+                "source": "omni_realtime",
+                "tool_call_id": tool_call_id,
+                "name": tool_name,
+            },
         )
 
     def _record_event(self, event: str, *, user_id: str, session_id: str, **payload) -> None:
@@ -1086,6 +1308,10 @@ def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
         record["delta"] = message.get("delta")
     elif event_type == "response.audio_transcript.done":
         record["transcript"] = message.get("transcript")
+    elif event_type in {"response.text.delta", "response.output_text.delta"}:
+        record["delta"] = message.get("delta") or message.get("text")
+    elif event_type in {"response.text.done", "response.output_text.done"}:
+        record["text"] = message.get("text") or message.get("transcript")
     elif event_type == "conversation.item.input_audio_transcription.completed":
         record["transcript"] = message.get("transcript")
     elif event_type == "response.done":

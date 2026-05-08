@@ -38,6 +38,9 @@
     const INPUT_RATE = 16000;
     const DEFAULT_CHUNK_MS = 20;
     const MIC_CHUNK_BYTES = INPUT_RATE * DEFAULT_CHUNK_MS / 1000 * 2;
+    const RGB_CAPTURE_MAX_WIDTH = 960;
+    const RGB_CAPTURE_MAX_HEIGHT = 540;
+    const RGB_JPEG_QUALITY = 0.78;
     const BARGE_IN_RMS_THRESHOLD = 0.055;
     const BARGE_IN_REQUIRED_FRAMES = 8;
     const BARGE_IN_MAX_PEAK = 0.72;
@@ -57,6 +60,7 @@
     let streamWs = null;
     let audioContext = null;
     let micStream = null;
+    let cameraStream = null;
     let micSource = null;
     let processor = null;
     let sessionId = null;
@@ -332,14 +336,16 @@
         sdk_version: "audio-chat-web-glass-0.1.0",
         auth: {mode: "disabled"},
         capabilities: {
-          "streams.produce": ["sensor.mic"],
+          "streams.produce": ["sensor.mic", "sensor.rgb"],
           "streams.consume": ["actuator.speaker"],
+          "sensor.rgb": true,
           "audio.aec": "browser_webrtc",
           "audio.wake_word": "manual",
         },
         subscriptions: [
           {event: "control.audio_session.*"},
           {event: "stream.output.*", filter: {stream_type: "actuator.speaker"}},
+          {event: "stream.control.*", filter: {stream_type: "sensor.rgb"}},
         ],
       }));
     }
@@ -384,12 +390,105 @@
       } else if (item.event_name === "stream.output.close.requested") {
         pendingOutputClose.set(item.stream_id, item);
         closeOutputWhenDrained(item.stream_id);
+      } else if (item.event_name === "stream.control.configure.requested" && item.stream_type === "sensor.rgb") {
+        await captureRgbAsset(item);
       } else if (item.event_name === "stream.output.cancel.requested" || item.event_name === "stream.output.cancelled") {
         stopOutputPlayback(item.stream_id, "server_cancelled");
       } else if (item.event_name === "control.audio_session.close.requested") {
         await stopMic();
         sendEvent(event("control.audio_session.closed", {reason: "web_glass_closed"}, {session_id: item.session_id}));
       }
+    }
+
+    async function captureRgbAsset(item) {
+      const requestId = item.payload && item.payload.request_id;
+      const rgbStreamId = newId("stream_rgb");
+      try {
+        await ensureStreamSocketOpen();
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("browser camera API unavailable");
+        }
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: {facingMode: "environment", width: {ideal: RGB_CAPTURE_MAX_WIDTH}, height: {ideal: RGB_CAPTURE_MAX_HEIGHT}},
+          audio: false,
+        });
+        const track = cameraStream.getVideoTracks()[0];
+        log(`camera settings ${JSON.stringify(track.getSettings())}`);
+        const image = await captureJpegFrame(cameraStream);
+        sendEvent(event("stream.input.opened", {
+          stream_type: "sensor.rgb",
+          format: {codec: "jpeg", sample_rate: 1, channels: 1, chunk_ms: 1},
+          request_id: requestId,
+        }, {session_id: item.session_id || sessionId, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        await delay(120);
+        streamWs.send(encodeStreamChunk({
+          user_id: document.getElementById("userId").value,
+          session_id: item.session_id || sessionId,
+          stream_id: rgbStreamId,
+          stream_type: "sensor.rgb",
+          seq: 0,
+          payload: image.bytes,
+          codec: "jpeg",
+          sample_rate: 1,
+          channels: 1,
+          duration_ms: 1,
+          final: true,
+          metadata: {
+            request_id: requestId,
+            width: image.width,
+            height: image.height,
+            reason: (item.payload && item.payload.reason) || "capture_photo",
+          },
+        }));
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "single_frame_uploaded",
+          request_id: requestId,
+        }, {session_id: item.session_id || sessionId, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        log(`send sensor.rgb jpeg bytes=${image.bytes.byteLength} request_id=${requestId || "-"}`);
+      } catch (err) {
+        log(`capture sensor.rgb failed: ${err.message}`);
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "capture_failed",
+          error: err.message,
+          request_id: requestId,
+        }, {session_id: item.session_id || sessionId, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+      } finally {
+        if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
+        cameraStream = null;
+      }
+    }
+
+    async function captureJpegFrame(stream) {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("camera frame timeout")), 3000);
+        video.onloadedmetadata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      await video.play();
+      await delay(150);
+      const settings = stream.getVideoTracks()[0].getSettings();
+      const sourceWidth = video.videoWidth || settings.width || 640;
+      const sourceHeight = video.videoHeight || settings.height || 480;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, width, height);
+      video.pause();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", RGB_JPEG_QUALITY));
+      if (!blob) throw new Error("jpeg encode failed");
+      return {bytes: new Uint8Array(await blob.arrayBuffer()), width, height};
     }
 
     async function openMicStream() {

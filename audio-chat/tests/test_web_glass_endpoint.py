@@ -84,6 +84,25 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "MediaFrame" not in html
 
 
+def test_web_glass_sensor_rgb_uses_valid_stream_format() -> None:
+    """测试目标：验证 web-glass 抓拍上传的 JPEG stream 能通过服务端格式校验。
+
+    测试方法：读取静态 HTML，检查 `sensor.rgb` 打开事件和 JPEG chunk 不再使用
+    `sample_rate=0`、`chunk_ms=0` 或 `duration_ms=0`，并在打开 stream 后短暂等待。
+    预期结果：浏览器端先发送合法的 `stream.input.opened`，再上传 JPEG 数据，避免
+    服务端拒绝打开事件后出现 `unknown stream_id`。
+    """
+    html = _html()
+
+    assert 'format: {codec: "jpeg", sample_rate: 1, channels: 1, chunk_ms: 1}' in html
+    assert "codec: \"jpeg\",\n          sample_rate: 1" in html
+    assert "duration_ms: 1" in html
+    assert "await delay(120);\n        streamWs.send(encodeStreamChunk({" in html
+    assert 'format: {codec: "jpeg", sample_rate: 0' not in html
+    assert "codec: \"jpeg\",\n          sample_rate: 0" not in html
+    assert "duration_ms: 0" not in html
+
+
 def test_web_glass_is_not_served_by_sdk_server() -> None:
     """测试目标：验证 web-glass 不作为 SDK server 内置静态路由。
 

@@ -383,6 +383,7 @@ class ControlService:
         allow_subscribe_all: bool = False,
         subscription_filter_mode: str = "exact",
         active_device_set_policy: str = "single",
+        effective_config: dict[str, Any] | None = None,
     ) -> None:
         self.authenticator = authenticator or DeviceAuthenticator(mode="disabled")
         self.validator = RegistrationValidator(
@@ -394,6 +395,7 @@ class ControlService:
         self.recorder = recorder or RunRecorder()
         self.exclude_producer_by_default = exclude_producer_by_default
         self.active_device_set_policy = active_device_set_policy
+        self.effective_config = dict(effective_config or {})
         self._bindings: dict[str, str] = {}
         self._devices: dict[str, Device] = {}
         self._connections: dict[str, DeviceConnection] = {}
@@ -473,7 +475,7 @@ class ControlService:
                     "device_id": device_id,
                     "connection_id": record.connection_id,
                     "heartbeat_interval_seconds": 10,
-                    "effective_config": {"stream.max_chunk_bytes": 8192},
+                    "effective_config": dict(self.effective_config),
                 },
             )
         except Exception as exc:

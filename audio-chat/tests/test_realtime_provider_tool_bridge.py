@@ -151,11 +151,11 @@ class ToolCallingRealtimeProvider:
         """当前测试不需要关闭。"""
 
 
-def test_realtime_core_records_tool_result_degradation_and_audio_output(tmp_path) -> None:
-    """测试目标：验证 RealtimeAudioAgentCore 能记录 provider tool call 结果和降级原因。
+def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) -> None:
+    """测试目标：验证 RealtimeAudioAgentCore 能记录 provider tool call 结果回填。
 
     测试方法：注入会触发工具调用的 fake provider，并注册 speaker 端侧消费原生音频。
-    预期结果：runs 中出现 `realtime.tool_result.ready` 和明确 degradation，端侧收到音频。
+    预期结果：runs 中出现 `realtime.tool_result.ready` 和回填状态，端侧收到音频。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio", realtime_provider="mock"))
@@ -178,8 +178,6 @@ def test_realtime_core_records_tool_result_degradation_and_audio_output(tmp_path
     )
 
     model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text(encoding="utf-8")
-    system_events = (tmp_path / "runs" / "system-events.jsonl").read_text(encoding="utf-8")
     assert "realtime.tool_result.ready" in model_events
-    assert "provider_tool_result_injection_not_supported" in model_events
-    assert "provider_tool_result_injection_not_supported" in system_events
+    assert "handled_by_provider_adapter" in model_events
     assert connection.chunks

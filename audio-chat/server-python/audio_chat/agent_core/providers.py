@@ -15,6 +15,9 @@ class ProviderUnavailable(RuntimeError):
     pass
 
 
+TEXT_AGENT_SYSTEM_PROMPT = "You are the audio-chat TextAgentCore."
+
+
 @dataclass(frozen=True)
 class ProviderCallDiagnostic:
     """真实 provider 调用诊断。
@@ -348,7 +351,7 @@ class OpenAICompatibleTextModelAdapter:
         stream = self._client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": "You are the audio-chat TextAgentCore."},
+                {"role": "system", "content": TEXT_AGENT_SYSTEM_PROMPT},
                 *messages,
             ],
             tools=tools or None,

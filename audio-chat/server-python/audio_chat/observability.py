@@ -156,6 +156,7 @@ class RunRecorder:
         self._agent_event_counts: dict[tuple[str, str], int] = {}
         self._model_request_started_at: dict[str, float] = {}
         self._delta_stats: dict[tuple[str, str], dict[str, Any]] = {}
+        self._first_model_request_logged = False
 
     def session_dir(self, session_id: str) -> Path:
         path = self.runs_root / "sessions" / session_id
@@ -293,7 +294,18 @@ class RunRecorder:
         log_info(
             self.logger,
             f"资产事件 {record.get('event')}",
-            LogContext(session_id=session_id, event=record.get("event"), fields={"asset_id": record.get("asset_id"), "stream_type": record.get("stream_type")}),
+            LogContext(
+                session_id=session_id,
+                event=record.get("event"),
+                fields={
+                    "asset_id": record.get("asset_id"),
+                    "request_id": record.get("request_id"),
+                    "stream_type": record.get("stream_type"),
+                    "matched_count": record.get("matched_count"),
+                    "delivered_count": record.get("delivered_count"),
+                    "timeout_seconds": record.get("timeout_seconds"),
+                },
+            ),
         )
 
     def record_model_request(self, session_id: str, record: dict[str, Any]) -> None:
@@ -307,6 +319,9 @@ class RunRecorder:
         path = self.session_dir(session_id) / "model-request.json"
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         self._model_request_started_at[session_id] = time.monotonic()
+        if not self._first_model_request_logged:
+            self._first_model_request_logged = True
+            self._log_first_model_request(session_id=session_id, record=record)
         log_info(
             self.logger,
             "模型请求已写入",
@@ -323,6 +338,38 @@ class RunRecorder:
                     "path": str(path),
                 },
             ),
+        )
+
+    def _log_first_model_request(self, *, session_id: str, record: dict[str, Any]) -> None:
+        """在进程首次调用大模型前打印完整请求快照。
+
+        主要逻辑：首次 `record_model_request()` 发生在 provider 调用之前，此处把同一份
+        `model-request.json` 内容以漂亮 JSON 打到终端，方便开发者先看 system prompt、
+        messages 和 tools；之后的请求只保留摘要日志和落盘文件，避免刷屏。
+        参数：`session_id` 为当前会话，`record` 为模型请求快照。
+        返回值：无。
+        异常情况：JSON 序列化异常时退回 `str(record)`。
+        """
+
+        try:
+            snapshot = json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True)
+        except Exception:
+            snapshot = str(record)
+        self.logger.info(
+            "首次模型请求完整快照\n%s",
+            snapshot,
+            extra=LogContext(
+                user_id=record.get("user_id"),
+                session_id=session_id,
+                event="model.request.first",
+                fields={
+                    "provider": record.get("provider"),
+                    "model": record.get("model"),
+                    "runner": record.get("runner"),
+                    "message_count": len(record.get("messages") or []),
+                    "tool_count": record.get("tool_count", len(record.get("tools") or [])),
+                },
+            ).to_dict(),
         )
 
     def write_result(self, session_id: str, record: dict[str, Any]) -> None:

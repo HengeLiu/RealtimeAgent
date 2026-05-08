@@ -6,8 +6,10 @@ import inspect
 import pkgutil
 import threading
 import time
-from dataclasses import asdict, dataclass
-from typing import Any, AsyncIterator
+from dataclasses import asdict, dataclass, field
+from typing import Any, AsyncIterator, Literal
+
+from pydantic import BaseModel, Field, ValidationError
 
 from audio_chat.asset import ArtifactRef, AssetRef
 from audio_chat.control import PublishResult
@@ -116,6 +118,29 @@ class ToolTrace:
 CapabilityTrace = ToolTrace
 
 
+ProgressMessage = str | tuple[str, ...] | list[str]
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """Tool 元数据声明。
+
+    主要功能：让开发者用一处声明告诉 SDK 和模型：工具名、说明、输入参数模型、
+    输出模型、类型标签和前置播报文案。
+    主要属性：`input_model` 推荐使用 Pydantic BaseModel，字段类型和 Field 描述会
+    自动转换为 provider function calling schema。
+    """
+
+    name: str
+    description: str
+    input_model: Any = dict
+    output_model: Any = None
+    capability_type: Literal["tool", "mcp", "task"] = "tool"
+    tags: list[str] = field(default_factory=list)
+    progress_message: ProgressMessage | None = None
+    timeout_seconds: float | None = None
+
+
 @dataclass
 class ToolContext:
     """Tool 执行上下文。
@@ -148,9 +173,11 @@ class BaseTool:
     name: str = ""
     description: str = ""
     input_model: Any = dict
+    output_model: Any = None
     timeout_seconds: float | None = None
     progress_message: str = ""
     progress_messages: tuple[str, ...] = ()
+    spec: ToolSpec | None = None
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行 Tool。
@@ -161,6 +188,32 @@ class BaseTool:
         异常情况：未覆盖时抛出 `ToolError`。
         """
         raise ToolError(f"tool {self.__class__.__name__} does not implement run()", code=ErrorCode.PROTOCOL_ERROR)
+
+    def resolved_spec(self) -> ToolSpec:
+        """返回工具的规范化元数据。
+
+        主要逻辑：优先使用开发者声明的 `spec = ToolSpec(...)`；没有 spec 时继续
+        兼容 `name/description/input_model` 简写。
+        参数：无。
+        返回值：`ToolSpec`。
+        异常情况：工具名为空时由注册表继续抛出结构化错误。
+        """
+
+        if isinstance(self.spec, ToolSpec):
+            return self.spec
+        progress: ProgressMessage | None = None
+        if self.progress_messages:
+            progress = self.progress_messages
+        elif self.progress_message:
+            progress = self.progress_message
+        return ToolSpec(
+            name=self.name or self.__class__.__name__,
+            description=self.description,
+            input_model=self.input_model,
+            output_model=self.output_model,
+            progress_message=progress,
+            timeout_seconds=self.timeout_seconds,
+        )
 
 
 class ToolRegistry:
@@ -181,11 +234,17 @@ class ToolRegistry:
         返回值：无。
         异常情况：名称为空时抛出 `ToolError`。
         """
-        name = tool.name or tool.__class__.__name__
+        spec = tool.resolved_spec()
+        name = spec.name
         if not name:
             raise ToolError("tool name is required", code=ErrorCode.INVALID_ARGUMENT)
         if name in self._tools:
             raise ToolError(f"duplicate tool name: {name}", code=ErrorCode.PROTOCOL_ERROR)
+        tool.name = name
+        tool.description = spec.description
+        tool.input_model = spec.input_model
+        tool.output_model = spec.output_model
+        tool.timeout_seconds = spec.timeout_seconds
         self._tools[name] = tool
 
     def get(self, name: str) -> BaseTool:
@@ -227,7 +286,13 @@ class ToolAutoDiscovery:
                     if not self._is_concrete_tool(name, obj):
                         continue
                     tool = obj()
-                    tool_name = tool.name or tool.__class__.__name__
+                    spec = tool.resolved_spec()
+                    tool_name = spec.name
+                    tool.name = spec.name
+                    tool.description = spec.description
+                    tool.input_model = spec.input_model
+                    tool.output_model = spec.output_model
+                    tool.timeout_seconds = spec.timeout_seconds
                     owner = f"{obj.__module__}.{obj.__name__}"
                     previous = seen.get(tool_name)
                     if previous is not None:
@@ -313,13 +378,17 @@ class ToolSchemaBuilder:
         异常情况：schema 构造失败时降级为空 object schema。
         """
 
+        spec = tool.resolved_spec()
         return {
-            "name": tool.name or tool.__class__.__name__,
-            "description": tool.description,
-            "parameters": self._input_schema(tool.input_model),
-            "progress_message": getattr(tool, "progress_message", None),
-            "progress_messages": list(getattr(tool, "progress_messages", ()) or ()),
-            "timeout_seconds": getattr(tool, "timeout_seconds", None),
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": self._input_schema(spec.input_model),
+            "output_schema": self._output_schema(spec.output_model),
+            "capability_type": spec.capability_type,
+            "tags": list(spec.tags),
+            "progress_message": _first_progress_message(spec.progress_message),
+            "progress_messages": _progress_candidates(spec.progress_message),
+            "timeout_seconds": spec.timeout_seconds,
         }
 
     def build_provider_schema(self, tool: BaseTool) -> dict:
@@ -341,12 +410,28 @@ class ToolSchemaBuilder:
         schema_builder = getattr(input_model, "model_json_schema", None)
         if callable(schema_builder):
             try:
-                return dict(schema_builder())
+                schema = dict(schema_builder())
+                schema.setdefault("type", "object")
+                schema.setdefault("properties", {})
+                return schema
             except Exception:
                 return {"type": "object", "properties": {}, "additionalProperties": True}
         if input_model is dict or input_model is None:
             return {"type": "object", "properties": {}, "additionalProperties": True}
         return {"type": "object", "properties": {}, "additionalProperties": True}
+
+    def _output_schema(self, output_model: Any) -> dict | None:
+        if output_model is None:
+            return None
+        if isinstance(output_model, dict):
+            return dict(output_model)
+        schema_builder = getattr(output_model, "model_json_schema", None)
+        if callable(schema_builder):
+            try:
+                return dict(schema_builder())
+            except Exception:
+                return None
+        return None
 
 
 class ToolContextFactory:
@@ -390,17 +475,44 @@ class ToolExecutor:
 
     async def execute(self, tool: BaseTool, context: ToolContext, input_data: dict) -> ToolResult:
         try:
-            coroutine = tool.run(context, input_data)
-            timeout_seconds = getattr(tool, "timeout_seconds", None)
+            validated_input = self._validate_input(tool, input_data)
+            coroutine = tool.run(context, validated_input)
+            timeout_seconds = tool.resolved_spec().timeout_seconds
             if timeout_seconds:
                 return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
             return await coroutine
+        except ValidationError as exc:
+            return ToolResult.failed(
+                ToolError(
+                    "tool input validation failed",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={"errors": exc.errors()},
+                )
+            )
         except TimeoutError:
             return ToolResult.failed(ToolError("tool execution timeout", code=ErrorCode.TIMEOUT))
         except AudioChatError as exc:
             return ToolResult.failed(exc)
         except Exception as exc:
             return ToolResult.failed(ToolError(str(exc), code=ErrorCode.UNKNOWN))
+
+    def _validate_input(self, tool: BaseTool, input_data: dict) -> dict:
+        """按工具 input_model 校验并归一入参。
+
+        主要逻辑：开发者使用 Pydantic BaseModel 声明入参时，SDK 在调用 Tool 前完成
+        类型转换和必填校验；为了兼容现有工具，传给 run 的仍是 dict。
+        参数：`tool` 为工具实例，`input_data` 为模型传入参数。
+        返回值：校验后的 dict。
+        异常情况：Pydantic 校验失败时抛出 `ValidationError`。
+        """
+
+        input_model = tool.resolved_spec().input_model
+        if isinstance(input_model, dict) or input_model is dict or input_model is None:
+            return dict(input_data or {})
+        if inspect.isclass(input_model) and issubclass(input_model, BaseModel):
+            model = input_model.model_validate(dict(input_data or {}))
+            return model.model_dump(exclude_none=True)
+        return dict(input_data or {})
 
 
 class ToolGateway:
@@ -435,8 +547,8 @@ class ToolGateway:
         return [
             tool
             for tool in self.registry.list_tools()
-            if self.policy.allowed(tool.name or tool.__class__.__name__)
-            and self._skill_allowed(tool.name or tool.__class__.__name__)
+            if self.policy.allowed(tool.resolved_spec().name)
+            and self._skill_allowed(tool.resolved_spec().name)
         ]
 
     def schemas(self) -> list[dict]:
@@ -500,7 +612,7 @@ class ToolGateway:
         messages = self._progress_candidates(tool)
         if not messages:
             return False
-        tool_name = tool.name or tool.__class__.__name__
+        tool_name = tool.resolved_spec().name
         key = (session_id, tool_name)
         if key in self._progress_emitted:
             return False
@@ -575,15 +687,7 @@ class ToolGateway:
     def _progress_candidates(tool: BaseTool) -> list[str]:
         """读取 Tool 的候选前置播报文案。"""
 
-        candidates: list[str] = []
-        for item in getattr(tool, "progress_messages", ()) or ():
-            text = str(item or "").strip()
-            if text:
-                candidates.append(text)
-        single = str(getattr(tool, "progress_message", "") or "").strip()
-        if single and single not in candidates:
-            candidates.insert(0, single)
-        return candidates
+        return _progress_candidates(tool.resolved_spec().progress_message)
 
     def _record_trace(
         self,
@@ -616,6 +720,33 @@ class ToolGateway:
             return True
         tool_allowlist = getattr(self.skill_service, "tool_allowlist", lambda: set())()
         return not tool_allowlist or tool_name in tool_allowlist
+
+
+def _progress_candidates(progress_message: ProgressMessage | None) -> list[str]:
+    """规范化工具前置播报候选文案。"""
+
+    if isinstance(progress_message, str):
+        raw = [progress_message]
+    elif isinstance(progress_message, (tuple, list)):
+        raw = [str(item) for item in progress_message]
+    else:
+        raw = []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        text = item.strip()
+        if not text or text in seen:
+            continue
+        result.append(text)
+        seen.add(text)
+    return result
+
+
+def _first_progress_message(progress_message: ProgressMessage | None) -> str | None:
+    """返回首个前置播报文案。"""
+
+    candidates = _progress_candidates(progress_message)
+    return candidates[0] if candidates else None
 
 
 @dataclass(frozen=True)
@@ -859,6 +990,7 @@ class UserDeviceContext:
             stream_type=stream_type,
             freshness_seconds=freshness_seconds,
             configure_payload=configure_payload,
+            session_id=self._app.active_session_id(self.user_id),
             timeout_seconds=timeout_seconds,
         )
 
@@ -967,6 +1099,23 @@ class UserDeviceContext:
 
         self.submit_text(text=text, priority=priority, ttl_seconds=ttl_seconds)
 
+    def close_continuous_dialog(self, *, mode: str = "after_reply", reason: str = "model_requested") -> dict:
+        """请求关闭连续对话窗口。
+
+        主要逻辑：兼容老 SDK `close_continuous_dialog` 工具语义，但执行仍委托
+        AudioChatApp 的音频会话生命周期；默认等待当前回复播放结束后关闭。
+        参数：`mode` 当前支持 after_reply / close_after_reply / close_now。
+        返回值：关闭调度结果。
+        异常情况：非法 mode 时抛出 `ToolError`。
+        """
+
+        close_mode = "close_after_reply" if mode in {"after_reply", "close_after_reply"} else mode
+        if close_mode not in {"close_after_reply", "close_now"}:
+            raise ToolError("unsupported close mode", code=ErrorCode.INVALID_ARGUMENT, details={"mode": mode})
+        session_id = self._app.active_session_id(self.user_id)
+        self._app.close_audio_session(self.user_id, reason=reason, mode=close_mode)
+        return {"scheduled": True, "mode": mode, "close_mode": close_mode, "session_id": session_id}
+
     def submit_audio(self, audio: bytes, codec: str, priority: str = "normal") -> None:
         """提交原生音频输出。
 
@@ -1016,6 +1165,24 @@ class UserDeviceContext:
         return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
 
 
+class RequestAssetInput(BaseModel):
+    """请求传感器资产输入。"""
+
+    stream_type: str = Field(description="要请求的 sensor.* stream 类型，例如 sensor.rgb。")
+    freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存资产的最大秒数；0 表示必须请求新资产。")
+    configure_payload: dict = Field(default_factory=dict, description="发给端侧的 stream 配置参数，不允许包含媒体字节。")
+    timeout_seconds: float | None = Field(default=None, gt=0, description="等待端侧上传资产的超时时间，单位秒。")
+
+
+class RequestAssetOutput(BaseModel):
+    """请求传感器资产输出。"""
+
+    asset_id: str | None = Field(default=None, description="资产 ID；超时或不可用时为空。")
+    stream_type: str | None = Field(default=None, description="资产来源 stream 类型。")
+    path: str | None = Field(default=None, description="本地调试路径。")
+    mime_type: str | None = Field(default=None, description="资产 MIME 类型。")
+
+
 class RequestAssetTool(BaseTool):
     """请求对话资产的协议原生 Tool 门面。
 
@@ -1023,8 +1190,14 @@ class RequestAssetTool(BaseTool):
     主要方法：`run()`。
     """
 
-    name = "request_asset"
-    description = "请求端侧上传指定类型的传感器资产。"
+    spec = ToolSpec(
+        name="request_asset",
+        description="请求端侧上传指定类型的传感器资产。需要抓拍照片时优先使用 capture_photo。",
+        input_model=RequestAssetInput,
+        output_model=RequestAssetOutput,
+        capability_type="tool",
+        tags=["asset", "stream", "sensor"],
+    )
 
     def run(
         self,
@@ -1068,12 +1241,30 @@ class RequestAssetTool(BaseTool):
 class ConfigureAssetStreamTool(BaseTool):
     """配置端侧传感器 stream 的内置 Tool。"""
 
-    name = "configure_asset_stream"
-    description = "通过控制事件请求端侧配置 sensor.* stream。"
+    class Input(BaseModel):
+        stream_type: str = Field(description="要配置的 sensor.* stream 类型，例如 sensor.rgb 或 sensor.imu。")
+        mode: str = Field(default="single", description="stream 模式，例如 single、continuous 或 stop。")
+        payload: dict = Field(default_factory=dict, description="端侧配置参数，不允许包含媒体字节。")
+        require_capability: str | None = Field(default=None, description="可选设备能力要求；为空时使用 stream_type。")
+        selection: Literal["first_available", "all"] = Field(default="first_available", description="匹配多台设备时的选择策略。")
+
+    class Output(BaseModel):
+        matched_count: int = Field(description="订阅和能力匹配的设备数量。")
+        delivered_count: int = Field(description="实际投递成功的设备数量。")
+
+    spec = ToolSpec(
+        name="configure_asset_stream",
+        description="通过控制事件请求端侧配置 sensor.* stream，适合启动或停止连续传感器上传。",
+        input_model=Input,
+        output_model=Output,
+        capability_type="tool",
+        tags=["stream", "sensor"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         stream_type = str(input_data.get("stream_type") or "")
         payload = dict(input_data.get("payload") or {})
+        payload.setdefault("mode", str(input_data.get("mode") or "single"))
         result = context.devices.publish_event(
             "stream.control.configure.requested",
             stream_type=stream_type,
@@ -1084,11 +1275,105 @@ class ConfigureAssetStreamTool(BaseTool):
         return ToolResult.success(data=result.__dict__, message="asset stream configure event published")
 
 
+class CapturePhotoInput(BaseModel):
+    """抓拍图片输入。"""
+
+    reason: str = Field(default="agent_requested", description="抓拍原因，会写入端侧 stream 配置事件。")
+    timeout_seconds: float | None = Field(default=10, description="等待端侧上传图片的超时时间。")
+    freshness_seconds: float = Field(default=0, description="可复用缓存图片的最大秒数；需要新图时填 0。")
+
+
+class CapturePhotoOutput(BaseModel):
+    """抓拍图片输出。"""
+
+    asset_id: str
+    stream_type: str
+    storage_uri: str
+    path: str
+    mime_type: str
+    bytes: int | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class CapturePhotoTool(BaseTool):
+    """旧 SDK `capture_photo` 的内置兼容 Tool。
+
+    主要功能：让模型继续用老工具名请求当前视觉资产；实现上只请求 `sensor.rgb`
+    stream，不引入相机 RPC 或点对点 device_id。
+    """
+
+    spec = ToolSpec(
+        name="capture_photo",
+        description=(
+            "当用户询问眼前画面、物体、文字、障碍物、路况等需要新的视觉信息才能回答的问题时调用。"
+            "在 Realtime/Omni Agent Core 中，本工具会获取端侧最新照片并追加到当前多模态 conversation，"
+            "让模型基于这张新照片继续回答；"
+            "普通闲聊、记忆维护或已有当前照片足够回答时不要调用。"
+        ),
+        input_model=CapturePhotoInput,
+        output_model=CapturePhotoOutput,
+        capability_type="tool",
+        tags=["camera", "image", "system"],
+        progress_message=(
+            "我先拍张照片看看。",
+            "稍等，我看一下眼前画面。",
+            "我先取一张当前画面。",
+        ),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """请求一张 `sensor.rgb` 图片资产。
+
+        主要逻辑：通过 `UserDeviceContext.capture_photo()` 发布 stream 配置事件并等待
+        端侧上传图片；返回资产引用给 Agent Core。
+        参数：`input_data` 可包含 reason、timeout_seconds、freshness_seconds。
+        返回值：成功时包含 AssetRef，超时时返回结构化失败。
+        异常情况：无匹配设备或等待超时会转为 `TIMEOUT` 失败。
+        """
+
+        asset = context.devices.capture_photo(
+            reason=str(input_data.get("reason") or "agent_requested"),
+            timeout_seconds=input_data.get("timeout_seconds"),
+            freshness_seconds=float(input_data.get("freshness_seconds") or 0),
+        )
+        if asset is None:
+            return ToolResult.failed(ToolError("photo capture timed out", code=ErrorCode.TIMEOUT))
+        return ToolResult.success(
+            data={
+                "asset_id": asset.asset_id,
+                "stream_type": asset.stream_type,
+                "storage_uri": asset.path,
+                "path": asset.path,
+                "mime_type": asset.mime_type,
+                "bytes": asset.metadata.get("payload_size"),
+                "metadata": dict(asset.metadata),
+            },
+            assets=[asset],
+            message="已完成一次抓拍。",
+        )
+
+
 class PublishDeviceCommandTool(BaseTool):
     """发布端侧命令事件的内置 Tool。"""
 
-    name = "publish_device_command"
-    description = "按订阅和能力发布 control.device.command.requested 事件。"
+    class Input(BaseModel):
+        command_name: str = Field(description="命令名称，例如 actuator.haptic.pulse 或 phone.task.start。")
+        params: dict = Field(default_factory=dict, description="命令参数，只放小型结构化数据。")
+        require_capability: str | None = Field(default=None, description="可选设备能力要求。")
+        selection: Literal["first_available", "all"] = Field(default="first_available", description="匹配多台设备时的选择策略。")
+
+    class Output(BaseModel):
+        matched_count: int = Field(description="订阅和能力匹配的设备数量。")
+        delivered_count: int = Field(description="实际投递成功的设备数量。")
+
+    spec = ToolSpec(
+        name="publish_device_command",
+        description="按订阅和能力发布 control.device.command.requested 控制事件，不接受 device_id。",
+        input_model=Input,
+        output_model=Output,
+        capability_type="tool",
+        tags=["device", "control"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         payload = {
@@ -1104,17 +1389,165 @@ class PublishDeviceCommandTool(BaseTool):
         return ToolResult.success(data=result.__dict__, message="device command event published")
 
 
+class StartPhoneVideoLinkInput(BaseModel):
+    """启动视频画面连接输入。"""
+
+    link_mode: str = Field(default="direct", description="兼容字段；新版 SDK 仅记录到 payload。")
+    frame_interval_ms: int = Field(default=500, ge=1, description="期望上传间隔，单位毫秒。")
+    duration_seconds: float | None = Field(default=None, description="可选持续时间，由端侧自行停止。")
+
+
+class StartPhoneVideoLinkOutput(BaseModel):
+    """启动视频画面连接输出。"""
+
+    link_id: str
+    task_id: str
+    task_type: str
+    state: str
+    stream_type: str
+    delivered_count: int
+    frame_interval_ms: int
+
+
+class StartPhoneVideoLinkTool(BaseTool):
+    """旧 SDK `start_phone_video_link` 的协议原生兼容 Tool。
+
+    主要功能：请求可生产 `sensor.rgb` 的端侧建立连续 RGB stream。新版 SDK 不再暴露
+    手机/眼镜点对点连接细节，因此本工具只返回配置事件投递结果和 link_id。
+    """
+
+    spec = ToolSpec(
+        name="start_phone_video_link",
+        description=(
+            "当任务需要手机或其他端侧摄像头持续回传画面时调用，例如持续观察、找物、导航或红绿灯辅助。"
+            "只需要单张眼前照片时不要调用，应使用 capture_photo。"
+        ),
+        input_model=StartPhoneVideoLinkInput,
+        output_model=StartPhoneVideoLinkOutput,
+        capability_type="tool",
+        tags=["phone", "video", "stream"],
+        progress_message=(
+            "我先连接手机摄像头。",
+            "稍等，我把手机画面接进来。",
+            "我先建立视频画面连接。",
+        ),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """请求端侧开始连续上传 RGB 资产。
+
+        主要逻辑：发布 `stream.control.configure.requested`，由设备订阅策略和能力匹配
+        决定具体端侧；不接受 device_id 参数。
+        参数：`frame_interval_ms` 控制上传间隔，`duration_seconds` 控制端侧自行停止。
+        返回值：配置事件投递摘要。
+        异常情况：无匹配订阅设备时仍返回 delivered_count=0，供 Agent 解释。
+        """
+
+        frame_interval_ms = max(1, int(input_data.get("frame_interval_ms") or 500))
+        link_id = new_id("video_link")
+        payload = {
+            "mode": "continuous",
+            "link_id": link_id,
+            "link_mode": str(input_data.get("link_mode") or "direct"),
+            "frame_interval_ms": frame_interval_ms,
+            "rate_hz": 1000.0 / frame_interval_ms,
+            "correlation_id": link_id,
+            "reason": "start_phone_video_link",
+        }
+        if input_data.get("duration_seconds") is not None:
+            payload["duration_seconds"] = float(input_data["duration_seconds"])
+        result = context.devices.configure_stream(
+            "sensor.rgb",
+            mode="continuous",
+            rate_hz=float(payload["rate_hz"]),
+            duration_seconds=payload.get("duration_seconds"),
+            payload=payload,
+            require_capability="sensor.rgb",
+            selection="first_available",
+        )
+        state = "running" if result.delivered_count > 0 else "unavailable"
+        return ToolResult.success(
+            data={
+                "link_id": link_id,
+                "task_id": link_id,
+                "task_type": "phone_video_link_task",
+                "state": state,
+                "stream_type": "sensor.rgb",
+                "delivered_count": result.delivered_count,
+                "frame_interval_ms": frame_interval_ms,
+            },
+            message="已请求端侧建立视频画面连接。" if result.delivered_count else "没有找到可建立视频画面连接的端侧。",
+        )
+
+
+class CloseContinuousDialogInput(BaseModel):
+    """关闭连续对话输入。"""
+
+    mode: Literal["after_reply", "close_after_reply", "close_now"] = Field(
+        default="after_reply",
+        description="关闭方式。after_reply 表示等当前回复播报完成后关闭连续对话。",
+    )
+
+
+class CloseContinuousDialogOutput(BaseModel):
+    """关闭连续对话输出。"""
+
+    scheduled: bool
+    mode: str
+    close_mode: str
+    session_id: str
+
+
+class CloseContinuousDialogTool(BaseTool):
+    """旧 SDK `close_continuous_dialog` 的内置兼容 Tool。"""
+
+    spec = ToolSpec(
+        name="close_continuous_dialog",
+        description=(
+            "只能在用户明确表达结束连续对话、希望助手安静、先不用继续听、先这样、等会儿再说等意图时调用。"
+            "不要因为一次普通问题已经回答完成就调用。"
+        ),
+        input_model=CloseContinuousDialogInput,
+        output_model=CloseContinuousDialogOutput,
+        capability_type="tool",
+        tags=["voice", "dialog", "system"],
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """安排关闭连续对话。"""
+
+        result = context.devices.close_continuous_dialog(
+            mode=str(input_data.get("mode") or "after_reply"),
+            reason="model_tool_requested",
+        )
+        return ToolResult.success(data=result, message="已安排关闭连续对话。")
+
+
 class QueryDeviceStateTool(BaseTool):
     """查询当前用户 active device set 的内置 Tool。"""
 
-    name = "query_device_state"
-    description = "查询当前用户在线设备和能力摘要。"
+    class Input(BaseModel):
+        capability: str | None = Field(default=None, description="可选能力过滤，例如 sensor.rgb、sensor.mic 或 actuator.speaker。")
+
+    class Output(BaseModel):
+        devices: list[dict] = Field(description="当前用户在线设备快照列表。")
+        count: int = Field(description="匹配设备数量。")
+
+    spec = ToolSpec(
+        name="query_device_state",
+        description="查询当前用户在线设备和能力摘要。用户询问有哪些设备在线、眼镜状态或端侧能力时调用。",
+        input_model=Input,
+        output_model=Output,
+        capability_type="tool",
+        tags=["device", "debug", "system"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         capability = input_data.get("capability")
         devices = context.devices.get_devices(str(capability) if capability else None)
+        data = {"devices": [device.__dict__ for device in devices], "count": len(devices)}
         return ToolResult.success(
-            data=[device.__dict__ for device in devices],
+            data=data,
             message=f"{len(devices)} active devices matched",
         )
 
@@ -1122,8 +1555,16 @@ class QueryDeviceStateTool(BaseTool):
 class QueryTaskStatusTool(BaseTool):
     """查询 TaskEngine 任务状态的内置 Tool。"""
 
-    name = "query_task_status"
-    description = "查询一个 server 侧任务的状态。"
+    class Input(BaseModel):
+        task_id: str = Field(description="要查询的 Task ID。")
+
+    spec = ToolSpec(
+        name="query_task_status",
+        description="查询一个 server 侧任务的状态。",
+        input_model=Input,
+        capability_type="tool",
+        tags=["task"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.tasks is None:
@@ -1135,8 +1576,17 @@ class QueryTaskStatusTool(BaseTool):
 class CancelTaskTool(BaseTool):
     """取消 TaskEngine 任务的内置 Tool。"""
 
-    name = "cancel_task"
-    description = "取消一个 server 侧任务。"
+    class Input(BaseModel):
+        task_id: str = Field(description="要取消的 Task ID。")
+        reason: str = Field(default="tool_requested", description="取消原因。")
+
+    spec = ToolSpec(
+        name="cancel_task",
+        description="取消一个 server 侧任务。只能在用户明确要求停止某个任务时调用。",
+        input_model=Input,
+        capability_type="tool",
+        tags=["task"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.tasks is None:
@@ -1148,8 +1598,17 @@ class CancelTaskTool(BaseTool):
 class MemorySearchTool(BaseTool):
     """搜索长期记忆的内置 Tool。"""
 
-    name = "memory_search"
-    description = "搜索当前用户的长期记忆。"
+    class Input(BaseModel):
+        query: str = Field(description="要搜索的记忆关键词或问题。")
+        limit: int = Field(default=5, ge=1, le=20, description="最多返回的记忆条数。")
+
+    spec = ToolSpec(
+        name="memory_search",
+        description="搜索当前用户的长期记忆。",
+        input_model=Input,
+        capability_type="tool",
+        tags=["memory"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.memory is None:
@@ -1168,8 +1627,17 @@ class MemorySearchTool(BaseTool):
 class ManageMemoryTool(BaseTool):
     """写入长期记忆的内置 Tool。"""
 
-    name = "manage_memory"
-    description = "写入当前用户长期记忆。"
+    class Input(BaseModel):
+        content: str = Field(description="要写入长期记忆的内容。")
+        metadata: dict = Field(default_factory=dict, description="可选结构化元数据。")
+
+    spec = ToolSpec(
+        name="manage_memory",
+        description="写入当前用户长期记忆。只有用户明确提供稳定偏好、身份信息或长期事实时调用。",
+        input_model=Input,
+        capability_type="tool",
+        tags=["memory"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.memory is None:
@@ -1185,8 +1653,16 @@ class ManageMemoryTool(BaseTool):
 class ReadSkillTool(BaseTool):
     """读取受控 Skill 的内置 Tool。"""
 
-    name = "read_skill"
-    description = "读取配置 Skill roots 下的受控 Skill 文档。"
+    class Input(BaseModel):
+        name: str = Field(description="要读取的 Skill 名称。")
+
+    spec = ToolSpec(
+        name="read_skill",
+        description="读取配置 Skill roots 下的受控 Skill 文档。",
+        input_model=Input,
+        capability_type="tool",
+        tags=["skill"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.skills is None:
@@ -1198,8 +1674,18 @@ class ReadSkillTool(BaseTool):
 class McpCallTool(BaseTool):
     """通过 MCP Gateway 调用 MCP tool 的内置 Tool。"""
 
-    name = "mcp_call"
-    description = "调用配置中的 MCP tool。"
+    class Input(BaseModel):
+        tool_name: str = Field(description="MCP tool 名称，例如 web.search 或 amap.route_plan。")
+        arguments: dict = Field(default_factory=dict, description="传给 MCP tool 的结构化参数。")
+        timeout_seconds: float | None = Field(default=None, gt=0, description="调用超时时间，单位秒。")
+
+    spec = ToolSpec(
+        name="mcp_call",
+        description="调用配置中的 MCP tool。业务推荐封装成更具体的 Tool 后再暴露给模型。",
+        input_model=Input,
+        capability_type="mcp",
+        tags=["mcp"],
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.mcp is None:
@@ -1215,7 +1701,10 @@ class McpCallTool(BaseTool):
 BUILTIN_TOOLS = (
     RequestAssetTool,
     ConfigureAssetStreamTool,
+    CapturePhotoTool,
     PublishDeviceCommandTool,
+    StartPhoneVideoLinkTool,
+    CloseContinuousDialogTool,
     QueryDeviceStateTool,
     QueryTaskStatusTool,
     CancelTaskTool,

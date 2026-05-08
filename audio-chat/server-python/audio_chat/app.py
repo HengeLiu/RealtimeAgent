@@ -41,7 +41,7 @@ class AudioChatConfig:
     control_subscription_filter_mode: str = "exact"
     control_heartbeat_timeout_seconds: float = 30.0
     control_heartbeat_check_interval_seconds: float = 5.0
-    stream_max_chunk_bytes: int = 8192
+    stream_max_chunk_bytes: int = 1048576
     stream_idle_timeout_seconds: float = 20.0
     default_sensor_mic: StreamFormat = StreamFormat()
     default_actuator_speaker: StreamFormat = StreamFormat(chunk_ms=40)
@@ -236,6 +236,7 @@ class AudioChatApp:
             allow_subscribe_all=self.config.control_allow_subscribe_all,
             subscription_filter_mode=self.config.control_subscription_filter_mode,
             active_device_set_policy=self.config.active_device_set_policy,
+            effective_config={"stream.max_chunk_bytes": self.config.stream_max_chunk_bytes},
         )
         self.stream_service = StreamService(
             control_service=self.control_service,
@@ -310,7 +311,7 @@ class AudioChatApp:
             self.tool_registry.register(tool_cls())
         for tool_cls in EXTENSION_BUILTIN_TOOLS:
             tool = tool_cls()
-            if self._extension_tool_enabled(tool.name):
+            if self._extension_tool_enabled(tool.resolved_spec().name):
                 self.tool_registry.register(tool)
         if self.config.tools_discover_enabled:
             tool_discovery = ToolAutoDiscovery()
@@ -319,6 +320,8 @@ class AudioChatApp:
                 recursive=self.config.tools_discover_recursive,
                 fail_fast=self.config.tools_discover_fail_fast,
             ):
+                if tool.resolved_spec().name in self.tool_registry.list_names():
+                    continue
                 self.tool_registry.register(tool)
             self.discovery_errors.extend(tool_discovery.errors)
         self.tool_gateway = ToolGateway(

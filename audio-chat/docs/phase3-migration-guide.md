@@ -80,19 +80,53 @@ tasks:
 
 ## 5. BaseTool 迁移
 
-旧 SDK 的 Tool 常见写法是继承 `BaseTool`，在 `run(context, input_data)` 中通过 `DeviceGroupContext` 使用设备能力。迁移后仍然继承 `BaseTool`，但只从 `audio_chat` 顶层导入：
+旧 SDK 的 Tool 常见写法是继承 `BaseTool`，在 `run(context, input_data)` 中通过 `DeviceGroupContext` 使用设备能力。迁移后仍然继承 `BaseTool`，但参数声明改为 `ToolSpec + Pydantic`：
 
 ```python
-from audio_chat import BaseTool, ToolContext, ToolResult
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+
+
+class FindObjectInput(BaseModel):
+    """找物 Tool 输入参数。"""
+
+    object_name: str = Field(default="目标物", description="用户想要查找的物品名称。")
+    timeout_seconds: float = Field(default=2, gt=0, description="等待端侧上传图片资产的超时时间，单位秒。")
+
+
+class FindObjectTool(BaseTool):
+    """找物 Tool 迁移样板。"""
+
+    spec = ToolSpec(
+        name="find_object",
+        description="请求端侧采集图片，并准备一次找物分析。",
+        input_model=FindObjectInput,
+        progress_message="正在请求端侧画面",
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        asset = context.devices.request_asset(
+            "sensor.rgb",
+            freshness_seconds=0,
+            timeout_seconds=input_data["timeout_seconds"],
+            configure_payload={"reason": "find_object", "object_name": input_data["object_name"]},
+        )
+        if asset is None:
+            return ToolResult.success(data={"captured": False}, message="未收到端侧画面")
+        return ToolResult.success(data={"captured": True, "asset_id": asset.asset_id}, assets=[asset])
 ```
 
 迁移规则：
 
 1. 保留业务参数校验、模型可读 `description` 和短动作语义。
-2. 把旧的 `context.capture_photo()` 改成 `context.devices.request_asset("sensor.rgb", ...)`。
-3. 把旧的 `context.submit_notification()` 改成 `context.devices.submit_text(...)`。
-4. 不再保存或传递 `device_id`；通过 `require_capability`、`stream_type` 和 subscription 匹配设备。
-5. Tool 返回 `ToolResult.success(...)`，资产用 `assets=[asset]` 带回，图片字节不进 `data`。
+2. 使用 `ToolSpec.name/description/input_model` 告诉 Agent Core 这个工具叫什么、做什么、需要哪些参数。
+3. `input_model` 使用 Pydantic `BaseModel`，字段类型和 `Field(description=...)` 会自动转换成模型可见的 provider tool schema。
+4. SDK 会在调用 `run()` 前校验参数并填充默认值；`run()` 收到的是校验后的 `dict`。
+5. 把旧的 `context.capture_photo()` 改成 `context.devices.request_asset("sensor.rgb", ...)`。
+6. 把旧的 `context.submit_notification()` 改成 `context.devices.submit_text(...)`。
+7. 不再保存或传递 `device_id`；通过 `require_capability`、`stream_type` 和 subscription 匹配设备。
+8. Tool 返回 `ToolResult.success(...)`，资产用 `assets=[asset]` 带回，图片字节不进 `data`。
 
 参考文件：`examples/migration-templates/find_object/tool.py`。
 

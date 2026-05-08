@@ -1,6 +1,43 @@
 from __future__ import annotations
 
-from audio_chat import BaseTool, ToolContext, ToolResult
+from pydantic import BaseModel, Field
+
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+
+
+class FindObjectCaptureInput(BaseModel):
+    """找物抓拍输入参数。"""
+
+    object_name: str = Field(default="目标物", description="用户想要查找的物品名称。")
+    freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存图片的最长秒数。")
+    timeout_seconds: float = Field(default=2, gt=0, description="等待端侧上传图片资产的超时时间，单位秒。")
+
+
+class FindObjectCaptureOutput(BaseModel):
+    """找物抓拍输出结构。"""
+
+    captured: bool = Field(description="是否收到端侧画面。")
+    found: bool = Field(description="当前 mock 视觉处理是否认为找到目标。")
+    object_name: str = Field(description="要查找的物品名称。")
+    asset_id: str | None = Field(default=None, description="图片资产 ID。")
+    path: str | None = Field(default=None, description="本地调试路径。")
+    source: str | None = Field(default=None, description="结果来源。")
+
+
+class StartFindObjectInput(BaseModel):
+    """持续找物任务输入参数。"""
+
+    object_name: str = Field(default="目标物", description="用户想要持续查找的物品名称。")
+    frame_limit: int = Field(default=3, ge=1, le=60, description="本次任务最多分析的图片帧数。")
+
+
+class StartFindObjectOutput(BaseModel):
+    """持续找物任务输出结构。"""
+
+    started: bool = Field(description="是否成功创建任务。")
+    task_id: str | None = Field(default=None, description="任务 ID。")
+    state: str | None = Field(default=None, description="任务状态。")
+    reason: str | None = Field(default=None, description="未启动原因。")
 
 
 class FindObjectCaptureTool(BaseTool):
@@ -12,9 +49,13 @@ class FindObjectCaptureTool(BaseTool):
     3. 不关心具体端侧设备，设备选择交给 capability 和 subscription 匹配。
     """
 
-    name = "find_object_capture"
-    description = "请求端侧画面并准备一次找物分析"
-    progress_message = "正在获取画面"
+    spec = ToolSpec(
+        name="find_object_capture",
+        description="请求端侧画面并准备一次找物分析。",
+        input_model=FindObjectCaptureInput,
+        output_model=FindObjectCaptureOutput,
+        progress_message="正在获取画面",
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行找物抓拍。
@@ -36,11 +77,11 @@ class FindObjectCaptureTool(BaseTool):
         1. 事件发布、stream 或资产缓存异常由 ToolGateway 转成失败结果。
         """
 
-        object_name = str(input_data.get("object_name") or "目标物").strip()
+        object_name = input_data["object_name"].strip()
         asset = context.devices.capture_photo(
             reason="find_object_capture",
-            timeout_seconds=float(input_data.get("timeout_seconds") or 2),
-            freshness_seconds=float(input_data.get("freshness_seconds") or 0),
+            timeout_seconds=float(input_data["timeout_seconds"]),
+            freshness_seconds=float(input_data["freshness_seconds"]),
             configure_payload={"format": "jpeg", "object_name": object_name},
         )
         if asset is None:
@@ -65,9 +106,13 @@ class FindObjectCaptureTool(BaseTool):
 class StartFindObjectTaskTool(BaseTool):
     """启动持续找物视觉任务的 Tool。"""
 
-    name = "start_find_object"
-    description = "启动持续 RGB 找物任务"
-    progress_message = "正在启动找物任务"
+    spec = ToolSpec(
+        name="start_find_object",
+        description="启动持续 RGB 找物任务。",
+        input_model=StartFindObjectInput,
+        output_model=StartFindObjectOutput,
+        progress_message="正在启动找物任务",
+    )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """创建找物视觉 Task。
