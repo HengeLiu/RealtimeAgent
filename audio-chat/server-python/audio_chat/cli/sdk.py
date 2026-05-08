@@ -239,10 +239,10 @@ def _wheel_contents_check(wheel_path: Path) -> dict:
         "__pycache__/",
         ".pyc",
         "runs/",
-        "examples/",
-        "endpoints-examples/ios-phone/",
-        "endpoints-examples/esp32-s3/",
-        "endpoints-examples/web-glass/",
+        "app-examples/",
+        "device-examples/native-ios-phone/",
+        "device-examples/native-esp32-glass/",
+        "device-examples/browser-glass/",
         "local.env",
         "AppConfig.json",
     )
@@ -313,7 +313,7 @@ def _esp32_reference_check(audio_root: Path) -> dict:
 
     from audio_chat.cli.esp32 import _esp32_project_manifest_check
 
-    endpoint_root = audio_root / "endpoints-examples" / "esp32-s3"
+    endpoint_root = audio_root / "device-examples" / "native-esp32-glass"
     errors = []
     for relative in ("README.md", "local.env.example"):
         if not (endpoint_root / relative).exists():
@@ -332,38 +332,33 @@ def _endpoint_source_check(audio_root: Path) -> dict:
     """检查发布候选随仓库交付的端侧参考源码。
 
     主要逻辑：端侧参考实现不进入 `audio_chat` SDK 内部命名空间，但 release
-    candidate 必须能说明 iOS、ESP32、web-glass 和 Python 参考端的源码输入是否齐全。
+    candidate 必须能说明 iOS、ESP32、browser-glass 和 Python 参考端的源码输入是否齐全。
     """
 
     required_files = {
         "ios_phone": [
-            "endpoints-examples/ios-phone/README.md",
-            "endpoints-examples/ios-phone/AppConfig.example.json",
-            "endpoints-examples/ios-phone/AudioChatPhone.xcodeproj/project.pbxproj",
-            "endpoints-examples/ios-phone/AudioChatPhone/Core/AudioChatEndpointRuntime.swift",
+            "device-examples/native-ios-phone/README.md",
+            "device-examples/native-ios-phone/AppConfig.example.json",
+            "device-examples/native-ios-phone/AudioChatPhone.xcodeproj/project.pbxproj",
+            "device-examples/native-ios-phone/AudioChatPhone/Core/AudioChatEndpointRuntime.swift",
         ],
         "esp32_s3": [
-            "endpoints-examples/esp32-s3/README.md",
-            "endpoints-examples/esp32-s3/local.env.example",
-            "endpoints-examples/esp32-s3/firmware/CMakeLists.txt",
+            "device-examples/native-esp32-glass/README.md",
+            "device-examples/native-esp32-glass/local.env.example",
+            "device-examples/native-esp32-glass/firmware/CMakeLists.txt",
         ],
-        "web_glass": [
-            "endpoints-examples/web-glass/README.md",
-            "endpoints-examples/web-glass/index.html",
-            "endpoints-examples/web-glass/web-glass.yaml",
-        ],
-        "browser_device": [
-            "device-examples/browser-device/README.md",
-            "device-examples/browser-device/index.html",
-            "device-examples/browser-device/browser-device.yaml",
+        "browser_glass": [
+            "device-examples/browser-glass/README.md",
+            "device-examples/browser-glass/index.html",
+            "device-examples/browser-glass/browser-glass.yaml",
         ],
         "python_phone_mock": [
-            "endpoints-examples/python-phone-mock/README.md",
-            "endpoints-examples/python-phone-mock/phone.mock.yaml",
-            "endpoints-examples/python-phone-mock/audio_chat_python_phone_mock/phone_mock.py",
+            "device-examples/python-phone/README.md",
+            "device-examples/python-phone/phone.mock.yaml",
+            "device-examples/python-phone/audio_chat_python_phone_mock/phone_mock.py",
         ],
         "python_glass": [
-            "endpoints-examples/python-glass/audio_chat_python_glass/playback.py",
+            "device-examples/python-glass/audio_chat_python_glass/playback.py",
         ],
     }
     checks: dict[str, dict] = {}
@@ -397,7 +392,7 @@ def _source_boundary_check(audio_root: Path) -> dict:
         if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):
             continue
         text = path.read_text(encoding="utf-8")
-        for needle in ("audio_chat.endpoints", "examples.", "endpoints-examples/ios-phone", "endpoints-examples/esp32-s3"):
+        for needle in ("audio_chat.endpoints", "app-examples.", "device-examples/native-ios-phone", "device-examples/native-esp32-glass"):
             if needle in text:
                 offenders.append(f"{path.relative_to(audio_root)}:{needle}")
     errors = [f"server SDK core imports endpoint/example boundary: {item}" for item in offenders]

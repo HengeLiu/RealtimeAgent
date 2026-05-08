@@ -63,7 +63,7 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
         Event(
             event_name="control.device.command.completed",
             user_id="user-phone-task",
-            producer_id="dev-python-phone-mock",
+            producer_id="dev-python-phone",
             payload={
                 "task_id": "task-phone-001",
                 "task_type": "find_object_phone_task",

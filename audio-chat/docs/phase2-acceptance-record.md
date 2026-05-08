@@ -11,7 +11,7 @@
 1. TextAgentCore 内部 `AsrPipeline` provider adapter：`DashScopeAsrProviderAdapter` 使用 `dashscope.audio.asr.Recognition`，支持真实 PCM chunk 输入、transcript delta 和 final transcript。
 2. TextAgentCore 内部 `TextModelAdapter`：支持 `mock`、`openai-compatible`、`dashscope-compatible` 流式 text delta。
 3. Output Service 内部 Streaming TTS：`DashScopeStreamingTTS` 使用 `dashscope.audio.tts_v2.SpeechSynthesizer`，`assistant_text.delta` 实时进入 TTS，生成 `assistant_audio.delta`。
-4. 完整 YAML 配置加载：新增 `audio-chat/examples/minimal/server.yaml` 和 `playback.yaml`，覆盖文档第 15 章的主要配置段，并支持环境变量覆盖。
+4. 完整 YAML 配置加载：新增 `audio-chat/app-examples/basic-app/server.yaml` 和 `playback.yaml`，覆盖文档第 15 章的主要配置段，并支持环境变量覆盖。
 5. `UserDeviceContext` 协议原生 API：Tool / Task 通过 `publish_event()`、`request_asset()`、`watch_assets()`、`submit_text()`、`submit_audio()` 和 `open_output_stream()` 表达业务意图，不面向设备实例编程。
 6. Asset Service 补强：`request_asset()` 支持 pending request、timeout、等待端侧上传、TTL、producer device_id 记录和最小 window 缓存；`watch_assets()` 支持按 `stream_type + correlation_id` 连续读取资产。
 7. Playback Arbiter 补强：覆盖 queue TTL、同优先级不抢占、interrupt、drop/requeue，以及 queued intent 继续播放路径。
@@ -33,7 +33,7 @@ Phase 2.5 新增完成项：
 mock playback 配置：
 
 ```text
-audio-chat/examples/minimal/playback.yaml
+audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 关键字段：
@@ -54,7 +54,7 @@ tts_voice: mock
 server YAML 配置：
 
 ```text
-audio-chat/examples/minimal/server.yaml
+audio-chat/app-examples/basic-app/server.yaml
 ```
 
 真实 provider adapter 状态：
@@ -86,7 +86,7 @@ uv run audio-chat.dev.preflight --report runs/audio-chat/preflight-phase25.json
 旧概念扫描：
 
 ```bash
-rg -n "VoiceRuntime|DeviceGroupContext|MediaFrame|group_id|source_device_id|target_device_id" audio-chat/server-python audio-chat/tests audio-chat/examples -S
+rg -n "VoiceRuntime|DeviceGroupContext|MediaFrame|group_id|source_device_id|target_device_id" audio-chat/server-python audio-chat/tests audio-chat/app-examples -S
 ```
 
 结果：无命中。
@@ -112,7 +112,7 @@ DASHSCOPE_API_KEY=... uv run python -m pytest audio-chat/tests/integration -q -r
 命令：
 
 ```bash
-uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 结果：
@@ -139,15 +139,15 @@ Phase 2.5 格式协商检查：
 
 ## 端侧联调结果
 
-本轮仍未连接物理 ESP32-S3。下一阶段端侧验证目标已调整为 `web-glass`，优先用浏览器成熟 WebRTC AEC / NS / AGC 验证全双工语音链路；ESP32-S3 AEC 真机验收暂时后置，不删除既有 bridge 文档。
+本轮仍未连接物理 ESP32-S3。下一阶段端侧验证目标已调整为 `browser-glass`，优先用浏览器成熟 WebRTC AEC / NS / AGC 验证全双工语音链路；ESP32-S3 AEC 真机验收暂时后置，不删除既有 bridge 文档。
 
 新增参考端侧：
 
-1. `audio-chat/endpoints-examples/web-glass/index.html`
-2. `audio-chat/endpoints-examples/web-glass/README.md`
-3. `audio-chat/endpoints-examples/web-glass/web-glass.yaml`
+1. `audio-chat/device-examples/browser-glass/index.html`
+2. `audio-chat/device-examples/browser-glass/README.md`
+3. `audio-chat/device-examples/browser-glass/browser-glass.yaml`
 
-`web-glass` 是独立参考端侧，不由 `audio-chat.server.run` 提供静态页面入口。server SDK 只暴露协议连接和 debug API，端侧类型只在注册事件中声明。
+`browser-glass` 是独立参考端侧，不由 `audio-chat.server.run` 提供静态页面入口。server SDK 只暴露协议连接和 debug API，端侧类型只在注册事件中声明。
 
 已验证：
 
@@ -161,7 +161,7 @@ Phase 2.5 格式协商检查：
 
 未完成：
 
-1. ESP32-S3 AEC 真机验收暂停，等待 `web-glass` 全双工链路稳定后继续。
+1. ESP32-S3 AEC 真机验收暂停，等待 `browser-glass` 全双工链路稳定后继续。
 2. 未验证真实端侧 AEC 算法效果。
 3. 未验证真实硬件播放器时钟、reference delay 和播放失败回执。
 
@@ -178,36 +178,36 @@ Phase 2.5 格式协商检查：
 
 ## 已知问题
 
-1. `web-glass` 已作为下一阶段优先端侧；物理 ESP32-S3 endpoint bridge 尚未真机验收。
+1. `browser-glass` 已作为下一阶段优先端侧；物理 ESP32-S3 endpoint bridge 尚未真机验收。
 2. DashScope TTS adapter 已是真实 streaming session，但同步 `synthesize_delta()` 仍是短窗口取音频，后续可优化成后台队列驱动以降低首包抖动。
 3. Playback Arbiter 的 `requeue` 已能重新打开 output stream，但不实现断点 resume。
 4. Asset Service 支持 TTL 和 window，但还没有质量评分、多设备选择策略和连续视频编码。
-5. ESP32 真机还需要等 `web-glass` 链路稳定后，再按 `audio-chat/docs/esp32-s3-endpoint-bridge.md` 补充实际刷写命令、串口日志、server 日志和 runs 产物。
+5. ESP32 真机还需要等 `browser-glass` 链路稳定后，再按 `audio-chat/docs/esp32-s3-endpoint-bridge.md` 补充实际刷写命令、串口日志、server 日志和 runs 产物。
 6. ToolGateway、TaskEngine、Skill Service、MCP Gateway 尚未完整落地。
 
 ## 结论
 
-Phase 2.5 的 provider、stream 格式、Asset request_id、playback 和 preflight 验收通过。真实 DashScope ASR/TTS 已可用，真实输出音频格式协商已落地；物理 ESP32-S3 endpoint bridge 仍是后置项，不能描述为已真机完成。下一步先用 `web-glass` 验证浏览器 WebRTC AEC 全双工链路，再回到 ESP32-S3 AEC。
+Phase 2.5 的 provider、stream 格式、Asset request_id、playback 和 preflight 验收通过。真实 DashScope ASR/TTS 已可用，真实输出音频格式协商已落地；物理 ESP32-S3 endpoint bridge 仍是后置项，不能描述为已真机完成。下一步先用 `browser-glass` 验证浏览器 WebRTC AEC 全双工链路，再回到 ESP32-S3 AEC。
 
-## Phase 2.6 web-glass + Omni Realtime 代码状态
+## Phase 2.6 browser-glass + Omni Realtime 代码状态
 
-本轮目标是先把 `web-glass -> audio-chat server -> Omni Realtime -> web-glass` 的实时语音链路落到 SDK 边界内，真实浏览器和真实 DashScope session 仍需手动验收。
+本轮目标是先把 `browser-glass -> audio-chat server -> Omni Realtime -> browser-glass` 的实时语音链路落到 SDK 边界内，真实浏览器和真实 DashScope session 仍需手动验收。
 
 已完成代码项：
 
 1. `agent.mode=realtime_audio` 已创建 `RealtimeAudioAgentCore`，Audio Pipeline 收到 `sensor.mic` 后直接调用 `append_audio_event()`，不进入 TextAgentCore ASR final 逻辑。
 2. `QwenOmniRealtimeAdapter` 按 16 kHz PCM 输入、24 kHz PCM 输出配置 DashScope Omni Realtime，并监听 `response.audio.delta`、`response.audio.done`、transcript、done 和 error 事件。
 3. Output Service 新增原生音频入口 `on_assistant_audio_delta(...)`，Omni audio delta 不经过 TTS，首包到达时打开 `actuator.speaker` output stream。
-4. `web-glass` 持续上传 16 kHz PCM16 20ms chunk；页面没有“提交本轮”按钮，也不依赖 `final:true` 触发回复。
-5. 新增 `audio-chat/examples/minimal/server-omni.yaml`，用于显式启动 realtime audio 链路。
+4. `browser-glass` 持续上传 16 kHz PCM16 20ms chunk；页面没有“提交本轮”按钮，也不依赖 `final:true` 触发回复。
+5. 新增 `audio-chat/app-examples/basic-app/server-omni.yaml`，用于显式启动 realtime audio 链路。
 6. 单元测试用 fake Omni adapter 覆盖：append audio 不要求 final、audio delta 打开 speaker stream、audio done 关闭 output stream、用户 interrupt 调用 provider cancel 并取消当前播放。
 7. 根据真实联调日志修正 Qwen Omni 默认音色：`Chelsie` 会被 DashScope 返回 `Voice 'Chelsie' is not supported.`，当前示例和默认配置改为旧实验验证过的 `Tina`。
 8. Realtime provider 失败后，同一 session 后续 mic chunk 不再继续 append，避免页面每 20ms 刷 `Connection is already closed.`。
 
 待真实验收：
 
-1. 使用 `DASHSCOPE_API_KEY` 启动 `audio-chat.server.run --config audio-chat/examples/minimal/server-omni.yaml`。
-2. 直接打开 `audio-chat/endpoints-examples/web-glass/index.html` 完成注册、唤醒、持续说话和播放；如从 `file://` 打开，通过 query 参数指定 `server_url=http://127.0.0.1:8765`。
+1. 使用 `DASHSCOPE_API_KEY` 启动 `audio-chat.server.run --config audio-chat/app-examples/basic-app/server-omni.yaml`。
+2. 直接打开 `audio-chat/device-examples/browser-glass/index.html` 完成注册、唤醒、持续说话和播放；如从 `file://` 打开，通过 query 参数指定 `server_url=http://127.0.0.1:8765`。
 3. 确认 runs 中出现 `omni.*` provider 事件、`assistant_audio.delta`、输入输出 stream 产物。
 4. 观察播放期间继续说话时，浏览器 AEC 是否避免明显回灌。
 

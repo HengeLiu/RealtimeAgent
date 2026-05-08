@@ -7,15 +7,15 @@
     "event_name": "control.device.register.requested",
     "timestamp_ms": 1760000000000,
     "user_id": "user-auth-001",
-    "producer_id": "dev-web-glass-001",
+    "producer_id": "dev-browser-glass-001",
     "payload": {
-      "device_id": "dev-web-glass-001",
-      "client_type": "web-glass",
+      "device_id": "dev-browser-glass-001",
+      "client_type": "browser-glass",
       "auth": {
         "mode": "signed_token",
         "token_claims": {
           "user_id": "user-auth-001",
-          "device_id": "dev-web-glass-001",
+          "device_id": "dev-browser-glass-001",
           "expires_at": 1759990000000,
           "nonce": "nonce-auth-expired-001"
         }

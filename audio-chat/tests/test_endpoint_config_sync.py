@@ -16,7 +16,7 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
     """测试目标：验证 config sync 能生成多端参考配置。
 
     测试方法：执行 `audio-chat.config.sync`，指定统一 server_url、user_id 和静态 token。
-    预期结果：server、glass playback、python phone mock、web-glass、iOS、ESP32-S3
+    预期结果：server、glass playback、python phone mock、browser-glass、iOS、ESP32-S3
     配置全部生成，且共享同一组 server_url、user_id 和鉴权 token。
     """
 

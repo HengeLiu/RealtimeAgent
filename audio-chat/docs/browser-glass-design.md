@@ -4,15 +4,15 @@
 
 ## 1. 文档目的
 
-本文档定义 `browser-device` 设备示例的目标形态。它用于替代当前历史命名中的 `web-glass`，但现阶段不要求立即完成全部重命名和实现迁移。
+本文档定义 `browser-glass` 设备示例的目标形态。它用于替代当前历史命名中的 `browser-glass`，但现阶段不要求立即完成全部重命名和实现迁移。
 
-`browser-device` 是一个运行在浏览器中的 Device 示例。它承担眼镜类设备在开发测试中的角色：负责感知和执行，帮助开发者快速验证 server、Agent Core、Tool、Task、事件协议和 stream 协议。
+`browser-glass` 是一个运行在浏览器中的 Device 示例。它承担眼镜类设备在开发测试中的角色：负责感知和执行，帮助开发者快速验证 server、Agent Core、Tool、Task、事件协议和 stream 协议。
 
 它不是协议类型，也不是 SDK 对开发者设备形态的约束。开发者真实设备可以运行在任意语言、任意硬件、任意仓库，只要遵守 Device 注册、事件和 stream 协议即可。
 
 ## 2. 定位
 
-`browser-device` 的核心定位是交互式调试设备，而不是业务功能实现。
+`browser-glass` 的核心定位是交互式调试设备，而不是业务功能实现。
 
 它应该支持：
 
@@ -41,9 +41,9 @@
 
 ```text
 audio-chat/device-examples/
-  browser-device/
+  browser-glass/
     README.md
-    browser-device.yaml
+    browser-glass.yaml
     index.html
     src/
       protocol.js
@@ -64,14 +64,14 @@ audio-chat/device-examples/
 现阶段当前仓库中对应历史目录是：
 
 ```text
-audio-chat/endpoints-examples/web-glass/
+audio-chat/device-examples/browser-glass/
 ```
 
-后续迁移时应把命名从 `web-glass` 收敛为 `browser-device`，并把文档、CLI 默认路径、测试路径和 package-check 一并更新。
+后续迁移时应把命名从 `browser-glass` 收敛为 `browser-glass`，并把文档、CLI 默认路径、测试路径和 package-check 一并更新。
 
 ## 4. 协议视角
 
-`browser-device` 注册为普通 Device。server 不知道它是浏览器、眼镜、手机还是模拟器。
+`browser-glass` 注册为普通 Device。server 不知道它是浏览器、眼镜、手机还是模拟器。
 
 开发者只需要理解：
 
@@ -89,8 +89,8 @@ audio-chat/endpoints-examples/web-glass/
 {
   "device_id": "dev-browser-001",
   "name": "浏览器调试设备",
-  "client_type": "browser-device",
-  "sdk_version": "audio-chat-browser-device-0.1.0",
+  "client_type": "browser-glass",
+  "sdk_version": "audio-chat-browser-glass-0.1.0",
   "auth": {"mode": "disabled"},
   "subscriptions": [
     {"event": "control.audio_session.*"},
@@ -175,7 +175,7 @@ audio-chat/endpoints-examples/web-glass/
 
 ### 5.3 麦克风区
 
-麦克风区是 `browser-device` 最复杂的部分，因为语音测试至少分为四类：
+麦克风区是 `browser-glass` 最复杂的部分，因为语音测试至少分为四类：
 
 1. 真实麦克风实时对话。
 2. 离线音频实时注入，用文件模拟真实麦克风长连接。
@@ -276,7 +276,7 @@ fast_replay 只用于回归复现，不代表真实实时对话。
 
 #### 5.3.4 混合测试：音频期间采集新数据
 
-真实对话中，模型可能在语音仍然打开时调用 Tool，例如请求拍照、请求连续视频、请求 IMU 或触发执行器。`browser-device` 必须允许麦克风 stream 与其他 sensor stream 并行存在。
+真实对话中，模型可能在语音仍然打开时调用 Tool，例如请求拍照、请求连续视频、请求 IMU 或触发执行器。`browser-glass` 必须允许麦克风 stream 与其他 sensor stream 并行存在。
 
 典型流程：
 
@@ -481,19 +481,19 @@ Client --> Haptic
 
 ```bash
 cd audio-chat
-uv run audio-chat.server.run --config examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
 ```
 
 然后打开浏览器设备页面：
 
 ```bash
-open audio-chat/device-examples/browser-device/index.html
+open audio-chat/device-examples/browser-glass/index.html
 ```
 
 当前迁移前可以继续打开：
 
 ```bash
-open audio-chat/endpoints-examples/web-glass/index.html
+open audio-chat/device-examples/browser-glass/index.html
 ```
 
 使用步骤：
@@ -507,7 +507,7 @@ open audio-chat/endpoints-examples/web-glass/index.html
 
 ## 9. 验收目标
 
-`browser-device` 完成后应满足：
+`browser-glass` 完成后应满足：
 
 1. 可以通过浏览器注册为普通 Device。
 2. debug API 能看到 `name`、`device_id`、`subscriptions` 和 `properties`。

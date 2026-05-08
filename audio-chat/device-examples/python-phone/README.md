@@ -1,6 +1,6 @@
-# python-phone-mock reference endpoint
+# python-phone reference endpoint
 
-`python-phone-mock` 是独立网络端侧参考实现，用来验证手机类设备不依赖固定
+`python-phone` 是独立网络端侧参考实现，用来验证手机类设备不依赖固定
 `phone` 类型建模，也不通过 `device_id` 点对点收发消息。
 
 ## 能力边界
@@ -49,13 +49,13 @@ RGB 帧来自 `vision_frames` 配置或默认测试 JPEG，并始终通过 `sens
 终端 1：
 
 ```bash
-uv run audio-chat.server.run --config examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
 ```
 
 终端 2：
 
 ```bash
-uv run audio-chat.phone.mock --config endpoints-examples/python-phone-mock/phone.mock.yaml
+uv run audio-chat.phone.mock --config device-examples/python-phone/phone.mock.yaml
 ```
 
 `mode: register_only` 会完成注册后退出，适合自动验收；后续长驻联调可以把它改成

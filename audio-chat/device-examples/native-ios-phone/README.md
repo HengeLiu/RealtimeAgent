@@ -35,7 +35,7 @@ App 启动时优先读取 bundle 内的 `AppConfig.json`，找不到时读取
 ```bash
 cd audio-chat
 uv run audio-chat.config.sync \
-  --output-dir examples/basic-app/config/generated \
+  --output-dir app-examples/basic-app/config/generated \
   --server-url http://127.0.0.1:8765 \
   --user-id user-endpoint-001
 ```
@@ -43,15 +43,15 @@ uv run audio-chat.config.sync \
 然后把生成的 iOS 配置覆盖到 App 资源目录：
 
 ```bash
-cp examples/basic-app/config/generated/ios-phone.local.json \
-  endpoints-examples/ios-phone/AudioChatPhone/Resources/AppConfig.json
+cp app-examples/basic-app/config/generated/ios-phone.local.json \
+  device-examples/native-ios-phone/AudioChatPhone/Resources/AppConfig.json
 ```
 
 `AppConfig.json` 字段语义和其他参考端一致：
 
 - `server_url`：server 地址，例如 `http://127.0.0.1:8765`。
 - `user_id`：同一用户下的多端共享用户编号。
-- `device_id`：iOS 端唯一设备编号，不能和 web-glass、python phone mock、glass playback 重复。
+- `device_id`：iOS 端唯一设备编号，不能和 browser-glass、python phone mock、glass playback 重复。
 - `auth`：注册鉴权配置，支持 `disabled`、`static_token` 和 `signed_token`。
 - `properties`：声明仅用于日志和 debug 的硬件参数；路由由 `subscriptions` 决定。
 - `subscriptions`：声明订阅 `stream.control.*`、`stream.output.*` 和 `control.audio_session.*`。
@@ -62,7 +62,7 @@ cp examples/basic-app/config/generated/ios-phone.local.json \
 uv run audio-chat.config.sync \
   --auth-mode signed_token \
   --signed-token '<pairing-service-generated-token>' \
-  --output-dir examples/basic-app/config/generated
+  --output-dir app-examples/basic-app/config/generated
 ```
 
 如果只传 `--auth-mode signed_token` 而不传 `--signed-token`，生成配置会保留
@@ -72,7 +72,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 cd audio-chat
-uv run audio-chat.server.run --config examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
 ```
 
 确认 server 可访问：
@@ -86,13 +86,13 @@ curl http://127.0.0.1:8765/api/health
 直接打开工程：
 
 ```bash
-open endpoints-examples/ios-phone/AudioChatPhone.xcodeproj
+open device-examples/native-ios-phone/AudioChatPhone.xcodeproj
 ```
 
 选择 `AudioChatPhone` scheme 和一个 iPhone Simulator 后运行。也可以命令行构建：
 
 ```bash
-cd audio-chat/endpoints-examples/ios-phone
+cd audio-chat/device-examples/native-ios-phone
 xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
@@ -132,6 +132,6 @@ uv run python -m pytest \
 有 Xcode 环境时，再补充运行 iOS build：
 
 ```bash
-cd audio-chat/endpoints-examples/ios-phone
+cd audio-chat/device-examples/native-ios-phone
 xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```

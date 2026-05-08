@@ -11,7 +11,7 @@
 1. 开发者能按文档安装、同步配置、启动 server、启动参考端侧或回放设备。
 2. 开发者能用相似的方式编写短动作 Tool、长流程 Task、设备通讯请求、通知和外部服务能力。
 3. 老业务样板能力 `find_object`、`traffic_light`、`navigation`、`search`、`timer` 能迁移到 `audio-chat` 并跑通设备级验收。
-4. Python phone mock、glass playback、web-glass、iOS phone 参考端和 ESP32-S3 参考端能支撑功能开发者进入真实联调。
+4. Python phone mock、glass playback、browser-glass、iOS phone 参考端和 ESP32-S3 参考端能支撑功能开发者进入真实联调。
 5. mock provider、真实 provider、回放和真机 smoke test 都有稳定验收入口。
 6. 文档和公开 API 对开发者友好，不要求理解 SDK 内部服务对象。
 
@@ -27,7 +27,7 @@
 2. 不要求保留 glass / phone 固定设备类型，`audio-chat` 使用 event/subscription 和 stream。
 3. 不要求保留 `/ws_audio`、`/ws_realtime_audio`、`sensor.camera.*` 等旧协议名称，`audio-chat` 使用 event + stream。
 4. 不要求业务代码手动注册 Tool / Task，`audio-chat` 默认自动发现。
-5. 不要求把 iOS / ESP32 正式端侧工程放入 Python SDK 包内，`audio-chat/endpoints-examples` 只提供参考端侧样例和契约。
+5. 不要求把 iOS / ESP32 正式端侧工程放入 Python SDK 包内，`audio-chat/device-examples` 只提供参考端侧样例和契约。
 
 ### 2.2 必须达到相同开发体验
 
@@ -167,8 +167,8 @@ uv run python scripts/acceptance_check.py old-sdk-parity-api
 audio-chat/pyproject.toml
 audio-chat/server-python/audio_chat/cli/
 audio-chat/server-python/audio_chat/preflight.py
-audio-chat/examples/basic-app/
-audio-chat/examples/minimal/
+audio-chat/app-examples/basic-app/
+audio-chat/app-examples/basic-app/
 audio-chat/tests/test_cli_old_sdk_parity.py
 audio-chat/tests/test_live_check.py
 audio-chat/tests/test_config_sync_multidevice.py
@@ -201,7 +201,7 @@ audio-chat/tests/test_package_check_release_inputs.py
    - server YAML
    - phone mock YAML
    - glass playback YAML
-   - web-glass YAML
+   - browser-glass YAML
    - iOS `AppConfig.json`
    - ESP32 `local.env`
 5. `live-check` 必须检查：
@@ -232,8 +232,8 @@ uv run python scripts/acceptance_check.py old-sdk-parity-cli
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/python-glass/audio_chat_python_glass/playback.py
-audio-chat/examples/basic-app/host/glass-playback/
+audio-chat/device-examples/python-glass/audio_chat_python_glass/playback.py
+audio-chat/app-examples/basic-app/host/glass-playback/
 audio-chat/testdata/playback/
 audio-chat/testdata/contracts/scenarios/
 audio-chat/tests/playback/
@@ -293,10 +293,10 @@ uv run python scripts/acceptance_check.py old-sdk-parity-playback
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/python-phone-mock/
-audio-chat/endpoints-examples/ios-phone/
-audio-chat/endpoints-examples/python-phone-mock/audio_chat_python_phone_mock/phone_mock.py
-audio-chat/examples/basic-app/capabilities/
+audio-chat/device-examples/python-phone/
+audio-chat/device-examples/native-ios-phone/
+audio-chat/device-examples/python-phone/audio_chat_python_phone_mock/phone_mock.py
+audio-chat/app-examples/basic-app/capabilities/
 audio-chat/tests/test_phone_task_contract.py
 audio-chat/tests/test_python_phone_mock_vision_task.py
 audio-chat/tests/test_ios_phone_contract.py
@@ -349,7 +349,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-phone
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/esp32-s3/
+audio-chat/device-examples/native-esp32-glass/
 audio-chat/server-python/audio_chat/cli/esp32.py
 audio-chat/docs/esp32-s3-endpoint-bridge.md
 audio-chat/tests/test_esp32_config_sync.py
@@ -411,8 +411,8 @@ uv run python scripts/acceptance_check.py old-sdk-parity-esp32
 写入范围：
 
 ```text
-audio-chat/examples/for-blind-app/
-audio-chat/examples/for-blind-app/capabilities/
+audio-chat/app-examples/for-blind-app/
+audio-chat/app-examples/for-blind-app/capabilities/
 audio-chat/testdata/for-blind/
 audio-chat/tests/acceptance/test_for_blind_capabilities_playback.py
 audio-chat/tests/acceptance/test_old_sdk_capability_migration_contract.py
@@ -421,7 +421,7 @@ audio-chat/tests/acceptance/test_old_sdk_capability_migration_contract.py
 建议目录：
 
 ```text
-examples/for-blind-app/
+app-examples/for-blind-app/
   README.md
   config/
     server.yaml
@@ -622,9 +622,9 @@ audio-chat/README.md
 audio-chat/docs/audio-chat-sdk-architecture.md
 audio-chat/docs/phase3-migration-guide.md
 audio-chat/docs/old-sdk-parity-development-plan.md
-audio-chat/examples/basic-app/
-audio-chat/examples/for-blind-app/
-audio-chat/examples/migration-templates/
+audio-chat/app-examples/basic-app/
+audio-chat/app-examples/for-blind-app/
+audio-chat/app-examples/for-blind-app/templates/
 audio-chat/tests/test_docs_old_sdk_parity.py
 audio-chat/tests/acceptance/test_docs_current_state_contract.py
 ```
@@ -637,7 +637,7 @@ audio-chat/tests/acceptance/test_docs_current_state_contract.py
    - 启动 server。
    - 启动 phone mock。
    - 启动 playback。
-   - 打开 web-glass。
+   - 打开 browser-glass。
    - iOS / ESP32 真机入口。
    - 写 Tool / Task。
    - 跑回放。
@@ -695,7 +695,7 @@ audio-chat/pyproject.toml
 audio-chat/README.md
 audio-chat/CHANGELOG.md
 audio-chat/server-python/audio_chat/
-audio-chat/endpoints-examples/
+audio-chat/device-examples/
 audio-chat/scripts/acceptance_check.py
 audio-chat/tests/test_release_package.py
 audio-chat/tests/test_package_boundary.py
@@ -721,7 +721,7 @@ audio-chat/tests/acceptance/test_release_candidate_gate.py
 4. 端侧源码包检查：
    - iOS 工程文件。
    - ESP32 工程文件。
-   - web-glass 静态入口。
+   - browser-glass 静态入口。
    - Python phone mock。
 5. 发布前检查：
    - all acceptance。
@@ -740,7 +740,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-release
 通过条件：
 
 1. 新建临时项目安装 wheel 后可以 `import audio_chat`。
-2. 新建临时项目可以复制 `examples/basic-app` 并跑通 playback。
+2. 新建临时项目可以复制 `app-examples/basic-app` 并跑通 playback。
 3. `audio-chat.sdk.package-check` 输出 release candidate 报告。
 4. 包内不包含本地私密配置和运行产物。
 
@@ -775,7 +775,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-release
 
 本阶段完成时，应满足：
 
-1. `examples/basic-app` 和 `examples/for-blind-app` 都能按 README 从零启动和回放。
+1. `app-examples/basic-app` 和 `app-examples/for-blind-app` 都能按 README 从零启动和回放。
 2. `find_object`、`traffic_light`、`navigation`、`search`、`timer` 五类能力都有 `audio-chat` 版本样板。
 3. Tool / Task 开发者只使用 `audio_chat` 公开 API。
 4. phone mock 能跑视觉任务。
@@ -800,7 +800,7 @@ uv run audio-chat.dev.preflight \
   --config app-examples/for-blind-app/server.yaml \
   --report runs/acceptance/old-sdk-parity-preflight.json
 uv run audio-chat.playback.glass \
-  --config examples/for-blind-app/host/glass-playback/look-around.yaml
+  --config app-examples/for-blind-app/host/glass-playback/look-around.yaml
 ```
 
 如果有真实 provider key：

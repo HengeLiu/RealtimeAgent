@@ -9,7 +9,7 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 2026-05-07 更新：本轮已补齐 `audio_chat_esp32_s3.esp32_aec` 中的 ESP32-S3
 协议参考状态机、网络参考端和自动契约测试。它能覆盖注册 payload、wake 后才打开
 `sensor.mic`、speaker output 回执、AEC reference ring 诊断、`sensor.rgb` stream 抓拍
-语义和 config sync 字段。`endpoints-examples/esp32-s3/firmware` 也提供最小 ESP-IDF 工程骨架，
+语义和 config sync 字段。`device-examples/native-esp32-glass/firmware` 也提供最小 ESP-IDF 工程骨架，
 用于 package-check 和 dry-run build。物理 ESP32-S3 固件仍未在本机连接，因此本文不能把
 真机能力描述为完成；真机 smoke 需要继续保留串口日志和 server runs 产物。
 
@@ -32,14 +32,14 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 
 ```bash
 uv run audio-chat.dev.preflight --report runs/audio-chat/preflight-phase25.json
-uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 接真机时应使用 server YAML 配置作为入口，并把日志级别调到 DEBUG：
 
 ```bash
 LOG_LEVEL=DEBUG uv run audio-chat.server.run \
-  --config audio-chat/examples/minimal/server.yaml
+  --config audio-chat/app-examples/basic-app/server.yaml
 ```
 
 如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、TextAgentCore 和 Output Service，不允许回退到旧 `MediaFrame` 公开协议。

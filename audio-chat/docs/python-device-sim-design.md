@@ -4,7 +4,7 @@
 
 ## 1. 文档目的
 
-本文档定义 `python-device-sim` 无头设备模拟器的目标形态。它用于收敛当前历史实现中的 `python-glass` 和 `python-phone-mock`，为 server、Agent Core、Tool、Task 和协议回归测试提供稳定的自动化设备。
+本文档定义 `python-device-sim` 无头设备模拟器的目标形态。它用于收敛当前历史实现中的 `python-glass` 和 `python-phone`，为 server、Agent Core、Tool、Task 和协议回归测试提供稳定的自动化设备。
 
 `python-device-sim` 是 Device 示例，不是 SDK 协议类型。它只是一套用 Python 实现的设备，用来帮助 SDK 开发和业务能力开发者快速构造可重复的测试场景。
 
@@ -30,7 +30,7 @@
 3. 真实摄像头调试 UI。
 4. 手动交互式调试主入口。
 
-这些应由 `browser-device` 承担。
+这些应由 `browser-glass` 承担。
 
 ## 3. 目标目录
 
@@ -69,8 +69,8 @@ audio-chat/device-examples/
 现阶段当前仓库中对应历史目录是：
 
 ```text
-audio-chat/endpoints-examples/python-glass/
-audio-chat/endpoints-examples/python-phone-mock/
+audio-chat/device-examples/python-glass/
+audio-chat/device-examples/python-phone/
 ```
 
 后续迁移时应把这两个历史实现收敛到 `python-device-sim`，保留旧 CLI 作为兼容别名。
@@ -356,7 +356,7 @@ uv run audio-chat.device.sim \
 兼容 CLI：
 
 ```bash
-uv run audio-chat.playback.glass --config examples/minimal/playback.yaml
+uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 uv run audio-chat.phone.mock --config device-examples/python-device-sim/scenarios/vision-task.yaml
 ```
 
@@ -368,7 +368,7 @@ uv run audio-chat.phone.mock --config device-examples/python-device-sim/scenario
 
 ```bash
 cd audio-chat
-uv run audio-chat.server.run --config examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
 uv run audio-chat.device.sim \
   --config device-examples/python-device-sim/scenarios/audio-playback.yaml
 ```
@@ -386,7 +386,7 @@ uv run audio-chat.device.sim \
 `python-device-sim` 完成后应满足：
 
 1. 能替代当前 `python-glass` 完成 WAV 回放。
-2. 能替代当前 `python-phone-mock` 完成视觉任务模拟。
+2. 能替代当前 `python-phone` 完成视觉任务模拟。
 3. 支持单设备和多设备场景。
 4. 支持真实网络模式。
 5. 支持 in-process 快速测试模式。

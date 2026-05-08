@@ -87,7 +87,7 @@ def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     handle = app.open_input_stream(
         user_id="user-browser-photo",
-        producer_id="dev-web-glass",
+        producer_id="dev-browser-glass",
         stream_type="sensor.rgb",
         format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
     )

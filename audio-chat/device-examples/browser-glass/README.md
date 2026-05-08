@@ -1,6 +1,6 @@
-# browser-device
+# browser-glass
 
-`browser-device` 是 audio-chat 的浏览器设备示例，用来承担开发测试中的感知和执行角色。它不是协议类型，也不要求开发者真实设备使用浏览器实现。
+`browser-glass` 是 audio-chat 的浏览器设备示例，用来承担开发测试中的感知和执行角色。它不是协议类型，也不要求开发者真实设备使用浏览器实现。
 
 ## 主要用途
 
@@ -19,13 +19,13 @@
 
 ```bash
 cd audio-chat
-uv run audio-chat.server.run --config examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
 ```
 
 打开页面：
 
 ```bash
-open device-examples/browser-device/index.html
+open device-examples/browser-glass/index.html
 ```
 
 或者使用 CLI：

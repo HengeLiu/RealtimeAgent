@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>audio-chat browser-device</title>
+  <title>audio-chat browser-glass</title>
   <style>
     body { margin: 24px; color: #172033; background: #f6f8fb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { background: #fff; border: 1px solid #d8dee8; border-radius: 8px; padding: 20px; }
@@ -35,7 +35,7 @@
 </head>
 <body>
   <main>
-    <h1>audio-chat browser-device</h1>
+    <h1>audio-chat browser-glass</h1>
     <p>浏览器设备示例：承担感知和执行角色，用于手动事件、真实麦克风、离线音频实时注入、摄像头/文件上传和下行播放测试。</p>
     <div class="row">
       <div><label for="serverUrl">Server URL</label><input id="serverUrl" /></div>
@@ -158,7 +158,7 @@
     document.getElementById("serverUrl").value = normalizeServerUrl(
       params.get("server_url") || defaultServerUrl(),
     );
-    document.getElementById("userId").value = params.get("user_id") || "user-browser-device-001";
+    document.getElementById("userId").value = params.get("user_id") || "user-browser-glass-001";
     document.getElementById("deviceId").value = params.get("device_id") || `dev-browser-${Math.random().toString(16).slice(2, 8)}`;
     document.getElementById("deviceName").value = params.get("name") || "浏览器调试设备";
     const audioModeSelect = document.getElementById("audioMode");
@@ -333,16 +333,21 @@
     }
 
     function event(event_name, payload = {}, extra = {}) {
+      const deviceId = currentDeviceId();
       return {
         version: PROTOCOL_VERSION,
         event_id: newId("evt"),
         event_name,
         timestamp_ms: Date.now(),
         user_id: document.getElementById("userId").value,
-        producer_id: document.getElementById("deviceId").value,
+        producer_id: deviceId,
         payload,
         ...extra,
       };
+    }
+
+    function currentDeviceId() {
+      return document.getElementById("deviceId").value;
     }
 
     function sendEvent(item) {
@@ -479,7 +484,7 @@
     function sendMicPayload(payload) {
       streamWs.send(encodeStreamChunk({
         user_id: document.getElementById("userId").value,
-        session_id: sessionId,
+        session_id: currentDeviceId(),
         stream_id: inputStreamId,
         stream_type: "sensor.mic",
         seq: seq++,
@@ -504,7 +509,7 @@
       const payload = micPcmBuffer.byteLength > 0 ? micPcmBuffer : new Uint8Array(0);
       streamWs.send(encodeStreamChunk({
         user_id: document.getElementById("userId").value,
-        session_id: sessionId,
+        session_id: currentDeviceId(),
         stream_id: inputStreamId,
         stream_type: "sensor.mic",
         seq: seq++,
@@ -602,7 +607,7 @@
         rms: level.rms,
         peak: level.peak,
         required_frames: BARGE_IN_REQUIRED_FRAMES,
-      }, {session_id: sessionId}));
+      }, {session_id: currentDeviceId()}));
     }
 
     async function connect() {
@@ -629,9 +634,9 @@
       sendEvent(event("control.device.register.requested", {
         device_id: deviceId,
         name: document.getElementById("deviceName").value || "浏览器调试设备",
-        device_name: "browser-device",
-        client_type: "browser-device",
-        sdk_version: "audio-chat-browser-device-0.1.0",
+        device_name: "browser-glass",
+        client_type: "browser-glass",
+        sdk_version: "audio-chat-browser-glass-0.1.0",
         auth: {mode: "disabled"},
         subscriptions: [
           {event: "control.*"},
@@ -663,7 +668,7 @@
         if (!controlWs || controlWs.readyState !== WebSocket.OPEN) return;
         sendEvent(event("control.device.heartbeat.received", {
           connection_state: "online",
-          client_type: "browser-device",
+          client_type: "browser-glass",
         }));
       }, 10000);
     }
@@ -680,7 +685,7 @@
           log("audio session already active; ignore duplicate open request");
           return;
         }
-        sessionId = item.session_id;
+        sessionId = currentDeviceId();
         sendEvent(event("control.audio_session.opened", {reason: "browser_device_opened"}, {session_id: sessionId}));
         renderStatus();
         if (document.getElementById("autoStartAudio").checked) {
@@ -697,19 +702,19 @@
         await handleRgbConfigure(item);
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.haptic") {
         sendEvent(event("stream.output.started", {stream_type: "actuator.haptic"}, {
-          session_id: item.session_id, stream_id: item.stream_id, stream_type: "actuator.haptic",
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
         }));
         sendEvent(event("stream.output.finished", {stream_type: "actuator.haptic"}, {
-          session_id: item.session_id, stream_id: item.stream_id, stream_type: "actuator.haptic",
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
         }));
         sendEvent(event("stream.output.closed", {stream_type: "actuator.haptic", reason: "browser_device_haptic_logged"}, {
-          session_id: item.session_id, stream_id: item.stream_id, stream_type: "actuator.haptic",
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
         }));
       } else if (item.event_name === "stream.output.cancel.requested" || item.event_name === "stream.output.cancelled") {
         stopOutputPlayback(item.stream_id, "server_cancelled");
       } else if (item.event_name === "control.audio_session.close.requested") {
         await stopMic();
-        sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: item.session_id}));
+        sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: currentDeviceId()}));
         sessionId = null;
         closeStreamSocket("audio_session_closed");
         renderStatus();
@@ -749,7 +754,7 @@
     async function uploadRgbImages(images, item = null, reason = "images_uploaded") {
       const requestId = item && item.payload && item.payload.request_id;
       const rgbStreamId = newId("stream_rgb");
-      const activeSession = (item && item.session_id) || sessionId || newId("sess");
+      const activeSession = currentDeviceId();
       try {
         await ensureStreamSocketOpen();
         if (!images.length) throw new Error("没有可上传的图片帧");
@@ -887,7 +892,7 @@
       await ensureStreamSocketOpen();
       rgbContinuousStreamId = newId("stream_rgb");
       rgbSeq = 0;
-      const activeSession = (item && item.session_id) || sessionId || newId("sess");
+      const activeSession = currentDeviceId();
       sendEvent(event("stream.input.opened", {
         stream_type: "sensor.rgb",
         format: {codec: "jpeg", sample_rate: Number(document.getElementById("videoFps").value || 1), channels: 1, chunk_ms: 1000},
@@ -928,7 +933,7 @@
       cameraStream = null;
       if (!rgbContinuousStreamId) return;
       sendEvent(event("stream.input.closed", {stream_type: "sensor.rgb", reason}, {
-        session_id: sessionId, stream_id: rgbContinuousStreamId, stream_type: "sensor.rgb",
+        session_id: currentDeviceId(), stream_id: rgbContinuousStreamId, stream_type: "sensor.rgb",
       }));
       setStreamState(rgbContinuousStreamId, {stream_type: "sensor.rgb", state: "closed", close_reason: reason});
       rgbContinuousStreamId = null;
@@ -1010,7 +1015,7 @@
             stream_type: "sensor.mic",
             format: {codec: "pcm16le", sample_rate: INPUT_RATE, channels: 1, chunk_ms: DEFAULT_CHUNK_MS},
             source: activeAudioSource,
-          }, {session_id: sessionId, stream_id: inputStreamId, stream_type: "sensor.mic"}));
+          }, {session_id: currentDeviceId(), stream_id: inputStreamId, stream_type: "sensor.mic"}));
         } else {
           log(`resume sensor.mic stream_id=${inputStreamId}`);
         }
@@ -1091,7 +1096,7 @@
         sendEvent(event("stream.input.opened", {
           stream_type: "sensor.mic",
           format: {codec: "pcm16le", sample_rate: INPUT_RATE, channels: 1, chunk_ms: DEFAULT_CHUNK_MS},
-        }, {session_id: sessionId, stream_id: inputStreamId, stream_type: "sensor.mic"}));
+        }, {session_id: currentDeviceId(), stream_id: inputStreamId, stream_type: "sensor.mic"}));
         setStreamState(inputStreamId, {
           stream_type: "sensor.mic",
           state: "open",
@@ -1134,7 +1139,7 @@
       if (!outputStarted.has(chunk.stream_id)) {
         outputStarted.add(chunk.stream_id);
         sendEvent(event("stream.output.started", {stream_type: "actuator.speaker"}, {
-          session_id: chunk.session_id, stream_id: chunk.stream_id, stream_type: chunk.stream_type,
+          session_id: currentDeviceId(), stream_id: chunk.stream_id, stream_type: chunk.stream_type,
         }));
       }
       playPcm16(chunk);
@@ -1175,10 +1180,10 @@
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);
       sendEvent(event("stream.output.finished", {stream_type: "actuator.speaker"}, {
-        session_id: request.session_id, stream_id: streamId, stream_type: "actuator.speaker",
+        session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
       }));
       sendEvent(event("stream.output.closed", {stream_type: "actuator.speaker", reason: "playback_drained"}, {
-        session_id: request.session_id, stream_id: streamId, stream_type: "actuator.speaker",
+        session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
       }));
     }
 
@@ -1193,7 +1198,7 @@
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);
       sendEvent(event("stream.output.closed", {stream_type: "actuator.speaker", reason}, {
-        session_id: sessionId, stream_id: streamId, stream_type: "actuator.speaker",
+        session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
       }));
     }
 
@@ -1210,7 +1215,7 @@
       if (micStream) micStream.getTracks().forEach((track) => track.stop());
       if (inputStreamId) {
         sendEvent(event("stream.input.closed", {stream_type: "sensor.mic", reason: "audio_segment_closed"}, {
-          session_id: sessionId, stream_id: inputStreamId, stream_type: "sensor.mic",
+          session_id: currentDeviceId(), stream_id: inputStreamId, stream_type: "sensor.mic",
         }));
         setStreamState(inputStreamId, {stream_type: "sensor.mic", state: "closed", close_reason: "audio_segment_closed"});
       }
@@ -1226,7 +1231,7 @@
       sendEvent(event("control.user.wake.detected", {wake_source: "browser_device_button"}));
     };
     interruptButton.onclick = () => {
-      sendEvent(event("control.user.interrupt.detected", {reason: "browser_device_manual_interrupt"}, {session_id: sessionId}));
+      sendEvent(event("control.user.interrupt.detected", {reason: "browser_device_manual_interrupt"}, {session_id: currentDeviceId()}));
       stopAllOutputPlayback("manual_interrupt");
     };
     startAudioButton.onclick = () => {
@@ -1250,7 +1255,7 @@
         const forbidden = ["audio", "image", "video", "bytes", "payload_bytes", "data"].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
         if (forbidden.length) throw new Error(`payload 不允许包含媒体大字节字段: ${forbidden.join(",")}`);
         const streamType = document.getElementById("customStreamType").value.trim();
-        const extra = {session_id: sessionId};
+        const extra = {session_id: currentDeviceId()};
         if (streamType) extra.stream_type = streamType;
         sendEvent(event(document.getElementById("customEventName").value.trim(), payload, extra));
       } catch (err) {
@@ -1263,7 +1268,7 @@
       sendEvent(event("control.user.dialog.close.requested", {
         reason: "browser_device_button",
         close_mode: "close_after_reply",
-      }, {session_id: sessionId}));
+      }, {session_id: currentDeviceId()}));
     };
 
     audioModeSelect.addEventListener("change", updateInputModePanels);

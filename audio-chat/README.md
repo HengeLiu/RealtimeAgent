@@ -73,11 +73,11 @@ class ContinuousVisionTask(BaseTask):
 
 最小样板见：
 
-- `examples/basic-app/capabilities/sample_tool/tool.py`
-- `examples/basic-app/capabilities/capture_photo/tool.py`
-- `examples/basic-app/capabilities/sample_task/task.py`
-- `examples/basic-app/capabilities/continuous_rgb_analyze/task.py`
-- `examples/migration-templates`
+- `app-examples/basic-app/capabilities/sample_tool/tool.py`
+- `app-examples/basic-app/capabilities/capture_photo/tool.py`
+- `app-examples/basic-app/capabilities/sample_task/task.py`
+- `app-examples/basic-app/capabilities/continuous_rgb_analyze/task.py`
+- `app-examples/for-blind-app/templates`
 
 关键约束：
 
@@ -137,7 +137,7 @@ class ContinuousVisionTask(BaseTask):
 
 `filter` 只过滤事件字段，例如 `stream_type`、`payload.command_name`、`payload.mode`。`properties` 不参与事件路由，只用于日志、debug、硬件参数说明或业务偏好。
 
-本仓库的 `endpoints-examples` 只提供两个目的：
+本仓库的 `device-examples` 只提供两个目的：
 
 - 帮助 SDK 开发者验证 server 协议、回放和自动验收。
 - 给设备开发者提供浏览器、Python、iOS、ESP32-S3 等设备实现案例。
@@ -146,7 +146,7 @@ class ContinuousVisionTask(BaseTask):
 
 设备示例的后续设计见：
 
-- [Browser Device 设计文档](docs/browser-device-design.md)
+- [Browser Glass 设计文档](docs/browser-glass-design.md)
 - [Python Device Sim 设计文档](docs/python-device-sim-design.md)
 - [事件订阅与分发优化说明](docs/event-subscription-routing-optimization.md)
 
@@ -176,7 +176,7 @@ uv run audio-chat.sdk.package-check \
 最小样例：
 
 ```bash
-uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
+uv run audio-chat.config.sync --app-root audio-chat/app-examples/basic-app
 ```
 
 同步后重点确认：
@@ -184,9 +184,9 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 - `app-examples/basic-app/server.yaml`
 - `app-examples/basic-app/host/phone-mock/config.yaml`
 - `app-examples/basic-app/host/glass-playback/playback.yaml`
-- `device-examples/browser-device/browser-device.yaml`
-- `endpoints-examples/ios-phone/AppConfig.example.json`
-- `endpoints-examples/esp32-s3/local.env.example`
+- `device-examples/browser-glass/browser-glass.yaml`
+- `device-examples/native-ios-phone/AppConfig.example.json`
+- `device-examples/native-esp32-glass/local.env.example`
 
 本阶段配置同步以开发样例为主；真机侧正式打开、构建、烧录命令由 `old-sdk-parity-cli` 线路继续补齐。
 
@@ -195,7 +195,7 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 最小 server：
 
 ```bash
-uv run audio-chat.server.run --config app-examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server.yaml
 ```
 
 业务样例 server：
@@ -235,13 +235,13 @@ curl http://127.0.0.1:8765/api/debug/playback
 Python 设备模拟器：
 
 ```bash
-uv run audio-chat.phone.mock --config audio-chat/endpoints-examples/python-phone-mock/phone.mock.yaml
+uv run audio-chat.phone.mock --config audio-chat/device-examples/python-phone/phone.mock.yaml
 ```
 
 设备回放：
 
 ```bash
-uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 使用已录制 WAV 作为模拟设备的麦克风输入：
@@ -261,13 +261,13 @@ uv run audio-chat.web.open --print-url
 iOS 设备示例入口：
 
 ```bash
-open audio-chat/endpoints-examples/ios-phone
+open audio-chat/device-examples/native-ios-phone
 ```
 
 ESP32-S3 设备示例入口：
 
 ```bash
-open audio-chat/endpoints-examples/esp32-s3
+open audio-chat/device-examples/native-esp32-glass
 ```
 
 iOS / ESP32-S3 目录目前是设备示例和契约入口。缺少 Xcode、ESP-IDF、串口或真实设备时，真机步骤只能作为待验证流程；真机 smoke 由 `old-sdk-parity-phone` 和 `old-sdk-parity-esp32` 线路补齐。
@@ -329,8 +329,8 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 老业务能力迁移优先从这些位置开始：
 
 - `docs/phase3-migration-guide.md`
-- `examples/migration-templates`
-- `examples/for-blind-app`：已经包含 find_object、traffic_light、navigation、search、timer 的可执行迁移样板。
+- `app-examples/for-blind-app/templates`
+- `app-examples/for-blind-app`：已经包含 find_object、traffic_light、navigation、search、timer 的可执行迁移样板。
 - `docs/old-sdk-parity-development-plan.md`
 
 老 SDK 到 `audio-chat` 的主要入口映射：
@@ -341,8 +341,8 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 | `openaiglass.server.run` | `audio-chat.server.run` | 通过 YAML 和 app-root 启动 server。 |
 | `openaiglass.phone.mock` | `audio-chat.phone.mock` | Python phone mock 参考端。 |
 | `openaiglass.glass.start --runtime playback` | `audio-chat.playback.glass` | 设备级回放入口。 |
-| `openaiglass.phone.open` | `endpoints-examples/ios-phone` | 当前为 iOS 参考端目录，CLI 由后续线路补齐。 |
-| `openaiglass.glass.start` | `endpoints-examples/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由后续线路补齐。 |
+| `openaiglass.phone.open` | `device-examples/native-ios-phone` | 当前为 iOS 参考端目录，CLI 由后续线路补齐。 |
+| `openaiglass.glass.start` | `device-examples/native-esp32-glass` | 当前为 ESP32-S3 参考端目录，构建烧录由后续线路补齐。 |
 | `openaiglass.sdk.preflight` | `audio-chat.dev.preflight` | 本地配置、provider、设备示例和 package 预检。 |
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
 | `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 只按 user active device set、event subscription 和 stream 工作。 |

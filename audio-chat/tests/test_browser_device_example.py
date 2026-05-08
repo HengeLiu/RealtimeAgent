@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BROWSER_DEVICE_ROOT = ROOT / "device-examples" / "browser-device"
+BROWSER_DEVICE_ROOT = ROOT / "device-examples" / "browser-glass"
 
 
 def _html() -> str:
@@ -10,7 +10,7 @@ def _html() -> str:
 
 
 def test_browser_device_uses_simplified_device_registration_protocol() -> None:
-    """测试目标：验证 browser-device 按 README 的简化设备协议注册。
+    """测试目标：验证 browser-glass 按 README 的简化设备协议注册。
 
     测试方法：静态读取 HTML，检查注册 payload 使用 name、subscriptions 和 properties，
     不再通过 capabilities 表达路由能力。
@@ -20,7 +20,7 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
     html = _html()
 
     assert "control.device.register.requested" in html
-    assert "client_type: \"browser-device\"" in html
+    assert "client_type: \"browser-glass\"" in html
     assert "properties: {" in html
     assert "subscriptions: [" in html
     assert "capabilities: {" not in html
@@ -29,7 +29,7 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
 
 
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:
-    """测试目标：验证 browser-device 支持真实麦克风和离线音频长连接测试。
+    """测试目标：验证 browser-glass 支持真实麦克风和离线音频长连接测试。
 
     测试方法：静态检查页面包含离线实时注入、段落 final 边界和 20ms chunk
     发送逻辑，且不再暴露快速回放模式。
@@ -54,7 +54,7 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
 
 
 def test_browser_device_switches_visible_fields_by_input_mode() -> None:
-    """测试目标：验证 browser-device 会按输入模式隐藏无关字段。
+    """测试目标：验证 browser-glass 会按输入模式隐藏无关字段。
 
     测试方法：静态检查音频模式和视觉数据源都绑定到 updateInputModePanels，
     并通过 field 容器和 hidden class 控制显示。
@@ -86,7 +86,7 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
 
 
 def test_browser_device_has_right_side_event_log_panel() -> None:
-    """测试目标：验证 browser-device 把日志窗口纵向放在右侧并区分广播事件。
+    """测试目标：验证 browser-glass 把日志窗口纵向放在右侧并区分广播事件。
 
     测试方法：静态检查页面使用 workspace 双栏布局、log tab、broadcastLog 和
     logBroadcastEvent。
@@ -106,7 +106,7 @@ def test_browser_device_has_right_side_event_log_panel() -> None:
 
 
 def test_browser_device_subscribes_all_event_prefixes_for_debug_log() -> None:
-    """测试目标：验证 browser-device 为调试日志订阅所有内置事件前缀。
+    """测试目标：验证 browser-glass 为调试日志订阅所有内置事件前缀。
 
     测试方法：静态检查注册 payload 包含 control、stream、agent、tool、task、
     memory、system 的通配订阅。
@@ -120,7 +120,7 @@ def test_browser_device_subscribes_all_event_prefixes_for_debug_log() -> None:
 
 
 def test_browser_device_opens_stream_socket_after_audio_session() -> None:
-    """测试目标：验证 browser-device 不在注册后提前建立数据连接。
+    """测试目标：验证 browser-glass 不在注册后提前建立数据连接。
 
     测试方法：静态检查注册成功分支只启用控制按钮，不创建 WebSocket；
     数据连接由 ensureStreamSocketOpen 在开始音频或视觉 stream 时按需打开。
@@ -162,7 +162,7 @@ def test_browser_device_stop_audio_keeps_dialog_connection() -> None:
 def test_browser_device_resets_mic_state_when_server_closes_input_stream() -> None:
     """测试目标：验证 server 关闭 sensor.mic 后，下一段离线音频会新建 stream。
 
-    测试方法：静态检查 browser-device 处理 `stream.input.closed + sensor.mic`，
+    测试方法：静态检查 browser-glass 处理 `stream.input.closed + sensor.mic`，
     并清空 inputStreamId、离线 timer 和本地状态。
     预期结果：连续对话期间如果 server 因 idle_timeout 关闭旧输入流，端侧不会复用
     已关闭的 stream_id。
@@ -181,7 +181,7 @@ def test_browser_device_resets_mic_state_when_server_closes_input_stream() -> No
 
 
 def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
-    """测试目标：验证 browser-device 能在音频长连接期间并行处理视觉 stream。
+    """测试目标：验证 browser-glass 能在音频长连接期间并行处理视觉 stream。
 
     测试方法：静态检查页面维护 streamStates，并提供 sensor.rgb single/continuous
     上传、停止和状态显示逻辑。
@@ -235,13 +235,14 @@ def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
 
 
 def test_browser_device_open_cli_defaults_to_new_example() -> None:
-    """测试目标：确认 Web 设备打开命令默认指向新的 browser-device。
+    """测试目标：确认 Web 设备打开命令默认指向新的 browser-glass。
 
     测试方法：读取 CLI 源码，检查默认路径。
-    预期结果：旧 web-glass 仍可通过显式路径使用，但默认入口已经切到新实现。
+    预期结果：默认入口指向 `device-examples/browser-glass/index.html`。
     """
 
     source = (ROOT / "server-python" / "audio_chat" / "cli" / "web.py").read_text(encoding="utf-8")
 
-    assert "device-examples/browser-device/index.html" in source
-    assert "endpoints-examples/web-glass/index.html" not in source
+    assert "device-examples/browser-glass/index.html" in source
+    old_default = "device-examples/browser" + "-device/index.html"
+    assert old_default not in source

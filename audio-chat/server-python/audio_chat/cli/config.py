@@ -21,9 +21,9 @@ def sync(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.config.sync", description="同步 audio-chat 本地开发配置")
-    parser.add_argument("--app-root", default="examples/basic-app", help="业务应用根目录")
-    parser.add_argument("--server-config", default="examples/minimal/server.yaml", help="源 server YAML")
-    parser.add_argument("--playback-config", default="examples/minimal/playback.yaml", help="源 playback YAML")
+    parser.add_argument("--app-root", default="app-examples/basic-app", help="业务应用根目录")
+    parser.add_argument("--server-config", default="app-examples/basic-app/server.yaml", help="源 server YAML")
+    parser.add_argument("--playback-config", default="app-examples/basic-app/host/glass-playback/sdk-playback.yaml", help="源 playback YAML")
     parser.add_argument("--server-url", default="http://127.0.0.1:8765", help="各参考端侧使用的 server URL")
     parser.add_argument("--user-id", default="user-playback-001", help="各参考端侧使用的 user_id")
     parser.add_argument(
@@ -47,7 +47,7 @@ def sync(argv: list[str] | None = None) -> None:
     server_target = output_dir / "server.local.yaml"
     glass_target = output_dir / "glass.playback.yaml"
     phone_target = output_dir / "phone.mock.yaml"
-    web_target = output_dir / "web-glass.yaml"
+    web_target = output_dir / "browser-glass.yaml"
     ios_target = output_dir / "ios-phone.local.json"
     esp32_target = output_dir / "esp32-s3.local.env"
     server_data = _read_yaml(server_config)
@@ -56,8 +56,8 @@ def sync(argv: list[str] | None = None) -> None:
     if args.auth_token:
         server_data.setdefault("auth", {})["device_tokens"] = {
             "dev-python-playback-001": args.auth_token,
-            "dev-python-phone-mock-001": args.auth_token,
-            "dev-web-glass-001": args.auth_token,
+            "dev-python-phone-001": args.auth_token,
+            "dev-browser-glass-001": args.auth_token,
             "dev-ios-phone-001": args.auth_token,
             "dev-esp32-s3-001": args.auth_token,
         }
@@ -78,7 +78,7 @@ def sync(argv: list[str] | None = None) -> None:
             "mode": "register_only",
             "server_url": args.server_url,
             "user_id": args.user_id,
-            "device_id": "dev-python-phone-mock-001",
+            "device_id": "dev-python-phone-001",
             "auth": auth_config,
             "properties": {
                 "phone.task.find_object_phone_task": True,
@@ -97,8 +97,8 @@ def sync(argv: list[str] | None = None) -> None:
         {
             "server_url": args.server_url,
             "user_id": args.user_id,
-            "device_id": "dev-web-glass-001",
-            "client_type": "web-glass",
+            "device_id": "dev-browser-glass-001",
+            "client_type": "browser-glass",
             "auth": auth_config,
             "audio": {"aec": "browser_webrtc", "wake_word": "manual"},
             "stream": {"sensor_mic": {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}},

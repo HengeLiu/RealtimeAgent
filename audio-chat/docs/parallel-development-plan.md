@@ -432,10 +432,10 @@ uv run python -m pytest tests/integration/test_dashscope_providers.py -q
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/python-glass/
-audio-chat/endpoints-examples/python-phone-mock/
-audio-chat/endpoints-examples/web-glass/
-audio-chat/examples/minimal/
+audio-chat/device-examples/python-glass/
+audio-chat/device-examples/python-phone/
+audio-chat/device-examples/browser-glass/
+audio-chat/app-examples/basic-app/
 audio-chat/server-python/audio_chat/server.py
 audio-chat/server-python/audio_chat/preflight.py
 audio-chat/tests/test_network_server_playback.py

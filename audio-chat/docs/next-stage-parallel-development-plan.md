@@ -22,8 +22,8 @@ uv run python scripts/acceptance_check.py all --keep-going \
 4. `TextAgentCore`、`RealtimeAudioAgentCore`、provider adapter、mock provider。
 5. `ToolGateway`、`BaseTool`、`BaseTask`、`TaskEngine`、自动发现和 `UserDeviceContext`。
 6. `OutputService`、流式 TTS 入口、原生 audio delta 入口、播放仲裁。
-7. aiohttp server、Python playback、web-glass 基础端侧、preflight 和 acceptance 脚本。
-8. 开发者可用入口、示例 App、能力回放、下一阶段 lane 注册、Python phone mock 和 web-glass 最小闭环。
+7. aiohttp server、Python playback、browser-glass 基础端侧、preflight 和 acceptance 脚本。
+8. 开发者可用入口、示例 App、能力回放、下一阶段 lane 注册、Python phone mock 和 browser-glass 最小闭环。
 9. 音频会话生命周期、轻量音频处理器链、正式设备注册鉴权、signed_token、Task Engine 生产化、Provider 工具桥和输出实时性。
 
 下一阶段目标先不追求完整复刻老版 SDK，而是把 SDK 从“协议骨架可运行”推进到“功能开发者可用”。这里的可用不是指内部模块存在，而是指开发者能安装 SDK、创建应用目录、编写 Tool / Task、启动 mock 端侧、跑一次回放验收，并能从日志和运行产物判断能力是否真的生效。
@@ -48,7 +48,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 
 1. 开发者可以用一组文档命令完成安装、配置、启动和停止，不需要理解内部服务对象。
 2. 开发者可以复制示例 app-root，新建一个 Tool 或 Task 后无需修改 `app.py` 即可被自动发现。
-3. 开发者可以用 Python phone mock、Python glass playback 或 web-glass 完成设备级回放。
+3. 开发者可以用 Python phone mock、Python glass playback 或 browser-glass 完成设备级回放。
 4. 开发者可以在 Tool / Task 中只通过事件和 stream 使用设备通讯能力，不接触 `device_id` 点对点发送细节。
 5. 回放结束后必须产出可检查文件，包括事件、stream、agent、tool、task、asset、output 和最终结果。
 6. 文档里标记为“已实现”的开发命令和公开 API 必须有验收脚本覆盖。
@@ -69,7 +69,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 2. Tool / Task 仍然只能通过 `UserDeviceContext` 使用设备通讯能力，不能按 `device_id` 点对点发送。
 3. MCP、Skill、Memory 不允许直接持有 `UserDeviceContext`；需要设备通讯能力时必须封装为 Tool 或 Task。
 4. 音频主链路优先级最高，先解决实时性、生命周期、关闭和打断。
-5. 端侧参考实现优先顺序：Python playback、web-glass、Python phone mock、iOS、ESP32-S3。
+5. 端侧参考实现优先顺序：Python playback、browser-glass、Python phone mock、iOS、ESP32-S3。
 6. 所有线路必须补自动验收。验收脚本可以先按 lane 增量扩展，但最终必须进入 `acceptance_check.py all`。
 
 ## 4. 下一阶段验收脚本扩展
@@ -183,7 +183,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 1. `scripts/acceptance_check.py` 已新增 `developer-usability` lane。
 2. `pyproject.toml` 已补齐 P0-A 要求的开发者入口命令。
 3. README、entry point 和 `audio_chat` 顶层公开 API 已加入自动一致性检查。
-4. `examples/basic-app` 提供最小 app-root、Tool 样板和 Task 样板，用于冻结开发者闭环的最低门槛。
+4. `app-examples/basic-app` 提供最小 app-root、Tool 样板和 Task 样板，用于冻结开发者闭环的最低门槛。
 5. `testdata/contracts/run_artifacts.schema.json` 记录 playback 运行产物的最小 schema。
 
 写入范围：
@@ -241,7 +241,7 @@ uv run python scripts/acceptance_check.py developer-usability \
 写入范围：
 
 ```text
-audio-chat/examples/basic-app/
+audio-chat/app-examples/basic-app/
 audio-chat/server-python/audio_chat/cli/
 audio-chat/tests/fixtures/basic_app/
 audio-chat/tests/acceptance/test_capability_template_playback.py
@@ -252,7 +252,7 @@ audio-chat/README.md
 建议目录：
 
 ```text
-examples/basic-app/
+app-examples/basic-app/
   README.md
   config/
     server.yaml
@@ -432,7 +432,7 @@ audio-chat/server-python/audio_chat/control/
 audio-chat/server-python/audio_chat/config.py
 audio-chat/server-python/audio_chat/server.py
 audio-chat/server-python/audio_chat/errors.py
-audio-chat/examples/minimal/server.yaml
+audio-chat/app-examples/basic-app/server.yaml
 audio-chat/tests/test_device_registration_management.py
 audio-chat/tests/test_signed_token_auth.py
 audio-chat/testdata/contracts/events/
@@ -502,7 +502,7 @@ audio-chat/tests/test_memory_service.py
 audio-chat/tests/test_skill_service.py
 audio-chat/tests/test_mcp_gateway.py
 audio-chat/tests/acceptance/test_indirect_device_context_contract.py
-audio-chat/examples/minimal/server.yaml
+audio-chat/app-examples/basic-app/server.yaml
 ```
 
 任务清单：
@@ -669,12 +669,12 @@ DASHSCOPE_API_KEY=... uv run python -m pytest tests/integration/test_dashscope_p
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/python-glass/
-audio-chat/endpoints-examples/web-glass/
-audio-chat/endpoints-examples/python-phone-mock/
-audio-chat/endpoints-examples/ios-phone/
-audio-chat/endpoints-examples/esp32-s3/
-audio-chat/examples/minimal/
+audio-chat/device-examples/python-glass/
+audio-chat/device-examples/browser-glass/
+audio-chat/device-examples/python-phone/
+audio-chat/device-examples/native-ios-phone/
+audio-chat/device-examples/native-esp32-glass/
+audio-chat/app-examples/basic-app/
 audio-chat/docs/esp32-s3-endpoint-bridge.md
 audio-chat/tests/test_web_glass_endpoint.py
 audio-chat/tests/test_python_phone_mock_endpoint.py
@@ -683,7 +683,7 @@ audio-chat/tests/test_endpoint_config_sync.py
 
 任务清单：
 
-1. web-glass：
+1. browser-glass：
    - 完成 control ws、stream ws。
    - getUserMedia 采集 PCM。
    - WebRTC AEC / NS / AGC 配置。
@@ -699,7 +699,7 @@ audio-chat/tests/test_endpoint_config_sync.py
    - 后续补 simulator build。
 4. ESP32-S3：
    - 保留 AEC bridge。
-   - 等 web-glass 全双工稳定后再做真机验收。
+   - 等 browser-glass 全双工稳定后再做真机验收。
    - 固件必须遵守 wake 后才打开音频长连接。
 5. Config sync：
    - 生成 server、web、python mock、iOS、ESP32 的本地配置。
@@ -707,15 +707,15 @@ audio-chat/tests/test_endpoint_config_sync.py
 
 当前落地状态：
 
-1. `web-glass` 已有静态页面和协议检查，覆盖 control ws、stream ws、WebRTC
+1. `browser-glass` 已有静态页面和协议检查，覆盖 control ws、stream ws、WebRTC
    AEC / NS / AGC、持续 `sensor.mic`、speaker 播放回执、用户打断和 Realtime
    模式不发送 final。
-2. `python-phone-mock` 已有网络 endpoint，能通过真实 `/ws/control` 注册，按
+2. `python-phone` 已有网络 endpoint，能通过真实 `/ws/control` 注册，按
    event/subscription 接收 `sensor.rgb` 采集请求，使用 `/ws/stream` 上传 RGB
    资产，并消费 `actuator.speaker` / `actuator.haptic` 输出 stream。
 3. `ios-phone` 和 `esp32-s3` 已提交目录、README 和最小配置样例，作为后续端侧小组
    的协议锚点；本阶段不阻塞 simulator build 或真机固件。
-4. `audio-chat.config.sync` 已生成 server、web-glass、python phone mock、glass
+4. `audio-chat.config.sync` 已生成 server、browser-glass、python phone mock、glass
    playback、iOS 和 ESP32-S3 本地配置，统一 `server_url`、`user_id` 和可选 token，
    并保证各端 `device_id` 不重复。
 5. `endpoint-reference` lane 已覆盖上述最小闭环：
@@ -737,8 +737,8 @@ uv run python scripts/acceptance_check.py endpoint-reference
 
 ```bash
 cd audio-chat
-uv run audio-chat.server.run --config examples/minimal/server-omni.yaml
-# 另一个终端或浏览器打开 web-glass
+uv run audio-chat.server.run --config app-examples/basic-app/server-omni.yaml
+# 另一个终端或浏览器打开 browser-glass
 # 触发页面注册、唤醒、麦克风上传、speaker 播放
 curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
@@ -746,23 +746,23 @@ curl http://127.0.0.1:8765/api/debug/playback
 
 通过条件：
 
-1. web-glass 能完成真实浏览器注册、唤醒、麦克风上传和 speaker 播放。
+1. browser-glass 能完成真实浏览器注册、唤醒、麦克风上传和 speaker 播放。
 2. Python phone mock 能作为独立网络 endpoint 运行。
 3. 多设备订阅分发由注册策略决定，不按设备类型硬编码。
 4. 配置同步后各端使用同一组 server_url、user_id、device_id 和 token。
 
 ### 13.1 F-iOS：iOS phone 参考端可运行客户端
 
-目标：把 `endpoints-examples/ios-phone` 从协议锚点、README 和配置样例推进到可在
+目标：把 `device-examples/native-ios-phone` 从协议锚点、README 和配置样例推进到可在
 Simulator 或真机上运行的参考客户端。该客户端不是生产 App，但必须能验证
 `audio-chat` 的设备注册、事件订阅、stream 打开、基础传感器上传和执行器消费。
 
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/ios-phone/
-audio-chat/endpoints-examples/ios-phone/AppConfig.example.json
-audio-chat/endpoints-examples/ios-phone/README.md
+audio-chat/device-examples/native-ios-phone/
+audio-chat/device-examples/native-ios-phone/AppConfig.example.json
+audio-chat/device-examples/native-ios-phone/README.md
 audio-chat/server-python/audio_chat/cli/config.py
 audio-chat/tests/test_ios_phone_endpoint_contract.py
 audio-chat/tests/test_endpoint_config_sync.py
@@ -805,13 +805,13 @@ uv run python -m pytest \
 如果本地安装 Xcode，还需要补充并运行：
 
 ```bash
-cd audio-chat/endpoints-examples/ios-phone
+cd audio-chat/device-examples/native-ios-phone
 xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
 通过条件：
 
-1. iOS 配置 schema 与 server、web-glass、python-phone-mock 使用同一套字段语义。
+1. iOS 配置 schema 与 server、browser-glass、python-phone 使用同一套字段语义。
 2. iOS 注册事件符合协议 golden，不引入 iOS 专用 RPC。
 3. iOS 可订阅并处理输出 stream 事件，能消费或模拟消费 `actuator.speaker`。
 4. iOS 可上传至少一种输入 stream，优先 `sensor.rgb` 或测试 PCM `sensor.mic`。
@@ -819,7 +819,7 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 
 当前落地状态：
 
-1. `endpoints-examples/ios-phone/AudioChatPhone.xcodeproj` 已提供最小 SwiftUI App。
+1. `device-examples/native-ios-phone/AudioChatPhone.xcodeproj` 已提供最小 SwiftUI App。
 2. `AudioChatEndpointRuntime` 已实现 `/ws/control` 注册、`/ws/stream` 连接、`sensor.rgb`
    测试 JPEG 上传、测试 `sensor.mic` PCM 上传和 `actuator.speaker` buffer 消费回执。
 3. `testdata/contracts/endpoints/ios_phone_register_requested.json` 已记录 iOS 注册 golden。
@@ -828,17 +828,17 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 
 ### 13.2 F-ESP32：ESP32-S3 真机桥接与验收
 
-目标：把 `endpoints-examples/esp32-s3` 从 AEC bridge、README 和配置样例推进到可真机联调的
+目标：把 `device-examples/native-esp32-glass` 从 AEC bridge、README 和配置样例推进到可真机联调的
 参考端。ESP32-S3 必须遵守端侧职责边界：端侧负责唤醒、AEC、麦克风采集和喇叭播放，
 server 只通过 event 和 stream 管理会话、输入、输出和关闭。
 
 写入范围：
 
 ```text
-audio-chat/endpoints-examples/esp32-s3/
-audio-chat/endpoints-examples/esp32-s3/local.env.example
+audio-chat/device-examples/native-esp32-glass/
+audio-chat/device-examples/native-esp32-glass/local.env.example
 audio-chat/docs/esp32-s3-endpoint-bridge.md
-audio-chat/endpoints-examples/esp32-s3/audio_chat_esp32_s3/esp32_aec.py
+audio-chat/device-examples/native-esp32-glass/audio_chat_esp32_s3/esp32_aec.py
 audio-chat/server-python/audio_chat/cli/config.py
 audio-chat/tests/test_esp32_s3_endpoint_contract.py
 audio-chat/tests/test_endpoint_config_sync.py
@@ -887,7 +887,7 @@ uv run python scripts/acceptance_check.py esp32-s3-endpoint \
 
 ```bash
 cd audio-chat
-uv run audio-chat.server.run --config examples/minimal/server-omni.yaml
+uv run audio-chat.server.run --config app-examples/basic-app/server-omni.yaml
 # 另一个终端刷写或启动 ESP32-S3，并保留串口日志和 runs/audio-chat/sessions/<session_id>/ 产物
 ```
 
@@ -941,7 +941,7 @@ audio-chat/tests/test_docs_commands.py
    - endpoint config check。
 4. README：
    - 只保留真实可运行命令。
-   - 单机 mock、网络 playback、web-glass、provider smoke 分开写。
+   - 单机 mock、网络 playback、browser-glass、provider smoke 分开写。
 5. 发布前检查：
    - 全 lane 验收。
    - docs command check。
@@ -971,7 +971,7 @@ uv run python scripts/acceptance_check.py developer-experience
 1. 架构文档已补充真实状态矩阵，按已实现、部分实现、未实现区分当前能力和 roadmap。
 2. `phase3-migration-guide.md` 已提供旧 SDK 到 `audio-chat` 的概念映射、迁移约束、样板路径和联调观察点。
 3. `testdata/contracts` 已补齐 auth 注册 golden、task lifecycle golden 和 output arbitration golden；事件 golden 与 stream chunk golden 继续沿用上一阶段契约。
-4. `examples/migration-templates` 已提供 `find_object` Tool、`continuous_rgb_analyze` Task 和 `notification_task` Task 样板，均只通过 `UserDeviceContext` 使用设备通讯能力。
+4. `app-examples/for-blind-app/templates` 已提供 `find_object` Tool、`continuous_rgb_analyze` Task 和 `notification_task` Task 样板，均只通过 `UserDeviceContext` 使用设备通讯能力。
 5. `next-docs-contract` lane 已接入文档、契约和迁移样板自动验收。
 
 写入范围：
@@ -982,7 +982,7 @@ audio-chat/docs/phase3-migration-guide.md
 audio-chat/docs/next-stage-parallel-development-plan.md
 audio-chat/testdata/contracts/
 audio-chat/tests/acceptance/
-audio-chat/examples/
+audio-chat/app-examples/
 ```
 
 任务清单：
@@ -1028,7 +1028,7 @@ uv run python scripts/acceptance_check.py next-docs-contract
 2. P0-B 示例 App 与能力回放闭环。
 3. P0-C 下一阶段验收入口。
 4. G 开发者体验、CLI 与发布前检查。
-5. F 参考端侧与多端联调中的 Python playback、Python phone mock 和 web-glass 最小闭环。
+5. F 参考端侧与多端联调中的 Python playback、Python phone mock 和 browser-glass 最小闭环。
 
 第一批完成后，已冻结开发者可用基线。需要复核时运行：
 
@@ -1063,7 +1063,7 @@ uv run python scripts/acceptance_check.py capability-template-playback --keep-go
 1. C 依赖 ToolGateway 当前稳定契约，但不强依赖真实端侧。
 2. D 已完成，后续 C 和业务迁移可以依赖 Task Engine 的持久化、恢复、取消、超时和任务事件桥。
 3. E 已完成，后续真实 provider 问题应优先补集成测试稳定性和诊断，而不是重新设计 Agent Core 工具桥。
-4. F 的 Python playback / Python phone mock / web-glass 最小闭环已完成；iOS phone 和 ESP32-S3 在 F 线中只完成了协议锚点、配置样例和文档骨架，下一步端侧重点转向可运行客户端与真机验收。
+4. F 的 Python playback / Python phone mock / browser-glass 最小闭环已完成；iOS phone 和 ESP32-S3 在 F 线中只完成了协议锚点、配置样例和文档骨架，下一步端侧重点转向可运行客户端与真机验收。
 5. H 已完成第一轮，后续每条线路仍必须同步更新文档、契约和迁移样板。
 
 ## 17. 合并要求
@@ -1074,7 +1074,7 @@ uv run python scripts/acceptance_check.py capability-template-playback --keep-go
 2. 对应测试。
 3. 对应 lane 验收报告。
 4. 涉及协议时更新 golden。
-5. 涉及配置时更新 `examples/minimal/server.yaml`。
+5. 涉及配置时更新 `app-examples/basic-app/server.yaml`。
 6. 涉及跨端时更新启动顺序和观察点。
 
 最终合并前必须通过：
@@ -1092,7 +1092,7 @@ cd audio-chat
 DASHSCOPE_API_KEY=... uv run python -m pytest tests/integration/test_dashscope_providers.py -q
 ```
 
-如果有 web-glass 人工联调条件，还需要保留：
+如果有 browser-glass 人工联调条件，还需要保留：
 
 ```text
 runs/audio-chat/sessions/<session_id>/events.jsonl
@@ -1112,9 +1112,9 @@ server DEBUG 日志
 下一阶段完成时，应达到：
 
 1. 功能开发者可以按照 README 从零安装、同步配置、启动 server、启动 mock 设备并完成一次回放。
-2. 功能开发者可以复制 `examples/basic-app` 新增 Tool / Task，且无需修改 SDK 内部代码即可自动发现。
+2. 功能开发者可以复制 `app-examples/basic-app` 新增 Tool / Task，且无需修改 SDK 内部代码即可自动发现。
 3. Tool / Task 能通过 `UserDeviceContext` 使用事件和 stream 控制设备、读取资产和输出结果。
-4. Python playback、Python phone mock 和 web-glass 至少有两个端侧参考实现可跑通。
+4. Python playback、Python phone mock 和 browser-glass 至少有两个端侧参考实现可跑通。
 5. TextAgentCore 和 RealtimeAudioAgentCore 在 mock provider 下都能跑通工具发现、工具调用和输出链路。
 6. Output Service 能处理 text delta 流式 TTS、audio delta 直通、优先级仲裁和打断产物记录。
 7. CLI 和 preflight 足以支持普通开发者安装、启动、回放、排障。

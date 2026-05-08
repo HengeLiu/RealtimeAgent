@@ -39,9 +39,9 @@
 
 | 样板 | 文件 | 适用场景 |
 | --- | --- | --- |
-| 找物 Tool | `examples/migration-templates/find_object/tool.py` | 一次性请求 RGB 资产，再由模型或视觉处理器分析。 |
-| 连续 RGB Task | `examples/migration-templates/continuous_rgb_analyze/task.py` | 通过事件配置连续上传，并通过 `watch_assets()` 消费多帧图片。 |
-| 通知 Task | `examples/migration-templates/notification_task/task.py` | 后台任务到点、状态变化或异常提醒。 |
+| 找物 Tool | `app-examples/for-blind-app/templates/find_object/tool.py` | 一次性请求 RGB 资产，再由模型或视觉处理器分析。 |
+| 连续 RGB Task | `app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py` | 通过事件配置连续上传，并通过 `watch_assets()` 消费多帧图片。 |
+| 通知 Task | `app-examples/for-blind-app/templates/notification_task/task.py` | 后台任务到点、状态变化或异常提醒。 |
 
 复制到业务 app-root 时，建议目录如下：
 
@@ -128,7 +128,7 @@ class FindObjectTool(BaseTool):
 7. 不再保存或传递 `device_id`；通过事件名、`stream_type`、payload 和 subscription 匹配设备。
 8. Tool 返回 `ToolResult.success(...)`，资产用 `assets=[asset]` 带回，图片字节不进 `data`。
 
-参考文件：`examples/migration-templates/find_object/tool.py`。
+参考文件：`app-examples/for-blind-app/templates/find_object/tool.py`。
 
 ## 6. BaseTask 迁移
 
@@ -148,8 +148,8 @@ from audio_chat import BaseTask, TaskContext, TaskEvent
 
 参考文件：
 
-- `examples/migration-templates/continuous_rgb_analyze/task.py`
-- `examples/migration-templates/notification_task/task.py`
+- `app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py`
+- `app-examples/for-blind-app/templates/notification_task/task.py`
 
 ## 7. DeviceGroupContext 到 UserDeviceContext
 
@@ -240,24 +240,24 @@ asset = context.devices.request_asset(
 最小回放入口：
 
 ```bash
-uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 业务迁移样板入口：
 
 ```bash
-uv run audio-chat.playback.glass --config audio-chat/examples/basic-app/host/glass-playback/playback.yaml
+uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/playback.yaml
 ```
 
 ## 14. 老业务能力样板映射
 
 | 旧能力 | audio-chat 样板目录 | 迁移重点 |
 | --- | --- | --- |
-| find_object | `examples/for-blind-app/capabilities/find_object` | 一次性 `sensor.rgb` 资产请求，检测结果进入 ToolResult 或 TaskEvent。 |
-| traffic_light | `examples/for-blind-app/capabilities/traffic_light` | 连续 `sensor.rgb` stream，识别结果通过 TaskEvent 和 Output Service 提醒。 |
-| navigation | `examples/for-blind-app/capabilities/navigation` | MCP 路线准备 + 位置/航向/视觉事件驱动 Task。 |
-| search | `examples/for-blind-app/capabilities/search` | 搜索 MCP wrapper，返回摘要和引用，不碰设备连接。 |
-| timer | `examples/for-blind-app/capabilities/timer` | Task 调度、恢复、取消和通知仲裁。 |
+| find_object | `app-examples/for-blind-app/capabilities/find_object` | 一次性 `sensor.rgb` 资产请求，检测结果进入 ToolResult 或 TaskEvent。 |
+| traffic_light | `app-examples/for-blind-app/capabilities/traffic_light` | 连续 `sensor.rgb` stream，识别结果通过 TaskEvent 和 Output Service 提醒。 |
+| navigation | `app-examples/for-blind-app/capabilities/navigation` | MCP 路线准备 + 位置/航向/视觉事件驱动 Task。 |
+| search | `app-examples/for-blind-app/capabilities/search` | 搜索 MCP wrapper，返回摘要和引用，不碰设备连接。 |
+| timer | `app-examples/for-blind-app/capabilities/timer` | Task 调度、恢复、取消和通知仲裁。 |
 
 ## 15. 迁移流程
 
@@ -271,7 +271,7 @@ uv run python scripts/acceptance_check.py capability-template-playback \
   --report runs/acceptance/capability-template-playback.json
 ```
 
-2. 从 `examples/migration-templates` 复制最接近的样板。
+2. 从 `app-examples/for-blind-app/templates` 复制最接近的样板。
 3. 把旧代码中的直接设备调用改为 `context.devices.publish_event()`、`request_asset()`、`watch_assets()`、`open_output_stream()` 或 `submit_text()`。
 4. 把图片、音频、视频等大字节移到 `sensor.*` 或 `actuator.*` stream。
 5. 为能力补一个独立回放或契约测试。
@@ -305,8 +305,8 @@ uv run python scripts/acceptance_check.py next-docs-contract \
 | `openaiglass.server.run` | `audio-chat.server.run` | 已有 YAML server 启动入口。 |
 | `openaiglass.phone.mock` | `audio-chat.phone.mock` | 已有 Python phone mock 参考端。 |
 | `openaiglass.glass.start --runtime playback` | `audio-chat.playback.glass` | 已有 Python playback 入口。 |
-| `openaiglass.phone.open` | `endpoints-examples/ios-phone` | 当前为 iOS 参考端目录，CLI 由 `old-sdk-parity-cli` 补齐。 |
-| `openaiglass.glass.start` | `endpoints-examples/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由 `old-sdk-parity-esp32` 补齐。 |
+| `openaiglass.phone.open` | `device-examples/native-ios-phone` | 当前为 iOS 参考端目录，CLI 由 `old-sdk-parity-cli` 补齐。 |
+| `openaiglass.glass.start` | `device-examples/native-esp32-glass` | 当前为 ESP32-S3 参考端目录，构建烧录由 `old-sdk-parity-esp32` 补齐。 |
 | `openaiglass.sdk.preflight` | `audio-chat.dev.preflight` | 已有预检报告。 |
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
 | `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 通过 event / stream / asset / output 表达设备通讯。 |

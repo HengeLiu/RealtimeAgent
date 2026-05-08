@@ -1,6 +1,6 @@
 # audio-chat python-glass
 
-`python-glass` 是用 Python 实现的参考眼镜端，定位等价于 `web-glass`：
+`python-glass` 是用 Python 实现的参考眼镜端，定位等价于 `browser-glass`：
 
 1. 通过 `/ws/control` 注册设备、发送唤醒事件和回执事件。
 2. 通过 `/ws/stream` 上传 `sensor.mic` 音频流。

@@ -97,8 +97,8 @@ def live_check(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.dev.live-check", description="检查 audio-chat 本地联调状态")
-    parser.add_argument("--config", default="examples/minimal/server.yaml")
-    parser.add_argument("--generated-dir", default="examples/basic-app/config/generated")
+    parser.add_argument("--config", default="app-examples/basic-app/server.yaml")
+    parser.add_argument("--generated-dir", default="app-examples/basic-app/config/generated")
     parser.add_argument("--report", default="runs/audio-chat/live-check.json")
     args = parser.parse_args(argv)
 
@@ -550,7 +550,7 @@ def _recent_playback_observation() -> dict:
         **result,
         "ok": True,
         "observed": False,
-        "action": "运行一次 playback: uv run audio-chat.playback.glass --config examples/minimal/playback.yaml",
+        "action": "运行一次 playback: uv run audio-chat.playback.glass --config app-examples/basic-app/host/glass-playback/sdk-playback.yaml",
     }
 
 
@@ -601,7 +601,7 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Au
         "server": generated_dir / "server.local.yaml",
         "phone_mock": generated_dir / "phone.mock.yaml",
         "glass_playback": generated_dir / "glass.playback.yaml",
-        "web_glass": generated_dir / "web-glass.yaml",
+        "web_glass": generated_dir / "browser-glass.yaml",
         "ios_phone": generated_dir / "ios-phone.local.json",
         "esp32_s3": generated_dir / "esp32-s3.local.env",
     }
@@ -613,7 +613,7 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Au
             "generated_dir": str(generated_dir),
             "missing": missing,
             "errors": [f"missing generated endpoint config: {', '.join(missing)}"],
-            "action": "先运行 audio-chat.config.sync --output-dir examples/basic-app/config/generated",
+            "action": "先运行 audio-chat.config.sync --output-dir app-examples/basic-app/config/generated",
         }
 
     user_ids: set[str] = set()

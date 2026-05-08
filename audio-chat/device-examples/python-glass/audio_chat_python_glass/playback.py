@@ -106,7 +106,7 @@ class PlaybackAudio:
 def _repo_root() -> Path:
     """返回仓库根目录。
 
-    主要逻辑：`playback.py` 位于 `audio-chat/endpoints-examples/python-glass/audio_chat_python_glass`，
+    主要逻辑：`playback.py` 位于 `audio-chat/device-examples/python-glass/audio_chat_python_glass`，
     向上四层是仓库根目录。
     返回值：仓库根目录路径。
     异常情况：无。
@@ -302,7 +302,7 @@ class PythonPlaybackEndpoint:
                     event_name="control.audio_session.opened",
                     user_id=self.user_id,
                     producer_id=self.device_id,
-                    session_id=event.session_id,
+                    session_id=self.device_id,
                     payload={"reason": "playback_opened"},
                 )
             )
@@ -321,7 +321,7 @@ class PythonPlaybackEndpoint:
                     event_name="stream.output.finished",
                     user_id=self.user_id,
                     producer_id=self.device_id,
-                    session_id=event.session_id,
+                    session_id=self.device_id,
                     stream_id=event.stream_id,
                     stream_type=event.stream_type,
                     payload={"stream_type": event.stream_type},
@@ -332,7 +332,7 @@ class PythonPlaybackEndpoint:
                     event_name="stream.output.closed",
                     user_id=self.user_id,
                     producer_id=self.device_id,
-                    session_id=event.session_id,
+                    session_id=self.device_id,
                     stream_id=event.stream_id,
                     stream_type=event.stream_type,
                     payload={"stream_type": event.stream_type, "reason": "playback_closed"},
@@ -344,7 +344,7 @@ class PythonPlaybackEndpoint:
                     event_name="control.audio_session.closed",
                     user_id=self.user_id,
                     producer_id=self.device_id,
-                    session_id=event.session_id,
+                    session_id=self.device_id,
                     payload={"reason": "playback_closed"},
                 )
             )
@@ -359,7 +359,7 @@ class PythonPlaybackEndpoint:
                     event_name="stream.output.started",
                     user_id=self.user_id,
                     producer_id=self.device_id,
-                    session_id=chunk.session_id,
+                    session_id=self.device_id,
                     stream_id=chunk.stream_id,
                     stream_type=chunk.stream_type,
                     payload={"stream_type": chunk.stream_type},
@@ -587,7 +587,7 @@ class PythonPlaybackEndpoint:
         count = self._sample_count(event)
         self._upload_sensor_stream(
             stream_type=event.stream_type or "",
-            session_id=event.session_id,
+            session_id=self.device_id,
             request_id=event.payload.get("request_id"),
             correlation_id=event.payload.get("correlation_id"),
             count=count,
@@ -937,7 +937,7 @@ class NetworkPythonPlaybackEndpoint:
                         event_name="control.audio_session.opened",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         payload={"reason": "playback_opened"},
                     ),
                 )
@@ -949,7 +949,7 @@ class NetworkPythonPlaybackEndpoint:
                         event_name="stream.output.finished",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type},
@@ -961,7 +961,7 @@ class NetworkPythonPlaybackEndpoint:
                         event_name="stream.output.closed",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type, "reason": "playback_closed"},
@@ -975,7 +975,7 @@ class NetworkPythonPlaybackEndpoint:
                         event_name="control.audio_session.closed",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         payload={"reason": "playback_closed"},
                     ),
                 )
@@ -996,7 +996,7 @@ class NetworkPythonPlaybackEndpoint:
                         event_name="stream.output.started",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=chunk.session_id,
+                        session_id=self.device_id,
                         stream_id=chunk.stream_id,
                         stream_type=chunk.stream_type,
                         payload={"stream_type": chunk.stream_type},
@@ -1070,7 +1070,7 @@ class NetworkPythonPlaybackEndpoint:
 
         request_id = str(event.payload.get("request_id") or "")
         stream_id = new_id("stream_rgb")
-        session_id = event.session_id or self._session_id or new_id("sess")
+        session_id = event.session_id or self._session_id or self.device_id
         metadata = {"request_id": request_id} if request_id else {}
         await self._send_event(
             control_ws,

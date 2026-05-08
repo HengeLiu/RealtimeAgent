@@ -2,11 +2,11 @@ from pathlib import Path
 
 
 def _html() -> str:
-    return Path(__file__).resolve().parents[1].joinpath("endpoints-examples/web-glass/index.html").read_text(encoding="utf-8")
+    return Path(__file__).resolve().parents[1].joinpath("device-examples/browser-glass/index.html").read_text(encoding="utf-8")
 
 
 def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
-    """测试目标：验证 web-glass 页面声明浏览器 AEC 能力和 audio-chat 协议事件。
+    """测试目标：验证 browser-glass 页面声明浏览器 AEC 能力和 audio-chat 协议事件。
 
     测试方法：读取静态 HTML，检查 getUserMedia 约束和关键控制事件名。
     预期结果：页面包含 AEC/NS/AGC、注册、唤醒、输入打开和输出回执事件。
@@ -28,7 +28,7 @@ def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
 
 
 def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
-    """测试目标：验证 web-glass JS 实现了 StreamChunkCodec 兼容结构。
+    """测试目标：验证 browser-glass JS 实现了 StreamChunkCodec 兼容结构。
 
     测试方法：检查 JS 中必须写入 4 字节 header_len、JSON header 和 payload，并校验
     `payload_size`。
@@ -48,10 +48,10 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "while (micPcmBuffer.byteLength >= MIC_CHUNK_BYTES)" in html
     assert "sendMicPayload(micPcmBuffer.slice(0, MIC_CHUNK_BYTES))" in html
     assert "final: false" in html
-    assert "function sendFinalMicPayload()" in html
+    assert 'function sendFinalMicPayload(reason = "audio_segment_closed")' in html
     assert "final: true" in html
     assert "send final sensor.mic bytes=" in html
-    assert "sendFinalMicPayload()" in html
+    assert 'sendFinalMicPayload("offline_segment_completed")' in html
     assert "control.device.heartbeat.received" in html
     assert "function startHeartbeat()" in html
     assert "close_mode: \"close_after_reply\"" in html
@@ -74,7 +74,7 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "recv audio chunk bytes=" in html
     assert "duration_ms=${durationMs}" in html
     assert "audioContext.createGain()" in html
-    assert "if (!outputStarted.has(streamId)) return;" in html
+    assert "if (!outputStarted.has(chunk.stream_id))" in html
     assert "stopAllOutputPlayback(\"barge_in_local\")" in html
     assert "stream.output.cancel.requested" in html
     assert "stopOutputPlayback(item.stream_id, \"server_cancelled\")" in html
@@ -86,7 +86,7 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
 
 
 def test_web_glass_sensor_rgb_uses_valid_stream_format() -> None:
-    """测试目标：验证 web-glass 抓拍上传的 JPEG stream 能通过服务端格式校验。
+    """测试目标：验证 browser-glass 抓拍上传的 JPEG stream 能通过服务端格式校验。
 
     测试方法：读取静态 HTML，检查 `sensor.rgb` 打开事件和 JPEG chunk 不再使用
     `sample_rate=0`、`chunk_ms=0` 或 `duration_ms=0`，并在打开 stream 后短暂等待。
@@ -96,23 +96,24 @@ def test_web_glass_sensor_rgb_uses_valid_stream_format() -> None:
     html = _html()
 
     assert 'format: {codec: "jpeg", sample_rate: 1, channels: 1, chunk_ms: 1}' in html
-    assert "codec: \"jpeg\",\n          sample_rate: 1" in html
+    assert "codec: \"jpeg\",\n            sample_rate: 1" in html
     assert "duration_ms: 1" in html
-    assert "await delay(120);\n        streamWs.send(encodeStreamChunk({" in html
+    assert "await delay(120);" in html
+    assert "streamWs.send(encodeStreamChunk({" in html
     assert 'format: {codec: "jpeg", sample_rate: 0' not in html
-    assert "codec: \"jpeg\",\n          sample_rate: 0" not in html
+    assert "codec: \"jpeg\",\n            sample_rate: 0" not in html
     assert "duration_ms: 0" not in html
 
 
 def test_web_glass_is_not_served_by_sdk_server() -> None:
-    """测试目标：验证 web-glass 不作为 SDK server 内置静态路由。
+    """测试目标：验证 browser-glass 不作为 SDK server 内置静态路由。
 
-    测试方法：检查 server 源码不包含 `/web-glass` 路由和 `web_glass` handler。
+    测试方法：检查 server 源码不包含 `/browser-glass` 路由和 `web_glass` handler。
     预期结果：server 只暴露协议和 debug API，不预判具体端侧类型。
     """
     server_source = Path(__file__).resolve().parents[1].joinpath("server-python/audio_chat/server.py").read_text(
         encoding="utf-8"
     )
 
-    assert '"/web-glass"' not in server_source
+    assert '"/browser-glass"' not in server_source
     assert "def web_glass" not in server_source

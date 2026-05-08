@@ -42,7 +42,7 @@ def test_python_phone_mock_registers_as_subscription_driven_endpoint(tmp_path: P
 
         snapshot = audio_app.control_service.build_device_snapshot("dev-phone")
         assert snapshot is not None
-        assert snapshot["client_type"] == "python-phone-mock"
+        assert snapshot["client_type"] == "python-phone"
         assert snapshot["properties"]["phone.task.find_object_phone_task"] is True
         assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in snapshot["subscriptions"]
 
@@ -139,12 +139,12 @@ def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path
 def test_endpoint_reference_directories_exist() -> None:
     """测试目标：验证第 13 节要求的参考端侧目录已经建立。
 
-    测试方法：检查 web-glass、python-phone-mock、iOS 和 ESP32-S3 目录中的最小配置。
+    测试方法：检查 browser-glass、python-phone、iOS 和 ESP32-S3 目录中的最小配置。
     预期结果：每个端侧都有 README 或示例配置，便于后续并行小组继续实现。
     """
 
     root = Path(__file__).resolve().parents[1]
-    assert (root / "endpoints-examples/web-glass/README.md").exists()
-    assert (root / "endpoints-examples/python-phone-mock/phone.mock.yaml").exists()
-    assert (root / "endpoints-examples/ios-phone/AppConfig.example.json").exists()
-    assert (root / "endpoints-examples/esp32-s3/local.env.example").exists()
+    assert (root / "device-examples/browser-glass/README.md").exists()
+    assert (root / "device-examples/python-phone/phone.mock.yaml").exists()
+    assert (root / "device-examples/native-ios-phone/AppConfig.example.json").exists()
+    assert (root / "device-examples/native-esp32-glass/local.env.example").exists()

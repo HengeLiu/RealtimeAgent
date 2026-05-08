@@ -42,9 +42,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = [
     "server-python",
-    "endpoints-examples/python-glass",
-    "endpoints-examples/python-phone-mock",
-    "endpoints-examples/esp32-s3",
+    "device-examples/python-glass",
+    "device-examples/python-phone",
+    "device-examples/native-esp32-glass",
 ]
 include = [
     "audio_chat*",

@@ -21,7 +21,7 @@ def open_ios(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.ios.open", description="打开 audio-chat iOS phone 参考端工程")
-    parser.add_argument("--project", default="endpoints-examples/ios-phone/AudioChatPhone.xcodeproj", help="Xcode 工程路径")
+    parser.add_argument("--project", default="device-examples/native-ios-phone/AudioChatPhone.xcodeproj", help="Xcode 工程路径")
     parser.add_argument("--print-path", action="store_true", help="只打印工程路径，不打开 Xcode")
     args = parser.parse_args(argv)
 
@@ -51,7 +51,7 @@ def build_sim(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.ios.build-sim", description="构建 audio-chat iOS Simulator 参考端")
-    parser.add_argument("--project", default="endpoints-examples/ios-phone/AudioChatPhone.xcodeproj", help="Xcode 工程路径")
+    parser.add_argument("--project", default="device-examples/native-ios-phone/AudioChatPhone.xcodeproj", help="Xcode 工程路径")
     parser.add_argument("--scheme", default="AudioChatPhone")
     parser.add_argument("--destination", default="platform=iOS Simulator,name=iPhone 16")
     parser.add_argument("--dry-run", action="store_true", help="只输出 xcodebuild 命令，不执行构建")

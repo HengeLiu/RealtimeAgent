@@ -93,7 +93,7 @@ class FindObjectPhoneTaskHandler(PhoneTaskHandler):
                 "target": target,
                 "found": True,
                 "frame_count": len(frames),
-                "source": "python-phone-mock",
+                "source": "python-phone",
                 "bbox": {"x": 0.42, "y": 0.38, "width": 0.2, "height": 0.16},
             },
         )
@@ -119,7 +119,7 @@ class TrafficLightPhoneTaskHandler(PhoneTaskHandler):
                 "color": color,
                 "confidence": 0.91,
                 "frame_count": len(frames),
-                "source": "python-phone-mock",
+                "source": "python-phone",
             },
         )
 
@@ -208,8 +208,8 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         device_id: str,
         runs_root: str = "runs/audio-chat",
         auth: dict[str, Any] | None = None,
-        device_name: str = "python-phone-mock",
-        client_type: str = "python-phone-mock",
+        device_name: str = "python-phone",
+        client_type: str = "python-phone",
         properties: dict[str, Any] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
@@ -274,7 +274,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.finished",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type},
@@ -286,7 +286,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.closed",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type, "reason": "phone_mock_closed"},
@@ -300,7 +300,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.cancelled",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type, "reason": "phone_mock_cancelled"},
@@ -313,7 +313,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         event_name="control.audio_session.closed",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         payload={"reason": "phone_mock_closed"},
                     ),
                 )
@@ -415,7 +415,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         frames: list[bytes],
     ) -> None:
         stream_id = new_id("stream_rgb")
-        session_id = command.session_id or str(command.payload.get("session_id") or "") or self._session_id or new_id("sess")
+        session_id = self.device_id
         await self._send_event(
             control_ws,
             Event(
@@ -480,7 +480,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             event_name=event_name,
             user_id=self.user_id,
             producer_id=self.device_id,
-            session_id=command.session_id or str(command.payload.get("session_id") or "") or None,
+            session_id=self.device_id,
             payload=payload,
         )
         self.task_events.append({"event_name": event_name, **payload, "timestamp_ms": int(time.time() * 1000)})
@@ -501,7 +501,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.started",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=chunk.session_id,
+                        session_id=self.device_id,
                         stream_id=chunk.stream_id,
                         stream_type=chunk.stream_type,
                         payload={"stream_type": chunk.stream_type},
@@ -512,7 +512,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
 
     def _build_result(self) -> dict[str, Any]:
         result = super()._build_result()
-        result["endpoint"] = "python-phone-mock"
+        result["endpoint"] = "python-phone"
         result["sensor_events"] = list(self.sensor_events)
         result["actuator_streams"] = list(self.actuator_streams)
         result["properties"] = dict(self.properties)
@@ -544,10 +544,10 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
     endpoint = NetworkPythonPhoneMockEndpoint(
         server_url=config.get("server_url", "http://127.0.0.1:8765"),
         user_id=config.get("user_id", "user-phone-mock-001"),
-        device_id=config.get("device_id", "dev-python-phone-mock-001"),
+        device_id=config.get("device_id", "dev-python-phone-001"),
         runs_root=config.get("runs_root", "runs/audio-chat"),
         auth=dict(config.get("auth") or {"mode": "disabled"}),
-        device_name=str(config.get("name") or config.get("device_name") or "python-phone-mock"),
+        device_name=str(config.get("name") or config.get("device_name") or "python-phone"),
         properties=dict(config.get("properties") or {}) or None,
         subscriptions=list(config.get("subscriptions") or []) or None,
         task_handlers=handler_registry,

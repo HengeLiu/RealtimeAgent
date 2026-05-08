@@ -12,8 +12,8 @@
 | `capabilities/search` | 搜索和问答资料查询 | MCP wrapper Tool，缺真实 provider 时明确 mock/fallback。 |
 | `capabilities/timer` | 计时器和后台通知 | `TaskContext.schedule_event()` + 查询、取消、到点通知。 |
 | `host/server` | 业务 app factory | 真实代码读取 YAML 并启用自动发现。 |
-| `host/phone-mock` | 视觉任务 mock 端 | 真实配置可复制 `endpoints-examples/python-phone-mock/phone.mock.yaml`。 |
-| `host/glass-playback` | 设备级回放入口 | 真实配置可复制 `examples/basic-app/host/glass-playback/playback.yaml`。 |
+| `host/phone-mock` | 视觉任务 mock 端 | 真实配置可复制 `device-examples/python-phone/phone.mock.yaml`。 |
+| `host/glass-playback` | 设备级回放入口 | 真实配置可复制 `app-examples/basic-app/host/glass-playback/playback.yaml`。 |
 
 ## 开发顺序
 
@@ -25,7 +25,7 @@ uv run python scripts/acceptance_check.py capability-template-playback \
   --report runs/acceptance/capability-template-playback.json
 ```
 
-2. 复制 `examples/migration-templates` 中最接近的 Tool / Task。
+2. 复制 `app-examples/for-blind-app/templates` 中最接近的 Tool / Task。
 3. 按本目录各能力 README 收敛事件名、stream_type、资产和输出产物。
 4. 运行独立回放配置和验收测试。
 5. 修改后继续注册到 `scripts/acceptance_check.py old-sdk-parity-capabilities`。

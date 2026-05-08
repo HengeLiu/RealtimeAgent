@@ -79,7 +79,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
             "run",
             "audio-chat.server.start",
             "--config",
-            "examples/minimal/server.yaml",
+            "app-examples/basic-app/server.yaml",
             "--pid-file",
             str(pid_file),
             "--log-file",
@@ -116,7 +116,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
 
 
 def test_web_open_print_url_is_side_effect_free() -> None:
-    """测试目标：确认 web-glass 打开命令支持无副作用检查模式。
+    """测试目标：确认 browser-glass 打开命令支持无副作用检查模式。
 
     测试方法：执行 `audio-chat.web.open --print-url`。
     预期结果：命令不启动浏览器，只输出可打开的 file URL。

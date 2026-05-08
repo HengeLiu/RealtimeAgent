@@ -7,17 +7,17 @@
     "event_name": "control.device.register.requested",
     "timestamp_ms": 1760000000000,
     "user_id": "user-auth-001",
-    "producer_id": "dev-web-glass-001",
+    "producer_id": "dev-browser-glass-001",
     "payload": {
-      "device_id": "dev-web-glass-001",
+      "device_id": "dev-browser-glass-001",
       "device_name": "web glass",
-      "client_type": "web-glass",
+      "client_type": "browser-glass",
       "sdk_version": "audio-chat-endpoint-0.1.0",
       "auth": {
         "mode": "signed_token",
         "token_claims": {
           "user_id": "user-auth-001",
-          "device_id": "dev-web-glass-001",
+          "device_id": "dev-browser-glass-001",
           "expires_at": 1760000300000,
           "nonce": "nonce-auth-success-001"
         }

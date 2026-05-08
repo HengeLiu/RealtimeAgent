@@ -53,8 +53,8 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
     assert server["auth"]["mode"] == "static_token"
     assert set(server["auth"]["device_tokens"]) == {
         "dev-python-playback-001",
-        "dev-python-phone-mock-001",
-        "dev-web-glass-001",
+        "dev-python-phone-001",
+        "dev-browser-glass-001",
         "dev-ios-phone-001",
         "dev-esp32-s3-001",
     }

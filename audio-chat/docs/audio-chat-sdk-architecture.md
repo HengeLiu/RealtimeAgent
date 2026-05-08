@@ -88,7 +88,7 @@ audio-chat/
   docs/
   server-python/
   examples/
-  endpoints-examples/
+  device-examples/
   tests/
   testdata/
 ```
@@ -132,7 +132,7 @@ audio-chat/
 
 1. `audio-chat/server-python` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
 2. `audio-chat/docs` 和 `audio-chat/testdata/contracts` 定义多端必须共同遵守的公共协议、对象模型和契约测试。
-3. `audio-chat/endpoints-examples` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧由开发者在自己的工程中自行实现，不要求放入 `audio-chat` 目录。
+3. `audio-chat/device-examples` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧由开发者在自己的工程中自行实现，不要求放入 `audio-chat` 目录。
 4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
 
 因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备通讯写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
@@ -166,7 +166,7 @@ audio-chat/
 | ToolGateway | 已实现 | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `tests/acceptance/test_protocol_native_tool_task_contract.py` 与 `tests/test_agent_core_router.py` 覆盖。 |
 | Task Engine | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。 |
 | Output Service | 已实现 | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `tests/test_phase2_providers_output.py` 覆盖。 |
-| Endpoint references | 已实现 | Python playback、Python phone mock 和 web-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。 |
+| Endpoint references | 已实现 | Python playback、Python phone mock 和 browser-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。 |
 | Memory / Skill / MCP | 已实现 | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备通讯能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
 | Signed token / Pairing | 未实现 | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。 |
 
@@ -180,13 +180,13 @@ audio-chat/
 | 自动发现 Tool / Task | `tests/acceptance/test_auto_discovery_developer_contract.py` |
 | 设备注册与订阅分发 | `tests/test_control_service.py`、`testdata/contracts/events/control_device_register_requested.json` |
 | stream chunk 协议 | `tests/test_protocol_contracts.py`、`testdata/contracts/streams/stream_chunk_pcm16le.json` |
-| 资产缓存与能力回放 | `tests/acceptance/test_capability_template_playback.py`、`testdata/contracts/scenarios/playback_minimal.json` |
+| 资产缓存与能力回放 | `tests/acceptance/test_capability_template_playback.py`、`testdata/contracts/scenarios/playback_sdk.json` |
 | Tool / Task 协议原生扩展 | `tests/acceptance/test_protocol_native_tool_task_contract.py` |
 | Output Service 与播放仲裁 | `tests/test_phase2_providers_output.py`、`testdata/contracts/output/output_arbitration_preempt_low_priority.json` |
-| H 线路迁移样板 | `examples/migration-templates`、`tests/acceptance/test_migration_template_contract.py` |
+| H 线路迁移样板 | `app-examples/for-blind-app/templates`、`tests/acceptance/test_migration_template_contract.py` |
 | Memory / Skill / MCP 能力面 | `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` |
-| 老业务能力迁移样板 | `examples/for-blind-app`、`tests/acceptance/test_for_blind_capabilities_playback.py`、`tests/acceptance/test_old_sdk_capability_migration_contract.py`、`old-sdk-parity-capabilities` |
-| 老 SDK 可用性文档入口 | `README.md`、`docs/phase3-migration-guide.md`、`docs/old-sdk-parity-troubleshooting.md`、`examples/for-blind-app`、`tests/test_docs_old_sdk_parity.py`、`tests/acceptance/test_docs_current_state_contract.py` |
+| 老业务能力迁移样板 | `app-examples/for-blind-app`、`tests/acceptance/test_for_blind_capabilities_playback.py`、`tests/acceptance/test_old_sdk_capability_migration_contract.py`、`old-sdk-parity-capabilities` |
+| 老 SDK 可用性文档入口 | `README.md`、`docs/phase3-migration-guide.md`、`docs/old-sdk-parity-troubleshooting.md`、`app-examples/for-blind-app`、`tests/test_docs_old_sdk_parity.py`、`tests/acceptance/test_docs_current_state_contract.py` |
 
 ### 3.7 公开扩展 API
 
@@ -3111,12 +3111,12 @@ await context.devices.submit_text(
 建议目录：
 
 ```text
-audio-chat/endpoints-examples/
+audio-chat/device-examples/
   esp32-glass/
   web-js/
   ios-phone/
   python-glass-playback/
-  python-phone-mock/
+  python-phone/
 ```
 
 ### 14.1 ESP32 Endpoint
@@ -3204,7 +3204,7 @@ audio-chat/endpoints-examples/
 
 研发流程必须允许开发者先用回放和 mock 快速闭环，再进入真机。真机联调不应该是验证 Tool / Task 业务逻辑的唯一方式。
 
-当前 Phase 2.5 之后，端侧优先验证目标是 `web-glass`：浏览器用 WebRTC AEC / NS / AGC 采集麦克风，并在同一页面播放 server 下行音频。`web-glass + Omni Realtime` 链路不需要页面提交 turn，也不依赖浏览器发送 `final:true` 触发回复；turn 判断交给 provider 的 turn detection / semantic VAD。
+当前 Phase 2.5 之后，端侧优先验证目标是 `browser-glass`：浏览器用 WebRTC AEC / NS / AGC 采集麦克风，并在同一页面播放 server 下行音频。`browser-glass + Omni Realtime` 链路不需要页面提交 turn，也不依赖浏览器发送 `final:true` 触发回复；turn 判断交给 provider 的 turn detection / semantic VAD。
 
 ### 15.2 安装 SDK 和 CLI
 
@@ -3266,8 +3266,8 @@ CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、�
 
 ```bash
 uv run audio-chat.config.sync \
-  --app-root examples/minimal \
-  --config audio-chat/examples/minimal/server.yaml
+  --app-root app-examples/basic-app \
+  --config audio-chat/app-examples/basic-app/server.yaml
 ```
 
 同步命令应做这些事：
@@ -3282,7 +3282,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 uv run audio-chat.config.sync \
-  --config audio-chat/examples/minimal/server.yaml \
+  --config audio-chat/app-examples/basic-app/server.yaml \
   --public-url http://192.168.1.23:8765
 ```
 
@@ -3299,7 +3299,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 uv run audio-chat.server.run \
-  --config audio-chat/examples/minimal/server.yaml
+  --config audio-chat/app-examples/basic-app/server.yaml
 ```
 
 业务项目启动时默认不需要指定业务装配入口。Tool / Task 由 YAML 中的自动发现配置加载：
@@ -3332,21 +3332,21 @@ Omni Realtime 联调启动：
 
 ```bash
 DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
-  --config audio-chat/examples/minimal/server-omni.yaml
+  --config audio-chat/app-examples/basic-app/server-omni.yaml
 ```
 
 然后直接打开独立参考端侧页面：
 
 ```text
-audio-chat/endpoints-examples/web-glass/index.html
+audio-chat/device-examples/browser-glass/index.html
 ```
 
-如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/endpoints-examples/web-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
+如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/device-examples/browser-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
 
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
 ```bash
-uv run audio-chat.server.start --config audio-chat/examples/minimal/server.yaml
+uv run audio-chat.server.start --config audio-chat/app-examples/basic-app/server.yaml
 uv run audio-chat.server.logs
 uv run audio-chat.server.stop
 ```
@@ -3362,7 +3362,7 @@ uv run audio-chat.dev.preflight \
   --report audio-chat/runs/preflight.json
 
 uv run audio-chat.playback.glass \
-  --config audio-chat/examples/minimal/playback.yaml
+  --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 回放配置至少包含：
@@ -3402,14 +3402,14 @@ Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅
 
 ```bash
 uv run audio-chat.phone.mock \
-  --config audio-chat/endpoints-examples/python-phone-mock/phone.mock.yaml
+  --config audio-chat/device-examples/python-phone/phone.mock.yaml
 ```
 
 mock 配置应允许声明调试属性和订阅：
 
 ```yaml
 user_id: "user-dev-001"
-device_id: "dev-python-phone-mock-001"
+device_id: "dev-python-phone-001"
 pair_token: "pair-phone-token"
 properties:
   camera.facing: "front"
@@ -3448,7 +3448,7 @@ ESP32 后续目标命令形态，当前未落地：
 ```bash
 uv run audio-chat.esp32.start \
   --app-root /path/to/my-app \
-  --project-dir /path/to/audio-chat/endpoints-examples/esp32-glass \
+  --project-dir /path/to/audio-chat/device-examples/native-esp32-glass \
   --idf-root /path/to/esp-idf \
   --port '/dev/tty.usbmodem*'
 ```
@@ -3468,10 +3468,10 @@ ESP32 命令需要支持：
 本地研发：
 
 1. `uv pip install -e audio-chat`
-2. 后续目标，当前未落地：`uv run audio-chat.config.sync --config audio-chat/examples/minimal/server.yaml`
+2. 后续目标，当前未落地：`uv run audio-chat.config.sync --config audio-chat/app-examples/basic-app/server.yaml`
 3. `uv run audio-chat.dev.preflight --report audio-chat/runs/preflight.json`
-4. `uv run audio-chat.server.run --config audio-chat/examples/minimal/server.yaml`
-5. 另一个终端运行 `uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml`
+4. `uv run audio-chat.server.run --config audio-chat/app-examples/basic-app/server.yaml`
+5. 另一个终端运行 `uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml`
 6. 查看 `runs/audio-chat` 和 `/api/debug/*`
 
 多设备 mock：
@@ -3510,7 +3510,7 @@ ESP32 命令需要支持：
 
 ```bash
 uv run audio-chat.dev.preflight \
-  --config audio-chat/examples/minimal/server.yaml \
+  --config audio-chat/app-examples/basic-app/server.yaml \
   --require-server \
   --report audio-chat/runs/preflight-live.json
 ```
@@ -4028,7 +4028,7 @@ TurnRecorder --> UserMessageStore
 
 ```bash
 audio-chat.playback.glass \
-  --config audio-chat/examples/blind-assistant/playback/look_around.yaml
+  --config audio-chat/app-examples/blind-assistant/playback/look_around.yaml
 ```
 
 回放断言：
@@ -4151,7 +4151,7 @@ audio-chat/
 ```bash
 uv run python -m pytest audio-chat/tests -q
 uv run audio-chat.dev.preflight --report audio-chat/runs/preflight.json
-uv run audio-chat.playback.glass --config audio-chat/examples/minimal/playback.yaml
+uv run audio-chat.playback.glass --config audio-chat/app-examples/basic-app/host/glass-playback/sdk-playback.yaml
 ```
 
 ## 21. 第二阶段能力
