@@ -38,9 +38,9 @@ def _register_device(
     endpoint,
     user_id: str,
     device_id: str,
-    capabilities: dict,
     subscriptions: list[dict],
     name: str | None = None,
+    properties: dict | None = None,
 ) -> None:
     app.register_device(
         Event(
@@ -51,7 +51,7 @@ def _register_device(
                 "device_id": device_id,
                 "name": name or device_id,
                 "auth": {"mode": "disabled"},
-                "capabilities": capabilities,
+                "properties": dict(properties or {}),
                 "subscriptions": subscriptions,
             },
         ),
@@ -73,7 +73,6 @@ def test_capture_photo_uses_sensor_rgb_asset_stream(tmp_path) -> None:
         endpoint=endpoint,
         user_id="user-photo",
         device_id="dev-camera",
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
 
@@ -148,7 +147,6 @@ def test_builtin_capture_photo_tool_uses_sensor_rgb_asset_stream(tmp_path) -> No
         endpoint=endpoint,
         user_id="user-photo-tool",
         device_id="dev-camera-tool",
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
     session_id = app.active_session_id("user-photo-tool")
@@ -183,7 +181,6 @@ def test_start_phone_video_link_tool_publishes_continuous_rgb_config(tmp_path) -
         endpoint=endpoint,
         user_id="user-video-link",
         device_id="dev-video",
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
     session_id = app.active_session_id("user-video-link")
@@ -223,7 +220,6 @@ def test_close_continuous_dialog_tool_requests_close_after_reply(tmp_path) -> No
         endpoint=endpoint,
         user_id="user-dialog",
         device_id="dev-dialog",
-        capabilities={"streams.consume": ["actuator.speaker"]},
         subscriptions=[{"event": "control.audio_session.*"}],
     )
     session_id = app.active_session_id("user-dialog")
@@ -291,7 +287,6 @@ def test_configure_stream_publishes_protocol_event_without_device_id(tmp_path) -
         endpoint=endpoint,
         user_id="user-stream",
         device_id="dev-rgb",
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
 
@@ -351,11 +346,11 @@ def test_watch_assets_filters_by_since_timestamp(tmp_path) -> None:
     assert asyncio.run(collect()) == [2]
 
 
-def test_notify_enters_output_service_and_find_device_is_read_only(tmp_path) -> None:
-    """测试目标：验证通知输出和设备查找都走开发者安全 API。
+def test_notify_enters_output_service_and_device_snapshot_is_read_only(tmp_path) -> None:
+    """测试目标：验证通知输出和设备快照都走开发者安全 API。
 
-    测试方法：注册 speaker 设备，调用 `notify()` 和 `find_device()`。
-    预期结果：通知进入 output stream；设备句柄只有只读 snapshot，不提供发送事件方法。
+    测试方法：注册 speaker 设备，调用 `get_devices()` 和 `notify()`。
+    预期结果：通知进入 output stream；设备快照只包含只读元数据，不提供发送事件方法。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
@@ -366,26 +361,26 @@ def test_notify_enters_output_service_and_find_device_is_read_only(tmp_path) -> 
         user_id="user-notify",
         device_id="dev-speaker",
         name="客厅扬声器模拟设备",
-        capabilities={"streams.consume": ["actuator.speaker"], "audio.output": True},
+        properties={"audio.output": True},
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
     )
     context = UserDeviceContext(user_id="user-notify", app=app)
 
-    handle = context.find_device(capability="actuator.speaker")
+    devices = context.get_devices()
     context.notify("测试通知", priority="high", ttl_seconds=5)
 
-    assert handle is not None
-    assert handle.snapshot.device_id == "dev-speaker"
-    assert handle.snapshot.name == "客厅扬声器模拟设备"
-    assert not hasattr(handle, "publish_event")
+    assert len(devices) == 1
+    assert devices[0].device_id == "dev-speaker"
+    assert devices[0].name == "客厅扬声器模拟设备"
+    assert not hasattr(devices[0], "publish_event")
     assert any(event.event_name == "stream.output.open.requested" for event in endpoint.events)
     assert endpoint.chunks
 
 
-def test_stream_output_routes_from_subscription_without_find_device_capability(tmp_path) -> None:
-    """测试目标：验证 stream 输出路由不依赖 `find_device(capability=...)`。
+def test_stream_output_routes_from_subscription_without_extra_declarations(tmp_path) -> None:
+    """测试目标：验证 stream 输出路由只依赖事件订阅。
 
-    测试方法：注册只订阅 `actuator.speaker` 输出事件的设备，不提供 capabilities，
+    测试方法：注册只订阅 `actuator.speaker` 输出事件的设备，不提供 properties，
     直接通过 `submit_audio()` 输出。
     预期结果：设备收到 output stream 事件和音频 chunk。
     """
@@ -398,14 +393,11 @@ def test_stream_output_routes_from_subscription_without_find_device_capability(t
         user_id="user-subscription-only",
         device_id="dev-speaker-subscription-only",
         name="仅订阅扬声器设备",
-        capabilities={},
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
     )
 
     context = UserDeviceContext(user_id="user-subscription-only", app=app)
-    handle = context.find_device("actuator.speaker")
     context.submit_audio(b"\x00\x00\x01\x00", codec="pcm16le")
 
-    assert handle is None
     assert any(event.event_name == "stream.output.open.requested" for event in endpoint.events)
     assert endpoint.chunks

@@ -133,7 +133,6 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
             payload={
                 "device_id": "dev-effective-config",
                 "auth": {"mode": "disabled"},
-                "capabilities": {"streams.produce": ["sensor.rgb"]},
                 "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
             },
         )
@@ -167,10 +166,6 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
             payload={
                 "device_id": "dev-playback",
                 "auth": {"mode": "disabled"},
-                "capabilities": {
-                    "streams.produce": ["sensor.mic"],
-                    "streams.consume": ["actuator.speaker"],
-                },
                 "subscriptions": [
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
@@ -253,7 +248,6 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
                 payload={
                     "device_id": connection.device_id,
                     "auth": {"mode": "disabled"},
-                    "capabilities": {"streams.consume": ["actuator.speaker"]},
                     "subscriptions": [
                         {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                     ],

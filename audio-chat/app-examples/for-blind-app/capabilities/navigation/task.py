@@ -69,7 +69,6 @@ class NavigationTask(BaseTask):
                     "sensor.rgb",
                     mode="single",
                     payload={"reason": "navigation_visual_confirm", "format": "jpeg"},
-                    require_capability="sensor.rgb",
                 )
         if context.bridge is not None:
             context.bridge.handle_event(

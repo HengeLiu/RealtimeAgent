@@ -126,11 +126,7 @@ def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path
             runs_root=str(tmp_path / "runs"),
             device_name="rgb-only",
             client_type="python-mock-rgb",
-            capabilities={
-                "streams.produce": ["sensor.rgb"],
-                "streams.consume": [],
-                "sensor.rgb": True,
-            },
+            properties={"camera.role": "rgb-only"},
             subscriptions=[
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
             ],
@@ -142,10 +138,7 @@ def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path
             runs_root=str(tmp_path / "runs"),
             device_name="speaker-only",
             client_type="python-mock-speaker",
-            capabilities={
-                "streams.produce": [],
-                "streams.consume": ["actuator.speaker"],
-            },
+            properties={"speaker.role": "speaker-only"},
             subscriptions=[
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
             ],
@@ -280,10 +273,6 @@ def test_failed_network_registration_does_not_allow_stream_connection(tmp_path: 
                                 "client_type": "python-playback",
                                 "sdk_version": "audio-chat-test",
                                 "auth": {"mode": "static_token", "token": "token-bad"},
-                                "capabilities": {
-                                    "streams.produce": ["sensor.mic"],
-                                    "streams.consume": ["actuator.speaker"],
-                                },
                                 "subscriptions": [{"event": "stream.output.*"}],
                             },
                         ).to_dict(),

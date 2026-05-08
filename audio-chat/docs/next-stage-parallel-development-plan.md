@@ -49,7 +49,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 1. 开发者可以用一组文档命令完成安装、配置、启动和停止，不需要理解内部服务对象。
 2. 开发者可以复制示例 app-root，新建一个 Tool 或 Task 后无需修改 `app.py` 即可被自动发现。
 3. 开发者可以用 Python phone mock、Python glass playback 或 web-glass 完成设备级回放。
-4. 开发者可以在 Tool / Task 中只通过事件和 stream 使用设备能力，不接触 `device_id` 点对点发送细节。
+4. 开发者可以在 Tool / Task 中只通过事件和 stream 使用设备通讯能力，不接触 `device_id` 点对点发送细节。
 5. 回放结束后必须产出可检查文件，包括事件、stream、agent、tool、task、asset、output 和最终结果。
 6. 文档里标记为“已实现”的开发命令和公开 API 必须有验收脚本覆盖。
 
@@ -66,8 +66,8 @@ uv run python scripts/acceptance_check.py all --keep-going \
 ## 3. 下一阶段原则
 
 1. 继续保持 server 与 endpoint 边界：server 只接受和下发 stream / event，不录音、不播放。
-2. Tool / Task 仍然只能通过 `UserDeviceContext` 使用设备能力，不能按 `device_id` 点对点发送。
-3. MCP、Skill、Memory 不允许直接持有 `UserDeviceContext`；需要设备能力时必须封装为 Tool 或 Task。
+2. Tool / Task 仍然只能通过 `UserDeviceContext` 使用设备通讯能力，不能按 `device_id` 点对点发送。
+3. MCP、Skill、Memory 不允许直接持有 `UserDeviceContext`；需要设备通讯能力时必须封装为 Tool 或 Task。
 4. 音频主链路优先级最高，先解决实时性、生命周期、关闭和打断。
 5. 端侧参考实现优先顺序：Python playback、web-glass、Python phone mock、iOS、ESP32-S3。
 6. 所有线路必须补自动验收。验收脚本可以先按 lane 增量扩展，但最终必须进入 `acceptance_check.py all`。
@@ -486,7 +486,7 @@ uv run python scripts/acceptance_check.py auth-device-management
 1. `MemoryService` 已提供 `MemoryRecord`、jsonl store、`write/search/delete` 和 `memory_search` / `manage_memory` 内置 Tool。
 2. `SkillService` 已支持从配置 roots 读取 `SKILL.md` / metadata，输出 description、tool allowlist 和 prompt snippets，并通过 `read_skill` Tool 暴露给 Agent。
 3. `McpGateway` 已支持从 yaml/json 配置读取 MCP tool 描述、本地 mock 调用、默认超时和 `mcp_call` Tool。
-4. `ToolContextFactory` 已注入 memory / skills / mcp；三者不持有 `UserDeviceContext`，设备能力仍只能经普通 Tool / Task 使用。
+4. `ToolContextFactory` 已注入 memory / skills / mcp；三者不持有 `UserDeviceContext`，设备通讯能力仍只能经普通 Tool / Task 使用。
 5. `memory-skill-mcp` lane 已有独立自动验收。
 
 写入范围：
@@ -531,7 +531,7 @@ audio-chat/examples/minimal/server.yaml
 5. ToolGateway 集成：
    - ToolContextFactory 注入 memory、skills、mcp。
    - Skill 可影响 tool allowlist，但不绕过 ToolPolicy。
-   - MCP / Skill 需要设备能力时，必须封装为普通 Tool 或 Task。
+   - MCP / Skill 需要设备通讯能力时，必须封装为普通 Tool 或 Task。
 
 验收命令：
 
@@ -711,7 +711,7 @@ audio-chat/tests/test_endpoint_config_sync.py
    AEC / NS / AGC、持续 `sensor.mic`、speaker 播放回执、用户打断和 Realtime
    模式不发送 final。
 2. `python-phone-mock` 已有网络 endpoint，能通过真实 `/ws/control` 注册，按
-   capability/subscription 接收 `sensor.rgb` 采集请求，使用 `/ws/stream` 上传 RGB
+   event/subscription 接收 `sensor.rgb` 采集请求，使用 `/ws/stream` 上传 RGB
    资产，并消费 `actuator.speaker` / `actuator.haptic` 输出 stream。
 3. `ios-phone` 和 `esp32-s3` 已提交目录、README 和最小配置样例，作为后续端侧小组
    的协议锚点；本阶段不阻塞 simulator build 或真机固件。
@@ -777,7 +777,7 @@ audio-chat/tests/test_endpoint_config_sync.py
 2. Control WebSocket：
    - 连接 `/ws/control`。
    - 发送 `control.device.register.requested`。
-   - 携带 `user_id`、`device_id`、capabilities、subscriptions 和 auth。
+   - 携带 `user_id`、`device_id`、properties、subscriptions 和 auth。
    - 接收并处理 `control.device.registered`、`stream.output.*`、`stream.control.*`。
 3. Stream WebSocket：
    - 支持上传 `sensor.mic` 或测试 PCM stream。
@@ -971,7 +971,7 @@ uv run python scripts/acceptance_check.py developer-experience
 1. 架构文档已补充真实状态矩阵，按已实现、部分实现、未实现区分当前能力和 roadmap。
 2. `phase3-migration-guide.md` 已提供旧 SDK 到 `audio-chat` 的概念映射、迁移约束、样板路径和联调观察点。
 3. `testdata/contracts` 已补齐 auth 注册 golden、task lifecycle golden 和 output arbitration golden；事件 golden 与 stream chunk golden 继续沿用上一阶段契约。
-4. `examples/migration-templates` 已提供 `find_object` Tool、`continuous_rgb_analyze` Task 和 `notification_task` Task 样板，均只通过 `UserDeviceContext` 使用设备能力。
+4. `examples/migration-templates` 已提供 `find_object` Tool、`continuous_rgb_analyze` Task 和 `notification_task` Task 样板，均只通过 `UserDeviceContext` 使用设备通讯能力。
 5. `next-docs-contract` lane 已接入文档、契约和迁移样板自动验收。
 
 写入范围：

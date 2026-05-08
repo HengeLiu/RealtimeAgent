@@ -40,7 +40,6 @@ class ContinuousRgbAnalyzeTask(BaseTask):
                 "asset_policy": "cache",
                 "correlation_id": correlation_id,
             },
-            require_capability="sensor.rgb",
             selection="first_available",
         )
 
@@ -86,6 +85,5 @@ class ContinuousRgbAnalyzeTask(BaseTask):
                 "stream.control.configure.requested",
                 stream_type="sensor.rgb",
                 payload={"mode": "stop", "reason": "task_cancelled"},
-                require_capability="sensor.rgb",
                 selection="all",
             )

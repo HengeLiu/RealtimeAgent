@@ -4,7 +4,7 @@ import asyncio
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import CONTROL_EVENTS, Event, StreamChunk
-from audio_chat.tools import DeviceHandle, UserDeviceContext
+from audio_chat.tools import UserDeviceContext
 
 
 class RecordingEndpoint:
@@ -58,8 +58,8 @@ def register_endpoint(
     app: AudioChatApp,
     endpoint: RecordingEndpoint,
     *,
-    capabilities: dict,
     subscriptions: list[dict],
+    properties: dict | None = None,
 ) -> None:
     response = app.register_device(
         Event(
@@ -72,7 +72,7 @@ def register_endpoint(
                 "client_type": "acceptance",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "capabilities": capabilities,
+                "properties": dict(properties or {}),
                 "subscriptions": subscriptions,
             },
         ),
@@ -102,14 +102,13 @@ def test_user_device_context_exposes_protocol_native_api_only(tmp_path) -> None:
     assert not hasattr(context, "get_or_request_asset")
     assert not hasattr(context, "submit_output")
 
-    # No selected-device RPC surface is allowed. Device selection may exist for snapshots,
-    # but Tool/Task communication must go through protocol events and streams.
-    assert not hasattr(DeviceHandle, "start_task")
-    assert not hasattr(DeviceHandle, "configure_stream")
-    assert not hasattr(DeviceHandle, "open_stream")
+    # Tool/Task communication must go through protocol events and streams.
+    assert not hasattr(context, "find_device")
+    assert not hasattr(context, "publish_to_device")
+    assert not hasattr(context, "open_device_stream")
 
 
-def test_publish_event_broadcasts_by_capability_and_subscription_not_device_id(tmp_path) -> None:
+def test_publish_event_broadcasts_by_subscription_not_device_id(tmp_path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     first = RecordingEndpoint(app=app, user_id="user-broadcast", device_id="dev-rgb-1")
     second = RecordingEndpoint(app=app, user_id="user-broadcast", device_id="dev-rgb-2")
@@ -119,13 +118,11 @@ def test_publish_event_broadcasts_by_capability_and_subscription_not_device_id(t
         register_endpoint(
             app,
             endpoint,
-            capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
             subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         )
     register_endpoint(
         app,
         other,
-        capabilities={"streams.consume": ["actuator.haptic"]},
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}}],
     )
 
@@ -150,7 +147,6 @@ def test_payload_only_control_event_does_not_open_stream(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        capabilities={"navigation.endpoint": True},
         subscriptions=[
             {
                 "event": "control.device.command.requested",
@@ -181,7 +177,6 @@ def test_continuous_sensor_stream_is_read_via_asset_watch(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
     context = UserDeviceContext(user_id="user-video", app=app)

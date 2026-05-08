@@ -53,7 +53,7 @@ class McpGateway:
     """MCP 工具调用网关。
 
     主要功能：读取本地 MCP 配置，管理 tool 描述并提供统一调用入口。
-    主要约束：本类不持有 `UserDeviceContext`；MCP 需要设备能力时必须
+    主要约束：本类不持有 `UserDeviceContext`；MCP 需要设备通讯能力时必须
     暴露为普通 Tool 或 Task 后再由业务代码通过 `context.devices` 完成。
     """
 

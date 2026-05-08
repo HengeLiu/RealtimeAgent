@@ -29,10 +29,6 @@ def _registration(device_id: str, subscriptions: list[dict]) -> Event:
             "client_type": "python-playback",
             "sdk_version": "audio-chat-endpoint-0.1.0",
             "auth": {"mode": "disabled"},
-            "capabilities": {
-                "streams.produce": ["sensor.mic"],
-                "streams.consume": ["actuator.speaker"],
-            },
             "subscriptions": subscriptions,
         },
     )
@@ -107,7 +103,6 @@ def test_stream_event_routes_by_subscription_without_capabilities() -> None:
     service = ControlService()
     camera = FakeConnection("camera")
     event = _registration("camera", [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}])
-    event.payload.pop("capabilities", None)
     event.payload["properties"] = {"camera.facing": "front"}
     service.register_device(event, camera)
 
@@ -125,7 +120,7 @@ def test_stream_event_routes_by_subscription_without_capabilities() -> None:
     assert camera.events[-1].event_name == "stream.control.configure.requested"
     snapshot = service.build_device_snapshot("camera")
     assert snapshot["properties"] == {"camera.facing": "front"}
-    assert snapshot["capabilities"] == {}
+    assert "capabilities" not in snapshot
 
 
 def test_control_service_public_publish_does_not_accept_target_device_id() -> None:

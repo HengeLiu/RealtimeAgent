@@ -44,7 +44,7 @@ uv run audio-chat.web.open --print-url
 4. `subscriptions`
 5. `properties`
 
-页面不依赖 `capabilities` 做路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
+页面不依赖旧能力字段做路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
 
 ## 音频测试模式
 
@@ -59,4 +59,3 @@ uv run audio-chat.web.open --print-url
 3. `关闭麦克风 stream`
 
 连续对话和 Omni Realtime 测试优先使用“保持连接并发送静音”。
-

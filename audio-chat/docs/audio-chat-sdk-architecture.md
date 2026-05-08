@@ -37,7 +37,7 @@
 4. 对外暴露了过多 frame、path、设备类型等低层细节，开发者需要理解太多历史兼容概念。
 5. 旧 SDK 同时包含 server、phone、glass 三端产品化职责，导致 Python 包、端侧工程、业务样板和打包发布边界不够干净。
 6. 文档里有多条阶段性设计，后续开发者容易分不清哪些是当前真实链路，哪些只是历史方案。
-7. `DeviceGroupContext` 对业务开发友好，但名字和 group_id 绑定过深；新版应保留“按能力使用设备”的体验，去掉固定 group 和端侧角色前提。
+7. `DeviceGroupContext` 对业务开发友好，但名字和 group_id 绑定过深；新版应保留“通过上下文使用设备通讯”的体验，去掉固定 group 和端侧角色前提。
 8. 旧版内置工具和任务覆盖了查询设备、抓拍、任务状态、取消任务、读 Skill、记忆检索等常见能力；新版应继续提供这些能力，但必须通过事件和 stream 实现，不能保留特殊 RPC。
 
 `audio-chat` 的设计目标是把这些经验收敛为更小、更明确、更可替换的模块。
@@ -135,7 +135,7 @@ audio-chat/
 3. `audio-chat/endpoints-examples` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧由开发者在自己的工程中自行实现，不要求放入 `audio-chat` 目录。
 4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
 
-因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备能力写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
+因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备通讯写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
 
 和旧版三端 SDK 的差异是：
 
@@ -167,7 +167,7 @@ audio-chat/
 | Task Engine | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。 |
 | Output Service | 已实现 | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `tests/test_phase2_providers_output.py` 覆盖。 |
 | Endpoint references | 已实现 | Python playback、Python phone mock 和 web-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。 |
-| Memory / Skill / MCP | 已实现 | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
+| Memory / Skill / MCP | 已实现 | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备通讯能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
 | Signed token / Pairing | 未实现 | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。 |
 
 ### 3.6 已实现能力验收索引
@@ -218,14 +218,12 @@ server 不应决定：
 4. 端侧如何做本地 AEC。
 5. 端侧如何控制摄像头、振动器或其他执行器硬件。
 
-### 4.2 设备没有固定类型，只有能力和订阅
+### 4.2 设备没有固定类型，只有订阅和属性
 
 `audio-chat` 对外不要求开发者先理解 glass、phone、web、mock 等固定设备类型。所有设备都注册到同一个 `user_id` 的运行中设备集合里，每个设备通过不同 `device_id` 区分，并声明：
 
-1. 自己能产生哪些 stream。
-2. 自己能消费哪些 stream。
-3. 自己订阅哪些事件，尤其是可以响应哪些 `*.command.*` 事件。
-4. 自己的端侧处理能力，例如 wake word、AEC、本地推理、相机等。
+1. 自己订阅哪些事件，尤其是可以响应哪些 `*.command.*` 或 `stream.control.*` 事件。
+2. 可选 `properties`，用于日志、debug API 和硬件参数说明，例如 wake word、AEC、本地推理、相机参数等。
 
 示例：
 
@@ -233,12 +231,10 @@ server 不应决定：
 {
   "user_id": "user-001",
   "device_id": "dev-esp32-glass-001",
-  "capabilities": {
-    "streams.produce": ["sensor.mic", "sensor.rgb"],
-    "streams.consume": ["actuator.speaker", "actuator.haptic"],
+  "properties": {
     "audio.wake_word": "endpoint",
     "audio.aec": "endpoint",
-    "sensor.rgb": true
+    "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
@@ -249,14 +245,16 @@ server 不应决定：
 }
 ```
 
-server 内部可以建立 capability 和 subscription 索引，用来选择“哪个设备能提供 `sensor.rgb` 样本”或“哪个设备适合消费 `actuator.speaker` stream”。但这种索引不应暴露为强设备类型。
+server 内部只根据订阅匹配结果选择设备。例如设备订阅
+`stream.control.* + filter(stream_type=sensor.rgb)`，就会收到 RGB 采集配置事件；
+设备订阅 `stream.output.* + filter(stream_type=actuator.speaker)`，就会收到扬声器输出 stream 事件。
 
 说明：
 
 1. 设备注册前只是一个未知控制连接和一份注册请求；注册成功后才会变成 server 内部的 `Device` 对象。
-2. `Device` 是运行态设备抽象，负责维护该设备的身份、能力、订阅、连接、心跳、stream 状态、端侧控制状态和最近错误。
+2. `Device` 是运行态设备抽象，负责维护该设备的身份、属性、订阅、连接、心跳、stream 状态、端侧控制状态和最近错误。
 3. 端侧执行能力不再设计成单独 task 概念，统一表达为设备订阅并响应控制事件；协议层不新增 `start_task`、RPC 或第三种通讯方式。
-4. 例如拍照不应是特殊 RPC。server 只需要向具备 `sensor.rgb=true` 且订阅了 `stream.control.* + filter(stream_type=sensor.rgb)` 的设备发送采集策略事件，真实图片仍由端侧通过 `sensor.rgb` stream 上传。
+4. 例如拍照不应是特殊 RPC。server 只需要向订阅了 `stream.control.* + filter(stream_type=sensor.rgb)` 的设备发送采集策略事件，真实图片仍由端侧通过 `sensor.rgb` stream 上传。
 5. server 侧 `Task Engine` 仍然存在，它负责长流程状态机；端侧只看到与自己有关的 command/result 事件。
 
 ### 4.3 控制信令和 stream 数据分离
@@ -456,7 +454,7 @@ participant "Audio Pipeline" as Audio
 participant "Agent Core" as Agent
 participant "Output Service" as Output
 
-Endpoint -> Control: control.device.register.requested(user_id, capabilities, subscriptions)
+Endpoint -> Control: control.device.register.requested(user_id, properties, subscriptions)
 Control -> Endpoint: control.device.registered
 Endpoint -> Endpoint: 本地等待唤醒词或按键
 Endpoint -> Control: control.user.wake.detected
@@ -718,8 +716,7 @@ filter 字段路径只推荐引用事件信封字段和 `payload` 内字段：
 | `stream_type` | 事件信封或 stream 元数据中的 `stream_type`。 |
 | `payload.mode` | `payload.mode`。 |
 
-`capabilities.*` 是旧示例的兼容字段，不作为新协议推荐写法。新协议中，事件分发
-只看订阅的 `event` 和 `filter`。例如订阅
+新版协议不支持按旧设备声明字段过滤。事件分发只看订阅的 `event` 和 `filter`。例如订阅
 `{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}`
 表示当 server 发布 `stream.control.configure.requested` 且 `stream_type=sensor.rgb`
 时，该设备会收到 RGB 采集配置事件；订阅
@@ -764,7 +761,7 @@ Python 扩展契约：
 | --- | --- | --- |
 | `BaseTool` / `ToolContext` / `ToolResult` | Tool 开发者 | 字段可向后兼容增加，不随内部服务重构改名。 |
 | `BaseTask` / `TaskContext` / `TaskEvent` / `TaskRef` | Task 开发者 | 状态机和事件语义稳定，允许增加可选字段。 |
-| `UserDeviceContext` / `DeviceSnapshot` / `AssetRef` | Tool / Task | 只暴露按能力使用设备的接口，不暴露连接对象。 |
+| `UserDeviceContext` / `DeviceSnapshot` / `AssetRef` | Tool / Task | 只暴露 event、stream 和只读快照接口，不暴露连接对象。 |
 | `Skill` / `Memory` / `MCPGateway` 的 Tool 封装入口 | 能力包开发者 | MCP 和 Skill 不直接拿设备上下文，必须通过 Tool / Task 间接使用设备。 |
 | `AudioChatError` / `ErrorCode` | 所有扩展点 | 所有 SDK 失败都应该返回结构化错误，避免只抛底层异常字符串。 |
 
@@ -782,7 +779,7 @@ Python 扩展契约：
 
 | 契约 | 说明 |
 | --- | --- |
-| 回放场景 YAML | 描述设备能力、订阅、输入音频、资产样本、执行器记录和断言。 |
+| 回放场景 YAML | 描述设备属性、订阅、输入音频、资产样本、执行器记录和断言。 |
 | golden event JSON | 验证 Event 信封、订阅 filter、错误响应和 stream 生命周期。 |
 | golden stream chunk | 验证二进制切片 header、payload_size、seq、timestamp 和 stream 元数据。 |
 | 回放 result.json | 固定断言结果、失败原因、工具轨迹、任务事件和播放决策字段。 |
@@ -848,7 +845,6 @@ class DeviceAuthenticator {
 
 class RegistrationValidator {
   +validate_payload(registration)
-  +validate_capabilities(capabilities)
   +validate_subscriptions(subscriptions)
 }
 
@@ -871,7 +867,6 @@ class DeviceRegistry {
   +get(device_id)
   +list_online(user_id)
   +update_heartbeat(device_id)
-  +find_by_capability(user_id, capability)
   +build_snapshot(user_id)
 }
 
@@ -880,7 +875,7 @@ class Device {
   +device_id
   +device_name
   +client_type
-  +capabilities
+  +properties
   +subscriptions
   +connection
   +stream_states
@@ -891,8 +886,6 @@ class Device {
   +mark_offline(reason)
   +update_registration(registration)
   +update_heartbeat(now)
-  +can_produce(stream_type)
-  +can_consume(stream_type)
   +snapshot()
 }
 
@@ -901,7 +894,7 @@ class DeviceSnapshot {
   +device_id
   +device_name
   +client_type
-  +capabilities
+  +properties
   +subscriptions
   +connection_state
   +stream_states
@@ -968,7 +961,7 @@ Device --> DeviceSnapshot
 
 1. server 只看到一个控制连接和 `control.device.register.requested`。
 2. 此时不能把连接加入用户设备集合，也不能参与订阅分发。
-3. 鉴权、协议版本、能力声明和订阅声明都通过后，才创建或刷新 `Device`。
+3. 鉴权、协议版本、属性格式和订阅声明都通过后，才创建或刷新 `Device`。
 
 注册后：
 
@@ -983,7 +976,7 @@ Device --> DeviceSnapshot
 | 状态 | 说明 |
 | --- | --- |
 | identity | `user_id`、`device_id`、`device_name`、`client_type`、`sdk_version`。 |
-| capabilities | 设备声明的感知器、执行器、音频处理、本地算力和扩展能力。 |
+| properties | 设备提交的日志、debug API 和硬件参数说明，不参与路由。 |
 | subscriptions | 设备注册时提交的订阅策略。 |
 | connection | 当前控制连接、连接时间、心跳时间、在线 / 离线状态。 |
 | stream_states | 该设备正在生产或消费的 stream 摘要。 |
@@ -1002,12 +995,9 @@ title Device 运行态关系
 
 class Device {
   +snapshot()
-  +can_produce(stream_type)
-  +can_consume(stream_type)
 }
 
 class DeviceSnapshot
-class DeviceHandle
 class UserDeviceContext
 class ActiveDeviceSet
 class DeviceRegistry
@@ -1021,8 +1011,7 @@ ControlService --> SubscriptionIndex
 DeviceRegistry --> Device
 ActiveDeviceSet --> Device
 Device --> DeviceSnapshot
-UserDeviceContext --> DeviceHandle
-DeviceHandle --> DeviceSnapshot
+UserDeviceContext --> DeviceSnapshot
 @enduml
 ```
 
@@ -1030,8 +1019,8 @@ DeviceHandle --> DeviceSnapshot
 
 1. `Device` 是 SDK 内部运行态对象。
 2. `DeviceSnapshot` 是只读数据。
-3. `DeviceHandle` 是 Tool / Task 可使用的受限操作句柄。
-4. `UserDeviceContext` 负责在当前 `user_id` 的 active device set 中选择设备，并返回 `DeviceSnapshot` 或 `DeviceHandle`。
+3. `UserDeviceContext.get_devices()` 只返回当前 `user_id` active device set 的只读快照。
+4. Tool / Task 真正和设备通讯时，必须通过 `publish_event()`、`configure_stream()`、`request_asset()` 或 `open_output_stream()`。
 
 ### 7.4 设备注册、验证与用户绑定
 
@@ -1053,12 +1042,10 @@ DeviceHandle --> DeviceSnapshot
       "mode": "static_token",
       "token": "pair-demo-token"
     },
-    "capabilities": {
-      "streams.produce": ["sensor.mic", "sensor.rgb"],
-      "streams.consume": ["actuator.speaker", "actuator.haptic"],
+    "properties": {
       "audio.wake_word": "endpoint",
       "audio.aec": "endpoint",
-      "sensor.rgb": true
+      "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
     },
     "subscriptions": [
       {"event": "control.audio_session.*"},
@@ -1080,7 +1067,7 @@ DeviceHandle --> DeviceSnapshot
 | `payload.client_type` | 端侧实现标识，例如 `esp32-glass`、`ios-phone`、`python-playback`；只用于调试、兼容和默认配置，不作为强设备类型路由。 |
 | `payload.sdk_version` | 端侧协议版本，用于兼容检查。 |
 | `payload.auth` | 注册鉴权信息。不同鉴权模式字段不同。 |
-| `payload.capabilities` | 设备能力声明。 |
+| `payload.properties` | 可选调试属性和硬件参数说明，不参与路由。 |
 | `payload.subscriptions` | 设备订阅声明。 |
 
 注册处理流程：
@@ -1094,11 +1081,11 @@ DeviceHandle --> DeviceSnapshot
    - static_token：检查配置中的 auth.device_tokens[device_id] 是否匹配。
    - signed_token：校验签名、过期时间、user_id 和 device_id。
    - disabled：只允许测试环境。
-5. 校验 capabilities：stream 类型必须是内置或已注册扩展类型，不能声明未知硬件能力。
+5. 校验 properties：必须是对象，只保存用于日志和 debug 的信息，不参与路由。
 6. 校验 subscriptions：事件名必须符合命名规范，filter 只能使用第一版支持的字段等值或数组包含匹配。
 7. 绑定 user_id 和 device_id：
    - 首次注册：写入 UserBindingStore。
-   - 已绑定同一 user_id：刷新在线状态和能力。
+   - 已绑定同一 user_id：刷新在线状态、属性和订阅。
    - 已绑定其他 user_id：拒绝注册，返回 control.device.register.failed。
 8. 如果 user.active_device_set_policy=single，确保该 user_id 只有一个 active device set；新设备加入当前集合，不创建第二个集合。
 9. 创建或刷新 `Device`，并写入 DeviceRegistry、SubscriptionIndex、DeviceConnectionRegistry。
@@ -1574,7 +1561,7 @@ Tool 或 Task 获取传感器数据时，应优先读取缓存，再按需请求
 ```text
 1. 查询 Asset Store 是否已有满足条件的资产。
 2. 如果命中，直接返回 AssetRef。
-3. 如果未命中，根据 capability 和 subscription 找到可提供该 stream 的设备。
+3. 如果未命中，发布带 `stream_type` 的控制事件，由订阅命中的设备上传该 stream。
 4. 发送 stream.control.configure.requested 事件，请端侧上传单帧或短时间片。
 5. 等待 Asset Service 写入 Asset Store。
 6. 返回 AssetRef，或在超时后返回明确失败原因。
@@ -1889,7 +1876,7 @@ tools = tool_gateway.build_provider_tools(
 
 说明：
 
-1. 设备能力不应在工具发现阶段硬编码成“有设备才暴露工具”。例如 `look_around` 可以始终暴露，执行时如果没有 `sensor.rgb` 设备，再返回可解释错误。
+1. 工具发现阶段不应硬编码成“有设备才暴露工具”。例如 `look_around` 可以始终暴露，执行时如果没有设备订阅 `sensor.rgb` 采集事件，再返回可解释错误。
 2. 如果某个业务希望动态隐藏工具，可以通过 Skill 或 ToolPolicy 实现，但不应让 Agent Core 直接查询设备列表来拼工具清单。
 3. Realtime 模型通常在 session 配置时提交 tool schema；文本模型通常在每次模型请求时提交 tool schema。
 
@@ -1936,8 +1923,8 @@ class ToolContext:
 
 约束：
 
-1. Tool 只能通过 `context.devices` 使用设备能力，不能直接拿 Control Service 或 Stream Service。
-2. MCP 和 Skill 不直接拿 `UserDeviceContext`。如果需要设备能力，必须封装为 Tool 或 Task。
+1. Tool 只能通过 `context.devices` 使用设备通讯能力，不能直接拿 Control Service 或 Stream Service。
+2. MCP 和 Skill 不直接拿 `UserDeviceContext`。如果需要设备通讯能力，必须封装为 Tool 或 Task。
 3. Tool 结果里可以返回 `AssetRef`、文本、结构化 JSON 或错误；不要返回大媒体字节。
 4. 如果工具执行会产生长流程，应创建 server 侧 Task，并返回 `task_id` 或状态摘要。
 5. 用户打断时，Agent Core 取消当前模型响应；已开始执行的 Tool 是否取消由 ToolExecutor 和 TaskEngine 根据工具声明决定。
@@ -2768,18 +2755,15 @@ TaskEventBridge --> AgentCoreRouter
 
 | 概念 | 使用者 | 说明 |
 | --- | --- | --- |
-| `Device` | SDK 内部 | 注册成功后的运行态设备对象，维护连接、心跳、能力、订阅、stream 状态和端侧控制状态。 |
+| `Device` | SDK 内部 | 注册成功后的运行态设备对象，维护连接、心跳、属性、订阅、stream 状态和端侧控制状态。 |
 | `DeviceSnapshot` | Tool / Task / 调试接口 | `Device` 的只读快照，用于查询当前设备状态。 |
-| `DeviceHandle` | Tool / Task | 旧兼容只读句柄，不提供任意点对点发事件能力。 |
 
 业务代码不直接构造或保存 `Device`。如果需要跨异步步骤保存引用，应保存
-`StreamHandle`、`AssetRef` 或 server 侧 `TaskRef`；不要长期缓存 `DeviceHandle`
-后假设连接永远有效。
+`StreamHandle`、`AssetRef` 或 server 侧 `TaskRef`；不要保存某个设备实例后假设连接永远有效。
 
 ```python
 class UserDeviceContext:
-    def get_devices(self, capability: str | None = None) -> list[DeviceSnapshot]: ...
-    def find_device(self, capability: str) -> DeviceHandle | None: ...
+    def get_devices(self) -> list[DeviceSnapshot]: ...
     def publish_event(
         self,
         event_name: str,
@@ -2816,10 +2800,6 @@ class UserDeviceContext:
     def submit_text(self, text: str, *, priority: str = "normal", ttl_seconds: int = 0) -> OutputSubmitResult: ...
     def submit_audio(self, audio: AsyncIterable[bytes], *, codec: str, priority: str = "normal") -> OutputSubmitResult: ...
 
-class DeviceHandle:
-    snapshot: DeviceSnapshot
-
-    def refresh_snapshot(self) -> DeviceSnapshot: ...
 ```
 
 业务能力可以使用协议事件名和 payload 表达意图，但不得直接构造完整事件信封、绕过订阅投递，也不得直接拼接底层 `StreamChunk` 二进制切片。
@@ -2857,16 +2837,15 @@ API 命名约定：
 | 请求设备采集数据 | `publish_event("stream.control.configure.requested", stream_type=...)` 或 `request_asset(...)` | 发布协议事件，端侧再打开 `sensor.*` stream 上传数据。 | 拍一张照片、上传一段 IMU 窗口、开启低频深度图采样。 |
 | 向设备发送数据 | `open_output_stream(...)` 或 `submit_text()` / `submit_audio()` | 打开 `actuator.*` output stream，再写入字节。 | 播放音频、振动模式、未来其他执行器字节流。 |
 | 持续处理传感器数据 | `publish_event("stream.control.configure.requested", ...)` + `watch_assets(...)` | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。 |
-| 查询设备状态 | `get_devices()` / `find_device()` | 读取 server 内部 `DeviceSnapshot`。 | 判断当前是否有相机、IMU、本地导航能力。 |
+| 查询设备状态 | `get_devices()` | 读取 server 内部 `DeviceSnapshot`。 | 展示当前在线设备、订阅和调试属性。 |
 
-Tool / Task 能否找到设备，取决于端侧注册时声明的 capability 和 subscription。端侧至少要声明两类信息：
+Tool / Task 发出的事件能否到达设备，取决于端侧注册时提交的 subscription。端侧至少要声明订阅策略：
 
 ```json
 {
-  "capabilities": {
-    "streams.produce": ["sensor.rgb", "sensor.imu"],
-    "streams.consume": ["actuator.speaker", "actuator.haptic"],
-    "navigation.endpoint": true
+  "properties": {
+    "camera.facing": "front",
+    "navigation.provider": "local"
   },
   "subscriptions": [
     {
@@ -2893,7 +2872,7 @@ Tool / Task 能否找到设备，取决于端侧注册时声明的 capability �
 
 1. `subscriptions` 说明设备愿意接收哪些控制事件。
 2. 事件分发只看 `event` 和 `filter` 是否命中。
-3. `capabilities` 是旧字段或调试字段，不参与新协议的事件分发。
+3. `properties` 只用于日志、debug API 和硬件参数说明。
 4. 如果设备没有订阅对应事件，server 不会把控制事件推给它。
 
 代码不能写死 `device_id`。`device_id` 是运行时设备实例标识，只能出现在注册、日志、调试快照和回执里。Tool / Task 应该按下面这些条件表达需求：
@@ -2922,7 +2901,7 @@ Tool / Task 提交意图
 2. Tool 需要查询当前用户有哪些在线设备，用于调试或给用户解释设备状态。
 3. Task 需要调整端侧长流程，例如持续低频上传 IMU、启动或停止手机侧导航、启用或关闭端侧本地推理。对端侧而言，这些都只是订阅到的控制事件和后续 stream，不是新的 task 通讯方式。
 4. Tool 或 Task 需要向用户发出可听输出，但不应直接打开播放器 stream，而应调用 `submit_text()` 或 `submit_audio()` 交给 Output Service。
-5. Tool 或 Task 需要组合 MCP、Skill、Memory 等能力，并且这些能力需要间接使用当前用户设备能力。
+5. Tool 或 Task 需要组合 MCP、Skill、Memory 等能力，并且这些能力需要间接使用当前用户设备通讯能力。
 
 不适合使用的场景：
 
@@ -3120,11 +3099,10 @@ await context.devices.submit_text(
 1. `UserDeviceContext` 由 SDK 在每次 Tool / Task 执行时注入，业务开发者不手动构造。
 2. 它只暴露“当前 `user_id` 的 active device set”，不会跨用户访问设备。
 3. 它内部通过 Control Service、Stream Service、Asset Service、Output Service 完成实际工作；业务开发者不需要理解事件分发细节。
-4. `UserDeviceContext` 不提供“向某个 `device_id` 发送事件”的接口。业务代码只能按 capability、subscription、stream_type 表达意图，最终由 Control Service 根据订阅策略分发。
+4. `UserDeviceContext` 不提供“向某个 `device_id` 发送事件”的接口。业务代码只能按 event、payload、stream_type 和 selection 表达意图，最终由 Control Service 根据订阅策略分发。
 5. `publish_event()` 不是点对点发送。它只能在当前 `user_id` 范围内发布协议事件，接收方仍然由设备注册时提交的订阅策略决定。
-6. `DeviceHandle` 不暴露底层控制连接，也不允许写入任意 Event。第一版建议 Tool / Task 优先使用 `UserDeviceContext.publish_event()` 和 `open_output_stream()`，减少对单个设备实例的依赖。
-7. `DeviceSnapshot` 是某个时刻的快照，不保证实时同步。执行关键操作前，SDK 应在内部重新检查设备是否仍在线、能力是否仍匹配、订阅是否仍满足。
-8. MCP 和 Skill 不允许直接接收或持有 `UserDeviceContext`。如果 MCP 或 Skill 需要影响设备行为，必须封装成 Tool 或 Task，由 Tool / Task 使用 `UserDeviceContext` 完成设备访问。
+6. `DeviceSnapshot` 是某个时刻的快照，不保证实时同步。执行关键操作前，SDK 应在内部重新检查设备是否仍在线、订阅是否仍满足。
+7. MCP 和 Skill 不允许直接接收或持有 `UserDeviceContext`。如果 MCP 或 Skill 需要影响设备行为，必须封装成 Tool 或 Task，由 Tool / Task 使用 `UserDeviceContext` 完成设备访问。
 
 ## 14. 端侧参考实现
 
@@ -3146,7 +3124,7 @@ audio-chat/endpoints-examples/
 职责：
 
 1. 连接 WiFi。
-2. 注册设备能力和订阅。
+2. 注册设备属性和订阅。
 3. 建立事件信令连接。
 4. 唤醒后建立 stream 连接或打开 `sensor.mic` stream。
 5. 使用麦克风采集音频。
@@ -3204,7 +3182,7 @@ audio-chat/endpoints-examples/
 
 职责：
 
-1. 模拟任意设备能力。
+1. 模拟任意设备订阅和 stream 行为。
 2. 执行 Python 版 `EndpointProcessor`。
 3. 返回结构化事件。
 4. 用于业务能力在无真实设备时闭环。
@@ -3427,15 +3405,14 @@ uv run audio-chat.phone.mock \
   --config audio-chat/endpoints-examples/python-phone-mock/phone.mock.yaml
 ```
 
-mock 配置应允许声明能力和订阅：
+mock 配置应允许声明调试属性和订阅：
 
 ```yaml
 user_id: "user-dev-001"
 device_id: "dev-python-phone-mock-001"
 pair_token: "pair-phone-token"
-capabilities:
-  streams.produce: ["sensor.rgb", "sensor.imu"]
-  streams.consume: []
+properties:
+  camera.facing: "front"
 subscriptions:
   - event: "stream.control.*"
     filter:
@@ -3831,7 +3808,7 @@ skill:
   # 是否允许 Skill 动态改变工具白名单。
   allow_tool_policy: true
 
-# mcp 控制 MCP Gateway。MCP 不直接拿 UserDeviceContext；需要设备能力时必须封装进 Tool 或 Task。
+# mcp 控制 MCP Gateway。MCP 不直接拿 UserDeviceContext；需要设备通讯能力时必须封装进 Tool 或 Task。
 mcp:
   # 是否启用 MCP Gateway。
   enabled: true

@@ -29,7 +29,6 @@ def test_public_extension_contract_exports_required_developer_api() -> None:
         "TaskRef",
         "UserDeviceContext",
         "DeviceSnapshot",
-        "DeviceHandle",
         "AssetRef",
         "ArtifactRef",
         "AudioChatError",
@@ -226,4 +225,3 @@ def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
                     offenders.append(f"{path.relative_to(root)}:{index + 1}:{command}")
 
     assert offenders == []
-

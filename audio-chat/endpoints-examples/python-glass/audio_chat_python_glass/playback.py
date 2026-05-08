@@ -462,16 +462,9 @@ class PythonPlaybackEndpoint:
                 "client_type": "python-playback",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "capabilities": {
-                    "streams.produce": ["sensor.mic", "sensor.rgb", "sensor.depth", "sensor.imu"],
-                    "streams.consume": ["actuator.speaker", "actuator.haptic"],
+                "properties": {
                     "audio.wake_word": "endpoint",
                     "audio.aec": "endpoint",
-                    "sensor.rgb": True,
-                    "sensor.depth": True,
-                    "sensor.imu": True,
-                    "sensor.heading": True,
-                    "sensor.location": True,
                 },
                 "subscriptions": [
                     {"event": "control.audio_session.*"},
@@ -570,7 +563,6 @@ class PythonPlaybackEndpoint:
                         stream_type=str(action.get("stream_type") or ""),
                         payload=dict(action.get("payload") or {}),
                     ),
-                    require_capability=str(action.get("require_capability") or action.get("stream_type") or ""),
                     selection=str(action.get("selection") or "first_available"),
                 )
                 action_results.append({"type": action_type, "stream_type": action.get("stream_type")})
@@ -807,7 +799,7 @@ class NetworkPythonPlaybackEndpoint:
         auth: dict[str, Any] | None = None,
         device_name: str = "python-playback",
         client_type: str = "python-playback",
-        capabilities: dict[str, Any] | None = None,
+        properties: dict[str, Any] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         chunk_interval_ms: int = 0,
@@ -819,12 +811,9 @@ class NetworkPythonPlaybackEndpoint:
         self.auth = auth or {"mode": "disabled"}
         self.device_name = device_name
         self.client_type = client_type
-        self.capabilities = capabilities or {
-            "streams.produce": ["sensor.mic", "sensor.rgb"],
-            "streams.consume": ["actuator.speaker"],
+        self.properties = properties or {
             "audio.wake_word": "endpoint",
             "audio.aec": "endpoint",
-            "sensor.rgb": True,
         }
         self.subscriptions = subscriptions or [
             {"event": "control.audio_session.*"},
@@ -1153,7 +1142,7 @@ class NetworkPythonPlaybackEndpoint:
                 "client_type": self.client_type,
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": self.auth,
-                "capabilities": self.capabilities,
+                "properties": self.properties,
                 "subscriptions": self.subscriptions,
             },
         )

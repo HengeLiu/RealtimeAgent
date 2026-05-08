@@ -34,7 +34,6 @@ def register_speaker(app: AudioChatApp, connection: SpeakerConnection) -> None:
             producer_id="dev-speaker",
             payload={
                 "device_id": "dev-speaker",
-                "capabilities": {"streams.consume": ["actuator.speaker"], "actuator.speaker": True},
                 "subscriptions": [{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
                 "auth": {"mode": "disabled"},
             },

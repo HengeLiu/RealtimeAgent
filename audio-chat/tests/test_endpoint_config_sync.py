@@ -82,8 +82,8 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     """测试目标：验证同步配置不依赖固定 glass / phone 角色，也不复用 device_id。
 
     测试方法：读取生成的各端配置，比较 user_id 和 device_id。
-    预期结果：所有参考端侧共享同一 user_id，但 device_id 各自唯一，路由仍由
-    capability/subscription 决定。
+    预期结果：所有参考端侧共享同一 user_id，但 device_id 各自唯一，路由由
+    event/subscription 决定。
     """
 
     output_dir = tmp_path / "generated"
@@ -104,11 +104,9 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     configs = [phone, glass, web, ios, {"user_id": esp32.user_id, "device_id": esp32.device_id}]
     assert {config["user_id"] for config in configs} == {"user-shared"}
     assert len({config["device_id"] for config in configs}) == len(configs)
-    assert "sensor.rgb" in phone["capabilities"]["streams.produce"]
-    assert "actuator.speaker" in phone["capabilities"]["streams.consume"]
+    assert phone["properties"]["phone.task.find_object_phone_task"] is True
     assert esp32.device_id == "dev-esp32-s3-001"
-    assert "sensor.rgb" in ios["capabilities"]["streams.produce"]
-    assert "actuator.speaker" in ios["capabilities"]["streams.consume"]
+    assert ios["properties"]["phone.task.find_object_phone_task"] is True
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in ios["subscriptions"]
 
 

@@ -61,8 +61,7 @@ class ContinuousVisionTask(BaseTask):
 
 `UserDeviceContext` 是 Tool / Task 访问当前用户设备集合的唯一入口：
 
-- `get_devices(capability=...)`：查询只读设备快照，可用于判断当前是否有设备具备某项能力。
-- `find_device(capability=...)`：按能力查找只读设备句柄；句柄不提供点对点发送方法。
+- `get_devices()`：查询只读设备快照，用于状态说明、日志和调试展示。
 - `publish_event(...)`：发布协议事件，由订阅匹配分发。
 - `configure_stream(...)`：请求订阅命中的设备打开、调整或停止 `sensor.*` stream。
 - `request_asset(...)`：请求某类 `sensor.*` stream 的最新结果，例如一张 `sensor.rgb` 图片。
@@ -82,10 +81,10 @@ class ContinuousVisionTask(BaseTask):
 
 关键约束：
 
-- Tool / Task 只能通过 `context.devices` 使用设备能力。
+- Tool / Task 只能通过 `context.devices` 使用设备通讯能力。
 - 不硬编码 `device_id` 做点对点发送。
 - 图片、音频、视频和文件不能放进控制事件 payload，必须走 `sensor.*` / `actuator.*` stream。
-- Memory / Skill / MCP 不能直接持有设备上下文；需要设备能力时，封装成 Tool 或 Task。
+- Memory / Skill / MCP 不能直接持有设备上下文；需要设备通讯能力时，封装成 Tool 或 Task。
 
 ## 2. 设备开发
 
@@ -133,7 +132,7 @@ class ContinuousVisionTask(BaseTask):
 1. server 只在同一个 `user_id` 当前在线设备中查找订阅者。
 2. 默认不把事件回发给事件生产者自己。
 3. 先匹配订阅的 `event`，再匹配 `filter`。
-4. 对 `sensor.*` 和 `actuator.*`，只要事件名和 `stream_type` filter 命中就发送，不再额外判断 `capabilities`。
+4. 对 `sensor.*` 和 `actuator.*`，只要事件名和 `stream_type` filter 命中就发送。
 5. Tool / Task 可以指定 `selection="first_available"` 或 `selection="all"`，但不能指定某个 `device_id`。
 
 `filter` 只过滤事件字段，例如 `stream_type`、`payload.command_name`、`payload.mode`。`properties` 不参与事件路由，只用于日志、debug、硬件参数说明或业务偏好。
@@ -273,7 +272,7 @@ Memory、Skill、MCP 已作为 Agent Core 能力面接入。业务侧规则是�
 - Memory 用来注入模型上下文和提供 `memory_search` / `manage_memory` 类能力。
 - Skill 用来声明受控能力说明、工具白名单和会话状态。
 - MCP 用来接地图、搜索、业务系统等外部方法。
-- Memory / Skill / MCP 不能直接持有设备上下文；需要设备能力时，封装成 Tool 或 Task，再通过 `UserDeviceContext` 调用。
+- Memory / Skill / MCP 不能直接持有设备上下文；需要设备通讯能力时，封装成 Tool 或 Task，再通过 `UserDeviceContext` 调用。
 
 迁移说明见 `docs/phase3-migration-guide.md`。
 
@@ -342,7 +341,7 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 | `openaiglass.glass.start` | `endpoints-examples/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由后续线路补齐。 |
 | `openaiglass.sdk.preflight` | `audio-chat.dev.preflight` | 本地配置、provider、设备示例和 package 预检。 |
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
-| `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 只按 user active device set、capability 和 subscription 工作。 |
+| `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 只按 user active device set、event subscription 和 stream 工作。 |
 
 ## 11. 当前状态口径
 

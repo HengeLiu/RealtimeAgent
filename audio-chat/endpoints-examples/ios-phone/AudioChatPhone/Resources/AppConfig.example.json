@@ -6,10 +6,7 @@
     "mode": "disabled"
   },
   "protocol_version": "audio-chat.v1",
-  "capabilities": {
-    "streams.produce": ["sensor.rgb", "sensor.mic"],
-    "streams.consume": ["actuator.speaker", "actuator.haptic"],
-    "sensor.rgb": true,
+  "properties": {
     "phone.task.find_object_phone_task": true,
     "phone.task.traffic_light_phone_task": true,
     "audio.aec": "replaceable",

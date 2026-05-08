@@ -11,11 +11,11 @@ from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, n
 from audio_chat.server import AudioChatHttpServer
 
 
-def test_python_phone_mock_registers_as_capability_driven_endpoint(tmp_path: Path) -> None:
-    """测试目标：验证 Python phone mock 通过 capability/subscription 注册为普通端侧。
+def test_python_phone_mock_registers_as_subscription_driven_endpoint(tmp_path: Path) -> None:
+    """测试目标：验证 Python phone mock 通过 properties/subscription 注册为普通端侧。
 
     测试方法：启动真实 aiohttp server，使用 phone mock 走 `/ws/control` 完成注册。
-    预期结果：debug snapshot 中能看到它生产 sensor.rgb、消费 speaker/haptic，且
+    预期结果：debug snapshot 中能看到调试属性和订阅策略，且
     `client_type` 只是诊断字段，不参与固定 phone 类型路由。
     """
 
@@ -43,9 +43,8 @@ def test_python_phone_mock_registers_as_capability_driven_endpoint(tmp_path: Pat
         snapshot = audio_app.control_service.build_device_snapshot("dev-phone")
         assert snapshot is not None
         assert snapshot["client_type"] == "python-phone-mock"
-        assert "sensor.rgb" in snapshot["capabilities"]["streams.produce"]
-        assert "actuator.speaker" in snapshot["capabilities"]["streams.consume"]
-        assert "actuator.haptic" in snapshot["capabilities"]["streams.consume"]
+        assert snapshot["properties"]["phone.task.find_object_phone_task"] is True
+        assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in snapshot["subscriptions"]
 
     asyncio.run(run())
 
@@ -53,10 +52,10 @@ def test_python_phone_mock_registers_as_capability_driven_endpoint(tmp_path: Pat
 def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path) -> None:
     """测试目标：验证 Python phone mock 同时支持传感器上传和执行器消费。
 
-    测试方法：注册 phone mock 后，server 侧按能力请求 `sensor.rgb` 资产，并打开
+    测试方法：注册 phone mock 后，server 侧按订阅请求 `sensor.rgb` 资产，并打开
     `actuator.haptic` 输出 stream。
     预期结果：RGB 通过 stream 上传形成 AssetRef；haptic chunk 通过 stream 下行到
-    phone mock；分发只由订阅和 capability 决定。
+    phone mock；分发只由事件名和订阅过滤决定。
     """
 
     async def run() -> None:

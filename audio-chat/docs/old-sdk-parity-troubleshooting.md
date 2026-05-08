@@ -36,13 +36,13 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 1. 端侧注册的 `subscriptions` 是否覆盖事件名，例如 `stream.control.*`。
 2. 事件是否带了正确 `stream_type`。
-3. Tool / Task 的 `require_capability` 是否和端侧 `capabilities` 一致。
+3. Tool / Task 发出的事件名、`stream_type` 或 payload filter 是否和端侧 `subscriptions` 一致。
 4. server 配置是否允许通配订阅或精确订阅。
 
 修复：
 
 - 不要硬编码 `device_id`。
-- 用 capability 和 subscription 修正匹配条件。
+- 用 event、filter 和 subscription 修正匹配条件。
 - 小 payload 只放语义和配置，大字节继续走 stream。
 
 ## 3. Stream 未打开

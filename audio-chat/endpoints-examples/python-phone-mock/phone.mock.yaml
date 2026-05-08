@@ -5,18 +5,7 @@ device_id: dev-python-phone-mock-001
 name: Python 算力模拟设备
 auth:
   mode: disabled
-capabilities:
-  streams.produce:
-    - sensor.rgb
-    - sensor.depth
-    - sensor.imu
-  streams.consume:
-    - actuator.speaker
-    - actuator.haptic
-  sensor.rgb: true
-  sensor.depth: true
-  sensor.imu: true
-  actuator.haptic: true
+properties:
   phone.task.find_object_phone_task: true
   phone.task.traffic_light_phone_task: true
 subscriptions:

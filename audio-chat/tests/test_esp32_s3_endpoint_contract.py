@@ -17,12 +17,12 @@ from audio_chat.server import AudioChatHttpServer
 
 
 def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
-    """测试目标：验证 ESP32-S3 注册事件只声明协议能力和订阅。
+    """测试目标：验证 ESP32-S3 注册事件只提交调试属性和订阅。
 
     测试方法：构造 `Esp32AecEndpointState`，把 registration payload 放入正式 Event
     校验流程。
-    预期结果：capability 表达 `sensor.mic`、`sensor.rgb` 和 `actuator.speaker`，
-    订阅使用 event/filter，不出现固定 glass/phone 类型或 target_device 字段。
+    预期结果：路由语义全部来自 event/filter 订阅，不出现固定 glass/phone 类型、
+    target_device 字段或 capabilities 声明。
     """
 
     state = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32")
@@ -35,11 +35,10 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     )
 
     assert event.to_dict()["payload"]["client_type"] == "esp32-s3"
-    assert payload["capabilities"]["streams.produce"] == ["sensor.mic", "sensor.rgb"]
-    assert payload["capabilities"]["streams.consume"] == ["actuator.speaker"]
-    assert payload["capabilities"]["audio.aec"] == "endpoint"
-    assert payload["capabilities"]["audio.playback_reference"] == "endpoint_ring_buffer"
-    assert payload["capabilities"]["sensor.rgb"] is True
+    assert "capabilities" not in payload
+    assert payload["properties"]["audio.aec"] == "endpoint"
+    assert payload["properties"]["audio.playback_reference"] == "endpoint_ring_buffer"
+    assert payload["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
     assert {"event": "control.audio_session.*"} in payload["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["subscriptions"]
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["subscriptions"]
@@ -143,8 +142,8 @@ def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
     assert config.device_id == "dev-sync-esp32"
     assert config.auth_payload() == {"mode": "static_token", "token": "token-sync"}
     assert payload["auth"]["token"] == "token-sync"
-    assert payload["capabilities"]["audio.input"]["sample_rate"] == 16000
-    assert payload["capabilities"]["audio.output"]["chunk_ms"] == 20
+    assert payload["properties"]["audio.input"]["sample_rate"] == 16000
+    assert payload["properties"]["audio.output"]["chunk_ms"] == 20
 
 
 def test_network_esp32_s3_endpoint_completes_protocol_smoke(tmp_path: Path) -> None:
@@ -188,7 +187,7 @@ def test_network_esp32_s3_endpoint_completes_protocol_smoke(tmp_path: Path) -> N
         snapshot = audio_app.control_service.build_device_snapshot("dev-esp32")
         assert snapshot is not None
         assert snapshot["client_type"] == "esp32-s3"
-        assert snapshot["capabilities"]["audio.aec"] == "endpoint"
-        assert snapshot["capabilities"]["sensor.rgb"] is True
+        assert snapshot["properties"]["audio.aec"] == "endpoint"
+        assert snapshot["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
 
     asyncio.run(run())

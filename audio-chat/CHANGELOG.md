@@ -13,7 +13,6 @@
 ### 当前不兼容点
 
 - 不复用旧 `openaiglass-sdk` 的 `DeviceGroupContext` 名称；新 SDK 使用 `UserDeviceContext`。
-- 不保留 glass / phone 固定设备类型建模；端侧通过 capabilities 和 subscriptions 声明能力。
+- 不保留 glass / phone 固定设备类型建模；端侧通过 subscriptions 声明事件订阅，通过 properties 描述调试信息。
 - 不保留旧 `/ws_audio`、`/ws_realtime_audio` 和 `sensor.camera.*` 协议名称；新 SDK 统一使用 event + stream。
 - iOS、ESP32、web-glass 和 Python phone mock 当前作为参考端源码随仓库交付，不进入 Python wheel。
-

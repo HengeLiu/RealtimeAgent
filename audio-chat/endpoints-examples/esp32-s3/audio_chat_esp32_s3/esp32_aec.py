@@ -137,7 +137,7 @@ class Esp32AecEndpointState:
     """ESP32-S3 audio-chat 端侧参考状态机。
 
     主要功能：
-    1. 固化注册 capability/subscription。
+    1. 固化注册 properties/subscription。
     2. 确保 wake 前不会上传 `sensor.mic`。
     3. 跟踪 speaker 下行、playback ring 和 AEC reference ring。
     4. 输出真机联调需要的诊断摘要。
@@ -208,15 +208,12 @@ class Esp32AecEndpointState:
             "client_type": "esp32-s3",
             "sdk_version": "audio-chat-endpoint-0.3.0",
             "auth": dict(self.auth),
-            "capabilities": {
-                "streams.produce": ["sensor.mic", "sensor.rgb"],
-                "streams.consume": ["actuator.speaker"],
+            "properties": {
                 "audio.wake_word": self.wake_word_mode,
                 "audio.aec": self.aec_mode,
                 "audio.playback_reference": self.playback_reference,
                 "audio.input": stream_format.__dict__,
                 "audio.output": stream_format.__dict__,
-                "sensor.rgb": self.rgb_capture_enabled,
                 "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
             },
             "subscriptions": [
@@ -393,7 +390,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
     """按真实网络协议运行的 ESP32-S3 参考端。
 
     主要功能：
-    1. 通过 `/ws/control` 注册 capability 和 subscription。
+    1. 通过 `/ws/control` 注册 properties 和 subscription。
     2. 本地 wake 后等待 `control.audio_session.open.requested`。
     3. 打开 `/ws/stream` 上传 `sensor.mic` PCM chunk。
     4. 消费 `actuator.speaker` 下行 chunk，并回报 started/finished/closed。
@@ -429,7 +426,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             auth=dict(payload["auth"]),
             device_name=str(payload["device_name"]),
             client_type=str(payload["client_type"]),
-            capabilities=dict(payload["capabilities"]),
+            properties=dict(payload["properties"]),
             subscriptions=list(payload["subscriptions"]),
         )
 
@@ -699,7 +696,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
         result = super()._build_result()
         result["endpoint"] = "esp32-s3"
         result["diagnostics"] = self.state.diagnostics()
-        result["capabilities"] = dict(self.capabilities)
+        result["properties"] = dict(self.properties)
         result["subscriptions"] = list(self.subscriptions)
         result["passed"] = bool(
             result.get("passed")

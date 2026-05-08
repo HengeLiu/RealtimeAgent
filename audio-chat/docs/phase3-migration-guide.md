@@ -14,23 +14,23 @@
 
 | 旧概念 | audio-chat 概念 | 迁移说明 |
 | --- | --- | --- |
-| `DeviceGroupContext` | `UserDeviceContext` | 以 `user_id` 的 active device set 为边界，按 capability 和 subscription 选择端侧。 |
+| `DeviceGroupContext` | `UserDeviceContext` | 以 `user_id` 的 active device set 为边界，按 event/subscription 和 stream 与端侧通讯。 |
 | 抓拍工具 | `BaseTool` + `request_asset("sensor.rgb")` | 控制事件只请求采集策略，图片字节必须通过 `sensor.rgb` stream 上传。 |
 | 长流程 Task | `BaseTask` + `TaskEventBridge` | Task 只维护 server 侧状态，通过 event 和 stream 驱动端侧。 |
 | 语音播报 | `Output Service` + `submit_text()` | 业务只提交文本、优先级和 TTL，不直接写播放器。 |
-| 手机任务 | 端侧 capability + subscription | 端侧声明能处理哪些事件，server 不新增 `start_phone_task` RPC。 |
+| 手机任务 | 端侧 subscription | 端侧订阅能处理的事件，server 不新增 `start_phone_task` RPC。 |
 | 媒体帧 | `StreamChunk` | 大字节统一走 stream，不放进控制事件 payload。 |
-| `context.mcp(...)` | `McpGateway` 或业务 Tool wrapper | MCP 不直接拿设备上下文；需要设备能力时通过 Tool / Task 间接调用。 |
-| Agent Memory | `MemoryService` + 内置 Tool | Memory 注入模型上下文，设备能力仍通过普通 Tool / Task 表达。 |
+| `context.mcp(...)` | `McpGateway` 或业务 Tool wrapper | MCP 不直接拿设备上下文；需要设备通讯能力时通过 Tool / Task 间接调用。 |
+| Agent Memory | `MemoryService` + 内置 Tool | Memory 注入模型上下文，设备通讯仍通过普通 Tool / Task 表达。 |
 | `context.submit_notification(...)` | `UserDeviceContext.submit_text(...)` / `TaskEventBridge` | 通知进入 Output Service 和播放仲裁，不直接操作播放器。 |
 
 ## 3. 强制约束
 
-1. Tool / Task 只能通过 `UserDeviceContext` 使用设备能力。
+1. Tool / Task 只能通过 `UserDeviceContext` 使用设备通讯能力。
 2. 不允许硬编码 device_id 做点对点发送。
 3. 设备通讯只能使用 event 和 stream，不新增隐藏 RPC。
 4. 大字节媒体必须走 stream，控制事件 payload 只放语义、配置、关联 ID 和小型状态。
-5. MCP、Skill、Memory 不允许直接持有设备上下文；需要设备能力时必须封装成 Tool 或 Task。
+5. MCP、Skill、Memory 不允许直接持有设备上下文；需要设备通讯能力时必须封装成 Tool 或 Task。
 6. 后台任务通知必须进入 Output Service 或 TaskEventBridge，不直接操作播放队列。
 
 ## 4. 可复制样板
@@ -80,7 +80,7 @@ tasks:
 
 ## 5. BaseTool 迁移
 
-旧 SDK 的 Tool 常见写法是继承 `BaseTool`，在 `run(context, input_data)` 中通过 `DeviceGroupContext` 使用设备能力。迁移后仍然继承 `BaseTool`，但参数声明改为 `ToolSpec + Pydantic`：
+旧 SDK 的 Tool 常见写法是继承 `BaseTool`，在 `run(context, input_data)` 中通过 `DeviceGroupContext` 使用设备。迁移后仍然继承 `BaseTool`，但参数声明改为 `ToolSpec + Pydantic`：
 
 ```python
 from pydantic import BaseModel, Field
@@ -125,7 +125,7 @@ class FindObjectTool(BaseTool):
 4. SDK 会在调用 `run()` 前校验参数并填充默认值；`run()` 收到的是校验后的 `dict`。
 5. 把旧的 `context.capture_photo()` 改成 `context.devices.request_asset("sensor.rgb", ...)`。
 6. 把旧的 `context.submit_notification()` 改成 `context.devices.submit_text(...)`。
-7. 不再保存或传递 `device_id`；通过 `require_capability`、`stream_type` 和 subscription 匹配设备。
+7. 不再保存或传递 `device_id`；通过事件名、`stream_type`、payload 和 subscription 匹配设备。
 8. Tool 返回 `ToolResult.success(...)`，资产用 `assets=[asset]` 带回，图片字节不进 `data`。
 
 参考文件：`examples/migration-templates/find_object/tool.py`。
@@ -157,8 +157,8 @@ from audio_chat import BaseTask, TaskContext, TaskEvent
 
 | 旧写法 | 新写法 | 说明 |
 | --- | --- | --- |
-| `context.require_glass()` | `context.devices.find_device("sensor.rgb")` | 只返回只读能力快照，真实通讯继续走 event / stream。 |
-| `context.require_phone()` | `context.devices.find_device("vision.local")` | phone 不再是固定类型，而是 capability。 |
+| `context.require_glass()` | `context.devices.get_devices()` | 只返回只读快照，真实通讯继续走 event / stream。 |
+| `context.require_phone()` | `context.devices.get_devices()` | phone 不再是固定类型；需要响应什么事件由 subscription 决定。 |
 | `context.capture_photo()` | `context.devices.request_asset("sensor.rgb", ...)` | 图片字节通过 `sensor.rgb` stream 上传。 |
 | `context.start_phone_video_link()` | `context.devices.publish_event("stream.control.configure.requested", stream_type="sensor.rgb", ...)` | 持续视频变为传感器 stream 配置。 |
 | `context.submit_notification()` | `context.devices.submit_text(...)` | 输出交给 Output Service。 |
@@ -186,11 +186,11 @@ asset = context.devices.request_asset(
 
 ## 9. Phone Video Task 迁移
 
-旧 SDK 中 `start_phone_video_link()` / phone task 用于让眼镜和手机建立视觉链路。新 SDK 不新增隐藏 phone RPC，迁移为 capability + subscription：
+旧 SDK 中 `start_phone_video_link()` / phone task 用于让眼镜和手机建立视觉链路。新 SDK 不新增隐藏 phone RPC，迁移为 event + stream + subscription：
 
 旧文档里也可以把这条链路称为 phone video task；迁移时不要保留点对点视频 RPC，而是改成 `sensor.rgb` stream 和事件订阅。
 
-1. phone mock 或 iOS 参考端注册 `streams.produce=["sensor.rgb"]` 或视觉处理 capability。
+1. phone mock 或 iOS 参考端订阅 `stream.control.* + filter(stream_type=sensor.rgb)` 或相关 `control.device.command.*` 事件。
 2. Task 发布 `stream.control.configure.requested`，带 `stream_type="sensor.rgb"`、`mode="continuous"`、`fps`、`correlation_id`。
 3. 端侧通过 `sensor.rgb` stream 上传帧。
 4. Task 用 `watch_assets("sensor.rgb", correlation_id=...)` 消费帧。
@@ -214,7 +214,7 @@ asset = context.devices.request_asset(
 
 1. 用户偏好、常用地点、设备习惯等写入 Memory。
 2. 当前视觉资产、音频片段和任务状态不要塞进 Memory，应该用 Asset / Task 产物。
-3. Memory 不能直接触发设备动作；需要设备能力时由 Tool / Task 执行。
+3. Memory 不能直接触发设备动作；需要设备通讯能力时由 Tool / Task 执行。
 
 ## 12. Notification 迁移
 
@@ -309,4 +309,4 @@ uv run python scripts/acceptance_check.py next-docs-contract \
 | `openaiglass.glass.start` | `endpoints-examples/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由 `old-sdk-parity-esp32` 补齐。 |
 | `openaiglass.sdk.preflight` | `audio-chat.dev.preflight` | 已有预检报告。 |
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
-| `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 通过 event / stream / asset / output 表达设备能力。 |
+| `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 通过 event / stream / asset / output 表达设备通讯。 |

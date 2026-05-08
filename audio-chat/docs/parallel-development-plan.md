@@ -139,7 +139,7 @@ audio-chat/testdata/contracts/
 2. 订阅 filter 补齐：
    - 支持事件信封字段。
    - 支持 `payload.*`。
-   - 支持 `capabilities.*`。
+   - 不支持旧设备声明字段过滤；只支持事件字段和 payload 字段过滤。
    - 数组包含匹配。
    - 明确不支持脚本、正则和复杂表达式。
 3. Device 抽象补齐：
@@ -296,7 +296,7 @@ uv run python scripts/acceptance_check.py tool-task-agent
 通过条件：
 
 1. 业务 Tool 不 import Control Service / Stream Service。
-2. Tool / Task 只能通过 UserDeviceContext 使用设备能力。
+2. Tool / Task 只能通过 UserDeviceContext 使用设备通讯能力。
 3. Agent Core 不直接 import 业务 Tool。
 4. Mock text model 能触发一次 Tool 调用，并把 ToolResult 回填后继续生成回复。
 5. TaskEvent 能写入 runs、消息历史，并按配置进入 Output Service 或 Agent Core。

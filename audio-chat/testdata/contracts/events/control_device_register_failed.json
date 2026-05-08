@@ -2,14 +2,6 @@
   "event_id": "evt-contract-control-device-register-failed",
   "event_name": "control.device.register.failed",
   "payload": {
-    "capabilities": {
-      "streams.consume": [
-        "actuator.speaker"
-      ],
-      "streams.produce": [
-        "sensor.mic"
-      ]
-    },
     "client_type": "contract-endpoint",
     "connection_id": "conn-contract",
     "device_id": "dev-contract",

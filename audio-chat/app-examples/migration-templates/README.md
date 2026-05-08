@@ -1,7 +1,7 @@
 # audio-chat 业务迁移样板
 
 本目录提供从旧 SDK 迁移业务能力时可以复制的最小样板。样板只依赖
-`audio_chat` 顶层公开 API，并且只通过 `UserDeviceContext` 表达设备能力。
+`audio_chat` 顶层公开 API，并且只通过 `UserDeviceContext` 表达设备通讯。
 
 ## 样板清单
 
@@ -17,7 +17,7 @@
 2. 不允许新增隐藏 RPC 或直接操作 WebSocket。
 3. 大字节媒体必须走 `sensor.*` 或 `actuator.*` stream。
 4. 控制事件 payload 只放语义、配置和关联 ID。
-5. Tool / Task 需要设备能力时，只通过 `context.devices` 使用 `UserDeviceContext`。
+5. Tool / Task 需要设备通讯时，只通过 `context.devices` 使用 `UserDeviceContext`。
 
 独立验收：
 

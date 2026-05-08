@@ -5,18 +5,11 @@
     "auth": {
       "mode": "disabled"
     },
-    "capabilities": {
+    "properties": {
       "audio.aec": "replaceable",
       "audio.wake_word": "manual",
-      "sensor.rgb": true,
-      "streams.consume": [
-        "actuator.speaker",
-        "actuator.haptic"
-      ],
-      "streams.produce": [
-        "sensor.rgb",
-        "sensor.mic"
-      ]
+      "phone.task.find_object_phone_task": true,
+      "phone.task.traffic_light_phone_task": true
     },
     "client_type": "ios-phone",
     "device_id": "dev-ios-phone-001",

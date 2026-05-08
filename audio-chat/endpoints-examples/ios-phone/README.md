@@ -53,7 +53,7 @@ cp examples/basic-app/config/generated/ios-phone.local.json \
 - `user_id`：同一用户下的多端共享用户编号。
 - `device_id`：iOS 端唯一设备编号，不能和 web-glass、python phone mock、glass playback 重复。
 - `auth`：注册鉴权配置，支持 `disabled`、`static_token` 和 `signed_token`。
-- `capabilities`：声明可生产 `sensor.rgb` / `sensor.mic`，可消费 `actuator.speaker` / `actuator.haptic`。
+- `properties`：声明仅用于日志和 debug 的硬件参数；路由由 `subscriptions` 决定。
 - `subscriptions`：声明订阅 `stream.control.*`、`stream.output.*` 和 `control.audio_session.*`。
 
 如果本地启用 signed token：

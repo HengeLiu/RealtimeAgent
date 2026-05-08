@@ -136,7 +136,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 "client_type": "ios-phone",
                 "sdk_version": "audio-chat-ios-reference-0.1.0",
                 "auth": config.auth.payload,
-                "capabilities": config.capabilities.mapValues { $0.object },
+                "properties": config.properties.mapValues { $0.object },
                 "subscriptions": config.subscriptions.map { $0.payload },
             ],
             version: config.protocolVersion

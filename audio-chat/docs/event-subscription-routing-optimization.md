@@ -7,7 +7,7 @@
 1. 设备开发者只需要在注册事件中声明 `subscriptions`。
 2. Tool / Task 开发者只通过 `context.devices` 发布事件、配置 stream 或读取资产。
 3. 业务代码不能按 `device_id` 点对点发送事件。
-4. `sensor.*` 和 `actuator.*` 只按事件名和 `stream_type` filter 命中，不再额外判断 `capabilities`。
+4. `sensor.*` 和 `actuator.*` 只按事件名和 `stream_type` filter 命中。
 5. 路由失败必须可观察，不能只表现为“没有响应”。
 
 ## 当前链路
@@ -166,12 +166,12 @@ async for asset in context.devices.watch_assets(
 
 终端只输出 DEBUG 摘要，不打印每个高频 chunk 的细节。
 
-## 与旧 capabilities 字段的关系
+## 与旧能力声明字段的关系
 
-旧 SDK 和部分早期示例会在注册 payload 中提交 `capabilities`。新版 SDK 仍保留读取能力，作为历史兼容和 debug 展示字段，但事件分发不会再因为它额外过滤设备。新设备不需要再声明它。
+旧 SDK 和部分早期示例曾在注册 payload 中提交独立的设备声明字段。新版 SDK 不再接收这个字段；注册时只保留 `subscriptions` 和可选 `properties`。
 
 推荐写法是：
 
 - 用 `subscriptions` 表达设备愿意处理哪些事件。
 - 用 `properties` 表达便于人观察的硬件和调试信息。
-- 用 stream 类型本身表达传感器和执行器能力。
+- 用事件名和 `filter` 表达路由条件，例如 `stream.control.* + stream_type=sensor.rgb`。

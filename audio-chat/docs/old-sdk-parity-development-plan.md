@@ -9,7 +9,7 @@
 新阶段目标不是复刻旧 `openaiglass-sdk` 的目录、类名和协议细节，而是让 `audio-chat` 达到老 SDK 对功能开发者的同等可用性：
 
 1. 开发者能按文档安装、同步配置、启动 server、启动参考端侧或回放设备。
-2. 开发者能用相似的方式编写短动作 Tool、长流程 Task、设备能力请求、通知和外部服务能力。
+2. 开发者能用相似的方式编写短动作 Tool、长流程 Task、设备通讯请求、通知和外部服务能力。
 3. 老业务样板能力 `find_object`、`traffic_light`、`navigation`、`search`、`timer` 能迁移到 `audio-chat` 并跑通设备级验收。
 4. Python phone mock、glass playback、web-glass、iOS phone 参考端和 ESP32-S3 参考端能支撑功能开发者进入真实联调。
 5. mock provider、真实 provider、回放和真机 smoke test 都有稳定验收入口。
@@ -24,7 +24,7 @@
 以下内容不要求与老 SDK 完全一致：
 
 1. 不要求保留 `DeviceGroupContext` 名称，`audio-chat` 使用 `UserDeviceContext`。
-2. 不要求保留 glass / phone 固定设备类型，`audio-chat` 使用 capability 和 subscription。
+2. 不要求保留 glass / phone 固定设备类型，`audio-chat` 使用 event/subscription 和 stream。
 3. 不要求保留 `/ws_audio`、`/ws_realtime_audio`、`sensor.camera.*` 等旧协议名称，`audio-chat` 使用 event + stream。
 4. 不要求业务代码手动注册 Tool / Task，`audio-chat` 默认自动发现。
 5. 不要求把 iOS / ESP32 正式端侧工程放入 Python SDK 包内，`audio-chat/endpoints-examples` 只提供参考端侧样例和契约。
@@ -139,7 +139,7 @@ audio-chat/tests/acceptance/test_no_internal_service_usage_contract.py
    - `configure_stream(stream_type=..., mode=..., rate_hz=..., duration_seconds=...)`
    - `watch_assets(stream_type=..., since=...)`
    - `notify(text=..., priority=..., ttl_seconds=...)`
-   - `find_device(capability=...)`，只返回能力快照，不暴露可变连接。
+   - `get_devices()`，只返回设备快照，不暴露可变连接。
 3. 所有 API 底层只能发布 event 或读写 stream / asset，不新增 RPC。
 4. 禁止开发者代码直接按 `device_id` 点对点发送事件。
 5. 为老 SDK 常用写法提供迁移表，但不强制提供同名别名。
@@ -366,7 +366,7 @@ audio-chat/tests/acceptance/test_esp32_s3_endpoint_contract.py
    - `user_id`。
    - `device_id`。
    - signed token 或 static token。
-   - capabilities 和 subscriptions。
+   - properties 和 subscriptions。
 2. ESP32 固件能力：
    - 控制连接注册和心跳。
    - 控制 WebSocket 重连。

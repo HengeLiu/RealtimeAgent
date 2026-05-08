@@ -42,7 +42,6 @@ class TrafficLightTask(BaseTask):
                 "frame_limit": frame_limit,
                 "vision_task": "traffic_light",
             },
-            require_capability="sensor.rgb",
         )
         assets = []
         async for asset in context.devices.watch_assets(
@@ -87,6 +86,5 @@ class TrafficLightTask(BaseTask):
                 "sensor.rgb",
                 mode="stop",
                 payload={"reason": "traffic_light_cancelled"},
-                require_capability="sensor.rgb",
                 selection="all",
             )

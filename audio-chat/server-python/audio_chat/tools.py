@@ -437,7 +437,7 @@ class ToolSchemaBuilder:
 class ToolContextFactory:
     """ToolContext 工厂。
 
-    主要功能：集中创建 Tool 执行上下文，确保设备能力只通过 UserDeviceContext 注入。
+    主要功能：集中创建 Tool 执行上下文，确保设备通讯能力只通过 UserDeviceContext 注入。
     """
 
     def __init__(
@@ -753,25 +753,15 @@ def _first_progress_message(progress_message: ProgressMessage | None) -> str | N
 class DeviceSnapshot:
     """端侧设备的只读快照。
 
-    主要功能：向 Tool / Task 暴露当前用户 active device set 的能力摘要。
+    主要功能：向 Tool / Task 暴露当前用户 active device set 的调试摘要。
     主要属性：`device_id` 只用于 debug 和只读展示，协议原生 Tool / Task API 不接受
     业务代码传入 device_id 做点对点投递。
     """
 
     device_id: str
-    capabilities: dict
     name: str = ""
-
-
-class DeviceHandle:
-    """设备只读句柄。
-
-    主要功能：保留兼容性的只读设备快照容器，不能承载命令、stream 配置或端侧任务 RPC。
-    主要属性：`snapshot` 是 `DeviceSnapshot`。
-    """
-
-    def __init__(self, snapshot: DeviceSnapshot) -> None:
-        self.snapshot = snapshot
+    properties: dict = field(default_factory=dict)
+    subscriptions: list[dict] = field(default_factory=list)
 
 
 class OutputStreamWriter:
@@ -842,38 +832,26 @@ class UserDeviceContext:
         self.user_id = user_id
         self._app = app
 
-    def get_devices(self, capability: str | None = None) -> list[DeviceSnapshot]:
+    def get_devices(self) -> list[DeviceSnapshot]:
         """返回当前用户 active device set 的只读快照。
 
-        主要逻辑：从 Control Service 读取在线设备。`capability` 仅作为旧
-        properties/capabilities 调试过滤参数；stream 通讯不要用它选路。
-        参数：`capability` 为空时返回全部设备，否则只返回旧属性中声明该能力的设备。
+        主要逻辑：从 Control Service 读取在线设备，返回身份、名称、properties 和
+        subscriptions，供 Tool / Task 做状态说明或调试展示。通讯仍然必须走事件和 stream。
+        参数：无。
         返回值：`DeviceSnapshot` 列表。
         异常情况：无在线设备时返回空列表。
         """
         devices = []
         for record in self._app.control_service.get_active_device_set(self.user_id).devices:
-            if capability is None or self._app.control_service.device_supports_capability(record, capability):
-                devices.append(
-                    DeviceSnapshot(
-                        device_id=record.device_id,
-                        capabilities=record.capabilities,
-                        name=getattr(record, "name", getattr(record, "device_name", "")),
-                    )
+            devices.append(
+                DeviceSnapshot(
+                    device_id=record.device_id,
+                    name=getattr(record, "name", getattr(record, "device_name", "")),
+                    properties=dict(getattr(record, "properties", {}) or {}),
+                    subscriptions=[subscription.__dict__ for subscription in getattr(record, "subscriptions", [])],
                 )
+            )
         return devices
-
-    def find_device(self, capability: str) -> DeviceHandle | None:
-        """按旧能力字段返回只读设备句柄。
-
-        主要逻辑：仅用于旧能力检查和 debug，不提供命令方法；真实通讯必须走协议
-        原生 API 的事件和 stream。
-        参数：`capability` 为能力名。
-        返回值：匹配时返回 `DeviceHandle`，否则返回 `None`。
-        异常情况：无。
-        """
-        devices = self.get_devices(capability)
-        return DeviceHandle(devices[0]) if devices else None
 
     def publish_event(
         self,
@@ -1161,14 +1139,6 @@ class UserDeviceContext:
             if isinstance(since, str) and ref.asset_id <= since:
                 continue
             yield ref
-
-    @staticmethod
-    def _has_capability(capabilities: dict, capability: str) -> bool:
-        """旧能力字典判断，仅供保留的兼容代码使用。"""
-
-        if capabilities.get(capability):
-            return True
-        return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
 
 
 class RequestAssetInput(BaseModel):
@@ -1528,7 +1498,7 @@ class QueryDeviceStateTool(BaseTool):
     """查询当前用户 active device set 的内置 Tool。"""
 
     class Input(BaseModel):
-        capability: str | None = Field(default=None, description="可选能力过滤，例如 sensor.rgb、sensor.mic 或 actuator.speaker。")
+        include_subscriptions: bool = Field(default=True, description="是否返回设备订阅摘要。")
 
     class Output(BaseModel):
         devices: list[dict] = Field(description="当前用户在线设备快照列表。")
@@ -1536,7 +1506,7 @@ class QueryDeviceStateTool(BaseTool):
 
     spec = ToolSpec(
         name="query_device_state",
-        description="查询当前用户在线设备和能力摘要。用户询问有哪些设备在线、眼镜状态或端侧能力时调用。",
+        description="查询当前用户在线设备、名称、properties 和订阅摘要。用户询问有哪些设备在线或设备状态时调用。",
         input_model=Input,
         output_model=Output,
         capability_type="tool",
@@ -1544,12 +1514,18 @@ class QueryDeviceStateTool(BaseTool):
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        capability = input_data.get("capability")
-        devices = context.devices.get_devices(str(capability) if capability else None)
-        data = {"devices": [device.__dict__ for device in devices], "count": len(devices)}
+        devices = context.devices.get_devices()
+        include_subscriptions = bool(input_data.get("include_subscriptions", True))
+        rows = []
+        for device in devices:
+            row = dict(device.__dict__)
+            if not include_subscriptions:
+                row.pop("subscriptions", None)
+            rows.append(row)
+        data = {"devices": rows, "count": len(devices)}
         return ToolResult.success(
             data=data,
-            message=f"{len(devices)} active devices matched",
+            message=f"{len(devices)} active devices online",
         )
 
 

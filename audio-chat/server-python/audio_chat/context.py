@@ -7,7 +7,6 @@
 from audio_chat.asset import ArtifactRef, AssetRef
 from audio_chat.tools import (
     CapabilityTrace,
-    DeviceHandle,
     DeviceSnapshot,
     OutputStreamWriter,
     UserDeviceContext,
@@ -17,7 +16,6 @@ __all__ = [
     "ArtifactRef",
     "AssetRef",
     "CapabilityTrace",
-    "DeviceHandle",
     "DeviceSnapshot",
     "OutputStreamWriter",
     "UserDeviceContext",

@@ -43,7 +43,7 @@ class CapturePhotoTool(BaseTool):
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行抓拍请求。
 
-        主要逻辑：只通过 `context.devices.request_asset()` 使用设备能力；端侧实际图片
+        主要逻辑：只通过 `context.devices.request_asset()` 使用设备通讯能力；端侧实际图片
         数据必须通过 `sensor.rgb` stream 上传，不能放进控制事件 payload。
         参数：`context` 为 SDK 注入的 Tool 上下文，`input_data` 可包含 `reason`。
         返回值：成功时包含图片资产引用，超时时返回可解释结果。

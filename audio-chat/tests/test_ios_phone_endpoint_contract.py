@@ -31,8 +31,8 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     """测试目标：验证 iOS 配置字段与其他参考端侧保持同一语义。
 
     测试方法：读取 `AppConfig.example.json`，检查 server、user、device、auth、
-    capabilities 和 subscriptions。
-    预期结果：iOS 不引入专用配置字段，能力路由仍由 capability/subscription 决定。
+    properties 和 subscriptions。
+    预期结果：iOS 不引入专用配置字段，路由只由 event/subscription 决定。
     """
 
     config = json.loads((IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8"))
@@ -42,11 +42,8 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["device_id"] == "dev-ios-phone-001"
     assert config["auth"]["mode"] == "disabled"
     assert config["protocol_version"] == "audio-chat.v1"
-    assert "sensor.rgb" in config["capabilities"]["streams.produce"]
-    assert "sensor.mic" in config["capabilities"]["streams.produce"]
-    assert "actuator.speaker" in config["capabilities"]["streams.consume"]
-    assert config["capabilities"]["phone.task.find_object_phone_task"] is True
-    assert config["capabilities"]["phone.task.traffic_light_phone_task"] is True
+    assert config["properties"]["phone.task.find_object_phone_task"] is True
+    assert config["properties"]["phone.task.traffic_light_phone_task"] is True
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
     assert {"event": "control.device.command.*"} in config["subscriptions"]
@@ -56,7 +53,7 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     """测试目标：验证 iOS 注册事件遵守公共 control.device.register.requested 契约。
 
     测试方法：读取 iOS 专用 golden 和 Swift 源码，检查注册 payload 必备字段。
-    预期结果：注册事件携带 user_id、device_id、auth、capabilities 和 subscriptions，
+    预期结果：注册事件携带 user_id、device_id、auth、properties 和 subscriptions，
     不包含 target_device 或固定 phone/glass 路由字段。
     """
 
@@ -67,9 +64,8 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     assert golden["producer_id"] == payload["device_id"]
     assert payload["client_type"] == "ios-phone"
     assert payload["auth"]["mode"] == "disabled"
-    assert "sensor.rgb" in payload["capabilities"]["streams.produce"]
-    assert "sensor.mic" in payload["capabilities"]["streams.produce"]
-    assert "actuator.speaker" in payload["capabilities"]["streams.consume"]
+    assert payload["properties"]["phone.task.find_object_phone_task"] is True
+    assert payload["properties"]["phone.task.traffic_light_phone_task"] is True
     assert "target_device" not in json.dumps(golden)
     assert "target_device_id" not in json.dumps(golden)
 
@@ -77,7 +73,7 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     for token in [
         "control.device.register.requested",
         "\"auth\": config.auth.payload",
-        "\"capabilities\": config.capabilities.mapValues",
+        "\"properties\": config.properties.mapValues",
         "\"subscriptions\": config.subscriptions.map",
     ]:
         assert token in source

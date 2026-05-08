@@ -23,7 +23,7 @@ Phase 2.5 新增完成项：
 
 1. Output Service 音频格式协商：`DashScopeStreamingTTS` 和 `MockStreamingTTS` 都暴露 `sample_rate_hz` metrics；Output Router 按 TTS provider 实际输出格式打开 `actuator.speaker` stream，`StreamFormat`、`assistant_audio.delta` chunk 和 metrics 保持一致。DashScope provider 在目标采样率不被 SDK 直接支持时会把 PCM 重采样到配置采样率。
 2. TTS 生命周期收紧：Output Router 按 output stream 创建 TTS session，`final` 只关闭当前 stream 绑定的 TTS，不影响其他用户或后续排队输出。
-3. Tool / Task 设备通讯语义收紧：旧 `DeviceHandle.configure_stream()`、`open_stream()`、`start_task()`、`EndpointTaskRef.stop()` 不再作为业务 API 暴露；`publish_event()` 按 user、订阅、能力和 selection 做协议分发，不在业务事件格式里暴露 `target_device_id`。
+3. Tool / Task 设备通讯语义收紧：旧选中设备后再操作的接口、`open_stream()`、`start_task()`、`EndpointTaskRef.stop()` 不再作为业务 API 暴露；`publish_event()` 按 user、订阅和 selection 做协议分发，不在业务事件格式里暴露 `target_device_id`。
 4. Asset Service request_id 关联：pending request 生成 request_id 并写入 `stream.control.configure.requested` payload；端侧通过 asset stream 回传时带回 request_id，Asset Service 只完成匹配请求，并使用锁保护 pending 表。
 5. Asset TTL 和并发隔离：过期资产不会被缓存命中；两个并发 `sensor.rgb` 请求不会因为上传顺序不同而串包。
 6. 稳定 provider 样本：新增脱敏/合成 16 kHz PCM 样本 `audio-chat/testdata/provider/dashscope-nihao-16k.pcm` 和期望文本 `dashscope-nihao-expected.txt`，真实 DashScope ASR integration 会断言 transcript 包含期望片段。
@@ -187,7 +187,7 @@ Phase 2.5 格式协商检查：
 
 ## 结论
 
-Phase 2.5 的 provider、stream 格式、DeviceHandle、Asset request_id、playback 和 preflight 验收通过。真实 DashScope ASR/TTS 已可用，真实输出音频格式协商已落地；物理 ESP32-S3 endpoint bridge 仍是后置项，不能描述为已真机完成。下一步先用 `web-glass` 验证浏览器 WebRTC AEC 全双工链路，再回到 ESP32-S3 AEC。
+Phase 2.5 的 provider、stream 格式、Asset request_id、playback 和 preflight 验收通过。真实 DashScope ASR/TTS 已可用，真实输出音频格式协商已落地；物理 ESP32-S3 endpoint bridge 仍是后置项，不能描述为已真机完成。下一步先用 `web-glass` 验证浏览器 WebRTC AEC 全双工链路，再回到 ESP32-S3 AEC。
 
 ## Phase 2.6 web-glass + Omni Realtime 代码状态
 

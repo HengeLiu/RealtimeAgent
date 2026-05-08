@@ -2,14 +2,6 @@
   "event_id": "evt-contract-control-device-register-requested",
   "event_name": "control.device.register.requested",
   "payload": {
-    "capabilities": {
-      "streams.consume": [
-        "actuator.speaker"
-      ],
-      "streams.produce": [
-        "sensor.mic"
-      ]
-    },
     "client_type": "contract-endpoint",
     "connection_id": "conn-contract",
     "device_id": "dev-contract",

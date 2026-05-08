@@ -46,19 +46,17 @@ LOG_LEVEL=DEBUG uv run audio-chat.server.run \
 
 ## ESP32 端启动与刷写
 
-ESP32-S3 端最小 bridge 固件需要声明：
+ESP32-S3 端最小 bridge 固件需要提交：
 
 ```json
 {
   "device_id": "dev-esp32-s3-001",
   "client_type": "esp32-s3",
-  "capabilities": {
+  "properties": {
     "audio.aec": "endpoint",
     "audio.playback_reference": "endpoint_ring_buffer",
-    "streams.produce": ["sensor.mic", "sensor.rgb"],
-    "streams.consume": ["actuator.speaker"],
     "audio.wake_word": "endpoint",
-    "sensor.rgb": true
+    "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
@@ -86,7 +84,7 @@ uv run audio-chat.config.sync \
 5. `AUDIO_CHAT_AUTH_MODE` / `AUDIO_CHAT_AUTH_TOKEN`
 6. `AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000`
 7. `AUDIO_CHAT_AUDIO_CHUNK_MS=20`
-8. stream capability 和 subscriptions JSON
+8. properties 和 subscriptions JSON
 
 旧 AEC 试验固件刷写入口仍可参考 `openaiglass-sdk/glass-esp32`；迁移到 audio-chat
 bridge 后，刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备

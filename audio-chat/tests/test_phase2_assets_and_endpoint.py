@@ -21,11 +21,6 @@ def test_user_device_context_requests_sensor_rgb_asset_without_direct_device_tar
         payload={
             "device_id": "dev-playback",
             "auth": {"mode": "disabled"},
-            "capabilities": {
-                "streams.produce": ["sensor.mic", "sensor.rgb"],
-                "streams.consume": ["actuator.speaker"],
-                "sensor.rgb": True,
-            },
             "subscriptions": [
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
             ],
@@ -53,7 +48,8 @@ def test_esp32_aec_endpoint_declares_endpoint_aec_and_buffers_playback_reference
     state.on_playback_pcm(b"abc")
     state.enqueue_aec_mic_pcm(b"mic")
 
-    assert payload["capabilities"]["audio.aec"] == "endpoint"
+    assert "capabilities" not in payload
+    assert payload["properties"]["audio.aec"] == "endpoint"
     assert state.sensor_mic_open is True
     assert state.aec_reference_ring.pop_all() == b"abc"
     assert list(state.mic_send_queue) == [b"mic"]
@@ -80,7 +76,6 @@ def test_protocol_native_context_publish_event_and_submit_text(tmp_path) -> None
             payload={
                 "device_id": "dev-device",
                 "auth": {"mode": "disabled"},
-                "capabilities": {"streams.produce": ["sensor.rgb"], "streams.consume": ["actuator.speaker"]},
                 "subscriptions": [
                     {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                     {"event": "control.device.command.requested"},
@@ -125,7 +120,6 @@ def test_publish_event_first_available_reaches_one_matching_subscriber(tmp_path)
                 payload={
                     "device_id": endpoint.device_id,
                     "auth": {"mode": "disabled"},
-                    "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
                     "subscriptions": [
                         {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                         {"event": "control.device.command.requested"},
@@ -170,7 +164,6 @@ def test_context_publish_event_uses_protocol_matching_not_device_command_service
             payload={
                 "device_id": "dev-spy",
                 "auth": {"mode": "disabled"},
-                "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
                 "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
             },
         ),
@@ -215,7 +208,6 @@ def test_asset_request_id_prevents_concurrent_rgb_cross_talk(tmp_path) -> None:
             payload={
                 "device_id": "dev-concurrent",
                 "auth": {"mode": "disabled"},
-                "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
                 "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
             },
         ),
@@ -336,7 +328,6 @@ def test_asset_request_rejects_media_bytes_in_control_payload(tmp_path) -> None:
             payload={
                 "device_id": "dev-camera",
                 "auth": {"mode": "disabled"},
-                "capabilities": {"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
                 "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
             },
         ),

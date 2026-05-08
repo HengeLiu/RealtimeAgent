@@ -4,7 +4,7 @@ description: 最小 Skill 示例
 tool_allowlist:
   - read_skill
 prompt_snippets:
-  - 只通过 Tool 或 Task 使用设备能力。
+  - 只通过 Tool 或 Task 使用设备通讯能力。
 ---
 # 最小 Skill 示例
 

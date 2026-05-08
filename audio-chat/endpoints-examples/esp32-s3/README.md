@@ -20,18 +20,16 @@
 7. 收到 `sensor.rgb` 的 `stream.control.configure.requested` 后，打开输入 stream
    上传 JPEG bytes；控制事件只保存 request_id、correlation_id、采样模式等语义字段。
 
-最小注册能力：
+最小注册信息：
 
 ```json
 {
   "client_type": "esp32-s3",
-  "capabilities": {
-    "streams.produce": ["sensor.mic", "sensor.rgb"],
-    "streams.consume": ["actuator.speaker"],
+  "properties": {
     "audio.wake_word": "endpoint",
     "audio.aec": "endpoint",
     "audio.playback_reference": "endpoint_ring_buffer",
-    "sensor.rgb": true
+    "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
@@ -51,7 +49,7 @@ uv run audio-chat.config.sync \
 ```
 
 生成的 `esp32-s3.local.env` 至少包含 server URL、control/stream WebSocket URL、user_id、
-device_id、auth、音频格式、wake/AEC 模式、stream capability 和订阅列表。真机固件可直接
+device_id、auth、音频格式、wake/AEC 模式、调试属性和订阅列表。真机固件可直接
 按这些键读取配置，避免手写与 server 不一致的 device_id 或 token。
 
 协议级验收：

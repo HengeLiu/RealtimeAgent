@@ -80,13 +80,7 @@ def sync(argv: list[str] | None = None) -> None:
             "user_id": args.user_id,
             "device_id": "dev-python-phone-mock-001",
             "auth": auth_config,
-            "capabilities": {
-                "streams.produce": ["sensor.rgb", "sensor.depth", "sensor.imu"],
-                "streams.consume": ["actuator.speaker", "actuator.haptic"],
-                "sensor.rgb": True,
-                "sensor.depth": True,
-                "sensor.imu": True,
-                "actuator.haptic": True,
+            "properties": {
                 "phone.task.find_object_phone_task": True,
                 "phone.task.traffic_light_phone_task": True,
             },
@@ -118,10 +112,7 @@ def sync(argv: list[str] | None = None) -> None:
                 "device_id": "dev-ios-phone-001",
                 "auth": auth_config,
                 "protocol_version": "audio-chat.v1",
-                "capabilities": {
-                    "streams.produce": ["sensor.rgb", "sensor.mic"],
-                    "streams.consume": ["actuator.speaker", "actuator.haptic"],
-                    "sensor.rgb": True,
+                "properties": {
                     "phone.task.find_object_phone_task": True,
                     "phone.task.traffic_light_phone_task": True,
                     "audio.aec": "replaceable",

@@ -42,7 +42,6 @@ class FindObjectVisionTask(BaseTask):
                 "frame_limit": frame_limit,
                 "object_name": object_name,
             },
-            require_capability="sensor.rgb",
         )
 
         assets = []
@@ -94,6 +93,5 @@ class FindObjectVisionTask(BaseTask):
                 "sensor.rgb",
                 mode="stop",
                 payload={"reason": "find_object_cancelled"},
-                require_capability="sensor.rgb",
                 selection="all",
             )

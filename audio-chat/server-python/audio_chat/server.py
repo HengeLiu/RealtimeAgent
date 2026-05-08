@@ -181,7 +181,7 @@ class AudioChatHttpServer:
         """返回设备连接快照。
 
         主要逻辑：读取 Control Service 的 debug snapshot，包含 connection_id、last_seen_at、
-        connection_state、capabilities 和 subscriptions。
+        connection_state、properties 和 subscriptions。
         参数：aiohttp request。
         返回值：JSON response。
         异常情况：无。

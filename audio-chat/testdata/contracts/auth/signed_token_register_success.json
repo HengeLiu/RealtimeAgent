@@ -22,10 +22,6 @@
           "nonce": "nonce-auth-success-001"
         }
       },
-      "capabilities": {
-        "streams.produce": ["sensor.mic"],
-        "streams.consume": ["actuator.speaker"]
-      },
       "subscriptions": [
         {"event": "control.audio_session.*"},
         {"event": "stream.output.*"}

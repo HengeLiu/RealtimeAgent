@@ -89,11 +89,6 @@ def register_basic_endpoint(app: AudioChatApp, endpoint: BasicAppPlaybackEndpoin
                 "client_type": "basic-app-playback",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "capabilities": {
-                    "streams.produce": ["sensor.rgb"],
-                    "streams.consume": ["actuator.speaker"],
-                    "sensor.rgb": True,
-                },
                 "subscriptions": [
                     {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},

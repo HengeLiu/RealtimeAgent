@@ -44,7 +44,7 @@ class PrepareNavigationTool(BaseTool):
     主要功能：
     1. 调用 MCP mock 路线规划工具。
     2. 返回路线摘要，供 Agent 决定是否启动导航 Task。
-    3. MCP 不直接持有设备上下文，设备能力仍由 Task 通过 event + stream 使用。
+    3. MCP 不直接持有设备上下文，设备通讯仍由 Task 通过 event + stream 使用。
     """
 
     spec = ToolSpec(

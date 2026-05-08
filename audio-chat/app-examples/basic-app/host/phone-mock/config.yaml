@@ -1,12 +1,6 @@
 user_id: user-basic-app
 device_id: dev-basic-phone-mock
-capabilities:
-  streams.produce:
-    - sensor.rgb
-  streams.consume:
-    - actuator.speaker
-    - actuator.haptic
-  sensor.rgb: true
+properties:
   phone.task.find_object_phone_task: true
   phone.task.traffic_light_phone_task: true
 subscriptions:

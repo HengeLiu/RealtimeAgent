@@ -14,7 +14,6 @@ from audio_chat.protocol import (
     CONTROL_EVENTS,
     PROTOCOL_VERSION,
     SERVER_PRODUCER_ID,
-    STREAM_TYPES,
     Event,
     Subscription,
     new_id,
@@ -44,7 +43,6 @@ class Device:
     client_type: str
     sdk_version: str
     properties: dict[str, Any]
-    capabilities: dict[str, Any]
     subscriptions: list[Subscription]
     connection_state: str = "online"
     connection_id: str = field(default_factory=lambda: new_id("conn"))
@@ -60,7 +58,11 @@ DeviceRecord = Device
 
 @dataclass(frozen=True)
 class DeviceSnapshot:
-    """只读设备快照。"""
+    """只读设备快照。
+
+    主要功能：给 debug API 暴露设备身份、连接状态、properties 和订阅策略。
+    不再包含旧的 capabilities 字段，避免把设备路由理解成第二套能力系统。
+    """
 
     user_id: str
     device_id: str
@@ -72,7 +74,6 @@ class DeviceSnapshot:
     connection_id: str
     last_seen_at: float
     connection_state: str
-    capabilities: dict[str, Any]
     subscriptions: tuple[Subscription, ...]
     last_error: dict[str, Any] | None = None
     register_failed_reason: str | None = None
@@ -93,7 +94,6 @@ class DeviceSnapshot:
             "connection_id": self.connection_id,
             "last_seen_at": self.last_seen_at,
             "connection_state": self.connection_state,
-            "capabilities": dict(self.capabilities),
             "subscriptions": [subscription.__dict__ for subscription in self.subscriptions],
             "last_error": self.last_error,
             "register_failed_reason": self.register_failed_reason,
@@ -289,15 +289,9 @@ class RegistrationValidator:
             raise ValueError("producer_id must equal payload.device_id")
         if event.version != PROTOCOL_VERSION:
             raise ValueError("unsupported protocol version")
-        # capabilities 是旧示例兼容字段，新协议路由只依赖 subscriptions 的 event/filter。
-        self.validate_capabilities(dict(event.payload.get("capabilities") or {}))
+        if "capabilities" in event.payload:
+            raise ValueError("registration payload must not contain capabilities; use subscriptions and properties")
         self.validate_subscriptions(event.payload.get("subscriptions") or [])
-
-    def validate_capabilities(self, capabilities: dict[str, Any]) -> None:
-        for key in ("streams.produce", "streams.consume"):
-            for stream_type in capabilities.get(key, []) or []:
-                if stream_type not in STREAM_TYPES:
-                    raise ValueError(f"unknown stream_type capability: {stream_type}")
 
     def validate_subscriptions(self, subscriptions: list[dict[str, Any]]) -> None:
         if len(subscriptions) > self.max_subscriptions_per_device:
@@ -335,7 +329,7 @@ class RegistrationValidator:
                 raise ValueError("subscription.filter path must be a non-empty string")
             if any(token in path for token in ("$", "[", "]", "(", ")", "|", "^")):
                 raise ValueError(f"unsupported subscription filter expression: {path}")
-            if not (path.startswith(("payload.", "capabilities.")) or path in allowed_envelope_fields):
+            if not (path.startswith("payload.") or path in allowed_envelope_fields):
                 raise ValueError(f"unsupported subscription filter path: {path}")
             if isinstance(expected, dict):
                 raise ValueError(f"subscription filter value must be scalar or list: {path}")
@@ -413,8 +407,6 @@ class SubscriptionMatcher:
             for part in path.split(".")[1:]:
                 value = value.get(part) if isinstance(value, dict) else None
             return value
-        if path.startswith("capabilities.") and device is not None:
-            return device.capabilities.get(path.removeprefix("capabilities."))
         return getattr(event, path, None)
 
 
@@ -467,7 +459,7 @@ class ControlService:
                 for item in registration.payload.get("subscriptions", [])
             ]
             name = str(registration.payload.get("name") or registration.payload.get("device_name") or device_id)
-            properties = dict(registration.payload.get("properties") or registration.payload.get("capabilities") or {})
+            properties = dict(registration.payload.get("properties") or {})
             record = Device(
                 user_id=registration.user_id,
                 device_id=device_id,
@@ -476,7 +468,6 @@ class ControlService:
                 client_type=registration.payload.get("client_type", "unknown"),
                 sdk_version=registration.payload.get("sdk_version", "unknown"),
                 properties=properties,
-                capabilities=dict(registration.payload.get("capabilities") or {}),
                 subscriptions=subscriptions,
                 auth_diagnostics={
                     "mode": self.authenticator.mode,
@@ -542,11 +533,10 @@ class ControlService:
                 ),
                 client_type=str(registration.payload.get("client_type") or "unknown"),
                 sdk_version=str(registration.payload.get("sdk_version") or "unknown"),
-                properties=dict(registration.payload.get("properties") or registration.payload.get("capabilities") or {}),
+                properties=dict(registration.payload.get("properties") or {}),
                 connection_id="",
                 last_seen_at=time.time(),
                 connection_state="offline",
-                capabilities=dict(registration.payload.get("capabilities") or {}),
                 subscriptions=tuple(
                     Subscription(event=str(item.get("event", "")), filter=dict(item.get("filter") or {}))
                     for item in registration.payload.get("subscriptions", [])
@@ -951,22 +941,6 @@ class ControlService:
         item["delivered"] = delivered
         item["delivery_reason"] = reason
 
-    def device_supports_capability(self, device: Device, capability: str) -> bool:
-        """兼容旧设备能力查询。
-
-        主要逻辑：事件分发不再调用本方法。这里仅供旧调试 API 或旧业务查询
-        `properties/capabilities` 中的非协议能力，避免把 stream 订阅解释成第二套
-        capability 概念。
-        参数：运行态设备对象和能力名。
-        返回值：支持时返回 True。
-        异常情况：无。
-        """
-
-        return self._has_legacy_capability(device.properties, capability) or self._has_legacy_capability(
-            device.capabilities,
-            capability,
-        )
-
     def _record_route(self, event: Event, result: PublishResult) -> None:
         """记录事件路由诊断。"""
 
@@ -985,12 +959,6 @@ class ControlService:
                 "route_diagnostics": list(result.route_diagnostics),
             },
         )
-
-    @staticmethod
-    def _has_legacy_capability(capabilities: dict[str, Any], capability: str) -> bool:
-        if capabilities.get(capability):
-            return True
-        return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
 
     def get_active_device_set(self, user_id: str) -> ActiveDeviceSet:
         devices = tuple(
@@ -1043,7 +1011,6 @@ class ControlService:
             connection_id=device.connection_id,
             last_seen_at=device.last_seen_at,
             connection_state=device.connection_state,
-            capabilities=dict(device.capabilities),
             subscriptions=tuple(device.subscriptions),
             last_error=dict(device.last_error) if device.last_error is not None else None,
             register_failed_reason=device.register_failed_reason,

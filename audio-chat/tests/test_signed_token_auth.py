@@ -46,7 +46,6 @@ def _registration(user_id: str, device_id: str, token: str) -> Event:
             "client_type": "python-playback",
             "sdk_version": "audio-chat-test",
             "auth": {"mode": "signed_token", "token": token},
-            "capabilities": {"streams.produce": ["sensor.mic"], "streams.consume": ["actuator.speaker"]},
             "subscriptions": [{"event": "control.audio_session.*"}],
         },
     )

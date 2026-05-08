@@ -184,7 +184,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
 
     主要功能：
     1. 模拟一台同 user 下的手机端设备。
-    2. 通过控制 WebSocket 注册 capability 和 subscription。
+    2. 通过控制 WebSocket 注册 properties 和 subscription。
     3. 通过 stream WebSocket 上传 `sensor.rgb`，并消费 `actuator.speaker`
        / `actuator.haptic` 下行 stream。
 
@@ -210,7 +210,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         auth: dict[str, Any] | None = None,
         device_name: str = "python-phone-mock",
         client_type: str = "python-phone-mock",
-        capabilities: dict[str, Any] | None = None,
+        properties: dict[str, Any] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         task_handlers: PhoneTaskHandlerRegistry | None = None,
@@ -225,14 +225,8 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             auth=auth,
             device_name=device_name,
             client_type=client_type,
-            capabilities=capabilities
+            properties=properties
             or {
-                "streams.produce": ["sensor.rgb", "sensor.depth", "sensor.imu"],
-                "streams.consume": ["actuator.speaker", "actuator.haptic"],
-                "sensor.rgb": True,
-                "sensor.depth": True,
-                "sensor.imu": True,
-                "actuator.haptic": True,
                 "phone.task.find_object_phone_task": True,
                 "phone.task.traffic_light_phone_task": True,
             },
@@ -521,7 +515,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["endpoint"] = "python-phone-mock"
         result["sensor_events"] = list(self.sensor_events)
         result["actuator_streams"] = list(self.actuator_streams)
-        result["capabilities"] = dict(self.capabilities)
+        result["properties"] = dict(self.properties)
         result["subscriptions"] = list(self.subscriptions)
         result["task_handlers"] = self.task_handlers.list_task_types()
         result["task_events"] = list(self.task_events)
@@ -554,7 +548,7 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         runs_root=config.get("runs_root", "runs/audio-chat"),
         auth=dict(config.get("auth") or {"mode": "disabled"}),
         device_name=str(config.get("name") or config.get("device_name") or "python-phone-mock"),
-        capabilities=dict(config.get("capabilities") or {}) or None,
+        properties=dict(config.get("properties") or {}) or None,
         subscriptions=list(config.get("subscriptions") or []) or None,
         task_handlers=handler_registry,
         task_event_scripts=dict(config.get("task_event_scripts") or {}),

@@ -3,7 +3,7 @@ import Foundation
 /// JSON 配置中的通用值。
 ///
 /// 主要功能：
-/// 1. 保留 `capabilities` 和 `subscriptions.filter` 中的布尔、数字、字符串、数组和对象。
+/// 1. 保留 `properties` 和 `subscriptions.filter` 中的布尔、数字、字符串、数组和对象。
 /// 2. 避免 Swift 侧把协议字段压缩成固定枚举，便于跟随 server 配置演进。
 enum JSONValue: Codable, Equatable {
     case string(String)
@@ -115,7 +115,7 @@ struct SubscriptionConfig: Codable, Equatable {
 /// iOS phone 参考端配置。
 ///
 /// 主要功能：
-/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、capabilities 和 subscriptions。
+/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties 和 subscriptions。
 /// 2. 为注册事件提供协议兼容 payload。
 /// 3. 缺少配置文件时提供本地默认值，便于打开工程后立即编译。
 struct AppConfig: Codable, Equatable {
@@ -124,7 +124,7 @@ struct AppConfig: Codable, Equatable {
     var deviceID: String
     var auth: AuthConfig
     var protocolVersion: String
-    var capabilities: [String: JSONValue]
+    var properties: [String: JSONValue]
     var subscriptions: [SubscriptionConfig]
 
     enum CodingKeys: String, CodingKey {
@@ -133,7 +133,7 @@ struct AppConfig: Codable, Equatable {
         case deviceID = "device_id"
         case auth
         case protocolVersion = "protocol_version"
-        case capabilities
+        case properties
         case subscriptions
     }
 
@@ -158,10 +158,7 @@ struct AppConfig: Codable, Equatable {
         deviceID: "dev-ios-phone-001",
         auth: AuthConfig(mode: "disabled", token: nil, signedToken: nil),
         protocolVersion: "audio-chat.v1",
-        capabilities: [
-            "streams.produce": .array([.string("sensor.rgb"), .string("sensor.mic")]),
-            "streams.consume": .array([.string("actuator.speaker"), .string("actuator.haptic")]),
-            "sensor.rgb": .bool(true),
+        properties: [
             "phone.task.find_object_phone_task": .bool(true),
             "phone.task.traffic_light_phone_task": .bool(true),
             "audio.aec": .string("replaceable"),

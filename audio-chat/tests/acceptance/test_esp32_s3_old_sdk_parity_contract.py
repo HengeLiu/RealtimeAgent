@@ -42,15 +42,15 @@ def test_esp32_contract_keeps_event_stream_boundary() -> None:
     """测试目标：冻结 ESP32-S3 参考端的通讯边界。
 
     测试方法：导入根契约测试中的状态机并检查注册 payload。
-    预期结果：设备通过 capability/subscription 声明音频和 RGB 能力，不出现隐藏 RPC。
+    预期结果：设备通过 event/filter 订阅表达通讯意图，不出现隐藏 RPC。
     """
 
     from audio_chat_esp32_s3.esp32_aec import Esp32AecEndpointState
 
     payload = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32").registration_payload()
 
-    assert "sensor.mic" in payload["capabilities"]["streams.produce"]
-    assert "sensor.rgb" in payload["capabilities"]["streams.produce"]
+    assert "capabilities" not in payload
+    assert payload["properties"]["audio.aec"] == "endpoint"
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["subscriptions"]
     assert "capture_photo" not in str(payload)
     assert "target_device" not in str(payload)

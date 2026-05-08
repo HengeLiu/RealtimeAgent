@@ -45,7 +45,6 @@ class FindObjectPhoneTask(BaseTask):
                     {"stream_type": "sensor.rgb", "mode": "continuous", "format": "jpeg"},
                 ],
             },
-            require_capability=f"phone.task.{self.task_type}",
             selection="first_available",
         )
         if result.delivered_count <= 0:

@@ -55,8 +55,8 @@ def register_endpoint(
     app: AudioChatApp,
     endpoint: EndpointProbe,
     *,
-    capabilities: dict,
     subscriptions: list[dict],
+    properties: dict | None = None,
 ) -> None:
     registered = app.register_device(
         Event(
@@ -69,7 +69,7 @@ def register_endpoint(
                 "client_type": "acceptance-probe",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "capabilities": capabilities,
+                "properties": dict(properties or {}),
                 "subscriptions": subscriptions,
             },
         ),
@@ -84,7 +84,6 @@ def test_payload_only_device_command_uses_event_without_stream(tmp_path) -> None
     register_endpoint(
         app,
         endpoint,
-        capabilities={"navigation.endpoint": True},
         subscriptions=[
             {
                 "event": "control.device.command.requested",
@@ -115,7 +114,6 @@ def test_continuous_sensor_task_uses_config_event_stream_and_asset_watch(tmp_pat
     register_endpoint(
         app,
         endpoint,
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
     context = UserDeviceContext(user_id="user-video", app=app)
@@ -168,7 +166,6 @@ def test_actuator_bytes_use_output_stream_not_event_payload(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        capabilities={"streams.consume": ["actuator.haptic"], "actuator.haptic": True},
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}}],
     )
 

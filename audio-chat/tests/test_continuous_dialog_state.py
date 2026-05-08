@@ -34,7 +34,6 @@ def register_audio_device(app: AudioChatApp, connection: Connection, user_id: st
             payload={
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
-                "capabilities": {"streams.produce": ["sensor.mic"], "streams.consume": ["actuator.speaker"]},
                 "subscriptions": [{"event": "control.audio_session.*"}],
             },
         ),
