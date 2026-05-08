@@ -12,8 +12,8 @@ audio-chat 迁移路径：
 
 参考：
 
-- `examples/basic-app/capabilities/continuous_rgb_analyze/task.py`
-- `examples/migration-templates/continuous_rgb_analyze/task.py`
+- `app-examples/basic-app/capabilities/continuous_rgb_analyze/task.py`
+- `app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py`
 
 验收要求：
 

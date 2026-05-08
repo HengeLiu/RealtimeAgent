@@ -20,7 +20,7 @@
 命令：
 
 ```bash
-uv run audio-chat.dev.preflight --config audio-chat/examples/minimal/server.yaml \
+uv run audio-chat.dev.preflight --config audio-chat/app-examples/basic-app/server.yaml \
   --report audio-chat/runs/preflight.json
 curl http://127.0.0.1:8765/api/debug/devices
 ```
@@ -82,7 +82,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 修复：
 
-- 先用 `examples/basic-app/capabilities/capture_photo/tool.py` 验证单帧资产链路。
+- 先用 `app-examples/basic-app/capabilities/capture_photo/tool.py` 验证单帧资产链路。
 - 再用 `continuous_rgb_analyze` 验证连续资产消费。
 
 ## 5. Tool 未注册
@@ -183,7 +183,7 @@ DASHSCOPE_API_KEY=... uv run python -m pytest audio-chat/tests/integration/test_
 修复：
 
 ```bash
-uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
+uv run audio-chat.config.sync --app-root audio-chat/app-examples/basic-app
 ```
 
 然后重新打开 iOS 参考端或重新配置 ESP32-S3 参考端。真机命令缺本地依赖时必须结构化失败，不能当作联调通过。

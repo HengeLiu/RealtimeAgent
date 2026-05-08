@@ -44,7 +44,7 @@ def test_current_state_docs_do_not_claim_unbacked_old_sdk_parity() -> None:
             _read("README.md"),
             _read("docs/audio-chat-sdk-architecture.md"),
             _read("docs/phase3-migration-guide.md"),
-            _read("examples/for-blind-app/README.md"),
+            _read("app-examples/for-blind-app/README.md"),
         ]
     )
     for expected in [
@@ -78,7 +78,7 @@ def test_old_sdk_parity_docs_reference_existing_acceptance_materials() -> None:
     required_refs = [
         "tests/test_docs_old_sdk_parity.py",
         "tests/acceptance/test_docs_current_state_contract.py",
-        "examples/for-blind-app",
+        "app-examples/for-blind-app",
         "docs/old-sdk-parity-troubleshooting.md",
     ]
     for ref in required_refs:
@@ -123,9 +123,9 @@ def test_docs_list_all_for_blind_capability_templates() -> None:
         [
             _read("README.md"),
             _read("docs/phase3-migration-guide.md"),
-            _read("examples/for-blind-app/README.md"),
+            _read("app-examples/for-blind-app/README.md"),
         ]
     )
     for capability in ["find_object", "traffic_light", "navigation", "search", "timer"]:
         assert capability in docs
-        assert (ROOT / "examples" / "for-blind-app" / "capabilities" / capability / "README.md").exists()
+        assert (ROOT / "app-examples" / "for-blind-app" / "capabilities" / capability / "README.md").exists()

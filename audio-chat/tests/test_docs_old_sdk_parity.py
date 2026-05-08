@@ -86,18 +86,18 @@ def test_old_sdk_migration_table_covers_main_developer_entries() -> None:
 def test_for_blind_sample_directories_exist_and_are_documented() -> None:
     """测试目标：确认文档提到的老业务能力样板目录真实存在。
 
-    测试方法：检查 `examples/for-blind-app` 下五类能力目录和 README。
+    测试方法：检查 `app-examples/for-blind-app` 下五类能力目录和 README。
     预期结果：迁移文档不会引用不存在的样板路径。
     """
 
     capabilities = ["find_object", "traffic_light", "navigation", "search", "timer"]
     for capability in capabilities:
-        path = ROOT / "examples" / "for-blind-app" / "capabilities" / capability / "README.md"
+        path = ROOT / "app-examples" / "for-blind-app" / "capabilities" / capability / "README.md"
         assert path.exists(), capability
         text = path.read_text(encoding="utf-8")
         assert "audio-chat" in text or "迁移路径" in text
 
-    app_readme = _read("examples/for-blind-app/README.md")
+    app_readme = _read("app-examples/for-blind-app/README.md")
     for capability in capabilities:
         assert f"capabilities/{capability}" in app_readme
 

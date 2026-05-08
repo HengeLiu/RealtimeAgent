@@ -270,7 +270,7 @@ ESP32-S3 设备示例入口：
 open audio-chat/device-examples/native-esp32-glass
 ```
 
-iOS / ESP32-S3 目录目前是设备示例和契约入口。缺少 Xcode、ESP-IDF、串口或真实设备时，真机步骤只能作为待验证流程；真机 smoke 由 `old-sdk-parity-phone` 和 `old-sdk-parity-esp32` 线路补齐。
+iOS / ESP32 目录目前是参考端和契约入口。缺少 Xcode、ESP-IDF、串口或真实设备时，真机步骤只能作为待验证流程；真机 smoke 由 `old-sdk-parity-phone` 和 `old-sdk-parity-esp32` 线路补齐。
 
 ## 7. Memory / Skill / MCP
 

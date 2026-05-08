@@ -1,7 +1,7 @@
 mode: in_process
 runs_root: runs/audio-chat/old-sdk-parity-playback
 asset_root: runs/audio-chat/old-sdk-parity-playback/assets
-app_root: examples/basic-app
+app_root: app-examples/basic-app
 user_id: user-old-sdk-parity-cli
 device_id: dev-old-sdk-parity-glass-playback
 heading:

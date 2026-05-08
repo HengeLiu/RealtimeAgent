@@ -41,13 +41,13 @@ def test_release_package_check_reports_release_candidate_gate(tmp_path: Path) ->
 def test_basic_app_can_be_copied_to_temp_project_and_playback_runs(tmp_path: Path) -> None:
     """测试目标：验证发布候选能支撑新项目复制 basic-app 后跑设备级回放。
 
-    测试方法：把 `examples/basic-app` 复制到临时目录，用当前 SDK 命令运行其
+    测试方法：把 `app-examples/basic-app` 复制到临时目录，用当前 SDK 命令运行其
     playback 配置。
     预期结果：回放命令成功，输出摘要里 `passed` 为 true。
     """
 
     app_copy = tmp_path / "basic-app"
-    shutil.copytree(AUDIO_ROOT / "examples" / "basic-app", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(AUDIO_ROOT / "app-examples" / "basic-app", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     config = app_copy / "host" / "glass-playback" / "playback.yaml"
 
     completed = subprocess.run(

@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE_ROOT = ROOT / "examples" / "migration-templates"
+TEMPLATE_ROOT = ROOT / "app-examples" / "for-blind-app" / "templates"
 
 
 def _python_files() -> list[Path]:
@@ -40,12 +40,12 @@ def test_migration_templates_are_valid_python_and_use_public_api() -> None:
     allowed_public_imports = {
         "BaseTask",
         "BaseTool",
-            "TaskContext",
-            "TaskEvent",
-            "ToolContext",
-            "ToolResult",
-            "ToolSpec",
-        }
+        "TaskContext",
+        "TaskEvent",
+        "ToolContext",
+        "ToolResult",
+        "ToolSpec",
+    }
     assert _python_files()
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -116,9 +116,9 @@ def test_phase3_migration_guide_references_templates_and_constraints() -> None:
 
     guide = (ROOT / "docs" / "phase3-migration-guide.md").read_text(encoding="utf-8")
     for expected in [
-        "examples/migration-templates/find_object/tool.py",
-        "examples/migration-templates/continuous_rgb_analyze/task.py",
-        "examples/migration-templates/notification_task/task.py",
+        "app-examples/for-blind-app/templates/find_object/tool.py",
+        "app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py",
+        "app-examples/for-blind-app/templates/notification_task/task.py",
         "UserDeviceContext",
         "不允许硬编码 device_id",
         "scripts/acceptance_check.py next-docs-contract",

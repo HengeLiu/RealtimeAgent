@@ -46,8 +46,8 @@ def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
         "tests/acceptance/test_release_candidate_gate.py",
         "audio-chat.sdk.package-check",
         "tests/acceptance/test_docs_current_state_contract.py",
-        "examples/basic-app/host/glass-playback/playback.yaml",
-        "examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
+        "app-examples/basic-app/host/glass-playback/playback.yaml",
+        "app-examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
     ]:
         assert expected in command_text
 

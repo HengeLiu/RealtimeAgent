@@ -202,7 +202,7 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
 def test_for_blind_examples_use_public_api_and_no_hidden_device_routes() -> None:
     """测试目标：冻结 for-blind 样板业务代码只能依赖公开 API。
 
-    测试方法：AST 和文本扫描 `examples/for-blind-app` 下 Python 文件。
+    测试方法：AST 和文本扫描 `app-examples/for-blind-app` 下 Python 文件。
     预期结果：不直接 import SDK 内部 service，不硬编码点对点设备路由，不携带媒体大字节字段。
     """
 

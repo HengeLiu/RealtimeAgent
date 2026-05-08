@@ -1,9 +1,9 @@
 mode: "in_process"
 runs_root: "runs/audio-chat/for-blind-app-playback"
 asset_root: "runs/audio-chat/for-blind-app-playback/assets"
-app_root: "examples/for-blind-app"
+app_root: "app-examples/for-blind-app"
 mcp_enabled: true
-mcp_config_path: "examples/for-blind-app/config/mcp.yaml"
+mcp_config_path: "app-examples/for-blind-app/config/mcp.yaml"
 user_id: "user-for-blind-playback"
 device_id: "dev-for-blind-playback"
 

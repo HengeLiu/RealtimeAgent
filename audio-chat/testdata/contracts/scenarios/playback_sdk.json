@@ -1,5 +1,5 @@
 {
-  "name": "playback-minimal",
+  "name": "playback-sdk",
   "required_events": [
     "control.device.registered",
     "control.user.wake.detected",

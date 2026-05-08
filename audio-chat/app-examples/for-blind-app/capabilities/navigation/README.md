@@ -12,7 +12,7 @@ audio-chat 迁移路径：
 参考：
 
 - `docs/phase3-migration-guide.md` 的 MCP Adapter 迁移章节。
-- `examples/migration-templates/continuous_rgb_analyze/task.py` 的连续传感器消费方式。
+- `app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py` 的连续传感器消费方式。
 
 验收要求：
 

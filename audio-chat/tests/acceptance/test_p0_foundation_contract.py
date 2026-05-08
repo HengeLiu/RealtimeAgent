@@ -85,13 +85,13 @@ def test_discovery_config_and_dev_checks_fields_are_loaded() -> None:
     预期结果：后续并行线路可以直接依赖这些配置字段。
     """
 
-    config = load_yaml_config("examples/minimal/server.yaml")
+    config = load_yaml_config("app-examples/basic-app/server.yaml")
 
     assert config.tools.discover.recursive is True
     assert config.tools.discover.fail_fast is True
     assert config.tasks.discover.recursive is True
     assert config.tasks.discover.fail_fast is True
-    assert config.dev_checks.report_path == "runs/audio-chat/preflight.json"
+    assert config.dev_checks.report_path == "runs/audio-chat/basic-app/preflight.json"
     assert config.dev_checks.require_recent_playback_ok is False
 
 
@@ -219,7 +219,7 @@ def test_preflight_generates_p0_json_report(tmp_path) -> None:
             "-m",
             "audio_chat.preflight",
             "--config",
-            "examples/minimal/server.yaml",
+            "app-examples/basic-app/server.yaml",
             "--report",
             str(report),
         ],

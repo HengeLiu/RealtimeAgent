@@ -4,7 +4,7 @@ from pathlib import Path
 from audio_chat_python_glass.playback import load_wav_audio, run_playback
 
 
-def test_python_playback_minimal_loop_writes_runs_artifacts(tmp_path: Path) -> None:
+def test_python_playback_sdk_loop_writes_runs_artifacts(tmp_path: Path) -> None:
     result = run_playback(
         {
             "runs_root": str(tmp_path / "runs"),

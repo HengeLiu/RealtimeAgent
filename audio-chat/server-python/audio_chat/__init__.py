@@ -1,4 +1,4 @@
-"""Minimal first-phase audio-chat server SDK."""
+"""audio-chat server SDK."""
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.asset import ArtifactRef, AssetRef

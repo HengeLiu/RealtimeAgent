@@ -56,7 +56,7 @@ def test_esp32_aec_endpoint_declares_endpoint_aec_and_buffers_playback_reference
 
 
 def test_yaml_config_loads_documented_sections() -> None:
-    config = load_yaml_config("examples/minimal/server.yaml")
+    config = load_yaml_config("app-examples/basic-app/server.yaml")
 
     assert config.server.port == 8765
     assert config.auth.mode == "disabled"

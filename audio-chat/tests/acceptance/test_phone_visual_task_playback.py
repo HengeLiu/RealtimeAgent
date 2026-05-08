@@ -11,7 +11,7 @@ from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoi
 from audio_chat.server import AudioChatHttpServer
 
 
-BASIC_APP_ROOT = Path(__file__).resolve().parents[2] / "examples" / "basic-app"
+BASIC_APP_ROOT = Path(__file__).resolve().parents[2] / "app-examples" / "basic-app"
 
 
 def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Path) -> None:
