@@ -54,6 +54,27 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
         assert item in html
 
 
+def test_browser_device_opens_stream_socket_after_audio_session() -> None:
+    """测试目标：验证 browser-device 不在注册后提前建立数据连接。
+
+    测试方法：静态检查注册成功分支只启用控制按钮，不创建 WebSocket；
+    数据连接由 ensureStreamSocketOpen 在开始音频或视觉 stream 时按需打开。
+    预期结果：control ws 是设备级常驻连接，stream ws 是连续对话级连接。
+    """
+
+    html = _html()
+    registered_branch = html.split('if (item.event_name === "control.device.registered")', 1)[1].split(
+        '} else if (item.event_name === "control.audio_session.open.requested")',
+        1,
+    )[0]
+
+    assert "enableRegisteredControls();" in registered_branch
+    assert "new WebSocket(streamUrl)" not in registered_branch
+    assert "openStreamSocket();" in html
+    assert "closeStreamSocket(\"audio_session_closed\")" in html
+    assert "startAudioButton.disabled = !registered || !sessionId || running" in html
+
+
 def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     """测试目标：验证 browser-device 能在音频长连接期间并行处理视觉 stream。
 

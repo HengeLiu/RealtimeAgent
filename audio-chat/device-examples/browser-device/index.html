@@ -218,9 +218,9 @@
     }
 
     function updateAudioButtons() {
-      const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN && streamWs && streamWs.readyState === WebSocket.OPEN);
+      const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN);
       const running = Boolean(inputStreamId || openingMic);
-      startAudioButton.disabled = !registered || running;
+      startAudioButton.disabled = !registered || !sessionId || running;
       startAudioButton.textContent = running ? "音频运行中" : "开始音频";
       stopAudioButton.disabled = !running;
     }
@@ -296,6 +296,30 @@
 
     async function ensureStreamSocketOpen() {
       if (streamWs && streamWs.readyState === WebSocket.OPEN) return;
+      if (streamWs && streamWs.readyState === WebSocket.CONNECTING) {
+        await waitStreamSocketOpen();
+        return;
+      }
+      openStreamSocket();
+      await waitStreamSocketOpen();
+    }
+
+    function openStreamSocket() {
+      const streamUrl = wsUrl(`/ws/stream?device_id=${document.getElementById("deviceId").value}`);
+      log(`connect ${streamUrl}`);
+      streamWs = new WebSocket(streamUrl);
+      streamWs.binaryType = "arraybuffer";
+      streamWs.onmessage = (message) => {
+        if (typeof message.data !== "string") handleStreamChunk(decodeStreamChunk(message.data));
+        else log(`stream text ${message.data}`);
+      };
+      streamWs.onopen = () => { log("stream ws open"); renderStatus(); };
+      streamWs.onclose = (evt) => { log(`stream ws closed code=${evt.code} reason=${evt.reason || "-"}`); renderStatus(); };
+      streamWs.onerror = () => { log("stream ws error"); renderStatus(); };
+      renderStatus();
+    }
+
+    async function waitStreamSocketOpen() {
       if (!streamWs) throw new Error("stream websocket is not created");
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("stream websocket open timeout")), 5000);
@@ -312,6 +336,23 @@
           reject(new Error("stream websocket error"));
         };
       });
+    }
+
+    function closeStreamSocket(reason = "dialog_closed") {
+      if (!streamWs) {
+        renderStatus();
+        return;
+      }
+      if (streamWs.readyState === WebSocket.OPEN || streamWs.readyState === WebSocket.CONNECTING) {
+        try {
+          log(`close stream ws reason=${reason}`);
+          streamWs.close(1000, reason);
+        } catch (err) {
+          log(`close stream ws failed: ${err.message}`);
+        }
+      }
+      streamWs = null;
+      renderStatus();
     }
 
     function encodeStreamChunk(chunk) {
@@ -539,17 +580,6 @@
       log(`recv ${item.event_name}`);
       if (item.event_name === "control.device.registered") {
         enableRegisteredControls();
-        const streamUrl = wsUrl(`/ws/stream?device_id=${document.getElementById("deviceId").value}`);
-        log(`connect ${streamUrl}`);
-        streamWs = new WebSocket(streamUrl);
-        streamWs.binaryType = "arraybuffer";
-        streamWs.onmessage = (message) => {
-          if (typeof message.data !== "string") handleStreamChunk(decodeStreamChunk(message.data));
-          else log(`stream text ${message.data}`);
-        };
-        streamWs.onopen = () => { log("stream ws open"); renderStatus(); };
-        streamWs.onclose = (evt) => { log(`stream ws closed code=${evt.code} reason=${evt.reason || "-"}`); renderStatus(); };
-        streamWs.onerror = () => { log("stream ws error"); renderStatus(); };
         log(`registered connection_id=${item.payload.connection_id}`);
         startHeartbeat();
       } else if (item.event_name === "control.audio_session.open.requested") {
@@ -589,6 +619,7 @@
         sessionId = null;
         closeButton.disabled = true;
         wakeButton.disabled = false;
+        closeStreamSocket("audio_session_closed");
         renderStatus();
       }
     }
