@@ -159,6 +159,27 @@ def test_browser_device_stop_audio_keeps_dialog_connection() -> None:
     assert "closeButton.disabled = !dialogOpen" in html
 
 
+def test_browser_device_resets_mic_state_when_server_closes_input_stream() -> None:
+    """测试目标：验证 server 关闭 sensor.mic 后，下一段离线音频会新建 stream。
+
+    测试方法：静态检查 browser-device 处理 `stream.input.closed + sensor.mic`，
+    并清空 inputStreamId、离线 timer 和本地状态。
+    预期结果：连续对话期间如果 server 因 idle_timeout 关闭旧输入流，端侧不会复用
+    已关闭的 stream_id。
+    """
+
+    html = _html()
+    handler_body = html.split("function markMicInputClosed(streamId", 1)[1].split("function pcm16ToFloat", 1)[0]
+    control_body = html.split("async function handleControlEvent(item)", 1)[1].split("async function handleRgbConfigure", 1)[0]
+
+    assert 'item.event_name === "stream.input.closed" && item.stream_type === "sensor.mic"' in control_body
+    assert "markMicInputClosed(item.stream_id" in control_body
+    assert "streamId !== inputStreamId" in handler_body
+    assert "clearInterval(offlineTimer)" in handler_body
+    assert "inputStreamId = null" in handler_body
+    assert 'activeAudioSource = audioModeSelect.value === "offline_realtime" ? "offline_paused" : "idle"' in handler_body
+
+
 def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     """测试目标：验证 browser-device 能在音频长连接期间并行处理视觉 stream。
 
@@ -186,6 +207,31 @@ def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     assert "inputStreamId = null" in html
     assert '"camera_frame_captured"' in html
     assert "视频模式只支持连续上传" in html
+
+
+def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
+    """测试目标：验证摄像头抓拍结果不会被文件上传逻辑覆盖。
+
+    测试方法：静态检查 uploadRgbImages 使用调用方传入的 images，并且只在
+    uploadSelectedImages 中读取文件输入。
+    预期结果：live_camera 模式的 stream.control.configure.requested 会上传摄像头帧，
+    不会误报“请选择图片文件”。
+    """
+
+    html = _html()
+    upload_body = html.split("async function uploadRgbImages(images, item = null", 1)[1].split(
+        "async function readSelectedImageFrames()",
+        1,
+    )[0]
+    selected_body = html.split("async function uploadSelectedImages(item = null)", 1)[1].split(
+        "async function uploadRgbImages",
+        1,
+    )[0]
+
+    assert 'await uploadRgbImages([await captureLiveCameraFrame()], item, "camera_frame_captured")' in html
+    assert "readSelectedImageFrames()" not in upload_body
+    assert "if (!images.length)" in upload_body
+    assert "await uploadRgbImages(await readSelectedImageFrames(), item, \"images_uploaded\")" in selected_body
 
 
 def test_browser_device_open_cli_defaults_to_new_example() -> None:

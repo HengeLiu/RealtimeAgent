@@ -23,7 +23,9 @@ def start(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.server.start", description="后台启动 audio-chat server")
-    parser.add_argument("--config", default="examples/minimal/server.yaml")
+    parser.add_argument("--config", default="")
+    parser.add_argument("--app-name", default="", help="应用名称，对应 app-examples/<app-name>")
+    parser.add_argument("--app-root", default="app-examples", help="应用根目录，默认 app-examples")
     parser.add_argument("--app-module", default="")
     parser.add_argument("--pid-file", default="runs/audio-chat/server.pid")
     parser.add_argument("--log-file", default="runs/audio-chat/server.log")
@@ -35,7 +37,17 @@ def start(argv: list[str] | None = None) -> None:
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     log_file.parent.mkdir(parents=True, exist_ok=True)
     if args.dry_run:
-        _write_pid_file(pid_file, {"status": "dry_run", "pid": None, "config": args.config, "log_file": str(log_file)})
+        _write_pid_file(
+            pid_file,
+            {
+                "status": "dry_run",
+                "pid": None,
+                "config": args.config,
+                "app_name": args.app_name,
+                "app_root": args.app_root,
+                "log_file": str(log_file),
+            },
+        )
         log_file.write_text("audio-chat server dry-run start\n", encoding="utf-8")
         print(f"server dry-run metadata written: {pid_file}")
         return
@@ -46,15 +58,27 @@ def start(argv: list[str] | None = None) -> None:
         sys.executable,
         "-c",
         "from audio_chat.server import main; main()",
-        "--config",
-        args.config,
     ]
+    if args.app_name:
+        command.extend(["--app-name", args.app_name, "--app-root", args.app_root])
+    else:
+        command.extend(["--config", args.config or "app-examples/minimal/server.yaml"])
     if args.app_module:
         command.extend(["--app-module", args.app_module])
     log_handle = log_file.open("ab")
     process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT)
     log_handle.close()
-    _write_pid_file(pid_file, {"status": "running", "pid": process.pid, "config": args.config, "log_file": str(log_file)})
+    _write_pid_file(
+        pid_file,
+        {
+            "status": "running",
+            "pid": process.pid,
+            "config": args.config,
+            "app_name": args.app_name,
+            "app_root": args.app_root,
+            "log_file": str(log_file),
+        },
+    )
     print(f"server started pid={process.pid} log={log_file}")
 
 

@@ -47,7 +47,7 @@ tasks:
 
 mcp:
   enabled: true
-  config_path: "examples/for-blind-app/config/mcp.yaml"
+  config_path: "app-examples/for-blind-app/config/mcp.yaml"
   default_timeout_seconds: 5
 
 dev_checks:

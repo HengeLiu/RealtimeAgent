@@ -10,8 +10,10 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.observability import LogContext, configure_console_logging, get_logger, log_debug, log_error, log_info
+from audio_chat.app_loader import load_app_config, prepare_app_imports
+from audio_chat.observability import LogContext, configure_console_logging, get_logger, log_debug, log_error, log_info, log_warning
 from audio_chat.protocol import Event, StreamChunkCodec
+from audio_chat.stream.service import StreamNotOpenError
 
 AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
 AUDIO_CHAT_SWEEPER_TASK_KEY = web.AppKey("audio_chat_sweeper_task", asyncio.Task)
@@ -175,7 +177,10 @@ class AudioChatHttpServer:
         返回值：JSON response。
         异常情况：无。
         """
-        return web.json_response({"status": "ok", "protocol_version": "audio-chat.v1"})
+        payload = {"status": "ok", "protocol_version": "audio-chat.v1"}
+        if self.audio_app.config.app_name:
+            payload["app_name"] = self.audio_app.config.app_name
+        return web.json_response(payload)
 
     async def debug_devices(self, _request: web.Request) -> web.Response:
         """返回设备连接快照。
@@ -327,6 +332,7 @@ class AudioChatHttpServer:
         connection.bind_stream_ws(ws)
         log_info(self.logger, "Stream WebSocket 已连接", LogContext(device_id=device_id))
         reported_errors: set[str] = set()
+        suppressed_errors: dict[str, int] = {}
         received_count = 0
 
         async def sender() -> None:
@@ -339,28 +345,45 @@ class AudioChatHttpServer:
             async for message in ws:
                 if message.type != WSMsgType.BINARY:
                     continue
+                chunk = None
                 try:
                     chunk = StreamChunkCodec.decode(message.data)
                     received_count += 1
                     self.audio_app.write_input_chunk(chunk)
                 except Exception as exc:
-                    log_error(
-                        self.logger,
-                        f"Stream chunk 处理失败 {type(exc).__name__}: {exc}",
-                        LogContext(device_id=device_id),
-                    )
-                    chunk_info = locals().get("chunk")
-                    if chunk_info is not None:
-                        user_id = getattr(chunk_info, "user_id", "unknown")
-                        session_id = getattr(chunk_info, "session_id", None)
-                        stream_id = getattr(chunk_info, "stream_id", None)
-                        stream_type = getattr(chunk_info, "stream_type", None)
+                    if chunk is not None:
+                        user_id = chunk.user_id
+                        session_id = chunk.session_id
+                        stream_id = chunk.stream_id
+                        stream_type = chunk.stream_type
+                        seq = chunk.seq
                     else:
                         user_id = "unknown"
                         session_id = None
                         stream_id = None
                         stream_type = None
+                        seq = None
                     dedupe_key = f"{device_id}:{stream_id}:{type(exc).__name__}:{str(exc)}"
+                    if dedupe_key in reported_errors:
+                        suppressed_errors[dedupe_key] = suppressed_errors.get(dedupe_key, 0) + 1
+                        continue
+                    reported_errors.add(dedupe_key)
+                    log_method = log_warning if isinstance(exc, StreamNotOpenError) else log_error
+                    log_method(
+                        self.logger,
+                        f"Stream chunk 处理失败 {type(exc).__name__}: {exc}",
+                        LogContext(
+                            user_id=user_id,
+                            session_id=session_id,
+                            device_id=device_id,
+                            stream_id=stream_id,
+                            fields={
+                                "stream_type": stream_type,
+                                "seq": seq,
+                                "note": "同类错误后续会被折叠到断开摘要" if isinstance(exc, StreamNotOpenError) else None,
+                            },
+                        ),
+                    )
                     error = Event(
                         event_name="system.error.raised",
                         user_id=user_id,
@@ -370,16 +393,23 @@ class AudioChatHttpServer:
                         stream_type=stream_type,
                         payload={
                             "message": str(exc),
+                            "error_type": type(exc).__name__,
                             "transport": "stream_ws",
                             "device_id": device_id,
+                            "seq": seq,
+                            "severity": "warning" if isinstance(exc, StreamNotOpenError) else "error",
                         },
                     )
                     self.audio_app.recorder.record_event(error)
                     self.audio_app.recorder.record_system_event(error.to_dict())
-                    if dedupe_key not in reported_errors:
-                        reported_errors.add(dedupe_key)
-                        await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
+                    await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
         finally:
+            for dedupe_key, count in suppressed_errors.items():
+                log_warning(
+                    self.logger,
+                    "Stream chunk 重复错误已折叠",
+                    LogContext(device_id=device_id, fields={"dedupe_key": dedupe_key, "suppressed_count": count}),
+                )
             sender_task.cancel()
             log_info(self.logger, "Stream WebSocket 已断开", LogContext(device_id=device_id, fields={"received_chunks": received_count}))
         return ws
@@ -392,10 +422,16 @@ class AudioChatHttpServer:
             event_name="system.error.raised",
             user_id=user_id,
             producer_id="server-main",
+            session_id=event.session_id if event is not None else None,
+            stream_id=event.stream_id if event is not None else None,
+            stream_type=event.stream_type if event is not None else None,
             payload={
                 "message": str(exc),
+                "error_type": type(exc).__name__,
                 "source_producer_id": producer_id,
+                "source_event": event.event_name if event is not None else None,
                 "raw_event": raw[:512],
+                "transport": "control_ws",
             },
         )
 
@@ -432,11 +468,21 @@ def main(argv: list[str] | None = None) -> None:
     异常情况：配置文件缺失、端口占用或扩展模块错误时进程退出并显示异常。
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="audio-chat/examples/minimal/server.yaml")
+    parser.add_argument("--config", default="")
+    parser.add_argument("--app-name", default="", help="应用名称，对应 app-examples/<app-name>")
+    parser.add_argument("--app-root", default="app-examples", help="应用根目录，默认 app-examples")
     parser.add_argument("--app-module", default="")
     args = parser.parse_args(argv)
 
-    config = AudioChatConfig.from_yaml(args.config)
+    if args.app_name:
+        config, launch = load_app_config(args.app_name, app_root=args.app_root)
+        resolved_config_path = str(launch.config_path)
+    else:
+        config_path = args.config or "app-examples/minimal/server.yaml"
+        prepare_app_imports(".")
+        config = AudioChatConfig.from_yaml(config_path)
+        launch = None
+        resolved_config_path = config_path
     configure_console_logging(config.log_level)
     logger = get_logger("audio_chat.server")
     log_info(
@@ -444,7 +490,10 @@ def main(argv: list[str] | None = None) -> None:
         "audio-chat server 启动",
         LogContext(
             fields={
-                "config": args.config,
+                "config": resolved_config_path,
+                "app_name": config.app_name,
+                "app_dir": config.app_dir,
+                "config_path": config.config_path or resolved_config_path,
                 "host": config.server_host,
                 "port": config.server_port,
                 "runs_root": config.runs_root,

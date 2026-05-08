@@ -221,6 +221,7 @@ class ObservabilityConfig:
 
 @dataclass(frozen=True)
 class AudioChatYamlConfig:
+    app_name: str = ""
     server: ServerConfig = field(default_factory=ServerConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     user: UserConfig = field(default_factory=UserConfig)
@@ -252,6 +253,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     agent_data = dict(data.get("agent", {}))
     agent_mode = str(agent_data.get("mode") or "").strip() or _agent_mode_from_voice_server_mode(voice.server_mode)
     return AudioChatYamlConfig(
+        app_name=str(data.get("app_name") or data.get("app-name") or ""),
         server=ServerConfig(**data.get("server", {})),
         auth=AuthConfig(**data.get("auth", {})),
         user=UserConfig(**data.get("user", {})),

@@ -25,6 +25,9 @@ from audio_chat.tools import BUILTIN_TOOLS, EXTENSION_BUILTIN_TOOLS, ToolAutoDis
 
 @dataclass(frozen=True)
 class AudioChatConfig:
+    app_name: str = ""
+    app_dir: str = ""
+    config_path: str = ""
     server_host: str = "0.0.0.0"
     server_port: int = 8765
     public_url: str = "http://127.0.0.1:8765"
@@ -114,6 +117,7 @@ class AudioChatConfig:
         text = loaded.agent.text
         realtime = loaded.agent.realtime
         return cls(
+            app_name=getattr(loaded, "app_name", ""),
             server_host=loaded.server.host,
             server_port=loaded.server.port,
             public_url=loaded.server.public_url,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field, replace
@@ -14,6 +15,9 @@ from audio_chat.output import OutputService
 from audio_chat.output.service import OutputItem
 from audio_chat.protocol import StreamChunk, StreamFormat
 from audio_chat.tools import ToolGateway
+
+
+_IMAGE_CONTEXT_SILENCE_PCM16 = b"\x00\x00" * 1600
 
 
 @dataclass(frozen=True)
@@ -419,9 +423,16 @@ class QwenOmniRealtimeAdapter:
             )
             image_path = _resolve_capture_photo_tool_image_path(result)
             image_bytes = image_path.read_bytes() if image_path is not None else None
+            response_instructions = self.config.instructions
             if image_bytes:
                 append_video = getattr(self._conversation, "append_video", None)
                 if callable(append_video):
+                    clear_buffer = getattr(self._conversation, "clear_appended_audio", None)
+                    if callable(clear_buffer):
+                        clear_buffer()
+                    append_audio = getattr(self._conversation, "append_audio", None)
+                    if callable(append_audio):
+                        append_audio(base64.b64encode(_IMAGE_CONTEXT_SILENCE_PCM16).decode("ascii"))
                     append_video(base64.b64encode(image_bytes).decode("ascii"))
                     commit = getattr(self._conversation, "commit", None)
                     if callable(commit):
@@ -435,9 +446,13 @@ class QwenOmniRealtimeAdapter:
                                 "tool_name": result.get("name"),
                                 "image_bytes": len(image_bytes),
                                 "image_path": str(image_path),
+                                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+                                "cleared_buffer": callable(clear_buffer),
+                                "prepended_audio_bytes": len(_IMAGE_CONTEXT_SILENCE_PCM16) if callable(append_audio) else 0,
                                 "committed": callable(commit),
                             }
                         )
+                    response_instructions = _capture_photo_response_instructions(self.config.instructions)
                 elif self._callbacks:
                     self._callbacks.error(
                         "Realtime provider does not support append_video",
@@ -459,7 +474,7 @@ class QwenOmniRealtimeAdapter:
                     },
                 )
             self._conversation.create_response(
-                instructions=self.config.instructions,
+                instructions=response_instructions,
                 output_modalities=self._output_modalities or None,
             )
         except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
@@ -500,6 +515,17 @@ def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | Non
         if candidate.is_file():
             return candidate.resolve()
     return None
+
+
+def _capture_photo_response_instructions(base: str) -> str:
+    """构造 capture_photo 后续响应指令。"""
+
+    return (
+        f"{base}\n\n"
+        "刚刚通过 capture_photo 工具提交了一张新的实时照片。"
+        "本次回答必须只基于刚提交的这张照片回答用户上一轮视觉问题；"
+        "如果它和历史照片或历史描述冲突，以刚提交的新照片为准。"
+    )
 
 
 class MockRealtimeProviderAdapter:

@@ -571,8 +571,10 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
 
         def __init__(self) -> None:
             self.items = []
+            self.audios = []
             self.videos = []
             self.commits = 0
+            self.clears = 0
             self.responses = []
 
         def create_item(self, item: dict) -> None:
@@ -580,6 +582,12 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
 
         def append_video(self, image_base64: str) -> None:
             self.videos.append(image_base64)
+
+        def append_audio(self, audio_base64: str) -> None:
+            self.audios.append(audio_base64)
+
+        def clear_appended_audio(self) -> None:
+            self.clears += 1
 
         def commit(self) -> None:
             self.commits += 1
@@ -613,11 +621,17 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     )
 
     assert conversation.items[0]["type"] == "function_call_output"
+    assert conversation.audios
     assert conversation.videos == ["/9hicm93c2VyLXBob3Rv/9k="]
+    assert conversation.clears == 1
     assert conversation.commits == 1
-    assert conversation.responses[0]["instructions"] == "结合图片回答"
+    assert "结合图片回答" in conversation.responses[0]["instructions"]
+    assert "刚提交的新照片" in conversation.responses[0]["instructions"]
     append_record = next(record for record in records if record.get("event") == "omni.capture_photo.image_appended")
     assert append_record["image_path"] == str(image_path.resolve())
+    assert append_record["image_sha256"] == "4c84c82bf54f47daa25a64cc46cb553c7c073ecc64c9f8b40287301cc3bf3407"
+    assert append_record["cleared_buffer"] is True
+    assert append_record["prepended_audio_bytes"] > 0
     assert append_record["committed"] is True
 
 

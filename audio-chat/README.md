@@ -181,9 +181,9 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 
 同步后重点确认：
 
-- `examples/basic-app/config/server.yaml`
-- `examples/basic-app/host/phone-mock/config.yaml`
-- `examples/basic-app/host/glass-playback/playback.yaml`
+- `app-examples/basic-app/server.yaml`
+- `app-examples/basic-app/host/phone-mock/config.yaml`
+- `app-examples/basic-app/host/glass-playback/playback.yaml`
 - `device-examples/browser-device/browser-device.yaml`
 - `endpoints-examples/ios-phone/AppConfig.example.json`
 - `endpoints-examples/esp32-s3/local.env.example`
@@ -195,21 +195,28 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 最小 server：
 
 ```bash
-uv run audio-chat.server.run --config audio-chat/examples/minimal/server.yaml
+uv run audio-chat.server.run --config app-examples/minimal/server.yaml
 ```
 
 业务样例 server：
 
 ```bash
 cd audio-chat
-PYTHONPATH=examples/basic-app uv run audio-chat.server.run \
-  --config examples/basic-app/config/server.yaml
+uv run audio-chat.server.run --app-name basic-app
+```
+
+`--app-name` 会自动解析 `app-examples/<app-name>`，加载该目录下的 `server.yaml` 或 `config/server.yaml`，并把 `capabilities` 目录加入 Tool / Task 自动发现。
+
+也可以显式指定应用根目录：
+
+```bash
+uv run audio-chat.server.run --app-name for-blind-app --app-root app-examples
 ```
 
 后台开发流程可以先 dry-run 检查命令参数：
 
 ```bash
-uv run audio-chat.server.start --config audio-chat/examples/minimal/server.yaml --dry-run
+uv run audio-chat.server.start --app-name basic-app --dry-run
 uv run audio-chat.server.logs --log-file audio-chat/runs/audio-chat/server.log
 uv run audio-chat.server.stop --dry-run
 ```
@@ -308,17 +315,14 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 
 ## 9. 看日志产物
 
-优先看结构化产物，而不是只看控制台日志：
+终端日志用于观察当前流程，重要日志会带 `detail_path` 指向完整结构化产物。`runs` 目录文件较多，日常调试优先看：
 
-- `runs/audio-chat/.../events.jsonl`：设备注册、订阅匹配、控制事件。
-- `runs/audio-chat/.../stream-events.jsonl`：stream 打开、chunk、关闭。
-- `runs/audio-chat/.../assets.jsonl`：server 内部缓存的 `sensor.*` stream 结果引用。
-- `runs/audio-chat/.../tool-events.jsonl`：Tool 入参、结果和错误。
-- `runs/audio-chat/.../task-events.jsonl`：Task 生命周期和通知决策。
-- `runs/audio-chat/.../output-decisions.jsonl`：Output Service 和播放仲裁结果。
-- `runs/audio-chat/.../result.json`：回放最终摘要。
+- `sessions/<session_id>/model-request.json`：本轮发给模型的请求快照，包括 prompt、messages、tools。
+- `sessions/<session_id>/agent-events.jsonl`：Agent Core 和 provider 事件。
+- `sessions/<session_id>/tool-events.jsonl`：Tool 入参、结果、耗时和错误。
+- `sessions/<session_id>/events.jsonl`：设备注册、唤醒、音频会话开关等控制事件。
 
-排障入口见 `docs/old-sdk-parity-troubleshooting.md`。
+完整产物说明见 `docs/runs-artifacts-guide.md`。老 SDK 迁移排障入口见 `docs/old-sdk-parity-troubleshooting.md`。
 
 ## 10. 老 SDK 迁移入口
 

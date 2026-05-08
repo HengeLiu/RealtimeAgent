@@ -527,6 +527,22 @@
       micPcmBuffer = new Uint8Array(0);
     }
 
+    function markMicInputClosed(streamId, reason = "server_closed") {
+      if (!streamId || streamId !== inputStreamId) return false;
+      if (offlineTimer) {
+        clearInterval(offlineTimer);
+        offlineTimer = null;
+      }
+      offlineAudio = null;
+      setStreamState(streamId, {stream_type: "sensor.mic", state: "closed", close_reason: reason});
+      inputStreamId = null;
+      micPcmBuffer = new Uint8Array(0);
+      activeAudioSource = audioModeSelect.value === "offline_realtime" ? "offline_paused" : "idle";
+      log(`sensor.mic closed by server stream_id=${streamId} reason=${reason}`);
+      renderStatus();
+      return true;
+    }
+
     function pcm16ToFloat(payload) {
       const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
       const out = new Float32Array(payload.byteLength / 2);
@@ -675,6 +691,8 @@
       } else if (item.event_name === "stream.output.close.requested") {
         pendingOutputClose.set(item.stream_id, item);
         closeOutputWhenDrained(item.stream_id);
+      } else if (item.event_name === "stream.input.closed" && item.stream_type === "sensor.mic") {
+        markMicInputClosed(item.stream_id, (item.payload && item.payload.reason) || "server_closed");
       } else if (item.event_name === "stream.control.configure.requested" && item.stream_type === "sensor.rgb") {
         await handleRgbConfigure(item);
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.haptic") {
@@ -734,7 +752,7 @@
       const activeSession = (item && item.session_id) || sessionId || newId("sess");
       try {
         await ensureStreamSocketOpen();
-        const images = await readSelectedImageFrames();
+        if (!images.length) throw new Error("没有可上传的图片帧");
         sendEvent(event("stream.input.opened", {
           stream_type: "sensor.rgb",
           format: {codec: "jpeg", sample_rate: 1, channels: 1, chunk_ms: 1},

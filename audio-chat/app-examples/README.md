@@ -1,6 +1,6 @@
-# audio-chat examples
+# audio-chat app-examples
 
-`examples/for-blind-app` 是当前唯一推荐给开发者复制和启动的完整示例应用。它把旧 SDK 的找物、红绿灯、导航、搜索、计时器，以及通用抓拍、设备状态、连续视觉 stream、Task 和 MCP wrapper 都放在同一个 app-root 中。
+`app-examples/for-blind-app` 是当前推荐给开发者复制和启动的完整示例应用。它把旧 SDK 的找物、红绿灯、导航、搜索、计时器，以及通用抓拍、设备状态、连续视觉 stream、Task 和 MCP wrapper 都放在同一个 app-root 中。
 
 其他目录只作为回归 fixture 或迁移模板保留：
 
@@ -15,9 +15,10 @@
 
 ```bash
 cd audio-chat
-PYTHONPATH=examples/for-blind-app uv run audio-chat.server.run \
-  --config examples/for-blind-app/config/server.yaml
+uv run audio-chat.server.run --app-name for-blind-app
 ```
+
+`--app-name for-blind-app` 会自动解析 `app-examples/for-blind-app`，加载 `config/server.yaml`，并把 `capabilities` 目录加入 Tool / Task 自动发现。应用如果使用根目录 `server.yaml`，例如 `basic-app`，同样可以通过 `--app-name basic-app` 启动。
 
 推荐验收：
 

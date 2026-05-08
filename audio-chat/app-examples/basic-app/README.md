@@ -21,8 +21,7 @@ playback 验收入口存在。
 
 ```bash
 cd audio-chat
-PYTHONPATH=examples/basic-app uv run audio-chat.server.run \
-  --config examples/basic-app/config/server.yaml
+uv run audio-chat.server.run --app-name basic-app
 ```
 
-当前目录名包含 `-`，不适合直接作为 Python 点分模块名导入；真实复制到业务仓库后建议改名为 `basic_app`，或像上面一样把 app-root 加入 `PYTHONPATH`。
+`--app-name basic-app` 会自动解析 `app-examples/basic-app`，加载根目录 `server.yaml`，并发现 `capabilities` 下的 Tool / Task。

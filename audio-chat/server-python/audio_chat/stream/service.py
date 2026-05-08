@@ -13,6 +13,18 @@ class StreamDispatcher(Protocol):
     def dispatch(self, chunk: StreamChunk) -> None: ...
 
 
+class StreamNotOpenError(ValueError):
+    """Raised when a chunk arrives for a stream that has already stopped."""
+
+    def __init__(self, handle: "StreamHandle") -> None:
+        super().__init__(f"stream is not open: state={handle.state}")
+        self.stream_id = handle.stream_id
+        self.stream_type = handle.stream_type
+        self.session_id = handle.session_id
+        self.user_id = handle.user_id
+        self.state = handle.state
+
+
 @dataclass
 class StreamHandle:
     """Stream 运行时句柄。
@@ -168,7 +180,7 @@ class StreamService:
         handle = self.registry.get(chunk.stream_id)
         self._validate_chunk(chunk, handle=handle)
         if handle.state != "open":
-            raise ValueError("stream is not open")
+            raise StreamNotOpenError(handle)
         handle.touch()
         self.recorder.record_stream_payload(chunk)
         self.recorder.record_stream_event(
@@ -189,7 +201,7 @@ class StreamService:
         handle = self.registry.get(chunk.stream_id)
         self._validate_chunk(chunk, handle=handle)
         if handle.state != "open":
-            raise ValueError("stream is not open")
+            raise StreamNotOpenError(handle)
         handle.touch()
         self.recorder.record_stream_payload(chunk)
         self.recorder.record_stream_event(
