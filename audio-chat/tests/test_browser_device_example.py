@@ -171,6 +171,8 @@ def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
 
     assert "streamStates = new Map()" in html
     assert "setStreamState" in html
+    assert "uploadSingleVisualSnapshot" in html
+    assert "uploadRgbImages" in html
     assert "uploadSelectedImages" in html
     assert "readSelectedImageFrames" in html
     assert "captureLiveCameraFrame" in html
@@ -182,6 +184,8 @@ def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     assert "stream_type: \"sensor.mic\"" in html
     assert "rgbContinuousStreamId = null" in html
     assert "inputStreamId = null" in html
+    assert '"camera_frame_captured"' in html
+    assert "视频模式只支持连续上传" in html
 
 
 def test_browser_device_open_cli_defaults_to_new_example() -> None:

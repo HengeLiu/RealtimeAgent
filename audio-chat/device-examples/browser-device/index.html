@@ -708,10 +708,27 @@
         await startContinuousRgb(item);
         return;
       }
-      await uploadSelectedImages(item);
+      await uploadSingleVisualSnapshot(item);
+    }
+
+    async function uploadSingleVisualSnapshot(item = null) {
+      const mode = rgbSourceModeSelect.value;
+      if (mode === "live_camera") {
+        await uploadRgbImages([await captureLiveCameraFrame()], item, "camera_frame_captured");
+        return;
+      }
+      if (mode === "image_upload") {
+        await uploadSelectedImages(item);
+        return;
+      }
+      throw new Error("视频模式只支持连续上传，请点击开始视频 stream");
     }
 
     async function uploadSelectedImages(item = null) {
+      await uploadRgbImages(await readSelectedImageFrames(), item, "images_uploaded");
+    }
+
+    async function uploadRgbImages(images, item = null, reason = "images_uploaded") {
       const requestId = item && item.payload && item.payload.request_id;
       const rgbStreamId = newId("stream_rgb");
       const activeSession = (item && item.session_id) || sessionId || newId("sess");
@@ -747,18 +764,18 @@
               height: image.height,
               image_index: index,
               image_count: images.length,
-              reason: (item && item.payload && item.payload.reason) || "upload_images",
+              reason: (item && item.payload && item.payload.reason) || reason,
             },
           }));
           bytesSent += image.bytes.byteLength;
         }
         sendEvent(event("stream.input.closed", {
           stream_type: "sensor.rgb",
-          reason: "images_uploaded",
+          reason,
           request_id: requestId,
           image_count: images.length,
         }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
-        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: images.length, bytes_sent: bytesSent, close_reason: "images_uploaded"});
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: images.length, bytes_sent: bytesSent, close_reason: reason});
         log(`send sensor.rgb images count=${images.length} bytes=${bytesSent} request_id=${requestId || "-"}`);
       } catch (err) {
         log(`capture sensor.rgb failed: ${err.message}`);
