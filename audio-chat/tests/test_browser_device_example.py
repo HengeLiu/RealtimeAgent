@@ -31,9 +31,9 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:
     """测试目标：验证 browser-device 支持真实麦克风和离线音频长连接测试。
 
-    测试方法：静态检查页面包含离线实时注入、快速回放、静音保持和 20ms chunk
-    发送逻辑。
-    预期结果：离线音频可以模拟实时 sensor.mic 长连接，快速回放被单独标识。
+    测试方法：静态检查页面包含离线实时注入、快速回放、段落 final 边界和
+    20ms chunk 发送逻辑。
+    预期结果：离线音频每段上传完成后暂停发送，但保留 sensor.mic stream 等待下一段。
     """
 
     html = _html()
@@ -41,11 +41,10 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
     required = [
         "offline_realtime",
         "offline_fast",
-        "keep_open_silence",
-        "keep_open_idle",
         "sendOfflineAudioRealtime",
         "sendOfflineAudioFast",
-        "silenceChunk",
+        "offline_segment_completed",
+        "offline_paused",
         "MIC_CHUNK_BYTES = INPUT_RATE * DEFAULT_CHUNK_MS / 1000 * 2",
         "setInterval(() =>",
         "DEFAULT_CHUNK_MS",
@@ -66,7 +65,6 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
 
     assert ".hidden { display: none !important; }" in html
     assert 'id="audioFileField"' in html
-    assert 'id="afterFileField"' in html
     assert 'id="silenceMsField"' in html
     assert 'id="imageFileField"' in html
     assert 'id="videoFileField"' in html
@@ -74,7 +72,7 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert 'audioModeSelect.addEventListener("change", updateInputModePanels)' in html
     assert 'rgbSourceModeSelect.addEventListener("change", updateInputModePanels)' in html
     assert 'setFieldVisible("audioFileField", offlineAudio)' in html
-    assert 'setFieldVisible("afterFileField", audioMode === "offline_realtime")' in html
+    assert 'id="afterFile"' not in html
     assert 'const continuousRgb = rgbMode === "live_camera" || rgbMode === "selected_video_current_frame"' in html
 
 
@@ -96,7 +94,7 @@ def test_browser_device_opens_stream_socket_after_audio_session() -> None:
     assert "new WebSocket(streamUrl)" not in registered_branch
     assert "openStreamSocket();" in html
     assert "closeStreamSocket(\"audio_session_closed\")" in html
-    assert "startAudioButton.disabled = !registered || !sessionId || running" in html
+    assert "startAudioButton.disabled = !registered || !sessionId || sending" in html
 
 
 def test_browser_device_stop_audio_keeps_dialog_connection() -> None:

@@ -61,14 +61,6 @@
           </select>
         </div>
         <div id="audioFileField"><label for="audioFile">WAV / PCM</label><input id="audioFile" type="file" accept=".wav,.pcm,audio/*" /></div>
-        <div id="afterFileField">
-          <label for="afterFile">文件结束后</label>
-          <select id="afterFile">
-            <option value="keep_open_silence">保持连接并发送静音</option>
-            <option value="keep_open_idle">保持连接但暂停发送</option>
-            <option value="auto_close">关闭麦克风 stream</option>
-          </select>
-        </div>
         <div id="silenceMsField"><label for="silenceMs">前后静音 ms</label><input id="silenceMs" type="number" min="0" value="300" /></div>
         <label class="inline"><input id="autoStartAudio" type="checkbox" />唤醒后自动开始音频</label>
         <button id="startAudio" disabled>开始音频</button>
@@ -171,7 +163,6 @@
     let streamStates = new Map();
     let offlineAudio = null;
     let offlineTimer = null;
-    let silenceTimer = null;
     let activeAudioSource = "idle";
     let videoElement = null;
     let videoTimer = null;
@@ -231,10 +222,12 @@
 
     function updateAudioButtons() {
       const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN);
-      const running = Boolean(inputStreamId || openingMic);
-      startAudioButton.disabled = !registered || !sessionId || running;
-      startAudioButton.textContent = running ? "音频运行中" : "开始音频";
-      stopAudioButton.disabled = !running;
+      const sending = isAudioSending();
+      const offlineMode = audioModeSelect.value === "offline_realtime" || audioModeSelect.value === "offline_fast";
+      const canStartNextSegment = Boolean(inputStreamId && activeAudioSource === "offline_paused" && offlineMode);
+      startAudioButton.disabled = !registered || !sessionId || sending || Boolean(inputStreamId && !canStartNextSegment);
+      startAudioButton.textContent = sending ? "音频发送中" : (canStartNextSegment ? "上传下一段" : "开始音频");
+      stopAudioButton.disabled = !inputStreamId && !openingMic;
     }
 
     function enableRegisteredControls() {
@@ -253,7 +246,6 @@
       const audioMode = audioModeSelect.value;
       const offlineAudio = audioMode === "offline_realtime" || audioMode === "offline_fast";
       setFieldVisible("audioFileField", offlineAudio);
-      setFieldVisible("afterFileField", audioMode === "offline_realtime");
       setFieldVisible("silenceMsField", offlineAudio);
 
       const rgbMode = rgbSourceModeSelect.value;
@@ -323,6 +315,10 @@
       } catch (err) {
         log(`send failed ${item.event_name}: ${err.message}`);
       }
+    }
+
+    function isAudioSending() {
+      return openingMic || activeAudioSource === "live_mic" || activeAudioSource === "offline_realtime" || activeAudioSource === "offline_fast";
     }
 
     async function ensureStreamSocketOpen() {
@@ -461,7 +457,7 @@
       });
     }
 
-    function sendFinalMicPayload() {
+    function sendFinalMicPayload(reason = "audio_segment_closed") {
       if (!streamWs || streamWs.readyState !== WebSocket.OPEN || !inputStreamId || !sessionId) return;
       const payload = micPcmBuffer.byteLength > 0 ? micPcmBuffer : new Uint8Array(0);
       streamWs.send(encodeStreamChunk({
@@ -476,7 +472,7 @@
         channels: 1,
         duration_ms: payload.byteLength > 0 ? DEFAULT_CHUNK_MS : 0,
         final: true,
-        metadata: {reason: "browser_device_stop_mic"},
+        metadata: {reason},
       }));
       const current = streamStates.get(inputStreamId) || {};
       setStreamState(inputStreamId, {
@@ -485,7 +481,7 @@
         seq,
         bytes_sent: (current.bytes_sent || 0) + payload.byteLength,
       });
-      log(`send final sensor.mic bytes=${payload.byteLength}`);
+      log(`send final sensor.mic bytes=${payload.byteLength} reason=${reason}`);
       micPcmBuffer = new Uint8Array(0);
     }
 
@@ -901,12 +897,9 @@
       return floatToPcm16(resampleLinear(channel, buffer.sampleRate, INPUT_RATE));
     }
 
-    function silenceChunk() {
-      return new Uint8Array(MIC_CHUNK_BYTES);
-    }
-
     async function openOfflineAudioStream({fast = false} = {}) {
-      if (openingMic || inputStreamId) return;
+      if (openingMic) return;
+      if (inputStreamId && activeAudioSource !== "offline_paused") return;
       openingMic = true;
       renderStatus();
       try {
@@ -919,19 +912,24 @@
           withSilence.set(offlineAudio, silenceBytes);
           offlineAudio = withSilence;
         }
-        inputStreamId = newId("stream_in");
-        seq = 0;
+        const reuseStream = Boolean(inputStreamId);
+        inputStreamId = inputStreamId || newId("stream_in");
+        if (!reuseStream) seq = 0;
         activeAudioSource = fast ? "offline_fast" : "offline_realtime";
-        sendEvent(event("stream.input.opened", {
-          stream_type: "sensor.mic",
-          format: {codec: "pcm16le", sample_rate: INPUT_RATE, channels: 1, chunk_ms: DEFAULT_CHUNK_MS},
-          source: activeAudioSource,
-        }, {session_id: sessionId, stream_id: inputStreamId, stream_type: "sensor.mic"}));
+        if (!reuseStream) {
+          sendEvent(event("stream.input.opened", {
+            stream_type: "sensor.mic",
+            format: {codec: "pcm16le", sample_rate: INPUT_RATE, channels: 1, chunk_ms: DEFAULT_CHUNK_MS},
+            source: activeAudioSource,
+          }, {session_id: sessionId, stream_id: inputStreamId, stream_type: "sensor.mic"}));
+        } else {
+          log(`resume sensor.mic stream_id=${inputStreamId}`);
+        }
         setStreamState(inputStreamId, {
           stream_type: "sensor.mic",
           state: "open",
-          seq: 0,
-          bytes_sent: 0,
+          seq,
+          bytes_sent: (streamStates.get(inputStreamId) || {}).bytes_sent || 0,
           opened_at: Date.now(),
         });
         closeButton.disabled = false;
@@ -984,28 +982,16 @@
     }
 
     function finishOfflineAudioFile() {
-      const afterFile = document.getElementById("afterFile").value;
-      if (afterFile === "auto_close" || activeAudioSource === "offline_fast") {
-        stopMic().catch((err) => log(`stop audio failed: ${err.message}`));
-        return;
-      }
-      if (afterFile === "keep_open_silence") {
-        activeAudioSource = "keep_open_silence";
-        silenceTimer = setInterval(() => {
-          if (!inputStreamId) return;
-          sendMicPayload(silenceChunk());
-        }, DEFAULT_CHUNK_MS);
-      } else {
-        activeAudioSource = "keep_open_idle";
-      }
+      sendFinalMicPayload("offline_segment_completed");
+      offlineAudio = null;
+      activeAudioSource = "offline_paused";
+      log("offline audio segment finished; sensor.mic stays open and waits for next segment");
       renderStatus();
     }
 
     async function stopOfflineTimers() {
       if (offlineTimer) clearInterval(offlineTimer);
-      if (silenceTimer) clearInterval(silenceTimer);
       offlineTimer = null;
-      silenceTimer = null;
       offlineAudio = null;
     }
 
@@ -1148,7 +1134,7 @@
       await stopOfflineTimers();
       if (processor) processor.disconnect();
       if (micSource) micSource.disconnect();
-      sendFinalMicPayload();
+      if (activeAudioSource !== "offline_paused") sendFinalMicPayload("audio_segment_closed");
       if (micStream) micStream.getTracks().forEach((track) => track.stop());
       if (inputStreamId) {
         sendEvent(event("stream.input.closed", {stream_type: "sensor.mic", reason: "audio_segment_closed"}, {
