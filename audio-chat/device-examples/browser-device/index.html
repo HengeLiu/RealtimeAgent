@@ -19,6 +19,7 @@
     button:disabled { opacity: 0.55; cursor: not-allowed; }
     .inline { display: flex; gap: 8px; align-items: center; min-height: 34px; }
     .inline input { width: auto; }
+    .hidden { display: none !important; }
     .panel { border-top: 1px solid #e5eaf2; padding-top: 8px; margin-top: 12px; }
     .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
     .status div { background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 6px; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -59,8 +60,8 @@
             <option value="offline_fast">离线音频快速回放</option>
           </select>
         </div>
-        <div><label for="audioFile">WAV / PCM</label><input id="audioFile" type="file" accept=".wav,.pcm,audio/*" /></div>
-        <div>
+        <div id="audioFileField"><label for="audioFile">WAV / PCM</label><input id="audioFile" type="file" accept=".wav,.pcm,audio/*" /></div>
+        <div id="afterFileField">
           <label for="afterFile">文件结束后</label>
           <select id="afterFile">
             <option value="keep_open_silence">保持连接并发送静音</option>
@@ -68,7 +69,7 @@
             <option value="auto_close">关闭麦克风 stream</option>
           </select>
         </div>
-        <div><label for="silenceMs">前后静音 ms</label><input id="silenceMs" type="number" min="0" value="300" /></div>
+        <div id="silenceMsField"><label for="silenceMs">前后静音 ms</label><input id="silenceMs" type="number" min="0" value="300" /></div>
         <label class="inline"><input id="autoStartAudio" type="checkbox" />唤醒后自动开始音频</label>
         <button id="startAudio" disabled>开始音频</button>
         <button id="stopAudio" class="secondary" disabled>停止音频</button>
@@ -89,12 +90,12 @@
             <option value="auto_fail">模拟失败</option>
           </select>
         </div>
-        <div><label for="imageFile">图片</label><input id="imageFile" type="file" accept="image/*" /></div>
-        <div><label for="videoFile">视频</label><input id="videoFile" type="file" accept="video/*" /></div>
-        <div><label for="videoFps">视频帧率</label><input id="videoFps" type="number" min="0.2" step="0.2" value="1" /></div>
+        <div id="imageFileField"><label for="imageFile">图片</label><input id="imageFile" type="file" accept="image/*" /></div>
+        <div id="videoFileField"><label for="videoFile">视频</label><input id="videoFile" type="file" accept="video/*" /></div>
+        <div id="videoFpsField"><label for="videoFps">视频帧率</label><input id="videoFps" type="number" min="0.2" step="0.2" value="1" /></div>
         <button id="sendPhoto" class="secondary" disabled>手动上传图片</button>
-        <button id="startVideo" class="secondary" disabled>开始视频 stream</button>
-        <button id="stopVideo" class="secondary" disabled>停止视频 stream</button>
+        <button id="startVideo" class="secondary" disabled>开始 RGB stream</button>
+        <button id="stopVideo" class="secondary" disabled>停止 RGB stream</button>
       </div>
       <p class="hint">视觉 stream 与麦克风 stream 相互独立；拍照或视频上传不会关闭正在进行的 sensor.mic 长连接。</p>
     </section>
@@ -152,6 +153,8 @@
     document.getElementById("userId").value = params.get("user_id") || "user-browser-device-001";
     document.getElementById("deviceId").value = params.get("device_id") || `dev-browser-${Math.random().toString(16).slice(2, 8)}`;
     document.getElementById("deviceName").value = params.get("name") || "浏览器调试设备";
+    const audioModeSelect = document.getElementById("audioMode");
+    const rgbSourceModeSelect = document.getElementById("rgbSourceMode");
 
     let controlWs = null;
     let streamWs = null;
@@ -240,6 +243,27 @@
       customEventButton.disabled = false;
       connectButton.disabled = true;
       renderStatus();
+    }
+
+    function setFieldVisible(id, visible) {
+      document.getElementById(id).classList.toggle("hidden", !visible);
+    }
+
+    function updateInputModePanels() {
+      const audioMode = audioModeSelect.value;
+      const offlineAudio = audioMode === "offline_realtime" || audioMode === "offline_fast";
+      setFieldVisible("audioFileField", offlineAudio);
+      setFieldVisible("afterFileField", audioMode === "offline_realtime");
+      setFieldVisible("silenceMsField", offlineAudio);
+
+      const rgbMode = rgbSourceModeSelect.value;
+      setFieldVisible("imageFileField", rgbMode === "selected_image" || rgbMode === "manual_confirm");
+      setFieldVisible("videoFileField", rgbMode === "selected_video_current_frame");
+      const continuousRgb = rgbMode === "live_camera" || rgbMode === "selected_video_current_frame";
+      setFieldVisible("videoFpsField", continuousRgb);
+      sendPhotoButton.textContent = rgbMode === "selected_video_current_frame" ? "上传当前视频帧" : "手动上传图片";
+      startVideoButton.classList.toggle("hidden", !continuousRgb);
+      stopVideoButton.classList.toggle("hidden", !continuousRgb);
     }
 
     function defaultServerUrl() {
@@ -696,7 +720,7 @@
     }
 
     async function resolveRgbFrame() {
-      const mode = document.getElementById("rgbSourceMode").value;
+      const mode = rgbSourceModeSelect.value;
       if (mode === "auto_fail") throw new Error("browser-device configured auto_fail");
       if (mode === "selected_image") return readSelectedImageFrame();
       if (mode === "selected_video_current_frame") return captureVideoFileFrame();
@@ -857,7 +881,7 @@
     }
 
     async function openAudioInput() {
-      const mode = document.getElementById("audioMode").value;
+      const mode = audioModeSelect.value;
       if (mode === "live_mic") {
         await openMicStream();
         return;
@@ -1184,6 +1208,9 @@
       }, {session_id: sessionId}));
     };
 
+    audioModeSelect.addEventListener("change", updateInputModePanels);
+    rgbSourceModeSelect.addEventListener("change", updateInputModePanels);
+    updateInputModePanels();
     renderStatus();
     window.__audioChatBrowserDeviceTest = {
       encodeStreamChunk,

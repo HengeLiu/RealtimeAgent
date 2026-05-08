@@ -54,6 +54,30 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
         assert item in html
 
 
+def test_browser_device_switches_visible_fields_by_input_mode() -> None:
+    """测试目标：验证 browser-device 会按输入模式隐藏无关字段。
+
+    测试方法：静态检查音频模式和视觉数据源都绑定到 updateInputModePanels，
+    并通过 field 容器和 hidden class 控制显示。
+    预期结果：真实麦克风不显示音频文件上传，图片/视频/摄像头模式只显示相关字段。
+    """
+
+    html = _html()
+
+    assert ".hidden { display: none !important; }" in html
+    assert 'id="audioFileField"' in html
+    assert 'id="afterFileField"' in html
+    assert 'id="silenceMsField"' in html
+    assert 'id="imageFileField"' in html
+    assert 'id="videoFileField"' in html
+    assert 'id="videoFpsField"' in html
+    assert 'audioModeSelect.addEventListener("change", updateInputModePanels)' in html
+    assert 'rgbSourceModeSelect.addEventListener("change", updateInputModePanels)' in html
+    assert 'setFieldVisible("audioFileField", offlineAudio)' in html
+    assert 'setFieldVisible("afterFileField", audioMode === "offline_realtime")' in html
+    assert 'const continuousRgb = rgbMode === "live_camera" || rgbMode === "selected_video_current_frame"' in html
+
+
 def test_browser_device_opens_stream_socket_after_audio_session() -> None:
     """测试目标：验证 browser-device 不在注册后提前建立数据连接。
 
