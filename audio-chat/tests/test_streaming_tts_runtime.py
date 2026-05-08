@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import audioop
 import json
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
@@ -63,6 +64,7 @@ def test_mock_streaming_tts_records_first_chunk_latency_metrics() -> None:
     metrics = tts.metrics()
 
     assert audio
+    assert audioop.rms(audio, 2) > 1000
     assert metrics["first_text_at"] is not None
     assert metrics["first_audio_at"] is not None
     assert metrics["first_chunk_latency_ms"] is not None

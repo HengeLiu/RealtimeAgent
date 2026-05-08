@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Protocol
 
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
@@ -29,6 +29,7 @@ class RealtimeProviderConfig:
     session_idle_timeout_seconds: int = 60
     websocket_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     instructions: str = "你是中文语音助手。请用简短口语回答用户。"
+    tools: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,8 @@ class QwenOmniRealtimeAdapter:
         self.config = config or RealtimeProviderConfig()
         self._conversation: Any | None = None
         self._callbacks: RealtimeProviderCallbacks | None = None
+        self._output_modalities: list[Any] = []
+        self._completed_tool_call_ids: set[str] = set()
 
     def open(self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks) -> None:
         """建立 Omni Realtime 会话。
@@ -97,6 +100,7 @@ class QwenOmniRealtimeAdapter:
         """
         if self._conversation is not None:
             return
+        self._completed_tool_call_ids.clear()
         api_key = os.getenv("DASHSCOPE_API_KEY")
         if not api_key:
             raise RuntimeError("DASHSCOPE_API_KEY is required for Qwen Omni Realtime")
@@ -140,17 +144,21 @@ class QwenOmniRealtimeAdapter:
         )
         self._conversation.connect()
         turn_detection_type = "semantic_vad" if self.config.turn_detection in {"provider", "semantic_vad"} else "server_vad"
-        self._conversation.update_session(
-            output_modalities=[MultiModality.TEXT, MultiModality.AUDIO],
-            voice=self.config.voice,
-            input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
-            output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
-            enable_input_audio_transcription=True,
-            input_audio_transcription_model="paraformer-realtime-v2",
-            enable_turn_detection=True,
-            turn_detection_type=turn_detection_type,
-            instructions=self.config.instructions,
-        )
+        self._output_modalities = [MultiModality.TEXT, MultiModality.AUDIO]
+        session_update_kwargs: dict[str, Any] = {
+            "output_modalities": self._output_modalities,
+            "voice": self.config.voice,
+            "input_audio_format": AudioFormat.PCM_16000HZ_MONO_16BIT,
+            "output_audio_format": AudioFormat.PCM_24000HZ_MONO_16BIT,
+            "enable_input_audio_transcription": True,
+            "input_audio_transcription_model": "paraformer-realtime-v2",
+            "enable_turn_detection": True,
+            "turn_detection_type": turn_detection_type,
+            "instructions": self.config.instructions,
+        }
+        if self.config.tools:
+            session_update_kwargs["tools"] = self.config.tools
+        self._conversation.update_session(**session_update_kwargs)
         callbacks.provider_event(
             {
                 "event": "omni.session.opened",
@@ -160,6 +168,7 @@ class QwenOmniRealtimeAdapter:
                 "input_audio": "pcm16le/16000/mono",
                 "output_audio": "pcm16le/24000/mono",
                 "turn_detection": turn_detection_type,
+                "tool_count": len(self.config.tools),
             }
         )
 
@@ -228,6 +237,8 @@ class QwenOmniRealtimeAdapter:
                 self._callbacks.error(str(exc), {"event": "omni.session.close.failed", "reason": reason})
         finally:
             self._conversation = None
+            self._output_modalities = []
+            self._completed_tool_call_ids.clear()
 
     def _handle_provider_event(self, message: dict[str, Any]) -> None:
         callbacks = self._callbacks
@@ -281,13 +292,17 @@ class QwenOmniRealtimeAdapter:
         if event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
             callbacks.provider_event(_summarize_omni_event(message))
             if callbacks.tool_call_done is not None:
+                call_id = str(message.get("call_id") or message.get("item_id") or message.get("id") or "")
+                if not self._try_mark_tool_call_completed(call_id=call_id, callbacks=callbacks):
+                    return
                 result = callbacks.tool_call_done(
                     {
-                        "tool_call_id": str(message.get("call_id") or message.get("item_id") or message.get("id") or ""),
+                        "tool_call_id": call_id,
                         "name": message.get("name"),
                         "arguments": message.get("arguments") or "",
                     }
                 )
+                self._submit_tool_result(call_id=call_id, result=result)
                 callbacks.provider_event(
                     {
                         "event": "omni.tool_result.ready",
@@ -295,7 +310,7 @@ class QwenOmniRealtimeAdapter:
                         "tool_call_id": result.get("tool_call_id"),
                         "tool_name": result.get("name"),
                         "ok": result.get("ok"),
-                        "degradation": "provider_tool_result_injection_not_supported",
+                        "injected": self._conversation is not None,
                     }
                 )
             return
@@ -303,13 +318,17 @@ class QwenOmniRealtimeAdapter:
             item = message.get("item") if isinstance(message.get("item"), dict) else {}
             if item.get("type") in {"function_call", "tool_call"} and callbacks.tool_call_done is not None:
                 callbacks.provider_event(_summarize_omni_event(message))
+                call_id = str(item.get("call_id") or item.get("id") or "")
+                if not self._try_mark_tool_call_completed(call_id=call_id, callbacks=callbacks):
+                    return
                 result = callbacks.tool_call_done(
                     {
-                        "tool_call_id": str(item.get("call_id") or item.get("id") or ""),
+                        "tool_call_id": call_id,
                         "name": item.get("name"),
                         "arguments": item.get("arguments") or "",
                     }
                 )
+                self._submit_tool_result(call_id=call_id, result=result)
                 callbacks.provider_event(
                     {
                         "event": "omni.tool_result.ready",
@@ -317,7 +336,7 @@ class QwenOmniRealtimeAdapter:
                         "tool_call_id": result.get("tool_call_id"),
                         "tool_name": result.get("name"),
                         "ok": result.get("ok"),
-                        "degradation": "provider_tool_result_injection_not_supported",
+                        "injected": self._conversation is not None,
                     }
                 )
                 return
@@ -325,6 +344,60 @@ class QwenOmniRealtimeAdapter:
             callbacks.error(str(message.get("message") or message), {"provider": "qwen", "raw": message})
             return
         callbacks.provider_event(_summarize_omni_event(message))
+
+    def _try_mark_tool_call_completed(self, *, call_id: str, callbacks: RealtimeProviderCallbacks) -> bool:
+        """确认同一个 provider 工具调用只被执行和回填一次。
+
+        主要逻辑：Qwen Omni 可能同时发出 `response.function_call_arguments.done`
+        和 `response.output_item.done`，两者描述的是同一个 function call。SDK 只应
+        执行一次工具并回填一次结果，否则 provider 会因为重复创建 response 而报错。
+        参数：`call_id` 为 provider 工具调用 ID，`callbacks` 用于记录重复忽略事件。
+        返回值：首次出现返回 True，重复或空 ID 返回 False。
+        异常情况：无。
+        """
+
+        if not call_id:
+            callbacks.provider_event({"event": "omni.tool_call.ignored", "provider": "qwen", "reason": "missing_call_id"})
+            return False
+        if call_id in self._completed_tool_call_ids:
+            callbacks.provider_event(
+                {
+                    "event": "omni.tool_call.duplicate_ignored",
+                    "provider": "qwen",
+                    "tool_call_id": call_id,
+                }
+            )
+            return False
+        self._completed_tool_call_ids.add(call_id)
+        return True
+
+    def _submit_tool_result(self, *, call_id: str, result: dict[str, Any]) -> None:
+        """把 ToolResult 回填给当前 Omni Realtime 会话。
+
+        主要逻辑：使用 provider conversation 的 `conversation.item.create`
+        写入 `function_call_output`，随后创建下一段文本和音频响应。
+        参数：`call_id` 为 provider 工具调用 ID，`result` 为 SDK ToolGateway 的结果。
+        返回值：无。
+        异常情况：provider SDK 异常通过 callbacks.error 记录，不向上破坏回调线程。
+        """
+
+        if self._conversation is None or not call_id:
+            return
+        try:
+            self._conversation.create_item(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(result, ensure_ascii=False, default=str),
+                }
+            )
+            self._conversation.create_response(
+                instructions=self.config.instructions,
+                output_modalities=self._output_modalities or None,
+            )
+        except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
+            if self._callbacks:
+                self._callbacks.error(str(exc), {"event": "omni.tool_result.inject.failed", "call_id": call_id})
 
 
 class MockRealtimeProviderAdapter:
@@ -516,7 +589,7 @@ class RealtimeToolBridge:
             record["name"] = name
         if arguments is not None:
             if isinstance(arguments, str):
-                record["arguments_text"] = str(record.get("arguments_text") or "") + arguments
+                record["arguments_text"] = arguments
             else:
                 record["arguments"].update(arguments)
         name = str(record.get("name") or "")
@@ -602,7 +675,13 @@ class RealtimeAudioAgentCore:
         if existing:
             existing[1].close(user_id=user_id, reason="session_replaced")
         self._failed_sessions.discard(session_id)
-        provider = self.provider_factory(self.realtime_config)
+        tools = self._realtime_tool_schemas()
+        session_config = replace(self.realtime_config, tools=tools)
+        self.recorder.record_model_request(
+            session_id,
+            self._build_model_request(user_id=user_id, session_id=session_id, config=session_config, tools=tools),
+        )
+        provider = self.provider_factory(session_config)
         callbacks = self._callbacks(user_id=user_id, session_id=session_id)
         try:
             provider.open(user_id=user_id, session_id=session_id, callbacks=callbacks)
@@ -621,6 +700,7 @@ class RealtimeAudioAgentCore:
             session_id=session_id,
             provider=self.realtime_config.provider,
             model=self.realtime_config.model,
+            tool_count=len(tools),
         )
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
@@ -834,21 +914,79 @@ class RealtimeAudioAgentCore:
                 "tool_call_id": result.get("tool_call_id"),
                 "tool_name": result.get("name"),
                 "ok": result.get("ok"),
-                "degradation": "provider_tool_result_injection_not_supported",
+                "provider_result_injection": "handled_by_provider_adapter",
             },
         )
-        self.recorder.record_system_event(
-            {
-                "event": "system.degradation.raised",
-                "component": "RealtimeProviderAdapter",
-                "reason": "provider_tool_result_injection_not_supported",
-                "user_id": user_id,
-                "session_id": session_id,
-                "tool_call_id": result.get("tool_call_id"),
-                "tool_name": result.get("name"),
-            }
-        )
         return result
+
+    def _realtime_tool_schemas(self) -> list[dict[str, Any]]:
+        """返回 Omni Realtime 可消费的 function calling schema。
+
+        主要逻辑：ToolGateway 默认输出 OpenAI-compatible `function` 嵌套结构；
+        Qwen Omni Realtime 沿用旧 SDK 的扁平 function schema。
+        参数：无。
+        返回值：Realtime session.update 可使用的 tools 列表。
+        异常情况：未绑定 ToolGateway 时返回空列表。
+        """
+
+        if self.tool_bridge.tool_gateway is None:
+            return []
+        tools: list[dict[str, Any]] = []
+        for schema in self.tool_bridge.tool_gateway.provider_schemas():
+            function = schema.get("function") if isinstance(schema, dict) else None
+            if isinstance(function, dict):
+                tools.append(
+                    {
+                        "type": "function",
+                        "name": function.get("name"),
+                        "description": function.get("description", ""),
+                        "parameters": function.get("parameters") or {"type": "object", "properties": {}},
+                    }
+                )
+            elif isinstance(schema, dict):
+                tools.append(schema)
+        return tools
+
+    def _build_model_request(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        config: RealtimeProviderConfig,
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """构造 Omni Realtime 等价模型请求快照。
+
+        主要逻辑：Realtime 底层不是 Chat Completions `messages` 参数，但开发者排障
+        仍需要看到等价的 system/user 视图、工具 schema 和音频输入占位。
+        参数：`user_id/session_id/config/tools` 描述当前会话。
+        返回值：可写入 `model-request.json` 的结构。
+        异常情况：无。
+        """
+
+        return {
+            "provider": config.provider,
+            "model": config.model,
+            "runner": "agent_core_realtime_audio",
+            "instructions": config.instructions,
+            "messages": [
+                {"role": "system", "content": config.instructions},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio_stream",
+                            "stream_type": "sensor.mic",
+                            "note": "Realtime 底层持续发送 PCM 音频；这里是等价请求视图。",
+                        }
+                    ],
+                },
+            ],
+            "tools": tools,
+            "tool_count": len(tools),
+            "user_id": user_id,
+            "session_id": session_id,
+        }
 
     def _default_provider_factory(self, config: RealtimeProviderConfig) -> RealtimeProviderAdapter:
         if config.provider == "mock":

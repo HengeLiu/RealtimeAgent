@@ -486,7 +486,7 @@ uv run python scripts/acceptance_check.py endpoint-playback
 3. 多设备 mock 能证明订阅策略分发，而不是硬编码设备类型。
 4. Web endpoint 能完成最小注册和唤醒流程。
 
-## 10. 并行线路 G：Docs / Contracts / Release Gate
+## 10. 并行线路 G：Docs / Contracts / Release Check
 
 目标：保持设计、代码、测试和开发者入口一致。
 
@@ -508,7 +508,7 @@ audio-chat/scripts/acceptance_check.py
 3. 每个内置事件都有 golden JSON。
 4. 每个 stream 类型有契约测试。
 5. README 只写真实可运行命令。
-6. release gate：
+6. release check：
    - `acceptance_check.py all --keep-going`。
    - package check。
    - boundary check。
@@ -554,7 +554,7 @@ uv run python scripts/acceptance_check.py all --keep-going
 1. A Protocol / Control / Device。
 2. B Stream / Asset。
 3. D Output / Notification / Observability。
-4. G Docs / Contracts / Release Gate。
+4. G Docs / Contracts / Release Check。
 
 第三批并行：
 

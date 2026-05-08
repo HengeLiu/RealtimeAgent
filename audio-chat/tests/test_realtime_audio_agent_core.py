@@ -5,9 +5,11 @@ from audio_chat.agent_core.realtime import (
     RealtimeAudioAgentCore,
     RealtimeProviderCallbacks,
     RealtimeProviderConfig,
+    RealtimeToolBridge,
 )
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
+from audio_chat.tools import BaseTool, ToolContext, ToolResult
 
 
 class Connection:
@@ -135,6 +137,45 @@ class FailingRealtimeProvider(FakeRealtimeProvider):
         """模拟 provider append 失败。"""
         self.append_calls += 1
         raise RuntimeError("Connection is already closed.")
+
+
+class EchoRealtimeTool(BaseTool):
+    """测试用 Realtime 工具。"""
+
+    name = "echo_realtime"
+    description = "Echo a value for realtime tool schema tests."
+    input_model = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+    }
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """返回输入值。"""
+
+        return ToolResult.success({"value": input_data.get("value")})
+
+
+class ArgumentCaptureGateway:
+    """测试用工具网关。
+
+    主要功能：记录 RealtimeToolBridge 最终传给工具的参数。
+    主要属性：`input_data` 保存最近一次工具调用入参。
+    """
+
+    def __init__(self) -> None:
+        self.input_data: dict | None = None
+
+    def provider_schemas(self) -> list[dict]:
+        """返回空工具 schema，当前测试不验证 schema。"""
+
+        return []
+
+    def call_sync_safe(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
+        """记录入参并返回成功结果。"""
+
+        self.input_data = input_data
+        return ToolResult.success({"received": input_data})
 
 
 def _realtime_app(tmp_path, instances: list[FakeRealtimeProvider]) -> AudioChatApp:
@@ -358,6 +399,191 @@ def test_realtime_commit_input_forwards_to_provider_and_records_event(tmp_path) 
 
     assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
     assert any(event.event == "input.committed" for event in app.agent_core.events())
+
+
+def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(tmp_path) -> None:
+    """测试目标：验证 Omni Realtime 也有等价 model request 和工具 schema。
+
+    测试方法：注册一个测试 Tool，注入 fake realtime provider，写入一片 mic chunk 打开会话。
+    预期结果：provider config 收到扁平 function schema，runs 中落盘 messages/tools 快照。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.tool_registry.register(EchoRealtimeTool())
+    app.agent_core = RealtimeAudioAgentCore(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            instructions="你是测试用 Omni 助手。",
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+    app.audio_pipeline.agent_core = app.agent_core
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+
+    tool_names = {tool["name"] for tool in instances[0].config.tools}
+    assert "echo_realtime" in tool_names
+    model_request = (tmp_path / "runs" / "sessions" / handle.session_id / "model-request.json").read_text(
+        encoding="utf-8"
+    )
+    assert "agent_core_realtime_audio" in model_request
+    assert "input_audio_stream" in model_request
+    assert "你是测试用 Omni 助手。" in model_request
+    assert "echo_realtime" in model_request
+
+
+def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
+    """测试目标：验证 Qwen Omni 工具结果会回填到同一条 Realtime 会话。
+
+    测试方法：绕过网络注入 fake conversation，直接触发 provider tool done 事件。
+    预期结果：conversation 收到 `function_call_output`，并继续创建音频响应。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    class FakeConversation:
+        """记录 provider adapter 写回的会话操作。"""
+
+        def __init__(self) -> None:
+            self.items = []
+            self.responses = []
+
+        def create_item(self, item: dict) -> None:
+            self.items.append(item)
+
+        def create_response(self, **kwargs) -> None:
+            self.responses.append(kwargs)
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="继续回答"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        tool_call_done=lambda record: {"tool_call_id": record["tool_call_id"], "name": record["name"], "ok": True},
+    )
+
+    provider._handle_provider_event(
+        {
+            "type": "response.function_call_arguments.done",
+            "call_id": "call-001",
+            "name": "echo_realtime",
+            "arguments": "{\"value\":\"ok\"}",
+        }
+    )
+
+    assert conversation.items[0]["type"] == "function_call_output"
+    assert conversation.items[0]["call_id"] == "call-001"
+    assert "\"ok\": true" in conversation.items[0]["output"]
+    assert conversation.responses[0]["instructions"] == "继续回答"
+    assert any(record.get("event") == "omni.tool_result.ready" for record in records)
+
+
+def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
+    """测试目标：验证 Qwen Omni 同一个工具调用只执行并回填一次。
+
+    测试方法：模拟 provider 先发送 `function_call_arguments.done`，随后又发送
+    同 call_id 的 `output_item.done`。
+    预期结果：工具回调、conversation item 和 create_response 都只发生一次，并记录重复忽略事件。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    class FakeConversation:
+        """记录 provider adapter 写回的会话操作。"""
+
+        def __init__(self) -> None:
+            self.items = []
+            self.responses = []
+
+        def create_item(self, item: dict) -> None:
+            self.items.append(item)
+
+        def create_response(self, **kwargs) -> None:
+            self.responses.append(kwargs)
+
+    records = []
+    calls = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        tool_call_done=lambda record: calls.append(record) or {"tool_call_id": record["tool_call_id"], "name": record["name"], "ok": True},
+    )
+
+    provider._handle_provider_event(
+        {
+            "type": "response.function_call_arguments.done",
+            "call_id": "call-001",
+            "name": "echo_realtime",
+            "arguments": "{}",
+        }
+    )
+    provider._handle_provider_event(
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "call-001",
+                "name": "echo_realtime",
+                "arguments": "{}",
+            },
+        }
+    )
+
+    assert len(calls) == 1
+    assert len(conversation.items) == 1
+    assert len(conversation.responses) == 1
+    assert any(record.get("event") == "omni.tool_call.duplicate_ignored" for record in records)
+
+
+def test_realtime_tool_bridge_prefers_done_arguments_over_delta_copy() -> None:
+    """测试目标：验证工具参数不会被 delta 和 done 重复拼接。
+
+    测试方法：先追加一次 `{}` 参数增量，再用 done 事件提交完整 `{}` 参数。
+    预期结果：工具收到空 dict，而不是无法解析的 `_raw_arguments={}{}`。
+    """
+
+    gateway = ArgumentCaptureGateway()
+    bridge = RealtimeToolBridge(tool_gateway=gateway)
+
+    bridge.append_tool_call_delta(tool_call_id="call-001", name="echo_realtime", arguments_delta="{}")
+    bridge.commit_tool_call(
+        tool_call_id="call-001",
+        user_id="user-001",
+        session_id="sess-001",
+        name="echo_realtime",
+        arguments="{}",
+    )
+
+    assert gateway.input_data == {}
 
 
 def test_mock_realtime_provider_cancel_and_close_are_observable() -> None:

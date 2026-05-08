@@ -723,7 +723,7 @@ audio-chat/tests/acceptance/test_release_candidate_gate.py
    - ESP32 工程文件。
    - web-glass 静态入口。
    - Python phone mock。
-5. 发布前 gate：
+5. 发布前检查：
    - all acceptance。
    - package-check。
    - docs contract。

@@ -72,6 +72,7 @@ agent:
     model: "qwen3.5-omni-plus-realtime"
     turn_detection: "provider"
     voice: "Tina"
+    instructions: "你是中文语音助手。请用简短口语回答用户。"
     session_idle_timeout_seconds: 60
     custom_adapter: ""
   text:

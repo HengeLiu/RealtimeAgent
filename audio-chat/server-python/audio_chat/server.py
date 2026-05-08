@@ -10,10 +10,12 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
+from audio_chat.observability import LogContext, configure_console_logging, get_logger, log_debug, log_error, log_info
 from audio_chat.protocol import Event, StreamChunkCodec
 
 AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
 AUDIO_CHAT_SWEEPER_TASK_KEY = web.AppKey("audio_chat_sweeper_task", asyncio.Task)
+QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
 
 
 @dataclass
@@ -62,6 +64,19 @@ class NetworkDeviceConnection:
         返回值：无。
         异常情况：队列写入失败时异常会留在 loop 回调中。
         """
+        if event.event_name not in QUIET_CONTROL_EVENTS:
+            log_debug(
+                get_logger("audio_chat.server"),
+                f"下发控制事件 {event.event_name}",
+                LogContext(
+                    user_id=event.user_id,
+                    session_id=event.session_id,
+                    device_id=self.device_id,
+                    stream_id=event.stream_id,
+                    event=event.event_name,
+                    fields={"stream_type": event.stream_type},
+                ),
+            )
         self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
 
     def push_stream_chunk(self, chunk: object) -> None:
@@ -100,6 +115,7 @@ class AudioChatHttpServer:
     def __init__(self, audio_app: AudioChatApp) -> None:
         self.audio_app = audio_app
         self.connections: dict[str, NetworkDeviceConnection] = {}
+        self.logger = get_logger("audio_chat.server")
 
     def create_web_app(self) -> web.Application:
         """创建 aiohttp 应用。
@@ -206,6 +222,8 @@ class AudioChatHttpServer:
         """
         ws = web.WebSocketResponse(heartbeat=15)
         await ws.prepare(request)
+        peer = request.remote or "-"
+        log_info(self.logger, "控制 WebSocket 已连接", LogContext(fields={"peer": peer}))
         loop = asyncio.get_running_loop()
         connection: NetworkDeviceConnection | None = None
         sender_task: asyncio.Task | None = None
@@ -222,6 +240,19 @@ class AudioChatHttpServer:
                 event: Event | None = None
                 try:
                     event = Event.from_dict(json.loads(message.data))
+                    if event.event_name not in QUIET_CONTROL_EVENTS:
+                        log_debug(
+                            self.logger,
+                            f"收到控制事件 {event.event_name}",
+                            LogContext(
+                                user_id=event.user_id,
+                                session_id=event.session_id,
+                                device_id=event.producer_id,
+                                stream_id=event.stream_id,
+                                event=event.event_name,
+                                fields={"stream_type": event.stream_type},
+                            ),
+                        )
                     if event.event_name == "control.device.register.requested":
                         device_id = str(event.payload.get("device_id") or event.producer_id)
                         pending_connection = NetworkDeviceConnection(device_id=device_id, loop=loop)
@@ -233,9 +264,31 @@ class AudioChatHttpServer:
                             self.connections[device_id] = pending_connection
                             connection = pending_connection
                             sender_task = asyncio.create_task(sender(connection))
+                            log_info(
+                                self.logger,
+                                "设备注册完成",
+                                LogContext(
+                                    user_id=event.user_id,
+                                    device_id=device_id,
+                                    event=registered.event_name,
+                                    fields={
+                                        "connection_id": pending_connection.connection_id,
+                                        "client_type": event.payload.get("client_type"),
+                                    },
+                                ),
+                            )
                     else:
                         self.audio_app.publish_control_event(event)
                 except Exception as exc:
+                    log_error(
+                        self.logger,
+                        f"控制事件处理失败 {type(exc).__name__}: {exc}",
+                        LogContext(
+                            user_id=event.user_id if event else None,
+                            session_id=event.session_id if event else None,
+                            device_id=event.producer_id if event else None,
+                        ),
+                    )
                     error = self._error_event(exc, event=event, raw=message.data)
                     self.audio_app.recorder.record_event(error)
                     self.audio_app.recorder.record_system_event(error.to_dict())
@@ -248,6 +301,11 @@ class AudioChatHttpServer:
                     connection.device_id,
                     connection_id=connection.connection_id,
                     reason="control_ws_disconnected",
+                )
+                log_info(
+                    self.logger,
+                    "控制 WebSocket 已断开",
+                    LogContext(device_id=connection.device_id, fields={"connection_id": connection.connection_id}),
                 )
         return ws
 
@@ -267,7 +325,9 @@ class AudioChatHttpServer:
         ws = web.WebSocketResponse(heartbeat=15)
         await ws.prepare(request)
         connection.bind_stream_ws(ws)
+        log_info(self.logger, "Stream WebSocket 已连接", LogContext(device_id=device_id))
         reported_errors: set[str] = set()
+        received_count = 0
 
         async def sender() -> None:
             while not ws.closed:
@@ -281,8 +341,14 @@ class AudioChatHttpServer:
                     continue
                 try:
                     chunk = StreamChunkCodec.decode(message.data)
+                    received_count += 1
                     self.audio_app.write_input_chunk(chunk)
                 except Exception as exc:
+                    log_error(
+                        self.logger,
+                        f"Stream chunk 处理失败 {type(exc).__name__}: {exc}",
+                        LogContext(device_id=device_id),
+                    )
                     chunk_info = locals().get("chunk")
                     if chunk_info is not None:
                         user_id = getattr(chunk_info, "user_id", "unknown")
@@ -315,6 +381,7 @@ class AudioChatHttpServer:
                         await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
         finally:
             sender_task.cancel()
+            log_info(self.logger, "Stream WebSocket 已断开", LogContext(device_id=device_id, fields={"received_chunks": received_count}))
         return ws
 
     @staticmethod
@@ -370,6 +437,23 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     config = AudioChatConfig.from_yaml(args.config)
+    configure_console_logging(config.log_level)
+    logger = get_logger("audio_chat.server")
+    log_info(
+        logger,
+        "audio-chat server 启动",
+        LogContext(
+            fields={
+                "config": args.config,
+                "host": config.server_host,
+                "port": config.server_port,
+                "runs_root": config.runs_root,
+                "agent_mode": config.agent_mode,
+                "realtime_provider": config.realtime_provider,
+                "text_model_provider": config.text_model_provider,
+            }
+        ),
+    )
     audio_app = AudioChatApp(config)
     _load_app_module(args.app_module, audio_app)
     server = AudioChatHttpServer(audio_app)

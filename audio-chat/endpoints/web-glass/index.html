@@ -47,7 +47,9 @@
     const wakeButton = document.getElementById("wake");
     const closeButton = document.getElementById("close");
     const params = new URLSearchParams(window.location.search);
-    document.getElementById("serverUrl").value = params.get("server_url") || `${location.protocol}//${location.host}`;
+    document.getElementById("serverUrl").value = normalizeServerUrl(
+      params.get("server_url") || defaultServerUrl(),
+    );
     document.getElementById("userId").value = params.get("user_id") || "user-web-glass-001";
     document.getElementById("deviceId").value = params.get("device_id") || `dev-web-glass-${Math.random().toString(16).slice(2, 8)}`;
 
@@ -69,6 +71,7 @@
     let openingMic = false;
     let interruptSentAt = 0;
     let speechDuringPlaybackFrames = 0;
+    let heartbeatTimer = null;
 
     function delay(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,12 +83,35 @@
       logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function defaultServerUrl() {
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        return `${location.protocol}//${location.host}`;
+      }
+      return "http://127.0.0.1:8765";
+    }
+
+    function normalizeServerUrl(raw) {
+      const value = String(raw || "").trim().replace(/\/$/, "");
+      if (!value) return "http://127.0.0.1:8765";
+      try {
+        const url = new URL(value);
+        if (url.hostname === "0.0.0.0" || url.hostname === "[::]" || url.hostname === "::") {
+          url.hostname = "127.0.0.1";
+        }
+        return url.toString().replace(/\/$/, "");
+      } catch (err) {
+        return value;
+      }
+    }
+
     function newId(prefix) {
       return `${prefix}_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`.slice(0, prefix.length + 13);
     }
 
     function wsUrl(path) {
-      const raw = document.getElementById("serverUrl").value.replace(/\/$/, "");
+      const normalized = normalizeServerUrl(document.getElementById("serverUrl").value);
+      document.getElementById("serverUrl").value = normalized;
+      const raw = normalized.replace(/\/$/, "");
       return raw.replace("http://", "ws://").replace("https://", "wss://") + path;
     }
 
@@ -195,6 +221,27 @@
       }));
     }
 
+    function sendFinalMicPayload() {
+      if (!streamWs || streamWs.readyState !== WebSocket.OPEN || !inputStreamId || !sessionId) return;
+      const payload = micPcmBuffer.byteLength > 0 ? micPcmBuffer : new Uint8Array(0);
+      streamWs.send(encodeStreamChunk({
+        user_id: document.getElementById("userId").value,
+        session_id: sessionId,
+        stream_id: inputStreamId,
+        stream_type: "sensor.mic",
+        seq: seq++,
+        payload,
+        codec: "pcm16le",
+        sample_rate: INPUT_RATE,
+        channels: 1,
+        duration_ms: payload.byteLength > 0 ? DEFAULT_CHUNK_MS : 0,
+        final: true,
+        metadata: {reason: "web_glass_stop_mic"},
+      }));
+      log(`send final sensor.mic bytes=${payload.byteLength}`);
+      micPcmBuffer = new Uint8Array(0);
+    }
+
     function pcm16ToFloat(payload) {
       const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
       const out = new Float32Array(payload.byteLength / 2);
@@ -259,10 +306,25 @@
 
     async function connect() {
       const deviceId = document.getElementById("deviceId").value;
-      controlWs = new WebSocket(wsUrl("/ws/control"));
+      const controlUrl = wsUrl("/ws/control");
+      log(`connect ${controlUrl}`);
+      controlWs = new WebSocket(controlUrl);
       controlWs.onmessage = (message) => handleControlEvent(JSON.parse(message.data));
-      controlWs.onclose = () => log("control ws closed");
-      await new Promise((resolve) => controlWs.onopen = resolve);
+      controlWs.onerror = () => log("control ws error");
+      controlWs.onclose = (evt) => log(`control ws closed code=${evt.code} reason=${evt.reason || "-"}`);
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("control websocket open timeout")), 5000);
+        controlWs.onopen = () => {
+          clearTimeout(timer);
+          log("control ws open");
+          resolve();
+        };
+        controlWs.onerror = () => {
+          clearTimeout(timer);
+          log("control ws error");
+          reject(new Error("control websocket error"));
+        };
+      });
       sendEvent(event("control.device.register.requested", {
         device_id: deviceId,
         device_name: "web-glass",
@@ -282,21 +344,35 @@
       }));
     }
 
+    function startHeartbeat() {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      heartbeatTimer = setInterval(() => {
+        if (!controlWs || controlWs.readyState !== WebSocket.OPEN) return;
+        sendEvent(event("control.device.heartbeat.received", {
+          connection_state: "online",
+          client_type: "web-glass",
+        }));
+      }, 10000);
+    }
+
     async function handleControlEvent(item) {
       log(`recv ${item.event_name}`);
       if (item.event_name === "control.device.registered") {
         wakeButton.disabled = false;
         connectButton.disabled = true;
-        streamWs = new WebSocket(wsUrl(`/ws/stream?device_id=${document.getElementById("deviceId").value}`));
+        const streamUrl = wsUrl(`/ws/stream?device_id=${document.getElementById("deviceId").value}`);
+        log(`connect ${streamUrl}`);
+        streamWs = new WebSocket(streamUrl);
         streamWs.binaryType = "arraybuffer";
         streamWs.onmessage = (message) => {
           if (typeof message.data !== "string") handleStreamChunk(decodeStreamChunk(message.data));
           else log(`stream text ${message.data}`);
         };
         streamWs.onopen = () => log("stream ws open");
-        streamWs.onclose = () => log("stream ws closed");
+        streamWs.onclose = (evt) => log(`stream ws closed code=${evt.code} reason=${evt.reason || "-"}`);
         streamWs.onerror = () => log("stream ws error");
         log(`registered connection_id=${item.payload.connection_id}`);
+        startHeartbeat();
       } else if (item.event_name === "control.audio_session.open.requested") {
         if (inputStreamId || openingMic) {
           log("audio session already active; ignore duplicate open request");
@@ -363,6 +439,8 @@
 
     function handleStreamChunk(chunk) {
       if (chunk.stream_type !== "actuator.speaker") return;
+      const durationMs = Math.round((chunk.payload.byteLength / 2) / (chunk.sample_rate || INPUT_RATE) * 1000);
+      log(`recv audio chunk bytes=${chunk.payload.byteLength} sample_rate=${chunk.sample_rate || INPUT_RATE} duration_ms=${durationMs}`);
       if (!outputStarted.has(chunk.stream_id)) {
         outputStarted.add(chunk.stream_id);
         sendEvent(event("stream.output.started", {stream_type: "actuator.speaker"}, {
@@ -378,7 +456,10 @@
       buffer.copyToChannel(samples, 0);
       const node = audioContext.createBufferSource();
       node.buffer = buffer;
-      node.connect(audioContext.destination);
+      const gain = audioContext.createGain();
+      gain.gain.value = 1.0;
+      node.connect(gain);
+      gain.connect(audioContext.destination);
       node.onended = () => {
         playbackNodes = playbackNodes.filter((item) => item.node !== node);
         closeOutputWhenDrained(chunk.stream_id);
@@ -427,6 +508,7 @@
     async function stopMic() {
       if (processor) processor.disconnect();
       if (micSource) micSource.disconnect();
+      sendFinalMicPayload();
       if (micStream) micStream.getTracks().forEach((track) => track.stop());
       if (inputStreamId) {
         sendEvent(event("stream.input.closed", {stream_type: "sensor.mic", reason: "web_glass_closed"}, {
@@ -438,14 +520,20 @@
       wakeButton.disabled = false;
     }
 
-    connectButton.onclick = connect;
+    connectButton.onclick = () => {
+      connect().catch((err) => log(`connect failed: ${err.message}`));
+    };
     wakeButton.onclick = () => {
       wakeButton.disabled = true;
       sendEvent(event("control.user.wake.detected", {wake_source: "web_glass_button"}));
     };
     closeButton.onclick = async () => {
       await stopMic();
-      sendEvent(event("control.user.dialog.close.requested", {reason: "web_glass_button"}, {session_id: sessionId}));
+      await delay(300);
+      sendEvent(event("control.user.dialog.close.requested", {
+        reason: "web_glass_button",
+        close_mode: "close_after_reply",
+      }, {session_id: sessionId}));
     };
 
     window.__audioChatWebGlassTest = {encodeStreamChunk, decodeStreamChunk};

@@ -4,6 +4,7 @@ import os
 import queue
 import time
 import audioop
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -253,6 +254,13 @@ class StreamingTTS(Protocol):
 
 
 class MockStreamingTTS:
+    """本地调试用流式 TTS。
+
+    主要功能：在没有真实 TTS provider 时，为端到端链路生成可听见的 PCM16 诊断音。
+    主要方法：`synthesize_delta` 将文本片段转成短音频，`metrics` 返回首包延迟指标。
+    主要属性：`sample_rate_hz` 决定输出采样率，`_text_push_count` 用于让连续片段音高略有变化。
+    """
+
     provider_name = "mock"
     streaming = True
 
@@ -266,6 +274,15 @@ class MockStreamingTTS:
         self._text_chars = 0
 
     def synthesize_delta(self, text: str) -> bytes:
+        """把文本 delta 合成为可听见的 PCM16 音频。
+
+        主要逻辑：mock provider 不生成真实语音，只生成带淡入淡出的短正弦音，
+        用于确认 server 到端侧播放器的输出链路确实可用。
+        参数：`text` 为模型输出的文本片段。
+        返回值：小端 PCM16 单声道字节流。
+        异常情况：空文本返回空字节，不抛出异常。
+        """
+
         if not text:
             return b""
         now = time.time()
@@ -273,10 +290,21 @@ class MockStreamingTTS:
             self._first_text_at = now
         self._text_push_count += 1
         self._text_chars += len(text)
-        samples = max(320, len(text.encode("utf-8")) * 40)
+        duration_seconds = max(0.12, min(0.25, len(text.encode("utf-8")) * 0.012))
+        samples = min(4000, max(1600, int(self.sample_rate_hz * duration_seconds)))
+        frequency_hz = 440 + (self._text_push_count % 4) * 80
+        fade_samples = max(1, min(samples // 3, int(self.sample_rate_hz * 0.025)))
+        amplitude = 0.22
+        pcm = bytearray(samples * 2)
+        for index in range(samples):
+            fade_in = min(1.0, index / fade_samples)
+            fade_out = min(1.0, (samples - index - 1) / fade_samples)
+            envelope = max(0.0, min(fade_in, fade_out))
+            value = int(math.sin(2 * math.pi * frequency_hz * index / self.sample_rate_hz) * amplitude * envelope * 32767)
+            pcm[index * 2 : index * 2 + 2] = value.to_bytes(2, "little", signed=True)
         if self._first_audio_at is None:
             self._first_audio_at = time.time()
-        return (b"\x01\x00" * samples)[: samples * 2]
+        return bytes(pcm)
 
     def metrics(self) -> dict:
         first_chunk_latency_ms = None

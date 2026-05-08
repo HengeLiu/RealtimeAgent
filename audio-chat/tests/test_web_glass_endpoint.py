@@ -48,7 +48,19 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "while (micPcmBuffer.byteLength >= MIC_CHUNK_BYTES)" in html
     assert "sendMicPayload(micPcmBuffer.slice(0, MIC_CHUNK_BYTES))" in html
     assert "final: false" in html
+    assert "function sendFinalMicPayload()" in html
+    assert "final: true" in html
+    assert "send final sensor.mic bytes=" in html
+    assert "sendFinalMicPayload()" in html
+    assert "control.device.heartbeat.received" in html
+    assert "function startHeartbeat()" in html
+    assert "close_mode: \"close_after_reply\"" in html
     assert "function delay(ms)" in html
+    assert "function defaultServerUrl()" in html
+    assert "function normalizeServerUrl(raw)" in html
+    assert 'url.hostname === "0.0.0.0"' in html
+    assert 'url.hostname = "127.0.0.1"' in html
+    assert '"http://127.0.0.1:8765"' in html
     assert "await ensureStreamSocketOpen()" in html
     assert "await delay(120)" in html
     assert "audio session already active; ignore duplicate open request" in html
@@ -59,9 +71,15 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "BARGE_IN_MAX_PEAK = 0.72" in html
     assert "barge-in detected rms=" in html
     assert "peak=${level.peak.toFixed(4)}" in html
+    assert "recv audio chunk bytes=" in html
+    assert "duration_ms=${durationMs}" in html
+    assert "audioContext.createGain()" in html
     assert "stopAllOutputPlayback(\"barge_in_local\")" in html
     assert "stream.output.cancel.requested" in html
     assert "stopOutputPlayback(item.stream_id, \"server_cancelled\")" in html
+    assert "control websocket open timeout" in html
+    assert "control ws closed code=${evt.code}" in html
+    assert "connect failed: ${err.message}" in html
     assert "提交本轮" not in html
     assert "MediaFrame" not in html
 

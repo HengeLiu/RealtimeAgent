@@ -15,7 +15,7 @@ uv pip install -e audio-chat
 
 如果 `uv run audio-chat.*` 找不到命令，重新执行 editable 安装。
 
-当前可试用发布候选版本为 `0.1.0rc1`。发布前闸门使用：
+当前可试用发布候选版本为 `0.1.0rc1`。发布前检查流程：
 
 ```bash
 cd audio-chat

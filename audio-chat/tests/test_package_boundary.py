@@ -9,7 +9,7 @@ AUDIO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_package_check_covers_wheel_editable_public_api_and_boundary(tmp_path) -> None:
-    """测试目标：冻结发布闸门的最小包检查范围。
+    """测试目标：冻结发布前检查的最小包检查范围。
 
     测试方法：运行 `audio-chat.sdk.package-check` 并读取 JSON 报告。
     预期结果：wheel 构建、editable install、公开 API 导入和 endpoint 边界检查都通过。

@@ -899,7 +899,7 @@ uv run audio-chat.server.run --config examples/minimal/server-omni.yaml
 4. AEC 相关能力由端侧声明和实现，server 只做诊断和会话控制。
 5. 无硬件环境时，contract test 必须覆盖协议、配置和文档；有硬件环境时，真机 smoke 需要保留串口日志与 server runs 产物。
 
-## 14. 并行线路 G：开发者体验、CLI 与发布闸门
+## 14. 并行线路 G：开发者体验、CLI 与发布前检查
 
 目标：让 SDK 具备开发者可安装、可启动、可预检、可排障的完整体验。
 
@@ -942,7 +942,7 @@ audio-chat/tests/test_docs_commands.py
 4. README：
    - 只保留真实可运行命令。
    - 单机 mock、网络 playback、web-glass、provider smoke 分开写。
-5. Release gate：
+5. 发布前检查：
    - 全 lane 验收。
    - docs command check。
    - package check。
@@ -1027,7 +1027,7 @@ uv run python scripts/acceptance_check.py next-docs-contract
 1. P0-A 开发者可用验收入口。
 2. P0-B 示例 App 与能力回放闭环。
 3. P0-C 下一阶段验收入口。
-4. G 开发者体验、CLI 与发布闸门。
+4. G 开发者体验、CLI 与发布前检查。
 5. F 参考端侧与多端联调中的 Python playback、Python phone mock 和 web-glass 最小闭环。
 
 第一批完成后，已冻结开发者可用基线。需要复核时运行：

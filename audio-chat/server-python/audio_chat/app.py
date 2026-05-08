@@ -28,6 +28,7 @@ class AudioChatConfig:
     server_host: str = "0.0.0.0"
     server_port: int = 8765
     public_url: str = "http://127.0.0.1:8765"
+    log_level: str = "DEBUG"
     runs_root: str = "runs/audio-chat"
     auth_mode: str = "disabled"
     device_tokens: dict[str, str] | None = None
@@ -78,6 +79,7 @@ class AudioChatConfig:
     realtime_model: str = "qwen3.5-omni-plus-realtime"
     realtime_turn_detection: str = "provider"
     realtime_voice: str = "Tina"
+    realtime_instructions: str = "你是中文语音助手。请用简短口语回答用户。"
     realtime_session_idle_timeout_seconds: int = 60
     tools_discover_enabled: bool = False
     tools_discover_packages: tuple[str, ...] = ()
@@ -115,6 +117,7 @@ class AudioChatConfig:
             server_host=loaded.server.host,
             server_port=loaded.server.port,
             public_url=loaded.server.public_url,
+            log_level=loaded.server.log_level,
             runs_root=loaded.observability.runs_root,
             auth_mode=loaded.auth.mode,
             device_tokens=loaded.auth.device_tokens,
@@ -165,6 +168,7 @@ class AudioChatConfig:
             realtime_model=realtime.model,
             realtime_turn_detection=realtime.turn_detection,
             realtime_voice=realtime.voice,
+            realtime_instructions=realtime.instructions,
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
             tools_discover_enabled=loaded.tools.discover.enabled,
             tools_discover_packages=tuple(loaded.tools.discover.packages),
@@ -340,6 +344,7 @@ class AudioChatApp:
                 model=self.config.realtime_model,
                 turn_detection=self.config.realtime_turn_detection,
                 voice=self.config.realtime_voice,
+                instructions=getattr(self.config, "realtime_instructions", "你是中文语音助手。请用简短口语回答用户。"),
                 session_idle_timeout_seconds=self.config.realtime_session_idle_timeout_seconds,
             ),
             asr_config=AsrProviderConfig(
