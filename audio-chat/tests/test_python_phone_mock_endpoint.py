@@ -145,7 +145,7 @@ def test_endpoint_reference_directories_exist() -> None:
     """
 
     root = Path(__file__).resolve().parents[1]
-    assert (root / "endpoints/web-glass/README.md").exists()
-    assert (root / "endpoints/python-phone-mock/phone.mock.yaml").exists()
-    assert (root / "endpoints/ios-phone/AppConfig.example.json").exists()
-    assert (root / "endpoints/esp32-s3/local.env.example").exists()
+    assert (root / "endpoints-examples/web-glass/README.md").exists()
+    assert (root / "endpoints-examples/python-phone-mock/phone.mock.yaml").exists()
+    assert (root / "endpoints-examples/ios-phone/AppConfig.example.json").exists()
+    assert (root / "endpoints-examples/esp32-s3/local.env.example").exists()

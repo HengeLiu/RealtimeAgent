@@ -143,9 +143,9 @@ Phase 2.5 格式协商检查：
 
 新增参考端侧：
 
-1. `audio-chat/endpoints/web-glass/index.html`
-2. `audio-chat/endpoints/web-glass/README.md`
-3. `audio-chat/endpoints/web-glass/web-glass.yaml`
+1. `audio-chat/endpoints-examples/web-glass/index.html`
+2. `audio-chat/endpoints-examples/web-glass/README.md`
+3. `audio-chat/endpoints-examples/web-glass/web-glass.yaml`
 
 `web-glass` 是独立参考端侧，不由 `audio-chat.server.run` 提供静态页面入口。server SDK 只暴露协议连接和 debug API，端侧类型只在注册事件中声明。
 
@@ -207,7 +207,7 @@ Phase 2.5 的 provider、stream 格式、DeviceHandle、Asset request_id、playb
 待真实验收：
 
 1. 使用 `DASHSCOPE_API_KEY` 启动 `audio-chat.server.run --config audio-chat/examples/minimal/server-omni.yaml`。
-2. 直接打开 `audio-chat/endpoints/web-glass/index.html` 完成注册、唤醒、持续说话和播放；如从 `file://` 打开，通过 query 参数指定 `server_url=http://127.0.0.1:8765`。
+2. 直接打开 `audio-chat/endpoints-examples/web-glass/index.html` 完成注册、唤醒、持续说话和播放；如从 `file://` 打开，通过 query 参数指定 `server_url=http://127.0.0.1:8765`。
 3. 确认 runs 中出现 `omni.*` provider 事件、`assistant_audio.delta`、输入输出 stream 产物。
 4. 观察播放期间继续说话时，浏览器 AEC 是否避免明显回灌。
 

@@ -12,12 +12,12 @@ AUDIO_ROOT = Path(__file__).resolve().parents[1]
 def test_esp32_reference_firmware_manifest_is_complete() -> None:
     """测试目标：确认 ESP32-S3 参考端具备 package-check 需要的工程骨架。
 
-    测试方法：检查 `endpoints/esp32-s3/firmware` 下 ESP-IDF 必要文件和组件依赖。
+    测试方法：检查 `endpoints-examples/esp32-s3/firmware` 下 ESP-IDF 必要文件和组件依赖。
     预期结果：CMake、sdkconfig defaults、component manifest 和参考 main 文件都存在，
     且 manifest 声明 WebSocket 与 JSON 依赖。
     """
 
-    result = _esp32_project_manifest_check(AUDIO_ROOT / "endpoints/esp32-s3/firmware")
+    result = _esp32_project_manifest_check(AUDIO_ROOT / "endpoints-examples/esp32-s3/firmware")
 
     assert result["ok"] is True
     assert result["errors"] == []
@@ -39,7 +39,7 @@ def test_esp32_build_dry_run_reports_command_with_reference_project() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert "audio-chat/endpoints/esp32-s3/firmware" in completed.stdout
+    assert "audio-chat/endpoints-examples/esp32-s3/firmware" in completed.stdout
     assert "build" in completed.stdout
 
 

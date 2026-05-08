@@ -12,7 +12,7 @@ def config(argv: list[str] | None = None) -> None:
 
     主要逻辑：
     1. 默认读取 `audio-chat.config.sync` 生成的 `esp32-s3.local.env`。
-    2. 写入 `endpoints/esp32-s3/local.env`，供固件或 bridge 读取。
+    2. 写入 `endpoints-examples/esp32-s3/local.env`，供固件或 bridge 读取。
     3. 源文件缺失时给出应先运行的 `config.sync` 命令。
 
     参数：`argv` 为命令行参数。
@@ -22,7 +22,7 @@ def config(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(prog="audio-chat.esp32.config", description="同步 ESP32-S3 参考端配置")
     parser.add_argument("--source", default="examples/basic-app/config/generated/esp32-s3.local.env", help="源 env 文件")
-    parser.add_argument("--output", default="endpoints/esp32-s3/local.env", help="输出 env 文件")
+    parser.add_argument("--output", default="endpoints-examples/esp32-s3/local.env", help="输出 env 文件")
     parser.add_argument("--print-path", action="store_true", help="只打印输出路径")
     args = parser.parse_args(argv)
 
@@ -67,7 +67,7 @@ def _run_idf_action(prog: str, action: str, argv: list[str] | None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog=prog, description=f"执行 ESP32-S3 {action} 动作")
-    parser.add_argument("--project-dir", default="endpoints/esp32-s3/firmware", help="ESP-IDF 工程目录")
+    parser.add_argument("--project-dir", default="endpoints-examples/esp32-s3/firmware", help="ESP-IDF 工程目录")
     parser.add_argument("--port", default="", help="串口端口，flash/monitor 时使用")
     parser.add_argument("--idf-py", default="idf.py", help="idf.py 命令路径")
     parser.add_argument("--dry-run", action="store_true", help="只输出诊断，不执行 idf.py")

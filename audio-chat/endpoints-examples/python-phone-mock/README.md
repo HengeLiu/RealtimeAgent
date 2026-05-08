@@ -55,7 +55,7 @@ uv run audio-chat.server.run --config examples/minimal/server.yaml
 终端 2：
 
 ```bash
-uv run audio-chat.phone.mock --config endpoints/python-phone-mock/phone.mock.yaml
+uv run audio-chat.phone.mock --config endpoints-examples/python-phone-mock/phone.mock.yaml
 ```
 
 `mode: register_only` 会完成注册后退出，适合自动验收；后续长驻联调可以把它改成

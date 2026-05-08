@@ -669,11 +669,11 @@ DASHSCOPE_API_KEY=... uv run python -m pytest tests/integration/test_dashscope_p
 写入范围：
 
 ```text
-audio-chat/endpoints/python-glass/
-audio-chat/endpoints/web-glass/
-audio-chat/endpoints/python-phone-mock/
-audio-chat/endpoints/ios-phone/
-audio-chat/endpoints/esp32-s3/
+audio-chat/endpoints-examples/python-glass/
+audio-chat/endpoints-examples/web-glass/
+audio-chat/endpoints-examples/python-phone-mock/
+audio-chat/endpoints-examples/ios-phone/
+audio-chat/endpoints-examples/esp32-s3/
 audio-chat/examples/minimal/
 audio-chat/docs/esp32-s3-endpoint-bridge.md
 audio-chat/tests/test_web_glass_endpoint.py
@@ -753,16 +753,16 @@ curl http://127.0.0.1:8765/api/debug/playback
 
 ### 13.1 F-iOS：iOS phone 参考端可运行客户端
 
-目标：把 `endpoints/ios-phone` 从协议锚点、README 和配置样例推进到可在
+目标：把 `endpoints-examples/ios-phone` 从协议锚点、README 和配置样例推进到可在
 Simulator 或真机上运行的参考客户端。该客户端不是生产 App，但必须能验证
 `audio-chat` 的设备注册、事件订阅、stream 打开、基础传感器上传和执行器消费。
 
 写入范围：
 
 ```text
-audio-chat/endpoints/ios-phone/
-audio-chat/endpoints/ios-phone/AppConfig.example.json
-audio-chat/endpoints/ios-phone/README.md
+audio-chat/endpoints-examples/ios-phone/
+audio-chat/endpoints-examples/ios-phone/AppConfig.example.json
+audio-chat/endpoints-examples/ios-phone/README.md
 audio-chat/server-python/audio_chat/cli/config.py
 audio-chat/tests/test_ios_phone_endpoint_contract.py
 audio-chat/tests/test_endpoint_config_sync.py
@@ -805,7 +805,7 @@ uv run python -m pytest \
 如果本地安装 Xcode，还需要补充并运行：
 
 ```bash
-cd audio-chat/endpoints/ios-phone
+cd audio-chat/endpoints-examples/ios-phone
 xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
@@ -819,7 +819,7 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 
 当前落地状态：
 
-1. `endpoints/ios-phone/AudioChatPhone.xcodeproj` 已提供最小 SwiftUI App。
+1. `endpoints-examples/ios-phone/AudioChatPhone.xcodeproj` 已提供最小 SwiftUI App。
 2. `AudioChatEndpointRuntime` 已实现 `/ws/control` 注册、`/ws/stream` 连接、`sensor.rgb`
    测试 JPEG 上传、测试 `sensor.mic` PCM 上传和 `actuator.speaker` buffer 消费回执。
 3. `testdata/contracts/endpoints/ios_phone_register_requested.json` 已记录 iOS 注册 golden。
@@ -828,17 +828,17 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 
 ### 13.2 F-ESP32：ESP32-S3 真机桥接与验收
 
-目标：把 `endpoints/esp32-s3` 从 AEC bridge、README 和配置样例推进到可真机联调的
+目标：把 `endpoints-examples/esp32-s3` 从 AEC bridge、README 和配置样例推进到可真机联调的
 参考端。ESP32-S3 必须遵守端侧职责边界：端侧负责唤醒、AEC、麦克风采集和喇叭播放，
 server 只通过 event 和 stream 管理会话、输入、输出和关闭。
 
 写入范围：
 
 ```text
-audio-chat/endpoints/esp32-s3/
-audio-chat/endpoints/esp32-s3/local.env.example
+audio-chat/endpoints-examples/esp32-s3/
+audio-chat/endpoints-examples/esp32-s3/local.env.example
 audio-chat/docs/esp32-s3-endpoint-bridge.md
-audio-chat/endpoints/esp32-s3/audio_chat_esp32_s3/esp32_aec.py
+audio-chat/endpoints-examples/esp32-s3/audio_chat_esp32_s3/esp32_aec.py
 audio-chat/server-python/audio_chat/cli/config.py
 audio-chat/tests/test_esp32_s3_endpoint_contract.py
 audio-chat/tests/test_endpoint_config_sync.py

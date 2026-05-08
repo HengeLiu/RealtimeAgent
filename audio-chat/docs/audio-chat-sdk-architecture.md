@@ -88,7 +88,7 @@ audio-chat/
   docs/
   server-python/
   examples/
-  endpoints/
+  endpoints-examples/
   tests/
   testdata/
 ```
@@ -132,7 +132,7 @@ audio-chat/
 
 1. `audio-chat/server-python` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
 2. `audio-chat/docs` 和 `audio-chat/testdata/contracts` 定义多端必须共同遵守的公共协议、对象模型和契约测试。
-3. `audio-chat/endpoints` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧可以由开发者自行实现。
+3. `audio-chat/endpoints-examples` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧由开发者在自己的工程中自行实现，不要求放入 `audio-chat` 目录。
 4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
 
 因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备能力写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
@@ -3131,7 +3131,7 @@ await context.devices.submit_text(
 建议目录：
 
 ```text
-audio-chat/endpoints/
+audio-chat/endpoints-examples/
   esp32-glass/
   web-js/
   ios-phone/
@@ -3358,10 +3358,10 @@ DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
 然后直接打开独立参考端侧页面：
 
 ```text
-audio-chat/endpoints/web-glass/index.html
+audio-chat/endpoints-examples/web-glass/index.html
 ```
 
-如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/endpoints/web-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
+如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../audio-chat/endpoints-examples/web-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
 
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
@@ -3422,7 +3422,7 @@ Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅
 
 ```bash
 uv run audio-chat.phone.mock \
-  --config audio-chat/endpoints/python-phone-mock/phone.mock.yaml
+  --config audio-chat/endpoints-examples/python-phone-mock/phone.mock.yaml
 ```
 
 mock 配置应允许声明能力和订阅：
@@ -3469,7 +3469,7 @@ ESP32 后续目标命令形态，当前未落地：
 ```bash
 uv run audio-chat.esp32.start \
   --app-root /path/to/my-app \
-  --project-dir /path/to/audio-chat/endpoints/esp32-glass \
+  --project-dir /path/to/audio-chat/endpoints-examples/esp32-glass \
   --idf-root /path/to/esp-idf \
   --port '/dev/tty.usbmodem*'
 ```

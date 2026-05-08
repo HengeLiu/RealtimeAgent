@@ -10,7 +10,7 @@ def open_web(argv: list[str] | None = None) -> None:
     """打开 web-glass 参考端侧页面。
 
     主要逻辑：
-    1. 默认解析仓库内 `endpoints/web-glass/index.html`。
+    1. 默认解析仓库内 `endpoints-examples/web-glass/index.html`。
     2. `--print-url` 只输出 file URL，供测试和无桌面环境使用。
     3. 非 `--print-url` 时按当前平台调用系统打开命令。
 
@@ -20,7 +20,7 @@ def open_web(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="audio-chat.web.open", description="打开 audio-chat web-glass 参考端侧")
-    parser.add_argument("--path", default="endpoints/web-glass/index.html", help="web-glass HTML 路径")
+    parser.add_argument("--path", default="endpoints-examples/web-glass/index.html", help="web-glass HTML 路径")
     parser.add_argument("--print-url", action="store_true", help="只打印 file URL，不打开浏览器")
     args = parser.parse_args(argv)
 

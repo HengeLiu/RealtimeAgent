@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IOS_ROOT = ROOT / "endpoints" / "ios-phone"
+IOS_ROOT = ROOT / "endpoints-examples" / "ios-phone"
 
 
 def test_ios_phone_reference_contains_task_registry_contract() -> None:

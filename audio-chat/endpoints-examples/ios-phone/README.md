@@ -44,7 +44,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 cp examples/basic-app/config/generated/ios-phone.local.json \
-  endpoints/ios-phone/AudioChatPhone/Resources/AppConfig.json
+  endpoints-examples/ios-phone/AudioChatPhone/Resources/AppConfig.json
 ```
 
 `AppConfig.json` 字段语义和其他参考端一致：
@@ -86,13 +86,13 @@ curl http://127.0.0.1:8765/api/health
 直接打开工程：
 
 ```bash
-open endpoints/ios-phone/AudioChatPhone.xcodeproj
+open endpoints-examples/ios-phone/AudioChatPhone.xcodeproj
 ```
 
 选择 `AudioChatPhone` scheme 和一个 iPhone Simulator 后运行。也可以命令行构建：
 
 ```bash
-cd audio-chat/endpoints/ios-phone
+cd audio-chat/endpoints-examples/ios-phone
 xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
@@ -132,6 +132,6 @@ uv run python -m pytest \
 有 Xcode 环境时，再补充运行 iOS build：
 
 ```bash
-cd audio-chat/endpoints/ios-phone
+cd audio-chat/endpoints-examples/ios-phone
 xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```

@@ -38,9 +38,9 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 - `examples/basic-app/config/server.yaml`
 - `examples/basic-app/host/phone-mock/config.yaml`
 - `examples/basic-app/host/glass-playback/playback.yaml`
-- `endpoints/web-glass/web-glass.yaml`
-- `endpoints/ios-phone/AppConfig.example.json`
-- `endpoints/esp32-s3/local.env.example`
+- `endpoints-examples/web-glass/web-glass.yaml`
+- `endpoints-examples/ios-phone/AppConfig.example.json`
+- `endpoints-examples/esp32-s3/local.env.example`
 
 本阶段配置同步以开发样例为主；真机侧正式打开、构建、烧录命令由 `old-sdk-parity-cli` 线路继续补齐。
 
@@ -82,7 +82,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 Python phone mock：
 
 ```bash
-uv run audio-chat.phone.mock --config audio-chat/endpoints/python-phone-mock/phone.mock.yaml
+uv run audio-chat.phone.mock --config audio-chat/endpoints-examples/python-phone-mock/phone.mock.yaml
 ```
 
 Glass playback：
@@ -108,13 +108,13 @@ uv run audio-chat.web.open --print-url
 iOS 参考端入口：
 
 ```bash
-open audio-chat/endpoints/ios-phone
+open audio-chat/endpoints-examples/ios-phone
 ```
 
 ESP32-S3 参考端入口：
 
 ```bash
-open audio-chat/endpoints/esp32-s3
+open audio-chat/endpoints-examples/esp32-s3
 ```
 
 iOS / ESP32 目录目前是参考端和契约入口。缺少 Xcode、ESP-IDF、串口或真实设备时，真机步骤只能作为待验证流程；真机 smoke 由 `old-sdk-parity-phone` 和 `old-sdk-parity-esp32` 线路补齐。
@@ -247,8 +247,8 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 | `openaiglass.server.run` | `audio-chat.server.run` | 通过 YAML 和 app-root 启动 server。 |
 | `openaiglass.phone.mock` | `audio-chat.phone.mock` | Python phone mock 参考端。 |
 | `openaiglass.glass.start --runtime playback` | `audio-chat.playback.glass` | 设备级回放入口。 |
-| `openaiglass.phone.open` | `endpoints/ios-phone` | 当前为 iOS 参考端目录，CLI 由后续线路补齐。 |
-| `openaiglass.glass.start` | `endpoints/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由后续线路补齐。 |
+| `openaiglass.phone.open` | `endpoints-examples/ios-phone` | 当前为 iOS 参考端目录，CLI 由后续线路补齐。 |
+| `openaiglass.glass.start` | `endpoints-examples/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由后续线路补齐。 |
 | `openaiglass.sdk.preflight` | `audio-chat.dev.preflight` | 本地配置、provider、endpoint 和 package 预检。 |
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
 | `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 只按 user active device set、capability 和 subscription 工作。 |

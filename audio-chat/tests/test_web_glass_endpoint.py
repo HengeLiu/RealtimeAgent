@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def _html() -> str:
-    return Path(__file__).resolve().parents[1].joinpath("endpoints/web-glass/index.html").read_text(encoding="utf-8")
+    return Path(__file__).resolve().parents[1].joinpath("endpoints-examples/web-glass/index.html").read_text(encoding="utf-8")
 
 
 def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:

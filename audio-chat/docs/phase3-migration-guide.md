@@ -305,8 +305,8 @@ uv run python scripts/acceptance_check.py next-docs-contract \
 | `openaiglass.server.run` | `audio-chat.server.run` | 已有 YAML server 启动入口。 |
 | `openaiglass.phone.mock` | `audio-chat.phone.mock` | 已有 Python phone mock 参考端。 |
 | `openaiglass.glass.start --runtime playback` | `audio-chat.playback.glass` | 已有 Python playback 入口。 |
-| `openaiglass.phone.open` | `endpoints/ios-phone` | 当前为 iOS 参考端目录，CLI 由 `old-sdk-parity-cli` 补齐。 |
-| `openaiglass.glass.start` | `endpoints/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由 `old-sdk-parity-esp32` 补齐。 |
+| `openaiglass.phone.open` | `endpoints-examples/ios-phone` | 当前为 iOS 参考端目录，CLI 由 `old-sdk-parity-cli` 补齐。 |
+| `openaiglass.glass.start` | `endpoints-examples/esp32-s3` | 当前为 ESP32-S3 参考端目录，构建烧录由 `old-sdk-parity-esp32` 补齐。 |
 | `openaiglass.sdk.preflight` | `audio-chat.dev.preflight` | 已有预检报告。 |
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
 | `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 通过 event / stream / asset / output 表达设备能力。 |

@@ -27,7 +27,7 @@
 2. 不要求保留 glass / phone 固定设备类型，`audio-chat` 使用 capability 和 subscription。
 3. 不要求保留 `/ws_audio`、`/ws_realtime_audio`、`sensor.camera.*` 等旧协议名称，`audio-chat` 使用 event + stream。
 4. 不要求业务代码手动注册 Tool / Task，`audio-chat` 默认自动发现。
-5. 不要求把 iOS / ESP32 正式端侧工程放入 Python SDK 包内，`audio-chat/endpoints` 只提供参考端侧和契约。
+5. 不要求把 iOS / ESP32 正式端侧工程放入 Python SDK 包内，`audio-chat/endpoints-examples` 只提供参考端侧样例和契约。
 
 ### 2.2 必须达到相同开发体验
 
@@ -232,7 +232,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-cli
 写入范围：
 
 ```text
-audio-chat/endpoints/python-glass/audio_chat_python_glass/playback.py
+audio-chat/endpoints-examples/python-glass/audio_chat_python_glass/playback.py
 audio-chat/examples/basic-app/host/glass-playback/
 audio-chat/testdata/playback/
 audio-chat/testdata/contracts/scenarios/
@@ -293,9 +293,9 @@ uv run python scripts/acceptance_check.py old-sdk-parity-playback
 写入范围：
 
 ```text
-audio-chat/endpoints/python-phone-mock/
-audio-chat/endpoints/ios-phone/
-audio-chat/endpoints/python-phone-mock/audio_chat_python_phone_mock/phone_mock.py
+audio-chat/endpoints-examples/python-phone-mock/
+audio-chat/endpoints-examples/ios-phone/
+audio-chat/endpoints-examples/python-phone-mock/audio_chat_python_phone_mock/phone_mock.py
 audio-chat/examples/basic-app/capabilities/
 audio-chat/tests/test_phone_task_contract.py
 audio-chat/tests/test_python_phone_mock_vision_task.py
@@ -349,7 +349,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-phone
 写入范围：
 
 ```text
-audio-chat/endpoints/esp32-s3/
+audio-chat/endpoints-examples/esp32-s3/
 audio-chat/server-python/audio_chat/cli/esp32.py
 audio-chat/docs/esp32-s3-endpoint-bridge.md
 audio-chat/tests/test_esp32_config_sync.py
@@ -695,7 +695,7 @@ audio-chat/pyproject.toml
 audio-chat/README.md
 audio-chat/CHANGELOG.md
 audio-chat/server-python/audio_chat/
-audio-chat/endpoints/
+audio-chat/endpoints-examples/
 audio-chat/scripts/acceptance_check.py
 audio-chat/tests/test_release_package.py
 audio-chat/tests/test_package_boundary.py
