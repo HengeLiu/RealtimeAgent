@@ -17,6 +17,8 @@
     button.secondary { background: #fff; color: #172033; }
     button.warning { background: #b42318; }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .inline { display: flex; gap: 8px; align-items: center; min-height: 34px; }
+    .inline input { width: auto; }
     .panel { border-top: 1px solid #e5eaf2; padding-top: 8px; margin-top: 12px; }
     .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
     .status div { background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 6px; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -67,6 +69,7 @@
           </select>
         </div>
         <div><label for="silenceMs">前后静音 ms</label><input id="silenceMs" type="number" min="0" value="300" /></div>
+        <label class="inline"><input id="autoStartAudio" type="checkbox" />唤醒后自动开始音频</label>
         <button id="startAudio" disabled>开始音频</button>
         <button id="stopAudio" class="secondary" disabled>停止音频</button>
       </div>
@@ -211,12 +214,20 @@
       rgbStatusEl.textContent = latestRgb
         ? `sensor.rgb=${latestRgb.state || "open"} seq=${latestRgb.seq || 0} bytes=${latestRgb.bytes_sent || 0}`
         : "sensor.rgb=idle";
+      updateAudioButtons();
+    }
+
+    function updateAudioButtons() {
+      const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN && streamWs && streamWs.readyState === WebSocket.OPEN);
+      const running = Boolean(inputStreamId || openingMic);
+      startAudioButton.disabled = !registered || running;
+      startAudioButton.textContent = running ? "音频运行中" : "开始音频";
+      stopAudioButton.disabled = !running;
     }
 
     function enableRegisteredControls() {
       wakeButton.disabled = false;
       interruptButton.disabled = false;
-      startAudioButton.disabled = false;
       sendPhotoButton.disabled = false;
       startVideoButton.disabled = false;
       customEventButton.disabled = false;
@@ -548,7 +559,13 @@
         }
         sessionId = item.session_id;
         sendEvent(event("control.audio_session.opened", {reason: "browser_device_opened"}, {session_id: sessionId}));
-        await openAudioInput();
+        closeButton.disabled = false;
+        renderStatus();
+        if (document.getElementById("autoStartAudio").checked) {
+          await openAudioInput();
+        } else {
+          log("audio session opened; waiting for manual start audio");
+        }
       } else if (item.event_name === "stream.output.close.requested") {
         pendingOutputClose.set(item.stream_id, item);
         closeOutputWhenDrained(item.stream_id);
@@ -569,6 +586,10 @@
       } else if (item.event_name === "control.audio_session.close.requested") {
         await stopMic();
         sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: item.session_id}));
+        sessionId = null;
+        closeButton.disabled = true;
+        wakeButton.disabled = false;
+        renderStatus();
       }
     }
 
@@ -828,6 +849,7 @@
     async function openOfflineAudioStream({fast = false} = {}) {
       if (openingMic || inputStreamId) return;
       openingMic = true;
+      renderStatus();
       try {
         await ensureStreamSocketOpen();
         offlineAudio = await readSelectedAudioAsPcm16();
@@ -854,8 +876,7 @@
           opened_at: Date.now(),
         });
         closeButton.disabled = false;
-        stopAudioButton.disabled = false;
-        startAudioButton.disabled = true;
+        renderStatus();
         if (fast) {
           sendOfflineAudioFast();
         } else {
@@ -863,6 +884,7 @@
         }
       } finally {
         openingMic = false;
+        renderStatus();
       }
     }
 
@@ -931,6 +953,7 @@
     async function openMicStream() {
       if (openingMic || inputStreamId) return;
       openingMic = true;
+      renderStatus();
       audioContext = audioContext || new AudioContext();
       await audioContext.resume();
       try {
@@ -976,10 +999,10 @@
         micSource.connect(processor);
         processor.connect(audioContext.destination);
         closeButton.disabled = false;
-        stopAudioButton.disabled = false;
-        startAudioButton.disabled = true;
+        renderStatus();
       } finally {
         openingMic = false;
+        renderStatus();
       }
     }
 
@@ -1075,10 +1098,8 @@
         setStreamState(inputStreamId, {stream_type: "sensor.mic", state: "closed", close_reason: "browser_device_closed"});
       }
       processor = null; micSource = null; micStream = null; inputStreamId = null; micPcmBuffer = new Uint8Array(0); activeAudioSource = "idle";
-      closeButton.disabled = true;
+      closeButton.disabled = !sessionId;
       wakeButton.disabled = false;
-      startAudioButton.disabled = false;
-      stopAudioButton.disabled = true;
       renderStatus();
     }
 
