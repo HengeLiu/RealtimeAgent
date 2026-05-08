@@ -41,7 +41,7 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     assert payload["properties"]["audio.playback_reference"] == "endpoint_ring_buffer"
     assert payload["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
     assert payload["properties"]["direct.camera_source"] is True
-    assert payload["properties"]["direct.camera.frame_format"] == "media_frame.camera_frame"
+    assert payload["properties"]["direct.camera.frame_format"] == "audio_chat.direct_frame.v1"
     assert {"event": "control.audio_session.*"} in payload["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["subscriptions"]
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["subscriptions"]
@@ -129,27 +129,27 @@ def test_esp32_s3_rgb_config_can_update_direct_camera_sink_uri() -> None:
     assert state.diagnostics()["direct_camera_sink_ws_uri"] == "ws://10.0.0.3:9001/ws/camera"
 
 
-def test_esp32_s3_encodes_direct_camera_frame_for_ios_sink() -> None:
-    """测试目标：验证 ESP32-S3 参考端兼容老 SDK 相机直连帧格式。
+def test_esp32_s3_encodes_direct_rgb_frame_for_ios_sink() -> None:
+    """测试目标：验证 ESP32-S3 参考端编码 audio-chat 相机直连帧。
 
     测试方法：调用状态机的直连相机帧编码方法，拆出 4 字节大端 header 长度、
     JSON header 和 JPEG payload。
-    预期结果：header 使用 `frame_type=camera_frame`、声明 payload_size，并保留
-    stream_id、seq 和 ts_ms，iOS phone 可按同一格式解码。
+    预期结果：header 使用 `stream_type=sensor.rgb`、声明 payload_size，并保留
+    stream_id、seq 和 timestamp_ms，iOS phone 可按同一格式解码。
     """
 
     state = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32")
     frame = b"\xff\xd8direct-camera\xff\xd9"
-    encoded = state.encode_direct_camera_frame(stream_id="stream-rgb", seq=7, payload=frame, timestamp_ms=123456)
+    encoded = state.encode_direct_rgb_frame(stream_id="stream-rgb", seq=7, payload=frame, timestamp_ms=123456)
 
     header_length = int.from_bytes(encoded[:4], "big")
     header = json.loads(encoded[4 : 4 + header_length].decode("utf-8"))
     payload = encoded[4 + header_length :]
 
-    assert header["frame_type"] == "camera_frame"
+    assert header["stream_type"] == "sensor.rgb"
     assert header["stream_id"] == "stream-rgb"
     assert header["seq"] == 7
-    assert header["ts_ms"] == 123456
+    assert header["timestamp_ms"] == 123456
     assert header["codec"] == "jpeg"
     assert header["payload_size"] == len(frame)
     assert payload == frame

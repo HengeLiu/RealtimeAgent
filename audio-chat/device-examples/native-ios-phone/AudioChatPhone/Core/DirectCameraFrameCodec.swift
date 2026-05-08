@@ -36,11 +36,10 @@ struct DirectCameraFrame: Equatable {
 
 /// ESP32 -> iOS 直连相机帧编解码器。
 ///
-/// 兼容老 SDK 的 `MediaFrame(camera_frame)` 格式，同时允许 audio-chat stream chunk
-/// header 中的 `stream_type=sensor.rgb`。两种格式都使用 4 字节大端 header 长度、
-/// JSON header 和原始 JPEG payload。
+/// audio-chat 直连帧使用 4 字节大端 header 长度、JSON header 和原始 JPEG payload。
+/// header 必须声明 `stream_type=sensor.rgb`，不承载历史端侧协议字段。
 enum DirectCameraFrameCodec {
-    static func encodeLegacyCameraFrame(
+    static func encodeDirectFrame(
         streamID: String,
         sequence: Int,
         payload: Data,
@@ -48,10 +47,10 @@ enum DirectCameraFrameCodec {
         codec: String = "jpeg"
     ) throws -> Data {
         let header: [String: Any] = [
-            "frame_type": "camera_frame",
+            "stream_type": "sensor.rgb",
             "stream_id": streamID,
             "seq": sequence,
-            "ts_ms": timestampMS,
+            "timestamp_ms": timestampMS,
             "codec": codec,
             "payload_size": payload.count,
         ]
@@ -79,10 +78,9 @@ enum DirectCameraFrameCodec {
             throw DirectCameraFrameDecodeError.invalidHeaderJSON
         }
 
-        let frameType = header["frame_type"] as? String
         let streamType = header["stream_type"] as? String
-        guard frameType == "camera_frame" || streamType == "sensor.rgb" else {
-            throw DirectCameraFrameDecodeError.unsupportedFrame(frameType ?? streamType ?? "unknown")
+        guard streamType == "sensor.rgb" else {
+            throw DirectCameraFrameDecodeError.unsupportedFrame(streamType ?? "unknown")
         }
         guard let streamID = header["stream_id"] as? String else {
             throw DirectCameraFrameDecodeError.missingField("stream_id")
@@ -96,7 +94,7 @@ enum DirectCameraFrameCodec {
         return DirectCameraFrame(
             streamID: streamID,
             sequence: intValue(header["seq"]) ?? 0,
-            timestampMS: int64Value(header["timestamp_ms"]) ?? int64Value(header["ts_ms"]) ?? AudioChatIDs.nowMS(),
+            timestampMS: int64Value(header["timestamp_ms"]) ?? AudioChatIDs.nowMS(),
             codec: header["codec"] as? String ?? "jpeg",
             payload: payload
         )

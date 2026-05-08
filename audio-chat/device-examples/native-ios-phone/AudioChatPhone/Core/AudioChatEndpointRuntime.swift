@@ -174,7 +174,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
         properties["direct.camera_sink.path"] = "/ws/camera"
         properties["direct.camera_sink.port"] = Int(config.directCameraSinkPort)
         properties["direct.camera_sink.uris"] = directCameraSinkURIs
-        properties["direct.camera_sink.frame_format"] = "media_frame.camera_frame"
+        properties["direct.camera_sink.frame_format"] = "audio_chat.direct_frame.v1"
         let event = AudioChatEvent(
             eventName: "control.device.register.requested",
             userID: config.userID,

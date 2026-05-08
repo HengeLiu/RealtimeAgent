@@ -3,8 +3,8 @@
 本目录提供一个最小可运行的 iOS phone 参考端。它用于验证 audio-chat 的
 `control.device.register.requested`、事件订阅、`/ws/stream` 二进制 stream、
 `sensor.rgb` 上传、测试 `sensor.mic` 上传和 `actuator.speaker` 输出消费。
-同时，它内置一个与老 SDK 兼容的本地相机 WebSocket 接收服务，用于接收 ESP32 端
-直连推送的 JPEG 帧，并在 server 请求 `sensor.rgb` 时优先上传最近一帧。
+同时，它内置一个本地相机 WebSocket 接收服务，用于接收 ESP32 端直连推送的
+JPEG 帧，并在 server 请求 `sensor.rgb` 时优先上传最近一帧。
 
 它不是生产 App，也不负责真实录音、播放、唤醒词、AEC 或硬件驱动。端侧只按
 event / stream 协议和 server 协作，不新增 RPC，不把媒体字节放入 control event。
@@ -64,10 +64,10 @@ cp app-examples/basic-app/config/generated/ios-phone.local.json \
 - `subscriptions`：声明订阅 `stream.control.*`、`stream.output.*` 和 `control.audio_session.*`。
 
 直连相机接收服务启动后会把 `ws://<iPhone局域网IP>:9001/ws/camera` 写入注册
-properties。ESP32 端配置该地址后，可按老 SDK 的 `MediaFrame(camera_frame)` 格式
-推送 JPEG：4 字节大端 JSON header 长度、JSON header、JPEG payload。iOS phone
-不会绕过 server 直接参与对话，只缓存最新帧，并在收到 server 的 `sensor.rgb`
-采集请求时通过 `/ws/stream` 上传。
+properties。ESP32 端配置该地址后，可按 `audio_chat.direct_frame.v1` 推送 JPEG：
+4 字节大端 JSON header 长度、JSON header、JPEG payload。header 中使用
+`stream_type=sensor.rgb`。iOS phone 不会绕过 server 直接参与对话，只缓存最新帧，
+并在收到 server 的 `sensor.rgb` 采集请求时通过 `/ws/stream` 上传。
 
 如果本地启用 signed token：
 

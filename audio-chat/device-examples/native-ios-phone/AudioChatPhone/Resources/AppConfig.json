@@ -12,7 +12,7 @@
     "phone.task.traffic_light_phone_task": true,
     "direct.camera_sink": true,
     "direct.camera_sink.path": "/ws/camera",
-    "direct.camera_sink.frame_format": "media_frame.camera_frame",
+    "direct.camera_sink.frame_format": "audio_chat.direct_frame.v1",
     "audio.aec": "replaceable",
     "audio.wake_word": "manual"
   },

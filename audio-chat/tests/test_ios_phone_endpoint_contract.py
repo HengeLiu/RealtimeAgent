@@ -47,7 +47,7 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["properties"]["phone.task.traffic_light_phone_task"] is True
     assert config["properties"]["direct.camera_sink"] is True
     assert config["properties"]["direct.camera_sink.path"] == "/ws/camera"
-    assert config["properties"]["direct.camera_sink.frame_format"] == "media_frame.camera_frame"
+    assert config["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
     assert {"event": "control.device.command.*"} in config["subscriptions"]
@@ -72,7 +72,7 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     assert payload["properties"]["phone.task.traffic_light_phone_task"] is True
     assert payload["properties"]["direct.camera_sink"] is True
     assert payload["properties"]["direct.camera_sink.path"] == "/ws/camera"
-    assert payload["properties"]["direct.camera_sink.frame_format"] == "media_frame.camera_frame"
+    assert payload["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
     assert "target_device" not in json.dumps(golden)
     assert "target_device_id" not in json.dumps(golden)
 
@@ -135,11 +135,11 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
 
 
 def test_ios_phone_direct_camera_sink_files_are_part_of_xcode_target() -> None:
-    """测试目标：验证 iOS phone 补齐老 SDK 的 ESP32 相机直连接收入口。
+    """测试目标：验证 iOS phone 具备 ESP32 相机直连接收入口。
 
     测试方法：静态检查直连相机接收器、帧编解码器和 Xcode target。
-    预期结果：工程能编译这些文件，并且支持老 SDK `MediaFrame(camera_frame)` 的
-    4 字节 header 长度 + JSON header + JPEG payload 格式。
+    预期结果：工程能编译这些文件，并且支持 audio-chat 直连帧的 4 字节 header
+    长度 + JSON header + JPEG payload 格式。
     """
 
     project = _read("AudioChatPhone.xcodeproj/project.pbxproj")
@@ -156,8 +156,8 @@ def test_ios_phone_direct_camera_sink_files_are_part_of_xcode_target() -> None:
         assert filename in project
 
     for token in [
-        "frame_type",
-        "camera_frame",
+        "stream_type",
+        "sensor.rgb",
         "payload_size",
         "UInt32(headerData.count).bigEndian",
         "/ws/camera",

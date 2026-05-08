@@ -19,8 +19,8 @@
    `control.user.interrupt.detected` 和对应 output cancel 回执。
 7. 收到 `sensor.rgb` 的 `stream.control.configure.requested` 后，打开输入 stream
    上传 JPEG bytes；控制事件只保存 request_id、correlation_id、采样模式等语义字段。
-8. 如果配置了 iOS phone 的直连相机接收地址，同时把同一帧 JPEG 按老 SDK
-   `MediaFrame(camera_frame)` 格式推送到 `ws://<phone-ip>:9001/ws/camera`。
+8. 如果配置了 iOS phone 的直连相机接收地址，同时把同一帧 JPEG 按
+   `audio_chat.direct_frame.v1` 格式推送到 `ws://<phone-ip>:9001/ws/camera`。
 
 最小注册信息：
 
@@ -33,7 +33,7 @@
     "audio.playback_reference": "endpoint_ring_buffer",
     "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
     "direct.camera_source": true,
-    "direct.camera.frame_format": "media_frame.camera_frame"
+    "direct.camera.frame_format": "audio_chat.direct_frame.v1"
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
@@ -71,8 +71,6 @@ AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS=500
 
 ```bash
 uv run python -m pytest tests/test_esp32_s3_endpoint_contract.py tests/test_endpoint_config_sync.py -q
-uv run python scripts/acceptance_check.py old-sdk-parity-esp32 \
-  --report runs/acceptance/old-sdk-parity-esp32.json
 ```
 
 已有实验桥接说明见 [esp32-s3-endpoint-bridge.md](../../docs/esp32-s3-endpoint-bridge.md)。

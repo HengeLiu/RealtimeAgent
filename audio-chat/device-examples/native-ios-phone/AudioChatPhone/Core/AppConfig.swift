@@ -210,7 +210,7 @@ struct AppConfig: Codable, Equatable {
             "phone.task.traffic_light_phone_task": .bool(true),
             "direct.camera_sink": .bool(true),
             "direct.camera_sink.path": .string("/ws/camera"),
-            "direct.camera_sink.frame_format": .string("media_frame.camera_frame"),
+            "direct.camera_sink.frame_format": .string("audio_chat.direct_frame.v1"),
             "audio.aec": .string("replaceable"),
             "audio.wake_word": .string("manual"),
         ],

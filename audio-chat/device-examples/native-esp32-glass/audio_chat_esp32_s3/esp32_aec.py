@@ -185,8 +185,8 @@ class Esp32AecEndpointState:
     rgb_capture_requests: int = 0
     rgb_frames_sent: int = 0
     rgb_bytes_sent: int = 0
-    direct_camera_frames_sent: int = 0
-    direct_camera_bytes_sent: int = 0
+    direct_rgb_frames_sent: int = 0
+    direct_rgb_bytes_sent: int = 0
     direct_camera_errors: int = 0
     control_events_received: int = 0
     last_error_phase: str | None = None
@@ -228,7 +228,7 @@ class Esp32AecEndpointState:
                 "audio.output": stream_format.__dict__,
                 "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
                 "direct.camera_source": True,
-                "direct.camera.frame_format": "media_frame.camera_frame",
+                "direct.camera.frame_format": "audio_chat.direct_frame.v1",
                 "direct.camera.default_sink_uri": self.phone_camera_sink_ws_uri,
                 "direct.camera.stream_interval_ms": self.phone_camera_stream_interval_ms,
             },
@@ -379,7 +379,7 @@ class Esp32AecEndpointState:
         self.rgb_bytes_sent += len(frame)
         return frame
 
-    def encode_direct_camera_frame(
+    def encode_direct_rgb_frame(
         self,
         *,
         stream_id: str,
@@ -389,13 +389,11 @@ class Esp32AecEndpointState:
     ) -> bytes:
         """编码 ESP32 到手机直连相机帧。
 
-        功能：
-        1. 复用老 SDK 的 `MediaFrame(camera_frame)` 二进制格式。
-        2. 让新 SDK 的 ESP32 示例可以把 JPEG 直接推给 iOS phone。
+        功能：让 ESP32 示例可以把 JPEG 直接推给 iOS phone 的相机接收服务。
 
         主要逻辑：
         1. 前 4 字节是大端 JSON header 长度。
-        2. header 描述 stream、序号、时间戳、编码和 payload 大小。
+        2. header 使用 audio-chat 字段描述 stream、序号、时间戳、编码和 payload 大小。
         3. header 后面直接拼接 JPEG payload。
 
         参数：
@@ -409,10 +407,10 @@ class Esp32AecEndpointState:
         """
 
         header = {
-            "frame_type": "camera_frame",
+            "stream_type": "sensor.rgb",
             "stream_id": stream_id,
             "seq": seq,
-            "ts_ms": timestamp_ms if timestamp_ms is not None else int(time.time() * 1000),
+            "timestamp_ms": timestamp_ms if timestamp_ms is not None else int(time.time() * 1000),
             "codec": "jpeg",
             "payload_size": len(payload),
         }
@@ -422,8 +420,8 @@ class Esp32AecEndpointState:
     def mark_direct_camera_sent(self, payload_size: int) -> None:
         """记录 ESP32 已经向手机直连发送一帧相机数据。"""
 
-        self.direct_camera_frames_sent += 1
-        self.direct_camera_bytes_sent += payload_size
+        self.direct_rgb_frames_sent += 1
+        self.direct_rgb_bytes_sent += payload_size
 
     def mark_direct_camera_failed(self, phase: str) -> None:
         """记录 ESP32 到手机直连相机发送失败。"""
@@ -456,8 +454,8 @@ class Esp32AecEndpointState:
             "rgb_frames_sent": self.rgb_frames_sent,
             "rgb_bytes_sent": self.rgb_bytes_sent,
             "direct_camera_sink_ws_uri": self.phone_camera_sink_ws_uri,
-            "direct_camera_frames_sent": self.direct_camera_frames_sent,
-            "direct_camera_bytes_sent": self.direct_camera_bytes_sent,
+            "direct_rgb_frames_sent": self.direct_rgb_frames_sent,
+            "direct_rgb_bytes_sent": self.direct_rgb_bytes_sent,
             "direct_camera_errors": self.direct_camera_errors,
             "close_reason": self.close_reason,
             "last_error_phase": self.last_error_phase,
@@ -734,7 +732,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                 },
             ),
         )
-        direct_sent = await self._send_direct_camera_frame(frame, stream_id=stream_id, seq=0)
+        direct_sent = await self._send_direct_rgb_frame(frame, stream_id=stream_id, seq=0)
         await stream_ws.send_bytes(
             StreamChunkCodec.encode(
                 StreamChunk(
@@ -775,8 +773,8 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             }
         )
 
-    async def _send_direct_camera_frame(self, frame: bytes, *, stream_id: str, seq: int) -> bool:
-        """把 JPEG 帧按老 SDK 直连格式发送给 phone 相机接收服务。
+    async def _send_direct_rgb_frame(self, frame: bytes, *, stream_id: str, seq: int) -> bool:
+        """把 JPEG 帧按 audio-chat 直连格式发送给 phone 相机接收服务。
 
         功能：当 `AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI` 已配置时，ESP32 参考端会额外
         建立一条到 phone 的 WebSocket，把同一帧图片直接推给手机端。
@@ -791,7 +789,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             return False
         from aiohttp import ClientSession
 
-        payload = self.state.encode_direct_camera_frame(stream_id=stream_id, seq=seq, payload=frame)
+        payload = self.state.encode_direct_rgb_frame(stream_id=stream_id, seq=seq, payload=frame)
         try:
             async with ClientSession() as session:
                 async with session.ws_connect(self.state.phone_camera_sink_ws_uri) as ws:
