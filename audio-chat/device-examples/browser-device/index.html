@@ -9,6 +9,7 @@
     main { background: #fff; border: 1px solid #d8dee8; border-radius: 8px; padding: 20px; }
     h1 { margin: 0 0 8px; font-size: 24px; }
     h2 { margin: 20px 0 8px; font-size: 16px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 34vw); gap: 18px; align-items: start; }
     .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 14px 0; }
     label { display: block; margin-bottom: 4px; font-weight: 600; }
     input, select, textarea { width: 260px; padding: 7px 9px; border: 1px solid #aab5c5; border-radius: 6px; box-sizing: border-box; }
@@ -23,8 +24,13 @@
     .panel { border-top: 1px solid #e5eaf2; padding-top: 8px; margin-top: 12px; }
     .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
     .status div { background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 6px; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #log { height: 360px; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 12px; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .log-panel { position: sticky; top: 12px; border-top: 0; padding-top: 0; margin-top: 12px; }
+    .log-tabs { display: flex; gap: 8px; margin: 0 0 8px; }
+    .log-tab { background: #fff; color: #172033; }
+    .log-tab.active { background: #1f6feb; color: #fff; }
+    .log-box { height: calc(100vh - 180px); min-height: 420px; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 12px; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .hint { color: #5e6a7d; font-size: 13px; margin: 4px 0 0; }
+    @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; } .log-panel { position: static; } .log-box { height: 360px; min-height: 360px; } }
   </style>
 </head>
 <body>
@@ -49,6 +55,8 @@
       <div id="rgbStatus">sensor.rgb=idle</div>
     </div>
 
+    <div class="workspace">
+      <div>
     <section class="panel">
       <h2>音频输入</h2>
       <div class="row">
@@ -57,7 +65,6 @@
           <select id="audioMode">
             <option value="live_mic">真实麦克风实时对话</option>
             <option value="offline_realtime">离线音频实时注入</option>
-            <option value="offline_fast">离线音频快速回放</option>
           </select>
         </div>
         <div id="audioFileField"><label for="audioFile">WAV / PCM</label><input id="audioFile" type="file" accept=".wav,.pcm,audio/*" /></div>
@@ -66,7 +73,7 @@
         <button id="startAudio" disabled>开始音频</button>
         <button id="stopAudio" class="secondary" disabled>停止音频</button>
       </div>
-      <p class="hint">实时注入会按 20ms chunk 发送文件，适合模拟连续对话长连接；快速回放只用于复现问题，不代表真实延迟、VAD 或打断表现。</p>
+      <p class="hint">离线音频会按 20ms chunk 实时注入。每段文件发送完成后自动暂停数据发送，并保留当前连续对话连接等待上传下一段。</p>
     </section>
 
     <section class="panel">
@@ -104,10 +111,18 @@
       </div>
     </section>
 
-    <section class="panel">
-      <h2>日志</h2>
-      <div id="log"></div>
-    </section>
+      </div>
+
+      <section class="panel log-panel">
+        <h2>日志</h2>
+        <div class="log-tabs">
+          <button id="runtimeLogTab" class="log-tab active" type="button">运行日志</button>
+          <button id="broadcastLogTab" class="log-tab" type="button">广播事件</button>
+        </div>
+        <div id="log" class="log-box"></div>
+        <div id="broadcastLog" class="log-box hidden"></div>
+      </section>
+    </div>
   </main>
 
   <script>
@@ -124,6 +139,9 @@
     const BARGE_IN_MAX_PEAK = 0.72;
     const BARGE_IN_COOLDOWN_MS = 1800;
     const logEl = document.getElementById("log");
+    const broadcastLogEl = document.getElementById("broadcastLog");
+    const runtimeLogTab = document.getElementById("runtimeLogTab");
+    const broadcastLogTab = document.getElementById("broadcastLogTab");
     const connectButton = document.getElementById("connect");
     const wakeButton = document.getElementById("wake");
     const interruptButton = document.getElementById("interrupt");
@@ -187,6 +205,28 @@
       logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function logBroadcastEvent(item) {
+      const at = new Date().toLocaleTimeString();
+      const payload = JSON.stringify({
+        event_name: item.event_name,
+        session_id: item.session_id || null,
+        stream_id: item.stream_id || null,
+        stream_type: item.stream_type || null,
+        producer_id: item.producer_id || null,
+        payload: item.payload || {},
+      });
+      broadcastLogEl.textContent += `[${at}] ${payload}\n`;
+      broadcastLogEl.scrollTop = broadcastLogEl.scrollHeight;
+    }
+
+    function showLogTab(name) {
+      const broadcast = name === "broadcast";
+      broadcastLogEl.classList.toggle("hidden", !broadcast);
+      logEl.classList.toggle("hidden", broadcast);
+      broadcastLogTab.classList.toggle("active", broadcast);
+      runtimeLogTab.classList.toggle("active", !broadcast);
+    }
+
     function setStreamState(streamId, patch) {
       if (!streamId) return;
       const current = streamStates.get(streamId) || {stream_id: streamId, seq: 0, bytes_sent: 0, bytes_received: 0};
@@ -223,7 +263,7 @@
     function updateAudioButtons() {
       const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN);
       const sending = isAudioSending();
-      const offlineMode = audioModeSelect.value === "offline_realtime" || audioModeSelect.value === "offline_fast";
+      const offlineMode = audioModeSelect.value === "offline_realtime";
       const canStartNextSegment = Boolean(inputStreamId && activeAudioSource === "offline_paused" && offlineMode);
       startAudioButton.disabled = !registered || !sessionId || sending || Boolean(inputStreamId && !canStartNextSegment);
       startAudioButton.textContent = sending ? "音频发送中" : (canStartNextSegment ? "上传下一段" : "开始音频");
@@ -244,7 +284,7 @@
 
     function updateInputModePanels() {
       const audioMode = audioModeSelect.value;
-      const offlineAudio = audioMode === "offline_realtime" || audioMode === "offline_fast";
+      const offlineAudio = audioMode === "offline_realtime";
       setFieldVisible("audioFileField", offlineAudio);
       setFieldVisible("silenceMsField", offlineAudio);
 
@@ -318,7 +358,7 @@
     }
 
     function isAudioSending() {
-      return openingMic || activeAudioSource === "live_mic" || activeAudioSource === "offline_realtime" || activeAudioSource === "offline_fast";
+      return openingMic || activeAudioSource === "live_mic" || activeAudioSource === "offline_realtime";
     }
 
     async function ensureStreamSocketOpen() {
@@ -576,6 +616,13 @@
         sdk_version: "audio-chat-browser-device-0.1.0",
         auth: {mode: "disabled"},
         subscriptions: [
+          {event: "control.*"},
+          {event: "stream.*"},
+          {event: "agent.*"},
+          {event: "tool.*"},
+          {event: "task.*"},
+          {event: "memory.*"},
+          {event: "system.*"},
           {event: "control.audio_session.*"},
           {event: "stream.output.*", filter: {stream_type: "actuator.speaker"}},
           {event: "stream.output.*", filter: {stream_type: "actuator.haptic"}},
@@ -604,6 +651,7 @@
     }
 
     async function handleControlEvent(item) {
+      logBroadcastEvent(item);
       log(`recv ${item.event_name}`);
       if (item.event_name === "control.device.registered") {
         enableRegisteredControls();
@@ -882,7 +930,7 @@
         await openMicStream();
         return;
       }
-      await openOfflineAudioStream({fast: mode === "offline_fast"});
+      await openOfflineAudioStream();
     }
 
     async function readSelectedAudioAsPcm16() {
@@ -897,7 +945,7 @@
       return floatToPcm16(resampleLinear(channel, buffer.sampleRate, INPUT_RATE));
     }
 
-    async function openOfflineAudioStream({fast = false} = {}) {
+    async function openOfflineAudioStream() {
       if (openingMic) return;
       if (inputStreamId && activeAudioSource !== "offline_paused") return;
       openingMic = true;
@@ -915,7 +963,7 @@
         const reuseStream = Boolean(inputStreamId);
         inputStreamId = inputStreamId || newId("stream_in");
         if (!reuseStream) seq = 0;
-        activeAudioSource = fast ? "offline_fast" : "offline_realtime";
+        activeAudioSource = "offline_realtime";
         if (!reuseStream) {
           sendEvent(event("stream.input.opened", {
             stream_type: "sensor.mic",
@@ -934,28 +982,11 @@
         });
         closeButton.disabled = false;
         renderStatus();
-        if (fast) {
-          sendOfflineAudioFast();
-        } else {
-          sendOfflineAudioRealtime();
-        }
+        sendOfflineAudioRealtime();
       } finally {
         openingMic = false;
         renderStatus();
       }
-    }
-
-    function sendOfflineAudioFast() {
-      if (!offlineAudio || !inputStreamId) return;
-      let offset = 0;
-      while (offset < offlineAudio.byteLength) {
-        const end = Math.min(offset + MIC_CHUNK_BYTES, offlineAudio.byteLength);
-        const chunk = offlineAudio.slice(offset, end);
-        sendMicPayload(chunk.byteLength === MIC_CHUNK_BYTES ? chunk : concatBytes(chunk, new Uint8Array(MIC_CHUNK_BYTES - chunk.byteLength)));
-        offset = end;
-      }
-      log(`offline fast replay complete bytes=${offlineAudio.byteLength}`);
-      finishOfflineAudioFile();
     }
 
     function sendOfflineAudioRealtime() {
@@ -1196,7 +1227,10 @@
 
     audioModeSelect.addEventListener("change", updateInputModePanels);
     rgbSourceModeSelect.addEventListener("change", updateInputModePanels);
+    runtimeLogTab.onclick = () => showLogTab("runtime");
+    broadcastLogTab.onclick = () => showLogTab("broadcast");
     updateInputModePanels();
+    showLogTab("runtime");
     renderStatus();
     window.__audioChatBrowserDeviceTest = {
       encodeStreamChunk,

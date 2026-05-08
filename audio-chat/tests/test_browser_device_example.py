@@ -31,18 +31,16 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:
     """测试目标：验证 browser-device 支持真实麦克风和离线音频长连接测试。
 
-    测试方法：静态检查页面包含离线实时注入、快速回放、段落 final 边界和
-    20ms chunk 发送逻辑。
-    预期结果：离线音频每段上传完成后暂停发送，但保留 sensor.mic stream 等待下一段。
+    测试方法：静态检查页面包含离线实时注入、段落 final 边界和 20ms chunk
+    发送逻辑，且不再暴露快速回放模式。
+    预期结果：离线音频按实时节奏上传，每段完成后暂停发送并等待下一段。
     """
 
     html = _html()
 
     required = [
         "offline_realtime",
-        "offline_fast",
         "sendOfflineAudioRealtime",
-        "sendOfflineAudioFast",
         "offline_segment_completed",
         "offline_paused",
         "MIC_CHUNK_BYTES = INPUT_RATE * DEFAULT_CHUNK_MS / 1000 * 2",
@@ -51,6 +49,8 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
     ]
     for item in required:
         assert item in html
+    assert "offline_fast" not in html
+    assert "sendOfflineAudioFast" not in html
 
 
 def test_browser_device_switches_visible_fields_by_input_mode() -> None:
@@ -74,6 +74,40 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert 'setFieldVisible("audioFileField", offlineAudio)' in html
     assert 'id="afterFile"' not in html
     assert 'const continuousRgb = rgbMode === "live_camera" || rgbMode === "selected_video_current_frame"' in html
+
+
+def test_browser_device_has_right_side_event_log_panel() -> None:
+    """测试目标：验证 browser-device 把日志窗口纵向放在右侧并区分广播事件。
+
+    测试方法：静态检查页面使用 workspace 双栏布局、log tab、broadcastLog 和
+    logBroadcastEvent。
+    预期结果：运行日志和服务器广播事件可以分别观察。
+    """
+
+    html = _html()
+
+    assert ".workspace { display: grid;" in html
+    assert "minmax(360px, 34vw)" in html
+    assert 'id="runtimeLogTab"' in html
+    assert 'id="broadcastLogTab"' in html
+    assert 'id="broadcastLog"' in html
+    assert "function logBroadcastEvent(item)" in html
+    assert "showLogTab(\"broadcast\")" in html
+    assert "logBroadcastEvent(item);" in html
+
+
+def test_browser_device_subscribes_all_event_prefixes_for_debug_log() -> None:
+    """测试目标：验证 browser-device 为调试日志订阅所有内置事件前缀。
+
+    测试方法：静态检查注册 payload 包含 control、stream、agent、tool、task、
+    memory、system 的通配订阅。
+    预期结果：设备可以在广播事件页签看到服务器广播出来的事件，但业务处理逻辑仍只处理已支持事件。
+    """
+
+    html = _html()
+
+    for prefix in ("control.*", "stream.*", "agent.*", "tool.*", "task.*", "memory.*", "system.*"):
+        assert f'{{event: "{prefix}"}}' in html
 
 
 def test_browser_device_opens_stream_socket_after_audio_session() -> None:
