@@ -93,6 +93,39 @@ def test_publish_resolves_by_subscription() -> None:
     assert sensor.events == []
 
 
+def test_stream_capability_is_inferred_from_subscription_without_capabilities() -> None:
+    """测试目标：验证 stream 能力判断以订阅为准，不要求设备重复声明 capabilities。
+
+    测试方法：注册一个只声明 `stream.control.* sensor.rgb` 订阅的设备，然后用
+    `require_capability=sensor.rgb` 发布匹配事件。
+    预期结果：设备可以被选中并收到事件，说明订阅就是设备能力事实。
+    """
+
+    service = ControlService()
+    camera = FakeConnection("camera")
+    event = _registration("camera", [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}])
+    event.payload.pop("capabilities", None)
+    event.payload["properties"] = {"camera.facing": "front"}
+    service.register_device(event, camera)
+
+    result = service.publish_matching(
+        Event(
+            event_name="stream.control.configure.requested",
+            user_id="user-001",
+            producer_id="server-main",
+            stream_type="sensor.rgb",
+            payload={"stream_type": "sensor.rgb"},
+        ),
+        require_capability="sensor.rgb",
+    )
+
+    assert result.delivered_count == 1
+    assert camera.events[-1].event_name == "stream.control.configure.requested"
+    snapshot = service.build_device_snapshot("camera")
+    assert snapshot["properties"] == {"camera.facing": "front"}
+    assert snapshot["capabilities"] == {}
+
+
 def test_control_service_public_publish_does_not_accept_target_device_id() -> None:
     """测试目标：确认业务侧不能通过 ControlService 公共 API 点对点发送事件。
 

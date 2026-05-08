@@ -43,6 +43,7 @@ class Device:
     device_name: str
     client_type: str
     sdk_version: str
+    properties: dict[str, Any]
     capabilities: dict[str, Any]
     subscriptions: list[Subscription]
     connection_state: str = "online"
@@ -67,6 +68,7 @@ class DeviceSnapshot:
     device_name: str
     client_type: str
     sdk_version: str
+    properties: dict[str, Any]
     connection_id: str
     last_seen_at: float
     connection_state: str
@@ -87,6 +89,7 @@ class DeviceSnapshot:
             "device_name": self.device_name,
             "client_type": self.client_type,
             "sdk_version": self.sdk_version,
+            "properties": dict(self.properties),
             "connection_id": self.connection_id,
             "last_seen_at": self.last_seen_at,
             "connection_state": self.connection_state,
@@ -424,6 +427,7 @@ class ControlService:
                 for item in registration.payload.get("subscriptions", [])
             ]
             name = str(registration.payload.get("name") or registration.payload.get("device_name") or device_id)
+            properties = dict(registration.payload.get("properties") or registration.payload.get("capabilities") or {})
             record = Device(
                 user_id=registration.user_id,
                 device_id=device_id,
@@ -431,6 +435,7 @@ class ControlService:
                 device_name=str(registration.payload.get("device_name") or name),
                 client_type=registration.payload.get("client_type", "unknown"),
                 sdk_version=registration.payload.get("sdk_version", "unknown"),
+                properties=properties,
                 capabilities=dict(registration.payload.get("capabilities") or {}),
                 subscriptions=subscriptions,
                 auth_diagnostics={
@@ -497,6 +502,7 @@ class ControlService:
                 ),
                 client_type=str(registration.payload.get("client_type") or "unknown"),
                 sdk_version=str(registration.payload.get("sdk_version") or "unknown"),
+                properties=dict(registration.payload.get("properties") or registration.payload.get("capabilities") or {}),
                 connection_id="",
                 last_seen_at=time.time(),
                 connection_state="offline",
@@ -601,7 +607,7 @@ class ControlService:
         self._validate_event(event)
         candidates = self.resolve_subscribers(event)
         if require_capability is not None:
-            candidates = [device for device in candidates if self._has_capability(device.capabilities, require_capability)]
+            candidates = [device for device in candidates if self.device_supports_capability(device, require_capability)]
         if selection == "all":
             return candidates
         if selection == "first_available":
@@ -741,8 +747,53 @@ class ControlService:
                 result.append(device)
         return result
 
+    def device_supports_capability(self, device: Device, capability: str) -> bool:
+        """按订阅推导设备是否支持某类交互，旧能力字段只作为兼容补充。
+
+        主要逻辑：`sensor.*` 能力由设备是否订阅对应 `stream.control.*` 事件决定；
+        `actuator.*` 能力由设备是否订阅对应 `stream.output.*` 事件决定。历史
+        `capabilities/properties` 字段只用于不能从订阅表达的附加能力和旧示例兼容。
+        参数：运行态设备对象和能力名。
+        返回值：支持时返回 True。
+        异常情况：无。
+        """
+
+        if self._subscription_supports_capability(device.subscriptions, capability):
+            return True
+        return self._has_legacy_capability(device.properties, capability) or self._has_legacy_capability(
+            device.capabilities,
+            capability,
+        )
+
+    @classmethod
+    def _subscription_supports_capability(cls, subscriptions: list[Subscription] | tuple[Subscription, ...], capability: str) -> bool:
+        if capability.startswith("sensor."):
+            return any(
+                SubscriptionMatcher._event_name_matches("stream.control.configure.requested", subscription.event)
+                and cls._stream_filter_matches(subscription.filter, capability)
+                for subscription in subscriptions
+            )
+        if capability.startswith("actuator."):
+            return any(
+                SubscriptionMatcher._event_name_matches("stream.output.open.requested", subscription.event)
+                and cls._stream_filter_matches(subscription.filter, capability)
+                for subscription in subscriptions
+            )
+        return False
+
     @staticmethod
-    def _has_capability(capabilities: dict[str, Any], capability: str) -> bool:
+    def _stream_filter_matches(filter_data: dict[str, Any], stream_type: str) -> bool:
+        expected = filter_data.get("stream_type")
+        if expected is None:
+            expected = filter_data.get("payload.stream_type")
+        if expected is None:
+            return True
+        if isinstance(expected, list):
+            return stream_type in expected
+        return expected == stream_type
+
+    @staticmethod
+    def _has_legacy_capability(capabilities: dict[str, Any], capability: str) -> bool:
         if capabilities.get(capability):
             return True
         return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])
@@ -794,6 +845,7 @@ class ControlService:
             device_name=device.device_name,
             client_type=device.client_type,
             sdk_version=device.sdk_version,
+            properties=dict(device.properties),
             connection_id=device.connection_id,
             last_seen_at=device.last_seen_at,
             connection_state=device.connection_state,

@@ -852,7 +852,7 @@ class UserDeviceContext:
         """
         devices = []
         for record in self._app.control_service.get_active_device_set(self.user_id).devices:
-            if capability is None or self._has_capability(record.capabilities, capability):
+            if capability is None or self._app.control_service.device_supports_capability(record, capability):
                 devices.append(
                     DeviceSnapshot(
                         device_id=record.device_id,
@@ -1168,6 +1168,8 @@ class UserDeviceContext:
 
     @staticmethod
     def _has_capability(capabilities: dict, capability: str) -> bool:
+        """旧能力字典判断，仅供保留的兼容代码使用。"""
+
         if capabilities.get(capability):
             return True
         return capability in capabilities.get("streams.produce", []) or capability in capabilities.get("streams.consume", [])

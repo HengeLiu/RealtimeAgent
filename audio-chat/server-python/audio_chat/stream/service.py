@@ -113,10 +113,10 @@ class StreamService:
     ) -> StreamHandle:
         """打开输入或输出 stream。
 
-        主要逻辑：输入 stream 只注册本地句柄；输出 stream 先按订阅、capability 和
+        主要逻辑：输入 stream 只注册本地句柄；输出 stream 先按订阅和
         selection 选出 consumer，再发布 `stream.output.open.requested`，后续 chunk 和
         close/cancel 事件都只发送给这批 consumer。
-        参数：`require_capability` 为空时，`actuator.*` 默认要求设备声明同名消费能力。
+        参数：`require_capability` 为空时，`actuator.*` 默认要求设备订阅同名 stream 输出事件。
         返回值：`StreamHandle`。
         异常情况：stream 类型、格式或 selection 非法时抛出 `ValueError`。
         """

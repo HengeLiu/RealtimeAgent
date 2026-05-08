@@ -2,17 +2,99 @@
 
 `audio-chat` 是新的 server-side Python SDK，用于构建基于语音、事件和 stream 的多设备 AI 应用。它不是旧 `openaiglass-sdk` 的小修版本，而是把开发者入口收敛到 Python server SDK、`user_id` 下的 active device set、协议事件、stream、Tool / Task、Memory / Skill / MCP、Output Service、播放仲裁和设备级回放。
 
-业务代码只依赖 `audio_chat` 顶层公开 API。设备侧通过 capabilities 和 subscriptions 声明自己能生产或消费哪些 stream、能响应哪些事件；server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。
+业务代码只依赖 `audio_chat` 顶层公开 API。设备侧通过 subscriptions 声明自己要接收哪些事件，并通过 stream 上传或消费数据；server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。
 
-## 1. 开发者需要关注的设备协议
+## 1. 功能扩展开发
+
+功能扩展开发者编写的是 server 侧业务能力，不直接实现设备连接，也不面向某个 `device_id` 编程。能力通过 SDK 提供的 Context 表达业务意图，由 server 根据设备注册时提交的 `subscriptions` 完成路由。
+
+功能扩展开发者需要关注这几件事：
+
+- 你要实现什么能力：继承 `BaseTool` 或 `BaseTask`。
+- 你需要什么输入：用 `input_model` 或 `ToolSpec` 告诉模型参数结构。
+- 你如何访问设备：通过 `context.devices`，也就是 `UserDeviceContext`。
+- 你如何协调设备：发送事件、配置 `sensor.*` stream、打开 `actuator.*` stream。
+- 你如何读取设备数据：读取 SDK 从 `sensor.*` stream 整理出的 `AssetRef`。
+- 你如何输出给用户：调用 Output Service，或写入 `actuator.*` stream。
+
+Tool 用于短动作能力，例如请求一张图片、查一次搜索、准备一段路线：
+
+```python
+from audio_chat import BaseTool, ToolContext, ToolResult
+
+
+class CapturePhotoTool(BaseTool):
+    name = "capture_photo"
+    description = "请求当前用户设备上传一张前方图片。"
+    input_model = dict
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        asset = context.devices.request_asset(
+            "sensor.rgb",
+            freshness_seconds=0,
+            timeout_seconds=3,
+        )
+        if asset is None:
+            return ToolResult.failed("拍照超时")
+        return ToolResult.ok({"asset_id": asset.asset_id, "mime_type": asset.mime_type})
+```
+
+Task 用于长流程能力，例如连续视觉分析、导航执行期、计时器和后台通知：
+
+```python
+from audio_chat import BaseTask, TaskContext, TaskEvent
+
+
+class ContinuousVisionTask(BaseTask):
+    task_type = "continuous_vision"
+
+    async def on_start(self, context: TaskContext) -> None:
+        context.devices.configure_stream(
+            "sensor.rgb",
+            mode="continuous",
+            rate_hz=1,
+        )
+
+    async def on_event(self, context: TaskContext, event: TaskEvent) -> None:
+        await context.emit_progress("视觉任务正在运行")
+```
+
+`UserDeviceContext` 是 Tool / Task 访问当前用户设备集合的唯一入口：
+
+- `get_devices(capability=...)`：查询只读设备快照，可用于判断当前是否有设备具备某项能力。
+- `find_device(capability=...)`：按能力查找只读设备句柄；句柄不提供点对点发送方法。
+- `publish_event(...)`：发布协议事件，由订阅匹配分发。
+- `configure_stream(...)`：请求具备能力并订阅事件的设备打开、调整或停止 `sensor.*` stream。
+- `request_asset(...)`：请求某类 `sensor.*` stream 的最新结果，例如一张 `sensor.rgb` 图片。
+- `query_assets(...)` / `watch_assets(...)`：读取 server 内部缓存的 stream 结果。
+- `open_output_stream(...)`：打开 `actuator.*` 输出 stream。
+- `submit_text(...)` / `submit_audio(...)`：进入 Output Service 和播放仲裁。
+
+这里的 `AssetRef` 是能力开发者使用的 server 内部缓存引用，不是设备协议对象。设备开发者只上传 stream；能力开发者可以通过 `AssetRef` 读取或传递这些 stream 结果。
+
+最小样板见：
+
+- `examples/basic-app/capabilities/sample_tool/tool.py`
+- `examples/basic-app/capabilities/capture_photo/tool.py`
+- `examples/basic-app/capabilities/sample_task/task.py`
+- `examples/basic-app/capabilities/continuous_rgb_analyze/task.py`
+- `examples/migration-templates`
+
+关键约束：
+
+- Tool / Task 只能通过 `context.devices` 使用设备能力。
+- 不硬编码 `device_id` 做点对点发送。
+- 图片、音频、视频和文件不能放进控制事件 payload，必须走 `sensor.*` / `actuator.*` stream。
+- Memory / Skill / MCP 不能直接持有设备上下文；需要设备能力时，封装成 Tool 或 Task。
+
+## 2. 设备开发
 
 `Device` 是接入 audio-chat server 的任意端侧实例。它可以运行在浏览器、Python 脚本、iOS App、ESP32 固件、Android App、Linux 盒子或其他环境中。SDK 不规定设备类型，也不要求开发者把自己的设备代码放进 `audio-chat` 仓库。
 
-设备开发者只需要关注这几件事：
+设备开发者只需要关注两件事：
 
-- 你是谁：`device_id`
-- 你能做什么：`capabilities`
-- 你想听什么：`subscriptions`
+- 设备身份：`device_id` / `user_id` / `name`。其中 `name` 只用于日志、debug API 和人工观察，不参与路由决策。
+- 设备订阅和属性：用 `subscriptions` 声明要接收哪些事件，也就是设备能参与哪些交互；用可选 `properties` 描述调试信息或硬件参数。例如订阅后上传 `sensor.mic`、`sensor.rgb`、`sensor.imu`，或接收 `actuator.speaker`、`actuator.haptic`。
 
 最小注册事件示例：
 
@@ -25,15 +107,16 @@
     "device_id": "dev-browser-001",
     "name": "浏览器调试设备",
     "client_type": "browser",
-    "capabilities": {
-      "streams.produce": ["sensor.mic", "sensor.rgb"],
-      "streams.consume": ["actuator.speaker"]
-    },
     "subscriptions": [
       {"event": "control.audio_session.*"},
       {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
       {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
-    ]
+    ],
+    "properties": {
+      "audio.aec": "browser_webrtc",
+      "audio.input.sample_rate": 16000,
+      "camera.facing": "front"
+    }
   }
 }
 ```
@@ -43,6 +126,8 @@
 - 事件：用于注册、心跳、会话打开关闭、stream 控制、设备命令和状态通知。
 - stream：用于传输音频、图片、视频、IMU、深度图、播放器输出、震动输出等连续或大字节数据。
 
+设备侧不需要理解 Tool、Task、Agent Core 或 Asset Service。设备只要按注册时声明的 `subscriptions` 消费事件，并按事件要求生产或消费 stream 即可。`properties` 不参与事件路由，只用于日志、debug、硬件参数说明或业务偏好。
+
 本仓库的 `endpoints-examples` 只提供两个目的：
 
 - 帮助 SDK 开发者验证 server 协议、回放和自动验收。
@@ -50,7 +135,12 @@
 
 这些示例不是协议约束。真实设备如何实现、运行在哪个仓库、使用哪种语言、是否同时具备感知、执行或端侧算力能力，都由设备开发者决定。
 
-## 2. 安装
+设备示例的后续设计见：
+
+- [Browser Device 设计文档](docs/browser-device-design.md)
+- [Python Device Sim 设计文档](docs/python-device-sim-design.md)
+
+## 3. 安装
 
 在仓库根目录执行：
 
@@ -71,7 +161,7 @@ uv run audio-chat.sdk.package-check \
   --report runs/acceptance/old-sdk-parity-package-check.json
 ```
 
-## 3. 同步配置
+## 4. 同步配置
 
 最小样例：
 
@@ -90,7 +180,7 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 
 本阶段配置同步以开发样例为主；真机侧正式打开、构建、烧录命令由 `old-sdk-parity-cli` 线路继续补齐。
 
-## 4. 启动 Server
+## 5. 启动 Server
 
 最小 server：
 
@@ -123,7 +213,7 @@ curl http://127.0.0.1:8765/api/debug/users/user-playback-001
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-## 5. 启动设备模拟器和参考设备
+## 6. 启动设备模拟器和参考设备
 
 Python 设备模拟器：
 
@@ -165,63 +255,7 @@ open audio-chat/endpoints-examples/esp32-s3
 
 iOS / ESP32-S3 目录目前是设备示例和契约入口。缺少 Xcode、ESP-IDF、串口或真实设备时，真机步骤只能作为待验证流程；真机 smoke 由 `old-sdk-parity-phone` 和 `old-sdk-parity-esp32` 线路补齐。
 
-## 6. 写 Tool
-
-Tool 用于短动作能力，例如请求一张图片、查一次搜索、准备一段路线。业务代码只从 `audio_chat` 顶层导入：
-
-```python
-from audio_chat import BaseTool, ToolContext, ToolResult
-```
-
-最小样板见：
-
-- `examples/basic-app/capabilities/sample_tool/tool.py`
-- `examples/basic-app/capabilities/capture_photo/tool.py`
-- `examples/migration-templates/find_object/tool.py`
-
-关键约束：
-
-- Tool 只能通过 `context.devices` 使用设备能力。
-- 不硬编码 `device_id` 做点对点发送。
-- 图片、音频、视频和文件不能放进控制事件 payload，必须走 `sensor.*` / `actuator.*` stream。server 可以在内部把 `sensor.*` stream 整理成缓存记录，但开发者不需要把 Asset 当成设备协议对象。
-
-## 7. 写 Task
-
-Task 用于长流程能力，例如连续视觉分析、导航执行期、计时器和后台通知。业务代码只从 `audio_chat` 顶层导入：
-
-```python
-from audio_chat import BaseTask, TaskContext, TaskEvent
-```
-
-最小样板见：
-
-- `examples/basic-app/capabilities/sample_task/task.py`
-- `examples/basic-app/capabilities/continuous_rgb_analyze/task.py`
-- `examples/basic-app/capabilities/timer/task.py`
-- `examples/migration-templates/continuous_rgb_analyze/task.py`
-- `examples/migration-templates/notification_task/task.py`
-
-Task 不直接操作播放队列或设备连接；状态变化通过 `TaskEvent` 回流，用户可听见的输出进入 Output Service。
-
-## 8. 使用 UserDeviceContext
-
-`UserDeviceContext` 替代旧 SDK 文档中的 `DeviceGroupContext`，是 Tool / Task 访问用户设备集合的唯一入口：
-
-```python
-from audio_chat import UserDeviceContext
-```
-
-当前开发者常用方法：
-
-- `get_devices(capability=...)`：查询只读设备快照。
-- `find_device(capability=...)`：按能力查找只读设备句柄。
-- `publish_event(...)`：发布协议事件，由订阅匹配分发。
-- `request_asset(...)`：请求某类 `sensor.*` stream 的最新结果，例如一张 `sensor.rgb` 图片；方法名保留 Asset 是 SDK 内部缓存实现的兼容命名。
-- `query_assets(...)` / `watch_assets(...)`：读取 server 内部缓存的 stream 结果。
-- `open_output_stream(...)`：打开 `actuator.*` 输出 stream。
-- `submit_text(...)` / `submit_audio(...)`：进入 Output Service 和播放仲裁。
-
-## 9. Memory / Skill / MCP
+## 7. Memory / Skill / MCP
 
 Memory、Skill、MCP 已作为 Agent Core 能力面接入。业务侧规则是：
 
@@ -232,7 +266,7 @@ Memory、Skill、MCP 已作为 Agent Core 能力面接入。业务侧规则是�
 
 迁移说明见 `docs/phase3-migration-guide.md`。
 
-## 10. 跑回放和验收
+## 8. 跑回放和验收
 
 开发者最小闭环：
 
@@ -262,7 +296,7 @@ uv run python scripts/acceptance_check.py all --keep-going \
 uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py -q
 ```
 
-## 11. 看日志产物
+## 9. 看日志产物
 
 优先看结构化产物，而不是只看控制台日志：
 
@@ -276,7 +310,7 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 
 排障入口见 `docs/old-sdk-parity-troubleshooting.md`。
 
-## 12. 老 SDK 迁移入口
+## 10. 老 SDK 迁移入口
 
 老业务能力迁移优先从这些位置开始：
 
@@ -299,6 +333,6 @@ uv run python -m pytest audio-chat/tests/integration/test_dashscope_providers.py
 | `BaseTool` / `BaseTask` | `audio_chat.BaseTool` / `audio_chat.BaseTask` | 顶层公开 API。 |
 | `DeviceGroupContext` | `audio_chat.UserDeviceContext` | 只按 user active device set、capability 和 subscription 工作。 |
 
-## 13. 当前状态口径
+## 11. 当前状态口径
 
 文档中写“已实现”的能力必须有代码、测试、样板或验收 lane 支撑。没有自动验收的内容只能写成参考端、迁移目标、后续线路或真机 smoke 待补齐。
