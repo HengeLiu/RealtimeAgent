@@ -38,7 +38,7 @@
       <button id="connect">连接并注册</button>
       <button id="wake" disabled>模拟唤醒</button>
       <button id="interrupt" class="secondary" disabled>模拟打断</button>
-      <button id="close" class="secondary" disabled>结束</button>
+      <button id="close" class="secondary" disabled>结束连续对话</button>
     </div>
 
     <div class="status">
@@ -214,7 +214,16 @@
       rgbStatusEl.textContent = latestRgb
         ? `sensor.rgb=${latestRgb.state || "open"} seq=${latestRgb.seq || 0} bytes=${latestRgb.bytes_sent || 0}`
         : "sensor.rgb=idle";
+      updateSessionButtons();
       updateAudioButtons();
+    }
+
+    function updateSessionButtons() {
+      const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN);
+      const dialogOpen = Boolean(sessionId);
+      wakeButton.disabled = !registered || dialogOpen;
+      interruptButton.disabled = !dialogOpen;
+      closeButton.disabled = !dialogOpen;
     }
 
     function updateAudioButtons() {
@@ -226,8 +235,6 @@
     }
 
     function enableRegisteredControls() {
-      wakeButton.disabled = false;
-      interruptButton.disabled = false;
       sendPhotoButton.disabled = false;
       startVideoButton.disabled = false;
       customEventButton.disabled = false;
@@ -589,7 +596,6 @@
         }
         sessionId = item.session_id;
         sendEvent(event("control.audio_session.opened", {reason: "browser_device_opened"}, {session_id: sessionId}));
-        closeButton.disabled = false;
         renderStatus();
         if (document.getElementById("autoStartAudio").checked) {
           await openAudioInput();
@@ -617,8 +623,6 @@
         await stopMic();
         sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: item.session_id}));
         sessionId = null;
-        closeButton.disabled = true;
-        wakeButton.disabled = false;
         closeStreamSocket("audio_session_closed");
         renderStatus();
       }
@@ -1123,14 +1127,12 @@
       sendFinalMicPayload();
       if (micStream) micStream.getTracks().forEach((track) => track.stop());
       if (inputStreamId) {
-        sendEvent(event("stream.input.closed", {stream_type: "sensor.mic", reason: "browser_device_closed"}, {
+        sendEvent(event("stream.input.closed", {stream_type: "sensor.mic", reason: "audio_segment_closed"}, {
           session_id: sessionId, stream_id: inputStreamId, stream_type: "sensor.mic",
         }));
-        setStreamState(inputStreamId, {stream_type: "sensor.mic", state: "closed", close_reason: "browser_device_closed"});
+        setStreamState(inputStreamId, {stream_type: "sensor.mic", state: "closed", close_reason: "audio_segment_closed"});
       }
       processor = null; micSource = null; micStream = null; inputStreamId = null; micPcmBuffer = new Uint8Array(0); activeAudioSource = "idle";
-      closeButton.disabled = !sessionId;
-      wakeButton.disabled = false;
       renderStatus();
     }
 

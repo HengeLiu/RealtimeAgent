@@ -75,6 +75,25 @@ def test_browser_device_opens_stream_socket_after_audio_session() -> None:
     assert "startAudioButton.disabled = !registered || !sessionId || running" in html
 
 
+def test_browser_device_stop_audio_keeps_dialog_connection() -> None:
+    """测试目标：验证停止音频只关闭当前麦克风 stream，不结束连续对话连接。
+
+    测试方法：静态检查停止麦克风逻辑使用 audio_segment_closed 关闭 sensor.mic，
+    且 closeStreamSocket 只出现在 audio session 关闭分支。
+    预期结果：停止一段音频后可以继续上传下一段，结束连续对话才释放连接。
+    """
+
+    html = _html()
+    stop_mic_body = html.split("async function stopMic()", 1)[1].split("connectButton.onclick", 1)[0]
+
+    assert "结束连续对话" in html
+    assert "audio_segment_closed" in stop_mic_body
+    assert "closeStreamSocket(" not in stop_mic_body
+    assert "closeStreamSocket(\"audio_session_closed\")" in html
+    assert "wakeButton.disabled = !registered || dialogOpen" in html
+    assert "closeButton.disabled = !dialogOpen" in html
+
+
 def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     """测试目标：验证 browser-device 能在音频长连接期间并行处理视觉 stream。
 
