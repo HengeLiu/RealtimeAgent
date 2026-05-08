@@ -352,6 +352,11 @@ def _endpoint_source_check(audio_root: Path) -> dict:
             "endpoints-examples/web-glass/index.html",
             "endpoints-examples/web-glass/web-glass.yaml",
         ],
+        "browser_device": [
+            "device-examples/browser-device/README.md",
+            "device-examples/browser-device/index.html",
+            "device-examples/browser-device/browser-device.yaml",
+        ],
         "python_phone_mock": [
             "endpoints-examples/python-phone-mock/README.md",
             "endpoints-examples/python-phone-mock/phone.mock.yaml",

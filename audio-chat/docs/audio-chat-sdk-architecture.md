@@ -710,14 +710,20 @@ Agent、Tool、Task 和系统事件：
 
 `filter` 第一版只支持字段等值匹配和数组包含匹配，不支持 `and/or/not`、比较运算、正则或脚本表达式。多个字段天然是 `AND` 关系。
 
-filter 字段路径可以引用事件信封字段和 `payload` 内字段：
+filter 字段路径只推荐引用事件信封字段和 `payload` 内字段：
 
 | 写法 | 匹配字段 |
 | --- | --- |
 | `producer_id` | 事件信封中的 `producer_id`。 |
 | `stream_type` | 事件信封或 stream 元数据中的 `stream_type`。 |
 | `payload.mode` | `payload.mode`。 |
-| `capabilities.streams.produce` | `payload.capabilities.streams.produce` 或设备状态快照中的同名字段。 |
+
+`capabilities.*` 是旧示例的兼容字段，不作为新协议推荐写法。新协议中，设备是否能生产
+`sensor.*` 或消费 `actuator.*`，由设备注册时提交的 `subscriptions` 推导。
+例如订阅 `{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}`
+表示设备可以接收 RGB 采集配置事件；订阅
+`{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}}`
+表示设备可以接收扬声器输出 stream。
 
 示例：
 

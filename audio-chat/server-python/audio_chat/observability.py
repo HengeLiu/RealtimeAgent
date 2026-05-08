@@ -188,6 +188,45 @@ class RunRecorder:
             ),
         )
 
+    def record_event_route(self, event: Event, record: dict[str, Any]) -> None:
+        """记录控制事件订阅匹配和投递诊断。
+
+        主要逻辑：写入全局 `control-routes.jsonl`，有 session 时同步写入会话目录。
+        终端只用 DEBUG 打一行摘要，避免正常 stream 或心跳链路刷屏。
+        参数：`event` 为原始控制事件，`record` 为 Control Service 生成的路由摘要。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+
+        payload = {
+            "timestamp_ms": event.timestamp_ms,
+            "user_id": event.user_id,
+            "session_id": event.session_id,
+            "producer_id": event.producer_id,
+            "stream_id": event.stream_id,
+            "stream_type": event.stream_type,
+            **dict(record),
+        }
+        self._append_jsonl(self.runs_root / "control-routes.jsonl", payload)
+        if event.session_id:
+            self._append_jsonl(self.session_dir(event.session_id) / "control-routes.jsonl", payload)
+        log_debug(
+            self.logger,
+            f"事件路由 {event.event_name}",
+            LogContext(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                device_id=event.producer_id,
+                stream_id=event.stream_id,
+                event="event.route.resolved",
+                fields={
+                    "matched_count": record.get("matched_count"),
+                    "delivered_count": record.get("delivered_count"),
+                    "stream_type": event.stream_type,
+                },
+            ),
+        )
+
     def record_stream_event(self, session_id: str, record: dict[str, Any]) -> None:
         self._append_jsonl(self.session_dir(session_id) / "stream-events.jsonl", record)
         name = str(record.get("event") or "")

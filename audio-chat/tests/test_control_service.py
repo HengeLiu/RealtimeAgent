@@ -89,6 +89,9 @@ def test_publish_resolves_by_subscription() -> None:
 
     assert result.matched_count == 1
     assert result.delivered_count == 1
+    assert result.route_diagnostics[0]["device_id"] == "speaker"
+    assert result.route_diagnostics[0]["subscription_matched"] is True
+    assert result.route_diagnostics[0]["delivered"] is True
     assert [event.event_name for event in speaker.events] == ["stream.output.open.requested"]
     assert sensor.events == []
 
@@ -189,12 +192,12 @@ def test_registration_validator_applies_subscription_config() -> None:
     assert wildcard.event_name == "control.device.register.failed"
 
 
-def test_subscription_filter_matches_envelope_payload_capabilities_and_arrays() -> None:
-    """测试目标：验证 A 线要求的订阅 filter 能匹配信封、payload 和 capabilities。
+def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
+    """测试目标：验证订阅 filter 能匹配信封字段、payload 字段和数组值。
 
     测试方法：注册一个同时过滤 producer_id、payload.command_name 和
-    capabilities.streams.consume 的设备，再发布匹配事件。
-    预期结果：数组包含匹配生效，事件只投递给符合能力和订阅条件的设备。
+    payload.tags 的设备，再发布匹配事件。
+    预期结果：数组包含匹配生效，事件只投递给符合订阅条件的设备。
     """
 
     service = ControlService()
@@ -208,7 +211,7 @@ def test_subscription_filter_matches_envelope_payload_capabilities_and_arrays() 
                     "filter": {
                         "producer_id": "server-main",
                         "payload.command_name": "audio.play",
-                        "capabilities.streams.consume": "actuator.speaker",
+                        "payload.tags": "speaker",
                     },
                 }
             ],
@@ -221,12 +224,45 @@ def test_subscription_filter_matches_envelope_payload_capabilities_and_arrays() 
             event_name="control.device.command.requested",
             user_id="user-001",
             producer_id="server-main",
-            payload={"command_name": "audio.play"},
+            payload={"command_name": "audio.play", "tags": ["speaker", "debug"]},
         )
     )
 
     assert result.matched_device_ids == ("dev-speaker",)
     assert [event.payload["command_name"] for event in endpoint.events] == ["audio.play"]
+
+
+def test_route_diagnostics_explain_subscription_miss() -> None:
+    """测试目标：验证事件没有投递时能看到明确的订阅未命中原因。
+
+    测试方法：注册只订阅 `sensor.rgb` 的设备，然后发布 `sensor.depth` 配置事件。
+    预期结果：未投递，`route_diagnostics` 指出 `stream_type` filter 不匹配。
+    """
+
+    service = ControlService()
+    endpoint = FakeConnection("dev-rgb")
+    service.register_device(
+        _registration("dev-rgb", [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}]),
+        endpoint,
+    )
+
+    result = service.publish_matching(
+        Event(
+            event_name="stream.control.configure.requested",
+            user_id="user-001",
+            producer_id="server-main",
+            stream_type="sensor.depth",
+            payload={"stream_type": "sensor.depth"},
+        ),
+        require_capability="sensor.depth",
+    )
+
+    assert result.matched_count == 0
+    assert endpoint.events == []
+    assert result.route_diagnostics[0]["reason"] == "filter_mismatch"
+    assert result.route_diagnostics[0]["detail"]["path"] == "stream_type"
+    assert result.route_diagnostics[0]["detail"]["expected"] == "sensor.rgb"
+    assert result.route_diagnostics[0]["detail"]["actual"] == "sensor.depth"
 
 
 def test_subscription_filter_rejects_regex_and_unknown_paths() -> None:

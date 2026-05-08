@@ -114,6 +114,7 @@ class PublishResult:
     delivered_count: int
     failed_device_ids: tuple[str, ...] = ()
     matched_device_ids: tuple[str, ...] = ()
+    route_diagnostics: tuple[dict[str, Any], ...] = ()
 
 
 class PairingTokenIssuer(Protocol):
@@ -288,6 +289,7 @@ class RegistrationValidator:
             raise ValueError("producer_id must equal payload.device_id")
         if event.version != PROTOCOL_VERSION:
             raise ValueError("unsupported protocol version")
+        # capabilities 是旧示例兼容字段，新协议的设备能力事实由 subscriptions 推导。
         self.validate_capabilities(dict(event.payload.get("capabilities") or {}))
         self.validate_subscriptions(event.payload.get("subscriptions") or [])
 
@@ -341,22 +343,60 @@ class RegistrationValidator:
 
 class SubscriptionMatcher:
     def match(self, event: Event, subscription: Subscription, device: Device | None = None) -> bool:
+        """判断单条订阅是否命中事件。"""
+
+        return bool(self.explain(event, subscription, device)["matched"])
+
+    def explain(self, event: Event, subscription: Subscription, device: Device | None = None) -> dict[str, Any]:
+        """返回单条订阅的匹配诊断。
+
+        主要逻辑：先匹配事件名，再逐个检查 filter 字段。返回结构只包含小型结构化
+        诊断，不包含媒体 payload。
+        参数：`event` 为待分发事件，`subscription` 为设备订阅，`device` 为可选设备状态。
+        返回值：包含 `matched/reason/subscription/filter` 的字典。
+        异常情况：无。
+        """
+
         if not self._event_name_matches(event.event_name, subscription.event):
-            return False
+            return {
+                "matched": False,
+                "reason": "event_name_mismatch",
+                "subscription": subscription.event,
+                "filter": dict(subscription.filter),
+            }
         for path, expected in subscription.filter.items():
             actual = self._lookup(event, path, device)
             if isinstance(actual, list):
                 if isinstance(expected, list):
                     if not all(item in actual for item in expected):
-                        return False
+                        return self._filter_miss(subscription, path, expected, actual)
                 elif expected not in actual:
-                    return False
+                    return self._filter_miss(subscription, path, expected, actual)
             elif isinstance(expected, list):
                 if actual not in expected:
-                    return False
+                    return self._filter_miss(subscription, path, expected, actual)
             elif actual != expected:
-                return False
-        return True
+                return self._filter_miss(subscription, path, expected, actual)
+        return {
+            "matched": True,
+            "reason": "matched",
+            "subscription": subscription.event,
+            "filter": dict(subscription.filter),
+        }
+
+    @staticmethod
+    def _filter_miss(subscription: Subscription, path: str, expected: Any, actual: Any) -> dict[str, Any]:
+        """生成 filter 未命中的可读诊断。"""
+
+        return {
+            "matched": False,
+            "reason": "filter_mismatch",
+            "subscription": subscription.event,
+            "filter": dict(subscription.filter),
+            "path": path,
+            "expected": expected,
+            "actual": actual,
+        }
 
     @staticmethod
     def _event_name_matches(event_name: str, pattern: str) -> bool:
@@ -556,10 +596,10 @@ class ControlService:
     def publish(self, event: Event) -> PublishResult:
         self._validate_event(event)
         self.recorder.record_event(event)
-        failed: list[str] = []
-        delivered = 0
-        subscribers = self.resolve_subscribers(event)
-        return self._deliver_to_devices(event, subscribers)
+        subscribers, route = self._resolve_subscribers_with_diagnostics(event)
+        result = self._deliver_to_devices(event, subscribers, route_diagnostics=route)
+        self._record_route(event, result)
+        return result
 
     def publish_matching(
         self,
@@ -580,12 +620,14 @@ class ControlService:
         """
         self._validate_event(event)
         self.recorder.record_event(event)
-        selected = self.resolve_matching_devices(
+        selected, route = self._resolve_matching_devices_with_diagnostics(
             event,
             require_capability=require_capability,
             selection=selection,
         )
-        return self._deliver_to_devices(event, selected)
+        result = self._deliver_to_devices(event, selected, route_diagnostics=route)
+        self._record_route(event, result)
+        return result
 
     def resolve_matching_devices(
         self,
@@ -605,35 +647,45 @@ class ControlService:
         异常情况：事件名或 selection 非法时抛出 `ValueError`。
         """
         self._validate_event(event)
-        candidates = self.resolve_subscribers(event)
-        if require_capability is not None:
-            candidates = [device for device in candidates if self.device_supports_capability(device, require_capability)]
-        if selection == "all":
-            return candidates
-        if selection == "first_available":
-            return candidates[:1]
-        raise ValueError(f"unsupported device selection: {selection}")
+        selected, _ = self._resolve_matching_devices_with_diagnostics(
+            event,
+            require_capability=require_capability,
+            selection=selection,
+        )
+        return selected
 
-    def _deliver_to_devices(self, event: Event, devices: list[Device]) -> PublishResult:
+    def _deliver_to_devices(
+        self,
+        event: Event,
+        devices: list[Device],
+        *,
+        route_diagnostics: list[dict[str, Any]] | None = None,
+    ) -> PublishResult:
         failed: list[str] = []
         delivered = 0
+        diagnostics = [dict(item) for item in (route_diagnostics or [])]
+        by_device = {item.get("device_id"): item for item in diagnostics}
         for device in devices:
             connection = self._connections.get(device.device_id)
             if connection is None:
                 failed.append(device.device_id)
+                self._mark_route_delivery(by_device, device.device_id, delivered=False, reason="connection_missing")
                 continue
             try:
                 connection.push_event(event)
                 delivered += 1
+                self._mark_route_delivery(by_device, device.device_id, delivered=True, reason="delivered")
             except Exception as exc:
                 failed.append(device.device_id)
                 device.connection_state = "offline"
                 self._record_device_error(device, "event_delivery_failed", str(exc))
+                self._mark_route_delivery(by_device, device.device_id, delivered=False, reason="event_delivery_failed")
         return PublishResult(
             matched_count=len(devices),
             delivered_count=delivered,
             failed_device_ids=tuple(failed),
             matched_device_ids=tuple(device.device_id for device in devices),
+            route_diagnostics=tuple(diagnostics),
         )
 
     def _push_event_to_device_ids(self, event: Event, device_ids: tuple[str, ...]) -> PublishResult:
@@ -649,7 +701,13 @@ class ControlService:
         self._validate_event(event)
         self.recorder.record_event(event)
         devices = [self._devices[device_id] for device_id in device_ids if device_id in self._devices]
-        return self._deliver_to_devices(event, devices)
+        route = [
+            self._route_decision(device, subscription_matched=True, selected=True, reason="frozen_stream_consumer")
+            for device in devices
+        ]
+        result = self._deliver_to_devices(event, devices, route_diagnostics=route)
+        self._record_route(event, result)
+        return result
 
     def push_stream_chunk_to_devices(self, device_ids: tuple[str, ...], chunk: object) -> PublishResult:
         failed: list[str] = []
@@ -737,15 +795,183 @@ class ControlService:
         return tuple(expired)
 
     def resolve_subscribers(self, event: Event) -> list[Device]:
+        result, _ = self._resolve_subscribers_with_diagnostics(event)
+        return result
+
+    def _resolve_subscribers_with_diagnostics(self, event: Event) -> tuple[list[Device], list[dict[str, Any]]]:
+        """解析订阅者并生成路由诊断。
+
+        主要逻辑：只检查当前 user 下设备，依次过滤离线设备、事件生产者和订阅规则。
+        诊断用于 debug API、runs 产物和 Tool 返回值，帮助开发者理解为什么某台设备
+        收到或没有收到事件。
+        参数：`event` 为待发布事件。
+        返回值：`(命中设备列表, 诊断列表)`。
+        异常情况：无。
+        """
+
         result: list[Device] = []
+        diagnostics: list[dict[str, Any]] = []
         for device in self._devices.values():
-            if device.user_id != event.user_id or device.connection_state != "online":
+            if device.user_id != event.user_id:
+                continue
+            if device.connection_state != "online":
+                diagnostics.append(self._route_decision(device, subscription_matched=False, selected=False, reason="device_offline"))
                 continue
             if self.exclude_producer_by_default and device.device_id == event.producer_id:
+                diagnostics.append(self._route_decision(device, subscription_matched=False, selected=False, reason="producer_excluded"))
                 continue
-            if any(self.matcher.match(event, subscription, device) for subscription in device.subscriptions):
+            match = self._first_subscription_match(event, device)
+            if match["matched"]:
                 result.append(device)
-        return result
+                diagnostics.append(
+                    self._route_decision(
+                        device,
+                        subscription_matched=True,
+                        selected=True,
+                        reason="subscription_matched",
+                        subscription=match.get("subscription"),
+                        filter_data=match.get("filter"),
+                    )
+                )
+            else:
+                diagnostics.append(
+                    self._route_decision(
+                        device,
+                        subscription_matched=False,
+                        selected=False,
+                        reason=str(match.get("reason") or "subscription_mismatch"),
+                        subscription=match.get("subscription"),
+                        filter_data=match.get("filter"),
+                        detail={
+                            key: match[key]
+                            for key in ("path", "expected", "actual")
+                            if key in match
+                        },
+                    )
+                )
+        return result, diagnostics
+
+    def _resolve_matching_devices_with_diagnostics(
+        self,
+        event: Event,
+        *,
+        require_capability: str | None,
+        selection: str,
+    ) -> tuple[list[Device], list[dict[str, Any]]]:
+        """按订阅、能力和选择策略解析设备，并保留每一步诊断。"""
+
+        if selection not in {"all", "first_available"}:
+            raise ValueError(f"unsupported device selection: {selection}")
+        candidates, diagnostics = self._resolve_subscribers_with_diagnostics(event)
+        selected: list[Device] = []
+        for device in candidates:
+            if require_capability is not None and not self.device_supports_capability(device, require_capability):
+                self._mark_route_selected(
+                    diagnostics,
+                    device.device_id,
+                    selected=False,
+                    reason="capability_mismatch",
+                    required_capability=require_capability,
+                )
+                continue
+            if selection == "first_available" and selected:
+                self._mark_route_selected(
+                    diagnostics,
+                    device.device_id,
+                    selected=False,
+                    reason="selection_skipped",
+                    required_capability=require_capability,
+                )
+                continue
+            selected.append(device)
+            self._mark_route_selected(
+                diagnostics,
+                device.device_id,
+                selected=True,
+                reason="selected",
+                required_capability=require_capability,
+            )
+        return selected, diagnostics
+
+    def _first_subscription_match(self, event: Event, device: Device) -> dict[str, Any]:
+        """返回设备订阅对事件的首个匹配结果或最有用的失败结果。"""
+
+        first_miss: dict[str, Any] | None = None
+        filter_miss: dict[str, Any] | None = None
+        for subscription in device.subscriptions:
+            current = self.matcher.explain(event, subscription, device)
+            if current["matched"]:
+                return current
+            first_miss = first_miss or current
+            if current.get("reason") == "filter_mismatch":
+                filter_miss = filter_miss or current
+        return filter_miss or first_miss or {"matched": False, "reason": "no_subscription"}
+
+    @staticmethod
+    def _route_decision(
+        device: Device,
+        *,
+        subscription_matched: bool,
+        selected: bool,
+        reason: str,
+        subscription: Any = None,
+        filter_data: Any = None,
+        detail: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """构造一条设备路由诊断。"""
+
+        decision = {
+            "device_id": device.device_id,
+            "name": device.name,
+            "connection_state": device.connection_state,
+            "subscription_matched": subscription_matched,
+            "selected": selected,
+            "delivered": False,
+            "reason": reason,
+        }
+        if subscription is not None:
+            decision["subscription"] = subscription
+        if filter_data:
+            decision["filter"] = dict(filter_data)
+        if detail:
+            decision["detail"] = dict(detail)
+        return decision
+
+    @staticmethod
+    def _mark_route_selected(
+        diagnostics: list[dict[str, Any]],
+        device_id: str,
+        *,
+        selected: bool,
+        reason: str,
+        required_capability: str | None,
+    ) -> None:
+        """更新某台设备的选择结果。"""
+
+        for item in diagnostics:
+            if item.get("device_id") != device_id:
+                continue
+            item["selected"] = selected
+            item["reason"] = reason
+            if required_capability is not None:
+                item["required_capability"] = required_capability
+            return
+
+    @staticmethod
+    def _mark_route_delivery(
+        by_device: dict[Any, dict[str, Any]],
+        device_id: str,
+        *,
+        delivered: bool,
+        reason: str,
+    ) -> None:
+        """更新某台设备的投递结果。"""
+
+        item = by_device.get(device_id)
+        if item is None:
+            return
+        item["delivered"] = delivered
+        item["delivery_reason"] = reason
 
     def device_supports_capability(self, device: Device, capability: str) -> bool:
         """按订阅推导设备是否支持某类交互，旧能力字段只作为兼容补充。
@@ -763,6 +989,25 @@ class ControlService:
         return self._has_legacy_capability(device.properties, capability) or self._has_legacy_capability(
             device.capabilities,
             capability,
+        )
+
+    def _record_route(self, event: Event, result: PublishResult) -> None:
+        """记录事件路由诊断。"""
+
+        recorder = getattr(self, "recorder", None)
+        if recorder is None or not hasattr(recorder, "record_event_route"):
+            return
+        recorder.record_event_route(
+            event,
+            {
+                "event": "event.route.resolved",
+                "event_name": event.event_name,
+                "matched_count": result.matched_count,
+                "delivered_count": result.delivered_count,
+                "failed_device_ids": list(result.failed_device_ids),
+                "matched_device_ids": list(result.matched_device_ids),
+                "route_diagnostics": list(result.route_diagnostics),
+            },
         )
 
     @classmethod

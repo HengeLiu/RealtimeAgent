@@ -126,7 +126,17 @@ class ContinuousVisionTask(BaseTask):
 - 事件：用于注册、心跳、会话打开关闭、stream 控制、设备命令和状态通知。
 - stream：用于传输音频、图片、视频、IMU、深度图、播放器输出、震动输出等连续或大字节数据。
 
-设备侧不需要理解 Tool、Task、Agent Core 或 Asset Service。设备只要按注册时声明的 `subscriptions` 消费事件，并按事件要求生产或消费 stream 即可。`properties` 不参与事件路由，只用于日志、debug、硬件参数说明或业务偏好。
+设备侧不需要理解 Tool、Task、Agent Core 或 Asset Service。设备只要按注册时声明的 `subscriptions` 消费事件，并按事件要求生产或消费 stream 即可。
+
+事件分发规则是固定的：
+
+1. server 只在同一个 `user_id` 当前在线设备中查找订阅者。
+2. 默认不把事件回发给事件生产者自己。
+3. 先匹配订阅的 `event`，再匹配 `filter`。
+4. 对 `sensor.*` 和 `actuator.*`，server 直接从订阅中推导设备是否支持该 stream，不要求设备额外声明 `capabilities`。
+5. Tool / Task 可以指定 `selection="first_available"` 或 `selection="all"`，但不能指定某个 `device_id`。
+
+`filter` 只过滤事件字段，例如 `stream_type`、`payload.command_name`、`payload.mode`。`properties` 不参与事件路由，只用于日志、debug、硬件参数说明或业务偏好。
 
 本仓库的 `endpoints-examples` 只提供两个目的：
 
@@ -139,6 +149,7 @@ class ContinuousVisionTask(BaseTask):
 
 - [Browser Device 设计文档](docs/browser-device-design.md)
 - [Python Device Sim 设计文档](docs/python-device-sim-design.md)
+- [事件订阅与分发优化说明](docs/event-subscription-routing-optimization.md)
 
 ## 3. 安装
 
@@ -174,7 +185,7 @@ uv run audio-chat.config.sync --app-root audio-chat/examples/basic-app
 - `examples/basic-app/config/server.yaml`
 - `examples/basic-app/host/phone-mock/config.yaml`
 - `examples/basic-app/host/glass-playback/playback.yaml`
-- `endpoints-examples/web-glass/web-glass.yaml`
+- `device-examples/browser-device/browser-device.yaml`
 - `endpoints-examples/ios-phone/AppConfig.example.json`
 - `endpoints-examples/esp32-s3/local.env.example`
 

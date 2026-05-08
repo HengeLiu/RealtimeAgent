@@ -27,8 +27,8 @@ def register_endpoint(
     app: AudioChatApp,
     endpoint: RecordingEndpoint,
     *,
-    capabilities: dict,
     subscriptions: list[dict],
+    properties: dict | None = None,
 ) -> None:
     response = app.register_device(
         Event(
@@ -41,8 +41,8 @@ def register_endpoint(
                 "client_type": "acceptance",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "capabilities": capabilities,
                 "subscriptions": subscriptions,
+                "properties": properties or {},
             },
         ),
         endpoint,
@@ -70,29 +70,28 @@ def test_public_tool_task_api_does_not_export_second_layer_request_objects() -> 
         assert not hasattr(output, name)
 
 
-def test_asset_request_requires_capability_and_subscription(tmp_path) -> None:
-    """Asset requests must not be delivered to devices that only subscribe by event.
+def test_asset_request_routes_by_stream_subscription(tmp_path) -> None:
+    """资产请求只依赖 stream 控制订阅，不要求设备重复声明 capabilities。
 
-    The architecture requires both:
-    - capability says the device can produce the stream;
-    - subscription says the device wants the configure event.
+    测试目标：验证设备能力事实来自 subscriptions。
+    测试方法：注册一个订阅 `sensor.rgb` 的设备和一个只订阅 `sensor.imu` 的设备，
+    然后请求 `sensor.rgb` 资产。
+    预期结果：事件只投递给 `sensor.rgb` 订阅设备。
     """
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=0.01))
     user_id = "user-asset-routing"
-    capable = RecordingEndpoint(user_id=user_id, device_id="dev-rgb-capable")
-    subscriber_only = RecordingEndpoint(user_id=user_id, device_id="dev-rgb-subscriber-only")
+    rgb_device = RecordingEndpoint(user_id=user_id, device_id="dev-rgb")
+    imu_device = RecordingEndpoint(user_id=user_id, device_id="dev-imu")
 
     register_endpoint(
         app,
-        capable,
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
+        rgb_device,
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
     register_endpoint(
         app,
-        subscriber_only,
-        capabilities={"streams.produce": ["sensor.imu"], "sensor.imu": True},
-        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+        imu_device,
+        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}}],
     )
 
     asset = UserDeviceContext(user_id=user_id, app=app).request_asset(
@@ -103,8 +102,8 @@ def test_asset_request_requires_capability_and_subscription(tmp_path) -> None:
     )
 
     assert asset is None
-    assert [event.event_name for event in capable.events] == ["stream.control.configure.requested"]
-    assert subscriber_only.events == []
+    assert [event.event_name for event in rgb_device.events] == ["stream.control.configure.requested"]
+    assert imu_device.events == []
 
 
 def test_open_output_stream_honors_capability_and_selection(tmp_path) -> None:
@@ -119,14 +118,12 @@ def test_open_output_stream_honors_capability_and_selection(tmp_path) -> None:
         register_endpoint(
             app,
             endpoint,
-            capabilities={"streams.consume": ["actuator.haptic"], "actuator.haptic": True},
             subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}}],
         )
     register_endpoint(
         app,
         speaker_only,
-        capabilities={"streams.consume": ["actuator.speaker"], "actuator.speaker": True},
-        subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}}],
+        subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
     )
 
     writer = UserDeviceContext(user_id=user_id, app=app).open_output_stream(
@@ -156,13 +153,13 @@ def test_payload_only_control_event_does_not_open_stream(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        capabilities={"navigation.endpoint": True},
         subscriptions=[
             {
                 "event": "control.device.command.requested",
                 "filter": {"payload.command_name": "navigation.start"},
             }
         ],
+        properties={"navigation.endpoint": True},
     )
 
     result = UserDeviceContext(user_id=user_id, app=app).publish_event(
@@ -192,7 +189,6 @@ def test_debug_snapshot_explains_subscription_miss_and_recent_errors(tmp_path) -
     register_endpoint(
         app,
         endpoint,
-        capabilities={"streams.produce": ["sensor.rgb"], "sensor.rgb": True},
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
 
@@ -203,9 +199,12 @@ def test_debug_snapshot_explains_subscription_miss_and_recent_errors(tmp_path) -
     )
     snapshot = app.control_service.build_user_snapshot("user-debug")
     device = snapshot["devices"][0]
+    route_events = (tmp_path / "runs" / "control-routes.jsonl").read_text(encoding="utf-8")
     app.control_service.expire_stale_devices(now=device["last_seen_at"] + 31, timeout_seconds=30)
 
     assert result.matched_count == 0
     assert endpoint.events == []
+    assert "event.route.resolved" in route_events
+    assert "filter_mismatch" in route_events
     assert device["subscriptions"][0]["filter"] == {"stream_type": "sensor.rgb"}
     assert app.control_service.build_device_snapshot("dev-rgb")["last_error"]["code"] == "heartbeat_timeout"
