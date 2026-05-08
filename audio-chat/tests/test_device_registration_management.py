@@ -49,6 +49,7 @@ def _registration(user_id: str, device_id: str, *, token: str = "token-ok") -> E
         producer_id=device_id,
         payload={
             "device_id": device_id,
+            "name": f"测试设备 {device_id}",
             "device_name": device_id,
             "client_type": "python-playback",
             "sdk_version": "audio-chat-test",
@@ -78,6 +79,7 @@ def test_reconnect_replaces_old_connection_and_records_binding_diagnostics() -> 
     assert second_response.event_name == "control.device.registered"
     assert first.closed_reason == "replaced_by_new_connection"
     assert snapshot["connection_state"] == "online"
+    assert snapshot["name"] == "测试设备 dev-001"
     assert snapshot["binding"]["bound_user_id"] == "user-001"
     assert snapshot["binding"]["replaced_connection"] is True
 
@@ -157,6 +159,7 @@ def test_debug_api_returns_device_and_user_snapshots() -> None:
             producer_id="dev-debug",
             payload={
                 "device_id": "dev-debug",
+                "name": "浏览器调试设备",
                 "device_name": "debug",
                 "client_type": "python-playback",
                 "sdk_version": "audio-chat-test",
@@ -178,5 +181,7 @@ def test_debug_api_returns_device_and_user_snapshots() -> None:
     device_payload = json.loads(device_response.text)
     user_payload = json.loads(user_response.text)
     assert device_payload["auth"]["status"] == "passed"
+    assert device_payload["name"] == "浏览器调试设备"
     assert device_payload["binding"]["bound_user_id"] == "user-001"
+    assert user_payload["devices"][0]["name"] == "浏览器调试设备"
     assert user_payload["devices"][0]["device_id"] == "dev-debug"

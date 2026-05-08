@@ -2,6 +2,7 @@ mode: register_only
 server_url: http://127.0.0.1:8765
 user_id: user-endpoint-001
 device_id: dev-python-phone-mock-001
+name: Python 算力模拟设备
 auth:
   mode: disabled
 capabilities:

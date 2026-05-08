@@ -457,6 +457,7 @@ class PythonPlaybackEndpoint:
             producer_id=self.device_id,
             payload={
                 "device_id": self.device_id,
+                "name": "Python 回放设备示例",
                 "device_name": "python-playback",
                 "client_type": "python-playback",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
@@ -1147,6 +1148,7 @@ class NetworkPythonPlaybackEndpoint:
             producer_id=self.device_id,
             payload={
                 "device_id": self.device_id,
+                "name": self.device_name,
                 "device_name": self.device_name,
                 "client_type": self.client_type,
                 "sdk_version": "audio-chat-endpoint-0.1.0",

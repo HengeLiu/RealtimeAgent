@@ -13,6 +13,7 @@
     "client_type": "contract-endpoint",
     "connection_id": "conn-contract",
     "device_id": "dev-contract",
+    "name": "协议契约设备",
     "subscriptions": [
       {
         "event": "stream.output.*",

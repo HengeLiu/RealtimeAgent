@@ -553,6 +553,7 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         device_id=config.get("device_id", "dev-python-phone-mock-001"),
         runs_root=config.get("runs_root", "runs/audio-chat"),
         auth=dict(config.get("auth") or {"mode": "disabled"}),
+        device_name=str(config.get("name") or config.get("device_name") or "python-phone-mock"),
         capabilities=dict(config.get("capabilities") or {}) or None,
         subscriptions=list(config.get("subscriptions") or []) or None,
         task_handlers=handler_registry,

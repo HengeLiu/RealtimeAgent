@@ -760,6 +760,7 @@ class DeviceSnapshot:
 
     device_id: str
     capabilities: dict
+    name: str = ""
 
 
 class DeviceHandle:
@@ -830,8 +831,9 @@ class OutputStreamWriter:
 class UserDeviceContext:
     """业务代码访问用户端侧能力的协议原生上下文门面。
 
-    主要功能：Tool / Task 只能通过事件、资产、输出意图和 stream 写入器表达业务意图；
-    不面向某个 device_id 编程，也不暴露端侧 RPC。
+    主要功能：Tool / Task 只能通过事件、sensor stream、输出意图和 stream 写入器表达业务意图；
+    不面向某个 device_id 编程，也不暴露端侧 RPC。Asset 是 server 内部对 sensor stream
+    结果的缓存引用，保留在方法名中是为了兼容既有 Tool。
     主要方法：`publish_event()`、`open_output_stream()`、`request_asset()`、
     `query_assets()`、`watch_assets()`、`submit_text()`、`submit_audio()`。
     """
@@ -851,7 +853,13 @@ class UserDeviceContext:
         devices = []
         for record in self._app.control_service.get_active_device_set(self.user_id).devices:
             if capability is None or self._has_capability(record.capabilities, capability):
-                devices.append(DeviceSnapshot(device_id=record.device_id, capabilities=record.capabilities))
+                devices.append(
+                    DeviceSnapshot(
+                        device_id=record.device_id,
+                        capabilities=record.capabilities,
+                        name=getattr(record, "name", getattr(record, "device_name", "")),
+                    )
+                )
         return devices
 
     def find_device(self, capability: str) -> DeviceHandle | None:
@@ -938,7 +946,7 @@ class UserDeviceContext:
         freshness_seconds: float = 0,
         configure_payload: dict | None = None,
     ) -> AssetRef | None:
-        """请求端侧采集一张 RGB 图片资产。
+        """请求端侧通过 `sensor.rgb` stream 采集一张图片。
 
         主要逻辑：这是旧 SDK `capture_photo()` 的迁移便捷入口，底层仍然调用
         `request_asset("sensor.rgb")`，由控制事件触发端侧通过 stream 上传 JPEG。
@@ -958,10 +966,10 @@ class UserDeviceContext:
         )
 
     def latest_asset(self, stream_type: str, *, freshness_seconds: float | None = None) -> AssetRef | None:
-        """读取指定 stream 类型的最新缓存资产。
+        """读取指定 stream 类型的最新内部缓存引用。
 
-        主要逻辑：只查询 Asset Service 缓存，不主动发布控制事件。
-        参数：`stream_type` 为资产 stream 类型，`freshness_seconds` 为可选最大年龄。
+        主要逻辑：只查询 server 对 sensor stream 结果的内部缓存，不主动发布控制事件。
+        参数：`stream_type` 为 sensor stream 类型，`freshness_seconds` 为可选最大年龄。
         返回值：存在时返回最新 `AssetRef`，否则返回 `None`。
         异常情况：无。
         """
@@ -976,11 +984,11 @@ class UserDeviceContext:
         configure_payload: dict | None = None,
         timeout_seconds: float | None = None,
     ) -> AssetRef | None:
-        """请求单个传感器资产。
+        """请求单个传感器 stream 的内部缓存引用。
 
-        主要逻辑：委托 Asset Service 先查 freshness 缓存，未命中时发布
+        主要逻辑：委托内部缓存服务先查 freshness 缓存，未命中时发布
         `stream.control.configure.requested`，等待端侧通过 `sensor.*` stream 上传。
-        参数：`stream_type` 为资产 stream，`freshness_seconds` 为缓存新鲜度，
+        参数：`stream_type` 为 sensor stream，`freshness_seconds` 为缓存新鲜度，
         `configure_payload` 为配置载荷，`timeout_seconds` 为等待超时。
         返回值：`AssetRef` 或 `None`。
         异常情况：底层事件发布或文件存储失败时向上抛出。
@@ -1033,10 +1041,10 @@ class UserDeviceContext:
         )
 
     def query_assets(self, stream_type: str, freshness_seconds: float | None = None) -> list[AssetRef]:
-        """查询缓存资产窗口。
+        """查询 sensor stream 结果缓存窗口。
 
-        主要逻辑：读取 Asset Service 缓存窗口，并按 freshness_seconds 可选过滤。
-        参数：`stream_type` 为资产 stream，`freshness_seconds` 为最大年龄。
+        主要逻辑：读取 server 对 sensor stream 结果的缓存窗口，并按 freshness_seconds 可选过滤。
+        参数：`stream_type` 为 sensor stream，`freshness_seconds` 为最大年龄。
         返回值：`AssetRef` 列表。
         异常情况：无。
         """
@@ -1053,7 +1061,7 @@ class UserDeviceContext:
         timeout_seconds: float | None = None,
         since: float | str | None = None,
     ) -> AsyncIterator[AssetRef]:
-        """持续读取资产 stream 写入的资产引用。
+        """持续读取 sensor stream 写入后的内部缓存引用。
 
         主要逻辑：返回 Asset Service 的 async iterator，按 stream_type 和 correlation_id
         过滤，适合 Task 消费连续 sensor.rgb 帧。

@@ -32,7 +32,16 @@ class PassiveEndpoint:
         )
 
 
-def _register_device(app: AudioChatApp, *, endpoint, user_id: str, device_id: str, capabilities: dict, subscriptions: list[dict]) -> None:
+def _register_device(
+    app: AudioChatApp,
+    *,
+    endpoint,
+    user_id: str,
+    device_id: str,
+    capabilities: dict,
+    subscriptions: list[dict],
+    name: str | None = None,
+) -> None:
     app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -40,6 +49,7 @@ def _register_device(app: AudioChatApp, *, endpoint, user_id: str, device_id: st
             producer_id=device_id,
             payload={
                 "device_id": device_id,
+                "name": name or device_id,
                 "auth": {"mode": "disabled"},
                 "capabilities": capabilities,
                 "subscriptions": subscriptions,
@@ -355,6 +365,7 @@ def test_notify_enters_output_service_and_find_device_is_read_only(tmp_path) -> 
         endpoint=endpoint,
         user_id="user-notify",
         device_id="dev-speaker",
+        name="客厅扬声器模拟设备",
         capabilities={"streams.consume": ["actuator.speaker"], "audio.output": True},
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
     )
@@ -365,6 +376,7 @@ def test_notify_enters_output_service_and_find_device_is_read_only(tmp_path) -> 
 
     assert handle is not None
     assert handle.snapshot.device_id == "dev-speaker"
+    assert handle.snapshot.name == "客厅扬声器模拟设备"
     assert not hasattr(handle, "publish_event")
     assert any(event.event_name == "stream.output.open.requested" for event in endpoint.events)
     assert endpoint.chunks

@@ -131,6 +131,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
             producerID: config.deviceID,
             payload: [
                 "device_id": config.deviceID,
+                "name": "iOS 设备示例",
                 "device_name": "ios-phone-reference",
                 "client_type": "ios-phone",
                 "sdk_version": "audio-chat-ios-reference-0.1.0",

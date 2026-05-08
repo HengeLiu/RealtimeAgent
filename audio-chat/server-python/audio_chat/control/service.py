@@ -39,6 +39,7 @@ class Device:
 
     user_id: str
     device_id: str
+    name: str
     device_name: str
     client_type: str
     sdk_version: str
@@ -62,6 +63,7 @@ class DeviceSnapshot:
 
     user_id: str
     device_id: str
+    name: str
     device_name: str
     client_type: str
     sdk_version: str
@@ -81,6 +83,7 @@ class DeviceSnapshot:
         return {
             "user_id": self.user_id,
             "device_id": self.device_id,
+            "name": self.name,
             "device_name": self.device_name,
             "client_type": self.client_type,
             "sdk_version": self.sdk_version,
@@ -420,10 +423,12 @@ class ControlService:
                 Subscription(event=item["event"], filter=dict(item.get("filter") or {}))
                 for item in registration.payload.get("subscriptions", [])
             ]
+            name = str(registration.payload.get("name") or registration.payload.get("device_name") or device_id)
             record = Device(
                 user_id=registration.user_id,
                 device_id=device_id,
-                device_name=registration.payload.get("device_name", device_id),
+                name=name,
+                device_name=str(registration.payload.get("device_name") or name),
                 client_type=registration.payload.get("client_type", "unknown"),
                 sdk_version=registration.payload.get("sdk_version", "unknown"),
                 capabilities=dict(registration.payload.get("capabilities") or {}),
@@ -484,7 +489,12 @@ class ControlService:
             snapshot = DeviceSnapshot(
                 user_id=registration.user_id,
                 device_id=failed_device_id,
-                device_name=str(registration.payload.get("device_name") or failed_device_id),
+                name=str(registration.payload.get("name") or registration.payload.get("device_name") or failed_device_id),
+                device_name=str(
+                    registration.payload.get("device_name")
+                    or registration.payload.get("name")
+                    or failed_device_id
+                ),
                 client_type=str(registration.payload.get("client_type") or "unknown"),
                 sdk_version=str(registration.payload.get("sdk_version") or "unknown"),
                 connection_id="",
@@ -780,6 +790,7 @@ class ControlService:
         return DeviceSnapshot(
             user_id=device.user_id,
             device_id=device.device_id,
+            name=device.name,
             device_name=device.device_name,
             client_type=device.client_type,
             sdk_version=device.sdk_version,

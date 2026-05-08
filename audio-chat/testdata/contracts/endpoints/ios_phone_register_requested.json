@@ -20,6 +20,7 @@
     },
     "client_type": "ios-phone",
     "device_id": "dev-ios-phone-001",
+    "name": "iOS 设备示例",
     "device_name": "ios-phone-reference",
     "sdk_version": "audio-chat-ios-reference-0.1.0",
     "subscriptions": [

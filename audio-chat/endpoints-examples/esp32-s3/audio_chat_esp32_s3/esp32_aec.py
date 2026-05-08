@@ -203,6 +203,7 @@ class Esp32AecEndpointState:
         stream_format = self.stream_format()
         return {
             "device_id": self.device_id,
+            "name": "ESP32-S3 设备示例",
             "device_name": "esp32-s3-aec-reference",
             "client_type": "esp32-s3",
             "sdk_version": "audio-chat-endpoint-0.3.0",
