@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from audio_chat.endpoints.python_phone_mock import main as phone_mock_main
+from audio_chat_python_phone_mock.phone_mock import main as phone_mock_main
 
 
 def mock(argv: list[str] | None = None) -> None:

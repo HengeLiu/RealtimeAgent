@@ -14,7 +14,7 @@ dependencies = [
 [project.scripts]
 "audio-chat.config.sync" = "audio_chat.cli.config:sync"
 "audio-chat.phone.mock" = "audio_chat.cli.phone:mock"
-"audio-chat.playback.glass" = "audio_chat.endpoints.python_playback:main"
+"audio-chat.playback.glass" = "audio_chat_python_glass.playback:main"
 "audio-chat.dev.preflight" = "audio_chat.preflight:main"
 "audio-chat.server.run" = "audio_chat.server:main"
 "audio-chat.server.start" = "audio_chat.cli.server:start"
@@ -40,8 +40,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["server-python"]
-include = ["audio_chat*"]
+where = [
+    "server-python",
+    "endpoints/python-glass",
+    "endpoints/python-phone-mock",
+    "endpoints/esp32-s3",
+]
+include = [
+    "audio_chat*",
+    "audio_chat_python_glass*",
+    "audio_chat_python_phone_mock*",
+    "audio_chat_esp32_s3*",
+]
 
 [tool.setuptools.package-data]
 audio_chat = ["py.typed"]

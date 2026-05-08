@@ -232,7 +232,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-cli
 写入范围：
 
 ```text
-audio-chat/server-python/audio_chat/endpoints/python_playback.py
+audio-chat/endpoints/python-glass/audio_chat_python_glass/playback.py
 audio-chat/examples/basic-app/host/glass-playback/
 audio-chat/testdata/playback/
 audio-chat/testdata/contracts/scenarios/
@@ -295,7 +295,7 @@ uv run python scripts/acceptance_check.py old-sdk-parity-playback
 ```text
 audio-chat/endpoints/python-phone-mock/
 audio-chat/endpoints/ios-phone/
-audio-chat/server-python/audio_chat/endpoints/python_phone_mock.py
+audio-chat/endpoints/python-phone-mock/audio_chat_python_phone_mock/phone_mock.py
 audio-chat/examples/basic-app/capabilities/
 audio-chat/tests/test_phone_task_contract.py
 audio-chat/tests/test_python_phone_mock_vision_task.py

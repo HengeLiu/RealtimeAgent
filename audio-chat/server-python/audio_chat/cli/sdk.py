@@ -331,8 +331,8 @@ def _esp32_reference_check(audio_root: Path) -> dict:
 def _endpoint_source_check(audio_root: Path) -> dict:
     """检查发布候选随仓库交付的端侧参考源码。
 
-    主要逻辑：端侧参考实现不进入 Python wheel，但 release candidate 必须能说明
-    iOS、ESP32、web-glass 和 Python phone mock 的源码输入是否齐全。
+    主要逻辑：端侧参考实现不进入 `audio_chat` SDK 内部命名空间，但 release
+    candidate 必须能说明 iOS、ESP32、web-glass 和 Python 参考端的源码输入是否齐全。
     """
 
     required_files = {
@@ -355,7 +355,10 @@ def _endpoint_source_check(audio_root: Path) -> dict:
         "python_phone_mock": [
             "endpoints/python-phone-mock/README.md",
             "endpoints/python-phone-mock/phone.mock.yaml",
-            "server-python/audio_chat/endpoints/python_phone_mock.py",
+            "endpoints/python-phone-mock/audio_chat_python_phone_mock/phone_mock.py",
+        ],
+        "python_glass": [
+            "endpoints/python-glass/audio_chat_python_glass/playback.py",
         ],
     }
     checks: dict[str, dict] = {}
@@ -378,15 +381,12 @@ def _endpoint_source_check(audio_root: Path) -> dict:
 def _source_boundary_check(audio_root: Path) -> dict:
     """扫描 server SDK 核心源码，防止引用业务样例或端侧工程。
 
-    主要逻辑：`audio_chat.cli` 和 `audio_chat.endpoints` 可以知道参考端侧位置；
+    主要逻辑：`audio_chat.cli` 可以知道参考端侧位置；
     核心包、Tool / Task / Agent / Stream / Output 服务不能 import examples 或端侧工程。
     """
 
     core_root = audio_root / "server-python" / "audio_chat"
-    allowed_prefixes = {
-        core_root / "cli",
-        core_root / "endpoints",
-    }
+    allowed_prefixes = {core_root / "cli"}
     offenders = []
     for path in sorted(core_root.rglob("*.py")):
         if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):

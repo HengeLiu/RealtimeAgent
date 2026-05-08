@@ -45,7 +45,7 @@ def test_esp32_contract_keeps_event_stream_boundary() -> None:
     预期结果：设备通过 capability/subscription 声明音频和 RGB 能力，不出现隐藏 RPC。
     """
 
-    from audio_chat.endpoints.esp32_aec import Esp32AecEndpointState
+    from audio_chat_esp32_s3.esp32_aec import Esp32AecEndpointState
 
     payload = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32").registration_payload()
 

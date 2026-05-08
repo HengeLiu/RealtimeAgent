@@ -7,7 +7,7 @@ from pathlib import Path
 from aiohttp import ClientSession, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.endpoints.python_phone_mock import NetworkPythonPhoneMockEndpoint
+from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
 from audio_chat.server import AudioChatHttpServer
 
 

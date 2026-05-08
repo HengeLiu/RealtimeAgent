@@ -38,8 +38,8 @@ def test_package_check_covers_wheel_editable_public_api_and_boundary(tmp_path) -
     assert data["checks"]["release_candidate"]["ok"] is True
 
 
-def test_release_wheel_does_not_include_private_or_endpoint_sources(tmp_path) -> None:
-    """测试目标：确认 server SDK wheel 不混入端侧源码、样例、运行产物或本地私密配置。
+def test_release_wheel_does_not_include_private_or_native_endpoint_sources(tmp_path) -> None:
+    """测试目标：确认 wheel 不混入真机端侧工程、样例、运行产物或本地私密配置。
 
     测试方法：读取 package-check 报告中的 wheel 内容检查结果。
     预期结果：`forbidden` 清单为空，且 `py.typed` 作为 package data 被包含。
@@ -69,7 +69,7 @@ def test_endpoint_reference_modules_are_importable_but_not_top_level_exports() -
     """
 
     import audio_chat
-    from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint
+    from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
 
     assert NetworkPythonPlaybackEndpoint is not None
     assert not hasattr(audio_chat, "NetworkPythonPlaybackEndpoint")

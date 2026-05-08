@@ -6,7 +6,7 @@ import pytest
 from aiohttp import ClientSession, WSServerHandshakeError, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint
+from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
 from audio_chat.protocol import Event, StreamFormat
 from audio_chat.server import AudioChatHttpServer
 
@@ -79,7 +79,7 @@ def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
                 device_id="dev-net-wav",
                 runs_root=str(tmp_path / "runs"),
             )
-            from audio_chat.endpoints.python_playback import load_wav_audio
+            from audio_chat_python_glass.playback import load_wav_audio
 
             audio = load_wav_audio(wav_path)
             result = await endpoint.run_once(audio=audio)

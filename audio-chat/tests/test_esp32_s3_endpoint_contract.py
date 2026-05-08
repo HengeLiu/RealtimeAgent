@@ -6,7 +6,7 @@ from pathlib import Path
 from aiohttp import web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.endpoints.esp32_aec import (
+from audio_chat_esp32_s3.esp32_aec import (
     DEFAULT_CHUNK_BYTES,
     Esp32AecEndpointState,
     Esp32S3EndpointConfig,

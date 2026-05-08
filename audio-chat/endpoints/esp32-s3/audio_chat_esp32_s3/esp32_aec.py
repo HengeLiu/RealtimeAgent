@@ -9,7 +9,7 @@ from typing import Any
 
 from aiohttp import WSMsgType
 
-from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint, PlaybackAudio
+from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint, PlaybackAudio
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat, new_id
 
 

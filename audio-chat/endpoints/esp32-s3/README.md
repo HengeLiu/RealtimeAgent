@@ -1,7 +1,7 @@
 # ESP32-S3 reference endpoint
 
 本目录记录 audio-chat ESP32-S3 真机桥接参考端协议。当前仓库提供
-`audio_chat.endpoints.esp32_aec` Python 契约模型和网络 smoke 参考实现，用于冻结
+`audio_chat_esp32_s3.esp32_aec` Python 契约模型和网络 smoke 参考实现，用于冻结
 注册、会话、stream 和 AEC 诊断语义；物理 ESP32-S3 固件仍需要在硬件环境中按同一协议
 实现和验收。
 

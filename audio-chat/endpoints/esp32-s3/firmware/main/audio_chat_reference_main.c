@@ -8,7 +8,7 @@ static const char *TAG = "audio_chat_reference";
  * ESP32-S3 参考固件骨架。
  *
  * 本文件只提供最小可构建的 ESP-IDF app，用于 package-check 和真机工程入口检查。
- * 协议契约已冻结在 audio_chat.endpoints.esp32_aec；真实固件应按以下清单补齐：
+ * 协议契约已冻结在 audio_chat_esp32_s3.esp32_aec；真实固件应按以下清单补齐：
  *
  * 1. 从 local.env 读取 WiFi、control WebSocket、stream WebSocket、user_id、
  *    device_id 和鉴权 token。

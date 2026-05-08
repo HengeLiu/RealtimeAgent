@@ -6,7 +6,7 @@
 
 Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮没有连接物理 ESP32-S3。因此本文件记录最小真机联调入口、事件检查点和 AEC reference 写入要求；真机日志尚未产生，不能把 ESP32 真机能力描述为已完成。
 
-2026-05-07 更新：本轮已补齐 `audio_chat.endpoints.esp32_aec` 中的 ESP32-S3
+2026-05-07 更新：本轮已补齐 `audio_chat_esp32_s3.esp32_aec` 中的 ESP32-S3
 协议参考状态机、网络参考端和自动契约测试。它能覆盖注册 payload、wake 后才打开
 `sensor.mic`、speaker output 回执、AEC reference ring 诊断、`sensor.rgb` stream 抓拍
 语义和 config sync 字段。`endpoints/esp32-s3/firmware` 也提供最小 ESP-IDF 工程骨架，

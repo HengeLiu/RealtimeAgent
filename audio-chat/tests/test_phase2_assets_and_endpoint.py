@@ -4,7 +4,8 @@ import time
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.config import load_yaml_config
-from audio_chat.endpoints import Esp32AecEndpointState, PythonPlaybackEndpoint
+from audio_chat_esp32_s3.esp32_aec import Esp32AecEndpointState
+from audio_chat_python_glass.playback import PythonPlaybackEndpoint
 from audio_chat.protocol import Event
 from audio_chat.protocol import StreamChunk
 from audio_chat.tools import RequestAssetTool, UserDeviceContext

@@ -106,7 +106,7 @@ class PlaybackAudio:
 def _repo_root() -> Path:
     """返回仓库根目录。
 
-    主要逻辑：`python_playback.py` 位于 `audio-chat/server-python/audio_chat/endpoints`，
+    主要逻辑：`playback.py` 位于 `audio-chat/endpoints/python-glass/audio_chat_python_glass`，
     向上四层是仓库根目录。
     返回值：仓库根目录路径。
     异常情况：无。

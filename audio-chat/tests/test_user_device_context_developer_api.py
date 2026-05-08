@@ -4,7 +4,7 @@ import asyncio
 import time
 
 from audio_chat import AudioChatApp, AudioChatConfig, Event, StreamChunk, UserDeviceContext
-from audio_chat.endpoints import PythonPlaybackEndpoint
+from audio_chat_python_glass.playback import PythonPlaybackEndpoint
 
 
 class PassiveEndpoint:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from audio_chat.endpoints import run_playback
+from audio_chat_python_glass.playback import run_playback
 
 
 def test_old_sdk_parity_playback_runs_tool_task_and_timer_scenarios(tmp_path: Path) -> None:

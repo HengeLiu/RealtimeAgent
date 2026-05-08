@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.endpoints.python_playback import PythonPlaybackEndpoint
+from audio_chat_python_glass.playback import PythonPlaybackEndpoint
 
 
 ROOT = Path(__file__).resolve().parents[2]

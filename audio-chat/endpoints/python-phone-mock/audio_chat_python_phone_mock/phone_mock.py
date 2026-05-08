@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from audio_chat.endpoints.python_playback import NetworkPythonPlaybackEndpoint
+from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, new_id
 
 

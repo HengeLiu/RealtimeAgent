@@ -669,7 +669,7 @@ DASHSCOPE_API_KEY=... uv run python -m pytest tests/integration/test_dashscope_p
 写入范围：
 
 ```text
-audio-chat/server-python/audio_chat/endpoints/
+audio-chat/endpoints/python-glass/
 audio-chat/endpoints/web-glass/
 audio-chat/endpoints/python-phone-mock/
 audio-chat/endpoints/ios-phone/
@@ -838,7 +838,7 @@ server 只通过 event 和 stream 管理会话、输入、输出和关闭。
 audio-chat/endpoints/esp32-s3/
 audio-chat/endpoints/esp32-s3/local.env.example
 audio-chat/docs/esp32-s3-endpoint-bridge.md
-audio-chat/server-python/audio_chat/endpoints/esp32_aec.py
+audio-chat/endpoints/esp32-s3/audio_chat_esp32_s3/esp32_aec.py
 audio-chat/server-python/audio_chat/cli/config.py
 audio-chat/tests/test_esp32_s3_endpoint_contract.py
 audio-chat/tests/test_endpoint_config_sync.py

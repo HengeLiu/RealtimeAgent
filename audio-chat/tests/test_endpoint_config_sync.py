@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from audio_chat.endpoints.esp32_aec import Esp32S3EndpointConfig
+from audio_chat_esp32_s3.esp32_aec import Esp32S3EndpointConfig
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[1]
