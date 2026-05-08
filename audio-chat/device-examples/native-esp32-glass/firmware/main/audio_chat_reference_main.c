@@ -20,6 +20,9 @@ static const char *TAG = "audio_chat_reference";
  *    AEC reference 环形缓冲，再上报 started/finished/closed 或 failed。
  * 6. 响应 sensor.rgb 的 stream.control.configure.requested，通过 /ws/stream
  *    上传 JPEG 字节，不把媒体大字节放进控制事件 payload。
+ * 7. 如果配置了 AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI，则兼容老 SDK 的
+ *    MediaFrame(camera_frame) 格式，把同一帧 JPEG 通过 phone 直连 WebSocket
+ *    推送给 iOS phone 的 /ws/camera 接收服务。
  */
 void app_main(void)
 {

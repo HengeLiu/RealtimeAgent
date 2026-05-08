@@ -15,6 +15,10 @@
 		B00000000000000000000006 /* AudioChatEndpointRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000106 /* AudioChatEndpointRuntime.swift */; };
 		B00000000000000000000007 /* AppConfig.example.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000107 /* AppConfig.example.json */; };
 		B00000000000000000000008 /* AppConfig.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000110 /* AppConfig.json */; };
+		B00000000000000000000009 /* IPAddressProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000111 /* IPAddressProvider.swift */; };
+		B00000000000000000000010 /* DirectCameraFrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000112 /* DirectCameraFrameCodec.swift */; };
+		B00000000000000000000011 /* DirectWebSocketFrameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000113 /* DirectWebSocketFrameParser.swift */; };
+		B00000000000000000000012 /* DirectCameraSinkServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000114 /* DirectCameraSinkServer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +32,10 @@
 		B00000000000000000000108 /* AudioChatPhone/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = AudioChatPhone/Info.plist; sourceTree = SOURCE_ROOT; };
 		B00000000000000000000109 /* AudioChatPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AudioChatPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000110 /* AppConfig.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = AppConfig.json; sourceTree = "<group>"; };
+		B00000000000000000000111 /* IPAddressProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPAddressProvider.swift; sourceTree = "<group>"; };
+		B00000000000000000000112 /* DirectCameraFrameCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectCameraFrameCodec.swift; sourceTree = "<group>"; };
+		B00000000000000000000113 /* DirectWebSocketFrameParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectWebSocketFrameParser.swift; sourceTree = "<group>"; };
+		B00000000000000000000114 /* DirectCameraSinkServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectCameraSinkServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,6 +76,10 @@
 				B00000000000000000000104 /* AudioChatEvent.swift */,
 				B00000000000000000000105 /* StreamChunkCodec.swift */,
 				B00000000000000000000106 /* AudioChatEndpointRuntime.swift */,
+				B00000000000000000000111 /* IPAddressProvider.swift */,
+				B00000000000000000000112 /* DirectCameraFrameCodec.swift */,
+				B00000000000000000000113 /* DirectWebSocketFrameParser.swift */,
+				B00000000000000000000114 /* DirectCameraSinkServer.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -160,6 +172,10 @@
 				B00000000000000000000004 /* AudioChatEvent.swift in Sources */,
 				B00000000000000000000005 /* StreamChunkCodec.swift in Sources */,
 				B00000000000000000000006 /* AudioChatEndpointRuntime.swift in Sources */,
+				B00000000000000000000009 /* IPAddressProvider.swift in Sources */,
+				B00000000000000000000010 /* DirectCameraFrameCodec.swift in Sources */,
+				B00000000000000000000011 /* DirectWebSocketFrameParser.swift in Sources */,
+				B00000000000000000000012 /* DirectCameraSinkServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

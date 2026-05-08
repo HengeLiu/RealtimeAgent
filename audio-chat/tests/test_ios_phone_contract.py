@@ -28,6 +28,9 @@ def test_ios_phone_reference_contains_task_registry_contract() -> None:
         "control.device.command.completed",
         "phone.task.find_object_phone_task",
         "phone.task.traffic_light_phone_task",
+        "DirectCameraSinkServer",
+        "direct.camera_sink",
+        "media_frame.camera_frame",
     ]:
         assert token in runtime + config
 

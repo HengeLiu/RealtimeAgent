@@ -124,6 +124,7 @@ struct AppConfig: Codable, Equatable {
     var deviceID: String
     var auth: AuthConfig
     var protocolVersion: String
+    var directCameraSinkPort: UInt16
     var properties: [String: JSONValue]
     var subscriptions: [SubscriptionConfig]
 
@@ -133,8 +134,53 @@ struct AppConfig: Codable, Equatable {
         case deviceID = "device_id"
         case auth
         case protocolVersion = "protocol_version"
+        case directCameraSinkPort = "direct_camera_sink_port"
         case properties
         case subscriptions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        serverURL = try container.decode(String.self, forKey: .serverURL)
+        userID = try container.decode(String.self, forKey: .userID)
+        deviceID = try container.decode(String.self, forKey: .deviceID)
+        auth = try container.decode(AuthConfig.self, forKey: .auth)
+        protocolVersion = try container.decodeIfPresent(String.self, forKey: .protocolVersion) ?? "audio-chat.v1"
+        directCameraSinkPort = try container.decodeIfPresent(UInt16.self, forKey: .directCameraSinkPort) ?? 9001
+        properties = try container.decodeIfPresent([String: JSONValue].self, forKey: .properties) ?? [:]
+        subscriptions = try container.decodeIfPresent([SubscriptionConfig].self, forKey: .subscriptions) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(serverURL, forKey: .serverURL)
+        try container.encode(userID, forKey: .userID)
+        try container.encode(deviceID, forKey: .deviceID)
+        try container.encode(auth, forKey: .auth)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encode(directCameraSinkPort, forKey: .directCameraSinkPort)
+        try container.encode(properties, forKey: .properties)
+        try container.encode(subscriptions, forKey: .subscriptions)
+    }
+
+    init(
+        serverURL: String,
+        userID: String,
+        deviceID: String,
+        auth: AuthConfig,
+        protocolVersion: String,
+        directCameraSinkPort: UInt16 = 9001,
+        properties: [String: JSONValue],
+        subscriptions: [SubscriptionConfig]
+    ) {
+        self.serverURL = serverURL
+        self.userID = userID
+        self.deviceID = deviceID
+        self.auth = auth
+        self.protocolVersion = protocolVersion
+        self.directCameraSinkPort = directCameraSinkPort
+        self.properties = properties
+        self.subscriptions = subscriptions
     }
 
     static func load() -> AppConfig {
@@ -158,9 +204,13 @@ struct AppConfig: Codable, Equatable {
         deviceID: "dev-ios-phone-001",
         auth: AuthConfig(mode: "disabled", token: nil, signedToken: nil),
         protocolVersion: "audio-chat.v1",
+        directCameraSinkPort: 9001,
         properties: [
             "phone.task.find_object_phone_task": .bool(true),
             "phone.task.traffic_light_phone_task": .bool(true),
+            "direct.camera_sink": .bool(true),
+            "direct.camera_sink.path": .string("/ws/camera"),
+            "direct.camera_sink.frame_format": .string("media_frame.camera_frame"),
             "audio.aec": .string("replaceable"),
             "audio.wake_word": .string("manual"),
         ],

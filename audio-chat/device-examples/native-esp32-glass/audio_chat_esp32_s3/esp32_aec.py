@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,6 +91,8 @@ class Esp32S3EndpointConfig:
     wake_word_mode: str = "endpoint"
     aec_mode: str = "endpoint"
     playback_reference: str = "endpoint_ring_buffer"
+    phone_camera_sink_ws_uri: str = ""
+    phone_camera_stream_interval_ms: int = 500
 
     @classmethod
     def from_env_file(cls, path: str | Path) -> "Esp32S3EndpointConfig":
@@ -120,6 +123,8 @@ class Esp32S3EndpointConfig:
             wake_word_mode=values.get("AUDIO_CHAT_WAKE_WORD_MODE", "endpoint"),
             aec_mode=values.get("AUDIO_CHAT_AEC_MODE", "endpoint"),
             playback_reference=values.get("AUDIO_CHAT_PLAYBACK_REFERENCE", "endpoint_ring_buffer"),
+            phone_camera_sink_ws_uri=values.get("AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI", ""),
+            phone_camera_stream_interval_ms=int(values.get("AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS", 500)),
         )
 
     def auth_payload(self) -> dict[str, str]:
@@ -158,6 +163,8 @@ class Esp32AecEndpointState:
     playback_reference: str = "endpoint_ring_buffer"
     rgb_capture_enabled: bool = True
     rgb_payload: bytes = b"\xff\xd8esp32-s3-reference-rgb\xff\xd9"
+    phone_camera_sink_ws_uri: str = ""
+    phone_camera_stream_interval_ms: int = 500
     mic_send_queue: deque[bytes] = field(default_factory=deque)
     aec_reference_ring: RingBuffer = field(default_factory=lambda: RingBuffer(max_bytes=DEFAULT_SAMPLE_RATE * 2 * 4))
     playback_ring: RingBuffer = field(default_factory=lambda: RingBuffer(max_bytes=DEFAULT_SAMPLE_RATE * 2 * 4))
@@ -178,6 +185,9 @@ class Esp32AecEndpointState:
     rgb_capture_requests: int = 0
     rgb_frames_sent: int = 0
     rgb_bytes_sent: int = 0
+    direct_camera_frames_sent: int = 0
+    direct_camera_bytes_sent: int = 0
+    direct_camera_errors: int = 0
     control_events_received: int = 0
     last_error_phase: str | None = None
 
@@ -195,6 +205,8 @@ class Esp32AecEndpointState:
             wake_word_mode=config.wake_word_mode,
             aec_mode=config.aec_mode,
             playback_reference=config.playback_reference,
+            phone_camera_sink_ws_uri=config.phone_camera_sink_ws_uri,
+            phone_camera_stream_interval_ms=config.phone_camera_stream_interval_ms,
         )
 
     def registration_payload(self) -> dict[str, Any]:
@@ -215,6 +227,10 @@ class Esp32AecEndpointState:
                 "audio.input": stream_format.__dict__,
                 "audio.output": stream_format.__dict__,
                 "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
+                "direct.camera_source": True,
+                "direct.camera.frame_format": "media_frame.camera_frame",
+                "direct.camera.default_sink_uri": self.phone_camera_sink_ws_uri,
+                "direct.camera.stream_interval_ms": self.phone_camera_stream_interval_ms,
             },
             "subscriptions": [
                 {"event": "control.audio_session.*"},
@@ -344,15 +360,76 @@ class Esp32AecEndpointState:
 
         self.control_events_received += 1
         self.rgb_capture_requests += 1
+        payload = payload or {}
+        sink_uri = (
+            payload.get("phone_camera_sink_ws_uri")
+            or payload.get("direct_camera_sink_uri")
+            or payload.get("camera_sink_ws_uri")
+            or payload.get("sink_uri")
+        )
+        if sink_uri:
+            self.phone_camera_sink_ws_uri = str(sink_uri)
         if not self.rgb_capture_enabled:
             self.last_error_phase = "sensor_rgb_unavailable"
             return None
-        if str((payload or {}).get("mode") or "single") == "stop":
+        if str(payload.get("mode") or "single") == "stop":
             return b""
         frame = bytes(self.rgb_payload)
         self.rgb_frames_sent += 1
         self.rgb_bytes_sent += len(frame)
         return frame
+
+    def encode_direct_camera_frame(
+        self,
+        *,
+        stream_id: str,
+        seq: int,
+        payload: bytes,
+        timestamp_ms: int | None = None,
+    ) -> bytes:
+        """编码 ESP32 到手机直连相机帧。
+
+        功能：
+        1. 复用老 SDK 的 `MediaFrame(camera_frame)` 二进制格式。
+        2. 让新 SDK 的 ESP32 示例可以把 JPEG 直接推给 iOS phone。
+
+        主要逻辑：
+        1. 前 4 字节是大端 JSON header 长度。
+        2. header 描述 stream、序号、时间戳、编码和 payload 大小。
+        3. header 后面直接拼接 JPEG payload。
+
+        参数：
+        1. `stream_id`：本次直连相机 stream 标识。
+        2. `seq`：帧序号。
+        3. `payload`：JPEG 字节。
+        4. `timestamp_ms`：可选毫秒时间戳；为空时使用当前时间。
+
+        返回值：可直接作为 WebSocket binary frame 发送的 bytes。
+        异常情况：JSON 编码失败时由 `json.dumps` 抛出异常。
+        """
+
+        header = {
+            "frame_type": "camera_frame",
+            "stream_id": stream_id,
+            "seq": seq,
+            "ts_ms": timestamp_ms if timestamp_ms is not None else int(time.time() * 1000),
+            "codec": "jpeg",
+            "payload_size": len(payload),
+        }
+        header_bytes = json.dumps(header, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return len(header_bytes).to_bytes(4, "big") + header_bytes + bytes(payload)
+
+    def mark_direct_camera_sent(self, payload_size: int) -> None:
+        """记录 ESP32 已经向手机直连发送一帧相机数据。"""
+
+        self.direct_camera_frames_sent += 1
+        self.direct_camera_bytes_sent += payload_size
+
+    def mark_direct_camera_failed(self, phase: str) -> None:
+        """记录 ESP32 到手机直连相机发送失败。"""
+
+        self.direct_camera_errors += 1
+        self.last_error_phase = phase
 
     def diagnostics(self) -> dict[str, Any]:
         """输出真机联调和 contract test 共用的诊断摘要。"""
@@ -378,6 +455,10 @@ class Esp32AecEndpointState:
             "rgb_capture_requests": self.rgb_capture_requests,
             "rgb_frames_sent": self.rgb_frames_sent,
             "rgb_bytes_sent": self.rgb_bytes_sent,
+            "direct_camera_sink_ws_uri": self.phone_camera_sink_ws_uri,
+            "direct_camera_frames_sent": self.direct_camera_frames_sent,
+            "direct_camera_bytes_sent": self.direct_camera_bytes_sent,
+            "direct_camera_errors": self.direct_camera_errors,
             "close_reason": self.close_reason,
             "last_error_phase": self.last_error_phase,
             "audio_format": self.stream_format().__dict__,
@@ -653,6 +734,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                 },
             ),
         )
+        direct_sent = await self._send_direct_camera_frame(frame, stream_id=stream_id, seq=0)
         await stream_ws.send_bytes(
             StreamChunkCodec.encode(
                 StreamChunk(
@@ -684,7 +766,41 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                 payload={"stream_type": "sensor.rgb", "reason": "esp32_rgb_uploaded"},
             ),
         )
-        self.asset_uploads.append({"stream_id": stream_id, "request_id": request_id, "payload_size": len(frame)})
+        self.asset_uploads.append(
+            {
+                "stream_id": stream_id,
+                "request_id": request_id,
+                "payload_size": len(frame),
+                "direct_camera_sent": direct_sent,
+            }
+        )
+
+    async def _send_direct_camera_frame(self, frame: bytes, *, stream_id: str, seq: int) -> bool:
+        """把 JPEG 帧按老 SDK 直连格式发送给 phone 相机接收服务。
+
+        功能：当 `AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI` 已配置时，ESP32 参考端会额外
+        建立一条到 phone 的 WebSocket，把同一帧图片直接推给手机端。
+        主要逻辑：server 资产上传仍然保留，直连发送失败只记录诊断，不影响
+        `sensor.rgb` stream 上传。
+        参数：`frame` 为 JPEG bytes，`stream_id` 和 `seq` 用于直连帧 header。
+        返回值：发送成功返回 True；未配置或失败返回 False。
+        异常情况：网络错误被捕获并写入 `last_error_phase`。
+        """
+
+        if not self.state.phone_camera_sink_ws_uri:
+            return False
+        from aiohttp import ClientSession
+
+        payload = self.state.encode_direct_camera_frame(stream_id=stream_id, seq=seq, payload=frame)
+        try:
+            async with ClientSession() as session:
+                async with session.ws_connect(self.state.phone_camera_sink_ws_uri) as ws:
+                    await ws.send_bytes(payload)
+            self.state.mark_direct_camera_sent(len(frame))
+            return True
+        except Exception:
+            self.state.mark_direct_camera_failed("direct_camera_send_failed")
+            return False
 
     async def run_once(self, audio_payload: bytes | None = None) -> dict[str, Any]:
         """执行一次 ESP32-S3 网络协议 smoke。"""
@@ -698,8 +814,22 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
         result["diagnostics"] = self.state.diagnostics()
         result["properties"] = dict(self.properties)
         result["subscriptions"] = list(self.subscriptions)
+        event_names = set(result.get("event_names", []))
+        core_events_passed = {
+            "control.device.registered",
+            "control.audio_session.open.requested",
+            "control.audio_session.opened",
+            "stream.input.opened",
+            "stream.output.open.requested",
+            "stream.output.started",
+            "stream.output.close.requested",
+            "stream.output.finished",
+            "stream.output.closed",
+            "control.audio_session.close.requested",
+            "control.audio_session.closed",
+        }.issubset(event_names)
         result["passed"] = bool(
-            result.get("passed")
+            core_events_passed
             and result["diagnostics"]["mic_chunks_sent"] > 0
             and result["diagnostics"]["speaker_chunks_received"] > 0
             and result["diagnostics"]["aec_reference_bytes"] == result["diagnostics"]["speaker_bytes_received"]
@@ -717,6 +847,10 @@ async def run_network_esp32_s3(config: dict[str, Any] | None = None) -> dict[str
         device_id=config.get("device_id", "dev-esp32-s3-001"),
         auth_token=str((config.get("auth") or {}).get("token", "")),
         auth_mode=str((config.get("auth") or {}).get("mode", "disabled")),
+        phone_camera_sink_ws_uri=str(
+            config.get("phone_camera_sink_ws_uri") or config.get("direct_camera_sink_uri") or ""
+        ),
+        phone_camera_stream_interval_ms=int(config.get("phone_camera_stream_interval_ms", 500)),
     )
     endpoint = NetworkEsp32S3Endpoint(
         config=endpoint_config,

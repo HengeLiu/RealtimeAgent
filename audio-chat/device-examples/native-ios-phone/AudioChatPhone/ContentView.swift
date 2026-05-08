@@ -22,19 +22,31 @@ struct ContentView: View {
                 Section("状态") {
                     labeled("Control", runtime.controlState)
                     labeled("Stream", runtime.streamState)
+                    labeled("Direct camera", runtime.directCameraState)
                     labeled("Speaker bytes", "\(runtime.speakerBytesBuffered)")
                     labeled("RGB uploads", "\(runtime.rgbUploadCount)")
+                    labeled("Direct camera frames", "\(runtime.directCameraFrameCount)")
+                    labeled("Direct camera bytes", "\(runtime.directCameraBytes)")
+                    if !runtime.directCameraSinkURIs.isEmpty {
+                        labeled("Direct camera URI", runtime.directCameraSinkURIs.joined(separator: "\n"))
+                    }
                 }
 
                 Section("操作") {
                     Button("连接并注册") {
                         Task { await runtime.connectAndRegister() }
                     }
+                    Button("启动直连相机接收") {
+                        runtime.startDirectCameraSink()
+                    }
                     Button("上传 sensor.rgb 测试帧") {
                         Task { await runtime.uploadTestRGBFrame(reason: "manual_button") }
                     }
                     Button("上传 sensor.mic 测试 PCM") {
                         Task { await runtime.uploadTestMicPCM() }
+                    }
+                    Button("停止直连相机接收") {
+                        runtime.stopDirectCameraSink()
                     }
                     Button("断开连接", role: .destructive) {
                         Task { await runtime.disconnect() }

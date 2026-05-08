@@ -19,6 +19,8 @@
    `control.user.interrupt.detected` 和对应 output cancel 回执。
 7. 收到 `sensor.rgb` 的 `stream.control.configure.requested` 后，打开输入 stream
    上传 JPEG bytes；控制事件只保存 request_id、correlation_id、采样模式等语义字段。
+8. 如果配置了 iOS phone 的直连相机接收地址，同时把同一帧 JPEG 按老 SDK
+   `MediaFrame(camera_frame)` 格式推送到 `ws://<phone-ip>:9001/ws/camera`。
 
 最小注册信息：
 
@@ -29,7 +31,9 @@
     "audio.wake_word": "endpoint",
     "audio.aec": "endpoint",
     "audio.playback_reference": "endpoint_ring_buffer",
-    "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
+    "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
+    "direct.camera_source": true,
+    "direct.camera.frame_format": "media_frame.camera_frame"
   },
   "subscriptions": [
     {"event": "control.audio_session.*"},
@@ -51,6 +55,17 @@ uv run audio-chat.config.sync \
 生成的 `esp32-s3.local.env` 至少包含 server URL、control/stream WebSocket URL、user_id、
 device_id、auth、音频格式、wake/AEC 模式、调试属性和订阅列表。真机固件可直接
 按这些键读取配置，避免手写与 server 不一致的 device_id 或 token。
+
+如果要联调 ESP32 到 iOS phone 的直连相机链路，先在 iOS phone 页面启动直连相机接收，
+再把页面展示的 `ws://<phone-ip>:9001/ws/camera` 写入：
+
+```bash
+AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI=ws://192.168.1.50:9001/ws/camera
+AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS=500
+```
+
+直连只负责把相机帧送到 iOS phone 缓存；server 仍然通过 `stream.control.*` 请求
+`sensor.rgb`，端侧再用 `/ws/stream` 上传进入对话的图片资产。
 
 协议级验收：
 

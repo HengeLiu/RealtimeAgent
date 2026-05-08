@@ -6,9 +6,13 @@
     "mode": "disabled"
   },
   "protocol_version": "audio-chat.v1",
+  "direct_camera_sink_port": 9001,
   "properties": {
     "phone.task.find_object_phone_task": true,
     "phone.task.traffic_light_phone_task": true,
+    "direct.camera_sink": true,
+    "direct.camera_sink.path": "/ws/camera",
+    "direct.camera_sink.frame_format": "media_frame.camera_frame",
     "audio.aec": "replaceable",
     "audio.wake_word": "manual"
   },

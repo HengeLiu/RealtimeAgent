@@ -42,8 +42,12 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["device_id"] == "dev-ios-phone-001"
     assert config["auth"]["mode"] == "disabled"
     assert config["protocol_version"] == "audio-chat.v1"
+    assert config["direct_camera_sink_port"] == 9001
     assert config["properties"]["phone.task.find_object_phone_task"] is True
     assert config["properties"]["phone.task.traffic_light_phone_task"] is True
+    assert config["properties"]["direct.camera_sink"] is True
+    assert config["properties"]["direct.camera_sink.path"] == "/ws/camera"
+    assert config["properties"]["direct.camera_sink.frame_format"] == "media_frame.camera_frame"
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
     assert {"event": "control.device.command.*"} in config["subscriptions"]
@@ -66,6 +70,9 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     assert payload["auth"]["mode"] == "disabled"
     assert payload["properties"]["phone.task.find_object_phone_task"] is True
     assert payload["properties"]["phone.task.traffic_light_phone_task"] is True
+    assert payload["properties"]["direct.camera_sink"] is True
+    assert payload["properties"]["direct.camera_sink.path"] == "/ws/camera"
+    assert payload["properties"]["direct.camera_sink.frame_format"] == "media_frame.camera_frame"
     assert "target_device" not in json.dumps(golden)
     assert "target_device_id" not in json.dumps(golden)
 
@@ -73,8 +80,9 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     for token in [
         "control.device.register.requested",
         "\"auth\": config.auth.payload",
-        "\"properties\": config.properties.mapValues",
+        "\"properties\": properties",
         "\"subscriptions\": config.subscriptions.map",
+        "direct.camera_sink.uris",
     ]:
         assert token in source
 
@@ -89,7 +97,9 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
 
     runtime = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
     codec = _read("AudioChatPhone/Core/StreamChunkCodec.swift")
-    combined = runtime + codec
+    direct_codec = _read("AudioChatPhone/Core/DirectCameraFrameCodec.swift")
+    direct_server = _read("AudioChatPhone/Core/DirectCameraSinkServer.swift")
+    combined = runtime + codec + direct_codec + direct_server
 
     required_tokens = [
         "/ws/control",
@@ -112,6 +122,9 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
         "TrafficLightPhoneTaskHandler",
         "payload_size",
         "UInt32(headerData.count).bigEndian",
+        "DirectCameraSinkServer",
+        "DirectCameraFrameCodec",
+        "direct.camera_sink.frame_format",
     ]
     for token in required_tokens:
         assert token in combined
@@ -119,6 +132,42 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
     forbidden_tokens = ["capture_photo", "target_device", "target_device_id", "/api/tasks/report-event"]
     for token in forbidden_tokens:
         assert token not in combined
+
+
+def test_ios_phone_direct_camera_sink_files_are_part_of_xcode_target() -> None:
+    """测试目标：验证 iOS phone 补齐老 SDK 的 ESP32 相机直连接收入口。
+
+    测试方法：静态检查直连相机接收器、帧编解码器和 Xcode target。
+    预期结果：工程能编译这些文件，并且支持老 SDK `MediaFrame(camera_frame)` 的
+    4 字节 header 长度 + JSON header + JPEG payload 格式。
+    """
+
+    project = _read("AudioChatPhone.xcodeproj/project.pbxproj")
+    codec = _read("AudioChatPhone/Core/DirectCameraFrameCodec.swift")
+    server = _read("AudioChatPhone/Core/DirectCameraSinkServer.swift")
+    runtime = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
+
+    for filename in [
+        "IPAddressProvider.swift",
+        "DirectCameraFrameCodec.swift",
+        "DirectWebSocketFrameParser.swift",
+        "DirectCameraSinkServer.swift",
+    ]:
+        assert filename in project
+
+    for token in [
+        "frame_type",
+        "camera_frame",
+        "payload_size",
+        "UInt32(headerData.count).bigEndian",
+        "/ws/camera",
+        "Sec-WebSocket-Accept",
+    ]:
+        assert token in codec + server
+
+    assert "latestDirectCameraFrame" in runtime
+    assert "direct_camera_sink" in runtime
+    assert "direct_camera_sent" not in runtime
 
 
 def test_ios_phone_readme_documents_simulator_real_device_and_signed_token() -> None:

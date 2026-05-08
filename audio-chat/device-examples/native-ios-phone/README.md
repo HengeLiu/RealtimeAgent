@@ -3,6 +3,8 @@
 本目录提供一个最小可运行的 iOS phone 参考端。它用于验证 audio-chat 的
 `control.device.register.requested`、事件订阅、`/ws/stream` 二进制 stream、
 `sensor.rgb` 上传、测试 `sensor.mic` 上传和 `actuator.speaker` 输出消费。
+同时，它内置一个与老 SDK 兼容的本地相机 WebSocket 接收服务，用于接收 ESP32 端
+直连推送的 JPEG 帧，并在 server 请求 `sensor.rgb` 时优先上传最近一帧。
 
 它不是生产 App，也不负责真实录音、播放、唤醒词、AEC 或硬件驱动。端侧只按
 event / stream 协议和 server 协作，不新增 RPC，不把媒体字节放入 control event。
@@ -19,6 +21,10 @@ AudioChatPhone/
     AudioChatEvent.swift
     StreamChunkCodec.swift
     AudioChatEndpointRuntime.swift
+    IPAddressProvider.swift
+    DirectCameraFrameCodec.swift
+    DirectWebSocketFrameParser.swift
+    DirectCameraSinkServer.swift
   Resources/
     AppConfig.json
     AppConfig.example.json
@@ -53,8 +59,15 @@ cp app-examples/basic-app/config/generated/ios-phone.local.json \
 - `user_id`：同一用户下的多端共享用户编号。
 - `device_id`：iOS 端唯一设备编号，不能和 browser-glass、python phone mock、glass playback 重复。
 - `auth`：注册鉴权配置，支持 `disabled`、`static_token` 和 `signed_token`。
+- `direct_camera_sink_port`：iOS 端本地相机接收 WebSocket 端口，默认 `9001`。
 - `properties`：声明仅用于日志和 debug 的硬件参数；路由由 `subscriptions` 决定。
 - `subscriptions`：声明订阅 `stream.control.*`、`stream.output.*` 和 `control.audio_session.*`。
+
+直连相机接收服务启动后会把 `ws://<iPhone局域网IP>:9001/ws/camera` 写入注册
+properties。ESP32 端配置该地址后，可按老 SDK 的 `MediaFrame(camera_frame)` 格式
+推送 JPEG：4 字节大端 JSON header 长度、JSON header、JPEG payload。iOS phone
+不会绕过 server 直接参与对话，只缓存最新帧，并在收到 server 的 `sensor.rgb`
+采集请求时通过 `/ws/stream` 上传。
 
 如果本地启用 signed token：
 
@@ -99,6 +112,7 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 页面中可执行：
 
 - “连接并注册”：连接 `/ws/control`，发送 `control.device.register.requested`。
+- “启动直连相机接收”：打开本机 `9001/ws/camera`，接收 ESP32 推送的 JPEG 帧。
 - “上传 sensor.rgb 测试帧”：通过 `/ws/stream` 上传一帧测试 JPEG。
 - “上传 sensor.mic 测试 PCM”：通过 `/ws/stream` 上传 20ms 静音 PCM。
 - 收到 `actuator.speaker` 下行 chunk 时，先写入本地 buffer，再通过 control event 上报 `stream.output.started`、`stream.output.finished` 和 `stream.output.closed`。
@@ -113,9 +127,10 @@ xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPho
 }
 ```
 
-确认 iPhone 和 Mac 在同一局域网，server 监听地址允许局域网访问。首次真机运行需要在
-Xcode 中设置 Team 和 Bundle Identifier。这个参考端只验证协议和 stream，不申请相机、
-麦克风或播放器权限；后续接真实硬件能力时也必须保持同一套 event / stream 协议。
+确认 iPhone、Mac 和 ESP32 在同一局域网，server 监听地址允许局域网访问。首次真机运行需要在
+Xcode 中设置 Team 和 Bundle Identifier。这个参考端默认不申请 iPhone 相机、麦克风或
+播放器权限；直连相机接收只接收外部设备推送的 JPEG。后续接真实硬件能力时也必须保持
+同一套 event / stream 协议。
 
 ## 自动验收
 

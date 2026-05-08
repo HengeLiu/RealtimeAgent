@@ -16,6 +16,10 @@ final class AudioChatEndpointRuntime: ObservableObject {
     @Published private(set) var speakerBytesBuffered = 0
     @Published private(set) var rgbUploadCount = 0
     @Published private(set) var phoneTaskEventLog: [String] = []
+    @Published private(set) var directCameraState = "未启动"
+    @Published private(set) var directCameraSinkURIs: [String] = []
+    @Published private(set) var directCameraFrameCount = 0
+    @Published private(set) var directCameraBytes = 0
 
     let config: AppConfig
 
@@ -25,6 +29,8 @@ final class AudioChatEndpointRuntime: ObservableObject {
     private var speakerBuffer = Data()
     private var sequenceByStream: [String: Int] = [:]
     private let phoneTaskRegistry = PhoneTaskRegistry()
+    private var directCameraSinkServer: DirectCameraSinkServer?
+    private var latestDirectCameraFrame: DirectCameraFrame?
 
     init(config: AppConfig) {
         self.config = config
@@ -33,6 +39,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
     /// 建立控制和 stream WebSocket，并发送注册事件。
     func connectAndRegister() async {
         do {
+            startDirectCameraSink()
             try await ensureControlSocket()
             try await sendRegistration()
             try await ensureStreamSocket()
@@ -49,7 +56,44 @@ final class AudioChatEndpointRuntime: ObservableObject {
         streamSocket = nil
         controlState = "已断开"
         streamState = "已断开"
+        stopDirectCameraSink()
         appendLog("disconnected")
+    }
+
+    /// 启动端侧直连相机接收服务。
+    ///
+    /// 功能：让 ESP32 等端侧感知设备可以直接把 JPEG 帧推到手机端。手机仍然通过
+    /// audio-chat 的 event / stream 协议把需要进入对话的图片上传到 server。
+    /// 参数：无。
+    /// 返回值：无。
+    /// 异常情况：端口被占用或网络不可用时只更新状态和日志，不向外抛出。
+    func startDirectCameraSink() {
+        if let server = directCameraSinkServer {
+            directCameraSinkURIs = server.sinkURIs
+            server.start()
+            return
+        }
+        let server = DirectCameraSinkServer(
+            port: config.directCameraSinkPort,
+            onState: { [weak self] state in
+                self?.directCameraState = state
+                self?.appendLog("direct camera: \(state)")
+            },
+            onFrame: { [weak self] frame in
+                self?.handleDirectCameraFrame(frame)
+            }
+        )
+        directCameraSinkServer = server
+        directCameraSinkURIs = server.sinkURIs
+        server.start()
+    }
+
+    /// 停止端侧直连相机接收服务。
+    func stopDirectCameraSink() {
+        directCameraSinkServer?.stop()
+        directCameraSinkServer = nil
+        directCameraSinkURIs = []
+        directCameraState = "未启动"
     }
 
     /// 手动上传一帧 `sensor.rgb` 测试图片。
@@ -125,6 +169,12 @@ final class AudioChatEndpointRuntime: ObservableObject {
     }
 
     private func sendRegistration() async throws {
+        var properties = config.properties.mapValues { $0.object }
+        properties["direct.camera_sink"] = true
+        properties["direct.camera_sink.path"] = "/ws/camera"
+        properties["direct.camera_sink.port"] = Int(config.directCameraSinkPort)
+        properties["direct.camera_sink.uris"] = directCameraSinkURIs
+        properties["direct.camera_sink.frame_format"] = "media_frame.camera_frame"
         let event = AudioChatEvent(
             eventName: "control.device.register.requested",
             userID: config.userID,
@@ -136,7 +186,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 "client_type": "ios-phone",
                 "sdk_version": "audio-chat-ios-reference-0.1.0",
                 "auth": config.auth.payload,
-                "properties": config.properties.mapValues { $0.object },
+                "properties": properties,
                 "subscriptions": config.subscriptions.map { $0.payload },
             ],
             version: config.protocolVersion
@@ -250,7 +300,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
             command: event,
             payload: ["task_id": taskID, "task_type": taskType, "progress": 1.0]
         )
-        let result = handler.result(command: event, frameCount: 1)
+        let result = handler.result(command: event, frameCount: max(1, directCameraFrameCount))
         try? await sendPhoneTaskEvent(
             "control.device.command.completed",
             command: event,
@@ -322,8 +372,17 @@ final class AudioChatEndpointRuntime: ObservableObject {
                     version: config.protocolVersion
                 )
             )
-            let payload = Self.testJPEGPayload()
-            let metadata: [String: Any] = requestID.map { ["request_id": $0] } ?? [:]
+            let directFrame = latestDirectCameraFrame
+            let payload = directFrame?.payload ?? Self.testJPEGPayload()
+            var metadata: [String: Any] = requestID.map { ["request_id": $0] } ?? [:]
+            if let directFrame {
+                metadata["source"] = "direct_camera_sink"
+                metadata["direct_stream_id"] = directFrame.streamID
+                metadata["direct_seq"] = directFrame.sequence
+                metadata["direct_ts_ms"] = directFrame.timestampMS
+            } else {
+                metadata["source"] = "ios_reference_test_frame"
+            }
             let chunk = AudioChatStreamChunk(
                 userID: config.userID,
                 sessionID: sessionID,
@@ -339,12 +398,13 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 metadata: metadata
             )
             try await streamSocket?.send(.data(AudioChatStreamChunkCodec.encode(chunk)))
+            let closeReason = directFrame == nil ? "ios_rgb_uploaded" : "ios_direct_rgb_uploaded"
             try await sendControlEvent(
                 AudioChatEvent(
                     eventName: "stream.input.closed",
                     userID: config.userID,
                     producerID: config.deviceID,
-                    payload: ["stream_type": "sensor.rgb", "reason": "ios_rgb_uploaded"],
+                    payload: ["stream_type": "sensor.rgb", "reason": closeReason],
                     sessionID: sessionID,
                     streamID: streamID,
                     streamType: "sensor.rgb",
@@ -356,6 +416,14 @@ final class AudioChatEndpointRuntime: ObservableObject {
         } catch {
             appendLog("sensor.rgb upload failed: \(error.localizedDescription)")
         }
+    }
+
+    private func handleDirectCameraFrame(_ frame: DirectCameraFrame) {
+        latestDirectCameraFrame = frame
+        directCameraFrameCount += 1
+        directCameraBytes += frame.payload.count
+        directCameraState = "已接收 \(directCameraFrameCount) 帧"
+        appendLog("direct camera frame bytes=\(frame.payload.count) seq=\(frame.sequence)")
     }
 
     private func finishOutputStream(_ event: AudioChatEvent) async {

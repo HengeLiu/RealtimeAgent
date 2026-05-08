@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from aiohttp import web
@@ -39,6 +40,8 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     assert payload["properties"]["audio.aec"] == "endpoint"
     assert payload["properties"]["audio.playback_reference"] == "endpoint_ring_buffer"
     assert payload["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
+    assert payload["properties"]["direct.camera_source"] is True
+    assert payload["properties"]["direct.camera.frame_format"] == "media_frame.camera_frame"
     assert {"event": "control.audio_session.*"} in payload["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["subscriptions"]
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["subscriptions"]
@@ -106,6 +109,52 @@ def test_esp32_s3_state_handles_rgb_capture_as_stream_asset() -> None:
     assert state.diagnostics()["last_error_phase"] == "sensor_rgb_unavailable"
 
 
+def test_esp32_s3_rgb_config_can_update_direct_camera_sink_uri() -> None:
+    """测试目标：验证 server 可通过控制事件下发本次 iOS 相机直连地址。
+
+    测试方法：构造带 `direct_camera_sink_uri` 的 `sensor.rgb` 配置请求。
+    预期结果：ESP32 状态机更新直连地址，同时仍然返回 JPEG 给 `/ws/stream` 上传路径。
+    """
+
+    state = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32")
+    frame = state.on_rgb_configure_requested(
+        {
+            "mode": "single",
+            "direct_camera_sink_uri": "ws://10.0.0.3:9001/ws/camera",
+        }
+    )
+
+    assert frame and frame.startswith(b"\xff\xd8")
+    assert state.phone_camera_sink_ws_uri == "ws://10.0.0.3:9001/ws/camera"
+    assert state.diagnostics()["direct_camera_sink_ws_uri"] == "ws://10.0.0.3:9001/ws/camera"
+
+
+def test_esp32_s3_encodes_direct_camera_frame_for_ios_sink() -> None:
+    """测试目标：验证 ESP32-S3 参考端兼容老 SDK 相机直连帧格式。
+
+    测试方法：调用状态机的直连相机帧编码方法，拆出 4 字节大端 header 长度、
+    JSON header 和 JPEG payload。
+    预期结果：header 使用 `frame_type=camera_frame`、声明 payload_size，并保留
+    stream_id、seq 和 ts_ms，iOS phone 可按同一格式解码。
+    """
+
+    state = Esp32AecEndpointState(device_id="dev-esp32", user_id="user-esp32")
+    frame = b"\xff\xd8direct-camera\xff\xd9"
+    encoded = state.encode_direct_camera_frame(stream_id="stream-rgb", seq=7, payload=frame, timestamp_ms=123456)
+
+    header_length = int.from_bytes(encoded[:4], "big")
+    header = json.loads(encoded[4 : 4 + header_length].decode("utf-8"))
+    payload = encoded[4 + header_length :]
+
+    assert header["frame_type"] == "camera_frame"
+    assert header["stream_id"] == "stream-rgb"
+    assert header["seq"] == 7
+    assert header["ts_ms"] == 123456
+    assert header["codec"] == "jpeg"
+    assert header["payload_size"] == len(frame)
+    assert payload == frame
+
+
 def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
     """测试目标：验证 ESP32-S3 `.env` 字段可被参考端解析。
 
@@ -128,6 +177,8 @@ def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
                 "AUDIO_CHAT_AUDIO_CHUNK_MS=20",
                 "AUDIO_CHAT_AEC_MODE=endpoint",
                 "AUDIO_CHAT_PLAYBACK_REFERENCE=endpoint_ring_buffer",
+                "AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI=ws://10.0.0.3:9001/ws/camera",
+                "AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS=250",
             ]
         ),
         encoding="utf-8",
@@ -141,9 +192,13 @@ def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
     assert config.user_id == "user-sync"
     assert config.device_id == "dev-sync-esp32"
     assert config.auth_payload() == {"mode": "static_token", "token": "token-sync"}
+    assert config.phone_camera_sink_ws_uri == "ws://10.0.0.3:9001/ws/camera"
+    assert config.phone_camera_stream_interval_ms == 250
     assert payload["auth"]["token"] == "token-sync"
     assert payload["properties"]["audio.input"]["sample_rate"] == 16000
     assert payload["properties"]["audio.output"]["chunk_ms"] == 20
+    assert payload["properties"]["direct.camera.default_sink_uri"] == "ws://10.0.0.3:9001/ws/camera"
+    assert payload["properties"]["direct.camera.stream_interval_ms"] == 250
 
 
 def test_network_esp32_s3_endpoint_completes_protocol_smoke(tmp_path: Path) -> None:
