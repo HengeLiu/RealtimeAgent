@@ -281,7 +281,7 @@ class AudioChatApp:
             control_service=self.control_service,
             stream_service=self.stream_service,
             recorder=self.recorder,
-            root=self.config.asset_root,
+            root=None,
             request_timeout_seconds=self.config.asset_request_timeout_seconds,
             default_ttl_seconds=self.config.asset_default_ttl_seconds,
             max_asset_bytes=self.config.asset_max_asset_bytes,
@@ -325,7 +325,7 @@ class AudioChatApp:
         self.task_engine.restore_unfinished()
         self.memory_service = MemoryService(
             enabled=self.config.memory_enabled,
-            store=JsonlMemoryStore(self.config.memory_path),
+            store=JsonlMemoryStore(_memory_root(self.config)),
         )
         self.skill_service = SkillService(
             enabled=self.config.skill_enabled,
@@ -428,7 +428,11 @@ class AudioChatApp:
         return False
 
     def register_device(self, registration: Event, connection: DeviceConnection | None = None) -> Event:
-        return self.control_service.register_device(registration, connection)
+        response = self.control_service.register_device(registration, connection)
+        device_id = registration.producer_id or registration.session_id
+        if registration.user_id and device_id:
+            self.recorder.bind_device(user_id=registration.user_id, device_id=device_id)
+        return response
 
     def publish_control_event(self, event: Event) -> None:
         if event.event_name == "control.user.wake.detected":
@@ -640,6 +644,7 @@ class AudioChatApp:
         device_id = self._event_device_id(event)
         self._active_device_by_user[event.user_id] = device_id
         self._device_dialogs_by_user[event.user_id] = DeviceDialogState(user_id=event.user_id, device_id=device_id)
+        self.recorder.bind_device(user_id=event.user_id, device_id=device_id)
         self.control_service.publish(
             Event(
                 event_name="control.user.wake.detected",
@@ -931,6 +936,21 @@ def _build_task_store(config: AudioChatConfig) -> TaskStore:
         root = config.tasks_store_root or str(Path(config.runs_root) / "tasks")
         return JsonlTaskStore(root)
     raise ValueError(f"unsupported task store type: {config.tasks_store_type}")
+
+
+def _memory_root(config: AudioChatConfig) -> str | Path:
+    """解析用户级 memory.json 根目录。
+
+    主要逻辑：旧默认 `runs/audio-chat/memory` 会把记忆写到独立目录；新版默认写到
+    `runs/<app_name>/<user_id>/memory.json`，只有显式配置时才使用配置目录。
+    参数：`config` 为应用配置。
+    返回值：MemoryStore 根目录。
+    异常情况：无。
+    """
+
+    if not config.memory_path or str(config.memory_path).strip() == "runs/audio-chat/memory":
+        return Path(config.runs_root)
+    return config.memory_path
 
 
 def _prepare_app_imports(app_dir: Path) -> None:

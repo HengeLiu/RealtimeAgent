@@ -22,15 +22,15 @@ def test_python_playback_sdk_loop_writes_runs_artifacts(tmp_path: Path) -> None:
     assert "control.audio_session.close.requested" in names
     assert result["passed"] is True
 
-    session_dir = tmp_path / "runs" / "sessions" / result["session_id"]
+    session_dir = tmp_path / "runs" / "user-playback" / result["session_id"]
     assert (session_dir / "events.jsonl").exists()
     assert (session_dir / "stream-events.jsonl").exists()
     assert (session_dir / "agent-events.jsonl").exists()
     assert (session_dir / "model-events.jsonl").exists()
     assert (session_dir / "playback-result.json").exists()
     assert (session_dir / "result.json").exists()
-    assert list(session_dir.glob("input-*.pcm"))
-    assert list(session_dir.glob("output-*.pcm"))
+    assert list((session_dir / "audio").glob("input-*.pcm"))
+    assert list((session_dir / "audio").glob("output-*.pcm"))
 
 
 def test_python_playback_accepts_recorded_wav_input(tmp_path: Path) -> None:
@@ -59,8 +59,8 @@ def test_python_playback_accepts_recorded_wav_input(tmp_path: Path) -> None:
     assert result["input_audio"]["total_bytes"] == audio.total_bytes
     assert result["input_audio"]["chunk_count"] > 1
 
-    session_dir = tmp_path / "runs" / "sessions" / result["session_id"]
-    input_pcm = b"".join(path.read_bytes() for path in session_dir.glob("input-*.pcm"))
+    session_dir = tmp_path / "runs" / "user-wav-playback" / result["session_id"]
+    input_pcm = b"".join(path.read_bytes() for path in (session_dir / "audio").glob("input-*.pcm"))
     with wave.open(audio.source_path, "rb") as wav_file:
         expected_pcm = wav_file.readframes(wav_file.getnframes())
     assert input_pcm == expected_pcm

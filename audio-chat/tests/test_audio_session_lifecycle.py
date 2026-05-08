@@ -85,7 +85,7 @@ def test_wake_requests_session_and_agent_opens_only_after_endpoint_opened(tmp_pa
     open_event = next(event for event in connection.events if event.event_name == "control.audio_session.open.requested")
     assert open_event.session_id == "dev-audio"
     assert app.active_session_id("user-a") == "dev-audio"
-    session_dir = tmp_path / "runs" / "sessions" / open_event.session_id
+    session_dir = tmp_path / "runs" / "user-a" / open_event.session_id
     assert not (session_dir / "agent-events.jsonl").exists()
 
     app.publish_control_event(

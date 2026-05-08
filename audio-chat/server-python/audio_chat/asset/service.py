@@ -58,8 +58,9 @@ class AssetStore:
     主要属性：`root` 为资产根目录，`_assets` 为本进程内索引。
     """
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, recorder: RunRecorder | None = None) -> None:
         self.root = Path(root)
+        self.recorder = recorder
         self._assets: list[AssetRef] = []
 
     def put(self, *, chunk: StreamChunk, device_id: str, ttl_seconds: float | None = None) -> AssetRef:
@@ -73,8 +74,12 @@ class AssetStore:
         异常情况：文件系统写入失败时抛出对应 IO 异常。
         """
         asset_id = new_id("asset")
-        suffix = ".jpg" if chunk.stream_type == "sensor.rgb" else ".bin"
-        path = self.root / chunk.user_id / f"{asset_id}{suffix}"
+        suffix = _asset_suffix(chunk.stream_type)
+        if self.recorder is not None:
+            self.recorder.bind_device(user_id=chunk.user_id, device_id=chunk.session_id)
+            path = self.recorder.media_dir(chunk.session_id, chunk.stream_type) / f"{asset_id}{suffix}"
+        else:
+            path = self.root / chunk.user_id / chunk.session_id / _asset_subdir(chunk.stream_type) / f"{asset_id}{suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(chunk.payload)
         storage_path = path.resolve()
@@ -197,7 +202,8 @@ class AssetService:
         self.control_service = control_service
         self.stream_service = stream_service
         self.recorder = recorder
-        self.store = AssetStore(root or recorder.runs_root / "assets")
+        # `root` 保留为旧配置兼容参数；新版资产必须跟随 runs/<user_id>/<device_id>。
+        self.store = AssetStore(recorder.runs_root, recorder=recorder)
         self.request_timeout_seconds = request_timeout_seconds
         self.default_ttl_seconds = default_ttl_seconds
         self.max_asset_bytes = max_asset_bytes
@@ -235,6 +241,7 @@ class AssetService:
             chunk.session_id,
             {
                 "event": "asset.stored",
+                "user_id": chunk.user_id,
                 "asset_id": ref.asset_id,
                 "stream_type": ref.stream_type,
                 "path": ref.path,
@@ -246,6 +253,7 @@ class AssetService:
                 chunk.session_id,
                 {
                     "event": "asset.stored",
+                    "user_id": chunk.user_id,
                     "asset_id": ref.asset_id,
                     "stream_type": ref.stream_type,
                     "path": ref.path,
@@ -311,6 +319,7 @@ class AssetService:
                 record_id,
                 {
                     "event": "asset.requested",
+                    "user_id": user_id,
                     "request_id": request_id,
                     "stream_type": stream_type,
                     "matched_count": publish_result.matched_count,
@@ -328,6 +337,7 @@ class AssetService:
                 record_id,
                 {
                     "event": "asset.request.timeout",
+                    "user_id": user_id,
                     "request_id": request_id,
                     "stream_type": stream_type,
                     "matched_count": publish_result.matched_count,
@@ -438,3 +448,23 @@ class AssetService:
         if isinstance(value, (list, tuple, set)):
             for item in value:
                 AssetService._reject_media_bytes(item)
+
+
+def _asset_subdir(stream_type: str) -> str:
+    if stream_type == "sensor.rgb":
+        return "photos"
+    if stream_type == "sensor.imu":
+        return "imu"
+    if stream_type == "sensor.depth":
+        return "depth"
+    return "assets"
+
+
+def _asset_suffix(stream_type: str) -> str:
+    if stream_type == "sensor.rgb":
+        return ".jpg"
+    if stream_type == "sensor.imu":
+        return ".jsonl"
+    if stream_type == "sensor.depth":
+        return ".bin"
+    return ".bin"

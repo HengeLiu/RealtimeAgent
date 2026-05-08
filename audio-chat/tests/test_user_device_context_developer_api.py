@@ -85,7 +85,7 @@ def test_capture_photo_uses_sensor_rgb_asset_stream(tmp_path) -> None:
     assert request_events
     assert request_events[-1].payload["reason"] == "parity-test"
     assert "request_id" in asset.metadata
-    asset_events = (tmp_path / "runs" / "sessions" / app.active_session_id("user-photo") / "assets.jsonl").read_text(
+    asset_events = (tmp_path / "runs" / "user-photo" / app.active_session_id("user-photo") / "assets.jsonl").read_text(
         encoding="utf-8"
     )
     assert "asset.requested" in asset_events
@@ -117,7 +117,7 @@ def test_capture_photo_timeout_is_visible_in_session_asset_events(tmp_path) -> N
     )
 
     assert asset is None
-    asset_events = (tmp_path / "runs" / "sessions" / session_id / "assets.jsonl").read_text(encoding="utf-8")
+    asset_events = (tmp_path / "runs" / "user-photo-timeout" / session_id / "assets.jsonl").read_text(encoding="utf-8")
     assert "asset.requested" in asset_events
     assert "asset.request.timeout" in asset_events
     assert '"delivered_count": 0' in asset_events

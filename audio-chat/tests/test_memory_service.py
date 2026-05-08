@@ -6,11 +6,12 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.memory import JsonlMemoryStore, MemoryService
 
 
-def test_memory_service_writes_searches_and_deletes_jsonl_records(tmp_path) -> None:
-    """测试目标：验证 Memory Service 的 jsonl 存储闭环。
+def test_memory_service_writes_searches_and_deletes_user_memory_json(tmp_path) -> None:
+    """测试目标：验证 Memory Service 的用户级 memory.json 存储闭环。
 
     测试方法：启用 Memory Service，写入两条用户记忆，按关键词搜索后删除其中一条。
-    预期结果：搜索只能返回当前用户的有效记录，删除后的记录不再出现。
+    预期结果：搜索只能返回当前用户的有效记录，删除后的记录不再出现，并写入
+    `runs/<app_name>/<user_id>/memory.json` 形态的用户级文件。
     """
 
     service = MemoryService(enabled=True, store=JsonlMemoryStore(tmp_path / "memory"))
@@ -24,6 +25,7 @@ def test_memory_service_writes_searches_and_deletes_jsonl_records(tmp_path) -> N
 
     assert service.delete(user_id="user-001", memory_id=first.memory_id) is True
     assert service.search(user_id="user-001", query="水杯", limit=10) == []
+    assert (tmp_path / "memory" / "user-001" / "memory.json").exists()
 
 
 def test_memory_disabled_does_not_expose_memory_tools(tmp_path) -> None:

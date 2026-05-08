@@ -202,9 +202,10 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
         )
     )
 
-    message_text = (tmp_path / "runs" / "users" / "user-tool" / "messages.jsonl").read_text(encoding="utf-8")
-    trace_text = (tmp_path / "runs" / "sessions" / session_id / "tool-trace.jsonl").read_text(encoding="utf-8")
-    model_request = (tmp_path / "runs" / "sessions" / session_id / "model-request.json").read_text(encoding="utf-8")
+    session_dir = tmp_path / "runs" / "user-tool" / session_id
+    message_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    trace_text = (session_dir / "tool-trace.jsonl").read_text(encoding="utf-8")
+    model_request = (session_dir / "model-request.json").read_text(encoding="utf-8")
 
     assert "tool.result" in message_text
     assert "上海天气已查询。" in message_text
@@ -264,7 +265,8 @@ def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> Non
     cancelled = asyncio.run(app.task_engine.cancel(ref.task_id, reason="test_done"))
     assert cancelled.state == "cancelled"
 
-    agent_events = (tmp_path / "runs" / "sessions" / "sess-task" / "agent-events.jsonl").read_text(encoding="utf-8")
-    task_events = (tmp_path / "runs" / "sessions" / "sess-task" / "task-events.jsonl").read_text(encoding="utf-8")
+    session_dir = tmp_path / "runs" / "user-task" / "sess-task"
+    agent_events = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    task_events = (session_dir / "task-events.jsonl").read_text(encoding="utf-8")
     assert "task.requires_agent_context_sync" in agent_events
     assert "demo.needs_agent" in task_events

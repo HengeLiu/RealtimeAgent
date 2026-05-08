@@ -55,10 +55,10 @@ class MemoryStore:
 
 
 class JsonlMemoryStore(MemoryStore):
-    """基于 filesystem/jsonl 的第一版 MemoryStore。
+    """基于 filesystem/json 的第一版 MemoryStore。
 
-    主要功能：每个用户一个 jsonl 文件，便于本地回放、验收和排障。
-    主要方法：`write()` 追加记录，`search()` 读取有效记录并做轻量文本匹配，
+    主要功能：每个用户一个 `memory.json` 文件，便于本地回放、验收和排障。
+    主要方法：`write()` 更新记录数组，`search()` 读取有效记录并做轻量文本匹配，
     `delete()` 追加 tombstone 记录。
     """
 
@@ -74,8 +74,11 @@ class JsonlMemoryStore(MemoryStore):
         异常情况：文件不可写时抛出底层 IO 异常。
         """
 
-        with self._path_for(record.user_id).open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+        records = self._load_raw_records(record.user_id)
+        records.append(asdict(record))
+        path = self._path_for(record.user_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         return record
 
     def search(self, *, user_id: str, query: str, limit: int) -> list[MemoryRecord]:
@@ -122,19 +125,51 @@ class JsonlMemoryStore(MemoryStore):
 
     def _path_for(self, user_id: str) -> Path:
         safe_user_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in user_id)
+        return self.root / safe_user_id / "memory.json"
+
+    def _legacy_path_for(self, user_id: str) -> Path:
+        safe_user_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in user_id)
         return self.root / f"{safe_user_id}.jsonl"
 
-    def _load_effective_records(self, user_id: str) -> list[MemoryRecord]:
+    def _load_raw_records(self, user_id: str) -> list[dict[str, Any]]:
+        """读取用户 memory 原始记录。
+
+        主要逻辑：优先读取新版 `memory.json` 数组；如果不存在，则兼容读取旧版
+        `<user_id>.jsonl`，方便已有开发数据迁移。
+        参数：`user_id` 为用户编号。
+        返回值：原始 dict 列表。
+        异常情况：JSON 损坏时返回空列表，避免阻塞本地开发。
+        """
+
         path = self._path_for(user_id)
-        if not path.exists():
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8") or "[]")
+            except Exception:
+                return []
+            if isinstance(data, list):
+                return [dict(item) for item in data if isinstance(item, dict)]
             return []
-        records: dict[str, MemoryRecord] = {}
-        deleted: set[str] = set()
-        for line in path.read_text(encoding="utf-8").splitlines():
+        legacy_path = self._legacy_path_for(user_id)
+        if not legacy_path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        for line in legacy_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
                 raw = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(raw, dict):
+                rows.append(raw)
+        return rows
+
+    def _load_effective_records(self, user_id: str) -> list[MemoryRecord]:
+        records: dict[str, MemoryRecord] = {}
+        deleted: set[str] = set()
+        for raw in self._load_raw_records(user_id):
+            try:
                 record = MemoryRecord(
                     memory_id=str(raw["memory_id"]),
                     user_id=str(raw["user_id"]),

@@ -153,19 +153,61 @@ class RunRecorder:
     def __init__(self, runs_root: str | Path = "runs/audio-chat") -> None:
         self.runs_root = Path(runs_root).expanduser().resolve()
         self.logger = get_logger("audio_chat.runs")
+        self._session_users: dict[str, str] = {}
         self._stream_chunk_stats: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._agent_event_counts: dict[tuple[str, str], int] = {}
         self._model_request_started_at: dict[str, float] = {}
         self._delta_stats: dict[tuple[str, str], dict[str, Any]] = {}
         self._first_model_request_logged = False
 
-    def session_dir(self, session_id: str) -> Path:
-        path = self.runs_root / "sessions" / session_id
+    def bind_device(self, *, user_id: str, device_id: str) -> Path:
+        """绑定当前运行目录中的用户和设备。
+
+        主要逻辑：新版运行产物以 device_id 作为 session_id，本方法把二者绑定到
+        `runs/<app_name>/<user_id>/<device_id>/`，并创建最关键的 `messages.jsonl`
+        和 `model-request.json` 占位文件，避免开发者排障时找不到入口。
+        参数：`user_id` 为用户标识，`device_id` 为设备标识。
+        返回值：设备级运行目录。
+        异常情况：文件系统不可写时抛出底层 IO 异常。
+        """
+
+        if not user_id or not device_id:
+            raise ValueError("bind_device requires user_id and device_id")
+        self._session_users[device_id] = user_id
+        path = self._device_dir(user_id, device_id)
+        messages = path / "messages.jsonl"
+        messages.touch(exist_ok=True)
+        model_request = path / "model-request.json"
+        if not model_request.exists():
+            model_request.write_text(
+                json.dumps(
+                    {
+                        "status": "not_started",
+                        "user_id": user_id,
+                        "session_id": device_id,
+                        "device_id": device_id,
+                        "note": "model request has not been created yet",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        return path
+
+    def session_dir(self, session_id: str, user_id: str | None = None) -> Path:
+        if user_id:
+            self._session_users[session_id] = user_id
+        bound_user_id = user_id or self._session_users.get(session_id)
+        if bound_user_id:
+            return self.bind_device(user_id=bound_user_id, device_id=session_id)
+        path = self.runs_root / "_unbound" / self._safe_path_part(session_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def user_dir(self, user_id: str) -> Path:
-        path = self.runs_root / "users" / user_id
+        path = self.runs_root / self._safe_path_part(user_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -179,7 +221,7 @@ class RunRecorder:
 
     def record_event(self, event: Event) -> None:
         if event.session_id:
-            self._append_jsonl(self.session_dir(event.session_id) / "events.jsonl", event.to_dict())
+            self._append_jsonl(self.session_dir(event.session_id, user_id=event.user_id) / "events.jsonl", event.to_dict())
         self._append_jsonl(self.runs_root / "control-events.jsonl", event.to_dict())
         if event.event_name in QUIET_CONTROL_EVENTS:
             return
@@ -231,7 +273,7 @@ class RunRecorder:
         }
         self._append_jsonl(self.runs_root / "control-routes.jsonl", payload)
         if event.session_id:
-            self._append_jsonl(self.session_dir(event.session_id) / "control-routes.jsonl", payload)
+            self._append_jsonl(self.session_dir(event.session_id, user_id=event.user_id) / "control-routes.jsonl", payload)
         detail_path = str(self.session_file(event.session_id, "control-routes.jsonl")) if event.session_id else str(self.runs_root / "control-routes.jsonl")
         log_debug(
             self.logger,
@@ -252,6 +294,7 @@ class RunRecorder:
         )
 
     def record_stream_event(self, session_id: str, record: dict[str, Any]) -> None:
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "stream-events.jsonl", record)
         name = str(record.get("event") or "")
         stream_id = str(record.get("stream_id") or "")
@@ -289,6 +332,7 @@ class RunRecorder:
         )
 
     def record_agent_event(self, session_id: str, record: dict[str, Any]) -> None:
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
         event = str(record.get("event") or "")
@@ -331,6 +375,7 @@ class RunRecorder:
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "tool-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "tool-trace.jsonl", record)
         log_info(
@@ -357,6 +402,7 @@ class RunRecorder:
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "task-events.jsonl", record)
         log_info(
             self.logger,
@@ -373,6 +419,7 @@ class RunRecorder:
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "assets.jsonl", record)
         log_info(
             self.logger,
@@ -400,6 +447,7 @@ class RunRecorder:
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
+        self._bind_from_record(session_id, record)
         path = self.session_dir(session_id) / "model-request.json"
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         self._model_request_started_at[session_id] = time.monotonic()
@@ -466,10 +514,12 @@ class RunRecorder:
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
+        self._bind_from_record(session_id, record)
         path = self.session_dir(session_id) / "result.json"
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
     def record_playback_result(self, session_id: str, record: dict[str, Any]) -> None:
+        self._bind_from_record(session_id, record)
         path = self.session_dir(session_id) / "playback-result.json"
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -502,6 +552,7 @@ class RunRecorder:
         )
 
     def record_playback_decision(self, session_id: str, record: dict[str, Any]) -> None:
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "output-decisions.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "playback-decisions.jsonl", record)
         log_info(
@@ -530,6 +581,7 @@ class RunRecorder:
         异常情况：文件写入失败时抛出 IO 异常。
         """
 
+        self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "actuators.jsonl", record)
         log_info(
             self.logger,
@@ -565,7 +617,7 @@ class RunRecorder:
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
-        path = self.session_dir(session_id) / f"output-{stream_id}.wav"
+        path = self.media_dir(session_id, "actuator.speaker") / f"output-{stream_id}.wav"
         path.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(channels)
@@ -579,7 +631,13 @@ class RunRecorder:
         )
 
     def record_message(self, user_id: str, record: dict[str, Any]) -> None:
-        self._append_jsonl(self.user_dir(user_id) / "messages.jsonl", record)
+        session_id = str(record.get("session_id") or record.get("device_id") or "")
+        if session_id:
+            self.bind_device(user_id=user_id, device_id=session_id)
+            path = self.session_dir(session_id) / "messages.jsonl"
+        else:
+            path = self.user_dir(user_id) / "messages.jsonl"
+        self._append_jsonl(path, record)
         log_info(
             self.logger,
             f"消息写入 {record.get('role')}",
@@ -587,15 +645,31 @@ class RunRecorder:
                 user_id=user_id,
                 session_id=record.get("session_id"),
                 event=record.get("event"),
-                fields={"role": record.get("role"), "text": _compact_text(record.get("content")), "detail_path": str(self.user_dir(user_id) / "messages.jsonl")},
+                fields={"role": record.get("role"), "text": _compact_text(record.get("content")), "detail_path": str(path)},
             ),
         )
 
     def record_stream_payload(self, chunk: StreamChunk) -> None:
         name = "input" if chunk.stream_type.startswith("sensor.") else "output"
-        path = self.session_dir(chunk.session_id) / f"{name}-{chunk.stream_id}.pcm"
+        self.bind_device(user_id=chunk.user_id, device_id=chunk.session_id)
+        path = self.media_dir(chunk.session_id, chunk.stream_type) / f"{name}-{chunk.stream_id}.pcm"
         with path.open("ab") as handle:
             handle.write(chunk.payload)
+
+    def media_dir(self, session_id: str, stream_type: str) -> Path:
+        """返回某类媒体或传感器数据的子目录。
+
+        主要逻辑：音频、照片、IMU、深度数据分别进入独立子目录，避免平铺在设备
+        运行目录下。
+        参数：`session_id` 即 device_id；`stream_type` 为 sensor/actuator 类型。
+        返回值：已创建的子目录。
+        异常情况：文件系统不可写时抛出底层 IO 异常。
+        """
+
+        dirname = _media_subdir_for_stream_type(stream_type)
+        path = self.session_dir(session_id) / dirname
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _pop_stream_chunk_summary(self, *, session_id: str, stream_id: str) -> dict[str, Any]:
         """Return accumulated chunk stats for stream lifecycle logs."""
@@ -710,6 +784,33 @@ class RunRecorder:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _bind_from_record(self, session_id: str, record: dict[str, Any]) -> None:
+        user_id = record.get("user_id")
+        if user_id:
+            self.bind_device(user_id=str(user_id), device_id=session_id)
+
+    def _device_dir(self, user_id: str, device_id: str) -> Path:
+        path = self.user_dir(user_id) / self._safe_path_part(device_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _safe_path_part(value: str) -> str:
+        text = str(value)
+        return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text) or "_"
+
+
+def _media_subdir_for_stream_type(stream_type: str) -> str:
+    if stream_type in {"sensor.mic", "actuator.speaker"} or stream_type.startswith("audio."):
+        return "audio"
+    if stream_type == "sensor.rgb":
+        return "photos"
+    if stream_type == "sensor.imu":
+        return "imu"
+    if stream_type == "sensor.depth":
+        return "depth"
+    return "assets"
 
 
 def _compact_text(value: Any, limit: int = 120) -> str | None:
