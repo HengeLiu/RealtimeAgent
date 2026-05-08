@@ -63,9 +63,11 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
     for config in endpoint_configs:
         assert config["server_url"] == "http://10.1.2.3:8765"
         assert config["auth"] == {"mode": "static_token", "token": "token-old-sdk-parity"}
+        assert config["supports"]
     assert "AUDIO_CHAT_SERVER_URL=http://10.1.2.3:8765" in esp32_env
     assert "AUDIO_CHAT_AUTH_MODE=static_token" in esp32_env
     assert "AUDIO_CHAT_AUTH_TOKEN=token-old-sdk-parity" in esp32_env
+    assert "AUDIO_CHAT_SUPPORTS=" in esp32_env
 
 
 def test_esp32_config_command_copies_generated_env(tmp_path: Path) -> None:

@@ -220,12 +220,13 @@ server 不应决定：
 4. 端侧如何做本地 AEC。
 5. 端侧如何控制摄像头、振动器或其他执行器硬件。
 
-### 4.2 设备没有固定类型，只有订阅和属性
+### 4.2 设备没有固定类型，推荐用 supports 声明能力
 
 `audio-chat` 对外不要求开发者先理解 glass、phone、web、mock 等固定设备类型。所有设备都注册到同一个 `user_id` 的运行中设备集合里，每个设备通过不同 `device_id` 区分，并声明：
 
-1. 自己订阅哪些事件，尤其是可以响应哪些 `*.command.*` 或 `stream.control.*` 事件。
-2. 可选 `properties`，用于日志、debug API 和硬件参数说明，例如 wake word、AEC、本地推理、相机参数等。
+1. 推荐声明 `supports`，表达自己支持哪些传感器和执行器，例如 `sensor.rgb`、`sensor.mic`、`actuator.speaker`。
+2. 可选声明 `subscriptions`，作为底层路由兼容入口、调试广播订阅或尚未标准化事件的补充。
+3. 可选 `properties`，用于日志、debug API 和硬件参数说明，例如 wake word、AEC、本地推理、相机参数等。
 
 示例：
 
@@ -238,6 +239,11 @@ server 不应决定：
     "audio.aec": "endpoint",
     "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
   },
+  "supports": [
+    {"id": "sensor.mic", "modes": ["continuous"], "sample_rate_hz": 16000, "channels": 1},
+    {"id": "sensor.rgb", "modes": ["single"], "formats": ["jpeg"]},
+    {"id": "actuator.speaker", "codecs": ["pcm16le"], "sample_rates_hz": [16000]}
+  ],
   "subscriptions": [
     {"event": "control.audio_session.*"},
     {"event": "stream.output.*"},
@@ -247,7 +253,7 @@ server 不应决定：
 }
 ```
 
-server 内部只根据订阅匹配结果选择设备。例如设备订阅
+server 注册时会先把 `supports` 编译成 `subscriptions`，内部再根据订阅匹配结果选择设备。例如设备支持 `sensor.rgb` 后会得到
 `stream.control.* + filter(stream_type=sensor.rgb)`，就会收到 RGB 采集配置事件；
 设备订阅 `stream.output.* + filter(stream_type=actuator.speaker)`，就会收到扬声器输出 stream 事件。
 
@@ -276,7 +282,7 @@ stream 数据负责字节：
 1. `sensor.mic`
 2. `actuator.speaker`
 3. `sensor.rgb`
-4. `sensor.depth`
+4. `sensor.tof`
 5. `sensor.imu`
 6. `actuator.haptic`
 7. 未来其他传感器或执行器 stream。
@@ -301,7 +307,7 @@ stream 数据负责字节：
 统一使用 stream 不等于所有 stream 都进入同一条实时 Agent 输入链路。
 
 1. `sensor.mic` / `actuator.speaker` 是对话主链路，有专用的音频会话、音频预处理、Realtime Audio Core、Text Core 模态转换和播放仲裁。
-2. `sensor.rgb`、`sensor.depth`、`sensor.imu` 等是对话资产，默认进入资产缓存，供 Tool、Task 或模型上下文按需取用。
+2. `sensor.rgb`、`sensor.tof`、`sensor.imu` 等是对话资产，默认进入资产缓存，供 Tool、Task 或模型上下文按需取用；`sensor.depth` 仅作为旧配置兼容名称。
 3. 如果端侧主动上传资产，server 直接缓存并建立索引。
 4. 如果缓存中没有需要的资产，Tool 通过 `UserDeviceContext` 请求资产；具体 stream 控制事件由 Control Service 生成并下发。
 5. 未来实时视觉模型可以新增专用 Agent Core，但必须显式声明哪些资产 stream 进入实时模型，不能把所有传感器默认推入 Agent Core。
@@ -1221,14 +1227,14 @@ stream 类型按端侧硬件角色分两类：
 1. `sensor.*`：端侧感知器产生的数据，例如麦克风、RGB 相机、深度相机、IMU。
 2. `actuator.*`：server 下发给端侧执行器的数据，例如扬声器、振动器。
 
-其中 `sensor.mic` 和 `actuator.speaker` 共同组成对话音频主链路；`sensor.rgb`、`sensor.depth`、`sensor.imu` 默认进入 `Asset Service` 和 `Asset Store`，等待 Tool、Task 或模型上下文按需取用。
+其中 `sensor.mic` 和 `actuator.speaker` 共同组成对话音频主链路；`sensor.rgb`、`sensor.tof`、`sensor.imu` 默认进入 `Asset Service` 和 `Asset Store`，等待 Tool、Task 或模型上下文按需取用。`sensor.depth` 只作为旧配置兼容名称出现，新文档和新端侧优先使用 `sensor.tof`。
 
 底层仍然可以使用二进制 chunk。新版统一称为 `StreamChunk`；旧版 `Frame`、`MediaFrame` 只作为迁移期历史概念出现，不是业务 API。
 
 `Stream Service` 不负责理解业务资产，也不负责决定音频进入哪种 Agent Core。它只负责连接、stream 生命周期和 chunk 收发。输入 chunk 到达后，由 `Stream Dispatcher` 根据 `stream_type` 做机械分发：
 
 1. `sensor.mic` 分发给 `Audio Pipeline`。
-2. `sensor.rgb`、`sensor.depth`、`sensor.imu` 分发给 `Asset Service`，写入 `Asset Store`。
+2. `sensor.rgb`、`sensor.tof`、`sensor.imu` 分发给 `Asset Service`，写入 `Asset Store`。
 3. 未识别或未授权的 `stream_type` 拒绝、关闭或记录为协议错误。
 
 因此总体架构中的关系不是“Stream Service 依赖 Asset Service”，而是“Stream Service 收到字节后交给 Dispatcher，Dispatcher 把非音频主链路的数据交给 Asset Service”。
@@ -1308,7 +1314,7 @@ StreamRegistry --> StreamHandle
 | --- | --- | --- |
 | `sensor.mic` | endpoint -> server | 唤醒后上传 AEC 后麦克风 PCM，属于对话音频主链路。 |
 | `sensor.rgb` | endpoint -> server | RGB 相机图像资产 stream，既可单帧也可连续视频。 |
-| `sensor.depth` | endpoint -> server | 深度相机资产 stream。 |
+| `sensor.tof` | endpoint -> server | ToF 深度相机资产 stream。 |
 | `sensor.imu` | endpoint -> server | IMU / heading / motion 资产 stream。 |
 
 执行器 stream：
@@ -2841,7 +2847,19 @@ API 命名约定：
 | 持续处理传感器数据 | `publish_event("stream.control.configure.requested", ...)` + `watch_assets(...)` | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。 |
 | 查询设备状态 | `get_devices()` | 读取 server 内部 `DeviceSnapshot`。 | 展示当前在线设备、订阅和调试属性。 |
 
-Tool / Task 发出的事件能否到达设备，取决于端侧注册时提交的 subscription。端侧至少要声明订阅策略：
+Tool / Task 发出的事件能否到达设备，取决于端侧注册时的 `supports` 或底层 `subscriptions`。端侧推荐先声明 `supports`：
+
+```json
+{
+  "supports": [
+    {"id": "sensor.rgb", "modes": ["single", "continuous"], "formats": ["jpeg"]},
+    {"id": "sensor.imu", "modes": ["continuous"], "frequency_hz": 30},
+    {"id": "actuator.haptic", "commands": ["vibrate"]}
+  ]
+}
+```
+
+如果需要兼容旧端侧、订阅调试广播或表达暂未标准化事件，也可以显式声明底层 `subscriptions`：
 
 ```json
 {

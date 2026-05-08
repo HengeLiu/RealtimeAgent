@@ -70,6 +70,7 @@ def sync(argv: list[str] | None = None) -> None:
             "user_id": args.user_id,
             "device_id": "dev-python-playback-001",
             "auth": auth_config,
+            "supports": _glass_supports(),
         },
     )
     _write_yaml(
@@ -84,6 +85,7 @@ def sync(argv: list[str] | None = None) -> None:
                 "phone.task.find_object_phone_task": True,
                 "phone.task.traffic_light_phone_task": True,
             },
+            "supports": _phone_supports(),
             "subscriptions": [
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
@@ -100,6 +102,34 @@ def sync(argv: list[str] | None = None) -> None:
             "device_id": "dev-browser-glass-001",
             "client_type": "browser-glass",
             "auth": auth_config,
+            "supports": [
+                {
+                    "id": "sensor.mic",
+                    "modes": ["continuous"],
+                    "sample_rate_hz": 48000,
+                    "channels": 1,
+                    "frequency_hz": 50,
+                    "duration_seconds": 0,
+                    "codecs": ["pcm16le"],
+                },
+                {
+                    "id": "sensor.rgb",
+                    "modes": ["single", "continuous"],
+                    "formats": ["jpeg"],
+                    "frequency_hz": 1,
+                    "sample_count": 1,
+                },
+                {
+                    "id": "actuator.speaker",
+                    "codecs": ["pcm16le"],
+                    "sample_rates_hz": [16000, 24000],
+                    "channels": 1,
+                },
+                {
+                    "id": "actuator.haptic",
+                    "commands": ["vibrate"],
+                },
+            ],
             "audio": {"aec": "browser_webrtc", "wake_word": "manual"},
             "stream": {"sensor_mic": {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20}},
         },
@@ -118,6 +148,7 @@ def sync(argv: list[str] | None = None) -> None:
                     "audio.aec": "replaceable",
                     "audio.wake_word": "manual",
                 },
+                "supports": _ios_supports(),
                 "subscriptions": [
                     {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
@@ -150,6 +181,7 @@ def sync(argv: list[str] | None = None) -> None:
                 "AUDIO_CHAT_AUDIO_CHUNK_MS=20",
                 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]',
                 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]',
+                'AUDIO_CHAT_SUPPORTS=[{"id":"sensor.mic","modes":["continuous"],"sample_rate_hz":16000,"channels":1,"frequency_hz":50,"duration_seconds":0,"codecs":["pcm16le"]},{"id":"sensor.rgb","modes":["single"],"formats":["jpeg"],"frequency_hz":1,"sample_count":1},{"id":"actuator.speaker","codecs":["pcm16le"],"sample_rates_hz":[16000],"channels":1}]',
                 'AUDIO_CHAT_SUBSCRIPTIONS=[{"event":"control.audio_session.*"},{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.output.cancel.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}]',
                 "",
             ]
@@ -197,6 +229,76 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     import yaml
 
     path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _phone_supports() -> list[dict[str, Any]]:
+    """生成 Python phone mock 和 iOS 参考端共用的设备语义能力。"""
+
+    return [
+        {
+            "id": "sensor.rgb",
+            "modes": ["single", "continuous"],
+            "formats": ["jpeg"],
+            "frequency_hz": 1,
+            "sample_count": 1,
+        },
+        {
+            "id": "actuator.speaker",
+            "codecs": ["pcm16le"],
+            "sample_rates_hz": [16000, 24000],
+            "channels": 1,
+        },
+        {
+            "id": "actuator.haptic",
+            "commands": ["vibrate"],
+        },
+    ]
+
+
+def _glass_supports() -> list[dict[str, Any]]:
+    """生成 Python glass playback 注册使用的设备语义能力。"""
+
+    return [
+        {
+            "id": "sensor.mic",
+            "modes": ["continuous"],
+            "sample_rate_hz": 16000,
+            "channels": 1,
+            "frequency_hz": 50,
+            "duration_seconds": 0,
+            "codecs": ["pcm16le"],
+        },
+        {
+            "id": "sensor.rgb",
+            "modes": ["single"],
+            "formats": ["jpeg"],
+            "frequency_hz": 1,
+            "sample_count": 1,
+        },
+        {
+            "id": "actuator.speaker",
+            "codecs": ["pcm16le"],
+            "sample_rates_hz": [16000, 24000],
+            "channels": 1,
+        },
+    ]
+
+
+def _ios_supports() -> list[dict[str, Any]]:
+    """生成 iOS 参考端注册使用的设备语义能力。"""
+
+    return [
+        *_phone_supports(),
+        {
+            "id": "sensor.mic",
+            "modes": ["continuous"],
+            "sample_rate_hz": 16000,
+            "channels": 1,
+            "frequency_hz": 50,
+            "duration_seconds": 0,
+            "codecs": ["pcm16le"],
+        },
+    ]
 
 
 def _auth(mode: str, token: str, signed_token: str = "") -> dict[str, str]:

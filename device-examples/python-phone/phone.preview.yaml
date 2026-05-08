@@ -8,6 +8,22 @@ properties:
   endpoint.role.visual_display: true
   endpoint.compute.vision: true
   actuator.display.rgb: true
+supports:
+  - id: sensor.rgb
+    modes:
+      - single
+      - continuous
+    formats:
+      - jpeg
+    frequency_hz: 15
+    sample_count: 0
+  - id: actuator.speaker
+    codecs:
+      - pcm16le
+    sample_rates_hz:
+      - 16000
+      - 24000
+    channels: 1
 subscriptions:
   - event: stream.input.*
     filter:

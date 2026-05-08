@@ -4,7 +4,7 @@
 
 ## 设计目标
 
-1. 设备开发者只需要在注册事件中声明 `subscriptions`。
+1. 设备开发者优先在注册事件中声明 `supports`，由 server 编译成底层 `subscriptions`。
 2. Tool / Task 开发者只通过 `context.devices` 发布事件、配置 stream 或读取资产。
 3. 业务代码不能按 `device_id` 点对点发送事件。
 4. `sensor.*` 和 `actuator.*` 只按事件名和 `stream_type` filter 命中。
@@ -24,6 +24,7 @@ participant "RunRecorder" as Recorder
 Tool -> Context: publish_event / configure_stream
 Context -> Control: publish_matching(Event)
 Control -> Control: validate event
+Control -> Control: compile supports -> subscriptions
 Control -> Matcher: event + subscriptions + filter
 Matcher --> Control: match / miss reason
 Control -> Control: selection
@@ -34,7 +35,27 @@ Control -> Recorder: control-routes.jsonl
 
 Stream 输出链路仍然遵守同一规则。`StreamService` 只在打开 `actuator.*` stream 时解析一次订阅者，并把后续 chunk、close、cancel 固定投递给这批 consumer，避免播放过程中因为设备重连或新设备注册改变旧 stream 的语义。
 
-## 订阅规则
+## supports 和订阅规则
+
+推荐设备注册时提交 `supports`。它是跨语言端侧最容易理解的语义能力声明：
+
+```json
+{
+  "supports": [
+    {"id": "sensor.rgb", "modes": ["single", "continuous"], "formats": ["jpeg"]},
+    {"id": "sensor.mic", "modes": ["continuous"], "sample_rate_hz": 16000, "channels": 1},
+    {"id": "actuator.speaker", "codecs": ["pcm16le"], "sample_rates_hz": [16000, 24000]}
+  ]
+}
+```
+
+server 注册设备时会把它编译成 `subscriptions`。例如 `sensor.rgb` 会编译成：
+
+```json
+{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
+```
+
+`subscriptions` 仍然是底层路由输入，也允许高级端侧显式提交，主要用于兼容旧配置、调试广播订阅或表达暂未标准化的事件。
 
 设备注册时提交：
 
@@ -168,10 +189,11 @@ async for asset in context.devices.watch_assets(
 
 ## 与旧能力声明字段的关系
 
-旧 SDK 和部分早期示例曾在注册 payload 中提交独立的设备声明字段。新版 SDK 不再接收这个字段；注册时只保留 `subscriptions` 和可选 `properties`。
+旧 SDK 和部分早期示例曾在注册 payload 中提交独立的设备声明字段。新版 SDK 不再接收这个字段；注册时优先使用 `supports`，也保留底层 `subscriptions` 和可选 `properties`。
 
 推荐写法是：
 
-- 用 `subscriptions` 表达设备愿意处理哪些事件。
+- 用 `supports` 表达设备支持哪些传感器和执行器。
+- 用 `subscriptions` 表达兼容、调试或暂未标准化的事件订阅。
 - 用 `properties` 表达便于人观察的硬件和调试信息。
 - 用事件名和 `filter` 表达路由条件，例如 `stream.control.* + stream_type=sensor.rgb`。

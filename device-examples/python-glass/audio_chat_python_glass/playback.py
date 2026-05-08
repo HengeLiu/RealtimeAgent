@@ -805,6 +805,7 @@ class NetworkPythonPlaybackEndpoint:
         device_name: str = "python-playback",
         client_type: str = "python-playback",
         properties: dict[str, Any] | None = None,
+        supports: list[dict[str, Any]] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         chunk_interval_ms: int = 0,
@@ -820,6 +821,30 @@ class NetworkPythonPlaybackEndpoint:
             "audio.wake_word": "endpoint",
             "audio.aec": "endpoint",
         }
+        self.supports = supports or [
+            {
+                "id": "sensor.mic",
+                "modes": ["continuous"],
+                "sample_rate_hz": 16000,
+                "channels": 1,
+                "frequency_hz": 50,
+                "duration_seconds": 0,
+                "codecs": ["pcm16le"],
+            },
+            {
+                "id": "sensor.rgb",
+                "modes": ["single"],
+                "formats": ["jpeg"],
+                "frequency_hz": 1,
+                "sample_count": 1,
+            },
+            {
+                "id": "actuator.speaker",
+                "codecs": ["pcm16le"],
+                "sample_rates_hz": [16000, 24000],
+                "channels": 1,
+            },
+        ]
         self.subscriptions = subscriptions or [
             {"event": "control.audio_session.*"},
             {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
@@ -1149,6 +1174,7 @@ class NetworkPythonPlaybackEndpoint:
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": self.auth,
                 "properties": self.properties,
+                "supports": self.supports,
                 "subscriptions": self.subscriptions,
             },
         )
@@ -1182,6 +1208,8 @@ class NetworkPythonPlaybackEndpoint:
             "output_chunk_count": len(self.output_chunks),
             "output_bytes": sum(len(chunk.payload) for chunk in self.output_chunks),
             "asset_uploads": list(self.asset_uploads),
+            "supports": list(self.supports),
+            "subscriptions": list(self.subscriptions),
             "transport": "network",
         }
         result["assertions"] = {event_name: event_name in result["event_names"] for event_name in PLAYBACK_REQUIRED_EVENTS}
@@ -1334,6 +1362,9 @@ async def run_network_playback(config: dict[str, Any] | None = None) -> dict[str
         device_id=config.get("device_id", "dev-python-playback-001"),
         runs_root=config.get("runs_root", "runs/audio-chat"),
         auth=dict(config.get("auth") or {"mode": "disabled"}),
+        properties=dict(config.get("properties") or {}) or None,
+        supports=list(config.get("supports") or []) or None,
+        subscriptions=list(config.get("subscriptions") or []) or None,
         chunk_interval_ms=int(config.get("chunk_interval_ms") or 0),
     )
     audio = _audio_from_action(config)

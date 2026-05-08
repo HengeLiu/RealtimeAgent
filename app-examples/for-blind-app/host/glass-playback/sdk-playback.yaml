@@ -3,6 +3,30 @@ runs_root: runs/audio-chat/for-blind-app
 server_url: http://127.0.0.1:8765
 user_id: user-playback-001
 device_id: dev-python-playback-001
+supports:
+  - id: sensor.mic
+    modes:
+      - continuous
+    sample_rate_hz: 16000
+    channels: 1
+    frequency_hz: 50
+    duration_seconds: 0
+    codecs:
+      - pcm16le
+  - id: sensor.rgb
+    modes:
+      - single
+    formats:
+      - jpeg
+    frequency_hz: 1
+    sample_count: 1
+  - id: actuator.speaker
+    codecs:
+      - pcm16le
+    sample_rates_hz:
+      - 16000
+      - 24000
+    channels: 1
 asr_provider: mock
 asr_model: mock-asr
 text_model_provider: mock

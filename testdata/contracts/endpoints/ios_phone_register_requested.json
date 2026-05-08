@@ -20,6 +20,30 @@
     "name": "iOS 设备示例",
     "device_name": "ios-phone-reference",
     "sdk_version": "audio-chat-ios-reference-0.1.0",
+    "supports": [
+      {
+        "id": "sensor.rgb",
+        "modes": ["single", "continuous"],
+        "formats": ["jpeg"],
+        "frequency_hz": 1,
+        "sample_count": 1
+      },
+      {
+        "id": "sensor.mic",
+        "modes": ["continuous"],
+        "sample_rate_hz": 16000,
+        "channels": 1,
+        "frequency_hz": 50,
+        "duration_seconds": 0,
+        "codecs": ["pcm16le"]
+      },
+      {
+        "id": "actuator.speaker",
+        "codecs": ["pcm16le"],
+        "sample_rates_hz": [16000, 24000],
+        "channels": 1
+      }
+    ],
     "subscriptions": [
       {
         "event": "stream.control.*",

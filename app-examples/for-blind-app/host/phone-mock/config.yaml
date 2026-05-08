@@ -3,6 +3,22 @@ device_id: dev-for-blind-phone-mock
 properties:
   phone.task.find_object_phone_task: true
   phone.task.traffic_light_phone_task: true
+supports:
+  - id: sensor.rgb
+    modes:
+      - single
+      - continuous
+    formats:
+      - jpeg
+    frequency_hz: 1
+    sample_count: 1
+  - id: actuator.speaker
+    codecs:
+      - pcm16le
+    sample_rates_hz:
+      - 16000
+      - 24000
+    channels: 1
 subscriptions:
   - event: stream.control.*
     filter:

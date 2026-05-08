@@ -31,8 +31,8 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     """测试目标：验证 iOS 配置字段与其他参考端侧保持同一语义。
 
     测试方法：读取 `AppConfig.example.json`，检查 server、user、device、auth、
-    properties 和 subscriptions。
-    预期结果：iOS 不引入专用配置字段，路由只由 event/subscription 决定。
+    properties、supports 和 subscriptions。
+    预期结果：iOS 不引入专用配置字段，优先用 supports 声明设备语义能力。
     """
 
     config = json.loads((IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8"))
@@ -48,6 +48,8 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["properties"]["direct.camera_sink"] is True
     assert config["properties"]["direct.camera_sink.path"] == "/ws/camera"
     assert config["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
+    support_ids = {item["id"] for item in config["supports"]}
+    assert {"sensor.rgb", "sensor.mic", "actuator.speaker"}.issubset(support_ids)
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
     assert {"event": "control.device.command.*"} in config["subscriptions"]
@@ -57,7 +59,7 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     """测试目标：验证 iOS 注册事件遵守公共 control.device.register.requested 契约。
 
     测试方法：读取 iOS 专用 golden 和 Swift 源码，检查注册 payload 必备字段。
-    预期结果：注册事件携带 user_id、device_id、auth、properties 和 subscriptions，
+    预期结果：注册事件携带 user_id、device_id、auth、properties、supports 和 subscriptions，
     不包含 target_device 或固定 phone/glass 路由字段。
     """
 
@@ -75,12 +77,14 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     assert payload["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
     assert "target_device" not in json.dumps(golden)
     assert "target_device_id" not in json.dumps(golden)
+    assert {item["id"] for item in payload["supports"]} == {"sensor.rgb", "sensor.mic", "actuator.speaker"}
 
     source = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
     for token in [
         "control.device.register.requested",
         "\"auth\": config.auth.payload",
         "\"properties\": properties",
+        "\"supports\": config.supports.map",
         "\"subscriptions\": config.subscriptions.map",
         "direct.camera_sink.uris",
     ]:

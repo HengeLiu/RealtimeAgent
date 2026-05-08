@@ -5,14 +5,14 @@
 
 ## 能力边界
 
-默认注册能力：
+默认注册能力通过 `supports` 表达，server 会把它编译成底层 `subscriptions`：
 
-- 生产 `sensor.rgb`、`sensor.depth`、`sensor.imu`
+- 生产 `sensor.rgb`；旧配置中的 `sensor.depth`、`sensor.imu` 订阅保留为协议兼容测试入口
 - 消费 `actuator.speaker`、`actuator.haptic`
 - 声明 `phone.task.find_object_phone_task` 和 `phone.task.traffic_light_phone_task`
-- 订阅 `stream.control.*` 中和传感器相关的控制事件
-- 订阅 `stream.output.*` 中 speaker / haptic 执行器输出
-- 订阅 `control.device.command.*`，用事件回报端侧任务 started / progress /
+- 兼容保留 `subscriptions`，用于接收 `stream.control.*`、`stream.output.*` 和
+  `control.device.command.*`
+- 通过 `control.device.command.*` 事件回报端侧任务 started / progress /
   completed / failed
 
 真实图片、音频和传感器数据只通过 `/ws/stream` 二进制通道传输；控制事件 payload

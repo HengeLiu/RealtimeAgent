@@ -115,7 +115,7 @@ struct SubscriptionConfig: Codable, Equatable {
 /// iOS phone 参考端配置。
 ///
 /// 主要功能：
-/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties 和 subscriptions。
+/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties、supports 和 subscriptions。
 /// 2. 为注册事件提供协议兼容 payload。
 /// 3. 缺少配置文件时提供本地默认值，便于打开工程后立即编译。
 struct AppConfig: Codable, Equatable {
@@ -126,6 +126,7 @@ struct AppConfig: Codable, Equatable {
     var protocolVersion: String
     var directCameraSinkPort: UInt16
     var properties: [String: JSONValue]
+    var supports: [[String: JSONValue]]
     var subscriptions: [SubscriptionConfig]
 
     enum CodingKeys: String, CodingKey {
@@ -136,6 +137,7 @@ struct AppConfig: Codable, Equatable {
         case protocolVersion = "protocol_version"
         case directCameraSinkPort = "direct_camera_sink_port"
         case properties
+        case supports
         case subscriptions
     }
 
@@ -148,6 +150,7 @@ struct AppConfig: Codable, Equatable {
         protocolVersion = try container.decodeIfPresent(String.self, forKey: .protocolVersion) ?? "audio-chat.v1"
         directCameraSinkPort = try container.decodeIfPresent(UInt16.self, forKey: .directCameraSinkPort) ?? 9001
         properties = try container.decodeIfPresent([String: JSONValue].self, forKey: .properties) ?? [:]
+        supports = try container.decodeIfPresent([[String: JSONValue]].self, forKey: .supports) ?? []
         subscriptions = try container.decodeIfPresent([SubscriptionConfig].self, forKey: .subscriptions) ?? []
     }
 
@@ -160,6 +163,7 @@ struct AppConfig: Codable, Equatable {
         try container.encode(protocolVersion, forKey: .protocolVersion)
         try container.encode(directCameraSinkPort, forKey: .directCameraSinkPort)
         try container.encode(properties, forKey: .properties)
+        try container.encode(supports, forKey: .supports)
         try container.encode(subscriptions, forKey: .subscriptions)
     }
 
@@ -171,6 +175,7 @@ struct AppConfig: Codable, Equatable {
         protocolVersion: String,
         directCameraSinkPort: UInt16 = 9001,
         properties: [String: JSONValue],
+        supports: [[String: JSONValue]] = [],
         subscriptions: [SubscriptionConfig]
     ) {
         self.serverURL = serverURL
@@ -180,6 +185,7 @@ struct AppConfig: Codable, Equatable {
         self.protocolVersion = protocolVersion
         self.directCameraSinkPort = directCameraSinkPort
         self.properties = properties
+        self.supports = supports
         self.subscriptions = subscriptions
     }
 
@@ -213,6 +219,30 @@ struct AppConfig: Codable, Equatable {
             "direct.camera_sink.frame_format": .string("audio_chat.direct_frame.v1"),
             "audio.aec": .string("replaceable"),
             "audio.wake_word": .string("manual"),
+        ],
+        supports: [
+            [
+                "id": .string("sensor.rgb"),
+                "modes": .array([.string("single"), .string("continuous")]),
+                "formats": .array([.string("jpeg")]),
+                "frequency_hz": .number(1),
+                "sample_count": .number(1),
+            ],
+            [
+                "id": .string("sensor.mic"),
+                "modes": .array([.string("continuous")]),
+                "sample_rate_hz": .number(16000),
+                "channels": .number(1),
+                "frequency_hz": .number(50),
+                "duration_seconds": .number(0),
+                "codecs": .array([.string("pcm16le")]),
+            ],
+            [
+                "id": .string("actuator.speaker"),
+                "codecs": .array([.string("pcm16le")]),
+                "sample_rates_hz": .array([.number(16000), .number(24000)]),
+                "channels": .number(1),
+            ],
         ],
         subscriptions: [
             SubscriptionConfig(event: "stream.control.*", filter: ["stream_type": .string("sensor.rgb")]),

@@ -9,7 +9,7 @@
 - `testdata/`、`tests/`、`scripts/`：契约样例、自动化测试和验收脚本。
 - `legacy/`：旧 `openaiglass-sdk`、旧 `openaiglass-for-blind`、旧根目录文档和历史运行资产。它们只作为迁移参考，不再作为新开发入口。
 
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备通过注册事件声明 `user_id`、`device_id`、订阅策略和属性；业务 Tool / Task 通过 `UserDeviceContext` 表达设备通讯意图；server 根据事件订阅和 stream 元数据完成路由。
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备通过注册事件声明 `user_id`、`device_id`、`supports` 语义能力和调试属性；server 会把 `supports` 编译成底层事件订阅。业务 Tool / Task 通过 `UserDeviceContext` 表达设备通讯意图；server 根据事件订阅和 stream 元数据完成路由。
 
 ## 快速开始
 
@@ -37,6 +37,22 @@ curl http://127.0.0.1:8765/api/debug/playback
 ```
 
 ## 启动参考设备
+
+最新推荐联调顺序：
+
+```bash
+# 1. 校验端侧能力文件，确认 supports 能编译成注册订阅
+uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+
+# 2. 启动应用 server
+uv run audio-chat.server.run --app-name for-blind-app
+
+# 3. 打开浏览器参考端，连接并注册后开始语音或视觉测试
+uv run audio-chat.web.open --print-url
+
+# 4. 可选：启动 Python phone mock，验证同一 user_id 下多设备事件路由
+uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
+```
 
 浏览器设备：
 
@@ -102,7 +118,7 @@ uv run audio-chat.esp32.build --dry-run --build-only
 
 | 概念 | 谁来实现 | 作用 |
 | --- | --- | --- |
-| 设备 | 端侧开发者 | 注册到某个 `user_id`，声明自己订阅哪些事件、具备哪些属性，并负责麦克风、摄像头、播放器、振动器等硬件。 |
+| 设备 | 端侧开发者 | 注册到某个 `user_id`，声明 `supports` 语义能力和调试属性，并负责麦克风、摄像头、播放器、振动器等硬件。 |
 | 事件 | 设备和 server 都会产生 | 小体积控制信令，例如注册、唤醒、打开音频会话、请求相机上传、请求振动、任务状态变化。 |
 | stream | 设备和 server 都会读写 | 大字节或连续数据，例如 `sensor.mic`、`sensor.rgb`、`sensor.imu`、`actuator.speaker`。 |
 | Tool / Task | 应用开发者 | Tool 做一次性能力，Task 做长流程能力；它们通过 `context.devices` 发布事件、请求 stream 资产、提交输出。 |
@@ -110,12 +126,12 @@ uv run audio-chat.esp32.build --dry-run --build-only
 一次完整链路通常是：
 
 ```text
-设备注册并提交订阅
+设备注册并提交 supports
   -> 用户语音唤醒并上传 sensor.mic stream
   -> Agent Core 理解用户意图
   -> 模型调用 Tool 或启动 Task
   -> Tool / Task 通过 context.devices 发布控制事件或请求资产
-  -> Control Service 按订阅策略选择在线设备
+  -> Control Service 按 supports 编译出的订阅策略选择在线设备
   -> 设备收到事件后执行硬件动作，并按需上传 sensor.* stream
   -> Asset Service 缓存图片、IMU、深度图等资产
   -> Tool / Task 读取资产或收到事件，返回结果或继续运行

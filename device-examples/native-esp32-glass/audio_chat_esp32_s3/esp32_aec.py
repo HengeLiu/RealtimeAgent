@@ -232,6 +232,38 @@ class Esp32AecEndpointState:
                 "direct.camera.default_sink_uri": self.phone_camera_sink_ws_uri,
                 "direct.camera.stream_interval_ms": self.phone_camera_stream_interval_ms,
             },
+            "supports": [
+                {
+                    "id": "sensor.mic",
+                    "modes": ["continuous"],
+                    "sample_rate_hz": self.sample_rate,
+                    "channels": self.channels,
+                    "frequency_hz": max(1, int(1000 / max(1, self.chunk_ms))),
+                    "duration_seconds": 0,
+                    "codecs": ["pcm16le"],
+                    "options": {
+                        "wake": self.wake_word_mode,
+                        "aec": self.aec_mode,
+                        "playback_reference": self.playback_reference,
+                    },
+                },
+                {
+                    "id": "sensor.rgb",
+                    "modes": ["single"],
+                    "formats": ["jpeg"],
+                    "frequency_hz": 1,
+                    "sample_count": 1,
+                    "options": {
+                        "direct_camera_sink_ws_uri": self.phone_camera_sink_ws_uri,
+                    },
+                },
+                {
+                    "id": "actuator.speaker",
+                    "codecs": ["pcm16le"],
+                    "sample_rates_hz": [self.sample_rate],
+                    "channels": self.channels,
+                },
+            ],
             "subscriptions": [
                 {"event": "control.audio_session.*"},
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},

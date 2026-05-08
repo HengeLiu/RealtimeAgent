@@ -402,6 +402,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         device_name: str = "python-phone",
         client_type: str = "python-phone",
         properties: dict[str, Any] | None = None,
+        supports: list[dict[str, Any]] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         task_handlers: PhoneTaskHandlerRegistry | None = None,
@@ -425,6 +426,26 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 "phone.task.find_object_phone_task": True,
                 "phone.task.traffic_light_phone_task": True,
             },
+            supports=supports
+            or [
+                {
+                    "id": "sensor.rgb",
+                    "modes": ["single", "continuous"],
+                    "formats": ["jpeg"],
+                    "frequency_hz": 1,
+                    "sample_count": 1,
+                },
+                {
+                    "id": "actuator.speaker",
+                    "codecs": ["pcm16le"],
+                    "sample_rates_hz": [16000, 24000],
+                    "channels": 1,
+                },
+                {
+                    "id": "actuator.haptic",
+                    "commands": ["vibrate"],
+                },
+            ],
             subscriptions=subscriptions
             or [
                 {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}},
@@ -793,6 +814,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["sensor_events"] = list(self.sensor_events)
         result["actuator_streams"] = list(self.actuator_streams)
         result["properties"] = dict(self.properties)
+        result["supports"] = list(self.supports)
         result["subscriptions"] = list(self.subscriptions)
         result["task_handlers"] = self.task_handlers.list_task_types()
         result["task_events"] = list(self.task_events)
@@ -830,6 +852,7 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         auth=dict(config.get("auth") or {"mode": "disabled"}),
         device_name=str(config.get("name") or config.get("device_name") or "python-phone"),
         properties=dict(config.get("properties") or {}) or None,
+        supports=list(config.get("supports") or []) or None,
         subscriptions=list(config.get("subscriptions") or []) or None,
         task_handlers=handler_registry,
         task_event_scripts=dict(config.get("task_event_scripts") or {}),

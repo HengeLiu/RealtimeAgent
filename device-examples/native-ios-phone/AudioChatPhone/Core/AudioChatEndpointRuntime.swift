@@ -187,6 +187,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 "sdk_version": "audio-chat-ios-reference-0.1.0",
                 "auth": config.auth.payload,
                 "properties": properties,
+                "supports": config.supports.map { support in support.mapValues { $0.object } },
                 "subscriptions": config.subscriptions.map { $0.payload },
             ],
             version: config.protocolVersion
