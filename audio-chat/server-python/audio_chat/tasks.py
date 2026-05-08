@@ -5,6 +5,7 @@ import inspect
 import asyncio
 import json
 import pkgutil
+import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -168,8 +169,6 @@ class TaskContext:
         1. 事件处理失败时由 TaskEngine 或 bridge 抛出结构化异常。
         """
 
-        if delay_seconds > 0:
-            await asyncio.sleep(delay_seconds)
         event = TaskEvent(
             task_id=self.task_ref.task_id,
             task_type=self.task_ref.task_type,
@@ -181,6 +180,17 @@ class TaskContext:
             requires_agent_decision=requires_agent_decision,
             allow_direct_notify=allow_direct_notify,
         )
+        if delay_seconds > 0:
+            def _fire_delayed_event() -> None:
+                if self.engine is not None:
+                    asyncio.run(self.engine.handle_event(event))
+                elif self.bridge is not None:
+                    self.bridge.handle_event(event)
+
+            timer = threading.Timer(delay_seconds, _fire_delayed_event)
+            timer.daemon = True
+            timer.start()
+            return self.task_ref
         if self.engine is not None:
             return await self.engine.handle_event(event)
         if self.bridge is not None:
@@ -478,7 +488,20 @@ class TaskEventBridge:
                 },
             )
         if event.allow_direct_notify and self.output_service and hasattr(self.output_service, "notify_task_event"):
-            self.output_service.notify_task_event(event)
+            try:
+                self.output_service.notify_task_event(event)
+            except Exception as exc:  # noqa: BLE001
+                if self.recorder and hasattr(self.recorder, "record_system_event"):
+                    self.recorder.record_system_event(
+                        {
+                            "event": "system.error.raised",
+                            "component": "TaskEventBridge",
+                            "message": str(exc),
+                            "task_id": event.task_id,
+                            "task_type": event.task_type,
+                            "task_event_name": event.event_name,
+                        }
+                    )
 
     def convert_event_to_agent_turn(self, event: TaskEvent) -> dict:
         """转换任务事件为 Agent 可读轮次。
@@ -697,6 +720,8 @@ class TaskEngine:
         """
 
         ref = self.query(event.task_id)
+        if ref.state in TERMINAL_TASK_STATES:
+            return ref
         task = self._instances.get(event.task_id)
         self.emit_event(event)
         if task is not None:

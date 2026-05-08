@@ -67,9 +67,9 @@ agent:
     system_prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
     asr_provider: "mock"
     asr_model: "mock-asr"
-    tts_provider: "mock"
-    tts_model: "mock-tts"
-    tts_voice: "mock"
+    tts_provider: "dashscope"
+    tts_model: "cosyvoice-v3-flash"
+    tts_voice: "longanhuan"
     streaming_tts: true
     max_context_messages: 30
     allow_mock_fallback: true
@@ -89,7 +89,8 @@ tasks:
   enabled: false
 
 memory:
-  enabled: false
+  enabled: true
+  store_type: "jsonl"
 
 skill:
   enabled: false

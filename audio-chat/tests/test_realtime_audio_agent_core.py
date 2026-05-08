@@ -450,7 +450,7 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     """测试目标：验证 Qwen Omni 工具结果会回填到同一条 Realtime 会话。
 
     测试方法：绕过网络注入 fake conversation，直接触发 provider tool done 事件。
-    预期结果：conversation 收到 `function_call_output`，并继续创建音频响应。
+    预期结果：conversation 收到 `function_call_output`，并在原 response.done 后继续创建音频响应。
     """
 
     from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
@@ -493,7 +493,11 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert conversation.items[0]["type"] == "function_call_output"
     assert conversation.items[0]["call_id"] == "call-001"
     assert "\"ok\": true" in conversation.items[0]["output"]
+    assert conversation.responses == []
+    assert any(record.get("event") == "omni.tool_followup_response.deferred" for record in records)
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
     assert conversation.responses[0]["instructions"] == "继续回答"
+    assert any(record.get("event") == "omni.tool_followup_response.created" for record in records)
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
 
 
@@ -575,18 +579,23 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
             self.videos = []
             self.commits = 0
             self.responses = []
+            self.operations = []
 
         def create_item(self, item: dict) -> None:
             self.items.append(item)
+            self.operations.append(("item", item["type"]))
 
         def append_video(self, image_base64: str) -> None:
             self.videos.append(image_base64)
+            self.operations.append(("video", image_base64))
 
         def append_audio(self, audio_base64: str) -> None:
             self.audios.append(audio_base64)
+            self.operations.append(("audio", audio_base64))
 
         def commit(self) -> None:
             self.commits += 1
+            self.operations.append(("commit", None))
 
         def create_response(self, **kwargs) -> None:
             self.responses.append(kwargs)
@@ -620,6 +629,13 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     assert conversation.items[0]["type"] == "function_call_output"
     assert conversation.audios == ["AQI=", "AwQ="]
     assert conversation.videos == ["/9hicm93c2VyLXBob3Rv/9k="]
+    assert conversation.operations == [
+        ("item", "function_call_output"),
+        ("audio", "AQI="),
+        ("audio", "AwQ="),
+        ("video", "/9hicm93c2VyLXBob3Rv/9k="),
+        ("commit", None),
+    ]
     assert conversation.commits == 1
     assert conversation.responses == []
     append_record = next(record for record in records if record.get("event") == "omni.capture_photo.image_appended")
@@ -636,7 +652,7 @@ def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
 
     测试方法：模拟 provider 先发送 `function_call_arguments.done`，随后又发送
     同 call_id 的 `output_item.done`。
-    预期结果：工具回调、conversation item 和 create_response 都只发生一次，并记录重复忽略事件。
+    预期结果：工具回调和 conversation item 只发生一次，follow-up response 只创建一次，并记录重复忽略事件。
     """
 
     from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
@@ -690,6 +706,8 @@ def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
 
     assert len(calls) == 1
     assert len(conversation.items) == 1
+    assert len(conversation.responses) == 0
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
     assert len(conversation.responses) == 1
     assert any(record.get("event") == "omni.tool_call.duplicate_ignored" for record in records)
 

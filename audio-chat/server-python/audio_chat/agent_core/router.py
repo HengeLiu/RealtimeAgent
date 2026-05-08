@@ -82,6 +82,7 @@ def _text_kwargs(kwargs: dict) -> dict:
         key: value
         for key, value in kwargs.items()
         if key in {"control_service", "output_service", "recorder", "asr_config", "text_model_config", "tool_gateway"}
+        or key == "memory_service"
     }
 
 

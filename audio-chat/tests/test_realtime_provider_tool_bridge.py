@@ -176,4 +176,6 @@ def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) 
     model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text(encoding="utf-8")
     assert "realtime.tool_result.ready" in model_events
     assert "handled_by_provider_adapter" in model_events
+    assert "tool.progress_message.emitted" not in model_events
+    assert "tool_progress_audio" not in model_events
     assert connection.chunks

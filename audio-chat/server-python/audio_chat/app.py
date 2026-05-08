@@ -24,6 +24,17 @@ from audio_chat.tasks import TaskEvent
 from audio_chat.tools import BUILTIN_TOOLS, EXTENSION_BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
 
 
+MEMORY_AGENT_INSTRUCTIONS = (
+    "长期记忆规则："
+    "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。"
+    "当用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等长期信息时，必须调用 manage_memory 保存或更新，不要只用文字声称已经记住。"
+    "不要保存密码、令牌、验证码、API Key、一次性任务状态、临时情绪或未经确认的推断。"
+    "已保存记忆分为 basic 和 personalized 两层：basic 会在提示词中直接提供全文；personalized 只提供主题。"
+    "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题时，要主动使用 memory_search 工具查询你关注的记忆主题。"
+    "不要编造记忆；查不到就按未知处理。"
+)
+
+
 @dataclass(frozen=True)
 class AudioChatConfig:
     app_name: str = ""
@@ -144,6 +155,7 @@ class AudioChatConfig:
     def from_loaded_config(cls, loaded: AudioChatYamlConfig) -> "AudioChatConfig":
         text = loaded.agent.text
         realtime = loaded.agent.realtime
+        memory_enabled = loaded.memory.enabled
         return cls(
             app_name=getattr(loaded, "app_name", ""),
             server_host=loaded.server.host,
@@ -175,7 +187,7 @@ class AudioChatConfig:
             asr_model=text.asr_model,
             text_model_provider=text.model_provider,
             text_model=text.model,
-            text_system_prompt=text.system_prompt,
+            text_system_prompt=_with_memory_instructions(text.system_prompt, enabled=memory_enabled),
             tts_provider=text.tts_provider,
             tts_model=text.tts_model,
             tts_voice=text.tts_voice,
@@ -201,7 +213,7 @@ class AudioChatConfig:
             realtime_model=realtime.model,
             realtime_turn_detection=realtime.turn_detection,
             realtime_voice=realtime.voice,
-            realtime_instructions=realtime.instructions,
+            realtime_instructions=_with_memory_instructions(realtime.instructions, enabled=memory_enabled),
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
             tools_discover_enabled=loaded.tools.discover.enabled,
             tools_discover_packages=tuple(loaded.tools.discover.packages),
@@ -216,7 +228,7 @@ class AudioChatConfig:
             tasks_max_running_per_user=loaded.tasks.max_running_per_user,
             tasks_store_type=str(loaded.tasks.store.get("type") or "memory"),
             tasks_store_root=loaded.tasks.store.get("root"),
-            memory_enabled=loaded.memory.enabled,
+            memory_enabled=memory_enabled,
             memory_store_type=loaded.memory.store_type,
             memory_path=loaded.memory.path,
             skill_enabled=loaded.skill.enabled,
@@ -254,7 +266,7 @@ class DeviceDialogState:
 
 class AudioChatApp:
     def __init__(self, config: AudioChatConfig | None = None) -> None:
-        self.config = config or AudioChatConfig()
+        self.config = _normalize_runtime_config(config or AudioChatConfig())
         self.recorder = RunRecorder(Path(self.config.runs_root))
         self.control_service = ControlService(
             authenticator=DeviceAuthenticator(
@@ -399,6 +411,7 @@ class AudioChatApp:
                 max_retries=self.config.provider_max_retries,
             ),
             tool_gateway=self.tool_gateway,
+            memory_service=self.memory_service,
         )
         if hasattr(self.agent_core, "bind_tool_gateway"):
             self.agent_core.bind_tool_gateway(self.tool_gateway)
@@ -923,6 +936,31 @@ def _normalize_agent_mode(mode: str) -> str:
     return normalized
 
 
+def _with_memory_instructions(prompt: str, *, enabled: bool) -> str:
+    """在启用 Memory 时给模型补充记忆使用规则。"""
+
+    base = str(prompt or "").strip()
+    if not enabled:
+        return base
+    if "长期记忆规则" in base:
+        return base
+    if not base:
+        return MEMORY_AGENT_INSTRUCTIONS
+    return f"{base}\n\n{MEMORY_AGENT_INSTRUCTIONS}"
+
+
+def _normalize_runtime_config(config: AudioChatConfig) -> AudioChatConfig:
+    """补齐直接构造 AudioChatConfig 时也应生效的派生配置。"""
+
+    if not config.memory_enabled:
+        return config
+    return replace(
+        config,
+        realtime_instructions=_with_memory_instructions(config.realtime_instructions, enabled=True),
+        text_system_prompt=_with_memory_instructions(config.text_system_prompt, enabled=True),
+    )
+
+
 def _build_task_store(config: AudioChatConfig) -> TaskStore:
     """按配置创建 TaskStore。
 
@@ -945,7 +983,7 @@ def _memory_root(config: AudioChatConfig) -> str | Path:
     """解析用户级 memory.json 根目录。
 
     主要逻辑：旧默认 `runs/audio-chat/memory` 会把记忆写到独立目录；新版默认写到
-    `runs/<app_name>/<user_id>/memory.json`，只有显式配置时才使用配置目录。
+    `runs_root/<user_id>/memory.json`，只有显式配置时才使用配置目录。
     参数：`config` 为应用配置。
     返回值：MemoryStore 根目录。
     异常情况：无。

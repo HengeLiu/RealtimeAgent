@@ -4,6 +4,7 @@ import asyncio
 import ast
 import json
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -42,6 +43,9 @@ def _build_app(tmp_path, monkeypatch) -> AudioChatApp:
             runs_root=str(tmp_path / "runs"),
             asset_root=str(tmp_path / "runs" / "assets"),
             memory_path=str(tmp_path / "runs" / "memory"),
+            tts_provider="mock",
+            tts_model="mock-tts",
+            tts_voice="mock",
         )
     )
 
@@ -197,6 +201,43 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
     assert cancelled.data["state"] == "cancelled"
     assert due.data["state"] == "completed"
     assert endpoint.output_chunks
+
+
+def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, monkeypatch) -> None:
+    """测试目标：计时器创建应立即返回 running，并把到点事件按秒数延后触发。
+
+    测试方法：替换 `threading.Timer` 为记录型 fake，不主动触发回调。
+    预期结果：创建 60 秒计时器不会立刻 completed，且调度延迟为 60 秒。
+    """
+
+    scheduled: list[dict] = []
+
+    class FakeTimer:
+        def __init__(self, interval, function) -> None:
+            self.interval = interval
+            self.function = function
+            self.daemon = False
+
+        def start(self) -> None:
+            scheduled.append({"interval": self.interval, "function": self.function, "daemon": self.daemon})
+
+    monkeypatch.setattr(threading, "Timer", FakeTimer)
+    app = _build_app(tmp_path, monkeypatch)
+    _register_playback(app)
+    session_id = app.active_session_id("user-for-blind")
+
+    created = asyncio.run(
+        app.tool_gateway.call(
+            name="timer",
+            user_id="user-for-blind",
+            session_id=session_id,
+            input_data={"action": "create", "seconds": 60, "auto_fire": True},
+        )
+    )
+
+    assert created.ok is True
+    assert created.data["state"] == "running"
+    assert scheduled and scheduled[0]["interval"] == 60
 
 
 def test_for_blind_examples_use_public_api_and_no_hidden_device_routes() -> None:

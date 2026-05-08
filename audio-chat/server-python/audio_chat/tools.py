@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 from audio_chat.asset import ArtifactRef, AssetRef
 from audio_chat.control import PublishResult
 from audio_chat.errors import AudioChatError, ErrorCode
+from audio_chat.memory import memory_record_to_public_dict
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 
 
@@ -1588,66 +1589,95 @@ class CancelTaskTool(BaseTool):
 
 
 class MemorySearchTool(BaseTool):
-    """搜索长期记忆的内置 Tool。"""
+    """按主题读取长期记忆详情的内置 Tool。"""
 
     class Input(BaseModel):
-        query: str = Field(description="要搜索的记忆关键词或问题。")
-        limit: int = Field(default=5, ge=1, le=20, description="最多返回的记忆条数。")
+        topic: str = Field(
+            default="",
+            description="要读取详情的单个记忆主题；优先使用系统提示中列出的记忆主题，或用户明确提到的记忆主题。",
+        )
+        topics: list[str] = Field(
+            default_factory=list,
+            description="要一次读取详情的多个记忆主题；只填写与当前回答直接相关的主题。",
+        )
 
     spec = ToolSpec(
         name="memory_search",
-        description="当回答需要读取已保存的长期记忆时调用。本工具只查询记忆，不新增、更新或删除记忆。",
+        description=(
+            "当回答用户问题需要读取已保存的长期记忆详情时调用。"
+            "本工具只查询记忆，不用于新增、更新或删除记忆；维护记忆请使用 manage_memory。"
+        ),
         input_model=Input,
         capability_type="tool",
         tags=["memory"],
         progress_message=(
-            "我查一下记忆。",
-            "稍等，我看看之前记了什么。",
+            "我先查一下记忆。",
+            "我看看之前记了什么。",
+            "稍等，我翻一下记忆。",
         ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.memory is None:
             return ToolResult.failed(ToolError("memory service is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        records = context.memory.search(
-            user_id=context.user_id,
-            query=str(input_data.get("query") or ""),
-            limit=int(input_data.get("limit") or 5),
-        )
+        topics = list(input_data.get("topics") or [])
+        topic = str(input_data.get("topic") or "").strip()
+        if topic:
+            topics.insert(0, topic)
+        records = context.memory.search_by_topics(user_id=context.user_id, topics=topics)
+        memories = [memory_record_to_public_dict(record) for record in records]
+        feedback = "已读取记忆详情" if memories else "没有找到匹配的记忆"
         return ToolResult.success(
-            data=[asdict(record) for record in records],
-            message=f"{len(records)} memory records matched",
+            data={"memories": memories, "feedback": feedback},
+            message=feedback,
         )
 
 
 class ManageMemoryTool(BaseTool):
-    """写入长期记忆的内置 Tool。"""
+    """管理长期记忆的内置 Tool。"""
 
     class Input(BaseModel):
-        content: str = Field(description="要写入或更新的长期记忆内容，应是稳定偏好、身份信息或长期事实。")
-        metadata: dict = Field(default_factory=dict, description="可选结构化元数据。")
+        memory_context: str = Field(
+            description=(
+                "请填写本轮对话中与长期记忆维护有关的信息，可以是用户原话，或者抽取出来需要记住或更新的事实、"
+                "用户要求忘记或删除的内容，以及必要的上下文。"
+            ),
+        )
 
     spec = ToolSpec(
         name="manage_memory",
-        description="当用户要求记住、更新、忘记信息，或明确提供稳定偏好、身份信息、长期事实时调用。不要保存密码、令牌等敏感信息。",
+        description=(
+            "当用户要求记住、更新、忘记或删除信息，或自然提供了姓名、偏好、习惯等值得长期保存的信息时调用。"
+            "本工具只用于维护记忆，不用于查询记忆；查询已有记忆请使用 memory_search。"
+        ),
         input_model=Input,
         capability_type="tool",
         tags=["memory"],
         progress_message=(
-            "好，我帮你记一下。",
-            "明白，我先记录下来。",
+            "嗯，我先记一下。",
+            "好，我把这个记下来。",
+            "明白，我先帮你记录一下。",
         ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.memory is None:
             return ToolResult.failed(ToolError("memory service is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        record = context.memory.write(
+        memory_context = str(
+            input_data.get("memory_context")
+            or input_data.get("content")
+            or input_data.get("query")
+            or ""
+        ).strip()
+        if not memory_context:
+            return ToolResult.failed(ToolError("memory_context is required", code=ErrorCode.INVALID_ARGUMENT))
+        result = context.memory.manage(
             user_id=context.user_id,
-            content=str(input_data.get("content") or ""),
-            metadata=dict(input_data.get("metadata") or {}),
+            memory_context=memory_context,
+            metadata={"session_id": context.session_id},
         )
-        return ToolResult.success(data=asdict(record), message="memory written")
+        feedback = str(result.get("feedback") or "记忆已处理")
+        return ToolResult.success(data=result, message=feedback)
 
 
 class ReadSkillTool(BaseTool):

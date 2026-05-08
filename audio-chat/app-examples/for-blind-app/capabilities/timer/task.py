@@ -44,11 +44,11 @@ class TimerTask(BaseTask):
         if auto_fire:
             await context.schedule_event(
                 "timer.due",
-                payload={"seconds": seconds},
-                delay_seconds=0,
+                payload={"seconds": seconds, "message": f"{seconds} 秒计时器到点了"},
+                delay_seconds=seconds,
                 priority="high",
-                requires_agent_decision=True,
-                allow_direct_notify=False,
+                requires_agent_decision=False,
+                allow_direct_notify=True,
             )
 
     async def on_event(self, context: TaskContext, event: TaskEvent) -> None:
@@ -57,8 +57,6 @@ class TimerTask(BaseTask):
         if event.event_name != "timer.due":
             return
         seconds = int(event.payload.get("seconds") or 0)
-        if context.devices is not None:
-            context.devices.notify(f"{seconds} 秒计时器到点了", priority="high")
         await context.complete({"seconds": seconds, "notified": True}, summary="计时器到点")
 
     async def on_cancel(self, context: TaskContext) -> None:

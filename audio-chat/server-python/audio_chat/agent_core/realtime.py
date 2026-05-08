@@ -92,6 +92,7 @@ class QwenOmniRealtimeAdapter:
         self._callbacks: RealtimeProviderCallbacks | None = None
         self._output_modalities: list[Any] = []
         self._completed_tool_call_ids: set[str] = set()
+        self._pending_tool_followup_response: dict[str, Any] | None = None
 
     def open(self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks) -> None:
         """建立 Omni Realtime 会话。
@@ -266,6 +267,7 @@ class QwenOmniRealtimeAdapter:
             self._conversation = None
             self._output_modalities = []
             self._completed_tool_call_ids.clear()
+            self._pending_tool_followup_response = None
 
     def _handle_provider_event(self, message: dict[str, Any]) -> None:
         callbacks = self._callbacks
@@ -304,6 +306,10 @@ class QwenOmniRealtimeAdapter:
         if event_type == "response.audio.done":
             callbacks.provider_event({"event": "omni.response.audio.done", "provider": "qwen"})
             callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type})
+            return
+        if event_type == "response.done":
+            callbacks.provider_event(_summarize_omni_event(message))
+            self._create_pending_tool_followup_response()
             return
         if event_type in {"response.function_call_arguments.delta", "response.tool_call_arguments.delta"}:
             callbacks.provider_event(_summarize_omni_event(message))
@@ -489,13 +495,56 @@ class QwenOmniRealtimeAdapter:
                     },
                 )
             if create_followup_response:
-                self._conversation.create_response(
-                    instructions=response_instructions,
-                    output_modalities=self._output_modalities or None,
-                )
+                self._pending_tool_followup_response = {
+                    "instructions": response_instructions,
+                    "output_modalities": self._output_modalities or None,
+                    "tool_call_id": call_id,
+                    "tool_name": result.get("name"),
+                }
+                if self._callbacks:
+                    self._callbacks.provider_event(
+                        {
+                            "event": "omni.tool_followup_response.deferred",
+                            "provider": "qwen",
+                            "tool_call_id": call_id,
+                            "tool_name": result.get("name"),
+                        }
+                    )
         except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.tool_result.inject.failed", "call_id": call_id})
+
+    def _create_pending_tool_followup_response(self) -> None:
+        """在原始 response 完成后创建工具结果后的 follow-up response。"""
+
+        if self._conversation is None or self._pending_tool_followup_response is None:
+            return
+        pending = self._pending_tool_followup_response
+        self._pending_tool_followup_response = None
+        try:
+            self._conversation.create_response(
+                instructions=pending.get("instructions"),
+                output_modalities=pending.get("output_modalities"),
+            )
+            if self._callbacks:
+                self._callbacks.provider_event(
+                    {
+                        "event": "omni.tool_followup_response.created",
+                        "provider": "qwen",
+                        "tool_call_id": pending.get("tool_call_id"),
+                        "tool_name": pending.get("tool_name"),
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
+            if self._callbacks:
+                self._callbacks.error(
+                    str(exc),
+                    {
+                        "event": "omni.tool_followup_response.create.failed",
+                        "tool_call_id": pending.get("tool_call_id"),
+                        "tool_name": pending.get("tool_name"),
+                    },
+                )
 
 
 def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | None:
@@ -788,12 +837,14 @@ class RealtimeAudioAgentCore:
         realtime_config: RealtimeProviderConfig | None = None,
         provider_factory: Callable[[RealtimeProviderConfig], RealtimeProviderAdapter] | None = None,
         tool_gateway: ToolGateway | None = None,
+        memory_service: Any = None,
         **_: Any,
     ) -> None:
         self.output_service = output_service
         self.recorder = recorder
         self.control_service = control_service
         self.realtime_config = realtime_config or RealtimeProviderConfig()
+        self.memory_service = memory_service
         self.provider_factory = provider_factory or self._default_provider_factory
         self.output_adapter = RealtimeOutputAdapter(output_service=output_service, recorder=recorder)
         self.tool_bridge = RealtimeToolBridge(tool_gateway=tool_gateway, recorder=recorder)
@@ -826,7 +877,8 @@ class RealtimeAudioAgentCore:
             existing[1].close(user_id=user_id, reason="session_replaced")
         self._failed_sessions.discard(session_id)
         tools = self._realtime_tool_schemas()
-        session_config = replace(self.realtime_config, tools=tools)
+        instructions = self._build_instructions(user_id=user_id)
+        session_config = replace(self.realtime_config, tools=tools, instructions=instructions)
         self.recorder.record_model_request(
             session_id,
             self._build_model_request(user_id=user_id, session_id=session_id, config=session_config, tools=tools),
@@ -1095,13 +1147,6 @@ class RealtimeAudioAgentCore:
             arguments=record.get("arguments"),
             result=result,
         )
-        if session_id not in self._sessions_with_provider_output and self.tool_bridge.tool_gateway is not None:
-            self.tool_bridge.tool_gateway.emit_progress_once(
-                name=str(result.get("name") or record.get("name") or ""),
-                user_id=user_id,
-                session_id=session_id,
-                output_service=self.output_service,
-            )
         self.recorder.record_agent_event(
             session_id,
             {
@@ -1182,6 +1227,27 @@ class RealtimeAudioAgentCore:
             "user_id": user_id,
             "session_id": session_id,
         }
+
+    def _build_instructions(self, *, user_id: str) -> str:
+        """构造当前 realtime 会话 instructions。
+
+        主要逻辑：在静态 Omni 指令后追加长期记忆片段；基本信息直接注入，个性化信息只注入主题。
+        参数：`user_id` 为当前用户编号。
+        返回值：发送给 Realtime provider 的 instructions。
+        异常情况：memory 未启用或读取失败时只返回基础指令。
+        """
+
+        base = self.realtime_config.instructions
+        memory = self.memory_service
+        if memory is None or not getattr(memory, "enabled", False):
+            return base
+        try:
+            fragment = memory.build_prompt_fragment(user_id=user_id)
+        except Exception:
+            return base
+        if not fragment:
+            return base
+        return f"{base}\n\n{fragment}"
 
     def _default_provider_factory(self, config: RealtimeProviderConfig) -> RealtimeProviderAdapter:
         if config.provider == "mock":

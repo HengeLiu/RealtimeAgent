@@ -77,6 +77,7 @@ class TextAgentCore:
         asr_config: AsrProviderConfig | None = None,
         text_model_config: TextModelProviderConfig | None = None,
         tool_gateway: ToolGateway | None = None,
+        memory_service: Any = None,
     ) -> None:
         self.control_service = control_service
         self.output_service = output_service
@@ -92,6 +93,7 @@ class TextAgentCore:
         self._cancelled_users: set[str] = set()
         self._event_buffer = AgentEventBuffer()
         self.tool_gateway = tool_gateway
+        self.memory_service = memory_service
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 TextAgentCore 使用的 ToolGateway。
@@ -192,7 +194,10 @@ class TextAgentCore:
         messages: list[dict[str, Any]] = [{"role": "user", "content": transcript}]
         assistant_parts: list[str] = []
         tools = self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
-        system_prompt = str(getattr(self.text_model, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT))
+        system_prompt = self._build_system_prompt(user_id=user_id)
+        previous_system_prompt = getattr(self.text_model, "system_prompt", None)
+        if previous_system_prompt is not None:
+            setattr(self.text_model, "system_prompt", system_prompt)
         self.recorder.record_model_request(
             session_id,
             {
@@ -207,75 +212,79 @@ class TextAgentCore:
                 "tool_count": len(tools),
             },
         )
-        for _ in range(4):
-            tool_calls: list[dict[str, Any]] = []
-            model_output_started = False
-            first_output_was_tool_call = False
-            for item in self._stream_model(messages=messages, transcript=transcript, tools=tools):
-                if user_id in self._cancelled_users:
-                    return "".join(assistant_parts)
-                if isinstance(item, dict) and item.get("type") == "tool_call":
+        try:
+            for _ in range(4):
+                tool_calls: list[dict[str, Any]] = []
+                model_output_started = False
+                first_output_was_tool_call = False
+                for item in self._stream_model(messages=messages, transcript=transcript, tools=tools):
+                    if user_id in self._cancelled_users:
+                        return "".join(assistant_parts)
+                    if isinstance(item, dict) and item.get("type") == "tool_call":
+                        if not model_output_started:
+                            model_output_started = True
+                            first_output_was_tool_call = True
+                        tool_calls.append(item)
+                        self._record_event(
+                            "tool_call.delta",
+                            user_id=user_id,
+                            session_id=session_id,
+                            tool_call_id=str(item.get("id") or ""),
+                            tool_name=str(item.get("name") or ""),
+                        )
+                        continue
+                    text_delta = self._extract_text_delta(item)
+                    if not text_delta:
+                        continue
                     if not model_output_started:
                         model_output_started = True
-                        first_output_was_tool_call = True
-                    tool_calls.append(item)
-                    self._record_event(
-                        "tool_call.delta",
+                    assistant_parts.append(text_delta)
+                    self.output_adapter.emit_text_delta(
                         user_id=user_id,
                         session_id=session_id,
-                        tool_call_id=str(item.get("id") or ""),
-                        tool_name=str(item.get("name") or ""),
+                        text=text_delta,
+                        final=False,
                     )
-                    continue
-                text_delta = self._extract_text_delta(item)
-                if not text_delta:
-                    continue
-                if not model_output_started:
-                    model_output_started = True
-                assistant_parts.append(text_delta)
-                self.output_adapter.emit_text_delta(
-                    user_id=user_id,
-                    session_id=session_id,
-                    text=text_delta,
-                    final=False,
-                )
-            if not tool_calls or self.tool_gateway is None:
-                break
-            messages.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
-            for tool_call in tool_calls:
-                if first_output_was_tool_call:
-                    self.tool_gateway.emit_progress_once(
+                if not tool_calls or self.tool_gateway is None:
+                    break
+                messages.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
+                for tool_call in tool_calls:
+                    if first_output_was_tool_call:
+                        self.tool_gateway.emit_progress_once(
+                            name=str(tool_call.get("name") or ""),
+                            user_id=user_id,
+                            session_id=session_id,
+                            output_service=self.output_service,
+                        )
+                    result = self._call_tool(
                         name=str(tool_call.get("name") or ""),
                         user_id=user_id,
                         session_id=session_id,
-                        output_service=self.output_service,
+                        input_data=dict(tool_call.get("arguments") or {}),
                     )
-                result = self._call_tool(
-                    name=str(tool_call.get("name") or ""),
-                    user_id=user_id,
-                    session_id=session_id,
-                    input_data=dict(tool_call.get("arguments") or {}),
-                )
-                result_dict = self._tool_result_to_dict(result)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id"),
-                        "name": tool_call.get("name"),
-                        "content": result_dict,
-                    }
-                )
-                self.control_service.append_message(
-                    user_id,
-                    {
-                        "session_id": session_id,
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id"),
-                        "name": tool_call.get("name"),
-                        "content": result_dict,
-                        "event": "tool.result",
-                    },
-                )
+                    result_dict = self._tool_result_to_dict(result)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.get("id"),
+                            "name": tool_call.get("name"),
+                            "content": result_dict,
+                        }
+                    )
+                    self.control_service.append_message(
+                        user_id,
+                        {
+                            "session_id": session_id,
+                            "role": "tool",
+                            "tool_call_id": tool_call.get("id"),
+                            "name": tool_call.get("name"),
+                            "content": result_dict,
+                            "event": "tool.result",
+                        },
+                    )
+        finally:
+            if previous_system_prompt is not None:
+                setattr(self.text_model, "system_prompt", previous_system_prompt)
         return "".join(assistant_parts)
 
     def _stream_model(self, *, messages: list[dict[str, Any]], transcript: str, tools: list[dict]) -> Any:
@@ -283,6 +292,27 @@ class TextAgentCore:
         if callable(stream_messages):
             return stream_messages(messages=messages, tools=tools)
         return self.text_model.stream_text(transcript)
+
+    def _build_system_prompt(self, *, user_id: str) -> str:
+        """构造当前轮文本模型 system prompt。
+
+        主要逻辑：在静态提示词后追加长期记忆片段；基本信息直接注入，个性化信息只注入主题。
+        参数：`user_id` 为当前用户编号。
+        返回值：发送给文本模型的 system prompt。
+        异常情况：memory 未启用或读取失败时只返回基础提示词。
+        """
+
+        base = str(getattr(self.text_model, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT))
+        memory = self.memory_service
+        if memory is None or not getattr(memory, "enabled", False):
+            return base
+        try:
+            fragment = memory.build_prompt_fragment(user_id=user_id)
+        except Exception:
+            return base
+        if not fragment:
+            return base
+        return f"{base}\n\n{fragment}"
 
     @staticmethod
     def _extract_text_delta(item: Any) -> str:
