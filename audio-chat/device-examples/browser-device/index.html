@@ -80,23 +80,20 @@
       <h2>视觉和文件输入</h2>
       <div class="row">
         <div>
-          <label for="rgbSourceMode">sensor.rgb 数据源</label>
+          <label for="rgbSourceMode">视觉输入模式</label>
           <select id="rgbSourceMode">
-            <option value="live_camera">真实摄像头</option>
-            <option value="selected_image">预选图片</option>
-            <option value="selected_video_current_frame">预选视频当前帧</option>
-            <option value="manual_confirm">收到请求时手动选择</option>
-            <option value="auto_fail">模拟失败</option>
+            <option value="image_upload">上传图片/多张图片</option>
+            <option value="video_upload">上传视频</option>
           </select>
         </div>
-        <div id="imageFileField"><label for="imageFile">图片</label><input id="imageFile" type="file" accept="image/*" /></div>
+        <div id="imageFileField"><label for="imageFile">图片</label><input id="imageFile" type="file" accept="image/*" multiple /></div>
         <div id="videoFileField"><label for="videoFile">视频</label><input id="videoFile" type="file" accept="video/*" /></div>
         <div id="videoFpsField"><label for="videoFps">视频帧率</label><input id="videoFps" type="number" min="0.2" step="0.2" value="1" /></div>
-        <button id="sendPhoto" class="secondary" disabled>手动上传图片</button>
+        <button id="sendPhoto" class="secondary" disabled>上传图片</button>
         <button id="startVideo" class="secondary" disabled>开始 RGB stream</button>
         <button id="stopVideo" class="secondary" disabled>停止 RGB stream</button>
       </div>
-      <p class="hint">视觉 stream 与麦克风 stream 相互独立；拍照或视频上传不会关闭正在进行的 sensor.mic 长连接。</p>
+      <p class="hint">图片会作为一段 sensor.rgb stream 上传；视频会按配置帧率连续上传。视觉 stream 与麦克风 stream 相互独立。</p>
     </section>
 
     <section class="panel">
@@ -170,7 +167,6 @@
     let streamWs = null;
     let audioContext = null;
     let micStream = null;
-    let cameraStream = null;
     let micSource = null;
     let processor = null;
     let sessionId = null;
@@ -289,13 +285,14 @@
       setFieldVisible("silenceMsField", offlineAudio);
 
       const rgbMode = rgbSourceModeSelect.value;
-      setFieldVisible("imageFileField", rgbMode === "selected_image" || rgbMode === "manual_confirm");
-      setFieldVisible("videoFileField", rgbMode === "selected_video_current_frame");
-      const continuousRgb = rgbMode === "live_camera" || rgbMode === "selected_video_current_frame";
-      setFieldVisible("videoFpsField", continuousRgb);
-      sendPhotoButton.textContent = rgbMode === "selected_video_current_frame" ? "上传当前视频帧" : "手动上传图片";
-      startVideoButton.classList.toggle("hidden", !continuousRgb);
-      stopVideoButton.classList.toggle("hidden", !continuousRgb);
+      const imageMode = rgbMode === "image_upload";
+      const videoMode = rgbMode === "video_upload";
+      setFieldVisible("imageFileField", imageMode);
+      setFieldVisible("videoFileField", videoMode);
+      setFieldVisible("videoFpsField", videoMode);
+      sendPhotoButton.classList.toggle("hidden", !imageMode);
+      startVideoButton.classList.toggle("hidden", !videoMode);
+      stopVideoButton.classList.toggle("hidden", !videoMode);
     }
 
     function defaultServerUrl() {
@@ -706,49 +703,58 @@
         await startContinuousRgb(item);
         return;
       }
-      await captureRgbAsset(item);
+      await uploadSelectedImages(item);
     }
 
-    async function captureRgbAsset(item = null) {
+    async function uploadSelectedImages(item = null) {
       const requestId = item && item.payload && item.payload.request_id;
       const rgbStreamId = newId("stream_rgb");
       const activeSession = (item && item.session_id) || sessionId || newId("sess");
       try {
         await ensureStreamSocketOpen();
-        const image = await resolveRgbFrame();
+        const images = await readSelectedImageFrames();
         sendEvent(event("stream.input.opened", {
           stream_type: "sensor.rgb",
           format: {codec: "jpeg", sample_rate: 1, channels: 1, chunk_ms: 1},
           request_id: requestId,
+          image_count: images.length,
         }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
         setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "open", seq: 0, bytes_sent: 0, opened_at: Date.now()});
         await delay(120);
-        streamWs.send(encodeStreamChunk({
-          user_id: document.getElementById("userId").value,
-          session_id: activeSession,
-          stream_id: rgbStreamId,
-          stream_type: "sensor.rgb",
-          seq: 0,
-          payload: image.bytes,
-          codec: "jpeg",
-          sample_rate: 1,
-          channels: 1,
-          duration_ms: 1,
-          final: true,
-          metadata: {
-            request_id: requestId,
-            width: image.width,
-            height: image.height,
-            reason: (item && item.payload && item.payload.reason) || "capture_photo",
-          },
-        }));
+        let bytesSent = 0;
+        for (let index = 0; index < images.length; index += 1) {
+          const image = images[index];
+          streamWs.send(encodeStreamChunk({
+            user_id: document.getElementById("userId").value,
+            session_id: activeSession,
+            stream_id: rgbStreamId,
+            stream_type: "sensor.rgb",
+            seq: index,
+            payload: image.bytes,
+            codec: "jpeg",
+            sample_rate: 1,
+            channels: 1,
+            duration_ms: 1,
+            final: index === images.length - 1,
+            metadata: {
+              request_id: requestId,
+              width: image.width,
+              height: image.height,
+              image_index: index,
+              image_count: images.length,
+              reason: (item && item.payload && item.payload.reason) || "upload_images",
+            },
+          }));
+          bytesSent += image.bytes.byteLength;
+        }
         sendEvent(event("stream.input.closed", {
           stream_type: "sensor.rgb",
-          reason: "single_frame_uploaded",
+          reason: "images_uploaded",
           request_id: requestId,
+          image_count: images.length,
         }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
-        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: 1, bytes_sent: image.bytes.byteLength, close_reason: "single_frame_uploaded"});
-        log(`send sensor.rgb jpeg bytes=${image.bytes.byteLength} request_id=${requestId || "-"}`);
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: images.length, bytes_sent: bytesSent, close_reason: "images_uploaded"});
+        log(`send sensor.rgb images count=${images.length} bytes=${bytesSent} request_id=${requestId || "-"}`);
       } catch (err) {
         log(`capture sensor.rgb failed: ${err.message}`);
         sendEvent(event("stream.input.closed", {
@@ -757,32 +763,19 @@
           error: err.message,
           request_id: requestId,
         }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
-      } finally {
-        if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
-        cameraStream = null;
       }
     }
 
-    async function resolveRgbFrame() {
-      const mode = rgbSourceModeSelect.value;
-      if (mode === "auto_fail") throw new Error("browser-device configured auto_fail");
-      if (mode === "selected_image") return readSelectedImageFrame();
-      if (mode === "selected_video_current_frame") return captureVideoFileFrame();
-      if (mode === "manual_confirm") {
-        const ok = window.confirm("server 请求 sensor.rgb，是否使用当前选择的数据源上传？");
-        if (!ok) throw new Error("manual capture cancelled");
-        const imageFile = document.getElementById("imageFile").files[0];
-        if (imageFile) return readSelectedImageFrame();
+    async function readSelectedImageFrames() {
+      const files = Array.from(document.getElementById("imageFile").files || []);
+      if (!files.length) throw new Error("请选择图片文件");
+      const images = [];
+      for (const file of files) {
+        const blob = file.type === "image/jpeg" ? file : await imageFileToJpegBlob(file);
+        const size = await readImageSize(blob);
+        images.push({bytes: new Uint8Array(await blob.arrayBuffer()), width: size.width, height: size.height});
       }
-      return captureLiveCameraFrame();
-    }
-
-    async function readSelectedImageFrame() {
-      const file = document.getElementById("imageFile").files[0];
-      if (!file) throw new Error("请选择图片文件");
-      const blob = file.type === "image/jpeg" ? file : await imageFileToJpegBlob(file);
-      const size = await readImageSize(blob);
-      return {bytes: new Uint8Array(await blob.arrayBuffer()), width: size.width, height: size.height};
+      return images;
     }
 
     async function imageFileToJpegBlob(file) {
@@ -798,19 +791,6 @@
     async function readImageSize(blob) {
       const bitmap = await createImageBitmap(blob);
       return {width: bitmap.width, height: bitmap.height};
-    }
-
-    async function captureLiveCameraFrame() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("browser camera API unavailable");
-      }
-      cameraStream = await navigator.mediaDevices.getUserMedia({
-        video: {facingMode: "environment", width: {ideal: RGB_CAPTURE_MAX_WIDTH}, height: {ideal: RGB_CAPTURE_MAX_HEIGHT}},
-        audio: false,
-      });
-      const track = cameraStream.getVideoTracks()[0];
-      log(`camera settings ${JSON.stringify(track.getSettings())}`);
-      return await captureJpegFrame(cameraStream);
     }
 
     async function ensureVideoElement() {
@@ -858,7 +838,7 @@
       const fps = Math.max(0.2, Number(document.getElementById("videoFps").value || 1));
       videoTimer = setInterval(async () => {
         try {
-          const image = await resolveRgbFrame();
+          const image = await captureVideoFileFrame();
           streamWs.send(encodeStreamChunk({
             user_id: document.getElementById("userId").value,
             session_id: activeSession,
@@ -891,37 +871,6 @@
       setStreamState(rgbContinuousStreamId, {stream_type: "sensor.rgb", state: "closed", close_reason: reason});
       rgbContinuousStreamId = null;
       stopVideoButton.disabled = true;
-    }
-
-    async function captureJpegFrame(stream) {
-      const video = document.createElement("video");
-      video.muted = true;
-      video.playsInline = true;
-      video.srcObject = stream;
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("camera frame timeout")), 3000);
-        video.onloadedmetadata = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
-      await video.play();
-      await delay(150);
-      const settings = stream.getVideoTracks()[0].getSettings();
-      const sourceWidth = video.videoWidth || settings.width || 640;
-      const sourceHeight = video.videoHeight || settings.height || 480;
-      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
-      const width = Math.max(1, Math.round(sourceWidth * scale));
-      const height = Math.max(1, Math.round(sourceHeight * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, width, height);
-      video.pause();
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", RGB_JPEG_QUALITY));
-      if (!blob) throw new Error("jpeg encode failed");
-      return {bytes: new Uint8Array(await blob.arrayBuffer()), width, height};
     }
 
     async function openAudioInput() {
@@ -1195,7 +1144,7 @@
       stopMic().catch((err) => log(`stop audio failed: ${err.message}`));
     };
     sendPhotoButton.onclick = () => {
-      captureRgbAsset(null).catch((err) => log(`manual photo failed: ${err.message}`));
+      uploadSelectedImages(null).catch((err) => log(`upload images failed: ${err.message}`));
     };
     startVideoButton.onclick = () => {
       startContinuousRgb(null).catch((err) => log(`start video stream failed: ${err.message}`));

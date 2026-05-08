@@ -73,7 +73,14 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert 'rgbSourceModeSelect.addEventListener("change", updateInputModePanels)' in html
     assert 'setFieldVisible("audioFileField", offlineAudio)' in html
     assert 'id="afterFile"' not in html
-    assert 'const continuousRgb = rgbMode === "live_camera" || rgbMode === "selected_video_current_frame"' in html
+    assert 'value="image_upload"' in html
+    assert 'value="video_upload"' in html
+    assert 'multiple' in html
+    assert 'setFieldVisible("imageFileField", imageMode)' in html
+    assert 'setFieldVisible("videoFileField", videoMode)' in html
+    assert 'setFieldVisible("videoFpsField", videoMode)' in html
+    assert "selected_video_current_frame" not in html
+    assert "manual_confirm" not in html
 
 
 def test_browser_device_has_right_side_event_log_panel() -> None:
@@ -162,7 +169,8 @@ def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
 
     assert "streamStates = new Map()" in html
     assert "setStreamState" in html
-    assert "captureRgbAsset" in html
+    assert "uploadSelectedImages" in html
+    assert "readSelectedImageFrames" in html
     assert "startContinuousRgb" in html
     assert "stopContinuousRgb" in html
     assert "stream_type: \"sensor.rgb\"" in html
