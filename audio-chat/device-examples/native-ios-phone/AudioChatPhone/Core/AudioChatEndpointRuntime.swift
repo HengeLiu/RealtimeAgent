@@ -54,7 +54,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
 
     /// 手动上传一帧 `sensor.rgb` 测试图片。
     func uploadTestRGBFrame(reason: String) async {
-        let sessionID = AudioChatIDs.make(prefix: "sess_ios")
+        let sessionID = config.deviceID
         await uploadRGBFrame(sessionID: sessionID, requestID: nil, reason: reason)
     }
 
@@ -62,7 +62,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
     func uploadTestMicPCM() async {
         do {
             try await ensureStreamSocket()
-            let sessionID = AudioChatIDs.make(prefix: "sess_ios")
+            let sessionID = config.deviceID
             let streamID = AudioChatIDs.make(prefix: "stream_mic")
             try await openInputStream(streamType: "sensor.mic", sessionID: sessionID, streamID: streamID, payload: [
                 "stream_type": "sensor.mic",
@@ -198,7 +198,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
             )
         case "stream.control.configure.requested" where event.streamType == "sensor.rgb":
             await uploadRGBFrame(
-                sessionID: event.sessionID ?? AudioChatIDs.make(prefix: "sess_ios"),
+                sessionID: event.sessionID ?? config.deviceID,
                 requestID: event.payload["request_id"] as? String,
                 reason: "server_requested"
             )
@@ -241,7 +241,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
             payload: ["task_id": taskID, "task_type": taskType, "state": "started"]
         )
         await uploadRGBFrame(
-            sessionID: event.payload["session_id"] as? String ?? event.sessionID ?? AudioChatIDs.make(prefix: "sess_ios_task"),
+            sessionID: config.deviceID,
             requestID: taskID,
             reason: "phone_task"
         )
@@ -269,7 +269,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
             userID: config.userID,
             producerID: config.deviceID,
             payload: payload,
-            sessionID: command.payload["session_id"] as? String ?? command.sessionID,
+            sessionID: config.deviceID,
             version: config.protocolVersion
         )
         try await sendControlEvent(event)

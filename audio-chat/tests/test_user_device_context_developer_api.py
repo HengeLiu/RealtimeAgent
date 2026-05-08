@@ -96,11 +96,19 @@ def test_capture_photo_uses_sensor_rgb_asset_stream(tmp_path) -> None:
 def test_capture_photo_timeout_is_visible_in_session_asset_events(tmp_path) -> None:
     """测试目标：验证抓拍超时时能在当前会话产物中看到明确诊断。
 
-    测试方法：不注册任何 `sensor.rgb` 设备，直接调用 `capture_photo()` 并等待短超时。
+    测试方法：只注册一台不订阅 `sensor.rgb` 的设备，直接调用 `capture_photo()` 并等待短超时。
     预期结果：返回 None，`assets.jsonl` 包含 request_id、delivered_count=0 和超时事件。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    endpoint = PassiveEndpoint("dev-no-camera")
+    _register_device(
+        app,
+        endpoint=endpoint,
+        user_id="user-photo-timeout",
+        device_id="dev-no-camera",
+        subscriptions=[],
+    )
     session_id = app.active_session_id("user-photo-timeout")
 
     asset = UserDeviceContext(user_id="user-photo-timeout", app=app).capture_photo(

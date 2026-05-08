@@ -12,7 +12,7 @@ from aiohttp import WSMsgType, web
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.app_loader import load_app_config, load_config_as_app
 from audio_chat.observability import LogContext, configure_console_logging, get_logger, log_debug, log_error, log_info, log_warning
-from audio_chat.protocol import Event, StreamChunkCodec
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunkCodec
 from audio_chat.stream.service import StreamNotOpenError
 
 AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
@@ -245,6 +245,7 @@ class AudioChatHttpServer:
                 event: Event | None = None
                 try:
                     event = Event.from_dict(json.loads(message.data))
+                    self._validate_device_session_alias(event)
                     if event.event_name not in QUIET_CONTROL_EVENTS:
                         log_debug(
                             self.logger,
@@ -348,6 +349,8 @@ class AudioChatHttpServer:
                 chunk = None
                 try:
                     chunk = StreamChunkCodec.decode(message.data)
+                    if chunk.session_id != device_id:
+                        raise ValueError("stream chunk session_id must equal device_id")
                     received_count += 1
                     self.audio_app.write_input_chunk(chunk)
                 except Exception as exc:
@@ -415,6 +418,22 @@ class AudioChatHttpServer:
         return ws
 
     @staticmethod
+    def _validate_device_session_alias(event: Event) -> None:
+        """校验端侧事件不再携带独立 session_id。
+
+        主要逻辑：新版协议把设备作为唯一运行标识；端侧生产的事件如果仍携带
+        `session_id`，其值必须等于 `producer_id`，避免重新引入独立会话概念。
+        参数：`event` 为端侧控制事件。
+        返回值：无。
+        异常情况：旧独立 session_id 时抛出 ValueError。
+        """
+
+        if event.producer_id == SERVER_PRODUCER_ID:
+            return
+        if event.session_id and event.session_id != event.producer_id:
+            raise ValueError("event session_id must equal producer_id device_id")
+
+    @staticmethod
     def _error_event(exc: Exception, *, event: Event | None, raw: str) -> Event:
         user_id = event.user_id if event is not None else "unknown"
         producer_id = event.producer_id if event is not None else "unknown"
@@ -478,7 +497,7 @@ def main(argv: list[str] | None = None) -> None:
         config, launch = load_app_config(args.app_name, app_root=args.app_root)
         resolved_config_path = str(launch.config_path)
     else:
-        config_path = args.config or "app-examples/minimal/server.yaml"
+        config_path = args.config or "app-examples/basic-app/server.yaml"
         config, launch = load_config_as_app(config_path)
         resolved_config_path = str(launch.config_path)
     configure_console_logging(config.log_level)

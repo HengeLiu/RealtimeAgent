@@ -285,20 +285,30 @@ class AssetService:
         payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(configure_payload or {})}
         payload["request_id"] = request_id
         self._reject_media_bytes(payload)
-        publish_result = self.control_service.publish_matching(
-            Event(
-                event_name="stream.control.configure.requested",
-                user_id=user_id,
-                producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
-                stream_type=stream_type,
-                payload=payload,
-            ),
-            selection="first_available",
+        event = Event(
+            event_name="stream.control.configure.requested",
+            user_id=user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            stream_type=stream_type,
+            payload=payload,
         )
-        if session_id and hasattr(self.recorder, "record_asset_event"):
+        matched = self.control_service.resolve_matching_devices(event, selection="first_available")
+        device_session_id = matched[0].device_id if matched else session_id
+        publish_result = self.control_service._push_event_to_device_ids(
+            Event(
+                event_name=event.event_name,
+                user_id=event.user_id,
+                producer_id=event.producer_id,
+                session_id=device_session_id,
+                stream_type=event.stream_type,
+                payload=event.payload,
+            ),
+            tuple(device.device_id for device in matched),
+        )
+        record_id = device_session_id or session_id
+        if record_id and hasattr(self.recorder, "record_asset_event"):
             self.recorder.record_asset_event(
-                session_id,
+                record_id,
                 {
                     "event": "asset.requested",
                     "request_id": request_id,
@@ -313,9 +323,9 @@ class AssetService:
         pending.event.wait(timeout=timeout_seconds or self.request_timeout_seconds)
         with self._lock:
             self._pending.pop(request_id, None)
-        if pending.asset is None and session_id and hasattr(self.recorder, "record_asset_event"):
+        if pending.asset is None and record_id and hasattr(self.recorder, "record_asset_event"):
             self.recorder.record_asset_event(
-                session_id,
+                record_id,
                 {
                     "event": "asset.request.timeout",
                     "request_id": request_id,

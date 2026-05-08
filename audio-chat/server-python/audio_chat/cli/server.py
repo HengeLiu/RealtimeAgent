@@ -65,7 +65,7 @@ def start(argv: list[str] | None = None) -> None:
     if args.app_name:
         command.extend(["--app-name", args.app_name, "--app-root", args.app_root])
     else:
-        command.extend(["--config", args.config or "app-examples/minimal/server.yaml"])
+        command.extend(["--config", args.config or "app-examples/basic-app/server.yaml"])
     if args.app_module:
         command.extend(["--app-module", args.app_module])
     log_handle = log_file.open("ab")
@@ -141,7 +141,7 @@ def _resolve_launch_metadata(args: argparse.Namespace):
 
     if args.app_name:
         return load_app_config(args.app_name, app_root=args.app_root)
-    return load_config_as_app(args.config or "app-examples/minimal/server.yaml")
+    return load_config_as_app(args.config or "app-examples/basic-app/server.yaml")
 
 
 def _wait_for_exit(pid: int, *, timeout_seconds: float) -> None:

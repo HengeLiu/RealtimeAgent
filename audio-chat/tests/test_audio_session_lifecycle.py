@@ -83,6 +83,8 @@ def test_wake_requests_session_and_agent_opens_only_after_endpoint_opened(tmp_pa
     )
 
     open_event = next(event for event in connection.events if event.event_name == "control.audio_session.open.requested")
+    assert open_event.session_id == "dev-audio"
+    assert app.active_session_id("user-a") == "dev-audio"
     session_dir = tmp_path / "runs" / "sessions" / open_event.session_id
     assert not (session_dir / "agent-events.jsonl").exists()
 
@@ -142,11 +144,11 @@ def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path
     )
 
 
-def test_endpoint_closed_releases_active_session_and_closes_agent(tmp_path) -> None:
-    """测试目标：验证 endpoint 确认关闭后才释放 active session。
+def test_endpoint_closed_releases_dialog_but_keeps_device_identity(tmp_path) -> None:
+    """测试目标：验证 endpoint 确认关闭后释放对话状态但不再生成新 session。
 
     测试方法：打开会话后请求 close_now，再模拟 endpoint 回 `control.audio_session.closed`。
-    预期结果：closed 之前 active session 仍存在；closed 之后重新取 active session 会生成新 ID。
+    预期结果：closed 之前 active device 仍存在；closed 之后重新取链路标识仍是同一 device_id。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
@@ -176,7 +178,7 @@ def test_endpoint_closed_releases_active_session_and_closes_agent(tmp_path) -> N
         )
     )
 
-    assert app.active_session_id("user-a") != session_id
+    assert app.active_session_id("user-a") == session_id
 
 
 def test_maintenance_sweeper_expires_heartbeat_idle_stream_and_max_duration(tmp_path) -> None:
@@ -199,7 +201,7 @@ def test_maintenance_sweeper_expires_heartbeat_idle_stream_and_max_duration(tmp_
     register_audio_endpoint(app, connection)
     device_snapshot = app.control_service.build_device_snapshot("dev-audio")
     session_id = app.active_session_id("user-a")
-    state = app._audio_sessions_by_user["user-a"]
+    state = app._device_dialogs_by_user["user-a"]
     state.opened_at = device_snapshot["last_seen_at"] - 10
     handle = app.open_input_stream(user_id="user-a", producer_id="dev-audio")
     handle.last_activity_at = device_snapshot["last_seen_at"] - 10

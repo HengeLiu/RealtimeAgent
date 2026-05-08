@@ -145,11 +145,10 @@ class StreamService:
         )
         self.registry.register(handle)
         if stream_type.startswith("actuator."):
-            event = Event(
+            match_event = Event(
                 event_name="stream.output.open.requested",
                 user_id=user_id,
                 producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
                 stream_id=stream_id,
                 stream_type=stream_type,
                 payload={
@@ -158,10 +157,21 @@ class StreamService:
                 },
             )
             matched = self.control_service.resolve_matching_devices(
-                event,
+                match_event,
                 selection=selection,
             )
             consumers = tuple(device.device_id for device in matched)
+            if len(consumers) == 1:
+                handle.session_id = consumers[0]
+            event = Event(
+                event_name=match_event.event_name,
+                user_id=match_event.user_id,
+                producer_id=match_event.producer_id,
+                session_id=handle.session_id,
+                stream_id=match_event.stream_id,
+                stream_type=match_event.stream_type,
+                payload=match_event.payload,
+            )
             handle.consumer_device_ids = consumers
             self.control_service._push_event_to_device_ids(event, consumers)
         self.recorder.record_stream_event(

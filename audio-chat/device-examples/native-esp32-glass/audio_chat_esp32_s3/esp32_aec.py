@@ -248,7 +248,7 @@ class Esp32AecEndpointState:
         """处理 server 下发的 audio session open 请求并打开 mic stream。"""
 
         self.control_events_received += 1
-        self.session_id = session_id or new_id("sess")
+        self.session_id = session_id or self.device_id
         self.input_stream_id = stream_id or new_id("stream_mic")
         self.audio_session_open = True
         self.sensor_mic_open = True
@@ -437,19 +437,19 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             event = Event.from_dict(json.loads(message.data))
             self.received_events.append(event)
             if event.event_name == "control.audio_session.open.requested":
-                self._session_id = event.session_id
-                self.state.on_audio_session_open_requested(event.session_id)
+                self._session_id = self.device_id
+                self.state.on_audio_session_open_requested(self.device_id)
                 await self._send_event(
                     control_ws,
                     Event(
                         event_name="control.audio_session.opened",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         payload={"reason": "esp32_session_opened", "aec": self.state.aec_mode},
                     ),
                 )
-                await self._open_and_send_mic(control_ws, stream_ws, event.session_id, audio_payload)
+                await self._open_and_send_mic(control_ws, stream_ws, self.device_id, audio_payload)
             elif event.event_name == "stream.output.close.requested":
                 self.state.mark_playback_finished()
                 await self._send_event(
@@ -458,7 +458,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.finished",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type, "diagnostics": self.state.diagnostics()},
@@ -470,7 +470,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.closed",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type, "reason": "esp32_playback_closed"},
@@ -485,7 +485,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.cancelled",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         stream_id=event.stream_id,
                         stream_type=event.stream_type,
                         payload={"stream_type": event.stream_type, "reason": "esp32_user_interrupt"},
@@ -499,7 +499,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                         event_name="control.audio_session.closed",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=event.session_id,
+                        session_id=self.device_id,
                         payload={"reason": "esp32_session_closed", "diagnostics": self.state.diagnostics()},
                     ),
                 )
@@ -523,7 +523,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                         event_name="stream.output.started",
                         user_id=self.user_id,
                         producer_id=self.device_id,
-                        session_id=chunk.session_id,
+                        session_id=self.device_id,
                         stream_id=chunk.stream_id,
                         stream_type=chunk.stream_type,
                         payload={"stream_type": chunk.stream_type},
@@ -621,7 +621,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                     event_name="stream.input.failed",
                     user_id=self.user_id,
                     producer_id=self.device_id,
-                    session_id=event.session_id,
+                    session_id=self.device_id,
                     stream_type="sensor.rgb",
                     payload={"stream_type": "sensor.rgb", "reason": self.state.last_error_phase},
                 ),
@@ -632,7 +632,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
         request_id = str(event.payload.get("request_id") or "")
         correlation_id = str(event.payload.get("correlation_id") or "")
         stream_id = new_id("stream_rgb")
-        session_id = event.session_id or self._session_id or new_id("sess")
+        session_id = event.session_id or self._session_id or self.device_id
         metadata: dict[str, Any] = {}
         if request_id:
             metadata["request_id"] = request_id

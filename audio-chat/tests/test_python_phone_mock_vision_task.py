@@ -11,7 +11,7 @@ from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoi
 from audio_chat.server import AudioChatHttpServer
 
 
-BASIC_APP_ROOT = Path(__file__).resolve().parents[1] / "examples" / "basic-app"
+BASIC_APP_ROOT = Path(__file__).resolve().parents[1] / "app-examples" / "basic-app"
 
 
 def test_python_phone_mock_discovers_builtin_vision_task_handlers() -> None:
@@ -84,13 +84,13 @@ def test_python_phone_mock_executes_find_object_and_traffic_light_tasks(tmp_path
                 find_ref = await audio_app.task_engine.create(
                     task_type="find_object_phone_task",
                     user_id="user-phone-task",
-                    session_id="sess-phone-vision",
+                    session_id="dev-python-phone-task",
                     input_data={"target": "水杯"},
                 )
                 traffic_ref = await audio_app.task_engine.create(
                     task_type="traffic_light_phone_task",
                     user_id="user-phone-task",
-                    session_id="sess-phone-vision",
+                    session_id="dev-python-phone-task",
                     input_data={"expected_color": "green"},
                 )
                 await _wait_for_state(audio_app, find_ref.task_id, "completed")
@@ -107,7 +107,7 @@ def test_python_phone_mock_executes_find_object_and_traffic_light_tasks(tmp_path
         assert [event["event_name"] for event in endpoint.task_events].count("control.device.command.completed") == 2
         assert any(item["task_type"] == "find_object_phone_task" for item in endpoint.frame_log)
         assert any(item["task_type"] == "traffic_light_phone_task" for item in endpoint.frame_log)
-        task_events = (tmp_path / "runs/sessions/sess-phone-vision/task-events.jsonl").read_text(encoding="utf-8")
+        task_events = (tmp_path / "runs/sessions/dev-python-phone-task/task-events.jsonl").read_text(encoding="utf-8")
         assert "phone_task.completed" in task_events
         assert "task.completed" in task_events
         assert "水杯" in task_events

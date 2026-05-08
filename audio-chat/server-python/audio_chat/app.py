@@ -227,16 +227,16 @@ class AudioChatConfig:
 
 
 @dataclass
-class AudioSessionState:
-    """用户音频会话运行态。
+class DeviceDialogState:
+    """设备对话运行态。
 
-    主要功能：记录 server 侧对音频会话生命周期的最小状态。
+    主要功能：记录 server 侧对某台设备连续对话生命周期的最小状态。
     主要属性：`state` 表示 requested/opened/closing/closed；`close_mode` 区分立即关闭
     和等待当前回复结束后关闭。
     """
 
     user_id: str
-    session_id: str
+    device_id: str
     state: str = "requested"
     opened_at: float = field(default_factory=time.time)
     last_activity_at: float = field(default_factory=time.time)
@@ -412,8 +412,8 @@ class AudioChatApp:
             ),
         )
         self.stream_service.set_dispatcher(self)
-        self._active_session_by_user: dict[str, str] = {}
-        self._audio_sessions_by_user: dict[str, AudioSessionState] = {}
+        self._active_device_by_user: dict[str, str] = {}
+        self._device_dialogs_by_user: dict[str, DeviceDialogState] = {}
         self.output_service.add_output_finished_listener(self._handle_output_finished)
 
     def _extension_tool_enabled(self, tool_name: str) -> bool:
@@ -449,7 +449,7 @@ class AudioChatApp:
             if self._should_ignore_model_close_request(event):
                 self._record_turn_ignored(
                     event.user_id,
-                    event.session_id or self._active_session_by_user.get(event.user_id),
+                    event.session_id or self._active_device_by_user.get(event.user_id),
                     reason=event.payload.get("reason", "model_close_protected"),
                     source=event.payload.get("source", event.producer_id),
                 )
@@ -464,7 +464,7 @@ class AudioChatApp:
             self.control_service.publish(event)
             self._record_turn_ignored(
                 event.user_id,
-                event.session_id or self._active_session_by_user.get(event.user_id),
+                event.session_id or self._active_device_by_user.get(event.user_id),
                 reason=event.payload.get("reason", "turn_ignored"),
                 source=event.payload.get("source", event.producer_id),
             )
@@ -474,7 +474,7 @@ class AudioChatApp:
             self.agent_core.interrupt(event.user_id, reason=event.payload.get("reason", "user_interrupt"))
             self.output_service.interrupt_user(
                 event.user_id,
-                session_id=event.session_id,
+                session_id=self._event_device_id(event),
                 reason=event.payload.get("reason", "user_interrupt"),
             )
             return
@@ -489,8 +489,9 @@ class AudioChatApp:
             return
         if event.event_name == "control.audio_session.opened":
             self.control_service.publish(event)
-            self._mark_audio_session_opened(event.user_id, event.session_id)
-            self._open_agent_session(event.user_id, event.session_id)
+            device_id = self._event_device_id(event)
+            self._mark_audio_session_opened(event.user_id, device_id)
+            self._open_agent_session(event.user_id, device_id)
             return
         if event.event_name == "control.audio_session.closed":
             self.control_service.publish(event)
@@ -520,12 +521,12 @@ class AudioChatApp:
         stream_type: str = "sensor.mic",
         format: StreamFormat | None = None,
     ) -> StreamHandle:
-        session_id = self._active_session_by_user.get(user_id) or new_id("sess")
-        self._active_session_by_user[user_id] = session_id
-        self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
+        device_id = producer_id
+        self._active_device_by_user[user_id] = device_id
+        self._device_dialogs_by_user.setdefault(user_id, DeviceDialogState(user_id=user_id, device_id=device_id))
         handle = self.stream_service.open_stream(
             user_id=user_id,
-            session_id=session_id,
+            session_id=device_id,
             stream_type=stream_type,
             producer_id=producer_id,
             format=format or StreamFormat(),
@@ -536,7 +537,7 @@ class AudioChatApp:
                 event_name="stream.input.opened",
                 user_id=user_id,
                 producer_id=producer_id,
-                session_id=session_id,
+                session_id=device_id,
                 stream_id=handle.stream_id,
                 stream_type=stream_type,
                 payload={"stream_type": stream_type, "format": handle.format.__dict__},
@@ -545,40 +546,56 @@ class AudioChatApp:
         return handle
 
     def active_session_id(self, user_id: str) -> str:
-        """返回用户当前会话 ID，没有则创建一个轻量会话 ID。
+        """返回用户当前设备 ID。
 
-        主要逻辑：Tool / Task 提交输出或打开 output stream 时需要 session_id 关联 runs
-        产物；如果用户尚未唤醒，则创建一个本地 session 作为输出上下文。
+        主要逻辑：新版协议不再创建独立 session，旧 API 名称保留为兼容层，返回值始终
+        是当前用户的活动 device_id。
         参数：`user_id` 为用户标识。
-        返回值：session_id。
-        异常情况：无。
+        返回值：device_id。
+        异常情况：当前用户没有在线设备且尚未建立对话时抛出 ValueError。
         """
-        session_id = self._active_session_by_user.get(user_id)
-        if session_id is None:
-            session_id = new_id("sess")
-            self._active_session_by_user[user_id] = session_id
-        self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
-        return session_id
+        device_id = self.active_device_id(user_id)
+        self._device_dialogs_by_user.setdefault(user_id, DeviceDialogState(user_id=user_id, device_id=device_id))
+        return device_id
+
+    def active_device_id(self, user_id: str) -> str:
+        """返回用户当前活动设备 ID。
+
+        主要逻辑：优先使用最近唤醒或上行 stream 的设备；没有记录时从在线设备中选择第一台。
+        参数：`user_id` 为用户标识。
+        返回值：device_id。
+        异常情况：当前用户没有在线设备时抛出 ValueError。
+        """
+
+        device_id = self._active_device_by_user.get(user_id)
+        if device_id:
+            return device_id
+        active = self.control_service.get_active_device_set(user_id)
+        if active.devices:
+            device_id = active.devices[0].device_id
+            self._active_device_by_user[user_id] = device_id
+            return device_id
+        raise ValueError(f"no active device for user: {user_id}")
 
     def write_input_chunk(self, chunk: StreamChunk) -> None:
         self.stream_service.on_chunk(chunk)
 
     def close_audio_session(self, user_id: str, *, reason: str = "completed", mode: str = "close_now") -> None:
-        session_id = self._active_session_by_user.get(user_id)
-        if session_id is None:
+        device_id = self._active_device_by_user.get(user_id)
+        if device_id is None:
             return
-        state = self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
+        state = self._device_dialogs_by_user.setdefault(user_id, DeviceDialogState(user_id=user_id, device_id=device_id))
         state.close_pending = True
         state.close_mode = mode
         state.close_reason = reason
         state.state = "closing"
-        if mode == "close_after_reply" and self.output_service.active_output_stream_id(user_id, session_id) is not None:
+        if mode == "close_after_reply" and self.output_service.active_output_stream_id(user_id, device_id) is not None:
             self.recorder.record_event(
                 Event(
                     event_name="control.audio_session.close.requested",
                     user_id=user_id,
                     producer_id=SERVER_PRODUCER_ID,
-                    session_id=session_id,
+                    session_id=device_id,
                     payload={"reason": reason, "close_mode": mode, "deferred": True},
                 )
             )
@@ -588,7 +605,7 @@ class AudioChatApp:
                 event_name="control.audio_session.close.requested",
                 user_id=user_id,
                 producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
+                session_id=device_id,
                 payload={"reason": reason, "close_mode": mode},
             )
         )
@@ -620,15 +637,15 @@ class AudioChatApp:
         self.agent_core.close(user_id, reason=reason)
 
     def _handle_wake_detected(self, event: Event) -> None:
-        session_id = self._active_session_by_user.get(event.user_id) or new_id("sess")
-        self._active_session_by_user[event.user_id] = session_id
-        self._audio_sessions_by_user[event.user_id] = AudioSessionState(user_id=event.user_id, session_id=session_id)
+        device_id = self._event_device_id(event)
+        self._active_device_by_user[event.user_id] = device_id
+        self._device_dialogs_by_user[event.user_id] = DeviceDialogState(user_id=event.user_id, device_id=device_id)
         self.control_service.publish(
             Event(
                 event_name="control.user.wake.detected",
                 user_id=event.user_id,
                 producer_id=event.producer_id,
-                session_id=session_id,
+                session_id=device_id,
                 payload=event.payload,
             )
         )
@@ -637,29 +654,47 @@ class AudioChatApp:
                 event_name="control.audio_session.open.requested",
                 user_id=event.user_id,
                 producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
+                session_id=device_id,
                 payload={"reason": "wake_detected"},
             )
         )
 
+    @staticmethod
+    def _event_device_id(event: Event) -> str:
+        """从事件中解析当前设备标识。
+
+        主要逻辑：端侧事件以 `producer_id` 作为设备身份；为了兼容旧协议，如果旧事件
+        带有 `session_id`，只有在 server 侧事件或 producer 为空时才作为兜底。
+        参数：`event` 为控制事件。
+        返回值：device_id。
+        异常情况：无法解析时抛出 ValueError。
+        """
+
+        if event.producer_id and event.producer_id != SERVER_PRODUCER_ID:
+            return event.producer_id
+        if event.session_id:
+            return event.session_id
+        raise ValueError("event requires device_id via producer_id")
+
     def _register_endpoint_input_stream(self, event: Event) -> None:
-        if not event.stream_id or not event.stream_type or not event.session_id:
-            raise ValueError("stream.input.opened requires session_id, stream_id and stream_type")
+        device_id = self._event_device_id(event)
+        if not event.stream_id or not event.stream_type:
+            raise ValueError("stream.input.opened requires stream_id and stream_type")
         if self.stream_service.registry.has(event.stream_id):
             return
         raw_format = dict(event.payload.get("format") or {})
         handle = self.stream_service.open_stream(
             user_id=event.user_id,
-            session_id=event.session_id,
+            session_id=device_id,
             stream_type=event.stream_type,
             producer_id=event.producer_id,
             format=_stream_format_from_dict(raw_format) if raw_format else self.stream_service.default_format_for(event.stream_type),
             stream_id=event.stream_id,
         )
-        self._active_session_by_user[event.user_id] = handle.session_id
-        self._audio_sessions_by_user.setdefault(
+        self._active_device_by_user[event.user_id] = handle.session_id
+        self._device_dialogs_by_user.setdefault(
             event.user_id,
-            AudioSessionState(user_id=event.user_id, session_id=handle.session_id, state="opened"),
+            DeviceDialogState(user_id=event.user_id, device_id=handle.session_id, state="opened"),
         ).touch()
 
     def _mark_endpoint_input_closed(self, event: Event) -> None:
@@ -679,23 +714,23 @@ class AudioChatApp:
             },
         )
 
-    def _mark_audio_session_opened(self, user_id: str, session_id: str | None) -> None:
-        """标记 endpoint 已确认打开音频会话。"""
+    def _mark_audio_session_opened(self, user_id: str, device_id: str | None) -> None:
+        """标记 endpoint 已确认打开设备对话。"""
 
-        if not session_id:
+        if not device_id:
             return
-        self._active_session_by_user[user_id] = session_id
-        state = self._audio_sessions_by_user.setdefault(user_id, AudioSessionState(user_id=user_id, session_id=session_id))
-        state.session_id = session_id
+        self._active_device_by_user[user_id] = device_id
+        state = self._device_dialogs_by_user.setdefault(user_id, DeviceDialogState(user_id=user_id, device_id=device_id))
+        state.device_id = device_id
         state.state = "opened"
         state.close_pending = False
         state.touch()
 
     def _touch_audio_session(self, user_id: str, session_id: str | None) -> None:
-        """刷新音频会话活跃时间。"""
+        """刷新设备对话活跃时间。"""
 
-        state = self._audio_sessions_by_user.get(user_id)
-        if state is None or (session_id is not None and state.session_id != session_id):
+        state = self._device_dialogs_by_user.get(user_id)
+        if state is None or (session_id is not None and state.device_id != session_id):
             return
         state.touch()
 
@@ -707,19 +742,19 @@ class AudioChatApp:
     def _maybe_close_pending_audio_session(self, user_id: str, session_id: str | None) -> None:
         """在 `close_after_reply` 条件满足时请求关闭音频会话。"""
 
-        state = self._audio_sessions_by_user.get(user_id)
+        state = self._device_dialogs_by_user.get(user_id)
         if state is None or not state.close_pending or state.close_mode != "close_after_reply":
             return
-        if session_id is not None and state.session_id != session_id:
+        if session_id is not None and state.device_id != session_id:
             return
-        if self.output_service.active_output_stream_id(user_id, state.session_id) is not None:
+        if self.output_service.active_output_stream_id(user_id, state.device_id) is not None:
             return
         self.control_service.publish(
             Event(
                 event_name="control.audio_session.close.requested",
                 user_id=user_id,
                 producer_id=SERVER_PRODUCER_ID,
-                session_id=state.session_id,
+                session_id=state.device_id,
                 payload={"reason": state.close_reason or "close_after_reply", "close_mode": "close_after_reply"},
             )
         )
@@ -794,7 +829,7 @@ class AudioChatApp:
                 task_type=task_type,
                 event_name=state_event_name,
                 user_id=event.user_id,
-                session_id=event.session_id or str(ref.metadata.get("session_id") or "") or None,
+                session_id=self._event_device_id(event),
                 payload={
                     "producer_id": event.producer_id,
                     "command_event_name": event.event_name,
@@ -819,12 +854,12 @@ class AudioChatApp:
     def _finalize_audio_session(self, user_id: str, *, reason: str) -> None:
         """释放 endpoint 已确认关闭的音频会话。"""
 
-        state = self._audio_sessions_by_user.pop(user_id, None)
-        self._active_session_by_user.pop(user_id, None)
+        state = self._device_dialogs_by_user.pop(user_id, None)
+        self._active_device_by_user.pop(user_id, None)
         self._close_agent_session(user_id, reason=reason)
         if state is not None:
             self.recorder.record_agent_event(
-                state.session_id,
+                state.device_id,
                 {"event": "audio_session.closed", "reason": reason, "close_mode": state.close_mode or "endpoint_closed"},
             )
 
@@ -846,13 +881,13 @@ class AudioChatApp:
         closed_streams = self.stream_service.close_idle_streams(now=current)
         closed_sessions: list[str] = []
         if self.config.audio_session_max_duration_seconds > 0:
-            for user_id, state in list(self._audio_sessions_by_user.items()):
+            for user_id, state in list(self._device_dialogs_by_user.items()):
                 if state.close_pending:
                     continue
                 if current - state.opened_at <= self.config.audio_session_max_duration_seconds:
                     continue
                 self.close_audio_session(user_id, reason="audio_session_max_duration", mode="close_now")
-                closed_sessions.append(state.session_id)
+                closed_sessions.append(state.device_id)
         return {
             "expired_devices": list(expired_devices),
             "closed_streams": [handle.stream_id for handle in closed_streams],
