@@ -10,7 +10,10 @@ from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
 class TimerInput(BaseModel):
     """计时器 Tool 输入参数。"""
 
-    action: Literal["create", "query", "cancel"] = Field(default="create", description="计时器操作：创建、查询或取消。")
+    action: Literal["create", "start", "query", "cancel"] = Field(
+        default="create",
+        description="计时器操作：create/start 创建计时器，query 查询，cancel 取消。",
+    )
     seconds: int = Field(default=60, ge=0, le=86400, description="创建计时器时的秒数，例如 5 分钟填写 300。")
     task_id: str | None = Field(default=None, description="查询或取消时使用的任务编号；没有明确编号时不要猜测。")
     auto_fire: bool = Field(default=True, description="是否在创建后立即调度到点事件，回放测试可关闭。")
@@ -43,7 +46,7 @@ class TimerTool(BaseTool):
         """执行计时器操作。
 
         主要逻辑：
-        1. `action=create` 创建 `timer_task`。
+        1. `action=create/start` 创建 `timer_task`。
         2. `action=query` 查询任务状态。
         3. `action=cancel` 取消任务。
 
@@ -55,6 +58,9 @@ class TimerTool(BaseTool):
         if context.tasks is None:
             return ToolResult.success(data={"ok": False, "reason": "task_engine_unavailable"})
         action = input_data["action"]
+        if action == "start":
+            input_data = {**input_data, "action": "create"}
+            action = "create"
         if action == "query":
             ref = context.tasks.query(str(input_data.get("task_id") or ""))
             return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)

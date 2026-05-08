@@ -306,6 +306,16 @@ class MockStreamingTTS:
             self._first_audio_at = time.time()
         return bytes(pcm)
 
+    def synthesize_text(self, text: str) -> bytes:
+        """一次性合成完整文本。
+
+        主要逻辑：mock provider 没有真实语音合成能力，因此复用 `synthesize_delta()` 生成
+        一段可听诊断音。参数 `text` 为完整播报文本；返回值为 PCM16 音频。
+        异常情况：空文本返回空字节。
+        """
+
+        return self.synthesize_delta(text)
+
     def metrics(self) -> dict:
         first_chunk_latency_ms = None
         if self._first_text_at is not None and self._first_audio_at is not None:
@@ -380,6 +390,8 @@ class DashScopeStreamingTTS:
         attr = f"PCM_{sample_rate_hz}HZ_MONO_16BIT"
         fmt = getattr(AudioFormat, attr, AudioFormat.PCM_22050HZ_MONO_16BIT)
         self._source_sample_rate_hz = sample_rate_hz if hasattr(AudioFormat, attr) else 22050
+        self._speech_synthesizer_cls = SpeechSynthesizer
+        self._audio_format = fmt
         self._synthesizer = SpeechSynthesizer(model=model, voice=voice, format=fmt, callback=_Callback())
 
     def synthesize_delta(self, text: str) -> bytes:
@@ -403,6 +415,34 @@ class DashScopeStreamingTTS:
                 chunks.append(chunk)
                 break
         return b"".join(chunks)
+
+    def synthesize_text(self, text: str) -> bytes:
+        """一次性合成完整文本。
+
+        主要逻辑：
+        1. Tool / Task 通知这类输出已经拿到完整文本，不需要走增量 TTS。
+        2. 使用 DashScope `SpeechSynthesizer.call()` 的同步语音合成路径，避免先打开
+           output stream 后再等待首包，导致端侧收到空流。
+        3. 对 provider 返回的 PCM 做采样率归一化，保持和 stream format 一致。
+
+        参数：`text` 为完整播报文本。
+        返回值：PCM16 单声道音频字节。
+        异常情况：DashScope 调用失败或超时时向上抛出，让调用方记录明确错误。
+        """
+
+        if not text:
+            return b""
+        now = time.time()
+        if self._first_text_at is None:
+            self._first_text_at = now
+        self._text_push_count += 1
+        self._text_chars += len(text)
+        synthesizer = self._speech_synthesizer_cls(model=self.model, voice=self.voice, format=self._audio_format)
+        timeout_millis = int(max(self.request_timeout_seconds, 15.0) * 1000)
+        payload = synthesizer.call(text, timeout_millis=timeout_millis)
+        if payload and self._first_audio_at is None:
+            self._first_audio_at = time.time()
+        return self._normalize_sample_rate(bytes(payload or b""))
 
     def metrics(self) -> dict:
         first_audio_latency_ms = None
@@ -649,7 +689,8 @@ class PlaybackArbiter:
         active = self._active_by_user.get(user_id)
         if active and active[1] == stream_id:
             self._active_by_user.pop(user_id, None)
-        return self.pop_next(user_id)
+            return self.pop_next(user_id)
+        return None
 
     def cancel_current(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
         active = self._active_by_user.pop(user_id, None)
@@ -992,6 +1033,31 @@ class OutputRouter:
             self._queued_sessions.discard(next_output.intent.session_id)
             self._play_queued_output(next_output)
 
+    def mark_endpoint_playback_finished(self, user_id: str, session_id: str | None, stream_id: str | None) -> None:
+        """处理端侧回报的播放完成事件。
+
+        主要逻辑：当端侧发送 `stream.output.finished/closed` 时，释放 PlaybackArbiter
+        中可能残留的 active 输出，并在有排队输出时立即接续播放。
+        参数：`user_id` 为用户标识；`session_id` 为端侧会话；`stream_id` 为已完成的输出流。
+        返回值：无。
+        异常情况：`stream_id` 为空或不是当前 active 输出时忽略。
+        """
+
+        if not stream_id:
+            return
+        next_output = self.arbiter.on_playback_finished(user_id, stream_id)
+        for stored_session, stored_stream_id in list(self._stream_by_session.items()):
+            if stored_stream_id == stream_id:
+                self._stream_by_session.pop(stored_session, None)
+                self._native_source_by_session.pop(stored_session, None)
+                self._queued_sessions.discard(stored_session)
+        self._source_by_stream.pop(stream_id, None)
+        if next_output is not None:
+            self._queued_sessions.discard(next_output.intent.session_id)
+            self._play_queued_output(next_output)
+        for listener in list(self._finish_listeners):
+            listener(user_id, session_id or "", stream_id)
+
     def _play_queued_output(self, queued: QueuedOutput) -> None:
         stream_id = self.arbiter.activate_queued(queued, format=queued.source.stream_format())
         self._stream_by_session[queued.intent.session_id] = stream_id
@@ -1258,6 +1324,17 @@ class OutputService:
 
         self.router.add_finish_listener(listener)
 
+    def mark_endpoint_playback_finished(self, *, user_id: str, session_id: str | None, stream_id: str | None) -> None:
+        """接收端侧播放完成回报。
+
+        主要逻辑：把端侧 `stream.output.finished/closed` 转为 Output Router 的播放完成信号。
+        参数：`user_id` 为用户标识；`session_id` 为端侧会话；`stream_id` 为完成的输出流。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id)
+
     def on_assistant_audio_delta(
         self,
         *,
@@ -1408,6 +1485,50 @@ class OutputService:
         )
 
     def submit_output(self, intent: OutputItem, text: str) -> None:
+        """提交完整文本输出。
+
+        主要逻辑：Tool / Task 通知已经是完整文本，优先使用 TTS provider 的一次性合成能力，
+        再作为原生音频交给 Output Router。这样不会先打开空的 speaker stream，也不会因为
+        DashScope 流式任务尚未启动而在 `streaming_complete()` 阶段失败。
+        参数：`intent` 为内部输出意图，`text` 为完整播报文本。
+        返回值：无。
+        异常情况：TTS 合成或 stream 写入失败时向上抛出，由 TaskEventBridge 记录系统错误。
+        """
+
+        if not text:
+            return
+        tts = self.router._new_tts()
+        synthesize_text = getattr(tts, "synthesize_text", None)
+        if callable(synthesize_text):
+            audio = synthesize_text(text)
+            if not audio:
+                raise RuntimeError("TTS provider returned empty audio for complete text output")
+            metrics = tts.metrics()
+            self.router.on_assistant_audio_delta(
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                audio=audio,
+                format=StreamFormat(
+                    codec="pcm16le",
+                    sample_rate=int(metrics.get("sample_rate_hz") or self.router.tts_config.sample_rate_hz),
+                    channels=1,
+                    chunk_ms=40,
+                ),
+                final=True,
+                intent=OutputItem(
+                    user_id=intent.user_id,
+                    session_id=intent.session_id,
+                    source=intent.source or "text_tts",
+                    priority=intent.priority,
+                    on_interrupted=intent.on_interrupted,
+                    on_blocked=intent.on_blocked,
+                    ttl_seconds=intent.ttl_seconds,
+                    dedupe_key=intent.dedupe_key,
+                    cached_prompt_key=intent.cached_prompt_key,
+                ),
+                metadata={"source": "text_tts", "tts": metrics},
+            )
+            return
         self.router.on_agent_text_delta(
             AssistantTextDelta(user_id=intent.user_id, session_id=intent.session_id, text=text, final=False, intent=intent)
         )

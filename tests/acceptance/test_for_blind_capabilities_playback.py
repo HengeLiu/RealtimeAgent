@@ -240,6 +240,44 @@ def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, mon
     assert scheduled and scheduled[0]["interval"] == 60
 
 
+def test_timer_start_alias_creates_timer_task(tmp_path, monkeypatch) -> None:
+    """测试目标：验证模型把计时器创建动作写成 `start` 时仍能创建后台任务。
+
+    测试方法：替换 `threading.Timer` 避免真实等待，通过 `timer` Tool 传入
+    `{"action": "start"}`。
+    预期结果：工具调用成功，返回 running 任务，并按秒数调度到点事件。
+    """
+
+    scheduled: list[dict] = []
+
+    class FakeTimer:
+        def __init__(self, interval, function) -> None:
+            self.interval = interval
+            self.function = function
+            self.daemon = False
+
+        def start(self) -> None:
+            scheduled.append({"interval": self.interval, "function": self.function, "daemon": self.daemon})
+
+    monkeypatch.setattr(threading, "Timer", FakeTimer)
+    app = _build_app(tmp_path, monkeypatch)
+    _register_playback(app)
+    session_id = app.active_session_id("user-for-blind")
+
+    created = asyncio.run(
+        app.tool_gateway.call(
+            name="timer",
+            user_id="user-for-blind",
+            session_id=session_id,
+            input_data={"action": "start", "seconds": 60, "auto_fire": True},
+        )
+    )
+
+    assert created.ok is True
+    assert created.data["state"] == "running"
+    assert scheduled and scheduled[0]["interval"] == 60
+
+
 def test_for_blind_examples_use_public_api_and_no_hidden_device_routes() -> None:
     """测试目标：冻结 for-blind 样板业务代码只能依赖公开 API。
 

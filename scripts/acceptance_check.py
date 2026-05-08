@@ -271,6 +271,20 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
+    "text-route-audiosample": (
+        CheckCommand(
+            "text_route_audiosample_tests",
+            (
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "tests/test_text_route_audio_samples.py",
+                "-q",
+            ),
+        ),
+    ),
     "endpoint-reference": (
         CheckCommand(
             "endpoint_reference_tests",

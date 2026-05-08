@@ -384,7 +384,15 @@ class StreamService:
         return StreamFormat()
 
     def _validate_stream(self, *, stream_type: str, format: StreamFormat) -> None:
-        if stream_type not in {"sensor.mic", "sensor.rgb", "sensor.depth", "sensor.imu", "actuator.speaker", "actuator.haptic"}:
+        if stream_type not in {
+            "sensor.mic",
+            "sensor.rgb",
+            "sensor.depth",
+            "sensor.tof",
+            "sensor.imu",
+            "actuator.speaker",
+            "actuator.haptic",
+        }:
             raise ValueError(f"unknown stream_type: {stream_type}")
         if format.codec not in {"pcm16le", "jpeg", "png", "raw"}:
             raise ValueError(f"unsupported codec: {format.codec}")

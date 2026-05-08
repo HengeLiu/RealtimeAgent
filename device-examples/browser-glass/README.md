@@ -36,15 +36,21 @@ uv run audio-chat.web.open --print-url
 
 ## 协议口径
 
-页面注册为普通 Device，只声明：
+页面注册为普通 Device。新的推荐入口是 [device.audio-chat.yaml](device.audio-chat.yaml)，它声明端侧支持的传感器和执行器：
 
 1. `device_id`
 2. `user_id`
 3. `name`
-4. `subscriptions`
+4. `supports`
 5. `properties`
 
-页面不依赖旧能力字段做路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
+本地校验：
+
+```bash
+uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml --json
+```
+
+校验命令会把 `supports` 编译成注册事件里的 `subscriptions`。页面不依赖旧能力字段做路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
 
 ## 音频测试模式
 

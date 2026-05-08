@@ -218,6 +218,53 @@ def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> N
     assert sum(len(chunk.payload) for chunk in queued_chunks) >= 880
 
 
+def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_path) -> None:
+    """测试目标：验证端侧播放完成事件会释放播放仲裁 active 状态。
+
+    测试方法：先让旧设备的一条输出保持 active，再提交同用户新会话输出进入队列，
+    然后模拟旧设备上报 `stream.output.closed`。
+    预期结果：旧 active 被释放，新会话排队输出立即恢复播放并写出音频 chunk。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    old_connection = Connection("dev-old")
+    new_connection = Connection("dev-new")
+    register_speaker(app, old_connection)
+    register_speaker(app, new_connection)
+    active = OutputItem(user_id="user-001", session_id="sess-old", priority="high")
+    queued = OutputItem(user_id="user-001", session_id="sess-new", priority="normal", on_blocked="queue")
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-old", text="old output", intent=active)
+    )
+    active_stream_id = app.output_service.active_output_stream_id("user-001", "sess-old")
+    assert active_stream_id is not None
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-new", text="new output", intent=queued)
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-new", text="", final=True, intent=queued)
+    )
+
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.closed",
+            user_id="user-001",
+            producer_id="dev-old",
+            session_id="sess-old",
+            stream_id=active_stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker", "reason": "playback_drained"},
+        )
+    )
+
+    assert app.output_service.active_output_stream_id("user-001", "sess-new") is None
+    queued_chunks = [chunk for chunk in new_connection.chunks if chunk.session_id == "sess-new"]
+    queued_decisions = (tmp_path / "runs" / "user-001" / "sess-new" / "playback-decisions.jsonl").read_text()
+    assert queued_chunks
+    assert "queued_playback_ready" in queued_decisions
+
+
 def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_path) -> None:
     """测试目标：验证显式 `on_blocked="drop"` 不会被全局默认 queue 覆盖。
 

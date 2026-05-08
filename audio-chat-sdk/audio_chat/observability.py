@@ -808,7 +808,7 @@ def _media_subdir_for_stream_type(stream_type: str) -> str:
         return "photos"
     if stream_type == "sensor.imu":
         return "imu"
-    if stream_type == "sensor.depth":
+    if stream_type in {"sensor.depth", "sensor.tof"}:
         return "depth"
     return "assets"
 

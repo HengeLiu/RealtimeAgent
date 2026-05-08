@@ -44,7 +44,7 @@ class FindObjectCaptureTool(BaseTool):
     """找物单帧抓拍 Tool。
 
     主要功能：
-    1. 通过 `UserDeviceContext.capture_photo()` 请求端侧上传一张 `sensor.rgb` 图片。
+    1. 通过 `UserDeviceContext.request_asset("sensor.rgb")` 请求端侧上传一张图片资产。
     2. 返回资产引用和目标名称，供 Agent 或后续视觉任务继续分析。
     3. 不关心具体端侧设备，设备选择交给 event/filter subscription 匹配。
     """
@@ -78,11 +78,16 @@ class FindObjectCaptureTool(BaseTool):
         """
 
         object_name = input_data["object_name"].strip()
-        asset = context.devices.capture_photo(
-            reason="find_object_capture",
-            timeout_seconds=float(input_data["timeout_seconds"]),
+        asset = context.devices.request_asset(
+            "sensor.rgb",
             freshness_seconds=float(input_data["freshness_seconds"]),
-            configure_payload={"format": "jpeg", "object_name": object_name},
+            configure_payload={
+                "mode": "single",
+                "reason": "find_object_capture",
+                "format": "jpeg",
+                "object_name": object_name,
+            },
+            timeout_seconds=float(input_data["timeout_seconds"]),
         )
         if asset is None:
             return ToolResult.success(

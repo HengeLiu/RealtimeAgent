@@ -15,7 +15,7 @@ from audio_chat.asset import ArtifactRef, AssetRef
 from audio_chat.control import PublishResult
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.memory import memory_record_to_public_dict
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, EventName, StreamChunk, StreamFormat, StreamType, new_id
 
 
 @dataclass(frozen=True)
@@ -856,9 +856,9 @@ class UserDeviceContext:
 
     def publish_event(
         self,
-        event_name: str,
+        event_name: str | EventName,
         payload: dict | None = None,
-        stream_type: str | None = None,
+        stream_type: str | StreamType | None = None,
         selection: str = "all",
         timeout_seconds: float | None = None,
     ) -> PublishResult:
@@ -942,7 +942,7 @@ class UserDeviceContext:
             timeout_seconds=timeout_seconds,
         )
 
-    def latest_asset(self, stream_type: str, *, freshness_seconds: float | None = None) -> AssetRef | None:
+    def latest_asset(self, stream_type: str | StreamType, *, freshness_seconds: float | None = None) -> AssetRef | None:
         """读取指定 stream 类型的最新内部缓存引用。
 
         主要逻辑：只查询 server 对 sensor stream 结果的内部缓存，不主动发布控制事件。
@@ -956,7 +956,7 @@ class UserDeviceContext:
 
     def request_asset(
         self,
-        stream_type: str,
+        stream_type: str | StreamType,
         freshness_seconds: float = 0,
         configure_payload: dict | None = None,
         timeout_seconds: float | None = None,
@@ -981,7 +981,7 @@ class UserDeviceContext:
 
     def configure_stream(
         self,
-        stream_type: str,
+        stream_type: str | StreamType,
         *,
         mode: str,
         rate_hz: float | None = None,
@@ -1001,7 +1001,7 @@ class UserDeviceContext:
         """
 
         event_payload = dict(payload or {})
-        event_payload["stream_type"] = stream_type
+        event_payload["stream_type"] = str(stream_type)
         event_payload["mode"] = mode
         if rate_hz is not None:
             event_payload["rate_hz"] = rate_hz
@@ -1015,7 +1015,7 @@ class UserDeviceContext:
             timeout_seconds=timeout_seconds,
         )
 
-    def query_assets(self, stream_type: str, freshness_seconds: float | None = None) -> list[AssetRef]:
+    def query_assets(self, stream_type: str | StreamType, freshness_seconds: float | None = None) -> list[AssetRef]:
         """查询 sensor stream 结果缓存窗口。
 
         主要逻辑：读取 server 对 sensor stream 结果的缓存窗口，并按 freshness_seconds 可选过滤。
@@ -1031,7 +1031,7 @@ class UserDeviceContext:
 
     def watch_assets(
         self,
-        stream_type: str,
+        stream_type: str | StreamType,
         correlation_id: str | None = None,
         timeout_seconds: float | None = None,
         since: float | str | None = None,
@@ -1119,7 +1119,7 @@ class UserDeviceContext:
     async def _watch_assets_filtered(
         self,
         *,
-        stream_type: str,
+        stream_type: str | StreamType,
         correlation_id: str | None,
         timeout_seconds: float | None,
         since: float | str | None,

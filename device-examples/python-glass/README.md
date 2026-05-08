@@ -17,3 +17,21 @@ uv run audio-chat.playback.glass \
 ```
 
 输入 WAV 必须是 16 kHz、单声道、16 bit PCM。endpoint 默认按 20 ms 切片上传，也就是每个 `sensor.mic` chunk 为 640 bytes。
+
+## Text 路线自动化
+
+Text 模型路线优先使用本端侧做无头验收。测试中 mock ASR 会读取 `metadata.source_path`
+中的 WAV 文件名作为转写文本，所以可以直接复用 `legacy/openaiglass-sdk/testdata/audio-sample/wav`
+下的老样例，不需要额外维护文本脚本。
+
+```bash
+uv run python -m pytest tests/test_text_route_audio_samples.py -q
+```
+
+这组测试覆盖：
+
+1. AudioSample 分片上传到 `sensor.mic`。
+2. mock ASR 生成转写文本。
+3. TextAgentCore 调用 `query_device_state` 或 `capture_photo`。
+4. `capture_photo` 通过 `stream.control.configure.requested` 请求 `sensor.rgb`，再由 Python glass 上传资产。
+5. 文本 delta 进入 Streaming TTS，并下发 `actuator.speaker`。

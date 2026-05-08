@@ -5,59 +5,93 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 PROTOCOL_VERSION = "audio-chat.v1"
 SERVER_PRODUCER_ID = "server-main"
 
-CONTROL_EVENTS = {
-    "control.device.register.requested",
-    "control.device.registered",
-    "control.device.register.failed",
-    "control.device.heartbeat.received",
-    "control.device.state.changed",
-    "control.device.command.requested",
-    "control.device.command.started",
-    "control.device.command.progress",
-    "control.device.command.completed",
-    "control.device.command.failed",
-    "control.user.wake.detected",
-    "control.user.dialog.close.requested",
-    "control.audio_session.open.requested",
-    "control.audio_session.opened",
-    "control.audio_session.close.requested",
-    "control.audio_session.closed",
-    "control.audio_session.turn.ignored",
-    "control.user.interrupt.detected",
-    "voice.turn.ignored",
-    "stream.input.opened",
-    "stream.input.closed",
-    "stream.input.failed",
-    "stream.output.open.requested",
-    "stream.output.close.requested",
-    "stream.output.closed",
-    "stream.output.cancel.requested",
-    "stream.output.cancelled",
-    "stream.output.started",
-    "stream.output.finished",
-    "stream.output.failed",
-    "stream.control.configure.requested",
-    "agent.response.started",
-    "agent.response.completed",
-    "tool.call.started",
-    "tool.call.completed",
-    "task.state.changed",
-    "system.error.raised",
-}
+class EventName(StrEnum):
+    """内置协议事件名。
 
-STREAM_TYPES = {
-    "sensor.mic",
-    "sensor.rgb",
-    "sensor.depth",
-    "sensor.imu",
-    "actuator.speaker",
-    "actuator.haptic",
-}
+    主要功能：为开发者提供可补全、可复用的事件名常量，减少手写字符串导致的拼写
+    错误。枚举值仍然是字符串，能直接传入 `Event`、`publish_event()` 和 JSON 序列化。
+    """
+
+    CONTROL_DEVICE_REGISTER_REQUESTED = "control.device.register.requested"
+    CONTROL_DEVICE_REGISTERED = "control.device.registered"
+    CONTROL_DEVICE_REGISTER_FAILED = "control.device.register.failed"
+    CONTROL_DEVICE_HEARTBEAT_RECEIVED = "control.device.heartbeat.received"
+    CONTROL_DEVICE_STATE_CHANGED = "control.device.state.changed"
+    CONTROL_DEVICE_COMMAND_REQUESTED = "control.device.command.requested"
+    CONTROL_DEVICE_COMMAND_STARTED = "control.device.command.started"
+    CONTROL_DEVICE_COMMAND_PROGRESS = "control.device.command.progress"
+    CONTROL_DEVICE_COMMAND_COMPLETED = "control.device.command.completed"
+    CONTROL_DEVICE_COMMAND_FAILED = "control.device.command.failed"
+    CONTROL_USER_WAKE_DETECTED = "control.user.wake.detected"
+    CONTROL_USER_DIALOG_CLOSE_REQUESTED = "control.user.dialog.close.requested"
+    CONTROL_AUDIO_SESSION_OPEN_REQUESTED = "control.audio_session.open.requested"
+    CONTROL_AUDIO_SESSION_OPENED = "control.audio_session.opened"
+    CONTROL_AUDIO_SESSION_CLOSE_REQUESTED = "control.audio_session.close.requested"
+    CONTROL_AUDIO_SESSION_CLOSED = "control.audio_session.closed"
+    CONTROL_AUDIO_SESSION_TURN_IGNORED = "control.audio_session.turn.ignored"
+    CONTROL_USER_INTERRUPT_DETECTED = "control.user.interrupt.detected"
+    VOICE_TURN_IGNORED = "voice.turn.ignored"
+    STREAM_INPUT_OPENED = "stream.input.opened"
+    STREAM_INPUT_CLOSED = "stream.input.closed"
+    STREAM_INPUT_FAILED = "stream.input.failed"
+    STREAM_OUTPUT_OPEN_REQUESTED = "stream.output.open.requested"
+    STREAM_OUTPUT_CLOSE_REQUESTED = "stream.output.close.requested"
+    STREAM_OUTPUT_CLOSED = "stream.output.closed"
+    STREAM_OUTPUT_CANCEL_REQUESTED = "stream.output.cancel.requested"
+    STREAM_OUTPUT_CANCELLED = "stream.output.cancelled"
+    STREAM_OUTPUT_STARTED = "stream.output.started"
+    STREAM_OUTPUT_FINISHED = "stream.output.finished"
+    STREAM_OUTPUT_FAILED = "stream.output.failed"
+    STREAM_CONTROL_CONFIGURE_REQUESTED = "stream.control.configure.requested"
+    AGENT_RESPONSE_STARTED = "agent.response.started"
+    AGENT_RESPONSE_COMPLETED = "agent.response.completed"
+    TOOL_CALL_STARTED = "tool.call.started"
+    TOOL_CALL_COMPLETED = "tool.call.completed"
+    TASK_STATE_CHANGED = "task.state.changed"
+    SYSTEM_ERROR_RAISED = "system.error.raised"
+
+
+class EventPattern(StrEnum):
+    """内置事件订阅模式。
+
+    主要功能：注册设备订阅时避免手写通配字符串。枚举值仍然是协议字符串，可直接
+    写入 `Subscription(event=...)` 或注册 payload。
+    """
+
+    ALL = "*"
+    CONTROL_AUDIO_SESSION_ALL = "control.audio_session.*"
+    CONTROL_DEVICE_COMMAND_ALL = "control.device.command.*"
+    STREAM_CONTROL_ALL = "stream.control.*"
+    STREAM_INPUT_ALL = "stream.input.*"
+    STREAM_OUTPUT_ALL = "stream.output.*"
+    TASK_ALL = "task.*"
+    SYSTEM_ALL = "system.*"
+
+
+class StreamType(StrEnum):
+    """内置 stream 类型。
+
+    主要功能：统一传感器和执行器 stream 名称，方便 Tool、Task 和端侧注册订阅复用。
+    """
+
+    SENSOR_MIC = "sensor.mic"
+    SENSOR_RGB = "sensor.rgb"
+    SENSOR_DEPTH = "sensor.depth"
+    SENSOR_IMU = "sensor.imu"
+    SENSOR_TOF = "sensor.tof"
+    ACTUATOR_SPEAKER = "actuator.speaker"
+    ACTUATOR_HAPTIC = "actuator.haptic"
+
+
+CONTROL_EVENTS = {event.value for event in EventName}
+
+STREAM_TYPES = {stream_type.value for stream_type in StreamType}
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 FORBIDDEN_EVENT_FIELDS = {"target_device", "target_device_id", "source_device", "source_device_id"}
@@ -138,13 +172,36 @@ def validate_event_envelope_dict(data: dict[str, Any]) -> None:
 
 @dataclass(frozen=True)
 class Subscription:
-    event: str
+    event: str | EventName | EventPattern
     filter: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "event", str(self.event))
+
+    @classmethod
+    def for_stream(cls, event: str | EventName | EventPattern, stream_type: str | StreamType) -> "Subscription":
+        """构造按 stream_type 过滤的事件订阅。
+
+        主要逻辑：把常见的 `{"event": "...", "filter": {"stream_type": "..."}}`
+        收敛成一个公开方法，避免端侧注册代码重复拼字典。
+        参数：`event` 为事件名或通配订阅，`stream_type` 为 stream 类型。
+        返回值：`Subscription`。
+        异常情况：非法事件名由注册校验阶段抛出。
+        """
+
+        return cls(event=str(event), filter={"stream_type": str(stream_type)})
+
+    def to_dict(self) -> dict[str, Any]:
+        """转换为注册 payload 中的订阅字典。"""
+
+        data: dict[str, Any] = {"event": str(self.event)}
+        if self.filter:
+            data["filter"] = dict(self.filter)
+        return data
 
 @dataclass(frozen=True)
 class Event:
-    event_name: str
+    event_name: str | EventName
     user_id: str
     producer_id: str
     payload: dict[str, Any] = field(default_factory=dict)
@@ -153,15 +210,21 @@ class Event:
     timestamp_ms: int = field(default_factory=now_ms)
     session_id: str | None = None
     stream_id: str | None = None
-    stream_type: str | None = None
+    stream_type: str | StreamType | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "event_name", str(self.event_name))
+        if self.stream_type is not None:
+            object.__setattr__(self, "stream_type", str(self.stream_type))
 
     def to_dict(self) -> dict[str, Any]:
-        validate_event_name(self.event_name)
+        event_name = str(self.event_name)
+        validate_event_name(event_name)
         validate_control_event_payload(dict(self.payload))
         data = {
             "version": self.version,
             "event_id": self.event_id,
-            "event_name": self.event_name,
+            "event_name": event_name,
             "timestamp_ms": self.timestamp_ms,
             "user_id": self.user_id,
             "producer_id": self.producer_id,

@@ -80,6 +80,12 @@ uv run audio-chat.playback.glass \
   --audio-wav legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav
 ```
 
+Text 模型路线的无头验收可以直接复用旧 SDK 的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock text model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
+
+```bash
+uv run python -m pytest tests/test_text_route_audio_samples.py -q
+```
+
 iOS 参考端：
 
 ```bash
@@ -124,45 +130,70 @@ uv run audio-chat.esp32.build --dry-run --build-only
 
 ### 设备如何接入能力
 
-设备注册时提交 `subscriptions`。订阅表达“我愿意处理哪些事件”，server 根据这些订阅决定某个事件应该投递给谁。
+端侧先写一份设备能力文件，例如 [device-examples/browser-glass/device.audio-chat.yaml](device-examples/browser-glass/device.audio-chat.yaml)。这份文件只描述“我支持哪些传感器和执行器”，不要求端侧开发者手写事件订阅。
 
-例如，一个浏览器设备既能播放声音，也能按需上传照片：
+内置语义 ID 先固定为六类：
 
-```python
-from audio_chat import EventPattern, StreamType, Subscription
+| 语义 ID | 含义 | 常用参数 |
+| --- | --- | --- |
+| `sensor.rgb` | RGB 相机。 | `modes`、`formats`、`width`、`height`、`frequency_hz`、`sample_count`、`duration_seconds` |
+| `sensor.imu` | IMU 传感器。 | `modes`、`frequency_hz`、`sample_count`、`duration_seconds`、`options.axes` |
+| `sensor.mic` | 麦克风。 | `sample_rate_hz`、`channels`、`frequency_hz`、`codecs` |
+| `sensor.tof` | ToF 深度相机。 | `modes`、`formats`、`width`、`height`、`frequency_hz` |
+| `actuator.speaker` | 扬声器。 | `codecs`、`sample_rates_hz`、`channels` |
+| `actuator.haptic` | 振动器。 | `commands`、`options` |
 
+示例：
 
-subscriptions = [
-    Subscription(EventPattern.CONTROL_AUDIO_SESSION_ALL).to_dict(),
-    Subscription.for_stream(EventPattern.STREAM_OUTPUT_ALL, StreamType.ACTUATOR_SPEAKER).to_dict(),
-    Subscription.for_stream(EventPattern.STREAM_CONTROL_ALL, StreamType.SENSOR_RGB).to_dict(),
-]
+```yaml
+$schema: ../../spec/audio-chat-device.schema.json
+
+device_id: dev-browser-glass-001
+user_id: user-browser-glass-001
+name: 浏览器调试设备
+
+supports:
+  - id: sensor.mic
+    sample_rate_hz: 48000
+    channels: 1
+    frequency_hz: 50
+
+  - id: sensor.rgb
+    modes: [single, continuous]
+    formats: [jpeg]
+    frequency_hz: 1
+    width: 1280
+    height: 720
+
+  - id: sensor.imu
+    modes: [continuous]
+    frequency_hz: 30
+
+  - id: sensor.tof
+    modes: [single, continuous]
+    frequency_hz: 5
+
+  - id: actuator.speaker
+    codecs: [pcm16le]
+    sample_rates_hz: [16000, 24000]
+
+  - id: actuator.haptic
+    commands: [vibrate]
 ```
 
-注册事件中的 JSON 最终仍然是标准协议格式：
+`$schema` 指向 [spec/audio-chat-device.schema.json](spec/audio-chat-device.schema.json)，编辑器可以据此提示字段和可选值。本地校验命令：
+
+```bash
+uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+```
+
+校验通过后，SDK 会把 `supports` 编译成注册事件里的 `subscriptions`。例如 `sensor.rgb` 会编译成：
 
 ```json
-{
-  "event_name": "control.device.register.requested",
-  "user_id": "user-demo-001",
-  "producer_id": "dev-browser-001",
-  "payload": {
-    "device_id": "dev-browser-001",
-    "name": "浏览器调试设备",
-    "subscriptions": [
-      {"event": "control.audio_session.*"},
-      {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-      {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
-    ],
-    "properties": {
-      "audio.aec": "browser_webrtc",
-      "camera.facing": "front"
-    }
-  }
-}
+{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
 ```
 
-当 Tool 发布 `EventName.STREAM_CONTROL_CONFIGURE_REQUESTED + stream_type=StreamType.SENSOR_RGB` 时，只有订阅命中的在线设备会收到；业务 Tool 不需要知道它最后投递给了 `dev-browser-001` 还是另一台 iOS 设备。
+Tool / Task 发布 RGB 采集请求时，Control Service 根据这条订阅找到浏览器设备并下发事件。端侧收到的仍然是标准协议事件，例如 `stream.control.configure.requested + stream_type=sensor.rgb + payload.mode=single`。
 
 ### Tool 如何使用设备
 
@@ -355,7 +386,7 @@ app-examples/<your-app>/
 
 1. 先判断能力是一次性动作还是长流程：一次性动作写 Tool，长流程写 Task。
 2. 列出它需要哪些端侧能力：例如 `sensor.rgb`、`sensor.imu`、`actuator.speaker`、`haptic.vibrate`。
-3. 约定端侧需要订阅哪些事件：例如 `stream.control.* + filter(stream_type=sensor.rgb)`。
+3. 确认端侧设备能力文件中已经声明对应 `supports`。
 4. 在 Tool / Task 中通过 `context.devices` 发布控制事件或请求资产。
 5. 用 `runs/audio-chat/...` 中的 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`task-events.jsonl` 验证链路。
 
@@ -374,31 +405,13 @@ app-examples/<your-app>/
 
 ## 设备开发
 
-设备注册时提交订阅策略。server 只在同一个 `user_id` 当前在线设备中投递事件，先匹配事件名，再匹配 `filter` 字段。
+端侧开发者优先维护设备能力文件，不直接维护 subscriptions。浏览器示例：
 
-最小注册事件：
-
-```json
-{
-  "event_name": "control.device.register.requested",
-  "user_id": "user-demo-001",
-  "producer_id": "dev-browser-001",
-  "payload": {
-    "device_id": "dev-browser-001",
-    "name": "浏览器调试设备",
-    "client_type": "browser",
-    "subscriptions": [
-      {"event": "control.audio_session.*"},
-      {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-      {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
-    ],
-    "properties": {
-      "audio.aec": "browser_webrtc",
-      "camera.facing": "front"
-    }
-  }
-}
+```bash
+uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml --json
 ```
+
+命令会输出可直接用于注册事件 payload 的 `supports` 和编译后的 `subscriptions`。server 只在同一个 `user_id` 当前在线设备中投递事件；设备接到事件后按 `event_name + stream_type + payload.mode` 路由到对应硬件实现。
 
 端侧实现入口：
 

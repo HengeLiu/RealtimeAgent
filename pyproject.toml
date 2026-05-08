@@ -21,6 +21,7 @@ dependencies = [
 "audio-chat.server.stop" = "audio_chat.cli.server:stop"
 "audio-chat.server.logs" = "audio_chat.cli.server:logs"
 "audio-chat.sdk.package-check" = "audio_chat.cli.sdk:package_check"
+"audio-chat.device.validate" = "audio_chat.cli.device:validate"
 "audio-chat.web.open" = "audio_chat.cli.web:open_web"
 "audio-chat.ios.open" = "audio_chat.cli.ios:open_ios"
 "audio-chat.ios.build-sim" = "audio_chat.cli.ios:build_sim"
@@ -54,7 +55,7 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-audio_chat = ["py.typed"]
+audio_chat = ["py.typed", "spec/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["audio-chat-sdk"]

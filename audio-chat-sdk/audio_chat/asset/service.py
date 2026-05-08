@@ -455,7 +455,7 @@ def _asset_subdir(stream_type: str) -> str:
         return "photos"
     if stream_type == "sensor.imu":
         return "imu"
-    if stream_type == "sensor.depth":
+    if stream_type in {"sensor.depth", "sensor.tof"}:
         return "depth"
     return "assets"
 
@@ -465,6 +465,6 @@ def _asset_suffix(stream_type: str) -> str:
         return ".jpg"
     if stream_type == "sensor.imu":
         return ".jsonl"
-    if stream_type == "sensor.depth":
+    if stream_type in {"sensor.depth", "sensor.tof"}:
         return ".bin"
     return ".bin"

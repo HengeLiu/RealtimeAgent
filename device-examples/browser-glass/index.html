@@ -693,6 +693,8 @@
         } else {
           log("audio session opened; waiting for manual start audio");
         }
+      } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.speaker") {
+        await ensureStreamSocketOpen();
       } else if (item.event_name === "stream.output.close.requested") {
         pendingOutputClose.set(item.stream_id, item);
         closeOutputWhenDrained(item.stream_id);

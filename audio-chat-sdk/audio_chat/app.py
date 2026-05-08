@@ -519,6 +519,11 @@ class AudioChatApp:
             return
         if event.event_name in {"stream.output.finished", "stream.output.closed"}:
             self.control_service.publish(event)
+            self.output_service.mark_endpoint_playback_finished(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+            )
             self._maybe_close_pending_audio_session(event.user_id, event.session_id)
             return
         self.control_service.publish(event)
@@ -528,7 +533,7 @@ class AudioChatApp:
             self._touch_audio_session(chunk.user_id, chunk.session_id)
             self.audio_pipeline.dispatch(chunk)
             return
-        if chunk.stream_type in {"sensor.rgb", "sensor.depth", "sensor.imu"}:
+        if chunk.stream_type in {"sensor.rgb", "sensor.depth", "sensor.imu", "sensor.tof"}:
             self.asset_service.store_chunk(chunk)
             return
         raise ValueError(f"unsupported input stream_type: {chunk.stream_type}")

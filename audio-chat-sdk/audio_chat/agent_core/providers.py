@@ -6,6 +6,7 @@ import threading
 import time
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
 from audio_chat.protocol import StreamChunk, new_id
@@ -161,15 +162,33 @@ class MockAsrProviderAdapter:
 
     def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
         events: list[TranscriptEvent] = []
+        transcript = self._transcript_for_chunk(chunk)
         if not self._sent_delta and chunk.payload:
             self._sent_delta = True
-            events.append(TranscriptEvent(text=self.transcript[:4], final=False))
+            events.append(TranscriptEvent(text=transcript[:4], final=False))
         if chunk.final:
-            events.append(TranscriptEvent(text=self.transcript, final=True))
+            events.append(TranscriptEvent(text=transcript, final=True))
         return events
 
     def cancel(self) -> None:
         self._sent_delta = False
+
+    def _transcript_for_chunk(self, chunk: StreamChunk) -> str:
+        """根据回放音频元数据生成 mock 转写文本。
+
+        主要逻辑：自动化回放会把 WAV 路径写入 `metadata.source_path`，mock ASR
+        使用文件名作为转写结果，这样测试可以直接复用 AudioSample，而不是维护另一套
+        文本脚本。没有路径时保留构造函数传入的默认文本。
+        参数：`chunk` 为端侧上传的麦克风 chunk。
+        返回值：用于后续 TextAgentCore 的转写文本。
+        异常情况：路径解析失败时回退默认文本。
+        """
+
+        source_path = str((chunk.metadata or {}).get("source_path") or "").strip()
+        if not source_path:
+            return self.transcript
+        stem = Path(source_path).stem.strip()
+        return stem or self.transcript
 
 
 class DashScopeAsrProviderAdapter:
@@ -288,14 +307,146 @@ class MockTextModelAdapter:
         self._cancelled = False
 
     def stream_text(self, transcript: str) -> Iterable[str]:
+        for item in self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[]):
+            if not isinstance(item, str):
+                continue
+            yield item
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]) -> Iterable[str | dict]:
+        """按文本链路语义生成可预测的 mock 模型输出。
+
+        主要逻辑：
+        1. 普通问答按短文本 delta 流式返回，覆盖 TTS streaming。
+        2. 如果用户转写文本命中设备状态、拍照或计时器意图，并且对应 Tool 已注册，
+           先返回统一 tool_call，让 TextAgentCore 走真实 ToolGateway。
+        3. 第二轮收到 tool 结果后，基于工具结果生成最终文本。
+
+        参数：`messages` 是当前轮对话历史，`tools` 是可用工具 schema。
+        返回值：字符串 delta 或内部 tool_call dict。
+        异常情况：本 mock 不抛 provider 异常。
+        """
+
         self._cancelled = False
-        for delta in ("This ", "is ", "a streaming mock response."):
+        tool_message = self._last_tool_message(messages)
+        if tool_message is not None:
+            for delta in self._reply_after_tool(tool_message):
+                if self._cancelled:
+                    return
+                yield delta
+            return
+
+        transcript = self._last_user_text(messages)
+        tool_names = self._tool_names(tools)
+        tool_call = self._maybe_tool_call(transcript, tool_names)
+        if tool_call is not None:
+            yield tool_call
+            return
+
+        for delta in self._plain_response(transcript):
             if self._cancelled:
                 return
             yield delta
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    @staticmethod
+    def _last_user_text(messages: list[dict]) -> str:
+        for item in reversed(messages):
+            if item.get("role") == "user":
+                return str(item.get("content") or "")
+        return ""
+
+    @staticmethod
+    def _last_tool_message(messages: list[dict]) -> dict | None:
+        for item in reversed(messages):
+            if item.get("role") == "tool":
+                return item
+        return None
+
+    @staticmethod
+    def _tool_names(tools: list[dict]) -> set[str]:
+        names: set[str] = set()
+        for item in tools or []:
+            function = item.get("function") if isinstance(item, dict) else None
+            name = function.get("name") if isinstance(function, dict) else None
+            if name:
+                names.add(str(name))
+        return names
+
+    def _maybe_tool_call(self, transcript: str, tool_names: set[str]) -> dict | None:
+        text = transcript.strip()
+        if not text:
+            return None
+        if "query_device_state" in tool_names and any(keyword in text for keyword in ("设备", "眼镜的状态", "在线")):
+            return {
+                "type": "tool_call",
+                "id": "call_mock_query_device_state",
+                "name": "query_device_state",
+                "arguments": {"include_subscriptions": True},
+            }
+        if "capture_photo" in tool_names and any(keyword in text for keyword in ("前面", "眼前", "看一下", "照片", "画面")):
+            return {
+                "type": "tool_call",
+                "id": "call_mock_capture_photo",
+                "name": "capture_photo",
+                "arguments": {"reason": text, "timeout_seconds": 5, "freshness_seconds": 0},
+            }
+        if "timer" in tool_names and any(keyword in text for keyword in ("计时", "提醒", "分钟", "秒")):
+            return {
+                "type": "tool_call",
+                "id": "call_mock_timer",
+                "name": "timer",
+                "arguments": {"action": "create", "seconds": self._timer_seconds(text), "auto_fire": False},
+            }
+        if "echo_text" in tool_names and any(keyword in text.lower() for keyword in ("echo", "回声", "复述")):
+            return {
+                "type": "tool_call",
+                "id": "call_mock_echo_text",
+                "name": "echo_text",
+                "arguments": {"text": text},
+            }
+        return None
+
+    @staticmethod
+    def _timer_seconds(text: str) -> int:
+        if "三分钟" in text or "3分钟" in text:
+            return 180
+        if "一分钟" in text or "1分钟" in text:
+            return 60
+        if "五分钟" in text or "5分钟" in text:
+            return 300
+        return 60
+
+    @staticmethod
+    def _plain_response(transcript: str) -> tuple[str, ...]:
+        text = transcript.strip()
+        if not text:
+            return ("我没有听清，", "请再说一遍。")
+        if "你是谁" in text or "自我介绍" in text:
+            return ("我是 audio-chat ", "文本链路助手。")
+        return ("我听到了：", text, "。")
+
+    @staticmethod
+    def _reply_after_tool(tool_message: dict) -> tuple[str, ...]:
+        name = str(tool_message.get("name") or "")
+        content = tool_message.get("content")
+        if not isinstance(content, dict):
+            return ("工具已经返回，", "我会继续处理。")
+        data = content.get("data") if isinstance(content.get("data"), dict) else {}
+        if name == "query_device_state":
+            count = data.get("count", 0)
+            return (f"当前有 {count} 台设备在线。",)
+        if name == "capture_photo":
+            if content.get("ok"):
+                return ("我已经拿到当前照片。",)
+            return ("没有拿到当前照片。",)
+        if name == "timer":
+            task_id = data.get("task_id") or "新的计时器"
+            return (f"计时器已创建，任务编号是 {task_id}。",)
+        if name == "echo_text":
+            return (str(data.get("text") or content.get("message") or "已复述。"),)
+        return (str(content.get("message") or "工具调用完成。"),)
 
 
 class OpenAICompatibleTextModelAdapter:

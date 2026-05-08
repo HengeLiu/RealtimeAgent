@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from audio_chat.device_capabilities import compile_registration_payload
 from audio_chat.observability import RunRecorder
 from audio_chat.protocol import (
     CONTROL_EVENTS,
@@ -290,7 +291,7 @@ class RegistrationValidator:
         if event.version != PROTOCOL_VERSION:
             raise ValueError("unsupported protocol version")
         if "capabilities" in event.payload:
-            raise ValueError("registration payload must not contain capabilities; use subscriptions and properties")
+            raise ValueError("registration payload must not contain capabilities; use supports or subscriptions")
         self.validate_subscriptions(event.payload.get("subscriptions") or [])
 
     def validate_subscriptions(self, subscriptions: list[dict[str, Any]]) -> None:
@@ -443,6 +444,19 @@ class ControlService:
         auth_mode = str((registration.payload.get("auth") or {}).get("mode") or self.authenticator.mode)
         failed_device_id = str(registration.payload.get("device_id") or registration.producer_id or "unknown")
         try:
+            compiled_payload = compile_registration_payload(registration.payload)
+            registration = Event(
+                event_name=registration.event_name,
+                user_id=registration.user_id,
+                producer_id=registration.producer_id,
+                payload=compiled_payload,
+                version=registration.version,
+                event_id=registration.event_id,
+                timestamp_ms=registration.timestamp_ms,
+                session_id=registration.session_id,
+                stream_id=registration.stream_id,
+                stream_type=registration.stream_type,
+            )
             if self.active_device_set_policy != "single":
                 raise ValueError(f"unsupported active_device_set_policy: {self.active_device_set_policy}")
             self.validator.validate_payload(registration)

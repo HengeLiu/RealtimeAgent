@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import math
+import shutil
 import sys
 import time
 import wave
@@ -107,16 +108,20 @@ def _repo_root() -> Path:
     """返回仓库根目录。
 
     主要逻辑：`playback.py` 位于 `device-examples/python-glass/audio_chat_python_glass`，
-    向上四层是仓库根目录。
+    向上三层是仓库根目录。
     返回值：仓库根目录路径。
     异常情况：无。
     """
 
-    return Path(__file__).resolve().parents[4]
+    return Path(__file__).resolve().parents[3]
 
 
 def _audio_chat_root() -> Path:
-    """返回 audio-chat 子工程根目录。"""
+    """返回当前项目根目录。
+
+    主要逻辑：历史版本存在 `audio-chat/` 子工程包裹目录；新版已经把 SDK、应用示例
+    和端侧示例提到项目根目录。本函数保留旧名称，作为路径兼容入口。
+    """
 
     return Path(__file__).resolve().parents[3]
 
@@ -915,12 +920,13 @@ class NetworkPythonPlaybackEndpoint:
         result = self._build_result()
         result["input_audio"] = _audio_result(playback_audio)
         if self._session_id:
-            session_dir = self.runs_root / "sessions" / self._session_id
+            session_dir = self._session_artifact_dir()
             (session_dir / "playback-result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             (session_dir / "result.json").write_text(
                 json.dumps({"ok": result["passed"], "status": "ok" if result["passed"] else "failed", **result}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            self._mirror_legacy_session_artifacts(session_dir)
         return result
 
     async def _control_loop(self, control_ws, stream_ws, audio: PlaybackAudio) -> None:
@@ -1159,7 +1165,7 @@ class NetworkPythonPlaybackEndpoint:
     def _build_result(self) -> dict[str, Any]:
         event_names = [event.event_name for event in self.received_events + self.sent_events]
         if self._session_id:
-            session_events_path = self.runs_root / "sessions" / self._session_id / "events.jsonl"
+            session_events_path = self._session_artifact_dir() / "events.jsonl"
             if session_events_path.exists():
                 for line in session_events_path.read_text(encoding="utf-8").splitlines():
                     if line.strip():
@@ -1181,7 +1187,7 @@ class NetworkPythonPlaybackEndpoint:
         result["assertions"] = {event_name: event_name in result["event_names"] for event_name in PLAYBACK_REQUIRED_EVENTS}
         result["passed"] = all(result["assertions"].values()) and result["output_chunk_count"] > 0
         if self._session_id:
-            session_dir = self.runs_root / "sessions" / self._session_id
+            session_dir = self._session_artifact_dir()
             session_dir.mkdir(parents=True, exist_ok=True)
             (session_dir / "playback-result.json").write_text(
                 json.dumps(result, ensure_ascii=False, indent=2),
@@ -1192,7 +1198,59 @@ class NetworkPythonPlaybackEndpoint:
                 json.dumps(result_record, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            self._mirror_legacy_session_artifacts(session_dir)
         return result
+
+    def _session_artifact_dir(self) -> Path:
+        """返回当前网络 playback 的运行产物目录。
+
+        主要逻辑：新版 RunRecorder 按 `runs_root/<user_id>/<device_id>` 保存产物；
+        旧测试和旧脚本可能仍读取 `runs_root/sessions/<session_id>`。本方法优先使用
+        新目录，找不到时回退旧目录，避免网络端测误判真实 text 路线失败。
+        返回值：会话产物目录。
+        异常情况：`_session_id` 为空时返回旧目录占位。
+        """
+
+        if not self._session_id:
+            return self.runs_root / "sessions" / "unknown"
+        candidates = [
+            self.runs_root / self.user_id / self._session_id,
+            self.runs_root / "sessions" / self._session_id,
+            self.runs_root / "_unbound" / self._session_id,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        candidates[0].mkdir(parents=True, exist_ok=True)
+        return candidates[0]
+
+    def _mirror_legacy_session_artifacts(self, source_dir: Path) -> None:
+        """把新版运行产物镜像到旧 `sessions/<id>` 目录。
+
+        主要逻辑：只复制文件，不移动媒体目录。这样新版目录仍是主入口，旧的无头回放
+        脚本也能在迁移期读取关键 JSONL/JSON 产物。
+        参数：`source_dir` 为新版会话目录。
+        返回值：无。
+        异常情况：文件复制失败时向上传递，测试应暴露真实问题。
+        """
+
+        if not self._session_id:
+            return
+        legacy_dir = self.runs_root / "sessions" / self._session_id
+        if legacy_dir.resolve() == source_dir.resolve():
+            return
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        for path in source_dir.iterdir():
+            if path.is_file():
+                shutil.copy2(path, legacy_dir / path.name)
+            elif path.is_dir():
+                for child in path.rglob("*"):
+                    if child.is_file():
+                        target_dir = legacy_dir / child.relative_to(source_dir).parent
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(child, target_dir / child.name)
+                        if path.name == "audio":
+                            shutil.copy2(child, legacy_dir / child.name)
 
 
 def _coerce_package_names(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
