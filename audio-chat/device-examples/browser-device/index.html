@@ -82,6 +82,7 @@
         <div>
           <label for="rgbSourceMode">视觉输入模式</label>
           <select id="rgbSourceMode">
+            <option value="live_camera">实时摄像头</option>
             <option value="image_upload">上传图片/多张图片</option>
             <option value="video_upload">上传视频</option>
           </select>
@@ -93,7 +94,7 @@
         <button id="startVideo" class="secondary" disabled>开始 RGB stream</button>
         <button id="stopVideo" class="secondary" disabled>停止 RGB stream</button>
       </div>
-      <p class="hint">图片会作为一段 sensor.rgb stream 上传；视频会按配置帧率连续上传。视觉 stream 与麦克风 stream 相互独立。</p>
+      <p class="hint">实时摄像头和视频会按配置帧率连续上传；图片会作为一段 sensor.rgb stream 上传。视觉 stream 与麦克风 stream 相互独立。</p>
     </section>
 
     <section class="panel">
@@ -167,6 +168,7 @@
     let streamWs = null;
     let audioContext = null;
     let micStream = null;
+    let cameraStream = null;
     let micSource = null;
     let processor = null;
     let sessionId = null;
@@ -285,14 +287,17 @@
       setFieldVisible("silenceMsField", offlineAudio);
 
       const rgbMode = rgbSourceModeSelect.value;
+      const cameraMode = rgbMode === "live_camera";
       const imageMode = rgbMode === "image_upload";
       const videoMode = rgbMode === "video_upload";
       setFieldVisible("imageFileField", imageMode);
       setFieldVisible("videoFileField", videoMode);
-      setFieldVisible("videoFpsField", videoMode);
+      setFieldVisible("videoFpsField", cameraMode || videoMode);
       sendPhotoButton.classList.toggle("hidden", !imageMode);
-      startVideoButton.classList.toggle("hidden", !videoMode);
-      stopVideoButton.classList.toggle("hidden", !videoMode);
+      startVideoButton.classList.toggle("hidden", !(cameraMode || videoMode));
+      stopVideoButton.classList.toggle("hidden", !(cameraMode || videoMode));
+      startVideoButton.textContent = cameraMode ? "开始摄像头 stream" : "开始视频 stream";
+      stopVideoButton.textContent = cameraMode ? "停止摄像头 stream" : "停止视频 stream";
     }
 
     function defaultServerUrl() {
@@ -793,6 +798,21 @@
       return {width: bitmap.width, height: bitmap.height};
     }
 
+    async function captureLiveCameraFrame() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("browser camera API unavailable");
+      }
+      if (!cameraStream) {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: {facingMode: "environment", width: {ideal: RGB_CAPTURE_MAX_WIDTH}, height: {ideal: RGB_CAPTURE_MAX_HEIGHT}},
+          audio: false,
+        });
+        const track = cameraStream.getVideoTracks()[0];
+        log(`camera settings ${JSON.stringify(track.getSettings())}`);
+      }
+      return await captureJpegFrame(cameraStream);
+    }
+
     async function ensureVideoElement() {
       const file = document.getElementById("videoFile").files[0];
       if (!file) throw new Error("请选择视频文件");
@@ -822,6 +842,11 @@
       return {bytes: new Uint8Array(await blob.arrayBuffer()), width: canvas.width, height: canvas.height};
     }
 
+    async function nextRgbFrame() {
+      if (rgbSourceModeSelect.value === "live_camera") return captureLiveCameraFrame();
+      return captureVideoFileFrame();
+    }
+
     async function startContinuousRgb(item = null) {
       if (rgbContinuousStreamId) return;
       await ensureStreamSocketOpen();
@@ -838,7 +863,7 @@
       const fps = Math.max(0.2, Number(document.getElementById("videoFps").value || 1));
       videoTimer = setInterval(async () => {
         try {
-          const image = await captureVideoFileFrame();
+          const image = await nextRgbFrame();
           streamWs.send(encodeStreamChunk({
             user_id: document.getElementById("userId").value,
             session_id: activeSession,
@@ -864,6 +889,8 @@
     async function stopContinuousRgb(reason = "manual_stop") {
       if (videoTimer) clearInterval(videoTimer);
       videoTimer = null;
+      if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStream = null;
       if (!rgbContinuousStreamId) return;
       sendEvent(event("stream.input.closed", {stream_type: "sensor.rgb", reason}, {
         session_id: sessionId, stream_id: rgbContinuousStreamId, stream_type: "sensor.rgb",
@@ -871,6 +898,36 @@
       setStreamState(rgbContinuousStreamId, {stream_type: "sensor.rgb", state: "closed", close_reason: reason});
       rgbContinuousStreamId = null;
       stopVideoButton.disabled = true;
+    }
+
+    async function captureJpegFrame(stream) {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("camera frame timeout")), 3000);
+        video.onloadedmetadata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      await video.play();
+      await delay(150);
+      const settings = stream.getVideoTracks()[0].getSettings();
+      const sourceWidth = video.videoWidth || settings.width || 640;
+      const sourceHeight = video.videoHeight || settings.height || 480;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(video, 0, 0, width, height);
+      video.pause();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", RGB_JPEG_QUALITY));
+      if (!blob) throw new Error("jpeg encode failed");
+      return {bytes: new Uint8Array(await blob.arrayBuffer()), width, height};
     }
 
     async function openAudioInput() {
