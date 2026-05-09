@@ -1,36 +1,23 @@
 mode: in_process
 runs_root: runs/audio-chat/for-blind-app
-server_url: http://127.0.0.1:8765
-user_id: user-playback-001
-device_id: dev-python-playback-001
+user_id: user-for-blind-app
+device_id: dev-for-blind-glass-sdk-playback
 supports:
-  - id: sensor.mic
-    modes:
-      - continuous
-    sample_rate_hz: 16000
-    channels: 1
-    frequency_hz: 50
-    duration_seconds: 0
-    codecs:
-      - pcm16le
-  - id: sensor.rgb
-    modes:
-      - single
-    formats:
-      - jpeg
-    frequency_hz: 1
-    sample_count: 1
-  - id: actuator.speaker
-    codecs:
-      - pcm16le
-    sample_rates_hz:
-      - 16000
-      - 24000
-    channels: 1
-asr_provider: mock
-asr_model: mock-asr
-text_model_provider: mock
-text_model: mock-text
-tts_provider: mock
-tts_model: mock-tts
-tts_voice: mock
+  sensors:
+    - type: rgb
+      modes: [single]
+      default:
+        format: jpeg
+        frequency_hz: 1
+        sample_count: 1
+subscriptions:
+  - event: control.audio_session.*
+  - event: stream.output.*
+    filter:
+      stream_type: actuator.speaker
+  - event: stream.output.cancel.*
+    filter:
+      stream_type: actuator.speaker
+  - event: stream.control.*
+    filter:
+      stream_type: sensor.rgb

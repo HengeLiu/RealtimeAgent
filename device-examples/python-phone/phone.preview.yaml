@@ -1,41 +1,26 @@
+mode: register_only
 server_url: http://127.0.0.1:8765
-user_id: user-endpoint-001
-device_id: dev-python-phone-display-001
-name: Python 手机视频显示端
-auth:
-  mode: disabled
-properties:
-  endpoint.role.visual_display: true
-  endpoint.compute.vision: true
-  actuator.display.rgb: true
+user_id: user-for-blind-app
+device_id: dev-python-phone-preview
 supports:
-  - id: sensor.rgb
-    modes:
-      - single
-      - continuous
-    formats:
-      - jpeg
-    frequency_hz: 15
-    sample_count: 0
-  - id: actuator.speaker
-    codecs:
-      - pcm16le
-    sample_rates_hz:
-      - 16000
-      - 24000
-    channels: 1
+  sensors:
+    - type: rgb
+      modes: [single, continuous]
+      default:
+        format: jpeg
+        frequency_hz: 1
+        sample_count: 1
+  actuators:
+    - type: vibrator
+      commands: [vibrate]
 subscriptions:
-  - event: stream.input.*
-    filter:
-      stream_type: sensor.rgb
   - event: stream.control.*
     filter:
       stream_type: sensor.rgb
-  - event: control.device.command.*
-display:
-  enabled: true
-  backend: opencv
-  window_title: audio-chat python phone
-  max_fps: 15
-  close_on_stream_closed: false
-  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.jpg
+  - event: stream.output.*
+    filter:
+      stream_type: actuator.speaker
+  - event: stream.output.*
+    filter:
+      stream_type: actuator.haptic
+  - event: command.*

@@ -4,10 +4,10 @@
 
 audio-chat 迁移路径：
 
-1. Tool 使用 `context.devices.request_asset("sensor.rgb", ...)` 请求单帧图片。
+1. Tool 使用 `await context.devices.sensors.rgb.one(...)` 请求单帧图片。
 2. 端侧通过 `sensor.rgb` stream 上传 JPEG / PNG。
 3. Tool 返回 `AssetRef` 和模型可读摘要。
-4. 需要持续引导时升级为 Task，发布 `stream.control.configure.requested` 并用 `watch_assets()` 消费多帧。
+4. 需要持续引导时升级为 Task，使用 `context.devices.sensors.rgb.stream()` 消费多帧。
 
 参考：
 

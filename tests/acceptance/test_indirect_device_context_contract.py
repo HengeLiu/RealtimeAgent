@@ -5,14 +5,14 @@ import inspect
 from audio_chat.mcp import McpGateway
 from audio_chat.memory import MemoryService
 from audio_chat.skills import SkillService
-from audio_chat.tools import ToolContext, UserDeviceContext
+from audio_chat.tools import ToolContext, ToolDeviceFacade
 
 
 def test_memory_skill_mcp_services_do_not_accept_user_device_context() -> None:
     """测试目标：冻结 Memory / Skill / MCP 不能直接持有设备上下文的契约。
 
     测试方法：检查三个服务构造函数和公开方法签名。
-    预期结果：签名中不出现 `UserDeviceContext`，也没有 devices/context 注入参数。
+    预期结果：签名中不出现 `ToolDeviceFacade`，也没有 devices/context 注入参数。
     """
 
     forbidden_names = {"devices", "device_context", "user_device_context", "context"}
@@ -22,7 +22,7 @@ def test_memory_skill_mcp_services_do_not_accept_user_device_context() -> None:
                 continue
             signature = inspect.signature(member)
             assert forbidden_names.isdisjoint(signature.parameters), f"{cls.__name__}.{name} leaks device context"
-            assert "UserDeviceContext" not in str(signature)
+            assert "ToolDeviceFacade" not in str(signature)
 
 
 def test_tool_context_is_the_only_bridge_to_device_capabilities() -> None:
@@ -33,7 +33,7 @@ def test_tool_context_is_the_only_bridge_to_device_capabilities() -> None:
     """
 
     annotations = ToolContext.__annotations__
-    assert "UserDeviceContext" in str(annotations["devices"])
+    assert "ToolDeviceFacade" in str(annotations["devices"])
     assert "memory" in annotations
     assert "skills" in annotations
     assert "mcp" in annotations
@@ -42,4 +42,4 @@ def test_tool_context_is_the_only_bridge_to_device_capabilities() -> None:
         assert not hasattr(service, "devices")
         assert not hasattr(service, "device_context")
         assert not hasattr(service, "user_device_context")
-        assert not isinstance(service, UserDeviceContext)
+        assert not isinstance(service, ToolDeviceFacade)

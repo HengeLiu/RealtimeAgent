@@ -12,14 +12,14 @@ class ContinuousRgbAnalyzeTask(BaseTask):
         """测试目标：验证 Task 通过事件请求连续 stream 并通过 Asset Service 读取。"""
 
         correlation_id = context.task_ref.task_id
-        context.devices.publish_event(
-            "stream.control.configure.requested",
+        context.devices.commands.call(
+            "stream.control.open.requested",
             stream_type="sensor.rgb",
             payload={"mode": "continuous", "correlation_id": correlation_id, "fps": 2},
             selection="first_available",
         )
         refs = []
-        async for ref in context.devices.watch_assets(
+        async for ref in context.devices.sensors.rgb.stream(
             "sensor.rgb",
             correlation_id=correlation_id,
             timeout_seconds=1,
@@ -39,4 +39,4 @@ class ContinuousRgbAnalyzeTask(BaseTask):
                     allow_direct_notify=False,
                 )
             )
-        context.devices.submit_text(f"frames={len(refs)}", priority="normal")
+        context.output.say(f"frames={len(refs)}", priority="normal")

@@ -126,7 +126,7 @@ struct AppConfig: Codable, Equatable {
     var protocolVersion: String
     var directCameraSinkPort: UInt16
     var properties: [String: JSONValue]
-    var supports: [[String: JSONValue]]
+    var supports: [String: JSONValue]
     var subscriptions: [SubscriptionConfig]
 
     enum CodingKeys: String, CodingKey {
@@ -150,7 +150,7 @@ struct AppConfig: Codable, Equatable {
         protocolVersion = try container.decodeIfPresent(String.self, forKey: .protocolVersion) ?? "audio-chat.v1"
         directCameraSinkPort = try container.decodeIfPresent(UInt16.self, forKey: .directCameraSinkPort) ?? 9001
         properties = try container.decodeIfPresent([String: JSONValue].self, forKey: .properties) ?? [:]
-        supports = try container.decodeIfPresent([[String: JSONValue]].self, forKey: .supports) ?? []
+        supports = try container.decodeIfPresent([String: JSONValue].self, forKey: .supports) ?? [:]
         subscriptions = try container.decodeIfPresent([SubscriptionConfig].self, forKey: .subscriptions) ?? []
     }
 
@@ -175,7 +175,7 @@ struct AppConfig: Codable, Equatable {
         protocolVersion: String,
         directCameraSinkPort: UInt16 = 9001,
         properties: [String: JSONValue],
-        supports: [[String: JSONValue]] = [],
+        supports: [String: JSONValue] = [:],
         subscriptions: [SubscriptionConfig]
     ) {
         self.serverURL = serverURL
@@ -221,33 +221,28 @@ struct AppConfig: Codable, Equatable {
             "audio.wake_word": .string("manual"),
         ],
         supports: [
-            [
-                "id": .string("sensor.rgb"),
-                "modes": .array([.string("single"), .string("continuous")]),
-                "formats": .array([.string("jpeg")]),
-                "frequency_hz": .number(1),
-                "sample_count": .number(1),
-            ],
-            [
-                "id": .string("sensor.mic"),
-                "modes": .array([.string("continuous")]),
-                "sample_rate_hz": .number(16000),
-                "channels": .number(1),
-                "frequency_hz": .number(50),
-                "duration_seconds": .number(0),
-                "codecs": .array([.string("pcm16le")]),
-            ],
-            [
-                "id": .string("actuator.speaker"),
-                "codecs": .array([.string("pcm16le")]),
-                "sample_rates_hz": .array([.number(16000), .number(24000)]),
-                "channels": .number(1),
-            ],
+            "sensors": .array([
+                .object([
+                    "type": .string("rgb"),
+                    "modes": .array([.string("single"), .string("continuous")]),
+                    "default": .object([
+                        "format": .string("jpeg"),
+                        "frequency_hz": .number(1),
+                        "sample_count": .number(1),
+                    ]),
+                ])
+            ]),
+            "actuators": .array([
+                .object([
+                    "type": .string("vibrator"),
+                    "commands": .array([.string("vibrate")]),
+                ])
+            ]),
         ],
         subscriptions: [
             SubscriptionConfig(event: "stream.control.*", filter: ["stream_type": .string("sensor.rgb")]),
             SubscriptionConfig(event: "stream.output.*", filter: ["stream_type": .string("actuator.speaker")]),
-            SubscriptionConfig(event: "control.device.command.*", filter: nil),
+            SubscriptionConfig(event: "command.*", filter: nil),
             SubscriptionConfig(event: "control.audio_session.*", filter: nil),
         ]
     )

@@ -4,38 +4,42 @@ device_id: dev-browser-glass-001
 name: 浏览器调试设备
 client_type: browser-glass
 supports:
-  - id: sensor.mic
-    sample_rate_hz: 48000
-    channels: 1
-    frequency_hz: 50
-    codecs:
-      - pcm16le
-    options:
-      aec: browser_webrtc
-      noise_suppression: browser_webrtc
-      wake: manual
-  - id: sensor.rgb
-    modes:
-      - single
-      - continuous
-    formats:
-      - jpeg
-    frequency_hz: 1
-    sample_count: 1
-    width: 1280
-    height: 720
-    options:
-      facing: environment
-  - id: actuator.speaker
-    codecs:
-      - pcm16le
-    sample_rates_hz:
-      - 16000
-      - 24000
-    channels: 1
-  - id: actuator.haptic
-    commands:
-      - vibrate
+  sensors:
+    - type: mic
+      default:
+        sample_rate_hz: 48000
+        channels: 1
+        frequency_hz: 50
+        codecs:
+          - pcm16le
+      external:
+        aec: browser_webrtc
+        noise_suppression: browser_webrtc
+        wake: manual
+    - type: rgb
+      modes:
+        - single
+        - continuous
+      default:
+        format: jpeg
+        frequency_hz: 1
+        sample_count: 1
+        width: 1280
+        height: 720
+      external:
+        facing: environment
+  actuators:
+    - type: speaker
+      default:
+        codecs:
+          - pcm16le
+        sample_rates_hz:
+          - 16000
+          - 24000
+        channels: 1
+    - type: vibrator
+      commands:
+        - vibrate
 subscriptions:
   - event: control.audio_session.*
   - event: stream.output.*

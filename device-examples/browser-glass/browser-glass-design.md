@@ -283,7 +283,7 @@ fast_replay 只用于回归复现，不代表真实实时对话。
 典型流程：
 
 1. `sensor.mic` stream 已打开，真实麦克风或离线音频实时注入正在进行。
-2. server 因 Tool 调用下发 `stream.control.configure.requested`，`stream_type=sensor.rgb`。
+2. server 因 Tool 调用下发 `stream.control.open.requested`，`stream_type=sensor.rgb`。
 3. 页面不关闭 `sensor.mic`。
 4. 页面根据当前设置选择数据源：
    - 真实摄像头抓拍。
@@ -335,7 +335,7 @@ actuator.haptic   server 下行动作
 3. 手动上传视频。
 4. 视频按固定帧率拆成 `sensor.rgb` stream。
 
-当收到 `stream.control.configure.requested` 且 `stream_type=sensor.rgb` 时，页面可以按 payload 中的 `mode` 决定：
+当收到 `stream.control.open.requested` 且 `stream_type=sensor.rgb` 时，页面可以按 payload 中的 `mode` 决定：
 
 1. `single`：抓拍或上传一帧。
 2. `continuous`：持续上传图片帧。
@@ -419,7 +419,7 @@ Device -> Server: stream.input.opened(sensor.mic)
 loop 语音对话期间
   Device -> Server: StreamChunk(sensor.mic)
 end
-Server -> Device: stream.control.configure.requested(sensor.rgb, mode=single)
+Server -> Device: stream.control.open.requested(sensor.rgb, mode=single)
 Device -> Device: 按数据源策略抓拍或读取文件
 Device -> Server: stream.input.opened(sensor.rgb)
 Device -> Server: StreamChunk(sensor.rgb, jpeg bytes, final=true)
@@ -438,13 +438,13 @@ participant "Browser Device" as Device
 participant "Server / Task" as Server
 
 Device -> Server: stream.input.opened(sensor.mic)
-Server -> Device: stream.control.configure.requested(sensor.rgb, mode=continuous, rate_hz=1)
+Server -> Device: stream.control.open.requested(sensor.rgb, mode=continuous, rate_hz=1)
 Device -> Server: stream.input.opened(sensor.rgb)
 loop 并行上传
   Device -> Server: StreamChunk(sensor.mic)
   Device -> Server: StreamChunk(sensor.rgb, frame jpeg)
 end
-Server -> Device: stream.control.configure.requested(sensor.rgb, mode=stop)
+Server -> Device: stream.control.open.requested(sensor.rgb, mode=stop)
 Device -> Server: stream.input.closed(sensor.rgb)
 Device -> Server: StreamChunk(sensor.mic)
 @enduml

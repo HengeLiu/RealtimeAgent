@@ -2,7 +2,7 @@
 
 本文是 `audio-chat` 下一阶段 Context 设备 API 的设计说明，不是当前版本的开发操作手册。它用于固定目标公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。
 
-当前仓库里仍保留部分旧实现，例如 `UserDeviceContext.request_asset()`、`publish_event()`、`configure_stream()` 等；这些名字只用于兼容和迁移，不再作为新功能开发的长期推荐接口。需要按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](device-capability-development-guide.md)。
+当前仓库以 typed device API 作为唯一推荐开发入口，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.actuators.vibrator.one()` 和 `context.devices.commands.call()`。需要按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](device-capability-development-guide.md)。
 
 ## 1. 设计原则
 
@@ -20,7 +20,6 @@
 
 | 阶段 | 目标 | 对开发者的影响 |
 | --- | --- | --- |
-| 兼容阶段 | 保留 `UserDeviceContext`，新增 typed facade 的内部适配层。 | 旧 Tool / Task 继续可用，新代码可以逐步试用新 API。 |
 | 双写阶段 | `request_asset()`、`publish_event()`、`watch_assets()` 等旧方法内部改成调用 typed facade。 | 调试产物可以同时观察旧 API 和新 API 的等价行为。 |
 | 收敛阶段 | 文档、模板和示例只暴露 `ToolContext` / `DeviceContext` 新接口。 | 开发者不再接触旧协议原生方法。 |
 
@@ -251,7 +250,7 @@ AssetRef(
 
 设备注册文件应该按传感器和执行器分开声明，不再使用 `supports.id` 这种扁平写法。
 
-推荐结构如下。注意：这是新版目标结构；当前仓库里的设备校验 schema 和浏览器参考端能力文件仍处在兼容旧格式阶段，后续实现需要同步升级 schema、注册编译器和参考端。
+推荐结构如下。注意：这是新版目标结构；当前仓库里的设备校验 schema 和浏览器参考端能力文件仍处在目标结构阶段，后续实现需要同步升级 schema、注册编译器和参考端。
 
 ```yaml
 $schema: ../../spec/audio-chat-device.schema.json
@@ -896,9 +895,9 @@ Task 可以维护远程命令状态：
 
 ```python
 class NavigationFollowTask(BaseTask):
-    name = "navigation_follow"
+    task_type = "navigation_follow"
 
-    async def run(self, context: DeviceContext):
+    async def on_start(self, context: DeviceContext) -> None:
         handle = await context.devices.commands.start(
             name="device.navigation.track",
             selector={"device_role": "phone"},
@@ -1021,9 +1020,9 @@ from audio_chat import BaseTask, DeviceContext
 class WatchFrontSceneTask(BaseTask):
     """持续观察用户前方画面。"""
 
-    name = "watch_front_scene"
+    task_type = "watch_front_scene"
 
-    async def run(self, context: DeviceContext):
+    async def on_start(self, context: DeviceContext) -> None:
         async for frame in context.devices.sensors.rgb.stream(
             selector={"device_role": "front_glass"},
             fps=1,
@@ -1046,9 +1045,9 @@ from audio_chat import BaseTask, DeviceContext
 class PhoneNavigationTask(BaseTask):
     """请求手机端执行导航跟踪，并维护远程任务状态。"""
 
-    name = "phone_navigation"
+    task_type = "phone_navigation"
 
-    async def run(self, context: DeviceContext):
+    async def on_start(self, context: DeviceContext) -> None:
         handle = await context.devices.commands.start(
             name="device.navigation.track",
             selector={"device_role": "phone"},
@@ -1235,7 +1234,7 @@ SDK 内部映射为：
 }
 ```
 
-设备收到控制信令后，打开 `sensor.rgb` stream，按请求上传一张图片或连续图片帧，然后关闭 stream。
+当前 SDK 只发送 `stream.control.open.requested` / `stream.control.close.requested`。设备收到控制信令后，打开 `sensor.rgb` stream，按请求上传一张图片或连续图片帧，然后关闭 stream。
 
 ### 13.1 控制信令命名建议
 
@@ -1255,20 +1254,9 @@ SDK 内部映射为：
 | `command.completed` | 设备命令完成。 |
 | `command.failed` | 设备命令失败。 |
 
-### 13.2 兼容旧协议
+### 13.2 协议收敛原则
 
-当前实现中已经存在 `stream.control.configure.requested`、`control.device.command.requested` 等旧事件。迁移期可以采用适配层：
-
-| 新目标协议 | 当前兼容协议 |
-| --- | --- |
-| `stream.control.open.requested` | `stream.control.configure.requested` with `mode=single/continuous` |
-| `stream.control.close.requested` | `stream.control.configure.requested` with `mode=stop` |
-| `command.requested` | `control.device.command.requested` |
-| `command.progress` | `control.device.command.progress` |
-| `command.completed` | `control.device.command.completed` |
-| `command.failed` | `control.device.command.failed` |
-
-适配层必须只存在 SDK 内部，不能继续暴露给新 Tool / Task 模板。
+新架构不再维护旧 stream 配置适配层。端侧只需要实现 `stream.control.open.requested` 和 `stream.control.close.requested`；功能代码只使用 typed API，不手写底层控制信令。
 
 ## 14. 调试观察点
 
@@ -1321,7 +1309,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 目标：
 
 - 新增 `ToolDeviceFacade`、`TaskDeviceFacade`、`AssetFacade`、`OutputFacade`。
-- facade 内部仍然调用当前 `UserDeviceContext`。
+- facade 内部仍然调用当前 `ToolDeviceFacade`。
 - 新增测试证明新 API 和旧 API 行为一致。
 
 验收：
@@ -1333,7 +1321,7 @@ await context.devices.sensors.rgb.one(...)
 与：
 
 ```python
-context.devices.request_asset("sensor.rgb", ...)
+await context.devices.sensors.rgb.one(...)
 ```
 
 在同一设备参考端上产生等价 AssetRef。
@@ -1357,7 +1345,7 @@ context.devices.request_asset("sensor.rgb", ...)
 目标：
 
 - schema 支持 `supports.sensors` / `supports.actuators`。
-- 设备注册编译器兼容旧 `supports[].id` 和新结构。
+- 设备注册编译器只接受结构化 supports。
 - 参考端能力文件迁移到新结构。
 
 验收：
@@ -1370,14 +1358,14 @@ context.devices.request_asset("sensor.rgb", ...)
 
 目标：
 
-- `UserDeviceContext` 不再作为文档推荐 API。
-- 旧 API 仅保留在兼容层和迁移指南。
+- `ToolDeviceFacade` 不再作为文档推荐 API。
+- 旧 API 仅保留在过渡说明和迁移指南。
 - 新业务能力全部使用 typed facade。
 
 验收：
 
 - docs 和 app templates 不再出现 `publish_event()`、`request_asset()` 作为推荐用法。
-- 旧 SDK parity 能力仍能跑通。
+- 历史版本 parity 能力仍能跑通。
 
 ## 17. 一句话总结
 

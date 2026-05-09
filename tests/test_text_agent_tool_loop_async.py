@@ -60,7 +60,7 @@ class ToolCallingModel:
         yield "工具结果已回填。"
 
     def stream_text(self, transcript: str):
-        """兼容旧接口，当前测试不应调用。"""
+        """历史接口占位，当前测试不应调用。"""
 
         yield "unused"
 

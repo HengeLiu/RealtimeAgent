@@ -88,7 +88,7 @@ class FormatValidator:
 
 
 class FormatNormalizer:
-    """兼容旧测试名称的格式校验器。
+    """历史测试名称的格式校验器。
 
     主要功能：保留旧的 `FormatNormalizer` API，同时内部复用 `FormatValidator`。
     主要方法：`process()` 返回校验后的 `StreamChunk`。

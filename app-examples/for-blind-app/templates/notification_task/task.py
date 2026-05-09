@@ -20,7 +20,7 @@ class NotificationTask(BaseTask):
 
         主要逻辑：
         1. 从任务输入中读取通知文本和优先级。
-        2. 通过 `context.devices.submit_text()` 提交文本输出。
+        2. 通过 `await context.output.say()` 提交文本输出。
         3. 通过 TaskEventBridge 写入任务事件。
 
         参数：
@@ -37,7 +37,7 @@ class NotificationTask(BaseTask):
         text = str(input_data.get("text") or "任务已完成")
         priority = str(input_data.get("priority") or "normal")
         if context.devices is not None:
-            context.devices.submit_text(text, priority=priority)
+            await context.output.say(text, priority=priority)
         if context.bridge is not None:
             context.bridge.handle_event(
                 TaskEvent(

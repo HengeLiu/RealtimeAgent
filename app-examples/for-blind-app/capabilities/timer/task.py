@@ -28,7 +28,7 @@ class TimerTask(BaseTask):
         seconds = max(0, int(input_data.get("seconds") or 0))
         auto_fire = bool(input_data.get("auto_fire", True))
         if context.devices is not None:
-            context.devices.notify(f"{seconds} 秒计时器已启动", priority="normal")
+            await context.output.say(f"{seconds} 秒计时器已启动", priority="normal")
         if context.bridge is not None:
             context.bridge.handle_event(
                 TaskEvent(
@@ -63,4 +63,4 @@ class TimerTask(BaseTask):
         """取消计时器。"""
 
         if context.devices is not None:
-            context.devices.notify("计时器已取消", priority="normal")
+            await context.output.say("计时器已取消", priority="normal")

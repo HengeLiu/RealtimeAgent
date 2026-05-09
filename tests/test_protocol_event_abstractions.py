@@ -21,7 +21,7 @@ def test_event_name_and_stream_type_enums_are_protocol_strings() -> None:
 
     data = event.to_dict()
 
-    assert data["event_name"] == "stream.control.configure.requested"
+    assert data["event_name"] == "stream.control.open.requested"
     assert data["stream_type"] == "sensor.rgb"
     assert data["event_name"] in CONTROL_EVENTS
     assert data["stream_type"] in STREAM_TYPES

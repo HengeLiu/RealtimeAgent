@@ -527,7 +527,13 @@ class RunRecorder:
         self._append_jsonl(self.runs_root / "system-events.jsonl", record)
         event_name = record.get("event") or record.get("event_name")
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-        log_method = log_warning if payload.get("severity") == "warning" or record.get("severity") == "warning" else log_error
+        severity = str(record.get("severity") or payload.get("severity") or "error")
+        if severity == "warning":
+            log_method = log_warning
+        elif severity in {"debug", "info"}:
+            log_method = log_debug if severity == "debug" else log_info
+        else:
+            log_method = log_error
         log_method(
             self.logger,
             f"系统事件 {event_name}",
@@ -547,6 +553,51 @@ class RunRecorder:
                     "stream_type": record.get("stream_type"),
                     "detail_path": str(self.runs_root / "system-events.jsonl"),
                     "session_detail_path": str(self.session_file(str(record.get("session_id")), "events.jsonl")) if record.get("session_id") else None,
+                },
+            ),
+        )
+
+    def record_capability_trace(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录能力 API 调用级轨迹。"""
+
+        self._bind_from_record(session_id, record)
+        self._append_jsonl(self.session_dir(session_id) / "capability-events.jsonl", record)
+        self._append_jsonl(self.runs_root / "capability-events.jsonl", record)
+        log_info(
+            self.logger,
+            f"能力调用 {record.get('capability')}",
+            LogContext(
+                user_id=record.get("user_id"),
+                session_id=session_id,
+                event=record.get("event"),
+                fields={
+                    "capability": record.get("capability"),
+                    "matched_count": record.get("matched_count"),
+                    "result": record.get("result"),
+                    "detail_path": str(self.session_file(session_id, "capability-events.jsonl")),
+                },
+            ),
+        )
+
+    def record_command_trace(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录设备命令 API 调用级轨迹。"""
+
+        self._bind_from_record(session_id, record)
+        self._append_jsonl(self.session_dir(session_id) / "command-events.jsonl", record)
+        self._append_jsonl(self.runs_root / "command-events.jsonl", record)
+        log_info(
+            self.logger,
+            f"设备命令 {record.get('command_name')}",
+            LogContext(
+                user_id=record.get("user_id"),
+                session_id=session_id,
+                event=record.get("event"),
+                fields={
+                    "command_id": record.get("command_id"),
+                    "ok": record.get("ok"),
+                    "device_count": record.get("device_count"),
+                    "error_count": record.get("error_count"),
+                    "detail_path": str(self.session_file(session_id, "command-events.jsonl")),
                 },
             ),
         )

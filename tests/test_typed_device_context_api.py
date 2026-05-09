@@ -141,7 +141,7 @@ def test_sensor_one_selector_can_narrow_device(tmp_path) -> None:
             await context.devices.sensors.rgb.one(selector={"device_role": "front_glass"}, timeout_seconds=0.01)
 
     asyncio.run(_run())
-    assert [event.event_name for event in front.events] == ["stream.control.configure.requested"]
+    assert [event.event_name for event in front.events] == ["stream.control.open.requested"]
     assert side.events == []
 
 
@@ -158,7 +158,7 @@ def test_commands_call_returns_stable_result(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        subscriptions=[{"event": "control.device.command.*"}],
+        subscriptions=[{"event": "command.*"}],
     )
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command")
 
@@ -188,13 +188,13 @@ def test_commands_call_selector_routes_only_matching_device(tmp_path) -> None:
     register_endpoint(
         app,
         phone,
-        subscriptions=[{"event": "control.device.command.*"}],
+        subscriptions=[{"event": "command.*"}],
         properties={"device_role": "phone"},
     )
     register_endpoint(
         app,
         glass,
-        subscriptions=[{"event": "control.device.command.*"}],
+        subscriptions=[{"event": "command.*"}],
         properties={"device_role": "front_glass"},
     )
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command-selector")

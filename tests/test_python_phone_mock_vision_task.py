@@ -104,7 +104,7 @@ def test_python_phone_mock_executes_find_object_and_traffic_light_tasks(tmp_path
 
         assert audio_app.task_engine.query(find_ref.task_id).state == "completed"
         assert audio_app.task_engine.query(traffic_ref.task_id).state == "completed"
-        assert [event["event_name"] for event in endpoint.task_events].count("control.device.command.completed") == 2
+        assert [event["event_name"] for event in endpoint.task_events].count("command.completed") == 2
         assert any(item["task_type"] == "find_object_phone_task" for item in endpoint.frame_log)
         assert any(item["task_type"] == "traffic_light_phone_task" for item in endpoint.frame_log)
         task_events = (tmp_path / "runs/user-phone-task/dev-python-phone-task/task-events.jsonl").read_text(encoding="utf-8")

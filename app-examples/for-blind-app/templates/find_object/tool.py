@@ -20,7 +20,7 @@ class FindObjectOutput(BaseModel):
     object_name: str = Field(description="要查找的物品名称。")
     asset_id: str | None = Field(default=None, description="图片资产 ID。")
     stream_type: str | None = Field(default=None, description="资产来源类型。")
-    path: str | None = Field(default=None, description="本地调试路径。")
+    uri: str | None = Field(default=None, description="资产 URI。")
 
 
 class FindObjectTool(BaseTool):
@@ -29,7 +29,7 @@ class FindObjectTool(BaseTool):
     主要功能：
     1. 请求具备 `sensor.rgb` 能力的端侧上传一张图片资产。
     2. 返回资产引用和待查找目标，后续可以交给模型或独立视觉处理器。
-    3. 保持业务代码只使用 `UserDeviceContext`，不指定具体设备。
+    3. 保持业务代码只使用 typed device facade，不指定具体设备。
     """
 
     spec = ToolSpec(
@@ -45,7 +45,7 @@ class FindObjectTool(BaseTool):
 
         主要逻辑：
         1. 从入参读取目标名称。
-        2. 通过 `context.devices.request_asset()` 请求 `sensor.rgb` 资产。
+        2. 通过 `context.devices.sensors.rgb.one()` 请求 `sensor.rgb` 资产。
         3. 图片字节由端侧通过 stream 上传，Tool 只读取 `AssetRef`。
 
         参数：
@@ -61,28 +61,21 @@ class FindObjectTool(BaseTool):
         """
 
         object_name = input_data["object_name"].strip()
-        asset = context.devices.request_asset(
-            "sensor.rgb",
-            freshness_seconds=float(input_data["freshness_seconds"]),
-            configure_payload={
+        asset = await context.devices.sensors.rgb.one(
+            params={
                 "reason": "find_object",
                 "format": "jpeg",
                 "object_name": object_name,
             },
             timeout_seconds=float(input_data["timeout_seconds"]),
         )
-        if asset is None:
-            return ToolResult.success(
-                data={"captured": False, "object_name": object_name},
-                message="未收到画面，无法开始找物",
-            )
         return ToolResult.success(
             data={
                 "captured": True,
                 "object_name": object_name,
                 "asset_id": asset.asset_id,
                 "stream_type": asset.stream_type,
-                "path": asset.path,
+                "uri": asset.uri,
             },
             message=f"已收到画面，可以开始查找{object_name}",
             assets=[asset],

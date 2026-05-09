@@ -66,7 +66,7 @@ runs/audio-chat/
 runs/audio-chat/<user_id>/<device_id>/
 ```
 
-其中 `<device_id>` 同时也是当前兼容层的会话标识，会出现在终端日志里，例如：
+其中 `<device_id>` 同时也是当前过渡说明的会话标识，会出现在终端日志里，例如：
 
 ```text
 user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browser-xxxx
@@ -111,8 +111,8 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 
 | 文件 | 状态 |
 | --- | --- |
-| `model-events.jsonl` | 兼容旧命名，目前基本等同于 `agent-events.jsonl`。 |
-| `tool-trace.jsonl` | 兼容旧命名，目前应优先看 `tool-events.jsonl`。 |
+| `model-events.jsonl` | 历史命名，目前基本等同于 `agent-events.jsonl`。 |
+| `tool-trace.jsonl` | 历史命名，目前应优先看 `tool-events.jsonl`。 |
 
 ## messages 文件
 

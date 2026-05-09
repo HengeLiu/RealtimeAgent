@@ -94,7 +94,7 @@ def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path
                 )
                 assert asset is not None
                 assert asset.stream_type == "sensor.rgb"
-                assert Path(asset.path).read_bytes() == b"\xff\xd8phone-rgb\xff\xd9"
+                assert Path(asset.uri).read_bytes() == b"\xff\xd8phone-rgb\xff\xd9"
 
                 handle = audio_app.stream_service.open_stream(
                     user_id="user-phone",
@@ -128,7 +128,7 @@ def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path
             await runner.cleanup()
 
         received = [event.event_name for event in endpoint.received_events]
-        assert "stream.control.configure.requested" in received
+        assert "stream.control.open.requested" in received
         assert endpoint.asset_uploads and endpoint.asset_uploads[0]["payload_size"] > 0
         assert any(item["stream_type"] == "actuator.haptic" for item in endpoint.actuator_streams)
         assert all("target_device" not in event.payload for event in endpoint.received_events)

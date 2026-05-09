@@ -22,7 +22,7 @@ def test_agent_mode_realtime_alias_builds_realtime_core(tmp_path) -> None:
 
 
 def test_voice_server_mode_text_and_omni_map_to_agent_modes(tmp_path) -> None:
-    """测试目标：验证旧 SDK `voice.server_mode` 可以迁移到新版 Agent Core。
+    """测试目标：验证历史版本 `voice.server_mode` 可以迁移到新版 Agent Core。
 
     测试方法：分别创建 app 根目录，把 text_server 和 omni_server 配置写入根目录 `server.yaml`，
     再通过 `AudioChatConfig.from_yaml()` 加载。

@@ -232,38 +232,16 @@ class Esp32AecEndpointState:
                 "direct.camera.default_sink_uri": self.phone_camera_sink_ws_uri,
                 "direct.camera.stream_interval_ms": self.phone_camera_stream_interval_ms,
             },
-            "supports": [
-                {
-                    "id": "sensor.mic",
-                    "modes": ["continuous"],
-                    "sample_rate_hz": self.sample_rate,
-                    "channels": self.channels,
-                    "frequency_hz": max(1, int(1000 / max(1, self.chunk_ms))),
-                    "duration_seconds": 0,
-                    "codecs": ["pcm16le"],
-                    "options": {
-                        "wake": self.wake_word_mode,
-                        "aec": self.aec_mode,
-                        "playback_reference": self.playback_reference,
-                    },
-                },
-                {
-                    "id": "sensor.rgb",
-                    "modes": ["single"],
-                    "formats": ["jpeg"],
-                    "frequency_hz": 1,
-                    "sample_count": 1,
-                    "options": {
-                        "direct_camera_sink_ws_uri": self.phone_camera_sink_ws_uri,
-                    },
-                },
-                {
-                    "id": "actuator.speaker",
-                    "codecs": ["pcm16le"],
-                    "sample_rates_hz": [self.sample_rate],
-                    "channels": self.channels,
-                },
-            ],
+            "supports": {
+                "sensors": [
+                    {
+                        "type": "rgb",
+                        "modes": ["single"],
+                        "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1},
+                        "external": {"direct_camera_sink_ws_uri": self.phone_camera_sink_ws_uri},
+                    }
+                ]
+            },
             "subscriptions": [
                 {"event": "control.audio_session.*"},
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
@@ -381,7 +359,7 @@ class Esp32AecEndpointState:
         2. 非 stop 请求返回 `rgb_payload`，大字节后续必须走 stream。
 
         参数：
-        1. `payload`：`stream.control.configure.requested` 的 payload。
+        1. `payload`：`stream.control.open.requested` 的 payload。
 
         返回值：
         1. JPEG bytes；`None` 表示失败；空 bytes 表示 stop 不上传。
@@ -615,7 +593,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                     ),
                 )
                 self._session_closed.set()
-            elif event.event_name == "stream.control.configure.requested" and event.stream_type == "sensor.rgb":
+            elif event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb":
                 await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
@@ -715,7 +693,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
         参数：
         1. `control_ws`：控制 WebSocket。
         2. `stream_ws`：stream WebSocket。
-        3. `event`：server 下发的 `stream.control.configure.requested`。
+        3. `event`：server 下发的 `stream.control.open.requested`。
 
         返回值：
         1. 无。

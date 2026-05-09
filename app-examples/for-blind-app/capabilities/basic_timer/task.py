@@ -7,7 +7,7 @@ class TimerTask(BaseTask):
     """后台计时器示例 Task。
 
     主要功能：
-    1. 展示 Task 启动后如何通过 `UserDeviceContext.submit_text()` 提交输出。
+    1. 展示 Task 启动后如何通过 `ToolDeviceFacade.submit_text()` 提交输出。
     2. 展示 TaskEvent 如何通过 bridge 回流，不直接操作端侧连接。
     3. 展示取消时如何提交取消事件和通知。
     """
@@ -27,7 +27,7 @@ class TimerTask(BaseTask):
 
         seconds = int(context.metadata.get("input", {}).get("seconds", 1))
         if context.devices is not None:
-            context.devices.submit_text(f"{seconds} 秒计时器已启动", priority="normal")
+            await context.output.say(f"{seconds} 秒计时器已启动", priority="normal")
         if context.bridge is not None:
             context.bridge.handle_event(
                 TaskEvent(
@@ -51,4 +51,4 @@ class TimerTask(BaseTask):
         """
 
         if context.devices is not None:
-            context.devices.submit_text("计时器已取消", priority="normal")
+            await context.output.say("计时器已取消", priority="normal")

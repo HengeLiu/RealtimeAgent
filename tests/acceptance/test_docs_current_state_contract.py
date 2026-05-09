@@ -49,7 +49,7 @@ def test_current_state_docs_do_not_claim_unbacked_old_sdk_parity() -> None:
     )
     for expected in [
         "iOS / ESP32 目录目前是参考端和契约入口",
-        "当前已提供可执行 Tool / Task、MCP mock、playback 配置和 `old-sdk-parity-capabilities` lane",
+        "当前已提供可执行 Tool / Task、MCP mock、playback 配置和 `device-api-upgrade-capabilities` lane",
         "tests/acceptance/test_for_blind_capabilities_playback.py",
         "当前为 iOS 参考端目录",
         "当前为 ESP32-S3 参考端目录",
@@ -79,7 +79,7 @@ def test_old_sdk_parity_docs_reference_existing_acceptance_materials() -> None:
         "tests/test_docs_old_sdk_parity.py",
         "tests/acceptance/test_docs_current_state_contract.py",
         "app-examples/for-blind-app",
-        "docs/old-sdk-parity-troubleshooting.md",
+        "docs/device-api-upgrade-troubleshooting.md",
     ]
     for ref in required_refs:
         assert ref in architecture
@@ -89,8 +89,8 @@ def test_old_sdk_parity_docs_reference_existing_acceptance_materials() -> None:
     for lane in [
         "developer-usability",
         "capability-template-playback",
-        "old-sdk-parity-capabilities",
-        "old-sdk-parity-docs",
+        "device-api-upgrade-capabilities",
+        "device-api-upgrade-docs",
     ]:
         assert f"scripts/acceptance_check.py {lane}" in readme
 
@@ -98,14 +98,14 @@ def test_old_sdk_parity_docs_reference_existing_acceptance_materials() -> None:
 def test_old_sdk_parity_doc_lane_is_registered() -> None:
     """测试目标：确认文档线路已注册到自动验收入口。
 
-    测试方法：导入 `scripts.acceptance_check`，检查 `old-sdk-parity-docs` lane。
+    测试方法：导入 `scripts.acceptance_check`，检查 `device-api-upgrade-docs` lane。
     预期结果：本线路能独立执行，也会进入 `all`。
     """
 
     acceptance_check = _load_acceptance_module()
 
-    assert "old-sdk-parity-docs" in acceptance_check.CHECKS
-    commands = acceptance_check.CHECKS["old-sdk-parity-docs"]
+    assert "device-api-upgrade-docs" in acceptance_check.CHECKS
+    commands = acceptance_check.CHECKS["device-api-upgrade-docs"]
     assert commands
     command_text = " ".join(commands[0].command)
     assert "tests/test_docs_old_sdk_parity.py" in command_text

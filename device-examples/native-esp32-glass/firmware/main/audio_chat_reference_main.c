@@ -18,7 +18,7 @@ static const char *TAG = "audio_chat_reference";
  *    control.audio_session.open.requested 后才上传 sensor.mic。
  * 5. 消费 actuator.speaker chunk，把同一帧 PCM 同步写入播放环形缓冲和
  *    AEC reference 环形缓冲，再上报 started/finished/closed 或 failed。
- * 6. 响应 sensor.rgb 的 stream.control.configure.requested，通过 /ws/stream
+ * 6. 响应 sensor.rgb 的 stream.control.open.requested，通过 /ws/stream
  *    上传 JPEG 字节，不把媒体大字节放进控制事件 payload。
  * 7. 如果配置了 AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI，则按 audio-chat 直连帧
  *    格式把同一帧 JPEG 通过 phone 直连 WebSocket 推送给 iOS phone 的

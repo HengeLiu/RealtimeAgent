@@ -7,8 +7,8 @@ class ContinuousRgbAnalyzeTask(BaseTask):
     """持续 RGB 分析迁移样板。
 
     主要功能：
-    1. 通过事件请求端侧持续上传 `sensor.rgb`。
-    2. 用 `watch_assets()` 消费 Asset Service 缓存的图片资产。
+    1. 通过 typed sensor API 请求端侧持续上传 `sensor.rgb`。
+    2. 直接消费 SDK 返回的图片资产。
     3. 通过 TaskEventBridge 回流结构化任务事件。
     """
 
@@ -20,7 +20,7 @@ class ContinuousRgbAnalyzeTask(BaseTask):
 
         主要逻辑：
         1. 生成 `correlation_id` 串联配置事件和资产帧。
-        2. 发布 `stream.control.configure.requested`，请求端侧开始上传。
+        2. 调用 `context.devices.sensors.rgb.stream()`，请求端侧开始上传。
         3. 消费固定数量帧后回流 `frames_collected` 事件。
 
         参数：
@@ -39,23 +39,15 @@ class ContinuousRgbAnalyzeTask(BaseTask):
         frame_limit = int(input_data.get("frame_limit") or 3)
         correlation_id = str(input_data.get("correlation_id") or context.task_ref.task_id)
 
-        context.devices.publish_event(
-            "stream.control.configure.requested",
-            stream_type="sensor.rgb",
-            payload={
-                "mode": "continuous",
-                "fps": int(input_data.get("fps") or 2),
+        assets = []
+        async for asset in context.devices.sensors.rgb.stream(
+            fps=int(input_data.get("fps") or 2),
+            sample_count=frame_limit,
+            params={
                 "format": "jpeg",
                 "asset_policy": "cache",
                 "correlation_id": correlation_id,
             },
-            selection="first_available",
-        )
-
-        assets = []
-        async for asset in context.devices.watch_assets(
-            "sensor.rgb",
-            correlation_id=correlation_id,
             timeout_seconds=float(input_data.get("timeout_seconds") or 2),
         ):
             assets.append(asset)
@@ -82,16 +74,10 @@ class ContinuousRgbAnalyzeTask(BaseTask):
     async def on_cancel(self, context: TaskContext) -> None:
         """取消持续 RGB 分析任务。
 
-        主要逻辑：只发布停止配置事件，由订阅匹配到的端侧自行关闭采集。
+        主要逻辑：typed stream 由 SDK 在迭代器关闭时发送 close 请求。
         参数：`context` 为 SDK 注入的任务上下文。
         返回值：无。
         异常情况：事件发布失败时由 Task Engine 记录。
         """
 
-        if context.devices is not None:
-            context.devices.publish_event(
-                "stream.control.configure.requested",
-                stream_type="sensor.rgb",
-                payload={"mode": "stop", "reason": "task_cancelled"},
-                selection="all",
-            )
+        _ = context

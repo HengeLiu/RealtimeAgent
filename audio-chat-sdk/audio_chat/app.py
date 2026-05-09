@@ -31,7 +31,8 @@ from audio_chat.tools import (
     ToolGateway,
     ToolPolicy,
     ToolRegistry,
-    UserDeviceContext,
+    TaskDeviceFacade,
+    DeviceRuntime,
 )
 
 
@@ -334,7 +335,9 @@ class AudioChatApp:
         self.task_engine = TaskEngine(
             store=_build_task_store(self.config),
             bridge=TaskEventBridge(recorder=self.recorder, output_service=self.output_service),
-            device_context_factory=lambda user_id: UserDeviceContext(user_id=user_id, app=self, allow_long_running=True),
+            device_context_factory=lambda user_id: TaskDeviceFacade(
+                context=DeviceRuntime(user_id=user_id, app=self, allow_long_running=True)
+            ),
             output_context_factory=lambda user_id: OutputFacade(user_id=user_id, app=self),
             asset_context_factory=lambda user_id: AssetFacade(user_id=user_id, app=self),
             max_running_per_user=self.config.tasks_max_running_per_user,
@@ -512,12 +515,15 @@ class AudioChatApp:
             )
             return
         if event.event_name in {
-            "control.device.command.started",
-            "control.device.command.progress",
-            "control.device.command.completed",
-            "control.device.command.failed",
+            "command.accepted",
+            "command.progress",
+            "command.completed",
+            "command.failed",
         }:
             self.control_service.publish(event)
+            broker = getattr(self, "_command_result_broker", None)
+            if broker is not None:
+                broker.record(event)
             self._handle_device_command_report(event)
             return
         if event.event_name == "control.audio_session.opened":
@@ -586,7 +592,7 @@ class AudioChatApp:
     def active_session_id(self, user_id: str) -> str:
         """返回用户当前设备 ID。
 
-        主要逻辑：新版协议不再创建独立 session，旧 API 名称保留为兼容层，返回值始终
+        主要逻辑：新版协议不再创建独立 session，旧 API 名称保留为过渡说明，返回值始终
         是当前用户的活动 device_id。
         参数：`user_id` 为用户标识。
         返回值：device_id。
@@ -702,7 +708,7 @@ class AudioChatApp:
     def _event_device_id(event: Event) -> str:
         """从事件中解析当前设备标识。
 
-        主要逻辑：端侧事件以 `producer_id` 作为设备身份；为了兼容旧协议，如果旧事件
+        主要逻辑：端侧事件以 `producer_id` 作为设备身份；为了历史协议，如果旧事件
         带有 `session_id`，只有在 server 侧事件或 producer 为空时才作为兜底。
         参数：`event` 为控制事件。
         返回值：device_id。
@@ -838,7 +844,7 @@ class AudioChatApp:
         """把端侧命令回报转换为 server 侧 TaskEvent。
 
         主要逻辑：phone 视觉任务等端侧执行能力只通过
-        `control.device.command.*` 事件回报 started / progress / completed /
+        `command.*` 事件回报 started / progress / completed /
         failed。这里根据 payload.task_id 把回报写入 TaskEngine，而不暴露
         device_id 点对点 RPC。
         参数：`event` 为端侧上报的命令事件。
@@ -857,10 +863,10 @@ class AudioChatApp:
 
         task_type = str(payload.get("task_type") or ref.task_type)
         state_event_name = {
-            "control.device.command.started": "phone_task.started",
-            "control.device.command.progress": "phone_task.progress",
-            "control.device.command.completed": "phone_task.completed",
-            "control.device.command.failed": "phone_task.failed",
+            "command.accepted": "phone_task.started",
+            "command.progress": "phone_task.progress",
+            "command.completed": "phone_task.completed",
+            "command.failed": "phone_task.failed",
         }[event.event_name]
         self.task_engine.emit_event(
             TaskEvent(
@@ -877,13 +883,13 @@ class AudioChatApp:
                 allow_direct_notify=False,
             )
         )
-        if event.event_name == "control.device.command.completed":
+        if event.event_name == "command.completed":
             self.task_engine.complete(
                 task_id,
                 payload=dict(payload.get("result") or payload),
                 summary=str(payload.get("summary") or payload.get("message") or "phone task completed"),
             )
-        elif event.event_name == "control.device.command.failed":
+        elif event.event_name == "command.failed":
             self.task_engine.fail(
                 task_id,
                 message=str(payload.get("message") or "phone task failed"),

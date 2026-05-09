@@ -19,19 +19,19 @@ class AssetRef:
 
     主要功能：用稳定引用描述端侧上传的图片或其他传感器资产，Tool 只能拿到引用，
     不直接拿端侧连接。
-    主要属性：`asset_id` 为资产标识，`device_id` 来自 stream producer，`path`
-    指向 server 保存的资产文件，`metadata` 记录 request_id、seq 和大小等诊断信息。
+    主要属性：`uri` 是公开读取位置，`created_at_ms` 和 `size_bytes` 用于跨端契约。
+    设备来源只进入 metadata 诊断信息，不作为公开字段暴露。
     """
 
     asset_id: str
     user_id: str
-    device_id: str
+    session_id: str | None
     stream_type: str
     mime_type: str
-    path: str
-    session_id: str | None
+    created_at_ms: int
     metadata: dict
-    created_at: float = field(default_factory=time.time)
+    uri: str | None = None
+    size_bytes: int | None = None
     expires_at: float | None = None
 
 
@@ -83,17 +83,20 @@ class AssetStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(chunk.payload)
         storage_path = path.resolve()
+        created_at = time.time()
         ref = AssetRef(
             asset_id=asset_id,
             user_id=chunk.user_id,
-            device_id=device_id,
+            session_id=chunk.session_id,
             stream_type=chunk.stream_type,
             mime_type="image/jpeg" if chunk.stream_type == "sensor.rgb" else "application/octet-stream",
-            path=str(storage_path),
-            session_id=chunk.session_id,
+            created_at_ms=int(created_at * 1000),
+            uri=str(storage_path),
+            size_bytes=len(chunk.payload),
             metadata={
                 "seq": chunk.seq,
                 "payload_size": len(chunk.payload),
+                "producer_id": device_id,
                 **dict(chunk.metadata),
             },
             expires_at=time.time() + ttl_seconds if ttl_seconds else None,
@@ -151,7 +154,7 @@ class AssetStore:
         for asset in self._assets:
             if asset.user_id != user_id or asset.stream_type != stream_type or self._expired(asset):
                 continue
-            if freshness_seconds is not None and now - asset.created_at > freshness_seconds:
+            if freshness_seconds is not None and now - (asset.created_at_ms / 1000) > freshness_seconds:
                 continue
             if correlation_id is not None and asset.metadata.get("correlation_id") != correlation_id:
                 continue
@@ -244,7 +247,7 @@ class AssetService:
                 "user_id": chunk.user_id,
                 "asset_id": ref.asset_id,
                 "stream_type": ref.stream_type,
-                "path": ref.path,
+                "uri": ref.uri,
                 "request_id": request_id or None,
             },
         )
@@ -256,7 +259,7 @@ class AssetService:
                     "user_id": chunk.user_id,
                     "asset_id": ref.asset_id,
                     "stream_type": ref.stream_type,
-                    "path": ref.path,
+                    "uri": ref.uri,
                     "request_id": request_id or None,
                     "metadata": dict(ref.metadata),
                 },
@@ -276,8 +279,8 @@ class AssetService:
     ) -> AssetRef | None:
         """协议原生单资产请求。
 
-        主要逻辑：先按 freshness 查询缓存；未命中时沿用
-        `stream.control.configure.requested` 请求端侧上传，不引入第二套 Request 对象。
+        主要逻辑：先按 freshness 查询缓存；未命中时发布
+        `stream.control.open.requested` 请求端侧上传，不引入第二套 Request 对象。
         参数：`user_id`、`stream_type` 定位资产，`freshness_seconds` 为缓存最大年龄，
         `configure_payload` 为端侧配置，`session_id` 为可选会话，`timeout_seconds`
         为等待超时，`device_ids` 是 SDK typed facade 内部已经按 selector 冻结的设备集合。
@@ -296,7 +299,7 @@ class AssetService:
         payload["request_id"] = request_id
         self._reject_media_bytes(payload)
         event = Event(
-            event_name="stream.control.configure.requested",
+            event_name="stream.control.open.requested",
             user_id=user_id,
             producer_id=SERVER_PRODUCER_ID,
             stream_type=stream_type,

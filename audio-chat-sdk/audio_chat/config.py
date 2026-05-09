@@ -71,9 +71,9 @@ class AudioPipelineConfig:
 
 @dataclass(frozen=True)
 class VoiceConfig:
-    """旧 SDK 语音配置兼容层。
+    """历史版本 语音配置过渡说明。
 
-    主要功能：把旧 SDK 常用的 server_mode、conversation_mode 和 session_lifecycle
+    主要功能：把历史版本 常用的 server_mode、conversation_mode 和 session_lifecycle
     映射到新版 audio-chat 的 Agent Core 与音频会话语义。
     主要属性：`server_mode` 控制 text/realtime 选择；`session_lifecycle` 控制音频会话复用。
     """
@@ -359,7 +359,7 @@ def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _agent_mode_from_voice_server_mode(server_mode: str) -> str:
-    """把旧 SDK voice.server_mode 映射为新版 agent.mode。
+    """把历史版本 voice.server_mode 映射为新版 agent.mode。
 
     参数：`server_mode` 为旧配置值，例如 `omni_server` 或 `text_server`。
     返回值：新版 `agent.mode`；未知或空值返回 `text`。

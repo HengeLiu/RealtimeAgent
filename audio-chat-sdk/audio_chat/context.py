@@ -23,7 +23,8 @@ from audio_chat.tools import (
     PlaybackRejectedError,
     OutputStreamWriter,
     StreamTimeoutError,
-    UserDeviceContext,
+    TaskDeviceFacade,
+    ToolDeviceFacade,
 )
 
 __all__ = [
@@ -46,5 +47,6 @@ __all__ = [
     "PlaybackRejectedError",
     "OutputStreamWriter",
     "StreamTimeoutError",
-    "UserDeviceContext",
+    "TaskDeviceFacade",
+    "ToolDeviceFacade",
 ]

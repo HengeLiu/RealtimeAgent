@@ -9,7 +9,7 @@ from audio_chat.memory import MemoryRecord, MemoryService, MemoryStore
 from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType, Subscription
 from audio_chat.skills import SkillDocument, SkillService
 from audio_chat.tasks import BaseTask, DeviceContext, JsonlTaskStore, TaskContext, TaskEngine, TaskEvent, TaskEventBridge, TaskRef, TaskSpec, TaskStore
-from audio_chat.context import CapabilityTrace, UserDeviceContext
+from audio_chat.context import CapabilityTrace, TaskDeviceFacade, ToolDeviceFacade
 from audio_chat.tools import (
     ActuatorResult,
     ActuatorStreamResult,
@@ -81,6 +81,7 @@ __all__ = [
     "StreamType",
     "Subscription",
     "TaskContext",
+    "TaskDeviceFacade",
     "TaskEngine",
     "TaskEvent",
     "TaskEventBridge",
@@ -89,10 +90,10 @@ __all__ = [
     "TaskStore",
     "ToolContext",
     "ToolContextFactory",
+    "ToolDeviceFacade",
     "ToolError",
     "ToolGateway",
     "ToolResult",
     "ToolSpec",
     "ToolTrace",
-    "UserDeviceContext",
 ]

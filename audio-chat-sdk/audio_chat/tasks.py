@@ -14,6 +14,7 @@ from typing import Any
 from audio_chat.asset import ArtifactRef
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.protocol import new_id
+from audio_chat.tools import ToolContext
 
 TERMINAL_TASK_STATES = {"completed", "cancelled", "failed", "timeout"}
 
@@ -97,19 +98,16 @@ class TaskEvent:
     created_at: float = field(default_factory=time.time)
 
 
-@dataclass
-class TaskContext:
-    """Task 执行上下文。
+@dataclass(kw_only=True)
+class DeviceContext(ToolContext):
+    """Task 设备执行上下文。
 
-    主要功能：由 TaskEngine 注入设备上下文、任务引用和事件桥，Task 不直接操作消息或播放。
+    主要功能：继承 ToolContext 的短生命周期能力，并由 TaskEngine 额外注入任务引用、
+    事件桥和 TaskEngine。Task 通过该上下文使用长时 stream、异步命令和任务状态流转；
+    不直接操作消息、底层 WebSocket 或 speaker。
     """
 
-    user_id: str
-    session_id: str | None
     task_ref: TaskRef
-    devices: Any = None
-    output: Any = None
-    assets: Any = None
     bridge: "TaskEventBridge | None" = None
     engine: "TaskEngine | None" = None
     metadata: dict = field(default_factory=dict)
@@ -200,7 +198,7 @@ class TaskContext:
         return None
 
 
-DeviceContext = TaskContext
+TaskContext = DeviceContext
 
 
 class BaseTask:

@@ -191,7 +191,7 @@ def load_wav_audio(path: str | Path, *, chunk_ms: int = DEFAULT_MIC_CHUNK_MS) ->
 def _pcm_audio(payload: bytes | None, *, chunk_ms: int = DEFAULT_MIC_CHUNK_MS) -> PlaybackAudio:
     """把测试用 PCM bytes 归一成 PlaybackAudio。
 
-    主要逻辑：兼容旧测试直接传入一段 PCM bytes 的调用方式，并保持默认静音输入。
+    主要逻辑：历史测试直接传入一段 PCM bytes 的调用方式，并保持默认静音输入。
     参数：`payload` 为 PCM16 原始字节。
     返回值：`PlaybackAudio`。
     异常情况：无。
@@ -353,7 +353,7 @@ class PythonPlaybackEndpoint:
                     payload={"reason": "playback_closed"},
                 )
             )
-        elif event.event_name == "stream.control.configure.requested" and event.stream_type in ASSET_STREAM_TYPES:
+        elif event.event_name == "stream.control.open.requested" and event.stream_type in ASSET_STREAM_TYPES:
             self._handle_sensor_configure(event)
 
     def push_stream_chunk(self, chunk: StreamChunk) -> None:
@@ -396,7 +396,7 @@ class PythonPlaybackEndpoint:
         主要逻辑：模拟端侧唤醒、打开 `sensor.mic` stream，并把录制音频按 chunk
         写入 server；不绕过 AudioChatApp 的公开协议入口。
         参数：
-        1. `audio_payload`：兼容旧测试的一段 PCM bytes。
+        1. `audio_payload`：历史测试的一段 PCM bytes。
         2. `audio`：从 WAV 读取出的分片音频。
         3. `chunk_interval_ms`：可选发送间隔，用于模拟真实端侧节奏。
         返回值：结构化回放结果。
@@ -558,10 +558,10 @@ class PythonPlaybackEndpoint:
                     ttl_seconds=int(action.get("ttl_seconds") or 0),
                 )
                 action_results.append({"type": action_type, "text": action.get("text")})
-            elif action_type == "configure_stream":
+            elif action_type == "open_sensor_stream":
                 self.app.control_service.publish_matching(
                     Event(
-                        event_name="stream.control.configure.requested",
+                        event_name="stream.control.open.requested",
                         user_id=self.user_id,
                         producer_id="server-main",
                         session_id=session_id,
@@ -805,7 +805,7 @@ class NetworkPythonPlaybackEndpoint:
         device_name: str = "python-playback",
         client_type: str = "python-playback",
         properties: dict[str, Any] | None = None,
-        supports: list[dict[str, Any]] | None = None,
+        supports: dict[str, Any] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         chunk_interval_ms: int = 0,
@@ -821,30 +821,11 @@ class NetworkPythonPlaybackEndpoint:
             "audio.wake_word": "endpoint",
             "audio.aec": "endpoint",
         }
-        self.supports = supports or [
-            {
-                "id": "sensor.mic",
-                "modes": ["continuous"],
-                "sample_rate_hz": 16000,
-                "channels": 1,
-                "frequency_hz": 50,
-                "duration_seconds": 0,
-                "codecs": ["pcm16le"],
-            },
-            {
-                "id": "sensor.rgb",
-                "modes": ["single"],
-                "formats": ["jpeg"],
-                "frequency_hz": 1,
-                "sample_count": 1,
-            },
-            {
-                "id": "actuator.speaker",
-                "codecs": ["pcm16le"],
-                "sample_rates_hz": [16000, 24000],
-                "channels": 1,
-            },
-        ]
+        self.supports = supports or {
+            "sensors": [
+                {"type": "rgb", "modes": ["single"], "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}}
+            ]
+        }
         self.subscriptions = subscriptions or [
             {"event": "control.audio_session.*"},
             {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
@@ -1011,7 +992,7 @@ class NetworkPythonPlaybackEndpoint:
                     ),
                 )
                 self._session_closed.set()
-            elif event.event_name == "stream.control.configure.requested" and event.stream_type == "sensor.rgb":
+            elif event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb":
                 await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
@@ -1091,7 +1072,7 @@ class NetworkPythonPlaybackEndpoint:
     async def _open_and_send_rgb_asset(self, control_ws, stream_ws, event: Event) -> None:
         """按控制事件上传一帧 `sensor.rgb` 资产。
 
-        主要逻辑：端侧收到 `stream.control.configure.requested` 后，使用真实 stream
+        主要逻辑：端侧收到 `stream.control.open.requested` 后，使用真实 stream
         WebSocket 打开 `sensor.rgb` 输入流并携带 request_id 回传 JPEG bytes，避免把图片
         放进控制事件 payload。
         参数：`control_ws` 和 `stream_ws` 是当前端侧网络连接，`event` 是配置请求。
@@ -1208,7 +1189,7 @@ class NetworkPythonPlaybackEndpoint:
             "output_chunk_count": len(self.output_chunks),
             "output_bytes": sum(len(chunk.payload) for chunk in self.output_chunks),
             "asset_uploads": list(self.asset_uploads),
-            "supports": list(self.supports),
+            "supports": self.supports,
             "subscriptions": list(self.subscriptions),
             "transport": "network",
         }
@@ -1363,7 +1344,7 @@ async def run_network_playback(config: dict[str, Any] | None = None) -> dict[str
         runs_root=config.get("runs_root", "runs/audio-chat"),
         auth=dict(config.get("auth") or {"mode": "disabled"}),
         properties=dict(config.get("properties") or {}) or None,
-        supports=list(config.get("supports") or []) or None,
+        supports=dict(config.get("supports") or {}) or None,
         subscriptions=list(config.get("subscriptions") or []) or None,
         chunk_interval_ms=int(config.get("chunk_interval_ms") or 0),
     )

@@ -237,7 +237,7 @@ def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
 
     测试方法：静态检查 uploadRgbImages 使用调用方传入的 images，并且只在
     uploadSelectedImages 中读取文件输入。
-    预期结果：live_camera 模式的 stream.control.configure.requested 会上传摄像头帧，
+    预期结果：live_camera 模式的 stream.control.open.requested 会上传摄像头帧，
     不会误报“请选择图片文件”。
     """
 

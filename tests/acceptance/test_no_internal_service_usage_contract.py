@@ -54,7 +54,7 @@ def test_examples_and_migration_templates_use_audio_chat_top_level_api() -> None
 
 
 def test_examples_do_not_use_hidden_rpc_or_device_id_routing() -> None:
-    """测试目标：禁止示例业务代码绕过 `UserDeviceContext` 做隐藏通讯。
+    """测试目标：禁止示例业务代码绕过 `ToolDeviceFacade` 做隐藏通讯。
 
     测试方法：文本扫描常见点对点发送、服务对象、WebSocket 直连和控制 payload 大字节。
     预期结果：示例只使用 event、stream、asset 和 output 公开 API。

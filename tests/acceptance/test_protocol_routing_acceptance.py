@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk
-from audio_chat.tools import UserDeviceContext
+from audio_chat.tools import ToolDeviceFacade
 
 
 class RecordingEndpoint:
@@ -94,7 +94,7 @@ def test_asset_request_routes_by_stream_subscription(tmp_path) -> None:
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}}],
     )
 
-    asset = UserDeviceContext(user_id=user_id, app=app).request_asset(
+    asset = ToolDeviceFacade(user_id=user_id, app=app).request_asset(
         "sensor.rgb",
         freshness_seconds=0,
         configure_payload={"mode": "single", "max_samples": 1},
@@ -102,7 +102,7 @@ def test_asset_request_routes_by_stream_subscription(tmp_path) -> None:
     )
 
     assert asset is None
-    assert [event.event_name for event in rgb_device.events] == ["stream.control.configure.requested"]
+    assert [event.event_name for event in rgb_device.events] == ["stream.control.open.requested"]
     assert imu_device.events == []
 
 
@@ -126,7 +126,7 @@ def test_open_output_stream_honors_capability_and_selection(tmp_path) -> None:
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
     )
 
-    writer = UserDeviceContext(user_id=user_id, app=app).open_output_stream(
+    writer = ToolDeviceFacade(user_id=user_id, app=app).open_output_stream(
         "actuator.haptic",
         codec="raw",
         selection="first_available",
@@ -154,15 +154,15 @@ def test_payload_only_control_event_does_not_open_stream(tmp_path) -> None:
         endpoint,
         subscriptions=[
             {
-                "event": "control.device.command.requested",
+                "event": "command.requested",
                 "filter": {"payload.command_name": "navigation.start"},
             }
         ],
         properties={"navigation.endpoint": True},
     )
 
-    result = UserDeviceContext(user_id=user_id, app=app).publish_event(
-        "control.device.command.requested",
+    result = ToolDeviceFacade(user_id=user_id, app=app).publish_event(
+        "command.requested",
         payload={"command_name": "navigation.start", "params": {"destination": "office"}},
         selection="first_available",
     )
@@ -190,8 +190,8 @@ def test_debug_snapshot_explains_subscription_miss_and_recent_errors(tmp_path) -
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
 
-    result = UserDeviceContext(user_id="user-debug", app=app).publish_event(
-        "stream.control.configure.requested",
+    result = ToolDeviceFacade(user_id="user-debug", app=app).publish_event(
+        "stream.control.open.requested",
         payload={"stream_type": "sensor.depth"},
         stream_type="sensor.depth",
     )

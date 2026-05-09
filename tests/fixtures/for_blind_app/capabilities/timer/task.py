@@ -12,7 +12,7 @@ class TimerTask(BaseTask):
         """测试目标：验证 Task 输出必须走 Output Service。"""
 
         if context.devices is not None:
-            context.devices.submit_text("timer started", priority="normal")
+            context.output.say("timer started", priority="normal")
         if context.bridge is not None:
             context.bridge.handle_event(
                 TaskEvent(

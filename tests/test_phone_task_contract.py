@@ -11,19 +11,19 @@ from audio_chat.tasks import TaskRef
 def test_phone_task_command_contract_uses_event_and_stream_semantics() -> None:
     """测试目标：验证 phone task 等价协议只使用公共 event + stream。
 
-    测试方法：构造 `control.device.command.requested` 事件，检查 payload 只包含
+    测试方法：构造 `command.requested` 事件，检查 payload 只包含
     task 语义、输入参数和所需 stream，不包含点对点设备字段或媒体大字节。
     预期结果：事件可通过协议校验，且 progress/completed/failed 都是公共事件名。
     """
 
-    assert "control.device.command.requested" in CONTROL_EVENTS
-    assert "control.device.command.started" in CONTROL_EVENTS
-    assert "control.device.command.progress" in CONTROL_EVENTS
-    assert "control.device.command.completed" in CONTROL_EVENTS
-    assert "control.device.command.failed" in CONTROL_EVENTS
+    assert "command.requested" in CONTROL_EVENTS
+    assert "command.accepted" in CONTROL_EVENTS
+    assert "command.progress" in CONTROL_EVENTS
+    assert "command.completed" in CONTROL_EVENTS
+    assert "command.failed" in CONTROL_EVENTS
 
     event = Event(
-        event_name="control.device.command.requested",
+        event_name="command.requested",
         user_id="user-phone-task",
         producer_id="server-main",
         payload={
@@ -47,7 +47,7 @@ def test_phone_task_command_contract_uses_event_and_stream_semantics() -> None:
 def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     """测试目标：验证端侧 command 回报会进入 TaskEngine。
 
-    测试方法：创建一个任务快照后，向 App 发布 `control.device.command.completed`。
+    测试方法：创建一个任务快照后，向 App 发布 `command.completed`。
     预期结果：任务进入 completed，runs 中写入 `phone_task.completed` 和 `task.completed`。
     """
 
@@ -61,7 +61,7 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     app.task_engine.store.put(created)
     app.publish_control_event(
         Event(
-            event_name="control.device.command.completed",
+            event_name="command.completed",
             user_id="user-phone-task",
             producer_id="dev-python-phone",
             payload={

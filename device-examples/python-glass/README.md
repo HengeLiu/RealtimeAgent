@@ -33,5 +33,5 @@ uv run python -m pytest tests/test_text_route_audio_samples.py -q
 1. AudioSample 分片上传到 `sensor.mic`。
 2. mock ASR 生成转写文本。
 3. TextAgentCore 调用 `query_device_state` 或 `capture_photo`。
-4. `capture_photo` 通过 `stream.control.configure.requested` 请求 `sensor.rgb`，再由 Python glass 上传资产。
+4. `capture_photo` 通过 `stream.control.open.requested` 请求 `sensor.rgb`，再由 Python glass 上传资产。
 5. 文本 delta 进入 Streaming TTS，并下发 `actuator.speaker`。

@@ -17,7 +17,7 @@
 6. 下行 `actuator.speaker` stream 播放开始后上报 `stream.output.started`；播放完成后
    上报 `stream.output.finished` 和 `stream.output.closed`；用户打断时上报
    `control.user.interrupt.detected` 和对应 output cancel 回执。
-7. 收到 `sensor.rgb` 的 `stream.control.configure.requested` 后，打开输入 stream
+7. 收到 `sensor.rgb` 的 `stream.control.open.requested` 后，打开输入 stream
    上传 JPEG bytes；控制事件只保存 request_id、correlation_id、采样模式等语义字段。
 8. 如果配置了 iOS phone 的直连相机接收地址，同时把同一帧 JPEG 按
    `audio_chat.direct_frame.v1` 格式推送到 `ws://<phone-ip>:9001/ws/camera`。

@@ -48,7 +48,7 @@ def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_
     """测试目标：验证 text 模型路线中的视觉工具仍遵守 stream/event 协议。
 
     测试方法：使用“看一下我前面有什么”音频样例触发 `capture_photo`；Python glass 收到
-    `stream.control.configure.requested` 后上传一帧 `sensor.rgb` 资产。
+    `stream.control.open.requested` 后上传一帧 `sensor.rgb` 资产。
     预期结果：工具调用成功，资产缓存写入照片，最终文本回复来自工具结果而不是固定图片。
     """
 

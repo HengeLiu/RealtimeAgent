@@ -73,7 +73,7 @@ class PhoneTaskResult:
 class PhoneTaskHandler:
     """Python phone mock 端侧任务处理器基类。
 
-    主要功能：把 `control.device.command.requested` 中的 task_type 映射到本地
+    主要功能：把 `command.requested` 中的 task_type 映射到本地
     视觉处理逻辑。它只代表参考端侧行为，不是 server SDK 业务 API。
     """
 
@@ -85,7 +85,7 @@ class PhoneTaskHandler:
         参数：`endpoint` 是当前 phone mock，`command` 是 server 下发事件，
         `frames` 是本次任务可用 RGB 帧。
         返回值：`PhoneTaskResult`。
-        异常情况：子类可抛出异常，phone mock 会转成 `control.device.command.failed`。
+        异常情况：子类可抛出异常，phone mock 会转成 `command.failed`。
         """
 
         raise NotImplementedError
@@ -145,7 +145,7 @@ class TrafficLightPhoneTaskHandler(PhoneTaskHandler):
 class PhoneTaskHandlerRegistry:
     """phone mock 任务 handler 注册表。
 
-    主要功能：内置旧 SDK 迁移样板 handler，并支持从配置包自动发现自定义 handler。
+    主要功能：内置历史版本 迁移样板 handler，并支持从配置包自动发现自定义 handler。
     """
 
     def __init__(self) -> None:
@@ -430,7 +430,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         device_name: str = "python-phone",
         client_type: str = "python-phone",
         properties: dict[str, Any] | None = None,
-        supports: list[dict[str, Any]] | None = None,
+        supports: dict[str, Any] | None = None,
         subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         task_handlers: PhoneTaskHandlerRegistry | None = None,
@@ -455,25 +455,18 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 "phone.task.traffic_light_phone_task": True,
             },
             supports=supports
-            or [
-                {
-                    "id": "sensor.rgb",
-                    "modes": ["single", "continuous"],
-                    "formats": ["jpeg"],
-                    "frequency_hz": 1,
-                    "sample_count": 1,
-                },
-                {
-                    "id": "actuator.speaker",
-                    "codecs": ["pcm16le"],
-                    "sample_rates_hz": [16000, 24000],
-                    "channels": 1,
-                },
-                {
-                    "id": "actuator.haptic",
-                    "commands": ["vibrate"],
-                },
-            ],
+            or {
+                "sensors": [
+                    {
+                        "type": "rgb",
+                        "modes": ["single", "continuous"],
+                        "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1},
+                    }
+                ],
+                "actuators": [
+                    {"type": "vibrator", "commands": ["vibrate"]},
+                ],
+            },
             subscriptions=subscriptions
             or [
                 {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}},
@@ -482,7 +475,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}},
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
-                {"event": "control.device.command.*"},
+                {"event": "command.*"},
             ],
             rgb_payload=rgb_payload,
         )
@@ -514,7 +507,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 continue
             event = Event.from_dict(json.loads(message.data))
             self.received_events.append(event)
-            if event.event_name == "stream.control.configure.requested":
+            if event.event_name == "stream.control.open.requested":
                 self.sensor_events.append(
                     {
                         "event_name": event.event_name,
@@ -524,7 +517,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 )
                 if event.stream_type == "sensor.rgb":
                     await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
-            elif event.event_name == "control.device.command.requested":
+            elif event.event_name == "command.requested":
                 await self._handle_device_command(control_ws, stream_ws, event)
             elif event.event_name == "stream.output.close.requested":
                 await self._send_event(
@@ -595,7 +588,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         if handler is None:
             await self._send_command_event(
                 control_ws,
-                event_name="control.device.command.failed",
+                event_name="command.failed",
                 command=event,
                 payload={
                     "task_id": task_id,
@@ -608,14 +601,14 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         try:
             await self._send_command_event(
                 control_ws,
-                event_name="control.device.command.started",
+                event_name="command.accepted",
                 command=event,
                 payload={"task_id": task_id, "task_type": task_type, "state": "started"},
             )
             for scripted in self.task_event_scripts.get(task_type, []):
                 await self._send_command_event(
                     control_ws,
-                    event_name=str(scripted.get("event_name") or "control.device.command.progress"),
+                    event_name=str(scripted.get("event_name") or "command.progress"),
                     command=event,
                     payload={"task_id": task_id, "task_type": task_type, **dict(scripted.get("payload") or {})},
                 )
@@ -623,7 +616,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             await self._upload_task_rgb_frames(control_ws, stream_ws, command=event, task_id=task_id, task_type=task_type, frames=frames)
             await self._send_command_event(
                 control_ws,
-                event_name="control.device.command.progress",
+                event_name="command.progress",
                 command=event,
                 payload={
                     "task_id": task_id,
@@ -635,7 +628,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             result = await handler.handle(self, event, frames)
             await self._send_command_event(
                 control_ws,
-                event_name="control.device.command.completed",
+                event_name="command.completed",
                 command=event,
                 payload={
                     "task_id": task_id,
@@ -648,7 +641,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         except Exception as exc:  # noqa: BLE001 - 端侧 mock 需要把 handler 错误转为协议事件
             await self._send_command_event(
                 control_ws,
-                event_name="control.device.command.failed",
+                event_name="command.failed",
                 command=event,
                 payload={
                     "task_id": task_id,
@@ -842,7 +835,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["sensor_events"] = list(self.sensor_events)
         result["actuator_streams"] = list(self.actuator_streams)
         result["properties"] = dict(self.properties)
-        result["supports"] = list(self.supports)
+        result["supports"] = dict(self.supports)
         result["subscriptions"] = list(self.subscriptions)
         result["task_handlers"] = self.task_handlers.list_task_types()
         result["task_events"] = list(self.task_events)
@@ -880,7 +873,7 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         auth=dict(config.get("auth") or {"mode": "disabled"}),
         device_name=str(config.get("name") or config.get("device_name") or "python-phone"),
         properties=dict(config.get("properties") or {}) or None,
-        supports=list(config.get("supports") or []) or None,
+        supports=dict(config.get("supports") or {}) or None,
         subscriptions=list(config.get("subscriptions") or []) or None,
         task_handlers=handler_registry,
         task_event_scripts=dict(config.get("task_event_scripts") or {}),

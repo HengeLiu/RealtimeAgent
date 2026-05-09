@@ -37,7 +37,7 @@ def test_event_rejects_invalid_name_and_point_to_point_fields() -> None:
         Event(event_name="Stream.Output", user_id="user-001", producer_id="server-main").to_dict()
     with pytest.raises(ValueError, match="forbidden device routing"):
         Event(
-            event_name="control.device.command.requested",
+            event_name="command.requested",
             user_id="user-001",
             producer_id="server-main",
             payload={"target_device_id": "dev-001"},
@@ -53,14 +53,14 @@ def test_event_rejects_media_bytes_in_control_payload() -> None:
 
     with pytest.raises(ValueError, match="must not contain bytes"):
         Event(
-            event_name="control.device.command.requested",
+            event_name="command.requested",
             user_id="user-001",
             producer_id="server-main",
             payload={"params": {"data": b"\x00\x01"}},
         ).to_dict()
     with pytest.raises(ValueError, match="media bytes"):
         Event(
-            event_name="control.device.command.requested",
+            event_name="command.requested",
             user_id="user-001",
             producer_id="server-main",
             payload={"image_base64": "abcd"},

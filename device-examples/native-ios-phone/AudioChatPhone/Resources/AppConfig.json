@@ -1,63 +1,26 @@
 {
   "server_url": "http://127.0.0.1:8765",
-  "user_id": "user-endpoint-001",
+  "user_id": "user-for-blind-app",
   "device_id": "dev-ios-phone-001",
-  "auth": {
-    "mode": "disabled"
+  "device_name": "native-ios-phone",
+  "client_type": "native-ios-phone",
+  "supports": {
+    "sensors": [
+      {
+        "type": "rgb",
+        "modes": ["single", "continuous"],
+        "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}
+      }
+    ],
+    "actuators": [
+      {"type": "vibrator", "commands": ["vibrate"]}
+    ]
   },
-  "protocol_version": "audio-chat.v1",
-  "direct_camera_sink_port": 9001,
-  "properties": {
-    "phone.task.find_object_phone_task": true,
-    "phone.task.traffic_light_phone_task": true,
-    "direct.camera_sink": true,
-    "direct.camera_sink.path": "/ws/camera",
-    "direct.camera_sink.frame_format": "audio_chat.direct_frame.v1",
-    "audio.aec": "replaceable",
-    "audio.wake_word": "manual"
-  },
-  "supports": [
-    {
-      "id": "sensor.rgb",
-      "modes": ["single", "continuous"],
-      "formats": ["jpeg"],
-      "frequency_hz": 1,
-      "sample_count": 1
-    },
-    {
-      "id": "sensor.mic",
-      "modes": ["continuous"],
-      "sample_rate_hz": 16000,
-      "channels": 1,
-      "frequency_hz": 50,
-      "duration_seconds": 0,
-      "codecs": ["pcm16le"]
-    },
-    {
-      "id": "actuator.speaker",
-      "codecs": ["pcm16le"],
-      "sample_rates_hz": [16000, 24000],
-      "channels": 1
-    }
-  ],
   "subscriptions": [
-    {
-      "event": "stream.control.*",
-      "filter": {
-        "stream_type": "sensor.rgb"
-      }
-    },
-    {
-      "event": "stream.output.*",
-      "filter": {
-        "stream_type": "actuator.speaker"
-      }
-    },
-    {
-      "event": "control.device.command.*"
-    },
-    {
-      "event": "control.audio_session.*"
-    }
+    {"event": "control.audio_session.*"},
+    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
+    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+    {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
+    {"event": "command.*"}
   ]
 }

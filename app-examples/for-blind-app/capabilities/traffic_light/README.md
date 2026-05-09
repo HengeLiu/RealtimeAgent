@@ -4,9 +4,9 @@
 
 audio-chat 迁移路径：
 
-1. Task 发布 `stream.control.configure.requested`，请求 `sensor.rgb` 连续上传。
+1. Task 使用 `context.devices.sensors.rgb.stream()`，由 SDK 请求 `sensor.rgb` 连续上传。
 2. phone mock 或 iOS 端侧声明视觉能力和 stream subscription。
-3. Task 用 `watch_assets("sensor.rgb", correlation_id=...)` 消费帧。
+3. Task 直接从 typed stream 消费 `AssetRef` 帧。
 4. 识别结果通过 `TaskEvent` 回流。
 5. 用户提示通过 Output Service 播报，不直接控制播放器。
 

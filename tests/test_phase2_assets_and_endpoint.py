@@ -8,7 +8,7 @@ from audio_chat_esp32_s3.esp32_aec import Esp32AecEndpointState
 from audio_chat_python_glass.playback import PythonPlaybackEndpoint
 from audio_chat.protocol import Event
 from audio_chat.protocol import StreamChunk
-from audio_chat.tools import RequestAssetTool, UserDeviceContext
+from audio_chat.tools import RequestAssetTool, ToolDeviceFacade
 
 
 def test_user_device_context_requests_sensor_rgb_asset_without_direct_device_target(tmp_path) -> None:
@@ -28,14 +28,14 @@ def test_user_device_context_requests_sensor_rgb_asset_without_direct_device_tar
     )
     app.register_device(registration, endpoint)
 
-    context = UserDeviceContext(user_id="user-asset", app=app)
+    context = ToolDeviceFacade(user_id="user-asset", app=app)
     asset = RequestAssetTool().run(context, stream_type="sensor.rgb")
 
     assert asset is not None
     assert asset.stream_type == "sensor.rgb"
     assert asset.mime_type == "image/jpeg"
-    assert asset.device_id == "dev-playback"
-    assert any(event.event_name == "stream.control.configure.requested" for event in endpoint.events)
+    assert asset.metadata.get("producer_id") == "dev-playback"
+    assert any(event.event_name == "stream.control.open.requested" for event in endpoint.events)
 
 
 def test_esp32_aec_endpoint_declares_endpoint_aec_and_buffers_playback_reference() -> None:
@@ -78,23 +78,23 @@ def test_protocol_native_context_publish_event_and_submit_text(tmp_path) -> None
                 "auth": {"mode": "disabled"},
                 "subscriptions": [
                     {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                    {"event": "control.device.command.requested"},
+                    {"event": "command.requested"},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
             },
         ),
         endpoint,
     )
-    context = UserDeviceContext(user_id="user-device", app=app)
+    context = ToolDeviceFacade(user_id="user-device", app=app)
 
     result = context.publish_event(
-        "stream.control.configure.requested",
+        "stream.control.open.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single"},
         selection="first_available",
     )
     context.publish_event(
-        "control.device.command.requested",
+        "command.requested",
         payload={"command_name": "rgb_window.start", "params": {"mode": "window"}},
         selection="first_available",
     )
@@ -102,8 +102,8 @@ def test_protocol_native_context_publish_event_and_submit_text(tmp_path) -> None
 
     event_names = [event.event_name for event in endpoint.events]
     assert result.delivered_count == 1
-    assert "stream.control.configure.requested" in event_names
-    assert "control.device.command.requested" in event_names
+    assert "stream.control.open.requested" in event_names
+    assert "command.requested" in event_names
     assert "stream.output.open.requested" in event_names
 
 
@@ -122,30 +122,30 @@ def test_publish_event_first_available_reaches_one_matching_subscriber(tmp_path)
                     "auth": {"mode": "disabled"},
                     "subscriptions": [
                         {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                        {"event": "control.device.command.requested"},
+                        {"event": "command.requested"},
                     ],
                 },
             ),
             endpoint,
         )
 
-    context = UserDeviceContext(user_id="user-two", app=app)
+    context = ToolDeviceFacade(user_id="user-two", app=app)
     context.publish_event(
-        "stream.control.configure.requested",
+        "stream.control.open.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single"},
         selection="first_available",
     )
     context.publish_event(
-        "control.device.command.requested",
+        "command.requested",
         payload={"command_name": "selected-only"},
         selection="first_available",
     )
 
-    assert [event.event_name for event in first.events].count("stream.control.configure.requested") == 1
-    assert [event.event_name for event in second.events].count("stream.control.configure.requested") == 0
-    assert [event.event_name for event in first.events].count("control.device.command.requested") == 1
-    assert [event.event_name for event in second.events].count("control.device.command.requested") == 0
+    assert [event.event_name for event in first.events].count("stream.control.open.requested") == 1
+    assert [event.event_name for event in second.events].count("stream.control.open.requested") == 0
+    assert [event.event_name for event in first.events].count("command.requested") == 1
+    assert [event.event_name for event in second.events].count("command.requested") == 0
 
 
 def test_context_publish_event_uses_protocol_matching_not_device_command_service(tmp_path) -> None:
@@ -169,10 +169,10 @@ def test_context_publish_event_uses_protocol_matching_not_device_command_service
         ),
         endpoint,
     )
-    context = UserDeviceContext(user_id="user-spy", app=app)
+    context = ToolDeviceFacade(user_id="user-spy", app=app)
 
     result = context.publish_event(
-        "stream.control.configure.requested",
+        "stream.control.open.requested",
         stream_type="sensor.rgb",
         payload={"mode": "single"},
         selection="first_available",
@@ -180,7 +180,7 @@ def test_context_publish_event_uses_protocol_matching_not_device_command_service
 
     assert result.delivered_count == 1
     assert not hasattr(app, "device_command_service")
-    assert [event.event_name for event in endpoint.events] == ["stream.control.configure.requested"]
+    assert [event.event_name for event in endpoint.events] == ["stream.control.open.requested"]
 
 
 def test_asset_request_id_prevents_concurrent_rgb_cross_talk(tmp_path) -> None:
@@ -228,11 +228,11 @@ def test_asset_request_id_prevents_concurrent_rgb_cross_talk(tmp_path) -> None:
         thread.start()
     deadline = time.time() + 1
     while time.time() < deadline:
-        request_events = [event for event in endpoint.events if event.event_name == "stream.control.configure.requested"]
+        request_events = [event for event in endpoint.events if event.event_name == "stream.control.open.requested"]
         if len(request_events) == 2:
             break
         time.sleep(0.01)
-    request_events = [event for event in endpoint.events if event.event_name == "stream.control.configure.requested"]
+    request_events = [event for event in endpoint.events if event.event_name == "stream.control.open.requested"]
     assert len(request_events) == 2
 
     second_request_id = request_events[1].payload["request_id"]

@@ -32,30 +32,25 @@ class FakeConnection:
 def test_browser_device_capability_file_compiles_to_subscriptions() -> None:
     """测试目标：验证浏览器设备能力文件能编译成协议订阅。
 
-    测试方法：读取 `device.audio-chat.yaml`，检查六类标准语义 ID 和编译产物。
-    预期结果：设备开发者不需要手写 subscriptions，也能得到 RGB、IMU、ToF、
-    speaker、haptic 和音频会话相关订阅。
+    测试方法：读取 `device.audio-chat.yaml`，检查结构化能力和编译产物。
+    预期结果：设备开发者不需要手写 subscriptions，也能得到 RGB、IMU、ToF 和 haptic 订阅。
     """
 
     result = compile_device_capabilities_file("device-examples/browser-glass/device.audio-chat.yaml")
 
     support_ids = {item["id"] for item in result["payload"]["supports"]}
     assert support_ids == {
-        "sensor.mic",
         "sensor.rgb",
         "sensor.imu",
         "sensor.tof",
-        "actuator.speaker",
         "actuator.haptic",
     }
     subscriptions = result["payload"]["subscriptions"]
-    assert {"event": "control.audio_session.*"} in subscriptions
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in subscriptions
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in subscriptions
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.tof"}} in subscriptions
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in subscriptions
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}} in subscriptions
-    assert {"event": "control.device.command.*", "filter": {"payload.command": "haptic.vibrate"}} in subscriptions
+    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in subscriptions
 
 
 def test_unknown_support_id_fails_fast() -> None:
@@ -66,7 +61,7 @@ def test_unknown_support_id_fails_fast() -> None:
     """
 
     with pytest.raises(ValueError, match="unknown support id"):
-        compile_supports_to_subscriptions([{"id": "sensor.rbg"}])
+        compile_supports_to_subscriptions({"sensors": [{"type": "rbg"}]})
 
 
 def test_structured_supports_compile_to_legacy_subscriptions(tmp_path: Path) -> None:
@@ -122,7 +117,7 @@ supports:
     assert result["payload"]["properties"]["device_role"] == "front_glass"
     assert result["payload"]["properties"]["tags"] == ["primary", "debug"]
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in result["payload"]["subscriptions"]
-    assert {"event": "control.device.command.*", "filter": {"payload.command": "haptic.vibrate"}} in result["payload"]["subscriptions"]
+    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in result["payload"]["subscriptions"]
 
 
 def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path) -> None:
@@ -138,7 +133,7 @@ def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path
         {
             "device_id": "dev-browser",
             "name": "browser",
-            "supports": [{"id": "sensor.rgb", "modes": ["single"], "formats": ["jpeg"]}],
+            "supports": {"sensors": [{"type": "rgb", "modes": ["single"], "default": {"format": "jpeg"}}]},
         }
     )
     app.register_device(
@@ -153,7 +148,7 @@ def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path
 
     app.publish_control_event(
         Event(
-            event_name="stream.control.configure.requested",
+            event_name="stream.control.open.requested",
             user_id="user-001",
             producer_id="server-main",
             stream_type="sensor.rgb",

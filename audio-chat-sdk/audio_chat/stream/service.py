@@ -121,6 +121,7 @@ class StreamService:
         format: StreamFormat | None = None,
         stream_id: str | None = None,
         selection: str = "all",
+        consumer_device_ids: tuple[str, ...] | None = None,
     ) -> StreamHandle:
         """打开输入或输出 stream。
 
@@ -136,7 +137,7 @@ class StreamService:
         stream_id = stream_id or new_id("stream")
         stream_format = format or self.default_format_for(stream_type)
         self._validate_stream(stream_type=stream_type, format=stream_format)
-        consumers: tuple[str, ...] = ()
+        consumers: tuple[str, ...] = tuple(consumer_device_ids or ())
         handle = StreamHandle(
             user_id=user_id,
             session_id=session_id,
@@ -177,11 +178,12 @@ class StreamService:
                     "format": stream_format.__dict__,
                 },
             )
-            matched = self.control_service.resolve_matching_devices(
-                match_event,
-                selection=selection,
-            )
-            consumers = tuple(device.device_id for device in matched)
+            if consumer_device_ids is None:
+                matched = self.control_service.resolve_matching_devices(
+                    match_event,
+                    selection=selection,
+                )
+                consumers = tuple(device.device_id for device in matched)
             if len(consumers) == 1:
                 handle.session_id = consumers[0]
             event = Event(

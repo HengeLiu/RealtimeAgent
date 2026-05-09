@@ -112,8 +112,8 @@ def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
 
     asset = app.asset_service.query_assets(user_id="user-browser-photo", stream_type="sensor.rgb")[-1]
     assert asset.metadata["payload_size"] == len(payload)
-    assert Path(asset.path).is_absolute()
-    assert Path(asset.path).read_bytes() == payload
+    assert Path(asset.uri).is_absolute()
+    assert Path(asset.uri).read_bytes() == payload
 
 
 def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:

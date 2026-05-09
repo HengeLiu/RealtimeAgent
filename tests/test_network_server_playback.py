@@ -184,8 +184,8 @@ def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path
 
         rgb_received = [event.event_name for event in rgb.received_events]
         speaker_received = [event.event_name for event in speaker.received_events]
-        assert "stream.control.configure.requested" in rgb_received
-        assert "stream.control.configure.requested" not in speaker_received
+        assert "stream.control.open.requested" in rgb_received
+        assert "stream.control.open.requested" not in speaker_received
         assert rgb.asset_uploads and rgb.asset_uploads[0]["payload_size"] > 0
         assert speaker.output_chunks
         assert not rgb.output_chunks

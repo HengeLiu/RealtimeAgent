@@ -79,7 +79,7 @@ class FirstToolCallModel:
         yield "查询完成"
 
     def stream_text(self, transcript: str):
-        """兼容旧接口。"""
+        """历史接口占位。"""
 
         yield "unused"
 

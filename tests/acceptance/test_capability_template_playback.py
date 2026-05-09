@@ -25,7 +25,7 @@ class ForBlindAppPlaybackEndpoint:
         """处理服务端下发事件。"""
 
         self.events.append(event)
-        if event.event_name != "stream.control.configure.requested" or event.stream_type != "sensor.rgb":
+        if event.event_name != "stream.control.open.requested" or event.stream_type != "sensor.rgb":
             return
         mode = event.payload.get("mode")
         if mode == "single":
@@ -191,7 +191,7 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
     assert capture.assets
     assert result["asset_count"] >= 3
     assert result["output_chunk_count"] > 0
-    assert "stream.control.configure.requested" in result["endpoint_received_events"]
+    assert "stream.control.open.requested" in result["endpoint_received_events"]
     assert missing == []
 
     tool_events = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")

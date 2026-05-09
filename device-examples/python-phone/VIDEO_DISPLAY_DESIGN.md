@@ -52,7 +52,7 @@ subscriptions:
   - event: stream.control.*
     filter:
       stream_type: sensor.rgb
-  - event: control.device.command.*
+  - event: command.*
 ```
 
 说明：
@@ -246,7 +246,7 @@ vision:
   input_size: 640
   confidence_threshold: 0.35
   max_fps: 5
-  result_event: control.device.command.progress
+  result_event: command.progress
 ```
 
 处理策略：
@@ -278,7 +278,7 @@ subscriptions:
   - event: stream.control.*
     filter:
       stream_type: sensor.rgb
-  - event: control.device.command.*
+  - event: command.*
 
 display:
   enabled: true

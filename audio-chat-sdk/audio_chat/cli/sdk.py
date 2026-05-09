@@ -44,7 +44,7 @@ def package_check(argv: list[str] | None = None) -> None:
         except Exception as exc:
             errors.append(f"entry point import failed: {name}={target}: {type(exc).__name__}: {exc}")
     package = importlib.import_module("audio_chat")
-    public_names = ["AudioChatApp", "AudioChatConfig", "BaseTool", "BaseTask", "ToolResult", "TaskEvent", "UserDeviceContext"]
+    public_names = ["AudioChatApp", "AudioChatConfig", "BaseTool", "BaseTask", "ToolResult", "TaskEvent", "ToolDeviceFacade", "TaskDeviceFacade"]
     missing = [name for name in public_names if not hasattr(package, name)]
     errors.extend(f"missing public export: {name}" for name in missing)
 
@@ -145,7 +145,7 @@ def _release_candidate_check(*, version: str, audio_root: Path) -> dict:
         changelog_text = ""
     else:
         changelog_text = changelog.read_text(encoding="utf-8")
-        for expected in (version, "不兼容点", "package-check", "old-sdk-parity-release"):
+        for expected in (version, "不兼容点", "package-check", "device-api-upgrade-release"):
             if expected not in changelog_text:
                 errors.append(f"CHANGELOG.md missing release note: {expected}")
     return {

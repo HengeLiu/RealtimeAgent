@@ -108,7 +108,7 @@ def test_stream_event_routes_by_subscription_without_capabilities() -> None:
 
     result = service.publish_matching(
         Event(
-            event_name="stream.control.configure.requested",
+            event_name="stream.control.open.requested",
             user_id="user-001",
             producer_id="server-main",
             stream_type="sensor.rgb",
@@ -117,7 +117,7 @@ def test_stream_event_routes_by_subscription_without_capabilities() -> None:
     )
 
     assert result.delivered_count == 1
-    assert camera.events[-1].event_name == "stream.control.configure.requested"
+    assert camera.events[-1].event_name == "stream.control.open.requested"
     snapshot = service.build_device_snapshot("camera")
     assert snapshot["properties"] == {"camera.facing": "front"}
     assert "capabilities" not in snapshot
@@ -201,7 +201,7 @@ def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
             "dev-speaker",
             [
                 {
-                    "event": "control.device.command.requested",
+                    "event": "command.requested",
                     "filter": {
                         "producer_id": "server-main",
                         "payload.command_name": "audio.play",
@@ -215,7 +215,7 @@ def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
 
     result = service.publish(
         Event(
-            event_name="control.device.command.requested",
+            event_name="command.requested",
             user_id="user-001",
             producer_id="server-main",
             payload={"command_name": "audio.play", "tags": ["speaker", "debug"]},
@@ -242,7 +242,7 @@ def test_route_diagnostics_explain_subscription_miss() -> None:
 
     result = service.publish_matching(
         Event(
-            event_name="stream.control.configure.requested",
+            event_name="stream.control.open.requested",
             user_id="user-001",
             producer_id="server-main",
             stream_type="sensor.depth",

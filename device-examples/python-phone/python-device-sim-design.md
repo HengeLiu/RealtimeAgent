@@ -216,7 +216,7 @@ mime_type
 
 行为：
 
-1. 监听 `stream.control.configure.requested`。
+1. 监听 `stream.control.open.requested`。
 2. 当 `stream_type=sensor.rgb` 且 `mode=single` 时上传图片。
 3. 通过 `sensor.rgb` stream 上传 JPEG / PNG 字节。
 
@@ -287,11 +287,11 @@ phone.task.traffic_light_phone_task
 事件形式：
 
 ```text
-control.device.command.requested
-control.device.command.started
-control.device.command.progress
-control.device.command.completed
-control.device.command.failed
+command.requested
+command.accepted
+command.progress
+command.completed
+command.failed
 ```
 
 算力模拟器可以从场景配置中读取固定返回，也可以调用本地模型或测试 stub。

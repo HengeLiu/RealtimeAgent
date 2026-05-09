@@ -10,7 +10,7 @@ from audio_chat.tasks import BaseTask, TaskContext, TaskEvent
 class RgbTaskEndpoint:
     """测试用 RGB 端侧。
 
-    主要功能：只响应 stream.control.configure.requested，通过 sensor.rgb stream 上传帧。
+    主要功能：只响应 stream.control.open.requested，通过 sensor.rgb stream 上传帧。
     """
 
     def __init__(self, *, app: AudioChatApp, user_id: str, device_id: str) -> None:
@@ -23,7 +23,7 @@ class RgbTaskEndpoint:
         """处理服务端请求的 stream 配置事件。"""
 
         self.events.append(event)
-        if event.event_name != "stream.control.configure.requested" or event.stream_type != "sensor.rgb":
+        if event.event_name != "stream.control.open.requested" or event.stream_type != "sensor.rgb":
             return
         if event.payload.get("mode") != "continuous":
             return
@@ -74,14 +74,14 @@ class ContinuousRgbProductionTask(BaseTask):
         """
 
         correlation_id = context.task_ref.task_id
-        context.devices.publish_event(
-            "stream.control.configure.requested",
+        context.devices.commands.call(
+            "stream.control.open.requested",
             stream_type="sensor.rgb",
             payload={"mode": "continuous", "correlation_id": correlation_id, "fps": 2},
             selection="first_available",
         )
         refs = []
-        async for ref in context.devices.watch_assets(
+        async for ref in context.devices.sensors.rgb.stream(
             "sensor.rgb",
             correlation_id=correlation_id,
             timeout_seconds=1,
@@ -105,8 +105,8 @@ class ContinuousRgbProductionTask(BaseTask):
     async def on_cancel(self, context: TaskContext) -> None:
         """取消时发布停止采集事件。"""
 
-        context.devices.publish_event(
-            "stream.control.configure.requested",
+        context.devices.commands.call(
+            "stream.control.open.requested",
             stream_type="sensor.rgb",
             payload={"mode": "stop", "correlation_id": context.task_ref.task_id},
             selection="first_available",
@@ -121,8 +121,8 @@ class CancellableRgbTask(ContinuousRgbProductionTask):
     async def on_start(self, context: TaskContext) -> None:
         """只请求端侧开始上传，不主动完成。"""
 
-        context.devices.publish_event(
-            "stream.control.configure.requested",
+        context.devices.commands.call(
+            "stream.control.open.requested",
             stream_type="sensor.rgb",
             payload={"mode": "continuous", "correlation_id": context.task_ref.task_id, "fps": 1},
             selection="first_available",
@@ -171,7 +171,7 @@ def test_continuous_sensor_task_uses_only_event_and_stream(tmp_path) -> None:
 
     assert ref.state == "completed"
     assert [event.event_name for event in endpoint.events if event.stream_type == "sensor.rgb"] == [
-        "stream.control.configure.requested"
+        "stream.control.open.requested"
     ]
     assert endpoint.events[0].payload["mode"] == "continuous"
     assert "device_id" not in endpoint.events[0].payload

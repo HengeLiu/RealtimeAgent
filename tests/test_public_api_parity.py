@@ -5,12 +5,12 @@ import inspect
 import audio_chat
 
 
-def test_old_sdk_parity_public_api_is_importable_from_top_level() -> None:
-    """测试目标：冻结老 SDK 可用性对齐阶段的顶层公开 API。
+def test_public_device_facade_api_is_importable_from_top_level() -> None:
+    """测试目标：冻结设备 Facade 架构阶段的顶层公开 API。
 
     测试方法：逐个从 `audio_chat` 顶层读取开发者应依赖的类型名。
     预期结果：业务代码无需 import SDK 内部 service 模块即可获得 Tool、Task、
-    Context、资产引用和 trace 对象。
+    Context、设备 Facade、资产引用和 trace 对象。
     """
 
     expected = {
@@ -21,7 +21,7 @@ def test_old_sdk_parity_public_api_is_importable_from_top_level() -> None:
         "TaskContext",
         "TaskEvent",
         "TaskRef",
-        "UserDeviceContext",
+        "ToolDeviceFacade",
         "ArtifactRef",
         "CapabilityTrace",
     }
@@ -35,11 +35,11 @@ def test_public_api_points_to_developer_safe_modules() -> None:
     """测试目标：确认顶层公开对象不会要求开发者感知底层服务实现。
 
     测试方法：检查关键对象所属模块和构造签名。
-    预期结果：`UserDeviceContext` 来自公开 context 门面；Tool / Task 上下文只暴露
+    预期结果：`ToolDeviceFacade 和 TaskDeviceFacade 来自公开 context 门面；Tool / Task 上下文只暴露
     `devices`，不暴露 ControlService、StreamService、AssetService 或 OutputService。
     """
 
-    assert audio_chat.UserDeviceContext.__module__ in {
+    assert audio_chat.ToolDeviceFacade.__module__ in {
         "audio_chat.tools",
         "audio_chat.context",
     }

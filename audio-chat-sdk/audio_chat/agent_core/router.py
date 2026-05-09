@@ -19,7 +19,7 @@ class AgentCoreRouter:
     主要方法：
     1. `register_factory()`：注册自定义 core 工厂。
     2. `create()`：按 mode 创建 core。
-    3. `build()`：兼容旧静态入口。
+    3. `build()`：历史静态入口。
     """
 
     factories: dict[str, Callable[..., AgentCore]] = field(default_factory=dict)
@@ -67,7 +67,7 @@ class AgentCoreRouter:
 
     @staticmethod
     def build(*, mode: str, custom_factories: dict[str, Callable[..., AgentCore]] | None = None, **kwargs) -> AgentCore:
-        """兼容旧调用方式的静态构建入口。"""
+        """历史调用方式的静态构建入口。"""
 
         router = AgentCoreRouter()
         for name, factory in dict(custom_factories or {}).items():

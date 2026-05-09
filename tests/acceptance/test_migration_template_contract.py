@@ -62,7 +62,7 @@ def test_migration_templates_do_not_use_hidden_device_rpc_or_device_id_routing()
 
     测试方法：扫描样板源码，禁止点对点 device_id 路由、隐藏 RPC、WebSocket 直连和
     控制事件内大字节字段。
-    预期结果：Tool / Task 只能通过 UserDeviceContext 的 event、asset、stream 和 output
+    预期结果：Tool / Task 只能通过 ToolDeviceFacade 的 event、asset、stream 和 output
     方法表达设备能力。
     """
 
@@ -101,10 +101,10 @@ def test_migration_templates_use_user_device_context_methods() -> None:
     continuous = (TEMPLATE_ROOT / "continuous_rgb_analyze" / "task.py").read_text(encoding="utf-8")
     notification = (TEMPLATE_ROOT / "notification_task" / "task.py").read_text(encoding="utf-8")
 
-    assert "context.devices.request_asset(" in find_object
-    assert "context.devices.publish_event(" in continuous
-    assert "context.devices.watch_assets(" in continuous
-    assert "context.devices.submit_text(" in notification
+    assert "context.devices.sensors.rgb.one(" in find_object
+    assert "context.devices.commands.call(" in continuous
+    assert "context.devices.sensors.rgb.stream(" in continuous
+    assert "context.output.say(" in notification
 
 
 def test_phase3_migration_guide_references_templates_and_constraints() -> None:
@@ -119,7 +119,7 @@ def test_phase3_migration_guide_references_templates_and_constraints() -> None:
         "app-examples/for-blind-app/templates/find_object/tool.py",
         "app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py",
         "app-examples/for-blind-app/templates/notification_task/task.py",
-        "UserDeviceContext",
+        "ToolDeviceFacade",
         "不允许硬编码 device_id",
         "scripts/acceptance_check.py next-docs-contract",
     ]:

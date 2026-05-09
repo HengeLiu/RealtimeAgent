@@ -20,7 +20,7 @@ class FindObjectCaptureOutput(BaseModel):
     found: bool = Field(description="当前 mock 视觉处理是否认为找到目标。")
     object_name: str = Field(description="要查找的物品名称。")
     asset_id: str | None = Field(default=None, description="图片资产 ID。")
-    path: str | None = Field(default=None, description="本地调试路径。")
+    uri: str | None = Field(default=None, description="资产 URI。")
     source: str | None = Field(default=None, description="结果来源。")
 
 
@@ -44,7 +44,7 @@ class FindObjectCaptureTool(BaseTool):
     """找物单帧抓拍 Tool。
 
     主要功能：
-    1. 通过 `UserDeviceContext.request_asset("sensor.rgb")` 请求端侧上传一张图片资产。
+    1. 通过 `context.devices.sensors.rgb.one()` 请求端侧上传一张图片资产。
     2. 返回资产引用和目标名称，供 Agent 或后续视觉任务继续分析。
     3. 不关心具体端侧设备，设备选择交给 event/filter subscription 匹配。
     """
@@ -78,10 +78,8 @@ class FindObjectCaptureTool(BaseTool):
         """
 
         object_name = input_data["object_name"].strip()
-        asset = context.devices.request_asset(
-            "sensor.rgb",
-            freshness_seconds=float(input_data["freshness_seconds"]),
-            configure_payload={
+        asset = await context.devices.sensors.rgb.one(
+            params={
                 "mode": "single",
                 "reason": "find_object_capture",
                 "format": "jpeg",
@@ -89,18 +87,13 @@ class FindObjectCaptureTool(BaseTool):
             },
             timeout_seconds=float(input_data["timeout_seconds"]),
         )
-        if asset is None:
-            return ToolResult.success(
-                data={"captured": False, "found": False, "object_name": object_name},
-                message="未收到画面，无法完成找物分析",
-            )
         return ToolResult.success(
             data={
                 "captured": True,
                 "found": True,
                 "object_name": object_name,
                 "asset_id": asset.asset_id,
-                "path": asset.path,
+                "uri": asset.uri,
                 "source": "mock_vision",
             },
             message=f"已收到画面，mock 识别认为{object_name}在前方",

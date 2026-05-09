@@ -47,7 +47,7 @@ class NavigationTask(BaseTask):
         for name in event_sequence:
             await self._emit_navigation_event(context, str(name), destination=destination, route_id=route_id)
 
-        context.devices.notify(f"已接近{destination}，请根据现场环境确认入口", priority="high")
+        await context.output.say(f"已接近{destination}，请根据现场环境确认入口", priority="high")
         await context.complete({"destination": destination, "route_id": route_id}, summary="导航样板完成")
 
     async def _emit_navigation_event(self, context: TaskContext, name: str, *, destination: str, route_id: str) -> None:
@@ -65,11 +65,11 @@ class NavigationTask(BaseTask):
             event_name = "navigation.visual_confirmed"
             payload.update({"message": "视觉确认入口候选"})
             if context.devices is not None:
-                context.devices.configure_stream(
-                    "sensor.rgb",
-                    mode="single",
-                    payload={"reason": "navigation_visual_confirm", "format": "jpeg"},
+                asset = await context.devices.sensors.rgb.one(
+                    params={"reason": "navigation_visual_confirm", "format": "jpeg"},
+                    timeout_seconds=2,
                 )
+                payload["asset_id"] = asset.asset_id
         if context.bridge is not None:
             context.bridge.handle_event(
                 TaskEvent(

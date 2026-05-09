@@ -187,7 +187,7 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 "sdk_version": "audio-chat-ios-reference-0.1.0",
                 "auth": config.auth.payload,
                 "properties": properties,
-                "supports": config.supports.map { support in support.mapValues { $0.object } },
+                "supports": config.supports.mapValues { -e.object },
                 "subscriptions": config.subscriptions.map { $0.payload },
             ],
             version: config.protocolVersion
@@ -247,13 +247,13 @@ final class AudioChatEndpointRuntime: ObservableObject {
                     version: config.protocolVersion
                 )
             )
-        case "stream.control.configure.requested" where event.streamType == "sensor.rgb":
+        case "stream.control.open.requested" where event.streamType == "sensor.rgb":
             await uploadRGBFrame(
                 sessionID: event.sessionID ?? config.deviceID,
                 requestID: event.payload["request_id"] as? String,
                 reason: "server_requested"
             )
-        case "control.device.command.requested":
+        case "command.requested":
             await handlePhoneTaskCommand(event)
         case "stream.output.close.requested":
             await finishOutputStream(event)
@@ -280,14 +280,14 @@ final class AudioChatEndpointRuntime: ObservableObject {
         let taskID = event.payload["task_id"] as? String ?? AudioChatIDs.make(prefix: "ios_phone_task")
         guard let handler = phoneTaskRegistry.handler(taskType: taskType) else {
             try? await sendPhoneTaskEvent(
-                "control.device.command.failed",
+                "command.failed",
                 command: event,
                 payload: ["task_id": taskID, "task_type": taskType, "message": "unknown phone task"]
             )
             return
         }
         try? await sendPhoneTaskEvent(
-            "control.device.command.started",
+            "command.accepted",
             command: event,
             payload: ["task_id": taskID, "task_type": taskType, "state": "started"]
         )
@@ -297,13 +297,13 @@ final class AudioChatEndpointRuntime: ObservableObject {
             reason: "phone_task"
         )
         try? await sendPhoneTaskEvent(
-            "control.device.command.progress",
+            "command.progress",
             command: event,
             payload: ["task_id": taskID, "task_type": taskType, "progress": 1.0]
         )
         let result = handler.result(command: event, frameCount: max(1, directCameraFrameCount))
         try? await sendPhoneTaskEvent(
-            "control.device.command.completed",
+            "command.completed",
             command: event,
             payload: [
                 "task_id": taskID,

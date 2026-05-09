@@ -7,7 +7,7 @@ class FindObjectPhoneTask(BaseTask):
     """找物手机视觉任务迁移样板。
 
     主要功能：
-    1. 用 `control.device.command.requested` 请求具备 phone task 能力的端侧执行找物。
+    1. 用 `command.requested` 请求具备 phone task 能力的端侧执行找物。
     2. 要求视觉帧仍通过 `sensor.rgb` stream 上传，不把图片塞进控制事件。
     3. 等待 phone mock 或 iOS 参考端通过 command 回报驱动任务完成。
     """
@@ -20,7 +20,7 @@ class FindObjectPhoneTask(BaseTask):
         """启动找物手机视觉任务。
 
         主要逻辑：从任务输入读取目标名称，发布协议原生命令事件；SDK App 会把端侧
-        `control.device.command.*` 回报桥接回 TaskEngine。
+        `command.*` 回报桥接回 TaskEngine。
         参数：`context` 为 SDK 注入任务上下文。
         返回值：无。
         异常情况：没有匹配端侧时把任务标记为失败。
@@ -30,8 +30,8 @@ class FindObjectPhoneTask(BaseTask):
             await context.fail("缺少设备上下文")
             return
         input_data = dict(context.metadata.get("input") or {})
-        result = context.devices.publish_event(
-            "control.device.command.requested",
+        result = context.devices._publish_control_event(
+            "command.requested",
             payload={
                 "command_name": "phone.task.start",
                 "task_type": self.task_type,

@@ -4,7 +4,7 @@ import asyncio
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk
-from audio_chat.tools import UserDeviceContext
+from audio_chat.tools import ToolDeviceFacade
 
 
 class EndpointProbe:
@@ -19,7 +19,7 @@ class EndpointProbe:
     def push_event(self, event: Event) -> None:
         self.events.append(event)
         if (
-            event.event_name == "stream.control.configure.requested"
+            event.event_name == "stream.control.open.requested"
             and event.stream_type == "sensor.rgb"
             and event.payload.get("mode") == "continuous"
         ):
@@ -86,14 +86,14 @@ def test_payload_only_device_command_uses_event_without_stream(tmp_path) -> None
         endpoint,
         subscriptions=[
             {
-                "event": "control.device.command.requested",
+                "event": "command.requested",
                 "filter": {"payload.command_name": "navigation.start"},
             }
         ],
     )
 
-    result = UserDeviceContext(user_id="user-command", app=app).publish_event(
-        "control.device.command.requested",
+    result = ToolDeviceFacade(user_id="user-command", app=app).publish_event(
+        "command.requested",
         payload={
             "command_name": "navigation.start",
             "params": {"destination": "gate-a", "mode": "walking"},
@@ -103,7 +103,7 @@ def test_payload_only_device_command_uses_event_without_stream(tmp_path) -> None
 
     assert result.matched_count == 1
     assert result.delivered_count == 1
-    assert [event.event_name for event in endpoint.events] == ["control.device.command.requested"]
+    assert [event.event_name for event in endpoint.events] == ["command.requested"]
     assert endpoint.events[0].payload["params"]["destination"] == "gate-a"
     assert app.stream_service.registry.list_by_user("user-command") == []
 
@@ -116,10 +116,10 @@ def test_continuous_sensor_task_uses_config_event_stream_and_asset_watch(tmp_pat
         endpoint,
         subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
     )
-    context = UserDeviceContext(user_id="user-video", app=app)
+    context = ToolDeviceFacade(user_id="user-video", app=app)
 
     result = context.publish_event(
-        "stream.control.configure.requested",
+        "stream.control.open.requested",
         stream_type="sensor.rgb",
         payload={
             "mode": "continuous",
@@ -151,7 +151,7 @@ def test_continuous_sensor_task_uses_config_event_stream_and_asset_watch(tmp_pat
     assert app.stream_service.registry.list_by_user("user-video")[0].stream_type == "sensor.rgb"
 
     stop = context.publish_event(
-        "stream.control.configure.requested",
+        "stream.control.open.requested",
         stream_type="sensor.rgb",
         payload={"mode": "stop", "correlation_id": "task-video-42"},
         selection="first_available",
@@ -169,7 +169,7 @@ def test_actuator_bytes_use_output_stream_not_event_payload(tmp_path) -> None:
         subscriptions=[{"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}}],
     )
 
-    writer = UserDeviceContext(user_id="user-haptic", app=app).open_output_stream(
+    writer = ToolDeviceFacade(user_id="user-haptic", app=app).open_output_stream(
         "actuator.haptic",
         codec="raw",
         selection="first_available",

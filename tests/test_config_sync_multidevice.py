@@ -28,9 +28,9 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
             "--server-url",
             "http://10.1.2.3:8765",
             "--user-id",
-            "user-old-sdk-parity",
+            "user-device-api-upgrade",
             "--auth-token",
-            "token-old-sdk-parity",
+            "token-device-api-upgrade",
         ],
         cwd=AUDIO_ROOT,
         text=True,
@@ -58,15 +58,15 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
         "dev-ios-phone-001",
         "dev-esp32-s3-001",
     }
-    assert {config["user_id"] for config in endpoint_configs} == {"user-old-sdk-parity"}
+    assert {config["user_id"] for config in endpoint_configs} == {"user-device-api-upgrade"}
     assert len({config["device_id"] for config in endpoint_configs}) == len(endpoint_configs)
     for config in endpoint_configs:
         assert config["server_url"] == "http://10.1.2.3:8765"
-        assert config["auth"] == {"mode": "static_token", "token": "token-old-sdk-parity"}
+        assert config["auth"] == {"mode": "static_token", "token": "token-device-api-upgrade"}
         assert config["supports"]
     assert "AUDIO_CHAT_SERVER_URL=http://10.1.2.3:8765" in esp32_env
     assert "AUDIO_CHAT_AUTH_MODE=static_token" in esp32_env
-    assert "AUDIO_CHAT_AUTH_TOKEN=token-old-sdk-parity" in esp32_env
+    assert "AUDIO_CHAT_AUTH_TOKEN=token-device-api-upgrade" in esp32_env
     assert "AUDIO_CHAT_SUPPORTS=" in esp32_env
 
 

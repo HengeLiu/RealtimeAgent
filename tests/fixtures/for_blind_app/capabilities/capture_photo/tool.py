@@ -10,9 +10,9 @@ class CapturePhotoTool(BaseTool):
     description = "请求一帧 sensor.rgb"
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        """测试目标：验证 Tool 只通过 UserDeviceContext 请求资产。"""
+        """测试目标：验证 Tool 只通过 ToolDeviceFacade 请求资产。"""
 
-        asset = context.devices.request_asset(
+        asset = context.devices.sensors.rgb.one(
             "sensor.rgb",
             freshness_seconds=0,
             configure_payload={"reason": input_data.get("reason", "test")},

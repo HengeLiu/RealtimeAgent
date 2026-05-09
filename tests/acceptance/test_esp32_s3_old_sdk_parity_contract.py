@@ -28,12 +28,12 @@ def test_old_sdk_parity_esp32_lane_is_registered() -> None:
     """测试目标：确认 ESP32-S3 老 SDK 对齐线路进入统一验收脚本。
 
     测试方法：读取 `scripts.acceptance_check.CHECKS` 中的 lane 注册表。
-    预期结果：`old-sdk-parity-esp32` 存在，且覆盖 ESP32 契约、配置和 package manifest。
+    预期结果：`device-api-upgrade-esp32` 存在，且覆盖 ESP32 契约、配置和 package manifest。
     """
 
     acceptance_check = _load_acceptance_module()
-    assert "old-sdk-parity-esp32" in acceptance_check.CHECKS
-    command_text = "\n".join(" ".join(command.command) for command in acceptance_check.CHECKS["old-sdk-parity-esp32"])
+    assert "device-api-upgrade-esp32" in acceptance_check.CHECKS
+    command_text = "\n".join(" ".join(command.command) for command in acceptance_check.CHECKS["device-api-upgrade-esp32"])
     assert "tests/test_esp32_s3_endpoint_contract.py" in command_text
     assert "tests/test_esp32_package_manifest.py" in command_text
 

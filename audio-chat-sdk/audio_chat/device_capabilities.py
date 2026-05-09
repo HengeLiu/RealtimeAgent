@@ -11,34 +11,28 @@ import yaml
 STANDARD_SUPPORT_IDS = {
     "sensor.rgb",
     "sensor.imu",
-    "sensor.mic",
     "sensor.tof",
-    "actuator.speaker",
     "actuator.haptic",
 }
 
-SENSOR_SUPPORT_IDS = {"sensor.rgb", "sensor.imu", "sensor.mic", "sensor.tof"}
-ACTUATOR_SUPPORT_IDS = {"actuator.speaker", "actuator.haptic"}
+SENSOR_SUPPORT_IDS = {"sensor.rgb", "sensor.imu", "sensor.tof"}
+ACTUATOR_SUPPORT_IDS = {"actuator.haptic"}
 
 SUPPORT_STREAM_TYPES = {
     "sensor.rgb": "sensor.rgb",
     "sensor.imu": "sensor.imu",
-    "sensor.mic": "sensor.mic",
     "sensor.tof": "sensor.tof",
-    "actuator.speaker": "actuator.speaker",
     "actuator.haptic": "actuator.haptic",
 }
 
 DEFAULT_MODES = {
     "sensor.rgb": ["single"],
     "sensor.imu": ["continuous"],
-    "sensor.mic": ["continuous"],
     "sensor.tof": ["single"],
 }
 
 ALLOWED_MODES = {"single", "continuous"}
 ALLOWED_IMAGE_FORMATS = {"jpeg", "png"}
-ALLOWED_AUDIO_CODECS = {"pcm16le", "opus"}
 ALLOWED_HAPTIC_COMMANDS = {"vibrate"}
 
 
@@ -107,31 +101,33 @@ def validate_device_capabilities_file(data: dict[str, Any], *, require_identity:
     return normalized
 
 
-def compile_supports_to_subscriptions(supports: list[dict[str, Any]] | dict[str, Any]) -> list[dict[str, Any]]:
+def compile_supports_to_subscriptions(supports: dict[str, Any]) -> list[dict[str, Any]]:
     """把设备语义能力编译成协议订阅。
 
     主要逻辑：开发者只写 `supports`；SDK 根据标准语义生成 `subscriptions`，作为事件
     路由的真实输入。
-    参数：`supports` 为标准化 supports 列表，或新版 `sensors/actuators` 结构。
+    参数：`supports` 只能是 `sensors/actuators` 结构。
     返回值：订阅字典列表。
     异常情况：supports 非法时由校验逻辑抛出。
     """
 
     normalized = validate_device_capabilities_file({"supports": supports}, require_identity=False)
+    return _compile_normalized_supports_to_subscriptions(normalized)
+
+
+def _compile_normalized_supports_to_subscriptions(normalized: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把已标准化的结构化能力编译成事件订阅。"""
+
     subscriptions: list[dict[str, Any]] = []
     for item in normalized:
         support_id = item["id"]
         stream_type = SUPPORT_STREAM_TYPES[support_id]
-        if support_id == "sensor.mic":
-            subscriptions.append({"event": "control.audio_session.*"})
-        elif support_id in {"sensor.rgb", "sensor.imu", "sensor.tof"}:
+        if support_id in {"sensor.rgb", "sensor.imu", "sensor.tof"}:
             subscriptions.append({"event": "stream.control.*", "filter": {"stream_type": stream_type}})
-        elif support_id == "actuator.speaker":
-            subscriptions.append({"event": "stream.output.*", "filter": {"stream_type": stream_type}})
         elif support_id == "actuator.haptic":
             subscriptions.append({"event": "stream.output.*", "filter": {"stream_type": stream_type}})
             for command in item.get("commands") or ["vibrate"]:
-                subscriptions.append({"event": "control.device.command.*", "filter": {"payload.command": f"haptic.{command}"}})
+                subscriptions.append({"event": "command.*", "filter": {"payload.command": f"haptic.{command}"}})
     return _dedupe_subscriptions(subscriptions)
 
 
@@ -159,7 +155,7 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
         "runtime": dict(data.get("runtime") or {}),
         "properties": properties,
         "supports": supports,
-        "subscriptions": compile_supports_to_subscriptions(supports),
+        "subscriptions": _compile_normalized_supports_to_subscriptions(supports),
     }
     if data.get("sdk_version"):
         payload["sdk_version"] = data["sdk_version"]
@@ -183,17 +179,23 @@ def compile_registration_payload(payload: dict[str, Any]) -> dict[str, Any]:
     supports = result.get("supports")
     if supports is None:
         return result
-    expanded_supports = _expand_structured_supports(supports)
-    if not isinstance(expanded_supports, list):
-        raise ValueError("supports must be a list or object")
-    compiled = compile_supports_to_subscriptions(expanded_supports)
+    if not isinstance(supports, dict):
+        raise ValueError("supports must use structured sensors/actuators object")
+    normalized = validate_device_capabilities_file({"supports": supports}, require_identity=False)
+    compiled = _compile_normalized_supports_to_subscriptions(normalized)
     explicit = result.get("subscriptions") or []
     if not isinstance(explicit, list):
         raise ValueError("subscriptions must be a list")
-    result["supports"] = validate_device_capabilities_file({"supports": expanded_supports}, require_identity=False)
+    result["supports"] = normalized
     result["subscriptions"] = _dedupe_subscriptions([*compiled, *explicit])
     properties = dict(result.get("properties") or {})
+    if isinstance(result.get("runtime"), dict):
+        properties.setdefault("runtime", dict(result["runtime"]))
     properties["audio_chat.support_ids"] = [item["id"] for item in result["supports"]]
+    properties["audio_chat.support_defaults"] = {
+        item["id"]: _support_defaults(item)
+        for item in result["supports"]
+    }
     result["properties"] = properties
     return result
 
@@ -209,11 +211,11 @@ def _expand_structured_supports(supports: Any) -> Any:
       actuators:
         - type: vibrator
 
-    当前路由编译器仍以 `id=sensor.rgb` 这类标准 ID 工作，因此在入口统一展开。
+    SDK 内部用标准能力 ID 做路由匹配；公开设备文件只接受结构化写法。
     """
 
     if not isinstance(supports, dict):
-        return supports
+        raise ValueError("supports must use structured sensors/actuators object")
     expanded: list[dict[str, Any]] = []
     for item in supports.get("sensors") or []:
         if not isinstance(item, dict):
@@ -236,10 +238,10 @@ def _expand_structured_supports(supports: Any) -> Any:
 
 
 def _structured_support_item_to_legacy(item: dict[str, Any], *, support_id: str) -> dict[str, Any]:
-    """把结构化能力条目转换成内部兼容格式。
+    """把结构化能力条目转换成内部标准格式。
 
-    主要逻辑：设备开发者在新版文件里按 `type/default/external` 描述能力；
-    server 内部继续复用已经稳定的 `id/frequency_hz/options` 编译链路。
+    主要逻辑：设备开发者按 `type/default/external` 描述能力；server 在入口展开成
+    标准能力 ID，避免公开协议继续暴露旧 旧数组 supports。
     参数：`item` 为结构化能力条目；`support_id` 为标准语义 ID。
     返回值：可被旧校验器和订阅编译器识别的能力条目。
     异常情况：本函数只做字段映射，非法值由后续校验阶段统一抛出。
@@ -281,13 +283,6 @@ def _validate_support_item(index: int, item: dict[str, Any]) -> None:
         _ensure_string_list(item, "formats", allowed=ALLOWED_IMAGE_FORMATS, default=["jpeg"])
         _ensure_int(item, "width", minimum=1)
         _ensure_int(item, "height", minimum=1)
-    if support_id == "sensor.mic":
-        _ensure_int(item, "sample_rate_hz", minimum=1)
-        _ensure_int(item, "channels", minimum=1)
-        _ensure_string_list(item, "codecs", allowed=ALLOWED_AUDIO_CODECS, default=["pcm16le"])
-    if support_id == "actuator.speaker":
-        _ensure_int_list(item, "sample_rates_hz", minimum=1, default=[16000, 24000])
-        _ensure_string_list(item, "codecs", allowed=ALLOWED_AUDIO_CODECS, default=["pcm16le"])
     if support_id == "actuator.haptic":
         _ensure_string_list(item, "commands", allowed=ALLOWED_HAPTIC_COMMANDS, default=["vibrate"])
 
@@ -300,18 +295,25 @@ def _normalize_support_item(item: dict[str, Any]) -> dict[str, Any]:
         result.setdefault("stream_type", SUPPORT_STREAM_TYPES[support_id])
     if support_id in {"sensor.rgb", "sensor.tof"}:
         result.setdefault("formats", ["jpeg"])
-    if support_id == "sensor.mic":
-        result.setdefault("codecs", ["pcm16le"])
-        result.setdefault("sample_rate_hz", 16000)
-        result.setdefault("channels", 1)
-    if support_id == "actuator.speaker":
-        result.setdefault("codecs", ["pcm16le"])
-        result.setdefault("sample_rates_hz", [16000, 24000])
-        result.setdefault("stream_type", SUPPORT_STREAM_TYPES[support_id])
     if support_id == "actuator.haptic":
         result.setdefault("commands", ["vibrate"])
         result.setdefault("stream_type", SUPPORT_STREAM_TYPES[support_id])
     return result
+
+
+def _support_defaults(item: dict[str, Any]) -> dict[str, Any]:
+    """提取能力默认调用参数。
+
+    主要逻辑：结构化 supports 会先被展开成内部兼容字段；这里把可作为 API 默认
+    params 的字段保存到设备 properties，供 typed device API 在调用时自动合并。
+    """
+
+    excluded = {"id", "stream_type", "modes", "options", "external", "commands"}
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in excluded and value is not None
+    }
 
 
 def _ensure_number(item: dict[str, Any], key: str, *, minimum: float) -> None:

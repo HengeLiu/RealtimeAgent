@@ -45,7 +45,7 @@ class EchoTool(BaseTool):
 
         主要逻辑：
         1. 从输入中读取 text。
-        2. 通过 `context.devices.get_devices()` 读取只读设备快照。
+        2. 通过 `context.devices._get_devices()` 读取只读设备快照。
         3. 返回结构化 `ToolResult`。
 
         参数：`context` 为 SDK 注入上下文，`input_data` 为模型传入参数。
@@ -55,6 +55,6 @@ class EchoTool(BaseTool):
 
         text = input_data["text"]
         return ToolResult.success(
-            data={"text": text, "device_count": len(context.devices.get_devices())},
+            data={"text": text, "device_count": len(context.devices._get_devices())},
             message=text,
         )

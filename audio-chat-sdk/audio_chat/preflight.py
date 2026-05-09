@@ -143,7 +143,7 @@ def _protocol_summary_check() -> dict:
         "stream.input.opened",
         "stream.output.open.requested",
     }
-    required_streams = {"sensor.mic", "actuator.speaker"}
+    required_streams = {"sensor.rgb", "sensor.imu", "sensor.tof", "actuator.haptic"}
     missing_events = sorted(required_events - set(CONTROL_EVENTS))
     missing_streams = sorted(required_streams - set(STREAM_TYPES))
     return {
@@ -199,7 +199,8 @@ def _package_import_check() -> dict:
         "TaskRef",
         "ToolError",
         "ToolResult",
-        "UserDeviceContext",
+        "ToolDeviceFacade",
+        "TaskDeviceFacade",
     ]
     errors: list[str] = []
     try:

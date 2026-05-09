@@ -36,7 +36,7 @@ class SkillService:
     """受控 Skill 读取服务。
 
     主要功能：只允许读取配置 roots 下的 Skill 文档，并暴露 metadata。
-    主要约束：本服务不持有 `UserDeviceContext`，需要设备通讯能力时必须由普通
+    主要约束：本服务不持有 `ToolDeviceFacade`，需要设备通讯能力时必须由普通
     Tool 或 Task 间接完成。
     """
 

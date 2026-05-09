@@ -11,8 +11,8 @@
 - 消费 `actuator.speaker`、`actuator.haptic`
 - 声明 `phone.task.find_object_phone_task` 和 `phone.task.traffic_light_phone_task`
 - 兼容保留 `subscriptions`，用于接收 `stream.control.*`、`stream.output.*` 和
-  `control.device.command.*`
-- 通过 `control.device.command.*` 事件回报端侧任务 started / progress /
+  `command.*`
+- 通过 `command.*` 事件回报端侧任务 started / progress /
   completed / failed
 
 真实图片、音频和传感器数据只通过 `/ws/stream` 二进制通道传输；控制事件 payload
@@ -23,17 +23,17 @@
 phone task 不新增 RPC。server 只发布：
 
 ```text
-control.device.command.requested
+command.requested
 ```
 
 payload 中包含 `task_type`、`task_id`、输入参数和所需 stream。Python phone mock
 通过内置 handler 或 `handler_packages` 自动发现 handler，执行后上报：
 
 ```text
-control.device.command.started
-control.device.command.progress
-control.device.command.completed
-control.device.command.failed
+command.accepted
+command.progress
+command.completed
+command.failed
 ```
 
 当前内置 handler：

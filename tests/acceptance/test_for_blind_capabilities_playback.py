@@ -106,7 +106,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
 
     app = _build_app(tmp_path, monkeypatch)
     endpoint = _register_playback(app)
-    scenario = yaml.safe_load((APP_ROOT / "host/glass-playback/old-sdk-parity-capabilities.yaml").read_text(encoding="utf-8"))[
+    scenario = yaml.safe_load((APP_ROOT / "host/glass-playback/device-api-upgrade-capabilities.yaml").read_text(encoding="utf-8"))[
         "scenario"
     ]
 

@@ -23,11 +23,11 @@ class EventName(StrEnum):
     CONTROL_DEVICE_REGISTER_FAILED = "control.device.register.failed"
     CONTROL_DEVICE_HEARTBEAT_RECEIVED = "control.device.heartbeat.received"
     CONTROL_DEVICE_STATE_CHANGED = "control.device.state.changed"
-    CONTROL_DEVICE_COMMAND_REQUESTED = "control.device.command.requested"
-    CONTROL_DEVICE_COMMAND_STARTED = "control.device.command.started"
-    CONTROL_DEVICE_COMMAND_PROGRESS = "control.device.command.progress"
-    CONTROL_DEVICE_COMMAND_COMPLETED = "control.device.command.completed"
-    CONTROL_DEVICE_COMMAND_FAILED = "control.device.command.failed"
+    COMMAND_REQUESTED = "command.requested"
+    COMMAND_ACCEPTED = "command.accepted"
+    COMMAND_PROGRESS = "command.progress"
+    COMMAND_COMPLETED = "command.completed"
+    COMMAND_FAILED = "command.failed"
     CONTROL_USER_WAKE_DETECTED = "control.user.wake.detected"
     CONTROL_USER_DIALOG_CLOSE_REQUESTED = "control.user.dialog.close.requested"
     CONTROL_AUDIO_SESSION_OPEN_REQUESTED = "control.audio_session.open.requested"
@@ -48,7 +48,8 @@ class EventName(StrEnum):
     STREAM_OUTPUT_STARTED = "stream.output.started"
     STREAM_OUTPUT_FINISHED = "stream.output.finished"
     STREAM_OUTPUT_FAILED = "stream.output.failed"
-    STREAM_CONTROL_CONFIGURE_REQUESTED = "stream.control.configure.requested"
+    STREAM_CONTROL_OPEN_REQUESTED = "stream.control.open.requested"
+    STREAM_CONTROL_CLOSE_REQUESTED = "stream.control.close.requested"
     AGENT_RESPONSE_STARTED = "agent.response.started"
     AGENT_RESPONSE_COMPLETED = "agent.response.completed"
     TOOL_CALL_STARTED = "tool.call.started"
@@ -66,7 +67,7 @@ class EventPattern(StrEnum):
 
     ALL = "*"
     CONTROL_AUDIO_SESSION_ALL = "control.audio_session.*"
-    CONTROL_DEVICE_COMMAND_ALL = "control.device.command.*"
+    COMMAND_ALL = "command.*"
     STREAM_CONTROL_ALL = "stream.control.*"
     STREAM_INPUT_ALL = "stream.input.*"
     STREAM_OUTPUT_ALL = "stream.output.*"
@@ -80,12 +81,10 @@ class StreamType(StrEnum):
     主要功能：统一传感器和执行器 stream 名称，方便 Tool、Task 和端侧注册订阅复用。
     """
 
-    SENSOR_MIC = "sensor.mic"
     SENSOR_RGB = "sensor.rgb"
     SENSOR_DEPTH = "sensor.depth"
     SENSOR_IMU = "sensor.imu"
     SENSOR_TOF = "sensor.tof"
-    ACTUATOR_SPEAKER = "actuator.speaker"
     ACTUATOR_HAPTIC = "actuator.haptic"
 
 

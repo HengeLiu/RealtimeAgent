@@ -52,7 +52,7 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert {"sensor.rgb", "sensor.mic", "actuator.speaker"}.issubset(support_ids)
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
-    assert {"event": "control.device.command.*"} in config["subscriptions"]
+    assert {"event": "command.*"} in config["subscriptions"]
 
 
 def test_ios_phone_registration_event_matches_contract_golden() -> None:
@@ -108,14 +108,14 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
     required_tokens = [
         "/ws/control",
         "/ws/stream",
-        "stream.control.configure.requested",
+        "stream.control.open.requested",
         "stream.output.started",
         "stream.output.finished",
         "stream.output.closed",
-        "control.device.command.requested",
-        "control.device.command.started",
-        "control.device.command.progress",
-        "control.device.command.completed",
+        "command.requested",
+        "command.accepted",
+        "command.progress",
+        "command.completed",
         "stream.input.opened",
         "stream.input.closed",
         "sensor.rgb",

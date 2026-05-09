@@ -121,7 +121,7 @@ ESP32 端不应在启动后保持 24 小时 `sensor.mic` 常驻上传。最小�
 5. 端侧播放失败时上报 `stream.output.failed`，不要静默丢 chunk。
 6. 用户打断只取消当前 output stream；除非 server 或用户明确关闭对话，不默认关闭整个
    audio session。
-7. `sensor.rgb` 抓拍或连续配置请求必须通过 `stream.control.configure.requested` 接收，
+7. `sensor.rgb` 抓拍或连续配置请求必须通过 `stream.control.open.requested` 接收，
    并通过 `/ws/stream` 上传 JPEG；不得把图片 bytes 放进控制事件 payload。
 
 ## AEC Reference 观察点
@@ -161,8 +161,8 @@ aec_output_bytes=<n>
 
 ```bash
 uv run python -m pytest tests/test_esp32_s3_endpoint_contract.py tests/test_endpoint_config_sync.py -q
-uv run python scripts/acceptance_check.py old-sdk-parity-esp32 \
-  --report runs/acceptance/old-sdk-parity-esp32.json
+uv run python scripts/acceptance_check.py device-api-upgrade-esp32 \
+  --report runs/acceptance/device-api-upgrade-esp32.json
 ```
 
 该验收只证明协议、配置、参考状态机和 ESP-IDF 工程骨架正确，不替代真机 Wi-Fi、I2S、

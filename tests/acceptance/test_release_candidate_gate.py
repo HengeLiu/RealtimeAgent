@@ -30,14 +30,14 @@ def _load_acceptance_module():
 def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
     """测试目标：确认 J 线发布候选 lane 已进入统一验收入口。
 
-    测试方法：读取 `OLD_SDK_PARITY_CHECKS` 中的 `old-sdk-parity-release` 命令。
+    测试方法：读取 `OLD_SDK_PARITY_CHECKS` 中的 `device-api-upgrade-release` 命令。
     预期结果：lane 同时覆盖 release tests、package-check、docs contract、for-blind app
     playback 和 for-blind app playback。
     """
 
     acceptance = _load_acceptance_module()
-    assert "old-sdk-parity-release" in acceptance.CHECKS
-    commands = acceptance.CHECKS["old-sdk-parity-release"]
+    assert "device-api-upgrade-release" in acceptance.CHECKS
+    commands = acceptance.CHECKS["device-api-upgrade-release"]
     command_text = "\n".join(" ".join(command.command) for command in commands)
 
     for expected in [
@@ -47,7 +47,7 @@ def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
         "audio-chat.sdk.package-check",
         "tests/acceptance/test_docs_current_state_contract.py",
         "app-examples/for-blind-app/host/glass-playback/playback.yaml",
-        "app-examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
+        "app-examples/for-blind-app/host/glass-playback/device-api-upgrade-capabilities.yaml",
     ]:
         assert expected in command_text
 
@@ -56,7 +56,7 @@ def test_release_candidate_docs_and_changelog_are_current() -> None:
     """测试目标：确认发布候选版本、README 和 CHANGELOG 口径一致。
 
     测试方法：读取 pyproject、README、CHANGELOG 和计划文档。
-    预期结果：版本带 rc 标识，文档说明 old-sdk-parity-release 和当前不兼容点。
+    预期结果：版本带 rc 标识，文档说明 device-api-upgrade-release 和当前不兼容点。
     """
 
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -67,11 +67,11 @@ def test_release_candidate_docs_and_changelog_are_current() -> None:
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    plan = (ROOT / "docs" / "old-sdk-parity-development-plan.md").read_text(encoding="utf-8")
-    for expected in [version, "old-sdk-parity-release", "audio-chat.sdk.package-check"]:
+    plan = (ROOT / "docs" / "device-api-upgrade-development-plan.md").read_text(encoding="utf-8")
+    for expected in [version, "device-api-upgrade-release", "audio-chat.sdk.package-check"]:
         assert expected in readme
         assert expected in changelog
-    for expected in ["当前不兼容点", "UserDeviceContext", "event + stream"]:
+    for expected in ["当前不兼容点", "ToolDeviceFacade", "event + stream"]:
         assert expected in changelog
     assert "## 14. 并行线路 J：发布候选与包边界" in plan
 

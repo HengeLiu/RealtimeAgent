@@ -7,8 +7,8 @@ class FindObjectVisionTask(BaseTask):
     """持续找物视觉 Task。
 
     主要功能：
-    1. 发布 `stream.control.configure.requested` 请求端侧持续上传 RGB 帧。
-    2. 通过 `watch_assets()` 消费同一 correlation_id 下的图片资产。
+    1. 通过 typed sensor API 请求端侧持续上传 RGB 帧。
+    2. 直接消费同一 stream 返回的图片资产。
     3. 用 TaskEvent 回流 mock 识别结果，并通过 Output Service 通知用户。
     """
 
@@ -30,24 +30,18 @@ class FindObjectVisionTask(BaseTask):
         object_name = str(input_data.get("object_name") or "目标物").strip()
         frame_limit = int(input_data.get("frame_limit") or 3)
         correlation_id = str(input_data.get("correlation_id") or context.task_ref.task_id)
-        context.devices.configure_stream(
-            "sensor.rgb",
-            mode="continuous",
-            rate_hz=float(input_data.get("fps") or 2),
+        assets = []
+        async for asset in context.devices.sensors.rgb.stream(
+            fps=float(input_data.get("fps") or 2),
             duration_seconds=float(input_data.get("duration_seconds") or 1),
-            payload={
+            sample_count=frame_limit,
+            params={
                 "format": "jpeg",
                 "asset_policy": "cache",
                 "correlation_id": correlation_id,
                 "frame_limit": frame_limit,
                 "object_name": object_name,
             },
-        )
-
-        assets = []
-        async for asset in context.devices.watch_assets(
-            "sensor.rgb",
-            correlation_id=correlation_id,
             timeout_seconds=float(input_data.get("timeout_seconds") or 2),
         ):
             assets.append(asset)
@@ -72,7 +66,7 @@ class FindObjectVisionTask(BaseTask):
                     allow_direct_notify=False,
                 )
             )
-        context.devices.notify(
+        await context.output.say(
             f"已找到{object_name}，mock 结果显示它在前方" if found else f"暂时没有找到{object_name}",
             priority="normal",
         )
@@ -88,10 +82,4 @@ class FindObjectVisionTask(BaseTask):
     async def on_cancel(self, context: TaskContext) -> None:
         """取消找物视觉任务。"""
 
-        if context.devices is not None:
-            context.devices.configure_stream(
-                "sensor.rgb",
-                mode="stop",
-                payload={"reason": "find_object_cancelled"},
-                selection="all",
-            )
+        _ = context

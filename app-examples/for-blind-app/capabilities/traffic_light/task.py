@@ -30,23 +30,18 @@ class TrafficLightTask(BaseTask):
         state = str(input_data.get("expected_state") or "green").strip().lower()
         frame_limit = int(input_data.get("frame_limit") or 2)
         correlation_id = str(input_data.get("correlation_id") or context.task_ref.task_id)
-        context.devices.configure_stream(
-            "sensor.rgb",
-            mode="continuous",
-            rate_hz=2,
+        assets = []
+        async for asset in context.devices.sensors.rgb.stream(
+            fps=2,
             duration_seconds=1,
-            payload={
+            sample_count=frame_limit,
+            params={
                 "format": "jpeg",
                 "asset_policy": "cache",
                 "correlation_id": correlation_id,
                 "frame_limit": frame_limit,
                 "vision_task": "traffic_light",
             },
-        )
-        assets = []
-        async for asset in context.devices.watch_assets(
-            "sensor.rgb",
-            correlation_id=correlation_id,
             timeout_seconds=float(input_data.get("timeout_seconds") or 2),
         ):
             assets.append(asset)
@@ -75,16 +70,10 @@ class TrafficLightTask(BaseTask):
                     allow_direct_notify=False,
                 )
             )
-        context.devices.notify(suggestion, priority="high" if state == "green" else "normal")
+        await context.output.say(suggestion, priority="high" if state == "green" else "normal")
         await context.complete({"state": state, "frame_count": len(assets)}, summary=suggestion)
 
     async def on_cancel(self, context: TaskContext) -> None:
         """取消红绿灯识别任务。"""
 
-        if context.devices is not None:
-            context.devices.configure_stream(
-                "sensor.rgb",
-                mode="stop",
-                payload={"reason": "traffic_light_cancelled"},
-                selection="all",
-            )
+        _ = context
