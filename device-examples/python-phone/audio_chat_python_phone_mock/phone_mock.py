@@ -342,6 +342,34 @@ class OpenCvVideoPreview:
         self.closed_by_user = False
         if self.enabled:
             self._cv2.namedWindow(self.window_title, self._cv2.WINDOW_NORMAL)
+            self._show_placeholder()
+
+    def _show_placeholder(self) -> None:
+        """显示启动占位画面。
+
+        主要逻辑：OpenCV 在部分平台上只调用 `namedWindow()` 不一定会弹出可见窗口；
+        启动时先显示一张黑色占位图，让用户确认 Python 手机端 GUI 已启动。真正收到
+        `sensor.rgb` 后会被实时画面覆盖。
+        参数：无。
+        返回值：无。
+        异常情况：GUI 环境不可用时由 OpenCV 抛出异常。
+        """
+
+        import numpy as np  # type: ignore
+
+        placeholder = np.zeros((360, 640, 3), dtype=np.uint8)
+        self._cv2.putText(
+            placeholder,
+            "Waiting for sensor.rgb stream...",
+            (32, 180),
+            self._cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (220, 220, 220),
+            2,
+            self._cv2.LINE_AA,
+        )
+        self._cv2.imshow(self.window_title, placeholder)
+        self._cv2.waitKey(1)
 
     def show(self, frame: DecodedVideoFrame) -> None:
         """显示一帧图像。

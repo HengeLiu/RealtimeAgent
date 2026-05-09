@@ -20,6 +20,48 @@ for path in (PYTHON_PHONE_ROOT, PYTHON_GLASS_ROOT):
         sys.path.insert(0, str(path))
 
 from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint  # noqa: E402
+from audio_chat_python_phone_mock.phone_mock import OpenCvVideoPreview  # noqa: E402
+
+
+class FakeCv2:
+    """用于验证 OpenCV 预览窗口调用顺序的轻量假对象。"""
+
+    WINDOW_NORMAL = 0
+    FONT_HERSHEY_SIMPLEX = 0
+    LINE_AA = 0
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def namedWindow(self, *_args) -> None:  # noqa: N802 - 模拟 OpenCV API
+        self.calls.append("namedWindow")
+
+    def putText(self, *_args) -> None:  # noqa: N802 - 模拟 OpenCV API
+        self.calls.append("putText")
+
+    def imshow(self, *_args) -> None:
+        self.calls.append("imshow")
+
+    def waitKey(self, *_args) -> int:  # noqa: N802 - 模拟 OpenCV API
+        self.calls.append("waitKey")
+        return 0
+
+    def destroyWindow(self, *_args) -> None:  # noqa: N802 - 模拟 OpenCV API
+        self.calls.append("destroyWindow")
+
+
+def test_python_phone_preview_shows_placeholder_on_startup() -> None:
+    """测试目标：确认 Python 手机端启动后立即弹出可见窗口占位画面。
+
+    测试方法：使用假的 cv2 模块实例化 `OpenCvVideoPreview`，观察调用顺序。
+    预期结果：初始化时调用 `namedWindow`、`imshow` 和 `waitKey`，即使还没有收到视频帧。
+    """
+
+    fake_cv2 = FakeCv2()
+
+    OpenCvVideoPreview(cv2_module=fake_cv2, enabled=True)
+
+    assert fake_cv2.calls[:4] == ["namedWindow", "putText", "imshow", "waitKey"]
 
 
 def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: Path) -> None:
