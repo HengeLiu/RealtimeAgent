@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from audio_chat import AudioChatApp, AudioChatConfig, Event, StreamChunk
-from audio_chat.device_capabilities import compile_device_capabilities_file, compile_registration_payload, _compile_structured_supports_to_internal_routes
+from audio_chat.device_capabilities import compile_device_capabilities_file, compile_internal_routes_from_supports, compile_registration_payload
 
 
 class FakeConnection:
@@ -39,7 +39,7 @@ def test_browser_device_capability_file_compiles_to_routes() -> None:
     result = compile_device_capabilities_file("device-examples/browser-glass/device.audio-chat.yaml")
 
     assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
-    routes = result["payload"]["routes"]
+    routes = compile_internal_routes_from_supports(result["payload"]["supports"])
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in routes
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in routes
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.tof"}} in routes
@@ -55,7 +55,7 @@ def test_unknown_support_id_fails_fast() -> None:
     """
 
     with pytest.raises(ValueError, match="unknown support id"):
-        _compile_structured_supports_to_internal_routes({"sensors": [{"type": "rbg"}]})
+        compile_internal_routes_from_supports({"sensors": [{"type": "rbg"}]})
 
 
 def test_structured_supports_compile_to_routes(tmp_path: Path) -> None:
@@ -112,8 +112,8 @@ supports:
     assert defaults["actuator.haptic"]["duration_seconds"] == 0.3
     assert result["payload"]["properties"]["device_role"] == "front_glass"
     assert result["payload"]["properties"]["tags"] == ["primary", "debug"]
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in result["payload"]["routes"]
-    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in result["payload"]["routes"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in compile_internal_routes_from_supports(result["payload"]["supports"])
+    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in compile_internal_routes_from_supports(result["payload"]["supports"])
 
 
 def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path) -> None:
@@ -198,4 +198,4 @@ def test_device_validate_cli_outputs_compiled_json(capsys) -> None:
 
     output = json.loads(capsys.readouterr().out)
     assert output["payload"]["device_id"] == "dev-browser-glass-001"
-    assert output["payload"]["routes"]
+    assert compile_internal_routes_from_supports(output["payload"]["supports"])

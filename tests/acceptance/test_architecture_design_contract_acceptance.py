@@ -161,7 +161,7 @@ def test_contract_golden_assets_exist_for_protocol_and_playback() -> None:
     """测试目标：确认公共契约测试资产已经落盘。
 
     测试方法：检查 events、streams、scenarios 三类 golden 目录和最少一个样例文件。
-    预期结果：端侧实现和 server 实现都能围绕 golden 文件做兼容性回归。
+    预期结果：端侧实现和 server 实现都能围绕 golden 文件做契约回归。
     """
 
     contracts_root = Path(__file__).resolve().parents[2] / "testdata/contracts"

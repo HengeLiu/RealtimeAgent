@@ -1,9 +1,9 @@
 {
-  "event_id": "evt-contract-subscription-filter-missed",
-  "event_name": "control.device.command.requested",
+  "event_id": "evt-contract-route-filter-missed",
+  "event_name": "command.requested",
   "payload": {
     "command_name": "contract.missed",
-    "subscription_result": "filter_missed"
+    "route_result": "filter_missed"
   },
   "producer_id": "server-main",
   "timestamp_ms": 1767225600000,

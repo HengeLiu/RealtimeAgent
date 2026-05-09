@@ -89,10 +89,7 @@ def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlayback
                 "client_type": "for-blind-app-playback",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "routes": [
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                ],
+                "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
             },
         ),
         endpoint,

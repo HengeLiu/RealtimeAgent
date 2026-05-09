@@ -213,7 +213,7 @@ class McpGateway:
 
 
 def _iter_server_items(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """兼容常见 MCP 配置格式，提取 server 条目。"""
+    """读取常见 MCP 配置格式，提取 server 条目。"""
 
     servers = config.get("servers")
     if isinstance(servers, list):

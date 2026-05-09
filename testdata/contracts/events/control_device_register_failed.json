@@ -5,14 +5,10 @@
     "client_type": "contract-endpoint",
     "connection_id": "conn-contract",
     "device_id": "dev-contract",
-    "subscriptions": [
-      {
-        "event": "stream.output.*",
-        "filter": {
-          "stream_type": "actuator.speaker"
-        }
-      }
-    ]
+    "supports": {
+      "sensors": [],
+      "actuators": []
+    }
   },
   "producer_id": "server-main",
   "timestamp_ms": 1767225600000,

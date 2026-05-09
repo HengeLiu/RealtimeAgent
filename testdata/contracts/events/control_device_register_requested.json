@@ -6,14 +6,10 @@
     "connection_id": "conn-contract",
     "device_id": "dev-contract",
     "name": "协议契约设备",
-    "subscriptions": [
-      {
-        "event": "stream.output.*",
-        "filter": {
-          "stream_type": "actuator.speaker"
-        }
-      }
-    ]
+    "supports": {
+      "sensors": [],
+      "actuators": []
+    }
   },
   "producer_id": "dev-contract",
   "timestamp_ms": 1767225600000,

@@ -355,7 +355,7 @@ uv run audio-chat.device.sim \
   --config device-examples/python-device-sim/scenarios/audio-playback.yaml
 ```
 
-兼容 CLI：
+CLI：
 
 ```bash
 uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml

@@ -1222,7 +1222,7 @@ class NetworkPythonPlaybackEndpoint:
 def _coerce_package_names(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
     """将配置中的包名归一化为元组。
 
-    函数功能：兼容 YAML/JSON 中常见的字符串、列表和空值写法。
+    函数功能：支持 YAML/JSON 中常见的字符串、列表和空值写法。
     主要逻辑：空值使用默认包名，单个字符串包装成单元素元组，列表或元组逐项转为字符串。
     参数：
         value：用户配置中的包名字段。

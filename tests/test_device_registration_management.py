@@ -54,16 +54,16 @@ def _registration(user_id: str, device_id: str, *, token: str = "token-ok") -> E
             "client_type": "python-playback",
             "sdk_version": "audio-chat-test",
             "auth": {"mode": "static_token", "token": token},
-            "routes": [{"event": "control.audio_session.*"}],
+            "supports": {"sensors": [], "actuators": []},
         },
     )
 
 
 def test_reconnect_replaces_old_connection_and_records_binding_diagnostics() -> None:
-    """测试目标：验证同 user 下同 device 重连会覆盖旧连接并写入诊断。
+    """测试目标：验证同 user 下同 device 重连会覆盖原连接并写入诊断。
 
     测试方法：同一用户连续注册同一设备，传入两个不同 FakeConnection。
-    预期结果：旧连接收到 replaced 原因，snapshot 标记 replaced_connection。
+    预期结果：原连接收到 replaced 原因，snapshot 标记 replaced_connection。
     """
 
     service = ControlService(authenticator=DeviceAuthenticator(mode="static_token", device_tokens={"dev-001": "token-ok"}))
@@ -163,7 +163,7 @@ def test_debug_api_returns_device_and_user_snapshots() -> None:
                 "client_type": "python-playback",
                 "sdk_version": "audio-chat-test",
                 "auth": {"mode": "disabled"},
-                "routes": [{"event": "control.audio_session.*"}],
+                "supports": {"sensors": [], "actuators": []},
             },
         ),
         FakeConnection("dev-debug"),

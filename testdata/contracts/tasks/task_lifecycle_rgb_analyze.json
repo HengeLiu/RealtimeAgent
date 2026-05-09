@@ -21,7 +21,7 @@
       }
     },
     {
-      "event_name": "stream.control.configure.requested",
+      "event_name": "stream.control.open.requested",
       "stream_type": "sensor.rgb",
       "payload": {
         "mode": "continuous",
@@ -39,12 +39,14 @@
     }
   ],
   "constraints": {
-    "device_access": "UserDeviceContext only",
+    "device_access": "TaskContext only",
     "media_bytes": "stream only",
     "cancel_event": {
-      "event_name": "stream.control.configure.requested",
+      "event_name": "stream.control.close.requested",
       "stream_type": "sensor.rgb",
-      "payload": {"mode": "stop"}
+      "payload": {
+        "reason": "task_cancelled"
+      }
     }
   }
 }

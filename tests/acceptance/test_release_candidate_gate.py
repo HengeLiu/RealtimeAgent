@@ -54,7 +54,7 @@ def test_release_candidate_docs_and_changelog_are_current() -> None:
     """测试目标：确认发布候选版本、README 和 CHANGELOG 口径一致。
 
     测试方法：读取 pyproject、README、CHANGELOG 和计划文档。
-    预期结果：版本带 rc 标识，文档说明 device-api-upgrade-release 和当前不兼容点。
+    预期结果：版本带 rc 标识，文档说明 device-api-upgrade-release 和当前架构变更点。
     """
 
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -69,7 +69,7 @@ def test_release_candidate_docs_and_changelog_are_current() -> None:
     for expected in [version, "device-api-upgrade-release", "audio-chat.sdk.package-check"]:
         assert expected in readme
         assert expected in changelog
-    for expected in ["当前不兼容点", "ToolDeviceFacade", "event + stream"]:
+    for expected in ["当前架构变更点", "ToolDeviceFacade", "event + stream"]:
         assert expected in changelog
     assert "## 14. 并行线路 J：发布候选与包边界" in plan
 

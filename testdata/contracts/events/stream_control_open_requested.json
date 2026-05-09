@@ -1,0 +1,16 @@
+{
+  "event_id": "evt-contract-stream-control-open-requested",
+  "event_name": "stream.control.open.requested",
+  "payload": {
+    "contract_case": "stream.control.open.requested",
+    "stream_type": "sensor.rgb",
+    "mode": "single",
+    "params": {}
+  },
+  "producer_id": "server-main",
+  "stream_id": "stream-contract",
+  "stream_type": "sensor.rgb",
+  "timestamp_ms": 1767225600000,
+  "user_id": "user-contract",
+  "version": "audio-chat.v1"
+}

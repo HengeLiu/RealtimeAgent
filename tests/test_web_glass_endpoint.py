@@ -28,11 +28,11 @@ def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
 
 
 def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
-    """测试目标：验证 browser-glass JS 实现了 StreamChunkCodec 兼容结构。
+    """测试目标：验证 browser-glass JS 实现了 StreamChunkCodec 结构。
 
     测试方法：检查 JS 中必须写入 4 字节 header_len、JSON header 和 payload，并校验
     `payload_size`。
-    预期结果：HTML 包含对应编解码结构，不回退旧 MediaFrame。
+    预期结果：HTML 包含对应编解码结构，不使用 MediaFrame。
     """
     html = _html()
 

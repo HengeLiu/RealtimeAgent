@@ -33,7 +33,7 @@ def test_text_route_uses_audio_sample_filename_as_mock_asr_transcript_and_calls_
 
     session_dir = app.recorder.session_dir(result["session_id"])
     messages = _read_jsonl(session_dir / "messages.jsonl")
-    tool_trace = _read_jsonl(session_dir / "tool-trace.jsonl")
+    tool_trace = _read_jsonl(session_dir / "tool-events.jsonl")
     model_events = (session_dir / "model-events.jsonl").read_text(encoding="utf-8")
 
     assert result["passed"] is True
@@ -60,7 +60,7 @@ def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_
 
     session_dir = app.recorder.session_dir(result["session_id"])
     messages = _read_jsonl(session_dir / "messages.jsonl")
-    tool_trace = _read_jsonl(session_dir / "tool-trace.jsonl")
+    tool_trace = _read_jsonl(session_dir / "tool-events.jsonl")
     assets = _read_jsonl(session_dir / "assets.jsonl")
 
     assert result["passed"] is True
@@ -75,8 +75,7 @@ def test_text_route_network_python_glass_replays_audio_sample_over_websocket(tmp
 
     测试方法：启动 aiohttp server，NetworkPythonPlaybackEndpoint 通过 control/stream 两条
     WebSocket 上传 AudioSample WAV。
-    预期结果：网络端测断言通过，输入音频被按多 chunk 上传，并镜像旧 `sessions/<id>`
-    产物以兼容迁移期验收脚本。
+    预期结果：网络端测断言通过，输入音频被按多 chunk 上传，并镜像`sessions/<id>` 产物用于验收脚本。
     """
 
     async def run() -> None:

@@ -7,11 +7,11 @@
   "properties": {
     "app-name": {
       "type": "string",
-      "description": "应用名称。SDK 也兼容 app_name；推荐使用 app-name。"
+      "description": "应用名称。SDK 支持 app_name；推荐使用 app-name。"
     },
     "app_name": {
       "type": "string",
-      "description": "应用名称兼容字段。"
+      "description": "应用名称备用字段。"
     },
     "server": {
       "$ref": "#/$defs/server"

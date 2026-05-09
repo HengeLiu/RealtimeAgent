@@ -37,9 +37,21 @@ def register_endpoint(
     app: AudioChatApp,
     endpoint: RecordingEndpoint,
     *,
-    routes: list[dict],
+    support_routes: list[dict],
     properties: dict | None = None,
 ) -> None:
+    sensors = []
+    actuators = []
+    for route in support_routes:
+        stream_type = (route.get("filter") or {}).get("stream_type")
+        if stream_type == "sensor.rgb":
+            sensors.append({"type": "rgb"})
+        if stream_type == "sensor.imu":
+            sensors.append({"type": "imu"})
+        if stream_type == "sensor.tof":
+            sensors.append({"type": "tof"})
+        if stream_type == "actuator.haptic":
+            actuators.append({"type": "vibrator"})
     response = app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -51,7 +63,7 @@ def register_endpoint(
                 "client_type": "typed-context-test",
                 "sdk_version": "audio-chat-test",
                 "auth": {"mode": "disabled"},
-                "routes": routes,
+                "supports": {"sensors": sensors, "actuators": actuators},
                 "properties": properties or {},
             },
         ),
@@ -95,7 +107,7 @@ def test_sensor_one_requires_unique_matching_device(tmp_path) -> None:
         register_endpoint(
             app,
             RecordingEndpoint(user_id=user_id, device_id=device_id),
-            routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+            support_routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         )
 
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-ambiguous")
@@ -124,13 +136,13 @@ def test_sensor_one_selector_can_narrow_device(tmp_path) -> None:
     register_endpoint(
         app,
         front,
-        routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+        support_routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         properties={"device_role": "front_glass"},
     )
     register_endpoint(
         app,
         side,
-        routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+        support_routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         properties={"device_role": "side_camera"},
     )
 
@@ -158,7 +170,7 @@ def test_commands_call_returns_stable_result(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        routes=[{"event": "command.*"}],
+        support_routes=[{"event": "command.*"}],
     )
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command")
 
@@ -188,13 +200,13 @@ def test_commands_call_selector_routes_only_matching_device(tmp_path) -> None:
     register_endpoint(
         app,
         phone,
-        routes=[{"event": "command.*"}],
+        support_routes=[{"event": "command.*"}],
         properties={"device_role": "phone"},
     )
     register_endpoint(
         app,
         glass,
-        routes=[{"event": "command.*"}],
+        support_routes=[{"event": "command.*"}],
         properties={"device_role": "front_glass"},
     )
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command-selector")

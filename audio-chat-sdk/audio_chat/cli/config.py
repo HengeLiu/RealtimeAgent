@@ -81,10 +81,7 @@ def sync(argv: list[str] | None = None) -> None:
             "user_id": args.user_id,
             "device_id": "dev-python-phone-001",
             "auth": auth_config,
-            "properties": {
-                "phone.task.find_object_phone_task": True,
-                "phone.task.traffic_light_phone_task": True,
-            },
+            "properties": {},
             "supports": _phone_supports(),
         },
     )
@@ -110,8 +107,6 @@ def sync(argv: list[str] | None = None) -> None:
                 "auth": auth_config,
                 "protocol_version": "audio-chat.v1",
                 "properties": {
-                    "phone.task.find_object_phone_task": True,
-                    "phone.task.traffic_light_phone_task": True,
                     "audio.aec": "replaceable",
                     "audio.wake_word": "manual",
                 },

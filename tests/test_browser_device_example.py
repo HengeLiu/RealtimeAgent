@@ -187,7 +187,7 @@ def test_browser_device_resets_mic_state_when_server_closes_input_stream() -> No
 
     测试方法：静态检查 browser-glass 处理 `stream.input.closed + sensor.mic`，
     并清空 inputStreamId、离线 timer 和本地状态。
-    预期结果：连续对话期间如果 server 因 idle_timeout 关闭旧输入流，端侧不会复用
+    预期结果：连续对话期间如果 server 因 idle_timeout 关闭原输入流，端侧不会复用
     已关闭的 stream_id。
     """
 

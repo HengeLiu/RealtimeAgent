@@ -8,7 +8,7 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 
 
 def test_agent_mode_realtime_alias_builds_realtime_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=realtime` 兼容老计划中的配置说法。
+    """测试目标：验证 `agent.mode=realtime` 当前配置说法。
 
     测试方法：直接用 `AudioChatConfig(agent_mode="realtime")` 创建 App。
     预期结果：实际构建 `RealtimeAudioAgentCore`，且不在构造阶段连接真实 provider。

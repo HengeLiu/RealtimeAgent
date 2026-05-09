@@ -30,10 +30,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
             payload={
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
-                "routes": [
-                    {"event": "control.audio_session.*"},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                ],
+                "supports": {"sensors": [], "actuators": []},
             },
         ),
         connection,
@@ -221,9 +218,9 @@ def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> N
 def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_path) -> None:
     """测试目标：验证端侧播放完成事件会释放播放仲裁 active 状态。
 
-    测试方法：先让旧设备的一条输出保持 active，再提交同用户新会话输出进入队列，
-    然后模拟旧设备上报 `stream.output.closed`。
-    预期结果：旧 active 被释放，新会话排队输出立即恢复播放并写出音频 chunk。
+    测试方法：先让当前设备的一条输出保持 active，再提交同用户新会话输出进入队列，
+    然后模拟当前设备上报 `stream.output.closed`。
+    预期结果：当前 active 被释放，新会话排队输出立即恢复播放并写出音频 chunk。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))

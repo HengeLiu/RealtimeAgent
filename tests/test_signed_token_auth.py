@@ -46,7 +46,7 @@ def _registration(user_id: str, device_id: str, token: str) -> Event:
             "client_type": "python-playback",
             "sdk_version": "audio-chat-test",
             "auth": {"mode": "signed_token", "token": token},
-            "routes": [{"event": "control.audio_session.*"}],
+            "supports": {"sensors": [], "actuators": []},
         },
     )
 

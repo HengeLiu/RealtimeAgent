@@ -1,9 +1,9 @@
 mode: in_process
-runs_root: runs/audio-chat/old-sdk-parity-playback
-asset_root: runs/audio-chat/old-sdk-parity-playback/assets
+runs_root: runs/audio-chat/device-api-playback
+asset_root: runs/audio-chat/device-api-playback/assets
 app_root: app-examples/for-blind-app
-user_id: user-old-sdk-parity-cli
-device_id: dev-old-sdk-parity-glass-playback
+user_id: user-device-api-cli
+device_id: dev-device-api-glass-playback
 heading:
   degrees: 92.5
   accuracy: mock
@@ -16,7 +16,7 @@ scenario:
     - type: call_tool
       name: capture_photo
       input:
-        reason: old-sdk-parity-cli
+        reason: device-api-cli
     - type: start_task
       task_type: continuous_rgb_analyze
       input:
@@ -41,7 +41,7 @@ scenario:
   assert:
     expected_events:
       - control.device.registered
-      - stream.control.configure.requested
+      - stream.control.open.requested
       - stream.output.open.requested
       - stream.output.close.requested
     expected_stream_types:

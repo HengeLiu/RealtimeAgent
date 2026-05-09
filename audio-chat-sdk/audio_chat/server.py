@@ -41,7 +41,7 @@ class NetworkDeviceConnection:
     def bind_control_ws(self, ws: web.WebSocketResponse) -> None:
         """绑定控制 WebSocket。
 
-        主要逻辑：保存当前 WebSocket，供重连覆盖和关闭旧连接使用。
+        主要逻辑：保存当前 WebSocket，供重连覆盖和关闭原连接使用。
         参数：`ws` 为 aiohttp WebSocket。
         返回值：无。
         异常情况：无。
@@ -94,7 +94,7 @@ class NetworkDeviceConnection:
     def close(self, *, reason: str) -> None:
         """关闭当前网络连接。
 
-        主要逻辑：设备同 `device_id` 重连时由 Control Service 调用，关闭旧控制和 stream
+        主要逻辑：设备同 `device_id` 重连时由 Control Service 调用，关闭原控制和 stream
         WebSocket，避免同一设备多连接同时收下行数据。
         参数：`reason` 为关闭原因。
         返回值：无。
@@ -425,7 +425,7 @@ class AudioChatHttpServer:
         `session_id`，其值必须等于 `producer_id`，避免重新引入独立会话概念。
         参数：`event` 为端侧控制事件。
         返回值：无。
-        异常情况：旧独立 session_id 时抛出 ValueError。
+        异常情况：独立 session_id 时抛出 ValueError。
         """
 
         if event.producer_id == SERVER_PRODUCER_ID:

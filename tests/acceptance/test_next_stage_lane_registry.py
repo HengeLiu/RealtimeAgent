@@ -57,7 +57,7 @@ def test_foundation_lanes_are_preserved_and_all_includes_next_stage() -> None:
     """测试目标：确认 P0-C 不破坏上一阶段 lane，且 `all` 会覆盖下一阶段 lane。
 
     测试方法：读取基础 lane 和合并后的 `CHECKS` 注册表。
-    预期结果：旧 lane 保留，新 lane 已进入 `all` 使用的总注册表。
+    预期结果：当前 lane 已进入 `all` 使用的总注册表。
     """
 
     acceptance = _load_acceptance_module()

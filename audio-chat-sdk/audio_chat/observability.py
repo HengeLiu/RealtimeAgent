@@ -369,15 +369,13 @@ class RunRecorder:
     def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
         """记录 Tool 调用轨迹。
 
-        主要逻辑：写入稳定 `tool-events.jsonl`，并保留旧 `tool-trace.jsonl`
-        读取入口，供回放和排障使用。
+        主要逻辑：写入稳定 `tool-events.jsonl`，供回放和排障使用。
         参数：`session_id` 为会话，`record` 为工具调用结构。
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "tool-events.jsonl", record)
-        self._append_jsonl(self.session_dir(session_id) / "tool-trace.jsonl", record)
         log_info(
             self.logger,
             f"工具调用 {record.get('tool_name')}",

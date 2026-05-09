@@ -201,7 +201,7 @@ class ToolContext:
 class SystemToolContext(ToolContext):
     """系统内置 Tool 执行上下文。
 
-    主要功能：只给 SDK 自带的专用 Tool 使用，让 query_task_status、
+    主要功能：只给 SDK 自带的运行时 Tool 使用，让 task_runtime_manager、
     memory_search、read_skill、mcp_call 等工具通过可见 Tool 边界访问内部服务。
     普通业务 Tool 不会拿到这些属性，避免在 Tool 内绕过模型可见工具列表。
     """
@@ -241,8 +241,7 @@ class BaseTool:
     def resolved_spec(self) -> ToolSpec:
         """返回工具的规范化元数据。
 
-        主要逻辑：优先使用开发者声明的 `spec = ToolSpec(...)`；没有 spec 时继续
-        兼容 `name/description/input_model` 简写。
+        主要逻辑：优先使用开发者声明的 `spec = ToolSpec(...)`；没有 spec 时支持 `name/description/input_model` 简写。
         参数：无。
         返回值：`ToolSpec`。
         异常情况：工具名为空时由注册表继续抛出结构化错误。
@@ -560,7 +559,7 @@ class ToolExecutor:
         """按工具 input_model 校验并归一入参。
 
         主要逻辑：开发者使用 Pydantic BaseModel 声明入参时，SDK 在调用 Tool 前完成
-        类型转换和必填校验；为了兼容现有工具，传给 run 的仍是 dict。
+        类型转换和必填校验；传给 run 的输入保持为 dict。
         参数：`tool` 为工具实例，`input_data` 为模型传入参数。
         返回值：校验后的 dict。
         异常情况：Pydantic 校验失败时抛出 `ValidationError`。
@@ -821,7 +820,6 @@ class DeviceSnapshot:
     device_id: str
     name: str = ""
     properties: dict = field(default_factory=dict)
-    routes: list[dict] = field(default_factory=list)
 
 
 class OutputStreamWriter:
@@ -1500,7 +1498,7 @@ class DeviceRuntime:
         """返回当前用户 active device set 的只读快照。
 
         主要逻辑：从 Control Service 读取在线设备，返回身份、名称、properties 和
-        routes，供 Tool / Task 做状态说明或调试展示。通讯仍然必须走事件和 stream。
+        设备属性摘要，供 Tool / Task 做状态说明或调试展示。通讯仍然必须走事件和 stream。
         参数：无。
         返回值：`DeviceSnapshot` 列表。
         异常情况：无在线设备时返回空列表。
@@ -1512,7 +1510,6 @@ class DeviceRuntime:
                     device_id=record.device_id,
                     name=getattr(record, "name", getattr(record, "device_name", "")),
                     properties=dict(getattr(record, "properties", {}) or {}),
-                    routes=[route.__dict__ for route in getattr(record, "routes", [])],
                 )
             )
         return devices
@@ -1727,7 +1724,6 @@ class DeviceRuntime:
                 device_id=device.device_id,
                 name=getattr(device, "name", getattr(device, "device_name", "")),
                 properties=dict(getattr(device, "properties", {}) or {}),
-                routes=[route.__dict__ for route in getattr(device, "routes", [])],
             )
             for device in devices
         )
@@ -1842,202 +1838,11 @@ class DeviceRuntime:
             yield ref
 
 
-class RequestAssetInput(BaseModel):
-    """请求传感器资产输入。"""
-
-    stream_type: str = Field(description="要获取的传感器数据类型，例如 sensor.rgb。")
-    freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存资产的最大秒数；0 表示必须请求新资产。")
-    params: dict = Field(default_factory=dict, description="可选采集参数，不要放入媒体字节。")
-    timeout_seconds: float | None = Field(default=None, gt=0, description="等待资产返回的超时时间，单位秒。")
-
-
-class RequestAssetOutput(BaseModel):
-    """请求传感器资产输出。"""
-
-    asset_id: str | None = Field(default=None, description="资产 ID；超时或不可用时为空。")
-    stream_type: str | None = Field(default=None, description="资产来源类型。")
-    uri: str | None = Field(default=None, description="资产 URI。")
-    mime_type: str | None = Field(default=None, description="资产 MIME 类型。")
-    size_bytes: int | None = Field(default=None, description="资产字节数。")
-    created_at_ms: int | None = Field(default=None, description="资产生成时间戳，毫秒。")
-
-
-class RequestAssetTool(BaseTool):
-    """请求对话资产的 typed Tool 门面。
-
-    主要功能：让 Agent 工具调用通过 `context.devices.sensors.*.one()` 获取资产引用。
-    主要方法：`run()`。
-    """
-
-    spec = ToolSpec(
-        name="request_asset",
-        description="获取指定类型的传感器资产。需要当前照片时优先使用 capture_photo。",
-        input_model=RequestAssetInput,
-        output_model=RequestAssetOutput,
-        capability_type="tool",
-        tags=["asset", "stream", "sensor"],
-    )
-
-    async def run(
-        self,
-        context: ToolContext,
-        input_data: dict | None = None,
-        **kwargs,
-    ):
-        """执行资产请求工具。
-
-        主要逻辑：直接转调 typed sensor API。
-        参数：`context` 为用户设备上下文，`stream_type` 为资产 stream，
-        `freshness_seconds` 为缓存新鲜度，`params` 为采集参数。
-        返回值：`AssetRef` 或 `None`。
-        异常情况：同 Context 方法。
-        """
-        _ = kwargs
-        return await self._run_tool_context(context, dict(input_data or {}))
-
-    async def _run_tool_context(self, context: ToolContext, input_data: dict) -> ToolResult:
-        """按 ToolGateway 调用形态执行资产请求。"""
-
-        stream_type = str(input_data.get("stream_type") or "")
-        sensor = {
-            "sensor.rgb": context.devices.sensors.rgb,
-            "sensor.imu": context.devices.sensors.imu,
-            "sensor.tof": context.devices.sensors.tof,
-        }.get(stream_type)
-        if sensor is None:
-            return ToolResult.failed(
-                ToolError(
-                    f"unsupported asset stream_type: {stream_type}",
-                    code=ErrorCode.INVALID_ARGUMENT,
-                    details={"stream_type": stream_type},
-                )
-            )
-        asset = await sensor.one(
-            timeout_seconds=float(input_data.get("timeout_seconds") or 10),
-            params=input_data.get("params"),
-        )
-        return ToolResult.success(
-            data={
-                "asset_id": asset.asset_id,
-                "stream_type": asset.stream_type,
-                "uri": asset.uri,
-                "mime_type": asset.mime_type,
-                "size_bytes": asset.size_bytes,
-                "created_at_ms": asset.created_at_ms,
-            },
-            assets=[asset],
-            message="asset requested",
-        )
-
-
-class CapturePhotoInput(BaseModel):
-    """抓拍图片输入。"""
-
-    reason: str = Field(default="agent_requested", description="抓拍原因，用简短中文说明即可。")
-    timeout_seconds: float | None = Field(default=10, description="等待图片返回的超时时间，单位秒。")
-    freshness_seconds: float = Field(default=0, description="可复用缓存图片的最大秒数；需要新图时填 0。")
-
-
-class CapturePhotoOutput(BaseModel):
-    """抓拍图片输出。"""
-
-    asset_id: str
-    stream_type: str
-    uri: str
-    mime_type: str
-    size_bytes: int | None = None
-    created_at_ms: int
-    metadata: dict = Field(default_factory=dict)
-
-
-class CapturePhotoTool(BaseTool):
-    """内置抓拍 Tool。
-
-    主要功能：让模型用稳定工具名请求当前视觉资产；实现上只请求 `sensor.rgb`
-    stream，不引入相机 RPC 或点对点 device_id。
-    """
-
-    spec = ToolSpec(
-        name="capture_photo",
-        description=(
-            "当用户询问眼前画面、物体、文字、障碍物、路况等需要新的视觉信息才能回答的问题时调用。"
-            "普通闲聊、记忆维护或已有当前照片足够回答时不要调用。"
-        ),
-        input_model=CapturePhotoInput,
-        output_model=CapturePhotoOutput,
-        capability_type="tool",
-        tags=["camera", "image", "system"],
-        progress_message=(
-            "我先拍张照片看看。",
-            "稍等，我看一下眼前画面。",
-            "我先取一张当前画面。",
-        ),
-    )
-
-    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        """请求一张 `sensor.rgb` 图片资产。
-
-        主要逻辑：通过 typed device facade 发布 stream open 事件并等待
-        端侧上传图片；返回资产引用给 Agent Core。
-        参数：`input_data` 可包含 reason、timeout_seconds、freshness_seconds。
-        返回值：成功时包含 AssetRef，超时时返回结构化失败。
-        异常情况：无匹配设备或等待超时会转为 `TIMEOUT` 失败。
-        """
-
-        asset = await context.devices.sensors.rgb.one(
-            timeout_seconds=float(input_data.get("timeout_seconds") or 10),
-            params={"reason": str(input_data.get("reason") or "agent_requested")},
-        )
-        return ToolResult.success(
-            data={
-                "asset_id": asset.asset_id,
-                "stream_type": asset.stream_type,
-                "uri": asset.uri,
-                "mime_type": asset.mime_type,
-                "size_bytes": asset.size_bytes,
-                "created_at_ms": asset.created_at_ms,
-                "metadata": dict(asset.metadata),
-            },
-            assets=[asset],
-            message="已完成一次抓拍。",
-        )
-
-
-class PublishDeviceCommandTool(BaseTool):
-    """发布端侧命令事件的内置 Tool。"""
-
-    class Input(BaseModel):
-        command: str = Field(description="命令名称，例如 actuator.haptic.pulse 或 phone.task.start。")
-        params: dict = Field(default_factory=dict, description="命令参数，只放小型结构化数据。")
-        selection: Literal["first_available", "all"] = Field(default="first_available", description="使用第一台可用设备，或所有可用设备。")
-
-    class Output(BaseModel):
-        matched_count: int = Field(description="订阅匹配并经过选择策略后的设备数量。")
-        delivered_count: int = Field(description="实际投递成功的设备数量。")
-
-    spec = ToolSpec(
-        name="publish_device_command",
-        description="让可用设备执行一个轻量命令，例如震动、提示音或启动设备侧动作。",
-        input_model=Input,
-        output_model=Output,
-        capability_type="tool",
-        tags=["device", "control"],
-    )
-
-    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        result = await context.devices.commands.call(
-            name=str(input_data.get("command") or ""),
-            params=dict(input_data.get("params") or {}),
-            require_single=str(input_data.get("selection") or "first_available") == "first_available",
-        )
-        return ToolResult.success(data=result.__dict__, message="device command completed" if result.ok else "device command failed")
-
-
 class QueryDeviceStateTool(BaseTool):
     """查询当前用户 active device set 的内置 Tool。"""
 
     class Input(BaseModel):
-        include_routes: bool = Field(default=False, description="是否返回 SDK 内部路由摘要。")
+        include_properties: bool = Field(default=True, description="是否返回设备公开 properties 摘要。")
 
     class Output(BaseModel):
         devices: list[dict] = Field(description="当前用户在线设备快照列表。")
@@ -2058,12 +1863,12 @@ class QueryDeviceStateTool(BaseTool):
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         devices = context.devices._get_devices()
-        include_routes = bool(input_data.get("include_routes", False))
+        include_properties = bool(input_data.get("include_properties", True))
         rows = []
         for device in devices:
             row = dict(device.__dict__)
-            if not include_routes:
-                row.pop("routes", None)
+            if not include_properties:
+                row.pop("properties", None)
             rows.append(row)
         data = {"devices": rows, "count": len(devices)}
         return ToolResult.success(
@@ -2072,62 +1877,11 @@ class QueryDeviceStateTool(BaseTool):
         )
 
 
-class QueryTaskStatusTool(BaseTool):
-    """查询 TaskEngine 任务状态的内置 Tool。"""
+class TaskRuntimeManagerTool(BaseTool):
+    """统一管理 TaskEngine 运行实例的内置 Tool。
 
-    class Input(BaseModel):
-        task_id: str = Field(description="要查询的任务编号；没有明确任务编号时不要猜测。")
-
-    spec = ToolSpec(
-        name="query_task_status",
-        description="当用户询问已启动任务的进度、状态或结果时调用；只适用于已经有任务编号的任务。",
-        input_model=Input,
-        capability_type="tool",
-        tags=["task"],
-        progress_message=(
-            "我查一下任务状态。",
-            "稍等，我看一下任务进度。",
-        ),
-    )
-
-    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        if context.tasks is None:
-            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        ref = context.tasks.query(str(input_data.get("task_id") or ""))
-        return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
-
-
-class CancelTaskTool(BaseTool):
-    """取消 TaskEngine 任务的内置 Tool。"""
-
-    class Input(BaseModel):
-        task_id: str = Field(description="要取消的任务编号；没有明确任务编号时不要猜测。")
-        reason: str = Field(default="tool_requested", description="取消原因。")
-
-    spec = ToolSpec(
-        name="cancel_task",
-        description="当用户明确要求停止、取消或结束某个正在运行的任务时调用；只适用于已经有任务编号的任务。",
-        input_model=Input,
-        capability_type="tool",
-        tags=["task"],
-        progress_message=(
-            "我帮你停止这个任务。",
-            "好的，我正在取消任务。",
-        ),
-    )
-
-    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        if context.tasks is None:
-            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        ref = await context.tasks.cancel(str(input_data.get("task_id") or ""), reason=str(input_data.get("reason") or "tool_requested"))
-        return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
-
-
-class TaskManageTool(BaseTool):
-    """统一管理 TaskEngine 任务的内置 Tool。
-
-    主要功能：以一个模型可见工具承载 Task 的启动、查询、取消和列表能力，避免为
-    每个业务 Task 新增一个只负责启动的 Tool。
+    主要功能：以一个模型可见工具承载 Task 的启动、查询、取消和列表能力。
+    业务 Task 只注册到 TaskRegistry，不再为每类 Task 暴露专用启动 Tool。
     """
 
     class Input(BaseModel):
@@ -2142,10 +1896,10 @@ class TaskManageTool(BaseTool):
         include_terminal: bool = Field(default=True, description="列出任务实例时是否包含已完成、取消、失败或超时任务。")
 
     spec = ToolSpec(
-        name="task_manage",
+        name="task_runtime_manager",
         description=(
-            "统一管理后台 Task。需要启动、查询、取消或列出 Task 时调用；"
-            "启动时必须提供已注册的 task_type，不要为不同 Task 猜测专用启动工具。"
+            "统一管理后台 Task 运行实例。需要启动、查询、取消或列出 Task 时调用；"
+            "启动时必须提供已注册的 task_type，不要调用或猜测某个业务 Task 的专用启动工具。"
         ),
         input_model=Input,
         capability_type="task",
@@ -2351,13 +2105,8 @@ class McpCallTool(BaseTool):
 
 
 BUILTIN_TOOLS = (
-    RequestAssetTool,
-    CapturePhotoTool,
-    PublishDeviceCommandTool,
     QueryDeviceStateTool,
-    QueryTaskStatusTool,
-    CancelTaskTool,
-    TaskManageTool,
+    TaskRuntimeManagerTool,
 )
 
 EXTENSION_BUILTIN_TOOLS = (
@@ -2368,9 +2117,7 @@ EXTENSION_BUILTIN_TOOLS = (
 )
 
 SYSTEM_CONTEXT_TOOL_NAMES = {
-    QueryTaskStatusTool.spec.name,
-    CancelTaskTool.spec.name,
-    TaskManageTool.spec.name,
+    TaskRuntimeManagerTool.spec.name,
     MemorySearchTool.spec.name,
     ManageMemoryTool.spec.name,
     ReadSkillTool.spec.name,

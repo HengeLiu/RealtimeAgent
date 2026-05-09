@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 
 from audio_chat.tasks import BaseTask, TaskEngine
-from audio_chat.tools import SystemToolContext, TaskManageTool
+from audio_chat.tools import SystemToolContext, TaskRuntimeManagerTool
 
 
 class ManagedToolTask(BaseTask):
-    """测试用 TaskManageTool 管理的任务。"""
+    """测试用 TaskRuntimeManagerTool 管理的任务。"""
 
     task_type = "managed_tool_task"
-    description = "TaskManageTool 测试任务"
+    description = "TaskRuntimeManagerTool 测试任务"
 
 
 def _context(engine: TaskEngine) -> SystemToolContext:
@@ -19,16 +19,16 @@ def _context(engine: TaskEngine) -> SystemToolContext:
     return SystemToolContext(user_id="user-task-tool", session_id="sess-task-tool", devices=None, tasks=engine)
 
 
-def test_task_manage_tool_starts_queries_cancels_and_lists_tasks() -> None:
-    """测试目标：验证统一 TaskManageTool 覆盖 Task 的主要管理动作。
+def test_task_runtime_manager_tool_starts_queries_cancels_and_lists_tasks() -> None:
+    """测试目标：验证统一 TaskRuntimeManagerTool 覆盖 Task 的主要管理动作。
 
-    测试方法：注册一个 Task，通过 `task_manage` 依次 list_types、start、query、list_instances、cancel。
+    测试方法：注册一个 Task，通过 `task_runtime_manager` 依次 list_types、start、query、list_instances、cancel。
     预期结果：所有动作都通过同一个 Tool 进入 TaskEngine，返回稳定 TaskRef。
     """
 
     engine = TaskEngine()
     engine.register(ManagedToolTask)
-    tool = TaskManageTool()
+    tool = TaskRuntimeManagerTool()
     context = _context(engine)
 
     listed = asyncio.run(tool.run(context, {"action": "list_types"}))
@@ -61,4 +61,3 @@ def test_task_manage_tool_starts_queries_cancels_and_lists_tasks() -> None:
     cancelled = asyncio.run(tool.run(context, {"action": "cancel", "task_id": task_id, "reason": "unit"}))
     assert cancelled.ok is True
     assert cancelled.data["state"] == "cancelled"
-

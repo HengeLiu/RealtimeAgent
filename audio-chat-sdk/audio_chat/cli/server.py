@@ -136,7 +136,7 @@ def _resolve_launch_metadata(args: argparse.Namespace):
     主要逻辑：dry-run 也复用真实启动的 app-name/config 解析规则，提前暴露配置路径错误。
     参数：`args` 为命令行参数。
     返回值：`AudioChatConfig` 和 `AppLaunch`。
-    异常情况：配置缺失、旧路径或非法 app-name 时由 app_loader 抛出。
+    异常情况：配置缺失、非法路径或非法 app-name 时由 app_loader 抛出。
     """
 
     if args.app_name:

@@ -269,21 +269,13 @@ def _resolve_config_path(path: str | Path) -> Path:
     raw = Path(path)
     if raw.exists():
         return raw
-    parts = raw.parts
-    if parts and parts[0] == "audio-chat":
-        trimmed = Path(*parts[1:])
-        if trimmed.exists():
-            return trimmed
-    audio_chat_prefixed = Path("audio-chat") / raw
-    if audio_chat_prefixed.exists():
-        return audio_chat_prefixed
     return raw
 
 
 def resolve_config_path(path: str | Path) -> Path:
     """解析配置文件路径。
 
-    主要逻辑：复用内部路径兼容规则，支持从仓库根目录或历史 `audio-chat/` 前缀路径加载。
+    主要逻辑：解析用户传入的配置路径，存在则返回实际路径，否则保留原值交给调用方报错。
     参数：`path` 为用户传入的配置路径。
     返回值：实际存在时返回可用路径；不存在时返回原始路径，交给调用方报错。
     异常情况：无。

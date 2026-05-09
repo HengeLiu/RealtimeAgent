@@ -204,7 +204,7 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
 
     session_dir = tmp_path / "runs" / "user-tool" / session_id
     message_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
-    trace_text = (session_dir / "tool-trace.jsonl").read_text(encoding="utf-8")
+    trace_text = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
     model_request = (session_dir / "model-request.json").read_text(encoding="utf-8")
 
     assert "tool.result" in message_text

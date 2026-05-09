@@ -98,7 +98,7 @@ def test_text_agent_tool_loop_is_safe_inside_running_event_loop(tmp_path) -> Non
 
     session_dir = tmp_path / "runs" / "user-tool" / "sess-async-tool"
     message_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
-    trace_text = (session_dir / "tool-trace.jsonl").read_text(encoding="utf-8")
+    trace_text = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
     assert "tool.result" in message_text
     assert "工具结果已回填。" in message_text
     assert "city_lookup" in trace_text

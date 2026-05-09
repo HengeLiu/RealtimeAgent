@@ -133,7 +133,7 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
             payload={
                 "device_id": "dev-effective-config",
                 "auth": {"mode": "disabled"},
-                "routes": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+                "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
             },
         )
     )
@@ -166,9 +166,7 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
             payload={
                 "device_id": "dev-playback",
                 "auth": {"mode": "disabled"},
-                "routes": [
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                ],
+                "supports": {"sensors": [], "actuators": []},
             },
         ),
         connection,
@@ -224,10 +222,7 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
             payload={
                 "device_id": "dev-continuous",
                 "auth": {"mode": "disabled"},
-                "routes": [
-                    {"event": "agent.response.*"},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                ],
+                "supports": {"sensors": [], "actuators": []},
             },
         ),
         connection,
@@ -312,9 +307,7 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
                 payload={
                     "device_id": connection.device_id,
                     "auth": {"mode": "disabled"},
-                    "routes": [
-                        {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                    ],
+                    "supports": {"sensors": [], "actuators": []},
                 },
             ),
             connection,

@@ -137,7 +137,7 @@ class JsonlMemoryStore(MemoryStore):
         主要逻辑：读取用户 jsonl，先应用 tombstone，再按 content 和 metadata
         的小写文本做包含匹配。空查询返回最新有效记录。
         参数：`user_id` 为用户编号，`query` 为搜索文本，`limit` 为最大条数。
-        返回值：按新到旧排序的 `MemoryRecord`。
+        返回值：按时间倒序排序的 `MemoryRecord`。
         异常情况：记录 JSON 损坏时跳过该行，避免单条坏数据阻塞本地验收。
         """
 

@@ -57,7 +57,7 @@ struct AudioChatStreamChunk {
 /// stream chunk 二进制编解码器。
 ///
 /// 主要功能：
-/// 1. 按 server 侧 `StreamChunkCodec` 兼容格式写入 4 字节 header 长度。
+/// 1. 按 server 侧 `StreamChunkCodec` 格式写入 4 字节 header 长度。
 /// 2. header 使用 JSON，payload 保持原始字节。
 /// 3. 解码下行 `actuator.speaker` 时校验 payload_size。
 enum AudioChatStreamChunkCodec {

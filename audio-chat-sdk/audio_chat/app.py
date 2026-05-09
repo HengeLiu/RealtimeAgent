@@ -699,8 +699,7 @@ class AudioChatApp:
     def _event_device_id(event: Event) -> str:
         """从事件中解析当前设备标识。
 
-        主要逻辑：端侧事件以 `producer_id` 作为设备身份；为了历史协议，如果旧事件
-        带有 `session_id`，只有在 server 侧事件或 producer 为空时才作为兜底。
+        主要逻辑：端侧事件必须以 `producer_id` 作为设备身份。
         参数：`event` 为控制事件。
         返回值：device_id。
         异常情况：无法解析时抛出 ValueError。
@@ -708,8 +707,6 @@ class AudioChatApp:
 
         if event.producer_id and event.producer_id != SERVER_PRODUCER_ID:
             return event.producer_id
-        if event.session_id:
-            return event.session_id
         raise ValueError("event requires device_id via producer_id")
 
     def _register_endpoint_input_stream(self, event: Event) -> None:
@@ -941,10 +938,10 @@ def _stream_format_from_dict(data: dict) -> StreamFormat:
 
 
 def _normalize_agent_mode(mode: str) -> str:
-    """规范化新版和旧文档中的 Agent 模式别名。"""
+    """规范化 Agent 模式名称。"""
 
     normalized = str(mode or "text").strip().lower()
-    if normalized in {"realtime", "omni", "omni_realtime"}:
+    if normalized in {"realtime_audio"}:
         return "realtime_audio"
     if normalized in {"text", "auto", "custom", "realtime_audio"}:
         return normalized

@@ -13,18 +13,16 @@ STANDARD_SUPPORT_IDS = {
     "sensor.imu",
     "sensor.tof",
     "actuator.haptic",
-    "actuator.speaker",
 }
 
 SENSOR_SUPPORT_IDS = {"sensor.rgb", "sensor.imu", "sensor.tof"}
-ACTUATOR_SUPPORT_IDS = {"actuator.haptic", "actuator.speaker"}
+ACTUATOR_SUPPORT_IDS = {"actuator.haptic"}
 
 SUPPORT_STREAM_TYPES = {
     "sensor.rgb": "sensor.rgb",
     "sensor.imu": "sensor.imu",
     "sensor.tof": "sensor.tof",
     "actuator.haptic": "actuator.haptic",
-    "actuator.speaker": "actuator.speaker",
 }
 
 DEFAULT_MODES = {
@@ -89,8 +87,8 @@ def validate_device_capabilities_file(data: dict[str, Any], *, require_identity:
         if not isinstance(data.get("name") or data.get("device_name"), str) or not (data.get("name") or data.get("device_name")):
             raise ValueError("name or device_name is required")
     supports = _expand_structured_supports(data.get("supports"))
-    if not isinstance(supports, list) or not supports:
-        raise ValueError("supports must be a non-empty list")
+    if not isinstance(supports, list):
+        raise ValueError("supports must use structured sensors/actuators object")
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(supports):
         if not isinstance(item, dict):
@@ -103,7 +101,7 @@ def validate_device_capabilities_file(data: dict[str, Any], *, require_identity:
     return normalized
 
 
-def _compile_structured_supports_to_internal_routes(supports: dict[str, Any]) -> list[dict[str, Any]]:
+def compile_internal_routes_from_supports(supports: dict[str, Any]) -> list[dict[str, Any]]:
     """把设备语义能力编译成内部事件路由规则。
 
     主要逻辑：开发者只写 `supports`；SDK 根据标准语义生成内部路由规则。
@@ -125,11 +123,10 @@ def _compile_normalized_supports_to_routes(normalized: list[dict[str, Any]]) -> 
         stream_type = SUPPORT_STREAM_TYPES[support_id]
         if support_id in {"sensor.rgb", "sensor.imu", "sensor.tof"}:
             routes.append({"event": "stream.control.*", "filter": {"stream_type": stream_type}})
-        elif support_id in {"actuator.haptic", "actuator.speaker"}:
+        elif support_id == "actuator.haptic":
             routes.append({"event": "stream.output.*", "filter": {"stream_type": stream_type}})
-            if support_id == "actuator.haptic":
-                for command in item.get("commands") or ["vibrate"]:
-                    routes.append({"event": "command.*", "filter": {"payload.command": f"haptic.{command}"}})
+            for command in item.get("commands") or ["vibrate"]:
+                routes.append({"event": "command.*", "filter": {"payload.command": f"haptic.{command}"}})
     return _dedupe_routes(routes)
 
 
@@ -138,7 +135,7 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
 
     主要逻辑：供 CLI 和端侧 helper 使用，输出可直接放入注册事件 payload 的字段。
     参数：`path` 为 YAML/JSON 设备能力文件。
-    返回值：包含 `device_id/user_id/name/runtime/properties/supports/routes` 的字典。
+    返回值：包含 `device_id/user_id/name/runtime/properties/supports` 的字典。
     异常情况：读取或校验失败时抛出明确异常。
     """
 
@@ -162,7 +159,6 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
         "runtime": dict(data.get("runtime") or {}),
         "properties": properties,
         "supports": dict(data.get("supports") or {}),
-        "routes": _dedupe_routes([*_compile_normalized_supports_to_routes(supports), *_system_routes()]),
     }
     if data.get("sdk_version"):
         payload["sdk_version"] = data["sdk_version"]
@@ -174,11 +170,11 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
 
 
 def compile_registration_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """为注册 payload 补齐内部路由规则。
+    """标准化设备注册 payload。
 
-    主要逻辑：端侧只能传入结构化 `supports`，SDK 负责生成内部路由规则。
+    主要逻辑：端侧只能传入结构化 `supports`，SDK 校验能力并补齐 properties。
     参数：`payload` 为注册事件 payload。
-    返回值：包含编译后 routes 的新 payload。
+    返回值：包含标准化 properties 的新 payload。
     异常情况：supports 非法或端侧手写 routes 时抛出 `ValueError`。
     """
 
@@ -191,9 +187,7 @@ def compile_registration_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(supports, dict):
         raise ValueError("supports must use structured sensors/actuators object")
     normalized = validate_device_capabilities_file({"supports": supports}, require_identity=False)
-    compiled = _compile_normalized_supports_to_routes(normalized)
     result["supports"] = supports
-    result["routes"] = _dedupe_routes([*compiled, *_system_routes()])
     properties = dict(result.get("properties") or {})
     if isinstance(result.get("runtime"), dict):
         properties.setdefault("runtime", dict(result["runtime"]))
@@ -212,6 +206,7 @@ def _system_routes() -> list[dict[str, Any]]:
     return [
         {"event": "control.audio_session.*"},
         {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
+        {"event": "command.*"},
     ]
 
 
@@ -312,8 +307,6 @@ def _normalize_support_item(item: dict[str, Any]) -> dict[str, Any]:
         result.setdefault("formats", ["jpeg"])
     if support_id == "actuator.haptic":
         result.setdefault("commands", ["vibrate"])
-        result.setdefault("stream_type", SUPPORT_STREAM_TYPES[support_id])
-    if support_id == "actuator.speaker":
         result.setdefault("stream_type", SUPPORT_STREAM_TYPES[support_id])
     return result
 

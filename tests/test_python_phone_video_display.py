@@ -91,9 +91,7 @@ def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: 
                 "endpoint.compute.vision": True,
                 "actuator.display.rgb": True,
             },
-            routes=[
-                {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}},
-            ],
+            supports={"sensors": [{"type": "rgb"}], "actuators": []},
             display={"enabled": False, "save_latest_frame": str(latest_frame)},
         )
         tasks: list[asyncio.Task] = []
@@ -122,7 +120,7 @@ def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: 
                             "client_type": "python-glass",
                             "auth": {"mode": "disabled"},
                             "properties": {"sensor.rgb": True},
-                            "routes": [],
+                            "supports": {"sensors": [], "actuators": []},
                         },
                     ),
                 )

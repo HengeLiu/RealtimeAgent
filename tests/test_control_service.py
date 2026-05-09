@@ -18,6 +18,20 @@ class FakeConnection:
         self.events.append(Event(event_name="control.device.state.changed", user_id="user-001", producer_id="server-main", payload={"reason": reason}))
 
 
+def _supports_for_routes(routes: list[dict]) -> dict:
+    """把测试期望的内部路由映射为公开 supports 注册输入。"""
+
+    sensors = []
+    actuators = []
+    for route in routes:
+        stream_type = (route.get("filter") or {}).get("stream_type")
+        if stream_type == "sensor.rgb":
+            sensors.append({"type": "rgb"})
+        if stream_type == "actuator.haptic":
+            actuators.append({"type": "vibrator"})
+    return {"sensors": sensors, "actuators": actuators}
+
+
 def _registration(device_id: str, routes: list[dict]) -> Event:
     return Event(
         event_name="control.device.register.requested",
@@ -29,7 +43,7 @@ def _registration(device_id: str, routes: list[dict]) -> Event:
             "client_type": "python-playback",
             "sdk_version": "audio-chat-endpoint-0.1.0",
             "auth": {"mode": "disabled"},
-            "routes": routes,
+            "supports": _supports_for_routes(routes),
         },
     )
 
@@ -281,10 +295,10 @@ def test_route_filter_rejects_regex_and_unknown_paths() -> None:
 
 
 def test_static_token_binding_reconnect_and_cross_user_rejection() -> None:
-    """测试目标：验证 static_token、同设备重连覆盖旧连接和跨 user 绑定保护。
+    """测试目标：验证 static_token、同设备重连覆盖原连接和跨 user 绑定保护。
 
     测试方法：用正确 token 注册设备，再用同 user 重连，最后换 user 尝试绑定同设备。
-    预期结果：旧连接关闭，active device set 仍只有新连接；跨 user 注册失败。
+    预期结果：原连接关闭，active device set 仍只有新连接；跨 user 注册失败。
     """
 
     service = ControlService(authenticator=DeviceAuthenticator(mode="static_token", device_tokens={"dev-auth": "secret"}))

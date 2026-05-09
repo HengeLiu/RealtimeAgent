@@ -9,14 +9,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from audio_chat.device_capabilities import compile_registration_payload
+from audio_chat.device_capabilities import compile_internal_routes_from_supports, compile_registration_payload
 from audio_chat.observability import RunRecorder
 from audio_chat.protocol import (
     CONTROL_EVENTS,
     PROTOCOL_VERSION,
     SERVER_PRODUCER_ID,
     Event,
-    Route,
     new_id,
     validate_control_event_payload,
     validate_event_name,
@@ -33,6 +32,14 @@ class DeviceConnection(Protocol):
     def close(self, *, reason: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class _Route:
+    """Control Service 内部事件路由规则。"""
+
+    event: str
+    filter: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class Device:
     """Control Service 内部运行态设备对象。"""
@@ -44,7 +51,7 @@ class Device:
     client_type: str
     sdk_version: str
     properties: dict[str, Any]
-    routes: list[Route]
+    routes: list[_Route]
     connection_state: str = "online"
     connection_id: str = field(default_factory=lambda: new_id("conn"))
     last_seen_at: float = field(default_factory=time.time)
@@ -61,7 +68,7 @@ DeviceRecord = Device
 class DeviceSnapshot:
     """只读设备快照。
 
-    主要功能：给 debug API 暴露设备身份、连接状态、properties 和内部路由摘要。
+    主要功能：给 debug API 暴露设备身份、连接状态和 properties。
     不包含 capabilities 字段，避免把设备路由理解成第二套能力系统。
     """
 
@@ -75,7 +82,7 @@ class DeviceSnapshot:
     connection_id: str
     last_seen_at: float
     connection_state: str
-    routes: tuple[Route, ...]
+    routes: tuple[_Route, ...]
     last_error: dict[str, Any] | None = None
     register_failed_reason: str | None = None
     auth_diagnostics: dict[str, Any] = field(default_factory=dict)
@@ -95,7 +102,6 @@ class DeviceSnapshot:
             "connection_id": self.connection_id,
             "last_seen_at": self.last_seen_at,
             "connection_state": self.connection_state,
-            "routes": [route.__dict__ for route in self.routes],
             "last_error": self.last_error,
             "register_failed_reason": self.register_failed_reason,
             "auth": dict(self.auth_diagnostics),
@@ -292,7 +298,6 @@ class RegistrationValidator:
             raise ValueError("unsupported protocol version")
         if "capabilities" in event.payload:
             raise ValueError("registration payload must not contain capabilities; use structured supports")
-        self.validate_routes(event.payload.get("routes") or [])
 
     def validate_routes(self, routes: list[dict[str, Any]]) -> None:
         if len(routes) > self.max_routes_per_device:
@@ -337,12 +342,12 @@ class RegistrationValidator:
 
 
 class RouteMatcher:
-    def match(self, event: Event, route: Route, device: Device | None = None) -> bool:
+    def match(self, event: Event, route: _Route, device: Device | None = None) -> bool:
         """判断单条路由是否命中事件。"""
 
         return bool(self.explain(event, route, device)["matched"])
 
-    def explain(self, event: Event, route: Route, device: Device | None = None) -> dict[str, Any]:
+    def explain(self, event: Event, route: _Route, device: Device | None = None) -> dict[str, Any]:
         """返回单条路由的匹配诊断。
 
         主要逻辑：先匹配事件名，再逐个检查 filter 字段。返回结构只包含小型结构化
@@ -380,7 +385,7 @@ class RouteMatcher:
         }
 
     @staticmethod
-    def _filter_miss(route: Route, path: str, expected: Any, actual: Any) -> dict[str, Any]:
+    def _filter_miss(route: _Route, path: str, expected: Any, actual: Any) -> dict[str, Any]:
         """生成 filter 未命中的可读诊断。"""
 
         return {
@@ -459,7 +464,12 @@ class ControlService:
             )
             if self.active_device_set_policy != "single":
                 raise ValueError(f"unsupported active_device_set_policy: {self.active_device_set_policy}")
+            routes = [
+                _Route(event=item["event"], filter=dict(item.get("filter") or {}))
+                for item in compile_internal_routes_from_supports(compiled_payload["supports"])
+            ]
             self.validator.validate_payload(registration)
+            self.validator.validate_routes([{"event": route.event, "filter": dict(route.filter)} for route in routes])
             ok, reason = self.authenticator.verify_token(registration)
             if not ok:
                 raise PermissionError(reason or "registration_denied")
@@ -468,10 +478,6 @@ class ControlService:
             if bound_user is not None and bound_user != registration.user_id:
                 raise PermissionError("device_bound_to_other_user")
             old_connection = self._connections.get(device_id)
-            routes = [
-                Route(event=item["event"], filter=dict(item.get("filter") or {}))
-                for item in registration.payload.get("routes", [])
-            ]
             name = str(registration.payload.get("name") or registration.payload.get("device_name") or device_id)
             properties = dict(registration.payload.get("properties") or {})
             record = Device(
@@ -551,11 +557,7 @@ class ControlService:
                 connection_id="",
                 last_seen_at=time.time(),
                 connection_state="offline",
-                routes=tuple(
-                    Route(event=str(item.get("event", "")), filter=dict(item.get("filter") or {}))
-                    for item in registration.payload.get("routes", [])
-                    if isinstance(item, dict)
-                ),
+                routes=tuple(),
                 last_error={"code": "registration_failed", "message": reason},
                 register_failed_reason=reason,
                 auth_diagnostics={

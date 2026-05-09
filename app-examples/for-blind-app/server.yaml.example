@@ -117,7 +117,7 @@ agent:
 
   text:
     # 文本模型 provider。当前代码真实支持 mock / openai-compatible / dashscope-compatible。
-    # 使用百炼兼容 OpenAI Chat Completions 接口时选择 dashscope-compatible。
+    # 使用百炼OpenAI-compatible Chat Completions 接口时选择 dashscope-compatible。
     model_provider: "dashscope-compatible"
     # 文本模型名，例如 qwen-plus、qwen-max、qwen-turbo 等，按百炼账号可用模型填写。
     model: "qwen-plus"

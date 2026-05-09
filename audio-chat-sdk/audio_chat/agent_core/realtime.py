@@ -865,7 +865,7 @@ class RealtimeAudioAgentCore:
     def open(self, user_id: str, session_id: str) -> None:
         """打开用户 realtime provider 会话。
 
-        主要逻辑：同一 user 已有同 session 时复用；session 变化时先关闭旧会话，再打开新会话。
+        主要逻辑：同一 user 已有同 session 时复用；session 变化时先关闭原会话，再打开新会话。
         参数：`user_id` 为用户标识，`session_id` 为音频会话标识。
         返回值：无。
         异常情况：provider 初始化失败时抛出异常，并记录 `system.error.raised`。

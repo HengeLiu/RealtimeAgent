@@ -22,10 +22,10 @@
           "nonce": "nonce-auth-success-001"
         }
       },
-      "subscriptions": [
-        {"event": "control.audio_session.*"},
-        {"event": "stream.output.*"}
-      ]
+      "supports": {
+        "sensors": [{"type": "rgb"}],
+        "actuators": []
+      }
     }
   },
   "expected": {

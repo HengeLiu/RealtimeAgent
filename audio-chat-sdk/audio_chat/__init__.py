@@ -6,7 +6,7 @@ from audio_chat.device_capabilities import compile_device_capabilities_file, com
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.mcp import McpGateway, McpToolSpec
 from audio_chat.memory import MemoryRecord, MemoryService, MemoryStore
-from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType, Route
+from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType
 from audio_chat.skills import SkillDocument, SkillService
 from audio_chat.tasks import BaseTask, JsonlTaskStore, TaskContext, TaskEngine, TaskRef, TaskSignal, TaskSignalBridge, TaskSpec, TaskStore
 from audio_chat.context import CapabilityTrace, TaskDeviceFacade, ToolDeviceFacade
@@ -77,7 +77,6 @@ __all__ = [
     "StreamFormat",
     "StreamTimeoutError",
     "StreamType",
-    "Route",
     "TaskContext",
     "TaskDeviceFacade",
     "TaskEngine",

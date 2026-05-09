@@ -127,9 +127,7 @@ def test_network_multi_device_route_routes_rgb_and_speaker(tmp_path: Path) -> No
             device_name="rgb-only",
             client_type="python-mock-rgb",
             properties={"camera.role": "rgb-only"},
-            routes=[
-                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-            ],
+            supports={"sensors": [{"type": "rgb"}], "actuators": []},
         )
         speaker = NetworkPythonPlaybackEndpoint(
             server_url=server_url,
@@ -139,9 +137,7 @@ def test_network_multi_device_route_routes_rgb_and_speaker(tmp_path: Path) -> No
             device_name="speaker-only",
             client_type="python-mock-speaker",
             properties={"speaker.role": "speaker-only"},
-            routes=[
-                {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-            ],
+            supports={"sensors": [], "actuators": []},
         )
         tasks = []
         try:
@@ -273,7 +269,7 @@ def test_failed_network_registration_does_not_allow_stream_connection(tmp_path: 
                                 "client_type": "python-playback",
                                 "sdk_version": "audio-chat-test",
                                 "auth": {"mode": "static_token", "token": "token-bad"},
-                                "routes": [{"event": "stream.output.*"}],
+                                "supports": {"sensors": [], "actuators": []},
                             },
                         ).to_dict(),
                         ensure_ascii=False,

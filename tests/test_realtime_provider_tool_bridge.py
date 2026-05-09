@@ -38,9 +38,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str) ->
             payload={
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
-                "routes": [
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                ],
+                "supports": {"sensors": [], "actuators": []},
             },
         ),
         connection,
@@ -95,7 +93,7 @@ def test_realtime_tool_bridge_commits_json_argument_delta_inside_running_loop(tm
 
     assert result["ok"] is True
     assert result["data"]["city"] == "hangzhou"
-    trace_text = (tmp_path / "runs" / "sessions" / "sess-rt" / "tool-trace.jsonl").read_text(encoding="utf-8")
+    trace_text = (tmp_path / "runs" / "sessions" / "sess-rt" / "tool-events.jsonl").read_text(encoding="utf-8")
     assert "realtime_city_lookup" in trace_text
 
 

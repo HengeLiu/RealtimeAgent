@@ -20,7 +20,10 @@
           "nonce": "nonce-auth-expired-001"
         }
       },
-      "subscriptions": []
+      "supports": {
+        "sensors": [],
+        "actuators": []
+      }
     }
   },
   "expected": {

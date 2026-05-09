@@ -94,7 +94,7 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
 def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> None:
     """测试目标：验证 iOS 参考端只通过 event / stream 协议处理端侧能力。
 
-    测试方法：静态检查 Swift 代码中的事件名、stream 类型和禁止旧 RPC 的关键词。
+    测试方法：静态检查 Swift 代码中的事件名、stream 类型和禁止 RPC 的关键词。
     预期结果：iOS 能处理输出 stream、响应 sensor.rgb 采集请求、上传测试 PCM，
     且没有 `capture_photo` 或固定设备路由字段。
     """

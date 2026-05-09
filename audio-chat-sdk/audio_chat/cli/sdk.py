@@ -132,7 +132,7 @@ def _release_candidate_check(*, version: str, audio_root: Path) -> dict:
     """检查当前发布候选标识和变更记录。
 
     主要逻辑：版本号必须包含 PEP 440 rc 标识，CHANGELOG 必须记录当前版本、
-    当前不兼容点和 package gate。这样 package-check 的报告可以直接作为
+    当前架构变更点和 package gate。这样 package-check 的报告可以直接作为
     release candidate 摘要交付。
     """
 
@@ -145,7 +145,7 @@ def _release_candidate_check(*, version: str, audio_root: Path) -> dict:
         changelog_text = ""
     else:
         changelog_text = changelog.read_text(encoding="utf-8")
-        for expected in (version, "不兼容点", "package-check", "device-api-upgrade-release"):
+        for expected in (version, "架构变更点", "package-check", "device-api-upgrade-release"):
             if expected not in changelog_text:
                 errors.append(f"CHANGELOG.md missing release note: {expected}")
     return {

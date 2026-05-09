@@ -35,7 +35,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
             payload={
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
-                "routes": [{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
+                "supports": {"sensors": [], "actuators": []},
             },
         ),
         connection,
@@ -160,7 +160,7 @@ def test_progress_audio_not_inserted_after_text_delta(tmp_path) -> None:
         encoding="utf-8"
     )
     assert "tool.progress_message.emitted" not in model_events
-    assert "progress_lookup" in (tmp_path / "runs" / "sessions" / "sess-progress-text-first" / "tool-trace.jsonl").read_text(
+    assert "progress_lookup" in (tmp_path / "runs" / "sessions" / "sess-progress-text-first" / "tool-events.jsonl").read_text(
         encoding="utf-8"
     )
 

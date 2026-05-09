@@ -214,7 +214,7 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
     """测试目标：确认当前开发说明覆盖真实可用的设备注册和功能开发入口。
 
     测试方法：读取开发说明，检查当前 supports 列表、typed facade、ToolDeviceFacade
-    兼容 API、BaseTool、BaseTask、TaskContext、运行命令和调试产物。
+    API、BaseTool、BaseTask、TaskContext、运行命令和调试产物。
     预期结果：开发者有一份能按当前代码直接操作的说明，并能分清已落地 API 和目标设计。
     """
 

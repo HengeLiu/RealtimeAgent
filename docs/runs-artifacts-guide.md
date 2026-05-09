@@ -10,7 +10,7 @@
 runs/audio-chat
 ```
 
-从当前版本开始，终端日志中的 `detail_path` 会打印绝对路径。旧日志里如果看到相对路径，需要按 server 启动时的工作目录拼接。
+从当前版本开始，终端日志中的 `detail_path` 会打印绝对路径。相对路径需要按 server 启动时的工作目录拼接。
 
 ## 先看什么
 
@@ -107,12 +107,12 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 | `playback-result.json` | python-glass / playback endpoint 的回放验收结果。 |
 | `actuators.jsonl` | 端侧执行器消费记录，例如 speaker chunk 收到、播放完成。 |
 
-### 兼容文件
+### 调试文件
 
 | 文件 | 状态 |
 | --- | --- |
 | `model-events.jsonl` | 历史命名，目前基本等同于 `agent-events.jsonl`。 |
-| `tool-trace.jsonl` | 历史命名，目前应优先看 `tool-events.jsonl`。 |
+| `tool-events.jsonl` | Tool 调用事件。 |
 
 ## messages 文件
 
@@ -150,7 +150,7 @@ runs/audio-chat/tasks/
 当前 runs 产物已经能支持排障，但目录对开发者不够友好，主要问题是：
 
 1. `agent-events.jsonl` 和 `model-events.jsonl` 内容重复。
-2. `tool-events.jsonl` 和 `tool-trace.jsonl` 内容重复。
+2. `tool-events.jsonl` 记录 Tool 调用。
 3. `output-decisions.jsonl` 和 `playback-decisions.jsonl` 语义重叠。
 4. `.pcm` 原始 payload 文件和日常调试文件混在同一层，导致 session 目录很乱。
 5. `input-stream_rgb_<id>.pcm` 后缀不准确，RGB/JPEG 资产不应该表现成 `.pcm`。
@@ -177,7 +177,7 @@ runs/audio-chat/tasks/
       stream_out_<id>.pcm
   compatibility/
     model-events.jsonl
-    tool-trace.jsonl
+    tool-events.jsonl
     output-decisions.jsonl
 ```
 

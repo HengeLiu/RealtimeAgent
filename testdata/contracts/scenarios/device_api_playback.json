@@ -1,8 +1,8 @@
 {
-  "name": "old-sdk-parity-playback",
+  "name": "device-api-playback",
   "required_events": [
     "control.device.registered",
-    "stream.control.configure.requested",
+    "stream.control.open.requested",
     "stream.output.open.requested",
     "stream.output.close.requested"
   ],
@@ -25,8 +25,13 @@
   ],
   "assertions": {
     "expected_asset_count": 8,
-    "expected_tool_events": ["capture_photo"],
-    "expected_task_signals": ["continuous_rgb_analyze.frames_collected", "timer.started"],
+    "expected_tool_events": [
+      "capture_photo"
+    ],
+    "expected_task_signals": [
+      "continuous_rgb_analyze.frames_collected",
+      "timer.started"
+    ],
     "expected_output_chunks": 1
   }
 }

@@ -59,10 +59,10 @@ class EventName(StrEnum):
 
 
 class EventPattern(StrEnum):
-    """内置事件路由模式。
+    """内置事件通配模式。
 
-    主要功能：生成内部路由规则时避免手写通配字符串。枚举值仍然是协议字符串，可直接
-    写入 `Route(event=...)` 或注册 payload。
+    主要功能：供 SDK 内部生成控制面路由规则，避免重复手写通配字符串。
+    枚举值仍然是协议字符串。
     """
 
     ALL = "*"
@@ -168,35 +168,6 @@ def validate_event_envelope_dict(data: dict[str, Any]) -> None:
         raise ValueError(f"event payload contains forbidden device routing fields: {sorted(payload_forbidden)}")
     validate_control_event_payload(payload)
 
-
-@dataclass(frozen=True)
-class Route:
-    event: str | EventName | EventPattern
-    filter: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "event", str(self.event))
-
-    @classmethod
-    def for_stream(cls, event: str | EventName | EventPattern, stream_type: str | StreamType) -> "Route":
-        """构造按 stream_type 过滤的事件路由规则。
-
-        主要逻辑：把常见的 `{"event": "...", "filter": {"stream_type": "..."}}`
-        收敛成一个公开方法，避免端侧注册代码重复拼字典。
-        参数：`event` 为事件名或通配模式，`stream_type` 为 stream 类型。
-        返回值：`Route`。
-        异常情况：非法事件名由注册校验阶段抛出。
-        """
-
-        return cls(event=str(event), filter={"stream_type": str(stream_type)})
-
-    def to_dict(self) -> dict[str, Any]:
-        """转换为注册 payload 中的订阅字典。"""
-
-        data: dict[str, Any] = {"event": str(self.event)}
-        if self.filter:
-            data["filter"] = dict(self.filter)
-        return data
 
 @dataclass(frozen=True)
 class Event:

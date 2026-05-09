@@ -139,7 +139,7 @@ def register_endpoint(app: AudioChatApp, endpoint: RgbTaskEndpoint) -> None:
             producer_id=endpoint.device_id,
             payload={
                 "device_id": endpoint.device_id,
-                "routes": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+                "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
                 "auth": {"mode": "disabled"},
             },
         ),

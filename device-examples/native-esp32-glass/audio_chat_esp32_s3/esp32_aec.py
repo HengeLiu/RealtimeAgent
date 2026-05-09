@@ -25,7 +25,7 @@ class RingBuffer:
     """ESP32 端侧音频环形缓冲的 Python 契约模型。
 
     主要功能：
-    1. 模拟旧 ESP32 AEC 试验中的 playback ring 和 reference ring。
+    1. 模拟 ESP32 AEC 试验中的 playback ring 和 reference ring。
     2. 为协议测试提供可检查的字节计数和溢出行为。
 
     主要属性：
@@ -45,7 +45,7 @@ class RingBuffer:
         return self._size
 
     def push(self, data: bytes) -> None:
-        """写入音频片段并按容量淘汰旧数据。
+        """写入音频片段并按容量淘汰早期数据。
 
         参数：`data` 是 PCM 或其他端侧音频字节。
         返回值：无。
