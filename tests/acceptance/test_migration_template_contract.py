@@ -41,7 +41,7 @@ def test_migration_templates_are_valid_python_and_use_public_api() -> None:
         "BaseTask",
         "BaseTool",
         "TaskContext",
-        "TaskEvent",
+        "TaskSignal",
         "ToolContext",
         "ToolResult",
         "ToolSpec",

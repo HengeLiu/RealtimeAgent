@@ -2,13 +2,13 @@
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.asset import ArtifactRef, AssetRef
-from audio_chat.device_capabilities import compile_device_capabilities_file, compile_registration_payload, compile_supports_to_subscriptions
+from audio_chat.device_capabilities import compile_device_capabilities_file, compile_registration_payload
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.mcp import McpGateway, McpToolSpec
 from audio_chat.memory import MemoryRecord, MemoryService, MemoryStore
-from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType, Subscription
+from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType, Route
 from audio_chat.skills import SkillDocument, SkillService
-from audio_chat.tasks import BaseTask, DeviceContext, JsonlTaskStore, TaskContext, TaskEngine, TaskEvent, TaskEventBridge, TaskRef, TaskSpec, TaskStore
+from audio_chat.tasks import BaseTask, JsonlTaskStore, TaskContext, TaskEngine, TaskRef, TaskSignal, TaskSignalBridge, TaskSpec, TaskStore
 from audio_chat.context import CapabilityTrace, TaskDeviceFacade, ToolDeviceFacade
 from audio_chat.tools import (
     ActuatorResult,
@@ -55,11 +55,9 @@ __all__ = [
     "CommandHandle",
     "CommandResult",
     "DeviceBusyError",
-    "DeviceContext",
     "DeviceNotFoundError",
     "compile_device_capabilities_file",
     "compile_registration_payload",
-    "compile_supports_to_subscriptions",
     "DeviceSnapshot",
     "ErrorCode",
     "Event",
@@ -79,13 +77,13 @@ __all__ = [
     "StreamFormat",
     "StreamTimeoutError",
     "StreamType",
-    "Subscription",
+    "Route",
     "TaskContext",
     "TaskDeviceFacade",
     "TaskEngine",
-    "TaskEvent",
-    "TaskEventBridge",
     "TaskRef",
+    "TaskSignal",
+    "TaskSignalBridge",
     "TaskSpec",
     "TaskStore",
     "ToolContext",

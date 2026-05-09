@@ -9,10 +9,10 @@
 | 目录 | 迁移目标 | 当前支撑 |
 | --- | --- | --- |
 | `capabilities/find_object` | 找物或看前方 Tool / Task | 一次性 `sensor.rgb` 抓拍和持续视觉任务。 |
-| `capabilities/traffic_light` | 红绿灯连续视觉识别 | 连续 `sensor.rgb` stream + TaskEvent + Output Service。 |
+| `capabilities/traffic_light` | 红绿灯连续视觉识别 | 连续 `sensor.rgb` stream + TaskSignal + Output Service。 |
 | `capabilities/navigation` | 路线准备和执行期导航 | MCP 路线准备 + 偏航、接近终点、视觉确认样板。 |
 | `capabilities/search` | 搜索和问答资料查询 | MCP wrapper Tool，缺真实 provider 时明确 mock/fallback。 |
-| `capabilities/timer` | 计时器和后台通知 | `TaskContext.schedule_event()` + 查询、取消、到点通知。 |
+| `capabilities/timer` | 计时器和后台通知 | `TaskContext.schedule_signal()` + 查询、取消、到点通知。 |
 | `capabilities/continuous_rgb_analyze` | SDK 连续视觉样板 | 通过 `TaskContext` 请求端侧持续上传 RGB 数据。 |
 | `capabilities/find_object_phone_task` | 端侧找物任务样板 | 通过 `command.requested` 请求手机或眼镜端执行视觉任务。 |
 | `capabilities/traffic_light_phone_task` | 端侧红绿灯任务样板 | 通过当前设备上下文和 RGB stream 对接端侧视觉任务。 |

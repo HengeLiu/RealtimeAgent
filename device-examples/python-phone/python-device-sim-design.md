@@ -75,7 +75,7 @@ device-examples/python-glass/
 device-examples/python-phone/
 ```
 
-后续迁移时应把这两个历史实现收敛到 `python-device-sim`，保留旧 CLI 作为兼容别名。
+后续应把这两个实现收敛到 `python-device-sim`。
 
 ## 4. 设计原则
 
@@ -86,7 +86,7 @@ device-examples/python-phone/
 模拟器启动时注册 Device：
 
 ```text
-device_id / user_id / name / subscriptions / properties
+device_id / user_id / name / supports / properties
 ```
 
 server 不知道它是“回放眼镜”、“手机 mock”还是“算力端”。所有行为都通过事件和 stream 完成。
@@ -138,7 +138,7 @@ class SimulatedDevice {
   +user_id
   +device_id
   +name
-  +subscriptions
+  +supports
   +properties
   +run()
 }
@@ -308,7 +308,7 @@ runs_root: runs/device-sim
 devices:
   - device_id: dev-sim-glass-001
     name: 音频回放和播放器模拟设备
-    subscriptions:
+    supports:
       - event: control.audio_session.*
       - event: stream.output.*
         filter:
@@ -362,7 +362,7 @@ uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-
 uv run python -m audio_chat_python_phone_mock --config device-examples/python-device-sim/scenarios/vision-task.yaml
 ```
 
-兼容 CLI 后续可以标记为旧入口，但不应立刻删除。
+CLI 入口应保持单一当前实现。
 
 ## 11. 开发者如何使用
 
@@ -377,7 +377,7 @@ uv run audio-chat.device.sim \
 
 设备开发者使用它对照协议：
 
-1. 查看注册事件如何声明 `subscriptions` 和可选 `properties`。
+1. 查看注册事件如何声明 `supports` 和可选 `properties`。
 2. 查看如何建立 `/ws/control` 和 `/ws/stream`。
 3. 查看如何上传 `sensor.*` stream。
 4. 查看如何消费 `actuator.*` stream。
@@ -395,4 +395,4 @@ uv run audio-chat.device.sim \
 6. 所有媒体和传感器数据都走 stream。
 7. 输出 `events.jsonl`、`streams.jsonl`、`actuators.jsonl` 和 `result.json`。
 8. 场景失败时能指出是注册、订阅、控制事件、stream 上传、stream 消费还是期望断言失败。
-9. 当前旧 CLI 入口仍可使用，避免打断已有验收脚本。
+9. 当前 CLI 入口使用统一配置。

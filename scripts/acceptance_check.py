@@ -244,7 +244,7 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "pytest",
                 "tests/test_task_engine_persistence.py",
                 "tests/test_task_engine_scheduler.py",
-                "tests/test_task_event_bridge.py",
+                "tests/test_task_signal_bridge.py",
                 "tests/acceptance/test_task_device_stream_contract.py",
                 "-q",
             ),

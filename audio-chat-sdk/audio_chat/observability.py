@@ -394,20 +394,24 @@ class RunRecorder:
             ),
         )
 
-    def record_task_event(self, session_id: str, record: dict[str, Any]) -> None:
-        """记录 TaskEvent。
+    def record_task_signal(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录 TaskSignal。
 
-        主要逻辑：写入 `task-events.jsonl`。
-        参数：`session_id` 为会话或任务标识，`record` 为任务事件结构。
+        主要逻辑：写入 `task-signals.jsonl`。
+        参数：`session_id` 为会话或任务标识，`record` 为任务信号结构。
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。
         """
         self._bind_from_record(session_id, record)
-        self._append_jsonl(self.session_dir(session_id) / "task-events.jsonl", record)
+        self._append_jsonl(self.session_dir(session_id) / "task-signals.jsonl", record)
         log_info(
             self.logger,
-            f"任务事件 {record.get('event')}",
-            LogContext(session_id=session_id, event=record.get("event"), fields={**record, "detail_path": str(self.session_file(session_id, "task-events.jsonl"))}),
+            f"任务信号 {record.get('signal_name')}",
+            LogContext(
+                session_id=session_id,
+                event=record.get("signal_name"),
+                fields={**record, "detail_path": str(self.session_file(session_id, "task-signals.jsonl"))},
+            ),
         )
 
     def record_asset_event(self, session_id: str, record: dict[str, Any]) -> None:
@@ -881,7 +885,7 @@ class TurnRecorder:
     """单轮交互记录器。
 
     主要功能：吸收 RunRecorder 的写入能力，为回放提供输入流、转写、模型请求、
-    Tool trace、TaskEvent、输出流和 result 的稳定入口。
+    Tool trace、TaskSignal、输出流和 result 的稳定入口。
     """
 
     def __init__(self, runs_root: str | Path = "runs/audio-chat") -> None:
@@ -902,8 +906,8 @@ class TurnRecorder:
     def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
         self.recorder.record_tool_trace(session_id, record)
 
-    def record_task_event(self, session_id: str, record: dict[str, Any]) -> None:
-        self.recorder.record_task_event(session_id, record)
+    def record_task_signal(self, session_id: str, record: dict[str, Any]) -> None:
+        self.recorder.record_task_signal(session_id, record)
 
     def record_output_stream(self, session_id: str, record: dict[str, Any]) -> None:
         self.recorder.record_stream_event(session_id, {"direction": "output", **record})

@@ -42,9 +42,9 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     assert payload["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
     assert payload["properties"]["direct.camera_source"] is True
     assert payload["properties"]["direct.camera.frame_format"] == "audio_chat.direct_frame.v1"
-    assert {"event": "control.audio_session.*"} in payload["subscriptions"]
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["subscriptions"]
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["subscriptions"]
+    assert {"event": "control.audio_session.*"} in payload["routes"]
+    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["routes"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["routes"]
     assert "target_device" not in str(payload)
     assert "phone" not in payload["client_type"]
     assert "glass" not in payload["client_type"]

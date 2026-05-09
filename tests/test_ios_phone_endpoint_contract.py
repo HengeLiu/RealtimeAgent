@@ -31,7 +31,7 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     """测试目标：验证 iOS 配置字段与其他参考端侧保持同一语义。
 
     测试方法：读取 `AppConfig.example.json`，检查 server、user、device、auth、
-    properties、supports 和 subscriptions。
+    properties、supports 和 routes。
     预期结果：iOS 不引入专用配置字段，优先用 supports 声明设备语义能力。
     """
 
@@ -50,16 +50,16 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
     support_ids = {item["id"] for item in config["supports"]}
     assert {"sensor.rgb", "sensor.mic", "actuator.speaker"}.issubset(support_ids)
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["subscriptions"]
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["subscriptions"]
-    assert {"event": "command.*"} in config["subscriptions"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["routes"]
+    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["routes"]
+    assert {"event": "command.*"} in config["routes"]
 
 
 def test_ios_phone_registration_event_matches_contract_golden() -> None:
     """测试目标：验证 iOS 注册事件遵守公共 control.device.register.requested 契约。
 
     测试方法：读取 iOS 专用 golden 和 Swift 源码，检查注册 payload 必备字段。
-    预期结果：注册事件携带 user_id、device_id、auth、properties、supports 和 subscriptions，
+    预期结果：注册事件携带 user_id、device_id、auth、properties、supports 和 routes，
     不包含 target_device 或固定 phone/glass 路由字段。
     """
 
@@ -85,7 +85,7 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
         "\"auth\": config.auth.payload",
         "\"properties\": properties",
         "\"supports\": config.supports.map",
-        "\"subscriptions\": config.subscriptions.map",
+        "\"routes\": config.routes.map",
         "direct.camera_sink.uris",
     ]:
         assert token in source

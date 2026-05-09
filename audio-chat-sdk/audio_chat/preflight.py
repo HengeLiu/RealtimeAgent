@@ -195,7 +195,7 @@ def _package_import_check() -> dict:
         "AudioChatError",
         "BaseTask",
         "BaseTool",
-        "TaskEvent",
+        "TaskSignal",
         "TaskRef",
         "ToolError",
         "ToolResult",
@@ -425,16 +425,6 @@ def _endpoint_config_check(config: AudioChatYamlConfig) -> dict:
 
     defaults = dict(config.endpoint_defaults or {})
     errors: list[str] = []
-    subscriptions = defaults.get("subscriptions")
-    if subscriptions is not None and not isinstance(subscriptions, list):
-        errors.append("endpoint_defaults.subscriptions must be a list")
-    if isinstance(subscriptions, list):
-        has_output_subscription = any(
-            isinstance(item, dict) and str(item.get("event", "")).startswith("stream.output")
-            for item in subscriptions
-        )
-        if not has_output_subscription:
-            errors.append("endpoint_defaults.subscriptions should include stream.output.*")
     wake_word = defaults.get("wake_word")
     if wake_word is not None and wake_word not in {"manual", "browser", "endpoint", "disabled"}:
         errors.append(f"unsupported endpoint_defaults.wake_word: {wake_word}")

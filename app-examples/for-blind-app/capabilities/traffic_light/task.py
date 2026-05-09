@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskSignal
 
 
 class TrafficLightTask(BaseTask):
@@ -54,11 +54,11 @@ class TrafficLightTask(BaseTask):
             "yellow": "黄灯，请减速等待",
         }.get(state, "未确认红绿灯状态，请谨慎等待")
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="traffic_light.state_detected",
+                    signal_name="traffic_light.state_detected",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={

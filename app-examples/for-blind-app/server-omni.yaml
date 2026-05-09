@@ -16,9 +16,9 @@ control:
   transport: "websocket"
   heartbeat_timeout_seconds: 30
   heartbeat_check_interval_seconds: 5
-  max_subscriptions_per_device: 64
-  allow_subscribe_all: false
-  subscription_filter_mode: "exact"
+  max_routes_per_device: 64
+  allow_route_all: false
+  route_filter_mode: "exact"
   exclude_producer_by_default: true
 
 stream:
@@ -125,11 +125,6 @@ mcp:
 endpoint_defaults:
   wake_word: "browser"
   aec: "browser_webrtc"
-  subscriptions:
-    - event: "control.audio_session.*"
-    - event: "stream.output.*"
-      filter:
-        stream_type: "actuator.speaker"
 
 observability:
   runs_root: "runs/audio-chat/for-blind-app"

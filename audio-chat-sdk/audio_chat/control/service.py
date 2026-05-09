@@ -16,7 +16,7 @@ from audio_chat.protocol import (
     PROTOCOL_VERSION,
     SERVER_PRODUCER_ID,
     Event,
-    Subscription,
+    Route,
     new_id,
     validate_control_event_payload,
     validate_event_name,
@@ -44,7 +44,7 @@ class Device:
     client_type: str
     sdk_version: str
     properties: dict[str, Any]
-    subscriptions: list[Subscription]
+    routes: list[Route]
     connection_state: str = "online"
     connection_id: str = field(default_factory=lambda: new_id("conn"))
     last_seen_at: float = field(default_factory=time.time)
@@ -61,8 +61,8 @@ DeviceRecord = Device
 class DeviceSnapshot:
     """只读设备快照。
 
-    主要功能：给 debug API 暴露设备身份、连接状态、properties 和订阅策略。
-    不再包含旧的 capabilities 字段，避免把设备路由理解成第二套能力系统。
+    主要功能：给 debug API 暴露设备身份、连接状态、properties 和内部路由摘要。
+    不包含 capabilities 字段，避免把设备路由理解成第二套能力系统。
     """
 
     user_id: str
@@ -75,7 +75,7 @@ class DeviceSnapshot:
     connection_id: str
     last_seen_at: float
     connection_state: str
-    subscriptions: tuple[Subscription, ...]
+    routes: tuple[Route, ...]
     last_error: dict[str, Any] | None = None
     register_failed_reason: str | None = None
     auth_diagnostics: dict[str, Any] = field(default_factory=dict)
@@ -95,7 +95,7 @@ class DeviceSnapshot:
             "connection_id": self.connection_id,
             "last_seen_at": self.last_seen_at,
             "connection_state": self.connection_state,
-            "subscriptions": [subscription.__dict__ for subscription in self.subscriptions],
+            "routes": [route.__dict__ for route in self.routes],
             "last_error": self.last_error,
             "register_failed_reason": self.register_failed_reason,
             "auth": dict(self.auth_diagnostics),
@@ -270,13 +270,13 @@ class RegistrationValidator:
     def __init__(
         self,
         *,
-        max_subscriptions_per_device: int = 64,
-        allow_subscribe_all: bool = False,
-        subscription_filter_mode: str = "exact",
+        max_routes_per_device: int = 64,
+        allow_route_all: bool = False,
+        route_filter_mode: str = "exact",
     ) -> None:
-        self.max_subscriptions_per_device = max_subscriptions_per_device
-        self.allow_subscribe_all = allow_subscribe_all
-        self.subscription_filter_mode = subscription_filter_mode
+        self.max_routes_per_device = max_routes_per_device
+        self.allow_route_all = allow_route_all
+        self.route_filter_mode = route_filter_mode
 
     def validate_payload(self, event: Event) -> None:
         validate_event_name(event.event_name)
@@ -291,28 +291,28 @@ class RegistrationValidator:
         if event.version != PROTOCOL_VERSION:
             raise ValueError("unsupported protocol version")
         if "capabilities" in event.payload:
-            raise ValueError("registration payload must not contain capabilities; use supports or subscriptions")
-        self.validate_subscriptions(event.payload.get("subscriptions") or [])
+            raise ValueError("registration payload must not contain capabilities; use structured supports")
+        self.validate_routes(event.payload.get("routes") or [])
 
-    def validate_subscriptions(self, subscriptions: list[dict[str, Any]]) -> None:
-        if len(subscriptions) > self.max_subscriptions_per_device:
-            raise ValueError("too many subscriptions for device")
-        for item in subscriptions:
+    def validate_routes(self, routes: list[dict[str, Any]]) -> None:
+        if len(routes) > self.max_routes_per_device:
+            raise ValueError("too many routes for device")
+        for item in routes:
             event_name = item.get("event")
             if not isinstance(event_name, str) or not event_name:
-                raise ValueError("subscription.event is required")
-            if event_name == "*" and not self.allow_subscribe_all:
-                raise ValueError("subscription '*' is disabled by config")
+                raise ValueError("route.event is required")
+            if event_name == "*" and not self.allow_route_all:
+                raise ValueError("route '*' is disabled by config")
             if event_name != "*" and not event_name.endswith("*") and event_name not in CONTROL_EVENTS:
-                raise ValueError(f"unknown subscription event: {event_name}")
+                raise ValueError(f"unknown route event: {event_name}")
             if not isinstance(item.get("filter", {}), dict):
-                raise ValueError("subscription.filter must be an object")
+                raise ValueError("route.filter must be an object")
             self.validate_filter(dict(item.get("filter") or {}))
-            if self.subscription_filter_mode != "exact":
-                raise ValueError(f"unsupported subscription_filter_mode: {self.subscription_filter_mode}")
+            if self.route_filter_mode != "exact":
+                raise ValueError(f"unsupported route_filter_mode: {self.route_filter_mode}")
 
     def validate_filter(self, filter_data: dict[str, Any]) -> None:
-        """校验订阅 filter 只使用协议支持的简单精确匹配。"""
+        """校验路由 filter 只使用协议支持的简单精确匹配。"""
 
         allowed_envelope_fields = {
             "version",
@@ -327,67 +327,67 @@ class RegistrationValidator:
         }
         for path, expected in filter_data.items():
             if not isinstance(path, str) or not path:
-                raise ValueError("subscription.filter path must be a non-empty string")
+                raise ValueError("route.filter path must be a non-empty string")
             if any(token in path for token in ("$", "[", "]", "(", ")", "|", "^")):
-                raise ValueError(f"unsupported subscription filter expression: {path}")
+                raise ValueError(f"unsupported route filter expression: {path}")
             if not (path.startswith("payload.") or path in allowed_envelope_fields):
-                raise ValueError(f"unsupported subscription filter path: {path}")
+                raise ValueError(f"unsupported route filter path: {path}")
             if isinstance(expected, dict):
-                raise ValueError(f"subscription filter value must be scalar or list: {path}")
+                raise ValueError(f"route filter value must be scalar or list: {path}")
 
 
-class SubscriptionMatcher:
-    def match(self, event: Event, subscription: Subscription, device: Device | None = None) -> bool:
-        """判断单条订阅是否命中事件。"""
+class RouteMatcher:
+    def match(self, event: Event, route: Route, device: Device | None = None) -> bool:
+        """判断单条路由是否命中事件。"""
 
-        return bool(self.explain(event, subscription, device)["matched"])
+        return bool(self.explain(event, route, device)["matched"])
 
-    def explain(self, event: Event, subscription: Subscription, device: Device | None = None) -> dict[str, Any]:
-        """返回单条订阅的匹配诊断。
+    def explain(self, event: Event, route: Route, device: Device | None = None) -> dict[str, Any]:
+        """返回单条路由的匹配诊断。
 
         主要逻辑：先匹配事件名，再逐个检查 filter 字段。返回结构只包含小型结构化
         诊断，不包含媒体 payload。
-        参数：`event` 为待分发事件，`subscription` 为设备订阅，`device` 为可选设备状态。
-        返回值：包含 `matched/reason/subscription/filter` 的字典。
+        参数：`event` 为待分发事件，`route` 为内部路由规则，`device` 为可选设备状态。
+        返回值：包含 `matched/reason/route/filter` 的字典。
         异常情况：无。
         """
 
-        if not self._event_name_matches(event.event_name, subscription.event):
+        if not self._event_name_matches(event.event_name, route.event):
             return {
                 "matched": False,
                 "reason": "event_name_mismatch",
-                "subscription": subscription.event,
-                "filter": dict(subscription.filter),
+                "route": route.event,
+                "filter": dict(route.filter),
             }
-        for path, expected in subscription.filter.items():
+        for path, expected in route.filter.items():
             actual = self._lookup(event, path, device)
             if isinstance(actual, list):
                 if isinstance(expected, list):
                     if not all(item in actual for item in expected):
-                        return self._filter_miss(subscription, path, expected, actual)
+                        return self._filter_miss(route, path, expected, actual)
                 elif expected not in actual:
-                    return self._filter_miss(subscription, path, expected, actual)
+                    return self._filter_miss(route, path, expected, actual)
             elif isinstance(expected, list):
                 if actual not in expected:
-                    return self._filter_miss(subscription, path, expected, actual)
+                    return self._filter_miss(route, path, expected, actual)
             elif actual != expected:
-                return self._filter_miss(subscription, path, expected, actual)
+                return self._filter_miss(route, path, expected, actual)
         return {
             "matched": True,
             "reason": "matched",
-            "subscription": subscription.event,
-            "filter": dict(subscription.filter),
+            "route": route.event,
+            "filter": dict(route.filter),
         }
 
     @staticmethod
-    def _filter_miss(subscription: Subscription, path: str, expected: Any, actual: Any) -> dict[str, Any]:
+    def _filter_miss(route: Route, path: str, expected: Any, actual: Any) -> dict[str, Any]:
         """生成 filter 未命中的可读诊断。"""
 
         return {
             "matched": False,
             "reason": "filter_mismatch",
-            "subscription": subscription.event,
-            "filter": dict(subscription.filter),
+            "route": route.event,
+            "filter": dict(route.filter),
             "path": path,
             "expected": expected,
             "actual": actual,
@@ -418,19 +418,19 @@ class ControlService:
         authenticator: DeviceAuthenticator | None = None,
         recorder: RunRecorder | None = None,
         exclude_producer_by_default: bool = True,
-        max_subscriptions_per_device: int = 64,
-        allow_subscribe_all: bool = False,
-        subscription_filter_mode: str = "exact",
+        max_routes_per_device: int = 64,
+        allow_route_all: bool = False,
+        route_filter_mode: str = "exact",
         active_device_set_policy: str = "single",
         effective_config: dict[str, Any] | None = None,
     ) -> None:
         self.authenticator = authenticator or DeviceAuthenticator(mode="disabled")
         self.validator = RegistrationValidator(
-            max_subscriptions_per_device=max_subscriptions_per_device,
-            allow_subscribe_all=allow_subscribe_all,
-            subscription_filter_mode=subscription_filter_mode,
+            max_routes_per_device=max_routes_per_device,
+            allow_route_all=allow_route_all,
+            route_filter_mode=route_filter_mode,
         )
-        self.matcher = SubscriptionMatcher()
+        self.matcher = RouteMatcher()
         self.recorder = recorder or RunRecorder()
         self.exclude_producer_by_default = exclude_producer_by_default
         self.active_device_set_policy = active_device_set_policy
@@ -468,9 +468,9 @@ class ControlService:
             if bound_user is not None and bound_user != registration.user_id:
                 raise PermissionError("device_bound_to_other_user")
             old_connection = self._connections.get(device_id)
-            subscriptions = [
-                Subscription(event=item["event"], filter=dict(item.get("filter") or {}))
-                for item in registration.payload.get("subscriptions", [])
+            routes = [
+                Route(event=item["event"], filter=dict(item.get("filter") or {}))
+                for item in registration.payload.get("routes", [])
             ]
             name = str(registration.payload.get("name") or registration.payload.get("device_name") or device_id)
             properties = dict(registration.payload.get("properties") or {})
@@ -482,7 +482,7 @@ class ControlService:
                 client_type=registration.payload.get("client_type", "unknown"),
                 sdk_version=registration.payload.get("sdk_version", "unknown"),
                 properties=properties,
-                subscriptions=subscriptions,
+                routes=routes,
                 auth_diagnostics={
                     "mode": self.authenticator.mode,
                     "request_mode": auth_mode,
@@ -551,9 +551,9 @@ class ControlService:
                 connection_id="",
                 last_seen_at=time.time(),
                 connection_state="offline",
-                subscriptions=tuple(
-                    Subscription(event=str(item.get("event", "")), filter=dict(item.get("filter") or {}))
-                    for item in registration.payload.get("subscriptions", [])
+                routes=tuple(
+                    Route(event=str(item.get("event", "")), filter=dict(item.get("filter") or {}))
+                    for item in registration.payload.get("routes", [])
                     if isinstance(item, dict)
                 ),
                 last_error={"code": "registration_failed", "message": reason},
@@ -600,8 +600,8 @@ class ControlService:
     def publish(self, event: Event) -> PublishResult:
         self._validate_event(event)
         self.recorder.record_event(event)
-        subscribers, route = self._resolve_subscribers_with_diagnostics(event)
-        result = self._deliver_to_devices(event, subscribers, route_diagnostics=route)
+        recipients, route = self._resolve_recipients_with_diagnostics(event)
+        result = self._deliver_to_devices(event, recipients, route_diagnostics=route)
         self._record_route(event, result)
         return result
 
@@ -699,7 +699,7 @@ class ControlService:
         self.recorder.record_event(event)
         devices = [self._devices[device_id] for device_id in device_ids if device_id in self._devices]
         route = [
-            self._route_decision(device, subscription_matched=True, selected=True, reason="frozen_stream_consumer")
+            self._route_decision(device, route_matched=True, selected=True, reason="frozen_stream_consumer")
             for device in devices
         ]
         result = self._deliver_to_devices(event, devices, route_diagnostics=route)
@@ -791,11 +791,11 @@ class ControlService:
             )
         return tuple(expired)
 
-    def resolve_subscribers(self, event: Event) -> list[Device]:
-        result, _ = self._resolve_subscribers_with_diagnostics(event)
+    def resolve_recipients(self, event: Event) -> list[Device]:
+        result, _ = self._resolve_recipients_with_diagnostics(event)
         return result
 
-    def _resolve_subscribers_with_diagnostics(self, event: Event) -> tuple[list[Device], list[dict[str, Any]]]:
+    def _resolve_recipients_with_diagnostics(self, event: Event) -> tuple[list[Device], list[dict[str, Any]]]:
         """解析订阅者并生成路由诊断。
 
         主要逻辑：只检查当前 user 下设备，依次过滤离线设备、事件生产者和订阅规则。
@@ -812,21 +812,21 @@ class ControlService:
             if device.user_id != event.user_id:
                 continue
             if device.connection_state != "online":
-                diagnostics.append(self._route_decision(device, subscription_matched=False, selected=False, reason="device_offline"))
+                diagnostics.append(self._route_decision(device, route_matched=False, selected=False, reason="device_offline"))
                 continue
             if self.exclude_producer_by_default and device.device_id == event.producer_id:
-                diagnostics.append(self._route_decision(device, subscription_matched=False, selected=False, reason="producer_excluded"))
+                diagnostics.append(self._route_decision(device, route_matched=False, selected=False, reason="producer_excluded"))
                 continue
-            match = self._first_subscription_match(event, device)
+            match = self._first_route_match(event, device)
             if match["matched"]:
                 result.append(device)
                 diagnostics.append(
                     self._route_decision(
                         device,
-                        subscription_matched=True,
+                        route_matched=True,
                         selected=True,
-                        reason="subscription_matched",
-                        subscription=match.get("subscription"),
+                        reason="route_matched",
+                        route=match.get("route"),
                         filter_data=match.get("filter"),
                     )
                 )
@@ -834,10 +834,10 @@ class ControlService:
                 diagnostics.append(
                     self._route_decision(
                         device,
-                        subscription_matched=False,
+                        route_matched=False,
                         selected=False,
-                        reason=str(match.get("reason") or "subscription_mismatch"),
-                        subscription=match.get("subscription"),
+                        reason=str(match.get("reason") or "route_mismatch"),
+                        route=match.get("route"),
                         filter_data=match.get("filter"),
                         detail={
                             key: match[key]
@@ -858,7 +858,7 @@ class ControlService:
 
         if selection not in {"all", "first_available"}:
             raise ValueError(f"unsupported device selection: {selection}")
-        candidates, diagnostics = self._resolve_subscribers_with_diagnostics(event)
+        candidates, diagnostics = self._resolve_recipients_with_diagnostics(event)
         selected: list[Device] = []
         for device in candidates:
             if selection == "first_available" and selected:
@@ -878,28 +878,28 @@ class ControlService:
             )
         return selected, diagnostics
 
-    def _first_subscription_match(self, event: Event, device: Device) -> dict[str, Any]:
-        """返回设备订阅对事件的首个匹配结果或最有用的失败结果。"""
+    def _first_route_match(self, event: Event, device: Device) -> dict[str, Any]:
+        """返回设备内部路由对事件的首个匹配结果或最有用的失败结果。"""
 
         first_miss: dict[str, Any] | None = None
         filter_miss: dict[str, Any] | None = None
-        for subscription in device.subscriptions:
-            current = self.matcher.explain(event, subscription, device)
+        for route in device.routes:
+            current = self.matcher.explain(event, route, device)
             if current["matched"]:
                 return current
             first_miss = first_miss or current
             if current.get("reason") == "filter_mismatch":
                 filter_miss = filter_miss or current
-        return filter_miss or first_miss or {"matched": False, "reason": "no_subscription"}
+        return filter_miss or first_miss or {"matched": False, "reason": "no_route"}
 
     @staticmethod
     def _route_decision(
         device: Device,
         *,
-        subscription_matched: bool,
+        route_matched: bool,
         selected: bool,
         reason: str,
-        subscription: Any = None,
+        route: Any = None,
         filter_data: Any = None,
         detail: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -909,13 +909,13 @@ class ControlService:
             "device_id": device.device_id,
             "name": device.name,
             "connection_state": device.connection_state,
-            "subscription_matched": subscription_matched,
+            "route_matched": route_matched,
             "selected": selected,
             "delivered": False,
             "reason": reason,
         }
-        if subscription is not None:
-            decision["subscription"] = subscription
+        if route is not None:
+            decision["route"] = route
         if filter_data:
             decision["filter"] = dict(filter_data)
         if detail:
@@ -1025,7 +1025,7 @@ class ControlService:
             connection_id=device.connection_id,
             last_seen_at=device.last_seen_at,
             connection_state=device.connection_state,
-            subscriptions=tuple(device.subscriptions),
+            routes=tuple(device.routes),
             last_error=dict(device.last_error) if device.last_error is not None else None,
             register_failed_reason=device.register_failed_reason,
             auth_diagnostics=dict(device.auth_diagnostics),

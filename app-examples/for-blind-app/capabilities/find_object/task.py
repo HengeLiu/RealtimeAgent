@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskSignal
 
 
 class FindObjectVisionTask(BaseTask):
@@ -9,7 +9,7 @@ class FindObjectVisionTask(BaseTask):
     主要功能：
     1. 通过 typed sensor API 请求端侧持续上传 RGB 帧。
     2. 直接消费同一 stream 返回的图片资产。
-    3. 用 TaskEvent 回流 mock 识别结果，并通过 Output Service 通知用户。
+    3. 用 TaskSignal 回流 mock 识别结果，并通过 Output Service 通知用户。
     """
 
     task_type = "find_object_vision_task"
@@ -50,11 +50,11 @@ class FindObjectVisionTask(BaseTask):
 
         found = bool(assets)
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="find_object.found" if found else "find_object.not_found",
+                    signal_name="find_object.found" if found else "find_object.not_found",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={

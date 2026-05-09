@@ -91,7 +91,7 @@ def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: 
                 "endpoint.compute.vision": True,
                 "actuator.display.rgb": True,
             },
-            subscriptions=[
+            routes=[
                 {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}},
             ],
             display={"enabled": False, "save_latest_frame": str(latest_frame)},
@@ -122,7 +122,7 @@ def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: 
                             "client_type": "python-glass",
                             "auth": {"mode": "disabled"},
                             "properties": {"sensor.rgb": True},
-                            "subscriptions": [],
+                            "routes": [],
                         },
                     ),
                 )

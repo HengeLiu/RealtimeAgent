@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskSignal
 
 
 class TimerTask(BaseTask):
     """计时器 Task。
 
     主要功能：
-    1. 使用 `TaskContext.schedule_event()` 表达到点事件。
+    1. 使用 `TaskContext.schedule_signal()` 表达到点信号。
     2. 支持取消通知。
     3. 到点提示进入 Output Service，不直接控制播放器。
     """
@@ -18,7 +18,7 @@ class TimerTask(BaseTask):
     async def on_start(self, context: TaskContext) -> None:
         """启动计时器。
 
-        主要逻辑：记录 scheduled 事件，提交启动提示，再调度 `timer.due`。
+        主要逻辑：记录 scheduled 信号，提交启动提示，再调度 `timer.due`。
         参数：`context` 为 SDK 注入上下文。
         返回值：无。
         异常情况：调度或输出失败时由 TaskEngine 记录。
@@ -30,11 +30,11 @@ class TimerTask(BaseTask):
         if context.devices is not None:
             await context.output.say(f"{seconds} 秒计时器已启动", priority="normal")
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="timer.scheduled",
+                    signal_name="timer.scheduled",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={"seconds": seconds},
@@ -42,7 +42,7 @@ class TimerTask(BaseTask):
                 )
             )
         if auto_fire:
-            await context.schedule_event(
+            await context.schedule_signal(
                 "timer.due",
                 payload={"seconds": seconds, "message": f"{seconds} 秒计时器到点了"},
                 delay_seconds=seconds,
@@ -51,12 +51,12 @@ class TimerTask(BaseTask):
                 allow_direct_notify=True,
             )
 
-    async def on_event(self, context: TaskContext, event: TaskEvent) -> None:
-        """处理计时器事件。"""
+    async def on_signal(self, context: TaskContext, signal: TaskSignal) -> None:
+        """处理计时器信号。"""
 
-        if event.event_name != "timer.due":
+        if signal.signal_name != "timer.due":
             return
-        seconds = int(event.payload.get("seconds") or 0)
+        seconds = int(signal.payload.get("seconds") or 0)
         await context.complete({"seconds": seconds, "notified": True}, summary="计时器到点")
 
     async def on_cancel(self, context: TaskContext) -> None:

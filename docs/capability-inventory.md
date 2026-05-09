@@ -56,18 +56,18 @@
 | ---: | --- | --- | --- | --- | --- | --- |
 | 30 | `TaskSpec` | SDK | 描述 Task 规格 | 收敛 task_type、version、timeout、cancel_supported、max_running_per_user。 | Task 基础设施 | 否 |
 | 31 | `TaskRef` | SDK | 任务引用 | 对外暴露 task_id、task_type、state、summary、metadata。 | Task 基础设施 | 否 |
-| 32 | `TaskEvent` | SDK | 任务事件 | 承载状态回流、通知、Agent 决策字段和 artifacts。 | Task 基础设施 | 否 |
-| 33 | `TaskContext` / `TaskContext` | SDK | Task 执行上下文 | 注入 devices、output、assets、bridge、engine，并提供 complete、fail、schedule_event。 | Task 基础设施 | 否 |
-| 34 | `BaseTask` | SDK | 业务 Task 基类 | 定义 `on_start()`、`on_event()`、`on_cancel()` 扩展点。 | Task 基础设施 | 否 |
+| 32 | `TaskSignal` | SDK | 任务信号 | 承载状态回流、通知、Agent 决策字段和 artifacts。 | Task 基础设施 | 否 |
+| 33 | `TaskContext` / `TaskContext` | SDK | Task 执行上下文 | 注入 devices、output、assets、bridge、engine，并提供 complete、fail、schedule_signal。 | Task 基础设施 | 否 |
+| 34 | `BaseTask` | SDK | 业务 Task 基类 | 定义 `on_start()`、`on_signal()`、`on_cancel()` 扩展点。 | Task 基础设施 | 否 |
 | 35 | `TaskStateMachine` | SDK | 状态机 | 校验 scheduled、running、waiting_external、completed、cancelled、failed、timeout 等状态流转。 | Task 基础设施 | 否 |
-| 36 | `TaskStore` | SDK | 内存任务存储 | 保存 TaskRef 和 TaskEvent。 | Task 基础设施 | 否 |
+| 36 | `TaskStore` | SDK | 内存任务存储 | 保存 TaskRef 和 TaskSignal。 | Task 基础设施 | 否 |
 | 37 | `JsonlTaskStore` | SDK | JSONL 持久化 | 追加写入任务快照和事件，启动时重放恢复。 | Task 基础设施 | 否 |
 | 38 | `TaskRegistry` | SDK | Task 注册表 | 按 `task_type` 注册、查找和列出 Task 类。 | Task 基础设施 | 否 |
 | 39 | `TaskAutoDiscovery` | SDK | 自动发现 Task | 递归导入包，发现 BaseTask 子类并检查重复 task_type。 | Task 基础设施 | 否 |
-| 40 | `TaskEventBridge` | SDK | 事件桥接 | 记录任务事件，并按事件字段转通知或 Agent 可读轮次。 | Task 基础设施 | 否 |
+| 40 | `TaskSignalBridge` | SDK | 信号桥接 | 记录任务信号，并按信号字段转通知或 Agent 可读轮次。 | Task 基础设施 | 否 |
 | 41 | `TaskExecutor` | SDK | Task 执行器 | 调用 Task 的 start、event、cancel 回调。 | Task 基础设施 | 否 |
 | 42 | `TaskScheduler` | SDK | 调度和超时判断 | 计算 deadline，判断恢复和过期。 | Task 基础设施 | 否 |
-| 43 | `TaskEngine` | SDK | Task 引擎 | 创建、恢复、查询、处理事件、取消、完成、失败任务，并注入 TaskContext。 | Task 基础设施 | 否 |
+| 43 | `TaskEngine` | SDK | Task 引擎 | 创建、恢复、查询、处理信号、取消、完成、失败任务，并注入 TaskContext。 | Task 基础设施 | 否 |
 
 ## 5. 当前发现的问题和待审查点
 

@@ -94,8 +94,8 @@ def test_protocol_control_golden_events_are_valid() -> None:
         "control_device_register_requested.json",
         "control_device_register_failed.json",
         "control_device_registered.json",
-        "subscription_matched.json",
-        "subscription_filter_missed.json",
+        "route_matched.json",
+        "route_filter_missed.json",
         "device_reconnected.json",
     }
 

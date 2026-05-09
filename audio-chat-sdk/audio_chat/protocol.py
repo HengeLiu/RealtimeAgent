@@ -59,10 +59,10 @@ class EventName(StrEnum):
 
 
 class EventPattern(StrEnum):
-    """内置事件订阅模式。
+    """内置事件路由模式。
 
-    主要功能：注册设备订阅时避免手写通配字符串。枚举值仍然是协议字符串，可直接
-    写入 `Subscription(event=...)` 或注册 payload。
+    主要功能：生成内部路由规则时避免手写通配字符串。枚举值仍然是协议字符串，可直接
+    写入 `Route(event=...)` 或注册 payload。
     """
 
     ALL = "*"
@@ -170,7 +170,7 @@ def validate_event_envelope_dict(data: dict[str, Any]) -> None:
 
 
 @dataclass(frozen=True)
-class Subscription:
+class Route:
     event: str | EventName | EventPattern
     filter: dict[str, Any] = field(default_factory=dict)
 
@@ -178,13 +178,13 @@ class Subscription:
         object.__setattr__(self, "event", str(self.event))
 
     @classmethod
-    def for_stream(cls, event: str | EventName | EventPattern, stream_type: str | StreamType) -> "Subscription":
-        """构造按 stream_type 过滤的事件订阅。
+    def for_stream(cls, event: str | EventName | EventPattern, stream_type: str | StreamType) -> "Route":
+        """构造按 stream_type 过滤的事件路由规则。
 
         主要逻辑：把常见的 `{"event": "...", "filter": {"stream_type": "..."}}`
         收敛成一个公开方法，避免端侧注册代码重复拼字典。
-        参数：`event` 为事件名或通配订阅，`stream_type` 为 stream 类型。
-        返回值：`Subscription`。
+        参数：`event` 为事件名或通配模式，`stream_type` 为 stream 类型。
+        返回值：`Route`。
         异常情况：非法事件名由注册校验阶段抛出。
         """
 

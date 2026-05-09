@@ -76,16 +76,17 @@ class TaskRef:
 
 
 @dataclass(frozen=True)
-class TaskEvent:
-    """任务生命周期事件。
+class TaskSignal:
+    """任务信号。
 
-    主要功能：承载任务状态回流、通知和 Agent 决策所需的结构化数据。
+    主要功能：承载任务状态变化、通知和 Agent 决策所需的结构化数据。
+    它只表示 Task 内部对外发出的信号，不等同于系统级协议事件。
     主要属性：`priority`、`dedupe_key`、`ttl_seconds` 可被 NotificationCoordinator 使用。
     """
 
     task_id: str
     task_type: str
-    event_name: str
+    signal_name: str
     user_id: str
     session_id: str | None = None
     payload: dict = field(default_factory=dict)
@@ -99,17 +100,17 @@ class TaskEvent:
 
 
 @dataclass(kw_only=True)
-class DeviceContext(ToolContext):
-    """Task 设备执行上下文。
+class _TaskContextBase(ToolContext):
+    """Task 上下文私有基类。
 
     主要功能：继承 ToolContext 的短生命周期能力，并由 TaskEngine 额外注入任务引用、
-    事件桥和 TaskEngine。Task 通过该上下文使用长时 stream、异步命令和任务状态流转；
+    信号桥和 TaskEngine。Task 通过该上下文使用长时 stream、异步命令和任务状态流转；
     不直接操作消息、底层 WebSocket 或 speaker。
     """
 
     devices: Any
     task_ref: TaskRef
-    bridge: "TaskEventBridge | None" = None
+    bridge: "TaskSignalBridge | None" = None
     engine: "TaskEngine | None" = None
     metadata: dict = field(default_factory=dict)
 
@@ -133,9 +134,9 @@ class DeviceContext(ToolContext):
             raise AudioChatError("task context has no engine", code=ErrorCode.PROTOCOL_ERROR)
         return self.engine.fail(self.task_ref.task_id, message=message, payload=payload or {})
 
-    async def schedule_event(
+    async def schedule_signal(
         self,
-        event_name: str,
+        signal_name: str,
         *,
         payload: dict | None = None,
         delay_seconds: float = 0,
@@ -143,37 +144,37 @@ class DeviceContext(ToolContext):
         requires_agent_decision: bool = False,
         allow_direct_notify: bool = False,
     ) -> TaskRef | None:
-        """调度一个任务事件。
+        """调度一个任务信号。
 
         功能：
-        1. 给业务 Task 提供稳定的延时事件入口，避免业务代码自建线程或定时器。
-        2. 延时到达后把事件重新送回 TaskEngine，使 `on_event()` 能处理到点、超时前提醒等状态。
+        1. 给业务 Task 提供稳定的延时信号入口，避免业务代码自建线程或定时器。
+        2. 延时到达后把信号重新送回 TaskEngine，使 `on_signal()` 能处理到点、超时前提醒等状态。
 
         主要逻辑：
         1. `delay_seconds` 大于 0 时先异步等待。
-        2. 构造 `TaskEvent`，复用当前任务编号、任务类型、用户和会话。
+        2. 构造 `TaskSignal`，复用当前任务编号、任务类型、用户和会话。
         3. 优先通过 TaskEngine 回流；没有绑定 engine 时退化为只通过 bridge 记录。
 
         参数：
-        1. `event_name`：任务事件名，例如 `timer.due`。
-        2. `payload`：事件载荷。
+        1. `signal_name`：任务信号名，例如 `timer.due`。
+        2. `payload`：信号载荷。
         3. `delay_seconds`：延时秒数；小于等于 0 表示立即回流。
-        4. `priority`：事件优先级。
+        4. `priority`：信号优先级。
         5. `requires_agent_decision`：是否需要进入 Agent 上下文同步。
-        6. `allow_direct_notify`：是否允许事件桥直接转成通知输出。
+        6. `allow_direct_notify`：是否允许信号桥直接转成通知输出。
 
         返回值：
-        1. 绑定 TaskEngine 时返回事件处理后的 `TaskRef`。
+        1. 绑定 TaskEngine 时返回信号处理后的 `TaskRef`。
         2. 仅绑定 bridge 时返回 `None`。
 
         异常情况：
-        1. 事件处理失败时由 TaskEngine 或 bridge 抛出结构化异常。
+        1. 信号处理失败时由 TaskEngine 或 bridge 抛出结构化异常。
         """
 
-        event = TaskEvent(
+        signal = TaskSignal(
             task_id=self.task_ref.task_id,
             task_type=self.task_ref.task_type,
-            event_name=event_name,
+            signal_name=signal_name,
             user_id=self.user_id,
             session_id=self.session_id,
             payload=dict(payload or {}),
@@ -182,9 +183,9 @@ class DeviceContext(ToolContext):
             allow_direct_notify=allow_direct_notify,
         )
         if delay_seconds > 0 and self.engine is not None:
-            self.engine.schedule_event(
+            self.engine.schedule_signal(
                 task_id=self.task_ref.task_id,
-                event_name=event_name,
+                signal_name=signal_name,
                 payload=dict(payload or {}),
                 delay_seconds=delay_seconds,
                 priority=priority,
@@ -193,28 +194,26 @@ class DeviceContext(ToolContext):
             )
             return self.task_ref
         if delay_seconds > 0:
-            def _fire_delayed_event() -> None:
+            def _fire_delayed_signal() -> None:
                 if self.bridge is not None:
-                    self.bridge.handle_event(event)
+                    self.bridge.handle_signal(signal)
 
-            timer = threading.Timer(delay_seconds, _fire_delayed_event)
+            timer = threading.Timer(delay_seconds, _fire_delayed_signal)
             timer.daemon = True
             timer.start()
             return self.task_ref
         if self.engine is not None:
-            return await self.engine.handle_event(event)
+            return await self.engine.handle_signal(signal)
         if self.bridge is not None:
-            self.bridge.handle_event(event)
+            self.bridge.handle_signal(signal)
         return None
 
 
 @dataclass(kw_only=True)
-class TaskContext(DeviceContext):
+class TaskContext(_TaskContextBase):
     """Task 执行上下文。
 
-    主要功能：作为业务 Task 的公开上下文类型，继承 `DeviceContext` 的长时设备能力、
-    输出、资产和任务状态流转方法。保留独立类而不是别名，避免 Context 分层只停留在
-    兼容实现。
+    主要功能：作为业务 Task 的公开上下文类型，提供长时设备能力、输出、资产和任务状态流转方法。
     """
 
     devices: Any = None
@@ -261,7 +260,14 @@ class BaseTask:
         """
         return None
 
-    async def on_event(self, context: TaskContext, event: TaskEvent) -> None:
+    async def on_signal(self, context: TaskContext, signal: TaskSignal) -> None:
+        """任务信号回调。
+
+        主要逻辑：基类只声明接口，子类按需覆盖。
+        参数：`context` 为 SDK 注入上下文，`signal` 为 TaskEngine 回流的任务信号。
+        返回值：无。
+        异常情况：无。
+        """
         return None
 
     async def on_cancel(self, context: TaskContext) -> None:
@@ -285,12 +291,12 @@ class TaskStateMachine:
 class TaskStore:
     """进程内任务存储。
 
-    主要功能：保存 TaskRef 和事件，可作为持久化 store 的内存基类。
+    主要功能：保存 TaskRef 和信号，可作为持久化 store 的内存基类。
     """
 
     def __init__(self) -> None:
         self._tasks: dict[str, TaskRef] = {}
-        self._events: list[TaskEvent] = []
+        self._signals: list[TaskSignal] = []
 
     def put(self, ref: TaskRef) -> None:
         self._tasks[ref.task_id] = ref
@@ -301,13 +307,13 @@ class TaskStore:
         except KeyError as exc:
             raise AudioChatError(f"unknown task: {task_id}", code=ErrorCode.NOT_FOUND) from exc
 
-    def append_event(self, event: TaskEvent) -> None:
-        self._events.append(event)
+    def append_signal(self, signal: TaskSignal) -> None:
+        self._signals.append(signal)
 
-    def events_for_task(self, task_id: str) -> list[TaskEvent]:
-        """返回某个任务的事件列表。"""
+    def signals_for_task(self, task_id: str) -> list[TaskSignal]:
+        """返回某个任务的信号列表。"""
 
-        return [event for event in self._events if event.task_id == task_id]
+        return [signal for signal in self._signals if signal.task_id == task_id]
 
     def list_tasks(self) -> list[TaskRef]:
         """列出全部任务快照。"""
@@ -323,15 +329,15 @@ class TaskStore:
 class JsonlTaskStore(TaskStore):
     """JSONL 持久化任务存储。
 
-    主要功能：把 TaskRef 快照和 TaskEvent 追加写入 jsonl，重启后可重放恢复。
-    主要属性：`root` 为存储目录，`tasks_path/events_path` 为落地文件。
+    主要功能：把 TaskRef 快照和 TaskSignal 追加写入 jsonl，重启后可重放恢复。
+    主要属性：`root` 为存储目录，`tasks_path/signals_path` 为落地文件。
     """
 
     def __init__(self, root: str | Path) -> None:
         super().__init__()
         self.root = Path(root)
         self.tasks_path = self.root / "tasks.jsonl"
-        self.events_path = self.root / "task-events.jsonl"
+        self.signals_path = self.root / "task-signals.jsonl"
         self.root.mkdir(parents=True, exist_ok=True)
         self._load()
 
@@ -339,9 +345,9 @@ class JsonlTaskStore(TaskStore):
         super().put(ref)
         self._append_jsonl(self.tasks_path, {"record_type": "task.snapshot", "task": _task_ref_to_dict(ref)})
 
-    def append_event(self, event: TaskEvent) -> None:
-        super().append_event(event)
-        self._append_jsonl(self.events_path, {"record_type": "task.event", "event": _task_event_to_dict(event)})
+    def append_signal(self, signal: TaskSignal) -> None:
+        super().append_signal(signal)
+        self._append_jsonl(self.signals_path, {"record_type": "task.signal", "signal": _task_signal_to_dict(signal)})
 
     def _load(self) -> None:
         """重放 jsonl 文件，恢复任务和事件内存索引。"""
@@ -352,11 +358,11 @@ class JsonlTaskStore(TaskStore):
                 if isinstance(task_data, dict):
                     ref = _task_ref_from_dict(task_data)
                     self._tasks[ref.task_id] = ref
-        if self.events_path.exists():
-            for record in _read_jsonl(self.events_path):
-                event_data = record.get("event") if isinstance(record, dict) else None
-                if isinstance(event_data, dict):
-                    self._events.append(_task_event_from_dict(event_data))
+        if self.signals_path.exists():
+            for record in _read_jsonl(self.signals_path):
+                signal_data = record.get("signal") if isinstance(record, dict) else None
+                if isinstance(signal_data, dict):
+                    self._signals.append(_task_signal_from_dict(signal_data))
 
     @staticmethod
     def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
@@ -477,68 +483,68 @@ class TaskAutoDiscovery:
         )
 
 
-class TaskEventBridge:
-    """TaskEvent 桥接层。
+class TaskSignalBridge:
+    """TaskSignal 桥接层。
 
-    主要功能：Task 不直接写消息、不直接播放、不直接重入 Agent；事件统一通过本层回流。
+    主要功能：Task 不直接写消息、不直接播放、不直接重入 Agent；信号统一通过本层回流。
     """
 
     def __init__(self, *, recorder: Any = None, output_service: Any = None) -> None:
         self.recorder = recorder
         self.output_service = output_service
 
-    def handle_event(self, event: TaskEvent) -> None:
-        """处理任务事件。
+    def handle_signal(self, signal: TaskSignal) -> None:
+        """处理任务信号。
 
-        主要逻辑：记录 task event；需要 Agent 决策的事件写入上下文同步记录；允许直
-        发的事件才交给通知协调层。
-        参数：`event` 为任务事件。
+        主要逻辑：记录 task signal；需要 Agent 决策的信号写入上下文同步记录；允许直
+        发的信号才交给通知协调层。
+        参数：`signal` 为任务信号。
         返回值：无。
         异常情况：底层记录或输出失败时向上抛出。
         """
-        if self.recorder and hasattr(self.recorder, "record_task_event"):
-            self.recorder.record_task_event(event.session_id or event.task_id, _task_event_to_dict(event))
-        if event.requires_agent_decision and self.recorder and hasattr(self.recorder, "record_agent_event"):
+        if self.recorder and hasattr(self.recorder, "record_task_signal"):
+            self.recorder.record_task_signal(signal.session_id or signal.task_id, _task_signal_to_dict(signal))
+        if signal.requires_agent_decision and self.recorder and hasattr(self.recorder, "record_agent_event"):
             self.recorder.record_agent_event(
-                event.session_id or event.task_id,
+                signal.session_id or signal.task_id,
                 {
                     "event": "task.requires_agent_context_sync",
-                    "task_id": event.task_id,
-                    "task_type": event.task_type,
-                    "task_event_name": event.event_name,
-                    "payload": event.payload,
+                    "task_id": signal.task_id,
+                    "task_type": signal.task_type,
+                    "task_signal_name": signal.signal_name,
+                    "payload": signal.payload,
                 },
             )
-        if event.allow_direct_notify and self.output_service and hasattr(self.output_service, "notify_task_event"):
+        if signal.allow_direct_notify and self.output_service and hasattr(self.output_service, "notify_task_signal"):
             try:
-                self.output_service.notify_task_event(event)
+                self.output_service.notify_task_signal(signal)
             except Exception as exc:  # noqa: BLE001
                 if self.recorder and hasattr(self.recorder, "record_system_event"):
                     self.recorder.record_system_event(
                         {
                             "event": "system.error.raised",
-                            "component": "TaskEventBridge",
+                            "component": "TaskSignalBridge",
                             "message": str(exc),
-                            "task_id": event.task_id,
-                            "task_type": event.task_type,
-                            "task_event_name": event.event_name,
+                            "task_id": signal.task_id,
+                            "task_type": signal.task_type,
+                            "task_signal_name": signal.signal_name,
                         }
                     )
 
-    def convert_event_to_agent_turn(self, event: TaskEvent) -> dict:
-        """转换任务事件为 Agent 可读轮次。
+    def convert_signal_to_agent_turn(self, signal: TaskSignal) -> dict:
+        """转换任务信号为 Agent 可读轮次。
 
-        主要逻辑：保留 task_id、task_type、event_name 和 payload。
-        参数：`event` 为任务事件。
+        主要逻辑：保留 task_id、task_type、signal_name 和 payload。
+        参数：`signal` 为任务信号。
         返回值：字典。
         异常情况：无。
         """
         return {
             "role": "tool",
-            "task_id": event.task_id,
-            "task_type": event.task_type,
-            "event_name": event.event_name,
-            "payload": event.payload,
+            "task_id": signal.task_id,
+            "task_type": signal.task_type,
+            "signal_name": signal.signal_name,
+            "payload": signal.payload,
         }
 
 
@@ -548,8 +554,8 @@ class TaskExecutor:
     async def start(self, task: BaseTask, context: TaskContext) -> None:
         await task.on_start(context)
 
-    async def event(self, task: BaseTask, context: TaskContext, event: TaskEvent) -> None:
-        await task.on_event(context, event)
+    async def signal(self, task: BaseTask, context: TaskContext, signal: TaskSignal) -> None:
+        await task.on_signal(context, signal)
 
     async def cancel(self, task: BaseTask, context: TaskContext) -> None:
         await task.on_cancel(context)
@@ -589,7 +595,7 @@ class TaskScheduler:
 class TaskEngine:
     """Task Engine 最小实现。
 
-    主要功能：创建任务引用、执行任务启动回调，并通过 TaskEventBridge 回流事件。
+    主要功能：创建任务引用、执行任务启动回调，并通过 TaskSignalBridge 回流信号。
     """
 
     def __init__(
@@ -599,7 +605,7 @@ class TaskEngine:
         store: TaskStore | None = None,
         state_machine: TaskStateMachine | None = None,
         executor: TaskExecutor | None = None,
-        bridge: TaskEventBridge | None = None,
+        bridge: TaskSignalBridge | None = None,
         scheduler: TaskScheduler | None = None,
         device_context_factory: Any = None,
         output_context_factory: Any = None,
@@ -610,14 +616,14 @@ class TaskEngine:
         self.store = store or TaskStore()
         self.state_machine = state_machine or TaskStateMachine()
         self.executor = executor or TaskExecutor()
-        self.bridge = bridge or TaskEventBridge()
+        self.bridge = bridge or TaskSignalBridge()
         self.scheduler = scheduler or TaskScheduler()
         self.device_context_factory = device_context_factory
         self.output_context_factory = output_context_factory
         self.asset_context_factory = asset_context_factory
         self.max_running_per_user = max_running_per_user
         self._instances: dict[str, BaseTask] = {}
-        self._scheduled_events: dict[str, threading.Timer] = {}
+        self._scheduled_signals: dict[str, threading.Timer] = {}
         self._schedule_metadata: dict[str, dict[str, Any]] = {}
         self._schedule_lock = threading.Lock()
 
@@ -706,7 +712,7 @@ class TaskEngine:
         """创建并启动任务。
 
         主要逻辑：创建 `scheduled` 引用，立即流转为 `running`，执行 Task.on_start，
-        并通过 TaskEventBridge 记录启动或失败事件。
+        并通过 TaskSignalBridge 记录启动或失败信号。
         参数：`task_type/user_id/session_id/input_data` 描述任务请求。
         返回值：最新 TaskRef。
         异常情况：未知任务、非法状态流转或 Task 启动异常会抛出结构化异常。
@@ -742,11 +748,11 @@ class TaskEngine:
         task = task_cls()
         self._instances[task_id] = task
         ref = self._transition(ref, "running", metadata={"started_at": time.time()})
-        self.emit_event(
-            TaskEvent(
+        self.emit_signal(
+            TaskSignal(
                 task_id=task_id,
                 task_type=task_type,
-                event_name="task.started",
+                signal_name="task.started",
                 user_id=user_id,
                 session_id=session_id,
                 payload={"state": ref.state, "input": dict(input_data or {})},
@@ -758,11 +764,11 @@ class TaskEngine:
             await self.executor.start(task, context)
         except Exception as exc:
             self._transition(ref, "failed", metadata={"error": str(exc)})
-            self.emit_event(
-                TaskEvent(
+            self.emit_signal(
+                TaskSignal(
                     task_id=task_id,
                     task_type=task_type,
-                    event_name="task.failed",
+                    signal_name="task.failed",
                     user_id=user_id,
                     session_id=session_id,
                     payload={"message": str(exc)},
@@ -774,34 +780,34 @@ class TaskEngine:
             raise
         return self.query(task_id)
 
-    async def handle_event(self, event: TaskEvent) -> TaskRef:
-        """把外部 TaskEvent 送回对应 Task 实例。
+    async def handle_signal(self, signal: TaskSignal) -> TaskRef:
+        """把外部 TaskSignal 送回对应 Task 实例。
 
-        主要逻辑：先记录事件，再调用 Task.on_event；是否通知或回流 Agent 由 bridge
-        根据事件字段决定。
-        参数：`event` 为任务事件。
+        主要逻辑：先记录信号，再调用 Task.on_signal；是否通知或回流 Agent 由 bridge
+        根据信号字段决定。
+        参数：`signal` 为任务信号。
         返回值：当前 TaskRef。
         异常情况：任务不存在时抛出 `AudioChatError`。
         """
 
-        ref = self.query(event.task_id)
+        ref = self.query(signal.task_id)
         if ref.state in TERMINAL_TASK_STATES:
             return ref
-        task = self._instances.get(event.task_id)
-        self.emit_event(event)
+        task = self._instances.get(signal.task_id)
+        self.emit_signal(signal)
         if task is not None:
-            await self.executor.event(
+            await self.executor.signal(
                 task,
-                self._context(user_id=event.user_id, session_id=event.session_id, ref=ref),
-                event,
+                self._context(user_id=signal.user_id, session_id=signal.session_id, ref=ref),
+                signal,
             )
-        return self.query(event.task_id)
+        return self.query(signal.task_id)
 
-    def schedule_event(
+    def schedule_signal(
         self,
         *,
         task_id: str,
-        event_name: str,
+        signal_name: str,
         payload: dict | None = None,
         delay_seconds: float = 0,
         user_id: str | None = None,
@@ -810,30 +816,30 @@ class TaskEngine:
         requires_agent_decision: bool = False,
         allow_direct_notify: bool = False,
     ) -> dict[str, Any]:
-        """统一调度一次任务事件。
+        """统一调度一次任务信号。
 
         主要逻辑：
         1. 校验任务存在和延迟参数。
         2. 由 TaskEngine 持有定时器，便于列出、取消和关闭。
-        3. 到点后重新进入 `handle_event()`，让业务 Task 的 `on_event()` 处理。
+        3. 到点后重新进入 `handle_signal()`，让业务 Task 的 `on_signal()` 处理。
         """
 
         ref = self.query(task_id)
         if ref.state in TERMINAL_TASK_STATES:
-            raise AudioChatError(f"cannot schedule event for terminal task: {task_id}", code=ErrorCode.PROTOCOL_ERROR)
-        normalized_event_name = event_name.strip()
-        if not normalized_event_name:
-            raise AudioChatError("event_name is required", code=ErrorCode.INVALID_ARGUMENT)
+            raise AudioChatError(f"cannot schedule signal for terminal task: {task_id}", code=ErrorCode.PROTOCOL_ERROR)
+        normalized_signal_name = signal_name.strip()
+        if not normalized_signal_name:
+            raise AudioChatError("signal_name is required", code=ErrorCode.INVALID_ARGUMENT)
         delay = float(delay_seconds)
         if delay < 0:
             raise AudioChatError("delay_seconds must be >= 0", code=ErrorCode.INVALID_ARGUMENT)
         schedule_id = new_id("task_schedule")
         resolved_user_id = user_id if user_id is not None else str(ref.metadata.get("user_id") or "")
         resolved_session_id = session_id if session_id is not None else (str(ref.metadata.get("session_id") or "") or None)
-        event = TaskEvent(
+        signal = TaskSignal(
             task_id=task_id,
             task_type=ref.task_type,
-            event_name=normalized_event_name,
+            signal_name=normalized_signal_name,
             user_id=resolved_user_id,
             session_id=resolved_session_id,
             payload=dict(payload or {}),
@@ -845,7 +851,7 @@ class TaskEngine:
             "schedule_id": schedule_id,
             "task_id": task_id,
             "task_type": ref.task_type,
-            "event_name": normalized_event_name,
+            "signal_name": normalized_signal_name,
             "delay_seconds": delay,
             "due_at": time.time() + delay,
             "user_id": resolved_user_id,
@@ -854,20 +860,20 @@ class TaskEngine:
 
         def _fire() -> None:
             with self._schedule_lock:
-                self._scheduled_events.pop(schedule_id, None)
+                self._scheduled_signals.pop(schedule_id, None)
                 self._schedule_metadata.pop(schedule_id, None)
-            asyncio.run(self.handle_event(event))
+            asyncio.run(self.handle_signal(signal))
 
         timer = threading.Timer(delay, _fire)
         timer.daemon = True
         with self._schedule_lock:
-            self._scheduled_events[schedule_id] = timer
+            self._scheduled_signals[schedule_id] = timer
             self._schedule_metadata[schedule_id] = metadata
-        self.emit_event(
-            TaskEvent(
+        self.emit_signal(
+            TaskSignal(
                 task_id=task_id,
                 task_type=ref.task_type,
-                event_name="task.event.scheduled",
+                signal_name="task.signal.scheduled",
                 user_id=resolved_user_id,
                 session_id=resolved_session_id,
                 payload=metadata,
@@ -877,24 +883,24 @@ class TaskEngine:
         timer.start()
         return dict(metadata)
 
-    def cancel_scheduled_event(self, schedule_id: str) -> bool:
-        """取消尚未触发的调度事件。"""
+    def cancel_scheduled_signal(self, schedule_id: str) -> bool:
+        """取消尚未触发的调度信号。"""
 
         with self._schedule_lock:
-            timer = self._scheduled_events.pop(schedule_id, None)
+            timer = self._scheduled_signals.pop(schedule_id, None)
             self._schedule_metadata.pop(schedule_id, None)
         if timer is None:
             return False
         timer.cancel()
         return True
 
-    def list_scheduled_events(self) -> list[dict[str, Any]]:
-        """列出当前仍在等待触发的调度事件。"""
+    def list_scheduled_signals(self) -> list[dict[str, Any]]:
+        """列出当前仍在等待触发的调度信号。"""
 
         with self._schedule_lock:
             rows = []
             for schedule_id, metadata in sorted(self._schedule_metadata.items()):
-                timer = self._scheduled_events.get(schedule_id)
+                timer = self._scheduled_signals.get(schedule_id)
                 row = dict(metadata)
                 row["alive"] = bool(timer and timer.is_alive())
                 rows.append(row)
@@ -904,8 +910,8 @@ class TaskEngine:
         """关闭 TaskEngine 管理的后台调度器。"""
 
         with self._schedule_lock:
-            timers = list(self._scheduled_events.values())
-            self._scheduled_events.clear()
+            timers = list(self._scheduled_signals.values())
+            self._scheduled_signals.clear()
             self._schedule_metadata.clear()
         for timer in timers:
             timer.cancel()
@@ -935,11 +941,11 @@ class TaskEngine:
                 ),
             )
         ref = self._transition(ref, "cancelled")
-        self.emit_event(
-            TaskEvent(
+        self.emit_signal(
+            TaskSignal(
                 task_id=ref.task_id,
                 task_type=ref.task_type,
-                event_name="task.cancelled",
+                signal_name="task.cancelled",
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
                 payload={"reason": reason},
@@ -949,17 +955,17 @@ class TaskEngine:
         return ref
 
     def complete(self, task_id: str, *, payload: dict | None = None, summary: str = "") -> TaskRef:
-        """完成任务并写入 `task.completed` 事件。"""
+        """完成任务并写入 `task.completed` 信号。"""
 
         ref = self.query(task_id)
         if ref.state in TERMINAL_TASK_STATES:
             return ref
         ref = self._transition(ref, "completed", summary=summary or ref.summary)
-        self.emit_event(
-            TaskEvent(
+        self.emit_signal(
+            TaskSignal(
                 task_id=ref.task_id,
                 task_type=ref.task_type,
-                event_name="task.completed",
+                signal_name="task.completed",
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
                 payload={"state": ref.state, **dict(payload or {})},
@@ -969,17 +975,17 @@ class TaskEngine:
         return ref
 
     def fail(self, task_id: str, *, message: str, payload: dict | None = None) -> TaskRef:
-        """失败任务并写入 `task.failed` 事件。"""
+        """失败任务并写入 `task.failed` 信号。"""
 
         ref = self.query(task_id)
         if ref.state in TERMINAL_TASK_STATES:
             return ref
         ref = self._transition(ref, "failed", metadata={"error": message})
-        self.emit_event(
-            TaskEvent(
+        self.emit_signal(
+            TaskSignal(
                 task_id=ref.task_id,
                 task_type=ref.task_type,
-                event_name="task.failed",
+                signal_name="task.failed",
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
                 payload={"message": message, **dict(payload or {})},
@@ -990,11 +996,11 @@ class TaskEngine:
         )
         return ref
 
-    def emit_event(self, event: TaskEvent) -> None:
-        """记录并桥接任务事件。"""
+    def emit_signal(self, signal: TaskSignal) -> None:
+        """记录并桥接任务信号。"""
 
-        self.store.append_event(event)
-        self.bridge.handle_event(event)
+        self.store.append_signal(signal)
+        self.bridge.handle_signal(signal)
 
     def _transition(self, ref: TaskRef, target: str, *, metadata: dict | None = None, summary: str | None = None) -> TaskRef:
         state = self.state_machine.transition(ref.state, target)
@@ -1023,11 +1029,11 @@ class TaskEngine:
         if not self.scheduler.expired(ref):
             return ref
         ref = self._transition(ref, "timeout", metadata={"timeout_at": time.time()})
-        self.emit_event(
-            TaskEvent(
+        self.emit_signal(
+            TaskSignal(
                 task_id=ref.task_id,
                 task_type=ref.task_type,
-                event_name="task.timeout",
+                signal_name="task.timeout",
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
                 payload={"timeout_seconds": ref.metadata.get("timeout_seconds")},
@@ -1095,17 +1101,17 @@ def _task_ref_from_dict(data: dict[str, Any]) -> TaskRef:
     )
 
 
-def _task_event_to_dict(event: TaskEvent) -> dict[str, Any]:
-    data = asdict(event)
-    data["artifacts"] = [_ref_to_dict(item) for item in event.artifacts]
+def _task_signal_to_dict(signal: TaskSignal) -> dict[str, Any]:
+    data = asdict(signal)
+    data["artifacts"] = [_ref_to_dict(item) for item in signal.artifacts]
     return data
 
 
-def _task_event_from_dict(data: dict[str, Any]) -> TaskEvent:
-    return TaskEvent(
+def _task_signal_from_dict(data: dict[str, Any]) -> TaskSignal:
+    return TaskSignal(
         task_id=str(data.get("task_id") or ""),
         task_type=str(data.get("task_type") or ""),
-        event_name=str(data.get("event_name") or ""),
+        signal_name=str(data.get("signal_name") or ""),
         user_id=str(data.get("user_id") or ""),
         session_id=data.get("session_id"),
         payload=dict(data.get("payload") or {}),

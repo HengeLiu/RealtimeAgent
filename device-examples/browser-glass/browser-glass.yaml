@@ -40,17 +40,6 @@ supports:
     - type: vibrator
       commands:
         - vibrate
-subscriptions:
-  - event: control.audio_session.*
-  - event: stream.output.*
-    filter:
-      stream_type: actuator.speaker
-  - event: stream.output.*
-    filter:
-      stream_type: actuator.haptic
-  - event: stream.control.*
-    filter:
-      stream_type: sensor.rgb
 properties:
   audio.aec: browser_webrtc
   audio.input.sample_rate: 16000

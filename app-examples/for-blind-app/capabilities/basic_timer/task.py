@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskSignal
 
 
 class TimerTask(BaseTask):
@@ -8,7 +8,7 @@ class TimerTask(BaseTask):
 
     主要功能：
     1. 展示 Task 启动后如何通过 `context.output.say()` 提交输出。
-    2. 展示 TaskEvent 如何通过 bridge 回流，不直接操作端侧连接。
+    2. 展示 TaskSignal 如何通过 bridge 回流，不直接操作端侧连接。
     3. 展示取消时如何提交取消事件和通知。
     """
 
@@ -29,11 +29,11 @@ class TimerTask(BaseTask):
         if context.devices is not None:
             await context.output.say(f"{seconds} 秒计时器已启动", priority="normal")
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="timer.started",
+                    signal_name="timer.started",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={"seconds": seconds, "message": "timer started"},

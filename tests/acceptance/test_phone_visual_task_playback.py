@@ -92,17 +92,17 @@ def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Pat
         control_payload_text = "\n".join(event.to_dict()["payload"].__repr__() for event in endpoint.sent_events)
         assert "image_base64" not in control_payload_text
         assert "raw_bytes" not in control_payload_text
-        session_task_events = (
-            app.recorder.session_dir("sess-accept-phone", user_id="user-accept-phone") / "task-events.jsonl"
+        session_task_signals = (
+            app.recorder.session_dir("sess-accept-phone", user_id="user-accept-phone") / "task-signals.jsonl"
         ).read_text(encoding="utf-8")
-        device_task_events = (
-            app.recorder.session_dir("dev-accept-phone", user_id="user-accept-phone") / "task-events.jsonl"
+        device_task_signals = (
+            app.recorder.session_dir("dev-accept-phone", user_id="user-accept-phone") / "task-signals.jsonl"
         ).read_text(encoding="utf-8")
-        task_events = session_task_events + device_task_events
-        assert "phone_task.started" in task_events
-        assert "phone_task.progress" in task_events
-        assert "phone_task.completed" in task_events
-        assert "task.completed" in task_events
+        task_signals = session_task_signals + device_task_signals
+        assert "phone_task.started" in task_signals
+        assert "phone_task.progress" in task_signals
+        assert "phone_task.completed" in task_signals
+        assert "task.completed" in task_signals
 
     asyncio.run(run())
 

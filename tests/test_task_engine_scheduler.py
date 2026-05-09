@@ -55,15 +55,15 @@ class ScheduledCompleteTask(BaseTask):
 
     task_type = "scheduled_complete_task"
 
-    async def on_event(self, context, event) -> None:
-        """测试目标：验证 TaskEngine 调度事件会回流到业务 Task。
+    async def on_signal(self, context, signal) -> None:
+        """测试目标：验证 TaskEngine 调度信号会回流到业务 Task。
 
         测试方法：收到 `scheduled.done` 后调用 `context.complete()`。
         预期结果：任务最终进入 completed。
         """
 
-        if event.event_name == "scheduled.done":
-            await context.complete({"from_event": True}, summary="scheduled done")
+        if signal.signal_name == "scheduled.done":
+            await context.complete({"from_signal": True}, summary="scheduled done")
 
 
 def test_task_query_moves_expired_running_task_to_timeout() -> None:
@@ -81,7 +81,7 @@ def test_task_query_moves_expired_running_task_to_timeout() -> None:
     timed_out = engine.query(ref.task_id)
 
     assert timed_out.state == "timeout"
-    assert any(event.event_name == "task.timeout" for event in engine.store.events_for_task(ref.task_id))
+    assert any(signal.signal_name == "task.timeout" for signal in engine.store.signals_for_task(ref.task_id))
 
 
 def test_task_cancel_calls_on_cancel_and_records_cancelled_state() -> None:
@@ -100,7 +100,7 @@ def test_task_cancel_calls_on_cancel_and_records_cancelled_state() -> None:
 
     assert cancelled.state == "cancelled"
     assert CancelAwareTask.cancelled is True
-    assert any(event.event_name == "task.cancelled" for event in engine.store.events_for_task(ref.task_id))
+    assert any(signal.signal_name == "task.cancelled" for signal in engine.store.signals_for_task(ref.task_id))
 
 
 def test_task_create_failure_records_failed_event() -> None:
@@ -118,7 +118,7 @@ def test_task_create_failure_records_failed_event() -> None:
 
     failed = engine.store.list_tasks()[-1]
     assert failed.state == "failed"
-    assert any(event.event_name == "task.failed" for event in engine.store.events_for_task(failed.task_id))
+    assert any(signal.signal_name == "task.failed" for signal in engine.store.signals_for_task(failed.task_id))
 
 
 def test_task_engine_rejects_user_concurrency_over_limit() -> None:
@@ -136,11 +136,11 @@ def test_task_engine_rejects_user_concurrency_over_limit() -> None:
         asyncio.run(engine.create(task_type="limited_task", user_id="user-limit", session_id="sess-two"))
 
 
-def test_task_engine_owns_and_cancels_scheduled_events() -> None:
-    """测试目标：验证 TaskEngine 统一管理延迟事件。
+def test_task_engine_owns_and_cancels_scheduled_signals() -> None:
+    """测试目标：验证 TaskEngine 统一管理延迟信号。
 
-    测试方法：创建任务后调用 `schedule_event()`，检查可列出，再取消该调度。
-    预期结果：调度记录存在且可取消，取消后列表为空，任务不会收到到点事件。
+    测试方法：创建任务后调用 `schedule_signal()`，检查可列出，再取消该调度。
+    预期结果：调度记录存在且可取消，取消后列表为空，任务不会收到到点信号。
     """
 
     engine = TaskEngine()
@@ -149,21 +149,21 @@ def test_task_engine_owns_and_cancels_scheduled_events() -> None:
         engine.create(task_type="scheduled_complete_task", user_id="user-schedule", session_id="sess-schedule")
     )
 
-    scheduled = engine.schedule_event(task_id=ref.task_id, event_name="scheduled.done", delay_seconds=0.05)
+    scheduled = engine.schedule_signal(task_id=ref.task_id, signal_name="scheduled.done", delay_seconds=0.05)
 
     assert scheduled["task_id"] == ref.task_id
-    assert [item["schedule_id"] for item in engine.list_scheduled_events()] == [scheduled["schedule_id"]]
-    assert engine.cancel_scheduled_event(scheduled["schedule_id"]) is True
-    assert engine.list_scheduled_events() == []
+    assert [item["schedule_id"] for item in engine.list_scheduled_signals()] == [scheduled["schedule_id"]]
+    assert engine.cancel_scheduled_signal(scheduled["schedule_id"]) is True
+    assert engine.list_scheduled_signals() == []
     time.sleep(0.08)
     assert engine.query(ref.task_id).state == "running"
 
 
 def test_task_engine_scheduled_event_flows_back_to_task() -> None:
-    """测试目标：验证到点事件会重新进入 Task.on_event。
+    """测试目标：验证到点信号会重新进入 Task.on_signal。
 
     测试方法：调度 `scheduled.done`，等待定时器触发。
-    预期结果：Task 处理事件并完成，事件日志包含业务事件和 completed。
+    预期结果：Task 处理信号并完成，信号日志包含业务信号和 completed。
     """
 
     engine = TaskEngine()
@@ -172,11 +172,11 @@ def test_task_engine_scheduled_event_flows_back_to_task() -> None:
         engine.create(task_type="scheduled_complete_task", user_id="user-due", session_id="sess-due")
     )
 
-    engine.schedule_event(task_id=ref.task_id, event_name="scheduled.done", delay_seconds=0.01)
+    engine.schedule_signal(task_id=ref.task_id, signal_name="scheduled.done", delay_seconds=0.01)
     time.sleep(0.05)
 
     assert engine.query(ref.task_id).state == "completed"
-    event_names = [event.event_name for event in engine.store.events_for_task(ref.task_id)]
-    assert "task.event.scheduled" in event_names
-    assert "scheduled.done" in event_names
-    assert "task.completed" in event_names
+    signal_names = [signal.signal_name for signal in engine.store.signals_for_task(ref.task_id)]
+    assert "task.signal.scheduled" in signal_names
+    assert "scheduled.done" in signal_names
+    assert "task.completed" in signal_names

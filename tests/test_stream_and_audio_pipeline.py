@@ -121,7 +121,7 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
 
     测试方法：用自定义 `stream_max_chunk_bytes` 创建 app，再注册设备。
     预期结果：`control.device.registered` 中的 `effective_config` 与 app 配置一致，
-    不再固定返回旧的 8192。
+    返回当前配置的 chunk 大小。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=123456))
@@ -133,7 +133,7 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
             payload={
                 "device_id": "dev-effective-config",
                 "auth": {"mode": "disabled"},
-                "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+                "routes": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
             },
         )
     )
@@ -166,7 +166,7 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
             payload={
                 "device_id": "dev-playback",
                 "auth": {"mode": "disabled"},
-                "subscriptions": [
+                "routes": [
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
             },
@@ -224,7 +224,7 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
             payload={
                 "device_id": "dev-continuous",
                 "auth": {"mode": "disabled"},
-                "subscriptions": [
+                "routes": [
                     {"event": "agent.response.*"},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
@@ -312,7 +312,7 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
                 payload={
                     "device_id": connection.device_id,
                     "auth": {"mode": "disabled"},
-                    "subscriptions": [
+                    "routes": [
                         {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                     ],
                 },

@@ -15,12 +15,12 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 用于 package-check 和 dry-run build。物理 ESP32-S3 固件仍未在本机连接，因此本文不能把
 真机能力描述为完成；真机 smoke 需要继续保留串口日志和 server runs 产物。
 
-可复用的旧试验代码：
+可复用的当前参考代码：
 
 1. 当前 `device-examples/native-esp32-glass/firmware` 参考工程
 2. 当前 `device-examples/native-esp32-glass` 端侧协议说明
 
-旧试验代码里的关键经验需要迁移到新版 audio-chat endpoint bridge：
+当前参考代码里的关键经验需要迁移到新版 audio-chat endpoint bridge：
 
 1. AEC reference ring buffer。
 2. mic send queue。
@@ -44,7 +44,7 @@ LOG_LEVEL=DEBUG uv run audio-chat.server.run \
   --config app-examples/for-blind-app/server.yaml
 ```
 
-如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、TextAgentCore 和 Output Service，不允许回退到旧 `MediaFrame` 公开协议。
+如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、TextAgentCore 和 Output Service，必须使用当前 stream chunk 协议。
 
 ## ESP32 端启动与刷写
 
@@ -60,12 +60,15 @@ ESP32-S3 端最小 bridge 固件需要提交：
     "audio.wake_word": "endpoint",
     "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}
   },
-  "subscriptions": [
-    {"event": "control.audio_session.*"},
-    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}},
-    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
-  ]
+  "supports": {
+    "sensors": [
+      {
+        "type": "rgb",
+        "modes": ["single"],
+        "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}
+      }
+    ]
+  }
 }
 ```
 
@@ -86,7 +89,7 @@ uv run audio-chat.config.sync \
 5. `AUDIO_CHAT_AUTH_MODE` / `AUDIO_CHAT_AUTH_TOKEN`
 6. `AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000`
 7. `AUDIO_CHAT_AUDIO_CHUNK_MS=20`
-8. properties 和 subscriptions JSON
+8. properties 和 supports JSON
 
 当前 bridge 刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备
 token。真实命令应在真机联调时补入本文件，避免提交本地 WiFi 或 token。

@@ -80,7 +80,7 @@ device-examples/browser-glass/
 ```text
 你是谁：device_id / user_id
 你叫什么：name
-你想听什么：subscriptions
+你想听什么：supports
 你有哪些调试或硬件说明：properties
 你收到事件后如何生产或消费 stream
 ```
@@ -94,7 +94,7 @@ device-examples/browser-glass/
   "client_type": "browser-glass",
   "sdk_version": "audio-chat-browser-glass-0.1.0",
   "auth": {"mode": "disabled"},
-  "subscriptions": [
+  "supports": [
     {"event": "control.audio_session.*"},
     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
     {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
@@ -126,7 +126,7 @@ device-examples/browser-glass/
 3. `device_id`
 4. `name`
 5. `auth`
-6. `subscriptions`
+6. `supports`
 7. `properties`
 
 操作：
@@ -512,7 +512,7 @@ open device-examples/browser-glass/index.html
 `browser-glass` 完成后应满足：
 
 1. 可以通过浏览器注册为普通 Device。
-2. debug API 能看到 `name`、`device_id`、`subscriptions` 和 `properties`。
+2. debug API 能看到 `name`、`device_id`、`supports` 和 `properties`。
 3. 可以手动发送 wake / interrupt / close。
 4. 可以上传真实麦克风 `sensor.mic`。
 5. 可以用本地 WAV 按真实时间模拟 `sensor.mic` 长连接。

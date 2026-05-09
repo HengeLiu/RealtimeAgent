@@ -6,7 +6,7 @@ audio-chat 迁移路径：
 
 1. Tool 解析用户时长后创建 `timer` Task。
 2. Task 持久化状态，支持恢复、取消和超时。
-3. 到点事件通过 `TaskEventBridge` 回流。
+3. 到点信号通过 `TaskSignalBridge` 回流。
 4. 用户提示进入 Output Service，由播放仲裁决定播报、排队或丢弃。
 
 参考：

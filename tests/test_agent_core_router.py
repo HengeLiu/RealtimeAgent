@@ -6,7 +6,7 @@ from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import StreamChunk
-from audio_chat.tasks import BaseTask, TaskEvent
+from audio_chat.tasks import BaseTask, TaskSignal
 from audio_chat.tools import BaseTool, ToolContext, ToolResult
 
 
@@ -220,17 +220,17 @@ class DemoTask(BaseTask):
     task_type = "demo_task"
 
     async def on_start(self, context) -> None:
-        """测试目标：验证 TaskEvent 只能通过 bridge 回流。
+        """测试目标：验证 TaskSignal 只能通过 bridge 回流。
 
-        测试方法：启动时提交一个 requires_agent_decision 事件。
-        预期结果：TaskEventBridge 写入 task-events 和 agent-events。
+        测试方法：启动时提交一个 requires_agent_decision 信号。
+        预期结果：TaskSignalBridge 写入 task-signals 和 agent-events。
         """
 
-        context.bridge.handle_event(
-            TaskEvent(
+        context.bridge.handle_signal(
+            TaskSignal(
                 task_id=context.task_ref.task_id,
                 task_type=context.task_ref.task_type,
-                event_name="demo.needs_agent",
+                signal_name="demo.needs_agent",
                 user_id=context.user_id,
                 session_id=context.session_id,
                 payload={"step": "started"},
@@ -241,10 +241,10 @@ class DemoTask(BaseTask):
 
 
 def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> None:
-    """测试目标：验证 TaskEngine 支持 create/query/cancel 和 TaskEventBridge 回流 Agent。
+    """测试目标：验证 TaskEngine 支持 create/query/cancel 和 TaskSignalBridge 回流 Agent。
 
     测试方法：注册 DemoTask 后创建任务，任务启动时发出 requires_agent_decision 事件。
-    预期结果：任务可查询和取消，runs 中写入 task event 与 agent context sync 事件。
+    预期结果：任务可查询和取消，runs 中写入 task signal 与 agent context sync 事件。
     """
 
     import asyncio
@@ -267,6 +267,6 @@ def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> Non
 
     session_dir = tmp_path / "runs" / "user-task" / "sess-task"
     agent_events = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
-    task_events = (session_dir / "task-events.jsonl").read_text(encoding="utf-8")
+    task_signals = (session_dir / "task-signals.jsonl").read_text(encoding="utf-8")
     assert "task.requires_agent_context_sync" in agent_events
-    assert "demo.needs_agent" in task_events
+    assert "demo.needs_agent" in task_signals

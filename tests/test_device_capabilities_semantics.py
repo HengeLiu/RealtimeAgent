@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from audio_chat import AudioChatApp, AudioChatConfig, Event, StreamChunk
-from audio_chat.device_capabilities import compile_device_capabilities_file, compile_registration_payload, compile_supports_to_subscriptions
+from audio_chat.device_capabilities import compile_device_capabilities_file, compile_registration_payload, _compile_structured_supports_to_internal_routes
 
 
 class FakeConnection:
@@ -29,22 +29,22 @@ class FakeConnection:
         pass
 
 
-def test_browser_device_capability_file_compiles_to_subscriptions() -> None:
+def test_browser_device_capability_file_compiles_to_routes() -> None:
     """测试目标：验证浏览器设备能力文件能编译成协议订阅。
 
     测试方法：读取 `device.audio-chat.yaml`，检查结构化能力和编译产物。
-    预期结果：设备开发者不需要手写 subscriptions，也能得到 RGB、IMU、ToF 和 haptic 订阅。
+    预期结果：设备开发者不需要手写 routes，也能得到 RGB、IMU、ToF 和 haptic 订阅。
     """
 
     result = compile_device_capabilities_file("device-examples/browser-glass/device.audio-chat.yaml")
 
     assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
-    subscriptions = result["payload"]["subscriptions"]
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in subscriptions
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in subscriptions
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.tof"}} in subscriptions
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}} in subscriptions
-    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in subscriptions
+    routes = result["payload"]["routes"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in routes
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in routes
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.tof"}} in routes
+    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}} in routes
+    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in routes
 
 
 def test_unknown_support_id_fails_fast() -> None:
@@ -55,10 +55,10 @@ def test_unknown_support_id_fails_fast() -> None:
     """
 
     with pytest.raises(ValueError, match="unknown support id"):
-        compile_supports_to_subscriptions({"sensors": [{"type": "rbg"}]})
+        _compile_structured_supports_to_internal_routes({"sensors": [{"type": "rbg"}]})
 
 
-def test_structured_supports_compile_to_subscriptions(tmp_path: Path) -> None:
+def test_structured_supports_compile_to_routes(tmp_path: Path) -> None:
     """测试目标：验证新版结构化能力声明能被 server 编译成当前路由订阅。
 
     测试方法：构造 `supports.sensors[].type` 和 `supports.actuators[].type` 写法，
@@ -112,14 +112,14 @@ supports:
     assert defaults["actuator.haptic"]["duration_seconds"] == 0.3
     assert result["payload"]["properties"]["device_role"] == "front_glass"
     assert result["payload"]["properties"]["tags"] == ["primary", "debug"]
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in result["payload"]["subscriptions"]
-    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in result["payload"]["subscriptions"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in result["payload"]["routes"]
+    assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in result["payload"]["routes"]
 
 
 def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path) -> None:
     """测试目标：验证注册请求只带 supports 时，server 能编译订阅并完成事件路由。
 
-    测试方法：注册一台支持 RGB 的设备，不传 subscriptions；随后发布 RGB 控制事件。
+    测试方法：注册一台支持 RGB 的设备，不传 routes；随后发布 RGB 控制事件。
     预期结果：设备收到事件，debug 快照中能看到编译后的订阅和 support id。
     """
 
@@ -156,7 +156,7 @@ def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path
     assert len(connection.events) == 1
     assert connection.events[-1].stream_type == "sensor.rgb"
     assert snapshot["properties"]["audio_chat.support_ids"] == ["sensor.rgb"]
-    assert snapshot["subscriptions"] == [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}]
+    assert snapshot["routes"] == [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}]
 
 
 def test_sensor_tof_stream_is_stored_as_asset(tmp_path: Path) -> None:
@@ -189,7 +189,7 @@ def test_device_validate_cli_outputs_compiled_json(capsys) -> None:
     """测试目标：验证设备能力校验命令可供开发者本地检查。
 
     测试方法：直接调用 CLI 函数并要求输出 JSON。
-    预期结果：输出包含注册 payload 和编译后的 subscriptions。
+    预期结果：输出包含注册 payload 和编译后的 routes。
     """
 
     from audio_chat.cli.device import validate
@@ -198,4 +198,4 @@ def test_device_validate_cli_outputs_compiled_json(capsys) -> None:
 
     output = json.loads(capsys.readouterr().out)
     assert output["payload"]["device_id"] == "dev-browser-glass-001"
-    assert output["payload"]["subscriptions"]
+    assert output["payload"]["routes"]

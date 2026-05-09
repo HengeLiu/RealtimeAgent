@@ -29,10 +29,9 @@ class AssetRef:
     stream_type: str
     mime_type: str
     created_at_ms: int
-    metadata: dict
     uri: str | None = None
     size_bytes: int | None = None
-    expires_at: float | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -62,6 +61,7 @@ class AssetStore:
         self.root = Path(root)
         self.recorder = recorder
         self._assets: list[AssetRef] = []
+        self._expires_at_by_asset_id: dict[str, float] = {}
 
     def put(self, *, chunk: StreamChunk, device_id: str, ttl_seconds: float | None = None) -> AssetRef:
         """保存一个资产 chunk。
@@ -99,8 +99,9 @@ class AssetStore:
                 "producer_id": device_id,
                 **dict(chunk.metadata),
             },
-            expires_at=time.time() + ttl_seconds if ttl_seconds else None,
         )
+        if ttl_seconds:
+            self._expires_at_by_asset_id[asset_id] = time.time() + ttl_seconds
         self._assets.append(ref)
         return ref
 
@@ -161,9 +162,9 @@ class AssetStore:
             refs.append(asset)
         return refs[-limit:]
 
-    @staticmethod
-    def _expired(asset: AssetRef) -> bool:
-        return asset.expires_at is not None and asset.expires_at < time.time()
+    def _expired(self, asset: AssetRef) -> bool:
+        expires_at = self._expires_at_by_asset_id.get(asset.asset_id)
+        return expires_at is not None and expires_at < time.time()
 
 
 class _PendingAssetCapture:
@@ -270,7 +271,7 @@ class AssetService:
         user_id: str,
         stream_type: str,
         freshness_seconds: float,
-        configure_payload: dict | None = None,
+        params: dict | None = None,
         session_id: str | None = None,
         timeout_seconds: float | None = None,
         device_ids: tuple[str, ...] | None = None,
@@ -280,12 +281,12 @@ class AssetService:
         主要逻辑：先按 freshness 查询缓存；未命中时发布
         `stream.control.open.requested` 请求端侧上传，不引入第二套 Request 对象。
         参数：`user_id`、`stream_type` 定位资产，`freshness_seconds` 为缓存最大年龄，
-        `configure_payload` 为端侧配置，`session_id` 为可选会话，`timeout_seconds`
+        `params` 为采集参数，`session_id` 为可选会话，`timeout_seconds`
         为等待超时，`device_ids` 是 SDK typed facade 内部已经按 selector 冻结的设备集合。
         返回值：`AssetRef` 或 `None`。
         异常情况：发布控制事件或文件写入失败时向上抛出。
         """
-        self._reject_media_bytes(configure_payload or {})
+        self._reject_media_bytes(params or {})
         cached = self.store.query(user_id=user_id, stream_type=stream_type, freshness_seconds=freshness_seconds, limit=1)
         if cached:
             return cached[-1]
@@ -293,7 +294,7 @@ class AssetService:
         pending = _PendingAssetCapture(user_id=user_id, stream_type=stream_type, request_id=request_id)
         with self._lock:
             self._pending[request_id] = pending
-        payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(configure_payload or {})}
+        payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(params or {})}
         payload["request_id"] = request_id
         self._reject_media_bytes(payload)
         event = Event(

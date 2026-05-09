@@ -8,7 +8,7 @@ import pytest
 
 from audio_chat.config import load_yaml_config
 from audio_chat.errors import ErrorCode
-from audio_chat.tasks import BaseTask, TaskAutoDiscovery, TaskEvent, TaskRegistry
+from audio_chat.tasks import BaseTask, TaskAutoDiscovery, TaskSignal, TaskRegistry
 from audio_chat.tools import BaseTool, ToolAutoDiscovery, ToolError, ToolRegistry, ToolResult
 
 
@@ -49,32 +49,32 @@ def test_tool_result_public_contract_fields() -> None:
     }
 
 
-def test_task_event_public_decision_and_notify_flags() -> None:
-    """测试目标：冻结 TaskEvent 的 Agent 决策和直达通知开关。
+def test_task_signal_public_decision_and_notify_flags() -> None:
+    """测试目标：冻结 TaskSignal 的 Agent 决策和直达通知开关。
 
-    测试方法：构造默认事件和需要 Agent 决策的事件。
-    预期结果：默认允许直接通知，复杂事件可显式要求 Agent 决策。
+    测试方法：构造默认信号和需要 Agent 决策的信号。
+    预期结果：默认允许直接通知，复杂信号可显式要求 Agent 决策。
     """
 
-    default_event = TaskEvent(
+    default_signal = TaskSignal(
         task_id="task-1",
         task_type="timer",
-        event_name="task.completed",
+        signal_name="task.completed",
         user_id="user-1",
     )
-    decision_event = TaskEvent(
+    decision_signal = TaskSignal(
         task_id="task-2",
         task_type="navigation",
-        event_name="navigation.decision.required",
+        signal_name="navigation.decision.required",
         user_id="user-1",
         requires_agent_decision=True,
         allow_direct_notify=False,
     )
 
-    assert default_event.requires_agent_decision is False
-    assert default_event.allow_direct_notify is True
-    assert decision_event.requires_agent_decision is True
-    assert decision_event.allow_direct_notify is False
+    assert default_signal.requires_agent_decision is False
+    assert default_signal.allow_direct_notify is True
+    assert decision_signal.requires_agent_decision is True
+    assert decision_signal.allow_direct_notify is False
 
 
 def test_discovery_config_and_dev_checks_fields_are_loaded() -> None:

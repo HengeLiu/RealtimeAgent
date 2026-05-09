@@ -142,7 +142,7 @@ class Esp32AecEndpointState:
     """ESP32-S3 audio-chat 端侧参考状态机。
 
     主要功能：
-    1. 固化注册 properties/subscription。
+    1. 固化注册 properties/supports。
     2. 确保 wake 前不会上传 `sensor.mic`。
     3. 跟踪 speaker 下行、playback ring 和 AEC reference ring。
     4. 输出真机联调需要的诊断摘要。
@@ -242,12 +242,6 @@ class Esp32AecEndpointState:
                     }
                 ]
             },
-            "subscriptions": [
-                {"event": "control.audio_session.*"},
-                {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}},
-                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-            ],
         }
 
     def stream_format(self) -> StreamFormat:
@@ -479,7 +473,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
     """按真实网络协议运行的 ESP32-S3 参考端。
 
     主要功能：
-    1. 通过 `/ws/control` 注册 properties 和 subscription。
+    1. 通过 `/ws/control` 注册 properties 和 supports。
     2. 本地 wake 后等待 `control.audio_session.open.requested`。
     3. 打开 `/ws/stream` 上传 `sensor.mic` PCM chunk。
     4. 消费 `actuator.speaker` 下行 chunk，并回报 started/finished/closed。
@@ -516,7 +510,6 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             device_name=str(payload["device_name"]),
             client_type=str(payload["client_type"]),
             properties=dict(payload["properties"]),
-            subscriptions=list(payload["subscriptions"]),
         )
 
     async def _control_loop(self, control_ws, stream_ws, audio_payload: bytes | None) -> None:
@@ -821,7 +814,6 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
         result["endpoint"] = "esp32-s3"
         result["diagnostics"] = self.state.diagnostics()
         result["properties"] = dict(self.properties)
-        result["subscriptions"] = list(self.subscriptions)
         event_names = set(result.get("event_names", []))
         core_events_passed = {
             "control.device.registered",

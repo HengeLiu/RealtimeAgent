@@ -11,8 +11,8 @@ from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, n
 from audio_chat.server import AudioChatHttpServer
 
 
-def test_python_phone_mock_registers_as_subscription_driven_endpoint(tmp_path: Path) -> None:
-    """测试目标：验证 Python phone mock 通过 properties/subscription 注册为普通端侧。
+def test_python_phone_mock_registers_as_route_driven_endpoint(tmp_path: Path) -> None:
+    """测试目标：验证 Python phone mock 通过 properties/route 注册为普通端侧。
 
     测试方法：启动真实 aiohttp server，使用 phone mock 走 `/ws/control` 完成注册。
     预期结果：debug snapshot 中能看到调试属性和订阅策略，且
@@ -44,7 +44,7 @@ def test_python_phone_mock_registers_as_subscription_driven_endpoint(tmp_path: P
         assert snapshot is not None
         assert snapshot["client_type"] == "python-phone"
         assert snapshot["properties"]["phone.task.find_object_phone_task"] is True
-        assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in snapshot["subscriptions"]
+        assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in snapshot["routes"]
 
     asyncio.run(run())
 

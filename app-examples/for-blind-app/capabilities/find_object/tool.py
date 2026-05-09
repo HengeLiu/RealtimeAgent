@@ -46,7 +46,7 @@ class FindObjectCaptureTool(BaseTool):
     主要功能：
     1. 通过 `context.devices.sensors.rgb.one()` 请求端侧上传一张图片资产。
     2. 返回资产引用和目标名称，供 Agent 或后续视觉任务继续分析。
-    3. 不关心具体端侧设备，设备选择交给 event/filter subscription 匹配。
+    3. 不关心具体端侧设备，设备选择交给 event/filter route 匹配。
     """
 
     spec = ToolSpec(

@@ -120,7 +120,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
 
     session_dir = Path(result["artifacts"]["result.json"]).parent
     tool_events = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
-    task_events = (session_dir / "task-events.jsonl").read_text(encoding="utf-8")
+    task_signals = (session_dir / "task-signals.jsonl").read_text(encoding="utf-8")
     assets = (session_dir / "assets.jsonl").read_text(encoding="utf-8")
     output = (session_dir / "output-decisions.jsonl").read_text(encoding="utf-8")
     final_result = json.loads((session_dir / "result.json").read_text(encoding="utf-8"))
@@ -144,7 +144,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
         "timer.scheduled",
         "timer.due",
     ]:
-        assert expected in task_events
+        assert expected in task_signals
     assert "asset.stored" in assets
     assert "play_now" in output
     assert final_result["ok"] is True
@@ -154,7 +154,7 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
     """测试目标：覆盖计时器创建、查询、取消和到点通知四种迁移语义。
 
     测试方法：通过 `timer` Tool 创建一个不自动到点的任务，随后查询并取消；再创建
-    一个自动到点任务验证 `TaskContext.schedule_event()` 会回流 `timer.due`。
+    一个自动到点任务验证 `TaskContext.schedule_signal()` 会回流 `timer.due`。
     预期结果：取消任务进入 cancelled，到点任务进入 completed，并产生可播报输出。
     """
 

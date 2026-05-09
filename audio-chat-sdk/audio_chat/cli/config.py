@@ -86,12 +86,6 @@ def sync(argv: list[str] | None = None) -> None:
                 "phone.task.traffic_light_phone_task": True,
             },
             "supports": _phone_supports(),
-            "subscriptions": [
-                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
-                {"event": "command.*"},
-            ],
         },
     )
     _write_yaml(
@@ -122,12 +116,6 @@ def sync(argv: list[str] | None = None) -> None:
                     "audio.wake_word": "manual",
                 },
                 "supports": _ios_supports(),
-                "subscriptions": [
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                    {"event": "command.*"},
-                    {"event": "control.audio_session.*"},
-                ],
             },
             ensure_ascii=False,
             indent=2,
@@ -154,8 +142,7 @@ def sync(argv: list[str] | None = None) -> None:
                 "AUDIO_CHAT_AUDIO_CHUNK_MS=20",
                 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]',
                 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]',
-                'AUDIO_CHAT_SUPPORTS=[{"id":"sensor.mic","modes":["continuous"],"sample_rate_hz":16000,"channels":1,"frequency_hz":50,"duration_seconds":0,"codecs":["pcm16le"]},{"id":"sensor.rgb","modes":["single"],"formats":["jpeg"],"frequency_hz":1,"sample_count":1},{"id":"actuator.speaker","codecs":["pcm16le"],"sample_rates_hz":[16000],"channels":1}]',
-                'AUDIO_CHAT_SUBSCRIPTIONS=[{"event":"control.audio_session.*"},{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.output.cancel.*","filter":{"stream_type":"actuator.speaker"}},{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}]',
+                'AUDIO_CHAT_SUPPORTS={"sensors":[{"type":"rgb","modes":["single"],"default":{"format":"jpeg","frequency_hz":1,"sample_count":1}}]}',
                 "",
             ]
         ),

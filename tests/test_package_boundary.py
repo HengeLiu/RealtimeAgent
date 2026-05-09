@@ -83,7 +83,7 @@ def test_public_api_imports_from_clean_python_process() -> None:
     预期结果：开发者安装后可直接从 `audio_chat` 导入扩展 API。
     """
 
-    code = "from audio_chat import AudioChatApp, BaseTool, BaseTask, ToolResult, TaskEvent"
+    code = "from audio_chat import AudioChatApp, BaseTool, BaseTask, ToolResult, TaskSignal"
     completed = subprocess.run(
         ["uv", "run", "python", "-c", code],
         cwd=AUDIO_ROOT,

@@ -52,7 +52,7 @@ scenario:
     expected_asset_count: 8
     expected_tool_events:
       - capture_photo
-    expected_task_events:
+    expected_task_signals:
       - continuous_rgb_analyze.frames_collected
       - timer.started
     expected_output_chunks: 1

@@ -9,7 +9,7 @@ from audio_chat.control.service import (
     HmacSignedTokenIssuer,
     PairingTokenIssuer,
     PublishResult,
-    SubscriptionMatcher,
+    RouteMatcher,
 )
 
 __all__ = [
@@ -23,5 +23,5 @@ __all__ = [
     "HmacSignedTokenIssuer",
     "PairingTokenIssuer",
     "PublishResult",
-    "SubscriptionMatcher",
+    "RouteMatcher",
 ]

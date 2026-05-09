@@ -9,7 +9,7 @@
 ## 2. 设计原则
 
 1. 只使用现有两类通信方式：控制事件和 stream 数据流。
-2. Python 手机端按设备注册，不引入固定 `phone` 类型分支；能力通过 `properties` 和 `subscriptions` 声明。
+2. Python 手机端按设备注册，不引入固定 `phone` 类型分支；能力通过 `supports` 和 `properties` 声明。
 3. 视频显示是端侧能力，server 只负责注册、订阅匹配、stream 路由和必要的资产缓存。
 4. 视频预览链路优先可调试、可回放，再逐步追求低延迟和高帧率。
 5. 未来 YOLO 等算法作为手机端本地处理模块挂到视频帧处理链路，不要求 server 了解具体算法细节。
@@ -45,7 +45,7 @@ properties:
   endpoint.compute.vision: true
   actuator.display.rgb: true
 
-subscriptions:
+supports:
   - event: stream.input.*
     filter:
       stream_type: sensor.rgb
@@ -271,7 +271,7 @@ properties:
   endpoint.compute.vision: true
   actuator.display.rgb: true
 
-subscriptions:
+supports:
   - event: stream.input.*
     filter:
       stream_type: sensor.rgb

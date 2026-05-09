@@ -100,8 +100,8 @@ def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path) -> None:
-    """测试目标：验证同一 user_id 下多设备按 capability/subscription 分发。
+def test_network_multi_device_route_routes_rgb_and_speaker(tmp_path: Path) -> None:
+    """测试目标：验证同一 user_id 下多设备按 capability/route 分发。
 
     测试方法：启动真实 aiohttp server，注册一台只产 `sensor.rgb` 的设备和一台只消费
     `actuator.speaker` 的设备；server 侧分别触发资产请求和播报输出。
@@ -127,7 +127,7 @@ def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path
             device_name="rgb-only",
             client_type="python-mock-rgb",
             properties={"camera.role": "rgb-only"},
-            subscriptions=[
+            routes=[
                 {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
             ],
         )
@@ -139,7 +139,7 @@ def test_network_multi_device_subscription_routes_rgb_and_speaker(tmp_path: Path
             device_name="speaker-only",
             client_type="python-mock-speaker",
             properties={"speaker.role": "speaker-only"},
-            subscriptions=[
+            routes=[
                 {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
             ],
         )
@@ -273,7 +273,7 @@ def test_failed_network_registration_does_not_allow_stream_connection(tmp_path: 
                                 "client_type": "python-playback",
                                 "sdk_version": "audio-chat-test",
                                 "auth": {"mode": "static_token", "token": "token-bad"},
-                                "subscriptions": [{"event": "stream.output.*"}],
+                                "routes": [{"event": "stream.output.*"}],
                             },
                         ).to_dict(),
                         ensure_ascii=False,

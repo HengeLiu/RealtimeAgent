@@ -87,7 +87,7 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
 
     测试方法：读取生成的各端配置，比较 user_id 和 device_id。
     预期结果：所有参考端侧共享同一 user_id，但 device_id 各自唯一，路由由
-    event/subscription 决定。
+    event/route 决定。
     """
 
     output_dir = tmp_path / "generated"
@@ -113,7 +113,7 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     assert esp32.device_id == "dev-esp32-s3-001"
     assert ios["properties"]["phone.task.find_object_phone_task"] is True
     assert {item["id"] for item in ios["supports"]} >= {"sensor.rgb", "sensor.mic", "actuator.speaker"}
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in ios["subscriptions"]
+    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in ios["routes"]
 
 
 def test_endpoint_config_sync_can_emit_signed_token_hint_for_ios(tmp_path: Path) -> None:

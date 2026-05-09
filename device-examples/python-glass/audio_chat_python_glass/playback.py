@@ -38,7 +38,7 @@ PLAYBACK_ARTIFACT_FILES = (
     "stream-events.jsonl",
     "agent-events.jsonl",
     "tool-events.jsonl",
-    "task-events.jsonl",
+    "task-signals.jsonl",
     "assets.jsonl",
     "output-decisions.jsonl",
     "actuators.jsonl",
@@ -467,14 +467,16 @@ class PythonPlaybackEndpoint:
                     "audio.wake_word": "endpoint",
                     "audio.aec": "endpoint",
                 },
-                "subscriptions": [
-                    {"event": "control.audio_session.*"},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                    {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.depth"}},
-                    {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}},
-                ],
+                "supports": {
+                    "sensors": [
+                        {"type": "rgb", "modes": ["single"], "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}},
+                        {"type": "tof", "modes": ["single"], "default": {"frequency_hz": 1, "sample_count": 1}},
+                        {"type": "imu", "modes": ["continuous"], "default": {"frequency_hz": 50}},
+                    ],
+                    "actuators": [
+                        {"type": "vibrator", "commands": ["vibrate"]},
+                    ],
+                },
             },
         )
         registered = self.app.register_device(registration, self)
@@ -712,7 +714,7 @@ class PythonPlaybackEndpoint:
         ]
         stream_records = _read_jsonl(session_dir / "stream-events.jsonl")
         tool_records = _read_jsonl(session_dir / "tool-events.jsonl")
-        task_records = _read_jsonl(session_dir / "task-events.jsonl")
+        task_records = _read_jsonl(session_dir / "task-signals.jsonl")
         asset_records = _read_jsonl(session_dir / "assets.jsonl")
         output_records = _read_jsonl(session_dir / "output-decisions.jsonl")
         result = {
@@ -728,7 +730,7 @@ class PythonPlaybackEndpoint:
             "stream_types": sorted({record.get("stream_type") for record in stream_records if record.get("stream_type")}),
             "asset_count": len(asset_records),
             "tool_event_count": len(tool_records),
-            "task_event_count": len(task_records),
+            "task_signal_count": len(task_records),
             "output_decision_count": len(output_records),
             "artifacts": {name: str(session_dir / name) for name in PLAYBACK_ARTIFACT_FILES},
         }
@@ -754,7 +756,7 @@ class PythonPlaybackEndpoint:
         expected_events = list(spec.get("expected_events") or PLAYBACK_REQUIRED_EVENTS)
         expected_stream_types = list(spec.get("expected_stream_types") or ["sensor.mic", "actuator.speaker"])
         expected_tool_events = list(spec.get("expected_tool_events") or [])
-        expected_task_events = list(spec.get("expected_task_events") or [])
+        expected_task_signals = list(spec.get("expected_task_signals") or [])
         expected_asset_count = int(spec.get("expected_asset_count", 0))
         expected_output_chunks = int(spec.get("expected_output_chunks", 1))
         tool_text = "\n".join(json.dumps(record, ensure_ascii=False, sort_keys=True) for record in tool_records)
@@ -766,8 +768,8 @@ class PythonPlaybackEndpoint:
             assertions[f"stream:{stream_type}"] = stream_type in result["stream_types"]
         for event_name in expected_tool_events:
             assertions[f"tool:{event_name}"] = event_name in tool_text
-        for event_name in expected_task_events:
-            assertions[f"task:{event_name}"] = event_name in task_text
+        for signal_name in expected_task_signals:
+            assertions[f"task:{signal_name}"] = signal_name in task_text
         assertions["asset_count"] = result["asset_count"] >= expected_asset_count
         assertions["output_chunks"] = result["output_chunk_count"] >= expected_output_chunks
         assertions["artifact_files"] = all(Path(path).exists() for path in result["artifacts"].values())
@@ -802,7 +804,6 @@ class NetworkPythonPlaybackEndpoint:
         client_type: str = "python-playback",
         properties: dict[str, Any] | None = None,
         supports: dict[str, Any] | None = None,
-        subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         chunk_interval_ms: int = 0,
     ) -> None:
@@ -822,11 +823,6 @@ class NetworkPythonPlaybackEndpoint:
                 {"type": "rgb", "modes": ["single"], "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}}
             ]
         }
-        self.subscriptions = subscriptions or [
-            {"event": "control.audio_session.*"},
-            {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-            {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-        ]
         self.rgb_payload = rgb_payload or b"\xff\xd8mock-rgb-network\xff\xd9"
         self.chunk_interval_ms = chunk_interval_ms
         self.sent_events: list[Event] = []
@@ -860,7 +856,7 @@ class NetworkPythonPlaybackEndpoint:
         if session is None:
             raise ValueError("run_until_registered requires an existing ClientSession")
         control_ws = await session.ws_connect(self._control_url())
-        await self._send_event(control_ws, self._registration_event())
+        await self._send_event(control_ws, self._registration_signal())
         registered = await self._receive_event(control_ws)
         self.received_events.append(registered)
         if registered.event_name != "control.device.registered":
@@ -1137,7 +1133,7 @@ class NetworkPythonPlaybackEndpoint:
             raise RuntimeError(f"unexpected websocket message type: {message.type}")
         return Event.from_dict(json.loads(message.data))
 
-    def _registration_event(self) -> Event:
+    def _registration_signal(self) -> Event:
         return Event(
             event_name="control.device.register.requested",
             user_id=self.user_id,
@@ -1151,7 +1147,6 @@ class NetworkPythonPlaybackEndpoint:
                 "auth": self.auth,
                 "properties": self.properties,
                 "supports": self.supports,
-                "subscriptions": self.subscriptions,
             },
         )
 
@@ -1185,7 +1180,6 @@ class NetworkPythonPlaybackEndpoint:
             "output_bytes": sum(len(chunk.payload) for chunk in self.output_chunks),
             "asset_uploads": list(self.asset_uploads),
             "supports": self.supports,
-            "subscriptions": list(self.subscriptions),
             "transport": "network",
         }
         result["assertions"] = {event_name: event_name in result["event_names"] for event_name in PLAYBACK_REQUIRED_EVENTS}
@@ -1308,7 +1302,6 @@ async def run_network_playback(config: dict[str, Any] | None = None) -> dict[str
         auth=dict(config.get("auth") or {"mode": "disabled"}),
         properties=dict(config.get("properties") or {}) or None,
         supports=dict(config.get("supports") or {}) or None,
-        subscriptions=list(config.get("subscriptions") or []) or None,
         chunk_interval_ms=int(config.get("chunk_interval_ms") or 0),
     )
     audio = _audio_from_action(config)

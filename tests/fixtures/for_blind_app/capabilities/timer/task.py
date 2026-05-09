@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.tasks import BaseTask, TaskContext, TaskEvent
+from audio_chat.tasks import BaseTask, TaskContext, TaskSignal
 
 
 class TimerTask(BaseTask):
@@ -14,11 +14,11 @@ class TimerTask(BaseTask):
         if context.devices is not None:
             context.output.say("timer started", priority="normal")
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="timer.started",
+                    signal_name="timer.started",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={"ok": True},

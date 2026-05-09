@@ -159,15 +159,6 @@
         },
       ],
     };
-    const DEBUG_EVENT_SUBSCRIPTIONS = [
-      {event: "control.*"},
-      {event: "stream.*"},
-      {event: "agent.*"},
-      {event: "tool.*"},
-      {event: "task.*"},
-      {event: "memory.*"},
-      {event: "system.*"},
-    ];
     const logEl = document.getElementById("log");
     const broadcastLogEl = document.getElementById("broadcastLog");
     const runtimeLogTab = document.getElementById("runtimeLogTab");
@@ -651,7 +642,6 @@
         sdk_version: "audio-chat-browser-glass-0.1.0",
         auth: {mode: "disabled"},
         supports: DEVICE_SUPPORTS,
-        subscriptions: DEBUG_EVENT_SUBSCRIPTIONS,
         properties: {
           "audio.aec": "browser_webrtc",
           "audio.input.sample_rate": INPUT_RATE,

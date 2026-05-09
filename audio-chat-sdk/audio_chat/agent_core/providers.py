@@ -383,7 +383,7 @@ class MockTextModelAdapter:
                 "type": "tool_call",
                 "id": "call_mock_query_device_state",
                 "name": "query_device_state",
-                "arguments": {"include_subscriptions": True},
+                "arguments": {},
             }
         if "capture_photo" in tool_names and any(keyword in text for keyword in ("前面", "眼前", "看一下", "照片", "画面")):
             return {

@@ -76,6 +76,6 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     updated = app.task_engine.query("task-phone-001")
     assert updated.state == "completed"
     assert updated.summary == "找到水杯"
-    task_events = (tmp_path / "runs/sessions/sess-phone-task/task-events.jsonl").read_text(encoding="utf-8")
-    assert "phone_task.completed" in task_events
-    assert "task.completed" in task_events
+    task_signals = (tmp_path / "runs/sessions/sess-phone-task/task-signals.jsonl").read_text(encoding="utf-8")
+    assert "phone_task.completed" in task_signals
+    assert "task.completed" in task_signals

@@ -3,7 +3,7 @@ import Foundation
 /// JSON 配置中的通用值。
 ///
 /// 主要功能：
-/// 1. 保留 `properties` 和 `subscriptions.filter` 中的布尔、数字、字符串、数组和对象。
+/// 1. 保留 `properties` 和 `supports` 中的布尔、数字、字符串、数组和对象。
 /// 2. 避免 Swift 侧把协议字段压缩成固定枚举，便于跟随 server 配置演进。
 enum JSONValue: Codable, Equatable {
     case string(String)
@@ -94,28 +94,10 @@ struct AuthConfig: Codable, Equatable {
     }
 }
 
-/// 端侧事件订阅配置。
-///
-/// 主要功能：
-/// 1. 声明端侧愿意接收的事件模式。
-/// 2. 使用 filter 表达 stream_type 等路由条件。
-struct SubscriptionConfig: Codable, Equatable {
-    var event: String
-    var filter: [String: JSONValue]?
-
-    var payload: [String: Any] {
-        var data: [String: Any] = ["event": event]
-        if let filter {
-            data["filter"] = filter.mapValues { $0.object }
-        }
-        return data
-    }
-}
-
 /// iOS phone 参考端配置。
 ///
 /// 主要功能：
-/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties、supports 和 subscriptions。
+/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties 和 supports。
 /// 2. 为注册事件提供当前协议 payload。
 /// 3. 缺少配置文件时提供本地默认值，便于打开工程后立即编译。
 struct AppConfig: Codable, Equatable {
@@ -127,7 +109,6 @@ struct AppConfig: Codable, Equatable {
     var directCameraSinkPort: UInt16
     var properties: [String: JSONValue]
     var supports: [String: JSONValue]
-    var subscriptions: [SubscriptionConfig]
 
     enum CodingKeys: String, CodingKey {
         case serverURL = "server_url"
@@ -138,7 +119,6 @@ struct AppConfig: Codable, Equatable {
         case directCameraSinkPort = "direct_camera_sink_port"
         case properties
         case supports
-        case subscriptions
     }
 
     init(from decoder: Decoder) throws {
@@ -151,7 +131,6 @@ struct AppConfig: Codable, Equatable {
         directCameraSinkPort = try container.decodeIfPresent(UInt16.self, forKey: .directCameraSinkPort) ?? 9001
         properties = try container.decodeIfPresent([String: JSONValue].self, forKey: .properties) ?? [:]
         supports = try container.decodeIfPresent([String: JSONValue].self, forKey: .supports) ?? [:]
-        subscriptions = try container.decodeIfPresent([SubscriptionConfig].self, forKey: .subscriptions) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -164,7 +143,6 @@ struct AppConfig: Codable, Equatable {
         try container.encode(directCameraSinkPort, forKey: .directCameraSinkPort)
         try container.encode(properties, forKey: .properties)
         try container.encode(supports, forKey: .supports)
-        try container.encode(subscriptions, forKey: .subscriptions)
     }
 
     init(
@@ -175,8 +153,7 @@ struct AppConfig: Codable, Equatable {
         protocolVersion: String,
         directCameraSinkPort: UInt16 = 9001,
         properties: [String: JSONValue],
-        supports: [String: JSONValue] = [:],
-        subscriptions: [SubscriptionConfig]
+        supports: [String: JSONValue] = [:]
     ) {
         self.serverURL = serverURL
         self.userID = userID
@@ -186,7 +163,6 @@ struct AppConfig: Codable, Equatable {
         self.directCameraSinkPort = directCameraSinkPort
         self.properties = properties
         self.supports = supports
-        self.subscriptions = subscriptions
     }
 
     static func load() -> AppConfig {
@@ -238,12 +214,6 @@ struct AppConfig: Codable, Equatable {
                     "commands": .array([.string("vibrate")]),
                 ])
             ]),
-        ],
-        subscriptions: [
-            SubscriptionConfig(event: "stream.control.*", filter: ["stream_type": .string("sensor.rgb")]),
-            SubscriptionConfig(event: "stream.output.*", filter: ["stream_type": .string("actuator.speaker")]),
-            SubscriptionConfig(event: "command.*", filter: nil),
-            SubscriptionConfig(event: "control.audio_session.*", filter: nil),
         ]
     )
 }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.tasks import BaseTask, TaskContext, TaskEvent
+from audio_chat.tasks import BaseTask, TaskContext, TaskSignal
 
 
 class ContinuousRgbAnalyzeTask(BaseTask):
@@ -28,11 +28,11 @@ class ContinuousRgbAnalyzeTask(BaseTask):
             if len(refs) >= 2:
                 break
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="continuous_rgb_analyze.frames_collected",
+                    signal_name="continuous_rgb_analyze.frames_collected",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={"frame_count": len(refs), "asset_ids": [ref.asset_id for ref in refs]},

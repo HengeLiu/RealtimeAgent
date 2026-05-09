@@ -405,7 +405,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
 
     主要功能：
     1. 模拟一台同 user 下的手机端设备。
-    2. 通过控制 WebSocket 注册 properties 和 subscription。
+    2. 通过控制 WebSocket 注册 properties 和 supports。
     3. 通过 stream WebSocket 上传 `sensor.rgb`，并消费 `actuator.speaker`
        / `actuator.haptic` 下行 stream。
 
@@ -433,10 +433,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         client_type: str = "python-phone",
         properties: dict[str, Any] | None = None,
         supports: dict[str, Any] | None = None,
-        subscriptions: list[dict[str, Any]] | None = None,
         rgb_payload: bytes | None = None,
         task_handlers: PhoneTaskHandlerRegistry | None = None,
-        task_event_scripts: dict[str, list[dict[str, Any]]] | None = None,
+        task_command_scripts: dict[str, list[dict[str, Any]]] | None = None,
         vision_frames: dict[str, list[bytes]] | None = None,
         display: dict[str, Any] | None = None,
     ) -> None:
@@ -469,24 +468,14 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                     {"type": "vibrator", "commands": ["vibrate"]},
                 ],
             },
-            subscriptions=subscriptions
-            or [
-                {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}},
-                {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
-                {"event": "stream.control.*", "filter": {"stream_type": "sensor.depth"}},
-                {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}},
-                {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-                {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}},
-                {"event": "command.*"},
-            ],
             rgb_payload=rgb_payload,
         )
         self.sensor_events: list[dict[str, Any]] = []
         self.actuator_streams: list[dict[str, Any]] = []
         self.task_handlers = task_handlers or PhoneTaskHandlerRegistry.with_builtins()
-        self.task_event_scripts = dict(task_event_scripts or {})
+        self.task_command_scripts = dict(task_command_scripts or {})
         self.vision_frames = dict(vision_frames or {})
-        self.task_events: list[dict[str, Any]] = []
+        self.task_command_events: list[dict[str, Any]] = []
         self.frame_log: list[dict[str, Any]] = []
         self.video_frames: list[dict[str, Any]] = []
         self.video_errors: list[dict[str, Any]] = []
@@ -621,7 +610,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 command=event,
                 payload={"task_id": task_id, "task_type": task_type, "state": "started"},
             )
-            for scripted in self.task_event_scripts.get(task_type, []):
+            for scripted in self.task_command_scripts.get(task_type, []):
                 await self._send_command_event(
                     control_ws,
                     event_name=str(scripted.get("event_name") or "command.progress"),
@@ -751,7 +740,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             session_id=self.device_id,
             payload=payload,
         )
-        self.task_events.append({"event_name": event_name, **payload, "timestamp_ms": int(time.time() * 1000)})
+        self.task_command_events.append({"event_name": event_name, **payload, "timestamp_ms": int(time.time() * 1000)})
         await self._send_event(control_ws, event)
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
@@ -852,9 +841,8 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["actuator_streams"] = list(self.actuator_streams)
         result["properties"] = dict(self.properties)
         result["supports"] = dict(self.supports)
-        result["subscriptions"] = list(self.subscriptions)
         result["task_handlers"] = self.task_handlers.list_task_types()
-        result["task_events"] = list(self.task_events)
+        result["task_command_events"] = list(self.task_command_events)
         result["frame_log"] = list(self.frame_log)
         result["video_frames"] = list(self.video_frames)
         result["video_errors"] = list(self.video_errors)
@@ -890,9 +878,8 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         device_name=str(config.get("name") or config.get("device_name") or "python-phone"),
         properties=dict(config.get("properties") or {}) or None,
         supports=dict(config.get("supports") or {}) or None,
-        subscriptions=list(config.get("subscriptions") or []) or None,
         task_handlers=handler_registry,
-        task_event_scripts=dict(config.get("task_event_scripts") or {}),
+        task_command_scripts=dict(config.get("task_command_scripts") or {}),
         vision_frames=vision_frames,
         display=display_config,
     )

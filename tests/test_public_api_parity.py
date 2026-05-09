@@ -19,7 +19,7 @@ def test_public_device_facade_api_is_importable_from_top_level() -> None:
         "ToolResult",
         "BaseTask",
         "TaskContext",
-        "TaskEvent",
+        "TaskSignal",
         "TaskRef",
         "ToolDeviceFacade",
         "ArtifactRef",

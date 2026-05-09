@@ -44,7 +44,7 @@ def package_check(argv: list[str] | None = None) -> None:
         except Exception as exc:
             errors.append(f"entry point import failed: {name}={target}: {type(exc).__name__}: {exc}")
     package = importlib.import_module("audio_chat")
-    public_names = ["AudioChatApp", "AudioChatConfig", "BaseTool", "BaseTask", "ToolResult", "TaskEvent", "ToolDeviceFacade", "TaskDeviceFacade"]
+    public_names = ["AudioChatApp", "AudioChatConfig", "BaseTool", "BaseTask", "ToolResult", "TaskSignal", "ToolDeviceFacade", "TaskDeviceFacade"]
     missing = [name for name in public_names if not hasattr(package, name)]
     errors.extend(f"missing public export: {name}" for name in missing)
 

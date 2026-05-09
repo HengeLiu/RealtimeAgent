@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat import Event, EventName, EventPattern, StreamType, Subscription
+from audio_chat import Event, EventName, EventPattern, StreamType, Route
 from audio_chat.protocol import CONTROL_EVENTS, STREAM_TYPES
 
 
@@ -27,16 +27,16 @@ def test_event_name_and_stream_type_enums_are_protocol_strings() -> None:
     assert data["stream_type"] in STREAM_TYPES
 
 
-def test_subscription_helpers_build_filter_payload() -> None:
+def test_route_helpers_build_filter_payload() -> None:
     """测试目标：验证订阅辅助方法能生成端侧注册 payload。
 
     测试方法：用 `EventPattern` 和 `StreamType` 构造按 stream 过滤的订阅。
     预期结果：生成的字典等价于手写 `event + filter`，便于端侧开发者复用。
     """
 
-    subscription = Subscription.for_stream(EventPattern.STREAM_CONTROL_ALL, StreamType.SENSOR_RGB)
+    route = Route.for_stream(EventPattern.STREAM_CONTROL_ALL, StreamType.SENSOR_RGB)
 
-    assert subscription.to_dict() == {
+    assert route.to_dict() == {
         "event": "stream.control.*",
         "filter": {"stream_type": "sensor.rgb"},
     }

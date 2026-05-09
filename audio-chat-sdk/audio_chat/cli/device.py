@@ -13,7 +13,7 @@ def validate(argv: list[str] | None = None) -> None:
     主要逻辑：
     1. 读取端侧 YAML/JSON 设备能力文件。
     2. 校验标准语义 ID 和参数类型。
-    3. 输出 server 注册时使用的 supports 和 subscriptions。
+    3. 输出 server 注册时使用的结构化 supports。
 
     参数：`argv` 为命令行参数。
     返回值：无。
@@ -30,5 +30,5 @@ def validate(argv: list[str] | None = None) -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     print(f"device capability file ok: {args.path}")
-    print("compiled subscriptions:")
-    print(json.dumps(result["payload"]["subscriptions"], ensure_ascii=False, indent=2))
+    print("compiled registration payload:")
+    print(json.dumps(result["payload"], ensure_ascii=False, indent=2))

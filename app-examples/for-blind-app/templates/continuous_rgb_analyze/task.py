@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskSignal
 
 
 class ContinuousRgbAnalyzeTask(BaseTask):
@@ -9,7 +9,7 @@ class ContinuousRgbAnalyzeTask(BaseTask):
     主要功能：
     1. 通过 typed sensor API 请求端侧持续上传 `sensor.rgb`。
     2. 直接消费 SDK 返回的图片资产。
-    3. 通过 TaskEventBridge 回流结构化任务事件。
+    3. 通过 TaskSignalBridge 回流结构化任务信号。
     """
 
     task_type = "continuous_rgb_analyze"
@@ -55,11 +55,11 @@ class ContinuousRgbAnalyzeTask(BaseTask):
                 break
 
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="continuous_rgb_analyze.frames_collected",
+                    signal_name="continuous_rgb_analyze.frames_collected",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={

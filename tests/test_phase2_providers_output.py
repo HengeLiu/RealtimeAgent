@@ -5,7 +5,7 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta
 from audio_chat.output.service import NotificationRequest, OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
-from audio_chat.tasks import TaskEvent, TaskEventBridge
+from audio_chat.tasks import TaskSignal, TaskSignalBridge
 
 
 class Connection:
@@ -30,7 +30,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
             payload={
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
-                "subscriptions": [
+                "routes": [
                     {"event": "control.audio_session.*"},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
@@ -432,21 +432,21 @@ def test_cached_prompt_audio_reuses_audio_and_records_wav(tmp_path) -> None:
         assert handle.getnframes() > 0
 
 
-def test_notification_coordinator_respects_task_event_notify_and_agent_sync(tmp_path) -> None:
-    """测试目标：验证 TaskEvent 能区分直接通知和 Agent 上下文同步。
+def test_notification_coordinator_respects_task_signal_notify_and_agent_sync(tmp_path) -> None:
+    """测试目标：验证 TaskSignal 能区分直接通知和 Agent 上下文同步。
 
-    测试方法：构造一个禁止直接播报、但要求 Agent 决策的任务事件，经 TaskEventBridge 处理。
-    预期结果：不产生端侧音频，task event 和 agent sync 事件都会写入 runs。
+    测试方法：构造一个禁止直接播报、但要求 Agent 决策的任务信号，经 TaskSignalBridge 处理。
+    预期结果：不产生端侧音频，task signal 和 agent sync 事件都会写入 runs。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
-    bridge = TaskEventBridge(recorder=app.recorder, output_service=app.output_service)
-    event = TaskEvent(
+    bridge = TaskSignalBridge(recorder=app.recorder, output_service=app.output_service)
+    signal = TaskSignal(
         task_id="task-nav-001",
         task_type="navigation",
-        event_name="reroute_required",
+        signal_name="reroute_required",
         user_id="user-001",
         session_id="sess-task",
         payload={"text": "需要重新规划路线"},
@@ -454,12 +454,12 @@ def test_notification_coordinator_respects_task_event_notify_and_agent_sync(tmp_
         allow_direct_notify=False,
     )
 
-    bridge.handle_event(event)
+    bridge.handle_signal(signal)
 
     assert connection.chunks == []
-    task_events = (tmp_path / "runs" / "sessions" / "sess-task" / "task-events.jsonl").read_text()
+    task_signals = (tmp_path / "runs" / "sessions" / "sess-task" / "task-signals.jsonl").read_text()
     agent_events = (tmp_path / "runs" / "sessions" / "sess-task" / "agent-events.jsonl").read_text()
-    assert "reroute_required" in task_events
+    assert "reroute_required" in task_signals
     assert "task.requires_agent_context_sync" in agent_events
 
 

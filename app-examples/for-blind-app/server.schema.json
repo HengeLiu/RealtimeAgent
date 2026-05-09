@@ -158,14 +158,14 @@
           "type": "number",
           "minimum": 0
         },
-        "max_subscriptions_per_device": {
+        "max_routes_per_device": {
           "type": "integer",
           "minimum": 1
         },
-        "allow_subscribe_all": {
+        "allow_route_all": {
           "type": "boolean"
         },
-        "subscription_filter_mode": {
+        "route_filter_mode": {
           "type": "string",
           "enum": ["exact"]
         },
@@ -588,16 +588,10 @@
         },
         "aec": {
           "type": "string"
-        },
-        "subscriptions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/subscription"
-          }
         }
       }
     },
-    "subscription": {
+    "route": {
       "type": "object",
       "additionalProperties": false,
       "required": ["event"],

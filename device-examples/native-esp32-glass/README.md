@@ -35,12 +35,6 @@
     "direct.camera_source": true,
     "direct.camera.frame_format": "audio_chat.direct_frame.v1"
   },
-  "subscriptions": [
-    {"event": "control.audio_session.*"},
-    {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
-    {"event": "stream.output.cancel.*", "filter": {"stream_type": "actuator.speaker"}},
-    {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}
-  ]
 }
 ```
 

@@ -15,7 +15,7 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
     """测试目标：验证 browser-glass 按 README 的简化设备协议注册。
 
     测试方法：静态读取 HTML，检查注册 payload 使用 supports 表达设备能力，
-    只保留广播日志使用的 debug subscriptions，不再手写业务路由订阅。
+    只保留广播日志使用的 debug routes，不再手写业务路由订阅。
     预期结果：页面作为普通 Device 注册，业务事件路由由 server 根据 supports 编译。
     """
 
@@ -26,7 +26,7 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
     assert "supports: DEVICE_SUPPORTS" in html
     assert "DEBUG_EVENT_SUBSCRIPTIONS" in html
     assert "properties: {" in html
-    assert "subscriptions: DEBUG_EVENT_SUBSCRIPTIONS" in html
+    assert "routes: DEBUG_EVENT_SUBSCRIPTIONS" in html
     assert '{event: "stream.control.*", filter: {stream_type: "sensor.rgb"}}' not in html
     assert '{event: "stream.output.*", filter: {stream_type: "actuator.speaker"}}' not in html
     assert "capabilities: {" not in html

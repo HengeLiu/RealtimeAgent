@@ -37,7 +37,7 @@ def register_endpoint(
     app: AudioChatApp,
     endpoint: RecordingEndpoint,
     *,
-    subscriptions: list[dict],
+    routes: list[dict],
     properties: dict | None = None,
 ) -> None:
     response = app.register_device(
@@ -51,7 +51,7 @@ def register_endpoint(
                 "client_type": "typed-context-test",
                 "sdk_version": "audio-chat-test",
                 "auth": {"mode": "disabled"},
-                "subscriptions": subscriptions,
+                "routes": routes,
                 "properties": properties or {},
             },
         ),
@@ -95,7 +95,7 @@ def test_sensor_one_requires_unique_matching_device(tmp_path) -> None:
         register_endpoint(
             app,
             RecordingEndpoint(user_id=user_id, device_id=device_id),
-            subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+            routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         )
 
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-ambiguous")
@@ -124,13 +124,13 @@ def test_sensor_one_selector_can_narrow_device(tmp_path) -> None:
     register_endpoint(
         app,
         front,
-        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+        routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         properties={"device_role": "front_glass"},
     )
     register_endpoint(
         app,
         side,
-        subscriptions=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+        routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
         properties={"device_role": "side_camera"},
     )
 
@@ -158,7 +158,7 @@ def test_commands_call_returns_stable_result(tmp_path) -> None:
     register_endpoint(
         app,
         endpoint,
-        subscriptions=[{"event": "command.*"}],
+        routes=[{"event": "command.*"}],
     )
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command")
 
@@ -188,13 +188,13 @@ def test_commands_call_selector_routes_only_matching_device(tmp_path) -> None:
     register_endpoint(
         app,
         phone,
-        subscriptions=[{"event": "command.*"}],
+        routes=[{"event": "command.*"}],
         properties={"device_role": "phone"},
     )
     register_endpoint(
         app,
         glass,
-        subscriptions=[{"event": "command.*"}],
+        routes=[{"event": "command.*"}],
         properties={"device_role": "front_glass"},
     )
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command-selector")

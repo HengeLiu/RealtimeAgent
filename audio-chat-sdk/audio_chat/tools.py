@@ -118,7 +118,7 @@ class ToolResult:
 
     @property
     def metadata(self) -> dict:
-        """历史测试和旧调用方读取的 `metadata` 字段。"""
+        """返回 Tool 结果附加信息。"""
 
         return dict(self.meta or {})
 
@@ -821,7 +821,7 @@ class DeviceSnapshot:
     device_id: str
     name: str = ""
     properties: dict = field(default_factory=dict)
-    subscriptions: list[dict] = field(default_factory=list)
+    routes: list[dict] = field(default_factory=list)
 
 
 class OutputStreamWriter:
@@ -1158,7 +1158,7 @@ class _SensorCapability:
             stream_type=self.stream_type,
             devices=devices,
             freshness_seconds=0,
-            configure_payload=payload,
+            params=payload,
             timeout_seconds=timeout_seconds,
         )
         if asset is None:
@@ -1500,7 +1500,7 @@ class DeviceRuntime:
         """返回当前用户 active device set 的只读快照。
 
         主要逻辑：从 Control Service 读取在线设备，返回身份、名称、properties 和
-        subscriptions，供 Tool / Task 做状态说明或调试展示。通讯仍然必须走事件和 stream。
+        routes，供 Tool / Task 做状态说明或调试展示。通讯仍然必须走事件和 stream。
         参数：无。
         返回值：`DeviceSnapshot` 列表。
         异常情况：无在线设备时返回空列表。
@@ -1512,7 +1512,7 @@ class DeviceRuntime:
                     device_id=record.device_id,
                     name=getattr(record, "name", getattr(record, "device_name", "")),
                     properties=dict(getattr(record, "properties", {}) or {}),
-                    subscriptions=[subscription.__dict__ for subscription in getattr(record, "subscriptions", [])],
+                    routes=[route.__dict__ for route in getattr(record, "routes", [])],
                 )
             )
         return devices
@@ -1554,7 +1554,7 @@ class DeviceRuntime:
         stream_type: str | StreamType,
         devices: list[Any],
         freshness_seconds: float = 0,
-        configure_payload: dict | None = None,
+        params: dict | None = None,
         timeout_seconds: float | None = None,
     ) -> AssetRef | None:
         """向已按 selector 冻结的设备集合请求单个资产。
@@ -1567,7 +1567,7 @@ class DeviceRuntime:
             user_id=self.user_id,
             stream_type=str(stream_type),
             freshness_seconds=freshness_seconds,
-            configure_payload=configure_payload,
+            params=params,
             session_id=self._app.active_session_id(self.user_id),
             timeout_seconds=timeout_seconds,
             device_ids=tuple(str(device.device_id) for device in devices),
@@ -1727,7 +1727,7 @@ class DeviceRuntime:
                 device_id=device.device_id,
                 name=getattr(device, "name", getattr(device, "device_name", "")),
                 properties=dict(getattr(device, "properties", {}) or {}),
-                subscriptions=[subscription.__dict__ for subscription in getattr(device, "subscriptions", [])],
+                routes=[route.__dict__ for route in getattr(device, "routes", [])],
             )
             for device in devices
         )
@@ -1847,7 +1847,7 @@ class RequestAssetInput(BaseModel):
 
     stream_type: str = Field(description="要获取的传感器数据类型，例如 sensor.rgb。")
     freshness_seconds: float = Field(default=0, ge=0, description="允许复用缓存资产的最大秒数；0 表示必须请求新资产。")
-    configure_payload: dict = Field(default_factory=dict, description="可选采集参数，不要放入媒体字节。")
+    params: dict = Field(default_factory=dict, description="可选采集参数，不要放入媒体字节。")
     timeout_seconds: float | None = Field(default=None, gt=0, description="等待资产返回的超时时间，单位秒。")
 
 
@@ -1888,7 +1888,7 @@ class RequestAssetTool(BaseTool):
 
         主要逻辑：直接转调 typed sensor API。
         参数：`context` 为用户设备上下文，`stream_type` 为资产 stream，
-        `freshness_seconds` 为缓存新鲜度，`configure_payload` 为端侧配置。
+        `freshness_seconds` 为缓存新鲜度，`params` 为采集参数。
         返回值：`AssetRef` 或 `None`。
         异常情况：同 Context 方法。
         """
@@ -1914,7 +1914,7 @@ class RequestAssetTool(BaseTool):
             )
         asset = await sensor.one(
             timeout_seconds=float(input_data.get("timeout_seconds") or 10),
-            params=input_data.get("configure_payload"),
+            params=input_data.get("params"),
         )
         return ToolResult.success(
             data={
@@ -2037,7 +2037,7 @@ class QueryDeviceStateTool(BaseTool):
     """查询当前用户 active device set 的内置 Tool。"""
 
     class Input(BaseModel):
-        include_subscriptions: bool = Field(default=True, description="是否返回设备可接收的事件摘要。")
+        include_routes: bool = Field(default=False, description="是否返回 SDK 内部路由摘要。")
 
     class Output(BaseModel):
         devices: list[dict] = Field(description="当前用户在线设备快照列表。")
@@ -2058,12 +2058,12 @@ class QueryDeviceStateTool(BaseTool):
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         devices = context.devices._get_devices()
-        include_subscriptions = bool(input_data.get("include_subscriptions", True))
+        include_routes = bool(input_data.get("include_routes", False))
         rows = []
         for device in devices:
             row = dict(device.__dict__)
-            if not include_subscriptions:
-                row.pop("subscriptions", None)
+            if not include_routes:
+                row.pop("routes", None)
             rows.append(row)
         data = {"devices": rows, "count": len(devices)}
         return ToolResult.success(

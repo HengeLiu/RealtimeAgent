@@ -61,7 +61,7 @@ class PlaybackDecision:
 class NotificationRequest:
     """通知请求。
 
-    主要功能：Output Service 内部接收 TaskEvent、系统提醒或业务通知后的统一入口对象。
+    主要功能：Output Service 内部接收 TaskSignal、系统提醒或业务通知后的统一入口对象。
     主要属性：`text` 为可播报内容，`priority`、`ttl_seconds`、`dedupe_key` 参与通知决策。
     """
 
@@ -95,7 +95,7 @@ class NotificationDecision:
 class NotificationCoordinator:
     """通知协调器。
 
-    主要功能：接收 TaskEvent 和系统通知，做最小去重决策后进入 Output Router。
+    主要功能：接收 TaskSignal 和系统通知，做最小去重决策后进入 Output Router。
     """
 
     def __init__(self, *, output_service: "OutputService | None" = None) -> None:
@@ -1455,31 +1455,31 @@ class OutputService:
             generation_mode=generation_mode,
         )
 
-    def notify_task_event(self, event: Any) -> NotificationDecision:
-        """接收任务事件通知。
+    def notify_task_signal(self, signal: Any) -> NotificationDecision:
+        """接收任务信号通知。
 
-        主要逻辑：从 TaskEvent 中提取文本、优先级和 TTL，交给 NotificationCoordinator。
-        参数：`event` 为 TaskEvent 或同形对象。
+        主要逻辑：从 TaskSignal 中提取文本、优先级和 TTL，交给 NotificationCoordinator。
+        参数：`signal` 为 TaskSignal 或同形对象。
         返回值：`NotificationDecision`。
         异常情况：下游输出失败时向上抛出。
         """
-        payload = getattr(event, "payload", {}) or {}
+        payload = getattr(signal, "payload", {}) or {}
         text = str(payload.get("text") or payload.get("message") or "")
         return self.notification_coordinator.submit(
             NotificationRequest(
-                user_id=getattr(event, "user_id"),
-                session_id=getattr(event, "session_id") or getattr(event, "task_id"),
+                user_id=getattr(signal, "user_id"),
+                session_id=getattr(signal, "session_id") or getattr(signal, "task_id"),
                 text=text,
-                priority=getattr(event, "priority", "normal"),
-                ttl_seconds=getattr(event, "ttl_seconds", 0),
-                dedupe_key=getattr(event, "dedupe_key", None),
+                priority=getattr(signal, "priority", "normal"),
+                ttl_seconds=getattr(signal, "ttl_seconds", 0),
+                dedupe_key=getattr(signal, "dedupe_key", None),
                 merge_key=payload.get("merge_key") or payload.get("notification_group"),
-                allow_direct_notify=bool(getattr(event, "allow_direct_notify", True)),
-                requires_agent_context_sync=bool(getattr(event, "requires_agent_decision", False)),
+                allow_direct_notify=bool(getattr(signal, "allow_direct_notify", True)),
+                requires_agent_context_sync=bool(getattr(signal, "requires_agent_decision", False)),
                 metadata={
-                    "task_id": getattr(event, "task_id", ""),
-                    "task_type": getattr(event, "task_type", ""),
-                    "event_name": getattr(event, "event_name", ""),
+                    "task_id": getattr(signal, "task_id", ""),
+                    "task_type": getattr(signal, "task_type", ""),
+                    "signal_name": getattr(signal, "signal_name", ""),
                 },
             )
         )
@@ -1492,7 +1492,7 @@ class OutputService:
         DashScope 流式任务尚未启动而在 `streaming_complete()` 阶段失败。
         参数：`intent` 为内部输出意图，`text` 为完整播报文本。
         返回值：无。
-        异常情况：TTS 合成或 stream 写入失败时向上抛出，由 TaskEventBridge 记录系统错误。
+        异常情况：TTS 合成或 stream 写入失败时向上抛出，由 TaskSignalBridge 记录系统错误。
         """
 
         if not text:

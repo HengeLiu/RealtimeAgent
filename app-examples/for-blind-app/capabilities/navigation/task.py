@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat import BaseTask, TaskContext, TaskEvent
+from audio_chat import BaseTask, TaskContext, TaskSignal
 
 
 class NavigationTask(BaseTask):
@@ -32,11 +32,11 @@ class NavigationTask(BaseTask):
         event_sequence = list(input_data.get("events") or ["deviation", "near_destination", "visual_confirmed"])
 
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name="navigation.started",
+                    signal_name="navigation.started",
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload={"destination": destination, "route_id": route_id},
@@ -45,24 +45,24 @@ class NavigationTask(BaseTask):
             )
 
         for name in event_sequence:
-            await self._emit_navigation_event(context, str(name), destination=destination, route_id=route_id)
+            await self._emit_navigation_signal(context, str(name), destination=destination, route_id=route_id)
 
         await context.output.say(f"已接近{destination}，请根据现场环境确认入口", priority="high")
         await context.complete({"destination": destination, "route_id": route_id}, summary="导航样板完成")
 
-    async def _emit_navigation_event(self, context: TaskContext, name: str, *, destination: str, route_id: str) -> None:
-        """生成单个导航事件。"""
+    async def _emit_navigation_signal(self, context: TaskContext, name: str, *, destination: str, route_id: str) -> None:
+        """生成单个导航信号。"""
 
         payload = {"destination": destination, "route_id": route_id}
-        event_name = "navigation.progress"
+        signal_name = "navigation.progress"
         if name == "deviation":
-            event_name = "navigation.deviation_detected"
+            signal_name = "navigation.deviation_detected"
             payload.update({"message": "检测到可能偏航，请重新确认方向", "heading": 92})
         elif name == "near_destination":
-            event_name = "navigation.near_destination"
+            signal_name = "navigation.near_destination"
             payload.update({"message": "接近目的地", "distance_meters": 18})
         elif name == "visual_confirmed":
-            event_name = "navigation.visual_confirmed"
+            signal_name = "navigation.visual_confirmed"
             payload.update({"message": "视觉确认入口候选"})
             if context.devices is not None:
                 asset = await context.devices.sensors.rgb.one(
@@ -71,11 +71,11 @@ class NavigationTask(BaseTask):
                 )
                 payload["asset_id"] = asset.asset_id
         if context.bridge is not None:
-            context.bridge.handle_event(
-                TaskEvent(
+            context.bridge.handle_signal(
+                TaskSignal(
                     task_id=context.task_ref.task_id,
                     task_type=context.task_ref.task_type,
-                    event_name=event_name,
+                    signal_name=signal_name,
                     user_id=context.user_id,
                     session_id=context.session_id,
                     payload=payload,

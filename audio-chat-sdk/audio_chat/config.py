@@ -36,9 +36,9 @@ class ControlConfig:
     transport: str = "websocket"
     heartbeat_timeout_seconds: int = 30
     heartbeat_check_interval_seconds: int = 5
-    max_subscriptions_per_device: int = 64
-    allow_subscribe_all: bool = False
-    subscription_filter_mode: str = "exact"
+    max_routes_per_device: int = 64
+    allow_route_all: bool = False
+    route_filter_mode: str = "exact"
     exclude_producer_by_default: bool = True
 
 

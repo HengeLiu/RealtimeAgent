@@ -4,7 +4,7 @@ import asyncio
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
-from audio_chat.tasks import BaseTask, TaskContext, TaskEvent
+from audio_chat.tasks import BaseTask, TaskContext, TaskSignal
 
 
 class RgbTaskEndpoint:
@@ -89,11 +89,11 @@ class ContinuousRgbProductionTask(BaseTask):
             refs.append(ref)
             if len(refs) >= 2:
                 break
-        context.bridge.handle_event(
-            TaskEvent(
+        context.bridge.handle_signal(
+            TaskSignal(
                 task_id=context.task_ref.task_id,
                 task_type=context.task_ref.task_type,
-                event_name="continuous_rgb_production.frames_collected",
+                signal_name="continuous_rgb_production.frames_collected",
                 user_id=context.user_id,
                 session_id=context.session_id,
                 payload={"frame_count": len(refs), "asset_ids": [ref.asset_id for ref in refs]},
@@ -139,7 +139,7 @@ def register_endpoint(app: AudioChatApp, endpoint: RgbTaskEndpoint) -> None:
             producer_id=endpoint.device_id,
             payload={
                 "device_id": endpoint.device_id,
-                "subscriptions": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+                "routes": [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
                 "auth": {"mode": "disabled"},
             },
         ),
@@ -152,7 +152,7 @@ def test_continuous_sensor_task_uses_only_event_and_stream(tmp_path) -> None:
     """测试目标：验收 Task Engine 生产化的连续 sensor.rgb 场景。
 
     测试方法：注册端点和 Task，Task 发布 configure event，端点通过 stream 上传帧。
-    预期结果：任务完成、资产落地、task event 记录帧数，未引入 device_id RPC。
+    预期结果：任务完成、资产落地、task signal 记录帧数，未引入 device_id RPC。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_root=str(tmp_path / "assets")))
@@ -177,11 +177,11 @@ def test_continuous_sensor_task_uses_only_event_and_stream(tmp_path) -> None:
     assert "device_id" not in endpoint.events[0].payload
     assert len(app.asset_service.query_assets(user_id="user-rgb", stream_type="sensor.rgb")) >= 2
 
-    task_events = (app.recorder.session_dir(session_id, user_id="user-rgb") / "task-events.jsonl").read_text(
+    task_signals = (app.recorder.session_dir(session_id, user_id="user-rgb") / "task-signals.jsonl").read_text(
         encoding="utf-8"
     )
-    assert "continuous_rgb_production.frames_collected" in task_events
-    assert "task.completed" in task_events
+    assert "continuous_rgb_production.frames_collected" in task_signals
+    assert "task.completed" in task_signals
 
 
 def test_cancelling_sensor_task_publishes_stop_configure_event(tmp_path) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.asset import ArtifactRef
 from audio_chat.protocol import Event
-from audio_chat.tasks import TaskEvent, TaskEventBridge
+from audio_chat.tasks import TaskSignal, TaskSignalBridge
 
 
 class SpeakerConnection:
@@ -34,7 +34,11 @@ def register_speaker(app: AudioChatApp, connection: SpeakerConnection) -> None:
             producer_id="dev-speaker",
             payload={
                 "device_id": "dev-speaker",
-                "subscriptions": [{"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}}],
+                "supports": {
+                    "actuators": [
+                        {"type": "speaker", "commands": ["play"], "default": {"sample_rate_hz": 16000}},
+                    ],
+                },
                 "auth": {"mode": "disabled"},
             },
         ),
@@ -42,23 +46,23 @@ def register_speaker(app: AudioChatApp, connection: SpeakerConnection) -> None:
     )
 
 
-def test_task_event_bridge_records_agent_sync_artifacts_and_direct_notify(tmp_path) -> None:
-    """测试目标：验证 TaskEventBridge 同时覆盖上下文同步、artifact 和直接通知。
+def test_task_signal_bridge_records_agent_sync_artifacts_and_direct_notify(tmp_path) -> None:
+    """测试目标：验证 TaskSignalBridge 同时覆盖上下文同步、artifact 和直接通知。
 
-    测试方法：构造带 ArtifactRef、requires_agent_decision 和文本通知的 TaskEvent。
-    预期结果：task-events、agent-events 和 output stream 都产生可检查产物。
+    测试方法：构造带 ArtifactRef、requires_agent_decision 和文本通知的 TaskSignal。
+    预期结果：task-signals、agent-events 和 output stream 都产生可检查产物。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     connection = SpeakerConnection()
     register_speaker(app, connection)
-    bridge = TaskEventBridge(recorder=app.recorder, output_service=app.output_service)
+    bridge = TaskSignalBridge(recorder=app.recorder, output_service=app.output_service)
 
-    bridge.handle_event(
-        TaskEvent(
+    bridge.handle_signal(
+        TaskSignal(
             task_id="task-bridge",
             task_type="navigation",
-            event_name="navigation.checkpoint",
+            signal_name="navigation.checkpoint",
             user_id="user-bridge",
             session_id="sess-bridge",
             payload={"text": "已到达路口"},
@@ -69,21 +73,21 @@ def test_task_event_bridge_records_agent_sync_artifacts_and_direct_notify(tmp_pa
     )
 
     session_root = tmp_path / "runs" / "user-bridge" / "sess-bridge"
-    task_events = (session_root / "task-events.jsonl").read_text(encoding="utf-8")
+    task_signals = (session_root / "task-signals.jsonl").read_text(encoding="utf-8")
     agent_events = (session_root / "agent-events.jsonl").read_text(encoding="utf-8")
 
-    assert "navigation.checkpoint" in task_events
-    assert "artifact-1" in task_events
+    assert "navigation.checkpoint" in task_signals
+    assert "artifact-1" in task_signals
     assert "task.requires_agent_context_sync" in agent_events
     assert connection.chunks
 
 
-def test_task_event_bridge_direct_notify_uses_complete_text_tts(tmp_path) -> None:
+def test_task_signal_bridge_direct_notify_uses_complete_text_tts(tmp_path) -> None:
     """测试目标：验证 Task 到点通知使用完整文本 TTS 后再打开输出流。
 
     测试方法：注入一个只支持 `synthesize_text()` 的 TTS，模拟真实通知类输出不走
     assistant_text.delta 流式路径。
-    预期结果：TaskEventBridge 处理 `timer.due` 后，speaker 连接收到音频 chunk，
+    预期结果：TaskSignalBridge 处理 `timer.due` 后，speaker 连接收到音频 chunk，
     且 stream 摘要记录非空音频。
     """
 
@@ -123,13 +127,13 @@ def test_task_event_bridge_direct_notify_uses_complete_text_tts(tmp_path) -> Non
     register_speaker(app, connection)
     fake_tts = CompleteTextTTS()
     app.output_service.router._injected_tts = fake_tts
-    bridge = TaskEventBridge(recorder=app.recorder, output_service=app.output_service)
+    bridge = TaskSignalBridge(recorder=app.recorder, output_service=app.output_service)
 
-    bridge.handle_event(
-        TaskEvent(
+    bridge.handle_signal(
+        TaskSignal(
             task_id="task-timer",
             task_type="timer_task",
-            event_name="timer.due",
+            signal_name="timer.due",
             user_id="user-bridge",
             session_id="sess-timer",
             payload={"message": "一分钟计时器到点了"},

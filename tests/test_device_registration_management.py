@@ -54,7 +54,7 @@ def _registration(user_id: str, device_id: str, *, token: str = "token-ok") -> E
             "client_type": "python-playback",
             "sdk_version": "audio-chat-test",
             "auth": {"mode": "static_token", "token": token},
-            "subscriptions": [{"event": "control.audio_session.*"}],
+            "routes": [{"event": "control.audio_session.*"}],
         },
     )
 
@@ -163,7 +163,7 @@ def test_debug_api_returns_device_and_user_snapshots() -> None:
                 "client_type": "python-playback",
                 "sdk_version": "audio-chat-test",
                 "auth": {"mode": "disabled"},
-                "subscriptions": [{"event": "control.audio_session.*"}],
+                "routes": [{"event": "control.audio_session.*"}],
             },
         ),
         FakeConnection("dev-debug"),

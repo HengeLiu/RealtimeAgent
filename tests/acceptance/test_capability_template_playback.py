@@ -89,7 +89,7 @@ def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlayback
                 "client_type": "for-blind-app-playback",
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
-                "subscriptions": [
+                "routes": [
                     {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}},
                     {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
                 ],
@@ -180,7 +180,7 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
         "stream-events.jsonl",
         "agent-events.jsonl",
         "tool-events.jsonl",
-        "task-events.jsonl",
+        "task-signals.jsonl",
         "assets.jsonl",
         "output-decisions.jsonl",
         "result.json",
@@ -195,14 +195,14 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
     assert missing == []
 
     tool_events = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
-    task_events = (session_dir / "task-events.jsonl").read_text(encoding="utf-8")
+    task_signals = (session_dir / "task-signals.jsonl").read_text(encoding="utf-8")
     assets = (session_dir / "assets.jsonl").read_text(encoding="utf-8")
     output_decisions = (session_dir / "output-decisions.jsonl").read_text(encoding="utf-8")
     final_result = json.loads((session_dir / "result.json").read_text(encoding="utf-8"))
 
     assert "capture_photo" in tool_events
-    assert "timer.started" in task_events
-    assert "continuous_rgb_analyze.frames_collected" in task_events
+    assert "timer.started" in task_signals
+    assert "continuous_rgb_analyze.frames_collected" in task_signals
     assert "asset.stored" in assets
     assert "play_now" in output_decisions
     assert final_result["ok"] is True

@@ -25,7 +25,7 @@ def test_public_extension_contract_exports_required_developer_api() -> None:
         "ToolError",
         "BaseTask",
         "TaskContext",
-        "TaskEvent",
+        "TaskSignal",
         "TaskRef",
         "ToolDeviceFacade",
         "DeviceSnapshot",
@@ -68,16 +68,16 @@ def test_tool_and_task_auto_discovery_contract_exists() -> None:
         "TaskStore",
         "TaskStateMachine",
         "TaskExecutor",
-        "TaskEventBridge",
+        "TaskSignalBridge",
     ]:
         assert hasattr(tasks, name), name
 
 
-def test_task_engine_state_machine_and_event_bridge_contract() -> None:
-    """测试目标：确认 Task Engine 按设计文档提供状态机和任务事件回流能力。
+def test_task_engine_state_machine_and_signal_bridge_contract() -> None:
+    """测试目标：确认 Task Engine 按设计文档提供状态机和任务信号回流能力。
 
-    测试方法：读取 Task 状态常量和允许转移表，并检查 TaskEventBridge 公开方法。
-    预期结果：长任务状态只能按设计文档声明的路径流转，TaskEvent 可回流消息、通知和 Agent。
+    测试方法：读取 Task 状态常量和允许转移表，并检查 TaskSignalBridge 公开方法。
+    预期结果：长任务状态只能按设计文档声明的路径流转，TaskSignal 可回流消息、通知和 Agent。
     """
 
     tasks = importlib.import_module("audio_chat.tasks")
@@ -95,9 +95,9 @@ def test_task_engine_state_machine_and_event_bridge_contract() -> None:
     assert ("running", "waiting_external") in tasks.TASK_TRANSITIONS
     assert ("waiting_external", "completed") in tasks.TASK_TRANSITIONS
 
-    bridge = tasks.TaskEventBridge
-    assert hasattr(bridge, "handle_event")
-    assert hasattr(bridge, "convert_event_to_agent_turn")
+    bridge = tasks.TaskSignalBridge
+    assert hasattr(bridge, "handle_signal")
+    assert hasattr(bridge, "convert_signal_to_agent_turn")
 
 
 def test_output_service_notification_coordinator_contract_exists() -> None:
@@ -116,7 +116,7 @@ def test_output_service_notification_coordinator_contract_exists() -> None:
 def test_turn_recorder_and_run_artifact_contract_exists(tmp_path) -> None:
     """测试目标：确认运行产物记录器覆盖新设计要求的关键证据。
 
-    测试方法：实例化 TurnRecorder，检查输入流、转写、模型请求、tool trace、task event、
+    测试方法：实例化 TurnRecorder，检查输入流、转写、模型请求、tool trace、task signal、
     输出流和 result 写入方法。
     预期结果：回放和排障不只依赖日志文本，而能读取稳定 runs 产物。
     """
@@ -131,7 +131,7 @@ def test_turn_recorder_and_run_artifact_contract_exists(tmp_path) -> None:
         "record_model_request",
         "record_agent_event",
         "record_tool_trace",
-        "record_task_event",
+        "record_task_signal",
         "record_output_stream",
         "write_result",
     ]:

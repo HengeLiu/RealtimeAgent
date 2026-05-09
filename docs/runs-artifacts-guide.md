@@ -165,7 +165,7 @@ runs/audio-chat/tasks/
   agent-events.jsonl
   stream-events.jsonl
   tool-events.jsonl
-  task-events.jsonl
+  task-signals.jsonl
   assets.jsonl
   playback-decisions.jsonl
   media/

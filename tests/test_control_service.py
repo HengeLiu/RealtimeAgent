@@ -18,7 +18,7 @@ class FakeConnection:
         self.events.append(Event(event_name="control.device.state.changed", user_id="user-001", producer_id="server-main", payload={"reason": reason}))
 
 
-def _registration(device_id: str, subscriptions: list[dict]) -> Event:
+def _registration(device_id: str, routes: list[dict]) -> Event:
     return Event(
         event_name="control.device.register.requested",
         user_id="user-001",
@@ -29,13 +29,13 @@ def _registration(device_id: str, subscriptions: list[dict]) -> Event:
             "client_type": "python-playback",
             "sdk_version": "audio-chat-endpoint-0.1.0",
             "auth": {"mode": "disabled"},
-            "subscriptions": subscriptions,
+            "routes": routes,
         },
     )
 
 
-def _registration_for_user(user_id: str, device_id: str, subscriptions: list[dict], *, auth: dict | None = None) -> Event:
-    event = _registration(device_id, subscriptions)
+def _registration_for_user(user_id: str, device_id: str, routes: list[dict], *, auth: dict | None = None) -> Event:
+    event = _registration(device_id, routes)
     payload = dict(event.payload)
     payload["auth"] = auth or {"mode": "disabled"}
     return Event(
@@ -60,7 +60,7 @@ def test_register_device_adds_active_device_set_and_binding() -> None:
     assert [device.device_id for device in active.devices] == ["dev-001"]
 
 
-def test_publish_resolves_by_subscription() -> None:
+def test_publish_resolves_by_route() -> None:
     service = ControlService()
     speaker = FakeConnection("speaker")
     sensor = FakeConnection("sensor")
@@ -86,13 +86,13 @@ def test_publish_resolves_by_subscription() -> None:
     assert result.matched_count == 1
     assert result.delivered_count == 1
     assert result.route_diagnostics[0]["device_id"] == "speaker"
-    assert result.route_diagnostics[0]["subscription_matched"] is True
+    assert result.route_diagnostics[0]["route_matched"] is True
     assert result.route_diagnostics[0]["delivered"] is True
     assert [event.event_name for event in speaker.events] == ["stream.output.open.requested"]
     assert sensor.events == []
 
 
-def test_stream_event_routes_by_subscription_without_capabilities() -> None:
+def test_stream_event_routes_by_route_without_capabilities() -> None:
     """测试目标：验证 stream 事件只按订阅命中，不要求设备重复声明 capabilities。
 
     测试方法：注册一个只声明 `stream.control.* sensor.rgb` 订阅的设备，然后用
@@ -162,13 +162,13 @@ def test_heartbeat_and_disconnect_update_debug_snapshot() -> None:
     assert offline_snapshot["connection_state"] == "offline"
 
 
-def test_registration_validator_applies_subscription_config() -> None:
-    """测试目标：验证 subscription 相关 YAML 配置会进入注册校验。
+def test_registration_validator_applies_route_config() -> None:
+    """测试目标：验证 route 相关 YAML 配置会进入注册校验。
 
     测试方法：限制每设备最多 1 个订阅，并禁止 `*` 订阅。
     预期结果：超量订阅或全量订阅都会注册失败。
     """
-    service = ControlService(max_subscriptions_per_device=1, allow_subscribe_all=False)
+    service = ControlService(max_routes_per_device=1, allow_route_all=False)
 
     too_many = service.register_device(
         _registration(
@@ -186,7 +186,7 @@ def test_registration_validator_applies_subscription_config() -> None:
     assert wildcard.event_name == "control.device.register.failed"
 
 
-def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
+def test_route_filter_matches_envelope_payload_and_arrays() -> None:
     """测试目标：验证订阅 filter 能匹配信封字段、payload 字段和数组值。
 
     测试方法：注册一个同时过滤 producer_id、payload.command 和
@@ -226,7 +226,7 @@ def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
     assert [event.payload["command"] for event in endpoint.events] == ["audio.play"]
 
 
-def test_route_diagnostics_explain_subscription_miss() -> None:
+def test_route_diagnostics_explain_route_miss() -> None:
     """测试目标：验证事件没有投递时能看到明确的订阅未命中原因。
 
     测试方法：注册只订阅 `sensor.rgb` 的设备，然后发布 `sensor.depth` 配置事件。
@@ -258,7 +258,7 @@ def test_route_diagnostics_explain_subscription_miss() -> None:
     assert result.route_diagnostics[0]["detail"]["actual"] == "sensor.depth"
 
 
-def test_subscription_filter_rejects_regex_and_unknown_paths() -> None:
+def test_route_filter_rejects_regex_and_unknown_paths() -> None:
     """测试目标：明确 filter 不支持脚本、正则和复杂表达式。
 
     测试方法：注册包含正则样式路径和未知顶层路径的订阅。
@@ -277,7 +277,7 @@ def test_subscription_filter_rejects_regex_and_unknown_paths() -> None:
 
     assert regex.event_name == "control.device.register.failed"
     assert unknown.event_name == "control.device.register.failed"
-    assert "unsupported subscription filter" in service.build_device_snapshot("dev-regex")["register_failed_reason"]
+    assert "unsupported route filter" in service.build_device_snapshot("dev-regex")["register_failed_reason"]
 
 
 def test_static_token_binding_reconnect_and_cross_user_rejection() -> None:

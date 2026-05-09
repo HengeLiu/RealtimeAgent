@@ -961,6 +961,30 @@ server Task
 
 这能避免把端侧实现细节暴露给 Agent Core，同时保留跨设备长流程能力。
 
+### 8.5 TaskSignal 与系统事件的关系
+
+Task 内部对外回流统一称为 `TaskSignal`。它用于描述 server Task 的状态变化、通知载荷和是否需要 Agent 决策，不是控制面的系统级 `Event`，也不是端侧命令回执 `CommandEvent`。
+
+```python
+TaskSignal(
+    task_id="task_xxx",
+    task_type="phone_navigation",
+    signal_name="navigation.reroute_required",
+    user_id="user_001",
+    payload={"message": "路线正在重新规划"},
+    requires_agent_decision=True,
+    allow_direct_notify=False,
+)
+```
+
+三者边界：
+
+| 概念 | 所属层 | 主要用途 |
+| --- | --- | --- |
+| `Event` / `event_name` | 系统协议和控制面 | 设备注册、stream 开关、端侧命令下发和回执。 |
+| `CommandEvent` | Context 设备命令 API | 持续命令或端侧任务的状态回报，由 server Task 消费。 |
+| `TaskSignal` / `signal_name` | Task 管理域 | server Task 的状态回流、通知和 Agent 决策同步。 |
+
 ## 9. 推荐 Tool 示例
 
 ```python
@@ -1251,7 +1275,7 @@ SDK 内部映射为：
 
 ### 13.2 协议收敛原则
 
-新架构不再维护旧 stream 配置适配层。端侧只需要实现 `stream.control.open.requested` 和 `stream.control.close.requested`；功能代码只使用 typed API，不手写底层控制信令。
+端侧只需要实现 `stream.control.open.requested` 和 `stream.control.close.requested`；功能代码只使用 typed API，不手写底层控制信令。
 
 ## 14. 调试观察点
 

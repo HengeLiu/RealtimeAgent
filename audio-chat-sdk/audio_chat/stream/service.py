@@ -31,7 +31,7 @@ class StreamHandle:
 
     主要功能：记录一条输入或输出 stream 的生命周期、格式和冻结消费者。
     主要属性：`consumer_device_ids` 在需要转发的 stream 打开时计算一次，后续 chunk、
-    close 和 cancel 都复用这组冻结消费者，避免插播或设备重连改变旧 stream 语义。
+    close 和 cancel 都复用这组冻结消费者，避免插播或设备重连改变已打开 stream 的消费者集合。
     """
 
     user_id: str

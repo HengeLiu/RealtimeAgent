@@ -188,7 +188,6 @@ final class AudioChatEndpointRuntime: ObservableObject {
                 "auth": config.auth.payload,
                 "properties": properties,
                 "supports": config.supports.mapValues { -e.object },
-                "subscriptions": config.subscriptions.map { $0.payload },
             ],
             version: config.protocolVersion
         )

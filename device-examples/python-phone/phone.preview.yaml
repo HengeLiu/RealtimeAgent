@@ -13,14 +13,3 @@ supports:
   actuators:
     - type: vibrator
       commands: [vibrate]
-subscriptions:
-  - event: stream.control.*
-    filter:
-      stream_type: sensor.rgb
-  - event: stream.output.*
-    filter:
-      stream_type: actuator.speaker
-  - event: stream.output.*
-    filter:
-      stream_type: actuator.haptic
-  - event: command.*

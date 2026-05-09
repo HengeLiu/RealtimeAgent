@@ -19,8 +19,7 @@ from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
-from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskEventBridge, TaskStore
-from audio_chat.tasks import TaskEvent
+from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignal, TaskSignalBridge, TaskStore
 from audio_chat.tools import (
     AssetFacade,
     BUILTIN_TOOLS,
@@ -63,9 +62,9 @@ class AudioChatConfig:
     token_clock_skew_seconds: int = 60
     active_device_set_policy: str = "single"
     control_exclude_producer_by_default: bool = True
-    control_max_subscriptions_per_device: int = 64
-    control_allow_subscribe_all: bool = False
-    control_subscription_filter_mode: str = "exact"
+    control_max_routes_per_device: int = 64
+    control_allow_route_all: bool = False
+    control_route_filter_mode: str = "exact"
     control_heartbeat_timeout_seconds: float = 30.0
     control_heartbeat_check_interval_seconds: float = 5.0
     stream_max_chunk_bytes: int = 1048576
@@ -178,9 +177,9 @@ class AudioChatConfig:
             token_clock_skew_seconds=loaded.auth.token_clock_skew_seconds,
             active_device_set_policy=loaded.user.active_device_set_policy,
             control_exclude_producer_by_default=loaded.control.exclude_producer_by_default,
-            control_max_subscriptions_per_device=loaded.control.max_subscriptions_per_device,
-            control_allow_subscribe_all=loaded.control.allow_subscribe_all,
-            control_subscription_filter_mode=loaded.control.subscription_filter_mode,
+            control_max_routes_per_device=loaded.control.max_routes_per_device,
+            control_allow_route_all=loaded.control.allow_route_all,
+            control_route_filter_mode=loaded.control.route_filter_mode,
             control_heartbeat_timeout_seconds=loaded.control.heartbeat_timeout_seconds,
             control_heartbeat_check_interval_seconds=loaded.control.heartbeat_check_interval_seconds,
             stream_max_chunk_bytes=loaded.stream.max_chunk_bytes,
@@ -283,9 +282,9 @@ class AudioChatApp:
             ),
             recorder=self.recorder,
             exclude_producer_by_default=self.config.control_exclude_producer_by_default,
-            max_subscriptions_per_device=self.config.control_max_subscriptions_per_device,
-            allow_subscribe_all=self.config.control_allow_subscribe_all,
-            subscription_filter_mode=self.config.control_subscription_filter_mode,
+            max_routes_per_device=self.config.control_max_routes_per_device,
+            allow_route_all=self.config.control_allow_route_all,
+            route_filter_mode=self.config.control_route_filter_mode,
             active_device_set_policy=self.config.active_device_set_policy,
             effective_config={"stream.max_chunk_bytes": self.config.stream_max_chunk_bytes},
         )
@@ -327,7 +326,7 @@ class AudioChatApp:
         )
         self.task_engine = TaskEngine(
             store=_build_task_store(self.config),
-            bridge=TaskEventBridge(recorder=self.recorder, output_service=self.output_service),
+            bridge=TaskSignalBridge(recorder=self.recorder, output_service=self.output_service),
             device_context_factory=lambda user_id: TaskDeviceFacade(
                 context=DeviceRuntime(user_id=user_id, app=self, allow_long_running=True)
             ),
@@ -585,8 +584,7 @@ class AudioChatApp:
     def active_session_id(self, user_id: str) -> str:
         """返回用户当前设备 ID。
 
-        主要逻辑：新版协议不再创建独立 session，旧 API 名称保留为过渡说明，返回值始终
-        是当前用户的活动 device_id。
+        主要逻辑：返回当前用户的活动 device_id。
         参数：`user_id` 为用户标识。
         返回值：device_id。
         异常情况：当前用户没有在线设备且尚未建立对话时抛出 ValueError。
@@ -834,7 +832,7 @@ class AudioChatApp:
         )
 
     def _handle_device_command_report(self, event: Event) -> None:
-        """把端侧命令回报转换为 server 侧 TaskEvent。
+        """把端侧命令回报转换为 server 侧 TaskSignal。
 
         主要逻辑：phone 视觉任务等端侧执行能力只通过
         `command.*` 事件回报 started / progress / completed /
@@ -855,17 +853,17 @@ class AudioChatApp:
             return
 
         task_type = str(payload.get("task_type") or ref.task_type)
-        state_event_name = {
+        state_signal_name = {
             "command.accepted": "phone_task.started",
             "command.progress": "phone_task.progress",
             "command.completed": "phone_task.completed",
             "command.failed": "phone_task.failed",
         }[event.event_name]
-        self.task_engine.emit_event(
-            TaskEvent(
+        self.task_engine.emit_signal(
+            TaskSignal(
                 task_id=task_id,
                 task_type=task_type,
-                event_name=state_event_name,
+                signal_name=state_signal_name,
                 user_id=event.user_id,
                 session_id=self._event_device_id(event),
                 payload={
@@ -999,8 +997,7 @@ def _build_task_store(config: AudioChatConfig) -> TaskStore:
 def _memory_root(config: AudioChatConfig) -> str | Path:
     """解析用户级 memory.json 根目录。
 
-    主要逻辑：旧默认 `runs/audio-chat/memory` 会把记忆写到独立目录；新版默认写到
-    `runs_root/<user_id>/memory.json`，只有显式配置时才使用配置目录。
+    主要逻辑：默认写到 `runs_root/<user_id>/memory.json`，只有显式配置时才使用配置目录。
     参数：`config` 为应用配置。
     返回值：MemoryStore 根目录。
     异常情况：无。
@@ -1014,7 +1011,7 @@ def _memory_root(config: AudioChatConfig) -> str | Path:
 def _prepare_app_imports(app_dir: Path) -> None:
     """准备 app 根目录导入路径。
 
-    主要逻辑：清理旧的 `capabilities` 模块缓存，并把当前 app 根目录放到 `sys.path`
+    主要逻辑：清理已加载的 `capabilities` 模块缓存，并把当前 app 根目录放到 `sys.path`
     前部，避免切换不同 app 时复用上一套能力模块。
     参数：`app_dir` 为 app 根目录。
     返回值：无。
