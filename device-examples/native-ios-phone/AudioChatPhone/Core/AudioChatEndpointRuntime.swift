@@ -537,53 +537,12 @@ protocol PhoneTaskHandler {
     func result(command: AudioChatEvent, frameCount: Int) -> PhoneTaskCommandResult
 }
 
-/// 找物任务 handler 样板。
-struct FindObjectPhoneTaskHandler: PhoneTaskHandler {
-    let taskType = "find_object_phone_task"
-
-    func result(command: AudioChatEvent, frameCount: Int) -> PhoneTaskCommandResult {
-        let input = command.payload["input"] as? [String: Any] ?? [:]
-        let target = input["target"] as? String ?? "目标物"
-        return PhoneTaskCommandResult(
-            summary: "找到\(target)",
-            payload: [
-                "target": target,
-                "found": true,
-                "frame_count": frameCount,
-                "source": "ios-phone-reference",
-            ]
-        )
-    }
-}
-
-/// 红绿灯任务 handler 样板。
-struct TrafficLightPhoneTaskHandler: PhoneTaskHandler {
-    let taskType = "traffic_light_phone_task"
-
-    func result(command: AudioChatEvent, frameCount: Int) -> PhoneTaskCommandResult {
-        let input = command.payload["input"] as? [String: Any] ?? [:]
-        let color = input["expected_color"] as? String ?? "green"
-        return PhoneTaskCommandResult(
-            summary: "红绿灯识别结果：\(color)",
-            payload: [
-                "color": color,
-                "confidence": 0.9,
-                "frame_count": frameCount,
-                "source": "ios-phone-reference",
-            ]
-        )
-    }
-}
-
 /// iOS phone 参考端任务注册表。
 final class PhoneTaskRegistry {
     private let handlers: [String: PhoneTaskHandler]
 
     init() {
-        let builtins: [PhoneTaskHandler] = [
-            FindObjectPhoneTaskHandler(),
-            TrafficLightPhoneTaskHandler(),
-        ]
+        let builtins: [PhoneTaskHandler] = []
         self.handlers = Dictionary(uniqueKeysWithValues: builtins.map { ($0.taskType, $0) })
     }
 

@@ -1,21 +1,20 @@
 # navigation 迁移样板
 
-能力价值：准备目的地、规划路线、执行期结合位置、航向和视觉事件给用户导航。
+能力价值：准备目的地并查询路线规划。执行期导航 Task 暂不保留，后续接入真实定位和导航状态后再实现。
 
 audio-chat 迁移路径：
 
-1. Tool 调用 MCP 或 provider 做 POI、地理编码和路线准备。
-2. Task 监听位置、航向、偏航、接近终点和视觉确认事件。
-3. 摄像头、IMU、location 这类持续数据走 `sensor.*` stream 或小型语义事件。
-4. 导航提示进入 Output Service，优先级按安全等级设置。
+1. `query_route_plan` Tool 调用 MCP 或 provider 做 POI、地理编码和路线准备。
+2. Tool 不启动后台任务，不直接处理设备连接。
+3. 未来执行期导航应作为 Task，由 `task_runtime_manager` 启动。
 
 参考：
 
 - `docs/phase3-migration-guide.md` 的 MCP Adapter 迁移章节。
-- `app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py` 的连续传感器消费方式。
+- `docs/context-device-api-design.md` 的 Tool / Task 边界说明。
 
 验收要求：
 
 - mock 路线准备不需要真实地图 key。
 - 配置真实地图 key 时，provider 错误要结构化记录，不能伪装成功。
-- 端侧导航动作通过 event / stream 表达。
+- 执行期导航未实现前，不保留专用启动 Tool 或执行期 Task 样板。

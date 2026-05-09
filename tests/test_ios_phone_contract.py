@@ -20,14 +20,10 @@ def test_ios_phone_reference_contains_task_registry_contract() -> None:
 
     for token in [
         "PhoneTaskRegistry",
-        "FindObjectPhoneTaskHandler",
-        "TrafficLightPhoneTaskHandler",
         "command.requested",
         "command.accepted",
         "command.progress",
         "command.completed",
-        "phone.task.find_object_phone_task",
-        "phone.task.traffic_light_phone_task",
         "DirectCameraSinkServer",
         "direct.camera_sink",
         "audio_chat.direct_frame.v1",

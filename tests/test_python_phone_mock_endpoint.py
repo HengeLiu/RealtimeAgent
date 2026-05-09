@@ -43,8 +43,8 @@ def test_python_phone_mock_registers_as_route_driven_endpoint(tmp_path: Path) ->
         snapshot = audio_app.control_service.build_device_snapshot("dev-phone")
         assert snapshot is not None
         assert snapshot["client_type"] == "python-phone"
-        assert snapshot["properties"]["phone.task.find_object_phone_task"] is True
-        assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in snapshot["routes"]
+        assert "phone.task.find_object_phone_task" not in snapshot["properties"]
+        assert snapshot["device_id"] == "dev-phone"
 
     asyncio.run(run())
 

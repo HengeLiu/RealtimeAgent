@@ -188,8 +188,6 @@ struct AppConfig: Codable, Equatable {
         protocolVersion: "audio-chat.v1",
         directCameraSinkPort: 9001,
         properties: [
-            "phone.task.find_object_phone_task": .bool(true),
-            "phone.task.traffic_light_phone_task": .bool(true),
             "direct.camera_sink": .bool(true),
             "direct.camera_sink.path": .string("/ws/camera"),
             "direct.camera_sink.frame_format": .string("audio_chat.direct_frame.v1"),

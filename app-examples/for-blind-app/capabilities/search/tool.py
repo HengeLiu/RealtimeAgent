@@ -45,13 +45,14 @@ class SearchWebTool(BaseTool):
         """
 
         query = input_data["query"]
-        if context.mcp is None:
+        mcp = getattr(context, "mcp", None)
+        if mcp is None:
             return ToolResult.success(
                 data={"provider": "fallback", "fallback": True, "query": query, "items": []},
                 message="搜索服务未配置，暂时没有搜索结果",
             )
         try:
-            result = context.mcp.call(
+            result = mcp.call(
                 tool_name="web.search",
                 arguments={"query": query, "limit": int(input_data["limit"])},
                 timeout_seconds=float(input_data["timeout_seconds"]),

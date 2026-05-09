@@ -25,7 +25,7 @@ def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_
     """测试目标：确认开发者新增能力后不修改 server 内部代码即可自动注册。
 
     测试方法：把测试 app-root 加入 sys.path，配置 Tool / Task 递归发现 `capabilities`。
-    预期结果：`capture_photo` Tool、`timer` Task 和 `continuous_rgb_analyze` Task 都进入注册表。
+    预期结果：`capture_photo` Tool 和 `timer` Task 都进入注册表。
     """
 
     clear_capabilities_modules()
@@ -45,7 +45,6 @@ def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_
 
     assert "capture_photo" in app.tool_registry.list_names()
     assert "timer" in app.task_engine.registry.list_task_types()
-    assert "continuous_rgb_analyze" in app.task_engine.registry.list_task_types()
     assert app.discovery_errors == []
 
 
@@ -112,7 +111,6 @@ def test_example_for_blind_app_files_are_copyable() -> None:
         "server.yaml",
         "templates/capture_photo/tool.py",
         "capabilities/timer/task.py",
-        "capabilities/continuous_rgb_analyze/task.py",
         "host/server/main.py",
         "host/phone-mock/config.yaml",
         "host/glass-playback/playback.yaml",

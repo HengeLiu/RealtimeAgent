@@ -28,7 +28,7 @@ def test_phone_task_command_contract_uses_event_and_stream_semantics() -> None:
         producer_id="server-main",
         payload={
             "command": "phone.task.start",
-            "task_type": "find_object_phone_task",
+            "task_type": "remote_vision_task",
             "task_id": "task-find-object-001",
             "input": {"target": "水杯"},
             "required_streams": [{"stream_type": "sensor.rgb", "mode": "continuous", "format": "jpeg"}],
@@ -37,7 +37,7 @@ def test_phone_task_command_contract_uses_event_and_stream_semantics() -> None:
 
     data = event.to_dict()
     text = json.dumps(data, ensure_ascii=False)
-    assert data["payload"]["task_type"] == "find_object_phone_task"
+    assert data["payload"]["task_type"] == "remote_vision_task"
     assert "sensor.rgb" in text
     assert "target_device" not in text
     assert "target_device_id" not in text
@@ -54,7 +54,7 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     created = TaskRef(
         task_id="task-phone-001",
-        task_type="find_object_phone_task",
+        task_type="remote_vision_task",
         state="running",
         metadata={"user_id": "user-phone-task", "session_id": "sess-phone-task", "input": {}},
     )
@@ -66,7 +66,7 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
             producer_id="dev-python-phone",
             payload={
                 "task_id": "task-phone-001",
-                "task_type": "find_object_phone_task",
+                "task_type": "remote_vision_task",
                 "result": {"found": True, "target": "水杯"},
                 "summary": "找到水杯",
             },
@@ -76,6 +76,7 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     updated = app.task_engine.query("task-phone-001")
     assert updated.state == "completed"
     assert updated.summary == "找到水杯"
-    task_signals = (tmp_path / "runs/sessions/sess-phone-task/task-signals.jsonl").read_text(encoding="utf-8")
-    assert "phone_task.completed" in task_signals
+    task_signals = (app.recorder.session_dir("sess-phone-task", user_id="user-phone-task") / "task-signals.jsonl").read_text(
+        encoding="utf-8"
+    )
     assert "task.completed" in task_signals

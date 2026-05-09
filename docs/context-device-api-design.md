@@ -985,6 +985,31 @@ TaskSignal(
 | `CommandEvent` | Context 设备命令 API | 持续命令或端侧任务的状态回报，由 server Task 消费。 |
 | `TaskSignal` / `signal_name` | Task 管理域 | server Task 的状态回流、通知和 Agent 决策同步。 |
 
+### 8.6 Task 运行时管理 Tool
+
+SDK 只提供一个模型可见的 Task 运行时入口：`task_runtime_manager`。业务能力不再新增
+按单个 Task 命名的专用启动、查询或取消 Tool。
+
+```json
+{
+  "action": "start",
+  "task_type": "find_object_task",
+  "input_data": {
+    "object_name": "水杯"
+  }
+}
+```
+
+`task_runtime_manager` 支持：
+
+| action | 用途 |
+| --- | --- |
+| `list_types` | 列出当前已注册 Task 类型和规格。 |
+| `start` | 启动一个已注册 Task。 |
+| `query` | 查询 TaskRef。 |
+| `cancel` | 取消仍在运行的 Task。 |
+| `list_instances` | 列出当前用户的 Task 实例。 |
+
 ## 9. 推荐 Tool 示例
 
 ```python

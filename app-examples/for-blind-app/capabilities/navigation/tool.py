@@ -51,13 +51,14 @@ class QueryRoutePlanTool(BaseTool):
 
         destination = input_data["destination"]
         origin = input_data["origin"]
-        if context.mcp is None:
+        mcp = getattr(context, "mcp", None)
+        if mcp is None:
             return ToolResult.success(
                 data={"provider": "fallback", "destination": destination, "route_ready": False},
                 message="路线服务未配置，无法规划真实路线",
             )
         try:
-            route = context.mcp.call(
+            route = mcp.call(
                 tool_name="amap.route_plan",
                 arguments={"origin": origin, "destination": destination},
                 timeout_seconds=float(input_data["timeout_seconds"]),

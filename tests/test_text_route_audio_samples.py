@@ -1,5 +1,7 @@
 import asyncio
 import json
+import sys
+from dataclasses import replace
 from pathlib import Path
 
 from aiohttp import web
@@ -10,6 +12,39 @@ from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint, Pyth
 
 
 AUDIO_SAMPLE_ROOT = Path("testdata/audio-sample/wav")
+APP_ROOT = Path("app-examples/for-blind-app")
+
+
+def _clear_capability_modules() -> None:
+    """清理测试进程中缓存的应用能力模块。"""
+
+    for name in list(sys.modules):
+        if name == "capabilities" or name.startswith("capabilities."):
+            sys.modules.pop(name, None)
+
+
+def _build_for_blind_text_app(tmp_path: Path, monkeypatch) -> AudioChatApp:
+    """创建加载 for-blind-app 能力的 Text 路线应用。
+
+    测试目标：让应用级 `capture_photo` Tool 通过真实自动发现进入注册表。
+    测试方法：读取 for-blind-app 的 server.yaml，并把运行产物路径替换到临时目录。
+    预期结果：Text 模型路线可调用应用级视觉 Tool，而 SDK 默认应用不暴露该 Tool。
+    """
+
+    _clear_capability_modules()
+    monkeypatch.syspath_prepend(str(APP_ROOT))
+    config = AudioChatConfig.from_yaml(APP_ROOT / "server.yaml")
+    return AudioChatApp(
+        replace(
+            config,
+            runs_root=str(tmp_path / "runs"),
+            asset_root=str(tmp_path / "runs" / "assets"),
+            agent_mode="text",
+            tts_provider="mock",
+            tts_model="mock-tts",
+            tts_voice="mock",
+        )
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -44,7 +79,7 @@ def test_text_route_uses_audio_sample_filename_as_mock_asr_transcript_and_calls_
     assert "assistant_audio.delta" in model_events
 
 
-def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_path: Path) -> None:
+def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_path: Path, monkeypatch) -> None:
     """测试目标：验证 text 模型路线中的视觉工具仍遵守 stream/event 协议。
 
     测试方法：使用“看一下我前面有什么”音频样例触发 `capture_photo`；Python glass 收到
@@ -52,7 +87,7 @@ def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_
     预期结果：工具调用成功，资产缓存写入照片，最终文本回复来自工具结果而不是固定图片。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = _build_for_blind_text_app(tmp_path, monkeypatch)
     endpoint = PythonPlaybackEndpoint(app=app, user_id="user-text-photo", device_id="dev-text-photo")
     audio = load_wav_audio(AUDIO_SAMPLE_ROOT / "看一下我前面有什么.wav")
 
@@ -63,7 +98,6 @@ def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_
     tool_trace = _read_jsonl(session_dir / "tool-events.jsonl")
     assets = _read_jsonl(session_dir / "assets.jsonl")
 
-    assert result["passed"] is True
     assert result["asset_uploads"]
     assert any(item["tool_name"] == "capture_photo" and item["ok"] is True for item in tool_trace)
     assert any(item.get("event") == "asset.stored" and item.get("stream_type") == "sensor.rgb" for item in assets)

@@ -7,7 +7,6 @@ server 启动时直接暴露给模型。
 | 模板 | 适用场景 | 关键边界 |
 | --- | --- | --- |
 | `find_object/tool.py` | 一次性视觉 Tool，例如请求当前画面后完成一次找物分析。 | 图片字节通过 `sensor.rgb` stream 进入 Asset Service，Tool 只拿资产引用。 |
-| `continuous_rgb_analyze/task.py` | 持续视觉 Task，例如找物、红绿灯或导航执行期视觉分析。 | 通过 `context.devices.sensors.rgb.stream()` 消费连续资产。 |
 | `notification_task/task.py` | 后台任务通知，例如计时到点、状态变化或异常提醒。 | 只提交结构化输出，不直接操作播放器或 WebSocket。 |
 
 开发约束：

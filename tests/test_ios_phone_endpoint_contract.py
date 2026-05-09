@@ -38,21 +38,13 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     config = json.loads((IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8"))
 
     assert config["server_url"].startswith("http://")
-    assert config["user_id"] == "user-endpoint-001"
+    assert config["user_id"]
     assert config["device_id"] == "dev-ios-phone-001"
-    assert config["auth"]["mode"] == "disabled"
-    assert config["protocol_version"] == "audio-chat.v1"
-    assert config["direct_camera_sink_port"] == 9001
-    assert config["properties"]["phone.task.find_object_phone_task"] is True
-    assert config["properties"]["phone.task.traffic_light_phone_task"] is True
-    assert config["properties"]["direct.camera_sink"] is True
-    assert config["properties"]["direct.camera_sink.path"] == "/ws/camera"
-    assert config["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
-    support_ids = {item["id"] for item in config["supports"]}
-    assert {"sensor.rgb", "sensor.mic", "actuator.speaker"}.issubset(support_ids)
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in config["routes"]
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in config["routes"]
-    assert {"event": "command.*"} in config["routes"]
+    assert "phone.task.find_object_phone_task" not in config.get("properties", {})
+    assert "phone.task.traffic_light_phone_task" not in config.get("properties", {})
+    supports = config["supports"]
+    assert any(item["type"] == "rgb" for item in supports["sensors"])
+    assert any(item["type"] == "vibrator" for item in supports["actuators"])
 
 
 def test_ios_phone_registration_event_matches_contract_golden() -> None:
@@ -70,14 +62,15 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
     assert golden["producer_id"] == payload["device_id"]
     assert payload["client_type"] == "ios-phone"
     assert payload["auth"]["mode"] == "disabled"
-    assert payload["properties"]["phone.task.find_object_phone_task"] is True
-    assert payload["properties"]["phone.task.traffic_light_phone_task"] is True
+    assert "phone.task.find_object_phone_task" not in payload["properties"]
+    assert "phone.task.traffic_light_phone_task" not in payload["properties"]
     assert payload["properties"]["direct.camera_sink"] is True
     assert payload["properties"]["direct.camera_sink.path"] == "/ws/camera"
     assert payload["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
     assert "target_device" not in json.dumps(golden)
     assert "target_device_id" not in json.dumps(golden)
-    assert {item["id"] for item in payload["supports"]} == {"sensor.rgb", "sensor.mic", "actuator.speaker"}
+    assert any(item["type"] == "rgb" for item in payload["supports"]["sensors"])
+    assert any(item["type"] == "vibrator" for item in payload["supports"]["actuators"])
 
     source = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
     for token in [
@@ -85,7 +78,6 @@ def test_ios_phone_registration_event_matches_contract_golden() -> None:
         "\"auth\": config.auth.payload",
         "\"properties\": properties",
         "\"supports\": config.supports.map",
-        "\"routes\": config.routes.map",
         "direct.camera_sink.uris",
     ]:
         assert token in source

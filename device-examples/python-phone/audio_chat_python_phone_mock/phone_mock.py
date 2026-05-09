@@ -91,63 +91,10 @@ class PhoneTaskHandler:
         raise NotImplementedError
 
 
-class FindObjectPhoneTaskHandler(PhoneTaskHandler):
-    """找物视觉任务 mock handler。
-
-    主要功能：读取命令输入中的目标名称和 RGB 帧数量，生成稳定的“找到目标”结果，
-    供 find_object 端侧任务和设备级回放使用。
-    """
-
-    task_type = "find_object_phone_task"
-
-    async def handle(self, endpoint: "NetworkPythonPhoneMockEndpoint", command: Event, frames: list[bytes]) -> PhoneTaskResult:
-        payload = dict(command.payload or {})
-        params = dict(payload.get("params") or {})
-        input_data = dict(params.get("input") or {})
-        target = str(input_data.get("target") or input_data.get("object_name") or "目标物").strip()
-        return PhoneTaskResult(
-            status="found",
-            message=f"已在 {len(frames)} 帧画面中找到 {target}",
-            data={
-                "target": target,
-                "found": True,
-                "frame_count": len(frames),
-                "source": "python-phone",
-                "bbox": {"x": 0.42, "y": 0.38, "width": 0.2, "height": 0.16},
-            },
-        )
-
-
-class TrafficLightPhoneTaskHandler(PhoneTaskHandler):
-    """红绿灯视觉任务 mock handler。
-
-    主要功能：按输入或配置返回稳定灯色，验证 traffic_light 端侧 phone task
-    事件和 stream 链路。
-    """
-
-    task_type = "traffic_light_phone_task"
-
-    async def handle(self, endpoint: "NetworkPythonPhoneMockEndpoint", command: Event, frames: list[bytes]) -> PhoneTaskResult:
-        payload = dict(command.payload or {})
-        params = dict(payload.get("params") or {})
-        input_data = dict(params.get("input") or {})
-        color = str(input_data.get("expected_color") or input_data.get("color") or "green").strip() or "green"
-        return PhoneTaskResult(
-            status="completed",
-            message=f"红绿灯识别结果：{color}",
-            data={
-                "color": color,
-                "confidence": 0.91,
-                "frame_count": len(frames),
-                "source": "python-phone",
-            },
-        )
-
-
 class PhoneTaskHandlerRegistry:
     """phone mock 任务 handler 注册表。
 
-    主要功能：内置端侧视觉任务 handler，并支持从配置包自动发现自定义 handler。
+    主要功能：支持从配置包自动发现自定义 handler；SDK 不内置具体业务视觉任务。
     """
 
     def __init__(self) -> None:
@@ -175,11 +122,9 @@ class PhoneTaskHandlerRegistry:
 
     @classmethod
     def with_builtins(cls, packages: list[str] | None = None) -> "PhoneTaskHandlerRegistry":
-        """创建带内置 handler 和可选自动发现结果的注册表。"""
+        """创建带可选自动发现结果的注册表。"""
 
         registry = cls()
-        registry.register(FindObjectPhoneTaskHandler())
-        registry.register(TrafficLightPhoneTaskHandler())
         for package in packages or []:
             registry.discover(package)
         return registry
@@ -450,11 +395,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             auth=auth,
             device_name=device_name,
             client_type=client_type,
-            properties=properties
-            or {
-                "phone.task.find_object_phone_task": True,
-                "phone.task.traffic_light_phone_task": True,
-            },
+            properties=properties or {},
             supports=supports
             or {
                 "sensors": [

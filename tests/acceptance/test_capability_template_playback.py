@@ -121,8 +121,8 @@ def build_for_blind_app(tmp_path, monkeypatch) -> AudioChatApp:
 def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_path, monkeypatch) -> None:
     """测试目标：验证“新增能力 -> 自动发现 -> 设备回放 -> 产物可检查”的闭环。
 
-    测试方法：启动测试 for-blind app，注册回放端点，依次调用 `capture_photo` Tool、
-    `timer` Task 和 `continuous_rgb_analyze` Task。
+    测试方法：启动测试 for-blind app，注册回放端点，依次调用 `capture_photo` Tool
+    和 `timer` Task。
     预期结果：能力无需修改 SDK 内部代码即可执行，runs 目录写入事件、stream、asset、
     tool、task、output 和 result 产物。
     """
@@ -148,22 +148,12 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
             input_data={"seconds": 1},
         )
     )
-    rgb_ref = asyncio.run(
-        app.task_engine.create(
-            task_type="continuous_rgb_analyze",
-            user_id="user-for-blind",
-            session_id=session_id,
-            input_data={"frame_limit": 2, "timeout_seconds": 1},
-        )
-    )
-
     result = {
-        "ok": capture.ok and timer_ref.state == "running" and rgb_ref.state == "running",
+        "ok": capture.ok and timer_ref.state == "running",
         "status": "ok",
         "tool": {"name": "capture_photo", "ok": capture.ok, "asset_count": len(capture.assets or [])},
         "tasks": [
             {"task_id": timer_ref.task_id, "task_type": timer_ref.task_type, "state": timer_ref.state},
-            {"task_id": rgb_ref.task_id, "task_type": rgb_ref.task_type, "state": rgb_ref.state},
         ],
         "endpoint_received_events": [event.event_name for event in endpoint.events],
         "output_chunk_count": len(endpoint.output_chunks),
@@ -186,7 +176,7 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
 
     assert capture.ok is True
     assert capture.assets
-    assert result["asset_count"] >= 3
+    assert result["asset_count"] >= 1
     assert result["output_chunk_count"] > 0
     assert "stream.control.open.requested" in result["endpoint_received_events"]
     assert missing == []
@@ -199,7 +189,6 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
 
     assert "capture_photo" in tool_events
     assert "timer.started" in task_signals
-    assert "continuous_rgb_analyze.frames_collected" in task_signals
     assert "asset.stored" in assets
     assert "play_now" in output_decisions
     assert final_result["ok"] is True

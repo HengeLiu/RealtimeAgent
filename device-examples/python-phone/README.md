@@ -9,8 +9,7 @@
 
 - 生产 `sensor.rgb`；按结构化 supports 声明 `sensor.rgb`，订阅由 server 编译生成
 - 消费 `actuator.speaker`、`actuator.haptic`
-- 声明 `phone.task.find_object_phone_task` 和 `phone.task.traffic_light_phone_task`
-- 内部路由由 server 根据结构化 `supports` 生成，用于接收 `stream.control.*`、`stream.output.*` 和 `command.*`
+- 内部路由由 server 根据结构化 `supports` 生成，用于接收 `stream.control.*`、`stream.output.*`
 - 通过 `command.*` 事件回报端侧任务 started / progress /
   completed / failed
 
@@ -26,7 +25,7 @@ command.requested
 ```
 
 payload 中包含 `task_type`、`task_id`、输入参数和所需 stream。Python phone mock
-通过内置 handler 或 `handler_packages` 自动发现 handler，执行后上报：
+通过 `handler_packages` 自动发现 handler，执行后上报：
 
 ```text
 command.accepted
@@ -35,10 +34,8 @@ command.completed
 command.failed
 ```
 
-当前内置 handler：
-
-- `find_object_phone_task`
-- `traffic_light_phone_task`
+当前 SDK 不内置具体业务 handler。找物和红绿灯依赖 YOLO 迁移，先在
+`for-blind-app` server 侧保留 mock Task；需要端侧执行时再按业务包注册 handler。
 
 RGB 帧来自 `vision_frames` 配置或默认测试 JPEG，并始终通过 `sensor.rgb` stream
 上传。事件日志、任务日志和帧日志会进入运行结果，便于对照真实 iOS 插件行为。

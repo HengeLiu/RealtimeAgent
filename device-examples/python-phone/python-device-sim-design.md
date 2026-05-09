@@ -280,8 +280,6 @@ rate_hz
 ```text
 compute.vision.describe
 compute.ocr.read_text
-phone.task.find_object_phone_task
-phone.task.traffic_light_phone_task
 ```
 
 事件形式：

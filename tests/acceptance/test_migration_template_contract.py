@@ -15,14 +15,13 @@ def _python_files() -> list[Path]:
 def test_migration_templates_exist_for_stage_h_capabilities() -> None:
     """测试目标：确认 H 线路要求的迁移样板已经存在。
 
-    测试方法：检查 find_object Tool、continuous_rgb_analyze Task 和 notification_task Task
-    三类样板文件。
+    测试方法：检查 capture_photo Tool、find_object Tool 和 notification_task Task 样板文件。
     预期结果：后续业务迁移可以复制样板开始，而不是重新猜 SDK 用法。
     """
 
     required = [
+        TEMPLATE_ROOT / "capture_photo" / "tool.py",
         TEMPLATE_ROOT / "find_object" / "tool.py",
-        TEMPLATE_ROOT / "continuous_rgb_analyze" / "task.py",
         TEMPLATE_ROOT / "notification_task" / "task.py",
         TEMPLATE_ROOT / "README.md",
     ]
@@ -94,16 +93,15 @@ def test_migration_templates_use_user_device_context_methods() -> None:
     """测试目标：确认样板确实通过 `context.devices` 使用设备能力。
 
     测试方法：检查各样板调用的公开设备上下文方法。
-    预期结果：find_object 使用资产请求，连续 RGB 使用事件和资产 watch，通知任务使用输出服务。
+    预期结果：capture_photo 和 find_object 使用单次 RGB 资产请求，通知任务使用输出服务。
     """
 
+    capture_photo = (TEMPLATE_ROOT / "capture_photo" / "tool.py").read_text(encoding="utf-8")
     find_object = (TEMPLATE_ROOT / "find_object" / "tool.py").read_text(encoding="utf-8")
-    continuous = (TEMPLATE_ROOT / "continuous_rgb_analyze" / "task.py").read_text(encoding="utf-8")
     notification = (TEMPLATE_ROOT / "notification_task" / "task.py").read_text(encoding="utf-8")
 
+    assert "context.devices.sensors.rgb.one(" in capture_photo
     assert "context.devices.sensors.rgb.one(" in find_object
-    assert "context.devices.commands.call(" in continuous
-    assert "context.devices.sensors.rgb.stream(" in continuous
     assert "context.output.say(" in notification
 
 
@@ -116,8 +114,8 @@ def test_phase3_migration_guide_references_templates_and_constraints() -> None:
 
     guide = (ROOT / "docs" / "phase3-migration-guide.md").read_text(encoding="utf-8")
     for expected in [
+        "app-examples/for-blind-app/templates/capture_photo/tool.py",
         "app-examples/for-blind-app/templates/find_object/tool.py",
-        "app-examples/for-blind-app/templates/continuous_rgb_analyze/task.py",
         "app-examples/for-blind-app/templates/notification_task/task.py",
         "ToolDeviceFacade",
         "不允许硬编码 device_id",

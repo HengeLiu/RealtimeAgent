@@ -11,9 +11,7 @@
       "direct.camera_sink": true,
       "direct.camera_sink.frame_format": "audio_chat.direct_frame.v1",
       "direct.camera_sink.path": "/ws/camera",
-      "direct.camera_sink.port": 9001,
-      "phone.task.find_object_phone_task": true,
-      "phone.task.traffic_light_phone_task": true
+      "direct.camera_sink.port": 9001
     },
     "client_type": "ios-phone",
     "device_id": "dev-ios-phone-001",

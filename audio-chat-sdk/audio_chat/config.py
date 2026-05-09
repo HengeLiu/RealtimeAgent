@@ -334,6 +334,19 @@ def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _known(data: dict[str, Any], keys: set[str]) -> dict[str, Any]:
+    """只保留配置模型明确支持的字段。
+
+    主要逻辑：YAML 中允许为未来扩展保留额外字段；加载当前 SDK 配置对象时只把
+    已知字段传入 dataclass，避免未知字段导致启动失败。
+    参数：`data` 为原始配置片段，`keys` 为当前模型支持的字段名。
+    返回值：过滤后的配置字典。
+    异常情况：无。
+    """
+
+    return {key: value for key, value in dict(data or {}).items() if key in keys}
+
+
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     text = data.setdefault("agent", {}).setdefault("text", {})

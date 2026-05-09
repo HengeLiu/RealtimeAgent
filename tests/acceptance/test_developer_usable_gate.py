@@ -29,8 +29,8 @@ def test_for_blind_app_example_exists_with_tool_and_task_templates(monkeypatch) 
     tools = ToolAutoDiscovery().discover(["capabilities"], recursive=True)
     tasks = TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
-    assert "echo_text" in {tool.name for tool in tools}
-    assert {"timer", "continuous_rgb_analyze"}.issubset({task.task_type for task in tasks})
+    assert {"capture_photo", "query_route_plan", "search_web"} <= {tool.name for tool in tools}
+    assert {"find_object_task", "traffic_light_task", "timer_task"}.issubset({task.task_type for task in tasks})
 
 
 def test_device_playback_acceptance_and_artifact_schema_exist() -> None:

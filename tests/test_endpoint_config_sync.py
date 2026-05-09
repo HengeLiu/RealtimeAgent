@@ -108,10 +108,10 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     configs = [phone, glass, web, ios, {"user_id": esp32.user_id, "device_id": esp32.device_id}]
     assert {config["user_id"] for config in configs} == {"user-shared"}
     assert len({config["device_id"] for config in configs}) == len(configs)
-    assert phone["properties"]["phone.task.find_object_phone_task"] is True
+    assert "phone.task.find_object_phone_task" not in phone.get("properties", {})
     assert {item["id"] for item in phone["supports"]} >= {"sensor.rgb", "actuator.speaker"}
     assert esp32.device_id == "dev-esp32-s3-001"
-    assert ios["properties"]["phone.task.find_object_phone_task"] is True
+    assert "phone.task.find_object_phone_task" not in ios.get("properties", {})
     assert {item["id"] for item in ios["supports"]} >= {"sensor.rgb", "sensor.mic", "actuator.speaker"}
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in ios["routes"]
 
