@@ -197,7 +197,6 @@ class AssetService:
         control_service: ControlService,
         stream_service: StreamService,
         recorder: RunRecorder,
-        root: str | Path | None = None,
         request_timeout_seconds: float = 5.0,
         default_ttl_seconds: float = 60.0,
         max_asset_bytes: int = 10485760,
@@ -205,7 +204,6 @@ class AssetService:
         self.control_service = control_service
         self.stream_service = stream_service
         self.recorder = recorder
-        # `root` 保留为旧配置兼容参数；新版资产必须跟随 runs/<user_id>/<device_id>。
         self.store = AssetStore(recorder.runs_root, recorder=recorder)
         self.request_timeout_seconds = request_timeout_seconds
         self.default_ttl_seconds = default_ttl_seconds

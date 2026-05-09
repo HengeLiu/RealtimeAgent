@@ -587,7 +587,7 @@ class RunRecorder:
         self._append_jsonl(self.runs_root / "command-events.jsonl", record)
         log_info(
             self.logger,
-            f"设备命令 {record.get('command_name')}",
+            f"设备命令 {record.get('command')}",
             LogContext(
                 user_id=record.get("user_id"),
                 session_id=session_id,

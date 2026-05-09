@@ -1,6 +1,6 @@
 # 设备能力与 Context API 开发说明
 
-当前架构只接受结构化 `supports`，不再兼容 旧数组 supports。Tool / Task 只能使用 typed facade：
+当前架构只接受结构化 `supports`。Tool / Task 只能使用 typed facade：
 
 - Tool：`context.devices.sensors.rgb.one()`、`context.devices.actuators.vibrator.one()`、`context.devices.commands.call()`。
 - Task：在 Tool 能力基础上额外开放 `.stream()` 和 `commands.start()/subscribe_result()`。
@@ -69,4 +69,4 @@ await context.output.say("已完成画面分析", priority="normal")
 - `stream.control.open.requested`
 - `stream.control.close.requested`
 
-不再存在 configure 兼容事件。
+不再存在 configure 事件。

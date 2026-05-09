@@ -84,8 +84,8 @@ I2S、AEC、摄像头和串口诊断。
 无 ESP-IDF 或无硬件时可以先做无副作用检查：
 
 ```bash
-uv run audio-chat.esp32.build --dry-run --build-only
-uv run audio-chat.esp32.monitor --dry-run --monitor-only --port /dev/tty.usbmodemXXXX
+uv run audio-chat.esp32.build --dry-run
+uv run audio-chat.esp32.monitor --dry-run --port /dev/tty.usbmodemXXXX
 ```
 
 有 ESP-IDF 与真机时再执行：

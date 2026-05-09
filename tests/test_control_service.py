@@ -189,7 +189,7 @@ def test_registration_validator_applies_subscription_config() -> None:
 def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
     """测试目标：验证订阅 filter 能匹配信封字段、payload 字段和数组值。
 
-    测试方法：注册一个同时过滤 producer_id、payload.command_name 和
+    测试方法：注册一个同时过滤 producer_id、payload.command 和
     payload.tags 的设备，再发布匹配事件。
     预期结果：数组包含匹配生效，事件只投递给符合订阅条件的设备。
     """
@@ -204,7 +204,7 @@ def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
                     "event": "command.requested",
                     "filter": {
                         "producer_id": "server-main",
-                        "payload.command_name": "audio.play",
+                        "payload.command": "audio.play",
                         "payload.tags": "speaker",
                     },
                 }
@@ -218,12 +218,12 @@ def test_subscription_filter_matches_envelope_payload_and_arrays() -> None:
             event_name="command.requested",
             user_id="user-001",
             producer_id="server-main",
-            payload={"command_name": "audio.play", "tags": ["speaker", "debug"]},
+            payload={"command": "audio.play", "tags": ["speaker", "debug"]},
         )
     )
 
     assert result.matched_device_ids == ("dev-speaker",)
-    assert [event.payload["command_name"] for event in endpoint.events] == ["audio.play"]
+    assert [event.payload["command"] for event in endpoint.events] == ["audio.play"]
 
 
 def test_route_diagnostics_explain_subscription_miss() -> None:

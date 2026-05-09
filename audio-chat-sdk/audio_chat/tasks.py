@@ -5,8 +5,8 @@ import inspect
 import asyncio
 import json
 import pkgutil
-import threading
 import time
+import threading
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -107,6 +107,7 @@ class DeviceContext(ToolContext):
     不直接操作消息、底层 WebSocket 或 speaker。
     """
 
+    devices: Any
     task_ref: TaskRef
     bridge: "TaskEventBridge | None" = None
     engine: "TaskEngine | None" = None
@@ -180,11 +181,20 @@ class DeviceContext(ToolContext):
             requires_agent_decision=requires_agent_decision,
             allow_direct_notify=allow_direct_notify,
         )
+        if delay_seconds > 0 and self.engine is not None:
+            self.engine.schedule_event(
+                task_id=self.task_ref.task_id,
+                event_name=event_name,
+                payload=dict(payload or {}),
+                delay_seconds=delay_seconds,
+                priority=priority,
+                requires_agent_decision=requires_agent_decision,
+                allow_direct_notify=allow_direct_notify,
+            )
+            return self.task_ref
         if delay_seconds > 0:
             def _fire_delayed_event() -> None:
-                if self.engine is not None:
-                    asyncio.run(self.engine.handle_event(event))
-                elif self.bridge is not None:
+                if self.bridge is not None:
                     self.bridge.handle_event(event)
 
             timer = threading.Timer(delay_seconds, _fire_delayed_event)
@@ -198,7 +208,16 @@ class DeviceContext(ToolContext):
         return None
 
 
-TaskContext = DeviceContext
+@dataclass(kw_only=True)
+class TaskContext(DeviceContext):
+    """Task 执行上下文。
+
+    主要功能：作为业务 Task 的公开上下文类型，继承 `DeviceContext` 的长时设备能力、
+    输出、资产和任务状态流转方法。保留独立类而不是别名，避免 Context 分层只停留在
+    兼容实现。
+    """
+
+    devices: Any = None
 
 
 class BaseTask:
@@ -598,9 +617,48 @@ class TaskEngine:
         self.asset_context_factory = asset_context_factory
         self.max_running_per_user = max_running_per_user
         self._instances: dict[str, BaseTask] = {}
+        self._scheduled_events: dict[str, threading.Timer] = {}
+        self._schedule_metadata: dict[str, dict[str, Any]] = {}
+        self._schedule_lock = threading.Lock()
 
     def register(self, task_cls: type[BaseTask]) -> None:
         self.registry.register(task_cls)
+
+    def list_task_types(self) -> list[dict[str, Any]]:
+        """列出当前已注册 Task 类型和运行规格。"""
+
+        rows: list[dict[str, Any]] = []
+        for task_type in self.registry.list_task_types():
+            task_cls = self.registry.get(task_type)
+            spec = task_cls.spec()
+            rows.append(
+                {
+                    "task_type": spec.task_type,
+                    "description": str(getattr(task_cls, "description", "") or ""),
+                    "version": spec.version,
+                    "timeout_seconds": spec.timeout_seconds,
+                    "cancel_supported": spec.cancel_supported,
+                    "max_running_per_user": spec.max_running_per_user,
+                }
+            )
+        return rows
+
+    def list_tasks(self, *, user_id: str | None = None, include_terminal: bool = True) -> list[TaskRef]:
+        """列出任务快照。
+
+        参数：`user_id` 可限制为单个用户，`include_terminal` 控制是否包含终态任务。
+        返回值：符合条件的 `TaskRef` 列表。
+        """
+
+        refs: list[TaskRef] = []
+        for ref in self.store.list_tasks():
+            ref = self._expire_if_needed(ref)
+            if user_id is not None and ref.metadata.get("user_id") != user_id:
+                continue
+            if not include_terminal and ref.state in TERMINAL_TASK_STATES:
+                continue
+            refs.append(ref)
+        return refs
 
     def query(self, task_id: str) -> TaskRef:
         """查询任务引用。
@@ -738,6 +796,119 @@ class TaskEngine:
                 event,
             )
         return self.query(event.task_id)
+
+    def schedule_event(
+        self,
+        *,
+        task_id: str,
+        event_name: str,
+        payload: dict | None = None,
+        delay_seconds: float = 0,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        priority: str = "normal",
+        requires_agent_decision: bool = False,
+        allow_direct_notify: bool = False,
+    ) -> dict[str, Any]:
+        """统一调度一次任务事件。
+
+        主要逻辑：
+        1. 校验任务存在和延迟参数。
+        2. 由 TaskEngine 持有定时器，便于列出、取消和关闭。
+        3. 到点后重新进入 `handle_event()`，让业务 Task 的 `on_event()` 处理。
+        """
+
+        ref = self.query(task_id)
+        if ref.state in TERMINAL_TASK_STATES:
+            raise AudioChatError(f"cannot schedule event for terminal task: {task_id}", code=ErrorCode.PROTOCOL_ERROR)
+        normalized_event_name = event_name.strip()
+        if not normalized_event_name:
+            raise AudioChatError("event_name is required", code=ErrorCode.INVALID_ARGUMENT)
+        delay = float(delay_seconds)
+        if delay < 0:
+            raise AudioChatError("delay_seconds must be >= 0", code=ErrorCode.INVALID_ARGUMENT)
+        schedule_id = new_id("task_schedule")
+        resolved_user_id = user_id if user_id is not None else str(ref.metadata.get("user_id") or "")
+        resolved_session_id = session_id if session_id is not None else (str(ref.metadata.get("session_id") or "") or None)
+        event = TaskEvent(
+            task_id=task_id,
+            task_type=ref.task_type,
+            event_name=normalized_event_name,
+            user_id=resolved_user_id,
+            session_id=resolved_session_id,
+            payload=dict(payload or {}),
+            priority=priority,
+            requires_agent_decision=requires_agent_decision,
+            allow_direct_notify=allow_direct_notify,
+        )
+        metadata = {
+            "schedule_id": schedule_id,
+            "task_id": task_id,
+            "task_type": ref.task_type,
+            "event_name": normalized_event_name,
+            "delay_seconds": delay,
+            "due_at": time.time() + delay,
+            "user_id": resolved_user_id,
+            "session_id": resolved_session_id,
+        }
+
+        def _fire() -> None:
+            with self._schedule_lock:
+                self._scheduled_events.pop(schedule_id, None)
+                self._schedule_metadata.pop(schedule_id, None)
+            asyncio.run(self.handle_event(event))
+
+        timer = threading.Timer(delay, _fire)
+        timer.daemon = True
+        with self._schedule_lock:
+            self._scheduled_events[schedule_id] = timer
+            self._schedule_metadata[schedule_id] = metadata
+        self.emit_event(
+            TaskEvent(
+                task_id=task_id,
+                task_type=ref.task_type,
+                event_name="task.event.scheduled",
+                user_id=resolved_user_id,
+                session_id=resolved_session_id,
+                payload=metadata,
+                allow_direct_notify=False,
+            )
+        )
+        timer.start()
+        return dict(metadata)
+
+    def cancel_scheduled_event(self, schedule_id: str) -> bool:
+        """取消尚未触发的调度事件。"""
+
+        with self._schedule_lock:
+            timer = self._scheduled_events.pop(schedule_id, None)
+            self._schedule_metadata.pop(schedule_id, None)
+        if timer is None:
+            return False
+        timer.cancel()
+        return True
+
+    def list_scheduled_events(self) -> list[dict[str, Any]]:
+        """列出当前仍在等待触发的调度事件。"""
+
+        with self._schedule_lock:
+            rows = []
+            for schedule_id, metadata in sorted(self._schedule_metadata.items()):
+                timer = self._scheduled_events.get(schedule_id)
+                row = dict(metadata)
+                row["alive"] = bool(timer and timer.is_alive())
+                rows.append(row)
+            return rows
+
+    def shutdown(self) -> None:
+        """关闭 TaskEngine 管理的后台调度器。"""
+
+        with self._schedule_lock:
+            timers = list(self._scheduled_events.values())
+            self._scheduled_events.clear()
+            self._schedule_metadata.clear()
+        for timer in timers:
+            timer.cancel()
 
     async def cancel(self, task_id: str, *, reason: str = "cancelled") -> TaskRef:
         """取消任务。

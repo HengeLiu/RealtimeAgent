@@ -147,6 +147,11 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
         properties["device_role"] = data["device_role"]
     if data.get("tags") is not None:
         properties["tags"] = data["tags"]
+    properties["audio_chat.support_ids"] = [item["id"] for item in supports]
+    properties["audio_chat.support_defaults"] = {
+        item["id"]: _support_defaults(item)
+        for item in supports
+    }
     payload = {
         "device_id": data["device_id"],
         "name": data.get("name", data.get("device_name", data["device_id"])),
@@ -154,7 +159,7 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
         "client_type": data.get("client_type", (data.get("runtime") or {}).get("platform", "unknown")),
         "runtime": dict(data.get("runtime") or {}),
         "properties": properties,
-        "supports": supports,
+        "supports": dict(data.get("supports") or {}),
         "subscriptions": _compile_normalized_supports_to_subscriptions(supports),
     }
     if data.get("sdk_version"):
@@ -186,15 +191,15 @@ def compile_registration_payload(payload: dict[str, Any]) -> dict[str, Any]:
     explicit = result.get("subscriptions") or []
     if not isinstance(explicit, list):
         raise ValueError("subscriptions must be a list")
-    result["supports"] = normalized
+    result["supports"] = supports
     result["subscriptions"] = _dedupe_subscriptions([*compiled, *explicit])
     properties = dict(result.get("properties") or {})
     if isinstance(result.get("runtime"), dict):
         properties.setdefault("runtime", dict(result["runtime"]))
-    properties["audio_chat.support_ids"] = [item["id"] for item in result["supports"]]
+    properties["audio_chat.support_ids"] = [item["id"] for item in normalized]
     properties["audio_chat.support_defaults"] = {
         item["id"]: _support_defaults(item)
-        for item in result["supports"]
+        for item in normalized
     }
     result["properties"] = properties
     return result
@@ -222,7 +227,7 @@ def _expand_structured_supports(supports: Any) -> Any:
             raise ValueError("supports.sensors items must be objects")
         sensor_type = item.get("type")
         support_id = f"sensor.{sensor_type}"
-        data = _structured_support_item_to_legacy(item, support_id=support_id)
+        data = _structured_support_item_to_standard(item, support_id=support_id)
         expanded.append(data)
     for item in supports.get("actuators") or []:
         if not isinstance(item, dict):
@@ -230,20 +235,20 @@ def _expand_structured_supports(supports: Any) -> Any:
         actuator_type = item.get("type")
         support_type = "haptic" if actuator_type == "vibrator" else actuator_type
         support_id = f"actuator.{support_type}"
-        data = _structured_support_item_to_legacy(item, support_id=support_id)
+        data = _structured_support_item_to_standard(item, support_id=support_id)
         if actuator_type == "vibrator":
             data.setdefault("commands", ["vibrate"])
         expanded.append(data)
     return expanded
 
 
-def _structured_support_item_to_legacy(item: dict[str, Any], *, support_id: str) -> dict[str, Any]:
+def _structured_support_item_to_standard(item: dict[str, Any], *, support_id: str) -> dict[str, Any]:
     """把结构化能力条目转换成内部标准格式。
 
     主要逻辑：设备开发者按 `type/default/external` 描述能力；server 在入口展开成
-    标准能力 ID，避免公开协议继续暴露旧 旧数组 supports。
+    标准能力 ID，避免公开协议暴露内部路由字段。
     参数：`item` 为结构化能力条目；`support_id` 为标准语义 ID。
-    返回值：可被旧校验器和订阅编译器识别的能力条目。
+    返回值：可被校验器和订阅编译器识别的能力条目。
     异常情况：本函数只做字段映射，非法值由后续校验阶段统一抛出。
     """
 
@@ -304,7 +309,7 @@ def _normalize_support_item(item: dict[str, Any]) -> dict[str, Any]:
 def _support_defaults(item: dict[str, Any]) -> dict[str, Any]:
     """提取能力默认调用参数。
 
-    主要逻辑：结构化 supports 会先被展开成内部兼容字段；这里把可作为 API 默认
+    主要逻辑：结构化 supports 会先被展开成内部标准字段；这里把可作为 API 默认
     params 的字段保存到设备 properties，供 typed device API 在调用时自动合并。
     """
 

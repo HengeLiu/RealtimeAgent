@@ -46,7 +46,7 @@ uv run python scripts/acceptance_check.py device-api-upgrade-capabilities \
 
 ## 边界
 
-- 不新增点对点 device RPC；当前获取画面使用 `await context.devices.sensors.rgb.one(...)`，`capture_photo` 仅作为历史版本 迁移兼容入口。
+- 不新增点对点 device RPC；当前获取画面使用 `await context.devices.sensors.rgb.one(...)`。
 - 找物、红绿灯这类手机视觉能力通过当前设备上下文和 stream 对接；
   业务代码不得直接操作 phone 连接或导入内部 service。
 - 图片、视频、IMU、音频字节走 stream，并以 `AssetRef` 引用结果。

@@ -71,10 +71,6 @@ def _run_idf_action(prog: str, action: str, argv: list[str] | None) -> None:
     parser.add_argument("--port", default="", help="串口端口，flash/monitor 时使用")
     parser.add_argument("--idf-py", default="idf.py", help="idf.py 命令路径")
     parser.add_argument("--dry-run", action="store_true", help="只输出诊断，不执行 idf.py")
-    if action == "build":
-        parser.add_argument("--build-only", action="store_true", help="兼容老 SDK 启动口径；等价于 build")
-    if action == "monitor":
-        parser.add_argument("--monitor-only", action="store_true", help="兼容老 SDK 启动口径；等价于 monitor")
     args = parser.parse_args(argv)
 
     project_dir = _resolve_audio_root_path(args.project_dir)

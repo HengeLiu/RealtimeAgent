@@ -26,12 +26,12 @@ def test_esp32_reference_firmware_manifest_is_complete() -> None:
 def test_esp32_build_dry_run_reports_command_with_reference_project() -> None:
     """测试目标：确认 ESP32 build 命令能在无副作用模式下使用参考工程。
 
-    测试方法：执行 `audio-chat.esp32.build --dry-run --build-only`。
+    测试方法：执行 `audio-chat.esp32.build --dry-run`。
     预期结果：命令返回 0，并输出将要执行的 idf.py build 命令；不要求本机安装 ESP-IDF。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.esp32.build", "--dry-run", "--build-only"],
+        ["uv", "run", "audio-chat.esp32.build", "--dry-run"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -43,15 +43,15 @@ def test_esp32_build_dry_run_reports_command_with_reference_project() -> None:
     assert "build" in completed.stdout
 
 
-def test_esp32_monitor_dry_run_accepts_monitor_only_flag() -> None:
-    """测试目标：冻结老 SDK monitor-only 口径的兼容入口。
+def test_esp32_monitor_dry_run_reports_command_with_reference_project() -> None:
+    """测试目标：确认 ESP32 monitor 命令能在无副作用模式下使用参考工程。
 
-    测试方法：执行 `audio-chat.esp32.monitor --dry-run --monitor-only`。
+    测试方法：执行 `audio-chat.esp32.monitor --dry-run`。
     预期结果：命令返回 0，并输出将要执行的 monitor 命令。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.esp32.monitor", "--dry-run", "--monitor-only", "--port", "/dev/tty.fake"],
+        ["uv", "run", "audio-chat.esp32.monitor", "--dry-run", "--port", "/dev/tty.fake"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,

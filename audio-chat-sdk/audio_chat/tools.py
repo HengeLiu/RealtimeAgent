@@ -33,23 +33,23 @@ class AmbiguousDeviceError(AudioChatError):
 
 
 class DeviceBusyError(AudioChatError):
-    """设备忙异常。当前版本先作为公开错误类型预留。"""
+    """设备忙异常。"""
 
 
 class CapabilityNotSupportedError(AudioChatError):
-    """设备能力不支持异常。当前版本先作为公开错误类型预留。"""
+    """设备能力不支持异常。"""
 
 
 class StreamTimeoutError(AudioChatError):
-    """数据流超时异常。当前版本先作为公开错误类型预留。"""
+    """数据流超时异常。"""
 
 
 class CommandFailedError(AudioChatError):
-    """设备命令失败异常。当前版本先作为公开错误类型预留。"""
+    """设备命令失败异常。"""
 
 
 class PlaybackRejectedError(AudioChatError):
-    """播放请求被拒绝异常。当前版本先作为公开错误类型预留。"""
+    """播放请求被拒绝异常。"""
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class ToolResult:
 
     @property
     def content(self) -> Any:
-        """历史测试和旧调用方读取的 `content` 字段。"""
+        """返回 Tool 结果主体数据。"""
 
         return self.data
 
@@ -898,27 +898,30 @@ class CommandResult:
 class CommandEvent:
     """设备长命令事件。
 
-    主要功能：描述 `CommandHandle.results()` 产生的远程命令状态。当前版本先提供
-    结构和最小 completed 事件，后续再接入真实设备回报订阅。
+    主要功能：描述 `CommandHandle.results()` 产生的远程命令状态。
     """
 
     command_id: str
     name: str
     state: str
     data: dict = field(default_factory=dict)
-    created_at: float = field(default_factory=time.time)
+    created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
 
 @dataclass(frozen=True)
 class DeviceLease:
     """设备能力选择结果。
 
-    主要功能：作为 SDK 内部 selector 解析结果，封装能力、selector、设备集合和
-    默认参数，避免 typed API 后续步骤重新选择设备。
+    主要功能：作为 SDK 内部 selector 解析结果，封装 lease_id、设备快照、内部设备集合
+    和默认参数，避免 typed API 后续步骤重新选择设备。
     """
 
+    lease_id: str
+    user_id: str
     capability: str | None
     selector: dict
+    device_snapshot: tuple[DeviceSnapshot, ...]
+    expires_at_ms: int
     devices: tuple[Any, ...]
     params: dict = field(default_factory=dict)
 
@@ -926,8 +929,7 @@ class DeviceLease:
 class CommandHandle:
     """设备长命令句柄。
 
-    主要功能：给 Task 维护远程设备任务状态提供稳定对象。当前过渡说明会先返回一次
-    accepted/running 事件，并在 `stop()` 时发送停止命令。
+    主要功能：给 Task 维护远程设备任务状态提供稳定对象，并在 `stop()` 时发送停止命令。
     """
 
     def __init__(self, *, context: "DeviceRuntime", command_id: str, name: str, selector: dict | None, params: dict | None) -> None:
@@ -944,7 +946,7 @@ class CommandHandle:
         主要逻辑：只转发端侧 `command.*` 回执，直到 completed、failed 或 stop。
         """
 
-        async for event in self._context.commands.subscribe_result(self.command_id):
+        async for event in self._context._command_result_broker().subscribe(self.command_id):
             yield event
             if event.state in {"completed", "failed"}:
                 break
@@ -956,7 +958,7 @@ class CommandHandle:
         """
 
         self._stopped = True
-        return await self._context.commands.call(
+        return await _CommandsFacade(context=self._context, allow_long_running=True).call(
             name=f"{self.name}.stop",
             selector=self.selector,
             params={"command_id": self.command_id, "reason": reason},
@@ -1006,7 +1008,7 @@ class CommandResultBroker:
         state = str(event.event_name).rsplit(".", 1)[-1]
         command_event = CommandEvent(
             command_id=command_id,
-            name=str(payload.get("command") or payload.get("command_name") or ""),
+            name=str(payload.get("command") or ""),
             state=state,
             data={"producer_id": event.producer_id, **payload},
         )
@@ -1296,14 +1298,14 @@ class _CommandsFacade:
         command_id = new_id("cmd")
         result = self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
-            payload={"command_id": command_id, "command": name, **dict(params or {})},
+            payload={"command_id": command_id, "command": name, "params": dict(params or {})},
             devices=devices,
         )
         self._context._record_command_trace(
             {
                 "event": "command.call.requested",
                 "command_id": command_id,
-                "command_name": name,
+                "command": name,
                 "selector": dict(selector or {}),
                 "device_count": len(devices),
                 "delivered_count": result.delivered_count,
@@ -1345,7 +1347,7 @@ class _CommandsFacade:
             {
                 "event": "command.call.completed",
                 "command_id": command_id,
-                "command_name": name,
+                "command": name,
                 "ok": command_result.ok,
                 "device_count": len(devices),
                 "completed_count": len(completed_events),
@@ -1370,14 +1372,14 @@ class _CommandsFacade:
         command_id = new_id("cmd")
         self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
-            payload={"command_id": command_id, "command": name, "mode": "start", **dict(params or {})},
+            payload={"command_id": command_id, "command": name, "mode": "start", "params": dict(params or {})},
             devices=devices,
         )
         self._context._record_command_trace(
             {
                 "event": "command.start.requested",
                 "command_id": command_id,
-                "command_name": name,
+                "command": name,
                 "selector": dict(selector or {}),
                 "device_count": len(devices),
             }
@@ -1411,7 +1413,7 @@ class ToolDeviceFacade:
     def _get_devices(self) -> list[DeviceSnapshot]:
         """供 SDK 内置系统工具读取设备快照，普通业务代码不应依赖。"""
 
-        return self._context.get_devices()
+        return self._context._device_snapshots()
 
     def _publish_control_event(
         self,
@@ -1482,6 +1484,15 @@ def _selector_value(device: Any, properties: dict, key: str) -> Any:
     return properties.get(dotted_key)
 
 
+FORBIDDEN_SELECTOR_FIELDS = {
+    "device_id",
+    "target_device",
+    "target_device_id",
+    "source_device",
+    "source_device_id",
+}
+
+
 def _device_support_defaults(device: Any, capability: str | None) -> dict:
     """读取设备注册声明中的能力默认参数。"""
 
@@ -1500,19 +1511,14 @@ class DeviceRuntime:
 
     主要功能：承接 typed facade 的设备解析、事件投递、stream 打开和资产查询；
     不作为公开 API 导出，业务代码只能看到 `ToolDeviceFacade` 或 `TaskDeviceFacade`。
-    主要方法：`publish_event()`、`open_output_stream()`、`request_asset()`、
-    `query_assets()`、`watch_assets()`、`submit_text()`、`submit_audio()`。
     """
 
     def __init__(self, *, user_id: str, app, allow_long_running: bool = False) -> None:
         self.user_id = user_id
         self._app = app
         self._allow_long_running = allow_long_running
-        self.sensors = _SensorsFacade(context=self, allow_stream=allow_long_running)
-        self.actuators = _ActuatorsFacade(context=self, allow_stream=allow_long_running)
-        self.commands = _CommandsFacade(context=self, allow_long_running=allow_long_running)
 
-    def get_devices(self) -> list[DeviceSnapshot]:
+    def _device_snapshots(self) -> list[DeviceSnapshot]:
         """返回当前用户 active device set 的只读快照。
 
         主要逻辑：从 Control Service 读取在线设备，返回身份、名称、properties 和
@@ -1532,67 +1538,6 @@ class DeviceRuntime:
                 )
             )
         return devices
-
-    def publish_event(
-        self,
-        event_name: str | EventName,
-        payload: dict | None = None,
-        stream_type: str | StreamType | None = None,
-        selection: str = "all",
-        timeout_seconds: float | None = None,
-    ) -> PublishResult:
-        """发布协议控制事件。
-
-        主要逻辑：事件按 user_id、订阅、stream_type 和 selection 匹配端侧；
-        业务代码不能指定 device_id。
-        参数：`event_name` 为协议事件名，`payload` 为事件载荷，`stream_type` 为可选
-        stream 过滤，`selection` 为选择策略，`timeout_seconds` 预留给未来 ACK 等待，
-        本阶段不阻塞。
-        返回值：`PublishResult`。
-        异常情况：事件非法或 selection 非法时抛出 `ValueError`。
-        """
-        _ = timeout_seconds
-        event = Event(
-            event_name=event_name,
-            user_id=self.user_id,
-            producer_id=SERVER_PRODUCER_ID,
-            stream_type=stream_type,
-            payload=dict(payload or {}),
-        )
-        return self._app.control_service.publish_matching(
-            event,
-            selection=selection,
-        )
-
-    def open_output_stream(
-        self,
-        stream_type: str,
-        codec: str,
-        metadata: dict | None = None,
-        selection: str = "all",
-    ) -> OutputStreamWriter:
-        """打开 output stream 并返回写入器。
-
-        主要逻辑：创建 `actuator.*` stream，底层按订阅和 selection 选出消费端，
-        并把后续 chunk 固定投递到这批设备。
-        参数：`stream_type` 为 output stream 类型，`codec` 为编码，`metadata` 为可选
-        元信息，`selection` 为设备匹配策略。
-        返回值：`OutputStreamWriter`。
-        异常情况：stream 类型或格式非法时由 Stream Service 抛出异常。
-        """
-        _ = metadata
-        session_id = self._app.active_session_id(self.user_id)
-        format = StreamFormat(codec=codec)
-        handle = self._app.stream_service.open_stream(
-            user_id=self.user_id,
-            session_id=session_id,
-            stream_type=stream_type,
-            producer_id=SERVER_PRODUCER_ID,
-            format=format,
-            stream_id=new_id("stream_out"),
-            selection=selection,
-        )
-        return OutputStreamWriter(context=self, stream_id=handle.stream_id, session_id=session_id, stream_type=stream_type, format=format)
 
     def _open_output_stream_for_devices(
         self,
@@ -1624,70 +1569,6 @@ class DeviceRuntime:
             broker = CommandResultBroker()
             setattr(self._app, "_command_result_broker", broker)
         return broker
-
-    def capture_photo(
-        self,
-        *,
-        reason: str = "",
-        timeout_seconds: float | None = None,
-        freshness_seconds: float = 0,
-        configure_payload: dict | None = None,
-    ) -> AssetRef | None:
-        """请求端侧通过 `sensor.rgb` stream 采集一张图片。
-
-        主要逻辑：这是历史版本 `capture_photo()` 的迁移便捷入口，底层仍然调用
-        `request_asset("sensor.rgb")`，由控制事件触发端侧通过 stream 上传 JPEG。
-        参数：`reason` 为抓拍原因，`timeout_seconds` 为等待超时，`freshness_seconds`
-        为允许复用缓存的最大秒数，`configure_payload` 为端侧补充配置。
-        返回值：命中或采集成功时返回 `AssetRef`，超时时返回 `None`。
-        异常情况：端侧配置 payload 包含媒体字节或控制事件非法时抛出异常。
-        """
-
-        payload = {"reason": reason} if reason else {}
-        payload.update(dict(configure_payload or {}))
-        return self.request_asset(
-            stream_type="sensor.rgb",
-            freshness_seconds=freshness_seconds,
-            configure_payload=payload,
-            timeout_seconds=timeout_seconds,
-        )
-
-    def latest_asset(self, stream_type: str | StreamType, *, freshness_seconds: float | None = None) -> AssetRef | None:
-        """读取指定 stream 类型的最新内部缓存引用。
-
-        主要逻辑：只查询 server 对 sensor stream 结果的内部缓存，不主动发布控制事件。
-        参数：`stream_type` 为 sensor stream 类型，`freshness_seconds` 为可选最大年龄。
-        返回值：存在时返回最新 `AssetRef`，否则返回 `None`。
-        异常情况：无。
-        """
-
-        refs = self.query_assets(stream_type=stream_type, freshness_seconds=freshness_seconds)
-        return refs[-1] if refs else None
-
-    def request_asset(
-        self,
-        stream_type: str | StreamType,
-        freshness_seconds: float = 0,
-        configure_payload: dict | None = None,
-        timeout_seconds: float | None = None,
-    ) -> AssetRef | None:
-        """请求单个传感器 stream 的内部缓存引用。
-
-        主要逻辑：委托内部缓存服务先查 freshness 缓存，未命中时发布
-        `stream.control.open.requested`，等待端侧通过 `sensor.*` stream 上传。
-        参数：`stream_type` 为 sensor stream，`freshness_seconds` 为缓存新鲜度，
-        `configure_payload` 为配置载荷，`timeout_seconds` 为等待超时。
-        返回值：`AssetRef` 或 `None`。
-        异常情况：底层事件发布或文件存储失败时向上抛出。
-        """
-        return self._app.asset_service.request_asset(
-            user_id=self.user_id,
-            stream_type=stream_type,
-            freshness_seconds=freshness_seconds,
-            configure_payload=configure_payload,
-            session_id=self._app.active_session_id(self.user_id),
-            timeout_seconds=timeout_seconds,
-        )
 
     def _request_asset_for_devices(
         self,
@@ -1741,73 +1622,6 @@ class DeviceRuntime:
             tuple(str(device.device_id) for device in devices),
         )
 
-    def query_assets(self, stream_type: str | StreamType, freshness_seconds: float | None = None) -> list[AssetRef]:
-        """查询 sensor stream 结果缓存窗口。
-
-        主要逻辑：读取 server 对 sensor stream 结果的缓存窗口，并按 freshness_seconds 可选过滤。
-        参数：`stream_type` 为 sensor stream，`freshness_seconds` 为最大年龄。
-        返回值：`AssetRef` 列表。
-        异常情况：无。
-        """
-        return self._app.asset_service.query_assets(
-            user_id=self.user_id,
-            stream_type=stream_type,
-            freshness_seconds=freshness_seconds,
-        )
-
-    def watch_assets(
-        self,
-        stream_type: str | StreamType,
-        correlation_id: str | None = None,
-        timeout_seconds: float | None = None,
-        since: float | str | None = None,
-    ) -> AsyncIterator[AssetRef]:
-        """持续读取 sensor stream 写入后的内部缓存引用。
-
-        主要逻辑：返回 Asset Service 的 async iterator，按 stream_type 和 correlation_id
-        过滤，适合 Task 消费连续 sensor.rgb 帧。
-        参数：`stream_type` 为资产 stream，`correlation_id` 为可选任务关联 ID，
-        `timeout_seconds` 为无新资产时的退出时间。
-        返回值：异步迭代器。
-        异常情况：无。
-        """
-        return self._watch_assets_filtered(
-            stream_type=stream_type,
-            correlation_id=correlation_id,
-            timeout_seconds=timeout_seconds,
-            since=since,
-        )
-
-    def submit_text(self, text: str, priority: str = "normal", ttl_seconds: int = 0) -> None:
-        """提交文本输出。
-
-        主要逻辑：业务只提交文本和优先级，TTS、播放仲裁和 speaker stream 由 Output
-        Service 负责。
-        参数：`text` 为要播报的文本，`priority` 为播放优先级，`ttl_seconds` 为排队 TTL。
-        返回值：无。
-        异常情况：Output Service 写入失败时向上抛出。
-        """
-        session_id = self._app.active_session_id(self.user_id)
-        self._app.output_service.submit_text(
-            user_id=self.user_id,
-            session_id=session_id,
-            text=text,
-            priority=priority,
-            ttl_seconds=ttl_seconds,
-        )
-
-    def notify(self, text: str, *, priority: str = "normal", ttl_seconds: int = 0) -> None:
-        """提交用户可感知通知。
-
-        主要逻辑：作为历史版本 `submit_notification()` 的迁移便捷入口，底层进入
-        Output Service，由 TTS、播放仲裁和输出 stream 统一处理。
-        参数：`text` 为通知文本，`priority` 为优先级，`ttl_seconds` 为通知有效期。
-        返回值：无。
-        异常情况：同 `submit_text()`。
-        """
-
-        self.submit_text(text=text, priority=priority, ttl_seconds=ttl_seconds)
-
     async def _sensor_stream(
         self,
         *,
@@ -1852,10 +1666,11 @@ class DeviceRuntime:
         )
         count = 0
         try:
-            async for asset in self.watch_assets(
-                stream_type,
+            async for asset in self._watch_assets_filtered(
+                stream_type=stream_type,
                 correlation_id=correlation_id,
                 timeout_seconds=timeout_seconds if timeout_seconds is not None else duration_seconds,
+                since=None,
             ):
                 yield asset
                 count += 1
@@ -1886,6 +1701,7 @@ class DeviceRuntime:
         当前实现只返回设备对象，不把 device_id 暴露给业务 API。
         """
 
+        started_at = time.time()
         if capability and str(capability).startswith("sensor."):
             event_name = "stream.control.open.requested"
             payload = {"stream_type": capability}
@@ -1928,9 +1744,22 @@ class DeviceRuntime:
                 code=ErrorCode.INVALID_ARGUMENT,
                 details={"capability": capability, "selector": selector or {}, "matched_count": len(devices)},
             )
+        snapshots = tuple(
+            DeviceSnapshot(
+                device_id=device.device_id,
+                name=getattr(device, "name", getattr(device, "device_name", "")),
+                properties=dict(getattr(device, "properties", {}) or {}),
+                subscriptions=[subscription.__dict__ for subscription in getattr(device, "subscriptions", [])],
+            )
+            for device in devices
+        )
         lease = DeviceLease(
+            lease_id=new_id("lease"),
+            user_id=self.user_id,
             capability=capability,
             selector=dict(selector or {}),
+            device_snapshot=snapshots,
+            expires_at_ms=int((time.time() + 30) * 1000),
             devices=tuple(devices),
             params=_device_support_defaults(devices[0], capability) if devices else {},
         )
@@ -1941,6 +1770,9 @@ class DeviceRuntime:
                 "selector": lease.selector,
                 "matched_count": len(lease.devices),
                 "require_single": require_single,
+                "lease_id": lease.lease_id,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "result": "ok",
             }
         )
         return list(lease.devices)
@@ -1953,8 +1785,12 @@ class DeviceRuntime:
         properties = dict(getattr(device, "properties", {}) or {})
         tags = _coerce_tags(getattr(device, "tags", None) or properties.get("tags") or properties.get("device.tags"))
         for key, expected in selector.items():
-            if key == "device_id":
-                raise AudioChatError("selector must not use device_id", code=ErrorCode.INVALID_ARGUMENT)
+            if key in FORBIDDEN_SELECTOR_FIELDS:
+                raise AudioChatError(
+                    f"selector must not use {key}",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={"field": key},
+                )
             if key == "capability":
                 support_ids = properties.get("audio_chat.support_ids") or []
                 if expected not in support_ids:
@@ -2001,23 +1837,6 @@ class DeviceRuntime:
             recorder.record_command_trace(session_id, payload)
         elif hasattr(recorder, "record_system_event"):
             recorder.record_system_event(payload)
-
-    def submit_audio(self, audio: bytes, codec: str, priority: str = "normal") -> None:
-        """提交原生音频输出。
-
-        主要逻辑：音频不经过 TTS，直接走 Output Service 原生 audio 入口和播放仲裁。
-        参数：`audio` 为二进制音频，`codec` 为编码，`priority` 为播放优先级。
-        返回值：无。
-        异常情况：Output Service 写入失败时向上抛出。
-        """
-        session_id = self._app.active_session_id(self.user_id)
-        self._app.output_service.submit_audio(
-            user_id=self.user_id,
-            session_id=session_id,
-            audio=audio,
-            format=StreamFormat(codec=codec),
-            priority=priority,
-        )
 
     async def _watch_assets_filtered(
         self,
@@ -2156,7 +1975,7 @@ class CapturePhotoOutput(BaseModel):
 class CapturePhotoTool(BaseTool):
     """内置抓拍 Tool。
 
-    主要功能：让模型继续用老工具名请求当前视觉资产；实现上只请求 `sensor.rgb`
+    主要功能：让模型用稳定工具名请求当前视觉资产；实现上只请求 `sensor.rgb`
     stream，不引入相机 RPC 或点对点 device_id。
     """
 
@@ -2210,7 +2029,7 @@ class PublishDeviceCommandTool(BaseTool):
     """发布端侧命令事件的内置 Tool。"""
 
     class Input(BaseModel):
-        command_name: str = Field(description="命令名称，例如 actuator.haptic.pulse 或 phone.task.start。")
+        command: str = Field(description="命令名称，例如 actuator.haptic.pulse 或 phone.task.start。")
         params: dict = Field(default_factory=dict, description="命令参数，只放小型结构化数据。")
         selection: Literal["first_available", "all"] = Field(default="first_available", description="使用第一台可用设备，或所有可用设备。")
 
@@ -2229,98 +2048,11 @@ class PublishDeviceCommandTool(BaseTool):
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         result = await context.devices.commands.call(
-            name=str(input_data.get("command_name") or ""),
+            name=str(input_data.get("command") or ""),
             params=dict(input_data.get("params") or {}),
             require_single=str(input_data.get("selection") or "first_available") == "first_available",
         )
         return ToolResult.success(data=result.__dict__, message="device command completed" if result.ok else "device command failed")
-
-
-class StartPhoneVideoLinkInput(BaseModel):
-    """启动视频画面连接输入。"""
-
-    link_mode: str = Field(default="direct", description="视频连接方式；通常保持默认值。")
-    frame_interval_ms: int = Field(default=500, ge=1, description="期望画面间隔，单位毫秒；越小越实时。")
-    duration_seconds: float | None = Field(default=None, description="可选持续时间，单位秒。")
-
-
-class StartPhoneVideoLinkOutput(BaseModel):
-    """启动视频画面连接输出。"""
-
-    link_id: str
-    task_id: str
-    task_type: str
-    state: str
-    stream_type: str
-    delivered_count: int
-    frame_interval_ms: int
-
-
-class StartPhoneVideoLinkTool(BaseTool):
-    """启动 RGB 连续画面流的系统 Tool。
-
-    主要功能：请求可生产 `sensor.rgb` 的端侧建立连续 RGB stream。新版 SDK 不再暴露
-    手机/眼镜点对点连接细节，因此本工具只返回配置事件投递结果和 link_id。
-    """
-
-    spec = ToolSpec(
-        name="start_phone_video_link",
-        description=(
-            "当任务需要手机或其他摄像头持续提供画面时调用，例如持续观察、找物、导航或红绿灯辅助。"
-            "只需要单张眼前照片时不要调用，应使用 capture_photo。"
-        ),
-        input_model=StartPhoneVideoLinkInput,
-        output_model=StartPhoneVideoLinkOutput,
-        capability_type="tool",
-        tags=["phone", "video", "stream"],
-        progress_message=(
-            "我先连接手机摄像头。",
-            "稍等，我把手机画面接进来。",
-            "我先建立视频画面连接。",
-        ),
-    )
-
-    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        """请求端侧开始连续上传 RGB 资产。
-
-        主要逻辑：发布 `stream.control.open.requested`，由设备订阅策略决定具体
-        端侧；不接受 device_id 参数。
-        参数：`frame_interval_ms` 控制上传间隔，`duration_seconds` 控制端侧自行停止。
-        返回值：配置事件投递摘要。
-        异常情况：无匹配订阅设备时仍返回 delivered_count=0，供 Agent 解释。
-        """
-
-        frame_interval_ms = max(1, int(input_data.get("frame_interval_ms") or 500))
-        link_id = new_id("video_link")
-        payload = {
-            "mode": "continuous",
-            "link_id": link_id,
-            "link_mode": str(input_data.get("link_mode") or "direct"),
-            "frame_interval_ms": frame_interval_ms,
-            "rate_hz": 1000.0 / frame_interval_ms,
-            "correlation_id": link_id,
-            "reason": "start_phone_video_link",
-        }
-        if input_data.get("duration_seconds") is not None:
-            payload["duration_seconds"] = float(input_data["duration_seconds"])
-        result = context.devices._publish_control_event(
-            "stream.control.open.requested",
-            stream_type="sensor.rgb",
-            payload=payload,
-        )
-        state = "running" if result.delivered_count > 0 else "unavailable"
-        return ToolResult.success(
-            data={
-                "link_id": link_id,
-                "task_id": link_id,
-                "task_type": "phone_video_link_task",
-                "state": state,
-                "stream_type": "sensor.rgb",
-                "delivered_count": result.delivered_count,
-                "frame_interval_ms": frame_interval_ms,
-            },
-            message="已请求建立视频画面连接。" if result.delivered_count else "没有找到可建立视频画面连接的设备。",
-        )
 
 
 class QueryDeviceStateTool(BaseTool):
@@ -2411,6 +2143,89 @@ class CancelTaskTool(BaseTool):
             return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
         ref = await context.tasks.cancel(str(input_data.get("task_id") or ""), reason=str(input_data.get("reason") or "tool_requested"))
         return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+
+
+class TaskManageTool(BaseTool):
+    """统一管理 TaskEngine 任务的内置 Tool。
+
+    主要功能：以一个模型可见工具承载 Task 的启动、查询、取消和列表能力，避免为
+    每个业务 Task 新增一个只负责启动的 Tool。
+    """
+
+    class Input(BaseModel):
+        action: Literal["start", "query", "cancel", "list_types", "list_instances"] = Field(
+            description="任务管理动作：start 启动，query 查询，cancel 取消，list_types 列出类型，list_instances 列出实例。",
+        )
+        task_type: str | None = Field(default=None, description="启动任务时使用的 Task 类型。")
+        task_id: str | None = Field(default=None, description="查询或取消任务时使用的任务编号。")
+        input_data: dict = Field(default_factory=dict, description="启动任务时传给 Task 的结构化输入。")
+        summary: str = Field(default="", description="启动任务时写入任务引用的简短摘要。")
+        reason: str = Field(default="tool_requested", description="取消任务时使用的原因。")
+        include_terminal: bool = Field(default=True, description="列出任务实例时是否包含已完成、取消、失败或超时任务。")
+
+    spec = ToolSpec(
+        name="task_manage",
+        description=(
+            "统一管理后台 Task。需要启动、查询、取消或列出 Task 时调用；"
+            "启动时必须提供已注册的 task_type，不要为不同 Task 猜测专用启动工具。"
+        ),
+        input_model=Input,
+        capability_type="task",
+        tags=["task", "manage"],
+        progress_message=(
+            "我处理一下这个后台任务。",
+            "稍等，我看一下任务。",
+        ),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行统一 Task 管理动作。
+
+        参数：`action` 指定管理动作；`task_type/task_id/input_data` 是各动作所需参数。
+        返回值：成功时返回任务类型、任务引用或实例列表。
+        异常情况：TaskEngine 未配置、缺少必要参数或任务不存在时返回结构化失败。
+        """
+
+        if not isinstance(context, SystemToolContext) or context.tasks is None:
+            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        action = str(input_data.get("action") or "").strip()
+        if action == "list_types":
+            return ToolResult.success(data={"task_types": context.tasks.list_task_types()}, message="task types listed")
+        if action == "list_instances":
+            refs = context.tasks.list_tasks(
+                user_id=context.user_id,
+                include_terminal=bool(input_data.get("include_terminal", True)),
+            )
+            return ToolResult.success(
+                data={"tasks": [ref.__dict__ for ref in refs]},
+                tasks=refs,
+                message=f"{len(refs)} tasks listed",
+            )
+        if action == "query":
+            task_id = str(input_data.get("task_id") or "").strip()
+            if not task_id:
+                return ToolResult.failed(ToolError("task_id is required", code=ErrorCode.INVALID_ARGUMENT))
+            ref = context.tasks.query(task_id)
+            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+        if action == "cancel":
+            task_id = str(input_data.get("task_id") or "").strip()
+            if not task_id:
+                return ToolResult.failed(ToolError("task_id is required", code=ErrorCode.INVALID_ARGUMENT))
+            ref = await context.tasks.cancel(task_id, reason=str(input_data.get("reason") or "tool_requested"))
+            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+        if action == "start":
+            task_type = str(input_data.get("task_type") or "").strip()
+            if not task_type:
+                return ToolResult.failed(ToolError("task_type is required", code=ErrorCode.INVALID_ARGUMENT))
+            ref = await context.tasks.create(
+                task_type=task_type,
+                user_id=context.user_id,
+                session_id=context.session_id,
+                input_data=dict(input_data.get("input_data") or {}),
+                summary=str(input_data.get("summary") or ""),
+            )
+            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+        return ToolResult.failed(ToolError(f"unknown task action: {action}", code=ErrorCode.INVALID_ARGUMENT))
 
 
 class MemorySearchTool(BaseTool):
@@ -2561,10 +2376,10 @@ BUILTIN_TOOLS = (
     RequestAssetTool,
     CapturePhotoTool,
     PublishDeviceCommandTool,
-    StartPhoneVideoLinkTool,
     QueryDeviceStateTool,
     QueryTaskStatusTool,
     CancelTaskTool,
+    TaskManageTool,
 )
 
 EXTENSION_BUILTIN_TOOLS = (
@@ -2577,6 +2392,7 @@ EXTENSION_BUILTIN_TOOLS = (
 SYSTEM_CONTEXT_TOOL_NAMES = {
     QueryTaskStatusTool.spec.name,
     CancelTaskTool.spec.name,
+    TaskManageTool.spec.name,
     MemorySearchTool.spec.name,
     ManageMemoryTool.spec.name,
     ReadSkillTool.spec.name,

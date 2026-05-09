@@ -17,7 +17,6 @@
 | 1 | `request_asset` | SDK | 已注册 | 请求传感器资产 | 调用 `context.devices.sensors.rgb.one()`，返回 AssetRef。 | Tool | 否 |
 | 2 | `capture_photo` | SDK | 已注册 | 获取当前画面 | 请求一次 `sensor.rgb` 图片，超时返回失败。 | Tool | 强相关 |
 | 3 | `publish_device_command` | SDK | 已注册 | 发轻量设备命令 | 发布 `command.requested`。 | Tool | 否 |
-| 4 | `start_phone_video_link` | SDK | 已注册 | 建立手机或摄像头画面链路 | 发布 `stream.control.open.requested` 请求连续 RGB，返回 link 投递结果。 | 边界待收敛：启动 Tool + 持续 Task | 强相关 |
 | 5 | `close_continuous_dialog` | SDK | 已注册 | 结束连续对话 | 调用 `close_continuous_dialog()` 安排当前会话关闭。 | Tool | 否 |
 | 6 | `query_device_state` | SDK | 已注册 | 查询设备状态 | 读取当前用户 active devices 快照，可选择是否包含订阅摘要。 | Tool | 否 |
 | 7 | `query_task_status` | SDK | 已注册 | 查询任务状态 | 通过 TaskEngine 查询 TaskRef。 | Tool，Task 查询专用工具 | 否 |
@@ -72,8 +71,7 @@
 
 ## 5. 当前发现的问题和待审查点
 
-1. `start_phone_video_link` 当前是 Tool，但会打开连续 RGB stream。按新定位，它更适合拆成“启动 Tool + 持续 Task”，或者明确只作为兼容入口保留。
-2. `read_skill` 是 SDK 扩展 Tool，但 `for-blind-app/server.yaml` 当前关闭 Skill，因此没有注册到当前 app。
-3. 目前源码中没有 `ConfigureAssetStreamTool` / `configure_asset_stream` 类；如果后续审查记录里出现该名称，应按当前代码视为不存在或已被其它设备 API 替代。
-4. `basic_timer.task.TimerTask` 的 task_type 是 `timer`，而 `timer.task.TimerTask` 的 task_type 是 `timer_task`。前者是最小样板，后者才是当前计时器 Tool 实际创建的正式任务。
-5. `sample_tool`、`sample_task`、`continuous_rgb_analyze` 更像 SDK 验证样板，不是盲人业务核心能力。
+1. `read_skill` 是 SDK 扩展 Tool，但 `for-blind-app/server.yaml` 当前关闭 Skill，因此没有注册到当前 app。
+2. 目前源码中没有 `ConfigureAssetStreamTool` / `configure_asset_stream` 类；如果后续审查记录里出现该名称，应按当前代码视为不存在或已被其它设备 API 替代。
+3. `basic_timer.task.TimerTask` 的 task_type 是 `timer`，而 `timer.task.TimerTask` 的 task_type 是 `timer_task`。前者是最小样板，后者才是当前计时器 Tool 实际创建的正式任务。
+4. `sample_tool`、`sample_task`、`continuous_rgb_analyze` 更像 SDK 验证样板，不是盲人业务核心能力。

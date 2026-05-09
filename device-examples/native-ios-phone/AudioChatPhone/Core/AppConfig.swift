@@ -116,7 +116,7 @@ struct SubscriptionConfig: Codable, Equatable {
 ///
 /// 主要功能：
 /// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties、supports 和 subscriptions。
-/// 2. 为注册事件提供协议兼容 payload。
+/// 2. 为注册事件提供当前协议 payload。
 /// 3. 缺少配置文件时提供本地默认值，便于打开工程后立即编译。
 struct AppConfig: Codable, Equatable {
     var serverURL: String

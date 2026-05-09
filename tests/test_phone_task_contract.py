@@ -27,7 +27,7 @@ def test_phone_task_command_contract_uses_event_and_stream_semantics() -> None:
         user_id="user-phone-task",
         producer_id="server-main",
         payload={
-            "command_name": "phone.task.start",
+            "command": "phone.task.start",
             "task_type": "find_object_phone_task",
             "task_id": "task-find-object-001",
             "input": {"target": "水杯"},

@@ -38,13 +38,7 @@ def test_browser_device_capability_file_compiles_to_subscriptions() -> None:
 
     result = compile_device_capabilities_file("device-examples/browser-glass/device.audio-chat.yaml")
 
-    support_ids = {item["id"] for item in result["payload"]["supports"]}
-    assert support_ids == {
-        "sensor.rgb",
-        "sensor.imu",
-        "sensor.tof",
-        "actuator.haptic",
-    }
+    assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
     subscriptions = result["payload"]["subscriptions"]
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in subscriptions
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in subscriptions
@@ -64,7 +58,7 @@ def test_unknown_support_id_fails_fast() -> None:
         compile_supports_to_subscriptions({"sensors": [{"type": "rbg"}]})
 
 
-def test_structured_supports_compile_to_legacy_subscriptions(tmp_path: Path) -> None:
+def test_structured_supports_compile_to_subscriptions(tmp_path: Path) -> None:
     """测试目标：验证新版结构化能力声明能被 server 编译成当前路由订阅。
 
     测试方法：构造 `supports.sensors[].type` 和 `supports.actuators[].type` 写法，
@@ -108,12 +102,14 @@ supports:
 
     result = compile_device_capabilities_file(capability_file)
 
-    supports = {item["id"]: item for item in result["payload"]["supports"]}
-    assert set(supports) == {"sensor.rgb", "sensor.imu", "actuator.haptic"}
-    assert supports["sensor.rgb"]["frequency_hz"] == 2
-    assert supports["sensor.rgb"]["formats"] == ["jpeg"]
-    assert supports["sensor.imu"]["frequency_hz"] == 50
-    assert supports["actuator.haptic"]["commands"] == ["vibrate"]
+    assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
+    support_ids = set(result["payload"]["properties"]["audio_chat.support_ids"])
+    assert support_ids == {"sensor.rgb", "sensor.imu", "actuator.haptic"}
+    defaults = result["payload"]["properties"]["audio_chat.support_defaults"]
+    assert defaults["sensor.rgb"]["frequency_hz"] == 2
+    assert defaults["sensor.rgb"]["formats"] == ["jpeg"]
+    assert defaults["sensor.imu"]["frequency_hz"] == 50
+    assert defaults["actuator.haptic"]["duration_seconds"] == 0.3
     assert result["payload"]["properties"]["device_role"] == "front_glass"
     assert result["payload"]["properties"]["tags"] == ["primary", "debug"]
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in result["payload"]["subscriptions"]

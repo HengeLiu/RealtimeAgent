@@ -1,6 +1,6 @@
 # audio-chat Context 与设备 API 设计说明
 
-本文是 `audio-chat` 下一阶段 Context 设备 API 的设计说明，不是当前版本的开发操作手册。它用于固定目标公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。
+本文是 `audio-chat` 当前 Context 设备 API 的架构契约。它用于固定公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。
 
 当前仓库以 typed device API 作为唯一推荐开发入口，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.actuators.vibrator.one()` 和 `context.devices.commands.call()`。需要按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](device-capability-development-guide.md)。
 
@@ -14,19 +14,14 @@
 6. Tool 是 Agent Loop 内的一次短生命周期调用，不启动长期后台任务。
 7. Task 使用 `DeviceContext`，可以维护持续数据流、异步命令和跨设备状态。
 
-### 1.1 设计状态
+### 1.1 当前架构状态
 
-本文描述的是目标公开 API，不等于当前代码全部已经实现。实现层需要分三步推进：
+当前仓库已经按 typed device API 收敛：业务 Tool 只能拿到 `ToolDeviceFacade`，业务 Task 拿到 `TaskDeviceFacade`。公开入口只保留 typed device API、结构化 `supports` 和 `stream.control.open/close.requested`。
 
-| 阶段 | 目标 | 对开发者的影响 |
-| --- | --- | --- |
-| 双写阶段 | `request_asset()`、`publish_event()`、`watch_assets()` 等旧方法内部改成调用 typed facade。 | 调试产物可以同时观察旧 API 和新 API 的等价行为。 |
-| 收敛阶段 | 文档、模板和示例只暴露 `ToolContext` / `DeviceContext` 新接口。 | 开发者不再接触旧协议原生方法。 |
+新增代码必须满足两条约束：
 
-设计落地前，任何新增代码都要满足两条约束：
-
-1. 新 API 不能引入第三套通讯对象；底层仍然只能映射到控制信令和数据流。
-2. 新 API 不能绕过已有设备注册、鉴权、运行产物和播放仲裁。
+1. 不能引入第三套通讯对象；底层仍然只能映射到控制信令和数据流。
+2. 不能绕过设备注册、鉴权、运行产物和播放仲裁。
 
 ### 1.2 对象模型
 
@@ -463,7 +458,7 @@ SDK 内部根据设备注册时的能力、标签、声明字段和在线状态�
 | `device_name` | `browser-glass` | 设备注册顶层字段。 |
 | `tags` | `["primary"]` | 设备注册顶层字段。 |
 | `runtime.platform` | `browser` | `runtime` 子字段。 |
-| `location` | `front` | 未来稳定字段或 properties 兼容字段。 |
+| `location` | `front` | 稳定字段或 properties 扩展字段。 |
 
 不允许 selector 直接匹配 `device_id`。如果调试场景必须指定某台设备，应放在 SDK 内部测试工具或调试 CLI 中，不成为业务 API。
 
@@ -1300,72 +1295,15 @@ curl http://127.0.0.1:8765/api/debug/playback
 - 大字节和连续数据走 stream。
 - 收到停止或取消后及时释放硬件资源。
 
-## 16. 从当前实现迁移到目标 API
+## 16. 架构收敛要求
 
-迁移工作建议分阶段完成。
+本仓库的设备 API 只保留当前架构。后续新增能力必须遵守：
 
-### 16.1 第一阶段：引入 facade，不改业务语义
-
-目标：
-
-- 新增 `ToolDeviceFacade`、`TaskDeviceFacade`、`AssetFacade`、`OutputFacade`。
-- facade 内部仍然调用当前 `ToolDeviceFacade`。
-- 新增测试证明新 API 和旧 API 行为一致。
-
-验收：
-
-```python
-await context.devices.sensors.rgb.one(...)
-```
-
-与：
-
-```python
-await context.devices.sensors.rgb.one(...)
-```
-
-在同一设备参考端上产生等价 AssetRef。
-
-### 16.2 第二阶段：改模板和示例
-
-目标：
-
-- `app-examples` 新模板只使用 typed facade。
-- 当前老样板保留，但标注为兼容示例。
-- 文档入口改成新 API 优先。
-
-验收：
-
-- 新建 Tool 不需要理解底层信令。
-- 新建 Task 不需要调用 `publish_event()`。
-- 能通过 browser-glass 和 python-phone mock 回放。
-
-### 16.3 第三阶段：升级设备能力 schema
-
-目标：
-
-- schema 支持 `supports.sensors` / `supports.actuators`。
-- 设备注册编译器只接受结构化 supports。
-- 参考端能力文件迁移到新结构。
-
-验收：
-
-- 新旧能力文件都能通过校验。
-- 新能力文件能生成与旧订阅等价的路由配置。
-- selector 能使用 `device_role`、`tags`、`device_name` 做选择。
-
-### 16.4 第四阶段：收敛旧 API
-
-目标：
-
-- `ToolDeviceFacade` 不再作为文档推荐 API。
-- 旧 API 仅保留在过渡说明和迁移指南。
-- 新业务能力全部使用 typed facade。
-
-验收：
-
-- docs 和 app templates 不再出现 `publish_event()`、`request_asset()` 作为推荐用法。
-- 历史版本 parity 能力仍能跑通。
+1. 文档、模板和示例只暴露 typed facade。
+2. 设备能力文件只使用结构化 `supports.sensors` / `supports.actuators`。
+3. 端侧只实现 `stream.control.open.requested` / `stream.control.close.requested` 和 `command.*`。
+4. Tool 不直接发布底层事件，不直接请求资产服务，不直接提交音频输出。
+5. Task 的持续能力只能通过 `TaskDeviceFacade` 获取。
 
 ## 17. 一句话总结
 

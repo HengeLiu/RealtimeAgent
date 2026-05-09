@@ -50,6 +50,22 @@ class FailingTask(BaseTask):
         raise RuntimeError("boom")
 
 
+class ScheduledCompleteTask(BaseTask):
+    """测试用调度完成 Task。"""
+
+    task_type = "scheduled_complete_task"
+
+    async def on_event(self, context, event) -> None:
+        """测试目标：验证 TaskEngine 调度事件会回流到业务 Task。
+
+        测试方法：收到 `scheduled.done` 后调用 `context.complete()`。
+        预期结果：任务最终进入 completed。
+        """
+
+        if event.event_name == "scheduled.done":
+            await context.complete({"from_event": True}, summary="scheduled done")
+
+
 def test_task_query_moves_expired_running_task_to_timeout() -> None:
     """测试目标：验证超时任务会流转到 timeout。
 
@@ -118,3 +134,49 @@ def test_task_engine_rejects_user_concurrency_over_limit() -> None:
 
     with pytest.raises(AudioChatError, match="concurrency exceeded"):
         asyncio.run(engine.create(task_type="limited_task", user_id="user-limit", session_id="sess-two"))
+
+
+def test_task_engine_owns_and_cancels_scheduled_events() -> None:
+    """测试目标：验证 TaskEngine 统一管理延迟事件。
+
+    测试方法：创建任务后调用 `schedule_event()`，检查可列出，再取消该调度。
+    预期结果：调度记录存在且可取消，取消后列表为空，任务不会收到到点事件。
+    """
+
+    engine = TaskEngine()
+    engine.register(ScheduledCompleteTask)
+    ref = asyncio.run(
+        engine.create(task_type="scheduled_complete_task", user_id="user-schedule", session_id="sess-schedule")
+    )
+
+    scheduled = engine.schedule_event(task_id=ref.task_id, event_name="scheduled.done", delay_seconds=0.05)
+
+    assert scheduled["task_id"] == ref.task_id
+    assert [item["schedule_id"] for item in engine.list_scheduled_events()] == [scheduled["schedule_id"]]
+    assert engine.cancel_scheduled_event(scheduled["schedule_id"]) is True
+    assert engine.list_scheduled_events() == []
+    time.sleep(0.08)
+    assert engine.query(ref.task_id).state == "running"
+
+
+def test_task_engine_scheduled_event_flows_back_to_task() -> None:
+    """测试目标：验证到点事件会重新进入 Task.on_event。
+
+    测试方法：调度 `scheduled.done`，等待定时器触发。
+    预期结果：Task 处理事件并完成，事件日志包含业务事件和 completed。
+    """
+
+    engine = TaskEngine()
+    engine.register(ScheduledCompleteTask)
+    ref = asyncio.run(
+        engine.create(task_type="scheduled_complete_task", user_id="user-due", session_id="sess-due")
+    )
+
+    engine.schedule_event(task_id=ref.task_id, event_name="scheduled.done", delay_seconds=0.01)
+    time.sleep(0.05)
+
+    assert engine.query(ref.task_id).state == "completed"
+    event_names = [event.event_name for event in engine.store.events_for_task(ref.task_id)]
+    assert "task.event.scheduled" in event_names
+    assert "scheduled.done" in event_names
+    assert "task.completed" in event_names

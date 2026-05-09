@@ -7,11 +7,10 @@
 
 默认注册能力通过 `supports` 表达，server 会把它编译成底层 `subscriptions`：
 
-- 生产 `sensor.rgb`；旧配置中的 `sensor.depth`、`sensor.imu` 订阅保留为协议兼容测试入口
+- 生产 `sensor.rgb`；按结构化 supports 声明 `sensor.rgb`，订阅由 server 编译生成
 - 消费 `actuator.speaker`、`actuator.haptic`
 - 声明 `phone.task.find_object_phone_task` 和 `phone.task.traffic_light_phone_task`
-- 兼容保留 `subscriptions`，用于接收 `stream.control.*`、`stream.output.*` 和
-  `command.*`
+- `subscriptions` 由 server 根据结构化 `supports` 编译，用于接收 `stream.control.*`、`stream.output.*` 和 `command.*`
 - 通过 `command.*` 事件回报端侧任务 started / progress /
   completed / failed
 

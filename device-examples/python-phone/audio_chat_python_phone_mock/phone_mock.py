@@ -95,14 +95,15 @@ class FindObjectPhoneTaskHandler(PhoneTaskHandler):
     """找物视觉任务 mock handler。
 
     主要功能：读取命令输入中的目标名称和 RGB 帧数量，生成稳定的“找到目标”结果，
-    供 find_object 迁移样板和设备级回放使用。
+    供 find_object 端侧任务和设备级回放使用。
     """
 
     task_type = "find_object_phone_task"
 
     async def handle(self, endpoint: "NetworkPythonPhoneMockEndpoint", command: Event, frames: list[bytes]) -> PhoneTaskResult:
         payload = dict(command.payload or {})
-        input_data = dict(payload.get("input") or payload.get("params") or {})
+        params = dict(payload.get("params") or {})
+        input_data = dict(params.get("input") or {})
         target = str(input_data.get("target") or input_data.get("object_name") or "目标物").strip()
         return PhoneTaskResult(
             status="found",
@@ -120,7 +121,7 @@ class FindObjectPhoneTaskHandler(PhoneTaskHandler):
 class TrafficLightPhoneTaskHandler(PhoneTaskHandler):
     """红绿灯视觉任务 mock handler。
 
-    主要功能：按输入或配置返回稳定灯色，验证 traffic_light 迁移样板的 phone task
+    主要功能：按输入或配置返回稳定灯色，验证 traffic_light 端侧 phone task
     事件和 stream 链路。
     """
 
@@ -128,7 +129,8 @@ class TrafficLightPhoneTaskHandler(PhoneTaskHandler):
 
     async def handle(self, endpoint: "NetworkPythonPhoneMockEndpoint", command: Event, frames: list[bytes]) -> PhoneTaskResult:
         payload = dict(command.payload or {})
-        input_data = dict(payload.get("input") or payload.get("params") or {})
+        params = dict(payload.get("params") or {})
+        input_data = dict(params.get("input") or {})
         color = str(input_data.get("expected_color") or input_data.get("color") or "green").strip() or "green"
         return PhoneTaskResult(
             status="completed",
@@ -145,7 +147,7 @@ class TrafficLightPhoneTaskHandler(PhoneTaskHandler):
 class PhoneTaskHandlerRegistry:
     """phone mock 任务 handler 注册表。
 
-    主要功能：内置历史版本 迁移样板 handler，并支持从配置包自动发现自定义 handler。
+    主要功能：内置端侧视觉任务 handler，并支持从配置包自动发现自定义 handler。
     """
 
     def __init__(self) -> None:
@@ -582,8 +584,22 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         """
 
         payload = dict(event.payload or {})
-        task_type = str(payload.get("task_type") or payload.get("command_name") or "").strip()
-        task_id = str(payload.get("task_id") or new_id("phone_task")).strip()
+        params = dict(payload.get("params") or {})
+        command = str(payload.get("command") or "").strip()
+        task_type = str(params.get("task_type") or "").strip()
+        if command != "phone.task.start":
+            await self._send_command_event(
+                control_ws,
+                event_name="command.failed",
+                command=event,
+                payload={
+                    "task_id": str(params.get("task_id") or ""),
+                    "task_type": task_type,
+                    "message": f"unsupported command: {command}",
+                },
+            )
+            return
+        task_id = str(params.get("task_id") or new_id("phone_task")).strip()
         handler = self.task_handlers.get(task_type)
         if handler is None:
             await self._send_command_event(

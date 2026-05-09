@@ -307,7 +307,6 @@ class AudioChatApp:
             control_service=self.control_service,
             stream_service=self.stream_service,
             recorder=self.recorder,
-            root=None,
             request_timeout_seconds=self.config.asset_request_timeout_seconds,
             default_ttl_seconds=self.config.asset_default_ttl_seconds,
             max_asset_bytes=self.config.asset_max_asset_bytes,

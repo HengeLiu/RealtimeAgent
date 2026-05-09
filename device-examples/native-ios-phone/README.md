@@ -60,9 +60,8 @@ cp app-examples/for-blind-app/config/generated/ios-phone.local.json \
 - `device_id`：iOS 端唯一设备编号，不能和 browser-glass、python phone mock、glass playback 重复。
 - `auth`：注册鉴权配置，支持 `disabled`、`static_token` 和 `signed_token`。
 - `direct_camera_sink_port`：iOS 端本地相机接收 WebSocket 端口，默认 `9001`。
-- `supports`：推荐的设备语义能力声明，例如 `sensor.rgb`、`sensor.mic`、`actuator.speaker`；server 会编译成底层订阅。
+- `supports`：推荐的设备语义能力声明，例如 `sensor.rgb`、`sensor.imu`、`actuator.vibrator`；server 会编译成底层订阅。
 - `properties`：声明仅用于日志和 debug 的硬件参数。
-- `subscriptions`：兼容和调试入口；可以显式声明 `stream.control.*`、`stream.output.*` 和 `control.audio_session.*`。
 
 直连相机接收服务启动后会把 `ws://<iPhone局域网IP>:9001/ws/camera` 写入注册
 properties。ESP32 端配置该地址后，可按 `audio_chat.direct_frame.v1` 推送 JPEG：
