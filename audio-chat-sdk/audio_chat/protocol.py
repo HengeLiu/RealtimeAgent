@@ -15,7 +15,7 @@ class EventName(StrEnum):
     """内置协议事件名。
 
     主要功能：为开发者提供可补全、可复用的事件名常量，减少手写字符串导致的拼写
-    错误。枚举值仍然是字符串，能直接传入 `Event`、`publish_event()` 和 JSON 序列化。
+    错误。枚举值仍然是字符串，能直接传入内部 `Event` 和 JSON 序列化。
     """
 
     CONTROL_DEVICE_REGISTER_REQUESTED = "control.device.register.requested"

@@ -106,7 +106,7 @@ def test_memory_enabled_uses_runs_user_memory_json_by_default(tmp_path) -> None:
 
 
 def test_memory_records_are_split_into_basic_and_personalized_prompt_layers(tmp_path) -> None:
-    """测试目标：验证长期记忆按老 SDK 约定拆成 basic 和 personalized 两层。
+    """测试目标：验证长期记忆按当前约定拆成 basic 和 personalized 两层。
 
     测试方法：写入一条姓名基本信息和一条楼梯偏好个性化信息，然后读取 memory.json
     和 prompt fragment。

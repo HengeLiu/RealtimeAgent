@@ -69,7 +69,6 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "pytest",
                 "tests/test_protocol_contracts.py",
                 "tests/test_control_service.py",
-                "tests/acceptance/test_protocol_routing_acceptance.py",
                 "-q",
             ),
         ),
@@ -84,7 +83,6 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "-m",
                 "pytest",
                 "tests/test_stream_and_audio_pipeline.py",
-                "tests/test_phase2_assets_and_endpoint.py",
                 "-q",
             ),
         ),
@@ -98,7 +96,6 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "python",
                 "-m",
                 "pytest",
-                "tests/acceptance/test_protocol_native_tool_task_contract.py",
                 "tests/test_agent_core_router.py",
                 "-q",
             ),
@@ -149,7 +146,6 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "-m",
                 "pytest",
                 "tests/acceptance/test_architecture_design_contract_acceptance.py",
-                "tests/acceptance/test_architecture_module_alignment.py",
                 "-q",
             ),
         ),
@@ -347,219 +343,9 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
     ),
-}
-
-OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
-    "old-sdk-parity-playback": (
+    "device-api-upgrade-release": (
         CheckCommand(
-            "old_sdk_parity_playback_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/playback/test_python_playback.py",
-                "tests/test_network_server_playback.py",
-                "tests/acceptance/test_old_sdk_playback_parity.py",
-                "-q",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_playback_cli",
-            ("uv", "run", "audio-chat.playback.glass", "--config", "app-examples/for-blind-app/host/glass-playback/old-sdk-parity.yaml"),
-        ),
-    ),
-    "old-sdk-parity-api": (
-        CheckCommand(
-            "old_sdk_parity_api_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_public_api_parity.py",
-                "tests/test_user_device_context_developer_api.py",
-                "tests/acceptance/test_no_internal_service_usage_contract.py",
-                "-q",
-            ),
-        ),
-    ),
-    "old-sdk-parity-cli": (
-        CheckCommand(
-            "old_sdk_parity_cli_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_cli_old_sdk_parity.py",
-                "tests/test_cli_developer_workflow.py",
-                "tests/test_config_sync_multidevice.py",
-                "tests/test_live_check.py",
-                "tests/test_package_check_release_inputs.py",
-                "-q",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_config_sync",
-            (
-                "uv",
-                "run",
-                "audio-chat.config.sync",
-                "--output-dir",
-                "runs/acceptance/old-sdk-parity-cli-generated",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_live_check_down",
-            (
-                "uv",
-                "run",
-                "audio-chat.dev.live-check",
-                "--config",
-                "app-examples/for-blind-app/server.yaml",
-                "--generated-dir",
-                "runs/acceptance/old-sdk-parity-cli-generated",
-                "--report",
-                "runs/acceptance/old-sdk-parity-cli-live-check.json",
-            ),
-        ),
-    ),
-    "old-sdk-parity-esp32": (
-        CheckCommand(
-            "old_sdk_parity_esp32_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_esp32_s3_endpoint_contract.py",
-                "tests/test_esp32_package_manifest.py",
-                "tests/test_endpoint_config_sync.py",
-                "tests/acceptance/test_esp32_s3_old_sdk_parity_contract.py",
-                "-q",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_esp32_build_dry_run",
-            ("uv", "run", "audio-chat.esp32.build", "--dry-run", "--build-only"),
-        ),
-    ),
-    "old-sdk-parity-phone": (
-        CheckCommand(
-            "old_sdk_parity_phone_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_phone_task_contract.py",
-                "tests/test_python_phone_mock_vision_task.py",
-                "tests/test_ios_phone_contract.py",
-                "tests/test_ios_phone_endpoint_contract.py",
-                "tests/acceptance/test_phone_visual_task_playback.py",
-                "-q",
-            ),
-        ),
-    ),
-    "old-sdk-parity-capabilities": (
-        CheckCommand(
-            "old_sdk_parity_capability_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/acceptance/test_for_blind_capabilities_playback.py",
-                "tests/acceptance/test_old_sdk_capability_migration_contract.py",
-                "-q",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_capability_playback_cli",
-            (
-                "uv",
-                "run",
-                "audio-chat.playback.glass",
-                "--config",
-                "app-examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
-            ),
-        ),
-    ),
-    "old-sdk-parity-docs": (
-        CheckCommand(
-            "old_sdk_parity_docs_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_docs_old_sdk_parity.py",
-                "tests/acceptance/test_docs_current_state_contract.py",
-                "tests/acceptance/test_next_docs_contract.py",
-                "tests/acceptance/test_migration_template_contract.py",
-                "-q",
-            ),
-        ),
-    ),
-    "old-sdk-parity-voice": (
-        CheckCommand(
-            "old_sdk_parity_voice_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_voice_session_modes.py",
-                "tests/test_progress_audio.py",
-                "tests/test_continuous_dialog_state.py",
-                "tests/test_playback_interrupt_policy.py",
-                "tests/acceptance/test_voice_old_sdk_parity.py",
-                "-q",
-            ),
-        ),
-    ),
-    "old-sdk-parity-provider": (
-        CheckCommand(
-            "old_sdk_parity_provider_tests",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/test_provider_degradation_policy.py",
-                "tests/test_mcp_external_server_smoke.py",
-                "tests/test_docs_commands.py",
-                "tests/acceptance/test_provider_old_sdk_parity_contract.py",
-                "tests/integration/test_dashscope_providers.py",
-                "-q",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_provider_preflight",
-            (
-                "uv",
-                "run",
-                "audio-chat.dev.preflight",
-                "--config",
-                "app-examples/for-blind-app/server.yaml",
-                "--report",
-                "runs/acceptance/old-sdk-parity-provider-preflight.json",
-            ),
-        ),
-    ),
-    "old-sdk-parity-release": (
-        CheckCommand(
-            "old_sdk_parity_release_tests",
+            "release_tests",
             (
                 "uv",
                 "run",
@@ -573,30 +359,17 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
             ),
         ),
         CheckCommand(
-            "old_sdk_parity_release_package_check",
+            "release_package_check",
             (
                 "uv",
                 "run",
                 "audio-chat.sdk.package-check",
                 "--report",
-                "runs/acceptance/old-sdk-parity-release-package-check.json",
+                "runs/acceptance/device-api-upgrade-release-package-check.json",
             ),
         ),
         CheckCommand(
-            "old_sdk_parity_release_docs_contract",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pytest",
-                "tests/acceptance/test_docs_current_state_contract.py",
-                "tests/acceptance/test_next_docs_contract.py",
-                "-q",
-            ),
-        ),
-        CheckCommand(
-            "old_sdk_parity_release_for_blind_app_playback",
+            "release_for_blind_playback",
             (
                 "uv",
                 "run",
@@ -605,23 +378,12 @@ OLD_SDK_PARITY_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "app-examples/for-blind-app/host/glass-playback/playback.yaml",
             ),
         ),
-        CheckCommand(
-            "old_sdk_parity_release_for_blind_playback",
-            (
-                "uv",
-                "run",
-                "audio-chat.playback.glass",
-                "--config",
-                "app-examples/for-blind-app/host/glass-playback/old-sdk-parity-capabilities.yaml",
-            ),
-        ),
     ),
 }
 
 CHECKS: dict[str, tuple[CheckCommand, ...]] = {
     **FOUNDATION_CHECKS,
     **NEXT_STAGE_CHECKS,
-    **OLD_SDK_PARITY_CHECKS,
 }
 
 

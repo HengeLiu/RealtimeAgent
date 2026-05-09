@@ -12,7 +12,7 @@
 4. 传感器和执行器使用固定语义 API，命令类能力使用更柔性的 `commands` API。
 5. 麦克风和喇叭属于系统音频通道，不作为普通设备能力开放给 Tool / Task 随意调用。
 6. Tool 是 Agent Loop 内的一次短生命周期调用，不启动长期后台任务。
-7. Task 使用 `DeviceContext`，可以维护持续数据流、异步命令和跨设备状态。
+7. Task 使用 `TaskContext`，可以维护持续数据流、异步命令和跨设备状态。
 
 ### 1.1 当前架构状态
 
@@ -38,7 +38,7 @@ class ToolContext {
   +output: OutputFacade
 }
 
-class DeviceContext {
+class TaskContext {
   +devices: TaskDeviceFacade
 }
 
@@ -84,9 +84,9 @@ class TaskCommandFacade {
   +subscribe_result()
 }
 
-ToolContext <|-- DeviceContext
+ToolContext <|-- TaskContext
 ToolContext o-- ToolDeviceFacade
-DeviceContext o-- TaskDeviceFacade
+TaskContext o-- TaskDeviceFacade
 ToolDeviceFacade o-- ToolSensorFacade
 ToolDeviceFacade o-- ToolActuatorFacade
 ToolDeviceFacade o-- ToolCommandFacade
@@ -96,7 +96,7 @@ TaskDeviceFacade o-- TaskCommandFacade
 @enduml
 ```
 
-`DeviceContext` 继承 `ToolContext` 的可用能力，但替换或扩展 `devices` facade，使 Task 可以使用长时和异步能力。Tool 不应该通过类型绕过限制拿到 Task 级接口。
+`TaskContext` 继承 `ToolContext` 的可用能力，但替换或扩展 `devices` facade，使 Task 可以使用长时和异步能力。Tool 不应该通过类型绕过限制拿到 Task 级接口。
 
 ## 2. Context 分层
 
@@ -138,9 +138,9 @@ ToolContext 中不提供 `tasks`、`memory`、`skills` 这类服务入口。它�
 
 这样做的原因是：是否启动任务、是否查询记忆、是否读取 Skill，都应该由模型根据可见工具自行决定，而不是某个业务 Tool 在内部绕过工具列表调用。
 
-### 2.2 DeviceContext
+### 2.2 TaskContext
 
-`DeviceContext` 用于 Task，扩展自 `ToolContext`，允许长时、异步和持续数据流。
+`TaskContext` 用于 Task，扩展自 `ToolContext`，允许长时、异步和持续数据流。
 
 允许使用：
 
@@ -180,7 +180,7 @@ Tool 执行时：
 Task 执行时：
 
 1. 专门的启动 Task Tool 请求 Task Engine 创建任务。
-2. Task Engine 创建任务状态并注入 `DeviceContext`。
+2. Task Engine 创建任务状态并注入 `TaskContext`。
 3. Task 可以启动持续数据流、订阅远程命令结果、调度内部事件。
 4. Task 完成、失败、取消或超时后，Task Engine 负责状态收敛和资源清理。
 
@@ -511,7 +511,7 @@ context.devices.sensors
 
 ### 6.0 通用签名
 
-所有普通传感器都提供 `one()`，只在 `DeviceContext` 中提供 `stream()`。
+所有普通传感器都提供 `one()`，只在 `TaskContext` 中提供 `stream()`。
 
 ```python
 async def one(
@@ -588,7 +588,7 @@ asset = await context.devices.sensors.rgb.one(
 )
 ```
 
-持续获取，仅 `DeviceContext` 可用：
+持续获取，仅 `TaskContext` 可用：
 
 ```python
 async for asset in context.devices.sensors.rgb.stream(
@@ -768,7 +768,7 @@ await context.devices.actuators.vibrator.one(
 )
 ```
 
-持续发送，仅 `DeviceContext` 可用：
+持续发送，仅 `TaskContext` 可用：
 
 ```python
 await context.devices.actuators.vibrator.stream(
@@ -871,7 +871,7 @@ CommandResult(
 
 ### 8.2 持续命令
 
-仅 `DeviceContext` 可用：
+仅 `TaskContext` 可用：
 
 ```python
 handle = await context.devices.commands.start(
@@ -892,7 +892,7 @@ Task 可以维护远程命令状态：
 class NavigationFollowTask(BaseTask):
     task_type = "navigation_follow"
 
-    async def on_start(self, context: DeviceContext) -> None:
+    async def on_start(self, context: TaskContext) -> None:
         handle = await context.devices.commands.start(
             name="device.navigation.track",
             selector={"device_role": "phone"},
@@ -1009,7 +1009,7 @@ class CapturePhotoTool(BaseTool):
 ## 10. 推荐 Task 示例
 
 ```python
-from audio_chat import BaseTask, DeviceContext
+from audio_chat import BaseTask, TaskContext
 
 
 class WatchFrontSceneTask(BaseTask):
@@ -1017,7 +1017,7 @@ class WatchFrontSceneTask(BaseTask):
 
     task_type = "watch_front_scene"
 
-    async def on_start(self, context: DeviceContext) -> None:
+    async def on_start(self, context: TaskContext) -> None:
         async for frame in context.devices.sensors.rgb.stream(
             selector={"device_role": "front_glass"},
             fps=1,
@@ -1034,7 +1034,7 @@ class WatchFrontSceneTask(BaseTask):
 跨设备远程任务示例：
 
 ```python
-from audio_chat import BaseTask, DeviceContext
+from audio_chat import BaseTask, TaskContext
 
 
 class PhoneNavigationTask(BaseTask):
@@ -1042,7 +1042,7 @@ class PhoneNavigationTask(BaseTask):
 
     task_type = "phone_navigation"
 
-    async def on_start(self, context: DeviceContext) -> None:
+    async def on_start(self, context: TaskContext) -> None:
         handle = await context.devices.commands.start(
             name="device.navigation.track",
             selector={"device_role": "phone"},

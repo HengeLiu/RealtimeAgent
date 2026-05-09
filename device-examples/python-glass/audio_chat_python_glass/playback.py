@@ -234,8 +234,7 @@ def _bytes_from_config(value: Any, *, default: bytes) -> bytes:
 def _audio_from_action(action: dict[str, Any]) -> PlaybackAudio | None:
     """从 playback action 中解析 WAV 输入。
 
-    主要逻辑：支持 `audio_wav`、`wav_path` 和 `wav` 三种配置名，方便复用老 SDK
-    音频样例路径。
+    主要逻辑：支持 `audio_wav`、`wav_path` 和 `wav` 三种当前配置名。
     参数：`action` 为场景中的单个 action。
     返回值：命中 WAV 时返回 `PlaybackAudio`，否则返回 None。
     异常情况：WAV 不存在或格式不符合要求时由 `load_wav_audio` 抛出。

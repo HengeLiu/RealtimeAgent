@@ -2,5 +2,5 @@ server_url: http://127.0.0.1:8765
 runs_root: runs/audio-chat
 user_id: user-python-glass-001
 device_id: dev-python-glass-001
-audio_wav: legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav
+audio_wav: testdata/audio-sample/wav/看一下我前面有什么.wav
 chunk_interval_ms: 0

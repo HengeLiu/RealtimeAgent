@@ -1163,7 +1163,7 @@ class RealtimeAudioAgentCore:
         """返回 Omni Realtime 可消费的 function calling schema。
 
         主要逻辑：ToolGateway 默认输出 OpenAI-compatible `function` 嵌套结构；
-        Qwen Omni Realtime 沿用历史版本 的扁平 function schema。
+        Qwen Omni Realtime 使用 provider 要求的扁平 function schema。
         参数：无。
         返回值：Realtime session.update 可使用的 tools 列表。
         异常情况：未绑定 ToolGateway 时返回空列表。

@@ -370,7 +370,7 @@ class RunRecorder:
         """记录 Tool 调用轨迹。
 
         主要逻辑：写入稳定 `tool-events.jsonl`，并保留旧 `tool-trace.jsonl`
-        兼容入口，供回放和排障读取。
+        读取入口，供回放和排障使用。
         参数：`session_id` 为会话，`record` 为工具调用结构。
         返回值：无。
         异常情况：文件写入失败时抛出 IO 异常。

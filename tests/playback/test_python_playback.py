@@ -34,15 +34,15 @@ def test_python_playback_sdk_loop_writes_runs_artifacts(tmp_path: Path) -> None:
 
 
 def test_python_playback_accepts_recorded_wav_input(tmp_path: Path) -> None:
-    """测试目标：验证 python-glass playback 可以用老 SDK 录制的 WAV 作为麦克风输入。
+    """测试目标：验证 python-glass playback 可以用当前样例 WAV 作为麦克风输入。
 
-    测试方法：读取 `legacy/openaiglass-sdk/testdata/audio-sample/wav` 中的真实样例，通过
+    测试方法：读取 `testdata/audio-sample/wav` 中的真实样例，通过
     in-process playback 上传给 server。
     预期结果：回放结果记录 WAV 路径、chunk 数和总字节数，落盘 input PCM 与 WAV
     数据区完全一致。
     """
 
-    wav_path = Path("legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav")
+    wav_path = Path("testdata/audio-sample/wav/看一下我前面有什么.wav")
     audio = load_wav_audio(wav_path)
     result = run_playback(
         {

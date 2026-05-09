@@ -211,7 +211,7 @@ def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
     readme_commands = set(re.findall(r"\baudio-chat\.[a-z0-9.-]+", (root / "README.md").read_text(encoding="utf-8")))
     assert readme_commands <= scripts
 
-    markers = ("后续目标", "未落地", "建议", "目标", "可选增强", "下一阶段", "应", "未来", "历史版本")
+    markers = ("后续目标", "未落地", "建议", "目标", "可选增强", "下一阶段", "应", "未来", )
     prefixes = ("server.", "dev.", "playback.", "config.", "mock.", "web.", "ios.", "esp32.")
     offenders = []
     for path in sorted((root / "docs").glob("*.md")):

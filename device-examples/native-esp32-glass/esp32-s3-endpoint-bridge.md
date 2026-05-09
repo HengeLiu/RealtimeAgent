@@ -17,8 +17,8 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 
 可复用的旧试验代码：
 
-1. `legacy/openaiglass-sdk/glass-esp32/main/test_official_aec.c`
-2. `legacy/openaiglass-sdk/server-python/devtools/omni_esp32_aec_relay.py`
+1. 当前 `device-examples/native-esp32-glass/firmware` 参考工程
+2. 当前 `device-examples/native-esp32-glass` 端侧协议说明
 
 旧试验代码里的关键经验需要迁移到新版 audio-chat endpoint bridge：
 
@@ -88,8 +88,7 @@ uv run audio-chat.config.sync \
 7. `AUDIO_CHAT_AUDIO_CHUNK_MS=20`
 8. properties 和 subscriptions JSON
 
-旧 AEC 试验固件刷写入口仍可参考 `legacy/openaiglass-sdk/glass-esp32`；迁移到 audio-chat
-bridge 后，刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备
+当前 bridge 刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备
 token。真实命令应在真机联调时补入本文件，避免提交本地 WiFi 或 token。
 
 ## 成功事件链

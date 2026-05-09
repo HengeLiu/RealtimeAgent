@@ -121,9 +121,6 @@ def _resolve_app_config(app_dir: Path) -> Path:
     config_path = app_dir / "server.yaml"
     if config_path.is_file():
         return config_path
-    legacy_path = app_dir / "config" / "server.yaml"
-    if legacy_path.exists():
-        raise FileNotFoundError(f"server.yaml must be placed at app root: {config_path}")
     raise FileNotFoundError(f"server.yaml not found under app directory: {app_dir}")
 
 

@@ -7,7 +7,7 @@ class TimerTask(BaseTask):
     """后台计时器示例 Task。
 
     主要功能：
-    1. 展示 Task 启动后如何通过 `ToolDeviceFacade.submit_text()` 提交输出。
+    1. 展示 Task 启动后如何通过 `context.output.say()` 提交输出。
     2. 展示 TaskEvent 如何通过 bridge 回流，不直接操作端侧连接。
     3. 展示取消时如何提交取消事件和通知。
     """

@@ -201,15 +201,10 @@ class JsonlMemoryStore(MemoryStore):
         safe_user_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in user_id)
         return self.root / safe_user_id / "memory.json"
 
-    def _legacy_path_for(self, user_id: str) -> Path:
-        safe_user_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in user_id)
-        return self.root / f"{safe_user_id}.jsonl"
-
     def _load_raw_records(self, user_id: str) -> list[dict[str, Any]]:
         """读取用户 memory 原始记录。
 
-        主要逻辑：优先读取新版 `memory.json` 数组；如果不存在，则兼容读取旧版
-        `<user_id>.jsonl`，方便已有开发数据迁移。
+        主要逻辑：读取当前 `memory.json` 数组存储。
         参数：`user_id` 为用户编号。
         返回值：原始 dict 列表。
         异常情况：JSON 损坏时返回空列表，避免阻塞本地开发。
@@ -224,20 +219,7 @@ class JsonlMemoryStore(MemoryStore):
             if isinstance(data, list):
                 return [dict(item) for item in data if isinstance(item, dict)]
             return []
-        legacy_path = self._legacy_path_for(user_id)
-        if not legacy_path.exists():
-            return []
-        rows: list[dict[str, Any]] = []
-        for line in legacy_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                raw = json.loads(line)
-            except Exception:
-                continue
-            if isinstance(raw, dict):
-                rows.append(raw)
-        return rows
+        return []
 
     def _load_effective_records(self, user_id: str) -> list[MemoryRecord]:
         records: dict[str, MemoryRecord] = {}
@@ -360,7 +342,7 @@ class MemoryService:
     def manage(self, *, user_id: str, memory_context: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         """根据一段自然语言上下文维护长期记忆。
 
-        主要逻辑：第一版在 SDK 内做保守规则解析，保持与老 SDK 相同的工具入参和两层存储格式；
+        主要逻辑：在 SDK 内做保守规则解析，保持稳定工具入参和两层存储格式；
         后续可以替换成独立 MemoryAgent，但不改变 Tool 协议。
         """
 

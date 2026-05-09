@@ -322,7 +322,7 @@ devices:
     sensors:
       mic:
         type: wav
-        path: legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav
+        path: testdata/audio-sample/wav/看一下我前面有什么.wav
       camera:
         type: file
         path: testdata/images/front.jpg

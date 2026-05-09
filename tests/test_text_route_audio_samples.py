@@ -9,7 +9,7 @@ from audio_chat.server import AudioChatHttpServer
 from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint, PythonPlaybackEndpoint, load_wav_audio
 
 
-AUDIO_SAMPLE_ROOT = Path("legacy/openaiglass-sdk/testdata/audio-sample/wav")
+AUDIO_SAMPLE_ROOT = Path("testdata/audio-sample/wav")
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -19,7 +19,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 def test_text_route_uses_audio_sample_filename_as_mock_asr_transcript_and_calls_device_tool(tmp_path: Path) -> None:
     """测试目标：验证 text 模型路线可以用真实 AudioSample 音频完成自动化回放。
 
-    测试方法：Python glass 无头端测上传老 SDK 的 WAV 样例；mock ASR 根据 WAV 文件名
+    测试方法：Python glass 无头端测上传当前 WAV 样例；mock ASR 根据 WAV 文件名
     生成转写文本，mock text model 按转写触发 `query_device_state` 工具。
     预期结果：ASR、TextAgentCore、ToolGateway、流式 TTS 和 speaker 输出全部产生
     可回放产物，工具轨迹中包含设备状态查询。

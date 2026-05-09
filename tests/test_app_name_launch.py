@@ -57,16 +57,16 @@ def test_app_name_requires_root_server_yaml() -> None:
     assert launch.config_path == launch.app_dir / "server.yaml"
 
 
-def test_config_path_rejects_legacy_config_server_yaml(tmp_path) -> None:
-    """`config/server.yaml` should not be accepted as an app config entry."""
+def test_config_path_requires_app_root_server_yaml(tmp_path) -> None:
+    """`nested config/server.yaml` should not be accepted as an app config entry."""
 
-    legacy_dir = tmp_path / "demo-app" / "config"
-    legacy_dir.mkdir(parents=True)
-    legacy_config = legacy_dir / "server.yaml"
-    legacy_config.write_text("server:\n  port: 8765\n", encoding="utf-8")
+    nested_dir = tmp_path / "demo-app" / "config"
+    nested_dir.mkdir(parents=True)
+    nested_config = nested_dir / "server.yaml"
+    nested_config.write_text("server:\n  port: 8765\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="app root"):
-        load_config_as_app(legacy_config)
+        load_config_as_app(nested_config)
 
 
 def test_server_start_dry_run_accepts_app_name(tmp_path) -> None:

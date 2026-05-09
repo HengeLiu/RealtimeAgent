@@ -58,12 +58,12 @@ def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
     """测试目标：验证网络模式 python-glass 会按真实协议分片上传录制 WAV。
 
     测试方法：启动真实 aiohttp server，使用 `NetworkPythonPlaybackEndpoint` 上传
-    老 SDK 的 WAV 样例。
+    当前 WAV 样例。
     预期结果：回放通过，input PCM 落盘内容与原 WAV 数据区一致，且 chunk 数大于 1。
     """
 
     async def run() -> None:
-        wav_path = Path("legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav")
+        wav_path = Path("testdata/audio-sample/wav/看一下我前面有什么.wav")
         audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
         server = AudioChatHttpServer(audio_app)
         app = server.create_web_app()

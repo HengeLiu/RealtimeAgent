@@ -8,8 +8,8 @@ from pathlib import Path
 AUDIO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_package_check_covers_old_sdk_parity_entry_points(tmp_path: Path) -> None:
-    """测试目标：确认 package-check 覆盖老 SDK 可用性对齐阶段新增 CLI。
+def test_package_check_covers_current_entry_points(tmp_path: Path) -> None:
+    """测试目标：确认 package-check 覆盖当前 SDK CLI。
 
     测试方法：运行 package-check 并读取报告中的 entry point 数量。
     预期结果：报告通过，且脚本数量覆盖 config/server/playback/web/iOS/ESP32/dev/sdk。

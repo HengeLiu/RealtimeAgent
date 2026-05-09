@@ -186,7 +186,7 @@ class AssetService:
 
     主要功能：管理 sensor.rgb 等非主音频流资产，提供缓存命中、端侧上传请求、
     request_id 关联、超时等待和 TTL 过滤。
-    主要方法：`request_asset()` 请求资产，`watch_assets()` 监听连续资产，
+    主要方法：`request_asset()` 请求资产，内部 watch 接口监听连续资产，
     `store_chunk()` 接收端侧上传，
     `get_asset_window()` 查询连续 stream 的最小缓存窗口。
     """

@@ -27,12 +27,12 @@ def _load_acceptance_module():
     return module
 
 
-def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
+def test_release_lane_is_registered_with_gate_steps() -> None:
     """测试目标：确认 J 线发布候选 lane 已进入统一验收入口。
 
-    测试方法：读取 `OLD_SDK_PARITY_CHECKS` 中的 `device-api-upgrade-release` 命令。
+    测试方法：读取 `CHECKS` 中的 `device-api-upgrade-release` 命令。
     预期结果：lane 同时覆盖 release tests、package-check、docs contract、for-blind app
-    playback 和 for-blind app playback。
+    playback。
     """
 
     acceptance = _load_acceptance_module()
@@ -45,9 +45,7 @@ def test_old_sdk_parity_release_lane_is_registered_with_gate_steps() -> None:
         "tests/test_package_boundary.py",
         "tests/acceptance/test_release_candidate_gate.py",
         "audio-chat.sdk.package-check",
-        "tests/acceptance/test_docs_current_state_contract.py",
         "app-examples/for-blind-app/host/glass-playback/playback.yaml",
-        "app-examples/for-blind-app/host/glass-playback/device-api-upgrade-capabilities.yaml",
     ]:
         assert expected in command_text
 

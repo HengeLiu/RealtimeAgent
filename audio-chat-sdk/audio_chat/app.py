@@ -100,9 +100,6 @@ class AudioChatConfig:
     output_tool_progress_priority: str = "low"
     output_tool_progress_ttl_seconds: int = 10
     agent_mode: str = "text"
-    voice_server_mode: str = ""
-    voice_conversation_mode: str = "continuous"
-    voice_session_lifecycle: str = "persistent"
     realtime_provider: str = "qwen"
     realtime_model: str = "qwen3.5-omni-plus-realtime"
     realtime_turn_detection: str = "provider"
@@ -218,9 +215,6 @@ class AudioChatConfig:
             output_tool_progress_priority=loaded.output.tool_progress_priority,
             output_tool_progress_ttl_seconds=loaded.output.tool_progress_ttl_seconds,
             agent_mode=_normalize_agent_mode(loaded.agent.mode),
-            voice_server_mode=loaded.voice.server_mode,
-            voice_conversation_mode=loaded.voice.conversation_mode,
-            voice_session_lifecycle=loaded.voice.session_lifecycle,
             realtime_provider=realtime.provider,
             realtime_model=realtime.model,
             realtime_turn_detection=realtime.turn_detection,

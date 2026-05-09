@@ -31,9 +31,6 @@
     "audio_pipeline": {
       "$ref": "#/$defs/audioPipeline"
     },
-    "voice": {
-      "$ref": "#/$defs/voice"
-    },
     "asset": {
       "$ref": "#/$defs/asset"
     },
@@ -271,22 +268,6 @@
         "max_session_seconds": {
           "type": "integer",
           "minimum": 0
-        }
-      }
-    },
-    "voice": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "server_mode": {
-          "type": "string",
-          "enum": ["", "text", "text_server", "realtime", "realtime_audio", "omni_server", "omni_realtime"]
-        },
-        "conversation_mode": {
-          "type": "string"
-        },
-        "session_lifecycle": {
-          "type": "string"
         }
       }
     },

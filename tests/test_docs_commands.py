@@ -174,7 +174,7 @@ def test_for_blind_server_example_documents_text_model_route(tmp_path) -> None:
 def test_developer_context_device_design_doc_covers_target_contracts() -> None:
     """测试目标：确认 Context 与设备 API 设计说明覆盖新版目标契约。
 
-    测试方法：读取指南文档，检查 ToolContext、DeviceContext、typed devices API、
+    测试方法：读取指南文档，检查 ToolContext、TaskContext、typed devices API、
     supports.sensors、supports.actuators、selector、AssetRef 和音频通道限制等关键概念。
     预期结果：设计文档清楚标注目标接口，避免被误当成当前实现说明。
     """
@@ -184,7 +184,7 @@ def test_developer_context_device_design_doc_covers_target_contracts() -> None:
         "设计说明",
         "不是当前版本的开发操作手册",
         "ToolContext",
-        "DeviceContext",
+        "TaskContext",
         "context.devices.sensors.rgb.one",
         "context.devices.sensors.rgb.stream",
         "context.devices.commands.call",

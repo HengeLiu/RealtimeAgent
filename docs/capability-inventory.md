@@ -6,7 +6,7 @@
 
 | 维度 | 判断规则 |
 | --- | --- |
-| 新定位归属 | Tool 是 Agent Loop 内的一次短生命周期调用；Task 使用 DeviceContext，负责持续数据流、异步命令、跨设备状态、取消、超时和恢复。 |
+| 新定位归属 | Tool 是 Agent Loop 内的一次短生命周期调用；Task 使用 TaskContext，负责持续数据流、异步命令、跨设备状态、取消、超时和恢复。 |
 | 盲人相关 | 强相关表示该能力直接服务视觉补偿、出行安全、导航、红绿灯、找物或眼前画面理解；否表示通用 SDK、调试、记忆、搜索、计时或样板能力。 |
 | 当前注册状态 | `for-blind-app` 当前会注册 SDK 内置 Tool、启用的扩展 Tool，以及 `capabilities/` 下自动发现的业务 Tool / Task。`templates/` 目录不纳入当前注册能力。 |
 
@@ -57,7 +57,7 @@
 | 30 | `TaskSpec` | SDK | 描述 Task 规格 | 收敛 task_type、version、timeout、cancel_supported、max_running_per_user。 | Task 基础设施 | 否 |
 | 31 | `TaskRef` | SDK | 任务引用 | 对外暴露 task_id、task_type、state、summary、metadata。 | Task 基础设施 | 否 |
 | 32 | `TaskEvent` | SDK | 任务事件 | 承载状态回流、通知、Agent 决策字段和 artifacts。 | Task 基础设施 | 否 |
-| 33 | `DeviceContext` / `TaskContext` | SDK | Task 执行上下文 | 注入 devices、output、assets、bridge、engine，并提供 complete、fail、schedule_event。 | Task 基础设施 | 否 |
+| 33 | `TaskContext` / `TaskContext` | SDK | Task 执行上下文 | 注入 devices、output、assets、bridge、engine，并提供 complete、fail、schedule_event。 | Task 基础设施 | 否 |
 | 34 | `BaseTask` | SDK | 业务 Task 基类 | 定义 `on_start()`、`on_event()`、`on_cancel()` 扩展点。 | Task 基础设施 | 否 |
 | 35 | `TaskStateMachine` | SDK | 状态机 | 校验 scheduled、running、waiting_external、completed、cancelled、failed、timeout 等状态流转。 | Task 基础设施 | 否 |
 | 36 | `TaskStore` | SDK | 内存任务存储 | 保存 TaskRef 和 TaskEvent。 | Task 基础设施 | 否 |

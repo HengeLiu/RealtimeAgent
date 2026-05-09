@@ -1184,7 +1184,7 @@ class _SensorCapability:
 
         if not self._allow_stream:
             raise AudioChatError(
-                f"streaming sensor API is only available in DeviceContext: {self.stream_type}",
+                f"streaming sensor API is only available in TaskContext: {self.stream_type}",
                 code=ErrorCode.PERMISSION_DENIED,
             )
         return self._context._sensor_stream(
@@ -1253,7 +1253,7 @@ class _VibratorCapability:
         """发送振动器连续数据。"""
 
         if not self._allow_stream:
-            raise AudioChatError("streaming actuator API is only available in DeviceContext", code=ErrorCode.PERMISSION_DENIED)
+            raise AudioChatError("streaming actuator API is only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_capability("actuator.haptic", selector=selector, require_single=True)
         merged_params = self._context._merge_capability_params("actuator.haptic", devices=devices, params=params)
         writer = self._context._open_output_stream_for_devices(
@@ -1367,7 +1367,7 @@ class _CommandsFacade:
         """启动远程长命令。"""
 
         if not self._allow_long_running:
-            raise AudioChatError("long running commands are only available in DeviceContext", code=ErrorCode.PERMISSION_DENIED)
+            raise AudioChatError("long running commands are only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
         command_id = new_id("cmd")
         self._context._publish_event_to_devices(
@@ -1414,28 +1414,6 @@ class ToolDeviceFacade:
         """供 SDK 内置系统工具读取设备快照，普通业务代码不应依赖。"""
 
         return self._context._device_snapshots()
-
-    def _publish_control_event(
-        self,
-        event_name: str | EventName,
-        *,
-        stream_type: str | StreamType | None = None,
-        payload: dict | None = None,
-        selector: dict | None = None,
-        selection: str = "first_available",
-    ) -> PublishResult:
-        """供 SDK 内置系统工具发布协议事件，普通业务代码不应依赖。"""
-
-        devices = self._context._resolve_devices_for_capability(stream_type, selector=selector, require_single=False)
-        if selection == "first_available":
-            devices = devices[:1]
-        return self._context._publish_event_to_devices(
-            event_name=event_name,
-            stream_type=stream_type,
-            payload=payload,
-            devices=devices,
-        )
-
 
 class TaskDeviceFacade(ToolDeviceFacade):
     """Task 可见设备能力门面。
@@ -1637,7 +1615,7 @@ class DeviceRuntime:
         """typed sensor stream 的内部实现。
 
         主要逻辑：先按 selector 确认只命中一台设备，再复用当前协议原生
-        `stream.control.open.requested` 和 `watch_assets()`。
+        `stream.control.open.requested` 和内部资产订阅。
         """
 
         devices = self._resolve_devices_for_capability(stream_type, selector=selector, require_single=True)
