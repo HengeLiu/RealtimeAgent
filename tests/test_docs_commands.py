@@ -169,3 +169,73 @@ def test_for_blind_server_example_documents_text_model_route(tmp_path) -> None:
     assert config.asr_provider == "dashscope"
     assert config.tts_provider == "dashscope"
     assert config.allow_mock_fallback is False
+
+
+def test_developer_context_device_design_doc_covers_target_contracts() -> None:
+    """测试目标：确认 Context 与设备 API 设计说明覆盖新版目标契约。
+
+    测试方法：读取指南文档，检查 ToolContext、DeviceContext、typed devices API、
+    supports.sensors、supports.actuators、selector、AssetRef 和音频通道限制等关键概念。
+    预期结果：设计文档清楚标注目标接口，避免被误当成当前实现说明。
+    """
+
+    guide = (AUDIO_ROOT / "docs" / "context-device-api-design.md").read_text(encoding="utf-8")
+    required = [
+        "设计说明",
+        "不是当前版本的开发操作手册",
+        "ToolContext",
+        "DeviceContext",
+        "context.devices.sensors.rgb.one",
+        "context.devices.sensors.rgb.stream",
+        "context.devices.commands.call",
+        "context.devices.commands.start",
+        "context.output.say",
+        "supports.sensors[].type",
+        "supports.actuators[].type",
+        "external",
+        "AssetRef",
+        "sensors.mic",
+        "actuators.speaker",
+        "vibrator",
+        "selector",
+        "创建输入数据流时，如果匹配到多个设备，SDK 应直接抛出错误",
+        "ToolContext 中不提供 `tasks`、`memory`、`skills` 这类服务入口",
+        "麦克风和喇叭属于系统音频通道",
+        "Selector 解析算法",
+        "DeviceLease",
+        "CommandHandle",
+        "DeviceNotFoundError",
+        "从当前实现迁移到目标 API",
+    ]
+    assert not [term for term in required if term not in guide]
+
+
+def test_device_capability_development_guide_covers_current_workflow() -> None:
+    """测试目标：确认当前开发说明覆盖真实可用的设备注册和功能开发入口。
+
+    测试方法：读取开发说明，检查当前 supports 列表、UserDeviceContext 兼容 API、
+    BaseTool、BaseTask、TaskContext、运行命令和调试产物。
+    预期结果：开发者有一份能按当前代码直接操作的说明，不会误用目标设计 API。
+    """
+
+    guide = (AUDIO_ROOT / "docs" / "device-capability-development-guide.md").read_text(encoding="utf-8")
+    required = [
+        "当前仓库已经可用",
+        "supports",
+        "supports[].id",
+        "context.devices.request_asset",
+        "context.devices.publish_event",
+        "context.devices.watch_assets",
+        "context.devices.submit_text",
+        "BaseTool",
+        "BaseTask",
+        "ToolSpec",
+        "TaskContext",
+        "AssetRef | None",
+        "audio-chat.device.validate",
+        "audio-chat.server.run",
+        "audio-chat.web.open",
+        "runs/audio-chat/sessions/<session_id>/assets.jsonl",
+        "当前阶段不要把新版目标 API 写进业务代码",
+    ]
+    assert not [term for term in required if term not in guide]
