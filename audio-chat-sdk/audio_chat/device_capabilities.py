@@ -87,10 +87,12 @@ def validate_device_capabilities_file(data: dict[str, Any], *, require_identity:
     """
 
     if require_identity:
-        for key in ("device_id", "user_id", "name"):
+        for key in ("device_id", "user_id"):
             if not isinstance(data.get(key), str) or not data.get(key):
                 raise ValueError(f"{key} is required")
-    supports = data.get("supports")
+        if not isinstance(data.get("name") or data.get("device_name"), str) or not (data.get("name") or data.get("device_name")):
+            raise ValueError("name or device_name is required")
+    supports = _expand_structured_supports(data.get("supports"))
     if not isinstance(supports, list) or not supports:
         raise ValueError("supports must be a non-empty list")
     normalized: list[dict[str, Any]] = []
@@ -105,12 +107,12 @@ def validate_device_capabilities_file(data: dict[str, Any], *, require_identity:
     return normalized
 
 
-def compile_supports_to_subscriptions(supports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compile_supports_to_subscriptions(supports: list[dict[str, Any]] | dict[str, Any]) -> list[dict[str, Any]]:
     """把设备语义能力编译成协议订阅。
 
     主要逻辑：开发者只写 `supports`；SDK 根据标准语义生成 `subscriptions`，作为事件
     路由的真实输入。
-    参数：`supports` 为标准化或原始 supports 列表。
+    参数：`supports` 为标准化 supports 列表，或新版 `sensors/actuators` 结构。
     返回值：订阅字典列表。
     异常情况：supports 非法时由校验逻辑抛出。
     """
@@ -144,13 +146,18 @@ def compile_device_capabilities_file(path: str | Path) -> dict[str, Any]:
 
     data = load_device_capabilities_file(path)
     supports = validate_device_capabilities_file(data, require_identity=True)
+    properties = dict(data.get("properties") or {})
+    if data.get("device_role") is not None:
+        properties["device_role"] = data["device_role"]
+    if data.get("tags") is not None:
+        properties["tags"] = data["tags"]
     payload = {
         "device_id": data["device_id"],
-        "name": data["name"],
-        "device_name": data.get("device_name", data["name"]),
+        "name": data.get("name", data.get("device_name", data["device_id"])),
+        "device_name": data.get("device_name", data.get("name", data["device_id"])),
         "client_type": data.get("client_type", (data.get("runtime") or {}).get("platform", "unknown")),
         "runtime": dict(data.get("runtime") or {}),
-        "properties": dict(data.get("properties") or {}),
+        "properties": properties,
         "supports": supports,
         "subscriptions": compile_supports_to_subscriptions(supports),
     }
@@ -176,18 +183,84 @@ def compile_registration_payload(payload: dict[str, Any]) -> dict[str, Any]:
     supports = result.get("supports")
     if supports is None:
         return result
-    if not isinstance(supports, list):
-        raise ValueError("supports must be a list")
-    compiled = compile_supports_to_subscriptions(supports)
+    expanded_supports = _expand_structured_supports(supports)
+    if not isinstance(expanded_supports, list):
+        raise ValueError("supports must be a list or object")
+    compiled = compile_supports_to_subscriptions(expanded_supports)
     explicit = result.get("subscriptions") or []
     if not isinstance(explicit, list):
         raise ValueError("subscriptions must be a list")
-    result["supports"] = validate_device_capabilities_file({"supports": supports}, require_identity=False)
+    result["supports"] = validate_device_capabilities_file({"supports": expanded_supports}, require_identity=False)
     result["subscriptions"] = _dedupe_subscriptions([*compiled, *explicit])
     properties = dict(result.get("properties") or {})
     properties["audio_chat.support_ids"] = [item["id"] for item in result["supports"]]
     result["properties"] = properties
     return result
+
+
+def _expand_structured_supports(supports: Any) -> Any:
+    """把新版结构化 supports 展开为当前内部标准列表。
+
+    新版设备文件使用：
+
+    supports:
+      sensors:
+        - type: rgb
+      actuators:
+        - type: vibrator
+
+    当前路由编译器仍以 `id=sensor.rgb` 这类标准 ID 工作，因此在入口统一展开。
+    """
+
+    if not isinstance(supports, dict):
+        return supports
+    expanded: list[dict[str, Any]] = []
+    for item in supports.get("sensors") or []:
+        if not isinstance(item, dict):
+            raise ValueError("supports.sensors items must be objects")
+        sensor_type = item.get("type")
+        support_id = f"sensor.{sensor_type}"
+        data = _structured_support_item_to_legacy(item, support_id=support_id)
+        expanded.append(data)
+    for item in supports.get("actuators") or []:
+        if not isinstance(item, dict):
+            raise ValueError("supports.actuators items must be objects")
+        actuator_type = item.get("type")
+        support_type = "haptic" if actuator_type == "vibrator" else actuator_type
+        support_id = f"actuator.{support_type}"
+        data = _structured_support_item_to_legacy(item, support_id=support_id)
+        if actuator_type == "vibrator":
+            data.setdefault("commands", ["vibrate"])
+        expanded.append(data)
+    return expanded
+
+
+def _structured_support_item_to_legacy(item: dict[str, Any], *, support_id: str) -> dict[str, Any]:
+    """把结构化能力条目转换成内部兼容格式。
+
+    主要逻辑：设备开发者在新版文件里按 `type/default/external` 描述能力；
+    server 内部继续复用已经稳定的 `id/frequency_hz/options` 编译链路。
+    参数：`item` 为结构化能力条目；`support_id` 为标准语义 ID。
+    返回值：可被旧校验器和订阅编译器识别的能力条目。
+    异常情况：本函数只做字段映射，非法值由后续校验阶段统一抛出。
+    """
+
+    data = {key: value for key, value in item.items() if key not in {"type", "default", "external"}}
+    data["id"] = support_id
+    default = item.get("default")
+    if isinstance(default, dict):
+        data.update(default)
+    if "fps" in data and "frequency_hz" not in data:
+        data["frequency_hz"] = data["fps"]
+    if "format" in data and "formats" not in data:
+        data["formats"] = [data["format"]]
+    if support_id == "sensor.imu" and "sample_rate_hz" in data and "frequency_hz" not in data:
+        data["frequency_hz"] = data["sample_rate_hz"]
+    external = item.get("external")
+    if isinstance(external, dict):
+        data["external"] = dict(external)
+        data.setdefault("options", dict(external))
+    return data
 
 
 def _validate_support_item(index: int, item: dict[str, Any]) -> None:

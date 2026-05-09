@@ -39,14 +39,14 @@ def test_readme_audio_chat_commands_exist_in_pyproject() -> None:
 def test_docs_entry_points_exist_in_pyproject() -> None:
     """测试目标：确认设计文档提到的已实现 entry point 没有缺失。
 
-    测试方法：扫描 README 与下一阶段计划中出现的 `audio-chat.*` 命令。
+    测试方法：扫描 README 与当前开发说明中出现的 `audio-chat.*` 命令。
     预期结果：非 roadmap 文本中的 P0-A 命令都能在 pyproject 中找到。
     """
 
     docs = "\n".join(
         [
             (AUDIO_ROOT / "README.md").read_text(encoding="utf-8"),
-            (AUDIO_ROOT / "docs" / "next-stage-parallel-development-plan.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "docs" / "device-capability-development-guide.md").read_text(encoding="utf-8"),
         ]
     )
     required = {
@@ -213,9 +213,9 @@ def test_developer_context_device_design_doc_covers_target_contracts() -> None:
 def test_device_capability_development_guide_covers_current_workflow() -> None:
     """测试目标：确认当前开发说明覆盖真实可用的设备注册和功能开发入口。
 
-    测试方法：读取开发说明，检查当前 supports 列表、UserDeviceContext 兼容 API、
-    BaseTool、BaseTask、TaskContext、运行命令和调试产物。
-    预期结果：开发者有一份能按当前代码直接操作的说明，不会误用目标设计 API。
+    测试方法：读取开发说明，检查当前 supports 列表、typed facade、UserDeviceContext
+    兼容 API、BaseTool、BaseTask、TaskContext、运行命令和调试产物。
+    预期结果：开发者有一份能按当前代码直接操作的说明，并能分清已落地 API 和目标设计。
     """
 
     guide = (AUDIO_ROOT / "docs" / "device-capability-development-guide.md").read_text(encoding="utf-8")
@@ -223,6 +223,9 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
         "当前仓库已经可用",
         "supports",
         "supports[].id",
+        "context.devices.sensors.rgb.one",
+        "context.devices.commands.call",
+        "context.output.say",
         "context.devices.request_asset",
         "context.devices.publish_event",
         "context.devices.watch_assets",
@@ -235,7 +238,7 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
         "audio-chat.device.validate",
         "audio-chat.server.run",
         "audio-chat.web.open",
-        "runs/audio-chat/sessions/<session_id>/assets.jsonl",
-        "当前阶段不要把新版目标 API 写进业务代码",
+        "runs/audio-chat/<user_id>/<device_id>/assets.jsonl",
+        "当前新 Tool 可以优先试用 typed facade",
     ]
     assert not [term for term in required if term not in guide]

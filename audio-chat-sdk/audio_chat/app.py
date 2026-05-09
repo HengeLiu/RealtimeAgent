@@ -21,7 +21,18 @@ from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
 from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskEventBridge, TaskStore
 from audio_chat.tasks import TaskEvent
-from audio_chat.tools import BUILTIN_TOOLS, EXTENSION_BUILTIN_TOOLS, ToolAutoDiscovery, ToolContextFactory, ToolGateway, ToolPolicy, ToolRegistry, UserDeviceContext
+from audio_chat.tools import (
+    AssetFacade,
+    BUILTIN_TOOLS,
+    EXTENSION_BUILTIN_TOOLS,
+    OutputFacade,
+    ToolAutoDiscovery,
+    ToolContextFactory,
+    ToolGateway,
+    ToolPolicy,
+    ToolRegistry,
+    UserDeviceContext,
+)
 
 
 MEMORY_AGENT_INSTRUCTIONS = (
@@ -323,7 +334,9 @@ class AudioChatApp:
         self.task_engine = TaskEngine(
             store=_build_task_store(self.config),
             bridge=TaskEventBridge(recorder=self.recorder, output_service=self.output_service),
-            device_context_factory=lambda user_id: UserDeviceContext(user_id=user_id, app=self),
+            device_context_factory=lambda user_id: UserDeviceContext(user_id=user_id, app=self, allow_long_running=True),
+            output_context_factory=lambda user_id: OutputFacade(user_id=user_id, app=self),
+            asset_context_factory=lambda user_id: AssetFacade(user_id=user_id, app=self),
             max_running_per_user=self.config.tasks_max_running_per_user,
         )
         self.discovery_errors: list[dict[str, str]] = []

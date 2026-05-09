@@ -69,6 +69,62 @@ def test_unknown_support_id_fails_fast() -> None:
         compile_supports_to_subscriptions([{"id": "sensor.rbg"}])
 
 
+def test_structured_supports_compile_to_legacy_subscriptions(tmp_path: Path) -> None:
+    """测试目标：验证新版结构化能力声明能被 server 编译成当前路由订阅。
+
+    测试方法：构造 `supports.sensors[].type` 和 `supports.actuators[].type` 写法，
+    读取编译结果中的标准 support id、默认参数映射和订阅。
+    预期结果：设备开发者可以按传感器/执行器语义写配置，server 内部仍得到稳定的
+    `sensor.*` / `actuator.*` 能力和订阅。
+    """
+
+    capability_file = tmp_path / "device.audio-chat.yaml"
+    capability_file.write_text(
+        """
+device_id: dev-structured-glass
+user_id: user-structured
+device_name: structured-glass
+device_role: front_glass
+tags: [primary, debug]
+supports:
+  sensors:
+    - type: rgb
+      modes: [single, continuous]
+      default:
+        fps: 2
+        sample_count: 1
+        duration_seconds: 0
+        width: 1280
+        height: 720
+        format: jpeg
+      external:
+        facing: environment
+    - type: imu
+      default:
+        sample_rate_hz: 50
+        duration_seconds: 5
+  actuators:
+    - type: vibrator
+      default:
+        duration_seconds: 0.3
+""",
+        encoding="utf-8",
+    )
+
+    result = compile_device_capabilities_file(capability_file)
+
+    supports = {item["id"]: item for item in result["payload"]["supports"]}
+    assert set(supports) == {"sensor.rgb", "sensor.imu", "actuator.haptic"}
+    assert supports["sensor.rgb"]["frequency_hz"] == 2
+    assert supports["sensor.rgb"]["formats"] == ["jpeg"]
+    assert supports["sensor.imu"]["frequency_hz"] == 50
+    assert supports["actuator.haptic"]["commands"] == ["vibrate"]
+    assert result["payload"]["properties"]["device_role"] == "front_glass"
+    assert result["payload"]["properties"]["tags"] == ["primary", "debug"]
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in result["payload"]["subscriptions"]
+    assert {"event": "control.device.command.*", "filter": {"payload.command": "haptic.vibrate"}} in result["payload"]["subscriptions"]
+
+
 def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path) -> None:
     """测试目标：验证注册请求只带 supports 时，server 能编译订阅并完成事件路由。
 

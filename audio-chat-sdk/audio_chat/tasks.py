@@ -108,6 +108,8 @@ class TaskContext:
     session_id: str | None
     task_ref: TaskRef
     devices: Any = None
+    output: Any = None
+    assets: Any = None
     bridge: "TaskEventBridge | None" = None
     engine: "TaskEngine | None" = None
     metadata: dict = field(default_factory=dict)
@@ -196,6 +198,9 @@ class TaskContext:
         if self.bridge is not None:
             self.bridge.handle_event(event)
         return None
+
+
+DeviceContext = TaskContext
 
 
 class BaseTask:
@@ -580,6 +585,8 @@ class TaskEngine:
         bridge: TaskEventBridge | None = None,
         scheduler: TaskScheduler | None = None,
         device_context_factory: Any = None,
+        output_context_factory: Any = None,
+        asset_context_factory: Any = None,
         max_running_per_user: int = 16,
     ) -> None:
         self.registry = registry or TaskRegistry()
@@ -589,6 +596,8 @@ class TaskEngine:
         self.bridge = bridge or TaskEventBridge()
         self.scheduler = scheduler or TaskScheduler()
         self.device_context_factory = device_context_factory
+        self.output_context_factory = output_context_factory
+        self.asset_context_factory = asset_context_factory
         self.max_running_per_user = max_running_per_user
         self._instances: dict[str, BaseTask] = {}
 
@@ -827,11 +836,15 @@ class TaskEngine:
 
     def _context(self, *, user_id: str, session_id: str | None, ref: TaskRef) -> TaskContext:
         devices = self.device_context_factory(user_id=user_id) if callable(self.device_context_factory) else None
+        output = self.output_context_factory(user_id=user_id) if callable(self.output_context_factory) else None
+        assets = self.asset_context_factory(user_id=user_id) if callable(self.asset_context_factory) else None
         return TaskContext(
             user_id=user_id,
             session_id=session_id,
             task_ref=ref,
             devices=devices,
+            output=output,
+            assets=assets,
             bridge=self.bridge,
             engine=self,
             metadata=dict(ref.metadata),

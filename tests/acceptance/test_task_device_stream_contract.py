@@ -177,7 +177,9 @@ def test_continuous_sensor_task_uses_only_event_and_stream(tmp_path) -> None:
     assert "device_id" not in endpoint.events[0].payload
     assert len(app.asset_service.query_assets(user_id="user-rgb", stream_type="sensor.rgb")) >= 2
 
-    task_events = (tmp_path / "runs" / "sessions" / session_id / "task-events.jsonl").read_text(encoding="utf-8")
+    task_events = (app.recorder.session_dir(session_id, user_id="user-rgb") / "task-events.jsonl").read_text(
+        encoding="utf-8"
+    )
     assert "continuous_rgb_production.frames_collected" in task_events
     assert "task.completed" in task_events
 

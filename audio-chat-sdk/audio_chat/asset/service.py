@@ -272,13 +272,15 @@ class AssetService:
         configure_payload: dict | None = None,
         session_id: str | None = None,
         timeout_seconds: float | None = None,
+        device_ids: tuple[str, ...] | None = None,
     ) -> AssetRef | None:
         """协议原生单资产请求。
 
         主要逻辑：先按 freshness 查询缓存；未命中时沿用
         `stream.control.configure.requested` 请求端侧上传，不引入第二套 Request 对象。
         参数：`user_id`、`stream_type` 定位资产，`freshness_seconds` 为缓存最大年龄，
-        `configure_payload` 为端侧配置，`session_id` 为可选会话，`timeout_seconds` 为等待超时。
+        `configure_payload` 为端侧配置，`session_id` 为可选会话，`timeout_seconds`
+        为等待超时，`device_ids` 是 SDK typed facade 内部已经按 selector 冻结的设备集合。
         返回值：`AssetRef` 或 `None`。
         异常情况：发布控制事件或文件写入失败时向上抛出。
         """
@@ -300,7 +302,14 @@ class AssetService:
             stream_type=stream_type,
             payload=payload,
         )
-        matched = self.control_service.resolve_matching_devices(event, selection="first_available")
+        if device_ids is None:
+            matched = self.control_service.resolve_matching_devices(event, selection="first_available")
+        else:
+            matched = [
+                device
+                for device in self.control_service.get_active_device_set(user_id).devices
+                if device.device_id in set(device_ids)
+            ]
         device_session_id = matched[0].device_id if matched else session_id
         publish_result = self.control_service._push_event_to_device_ids(
             Event(

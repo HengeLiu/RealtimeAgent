@@ -8,9 +8,33 @@ from audio_chat.mcp import McpGateway, McpToolSpec
 from audio_chat.memory import MemoryRecord, MemoryService, MemoryStore
 from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType, Subscription
 from audio_chat.skills import SkillDocument, SkillService
-from audio_chat.tasks import BaseTask, JsonlTaskStore, TaskContext, TaskEngine, TaskEvent, TaskEventBridge, TaskRef, TaskSpec, TaskStore
+from audio_chat.tasks import BaseTask, DeviceContext, JsonlTaskStore, TaskContext, TaskEngine, TaskEvent, TaskEventBridge, TaskRef, TaskSpec, TaskStore
 from audio_chat.context import CapabilityTrace, UserDeviceContext
-from audio_chat.tools import BaseTool, DeviceSnapshot, ToolContext, ToolError, ToolGateway, ToolResult, ToolSpec, ToolTrace
+from audio_chat.tools import (
+    ActuatorResult,
+    ActuatorStreamResult,
+    AmbiguousDeviceError,
+    AssetFacade,
+    BaseTool,
+    CapabilityNotSupportedError,
+    CommandEvent,
+    CommandFailedError,
+    CommandHandle,
+    CommandResult,
+    DeviceBusyError,
+    DeviceNotFoundError,
+    DeviceSnapshot,
+    OutputFacade,
+    PlaybackRejectedError,
+    StreamTimeoutError,
+    ToolContext,
+    ToolContextFactory,
+    ToolError,
+    ToolGateway,
+    ToolResult,
+    ToolSpec,
+    ToolTrace,
+)
 
 __all__ = [
     "ArtifactRef",
@@ -21,6 +45,18 @@ __all__ = [
     "BaseTask",
     "BaseTool",
     "CapabilityTrace",
+    "ActuatorResult",
+    "ActuatorStreamResult",
+    "AmbiguousDeviceError",
+    "AssetFacade",
+    "CapabilityNotSupportedError",
+    "CommandEvent",
+    "CommandFailedError",
+    "CommandHandle",
+    "CommandResult",
+    "DeviceBusyError",
+    "DeviceContext",
+    "DeviceNotFoundError",
     "compile_device_capabilities_file",
     "compile_registration_payload",
     "compile_supports_to_subscriptions",
@@ -35,10 +71,13 @@ __all__ = [
     "MemoryRecord",
     "MemoryService",
     "MemoryStore",
+    "OutputFacade",
+    "PlaybackRejectedError",
     "SkillDocument",
     "SkillService",
     "StreamChunk",
     "StreamFormat",
+    "StreamTimeoutError",
     "StreamType",
     "Subscription",
     "TaskContext",
@@ -49,6 +88,7 @@ __all__ = [
     "TaskSpec",
     "TaskStore",
     "ToolContext",
+    "ToolContextFactory",
     "ToolError",
     "ToolGateway",
     "ToolResult",

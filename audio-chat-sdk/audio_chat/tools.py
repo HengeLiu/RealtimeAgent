@@ -18,6 +18,40 @@ from audio_chat.memory import memory_record_to_public_dict
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, EventName, StreamChunk, StreamFormat, StreamType, new_id
 
 
+class DeviceNotFoundError(AudioChatError):
+    """设备未找到异常。
+
+    主要功能：当 typed device API 无法为当前用户找到支持指定能力的在线设备时抛出。
+    """
+
+
+class AmbiguousDeviceError(AudioChatError):
+    """设备选择不唯一异常。
+
+    主要功能：当创建输入流或远程长命令时匹配到多台设备，要求调用方补充 selector。
+    """
+
+
+class DeviceBusyError(AudioChatError):
+    """设备忙异常。当前版本先作为公开错误类型预留。"""
+
+
+class CapabilityNotSupportedError(AudioChatError):
+    """设备能力不支持异常。当前版本先作为公开错误类型预留。"""
+
+
+class StreamTimeoutError(AudioChatError):
+    """数据流超时异常。当前版本先作为公开错误类型预留。"""
+
+
+class CommandFailedError(AudioChatError):
+    """设备命令失败异常。当前版本先作为公开错误类型预留。"""
+
+
+class PlaybackRejectedError(AudioChatError):
+    """播放请求被拒绝异常。当前版本先作为公开错误类型预留。"""
+
+
 @dataclass(frozen=True)
 class ToolResult:
     """Tool 执行结果。
@@ -157,6 +191,8 @@ class ToolContext:
     memory: Any = None
     skills: Any = None
     mcp: Any = None
+    output: Any = None
+    assets: Any = None
     metadata: dict = None
 
     def __post_init__(self) -> None:
@@ -460,11 +496,13 @@ class ToolContextFactory:
         return ToolContext(
             user_id=user_id,
             session_id=session_id,
-            devices=UserDeviceContext(user_id=user_id, app=self.app),
+            devices=UserDeviceContext(user_id=user_id, app=self.app, allow_long_running=False),
             tasks=self.task_engine,
             memory=self.memory_service,
             skills=self.skill_service,
             mcp=self.mcp_gateway,
+            output=OutputFacade(user_id=user_id, app=self.app),
+            assets=AssetFacade(user_id=user_id, app=self.app),
         )
 
 
@@ -819,6 +857,374 @@ class OutputStreamWriter:
         self._context._app.stream_service.close_stream(self.stream_id, reason=reason)
 
 
+@dataclass(frozen=True)
+class CommandResult:
+    """设备命令执行结果。
+
+    主要功能：作为 `context.devices.commands.call()` 的稳定返回结构，屏蔽底层
+    控制事件和多设备投递细节。
+    """
+
+    command_id: str
+    name: str
+    ok: bool
+    data: dict = field(default_factory=dict)
+    device_count: int = 0
+    errors: list[dict] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CommandEvent:
+    """设备长命令事件。
+
+    主要功能：描述 `CommandHandle.results()` 产生的远程命令状态。当前版本先提供
+    结构和最小 completed 事件，后续再接入真实设备回报订阅。
+    """
+
+    command_id: str
+    name: str
+    state: str
+    data: dict = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+
+
+class CommandHandle:
+    """设备长命令句柄。
+
+    主要功能：给 Task 维护远程设备任务状态提供稳定对象。当前兼容层会先返回一次
+    accepted/running 事件，并在 `stop()` 时发送停止命令。
+    """
+
+    def __init__(self, *, context: "UserDeviceContext", command_id: str, name: str, selector: dict | None, params: dict | None) -> None:
+        self._context = context
+        self.command_id = command_id
+        self.name = name
+        self.selector = dict(selector or {})
+        self.params = dict(params or {})
+        self._stopped = False
+
+    async def results(self) -> AsyncIterator[CommandEvent]:
+        """异步读取命令状态。
+
+        当前实现先暴露最小 accepted/running 事件，后续接入设备端
+        `control.device.command.*` 回执后再持续产出真实事件。
+        """
+
+        yield CommandEvent(command_id=self.command_id, name=self.name, state="accepted", data={"params": self.params})
+        if not self._stopped:
+            yield CommandEvent(command_id=self.command_id, name=self.name, state="running", data={})
+
+    async def stop(self, *, reason: str = "task_cancelled") -> CommandResult:
+        """停止远程命令。
+
+        主要逻辑：发送 `*.stop` 约定命令，端侧可按 command_id 释放资源。
+        """
+
+        self._stopped = True
+        return await self._context.commands.call(
+            name=f"{self.name}.stop",
+            selector=self.selector,
+            params={"command_id": self.command_id, "reason": reason},
+        )
+
+
+@dataclass(frozen=True)
+class ActuatorResult:
+    """执行器一次性动作结果。"""
+
+    ok: bool
+    delivered_count: int
+    matched_count: int
+    data: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ActuatorStreamResult:
+    """执行器流式动作结果。"""
+
+    ok: bool
+    stream_id: str | None = None
+    frames_written: int = 0
+
+
+class OutputFacade:
+    """用户可感知输出门面。
+
+    主要功能：让 Tool / Task 用 `context.output.say()` 表达播报意图，不直接写
+    `actuator.speaker`。
+    """
+
+    def __init__(self, *, user_id: str, app) -> None:
+        self.user_id = user_id
+        self._app = app
+
+    async def say(self, text: str, *, priority: str = "normal", ttl_seconds: int = 0, dedupe_key: str | None = None) -> None:
+        """提交文本播报。
+
+        参数：`text` 是要播报的文本；`priority` 和 `ttl_seconds` 交给 Output Service
+        和播放仲裁处理；`dedupe_key` 预留给后续去重策略。
+        """
+
+        _ = dedupe_key
+        session_id = self._app.active_session_id(self.user_id)
+        self._app.output_service.submit_text(
+            user_id=self.user_id,
+            session_id=session_id,
+            text=text,
+            priority=priority,
+            ttl_seconds=ttl_seconds,
+        )
+
+
+class AssetFacade:
+    """资产引用读取门面。
+
+    主要功能：提供 `context.assets.get()`，让开发者按 asset_id 读取已生成的
+    `AssetRef`。当前实现通过现有资产窗口扫描完成。
+    """
+
+    def __init__(self, *, user_id: str, app) -> None:
+        self.user_id = user_id
+        self._app = app
+
+    def get(self, asset_id: str) -> AssetRef | None:
+        """按 asset_id 查找资产引用。"""
+
+        for stream_type in ("sensor.rgb", "sensor.imu", "sensor.tof"):
+            for asset in self._app.asset_service.get_asset_window(user_id=self.user_id, stream_type=stream_type, limit=100):
+                if asset.asset_id == asset_id:
+                    return asset
+        return None
+
+
+class _SensorCapability:
+    """单个传感器 typed API 适配器。"""
+
+    def __init__(self, *, context: "UserDeviceContext", stream_type: str, allow_stream: bool) -> None:
+        self._context = context
+        self.stream_type = stream_type
+        self._allow_stream = allow_stream
+
+    async def one(
+        self,
+        *,
+        selector: dict | None = None,
+        timeout_seconds: float = 10,
+        params: dict | None = None,
+    ) -> AssetRef:
+        """请求一次传感器数据并返回 AssetRef。"""
+
+        devices = self._context._resolve_devices_for_capability(self.stream_type, selector=selector, require_single=True)
+        payload = {"mode": "single", **dict(params or {})}
+        asset = self._context._request_asset_for_devices(
+            stream_type=self.stream_type,
+            devices=devices,
+            freshness_seconds=0,
+            configure_payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        if asset is None:
+            raise StreamTimeoutError(
+                f"sensor asset timeout: {self.stream_type}",
+                code=ErrorCode.TIMEOUT,
+                details={"stream_type": self.stream_type, "selector": selector or {}},
+            )
+        return asset
+
+    def stream(
+        self,
+        *,
+        selector: dict | None = None,
+        fps: float | None = None,
+        sample_rate_hz: float | None = None,
+        duration_seconds: float | None = None,
+        sample_count: int | None = None,
+        params: dict | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AsyncIterator[AssetRef]:
+        """打开持续传感器流并逐个返回 AssetRef。"""
+
+        if not self._allow_stream:
+            raise AudioChatError(
+                f"streaming sensor API is only available in DeviceContext: {self.stream_type}",
+                code=ErrorCode.PERMISSION_DENIED,
+            )
+        return self._context._sensor_stream(
+            stream_type=self.stream_type,
+            selector=selector,
+            fps=fps,
+            sample_rate_hz=sample_rate_hz,
+            duration_seconds=duration_seconds,
+            sample_count=sample_count,
+            params=params,
+            timeout_seconds=timeout_seconds,
+        )
+
+
+class _SensorsFacade:
+    """传感器 typed API 聚合对象。"""
+
+    def __init__(self, *, context: "UserDeviceContext", allow_stream: bool) -> None:
+        self.rgb = _SensorCapability(context=context, stream_type="sensor.rgb", allow_stream=allow_stream)
+        self.imu = _SensorCapability(context=context, stream_type="sensor.imu", allow_stream=allow_stream)
+        self.tof = _SensorCapability(context=context, stream_type="sensor.tof", allow_stream=allow_stream)
+
+
+class _VibratorCapability:
+    """振动器 typed API。"""
+
+    def __init__(self, *, context: "UserDeviceContext", allow_stream: bool) -> None:
+        self._context = context
+        self._allow_stream = allow_stream
+
+    async def one(
+        self,
+        *,
+        selector: dict | None = None,
+        params: dict | None = None,
+        timeout_seconds: float = 5,
+    ) -> ActuatorResult:
+        """执行一次振动动作。"""
+
+        _ = timeout_seconds
+        devices = self._context._resolve_devices_for_capability("actuator.haptic", selector=selector, require_single=False)
+        payload = {"command": "haptic.vibrate", **dict(params or {})}
+        result = self._context._publish_event_to_devices(
+            event_name=EventName.CONTROL_DEVICE_COMMAND_REQUESTED,
+            payload=payload,
+            stream_type="actuator.haptic",
+            devices=devices,
+        )
+        return ActuatorResult(
+            ok=result.delivered_count > 0,
+            delivered_count=result.delivered_count,
+            matched_count=len(devices),
+            data={"command": "haptic.vibrate"},
+        )
+
+    async def stream(
+        self,
+        *,
+        selector: dict | None = None,
+        frames,
+        params: dict | None = None,
+    ) -> ActuatorStreamResult:
+        """发送振动器连续数据。"""
+
+        if not self._allow_stream:
+            raise AudioChatError("streaming actuator API is only available in DeviceContext", code=ErrorCode.PERMISSION_DENIED)
+        self._context._resolve_devices_for_capability("actuator.haptic", selector=selector, require_single=True)
+        writer = self._context.open_output_stream("actuator.haptic", codec=str((params or {}).get("codec") or "raw"), selection="first_available")
+        count = 0
+        for frame in frames:
+            writer.write(bytes(frame), final=False)
+            count += 1
+        writer.write(b"", final=True)
+        return ActuatorStreamResult(ok=True, stream_id=writer.stream_id, frames_written=count)
+
+
+class _ActuatorsFacade:
+    """执行器 typed API 聚合对象。"""
+
+    def __init__(self, *, context: "UserDeviceContext", allow_stream: bool) -> None:
+        self.vibrator = _VibratorCapability(context=context, allow_stream=allow_stream)
+
+
+class _CommandsFacade:
+    """设备命令 typed API。"""
+
+    def __init__(self, *, context: "UserDeviceContext", allow_long_running: bool) -> None:
+        self._context = context
+        self._allow_long_running = allow_long_running
+
+    async def call(
+        self,
+        *,
+        name: str,
+        selector: dict | None = None,
+        params: dict | None = None,
+        timeout_seconds: float = 5,
+        require_single: bool = False,
+    ) -> CommandResult:
+        """执行一次设备命令。"""
+
+        _ = timeout_seconds
+        devices = self._context._resolve_devices_for_command(selector=selector, require_single=require_single)
+        command_id = new_id("cmd")
+        result = self._context._publish_event_to_devices(
+            event_name=EventName.CONTROL_DEVICE_COMMAND_REQUESTED,
+            payload={"command_id": command_id, "command": name, **dict(params or {})},
+            devices=devices,
+        )
+        return CommandResult(
+            command_id=command_id,
+            name=name,
+            ok=result.delivered_count > 0,
+            data={"params": dict(params or {})},
+            device_count=len(devices),
+            errors=[{"device_id": device_id, "message": "delivery_failed"} for device_id in result.failed_device_ids],
+        )
+
+    async def start(
+        self,
+        *,
+        name: str,
+        selector: dict | None = None,
+        params: dict | None = None,
+    ) -> CommandHandle:
+        """启动远程长命令。"""
+
+        if not self._allow_long_running:
+            raise AudioChatError("long running commands are only available in DeviceContext", code=ErrorCode.PERMISSION_DENIED)
+        devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
+        command_id = new_id("cmd")
+        self._context._publish_event_to_devices(
+            event_name=EventName.CONTROL_DEVICE_COMMAND_REQUESTED,
+            payload={"command_id": command_id, "command": name, "mode": "start", **dict(params or {})},
+            devices=devices,
+        )
+        return CommandHandle(context=self._context, command_id=command_id, name=name, selector=selector, params=params)
+
+    async def stop(self, command_id: str, *, name: str = "device.command", reason: str = "requested") -> CommandResult:
+        """停止远程长命令。"""
+
+        return await self.call(name=f"{name}.stop", params={"command_id": command_id, "reason": reason})
+
+    def subscribe_result(self, command_id: str) -> AsyncIterator[CommandEvent]:
+        """订阅远程命令结果。当前版本返回空迭代器，预留给真实回执实现。"""
+
+        async def _empty() -> AsyncIterator[CommandEvent]:
+            if False:
+                yield CommandEvent(command_id=command_id, name="", state="completed")
+
+        return _empty()
+
+
+def _coerce_tags(value: Any) -> list[str]:
+    """把注册字段里的标签统一成字符串列表。"""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _selector_value(device: Any, properties: dict, key: str) -> Any:
+    """读取 selector 可匹配字段。"""
+
+    if hasattr(device, key):
+        return getattr(device, key)
+    if key in properties:
+        return properties[key]
+    dotted_key = key.replace(".", "_")
+    if hasattr(device, dotted_key):
+        return getattr(device, dotted_key)
+    return properties.get(dotted_key)
+
+
 class UserDeviceContext:
     """业务代码访问用户端侧能力的协议原生上下文门面。
 
@@ -829,9 +1235,13 @@ class UserDeviceContext:
     `query_assets()`、`watch_assets()`、`submit_text()`、`submit_audio()`。
     """
 
-    def __init__(self, *, user_id: str, app) -> None:
+    def __init__(self, *, user_id: str, app, allow_long_running: bool = False) -> None:
         self.user_id = user_id
         self._app = app
+        self._allow_long_running = allow_long_running
+        self.sensors = _SensorsFacade(context=self, allow_stream=allow_long_running)
+        self.actuators = _ActuatorsFacade(context=self, allow_stream=allow_long_running)
+        self.commands = _CommandsFacade(context=self, allow_long_running=allow_long_running)
 
     def get_devices(self) -> list[DeviceSnapshot]:
         """返回当前用户 active device set 的只读快照。
@@ -979,6 +1389,58 @@ class UserDeviceContext:
             timeout_seconds=timeout_seconds,
         )
 
+    def _request_asset_for_devices(
+        self,
+        *,
+        stream_type: str | StreamType,
+        devices: list[Any],
+        freshness_seconds: float = 0,
+        configure_payload: dict | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AssetRef | None:
+        """向已按 selector 冻结的设备集合请求单个资产。
+
+        主要逻辑：typed facade 先解析设备，再把内部设备集合交给 Asset Service；
+        业务代码仍然只使用 selector，不接触 device_id。
+        """
+
+        return self._app.asset_service.request_asset(
+            user_id=self.user_id,
+            stream_type=str(stream_type),
+            freshness_seconds=freshness_seconds,
+            configure_payload=configure_payload,
+            session_id=self._app.active_session_id(self.user_id),
+            timeout_seconds=timeout_seconds,
+            device_ids=tuple(str(device.device_id) for device in devices),
+        )
+
+    def _publish_event_to_devices(
+        self,
+        *,
+        event_name: str | EventName,
+        payload: dict | None,
+        devices: list[Any],
+        stream_type: str | StreamType | None = None,
+    ) -> PublishResult:
+        """向 typed facade 已经解析出的内部设备集合投递控制事件。
+
+        主要逻辑：这是 SDK 内部 helper，用于保证 selector 真实影响投递结果；
+        对外仍不提供按 device_id 发送事件的 API。
+        """
+
+        event = Event(
+            event_name=event_name,
+            user_id=self.user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=str(devices[0].device_id) if len(devices) == 1 else self._app.active_session_id(self.user_id),
+            stream_type=stream_type,
+            payload=dict(payload or {}),
+        )
+        return self._app.control_service._push_event_to_device_ids(
+            event,
+            tuple(str(device.device_id) for device in devices),
+        )
+
     def configure_stream(
         self,
         stream_type: str | StreamType,
@@ -1081,6 +1543,142 @@ class UserDeviceContext:
         """
 
         self.submit_text(text=text, priority=priority, ttl_seconds=ttl_seconds)
+
+    async def _sensor_stream(
+        self,
+        *,
+        stream_type: str,
+        selector: dict | None = None,
+        fps: float | None = None,
+        sample_rate_hz: float | None = None,
+        duration_seconds: float | None = None,
+        sample_count: int | None = None,
+        params: dict | None = None,
+        timeout_seconds: float | None = None,
+    ) -> AsyncIterator[AssetRef]:
+        """typed sensor stream 的内部兼容实现。
+
+        主要逻辑：先按 selector 确认只命中一台设备，再复用当前协议原生
+        `configure_stream()` 和 `watch_assets()`。
+        """
+
+        devices = self._resolve_devices_for_capability(stream_type, selector=selector, require_single=True)
+        correlation_id = new_id("stream_req")
+        payload = dict(params or {})
+        payload["correlation_id"] = correlation_id
+        payload.setdefault("asset_policy", "cache")
+        if fps is not None:
+            payload["fps"] = fps
+        if sample_rate_hz is not None:
+            payload["sample_rate_hz"] = sample_rate_hz
+        if sample_count is not None:
+            payload["sample_count"] = sample_count
+        self._publish_event_to_devices(
+            event_name="stream.control.configure.requested",
+            stream_type=stream_type,
+            payload={
+                "stream_type": str(stream_type),
+                "mode": "continuous",
+                "rate_hz": fps or sample_rate_hz,
+                "duration_seconds": duration_seconds,
+                **payload,
+            },
+            devices=devices,
+        )
+        count = 0
+        try:
+            async for asset in self.watch_assets(
+                stream_type,
+                correlation_id=correlation_id,
+                timeout_seconds=timeout_seconds if timeout_seconds is not None else duration_seconds,
+            ):
+                yield asset
+                count += 1
+                if sample_count is not None and count >= sample_count:
+                    break
+        finally:
+            self._publish_event_to_devices(
+                event_name="stream.control.configure.requested",
+                stream_type=stream_type,
+                payload={"stream_type": str(stream_type), "mode": "stop", "reason": "typed_stream_closed", "correlation_id": correlation_id},
+                devices=devices,
+            )
+
+    def _resolve_devices_for_command(self, *, selector: dict | None, require_single: bool) -> list[Any]:
+        return self._resolve_devices_for_capability(None, selector=selector, require_single=require_single)
+
+    def _resolve_devices_for_capability(
+        self,
+        capability: str | None,
+        *,
+        selector: dict | None,
+        require_single: bool,
+    ) -> list[Any]:
+        """按能力和 selector 解析在线设备。
+
+        主要逻辑：复用 Control Service 的订阅匹配能力，再在 SDK 内部应用 selector。
+        当前实现只返回设备对象，不把 device_id 暴露给业务 API。
+        """
+
+        if capability and str(capability).startswith("sensor."):
+            event_name = "stream.control.configure.requested"
+            payload = {"stream_type": capability}
+        elif capability == "actuator.haptic":
+            event_name = EventName.CONTROL_DEVICE_COMMAND_REQUESTED
+            payload = {"command": "haptic.vibrate"}
+        else:
+            event_name = EventName.CONTROL_DEVICE_COMMAND_REQUESTED
+            payload = {"command": "*"}
+        event = Event(
+            event_name=event_name,
+            user_id=self.user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            stream_type=capability,
+            payload=payload,
+        )
+        try:
+            candidates = self._app.control_service.resolve_matching_devices(event, selection="all")
+        except Exception:
+            candidates = list(self._app.control_service.get_active_device_set(self.user_id).devices)
+        if not candidates and capability is None:
+            candidates = list(self._app.control_service.get_active_device_set(self.user_id).devices)
+        devices = [device for device in candidates if self._selector_matches(device, selector or {})]
+        if not devices:
+            raise DeviceNotFoundError(
+                f"no online device matches capability: {capability or 'command'}",
+                code=ErrorCode.NOT_FOUND,
+                details={"capability": capability, "selector": selector or {}},
+            )
+        if require_single and len(devices) > 1:
+            raise AmbiguousDeviceError(
+                f"multiple devices match capability: {capability or 'command'}",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"capability": capability, "selector": selector or {}, "matched_count": len(devices)},
+            )
+        return devices
+
+    def _selector_matches(self, device: Any, selector: dict) -> bool:
+        """检查设备是否匹配 selector。"""
+
+        if not selector:
+            return True
+        properties = dict(getattr(device, "properties", {}) or {})
+        tags = _coerce_tags(getattr(device, "tags", None) or properties.get("tags") or properties.get("device.tags"))
+        for key, expected in selector.items():
+            if key == "capability":
+                support_ids = properties.get("audio_chat.support_ids") or []
+                if expected not in support_ids:
+                    return False
+                continue
+            if key == "tags":
+                expected_tags = _coerce_tags(expected)
+                if not set(expected_tags).issubset(set(tags)):
+                    return False
+                continue
+            actual = _selector_value(device, properties, key)
+            if actual != expected:
+                return False
+        return True
 
     def close_continuous_dialog(self, *, mode: str = "after_reply", reason: str = "model_requested") -> dict:
         """请求关闭连续对话窗口。
