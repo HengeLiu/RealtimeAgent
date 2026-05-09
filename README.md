@@ -9,7 +9,7 @@
 - `testdata/`、`tests/`、`scripts/`：契约样例、自动化测试和验收脚本。
 - `legacy/`：旧 `openaiglass-sdk`、旧 `openaiglass-for-blind`、旧根目录文档和历史运行资产。它们只作为迁移参考，不再作为新开发入口。
 
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](docs/device-capability-development-guide.md) 为准；下一阶段目标 API 见 [Context 与设备 API 设计说明](docs/context-device-api-design.md)。
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](docs/device-capability-development-guide.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](docs/context-device-api-design.md)。
 
 ## 快速开始
 
@@ -114,16 +114,17 @@ uv run audio-chat.esp32.build --dry-run --build-only
 
 ## 开发者工作模型
 
-当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](docs/device-capability-development-guide.md)。下一阶段的新版 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](docs/context-device-api-design.md)。
+当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](docs/device-capability-development-guide.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](docs/context-device-api-design.md)。
 
 当前开发口径：
 
 - Tool 使用 `ToolContext`，只做短生命周期动作。
 - Task 使用 `TaskContext`，可以做持续数据流和异步状态维护。
-- 当前功能开发者使用 `context.devices.request_asset()`、`publish_event()`、`watch_assets()`、`submit_text()` 等兼容接口。
+- 新 Tool 可以优先使用已落地的 typed facade，例如 `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 和 `context.assets.get()`。
+- 连续 stream、部分远程命令和旧模板仍使用 `context.devices.request_asset()`、`publish_event()`、`watch_assets()`、`submit_text()` 等兼容接口。
 - 麦克风和喇叭是系统音频通道，不作为普通设备能力开放。
 - 设备当前使用 `supports[].id` 声明能力；新版目标结构是 `supports.sensors[].type` 和 `supports.actuators[].type`。
-- `context.devices.sensors.*`、`DeviceContext`、`selector` 是下一阶段目标 API，不要在当前业务代码里直接使用。
+- `selector` 已可用于 typed sensor API 的设备筛选；完整设备 schema 和所有 facade 能力仍按设计文档继续补齐。
 
 默认应用目录结构如下：
 
@@ -150,9 +151,9 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 新增一个能力时，推荐按这个顺序设计：
 
 1. 先判断能力是一次性动作还是长流程：一次性动作写 Tool，长流程写 Task。
-2. 列出它需要哪些端侧能力：例如 `sensors.rgb`、`sensors.imu`、`actuators.vibrator` 或 `commands.call`。
-3. 确认端侧设备能力文件中已经声明对应能力和 selector 可匹配字段。
-4. 在 Tool / Task 中通过高级 Context API 表达能力调用，不直接拼底层信令。
+2. 列出它需要哪些端侧能力：当前能力文件仍使用 `sensor.rgb`、`sensor.imu`、`actuator.haptic` 等 `stream_type`；业务代码逐步收敛到 `context.devices.sensors.rgb`、`context.devices.sensors.imu`、`context.devices.actuators.vibrator` 这类 typed facade。
+3. 确认端侧设备能力文件中已经声明对应 `supports[].id`。
+4. 在 Tool / Task 中通过 Context API 表达能力调用，不直接操作 WebSocket 或硬编码 `device_id`。
 5. 用 `runs/audio-chat/...` 中的运行产物验证链路。
 
 业务样例：
@@ -176,7 +177,7 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml --json
 ```
 
-设备能力文件用于声明 `supports.sensors`、`supports.actuators`、`device_role`、`tags` 和 `external` 扩展信息。底层订阅与控制信令由 SDK 和端侧参考实现处理；新功能开发者不需要直接维护。
+设备能力文件当前用于声明 `supports[].id`、运行环境和调试属性。`supports.sensors`、`supports.actuators`、`selector`、`external` 是下一阶段目标设计，当前不要写进可运行设备配置。
 
 端侧实现入口：
 
@@ -243,13 +244,8 @@ uv run python -m pytest tests/integration/test_dashscope_providers.py -q
 
 ## 文档
 
-- [SDK 架构设计](docs/audio-chat-sdk-architecture.md)
 - [设备注册与功能开发说明](docs/device-capability-development-guide.md)
+- [SDK 架构设计](docs/audio-chat-sdk-architecture.md)
 - [Context 与设备 API 设计说明](docs/context-device-api-design.md)
-- [迁移指南](docs/phase3-migration-guide.md)
 - [运行产物说明](docs/runs-artifacts-guide.md)
 - [浏览器设备设计](docs/browser-glass-design.md)
-- [ESP32-S3 参考端说明](docs/esp32-s3-endpoint-bridge.md)
-- [历史 SDK 可用性对齐计划](docs/old-sdk-parity-development-plan.md)
-
-历史资料在 `legacy/` 下保留。需要查旧实现时优先看 `legacy/openaiglass-sdk` 和 `legacy/openaiglass-for-blind`，新开发不要再从这些目录复制入口命令或导入路径。

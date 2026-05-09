@@ -1,8 +1,8 @@
 # audio-chat 设备注册与功能开发说明
 
-本文面向当前版本 `audio-chat` 的功能开发者和设备开发者。它描述的是当前仓库已经可用的开发方式，不是下一阶段 API 设计稿。
+本文面向当前版本 `audio-chat` 的功能开发者和设备开发者。它描述的是当前仓库已经可用的开发方式，不是阶段性计划文档。
 
-如果你想了解新版 `context.devices.sensors.rgb.one()`、`DeviceContext`、`selector`、`supports.sensors.type` 等目标 API，请阅读 [Context 与设备 API 设计说明](context-device-api-design.md)。当前开发仍以本文为准。
+当前代码已经提供 typed device facade，例如 `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 和 `context.assets.get()`。设备注册同时兼容旧的 `supports[].id` 写法和新的 `supports.sensors[].type` / `supports.actuators[].type` 写法；部分长流和远程命令回报仍是兼容层实现。更完整的目标设计见 [Context 与设备 API 设计说明](context-device-api-design.md)。
 
 ## 1. 当前开发模型
 
@@ -52,6 +52,14 @@ uv run audio-chat.device.validate device-examples/browser-glass/device.audio-cha
 uv run audio-chat.server.run --app-name for-blind-app
 ```
 
+如果使用后台 server 管理命令：
+
+```bash
+uv run audio-chat.server.start --app-name for-blind-app
+uv run audio-chat.server.logs
+uv run audio-chat.server.stop
+```
+
 打开浏览器设备：
 
 ```bash
@@ -66,7 +74,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 ## 3. 设备注册文件
 
-当前可用的设备能力文件使用 `supports` 列表。示例：
+设备能力文件推荐使用结构化 `supports`，也继续兼容旧的 `supports[].id` 列表。浏览器参考端仍保留旧写法，方便和现有端侧代码对照：
 
 [device-examples/browser-glass/device.audio-chat.yaml](../device-examples/browser-glass/device.audio-chat.yaml)
 
@@ -125,10 +133,67 @@ properties:
 | `device_id` | 设备实例 ID，用于注册、日志和调试。功能代码不要写死它。 |
 | `user_id` | 设备绑定的用户。 |
 | `device_name` / `client_type` | 设备实现名称，用于日志和调试。 |
+| `device_role` | 设备在当前用户设备组中的角色，例如 `front_glass`、`phone`，用于 selector 选择设备。 |
+| `tags` | 设备标签，例如 `primary`、`debug`，用于 selector 进一步约束。 |
 | `runtime` | 端侧运行环境说明。 |
-| `supports[].id` | 当前设备支持的能力，例如 `sensor.rgb`、`sensor.imu`、`actuator.haptic`。 |
-| `options` | 当前版本里的设备扩展字段，会随注册 payload 透传；下一阶段设计中会改名为 `external`。 |
+| `supports.sensors[].type` | 推荐写法，声明传感器能力，例如 `rgb`、`imu`、`tof`、`mic`。 |
+| `supports.actuators[].type` | 推荐写法，声明执行器能力，例如 `speaker`、`vibrator`。 |
+| `supports[].id` | 兼容写法，声明标准能力 ID，例如 `sensor.rgb`、`sensor.imu`、`actuator.haptic`。 |
+| `default` | 推荐写法里的默认采样参数，例如 `fps`、`sample_rate_hz`、`duration_seconds`、`width`、`height`。 |
+| `external` / `options` | 设备扩展字段，会随注册 payload 透传；新写法推荐使用 `external`，旧写法继续支持 `options`。 |
 | `properties` | 调试或路由辅助属性。 |
+
+推荐的新写法示例：
+
+```yaml
+$schema: ../../spec/audio-chat-device.schema.json
+
+device_id: dev-browser-glass-001
+user_id: user-browser-glass-001
+device_name: browser-glass
+device_role: front_glass
+tags: [primary, debug]
+
+runtime:
+  platform: browser
+  language: javascript
+  version: 0.1.0
+
+supports:
+  sensors:
+    - type: mic
+      default:
+        sample_rate_hz: 48000
+        channels: 1
+        frequency_hz: 50
+        codecs: [pcm16le]
+      external:
+        aec: browser_webrtc
+        noise_suppression: browser_webrtc
+
+    - type: rgb
+      modes: [single, continuous]
+      default:
+        fps: 1
+        sample_count: 1
+        width: 1280
+        height: 720
+        format: jpeg
+      external:
+        facing: environment
+
+  actuators:
+    - type: speaker
+      default:
+        codecs: [pcm16le]
+        sample_rates_hz: [16000, 24000]
+        channels: 1
+    - type: vibrator
+      external:
+        default_pattern: short
+```
+
+`audio-chat.device.validate` 会把上述结构编译成 server 注册时使用的 `supports[].id` 和 `subscriptions`，设备代码不需要手写底层订阅。
 
 当前内置能力：
 
@@ -219,7 +284,21 @@ class EchoTool(BaseTool):
 
 ## 6. Tool 中获取一次传感器数据
 
-当前版本用 `context.devices.request_asset()` 请求一次传感器数据。以 RGB 图片为例：
+当前版本推荐新 Tool 优先使用 typed facade 请求一次传感器数据。以 RGB 图片为例：
+
+```python
+asset = await context.devices.sensors.rgb.one(
+    selector={"device_role": "front_glass"},
+    timeout_seconds=10,
+    params={
+        "width": 1280,
+        "height": 720,
+        "format": "jpeg",
+    },
+)
+```
+
+兼容旧代码时，也可以继续用 `context.devices.request_asset()`：
 
 ```python
 asset = context.devices.request_asset(
@@ -234,7 +313,7 @@ asset = context.devices.request_asset(
 )
 ```
 
-返回值是 `AssetRef | None`：
+typed facade 返回 `AssetRef`，超时会抛出结构化异常；兼容 API 返回 `AssetRef | None`：
 
 - 返回 `AssetRef`：server 收到端侧上传的数据，并生成引用。
 - 返回 `None`：超时或没有设备响应。
@@ -261,21 +340,14 @@ class CaptureCurrentViewTool(BaseTool):
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        asset = context.devices.request_asset(
-            "sensor.rgb",
-            freshness_seconds=0,
-            configure_payload={
-                "mode": "single",
-                "reason": input_data.get("reason") or "agent_requested",
-                "format": "jpeg",
-            },
+        asset = await context.devices.sensors.rgb.one(
+            selector={"device_role": "front_glass"},
             timeout_seconds=float(input_data.get("timeout_seconds") or 10),
+            params={
+                "format": "jpeg",
+                "reason": input_data.get("reason") or "agent_requested",
+            },
         )
-        if asset is None:
-            return ToolResult.success(
-                data={"captured": False},
-                message="没有收到当前画面。",
-            )
         return ToolResult.success(
             data={"captured": True, "asset_id": asset.asset_id, "path": asset.path},
             assets=[asset],
@@ -425,14 +497,14 @@ app-examples/<your-app>/
 
 当前版本仍处在新旧接口过渡期，有几个限制需要明确：
 
-- 推荐设计中的 `context.devices.sensors.rgb.one()` 尚未落地。
-- 推荐设计中的 `DeviceContext` 尚未替换当前 `TaskContext`。
-- 推荐设计中的 `selector` 尚未成为稳定公开参数。
-- 推荐设计中的 `supports.sensors.type` / `supports.actuators.type` 尚未替换当前 `supports[].id`。
+- `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 已有兼容实现，但仍复用底层 `UserDeviceContext` 和旧协议。
+- `DeviceContext` 当前是 `TaskContext` 的公开别名，Task 中长流能力通过 `allow_long_running=True` 的设备上下文启用。
+- `selector` 已可用于 typed sensor API 的设备筛选；当前主要按 `device_role`、`device_name`、`tags` 和标准能力 ID 匹配。
+- `supports.sensors[].type` / `supports.actuators[].type` 已可用于设备能力文件，旧的 `supports[].id` 仍保留兼容。
 - 当前 `UserDeviceContext` 仍是功能代码访问设备的兼容入口。
 - 当前 `selection="first_available"` / `selection="all"` 仍在使用，后续会被 selector 规则替换。
 
-因此，当前开发要按本文可运行接口写；新接口要等实现和 schema 同步后再切换。
+因此，当前新 Tool 可以优先试用 typed facade；新设备能力文件优先按结构化 `supports` 写，涉及持续流和远程任务时仍要参考当前兼容 API。
 
 ## 12. 调试和验收
 
@@ -448,12 +520,12 @@ curl http://127.0.0.1:8765/api/debug/playback
 
 | 文件 | 用途 |
 | --- | --- |
-| `runs/audio-chat/sessions/<session_id>/events.jsonl` | 控制消息和模型过程事件。 |
-| `runs/audio-chat/sessions/<session_id>/stream-events.jsonl` | stream 开启、关闭和摘要。 |
-| `runs/audio-chat/sessions/<session_id>/assets.jsonl` | 资产写入和请求结果。 |
-| `runs/audio-chat/sessions/<session_id>/tool-events.jsonl` | Tool 调用、参数、结果和错误。 |
-| `runs/audio-chat/sessions/<session_id>/task-events.jsonl` | Task 生命周期。 |
-| `runs/audio-chat/sessions/<session_id>/output-decisions.jsonl` | 播放仲裁和输出决策。 |
+| `runs/audio-chat/<user_id>/<device_id>/events.jsonl` | 控制消息和模型过程事件。 |
+| `runs/audio-chat/<user_id>/<device_id>/stream-events.jsonl` | stream 开启、关闭和摘要。 |
+| `runs/audio-chat/<user_id>/<device_id>/assets.jsonl` | 资产写入和请求结果。 |
+| `runs/audio-chat/<user_id>/<device_id>/tool-events.jsonl` | Tool 调用、参数、结果和错误。 |
+| `runs/audio-chat/<user_id>/<device_id>/task-events.jsonl` | Task 生命周期。 |
+| `runs/audio-chat/<user_id>/<device_id>/output-decisions.jsonl` | 播放仲裁和输出决策。 |
 
 常用测试：
 
@@ -474,7 +546,7 @@ uv run python scripts/acceptance_check.py capability-template-playback \
 
 ## 13. 从本文迁移到新版 API
 
-后续实现 `context.devices.sensors.*` 后，当前写法会逐步迁移：
+typed facade 会逐步替代兼容 API：
 
 | 当前可用写法 | 新版目标写法 |
 | --- | --- |
@@ -484,4 +556,4 @@ uv run python scripts/acceptance_check.py capability-template-playback \
 | `context.devices.submit_text(...)` | `await context.output.say(...)` |
 | `supports[].id` | `supports.sensors[].type` / `supports.actuators[].type` |
 
-当前阶段不要把新版目标 API 写进业务代码，除非对应实现已经落地。
+当前阶段可以在新 Tool 中使用已经落地的 typed facade；未落地部分仍按当前兼容 API 写，并在迁移时逐步替换。

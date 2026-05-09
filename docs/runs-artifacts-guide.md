@@ -1,5 +1,7 @@
 # runs 目录产物说明
 
+文档状态：当前调试说明。本文描述当前 `runs/audio-chat` 产物结构，是排查模型请求、设备通讯、stream、资产、Tool、Task 和输出链路的主要入口。
+
 `runs` 是 audio-chat 的开发调试和回放证据目录。它不是业务数据目录，也不是开发者日常需要全部阅读的目录。
 
 默认根目录由 `observability.runs_root` 决定，默认值是：
@@ -16,10 +18,10 @@ runs/audio-chat
 
 | 文件 | 用途 |
 | --- | --- |
-| `sessions/<session_id>/model-request.json` | 本轮发给模型的请求快照，包括 prompt、messages、tools。 |
-| `sessions/<session_id>/agent-events.jsonl` | Agent Core 和 provider 的关键事件，排查模型是否响应、是否调用工具。 |
-| `sessions/<session_id>/tool-events.jsonl` | 工具调用参数、结果、耗时和错误。 |
-| `sessions/<session_id>/events.jsonl` | 控制事件时间线，排查设备注册、唤醒、音频会话开关。 |
+| `<user_id>/<device_id>/model-request.json` | 本轮发给模型的请求快照，包括 prompt、messages、tools。 |
+| `<user_id>/<device_id>/agent-events.jsonl` | Agent Core 和 provider 的关键事件，排查模型是否响应、是否调用工具。 |
+| `<user_id>/<device_id>/tool-events.jsonl` | 工具调用参数、结果、耗时和错误。 |
+| `<user_id>/<device_id>/events.jsonl` | 控制事件时间线，排查设备注册、唤醒、音频会话开关。 |
 
 如果只想确认模型到底听到了什么、拿到了哪些工具，优先看 `model-request.json`。
 
@@ -40,15 +42,9 @@ runs/audio-chat/
   system-events.jsonl
   debug/
     playback.json
-  sessions/
-    <session_id>/
+  <user_id>/
+    <device_id>/
       ...
-  users/
-    <user_id>/
-      messages.jsonl
-  assets/
-    <user_id>/
-      asset_*.jpg
   tasks/
     ...
 ```
@@ -62,18 +58,18 @@ runs/audio-chat/
 | `system-events.jsonl` | 全局系统错误/降级 | 是 | 所有系统级异常、provider 降级、stream 处理错误都会进入这里。 |
 | `debug/playback.json` | 当前播放状态快照 | 按需 | 查询当前 Output Service / Playback Arbiter 状态。 |
 
-## session 目录
+## 用户设备目录
 
-每次音频会话会生成：
+当前版本按用户和设备组织运行产物：
 
 ```text
-runs/audio-chat/sessions/<session_id>/
+runs/audio-chat/<user_id>/<device_id>/
 ```
 
-其中 `<session_id>` 会出现在终端日志里，例如：
+其中 `<device_id>` 同时也是当前兼容层的会话标识，会出现在终端日志里，例如：
 
 ```text
-session_id=sess_cf144de2e552
+user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browser-xxxx
 ```
 
 ### 日常调试文件
@@ -101,7 +97,7 @@ session_id=sess_cf144de2e552
 | 文件 | 用途 |
 | --- | --- |
 | `input-stream_in_<id>.pcm` | 麦克风上行原始 PCM。排查录音、采样率、VAD、ASR 或 Omni 输入时使用。 |
-| `input-stream_rgb_<id>.pcm` | 当前命名不理想，实际可能是 RGB/JPEG 等 sensor payload 的原始字节。应优先通过 `assets.jsonl` 和 `assets/<user_id>/asset_*.jpg` 查看图片。 |
+| `input-stream_rgb_<id>.pcm` | 当前命名不理想，实际可能是 RGB/JPEG 等 sensor payload 的原始字节。应优先通过 `assets.jsonl` 和 `photos/asset_*.jpg` 查看图片。 |
 
 ### 回放验收文件
 
@@ -118,10 +114,10 @@ session_id=sess_cf144de2e552
 | `model-events.jsonl` | 兼容旧命名，目前基本等同于 `agent-events.jsonl`。 |
 | `tool-trace.jsonl` | 兼容旧命名，目前应优先看 `tool-events.jsonl`。 |
 
-## user 目录
+## messages 文件
 
 ```text
-runs/audio-chat/users/<user_id>/messages.jsonl
+runs/audio-chat/<user_id>/<device_id>/messages.jsonl
 ```
 
 保存用户级对话历史。它不是单轮排障的第一入口，而是用于确认长期上下文是否被正确写入。
@@ -129,15 +125,15 @@ runs/audio-chat/users/<user_id>/messages.jsonl
 ## assets 目录
 
 ```text
-runs/audio-chat/assets/<user_id>/asset_*.jpg
+runs/audio-chat/<user_id>/<device_id>/photos/asset_*.jpg
 ```
 
 保存相机等传感器产生的资产文件。拍照工具相关问题，应同时看：
 
-1. `sessions/<session_id>/assets.jsonl`
-2. `assets/<user_id>/asset_*.jpg`
-3. `sessions/<session_id>/model-request.json`
-4. `sessions/<session_id>/tool-events.jsonl`
+1. `<user_id>/<device_id>/assets.jsonl`
+2. `<user_id>/<device_id>/photos/asset_*.jpg`
+3. `<user_id>/<device_id>/model-request.json`
+4. `<user_id>/<device_id>/tool-events.jsonl`
 
 ## tasks 目录
 
@@ -159,10 +155,10 @@ runs/audio-chat/tasks/
 4. `.pcm` 原始 payload 文件和日常调试文件混在同一层，导致 session 目录很乱。
 5. `input-stream_rgb_<id>.pcm` 后缀不准确，RGB/JPEG 资产不应该表现成 `.pcm`。
 
-建议后续把 session 目录调整为：
+建议后续把用户设备目录调整为：
 
 ```text
-sessions/<session_id>/
+<user_id>/<device_id>/
   summary.json
   model-request.json
   events.jsonl
@@ -185,26 +181,26 @@ sessions/<session_id>/
     output-decisions.jsonl
 ```
 
-这不是协议变化，只是观测产物目录整理。迁移时需要保留旧路径一段时间，避免现有测试和回放工具断掉。
+这不是协议变化，只是观测产物目录整理。
 
 ## 快速定位命令
 
 查看某个 session 下面有哪些文件：
 
 ```bash
-find runs/audio-chat/sessions/<session_id> -maxdepth 1 -type f | sort
+find runs/audio-chat/<user_id>/<device_id> -maxdepth 1 -type f | sort
 ```
 
 查看本轮模型请求：
 
 ```bash
-cat runs/audio-chat/sessions/<session_id>/model-request.json
+cat runs/audio-chat/<user_id>/<device_id>/model-request.json
 ```
 
 查看本轮工具调用：
 
 ```bash
-tail -n 50 runs/audio-chat/sessions/<session_id>/tool-events.jsonl
+tail -n 50 runs/audio-chat/<user_id>/<device_id>/tool-events.jsonl
 ```
 
 查看系统错误：

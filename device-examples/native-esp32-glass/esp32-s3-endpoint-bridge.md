@@ -2,6 +2,8 @@
 
 日期：2026-05-06
 
+文档状态：ESP32-S3 参考端联调说明。当前目录提供参考端、配置和 dry-run build 入口，但不能把物理 ESP32-S3 真机能力描述为已完成；真机 smoke 仍需要串口日志和 server runs 产物作为证据。
+
 ## 当前状态
 
 Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮没有连接物理 ESP32-S3。因此本文件记录最小真机联调入口、事件检查点和 AEC reference 写入要求；真机日志尚未产生，不能把 ESP32 真机能力描述为已完成。

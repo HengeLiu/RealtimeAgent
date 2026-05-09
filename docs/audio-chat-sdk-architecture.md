@@ -1,6 +1,8 @@
-# audio-chat 新 SDK 总体架构设计
+# audio-chat SDK 总体架构设计
 
 更新时间：2026-05-07
+
+文档状态：总体架构设计与历史决策记录。本文覆盖了 `audio-chat` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分公开 API 章节仍保留 `UserDeviceContext` 等当前兼容实现口径。当前可执行开发说明以 [设备注册与功能开发说明](device-capability-development-guide.md) 为准；完整 Context API 设计以 [Context 与设备 API 设计说明](context-device-api-design.md) 为准。
 
 ## 1. 文档目的
 
@@ -140,14 +142,14 @@ legacy/
 
 和旧版三端 SDK 的差异是：
 
-| 旧 SDK 经验 | audio-chat 取舍 |
-| --- | --- |
-| 多端协同运行模型 | 保留为公共协议和参考端侧，不把端侧正式工程塞进 server Python 包。 |
-| glass / phone / server 固定角色 | 改成能力和订阅驱动；`client_type` 只用于调试、兼容和默认配置。 |
-| `DeviceGroupContext` | 改成 `UserDeviceContext`，以 `user_id` 的 active device set 为边界。 |
-| 控制面和媒体面 | 改成 Control Service 和 Stream Service，开发者只理解 event 和 stream。 |
-| 回放端、mock 端、preflight | 保留并提升为第一阶段验收入口。 |
-| Task 事件、通知和播放仲裁 | 收敛进 Task Engine 与 Output Service，避免业务能力直接控制播放。 |
+| 旧 SDK 经验                     | audio-chat 取舍                                                          |
+| ------------------------------- | ------------------------------------------------------------------------ |
+| 多端协同运行模型                | 保留为公共协议和参考端侧，不把端侧正式工程塞进 server Python 包。        |
+| glass / phone / server 固定角色 | 改成能力和订阅驱动；`client_type` 只用于调试、兼容和默认配置。         |
+| `DeviceGroupContext`          | 改成 `UserDeviceContext`，以 `user_id` 的 active device set 为边界。 |
+| 控制面和媒体面                  | 改成 Control Service 和 Stream Service，开发者只理解 event 和 stream。   |
+| 回放端、mock 端、preflight      | 保留并提升为第一阶段验收入口。                                           |
+| Task 事件、通知和播放仲裁       | 收敛进 Task Engine 与 Output Service，避免业务能力直接控制播放。         |
 
 ### 3.5 当前实现状态矩阵
 
@@ -157,38 +159,38 @@ legacy/
 2. `部分实现`：已有最小骨架或 mock 闭环，但仍缺生产能力、真实 provider 或完整生命周期。
 3. `未实现`：只在设计或下一阶段计划中存在，不能写成当前可用能力。
 
-| 模块 | 状态 | 当前依据 |
-| --- | --- | --- |
-| Control Service | 已实现 | 设备注册、订阅匹配、事件发布和 debug API 已由 `tests/test_control_service.py`、`tests/acceptance/test_protocol_routing_acceptance.py` 覆盖。 |
-| Stream Service | 已实现 | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `tests/test_stream_and_audio_pipeline.py`、`tests/test_network_server_playback.py` 覆盖。 |
-| Audio Pipeline | 部分实现 | 已有格式校验、mock provider 和最小音频链路；text 路线可复用 AudioSample 做无头回放，见 `tests/test_text_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。 |
-| Asset Service | 已实现 | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。 |
-| Agent Core | 部分实现 | Text / Realtime mock 链路、工具发现和 provider schema 已覆盖；TextAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。 |
-| ToolGateway | 已实现 | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `tests/acceptance/test_protocol_native_tool_task_contract.py` 与 `tests/test_agent_core_router.py` 覆盖。 |
-| Task Engine | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。 |
-| Output Service | 已实现 | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `tests/test_phase2_providers_output.py` 覆盖。 |
-| Endpoint references | 已实现 | Python playback、Python phone mock 和 browser-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。 |
-| Memory / Skill / MCP | 已实现 | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备通讯能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
-| Signed token / Pairing | 未实现 | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。 |
+| 模块                   | 状态     | 当前依据                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Control Service        | 已实现   | 设备注册、订阅匹配、事件发布和 debug API 已由 `tests/test_control_service.py`、`tests/acceptance/test_protocol_routing_acceptance.py` 覆盖。                                                                                                                                                                               |
+| Stream Service         | 已实现   | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `tests/test_stream_and_audio_pipeline.py`、`tests/test_network_server_playback.py` 覆盖。                                                                                                                                                                 |
+| Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；text 路线可复用 AudioSample 做无头回放，见 `tests/test_text_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
+| Asset Service          | 已实现   | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。                                                                                                                                          |
+| Agent Core             | 部分实现 | Text / Realtime mock 链路、工具发现和 provider schema 已覆盖；TextAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
+| ToolGateway            | 已实现   | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `tests/acceptance/test_protocol_native_tool_task_contract.py` 与 `tests/test_agent_core_router.py` 覆盖。                                                                                                                                                      |
+| Task Engine            | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。                                                                                                                                                                                                                             |
+| Output Service         | 已实现   | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `tests/test_phase2_providers_output.py` 覆盖。                                                                                                                                                                                                               |
+| Endpoint references    | 已实现   | Python playback、Python phone mock 和 browser-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。                                                                                                                           |
+| Memory / Skill / MCP   | 已实现   | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备通讯能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
+| Signed token / Pairing | 未实现   | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。                                                                                                                                                                                                                                              |
 
 ### 3.6 已实现能力验收索引
 
 文档里标记为 `已实现` 的能力必须能落到测试、契约或样板上。当前索引如下：
 
-| 能力 | 验收依据 |
-| --- | --- |
-| CLI 和开发者入口 | `tests/test_cli_developer_workflow.py`、`tests/test_docs_commands.py` |
-| 自动发现 Tool / Task | `tests/acceptance/test_auto_discovery_developer_contract.py` |
-| 设备注册与订阅分发 | `tests/test_control_service.py`、`testdata/contracts/events/control_device_register_requested.json` |
-| stream chunk 协议 | `tests/test_protocol_contracts.py`、`testdata/contracts/streams/stream_chunk_pcm16le.json` |
-| 资产缓存与能力回放 | `tests/acceptance/test_capability_template_playback.py`、`testdata/contracts/scenarios/playback_sdk.json` |
-| Tool / Task 协议原生扩展 | `tests/acceptance/test_protocol_native_tool_task_contract.py` |
-| Text 模型音频闭环 | `tests/test_text_route_audio_samples.py` |
-| Output Service 与播放仲裁 | `tests/test_phase2_providers_output.py`、`testdata/contracts/output/output_arbitration_preempt_low_priority.json` |
-| H 线路迁移样板 | `app-examples/for-blind-app/templates`、`tests/acceptance/test_migration_template_contract.py` |
-| Memory / Skill / MCP 能力面 | `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py` |
-| 老业务能力迁移样板 | `app-examples/for-blind-app`、`tests/acceptance/test_for_blind_capabilities_playback.py`、`tests/acceptance/test_old_sdk_capability_migration_contract.py`、`old-sdk-parity-capabilities` |
-| 老 SDK 可用性文档入口 | `README.md`、`docs/phase3-migration-guide.md`、`docs/old-sdk-parity-troubleshooting.md`、`app-examples/for-blind-app`、`tests/test_docs_old_sdk_parity.py`、`tests/acceptance/test_docs_current_state_contract.py` |
+| 能力                        | 验收依据                                                                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CLI 和开发者入口            | `tests/test_cli_developer_workflow.py`、`tests/test_docs_commands.py`                                                                                                                                                      |
+| 自动发现 Tool / Task        | `tests/acceptance/test_auto_discovery_developer_contract.py`                                                                                                                                                                 |
+| 设备注册与订阅分发          | `tests/test_control_service.py`、`testdata/contracts/events/control_device_register_requested.json`                                                                                                                        |
+| stream chunk 协议           | `tests/test_protocol_contracts.py`、`testdata/contracts/streams/stream_chunk_pcm16le.json`                                                                                                                                 |
+| 资产缓存与能力回放          | `tests/acceptance/test_capability_template_playback.py`、`testdata/contracts/scenarios/playback_sdk.json`                                                                                                                  |
+| Tool / Task 协议原生扩展    | `tests/acceptance/test_protocol_native_tool_task_contract.py`                                                                                                                                                                |
+| Text 模型音频闭环           | `tests/test_text_route_audio_samples.py`                                                                                                                                                                                     |
+| Output Service 与播放仲裁   | `tests/test_phase2_providers_output.py`、`testdata/contracts/output/output_arbitration_preempt_low_priority.json`                                                                                                          |
+| H 线路迁移样板              | `app-examples/for-blind-app/templates`、`tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
+| Memory / Skill / MCP 能力面 | `tests/test_memory_service.py`、`tests/test_skill_service.py`、`tests/test_mcp_gateway.py`、`tests/acceptance/test_indirect_device_context_contract.py`                                                                |
+| 老业务能力迁移样板          | `app-examples/for-blind-app`、`tests/acceptance/test_for_blind_capabilities_playback.py`、`tests/acceptance/test_old_sdk_capability_migration_contract.py`、`old-sdk-parity-capabilities`                              |
+| 老 SDK 可用性文档入口       | `README.md`、`docs/phase3-migration-guide.md`、`docs/old-sdk-parity-troubleshooting.md`、`app-examples/for-blind-app`、`tests/test_docs_old_sdk_parity.py`、`tests/acceptance/test_docs_current_state_contract.py` |
 
 ### 3.7 公开扩展 API
 
@@ -440,14 +442,14 @@ Output --> Stream : actuator.speaker
 
 参与组件：
 
-| 组件 | 说明 |
-| --- | --- |
-| Endpoint | 任意端侧设备，例如 ESP32 眼镜、Web、iOS 或 Python 回放端。 |
-| Control Service | 控制事件入口，负责设备注册、订阅、用户唤醒、音频会话打开和关闭等控制面事件。 |
-| Stream Service | stream 字节入口，负责 `sensor.mic` 和 `actuator.speaker` 等 stream 的打开、写入、关闭。 |
-| Audio Pipeline | 音频主链路，负责 `sensor.mic` 的格式归一、质量诊断和路由；文本链路的 ASR / turn boundary 由 `TextAgentCore` 内部完成。 |
-| Agent Core | 大模型对话核心，可以是 `RealtimeAudioAgentCore` 或 `TextAgentCore`。 |
-| Output Service | 输出链路，负责把 Agent / Task 的输出交给播放仲裁，并最终写入 `actuator.speaker` stream。 |
+| 组件            | 说明                                                                                                                       |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint        | 任意端侧设备，例如 ESP32 眼镜、Web、iOS 或 Python 回放端。                                                                 |
+| Control Service | 控制事件入口，负责设备注册、订阅、用户唤醒、音频会话打开和关闭等控制面事件。                                               |
+| Stream Service  | stream 字节入口，负责 `sensor.mic` 和 `actuator.speaker` 等 stream 的打开、写入、关闭。                                |
+| Audio Pipeline  | 音频主链路，负责 `sensor.mic` 的格式归一、质量诊断和路由；文本链路的 ASR / turn boundary 由 `TextAgentCore` 内部完成。 |
+| Agent Core      | 大模型对话核心，可以是 `RealtimeAudioAgentCore` 或 `TextAgentCore`。                                                   |
+| Output Service  | 输出链路，负责把 Agent / Task 的输出交给播放仲裁，并最终写入 `actuator.speaker` stream。                                 |
 
 说明：这张图只表达连续对话主干。`Output Service` 在这里是折叠节点，它内部包含 `Output Router` 和 `Playback Arbiter`。`RealtimeOutputAdapter`、`TextOutputAdapter` 是各自 Agent Core 的内部实现，不在主干时序图中展开；详细输出链路见第 12 章。
 
@@ -505,11 +507,11 @@ server 可以释放音频会话的情况：
 
 旧 SDK 的连续对话关闭逻辑说明了一个细节：释放音频会话不总是“立刻断开”。新版需要区分三种关闭：
 
-| 类型 | 场景 | 行为 |
-| --- | --- | --- |
-| `close_now` | 端侧断开、用户强打断、provider session 失败。 | 立即取消当前响应、关闭输入输出 stream，并释放 provider 会话。 |
-| `close_after_reply` | 用户说“结束对话”，但当前回复已经开始。 | 停止接收新输入，允许当前输出完成，然后关闭音频会话。 |
-| `idle_timeout_close` | 连续静默超过阈值。 | 如果没有活动输出和工具调用，关闭会话；否则等活动项结束后关闭。 |
+| 类型                   | 场景                                          | 行为                                                           |
+| ---------------------- | --------------------------------------------- | -------------------------------------------------------------- |
+| `close_now`          | 端侧断开、用户强打断、provider session 失败。 | 立即取消当前响应、关闭输入输出 stream，并释放 provider 会话。  |
+| `close_after_reply`  | 用户说“结束对话”，但当前回复已经开始。      | 停止接收新输入，允许当前输出完成，然后关闭音频会话。           |
+| `idle_timeout_close` | 连续静默超过阈值。                            | 如果没有活动输出和工具调用，关闭会话；否则等活动项结束后关闭。 |
 
 关闭时还需要清理：
 
@@ -543,14 +545,14 @@ server 可以释放音频会话的情况：
 
 字段说明：
 
-| 字段 | 说明 |
-| --- | --- |
-| `event_name` | 事件名，支持层级命名和通配订阅。 |
-| `user_id` | 事件所属用户。 |
+| 字段            | 说明                                                            |
+| --------------- | --------------------------------------------------------------- |
+| `event_name`  | 事件名，支持层级命名和通配订阅。                                |
+| `user_id`     | 事件所属用户。                                                  |
 | `producer_id` | 事件生产者编号，例如 `server-main` 或某个端侧 `device_id`。 |
-| `session_id` | 可选语音或交互会话。 |
-| `stream_id` | 可选 stream。 |
-| `payload` | 小型结构化数据，不放大媒体字节。 |
+| `session_id`  | 可选语音或交互会话。                                            |
+| `stream_id`   | 可选 stream。                                                   |
+| `payload`     | 小型结构化数据，不放大媒体字节。                                |
 
 约定：
 
@@ -570,47 +572,47 @@ server 可以释放音频会话的情况：
 
 第一层 `plane` 只允许以下几类：
 
-| 第一层 | 边界 | 示例 |
-| --- | --- | --- |
-| `control` | 端侧注册、心跳、用户会话、音频会话等控制面事件。 | `control.device.registered` |
-| `stream` | stream 生命周期、stream 数据到达、stream 控制请求。 | `stream.input.opened` |
-| `agent` | Agent Core 的输入提交、模型响应、工具桥接状态。 | `agent.response.started` |
-| `tool` | server 侧工具调用生命周期。 | `tool.call.completed` |
-| `task` | server 侧长任务生命周期和状态变化。 | `task.state.changed` |
-| `memory` | 长期记忆读写、检索和整理。 | `memory.write.completed` |
-| `system` | 系统错误、降级、健康状态和诊断。 | `system.error.raised` |
+| 第一层      | 边界                                                | 示例                          |
+| ----------- | --------------------------------------------------- | ----------------------------- |
+| `control` | 端侧注册、心跳、用户会话、音频会话等控制面事件。    | `control.device.registered` |
+| `stream`  | stream 生命周期、stream 数据到达、stream 控制请求。 | `stream.input.opened`       |
+| `agent`   | Agent Core 的输入提交、模型响应、工具桥接状态。     | `agent.response.started`    |
+| `tool`    | server 侧工具调用生命周期。                         | `tool.call.completed`       |
+| `task`    | server 侧长任务生命周期和状态变化。                 | `task.state.changed`        |
+| `memory`  | 长期记忆读写、检索和整理。                          | `memory.write.completed`    |
+| `system`  | 系统错误、降级、健康状态和诊断。                    | `system.error.raised`       |
 
 不再把 `device.*`、`user.*`、`audio.*` 放在第一层，因为这些概念属于控制面资源，应该放在 `control.<resource>.*` 下。例如：
 
-| 旧式平铺命名 | 新命名 |
-| --- | --- |
-| `device.registered` | `control.device.registered` |
-| `user.wake.detected` | `control.user.wake.detected` |
+| 旧式平铺命名           | 新命名                                   |
+| ---------------------- | ---------------------------------------- |
+| `device.registered`  | `control.device.registered`            |
+| `user.wake.detected` | `control.user.wake.detected`           |
 | `audio.session.open` | `control.audio_session.open.requested` |
 
 第二层 `resource` 的含义由第一层决定：
 
-| 第一层 | 第二层资源 |
-| --- | --- |
-| `control` | `device`、`user`、`audio_session`、`subscription` |
-| `stream` | `input`、`output`、`control` |
-| `agent` | `session`、`input`、`response`、`transcript`、`tool_bridge` |
-| `tool` | `call`、`result` |
-| `task` | `instance`、`state`、`event` |
-| `memory` | `read`、`write`、`search` |
-| `system` | `health`、`error`、`degradation` |
+| 第一层      | 第二层资源                                                            |
+| ----------- | --------------------------------------------------------------------- |
+| `control` | `device`、`user`、`audio_session`、`subscription`             |
+| `stream`  | `input`、`output`、`control`                                    |
+| `agent`   | `session`、`input`、`response`、`transcript`、`tool_bridge` |
+| `tool`    | `call`、`result`                                                  |
+| `task`    | `instance`、`state`、`event`                                    |
+| `memory`  | `read`、`write`、`search`                                       |
+| `system`  | `health`、`error`、`degradation`                                |
 
 第三层 `action` 使用稳定动词或状态词：
 
-| 动作 | 使用场景 |
-| --- | --- |
-| `requested` | server 请求某事发生，例如请求打开音频会话。 |
-| `opened` / `closed` | 会话或 stream 生命周期。 |
-| `started` / `completed` / `failed` | 调用、任务、响应生命周期。 |
-| `changed` | 状态变化。 |
-| `detected` | 端侧或 server 检测到事实。 |
-| `cancelled` | 被取消。 |
-| `received` | server 收到数据或事件。 |
+| 动作                                     | 使用场景                                    |
+| ---------------------------------------- | ------------------------------------------- |
+| `requested`                            | server 请求某事发生，例如请求打开音频会话。 |
+| `opened` / `closed`                  | 会话或 stream 生命周期。                    |
+| `started` / `completed` / `failed` | 调用、任务、响应生命周期。                  |
+| `changed`                              | 状态变化。                                  |
+| `detected`                             | 端侧或 server 检测到事实。                  |
+| `cancelled`                            | 被取消。                                    |
+| `received`                             | server 收到数据或事件。                     |
 
 命名原则：
 
@@ -625,62 +627,62 @@ server 可以释放音频会话的情况：
 
 设备生命周期：
 
-| 事件 | 生产者 | 说明 |
-| --- | --- | --- |
-| `control.device.register.requested` | device | 注册设备、能力、订阅和 token。 |
-| `control.device.registered` | server | 注册成功。 |
-| `control.device.register.failed` | server | 注册失败。 |
-| `control.device.heartbeat.received` | device | server 收到设备心跳。 |
-| `control.device.state.changed` | device/server | 端侧或 server 记录的设备状态变更。 |
+| 事件                                  | 生产者        | 说明                               |
+| ------------------------------------- | ------------- | ---------------------------------- |
+| `control.device.register.requested` | device        | 注册设备、能力、订阅和 token。     |
+| `control.device.registered`         | server        | 注册成功。                         |
+| `control.device.register.failed`    | server        | 注册失败。                         |
+| `control.device.heartbeat.received` | device        | server 收到设备心跳。              |
+| `control.device.state.changed`      | device/server | 端侧或 server 记录的设备状态变更。 |
 
 用户与会话：
 
-| 事件 | 生产者 | 说明 |
-| --- | --- | --- |
-| `control.user.wake.detected` | device | 端侧检测到唤醒。 |
-| `control.user.dialog.close.requested` | device/server | 用户或 server 结束连续对话。 |
-| `control.audio_session.open.requested` | server | 要求被投递到的端侧打开音频会话。 |
-| `control.audio_session.opened` | device | 端侧确认音频会话已打开，`producer_id` 是该端侧设备编号。 |
-| `control.audio_session.close.requested` | server | server 要求被投递到的端侧释放会话。 |
-| `control.audio_session.closed` | device | 端侧确认关闭，`producer_id` 是该端侧设备编号。 |
-| `control.user.interrupt.detected` | device/server | 用户打断或 server 侧取消。 |
+| 事件                                      | 生产者        | 说明                                                       |
+| ----------------------------------------- | ------------- | ---------------------------------------------------------- |
+| `control.user.wake.detected`            | device        | 端侧检测到唤醒。                                           |
+| `control.user.dialog.close.requested`   | device/server | 用户或 server 结束连续对话。                               |
+| `control.audio_session.open.requested`  | server        | 要求被投递到的端侧打开音频会话。                           |
+| `control.audio_session.opened`          | device        | 端侧确认音频会话已打开，`producer_id` 是该端侧设备编号。 |
+| `control.audio_session.close.requested` | server        | server 要求被投递到的端侧释放会话。                        |
+| `control.audio_session.closed`          | device        | 端侧确认关闭，`producer_id` 是该端侧设备编号。           |
+| `control.user.interrupt.detected`       | device/server | 用户打断或 server 侧取消。                                 |
 
 Stream：
 
-| 事件 | 生产者 | 说明 |
-| --- | --- | --- |
-| `stream.input.opened` | device | 端侧已打开输入 stream。 |
-| `stream.input.closed` | device/server | 输入 stream 关闭。 |
-| `stream.input.failed` | device/server | 输入 stream 失败。 |
-| `stream.output.open.requested` | server | server 要求端侧准备消费输出 stream。 |
-| `stream.output.close.requested` | server | server 请求端侧关闭输出 stream。 |
-| `stream.output.closed` | device/server | 输出 stream 已关闭。 |
-| `stream.output.cancel.requested` | server | server 请求端侧取消输出 stream。 |
-| `stream.output.cancelled` | server | 输出 stream 被取消。 |
-| `stream.output.started` | device | 端侧开始播放或执行。 |
-| `stream.output.finished` | device | 端侧播放或执行完成。 |
-| `stream.output.failed` | device | 端侧播放或执行失败。 |
-| `stream.control.configure.requested` | server | server 请求端侧调整某类 stream 策略，例如通过 `stream_type=sensor.rgb` 请求 RGB 相机单帧或连续上传。 |
+| 事件                                   | 生产者        | 说明                                                                                                   |
+| -------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `stream.input.opened`                | device        | 端侧已打开输入 stream。                                                                                |
+| `stream.input.closed`                | device/server | 输入 stream 关闭。                                                                                     |
+| `stream.input.failed`                | device/server | 输入 stream 失败。                                                                                     |
+| `stream.output.open.requested`       | server        | server 要求端侧准备消费输出 stream。                                                                   |
+| `stream.output.close.requested`      | server        | server 请求端侧关闭输出 stream。                                                                       |
+| `stream.output.closed`               | device/server | 输出 stream 已关闭。                                                                                   |
+| `stream.output.cancel.requested`     | server        | server 请求端侧取消输出 stream。                                                                       |
+| `stream.output.cancelled`            | server        | 输出 stream 被取消。                                                                                   |
+| `stream.output.started`              | device        | 端侧开始播放或执行。                                                                                   |
+| `stream.output.finished`             | device        | 端侧播放或执行完成。                                                                                   |
+| `stream.output.failed`               | device        | 端侧播放或执行失败。                                                                                   |
+| `stream.control.configure.requested` | server        | server 请求端侧调整某类 stream 策略，例如通过 `stream_type=sensor.rgb` 请求 RGB 相机单帧或连续上传。 |
 
 端侧控制：
 
-| 事件 | 生产者 | 说明 |
-| --- | --- | --- |
+| 事件                                 | 生产者 | 说明                                                                                  |
+| ------------------------------------ | ------ | ------------------------------------------------------------------------------------- |
 | `control.device.command.requested` | server | server 请求具备某项能力且订阅该事件的端侧执行控制动作，例如启动或停止导航、本地推理。 |
-| `control.device.command.started` | device | 端侧确认控制动作已开始。 |
-| `control.device.command.completed` | device | 端侧确认控制动作已完成。 |
-| `control.device.command.failed` | device | 端侧控制动作失败。 |
+| `control.device.command.started`   | device | 端侧确认控制动作已开始。                                                              |
+| `control.device.command.completed` | device | 端侧确认控制动作已完成。                                                              |
+| `control.device.command.failed`    | device | 端侧控制动作失败。                                                                    |
 
 Agent、Tool、Task 和系统事件：
 
-| 事件 | 生产者 | 说明 |
-| --- | --- | --- |
-| `agent.response.started` | server | Agent 开始响应。 |
+| 事件                         | 生产者 | 说明             |
+| ---------------------------- | ------ | ---------------- |
+| `agent.response.started`   | server | Agent 开始响应。 |
 | `agent.response.completed` | server | Agent 响应完成。 |
-| `tool.call.started` | server | 工具调用开始。 |
-| `tool.call.completed` | server | 工具调用完成。 |
-| `task.state.changed` | server | 任务状态变更。 |
-| `system.error.raised` | server | 系统错误。 |
+| `tool.call.started`        | server | 工具调用开始。   |
+| `tool.call.completed`      | server | 工具调用完成。   |
+| `task.state.changed`       | server | 任务状态变更。   |
+| `system.error.raised`      | server | 系统错误。       |
 
 ### 6.3 订阅声明
 
@@ -718,11 +720,11 @@ Agent、Tool、Task 和系统事件：
 
 filter 字段路径只推荐引用事件信封字段和 `payload` 内字段：
 
-| 写法 | 匹配字段 |
-| --- | --- |
-| `producer_id` | 事件信封中的 `producer_id`。 |
-| `stream_type` | 事件信封或 stream 元数据中的 `stream_type`。 |
-| `payload.mode` | `payload.mode`。 |
+| 写法             | 匹配字段                                       |
+| ---------------- | ---------------------------------------------- |
+| `producer_id`  | 事件信封中的 `producer_id`。                 |
+| `stream_type`  | 事件信封或 stream 元数据中的 `stream_type`。 |
+| `payload.mode` | `payload.mode`。                             |
 
 新版协议不支持按旧设备声明字段过滤。事件分发只看订阅的 `event` 和 `filter`。例如订阅
 `{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}`
@@ -748,10 +750,10 @@ subscriptions=[
 
 第一版推荐默认音频格式：
 
-| 方向 | codec | sample_rate | channels | chunk_ms |
-| --- | --- | --- | --- | --- |
-| 上行 `sensor.mic` | `pcm16le` | `16000` | `1` | `20` |
-| 下行 `actuator.speaker` | `pcm16le` | `16000` 或 `24000` | `1` | `20` 或 `40` |
+| 方向                      | codec       | sample_rate            | channels | chunk_ms         |
+| ------------------------- | ----------- | ---------------------- | -------- | ---------------- |
+| 上行 `sensor.mic`       | `pcm16le` | `16000`              | `1`    | `20`           |
+| 下行 `actuator.speaker` | `pcm16le` | `16000` 或 `24000` | `1`    | `20` 或 `40` |
 
 说明：
 
@@ -765,32 +767,32 @@ subscriptions=[
 
 Python 扩展契约：
 
-| 契约 | 使用者 | 稳定要求 |
-| --- | --- | --- |
-| `BaseTool` / `ToolContext` / `ToolResult` | Tool 开发者 | 字段可向后兼容增加，不随内部服务重构改名。 |
-| `BaseTask` / `TaskContext` / `TaskEvent` / `TaskRef` | Task 开发者 | 状态机和事件语义稳定，允许增加可选字段。 |
-| `UserDeviceContext` / `DeviceSnapshot` / `AssetRef` | Tool / Task | 只暴露 event、stream 和只读快照接口，不暴露连接对象。 |
-| `Skill` / `Memory` / `MCPGateway` 的 Tool 封装入口 | 能力包开发者 | MCP 和 Skill 不直接拿设备上下文，必须通过 Tool / Task 间接使用设备。 |
-| `AudioChatError` / `ErrorCode` | 所有扩展点 | 所有 SDK 失败都应该返回结构化错误，避免只抛底层异常字符串。 |
+| 契约                                                         | 使用者       | 稳定要求                                                             |
+| ------------------------------------------------------------ | ------------ | -------------------------------------------------------------------- |
+| `BaseTool` / `ToolContext` / `ToolResult`              | Tool 开发者  | 字段可向后兼容增加，不随内部服务重构改名。                           |
+| `BaseTask` / `TaskContext` / `TaskEvent` / `TaskRef` | Task 开发者  | 状态机和事件语义稳定，允许增加可选字段。                             |
+| `UserDeviceContext` / `DeviceSnapshot` / `AssetRef`    | Tool / Task  | 只暴露 event、stream 和只读快照接口，不暴露连接对象。                |
+| `Skill` / `Memory` / `MCPGateway` 的 Tool 封装入口     | 能力包开发者 | MCP 和 Skill 不直接拿设备上下文，必须通过 Tool / Task 间接使用设备。 |
+| `AudioChatError` / `ErrorCode`                           | 所有扩展点   | 所有 SDK 失败都应该返回结构化错误，避免只抛底层异常字符串。          |
 
 跨端协议契约：
 
-| 契约 | 说明 |
-| --- | --- |
-| Event 信封和内置事件名 | Python、ESP32、iOS、Web、回放端必须一致。 |
-| 订阅声明和 filter 规则 | 决定事件如何被投递，不能让业务代码绕过。 |
-| Stream 元数据和 `StreamChunk` 二进制封装 | 用于真实字节传输、回放和端侧兼容测试。 |
-| 设备注册、鉴权、绑定和心跳 | 决定设备何时进入 `user_id` active device set。 |
-| Stream 类型命名 | `sensor.*` / `actuator.*` 是跨端约定，不按具体端侧角色命名。 |
+| 契约                                       | 说明                                                             |
+| ------------------------------------------ | ---------------------------------------------------------------- |
+| Event 信封和内置事件名                     | Python、ESP32、iOS、Web、回放端必须一致。                        |
+| 订阅声明和 filter 规则                     | 决定事件如何被投递，不能让业务代码绕过。                         |
+| Stream 元数据和 `StreamChunk` 二进制封装 | 用于真实字节传输、回放和端侧兼容测试。                           |
+| 设备注册、鉴权、绑定和心跳                 | 决定设备何时进入 `user_id` active device set。                 |
+| Stream 类型命名                            | `sensor.*` / `actuator.*` 是跨端约定，不按具体端侧角色命名。 |
 
 测试资产契约：
 
-| 契约 | 说明 |
-| --- | --- |
-| 回放场景 YAML | 描述设备属性、订阅、输入音频、资产样本、执行器记录和断言。 |
-| golden event JSON | 验证 Event 信封、订阅 filter、错误响应和 stream 生命周期。 |
+| 契约                | 说明                                                                   |
+| ------------------- | ---------------------------------------------------------------------- |
+| 回放场景 YAML       | 描述设备属性、订阅、输入音频、资产样本、执行器记录和断言。             |
+| golden event JSON   | 验证 Event 信封、订阅 filter、错误响应和 stream 生命周期。             |
 | golden stream chunk | 验证二进制切片 header、payload_size、seq、timestamp 和 stream 元数据。 |
-| 回放 result.json | 固定断言结果、失败原因、工具轨迹、任务事件和播放决策字段。 |
+| 回放 result.json    | 固定断言结果、失败原因、工具轨迹、任务事件和播放决策字段。             |
 
 非公共实现包括：
 
@@ -981,15 +983,15 @@ Device --> DeviceSnapshot
 
 `Device` 负责维护：
 
-| 状态 | 说明 |
-| --- | --- |
-| identity | `user_id`、`device_id`、`device_name`、`client_type`、`sdk_version`。 |
-| properties | 设备提交的日志、debug API 和硬件参数说明，不参与路由。 |
-| subscriptions | 设备注册时提交的订阅策略。 |
-| connection | 当前控制连接、连接时间、心跳时间、在线 / 离线状态。 |
-| stream_states | 该设备正在生产或消费的 stream 摘要。 |
+| 状态           | 说明                                                                               |
+| -------------- | ---------------------------------------------------------------------------------- |
+| identity       | `user_id`、`device_id`、`device_name`、`client_type`、`sdk_version`。    |
+| properties     | 设备提交的日志、debug API 和硬件参数说明，不参与路由。                             |
+| subscriptions  | 设备注册时提交的订阅策略。                                                         |
+| connection     | 当前控制连接、连接时间、心跳时间、在线 / 离线状态。                                |
+| stream_states  | 该设备正在生产或消费的 stream 摘要。                                               |
 | control_states | 该设备通过控制事件上报的长流程状态摘要，例如导航中、本地推理中、传感器策略已启用。 |
-| health | 最近错误、协议降级、丢包或心跳异常等诊断信息。 |
+| health         | 最近错误、协议降级、丢包或心跳异常等诊断信息。                                     |
 
 `DeviceSnapshot` 是 `Device` 的只读快照，用于 Tool / Task、调试接口、日志和观测数据。业务代码只能读取快照，不能直接修改 `Device` 内部状态。
 
@@ -1066,17 +1068,17 @@ UserDeviceContext --> DeviceSnapshot
 
 字段约束：
 
-| 字段 | 说明 |
-| --- | --- |
-| `user_id` | 要绑定到的用户。第一版由端侧配置或配对流程写入，不从模型或业务 Tool 推断。 |
-| `producer_id` | 事件生产者，必须等于 `payload.device_id`。 |
-| `payload.device_id` | 设备稳定标识。由开发者或端侧生成，不能作为事件接收方字段使用。 |
-| `payload.device_name` | 人可读名称，只用于调试和设备列表。 |
-| `payload.client_type` | 端侧实现标识，例如 `esp32-glass`、`ios-phone`、`python-playback`；只用于调试、兼容和默认配置，不作为强设备类型路由。 |
-| `payload.sdk_version` | 端侧协议版本，用于兼容检查。 |
-| `payload.auth` | 注册鉴权信息。不同鉴权模式字段不同。 |
-| `payload.properties` | 可选调试属性和硬件参数说明，不参与路由。 |
-| `payload.subscriptions` | 设备订阅声明。 |
+| 字段                      | 说明                                                                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `user_id`               | 要绑定到的用户。第一版由端侧配置或配对流程写入，不从模型或业务 Tool 推断。                                                 |
+| `producer_id`           | 事件生产者，必须等于 `payload.device_id`。                                                                               |
+| `payload.device_id`     | 设备稳定标识。由开发者或端侧生成，不能作为事件接收方字段使用。                                                             |
+| `payload.device_name`   | 人可读名称，只用于调试和设备列表。                                                                                         |
+| `payload.client_type`   | 端侧实现标识，例如 `esp32-glass`、`ios-phone`、`python-playback`；只用于调试、兼容和默认配置，不作为强设备类型路由。 |
+| `payload.sdk_version`   | 端侧协议版本，用于兼容检查。                                                                                               |
+| `payload.auth`          | 注册鉴权信息。不同鉴权模式字段不同。                                                                                       |
+| `payload.properties`    | 可选调试属性和硬件参数说明，不参与路由。                                                                                   |
+| `payload.subscriptions` | 设备订阅声明。                                                                                                             |
 
 注册处理流程：
 
@@ -1146,18 +1148,18 @@ UserDeviceContext --> DeviceSnapshot
 
 鉴权模式：
 
-| 模式 | 场景 | 说明 |
-| --- | --- | --- |
-| `static_token` | 本地联调、固定设备 demo | server 配置 `auth.device_tokens`，设备注册时提交 token。 |
-| `signed_token` | 正式部署 | 配对服务或管理端生成短期签名 token，token 内包含 `user_id`、`device_id`、过期时间。 |
-| `disabled` | 单元测试、离线回放 | 不校验 token，只能在测试配置中开启。 |
+| 模式             | 场景                    | 说明                                                                                    |
+| ---------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| `static_token` | 本地联调、固定设备 demo | server 配置 `auth.device_tokens`，设备注册时提交 token。                              |
+| `signed_token` | 正式部署                | 配对服务或管理端生成短期签名 token，token 内包含 `user_id`、`device_id`、过期时间。 |
+| `disabled`     | 单元测试、离线回放      | 不校验 token，只能在测试配置中开启。                                                    |
 
 调试与管理接口：
 
-| API | 说明 |
-| --- | --- |
-| `GET /api/debug/devices` | 查看全部设备注册、在线、绑定和能力状态。 |
-| `GET /api/debug/users/{user_id}` | 查看某个用户的 active device set、订阅和消息状态。 |
+| API                                            | 说明                                                               |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| `GET /api/debug/devices`                     | 查看全部设备注册、在线、绑定和能力状态。                           |
+| `GET /api/debug/users/{user_id}`             | 查看某个用户的 active device set、订阅和消息状态。                 |
 | `POST /api/admin/devices/{device_id}/unbind` | 显式解绑设备。第一版可只提供本地开发接口，正式部署应接入管理鉴权。 |
 
 ### 7.5 事件发布与分发
@@ -1204,13 +1206,13 @@ result = control_service.publish(Event(
 
 ### 7.6 与其他模块的边界
 
-| 模块 | 边界 |
-| --- | --- |
-| Stream Service | 负责字节 stream，不通过 Control Service 传输媒体大字节。 |
-| Audio Pipeline | 消费 `sensor.mic` stream，不负责设备注册和事件订阅。 |
-| Asset Service | 通过 Control Service 请求端侧上传资产，资产数据仍走 Stream Service。 |
-| Tool / Task | 只通过 `UserDeviceContext` 发布协议事件、打开 stream、查询资产或提交输出，不直接找设备连接，也不按 `device_id` 点对点发送。 |
-| Output Service | 生成并仲裁输出音频，最终通过 Stream Service 写入 `actuator.speaker`。 |
+| 模块           | 边界                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Stream Service | 负责字节 stream，不通过 Control Service 传输媒体大字节。                                                                        |
+| Audio Pipeline | 消费 `sensor.mic` stream，不负责设备注册和事件订阅。                                                                          |
+| Asset Service  | 通过 Control Service 请求端侧上传资产，资产数据仍走 Stream Service。                                                            |
+| Tool / Task    | 只通过 `UserDeviceContext` 发布协议事件、打开 stream、查询资产或提交输出，不直接找设备连接，也不按 `device_id` 点对点发送。 |
+| Output Service | 生成并仲裁输出音频，最终通过 Stream Service 写入 `actuator.speaker`。                                                         |
 
 ## 8. Stream Service
 
@@ -1310,19 +1312,19 @@ StreamRegistry --> StreamHandle
 
 感知器 stream：
 
-| Stream 类型 | 方向 | 示例 |
-| --- | --- | --- |
+| Stream 类型    | 方向               | 示例                                              |
+| -------------- | ------------------ | ------------------------------------------------- |
 | `sensor.mic` | endpoint -> server | 唤醒后上传 AEC 后麦克风 PCM，属于对话音频主链路。 |
-| `sensor.rgb` | endpoint -> server | RGB 相机图像资产 stream，既可单帧也可连续视频。 |
-| `sensor.tof` | endpoint -> server | ToF 深度相机资产 stream。 |
-| `sensor.imu` | endpoint -> server | IMU / heading / motion 资产 stream。 |
+| `sensor.rgb` | endpoint -> server | RGB 相机图像资产 stream，既可单帧也可连续视频。   |
+| `sensor.tof` | endpoint -> server | ToF 深度相机资产 stream。                         |
+| `sensor.imu` | endpoint -> server | IMU / heading / motion 资产 stream。              |
 
 执行器 stream：
 
-| Stream 类型 | 方向 | 示例 |
-| --- | --- | --- |
+| Stream 类型          | 方向               | 示例                                           |
+| -------------------- | ------------------ | ---------------------------------------------- |
 | `actuator.speaker` | server -> endpoint | assistant 或通知播报音频，属于对话音频主链路。 |
-| `actuator.haptic` | server -> endpoint | 振动执行器输出。 |
+| `actuator.haptic`  | server -> endpoint | 振动执行器输出。                               |
 
 ### 8.4 对话音频和对话资产分流
 
@@ -1678,20 +1680,20 @@ TextAgentCore --> OutputService
 
 统一事件：
 
-| 事件 | 说明 |
-| --- | --- |
-| `input_transcript.delta` | 用户输入转写增量，可选。 |
-| `input_transcript.done` | 用户输入转写完成，可选。 |
-| `assistant_text.delta` | 模型文本输出增量。 |
-| `assistant_text.done` | 模型文本输出完成。 |
-| `assistant_audio.delta` | 模型或 TTS 音频输出增量。 |
-| `assistant_audio.done` | 当前音频输出完成。 |
-| `tool_call.started` | 工具调用开始。 |
-| `tool_call.delta` | 工具参数增量。 |
-| `tool_call.completed` | 工具调用完成。 |
-| `tool_call.failed` | 工具调用失败。 |
-| `response.done` | 当前模型响应完成。 |
-| `session.error` | 会话异常。 |
+| 事件                       | 说明                      |
+| -------------------------- | ------------------------- |
+| `input_transcript.delta` | 用户输入转写增量，可选。  |
+| `input_transcript.done`  | 用户输入转写完成，可选。  |
+| `assistant_text.delta`   | 模型文本输出增量。        |
+| `assistant_text.done`    | 模型文本输出完成。        |
+| `assistant_audio.delta`  | 模型或 TTS 音频输出增量。 |
+| `assistant_audio.done`   | 当前音频输出完成。        |
+| `tool_call.started`      | 工具调用开始。            |
+| `tool_call.delta`        | 工具参数增量。            |
+| `tool_call.completed`    | 工具调用完成。            |
+| `tool_call.failed`       | 工具调用失败。            |
+| `response.done`          | 当前模型响应完成。        |
+| `session.error`          | 会话异常。                |
 
 ### 11.2 工具注册、发现与调用
 
@@ -1939,13 +1941,13 @@ class ToolContext:
 
 #### 11.2.4 Realtime 与 Text 的差异
 
-| 环节 | RealtimeAudioAgentCore | TextAgentCore |
-| --- | --- | --- |
-| 工具 schema 提交 | `RealtimeToolBridge` 在 provider session update 时提交。 | `TextToolLoop` 在每次模型请求时提交。 |
-| 工具调用来源 | provider realtime tool call event。 | 文本模型流式响应中的 tool call。 |
-| 参数增量 | 可能以 delta 形式到达，需要聚合完整 JSON。 | 可能是完整 JSON，也可能是流式 delta。 |
-| 结果回填 | `RealtimeToolBridge.submit_tool_result()` 回写 provider session。 | `TextToolLoop` 把结果追加到 messages 后继续模型循环。 |
-| 输出提示 | 工具进度提示走 `context.devices.submit_text()` 或 Output Service。 | 同左。 |
+| 环节             | RealtimeAudioAgentCore                                               | TextAgentCore                                           |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
+| 工具 schema 提交 | `RealtimeToolBridge` 在 provider session update 时提交。           | `TextToolLoop` 在每次模型请求时提交。                 |
+| 工具调用来源     | provider realtime tool call event。                                  | 文本模型流式响应中的 tool call。                        |
+| 参数增量         | 可能以 delta 形式到达，需要聚合完整 JSON。                           | 可能是完整 JSON，也可能是流式 delta。                   |
+| 结果回填         | `RealtimeToolBridge.submit_tool_result()` 回写 provider session。  | `TextToolLoop` 把结果追加到 messages 后继续模型循环。 |
+| 输出提示         | 工具进度提示走 `context.devices.submit_text()` 或 Output Service。 | 同左。                                                  |
 
 ### 11.3 RealtimeAudioAgentCore
 
@@ -2155,12 +2157,12 @@ app.register_agent_core(
 
 未来可能内置：
 
-| Agent Core | 场景 |
-| --- | --- |
-| `VisionRealtimeAgentCore` | 视频 stream 直接进入多模态实时模型。 |
-| `TranscriptOnlyAgentCore` | 只转写、摘要、归档，不输出语音。 |
-| `HybridAgentCore` | 音频输入先 ASR，同时保留 native audio 给模型辅助。 |
-| `WorkflowAgentCore` | 不直接调用 LLM，按确定性 workflow 和 task 编排运行。 |
+| Agent Core                  | 场景                                                 |
+| --------------------------- | ---------------------------------------------------- |
+| `VisionRealtimeAgentCore` | 视频 stream 直接进入多模态实时模型。                 |
+| `TranscriptOnlyAgentCore` | 只转写、摘要、归档，不输出语音。                     |
+| `HybridAgentCore`         | 音频输入先 ASR，同时保留 native audio 给模型辅助。   |
+| `WorkflowAgentCore`       | 不直接调用 LLM，按确定性 workflow 和 task 编排运行。 |
 
 ## 12. Output Service
 
@@ -2174,26 +2176,26 @@ Agent Core 内部的 `RealtimeOutputAdapter`、`TextOutputAdapter` 不属于 `Ou
 
 组件归属：
 
-| 组件 | 归属 | 说明 |
-| --- | --- | --- |
-| `RealtimeOutputAdapter` | `RealtimeAudioAgentCore` 内部 | 将 realtime provider 的 `audio_delta` / `text_delta` 映射成统一 assistant delta。 |
-| `TextOutputAdapter` | `TextAgentCore` 内部 | 将文本模型的 `text_delta` 映射成统一 `assistant_text.delta`。 |
-| `Streaming TTS` | `Output Router` 内部依赖 | 将文本 delta 实时转成音频 delta，可被 agent reply、tool progress、task notification 复用。 |
-| `Output Router` | `Output Service` 内部 | 选择 native audio、Streaming TTS 或缓存音频。 |
-| `Notification Coordinator` | `Output Service` 内部 | 接收 TaskEvent、系统提醒和业务通知，做去重、合并和是否直发判断。 |
-| `Playback Arbiter` | `Output Service` 内部 | 根据优先级和打断策略仲裁播放资源。 |
+| 组件                         | 归属                            | 说明                                                                                       |
+| ---------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
+| `RealtimeOutputAdapter`    | `RealtimeAudioAgentCore` 内部 | 将 realtime provider 的 `audio_delta` / `text_delta` 映射成统一 assistant delta。      |
+| `TextOutputAdapter`        | `TextAgentCore` 内部          | 将文本模型的 `text_delta` 映射成统一 `assistant_text.delta`。                          |
+| `Streaming TTS`            | `Output Router` 内部依赖      | 将文本 delta 实时转成音频 delta，可被 agent reply、tool progress、task notification 复用。 |
+| `Output Router`            | `Output Service` 内部         | 选择 native audio、Streaming TTS 或缓存音频。                                              |
+| `Notification Coordinator` | `Output Service` 内部         | 接收 TaskEvent、系统提醒和业务通知，做去重、合并和是否直发判断。                           |
+| `Playback Arbiter`         | `Output Service` 内部         | 根据优先级和打断策略仲裁播放资源。                                                         |
 
 ### 12.1 输出来源
 
 server 可能同时产生多类输出：
 
-| 来源 | 示例 |
-| --- | --- |
-| `agent_reply` | 模型最终回复。 |
-| `tool_progress` | “我先看一下”。 |
-| `task_notification` | 计时器到点、找物成功。 |
-| `safety_alert` | 红绿灯、障碍物、安全提醒。 |
-| `system_alert` | 设备断开、权限失败。 |
+| 来源                  | 示例                       |
+| --------------------- | -------------------------- |
+| `agent_reply`       | 模型最终回复。             |
+| `tool_progress`     | “我先看一下”。           |
+| `task_notification` | 计时器到点、找物成功。     |
+| `safety_alert`      | 红绿灯、障碍物、安全提醒。 |
+| `system_alert`      | 设备断开、权限失败。       |
 
 ### 12.2 Output Router
 
@@ -2210,12 +2212,12 @@ server 可能同时产生多类输出：
 
 和相邻模块的分工：
 
-| 模块 | 做什么 | 不做什么 |
-| --- | --- | --- |
-| `RealtimeOutputAdapter` | 把 provider 原生 realtime 事件映射成统一 `assistant_audio.delta` / `assistant_text.delta`。 | 不决定播放优先级，不直接写端侧 speaker stream。 |
-| `TextOutputAdapter` | 把文本模型返回的 delta 映射成统一 `assistant_text.delta`。 | 不持有 TTS，不决定播放优先级。 |
-| `Output Router` | 把统一输出事件或内部 `OutputItem` 转成可播放的音频来源；native audio 透传，text delta 进入 Streaming TTS，短提示可走缓存音频。 | 不决定是否打断当前播放，不直接选择端侧硬件连接。 |
-| `Playback Arbiter` | 对同一用户或同一端侧的播放资源做优先级仲裁，决定立即播放、排队、打断或丢弃。 | 不做 TTS，不理解 provider 原始事件。 |
+| 模块                      | 做什么                                                                                                                           | 不做什么                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `RealtimeOutputAdapter` | 把 provider 原生 realtime 事件映射成统一 `assistant_audio.delta` / `assistant_text.delta`。                                  | 不决定播放优先级，不直接写端侧 speaker stream。  |
+| `TextOutputAdapter`     | 把文本模型返回的 delta 映射成统一 `assistant_text.delta`。                                                                     | 不持有 TTS，不决定播放优先级。                   |
+| `Output Router`         | 把统一输出事件或内部 `OutputItem` 转成可播放的音频来源；native audio 透传，text delta 进入 Streaming TTS，短提示可走缓存音频。 | 不决定是否打断当前播放，不直接选择端侧硬件连接。 |
+| `Playback Arbiter`      | 对同一用户或同一端侧的播放资源做优先级仲裁，决定立即播放、排队、打断或丢弃。                                                     | 不做 TTS，不理解 provider 原始事件。             |
 
 因此链路是：
 
@@ -2432,34 +2434,34 @@ PlaybackArbiter --> StreamService
 
 内部决策：
 
-| 决策 | 说明 |
-| --- | --- |
-| `play_now` | 当前没有活动播放，立即打开新的 output stream。 |
-| `queue` | 当前不能被抢占，新输出排队。 |
-| `interrupt` | 新输出抢占旧输出。 |
-| `drop` | 新输出被去重、过期或策略丢弃。 |
-| `cancel_current` | 用户打断当前输出。 |
-| `play_next` | 当前播放结束后播放队列下一项。 |
+| 决策               | 说明                                           |
+| ------------------ | ---------------------------------------------- |
+| `play_now`       | 当前没有活动播放，立即打开新的 output stream。 |
+| `queue`          | 当前不能被抢占，新输出排队。                   |
+| `interrupt`      | 新输出抢占旧输出。                             |
+| `drop`           | 新输出被去重、过期或策略丢弃。                 |
+| `cancel_current` | 用户打断当前输出。                             |
+| `play_next`      | 当前播放结束后播放队列下一项。                 |
 
 开发者设置：
 
-| 字段 | 建议值 | 说明 |
-| --- | --- | --- |
-| `priority` | `low`、`normal`、`high`、`critical` | 表达业务重要性。 |
-| `on_interrupted` | `drop`、`requeue`、`resume` | 当前播放被更高优先级输出打断后如何处理。第一版实现 `drop` 和 `requeue`，`resume` 作为后续扩展。 |
-| `on_blocked` | `queue`、`drop` | 新输出优先级不足、不能抢占当前播放时如何处理。 |
-| `dedupe_key` | 任意字符串 | 同类短时间通知去重。 |
-| `ttl_seconds` | 秒 | 进入队列后超过该时间还未播放则丢弃。只有 `on_blocked=queue` 或 `on_interrupted=requeue` 时才有意义。 |
+| 字段               | 建议值                                      | 说明                                                                                                     |
+| ------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `priority`       | `low`、`normal`、`high`、`critical` | 表达业务重要性。                                                                                         |
+| `on_interrupted` | `drop`、`requeue`、`resume`           | 当前播放被更高优先级输出打断后如何处理。第一版实现 `drop` 和 `requeue`，`resume` 作为后续扩展。    |
+| `on_blocked`     | `queue`、`drop`                         | 新输出优先级不足、不能抢占当前播放时如何处理。                                                           |
+| `dedupe_key`     | 任意字符串                                  | 同类短时间通知去重。                                                                                     |
+| `ttl_seconds`    | 秒                                          | 进入队列后超过该时间还未播放则丢弃。只有 `on_blocked=queue` 或 `on_interrupted=requeue` 时才有意义。 |
 
 默认建议：
 
-| 来源 | priority | on_interrupted | on_blocked | ttl_seconds |
-| --- | --- | --- | --- | --- |
-| 普通 Agent 回复 | `normal` | `drop` | `drop` | `0` |
-| 工具进度提示 | `low` | `drop` | `drop` | `0` |
-| 计时器到点 | `high` | `drop` | `queue` | `30` |
-| 安全告警 | `critical` | `drop` | `queue` | `10` |
-| 系统错误 | `high` | `drop` | `queue` | `30` |
+| 来源            | priority     | on_interrupted | on_blocked | ttl_seconds |
+| --------------- | ------------ | -------------- | ---------- | ----------- |
+| 普通 Agent 回复 | `normal`   | `drop`       | `drop`   | `0`       |
+| 工具进度提示    | `low`      | `drop`       | `drop`   | `0`       |
+| 计时器到点      | `high`     | `drop`       | `queue`  | `30`      |
+| 安全告警        | `critical` | `drop`       | `queue`  | `10`      |
+| 系统错误        | `high`     | `drop`       | `queue`  | `30`      |
 
 仲裁规则：
 
@@ -2494,13 +2496,13 @@ Tool 和 Task 是业务开发者最主要的扩展点。它们必须面向能力
 
 公共引用对象：
 
-| 对象 | 说明 |
-| --- | --- |
-| `AssetRef` | 资产引用，包含 `asset_id`、`stream_type`、`mime_type`、`codec`、`storage_uri`、大小、时间戳、来源 stream 和设备快照信息。 |
-| `ArtifactRef` | 派生产物引用，包含 `artifact_id`、类型、文本摘要、存储路径和元数据。用于转写、分析报告、任务事件等结构化产物。 |
-| `TaskRef` | 任务引用，包含 `task_id`、`task_type`、状态和摘要。 |
-| `ToolTrace` | 工具调用轨迹，写入调试产物，不要求业务开发者手动构造。 |
-| `AudioChatError` | SDK 统一结构化错误，包含 `code`、`message`、`retryable` 和 `details`。 |
+| 对象               | 说明                                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `AssetRef`       | 资产引用，包含 `asset_id`、`stream_type`、`mime_type`、`codec`、`storage_uri`、大小、时间戳、来源 stream 和设备快照信息。 |
+| `ArtifactRef`    | 派生产物引用，包含 `artifact_id`、类型、文本摘要、存储路径和元数据。用于转写、分析报告、任务事件等结构化产物。                    |
+| `TaskRef`        | 任务引用，包含 `task_id`、`task_type`、状态和摘要。                                                                             |
+| `ToolTrace`      | 工具调用轨迹，写入调试产物，不要求业务开发者手动构造。                                                                              |
+| `AudioChatError` | SDK 统一结构化错误，包含 `code`、`message`、`retryable` 和 `details`。                                                      |
 
 ### 13.1 Tool 模板
 
@@ -2554,16 +2556,16 @@ Tool 的 `ToolSpec.input_model` 是 Agent Core 发现工具时生成 provider to
 
 `ToolResult` 吸收旧 SDK `CapabilityResult` 的经验，但命名更贴近 Tool 开发者：
 
-| 字段 | 说明 |
-| --- | --- |
-| `ok` | 是否成功。失败时仍然可以返回可读 `message`。 |
-| `data` | 模型可读的结构化结果，不放大媒体字节。 |
-| `message` | 面向用户或模型的简短结果说明。 |
-| `assets` | Tool 产生或引用的资产，例如图片、音频、IMU 时间片。 |
-| `artifacts` | 派生调试产物或结构化文档，例如转写 JSON、分析报告。 |
-| `tasks` | Tool 创建或关联的 server 侧长任务引用。 |
-| `meta` | 只用于调试和观测的附加字段。 |
-| `error` | 结构化错误，包含 `code`、`message`、`retryable` 和 `details`。 |
+| 字段          | 说明                                                                   |
+| ------------- | ---------------------------------------------------------------------- |
+| `ok`        | 是否成功。失败时仍然可以返回可读 `message`。                         |
+| `data`      | 模型可读的结构化结果，不放大媒体字节。                                 |
+| `message`   | 面向用户或模型的简短结果说明。                                         |
+| `assets`    | Tool 产生或引用的资产，例如图片、音频、IMU 时间片。                    |
+| `artifacts` | 派生调试产物或结构化文档，例如转写 JSON、分析报告。                    |
+| `tasks`     | Tool 创建或关联的 server 侧长任务引用。                                |
+| `meta`      | 只用于调试和观测的附加字段。                                           |
+| `error`     | 结构化错误，包含 `code`、`message`、`retryable` 和 `details`。 |
 
 便捷构造：
 
@@ -2583,16 +2585,16 @@ return ToolResult.failed(
 
 ToolGateway 在每次调用时必须记录 `ToolTrace`：
 
-| 字段 | 说明 |
-| --- | --- |
-| `trace_id` | 调用轨迹编号。 |
-| `generation_id` | 当前模型生成编号。 |
-| `tool_name` | 工具名。 |
-| `status` | `started`、`completed`、`failed`、`cancelled`。 |
-| `input_summary` | 脱敏后的输入摘要。 |
-| `output_summary` | 脱敏后的输出摘要。 |
-| `error_code` | 失败时的结构化错误码。 |
-| `latency_ms` | 工具耗时。 |
+| 字段               | 说明                                                    |
+| ------------------ | ------------------------------------------------------- |
+| `trace_id`       | 调用轨迹编号。                                          |
+| `generation_id`  | 当前模型生成编号。                                      |
+| `tool_name`      | 工具名。                                                |
+| `status`         | `started`、`completed`、`failed`、`cancelled`。 |
+| `input_summary`  | 脱敏后的输入摘要。                                      |
+| `output_summary` | 脱敏后的输出摘要。                                      |
+| `error_code`     | 失败时的结构化错误码。                                  |
+| `latency_ms`     | 工具耗时。                                              |
 
 这些 trace 写入 `UserMessageStore` 和 runs 产物，供回放断言和排障使用。业务 Tool 不需要自己写 trace 文件。
 
@@ -2606,17 +2608,17 @@ ToolGateway 在每次调用时必须记录 `ToolTrace`：
 
 内置 Tool：
 
-| Tool | 说明 |
-| --- | --- |
-| `request_asset` | 优先读取资产缓存；缓存未命中时请求端侧上传资产，例如 `sensor.rgb` 单帧图像。 |
-| `configure_asset_stream` | 请求端侧调整某类资产 stream 的上传策略，例如单帧、连续、低频或停止。 |
-| `publish_device_command` | 按 capability 发布受控控制事件；真实下发仍然是匹配订阅后的控制事件。 |
-| `query_device_state` | 查询用户当前设备集合状态。 |
-| `query_task_status` | 查询任务状态。 |
-| `cancel_task` | 取消任务。 |
-| `read_skill` | 读取受控 Skill。 |
-| `memory_search` | 搜索长期记忆。 |
-| `manage_memory` | 写入或整理长期记忆。 |
+| Tool                       | 说明                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| `request_asset`          | 优先读取资产缓存；缓存未命中时请求端侧上传资产，例如 `sensor.rgb` 单帧图像。 |
+| `configure_asset_stream` | 请求端侧调整某类资产 stream 的上传策略，例如单帧、连续、低频或停止。           |
+| `publish_device_command` | 按 capability 发布受控控制事件；真实下发仍然是匹配订阅后的控制事件。           |
+| `query_device_state`     | 查询用户当前设备集合状态。                                                     |
+| `query_task_status`      | 查询任务状态。                                                                 |
+| `cancel_task`            | 取消任务。                                                                     |
+| `read_skill`             | 读取受控 Skill。                                                               |
+| `memory_search`          | 搜索长期记忆。                                                                 |
+| `manage_memory`          | 写入或整理长期记忆。                                                           |
 
 ### 13.2 Task 模板
 
@@ -2643,15 +2645,15 @@ Task 只表示 server 侧长流程，不表示端侧有第三种通讯协议。�
 
 Task Engine 吸收旧版 backend-task-core 的状态机经验，第一版内置统一状态：
 
-| 状态 | 说明 |
-| --- | --- |
-| `scheduled` | 已创建，尚未开始执行。 |
-| `running` | 正在执行。 |
+| 状态                 | 说明                                            |
+| -------------------- | ----------------------------------------------- |
+| `scheduled`        | 已创建，尚未开始执行。                          |
+| `running`          | 正在执行。                                      |
 | `waiting_external` | 等待端侧事件、stream 资产、MCP 或其他外部结果。 |
-| `completed` | 正常完成。 |
-| `cancelled` | 被用户、Tool 或系统取消。 |
-| `failed` | 执行失败。 |
-| `timeout` | 超时结束。 |
+| `completed`        | 正常完成。                                      |
+| `cancelled`        | 被用户、Tool 或系统取消。                       |
+| `failed`           | 执行失败。                                      |
+| `timeout`          | 超时结束。                                      |
 
 允许状态转移：
 
@@ -2664,12 +2666,12 @@ completed / cancelled / failed / timeout -> terminal
 
 Task 公共对象：
 
-| 对象 | 说明 |
-| --- | --- |
-| `TaskSpec` | 某类任务模板，包含 `task_type`、`version`、取消能力和超时设置。 |
+| 对象             | 说明                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| `TaskSpec`     | 某类任务模板，包含 `task_type`、`version`、取消能力和超时设置。                   |
 | `TaskInstance` | 某个任务实例，包含 `task_id`、`user_id`、`session_id`、状态、输入、结果和错误。 |
-| `TaskEvent` | 任务生命周期事件，用于状态回流、通知、Agent 决策和回放断言。 |
-| `TaskRef` | 返回给 Tool、模型或消息历史的任务引用。 |
+| `TaskEvent`    | 任务生命周期事件，用于状态回流、通知、Agent 决策和回放断言。                          |
+| `TaskRef`      | 返回给 Tool、模型或消息历史的任务引用。                                               |
 
 Task 自动发现规则和 Tool 保持一致：
 
@@ -2748,12 +2750,12 @@ TaskEventBridge --> AgentCoreRouter
 
 内置 Task：
 
-| Task | 说明 |
-| --- | --- |
-| `device_command_task` | 管理需要端侧配合的 server 侧长流程；端侧只接收控制事件，不存在独立 task 协议。 |
-| `sensor_stream_watch_task` | 管理传感器 stream 生命周期，例如相机、深度相机、IMU。 |
-| `timer_task` | 最小通用定时任务样板。 |
-| `notification_task` | 后台通知和播放请求样板。 |
+| Task                         | 说明                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `device_command_task`      | 管理需要端侧配合的 server 侧长流程；端侧只接收控制事件，不存在独立 task 协议。 |
+| `sensor_stream_watch_task` | 管理传感器 stream 生命周期，例如相机、深度相机、IMU。                          |
+| `timer_task`               | 最小通用定时任务样板。                                                         |
+| `notification_task`        | 后台通知和播放请求样板。                                                       |
 
 ### 13.3 UserDeviceContext
 
@@ -2761,10 +2763,10 @@ TaskEventBridge --> AgentCoreRouter
 
 三层概念：
 
-| 概念 | 使用者 | 说明 |
-| --- | --- | --- |
-| `Device` | SDK 内部 | 注册成功后的运行态设备对象，维护连接、心跳、属性、订阅、stream 状态和端侧控制状态。 |
-| `DeviceSnapshot` | Tool / Task / 调试接口 | `Device` 的只读快照，用于查询当前设备状态。 |
+| 概念               | 使用者                 | 说明                                                                                |
+| ------------------ | ---------------------- | ----------------------------------------------------------------------------------- |
+| `Device`         | SDK 内部               | 注册成功后的运行态设备对象，维护连接、心跳、属性、订阅、stream 状态和端侧控制状态。 |
+| `DeviceSnapshot` | Tool / Task / 调试接口 | `Device` 的只读快照，用于查询当前设备状态。                                       |
 
 业务代码不直接构造或保存 `Device`。如果需要跨异步步骤保存引用，应保存
 `StreamHandle`、`AssetRef` 或 server 侧 `TaskRef`；不要保存某个设备实例后假设连接永远有效。
@@ -2839,13 +2841,13 @@ API 命名约定：
 
 `UserDeviceContext` 提供的是业务 API，不是第三种通讯协议。每个 API 都会落到控制事件或 stream：
 
-| 开发者意图 | 推荐 API | 底层协议 | 适合场景 |
-| --- | --- | --- | --- |
-| 控制设备执行动作 | `publish_event("control.device.command.requested", payload=...)` | 发布协议事件，由订阅策略分发。 | 启动导航、停止导航、开始本地推理、切换端侧模式。 |
-| 请求设备采集数据 | `publish_event("stream.control.configure.requested", stream_type=...)` 或 `request_asset(...)` | 发布协议事件，端侧再打开 `sensor.*` stream 上传数据。 | 拍一张照片、上传一段 IMU 窗口、开启低频深度图采样。 |
-| 向设备发送数据 | `open_output_stream(...)` 或 `submit_text()` / `submit_audio()` | 打开 `actuator.*` output stream，再写入字节。 | 播放音频、振动模式、未来其他执行器字节流。 |
-| 持续处理传感器数据 | `publish_event("stream.control.configure.requested", ...)` + `watch_assets(...)` | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。 |
-| 查询设备状态 | `get_devices()` | 读取 server 内部 `DeviceSnapshot`。 | 展示当前在线设备、订阅和调试属性。 |
+| 开发者意图         | 推荐 API                                                                                           | 底层协议                                                                       | 适合场景                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------- |
+| 控制设备执行动作   | `publish_event("control.device.command.requested", payload=...)`                                 | 发布协议事件，由订阅策略分发。                                                 | 启动导航、停止导航、开始本地推理、切换端侧模式。    |
+| 请求设备采集数据   | `publish_event("stream.control.configure.requested", stream_type=...)` 或 `request_asset(...)` | 发布协议事件，端侧再打开 `sensor.*` stream 上传数据。                        | 拍一张照片、上传一段 IMU 窗口、开启低频深度图采样。 |
+| 向设备发送数据     | `open_output_stream(...)` 或 `submit_text()` / `submit_audio()`                              | 打开 `actuator.*` output stream，再写入字节。                                | 播放音频、振动模式、未来其他执行器字节流。          |
+| 持续处理传感器数据 | `publish_event("stream.control.configure.requested", ...)` + `watch_assets(...)`               | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。  |
+| 查询设备状态       | `get_devices()`                                                                                  | 读取 server 内部 `DeviceSnapshot`。                                          | 展示当前在线设备、订阅和调试属性。                  |
 
 Tool / Task 发出的事件能否到达设备，取决于端侧注册时的 `supports` 或底层 `subscriptions`。端侧推荐先声明 `supports`：
 
@@ -3215,12 +3217,12 @@ device-examples/
 
 `audio-chat` 第一版应支持四种研发模式：
 
-| 模式 | 用途 | 需要真实设备 |
-| --- | --- | --- |
-| 最小回放闭环 | 验证协议、Agent Core、TTS、输出仲裁和 runs 产物。 | 不需要 |
-| Python Mock 多设备 | 验证多设备注册、订阅、资产请求和端侧 task。 | 不需要 |
-| Web / iOS 调试 | 验证手机或浏览器端麦克风、播放器、相机和 UI task。 | 可选 |
-| ESP32 真机联调 | 验证 WiFi、唤醒、AEC、I2S 播放、相机和传感器 stream。 | 需要 |
+| 模式               | 用途                                                  | 需要真实设备 |
+| ------------------ | ----------------------------------------------------- | ------------ |
+| 最小回放闭环       | 验证协议、Agent Core、TTS、输出仲裁和 runs 产物。     | 不需要       |
+| Python Mock 多设备 | 验证多设备注册、订阅、资产请求和端侧 task。           | 不需要       |
+| Web / iOS 调试     | 验证手机或浏览器端麦克风、播放器、相机和 UI task。    | 可选         |
+| ESP32 真机联调     | 验证 WiFi、唤醒、AEC、I2S 播放、相机和传感器 stream。 | 需要         |
 
 研发流程必须允许开发者先用回放和 mock 快速闭环，再进入真机。真机联调不应该是验证 Tool / Task 业务逻辑的唯一方式。
 
@@ -3260,21 +3262,21 @@ uv run audio-chat.web.open --help
 
 `audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control` 和 `/ws/stream`。server SDK 不内置任何具体端侧页面或端侧类型预判；参考端侧以独立工程或独立文件形式存在，设备类型只在 `control.device.register.requested` 中声明。当前 CLI 状态如下：
 
-| 命令 | 说明 |
-| --- | --- |
-| `audio-chat.server.run` | 前台启动 server，适合日常开发。 |
-| `audio-chat.server.start` | 后台启动 server，写入 PID 和日志；支持 `--dry-run` 做无副作用检查。 |
-| `audio-chat.server.stop` | 停止后台 server；支持 `--dry-run`。 |
-| `audio-chat.server.logs` | 输出或跟随后台 server 日志。 |
-| `audio-chat.config.sync` | 同步 server、mock、iOS、ESP32 的本地联调配置。 |
-| `audio-chat.dev.preflight` | 生成预检报告，验证协议事件、stream 类型、配置和依赖。 |
-| `audio-chat.playback.glass` | 启动 Python 回放端，上传 testdata 并断言输出。 |
+| 命令                                       | 说明                                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `audio-chat.server.run`                  | 前台启动 server，适合日常开发。                                                             |
+| `audio-chat.server.start`                | 后台启动 server，写入 PID 和日志；支持 `--dry-run` 做无副作用检查。                       |
+| `audio-chat.server.stop`                 | 停止后台 server；支持 `--dry-run`。                                                       |
+| `audio-chat.server.logs`                 | 输出或跟随后台 server 日志。                                                                |
+| `audio-chat.config.sync`                 | 同步 server、mock、iOS、ESP32 的本地联调配置。                                              |
+| `audio-chat.dev.preflight`               | 生成预检报告，验证协议事件、stream 类型、配置和依赖。                                       |
+| `audio-chat.playback.glass`              | 启动 Python 回放端，上传 testdata 并断言输出。                                              |
 | `python -m audio_chat_python_phone_mock` | 端侧模块入口，启动 Python 手机 mock，用于验证多设备、端侧 task 和资产回传；它不是 SDK CLI。 |
-| `audio-chat.sdk.package-check` | 执行 SDK 包边界、公开导入和入口命令检查。 |
-| `audio-chat.web.open` | 打开或打印 Web JS endpoint 调试页地址。 |
-| `audio-chat.ios.open` | 后续目标，当前未落地：打开 iOS endpoint 工程。 |
-| `audio-chat.ios.build-sim` | 后续目标，当前未落地：验证 iOS 模拟器构建。 |
-| `audio-chat.esp32.start` | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。 |
+| `audio-chat.sdk.package-check`           | 执行 SDK 包边界、公开导入和入口命令检查。                                                   |
+| `audio-chat.web.open`                    | 打开或打印 Web JS endpoint 调试页地址。                                                     |
+| `audio-chat.ios.open`                    | 后续目标，当前未落地：打开 iOS endpoint 工程。                                              |
+| `audio-chat.ios.build-sim`               | 后续目标，当前未落地：验证 iOS 模拟器构建。                                                 |
+| `audio-chat.esp32.start`                 | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。                                     |
 
 CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、健康检查、端侧参考工程启动和工具链调度。业务项目只提供配置、Tool / Task 代码和可选端侧工程路径。
 
@@ -3544,12 +3546,12 @@ uv run audio-chat.dev.preflight \
 
 建议拆成四个命令，但 `audio-chat.dev.preflight` 可以聚合调用：
 
-| 命令 | 目标 |
-| --- | --- |
-| `audio-chat.dev.contract-tests` | 后续目标，当前未落地：只跑公共协议和公开对象契约测试。 |
-| `audio-chat.dev.package-check` | 后续目标，当前未落地：构建 wheel、安装到临时目录、验证公开导入和 CLI。 |
+| 命令                              | 目标                                                                              |
+| --------------------------------- | --------------------------------------------------------------------------------- |
+| `audio-chat.dev.contract-tests` | 后续目标，当前未落地：只跑公共协议和公开对象契约测试。                            |
+| `audio-chat.dev.package-check`  | 后续目标，当前未落地：构建 wheel、安装到临时目录、验证公开导入和 CLI。            |
 | `audio-chat.dev.boundary-check` | 后续目标，当前未落地：扫描 SDK 主包是否依赖业务目录、真实本地配置或固定设备实例。 |
-| `audio-chat.dev.live-check` | 后续目标，当前未落地：server 已启动时检查健康、设备、订阅和最近回放结果。 |
+| `audio-chat.dev.live-check`     | 后续目标，当前未落地：server 已启动时检查健康、设备、订阅和最近回放结果。         |
 
 这些检查吸收旧 SDK 的 package-check、contract-tests、preflight 和 live-check 经验。它们的职责是防止“单元测试能过，但 SDK 装不上、端侧协议不一致、业务代码绕过公开契约”的问题进入下一阶段。
 
@@ -3919,18 +3921,18 @@ dev_checks:
 
 内置 HTTP debug API：
 
-| API | 说明 |
-| --- | --- |
-| `/api/health` | 健康检查。 |
-| `/api/debug/users/{user_id}` | 用户、设备集合、订阅和消息状态。 |
-| `/api/debug/devices` | 全部设备状态。 |
-| `/api/debug/devices/{device_id}` | 单个设备的绑定用户、在线状态、能力、订阅和最近错误。 |
+| API                                       | 说明                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `/api/health`                           | 健康检查。                                                         |
+| `/api/debug/users/{user_id}`            | 用户、设备集合、订阅和消息状态。                                   |
+| `/api/debug/devices`                    | 全部设备状态。                                                     |
+| `/api/debug/devices/{device_id}`        | 单个设备的绑定用户、在线状态、能力、订阅和最近错误。               |
 | `/api/admin/devices/{device_id}/unbind` | 显式解绑设备。第一版可只在本地开发开启，正式部署必须接入管理鉴权。 |
-| `/api/debug/streams` | stream 状态。 |
-| `/api/debug/audio-sessions` | 音频会话状态。 |
-| `/api/debug/playback` | 当前播放、队列、仲裁决策。 |
-| `/api/debug/tasks` | 任务运行态。 |
-| `/api/debug/session/{session_id}` | 单会话调试快照。 |
+| `/api/debug/streams`                    | stream 状态。                                                      |
+| `/api/debug/audio-sessions`             | 音频会话状态。                                                     |
+| `/api/debug/playback`                   | 当前播放、队列、仲裁决策。                                         |
+| `/api/debug/tasks`                      | 任务运行态。                                                       |
+| `/api/debug/session/{session_id}`       | 单会话调试快照。                                                   |
 
 ### 17.3 运行产物
 
@@ -4034,11 +4036,11 @@ TurnRecorder --> UserMessageStore
 
 契约测试必须覆盖三类 golden：
 
-| golden | 验证内容 |
-| --- | --- |
-| `events/*.json` | Event 信封字段、事件命名、注册响应、失败响应、订阅 filter 匹配。 |
-| `streams/*.bin` | `StreamChunk` 二进制 header、payload_size、seq、timestamp、stream 元数据。 |
-| `scenarios/*.yaml` | 回放端按真实协议完成注册、唤醒、stream 上传、资产回传和输出接收。 |
+| golden               | 验证内容                                                                     |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `events/*.json`    | Event 信封字段、事件命名、注册响应、失败响应、订阅 filter 匹配。             |
+| `streams/*.bin`    | `StreamChunk` 二进制 header、payload_size、seq、timestamp、stream 元数据。 |
+| `scenarios/*.yaml` | 回放端按真实协议完成注册、唤醒、stream 上传、资产回传和输出接收。            |
 
 契约测试只依赖公共协议和公开对象，不 import server 内部连接表、队列或 provider adapter。
 
@@ -4065,15 +4067,15 @@ audio-chat.playback.glass \
 
 回放断言不应只检查“有没有音频输出”。第一版至少支持：
 
-| 断言 | 说明 |
-| --- | --- |
-| `events_contains` | 是否出现指定控制事件或 stream 生命周期事件。 |
-| `reply_text_contains` | assistant 文本或转写产物是否包含指定内容。 |
-| `reply_text_not_contains` | assistant 文本不应包含指定内容。 |
-| `required_tool_traces` | 必须调用哪些 Tool，以及状态是否成功。 |
-| `required_task_events` | 必须产生哪些 TaskEvent。 |
-| `model_request_contains` | 模型请求快照是否包含指定上下文、资产或工具 schema。 |
-| `playback_decisions` | 是否产生预期播放仲裁结果，例如 `play_now`、`interrupt`、`drop`。 |
+| 断言                        | 说明                                                                   |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `events_contains`         | 是否出现指定控制事件或 stream 生命周期事件。                           |
+| `reply_text_contains`     | assistant 文本或转写产物是否包含指定内容。                             |
+| `reply_text_not_contains` | assistant 文本不应包含指定内容。                                       |
+| `required_tool_traces`    | 必须调用哪些 Tool，以及状态是否成功。                                  |
+| `required_task_events`    | 必须产生哪些 TaskEvent。                                               |
+| `model_request_contains`  | 模型请求快照是否包含指定上下文、资产或工具 schema。                    |
+| `playback_decisions`      | 是否产生预期播放仲裁结果，例如 `play_now`、`interrupt`、`drop`。 |
 
 每次回放都必须写出：
 
@@ -4205,25 +4207,25 @@ uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-
 
 ## 23. 主要风险
 
-| 风险 | 说明 | 缓解 |
-| --- | --- | --- |
-| 事件订阅系统过度复杂 | 如果第一版支持完整表达式语言，会拖慢落地。 | 第一版只支持 `event + filter`，filter 限定为字段等值和数组包含匹配。 |
-| 新旧 SDK 并存导致认知分裂 | 开发者不知道该用哪套。 | README 明确新项目优先 `audio-chat`，旧项目稳定期保留旧 SDK。 |
-| Realtime provider 协议差异 | OpenAI、Qwen、其他 provider 事件名和音频格式不同。 | 建立 `RealtimeProviderAdapter`，只向上输出统一 Agent 事件。 |
-| 端侧 AEC 效果不稳定 | ESP32、Web、iOS 表现不同。 | 能力声明 + server 侧质量诊断 + AEC 试验固件持续回放。 |
-| 下行输出仲裁复杂 | Agent、Task、安全提醒同时抢播。 | 从第一阶段就实现 `Playback Arbiter`，业务不得直接播。 |
-| Tool 副作用和用户打断冲突 | 用户打断时工具可能已执行。 | 引入 `generation_id`、工具副作用日志和可取消任务策略。 |
-| 过早抽象 provider | 支持太多模型会拖慢落地。 | 第一阶段只做 mock/text，第二阶段只优先 Qwen Omni + 一套文本模型。 |
+| 风险                       | 说明                                               | 缓解                                                                   |
+| -------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------- |
+| 事件订阅系统过度复杂       | 如果第一版支持完整表达式语言，会拖慢落地。         | 第一版只支持 `event + filter`，filter 限定为字段等值和数组包含匹配。 |
+| 新旧 SDK 并存导致认知分裂  | 开发者不知道该用哪套。                             | README 明确新项目优先 `audio-chat`，旧项目稳定期保留旧 SDK。         |
+| Realtime provider 协议差异 | OpenAI、Qwen、其他 provider 事件名和音频格式不同。 | 建立 `RealtimeProviderAdapter`，只向上输出统一 Agent 事件。          |
+| 端侧 AEC 效果不稳定        | ESP32、Web、iOS 表现不同。                         | 能力声明 + server 侧质量诊断 + AEC 试验固件持续回放。                  |
+| 下行输出仲裁复杂           | Agent、Task、安全提醒同时抢播。                    | 从第一阶段就实现 `Playback Arbiter`，业务不得直接播。                |
+| Tool 副作用和用户打断冲突  | 用户打断时工具可能已执行。                         | 引入 `generation_id`、工具副作用日志和可取消任务策略。               |
+| 过早抽象 provider          | 支持太多模型会拖慢落地。                           | 第一阶段只做 mock/text，第二阶段只优先 Qwen Omni + 一套文本模型。      |
 
 ## 24. 参考资料
 
 1. OpenAI Realtime API 概览：说明 Realtime API 支持低延迟多模态、原生 speech-to-speech，以及音频和文本输入输出。
-   <https://platform.openai.com/docs/guides/realtime/overview>
+   [https://platform.openai.com/docs/guides/realtime/overview](https://platform.openai.com/docs/guides/realtime/overview)
 2. OpenAI Realtime WebSocket 指南：说明 WebSocket 是低层接口，调用方需要发送和处理音频 chunk。
-   <https://platform.openai.com/docs/guides/realtime-websocket>
+   [https://platform.openai.com/docs/guides/realtime-websocket](https://platform.openai.com/docs/guides/realtime-websocket)
 3. OpenAI Realtime 音频能力说明：说明 WebSocket 场景可使用 `input_audio_buffer.append` 输入音频，并监听 `response.output_audio.delta` 获取模型音频输出。
-   <https://platform.openai.com/docs/guides/realtime-model-capabilities>
+   [https://platform.openai.com/docs/guides/realtime-model-capabilities](https://platform.openai.com/docs/guides/realtime-model-capabilities)
 4. Qwen-Omni-Realtime 官方文档：说明 Qwen Omni Realtime 通过 WebSocket 接入，处理流式音频和图像输入，并实时生成文本和音频输出。
-   <https://www.alibabacloud.com/help/en/model-studio/realtime>
+   [https://www.alibabacloud.com/help/en/model-studio/realtime](https://www.alibabacloud.com/help/en/model-studio/realtime)
 5. Qwen-Omni-Realtime Client Events：说明 `session.update`、音频格式、工具和 turn detection 等 client event 语义。
-   <https://www.alibabacloud.com/help/en/model-studio/client-events>
+   [https://www.alibabacloud.com/help/en/model-studio/client-events](https://www.alibabacloud.com/help/en/model-studio/client-events)

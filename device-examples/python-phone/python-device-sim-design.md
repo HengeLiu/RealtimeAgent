@@ -2,6 +2,8 @@
 
 更新时间：2026-05-08
 
+文档状态：目标设计文档。当前仓库仍保留 `device-examples/python-glass`、`device-examples/python-phone` 等参考端；本文描述的是后续收敛为统一无头设备模拟器的目标形态。当前可运行端侧和开发方式见 [设备注册与功能开发说明](device-capability-development-guide.md)。
+
 ## 1. 文档目的
 
 本文档定义 `python-device-sim` 无头设备模拟器的目标形态。它用于收敛当前历史实现中的 `python-glass` 和 `python-phone`，为 server、Agent Core、Tool、Task 和协议回归测试提供稳定的自动化设备。

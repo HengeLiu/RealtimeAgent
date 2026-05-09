@@ -2,9 +2,11 @@
 
 更新时间：2026-05-08
 
+文档状态：浏览器参考端设计文档。当前可运行端侧仍位于 `device-examples/browser-glass`，能力文件是 `device.audio-chat.yaml`。当前设备接入操作以 [设备注册与功能开发说明](device-capability-development-guide.md) 为准；本文主要说明浏览器参考端的目标形态和设计边界。
+
 ## 1. 文档目的
 
-本文档定义 `browser-glass` 设备示例的目标形态。它用于替代当前历史命名中的 `browser-glass`，但现阶段不要求立即完成全部重命名和实现迁移。
+本文档定义 `browser-glass` 设备示例的目标形态。当前仓库已经使用 `device-examples/browser-glass` 作为浏览器参考端目录，后续工作主要是继续拆分 JS 模块和补齐端侧能力，而不是再做目录重命名。
 
 `browser-glass` 是一个运行在浏览器中的 Device 示例。它承担眼镜类设备在开发测试中的角色：负责感知和执行，帮助开发者快速验证 server、Agent Core、Tool、Task、事件协议和 stream 协议。
 
@@ -67,7 +69,7 @@ device-examples/
 device-examples/browser-glass/
 ```
 
-后续迁移时应把命名从 `browser-glass` 收敛为 `browser-glass`，并把文档、CLI 默认路径、测试路径和 package-check 一并更新。
+后续迁移重点是把当前单页实现逐步拆成 `src/` 模块，并让文档、CLI 默认路径、测试路径和 package-check 保持一致。
 
 ## 4. 协议视角
 
