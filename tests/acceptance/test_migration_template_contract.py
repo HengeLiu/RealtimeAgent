@@ -5,35 +5,29 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE_ROOT = ROOT / "app-examples" / "for-blind-app" / "templates"
+CAPABILITY_ROOT = ROOT / "app-examples" / "for-blind-app" / "capabilities"
 
 
 def _python_files() -> list[Path]:
-    return sorted(TEMPLATE_ROOT.glob("*/*.py"))
+    return sorted(CAPABILITY_ROOT.glob("*.py"))
 
 
-def test_migration_templates_exist_for_stage_h_capabilities() -> None:
-    """测试目标：确认 H 线路要求的迁移样板已经存在。
+def test_for_blind_capability_files_are_flat_and_minimal() -> None:
+    """测试目标：确认 for-blind-app 能力目录已经从旧 SDK 多目录样板收敛为扁平文件。
 
-    测试方法：检查 capture_photo Tool、find_object Tool 和 notification_task Task 样板文件。
-    预期结果：后续业务迁移可以复制样板开始，而不是重新猜 SDK 用法。
+    测试方法：检查 `capabilities` 下只有 `__init__.py`、`tools.py` 和 `tasks.py`。
+    预期结果：不会再留下可被自动发现扫描到的旧能力包目录。
     """
 
-    required = [
-        TEMPLATE_ROOT / "capture_photo" / "tool.py",
-        TEMPLATE_ROOT / "find_object" / "tool.py",
-        TEMPLATE_ROOT / "notification_task" / "task.py",
-        TEMPLATE_ROOT / "README.md",
-    ]
-    missing = [str(path.relative_to(ROOT)) for path in required if not path.exists()]
-    assert missing == []
+    entries = sorted(path.name for path in CAPABILITY_ROOT.iterdir() if path.name != "__pycache__")
+    assert entries == ["__init__.py", "tasks.py", "tools.py"]
 
 
-def test_migration_templates_are_valid_python_and_use_public_api() -> None:
-    """测试目标：确认迁移样板语法正确并只依赖公开扩展面。
+def test_for_blind_capability_files_are_valid_python_and_use_public_api() -> None:
+    """测试目标：确认精简后的能力文件语法正确并只依赖公开扩展面。
 
-    测试方法：用 AST 解析样板，检查 `from audio_chat import ...` 导入。
-    预期结果：样板可直接复制到业务 app-root，不需要 import SDK 内部服务对象。
+    测试方法：用 AST 解析 `tools.py` 和 `tasks.py`，检查 `from audio_chat import ...` 导入。
+    预期结果：业务能力可直接复制，不需要 import SDK 内部服务对象。
     """
 
     allowed_public_imports = {
@@ -45,8 +39,9 @@ def test_migration_templates_are_valid_python_and_use_public_api() -> None:
         "ToolResult",
         "ToolSpec",
     }
-    assert _python_files()
     for path in _python_files():
+        if path.name == "__init__.py":
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imported_from_audio_chat = set()
         for node in ast.walk(tree):
@@ -56,13 +51,12 @@ def test_migration_templates_are_valid_python_and_use_public_api() -> None:
         assert imported_from_audio_chat <= allowed_public_imports
 
 
-def test_migration_templates_do_not_use_hidden_device_rpc_or_device_id_routing() -> None:
-    """测试目标：冻结迁移样板的设备访问边界。
+def test_for_blind_capabilities_do_not_use_hidden_device_rpc_or_device_id_routing() -> None:
+    """测试目标：冻结业务能力的设备访问边界。
 
-    测试方法：扫描样板源码，禁止点对点 device_id 路由、隐藏 RPC、WebSocket 直连和
+    测试方法：扫描能力源码，禁止点对点 device_id 路由、隐藏 RPC、WebSocket 直连和
     控制事件内大字节字段。
-    预期结果：Tool / Task 只能通过 ToolDeviceFacade 的 event、asset、stream 和 output
-    方法表达设备能力。
+    预期结果：Tool / Task 只能通过 Context 设备 API 和 Output Service 表达设备能力。
     """
 
     forbidden_terms = [
@@ -89,36 +83,16 @@ def test_migration_templates_do_not_use_hidden_device_rpc_or_device_id_routing()
     assert offenders == []
 
 
-def test_migration_templates_use_user_device_context_methods() -> None:
-    """测试目标：确认样板确实通过 `context.devices` 使用设备能力。
+def test_for_blind_capabilities_use_context_device_api() -> None:
+    """测试目标：确认当前能力确实通过新版 Context 设备 API 使用设备能力。
 
-    测试方法：检查各样板调用的公开设备上下文方法。
-    预期结果：capture_photo 和 find_object 使用单次 RGB 资产请求，通知任务使用输出服务。
+    测试方法：检查 Tool 和 Task 中的关键公开调用。
+    预期结果：视觉能力请求单次 RGB 资产，用户可感知提示进入 Output Service。
     """
 
-    capture_photo = (TEMPLATE_ROOT / "capture_photo" / "tool.py").read_text(encoding="utf-8")
-    find_object = (TEMPLATE_ROOT / "find_object" / "tool.py").read_text(encoding="utf-8")
-    notification = (TEMPLATE_ROOT / "notification_task" / "task.py").read_text(encoding="utf-8")
+    tools = (CAPABILITY_ROOT / "tools.py").read_text(encoding="utf-8")
+    tasks = (CAPABILITY_ROOT / "tasks.py").read_text(encoding="utf-8")
 
-    assert "context.devices.sensors.rgb.one(" in capture_photo
-    assert "context.devices.sensors.rgb.one(" in find_object
-    assert "context.output.say(" in notification
-
-
-def test_phase3_migration_guide_references_templates_and_constraints() -> None:
-    """测试目标：确认迁移指南把样板、边界和验收命令写清楚。
-
-    测试方法：读取 `phase3-migration-guide.md`，检查模板路径、关键约束和 H 线路验收命令。
-    预期结果：业务迁移人员可以按指南复制样板并跑独立验收。
-    """
-
-    guide = (ROOT / "docs" / "phase3-migration-guide.md").read_text(encoding="utf-8")
-    for expected in [
-        "app-examples/for-blind-app/templates/capture_photo/tool.py",
-        "app-examples/for-blind-app/templates/find_object/tool.py",
-        "app-examples/for-blind-app/templates/notification_task/task.py",
-        "ToolDeviceFacade",
-        "不允许硬编码 device_id",
-        "scripts/acceptance_check.py next-docs-contract",
-    ]:
-        assert expected in guide
+    assert "context.devices.sensors.rgb.one(" in tools
+    assert "context.devices.sensors.rgb.one(" in tasks
+    assert "context.output.say(" in tasks

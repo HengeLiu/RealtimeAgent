@@ -549,7 +549,7 @@ def _recent_playback_observation() -> dict:
         **result,
         "ok": True,
         "observed": False,
-        "action": "运行一次 playback: uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml",
+        "action": "运行一次 playback: uv run audio-chat.config.sync --output-dir runs/audio-chat/for-blind-app/generated 后使用生成的 glass.playback.yaml",
     }
 
 

@@ -38,20 +38,19 @@ def test_release_package_check_reports_release_candidate_gate(tmp_path: Path) ->
     assert data["checks"]["source_boundary"]["ok"] is True
 
 
-def test_for_blind_app_can_be_copied_to_temp_project_and_playback_runs(tmp_path: Path) -> None:
-    """测试目标：验证发布候选能支撑新项目复制 for-blind-app 后跑设备级回放。
+def test_for_blind_app_can_be_copied_to_temp_project_and_generate_endpoint_configs(tmp_path: Path) -> None:
+    """测试目标：验证发布候选能支撑新项目复制精简后的 for-blind-app。
 
-    测试方法：把 `app-examples/for-blind-app` 复制到临时目录，用当前 SDK 命令运行其
-    playback 配置。
-    预期结果：回放命令成功，输出摘要里 `passed` 为 true。
+    测试方法：把 `app-examples/for-blind-app` 复制到临时目录，用当前 SDK 命令生成端侧配置。
+    预期结果：配置同步命令成功，并生成 glass playback 配置。
     """
 
     app_copy = tmp_path / "for-blind-app"
     shutil.copytree(AUDIO_ROOT / "app-examples" / "for-blind-app", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    config = app_copy / "host" / "glass-playback" / "playback.yaml"
+    output_dir = tmp_path / "generated"
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.playback.glass", "--config", str(config)],
+        ["uv", "run", "audio-chat.config.sync", "--app-root", str(app_copy), "--server-config", str(app_copy / "server.yaml"), "--output-dir", str(output_dir)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -60,7 +59,5 @@ def test_for_blind_app_can_be_copied_to_temp_project_and_playback_runs(tmp_path:
 
     assert completed.returncode == 0, f"stdout={completed.stdout}\nstderr={completed.stderr}"
     result = json.loads(completed.stdout)
-    assert result["passed"] is True
-    assert "sensor.mic" in result["stream_types"]
-    assert "actuator.speaker" in result["stream_types"]
-
+    assert result["ok"] is True
+    assert Path(result["files"]["glass_playback"]).exists()

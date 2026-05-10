@@ -1,4 +1,3 @@
-# yaml-language-server: $schema=./server.schema.json
 app-name: "for-blind-app"
 
 server:
@@ -127,13 +126,12 @@ memory:
 
 skill:
   enabled: false
-  roots:
-    - "app-examples/for-blind-app/skills"
+  roots: []
   allow_tool_policy: true
 
 mcp:
-  enabled: true
-  config_path: "app-examples/for-blind-app/config/mcp.yaml"
+  enabled: false
+  config_path: ""
   default_timeout_seconds: 30
 
 endpoint_defaults:

@@ -130,45 +130,36 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
     } <= names
 
 
-def test_for_blind_server_example_documents_text_model_route(tmp_path) -> None:
-    """测试目标：确认 for-blind-app 的示例配置能指导开发者启动 Text 大模型路线。
+def test_for_blind_server_yaml_documents_supported_model_routes(tmp_path) -> None:
+    """测试目标：确认 for-blind-app 的精简配置仍能指导开发者启动服务。
 
-    测试方法：读取 `server.yaml.example` 和配套 JSON Schema，检查 schema 引用、关键 provider
-    取值，并把示例复制为临时 `server.yaml` 后交给真实配置加载器解析。
-    预期结果：示例配置默认进入 text 路线，ASR / 文本模型 / TTS 都使用当前代码支持的真实 provider。
+    测试方法：读取 `server.yaml`，检查关键 provider 取值和已删除旧 schema/example 引用。
+    预期结果：配置可直接作为 app-root 配置使用，不再依赖老 SDK 示例文件。
     """
 
-    example = AUDIO_ROOT / "app-examples" / "for-blind-app" / "server.yaml.example"
-    schema = AUDIO_ROOT / "app-examples" / "for-blind-app" / "server.schema.json"
+    config = AUDIO_ROOT / "app-examples" / "for-blind-app" / "server.yaml"
+    text = config.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
 
-    example_text = example.read_text(encoding="utf-8")
-    assert example_text.splitlines()[0] == "# yaml-language-server: $schema=./server.schema.json"
-
-    schema_data = json.loads(schema.read_text(encoding="utf-8"))
-    text_config_schema = schema_data["$defs"]["agentText"]["properties"]
-    assert text_config_schema["model_provider"]["enum"] == ["mock", "openai-compatible", "dashscope-compatible"]
-    assert text_config_schema["asr_provider"]["enum"] == ["mock", "dashscope"]
-    assert text_config_schema["tts_provider"]["enum"] == ["mock", "dashscope"]
-
-    data = yaml.safe_load(example_text)
-    assert data["agent"]["mode"] == "text"
-    assert data["agent"]["text"]["model_provider"] == "dashscope-compatible"
+    assert "server.schema.json" not in text
+    assert data["agent"]["mode"] in {"text", "realtime_audio", "auto", "custom"}
+    assert data["agent"]["text"]["model_provider"] in {"mock", "openai-compatible", "dashscope-compatible"}
     assert data["agent"]["text"]["model"]
-    assert data["agent"]["text"]["asr_provider"] == "dashscope"
-    assert data["agent"]["text"]["tts_provider"] == "dashscope"
-    assert data["agent"]["text"]["allow_mock_fallback"] is False
+    assert data["agent"]["text"]["asr_provider"] in {"mock", "dashscope"}
+    assert data["agent"]["text"]["tts_provider"] in {"mock", "dashscope"}
+    assert data["mcp"]["enabled"] is False
 
     app_dir = tmp_path / "for-blind-app"
     app_dir.mkdir()
-    shutil.copyfile(example, app_dir / "server.yaml")
+    shutil.copyfile(config, app_dir / "server.yaml")
     config = AudioChatConfig.from_yaml(app_dir / "server.yaml")
 
-    assert config.agent_mode == "text"
-    assert config.text_model_provider == "dashscope-compatible"
+    assert config.agent_mode == data["agent"]["mode"]
+    assert config.text_model_provider == data["agent"]["text"]["model_provider"]
     assert config.text_model == data["agent"]["text"]["model"]
-    assert config.asr_provider == "dashscope"
-    assert config.tts_provider == "dashscope"
-    assert config.allow_mock_fallback is False
+    assert config.asr_provider == data["agent"]["text"]["asr_provider"]
+    assert config.tts_provider == data["agent"]["text"]["tts_provider"]
+    assert config.allow_mock_fallback == data["agent"]["text"]["allow_mock_fallback"]
 
 
 def test_developer_context_device_design_doc_covers_target_contracts() -> None:

@@ -20,7 +20,8 @@ def test_for_blind_app_example_exists_with_tool_and_task_templates(monkeypatch) 
     app_root = AUDIO_ROOT / "app-examples" / "for-blind-app"
     assert (app_root / "README.md").exists()
     assert (app_root / "server.yaml").exists()
-    assert (app_root / "host" / "server" / "main.py").exists()
+    assert (app_root / "capabilities" / "tools.py").exists()
+    assert (app_root / "capabilities" / "tasks.py").exists()
     for module_name in list(sys.modules):
         if module_name == "capabilities" or module_name.startswith("capabilities."):
             sys.modules.pop(module_name, None)
@@ -41,5 +42,5 @@ def test_device_playback_acceptance_and_artifact_schema_exist() -> None:
     """
 
     assert (AUDIO_ROOT / "tests" / "playback" / "test_python_playback.py").exists()
-    assert (AUDIO_ROOT / "app-examples" / "for-blind-app" / "host" / "glass-playback" / "sdk-playback.yaml").exists()
+    assert (AUDIO_ROOT / "audio-chat-sdk" / "audio_chat" / "cli" / "config.py").exists()
     assert (AUDIO_ROOT / "testdata" / "contracts" / "run_artifacts.schema.json").exists()

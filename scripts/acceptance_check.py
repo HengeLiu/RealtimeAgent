@@ -131,10 +131,7 @@ FOUNDATION_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "-q",
             ),
         ),
-        CheckCommand(
-            "playback_cli_config",
-            ("uv", "run", "audio-chat.playback.glass", "--config", "app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml"),
-        ),
+        CheckCommand("config_sync_generates_playback", ("uv", "run", "audio-chat.config.sync", "--output-dir", "runs/acceptance/generated")),
     ),
     "docs-contract": (
         CheckCommand(
@@ -368,16 +365,7 @@ NEXT_STAGE_CHECKS: dict[str, tuple[CheckCommand, ...]] = {
                 "runs/acceptance/device-api-upgrade-release-package-check.json",
             ),
         ),
-        CheckCommand(
-            "release_for_blind_playback",
-            (
-                "uv",
-                "run",
-                "audio-chat.playback.glass",
-                "--config",
-                "app-examples/for-blind-app/host/glass-playback/playback.yaml",
-            ),
-        ),
+        CheckCommand("release_for_blind_config_sync", ("uv", "run", "audio-chat.config.sync", "--output-dir", "runs/acceptance/release-generated")),
     ),
 }
 

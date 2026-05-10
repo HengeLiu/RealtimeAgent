@@ -109,11 +109,8 @@ def test_example_for_blind_app_files_are_copyable() -> None:
     expected = [
         "README.md",
         "server.yaml",
-        "templates/capture_photo/tool.py",
-        "capabilities/timer/task.py",
-        "host/server/main.py",
-        "host/phone-mock/config.yaml",
-        "host/glass-playback/playback.yaml",
+        "capabilities/tools.py",
+        "capabilities/tasks.py",
     ]
 
     missing = [item for item in expected if not (root / item).exists()]

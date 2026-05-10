@@ -23,7 +23,7 @@ def sync(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="audio-chat.config.sync", description="同步 audio-chat 本地开发配置")
     parser.add_argument("--app-root", default="app-examples/for-blind-app", help="业务应用根目录")
     parser.add_argument("--server-config", default="app-examples/for-blind-app/server.yaml", help="源 server YAML")
-    parser.add_argument("--playback-config", default="app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml", help="源 playback YAML")
+    parser.add_argument("--playback-config", default="", help="可选源 playback YAML；为空时生成最小 playback 配置")
     parser.add_argument("--server-url", default="http://127.0.0.1:8765", help="各参考端侧使用的 server URL")
     parser.add_argument("--user-id", default="user-playback-001", help="各参考端侧使用的 user_id")
     parser.add_argument(
@@ -42,7 +42,7 @@ def sync(argv: list[str] | None = None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     server_config = _resolve_input(args.server_config)
-    playback_config = _resolve_input(args.playback_config)
+    playback_config = _resolve_input(args.playback_config) if args.playback_config else None
     auth_config = _auth(args.auth_mode, args.auth_token, args.signed_token)
     server_target = output_dir / "server.local.yaml"
     glass_target = output_dir / "glass.playback.yaml"
@@ -65,7 +65,7 @@ def sync(argv: list[str] | None = None) -> None:
     _write_yaml(
         glass_target,
         {
-            **_read_yaml(playback_config),
+            **(_read_yaml(playback_config) if playback_config is not None else _default_playback_config()),
             "server_url": args.server_url,
             "user_id": args.user_id,
             "device_id": "dev-python-playback-001",
@@ -178,6 +178,15 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     import yaml
 
     return dict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+
+
+def _default_playback_config() -> dict[str, Any]:
+    """生成不依赖 app 示例文件的最小 glass playback 配置。"""
+
+    return {
+        "mode": "in_process",
+        "runs_root": "runs/audio-chat/for-blind-app",
+    }
 
 
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:

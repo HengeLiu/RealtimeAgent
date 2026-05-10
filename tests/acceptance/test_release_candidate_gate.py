@@ -45,7 +45,7 @@ def test_release_lane_is_registered_with_gate_steps() -> None:
         "tests/test_package_boundary.py",
         "tests/acceptance/test_release_candidate_gate.py",
         "audio-chat.sdk.package-check",
-        "app-examples/for-blind-app/host/glass-playback/playback.yaml",
+        "audio-chat.config.sync",
     ]:
         assert expected in command_text
 
@@ -72,4 +72,3 @@ def test_release_candidate_docs_and_changelog_are_current() -> None:
     for expected in ["当前架构变更点", "ToolDeviceFacade", "event + stream"]:
         assert expected in changelog
     assert "## 14. 并行线路 J：发布候选与包边界" in plan
-
