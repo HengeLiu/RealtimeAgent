@@ -450,8 +450,9 @@ def test_realtime_open_loads_device_message_history_into_instructions(tmp_path) 
     """测试目标：验证 Realtime 会话启动时加载同一用户同一设备的历史消息。
 
     测试方法：预先写入 `messages.jsonl`，再打开 fake Realtime provider 会话。
-    预期结果：provider instructions 和等价 `model-request.json` 都包含历史 user/assistant
-    对话，确保真实 Realtime 模型也能获得上下文。
+    预期结果：provider instructions 包含历史 user/assistant 对话；等价
+    `model-request.json` 只在 `history_messages` 调试字段保留历史，不在
+    `messages` 中重复展开。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -486,8 +487,11 @@ def test_realtime_open_loads_device_message_history_into_instructions(tmp_path) 
 
     request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
     assert "我刚才想去南门。" in instances[0].config.instructions
-    assert request["messages"][1]["content"] == "我刚才想去南门。"
-    assert request["messages"][2]["content"] == "我会继续按南门方向引导。"
+    assert request["messages"][0]["content"].count("我刚才想去南门。") == 1
+    assert request["messages"][1]["content"][0]["type"] == "input_audio_stream"
+    assert request["history_messages"][0]["content"] == "我刚才想去南门。"
+    assert request["history_messages"][1]["content"] == "我会继续按南门方向引导。"
+    assert request["history_injected_to"] == "instructions"
 
 
 def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:

@@ -1283,7 +1283,8 @@ class RealtimeAudioAgentCore:
 
         主要逻辑：Realtime 底层不是 Chat Completions `messages` 参数，但开发者排障
         仍需要看到等价的 system/user 视图、工具 schema 和音频输入占位。
-        参数：`user_id/session_id/config/tools` 描述当前会话。
+        参数：`user_id/session_id/config/tools` 描述当前会话；`history_messages`
+        已注入 instructions，只作为调试字段保存，避免在 messages 里重复展开。
         返回值：可写入 `model-request.json` 的结构。
         异常情况：无。
         """
@@ -1296,7 +1297,6 @@ class RealtimeAudioAgentCore:
             "instructions": config.instructions,
             "messages": [
                 {"role": "system", "content": config.instructions},
-                *history,
                 {
                     "role": "user",
                     "content": [
@@ -1308,6 +1308,8 @@ class RealtimeAudioAgentCore:
                     ],
                 },
             ],
+            "history_messages": history,
+            "history_injected_to": "instructions" if history else "",
             "tools": tools,
             "tool_count": len(tools),
             "user_id": user_id,
