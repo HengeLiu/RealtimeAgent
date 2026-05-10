@@ -89,6 +89,10 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 | `tool-events.jsonl` | 新版工具调用日志。包括工具名称、输入参数、返回结果、错误、耗时。 |
 | `stream-events.jsonl` | stream 生命周期和 chunk 摘要。终端不逐条打印 chunk，完整明细在这里。 |
 | `assets.jsonl` | 资产写入和资产请求记录。拍照、连续 RGB、深度图等传感器资产从这里追。 |
+| `active-messages.jsonl` | 当前会直接进入模型上下文的真实 user/assistant/tool 消息。 |
+| `messages.jsonl` | 兼容旧排障脚本的 active message 镜像；语义等同于 `active-messages.jsonl`。 |
+| `message-summaries.jsonl` | 被压缩历史对话的摘要记录；最新摘要会注入后续模型提示词。 |
+| `history/*-messages.jsonl` | 被摘要压缩后的原始消息备份，按时间段拆文件保存。 |
 
 ### 输出和播放相关
 
@@ -124,10 +128,20 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 ## messages 文件
 
 ```text
+runs/<app_name>/<user_id>/<device_id>/active-messages.jsonl
 runs/<app_name>/<user_id>/<device_id>/messages.jsonl
+runs/<app_name>/<user_id>/<device_id>/message-summaries.jsonl
+runs/<app_name>/<user_id>/<device_id>/history/<start>-<end>-messages.jsonl
 ```
 
-保存用户级对话历史。它不是单轮排障的第一入口，而是用于确认长期上下文是否被正确写入。
+消息维护分四层：
+
+1. `active-messages.jsonl` 是 canonical 文件，保存当前模型可直接看到的近期对话；系统重启后从这里恢复上下文。
+2. `messages.jsonl` 是兼容镜像，内容与 active 保持一致，便于旧脚本和人工排障继续读取。
+3. `history/<start>-<end>-messages.jsonl` 保存被压缩出 active 的原始消息，文件名中的时间段来自被归档消息的起止时间。
+4. `message-summaries.jsonl` 追加每次压缩得到的摘要；后续请求只把最新摘要放入提示词，不再把归档原文重复展开。
+
+压缩触发点在连续音频会话结束后：如果 active 消息数大于 30 条，则保留最新 5 条，其余消息先写入 history，再追加 summary，最后重写 active 和兼容 `messages.jsonl`。长期记忆仍由 `<runtime_root>/<user_id>/memory.json` 维护，和 message summary 分开：memory 保存稳定用户事实，message summary 只保存对话上下文重点。
 
 ## assets 目录
 

@@ -288,6 +288,57 @@ def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -
     assert "历史已加载。" in (tmp_path / "runs" / user_id / device_id / "messages.jsonl").read_text(encoding="utf-8")
 
 
+def test_text_agent_injects_latest_message_summary_without_duplicate_history(tmp_path) -> None:
+    """测试目标：验证文本模型请求会注入历史摘要但不重复展开已压缩原始消息。
+
+    测试方法：先通过 ConversationMemoryService 触发一次压缩，再发送新一轮文本输入。
+    预期结果：system prompt 包含最新摘要；runtime messages 只包含压缩后 active 消息和当前输入。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="text",
+            text_max_context_messages=10,
+        )
+    )
+    user_id = "user-summary"
+    device_id = "dev-summary"
+    for index in range(8):
+        app.control_service.append_message(
+            user_id,
+            {
+                "session_id": device_id,
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"压缩前消息 {index}",
+                "created_at": 1_700_000_000 + index,
+            },
+        )
+    app.control_service.compact_messages_if_needed(user_id=user_id, session_id=device_id, threshold=6, keep_latest=2)
+    model = CaptureHistoryTextModel()
+    app.agent_core.text_model = model
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=device_id,
+            stream_id="stream-summary",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
+    assert "更早历史对话的压缩摘要" in request["messages"][0]["content"]
+    assert "压缩前消息 0" in request["messages"][0]["content"]
+    assert all("压缩前消息 0" not in item.get("content", "") for item in model.messages[0])
+    assert model.messages[0][0]["content"] == "压缩前消息 6"
+    assert model.messages[0][1]["content"] == "压缩前消息 7"
+    assert model.messages[0][-1]["role"] == "user"
+
+
 class DemoTask(BaseTask):
     """测试用 Task。"""
 

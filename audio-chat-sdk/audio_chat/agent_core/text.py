@@ -223,7 +223,7 @@ class TextAgentCore:
         )
         assistant_parts: list[str] = []
         tools = self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
-        system_prompt = self._build_system_prompt(user_id=user_id)
+        system_prompt = self._build_system_prompt(user_id=user_id, session_id=session_id)
         previous_system_prompt = getattr(self.text_model, "system_prompt", None)
         if previous_system_prompt is not None:
             setattr(self.text_model, "system_prompt", system_prompt)
@@ -351,26 +351,35 @@ class TextAgentCore:
             messages = messages[-self.max_context_messages :]
         return messages
 
-    def _build_system_prompt(self, *, user_id: str) -> str:
+    def _build_system_prompt(self, *, user_id: str, session_id: str) -> str:
         """构造当前轮文本模型 system prompt。
 
-        主要逻辑：在静态提示词后追加长期记忆片段，让模型直接获得当前用户的已保存信息。
-        参数：`user_id` 为当前用户编号。
+        主要逻辑：在静态提示词后追加长期记忆和更早历史摘要，避免把已压缩的原始
+        对话重复放回 messages。
+        参数：`user_id` 为当前用户编号，`session_id` 为设备级会话编号。
         返回值：发送给文本模型的 system prompt。
-        异常情况：memory 未启用或读取失败时只返回基础提示词。
+        异常情况：memory 或历史摘要读取失败时跳过对应片段。
         """
 
-        base = str(getattr(self.text_model, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT))
+        parts = [str(getattr(self.text_model, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT))]
         memory = self.memory_service
-        if memory is None or not getattr(memory, "enabled", False):
-            return base
+        if memory is not None and getattr(memory, "enabled", False):
+            try:
+                fragment = memory.build_prompt_fragment(user_id=user_id)
+            except Exception:
+                fragment = ""
+            if fragment:
+                parts.append(fragment)
         try:
-            fragment = memory.build_prompt_fragment(user_id=user_id)
+            summary_fragment = self.control_service.load_message_summary_fragment(
+                user_id=user_id,
+                session_id=session_id,
+            )
         except Exception:
-            return base
-        if not fragment:
-            return base
-        return f"{base}\n\n{fragment}"
+            summary_fragment = ""
+        if summary_fragment:
+            parts.append(summary_fragment)
+        return "\n\n".join(parts)
 
     @staticmethod
     def _extract_text_delta(item: Any) -> str:

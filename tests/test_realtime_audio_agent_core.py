@@ -494,6 +494,49 @@ def test_realtime_open_loads_device_message_history_into_instructions(tmp_path) 
     assert request["history_injected_to"] == "instructions"
 
 
+def test_realtime_open_injects_latest_message_summary(tmp_path) -> None:
+    """测试目标：验证 Realtime instructions 注入更早历史摘要。
+
+    测试方法：先压缩一批历史消息，再打开 fake Realtime provider 会话。
+    预期结果：instructions 包含 summary 和保留的 active 历史，等价请求字段不重复展开归档原文。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-summary"
+    device_id = "dev-summary"
+    for index in range(8):
+        app.control_service.append_message(
+            user_id,
+            {
+                "session_id": device_id,
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"实时压缩前消息 {index}",
+                "created_at": 1_700_000_000 + index,
+            },
+        )
+    app.control_service.compact_messages_if_needed(user_id=user_id, session_id=device_id, threshold=6, keep_latest=2)
+    app.agent_core = RealtimeAudioAgentCore(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        control_service=app.control_service,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni", instructions="你是测试用 Omni 助手。"),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+        max_context_messages=10,
+    )
+
+    app.agent_core.open(user_id=user_id, session_id=device_id)
+
+    request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
+    instructions = instances[0].config.instructions
+    assert "更早历史对话的压缩摘要" in instructions
+    assert "实时压缩前消息 0" in instructions
+    assert "实时压缩前消息 6" in instructions
+    assert request["history_messages"][0]["content"] == "实时压缩前消息 6"
+    assert all("实时压缩前消息 0" not in json.dumps(item, ensure_ascii=False) for item in request["history_messages"])
+
+
 def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     """测试目标：验证 Qwen Omni 工具结果会回填到同一条 Realtime 会话。
 

@@ -466,6 +466,8 @@ class PythonPlaybackEndpoint:
                 "properties": {
                     "audio.wake_word": "endpoint",
                     "audio.aec": "endpoint",
+                    "audio_chat.audio_input": "sensor.mic",
+                    "audio_chat.audio_output": "actuator.speaker",
                 },
                 "supports": {
                     "sensors": [
@@ -817,6 +819,8 @@ class NetworkPythonPlaybackEndpoint:
         self.properties = properties or {
             "audio.wake_word": "endpoint",
             "audio.aec": "endpoint",
+            "audio_chat.audio_input": "sensor.mic",
+            "audio_chat.audio_output": "actuator.speaker",
         }
         self.supports = supports or {
             "sensors": [

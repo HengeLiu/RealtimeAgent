@@ -2,6 +2,7 @@
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.asset import ArtifactRef, AssetRef
+from audio_chat.conversation import ConversationMemoryService, MessageSummary, RuleBasedMessageSummarizer
 from audio_chat.device_capabilities import compile_device_capabilities_file, compile_registration_payload
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.mcp import McpGateway, McpToolSpec
@@ -55,6 +56,7 @@ __all__ = [
     "CommandFailedError",
     "CommandHandle",
     "CommandResult",
+    "ConversationMemoryService",
     "DeviceBusyError",
     "DeviceNotFoundError",
     "compile_device_capabilities_file",
@@ -70,8 +72,10 @@ __all__ = [
     "MemoryRecord",
     "MemoryService",
     "MemoryStore",
+    "MessageSummary",
     "OutputFacade",
     "PlaybackRejectedError",
+    "RuleBasedMessageSummarizer",
     "SkillDocument",
     "SkillService",
     "StreamChunk",

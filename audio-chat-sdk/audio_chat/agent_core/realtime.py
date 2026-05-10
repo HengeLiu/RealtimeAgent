@@ -928,6 +928,9 @@ class RealtimeAudioAgentCore:
         tools = self._realtime_tool_schemas()
         history_messages = self._load_runtime_messages(user_id=user_id, session_id=session_id)
         instructions = self._build_instructions(user_id=user_id)
+        summary_fragment = self._load_message_summary_fragment(user_id=user_id, session_id=session_id)
+        if summary_fragment:
+            instructions = f"{instructions}\n\n{summary_fragment}"
         history_fragment = _history_messages_prompt_fragment(history_messages)
         if history_fragment:
             instructions = f"{instructions}\n\n{history_fragment}"
@@ -1269,6 +1272,23 @@ class RealtimeAudioAgentCore:
             return []
         messages = [_normalize_history_message(record) for record in records]
         return [message for message in messages if message is not None]
+
+    def _load_message_summary_fragment(self, *, user_id: str, session_id: str) -> str:
+        """读取更早历史对话摘要提示词。
+
+        主要逻辑：Realtime provider 没有单独 messages 参数，历史摘要与 active
+        对话一样注入 instructions；读取失败时保持空字符串。
+        参数：`user_id/session_id` 定位用户设备。
+        返回值：可追加到 instructions 的提示词片段。
+        异常情况：无；底层异常会被吞掉并返回空字符串。
+        """
+
+        if self.control_service is None:
+            return ""
+        try:
+            return self.control_service.load_message_summary_fragment(user_id=user_id, session_id=session_id)
+        except Exception:
+            return ""
 
     def _build_model_request(
         self,

@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from audio_chat.conversation import ConversationMemoryService, MessageSummary
 from audio_chat.device_capabilities import (
     compile_internal_routes_from_supports,
     compile_registration_payload,
@@ -432,6 +433,7 @@ class ControlService:
         route_filter_mode: str = "exact",
         active_device_set_policy: str = "single",
         effective_config: dict[str, Any] | None = None,
+        conversation_memory: ConversationMemoryService | None = None,
     ) -> None:
         self.authenticator = authenticator or DeviceAuthenticator(mode="disabled")
         self.validator = RegistrationValidator(
@@ -444,6 +446,7 @@ class ControlService:
         self.exclude_producer_by_default = exclude_producer_by_default
         self.active_device_set_policy = active_device_set_policy
         self.effective_config = dict(effective_config or {})
+        self.conversation_memory = conversation_memory
         self._bindings: dict[str, str] = {}
         self._devices: dict[str, Device] = {}
         self._connections: dict[str, DeviceConnection] = {}
@@ -999,22 +1002,59 @@ class ControlService:
         return ActiveDeviceSet(user_id=user_id, devices=devices)
 
     def append_message(self, user_id: str, message: dict[str, Any]) -> None:
+        session_id = str(message.get("session_id") or message.get("device_id") or "")
+        if self.conversation_memory is not None and session_id:
+            self.conversation_memory.append_message(user_id=user_id, device_id=session_id, message=message)
+            self.recorder.log_message(
+                user_id,
+                message,
+                detail_path=self.conversation_memory.legacy_messages_path(user_id=user_id, device_id=session_id),
+            )
+            return
         self.recorder.record_message(user_id, message)
 
     def load_messages(self, *, user_id: str, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
         """读取同一用户同一设备的历史消息。
 
-        主要逻辑：委托 RunRecorder 从 `messages.jsonl` 读取历史，供 Agent Core 组装
-        模型上下文。
+        主要逻辑：优先委托 ConversationMemoryService 读取 active messages；未配置时
+        回退到 RunRecorder 的旧 `messages.jsonl` 读取逻辑。
         参数：`user_id` 为用户编号，`session_id` 为设备级会话编号，`limit` 为最大条数。
         返回值：历史消息列表。
         异常情况：底层无读取能力时返回空列表。
         """
 
+        if self.conversation_memory is not None:
+            return self.conversation_memory.load_active_messages(user_id=user_id, device_id=session_id, limit=limit)
         loader = getattr(self.recorder, "load_messages", None)
         if not callable(loader):
             return []
         return loader(user_id=user_id, session_id=session_id, limit=limit)
+
+    def load_message_summary_fragment(self, *, user_id: str, session_id: str) -> str:
+        """读取可注入模型上下文的最近历史摘要片段。"""
+
+        if self.conversation_memory is None:
+            return ""
+        return self.conversation_memory.build_summary_prompt_fragment(user_id=user_id, device_id=session_id)
+
+    def compact_messages_if_needed(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        threshold: int = 30,
+        keep_latest: int = 5,
+    ) -> MessageSummary | None:
+        """在连续对话结束时按阈值压缩 active messages。"""
+
+        if self.conversation_memory is None:
+            return None
+        return self.conversation_memory.compact_if_needed(
+            user_id=user_id,
+            device_id=session_id,
+            threshold=threshold,
+            keep_latest=keep_latest,
+        )
 
     def build_user_snapshot(self, user_id: str) -> dict[str, Any]:
         return {

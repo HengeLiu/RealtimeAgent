@@ -11,6 +11,7 @@ from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
 from audio_chat.audio_pipeline import AudioPipeline, AudioPipelineConfig as RuntimeAudioPipelineConfig
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config, resolve_config_path
+from audio_chat.conversation import ConversationMemoryService
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
 from audio_chat.mcp import McpGateway
 from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService, RuleBasedMemoryManagementAgent
@@ -63,6 +64,8 @@ class AudioChatConfig:
     signed_token_secret_env: str = "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
     token_clock_skew_seconds: int = 60
     active_device_set_policy: str = "single"
+    message_compact_threshold: int = 30
+    message_compact_keep_latest: int = 5
     control_exclude_producer_by_default: bool = True
     control_max_routes_per_device: int = 64
     control_allow_route_all: bool = False
@@ -185,6 +188,8 @@ class AudioChatConfig:
             signed_token_secret_env=loaded.auth.signed_token_secret_env,
             token_clock_skew_seconds=loaded.auth.token_clock_skew_seconds,
             active_device_set_policy=loaded.user.active_device_set_policy,
+            message_compact_threshold=30,
+            message_compact_keep_latest=5,
             control_exclude_producer_by_default=loaded.control.exclude_producer_by_default,
             control_max_routes_per_device=loaded.control.max_routes_per_device,
             control_allow_route_all=loaded.control.allow_route_all,
@@ -289,6 +294,7 @@ class AudioChatApp:
     def __init__(self, config: AudioChatConfig | None = None) -> None:
         self.config = _normalize_runtime_config(config or AudioChatConfig())
         self.recorder = RunRecorder(Path(self.config.runs_root))
+        self.conversation_memory = ConversationMemoryService(Path(self.config.runs_root))
         self.control_service = ControlService(
             authenticator=DeviceAuthenticator(
                 mode=self.config.auth_mode,
@@ -303,6 +309,7 @@ class AudioChatApp:
             route_filter_mode=self.config.control_route_filter_mode,
             active_device_set_policy=self.config.active_device_set_policy,
             effective_config={"stream.max_chunk_bytes": self.config.stream_max_chunk_bytes},
+            conversation_memory=self.conversation_memory,
         )
         self.stream_service = StreamService(
             control_service=self.control_service,
@@ -924,6 +931,23 @@ class AudioChatApp:
         self._active_device_by_user.pop(user_id, None)
         self._close_agent_session(user_id, reason=reason)
         if state is not None:
+            summary = self.control_service.compact_messages_if_needed(
+                user_id=user_id,
+                session_id=state.device_id,
+                threshold=self.config.message_compact_threshold,
+                keep_latest=self.config.message_compact_keep_latest,
+            )
+            if summary is not None:
+                self.recorder.record_agent_event(
+                    state.device_id,
+                    {
+                        "event": "conversation.messages.compacted",
+                        "user_id": user_id,
+                        "source_message_count": summary.source_message_count,
+                        "history_file": summary.history_file,
+                        "summary_id": summary.summary_id,
+                    },
+                )
             self.recorder.record_agent_event(
                 state.device_id,
                 {"event": "audio_session.closed", "reason": reason, "close_mode": state.close_mode or "endpoint_closed"},

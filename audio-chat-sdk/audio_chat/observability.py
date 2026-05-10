@@ -708,6 +708,20 @@ class RunRecorder:
         else:
             path = self.user_dir(user_id) / "messages.jsonl"
         self._append_jsonl(path, record)
+        self.log_message(user_id, record, detail_path=path)
+
+    def log_message(self, user_id: str, record: dict[str, Any], *, detail_path: Path | None = None) -> None:
+        """只记录消息写入日志，不重复写文件。
+
+        主要逻辑：ConversationMemoryService 接管消息文件写入后，仍复用 RunRecorder
+        的终端日志格式。
+        参数：`user_id` 为用户编号，`record` 为消息记录，`detail_path` 为实际文件路径。
+        返回值：无。
+        异常情况：无。
+        """
+
+        session_id = str(record.get("session_id") or record.get("device_id") or "")
+        path = detail_path or (self.session_dir(session_id) / "messages.jsonl" if session_id else self.user_dir(user_id) / "messages.jsonl")
         log_info(
             self.logger,
             f"消息写入 {record.get('role')}",
