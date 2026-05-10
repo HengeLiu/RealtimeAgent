@@ -30,18 +30,6 @@ def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
     return {"role": role, "content": text}
 
 
-def _history_messages_prompt_fragment(messages: list[dict[str, Any]]) -> str:
-    """把历史消息压成可追加到 Realtime instructions 的中文片段。"""
-
-    if not messages:
-        return ""
-    lines = ["以下是同一用户在本设备上的历史对话，回答时应保持上下文连续："]
-    for message in messages:
-        role = "用户" if message.get("role") == "user" else "助手"
-        lines.append(f"- {role}: {message.get('content')}")
-    return "\n".join(lines)
-
-
 @dataclass(frozen=True)
 class RealtimeProviderConfig:
     """Realtime provider 配置。
@@ -931,9 +919,6 @@ class RealtimeAudioAgentCore:
         summary_fragment = self._load_message_summary_fragment(user_id=user_id, session_id=session_id)
         if summary_fragment:
             instructions = f"{instructions}\n\n{summary_fragment}"
-        history_fragment = _history_messages_prompt_fragment(history_messages)
-        if history_fragment:
-            instructions = f"{instructions}\n\n{history_fragment}"
         session_config = replace(self.realtime_config, tools=tools, instructions=instructions)
         self.recorder.record_model_request(
             session_id,
@@ -1252,9 +1237,9 @@ class RealtimeAudioAgentCore:
     def _load_runtime_messages(self, *, user_id: str, session_id: str) -> list[dict[str, Any]]:
         """读取 Realtime 会话启动时可注入的历史对话。
 
-        主要逻辑：Realtime provider 没有标准 Chat Completions messages 入参，因此
-        读取历史 user/assistant 文本后注入 instructions，同时写入等价 model_request
-        视图，方便排障。
+        主要逻辑：读取 active user/assistant 文本后写入等价 `model_request.messages`
+        视图；system 只承载基础提示词、长期记忆和已压缩摘要，未压缩历史必须按
+        原角色平铺在 messages 中，避免混入 system prompt。
         参数：`user_id/session_id` 定位同一用户同一设备的 `messages.jsonl`。
         返回值：模型可读的历史消息列表。
         异常情况：读取失败时返回空列表。
@@ -1276,8 +1261,7 @@ class RealtimeAudioAgentCore:
     def _load_message_summary_fragment(self, *, user_id: str, session_id: str) -> str:
         """读取更早历史对话摘要提示词。
 
-        主要逻辑：Realtime provider 没有单独 messages 参数，历史摘要与 active
-        对话一样注入 instructions；读取失败时保持空字符串。
+        主要逻辑：只读取已压缩历史摘要；未压缩 active 历史由 `messages` 平铺表达。
         参数：`user_id/session_id` 定位用户设备。
         返回值：可追加到 instructions 的提示词片段。
         异常情况：无；底层异常会被吞掉并返回空字符串。
@@ -1299,37 +1283,41 @@ class RealtimeAudioAgentCore:
         tools: list[dict[str, Any]],
         history_messages: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """构造 Omni Realtime 等价模型请求快照。
+        """构造 Omni Realtime 模型请求快照。
 
         主要逻辑：Realtime 底层不是 Chat Completions `messages` 参数，但开发者排障
-        仍需要看到等价的 system/user 视图、工具 schema 和音频输入占位。
+        需要看到等价的 system/user/assistant 视图。system 只包含基础提示词、长期记忆
+        和已压缩摘要；未压缩 active 历史按原 role 平铺在 messages 中，最后追加当前
+        音频输入占位。
         参数：`user_id/session_id/config/tools` 描述当前会话；`history_messages`
-        已注入 instructions，只作为调试字段保存，避免在 messages 里重复展开。
+        是未压缩 active 历史。
         返回值：可写入 `model-request.json` 的结构。
         异常情况：无。
         """
 
         history = list(history_messages or [])
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": config.instructions},
+            *history,
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio_stream",
+                        "stream_type": "sensor.mic",
+                        "note": "Realtime 底层持续发送 PCM 音频；这里是等价请求视图。",
+                    }
+                ],
+            },
+        ]
         return {
             "provider": config.provider,
             "model": config.model,
             "runner": "agent_core_realtime_audio",
             "instructions": config.instructions,
-            "messages": [
-                {"role": "system", "content": config.instructions},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_audio_stream",
-                            "stream_type": "sensor.mic",
-                            "note": "Realtime 底层持续发送 PCM 音频；这里是等价请求视图。",
-                        }
-                    ],
-                },
-            ],
-            "history_messages": history,
-            "history_injected_to": "instructions" if history else "",
+            "messages": messages,
+            "active_history_message_count": len(history),
+            "active_history_injected_to": "messages" if history else "",
             "tools": tools,
             "tool_count": len(tools),
             "user_id": user_id,

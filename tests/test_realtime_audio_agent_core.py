@@ -446,13 +446,12 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     assert "echo_realtime" in model_request
 
 
-def test_realtime_open_loads_device_message_history_into_instructions(tmp_path) -> None:
-    """测试目标：验证 Realtime 会话启动时加载同一用户同一设备的历史消息。
+def test_realtime_open_loads_device_message_history_as_flat_messages(tmp_path) -> None:
+    """测试目标：验证 Realtime 会话启动时把未压缩历史按 role 平铺到 messages。
 
     测试方法：预先写入 `messages.jsonl`，再打开 fake Realtime provider 会话。
-    预期结果：provider instructions 包含历史 user/assistant 对话；等价
-    `model-request.json` 只在 `history_messages` 调试字段保留历史，不在
-    `messages` 中重复展开。
+    预期结果：system content 不包含 active 历史；`model-request.json` 的 messages
+    依次包含 system、历史 user/assistant 和当前 input_audio_stream。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -486,19 +485,21 @@ def test_realtime_open_loads_device_message_history_into_instructions(tmp_path) 
     app.agent_core.open(user_id=user_id, session_id=device_id)
 
     request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
-    assert "我刚才想去南门。" in instances[0].config.instructions
-    assert request["messages"][0]["content"].count("我刚才想去南门。") == 1
-    assert request["messages"][1]["content"][0]["type"] == "input_audio_stream"
-    assert request["history_messages"][0]["content"] == "我刚才想去南门。"
-    assert request["history_messages"][1]["content"] == "我会继续按南门方向引导。"
-    assert request["history_injected_to"] == "instructions"
+    assert "我刚才想去南门。" not in instances[0].config.instructions
+    assert "我刚才想去南门。" not in request["messages"][0]["content"]
+    assert request["messages"][1] == {"role": "user", "content": "我刚才想去南门。"}
+    assert request["messages"][2] == {"role": "assistant", "content": "我会继续按南门方向引导。"}
+    assert request["messages"][3]["content"][0]["type"] == "input_audio_stream"
+    assert request["active_history_message_count"] == 2
+    assert request["active_history_injected_to"] == "messages"
 
 
-def test_realtime_open_injects_latest_message_summary(tmp_path) -> None:
-    """测试目标：验证 Realtime instructions 注入更早历史摘要。
+def test_realtime_open_keeps_summary_in_system_and_active_history_as_messages(tmp_path) -> None:
+    """测试目标：验证 Realtime 把摘要放 system，把 active 历史平铺到 messages。
 
     测试方法：先压缩一批历史消息，再打开 fake Realtime provider 会话。
-    预期结果：instructions 包含 summary 和保留的 active 历史，等价请求字段不重复展开归档原文。
+    预期结果：instructions/system 包含 summary；保留的 active 历史只出现在后续
+    user/assistant messages 中。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -532,9 +533,11 @@ def test_realtime_open_injects_latest_message_summary(tmp_path) -> None:
     instructions = instances[0].config.instructions
     assert "更早历史对话的压缩摘要" in instructions
     assert "实时压缩前消息 0" in instructions
-    assert "实时压缩前消息 6" in instructions
-    assert request["history_messages"][0]["content"] == "实时压缩前消息 6"
-    assert all("实时压缩前消息 0" not in json.dumps(item, ensure_ascii=False) for item in request["history_messages"])
+    assert "实时压缩前消息 6" not in instructions
+    assert request["messages"][0]["content"] == instructions
+    assert request["messages"][1]["content"] == "实时压缩前消息 6"
+    assert request["messages"][2]["content"] == "实时压缩前消息 7"
+    assert request["messages"][3]["content"][0]["type"] == "input_audio_stream"
 
 
 def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
