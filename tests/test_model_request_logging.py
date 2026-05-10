@@ -49,6 +49,47 @@ def test_first_model_request_logs_full_snapshot_once(tmp_path, caplog) -> None:
     assert "list_online_devices" in message
 
 
+def test_realtime_first_model_request_terminal_snapshot_only_logs_model_visible_messages(tmp_path, caplog) -> None:
+    """测试目标：验证 Realtime 首次模型请求终端日志只打印模型可见上下文。
+
+    测试方法：构造同时包含 `instructions`、`history_messages` 和规范化 `messages`
+    的 Realtime 请求，并捕获首次快照日志。
+    预期结果：终端日志包含 `messages/tools`，但不重复打印 Realtime 中间调试字段。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    request = {
+        "provider": "qwen",
+        "model": "qwen3.5-omni-plus-realtime",
+        "runner": "agent_core_realtime_audio",
+        "user_id": "user-realtime",
+        "session_id": "dev-realtime",
+        "instructions": "系统提示词，包含历史摘要。",
+        "messages": [
+            {"role": "system", "content": "系统提示词，包含历史摘要。"},
+            {"role": "user", "content": [{"type": "input_audio_stream", "stream_type": "sensor.mic"}]},
+        ],
+        "history_messages": [{"role": "user", "content": "历史用户输入"}],
+        "history_injected_to": "instructions",
+        "tools": [{"type": "function", "name": "capture_photo", "parameters": {"type": "object"}}],
+        "tool_count": 1,
+    }
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_model_request("dev-realtime", request)
+
+    snapshots = [record.getMessage() for record in caplog.records if "首次模型请求完整快照" in record.getMessage()]
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert '"messages"' in snapshot
+    assert '"tools"' in snapshot
+    assert "系统提示词，包含历史摘要。" in snapshot
+    assert "input_audio_stream" in snapshot
+    assert '"instructions"' not in snapshot
+    assert '"history_messages"' not in snapshot
+    assert '"history_injected_to"' not in snapshot
+
+
 def test_system_error_logs_payload_details(tmp_path, caplog) -> None:
     """测试目标：系统错误日志必须展示 payload 中的真实错误信息。
 
@@ -196,5 +237,5 @@ def test_important_terminal_logs_include_detail_paths(tmp_path, caplog) -> None:
 
     model_logs = [record for record in caplog.records if "模型请求已写入" in record.getMessage()]
     tool_logs = [record for record in caplog.records if "工具调用 demo_tool" in record.getMessage()]
-    assert model_logs and getattr(model_logs[0], "detail_path").endswith("sessions/sess-path/model-request.json")
-    assert tool_logs and getattr(tool_logs[0], "detail_path").endswith("sessions/sess-path/tool-events.jsonl")
+    assert model_logs and getattr(model_logs[0], "detail_path").endswith("user-path/sess-path/model-request.json")
+    assert tool_logs and getattr(tool_logs[0], "detail_path").endswith("user-path/sess-path/tool-events.jsonl")

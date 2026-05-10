@@ -496,17 +496,18 @@ class RunRecorder:
         """在进程首次调用大模型前打印完整请求快照。
 
         主要逻辑：首次 `record_model_request()` 发生在 provider 调用之前，此处把同一份
-        `model-request.json` 内容以漂亮 JSON 打到终端，方便开发者先看 system prompt、
-        messages 和 tools；之后的请求只保留摘要日志和落盘文件，避免刷屏。
+        请求整理成“模型可见上下文”后打印，方便开发者先看 system prompt、messages
+        和 tools；provider 原始字段和中间调试字段仍完整落盘到 `model-request.json`。
         参数：`session_id` 为当前会话，`record` 为模型请求快照。
         返回值：无。
         异常情况：JSON 序列化异常时退回 `str(record)`。
         """
 
+        log_record = _model_request_terminal_snapshot(record)
         try:
-            snapshot = json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True)
+            snapshot = json.dumps(log_record, ensure_ascii=False, indent=2, sort_keys=True)
         except Exception:
-            snapshot = str(record)
+            snapshot = str(log_record)
         self.logger.info(
             "首次模型请求完整快照\n%s",
             snapshot,
@@ -936,6 +937,35 @@ def _elapsed_ms(start: float | None, end: float) -> int | None:
     if start is None:
         return None
     return int((end - start) * 1000)
+
+
+def _model_request_terminal_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    """构造终端首次模型请求快照。
+
+    主要逻辑：终端日志只展示开发者判断提示词和输入质量所需的模型可见内容；
+    `instructions`、`history_messages` 等 Realtime 中间字段不在终端重复打印，避免
+    与 `messages[0].content` 混淆。完整原始记录仍写入 `model-request.json`。
+    参数：`record` 为 RunRecorder 收到的模型请求。
+    返回值：可打印的紧凑请求快照。
+    异常情况：无。
+    """
+
+    snapshot: dict[str, Any] = {}
+    for key in ("provider", "model", "runner", "user_id", "session_id"):
+        if key in record:
+            snapshot[key] = record[key]
+    messages = record.get("messages")
+    if isinstance(messages, list):
+        snapshot["messages"] = messages
+    elif record.get("instructions"):
+        snapshot["messages"] = [{"role": "system", "content": record.get("instructions")}]
+    if "tools" in record:
+        snapshot["tools"] = record.get("tools") or []
+    if "tool_count" in record:
+        snapshot["tool_count"] = record.get("tool_count")
+    elif "tools" in snapshot:
+        snapshot["tool_count"] = len(snapshot.get("tools") or [])
+    return snapshot
 
 
 class TurnRecorder:
