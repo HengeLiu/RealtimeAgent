@@ -1,6 +1,6 @@
 app-name: "for-blind-app"
 
-# 路径约定：默认运行产物写入 runs/<app-name>/。
+# 路径约定：默认运行产物写入当前应用目录下的 runs/。
 # 如需整体迁移运行目录，只配置 paths.runtime_root。
 paths: {}
 

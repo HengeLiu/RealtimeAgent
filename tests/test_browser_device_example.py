@@ -219,6 +219,8 @@ def test_browser_device_resets_mic_state_when_server_closes_input_stream() -> No
     assert "markMicInputClosed(item.stream_id" in control_body
     assert "streamId !== inputStreamId" in handler_body
     assert "clearInterval(offlineTimer)" in handler_body
+    assert "if (processor) processor.disconnect()" in handler_body
+    assert "if (micStream) micStream.getTracks().forEach((track) => track.stop())" in handler_body
     assert "inputStreamId = null" in handler_body
     assert 'activeAudioSource = audioModeSelect.value === "offline_realtime" ? "offline_paused" : "idle"' in handler_body
 

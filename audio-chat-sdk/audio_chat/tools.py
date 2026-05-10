@@ -2163,7 +2163,12 @@ class MemorySearchTool(BaseTool):
 
 
 class ManageMemoryTool(BaseTool):
-    """管理长期记忆的内置 Tool。"""
+    """管理长期记忆的模型可见入口。
+
+    主要功能：把主 Agent 提取出的 `memory_context` 交给系统级 `MemoryService`。
+    记忆判断和落盘不在 Tool 内完成，而由 MemoryService 调用内部记忆管理子 Agent
+    生成动作计划并执行，确保记忆能力不绑定某个业务模型或单个 Tool 实现。
+    """
 
     class Input(BaseModel):
         memory_context: str = Field(
@@ -2190,6 +2195,14 @@ class ManageMemoryTool(BaseTool):
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行长期记忆维护。
+
+        主要逻辑：Tool 只做模型入参归一和错误返回；真正的记忆管理由
+        `context.memory.manage()` 负责。`context.memory` 是应用级系统服务，
+        内部会读取当前 user_id 的已有记忆、调用 MemoryManagementAgent，再执行
+        add/update/delete 动作。
+        """
+
         if context.memory is None:
             return ToolResult.failed(ToolError("memory service is not configured", code=ErrorCode.PROTOCOL_ERROR))
         memory_context = str(

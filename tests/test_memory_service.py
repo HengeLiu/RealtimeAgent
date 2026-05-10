@@ -3,7 +3,24 @@ from __future__ import annotations
 import asyncio
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.memory import JsonlMemoryStore, MemoryService
+from audio_chat.config import load_yaml_config
+from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryOperationAction, MemoryOperationPlan, MemoryService
+
+
+class FakeMemoryManager:
+    """测试用记忆子 Agent，返回预设动作计划。"""
+
+    def __init__(self, plans: list[MemoryOperationPlan]) -> None:
+        self.plans = list(plans)
+        self.requests = []
+        self.existing_batches = []
+
+    def plan(self, *, request, existing_memories):
+        """记录请求并返回下一条计划。"""
+
+        self.requests.append(request)
+        self.existing_batches.append(list(existing_memories))
+        return self.plans.pop(0)
 
 
 def test_memory_service_writes_searches_and_deletes_user_memory_json(tmp_path) -> None:
@@ -79,6 +96,52 @@ def test_memory_enabled_exposes_and_executes_builtin_tools(tmp_path) -> None:
     assert write_result.ok is True
     assert search_result.ok is True
     assert search_result.data["memories"][0]["content"] == "电梯口在走廊尽头"
+
+
+def test_memory_service_uses_manager_agent_plan(tmp_path) -> None:
+    """测试目标：验证 MemoryService 通过记忆子 Agent 计划维护记忆。
+
+    测试方法：注入测试用 manager，先返回新增动作，再返回带 memory_id 的更新动作。
+    预期结果：MemoryService 会把已有记忆传给子 Agent，并按动作计划写入同一主题槽位。
+    """
+
+    manager = FakeMemoryManager(
+        plans=[
+            MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="add",
+                        memory_type="personalized",
+                        topic="导航偏好",
+                        content="用户喜欢导航提示简短。",
+                    )
+                ],
+                feedback="已记住导航偏好",
+            ),
+            MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="update",
+                        memory_type="personalized",
+                        topic="导航偏好",
+                        content="用户喜欢导航提示简短，并且先说方向再说距离。",
+                    )
+                ],
+                feedback="已更新导航偏好",
+            ),
+        ]
+    )
+    service = MemoryService(enabled=True, store=JsonlMemoryStore(tmp_path / "memory"), manager_agent=manager)
+
+    first = service.manage(user_id="user-plan", memory_context="记住我的导航提示要简短")
+    second = service.manage(user_id="user-plan", memory_context="补充一下，先说方向再说距离")
+    records = service.search_by_topics(user_id="user-plan", topics=["导航偏好"])
+
+    assert first["feedback"] == "已记住导航偏好"
+    assert second["feedback"] == "已更新导航偏好"
+    assert len(manager.existing_batches[0]) == 0
+    assert manager.existing_batches[1][0].topic == "导航偏好"
+    assert records[0].content == "用户喜欢导航提示简短，并且先说方向再说距离。"
 
 
 def test_memory_enabled_uses_runs_user_memory_json_by_default(tmp_path) -> None:
@@ -184,3 +247,41 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
     assert delete_result.ok is True
     assert delete_result.data["actions"][0]["success"] is True
     assert search_result.data["memories"] == []
+
+
+def test_memory_manager_is_configured_as_system_capability(tmp_path) -> None:
+    """测试目标：验证记忆管理子 Agent 来自 memory.manager 配置，而不是 text 模型配置。
+
+    测试方法：写入一份 text 模型为 mock、memory.manager 为 dashscope-compatible 的
+    server.yaml，并通过 AudioChatConfig 构建 App。
+    预期结果：MemoryService 内部 manager 是 LlmMemoryManagementAgent，且使用
+    memory.manager.model。
+    """
+
+    app_dir = tmp_path / "memory-manager-app"
+    app_dir.mkdir()
+    config_path = app_dir / "server.yaml"
+    config_path.write_text(
+        """
+app_name: memory-manager-app
+agent:
+  text:
+    model_provider: mock
+    model: mock-text
+memory:
+  enabled: true
+  manager:
+    provider: dashscope-compatible
+    model: qwen-memory
+    api_key_env: DASHSCOPE_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    app = AudioChatApp(AudioChatConfig.from_loaded_config(loaded))
+
+    assert isinstance(app.memory_service.manager_agent, LlmMemoryManagementAgent)
+    assert app.memory_service.manager_agent.model == "qwen-memory"
+    assert app.config.text_model_provider == "mock"

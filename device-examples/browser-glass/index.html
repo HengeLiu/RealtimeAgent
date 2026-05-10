@@ -677,9 +677,13 @@
         clearInterval(offlineTimer);
         offlineTimer = null;
       }
+      if (processor) processor.disconnect();
+      if (micSource) micSource.disconnect();
+      if (micStream) micStream.getTracks().forEach((track) => track.stop());
       offlineAudio = null;
       setStreamState(streamId, {stream_type: "sensor.mic", state: "closed", close_reason: reason});
       inputStreamId = null;
+      processor = null; micSource = null; micStream = null;
       micPcmBuffer = new Uint8Array(0);
       activeAudioSource = audioModeSelect.value === "offline_realtime" ? "offline_paused" : "idle";
       log(`sensor.mic closed by server stream_id=${streamId} reason=${reason}`);

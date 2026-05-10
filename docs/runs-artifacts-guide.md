@@ -1,19 +1,21 @@
 # runs 目录产物说明
 
-文档状态：当前调试说明。本文描述当前 `runs/<app_name>` 产物结构，是排查模型请求、设备通讯、stream、资产、Tool、Task 和输出链路的主要入口。
+文档状态：当前调试说明。本文描述当前应用目录下 `runs` 产物结构，是排查模型请求、设备通讯、stream、资产、Tool、Task 和输出链路的主要入口。
 
 `runs` 是 audio-chat 的开发调试和回放证据目录。它不是业务数据目录，也不是开发者日常需要全部阅读的目录。
 
-默认根目录由 `paths.runtime_root` 统一决定；未配置时从 `server.yaml` 的 `app-name` 派生，例如
-`for-blind-app` 的默认值是：
+默认根目录由 `paths.runtime_root` 统一决定；未配置时使用 `server.yaml` 所在应用目录下的 `runs`，例如 `for-blind-app` 的默认值是：
 
 ```text
-runs/for-blind-app
+app-examples/for-blind-app/runs
 ```
 
 `observability.runs_root`、`asset.root`、`memory.path`、`user.message_store.root`
 和 `dev_checks.report_path` 都会从这个根目录自动派生。只有确实需要单独覆盖某个
 子目录时，才在对应配置段里显式写路径。
+
+长期记忆不再默认写入单独的 `memory` 子目录。默认 `memory.path` 等于
+`paths.runtime_root`，实际文件是 `<runtime_root>/<user_id>/memory.json`。
 
 从当前版本开始，终端日志中的 `detail_path` 会打印绝对路径。相对路径需要按 server 启动时的工作目录拼接。
 

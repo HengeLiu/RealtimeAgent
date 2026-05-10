@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.protocol import new_id
@@ -12,6 +13,7 @@ from audio_chat.protocol import new_id
 
 MemoryType = Literal["basic", "personalized"]
 MemorySource = Literal["user_requested", "agent_inferred", "system"]
+MemoryOperation = Literal["add", "update", "delete"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,52 @@ class MemoryRecord:
 
 class MemoryError(AudioChatError):
     """Memory Service 结构化异常。"""
+
+
+@dataclass(frozen=True)
+class MemoryOperationRequest:
+    """记忆维护请求。
+
+    主要功能：承载主 Agent 从当前对话中摘取的记忆相关上下文。
+    主要属性：`memory_context` 是自然语言上下文；`metadata` 用于审计。
+    """
+
+    memory_context: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MemoryOperationAction:
+    """记忆子 Agent 输出的一条内部动作。"""
+
+    operation: MemoryOperation
+    topic: str
+    content: str = ""
+    memory_type: MemoryType = "personalized"
+    memory_id: str = ""
+
+
+@dataclass(frozen=True)
+class MemoryOperationPlan:
+    """记忆子 Agent 输出的结构化维护计划。"""
+
+    actions: list[MemoryOperationAction]
+    feedback: str = "记忆已处理"
+
+
+class MemoryManagementAgent(Protocol):
+    """记忆管理子 Agent 接口。
+
+    主要功能：根据自然语言上下文和已有记忆，生成新增、更新、删除动作计划。
+    """
+
+    def plan(
+        self,
+        *,
+        request: MemoryOperationRequest,
+        existing_memories: list[MemoryRecord],
+    ) -> MemoryOperationPlan:
+        """生成记忆操作计划。"""
 
 
 class MemoryStore:
@@ -280,9 +328,16 @@ class MemoryService:
     主要属性：`enabled` 控制工具是否可用，`store` 是具体存储实现。
     """
 
-    def __init__(self, *, enabled: bool = False, store: MemoryStore | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = False,
+        store: MemoryStore | None = None,
+        manager_agent: MemoryManagementAgent | None = None,
+    ) -> None:
         self.enabled = enabled
-        self.store = store or JsonlMemoryStore("runs/default-app/memory")
+        self.store = store or JsonlMemoryStore("runs/default-app")
+        self.manager_agent = manager_agent or RuleBasedMemoryManagementAgent()
 
     def write(self, *, user_id: str, content: str, metadata: dict[str, Any] | None = None) -> MemoryRecord:
         """写入用户长期记忆。
@@ -342,41 +397,29 @@ class MemoryService:
     def manage(self, *, user_id: str, memory_context: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         """根据一段自然语言上下文维护长期记忆。
 
-        主要逻辑：在 SDK 内做保守规则解析，保持稳定工具入参和两层存储格式；
-        后续可以替换成独立 MemoryAgent，但不改变 Tool 协议。
+        主要逻辑：先读取当前用户已有记忆，再交给记忆管理子 Agent 生成动作计划，
+        最后由 SDK 串行执行动作并落盘。模型或规则只负责“计划”，不直接写文件。
         """
 
         self._ensure_enabled()
         context = " ".join(str(memory_context or "").strip().split())
         if not context:
             raise MemoryError("memory_context is required", code=ErrorCode.INVALID_ARGUMENT)
-        lowered = context.lower()
-        if any(word in context for word in ("忘记", "删除")) or "forget" in lowered:
-            query = context
-            for marker in ("忘记", "删除", "请", "帮我"):
-                query = query.replace(marker, "")
-            matches = self.search(user_id=user_id, query=query.strip() or context, limit=1)
-            if not matches:
-                return {"feedback": "没有找到需要处理的记忆", "actions": []}
-            deleted = self.delete(user_id=user_id, memory_id=matches[0].memory_id)
-            return {
-                "feedback": "记忆已更新" if deleted else "没有找到需要处理的记忆",
-                "actions": [{"operation": "delete", "topic": matches[0].topic, "success": deleted}],
-            }
-        memory_type = _infer_memory_type(context)
-        topic = _infer_memory_topic(context, memory_type=memory_type)
-        content = _normalize_memory_content(context, topic=topic, memory_type=memory_type)
-        record = self.add_memory(
-            user_id=user_id,
-            memory_type=memory_type,
-            topic=topic,
-            content=content,
-            source="user_requested" if "记住" in context else "agent_inferred",
-            metadata=dict(metadata or {}),
-        )
+        request = MemoryOperationRequest(memory_context=context, metadata=dict(metadata or {}))
+        existing = self.store.list_records(user_id=user_id, limit=100)
+        try:
+            plan = self.manager_agent.plan(request=request, existing_memories=existing)
+        except MemoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 子 Agent 可能来自模型或外部服务
+            raise MemoryError(f"memory manager failed: {exc}", code=ErrorCode.UNKNOWN) from exc
+        results: list[dict[str, Any]] = []
+        for action in plan.actions:
+            results.append(self._execute_action(user_id=user_id, action=action, request=request))
+        feedback = str(plan.feedback or "").strip() or _build_feedback(results)
         return {
-            "feedback": "记忆已更新",
-            "actions": [{"operation": "update", "memory_type": record.memory_type, "topic": record.topic, "success": True}],
+            "feedback": feedback,
+            "actions": results,
         }
 
     def search(self, *, user_id: str, query: str, limit: int = 5) -> list[MemoryRecord]:
@@ -425,6 +468,56 @@ class MemoryService:
         self._ensure_enabled()
         return self.store.delete(user_id=user_id, memory_id=memory_id)
 
+    def _execute_action(
+        self,
+        *,
+        user_id: str,
+        action: MemoryOperationAction,
+        request: MemoryOperationRequest,
+    ) -> dict[str, Any]:
+        """执行记忆子 Agent 生成的单条动作。"""
+
+        operation = action.operation
+        if operation in {"add", "update"}:
+            target = self._find_action_target(user_id=user_id, action=action)
+            record = self.add_memory(
+                user_id=user_id,
+                memory_type=action.memory_type,
+                topic=action.topic or (target.topic if target is not None else ""),
+                content=action.content or (target.content if target is not None else ""),
+                source="user_requested" if "记住" in request.memory_context else "agent_inferred",
+                metadata=dict(request.metadata),
+            )
+            return {
+                "operation": operation,
+                "memory_type": record.memory_type,
+                "topic": record.topic,
+                "success": True,
+            }
+        if operation == "delete":
+            target = self._find_action_target(user_id=user_id, action=action)
+            success = self.delete(user_id=user_id, memory_id=target.memory_id) if target is not None else False
+            return {
+                "operation": "delete",
+                "topic": action.topic or (target.topic if target is not None else ""),
+                "success": success,
+            }
+        return {"operation": str(operation), "topic": action.topic, "success": False}
+
+    def _find_action_target(self, *, user_id: str, action: MemoryOperationAction) -> MemoryRecord | None:
+        """按 memory_id 或主题寻找动作目标。"""
+
+        records = self.store.list_records(user_id=user_id, limit=100)
+        memory_id = str(action.memory_id or "").strip()
+        if memory_id:
+            matched = next((record for record in records if record.memory_id == memory_id), None)
+            if matched is not None:
+                return matched
+        topic = " ".join(str(action.topic or "").strip().split()).lower()
+        if topic:
+            return next((record for record in records if " ".join(record.topic.strip().split()).lower() == topic), None)
+        return None
+
     def _ensure_enabled(self) -> None:
         if not self.enabled:
             raise MemoryError("memory service is disabled", code=ErrorCode.PERMISSION_DENIED)
@@ -434,6 +527,200 @@ def memory_record_to_public_dict(record: MemoryRecord) -> dict[str, Any]:
     """转换成主 Agent 可见的记忆详情。"""
 
     return {"memory_type": record.memory_type, "topic": record.topic, "content": record.content}
+
+
+class RuleBasedMemoryManagementAgent:
+    """轻量记忆子 Agent。
+
+    主要功能：在没有真实模型子 Agent 时提供可预测的本地计划生成能力，保持测试和
+    离线 demo 可用。生产环境可替换为 `LlmMemoryManagementAgent`。
+    """
+
+    def plan(
+        self,
+        *,
+        request: MemoryOperationRequest,
+        existing_memories: list[MemoryRecord],
+    ) -> MemoryOperationPlan:
+        context = " ".join(str(request.memory_context or "").strip().split())
+        lowered = context.lower()
+        if any(word in context for word in ("忘记", "删除")) or "forget" in lowered:
+            query = context
+            for marker in ("忘记", "删除", "请", "帮我"):
+                query = query.replace(marker, "")
+            target = _match_existing_memory(existing_memories, query.strip() or context)
+            if target is None:
+                return MemoryOperationPlan(actions=[], feedback="没有找到需要处理的记忆")
+            return MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="delete",
+                        topic=target.topic,
+                        memory_type=target.memory_type,
+                        memory_id=target.memory_id,
+                    )
+                ],
+                feedback="记忆已更新",
+            )
+        memory_type = _infer_memory_type(context)
+        topic = _infer_memory_topic(context, memory_type=memory_type)
+        content = _normalize_memory_content(context, topic=topic, memory_type=memory_type)
+        target = _match_existing_memory(existing_memories, topic)
+        return MemoryOperationPlan(
+            actions=[
+                MemoryOperationAction(
+                    operation="update" if target is not None else "add",
+                    memory_type=memory_type,
+                    topic=topic,
+                    content=content,
+                    memory_id=target.memory_id if target is not None else "",
+                )
+            ],
+            feedback="记忆已更新",
+        )
+
+
+class LlmMemoryManagementAgent:
+    """基于 OpenAI-compatible Chat Completions 的记忆管理子 Agent。"""
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key_env: str = "OPENAI_API_KEY",
+        base_url: str | None = None,
+        timeout_seconds: float = 5.0,
+        max_retries: int = 1,
+    ) -> None:
+        self.model = model
+        self.api_key_env = api_key_env
+        self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+
+    def plan(
+        self,
+        *,
+        request: MemoryOperationRequest,
+        existing_memories: list[MemoryRecord],
+    ) -> MemoryOperationPlan:
+        """调用模型生成记忆维护计划。"""
+
+        api_key = os.getenv(self.api_key_env)
+        if not api_key:
+            raise MemoryError(f"{self.api_key_env} is required for memory manager", code=ErrorCode.PROVIDER_UNAVAILABLE)
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise MemoryError("openai package is required for memory manager", code=ErrorCode.PROVIDER_UNAVAILABLE) from exc
+        client = OpenAI(
+            api_key=api_key,
+            base_url=self.base_url,
+            timeout=self.timeout_seconds,
+            max_retries=self.max_retries,
+        )
+        completion = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": _memory_manager_system_prompt()},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "request": {"memory_context": request.memory_context},
+                            "existing_memories": [_record_to_internal_dict(record) for record in existing_memories],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0,
+        )
+        raw = completion.choices[0].message.content or ""
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise MemoryError("memory manager returned invalid JSON", code=ErrorCode.PROTOCOL_ERROR) from exc
+        return _parse_memory_plan(payload)
+
+
+def _parse_memory_plan(payload: dict[str, Any]) -> MemoryOperationPlan:
+    """把模型输出 JSON 转成内部动作计划。"""
+
+    actions: list[MemoryOperationAction] = []
+    for item in payload.get("actions") or []:
+        if not isinstance(item, dict):
+            continue
+        operation = str(item.get("operation") or "").strip()
+        if operation not in {"add", "update", "delete"}:
+            continue
+        memory_type = "basic" if str(item.get("memory_type") or "").strip() == "basic" else "personalized"
+        actions.append(
+            MemoryOperationAction(
+                operation=operation,  # type: ignore[arg-type]
+                topic=str(item.get("topic") or "").strip(),
+                content=str(item.get("content") or "").strip(),
+                memory_type=memory_type,
+                memory_id=str(item.get("memory_id") or "").strip(),
+            )
+        )
+    return MemoryOperationPlan(actions=actions, feedback=str(payload.get("feedback") or "").strip() or "记忆已处理")
+
+
+def _record_to_internal_dict(record: MemoryRecord) -> dict[str, Any]:
+    return {
+        "memory_id": record.memory_id,
+        "memory_type": record.memory_type,
+        "topic": record.topic,
+        "content": record.content,
+        "source": record.source,
+        "confidence": record.confidence,
+        "metadata": record.metadata,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def _memory_manager_system_prompt() -> str:
+    return (
+        "你是记忆管理子Agent。你只输出JSON，不输出解释。\n"
+        "你要根据用户提供的上下文信息和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"
+        "已有记忆分两种类型 memory_type(basic/personalized)："
+        "basic 用于姓名、年龄、性别、称呼等短小稳定信息；"
+        "personalized 用于住址、电话、爱好、习惯、任务设置等可能变化或较长的信息。\n"
+        "同一用户下，memory_type + topic 表示一个记忆主题槽位；"
+        "每条已有记忆都有唯一 memory_id，content 是这个主题的完整详细记录。\n"
+        "更新已有记忆时，content 必须写出更新后的完整内容，不能只写增量片段。\n"
+        "更新或删除已有记忆时必须填写已有记忆中的 memory_id；新增时不要填写 memory_id。\n"
+        "不要保存API Key、设备token、WiFi密码、一次性任务状态或未经确认的推断。\n"
+        "输出格式：{\"actions\":[{\"operation\":\"add|update|delete\",\"memory_type\":\"basic|personalized\",\"topic\":\"主题\",\"content\":\"完整内容\",\"memory_id\":\"已有编号\"}],\"feedback\":\"给主Agent的简短中文反馈\"}"
+    )
+
+
+def _match_existing_memory(records: list[MemoryRecord], query: str) -> MemoryRecord | None:
+    """用轻量规则从已有记忆中找最相关的目标。"""
+
+    normalized = " ".join(str(query or "").strip().lower().split())
+    if not normalized:
+        return records[0] if records else None
+    for record in records:
+        if normalized == record.topic.lower():
+            return record
+    for record in records:
+        text = f"{record.topic} {record.content}".lower()
+        if normalized in text or record.topic.lower() in normalized:
+            return record
+    return None
+
+
+def _build_feedback(results: list[dict[str, Any]]) -> str:
+    """根据动作结果生成默认反馈。"""
+
+    if not results:
+        return "没有需要更新的记忆"
+    if any(item.get("success") for item in results):
+        return "记忆已更新"
+    return "没有找到需要处理的记忆"
 
 
 def _infer_memory_type(content: str) -> MemoryType:
@@ -482,8 +769,14 @@ __all__ = [
     "JsonlMemoryStore",
     "MemoryError",
     "MemoryRecord",
+    "MemoryManagementAgent",
+    "MemoryOperationAction",
+    "MemoryOperationPlan",
+    "MemoryOperationRequest",
     "MemoryService",
     "MemoryStore",
     "MemoryType",
+    "LlmMemoryManagementAgent",
+    "RuleBasedMemoryManagementAgent",
     "memory_record_to_public_dict",
 ]

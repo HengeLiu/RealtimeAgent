@@ -10,10 +10,10 @@
 
 ## 路径配置
 
-`server.yaml` 默认按 `app-name` 派生运行产物目录：
+`server.yaml` 默认把运行产物放在当前应用目录下：
 
 ```text
-runs/for-blind-app/
+app-examples/for-blind-app/runs/
 ```
 
 日常不需要分别配置用户消息、资产、记忆、任务和 preflight 报告路径。需要把所有运行产物迁移到其它目录时，只配置一个入口：
@@ -30,7 +30,7 @@ paths:
 | `observability.runs_root` | `<runtime_root>` |
 | `user.message_store.root` | `<runtime_root>/users` |
 | `asset.root` | `<runtime_root>/assets` |
-| `memory.path` | `<runtime_root>/memory` |
+| `memory.path` | `<runtime_root>`，实际文件为 `<runtime_root>/<user_id>/memory.json` |
 | `dev_checks.report_path` | `<runtime_root>/preflight.json` |
 
 启动方式：

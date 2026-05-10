@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from audio_chat.agent_core import TextAgentCore
@@ -271,6 +272,35 @@ def test_stream_lifecycle_idle_timeout_and_input_failed_events(tmp_path) -> None
 
     assert [handle.stream_id for handle in closed] == [idle.stream_id]
     assert app.stream_service.registry.get(idle.stream_id).state == "closed"
+
+
+def test_closed_input_stream_late_chunk_is_dropped(tmp_path) -> None:
+    """测试目标：验证输入 stream 正常关闭后的迟到 chunk 不再升级为系统错误。
+
+    测试方法：打开 `sensor.mic` 输入流并主动关闭，再写入同一 stream 的后续音频包。
+    预期结果：写入过程不抛 `StreamNotOpenError`，不会进入音频处理，只记录 dropped 生命周期事件。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    handle = app.open_input_stream(user_id="user-late", producer_id="dev-late")
+    app.stream_service.close_stream(handle.stream_id, reason="idle_timeout")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-late",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=1,
+            payload=b"\x00\x00" * 320,
+        )
+    )
+
+    events_path = app.recorder.session_file(handle.session_id, "stream-events.jsonl")
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    dropped = [event for event in events if event.get("event") == "stream.chunk.dropped"]
+    assert dropped[-1]["stream_id"] == handle.stream_id
+    assert dropped[-1]["reason"] == "input_stream_closed_late_chunk"
 
 
 def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -> None:

@@ -148,10 +148,21 @@ class GenericEnabledConfig:
 
 
 @dataclass(frozen=True)
+class MemoryManagerConfig:
+    provider: str = "rule"
+    model: str = ""
+    api_key_env: str = "DASHSCOPE_API_KEY"
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    timeout_seconds: float = 5.0
+    max_retries: int = 1
+
+
+@dataclass(frozen=True)
 class MemoryConfig:
     enabled: bool = False
     store_type: str = "jsonl"
-    path: str = "runs/default-app/memory"
+    path: str = "runs/default-app"
+    manager: MemoryManagerConfig = field(default_factory=MemoryManagerConfig)
 
 
 @dataclass(frozen=True)
@@ -247,6 +258,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
 
     config_path = _resolve_config_path(path)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    data["__config_path"] = str(config_path)
     data = _apply_env_overrides(data)
     data = _apply_path_defaults(data)
     text = data.get("agent", {}).get("text", {})
@@ -271,7 +283,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         output=OutputConfig(**data.get("output", {})),
         tools=_tool_config(data.get("tools", {"enabled": True})),
         tasks=_task_config(data.get("tasks", {})),
-        memory=MemoryConfig(**_known(data.get("memory", {}), {"enabled", "store_type", "path"})),
+        memory=_memory_config(data.get("memory", {})),
         skill=SkillConfig(**_known(data.get("skill", {}), {"enabled", "roots", "allow_tool_policy"})),
         mcp=McpConfig(**_known(data.get("mcp", {}), {"enabled", "config_path", "default_timeout_seconds"})),
         endpoint_defaults=data.get("endpoint_defaults", {}),
@@ -285,6 +297,19 @@ def _resolve_config_path(path: str | Path) -> Path:
     if raw.exists():
         return raw
     return raw
+
+
+def _memory_config(raw: dict[str, Any]) -> MemoryConfig:
+    """解析 memory 配置，包含系统级记忆管理子 Agent 配置。"""
+
+    data = dict(raw or {})
+    manager = MemoryManagerConfig(**_known(data.get("manager", {}), {"provider", "model", "api_key_env", "base_url", "timeout_seconds", "max_retries"}))
+    return MemoryConfig(
+        enabled=bool(data.get("enabled", False)),
+        store_type=str(data.get("store_type") or "jsonl"),
+        path=str(data.get("path") or "runs/default-app"),
+        manager=manager,
+    )
 
 
 def resolve_config_path(path: str | Path) -> Path:
@@ -361,7 +386,8 @@ def _apply_path_defaults(data: dict[str, Any]) -> dict[str, Any]:
     """
 
     app_name = str(data.get("app_name") or data.get("app-name") or "").strip()
-    default_runtime_root = f"runs/{app_name}" if app_name else "runs/default-app"
+    config_dir = _resolve_config_path(str(data.get("__config_path") or "")).parent if data.get("__config_path") else Path.cwd()
+    default_runtime_root = str(config_dir / "runs") if app_name else "runs/default-app"
     paths = dict(data.get("paths") or {})
     data["paths"] = paths
     runtime_root = str(paths.get("runtime_root") or default_runtime_root)
@@ -380,7 +406,7 @@ def _apply_path_defaults(data: dict[str, Any]) -> dict[str, Any]:
     asset.setdefault("root", f"{runtime_root}/assets")
 
     memory = data.setdefault("memory", {})
-    memory.setdefault("path", f"{runtime_root}/memory")
+    memory.setdefault("path", runtime_root)
 
     tasks = data.setdefault("tasks", {})
     store = tasks.setdefault("store", {})

@@ -40,7 +40,7 @@ def _build_app(tmp_path, monkeypatch) -> AudioChatApp:
             config,
             runs_root=str(tmp_path / "runs"),
             asset_root=str(tmp_path / "runs" / "assets"),
-            memory_path=str(tmp_path / "runs" / "memory"),
+            memory_path=str(tmp_path / "runs"),
             tts_provider="mock",
             tts_model="mock-tts",
             tts_voice="mock",

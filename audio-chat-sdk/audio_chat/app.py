@@ -13,7 +13,7 @@ from audio_chat.audio_pipeline import AudioPipeline, AudioPipelineConfig as Runt
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config, resolve_config_path
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
 from audio_chat.mcp import McpGateway
-from audio_chat.memory import JsonlMemoryStore, MemoryService
+from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService, RuleBasedMemoryManagementAgent
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
@@ -122,7 +122,13 @@ class AudioChatConfig:
     tasks_store_root: str | None = None
     memory_enabled: bool = False
     memory_store_type: str = "jsonl"
-    memory_path: str = "runs/default-app/memory"
+    memory_path: str = "runs/default-app"
+    memory_manager_provider: str = "rule"
+    memory_manager_model: str = ""
+    memory_manager_api_key_env: str = "DASHSCOPE_API_KEY"
+    memory_manager_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    memory_manager_timeout_seconds: float = 5.0
+    memory_manager_max_retries: int = 1
     skill_enabled: bool = False
     skill_roots: tuple[str, ...] = ()
     skill_allow_tool_policy: bool = True
@@ -238,6 +244,12 @@ class AudioChatConfig:
             memory_enabled=memory_enabled,
             memory_store_type=loaded.memory.store_type,
             memory_path=loaded.memory.path,
+            memory_manager_provider=loaded.memory.manager.provider,
+            memory_manager_model=loaded.memory.manager.model,
+            memory_manager_api_key_env=loaded.memory.manager.api_key_env,
+            memory_manager_base_url=loaded.memory.manager.base_url,
+            memory_manager_timeout_seconds=loaded.memory.manager.timeout_seconds,
+            memory_manager_max_retries=loaded.memory.manager.max_retries,
             skill_enabled=loaded.skill.enabled,
             skill_roots=tuple(loaded.skill.roots),
             skill_allow_tool_policy=loaded.skill.allow_tool_policy,
@@ -350,6 +362,7 @@ class AudioChatApp:
         self.memory_service = MemoryService(
             enabled=self.config.memory_enabled,
             store=JsonlMemoryStore(_memory_root(self.config)),
+            manager_agent=_build_memory_manager(self.config),
         )
         self.skill_service = SkillService(
             enabled=self.config.skill_enabled,
@@ -1011,15 +1024,51 @@ def _build_task_store(config: AudioChatConfig) -> TaskStore:
 def _memory_root(config: AudioChatConfig) -> str | Path:
     """解析用户级 memory.json 根目录。
 
-    主要逻辑：默认写到 `runs_root/<user_id>/memory.json`，只有显式配置时才使用配置目录。
+    主要逻辑：默认写到 `runs_root/<user_id>/memory.json`；兼容旧配置自动派生的
+    `runs_root/memory`，但不再默认创建单独 memory 目录。
     参数：`config` 为应用配置。
     返回值：MemoryStore 根目录。
     异常情况：无。
     """
 
-    if not config.memory_path or str(config.memory_path).strip() in {"runs/audio-chat/memory", "runs/default-app/memory"}:
-        return Path(config.runs_root)
-    return config.memory_path
+    raw = str(config.memory_path or "").strip()
+    runs_root = Path(config.runs_root)
+    if not raw:
+        return runs_root
+    memory_path = Path(raw)
+    legacy_defaults = {"runs/audio-chat", "runs/audio-chat/memory", "runs/default-app", "runs/default-app/memory"}
+    if raw in legacy_defaults or memory_path == runs_root:
+        return runs_root
+    try:
+        if memory_path.name == "memory" and memory_path.parent == runs_root:
+            return runs_root
+    except ValueError:
+        pass
+    return memory_path
+
+
+def _build_memory_manager(config: AudioChatConfig) -> MemoryManagementAgent:
+    """按当前模型配置创建记忆管理子 Agent。
+
+    主要逻辑：记忆管理是系统能力，子 Agent 由 memory.manager 配置决定，不依赖
+    主对话 text/realtime 模型。未配置真实 manager 时使用轻量本地子 Agent。
+    """
+
+    provider = str(config.memory_manager_provider or "rule").strip().lower()
+    if provider in {"rule", "rule-based", "local", "mock"}:
+        return RuleBasedMemoryManagementAgent()
+    if provider in {"openai-compatible", "dashscope-compatible", "llm"}:
+        model = str(config.memory_manager_model or "").strip()
+        if not model:
+            return RuleBasedMemoryManagementAgent()
+        return LlmMemoryManagementAgent(
+            model=model,
+            api_key_env=config.memory_manager_api_key_env,
+            base_url=config.memory_manager_base_url or None,
+            timeout_seconds=config.memory_manager_timeout_seconds,
+            max_retries=config.memory_manager_max_retries,
+        )
+    return RuleBasedMemoryManagementAgent()
 
 
 def _prepare_app_imports(app_dir: Path) -> None:
