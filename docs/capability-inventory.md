@@ -1,6 +1,6 @@
 # audio-chat 能力规整清单
 
-本文记录本轮 Tool / Task 规整后的目标状态。判断依据见 [Context 与设备 API 设计说明](context-device-api-design.md)：Tool 是 Agent Loop 内一次短调用；Task 是后台运行实例，由统一运行时管理器启动、查询、取消。
+本文记录本轮 Tool / Task 规整后的目标状态。判断依据见 [Context 与设备 API 设计说明](context-device-api-design.md)：Tool 是 Agent Loop 内一次短调用；Task 是后台运行实例，由自动生成的专用启动 Tool 创建，再由统一运行时管理器查询和取消。
 
 ## SDK 内置 Tool
 
@@ -8,13 +8,13 @@
 | ---: | --- | --- | --- | --- |
 | 1 | `close_continuous_dialog` | 保留 | 结束连续对话或安排会话关闭。 | 是 |
 | 2 | `query_device_state` | 保留 | 查询当前用户在线设备和能力快照。 | 是 |
-| 3 | `task_runtime_manager` | 保留 | 统一启动、查询、取消和列出 Task 运行实例。 | 是 |
+| 3 | `task_runtime_manager` | 保留 | 查询、取消和列出 Task 运行实例。 | 是 |
 | 4 | `memory_search` | 保留 | 查询长期记忆。 | 是，受 memory 配置控制 |
 | 5 | `manage_memory` | 保留 | 写入、更新或删除长期记忆。 | 是，受 memory 配置控制 |
 | 6 | `read_skill` | 保留 | 读取受控 Skill 文档。 | 是，受 skill 配置控制 |
 | 7 | `mcp_call` | 保留 | 调用已配置 MCP tool。 | 是，受 mcp 配置控制 |
 
-以下旧工具不再作为 SDK 内置实现：`request_asset`、`capture_photo`、`publish_device_command`、`query_task_status`、`cancel_task`。对应底层能力分别保留在 Context 设备 API 或 `task_runtime_manager` 中。
+以下旧工具不再作为 SDK 内置实现：`request_asset`、`capture_photo`、`publish_device_command`、`query_task_status`、`cancel_task`。对应底层能力分别保留在 Context 设备 API、自动生成的 `start_*_task` Tool 或 `task_runtime_manager` 中。
 
 ## for-blind-app Tool
 
@@ -24,7 +24,7 @@
 | 9 | `query_route_plan` | App 能力 | 调 MCP `amap.route_plan` mock/fallback 查询路线。 | 否 |
 | 10 | `search_web` | App 能力 | 调 MCP `web.search` mock/fallback 搜索资料。 | 否 |
 
-专用 Task 启动 Tool、联调样板 Tool 和重复计时器入口已清理。后台能力统一通过 `task_runtime_manager` 启动对应 Task。
+业务 Task 不再手写重复的启动 Tool；SDK 会按 TaskSpec 自动生成 `start_find_object_task`、`start_traffic_light_task`、`start_timer_task` 这类模型可见启动 Tool。
 
 ## for-blind-app Task
 

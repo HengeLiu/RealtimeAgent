@@ -44,6 +44,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -247,7 +248,7 @@ def test_realtime_audio_done_closes_current_output_stream(tmp_path) -> None:
     instances[0].emit_done()
 
     assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
-    model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text()
+    model_events = (tmp_path / "runs" / "user-001" / handle.session_id / "model-events.jsonl").read_text()
     assert "assistant_audio.done" in model_events
 
 
@@ -323,7 +324,7 @@ def test_realtime_provider_failure_suppresses_repeated_append_errors(tmp_path) -
 
     assert len(instances) == 1
     assert instances[0].append_calls == 1
-    model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text()
+    model_events = (tmp_path / "runs" / "user-001" / handle.session_id / "model-events.jsonl").read_text()
     assert model_events.count("realtime.session.failed") == 1
 
 
@@ -434,7 +435,7 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
 
     tool_names = {tool["name"] for tool in instances[0].config.tools}
     assert "echo_realtime" in tool_names
-    model_request = (tmp_path / "runs" / "sessions" / handle.session_id / "model-request.json").read_text(
+    model_request = (tmp_path / "runs" / "user-001" / handle.session_id / "model-request.json").read_text(
         encoding="utf-8"
     )
     assert "agent_core_realtime_audio" in model_request
@@ -496,6 +497,62 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert conversation.responses[0]["instructions"] == "继续回答"
     assert any(record.get("event") == "omni.tool_followup_response.created" for record in records)
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
+
+
+def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> None:
+    """测试目标：验证 Realtime 工具失败后 follow-up 明确约束模型承认失败。
+
+    测试方法：模拟 task_runtime_manager 启动任务失败，触发工具结果回填和 response.done。
+    预期结果：创建 follow-up response 的 instructions 包含失败原因，并禁止声称成功。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    class FakeConversation:
+        """记录 provider adapter 写回的会话操作。"""
+
+        def __init__(self) -> None:
+            self.items = []
+            self.responses = []
+
+        def create_item(self, item: dict) -> None:
+            self.items.append(item)
+
+        def create_response(self, **kwargs) -> None:
+            self.responses.append(kwargs)
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="基础指令"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+
+    provider._submit_tool_result(
+        call_id="call-failed-task",
+        result={
+            "tool_call_id": "call-failed-task",
+            "name": "task_runtime_manager",
+            "ok": False,
+            "data": None,
+            "message": "任务启动失败：unknown task: timer",
+            "error": {"code": "not_found", "message": "unknown task: timer", "retryable": False, "details": {}},
+            "meta": {"operation": "task_start", "requested_task_type": "timer", "resolved_task_type": "timer"},
+        },
+    )
+    provider._handle_provider_event({"type": "response.done", "response": {"status": "completed"}})
+
+    instructions = conversation.responses[0]["instructions"]
+    assert "基础指令" in instructions
+    assert "工具调用失败" in instructions
+    assert "unknown task: timer" in instructions
+    assert "任务没有启动" in instructions
+    assert "不能声称工具已经执行成功" in instructions
 
 
 def test_qwen_omni_final_audio_chunk_commits_input_boundary() -> None:
@@ -839,7 +896,7 @@ def test_realtime_provider_text_is_persisted_to_user_messages(tmp_path) -> None:
         record={"event": "omni.response.audio_transcript.done", "transcript": ""},
     )
 
-    messages = (tmp_path / "runs" / "users" / "user-001" / "messages.jsonl").read_text(encoding="utf-8")
+    messages = (tmp_path / "runs" / "user-001" / "sess-001" / "messages.jsonl").read_text(encoding="utf-8")
     assert '"role": "user"' in messages
     assert "帮我查一下有哪些设备在线。" in messages
     assert '"role": "assistant"' in messages
@@ -871,7 +928,7 @@ def test_realtime_tool_call_is_persisted_to_user_messages(tmp_path) -> None:
     )
 
     assert result["ok"] is True
-    messages = (tmp_path / "runs" / "users" / "user-001" / "messages.jsonl").read_text(encoding="utf-8")
+    messages = (tmp_path / "runs" / "user-001" / "sess-001" / "messages.jsonl").read_text(encoding="utf-8")
     assert "assistant_tool_call.done" in messages
     assert "tool_result.done" in messages
     assert "echo_realtime" in messages
@@ -915,7 +972,7 @@ def test_realtime_core_replays_last_user_audio_for_capture_photo(tmp_path) -> No
     )
 
     assert chunks == [b"\x01\x02", b"\x03\x04"]
-    model_events = (tmp_path / "runs" / "sessions" / "sess-replay" / "model-events.jsonl").read_text(
+    model_events = (tmp_path / "runs" / "user-001" / "sess-replay" / "model-events.jsonl").read_text(
         encoding="utf-8"
     )
     assert "realtime.input_audio.replay.prepared" in model_events

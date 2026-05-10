@@ -49,11 +49,13 @@ TASK_TRANSITIONS = {
 class TaskSpec:
     """Task 运行规格。
 
-    主要功能：把 Task 类型、版本、超时、取消能力和用户级并发限制收敛成稳定描述。
-    主要属性：`task_type/version/timeout_seconds/cancel_supported/max_running_per_user`。
+    主要功能：把 Task 类型、启动输入、版本、超时、取消能力和用户级并发限制收敛成稳定描述。
+    主要属性：`task_type/input_model/start_tool_name/version/timeout_seconds/cancel_supported/max_running_per_user`。
     """
 
     task_type: str
+    input_model: Any = dict
+    start_tool_name: str | None = None
     version: str = "v1"
     timeout_seconds: float | None = None
     cancel_supported: bool = True
@@ -227,6 +229,8 @@ class BaseTask:
 
     task_type: str = ""
     description: str = ""
+    input_model: Any = dict
+    start_tool_name: str | None = None
     version: str = "v1"
     timeout_seconds: float | None = None
     cancel_supported: bool = True
@@ -244,6 +248,8 @@ class BaseTask:
 
         return TaskSpec(
             task_type=cls.task_type or cls.__name__,
+            input_model=getattr(cls, "input_model", dict),
+            start_tool_name=getattr(cls, "start_tool_name", None),
             version=str(getattr(cls, "version", "v1") or "v1"),
             timeout_seconds=getattr(cls, "timeout_seconds", None),
             cancel_supported=bool(getattr(cls, "cancel_supported", True)),
@@ -641,6 +647,7 @@ class TaskEngine:
                 {
                     "task_type": spec.task_type,
                     "description": str(getattr(task_cls, "description", "") or ""),
+                    "start_tool_name": spec.start_tool_name or _default_task_start_tool_name(spec.task_type),
                     "version": spec.version,
                     "timeout_seconds": spec.timeout_seconds,
                     "cancel_supported": spec.cancel_supported,
@@ -1068,6 +1075,15 @@ def _resolve_timeout_seconds(spec: TaskSpec, input_data: dict) -> float | None:
         return None
     value = float(raw)
     return value if value > 0 else None
+
+
+def _default_task_start_tool_name(task_type: str) -> str:
+    """Return the model-visible start tool name for a task type."""
+
+    normalized = str(task_type or "").strip()
+    if normalized.endswith("_task"):
+        return f"start_{normalized}"
+    return f"start_{normalized}_task"
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

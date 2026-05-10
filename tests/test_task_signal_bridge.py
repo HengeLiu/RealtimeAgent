@@ -34,11 +34,8 @@ def register_speaker(app: AudioChatApp, connection: SpeakerConnection) -> None:
             producer_id="dev-speaker",
             payload={
                 "device_id": "dev-speaker",
-                "supports": {
-                    "actuators": [
-                        {"type": "speaker", "commands": ["play"], "default": {"sample_rate_hz": 16000}},
-                    ],
-                },
+                "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
                 "auth": {"mode": "disabled"},
             },
         ),

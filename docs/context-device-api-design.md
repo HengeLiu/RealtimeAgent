@@ -193,7 +193,7 @@ Task 执行时：
 | Memory | `memory.search`、`memory.write` 等专用 Tool。 | 让模型可见何时读写记忆，便于审计。 |
 | Skill | `skill.read`、`skill.search` 等专用 Tool。 | Skill 选择应进入 Agent 决策，而不是被某个 Tool 隐式读取。 |
 | MCP | MCP wrapper Tool。 | 保持外部服务调用的 schema、权限和日志可见。 |
-| Task | `task.start_*`、`task.cancel_*` 专用 Tool。 | 长任务启动是模型行为，应有明确工具调用记录。 |
+| Task | SDK 自动生成的 `start_*_task` Tool，以及 `task_runtime_manager` 查询/取消 Tool。 | 长任务启动是模型行为，应有明确工具调用记录；查询、取消和列表属于运行时管理。 |
 
 ## 3. Asset 是否需要存在
 
@@ -985,30 +985,55 @@ TaskSignal(
 | `CommandEvent` | Context 设备命令 API | 持续命令或端侧任务的状态回报，由 server Task 消费。 |
 | `TaskSignal` / `signal_name` | Task 管理域 | server Task 的状态回流、通知和 Agent 决策同步。 |
 
-### 8.6 Task 运行时管理 Tool
+### 8.6 Task 启动 Tool 与运行时管理 Tool
 
-SDK 只提供一个模型可见的 Task 运行时入口：`task_runtime_manager`。业务能力不再新增
-按单个 Task 命名的专用启动、查询或取消 Tool。
+Task 对开发者仍然是后台运行时抽象，不继承 `BaseTool`。但从模型视角，启动 Task 必须表现为普通 provider tool call。SDK 在 Task 注册后按 `TaskSpec` 自动生成一个模型可见启动 Tool：
+
+```text
+find_object_task -> start_find_object_task
+traffic_light_task -> start_traffic_light_task
+timer_task -> start_timer_task
+```
+
+每个启动 Tool 的参数 schema 来自 Task 的 `input_model`。`input_model` 与 Tool 的 `ToolSpec.input_model` 使用同一套规则：推荐用 Pydantic `BaseModel` 定义输入，字段类型、必填项、默认值、范围约束和 `Field(description=...)` 会进入 provider tool schema；JSON Schema dict 只作为兼容入口。模型不需要知道 `TaskEngine.create()`、`task_type` 或 `input_data` 这类内部字段，只需要调用具体启动 Tool：
 
 ```json
 {
-  "action": "start",
-  "task_type": "find_object_task",
-  "input_data": {
+  "tool": "start_find_object_task",
+  "arguments": {
     "object_name": "水杯"
   }
 }
 ```
 
-`task_runtime_manager` 支持：
+启动 Tool 内部由 SDK 转换为：
+
+```python
+task_engine.create(
+    task_type="find_object_task",
+    user_id=context.user_id,
+    session_id=context.session_id,
+    input_data={"object_name": "水杯"},
+)
+```
+
+`task_runtime_manager` 只负责已创建 Task 的运行时管理，不再作为模型首选启动入口：
 
 | action | 用途 |
 | --- | --- |
 | `list_types` | 列出当前已注册 Task 类型和规格。 |
-| `start` | 启动一个已注册 Task。 |
 | `query` | 查询 TaskRef。 |
 | `cancel` | 取消仍在运行的 Task。 |
 | `list_instances` | 列出当前用户的 Task 实例。 |
+
+这个拆分保持了 Tool 与 Task 的边界：
+
+| 层 | 责任 |
+| --- | --- |
+| `BaseTool` | 模型可调用的一次性接口，拥有 provider tool schema。 |
+| 自动生成的 `TaskStartTool` | 把具体 Task 的启动参数暴露给模型，并调用 TaskEngine 创建后台实例。 |
+| `BaseTask` | 后台生命周期、状态机、调度信号、取消、恢复和长时设备流。 |
+| `task_runtime_manager` | 查询、取消、列出 Task 实例和类型。 |
 
 ## 9. 推荐 Tool 示例
 

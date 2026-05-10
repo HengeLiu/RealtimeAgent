@@ -108,7 +108,9 @@ class ToolResult:
         返回值：`ToolResult`。
         异常情况：无。
         """
-        return cls(ok=False, assets=[], artifacts=[], tasks=[], meta={}, error=error.to_dict())
+        error_dict = error.to_dict()
+        message = str(error_dict.get("message") or error)
+        return cls(ok=False, message=message, assets=[], artifacts=[], tasks=[], meta={}, error=error_dict)
 
     @property
     def content(self) -> Any:
@@ -1880,26 +1882,23 @@ class QueryDeviceStateTool(BaseTool):
 class TaskRuntimeManagerTool(BaseTool):
     """统一管理 TaskEngine 运行实例的内置 Tool。
 
-    主要功能：以一个模型可见工具承载 Task 的启动、查询、取消和列表能力。
-    业务 Task 只注册到 TaskRegistry，不再为每类 Task 暴露专用启动 Tool。
+    主要功能：以一个模型可见工具承载 Task 的查询、取消和列表能力。
+    业务 Task 启动由 SDK 自动生成的专用 start_* Tool 暴露给模型。
     """
 
     class Input(BaseModel):
-        action: Literal["start", "query", "cancel", "list_types", "list_instances"] = Field(
-            description="任务管理动作：start 启动，query 查询，cancel 取消，list_types 列出类型，list_instances 列出实例。",
+        action: Literal["query", "cancel", "list_types", "list_instances"] = Field(
+            description="任务管理动作：query 查询，cancel 取消，list_types 列出类型，list_instances 列出实例。启动任务请调用对应 start_* Tool。",
         )
-        task_type: str | None = Field(default=None, description="启动任务时使用的 Task 类型。")
         task_id: str | None = Field(default=None, description="查询或取消任务时使用的任务编号。")
-        input_data: dict = Field(default_factory=dict, description="启动任务时传给 Task 的结构化输入。")
-        summary: str = Field(default="", description="启动任务时写入任务引用的简短摘要。")
         reason: str = Field(default="tool_requested", description="取消任务时使用的原因。")
         include_terminal: bool = Field(default=True, description="列出任务实例时是否包含已完成、取消、失败或超时任务。")
 
     spec = ToolSpec(
         name="task_runtime_manager",
         description=(
-            "统一管理后台 Task 运行实例。需要启动、查询、取消或列出 Task 时调用；"
-            "启动时必须提供已注册的 task_type，不要调用或猜测某个业务 Task 的专用启动工具。"
+            "统一管理后台 Task 运行实例。只用于查询、取消或列出 Task；"
+            "启动任务必须调用具体的 start_* Tool，例如 start_timer_task。"
         ),
         input_model=Input,
         capability_type="task",
@@ -1949,15 +1948,173 @@ class TaskRuntimeManagerTool(BaseTool):
             task_type = str(input_data.get("task_type") or "").strip()
             if not task_type:
                 return ToolResult.failed(ToolError("task_type is required", code=ErrorCode.INVALID_ARGUMENT))
-            ref = await context.tasks.create(
+            start_input = _normalize_task_runtime_start_input(
                 task_type=task_type,
-                user_id=context.user_id,
-                session_id=context.session_id,
                 input_data=dict(input_data.get("input_data") or {}),
-                summary=str(input_data.get("summary") or ""),
+                available_task_types=_task_runtime_task_type_names(context.tasks.list_task_types()),
             )
+            try:
+                ref = await context.tasks.create(
+                    task_type=start_input["task_type"],
+                    user_id=context.user_id,
+                    session_id=context.session_id,
+                    input_data=start_input["input_data"],
+                    summary=str(input_data.get("summary") or ""),
+                )
+            except AudioChatError as exc:
+                error = exc.to_dict()
+                requested_task_type = task_type
+                resolved_task_type = str(start_input["task_type"])
+                message = f"任务启动失败：{error.get('message') or str(exc)}"
+                return ToolResult(
+                    ok=False,
+                    message=message,
+                    assets=[],
+                    artifacts=[],
+                    tasks=[],
+                    meta={
+                        "operation": "task_start",
+                        "requested_task_type": requested_task_type,
+                        "resolved_task_type": resolved_task_type,
+                    },
+                    error=error,
+                )
             return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
         return ToolResult.failed(ToolError(f"unknown task action: {action}", code=ErrorCode.INVALID_ARGUMENT))
+
+
+class TaskStartTool(BaseTool):
+    """由 SDK 根据 BaseTask 自动生成的模型可见启动 Tool。"""
+
+    def __init__(
+        self,
+        *,
+        task_type: str,
+        description: str,
+        input_model: Any = dict,
+        tool_name: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.task_type = task_type
+        self.name = tool_name or _default_task_start_tool_name(task_type)
+        task_description = str(description or f"启动 {task_type} 后台任务。").strip()
+        self.description = task_description
+        self.input_model = input_model
+        self.timeout_seconds = timeout_seconds
+        self.spec = ToolSpec(
+            name=self.name,
+            description=_task_start_tool_description(task_type=task_type, description=task_description),
+            input_model=input_model,
+            capability_type="task",
+            tags=["task", "start", task_type],
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        if not isinstance(context, SystemToolContext) or context.tasks is None:
+            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        try:
+            ref = await context.tasks.create(
+                task_type=self.task_type,
+                user_id=context.user_id,
+                session_id=context.session_id,
+                input_data=dict(input_data or {}),
+                summary=str(self.description or self.task_type),
+            )
+        except AudioChatError as exc:
+            error = exc.to_dict()
+            return ToolResult(
+                ok=False,
+                message=f"任务启动失败：{error.get('message') or str(exc)}",
+                assets=[],
+                artifacts=[],
+                tasks=[],
+                meta={
+                    "operation": "task_start",
+                    "requested_task_type": self.task_type,
+                    "resolved_task_type": self.task_type,
+                    "start_tool_name": self.name,
+                },
+                error=error,
+            )
+        return ToolResult.success(
+            data=ref.__dict__,
+            tasks=[ref],
+            message=f"{self.task_type} started",
+            meta={"operation": "task_start", "start_tool_name": self.name},
+        )
+
+
+def _default_task_start_tool_name(task_type: str) -> str:
+    normalized = str(task_type or "").strip()
+    if normalized.endswith("_task"):
+        return f"start_{normalized}"
+    return f"start_{normalized}_task"
+
+
+def _task_start_tool_description(*, task_type: str, description: str) -> str:
+    task = str(task_type or "task").strip()
+    summary = str(description or f"启动 {task} 后台任务。").strip().rstrip("。")
+    return (
+        f"{summary}。"
+        f"当用户明确要求启动或持续执行该后台能力时调用本工具；"
+        f"调用成功后 SDK 会创建 `{task}` 后台 Task 实例并立即返回 task_id。"
+        "Task 会在后台继续运行、发出状态信号或到点通知；"
+        "后续查询进度、列出任务或取消任务请使用 task_runtime_manager。"
+    )
+
+
+def _task_runtime_task_type_names(rows: Any) -> set[str]:
+    """Extract registered task type names from TaskEngine list output."""
+
+    names: set[str] = set()
+    for row in rows or []:
+        if isinstance(row, dict):
+            value = row.get("task_type")
+        else:
+            value = row
+        text = str(value or "").strip()
+        if text:
+            names.add(text)
+    return names
+
+
+def _normalize_task_runtime_start_input(
+    *,
+    task_type: str,
+    input_data: dict,
+    available_task_types: set[str],
+) -> dict[str, Any]:
+    """Normalize common model aliases for built-in task starts."""
+
+    normalized_type = task_type
+    normalized_input = dict(input_data)
+    if task_type in {"timer", "timer_task", "reminder", "alarm", "countdown", "计时器", "倒计时", "提醒", "闹钟"}:
+        if "timer_task" in available_task_types:
+            normalized_type = "timer_task"
+            normalized_input = _normalize_timer_task_input(normalized_input)
+    return {"task_type": normalized_type, "input_data": normalized_input}
+
+
+def _normalize_timer_task_input(input_data: dict) -> dict:
+    """Map provider-friendly timer/reminder fields to the sample timer_task contract."""
+
+    normalized = dict(input_data)
+    seconds = normalized.get("seconds")
+    if seconds is None:
+        seconds = normalized.get("duration_seconds")
+    if seconds is None:
+        seconds = normalized.get("delay_seconds")
+    if seconds is None:
+        seconds = normalized.get("timeout_seconds")
+    if seconds is not None:
+        normalized["seconds"] = int(float(seconds))
+    message = str(normalized.get("message") or normalized.get("notify_text") or normalized.get("text") or "").strip()
+    if message:
+        normalized["message"] = message
+        normalized["notify_text"] = message
+    normalized.setdefault("auto_fire", True)
+    return normalized
 
 
 class MemorySearchTool(BaseTool):

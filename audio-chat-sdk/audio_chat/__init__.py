@@ -33,6 +33,7 @@ from audio_chat.tools import (
     ToolGateway,
     ToolResult,
     ToolSpec,
+    TaskStartTool,
     ToolTrace,
 )
 
@@ -84,6 +85,7 @@ __all__ = [
     "TaskSignal",
     "TaskSignalBridge",
     "TaskSpec",
+    "TaskStartTool",
     "TaskStore",
     "ToolContext",
     "ToolContextFactory",

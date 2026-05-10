@@ -35,7 +35,15 @@ def test_app_name_loads_server_yaml_and_auto_registers_capabilities() -> None:
     assert config.config_path == str(launch.config_path)
     assert config.tools_discover_enabled is True
     assert config.tasks_discover_enabled is True
-    assert {"capture_photo", "query_route_plan", "search_web", "task_runtime_manager"} <= set(app.tool_registry.list_names())
+    assert {
+        "capture_photo",
+        "query_route_plan",
+        "search_web",
+        "task_runtime_manager",
+        "start_find_object_task",
+        "start_traffic_light_task",
+        "start_timer_task",
+    } <= set(app.tool_registry.list_names())
     assert {"find_object_task", "traffic_light_task", "timer_task"} <= set(app.task_engine.registry.list_task_types())
 
 

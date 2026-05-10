@@ -81,6 +81,9 @@ def test_for_blind_capability_packages_are_auto_discovered(tmp_path, monkeypatch
         "query_route_plan",
         "search_web",
         "task_runtime_manager",
+        "start_find_object_task",
+        "start_traffic_light_task",
+        "start_timer_task",
     } <= set(app.tool_registry.list_names())
     assert {
         "find_object_task",
@@ -94,7 +97,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
     """测试目标：验证整改后的 for-blind 能力至少各有一个成功路径回放。
 
     测试方法：注册具备 RGB 和 speaker 能力的 playback 设备，调用应用 Tool，并通过
-    `task_runtime_manager` 统一启动找物、红绿灯和计时器 Task。
+    专用 `start_*_task` Tool 启动找物、红绿灯和计时器 Task。
     预期结果：result、tool、task、asset、output 等产物能解释全链路。
     """
 
@@ -112,26 +115,18 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
     )
     find_object = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_find_object_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "find_object_task",
-                "input_data": {"object_name": "水杯", "mock_found": True},
-            },
+            input_data={"object_name": "水杯", "mock_found": True},
         )
     )
     traffic_light = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_traffic_light_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "traffic_light_task",
-                "input_data": {"mock_state": "green"},
-            },
+            input_data={"mock_state": "green"},
         )
     )
     route = asyncio.run(
@@ -152,14 +147,10 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
     )
     timer = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_timer_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "timer_task",
-                "input_data": {"seconds": 0, "auto_fire": True},
-            },
+            input_data={"seconds": 0, "auto_fire": True},
         )
     )
     result = {
@@ -183,7 +174,9 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
 
     for expected in [
         "capture_photo",
-        "task_runtime_manager",
+        "start_find_object_task",
+        "start_traffic_light_task",
+        "start_timer_task",
         "query_route_plan",
         "search_web",
     ]:
@@ -203,7 +196,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
 def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_path, monkeypatch) -> None:
     """测试目标：覆盖计时器创建、查询、取消和到点通知四种迁移语义。
 
-    测试方法：通过 `task_runtime_manager` 创建一个不自动到点的任务，随后查询并取消；
+    测试方法：通过 `start_timer_task` 创建一个不自动到点的任务，随后查询并取消；
     再创建一个自动到点任务验证 `TaskContext.schedule_signal()` 会回流 `timer.due`。
     预期结果：取消任务进入 cancelled，到点任务进入 completed，并产生可播报输出。
     """
@@ -214,14 +207,10 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
 
     created = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_timer_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "timer_task",
-                "input_data": {"seconds": 30, "auto_fire": False},
-            },
+            input_data={"seconds": 30, "auto_fire": False},
         )
     )
     task_id = created.data["task_id"]
@@ -243,14 +232,10 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
     )
     due = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_timer_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "timer_task",
-                "input_data": {"seconds": 0, "auto_fire": True},
-            },
+            input_data={"seconds": 0, "auto_fire": True},
         )
     )
 
@@ -265,7 +250,7 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
 def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, monkeypatch) -> None:
     """测试目标：计时器创建应立即返回 running，并把到点事件按秒数延后触发。
 
-    测试方法：替换 `threading.Timer` 为记录型 fake，不主动触发回调，通过统一 Task 管理 Tool 启动。
+    测试方法：替换 `threading.Timer` 为记录型 fake，不主动触发回调，通过专用 Task 启动 Tool 启动。
     预期结果：创建 60 秒计时器不会立刻 completed，且调度延迟为 60 秒。
     """
 
@@ -287,14 +272,10 @@ def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, mon
 
     created = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_timer_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "timer_task",
-                "input_data": {"seconds": 60, "auto_fire": True},
-            },
+            input_data={"seconds": 60, "auto_fire": True},
         )
     )
 
@@ -303,11 +284,10 @@ def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, mon
     assert scheduled and scheduled[0]["interval"] == 60
 
 
-def test_timer_start_alias_creates_timer_task(tmp_path, monkeypatch) -> None:
-    """测试目标：验证模型通过统一 Task 管理 Tool 能创建计时器后台任务。
+def test_timer_start_tool_creates_timer_task(tmp_path, monkeypatch) -> None:
+    """测试目标：验证模型通过专用 Task 启动 Tool 能创建计时器后台任务。
 
-    测试方法：替换 `threading.Timer` 避免真实等待，通过 `task_runtime_manager`
-    传入 `{"action": "start", "task_type": "timer_task"}`。
+    测试方法：替换 `threading.Timer` 避免真实等待，通过 `start_timer_task` 传入计时参数。
     预期结果：工具调用成功，返回 running 任务，并按秒数调度到点事件。
     """
 
@@ -329,14 +309,10 @@ def test_timer_start_alias_creates_timer_task(tmp_path, monkeypatch) -> None:
 
     created = asyncio.run(
         app.tool_gateway.call(
-            name="task_runtime_manager",
+            name="start_timer_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={
-                "action": "start",
-                "task_type": "timer_task",
-                "input_data": {"seconds": 60, "auto_fire": True},
-            },
+            input_data={"seconds": 60, "auto_fire": True},
         )
     )
 

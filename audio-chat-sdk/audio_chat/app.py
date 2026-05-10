@@ -25,6 +25,8 @@ from audio_chat.tools import (
     BUILTIN_TOOLS,
     EXTENSION_BUILTIN_TOOLS,
     OutputFacade,
+    SYSTEM_CONTEXT_TOOL_NAMES,
+    TaskStartTool,
     ToolAutoDiscovery,
     ToolContextFactory,
     ToolGateway,
@@ -377,6 +379,21 @@ class AudioChatApp:
                     continue
                 self.tool_registry.register(tool)
             self.discovery_errors.extend(tool_discovery.errors)
+        for task_info in self.task_engine.list_task_types():
+            task_type = str(task_info.get("task_type") or "").strip()
+            if not task_type:
+                continue
+            task_cls = self.task_engine.registry.get(task_type)
+            task_spec = task_cls.spec()
+            start_tool = TaskStartTool(
+                task_type=task_type,
+                description=str(getattr(task_cls, "description", "") or f"启动 {task_type} 后台任务。"),
+                input_model=task_spec.input_model,
+                tool_name=task_spec.start_tool_name or str(task_info.get("start_tool_name") or ""),
+                timeout_seconds=task_spec.timeout_seconds,
+            )
+            self.tool_registry.register(start_tool)
+            SYSTEM_CONTEXT_TOOL_NAMES.add(start_tool.resolved_spec().name)
         self.tool_gateway = ToolGateway(
             registry=self.tool_registry,
             policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),

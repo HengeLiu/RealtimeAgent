@@ -428,7 +428,7 @@ class QwenOmniRealtimeAdapter:
             image_path = _resolve_capture_photo_tool_image_path(result)
             image_bytes = image_path.read_bytes() if image_path is not None else None
             create_followup_response = True
-            response_instructions = self.config.instructions
+            response_instructions = _tool_result_followup_instructions(self.config.instructions, result)
             if image_bytes:
                 append_video = getattr(self._conversation, "append_video", None)
                 if callable(append_video):
@@ -590,6 +590,28 @@ def _capture_photo_response_instructions(base: str) -> str:
         "刚刚通过 capture_photo 工具提交了一张新的实时照片。"
         "本次回答必须只基于刚提交的这张照片回答用户上一轮视觉问题；"
         "如果它和历史照片或历史描述冲突，以刚提交的新照片为准。"
+    )
+
+
+def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str:
+    """构造工具结果后的 follow-up 响应指令。"""
+
+    if result.get("ok") is not False:
+        return base
+    error = result.get("error") if isinstance(result.get("error"), dict) else {}
+    message = str(result.get("message") or error.get("message") or "工具调用失败").strip()
+    name = str(result.get("name") or "工具").strip()
+    operation = str((result.get("meta") or {}).get("operation") or "").strip()
+    task_rule = ""
+    if operation == "task_start" or name == "task_runtime_manager":
+        task_rule = "如果这是后台任务或计时器启动失败，必须明确告诉用户任务没有启动、不会按时提醒。"
+    return (
+        f"{base}\n\n"
+        "刚刚的工具调用失败了。"
+        f"工具名：{name}。失败原因：{message}。"
+        "本次回答必须把失败事实直接告知用户，不能声称工具已经执行成功。"
+        f"{task_rule}"
+        "请用简短口语中文说明，并在合适时建议用户重试。"
     )
 
 

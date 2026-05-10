@@ -39,6 +39,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str) ->
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -93,7 +94,7 @@ def test_realtime_tool_bridge_commits_json_argument_delta_inside_running_loop(tm
 
     assert result["ok"] is True
     assert result["data"]["city"] == "hangzhou"
-    trace_text = (tmp_path / "runs" / "sessions" / "sess-rt" / "tool-events.jsonl").read_text(encoding="utf-8")
+    trace_text = (tmp_path / "runs" / "user-rt" / "sess-rt" / "tool-events.jsonl").read_text(encoding="utf-8")
     assert "realtime_city_lookup" in trace_text
 
 
@@ -171,7 +172,7 @@ def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) 
         )
     )
 
-    model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text(encoding="utf-8")
+    model_events = (tmp_path / "runs" / "user-rt" / handle.session_id / "model-events.jsonl").read_text(encoding="utf-8")
     assert "realtime.tool_result.ready" in model_events
     assert "handled_by_provider_adapter" in model_events
     assert "tool.progress_message.emitted" not in model_events

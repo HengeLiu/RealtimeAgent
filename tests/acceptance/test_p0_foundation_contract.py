@@ -41,6 +41,7 @@ def test_tool_result_public_contract_fields() -> None:
     assert success.metadata == success.meta
 
     assert failure.ok is False
+    assert failure.message == "bad input"
     assert failure.error == {
         "code": "invalid_argument",
         "message": "bad input",

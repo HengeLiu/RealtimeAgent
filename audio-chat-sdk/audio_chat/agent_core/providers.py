@@ -392,17 +392,12 @@ class MockTextModelAdapter:
                 "name": "capture_photo",
                 "arguments": {"reason": text, "timeout_seconds": 5, "freshness_seconds": 0},
             }
-        if "task_runtime_manager" in tool_names and any(keyword in text for keyword in ("计时", "提醒", "分钟", "秒")):
+        if "start_timer_task" in tool_names and any(keyword in text for keyword in ("计时", "提醒", "分钟", "秒")):
             return {
                 "type": "tool_call",
-                "id": "call_mock_task_runtime_timer",
-                "name": "task_runtime_manager",
-                "arguments": {
-                    "action": "start",
-                    "task_type": "timer_task",
-                    "input_data": {"seconds": self._timer_seconds(text), "auto_fire": False},
-                    "summary": "计时器任务",
-                },
+                "id": "call_mock_start_timer_task",
+                "name": "start_timer_task",
+                "arguments": {"seconds": self._timer_seconds(text), "auto_fire": False},
             }
         return None
 
@@ -442,6 +437,9 @@ class MockTextModelAdapter:
         if name == "task_runtime_manager":
             task_id = data.get("task_id") or "新的计时器"
             return (f"计时器已创建，任务编号是 {task_id}。",)
+        if name.startswith("start_") and name.endswith("_task"):
+            task_id = data.get("task_id") or "新的任务"
+            return (f"任务已启动，编号是 {task_id}。",)
         return (str(content.get("message") or "工具调用完成。"),)
 
 

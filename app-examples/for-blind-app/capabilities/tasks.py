@@ -1,6 +1,64 @@
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
 from audio_chat import BaseTask, TaskContext, TaskSignal
+
+
+class FindObjectTaskInput(BaseModel):
+    """找物后台任务启动参数。"""
+
+    object_name: str = Field(
+        description="用户要寻找的目标物体名称，例如水杯、钥匙、门口、座位。目标明确时必须填写。",
+    )
+    timeout_seconds: float = Field(
+        default=5,
+        gt=0,
+        description="等待眼镜端上传当前 RGB 图片的最长时间，单位秒；普通找物场景建议使用 5 秒。",
+    )
+    mock_found: bool = Field(
+        default=True,
+        description="仅用于测试或回放：是否模拟已经找到目标物。真实视觉实现接入后不应由模型填写。",
+    )
+    mock_confidence: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="仅用于测试或回放：模拟识别置信度，范围 0 到 1；不确定时留空。",
+    )
+
+
+class TrafficLightTaskInput(BaseModel):
+    """红绿灯后台任务启动参数。"""
+
+    mock_state: Literal["green", "red", "yellow"] = Field(
+        default="green",
+        description="仅用于测试或回放：模拟红绿灯状态，可填 green、red 或 yellow；真实视觉实现接入后不应由模型填写。",
+    )
+    timeout_seconds: float = Field(
+        default=5,
+        gt=0,
+        description="等待眼镜端上传当前 RGB 图片的最长时间，单位秒；过马路判断建议使用 5 秒以内。",
+    )
+
+
+class TimerTaskInput(BaseModel):
+    """计时器后台任务启动参数。"""
+
+    seconds: int = Field(
+        ge=0,
+        description="计时器时长，单位秒。模型必须把用户说的分钟、小时换算成秒，例如一分钟填 60；普通用户计时应大于 0。",
+    )
+    message: str = Field(
+        default="",
+        description="计时结束时播报给用户的话；如果用户没有指定内容，可以留空，系统会使用默认到点提示。",
+    )
+    auto_fire: bool = Field(
+        default=True,
+        description="是否由 SDK 调度器自动在到点时触发提醒；普通用户计时器必须保持 true。",
+    )
 
 
 class FindObjectTask(BaseTask):
@@ -13,7 +71,8 @@ class FindObjectTask(BaseTask):
     """
 
     task_type = "find_object_task"
-    description = "找物 mock 视觉任务"
+    description = "启动找物后台任务。用于用户要求寻找某个物体或确认目标是否在当前视野中；任务会请求眼镜端抓拍当前 RGB 图片，生成找物结果并播报。"
+    input_model = FindObjectTaskInput
 
     async def on_start(self, context: TaskContext) -> None:
         """启动找物视觉任务。
@@ -29,7 +88,7 @@ class FindObjectTask(BaseTask):
             await context.fail("缺少设备上下文")
             return
         input_data = dict(context.metadata.get("input") or {})
-        object_name = str(input_data.get("object_name") or input_data.get("target") or "目标物").strip()
+        object_name = str(input_data.get("object_name") or "目标物").strip()
         asset = await context.devices.sensors.rgb.one(
             params={
                 "format": "jpeg",
@@ -89,7 +148,8 @@ class TrafficLightTask(BaseTask):
     """
 
     task_type = "traffic_light_task"
-    description = "红绿灯 mock 视觉识别任务"
+    description = "启动红绿灯识别后台任务。用于用户过马路、询问红绿灯状态或需要通行建议时；任务会请求当前 RGB 图片并播报可行动作建议。"
+    input_model = TrafficLightTaskInput
 
     async def on_start(self, context: TaskContext) -> None:
         """启动红绿灯识别。
@@ -155,7 +215,8 @@ class TimerTask(BaseTask):
     """
 
     task_type = "timer_task"
-    description = "计时器后台任务"
+    description = "启动计时器后台任务。用于用户要求倒计时、计时、稍后提醒或到点提示；任务会立即返回 task_id，并在指定秒数后通过 speaker 播报提醒。"
+    input_model = TimerTaskInput
 
     async def on_start(self, context: TaskContext) -> None:
         """启动计时器。
@@ -168,6 +229,7 @@ class TimerTask(BaseTask):
 
         input_data = dict(context.metadata.get("input") or {})
         seconds = max(0, int(input_data.get("seconds") or 0))
+        message = str(input_data.get("message") or "").strip()
         auto_fire = bool(input_data.get("auto_fire", True))
         if context.devices is not None:
             await context.output.say(f"{seconds} 秒计时器已启动", priority="normal")
@@ -186,7 +248,7 @@ class TimerTask(BaseTask):
         if auto_fire:
             await context.schedule_signal(
                 "timer.due",
-                payload={"seconds": seconds, "message": f"{seconds} 秒计时器到点了"},
+                payload={"seconds": seconds, "message": message or f"{seconds} 秒计时器到点了"},
                 delay_seconds=seconds,
                 priority="high",
                 requires_agent_decision=False,
