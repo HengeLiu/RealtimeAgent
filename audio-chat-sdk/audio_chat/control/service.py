@@ -1001,6 +1001,21 @@ class ControlService:
     def append_message(self, user_id: str, message: dict[str, Any]) -> None:
         self.recorder.record_message(user_id, message)
 
+    def load_messages(self, *, user_id: str, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """读取同一用户同一设备的历史消息。
+
+        主要逻辑：委托 RunRecorder 从 `messages.jsonl` 读取历史，供 Agent Core 组装
+        模型上下文。
+        参数：`user_id` 为用户编号，`session_id` 为设备级会话编号，`limit` 为最大条数。
+        返回值：历史消息列表。
+        异常情况：底层无读取能力时返回空列表。
+        """
+
+        loader = getattr(self.recorder, "load_messages", None)
+        if not callable(loader):
+            return []
+        return loader(user_id=user_id, session_id=session_id, limit=limit)
+
     def build_user_snapshot(self, user_id: str) -> dict[str, Any]:
         return {
             "user_id": user_id,

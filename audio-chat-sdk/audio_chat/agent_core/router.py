@@ -78,11 +78,20 @@ class AgentCoreRouter:
 
 
 def _text_kwargs(kwargs: dict) -> dict:
+    allowed = {
+        "control_service",
+        "output_service",
+        "recorder",
+        "asr_config",
+        "text_model_config",
+        "tool_gateway",
+        "max_context_messages",
+        "memory_service",
+    }
     return {
         key: value
         for key, value in kwargs.items()
-        if key in {"control_service", "output_service", "recorder", "asr_config", "text_model_config", "tool_gateway"}
-        or key == "memory_service"
+        if key in allowed
     }
 
 

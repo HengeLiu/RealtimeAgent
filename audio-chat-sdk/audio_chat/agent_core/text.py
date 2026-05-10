@@ -19,6 +19,29 @@ from audio_chat.errors import ErrorCode
 from audio_chat.tools import ToolError, ToolGateway, ToolResult
 
 
+def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
+    """把落盘消息转换为模型可消费的历史上下文。
+
+    主要逻辑：只回灌 `user` 和 `assistant` 的文本内容；`tool` 消息留在
+    `messages.jsonl` 中审计，不直接放入新一轮模型请求，避免形成孤立工具结果。
+    参数：`record` 为 `messages.jsonl` 中的一行。
+    返回值：模型消息或 None。
+    异常情况：字段缺失或内容为空时返回 None。
+    """
+
+    role = str(record.get("role") or "").strip()
+    if role not in {"user", "assistant"}:
+        return None
+    content = record.get("content")
+    if isinstance(content, str):
+        text = " ".join(content.strip().split())
+    else:
+        text = ""
+    if not text:
+        return None
+    return {"role": role, "content": text}
+
+
 class AsrPipeline:
     def __init__(self, *, config: AsrProviderConfig, recorder: RunRecorder) -> None:
         self.provider, downgrade_reason = build_asr_provider(config)
@@ -78,6 +101,7 @@ class TextAgentCore:
         text_model_config: TextModelProviderConfig | None = None,
         tool_gateway: ToolGateway | None = None,
         memory_service: Any = None,
+        max_context_messages: int = 30,
     ) -> None:
         self.control_service = control_service
         self.output_service = output_service
@@ -94,6 +118,7 @@ class TextAgentCore:
         self._event_buffer = AgentEventBuffer()
         self.tool_gateway = tool_gateway
         self.memory_service = memory_service
+        self.max_context_messages = max(1, int(max_context_messages or 30))
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 TextAgentCore 使用的 ToolGateway。
@@ -191,7 +216,11 @@ class TextAgentCore:
         异常情况：ToolGateway 会把工具异常转换为 ToolResult，本函数不抛业务异常。
         """
 
-        messages: list[dict[str, Any]] = [{"role": "user", "content": transcript}]
+        messages: list[dict[str, Any]] = self._build_runtime_messages(
+            user_id=user_id,
+            session_id=session_id,
+            transcript=transcript,
+        )
         assistant_parts: list[str] = []
         tools = self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
         system_prompt = self._build_system_prompt(user_id=user_id)
@@ -292,6 +321,35 @@ class TextAgentCore:
         if callable(stream_messages):
             return stream_messages(messages=messages, tools=tools)
         return self.text_model.stream_text(transcript)
+
+    def _build_runtime_messages(self, *, user_id: str, session_id: str, transcript: str) -> list[dict[str, Any]]:
+        """构造发送给文本模型的运行时消息。
+
+        主要逻辑：从同一 `user_id + session_id(device_id)` 的 `messages.jsonl`
+        读取历史 user/assistant 对话文本，再确保当前用户输入位于最后。历史 tool
+        消息不直接回灌给模型，避免缺少配套 assistant tool_calls 时触发 provider 协议错误。
+        参数：`user_id/session_id` 定位历史文件，`transcript` 为当前轮用户文本。
+        返回值：Chat Completions 风格的消息列表，不包含 system message。
+        异常情况：历史读取失败时退化为仅包含当前用户输入。
+        """
+
+        history: list[dict[str, Any]] = []
+        try:
+            history = self.control_service.load_messages(
+                user_id=user_id,
+                session_id=session_id,
+                limit=self.max_context_messages,
+            )
+        except Exception:
+            history = []
+        messages = [_normalize_history_message(item) for item in history]
+        messages = [item for item in messages if item is not None]
+        current = {"role": "user", "content": transcript}
+        if not messages or messages[-1] != current:
+            messages.append(current)
+        if len(messages) > self.max_context_messages:
+            messages = messages[-self.max_context_messages :]
+        return messages
 
     def _build_system_prompt(self, *, user_id: str) -> str:
         """构造当前轮文本模型 system prompt。

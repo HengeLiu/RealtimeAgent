@@ -83,6 +83,7 @@ class AudioChatConfig:
     text_model_provider: str = "mock"
     text_model: str = "mock-text"
     text_system_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
+    text_max_context_messages: int = 30
     tts_provider: str = "mock"
     tts_model: str = "mock-tts"
     tts_voice: str = "mock"
@@ -204,6 +205,7 @@ class AudioChatConfig:
             text_model_provider=text.model_provider,
             text_model=text.model,
             text_system_prompt=_with_memory_instructions(text.system_prompt, enabled=memory_enabled),
+            text_max_context_messages=text.max_context_messages,
             tts_provider=text.tts_provider,
             tts_model=text.tts_model,
             tts_voice=text.tts_voice,
@@ -448,6 +450,7 @@ class AudioChatApp:
                 request_timeout_seconds=self.config.provider_request_timeout_seconds,
                 max_retries=self.config.provider_max_retries,
             ),
+            max_context_messages=self.config.text_max_context_messages,
             tool_gateway=self.tool_gateway,
             memory_service=self.memory_service,
         )

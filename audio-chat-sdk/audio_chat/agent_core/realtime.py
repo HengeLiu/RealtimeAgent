@@ -17,6 +17,31 @@ from audio_chat.protocol import StreamChunk, StreamFormat
 from audio_chat.tools import ToolGateway
 
 
+def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
+    """把落盘消息转换为 Realtime 可注入的历史上下文。"""
+
+    role = str(record.get("role") or "").strip()
+    if role not in {"user", "assistant"}:
+        return None
+    content = record.get("content")
+    text = " ".join(content.strip().split()) if isinstance(content, str) else ""
+    if not text:
+        return None
+    return {"role": role, "content": text}
+
+
+def _history_messages_prompt_fragment(messages: list[dict[str, Any]]) -> str:
+    """把历史消息压成可追加到 Realtime instructions 的中文片段。"""
+
+    if not messages:
+        return ""
+    lines = ["以下是同一用户在本设备上的历史对话，回答时应保持上下文连续："]
+    for message in messages:
+        role = "用户" if message.get("role") == "user" else "助手"
+        lines.append(f"- {role}: {message.get('content')}")
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class RealtimeProviderConfig:
     """Realtime provider 配置。
@@ -860,6 +885,7 @@ class RealtimeAudioAgentCore:
         provider_factory: Callable[[RealtimeProviderConfig], RealtimeProviderAdapter] | None = None,
         tool_gateway: ToolGateway | None = None,
         memory_service: Any = None,
+        max_context_messages: int = 30,
         **_: Any,
     ) -> None:
         self.output_service = output_service
@@ -867,6 +893,7 @@ class RealtimeAudioAgentCore:
         self.control_service = control_service
         self.realtime_config = realtime_config or RealtimeProviderConfig()
         self.memory_service = memory_service
+        self.max_context_messages = max(1, int(max_context_messages or 30))
         self.provider_factory = provider_factory or self._default_provider_factory
         self.output_adapter = RealtimeOutputAdapter(output_service=output_service, recorder=recorder)
         self.tool_bridge = RealtimeToolBridge(tool_gateway=tool_gateway, recorder=recorder)
@@ -899,11 +926,21 @@ class RealtimeAudioAgentCore:
             existing[1].close(user_id=user_id, reason="session_replaced")
         self._failed_sessions.discard(session_id)
         tools = self._realtime_tool_schemas()
+        history_messages = self._load_runtime_messages(user_id=user_id, session_id=session_id)
         instructions = self._build_instructions(user_id=user_id)
+        history_fragment = _history_messages_prompt_fragment(history_messages)
+        if history_fragment:
+            instructions = f"{instructions}\n\n{history_fragment}"
         session_config = replace(self.realtime_config, tools=tools, instructions=instructions)
         self.recorder.record_model_request(
             session_id,
-            self._build_model_request(user_id=user_id, session_id=session_id, config=session_config, tools=tools),
+            self._build_model_request(
+                user_id=user_id,
+                session_id=session_id,
+                config=session_config,
+                tools=tools,
+                history_messages=history_messages,
+            ),
         )
         provider = self.provider_factory(session_config)
         callbacks = self._callbacks(user_id=user_id, session_id=session_id)
@@ -1209,6 +1246,30 @@ class RealtimeAudioAgentCore:
                 tools.append(schema)
         return tools
 
+    def _load_runtime_messages(self, *, user_id: str, session_id: str) -> list[dict[str, Any]]:
+        """读取 Realtime 会话启动时可注入的历史对话。
+
+        主要逻辑：Realtime provider 没有标准 Chat Completions messages 入参，因此
+        读取历史 user/assistant 文本后注入 instructions，同时写入等价 model_request
+        视图，方便排障。
+        参数：`user_id/session_id` 定位同一用户同一设备的 `messages.jsonl`。
+        返回值：模型可读的历史消息列表。
+        异常情况：读取失败时返回空列表。
+        """
+
+        if self.control_service is None:
+            return []
+        try:
+            records = self.control_service.load_messages(
+                user_id=user_id,
+                session_id=session_id,
+                limit=self.max_context_messages,
+            )
+        except Exception:
+            return []
+        messages = [_normalize_history_message(record) for record in records]
+        return [message for message in messages if message is not None]
+
     def _build_model_request(
         self,
         *,
@@ -1216,6 +1277,7 @@ class RealtimeAudioAgentCore:
         session_id: str,
         config: RealtimeProviderConfig,
         tools: list[dict[str, Any]],
+        history_messages: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """构造 Omni Realtime 等价模型请求快照。
 
@@ -1226,6 +1288,7 @@ class RealtimeAudioAgentCore:
         异常情况：无。
         """
 
+        history = list(history_messages or [])
         return {
             "provider": config.provider,
             "model": config.model,
@@ -1233,6 +1296,7 @@ class RealtimeAudioAgentCore:
             "instructions": config.instructions,
             "messages": [
                 {"role": "system", "content": config.instructions},
+                *history,
                 {
                     "role": "user",
                     "content": [

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from audio_chat.agent_core.base import AgentCoreEvent
@@ -178,6 +180,29 @@ class ToolCallingTextModel:
         pass
 
 
+class CaptureHistoryTextModel:
+    """测试用文本模型，记录 TextAgentCore 传入的运行时 messages。"""
+
+    provider_name = "mock-history"
+    model = "mock-history-model"
+
+    def __init__(self) -> None:
+        self.system_prompt = ""
+        self.messages = []
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """记录 messages 并返回固定回复。"""
+
+        self.messages.append(list(messages))
+        yield "历史已加载。"
+
+    def stream_text(self, transcript: str):
+        yield "unused"
+
+    def cancel(self) -> None:
+        pass
+
+
 def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -> None:
     """测试目标：验证 TextAgentCore 通过 ToolGateway 调用 Tool 并继续模型循环。
 
@@ -210,8 +235,57 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
     assert "tool.result" in message_text
     assert "上海天气已查询。" in message_text
     assert "lookup_weather" in trace_text
-    assert "You are the audio-chat TextAgentCore." in model_request
+    assert "你是中文语音助手" in model_request
     assert "lookup_weather" in model_request
+
+
+def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -> None:
+    """测试目标：验证同一用户同一设备的新一轮文本请求会加载历史消息。
+
+    测试方法：先在 `runs/<user_id>/<device_id>/messages.jsonl` 写入历史 user/assistant
+    对话，再触发 TextAgentCore 处理当前 final 麦克风输入。
+    预期结果：模型收到的运行时 messages 和 `model-request.json` 都包含历史消息，并以
+    当前用户输入收尾。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="text",
+            text_max_context_messages=10,
+        )
+    )
+    user_id = "user-browser-glass-001"
+    device_id = "dev-browser-glass-001"
+    messages_path = tmp_path / "runs" / user_id / device_id / "messages.jsonl"
+    messages_path.parent.mkdir(parents=True, exist_ok=True)
+    history = [
+        {"session_id": device_id, "role": "user", "content": "我刚才说我要去电梯口。"},
+        {"session_id": device_id, "role": "assistant", "content": "我会帮你留意去电梯口的路线。"},
+    ]
+    messages_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in history) + "\n", encoding="utf-8")
+    model = CaptureHistoryTextModel()
+    app.agent_core.text_model = model
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=device_id,
+            stream_id="stream-history",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    runtime_messages = model.messages[0]
+    request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
+    assert runtime_messages[0]["content"] == "我刚才说我要去电梯口。"
+    assert runtime_messages[1]["content"] == "我会帮你留意去电梯口的路线。"
+    assert runtime_messages[-1]["role"] == "user"
+    assert request["messages"][1]["content"] == "我刚才说我要去电梯口。"
+    assert "历史已加载。" in (tmp_path / "runs" / user_id / device_id / "messages.jsonl").read_text(encoding="utf-8")
 
 
 class DemoTask(BaseTask):

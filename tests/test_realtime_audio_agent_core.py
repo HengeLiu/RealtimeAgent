@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from audio_chat.agent_core.realtime import (
     MockRealtimeProviderAdapter,
     RealtimeAudioAgentCore,
@@ -442,6 +444,50 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     assert "input_audio_stream" in model_request
     assert "你是测试用 Omni 助手。" in model_request
     assert "echo_realtime" in model_request
+
+
+def test_realtime_open_loads_device_message_history_into_instructions(tmp_path) -> None:
+    """测试目标：验证 Realtime 会话启动时加载同一用户同一设备的历史消息。
+
+    测试方法：预先写入 `messages.jsonl`，再打开 fake Realtime provider 会话。
+    预期结果：provider instructions 和等价 `model-request.json` 都包含历史 user/assistant
+    对话，确保真实 Realtime 模型也能获得上下文。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-001"
+    device_id = "dev-web"
+    messages_path = tmp_path / "runs" / user_id / device_id / "messages.jsonl"
+    messages_path.parent.mkdir(parents=True, exist_ok=True)
+    messages_path.write_text(
+        "\n".join(
+            json.dumps(item, ensure_ascii=False)
+            for item in [
+                {"session_id": device_id, "role": "user", "content": "我刚才想去南门。"},
+                {"session_id": device_id, "role": "assistant", "content": "我会继续按南门方向引导。"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    app.agent_core = RealtimeAudioAgentCore(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        control_service=app.control_service,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni", instructions="你是测试用 Omni 助手。"),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+        max_context_messages=10,
+    )
+    app.audio_pipeline.agent_core = app.agent_core
+
+    app.agent_core.open(user_id=user_id, session_id=device_id)
+
+    request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
+    assert "我刚才想去南门。" in instances[0].config.instructions
+    assert request["messages"][1]["content"] == "我刚才想去南门。"
+    assert request["messages"][2]["content"] == "我会继续按南门方向引导。"
 
 
 def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:

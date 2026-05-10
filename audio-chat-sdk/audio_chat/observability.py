@@ -719,6 +719,34 @@ class RunRecorder:
             ),
         )
 
+    def load_messages(self, *, user_id: str, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """读取同一用户同一设备的历史消息。
+
+        主要逻辑：优先读取 `runs/<user_id>/<session_id>/messages.jsonl`；如果会话尚未
+        绑定用户，也会按传入 user_id 绑定目录。读取失败或 JSON 行损坏时跳过坏行，
+        避免一条历史记录阻塞当前对话。
+        参数：`user_id` 为用户编号，`session_id` 为设备级会话编号，`limit` 为最多返回条数。
+        返回值：按原始写入顺序返回最近 `limit` 条消息。
+        异常情况：文件不存在时返回空列表。
+        """
+
+        if not user_id or not session_id or limit <= 0:
+            return []
+        path = self.session_dir(session_id, user_id=user_id) / "messages.jsonl"
+        if not path.exists():
+            return []
+        records: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                records.append(data)
+        return records[-limit:]
+
     def record_stream_payload(self, chunk: StreamChunk) -> None:
         name = "input" if chunk.stream_type.startswith("sensor.") else "output"
         self.bind_device(user_id=chunk.user_id, device_id=chunk.session_id)
