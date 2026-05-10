@@ -229,7 +229,7 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
         "audio-chat.device.validate",
         "audio-chat.server.run",
         "audio-chat.web.open",
-        "runs/audio-chat/<user_id>/<device_id>/assets.jsonl",
+        "runs/<app_name>/<user_id>/<device_id>/assets.jsonl",
         "当前新 Tool 可以优先试用 typed facade",
     ]
     assert not [term for term in required if term not in guide]

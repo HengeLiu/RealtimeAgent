@@ -282,7 +282,7 @@ class MemoryService:
 
     def __init__(self, *, enabled: bool = False, store: MemoryStore | None = None) -> None:
         self.enabled = enabled
-        self.store = store or JsonlMemoryStore("runs/audio-chat/memory")
+        self.store = store or JsonlMemoryStore("runs/default-app/memory")
 
     def write(self, *, user_id: str, content: str, metadata: dict[str, Any] | None = None) -> MemoryRecord:
         """写入用户长期记忆。

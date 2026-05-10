@@ -99,14 +99,14 @@ def live_check(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="audio-chat.dev.live-check", description="检查 audio-chat 本地联调状态")
     parser.add_argument("--config", default="app-examples/for-blind-app/server.yaml")
     parser.add_argument("--generated-dir", default="app-examples/for-blind-app/config/generated")
-    parser.add_argument("--report", default="runs/audio-chat/live-check.json")
+    parser.add_argument("--report", default="runs/default-app/live-check.json")
     args = parser.parse_args(argv)
 
     loaded = load_yaml_config(args.config)
     checks = [
         _live_server_check(loaded),
-        _recent_registration_failures_check(),
-        _recent_playback_observation(),
+        _recent_registration_failures_check(loaded),
+        _recent_playback_observation(loaded),
         _provider_key_check(loaded),
         _provider_runtime_profile_check(loaded),
         _mcp_config_check(loaded),
@@ -539,28 +539,41 @@ def _recent_playback_check() -> dict:
     return {"name": "recent_playback", "ok": ok, "path": str(latest), "result": data, "errors": [] if ok else ["latest playback result is not ok"]}
 
 
-def _recent_playback_observation() -> dict:
-    """读取最近 playback 结果；没有结果时只作为诊断，不阻塞 live-check。"""
+def _recent_playback_observation(config: AudioChatYamlConfig) -> dict:
+    """读取最近 playback 结果；没有结果时只作为诊断，不阻塞 live-check。
+
+    参数：`config` 为已加载的 server.yaml 配置，用于生成 app_name 相关的提示路径。
+    返回值：结构化检查结果。
+    异常情况：无。
+    """
 
     result = _recent_playback_check()
     if result["ok"]:
         return result
+    generated_dir = Path(config.observability.runs_root) / "generated"
     return {
         **result,
         "ok": True,
         "observed": False,
-        "action": "运行一次 playback: uv run audio-chat.config.sync --output-dir runs/audio-chat/for-blind-app/generated 后使用生成的 glass.playback.yaml",
+        "action": f"运行一次 playback: uv run audio-chat.config.sync --output-dir {generated_dir} 后使用生成的 glass.playback.yaml",
     }
 
 
-def _recent_registration_failures_check() -> dict:
+def _recent_registration_failures_check(config: AudioChatYamlConfig) -> dict:
     """扫描最近控制事件中的注册失败。
 
     主要逻辑：读取常见 runs 目录下的 control-events.jsonl，寻找
     `control.device.register.failed` 或注册阶段 `system.error.raised`。
+    参数：`config` 为已加载的 server.yaml 配置，用于定位当前 app 的 runs 根目录。
+    返回值：结构化检查结果。
+    异常情况：无。
     """
 
-    candidates = [Path("runs/audio-chat/control-events.jsonl"), Path("runs/control-events.jsonl")]
+    candidates = [
+        Path(config.observability.runs_root) / "control-events.jsonl",
+        Path("runs/default-app/control-events.jsonl"),
+        Path("runs/control-events.jsonl"),
+    ]
     failures: list[dict] = []
     for path in candidates:
         if not path.exists():
@@ -612,7 +625,7 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Au
             "generated_dir": str(generated_dir),
             "missing": missing,
             "errors": [f"missing generated endpoint config: {', '.join(missing)}"],
-            "action": "先运行 audio-chat.config.sync --output-dir app-examples/for-blind-app/config/generated",
+            "action": f"先运行 audio-chat.config.sync --output-dir {generated_dir}",
         }
 
     user_ids: set[str] = set()

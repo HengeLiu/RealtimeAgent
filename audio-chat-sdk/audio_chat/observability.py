@@ -150,7 +150,7 @@ def _format_log_value(value: Any) -> str:
 
 
 class RunRecorder:
-    def __init__(self, runs_root: str | Path = "runs/audio-chat") -> None:
+    def __init__(self, runs_root: str | Path = "runs/default-app") -> None:
         self.runs_root = Path(runs_root).expanduser().resolve()
         self.logger = get_logger("audio_chat.runs")
         self._session_users: dict[str, str] = {}
@@ -886,7 +886,7 @@ class TurnRecorder:
     Tool trace、TaskSignal、输出流和 result 的稳定入口。
     """
 
-    def __init__(self, runs_root: str | Path = "runs/audio-chat") -> None:
+    def __init__(self, runs_root: str | Path = "runs/default-app") -> None:
         self.recorder = RunRecorder(runs_root)
 
     def record_input_stream(self, session_id: str, record: dict[str, Any]) -> None:

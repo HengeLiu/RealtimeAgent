@@ -136,6 +136,10 @@
     const BARGE_IN_REQUIRED_FRAMES = 8;
     const BARGE_IN_MAX_PEAK = 0.72;
     const BARGE_IN_COOLDOWN_MS = 1800;
+    const BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1";
+    const DEFAULT_DEVICE_ID = "dev-browser-glass-001";
+    const DEFAULT_USER_ID = "user-browser-glass-001";
+    const DEFAULT_DEVICE_NAME = "浏览器调试设备";
     const DEVICE_SUPPORTS = {
       sensors: [
         {
@@ -178,14 +182,11 @@
     const micStatusEl = document.getElementById("micStatus");
     const rgbStatusEl = document.getElementById("rgbStatus");
     const params = new URLSearchParams(window.location.search);
-    document.getElementById("serverUrl").value = normalizeServerUrl(
-      params.get("server_url") || defaultServerUrl(),
-    );
-    document.getElementById("userId").value = params.get("user_id") || "user-browser-glass-001";
-    document.getElementById("deviceId").value = params.get("device_id") || `dev-browser-${Math.random().toString(16).slice(2, 8)}`;
-    document.getElementById("deviceName").value = params.get("name") || "浏览器调试设备";
     const audioModeSelect = document.getElementById("audioMode");
     const rgbSourceModeSelect = document.getElementById("rgbSourceMode");
+    const initialBrowserConfig = resolveInitialBrowserConfig(params);
+    applyBrowserConfig(initialBrowserConfig);
+    saveBrowserConfig();
 
     let controlWs = null;
     let streamWs = null;
@@ -344,6 +345,116 @@
       }
     }
 
+    function loadStoredBrowserConfig() {
+      try {
+        const raw = window.localStorage.getItem(BROWSER_CONFIG_STORAGE_KEY);
+        if (!raw) return {};
+        const data = JSON.parse(raw);
+        return data && typeof data === "object" ? data : {};
+      } catch (err) {
+        log(`读取浏览器本地配置失败: ${err.message}`);
+        return {};
+      }
+    }
+
+    function resolveInitialBrowserConfig(searchParams) {
+      const stored = loadStoredBrowserConfig();
+      return {
+        server_url: normalizeServerUrl(searchParams.get("server_url") || stored.server_url || defaultServerUrl()),
+        user_id: searchParams.get("user_id") || stored.user_id || DEFAULT_USER_ID,
+        device_id: searchParams.get("device_id") || stored.device_id || DEFAULT_DEVICE_ID,
+        name: searchParams.get("name") || stored.name || DEFAULT_DEVICE_NAME,
+        audio_mode: selectOptionValue("audioMode", searchParams.get("audio_mode") || stored.audio_mode, "live_mic"),
+        rgb_source_mode: selectOptionValue("rgbSourceMode", searchParams.get("rgb_source_mode") || stored.rgb_source_mode, "live_camera"),
+        auto_start_audio: parseStoredBoolean(searchParams.get("auto_start_audio"), stored.auto_start_audio, false),
+        silence_ms: searchParams.get("silence_ms") || stored.silence_ms || "300",
+        video_fps: searchParams.get("video_fps") || stored.video_fps || "1",
+        custom_event_name: searchParams.get("custom_event_name") || stored.custom_event_name || "control.user.wake.detected",
+        custom_stream_type: searchParams.get("custom_stream_type") || stored.custom_stream_type || "",
+        custom_payload: stored.custom_payload || "{}",
+      };
+    }
+
+    function selectOptionValue(selectId, value, fallback) {
+      const select = document.getElementById(selectId);
+      const allowed = new Set(Array.from(select.options).map((option) => option.value));
+      return allowed.has(value) ? value : fallback;
+    }
+
+    function parseStoredBoolean(raw, storedValue, fallback) {
+      if (raw !== null && raw !== undefined) return ["1", "true", "yes", "on"].includes(String(raw).toLowerCase());
+      if (storedValue !== undefined) return Boolean(storedValue);
+      return fallback;
+    }
+
+    function applyBrowserConfig(config) {
+      document.getElementById("serverUrl").value = normalizeServerUrl(config.server_url);
+      document.getElementById("userId").value = config.user_id;
+      document.getElementById("deviceId").value = config.device_id;
+      document.getElementById("deviceName").value = config.name;
+      audioModeSelect.value = config.audio_mode;
+      rgbSourceModeSelect.value = config.rgb_source_mode;
+      document.getElementById("autoStartAudio").checked = Boolean(config.auto_start_audio);
+      document.getElementById("silenceMs").value = config.silence_ms;
+      document.getElementById("videoFps").value = config.video_fps;
+      document.getElementById("customEventName").value = config.custom_event_name;
+      document.getElementById("customStreamType").value = config.custom_stream_type;
+      document.getElementById("customPayload").value = config.custom_payload;
+    }
+
+    function readBrowserConfigFromForm() {
+      return {
+        server_url: normalizeServerUrl(document.getElementById("serverUrl").value),
+        user_id: document.getElementById("userId").value.trim() || DEFAULT_USER_ID,
+        device_id: document.getElementById("deviceId").value.trim() || DEFAULT_DEVICE_ID,
+        name: document.getElementById("deviceName").value.trim() || DEFAULT_DEVICE_NAME,
+        audio_mode: audioModeSelect.value,
+        rgb_source_mode: rgbSourceModeSelect.value,
+        auto_start_audio: document.getElementById("autoStartAudio").checked,
+        silence_ms: document.getElementById("silenceMs").value || "300",
+        video_fps: document.getElementById("videoFps").value || "1",
+        custom_event_name: document.getElementById("customEventName").value.trim() || "control.user.wake.detected",
+        custom_stream_type: document.getElementById("customStreamType").value.trim(),
+        custom_payload: document.getElementById("customPayload").value || "{}",
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    function saveBrowserConfig() {
+      try {
+        const config = readBrowserConfigFromForm();
+        window.localStorage.setItem(BROWSER_CONFIG_STORAGE_KEY, JSON.stringify(config));
+      } catch (err) {
+        log(`保存浏览器本地配置失败: ${err.message}`);
+      }
+    }
+
+    function bindBrowserConfigPersistence() {
+      const ids = [
+        "serverUrl",
+        "userId",
+        "deviceId",
+        "deviceName",
+        "audioMode",
+        "rgbSourceMode",
+        "autoStartAudio",
+        "silenceMs",
+        "videoFps",
+        "customEventName",
+        "customStreamType",
+        "customPayload",
+      ];
+      for (const id of ids) {
+        const element = document.getElementById(id);
+        if (!element) continue;
+        element.addEventListener("input", saveBrowserConfig);
+        element.addEventListener("change", () => {
+          saveBrowserConfig();
+          if (id === "audioMode" || id === "rgbSourceMode") updateInputModePanels();
+        });
+      }
+    }
+
     function newId(prefix) {
       return `${prefix}_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`.slice(0, prefix.length + 13);
     }
@@ -370,7 +481,12 @@
     }
 
     function currentDeviceId() {
-      return document.getElementById("deviceId").value;
+      const input = document.getElementById("deviceId");
+      const value = input.value.trim();
+      if (value) return value;
+      input.value = DEFAULT_DEVICE_ID;
+      saveBrowserConfig();
+      return DEFAULT_DEVICE_ID;
     }
 
     function sendEvent(item) {
@@ -656,7 +772,8 @@
     }
 
     async function connect() {
-      const deviceId = document.getElementById("deviceId").value;
+      saveBrowserConfig();
+      const deviceId = currentDeviceId();
       const controlUrl = wsUrl("/ws/control");
       log(`connect ${controlUrl}`);
       controlWs = new WebSocket(controlUrl);
@@ -1292,6 +1409,7 @@
       }, {session_id: currentDeviceId()}));
     };
 
+    bindBrowserConfigPersistence();
     audioModeSelect.addEventListener("change", updateInputModePanels);
     rgbSourceModeSelect.addEventListener("change", updateInputModePanels);
     runtimeLogTab.onclick = () => showLogTab("runtime");

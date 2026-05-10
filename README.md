@@ -74,7 +74,7 @@ uv run python -m audio_chat_python_phone_mock --config device-examples/python-ph
 
 该端侧会打开 OpenCV 视频窗口，注册到 server，并订阅同一 `user_id` 下的
 `sensor.rgb` 输入流。眼镜端或浏览器端上传 RGB stream 后，画面会回显到这个窗口，
-最近一帧会写入 `runs/audio-chat/python-phone/latest-rgb.jpg`。
+最近一帧会写入 `runs/python-phone/latest-rgb.jpg`。
 
 Python glass playback：
 
@@ -154,7 +154,7 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 2. 列出它需要哪些端侧能力：当前能力文件仍使用 `sensor.rgb`、`sensor.imu`、`actuator.haptic` 等 `stream_type`；业务代码逐步收敛到 `context.devices.sensors.rgb`、`context.devices.sensors.imu`、`context.devices.actuators.vibrator` 这类 typed facade。
 3. 确认端侧设备能力文件中已经声明对应 `supports[].id`。
 4. 在 Tool / Task 中通过 Context API 表达能力调用，不直接操作 WebSocket 或硬编码 `device_id`。
-5. 用 `runs/audio-chat/...` 中的运行产物验证链路。
+5. 用 `runs/<app_name>/...` 中的运行产物验证链路。
 
 业务样例：
 
@@ -206,7 +206,7 @@ uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
 发布包检查：
 
 ```bash
-uv run audio-chat.sdk.package-check --report runs/audio-chat/package-check.json
+uv run audio-chat.sdk.package-check --report runs/default-app/package-check.json
 ```
 
 自动验收：

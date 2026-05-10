@@ -34,6 +34,11 @@ open device-examples/browser-glass/index.html
 uv run audio-chat.web.open --print-url
 ```
 
+页面会把 Server URL、User ID、Device ID、输入模式和调试事件内容保存到浏览器
+`localStorage`。再次打开时优先使用 URL 参数，其次使用上一次保存的值，最后才使用
+示例默认值。`device_id` 默认固定为 `dev-browser-glass-001`，不会每次刷新随机变化；
+需要切换设备身份时，手动修改页面里的 Device ID 即可。
+
 ## 协议口径
 
 页面注册为普通 Device。新的推荐入口是 [device.audio-chat.yaml](device.audio-chat.yaml)，它声明端侧支持的传感器和执行器：

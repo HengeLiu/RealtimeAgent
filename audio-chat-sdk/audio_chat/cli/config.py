@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from audio_chat.config import load_yaml_config
+
 
 def sync(argv: list[str] | None = None) -> None:
     """同步本地开发配置。
@@ -51,6 +53,7 @@ def sync(argv: list[str] | None = None) -> None:
     ios_target = output_dir / "ios-phone.local.json"
     esp32_target = output_dir / "esp32-s3.local.env"
     server_data = _read_yaml(server_config)
+    runs_root = _runtime_root_from_server_config(server_config)
     server_data.setdefault("server", {})["public_url"] = args.server_url
     server_data.setdefault("auth", {})["mode"] = auth_config["mode"]
     if args.auth_token:
@@ -65,7 +68,7 @@ def sync(argv: list[str] | None = None) -> None:
     _write_yaml(
         glass_target,
         {
-            **(_read_yaml(playback_config) if playback_config is not None else _default_playback_config()),
+            **(_read_yaml(playback_config) if playback_config is not None else _default_playback_config(runs_root)),
             "server_url": args.server_url,
             "user_id": args.user_id,
             "device_id": "dev-python-playback-001",
@@ -180,13 +183,33 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return dict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
 
 
-def _default_playback_config() -> dict[str, Any]:
-    """生成不依赖 app 示例文件的最小 glass playback 配置。"""
+def _default_playback_config(runs_root: str) -> dict[str, Any]:
+    """生成不依赖 app 示例文件的最小 glass playback 配置。
+
+    主要逻辑：`runs_root` 从源 server.yaml 的 app-name / paths 派生，避免 SDK 绑定
+    某个业务示例名称。
+    参数：`runs_root` 为 server 运行产物根目录。
+    返回值：Python glass playback 可使用的最小配置。
+    异常情况：无。
+    """
 
     return {
         "mode": "in_process",
-        "runs_root": "runs/audio-chat/for-blind-app",
+        "runs_root": runs_root,
     }
+
+
+def _runtime_root_from_server_config(server_config: Path) -> str:
+    """从源 server.yaml 读取运行产物根目录。
+
+    主要逻辑：复用 SDK 的 YAML 加载规则，由 server.yaml 中的 `app-name` 和
+    `paths.runtime_root` 决定默认路径。
+    参数：`server_config` 为源 server.yaml 路径。
+    返回值：配置加载后的 `paths.runtime_root`。
+    异常情况：配置文件不可读或 YAML 非法时由 `load_yaml_config` 抛出。
+    """
+
+    return load_yaml_config(server_config).paths.runtime_root
 
 
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:

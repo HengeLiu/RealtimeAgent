@@ -91,7 +91,7 @@ def test_discovery_config_and_dev_checks_fields_are_loaded() -> None:
     assert config.tools.discover.fail_fast is True
     assert config.tasks.discover.recursive is True
     assert config.tasks.discover.fail_fast is True
-    assert config.dev_checks.report_path == "runs/audio-chat/for-blind-app/preflight.json"
+    assert config.dev_checks.report_path == "runs/for-blind-app/preflight.json"
     assert config.dev_checks.require_recent_playback_ok is False
 
 

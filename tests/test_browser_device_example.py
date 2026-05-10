@@ -108,6 +108,26 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert "manual_confirm" not in html
 
 
+def test_browser_device_persists_form_config_and_stable_device_id() -> None:
+    """测试目标：验证 browser-glass 会保存浏览器端配置且 device_id 不再随机生成。
+
+    测试方法：静态检查页面使用 localStorage 保存表单配置，并使用固定默认 device_id。
+    预期结果：刷新页面后保留上次连接参数和输入模式，除非用户手动修改 device_id。
+    """
+
+    html = _html()
+
+    assert 'BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1"' in html
+    assert 'DEFAULT_DEVICE_ID = "dev-browser-glass-001"' in html
+    assert "loadStoredBrowserConfig()" in html
+    assert "resolveInitialBrowserConfig(params)" in html
+    assert "applyBrowserConfig(initialBrowserConfig)" in html
+    assert "bindBrowserConfigPersistence()" in html
+    assert "window.localStorage.setItem(BROWSER_CONFIG_STORAGE_KEY" in html
+    assert 'searchParams.get("device_id") || stored.device_id || DEFAULT_DEVICE_ID' in html
+    assert "dev-browser-${Math.random" not in html
+
+
 def test_browser_device_has_right_side_event_log_panel() -> None:
     """测试目标：验证 browser-glass 把日志窗口纵向放在右侧并区分广播事件。
 

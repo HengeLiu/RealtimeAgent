@@ -82,6 +82,67 @@ def test_live_check_reports_actionable_server_down_state(tmp_path: Path) -> None
     assert data["next_actions"]
 
 
+def test_live_check_recent_playback_action_uses_loaded_app_runs_root(tmp_path: Path) -> None:
+    """测试目标：确认 live-check 的提示路径来自 server.yaml，而不是 SDK 硬编码示例名称。
+
+    测试方法：用 app-name=custom-app 的配置执行 live-check。
+    预期结果：recent_playback 的下一步提示使用 `runs/custom-app/generated`。
+    """
+
+    port = _free_port()
+    config = tmp_path / "server.yaml"
+    config.write_text(
+        f"""
+app-name: custom-app
+server:
+  public_url: http://127.0.0.1:{port}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    generated = tmp_path / "generated"
+    subprocess.run(
+        [
+            "uv",
+            "run",
+            "audio-chat.config.sync",
+            "--server-config",
+            str(config),
+            "--server-url",
+            f"http://127.0.0.1:{port}",
+            "--output-dir",
+            str(generated),
+        ],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    report = tmp_path / "live-check.json"
+
+    completed = subprocess.run(
+        [
+            "uv",
+            "run",
+            "audio-chat.dev.live-check",
+            "--config",
+            str(config),
+            "--generated-dir",
+            str(generated),
+            "--report",
+            str(report),
+        ],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    data = json.loads(report.read_text(encoding="utf-8"))
+    checks = {check["name"]: check for check in data["checks"]}
+    assert "runs/custom-app/generated" in checks["recent_playback"]["action"]
+
+
 def test_live_check_reports_server_health_when_running(tmp_path: Path) -> None:
     """测试目标：确认 live-check 能识别已启动 server 并读取 debug devices。
 

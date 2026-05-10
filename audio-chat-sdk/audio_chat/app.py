@@ -55,7 +55,7 @@ class AudioChatConfig:
     server_port: int = 8765
     public_url: str = "http://127.0.0.1:8765"
     log_level: str = "DEBUG"
-    runs_root: str = "runs/audio-chat"
+    runs_root: str = "runs/default-app"
     auth_mode: str = "disabled"
     device_tokens: dict[str, str] | None = None
     signed_token_secret_env: str = "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
@@ -120,7 +120,7 @@ class AudioChatConfig:
     tasks_store_root: str | None = None
     memory_enabled: bool = False
     memory_store_type: str = "jsonl"
-    memory_path: str = "runs/audio-chat/memory"
+    memory_path: str = "runs/default-app/memory"
     skill_enabled: bool = False
     skill_roots: tuple[str, ...] = ()
     skill_allow_tool_policy: bool = True
@@ -1000,7 +1000,7 @@ def _memory_root(config: AudioChatConfig) -> str | Path:
     异常情况：无。
     """
 
-    if not config.memory_path or str(config.memory_path).strip() == "runs/audio-chat/memory":
+    if not config.memory_path or str(config.memory_path).strip() in {"runs/audio-chat/memory", "runs/default-app/memory"}:
         return Path(config.runs_root)
     return config.memory_path
 

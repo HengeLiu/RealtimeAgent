@@ -1,14 +1,19 @@
 # runs 目录产物说明
 
-文档状态：当前调试说明。本文描述当前 `runs/audio-chat` 产物结构，是排查模型请求、设备通讯、stream、资产、Tool、Task 和输出链路的主要入口。
+文档状态：当前调试说明。本文描述当前 `runs/<app_name>` 产物结构，是排查模型请求、设备通讯、stream、资产、Tool、Task 和输出链路的主要入口。
 
 `runs` 是 audio-chat 的开发调试和回放证据目录。它不是业务数据目录，也不是开发者日常需要全部阅读的目录。
 
-默认根目录由 `observability.runs_root` 决定，默认值是：
+默认根目录由 `paths.runtime_root` 统一决定；未配置时从 `server.yaml` 的 `app-name` 派生，例如
+`for-blind-app` 的默认值是：
 
 ```text
-runs/audio-chat
+runs/for-blind-app
 ```
+
+`observability.runs_root`、`asset.root`、`memory.path`、`user.message_store.root`
+和 `dev_checks.report_path` 都会从这个根目录自动派生。只有确实需要单独覆盖某个
+子目录时，才在对应配置段里显式写路径。
 
 从当前版本开始，终端日志中的 `detail_path` 会打印绝对路径。相对路径需要按 server 启动时的工作目录拼接。
 
@@ -36,7 +41,7 @@ runs/audio-chat
 ## 根目录结构
 
 ```text
-runs/audio-chat/
+runs/<app_name>/
   control-events.jsonl
   control-routes.jsonl
   system-events.jsonl
@@ -63,7 +68,7 @@ runs/audio-chat/
 当前版本按用户和设备组织运行产物：
 
 ```text
-runs/audio-chat/<user_id>/<device_id>/
+runs/<app_name>/<user_id>/<device_id>/
 ```
 
 其中 `<device_id>` 同时也是当前过渡说明的会话标识，会出现在终端日志里，例如：
@@ -117,7 +122,7 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 ## messages 文件
 
 ```text
-runs/audio-chat/<user_id>/<device_id>/messages.jsonl
+runs/<app_name>/<user_id>/<device_id>/messages.jsonl
 ```
 
 保存用户级对话历史。它不是单轮排障的第一入口，而是用于确认长期上下文是否被正确写入。
@@ -125,7 +130,7 @@ runs/audio-chat/<user_id>/<device_id>/messages.jsonl
 ## assets 目录
 
 ```text
-runs/audio-chat/<user_id>/<device_id>/photos/asset_*.jpg
+runs/<app_name>/<user_id>/<device_id>/photos/asset_*.jpg
 ```
 
 保存相机等传感器产生的资产文件。拍照工具相关问题，应同时看：
@@ -140,14 +145,14 @@ runs/audio-chat/<user_id>/<device_id>/photos/asset_*.jpg
 如果任务存储配置为 jsonl，长任务状态会写入：
 
 ```text
-runs/audio-chat/tasks/
+runs/<app_name>/tasks/
 ```
 
 日常语音对话排障通常不用看它。排查后台任务恢复、定时任务、长任务状态时再看。
 
-## 当前不合理点
+## 后续可整理点
 
-当前 runs 产物已经能支持排障，但目录对开发者不够友好，主要问题是：
+当前 runs 产物已经按 `runs/<app_name>/<user_id>/<device_id>` 分层，仍有一些文件组织可以继续优化：
 
 1. `agent-events.jsonl` 和 `model-events.jsonl` 内容重复。
 2. `tool-events.jsonl` 记录 Tool 调用。
@@ -188,23 +193,23 @@ runs/audio-chat/tasks/
 查看某个 session 下面有哪些文件：
 
 ```bash
-find runs/audio-chat/<user_id>/<device_id> -maxdepth 1 -type f | sort
+find runs/<app_name>/<user_id>/<device_id> -maxdepth 1 -type f | sort
 ```
 
 查看本轮模型请求：
 
 ```bash
-cat runs/audio-chat/<user_id>/<device_id>/model-request.json
+cat runs/<app_name>/<user_id>/<device_id>/model-request.json
 ```
 
 查看本轮工具调用：
 
 ```bash
-tail -n 50 runs/audio-chat/<user_id>/<device_id>/tool-events.jsonl
+tail -n 50 runs/<app_name>/<user_id>/<device_id>/tool-events.jsonl
 ```
 
 查看系统错误：
 
 ```bash
-tail -n 100 runs/audio-chat/system-events.jsonl
+tail -n 100 runs/<app_name>/system-events.jsonl
 ```

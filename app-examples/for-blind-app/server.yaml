@@ -1,5 +1,9 @@
 app-name: "for-blind-app"
 
+# 路径约定：默认运行产物写入 runs/<app-name>/。
+# 如需整体迁移运行目录，只配置 paths.runtime_root。
+paths: {}
+
 server:
   host: "0.0.0.0"
   port: 8765
@@ -16,9 +20,6 @@ auth:
 
 user:
   active_device_set_policy: "single"
-  message_store:
-    type: "jsonl"
-    root: "runs/audio-chat/for-blind-app/users"
   recent_message_limit: 200
 
 control:
@@ -60,7 +61,6 @@ audio_pipeline:
 
 asset:
   store_type: "filesystem"
-  root: "runs/audio-chat/for-blind-app/assets"
   max_asset_bytes: 10485760
   default_ttl_seconds: 60
   request_timeout_seconds: 5
@@ -122,7 +122,6 @@ tasks:
 memory:
   enabled: true
   store_type: "jsonl"
-  path: "runs/audio-chat/for-blind-app/memory"
 
 skill:
   enabled: false
@@ -139,7 +138,6 @@ endpoint_defaults:
   aec: "browser_webrtc"
 
 observability:
-  runs_root: "runs/audio-chat/for-blind-app"
   record_input_streams: true
   record_output_streams: true
   record_model_events: true
@@ -152,6 +150,4 @@ dev_checks:
   run_contract_tests: true
   run_package_check: true
   run_boundary_check: true
-  contract_tests_path: "testdata/contracts"
   require_recent_playback_ok: false
-  report_path: "runs/audio-chat/for-blind-app/preflight.json"

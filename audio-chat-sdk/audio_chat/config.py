@@ -7,6 +7,18 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class PathConfig:
+    """应用路径约定配置。
+
+    主要功能：用一个运行根目录统一派生 server 调试、资产、记忆和验收报告路径。
+    主要属性：`runtime_root` 是运行产物根目录；`contract_tests_path` 是仓库内契约样例目录。
+    """
+
+    runtime_root: str = ""
+    contract_tests_path: str = "testdata/contracts"
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8765
@@ -27,7 +39,7 @@ class AuthConfig:
 @dataclass(frozen=True)
 class UserConfig:
     active_device_set_policy: str = "single"
-    message_store: dict[str, Any] = field(default_factory=lambda: {"type": "jsonl", "root": "runs/audio-chat/users"})
+    message_store: dict[str, Any] = field(default_factory=lambda: {"type": "jsonl", "root": "runs/default-app/users"})
     recent_message_limit: int = 200
 
 
@@ -73,7 +85,7 @@ class AudioPipelineConfig:
 @dataclass(frozen=True)
 class AssetConfig:
     store_type: str = "filesystem"
-    root: str = "runs/audio-chat/assets"
+    root: str = "runs/default-app/assets"
     max_asset_bytes: int = 10485760
     default_ttl_seconds: int = 60
     request_timeout_seconds: float = 5.0
@@ -139,7 +151,7 @@ class GenericEnabledConfig:
 class MemoryConfig:
     enabled: bool = False
     store_type: str = "jsonl"
-    path: str = "runs/audio-chat/memory"
+    path: str = "runs/default-app/memory"
 
 
 @dataclass(frozen=True)
@@ -180,7 +192,7 @@ class ToolConfig:
 class TaskConfig:
     enabled: bool = False
     max_running_per_user: int = 16
-    store: dict[str, Any] = field(default_factory=lambda: {"type": "memory", "root": "runs/audio-chat/tasks"})
+    store: dict[str, Any] = field(default_factory=lambda: {"type": "memory", "root": "runs/default-app/tasks"})
     discover: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -191,13 +203,13 @@ class DevChecksConfig:
     run_package_check: bool = True
     run_boundary_check: bool = True
     contract_tests_path: str = "testdata/contracts"
-    report_path: str = "runs/audio-chat/preflight.json"
+    report_path: str = "runs/default-app/preflight.json"
     require_recent_playback_ok: bool = False
 
 
 @dataclass(frozen=True)
 class ObservabilityConfig:
-    runs_root: str = "runs/audio-chat"
+    runs_root: str = "runs/default-app"
     record_input_streams: bool = True
     record_output_streams: bool = True
     record_model_events: bool = True
@@ -210,6 +222,7 @@ class ObservabilityConfig:
 @dataclass(frozen=True)
 class AudioChatYamlConfig:
     app_name: str = ""
+    paths: PathConfig = field(default_factory=PathConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     user: UserConfig = field(default_factory=UserConfig)
@@ -235,11 +248,13 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     config_path = _resolve_config_path(path)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     data = _apply_env_overrides(data)
+    data = _apply_path_defaults(data)
     text = data.get("agent", {}).get("text", {})
     agent_data = dict(data.get("agent", {}))
     agent_mode = str(agent_data.get("mode") or "").strip() or "text"
     return AudioChatYamlConfig(
         app_name=str(data.get("app_name") or data.get("app-name") or ""),
+        paths=PathConfig(**_known(data.get("paths", {}), {"runtime_root", "contract_tests_path"})),
         server=ServerConfig(**data.get("server", {})),
         auth=AuthConfig(**data.get("auth", {})),
         user=UserConfig(**data.get("user", {})),
@@ -334,6 +349,50 @@ def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _apply_path_defaults(data: dict[str, Any]) -> dict[str, Any]:
+    """按统一运行根目录补齐派生路径。
+
+    主要逻辑：把 `paths.runtime_root` 作为唯一需要理解的运行目录，未显式配置的
+    users、assets、memory、tasks 和 preflight 路径都从它派生；老配置已写明的子路径
+    不会被覆盖。
+    参数：`data` 为 YAML 解析后的原始配置。
+    返回值：补齐派生路径后的配置字典。
+    异常情况：无。
+    """
+
+    app_name = str(data.get("app_name") or data.get("app-name") or "").strip()
+    default_runtime_root = f"runs/{app_name}" if app_name else "runs/default-app"
+    paths = dict(data.get("paths") or {})
+    data["paths"] = paths
+    runtime_root = str(paths.get("runtime_root") or default_runtime_root)
+    paths.setdefault("runtime_root", runtime_root)
+    paths.setdefault("contract_tests_path", "testdata/contracts")
+
+    observability = data.setdefault("observability", {})
+    observability.setdefault("runs_root", runtime_root)
+
+    user = data.setdefault("user", {})
+    message_store = user.setdefault("message_store", {})
+    message_store.setdefault("type", "jsonl")
+    message_store.setdefault("root", f"{runtime_root}/users")
+
+    asset = data.setdefault("asset", {})
+    asset.setdefault("root", f"{runtime_root}/assets")
+
+    memory = data.setdefault("memory", {})
+    memory.setdefault("path", f"{runtime_root}/memory")
+
+    tasks = data.setdefault("tasks", {})
+    store = tasks.setdefault("store", {})
+    if str(store.get("type") or "").strip().lower() == "jsonl":
+        store.setdefault("root", f"{runtime_root}/tasks")
+
+    dev_checks = data.setdefault("dev_checks", {})
+    dev_checks.setdefault("contract_tests_path", paths["contract_tests_path"])
+    dev_checks.setdefault("report_path", f"{runtime_root}/preflight.json")
+    return data
+
+
 def _known(data: dict[str, Any], keys: set[str]) -> dict[str, Any]:
     """只保留配置模型明确支持的字段。
 
@@ -350,6 +409,10 @@ def _known(data: dict[str, Any], keys: set[str]) -> dict[str, Any]:
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     text = data.setdefault("agent", {}).setdefault("text", {})
+    if os.getenv("AUDIO_CHAT_RUNS_ROOT") is not None:
+        paths = dict(data.get("paths") or {})
+        paths["runtime_root"] = os.getenv("AUDIO_CHAT_RUNS_ROOT", "")
+        data["paths"] = paths
     mapping = {
         "AUDIO_CHAT_RUNS_ROOT": ("observability", "runs_root"),
         "AUDIO_CHAT_AUTH_MODE": ("auth", "mode"),

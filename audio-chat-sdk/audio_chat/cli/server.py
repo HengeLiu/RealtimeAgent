@@ -29,8 +29,8 @@ def start(argv: list[str] | None = None) -> None:
     parser.add_argument("--app-name", default="", help="应用名称，对应 app-examples/<app-name>")
     parser.add_argument("--app-root", default="app-examples", help="应用根目录，默认 app-examples")
     parser.add_argument("--app-module", default="")
-    parser.add_argument("--pid-file", default="runs/audio-chat/server.pid")
-    parser.add_argument("--log-file", default="runs/audio-chat/server.log")
+    parser.add_argument("--pid-file", default="runs/default-app/server.pid")
+    parser.add_argument("--log-file", default="runs/default-app/server.log")
     parser.add_argument("--dry-run", action="store_true", help="只写入开发验收文件，不启动真实 server")
     args = parser.parse_args(argv)
 
@@ -89,7 +89,7 @@ def stop(argv: list[str] | None = None) -> None:
     """停止由 `audio-chat.server.start` 启动的 server。"""
 
     parser = argparse.ArgumentParser(prog="audio-chat.server.stop", description="停止 audio-chat server")
-    parser.add_argument("--pid-file", default="runs/audio-chat/server.pid")
+    parser.add_argument("--pid-file", default="runs/default-app/server.pid")
     parser.add_argument("--dry-run", action="store_true", help="只验证 pid 文件路径")
     args = parser.parse_args(argv)
     pid_file = Path(args.pid_file)
@@ -115,7 +115,7 @@ def logs(argv: list[str] | None = None) -> None:
     """打印 server 日志尾部。"""
 
     parser = argparse.ArgumentParser(prog="audio-chat.server.logs", description="查看 audio-chat server 日志")
-    parser.add_argument("--log-file", default="runs/audio-chat/server.log")
+    parser.add_argument("--log-file", default="runs/default-app/server.log")
     parser.add_argument("--tail", type=int, default=80)
     args = parser.parse_args(argv)
     log_file = Path(args.log_file)
