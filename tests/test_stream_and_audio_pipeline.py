@@ -303,6 +303,54 @@ def test_closed_input_stream_late_chunk_is_dropped(tmp_path) -> None:
     assert dropped[-1]["reason"] == "input_stream_closed_late_chunk"
 
 
+def test_mic_input_close_is_pushed_to_producer_device(tmp_path) -> None:
+    """测试目标：服务端关闭麦克风输入流时，原生产端能收到关闭事件。
+
+    测试方法：注册浏览器眼镜式设备，打开 `sensor.mic` 后由服务端按 idle_timeout
+    关闭 stream。
+    预期结果：设备连接收到 `stream.input.closed`，端侧可释放旧 stream_id 并创建下一段
+    输入流。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+
+    class Connection:
+        device_id = "dev-browser-glass"
+
+        def __init__(self) -> None:
+            self.events = []
+
+        def push_event(self, event: Event) -> None:
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            pass
+
+    connection = Connection()
+    response = app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-browser-glass",
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [], "actuators": []},
+            },
+        ),
+        connection,
+    )
+    assert response.event_name == "control.device.registered"
+    handle = app.open_input_stream(user_id="user-browser-glass", producer_id=connection.device_id)
+
+    app.stream_service.close_stream(handle.stream_id, reason="idle_timeout")
+
+    close_events = [event for event in connection.events if event.event_name == "stream.input.closed"]
+    assert len(close_events) == 1
+    assert close_events[0].stream_id == handle.stream_id
+    assert close_events[0].payload["reason"] == "idle_timeout"
+
+
 def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -> None:
     """测试目标：确认 output stream 打开时冻结消费者。
 

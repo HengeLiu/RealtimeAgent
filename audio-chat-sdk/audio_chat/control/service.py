@@ -695,13 +695,19 @@ class ControlService:
             route_diagnostics=tuple(diagnostics),
         )
 
-    def _push_event_to_device_ids(self, event: Event, device_ids: tuple[str, ...]) -> PublishResult:
+    def _push_event_to_device_ids(
+        self,
+        event: Event,
+        device_ids: tuple[str, ...],
+        *,
+        route_reason: str = "frozen_stream_consumer",
+    ) -> PublishResult:
         """向已冻结的内部设备集合推送事件。
 
-        主要逻辑：仅供 Stream Service 关闭或取消已打开的 output stream 时使用，
-        目标列表来自打开 stream 时的协议匹配结果，不向 Tool / Task 暴露 device_id
-        点对点发送接口。
+        主要逻辑：供 Stream Service 向已冻结 output consumer 或 input producer
+        推送生命周期事件，不向 Tool / Task 暴露 device_id 点对点发送接口。
         参数：`event` 为协议事件，`device_ids` 为内部冻结 consumer 列表。
+        `route_reason` 为路由诊断原因。
         返回值：投递统计。
         异常情况：事件非法时抛出 `ValueError`。
         """
@@ -709,7 +715,7 @@ class ControlService:
         self.recorder.record_event(event)
         devices = [self._devices[device_id] for device_id in device_ids if device_id in self._devices]
         route = [
-            self._route_decision(device, route_matched=True, selected=True, reason="frozen_stream_consumer")
+            self._route_decision(device, route_matched=True, selected=True, reason=route_reason)
             for device in devices
         ]
         result = self._deliver_to_devices(event, devices, route_diagnostics=route)

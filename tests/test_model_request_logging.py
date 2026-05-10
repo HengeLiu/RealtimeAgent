@@ -150,6 +150,17 @@ def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) ->
         recorder.record_stream_event(
             chunk.session_id,
             {
+                "event": "stream.chunk.dropped",
+                "stream_id": chunk.stream_id,
+                "stream_type": chunk.stream_type,
+                "seq": 3,
+                "payload_size": 2,
+                "reason": "input_stream_closed_late_chunk",
+            },
+        )
+        recorder.record_stream_event(
+            chunk.session_id,
+            {
                 "event": "stream.closed",
                 "stream_id": chunk.stream_id,
                 "stream_type": chunk.stream_type,
@@ -158,11 +169,12 @@ def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) ->
         )
 
     assert not any("stream.chunk.received" in record.getMessage() for record in caplog.records)
+    assert not any("stream.chunk.dropped" in record.getMessage() for record in caplog.records)
     close_records = [record for record in caplog.records if "数据流事件 stream.closed" in record.getMessage()]
     assert len(close_records) == 1
     assert getattr(close_records[0], "input_chunk_count") == 3
     assert getattr(close_records[0], "input_bytes") == 6
-    assert getattr(close_records[0], "detail_path").endswith("sessions/sess-stream-log/stream-events.jsonl")
+    assert getattr(close_records[0], "detail_path").endswith("_unbound/sess-stream-log/stream-events.jsonl")
 
 
 def test_important_terminal_logs_include_detail_paths(tmp_path, caplog) -> None:

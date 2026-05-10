@@ -282,6 +282,9 @@ class StreamService:
         )
         if handle.stream_type.startswith("actuator."):
             self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
+        elif handle.stream_type == "sensor.mic":
+            # 麦克风输入流的生产端必须收到关闭通知，否则浏览器会继续复用已关闭的 stream_id。
+            self.control_service._push_event_to_device_ids(event, (handle.producer_id,), route_reason="stream_producer")
         else:
             self.control_service.publish(event)
         self.recorder.record_stream_event(

@@ -42,6 +42,12 @@ DELTA_SUMMARY_DONE_EVENTS = {
 }
 QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
 DEBUG_ONLY_CONTROL_PREFIXES = ("stream.",)
+VISIBLE_STREAM_EVENTS = {
+    "stream.opened",
+    "stream.closed",
+    "stream.failed",
+    "stream.output.summary",
+}
 
 
 @dataclass(frozen=True)
@@ -294,6 +300,15 @@ class RunRecorder:
         )
 
     def record_stream_event(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录 stream 事件，并控制终端日志噪音。
+
+        主要逻辑：所有事件仍写入 `stream-events.jsonl` 便于复盘；终端只打印
+        stream 的开始、结束、失败和输出摘要，避免高频 chunk 或晚到丢弃事件刷屏。
+        参数：`session_id` 为会话编号，`record` 为 stream 事件内容。
+        返回值：无。
+        异常情况：文件写入失败时抛出 IO 异常。
+        """
+
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "stream-events.jsonl", record)
         name = str(record.get("event") or "")
@@ -310,6 +325,8 @@ class RunRecorder:
             stats["bytes"] = int(stats.get("bytes") or 0) + int(record.get("payload_size") or 0)
             stats["last_seq"] = record.get("seq")
             stats["last_at"] = now
+            return
+        if name not in VISIBLE_STREAM_EVENTS:
             return
         chunk_fields = self._pop_stream_chunk_summary(session_id=session_id, stream_id=stream_id)
         log_info(
