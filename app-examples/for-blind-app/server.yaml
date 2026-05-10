@@ -122,6 +122,13 @@ tasks:
 memory:
   enabled: true
   store_type: "jsonl"
+  manager:
+    provider: "dashscope-compatible"
+    model: "qwen-plus"
+    api_key_env: "DASHSCOPE_API_KEY"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    timeout_seconds: 5
+    max_retries: 1
 
 skill:
   enabled: false

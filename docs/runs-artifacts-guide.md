@@ -139,9 +139,9 @@ runs/<app_name>/<user_id>/<device_id>/history/<start>-<end>-messages.jsonl
 1. `active-messages.jsonl` 是 canonical 文件，保存当前模型可直接看到的近期对话；系统重启后从这里恢复上下文。
 2. `messages.jsonl` 是兼容镜像，内容与 active 保持一致，便于旧脚本和人工排障继续读取。
 3. `history/<start>-<end>-messages.jsonl` 保存被压缩出 active 的原始消息，文件名中的时间段来自被归档消息的起止时间。
-4. `message-summaries.jsonl` 追加每次压缩得到的摘要；后续请求只把最新摘要放入提示词，不再把归档原文重复展开。
+4. `message-summaries.jsonl` 追加每次压缩得到的 LLM 结构化摘要；后续请求只把最新摘要放入提示词，不再把归档原文重复展开。
 
-压缩触发点在连续音频会话结束后：如果 active 消息数大于 30 条，则保留最新 5 条，其余消息先写入 history，再追加 summary，最后重写 active 和兼容 `messages.jsonl`。长期记忆仍由 `<runtime_root>/<user_id>/memory.json` 维护，和 message summary 分开：memory 保存稳定用户事实，message summary 只保存对话上下文重点。
+压缩触发点在连续音频会话结束后：如果 active 消息数大于 30 条，则保留最新 5 条，其余消息会先交给摘要子 Agent 生成结构化滚动摘要；只有摘要成功后，才写入 history、追加 summary，并重写 active 和兼容 `messages.jsonl`。如果摘要模型未配置、缺少 API Key 或 provider 调用失败，本次压缩会跳过并记录 `conversation.summary.failed` 错误日志，active 原文保持不变。长期记忆仍由 `<runtime_root>/<user_id>/memory.json` 维护，和 message summary 分开：memory 保存稳定用户事实，message summary 只保存对话上下文重点。
 
 ## assets 目录
 

@@ -11,7 +11,7 @@ from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
 from audio_chat.audio_pipeline import AudioPipeline, AudioPipelineConfig as RuntimeAudioPipelineConfig
 from audio_chat.config import AudioChatYamlConfig, load_yaml_config, resolve_config_path
-from audio_chat.conversation import ConversationMemoryService
+from audio_chat.conversation import ConversationMemoryService, LlmMessageSummarizer
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
 from audio_chat.mcp import McpGateway
 from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService, RuleBasedMemoryManagementAgent
@@ -294,7 +294,10 @@ class AudioChatApp:
     def __init__(self, config: AudioChatConfig | None = None) -> None:
         self.config = _normalize_runtime_config(config or AudioChatConfig())
         self.recorder = RunRecorder(Path(self.config.runs_root))
-        self.conversation_memory = ConversationMemoryService(Path(self.config.runs_root))
+        self.conversation_memory = ConversationMemoryService(
+            Path(self.config.runs_root),
+            summarizer=_build_message_summarizer(self.config),
+        )
         self.control_service = ControlService(
             authenticator=DeviceAuthenticator(
                 mode=self.config.auth_mode,
@@ -1096,6 +1099,31 @@ def _build_memory_manager(config: AudioChatConfig) -> MemoryManagementAgent:
             max_retries=config.memory_manager_max_retries,
         )
     return RuleBasedMemoryManagementAgent()
+
+
+def _build_message_summarizer(config: AudioChatConfig) -> LlmMessageSummarizer | None:
+    """按配置创建会话摘要子 Agent。
+
+    主要逻辑：会话摘要只使用真实 LLM，不提供规则 fallback；未配置模型时返回 None，
+    后续压缩会跳过并打印错误。
+    参数：`config` 为应用运行配置。
+    返回值：可用的 LlmMessageSummarizer 或 None。
+    异常情况：无。
+    """
+
+    provider = str(config.memory_manager_provider or "").strip().lower()
+    if provider not in {"openai-compatible", "dashscope-compatible", "llm"}:
+        return None
+    model = str(config.memory_manager_model or "").strip()
+    if not model:
+        return None
+    return LlmMessageSummarizer(
+        model=model,
+        api_key_env=config.memory_manager_api_key_env,
+        base_url=config.memory_manager_base_url or None,
+        timeout_seconds=config.memory_manager_timeout_seconds,
+        max_retries=config.memory_manager_max_retries,
+    )
 
 
 def _prepare_app_imports(app_dir: Path) -> None:

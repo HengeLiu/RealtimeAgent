@@ -203,6 +203,15 @@ class CaptureHistoryTextModel:
         pass
 
 
+class FixedSummaryAgent:
+    """测试用会话摘要器。"""
+
+    def summarize(self, *, previous_summary: str, messages: list[dict]) -> str:
+        """返回包含旧消息线索的固定摘要。"""
+
+        return "当前对话状态：\n- 压缩前消息 0 已被归档。"
+
+
 def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -> None:
     """测试目标：验证 TextAgentCore 通过 ToolGateway 调用 Tool 并继续模型循环。
 
@@ -302,6 +311,7 @@ def test_text_agent_injects_latest_message_summary_without_duplicate_history(tmp
             text_max_context_messages=10,
         )
     )
+    app.conversation_memory.summarizer = FixedSummaryAgent()
     user_id = "user-summary"
     device_id = "dev-summary"
     for index in range(8):
@@ -332,7 +342,7 @@ def test_text_agent_injects_latest_message_summary_without_duplicate_history(tmp
 
     request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
     assert "更早历史对话的压缩摘要" in request["messages"][0]["content"]
-    assert "压缩前消息 0" in request["messages"][0]["content"]
+    assert "压缩前消息 0 已被归档" in request["messages"][0]["content"]
     assert all("压缩前消息 0" not in item.get("content", "") for item in model.messages[0])
     assert model.messages[0][0]["content"] == "压缩前消息 6"
     assert model.messages[0][1]["content"] == "压缩前消息 7"

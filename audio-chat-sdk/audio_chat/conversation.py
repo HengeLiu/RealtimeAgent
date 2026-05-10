@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+from audio_chat.observability import LogContext, get_logger, log_error
 
 
 @dataclass(frozen=True)
@@ -32,42 +35,118 @@ class MessageSummarizer(Protocol):
     主要功能：把一批即将归档的 active messages 压缩成一段可放入模型上下文的摘要。
     """
 
-    def summarize(self, messages: list[dict[str, Any]]) -> str:
+    def summarize(self, *, previous_summary: str, messages: list[dict[str, Any]]) -> str:
         """生成摘要文本。"""
 
 
-class RuleBasedMessageSummarizer:
-    """轻量规则摘要器。
+class ConversationSummaryError(RuntimeError):
+    """会话摘要失败异常。
 
-    主要功能：在未配置专用 LLM 摘要器前，用确定性规则保留历史对话的关键文本。
-    主要方法：`summarize()` 按角色提取 user/assistant 文本并控制长度。
+    主要功能：把 LLM 摘要配置缺失、依赖缺失、模型返回空内容或非法内容统一成
+    可观测错误，供上层跳过本次压缩。
     """
 
-    def __init__(self, max_chars: int = 1600) -> None:
-        self.max_chars = max(200, int(max_chars or 1600))
 
-    def summarize(self, messages: list[dict[str, Any]]) -> str:
-        """生成一段稳定、可读的历史摘要。
+class LlmMessageSummarizer:
+    """基于 OpenAI-compatible Chat Completions 的会话摘要器。
 
-        参数：`messages` 为被压缩的 active messages。
-        返回值：中文摘要文本。
-        异常情况：无；空消息返回固定提示。
+    主要功能：用专用模型把 previous_summary 与本次归档消息合并成结构化滚动摘要。
+    主要属性：`model` 是摘要模型名称，`base_url` 可指向 DashScope/OpenAI-compatible
+    服务。
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key_env: str = "OPENAI_API_KEY",
+        base_url: str | None = None,
+        timeout_seconds: float = 5.0,
+        max_retries: int = 1,
+    ) -> None:
+        self.model = model
+        self.api_key_env = api_key_env
+        self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+
+    def summarize(self, *, previous_summary: str, messages: list[dict[str, Any]]) -> str:
+        """调用模型生成结构化增量摘要。
+
+        主要逻辑：把上一版摘要和本次归档消息交给摘要子 Agent，要求输出固定中文
+        分区，禁止逐条复述原文。
+        参数：`previous_summary` 为上一版摘要，`messages` 为本次即将归档的消息。
+        返回值：结构化中文摘要。
+        异常情况：配置缺失、依赖缺失、模型错误或返回空内容时抛出
+        ConversationSummaryError。
         """
 
-        lines: list[str] = []
-        for message in messages:
-            role = str(message.get("role") or "")
-            if role not in {"user", "assistant"}:
-                continue
-            content = _compact_text(message.get("content"), limit=220)
-            if not content:
-                continue
-            label = "用户" if role == "user" else "助手"
-            lines.append(f"{label}: {content}")
-        if not lines:
-            return "本段历史对话没有可提取的用户或助手文本。"
-        summary = "本段历史对话要点：\n" + "\n".join(f"- {line}" for line in lines)
-        return summary if len(summary) <= self.max_chars else f"{summary[: self.max_chars].rstrip()}..."
+        api_key = os.getenv(self.api_key_env)
+        if not api_key:
+            raise ConversationSummaryError(f"{self.api_key_env} is required for message summarizer")
+        if not self.model:
+            raise ConversationSummaryError("message summarizer model is not configured")
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ConversationSummaryError("openai package is required for message summarizer") from exc
+        client = OpenAI(
+            api_key=api_key,
+            base_url=self.base_url,
+            timeout=self.timeout_seconds,
+            max_retries=self.max_retries,
+        )
+        try:
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": _message_summary_system_prompt()},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "previous_summary": previous_summary or "",
+                                "archived_messages": _messages_for_summary(messages),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                temperature=0,
+            )
+        except Exception as exc:  # noqa: BLE001 - provider 异常需要转成统一摘要错误
+            raise ConversationSummaryError(f"message summarizer provider failed: {exc}") from exc
+        content = str(completion.choices[0].message.content or "").strip()
+        if not content:
+            raise ConversationSummaryError("message summarizer returned empty content")
+        return content
+
+
+def _message_summary_system_prompt() -> str:
+    return (
+        "你是会话历史摘要子Agent。你只输出中文结构化摘要，不输出JSON，不解释你的工作过程。\n"
+        "你的任务是把 previous_summary 与 archived_messages 合并成一份更新后的滚动摘要。\n"
+        "不要逐条复述聊天记录；要去重、归纳、保留会影响后续回答的事实、上下文和注意事项。\n"
+        "如果 archived_messages 与 previous_summary 冲突，以较新的 archived_messages 为准，并在注意事项中说明。\n"
+        "输出必须使用以下标题，标题顺序固定：\n"
+        "用户身份与偏好：\n"
+        "当前对话状态：\n"
+        "视觉与环境线索：\n"
+        "未完成事项与回答约束：\n"
+        "每个标题下用 1-5 条短 bullet。只保留有用信息；没有内容时写“无”。"
+    )
+
+
+def _messages_for_summary(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for message in messages:
+        role = str(message.get("role") or "").strip()
+        if role not in {"user", "assistant"}:
+            continue
+        content = _compact_text(message.get("content"), limit=1000)
+        if content:
+            result.append({"role": role, "content": content})
+    return result
 
 
 class ConversationMemoryService:
@@ -83,7 +162,8 @@ class ConversationMemoryService:
 
     def __init__(self, root: str | Path, *, summarizer: MessageSummarizer | None = None) -> None:
         self.root = Path(root).expanduser().resolve()
-        self.summarizer = summarizer or RuleBasedMessageSummarizer()
+        self.summarizer = summarizer
+        self.logger = get_logger("audio_chat.runs")
 
     def append_message(self, *, user_id: str, device_id: str, message: dict[str, Any]) -> None:
         """追加一条 active message。
@@ -202,6 +282,30 @@ class ConversationMemoryService:
         marker = f"{_format_timestamp(start_at)}-{_format_timestamp(end_at)}"
         history_path = self._device_dir(user_id, device_id) / "history" / f"{marker}-messages.jsonl"
         history_rel = str(history_path.relative_to(self._device_dir(user_id, device_id)))
+        previous_summary = self.load_latest_summary(user_id=user_id, device_id=device_id)
+        if self.summarizer is None:
+            self._log_summary_failed(
+                user_id=user_id,
+                device_id=device_id,
+                reason="message_summarizer_not_configured",
+                error_type="ConversationSummaryError",
+                error_message="message summarizer is not configured",
+            )
+            return None
+        try:
+            content = self.summarizer.summarize(
+                previous_summary=previous_summary.content if previous_summary is not None else "",
+                messages=archived,
+            )
+        except Exception as exc:  # noqa: BLE001 - 摘要失败必须跳过压缩并记录异常
+            self._log_summary_failed(
+                user_id=user_id,
+                device_id=device_id,
+                reason="message_summarizer_failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return None
         self._write_jsonl(history_path, archived)
         summary = MessageSummary(
             summary_id=f"summary_{int(time.time() * 1000)}",
@@ -211,13 +315,40 @@ class ConversationMemoryService:
             source_start_at=start_at,
             source_end_at=end_at,
             history_file=history_rel,
-            content=self.summarizer.summarize(archived),
+            content=content,
             created_at=time.time(),
         )
         self._append_jsonl(self._device_dir(user_id, device_id) / self.SUMMARY_FILE, asdict(summary))
         self._write_jsonl(self._device_dir(user_id, device_id) / self.ACTIVE_FILE, kept)
         self._write_jsonl(self._device_dir(user_id, device_id) / self.LEGACY_MESSAGES_FILE, kept)
         return summary
+
+    def _log_summary_failed(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        reason: str,
+        error_type: str,
+        error_message: str,
+    ) -> None:
+        """记录摘要失败并保持 active messages 不变。"""
+
+        log_error(
+            self.logger,
+            "会话消息摘要失败，跳过本次压缩",
+            LogContext(
+                user_id=user_id,
+                session_id=device_id,
+                event="conversation.summary.failed",
+                fields={
+                    "reason": reason,
+                    "error_type": error_type,
+                    "error_message": error_message,
+                    "detail_path": str(self._device_dir(user_id, device_id) / self.SUMMARY_FILE),
+                },
+            ),
+        )
 
     def _device_dir(self, user_id: str, device_id: str) -> Path:
         path = self.root / _safe_path_part(user_id) / _safe_path_part(device_id)

@@ -5,6 +5,7 @@ import json
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.config import load_yaml_config
+from audio_chat.conversation import LlmMessageSummarizer
 from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryOperationAction, MemoryOperationPlan, MemoryService
 from audio_chat.protocol import StreamChunk
 
@@ -358,4 +359,6 @@ memory:
 
     assert isinstance(app.memory_service.manager_agent, LlmMemoryManagementAgent)
     assert app.memory_service.manager_agent.model == "qwen-memory"
+    assert isinstance(app.conversation_memory.summarizer, LlmMessageSummarizer)
+    assert app.conversation_memory.summarizer.model == "qwen-memory"
     assert app.config.text_model_provider == "mock"

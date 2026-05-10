@@ -118,6 +118,15 @@ class FakeRealtimeProvider:
         self.closed = True
 
 
+class FixedSummaryAgent:
+    """测试用会话摘要器。"""
+
+    def summarize(self, *, previous_summary: str, messages: list[dict]) -> str:
+        """返回固定结构化摘要。"""
+
+        return "当前对话状态：\n- 实时压缩前消息 0 已被归档。"
+
+
 class FailingRealtimeProvider(FakeRealtimeProvider):
     """测试用失败 provider。
 
@@ -504,6 +513,7 @@ def test_realtime_open_keeps_summary_in_system_and_active_history_as_messages(tm
 
     instances: list[FakeRealtimeProvider] = []
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.conversation_memory.summarizer = FixedSummaryAgent()
     user_id = "user-summary"
     device_id = "dev-summary"
     for index in range(8):
@@ -532,7 +542,7 @@ def test_realtime_open_keeps_summary_in_system_and_active_history_as_messages(tm
     request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
     instructions = instances[0].config.instructions
     assert "更早历史对话的压缩摘要" in instructions
-    assert "实时压缩前消息 0" in instructions
+    assert "实时压缩前消息 0 已被归档" in instructions
     assert "实时压缩前消息 6" not in instructions
     assert request["messages"][0]["content"] == instructions
     assert request["messages"][1]["content"] == "实时压缩前消息 6"

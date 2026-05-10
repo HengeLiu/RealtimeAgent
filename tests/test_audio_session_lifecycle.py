@@ -42,6 +42,15 @@ class Connection:
         )
 
 
+class FixedSummarizer:
+    """测试用会话摘要器。"""
+
+    def summarize(self, *, previous_summary: str, messages: list[dict]) -> str:
+        """返回固定摘要，避免单测访问真实模型。"""
+
+        return "当前对话状态：\n- 已压缩旧会话消息。"
+
+
 def register_audio_endpoint(app: AudioChatApp, connection: Connection, *, user_id: str = "user-a") -> None:
     """注册一个同时支持 mic 和 speaker 的测试端侧。"""
 
@@ -194,6 +203,7 @@ def test_endpoint_closed_compacts_messages_after_dialog(tmp_path) -> None:
             message_compact_keep_latest=2,
         )
     )
+    app.conversation_memory.summarizer = FixedSummarizer()
     connection = Connection("dev-audio")
     register_audio_endpoint(app, connection)
     session_id = app.active_session_id("user-a")
@@ -238,7 +248,7 @@ def test_endpoint_closed_compacts_messages_after_dialog(tmp_path) -> None:
     assert active == legacy
     assert len(history_files) == 1
     assert len(history_files[0].read_text(encoding="utf-8").splitlines()) == 5
-    assert "会话消息 0" in summary_text
+    assert "已压缩旧会话消息" in summary_text
     assert "conversation.messages.compacted" in events_text
 
 
