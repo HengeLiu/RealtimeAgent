@@ -9,7 +9,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from audio_chat.device_capabilities import compile_internal_routes_from_supports, compile_registration_payload
+from audio_chat.device_capabilities import (
+    compile_internal_routes_from_supports,
+    compile_registration_payload,
+    compile_system_routes_from_properties,
+)
 from audio_chat.observability import RunRecorder
 from audio_chat.protocol import (
     CONTROL_EVENTS,
@@ -468,6 +472,10 @@ class ControlService:
                 _Route(event=item["event"], filter=dict(item.get("filter") or {}))
                 for item in compile_internal_routes_from_supports(compiled_payload["supports"])
             ]
+            routes.extend(
+                _Route(event=item["event"], filter=dict(item.get("filter") or {}))
+                for item in compile_system_routes_from_properties(compiled_payload.get("properties"))
+            )
             self.validator.validate_payload(registration)
             self.validator.validate_routes([{"event": route.event, "filter": dict(route.filter)} for route in routes])
             ok, reason = self.authenticator.verify_token(registration)

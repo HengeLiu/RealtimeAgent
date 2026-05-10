@@ -644,6 +644,72 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     assert append_record["response_create"] == "provider_auto_after_commit"
 
 
+def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> None:
+    """测试目标：验证 capture_photo 返回 `data.uri` 时也能把图片追加回 Omni。
+
+    测试方法：构造只包含 `data.uri` 的成功工具结果，调用 `_submit_tool_result()`。
+    预期结果：provider 能找到本地图片文件，不再报 `missing_image`，并正常追加图片。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    image_path = tmp_path / "photo-uri.jpg"
+    image_path.write_bytes(b"\xff\xd8browser-photo-uri\xff\xd9")
+
+    class FakeConversation:
+        """记录 provider adapter 写回的会话操作。"""
+
+        def __init__(self) -> None:
+            self.items = []
+            self.audios = []
+            self.videos = []
+            self.commits = 0
+
+        def create_item(self, item: dict) -> None:
+            self.items.append(item)
+
+        def append_video(self, image_base64: str) -> None:
+            self.videos.append(image_base64)
+
+        def append_audio(self, audio_base64: str) -> None:
+            self.audios.append(audio_base64)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="结合图片回答"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        replay_audio_for_tool_result=lambda result: [b"\x01\x02"],
+    )
+
+    provider._submit_tool_result(
+        call_id="call-photo-uri",
+        result={
+            "tool_call_id": "call-photo-uri",
+            "name": "capture_photo",
+            "ok": True,
+            "data": {"uri": str(image_path), "mime_type": "image/jpeg"},
+            "message": "已完成一次抓拍。",
+            "error": None,
+            "meta": {},
+        },
+    )
+
+    assert conversation.items[0]["type"] == "function_call_output"
+    assert conversation.audios == ["AQI="]
+    assert conversation.videos == ["/9hicm93c2VyLXBob3RvLXVyaf/Z"]
+    assert conversation.commits == 1
+    assert not any(record.get("event") == "omni.capture_photo.image_append.missing_image" for record in records)
+
+
 def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
     """测试目标：验证 Qwen Omni 同一个工具调用只执行并回填一次。
 

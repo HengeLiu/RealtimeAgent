@@ -550,7 +550,7 @@ class QwenOmniRealtimeAdapter:
 def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | None:
     """从 `capture_photo` 工具结果解析本地图片路径。
 
-    主要逻辑：只处理成功的 `capture_photo` 结果，优先从 `data.storage_uri/path` 读取
+    主要逻辑：只处理成功的 `capture_photo` 结果，优先从 `data.storage_uri/path/uri` 读取
     本地文件；历史运行产物里的相对路径，避免 server 启动目录不同导致图片追加失败。
     参数：`result` 为 RealtimeToolBridge 生成的工具回填结果。
     返回值：存在的图片路径；不满足条件或文件不存在时返回 None。
@@ -562,7 +562,7 @@ def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | Non
     data = result.get("data")
     if not isinstance(data, dict):
         return None
-    raw_path = str(data.get("storage_uri") or data.get("path") or "").strip()
+    raw_path = str(data.get("storage_uri") or data.get("path") or data.get("uri") or "").strip()
     if not raw_path:
         return None
     path = Path(raw_path).expanduser()

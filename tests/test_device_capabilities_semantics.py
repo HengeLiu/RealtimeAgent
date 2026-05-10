@@ -40,6 +40,7 @@ def test_browser_device_capability_file_compiles_to_routes() -> None:
 
     assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
     routes = compile_internal_routes_from_supports(result["payload"]["supports"])
+    assert {"event": "control.audio_session.*"} in routes
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in routes
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in routes
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.tof"}} in routes
@@ -156,7 +157,46 @@ def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path
     assert len(connection.events) == 1
     assert connection.events[-1].stream_type == "sensor.rgb"
     assert snapshot["properties"]["audio_chat.support_ids"] == ["sensor.rgb"]
-    assert snapshot["routes"] == [{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}]
+    assert {"event": "control.audio_session.*"} in compile_internal_routes_from_supports(payload["supports"])
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in compile_internal_routes_from_supports(payload["supports"])
+
+
+def test_registration_compiles_audio_session_route_for_browser_wake_flow(tmp_path: Path) -> None:
+    """测试目标：验证结构化 supports 注册后，wake 能把 open.requested 路由回设备。
+
+    测试方法：注册一台只声明 RGB 的浏览器设备，然后发布 `control.user.wake.detected`。
+    预期结果：设备仍能收到 `control.audio_session.open.requested`，避免浏览器端拿不到 sessionId。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    connection = FakeConnection("dev-browser")
+    payload = compile_registration_payload(
+        {
+            "device_id": "dev-browser",
+            "name": "browser",
+            "supports": {"sensors": [{"type": "rgb", "modes": ["single"], "default": {"format": "jpeg"}}]},
+        }
+    )
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-001",
+            producer_id="dev-browser",
+            payload=payload,
+        ),
+        connection,
+    )
+
+    app.publish_control_event(
+        Event(
+            event_name="control.user.wake.detected",
+            user_id="user-001",
+            producer_id="dev-browser",
+            payload={"wake_source": "browser_device_button"},
+        )
+    )
+
+    assert any(event.event_name == "control.audio_session.open.requested" for event in connection.events)
 
 
 def test_sensor_tof_stream_is_stored_as_asset(tmp_path: Path) -> None:

@@ -117,7 +117,7 @@ def compile_internal_routes_from_supports(supports: dict[str, Any]) -> list[dict
 def _compile_normalized_supports_to_routes(normalized: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """把已标准化的结构化能力编译成内部事件路由规则。"""
 
-    routes: list[dict[str, Any]] = []
+    routes: list[dict[str, Any]] = [{"event": "control.audio_session.*"}]
     for item in normalized:
         support_id = item["id"]
         stream_type = SUPPORT_STREAM_TYPES[support_id]
@@ -208,6 +208,26 @@ def _system_routes() -> list[dict[str, Any]]:
         {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}},
         {"event": "command.*"},
     ]
+
+
+def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """按端侧声明的系统音频属性编译内部路由。
+
+    主要逻辑：`supports` 目前只表达业务传感器/执行器；麦克风和扬声器属于系统音频主链路，
+    由 `audio_chat.audio_input/audio_output` 属性声明后补齐内部订阅。
+    参数：`properties` 为注册 payload 中的属性字典。
+    返回值：需要追加的内部路由列表。
+    异常情况：属性缺失或不匹配时返回空列表。
+    """
+
+    data = dict(properties or {})
+    routes: list[dict[str, Any]] = []
+    if str(data.get("audio_chat.audio_input") or "").strip() == "sensor.mic":
+        routes.append({"event": "control.audio_session.*"})
+    if str(data.get("audio_chat.audio_output") or "").strip() == "actuator.speaker":
+        routes.append({"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}})
+        routes.append({"event": "command.*"})
+    return _dedupe_routes(routes)
 
 
 def _expand_structured_supports(supports: Any) -> Any:
