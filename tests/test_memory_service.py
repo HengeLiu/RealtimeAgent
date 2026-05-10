@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.config import load_yaml_config
 from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryOperationAction, MemoryOperationPlan, MemoryService
+from audio_chat.protocol import StreamChunk
 
 
 class FakeMemoryManager:
@@ -21,6 +23,33 @@ class FakeMemoryManager:
         self.requests.append(request)
         self.existing_batches.append(list(existing_memories))
         return self.plans.pop(0)
+
+
+class CaptureMessagesModel:
+    """测试用文本模型，记录主 Agent 发给模型的 messages。"""
+
+    provider_name = "mock-capture"
+    model = "mock-capture-model"
+
+    def __init__(self) -> None:
+        self.system_prompt = ""
+        self.messages = []
+        self.system_prompts = []
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """记录入参并返回一段固定文本。"""
+
+        self.system_prompts.append(self.system_prompt)
+        self.messages.append(list(messages))
+        yield "已读取记忆。"
+
+    def stream_text(self, transcript: str):
+        """历史接口占位，当前测试不应调用。"""
+
+        yield "unused"
+
+    def cancel(self) -> None:
+        """取消测试模型。"""
 
 
 def test_memory_service_writes_searches_and_deletes_user_memory_json(tmp_path) -> None:
@@ -168,13 +197,13 @@ def test_memory_enabled_uses_runs_user_memory_json_by_default(tmp_path) -> None:
     assert (runs_root / "user-default-memory" / "memory.json").exists()
 
 
-def test_memory_records_are_split_into_basic_and_personalized_prompt_layers(tmp_path) -> None:
-    """测试目标：验证长期记忆按当前约定拆成 basic 和 personalized 两层。
+def test_memory_records_are_injected_into_prompt_fragment(tmp_path) -> None:
+    """测试目标：验证长期记忆会注入主模型提示词。
 
     测试方法：写入一条姓名基本信息和一条楼梯偏好个性化信息，然后读取 memory.json
     和 prompt fragment。
-    预期结果：落盘记录包含 memory_type/topic/content；prompt 中 basic 注入全文，
-    personalized 只注入主题，详情需要通过 memory_search 再读取。
+    预期结果：落盘记录包含 memory_type/topic/content；prompt 中 basic 和 personalized
+    都注入可直接使用的内容，避免模型只看到主题却不知道用户具体偏好。
     """
 
     service = MemoryService(enabled=True, store=JsonlMemoryStore(tmp_path / "runs"))
@@ -191,9 +220,54 @@ def test_memory_records_are_split_into_basic_and_personalized_prompt_layers(tmp_
     fragment = service.build_prompt_fragment(user_id="user-layer")
     assert "基本信息：" in fragment
     assert "- 姓名: 用户名字叫文刀。" in fragment
-    assert "个性化信息主题：" in fragment
-    assert "- 楼梯偏好" in fragment
-    assert "用户默认走左侧楼梯" not in fragment
+    assert "个性化信息：" in fragment
+    assert "- 楼梯偏好: 用户默认走左侧楼梯" in fragment
+
+
+def test_text_agent_model_request_includes_memory_content(tmp_path) -> None:
+    """测试目标：验证主模型请求 messages 中注入用户记忆正文。
+
+    测试方法：给用户写入一条 personalized 记忆，替换文本模型为可捕获 messages 的
+    测试模型，然后发送一段 final 麦克风输入。
+    预期结果：`model-request.json` 和模型收到的 system message 都包含记忆正文，而
+    不是只包含记忆主题。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="text",
+            memory_enabled=True,
+            text_system_prompt="你是测试助手。",
+        )
+    )
+    app.memory_service.add_memory(
+        user_id="user-memory-prompt",
+        memory_type="personalized",
+        topic="用户偏好",
+        content="用户喜欢导航提示先说方向再说距离。",
+    )
+    model = CaptureMessagesModel()
+    app.agent_core.text_model = model
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id="user-memory-prompt",
+            session_id="sess-memory-prompt",
+            stream_id="stream-memory-prompt",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    system_prompt = model.system_prompts[0]
+    request_path = tmp_path / "runs" / "user-memory-prompt" / "sess-memory-prompt" / "model-request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    assert "用户喜欢导航提示先说方向再说距离。" in system_prompt
+    assert "用户喜欢导航提示先说方向再说距离。" in request["messages"][0]["content"]
+    assert "个性化信息：" in request["messages"][0]["content"]
 
 
 def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_path) -> None:

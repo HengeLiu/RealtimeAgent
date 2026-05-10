@@ -441,7 +441,15 @@ class MemoryService:
         return self.store.list_records(user_id=user_id, limit=limit, memory_type=memory_type)
 
     def build_prompt_fragment(self, *, user_id: str, max_items: int = 6) -> str:
-        """构造注入主 Agent system prompt 的长期记忆片段。"""
+        """构造注入主 Agent system prompt 的长期记忆片段。
+
+        主要逻辑：按更新时间读取 basic 和 personalized 记忆，并把两类内容都注入
+        prompt；personalized 仍保留主题，方便模型在需要更完整上下文时调用
+        `memory_search` 精查。
+        参数：`user_id` 为用户编号，`max_items` 为每类最多注入条数。
+        返回值：可追加到 system prompt 的中文记忆片段。
+        异常情况：存储读取异常由调用方兜底处理。
+        """
 
         if not self.enabled or max_items <= 0:
             return ""
@@ -450,16 +458,16 @@ class MemoryService:
         if not basic_records and not personalized_records:
             return ""
         lines = [
-            "以下是已保存的用户信息。基本信息已直接提供；个性化信息只提供主题，如果需要详细内容，请调用 memory_search(topic 或 topics) 查询后再回答。"
+            "以下是已保存的用户信息。内容可直接用于回答；如果需要核对更多细节，请调用 memory_search(topic 或 topics) 查询。"
         ]
         if basic_records:
             lines.append("基本信息：")
             for record in basic_records:
                 lines.append(f"- {record.topic}: {record.content}")
         if personalized_records:
-            lines.append("个性化信息主题：")
+            lines.append("个性化信息：")
             for record in personalized_records:
-                lines.append(f"- {record.topic}")
+                lines.append(f"- {record.topic}: {record.content}")
         return "\n".join(lines)
 
     def delete(self, *, user_id: str, memory_id: str) -> bool:

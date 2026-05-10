@@ -296,7 +296,7 @@ class TextAgentCore:
     def _build_system_prompt(self, *, user_id: str) -> str:
         """构造当前轮文本模型 system prompt。
 
-        主要逻辑：在静态提示词后追加长期记忆片段；基本信息直接注入，个性化信息只注入主题。
+        主要逻辑：在静态提示词后追加长期记忆片段，让模型直接获得当前用户的已保存信息。
         参数：`user_id` 为当前用户编号。
         返回值：发送给文本模型的 system prompt。
         异常情况：memory 未启用或读取失败时只返回基础提示词。
