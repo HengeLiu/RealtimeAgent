@@ -1316,8 +1316,9 @@
 
     function closeOutputWhenDrained(streamId) {
       const request = pendingOutputClose.get(streamId);
+      if (!request || !outputStarted.has(streamId)) return;
       const streamHasNodes = playbackNodes.some((item) => item.streamId === streamId);
-      if (!request || streamHasNodes || audioContext.currentTime < playbackTime - 0.03) return;
+      if (streamHasNodes || !audioContext || audioContext.currentTime < playbackTime - 0.03) return;
       pendingOutputClose.delete(streamId);
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);

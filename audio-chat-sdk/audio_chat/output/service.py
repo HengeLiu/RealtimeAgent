@@ -5,6 +5,7 @@ import queue
 import time
 import audioop
 import math
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -246,10 +247,13 @@ class StreamingTTS(Protocol):
     def synthesize_delta(self, text: str) -> bytes:
         ...
 
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        ...
+
     def metrics(self) -> dict:
         ...
 
-    def finish(self) -> None:
+    def finish(self) -> bytes:
         ...
 
 
@@ -334,8 +338,20 @@ class MockStreamingTTS:
             "mock": True,
         }
 
-    def finish(self) -> None:
-        return None
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """返回已经可用的音频。
+
+        主要逻辑：mock TTS 在 `synthesize_delta()` 中同步生成音频，没有后台队列需要
+        drain，因此这里固定返回空字节。
+        参数：`wait_seconds` 为兼容真实 TTS 的等待时间。
+        返回值：空字节。
+        异常情况：无。
+        """
+
+        return b""
+
+    def finish(self) -> bytes:
+        return b""
 
 
 class DashScopeStreamingTTS:
@@ -372,6 +388,8 @@ class DashScopeStreamingTTS:
         self._first_audio_at: float | None = None
         self._text_push_count = 0
         self._text_chars = 0
+        self._complete = threading.Event()
+        self._errors: list[str] = []
 
         sink = self
         dashscope.api_key = api_key
@@ -385,7 +403,11 @@ class DashScopeStreamingTTS:
                     sink._audio.put(sink._normalize_sample_rate(bytes(data)))
 
             def on_error(self, message: str):  # pragma: no cover - exercised in integration
-                sink._audio.put(b"")
+                sink._errors.append(str(message))
+                sink._complete.set()
+
+            def on_complete(self):  # pragma: no cover - exercised in integration
+                sink._complete.set()
 
         attr = f"PCM_{sample_rate_hz}HZ_MONO_16BIT"
         fmt = getattr(AudioFormat, attr, AudioFormat.PCM_22050HZ_MONO_16BIT)
@@ -396,24 +418,39 @@ class DashScopeStreamingTTS:
 
     def synthesize_delta(self, text: str) -> bytes:
         if not text:
-            return b""
+            return self.drain_audio()
         if self._first_text_at is None:
             self._first_text_at = time.time()
         self._text_push_count += 1
         self._text_chars += len(text)
         self._synthesizer.streaming_call(text)
-        deadline = time.time() + max(0.1, self.request_timeout_seconds)
+        return self.drain_audio()
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """取出 TTS 回调中已经到达的音频。
+
+        主要逻辑：DashScope TTS 的音频通过 `on_data` 异步回调到达。文本 delta 进入
+        TTS 后不能阻塞等待整段音频，否则会卡住模型流式输出；因此常规 delta 只做
+        非阻塞 drain，final 阶段再带短等待 drain 剩余音频。
+        参数：`wait_seconds` 为首个音频可等待的最长秒数，0 表示只取现有队列。
+        返回值：已经可播放的 PCM 字节。
+        异常情况：无。
+        """
+
+        deadline = time.time() + max(0.0, wait_seconds)
         chunks: list[bytes] = []
-        while time.time() < deadline:
+        while True:
             try:
-                chunk = self._audio.get(timeout=0.05)
+                timeout = 0.0
+                if wait_seconds > 0:
+                    timeout = max(0.0, min(0.05, deadline - time.time()))
+                chunk = self._audio.get(timeout=timeout) if timeout > 0 else self._audio.get_nowait()
             except queue.Empty:
-                if chunks:
+                if wait_seconds <= 0 or chunks or time.time() >= deadline:
                     break
                 continue
             if chunk:
                 chunks.append(chunk)
-                break
         return b"".join(chunks)
 
     def synthesize_text(self, text: str) -> bytes:
@@ -466,8 +503,11 @@ class DashScopeStreamingTTS:
             "text_chars": self._text_chars,
         }
 
-    def finish(self) -> None:
+    def finish(self) -> bytes:
         self._synthesizer.streaming_complete()
+        if not self._complete.is_set():
+            self._complete.wait(timeout=max(0.1, self.request_timeout_seconds))
+        return self.drain_audio(wait_seconds=0.2)
 
     def _normalize_sample_rate(self, pcm: bytes) -> bytes:
         if self._source_sample_rate_hz == self.sample_rate_hz:
@@ -533,13 +573,24 @@ class StreamingTtsOutputSource:
     def synthesize_pending(self) -> bytes:
         text = self._pending_text
         self._pending_text = ""
-        return self.tts.synthesize_delta(text)
+        if text:
+            return self.tts.synthesize_delta(text)
+        drain = getattr(self.tts, "drain_audio", None)
+        if callable(drain):
+            return drain()
+        return b""
 
     def metrics(self) -> dict:
         return self.tts.metrics()
 
-    def finish(self) -> None:
-        self.tts.finish()
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        drain = getattr(self.tts, "drain_audio", None)
+        if callable(drain):
+            return drain(wait_seconds)
+        return b""
+
+    def finish(self) -> bytes:
+        return self.tts.finish() or b""
 
 
 @dataclass
@@ -572,8 +623,8 @@ class NativeAudioOutputSource:
     def metrics(self) -> dict:
         return {"provider": "native_audio", "sample_rate_hz": self.format.sample_rate, **self.metadata}
 
-    def finish(self) -> None:
-        return None
+    def finish(self) -> bytes:
+        return b""
 
     def chunk_bytes(self) -> int:
         """计算当前格式下每个 stream chunk 的字节数。
@@ -615,8 +666,8 @@ class CachedAudioOutputSource:
     def metrics(self) -> dict:
         return {"provider": "cached_prompt_audio", "cache_key": self.cache_key, **self.metadata}
 
-    def finish(self) -> None:
-        return None
+    def finish(self) -> bytes:
+        return b""
 
 
 @dataclass
@@ -816,6 +867,8 @@ class OutputRouter:
         self._payload_by_stream: dict[str, bytearray] = {}
         self._queued_sessions: set[str] = set()
         self._finish_listeners: list[Callable[[str, str, str], None]] = []
+        self._tts_pump_streams: set[str] = set()
+        self._write_lock = threading.RLock()
 
     def add_finish_listener(self, listener: Callable[[str, str, str], None]) -> None:
         """注册 output stream 完成回调。
@@ -854,33 +907,21 @@ class OutputRouter:
                 return
             self._stream_by_session[delta.session_id] = stream_id
             self._source_by_stream[stream_id] = source
-        payload = source.synthesize_pending()
-        seq = self._seq_by_stream.get(stream_id, 0)
-        if payload:
-            chunk = StreamChunk(
+            self._start_tts_drain_pump(
                 user_id=delta.user_id,
                 session_id=delta.session_id,
                 stream_id=stream_id,
-                stream_type="actuator.speaker",
-                seq=seq,
+                source=source,
+            )
+        payload = source.synthesize_pending()
+        if payload:
+            self._write_tts_payload(
+                user_id=delta.user_id,
+                session_id=delta.session_id,
+                stream_id=stream_id,
                 payload=payload,
-                sample_rate=self.stream_service.registry.get(stream_id).format.sample_rate,
-                duration_ms=40,
-                final=False,
+                source=source,
             )
-            self.stream_service.write_chunk(chunk)
-            self._payload_by_stream.setdefault(stream_id, bytearray()).extend(payload)
-            self.recorder.record_agent_event(
-                delta.session_id,
-                {
-                    "event": "assistant_audio.delta",
-                    "stream_id": stream_id,
-                    "payload_size": len(payload),
-                    "tts": source.metrics(),
-                    "stream_format": self.stream_service.registry.get(stream_id).format.__dict__,
-                },
-            )
-            self._seq_by_stream[stream_id] = seq + 1
         if delta.final:
             self._finish_stream(delta.user_id, delta.session_id, stream_id, source)
 
@@ -1001,8 +1042,17 @@ class OutputRouter:
         stream_id: str,
         source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
     ) -> None:
-        source.finish()
         handle = self.stream_service.registry.get(stream_id)
+        finish_payload = source.finish() or b""
+        if finish_payload:
+            self._write_tts_payload(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                payload=finish_payload,
+                source=source,
+                metadata={"flush": "finish"},
+            )
         payload = bytes(self._payload_by_stream.pop(stream_id, bytearray()))
         if payload and handle.format.codec == "pcm16le":
             self.recorder.record_output_wav(
@@ -1032,6 +1082,126 @@ class OutputRouter:
         if next_output is not None:
             self._queued_sessions.discard(next_output.intent.session_id)
             self._play_queued_output(next_output)
+
+    def _write_tts_payload(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        payload: bytes,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+        metadata: dict | None = None,
+    ) -> None:
+        """写入 Text TTS 产生的可播放音频。
+
+        主要逻辑：TTS 音频可能来自普通 text delta，也可能来自 final 阶段的
+        `streaming_complete()` drain。这里统一写入 output stream 并记录
+        `assistant_audio.delta`，避免尾音在关闭 stream 前丢失。
+        参数：`payload` 为 PCM 音频；`source` 提供 TTS 指标和输出格式。
+        返回值：无。
+        异常情况：stream 已关闭时由 StreamService 抛出。
+        """
+
+        if not payload:
+            return
+        with self._write_lock:
+            handle = self.stream_service.registry.get(stream_id)
+            if handle.state != "open":
+                return
+            seq = self._seq_by_stream.get(stream_id, 0)
+            written_bytes = 0
+            chunk_count = 0
+            for part in self._split_output_payload(payload, format=handle.format):
+                chunk = StreamChunk(
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    stream_type="actuator.speaker",
+                    seq=seq,
+                    payload=part,
+                    codec=handle.format.codec,
+                    sample_rate=handle.format.sample_rate,
+                    channels=handle.format.channels,
+                    duration_ms=handle.format.chunk_ms,
+                    final=False,
+                    metadata=dict(metadata or {}),
+                )
+                self.stream_service.write_chunk(chunk)
+                self._payload_by_stream.setdefault(stream_id, bytearray()).extend(part)
+                written_bytes += len(part)
+                chunk_count += 1
+                seq += 1
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.delta",
+                    "stream_id": stream_id,
+                    "payload_size": written_bytes,
+                    "chunk_count": chunk_count,
+                    "tts": source.metrics(),
+                    "stream_format": handle.format.__dict__,
+                    **dict(metadata or {}),
+                },
+            )
+            self._seq_by_stream[stream_id] = seq
+
+    def _start_tts_drain_pump(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource,
+    ) -> None:
+        """启动 TTS 音频后台 drain。
+
+        主要逻辑：真实 TTS 的 `on_data` 回调可能在两次模型 text delta 之间到达；
+        pump 线程会短等待并写出已到达音频，让 Text 链路接近 realtime 播放，而不是
+        等下一次模型 delta 或 final 才播放。
+        参数：`stream_id` 定位当前 output stream；`source` 持有 TTS 会话。
+        返回值：无。
+        异常情况：写入失败时记录系统事件，线程退出。
+        """
+
+        if stream_id in self._tts_pump_streams:
+            return
+        self._tts_pump_streams.add(stream_id)
+
+        def _run() -> None:
+            try:
+                while True:
+                    handle = self.stream_service.registry.get(stream_id)
+                    if handle.state != "open" or self._stream_by_session.get(session_id) != stream_id:
+                        return
+                    payload = source.drain_audio(wait_seconds=0.05)
+                    if payload:
+                        self._write_tts_payload(
+                            user_id=user_id,
+                            session_id=session_id,
+                            stream_id=stream_id,
+                            payload=payload,
+                            source=source,
+                            metadata={"drain": "background"},
+                        )
+                    elif source.final_requested:
+                        time.sleep(0.02)
+                    else:
+                        time.sleep(0.01)
+            except Exception as exc:  # noqa: BLE001 - 后台 drain 需要保留诊断
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.error.raised",
+                        "component": "StreamingTTSPump",
+                        "stream_id": stream_id,
+                        "session_id": session_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            finally:
+                self._tts_pump_streams.discard(stream_id)
+
+        threading.Thread(target=_run, name=f"tts-drain-{stream_id}", daemon=True).start()
 
     def mark_endpoint_playback_finished(self, user_id: str, session_id: str | None, stream_id: str | None) -> None:
         """处理端侧回报的播放完成事件。
@@ -1103,6 +1273,24 @@ class OutputRouter:
             dedupe_key=intent.dedupe_key,
             cached_prompt_key=intent.cached_prompt_key,
         )
+
+    def _split_output_payload(self, payload: bytes, *, format: StreamFormat) -> list[bytes]:
+        """按输出格式拆分 PCM payload。
+
+        主要逻辑：Text TTS 可能一次 drain 出较长音频；这里按 stream format 的
+        `chunk_ms` 拆成稳定小片，避免一个 StreamChunk 里混入过长音频。
+        参数：`payload` 为待发送音频，`format` 为当前 output stream 格式。
+        返回值：拆分后的音频片段列表。
+        异常情况：无。
+        """
+
+        target_size = max(1, format.sample_rate * format.channels * format.chunk_ms // 1000)
+        if format.codec == "pcm16le":
+            frame_bytes = max(2, format.channels * 2)
+            target_size = max(frame_bytes, target_size * 2)
+            target_size -= target_size % frame_bytes
+        target_size = max(1, min(target_size, self.stream_service.max_chunk_bytes))
+        return [payload[offset : offset + target_size] for offset in range(0, len(payload), target_size)]
 
     def _split_native_audio_payload(self, payload: bytes, *, source: NativeAudioOutputSource) -> list[bytes]:
         """把 provider 原生音频拆成协议 chunk。

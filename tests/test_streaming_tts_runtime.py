@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import audioop
 import json
+import time
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta
@@ -40,6 +41,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -83,11 +85,134 @@ def test_output_service_persists_tts_latency_metrics_in_audio_delta_event(tmp_pa
     assert connection.chunks
     events = [
         json.loads(line)
-        for line in (tmp_path / "runs" / "sessions" / "sess-tts" / "model-events.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (tmp_path / "runs" / "user-001" / "sess-tts" / "model-events.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     audio_event = next(item for item in events if item.get("event") == "assistant_audio.delta")
     assert audio_event["tts"]["first_chunk_latency_ms"] is not None
+
+
+def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
+    """测试目标：验证流式 TTS 在 final 后产生的剩余音频不会丢失。
+
+    测试方法：注入一个普通 text delta 只记录文本、不立即返回音频的 TTS；
+    当 assistant final 到达时，TTS 的 `finish()` 返回完整 PCM。
+    预期结果：OutputService 在关闭 stream 前把 finish 返回的音频写给端侧。
+    """
+
+    class FinishFlushTTS:
+        """测试用 TTS，模拟真实 provider 在 complete 后才回调尾部音频。"""
+
+        provider_name = "finish-flush"
+        model = "finish-flush-model"
+        streaming = True
+
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+            self.finished = False
+
+        def synthesize_delta(self, text: str) -> bytes:
+            """记录增量文本，但不立即返回音频。"""
+
+            if text:
+                self.texts.append(text)
+            return b""
+
+        def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+            """普通 delta 阶段没有可用音频。"""
+
+            return b""
+
+        def finish(self) -> bytes:
+            """在 final 阶段返回完整 PCM。"""
+
+            self.finished = True
+            return b"\x01\x00" * 960
+
+        def metrics(self) -> dict:
+            """返回固定音频格式和调试信息。"""
+
+            return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection)
+    fake_tts = FinishFlushTTS()
+    app.output_service.router._injected_tts = fake_tts
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-flush", text="第一句")
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-flush", text="", final=True)
+    )
+
+    assert fake_tts.texts == ["第一句"]
+    assert fake_tts.finished
+    assert sum(len(chunk.payload) for chunk in connection.chunks) == 1920
+    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+
+
+def test_output_service_background_drains_tts_audio_between_text_deltas(tmp_path) -> None:
+    """测试目标：验证 TTS 回调音频不必等下一次 text delta 或 final 才下发。
+
+    测试方法：注入一个 `synthesize_delta()` 不返回音频、但 `drain_audio()` 返回音频的
+    TTS，提交一段非 final 文本后短暂等待后台 pump。
+    预期结果：端侧在 final 前收到音频 chunk。
+    """
+
+    class BackgroundDrainTTS:
+        """测试用 TTS，模拟 provider 通过后台回调产生音频。"""
+
+        provider_name = "background-drain"
+        model = "background-drain-model"
+        streaming = True
+
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+            self.drained = False
+
+        def synthesize_delta(self, text: str) -> bytes:
+            """只接收文本，不同步返回音频。"""
+
+            if text:
+                self.texts.append(text)
+            return b""
+
+        def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+            """第一次后台 drain 返回一段 PCM。"""
+
+            if self.texts and not self.drained:
+                self.drained = True
+                return b"\x02\x00" * 480
+            return b""
+
+        def finish(self) -> bytes:
+            """本测试不依赖 final flush。"""
+
+            return b""
+
+        def metrics(self) -> dict:
+            """返回固定音频格式。"""
+
+            return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection)
+    fake_tts = BackgroundDrainTTS()
+    app.output_service.router._injected_tts = fake_tts
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-background", text="后台音频")
+    )
+    deadline = time.time() + 1.0
+    while time.time() < deadline and not connection.chunks:
+        time.sleep(0.02)
+
+    assert fake_tts.texts == ["后台音频"]
+    assert connection.chunks
+    assert sum(len(chunk.payload) for chunk in connection.chunks) == 960
 
 
 def test_dashscope_tts_missing_key_falls_back_or_fails_explicitly(monkeypatch) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -9,6 +10,7 @@ from audio_chat.output import AssistantTextDelta, OutputService
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from audio_chat.agent_core.providers import (
+    AsrProviderAdapter,
     AsrProviderConfig,
     TEXT_AGENT_SYSTEM_PROMPT,
     TextModelProviderConfig,
@@ -44,30 +46,69 @@ def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
 
 class AsrPipeline:
     def __init__(self, *, config: AsrProviderConfig, recorder: RunRecorder) -> None:
-        self.provider, downgrade_reason = build_asr_provider(config)
+        self.config = config
         self.recorder = recorder
-        if downgrade_reason:
-            self._record_degradation(downgrade_reason)
+        self._providers: dict[str, AsrProviderAdapter] = {}
+        self._lock = threading.RLock()
 
     def append_audio(self, chunk: StreamChunk) -> str | None:
         final_text: str | None = None
-        for event in self.provider.append_audio(chunk):
-            name = "input_transcript.done" if event.final else "input_transcript.delta"
-            self.recorder.record_agent_event(
-                chunk.session_id,
-                {
-                    "event": name,
-                    "text": event.text,
-                    "provider": self.provider.provider_name,
-                    "model": self.provider.model,
-                },
-            )
-            if event.final:
-                final_text = event.text
+        provider_key = chunk.stream_id or chunk.session_id
+        provider = self._provider_for(provider_key)
+        try:
+            for event in provider.append_audio(chunk):
+                name = "input_transcript.done" if event.final else "input_transcript.delta"
+                self.recorder.record_agent_event(
+                    chunk.session_id,
+                    {
+                        "event": name,
+                        "text": event.text,
+                        "provider": provider.provider_name,
+                        "model": provider.model,
+                    },
+                )
+                if event.final:
+                    final_text = event.text
+        finally:
+            if chunk.final:
+                self._close_provider(provider_key)
         return final_text
 
     def cancel(self) -> None:
-        self.provider.cancel()
+        with self._lock:
+            providers = list(self._providers.values())
+            self._providers.clear()
+        for provider in providers:
+            provider.cancel()
+
+    def _provider_for(self, provider_key: str) -> AsrProviderAdapter:
+        """按输入流返回独立 ASR provider。
+
+        主要逻辑：真实 realtime ASR 在 final 后会关闭底层会话；浏览器眼镜每段录音
+        会打开新的 `sensor.mic` stream，因此这里按 stream_id 隔离 provider，避免
+        第二段音频复用已关闭的识别会话。
+        参数：`provider_key` 通常为输入 stream_id。
+        返回值：可继续接收该输入流音频的 ASR provider。
+        异常情况：provider 构造失败时由 `build_asr_provider` 按配置降级或抛出。
+        """
+
+        with self._lock:
+            provider = self._providers.get(provider_key)
+            if provider is not None:
+                return provider
+            provider, downgrade_reason = build_asr_provider(self.config)
+            if downgrade_reason:
+                self._record_degradation(downgrade_reason)
+            self._providers[provider_key] = provider
+            return provider
+
+    def _close_provider(self, provider_key: str) -> None:
+        """关闭并移除一条输入流对应的 ASR provider。"""
+
+        with self._lock:
+            provider = self._providers.pop(provider_key, None)
+        if provider is not None:
+            provider.cancel()
 
     def _record_degradation(self, reason: str) -> None:
         self.recorder.record_system_event(

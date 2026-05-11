@@ -64,8 +64,7 @@ def test_dashscope_streaming_tts_real_session_returns_pcm_and_metrics() -> None:
     )
 
     first = provider.synthesize_delta(EXPECTED_TEXT)
-    provider.finish()
-    audio = first
+    audio = first + provider.finish()
     while True:
         try:
             audio += provider._audio.get_nowait()

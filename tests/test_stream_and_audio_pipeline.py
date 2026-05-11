@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
 
+import audio_chat.agent_core.text as text_module
 from audio_chat.agent_core import TextAgentCore
+from audio_chat.agent_core.providers import TranscriptEvent
 from audio_chat.audio_pipeline import AudioPipeline, FormatNormalizer
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
@@ -223,7 +225,11 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
             payload={
                 "device_id": "dev-continuous",
                 "auth": {"mode": "disabled"},
-                "supports": {"sensors": [], "actuators": []},
+                "supports": {
+                    "sensors": [{"type": "mic"}],
+                    "actuators": [{"type": "speaker"}],
+                },
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -245,10 +251,98 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
             )
         )
 
-    event_names = [event.event_name for event in connection.events]
-    assert event_names.count("agent.response.started") == 2
-    assert event_names.count("stream.output.open.requested") == 2
-    assert len(connection.chunks) >= 2
+    messages_path = app.recorder.session_file(first.session_id, "messages.jsonl")
+    messages = [json.loads(line) for line in messages_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert [message["role"] for message in messages].count("user") == 2
+    assert [message["role"] for message in messages].count("assistant") == 2
+
+
+def test_text_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 Text 链路每条麦克风输入流使用独立 ASR 会话。
+
+    测试方法：把 ASR provider 替换成 final 后关闭自身的假实现，在同一 session 下
+    连续提交两条 `sensor.mic` stream。
+    预期结果：第二条输入流会创建新的 ASR provider，并正常写入第二轮用户消息，
+    不会复用第一轮已关闭的 realtime ASR 会话。
+    """
+
+    created_providers = []
+
+    class ClosingAsrProvider:
+        provider_name = "closing-asr"
+
+        def __init__(self) -> None:
+            self.model = "closing-asr"
+            self.closed = False
+            created_providers.append(self)
+
+        def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
+            if self.closed:
+                return []
+            if not chunk.final:
+                return []
+            self.closed = True
+            return [TranscriptEvent(text=f"transcript:{chunk.stream_id}", final=True)]
+
+        def cancel(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(text_module, "build_asr_provider", lambda config: (ClosingAsrProvider(), None))
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+
+    class Connection:
+        device_id = "dev-recreate-asr"
+
+        def __init__(self) -> None:
+            self.events = []
+            self.chunks = []
+
+        def push_event(self, event: Event) -> None:
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            self.chunks.append(chunk)
+
+    connection = Connection()
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-recreate-asr",
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {
+                    "sensors": [{"type": "mic"}],
+                    "actuators": [{"type": "speaker"}],
+                },
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    first = app.open_input_stream(user_id="user-recreate-asr", producer_id=connection.device_id)
+    second = app.open_input_stream(user_id="user-recreate-asr", producer_id=connection.device_id)
+
+    for handle in (first, second):
+        app.write_input_chunk(
+            StreamChunk(
+                user_id="user-recreate-asr",
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.mic",
+                seq=0,
+                payload=b"\x00\x00" * 320,
+                final=True,
+            )
+        )
+
+    messages_path = app.recorder.session_file(first.session_id, "messages.jsonl")
+    messages = [json.loads(line) for line in messages_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    user_messages = [message["content"] for message in messages if message["role"] == "user"]
+    assert len(created_providers) == 2
+    assert user_messages == [f"transcript:{first.stream_id}", f"transcript:{second.stream_id}"]
 
 
 def test_stream_lifecycle_idle_timeout_and_input_failed_events(tmp_path) -> None:

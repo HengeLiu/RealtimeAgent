@@ -225,6 +225,33 @@ def test_browser_device_resets_mic_state_when_server_closes_input_stream() -> No
     assert 'activeAudioSource = audioModeSelect.value === "offline_realtime" ? "offline_paused" : "idle"' in handler_body
 
 
+def test_browser_device_defers_output_close_until_audio_arrives() -> None:
+    """测试目标：验证 server close 信令早于音频 chunk 到达时不会提前关闭播放。
+
+    测试方法：静态检查 browser-glass 在 `closeOutputWhenDrained()` 中要求当前
+    output stream 已经收到音频并发送过 `stream.output.started`，再允许上报
+    `stream.output.finished/closed`。
+    预期结果：Text TTS 这类短音频不会因为 close.requested 先到而只听到提示音。
+    """
+
+    html = _html()
+    close_body = html.split("function closeOutputWhenDrained(streamId)", 1)[1].split(
+        "function stopOutputPlayback",
+        1,
+    )[0]
+    stream_body = html.split("function handleStreamChunk(chunk)", 1)[1].split(
+        "async function ensureAudioContext",
+        1,
+    )[0]
+
+    assert "pendingOutputClose.set(item.stream_id, item)" in html
+    assert "if (!request || !outputStarted.has(streamId)) return;" in close_body
+    assert "if (!outputStarted.has(chunk.stream_id))" in stream_body
+    assert "outputStarted.add(chunk.stream_id)" in stream_body
+    assert 'sendEvent(event("stream.output.finished"' in close_body
+    assert 'sendEvent(event("stream.output.closed"' in close_body
+
+
 def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     """测试目标：验证 browser-glass 能在音频长连接期间并行处理视觉 stream。
 

@@ -99,6 +99,70 @@ Text 模型路线的无头验收可以直接复用旧 SDK 的 AudioSample。mock
 uv run python -m pytest tests/test_text_route_audio_samples.py -q
 ```
 
+## 更换模型和模态
+
+应用运行配置在 `app-examples/for-blind-app/server.yaml`。根目录的 `server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
+
+如果要从 Omni Realtime 切到文本模态测试，把 `agent.mode` 改成 `text`，然后配置 `agent.text` 三段 provider：
+
+```yaml
+agent:
+  mode: "text"
+  text:
+    model_provider: "dashscope-compatible"
+    model: "qwen-plus"
+    asr_provider: "dashscope"
+    asr_model: "fun-asr-realtime"
+    tts_provider: "dashscope"
+    tts_model: "cosyvoice-v3-flash"
+    tts_voice: "longanhuan"
+    streaming_tts: true
+    allow_mock_fallback: true
+```
+
+这条链路是 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`。当前 `asr_provider: "dashscope"` 走 `dashscope.audio.asr.Recognition` 实时接口，ASR 模型应使用 `fun-asr-realtime`；`qwen3-asr-flash` 是非实时录音文件识别/HTTP 调用模型，不适配这条实时麦克风路径。使用 DashScope 真实 provider 前需要设置：
+
+```bash
+export DASHSCOPE_API_KEY="你的 DashScope Key"
+uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
+uv run audio-chat.server.run --app-name for-blind-app
+```
+
+如果只是先验证文本链路形状，可以把 `model_provider/asr_provider/tts_provider` 都设成 `mock`。mock ASR 在 playback 测试里会用 WAV 文件名作为转写文本，mock TTS 会生成诊断音，不需要任何 API Key。
+
+如果要接 OpenAI-compatible 或本地兼容服务，只替换文本模型段：
+
+```yaml
+agent:
+  mode: "text"
+  text:
+    model_provider: "openai-compatible"
+    model: "你的模型名"
+```
+
+并设置：
+
+```bash
+export OPENAI_API_KEY="你的 Key"
+export OPENAI_BASE_URL="https://你的兼容接口/v1"
+```
+
+ASR 和 TTS 目前可运行的真实实现主要是 DashScope；本地兼容服务只替换文本大模型时，建议先保留 `asr_provider: "mock"`、`tts_provider: "mock"` 或继续使用 DashScope。
+
+如果要切回 Omni Realtime，把 `agent.mode` 改成 `realtime_audio`，并配置 `agent.realtime`：
+
+```yaml
+agent:
+  mode: "realtime_audio"
+  realtime:
+    provider: "qwen"
+    model: "qwen3.5-omni-plus-realtime"
+    voice: "Tina"
+    turn_detection: "provider"
+```
+
+Omni Realtime 同样使用 `DASHSCOPE_API_KEY`。它的主链路是 `sensor.mic -> RealtimeAudioAgentCore -> assistant_audio.delta -> actuator.speaker`，不经过 TextAgentCore 的 ASR 和 TTS。
+
 iOS 参考端：
 
 ```bash
@@ -245,7 +309,7 @@ uv run python -m pytest tests/integration/test_dashscope_providers.py -q
 ## 文档
 
 - [设备注册与功能开发说明](docs/device-capability-development-guide.md)
-- [SDK 架构设计](docs/audio-chat-sdk-architecture.md)
+- [SDK 总体架构设计](docs/audio-chat-sdk-architecture-design.md)
 - [Context 与设备 API 设计说明](docs/context-device-api-design.md)
 - [运行产物说明](docs/runs-artifacts-guide.md)
 - [浏览器设备设计](docs/browser-glass-design.md)

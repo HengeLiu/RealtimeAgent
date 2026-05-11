@@ -67,7 +67,7 @@ asset:
   selection_policy: "latest"
 
 agent:
-  mode: "realtime_audio"
+  mode: "text"
   realtime:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"
@@ -77,17 +77,19 @@ agent:
     session_idle_timeout_seconds: 60
     custom_adapter: ""
   text:
-    model_provider: "mock"
-    model: "mock-text"
+    model_provider: "dashscope-compatible"
+    model: "qwen-plus"
     system_prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
-    asr_provider: "mock"
-    asr_model: "mock-asr"
+    asr_provider: "dashscope"
+    asr_model: "fun-asr-realtime"
     tts_provider: "dashscope"
     tts_model: "cosyvoice-v3-flash"
     tts_voice: "longanhuan"
     streaming_tts: true
     max_context_messages: 30
-    allow_mock_fallback: true
+    allow_mock_fallback: false
+    request_timeout_seconds: 15
+    max_retries: 1
 
 output:
   default_priority: "normal"
