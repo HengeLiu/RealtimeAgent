@@ -393,7 +393,7 @@ class MockTextModelAdapter:
                 "type": "tool_call",
                 "id": "call_mock_capture_photo",
                 "name": "capture_photo",
-                "arguments": {"reason": text, "timeout_seconds": 5, "freshness_seconds": 0},
+                "arguments": {"timeout_seconds": 5, "freshness_seconds": 0},
             }
         if "start_timer_task" in tool_names and any(keyword in text for keyword in ("计时", "提醒", "分钟", "秒")):
             return {

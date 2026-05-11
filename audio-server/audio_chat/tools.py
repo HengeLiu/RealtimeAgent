@@ -1891,7 +1891,6 @@ class TaskRuntimeManagerTool(BaseTool):
             description="任务管理动作：query 查询，cancel 取消，list_types 列出类型，list_instances 列出实例。启动任务请调用对应 start_* Tool。",
         )
         task_id: str | None = Field(default=None, description="查询或取消任务时使用的任务编号。")
-        reason: str = Field(default="tool_requested", description="取消任务时使用的原因。")
         include_terminal: bool = Field(default=True, description="列出任务实例时是否包含已完成、取消、失败或超时任务。")
 
     spec = ToolSpec(
@@ -1942,7 +1941,7 @@ class TaskRuntimeManagerTool(BaseTool):
             task_id = str(input_data.get("task_id") or "").strip()
             if not task_id:
                 return ToolResult.failed(ToolError("task_id is required", code=ErrorCode.INVALID_ARGUMENT))
-            ref = await context.tasks.cancel(task_id, reason=str(input_data.get("reason") or "tool_requested"))
+            ref = await context.tasks.cancel(task_id, reason="tool_requested")
             return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
         if action == "start":
             task_type = str(input_data.get("task_type") or "").strip()

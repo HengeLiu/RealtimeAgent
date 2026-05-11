@@ -158,7 +158,7 @@ def test_capture_photo_uses_browser_camera_cold_start_timeout(monkeypatch) -> No
             self.devices = FakeDevices(rgb)
 
     rgb = FakeRgb()
-    result = asyncio.run(ToolExecutor().execute(CapturePhotoTool(), FakeContext(rgb), {"reason": "test"}))
+    result = asyncio.run(ToolExecutor().execute(CapturePhotoTool(), FakeContext(rgb), {}))
 
     assert result.ok is True
     assert rgb.timeout_seconds == 15

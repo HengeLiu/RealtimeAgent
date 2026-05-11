@@ -110,7 +110,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
             name="capture_photo",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={"reason": "acceptance"},
+            input_data={},
         )
     )
     find_object = asyncio.run(

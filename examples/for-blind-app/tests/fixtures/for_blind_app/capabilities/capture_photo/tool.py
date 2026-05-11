@@ -13,7 +13,7 @@ class CapturePhotoTool(BaseTool):
         """测试目标：验证 Tool 只通过 ToolDeviceFacade 请求资产。"""
 
         asset = await context.devices.sensors.rgb.one(
-            params={"reason": input_data.get("reason", "test")},
+            params={},
             timeout_seconds=1,
         )
         if asset is None:

@@ -92,7 +92,6 @@ class FindObjectTask(BaseTask):
         asset = await context.devices.sensors.rgb.one(
             params={
                 "format": "jpeg",
-                "reason": "find_object_mock",
                 "object_name": object_name,
             },
             timeout_seconds=float(input_data.get("timeout_seconds") or 5),
@@ -169,7 +168,6 @@ class TrafficLightTask(BaseTask):
         asset = await context.devices.sensors.rgb.one(
             params={
                 "format": "jpeg",
-                "reason": "traffic_light_mock",
             },
             timeout_seconds=float(input_data.get("timeout_seconds") or 5),
         )

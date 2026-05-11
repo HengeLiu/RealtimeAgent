@@ -125,6 +125,8 @@ class QwenOmniRealtimeAdapter:
         self._output_modalities: list[Any] = []
         self._completed_tool_call_ids: set[str] = set()
         self._pending_tool_followup_response: dict[str, Any] | None = None
+        self._suppress_current_response_audio = False
+        self._current_response_audio_emitted = False
 
     def open(self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks) -> None:
         """建立 Omni Realtime 会话。
@@ -301,12 +303,25 @@ class QwenOmniRealtimeAdapter:
             self._output_modalities = []
             self._completed_tool_call_ids.clear()
             self._pending_tool_followup_response = None
+            self._suppress_current_response_audio = False
+            self._current_response_audio_emitted = False
 
     def _handle_provider_event(self, message: dict[str, Any]) -> None:
         callbacks = self._callbacks
         if callbacks is None:
             return
         event_type = str(message.get("type") or "")
+        if event_type == "response.created":
+            self._suppress_current_response_audio = False
+            self._current_response_audio_emitted = False
+            callbacks.provider_event(_summarize_omni_event(message))
+            return
+        if event_type == "response.output_item.added":
+            item = message.get("item") if isinstance(message.get("item"), dict) else {}
+            if item.get("type") in {"function_call", "tool_call"}:
+                self._suppress_current_response_audio = True
+            callbacks.provider_event(_summarize_omni_event(message))
+            return
         if event_type == "response.audio.delta":
             raw_delta = str(message.get("delta") or "")
             callbacks.provider_event(
@@ -314,10 +329,21 @@ class QwenOmniRealtimeAdapter:
                     "event": "omni.response.audio.delta",
                     "provider": "qwen",
                     "delta_base64_len": len(raw_delta),
+                    "suppressed": self._suppress_current_response_audio,
                 }
             )
             if raw_delta:
                 audio = base64.b64decode(raw_delta)
+                if self._suppress_current_response_audio:
+                    callbacks.provider_event(
+                        {
+                            "event": "omni.response.audio.delta.suppressed",
+                            "provider": "qwen",
+                            "audio_bytes": len(audio),
+                            "reason": "tool_call_response",
+                        }
+                    )
+                    return
                 callbacks.provider_event(
                     {
                         "event": "omni.response.audio.delta.decoded",
@@ -335,16 +361,21 @@ class QwenOmniRealtimeAdapter:
                         "provider_event": event_type,
                     },
                 )
+                self._current_response_audio_emitted = True
             return
         if event_type == "response.audio.done":
             callbacks.provider_event({"event": "omni.response.audio.done", "provider": "qwen"})
-            callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type})
+            if self._current_response_audio_emitted:
+                callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type})
             return
         if event_type == "response.done":
             callbacks.provider_event(_summarize_omni_event(message))
             self._create_pending_tool_followup_response()
+            self._suppress_current_response_audio = False
+            self._current_response_audio_emitted = False
             return
         if event_type in {"response.function_call_arguments.delta", "response.tool_call_arguments.delta"}:
+            self._suppress_current_response_audio = True
             callbacks.provider_event(_summarize_omni_event(message))
             if callbacks.tool_call_delta is not None:
                 callbacks.tool_call_delta(
@@ -356,6 +387,7 @@ class QwenOmniRealtimeAdapter:
                 )
             return
         if event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
+            self._suppress_current_response_audio = True
             callbacks.provider_event(_summarize_omni_event(message))
             if callbacks.tool_call_done is not None:
                 call_id = str(message.get("call_id") or message.get("item_id") or message.get("id") or "")
@@ -1582,6 +1614,11 @@ def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
     elif event_type == "response.done":
         response = message.get("response") if isinstance(message.get("response"), dict) else {}
         record["status"] = response.get("status")
+    elif event_type == "response.output_item.added":
+        item = message.get("item") if isinstance(message.get("item"), dict) else {}
+        record["item_type"] = item.get("type")
+        record["tool_call_id"] = item.get("call_id") or item.get("id")
+        record["tool_name"] = item.get("name")
     elif event_type in {"response.function_call_arguments.delta", "response.tool_call_arguments.delta"}:
         record["tool_call_id"] = message.get("call_id") or message.get("item_id") or message.get("id")
         record["delta_len"] = len(str(message.get("delta") or message.get("arguments_delta") or ""))

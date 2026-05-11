@@ -19,7 +19,6 @@ VISION_IMAGE_BASE64_MAX_BYTES = 7_500_000
 class CapturePhotoInput(BaseModel):
     """抓拍 Tool 输入参数。"""
 
-    reason: str = Field(default="agent_requested", description="请求抓拍的业务原因。")
     timeout_seconds: float = Field(
         default=CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS,
         gt=0,
@@ -57,13 +56,13 @@ class CapturePhotoTool(BaseTool):
 
         主要逻辑：只使用 Context 设备 API 请求 `sensor.rgb` 单帧资产；图片字节
         由端侧通过 stream 上传，Tool 只返回资产引用。
-        参数：`context` 为 SDK 注入上下文，`input_data` 包含 reason 和 timeout_seconds。
+        参数：`context` 为 SDK 注入上下文，`input_data` 包含 timeout_seconds。
         返回值：成功时返回 `AssetRef`。
         异常情况：设备不可用或超时时由底层 Context API 抛出。
         """
 
         asset = await context.devices.sensors.rgb.one(
-            params={"reason": str(input_data.get("reason") or "agent_requested"), "format": "jpeg"},
+            params={"format": "jpeg"},
             timeout_seconds=float(input_data.get("timeout_seconds") or CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS),
         )
         return ToolResult.success(
@@ -191,7 +190,7 @@ class InterpretCurrentViewTool(BaseTool):
 
         query = str(input_data.get("query") or "请描述当前画面。")
         asset = await context.devices.sensors.rgb.one(
-            params={"reason": query or "interpret_current_view", "format": "jpeg"},
+            params={"format": "jpeg"},
             timeout_seconds=float(input_data.get("timeout_seconds") or CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS),
         )
         result = _interpret_asset_with_vision_model(

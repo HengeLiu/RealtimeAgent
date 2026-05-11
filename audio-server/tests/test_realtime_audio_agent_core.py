@@ -173,7 +173,7 @@ class CapturePhotoRealtimeTool(BaseTool):
     description = "Capture a photo for realtime vision."
     input_model = {
         "type": "object",
-        "properties": {"reason": {"type": "string"}},
+        "properties": {},
     }
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -1007,6 +1007,44 @@ def test_realtime_tool_bridge_prefers_done_arguments_over_delta_copy() -> None:
     )
 
     assert gateway.input_data == {}
+
+
+def test_qwen_omni_suppresses_audio_while_generating_tool_arguments() -> None:
+    """测试目标：验证 Omni 生成工具参数期间的音频不会下发到扬声器。
+
+    测试方法：模拟 provider 进入 function call 参数增量后继续发送 audio delta。
+    预期结果：adapter 记录 suppressed 事件，不调用 audio_delta，也不会在 audio.done
+    时关闭一个从未打开的输出流。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    records = []
+    audio_chunks = []
+    audio_done = []
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni"))
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: audio_chunks.append(audio),
+        audio_done=lambda metadata: audio_done.append(metadata),
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+
+    provider._handle_provider_event({"type": "response.created"})
+    provider._handle_provider_event(
+        {
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call-001",
+            "name": "capture_photo",
+            "delta": "{\"timeout_seconds\":",
+        }
+    )
+    provider._handle_provider_event({"type": "response.audio.delta", "delta": "AQI="})
+    provider._handle_provider_event({"type": "response.audio.done"})
+
+    assert audio_chunks == []
+    assert audio_done == []
+    assert any(record.get("event") == "omni.response.audio.delta.suppressed" for record in records)
 
 
 def test_realtime_provider_text_is_persisted_to_user_messages(tmp_path) -> None:

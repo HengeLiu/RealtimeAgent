@@ -51,6 +51,8 @@ def test_task_start_tool_starts_and_runtime_manager_queries_cancels_and_lists_ta
         input_model=ManagedToolTask.spec().input_model,
     )
     context = _context(engine)
+    manager_schema = manager.resolved_spec().input_model.model_json_schema()
+    assert "reason" not in manager_schema["properties"]
 
     listed = asyncio.run(manager.run(context, {"action": "list_types"}))
     assert listed.ok is True
@@ -74,7 +76,7 @@ def test_task_start_tool_starts_and_runtime_manager_queries_cancels_and_lists_ta
     assert instances.ok is True
     assert [item["task_id"] for item in instances.data["tasks"]] == [task_id]
 
-    cancelled = asyncio.run(manager.run(context, {"action": "cancel", "task_id": task_id, "reason": "unit"}))
+    cancelled = asyncio.run(manager.run(context, {"action": "cancel", "task_id": task_id}))
     assert cancelled.ok is True
     assert cancelled.data["state"] == "cancelled"
 

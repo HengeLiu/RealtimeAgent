@@ -137,7 +137,7 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
             name="capture_photo",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={"reason": "acceptance"},
+            input_data={},
         )
     )
     timer_ref = asyncio.run(
