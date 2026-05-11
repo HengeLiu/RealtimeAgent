@@ -267,7 +267,7 @@ def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, mon
 
     monkeypatch.setattr(threading, "Timer", FakeTimer)
     app = _build_app(tmp_path, monkeypatch)
-    _register_playback(app)
+    endpoint = _register_playback(app)
     session_id = app.active_session_id("user-for-blind")
 
     created = asyncio.run(
@@ -282,6 +282,7 @@ def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, mon
     assert created.ok is True
     assert created.data["state"] == "running"
     assert scheduled and scheduled[0]["interval"] == 60
+    assert endpoint.output_chunks == []
 
 
 def test_timer_start_tool_creates_timer_task(tmp_path, monkeypatch) -> None:

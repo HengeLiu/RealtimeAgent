@@ -231,8 +231,6 @@ class TimerTask(BaseTask):
         seconds = max(0, int(input_data.get("seconds") or 0))
         message = str(input_data.get("message") or "").strip()
         auto_fire = bool(input_data.get("auto_fire", True))
-        if context.devices is not None:
-            await context.output.say(f"{seconds} 秒计时器已启动", priority="normal")
         if context.bridge is not None:
             context.bridge.handle_signal(
                 TaskSignal(
