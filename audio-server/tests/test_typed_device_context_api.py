@@ -157,6 +157,60 @@ def test_sensor_one_selector_can_narrow_device(tmp_path) -> None:
     assert side.events == []
 
 
+def test_sensor_one_returns_when_endpoint_reports_capture_failed(tmp_path) -> None:
+    """测试目标：确认端侧主动上报抓拍失败时，资产请求不会继续等到超时。
+
+    测试方法：注册一台 RGB 设备，后台调用 `rgb.one()` 后模拟端侧带 request_id
+    发送 `stream.input.closed reason=capture_failed`。
+    预期结果：等待方立即以 StreamTimeoutError 返回，并记录 `asset.request.failed`。
+    """
+
+    from audio_chat import StreamTimeoutError
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=5))
+    user_id = "user-rgb-failed"
+    endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-rgb-failed")
+    register_endpoint(
+        app,
+        endpoint,
+        support_routes=[{"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}}],
+    )
+    context = ToolContextFactory(app=app).create(user_id=user_id, session_id="dev-rgb-failed")
+
+    async def _run() -> None:
+        task = asyncio.create_task(
+            asyncio.to_thread(lambda: asyncio.run(context.devices.sensors.rgb.one(timeout_seconds=5)))
+        )
+        deadline = asyncio.get_running_loop().time() + 1
+        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert endpoint.events
+        request_id = endpoint.events[-1].payload["request_id"]
+        app.publish_control_event(
+            Event(
+                event_name="stream.input.closed",
+                user_id=user_id,
+                producer_id="dev-rgb-failed",
+                session_id="dev-rgb-failed",
+                stream_id="stream_rgb_failed",
+                stream_type="sensor.rgb",
+                payload={
+                    "stream_type": "sensor.rgb",
+                    "reason": "capture_failed",
+                    "error": "camera permission denied",
+                    "request_id": request_id,
+                },
+            )
+        )
+        with pytest.raises(StreamTimeoutError):
+            await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(_run())
+    assets_log = tmp_path / "runs" / user_id / "dev-rgb-failed" / "assets.jsonl"
+    assert "asset.request.failed" in assets_log.read_text(encoding="utf-8")
+    assert "camera permission denied" in assets_log.read_text(encoding="utf-8")
+
+
 def test_commands_call_returns_stable_result(tmp_path) -> None:
     """测试目标：确认 Commands API 不暴露底层 PublishResult。
 

@@ -513,6 +513,7 @@ class AudioChatApp:
             self.control_service.publish(event)
             return
         if event.event_name == "stream.input.closed":
+            self._mark_asset_request_failed(event)
             self._mark_endpoint_input_closed(event)
             self.control_service.publish(event)
             return
@@ -788,6 +789,31 @@ class AudioChatApp:
                 "stream_type": handle.stream_type,
                 "reason": event.payload.get("reason", "endpoint_closed"),
             },
+        )
+
+    def _mark_asset_request_failed(self, event: Event) -> None:
+        """把端侧资产采集失败回执转给 Asset Service。
+
+        主要逻辑：端侧在摄像头权限、文件选择或采集阶段失败时，会带 request_id
+        发送 `stream.input.closed reason=capture_failed`。这里让等待中的资产请求
+        立刻结束，避免只能等服务端超时。
+        参数：`event` 为端侧关闭输入流事件。
+        返回值：无。
+        异常情况：缺少 request_id 或非资产流时忽略。
+        """
+
+        request_id = str(event.payload.get("request_id") or "").strip()
+        if not request_id or not str(event.stream_type or "").startswith("sensor."):
+            return
+        reason = str(event.payload.get("reason") or "").strip()
+        if reason not in {"capture_failed", "asset_capture_failed"}:
+            return
+        self.asset_service.fail_request(
+            user_id=event.user_id,
+            stream_type=str(event.stream_type),
+            request_id=request_id,
+            reason=reason,
+            message=str(event.payload.get("error") or reason),
         )
 
     def _mark_audio_session_opened(self, user_id: str, device_id: str | None) -> None:

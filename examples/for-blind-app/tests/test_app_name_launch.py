@@ -37,6 +37,8 @@ def test_app_name_loads_server_yaml_and_auto_registers_capabilities() -> None:
     assert config.tasks_discover_enabled is True
     assert {
         "capture_photo",
+        "interpret_image",
+        "interpret_current_view",
         "query_route_plan",
         "search_web",
         "task_runtime_manager",
@@ -56,7 +58,9 @@ def test_config_path_infers_app_name_from_server_yaml_parent() -> None:
     assert config.app_name == "for-blind-app"
     assert config.app_dir == str(launch.app_dir)
     assert config.config_path.endswith("examples/for-blind-app/audio-server/server.yaml")
-    assert "capture_photo" in app.tool_registry.list_names()
+    tool_names = set(app.tool_registry.list_names())
+    assert "capture_photo" in tool_names
+    assert "interpret_current_view" in tool_names
 
 
 def test_app_name_requires_root_server_yaml() -> None:

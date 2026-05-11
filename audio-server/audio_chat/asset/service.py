@@ -180,6 +180,7 @@ class _PendingAssetCapture:
         self.request_id = request_id
         self.event = ThreadEvent()
         self.asset: AssetRef | None = None
+        self.error: dict | None = None
 
 
 class AssetService:
@@ -265,6 +266,34 @@ class AssetService:
             )
         return ref
 
+    def fail_request(
+        self,
+        *,
+        user_id: str,
+        stream_type: str,
+        request_id: str,
+        reason: str,
+        message: str | None = None,
+    ) -> bool:
+        """标记一次端侧资产请求失败并唤醒等待方。
+
+        主要逻辑：端侧在无法打开摄像头、没有选择图片或权限失败时，会带
+        `request_id` 回传 `stream.input.closed`。这里用同一个 request_id 唤醒
+        `request_asset()`，避免服务端继续等到超时。
+        参数：`user_id/stream_type/request_id` 定位等待请求；`reason/message`
+        描述端侧失败原因。
+        返回值：命中并唤醒 pending 返回 True，否则返回 False。
+        异常情况：无。
+        """
+
+        with self._lock:
+            pending = self._pending.get(request_id)
+        if pending is None or pending.user_id != user_id or pending.stream_type != stream_type:
+            return False
+        pending.error = {"reason": reason, "message": message or reason}
+        pending.event.set()
+        return True
+
     def request_asset(
         self,
         *,
@@ -343,7 +372,24 @@ class AssetService:
         pending.event.wait(timeout=timeout_seconds or self.request_timeout_seconds)
         with self._lock:
             self._pending.pop(request_id, None)
-        if pending.asset is None and record_id and hasattr(self.recorder, "record_asset_event"):
+        if pending.asset is None and pending.error is not None and record_id and hasattr(self.recorder, "record_asset_event"):
+            self.recorder.record_asset_event(
+                record_id,
+                {
+                    "event": "asset.request.failed",
+                    "user_id": user_id,
+                    "request_id": request_id,
+                    "stream_type": stream_type,
+                    "matched_count": publish_result.matched_count,
+                    "delivered_count": publish_result.delivered_count,
+                    "matched_device_ids": list(publish_result.matched_device_ids),
+                    "failed_device_ids": list(publish_result.failed_device_ids),
+                    "timeout_seconds": timeout_seconds or self.request_timeout_seconds,
+                    "reason": pending.error.get("reason"),
+                    "message": pending.error.get("message"),
+                },
+            )
+        elif pending.asset is None and record_id and hasattr(self.recorder, "record_asset_event"):
             self.recorder.record_asset_event(
                 record_id,
                 {
