@@ -101,7 +101,7 @@ def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
     """
 
     class FinishFlushTTS:
-        """测试用 TTS，模拟真实 provider 在 complete 后才回调尾部音频。"""
+        """测试用 TTS，模拟真实 provider 在 streaming_complete 后返回尾部音频。"""
 
         provider_name = "finish-flush"
         model = "finish-flush-model"
@@ -124,7 +124,7 @@ def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
             return b""
 
         def finish(self) -> bytes:
-            """在 final 阶段返回完整 PCM。"""
+            """在 final 阶段完成当前 TTS streaming task 并返回 PCM。"""
 
             self.finished = True
             return b"\x01\x00" * 960
@@ -151,6 +151,80 @@ def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
     assert fake_tts.finished
     assert sum(len(chunk.payload) for chunk in connection.chunks) == 1920
     assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+
+
+def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> None:
+    """测试目标：验证每轮回答 final 都会完成当前 TTS task。
+
+    测试方法：同一个 session 连续提交两轮文本输出，分别记录两轮 TTS task。
+    预期结果：每轮 final 都调用 provider complete，并在下一轮创建新的 TTS task。
+    """
+
+    class CountingTTS:
+        """测试用 TTS：记录每个回答 task 的文本和 complete 次数。"""
+
+        provider_name = "counting"
+        model = "counting-model"
+        streaming = True
+
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+            self.finished = False
+
+        def synthesize_delta(self, text: str) -> bytes:
+            """记录本 task 收到的文本并同步返回音频。"""
+
+            self.texts.append(text)
+            return b"\x03\x00" * 240
+
+        def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+            """本测试不依赖后台音频。"""
+
+            return b""
+
+        def finish(self) -> bytes:
+            """标记当前 task 已完成。"""
+
+            self.finished = True
+            return b""
+
+        def metrics(self) -> dict:
+            """返回固定音频格式。"""
+
+            return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection)
+    router = app.output_service.router
+    tasks = [CountingTTS(), CountingTTS()]
+
+    def next_tts() -> CountingTTS:
+        """按顺序返回两个独立 task。"""
+
+        return tasks.pop(0)
+
+    router._new_tts = next_tts  # type: ignore[method-assign]
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-task", text="第一轮")
+    )
+    first_task = router._source_by_session["sess-task"].tts
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-task", text="", final=True)
+    )
+
+    assert first_task.finished
+    assert "sess-task" not in router._source_by_session
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-task", text="第二轮")
+    )
+    second_task = router._source_by_session["sess-task"].tts
+
+    assert second_task is not first_task
+    assert second_task.texts == ["第二轮"]
+    assert connection.chunks
 
 
 def test_output_service_background_drains_tts_audio_between_text_deltas(tmp_path) -> None:
@@ -213,6 +287,95 @@ def test_output_service_background_drains_tts_audio_between_text_deltas(tmp_path
     assert fake_tts.texts == ["后台音频"]
     assert connection.chunks
     assert sum(len(chunk.payload) for chunk in connection.chunks) == 960
+
+
+def test_text_tts_empty_final_does_not_open_output_stream(tmp_path) -> None:
+    """测试目标：验证没有任何文本 delta 时，空 final 不会打开扬声器输出流。
+
+    测试方法：直接提交 `text=""、final=True` 的 AssistantTextDelta。
+    预期结果：端侧不会收到 `stream.output.open.requested`，runs 记录 empty_output。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection)
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-empty-final", text="", final=True)
+    )
+
+    assert not any(event.event_name == "stream.output.open.requested" for event in connection.events)
+    model_events = (tmp_path / "runs" / "user-001" / "sess-empty-final" / "model-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "assistant_audio.done" in model_events
+    assert '"empty_output": true' in model_events
+
+
+def test_text_tts_failure_releases_active_playback_for_next_turn(tmp_path) -> None:
+    """测试目标：验证 TTS 在 output stream 打开后失败时，会释放 active 播放状态。
+
+    测试方法：先注入一个 `synthesize_delta()` 抛异常的 TTS，触发输出失败；再换成
+    正常 mock TTS 提交下一轮文本。
+    预期结果：第二轮播放决策是 `play_now`，不是 `active_playback_not_preempted` 队列。
+    """
+
+    class FailingTTS:
+        """测试用 TTS：模拟 provider 抛出 speech synthesizer 状态错误。"""
+
+        provider_name = "failing"
+        model = "failing-model"
+        streaming = True
+
+        def synthesize_delta(self, text: str) -> bytes:
+            """首段文本进入 TTS 时抛出真实现场同类错误。"""
+
+            raise RuntimeError("speech synthesizer has not been started.")
+
+        def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+            """失败场景没有可 drain 音频。"""
+
+            return b""
+
+        def finish(self) -> bytes:
+            """失败场景不应依赖 finish。"""
+
+            return b""
+
+        def metrics(self) -> dict:
+            """返回固定格式，保证 stream 可以先被打开。"""
+
+            return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection)
+    app.output_service.router._injected_tts = FailingTTS()
+
+    try:
+        app.output_service.on_assistant_text_delta(
+            AssistantTextDelta(user_id="user-001", session_id="sess-failing-tts", text="会失败")
+        )
+    except RuntimeError as exc:
+        assert "speech synthesizer has not been started" in str(exc)
+    else:  # pragma: no cover - 防止输出失败被静默吞掉
+        raise AssertionError("expected TTS failure")
+
+    app.output_service.router._injected_tts = MockStreamingTTS(sample_rate_hz=24000)
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-after-failure", text="恢复播放")
+    )
+
+    decisions = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / "user-001" / "sess-after-failure" / "playback-decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert decisions[-1]["action"] == "play_now"
+    assert decisions[-1]["reason"] == "no_active_playback"
+    assert connection.chunks
 
 
 def test_dashscope_tts_missing_key_falls_back_or_fails_explicitly(monkeypatch) -> None:

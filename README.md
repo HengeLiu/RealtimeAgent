@@ -286,6 +286,46 @@ uv run audio-chat.sdk.package-check \
 uv run python -m pytest audio-server/tests examples/for-blind-app/tests examples/dev-support/tests -q
 ```
 
+## 运行产物与日志索引
+
+服务启动时，`audio_chat.runs` 会打印一次 `运行产物目录索引`。其中 `runs_root` 是当前应用的运行产物根目录；后续事件日志不再重复打印 `detail_path`、`session_detail_path` 或 `path`，排查时按启动索引定位文件。
+
+根目录文件：
+
+```text
+control-events.jsonl      # 全局控制事件流水
+control-routes.jsonl      # 控制事件订阅匹配和投递结果
+system-events.jsonl       # 系统错误、降级和恢复事件
+capability-events.jsonl   # 跨会话能力调用轨迹
+command-events.jsonl      # 跨会话设备命令轨迹
+debug/playback.json       # 当前播放仲裁快照，对应 /api/debug/playback
+tasks/                    # 长流程 Task 运行产物
+```
+
+设备会话目录位于 `<runs_root>/<user_id>/<device_id>/`：
+
+```text
+events.jsonl              # 当前设备会话控制事件
+messages.jsonl            # 用户、助手和工具消息历史
+model-request.json        # 最近一次发给模型的请求快照
+agent-events.jsonl        # Agent Core、模型 provider 和 delta 摘要事件
+model-events.jsonl        # 模型相关事件镜像，便于按模型视角排查
+tool-events.jsonl         # 工具调用参数、结果、耗时和错误
+stream-events.jsonl       # 数据流打开、关闭、失败和分片摘要
+assets.jsonl              # 图片等资产写入和请求记录
+task-signals.jsonl        # Task Engine 信号记录
+output-decisions.jsonl    # 服务端输出仲裁决策
+playback-decisions.jsonl  # 端侧播放仲裁决策
+actuators.jsonl           # 端侧执行器播放和回执记录
+audio/                    # 麦克风输入 PCM 和扬声器输出 WAV
+photos/                   # RGB 图片或抓拍资产
+imu/                      # IMU 数据
+depth/                    # 深度或 ToF 数据
+assets/                   # 其他资产
+```
+
+用户级文件位于 `<runs_root>/<user_id>/`，其中 `memory.json` 保存用户长期记忆。
+
 ## 测试
 
 ```bash

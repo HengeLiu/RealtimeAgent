@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
+from audio_chat.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
 from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService
@@ -1385,12 +1386,6 @@ class RealtimeAudioAgentCore:
                     "message": message,
                 },
             )
-            self._event_buffer.record_event(
-                "session.error",
-                user_id=user_id,
-                session_id=session_id,
-                payload={"message": message, **record},
-            )
 
     def _record_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """记录 provider 事件到 runs 和统一事件缓存。"""
@@ -1527,20 +1522,20 @@ class RealtimeAudioAgentCore:
     ) -> None:
         """写入 provider/system 错误，避免异常在热路径重复刷屏。"""
 
-        self.recorder.record_system_event(
-            {
-                "event": "system.error.raised",
-                "message": message,
-                "user_id": user_id,
-                "session_id": session_id,
-                **record,
-            }
-        )
-        self._event_buffer.record_event(
-            "session.error",
+        detail = dict(record)
+        component = str(detail.pop("component", "") or "RealtimeAudioAgentCore")
+        record_agent_recovery_error(
+            recorder=self.recorder,
+            event_buffer=self._event_buffer,
+            control_service=self.control_service,
             user_id=user_id,
             session_id=session_id,
-            payload={"message": message, **record},
+            component=component,
+            message=message,
+            agent_event="session.error",
+            recoverable=True,
+            fallback_text=DEFAULT_RECOVERABLE_ERROR_MESSAGE,
+            record=detail,
         )
 
 

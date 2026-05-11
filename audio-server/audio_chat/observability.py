@@ -20,6 +20,7 @@ NOISY_LIBRARY_LOG_LEVELS: tuple[tuple[str, int], ...] = (
     ("openai", logging.WARNING),
 )
 STANDARD_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
+STORAGE_PATH_LOG_FIELDS = {"detail_path", "session_detail_path", "path"}
 HIGH_FREQUENCY_AGENT_EVENTS = {
     "input_transcript.delta",
     "assistant_text.delta",
@@ -74,7 +75,7 @@ class LogContext:
             if value and key not in STANDARD_LOG_RECORD_FIELDS:
                 result[key] = value
         for key, value in self.fields.items():
-            if value is not None and key not in STANDARD_LOG_RECORD_FIELDS:
+            if value is not None and key not in STANDARD_LOG_RECORD_FIELDS and key not in STORAGE_PATH_LOG_FIELDS:
                 result[key] = value
         return result
 
@@ -91,7 +92,7 @@ class LineFormatter(logging.Formatter):
         standard = STANDARD_LOG_RECORD_FIELDS | {"exc_info", "exc_text", "stack_info"}
         fields: list[str] = []
         for key, value in sorted(record.__dict__.items()):
-            if key in standard or key.startswith("_"):
+            if key in standard or key in STORAGE_PATH_LOG_FIELDS or key.startswith("_"):
                 continue
             fields.append(f"{key}={_format_log_value(value)}")
         if fields:
@@ -156,6 +157,15 @@ def _format_log_value(value: Any) -> str:
 
 
 class RunRecorder:
+    """运行产物记录器。
+
+    主要功能：把控制事件、流事件、Agent 事件、模型请求、工具调用和媒体文件
+    写入稳定目录，并输出适合开发终端阅读的摘要日志。
+    主要方法：`record_event()` 记录控制事件，`record_model_request()` 保存模型请求，
+    `record_stream_event()` 汇总数据流生命周期，`record_message()` 保存会话消息。
+    主要属性：`runs_root` 是运行产物根目录，`logger` 是统一的运行日志器。
+    """
+
     def __init__(self, runs_root: str | Path = "runs/default-app") -> None:
         self.runs_root = Path(runs_root).expanduser().resolve()
         self.logger = get_logger("audio_chat.runs")
@@ -165,6 +175,57 @@ class RunRecorder:
         self._model_request_started_at: dict[str, float] = {}
         self._delta_stats: dict[tuple[str, str], dict[str, Any]] = {}
         self._first_model_request_logged = False
+        self._artifact_index_logged = False
+        self._log_artifact_index_once()
+
+    def _log_artifact_index_once(self) -> None:
+        """在进程启动阶段打印一次运行产物目录索引。
+
+        主要逻辑：终端后续事件不再重复打印 `detail_path/path`，因此启动时集中给出
+        根目录、会话目录和常见文件含义，便于开发者按事件类型定位落盘细节。
+        参数：无。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if self._artifact_index_logged:
+            return
+        self._artifact_index_logged = True
+        log_info(
+            self.logger,
+            "运行产物目录索引",
+            LogContext(
+                fields={
+                    "runs_root": str(self.runs_root),
+                    "session_dir_pattern": "<runs_root>/<user_id>/<device_id>/",
+                    "media_dir_pattern": "<runs_root>/<user_id>/<device_id>/<audio|photos|imu|depth|assets>/",
+                    "global_files": {
+                        "control-events.jsonl": "全局控制事件流水",
+                        "control-routes.jsonl": "控制事件订阅匹配和投递结果",
+                        "system-events.jsonl": "系统错误、降级和恢复事件",
+                        "capability-events.jsonl": "跨会话能力调用轨迹",
+                        "command-events.jsonl": "跨会话设备命令轨迹",
+                        "debug/playback.json": "当前播放仲裁快照",
+                    },
+                    "session_files": {
+                        "events.jsonl": "当前设备会话控制事件",
+                        "messages.jsonl": "用户、助手和工具消息历史",
+                        "model-request.json": "最近一次发给模型的请求快照",
+                        "agent-events.jsonl": "Agent Core、模型 provider 和 delta 摘要事件",
+                        "model-events.jsonl": "模型相关事件镜像，便于按模型视角排查",
+                        "tool-events.jsonl": "工具调用参数、结果、耗时和错误",
+                        "stream-events.jsonl": "数据流打开、关闭、失败和分片摘要",
+                        "assets.jsonl": "图片等资产写入和请求记录",
+                        "task-signals.jsonl": "Task Engine 信号记录",
+                        "output-decisions.jsonl": "服务端输出仲裁决策",
+                        "playback-decisions.jsonl": "端侧播放仲裁决策",
+                        "actuators.jsonl": "端侧执行器播放和回执记录",
+                    },
+                    "user_files": {"memory.json": "用户长期记忆"},
+                    "task_dir_pattern": "<runs_root>/tasks/",
+                },
+            ),
+        )
 
     def bind_device(self, *, user_id: str, device_id: str) -> Path:
         """绑定当前运行目录中的用户和设备。

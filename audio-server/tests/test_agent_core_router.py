@@ -169,8 +169,15 @@ class ToolCallingTextModel:
                 "arguments": {"city": "shanghai"},
             }
             return
+        assistant_message = next(item for item in messages if item["role"] == "assistant" and item.get("tool_calls"))
+        provider_call = assistant_message["tool_calls"][0]
+        assert provider_call["type"] == "function"
+        assert provider_call["id"] == "call-weather-1"
+        assert provider_call["function"]["name"] == "lookup_weather"
+        assert json.loads(provider_call["function"]["arguments"]) == {"city": "shanghai"}
         tool_message = next(item for item in messages if item["role"] == "tool")
-        assert tool_message["content"]["data"]["city"] == "shanghai"
+        assert "name" not in tool_message
+        assert json.loads(tool_message["content"])["data"]["city"] == "shanghai"
         yield "上海天气已查询。"
 
     def stream_text(self, transcript: str):
@@ -178,6 +185,162 @@ class ToolCallingTextModel:
 
     def cancel(self) -> None:
         pass
+
+
+class ToolLoopFailingTextModel:
+    """测试用文本模型：工具调用后的第二轮 provider 请求抛出异常。"""
+
+    provider_name = "mock-tool-failing"
+    model = "mock-tool-failing-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """首轮返回工具调用，第二轮模拟 provider 内部异常。"""
+
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "tool_call",
+                "id": "call-weather-fail",
+                "name": "lookup_weather",
+                "arguments": {"city": "shanghai"},
+            }
+            return
+        raise RuntimeError("provider rejected tool call history")
+
+    def stream_text(self, transcript: str):
+        yield "unused"
+
+    def cancel(self) -> None:
+        pass
+
+
+class RecoveryTextModel:
+    """测试用文本模型：异常后一轮新输入可以继续正常回复。"""
+
+    provider_name = "mock-recovery"
+    model = "mock-recovery-model"
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """直接返回恢复后的文本。"""
+
+        yield "恢复后的回答。"
+
+    def stream_text(self, transcript: str):
+        yield "unused"
+
+    def cancel(self) -> None:
+        pass
+
+
+class MultiDeltaRecoveryTextModel:
+    """测试用文本模型：把同一条回复拆成多个文本 delta。"""
+
+    provider_name = "mock-multi-delta"
+    model = "mock-multi-delta-model"
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """返回两段文本，模拟真实模型分片输出。"""
+
+        yield "第一段，"
+        yield "第二段。"
+
+    def stream_text(self, transcript: str):
+        yield "unused"
+
+    def cancel(self) -> None:
+        pass
+
+
+class FailingOutputAdapter:
+    """测试用输出适配器：模拟 TTS/output 状态损坏。"""
+
+    def emit_text_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
+        """始终抛出输出异常。"""
+
+        raise RuntimeError("fallback output failed")
+
+
+class StreamingFailCompleteSucceedTTS:
+    """测试用 TTS：流式首包失败，但完整文本合成可用。"""
+
+    provider_name = "streaming-fail-complete-ok"
+    model = "streaming-fail-complete-ok-model"
+    streaming = True
+
+    def __init__(self) -> None:
+        self.streamed_texts: list[str] = []
+        self.completed_texts: list[str] = []
+
+    def synthesize_delta(self, text: str) -> bytes:
+        """模拟 DashScope streaming_call 首段抛出 InvalidTask。"""
+
+        self.streamed_texts.append(text)
+        raise RuntimeError("speech synthesizer has not been started.")
+
+    def synthesize_text(self, text: str) -> bytes:
+        """完整文本合成成功，作为流式失败后的补播路径。"""
+
+        self.completed_texts.append(text)
+        return b"\x03\x00" * 960
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """失败后没有后台音频。"""
+
+        return b""
+
+    def finish(self) -> bytes:
+        """本测试不依赖 streaming finish。"""
+
+        return b""
+
+    def metrics(self) -> dict:
+        """返回固定音频格式。"""
+
+        return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
+
+
+class FirstDeltaFailsThenStreamsTTS:
+    """测试用 TTS：首段流式失败，后续流式如果被调用会返回音频。"""
+
+    provider_name = "first-delta-fails"
+    model = "first-delta-fails-model"
+    streaming = True
+
+    def __init__(self) -> None:
+        self.streamed_texts: list[str] = []
+        self.completed_texts: list[str] = []
+
+    def synthesize_delta(self, text: str) -> bytes:
+        """第一段抛错，后续调用会成功，用于捕获重复播放风险。"""
+
+        self.streamed_texts.append(text)
+        if len(self.streamed_texts) == 1:
+            raise RuntimeError("speech synthesizer has not been started.")
+        return b"\x04\x00" * 480
+
+    def synthesize_text(self, text: str) -> bytes:
+        """完整文本补播路径。"""
+
+        self.completed_texts.append(text)
+        return b"\x05\x00" * 960
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """本测试不依赖后台 drain。"""
+
+        return b""
+
+    def finish(self) -> bytes:
+        """本测试不依赖 streaming finish。"""
+
+        return b""
+
+    def metrics(self) -> dict:
+        """返回固定音频格式。"""
+
+        return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
 
 
 class CaptureHistoryTextModel:
@@ -246,6 +409,222 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
     assert "lookup_weather" in trace_text
     assert "你是中文语音助手" in model_request
     assert "lookup_weather" in model_request
+
+
+def test_text_agent_core_recovers_after_provider_error_in_tool_loop(tmp_path) -> None:
+    """测试目标：验证工具循环中的 provider 异常会反馈给用户且不阻断后续对话。
+
+    测试方法：mock 文本模型首轮返回工具调用，第二轮抛出 provider 异常；随后替换为
+    正常模型并发送另一段 final 麦克风输入。
+    预期结果：当前轮写入可恢复错误、中文兜底回复和 system.error；下一轮仍能正常回复。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.tool_registry.register(WeatherTool())
+    app.agent_core.text_model = ToolLoopFailingTextModel()
+    user_id = "user-recoverable-error"
+    session_id = "sess-recoverable-error"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-error-first",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    events_text = (session_dir / "events.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert TextAgentCore.RECOVERABLE_ERROR_MESSAGE in messages_text
+    assert "system.error.raised" in events_text
+    assert "response.failed" in agent_events_text
+    assert "provider rejected tool call history" in agent_events_text
+
+    app.agent_core.text_model = RecoveryTextModel()
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-error-second",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello again",
+            final=True,
+        )
+    )
+
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    assert "恢复后的回答。" in messages_text
+
+
+def test_text_agent_recovery_does_not_raise_when_fallback_output_fails(tmp_path) -> None:
+    """测试目标：验证恢复提示的 TTS/output 再次失败时不会冒泡到 stream 层。
+
+    测试方法：mock 文本模型在工具循环第二轮抛异常，同时把 output adapter 替换成
+    始终抛异常的实现。
+    预期结果：`append_audio_event()` 不抛异常，messages 中仍记录兜底文本，agent
+    事件中同时包含 `response.failed` 和 `output.failed`。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.tool_registry.register(WeatherTool())
+    app.agent_core.text_model = ToolLoopFailingTextModel()
+    app.agent_core.output_adapter = FailingOutputAdapter()
+    user_id = "user-output-recovery"
+    session_id = "sess-output-recovery"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-output-fail",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert TextAgentCore.RECOVERABLE_ERROR_MESSAGE in messages_text
+    assert "response.failed" in agent_events_text
+    assert "output.failed" in agent_events_text
+    assert "fallback output failed" in agent_events_text
+
+
+def test_text_agent_streaming_tts_failure_reopens_stream_and_keeps_real_answer(tmp_path) -> None:
+    """测试目标：验证普通回答的流式 TTS 首包失败后会重开 streaming TTS。
+
+    测试方法：mock 文本模型返回真实回答，注入一个首段流式失败、第二次流式成功的
+    provider。
+    预期结果：消息历史保存真实回答，agent 事件记录 `output.tts_stream_reopen`，
+    不使用全文本 TTS 补播，并生成音频。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.agent_core.text_model = RecoveryTextModel()
+    tts = FirstDeltaFailsThenStreamsTTS()
+    app.output_service.router._injected_tts = tts
+    user_id = "user-streaming-tts-recovery"
+    session_id = "sess-streaming-tts-recovery"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-tts-recovery",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    stream_events_text = (session_dir / "stream-events.jsonl").read_text(encoding="utf-8")
+    assert "恢复后的回答。" in messages_text
+    assert TextAgentCore.RECOVERABLE_ERROR_MESSAGE not in messages_text
+    assert "response.failed" not in agent_events_text
+    assert "output.tts_stream_reopen" in agent_events_text
+    assert "output.recovered" not in agent_events_text
+    assert "stream.failed" in stream_events_text
+    assert tts.streamed_texts == ["恢复后的回答。", "恢复后的回答。"]
+    assert tts.completed_texts == []
+    assert list((session_dir / "audio").glob("output-*.wav"))
+
+
+def test_text_agent_continues_streaming_after_reopening_tts_source(tmp_path) -> None:
+    """测试目标：验证流式 TTS 失败重开后，本轮后续 delta 继续走 streaming TTS。
+
+    测试方法：模型返回两段文本；TTS 第一段流式失败，第二段流式如果被调用会返回音频。
+    预期结果：第一段被重试，第二段继续进入新 streaming source，不使用全文本 TTS。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.agent_core.text_model = MultiDeltaRecoveryTextModel()
+    tts = FirstDeltaFailsThenStreamsTTS()
+    app.output_service.router._injected_tts = tts
+    user_id = "user-stop-streaming-after-failure"
+    session_id = "sess-stop-streaming-after-failure"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-stop-after-failure",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "第一段，第二段。" in messages_text
+    assert tts.streamed_texts == ["第一段，", "第一段，", "第二段。"]
+    assert tts.completed_texts == []
+    assert agent_events_text.count("output.tts_stream_reopen") == 1
+    assert "output.recovered" not in agent_events_text
+    assert len(list((session_dir / "audio").glob("output-*.wav"))) == 1
+
+
+def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:
+    """测试目标：验证同一个 sensor.mic stream 内可以连续提交多段用户输入。
+
+    测试方法：用同一个 stream_id 发送两段 final 麦克风输入，只改变 seq 和 mock ASR
+    文件名转写。
+    预期结果：两段输入都会触发 TextAgentCore 响应，不会因为复用 stream_id 被静默跳过。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    model = CaptureHistoryTextModel()
+    app.agent_core.text_model = model
+    user_id = "user-same-stream"
+    session_id = "dev-same-stream"
+    stream_id = "stream-in-reused"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=10,
+            payload=b"first",
+            final=True,
+            metadata={"source_path": "/tmp/你是谁呀.wav"},
+        )
+    )
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=20,
+            payload=b"second",
+            final=True,
+            metadata={"source_path": "/tmp/我刚才问了你什么.wav"},
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    assert "你是谁呀" in messages_text
+    assert "我刚才问了你什么" in messages_text
+    assert len(model.messages) == 2
 
 
 def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -> None:

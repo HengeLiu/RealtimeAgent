@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter
@@ -55,8 +56,13 @@ class ToolCallingModel:
                 "arguments": {"city": "shanghai"},
             }
             return
+        assistant_message = next(item for item in messages if item["role"] == "assistant" and item.get("tool_calls"))
+        provider_call = assistant_message["tool_calls"][0]
+        assert provider_call["type"] == "function"
+        assert provider_call["function"]["name"] == "city_lookup"
+        assert json.loads(provider_call["function"]["arguments"]) == {"city": "shanghai"}
         tool_message = next(item for item in messages if item["role"] == "tool")
-        assert tool_message["content"]["data"]["city"] == "shanghai"
+        assert json.loads(tool_message["content"])["data"]["city"] == "shanghai"
         yield "工具结果已回填。"
 
     def stream_text(self, transcript: str):

@@ -6,6 +6,23 @@ from audio_chat.observability import RunRecorder
 from audio_chat.protocol import Event, StreamChunk
 
 
+def test_run_recorder_logs_artifact_index_once_on_startup(tmp_path, caplog) -> None:
+    """测试目标：验证运行产物目录只在记录器启动时集中提示一次。
+
+    测试方法：在 caplog 捕获范围内创建 RunRecorder，并检查启动索引日志。
+    预期结果：日志包含 runs 根目录、全局文件和会话文件索引，不依赖后续事件重复打印路径。
+    """
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        RunRecorder(tmp_path / "runs")
+
+    index_logs = [record for record in caplog.records if "运行产物目录索引" in record.getMessage()]
+    assert len(index_logs) == 1
+    assert getattr(index_logs[0], "runs_root") == str(tmp_path / "runs")
+    assert "system-events.jsonl" in getattr(index_logs[0], "global_files")
+    assert "model-request.json" in getattr(index_logs[0], "session_files")
+
+
 def test_first_model_request_logs_full_snapshot_once(tmp_path, caplog) -> None:
     """测试目标：验证首次大模型调用前会在终端日志打印完整请求快照。
 
@@ -122,7 +139,8 @@ def test_system_error_logs_payload_details(tmp_path, caplog) -> None:
     assert "系统事件 None" not in messages
     assert any(getattr(record, "error_type", None) == "StreamNotOpenError" for record in caplog.records)
     assert any(getattr(record, "stream_id", None) == "stream-log" for record in caplog.records)
-    assert any(str(tmp_path / "runs" / "system-events.jsonl") == getattr(record, "detail_path", None) for record in caplog.records)
+    assert not any(hasattr(record, "detail_path") for record in caplog.records)
+    assert (tmp_path / "runs" / "system-events.jsonl").exists()
 
 
 def test_realtime_provider_error_terminal_log_keeps_actionable_message(tmp_path, caplog) -> None:
@@ -215,11 +233,16 @@ def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) ->
     assert len(close_records) == 1
     assert getattr(close_records[0], "input_chunk_count") == 3
     assert getattr(close_records[0], "input_bytes") == 6
-    assert getattr(close_records[0], "detail_path").endswith("_unbound/sess-stream-log/stream-events.jsonl")
+    assert not hasattr(close_records[0], "detail_path")
+    assert (tmp_path / "runs" / "_unbound" / "sess-stream-log" / "stream-events.jsonl").exists()
 
 
-def test_important_terminal_logs_include_detail_paths(tmp_path, caplog) -> None:
-    """测试目标：重要终端日志应提示完整细节文件位置。"""
+def test_important_terminal_logs_hide_storage_paths_but_keep_artifacts(tmp_path, caplog) -> None:
+    """测试目标：重要终端日志不重复打印落盘路径，但文件仍正常写入。
+
+    测试方法：记录模型请求和工具调用，检查终端 extra 与运行产物文件。
+    预期结果：终端日志没有 detail_path/path，`model-request.json` 和 `tool-events.jsonl` 仍存在。
+    """
 
     recorder = RunRecorder(tmp_path / "runs")
     request = {
@@ -237,5 +260,8 @@ def test_important_terminal_logs_include_detail_paths(tmp_path, caplog) -> None:
 
     model_logs = [record for record in caplog.records if "模型请求已写入" in record.getMessage()]
     tool_logs = [record for record in caplog.records if "工具调用 demo_tool" in record.getMessage()]
-    assert model_logs and getattr(model_logs[0], "detail_path").endswith("user-path/sess-path/model-request.json")
-    assert tool_logs and getattr(tool_logs[0], "detail_path").endswith("user-path/sess-path/tool-events.jsonl")
+    assert model_logs and not hasattr(model_logs[0], "detail_path")
+    assert model_logs and not hasattr(model_logs[0], "path")
+    assert tool_logs and not hasattr(tool_logs[0], "detail_path")
+    assert (tmp_path / "runs" / "user-path" / "sess-path" / "model-request.json").exists()
+    assert (tmp_path / "runs" / "user-path" / "sess-path" / "tool-events.jsonl").exists()

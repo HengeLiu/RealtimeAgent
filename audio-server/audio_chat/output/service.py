@@ -547,6 +547,8 @@ class StreamingTtsOutputSource:
     tts: StreamingTTS
     _pending_text: str = ""
     final_requested: bool = False
+    _submitted_text: bool = False
+    _completed: bool = False
 
     def append_text(self, text: str) -> None:
         """追加文本 delta。
@@ -571,10 +573,14 @@ class StreamingTtsOutputSource:
         )
 
     def synthesize_pending(self) -> bytes:
+        if self._completed:
+            raise RuntimeError("streaming TTS task has already completed")
         text = self._pending_text
-        self._pending_text = ""
         if text:
-            return self.tts.synthesize_delta(text)
+            payload = self.tts.synthesize_delta(text)
+            self._pending_text = ""
+            self._submitted_text = True
+            return payload
         drain = getattr(self.tts, "drain_audio", None)
         if callable(drain):
             return drain()
@@ -590,7 +596,40 @@ class StreamingTtsOutputSource:
         return b""
 
     def finish(self) -> bytes:
+        """结束当前回答对应的 TTS streaming task。
+
+        主要逻辑：DashScope tts_v2 的 `streaming_call` 属于一次语音合成任务；
+        final 阶段必须调用 `streaming_complete`，否则服务端可能缓存不完整短句，
+        导致当前回答没有尾部音频甚至没有音频。
+        返回值：provider complete 后 drain 出来的 PCM 音频。
+        异常情况：provider complete 失败时向上抛出，交给输出恢复逻辑处理。
+        """
+
+        if self._completed:
+            return b""
+        self._completed = True
+        if not self._submitted_text:
+            return b""
         return self.tts.finish() or b""
+
+    def close(self) -> bytes:
+        """关闭当前 TTS provider 任务。
+
+        主要逻辑：如果当前回答已经 final complete，则无需重复关闭；如果被打断或
+        会话关闭时仍有未完成文本，则尽力 complete，避免 provider 连接泄漏。
+        参数：无。
+        返回值：provider close 阶段 drain 出来的尾部音频，调用方可选择丢弃。
+        异常情况：provider 状态异常时向上抛出，便于调用方记录。
+        """
+
+        if self._completed:
+            return b""
+        return self.finish()
+
+    def clone_pending_with(self, tts: StreamingTTS) -> "StreamingTtsOutputSource":
+        """用新的 provider 复制当前尚未合成的文本。"""
+
+        return StreamingTtsOutputSource(tts=tts, _pending_text=self._pending_text, final_requested=self.final_requested)
 
 
 @dataclass
@@ -885,6 +924,18 @@ class OutputRouter:
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
         intent = self._intent_with_defaults(delta.intent or OutputItem(user_id=delta.user_id, session_id=delta.session_id))
         source = self._source_by_session.get(delta.session_id)
+        if source is None and not delta.text and delta.final:
+            self.recorder.record_agent_event(
+                delta.session_id,
+                {
+                    "event": "assistant_audio.done",
+                    "user_id": delta.user_id,
+                    "stream_id": None,
+                    "empty_output": True,
+                    "source": "text_tts",
+                },
+            )
+            return
         if source is None:
             source = StreamingTtsOutputSource(tts=self._new_tts())
             self._source_by_session[delta.session_id] = source
@@ -913,17 +964,23 @@ class OutputRouter:
                 stream_id=stream_id,
                 source=source,
             )
-        payload = source.synthesize_pending()
-        if payload:
-            self._write_tts_payload(
+        try:
+            self._drain_text_source_to_stream(
                 user_id=delta.user_id,
                 session_id=delta.session_id,
                 stream_id=stream_id,
-                payload=payload,
                 source=source,
+                final=delta.final,
             )
-        if delta.final:
-            self._finish_stream(delta.user_id, delta.session_id, stream_id, source)
+        except Exception:
+            self._retry_text_output_with_new_source(
+                user_id=delta.user_id,
+                session_id=delta.session_id,
+                stream_id=stream_id,
+                source=source,
+                intent=intent,
+                final=delta.final,
+            )
 
     def on_assistant_audio_delta(
         self,
@@ -1074,6 +1131,7 @@ class OutputRouter:
         )
         self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
         self._stream_by_session.pop(session_id, None)
+        self._source_by_session.pop(session_id, None)
         self._source_by_stream.pop(stream_id, None)
         self._native_source_by_session.pop(session_id, None)
         next_output = self.arbiter.on_playback_finished(user_id, stream_id)
@@ -1082,6 +1140,159 @@ class OutputRouter:
         if next_output is not None:
             self._queued_sessions.discard(next_output.intent.session_id)
             self._play_queued_output(next_output)
+
+    def _drain_text_source_to_stream(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource,
+        final: bool,
+    ) -> None:
+        """把当前 Text TTS source 中的待合成文本写入 output stream。"""
+
+        payload = source.synthesize_pending()
+        if payload:
+            self._write_tts_payload(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                payload=payload,
+                source=source,
+            )
+        if final:
+            self._finish_stream(user_id, session_id, stream_id, source)
+
+    def _retry_text_output_with_new_source(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource,
+        intent: OutputItem,
+        final: bool,
+    ) -> None:
+        """TTS provider 异常关闭后重开 streaming source 并重试当前 delta。
+
+        主要逻辑：DashScope streaming task 可能在连续对话中被 provider 侧关闭；
+        如果当前 source 仍保留待合成文本，则丢弃旧 source，重开 provider 和 output
+        stream 后重试一次。重试失败才把异常交给上层异常处理。
+        参数：`stream_id` 为已失败的 output stream；`source` 保留当前待合成文本。
+        返回值：无。
+        异常情况：重试仍失败时向上抛出。
+        """
+
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "output.tts_stream_reopen",
+                "user_id": user_id,
+                "stream_id": stream_id,
+                "reason": "streaming_tts_provider_failed",
+                "pending_text_chars": len(source._pending_text),
+            },
+        )
+        self._abort_stream_after_output_error(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason="tts_stream_reopen",
+        )
+        retry_source = source.clone_pending_with(self._new_tts())
+        self._source_by_session[session_id] = retry_source
+        decision, retry_stream_id = self.arbiter.submit(source=retry_source, intent=intent, format=retry_source.stream_format())
+        if decision.action == "queue":
+            self._queued_sessions.add(session_id)
+            return
+        if decision.action == "drop" or retry_stream_id is None:
+            return
+        self._stream_by_session[session_id] = retry_stream_id
+        self._source_by_stream[retry_stream_id] = retry_source
+        self._start_tts_drain_pump(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=retry_stream_id,
+            source=retry_source,
+        )
+        try:
+            self._drain_text_source_to_stream(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=retry_stream_id,
+                source=retry_source,
+                final=final,
+            )
+        except Exception:
+            self._abort_stream_after_output_error(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=retry_stream_id,
+                reason="tts_stream_reopen_failed",
+            )
+            raise
+
+    def _abort_stream_after_output_error(self, *, user_id: str, session_id: str, stream_id: str | None, reason: str) -> None:
+        """输出生成失败后清理已经打开的 output stream。
+
+        主要逻辑：Text TTS 可能在 stream 已打开后才抛出 provider 异常；此时必须
+        关闭 stream、释放播放仲裁 active 状态并丢弃损坏的 TTS source，否则下一轮
+        正常模型回复会被误判为 `active_playback_not_preempted` 而排队。
+        参数：`user_id/session_id/stream_id` 定位失败输出；`reason` 为关闭原因。
+        返回值：无。
+        异常情况：清理过程尽量吞掉异常，避免覆盖原始 TTS 错误。
+        """
+
+        if stream_id:
+            try:
+                self.stream_service.fail_stream(stream_id, reason=reason)
+            except Exception:
+                try:
+                    self.stream_service.close_stream(stream_id, reason=reason)
+                except Exception:
+                    pass
+            self.arbiter.on_playback_finished(user_id, stream_id)
+            self._source_by_stream.pop(stream_id, None)
+            self._payload_by_stream.pop(stream_id, None)
+            self._seq_by_stream.pop(stream_id, None)
+        if self._stream_by_session.get(session_id) == stream_id:
+            self._stream_by_session.pop(session_id, None)
+        self._source_by_session.pop(session_id, None)
+        self._native_source_by_session.pop(session_id, None)
+        self._queued_sessions.discard(session_id)
+
+    def close_text_session(self, session_id: str, *, reason: str = "audio_session_closed") -> None:
+        """关闭连续对话级 Text TTS provider。
+
+        主要逻辑：普通回答结束时只关闭端侧 output stream，不关闭 provider streaming
+        task；当用户主动结束或会话超时结束时，才在这里 complete 并移除 source。
+        参数：`session_id` 为设备级会话编号；`reason` 为关闭原因。
+        返回值：无。
+        异常情况：provider close 失败时记录系统事件，不向外抛出。
+        """
+
+        source = self._source_by_session.pop(session_id, None)
+        if source is None:
+            return
+        try:
+            source.close()
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "output.tts_session.closed", "session_id": session_id, "reason": reason},
+            )
+        except Exception as exc:
+            self.recorder.record_system_event(
+                {
+                    "event": "system.error.raised",
+                    "component": "OutputRouter",
+                    "session_id": session_id,
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "severity": "warning",
+                    "reason": reason,
+                }
+            )
 
     def _write_tts_payload(
         self,
@@ -1523,6 +1734,11 @@ class OutputService:
 
         self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id)
 
+    def close_text_session(self, session_id: str, *, reason: str = "audio_session_closed") -> None:
+        """关闭文本链路连续对话级 TTS provider。"""
+
+        self.router.close_text_session(session_id, reason=reason)
+
     def on_assistant_audio_delta(
         self,
         *,
@@ -1731,6 +1947,12 @@ class OutputService:
             for stored_session, stream_id in list(self.router._stream_by_session.items()):
                 if stream_id == decision.interrupted_stream_id:
                     self.router._stream_by_session.pop(stored_session, None)
+                    source = self.router._source_by_session.pop(stored_session, None)
+                    if source is not None:
+                        try:
+                            source.close()
+                        except Exception:
+                            pass
                     self.router._native_source_by_session.pop(stored_session, None)
         return decision
 
