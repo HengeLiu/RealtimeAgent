@@ -24,9 +24,7 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
     assert "control.device.register.requested" in html
     assert "client_type: \"browser-glass\"" in html
     assert "supports: DEVICE_SUPPORTS" in html
-    assert "DEBUG_EVENT_SUBSCRIPTIONS" in html
     assert "properties: {" in html
-    assert "routes: DEBUG_EVENT_SUBSCRIPTIONS" in html
     assert '{event: "stream.control.*", filter: {stream_type: "sensor.rgb"}}' not in html
     assert '{event: "stream.output.*", filter: {stream_type: "actuator.speaker"}}' not in html
     assert "capabilities: {" not in html
@@ -44,11 +42,15 @@ def test_browser_device_supports_match_checked_capability_file() -> None:
 
     html = _html()
     capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.audio-chat.yaml").read_text(encoding="utf-8"))
-    support_ids = {item["id"] for item in capability_file["supports"]}
+    sensor_types = {item["type"] for item in capability_file["supports"]["sensors"]}
+    actuator_types = {item["type"] for item in capability_file["supports"]["actuators"]}
 
-    for support_id in ("sensor.mic", "sensor.rgb", "actuator.speaker", "actuator.haptic"):
-        assert support_id in support_ids
-        assert f'id: "{support_id}"' in html
+    assert "rgb" in sensor_types
+    assert "vibrator" in actuator_types
+    assert 'type: "rgb"' in html
+    assert 'type: "vibrator"' in html
+    assert '"audio_chat.audio_input": "sensor.mic"' in html
+    assert '"audio_chat.audio_output": "actuator.speaker"' in html
 
 
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:
@@ -77,33 +79,33 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
 
 
 def test_browser_device_switches_visible_fields_by_input_mode() -> None:
-    """测试目标：验证 browser-glass 会按输入模式隐藏无关字段。
+    """测试目标：验证 browser-glass 只暴露样例目录选择入口。
 
-    测试方法：静态检查音频模式和视觉数据源都绑定到 updateInputModePanels，
-    并通过 field 容器和 hidden class 控制显示。
-    预期结果：真实麦克风不显示音频文件上传，图片/视频/摄像头模式只显示相关字段。
+    测试方法：静态检查页面隐藏原生文件 input，使用 File System Access API
+    的样例选择按钮，并移除旧的视频、静音和手动图片上传控件。
+    预期结果：离线音频和图片样例由按钮选择，图片只在服务端请求时上传。
     """
 
     html = _html()
 
     assert ".hidden { display: none !important; }" in html
-    assert 'id="audioFileField"' in html
-    assert 'id="silenceMsField"' in html
-    assert 'id="imageFileField"' in html
-    assert 'id="videoFileField"' in html
-    assert 'id="videoFpsField"' in html
+    assert 'id="chooseAudioSample"' in html
+    assert 'id="chooseImageSample"' in html
+    assert "<h2>音频选择</h2>" in html
+    assert "<h2>带图输入</h2>" in html
+    assert "<h2>自定义事件</h2>" not in html
+    assert 'id="audioFile" class="hidden"' in html
+    assert 'id="imageFile" class="hidden"' in html
+    assert "showOpenFilePicker" in html
+    assert "showDirectoryPicker" in html
+    assert "restoreSampleSelections()" in html
     assert 'audioModeSelect.addEventListener("change", updateInputModePanels)' in html
-    assert 'rgbSourceModeSelect.addEventListener("change", updateInputModePanels)' in html
-    assert 'setFieldVisible("audioFileField", offlineAudio)' in html
+    assert 'chooseAudioSampleButton.classList.toggle("hidden", !offlineAudio)' in html
     assert 'id="afterFile"' not in html
-    assert 'value="live_camera"' in html
-    assert 'value="image_upload"' in html
-    assert 'value="video_upload"' in html
     assert 'multiple' in html
-    assert 'const cameraMode = rgbMode === "live_camera"' in html
-    assert 'setFieldVisible("imageFileField", imageMode)' in html
-    assert 'setFieldVisible("videoFileField", videoMode)' in html
-    assert 'setFieldVisible("videoFpsField", cameraMode || videoMode)' in html
+    assert 'id="silenceMs"' not in html
+    assert 'id="sendPhoto"' not in html
+    assert 'id="videoFile"' not in html
     assert "selected_video_current_frame" not in html
     assert "manual_confirm" not in html
 
@@ -129,22 +131,22 @@ def test_browser_device_persists_form_config_and_stable_device_id() -> None:
 
 
 def test_browser_device_has_right_side_event_log_panel() -> None:
-    """测试目标：验证 browser-glass 把日志窗口纵向放在右侧并区分广播事件。
+    """测试目标：验证 browser-glass 使用底部固定双日志文本框。
 
-    测试方法：静态检查页面使用 workspace 双栏布局、log tab、broadcastLog 和
-    logBroadcastEvent。
-    预期结果：运行日志和服务器广播事件可以分别观察。
+    测试方法：静态检查页面使用固定底部 log-dock，并用两个 readonly textarea
+    分别展示运行日志和广播事件。
+    预期结果：日志区域固定高度、横向排列，且不再使用页签切换。
     """
 
     html = _html()
 
-    assert ".workspace { display: grid;" in html
-    assert "minmax(360px, 34vw)" in html
-    assert 'id="runtimeLogTab"' in html
-    assert 'id="broadcastLogTab"' in html
-    assert 'id="broadcastLog"' in html
+    assert ".log-dock { position: fixed;" in html
+    assert "grid-template-columns: 1fr 1fr" in html
+    assert '<textarea id="log" class="log-box" readonly>' in html
+    assert '<textarea id="broadcastLog" class="log-box" readonly>' in html
+    assert 'id="runtimeLogTab"' not in html
+    assert 'id="broadcastLogTab"' not in html
     assert "function logBroadcastEvent(item)" in html
-    assert "showLogTab(\"broadcast\")" in html
     assert "logBroadcastEvent(item);" in html
 
 
@@ -158,8 +160,8 @@ def test_browser_device_subscribes_all_event_prefixes_for_debug_log() -> None:
 
     html = _html()
 
-    for prefix in ("control.*", "stream.*", "agent.*", "tool.*", "task.*", "memory.*", "system.*"):
-        assert f'{{event: "{prefix}"}}' in html
+    assert "logBroadcastEvent(item);" in html
+    assert "controlWs.onmessage = (message) => handleControlEvent(JSON.parse(message.data));" in html
 
 
 def test_browser_device_opens_stream_socket_after_audio_session() -> None:
@@ -270,15 +272,13 @@ def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     assert "readSelectedImageFrames" in html
     assert "captureLiveCameraFrame" in html
     assert "captureJpegFrame" in html
-    assert "nextRgbFrame" in html
-    assert "startContinuousRgb" in html
     assert "stopContinuousRgb" in html
     assert "stream_type: \"sensor.rgb\"" in html
     assert "stream_type: \"sensor.mic\"" in html
-    assert "rgbContinuousStreamId = null" in html
     assert "inputStreamId = null" in html
     assert '"camera_frame_captured"' in html
-    assert "视频模式只支持连续上传" in html
+    assert "selectedImageSampleFiles.length" in html
+    assert "视频模式只支持连续上传" not in html
 
 
 def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
@@ -301,6 +301,7 @@ def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
     )[0]
 
     assert 'await uploadRgbImages([await captureLiveCameraFrame()], item, "camera_frame_captured")' in html
+    assert "selectedImageSampleFiles.length" in html
     assert "readSelectedImageFrames()" not in upload_body
     assert "if (!images.length)" in upload_body
     assert "await uploadRgbImages(await readSelectedImageFrames(), item, \"images_uploaded\")" in selected_body

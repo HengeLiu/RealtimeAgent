@@ -5,11 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>audio-chat browser-glass</title>
   <style>
-    body { margin: 24px; color: #172033; background: #f6f8fb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 24px; padding-bottom: 260px; color: #172033; background: #f6f8fb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { background: #fff; border: 1px solid #d8dee8; border-radius: 8px; padding: 20px; }
     h1 { margin: 0 0 8px; font-size: 24px; }
     h2 { margin: 20px 0 8px; font-size: 16px; }
-    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 34vw); gap: 18px; align-items: start; }
     .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 14px 0; }
     label { display: block; margin-bottom: 4px; font-weight: 600; }
     input, select, textarea { width: 260px; padding: 7px 9px; border: 1px solid #aab5c5; border-radius: 6px; box-sizing: border-box; }
@@ -24,13 +23,13 @@
     .panel { border-top: 1px solid #e5eaf2; padding-top: 8px; margin-top: 12px; }
     .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
     .status div { background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 6px; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .log-panel { position: sticky; top: 12px; border-top: 0; padding-top: 0; margin-top: 12px; }
-    .log-tabs { display: flex; gap: 8px; margin: 0 0 8px; }
-    .log-tab { background: #fff; color: #172033; }
-    .log-tab.active { background: #1f6feb; color: #fff; }
-    .log-box { height: calc(100vh - 180px); min-height: 420px; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 12px; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .file-name { color: #5e6a7d; font-size: 13px; min-width: 180px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .log-dock { position: fixed; left: 24px; right: 24px; bottom: 16px; z-index: 20; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: rgba(246, 248, 251, 0.96); box-shadow: 0 10px 30px rgba(15, 23, 34, 0.16); }
+    .log-panel { border-top: 0; padding-top: 0; margin-top: 0; }
+    .log-panel h2 { margin: 0 0 6px; }
+    .log-box { width: 100%; height: 170px; min-height: 170px; resize: none; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 10px; border-radius: 6px; border: 1px solid #243248; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
     .hint { color: #5e6a7d; font-size: 13px; margin: 4px 0 0; }
-    @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; } .log-panel { position: static; } .log-box { height: 360px; min-height: 360px; } }
+    @media (max-width: 980px) { body { padding-bottom: 430px; } .log-dock { grid-template-columns: 1fr; } .log-box { height: 150px; min-height: 150px; } }
   </style>
 </head>
 <body>
@@ -42,6 +41,8 @@
       <div><label for="userId">User ID</label><input id="userId" /></div>
       <div><label for="deviceId">Device ID</label><input id="deviceId" /></div>
       <div><label for="deviceName">Name</label><input id="deviceName" /></div>
+      <label class="inline"><input id="autoConnect" type="checkbox" />自动连接</label>
+      <label class="inline"><input id="autoWake" type="checkbox" />连接后自动唤醒</label>
       <button id="connect">连接并注册</button>
       <button id="wake" disabled>模拟唤醒</button>
       <button id="interrupt" class="secondary" disabled>模拟打断</button>
@@ -55,10 +56,8 @@
       <div id="rgbStatus">sensor.rgb=idle</div>
     </div>
 
-    <div class="workspace">
-      <div>
     <section class="panel">
-      <h2>音频输入</h2>
+      <h2>音频选择</h2>
       <div class="row">
         <div>
           <label for="audioMode">模式</label>
@@ -67,61 +66,37 @@
             <option value="offline_realtime">离线音频实时注入</option>
           </select>
         </div>
-        <div id="audioFileField"><label for="audioFile">WAV / PCM</label><input id="audioFile" type="file" accept=".wav,.pcm,audio/*" /></div>
-        <div id="silenceMsField"><label for="silenceMs">前后静音 ms</label><input id="silenceMs" type="number" min="0" value="300" /></div>
-        <label class="inline"><input id="autoStartAudio" type="checkbox" />唤醒后自动开始音频</label>
+        <button id="chooseAudioSample" class="secondary" type="button">从样例目录选择音频</button>
+        <span id="audioSampleName" class="file-name">未选择音频</span>
+        <input id="audioFile" class="hidden" type="file" accept=".wav,.pcm,audio/*" />
         <button id="startAudio" disabled>开始音频</button>
         <button id="stopAudio" class="secondary" disabled>停止音频</button>
       </div>
-      <p class="hint">离线音频会按 20ms chunk 实时注入。每段文件发送完成后自动暂停数据发送，并保留当前连续对话连接等待上传下一段。</p>
+      <p class="hint">离线音频会按 20ms chunk 实时注入。若服务端请求图片资产，会优先上传已选择的离线图片；没有选择图片时再打开摄像头抓拍。</p>
     </section>
 
     <section class="panel">
-      <h2>视觉和文件输入</h2>
+      <h2>带图输入</h2>
       <div class="row">
-        <div>
-          <label for="rgbSourceMode">视觉输入模式</label>
-          <select id="rgbSourceMode">
-            <option value="live_camera">实时摄像头</option>
-            <option value="image_upload">上传图片/多张图片</option>
-            <option value="video_upload">上传视频</option>
-          </select>
-        </div>
-        <div id="imageFileField"><label for="imageFile">图片</label><input id="imageFile" type="file" accept="image/*" multiple /></div>
-        <div id="videoFileField"><label for="videoFile">视频</label><input id="videoFile" type="file" accept="video/*" /></div>
-        <div id="videoFpsField"><label for="videoFps">视频帧率</label><input id="videoFps" type="number" min="0.2" step="0.2" value="1" /></div>
-        <button id="sendPhoto" class="secondary" disabled>上传图片</button>
-        <button id="startVideo" class="secondary" disabled>开始 RGB stream</button>
-        <button id="stopVideo" class="secondary" disabled>停止 RGB stream</button>
+        <button id="chooseImageSample" class="secondary" type="button">从样例目录选择图片</button>
+        <span id="imageSampleName" class="file-name">未选择图片，按需使用摄像头</span>
+        <input id="imageFile" class="hidden" type="file" accept="image/*" multiple />
       </div>
-      <p class="hint">实时摄像头和视频会按配置帧率连续上传；图片会作为一段 sensor.rgb stream 上传。视觉 stream 与麦克风 stream 相互独立。</p>
+      <p class="hint">图片只在服务端请求 sensor.rgb 时上传；未选择图片时浏览器会请求摄像头拍一张。</p>
     </section>
 
-    <section class="panel">
-      <h2>自定义事件</h2>
-      <div class="row">
-        <div><label for="customEventName">Event name</label><input id="customEventName" value="control.user.wake.detected" /></div>
-        <div><label for="customStreamType">Stream type</label><input id="customStreamType" placeholder="可选，例如 sensor.rgb" /></div>
-      </div>
-      <textarea id="customPayload">{}</textarea>
-      <div class="row">
-        <button id="sendCustomEvent" class="secondary" disabled>发送自定义事件</button>
-      </div>
-    </section>
-
-      </div>
-
-      <section class="panel log-panel">
-        <h2>日志</h2>
-        <div class="log-tabs">
-          <button id="runtimeLogTab" class="log-tab active" type="button">运行日志</button>
-          <button id="broadcastLogTab" class="log-tab" type="button">广播事件</button>
-        </div>
-        <div id="log" class="log-box"></div>
-        <div id="broadcastLog" class="log-box hidden"></div>
-      </section>
-    </div>
   </main>
+
+  <section class="log-dock">
+    <div class="log-panel">
+      <h2>运行日志</h2>
+      <textarea id="log" class="log-box" readonly></textarea>
+    </div>
+    <div class="log-panel">
+      <h2>广播事件</h2>
+      <textarea id="broadcastLog" class="log-box" readonly></textarea>
+    </div>
+  </section>
 
   <script>
     const PROTOCOL_VERSION = "audio-chat.v1";
@@ -137,6 +112,12 @@
     const BARGE_IN_MAX_PEAK = 0.72;
     const BARGE_IN_COOLDOWN_MS = 1800;
     const BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1";
+    const SAMPLE_HANDLE_DB = "audio-chat.browser-glass.samples";
+    const SAMPLE_HANDLE_STORE = "handles";
+    const AUDIO_SAMPLE_DIR_KEY = "audio_sample_dir";
+    const IMAGE_SAMPLE_DIR_KEY = "image_sample_dir";
+    const AUDIO_SAMPLE_FILE_KEY = "audio_sample_file";
+    const IMAGE_SAMPLE_FILES_KEY = "image_sample_files";
     const DEFAULT_DEVICE_ID = "dev-browser-glass-001";
     const DEFAULT_USER_ID = "user-browser-glass-001";
     const DEFAULT_DEVICE_NAME = "浏览器调试设备";
@@ -165,25 +146,22 @@
     };
     const logEl = document.getElementById("log");
     const broadcastLogEl = document.getElementById("broadcastLog");
-    const runtimeLogTab = document.getElementById("runtimeLogTab");
-    const broadcastLogTab = document.getElementById("broadcastLogTab");
     const connectButton = document.getElementById("connect");
     const wakeButton = document.getElementById("wake");
     const interruptButton = document.getElementById("interrupt");
     const closeButton = document.getElementById("close");
     const startAudioButton = document.getElementById("startAudio");
     const stopAudioButton = document.getElementById("stopAudio");
-    const sendPhotoButton = document.getElementById("sendPhoto");
-    const startVideoButton = document.getElementById("startVideo");
-    const stopVideoButton = document.getElementById("stopVideo");
-    const customEventButton = document.getElementById("sendCustomEvent");
+    const chooseAudioSampleButton = document.getElementById("chooseAudioSample");
+    const chooseImageSampleButton = document.getElementById("chooseImageSample");
+    const audioSampleNameEl = document.getElementById("audioSampleName");
+    const imageSampleNameEl = document.getElementById("imageSampleName");
     const connectionStatusEl = document.getElementById("connectionStatus");
     const sessionStatusEl = document.getElementById("sessionStatus");
     const micStatusEl = document.getElementById("micStatus");
     const rgbStatusEl = document.getElementById("rgbStatus");
     const params = new URLSearchParams(window.location.search);
     const audioModeSelect = document.getElementById("audioMode");
-    const rgbSourceModeSelect = document.getElementById("rgbSourceMode");
     const initialBrowserConfig = resolveInitialBrowserConfig(params);
     applyBrowserConfig(initialBrowserConfig);
     saveBrowserConfig();
@@ -204,10 +182,6 @@
     let offlineAudio = null;
     let offlineTimer = null;
     let activeAudioSource = "idle";
-    let videoElement = null;
-    let videoTimer = null;
-    let rgbContinuousStreamId = null;
-    let rgbSeq = 0;
     let outputStarted = new Set();
     let outputClosed = new Set();
     let pendingOutputClose = new Map();
@@ -216,6 +190,11 @@
     let interruptSentAt = 0;
     let speechDuringPlaybackFrames = 0;
     let heartbeatTimer = null;
+    let sampleDbPromise = null;
+    let selectedAudioSampleFileHandle = null;
+    let selectedAudioSampleFile = null;
+    let selectedImageSampleFileHandles = [];
+    let selectedImageSampleFiles = [];
 
     function delay(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
@@ -223,7 +202,7 @@
 
     function log(line) {
       const at = new Date().toLocaleTimeString();
-      logEl.textContent += `[${at}] ${line}\n`;
+      logEl.value += `[${at}] ${line}\n`;
       logEl.scrollTop = logEl.scrollHeight;
     }
 
@@ -237,16 +216,8 @@
         producer_id: item.producer_id || null,
         payload: item.payload || {},
       });
-      broadcastLogEl.textContent += `[${at}] ${payload}\n`;
+      broadcastLogEl.value += `[${at}] ${payload}\n`;
       broadcastLogEl.scrollTop = broadcastLogEl.scrollHeight;
-    }
-
-    function showLogTab(name) {
-      const broadcast = name === "broadcast";
-      broadcastLogEl.classList.toggle("hidden", !broadcast);
-      logEl.classList.toggle("hidden", broadcast);
-      broadcastLogTab.classList.toggle("active", broadcast);
-      runtimeLogTab.classList.toggle("active", !broadcast);
     }
 
     function setStreamState(streamId, patch) {
@@ -293,9 +264,6 @@
     }
 
     function enableRegisteredControls() {
-      sendPhotoButton.disabled = false;
-      startVideoButton.disabled = false;
-      customEventButton.disabled = false;
       connectButton.disabled = true;
       renderStatus();
     }
@@ -307,21 +275,8 @@
     function updateInputModePanels() {
       const audioMode = audioModeSelect.value;
       const offlineAudio = audioMode === "offline_realtime";
-      setFieldVisible("audioFileField", offlineAudio);
-      setFieldVisible("silenceMsField", offlineAudio);
-
-      const rgbMode = rgbSourceModeSelect.value;
-      const cameraMode = rgbMode === "live_camera";
-      const imageMode = rgbMode === "image_upload";
-      const videoMode = rgbMode === "video_upload";
-      setFieldVisible("imageFileField", imageMode);
-      setFieldVisible("videoFileField", videoMode);
-      setFieldVisible("videoFpsField", cameraMode || videoMode);
-      sendPhotoButton.classList.toggle("hidden", !imageMode);
-      startVideoButton.classList.toggle("hidden", !(cameraMode || videoMode));
-      stopVideoButton.classList.toggle("hidden", !(cameraMode || videoMode));
-      startVideoButton.textContent = cameraMode ? "开始摄像头 stream" : "开始视频 stream";
-      stopVideoButton.textContent = cameraMode ? "停止摄像头 stream" : "停止视频 stream";
+      chooseAudioSampleButton.classList.toggle("hidden", !offlineAudio);
+      audioSampleNameEl.classList.toggle("hidden", !offlineAudio);
     }
 
     function defaultServerUrl() {
@@ -365,13 +320,8 @@
         device_id: searchParams.get("device_id") || stored.device_id || DEFAULT_DEVICE_ID,
         name: searchParams.get("name") || stored.name || DEFAULT_DEVICE_NAME,
         audio_mode: selectOptionValue("audioMode", searchParams.get("audio_mode") || stored.audio_mode, "live_mic"),
-        rgb_source_mode: selectOptionValue("rgbSourceMode", searchParams.get("rgb_source_mode") || stored.rgb_source_mode, "live_camera"),
-        auto_start_audio: parseStoredBoolean(searchParams.get("auto_start_audio"), stored.auto_start_audio, false),
-        silence_ms: searchParams.get("silence_ms") || stored.silence_ms || "300",
-        video_fps: searchParams.get("video_fps") || stored.video_fps || "1",
-        custom_event_name: searchParams.get("custom_event_name") || stored.custom_event_name || "control.user.wake.detected",
-        custom_stream_type: searchParams.get("custom_stream_type") || stored.custom_stream_type || "",
-        custom_payload: stored.custom_payload || "{}",
+        auto_connect: parseStoredBoolean(searchParams.get("auto_connect"), stored.auto_connect, false),
+        auto_wake: parseStoredBoolean(searchParams.get("auto_wake"), stored.auto_wake, false),
       };
     }
 
@@ -393,13 +343,8 @@
       document.getElementById("deviceId").value = config.device_id;
       document.getElementById("deviceName").value = config.name;
       audioModeSelect.value = config.audio_mode;
-      rgbSourceModeSelect.value = config.rgb_source_mode;
-      document.getElementById("autoStartAudio").checked = Boolean(config.auto_start_audio);
-      document.getElementById("silenceMs").value = config.silence_ms;
-      document.getElementById("videoFps").value = config.video_fps;
-      document.getElementById("customEventName").value = config.custom_event_name;
-      document.getElementById("customStreamType").value = config.custom_stream_type;
-      document.getElementById("customPayload").value = config.custom_payload;
+      document.getElementById("autoConnect").checked = Boolean(config.auto_connect);
+      document.getElementById("autoWake").checked = Boolean(config.auto_wake);
     }
 
     function readBrowserConfigFromForm() {
@@ -409,13 +354,8 @@
         device_id: document.getElementById("deviceId").value.trim() || DEFAULT_DEVICE_ID,
         name: document.getElementById("deviceName").value.trim() || DEFAULT_DEVICE_NAME,
         audio_mode: audioModeSelect.value,
-        rgb_source_mode: rgbSourceModeSelect.value,
-        auto_start_audio: document.getElementById("autoStartAudio").checked,
-        silence_ms: document.getElementById("silenceMs").value || "300",
-        video_fps: document.getElementById("videoFps").value || "1",
-        custom_event_name: document.getElementById("customEventName").value.trim() || "control.user.wake.detected",
-        custom_stream_type: document.getElementById("customStreamType").value.trim(),
-        custom_payload: document.getElementById("customPayload").value || "{}",
+        auto_connect: document.getElementById("autoConnect").checked,
+        auto_wake: document.getElementById("autoWake").checked,
         updated_at: new Date().toISOString(),
       };
     }
@@ -436,13 +376,8 @@
         "deviceId",
         "deviceName",
         "audioMode",
-        "rgbSourceMode",
-        "autoStartAudio",
-        "silenceMs",
-        "videoFps",
-        "customEventName",
-        "customStreamType",
-        "customPayload",
+        "autoConnect",
+        "autoWake",
       ];
       for (const id of ids) {
         const element = document.getElementById(id);
@@ -450,8 +385,137 @@
         element.addEventListener("input", saveBrowserConfig);
         element.addEventListener("change", () => {
           saveBrowserConfig();
-          if (id === "audioMode" || id === "rgbSourceMode") updateInputModePanels();
+          if (id === "audioMode") updateInputModePanels();
         });
+      }
+    }
+
+    function openSampleHandleDb() {
+      if (sampleDbPromise) return sampleDbPromise;
+      sampleDbPromise = new Promise((resolve, reject) => {
+        if (!window.indexedDB) {
+          reject(new Error("当前浏览器不支持 IndexedDB，无法记住样例目录"));
+          return;
+        }
+        const request = indexedDB.open(SAMPLE_HANDLE_DB, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore(SAMPLE_HANDLE_STORE);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("open IndexedDB failed"));
+      });
+      return sampleDbPromise;
+    }
+
+    async function putSampleHandle(key, value) {
+      const db = await openSampleHandleDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(SAMPLE_HANDLE_STORE, "readwrite");
+        tx.objectStore(SAMPLE_HANDLE_STORE).put(value, key);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("save sample handle failed"));
+      });
+    }
+
+    async function getSampleHandle(key) {
+      const db = await openSampleHandleDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(SAMPLE_HANDLE_STORE, "readonly");
+        const request = tx.objectStore(SAMPLE_HANDLE_STORE).get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("load sample handle failed"));
+      });
+    }
+
+    async function hasFileHandlePermission(handle) {
+      if (!handle || typeof handle.queryPermission !== "function") return false;
+      const permission = await handle.queryPermission({mode: "read"});
+      return permission === "granted";
+    }
+
+    async function requestFileHandlePermission(handle) {
+      if (!handle || typeof handle.requestPermission !== "function") return false;
+      const permission = await handle.requestPermission({mode: "read"});
+      return permission === "granted";
+    }
+
+    function summarizeFiles(files, emptyText) {
+      if (!files.length) return emptyText;
+      if (files.length === 1) return files[0].name;
+      return `${files[0].name} 等 ${files.length} 个文件`;
+    }
+
+    function setSelectedAudioSample(fileHandle, file) {
+      selectedAudioSampleFileHandle = fileHandle || null;
+      selectedAudioSampleFile = file || null;
+      audioSampleNameEl.textContent = file ? file.name : "未选择音频";
+    }
+
+    function setSelectedImageSamples(fileHandles, files) {
+      selectedImageSampleFileHandles = fileHandles || [];
+      selectedImageSampleFiles = files || [];
+      imageSampleNameEl.textContent = summarizeFiles(selectedImageSampleFiles, "未选择图片，按需使用摄像头");
+    }
+
+    async function chooseFileFromSampleDirectory({kind, accept, multiple}) {
+      if (!window.showOpenFilePicker || !window.showDirectoryPicker) {
+        return chooseFileWithHiddenInput(kind);
+      }
+      const dirKey = kind === "audio" ? AUDIO_SAMPLE_DIR_KEY : IMAGE_SAMPLE_DIR_KEY;
+      const fileKey = kind === "audio" ? AUDIO_SAMPLE_FILE_KEY : IMAGE_SAMPLE_FILES_KEY;
+      let dirHandle = await getSampleHandle(dirKey).catch(() => null);
+      if (!dirHandle || !(await hasFileHandlePermission(dirHandle))) {
+        dirHandle = await window.showDirectoryPicker({mode: "read"});
+        if (!(await requestFileHandlePermission(dirHandle))) throw new Error("未授权读取样例目录");
+        await putSampleHandle(dirKey, dirHandle);
+      }
+      const handles = await window.showOpenFilePicker({
+        startIn: dirHandle,
+        multiple,
+        types: [{description: kind === "audio" ? "音频样例" : "图片样例", accept}],
+      });
+      await putSampleHandle(fileKey, multiple ? handles : handles[0]);
+      const files = await Promise.all(handles.map((handle) => handle.getFile()));
+      if (kind === "audio") {
+        setSelectedAudioSample(handles[0], files[0]);
+      } else {
+        setSelectedImageSamples(handles, files);
+      }
+      log(`selected ${kind} sample ${summarizeFiles(files, "")}`);
+    }
+
+    function chooseFileWithHiddenInput(kind) {
+      return new Promise((resolve, reject) => {
+        const input = document.getElementById(kind === "audio" ? "audioFile" : "imageFile");
+        input.onchange = () => {
+          const files = Array.from(input.files || []);
+          if (!files.length) {
+            reject(new Error(kind === "audio" ? "请选择音频文件" : "请选择图片文件"));
+            return;
+          }
+          if (kind === "audio") setSelectedAudioSample(null, files[0]);
+          else setSelectedImageSamples([], files);
+          resolve();
+        };
+        input.click();
+      });
+    }
+
+    async function restoreSampleSelections() {
+      try {
+        const audioHandle = await getSampleHandle(AUDIO_SAMPLE_FILE_KEY).catch(() => null);
+        if (audioHandle && await hasFileHandlePermission(audioHandle)) {
+          setSelectedAudioSample(audioHandle, await audioHandle.getFile());
+        }
+        const imageHandles = await getSampleHandle(IMAGE_SAMPLE_FILES_KEY).catch(() => null);
+        const handles = Array.isArray(imageHandles) ? imageHandles : (imageHandles ? [imageHandles] : []);
+        const permitted = [];
+        for (const handle of handles) {
+          if (await hasFileHandlePermission(handle)) permitted.push(handle);
+        }
+        if (permitted.length) {
+          setSelectedImageSamples(permitted, await Promise.all(permitted.map((handle) => handle.getFile())));
+        }
+      } catch (err) {
+        log(`恢复样例文件选择失败: ${err.message}`);
       }
     }
 
@@ -818,6 +882,9 @@
         enableRegisteredControls();
         log(`registered connection_id=${item.payload.connection_id}`);
         startHeartbeat();
+        if (document.getElementById("autoWake").checked && !sessionId) {
+          sendWakeDetected("auto_wake");
+        }
       } else if (item.event_name === "control.audio_session.open.requested") {
         if (inputStreamId || openingMic) {
           log("audio session already active; ignore duplicate open request");
@@ -826,11 +893,7 @@
         sessionId = currentDeviceId();
         sendEvent(event("control.audio_session.opened", {reason: "browser_device_opened"}, {session_id: sessionId}));
         renderStatus();
-        if (document.getElementById("autoStartAudio").checked) {
-          await openAudioInput();
-        } else {
-          log("audio session opened; waiting for manual start audio");
-        }
+        log("audio session opened; waiting for manual start audio");
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.speaker") {
         await ensureStreamSocketOpen();
       } else if (item.event_name === "stream.output.close.requested") {
@@ -841,7 +904,7 @@
       } else if (item.event_name === "stream.control.open.requested" && item.stream_type === "sensor.rgb") {
         await handleRgbConfigure(item);
       } else if (item.event_name === "stream.control.close.requested" && item.stream_type === "sensor.rgb") {
-        stopRgbContinuous("server_close_requested");
+        stopContinuousRgb("server_close_requested");
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.haptic") {
         sendEvent(event("stream.output.started", {stream_type: "actuator.haptic"}, {
           session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
@@ -870,23 +933,18 @@
         return;
       }
       if (mode === "continuous") {
-        await startContinuousRgb(item);
+        await uploadSingleVisualSnapshot(item);
         return;
       }
       await uploadSingleVisualSnapshot(item);
     }
 
     async function uploadSingleVisualSnapshot(item = null) {
-      const mode = rgbSourceModeSelect.value;
-      if (mode === "live_camera") {
-        await uploadRgbImages([await captureLiveCameraFrame()], item, "camera_frame_captured");
-        return;
-      }
-      if (mode === "image_upload") {
+      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
         await uploadSelectedImages(item);
         return;
       }
-      throw new Error("视频模式只支持连续上传，请点击开始视频 stream");
+      await uploadRgbImages([await captureLiveCameraFrame()], item, "camera_frame_captured");
     }
 
     async function uploadSelectedImages(item = null) {
@@ -954,7 +1012,9 @@
     }
 
     async function readSelectedImageFrames() {
-      const files = Array.from(document.getElementById("imageFile").files || []);
+      const files = selectedImageSampleFiles.length
+        ? selectedImageSampleFiles
+        : Array.from(document.getElementById("imageFile").files || []);
       if (!files.length) throw new Error("请选择图片文件");
       const images = [];
       for (const file of files) {
@@ -995,91 +1055,9 @@
       return await captureJpegFrame(cameraStream);
     }
 
-    async function ensureVideoElement() {
-      const file = document.getElementById("videoFile").files[0];
-      if (!file) throw new Error("请选择视频文件");
-      if (videoElement && videoElement.dataset.fileName === file.name) return videoElement;
-      if (videoElement && videoElement.src) URL.revokeObjectURL(videoElement.src);
-      videoElement = document.createElement("video");
-      videoElement.muted = true;
-      videoElement.playsInline = true;
-      videoElement.dataset.fileName = file.name;
-      videoElement.src = URL.createObjectURL(file);
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("video metadata timeout")), 3000);
-        videoElement.onloadedmetadata = () => { clearTimeout(timer); resolve(); };
-      });
-      return videoElement;
-    }
-
-    async function captureVideoFileFrame() {
-      const video = await ensureVideoElement();
-      if (video.paused) await video.play().catch(() => {});
-      const canvas = document.createElement("canvas");
-      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / video.videoWidth, RGB_CAPTURE_MAX_HEIGHT / video.videoHeight);
-      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", RGB_JPEG_QUALITY));
-      return {bytes: new Uint8Array(await blob.arrayBuffer()), width: canvas.width, height: canvas.height};
-    }
-
-    async function nextRgbFrame() {
-      if (rgbSourceModeSelect.value === "live_camera") return captureLiveCameraFrame();
-      return captureVideoFileFrame();
-    }
-
-    async function startContinuousRgb(item = null) {
-      if (rgbContinuousStreamId) return;
-      await ensureStreamSocketOpen();
-      rgbContinuousStreamId = newId("stream_rgb");
-      rgbSeq = 0;
-      const activeSession = currentDeviceId();
-      sendEvent(event("stream.input.opened", {
-        stream_type: "sensor.rgb",
-        format: {codec: "jpeg", sample_rate: Number(document.getElementById("videoFps").value || 1), channels: 1, chunk_ms: 1000},
-        mode: "continuous",
-      }, {session_id: activeSession, stream_id: rgbContinuousStreamId, stream_type: "sensor.rgb"}));
-      setStreamState(rgbContinuousStreamId, {stream_type: "sensor.rgb", state: "open", seq: 0, bytes_sent: 0, opened_at: Date.now()});
-      stopVideoButton.disabled = false;
-      const fps = Math.max(0.2, Number(document.getElementById("videoFps").value || 1));
-      videoTimer = setInterval(async () => {
-        try {
-          const image = await nextRgbFrame();
-          streamWs.send(encodeStreamChunk({
-            user_id: document.getElementById("userId").value,
-            session_id: activeSession,
-            stream_id: rgbContinuousStreamId,
-            stream_type: "sensor.rgb",
-            seq: rgbSeq++,
-            payload: image.bytes,
-            codec: "jpeg",
-            sample_rate: fps,
-            channels: 1,
-            duration_ms: Math.round(1000 / fps),
-            final: false,
-            metadata: {width: image.width, height: image.height, mode: "continuous"},
-          }));
-          const current = streamStates.get(rgbContinuousStreamId) || {};
-          setStreamState(rgbContinuousStreamId, {stream_type: "sensor.rgb", state: "open", seq: rgbSeq, bytes_sent: (current.bytes_sent || 0) + image.bytes.byteLength});
-        } catch (err) {
-          log(`continuous sensor.rgb failed: ${err.message}`);
-        }
-      }, Math.round(1000 / fps));
-    }
-
     async function stopContinuousRgb(reason = "manual_stop") {
-      if (videoTimer) clearInterval(videoTimer);
-      videoTimer = null;
       if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
       cameraStream = null;
-      if (!rgbContinuousStreamId) return;
-      sendEvent(event("stream.input.closed", {stream_type: "sensor.rgb", reason}, {
-        session_id: currentDeviceId(), stream_id: rgbContinuousStreamId, stream_type: "sensor.rgb",
-      }));
-      setStreamState(rgbContinuousStreamId, {stream_type: "sensor.rgb", state: "closed", close_reason: reason});
-      rgbContinuousStreamId = null;
-      stopVideoButton.disabled = true;
     }
 
     async function captureJpegFrame(stream) {
@@ -1122,7 +1100,7 @@
     }
 
     async function readSelectedAudioAsPcm16() {
-      const file = document.getElementById("audioFile").files[0];
+      const file = selectedAudioSampleFile || document.getElementById("audioFile").files[0];
       if (!file) throw new Error("请选择 WAV/PCM 音频文件");
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (file.name.toLowerCase().endsWith(".pcm")) return bytes;
@@ -1141,13 +1119,6 @@
       try {
         await ensureStreamSocketOpen();
         offlineAudio = await readSelectedAudioAsPcm16();
-        const prefixSilenceMs = Number(document.getElementById("silenceMs").value || 0);
-        const silenceBytes = Math.round(prefixSilenceMs / DEFAULT_CHUNK_MS) * MIC_CHUNK_BYTES;
-        if (silenceBytes > 0) {
-          const withSilence = new Uint8Array(silenceBytes + offlineAudio.byteLength + silenceBytes);
-          withSilence.set(offlineAudio, silenceBytes);
-          offlineAudio = withSilence;
-        }
         const reuseStream = Boolean(inputStreamId);
         inputStreamId = inputStreamId || newId("stream_in");
         if (!reuseStream) seq = 0;
@@ -1366,12 +1337,16 @@
       renderStatus();
     }
 
+    function sendWakeDetected(wakeSource = "browser_device_button") {
+      wakeButton.disabled = true;
+      sendEvent(event("control.user.wake.detected", {wake_source: wakeSource}));
+    }
+
     connectButton.onclick = () => {
       connect().catch((err) => log(`connect failed: ${err.message}`));
     };
     wakeButton.onclick = () => {
-      wakeButton.disabled = true;
-      sendEvent(event("control.user.wake.detected", {wake_source: "browser_device_button"}));
+      sendWakeDetected("browser_device_button");
     };
     interruptButton.onclick = () => {
       sendEvent(event("control.user.interrupt.detected", {reason: "browser_device_manual_interrupt"}, {session_id: currentDeviceId()}));
@@ -1383,27 +1358,19 @@
     stopAudioButton.onclick = () => {
       stopMic().catch((err) => log(`stop audio failed: ${err.message}`));
     };
-    sendPhotoButton.onclick = () => {
-      uploadSelectedImages(null).catch((err) => log(`upload images failed: ${err.message}`));
+    chooseAudioSampleButton.onclick = () => {
+      chooseFileFromSampleDirectory({
+        kind: "audio",
+        accept: {"audio/*": [".wav", ".pcm"], "application/octet-stream": [".pcm"]},
+        multiple: false,
+      }).catch((err) => log(`choose audio sample failed: ${err.message}`));
     };
-    startVideoButton.onclick = () => {
-      startContinuousRgb(null).catch((err) => log(`start video stream failed: ${err.message}`));
-    };
-    stopVideoButton.onclick = () => {
-      stopContinuousRgb("manual_stop").catch((err) => log(`stop video stream failed: ${err.message}`));
-    };
-    customEventButton.onclick = () => {
-      try {
-        const payload = JSON.parse(document.getElementById("customPayload").value || "{}");
-        const forbidden = ["audio", "image", "video", "bytes", "payload_bytes", "data"].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
-        if (forbidden.length) throw new Error(`payload 不允许包含媒体大字节字段: ${forbidden.join(",")}`);
-        const streamType = document.getElementById("customStreamType").value.trim();
-        const extra = {session_id: currentDeviceId()};
-        if (streamType) extra.stream_type = streamType;
-        sendEvent(event(document.getElementById("customEventName").value.trim(), payload, extra));
-      } catch (err) {
-        log(`custom event failed: ${err.message}`);
-      }
+    chooseImageSampleButton.onclick = () => {
+      chooseFileFromSampleDirectory({
+        kind: "image",
+        accept: {"image/*": [".jpg", ".jpeg", ".png", ".webp", ".bmp"]},
+        multiple: true,
+      }).catch((err) => log(`choose image sample failed: ${err.message}`));
     };
     closeButton.onclick = async () => {
       await stopMic();
@@ -1416,12 +1383,13 @@
 
     bindBrowserConfigPersistence();
     audioModeSelect.addEventListener("change", updateInputModePanels);
-    rgbSourceModeSelect.addEventListener("change", updateInputModePanels);
-    runtimeLogTab.onclick = () => showLogTab("runtime");
-    broadcastLogTab.onclick = () => showLogTab("broadcast");
     updateInputModePanels();
-    showLogTab("runtime");
     renderStatus();
+    restoreSampleSelections().finally(() => {
+      if (document.getElementById("autoConnect").checked) {
+        connect().catch((err) => log(`auto connect failed: ${err.message}`));
+      }
+    });
     window.__audioChatBrowserDeviceTest = {
       encodeStreamChunk,
       decodeStreamChunk,
