@@ -18,7 +18,6 @@ from audio_chat.protocol import StreamChunk, StreamFormat
 from audio_chat.tools import ToolGateway
 
 TEXT_ONLY_VISION_TOOLS = {"interpret_current_view", "interpret_image"}
-QWEN_OMNI_IMAGE_ANCHOR_AUDIO = bytes(640)
 
 
 def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -498,29 +497,48 @@ class QwenOmniRealtimeAdapter:
             if image_bytes:
                 append_video = getattr(self._conversation, "append_video", None)
                 if callable(append_video):
+                    replay_audio = self._callbacks.replay_audio_for_tool_result(result) if self._callbacks and self._callbacks.replay_audio_for_tool_result else []
                     append_audio = getattr(self._conversation, "append_audio", None)
-                    if callable(append_audio):
-                        append_audio(base64.b64encode(QWEN_OMNI_IMAGE_ANCHOR_AUDIO).decode("ascii"))
-                    append_video(base64.b64encode(image_bytes).decode("ascii"))
-                    commit = getattr(self._conversation, "commit", None)
-                    if callable(commit):
-                        commit()
-                    if self._callbacks:
-                        self._callbacks.provider_event(
-                            {
-                                "event": "omni.capture_photo.image_appended",
-                                "provider": "qwen",
-                                "tool_call_id": call_id,
-                                "tool_name": result.get("name"),
-                                "image_bytes": len(image_bytes),
-                                "image_path": str(image_path),
-                                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
-                                "anchor_audio_bytes": len(QWEN_OMNI_IMAGE_ANCHOR_AUDIO) if callable(append_audio) else 0,
-                                "committed": callable(commit),
-                                "response_create": "deferred_after_response_done",
-                            }
-                        )
-                    response_instructions = _capture_photo_response_instructions(self.config.instructions)
+                    if not replay_audio or not callable(append_audio):
+                        if self._callbacks:
+                            self._callbacks.provider_event(
+                                {
+                                    "event": "omni.capture_photo.audio_replay.missing",
+                                    "provider": "qwen",
+                                    "call_id": call_id,
+                                    "tool_name": result.get("name"),
+                                    "image_path": str(image_path),
+                                    "has_append_audio": callable(append_audio),
+                                    "replay_chunk_count": len(replay_audio),
+                                    "message": "capture_photo image cannot be replayed because user audio is unavailable",
+                                }
+                            )
+                    else:
+                        for audio in replay_audio:
+                            if audio:
+                                append_audio(base64.b64encode(audio).decode("ascii"))
+                        append_video(base64.b64encode(image_bytes).decode("ascii"))
+                        commit = getattr(self._conversation, "commit", None)
+                        if callable(commit):
+                            commit()
+                        if self._callbacks:
+                            self._callbacks.provider_event(
+                                {
+                                    "event": "omni.capture_photo.image_appended",
+                                    "provider": "qwen",
+                                    "tool_call_id": call_id,
+                                    "tool_name": result.get("name"),
+                                    "image_bytes": len(image_bytes),
+                                    "image_path": str(image_path),
+                                    "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+                                    "replayed_audio_bytes": sum(len(audio) for audio in replay_audio),
+                                    "replayed_audio_chunk_count": len(replay_audio),
+                                    "committed": callable(commit),
+                                    "response_create": "provider_auto_after_commit",
+                                }
+                            )
+                        response_instructions = _capture_photo_response_instructions(self.config.instructions)
+                        create_followup_response = False
                 elif self._callbacks:
                     self._callbacks.error(
                         "Realtime provider does not support append_video",
@@ -637,6 +655,7 @@ def _capture_photo_response_instructions(base: str) -> str:
         "刚刚通过 capture_photo 工具提交了一张新的实时照片。"
         "本次回答必须只基于刚提交的这张照片回答用户上一轮视觉问题；"
         "如果它和历史照片或历史描述冲突，以刚提交的新照片为准。"
+        "刚才已经完成抓拍，本次不要再次调用 capture_photo。"
         "不要复述工具参数、文件名或调用过程；看不清时直接说明看不清，不能猜测。"
     )
 
