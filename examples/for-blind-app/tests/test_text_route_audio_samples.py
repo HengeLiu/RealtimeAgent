@@ -6,12 +6,14 @@ from pathlib import Path
 
 from aiohttp import web
 
+from audio_chat import AssetRef
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.server import AudioChatHttpServer
+from audio_chat.tools import ToolExecutor
 from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint, PythonPlaybackEndpoint, load_wav_audio
 
 
-AUDIO_SAMPLE_ROOT = Path("testdata/audio-sample/wav")
+AUDIO_SAMPLE_ROOT = Path("testdata/audio-sample")
 APP_ROOT = Path("examples/for-blind-app/audio-server")
 
 
@@ -80,7 +82,10 @@ def test_text_route_uses_audio_sample_filename_as_mock_asr_transcript_and_calls_
     assert result["input_audio"]["chunk_count"] > 1
     assert any(item["role"] == "user" and item["content"] == "帮我查一下我眼镜的状态" for item in messages)
     assert any(item["tool_name"] == "query_device_state" and item["ok"] is True for item in tool_trace)
-    assert any("当前有 1 台设备在线" in str(item.get("content")) for item in messages)
+    assert any(
+        item.get("role") == "tool" and (item.get("content") or {}).get("data", {}).get("count") == 1
+        for item in messages
+    )
     assert "assistant_audio.delta" in model_events
 
 
@@ -106,7 +111,57 @@ def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_
     assert result["asset_uploads"]
     assert any(item["tool_name"] == "capture_photo" and item["ok"] is True for item in tool_trace)
     assert any(item.get("event") == "asset.stored" and item.get("stream_type") == "sensor.rgb" for item in assets)
-    assert any("我已经拿到当前照片" in str(item.get("content")) for item in messages)
+    assert any(
+        item.get("role") == "tool" and (item.get("content") or {}).get("data", {}).get("captured") is True
+        for item in messages
+    )
+
+
+def test_capture_photo_uses_browser_camera_cold_start_timeout(monkeypatch) -> None:
+    """测试目标：确认抓拍工具默认等待时间能覆盖浏览器摄像头冷启动。
+
+    测试方法：通过 ToolExecutor 执行 `capture_photo`，不传 `timeout_seconds`，
+    用假的 RGB facade 记录最终传给 `sensor.rgb.one()` 的超时值。
+    预期结果：默认超时为 15 秒，避免首次 `getUserMedia` 超过 5 秒时误判拍照失败。
+    """
+
+    _clear_capability_modules()
+    monkeypatch.syspath_prepend(str(APP_ROOT))
+    from capabilities.tools import CapturePhotoTool
+
+    class FakeRgb:
+        def __init__(self) -> None:
+            self.timeout_seconds: float | None = None
+
+        async def one(self, *, params: dict, timeout_seconds: float) -> AssetRef:
+            self.timeout_seconds = timeout_seconds
+            return AssetRef(
+                asset_id="asset-test",
+                user_id="user-test",
+                session_id="sess-test",
+                stream_type="sensor.rgb",
+                mime_type="image/jpeg",
+                created_at_ms=0,
+                uri="/tmp/asset-test.jpg",
+            )
+
+    class FakeSensors:
+        def __init__(self, rgb: FakeRgb) -> None:
+            self.rgb = rgb
+
+    class FakeDevices:
+        def __init__(self, rgb: FakeRgb) -> None:
+            self.sensors = FakeSensors(rgb)
+
+    class FakeContext:
+        def __init__(self, rgb: FakeRgb) -> None:
+            self.devices = FakeDevices(rgb)
+
+    rgb = FakeRgb()
+    result = asyncio.run(ToolExecutor().execute(CapturePhotoTool(), FakeContext(rgb), {"reason": "test"}))
+
+    assert result.ok is True
+    assert rgb.timeout_seconds == 15
 
 
 def test_text_route_network_python_glass_replays_audio_sample_over_websocket(tmp_path: Path) -> None:
@@ -140,7 +195,7 @@ def test_text_route_network_python_glass_replays_audio_sample_over_websocket(tmp
         assert result["passed"] is True
         assert result["transport"] == "network"
         assert result["input_audio"]["chunk_count"] > 1
-        assert (tmp_path / "runs" / "sessions" / result["session_id"] / "events.jsonl").exists()
+        assert (tmp_path / "runs" / "user-text-network" / result["session_id"] / "events.jsonl").exists()
         assert (tmp_path / "runs" / "user-text-network" / result["session_id"] / "model-request.json").exists()
 
     asyncio.run(run())

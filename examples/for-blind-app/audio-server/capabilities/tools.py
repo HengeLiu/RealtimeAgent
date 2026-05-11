@@ -5,11 +5,18 @@ from pydantic import BaseModel, Field
 from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
+CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS = 15
+
+
 class CapturePhotoInput(BaseModel):
     """抓拍 Tool 输入参数。"""
 
     reason: str = Field(default="agent_requested", description="请求抓拍的业务原因。")
-    timeout_seconds: float = Field(default=5, gt=0, description="等待图片返回的超时时间，单位秒。")
+    timeout_seconds: float = Field(
+        default=CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS,
+        gt=0,
+        description="等待图片返回的超时时间，单位秒。",
+    )
 
 
 class CapturePhotoOutput(BaseModel):
@@ -49,7 +56,7 @@ class CapturePhotoTool(BaseTool):
 
         asset = await context.devices.sensors.rgb.one(
             params={"reason": str(input_data.get("reason") or "agent_requested"), "format": "jpeg"},
-            timeout_seconds=float(input_data.get("timeout_seconds") or 5),
+            timeout_seconds=float(input_data.get("timeout_seconds") or CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS),
         )
         return ToolResult.success(
             data={
