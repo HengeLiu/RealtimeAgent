@@ -85,7 +85,7 @@ iOS 参考端适合验证手机端注册、日志、直连相机接收和 Swift 
 
 ```bash
 uv run audio-chat.esp32.config
-uv run audio-chat.esp32.build --dry-run --build-only
+uv run audio-chat.esp32.build --dry-run
 ```
 
 有 ESP-IDF 和真机时再做 build、flash、monitor。

@@ -36,6 +36,14 @@ curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
+如果需要后台管理 server，可使用：
+
+```bash
+uv run audio-chat.server.start --config examples/for-blind-app/audio-server/server.yaml
+uv run audio-chat.server.logs
+uv run audio-chat.server.stop
+```
+
 ## 启动参考设备
 
 最新推荐联调顺序：
@@ -90,10 +98,10 @@ uv run audio-chat.playback.glass --config examples/dev-support/devices/python-gl
 ```bash
 uv run audio-chat.playback.glass \
   --server-url http://127.0.0.1:8765 \
-  --audio-wav legacy/openaiglass-sdk/testdata/audio-sample/wav/看一下我前面有什么.wav
+  --audio-wav testdata/audio-sample/看一下我前面有什么.wav
 ```
 
-Text 模型路线的无头验收可以直接复用旧 SDK 的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock text model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
+Text 模型路线的无头验收可以直接复用 `testdata/audio-sample/` 下的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock text model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
 
 ```bash
 uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
@@ -101,7 +109,7 @@ uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_sampl
 
 ## 更换模型和模态
 
-应用运行配置在 `examples/for-blind-app/audio-server/server.yaml`。根目录的 `server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
+应用运行配置在 `examples/for-blind-app/audio-server/server.yaml`。`audio-server/config/server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
 
 如果要从 Omni Realtime 切到文本模态测试，把 `agent.mode` 改成 `text`，然后配置 `agent.text` 三段 provider：
 
@@ -173,7 +181,7 @@ ESP32-S3 参考端：
 
 ```bash
 uv run audio-chat.esp32.config
-uv run audio-chat.esp32.build --dry-run --build-only
+uv run audio-chat.esp32.build --dry-run
 ```
 
 ## 开发者工作模型
@@ -184,11 +192,11 @@ uv run audio-chat.esp32.build --dry-run --build-only
 
 - Tool 使用 `ToolContext`，只做短生命周期动作。
 - Task 使用 `TaskContext`，可以做持续数据流和异步状态维护。
-- 新 Tool 可以优先使用已落地的 typed facade，例如 `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 和 `context.assets.get()`。
-- 连续 stream、部分远程命令和旧模板仍使用 `context.devices.request_asset()`、`publish_event()`、`watch_assets()`、`submit_text()` 等兼容接口。
+- Tool 使用已落地的 typed facade，例如 `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 和 `context.assets.get()`。
+- Task 在 Tool 能力基础上额外开放持续 stream 和长命令接口，例如 `context.devices.sensors.rgb.stream()`、`context.devices.commands.start()` 和 `context.devices.commands.subscribe_result()`。
 - 麦克风和喇叭是系统音频通道，不作为普通设备能力开放。
-- 设备当前使用 `supports[].id` 声明能力；新版目标结构是 `supports.sensors[].type` 和 `supports.actuators[].type`。
-- `selector` 已可用于 typed sensor API 的设备筛选；完整设备 schema 和所有 facade 能力仍按设计文档继续补齐。
+- 设备能力文件当前只接受结构化 `supports.sensors[].type` 和 `supports.actuators[].type`；注册 payload 不允许手写 `routes`。
+- `selector` 已可用于 typed sensor、actuator 和 command API 的设备筛选。
 
 默认应用目录结构如下：
 
@@ -196,10 +204,9 @@ uv run audio-chat.esp32.build --dry-run --build-only
 examples/<your-app>/audio-server/
   server.yaml
   capabilities/
-    your_tool/
-      tool.py      # 继承 BaseTool，会被自动发现
-    your_task/
-      task.py      # 继承 BaseTask，会被自动发现
+    __init__.py
+    tools.py       # 继承 BaseTool，会被自动发现
+    tasks.py       # 继承 BaseTask，会被自动发现
   skills/
   config/
 ```
@@ -215,14 +222,13 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 新增一个能力时，推荐按这个顺序设计：
 
 1. 先判断能力是一次性动作还是长流程：一次性动作写 Tool，长流程写 Task。
-2. 列出它需要哪些端侧能力：当前能力文件仍使用 `sensor.rgb`、`sensor.imu`、`actuator.haptic` 等 `stream_type`；业务代码逐步收敛到 `context.devices.sensors.rgb`、`context.devices.sensors.imu`、`context.devices.actuators.vibrator` 这类 typed facade。
-3. 确认端侧设备能力文件中已经声明对应 `supports[].id`。
+2. 列出它需要哪些端侧能力：设备文件用 `supports.sensors` / `supports.actuators` 声明；业务代码使用 `context.devices.sensors.rgb`、`context.devices.sensors.imu`、`context.devices.sensors.tof`、`context.devices.actuators.vibrator` 这类 typed facade。
+3. 确认端侧设备能力文件中已经声明对应能力，例如 `type: rgb`、`type: imu`、`type: tof` 或 `type: vibrator`。
 4. 在 Tool / Task 中通过 Context API 表达能力调用，不直接操作 WebSocket 或硬编码 `device_id`。
-5. 用 `runs/<app_name>/...` 中的运行产物验证链路。
+5. 用 `<runs_root>/...` 中的运行产物验证链路。for-blind-app 默认写入 `examples/for-blind-app/audio-server/runs/`。
 
 业务样例：
 
-- `examples/for-blind-app`：最小 Tool / Task / playback 样板。
 - `examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器迁移版本。
 - `examples/for-blind-app/audio-server/capabilities`：业务能力样例。
 
@@ -241,7 +247,7 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
 ```
 
-设备能力文件当前用于声明 `supports[].id`、运行环境和调试属性。`supports.sensors`、`supports.actuators`、`selector`、`external` 是下一阶段目标设计，当前不要写进可运行设备配置。
+设备能力文件当前用于声明结构化 `supports.sensors`、`supports.actuators`、运行环境和调试属性。`selector` 是 Tool / Task 调用设备时的运行期筛选条件，不写进设备能力文件；`external` 可用于端侧私有调试元数据。
 
 端侧实现入口：
 

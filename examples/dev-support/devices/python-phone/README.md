@@ -47,8 +47,8 @@ RGB 帧来自 `vision_frames` 配置或默认测试 JPEG，并始终通过 `sens
 
 设计文档见 [VIDEO_DISPLAY_DESIGN.md](VIDEO_DISPLAY_DESIGN.md)。
 
-本地视频窗口使用 OpenCV 实现。启动后会注册为一台普通设备，订阅 `sensor.rgb`
-输入流，并把收到的最近一帧保存到 `runs/audio-chat/python-phone/latest-rgb.jpg`。
+本地视频窗口使用 OpenCV 实现。启动后会注册为一台普通设备并订阅 `sensor.rgb`
+输入流。需要保存最近一帧时，在配置的 `display.save_latest_frame` 中显式设置输出路径。
 
 ```bash
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml

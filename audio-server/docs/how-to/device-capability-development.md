@@ -1,11 +1,13 @@
 # 设备能力与 Context API 开发说明
 
-当前架构只接受结构化 `supports`。Tool / Task 只能使用 typed facade：
+当前仓库已经可用的设备能力开发入口是 structured supports 加 typed facade。当前架构只接受结构化 `supports`，Tool / Task 只能使用 typed facade：
 
 - Tool：`context.devices.sensors.rgb.one()`、`context.devices.actuators.vibrator.one()`、`context.devices.commands.call()`。
 - Task：在 Tool 能力基础上额外开放 `.stream()` 和 `commands.start()/subscribe_result()`。
 - 用户可听输出：统一使用 `await context.output.say(...)`，不直接写 speaker。
 - 麦克风和扬声器属于系统音频主链路，不作为普通 `supports` capability 暴露。
+
+当前新 Tool 可以优先试用 typed facade；不要再用旧草案里的 `request_asset()`、`publish_event()`、`watch_assets()` 或 `submit_text()`。
 
 ## 设备能力文件
 
@@ -35,6 +37,9 @@ supports:
 ## Tool 示例
 
 ```python
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+
+
 asset = await context.devices.sensors.rgb.one(
     params={"reason": "capture", "format": "jpeg"},
     timeout_seconds=2,
@@ -45,10 +50,15 @@ return ToolResult.success(data={"asset_id": asset.asset_id, "uri": asset.uri})
 ## Task 示例
 
 ```python
+from audio_chat import BaseTask, TaskContext
+
+
 async for frame in context.devices.sensors.rgb.stream(fps=1, sample_count=3):
     handle_frame(frame)
 await context.output.say("已完成画面分析", priority="normal")
 ```
+
+`context.assets.get(asset_id)` 的返回值是 `AssetRef | None`；找不到资产时业务代码应给出明确失败结果。
 
 ## 命令协议
 
@@ -70,3 +80,15 @@ await context.output.say("已完成画面分析", priority="normal")
 - `stream.control.close.requested`
 
 不再存在 configure 事件。
+
+## 常用命令和观察点
+
+```bash
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run audio-chat.server.run --app-name for-blind-app
+uv run audio-chat.web.open --print-url
+```
+
+for-blind-app 默认运行产物位于 `examples/for-blind-app/audio-server/runs/`。旧文档里的
+`runs/<app_name>/<user_id>/<device_id>/assets.jsonl` 应按当前配置理解为
+`<runs_root>/<user_id>/<device_id>/assets.jsonl`。

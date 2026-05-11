@@ -143,7 +143,7 @@ ESP32-S3 参考端：
 
 ```bash
 uv run audio-chat.esp32.config
-uv run audio-chat.esp32.build --dry-run --build-only
+uv run audio-chat.esp32.build --dry-run
 ```
 
 预检和发布包检查：

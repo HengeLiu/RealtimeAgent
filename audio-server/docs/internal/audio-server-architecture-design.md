@@ -2,7 +2,7 @@
 
 更新时间：2026-05-07
 
-文档状态：总体架构设计与历史决策记录。本文覆盖了 `audio-chat` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分公开 API 章节仍保留 `UserDeviceContext` 等当前兼容实现口径。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准；完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
+文档状态：总体架构设计与历史决策记录。本文覆盖了 `audio-chat` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
 
 ## 1. 文档目的
 
@@ -169,7 +169,7 @@ legacy/
 | Output Service         | 已实现   | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `audio-server/tests/test_phase2_providers_output.py` 覆盖。                                                                                                                                                                                                               |
 | Endpoint references    | 已实现   | Python playback、Python phone mock 和 browser-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。                                                                                                                           |
 | Memory / Skill / MCP   | 已实现   | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `audio-server/tests/test_memory_service.py`、`audio-server/tests/test_skill_service.py`、`audio-server/tests/test_mcp_gateway.py`、`audio-server/tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备通讯能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
-| Signed token / Pairing | 未实现   | B 线路会实现 signed token、绑定冲突和 PairingTokenIssuer；当前只保留契约 golden。                                                                                                                                                                                                                                              |
+| Signed token / Pairing | 部分实现 | `DeviceAuthenticator` 已支持 `disabled`、`static_token` 和 HMAC `signed_token` 校验；配对管理端、显式解绑和绑定冲突管理仍属于后续部署能力。                                                                                                                                                                                                                                              |
 
 ### 3.6 已实现能力验收索引
 
@@ -185,7 +185,7 @@ legacy/
 | Tool / Task 协议原生扩展    | `tests/acceptance/test_protocol_native_tool_task_contract.py`                                                                                                                                                                |
 | Text 模型音频闭环           | `examples/for-blind-app/tests/test_text_route_audio_samples.py`                                                                                                                                                                                     |
 | Output Service 与播放仲裁   | `audio-server/tests/test_phase2_providers_output.py`                                                                                                          |
-| H 线路迁移样板              | `examples/for-blind-app/templates`、`examples/for-blind-app/tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
+| H 线路迁移样板              | `examples/for-blind-app/audio-server/capabilities/{tools.py,tasks.py}`、`examples/for-blind-app/tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
 | Memory / Skill / MCP 能力面 | `audio-server/tests/test_memory_service.py`、`audio-server/tests/test_skill_service.py`、`audio-server/tests/test_mcp_gateway.py`、`audio-server/tests/acceptance/test_indirect_device_context_contract.py`                                                                |
 
 ### 3.7 公开扩展 API
@@ -193,7 +193,7 @@ legacy/
 业务代码应优先从 `audio_chat` 顶层导入扩展类，不依赖内部服务模块路径：
 
 ```python
-from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec, BaseTask, TaskContext, TaskEvent, UserDeviceContext
+from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec, BaseTask, TaskContext, TaskSignal
 ```
 
 ## 4. 设计原则
@@ -3485,7 +3485,7 @@ uv run audio-chat.esp32.start \
 
 ESP32 命令需要支持：
 
-1. `--build-only`：只编译。
+1. `--dry-run`：只输出诊断命令，不执行 ESP-IDF。
 2. `--flash-only`：只烧录已构建产物。
 3. `--monitor-only`：只打开串口监看。
 4. `--port` 通配符：匹配多个串口时提示开发者选择。

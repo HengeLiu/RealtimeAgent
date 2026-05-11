@@ -44,13 +44,17 @@ examples/for-blind-app/
   audio-server/
     server.yaml
     capabilities/
-    tools.py
-    tasks.py
+      __init__.py
+      tools.py
+      tasks.py
+  devices/
+    native-ios-phone/
+    native-esp32-glass/
 ```
 
 业务能力应该放在应用目录下，而不是写进 SDK 核心包。
 
-## examples/devices
+## examples/dev-support 和 examples/*/devices
 
 参考端侧实现：
 
@@ -91,10 +95,6 @@ uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_sampl
 ## testdata
 
 契约、回放和样例数据目录。适合保存可复现输入，而不是保存真实用户数据。
-
-## scripts
-
-验收和辅助脚本目录。发布或开源前可以用 acceptance 脚本做开发者体验检查。
 
 ## legacy
 

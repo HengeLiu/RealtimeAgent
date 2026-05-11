@@ -286,7 +286,7 @@ display:
   window_title: audio-chat python phone
   max_fps: 15
   close_on_stream_closed: false
-  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.jpg
+  save_latest_frame: runs/python-phone/latest-rgb.jpg
 
 stream:
   accepted_stream_types:
@@ -320,7 +320,7 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 2. 收到至少一个 `sensor.rgb` stream。
 3. 解码帧数大于 0。
 4. Python 手机端窗口显示眼镜画面。
-5. `runs/audio-chat/python-phone/latest-rgb.jpg` 存在。
+5. 配置了 `display.save_latest_frame` 时，对应的最近帧文件存在。
 6. 运行结果中包含 `stream_id`、`frame_count`、`first_frame_after_ms`。
 7. 关闭眼镜端推流后，手机端记录 `stream.input.closed` 并保留最后一帧。
 

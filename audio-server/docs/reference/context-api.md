@@ -1,8 +1,8 @@
 # audio-chat Context 与设备 API 设计说明
 
-本文是 `audio-chat` 当前 Context 设备 API 的架构契约。它用于固定公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。
+本文是 `audio-chat` 当前 Context 设备 API 的架构契约和设计说明。它用于固定公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。它不是当前版本的开发操作手册；按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](../how-to/device-capability-development.md)。
 
-当前仓库以 typed device API 作为唯一推荐开发入口，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.actuators.vibrator.one()` 和 `context.devices.commands.call()`。需要按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](../how-to/device-capability-development.md)。
+当前仓库以 typed device API 作为唯一推荐开发入口，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.actuators.vibrator.one()`、`context.devices.commands.call()` 和 `context.output.say()`。从当前实现迁移到目标 API 时，优先替换旧的 `request_asset()`、`publish_event()`、`watch_assets()` 和 `submit_text()` 写法。
 
 ## 1. 设计原则
 

@@ -43,7 +43,7 @@ examples/for-blind-app/audio-server/runs
 ## 根目录结构
 
 ```text
-runs/<app_name>/
+<runs_root>/
   control-events.jsonl
   control-routes.jsonl
   system-events.jsonl
@@ -70,7 +70,7 @@ runs/<app_name>/
 当前版本按用户和设备组织运行产物：
 
 ```text
-runs/<app_name>/<user_id>/<device_id>/
+<runs_root>/<user_id>/<device_id>/
 ```
 
 其中 `<device_id>` 同时也是当前过渡说明的会话标识，会出现在终端日志里，例如：
@@ -89,8 +89,7 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 | `tool-events.jsonl` | 新版工具调用日志。包括工具名称、输入参数、返回结果、错误、耗时。 |
 | `stream-events.jsonl` | stream 生命周期和 chunk 摘要。终端不逐条打印 chunk，完整明细在这里。 |
 | `assets.jsonl` | 资产写入和资产请求记录。拍照、连续 RGB、深度图等传感器资产从这里追。 |
-| `active-messages.jsonl` | 当前会直接进入模型上下文的真实 user/assistant/tool 消息。 |
-| `messages.jsonl` | 兼容旧排障脚本的 active message 镜像；语义等同于 `active-messages.jsonl`。 |
+| `messages.jsonl` | 当前设备对话消息审计；包含 user/assistant/tool 记录，重启恢复时只筛选可进入模型上下文的 user/assistant 文本。 |
 | `message-summaries.jsonl` | 被压缩历史对话的摘要记录；最新摘要会注入后续模型提示词。 |
 | `history/*-messages.jsonl` | 被摘要压缩后的原始消息备份，按时间段拆文件保存。 |
 
@@ -128,25 +127,23 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 ## messages 文件
 
 ```text
-runs/<app_name>/<user_id>/<device_id>/active-messages.jsonl
-runs/<app_name>/<user_id>/<device_id>/messages.jsonl
-runs/<app_name>/<user_id>/<device_id>/message-summaries.jsonl
-runs/<app_name>/<user_id>/<device_id>/history/<start>-<end>-messages.jsonl
+<runs_root>/<user_id>/<device_id>/messages.jsonl
+<runs_root>/<user_id>/<device_id>/message-summaries.jsonl
+<runs_root>/<user_id>/<device_id>/history/<start>-<end>-messages.jsonl
 ```
 
-消息维护分四层：
+消息维护分三层：
 
-1. `active-messages.jsonl` 是 canonical 文件，保存当前模型可直接看到的近期对话；系统重启后从这里恢复上下文。
-2. `messages.jsonl` 是兼容镜像，内容与 active 保持一致，便于旧脚本和人工排障继续读取。
-3. `history/<start>-<end>-messages.jsonl` 保存被压缩出 active 的原始消息，文件名中的时间段来自被归档消息的起止时间。
-4. `message-summaries.jsonl` 追加每次压缩得到的 LLM 结构化摘要；后续请求只把最新摘要放入提示词，不再把归档原文重复展开。
+1. `messages.jsonl` 保存当前设备对话消息审计；进程内 active messages 从这里筛选 user/assistant 非空文本恢复。
+2. `history/<start>-<end>-messages.jsonl` 保存被压缩出 active 的原始消息，文件名中的时间段来自被归档消息的起止时间。
+3. `message-summaries.jsonl` 追加每次压缩得到的 LLM 结构化摘要；后续请求只把最新摘要放入提示词，不再把归档原文重复展开。
 
-压缩触发点在连续音频会话结束后：如果 active 消息数大于 30 条，则保留最新 5 条，其余消息会先交给摘要子 Agent 生成结构化滚动摘要；只有摘要成功后，才写入 history、追加 summary，并重写 active 和兼容 `messages.jsonl`。如果摘要模型未配置、缺少 API Key 或 provider 调用失败，本次压缩会跳过并记录 `conversation.summary.failed` 错误日志，active 原文保持不变。长期记忆仍由 `<runtime_root>/<user_id>/memory.json` 维护，和 message summary 分开：memory 保存稳定用户事实，message summary 只保存对话上下文重点。
+压缩触发点在连续音频会话结束后：如果 active 消息数大于 30 条，则保留最新 5 条，其余消息会先交给摘要子 Agent 生成结构化滚动摘要；只有摘要成功后，才写入 history、追加 summary，并把 `messages.jsonl` 重写为剩余 active 对话的审计记录。如果摘要模型未配置、缺少 API Key 或 provider 调用失败，本次压缩会跳过并记录 `conversation.summary.failed` 错误日志，active 原文保持不变。长期记忆仍由 `<runtime_root>/<user_id>/memory.json` 维护，和 message summary 分开：memory 保存稳定用户事实，message summary 只保存对话上下文重点。
 
 ## assets 目录
 
 ```text
-runs/<app_name>/<user_id>/<device_id>/photos/asset_*.jpg
+<runs_root>/<user_id>/<device_id>/photos/asset_*.jpg
 ```
 
 保存相机等传感器产生的资产文件。拍照工具相关问题，应同时看：
@@ -161,14 +158,14 @@ runs/<app_name>/<user_id>/<device_id>/photos/asset_*.jpg
 如果任务存储配置为 jsonl，长任务状态会写入：
 
 ```text
-runs/<app_name>/tasks/
+<runs_root>/tasks/
 ```
 
 日常语音对话排障通常不用看它。排查后台任务恢复、定时任务、长任务状态时再看。
 
 ## 后续可整理点
 
-当前 runs 产物已经按 `runs/<app_name>/<user_id>/<device_id>` 分层，仍有一些文件组织可以继续优化：
+当前 runs 产物已经按 `<runs_root>/<user_id>/<device_id>` 分层，仍有一些文件组织可以继续优化：
 
 1. `agent-events.jsonl` 和 `model-events.jsonl` 内容重复。
 2. `tool-events.jsonl` 记录 Tool 调用。
@@ -209,23 +206,23 @@ runs/<app_name>/tasks/
 查看某个 session 下面有哪些文件：
 
 ```bash
-find runs/<app_name>/<user_id>/<device_id> -maxdepth 1 -type f | sort
+find <runs_root>/<user_id>/<device_id> -maxdepth 1 -type f | sort
 ```
 
 查看本轮模型请求：
 
 ```bash
-cat runs/<app_name>/<user_id>/<device_id>/model-request.json
+cat <runs_root>/<user_id>/<device_id>/model-request.json
 ```
 
 查看本轮工具调用：
 
 ```bash
-tail -n 50 runs/<app_name>/<user_id>/<device_id>/tool-events.jsonl
+tail -n 50 <runs_root>/<user_id>/<device_id>/tool-events.jsonl
 ```
 
 查看系统错误：
 
 ```bash
-tail -n 100 runs/<app_name>/system-events.jsonl
+tail -n 100 <runs_root>/system-events.jsonl
 ```

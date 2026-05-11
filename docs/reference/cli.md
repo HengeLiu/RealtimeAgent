@@ -92,7 +92,7 @@ uv run audio-chat.esp32.config
 无硬件检查：
 
 ```bash
-uv run audio-chat.esp32.build --dry-run --build-only
+uv run audio-chat.esp32.build --dry-run
 ```
 
 有 ESP-IDF 和硬件时：
