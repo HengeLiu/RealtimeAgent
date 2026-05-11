@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 
 from audio_chat.agent_core.realtime import (
     MockRealtimeProviderAdapter,
@@ -770,8 +771,8 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
 
     测试方法：构造包含本地 JPEG 路径的工具结果，注入 fake conversation 后调用
     `_submit_tool_result()`。
-    预期结果：conversation 先收到 base64 图片，再收到 `function_call_output`，最后
-    创建下一段文本和音频响应，保证工具完成前图片已经进入 Realtime 上文。
+    预期结果：conversation 收到 `function_call_output`、静音锚点、base64 图片和
+    commit，不再 replay 用户音频，避免把同一句语音制造成第二个用户回合。
     """
 
     from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
@@ -836,24 +837,30 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     )
 
     assert conversation.items[0]["type"] == "function_call_output"
-    assert conversation.audios == ["AQI=", "AwQ="]
+    assert len(conversation.audios) == 1
+    assert base64.b64decode(conversation.audios[0]) == bytes(640)
     assert conversation.videos == ["/9hicm93c2VyLXBob3Rv/9k="]
     assert conversation.operations == [
         ("item", "function_call_output"),
-        ("audio", "AQI="),
-        ("audio", "AwQ="),
+        ("audio", conversation.audios[0]),
         ("video", "/9hicm93c2VyLXBob3Rv/9k="),
         ("commit", None),
     ]
     assert conversation.commits == 1
     assert conversation.responses == []
+    assert provider._pending_tool_followup_response is not None
     append_record = next(record for record in records if record.get("event") == "omni.capture_photo.image_appended")
     assert append_record["image_path"] == str(image_path.resolve())
     assert append_record["image_sha256"] == "4c84c82bf54f47daa25a64cc46cb553c7c073ecc64c9f8b40287301cc3bf3407"
-    assert append_record["replayed_audio_bytes"] == 4
-    assert append_record["replayed_audio_chunk_count"] == 2
+    assert "replayed_audio_bytes" not in append_record
+    assert "replayed_audio_chunk_count" not in append_record
+    assert append_record["anchor_audio_bytes"] == 640
     assert append_record["committed"] is True
-    assert append_record["response_create"] == "provider_auto_after_commit"
+    assert append_record["response_create"] == "deferred_after_response_done"
+
+    provider._create_pending_tool_followup_response()
+    assert conversation.responses
+    assert "刚刚通过 capture_photo 工具提交了一张新的实时照片" in conversation.responses[0]["instructions"]
 
 
 def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> None:
@@ -876,6 +883,7 @@ def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> N
             self.audios = []
             self.videos = []
             self.commits = 0
+            self.responses = []
 
         def create_item(self, item: dict) -> None:
             self.items.append(item)
@@ -888,6 +896,9 @@ def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> N
 
         def commit(self) -> None:
             self.commits += 1
+
+        def create_response(self, **kwargs) -> None:
+            self.responses.append(kwargs)
 
     records = []
     conversation = FakeConversation()
@@ -916,9 +927,11 @@ def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> N
     )
 
     assert conversation.items[0]["type"] == "function_call_output"
-    assert conversation.audios == ["AQI="]
+    assert len(conversation.audios) == 1
+    assert base64.b64decode(conversation.audios[0]) == bytes(640)
     assert conversation.videos == ["/9hicm93c2VyLXBob3RvLXVyaf/Z"]
     assert conversation.commits == 1
+    assert provider._pending_tool_followup_response is not None
     assert not any(record.get("event") == "omni.capture_photo.image_append.missing_image" for record in records)
 
 
