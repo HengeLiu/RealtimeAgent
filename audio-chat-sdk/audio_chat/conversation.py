@@ -152,11 +152,11 @@ def _messages_for_summary(messages: list[dict[str, Any]]) -> list[dict[str, str]
 class ConversationMemoryService:
     """会话消息维护服务。
 
-    主要功能：统一维护 active_messages、history_messages 和 message_summaries。
-    主要属性：`root` 是 runs 根目录；每个用户设备目录下保存 active、summary 和 history。
+    主要功能：在内存中维护模型可见 active_messages，并用 `messages.jsonl` 保存
+    当前 active 的完整离线备份，备份中包含工具调用过程。
+    主要属性：`root` 是 runs 根目录；`_active_messages` 是大模型真正可见的进程内上文。
     """
 
-    ACTIVE_FILE = "active-messages.jsonl"
     LEGACY_MESSAGES_FILE = "messages.jsonl"
     SUMMARY_FILE = "message-summaries.jsonl"
 
@@ -164,23 +164,25 @@ class ConversationMemoryService:
         self.root = Path(root).expanduser().resolve()
         self.summarizer = summarizer
         self.logger = get_logger("audio_chat.runs")
+        self._active_messages: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def append_message(self, *, user_id: str, device_id: str, message: dict[str, Any]) -> None:
-        """追加一条 active message。
+        """追加一条会话消息。
 
-        主要逻辑：写入 canonical `active-messages.jsonl`，同时同步旧入口
-        `messages.jsonl`，便于现有排障脚本继续读取。
+        主要逻辑：`messages.jsonl` 保存当前 active 的完整离线备份，包括工具调用
+        过程；进程内 active messages 只保存可直接进入模型上文的 user/assistant
+        非空文本。
         参数：`user_id/device_id` 定位设备对话，`message` 为待保存消息。
         返回值：无。
         异常情况：文件不可写时抛出底层 IO 异常。
         """
 
         normalized = _normalize_record(message, user_id=user_id, device_id=device_id)
-        active_path = self._device_dir(user_id, device_id) / self.ACTIVE_FILE
         legacy_path = self._device_dir(user_id, device_id) / self.LEGACY_MESSAGES_FILE
-        self._initialize_active_from_legacy(active_path=active_path, legacy_path=legacy_path)
-        self._append_jsonl(active_path, normalized)
+        active = self._ensure_active_messages(user_id=user_id, device_id=device_id)
         self._append_jsonl(legacy_path, normalized)
+        if _is_model_visible_record(normalized):
+            active.append(normalized)
 
     def legacy_messages_path(self, *, user_id: str, device_id: str) -> Path:
         """返回兼容 `messages.jsonl` 文件路径。
@@ -197,8 +199,8 @@ class ConversationMemoryService:
     def load_active_messages(self, *, user_id: str, device_id: str, limit: int = 50) -> list[dict[str, Any]]:
         """读取当前可直接进入模型上下文的 active messages。
 
-        主要逻辑：优先读取 `active-messages.jsonl`；首次升级时如果只存在旧
-        `messages.jsonl`，会把旧内容迁移成 active 文件。
+        主要逻辑：读取进程内 active messages；首次访问时会从完整审计
+        `messages.jsonl` 中筛选 user/assistant 非空文本作为重启恢复上下文。
         参数：`limit` 为最多返回条数。
         返回值：按原始顺序返回最近消息。
         异常情况：文件不存在时返回空列表。
@@ -206,10 +208,7 @@ class ConversationMemoryService:
 
         if not user_id or not device_id or limit <= 0:
             return []
-        active_path = self._device_dir(user_id, device_id) / self.ACTIVE_FILE
-        legacy_path = self._device_dir(user_id, device_id) / self.LEGACY_MESSAGES_FILE
-        self._initialize_active_from_legacy(active_path=active_path, legacy_path=legacy_path)
-        records = self._read_jsonl(active_path)
+        records = self._ensure_active_messages(user_id=user_id, device_id=device_id)
         return records[-limit:]
 
     def load_latest_summary(self, *, user_id: str, device_id: str) -> MessageSummary | None:
@@ -261,8 +260,9 @@ class ConversationMemoryService:
     ) -> MessageSummary | None:
         """按阈值压缩 active messages。
 
-        主要逻辑：当 active 数量大于 threshold 时，把除最新 keep_latest 条外的旧消息
-        写入 history 文件，追加一条 summary，然后重写 active 和 legacy messages。
+        主要逻辑：当内存 active 数量大于 threshold 时，把除最新 keep_latest 条外
+        的旧消息压缩；被压缩的完整调用过程从 `messages.jsonl` 移入 history，
+        `messages.jsonl` 重写为剩余 active 的完整备份，最后替换进程内 active。
         参数：`threshold` 为触发阈值，`keep_latest` 为压缩后保留最近消息数量。
         返回值：触发压缩时返回摘要记录，否则返回 None。
         异常情况：写文件失败时抛出底层 IO 异常；写入顺序保证先备份、再摘要、最后裁剪。
@@ -277,11 +277,15 @@ class ConversationMemoryService:
         kept = active[-keep_latest:]
         if not archived:
             return None
+        device_dir = self._device_dir(user_id, device_id)
+        messages_path = device_dir / self.LEGACY_MESSAGES_FILE
+        full_records = self._read_jsonl(messages_path)
+        archived_full, kept_full = _split_records_by_visible_count(full_records, visible_count=len(archived))
         start_at = _message_timestamp(archived[0])
         end_at = _message_timestamp(archived[-1])
         marker = f"{_format_timestamp(start_at)}-{_format_timestamp(end_at)}"
-        history_path = self._device_dir(user_id, device_id) / "history" / f"{marker}-messages.jsonl"
-        history_rel = str(history_path.relative_to(self._device_dir(user_id, device_id)))
+        history_path = device_dir / "history" / f"{marker}-messages.jsonl"
+        history_rel = str(history_path.relative_to(device_dir))
         previous_summary = self.load_latest_summary(user_id=user_id, device_id=device_id)
         if self.summarizer is None:
             self._log_summary_failed(
@@ -306,7 +310,7 @@ class ConversationMemoryService:
                 error_message=str(exc),
             )
             return None
-        self._write_jsonl(history_path, archived)
+        self._write_jsonl(history_path, archived_full)
         summary = MessageSummary(
             summary_id=f"summary_{int(time.time() * 1000)}",
             user_id=user_id,
@@ -318,9 +322,9 @@ class ConversationMemoryService:
             content=content,
             created_at=time.time(),
         )
-        self._append_jsonl(self._device_dir(user_id, device_id) / self.SUMMARY_FILE, asdict(summary))
-        self._write_jsonl(self._device_dir(user_id, device_id) / self.ACTIVE_FILE, kept)
-        self._write_jsonl(self._device_dir(user_id, device_id) / self.LEGACY_MESSAGES_FILE, kept)
+        self._append_jsonl(device_dir / self.SUMMARY_FILE, asdict(summary))
+        self._write_jsonl(messages_path, kept_full)
+        self._active_messages[(user_id, device_id)] = kept
         return summary
 
     def _log_summary_failed(
@@ -355,19 +359,21 @@ class ConversationMemoryService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _initialize_active_from_legacy(self, *, active_path: Path, legacy_path: Path) -> None:
-        """从旧 messages.jsonl 初始化 active-messages.jsonl。
+    def _ensure_active_messages(self, *, user_id: str, device_id: str) -> list[dict[str, Any]]:
+        """读取或初始化进程内 active messages。
 
-        主要逻辑：升级后的第一条新消息写入前也要执行迁移，否则新 active 文件会抢先
-        创建，导致旧历史无法进入运行时上下文。
-        参数：`active_path` 为 canonical 文件，`legacy_path` 为旧文件。
-        返回值：无。
-        异常情况：旧文件不存在或 active 已存在时不做处理。
+        主要逻辑：active 是运行时状态，不落盘；如果当前进程还没有该用户设备的
+        active，就从完整审计 `messages.jsonl` 筛选模型可见消息作为重启恢复上下文。
+        参数：`user_id/device_id` 定位用户设备。
+        返回值：可原地修改的 active messages 列表。
+        异常情况：无。
         """
 
-        if active_path.exists() or not legacy_path.exists():
-            return
-        self._write_jsonl(active_path, self._read_jsonl(legacy_path))
+        key = (user_id, device_id)
+        if key not in self._active_messages:
+            legacy_path = self._device_dir(user_id, device_id) / self.LEGACY_MESSAGES_FILE
+            self._active_messages[key] = _model_visible_records(self._read_jsonl(legacy_path))
+        return self._active_messages[key]
 
     @staticmethod
     def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
@@ -409,6 +415,49 @@ def _normalize_record(record: dict[str, Any], *, user_id: str, device_id: str) -
     normalized.setdefault("device_id", device_id)
     normalized.setdefault("created_at", time.time())
     return normalized
+
+
+def _is_model_visible_record(record: dict[str, Any]) -> bool:
+    role = str(record.get("role") or "").strip()
+    if role not in {"user", "assistant"}:
+        return False
+    content = record.get("content")
+    return isinstance(content, str) and bool(content.strip())
+
+
+def _model_visible_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [record for record in records if _is_model_visible_record(record)]
+
+
+def _split_records_by_visible_count(
+    records: list[dict[str, Any]],
+    *,
+    visible_count: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按模型可见消息数量切分完整消息记录。
+
+    主要逻辑：`messages.jsonl` 中包含 tool 调用过程，不能简单按行数切分。这里按
+    user/assistant 非空文本的数量确定边界，同时保留边界前的完整工具过程。
+    参数：`records` 为完整 active 备份，`visible_count` 为要归档的模型可见消息数。
+    返回值：`(archived_full, kept_full)`。
+    异常情况：visible_count 小于等于 0 时不归档。
+    """
+
+    if visible_count <= 0:
+        return [], list(records)
+    archived: list[dict[str, Any]] = []
+    visible_seen = 0
+    split_index = 0
+    for index, record in enumerate(records):
+        archived.append(record)
+        if _is_model_visible_record(record):
+            visible_seen += 1
+        if visible_seen >= visible_count:
+            split_index = index + 1
+            break
+    else:
+        split_index = len(records)
+    return archived, records[split_index:]
 
 
 def _message_timestamp(record: dict[str, Any]) -> float:

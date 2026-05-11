@@ -238,14 +238,15 @@ def test_endpoint_closed_compacts_messages_after_dialog(tmp_path) -> None:
     )
 
     session_dir = tmp_path / "runs" / "user-a" / session_id
-    active = [json.loads(line) for line in (session_dir / "active-messages.jsonl").read_text(encoding="utf-8").splitlines()]
+    active = app.control_service.load_messages(user_id="user-a", session_id=session_id, limit=10)
     legacy = [json.loads(line) for line in (session_dir / "messages.jsonl").read_text(encoding="utf-8").splitlines()]
     summary_text = (session_dir / "message-summaries.jsonl").read_text(encoding="utf-8")
     events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
     history_files = list((session_dir / "history").glob("*-messages.jsonl"))
 
     assert [item["content"] for item in active] == ["会话消息 5", "会话消息 6"]
-    assert active == legacy
+    assert [item["content"] for item in legacy] == ["会话消息 5", "会话消息 6"]
+    assert not (session_dir / "active-messages.jsonl").exists()
     assert len(history_files) == 1
     assert len(history_files[0].read_text(encoding="utf-8").splitlines()) == 5
     assert "已压缩旧会话消息" in summary_text

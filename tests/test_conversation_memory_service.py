@@ -41,7 +41,7 @@ def test_conversation_memory_service_compacts_active_messages(tmp_path) -> None:
     """测试目标：验证消息维护服务按 active/history/summary 三层保存对话。
 
     测试方法：写入 32 条 active messages 后触发压缩，保留最新 5 条。
-    预期结果：active 和旧 messages 镜像只剩 5 条；history 归档 27 条；summary 可进入提示词。
+    预期结果：内存 active 和 messages 备份只剩 5 条；history 归档 27 条；summary 可进入提示词。
     """
 
     summarizer = FixedSummarizer()
@@ -63,7 +63,7 @@ def test_conversation_memory_service_compacts_active_messages(tmp_path) -> None:
     summary = service.compact_if_needed(user_id=user_id, device_id=device_id, threshold=30, keep_latest=5)
 
     device_dir = tmp_path / "runs" / user_id / device_id
-    active = _read_jsonl(device_dir / "active-messages.jsonl")
+    active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
     legacy = _read_jsonl(device_dir / "messages.jsonl")
     history_files = list((device_dir / "history").glob("*-messages.jsonl"))
     summaries = _read_jsonl(device_dir / "message-summaries.jsonl")
@@ -71,7 +71,8 @@ def test_conversation_memory_service_compacts_active_messages(tmp_path) -> None:
 
     assert summary is not None
     assert len(active) == 5
-    assert active == legacy
+    assert len(legacy) == 5
+    assert not (device_dir / "active-messages.jsonl").exists()
     assert len(history_files) == 1
     assert len(_read_jsonl(history_files[0])) == 27
     assert summaries[-1]["source_message_count"] == 27
@@ -85,7 +86,7 @@ def test_conversation_memory_service_skips_compaction_when_summarizer_fails(tmp_
     """测试目标：验证 LLM 摘要失败时跳过压缩且保留 active 原文。
 
     测试方法：注入会抛异常的摘要器，写入 7 条消息后触发压缩。
-    预期结果：不生成 history 和 summary；active/messages 仍保留 7 条；终端记录错误。
+    预期结果：不生成 history 和 summary；内存 active 和 messages 仍保留 7 条；终端记录错误。
     """
 
     service = ConversationMemoryService(tmp_path / "runs", summarizer=FailingSummarizer())
@@ -103,19 +104,20 @@ def test_conversation_memory_service_skips_compaction_when_summarizer_fails(tmp_
 
     device_dir = tmp_path / "runs" / user_id / device_id
     assert summary is None
-    assert len(_read_jsonl(device_dir / "active-messages.jsonl")) == 7
+    assert len(service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)) == 7
     assert len(_read_jsonl(device_dir / "messages.jsonl")) == 7
+    assert not (device_dir / "active-messages.jsonl").exists()
     assert not (device_dir / "history").exists()
     assert not (device_dir / "message-summaries.jsonl").exists()
     assert any("会话消息摘要失败" in record.getMessage() for record in caplog.records)
     assert any(getattr(record, "error_message", "") == "llm unavailable" for record in caplog.records)
 
 
-def test_conversation_memory_service_migrates_legacy_messages(tmp_path) -> None:
-    """测试目标：验证旧版 messages.jsonl 能自动迁移成 active-messages.jsonl。
+def test_conversation_memory_service_restores_active_messages_from_full_messages(tmp_path) -> None:
+    """测试目标：验证重启后可从完整 messages.jsonl 恢复内存 active messages。
 
-    测试方法：只写旧 messages 文件，然后调用 active 读取接口。
-    预期结果：返回旧消息，并生成 canonical active 文件。
+    测试方法：只写完整 messages 文件，然后调用 active 读取接口。
+    预期结果：返回可进入模型上文的旧消息，但不创建离线 active 文件。
     """
 
     service = ConversationMemoryService(tmp_path / "runs")
@@ -125,6 +127,8 @@ def test_conversation_memory_service_migrates_legacy_messages(tmp_path) -> None:
     device_dir.mkdir(parents=True)
     legacy_records = [
         {"session_id": device_id, "role": "user", "content": "旧消息 1"},
+        {"session_id": device_id, "role": "assistant", "content": ""},
+        {"session_id": device_id, "role": "tool", "content": {"ok": True}},
         {"session_id": device_id, "role": "assistant", "content": "旧消息 2"},
     ]
     (device_dir / "messages.jsonl").write_text(
@@ -134,5 +138,67 @@ def test_conversation_memory_service_migrates_legacy_messages(tmp_path) -> None:
 
     active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
 
-    assert active == legacy_records
-    assert _read_jsonl(device_dir / "active-messages.jsonl") == legacy_records
+    assert [item["content"] for item in active] == ["旧消息 1", "旧消息 2"]
+    assert _read_jsonl(device_dir / "messages.jsonl") == legacy_records
+    assert not (device_dir / "active-messages.jsonl").exists()
+
+
+def test_conversation_memory_service_keeps_full_messages_and_visible_active_separate(tmp_path) -> None:
+    """测试目标：验证完整审计消息和模型可见 active messages 分开维护。
+
+    测试方法：追加 user、空 assistant、tool 和 assistant 文本消息。
+    预期结果：messages 保存全部 4 条；内存 active 只保存 user 和非空 assistant 文本。
+    """
+
+    service = ConversationMemoryService(tmp_path / "runs")
+    user_id = "user-a"
+    device_id = "dev-a"
+    service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "user", "content": "你好"})
+    service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "assistant", "content": ""})
+    service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "tool", "content": {"ok": True}})
+    service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "assistant", "content": "你好"})
+
+    device_dir = tmp_path / "runs" / user_id / device_id
+    active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
+    legacy = _read_jsonl(device_dir / "messages.jsonl")
+    assert [item["content"] for item in active] == ["你好", "你好"]
+    assert len(legacy) == 4
+    assert [item["role"] for item in legacy] == ["user", "assistant", "tool", "assistant"]
+    assert not (device_dir / "active-messages.jsonl").exists()
+
+
+def test_conversation_memory_service_compacts_full_message_backup_with_tool_records(tmp_path) -> None:
+    """测试目标：验证压缩时完整工具调用过程随旧 active 一起进入 history。
+
+    测试方法：写入 user、空 assistant tool_call、tool result、assistant 等混合消息，
+    按 4 条模型可见消息触发压缩并保留最新 1 条。
+    预期结果：history 保存被压缩部分的完整调用过程；messages 只保留剩余 active 的备份。
+    """
+
+    summarizer = FixedSummarizer()
+    service = ConversationMemoryService(tmp_path / "runs", summarizer=summarizer)
+    user_id = "user-a"
+    device_id = "dev-a"
+    records = [
+        {"session_id": device_id, "role": "user", "content": "用户 1", "created_at": 1_700_000_001},
+        {"session_id": device_id, "role": "assistant", "content": "", "event": "assistant_tool_call.done", "created_at": 1_700_000_002},
+        {"session_id": device_id, "role": "tool", "content": {"ok": True}, "event": "tool_result.done", "created_at": 1_700_000_003},
+        {"session_id": device_id, "role": "assistant", "content": "助手 1", "created_at": 1_700_000_004},
+        {"session_id": device_id, "role": "user", "content": "用户 2", "created_at": 1_700_000_005},
+        {"session_id": device_id, "role": "assistant", "content": "助手 2", "created_at": 1_700_000_006},
+    ]
+    for record in records:
+        service.append_message(user_id=user_id, device_id=device_id, message=record)
+
+    summary = service.compact_if_needed(user_id=user_id, device_id=device_id, threshold=3, keep_latest=1)
+
+    device_dir = tmp_path / "runs" / user_id / device_id
+    history_file = next((device_dir / "history").glob("*-messages.jsonl"))
+    history = _read_jsonl(history_file)
+    messages = _read_jsonl(device_dir / "messages.jsonl")
+    active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
+    assert summary is not None
+    assert [item["event"] for item in history if item.get("event")] == ["assistant_tool_call.done", "tool_result.done"]
+    assert [item["content"] for item in active] == ["助手 2"]
+    assert [item["content"] for item in messages] == ["助手 2"]
+    assert summarizer.calls[-1]["message_count"] == 3
