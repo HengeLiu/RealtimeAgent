@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -212,8 +211,6 @@ class TextAgentCore:
                 {"event": "system.degradation.raised", "component": "TextModelAdapter", "reason": downgrade_reason}
             )
         self._responded_input_streams: set[str] = set()
-        self._recent_turns: dict[str, float] = {}
-        self._duplicate_turn_window_seconds = 15.0
         self._cancelled_users: set[str] = set()
         self._session_by_user: dict[str, str] = {}
         self._event_buffer = AgentEventBuffer()
@@ -252,15 +249,6 @@ class TextAgentCore:
         turn_key = self._turn_key(chunk=chunk, transcript=transcript)
         if turn_key in self._responded_input_streams:
             self._record_duplicate_turn(chunk=chunk, transcript=transcript, turn_key=turn_key, reason="duplicate_turn")
-            return
-        recent_key = self._recent_turn_key(chunk=chunk, transcript=transcript)
-        if self._is_recent_duplicate(recent_key):
-            self._record_duplicate_turn(
-                chunk=chunk,
-                transcript=transcript,
-                turn_key=recent_key,
-                reason="recent_duplicate_turn",
-            )
             return
         self._responded_input_streams.add(turn_key)
         self._cancelled_users.discard(chunk.user_id)
@@ -360,43 +348,6 @@ class TextAgentCore:
 
         stream_id = chunk.stream_id or chunk.session_id
         return f"{stream_id}:{chunk.seq}:{transcript.strip()}"
-
-    @staticmethod
-    def _recent_turn_key(*, chunk: StreamChunk, transcript: str) -> str:
-        """生成短时间重复输入检测 key。
-
-        主要逻辑：真实 ASR provider 在 stream 结束、stop 或迟到回调时可能再次吐出
-        与前一次完全相同的 final transcript。这里不带 seq，只按会话、输入流和文本
-        去重，用于拦截几秒内的重复 final，避免工具类请求被执行两次。
-        参数：`chunk` 为触发 final 的音频分片；`transcript` 为最终文本。
-        返回值：短时间去重 key。
-        异常情况：无。
-        """
-
-        stream_id = chunk.stream_id or chunk.session_id
-        normalized = " ".join(transcript.strip().split())
-        return f"{chunk.session_id}:{stream_id}:{normalized}"
-
-    def _is_recent_duplicate(self, key: str) -> bool:
-        """判断当前 turn 是否是短时间内重复 final。
-
-        主要逻辑：先清理过期 key，再检查同 key 是否在窗口内出现过；未出现时记录
-        当前时间。窗口只覆盖 ASR 迟到重复，不影响用户过一会儿真的重复同一句。
-        参数：`key` 为 `_recent_turn_key()` 生成的值。
-        返回值：重复返回 True，否则 False。
-        异常情况：无。
-        """
-
-        now = time.monotonic()
-        cutoff = now - self._duplicate_turn_window_seconds
-        for stored_key, seen_at in list(self._recent_turns.items()):
-            if seen_at < cutoff:
-                self._recent_turns.pop(stored_key, None)
-        seen_at = self._recent_turns.get(key)
-        if seen_at is not None and seen_at >= cutoff:
-            return True
-        self._recent_turns[key] = now
-        return False
 
     def _record_duplicate_turn(self, *, chunk: StreamChunk, transcript: str, turn_key: str, reason: str) -> None:
         """记录被去重跳过的输入 turn。"""

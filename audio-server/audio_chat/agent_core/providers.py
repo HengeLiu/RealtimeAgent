@@ -218,6 +218,7 @@ class DashScopeAsrProviderAdapter:
         self._final_text = ""
         self._latest_partial = ""
         self._final_sentences: list[str] = []
+        self._emitted_final_text = False
         self._session_id = new_id("asr")
 
         adapter = self
@@ -232,6 +233,7 @@ class DashScopeAsrProviderAdapter:
                     adapter._final_sentences.append(text)
                     adapter._final_text = "".join(adapter._final_sentences)
                     adapter._latest_partial = ""
+                    adapter._emitted_final_text = True
                 else:
                     adapter._latest_partial = text
                 adapter._events.put(TranscriptEvent(text=text, final=final))
@@ -267,8 +269,9 @@ class DashScopeAsrProviderAdapter:
             self._done.wait(timeout=self.timeout_seconds)
             events.extend(self._drain_events())
             final_text = self._final_text or self._latest_partial
-            if final_text and not any(event.final for event in events):
+            if final_text and not self._emitted_final_text and not any(event.final for event in events):
                 events.append(TranscriptEvent(text=final_text, final=True))
+                self._emitted_final_text = True
         return events
 
     def cancel(self) -> None:

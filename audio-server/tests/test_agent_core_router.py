@@ -627,44 +627,6 @@ def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:
     assert len(model.messages) == 2
 
 
-def test_text_agent_skips_recent_duplicate_final_transcript(tmp_path) -> None:
-    """测试目标：验证 ASR 迟到重复 final 不会触发第二次 Agent 响应。
-
-    测试方法：同一 session 和 stream 在短时间内用不同 seq 提交完全相同的 final
-    transcript。
-    预期结果：只写入一次 user 消息和一次模型请求，agent-events 记录
-    `recent_duplicate_turn`。
-    """
-
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    model = CaptureHistoryTextModel()
-    app.agent_core.text_model = model
-    user_id = "user-duplicate-final"
-    session_id = "dev-duplicate-final"
-    stream_id = "stream-in-duplicate-final"
-
-    for seq in (10, 20):
-        app.agent_core.append_audio_event(
-            StreamChunk(
-                user_id=user_id,
-                session_id=session_id,
-                stream_id=stream_id,
-                stream_type="sensor.mic",
-                seq=seq,
-                payload=b"audio",
-                final=True,
-                metadata={"source_path": "/tmp/设置一个1分钟的计时器，到时间后提醒我.wav"},
-            )
-        )
-
-    session_dir = tmp_path / "runs" / user_id / session_id
-    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
-    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert messages_text.count("设置一个1分钟的计时器，到时间后提醒我") == 1
-    assert len(model.messages) == 1
-    assert "recent_duplicate_turn" in agent_events_text
-
-
 def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -> None:
     """测试目标：验证同一用户同一设备的新一轮文本请求会加载历史消息。
 
