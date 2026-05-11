@@ -161,6 +161,48 @@ class EchoRealtimeTool(BaseTool):
         return ToolResult.success({"value": input_data.get("value")})
 
 
+class CapturePhotoRealtimeTool(BaseTool):
+    """测试用 Realtime 视觉工具。
+
+    主要功能：模拟可暴露给 Omni Realtime 的抓拍工具。
+    主要方法：`run()` 返回一次成功抓拍结果。
+    主要属性：`name` 用于验证工具 schema 注入。
+    """
+
+    name = "capture_photo"
+    description = "Capture a photo for realtime vision."
+    input_model = {
+        "type": "object",
+        "properties": {"reason": {"type": "string"}},
+    }
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """返回模拟抓拍结果。"""
+
+        return ToolResult.success({"captured": True})
+
+
+class InterpretCurrentViewRealtimeExcludedTool(BaseTool):
+    """测试用文本链路视觉工具。
+
+    主要功能：模拟 `拍照 + 独立图片解读` 的文本链路复合工具。
+    主要方法：`run()` 返回图片解读文本。
+    主要属性：`name` 用于验证该工具不会暴露给 Omni Realtime。
+    """
+
+    name = "interpret_current_view"
+    description = "Interpret current view for text agent."
+    input_model = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+    }
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """返回模拟图片解读结果。"""
+
+        return ToolResult.success({"interpretation": "测试结果"})
+
+
 class ArgumentCaptureGateway:
     """测试用工具网关。
 
@@ -416,6 +458,8 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     instances: list[FakeRealtimeProvider] = []
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
     app.tool_registry.register(EchoRealtimeTool())
+    app.tool_registry.register(CapturePhotoRealtimeTool())
+    app.tool_registry.register(InterpretCurrentViewRealtimeExcludedTool())
     app.agent_core = RealtimeAudioAgentCore(
         output_service=app.output_service,
         recorder=app.recorder,
@@ -446,6 +490,8 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
 
     tool_names = {tool["name"] for tool in instances[0].config.tools}
     assert "echo_realtime" in tool_names
+    assert "capture_photo" in tool_names
+    assert "interpret_current_view" not in tool_names
     model_request = (tmp_path / "runs" / "user-001" / handle.session_id / "model-request.json").read_text(
         encoding="utf-8"
     )
@@ -453,6 +499,8 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     assert "input_audio_stream" in model_request
     assert "你是测试用 Omni 助手。" in model_request
     assert "echo_realtime" in model_request
+    assert "capture_photo" in model_request
+    assert "interpret_current_view" not in model_request
 
 
 def test_realtime_open_loads_device_message_history_as_flat_messages(tmp_path) -> None:
@@ -662,11 +710,12 @@ def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> Non
 
 
 def test_qwen_omni_final_audio_chunk_commits_input_boundary() -> None:
-    """测试目标：验证 Qwen Omni 收到 endpoint final chunk 时会提交输入边界。
+    """测试目标：验证 Qwen Omni 收到 endpoint final chunk 时只提交输入边界。
 
     测试方法：给 `QwenOmniRealtimeAdapter` 注入 fake conversation，发送一片
     `final=true` 的 sensor.mic chunk。
     预期结果：conversation 收到音频 append，并调用 DashScope SDK 的 `commit()`。
+    回答创建由 provider 的 VAD/回合事件驱动，避免重复创建响应。
     """
 
     from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter

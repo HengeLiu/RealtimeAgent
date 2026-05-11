@@ -17,6 +17,8 @@ from audio_chat.output.service import OutputItem
 from audio_chat.protocol import StreamChunk, StreamFormat
 from audio_chat.tools import ToolGateway
 
+TEXT_ONLY_VISION_TOOLS = {"interpret_current_view", "interpret_image"}
+
 
 def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
     """把落盘消息转换为 Realtime 可注入的历史上下文。"""
@@ -29,6 +31,22 @@ def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
     if not text:
         return None
     return {"role": role, "content": text}
+
+
+def _provider_tool_schema_name(schema: dict[str, Any]) -> str:
+    """从 provider tool schema 中提取工具名。
+
+    主要逻辑：兼容 OpenAI-compatible 的 `function.name` 和 Realtime 扁平
+    `name` 两种结构。
+    参数：`schema` 为工具 schema。
+    返回值：工具名；缺失时返回空字符串。
+    异常情况：无。
+    """
+
+    function = schema.get("function") if isinstance(schema, dict) else None
+    if isinstance(function, dict):
+        return str(function.get("name") or "")
+    return str(schema.get("name") or "") if isinstance(schema, dict) else ""
 
 
 @dataclass(frozen=True)
@@ -210,8 +228,9 @@ class QwenOmniRealtimeAdapter:
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """提交 provider 输入边界。
 
-        主要逻辑：Qwen Omni 当前主要由 provider turn detection 决定边界；
-        如果 SDK 版本暴露 commit 方法则调用，否则只记录为 no-op。
+        主要逻辑：Qwen Omni 连续麦克风主要由 provider turn detection 决定边界；
+        端侧明确上传 `final=true` 时只调用 commit，不额外创建 response，避免
+        与 provider 自动回合响应重复。
         参数：`user_id`、`session_id` 用于关联日志；`reason` 为提交原因。
         返回值：无。
         异常情况：provider 异常会转成 callbacks.error。
@@ -781,7 +800,13 @@ class RealtimeToolBridge:
     def tool_schemas(self) -> list[dict]:
         """返回 provider 可用的工具 schema。"""
 
-        return self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
+        if self.tool_gateway is None:
+            return []
+        return [
+            schema
+            for schema in self.tool_gateway.provider_schemas()
+            if _provider_tool_schema_name(schema) not in TEXT_ONLY_VISION_TOOLS
+        ]
 
     def append_tool_call_delta(
         self,
@@ -1221,6 +1246,8 @@ class RealtimeAudioAgentCore:
             return []
         tools: list[dict[str, Any]] = []
         for schema in self.tool_bridge.tool_gateway.provider_schemas():
+            if _provider_tool_schema_name(schema) in TEXT_ONLY_VISION_TOOLS:
+                continue
             function = schema.get("function") if isinstance(schema, dict) else None
             if isinstance(function, dict):
                 tools.append(

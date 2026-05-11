@@ -272,6 +272,7 @@ def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:
     assert "readSelectedImageFrames" in html
     assert "captureLiveCameraFrame" in html
     assert "captureJpegFrame" in html
+    assert "waitStreamSocketBufferedDrain" in html
     assert "stopContinuousRgb" in html
     assert "stream_type: \"sensor.rgb\"" in html
     assert "stream_type: \"sensor.mic\"" in html
@@ -304,7 +305,27 @@ def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
     assert "selectedImageSampleFiles.length" in html
     assert "readSelectedImageFrames()" not in upload_body
     assert "if (!images.length)" in upload_body
+    assert "await waitStreamSocketBufferedDrain()" in upload_body
     assert "await uploadRgbImages(await readSelectedImageFrames(), item, \"images_uploaded\")" in selected_body
+
+
+def test_browser_device_appends_tail_silence_for_offline_realtime_audio() -> None:
+    """测试目标：验证离线音频实时注入会追加短静音尾巴。
+
+    测试方法：静态检查 browser-glass 在读取离线音频后追加固定静音片段。
+    预期结果：Omni provider 的 VAD 有稳定的回合结束边界，不需要强制创建响应。
+    """
+
+    html = _html()
+    offline_body = html.split("async function openOfflineAudioStream()", 1)[1].split(
+        "function sendOfflineAudioRealtime()",
+        1,
+    )[0]
+
+    assert "const OFFLINE_TAIL_SILENCE_MS = 800" in html
+    assert "const tailSilenceChunks = Math.ceil(OFFLINE_TAIL_SILENCE_MS / DEFAULT_CHUNK_MS)" in offline_body
+    assert "const tailSilenceBytes = tailSilenceChunks * MIC_CHUNK_BYTES" in offline_body
+    assert "audioWithTail.set(offlineAudio, 0)" in offline_body
 
 
 def test_browser_device_open_cli_defaults_to_new_example() -> None:

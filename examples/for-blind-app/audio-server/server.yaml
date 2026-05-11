@@ -67,8 +67,8 @@ asset:
   selection_policy: "latest"
 
 agent:
-  mode: "text"
-  # mode: "realtime"
+  # mode: "text"
+  mode: "realtime"
   realtime:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"
