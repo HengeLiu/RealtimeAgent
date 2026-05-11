@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository is organized around the `audio-chat` server-side Python SDK and runnable device examples. Core SDK code lives in `audio-chat-sdk/audio_chat/`, while app-level examples start in `app-examples/for-blind-app/`. Reference device implementations are under `device-examples/` for browser glass, Python glass, Python phone, native iOS phone, and ESP32-S3 glass. Use `tests/` for automated tests, `testdata/` for contract and playback fixtures, `scripts/` for acceptance helpers, and `docs/` for architecture and integration notes. Treat `legacy/` as migration reference only, not the default development entry point.
+This repository is organized around the `audio_chat` server-side Python SDK and runnable project examples. Core SDK source lives under `audio-server/audio_chat/`, while app-level examples start in `examples/`. Reference device implementations live under each example project's `devices/` directory. Use `audio-server/tests/` for SDK tests, `examples/*/tests/` for example tests, `testdata/` for shared audio playback samples, and `docs/` for community-facing documentation. Treat `legacy/` as migration reference only, not the default development entry point.
 
 ## Build, Test, and Development Commands
 
@@ -22,7 +22,7 @@ uv run audio-chat.server.run --app-name for-blind-app
 Validate a device capability file:
 
 ```bash
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 ```
 
 Open the browser glass reference client:
@@ -35,7 +35,7 @@ Run tests:
 
 ```bash
 uv run python -m pytest
-uv run python -m pytest tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
 ```
 
 ## Coding Style & Naming Conventions
@@ -44,7 +44,7 @@ Use Python 3.11+ and follow existing package boundaries. Public SDK modules use 
 
 ## Testing Guidelines
 
-Tests use `pytest`; `pyproject.toml` sets `tests/` as the default test path and adds `audio-chat-sdk` to `pythonpath`. Name tests `test_*.py` and keep fixtures in `tests/fixtures/` or `testdata/`. For cross-device behavior, include a reproducible local flow: sync or validate config, start the server, start browser/Python phone/glass playback as needed, then inspect logs, `/api/health`, `/api/debug/devices`, and generated files under `runs/`.
+Tests use `pytest`; `pyproject.toml` collects `audio-server/tests/` and `examples/*/tests/`, and sets SDK/reference-device package roots in `pythonpath`. Name tests `test_*.py` and keep fixtures near the owning test suite or in `testdata/`. For cross-device behavior, include a reproducible local flow: sync or validate config, start the server, start browser/Python phone/glass playback as needed, then inspect logs, `/api/health`, `/api/debug/devices`, and generated files under `runs/`.
 
 ## Commit & Pull Request Guidelines
 

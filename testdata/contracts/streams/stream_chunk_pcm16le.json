@@ -1,7 +1,0 @@
-{
-  "codec": "pcm16le",
-  "duration_ms": 20,
-  "payload_size": 640,
-  "sample_rate": 16000,
-  "stream_type": "sensor.mic"
-}

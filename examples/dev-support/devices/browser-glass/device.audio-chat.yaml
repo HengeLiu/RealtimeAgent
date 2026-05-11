@@ -1,0 +1,57 @@
+$schema: ../../../../audio-server/audio_chat/spec/audio-chat-device.schema.json
+
+device_id: dev-browser-glass-001
+user_id: user-browser-glass-001
+name: 浏览器调试设备
+device_name: browser-glass
+client_type: browser-glass
+sdk_version: audio-chat-browser-glass-0.1.0
+
+runtime:
+  platform: browser
+  language: javascript
+  version: 0.1.0
+
+supports:
+  sensors:
+    - type: rgb
+      modes: [single, continuous]
+      default:
+        format: jpeg
+        frequency_hz: 1
+        sample_count: 1
+        duration_seconds: 0
+        width: 1280
+        height: 720
+      external:
+        facing: environment
+    - type: imu
+      modes: [continuous]
+      default:
+        frequency_hz: 30
+        sample_count: 0
+        duration_seconds: 0
+      external:
+        axes: [accel, gyro]
+    - type: tof
+      modes: [single, continuous]
+      default:
+        format: png
+        frequency_hz: 5
+        sample_count: 1
+        duration_seconds: 0
+        width: 320
+        height: 240
+      external:
+        unit: millimeter
+  actuators:
+    - type: vibrator
+      commands: [vibrate]
+      default:
+        default_pattern: short
+
+properties:
+  debug.manual_events: true
+  debug.file_upload: true
+  audio_chat.audio_input: sensor.mic
+  audio_chat.audio_output: actuator.speaker

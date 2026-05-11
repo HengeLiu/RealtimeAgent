@@ -7,8 +7,13 @@
 ### 已纳入 release candidate gate
 
 - `audio-chat.sdk.package-check` 会检查 wheel build、wheel 安装导入、editable install、CLI entry points、公开 API、package data、端侧参考源码、包边界和本地私密产物排除。
-- `scripts/acceptance_check.py old-sdk-parity-release` 作为发布候选 lane，覆盖 package-check、docs contract、basic app playback 和 for-blind app playback。
+- `audio-chat.dev.preflight` 和 `audio-chat.sdk.package-check` 作为发布前主要检查入口，覆盖配置、包边界、公开 API 和端侧参考源码存在性。
 - Python wheel 只交付 server-side SDK 包，不包含 examples、runs、端侧真机工程、本地配置或缓存产物。
+
+### 架构变更点
+
+- 仓库目录按 `audio_chat` 开源项目重新整理：server SDK 进入 `audio-server/`，示例应用和端侧参考实现按项目归入 `examples/`。
+- Context API、设备能力声明和 stream/event 协议继续作为端侧接入边界。
 
 ### 当前不兼容点
 

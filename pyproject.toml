@@ -42,10 +42,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = [
-    "audio-chat-sdk",
-    "device-examples/python-glass",
-    "device-examples/python-phone",
-    "device-examples/native-esp32-glass",
+    "audio-server",
+    "examples/dev-support/devices/python-glass",
+    "examples/dev-support/devices/python-phone",
+    "examples/for-blind-app/devices/native-esp32-glass",
 ]
 include = [
     "audio_chat*",
@@ -58,8 +58,17 @@ include = [
 audio_chat = ["py.typed", "spec/*.json"]
 
 [tool.pytest.ini_options]
-pythonpath = ["audio-chat-sdk"]
-testpaths = ["tests"]
+pythonpath = [
+    "audio-server",
+    "examples/dev-support/devices/python-glass",
+    "examples/dev-support/devices/python-phone",
+    "examples/for-blind-app/devices/native-esp32-glass",
+]
+testpaths = [
+    "audio-server/tests",
+    "examples/for-blind-app/tests",
+    "examples/dev-support/tests",
+]
 addopts = "-q"
 filterwarnings = [
     "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning",

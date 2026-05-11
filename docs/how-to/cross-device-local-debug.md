@@ -23,7 +23,7 @@ server:
 先校验浏览器参考设备：
 
 ```bash
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 ```
 
 如果要联调其他设备，也先检查对应配置文件。
@@ -62,13 +62,13 @@ curl http://127.0.0.1:8765/api/debug/devices
 ## 5. 可选：连接 Python phone mock
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 如果要查看 RGB stream：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.preview.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 ## 6. 可选：运行 iOS 参考端
@@ -110,7 +110,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 5. `model-request.json`：模型最终看到了什么 prompt、messages 和 tools。
 6. `system-events.jsonl`：系统级异常和 provider 降级。
 
-详细文件说明见 [runs 目录产物说明](inspect-runs-artifacts.md)。
+详细文件说明见 [runs 目录产物说明](../../audio-server/docs/how-to/inspect-runs-artifacts.md)。
 
 ## 常见判断
 
@@ -135,4 +135,3 @@ Tool 没有调用：
 - 看 `output-decisions.jsonl` 或 `playback-decisions.jsonl`。
 - 看 `/api/debug/playback`。
 - 看端侧是否消费 `actuator.speaker` stream。
-

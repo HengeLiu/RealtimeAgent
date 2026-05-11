@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你考虑参与 `audio-chat`。这个项目目前处在 SDK 开源前后的快速演进阶段，贡献时请优先保证代码、文档和测试能够反映真实实现状态。
+感谢你考虑参与 `audio_chat`。这个项目目前处在 SDK 开源前后的快速演进阶段，贡献时请优先保证代码、文档和测试能够反映真实实现状态。
 
 ## 贡献方向
 
@@ -30,14 +30,14 @@ uv pip install -e .
 运行测试：
 
 ```bash
-uv run python -m pytest tests -q
+uv run python -m pytest -q
 ```
 
 针对文档或开发者体验变更，建议至少跑：
 
 ```bash
-uv run python -m pytest tests/test_text_route_audio_samples.py -q
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 ```
 
 ## 代码风格
@@ -85,4 +85,3 @@ PR 建议包含：
 6. 本地运行日志和构建产物。
 
 如果新增工具会产生缓存、日志或构建产物，请同步更新 `.gitignore`。
-

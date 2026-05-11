@@ -2,14 +2,14 @@
 
 `audio-chat` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
 
-- `audio-chat-sdk/`：Python server SDK 源码，发布包名为 `audio-chat`，导入名为 `audio_chat`。
-- `app-examples/`：基于 SDK 的应用样例，新的业务应用从这里开始。
-- `device-examples/`：浏览器、Python、iOS、ESP32-S3 等参考端侧实现。端侧实现已经从 SDK 子目录中独立出来，体现 SDK 只承担 server-side 职责。
+- `audio-server/audio_chat/`：Python server SDK 源码目录，发布包名为 `audio-chat`，导入名为 `audio_chat`。
+- `examples/`：示例项目和参考端侧实现。每个示例项目按 `audio-server/` 和 `devices/` 分层组织。
 - `docs/`：架构设计、迁移说明、联调和排障文档。
-- `testdata/`、`tests/`、`scripts/`：契约样例、自动化测试和验收脚本。
+- `testdata/`：跨示例复用的音频样例。
+- `audio-server/tests/`、`examples/*/tests/`：SDK 和示例项目的自动化测试。
 - `legacy/`：旧 `openaiglass-sdk`、旧 `openaiglass-for-blind`、旧根目录文档和历史运行资产。它们只作为迁移参考，不再作为新开发入口。
 
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](docs/device-capability-development-guide.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](docs/context-device-api-design.md)。
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)。
 
 ## 快速开始
 
@@ -42,7 +42,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 
 ```bash
 # 1. 校验端侧能力文件，确认设备能力声明有效
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 
 # 2. 启动应用 server
 uv run audio-chat.server.run --app-name for-blind-app
@@ -51,7 +51,7 @@ uv run audio-chat.server.run --app-name for-blind-app
 uv run audio-chat.web.open --print-url
 
 # 4. 可选：启动 Python phone mock，验证同一 user_id 下多设备协作
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 浏览器设备：
@@ -63,13 +63,13 @@ uv run audio-chat.web.open --print-url
 Python phone mock：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 Python 手机视频显示端：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.preview.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 该端侧会打开 OpenCV 视频窗口，注册到 server，并订阅同一 `user_id` 下的
@@ -79,11 +79,11 @@ uv run python -m audio_chat_python_phone_mock --config device-examples/python-ph
 Python glass playback：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
-发布候选版本当前为 `0.1.0rc1`。发布前使用 `audio-chat.sdk.package-check` 和
-`old-sdk-parity-release` 验收，确认统一示例应用、包边界、文档和旧 SDK 等价回放仍然一致。
+发布候选版本当前为 `0.1.0rc1`。发布前优先使用 `audio-chat.sdk.package-check`、
+`audio-chat.dev.preflight` 和关键 pytest 子集确认包边界、示例应用和设备入口仍然一致。
 
 使用录制音频驱动 playback：
 
@@ -96,12 +96,12 @@ uv run audio-chat.playback.glass \
 Text 模型路线的无头验收可以直接复用旧 SDK 的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock text model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
 
 ```bash
-uv run python -m pytest tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
 ```
 
 ## 更换模型和模态
 
-应用运行配置在 `app-examples/for-blind-app/server.yaml`。根目录的 `server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
+应用运行配置在 `examples/for-blind-app/audio-server/server.yaml`。根目录的 `server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
 
 如果要从 Omni Realtime 切到文本模态测试，把 `agent.mode` 改成 `text`，然后配置 `agent.text` 三段 provider：
 
@@ -124,7 +124,7 @@ agent:
 
 ```bash
 export DASHSCOPE_API_KEY="你的 DashScope Key"
-uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
+uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
 uv run audio-chat.server.run --app-name for-blind-app
 ```
 
@@ -178,7 +178,7 @@ uv run audio-chat.esp32.build --dry-run --build-only
 
 ## 开发者工作模型
 
-当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](docs/device-capability-development-guide.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](docs/context-device-api-design.md)。
+当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)。
 
 当前开发口径：
 
@@ -193,7 +193,7 @@ uv run audio-chat.esp32.build --dry-run --build-only
 默认应用目录结构如下：
 
 ```text
-app-examples/<your-app>/
+examples/<your-app>/audio-server/
   server.yaml
   capabilities/
     your_tool/
@@ -222,9 +222,9 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 
 业务样例：
 
-- `app-examples/for-blind-app`：最小 Tool / Task / playback 样板。
-- `app-examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器迁移版本。
-- `app-examples/for-blind-app/templates`：新能力开发模板。
+- `examples/for-blind-app`：最小 Tool / Task / playback 样板。
+- `examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器迁移版本。
+- `examples/for-blind-app/audio-server/capabilities`：业务能力样例。
 
 关键约束：
 
@@ -238,18 +238,18 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 端侧开发者优先维护设备能力文件。浏览器示例：
 
 ```bash
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml --json
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
 ```
 
 设备能力文件当前用于声明 `supports[].id`、运行环境和调试属性。`supports.sensors`、`supports.actuators`、`selector`、`external` 是下一阶段目标设计，当前不要写进可运行设备配置。
 
 端侧实现入口：
 
-- `device-examples/browser-glass`
-- `device-examples/python-glass`
-- `device-examples/python-phone`
-- `device-examples/native-ios-phone`
-- `device-examples/native-esp32-glass`
+- `examples/dev-support/devices/browser-glass`
+- `examples/dev-support/devices/python-glass`
+- `examples/dev-support/devices/python-phone`
+- `examples/for-blind-app/devices/native-ios-phone`
+- `examples/for-blind-app/devices/native-esp32-glass`
 
 iOS / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型或 ESP32 真机效果已经完成。
 
@@ -258,13 +258,13 @@ iOS / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型
 生成本地联调配置：
 
 ```bash
-uv run audio-chat.config.sync --app-root app-examples/for-blind-app
+uv run audio-chat.config.sync --app-root examples/for-blind-app/audio-server
 ```
 
 预检：
 
 ```bash
-uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
+uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 发布包检查：
@@ -273,43 +273,37 @@ uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
 uv run audio-chat.sdk.package-check --report runs/default-app/package-check.json
 ```
 
-自动验收：
+建议验收：
 
 ```bash
-uv run python scripts/acceptance_check.py developer-usability \
-  --report runs/acceptance/developer-usability.json
+uv run audio-chat.dev.preflight \
+  --config examples/for-blind-app/audio-server/server.yaml \
+  --report runs/acceptance/preflight.json
 
-uv run python scripts/acceptance_check.py capability-template-playback \
-  --report runs/acceptance/capability-template-playback.json
+uv run audio-chat.sdk.package-check \
+  --report runs/acceptance/package-check.json
 
-uv run python scripts/acceptance_check.py old-sdk-parity-capabilities \
-  --report runs/acceptance/old-sdk-parity-capabilities.json
-
-uv run python scripts/acceptance_check.py old-sdk-parity-docs \
-  --report runs/acceptance/old-sdk-parity-docs.json
-
-uv run python scripts/acceptance_check.py old-sdk-parity-release \
-  --report runs/acceptance/old-sdk-parity-release.json
+uv run python -m pytest audio-server/tests examples/for-blind-app/tests examples/dev-support/tests -q
 ```
 
 ## 测试
 
 ```bash
-uv run python -m pytest tests -q
+uv run python -m pytest
 ```
 
 真实 provider 集成测试需要配置对应 API Key：
 
 ```bash
-uv run python -m pytest tests/integration/test_dashscope_providers.py -q
+uv run python -m pytest audio-server/tests/integration/test_dashscope_providers.py -q
 ```
 
 当前代码仍可能有开发中测试失败；目录升级不隐藏这些问题，后续修复应继续在新的根目录结构下进行。
 
 ## 文档
 
-- [设备注册与功能开发说明](docs/device-capability-development-guide.md)
-- [SDK 总体架构设计](docs/audio-chat-sdk-architecture-design.md)
-- [Context 与设备 API 设计说明](docs/context-device-api-design.md)
-- [运行产物说明](docs/runs-artifacts-guide.md)
-- [浏览器设备设计](docs/browser-glass-design.md)
+- [文档目录](docs/README.md)
+- [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md)
+- [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)
+- [运行产物说明](audio-server/docs/how-to/inspect-runs-artifacts.md)
+- [内部设计与阶段记录](audio-server/docs/README.md)

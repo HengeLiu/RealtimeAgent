@@ -22,7 +22,7 @@ uv run audio-chat.server.run --app-name for-blind-app
 按配置启动：
 
 ```bash
-uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
+uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 ## 设备能力
@@ -30,13 +30,13 @@ uv run audio-chat.server.run --config app-examples/for-blind-app/server.yaml
 校验设备能力文件：
 
 ```bash
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 ```
 
 输出 JSON：
 
 ```bash
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml --json
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
 ```
 
 ## 浏览器参考设备
@@ -52,19 +52,19 @@ uv run audio-chat.web.open --print-url
 Python phone mock：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 Python phone RGB 预览：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.preview.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 Python glass playback：
 
 ```bash
-uv run audio-chat.playback.glass --config app-examples/for-blind-app/host/glass-playback/sdk-playback.yaml
+uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
 ## iOS 参考端
@@ -108,7 +108,7 @@ uv run audio-chat.esp32.monitor --port /dev/tty.usbmodemXXXX
 预检：
 
 ```bash
-uv run audio-chat.dev.preflight --config app-examples/for-blind-app/server.yaml
+uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 发布包检查：
@@ -120,12 +120,11 @@ uv run audio-chat.sdk.package-check --report runs/default-app/package-check.json
 无头回放测试：
 
 ```bash
-uv run python -m pytest tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
 ```
 
 全部测试：
 
 ```bash
-uv run python -m pytest tests -q
+uv run python -m pytest
 ```
-

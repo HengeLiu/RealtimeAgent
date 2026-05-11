@@ -63,19 +63,19 @@ uv run audio-chat.web.open --print-url
 同一 `user_id` 下可以同时连接多个参考设备：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.mock.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 如果要查看 RGB stream 回显：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config device-examples/python-phone/phone.preview.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 ## 校验设备能力文件
 
 ```bash
-uv run audio-chat.device.validate device-examples/browser-glass/device.audio-chat.yaml
+uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 ```
 
 设备能力文件描述端侧支持哪些传感器和执行器。业务 Tool / Task 会通过 Context API 使用这些能力。
@@ -83,7 +83,7 @@ uv run audio-chat.device.validate device-examples/browser-glass/device.audio-cha
 ## 跑一个无头回放测试
 
 ```bash
-uv run python -m pytest tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
 ```
 
 这条链路使用录制音频样例和 mock ASR，覆盖：
@@ -102,11 +102,10 @@ sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker
 4. `events.jsonl`
 5. `system-events.jsonl`
 
-详细说明见 [runs 目录产物说明](../how-to/inspect-runs-artifacts.md)。
+详细说明见 [runs 目录产物说明](../../audio-server/docs/how-to/inspect-runs-artifacts.md)。
 
 ## 下一步
 
 - 想写业务能力，读 [第一个 Tool 和 Task](../tutorials/build-first-capability.md)。
-- 想接入端侧设备，读 [设备能力与 Context API 开发说明](../how-to/device-capability-development.md)。
+- 想接入端侧设备，读 [设备能力与 Context API 开发说明](../../audio-server/docs/how-to/device-capability-development.md)。
 - 想理解命令行入口，读 [CLI 参考](../reference/cli.md)。
-
