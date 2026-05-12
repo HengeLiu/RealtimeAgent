@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import wave
 from pathlib import Path
 
@@ -37,6 +38,7 @@ async def run_case(case: PlaybackCase, *, server_url: str, runs_root: str | Path
     """通过真实协议执行单个 Case。"""
 
     client = PlaybackProtocolClient(server_url=server_url, device=case.device)
+    audio_session_opened = False
     async with ClientSession() as session:
         try:
             await client.connect(session)
@@ -59,6 +61,7 @@ async def run_case(case: PlaybackCase, *, server_url: str, runs_root: str | Path
                 name = item.get("event_name")
                 if name == "control.audio_session.open.requested":
                     await client.send_event(client.event("control.audio_session.opened", {"reason": "python_playback_glass_opened"}, session_id=client.device_id))
+                    audio_session_opened = True
                     audio = case.inputs.get("audio") or {}
                     if audio.get("path"):
                         wav_path = resolve_repo_path(str(audio["path"]), base=case.path.parent)
@@ -83,12 +86,16 @@ async def run_case(case: PlaybackCase, *, server_url: str, runs_root: str | Path
                     await client.send_rgb_fixture(session, request_event=item, image_path=_select_sensor_fixture(case, "sensor.rgb"))
                 elif name == "control.audio_session.close.requested":
                     await client.send_event(client.event("control.audio_session.closed", {"reason": "python_playback_glass_closed"}, session_id=client.device_id))
+                    audio_session_opened = False
                     break
             if audio_task:
                 await asyncio.wait_for(audio_task, timeout=5)
             for stream_id in speaker_streams:
                 await client.close_output(stream_id)
         finally:
+            if audio_session_opened:
+                with contextlib.suppress(Exception):
+                    await client.send_event(client.event("control.audio_session.closed", {"reason": "python_playback_glass_finished"}, session_id=client.device_id))
             await client.close()
     return CaseReport.from_assertion(case=case, assertion_result=assert_case(case, runs_root=runs_root, stats=client.stats), stats=client.stats, report_dir=report_dir)
 
