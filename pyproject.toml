@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 "audio-chat.config.sync" = "audio_chat.cli.config:sync"
 "audio-chat.playback.glass" = "audio_chat_python_glass.playback:main"
+"audio-chat.playback-glass.run" = "audio_chat_python_playback_glass.cli:main"
 "audio-chat.dev.preflight" = "audio_chat.preflight:main"
 "audio-chat.server.run" = "audio_chat.server:main"
 "audio-chat.server.start" = "audio_chat.cli.server:start"
@@ -44,12 +45,14 @@ build-backend = "setuptools.build_meta"
 where = [
     "audio-server",
     "examples/dev-support/devices/python-glass",
+    "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
     "examples/for-blind-app/devices/native-esp32-glass",
 ]
 include = [
     "audio_chat*",
     "audio_chat_python_glass*",
+    "audio_chat_python_playback_glass*",
     "audio_chat_python_phone_mock*",
     "audio_chat_esp32_s3*",
 ]
@@ -61,6 +64,7 @@ audio_chat = ["py.typed", "spec/*.json"]
 pythonpath = [
     "audio-server",
     "examples/dev-support/devices/python-glass",
+    "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
     "examples/for-blind-app/devices/native-esp32-glass",
 ]

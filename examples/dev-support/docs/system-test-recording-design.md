@@ -353,3 +353,13 @@ expect:
 7. 系统测试必须覆盖真实 Control WebSocket、Stream WebSocket、资产写入和输出回执。
 8. `python-playback-glass` 可以复用协议编码、设备能力声明和测试样例，但不能复用 server 内部对象。
 9. 文档中的测试结果必须来自真实命令结果；设计阶段不要写“已通过”。
+
+## 13. 当前落地状态
+
+截至 2026-05-12，`python-playback-glass` 已按本文定位落在
+`examples/dev-support/devices/python-playback-glass/`，并保持以下边界：
+
+1. 端侧包不导入 `AudioChatApp`、`AudioChatConfig`、`ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
+2. 回放路径通过 `/ws/control` 和 `/ws/stream` 发送事件与二进制 chunk。
+3. recorder 只读取 runs 文件产物，不调用 server 内部对象。
+4. pytest 覆盖端侧 schema、协议编解码、recorder 和静态边界；完整系统回放仍需要外部启动 server 后执行 suite。

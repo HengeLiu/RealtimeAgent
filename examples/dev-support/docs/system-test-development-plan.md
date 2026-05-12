@@ -311,3 +311,68 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 3. 多设备 Case 能验证 RGB 从眼镜端转发到 phone preview。
 4. Task Case 能验证 `task-signals.jsonl`。
 5. 文档、CLI、示例 Case 和测试结果一致。
+
+## 8. 实施记录
+
+### 阶段 0：定位校准和现有能力盘点
+
+- 状态：已完成。
+- 目标：确认本次实现必须是 `examples/dev-support` 下的端侧设备，不落入 SDK 内部测试框架。
+- 实现：复查 `browser-glass` 的控制事件、StreamChunk 编解码、`sensor.mic`/`sensor.rgb` 上传和 `actuator.speaker` 回执；确认旧 `python-glass` 目录当前不存在，因此不迁移旧 in-process 代码。
+- 文件：`examples/dev-support/devices/browser-glass/index.html`、`testdata/audio-sample/`、`testdata/image-sample/`。
+- 验证：`rg` 检查现有协议事件和样例文件；确认没有新增 `audio-server/audio_chat/system_test`。
+- 风险：旧 `pyproject.toml` 和部分历史测试仍保留 `python-glass` 引用，本阶段未清理旧端侧。
+
+### 阶段 1：端侧骨架和真实协议注册
+
+- 状态：已完成。
+- 目标：新增 `python-playback-glass` 端侧骨架，支持真实 `/ws/control` 注册和心跳。
+- 实现：新增端侧包、`device.audio-chat.yaml`、`playback.glass.yaml`、README、CLI 入口和 `PlaybackProtocolClient`；协议客户端只使用 `aiohttp` WebSocket，不导入 `AudioChatApp`、`AudioChatConfig`、`ToolGateway` 等 server 内部对象。
+- 文件：`examples/dev-support/devices/python-playback-glass/audio_chat_python_playback_glass/{__main__.py,cli.py,case_schema.py,protocol_client.py}`、`pyproject.toml`。
+- 验证：`uv run python -m audio_chat_python_playback_glass --help` 通过；`uv run audio-chat.playback-glass.run --help` 通过；`uv run audio-chat.device.validate examples/dev-support/devices/python-playback-glass/device.audio-chat.yaml --json` 通过。
+- 待验收：需要启动真实 server 后运行 `register_only.yaml`，在 `/api/debug/devices` 和 runs 中观察注册事件。
+
+### 阶段 2：Case Schema 和最小回放 Case
+
+- 状态：已完成。
+- 目标：定义 Case YAML，并支持音频 fixture 通过 `/ws/stream` 作为 `sensor.mic` 上传。
+- 实现：新增 `PlaybackCase`、`PlaybackSuite`、WAV PCM 读取、`who_are_you.yaml`；回放端收到 `control.audio_session.open.requested` 后发送 `control.audio_session.opened`，再按 20ms chunk 上传 WAV PCM 和 final chunk。
+- 文件：`case_schema.py`、`runner.py`、`cases/smoke/who_are_you.yaml`。
+- 验证：`uv run python -m pytest examples/dev-support/tests/python_playback_glass -q` 通过。
+- 待验收：需要真实 server 和 mock provider 环境验证 speaker 输出 chunk。
+
+### 阶段 3：视觉 fixture 和能力请求响应
+
+- 状态：已完成。
+- 目标：支持 server 请求 `sensor.rgb` 时上传图片 fixture。
+- 实现：监听 `stream.control.open.requested(sensor.rgb)`，按 Case 中 `inputs.sensors.sensor.rgb.fixtures` 读取图片，通过 stream 上传 JPEG chunk，并发送 `stream.input.opened/closed`。
+- 文件：`protocol_client.py`、`runner.py`、`cases/smoke/look_front.yaml`。
+- 验证：静态测试覆盖 Case 加载和协议 chunk 编解码；设备能力文件声明 `sensor.rgb` 并通过校验。
+- 待验收：需要真实 server 触发 `capture_photo` 后确认 `assets.jsonl` 出现 `sensor.rgb` 资产。
+
+### 阶段 4：断言和报告
+
+- 状态：已完成。
+- 目标：支持系统层预期行为断言和结构化 `report.json`。
+- 实现：新增 runs 产物读取和断言，覆盖 `events.includes`、`streams.includes`、`tools.called`、`tasks.signals.includes`、`assets.<stream_type>.min_count`、`output.min_audio_chunks`、`errors.disallow_system_error`、`model_request.tools.includes`；新增单 Case result 和统一 report 写出。
+- 文件：`assertions.py`、`report.py`。
+- 验证：`test_recorder_generates_stable_case_without_dynamic_ids` 和 `test_static_boundaries` 通过；故意破坏断言的真实 server 验证尚未执行。
+- 待验收：运行真实 suite 后检查失败报告是否足够定位问题。
+
+### 阶段 5：Recorder 和 browser-glass 录制入口
+
+- 状态：已完成。
+- 目标：降低手写 Case 成本。
+- 实现：新增 `record` 子命令，从 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`task-signals.jsonl`、`assets.jsonl`、`model-request.json` 生成 Case 草稿；过滤动态字段；在 `browser-glass` 页面新增录制命令生成区。
+- 文件：`recorder.py`、`browser-glass/index.html`、`README.md`。
+- 验证：`test_recorder_generates_stable_case_without_dynamic_ids` 通过；`node` 检查 browser-glass 内联脚本语法通过。
+- 待验收：用一次真实 browser-glass 手测 runs 产物生成草稿，并人工确认断言严格度。
+
+### 阶段 6：Suite 和 pytest 集成
+
+- 状态：已完成。
+- 目标：支持每次改代码后跑一组系统 Case，并保留 pytest 外层边界。
+- 实现：新增 `suites/smoke.yaml` 和 `run --suite`；新增 `--fail-fast`、`--keep-runs` 参数；新增 `examples/dev-support/tests/python_playback_glass`，测试 schema、协议编解码、recorder 和 server 内部依赖禁用规则。
+- 文件：`suites/smoke.yaml`、`examples/dev-support/tests/python_playback_glass/*`。
+- 验证：`uv run python -m pytest examples/dev-support/tests/python_playback_glass -q` 通过，结果 `8 passed`；其中 `test_cli_register_only_over_real_websocket_server` 启动真实 aiohttp server，并通过子进程 CLI 执行 `register_only` Case。
+- 待验收：pytest 已覆盖真实 WebSocket 注册链路；包含音频、图片、工具和输出的完整 smoke suite 仍需要外部启动 mock provider server 后执行。

@@ -24,6 +24,7 @@
     .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
     .status div { background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 6px; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .file-name { color: #5e6a7d; font-size: 13px; min-width: 180px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .record-command { min-height: 118px; }
     .log-dock { position: fixed; left: 24px; right: 24px; bottom: 16px; z-index: 20; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: rgba(246, 248, 251, 0.96); box-shadow: 0 10px 30px rgba(15, 23, 34, 0.16); }
     .log-panel { border-top: 0; padding-top: 0; margin-top: 0; }
     .log-panel h2 { margin: 0 0 6px; }
@@ -85,6 +86,18 @@
       <p class="hint">图片只在服务端请求 sensor.rgb 时上传；未选择图片时浏览器会请求摄像头拍一张。</p>
     </section>
 
+    <section class="panel">
+      <h2>录制 Case 草稿</h2>
+      <div class="row">
+        <div><label for="recordRunsRoot">Runs Root</label><input id="recordRunsRoot" /></div>
+        <div><label for="recordSessionId">Session ID</label><input id="recordSessionId" placeholder="默认使用最新 session" /></div>
+        <div><label for="recordOut">输出 YAML</label><input id="recordOut" /></div>
+        <button id="buildRecordCommand" class="secondary" type="button">生成录制命令</button>
+      </div>
+      <textarea id="recordCommand" class="record-command" readonly></textarea>
+      <p class="hint">命令会引用当前 user_id、device_id、已选择音频和图片路径；运行后仍需要人工确认 Case 断言严格度。</p>
+    </section>
+
   </main>
 
   <section class="log-dock">
@@ -120,6 +133,8 @@
     const IMAGE_SAMPLE_DIR_KEY = "image_sample_dir";
     const AUDIO_SAMPLE_FILE_KEY = "audio_sample_file";
     const IMAGE_SAMPLE_FILES_KEY = "image_sample_files";
+    const DEFAULT_RECORD_RUNS_ROOT = "examples/for-blind-app/audio-server/runs";
+    const DEFAULT_RECORD_OUT = "examples/dev-support/devices/python-playback-glass/cases/draft/recorded.yaml";
     const DEFAULT_DEVICE_ID = "dev-browser-glass-001";
     const DEFAULT_USER_ID = "user-browser-glass-001";
     const DEFAULT_DEVICE_NAME = "浏览器调试设备";
@@ -158,6 +173,8 @@
     const chooseImageSampleButton = document.getElementById("chooseImageSample");
     const audioSampleNameEl = document.getElementById("audioSampleName");
     const imageSampleNameEl = document.getElementById("imageSampleName");
+    const buildRecordCommandButton = document.getElementById("buildRecordCommand");
+    const recordCommandEl = document.getElementById("recordCommand");
     const connectionStatusEl = document.getElementById("connectionStatus");
     const sessionStatusEl = document.getElementById("sessionStatus");
     const micStatusEl = document.getElementById("micStatus");
@@ -167,6 +184,8 @@
     const initialBrowserConfig = resolveInitialBrowserConfig(params);
     applyBrowserConfig(initialBrowserConfig);
     saveBrowserConfig();
+    document.getElementById("recordRunsRoot").value = DEFAULT_RECORD_RUNS_ROOT;
+    document.getElementById("recordOut").value = DEFAULT_RECORD_OUT;
 
     let controlWs = null;
     let streamWs = null;
@@ -220,6 +239,44 @@
       });
       broadcastLogEl.value += `[${at}] ${payload}\n`;
       broadcastLogEl.scrollTop = broadcastLogEl.scrollHeight;
+    }
+
+    function shellQuote(value) {
+      return `'${String(value).replace(/'/g, `'\\''`)}'`;
+    }
+
+    function selectedAudioPathForRecord() {
+      const file = selectedAudioSampleFile || document.getElementById("audioFile").files[0];
+      if (!file) return "";
+      return `testdata/audio-sample/${file.name}`;
+    }
+
+    function selectedImagePathsForRecord() {
+      const files = selectedImageSampleFiles.length
+        ? selectedImageSampleFiles
+        : Array.from(document.getElementById("imageFile").files || []);
+      return files.map((file) => `testdata/image-sample/${file.name}`);
+    }
+
+    function buildPlaybackRecordCommand() {
+      const args = [
+        "uv run python -m audio_chat_python_playback_glass record",
+        "--runs-root", shellQuote(document.getElementById("recordRunsRoot").value || DEFAULT_RECORD_RUNS_ROOT),
+        "--user-id", shellQuote(document.getElementById("userId").value || DEFAULT_USER_ID),
+        "--device-id", shellQuote(currentDeviceId()),
+      ];
+      const recordSessionId = document.getElementById("recordSessionId").value.trim();
+      if (recordSessionId) args.push("--session-id", shellQuote(recordSessionId));
+      const audioPath = selectedAudioPathForRecord();
+      if (audioPath) args.push("--audio", shellQuote(audioPath));
+      for (const path of selectedImagePathsForRecord()) {
+        args.push("--image", shellQuote(`sensor.rgb=${path}`));
+      }
+      args.push("--out", shellQuote(document.getElementById("recordOut").value || DEFAULT_RECORD_OUT));
+      recordCommandEl.value = args.join(" \\\n  ");
+      recordCommandEl.focus();
+      recordCommandEl.select();
+      log("generated python-playback-glass record command");
     }
 
     function setStreamState(streamId, patch) {
@@ -1413,6 +1470,7 @@
         multiple: true,
       }).catch((err) => log(`choose image sample failed: ${err.message}`));
     };
+    buildRecordCommandButton.onclick = buildPlaybackRecordCommand;
     closeButton.onclick = async () => {
       await stopMic();
       await delay(300);

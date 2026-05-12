@@ -1,0 +1,5 @@
+id: smoke
+name: 开发冒烟系统测试
+cases:
+  - ../cases/smoke/who_are_you.yaml
+  - ../cases/smoke/look_front.yaml

@@ -1,0 +1,20 @@
+id: register_only
+name: 仅注册回放眼镜
+description: 只验证 python-playback-glass 能作为普通设备注册。
+
+device:
+  user_id: user-system-test
+  device_id: dev-python-playback-glass-register
+  name: Python 回放眼镜注册测试
+
+inputs: {}
+
+expect:
+  events:
+    includes:
+      - control.device.registered
+  errors:
+    disallow_system_error: true
+
+playback:
+  timeout_seconds: 5
