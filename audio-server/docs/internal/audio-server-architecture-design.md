@@ -3855,6 +3855,18 @@ memory:
   store_type: "jsonl"
   # 记忆存储根目录或文件路径。
   path: "runs/audio-chat/memory"
+  # 记忆整理由独立 LLM 子 Agent 完成，不提供规则式、本地式或 mock 降级。
+  manager:
+    # 记忆整理模型名。
+    model: "qwen-plus"
+    # API Key 环境变量名。
+    api_key_env: "DASHSCOPE_API_KEY"
+    # OpenAI-compatible base URL。
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # 调用超时秒数。
+    timeout_seconds: 5
+    # 调用重试次数。
+    max_retries: 1
 
 # skill 控制 Skill 读取和约束。
 skill:

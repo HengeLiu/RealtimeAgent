@@ -51,7 +51,9 @@ def test_app_name_loads_server_yaml_and_auto_registers_capabilities() -> None:
         for item in app.tool_gateway.provider_schemas()
         if item.get("type") == "function"
     }
-    assert "reason" not in provider_schemas["capture_photo"].get("properties", {})
+    assert "capture_photo" not in provider_schemas
+    assert "interpret_image" not in provider_schemas
+    assert "interpret_current_view" not in provider_schemas
     assert "reason" not in provider_schemas["task_runtime_manager"].get("properties", {})
     assert {"find_object_task", "traffic_light_task", "timer_task"} <= set(app.task_engine.registry.list_task_types())
 

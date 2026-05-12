@@ -112,7 +112,10 @@ tools:
     recursive: true
     fail_fast: true
   allowlist: []
-  denylist: []
+  denylist:
+    - "capture_photo"
+    - "interpret_image"
+    - "interpret_current_view"
   default_timeout_seconds: 30
   allow_parallel_calls: true
 
@@ -129,7 +132,6 @@ memory:
   enabled: true
   store_type: "jsonl"
   manager:
-    provider: "dashscope-compatible"
     model: "qwen-plus"
     api_key_env: "DASHSCOPE_API_KEY"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"

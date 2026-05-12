@@ -14,7 +14,7 @@ from audio_chat.config import AudioChatYamlConfig, load_yaml_config, resolve_con
 from audio_chat.conversation import ConversationMemoryService, LlmMessageSummarizer
 from audio_chat.control import ControlService, DeviceAuthenticator, DeviceConnection
 from audio_chat.mcp import McpGateway
-from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService, RuleBasedMemoryManagementAgent
+from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
@@ -130,8 +130,7 @@ class AudioChatConfig:
     memory_enabled: bool = False
     memory_store_type: str = "jsonl"
     memory_path: str = "runs/default-app"
-    memory_manager_provider: str = "rule"
-    memory_manager_model: str = ""
+    memory_manager_model: str = "qwen-plus"
     memory_manager_api_key_env: str = "DASHSCOPE_API_KEY"
     memory_manager_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     memory_manager_timeout_seconds: float = 5.0
@@ -257,7 +256,6 @@ class AudioChatConfig:
             memory_enabled=memory_enabled,
             memory_store_type=loaded.memory.store_type,
             memory_path=loaded.memory.path,
-            memory_manager_provider=loaded.memory.manager.provider,
             memory_manager_model=loaded.memory.manager.model,
             memory_manager_api_key_env=loaded.memory.manager.api_key_env,
             memory_manager_base_url=loaded.memory.manager.base_url,
@@ -1123,25 +1121,20 @@ def _memory_root(config: AudioChatConfig) -> str | Path:
 def _build_memory_manager(config: AudioChatConfig) -> MemoryManagementAgent:
     """按当前模型配置创建记忆管理子 Agent。
 
-    主要逻辑：记忆管理是系统能力，子 Agent 由 memory.manager 配置决定，不依赖
-    主对话 text/realtime 模型。未配置真实 manager 时使用轻量本地子 Agent。
+    主要逻辑：记忆管理是系统能力，必须由真实 LLM 子 Agent 执行；SDK 不再提供
+    规则式、本地式或 mock 式降级，避免主 Agent 和记忆子 Agent 的行为语义分叉。
     """
 
-    provider = str(config.memory_manager_provider or "rule").strip().lower()
-    if provider in {"rule", "rule-based", "local", "mock"}:
-        return RuleBasedMemoryManagementAgent()
-    if provider in {"openai-compatible", "dashscope-compatible", "llm"}:
-        model = str(config.memory_manager_model or "").strip()
-        if not model:
-            return RuleBasedMemoryManagementAgent()
-        return LlmMemoryManagementAgent(
-            model=model,
-            api_key_env=config.memory_manager_api_key_env,
-            base_url=config.memory_manager_base_url or None,
-            timeout_seconds=config.memory_manager_timeout_seconds,
-            max_retries=config.memory_manager_max_retries,
-        )
-    return RuleBasedMemoryManagementAgent()
+    model = str(config.memory_manager_model or "").strip()
+    if not model:
+        raise ValueError("memory.manager.model is required when memory manager is configured")
+    return LlmMemoryManagementAgent(
+        model=model,
+        api_key_env=config.memory_manager_api_key_env,
+        base_url=config.memory_manager_base_url or None,
+        timeout_seconds=config.memory_manager_timeout_seconds,
+        max_retries=config.memory_manager_max_retries,
+    )
 
 
 def _build_message_summarizer(config: AudioChatConfig) -> LlmMessageSummarizer | None:
@@ -1154,8 +1147,7 @@ def _build_message_summarizer(config: AudioChatConfig) -> LlmMessageSummarizer |
     异常情况：无。
     """
 
-    provider = str(config.memory_manager_provider or "").strip().lower()
-    if provider not in {"openai-compatible", "dashscope-compatible", "llm"}:
+    if not config.memory_enabled:
         return None
     model = str(config.memory_manager_model or "").strip()
     if not model:

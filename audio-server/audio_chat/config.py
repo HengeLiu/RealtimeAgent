@@ -151,8 +151,7 @@ class GenericEnabledConfig:
 
 @dataclass(frozen=True)
 class MemoryManagerConfig:
-    provider: str = "rule"
-    model: str = ""
+    model: str = "qwen-plus"
     api_key_env: str = "DASHSCOPE_API_KEY"
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     timeout_seconds: float = 5.0
@@ -303,7 +302,7 @@ def _memory_config(raw: dict[str, Any]) -> MemoryConfig:
     """解析 memory 配置，包含系统级记忆管理子 Agent 配置。"""
 
     data = dict(raw or {})
-    manager = MemoryManagerConfig(**_known(data.get("manager", {}), {"provider", "model", "api_key_env", "base_url", "timeout_seconds", "max_retries"}))
+    manager = MemoryManagerConfig(**_known(data.get("manager", {}), {"model", "api_key_env", "base_url", "timeout_seconds", "max_retries"}))
     return MemoryConfig(
         enabled=bool(data.get("enabled", False)),
         store_type=str(data.get("store_type") or "jsonl"),

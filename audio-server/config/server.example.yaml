@@ -273,8 +273,6 @@ memory:
   path: "runs/audio-chat"
   # 记忆整理模型配置，和主对话文本模型独立。
   manager:
-    # rule 表示规则整理；dashscope-compatible 表示用兼容接口做总结。
-    provider: "dashscope-compatible"
     # 记忆整理模型名。
     model: "qwen-plus"
     # API Key 环境变量名。

@@ -337,7 +337,7 @@ class MemoryService:
     ) -> None:
         self.enabled = enabled
         self.store = store or JsonlMemoryStore("runs/default-app")
-        self.manager_agent = manager_agent or RuleBasedMemoryManagementAgent()
+        self.manager_agent = manager_agent
 
     def write(self, *, user_id: str, content: str, metadata: dict[str, Any] | None = None) -> MemoryRecord:
         """写入用户长期记忆。
@@ -407,6 +407,8 @@ class MemoryService:
             raise MemoryError("memory_context is required", code=ErrorCode.INVALID_ARGUMENT)
         request = MemoryOperationRequest(memory_context=context, metadata=dict(metadata or {}))
         existing = self.store.list_records(user_id=user_id, limit=100)
+        if self.manager_agent is None:
+            raise MemoryError("memory manager agent is required", code=ErrorCode.PROVIDER_UNAVAILABLE)
         try:
             plan = self.manager_agent.plan(request=request, existing_memories=existing)
         except MemoryError:
@@ -537,57 +539,6 @@ def memory_record_to_public_dict(record: MemoryRecord) -> dict[str, Any]:
     return {"memory_type": record.memory_type, "topic": record.topic, "content": record.content}
 
 
-class RuleBasedMemoryManagementAgent:
-    """轻量记忆子 Agent。
-
-    主要功能：在没有真实模型子 Agent 时提供可预测的本地计划生成能力，保持测试和
-    离线 demo 可用。生产环境可替换为 `LlmMemoryManagementAgent`。
-    """
-
-    def plan(
-        self,
-        *,
-        request: MemoryOperationRequest,
-        existing_memories: list[MemoryRecord],
-    ) -> MemoryOperationPlan:
-        context = " ".join(str(request.memory_context or "").strip().split())
-        lowered = context.lower()
-        if any(word in context for word in ("忘记", "删除")) or "forget" in lowered:
-            query = context
-            for marker in ("忘记", "删除", "请", "帮我"):
-                query = query.replace(marker, "")
-            target = _match_existing_memory(existing_memories, query.strip() or context)
-            if target is None:
-                return MemoryOperationPlan(actions=[], feedback="没有找到需要处理的记忆")
-            return MemoryOperationPlan(
-                actions=[
-                    MemoryOperationAction(
-                        operation="delete",
-                        topic=target.topic,
-                        memory_type=target.memory_type,
-                        memory_id=target.memory_id,
-                    )
-                ],
-                feedback="记忆已更新",
-            )
-        memory_type = _infer_memory_type(context)
-        topic = _infer_memory_topic(context, memory_type=memory_type)
-        content = _normalize_memory_content(context, topic=topic, memory_type=memory_type)
-        target = _match_existing_memory(existing_memories, topic)
-        return MemoryOperationPlan(
-            actions=[
-                MemoryOperationAction(
-                    operation="update" if target is not None else "add",
-                    memory_type=memory_type,
-                    topic=topic,
-                    content=content,
-                    memory_id=target.memory_id if target is not None else "",
-                )
-            ],
-            feedback="记忆已更新",
-        )
-
-
 class LlmMemoryManagementAgent:
     """基于 OpenAI-compatible Chat Completions 的记忆管理子 Agent。"""
 
@@ -705,22 +656,6 @@ def _memory_manager_system_prompt() -> str:
     )
 
 
-def _match_existing_memory(records: list[MemoryRecord], query: str) -> MemoryRecord | None:
-    """用轻量规则从已有记忆中找最相关的目标。"""
-
-    normalized = " ".join(str(query or "").strip().lower().split())
-    if not normalized:
-        return records[0] if records else None
-    for record in records:
-        if normalized == record.topic.lower():
-            return record
-    for record in records:
-        text = f"{record.topic} {record.content}".lower()
-        if normalized in text or record.topic.lower() in normalized:
-            return record
-    return None
-
-
 def _build_feedback(results: list[dict[str, Any]]) -> str:
     """根据动作结果生成默认反馈。"""
 
@@ -729,11 +664,6 @@ def _build_feedback(results: list[dict[str, Any]]) -> str:
     if any(item.get("success") for item in results):
         return "记忆已更新"
     return "没有找到需要处理的记忆"
-
-
-def _infer_memory_type(content: str) -> MemoryType:
-    basic_keywords = ("我叫", "名字", "姓名", "年龄", "岁", "性别", "称呼", "叫我", "语言偏好", "沟通偏好")
-    return "basic" if any(keyword in content for keyword in basic_keywords) else "personalized"
 
 
 def _infer_memory_topic(content: str, *, memory_type: MemoryType = "personalized") -> str:
@@ -764,15 +694,6 @@ def _infer_memory_topic(content: str, *, memory_type: MemoryType = "personalized
     return "基本信息" if memory_type == "basic" else "用户偏好"
 
 
-def _normalize_memory_content(content: str, *, topic: str, memory_type: MemoryType) -> str:
-    normalized = " ".join(content.strip().split())
-    if topic == "姓名" and "我叫" in normalized:
-        name = normalized.split("我叫", 1)[1].split("，", 1)[0].split(",", 1)[0].strip("。 .")
-        if name:
-            return f"用户名字叫{name}。"
-    return normalized
-
-
 __all__ = [
     "JsonlMemoryStore",
     "MemoryError",
@@ -785,6 +706,5 @@ __all__ = [
     "MemoryStore",
     "MemoryType",
     "LlmMemoryManagementAgent",
-    "RuleBasedMemoryManagementAgent",
     "memory_record_to_public_dict",
 ]

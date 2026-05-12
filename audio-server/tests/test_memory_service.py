@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.config import load_yaml_config
 from audio_chat.conversation import LlmMessageSummarizer
-from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryOperationAction, MemoryOperationPlan, MemoryService
+from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryError, MemoryOperationAction, MemoryOperationPlan, MemoryService
 from audio_chat.protocol import StreamChunk
 
 
@@ -104,6 +106,21 @@ def test_memory_enabled_exposes_and_executes_builtin_tools(tmp_path) -> None:
             memory_path=str(tmp_path / "memory"),
         )
     )
+    app.memory_service.manager_agent = FakeMemoryManager(
+        plans=[
+            MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="add",
+                        memory_type="personalized",
+                        topic="电梯位置",
+                        content="电梯口在走廊尽头",
+                    )
+                ],
+                feedback="已记住电梯位置",
+            )
+        ]
+    )
 
     assert {"manage_memory", "memory_search"}.issubset(set(app.tool_registry.list_names()))
     write_result = asyncio.run(
@@ -184,6 +201,21 @@ def test_memory_enabled_uses_runs_user_memory_json_by_default(tmp_path) -> None:
 
     runs_root = tmp_path / "runs"
     app = AudioChatApp(AudioChatConfig(runs_root=str(runs_root), memory_enabled=True))
+    app.memory_service.manager_agent = FakeMemoryManager(
+        plans=[
+            MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="add",
+                        memory_type="personalized",
+                        topic="楼梯偏好",
+                        content="用户默认走左侧楼梯",
+                    )
+                ],
+                feedback="已记住楼梯偏好",
+            )
+        ]
+    )
 
     result = asyncio.run(
         app.tool_gateway.call(
@@ -208,8 +240,8 @@ def test_memory_records_are_injected_into_prompt_fragment(tmp_path) -> None:
     """
 
     service = MemoryService(enabled=True, store=JsonlMemoryStore(tmp_path / "runs"))
-    service.manage(user_id="user-layer", memory_context="我叫文刀，文字的文，刀锋的刀。")
-    service.manage(user_id="user-layer", memory_context="用户默认走左侧楼梯")
+    service.add_memory(user_id="user-layer", memory_type="basic", topic="姓名", content="用户名字叫文刀。")
+    service.add_memory(user_id="user-layer", memory_type="personalized", topic="楼梯偏好", content="用户默认走左侧楼梯")
 
     memory_path = tmp_path / "runs" / "user-layer" / "memory.json"
     payload = memory_path.read_text(encoding="utf-8")
@@ -288,6 +320,31 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
             text_system_prompt="你是测试助手。",
         )
     )
+    app.memory_service.manager_agent = FakeMemoryManager(
+        plans=[
+            MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="add",
+                        memory_type="personalized",
+                        topic="行走偏好",
+                        content="用户喜欢靠右侧行走",
+                    )
+                ],
+                feedback="已记住行走偏好",
+            ),
+            MemoryOperationPlan(
+                actions=[
+                    MemoryOperationAction(
+                        operation="delete",
+                        memory_type="personalized",
+                        topic="行走偏好",
+                    )
+                ],
+                feedback="记忆已删除",
+            ),
+        ]
+    )
 
     assert "长期记忆规则" in app.config.realtime_instructions
     assert "长期记忆规则" in app.config.text_system_prompt
@@ -314,7 +371,7 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
             name="memory_search",
             user_id="user-memory-rule",
             session_id="session-memory-rule",
-            input_data={"topic": "用户偏好"},
+            input_data={"topic": "行走偏好"},
         )
     )
 
@@ -327,7 +384,7 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
 def test_memory_manager_is_configured_as_system_capability(tmp_path) -> None:
     """测试目标：验证记忆管理子 Agent 来自 memory.manager 配置，而不是 text 模型配置。
 
-    测试方法：写入一份 text 模型为 mock、memory.manager 为 dashscope-compatible 的
+    测试方法：写入一份 text 模型为 mock、memory.manager 指定 qwen-memory 的
     server.yaml，并通过 AudioChatConfig 构建 App。
     预期结果：MemoryService 内部 manager 是 LlmMemoryManagementAgent，且使用
     memory.manager.model。
@@ -346,7 +403,6 @@ agent:
 memory:
   enabled: true
   manager:
-    provider: dashscope-compatible
     model: qwen-memory
     api_key_env: DASHSCOPE_API_KEY
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -362,3 +418,16 @@ memory:
     assert isinstance(app.conversation_memory.summarizer, LlmMessageSummarizer)
     assert app.conversation_memory.summarizer.model == "qwen-memory"
     assert app.config.text_model_provider == "mock"
+
+
+def test_memory_manage_requires_real_manager_agent(tmp_path) -> None:
+    """测试目标：验证 manage_memory 不再使用规则式、本地式或 mock 式兜底。
+
+    测试方法：直接构造没有 manager_agent 的 MemoryService，并调用 manage。
+    预期结果：服务抛出结构化 MemoryError，提示必须配置真实记忆管理子 Agent。
+    """
+
+    service = MemoryService(enabled=True, store=JsonlMemoryStore(tmp_path / "memory"))
+
+    with pytest.raises(MemoryError, match="memory manager agent is required"):
+        service.manage(user_id="user-no-manager", memory_context="记住我喜欢简短提示")

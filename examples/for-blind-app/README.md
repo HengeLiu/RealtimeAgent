@@ -5,7 +5,7 @@
 | 路径 | 作用 |
 | --- | --- |
 | `server.yaml` | 应用运行配置。 |
-| `capabilities/tools.py` | 应用级 Tool：`capture_photo`、`query_route_plan`、`search_web`。 |
+| `capabilities/tools.py` | 应用级 Tool：`capture_photo`、`interpret_image`、`interpret_current_view`、`query_route_plan`、`search_web`。其中三个图片相关 Tool 当前通过 `tools.denylist` 暂不暴露给模型。 |
 | `capabilities/tasks.py` | 应用级 Task：`find_object_task`、`traffic_light_task`、`timer_task`。 |
 
 ## 路径配置
