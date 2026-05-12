@@ -85,7 +85,8 @@ server 应在注册时补齐内部路由：
 
 ## 5. 当前状态与缺口
 
-截至当前代码状态，视频显示链路已经具备一部分基础，但还不能完成 browser-glass 到 python-phone 的图片回显测试。
+截至当前代码状态，视频显示链路已经具备一部分基础。2026-05-12 的实现更新后，
+browser-glass 到 python-phone 的“单张图片回显”链路已具备本地联调条件；持续视频流仍按后续阶段处理。
 
 已具备：
 
@@ -97,18 +98,22 @@ server 应在注册时补齐内部路由：
 6. `StreamService.on_chunk()` 已能把冻结消费者对应的 chunk 推送到设备的 `/ws/stream` 下行队列。
 7. `browser-glass` 已能在收到 `stream.control.open.requested(sensor.rgb)` 后，把用户选择的图片或摄像头抓拍结果作为 `sensor.rgb` 上传。
 
-缺口：
+已补齐：
 
-1. `phone.preview.yaml` 仍是 `mode: register_only`，启动后只注册然后退出，无法长驻接收视频。
-2. `phone.preview.yaml` 没有启用 `display.enabled`，也没有配置 `display.save_latest_frame`，和 README 中“打开窗口并保存最近帧”的描述不一致。
-3. `phone.preview.yaml` 当前声明 `supports.sensors.rgb`，这会把 phone preview 表达成 RGB 生产设备；回显场景需要的是 RGB 消费显示设备。
-4. `compile_internal_routes_from_supports()` 目前只为 `sensor.rgb` 生产能力生成 `stream.control.*` 路由，不会生成 `stream.input.*` 消费路由。
-5. `compile_system_routes_from_properties()` 目前只处理 `audio_chat.audio_input=sensor.mic` 和 `audio_chat.audio_output=actuator.speaker`，没有处理 `actuator.display.rgb` 或 `endpoint.role.visual_display`。
-6. browser-glass 和 python-phone 的默认 `user_id` 不一致；不改配置时不在同一个设备组，server 不会跨用户转发 stream。
-7. browser-glass 选择图片后不会主动上传，只有收到 `stream.control.open.requested(sensor.rgb)` 才上传；因此还需要一个触发入口。
-8. browser-glass 的 `mode=continuous` 当前实际只上传一次 `uploadSingleVisualSnapshot()`，不是真持续视频流。本阶段可以先验收“图片回显”，持续视频后续再做。
-9. 现有验收测试 `examples/dev-support/tests/test_python_phone_video_display.py::test_sensor_rgb_input_stream_routes_to_python_phone_video_display` 当前失败，现象是 phone 端等不到 `video_frames == 1`。
-10. 当前 `OpenCvVideoPreview` 只能显示画面，不能承载设备状态、路由事件、日志面板和操作按钮，不适合作为长期联调界面。
+1. `phone.preview.yaml` 改为 `mode: preview`，启动后长驻接收视频。
+2. `phone.preview.yaml` 通过 `properties` 声明视觉显示端身份，不再默认声明 RGB 生产能力。
+3. `compile_system_routes_from_properties()` 已支持把 `actuator.display.rgb` 或
+   `endpoint.role.visual_display` 编译成 `stream.input.* + sensor.rgb` 内部路由。
+4. browser-glass 和 python-phone 默认使用同一 `user_id`。
+5. browser-glass 已提供“上传所选图片”按钮，便于不依赖模型工具调用直接触发回显。
+6. Python phone 已增加 PySide6 GUI 事件桥、状态面板、日志面板和视频面板；OpenCV 保留为解码和保存最近帧。
+
+仍需后续处理：
+
+1. browser-glass 的 `mode=continuous` 当前仍按单张图片上传处理，不是真持续视频流。
+2. PySide6 窗口首版只包含视频、状态和日志，工具栏按钮、日志过滤、runs 目录打开等增强项后续补。
+3. 后续如果要正式表达“显示器”能力，仍建议新增 `supports.displays` 或
+   `supports.consumers`，本阶段先不扩大公开 schema。
 
 ## 6. 运行方式
 
@@ -139,11 +144,10 @@ supports:
 display:
   enabled: true
   backend: pyside6
-  window_title: audio-chat python phone
+  window_title: audio-chat Python Phone
   max_fps: 15
-  close_on_stream_closed: false
-  save_latest_frame: runs/python-phone/latest-rgb.jpg
-  log_limit: 500
+  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.png
+  log_limit: 200
   show_debug_events: true
 ```
 
@@ -527,7 +531,7 @@ uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server
 终端 2：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 终端 3 或浏览器：
@@ -621,7 +625,7 @@ uv run python -m pytest audio-server/tests/test_device_capabilities_semantics.py
 验收：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 启动后应保持运行，并显示包含视频占位区、连接状态和事件日志的 GUI 窗口。

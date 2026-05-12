@@ -6,6 +6,7 @@ import importlib
 import inspect
 import json
 import pkgutil
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,8 +14,15 @@ from typing import Any
 
 from aiohttp import ClientSession
 
-from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, new_id
+from .gui import GuiEventBridge, PhonePreviewWindow
+
+try:
+    from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
+except ModuleNotFoundError as exc:
+    if exc.name != "audio_chat_python_glass":
+        raise
+    from .playback_fallback import NetworkPythonPlaybackEndpoint
 
 
 def _resolve_output_path(raw_path: str | Path) -> Path:
@@ -383,9 +391,11 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         task_command_scripts: dict[str, list[dict[str, Any]]] | None = None,
         vision_frames: dict[str, list[bytes]] | None = None,
         display: dict[str, Any] | None = None,
+        gui_bridge: GuiEventBridge | None = None,
     ) -> None:
         display_config = dict(display or {})
         display_enabled = bool(display_config.get("enabled", False))
+        display_backend = str(display_config.get("backend") or "opencv").strip().lower()
         save_latest_frame = str(display_config.get("save_latest_frame") or "") or None
         super().__init__(
             server_url=server_url,
@@ -423,22 +433,31 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         self.video_decoder: StreamChunkImageDecoder | None = None
         self.frame_store: FrameStore | None = None
         self.video_preview: OpenCvVideoPreview | None = None
+        self.gui_bridge = gui_bridge
         if display_enabled or save_latest_frame:
             self.video_decoder = StreamChunkImageDecoder()
             self.frame_store = FrameStore(save_latest_frame=save_latest_frame)
-            self.video_preview = OpenCvVideoPreview(
-                cv2_module=self.video_decoder._cv2,
-                enabled=display_enabled,
-                window_title=str(display_config.get("window_title") or "audio-chat python phone"),
-                max_fps=float(display_config.get("max_fps") or 15.0),
-            )
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_status(display_backend=display_backend, latest_frame_path=str(self.frame_store.save_latest_frame or ""))
+                self.gui_bridge.emit_log("INFO", "Python 手机视频显示端已启动")
+            if display_backend in {"opencv", "cv2"}:
+                self.video_preview = OpenCvVideoPreview(
+                    cv2_module=self.video_decoder._cv2,
+                    enabled=display_enabled,
+                    window_title=str(display_config.get("window_title") or "audio-chat python phone"),
+                    max_fps=float(display_config.get("max_fps") or 15.0),
+                )
 
     async def _control_loop(self, control_ws, stream_ws, audio_payload: bytes | None) -> None:
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_status(control="open")
         async for message in control_ws:
             if message.type.name != "TEXT":
                 continue
             event = Event.from_dict(json.loads(message.data))
             self.received_events.append(event)
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log("DEBUG", f"control event {event.event_name} stream={event.stream_type or '-'}", debug=True)
             if event.event_name == "stream.control.open.requested":
                 self.sensor_events.append(
                     {
@@ -685,6 +704,8 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         await self._send_event(control_ws, event)
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_status(stream="open")
         async for message in stream_ws:
             if message.type.name != "BINARY":
                 continue
@@ -729,6 +750,12 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 self.frame_store.update(frame, cv2_module=self.video_decoder._cv2)
             if self.video_preview is not None:
                 self.video_preview.show(frame)
+            if self.gui_bridge is not None:
+                summary = self.gui_bridge.emit_frame(frame)
+                self.gui_bridge.emit_log(
+                    "INFO",
+                    f"收到 sensor.rgb 帧 stream={summary.stream_id} seq={summary.seq} size={summary.width}x{summary.height}",
+                )
             self.video_frames.append(
                 {
                     **_chunk_summary(chunk),
@@ -738,6 +765,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 }
             )
         except Exception as exc:  # noqa: BLE001 - 端侧视频预览应记录坏帧并继续收流
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_status(last_error=str(exc))
+                self.gui_bridge.emit_log("ERROR", f"视频帧解码失败: {type(exc).__name__}: {exc}")
             self.video_errors.append(
                 {
                     "stream_id": chunk.stream_id,
@@ -760,6 +790,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
 
         async with ClientSession() as session:
             control_ws = await self.run_until_registered(session=session)
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_status(registered=True, control="open")
+                self.gui_bridge.emit_log("INFO", f"设备已注册 device_id={self.device_id}")
             try:
                 async with session.ws_connect(self._stream_url()) as stream_ws:
                     control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, None))
@@ -772,6 +805,8 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             finally:
                 if self.video_preview is not None:
                     self.video_preview.close()
+                if self.gui_bridge is not None:
+                    self.gui_bridge.emit_status(control="closed", stream="closed")
                 await control_ws.close()
         return self._build_result()
 
@@ -788,6 +823,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["video_frames"] = list(self.video_frames)
         result["video_errors"] = list(self.video_errors)
         result["video_frame_store"] = self.frame_store.summary() if self.frame_store else {}
+        result["gui"] = self.gui_bridge.snapshot() if self.gui_bridge else {}
         return result
 
 
@@ -803,14 +839,19 @@ def _chunk_summary(chunk: StreamChunk) -> dict[str, Any]:
     }
 
 
-async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """按配置运行一次 Python phone mock 网络闭环。"""
+def _build_endpoint_from_config(config: dict[str, Any], *, gui_bridge: GuiEventBridge | None = None) -> NetworkPythonPhoneMockEndpoint:
+    """从配置创建 Python phone mock 端点。
 
-    config = config or {}
+    主要逻辑：集中处理 handler、视觉帧和显示配置，避免 CLI、测试和 GUI 入口各自拼装。
+    参数：`config` 为 YAML/JSON 配置，`gui_bridge` 为可选 GUI 事件桥。
+    返回值：配置好的 `NetworkPythonPhoneMockEndpoint`。
+    异常情况：配置中的 handler 包或帧文件非法时向上抛出。
+    """
+
     handler_registry = PhoneTaskHandlerRegistry.with_builtins(list(config.get("handler_packages") or []))
     vision_frames = _vision_frames_from_config(dict(config.get("vision_frames") or {}))
     display_config = dict(config.get("display") or {})
-    endpoint = NetworkPythonPhoneMockEndpoint(
+    return NetworkPythonPhoneMockEndpoint(
         server_url=config.get("server_url", "http://127.0.0.1:8765"),
         user_id=config.get("user_id", "user-phone-mock-001"),
         device_id=config.get("device_id", "dev-python-phone-001"),
@@ -823,7 +864,15 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         task_command_scripts=dict(config.get("task_command_scripts") or {}),
         vision_frames=vision_frames,
         display=display_config,
+        gui_bridge=gui_bridge,
     )
+
+
+async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """按配置运行一次 Python phone mock 网络闭环。"""
+
+    config = config or {}
+    endpoint = _build_endpoint_from_config(config)
     mode = str(config.get("mode") or "").strip()
     if mode in {"register_only", "network_register"} or (not mode and not display_config):
         async with ClientSession() as session:
@@ -839,6 +888,50 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
     if mode in {"once", "network_once"}:
         return await endpoint.run_once()
     return await endpoint.run_forever()
+
+
+def run_network_phone_preview_gui(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """启动 PySide6 手机视频预览窗口。
+
+    主要逻辑：Qt 窗口运行在主线程，网络协议循环运行在后台线程；两者通过
+    `GuiEventBridge` 传递状态、日志和视频帧。
+    参数：`config` 为 phone.preview.yaml 解析结果。
+    返回值：窗口关闭时的运行摘要。
+    异常情况：server 未启动、PySide6 未安装或配置错误时抛出明确异常。
+    """
+
+    config = config or {}
+    display_config = dict(config.get("display") or {})
+    bridge = GuiEventBridge(
+        log_limit=int(display_config.get("log_limit") or 200),
+        show_debug_events=bool(display_config.get("show_debug_events", False)),
+    )
+    endpoint = _build_endpoint_from_config(config, gui_bridge=bridge)
+    result_holder: dict[str, Any] = {}
+    error_holder: dict[str, BaseException] = {}
+
+    def network_worker() -> None:
+        try:
+            result_holder.update(asyncio.run(endpoint.run_forever()))
+        except BaseException as exc:  # noqa: BLE001 - 后台线程错误要显示到 GUI 并回传给 CLI
+            error_holder["error"] = exc
+            bridge.emit_status(last_error=str(exc), control="error", stream="error")
+            bridge.emit_log("ERROR", f"网络循环退出: {type(exc).__name__}: {exc}")
+
+    thread = threading.Thread(target=network_worker, name="python-phone-network", daemon=True)
+    thread.start()
+    window = PhonePreviewWindow(
+        bridge=bridge,
+        title=str(display_config.get("window_title") or "audio-chat Python Phone"),
+    )
+    exit_code = window.show()
+    result = result_holder or endpoint._build_result()
+    result["mode"] = "preview"
+    result["gui_exit_code"] = exit_code
+    if error_holder:
+        result["passed"] = False
+        result["error"] = str(error_holder["error"])
+    return result
 
 
 def _vision_frames_from_config(config: dict[str, Any]) -> dict[str, list[bytes]]:
@@ -869,7 +962,13 @@ def main(argv: list[str] | None = None) -> None:
             import yaml
 
             config = yaml.safe_load(text) or {}
-    result = asyncio.run(run_network_phone_mock(config))
+    display_config = dict(config.get("display") or {})
+    mode = str(config.get("mode") or "").strip()
+    backend = str(display_config.get("backend") or "").strip().lower()
+    if mode == "preview" and bool(display_config.get("enabled", False)) and backend == "pyside6":
+        result = run_network_phone_preview_gui(config)
+    else:
+        result = asyncio.run(run_network_phone_mock(config))
     if not result.get("passed", False):
         raise SystemExit(1)
     print(json.dumps(result, ensure_ascii=False, indent=2))

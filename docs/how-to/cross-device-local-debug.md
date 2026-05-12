@@ -68,8 +68,17 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 如果要查看 RGB stream：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
+
+视频显示端通过 properties 声明 `endpoint.role.visual_display` 和
+`actuator.display.rgb`，不再把自己注册成 RGB 传感器。浏览器参考端连接后，选择图片并
+点击“上传所选图片”，server 会把该 `sensor.rgb` 输入流转发给同一 `user_id` 下的
+Python phone 窗口。观察点：
+
+1. Python phone 窗口状态栏的 `registered=true` 和 `frame` 计数。
+2. `runs/audio-chat/python-phone/latest-rgb.png` 是否更新。
+3. server `stream-events.jsonl` 中 `sensor.rgb` 的 opened/chunk/closed 事件。
 
 ## 6. 可选：运行 iOS 参考端
 

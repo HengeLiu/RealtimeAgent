@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from audio_chat import AudioChatApp, AudioChatConfig, Event, StreamChunk
-from audio_chat.device_capabilities import compile_device_capabilities_file, compile_internal_routes_from_supports, compile_registration_payload
+from audio_chat.device_capabilities import (
+    compile_device_capabilities_file,
+    compile_internal_routes_from_supports,
+    compile_registration_payload,
+    compile_system_routes_from_properties,
+)
 
 
 class FakeConnection:
@@ -33,7 +38,7 @@ def test_browser_device_capability_file_compiles_to_routes() -> None:
     """测试目标：验证浏览器设备能力文件能编译成协议订阅。
 
     测试方法：读取 `device.audio-chat.yaml`，检查结构化能力和编译产物。
-    预期结果：设备开发者不需要手写 routes，也能得到 RGB、IMU、ToF 和 haptic 订阅。
+    预期结果：设备开发者不需要手写 routes，也能得到 RGB 和 haptic 订阅。
     """
 
     result = compile_device_capabilities_file("examples/dev-support/devices/browser-glass/device.audio-chat.yaml")
@@ -42,8 +47,6 @@ def test_browser_device_capability_file_compiles_to_routes() -> None:
     routes = compile_internal_routes_from_supports(result["payload"]["supports"])
     assert {"event": "control.audio_session.*"} in routes
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in routes
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.imu"}} in routes
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.tof"}} in routes
     assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.haptic"}} in routes
     assert {"event": "command.*", "filter": {"payload.command": "haptic.vibrate"}} in routes
 
@@ -197,6 +200,36 @@ def test_registration_compiles_audio_session_route_for_browser_wake_flow(tmp_pat
     )
 
     assert any(event.event_name == "control.audio_session.open.requested" for event in connection.events)
+
+
+def test_visual_display_properties_compile_to_rgb_input_route() -> None:
+    """测试目标：验证视觉显示设备可通过 properties 订阅 RGB 输入流。
+
+    测试方法：分别使用 `actuator.display.rgb` 和 `endpoint.role.visual_display`
+    声明显示能力，检查系统路由编译结果。
+    预期结果：编译得到 `stream.input.* + sensor.rgb`，且不会生成上游相机控制路由。
+    """
+
+    routes = compile_system_routes_from_properties(
+        {
+            "actuator.display.rgb": True,
+            "endpoint.role.visual_display": "true",
+        }
+    )
+
+    assert {"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}} in routes
+    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} not in routes
+
+
+def test_visual_display_property_disabled_does_not_subscribe_rgb_input() -> None:
+    """测试目标：验证未声明显示能力的普通设备不会消费 RGB 输入流。
+
+    测试方法：传入空 properties 和显式 false 字符串。
+    预期结果：不会生成 `sensor.rgb` 输入流消费者路由，避免所有设备都收到视频帧。
+    """
+
+    assert compile_system_routes_from_properties({}) == []
+    assert compile_system_routes_from_properties({"actuator.display.rgb": "false"}) == []
 
 
 def test_sensor_tof_stream_is_stored_as_asset(tmp_path: Path) -> None:

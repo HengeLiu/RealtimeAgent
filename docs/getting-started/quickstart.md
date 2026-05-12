@@ -69,8 +69,12 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 如果要查看 RGB stream 回显：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
+
+该命令会打开 PySide6 视频窗口。保持浏览器设备和 Python phone 使用同一个
+`user_id`，在 browser-glass 的“带图输入”区域点击“上传所选图片”，即可把图片通过
+server 回显到 phone 窗口。
 
 ## 校验设备能力文件
 

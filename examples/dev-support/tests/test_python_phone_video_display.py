@@ -21,6 +21,7 @@ for path in (PYTHON_PHONE_ROOT, PYTHON_GLASS_ROOT):
 
 from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint  # noqa: E402
 from audio_chat_python_phone_mock.phone_mock import OpenCvVideoPreview  # noqa: E402
+from audio_chat_python_phone_mock.gui import GuiEventBridge  # noqa: E402
 
 
 class FakeCv2:
@@ -64,6 +65,45 @@ def test_python_phone_preview_shows_placeholder_on_startup() -> None:
     assert fake_cv2.calls[:4] == ["namedWindow", "putText", "imshow", "waitKey"]
 
 
+def test_python_phone_gui_event_bridge_records_status_log_and_frame() -> None:
+    """测试目标：验证 Python 手机 GUI 的无界面事件桥可在 CI 中独立测试。
+
+    测试方法：发布状态、日志和一帧假图像，读取 bridge 快照。
+    预期结果：事件桥记录关键状态和最近帧信息，不依赖 PySide6 窗口。
+    """
+
+    class FakeImage:
+        shape = (12, 34, 3)
+
+    class FakeFrame:
+        stream_id = "stream-rgb-001"
+        stream_type = "sensor.rgb"
+        seq = 7
+        codec = "jpeg"
+        image = FakeImage()
+
+        @property
+        def width(self) -> int:
+            return 34
+
+        @property
+        def height(self) -> int:
+            return 12
+
+    bridge = GuiEventBridge(log_limit=2, show_debug_events=True)
+
+    bridge.emit_status(control="open", stream="open", registered=True)
+    bridge.emit_log("INFO", "registered")
+    summary = bridge.emit_frame(FakeFrame())
+
+    snapshot = bridge.snapshot()
+    assert summary.width == 34
+    assert snapshot["status"]["registered"] is True
+    assert snapshot["status"]["frame_count"] == 1
+    assert snapshot["latest_frame"]["stream_id"] == "stream-rgb-001"
+    assert snapshot["logs"][-1]["message"] == "registered"
+
+
 def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: Path) -> None:
     """测试目标：验证眼镜端 `sensor.rgb` 视频 stream 能通过 server 回显到 Python 手机端。
 
@@ -91,7 +131,7 @@ def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: 
                 "endpoint.compute.vision": True,
                 "actuator.display.rgb": True,
             },
-            supports={"sensors": [{"type": "rgb"}], "actuators": []},
+            supports={"sensors": [], "actuators": []},
             display={"enabled": False, "save_latest_frame": str(latest_frame)},
         )
         tasks: list[asyncio.Task] = []

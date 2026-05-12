@@ -40,18 +40,27 @@ command.failed
 RGB 帧来自 `vision_frames` 配置或默认测试 JPEG，并始终通过 `sensor.rgb` stream
 上传。事件日志、任务日志和帧日志会进入运行结果，便于对照真实 iOS 插件行为。
 
-## 视频显示端设计
+## 视频显示端
 
-下一阶段会把 Python 手机端扩展成可长驻运行的视频显示端，用来显示眼镜端传到同一
+Python 手机端可以长驻运行成视频显示端，用来显示眼镜端或浏览器端上传到同一
 `user_id` 设备组内的 `sensor.rgb` 视频流，并为后续 YOLO 等本地视觉算法预留扩展点。
 
 设计文档见 [VIDEO_DISPLAY_DESIGN.md](VIDEO_DISPLAY_DESIGN.md)。
 
-本地视频窗口使用 OpenCV 实现。启动后会注册为一台普通设备并订阅 `sensor.rgb`
-输入流。需要保存最近一帧时，在配置的 `display.save_latest_frame` 中显式设置输出路径。
+本地窗口默认使用 PySide6 实现，OpenCV 只负责 JPEG/PNG 解码和最近帧落盘。启动后
+设备不会声明自己是 RGB 传感器，而是通过 `properties.endpoint.role.visual_display`
+和 `properties.actuator.display.rgb` 订阅同一用户下的 `sensor.rgb` 输入流。
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+```
+
+联调时保持 `browser-glass` 和 `python-phone` 的 `user_id` 一致。浏览器页面连接后，
+在“带图输入”区域选择图片并点击“上传所选图片”，图片会通过 server 回显到 PySide6
+窗口；未选择图片时浏览器会请求摄像头拍一张。最近一帧默认写入：
+
+```text
+runs/audio-chat/python-phone/latest-rgb.png
 ```
 
 ## 启动

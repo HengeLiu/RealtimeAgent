@@ -79,11 +79,11 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
 
 
 def test_browser_device_switches_visible_fields_by_input_mode() -> None:
-    """测试目标：验证 browser-glass 只暴露样例目录选择入口。
+    """测试目标：验证 browser-glass 使用样例目录选择入口和明确的图片上传按钮。
 
     测试方法：静态检查页面隐藏原生文件 input，使用 File System Access API
-    的样例选择按钮，并移除旧的视频、静音和手动图片上传控件。
-    预期结果：离线音频和图片样例由按钮选择，图片只在服务端请求时上传。
+    的样例选择按钮，并移除旧的视频和静音控件。
+    预期结果：离线音频和图片样例由按钮选择，图片可由服务端请求或手动按钮触发上传。
     """
 
     html = _html()
@@ -91,6 +91,7 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert ".hidden { display: none !important; }" in html
     assert 'id="chooseAudioSample"' in html
     assert 'id="chooseImageSample"' in html
+    assert 'id="uploadImageNow"' in html
     assert "<h2>音频选择</h2>" in html
     assert "<h2>带图输入</h2>" in html
     assert "<h2>自定义事件</h2>" not in html
@@ -307,6 +308,22 @@ def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
     assert "if (!images.length)" in upload_body
     assert "await waitStreamSocketBufferedDrain()" in upload_body
     assert "await uploadRgbImages(await readSelectedImageFrames(), item, \"images_uploaded\")" in selected_body
+
+
+def test_browser_device_has_manual_sensor_rgb_upload_button() -> None:
+    """测试目标：验证 browser-glass 能主动上传图片触发手机回显测试。
+
+    测试方法：静态检查按钮、启停状态和 onclick 处理逻辑。
+    预期结果：注册后按钮可用，并复用 `uploadSingleVisualSnapshot()` 发送 sensor.rgb。
+    """
+
+    html = _html()
+
+    assert 'const uploadImageNowButton = document.getElementById("uploadImageNow")' in html
+    assert "uploadImageNowButton.disabled = !registered" in html
+    assert "uploadImageNowButton.onclick = () =>" in html
+    assert 'reason: "manual_browser_upload"' in html
+    assert "uploadSingleVisualSnapshot({payload: {reason: \"manual_browser_upload\"}})" in html
 
 
 def test_browser_device_appends_tail_silence_for_offline_realtime_audio() -> None:

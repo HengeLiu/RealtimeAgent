@@ -77,12 +77,13 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 Python 手机视频显示端：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
-该端侧会打开 OpenCV 视频窗口，注册到 server，并订阅同一 `user_id` 下的
-`sensor.rgb` 输入流。眼镜端或浏览器端上传 RGB stream 后，画面会回显到这个窗口，
-最近一帧会写入 `runs/python-phone/latest-rgb.jpg`。
+该端侧会打开 PySide6 视频窗口，注册到 server，并订阅同一 `user_id` 下的
+`sensor.rgb` 输入流。浏览器端连接后可在“带图输入”区域点击“上传所选图片”，
+画面会回显到这个窗口，最近一帧会写入
+`runs/audio-chat/python-phone/latest-rgb.png`。
 
 Python glass playback：
 

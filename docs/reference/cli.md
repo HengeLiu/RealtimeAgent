@@ -58,7 +58,7 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 Python phone RGB 预览：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 Python glass playback：
