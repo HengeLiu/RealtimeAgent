@@ -439,7 +439,19 @@ class QwenOmniRealtimeAdapter:
                 )
                 return
         if event_type == "error":
-            callbacks.error(str(message.get("message") or message), {"provider": "qwen", "raw": message})
+            error = message.get("error") if isinstance(message.get("error"), dict) else {}
+            provider_message = str(error.get("message") or message.get("message") or message)
+            callbacks.error(
+                provider_message,
+                {
+                    "provider": "qwen",
+                    "raw": message,
+                    "provider_event_id": message.get("event_id"),
+                    "provider_error_code": error.get("code"),
+                    "provider_error_type": error.get("type") or message.get("type"),
+                    "provider_error_message": error.get("message"),
+                },
+            )
             return
         callbacks.provider_event(_summarize_omni_event(message))
 
@@ -1445,6 +1457,10 @@ class RealtimeAudioAgentCore:
                     "provider": self.realtime_config.provider,
                     "model": self.realtime_config.model,
                     "message": message,
+                    "provider_event_id": record.get("provider_event_id"),
+                    "provider_error_code": record.get("provider_error_code"),
+                    "provider_error_type": record.get("provider_error_type"),
+                    "provider_error_message": record.get("provider_error_message"),
                 },
             )
 

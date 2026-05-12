@@ -5,6 +5,7 @@ import logging
 import sys
 import time
 import wave
+from ast import literal_eval
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -293,6 +294,7 @@ class RunRecorder:
         if event.event_name in QUIET_CONTROL_EVENTS:
             return
         payload = event.payload or {}
+        error_fields = _error_log_fields(payload.get("provider_error_message") or payload.get("message") or payload.get("error"))
         if event.event_name.startswith("system.error"):
             level_logger = log_warning if payload.get("severity") == "warning" else log_error
         elif event.event_name.startswith(DEBUG_ONLY_CONTROL_PREFIXES):
@@ -312,7 +314,10 @@ class RunRecorder:
                     "stream_type": event.stream_type,
                     "reason": payload.get("reason"),
                     "error_type": payload.get("error_type"),
-                    "error_message": _compact_text(payload.get("message")),
+                    "error_message": error_fields.get("error_message") or _compact_text(payload.get("message"), limit=1000),
+                    "provider_error_code": error_fields.get("provider_error_code") or payload.get("provider_error_code"),
+                    "provider_error_type": error_fields.get("provider_error_type") or payload.get("provider_error_type"),
+                    "provider_event_id": error_fields.get("provider_event_id") or payload.get("provider_event_id"),
                     "suppressed_count": payload.get("suppressed_count"),
                     "detail_path": self._event_detail_path(event),
                 },
@@ -414,6 +419,9 @@ class RunRecorder:
         self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
         event = str(record.get("event") or "")
+        error_fields = _error_log_fields(
+            record.get("provider_error_message") or record.get("message") or record.get("error") or record.get("raw")
+        )
         context = LogContext(
             user_id=record.get("user_id"),
             session_id=session_id,
@@ -427,8 +435,18 @@ class RunRecorder:
                 "ok": record.get("ok"),
                 "status": record.get("status"),
                 "reason": record.get("reason"),
-                "error_message": _compact_text(record.get("message") or record.get("error"), limit=500),
+                "error_message": error_fields.get("error_message")
+                or _compact_text(record.get("message") or record.get("error"), limit=1000),
+                "provider_error_code": record.get("provider_error_code") or error_fields.get("provider_error_code"),
+                "provider_error_type": record.get("provider_error_type") or error_fields.get("provider_error_type"),
+                "provider_event_id": record.get("provider_event_id") or error_fields.get("provider_event_id"),
+                "websocket_code": record.get("code") or record.get("websocket_code"),
+                "websocket_message": _compact_text(record.get("message") if event.endswith("websocket.closed") else record.get("websocket_message"), limit=500),
                 "bytes": record.get("audio_bytes") or record.get("payload_size"),
+                "image_bytes": record.get("image_bytes"),
+                "image_sha256": record.get("image_sha256"),
+                "replayed_audio_bytes": record.get("replayed_audio_bytes"),
+                "replayed_audio_chunk_count": record.get("replayed_audio_chunk_count"),
                 "final": record.get("final"),
                 "text": _compact_text(record.get("text")),
                 "detail_path": str(self.session_file(session_id, "agent-events.jsonl")),
@@ -608,6 +626,15 @@ class RunRecorder:
         self._append_jsonl(self.runs_root / "system-events.jsonl", record)
         event_name = record.get("event") or record.get("event_name")
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        error_fields = _error_log_fields(
+            record.get("provider_error_message")
+            or payload.get("provider_error_message")
+            or record.get("message")
+            or payload.get("message")
+            or record.get("error")
+            or payload.get("error")
+            or payload
+        )
         severity = str(record.get("severity") or payload.get("severity") or "error")
         if severity == "warning":
             log_method = log_warning
@@ -628,7 +655,17 @@ class RunRecorder:
                     "component": record.get("component") or payload.get("component"),
                     "reason": record.get("reason") or payload.get("reason"),
                     "error_type": record.get("error_type") or payload.get("error_type"),
-                    "error_message": _compact_text(record.get("message") or payload.get("message")),
+                    "error_message": error_fields.get("error_message")
+                    or _compact_text(record.get("message") or payload.get("message"), limit=1000),
+                    "provider_error_code": record.get("provider_error_code")
+                    or payload.get("provider_error_code")
+                    or error_fields.get("provider_error_code"),
+                    "provider_error_type": record.get("provider_error_type")
+                    or payload.get("provider_error_type")
+                    or error_fields.get("provider_error_type"),
+                    "provider_event_id": record.get("provider_event_id")
+                    or payload.get("provider_event_id")
+                    or error_fields.get("provider_event_id"),
                     "call_id": record.get("call_id") or payload.get("call_id"),
                     "suppressed_count": payload.get("suppressed_count"),
                     "stream_type": record.get("stream_type"),
@@ -992,6 +1029,62 @@ def _compact_text(value: Any, limit: int = 120) -> str | None:
         return None
     text = str(value).replace("\n", "\\n")
     return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _error_log_fields(value: Any) -> dict[str, str | None]:
+    """从 provider 或 SDK 错误对象中提取终端可读字段。
+
+    主要逻辑：provider 错误经常是嵌套 dict，或已经被 `str(dict)` 转成字符串。
+    这里尽量解析出稳定的 event_id、code/type/message，避免终端只看到一段被截断的
+    Python dict 字符串。
+    参数：`value` 为错误对象、字符串或包含 payload/error 的记录。
+    返回值：适合放入日志 extra 的字段。
+    异常情况：解析失败时回退到原始文本摘要。
+    """
+
+    parsed = _parse_error_value(value)
+    raw_message = _compact_text(value, limit=1000)
+    if not isinstance(parsed, dict):
+        return {"error_message": raw_message}
+    error_obj = parsed.get("error") if isinstance(parsed.get("error"), dict) else {}
+    payload = parsed.get("payload") if isinstance(parsed.get("payload"), dict) else {}
+    if not error_obj and isinstance(payload.get("error"), dict):
+        error_obj = payload.get("error") or {}
+    provider_message = (
+        error_obj.get("message")
+        or parsed.get("message")
+        or payload.get("message")
+        or parsed.get("error_message")
+        or raw_message
+    )
+    return {
+        "error_message": _compact_text(provider_message, limit=1000),
+        "provider_error_code": _compact_text(error_obj.get("code") or parsed.get("code") or payload.get("code"), limit=200),
+        "provider_error_type": _compact_text(error_obj.get("type") or parsed.get("type") or payload.get("type"), limit=200),
+        "provider_event_id": _compact_text(parsed.get("event_id") or payload.get("event_id"), limit=200),
+    }
+
+
+def _parse_error_value(value: Any) -> Any:
+    """解析错误值，兼容 dict、JSON 字符串和 Python dict 字符串。"""
+
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text[0] in "{[":
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        try:
+            return literal_eval(text)
+        except Exception:
+            return None
+    return None
 
 
 def _elapsed_ms(start: float | None, end: float) -> int | None:

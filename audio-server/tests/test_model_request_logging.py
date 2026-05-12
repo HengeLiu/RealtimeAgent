@@ -143,6 +143,71 @@ def test_system_error_logs_payload_details(tmp_path, caplog) -> None:
     assert (tmp_path / "runs" / "system-events.jsonl").exists()
 
 
+def test_system_error_logs_nested_provider_error_fields(tmp_path, caplog) -> None:
+    """测试目标：验证 provider 嵌套错误能在终端日志中拆出关键字段。
+
+    测试方法：记录一条 Qwen Realtime 返回的嵌套 error payload。
+    预期结果：终端 extra 能直接看到 provider_event_id、provider_error_code 和完整
+    provider message，不需要人工从被截断的 dict 字符串里找。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    event = Event(
+        event_name="system.error.raised",
+        user_id="user-log",
+        producer_id="server-main",
+        session_id="sess-log",
+        payload={
+            "message": {
+                "event_id": "event_XuPouKoleGtk6Z98GZMju",
+                "type": "error",
+                "error": {"code": "InternalError", "message": "Internal service error: null"},
+            },
+            "error_type": "AgentCoreError",
+            "component": "RealtimeProviderAdapter",
+        },
+    )
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_event(event)
+        recorder.record_system_event(event.to_dict())
+
+    assert any(getattr(record, "provider_event_id", None) == "event_XuPouKoleGtk6Z98GZMju" for record in caplog.records)
+    assert any(getattr(record, "provider_error_code", None) == "InternalError" for record in caplog.records)
+    assert any(getattr(record, "error_message", None) == "Internal service error: null" for record in caplog.records)
+
+
+def test_normal_control_event_does_not_log_payload_as_error_message(tmp_path, caplog) -> None:
+    """测试目标：验证普通控制事件不会把 payload 误写成 error_message。
+
+    测试方法：记录一条正常的 `stream.control.open.requested` 控制事件。
+    预期结果：终端日志保留 stream_type/request_id 等正常字段，但没有 error_message。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    event = Event(
+        event_name="stream.control.open.requested",
+        user_id="user-log",
+        producer_id="server-main",
+        session_id="sess-log",
+        stream_type="sensor.rgb",
+        payload={
+            "stream_type": "sensor.rgb",
+            "mode": "single",
+            "request_id": "asset_req_log",
+            "width": 960,
+            "height": 540,
+        },
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
+        recorder.record_event(event)
+
+    matched = [record for record in caplog.records if record.getMessage() == "控制事件 stream.control.open.requested"]
+    assert matched
+    assert not any(hasattr(record, "error_message") for record in matched)
+
+
 def test_realtime_provider_error_terminal_log_keeps_actionable_message(tmp_path, caplog) -> None:
     """测试目标：Realtime provider 错误日志不能截断关键错误信息。
 
@@ -173,7 +238,37 @@ def test_realtime_provider_error_terminal_log_keeps_actionable_message(tmp_path,
 
     error_messages = [getattr(record, "error_message", "") for record in caplog.records]
     assert any("Error append image before append audio." in item for item in error_messages)
-    assert any("invalid_request_error" in item for item in error_messages)
+    assert any(getattr(record, "provider_error_type", None) == "invalid_request_error" for record in caplog.records)
+
+
+def test_agent_event_logs_capture_photo_image_context(tmp_path, caplog) -> None:
+    """测试目标：验证图片回填关键上下文会出现在终端日志中。
+
+    测试方法：记录一次 `omni.capture_photo.image_appended` Agent 事件。
+    预期结果：终端 extra 包含图片哈希、图片字节数和重放音频大小，现场可以直接判断
+    模型看到的是哪张图以及一起回放了多少音频。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_agent_event(
+            "sess-log",
+            {
+                "event": "omni.capture_photo.image_appended",
+                "provider": "qwen",
+                "tool_call_id": "call-photo",
+                "tool_name": "capture_photo",
+                "image_bytes": 167512,
+                "image_sha256": "abc123",
+                "replayed_audio_bytes": 96000,
+                "replayed_audio_chunk_count": 30,
+            },
+        )
+
+    assert any(getattr(record, "image_sha256", None) == "abc123" for record in caplog.records)
+    assert any(getattr(record, "image_bytes", None) == 167512 for record in caplog.records)
+    assert any(getattr(record, "replayed_audio_bytes", None) == 96000 for record in caplog.records)
 
 
 def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) -> None:
