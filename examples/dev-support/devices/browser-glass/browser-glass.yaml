@@ -13,8 +13,8 @@ supports:
         format: jpeg
         frequency_hz: 1
         sample_count: 1
-        width: 1280
-        height: 720
+        width: 960
+        height: 540
       external:
         facing: environment
   actuators:

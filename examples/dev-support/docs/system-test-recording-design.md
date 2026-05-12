@@ -2,32 +2,58 @@
 
 更新时间：2026-05-12
 
-文档状态：下一阶段设计稿。本文记录通过 `browser-glass` 手动测试结果自动生成系统级 Case 草稿的方案，避免后续遗忘关键取舍。当前实现尚未完成，开发入口以本设计和后续开发计划为准。
+文档状态：下一阶段设计稿。本文记录新的定位：系统测试能力属于 `examples/dev-support` 下的特殊端侧实现，名称暂定为 `python-playback-glass`，即“眼镜回放设备”。它对 server 必须像普通端侧一样透明，不能成为 SDK 内部测试框架。
 
-## 1. 背景
+## 1. 核心定位
 
-当前仓库已经具备系统测试的基础能力：
+`python-playback-glass` 是一个开发支持端侧，不是 `audio_chat` SDK 内部模块。
 
-1. `testdata/audio-sample/` 保存了可回放的语音样例。
-2. `testdata/image-sample/` 保存了可作为 `sensor.rgb` fixture 的图片样例。
-3. `python-glass` playback 能用真实协议或 in-process 方式上传 `sensor.mic`、响应 `sensor.rgb` 请求并消费 `actuator.speaker`。
-4. `browser-glass` 能完成手动注册、唤醒、语音输入、图片上传和播放验证。
-5. server 的 runs 产物已经记录事件、stream、Agent、Tool、Task、资产和输出链路。
+它在系统中的身份是“一台可脚本化的眼镜设备”：
 
-下一阶段要做的不是普通单元测试，而是面向完整功能链路的系统级集成测试。测试 Case 应提前描述用户输入、设备行为和预期系统行为，每次修改代码后可以自动回放并检查所有 Case 是否仍通过。
+1. 通过 `/ws/control` 注册设备、发送控制事件、接收 server 控制事件。
+2. 通过 `/ws/stream` 上传 `sensor.mic`、`sensor.rgb` 等输入 stream。
+3. 通过 `/ws/stream` 接收 `actuator.speaker` 输出 stream，并按协议回执 `stream.output.started/finished/closed`。
+4. 按 Case 文件回放 `testdata/audio-sample/` 和 `testdata/image-sample/`。
+5. 读取 server 的 runs 产物做系统级断言。
 
-手写 Case YAML 成本较高，因此需要支持从一次真实手动联调中自动录制 Case 草稿：开发者先用 `browser-glass` 完成探索式测试，再由工具根据 runs 产物归纳出可回放、可维护的 Case 文件。
+server 不能知道它是测试框架。对 server 来说，它和 `browser-glass`、`python-glass`、真实眼镜没有本质区别，只是 client_type、device_id 和能力声明不同。
 
-## 2. 目标
+## 2. 明确禁止
+
+本方案禁止以下实现方式：
+
+1. 不在 `audio-server/audio_chat/` 下新增 `system_test` 之类测试框架目录。
+2. 不新增 `audio-chat.system-test.*` 这类 SDK CLI 入口。
+3. 不在回放端侧中实例化 `AudioChatApp`、`AudioChatConfig`。
+4. 不直接调用 `register_device()`、`publish_control_event()`、`open_input_stream()`、`write_input_chunk()`、`stream_service.close_stream()`。
+5. 不直接调用 `ToolGateway`、`TaskEngine`、`OutputService`、`AssetService` 或 server recorder。
+6. 不使用 in-process 模式作为系统测试主路径。
+7. 不把 Case Runner 做成 server 内部调度器。
+
+如果某个测试为了 SDK 单元或组件测试确实需要 in-process，那应放在 `audio-server/tests/`，并明确命名为组件测试；它不属于本文讨论的系统级端侧回放测试。
+
+## 3. 背景
+
+当前仓库已有可复用基础：
+
+1. `testdata/audio-sample/` 保存可回放的语音样例。
+2. `testdata/image-sample/` 保存可作为 `sensor.rgb` fixture 的图片样例。
+3. `browser-glass` 能完成手动注册、唤醒、语音输入、图片上传和播放验证。
+4. server runs 产物记录事件、stream、Agent、Tool、Task、资产和输出链路。
+5. `python-glass` 中已有部分网络 WebSocket 端侧逻辑，可以作为参考，但需要独立整理成 `python-playback-glass`。
+
+下一阶段要做的是系统级集成测试。测试 Case 应提前描述用户输入、设备行为和预期系统行为；每次改代码后，可以自动启动 server、启动回放设备、执行 Case，并检查所有预期是否满足。
+
+## 4. 目标
 
 本方案目标：
 
-1. 通过 `browser-glass` 手动跑通一次真实链路。
-2. 从 server runs 产物自动生成系统测试 Case 草稿。
-3. 生成的 Case 能复用 `testdata/audio-sample` 和 `testdata/image-sample`。
-4. Case 中保存稳定预期行为，而不是保存一次运行的所有动态细节。
-5. 后续通过系统测试 runner 自动回放 Case 并输出结构化报告。
-6. 失败时能指出是注册、控制事件、stream、Agent、Tool、Task、资产、输出还是系统错误层面失败。
+1. 支持从 `browser-glass` 手动测试 runs 产物生成 Case YAML 草稿。
+2. 支持 `python-playback-glass` 按 Case YAML 自动回放音频和图片。
+3. 回放设备只通过真实控制协议和数据流协议与 server 对话。
+4. 支持检查事件、stream、Tool、Task、资产、输出和系统错误。
+5. 支持输出结构化 `report.json`。
+6. 支持 pytest 或本地命令调用，但 pytest 只作为外层启动器，不直接调用 server 内部对象。
 
 非目标：
 
@@ -37,41 +63,41 @@
 4. 不要求每个 Case 一开始覆盖真机、真实模型和所有端侧。
 5. 不让 Case 文件保存 `event_id`、`timestamp_ms`、`stream_id` 等一次性动态字段。
 
-## 3. 总体流程
+## 5. 总体流程
 
 ```plantuml
 @startuml
-title 录制式系统测试流程
+title python-playback-glass 录制式系统测试流程
 
 actor Developer as Dev
 participant "browser-glass" as Browser
 participant "audio-chat server" as Server
 participant "runs artifacts" as Runs
-participant "Case Recorder" as Recorder
+participant "Case Recorder\n(dev-support)" as Recorder
 participant "Case YAML" as Case
-participant "System Test Runner" as Runner
+participant "python-playback-glass" as Playback
 
-Dev -> Browser: 开始录制 Case
-Browser -> Server: 注册设备和发送录制标记
-Dev -> Browser: 手动唤醒、输入音频、选择图片
-Browser -> Server: control events + stream chunks
+Dev -> Browser: 手动测试一次真实链路
+Browser -> Server: /ws/control 注册、唤醒、事件
+Browser -> Server: /ws/stream 上传音频/图片
 Server -> Runs: 写入事件、模型、工具、资产、输出产物
-Dev -> Browser: 结束录制
+Dev -> Recorder: 指定 runs_root/user_id/device_id 和样例文件
 Recorder -> Runs: 读取 session 产物
-Recorder -> Recorder: 归纳稳定断言
 Recorder -> Case: 生成 YAML 草稿
-Dev -> Case: 修改 id/name/断言严格度
-Runner -> Case: 加载 Case
-Runner -> Server: 启动测试 server 或 in-process app
-Runner -> Server: 注册模拟设备并回放输入
-Runner -> Runs: 读取新产物
-Runner -> Dev: 输出 report.json 和失败摘要
+Dev -> Case: 确认业务意图和断言严格度
+Dev -> Playback: 执行 Case 或 Suite
+Playback -> Server: /ws/control 注册为普通眼镜设备
+Playback -> Server: /ws/stream 回放 sensor.mic/sensor.rgb
+Server -> Playback: 下发 actuator.speaker
+Playback -> Server: 按协议回执输出播放状态
+Playback -> Runs: 读取本轮 server 产物
+Playback -> Dev: 输出 report.json 和失败摘要
 @enduml
 ```
 
-## 4. 分工边界
+## 6. 分工边界
 
-### 4.1 browser-glass
+### 6.1 browser-glass
 
 `browser-glass` 负责交互式手动测试：
 
@@ -82,11 +108,26 @@ Runner -> Dev: 输出 report.json 和失败摘要
 5. 播放 server 下发的 `actuator.speaker`。
 6. 在录制模式下记录用户选择的样例文件名和录制元数据。
 
-`browser-glass` 不负责完整推断系统 Case。它只知道前端行为，不完整知道 Agent、Tool、Task、资产缓存和播放仲裁是否符合预期。
+`browser-glass` 不负责推断完整 Case。它只提供手测入口和录制元数据；系统真相来自 server runs。
 
-### 4.2 server runs
+### 6.2 python-playback-glass
 
-server runs 是录制的主要真相来源：
+`python-playback-glass` 负责自动化回放：
+
+1. 加载 Case YAML。
+2. 使用 Case 中的设备声明注册为普通眼镜设备。
+3. 收到 `control.audio_session.open.requested` 后按协议回 `control.audio_session.opened`。
+4. 按音频 fixture 以真实 chunk 格式上传 `sensor.mic`。
+5. 收到 `stream.control.open.requested(sensor.rgb)` 后上传图片 fixture。
+6. 接收 `actuator.speaker` 二进制输出，统计 chunk 和字节数，并按协议回执。
+7. 等待 session 关闭或超时。
+8. 从 runs 产物读取证据并执行断言。
+
+它可以有一个外层 harness 启动 server，但 harness 与回放设备应保持分层：回放设备本身不能拿到 server 对象引用。
+
+### 6.3 server runs
+
+server runs 是录制和断言的主要真相来源：
 
 1. `events.jsonl`：控制面事件和会话生命周期。
 2. `stream-events.jsonl`：stream 生命周期和 chunk 摘要。
@@ -98,66 +139,71 @@ server runs 是录制的主要真相来源：
 8. `output-decisions.jsonl` / `playback-decisions.jsonl`：输出和播放仲裁。
 9. `system-events.jsonl`：系统错误、降级和恢复事件。
 
-### 4.3 Case Recorder
+### 6.4 Case Recorder
 
 Case Recorder 负责把一次运行归纳成 Case 草稿：
 
-1. 定位要录制的 `user_id`、`device_id`、`session_id`。
+1. 定位 `runs_root`、`user_id`、`device_id`、可选 `session_id`。
 2. 读取该 session 的 runs 产物。
-3. 推断输入音频和图片 fixture。
+3. 根据用户参数或 browser-glass 录制元数据填入音频和图片 fixture。
 4. 从事件和产物中抽取稳定断言。
 5. 过滤动态字段和高频 chunk 明细。
 6. 输出 YAML 草稿和录制摘要。
 
-第一阶段可以先做 CLI：
+第一阶段 CLI 应属于 dev-support 端侧工具，例如：
 
 ```bash
-uv run audio-chat.system-test.record \
+uv run python -m audio_chat_python_playback_glass record \
   --runs-root examples/for-blind-app/audio-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
-  --out examples/dev-support/system-tests/cases/draft/latest.yaml
+  --audio testdata/audio-sample/看一下我前面有什么.wav \
+  --image sensor.rgb=testdata/image-sample/刚子看电脑.jpeg \
+  --out examples/dev-support/devices/python-playback-glass/cases/draft/look_front.yaml
 ```
 
-后续再让 `browser-glass` 页面展示“导出 Case YAML”按钮。浏览器直接写仓库文件权限复杂，第一阶段可以只展示 YAML 文本供复制。
-
-### 4.4 System Test Runner
-
-System Test Runner 负责回放 Case：
-
-1. 加载 Case YAML。
-2. 启动 in-process app 或连接已有 server。
-3. 注册一个或多个模拟设备。
-4. 按 Case 上传音频、图片、视频或传感器数据。
-5. 等待系统完成输出、Task 或超时。
-6. 读取本轮 runs 产物。
-7. 执行断言并输出 `report.json`。
-
-## 5. Case 文件结构
-
-建议目录：
+## 7. 建议目录
 
 ```text
-examples/dev-support/system-tests/
+examples/dev-support/devices/python-playback-glass/
+  README.md
+  device.audio-chat.yaml
+  playback.glass.yaml
+  audio_chat_python_playback_glass/
+    __init__.py
+    __main__.py
+    cli.py
+    case_schema.py
+    recorder.py
+    runner.py
+    device.py
+    protocol_client.py
+    assertions.py
+    report.py
   cases/
     smoke/
-    vision/
-    memory/
-    tasks/
-    navigation/
     draft/
   suites/
     smoke.yaml
-    full.yaml
   reports/
+
+examples/dev-support/tests/python_playback_glass/
+  test_case_schema.py
+  test_recorder.py
+  test_protocol_client.py
+  test_smoke_suite.py
 ```
 
-Case 示例：
+这里的 `runner.py` 是端侧回放 runner，不是 SDK runner。它可以启动 `protocol_client.py` 连接 server，但不能导入 `audio_chat.app.AudioChatApp`。
+
+## 8. Case 文件结构
+
+Case 描述端侧行为和系统预期，不描述 server 内部对象。
 
 ```yaml
 id: look_front_001
 name: 看一下我前面有什么
-description: 使用音频样例触发看图工具，并要求设备上传一张 RGB 图片。
+description: 使用音频样例触发看图工具，并要求回放眼镜上传一张 RGB 图片。
 
 source:
   recorded_from: browser-glass
@@ -165,10 +211,21 @@ source:
   original_user_id: user-browser-glass-001
   original_device_id: dev-browser-glass-001
 
-app:
-  config: examples/for-blind-app/audio-server/server.yaml
-  agent_mode: text
-  providers: mock
+device:
+  user_id: user-system-test
+  device_id: dev-python-playback-glass
+  name: Python 回放眼镜
+  client_type: python-playback-glass
+  properties:
+    audio_chat.audio_input: sensor.mic
+    audio_chat.audio_output: actuator.speaker
+  supports:
+    sensors:
+      - type: rgb
+        modes: [single, continuous]
+    actuators:
+      - type: vibrator
+        commands: [vibrate]
 
 inputs:
   audio:
@@ -180,21 +237,6 @@ inputs:
       fixtures:
         - path: testdata/image-sample/刚子看电脑.jpeg
           codec: jpeg
-
-devices:
-  - id: glass
-    device_id: dev-system-test-glass
-    user_id: user-system-test
-    system_audio:
-      input: sensor.mic
-      output: actuator.speaker
-    supports:
-      sensors:
-        - type: rgb
-          modes: [single, continuous]
-      actuators:
-        - type: vibrator
-          commands: [vibrate]
 
 expect:
   events:
@@ -220,7 +262,9 @@ expect:
     disallow_system_error: true
 ```
 
-## 6. 录制归纳规则
+`server_url`、server 启动命令、provider 配置和 runs 根目录应由命令行、环境变量或 suite 运行配置提供，不写进单个 Case 的端侧契约里。
+
+## 9. 录制归纳规则
 
 录制器不能把一次手动运行原样变成全量断言。它需要把动态事实归纳成稳定预期。
 
@@ -256,7 +300,7 @@ expect:
 | 本次无系统错误 | `errors.disallow_system_error: true` |
 | 本次模型请求包含某工具 | `model_request.tools.includes` 包含工具名 |
 
-## 7. 测试 Lane
+## 10. 测试 Lane
 
 建议至少三条 lane：
 
@@ -268,9 +312,9 @@ expect:
 
 第一阶段优先实现 `smoke`，避免被真实模型波动拖慢开发。
 
-## 8. 失败报告
+## 11. 失败报告
 
-Runner 输出的 `report.json` 应包含：
+`python-playback-glass` 输出的 `report.json` 应包含：
 
 ```json
 {
@@ -290,7 +334,7 @@ Runner 输出的 `report.json` 应包含：
           "actual": []
         }
       ],
-      "runs_dir": "examples/for-blind-app/audio-server/runs/user-system-test/dev-system-test-glass"
+      "runs_dir": "examples/for-blind-app/audio-server/runs/user-system-test/dev-python-playback-glass"
     }
   ]
 }
@@ -298,16 +342,14 @@ Runner 输出的 `report.json` 应包含：
 
 命令行输出只展示摘要和失败定位，详细证据保留到 report 和 runs 产物。
 
-## 9. 注意点
+## 12. 注意点
 
 1. Case 文件是系统行为契约，不是某次日志的拷贝。
-2. 录制器必须默认生成“宽松但有效”的断言，避免后续因为时间戳、chunk 数或模型措辞变化产生误报。
+2. 录制器默认生成“宽松但有效”的断言，避免后续因为时间戳、chunk 数或模型措辞变化产生误报。
 3. 对真实 provider 的 Case 不能逐字断言 assistant 文本；mock provider lane 可以更严格。
 4. 图片、音频、视频等输入应引用 `testdata` 文件路径，不把媒体字节写进 YAML。
 5. 录制时如果使用了本地临时图片，应提示复制到 `testdata/image-sample/` 后再生成可提交 Case。
 6. 录制时如果使用了真实用户音频、图片或视频，默认不生成可提交 Case，除非明确指定脱敏路径。
-7. 系统测试不能绕过 Control Service、Stream Service、Asset Service 和 Output Service。
-8. 第一阶段可以复用 `PythonPlaybackEndpoint.run_scripted()`，不要急着重写完整模拟器。
-9. 后续统一 `python-device-sim` 时，应让 Case Runner 复用同一套场景定义。
-10. 文档中的测试结果必须来自真实命令结果；设计阶段不要写“已通过”。
-
+7. 系统测试必须覆盖真实 Control WebSocket、Stream WebSocket、资产写入和输出回执。
+8. `python-playback-glass` 可以复用协议编码、设备能力声明和测试样例，但不能复用 server 内部对象。
+9. 文档中的测试结果必须来自真实命令结果；设计阶段不要写“已通过”。

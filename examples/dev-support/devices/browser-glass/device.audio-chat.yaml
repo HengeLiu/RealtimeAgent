@@ -21,29 +21,10 @@ supports:
         frequency_hz: 1
         sample_count: 1
         duration_seconds: 0
-        width: 1280
-        height: 720
+        width: 960
+        height: 540
       external:
         facing: environment
-    - type: imu
-      modes: [continuous]
-      default:
-        frequency_hz: 30
-        sample_count: 0
-        duration_seconds: 0
-      external:
-        axes: [accel, gyro]
-    - type: tof
-      modes: [single, continuous]
-      default:
-        format: png
-        frequency_hz: 5
-        sample_count: 1
-        duration_seconds: 0
-        width: 320
-        height: 240
-      external:
-        unit: millimeter
   actuators:
     - type: vibrator
       commands: [vibrate]

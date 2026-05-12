@@ -8,10 +8,9 @@
 2. 手动发送 wake / interrupt / close / heartbeat 等控制事件。
 3. 使用真实麦克风进行全链路实时对话。
 4. 上传 WAV / PCM 文件，按真实时间模拟 `sensor.mic` 长连接。
-5. 快速回放离线音频，用于复现 server 或 Agent Core 问题。
-6. 使用摄像头、图片或视频文件响应 `sensor.rgb` 请求。
-7. 播放 server 下发的 `actuator.speaker` 音频。
-8. 模拟 `actuator.haptic` 执行器。
+5. 使用摄像头或图片样例响应 `sensor.rgb` 请求。
+6. 播放 server 下发的 `actuator.speaker` 音频。
+7. 模拟 `actuator.haptic` 执行器。
 
 ## 启动
 
@@ -61,12 +60,5 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 
 1. `真实麦克风实时对话`：使用浏览器麦克风持续上传 `sensor.mic`。
 2. `离线音频实时注入`：把本地音频按 20ms chunk 发送，模拟真实长连接。
-3. `离线音频快速回放`：尽快上传完整音频，只用于复现问题。
 
-离线实时注入支持文件结束后的三种策略：
-
-1. `保持连接并发送静音`
-2. `保持连接但暂停发送`
-3. `关闭麦克风 stream`
-
-连续对话和 Omni Realtime 测试优先使用“保持连接并发送静音”。
+离线实时注入会在文件末尾追加短静音尾巴，发送 final chunk 后进入可继续上传下一段的暂停状态。快速批量回放和 CI 验收不由 browser-glass 承担，后续由 `python-playback-glass` 负责。
