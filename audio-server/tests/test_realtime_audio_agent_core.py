@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 
 from audio_chat.agent_core.realtime import (
+    OMNI_REALTIME_IMAGE_MAX_BYTES,
     MockRealtimeProviderAdapter,
     RealtimeAudioAgentCore,
     RealtimeProviderCallbacks,
     RealtimeProviderConfig,
     RealtimeToolBridge,
+    _prepare_omni_realtime_image,
 )
 from audio_chat.app import AudioChatApp, AudioChatConfig
+from audio_chat.asset.service import AssetRef
 from audio_chat.protocol import Event, StreamChunk, StreamFormat
 from audio_chat.tools import BaseTool, ToolContext, ToolResult
 
@@ -53,6 +58,28 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
     )
 
 
+def register_speaker_and_rgb(app: AudioChatApp, connection: Connection, user_id: str = "user-001") -> None:
+    """注册一个同时支持扬声器和 RGB 单帧采集的测试端侧。"""
+
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=user_id,
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {
+                    "sensors": [{"type": "rgb", "modes": ["single", "continuous"]}],
+                    "actuators": [],
+                },
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+
+
 class FakeRealtimeProvider:
     """测试用 fake realtime provider。
 
@@ -64,6 +91,7 @@ class FakeRealtimeProvider:
         self.config = config
         self.callbacks: RealtimeProviderCallbacks | None = None
         self.appended: list[StreamChunk] = []
+        self.images: list[tuple[bytes, dict]] = []
         self.cancelled = False
         self.closed = False
 
@@ -108,6 +136,10 @@ class FakeRealtimeProvider:
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """记录输入提交并模拟 provider 输出完成。"""
         self.emit_done()
+
+    def append_image(self, image: bytes, *, user_id: str, session_id: str, metadata: dict | None = None) -> None:
+        """记录追加到 fake provider 的图片。"""
+        self.images.append((image, dict(metadata or {})))
 
     def cancel(self, *, user_id: str, reason: str) -> None:
         """记录 cancel 调用。"""
@@ -244,6 +276,34 @@ def _new_fake(config: RealtimeProviderConfig, instances: list[FakeRealtimeProvid
     return fake
 
 
+class FakeAssetService:
+    """测试用资产服务。
+
+    主要功能：模拟 `sensor.rgb` 单帧请求，每次返回同一个本地 JPEG 文件引用。
+    主要属性：`request_count` 记录服务端向端侧请求视觉帧的次数。
+    """
+
+    def __init__(self, image_path: Path) -> None:
+        self.image_path = image_path
+        self.request_count = 0
+
+    def request_asset(self, **kwargs) -> AssetRef:
+        """返回一帧本地测试图片。"""
+
+        self.request_count += 1
+        return AssetRef(
+            asset_id=f"asset-test-{self.request_count}",
+            user_id=str(kwargs.get("user_id") or "user-001"),
+            session_id=str(kwargs.get("session_id") or "sess-001"),
+            stream_type=str(kwargs.get("stream_type") or "sensor.rgb"),
+            mime_type="image/jpeg",
+            created_at_ms=int(time.time() * 1000),
+            uri=str(self.image_path),
+            size_bytes=self.image_path.stat().st_size,
+            metadata={"request_count": self.request_count},
+        )
+
+
 def test_realtime_append_audio_does_not_require_final_and_opens_speaker_stream(tmp_path) -> None:
     """测试目标：验证 realtime core 不依赖浏览器发送 final 即可处理音频。
 
@@ -340,6 +400,93 @@ def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
 
     assert instances[0].cancelled is True
     assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
+
+
+def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> None:
+    """测试目标：验证 Omni Realtime 语音 turn 内会按间隔追加 RGB 图片。
+
+    测试方法：注入 fake realtime provider 和 fake asset service，模拟 provider
+    上报 `speech_started`，等待后台视觉采样线程请求图片并 append 到 provider，
+    再模拟 `speech_stopped` 停止采样。
+    预期结果：fake provider 至少收到一张图片，runs 中记录视觉采样开始、追加和停止，
+    并向端侧下发 `sensor.rgb` 关闭请求。
+    """
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = FakeAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.1,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.open("user-001", "sess-visual")
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-visual",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    deadline = time.time() + 1
+    while time.time() < deadline and not instances[0].images:
+        time.sleep(0.02)
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-visual",
+        record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "fake"},
+    )
+
+    assert asset_service.request_count >= 1
+    assert instances[0].images
+    assert instances[0].images[0][0] == image_path.read_bytes()
+    assert instances[0].images[0][1]["frame_index"] == 0
+    agent_events = (tmp_path / "runs" / "user-001" / "sess-visual" / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "realtime.visual_sampler.started" in agent_events
+    assert "realtime.visual_frame.appended" in agent_events
+    assert "realtime.visual_sampler.stopped" in agent_events
+    assert "realtime.visual_stream.close.requested" in agent_events
+    assert any(
+        event.event_name == "stream.control.close.requested" and event.stream_type == "sensor.rgb"
+        for event in connection.events
+    )
+
+
+def test_prepare_omni_realtime_image_compresses_large_jpeg() -> None:
+    """测试目标：验证发送给 Omni Realtime 前会把大图压到安全大小。
+
+    测试方法：用 OpenCV 构造一张高噪声 JPEG，大于 provider WebSocket 单帧安全阈值，
+    调用服务端图片预处理函数。
+    预期结果：返回 JPEG 小于 `OMNI_REALTIME_IMAGE_MAX_BYTES`，并带有压缩诊断信息。
+    """
+
+    import cv2  # type: ignore[import-not-found]
+    import numpy as np  # type: ignore[import-not-found]
+
+    rng = np.random.default_rng(42)
+    image = rng.integers(0, 256, size=(1200, 1600, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    assert ok
+    original = encoded.tobytes()
+    assert len(original) > OMNI_REALTIME_IMAGE_MAX_BYTES
+
+    prepared, metadata = _prepare_omni_realtime_image(original)
+
+    assert len(prepared) <= OMNI_REALTIME_IMAGE_MAX_BYTES
+    assert metadata["image_compressed"] is True
+    assert metadata["original_image_bytes"] == len(original)
 
 
 def test_realtime_provider_failure_suppresses_repeated_append_errors(tmp_path) -> None:
@@ -452,7 +599,8 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     """测试目标：验证 Omni Realtime 也有等价 model request 和工具 schema。
 
     测试方法：注册一个测试 Tool，注入 fake realtime provider，写入一片 mic chunk 打开会话。
-    预期结果：provider config 收到扁平 function schema，runs 中落盘 messages/tools 快照。
+    预期结果：provider config 收到扁平 function schema；视觉类工具被 realtime
+    内联图片链路替代，不再暴露给 Omni。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -490,7 +638,7 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
 
     tool_names = {tool["name"] for tool in instances[0].config.tools}
     assert "echo_realtime" in tool_names
-    assert "capture_photo" in tool_names
+    assert "capture_photo" not in tool_names
     assert "interpret_current_view" not in tool_names
     model_request = (tmp_path / "runs" / "user-001" / handle.session_id / "model-request.json").read_text(
         encoding="utf-8"
@@ -499,7 +647,7 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     assert "input_audio_stream" in model_request
     assert "你是测试用 Omni 助手。" in model_request
     assert "echo_realtime" in model_request
-    assert "capture_photo" in model_request
+    assert "capture_photo" not in model_request
     assert "interpret_current_view" not in model_request
 
 

@@ -117,11 +117,14 @@ class AgentRealtimeConfig:
     instructions: str = "你是中文语音助手。请用简短口语回答用户。"
     session_idle_timeout_seconds: int = 60
     custom_adapter: str = ""
+    visual_frame_interval_seconds: float = 1.0
+    visual_frame_timeout_seconds: float = 1.5
+    visual_frame_freshness_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
 class AgentConfig:
-    mode: str = "text"
+    mode: str = "realtime_audio"
     custom_core: str = ""
     realtime: AgentRealtimeConfig = field(default_factory=AgentRealtimeConfig)
     text: AgentTextConfig = field(default_factory=AgentTextConfig)
@@ -260,7 +263,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     data = _apply_path_defaults(data)
     text = data.get("agent", {}).get("text", {})
     agent_data = dict(data.get("agent", {}))
-    agent_mode = str(agent_data.get("mode") or "").strip() or "text"
+    agent_mode = str(agent_data.get("mode") or "").strip() or "realtime_audio"
     return AudioChatYamlConfig(
         app_name=str(data.get("app_name") or data.get("app-name") or ""),
         paths=PathConfig(**_known(data.get("paths", {}), {"runtime_root"})),
@@ -272,7 +275,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         audio_pipeline=AudioPipelineConfig(**data.get("audio_pipeline", {})),
         asset=AssetConfig(**data.get("asset", {})),
         agent=AgentConfig(
-            mode=agent_mode or "text",
+            mode=agent_mode or "realtime_audio",
             custom_core=agent_data.get("custom_core", ""),
             realtime=AgentRealtimeConfig(**agent_data.get("realtime", {})),
             text=AgentTextConfig(**text),

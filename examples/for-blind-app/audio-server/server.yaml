@@ -68,14 +68,17 @@ asset:
 
 agent:
   # mode: "text"
-  mode: "realtime"
+  mode: "realtime_audio"
   realtime:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"
     turn_detection: "provider"
     voice: "Tina"
-    instructions: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。用户询问眼前、前方、当前画面、障碍物、文字、路况等实时视觉内容时，应优先调用 capture_photo 获取当前图片；如果当前回合已经提交了抓拍图片，必须直接基于最新图片回答，不要再次调用 capture_photo。不要输出代码块。"
+    instructions: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。每个用户语音输入期间，系统可能会持续附带当前视野图片。如果用户的问题明确涉及图片、眼前、前面、看到的画面、这是什么、周围有什么等视觉内容，请直接基于这些图片简短回答。如果用户的问题不涉及视觉内容，例如看天气、看路线、看资料、看状态、计时器、提醒、闲聊，请直接回答用户问题，不要描述图片，也不要提到你收到了图片。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的非视觉工具。不要输出代码块。"
     session_idle_timeout_seconds: 60
+    visual_frame_interval_seconds: 1.0
+    visual_frame_timeout_seconds: 1.5
+    visual_frame_freshness_seconds: 0.0
     custom_adapter: ""
   text:
     model_provider: "dashscope-compatible"

@@ -108,6 +108,7 @@
     const RGB_CAPTURE_MAX_WIDTH = 960;
     const RGB_CAPTURE_MAX_HEIGHT = 540;
     const RGB_JPEG_QUALITY = 0.78;
+    const RGB_JPEG_MAX_BYTES = 180000;
     const BARGE_IN_RMS_THRESHOLD = 0.055;
     const BARGE_IN_REQUIRED_FRAMES = 8;
     const BARGE_IN_MAX_PEAK = 0.72;
@@ -1032,26 +1033,19 @@
       if (!files.length) throw new Error("请选择图片文件");
       const images = [];
       for (const file of files) {
-        const blob = file.type === "image/jpeg" ? file : await imageFileToJpegBlob(file);
-        const size = await readImageSize(blob);
-        images.push({bytes: new Uint8Array(await blob.arrayBuffer()), width: size.width, height: size.height});
+        images.push(await imageFileToJpegFrame(file));
       }
       return images;
     }
 
-    async function imageFileToJpegBlob(file) {
+    async function imageFileToJpegFrame(file) {
       const bitmap = await createImageBitmap(file);
       const canvas = document.createElement("canvas");
       const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / bitmap.width, RGB_CAPTURE_MAX_HEIGHT / bitmap.height);
       canvas.width = Math.max(1, Math.round(bitmap.width * scale));
       canvas.height = Math.max(1, Math.round(bitmap.height * scale));
       canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      return await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", RGB_JPEG_QUALITY));
-    }
-
-    async function readImageSize(blob) {
-      const bitmap = await createImageBitmap(blob);
-      return {width: bitmap.width, height: bitmap.height};
+      return await encodeBoundedJpegFrame(canvas, canvas.width, canvas.height);
     }
 
     async function captureLiveCameraFrame() {
@@ -1099,9 +1093,35 @@
       canvas.height = height;
       canvas.getContext("2d").drawImage(video, 0, 0, width, height);
       video.pause();
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", RGB_JPEG_QUALITY));
-      if (!blob) throw new Error("jpeg encode failed");
-      return {bytes: new Uint8Array(await blob.arrayBuffer()), width, height};
+      return await encodeBoundedJpegFrame(canvas, width, height);
+    }
+
+    async function encodeBoundedJpegFrame(sourceCanvas, sourceWidth, sourceHeight) {
+      const qualities = [RGB_JPEG_QUALITY, 0.68, 0.58, 0.48, 0.38, 0.3];
+      const scales = [1, 0.85, 0.7, 0.55, 0.4, 0.3];
+      let best = null;
+      for (const scale of scales) {
+        const width = Math.max(1, Math.round(sourceWidth * scale));
+        const height = Math.max(1, Math.round(sourceHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height);
+        for (const quality of qualities) {
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+          if (!blob) continue;
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          if (!best || bytes.byteLength < best.bytes.byteLength) {
+            best = {bytes, width, height, quality};
+          }
+          if (bytes.byteLength <= RGB_JPEG_MAX_BYTES) {
+            return {bytes, width, height};
+          }
+        }
+      }
+      if (!best) throw new Error("jpeg encode failed");
+      log(`jpeg frame still large after compression bytes=${best.bytes.byteLength}`);
+      return {bytes: best.bytes, width: best.width, height: best.height};
     }
 
     async function openAudioInput() {

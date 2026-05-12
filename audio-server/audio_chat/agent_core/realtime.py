@@ -4,20 +4,24 @@ import base64
 import hashlib
 import json
 import os
+import threading
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from audio_chat.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
+from audio_chat.asset.service import AssetService
 from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService
 from audio_chat.output.service import OutputItem
-from audio_chat.protocol import StreamChunk, StreamFormat
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat
 from audio_chat.tools import ToolGateway
 
-TEXT_ONLY_VISION_TOOLS = {"interpret_current_view", "interpret_image"}
+REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
+OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
 
 
 def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -65,6 +69,9 @@ class RealtimeProviderConfig:
     websocket_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     instructions: str = "你是中文语音助手。请用简短口语回答用户。"
     tools: list[dict[str, Any]] = field(default_factory=list)
+    visual_frame_interval_seconds: float = 1.0
+    visual_frame_timeout_seconds: float = 1.5
+    visual_frame_freshness_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,9 @@ class RealtimeProviderAdapter(Protocol):
     def append_audio(self, chunk: StreamChunk) -> None:
         ...
 
+    def append_image(self, image: bytes, *, user_id: str, session_id: str, metadata: dict[str, Any] | None = None) -> None:
+        ...
+
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         ...
 
@@ -127,6 +137,8 @@ class QwenOmniRealtimeAdapter:
         self._pending_tool_followup_response: dict[str, Any] | None = None
         self._suppress_current_response_audio = False
         self._current_response_audio_emitted = False
+        self._session_updated = threading.Event()
+        self._operation_lock = threading.RLock()
 
     def open(self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks) -> None:
         """建立 Omni Realtime 会话。
@@ -140,6 +152,7 @@ class QwenOmniRealtimeAdapter:
         if self._conversation is not None:
             return
         self._completed_tool_call_ids.clear()
+        self._session_updated.clear()
         api_key = os.getenv("DASHSCOPE_API_KEY")
         if not api_key:
             raise RuntimeError("DASHSCOPE_API_KEY is required for Qwen Omni Realtime")
@@ -197,7 +210,9 @@ class QwenOmniRealtimeAdapter:
         }
         if self.config.tools:
             session_update_kwargs["tools"] = self.config.tools
-        self._conversation.update_session(**session_update_kwargs)
+        with self._operation_lock:
+            self._conversation.update_session(**session_update_kwargs)
+        session_updated = self._session_updated.wait(timeout=5)
         callbacks.provider_event(
             {
                 "event": "omni.session.opened",
@@ -208,6 +223,7 @@ class QwenOmniRealtimeAdapter:
                 "output_audio": "pcm16le/24000/mono",
                 "turn_detection": turn_detection_type,
                 "tool_count": len(self.config.tools),
+                "session_updated": session_updated,
             }
         )
 
@@ -222,10 +238,42 @@ class QwenOmniRealtimeAdapter:
         """
         if self._conversation is None:
             raise RuntimeError("Realtime provider session is not opened")
-        if chunk.payload:
-            self._conversation.append_audio(base64.b64encode(chunk.payload).decode("ascii"))
+        with self._operation_lock:
+            if chunk.payload:
+                self._conversation.append_audio(base64.b64encode(chunk.payload).decode("ascii"))
         if chunk.final:
             self.commit_input(user_id=chunk.user_id, session_id=chunk.session_id, reason="final_chunk")
+
+    def append_image(self, image: bytes, *, user_id: str, session_id: str, metadata: dict[str, Any] | None = None) -> None:
+        """向当前 Omni Realtime turn 追加一张图片。
+
+        主要逻辑：把 server 侧刚收到的 `sensor.rgb` JPEG bytes 通过 DashScope
+        `append_video` 追加到同一条 Realtime 会话。发送前会按 Omni WebSocket
+        单帧限制压缩，避免 base64 后超过 provider frame 上限。
+        参数：`image` 为 JPEG/PNG bytes；`metadata` 用于日志诊断。
+        返回值：无。
+        异常情况：provider 未打开或 SDK 不支持图片追加时抛出异常。
+        """
+
+        if self._conversation is None:
+            raise RuntimeError("Realtime provider session is not opened")
+        append_video = getattr(self._conversation, "append_video", None)
+        if not callable(append_video):
+            raise RuntimeError("Realtime provider conversation does not support append_video")
+        prepared_image, image_metadata = _prepare_omni_realtime_image(image)
+        with self._operation_lock:
+            append_video(base64.b64encode(prepared_image).decode("ascii"))
+        if self._callbacks:
+            self._callbacks.provider_event(
+                {
+                    "event": "omni.input_image_buffer.appended",
+                    "provider": "qwen",
+                    "image_bytes": len(prepared_image),
+                    "image_sha256": hashlib.sha256(prepared_image).hexdigest(),
+                    **dict(metadata or {}),
+                    **image_metadata,
+                }
+            )
 
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """提交 provider 输入边界。
@@ -245,7 +293,8 @@ class QwenOmniRealtimeAdapter:
             if not callable(commit):
                 commit = getattr(self._conversation, "commit_input_audio", None)
             if callable(commit):
-                commit()
+                with self._operation_lock:
+                    commit()
                 if self._callbacks:
                     self._callbacks.provider_event(
                         {
@@ -278,7 +327,8 @@ class QwenOmniRealtimeAdapter:
         if self._conversation is None:
             return
         try:
-            self._conversation.cancel_response()
+            with self._operation_lock:
+                self._conversation.cancel_response()
         except Exception as exc:  # noqa: BLE001 - provider SDK may raise transport-specific errors
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.response.cancel.failed", "reason": reason})
@@ -294,7 +344,8 @@ class QwenOmniRealtimeAdapter:
         if self._conversation is None:
             return
         try:
-            self._conversation.close()
+            with self._operation_lock:
+                self._conversation.close()
         except Exception as exc:  # noqa: BLE001
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.session.close.failed", "reason": reason})
@@ -311,6 +362,8 @@ class QwenOmniRealtimeAdapter:
         if callbacks is None:
             return
         event_type = str(message.get("type") or "")
+        if event_type == "session.updated":
+            self._session_updated.set()
         if event_type == "response.created":
             self._suppress_current_response_audio = False
             self._current_response_audio_emitted = False
@@ -495,13 +548,14 @@ class QwenOmniRealtimeAdapter:
         if self._conversation is None or not call_id:
             return
         try:
-            self._conversation.create_item(
-                {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": json.dumps(result, ensure_ascii=False, default=str),
-                }
-            )
+            with self._operation_lock:
+                self._conversation.create_item(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result, ensure_ascii=False, default=str),
+                    }
+                )
             image_path = _resolve_capture_photo_tool_image_path(result)
             image_bytes = image_path.read_bytes() if image_path is not None else None
             create_followup_response = True
@@ -529,10 +583,12 @@ class QwenOmniRealtimeAdapter:
                         for audio in replay_audio:
                             if audio:
                                 append_audio(base64.b64encode(audio).decode("ascii"))
-                        append_video(base64.b64encode(image_bytes).decode("ascii"))
+                        with self._operation_lock:
+                            append_video(base64.b64encode(image_bytes).decode("ascii"))
                         commit = getattr(self._conversation, "commit", None)
                         if callable(commit):
-                            commit()
+                            with self._operation_lock:
+                                commit()
                         if self._callbacks:
                             self._callbacks.provider_event(
                                 {
@@ -599,10 +655,11 @@ class QwenOmniRealtimeAdapter:
         pending = self._pending_tool_followup_response
         self._pending_tool_followup_response = None
         try:
-            self._conversation.create_response(
-                instructions=pending.get("instructions"),
-                output_modalities=pending.get("output_modalities"),
-            )
+            with self._operation_lock:
+                self._conversation.create_response(
+                    instructions=pending.get("instructions"),
+                    output_modalities=pending.get("output_modalities"),
+                )
             if self._callbacks:
                 self._callbacks.provider_event(
                     {
@@ -657,6 +714,56 @@ def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | Non
         if candidate.is_file():
             return candidate.resolve()
     return None
+
+
+def _prepare_omni_realtime_image(image: bytes, *, max_bytes: int = OMNI_REALTIME_IMAGE_MAX_BYTES) -> tuple[bytes, dict[str, Any]]:
+    """把图片压缩到 Omni Realtime 单个 WebSocket frame 的安全范围内。
+
+    主要逻辑：provider 的 frame 限制按 base64 后的 JSON 帧计算，原始 JPEG 接近
+    256KB 时仍可能超限。这里把原始图片压到约 180KB 以下，给 base64 和 JSON 字段
+    预留空间。优先降低 JPEG 质量，再逐步缩小尺寸。
+    参数：`image` 为原始图片 bytes；`max_bytes` 是压缩后目标大小。
+    返回值：压缩后的图片 bytes 以及诊断元数据。
+    异常情况：图片无法解码或压缩后仍超限时抛出 `ValueError`。
+    """
+
+    if len(image) <= max_bytes:
+        return image, {"original_image_bytes": len(image), "image_compressed": False}
+    try:
+        import cv2  # type: ignore[import-not-found]
+        import numpy as np  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001 - 缺少图像依赖时给出明确错误
+        raise ValueError(f"image is too large for Omni Realtime and image compression dependency is unavailable: {exc}") from exc
+
+    decoded = cv2.imdecode(np.frombuffer(image, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ValueError(f"image is too large for Omni Realtime and cannot be decoded: bytes={len(image)}")
+
+    best: bytes | None = None
+    best_shape: tuple[int, int] | None = None
+    height, width = decoded.shape[:2]
+    for scale in (1.0, 0.85, 0.7, 0.55, 0.4, 0.3, 0.22):
+        target_width = max(1, int(width * scale))
+        target_height = max(1, int(height * scale))
+        resized = decoded if scale == 1.0 else cv2.resize(decoded, (target_width, target_height), interpolation=cv2.INTER_AREA)
+        for quality in (78, 68, 58, 48, 38, 30):
+            ok, encoded = cv2.imencode(".jpg", resized, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            if not ok:
+                continue
+            candidate = encoded.tobytes()
+            if best is None or len(candidate) < len(best):
+                best = candidate
+                best_shape = (target_width, target_height)
+            if len(candidate) <= max_bytes:
+                return candidate, {
+                    "original_image_bytes": len(image),
+                    "image_compressed": True,
+                    "compressed_image_bytes": len(candidate),
+                    "compressed_width": target_width,
+                    "compressed_height": target_height,
+                    "compressed_jpeg_quality": quality,
+                }
+    raise ValueError(f"image is too large for Omni Realtime after compression: original={len(image)} best={len(best) if best else 0}")
 
 
 def _capture_photo_response_instructions(base: str) -> str:
@@ -741,6 +848,19 @@ class MockRealtimeProviderAdapter:
             )
         if chunk.final:
             self.commit_input(user_id=chunk.user_id, session_id=chunk.session_id, reason="final_chunk")
+
+    def append_image(self, image: bytes, *, user_id: str, session_id: str, metadata: dict[str, Any] | None = None) -> None:
+        """记录 mock 图片输入。"""
+
+        if self._callbacks is not None:
+            self._callbacks.provider_event(
+                {
+                    "event": "mock_realtime.input_image.appended",
+                    "provider": "mock",
+                    "image_bytes": len(image),
+                    **dict(metadata or {}),
+                }
+            )
 
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """提交 mock 输入边界并结束音频输出。"""
@@ -851,7 +971,7 @@ class RealtimeToolBridge:
         return [
             schema
             for schema in self.tool_gateway.provider_schemas()
-            if _provider_tool_schema_name(schema) not in TEXT_ONLY_VISION_TOOLS
+            if _provider_tool_schema_name(schema) not in REALTIME_INLINE_VISION_TOOLS
         ]
 
     def append_tool_call_delta(
@@ -941,6 +1061,7 @@ class RealtimeAudioAgentCore:
         output_service: OutputService,
         recorder: RunRecorder,
         control_service: ControlService | None = None,
+        asset_service: AssetService | None = None,
         realtime_config: RealtimeProviderConfig | None = None,
         provider_factory: Callable[[RealtimeProviderConfig], RealtimeProviderAdapter] | None = None,
         tool_gateway: ToolGateway | None = None,
@@ -951,6 +1072,7 @@ class RealtimeAudioAgentCore:
         self.output_service = output_service
         self.recorder = recorder
         self.control_service = control_service
+        self.asset_service = asset_service
         self.realtime_config = realtime_config or RealtimeProviderConfig()
         self.memory_service = memory_service
         self.max_context_messages = max(1, int(max_context_messages or 30))
@@ -965,6 +1087,8 @@ class RealtimeAudioAgentCore:
         self._recorded_user_transcripts: set[tuple[str, str]] = set()
         self._active_user_audio_by_session: dict[str, list[bytes]] = {}
         self._last_user_audio_by_session: dict[str, list[bytes]] = {}
+        self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
+        self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -1140,6 +1264,8 @@ class RealtimeAudioAgentCore:
         """
         existing = self._sessions.pop(user_id, None)
         session_id = existing[0] if existing else None
+        if session_id:
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
         if existing:
             existing[1].close(user_id=user_id, reason=reason)
         if session_id:
@@ -1292,7 +1418,7 @@ class RealtimeAudioAgentCore:
             return []
         tools: list[dict[str, Any]] = []
         for schema in self.tool_bridge.tool_gateway.provider_schemas():
-            if _provider_tool_schema_name(schema) in TEXT_ONLY_VISION_TOOLS:
+            if _provider_tool_schema_name(schema) in REALTIME_INLINE_VISION_TOOLS:
                 continue
             function = schema.get("function") if isinstance(schema, dict) else None
             if isinstance(function, dict):
@@ -1468,12 +1594,233 @@ class RealtimeAudioAgentCore:
         """记录 provider 事件到 runs 和统一事件缓存。"""
 
         self.recorder.record_agent_event(session_id, record)
+        self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
             str(record.get("event") or "provider.event"),
             user_id=user_id,
             session_id=session_id,
             payload=dict(record),
+        )
+
+    def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """根据 provider VAD 事件启动或停止视觉帧采样。
+
+        主要逻辑：Omni VAD 模式下，语音开始后每秒向端侧请求一帧 `sensor.rgb`，
+        收到资产后追加到同一条 Realtime 会话；输入提交后停止采样。这样避免只在
+        单一时间点提交图片导致图片没有进入当前 turn。
+        """
+
+        event = str(record.get("event") or "")
+        if event == "omni.input_audio_buffer.speech_started":
+            self._start_visual_sampler(user_id=user_id, session_id=session_id)
+        elif event == "omni.input_audio_buffer.speech_stopped":
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=event)
+        elif event == "omni.response.done":
+            # 理论上 provider VAD 会先给 speech_stopped；这里作为异常兜底，避免采样线程泄漏。
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=event)
+
+    def _start_visual_sampler(self, *, user_id: str, session_id: str) -> None:
+        """启动当前 turn 的视觉帧采样线程。"""
+
+        interval = float(self.realtime_config.visual_frame_interval_seconds or 0)
+        if interval <= 0 or self.asset_service is None:
+            return
+        existing = self._visual_sampler_threads_by_session.get(session_id)
+        if existing and existing.is_alive():
+            return
+        stop_event = threading.Event()
+        self._visual_sampler_stop_by_session[session_id] = stop_event
+        thread = threading.Thread(
+            target=self._visual_sampler_loop,
+            kwargs={"user_id": user_id, "session_id": session_id, "stop_event": stop_event, "interval": interval},
+            name=f"realtime-visual-{session_id}",
+            daemon=True,
+        )
+        self._visual_sampler_threads_by_session[session_id] = thread
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.visual_sampler.started",
+                "provider": self.realtime_config.provider,
+                "interval_seconds": interval,
+            },
+        )
+        thread.start()
+
+    def _stop_visual_sampler(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """停止当前 turn 的视觉帧采样线程。"""
+
+        stop_event = self._visual_sampler_stop_by_session.pop(session_id, None)
+        thread = self._visual_sampler_threads_by_session.pop(session_id, None)
+        if stop_event is None and thread is None:
+            return
+        if stop_event is not None:
+            stop_event.set()
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.visual_sampler.stopped",
+                "provider": self.realtime_config.provider,
+                "reason": reason,
+            },
+        )
+        self._request_visual_stream_close(user_id=user_id, session_id=session_id, reason=reason)
+
+    def _request_visual_stream_close(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """通知端侧关闭本轮 Realtime 视觉采集。
+
+        主要逻辑：视觉帧是按需追加的，不应该让端侧摄像头跨 turn 常开。采样停止时，
+        向支持 `sensor.rgb` 的设备广播 `stream.control.close.requested`，浏览器参考端
+        收到后会停止 `MediaStream`。
+        """
+
+        if self.control_service is None:
+            return
+        event = Event(
+            event_name="stream.control.close.requested",
+            user_id=user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=session_id,
+            stream_type="sensor.rgb",
+            payload={"stream_type": "sensor.rgb", "mode": "stop", "reason": f"realtime_visual_sampler_{reason}"},
+        )
+        matched = self.control_service.resolve_matching_devices(event, selection="all")
+        publish_result = self.control_service._push_event_to_device_ids(
+            event,
+            tuple(device.device_id for device in matched),
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.visual_stream.close.requested",
+                "provider": self.realtime_config.provider,
+                "reason": reason,
+                "matched_count": publish_result.matched_count,
+                "delivered_count": publish_result.delivered_count,
+                "matched_device_ids": list(publish_result.matched_device_ids),
+            },
+        )
+
+    def _visual_sampler_loop(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stop_event: threading.Event,
+        interval: float,
+    ) -> None:
+        """按固定间隔请求并追加当前视觉帧。
+
+        主要逻辑：每次循环都通过 AssetService 请求 `sensor.rgb` 单帧。端侧如果摄像头
+        已打开，应直接抓取当前帧；如果未打开，会在处理 `stream.control.open.requested`
+        时打开摄像头并上传。请求成功后把本地 JPEG bytes 追加到 provider。
+        """
+
+        frame_index = 0
+        timeout = float(self.realtime_config.visual_frame_timeout_seconds or 1.5)
+        freshness = float(self.realtime_config.visual_frame_freshness_seconds or 0.0)
+        while not stop_event.is_set():
+            started_at = time.monotonic()
+            try:
+                self._request_and_append_visual_frame(
+                    user_id=user_id,
+                    session_id=session_id,
+                    frame_index=frame_index,
+                    timeout_seconds=timeout,
+                    freshness_seconds=freshness,
+                )
+            except Exception as exc:  # noqa: BLE001 - 后台采样异常只能记录，不能打断音频主链路
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "realtime.visual_frame.failed",
+                        "provider": self.realtime_config.provider,
+                        "frame_index": frame_index,
+                        "message": str(exc),
+                    },
+                )
+            frame_index += 1
+            elapsed = time.monotonic() - started_at
+            stop_event.wait(max(0.0, interval - elapsed))
+
+    def _request_and_append_visual_frame(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        frame_index: int,
+        timeout_seconds: float,
+        freshness_seconds: float,
+    ) -> None:
+        """请求一帧 RGB 资产并追加到当前 Realtime provider。"""
+
+        if self.asset_service is None:
+            return
+        existing = self._sessions.get(user_id)
+        if not existing or existing[0] != session_id:
+            return
+        asset = self.asset_service.request_asset(
+            user_id=user_id,
+            stream_type="sensor.rgb",
+            freshness_seconds=freshness_seconds,
+            params={
+                "format": "jpeg",
+                "frequency_hz": 1,
+                "sample_count": 1,
+                "duration_seconds": 0,
+                "reason": "realtime_visual_sampler",
+            },
+            session_id=session_id,
+            timeout_seconds=timeout_seconds,
+        )
+        if asset is None or not asset.uri:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "realtime.visual_frame.missing",
+                    "provider": self.realtime_config.provider,
+                    "frame_index": frame_index,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
+            return
+        image_path = Path(str(asset.uri)).expanduser()
+        if not image_path.is_file():
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "realtime.visual_frame.missing_file",
+                    "provider": self.realtime_config.provider,
+                    "frame_index": frame_index,
+                    "asset_id": asset.asset_id,
+                    "uri": asset.uri,
+                },
+            )
+            return
+        image_bytes = image_path.read_bytes()
+        provider = existing[1]
+        provider.append_image(
+            image_bytes,
+            user_id=user_id,
+            session_id=session_id,
+            metadata={
+                "frame_index": frame_index,
+                "asset_id": asset.asset_id,
+                "uri": asset.uri,
+                "stream_type": asset.stream_type,
+            },
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.visual_frame.appended",
+                "provider": self.realtime_config.provider,
+                "frame_index": frame_index,
+                "asset_id": asset.asset_id,
+                "image_bytes": len(image_bytes),
+                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+            },
         )
 
     def _capture_provider_message(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:

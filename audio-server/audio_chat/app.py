@@ -104,13 +104,16 @@ class AudioChatConfig:
     output_tool_progress_audio_mode: str = "cached"
     output_tool_progress_priority: str = "low"
     output_tool_progress_ttl_seconds: int = 10
-    agent_mode: str = "text"
+    agent_mode: str = "realtime_audio"
     realtime_provider: str = "qwen"
     realtime_model: str = "qwen3.5-omni-plus-realtime"
     realtime_turn_detection: str = "provider"
     realtime_voice: str = "Tina"
     realtime_instructions: str = "你是中文语音助手。请用简短口语回答用户。"
     realtime_session_idle_timeout_seconds: int = 60
+    realtime_visual_frame_interval_seconds: float = 1.0
+    realtime_visual_frame_timeout_seconds: float = 1.5
+    realtime_visual_frame_freshness_seconds: float = 0.0
     tools_discover_enabled: bool = False
     tools_discover_packages: tuple[str, ...] = ()
     tools_discover_recursive: bool = False
@@ -235,6 +238,9 @@ class AudioChatConfig:
             realtime_voice=realtime.voice,
             realtime_instructions=_with_memory_instructions(realtime.instructions, enabled=memory_enabled),
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
+            realtime_visual_frame_interval_seconds=realtime.visual_frame_interval_seconds,
+            realtime_visual_frame_timeout_seconds=realtime.visual_frame_timeout_seconds,
+            realtime_visual_frame_freshness_seconds=realtime.visual_frame_freshness_seconds,
             tools_discover_enabled=loaded.tools.discover.enabled,
             tools_discover_packages=tuple(loaded.tools.discover.packages),
             tools_discover_recursive=loaded.tools.discover.recursive,
@@ -435,6 +441,7 @@ class AudioChatApp:
         self.agent_core = AgentCoreRouter.build(
             mode=_normalize_agent_mode(self.config.agent_mode),
             control_service=self.control_service,
+            asset_service=self.asset_service,
             output_service=self.output_service,
             recorder=self.recorder,
             realtime_config=RealtimeProviderConfig(
@@ -444,6 +451,9 @@ class AudioChatApp:
                 voice=self.config.realtime_voice,
                 instructions=getattr(self.config, "realtime_instructions", "你是中文语音助手。请用简短口语回答用户。"),
                 session_idle_timeout_seconds=self.config.realtime_session_idle_timeout_seconds,
+                visual_frame_interval_seconds=getattr(self.config, "realtime_visual_frame_interval_seconds", 1.0),
+                visual_frame_timeout_seconds=getattr(self.config, "realtime_visual_frame_timeout_seconds", 1.5),
+                visual_frame_freshness_seconds=getattr(self.config, "realtime_visual_frame_freshness_seconds", 0.0),
             ),
             asr_config=AsrProviderConfig(
                 provider=self.config.asr_provider,

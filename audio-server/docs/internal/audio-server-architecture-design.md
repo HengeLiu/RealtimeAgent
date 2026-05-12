@@ -2032,13 +2032,14 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 1. `RealtimeSessionManager` 打开 provider realtime session。
 2. `RealtimeToolBridge` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema；`RealtimeProviderAdapter` 发送 session 配置，包括 instructions、voice、音频格式、tool schema、turn detection。
 3. `RealtimeInputAdapter` 将 `sensor.mic` stream chunk 映射为 provider audio append 事件。
-4. 如果工具结果或上下文包含图片资产，按 provider 能力将 `AssetRef` 映射为 image input；不直接把相机 stream 全量接入实时模型。
-5. `RealtimeTurnBoundary` 监听 provider VAD、input committed、response started、response done 等事件。
-6. provider 产生 tool call 时，`RealtimeToolBridge` 调用统一 `ToolGateway`。
+4. `RealtimeTurnBoundary` 监听 provider VAD 事件。收到 `input_audio_buffer.speech_started` 后，`RealtimeVisualSampler` 按固定间隔请求 `sensor.rgb` 单帧资产，并把图片追加到同一条 provider realtime turn。
+5. `RealtimeVisualSampler` 不要求端侧一直上传相机流；它每次通过 `AssetService.request_asset(stream_type=sensor.rgb)` 请求当前帧。端侧如果摄像头已打开，就直接抓当前帧；如果摄像头未打开，就在处理请求时打开摄像头再上传。
+6. provider 产生 tool call 时，`RealtimeToolBridge` 调用统一 `ToolGateway`。视觉类工具如 `capture_photo`、`interpret_current_view` 不暴露给 Omni Realtime，避免和内联图片输入形成两套视觉链路。
 7. 工具结果回填 provider。
 8. provider 产生 `audio_delta` 时，`RealtimeOutputAdapter` 立即转为 `assistant_audio.delta`。
 9. provider 产生 `text_delta` 时，记录到 messages 和调试产物。
-10. 用户打断时调用 provider cancel，并通知 Output Service 取消旧 output stream。
+10. 收到 `input_audio_buffer.speech_stopped` 后，停止本轮 `RealtimeVisualSampler`，并下发 `stream.control.close.requested(stream_type=sensor.rgb)` 要求端侧释放摄像头；`response.done` 和会话关闭只作为异常兜底清理。
+11. 用户打断时调用 provider cancel，并通知 Output Service 取消旧 output stream。
 
 可复用组件：
 
@@ -3236,6 +3237,18 @@ examples/dev-support/devices/
 
 当前 Phase 2.5 之后，端侧优先验证目标是 `browser-glass`：浏览器用 WebRTC AEC / NS / AGC 采集麦克风，并在同一页面播放 server 下行音频。`browser-glass + Omni Realtime` 链路不需要页面提交 turn，也不依赖浏览器发送 `final:true` 触发回复；turn 判断交给 provider 的 turn detection / semantic VAD。
 
+当前 Omni Realtime 视觉输入链路采用“语音 turn 内重复提交当前帧”的方案：
+
+1. server 等待 provider session 配置生效后开始接收实时音频。
+2. provider 上报 `input_audio_buffer.speech_started` 后，server 每秒通过 `sensor.rgb` 请求一张当前视野图片。
+3. browser-glass 如果摄像头已经打开，就直接从现有 `MediaStream` 抓一帧；如果摄像头还没有打开，就按 `stream.control.open.requested(stream_type=sensor.rgb)` 请求打开摄像头并上传一帧。
+4. server 收到图片资产后立即通过 provider adapter 追加到当前 Omni Realtime 会话。
+5. provider 上报 `input_audio_buffer.speech_stopped` 后，server 停止每秒请求图片，并通知端侧关闭 `sensor.rgb` 摄像头采集。
+6. provider VAD 自动提交本轮输入，模型同时看到实时语音和这轮内多次提交的当前帧。
+7. 如果用户问题不涉及视觉内容，系统提示词要求模型不要描述图片；如果用户问题涉及眼前、前面、画面或这是什么，模型直接基于本轮图片回答。
+
+这个方案替代旧的 `capture_photo -> function_call_output -> replay audio -> append image -> commit` 链路。旧链路在真实 Omni 上容易产生新的输入 item、图片时机不稳定和后续 response 缺失问题。
+
 ### 15.2 安装 SDK 和 CLI
 
 正式发布后安装：
@@ -3372,6 +3385,20 @@ examples/dev-support/devices/browser-glass/index.html
 ```
 
 如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../examples/dev-support/devices/browser-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
+
+如果要验证视觉输入，应确认日志中存在：
+
+```text
+realtime.visual_sampler.started
+asset.requested stream_type=sensor.rgb
+asset.stored stream_type=sensor.rgb
+omni.input_image_buffer.appended
+realtime.visual_frame.appended
+realtime.visual_sampler.stopped
+realtime.visual_stream.close.requested
+```
+
+每个视觉 turn 通常会在 `speech_started` 到 `speech_stopped` 之间追加多张图片，默认间隔为 1 秒；`speech_stopped` 后端侧摄像头应被关闭。
 
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
