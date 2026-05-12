@@ -286,11 +286,13 @@ class FakeAssetService:
     def __init__(self, image_path: Path) -> None:
         self.image_path = image_path
         self.request_count = 0
+        self.requests: list[dict] = []
 
     def request_asset(self, **kwargs) -> AssetRef:
         """返回一帧本地测试图片。"""
 
         self.request_count += 1
+        self.requests.append(dict(kwargs))
         return AssetRef(
             asset_id=f"asset-test-{self.request_count}",
             user_id=str(kwargs.get("user_id") or "user-001"),
@@ -434,10 +436,19 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
         tool_gateway=app.tool_gateway,
     )
 
-    core.open("user-001", "sess-visual")
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
     core._record_provider_event(
         user_id="user-001",
-        session_id="sess-visual",
+        session_id="dev-web",
         record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
     )
     deadline = time.time() + 1
@@ -445,15 +456,16 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
         time.sleep(0.02)
     core._record_provider_event(
         user_id="user-001",
-        session_id="sess-visual",
+        session_id="dev-web",
         record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "fake"},
     )
 
     assert asset_service.request_count >= 1
+    assert asset_service.requests[0]["device_ids"] == ("dev-web",)
     assert instances[0].images
     assert instances[0].images[0][0] == image_path.read_bytes()
     assert instances[0].images[0][1]["frame_index"] == 0
-    agent_events = (tmp_path / "runs" / "user-001" / "sess-visual" / "agent-events.jsonl").read_text(encoding="utf-8")
+    agent_events = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "realtime.visual_sampler.started" in agent_events
     assert "realtime.visual_frame.appended" in agent_events
     assert "realtime.visual_sampler.stopped" in agent_events
@@ -461,6 +473,129 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
     assert any(
         event.event_name == "stream.control.close.requested" and event.stream_type == "sensor.rgb"
         for event in connection.events
+    )
+
+
+def test_realtime_visual_sampler_stops_when_no_rgb_device(tmp_path) -> None:
+    """测试目标：验证音频设备没有在线 RGB 能力时，视觉采样不会持续刷请求。
+
+    测试方法：只注册扬声器设备，不注册 `sensor.rgb` 能力；先追加一片来自该设备的
+    音频，再模拟 provider 上报 `speech_started`，等待后台采样线程完成一次设备检查。
+    预期结果：不会调用 AssetService 请求图片，runs 记录配对链路不可用并停止采样。
+    """
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = FakeAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    connection = Connection("dev-audio-only")
+    register_speaker(app, connection)
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.1,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-audio-only",
+            stream_id="stream-mic-audio-only",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-audio-only",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    deadline = time.time() + 1
+    agent_events_path = tmp_path / "runs" / "user-001" / "dev-audio-only" / "agent-events.jsonl"
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "realtime.visual_sampler.paired_stream_unavailable" in agent_events:
+            break
+        time.sleep(0.02)
+
+    agent_events = agent_events_path.read_text(encoding="utf-8")
+    assert asset_service.request_count == 0
+    assert not instances[0].images
+    assert "realtime.visual_sampler.paired_stream_unavailable" in agent_events
+    assert "realtime.visual_sampler.stopped" in agent_events
+
+
+def test_realtime_visual_sampler_ignores_other_rgb_device(tmp_path) -> None:
+    """测试目标：验证视觉采样不会使用同一用户下其他设备的 RGB 能力。
+
+    测试方法：当前音频来自只支持扬声器的设备，同时注册另一台支持 RGB 的设备；
+    模拟 `speech_started` 后等待采样线程检查配对链路。
+    预期结果：采样停止，不调用 AssetService，也不会把另一台设备的图片拼进当前语音。
+    """
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = FakeAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    audio_connection = Connection("dev-audio-only")
+    rgb_connection = Connection("dev-rgb")
+    register_speaker(app, audio_connection)
+    register_speaker_and_rgb(app, rgb_connection)
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.1,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-audio-only",
+            stream_id="stream-mic-audio-only",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-audio-only",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    deadline = time.time() + 1
+    agent_events_path = tmp_path / "runs" / "user-001" / "dev-audio-only" / "agent-events.jsonl"
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "realtime.visual_sampler.paired_stream_unavailable" in agent_events:
+            break
+        time.sleep(0.02)
+
+    assert asset_service.request_count == 0
+    assert not instances[0].images
+    assert not any(
+        event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb"
+        for event in rgb_connection.events
     )
 
 

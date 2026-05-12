@@ -2038,7 +2038,7 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 7. 工具结果回填 provider。
 8. provider 产生 `audio_delta` 时，`RealtimeOutputAdapter` 立即转为 `assistant_audio.delta`。
 9. provider 产生 `text_delta` 时，记录到 messages 和调试产物。
-10. 收到 `input_audio_buffer.speech_stopped` 后，停止本轮 `RealtimeVisualSampler`，并下发 `stream.control.close.requested(stream_type=sensor.rgb)` 要求端侧释放摄像头；`response.done` 和会话关闭只作为异常兜底清理。
+10. 收到 `input_audio_buffer.speech_stopped` 后，停止本轮 `RealtimeVisualSampler`，并下发 `stream.control.close.requested(stream_type=sensor.rgb)` 要求端侧释放摄像头；如果当前音频 stream 已关闭、音频设备已离线或同一设备没有在线 `sensor.rgb` 能力，也立即停止采样，不持续刷请求；`response.done` 和会话关闭只作为异常兜底清理。
 11. 用户打断时调用 provider cancel，并通知 Output Service 取消旧 output stream。
 
 可复用组件：
@@ -3241,7 +3241,7 @@ examples/dev-support/devices/
 
 1. server 等待 provider session 配置生效后开始接收实时音频。
 2. provider 上报 `input_audio_buffer.speech_started` 后，server 每秒通过 `sensor.rgb` 请求一张当前视野图片。
-3. browser-glass 如果摄像头已经打开，就直接从现有 `MediaStream` 抓一帧；如果摄像头还没有打开，就按 `stream.control.open.requested(stream_type=sensor.rgb)` 请求打开摄像头并上传一帧。
+3. browser-glass 如果摄像头已经打开，就直接从现有 `MediaStream` 抓一帧；如果摄像头还没有打开，就按 `stream.control.open.requested(stream_type=sensor.rgb)` 请求打开摄像头并上传一帧。server 每轮请求前会检查触发当前语音的同一台设备是否仍有在线 RGB 能力；没有时停止视觉采样，不改用同一用户下其他设备。
 4. server 收到图片资产后立即通过 provider adapter 追加到当前 Omni Realtime 会话。
 5. provider 上报 `input_audio_buffer.speech_stopped` 后，server 停止每秒请求图片，并通知端侧关闭 `sensor.rgb` 摄像头采集。
 6. provider VAD 自动提交本轮输入，模型同时看到实时语音和这轮内多次提交的当前帧。
@@ -3399,6 +3399,7 @@ realtime.visual_stream.close.requested
 ```
 
 每个视觉 turn 通常会在 `speech_started` 到 `speech_stopped` 之间追加多张图片，默认间隔为 1 秒；`speech_stopped` 后端侧摄像头应被关闭。
+如果配对的音频设备或 RGB 能力不可用，应看到 `realtime.visual_sampler.paired_stream_unavailable`，并且不再继续出现新的 `asset.requested stream_type=sensor.rgb`。
 
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 

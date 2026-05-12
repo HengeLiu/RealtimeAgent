@@ -800,6 +800,13 @@ class AudioChatApp:
                 "reason": event.payload.get("reason", "endpoint_closed"),
             },
         )
+        if handle.stream_type == "sensor.mic" and hasattr(self.agent_core, "on_audio_input_closed"):
+            self.agent_core.on_audio_input_closed(
+                user_id=handle.user_id,
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                reason=str(event.payload.get("reason", "endpoint_closed")),
+            )
 
     def _mark_asset_request_failed(self, event: Event) -> None:
         """把端侧资产采集失败回执转给 Asset Service。

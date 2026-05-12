@@ -1089,6 +1089,8 @@ class RealtimeAudioAgentCore:
         self._last_user_audio_by_session: dict[str, list[bytes]] = {}
         self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
         self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
+        self._audio_stream_by_session: dict[str, str] = {}
+        self._closed_audio_streams_by_session: dict[str, set[str]] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -1161,6 +1163,8 @@ class RealtimeAudioAgentCore:
             raise ValueError("RealtimeAudioAgentCore only accepts sensor.mic")
         if chunk.session_id in self._failed_sessions:
             return
+        self._audio_stream_by_session[chunk.session_id] = chunk.stream_id
+        self._closed_audio_streams_by_session.setdefault(chunk.session_id, set()).discard(chunk.stream_id)
         self._cache_replay_audio(chunk)
         self.open(chunk.user_id, chunk.session_id)
         _session_id, provider = self._sessions[chunk.user_id]
@@ -1191,6 +1195,17 @@ class RealtimeAudioAgentCore:
             session_id=chunk.session_id,
             payload={"payload_size": len(chunk.payload), "final": chunk.final},
         )
+
+    def on_audio_input_closed(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
+        """通知 Realtime 当前音频输入 stream 已关闭。
+
+        主要逻辑：视觉采样必须和触发它的音频采集一一配对。音频 stream 关闭后，
+        立即停止同 session 的视觉采样，避免设备下线或停止录音后继续请求 RGB。
+        """
+
+        self._closed_audio_streams_by_session.setdefault(session_id, set()).add(stream_id)
+        if self._audio_stream_by_session.get(session_id) == stream_id:
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=f"audio_stream_closed:{reason}")
 
     def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
         """提交 realtime provider 输入边界。
@@ -1723,6 +1738,18 @@ class RealtimeAudioAgentCore:
         while not stop_event.is_set():
             started_at = time.monotonic()
             try:
+                if not self._has_paired_visual_capture_device(user_id=user_id, session_id=session_id):
+                    self.recorder.record_agent_event(
+                        session_id,
+                        {
+                            "event": "realtime.visual_sampler.paired_stream_unavailable",
+                            "provider": self.realtime_config.provider,
+                            "frame_index": frame_index,
+                            "audio_stream_id": self._audio_stream_by_session.get(session_id),
+                        },
+                    )
+                    self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="paired_stream_unavailable")
+                    return
                 self._request_and_append_visual_frame(
                     user_id=user_id,
                     session_id=session_id,
@@ -1743,6 +1770,33 @@ class RealtimeAudioAgentCore:
             frame_index += 1
             elapsed = time.monotonic() - started_at
             stop_event.wait(max(0.0, interval - elapsed))
+
+    def _has_paired_visual_capture_device(self, *, user_id: str, session_id: str) -> bool:
+        """检查当前音频设备是否仍在线且支持 RGB 采集。
+
+        主要逻辑：视觉采样必须和同一个设备的音频采集配对。这里先检查音频 stream
+        是否已关闭，再检查同一 session/device 是否仍是在线 RGB 路由目标。
+        """
+
+        audio_stream_id = self._audio_stream_by_session.get(session_id)
+        if not audio_stream_id:
+            return False
+        if audio_stream_id and audio_stream_id in self._closed_audio_streams_by_session.get(session_id, set()):
+            return False
+        if self.control_service is None:
+            return True
+        event = Event(
+            event_name="stream.control.open.requested",
+            user_id=user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=session_id,
+            stream_type="sensor.rgb",
+            payload={"stream_type": "sensor.rgb", "mode": "single", "reason": "realtime_visual_sampler_probe"},
+        )
+        return any(
+            device.device_id == session_id
+            for device in self.control_service.resolve_matching_devices(event, selection="all")
+        )
 
     def _request_and_append_visual_frame(
         self,
@@ -1773,6 +1827,7 @@ class RealtimeAudioAgentCore:
             },
             session_id=session_id,
             timeout_seconds=timeout_seconds,
+            device_ids=(session_id,),
         )
         if asset is None or not asset.uri:
             self.recorder.record_agent_event(
