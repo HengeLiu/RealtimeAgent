@@ -54,6 +54,17 @@ RGB 帧来自 `vision_frames` 配置或默认测试 JPEG，并始终通过 `sens
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
+## peer video receiver
+
+`phone.preview.yaml` 现在也可作为 peer video 接收端参与 for-blind-app 找物和红绿灯任务：
+
+1. 注册属性包含 `device_role: phone`、`endpoint.compute.vision: true` 和 `peer.video.receiver: true`。
+2. 收到 `peer.video.receiver.start` 后，Python phone 会打开 `ws://<phone-ip>:19081/peer-video/<peer_session_id>`。
+3. 端侧通过 `RemoteTaskReporter` 上报 `command.accepted/progress/completed/failed`，包括 `peer.receiver.ready`、`peer.video.first_frame`、`peer.video.frame_processed` 和 `peer.video.timeout`。
+4. 每帧调用 `fork_yolo_mock(frame, purpose, object_name)`，当前只打印 `yolo.mock.frame_processed` 并生成 mock 结果。
+
+`RemoteTaskReporter` 只是 Python 参考端 helper，不是跨语言必需对象。Swift、JavaScript、Kotlin 或 C 端侧只要发送等价的 `command.*` 控制事件即可。
+
 ## 启动
 
 终端 1：
@@ -68,5 +79,5 @@ uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
-`mode: register_only` 会完成注册后退出，适合自动验收；后续长驻联调可以把它改成
-保持连接的模式。
+peer video 联调使用 `phone.preview.yaml`，该配置默认以长驻模式运行。`mode: register_only`
+只适合自动验收，会在完成注册后退出。

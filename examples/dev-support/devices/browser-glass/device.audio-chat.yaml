@@ -32,6 +32,9 @@ supports:
         default_pattern: short
 
 properties:
+  device_role: glass
+  endpoint.role.glass: true
+  peer.video.sender: true
   debug.manual_events: true
   debug.file_upload: true
   audio_chat.audio_input: sensor.mic

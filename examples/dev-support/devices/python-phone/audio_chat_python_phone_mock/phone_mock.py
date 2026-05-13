@@ -15,6 +15,8 @@ from aiohttp import ClientSession
 
 from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, new_id
+from .peer_video import PeerVideoReceiver
+from .remote_task import RemoteCommand, RemoteTaskReporter
 
 
 def _resolve_output_path(raw_path: str | Path) -> Path:
@@ -383,6 +385,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         task_command_scripts: dict[str, list[dict[str, Any]]] | None = None,
         vision_frames: dict[str, list[bytes]] | None = None,
         display: dict[str, Any] | None = None,
+        peer_video: dict[str, Any] | None = None,
     ) -> None:
         display_config = dict(display or {})
         display_enabled = bool(display_config.get("enabled", False))
@@ -416,6 +419,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         self.task_handlers = task_handlers or PhoneTaskHandlerRegistry.with_builtins()
         self.task_command_scripts = dict(task_command_scripts or {})
         self.vision_frames = dict(vision_frames or {})
+        self.peer_video_config = dict(peer_video or {})
+        self.peer_video_receivers: dict[str, PeerVideoReceiver] = {}
+        self.peer_video_tasks: dict[str, asyncio.Task] = {}
         self.task_command_events: list[dict[str, Any]] = []
         self.frame_log: list[dict[str, Any]] = []
         self.video_frames: list[dict[str, Any]] = []
@@ -516,6 +522,12 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         payload = dict(event.payload or {})
         params = dict(payload.get("params") or {})
         command = str(payload.get("command") or "").strip()
+        if command == "peer.video.receiver.start":
+            await self._handle_peer_video_receiver_start(control_ws, event)
+            return
+        if command == "peer.video.receiver.start.stop":
+            await self._handle_peer_video_receiver_stop(control_ws, event)
+            return
         task_type = str(params.get("task_type") or "").strip()
         if command != "phone.task.start":
             await self._send_command_event(
@@ -684,6 +696,80 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         self.task_command_events.append({"event_name": event_name, **payload, "timestamp_ms": int(time.time() * 1000)})
         await self._send_event(control_ws, event)
 
+    async def _handle_peer_video_receiver_start(self, control_ws, event: Event) -> None:
+        """启动 peer video receiver。
+
+        主要逻辑：解析 server 下发的 `peer.video.receiver.start`，创建
+        `RemoteTaskReporter` 和 `PeerVideoReceiver`，后台运行接收端，避免阻塞控制事件
+        主循环。
+        参数：`control_ws` 为控制 WebSocket，`event` 为命令事件。
+        返回值：无。
+        异常情况：解析失败时发送 command.failed。
+        """
+
+        try:
+            command = RemoteCommand.from_event(event)
+            config = dict(self.peer_video_config or {})
+            params = dict(command.params or {})
+            timeout_seconds = float(params.get("timeout_seconds") or config.get("timeout_seconds") or 30)
+            reporter = RemoteTaskReporter(
+                command=command,
+                producer_id=self.device_id,
+                role="receiver",
+                send_event=lambda item: self._send_event(control_ws, item),
+            )
+            receiver = PeerVideoReceiver(
+                command=command,
+                reporter=reporter,
+                listen_host=str(config.get("listen_host") or "0.0.0.0"),
+                listen_port=int(config.get("listen_port") or 19081),
+                timeout_seconds=timeout_seconds,
+                public_host=str(config.get("public_host") or config.get("advertise_host") or "127.0.0.1"),
+            )
+            self.peer_video_receivers[command.command_id] = receiver
+            task = asyncio.create_task(receiver.run())
+            self.peer_video_tasks[command.command_id] = task
+            task.add_done_callback(lambda _: self.peer_video_tasks.pop(command.command_id, None))
+        except Exception as exc:  # noqa: BLE001 - 端侧命令解析错误需要回报给 server
+            await self._send_command_event(
+                control_ws,
+                event_name="command.failed",
+                command=event,
+                payload={
+                    "command_id": str((event.payload or {}).get("command_id") or ""),
+                    "command": "peer.video.receiver.start",
+                    "message": str(exc),
+                },
+            )
+
+    async def _handle_peer_video_receiver_stop(self, control_ws, event: Event) -> None:
+        """停止 peer video receiver。
+
+        主要逻辑：根据 stop params.command_id 找到原始 receiver，通知其退出，并对 stop
+        命令本身发送 completed 回执。
+        参数：`control_ws` 为控制 WebSocket，`event` 为 stop 命令事件。
+        返回值：无。
+        异常情况：无 receiver 时仍返回 completed，保持取消幂等。
+        """
+
+        payload = dict(event.payload or {})
+        params = dict(payload.get("params") or {})
+        target_command_id = str(params.get("command_id") or "").strip()
+        receiver = self.peer_video_receivers.get(target_command_id)
+        if receiver is not None:
+            await receiver.stop(str(params.get("reason") or "server_stop"))
+        await self._send_command_event(
+            control_ws,
+            event_name="command.completed",
+            command=event,
+            payload={
+                "command_id": str(payload.get("command_id") or ""),
+                "command": "peer.video.receiver.start.stop",
+                "target_command_id": target_command_id,
+                "result": {"stopped": True},
+            },
+        )
+
     async def _stream_loop(self, control_ws, stream_ws) -> None:
         async for message in stream_ws:
             if message.type.name != "BINARY":
@@ -788,6 +874,10 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["video_frames"] = list(self.video_frames)
         result["video_errors"] = list(self.video_errors)
         result["video_frame_store"] = self.frame_store.summary() if self.frame_store else {}
+        result["peer_video_receivers"] = {
+            command_id: {"frame_count": receiver.frame_count, "peer_session_id": receiver.peer_session_id}
+            for command_id, receiver in self.peer_video_receivers.items()
+        }
         return result
 
 
@@ -823,6 +913,7 @@ async def run_network_phone_mock(config: dict[str, Any] | None = None) -> dict[s
         task_command_scripts=dict(config.get("task_command_scripts") or {}),
         vision_frames=vision_frames,
         display=display_config,
+        peer_video=dict(config.get("peer_video") or {}),
     )
     mode = str(config.get("mode") or "").strip()
     if mode in {"register_only", "network_register"} or (not mode and not display_config):

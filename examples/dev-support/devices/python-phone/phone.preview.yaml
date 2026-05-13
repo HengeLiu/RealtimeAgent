@@ -1,7 +1,22 @@
-mode: register_only
+mode: forever
 server_url: http://127.0.0.1:8765
-user_id: user-for-blind-app
+user_id: user-browser-glass-001
 device_id: dev-python-phone-preview
+properties:
+  device_role: phone
+  endpoint.role.phone: true
+  endpoint.compute.vision: true
+  peer.video.receiver: true
+peer_video:
+  enabled: true
+  listen_host: "0.0.0.0"
+  listen_port: 19081
+  public_host: "127.0.0.1"
+  timeout_seconds: 30
+  close_button_enabled: true
+  yolo_mock:
+    enabled: true
+    per_frame: true
 supports:
   sensors:
     - type: rgb

@@ -53,6 +53,26 @@ def test_browser_device_supports_match_checked_capability_file() -> None:
     assert '"audio_chat.audio_output": "actuator.speaker"' in html
 
 
+def test_browser_device_declares_and_handles_peer_video_sender() -> None:
+    """测试目标：验证 browser-glass 具备 peer video sender 静态处理入口。
+
+    测试方法：静态读取 HTML 和设备能力文件，检查命令名、连接、帧发送和 stop handler。
+    预期结果：页面可响应 `peer.video.sender.start`，并声明 glass sender properties。
+    """
+
+    html = _html()
+    capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.audio-chat.yaml").read_text(encoding="utf-8"))
+
+    assert capability_file["properties"]["device_role"] == "glass"
+    assert capability_file["properties"]["peer.video.sender"] is True
+    assert "peer.video.sender.start" in html
+    assert "peer.video.sender.start.stop" in html
+    assert "startPeerVideoSender" in html
+    assert "sendPeerVideoFrame" in html
+    assert "peer.sender.connected" in html
+    assert "peer.video.frame.sent" in html
+
+
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:
     """测试目标：验证 browser-glass 支持真实麦克风和离线音频长连接测试。
 

@@ -11,6 +11,7 @@
 5. 使用摄像头或图片样例响应 `sensor.rgb` 请求。
 6. 播放 server 下发的 `actuator.speaker` 音频。
 7. 模拟 `actuator.haptic` 执行器。
+8. 收到 `peer.video.sender.start` 后连接 Python phone receiver，并按 fps 发送 JPEG 帧。
 
 ## 启动
 
@@ -55,6 +56,24 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 ```
 
 校验命令会按 `supports` 生成注册事件所需的内部路由。页面运行时也按同一口径提交 `supports`，server 负责生成业务路由；页面不再手写事件路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
+
+## peer video sender
+
+for-blind-app 的找物和红绿灯 Task 会先启动 Python phone receiver，再向 browser-glass 下发：
+
+```text
+command.requested command=peer.video.sender.start
+```
+
+页面处理流程：
+
+1. 发送 `command.accepted`。
+2. 读取 `params.receiver.url` 并建立 WebSocket。
+3. 上报 `peer.sender.connecting` 和 `peer.sender.connected`。
+4. 按 `params.source.fps` 从摄像头抽帧；如果已经选择图片样例，则循环发送图片样例。
+5. 收到 `peer.video.sender.start.stop` 后停止定时器并关闭 WebSocket。
+
+本地日志会打印 `peer.video.sender.start`、`peer.sender.connected`、`peer.video.frame.sent` 和 `peer.video.sender.stop`，用于和 phone 日志、server runs 对齐。
 
 ## 音频测试模式
 

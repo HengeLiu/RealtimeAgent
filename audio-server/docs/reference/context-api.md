@@ -961,6 +961,36 @@ server Task
 
 这能避免把端侧实现细节暴露给 Agent Core，同时保留跨设备长流程能力。
 
+peer video 这类跨设备任务也使用同一模型。Task 先选择 phone 端启动 receiver，等待端侧通过
+`command.progress status=peer.receiver.ready` 返回 WebSocket 地址，再选择 glass 端启动 sender：
+
+```python
+phone = await context.devices.commands.start(
+    name="peer.video.receiver.start",
+    selector={"device_role": "phone"},
+    params={
+        "peer_session_id": context.task_ref.task_id,
+        "task_type": context.task_ref.task_type,
+        "purpose": "find_object",
+        "object_name": "水杯",
+        "media_config": {"codec": "jpeg", "width": 960, "height": 540, "fps": 5},
+        "timeout_seconds": 30,
+    },
+)
+
+glass = await context.devices.commands.start(
+    name="peer.video.sender.start",
+    selector={"device_role": "glass"},
+    params={
+        "peer_session_id": context.task_ref.task_id,
+        "source": {"stream_type": "sensor.rgb", "codec": "jpeg", "fps": 5},
+        "receiver": {"transport": "websocket", "url": "ws://phone:19081/peer-video/task_xxx"},
+    },
+)
+```
+
+这里 `CommandHandle.results()` 只消费端侧状态，视频帧不经过 server，也不放进 `TaskSignal` 或控制信令 payload。
+
 ### 8.5 TaskSignal 与系统事件的关系
 
 Task 内部对外回流统一称为 `TaskSignal`。它用于描述 server Task 的状态变化、通知载荷和是否需要 Agent 决策，不是控制面的系统级 `Event`，也不是端侧命令回执 `CommandEvent`。
