@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import socket
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from aiohttp import web
 
@@ -33,6 +34,7 @@ class PeerVideoReceiver:
     frame_count: int = 0
     last_detection: dict[str, Any] | None = None
     complete_after_frames: int = 0
+    frame_callback: Callable[[bytes, dict[str, Any]], Any] | None = None
     close_reason: str = ""
     _runner: web.AppRunner | None = field(default=None, init=False)
     _stop_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
@@ -137,6 +139,7 @@ class PeerVideoReceiver:
             first_frame = self.frame_count == 0
             self.latest_frame = frame
             self.frame_count += 1
+            await self._emit_frame(frame)
             if first_frame:
                 await self.reporter.progress(
                     "peer.video.first_frame",
@@ -154,6 +157,31 @@ class PeerVideoReceiver:
                 self.close_reason = "mock_result"
                 self._stop_event.set()
         return ws
+
+    async def _emit_frame(self, frame: bytes) -> None:
+        """把 peer video 帧转交给端侧显示和调试链路。
+
+        主要逻辑：receiver 负责直连 WebSocket 收帧；GUI、最近帧保存和统计属于 phone
+        endpoint，因此通过回调把原始 JPEG 帧和轻量元数据交给上层。
+        参数：`frame` 为收到的 JPEG/PNG 字节。
+        返回值：无。
+        异常情况：回调异常只记录日志，不中断 peer video 任务。
+        """
+
+        if self.frame_callback is None:
+            return
+        metadata = {
+            "peer_session_id": self.peer_session_id,
+            "purpose": self.purpose,
+            "object_name": self.object_name,
+            "frame_count": self.frame_count,
+        }
+        try:
+            result = self.frame_callback(frame, metadata)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 - 显示链路失败不应中断任务控制链路
+            logger.exception("peer.video.frame_callback_failed peer_session_id=%s frame_count=%s", self.peer_session_id, self.frame_count)
 
     async def close(self, reason: str) -> None:
         """释放 receiver WebSocket server。

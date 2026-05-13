@@ -21,6 +21,7 @@ def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
 
     async def run() -> None:
         sent: list[Event] = []
+        frames: list[dict] = []
 
         async def send_event(event: Event) -> None:
             sent.append(event)
@@ -45,6 +46,7 @@ def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
             timeout_seconds=5,
             public_host="127.0.0.1",
             complete_after_frames=1,
+            frame_callback=lambda frame, metadata: frames.append({"bytes": frame, "metadata": metadata}),
         )
         task = asyncio.create_task(receiver.run())
         await _wait_for_status(sent, "peer.receiver.ready")
@@ -57,6 +59,17 @@ def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
         assert result["found"] is True
         assert result["frame_count"] == 1
         assert receiver.latest_frame == b"\xff\xd8mock-frame\xff\xd9"
+        assert frames == [
+            {
+                "bytes": b"\xff\xd8mock-frame\xff\xd9",
+                "metadata": {
+                    "peer_session_id": "task-peer",
+                    "purpose": "find_object",
+                    "object_name": "水杯",
+                    "frame_count": 1,
+                },
+            }
+        ]
 
         event_names = [event.event_name for event in sent]
         statuses = [event.payload.get("status") for event in sent]

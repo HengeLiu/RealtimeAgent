@@ -810,6 +810,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 timeout_seconds=timeout_seconds,
                 public_host=str(config.get("public_host") or config.get("advertise_host") or "127.0.0.1"),
                 complete_after_frames=complete_after_frames,
+                frame_callback=lambda frame, metadata: self._handle_peer_video_frame(frame, metadata),
             )
             self.peer_video_receivers[command.command_id] = receiver
             task = asyncio.create_task(receiver.run())
@@ -826,6 +827,36 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                     "message": str(exc),
                 },
             )
+
+    def _handle_peer_video_frame(self, frame: bytes, metadata: dict[str, Any]) -> None:
+        """把 peer video 直连帧送入本地视频显示链路。
+
+        主要逻辑：peer video 不经过 server stream 服务，但对 phone 端窗口来说仍然是
+        `sensor.rgb` 图像帧。这里复用已有解码、最近帧保存和 GUI 刷新逻辑，避免
+        phone 窗口只能看到 server 转发的 RGB，而看不到任务直连视频。
+        参数：`frame` 为 peer sender 发来的 JPEG/PNG 字节，`metadata` 为 peer session 信息。
+        返回值：无。
+        异常情况：解码失败会由 `_handle_video_chunk()` 记录到 `video_errors`。
+        """
+
+        seq = max(0, int(metadata.get("frame_count") or 1) - 1)
+        stream_id = f"peer_{metadata.get('peer_session_id') or 'video'}"
+        self._handle_video_chunk(
+            StreamChunk(
+                user_id=self.user_id,
+                session_id=self.device_id,
+                stream_id=stream_id,
+                stream_type="sensor.rgb",
+                seq=seq,
+                payload=frame,
+                codec="jpeg",
+                sample_rate=1,
+                channels=1,
+                duration_ms=1,
+                final=False,
+                metadata={"source": "peer_video", **metadata},
+            )
+        )
 
     async def _handle_peer_video_receiver_stop(self, control_ws, event: Event) -> None:
         """停止 peer video receiver。
