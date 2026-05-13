@@ -232,6 +232,20 @@ def test_visual_display_property_disabled_does_not_subscribe_rgb_input() -> None
     assert compile_system_routes_from_properties({"actuator.display.rgb": "false"}) == []
 
 
+def test_peer_video_properties_compile_to_command_route() -> None:
+    """测试目标：验证 peer video 端点能通过 properties 订阅远程命令。
+
+    测试方法：分别声明 phone receiver 和 glass sender 的 peer video 属性。
+    预期结果：server 注册阶段生成 `command.*` 路由，TaskContext.commands 能找到设备。
+    """
+
+    receiver_routes = compile_system_routes_from_properties({"peer.video.receiver": True})
+    sender_routes = compile_system_routes_from_properties({"peer.video.sender": "true"})
+
+    assert {"event": "command.*"} in receiver_routes
+    assert {"event": "command.*"} in sender_routes
+
+
 def test_sensor_tof_stream_is_stored_as_asset(tmp_path: Path) -> None:
     """测试目标：验证 ToF 相机不是只停留在注册语义中，也能作为资产流入库。
 
