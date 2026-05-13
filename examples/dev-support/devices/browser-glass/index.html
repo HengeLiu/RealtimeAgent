@@ -30,7 +30,17 @@
     .log-panel h2 { margin: 0 0 6px; }
     .log-box { width: 100%; height: 170px; min-height: 170px; resize: none; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 10px; border-radius: 6px; border: 1px solid #243248; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
     .hint { color: #5e6a7d; font-size: 13px; margin: 4px 0 0; }
+    .visual-toolbar { display: grid; grid-template-columns: auto auto minmax(180px, 1fr) auto; gap: 12px; align-items: center; margin: 14px 0; }
+    .visual-preview { display: grid; grid-template-columns: minmax(320px, 680px); gap: 12px; align-items: start; margin-top: 10px; }
+    .preview-stage label { margin-bottom: 8px; }
+    .preview-canvas, .source-video { width: 100%; aspect-ratio: 16 / 9; background: #0f1722; border: 1px solid #253047; border-radius: 6px; object-fit: contain; box-sizing: border-box; }
+    .source-video { display: none; pointer-events: none; }
+    .visual-preview.source-video .preview-canvas { display: none; }
+    .visual-preview.source-video .source-video { display: block; }
+    .frame-strip { display: flex; gap: 12px; max-width: min(100%, 900px); overflow-x: auto; padding: 12px 0 4px; }
+    .frame-thumb { flex: 0 0 auto; width: 78px; height: 54px; border: 2px solid #ef4444; border-radius: 6px; background: #0f1722; object-fit: cover; }
     @media (max-width: 980px) { body { padding-bottom: 430px; } .log-dock { grid-template-columns: 1fr; } .log-box { height: 150px; min-height: 150px; } }
+    @media (max-width: 980px) { .visual-toolbar, .visual-preview { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -78,13 +88,23 @@
 
     <section class="panel">
       <h2>带图输入</h2>
-      <div class="row">
+      <div class="visual-toolbar">
         <button id="chooseImageSample" class="secondary" type="button">从样例目录选择图片</button>
-        <span id="imageSampleName" class="file-name">未选择图片，按需使用摄像头</span>
         <input id="imageFile" class="hidden" type="file" accept="image/*" multiple />
-        <button id="uploadImageNow" type="button" disabled>上传所选图片</button>
+        <button id="chooseVideoSample" class="secondary" type="button">选择视频</button>
+        <input id="videoFile" class="hidden" type="file" accept="video/*" />
+        <span id="visualInputName" class="file-name">未选择图片或视频，按需使用摄像头</span>
+        <button id="uploadImageNow" type="button" disabled>上传当前帧</button>
       </div>
-      <p class="hint">服务端请求 sensor.rgb 时会自动上传图片；也可以手动上传所选图片，未选择图片时浏览器会请求摄像头拍一张。</p>
+      <div class="visual-preview">
+        <div class="preview-stage">
+          <label>采集帧预览</label>
+          <canvas id="visualFramePreview" class="preview-canvas" width="960" height="540"></canvas>
+          <video id="selectedVideoSource" class="source-video" muted playsinline preload="metadata"></video>
+        </div>
+        <p class="hint">图片和视频只能二选一。视频预览不能手动播放或暂停；只有收到 sensor.rgb 或 peer video 采集请求时才会自动播放、抽帧和停止。</p>
+        <div id="capturedFrameStrip" class="frame-strip" aria-label="采集帧缩略图"></div>
+      </div>
     </section>
 
     <section class="panel">
@@ -132,8 +152,10 @@
     const SAMPLE_HANDLE_STORE = "handles";
     const AUDIO_SAMPLE_DIR_KEY = "audio_sample_dir";
     const IMAGE_SAMPLE_DIR_KEY = "image_sample_dir";
+    const VIDEO_SAMPLE_DIR_KEY = "video_sample_dir";
     const AUDIO_SAMPLE_FILE_KEY = "audio_sample_file";
     const IMAGE_SAMPLE_FILES_KEY = "image_sample_files";
+    const VIDEO_SAMPLE_FILE_KEY = "video_sample_file";
     const DEFAULT_RECORD_RUNS_ROOT = "examples/for-blind-app/audio-server/runs";
     const DEFAULT_RECORD_OUT = "examples/dev-support/devices/python-playback-glass/cases/draft/recorded.yaml";
     const DEFAULT_DEVICE_ID = "dev-browser-glass-001";
@@ -172,9 +194,14 @@
     const stopAudioButton = document.getElementById("stopAudio");
     const chooseAudioSampleButton = document.getElementById("chooseAudioSample");
     const chooseImageSampleButton = document.getElementById("chooseImageSample");
+    const chooseVideoSampleButton = document.getElementById("chooseVideoSample");
     const uploadImageNowButton = document.getElementById("uploadImageNow");
     const audioSampleNameEl = document.getElementById("audioSampleName");
-    const imageSampleNameEl = document.getElementById("imageSampleName");
+    const visualInputNameEl = document.getElementById("visualInputName");
+    const selectedVideoSourceEl = document.getElementById("selectedVideoSource");
+    const visualFramePreviewEl = document.getElementById("visualFramePreview");
+    const visualPreviewEl = document.querySelector(".visual-preview");
+    const capturedFrameStripEl = document.getElementById("capturedFrameStrip");
     const buildRecordCommandButton = document.getElementById("buildRecordCommand");
     const recordCommandEl = document.getElementById("recordCommand");
     const connectionStatusEl = document.getElementById("connectionStatus");
@@ -218,6 +245,9 @@
     let selectedAudioSampleFile = null;
     let selectedImageSampleFileHandles = [];
     let selectedImageSampleFiles = [];
+    let selectedVideoSampleFileHandle = null;
+    let selectedVideoSampleFile = null;
+    let selectedVideoObjectUrl = "";
     let peerVideoSender = null;
 
     function delay(ms) {
@@ -313,7 +343,7 @@
       wakeButton.disabled = !registered || dialogOpen;
       interruptButton.disabled = !dialogOpen;
       closeButton.disabled = !dialogOpen;
-      uploadImageNowButton.disabled = !registered;
+      uploadImageNowButton.disabled = !registered || activeVisualInputKind() === "camera";
     }
 
     function updateAudioButtons() {
@@ -515,15 +545,88 @@
     function setSelectedImageSamples(fileHandles, files) {
       selectedImageSampleFileHandles = fileHandles || [];
       selectedImageSampleFiles = files || [];
-      imageSampleNameEl.textContent = summarizeFiles(selectedImageSampleFiles, "未选择图片，按需使用摄像头");
+      if (selectedImageSampleFiles.length) clearSelectedVideoSample();
+      updateVisualInputState();
+    }
+
+    function setSelectedVideoSample(fileHandle, file) {
+      if (file) clearSelectedImageSamples();
+      selectedVideoSampleFileHandle = fileHandle || null;
+      selectedVideoSampleFile = file || null;
+      if (selectedVideoObjectUrl) {
+        URL.revokeObjectURL(selectedVideoObjectUrl);
+        selectedVideoObjectUrl = "";
+      }
+      selectedVideoSourceEl.pause();
+      selectedVideoSourceEl.removeAttribute("src");
+      selectedVideoSourceEl.load();
+      if (!file) {
+        selectedVideoSourceEl.style.display = "none";
+        updateVisualInputState();
+        return;
+      }
+      selectedVideoObjectUrl = URL.createObjectURL(file);
+      selectedVideoSourceEl.src = selectedVideoObjectUrl;
+      selectedVideoSourceEl.style.display = "block";
+      selectedVideoSourceEl.load();
+      updateVisualInputState();
+      renderSelectedVideoPreview().catch((err) => log(`video preview failed: ${err.message}`));
+    }
+
+    function clearSelectedImageSamples() {
+      selectedImageSampleFileHandles = [];
+      selectedImageSampleFiles = [];
+      const imageInput = document.getElementById("imageFile");
+      if (imageInput) imageInput.value = "";
+    }
+
+    function clearSelectedVideoSample() {
+      selectedVideoSampleFileHandle = null;
+      selectedVideoSampleFile = null;
+      const videoInput = document.getElementById("videoFile");
+      if (videoInput) videoInput.value = "";
+      if (selectedVideoObjectUrl) {
+        URL.revokeObjectURL(selectedVideoObjectUrl);
+        selectedVideoObjectUrl = "";
+      }
+      selectedVideoSourceEl.pause();
+      selectedVideoSourceEl.removeAttribute("src");
+      selectedVideoSourceEl.style.display = "none";
+      selectedVideoSourceEl.load();
+    }
+
+    function activeVisualInputKind() {
+      if (selectedVideoSampleFile || document.getElementById("videoFile").files.length) return "video";
+      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) return "image";
+      return "camera";
+    }
+
+    function updateVisualInputState() {
+      const active = activeVisualInputKind();
+      if (active === "image") {
+        visualInputNameEl.textContent = summarizeFiles(selectedImageSampleFiles, "已选择图片");
+        visualInputNameEl.title = "当前使用图片输入";
+      } else if (active === "video") {
+        const file = selectedVideoSampleFile || document.getElementById("videoFile").files[0];
+        visualInputNameEl.textContent = file ? file.name : "已选择视频";
+        visualInputNameEl.title = "当前使用视频输入";
+      } else {
+        visualInputNameEl.textContent = "未选择图片或视频，按需使用摄像头";
+        visualInputNameEl.title = "当前使用摄像头输入";
+      }
+      visualPreviewEl.classList.toggle("source-image", active === "image");
+      visualPreviewEl.classList.toggle("source-video", active === "video");
+      visualPreviewEl.classList.toggle("source-camera", active === "camera");
+      uploadImageNowButton.textContent = active === "video" ? "上传当前视频帧" : (active === "image" ? "上传所选图片" : "上传当前帧");
+      renderStatus();
     }
 
     async function chooseFileFromSampleDirectory({kind, accept, multiple}) {
       if (!window.showOpenFilePicker || !window.showDirectoryPicker) {
         return chooseFileWithHiddenInput(kind);
       }
-      const dirKey = kind === "audio" ? AUDIO_SAMPLE_DIR_KEY : IMAGE_SAMPLE_DIR_KEY;
-      const fileKey = kind === "audio" ? AUDIO_SAMPLE_FILE_KEY : IMAGE_SAMPLE_FILES_KEY;
+      const dirKey = kind === "audio" ? AUDIO_SAMPLE_DIR_KEY : (kind === "video" ? VIDEO_SAMPLE_DIR_KEY : IMAGE_SAMPLE_DIR_KEY);
+      const fileKey = kind === "audio" ? AUDIO_SAMPLE_FILE_KEY : (kind === "video" ? VIDEO_SAMPLE_FILE_KEY : IMAGE_SAMPLE_FILES_KEY);
       let dirHandle = await getSampleHandle(dirKey).catch(() => null);
       if (!dirHandle || !(await hasFileHandlePermission(dirHandle))) {
         dirHandle = await window.showDirectoryPicker({mode: "read"});
@@ -533,29 +636,36 @@
       const handles = await window.showOpenFilePicker({
         startIn: dirHandle,
         multiple,
-        types: [{description: kind === "audio" ? "音频样例" : "图片样例", accept}],
+        types: [{description: kind === "audio" ? "音频样例" : (kind === "video" ? "视频样例" : "图片样例"), accept}],
       });
       await putSampleHandle(fileKey, multiple ? handles : handles[0]);
       const files = await Promise.all(handles.map((handle) => handle.getFile()));
       if (kind === "audio") {
         setSelectedAudioSample(handles[0], files[0]);
+      } else if (kind === "video") {
+        setSelectedVideoSample(handles[0], files[0]);
       } else {
         setSelectedImageSamples(handles, files);
+        renderSelectedImagePreview().catch((err) => log(`image preview failed: ${err.message}`));
       }
       log(`selected ${kind} sample ${summarizeFiles(files, "")}`);
     }
 
     function chooseFileWithHiddenInput(kind) {
       return new Promise((resolve, reject) => {
-        const input = document.getElementById(kind === "audio" ? "audioFile" : "imageFile");
+        const input = document.getElementById(kind === "audio" ? "audioFile" : (kind === "video" ? "videoFile" : "imageFile"));
         input.onchange = () => {
           const files = Array.from(input.files || []);
           if (!files.length) {
-            reject(new Error(kind === "audio" ? "请选择音频文件" : "请选择图片文件"));
+            reject(new Error(kind === "audio" ? "请选择音频文件" : (kind === "video" ? "请选择视频文件" : "请选择图片文件")));
             return;
           }
           if (kind === "audio") setSelectedAudioSample(null, files[0]);
-          else setSelectedImageSamples([], files);
+          else if (kind === "video") setSelectedVideoSample(null, files[0]);
+          else {
+            setSelectedImageSamples([], files);
+            renderSelectedImagePreview().catch((err) => log(`image preview failed: ${err.message}`));
+          }
           resolve();
         };
         input.click();
@@ -576,6 +686,11 @@
         }
         if (permitted.length) {
           setSelectedImageSamples(permitted, await Promise.all(permitted.map((handle) => handle.getFile())));
+          renderSelectedImagePreview().catch((err) => log(`image preview failed: ${err.message}`));
+        }
+        const videoHandle = await getSampleHandle(VIDEO_SAMPLE_FILE_KEY).catch(() => null);
+        if (videoHandle && await hasFileHandlePermission(videoHandle)) {
+          setSelectedVideoSample(videoHandle, await videoHandle.getFile());
         }
       } catch (err) {
         log(`恢复样例文件选择失败: ${err.message}`);
@@ -1075,7 +1190,7 @@
         const fps = Math.max(1, Number((params.source || {}).fps || 5));
         const intervalMs = Math.max(100, Math.round(1000 / fps));
         peerVideoSender.timer = setInterval(() => {
-          sendPeerVideoFrame(peerVideoSender).catch((err) => {
+          sendPeerVideoFrame(peerVideoSender, fps).catch((err) => {
             log(`peer.video.frame.failed ${err.message}`);
           });
         }, intervalMs);
@@ -1089,20 +1204,16 @@
       };
     }
 
-    async function sendPeerVideoFrame(sender) {
+    async function sendPeerVideoFrame(sender, fps = 5) {
       if (!sender || sender.stopped || !sender.ws || sender.ws.readyState !== WebSocket.OPEN) return;
-      const frame = await capturePeerVideoFrame();
+      const frame = await capturePeerVideoFrame({fps});
       sender.ws.send(frame.bytes);
       sender.frameSeq += 1;
       log(`peer.video.frame.sent seq=${sender.frameSeq} bytes=${frame.bytes.byteLength}`);
     }
 
-    async function capturePeerVideoFrame() {
-      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
-        const frames = await readSelectedImageFrames();
-        return frames[0];
-      }
-      return await captureLiveCameraFrame();
+    async function capturePeerVideoFrame(options = {}) {
+      return await captureVisualFrame(options);
     }
 
     async function stopPeerVideoSender(reason = "manual_stop", commandEvent = null) {
@@ -1112,6 +1223,7 @@
         if (peerVideoSender.ws && peerVideoSender.ws.readyState === WebSocket.OPEN) {
           peerVideoSender.ws.close(1000, reason);
         }
+        stopSelectedVideoCapture();
         log(`peer.video.sender.stop reason=${reason}`);
         peerVideoSender = null;
       }
@@ -1130,6 +1242,10 @@
         return;
       }
       if (mode === "continuous") {
+        if (hasSelectedVideo()) {
+          await uploadSelectedVideoFramesRealtime(item);
+          return;
+        }
         await uploadSingleVisualSnapshot(item);
         return;
       }
@@ -1137,6 +1253,14 @@
     }
 
     async function uploadSingleVisualSnapshot(item = null) {
+      if (hasSelectedVideo()) {
+        try {
+          await uploadRgbImages([await captureVisualFrame({fps: Number((item && item.payload && item.payload.frequency_hz) || 1)})], item, "video_frame_captured");
+        } finally {
+          stopSelectedVideoCapture();
+        }
+        return;
+      }
       if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
         await uploadSelectedImages(item);
         return;
@@ -1210,6 +1334,80 @@
       }
     }
 
+    async function uploadSelectedVideoFramesRealtime(item = null) {
+      const payload = (item && item.payload) || {};
+      const requestId = payload.request_id;
+      const fps = Math.max(1, Number(payload.frequency_hz || payload.fps || 5));
+      const sampleCount = Number(payload.sample_count || 0);
+      const durationSeconds = Number(payload.duration_seconds || 0);
+      const fallbackCount = selectedVideoSourceEl.duration ? Math.ceil(selectedVideoSourceEl.duration * fps) : fps;
+      const frameCount = Math.max(1, Math.min(600, sampleCount || Math.ceil(durationSeconds * fps) || fallbackCount));
+      const intervalMs = Math.max(100, Math.round(1000 / fps));
+      const rgbStreamId = newId("stream_rgb");
+      const activeSession = currentDeviceId();
+      let bytesSent = 0;
+      try {
+        await ensureStreamSocketOpen();
+        await ensureSelectedVideoReady();
+        sendEvent(event("stream.input.opened", {
+          stream_type: "sensor.rgb",
+          format: {codec: "jpeg", sample_rate: fps, channels: 1, chunk_ms: intervalMs},
+          request_id: requestId,
+          image_count: frameCount,
+          source: "selected_video",
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "open", seq: 0, bytes_sent: 0, opened_at: Date.now()});
+        await delay(120);
+        for (let index = 0; index < frameCount; index += 1) {
+          const startedAt = Date.now();
+          const image = await captureSelectedVideoFrame({fps});
+          streamWs.send(encodeStreamChunk({
+            user_id: document.getElementById("userId").value,
+            session_id: activeSession,
+            stream_id: rgbStreamId,
+            stream_type: "sensor.rgb",
+            seq: index,
+            payload: image.bytes,
+            codec: "jpeg",
+            sample_rate: fps,
+            channels: 1,
+            duration_ms: intervalMs,
+            final: index === frameCount - 1,
+            metadata: {
+              request_id: requestId,
+              width: image.width,
+              height: image.height,
+              image_index: index,
+              image_count: frameCount,
+              video_time_seconds: selectedVideoSourceEl.currentTime,
+              reason: payload.reason || "video_frames_uploaded",
+            },
+          }));
+          bytesSent += image.bytes.byteLength;
+          setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "open", seq: index + 1, bytes_sent: bytesSent});
+          const remaining = intervalMs - (Date.now() - startedAt);
+          if (index < frameCount - 1 && remaining > 0) await delay(remaining);
+        }
+        await waitStreamSocketBufferedDrain();
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "video_frames_uploaded",
+          request_id: requestId,
+          image_count: frameCount,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: frameCount, bytes_sent: bytesSent, close_reason: "video_frames_uploaded"});
+        log(`send sensor.rgb video frames count=${frameCount} fps=${fps} bytes=${bytesSent} request_id=${requestId || "-"}`);
+      } catch (err) {
+        log(`capture sensor.rgb video failed: ${err.message}`);
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "capture_failed",
+          error: err.message,
+          request_id: requestId,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+      }
+    }
+
     async function readSelectedImageFrames() {
       const files = selectedImageSampleFiles.length
         ? selectedImageSampleFiles
@@ -1222,6 +1420,19 @@
       return images;
     }
 
+    function hasSelectedVideo() {
+      return Boolean(selectedVideoSampleFile || document.getElementById("videoFile").files.length);
+    }
+
+    async function captureVisualFrame(options = {}) {
+      if (hasSelectedVideo()) return await captureSelectedVideoFrame(options);
+      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
+        const frames = await readSelectedImageFrames();
+        return frames[0];
+      }
+      return await captureLiveCameraFrame();
+    }
+
     async function imageFileToJpegFrame(file) {
       const bitmap = await createImageBitmap(file);
       const canvas = document.createElement("canvas");
@@ -1229,7 +1440,131 @@
       canvas.width = Math.max(1, Math.round(bitmap.width * scale));
       canvas.height = Math.max(1, Math.round(bitmap.height * scale));
       canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      return await encodeBoundedJpegFrame(canvas, canvas.width, canvas.height);
+      const frame = await encodeBoundedJpegFrame(canvas, canvas.width, canvas.height);
+      renderCapturedFramePreview(canvas, canvas.width, canvas.height, "image");
+      return frame;
+    }
+
+    async function renderSelectedImagePreview() {
+      const files = selectedImageSampleFiles.length
+        ? selectedImageSampleFiles
+        : Array.from(document.getElementById("imageFile").files || []);
+      if (!files.length) return;
+      const bitmap = await createImageBitmap(files[0]);
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / bitmap.width, RGB_CAPTURE_MAX_HEIGHT / bitmap.height);
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      visualFramePreviewEl.width = width;
+      visualFramePreviewEl.height = height;
+      const ctx = visualFramePreviewEl.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(bitmap, 0, 0, width, height);
+    }
+
+    async function renderSelectedVideoPreview() {
+      await ensureSelectedVideoReady();
+      selectedVideoSourceEl.pause();
+      if (selectedVideoSourceEl.currentTime !== 0) {
+        selectedVideoSourceEl.currentTime = 0;
+        await waitForVideoSeek(selectedVideoSourceEl);
+      }
+      await waitForVideoPaint(selectedVideoSourceEl, 120);
+    }
+
+    async function playSelectedVideoForCapture() {
+      await ensureSelectedVideoReady();
+      if (selectedVideoSourceEl.paused) {
+        await selectedVideoSourceEl.play();
+      }
+    }
+
+    function stopSelectedVideoCapture() {
+      selectedVideoSourceEl.pause();
+    }
+
+    async function captureSelectedVideoFrame(options = {}) {
+      const fps = Math.max(1, Number(options.fps || 1));
+      await playSelectedVideoForCapture();
+      if (selectedVideoSourceEl.ended || selectedVideoSourceEl.currentTime >= selectedVideoSourceEl.duration) {
+        selectedVideoSourceEl.currentTime = 0;
+        await waitForVideoSeek(selectedVideoSourceEl);
+      }
+      await waitForVideoPaint(selectedVideoSourceEl, Math.round(1000 / fps));
+      const sourceWidth = selectedVideoSourceEl.videoWidth || RGB_CAPTURE_MAX_WIDTH;
+      const sourceHeight = selectedVideoSourceEl.videoHeight || RGB_CAPTURE_MAX_HEIGHT;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(selectedVideoSourceEl, 0, 0, width, height);
+      renderCapturedFramePreview(canvas, width, height, `video ${selectedVideoSourceEl.currentTime.toFixed(2)}s`);
+      return await encodeBoundedJpegFrame(canvas, width, height);
+    }
+
+    async function ensureSelectedVideoReady() {
+      const file = selectedVideoSampleFile || document.getElementById("videoFile").files[0];
+      if (!file) throw new Error("请选择视频文件");
+      if (!selectedVideoSampleFile && !selectedVideoSourceEl.src) setSelectedVideoSample(null, file);
+      if (selectedVideoSourceEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("video load timeout")), 5000);
+        selectedVideoSourceEl.onloadeddata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        selectedVideoSourceEl.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("video load failed"));
+        };
+        selectedVideoSourceEl.load();
+      });
+    }
+
+    function waitForVideoSeek(video) {
+      return new Promise((resolve) => {
+        if (!video.seeking) {
+          resolve();
+          return;
+        }
+        video.onseeked = () => resolve();
+      });
+    }
+
+    async function waitForVideoPaint(video, fallbackMs) {
+      if (typeof video.requestVideoFrameCallback === "function") {
+        await new Promise((resolve) => video.requestVideoFrameCallback(() => resolve()));
+        return;
+      }
+      await delay(Math.max(40, Math.min(200, fallbackMs || 120)));
+    }
+
+    function renderCapturedFramePreview(sourceCanvas, width, height, label) {
+      const canvas = visualFramePreviewEl;
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(sourceCanvas, 0, 0, width, height);
+      ctx.fillStyle = "rgba(15, 23, 34, 0.72)";
+      ctx.fillRect(8, 8, Math.min(width - 16, 360), 28);
+      ctx.fillStyle = "#dbe7ff";
+      ctx.font = "14px ui-monospace, Menlo, monospace";
+      ctx.fillText(`captured ${label || "frame"}`, 18, 27);
+      appendCapturedFrameThumbnail(sourceCanvas, width, height);
+    }
+
+    function appendCapturedFrameThumbnail(sourceCanvas, width, height) {
+      const thumb = document.createElement("canvas");
+      thumb.className = "frame-thumb";
+      thumb.width = 156;
+      thumb.height = 108;
+      thumb.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height, 0, 0, thumb.width, thumb.height);
+      capturedFrameStripEl.appendChild(thumb);
+      while (capturedFrameStripEl.children.length > 30) {
+        capturedFrameStripEl.removeChild(capturedFrameStripEl.firstElementChild);
+      }
+      capturedFrameStripEl.scrollLeft = capturedFrameStripEl.scrollWidth;
     }
 
     async function captureLiveCameraFrame() {
@@ -1277,6 +1612,7 @@
       canvas.height = height;
       canvas.getContext("2d").drawImage(video, 0, 0, width, height);
       video.pause();
+      renderCapturedFramePreview(canvas, width, height, "camera");
       return await encodeBoundedJpegFrame(canvas, width, height);
     }
 
@@ -1596,6 +1932,13 @@
         accept: {"image/*": [".jpg", ".jpeg", ".png", ".webp", ".bmp"]},
         multiple: true,
       }).catch((err) => log(`choose image sample failed: ${err.message}`));
+    };
+    chooseVideoSampleButton.onclick = () => {
+      chooseFileFromSampleDirectory({
+        kind: "video",
+        accept: {"video/*": [".mp4", ".mov", ".m4v", ".webm"]},
+        multiple: false,
+      }).catch((err) => log(`choose video sample failed: ${err.message}`));
     };
     buildRecordCommandButton.onclick = buildPlaybackRecordCommand;
     uploadImageNowButton.onclick = () => {

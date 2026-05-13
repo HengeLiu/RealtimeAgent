@@ -509,6 +509,29 @@ class AudioChatApp:
             self.recorder.bind_device(user_id=registration.user_id, device_id=device_id)
         return response
 
+    def mark_device_connection_offline(
+        self,
+        device_id: str,
+        *,
+        connection_id: str | None = None,
+        reason: str = "disconnected",
+    ) -> None:
+        """标记设备离线，并失败化该设备上未完成的远程命令。
+
+        主要逻辑：控制 WebSocket 断开和心跳超时都应终止该设备上的长命令等待。
+        `ControlService` 负责设备在线状态；`CommandResultBroker` 负责把未完成 command
+        转成 failed，唤醒正在等待的 Task。
+        参数：`device_id` 为设备 ID，`connection_id` 用于避免旧连接覆盖新连接，
+        `reason` 为离线原因。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self.control_service.mark_connection_offline(device_id, connection_id=connection_id, reason=reason)
+        broker = getattr(self, "_command_result_broker", None)
+        if broker is not None:
+            broker.fail_device_commands(device_id=device_id, reason=reason)
+
     def publish_control_event(self, event: Event) -> None:
         if event.event_name == "control.user.wake.detected":
             self._handle_wake_detected(event)
@@ -1012,6 +1035,10 @@ class AudioChatApp:
             now=current,
             timeout_seconds=self.config.control_heartbeat_timeout_seconds,
         )
+        broker = getattr(self, "_command_result_broker", None)
+        if broker is not None:
+            for device_id in expired_devices:
+                broker.fail_device_commands(device_id=device_id, reason="heartbeat_timeout")
         closed_streams = self.stream_service.close_idle_streams(now=current)
         closed_sessions: list[str] = []
         if self.config.audio_session_max_duration_seconds > 0:

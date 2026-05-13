@@ -997,6 +997,29 @@ class CommandResultBroker:
     def __init__(self) -> None:
         self._history: dict[str, list[CommandEvent]] = {}
         self._subscribers: dict[str, list[asyncio.Queue[CommandEvent]]] = {}
+        self._command_devices: dict[str, set[str]] = {}
+        self._device_commands: dict[str, set[str]] = {}
+        self._terminal_devices: dict[str, set[str]] = {}
+
+    def register_command(self, *, command_id: str, name: str, device_ids: tuple[str, ...]) -> None:
+        """登记一个已经下发、尚未结束的设备命令。
+
+        主要逻辑：在 `command.requested` 下发前登记 command 与目标设备的关系。
+        后续如果设备控制连接断开，SDK 可以把该设备上的未完成 command 转成
+        `command.failed`，避免 Task 长时间等待已经失联的端侧。
+        参数：`command_id/name/device_ids` 来自命令下发阶段。
+        返回值：无。
+        异常情况：无。
+        """
+
+        command_id = str(command_id or "").strip()
+        if not command_id:
+            return
+        device_set = {str(device_id) for device_id in device_ids if str(device_id)}
+        self._command_devices[command_id] = device_set
+        self._terminal_devices.setdefault(command_id, set())
+        for device_id in device_set:
+            self._device_commands.setdefault(device_id, set()).add(command_id)
 
     def record(self, event: Event) -> None:
         """记录端侧命令回执并唤醒订阅者。"""
@@ -1012,9 +1035,67 @@ class CommandResultBroker:
             state=state,
             data={"producer_id": event.producer_id, **payload},
         )
-        self._history.setdefault(command_id, []).append(command_event)
-        for queue in list(self._subscribers.get(command_id, [])):
+        self._append(command_event)
+        if state in self.TERMINAL_STATES and event.producer_id:
+            self._mark_terminal(command_id, str(event.producer_id))
+
+    def fail_device_commands(self, *, device_id: str, reason: str = "device_offline") -> tuple[str, ...]:
+        """把某台离线设备上的未完成命令标记为 failed。
+
+        主要逻辑：控制连接断开或心跳超时时调用本方法。它只影响已登记且该设备尚未
+        返回 completed/failed 的 command，不会重复覆盖已经终态的命令。
+        参数：`device_id` 为离线设备，`reason` 为失败原因。
+        返回值：被标记失败的 command_id 列表。
+        异常情况：无。
+        """
+
+        device_id = str(device_id or "").strip()
+        if not device_id:
+            return tuple()
+        failed: list[str] = []
+        for command_id in list(self._device_commands.get(device_id, set())):
+            if device_id in self._terminal_devices.get(command_id, set()):
+                continue
+            history = self._history.get(command_id, [])
+            name = history[-1].name if history else ""
+            command_event = CommandEvent(
+                command_id=command_id,
+                name=name,
+                state="failed",
+                data={
+                    "producer_id": device_id,
+                    "command_id": command_id,
+                    "command": name,
+                    "message": f"device offline: {reason}",
+                    "error_code": "device_offline",
+                    "reason": reason,
+                },
+            )
+            self._append(command_event)
+            self._mark_terminal(command_id, device_id)
+            failed.append(command_id)
+        return tuple(failed)
+
+    def _append(self, command_event: CommandEvent) -> None:
+        """记录命令事件并通知订阅者。"""
+
+        self._history.setdefault(command_event.command_id, []).append(command_event)
+        for queue in list(self._subscribers.get(command_event.command_id, [])):
             queue.put_nowait(command_event)
+
+    def _mark_terminal(self, command_id: str, device_id: str) -> None:
+        """标记某台设备上的 command 已进入终态。"""
+
+        terminal = self._terminal_devices.setdefault(command_id, set())
+        terminal.add(device_id)
+        if terminal >= self._command_devices.get(command_id, set()):
+            for item in self._command_devices.pop(command_id, set()):
+                commands = self._device_commands.get(item)
+                if commands is not None:
+                    commands.discard(command_id)
+                    if not commands:
+                        self._device_commands.pop(item, None)
+            self._terminal_devices.pop(command_id, None)
 
     async def wait(
         self,
@@ -1297,6 +1378,7 @@ class _CommandsFacade:
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=require_single)
         command_id = new_id("cmd")
         broker = self._context._command_result_broker()
+        broker.register_command(command_id=command_id, name=name, device_ids=tuple(str(device.device_id) for device in devices))
         result = self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
             payload={"command_id": command_id, "command": name, "params": dict(params or {})},
@@ -1371,7 +1453,8 @@ class _CommandsFacade:
             raise AudioChatError("long running commands are only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
         command_id = new_id("cmd")
-        self._context._command_result_broker()
+        broker = self._context._command_result_broker()
+        broker.register_command(command_id=command_id, name=name, device_ids=tuple(str(device.device_id) for device in devices))
         self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
             payload={"command_id": command_id, "command": name, "mode": "start", "params": dict(params or {})},

@@ -33,6 +33,7 @@ class PeerVideoReceiver:
     latest_frame: bytes | None = None
     frame_count: int = 0
     last_detection: dict[str, Any] | None = None
+    sender_connected: bool = False
     complete_after_frames: int = 0
     frame_callback: Callable[[bytes, dict[str, Any]], Any] | None = None
     close_reason: str = ""
@@ -71,8 +72,22 @@ class PeerVideoReceiver:
             )
             if self.close_reason == "server_stop":
                 result = {"stopped": True, "frame_count": self.frame_count, "source": "mock"}
+            if self.close_reason == "sender_disconnected" and self.frame_count <= 0:
+                result = {
+                    "failed": True,
+                    "frame_count": self.frame_count,
+                    "source": "mock",
+                    "message": "眼镜视频发送端已断开，未收到可处理的视频帧",
+                }
             logger.info("vision.mock.result peer_session_id=%s result=%s", self.peer_session_id, result)
-            await self.reporter.completed(result=result, message=str(result.get("message") or "peer video completed"))
+            if result.get("failed"):
+                await self.reporter.failed(
+                    message=str(result.get("message") or "peer video failed"),
+                    error_code=str(result.get("error_code") or "peer_video_sender_disconnected"),
+                    data=result,
+                )
+            else:
+                await self.reporter.completed(result=result, message=str(result.get("message") or "peer video completed"))
             return result
         except Exception as exc:  # noqa: BLE001 - 参考端需要把 receiver 错误上报给 server
             await self.reporter.failed(message=str(exc), error_code="peer_video_receiver_failed")
@@ -131,30 +146,41 @@ class PeerVideoReceiver:
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        self.sender_connected = True
         logger.info("peer.video.sender.connected peer_session_id=%s", self.peer_session_id)
-        async for message in ws:
-            if message.type != web.WSMsgType.BINARY:
-                continue
-            frame = bytes(message.data)
-            first_frame = self.frame_count == 0
-            self.latest_frame = frame
-            self.frame_count += 1
-            await self._emit_frame(frame)
-            if first_frame:
+        try:
+            async for message in ws:
+                if message.type != web.WSMsgType.BINARY:
+                    continue
+                frame = bytes(message.data)
+                first_frame = self.frame_count == 0
+                self.latest_frame = frame
+                self.frame_count += 1
+                await self._emit_frame(frame)
+                if first_frame:
+                    await self.reporter.progress(
+                        "peer.video.first_frame",
+                        message="收到第一帧 peer video",
+                        metrics={"frame_count": self.frame_count, "frame_size": len(frame)},
+                    )
+                self.last_detection = await fork_yolo_mock(frame, purpose=self.purpose, object_name=self.object_name)
                 await self.reporter.progress(
-                    "peer.video.first_frame",
-                    message="收到第一帧 peer video",
+                    "peer.video.frame_processed",
+                    message="peer video frame processed",
+                    data={"detection": self.last_detection},
                     metrics={"frame_count": self.frame_count, "frame_size": len(frame)},
                 )
-            self.last_detection = await fork_yolo_mock(frame, purpose=self.purpose, object_name=self.object_name)
-            await self.reporter.progress(
-                "peer.video.frame_processed",
-                message="peer video frame processed",
-                data={"detection": self.last_detection},
-                metrics={"frame_count": self.frame_count, "frame_size": len(frame)},
-            )
-            if self.complete_after_frames > 0 and self.frame_count >= self.complete_after_frames:
-                self.close_reason = "mock_result"
+                if self.complete_after_frames > 0 and self.frame_count >= self.complete_after_frames:
+                    self.close_reason = "mock_result"
+                    self._stop_event.set()
+        finally:
+            if not self._stop_event.is_set():
+                self.close_reason = "sender_disconnected"
+                await self.reporter.progress(
+                    "peer.video.sender_disconnected",
+                    message="眼镜视频发送端已断开",
+                    metrics={"frame_count": self.frame_count},
+                )
                 self._stop_event.set()
         return ws
 

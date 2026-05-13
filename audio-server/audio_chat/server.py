@@ -303,7 +303,7 @@ class AudioChatHttpServer:
             if sender_task is not None:
                 sender_task.cancel()
             if connection is not None:
-                self.audio_app.control_service.mark_connection_offline(
+                self.audio_app.mark_device_connection_offline(
                     connection.device_id,
                     connection_id=connection.connection_id,
                     reason="control_ws_disconnected",

@@ -99,11 +99,11 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
 
 
 def test_browser_device_switches_visible_fields_by_input_mode() -> None:
-    """测试目标：验证 browser-glass 使用样例目录选择入口和明确的图片上传按钮。
+    """测试目标：验证 browser-glass 使用样例目录选择入口和明确的视觉上传按钮。
 
-    测试方法：静态检查页面隐藏原生文件 input，使用 File System Access API
-    的样例选择按钮，并移除旧的视频和静音控件。
-    预期结果：离线音频和图片样例由按钮选择，图片可由服务端请求或手动按钮触发上传。
+    测试方法：静态检查页面隐藏原生文件 input，使用 File System Access API 的样例
+    选择按钮，并提供视频采帧预览入口。
+    预期结果：离线音频、图片和视频样例由按钮选择，视频可在服务端请求采集时按帧抽取。
     """
 
     html = _html()
@@ -111,12 +111,28 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert ".hidden { display: none !important; }" in html
     assert 'id="chooseAudioSample"' in html
     assert 'id="chooseImageSample"' in html
+    assert 'id="chooseVideoSample"' in html
     assert 'id="uploadImageNow"' in html
     assert "<h2>音频选择</h2>" in html
     assert "<h2>带图输入</h2>" in html
     assert "<h2>自定义事件</h2>" not in html
     assert 'id="audioFile" class="hidden"' in html
     assert 'id="imageFile" class="hidden"' in html
+    assert 'id="videoFile" class="hidden"' in html
+    assert 'id="visualFramePreview"' in html
+    assert 'id="selectedVideoSource"' in html
+    assert 'id="videoPlaceholder"' in html
+    assert 'id="capturedFrameStrip"' in html
+    assert "frame-thumb" in html
+    assert "source-image" in html
+    assert "source-video" in html
+    assert "source-camera" in html
+    assert 'classList.toggle("source-video", active === "video")' in html
+    assert "renderSelectedImagePreview" in html
+    assert "图片和视频只能二选一" in html
+    assert "clearSelectedVideoSample()" in html
+    assert "clearSelectedImageSamples()" in html
+    assert "activeVisualInputKind" in html
     assert "showOpenFilePicker" in html
     assert "showDirectoryPicker" in html
     assert "restoreSampleSelections()" in html
@@ -126,8 +142,9 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert 'multiple' in html
     assert 'id="silenceMs"' not in html
     assert 'id="sendPhoto"' not in html
-    assert 'id="videoFile"' not in html
-    assert "selected_video_current_frame" not in html
+    assert "captureSelectedVideoFrame" in html
+    assert "uploadSelectedVideoFramesRealtime" in html
+    assert "requestVideoFrameCallback" in html
     assert "manual_confirm" not in html
 
 
