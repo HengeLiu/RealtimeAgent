@@ -595,6 +595,47 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 )
                 self._session_closed.set()
 
+    async def _send_heartbeat(self, control_ws) -> None:
+        """发送一次设备心跳。
+
+        主要逻辑：长驻 phone 端即使暂时没有收到 server 控制事件，也要主动刷新
+        server 侧在线状态，避免模型思考或工具调用耗时超过心跳超时后被误判离线。
+        参数：`control_ws` 为控制 WebSocket。
+        返回值：无。
+        异常情况：WebSocket 发送失败时向上抛出，由心跳循环结束当前连接。
+        """
+
+        await self._send_event(
+            control_ws,
+            Event(
+                event_name="control.device.heartbeat.received",
+                user_id=self.user_id,
+                producer_id=self.device_id,
+                session_id=self.device_id,
+                payload={"device_id": self.device_id},
+            ),
+        )
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_log("DEBUG", "发送设备心跳", debug=True)
+
+    async def _heartbeat_loop(self, control_ws, *, interval_seconds: float = 10.0) -> None:
+        """周期性发送设备心跳。
+
+        主要逻辑：按 server 注册返回的心跳间隔循环发送
+        `control.device.heartbeat.received`，直到连接关闭或任务被取消。
+        参数：`control_ws` 为控制 WebSocket，`interval_seconds` 为发送间隔。
+        返回值：无。
+        异常情况：取消时正常退出；其他发送异常交给调用方的任务生命周期暴露。
+        """
+
+        interval = max(1.0, float(interval_seconds or 10.0))
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await self._send_heartbeat(control_ws)
+        except asyncio.CancelledError:
+            raise
+
     async def _handle_device_command(self, control_ws, stream_ws, event: Event) -> None:
         """处理 server 下发的 phone task 命令事件。
 
@@ -1116,10 +1157,17 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
 
         async with ClientSession() as session:
             control_ws = await self.run_until_registered(session=session)
+            registered_event = self.received_events[-1] if self.received_events else None
+            heartbeat_interval = (
+                float((registered_event.payload or {}).get("heartbeat_interval_seconds") or 10.0)
+                if registered_event is not None
+                else 10.0
+            )
             if self.gui_bridge is not None:
                 self.gui_bridge.emit_status(registered=True, control="open")
                 self.gui_bridge.emit_log("INFO", f"设备已注册 device_id={self.device_id}")
             self._start_vision_warmup()
+            heartbeat_task = asyncio.create_task(self._heartbeat_loop(control_ws, interval_seconds=heartbeat_interval))
             try:
                 async with session.ws_connect(self._stream_url()) as stream_ws:
                     control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, None))
@@ -1130,6 +1178,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         control_task.cancel()
                         stream_task.cancel()
             finally:
+                heartbeat_task.cancel()
                 await self._stop_all_peer_video_receivers(reason="phone_endpoint_closing")
                 await self._cancel_vision_warmup()
                 if self.video_preview is not None:

@@ -112,6 +112,35 @@ def test_yoloe_text_dependency_error_points_to_phone_requirements(monkeypatch) -
         find_object_module._ensure_yoloe_text_dependency()
 
 
+def test_find_object_uses_predict_instead_of_tracker_dependency() -> None:
+    """测试目标：验证找物推理不进入 Ultralytics tracker 依赖路径。
+
+    测试方法：构造同时带 `predict()` 和 `track()` 的假模型，`track()` 被调用则失败。
+    预期结果：`_run_segment()` 使用逐帧 predict，避免端侧额外依赖 `lap`。
+    """
+
+    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+
+    class FakeYoloeModel:
+        predict_called = False
+
+        def predict(self, *_args, **_kwargs):
+            self.predict_called = True
+            return []
+
+        def track(self, *_args, **_kwargs):
+            raise AssertionError("找物推理不应该调用 track()")
+
+    model = FakeYoloeModel()
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    config = VisionConfig.from_mapping({"provider": "yolo"}).find_object
+
+    result = find_object_module._run_segment(model, frame, config)
+
+    assert model.predict_called is True
+    assert result == {"masks": [], "boxes": [], "confidences": [], "ids": []}
+
+
 def test_yoloe_text_weight_download_uses_phone_cache_dir(tmp_path, monkeypatch) -> None:
     """测试目标：验证 YOLOE 文本权重下载不会落到仓库根目录。
 

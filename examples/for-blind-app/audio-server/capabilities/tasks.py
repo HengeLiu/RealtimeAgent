@@ -314,13 +314,13 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
     """找物 peer video Task。
 
     主要功能：
-    1. 编排手机端启动视频接收和 YOLO mock。
+    1. 编排手机端启动视频接收和 YOLO 找物识别。
     2. 编排眼镜端连接手机端并发送 JPEG 帧。
     3. 根据手机端 completed result 生成 TaskSignal 和播报。
     """
 
     task_type = "find_object_task"
-    description = "启动找物后台任务。用于用户要求寻找某个物体或确认目标是否在当前视野中；任务会编排手机和眼镜建立 peer video，由手机端 YOLO mock 逐帧处理并播报结果。"
+    description = "启动找物后台任务。用于用户要求寻找某个物体、持续观察目标或确认目标是否在当前视野中；任务会编排手机和眼镜建立 peer video，由手机端 YOLO 逐帧处理并返回真实结果。调用本工具后，在任务返回 finish/error 前不要自行回答已找到、位置、距离或方向。"
     input_model = FindObjectTaskInput
 
     def __init__(self) -> None:
@@ -331,7 +331,7 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
         """启动找物视觉任务。
 
         主要逻辑：读取目标物名称，先启动 phone peer receiver，再启动 glass peer
-        sender；最终结果由 phone 端 YOLO mock 通过 command.completed 返回。
+        sender；最终结果由 phone 端 YOLO 通过 command.completed 返回。
         参数：`context` 为 SDK 注入的任务上下文。
         返回值：无。
         异常情况：端侧失败或超时时任务进入 failed。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 import pytest
@@ -65,6 +66,24 @@ class ScheduledCompleteTask(BaseTask):
         assert event.event.payload["signal_name"] == "scheduled.done"
 
 
+class LoopSurvivalTask(BaseTask):
+    """测试用后台存活 Task。"""
+
+    task_type = "loop_survival_task"
+    finished = threading.Event()
+
+    async def on_start(self, context) -> None:
+        """测试目标：验证 Task 不依赖创建它的临时事件循环。
+
+        测试方法：任务启动后等待一小段时间，再主动完成。
+        预期结果：即使 `TaskEngine.create()` 所在的 `asyncio.run()` 已退出，任务仍能完成。
+        """
+
+        await asyncio.sleep(0.05)
+        await context.complete({"ok": True}, summary="后台任务完成")
+        type(self).finished.set()
+
+
 def _wait_for_state(engine: TaskEngine, task_id: str, state: str, *, timeout_seconds: float = 0.5):
     """等待后台 TaskRunner 把任务流转到目标状态。"""
 
@@ -75,6 +94,23 @@ def _wait_for_state(engine: TaskEngine, task_id: str, state: str, *, timeout_sec
             return ref
         time.sleep(0.01)
     return engine.query(task_id)
+
+
+def test_task_runner_survives_transient_create_event_loop() -> None:
+    """测试目标：验证 TaskRunner 不会把后台 Task 绑定到工具调用的临时事件循环。
+
+    测试方法：在 `asyncio.run()` 中创建任务，让创建 loop 立即退出，再等待任务完成。
+    预期结果：任务继续在 TaskRunner 独立后台 loop 中运行，最终进入 finished。
+    """
+
+    LoopSurvivalTask.finished.clear()
+    engine = TaskEngine()
+    engine.register(LoopSurvivalTask)
+
+    ref = asyncio.run(engine.create(task_type="loop_survival_task", user_id="user-loop", session_id="sess-loop"))
+
+    assert LoopSurvivalTask.finished.wait(0.5) is True
+    assert _wait_for_state(engine, ref.task_id, "finished").state == "finished"
 
 
 def test_task_query_moves_expired_started_task_to_failed() -> None:

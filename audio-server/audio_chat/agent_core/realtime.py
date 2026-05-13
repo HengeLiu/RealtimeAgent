@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -22,6 +23,7 @@ from audio_chat.tools import ToolGateway
 
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
 OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
+REALTIME_FIND_OBJECT_START_TOOL = "start_find_object_task"
 
 
 def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -51,6 +53,41 @@ def _provider_tool_schema_name(schema: dict[str, Any]) -> str:
     if isinstance(function, dict):
         return str(function.get("name") or "")
     return str(schema.get("name") or "") if isinstance(schema, dict) else ""
+
+
+def _extract_find_object_name(transcript: str) -> str | None:
+    """从用户语音转写中提取找物目标名称。
+
+    主要逻辑：只处理明确的“找/寻找/留意/观察某物在哪里”类表达，作为 Realtime
+    工具漏调时的兜底意图识别。该函数不替代模型理解，只用于防止模型口头声称已启动
+    但没有实际调用 `start_find_object_task`。
+    参数：`transcript` 为用户语音转写文本。
+    返回值：目标物名称；不是找物意图时返回 None。
+    异常情况：无。
+    """
+
+    text = re.sub(r"[\s，。！？、,.!?]", "", str(transcript or ""))
+    if not text:
+        return None
+    if not any(keyword in text for keyword in ("找", "寻找", "留意", "观察")):
+        return None
+    if not any(keyword in text for keyword in ("在哪", "哪里", "位置", "找一下", "帮我找", "寻找", "留意")):
+        return None
+    patterns = (
+        r"(?:帮我|请|麻烦你|给我)?(?:找一下|找找|找|寻找|留意|观察)(?P<object>.+?)(?:在哪里|在哪儿|在哪|的位置|位置|$)",
+        r"(?P<object>.+?)(?:在哪里|在哪儿|在哪|的位置|位置)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        object_name = str(match.group("object") or "")
+        object_name = re.sub(r"^(一下|这个|那个|我的|我|帮我|请|要找的)+", "", object_name)
+        object_name = re.sub(r"(哪里|在哪儿|在哪|位置|吗|呢|啊|呀)+$", "", object_name)
+        object_name = object_name.strip()
+        if 1 <= len(object_name) <= 20:
+            return object_name
+    return None
 
 
 @dataclass(frozen=True)
@@ -1085,6 +1122,8 @@ class RealtimeAudioAgentCore:
         self._event_buffer = AgentEventBuffer()
         self._assistant_text_by_session: dict[str, list[str]] = {}
         self._recorded_user_transcripts: set[tuple[str, str]] = set()
+        self._pending_find_object_intent_by_session: dict[str, dict[str, Any]] = {}
+        self._tool_call_count_by_session: dict[str, int] = {}
         self._active_user_audio_by_session: dict[str, list[bytes]] = {}
         self._last_user_audio_by_session: dict[str, list[bytes]] = {}
         self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
@@ -1399,6 +1438,9 @@ class RealtimeAudioAgentCore:
             name=record.get("name"),
             arguments=record.get("arguments"),
         )
+        self._tool_call_count_by_session[session_id] = self._tool_call_count_by_session.get(session_id, 0) + 1
+        if str(result.get("name") or record.get("name") or "") == REALTIME_FIND_OBJECT_START_TOOL:
+            self._pending_find_object_intent_by_session.pop(session_id, None)
         self._append_tool_messages(
             user_id=user_id,
             session_id=session_id,
@@ -1611,6 +1653,7 @@ class RealtimeAudioAgentCore:
         self.recorder.record_agent_event(session_id, record)
         self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
+        self._handle_realtime_intent_fallback(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
             str(record.get("event") or "provider.event"),
             user_id=user_id,
@@ -1900,6 +1943,7 @@ class RealtimeAudioAgentCore:
             if key in self._recorded_user_transcripts:
                 return
             self._recorded_user_transcripts.add(key)
+            self._remember_find_object_intent(session_id=session_id, transcript=transcript)
             self.control_service.append_message(
                 user_id,
                 {
@@ -1933,6 +1977,92 @@ class RealtimeAudioAgentCore:
                     "source": "omni_realtime",
                 },
             )
+
+    def _remember_find_object_intent(self, *, session_id: str, transcript: str) -> None:
+        """记录当前轮可能需要找物任务兜底的用户意图。
+
+        主要逻辑：Realtime provider 偶尔会在“找物”请求中只口头回答“已启动”，
+        但没有真正提交 function call。这里不直接执行业务，只记录意图和当前工具调用
+        计数；等同一轮 `response.done` 时如果仍没有工具调用，再走公开 ToolGateway
+        兜底启动 `start_find_object_task`。
+        参数：`session_id` 为当前音频会话，`transcript` 为用户语音转写。
+        返回值：无。
+        异常情况：无。
+        """
+
+        object_name = _extract_find_object_name(transcript)
+        if not object_name:
+            self._pending_find_object_intent_by_session.pop(session_id, None)
+            return
+        self._pending_find_object_intent_by_session[session_id] = {
+            "transcript": transcript,
+            "object_name": object_name,
+            "tool_call_count": self._tool_call_count_by_session.get(session_id, 0),
+        }
+
+    def _handle_realtime_intent_fallback(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """在模型漏调找物工具时通过 ToolGateway 兜底启动任务。
+
+        主要逻辑：只处理已经暴露 `start_find_object_task` 的应用；如果当前用户转写是
+        找物意图，且本轮 response 完成时没有任何 provider 工具调用，则补一次同名
+        Tool 调用。兜底仍走公开 ToolGateway，不直接操作 TaskEngine、设备或业务对象。
+        参数：`user_id/session_id` 定位会话，`record` 为 provider 事件摘要。
+        返回值：无。
+        异常情况：ToolGateway 内部错误会体现在 ToolResult，并写入工具消息。
+        """
+
+        if str(record.get("event") or "") != "omni.response.done":
+            return
+        pending = self._pending_find_object_intent_by_session.get(session_id)
+        if not pending:
+            return
+        if self._tool_call_count_by_session.get(session_id, 0) > int(pending.get("tool_call_count") or 0):
+            self._pending_find_object_intent_by_session.pop(session_id, None)
+            return
+        gateway = self.tool_bridge.tool_gateway
+        if gateway is None:
+            return
+        tool_names = {_provider_tool_schema_name(schema) for schema in gateway.provider_schemas()}
+        if REALTIME_FIND_OBJECT_START_TOOL not in tool_names:
+            return
+        self._pending_find_object_intent_by_session.pop(session_id, None)
+        object_name = str(pending.get("object_name") or "目标物")
+        tool_call_id = f"fallback_{int(time.time() * 1000)}"
+        input_data = {"object_name": object_name, "timeout_seconds": 30}
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.intent_fallback.tool_call",
+                "tool_call_id": tool_call_id,
+                "tool_name": REALTIME_FIND_OBJECT_START_TOOL,
+                "object_name": object_name,
+                "reason": "find_object_intent_without_provider_tool_call",
+            },
+        )
+        result = gateway.call_sync_safe(
+            name=REALTIME_FIND_OBJECT_START_TOOL,
+            user_id=user_id,
+            session_id=session_id,
+            input_data=input_data,
+        )
+        result_dict = {
+            "tool_call_id": tool_call_id,
+            "name": REALTIME_FIND_OBJECT_START_TOOL,
+            "ok": result.ok,
+            "data": result.data,
+            "message": result.message,
+            "error": result.error,
+            "meta": result.meta or {},
+        }
+        self._tool_call_count_by_session[session_id] = self._tool_call_count_by_session.get(session_id, 0) + 1
+        self._append_tool_messages(
+            user_id=user_id,
+            session_id=session_id,
+            tool_call_id=tool_call_id,
+            tool_name=REALTIME_FIND_OBJECT_START_TOOL,
+            arguments=input_data,
+            result=result_dict,
+        )
 
     def _append_tool_messages(
         self,

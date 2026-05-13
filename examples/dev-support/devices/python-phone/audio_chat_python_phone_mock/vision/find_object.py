@@ -179,10 +179,13 @@ def _run_segment(model: Any, frame_bgr: np.ndarray, config: FindObjectVisionConf
     异常情况：模型推理异常时向上抛出。
     """
 
-    if hasattr(model, "track"):
-        raw = model.track(frame_bgr, conf=config.conf, iou=config.iou, imgsz=config.imgsz, persist=True, verbose=False)
+    # 找物任务只需要逐帧检测结果，跨帧稳定性由 stable_hits 处理。
+    # Ultralytics 的 track() 会额外导入 lap 等 tracker 依赖，端侧没有必要承担这层依赖。
+    predict = getattr(model, "predict", None)
+    if callable(predict):
+        raw = predict(frame_bgr, conf=config.conf, iou=config.iou, imgsz=config.imgsz, verbose=False)
     else:
-        raw = model(frame_bgr, conf=config.conf, imgsz=config.imgsz, verbose=False)
+        raw = model(frame_bgr, conf=config.conf, iou=config.iou, imgsz=config.imgsz, verbose=False)
     if not raw:
         return {"masks": [], "boxes": [], "confidences": [], "ids": []}
     r0 = raw[0]

@@ -680,25 +680,6 @@ class TaskRunner:
     def submit(self, task_id: str, coro: Any) -> Future:
         """提交一个 Task 协程到后台事件循环。"""
 
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-        if running_loop is not None and running_loop.is_running():
-            task = running_loop.create_task(coro)
-            with self._lock:
-                self._futures.setdefault(task_id, set()).add(task)
-
-            def _cleanup_task(done: Any) -> None:
-                with self._lock:
-                    futures = self._futures.get(task_id)
-                    if futures is not None:
-                        futures.discard(done)
-                        if not futures:
-                            self._futures.pop(task_id, None)
-
-            task.add_done_callback(_cleanup_task)
-            return task
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         with self._lock:

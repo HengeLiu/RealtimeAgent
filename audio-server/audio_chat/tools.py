@@ -995,8 +995,9 @@ class CommandResultBroker:
     TERMINAL_STATES = {"completed", "failed"}
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._history: dict[str, list[CommandEvent]] = {}
-        self._subscribers: dict[str, list[asyncio.Queue[CommandEvent]]] = {}
+        self._subscribers: dict[str, list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[CommandEvent]]]] = {}
         self._command_devices: dict[str, set[str]] = {}
         self._device_commands: dict[str, set[str]] = {}
         self._terminal_devices: dict[str, set[str]] = {}
@@ -1024,16 +1025,18 @@ class CommandResultBroker:
         if not command_id:
             return
         device_set = {str(device_id) for device_id in device_ids if str(device_id)}
-        self._command_devices[command_id] = device_set
-        self._command_metadata[command_id] = dict(metadata or {})
-        self._terminal_devices.setdefault(command_id, set())
-        for device_id in device_set:
-            self._device_commands.setdefault(device_id, set()).add(command_id)
+        with self._lock:
+            self._command_devices[command_id] = device_set
+            self._command_metadata[command_id] = dict(metadata or {})
+            self._terminal_devices.setdefault(command_id, set())
+            for device_id in device_set:
+                self._device_commands.setdefault(device_id, set()).add(command_id)
 
     def metadata_for(self, command_id: str) -> dict[str, Any]:
         """返回命令登记时保存的 task 等元数据。"""
 
-        return dict(self._command_metadata.get(str(command_id or "").strip()) or {})
+        with self._lock:
+            return dict(self._command_metadata.get(str(command_id or "").strip()) or {})
 
     def record(self, event: Event) -> None:
         """记录端侧命令回执并唤醒订阅者。"""
@@ -1068,11 +1071,14 @@ class CommandResultBroker:
         if not device_id:
             return tuple()
         failed: list[str] = []
-        for command_id in list(self._device_commands.get(device_id, set())):
-            if device_id in self._terminal_devices.get(command_id, set()):
-                continue
-            history = self._history.get(command_id, [])
-            name = history[-1].name if history else ""
+        with self._lock:
+            command_ids = list(self._device_commands.get(device_id, set()))
+        for command_id in command_ids:
+            with self._lock:
+                if device_id in self._terminal_devices.get(command_id, set()):
+                    continue
+                history = self._history.get(command_id, [])
+                name = history[-1].name if history else ""
             command_event = CommandEvent(
                 command_id=command_id,
                 name=name,
@@ -1094,23 +1100,39 @@ class CommandResultBroker:
     def _append(self, command_event: CommandEvent) -> None:
         """记录命令事件并通知订阅者。"""
 
-        self._history.setdefault(command_event.command_id, []).append(command_event)
-        for queue in list(self._subscribers.get(command_event.command_id, [])):
-            queue.put_nowait(command_event)
+        with self._lock:
+            self._history.setdefault(command_event.command_id, []).append(command_event)
+            subscribers = list(self._subscribers.get(command_event.command_id, []))
+        stale: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[CommandEvent]]] = []
+        for loop, queue in subscribers:
+            if loop.is_closed():
+                stale.append((loop, queue))
+                continue
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, command_event)
+            except RuntimeError:
+                stale.append((loop, queue))
+        if stale:
+            with self._lock:
+                current = self._subscribers.get(command_event.command_id, [])
+                for item in stale:
+                    if item in current:
+                        current.remove(item)
 
     def _mark_terminal(self, command_id: str, device_id: str) -> None:
         """标记某台设备上的 command 已进入终态。"""
 
-        terminal = self._terminal_devices.setdefault(command_id, set())
-        terminal.add(device_id)
-        if terminal >= self._command_devices.get(command_id, set()):
-            for item in self._command_devices.pop(command_id, set()):
-                commands = self._device_commands.get(item)
-                if commands is not None:
-                    commands.discard(command_id)
-                    if not commands:
-                        self._device_commands.pop(item, None)
-            self._terminal_devices.pop(command_id, None)
+        with self._lock:
+            terminal = self._terminal_devices.setdefault(command_id, set())
+            terminal.add(device_id)
+            if terminal >= self._command_devices.get(command_id, set()):
+                for item in self._command_devices.pop(command_id, set()):
+                    commands = self._device_commands.get(item)
+                    if commands is not None:
+                        commands.discard(command_id)
+                        if not commands:
+                            self._device_commands.pop(item, None)
+                self._terminal_devices.pop(command_id, None)
 
     async def wait(
         self,
@@ -1125,11 +1147,15 @@ class CommandResultBroker:
         由调用方转换成结构化 CommandResult。
         """
 
-        seen = list(self._history.get(command_id, []))
+        with self._lock:
+            seen = list(self._history.get(command_id, []))
         if _command_terminal_device_ids(seen) >= set(expected_device_ids):
             return seen
+        loop = asyncio.get_running_loop()
         queue: asyncio.Queue[CommandEvent] = asyncio.Queue()
-        self._subscribers.setdefault(command_id, []).append(queue)
+        subscriber = (loop, queue)
+        with self._lock:
+            self._subscribers.setdefault(command_id, []).append(subscriber)
         deadline = time.time() + max(0.0, timeout_seconds)
         try:
             while _command_terminal_device_ids(seen) < set(expected_device_ids):
@@ -1141,19 +1167,27 @@ class CommandResultBroker:
                 except TimeoutError:
                     break
         finally:
-            subscribers = self._subscribers.get(command_id, [])
-            if queue in subscribers:
-                subscribers.remove(queue)
+            with self._lock:
+                subscribers = self._subscribers.get(command_id, [])
+                if subscriber in subscribers:
+                    subscribers.remove(subscriber)
         return seen
 
     def subscribe(self, command_id: str) -> AsyncIterator[CommandEvent]:
         """订阅某个命令的真实端侧回执。"""
 
         async def _events() -> AsyncIterator[CommandEvent]:
-            for event in self._history.get(command_id, []):
+            with self._lock:
+                history = list(self._history.get(command_id, []))
+            for event in history:
                 yield event
+                if event.state in self.TERMINAL_STATES:
+                    return
+            loop = asyncio.get_running_loop()
             queue: asyncio.Queue[CommandEvent] = asyncio.Queue()
-            self._subscribers.setdefault(command_id, []).append(queue)
+            subscriber = (loop, queue)
+            with self._lock:
+                self._subscribers.setdefault(command_id, []).append(subscriber)
             try:
                 while True:
                     event = await queue.get()
@@ -1161,9 +1195,10 @@ class CommandResultBroker:
                     if event.state in self.TERMINAL_STATES:
                         break
             finally:
-                subscribers = self._subscribers.get(command_id, [])
-                if queue in subscribers:
-                    subscribers.remove(queue)
+                with self._lock:
+                    subscribers = self._subscribers.get(command_id, [])
+                    if subscriber in subscribers:
+                        subscribers.remove(subscriber)
 
         return _events()
 
