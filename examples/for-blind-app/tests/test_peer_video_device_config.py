@@ -27,3 +27,5 @@ def test_peer_video_device_configs_share_user_and_roles() -> None:
     assert phone["properties"]["endpoint.role.phone"] is True
     assert phone["properties"]["endpoint.compute.vision"] is True
     assert phone["properties"]["peer.video.receiver"] is True
+    assert phone["peer_video"]["timeout_seconds"] == 30
+    assert phone["peer_video"]["yolo_mock"]["complete_after_frames"] == 0

@@ -36,6 +36,54 @@ class RecordingEndpoint:
         _ = reason
 
 
+class EagerPeerEndpoint(RecordingEndpoint):
+    """会立即回报 peer video 状态的测试端侧。
+
+    主要功能：模拟真实端侧在收到 `command.requested` 后立刻返回 progress，
+    用于暴露 server 在创建订阅前下发命令导致早到回执丢失的竞态。
+    """
+
+    def __init__(self, *, app: AudioChatApp, user_id: str, device_id: str, role: str) -> None:
+        super().__init__(user_id=user_id, device_id=device_id)
+        self.app = app
+        self.role = role
+
+    def push_event(self, event: Event) -> None:
+        """记录命令并立即回报 ready/connected。"""
+
+        super().push_event(event)
+        if event.event_name != "command.requested":
+            return
+        payload = dict(event.payload or {})
+        command_id = str(payload.get("command_id") or "")
+        command = str(payload.get("command") or "")
+        if self.role == "phone" and command == "peer.video.receiver.start":
+            self.app.publish_control_event(
+                Event(
+                    event_name="command.progress",
+                    user_id=self.user_id,
+                    producer_id=self.device_id,
+                    session_id=self.device_id,
+                    payload={
+                        "command_id": command_id,
+                        "command": command,
+                        "status": "peer.receiver.ready",
+                        "data": {"receiver": {"transport": "websocket", "url": "ws://127.0.0.1:19081/peer-video/task"}},
+                    },
+                )
+            )
+        if self.role == "glass" and command == "peer.video.sender.start":
+            self.app.publish_control_event(
+                Event(
+                    event_name="command.progress",
+                    user_id=self.user_id,
+                    producer_id=self.device_id,
+                    session_id=self.device_id,
+                    payload={"command_id": command_id, "command": command, "status": "peer.sender.connected"},
+                )
+            )
+
+
 def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
     """测试目标：验证找物 Task 按 phone receiver -> glass sender 的顺序编排。
 
@@ -118,6 +166,52 @@ def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
         ref = await asyncio.wait_for(create_task, timeout=2)
         assert ref.state == "completed"
         assert app.task_engine.query(ref.task_id).summary == "找物完成"
+
+    asyncio.run(run())
+
+
+def test_peer_video_task_keeps_eager_command_progress(tmp_path: Path) -> None:
+    """测试目标：验证端侧快速回报 ready 时 Task 不会丢失命令状态。
+
+    测试方法：phone 端在收到 `peer.video.receiver.start` 的同一调用栈内立即发布
+    `peer.receiver.ready`，观察 glass 命令是否能马上下发。
+    预期结果：server 先初始化命令回执缓存，早到 progress 被 Task 消费，glass
+    命令在短时间内出现。
+    """
+
+    async def run() -> None:
+        app = _app_with_peer_tasks(tmp_path)
+        phone = EagerPeerEndpoint(app=app, user_id="user-peer", device_id="dev-phone", role="phone")
+        glass = EagerPeerEndpoint(app=app, user_id="user-peer", device_id="dev-glass", role="glass")
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+
+        create_task = asyncio.create_task(
+            app.task_engine.create(
+                task_type="find_object_task",
+                user_id="user-peer",
+                session_id="dev-glass",
+                input_data={"object_name": "水杯", "timeout_seconds": 1},
+            )
+        )
+        glass_command = await asyncio.wait_for(_wait_for_command(glass), timeout=0.3)
+        assert glass_command.payload["command"] == "peer.video.sender.start"
+        phone_command = _command_events(phone)[0]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id="user-peer",
+                producer_id="dev-phone",
+                session_id="dev-phone",
+                payload={
+                    "command_id": phone_command.payload["command_id"],
+                    "command": "peer.video.receiver.start",
+                    "result": {"type": "find_object", "object_name": "水杯", "found": True, "message": "已找到水杯", "source": "mock"},
+                },
+            )
+        )
+        ref = await asyncio.wait_for(create_task, timeout=2)
+        assert ref.state == "completed"
 
     asyncio.run(run())
 

@@ -143,11 +143,31 @@ class PeerVideoTaskMixin:
             async for event in handle.results():
                 if event.state == "failed":
                     raise RuntimeError(str(event.data.get("message") or "peer video command failed"))
-                if event.data.get("status") == status:
+                if self.command_event_status(event) == status:
                     return event
             raise RuntimeError(f"peer video command ended before status {status}")
 
         return await asyncio.wait_for(_wait(), timeout=timeout_seconds)
+
+    @staticmethod
+    def command_event_status(event: CommandEvent) -> str:
+        """提取端侧长命令状态。
+
+        主要逻辑：优先读取 `command.progress` payload 顶层的 `status`；同时兼容
+        少数端侧把状态误放进 `data.status` 的情况，避免 Task 因字段位置轻微差异
+        错过 ready/connected。
+        参数：`event` 为 `CommandHandle.results()` 产生的命令事件。
+        返回值：状态字符串，缺失时返回空字符串。
+        异常情况：无。
+        """
+
+        status = event.data.get("status")
+        if status:
+            return str(status)
+        nested = event.data.get("data")
+        if isinstance(nested, dict) and nested.get("status"):
+            return str(nested.get("status"))
+        return ""
 
     async def wait_terminal(self, handle: CommandHandle, *, timeout_seconds: float) -> CommandEvent:
         """等待远程命令终态。

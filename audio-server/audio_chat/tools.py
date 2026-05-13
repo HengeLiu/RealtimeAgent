@@ -1296,6 +1296,7 @@ class _CommandsFacade:
 
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=require_single)
         command_id = new_id("cmd")
+        broker = self._context._command_result_broker()
         result = self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
             payload={"command_id": command_id, "command": name, "params": dict(params or {})},
@@ -1312,7 +1313,7 @@ class _CommandsFacade:
             }
         )
         expected_device_ids = tuple(device_id for device_id in result.matched_device_ids if device_id not in result.failed_device_ids)
-        events = await self._context._command_result_broker().wait(
+        events = await broker.wait(
             command_id,
             expected_device_ids=expected_device_ids,
             timeout_seconds=timeout_seconds,
@@ -1370,6 +1371,7 @@ class _CommandsFacade:
             raise AudioChatError("long running commands are only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
         command_id = new_id("cmd")
+        self._context._command_result_broker()
         self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
             payload={"command_id": command_id, "command": name, "mode": "start", "params": dict(params or {})},

@@ -238,6 +238,10 @@ class PhonePreviewWindow:
         self.video_panel = VideoPanel(QtWidgets, QtGui, QtCore)
         self.status_panel = StatusPanel(QtWidgets)
         self.log_panel = EventLogPanel(QtWidgets)
+        self.dispatcher = self._build_dispatcher(QtCore)
+        self.dispatcher.status.connect(self.status_panel.update_status, QtCore.Qt.ConnectionType.QueuedConnection)
+        self.dispatcher.log.connect(self.log_panel.append_log, QtCore.Qt.ConnectionType.QueuedConnection)
+        self.dispatcher.frame.connect(self.video_panel.show_frame, QtCore.Qt.ConnectionType.QueuedConnection)
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self.video_panel.widget, 3)
         layout.addWidget(self.status_panel.widget)
@@ -248,15 +252,51 @@ class PhonePreviewWindow:
         self.window.resize(900, 720)
         self._connect_bridge()
 
+    def _build_dispatcher(self, qt_core: Any) -> Any:
+        """创建 Qt 主线程事件转发器。
+
+        主要逻辑：网络循环在后台线程收到视频帧，不能直接调用 Qt 控件；这里用
+        queued signal 把状态、日志和图像投递回 Qt 主线程，避免预览窗口偶发不刷新。
+        参数：`qt_core` 为动态导入的 PySide6.QtCore。
+        返回值：带有 `status/log/frame` 三个信号的 QObject。
+        异常情况：无。
+        """
+
+        class PreviewDispatcher(qt_core.QObject):  # type: ignore[misc, valid-type]
+            status = qt_core.Signal(object)
+            log = qt_core.Signal(object)
+            frame = qt_core.Signal(object)
+
+        return PreviewDispatcher()
+
     def _connect_bridge(self) -> None:
         """把纯 Python 事件桥连接到 Qt 主线程。"""
 
-        self.bridge.on_status(lambda status: self._qt_core.QTimer.singleShot(0, lambda: self.status_panel.update_status(status)))
-        self.bridge.on_log(lambda entry: self._qt_core.QTimer.singleShot(0, lambda: self.log_panel.append_log(entry)))
-        self.bridge.on_frame(lambda _summary, image: self._qt_core.QTimer.singleShot(0, lambda: self.video_panel.show_frame(image)))
+        self.bridge.on_status(lambda status: self.dispatcher.status.emit(dict(status)))
+        self.bridge.on_log(lambda entry: self.dispatcher.log.emit(entry))
+        self.bridge.on_frame(lambda _summary, image: self.dispatcher.frame.emit(_copy_image(image)))
 
     def show(self) -> int:
         """显示窗口并进入 Qt 事件循环。"""
 
         self.window.show()
         return int(self.app.exec())
+
+
+def _copy_image(image: Any) -> Any:
+    """复制跨线程投递的视频帧。
+
+    主要逻辑：OpenCV 图像通常是 numpy array，网络线程继续处理下一帧时不应影响
+    已投递给 Qt 主线程的对象；如果对象不支持 `copy()`，则按原样返回。
+    参数：`image` 为待显示图像。
+    返回值：可安全投递给 GUI 的图像对象。
+    异常情况：复制失败时返回原对象，避免显示链路中断。
+    """
+
+    try:
+        copy = getattr(image, "copy", None)
+        if callable(copy):
+            return copy()
+    except Exception:  # noqa: BLE001 - 显示辅助不能影响主链路
+        return image
+    return image

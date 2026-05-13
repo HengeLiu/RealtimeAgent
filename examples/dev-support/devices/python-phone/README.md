@@ -71,6 +71,7 @@ runs/audio-chat/python-phone/latest-rgb.png
 2. 收到 `peer.video.receiver.start` 后，Python phone 会打开 `ws://<phone-ip>:19081/peer-video/<peer_session_id>`。
 3. 端侧通过 `RemoteTaskReporter` 上报 `command.accepted/progress/completed/failed`，包括 `peer.receiver.ready`、`peer.video.first_frame`、`peer.video.frame_processed` 和 `peer.video.timeout`。
 4. 每帧调用 `fork_yolo_mock(frame, purpose, object_name)`，当前只打印 `yolo.mock.frame_processed` 并生成 mock 结果。
+5. `phone.preview.yaml` 默认不按首帧立即完成，保持视频回显到 30 秒超时后再返回 mock 结果；自动化测试可单独把 `complete_after_frames` 设为正数。
 
 `RemoteTaskReporter` 只是 Python 参考端 helper，不是跨语言必需对象。Swift、JavaScript、Kotlin 或 C 端侧只要发送等价的 `command.*` 控制事件即可。
 
