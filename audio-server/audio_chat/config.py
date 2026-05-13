@@ -220,6 +220,7 @@ class DevChecksConfig:
 @dataclass(frozen=True)
 class ObservabilityConfig:
     runs_root: str = "runs/default-app"
+    log_timezone: str = "local"
     record_input_streams: bool = True
     record_output_streams: bool = True
     record_model_events: bool = True
@@ -443,6 +444,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         data["paths"] = paths
     mapping = {
         "AUDIO_CHAT_RUNS_ROOT": ("observability", "runs_root"),
+        "AUDIO_CHAT_LOG_TIMEZONE": ("observability", "log_timezone"),
         "AUDIO_CHAT_AUTH_MODE": ("auth", "mode"),
         "AUDIO_CHAT_ASR_PROVIDER": ("agent", "text", "asr_provider"),
         "AUDIO_CHAT_ASR_MODEL": ("agent", "text", "asr_model"),

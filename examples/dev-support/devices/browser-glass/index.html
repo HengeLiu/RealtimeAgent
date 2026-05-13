@@ -100,7 +100,7 @@
           <canvas id="visualFramePreview" class="preview-canvas" width="960" height="540"></canvas>
           <video id="selectedVideoSource" class="source-video" muted playsinline preload="metadata"></video>
         </div>
-        <p class="hint">图片和视频只能二选一。视频预览不能手动播放或暂停；只有收到 sensor.rgb 或 peer video 采集请求时才会自动播放、抽帧和停止。</p>
+        <p class="hint">图片和视频只能二选一。视频预览不能手动播放或暂停；收到 sensor.rgb 或 peer video 采集请求后会按视频自己的时间线播放，并从当前进度抽帧。</p>
         <div id="capturedFrameStrip" class="frame-strip" aria-label="采集帧缩略图"></div>
       </div>
     </section>
@@ -141,6 +141,9 @@
     const RGB_CAPTURE_MAX_HEIGHT = 540;
     const RGB_JPEG_QUALITY = 0.78;
     const RGB_JPEG_MAX_BYTES = 180000;
+    const CAPTURE_PREVIEW_MIN_INTERVAL_MS = 500;
+    const CAPTURE_THUMBNAIL_MIN_INTERVAL_MS = 1000;
+    const CAPTURE_THUMBNAIL_MAX_COUNT = 8;
     const BARGE_IN_RMS_THRESHOLD = 0.055;
     const BARGE_IN_REQUIRED_FRAMES = 8;
     const BARGE_IN_MAX_PEAK = 0.72;
@@ -246,6 +249,8 @@
     let selectedVideoSampleFileHandle = null;
     let selectedVideoSampleFile = null;
     let selectedVideoObjectUrl = "";
+    let lastCapturedPreviewAt = 0;
+    let lastCapturedThumbnailAt = 0;
     let peerVideoSender = null;
 
     function delay(ms) {
@@ -566,6 +571,7 @@
       selectedVideoObjectUrl = URL.createObjectURL(file);
       selectedVideoSourceEl.src = selectedVideoObjectUrl;
       selectedVideoSourceEl.style.display = "none";
+      selectedVideoSourceEl.loop = true;
       selectedVideoSourceEl.load();
       updateVisualInputState();
       renderSelectedVideoPreview().catch((err) => log(`video preview failed: ${err.message}`));
@@ -1218,7 +1224,11 @@
 
     async function sendPeerVideoFrame(sender, fps = 5) {
       if (!sender || sender.stopped || !sender.ws || sender.ws.readyState !== WebSocket.OPEN) return;
-      const frame = await capturePeerVideoFrame({fps});
+      const frame = await capturePeerVideoFrame({
+        fps,
+        previewThrottleMs: CAPTURE_PREVIEW_MIN_INTERVAL_MS,
+        thumbnailThrottleMs: CAPTURE_THUMBNAIL_MIN_INTERVAL_MS,
+      });
       sender.ws.send(frame.bytes);
       sender.frameSeq += 1;
       log(`peer.video.frame.sent seq=${sender.frameSeq} bytes=${frame.bytes.byteLength}`);
@@ -1281,11 +1291,7 @@
 
     async function uploadSingleVisualSnapshot(item = null) {
       if (hasSelectedVideo()) {
-        try {
-          await uploadRgbImages([await captureVisualFrame({fps: Number((item && item.payload && item.payload.frequency_hz) || 1)})], item, "video_frame_captured");
-        } finally {
-          stopSelectedVideoCapture();
-        }
+        await uploadRgbImages([await captureVisualFrame({fps: Number((item && item.payload && item.payload.frequency_hz) || 1)})], item, "video_frame_captured");
         return;
       }
       if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
@@ -1387,7 +1393,11 @@
         await delay(120);
         for (let index = 0; index < frameCount; index += 1) {
           const startedAt = Date.now();
-          const image = await captureSelectedVideoFrame({fps});
+          const image = await captureSelectedVideoFrame({
+            fps,
+            previewThrottleMs: CAPTURE_PREVIEW_MIN_INTERVAL_MS,
+            thumbnailThrottleMs: CAPTURE_THUMBNAIL_MIN_INTERVAL_MS,
+          });
           streamWs.send(encodeStreamChunk({
             user_id: document.getElementById("userId").value,
             session_id: activeSession,
@@ -1432,8 +1442,6 @@
           error: err.message,
           request_id: requestId,
         }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
-      } finally {
-        stopSelectedVideoCapture();
       }
     }
 
@@ -1503,8 +1511,12 @@
       drawVideoFrameToPreview("video preview");
     }
 
-    async function playSelectedVideoForCapture() {
+    async function ensureSelectedVideoTimelineRunning() {
       await ensureSelectedVideoReady();
+      if (selectedVideoSourceEl.ended || selectedVideoSourceEl.currentTime >= selectedVideoSourceEl.duration) {
+        selectedVideoSourceEl.currentTime = 0;
+        await waitForVideoSeek(selectedVideoSourceEl);
+      }
       if (selectedVideoSourceEl.paused) {
         await selectedVideoSourceEl.play();
       }
@@ -1516,11 +1528,7 @@
 
     async function captureSelectedVideoFrame(options = {}) {
       const fps = Math.max(1, Number(options.fps || 1));
-      await playSelectedVideoForCapture();
-      if (selectedVideoSourceEl.ended || selectedVideoSourceEl.currentTime >= selectedVideoSourceEl.duration) {
-        selectedVideoSourceEl.currentTime = 0;
-        await waitForVideoSeek(selectedVideoSourceEl);
-      }
+      await ensureSelectedVideoTimelineRunning();
       await waitForVideoPaint(selectedVideoSourceEl, Math.round(1000 / fps));
       const sourceWidth = selectedVideoSourceEl.videoWidth || RGB_CAPTURE_MAX_WIDTH;
       const sourceHeight = selectedVideoSourceEl.videoHeight || RGB_CAPTURE_MAX_HEIGHT;
@@ -1531,7 +1539,10 @@
       canvas.width = width;
       canvas.height = height;
       canvas.getContext("2d").drawImage(selectedVideoSourceEl, 0, 0, width, height);
-      renderCapturedFramePreview(canvas, width, height, `video ${selectedVideoSourceEl.currentTime.toFixed(2)}s`);
+      renderCapturedFramePreview(canvas, width, height, `video ${selectedVideoSourceEl.currentTime.toFixed(2)}s`, {
+        previewThrottleMs: Number(options.previewThrottleMs || 0),
+        thumbnailThrottleMs: Number(options.thumbnailThrottleMs || 0),
+      });
       return await encodeBoundedJpegFrame(canvas, width, height);
     }
 
@@ -1608,7 +1619,23 @@
       await delay(Math.max(40, Math.min(200, fallbackMs || 120)));
     }
 
-    function renderCapturedFramePreview(sourceCanvas, width, height, label) {
+    function renderCapturedFramePreview(sourceCanvas, width, height, label, options = {}) {
+      const now = Date.now();
+      const previewThrottleMs = Math.max(0, Number(options.previewThrottleMs || 0));
+      const thumbnailThrottleMs = Math.max(0, Number(options.thumbnailThrottleMs || 0));
+      const shouldUpdatePreview = !previewThrottleMs || now - lastCapturedPreviewAt >= previewThrottleMs;
+      const shouldUpdateThumbnail = !thumbnailThrottleMs || now - lastCapturedThumbnailAt >= thumbnailThrottleMs;
+      if (!shouldUpdatePreview && !shouldUpdateThumbnail) return;
+      if (shouldUpdatePreview) {
+        lastCapturedPreviewAt = now;
+      }
+      if (shouldUpdateThumbnail) {
+        lastCapturedThumbnailAt = now;
+      }
+      if (!shouldUpdatePreview) {
+        appendCapturedFrameThumbnail(sourceCanvas, width, height);
+        return;
+      }
       const canvas = visualFramePreviewEl;
       canvas.width = width;
       canvas.height = height;
@@ -1619,7 +1646,7 @@
       ctx.fillStyle = "#dbe7ff";
       ctx.font = "14px ui-monospace, Menlo, monospace";
       ctx.fillText(`captured ${label || "frame"}`, 18, 27);
-      appendCapturedFrameThumbnail(sourceCanvas, width, height);
+      if (shouldUpdateThumbnail) appendCapturedFrameThumbnail(sourceCanvas, width, height);
     }
 
     function appendCapturedFrameThumbnail(sourceCanvas, width, height) {
@@ -1629,7 +1656,7 @@
       thumb.height = 108;
       thumb.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height, 0, 0, thumb.width, thumb.height);
       capturedFrameStripEl.appendChild(thumb);
-      while (capturedFrameStripEl.children.length > 30) {
+      while (capturedFrameStripEl.children.length > CAPTURE_THUMBNAIL_MAX_COUNT) {
         capturedFrameStripEl.removeChild(capturedFrameStripEl.firstElementChild);
       }
       capturedFrameStripEl.scrollLeft = capturedFrameStripEl.scrollWidth;
@@ -1685,31 +1712,26 @@
     }
 
     async function encodeBoundedJpegFrame(sourceCanvas, sourceWidth, sourceHeight) {
-      const qualities = [RGB_JPEG_QUALITY, 0.68, 0.58, 0.48, 0.38, 0.3];
-      const scales = [1, 0.85, 0.7, 0.55, 0.4, 0.3];
-      let best = null;
-      for (const scale of scales) {
-        const width = Math.max(1, Math.round(sourceWidth * scale));
-        const height = Math.max(1, Math.round(sourceHeight * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height);
-        for (const quality of qualities) {
-          const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-          if (!blob) continue;
-          const bytes = new Uint8Array(await blob.arrayBuffer());
-          if (!best || bytes.byteLength < best.bytes.byteLength) {
-            best = {bytes, width, height, quality};
-          }
-          if (bytes.byteLength <= RGB_JPEG_MAX_BYTES) {
-            return {bytes, width, height};
-          }
-        }
+      const primary = await encodeJpegFromCanvas(sourceCanvas, sourceWidth, sourceHeight, RGB_JPEG_QUALITY);
+      if (primary.bytes.byteLength <= RGB_JPEG_MAX_BYTES) return primary;
+      const fallbackScale = 0.65;
+      const width = Math.max(1, Math.round(sourceWidth * fallbackScale));
+      const height = Math.max(1, Math.round(sourceHeight * fallbackScale));
+      const fallbackCanvas = document.createElement("canvas");
+      fallbackCanvas.width = width;
+      fallbackCanvas.height = height;
+      fallbackCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height);
+      const fallback = await encodeJpegFromCanvas(fallbackCanvas, width, height, 0.62);
+      if (fallback.bytes.byteLength > RGB_JPEG_MAX_BYTES) {
+        log(`jpeg frame still large after fallback compression bytes=${fallback.bytes.byteLength}`);
       }
-      if (!best) throw new Error("jpeg encode failed");
-      log(`jpeg frame still large after compression bytes=${best.bytes.byteLength}`);
-      return {bytes: best.bytes, width: best.width, height: best.height};
+      return fallback;
+    }
+
+    async function encodeJpegFromCanvas(canvas, width, height, quality) {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (!blob) throw new Error("jpeg encode failed");
+      return {bytes: new Uint8Array(await blob.arrayBuffer()), width, height};
     }
 
     async function openAudioInput() {

@@ -167,6 +167,53 @@ def test_peer_video_receiver_reports_vision_prepare_failure_without_leaking_task
     asyncio.run(run())
 
 
+def test_peer_video_receiver_reports_waiting_until_slow_vision_prepare_finishes() -> None:
+    """测试目标：验证慢速 YOLOE 准备期间 receiver 上报等待状态，准备完成后再 ready。
+
+    测试方法：注入一个受控释放的视觉准备处理器，启动 receiver 后先观察 waiting，
+    再释放准备任务并等待 ready。
+    预期结果：模型准备完成前不会上报 `peer.receiver.ready`，避免眼镜提前采集。
+    """
+
+    async def run() -> None:
+        sent: list[Event] = []
+        prepare_started = asyncio.Event()
+        release_prepare = asyncio.Event()
+
+        async def send_event(event: Event) -> None:
+            sent.append(event)
+
+        command = RemoteCommand(
+            command_id="cmd-phone",
+            command="peer.video.receiver.start",
+            user_id="user-peer",
+            session_id="dev-phone",
+            params={"peer_session_id": "task-peer-slow", "purpose": "find_object", "object_name": "水杯"},
+        )
+        receiver = PeerVideoReceiver(
+            command=command,
+            reporter=RemoteTaskReporter(command=command, producer_id="dev-phone", role="receiver", send_event=send_event),
+            listen_host="127.0.0.1",
+            listen_port=_unused_port(),
+            timeout_seconds=5,
+            public_host="127.0.0.1",
+            vision_processor=SlowVisionProcessor(prepare_started, release_prepare),
+        )
+
+        task = asyncio.create_task(receiver.run())
+        await _wait_for_status(sent, "peer.receiver.waiting_vision")
+        assert not any(event.payload.get("status") == "peer.receiver.ready" for event in sent)
+        assert prepare_started.is_set() is True
+        assert task.done() is False
+
+        release_prepare.set()
+        await _wait_for_status(sent, "peer.receiver.ready")
+        await receiver.stop("test_done")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run())
+
+
 async def _wait_for_status(events: list[Event], status: str) -> None:
     """等待 fake reporter 收到指定状态。"""
 
@@ -194,3 +241,23 @@ class FailingVisionProcessor:
     async def prepare_session(self, *, purpose: str, object_name: str) -> None:
         _ = purpose, object_name
         raise RuntimeError("视觉依赖缺失")
+
+
+class SlowVisionProcessor:
+    """用于模拟视觉模型准备较慢的处理器。"""
+
+    provider = "yolo"
+
+    def __init__(self, started: asyncio.Event, release: asyncio.Event) -> None:
+        self.started = started
+        self.release = release
+        self.log_callback = None
+
+    async def prepare_session(self, *, purpose: str, object_name: str) -> None:
+        _ = purpose, object_name
+        self.started.set()
+        await self.release.wait()
+
+    async def build_final_result(self, *, frame_count: int, last_detection: dict | None) -> dict:
+        _ = last_detection
+        return {"stopped": True, "frame_count": frame_count, "source": "yolo"}

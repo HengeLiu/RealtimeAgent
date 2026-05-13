@@ -48,14 +48,14 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     """测试目标：验证端侧 command 回报会进入 TaskEngine。
 
     测试方法：创建一个任务快照后，向 App 发布 `command.completed`。
-    预期结果：任务进入 completed，runs 中写入 `phone_task.completed` 和 `task.completed`。
+    预期结果：任务进入 finished，runs 中写入 `task.event.dispatch.accepted` 和 `task.finished`。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
     created = TaskRef(
         task_id="task-phone-001",
         task_type="remote_vision_task",
-        state="running",
+        state="started",
         metadata={"user_id": "user-phone-task", "session_id": "sess-phone-task", "input": {}},
     )
     app.task_engine.store.put(created)
@@ -74,9 +74,10 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     )
 
     updated = app.task_engine.query("task-phone-001")
-    assert updated.state == "completed"
+    assert updated.state == "finished"
     assert updated.summary == "找到水杯"
     task_signals = (app.recorder.session_dir("sess-phone-task", user_id="user-phone-task") / "task-signals.jsonl").read_text(
         encoding="utf-8"
     )
-    assert "task.completed" in task_signals
+    assert "task.event.dispatch.accepted" in task_signals
+    assert "task.finished" in task_signals

@@ -20,7 +20,7 @@ from audio_chat.output import OutputService, TtsProviderConfig
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
-from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignal, TaskSignalBridge, TaskStore
+from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignalBridge, TaskStore
 from audio_chat.tools import (
     AssetFacade,
     BUILTIN_TOOLS,
@@ -58,6 +58,7 @@ class AudioChatConfig:
     server_port: int = 8765
     public_url: str = "http://127.0.0.1:8765"
     log_level: str = "DEBUG"
+    log_timezone: str = "local"
     runs_root: str = "runs/default-app"
     auth_mode: str = "disabled"
     device_tokens: dict[str, str] | None = None
@@ -184,6 +185,7 @@ class AudioChatConfig:
             server_port=loaded.server.port,
             public_url=loaded.server.public_url,
             log_level=loaded.server.log_level,
+            log_timezone=loaded.observability.log_timezone,
             runs_root=loaded.observability.runs_root,
             auth_mode=loaded.auth.mode,
             device_tokens=loaded.auth.device_tokens,
@@ -936,18 +938,22 @@ class AudioChatApp:
         )
 
     def _handle_device_command_report(self, event: Event) -> None:
-        """把端侧命令回报转换为 server 侧 TaskSignal。
+        """把端侧命令回报转换为 Task actor 事件。
 
         主要逻辑：phone 视觉任务等端侧执行能力只通过
         `command.*` 事件回报 started / progress / completed /
-        failed。这里根据 payload.task_id 把回报写入 TaskEngine，而不暴露
-        device_id 点对点 RPC。
+        failed。这里根据 payload.task_id 把回报转换成 `task.event.*`，
+        由对应 Task 实例决定如何处理，而不暴露 device_id 点对点 RPC。
         参数：`event` 为端侧上报的命令事件。
         返回值：无。
         异常情况：找不到 task 时忽略，避免普通端侧命令回执影响控制面。
         """
 
         payload = dict(event.payload or {})
+        command_id = str(payload.get("command_id") or "").strip()
+        broker = getattr(self, "_command_result_broker", None)
+        command_metadata = broker.metadata_for(command_id) if broker is not None and command_id else {}
+        payload = {**command_metadata, **payload}
         task_id = str(payload.get("task_id") or "").strip()
         if not task_id:
             return
@@ -957,39 +963,34 @@ class AudioChatApp:
             return
 
         task_type = str(payload.get("task_type") or ref.task_type)
-        state_signal_name = {
-            "command.accepted": "phone_task.started",
-            "command.progress": "phone_task.progress",
-            "command.completed": "phone_task.completed",
-            "command.failed": "phone_task.failed",
+        task_event_name = {
+            "command.accepted": "task.event.status",
+            "command.progress": "task.event.process",
+            "command.completed": "task.event.finish",
+            "command.failed": "task.event.error",
         }[event.event_name]
-        self.task_engine.emit_signal(
-            TaskSignal(
-                task_id=task_id,
-                task_type=task_type,
-                signal_name=state_signal_name,
+        task_payload = {
+            "task_id": task_id,
+            "task_type": task_type,
+            "producer_id": event.producer_id,
+            "command_event_name": event.event_name,
+            "cause": {"domain": "command", "event": event.event_name, "producer_id": event.producer_id},
+            **payload,
+        }
+        if event.event_name == "command.failed":
+            message = str(payload.get("message") or "")
+            task_payload.setdefault("raw_error", message)
+            if payload.get("user_message") is None and payload.get("text") is None:
+                task_payload["message"] = "端侧任务执行失败"
+        self.task_engine.dispatch_event(
+            Event(
+                event_name=task_event_name,
+                producer_id=SERVER_PRODUCER_ID,
                 user_id=event.user_id,
                 session_id=self._event_device_id(event),
-                payload={
-                    "producer_id": event.producer_id,
-                    "command_event_name": event.event_name,
-                    **payload,
-                },
-                allow_direct_notify=False,
+                payload=task_payload,
             )
         )
-        if event.event_name == "command.completed":
-            self.task_engine.complete(
-                task_id,
-                payload=dict(payload.get("result") or payload),
-                summary=str(payload.get("summary") or payload.get("message") or "phone task completed"),
-            )
-        elif event.event_name == "command.failed":
-            self.task_engine.fail(
-                task_id,
-                message=str(payload.get("message") or "phone task failed"),
-                payload=payload,
-            )
 
     def _finalize_audio_session(self, user_id: str, *, reason: str) -> None:
         """释放 endpoint 已确认关闭的音频会话。"""

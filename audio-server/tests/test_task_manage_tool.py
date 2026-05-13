@@ -66,7 +66,7 @@ def test_task_start_tool_starts_and_runtime_manager_queries_cancels_and_lists_ta
     )
     assert started.ok is True
     task_id = started.data["task_id"]
-    assert started.data["state"] == "running"
+    assert started.data["state"] == "started"
 
     queried = asyncio.run(manager.run(context, {"action": "query", "task_id": task_id}))
     assert queried.ok is True

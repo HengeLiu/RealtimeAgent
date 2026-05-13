@@ -1,3 +1,5 @@
 ultralytics>=8.3.0
 torch>=2.0.0
 torchvision>=0.15.0
+# YOLOE 的文本 prompt 编码依赖。显式安装，避免 Ultralytics 运行时调用 python -m pip 自动安装。
+git+https://github.com/ultralytics/CLIP.git

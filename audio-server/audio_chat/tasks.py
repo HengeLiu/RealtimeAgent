@@ -7,41 +7,35 @@ import json
 import pkgutil
 import time
 import threading
+from concurrent.futures import Future
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from audio_chat.asset import ArtifactRef
 from audio_chat.errors import AudioChatError, ErrorCode
-from audio_chat.protocol import new_id
+from audio_chat.protocol import Event, SERVER_PRODUCER_ID, new_id
 from audio_chat.tools import ToolContext
 
-TERMINAL_TASK_STATES = {"completed", "cancelled", "failed", "timeout"}
+TASK_EVENT_TYPES = ("start", "process", "status", "finish", "cancel", "error")
+TASK_EVENT_NAMES = {f"task.event.{event_type}" for event_type in TASK_EVENT_TYPES}
 
-TASK_STATES = (
-    "scheduled",
-    "running",
-    "waiting_external",
-    "completed",
-    "cancelled",
-    "failed",
-    "timeout",
-)
+TERMINAL_TASK_STATES = {"finished", "cancelled", "failed"}
+
+TASK_STATES = ("started", "finished", "cancelled", "failed")
+
+LEGACY_TASK_STATE_MAP = {
+    "scheduled": "started",
+    "running": "started",
+    "waiting_external": "started",
+    "completed": "finished",
+    "timeout": "failed",
+}
 
 TASK_TRANSITIONS = {
-    ("scheduled", "running"),
-    ("scheduled", "failed"),
-    ("scheduled", "timeout"),
-    ("running", "waiting_external"),
-    ("waiting_external", "running"),
-    ("waiting_external", "completed"),
-    ("running", "completed"),
-    ("running", "cancelled"),
-    ("scheduled", "cancelled"),
-    ("running", "failed"),
-    ("waiting_external", "failed"),
-    ("running", "timeout"),
-    ("waiting_external", "timeout"),
+    ("started", "finished"),
+    ("started", "cancelled"),
+    ("started", "failed"),
 }
 
 
@@ -101,6 +95,20 @@ class TaskSignal:
     created_at: float = field(default_factory=time.time)
 
 
+@dataclass(frozen=True)
+class TaskEventView:
+    """Task Actor 收到的事件视图。
+
+    主要功能：把系统事件 `task.event.*` 解析成 Task 开发者可读的结构。
+    主要属性：`task_id` 定位具体任务实例，`task_event_type` 限制为 start/process/status/finish/cancel/error。
+    """
+
+    event: Event
+    task_id: str
+    task_type: str
+    task_event_type: str
+
+
 @dataclass(kw_only=True)
 class _TaskContextBase(ToolContext):
     """Task 上下文私有基类。
@@ -119,7 +127,7 @@ class _TaskContextBase(ToolContext):
     async def complete(self, payload: dict | None = None, *, summary: str = "") -> TaskRef:
         """把当前任务标记为完成。
 
-        主要逻辑：委托 TaskEngine 完成状态流转并写入 `task.completed` 事件。
+        主要逻辑：委托 TaskEngine 完成状态流转并写入 `task.finished` 信号。
         参数：`payload` 为完成事件载荷，`summary` 为任务摘要。
         返回值：完成后的 `TaskRef`。
         异常情况：上下文未绑定 TaskEngine 时抛出协议错误。
@@ -225,6 +233,8 @@ class BaseTask:
     """业务 Task 基类。
 
     主要功能：定义长任务稳定扩展面，自动发现只注册继承该类的具体子类。
+    业务开发者只覆盖 `run()` 和 `on_*()` 回调；`_process_*()` 是 Task Core
+    的内部模板方法，用来注入 finish/error/cancel 的状态流转逻辑。
     """
 
     task_type: str = ""
@@ -256,28 +266,113 @@ class BaseTask:
             max_running_per_user=getattr(cls, "max_running_per_user", None),
         )
 
-    async def on_start(self, context: TaskContext) -> None:
+    async def run(self, context: TaskContext) -> None:
+        """任务后台入口。
+
+        主要逻辑：默认兼容旧任务，把启动行为委托给 `on_start()`；新任务可以覆盖
+        本方法启动后台流程，然后快速返回或自行等待外部事件。
+        参数：`context` 为 SDK 注入上下文。
+        返回值：无。
+        异常情况：异常会被 TaskRunner 捕获并转换为 `task.event.error`。
+        """
+
+        await self._invoke_event_hook("on_start", context, None)
+
+    async def on_start(self, context: TaskContext, event: TaskEventView | None = None) -> None:
         """任务启动回调。
 
         主要逻辑：基类只声明接口，子类按需覆盖。
-        参数：`context` 为 SDK 注入上下文。
+        参数：`context` 为 SDK 注入上下文，`event` 为可选任务事件。
         返回值：无。
         异常情况：无。
         """
+        return None
+
+    async def on_process(self, context: TaskContext, event: TaskEventView) -> None:
+        """任务过程事件回调。"""
+        return None
+
+    async def on_status(self, context: TaskContext, event: TaskEventView) -> None:
+        """任务状态事件回调。"""
+        return None
+
+    async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
+        """任务完成事件回调。"""
+        return None
+
+    async def on_cancel(self, context: TaskContext, event: TaskEventView | None = None) -> None:
+        """任务取消事件回调。"""
+        return None
+
+    async def on_error(self, context: TaskContext, event: TaskEventView) -> None:
+        """任务错误事件回调。"""
         return None
 
     async def on_signal(self, context: TaskContext, signal: TaskSignal) -> None:
-        """任务信号回调。
+        """兼容旧版 TaskSignal 回调。
 
-        主要逻辑：基类只声明接口，子类按需覆盖。
-        参数：`context` 为 SDK 注入上下文，`signal` 为 TaskEngine 回流的任务信号。
-        返回值：无。
-        异常情况：无。
+        主要逻辑：保留旧扩展点，新的 Task Core 不再把 TaskSignal 当作 actor 输入。
         """
         return None
 
-    async def on_cancel(self, context: TaskContext) -> None:
-        return None
+    async def _process_start(self, context: TaskContext, event: TaskEventView) -> None:
+        await self._invoke_event_hook("on_start", context, event)
+
+    async def _process_process(self, context: TaskContext, event: TaskEventView) -> None:
+        await self._invoke_event_hook("on_process", context, event)
+
+    async def _process_status(self, context: TaskContext, event: TaskEventView) -> None:
+        await self._invoke_event_hook("on_status", context, event)
+
+    async def _process_finish(self, context: TaskContext, event: TaskEventView) -> None:
+        payload = dict(event.event.payload or {})
+        try:
+            await self._invoke_event_hook("on_finish", context, event)
+        except Exception as exc:  # noqa: BLE001
+            await context.fail(
+                str(exc) or "任务完成事件处理失败",
+                payload={"reason": "finish_handler_failed", "raw_error": str(exc), **payload},
+            )
+            return
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            result = {k: v for k, v in payload.items() if k not in {"task_id", "task_type", "summary", "cause"}}
+        summary = str(payload.get("summary") or "")
+        await context.complete(result, summary=summary)
+
+    async def _process_cancel(self, context: TaskContext, event: TaskEventView) -> None:
+        payload = dict(event.event.payload or {})
+        try:
+            await self._invoke_event_hook("on_cancel", context, event)
+        finally:
+            if context.engine is not None:
+                context.engine._mark_cancelled(context.task_ref.task_id, reason=str(payload.get("reason") or "cancelled"))
+
+    async def _process_error(self, context: TaskContext, event: TaskEventView) -> None:
+        payload = dict(event.event.payload or {})
+        message = str(payload.get("user_message") or payload.get("message") or "任务执行失败")
+        try:
+            await self._invoke_event_hook("on_error", context, event)
+        except Exception as exc:  # noqa: BLE001
+            payload = {"handler_error": str(exc), **payload}
+        await context.fail(message, payload=payload)
+
+    async def _invoke_event_hook(
+        self,
+        hook_name: str,
+        context: TaskContext,
+        event: TaskEventView | None,
+    ) -> None:
+        """调用开发者事件回调，并兼容旧版只接收 context 的方法签名。"""
+
+        hook = getattr(self, hook_name)
+        parameters = list(inspect.signature(hook).parameters.values())
+        if len(parameters) <= 1 or event is None:
+            result = hook(context)
+        else:
+            result = hook(context, event)
+        if inspect.isawaitable(result):
+            await result
 
 
 class TaskStateMachine:
@@ -287,6 +382,8 @@ class TaskStateMachine:
     """
 
     def transition(self, current: str, target: str) -> str:
+        current = _normalize_task_state(current)
+        target = _normalize_task_state(target)
         if current == target:
             return target
         if (current, target) not in TASK_TRANSITIONS:
@@ -555,16 +652,115 @@ class TaskSignalBridge:
 
 
 class TaskExecutor:
-    """Task 执行器。"""
+    """兼容旧版测试和扩展的 Task 执行器。"""
 
     async def start(self, task: BaseTask, context: TaskContext) -> None:
-        await task.on_start(context)
+        await task.run(context)
 
     async def signal(self, task: BaseTask, context: TaskContext, signal: TaskSignal) -> None:
         await task.on_signal(context, signal)
 
     async def cancel(self, task: BaseTask, context: TaskContext) -> None:
         await task.on_cancel(context)
+
+
+class TaskRunner:
+    """Task 后台运行器。
+
+    主要功能：在独立事件循环中运行 Task actor，保证 `TaskEngine.create()` 能快速返回
+    TaskRef，并让后续 `task.event.*` 事件异步投递到对应 Task 实例。
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._futures: dict[str, set[Future]] = {}
+
+    def submit(self, task_id: str, coro: Any) -> Future:
+        """提交一个 Task 协程到后台事件循环。"""
+
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not None and running_loop.is_running():
+            task = running_loop.create_task(coro)
+            with self._lock:
+                self._futures.setdefault(task_id, set()).add(task)
+
+            def _cleanup_task(done: Any) -> None:
+                with self._lock:
+                    futures = self._futures.get(task_id)
+                    if futures is not None:
+                        futures.discard(done)
+                        if not futures:
+                            self._futures.pop(task_id, None)
+
+            task.add_done_callback(_cleanup_task)
+            return task
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        with self._lock:
+            self._futures.setdefault(task_id, set()).add(future)
+
+        def _cleanup(done: Future) -> None:
+            with self._lock:
+                futures = self._futures.get(task_id)
+                if futures is not None:
+                    futures.discard(done)
+                    if not futures:
+                        self._futures.pop(task_id, None)
+
+        future.add_done_callback(_cleanup)
+        return future
+
+    def cancel_task(self, task_id: str) -> None:
+        """取消某个任务仍在后台运行的协程。"""
+
+        with self._lock:
+            futures = list(self._futures.get(task_id, set()))
+        for future in futures:
+            future.cancel()
+
+    def shutdown(self) -> None:
+        """关闭后台事件循环。"""
+
+        with self._lock:
+            futures = [future for group in self._futures.values() for future in group]
+            self._futures.clear()
+            loop = self._loop
+        for future in futures:
+            future.cancel()
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is not None and self._loop.is_running():
+                return self._loop
+            ready = threading.Event()
+
+            def _run_loop() -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                with self._lock:
+                    self._loop = loop
+                ready.set()
+                loop.run_forever()
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.close()
+
+            self._thread = threading.Thread(target=_run_loop, name="audio-chat-task-runner", daemon=True)
+            self._thread.start()
+        ready.wait(timeout=2)
+        if self._loop is None:
+            raise AudioChatError("task runner loop did not start", code=ErrorCode.PROTOCOL_ERROR)
+        return self._loop
 
 
 class TaskScheduler:
@@ -611,6 +807,7 @@ class TaskEngine:
         store: TaskStore | None = None,
         state_machine: TaskStateMachine | None = None,
         executor: TaskExecutor | None = None,
+        runner: TaskRunner | None = None,
         bridge: TaskSignalBridge | None = None,
         scheduler: TaskScheduler | None = None,
         device_context_factory: Any = None,
@@ -622,6 +819,7 @@ class TaskEngine:
         self.store = store or TaskStore()
         self.state_machine = state_machine or TaskStateMachine()
         self.executor = executor or TaskExecutor()
+        self.runner = runner or TaskRunner()
         self.bridge = bridge or TaskSignalBridge()
         self.scheduler = scheduler or TaskScheduler()
         self.device_context_factory = device_context_factory
@@ -718,8 +916,8 @@ class TaskEngine:
     ) -> TaskRef:
         """创建并启动任务。
 
-        主要逻辑：创建 `scheduled` 引用，立即流转为 `running`，执行 Task.on_start，
-        并通过 TaskSignalBridge 记录启动或失败信号。
+        主要逻辑：创建 `started` 引用，把 Task actor 交给后台 TaskRunner 运行，
+        然后立即返回 TaskRef。
         参数：`task_type/user_id/session_id/input_data` 描述任务请求。
         返回值：最新 TaskRef。
         异常情况：未知任务、非法状态流转或 Task 启动异常会抛出结构化异常。
@@ -735,7 +933,7 @@ class TaskEngine:
         ref = TaskRef(
             task_id=task_id,
             task_type=task_type,
-            state="scheduled",
+            state="started",
             summary=summary,
             metadata={
                 "user_id": user_id,
@@ -747,14 +945,13 @@ class TaskEngine:
                 "cancel_supported": spec.cancel_supported,
                 "max_running_per_user": spec.max_running_per_user or self.max_running_per_user,
                 "created_at": now,
-                "started_at": None,
+                "started_at": now,
                 "updated_at": now,
             },
         )
         self.store.put(ref)
         task = task_cls()
         self._instances[task_id] = task
-        ref = self._transition(ref, "running", metadata={"started_at": time.time()})
         self.emit_signal(
             TaskSignal(
                 task_id=task_id,
@@ -767,31 +964,156 @@ class TaskEngine:
             )
         )
         context = self._context(user_id=user_id, session_id=session_id, ref=ref)
+        self.runner.submit(task_id, self._run_task(task_id, task, context))
+        await asyncio.sleep(0)
+        return ref
+
+    async def _run_task(self, task_id: str, task: BaseTask, context: TaskContext) -> None:
+        """运行 Task actor，并把未捕获异常转换为 `task.event.error`。"""
+
         try:
-            await self.executor.start(task, context)
-        except Exception as exc:
-            self._transition(ref, "failed", metadata={"error": str(exc)})
-            self.emit_signal(
-                TaskSignal(
-                    task_id=task_id,
-                    task_type=task_type,
-                    signal_name="task.failed",
-                    user_id=user_id,
-                    session_id=session_id,
-                    payload={"message": str(exc)},
-                    priority="high",
-                    requires_agent_decision=True,
-                    allow_direct_notify=True,
-                )
-            )
+            await task.run(context)
+        except asyncio.CancelledError:
             raise
-        return self.query(task_id)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                ref = self.query(task_id)
+            except AudioChatError:
+                return
+            if ref.state in TERMINAL_TASK_STATES:
+                return
+            event = Event(
+                event_name="task.event.error",
+                producer_id=SERVER_PRODUCER_ID,
+                user_id=str(ref.metadata.get("user_id") or context.user_id),
+                session_id=str(ref.metadata.get("session_id") or "") or context.session_id,
+                payload={
+                    "task_id": task_id,
+                    "task_type": ref.task_type,
+                    "reason": "runner_failed",
+                    "raw_error": str(exc),
+                    "message": "任务执行失败",
+                },
+            )
+            self.dispatch_event(event)
+
+    def dispatch_event(self, event: Event) -> TaskRef | None:
+        """把 `task.event.*` 系统事件路由到具体 Task actor。
+
+        主要逻辑：从 `payload.task_id` 定位任务实例，校验任务类型和状态，然后把
+        事件提交给后台 TaskRunner。失败、跳过和接收都会写入 TaskSignal 作为运行产物。
+        """
+
+        try:
+            view = self._parse_task_event(event)
+        except AudioChatError as exc:
+            self._emit_dispatch_signal(
+                event=event,
+                signal_name="task.event.dispatch.failed",
+                payload={"reason": exc.details.get("reason") if isinstance(exc.details, dict) else str(exc)},
+            )
+            return None
+        try:
+            ref = self.query(view.task_id)
+        except AudioChatError:
+            self._emit_dispatch_signal(
+                event=event,
+                signal_name="task.event.dispatch.skipped",
+                payload={"task_id": view.task_id, "reason": "task_not_found"},
+            )
+            return None
+        if view.task_type and view.task_type != ref.task_type:
+            self._emit_dispatch_signal(
+                event=event,
+                signal_name="task.event.dispatch.failed",
+                ref=ref,
+                payload={"reason": "task_type_mismatch", "actual_task_type": ref.task_type, "event_task_type": view.task_type},
+            )
+            return ref
+        if ref.state in TERMINAL_TASK_STATES:
+            self._emit_dispatch_signal(
+                event=event,
+                signal_name="task.event.dispatch.skipped",
+                ref=ref,
+                payload={"reason": "task_terminal", "state": ref.state},
+            )
+            return ref
+        task = self._instances.get(ref.task_id)
+        if task is None:
+            if view.task_event_type == "finish":
+                payload = dict(event.payload or {})
+                self.complete(ref.task_id, payload=dict(payload.get("result") or payload), summary=str(payload.get("summary") or ""))
+                self._emit_dispatch_signal(
+                    event=event,
+                    signal_name="task.event.dispatch.accepted",
+                    ref=ref,
+                    payload={"task_event_type": view.task_event_type, "fallback": "missing_instance_default_finish"},
+                )
+                return self.query(ref.task_id)
+            if view.task_event_type == "error":
+                payload = dict(event.payload or {})
+                self.fail(
+                    ref.task_id,
+                    message=str(payload.get("user_message") or payload.get("message") or "任务执行失败"),
+                    payload=payload,
+                )
+                self._emit_dispatch_signal(
+                    event=event,
+                    signal_name="task.event.dispatch.accepted",
+                    ref=ref,
+                    payload={"task_event_type": view.task_event_type, "fallback": "missing_instance_default_error"},
+                )
+                return self.query(ref.task_id)
+            if view.task_event_type == "cancel":
+                self._mark_cancelled(ref.task_id, reason=str((event.payload or {}).get("reason") or "cancelled"))
+                self._emit_dispatch_signal(
+                    event=event,
+                    signal_name="task.event.dispatch.accepted",
+                    ref=ref,
+                    payload={"task_event_type": view.task_event_type, "fallback": "missing_instance_default_cancel"},
+                )
+                return self.query(ref.task_id)
+            self._emit_dispatch_signal(
+                event=event,
+                signal_name="task.event.dispatch.skipped",
+                ref=ref,
+                payload={"reason": "task_instance_missing"},
+            )
+            return ref
+        resolved_view = replace(view, task_type=ref.task_type)
+        context = self._context(
+            user_id=str(ref.metadata.get("user_id") or event.user_id or ""),
+            session_id=str(ref.metadata.get("session_id") or "") or event.session_id,
+            ref=ref,
+        )
+        self.runner.submit(ref.task_id, self._run_event(task, context, resolved_view))
+        self._emit_dispatch_signal(
+            event=event,
+            signal_name="task.event.dispatch.accepted",
+            ref=ref,
+            payload={"task_event_type": resolved_view.task_event_type},
+        )
+        return ref
+
+    async def _run_event(self, task: BaseTask, context: TaskContext, event: TaskEventView) -> None:
+        """执行一个 Task actor 事件，并把处理异常转为 failed。"""
+
+        method = getattr(task, f"_process_{event.task_event_type}")
+        try:
+            await method(context, event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            try:
+                await context.fail(str(exc) or "任务事件处理失败", payload={"reason": "event_handler_failed", "raw_error": str(exc)})
+            except Exception:
+                raise
 
     async def handle_signal(self, signal: TaskSignal) -> TaskRef:
-        """把外部 TaskSignal 送回对应 Task 实例。
+        """兼容旧版 TaskSignal 回流入口。
 
-        主要逻辑：先记录信号，再调用 Task.on_signal；是否通知或回流 Agent 由 bridge
-        根据信号字段决定。
+        主要逻辑：先把 TaskSignal 作为输出信号记录，再转换成 `task.event.*`
+        投递给 Task actor。新的业务代码应直接使用 `dispatch_event()`。
         参数：`signal` 为任务信号。
         返回值：当前 TaskRef。
         异常情况：任务不存在时抛出 `AudioChatError`。
@@ -800,14 +1122,21 @@ class TaskEngine:
         ref = self.query(signal.task_id)
         if ref.state in TERMINAL_TASK_STATES:
             return ref
-        task = self._instances.get(signal.task_id)
         self.emit_signal(signal)
-        if task is not None:
-            await self.executor.signal(
-                task,
-                self._context(user_id=signal.user_id, session_id=signal.session_id, ref=ref),
-                signal,
-            )
+        event = Event(
+            event_name=_task_event_name_for_signal(signal.signal_name),
+            producer_id=SERVER_PRODUCER_ID,
+            user_id=signal.user_id,
+            session_id=signal.session_id,
+            payload={
+                "task_id": signal.task_id,
+                "task_type": signal.task_type,
+                "signal_name": signal.signal_name,
+                "cause": {"domain": "task_signal", "event": signal.signal_name},
+                **dict(signal.payload or {}),
+            },
+        )
+        self.dispatch_event(event)
         return self.query(signal.task_id)
 
     def schedule_signal(
@@ -922,11 +1251,12 @@ class TaskEngine:
             self._schedule_metadata.clear()
         for timer in timers:
             timer.cancel()
+        self.runner.shutdown()
 
     async def cancel(self, task_id: str, *, reason: str = "cancelled") -> TaskRef:
         """取消任务。
 
-        主要逻辑：执行 Task.on_cancel，状态流转到 cancelled，并记录 `task.cancelled`。
+        主要逻辑：把取消请求转换为 `task.event.cancel`，由 Task actor 自己处理。
         参数：`task_id` 为任务 ID，`reason` 为取消原因。
         返回值：取消后的 TaskRef。
         异常情况：非法状态流转或任务不存在时抛出 `AudioChatError`。
@@ -937,42 +1267,40 @@ class TaskEngine:
             return ref
         if ref.metadata.get("cancel_supported") is False:
             raise AudioChatError(f"task does not support cancel: {task_id}", code=ErrorCode.PROTOCOL_ERROR)
+        event = Event(
+            event_name="task.event.cancel",
+            producer_id=SERVER_PRODUCER_ID,
+            user_id=str(ref.metadata.get("user_id") or ""),
+            session_id=str(ref.metadata.get("session_id") or "") or None,
+            payload={"task_id": task_id, "task_type": ref.task_type, "reason": reason},
+        )
         task = self._instances.get(task_id)
-        if task is not None:
-            await self.executor.cancel(
-                task,
-                self._context(
-                    user_id=str(ref.metadata.get("user_id") or ""),
-                    session_id=str(ref.metadata.get("session_id") or "") or None,
-                    ref=ref,
-                ),
-            )
-        ref = self._transition(ref, "cancelled")
-        self.emit_signal(
-            TaskSignal(
-                task_id=ref.task_id,
-                task_type=ref.task_type,
-                signal_name="task.cancelled",
+        if task is None:
+            self.dispatch_event(event)
+            return self.query(task_id)
+        await self._run_event(
+            task,
+            self._context(
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
-                payload={"reason": reason},
-                allow_direct_notify=True,
-            )
+                ref=ref,
+            ),
+            TaskEventView(event=event, task_id=task_id, task_type=ref.task_type, task_event_type="cancel"),
         )
-        return ref
+        return self.query(task_id)
 
     def complete(self, task_id: str, *, payload: dict | None = None, summary: str = "") -> TaskRef:
-        """完成任务并写入 `task.completed` 信号。"""
+        """完成任务并写入 `task.finished` 信号。"""
 
         ref = self.query(task_id)
         if ref.state in TERMINAL_TASK_STATES:
             return ref
-        ref = self._transition(ref, "completed", summary=summary or ref.summary)
+        ref = self._transition(ref, "finished", summary=summary or ref.summary)
         self.emit_signal(
             TaskSignal(
                 task_id=ref.task_id,
                 task_type=ref.task_type,
-                signal_name="task.completed",
+                signal_name="task.finished",
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
                 payload={"state": ref.state, **dict(payload or {})},
@@ -998,7 +1326,28 @@ class TaskEngine:
                 payload={"message": message, **dict(payload or {})},
                 priority="high",
                 requires_agent_decision=True,
-                allow_direct_notify=True,
+                allow_direct_notify=bool((payload or {}).get("allow_direct_notify", False)),
+            )
+        )
+        return ref
+
+    def _mark_cancelled(self, task_id: str, *, reason: str = "cancelled") -> TaskRef:
+        """Task Core 内部取消收口。"""
+
+        ref = self.query(task_id)
+        if ref.state in TERMINAL_TASK_STATES:
+            return ref
+        self.runner.cancel_task(task_id)
+        ref = self._transition(ref, "cancelled")
+        self.emit_signal(
+            TaskSignal(
+                task_id=ref.task_id,
+                task_type=ref.task_type,
+                signal_name="task.cancelled",
+                user_id=str(ref.metadata.get("user_id") or ""),
+                session_id=str(ref.metadata.get("session_id") or "") or None,
+                payload={"reason": reason},
+                allow_direct_notify=False,
             )
         )
         return ref
@@ -1035,18 +1384,18 @@ class TaskEngine:
     def _expire_if_needed(self, ref: TaskRef) -> TaskRef:
         if not self.scheduler.expired(ref):
             return ref
-        ref = self._transition(ref, "timeout", metadata={"timeout_at": time.time()})
+        ref = self._transition(ref, "failed", metadata={"timeout_at": time.time(), "error": "timeout"})
         self.emit_signal(
             TaskSignal(
                 task_id=ref.task_id,
                 task_type=ref.task_type,
-                signal_name="task.timeout",
+                signal_name="task.failed",
                 user_id=str(ref.metadata.get("user_id") or ""),
                 session_id=str(ref.metadata.get("session_id") or "") or None,
-                payload={"timeout_seconds": ref.metadata.get("timeout_seconds")},
+                payload={"reason": "timeout", "timeout_seconds": ref.metadata.get("timeout_seconds")},
                 priority="high",
                 requires_agent_decision=True,
-                allow_direct_notify=True,
+                allow_direct_notify=False,
             )
         )
         return ref
@@ -1068,6 +1417,60 @@ class TaskEngine:
                 details={"user_id": user_id, "limit": limit, "task_type": spec.task_type},
             )
 
+    def _parse_task_event(self, event: Event) -> TaskEventView:
+        event_name = str(event.event_name or "")
+        if not event_name.startswith("task.event."):
+            raise AudioChatError(
+                f"unsupported task event: {event_name}",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"reason": "unsupported_event_name", "event_name": event_name},
+            )
+        task_event_type = event_name.removeprefix("task.event.")
+        if task_event_type not in TASK_EVENT_TYPES:
+            raise AudioChatError(
+                f"unsupported task event type: {task_event_type}",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"reason": "unsupported_task_event_type", "task_event_type": task_event_type},
+            )
+        payload = dict(event.payload or {})
+        task_id = str(payload.get("task_id") or "").strip()
+        if not task_id:
+            raise AudioChatError(
+                "task.event payload missing task_id",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"reason": "missing_task_id"},
+            )
+        task_type = str(payload.get("task_type") or "").strip()
+        return TaskEventView(event=event, task_id=task_id, task_type=task_type, task_event_type=task_event_type)
+
+    def _emit_dispatch_signal(
+        self,
+        *,
+        event: Event,
+        signal_name: str,
+        payload: dict | None = None,
+        ref: TaskRef | None = None,
+    ) -> None:
+        event_payload = dict(event.payload or {})
+        task_id = str(event_payload.get("task_id") or (ref.task_id if ref is not None else "task_unknown"))
+        task_type = str(event_payload.get("task_type") or (ref.task_type if ref is not None else "unknown"))
+        signal_payload = {
+            "event_name": str(event.event_name),
+            "event_id": event.event_id,
+            **dict(payload or {}),
+        }
+        self.emit_signal(
+            TaskSignal(
+                task_id=task_id,
+                task_type=task_type,
+                signal_name=signal_name,
+                user_id=str((ref.metadata if ref is not None else {}).get("user_id") or event.user_id or ""),
+                session_id=(str((ref.metadata if ref is not None else {}).get("session_id") or "") or event.session_id),
+                payload=signal_payload,
+                allow_direct_notify=False,
+            )
+        )
+
 
 def _resolve_timeout_seconds(spec: TaskSpec, input_data: dict) -> float | None:
     raw = input_data.get("timeout_seconds", spec.timeout_seconds)
@@ -1075,6 +1478,28 @@ def _resolve_timeout_seconds(spec: TaskSpec, input_data: dict) -> float | None:
         return None
     value = float(raw)
     return value if value > 0 else None
+
+
+def _normalize_task_state(state: str) -> str:
+    """把历史状态名映射到当前 Task Core 状态名。"""
+
+    normalized = str(state or "started")
+    return LEGACY_TASK_STATE_MAP.get(normalized, normalized)
+
+
+def _task_event_name_for_signal(signal_name: str) -> str:
+    """把兼容 TaskSignal 转换成 Task actor 事件名。"""
+
+    normalized = str(signal_name or "").strip()
+    if normalized.endswith(".done") or normalized.endswith(".due") or normalized.endswith(".completed"):
+        return "task.event.finish"
+    if normalized.endswith(".failed") or normalized.endswith(".error"):
+        return "task.event.error"
+    if normalized.endswith(".cancelled") or normalized.endswith(".cancel"):
+        return "task.event.cancel"
+    if normalized.endswith(".started"):
+        return "task.event.status"
+    return "task.event.process"
 
 
 def _default_task_start_tool_name(task_type: str) -> str:
@@ -1108,10 +1533,11 @@ def _task_ref_to_dict(ref: TaskRef) -> dict[str, Any]:
 
 
 def _task_ref_from_dict(data: dict[str, Any]) -> TaskRef:
+    state = _normalize_task_state(str(data.get("state") or "started"))
     return TaskRef(
         task_id=str(data.get("task_id") or ""),
         task_type=str(data.get("task_type") or ""),
-        state=str(data.get("state") or "scheduled"),
+        state=state,
         summary=str(data.get("summary") or ""),
         metadata=dict(data.get("metadata") or {}),
     )

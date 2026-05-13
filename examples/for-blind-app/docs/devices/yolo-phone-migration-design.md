@@ -183,6 +183,8 @@ vision:
     enable_hsv_fallback: true
 ```
 
+`device: auto` 在 Python phone 参考端中会优先选择 CUDA，否则使用 CPU；不会自动选择 macOS MPS。原因是 YOLOE / MobileCLIP 文本编码路径可能产生 float64 张量，而 MPS 不支持 float64。确实要试 MPS 时可以显式配置 `device: mps`，但这属于端侧实验配置。
+
 约束：
 
 1. 模型文件不提交到仓库，默认通过环境变量指定。
@@ -204,6 +206,10 @@ numpy 间接依赖
 ```text
 examples/dev-support/devices/python-phone/requirements.vision.txt
 ```
+
+其中 `git+https://github.com/ultralytics/CLIP.git` 是 YOLOE 文本 prompt 的端侧依赖。必须显式安装，不能依赖 Ultralytics 在运行时调用 `python -m pip` 自动补依赖；`uv` 创建的虚拟环境可能没有 pip，且非 Python 端侧也不应理解 Python SDK 的 extras。
+
+首次调用 YOLOE 文本 prompt 时，Ultralytics 还会下载 `mobileclip_blt.ts` 文本编码权重，文件约 572MB。Python phone 会把它限制到 `runs/audio-chat/python-phone/vision-cache/`；正式联调前应让端侧完成这一次缓存下载，该权重属于端侧模型缓存，不提交到仓库。
 
 安装方式：
 
@@ -393,6 +399,7 @@ participant "Browser glass Sender" as Glass
 
 Task -> Phone : command.start(peer.video.receiver.start)
 Phone -> Vision : prepare_session(purpose, object_name)
+Phone --> Task : command.progress(peer.receiver.waiting_vision)
 Phone --> Task : command.progress(peer.receiver.ready)
 Task -> Glass : command.start(peer.video.sender.start)
 Glass -> Phone : JPEG frames
@@ -459,6 +466,8 @@ Python phone 端新增日志事件：
 | --- | --- |
 | 模型路径缺失 | `command.failed`，message 写明缺失的环境变量或配置项。 |
 | `ultralytics` 未安装 | `command.failed`，提示在 Python phone 端安装 `requirements.vision.txt`。 |
+| YOLOE 文本依赖 `clip` 未安装 | 在调用 `get_text_pe()` 前失败，`command.failed` 提示安装 Python phone 端的 `requirements.vision.txt`，避免触发 Ultralytics 自动 pip 安装。 |
+| YOLOE 文本编码权重未缓存 | 首次运行会下载约 572MB 的 `mobileclip_blt.ts` 到 `runs/audio-chat/python-phone/vision-cache/`；联调前可先让 phone 端完成缓存，下载产物不提交。 |
 | 单帧解码失败 | 记录 WARNING，继续等待下一帧。 |
 | 单帧推理异常 | 记录 ERROR，连续失败达到阈值后 `command.failed`。 |
 | 30 秒未找到物体 | `command.completed(found=false)`。 |

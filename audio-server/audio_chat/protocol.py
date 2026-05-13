@@ -54,6 +54,12 @@ class EventName(StrEnum):
     AGENT_RESPONSE_COMPLETED = "agent.response.completed"
     TOOL_CALL_STARTED = "tool.call.started"
     TOOL_CALL_COMPLETED = "tool.call.completed"
+    TASK_EVENT_START = "task.event.start"
+    TASK_EVENT_PROCESS = "task.event.process"
+    TASK_EVENT_STATUS = "task.event.status"
+    TASK_EVENT_FINISH = "task.event.finish"
+    TASK_EVENT_CANCEL = "task.event.cancel"
+    TASK_EVENT_ERROR = "task.event.error"
     TASK_STATE_CHANGED = "task.state.changed"
     SYSTEM_ERROR_RAISED = "system.error.raised"
 

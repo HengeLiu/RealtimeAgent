@@ -55,22 +55,33 @@ class ScheduledCompleteTask(BaseTask):
 
     task_type = "scheduled_complete_task"
 
-    async def on_signal(self, context, signal) -> None:
-        """测试目标：验证 TaskEngine 调度信号会回流到业务 Task。
+    async def on_finish(self, context, event) -> None:
+        """测试目标：验证 TaskEngine 调度事件会回流到业务 Task。
 
-        测试方法：收到 `scheduled.done` 后调用 `context.complete()`。
-        预期结果：任务最终进入 completed。
+        测试方法：收到由 `scheduled.done` 转换来的 `task.event.finish` 后记录结果。
+        预期结果：任务最终进入 finished。
         """
 
-        if signal.signal_name == "scheduled.done":
-            await context.complete({"from_signal": True}, summary="scheduled done")
+        assert event.event.payload["signal_name"] == "scheduled.done"
 
 
-def test_task_query_moves_expired_running_task_to_timeout() -> None:
-    """测试目标：验证超时任务会流转到 timeout。
+def _wait_for_state(engine: TaskEngine, task_id: str, state: str, *, timeout_seconds: float = 0.5):
+    """等待后台 TaskRunner 把任务流转到目标状态。"""
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        ref = engine.query(task_id)
+        if ref.state == state:
+            return ref
+        time.sleep(0.01)
+    return engine.query(task_id)
+
+
+def test_task_query_moves_expired_started_task_to_failed() -> None:
+    """测试目标：验证超时任务会流转到 failed。
 
     测试方法：创建带 `timeout_seconds` 的任务，等待 deadline 后查询。
-    预期结果：查询触发惰性调度，任务状态变为 timeout 并写入 timeout 事件。
+    预期结果：查询触发惰性调度，任务状态变为 failed 并写入 timeout 原因。
     """
 
     engine = TaskEngine()
@@ -80,8 +91,8 @@ def test_task_query_moves_expired_running_task_to_timeout() -> None:
     time.sleep(0.02)
     timed_out = engine.query(ref.task_id)
 
-    assert timed_out.state == "timeout"
-    assert any(signal.signal_name == "task.timeout" for signal in engine.store.signals_for_task(ref.task_id))
+    assert timed_out.state == "failed"
+    assert any(signal.signal_name == "task.failed" and signal.payload.get("reason") == "timeout" for signal in engine.store.signals_for_task(ref.task_id))
 
 
 def test_task_cancel_calls_on_cancel_and_records_cancelled_state() -> None:
@@ -107,16 +118,23 @@ def test_task_create_failure_records_failed_event() -> None:
     """测试目标：验证启动异常会进入 failed 并暴露结构化事件。
 
     测试方法：Task.on_start 抛出 RuntimeError。
-    预期结果：create 向上抛出异常，store 中最后一个任务为 failed。
+    预期结果：create 立即返回 started，后台 runner 把任务流转为 failed。
     """
 
     engine = TaskEngine()
     engine.register(FailingTask)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(engine.create(task_type="failing_task", user_id="user-fail", session_id="sess-fail"))
+    async def run() -> None:
+        ref = await engine.create(task_type="failing_task", user_id="user-fail", session_id="sess-fail")
+        deadline = time.time() + 0.5
+        while time.time() < deadline:
+            if engine.query(ref.task_id).state == "failed":
+                return
+            await asyncio.sleep(0.01)
 
+    asyncio.run(run())
     failed = engine.store.list_tasks()[-1]
+
     assert failed.state == "failed"
     assert any(signal.signal_name == "task.failed" for signal in engine.store.signals_for_task(failed.task_id))
 
@@ -156,14 +174,14 @@ def test_task_engine_owns_and_cancels_scheduled_signals() -> None:
     assert engine.cancel_scheduled_signal(scheduled["schedule_id"]) is True
     assert engine.list_scheduled_signals() == []
     time.sleep(0.08)
-    assert engine.query(ref.task_id).state == "running"
+    assert engine.query(ref.task_id).state == "started"
 
 
 def test_task_engine_scheduled_event_flows_back_to_task() -> None:
-    """测试目标：验证到点信号会重新进入 Task.on_signal。
+    """测试目标：验证到点信号会转换为 Task 事件。
 
     测试方法：调度 `scheduled.done`，等待定时器触发。
-    预期结果：Task 处理信号并完成，信号日志包含业务信号和 completed。
+    预期结果：Task 处理 `task.event.finish` 并完成，信号日志包含调度和 finished。
     """
 
     engine = TaskEngine()
@@ -175,8 +193,8 @@ def test_task_engine_scheduled_event_flows_back_to_task() -> None:
     engine.schedule_signal(task_id=ref.task_id, signal_name="scheduled.done", delay_seconds=0.01)
     time.sleep(0.05)
 
-    assert engine.query(ref.task_id).state == "completed"
+    assert _wait_for_state(engine, ref.task_id, "finished").state == "finished"
     signal_names = [signal.signal_name for signal in engine.store.signals_for_task(ref.task_id)]
     assert "task.signal.scheduled" in signal_names
     assert "scheduled.done" in signal_names
-    assert "task.completed" in signal_names
+    assert "task.finished" in signal_names

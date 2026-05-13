@@ -70,13 +70,15 @@ command.requested command=peer.video.sender.start
 1. 发送 `command.accepted`。
 2. 读取 `params.receiver.url` 并建立 WebSocket。
 3. 上报 `peer.sender.connecting` 和 `peer.sender.connected`。
-4. 按 `params.source.fps` 抽帧；如果已选择视频，则播放视频并按当前播放时间抽取 JPEG 帧；如果已选择图片样例，则循环发送图片样例；否则使用摄像头。
+4. 按 `params.source.fps` 抽帧；如果已选择视频，则启动视频自己的播放时间线，并从当前播放进度抽取 JPEG 帧；如果已选择图片样例，则循环发送图片样例；否则使用摄像头。
 5. 收到 `peer.video.sender.start.stop` 后停止定时器并关闭 WebSocket。
 6. peer WebSocket error/close、控制连接断开或页面关闭时，也会停止 sender；异常断开会通过 `command.failed` 回报 server。
 
 本地日志会打印 `peer.video.sender.start`、`peer.sender.connected`、`peer.video.frame.sent` 和 `peer.video.sender.stop`，用于和 phone 日志、server runs 对齐。
 
-页面左侧的“采集帧预览”会显示实际被上传或发送给 phone 的 JPEG 帧。选择视频后，`sensor.rgb` 的 continuous 请求会按请求里的 `frequency_hz`、`sample_count` 或 `duration_seconds` 逐帧采集；peer video 任务则按 `params.source.fps` 采集。
+页面左侧的“采集帧预览”会显示实际被上传或发送给 phone 的 JPEG 帧。选择视频后，视频不会因为每次 `sensor.rgb` 请求才推进一小段，而是像真实摄像头看到的世界一样拥有自己的播放时间线：首次采集请求会自动开始播放，后续 `sensor.rgb` 或 peer video 请求只按各自频率从当前播放进度抽帧。
+
+为了避免影响浏览器端音频播放，连续视频发送时页面回显会降频刷新：发送给 server 或 phone 的帧仍按请求频率发送，但大预览和缩略图不会每帧都重绘。缩略图只保留最近少量帧，用来观察实际发出的画面是否正确。
 
 ## 音频测试模式
 
@@ -96,4 +98,4 @@ command.requested command=peer.video.sender.start
 
 图片会以 `sensor.rgb` 输入流上传到 server，server 再转发给同一 `user_id` 下声明
 `endpoint.role.visual_display` 或 `actuator.display.rgb` 的显示设备。
-视频不会一次性上传文件本身，而是在浏览器按采集频率抽取当前播放帧，作为 JPEG 帧走 `sensor.rgb` 或 peer video WebSocket。
+视频不会一次性上传文件本身，而是在浏览器按采集频率抽取当前播放帧，作为 JPEG 帧走 `sensor.rgb` 或 peer video WebSocket。采集请求不会控制视频进度，只有切换资源、停止 peer sender、重置页面或关闭页面时才会停止这个隐藏的视频时间线。

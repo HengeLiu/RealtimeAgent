@@ -81,18 +81,11 @@ def test_task_engine_state_machine_and_signal_bridge_contract() -> None:
 
     tasks = importlib.import_module("audio_chat.tasks")
 
-    assert set(tasks.TASK_STATES) == {
-        "scheduled",
-        "running",
-        "waiting_external",
-        "completed",
-        "cancelled",
-        "failed",
-        "timeout",
-    }
-    assert ("scheduled", "running") in tasks.TASK_TRANSITIONS
-    assert ("running", "waiting_external") in tasks.TASK_TRANSITIONS
-    assert ("waiting_external", "completed") in tasks.TASK_TRANSITIONS
+    assert set(tasks.TASK_STATES) == {"started", "finished", "cancelled", "failed"}
+    assert ("started", "finished") in tasks.TASK_TRANSITIONS
+    assert ("started", "cancelled") in tasks.TASK_TRANSITIONS
+    assert ("started", "failed") in tasks.TASK_TRANSITIONS
+    assert set(tasks.TASK_EVENT_TYPES) == {"start", "process", "status", "finish", "cancel", "error"}
 
     bridge = tasks.TaskSignalBridge
     assert hasattr(bridge, "handle_signal")
@@ -165,7 +158,11 @@ def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
     root = Path(__file__).resolve().parents[3]
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = set(pyproject["project"]["scripts"])
-    readme_commands = set(re.findall(r"\baudio-chat\.[a-z0-9.-]+", (root / "README.md").read_text(encoding="utf-8")))
+    readme_commands = {
+        command
+        for command in re.findall(r"\baudio-chat\.[a-z0-9.-]+", (root / "README.md").read_text(encoding="utf-8"))
+        if not command.endswith(".yaml")
+    }
     assert readme_commands <= scripts
 
     markers = ("后续目标", "未落地", "建议", "目标", "可选增强", "下一阶段", "应", "未来", )

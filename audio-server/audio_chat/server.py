@@ -134,6 +134,7 @@ class AudioChatHttpServer:
         app.router.add_get("/api/debug/devices/{device_id}", self.debug_device)
         app.router.add_get("/api/debug/users/{user_id}", self.debug_user)
         app.router.add_get("/api/debug/playback", self.debug_playback)
+        app.router.add_get("/api/debug/tasks", self.debug_tasks)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
         app.on_startup.append(self._on_startup)
@@ -215,6 +216,45 @@ class AudioChatHttpServer:
         """返回播放仲裁快照。"""
 
         return web.json_response(self.audio_app.output_service.debug_snapshot())
+
+    async def debug_tasks(self, request: web.Request) -> web.Response:
+        """返回 Task Core 调试快照。
+
+        主要逻辑：列出 TaskRef、最近 TaskSignal 和调度等待项，用于排查 Task actor
+        是否启动、是否进入终态以及最近一次 dispatch 结果。
+        参数：可选 query `user_id` 和 `include_terminal`。
+        返回值：JSON response。
+        异常情况：无。
+        """
+
+        user_id = request.query.get("user_id") or None
+        include_terminal = request.query.get("include_terminal", "true").lower() not in {"0", "false", "no"}
+        tasks = []
+        for ref in self.audio_app.task_engine.list_tasks(user_id=user_id, include_terminal=include_terminal):
+            signals = self.audio_app.task_engine.store.signals_for_task(ref.task_id)
+            tasks.append(
+                {
+                    "task_id": ref.task_id,
+                    "task_type": ref.task_type,
+                    "state": ref.state,
+                    "summary": ref.summary,
+                    "metadata": dict(ref.metadata),
+                    "recent_signals": [
+                        {
+                            "signal_name": signal.signal_name,
+                            "payload": dict(signal.payload),
+                            "created_at": signal.created_at,
+                        }
+                        for signal in signals[-5:]
+                    ],
+                }
+            )
+        return web.json_response(
+            {
+                "tasks": tasks,
+                "scheduled_signals": self.audio_app.task_engine.list_scheduled_signals(),
+            }
+        )
 
     async def control_ws(self, request: web.Request) -> web.WebSocketResponse:
         """处理控制 WebSocket。
@@ -500,7 +540,7 @@ def main(argv: list[str] | None = None) -> None:
         config_path = args.config or "examples/for-blind-app/audio-server/server.yaml"
         config, launch = load_config_as_app(config_path)
         resolved_config_path = str(launch.config_path)
-    configure_console_logging(config.log_level)
+    configure_console_logging(config.log_level, timezone_name=config.log_timezone)
     logger = get_logger("audio_chat.server")
     log_info(
         logger,
@@ -513,6 +553,7 @@ def main(argv: list[str] | None = None) -> None:
                 "config_path": config.config_path or resolved_config_path,
                 "host": config.server_host,
                 "port": config.server_port,
+                "log_timezone": config.log_timezone,
                 "runs_root": config.runs_root,
                 "agent_mode": config.agent_mode,
                 "realtime_provider": config.realtime_provider,

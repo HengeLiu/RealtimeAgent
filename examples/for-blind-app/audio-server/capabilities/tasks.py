@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from audio_chat import BaseTask, CommandEvent, CommandHandle, TaskContext, TaskSignal
+from audio_chat import BaseTask, CommandEvent, CommandHandle, TaskContext, TaskEventView, TaskSignal
 
 
 class FindObjectTaskInput(BaseModel):
@@ -107,7 +107,7 @@ class PeerVideoTaskMixin:
             selector={"device_role": "phone"},
             params=receiver_params,
         )
-        phone_ready = await self.wait_status(self.phone_handle, "peer.receiver.ready", timeout_seconds=5)
+        phone_ready = await self.wait_phone_receiver_ready(context, self.phone_handle, timeout_seconds=timeout_seconds + 180)
         receiver = dict((phone_ready.data.get("data") or {}).get("receiver") or phone_ready.data.get("receiver") or {})
         if not receiver:
             raise RuntimeError("phone peer receiver ready event missing receiver")
@@ -125,7 +125,10 @@ class PeerVideoTaskMixin:
             },
         )
         await self.wait_status(self.glass_handle, "peer.sender.connected", timeout_seconds=5)
-        completed = await self.wait_terminal(self.phone_handle, timeout_seconds=timeout_seconds + 5)
+        # 真实 YOLOE 首次启动可能包含 MobileCLIP 文本编码权重下载和模型预热。
+        # 这段时间不属于用户要求的“找物/红绿灯识别时长”，所以 server 等待 phone
+        # completed 时保留额外预热余量；phone 端会在视觉准备完成后再启动业务超时。
+        completed = await self.wait_terminal(self.phone_handle, timeout_seconds=timeout_seconds + 180)
         result = dict(completed.data.get("result") or {})
         if not result:
             result = dict(completed.data)
@@ -149,6 +152,60 @@ class PeerVideoTaskMixin:
             raise RuntimeError(f"peer video command ended before status {status}")
 
         return await asyncio.wait_for(_wait(), timeout=timeout_seconds)
+
+    async def wait_phone_receiver_ready(self, context: TaskContext, handle: CommandHandle, *, timeout_seconds: float) -> CommandEvent:
+        """等待 phone receiver 视觉就绪。
+
+        参数：`context` 为任务上下文，`handle` 为 phone receiver 命令句柄，
+        `timeout_seconds` 为包含模型预热在内的最长等待。
+        返回值：`peer.receiver.ready` 事件。
+        异常情况：端侧 failed 或超时时抛出 RuntimeError/TimeoutError。
+        """
+
+        async def _wait() -> CommandEvent:
+            waiting_notified = False
+            async for event in handle.results():
+                if event.state == "failed":
+                    raise RuntimeError(str(event.data.get("message") or "peer video receiver failed"))
+                status = self.command_event_status(event)
+                if status == "peer.receiver.waiting_vision" and not waiting_notified:
+                    waiting_notified = True
+                    self.notify_output(context, "手机正在准备视觉模型，请稍等", priority="normal")
+                if status == "peer.receiver.ready":
+                    if waiting_notified:
+                        self.notify_output(context, "手机视觉模型已就绪，开始识别", priority="normal")
+                    return event
+            raise RuntimeError("peer video command ended before phone receiver ready")
+
+        return await asyncio.wait_for(_wait(), timeout=timeout_seconds)
+
+    def notify_output(self, context: TaskContext, text: str, *, priority: str = "normal") -> None:
+        """非阻塞提交任务状态播报。
+
+        主要逻辑：`context.output.say()` 当前会同步触发完整 TTS 合成。任务编排等待
+        phone/glass 状态时，不能让播报阻塞 command 回执消费；因此把播报放到后台
+        线程提交，状态机继续向前推进。
+        参数：`context` 为任务上下文，`text` 为播报文本，`priority` 为输出优先级。
+        返回值：无。
+        异常情况：后台播报失败只记录到系统日志，不影响 peer video 编排。
+        """
+
+        async def _submit() -> None:
+            try:
+                await asyncio.to_thread(_submit_output_text, context, text, priority)
+            except Exception as exc:  # noqa: BLE001 - 状态播报失败不应影响任务主流程
+                recorder = getattr(context.bridge, "recorder", None) if context.bridge is not None else None
+                if recorder is not None and hasattr(recorder, "record_system_event"):
+                    recorder.record_system_event(
+                        {
+                            "event": "peer_video.status_notify_failed",
+                            "task_id": context.task_ref.task_id,
+                            "task_type": context.task_ref.task_type,
+                            "message": str(exc),
+                        }
+                    )
+
+        asyncio.create_task(_submit())
 
     @staticmethod
     def command_event_status(event: CommandEvent) -> str:
@@ -230,6 +287,29 @@ class PeerVideoTaskMixin:
         )
 
 
+def _submit_output_text(context: TaskContext, text: str, priority: str) -> None:
+    """在线程中提交状态播报文本。
+
+    主要逻辑：绕开 `context.output.say()` 的 coroutine 包装，直接调用 OutputService。
+    该函数只用于非阻塞状态提示，不承载任务完成播报。
+    参数：`context` 为任务上下文，`text` 为播报内容，`priority` 为输出优先级。
+    返回值：无。
+    异常情况：OutputService 抛出的异常由调用方记录。
+    """
+
+    output = context.output
+    app = getattr(output, "_app")
+    user_id = getattr(output, "user_id")
+    session_id = app.active_session_id(user_id)
+    app.output_service.submit_text(
+        user_id=user_id,
+        session_id=session_id,
+        text=text,
+        priority=priority,
+        ttl_seconds=0,
+    )
+
+
 class FindObjectTask(PeerVideoTaskMixin, BaseTask):
     """找物 peer video Task。
 
@@ -271,6 +351,24 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
             await self.stop_peer_video(reason="task_failed")
             await context.fail(str(exc), payload={"object_name": object_name})
             return
+        found = bool(result.get("found", True))
+        payload = {**result, "object_name": result.get("object_name") or object_name}
+        self.emit_task_signal(
+            context,
+            signal_name="find_object.found" if found else "find_object.not_found",
+            payload=payload,
+        )
+        message = str(result.get("message") or (f"已找到{object_name}，它在前方" if found else f"暂时没有找到{object_name}"))
+        await context.output.say(message, priority="normal")
+        await context.complete(payload, summary="找物完成" if found else "找物未命中")
+
+    async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
+        """处理端侧找物完成事件。"""
+
+        input_data = dict(context.metadata.get("input") or {})
+        object_name = str(input_data.get("object_name") or "目标物").strip()
+        event_payload = dict(event.event.payload or {})
+        result = dict(event_payload.get("result") or event_payload)
         found = bool(result.get("found", True))
         payload = {**result, "object_name": result.get("object_name") or object_name}
         self.emit_task_signal(
@@ -339,6 +437,22 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
         await context.output.say(suggestion, priority="high" if state == "green" else "normal")
         await context.complete(payload, summary=suggestion)
 
+    async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
+        """处理端侧红绿灯识别完成事件。"""
+
+        event_payload = dict(event.event.payload or {})
+        result = dict(event_payload.get("result") or event_payload)
+        state = str(result.get("state") or "green").strip().lower()
+        suggestion = str(result.get("message") or result.get("suggestion") or "绿灯，可以在确认安全后通行")
+        payload = {**result, "state": state, "suggestion": suggestion}
+        self.emit_task_signal(
+            context,
+            signal_name="traffic_light.green" if state == "green" else "traffic_light.state_detected",
+            payload=payload,
+        )
+        await context.output.say(suggestion, priority="high" if state == "green" else "normal")
+        await context.complete(payload, summary=suggestion)
+
     async def on_cancel(self, context: TaskContext) -> None:
         """取消红绿灯识别任务。"""
 
@@ -394,12 +508,13 @@ class TimerTask(BaseTask):
                 allow_direct_notify=True,
             )
 
-    async def on_signal(self, context: TaskContext, signal: TaskSignal) -> None:
-        """处理计时器信号。"""
+    async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
+        """处理计时器到点事件。"""
 
-        if signal.signal_name != "timer.due":
+        payload = dict(event.event.payload or {})
+        if payload.get("signal_name") != "timer.due":
             return
-        seconds = int(signal.payload.get("seconds") or 0)
+        seconds = int(payload.get("seconds") or 0)
         await context.complete({"seconds": seconds, "notified": True}, summary="计时器到点")
 
     async def on_cancel(self, context: TaskContext) -> None:

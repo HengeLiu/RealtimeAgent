@@ -434,6 +434,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         self.vision_frames = dict(vision_frames or {})
         self.peer_video_config = dict(peer_video or {})
         self.vision_config = vision if isinstance(vision, VisionConfig) else VisionConfig.from_mapping(vision if isinstance(vision, dict) else None)
+        self.vision_warmup_task: asyncio.Task | None = None
         self.peer_video_receivers: dict[str, PeerVideoReceiver] = {}
         self.peer_video_tasks: dict[str, asyncio.Task] = {}
         self.task_command_events: list[dict[str, Any]] = []
@@ -607,6 +608,15 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         payload = dict(event.payload or {})
         params = dict(payload.get("params") or {})
         command = str(payload.get("command") or "").strip()
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_log(
+                "INFO",
+                (
+                    "收到设备命令 "
+                    f"command={command or '-'} command_id={payload.get('command_id') or '-'} "
+                    f"task_type={params.get('task_type') or '-'} peer_session_id={params.get('peer_session_id') or '-'}"
+                ),
+            )
         if command == "peer.video.receiver.start":
             await self._handle_peer_video_receiver_start(control_ws, event)
             return
@@ -799,6 +809,15 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             yolo_mock_config = dict(config.get("yolo_mock") or {})
             timeout_seconds = float(params.get("timeout_seconds") or config.get("timeout_seconds") or 30)
             complete_after_frames = int(yolo_mock_config.get("complete_after_frames") or config.get("complete_after_frames") or 0)
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log(
+                    "INFO",
+                    (
+                        "准备启动 peer video receiver "
+                        f"command_id={command.command_id} purpose={params.get('purpose') or '-'} "
+                        f"object_name={params.get('object_name') or '-'} timeout={timeout_seconds}s"
+                    ),
+                )
             reporter = RemoteTaskReporter(
                 command=command,
                 producer_id=self.device_id,
@@ -814,13 +833,18 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 public_host=str(config.get("public_host") or config.get("advertise_host") or "127.0.0.1"),
                 complete_after_frames=complete_after_frames,
                 frame_callback=lambda frame, metadata: self._handle_peer_video_frame(frame, metadata),
+                log_callback=lambda level, message: self._emit_peer_video_log(level, message),
                 vision_processor=build_vision_processor(self.vision_config),
             )
             self.peer_video_receivers[command.command_id] = receiver
             task = asyncio.create_task(receiver.run())
             self.peer_video_tasks[command.command_id] = task
             task.add_done_callback(lambda finished, command_id=command.command_id: self._on_peer_video_task_done(command_id, finished))
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log("INFO", f"peer video receiver 后台任务已创建 command_id={command.command_id}")
         except Exception as exc:  # noqa: BLE001 - 端侧命令解析错误需要回报给 server
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log("ERROR", f"peer video receiver 启动失败: {type(exc).__name__}: {exc}")
             await self._send_command_event(
                 control_ws,
                 event_name="command.failed",
@@ -831,6 +855,61 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                     "message": str(exc),
                 },
             )
+
+    def _start_vision_warmup(self) -> None:
+        """启动 phone 端视觉模型后台预热。
+
+        主要逻辑：phone 注册后立即加载真实 YOLO 模型和 YOLOE 文本编码依赖，提前暴露
+        模型路径、依赖或下载问题。预热不阻塞设备注册和控制连接。
+        返回值：无。
+        异常情况：后台任务内部记录并写入 GUI。
+        """
+
+        if self.vision_config.provider == "mock":
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log("INFO", "视觉模型预热跳过 provider=mock")
+            return
+        if self.vision_warmup_task is not None and not self.vision_warmup_task.done():
+            return
+        self.vision_warmup_task = asyncio.create_task(self._warmup_vision_models())
+
+    async def _warmup_vision_models(self) -> None:
+        """后台预热真实视觉模型。"""
+
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_status(vision="warming")
+            self.gui_bridge.emit_log("INFO", f"视觉模型预热开始 provider={self.vision_config.provider} device={self.vision_config.device}")
+        try:
+            find_processor = build_vision_processor(self.vision_config)
+            find_processor.log_callback = self._emit_peer_video_log
+            await find_processor.prepare_session(purpose="find_object", object_name="目标物")
+            traffic_processor = build_vision_processor(self.vision_config)
+            traffic_processor.log_callback = self._emit_peer_video_log
+            await traffic_processor.prepare_session(purpose="traffic_light", object_name="")
+        except asyncio.CancelledError:
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log("INFO", "视觉模型预热已取消")
+            raise
+        except Exception as exc:  # noqa: BLE001 - 预热失败要可观察，但不能断开 phone 控制连接
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_status(vision="failed", last_error=str(exc))
+                self.gui_bridge.emit_log("ERROR", f"视觉模型预热失败: {type(exc).__name__}: {exc}")
+            return
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_status(vision="ready")
+            self.gui_bridge.emit_log("INFO", "视觉模型预热完成，phone 端已就绪")
+
+    async def _cancel_vision_warmup(self) -> None:
+        """取消仍在运行的视觉预热任务。"""
+
+        task = self.vision_warmup_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     def _on_peer_video_task_done(self, command_id: str, task: asyncio.Task) -> None:
         """收口 peer video 后台任务结果。
@@ -850,6 +929,20 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         if exc is not None:
             if self.gui_bridge is not None:
                 self.gui_bridge.emit_log("ERROR", f"peer video receiver 异常退出: {type(exc).__name__}: {exc}")
+            return
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_log("INFO", f"peer video receiver 后台任务结束 command_id={command_id}")
+
+    def _emit_peer_video_log(self, level: str, message: str) -> None:
+        """把 peer video receiver 内部日志写入 GUI 面板。
+
+        参数：`level` 为日志级别，`message` 为日志内容。
+        返回值：无。
+        异常情况：GUI 不存在时忽略。
+        """
+
+        if self.gui_bridge is not None:
+            self.gui_bridge.emit_log(level, message, debug=str(level).upper() == "DEBUG")
 
     def _handle_peer_video_frame(self, frame: bytes, metadata: dict[str, Any]) -> None:
         """把 peer video 直连帧送入本地视频显示链路。
@@ -1026,6 +1119,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             if self.gui_bridge is not None:
                 self.gui_bridge.emit_status(registered=True, control="open")
                 self.gui_bridge.emit_log("INFO", f"设备已注册 device_id={self.device_id}")
+            self._start_vision_warmup()
             try:
                 async with session.ws_connect(self._stream_url()) as stream_ws:
                     control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, None))
@@ -1037,6 +1131,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         stream_task.cancel()
             finally:
                 await self._stop_all_peer_video_receivers(reason="phone_endpoint_closing")
+                await self._cancel_vision_warmup()
                 if self.video_preview is not None:
                     self.video_preview.close()
                 if self.gui_bridge is not None:

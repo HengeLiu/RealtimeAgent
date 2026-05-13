@@ -84,7 +84,7 @@ def _select_device(device: str) -> str:
     """选择模型运行设备。
 
     参数：`device` 为 auto/cpu/mps/cuda/cuda:0。
-    返回值：ultralytics 可接受的设备字符串，auto 时尽量选择 mps/cuda，否则为空。
+    返回值：ultralytics 可接受的设备字符串；auto 时优先 CUDA，否则使用 CPU。
     异常情况：无。
     """
 
@@ -93,13 +93,11 @@ def _select_device(device: str) -> str:
         try:
             import torch  # type: ignore
 
-            if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-                return "mps"
             if torch.cuda.is_available():
                 return "cuda"
         except Exception:
-            return ""
-        return ""
+            return "cpu"
+        return "cpu"
     if normalized in {"default", "none"}:
         return ""
     return normalized

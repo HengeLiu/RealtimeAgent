@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from threading import Lock
+from typing import Any, Callable
 
 import cv2
 import numpy as np
 
 from .config import FindObjectVisionConfig
-from .models import load_ultralytics_model
+from .models import VisionDependencyError, load_ultralytics_model
 from .result import VisionFrameResult, find_object_message
 
 logger = logging.getLogger(__name__)
+
+_TEXT_MODEL_DOWNLOAD_LOCK = Lock()
+_TEXT_MODEL_CACHE_DIR = Path("runs/audio-chat/python-phone/vision-cache")
 
 
 @dataclass
@@ -28,6 +34,7 @@ class FindObjectDetector:
     object_name: str = "目标物"
     stable_hits: int = 0
     last_track_id: int | None = None
+    log_callback: Callable[[str, str], Any] | None = None
     _model: Any | None = None
     _prompt: str = ""
 
@@ -40,12 +47,19 @@ class FindObjectDetector:
         """
 
         self.object_name = object_name or "目标物"
+        self._emit_log("INFO", f"YOLOE 找物模型加载开始 model={self.config.model_path} device={self.device}")
         self._model = load_ultralytics_model(kind="yoloe", model_path=self.config.model_path, device=self.device)
+        self._emit_log("INFO", "YOLOE 找物模型加载完成")
         if self._prompt != self.object_name:
             set_classes = getattr(self._model, "set_classes", None)
             get_text_pe = getattr(self._model, "get_text_pe", None)
             if callable(set_classes) and callable(get_text_pe):
-                self._model.set_classes([self.object_name], self._model.get_text_pe([self.object_name]))
+                self._emit_log("INFO", f"YOLOE 文本 prompt 准备开始 object_name={self.object_name}")
+                _ensure_yoloe_text_dependency()
+                self._model.set_classes([self.object_name], _get_yoloe_text_pe(self._model, [self.object_name], log_callback=self.log_callback))
+                self._emit_log("INFO", f"YOLOE 文本 prompt 准备完成 object_name={self.object_name}")
+            else:
+                self._emit_log("WARNING", "YOLOE 模型缺少 set_classes/get_text_pe，跳过文本 prompt 设置")
             self._prompt = self.object_name
         self.stable_hits = 0
         self.last_track_id = None
@@ -61,6 +75,7 @@ class FindObjectDetector:
         if self._model is None:
             self.prepare(self.object_name)
         start = time.perf_counter()
+        self._emit_log("DEBUG", f"YOLOE 找物推理开始 frame_count={frame_count}")
         detection = self._detect(frame_bgr)
         if detection.get("found"):
             self.stable_hits += 1
@@ -77,6 +92,13 @@ class FindObjectDetector:
             float(detection.get("confidence") or 0.0),
             self.stable_hits,
             elapsed_ms,
+        )
+        self._emit_log(
+            "DEBUG",
+            (
+                f"YOLOE 找物推理完成 frame_count={frame_count} found={detection.get('found')} "
+                f"confidence={float(detection.get('confidence') or 0.0):.3f} elapsed_ms={elapsed_ms}"
+            ),
         )
         return VisionFrameResult(
             detection=detection,
@@ -108,6 +130,11 @@ class FindObjectDetector:
         if "confidence" not in detection:
             detection["confidence"] = 0.0
         return detection
+
+    def _emit_log(self, level: str, message: str) -> None:
+        """输出找物检测器日志，并同步到可选 GUI 日志面板。"""
+
+        _emit_callback_log(self.log_callback, level, message)
 
     def _detect(self, frame_bgr: np.ndarray) -> dict[str, Any]:
         model = self._model
@@ -207,6 +234,59 @@ def _choose_detection(result: dict[str, list[Any]], *, last_track_id: int | None
         "confidence": confidences[chosen_idx] if chosen_idx < len(confidences) else 0.0,
         "track_id": ids[chosen_idx] if chosen_idx < len(ids) else None,
     }
+
+
+def _ensure_yoloe_text_dependency() -> None:
+    """确认 YOLOE 文本提示依赖已经安装。
+
+    主要逻辑：YOLOE 在 `get_text_pe()` 中会导入 `clip`。如果缺少该依赖，
+    Ultralytics 会尝试用当前解释器执行 `python -m pip install`，这在 uv 创建的
+    端侧虚拟环境中经常没有 pip，错误也不够清晰。这里提前检查并给出 phone 端
+    自己的安装命令。
+    返回值：无。
+    异常情况：缺少 `clip` 时抛出 `VisionDependencyError`。
+    """
+
+    try:
+        import clip  # type: ignore  # noqa: F401
+    except ModuleNotFoundError as exc:
+        raise VisionDependencyError(
+            "缺少 YOLOE 文本提示依赖 clip，请在 Python phone 端执行: "
+            "uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.txt"
+        ) from exc
+
+
+def _get_yoloe_text_pe(model: Any, texts: list[str], *, log_callback: Callable[[str, str], Any] | None = None) -> Any:
+    """在端侧缓存目录中生成 YOLOE 文本特征。
+
+    主要逻辑：Ultralytics 会在 `get_text_pe()` 内按相对路径下载
+    `mobileclip_blt.ts`。这里把下载过程限制到 Python phone 的运行产物目录，
+    避免大模型权重落到仓库根目录。由于 `os.chdir()` 是进程级状态，使用锁避免
+    多个找物任务并发准备模型时互相影响。
+    参数：`model` 为 YOLOE 模型，`texts` 为文本 prompt 列表。
+    返回值：YOLOE 文本特征张量。
+    异常情况：下载、加载或编码失败时向上抛出，由 receiver 转为 `command.failed`。
+    """
+
+    cwd = Path.cwd()
+    cache_dir = (cwd / _TEXT_MODEL_CACHE_DIR).resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with _TEXT_MODEL_DOWNLOAD_LOCK:
+        os.chdir(cache_dir)
+        try:
+            _emit_callback_log(log_callback, "INFO", f"YOLOE 文本编码开始 cache_dir={cache_dir}")
+            return model.get_text_pe(texts)
+        finally:
+            os.chdir(cwd)
+            _emit_callback_log(log_callback, "INFO", f"YOLOE 文本编码结束，工作目录已恢复 cwd={cwd}")
+
+
+def _emit_callback_log(log_callback: Callable[[str, str], Any] | None, level: str, message: str) -> None:
+    """向可选回调输出日志。"""
+
+    getattr(logger, str(level or "INFO").lower(), logger.info)(message)
+    if log_callback is not None:
+        log_callback(level, message)
 
 
 def _mask_bbox(mask: np.ndarray) -> tuple[int, int, int, int]:

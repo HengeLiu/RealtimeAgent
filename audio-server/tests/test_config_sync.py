@@ -6,6 +6,9 @@ from pathlib import Path
 
 import yaml
 
+from audio_chat.app import AudioChatConfig
+from audio_chat.config import load_yaml_config
+
 
 AUDIO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,3 +86,26 @@ server:
     assert completed.returncode == 0, completed.stderr
     playback = yaml.safe_load((output_dir / "glass.playback.yaml").read_text(encoding="utf-8"))
     assert playback["runs_root"] == str(app_root / "runs")
+
+
+def test_config_loads_observability_log_timezone(tmp_path) -> None:
+    """测试目标：确认 YAML 中的日志时区会进入运行配置。
+
+    测试方法：写入最小 server.yaml，并在 observability 中设置 `Asia/Shanghai`。
+    预期结果：加载后的 YAML 配置和运行态配置都保留该时区。
+    """
+
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        """
+observability:
+  log_timezone: Asia/Shanghai
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+
+    assert loaded.observability.log_timezone == "Asia/Shanghai"
+    assert runtime_config.log_timezone == "Asia/Shanghai"

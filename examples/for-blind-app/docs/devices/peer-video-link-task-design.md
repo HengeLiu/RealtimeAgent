@@ -58,6 +58,7 @@ Agent -> TaskEngine : start_find_object_task / start_traffic_light_task
 TaskEngine -> Task : on_start(TaskContext)
 Task -> Phone : command.start(peer.video.receiver.start)
 Phone --> Task : command.accepted
+Phone --> Task : command.progress(peer.receiver.waiting_vision)
 Phone --> Task : command.progress(peer.receiver.ready)
 Task -> Glass : command.start(peer.video.sender.start)
 Glass --> Task : command.accepted
@@ -398,7 +399,8 @@ server 运行产物示例：
 | status | 上报端 | 含义 | Task 处理 |
 | --- | --- | --- | --- |
 | `peer.receiver.starting` | phone | 手机端正在准备接收 | 更新 Task metadata |
-| `peer.receiver.ready` | phone | 手机端已准备好，携带 receiver 参数 | 触发眼镜端 sender start |
+| `peer.receiver.waiting_vision` | phone | 手机端 receiver 已启动，但视觉模型仍在加载或文本编码 | server 播报等待，眼镜暂不采集 |
+| `peer.receiver.ready` | phone | 手机端 receiver 和视觉模型都已准备好，携带 receiver 参数 | server 播报开始识别，触发眼镜端 sender start |
 | `peer.sender.connecting` | glass | 眼镜端正在连接手机 | 更新 Task metadata |
 | `peer.sender.connected` | glass | 眼镜端已连接手机 | 可播报“视频已连接” |
 | `peer.video.first_frame` | phone | 手机端收到首帧 | 记录首帧时间 |

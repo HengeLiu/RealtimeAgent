@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from audio_chat_python_phone_mock.vision.config import VisionConfig
+from audio_chat_python_phone_mock.vision.models import VisionDependencyError
 from audio_chat_python_phone_mock.vision.processor import VisionProcessor
 from audio_chat_python_phone_mock.vision.traffic_light import TrafficLightDetector
 
@@ -84,6 +88,72 @@ def test_phone_preview_config_declares_real_yolo_models() -> None:
     assert "provider: yolo" in text
     assert "yoloe-11l-seg.pt" in text
     assert "trafficlight.pt" in text
+
+
+def test_yoloe_text_dependency_error_points_to_phone_requirements(monkeypatch) -> None:
+    """测试目标：验证缺少 YOLOE 文本依赖时不会触发 Ultralytics 自动 pip 安装。
+
+    测试方法：临时让 `import clip` 抛出 ModuleNotFoundError，直接调用依赖预检函数。
+    预期结果：抛出 `VisionDependencyError`，错误信息指向 Python phone 自己的依赖文件。
+    """
+
+    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "clip":
+            raise ModuleNotFoundError("No module named 'clip'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(VisionDependencyError, match="requirements\\.vision\\.txt"):
+        find_object_module._ensure_yoloe_text_dependency()
+
+
+def test_yoloe_text_weight_download_uses_phone_cache_dir(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 YOLOE 文本权重下载不会落到仓库根目录。
+
+    测试方法：把当前目录切到临时目录，用假模型记录 `get_text_pe()` 执行时的工作目录。
+    预期结果：工作目录位于 Python phone 的运行产物缓存目录。
+    """
+
+    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+
+    class FakeTextModel:
+        called_cwd: Path | None = None
+
+        def get_text_pe(self, texts):
+            self.called_cwd = Path.cwd()
+            return {"texts": texts}
+
+    fake_model = FakeTextModel()
+    monkeypatch.chdir(tmp_path)
+
+    result = find_object_module._get_yoloe_text_pe(fake_model, ["眼镜"])
+
+    assert result == {"texts": ["眼镜"]}
+    assert fake_model.called_cwd == tmp_path / "runs/audio-chat/python-phone/vision-cache"
+    assert Path.cwd() == tmp_path
+
+
+def test_auto_device_avoids_mps_for_yoloe_float64_compatibility(monkeypatch) -> None:
+    """测试目标：验证自动设备选择不会在 Mac 上默认使用 MPS。
+
+    测试方法：注入一个 MPS 可用、CUDA 不可用的假 torch 模块，调用 `_select_device("auto")`。
+    预期结果：返回 cpu，避免 YOLOE/MobileCLIP 中 float64 张量触发 MPS 不支持错误。
+    """
+
+    import audio_chat_python_phone_mock.vision.models as models_module
+
+    fake_torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        cuda=SimpleNamespace(is_available=lambda: False),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert models_module._select_device("auto") == "cpu"
 
 
 class FakeTrafficModel:

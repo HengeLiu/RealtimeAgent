@@ -2,8 +2,31 @@ from __future__ import annotations
 
 import logging
 
-from audio_chat.observability import RunRecorder
+from audio_chat.observability import LineFormatter, RunRecorder
 from audio_chat.protocol import Event, StreamChunk
+
+
+def test_line_formatter_uses_configured_timezone() -> None:
+    """测试目标：确认控制台日志可以按配置输出北京时间。
+
+    测试方法：创建指定 `Asia/Shanghai` 的日志格式化器并格式化一条记录。
+    预期结果：日志时间戳携带 `+08:00` 时区偏移。
+    """
+
+    formatter = LineFormatter(timezone_name="Asia/Shanghai")
+    record = logging.makeLogRecord(
+        {
+            "name": "audio_chat.test",
+            "levelno": logging.INFO,
+            "levelname": "INFO",
+            "msg": "timezone check",
+            "args": (),
+        }
+    )
+
+    line = formatter.format(record)
+
+    assert "+08:00" in line
 
 
 def test_run_recorder_logs_artifact_index_once_on_startup(tmp_path, caplog) -> None:

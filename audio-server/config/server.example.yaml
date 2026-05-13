@@ -319,6 +319,8 @@ endpoint_defaults:
 observability:
   # 运行产物根目录。缺省不写时由 paths.runtime_root 派生。
   runs_root: "runs/audio-chat"
+  # 控制台日志时区。local 使用服务器系统时区；也可以显式设置为 Asia/Shanghai。
+  log_timezone: "local"
   # 是否保存输入 stream。可能包含真实音频，正式环境谨慎开启。
   record_input_streams: true
   # 是否保存输出 stream，用于排查 TTS 和端侧播放。

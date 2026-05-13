@@ -153,6 +153,7 @@ endpoint_defaults:
   aec: "browser_webrtc"
 
 observability:
+  log_timezone: "Asia/Shanghai"
   record_input_streams: true
   record_output_streams: true
   record_model_events: true

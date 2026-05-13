@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sys
+import time
 from pathlib import Path
 
 from audio_chat import AudioChatApp, AudioChatConfig
@@ -174,9 +175,10 @@ def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
             )
         )
         await _complete_stop_command(app, glass)
-        ref = await asyncio.wait_for(create_task, timeout=2)
-        assert ref.state == "completed"
-        assert app.task_engine.query(ref.task_id).summary == "找物完成"
+        started = await asyncio.wait_for(create_task, timeout=2)
+        ref = await _wait_for_task_state(app, started.task_id, "finished")
+        assert ref.state == "finished"
+        assert ref.summary == "找物完成"
 
     asyncio.run(run())
 
@@ -221,8 +223,99 @@ def test_peer_video_task_keeps_eager_command_progress(tmp_path: Path) -> None:
                 },
             )
         )
-        ref = await asyncio.wait_for(create_task, timeout=2)
-        assert ref.state == "completed"
+        started = await asyncio.wait_for(create_task, timeout=2)
+        ref = await _wait_for_task_state(app, started.task_id, "finished")
+        assert ref.state == "finished"
+
+    asyncio.run(run())
+
+
+def test_peer_video_task_waits_for_phone_vision_ready_before_starting_glass(tmp_path: Path, monkeypatch) -> None:
+    """测试目标：验证 phone 视觉模型未就绪时，Task 不会提前启动眼镜采集。
+
+    测试方法：phone 先回报 `peer.receiver.waiting_vision`，确认 glass 没收到 sender
+    命令；再回报 `peer.receiver.ready`，确认 glass sender 才下发。
+    预期结果：眼镜采集严格等待 phone 视觉模型 ready。
+    """
+
+    async def run() -> None:
+        app = _app_with_peer_tasks(tmp_path)
+        tasks_module = sys.modules["capabilities.tasks"]
+        monkeypatch.setattr(tasks_module, "_submit_output_text", lambda *_args: time.sleep(0.5))
+        phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
+        glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+
+        create_task = asyncio.create_task(
+            app.task_engine.create(
+                task_type="find_object_task",
+                user_id="user-peer",
+                session_id="dev-glass",
+                input_data={"object_name": "水杯", "timeout_seconds": 1},
+            )
+        )
+        phone_command = await _wait_for_command(phone)
+        phone_cmd = phone_command.payload["command_id"]
+        app.publish_control_event(
+            Event(
+                event_name="command.progress",
+                user_id="user-peer",
+                producer_id="dev-phone",
+                session_id="dev-phone",
+                payload={
+                    "command_id": phone_cmd,
+                    "command": "peer.video.receiver.start",
+                    "status": "peer.receiver.waiting_vision",
+                    "data": {"receiver": {"transport": "websocket", "url": "ws://127.0.0.1:19081/peer-video/task"}},
+                },
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not _command_events(glass)
+        app.publish_control_event(
+            Event(
+                event_name="command.progress",
+                user_id="user-peer",
+                producer_id="dev-phone",
+                session_id="dev-phone",
+                payload={
+                    "command_id": phone_cmd,
+                    "command": "peer.video.receiver.start",
+                    "status": "peer.receiver.ready",
+                    "data": {"receiver": {"transport": "websocket", "url": "ws://127.0.0.1:19081/peer-video/task"}},
+                },
+            )
+        )
+        glass_command = await _wait_for_command(glass)
+        assert glass_command.payload["command"] == "peer.video.sender.start"
+        glass_cmd = glass_command.payload["command_id"]
+        app.publish_control_event(
+            Event(
+                event_name="command.progress",
+                user_id="user-peer",
+                producer_id="dev-glass",
+                session_id="dev-glass",
+                payload={"command_id": glass_cmd, "command": "peer.video.sender.start", "status": "peer.sender.connected"},
+            )
+        )
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id="user-peer",
+                producer_id="dev-phone",
+                session_id="dev-phone",
+                payload={
+                    "command_id": phone_cmd,
+                    "command": "peer.video.receiver.start",
+                    "result": {"type": "find_object", "object_name": "水杯", "found": True, "message": "已找到水杯", "source": "mock"},
+                },
+            )
+        )
+        await _complete_stop_command(app, glass)
+        started = await asyncio.wait_for(create_task, timeout=2)
+        ref = await _wait_for_task_state(app, started.task_id, "finished")
+        assert ref.state == "finished"
 
     asyncio.run(run())
 
@@ -251,7 +344,8 @@ def test_peer_video_task_fails_when_phone_disconnects(tmp_path: Path) -> None:
         )
         await _wait_for_command(phone)
         app.mark_device_connection_offline("dev-phone", reason="test_phone_disconnect")
-        ref = await asyncio.wait_for(create_task, timeout=1)
+        started = await asyncio.wait_for(create_task, timeout=1)
+        ref = await _wait_for_task_state(app, started.task_id, "failed")
         assert ref.state == "failed"
         assert "device offline" in ref.metadata["error"]
 
@@ -281,8 +375,9 @@ def test_traffic_light_task_reports_green_with_high_priority_path(tmp_path: Path
             )
         )
         await _drive_successful_peer_video(app, phone, glass, {"type": "traffic_light", "state": "green", "can_cross": True, "message": "绿灯，可以在确认安全后通行", "source": "mock"})
-        ref = await asyncio.wait_for(create_task, timeout=2)
-        assert ref.state == "completed"
+        started = await asyncio.wait_for(create_task, timeout=2)
+        ref = await _wait_for_task_state(app, started.task_id, "finished")
+        assert ref.state == "finished"
         task_signals = (tmp_path / "runs/user-peer/dev-glass/task-signals.jsonl").read_text(encoding="utf-8")
         assert "traffic_light.green" in task_signals
 
@@ -348,6 +443,18 @@ async def _wait_for_command(endpoint: RecordingEndpoint, count: int = 1) -> Even
             return events[count - 1]
         await asyncio.sleep(0.01)
     raise AssertionError(f"endpoint {endpoint.device_id} did not receive command {count}")
+
+
+async def _wait_for_task_state(app: AudioChatApp, task_id: str, state: str, *, timeout_seconds: float = 1.0):
+    """等待 TaskEngine 查询到指定状态。"""
+
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        ref = app.task_engine.query(task_id)
+        if ref.state == state:
+            return ref
+        await asyncio.sleep(0.01)
+    return app.task_engine.query(task_id)
 
 
 def _command_events(endpoint: RecordingEndpoint) -> list[Event]:

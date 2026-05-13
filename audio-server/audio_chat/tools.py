@@ -1000,8 +1000,16 @@ class CommandResultBroker:
         self._command_devices: dict[str, set[str]] = {}
         self._device_commands: dict[str, set[str]] = {}
         self._terminal_devices: dict[str, set[str]] = {}
+        self._command_metadata: dict[str, dict[str, Any]] = {}
 
-    def register_command(self, *, command_id: str, name: str, device_ids: tuple[str, ...]) -> None:
+    def register_command(
+        self,
+        *,
+        command_id: str,
+        name: str,
+        device_ids: tuple[str, ...],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """登记一个已经下发、尚未结束的设备命令。
 
         主要逻辑：在 `command.requested` 下发前登记 command 与目标设备的关系。
@@ -1017,9 +1025,15 @@ class CommandResultBroker:
             return
         device_set = {str(device_id) for device_id in device_ids if str(device_id)}
         self._command_devices[command_id] = device_set
+        self._command_metadata[command_id] = dict(metadata or {})
         self._terminal_devices.setdefault(command_id, set())
         for device_id in device_set:
             self._device_commands.setdefault(device_id, set()).add(command_id)
+
+    def metadata_for(self, command_id: str) -> dict[str, Any]:
+        """返回命令登记时保存的 task 等元数据。"""
+
+        return dict(self._command_metadata.get(str(command_id or "").strip()) or {})
 
     def record(self, event: Event) -> None:
         """记录端侧命令回执并唤醒订阅者。"""
@@ -1028,6 +1042,7 @@ class CommandResultBroker:
         command_id = str(payload.get("command_id") or "").strip()
         if not command_id:
             return
+        payload = {**self.metadata_for(command_id), **payload}
         state = str(event.event_name).rsplit(".", 1)[-1]
         command_event = CommandEvent(
             command_id=command_id,
@@ -1161,6 +1176,20 @@ def _command_terminal_device_ids(events: list[CommandEvent]) -> set[str]:
         for event in events
         if event.state in CommandResultBroker.TERMINAL_STATES and event.data.get("producer_id")
     }
+
+
+def _command_task_metadata(params: dict | None) -> dict[str, Any]:
+    """从命令参数中提取 Task 路由元数据。"""
+
+    data = dict(params or {})
+    task_id = str(data.get("task_id") or data.get("peer_session_id") or "").strip()
+    task_type = str(data.get("task_type") or "").strip()
+    metadata: dict[str, Any] = {}
+    if task_id:
+        metadata["task_id"] = task_id
+    if task_type:
+        metadata["task_type"] = task_type
+    return metadata
 
 
 class OutputFacade:
@@ -1378,7 +1407,12 @@ class _CommandsFacade:
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=require_single)
         command_id = new_id("cmd")
         broker = self._context._command_result_broker()
-        broker.register_command(command_id=command_id, name=name, device_ids=tuple(str(device.device_id) for device in devices))
+        broker.register_command(
+            command_id=command_id,
+            name=name,
+            device_ids=tuple(str(device.device_id) for device in devices),
+            metadata=_command_task_metadata(params),
+        )
         result = self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
             payload={"command_id": command_id, "command": name, "params": dict(params or {})},
@@ -1454,7 +1488,12 @@ class _CommandsFacade:
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
         command_id = new_id("cmd")
         broker = self._context._command_result_broker()
-        broker.register_command(command_id=command_id, name=name, device_ids=tuple(str(device.device_id) for device in devices))
+        broker.register_command(
+            command_id=command_id,
+            name=name,
+            device_ids=tuple(str(device.device_id) for device in devices),
+            metadata=_command_task_metadata(params),
+        )
         self._context._publish_event_to_devices(
             event_name=EventName.COMMAND_REQUESTED,
             payload={"command_id": command_id, "command": name, "mode": "start", "params": dict(params or {})},

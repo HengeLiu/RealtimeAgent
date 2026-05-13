@@ -7,9 +7,10 @@ import time
 import wave
 from ast import literal_eval
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from audio_chat.protocol import Event, StreamChunk
 
@@ -84,10 +85,24 @@ class LogContext:
 class LineFormatter(logging.Formatter):
     """开发调试用单行日志格式化器。"""
 
+    def __init__(self, *, timezone_name: str = "local") -> None:
+        """创建单行日志格式化器。
+
+        主要逻辑：默认使用服务器本地时区；配置为 IANA 时区名时使用指定时区，
+        例如 `Asia/Shanghai`，避免 Linux 服务器系统时区不是北京时间时日志难读。
+        参数：`timezone_name` 为 `local`/`auto`/空字符串或 IANA 时区名。
+        返回值：无。
+        异常情况：未知时区会回退到本地时区。
+        """
+
+        super().__init__()
+        self.timezone_name = str(timezone_name or "local")
+        self.timezone = _resolve_log_timezone(self.timezone_name)
+
     def format(self, record: logging.LogRecord) -> str:
         """格式化为 `time level logger message key=value`。"""
 
-        timestamp = datetime.now(tz=timezone.utc).astimezone().isoformat(timespec="milliseconds")
+        timestamp = datetime.now(tz=self.timezone).isoformat(timespec="milliseconds")
         message = record.getMessage()
         line = f"{timestamp} {record.levelname} {record.name} {message}"
         standard = STANDARD_LOG_RECORD_FIELDS | {"exc_info", "exc_text", "stack_info"}
@@ -101,11 +116,12 @@ class LineFormatter(logging.Formatter):
         return line
 
 
-def configure_console_logging(level: str = "INFO") -> None:
+def configure_console_logging(level: str = "INFO", *, timezone_name: str = "local") -> None:
     """配置开发终端日志。
 
     主要逻辑：绑定 stdout 单行日志格式，并压低第三方库的噪声日志。
-    参数：`level` 为 DEBUG/INFO/WARNING/ERROR 等标准级别名称。
+    参数：`level` 为 DEBUG/INFO/WARNING/ERROR 等标准级别名称；`timezone_name`
+    为日志时间时区，默认 `local` 使用系统本地时区，可设置为 `Asia/Shanghai`。
     返回值：无。
     异常情况：未知级别时回退 INFO。
     """
@@ -115,10 +131,28 @@ def configure_console_logging(level: str = "INFO") -> None:
     root.handlers.clear()
     root.setLevel(resolved)
     handler = logging.StreamHandler(stream=sys.stdout)
-    handler.setFormatter(LineFormatter())
+    handler.setFormatter(LineFormatter(timezone_name=timezone_name))
     root.addHandler(handler)
     for name, logger_level in NOISY_LIBRARY_LOG_LEVELS:
         logging.getLogger(name).setLevel(logger_level)
+
+
+def _resolve_log_timezone(timezone_name: str):
+    """解析日志时区配置。
+
+    主要逻辑：`local`、`auto` 或空值走系统本地时区；其他值按 IANA 时区名解析。
+    参数：`timezone_name` 是配置中的时区名。
+    返回值：tzinfo 对象。
+    异常情况：未知时区回退系统本地时区。
+    """
+
+    name = str(timezone_name or "local").strip()
+    if not name or name.lower() in {"local", "auto", "system"}:
+        return datetime.now().astimezone().tzinfo
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return datetime.now().astimezone().tzinfo
 
 
 def get_logger(name: str) -> logging.Logger:

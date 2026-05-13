@@ -139,6 +139,11 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert "drawVideoFrameToPreview" in html
     assert "drawPreviewPlaceholder" in html
     assert "showVisualPreview" in html
+    assert "ensureSelectedVideoTimelineRunning" in html
+    assert "CAPTURE_PREVIEW_MIN_INTERVAL_MS" in html
+    assert "CAPTURE_THUMBNAIL_MAX_COUNT" in html
+    assert "encodeJpegFromCanvas" in html
+    assert "playSelectedVideoForCapture" not in html
     assert "stopSelectedVideoCapture" in html
     assert "图片和视频只能二选一" in html
     assert "clearSelectedVideoSample()" in html

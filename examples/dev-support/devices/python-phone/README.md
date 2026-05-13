@@ -69,11 +69,13 @@ runs/audio-chat/python-phone/latest-rgb.png
 
 1. 注册属性包含 `device_role: phone`、`endpoint.compute.vision: true` 和 `peer.video.receiver: true`。
 2. 收到 `peer.video.receiver.start` 后，Python phone 会打开 `ws://<phone-ip>:19081/peer-video/<peer_session_id>`。
-3. 端侧通过 `RemoteTaskReporter` 上报 `command.accepted/progress/completed/failed`，包括 `peer.receiver.ready`、`peer.video.first_frame`、`peer.video.frame_processed` 和 `peer.video.timeout`。
-4. 每帧通过 `VisionProcessor` 调用本地视觉识别；`phone.preview.yaml` 默认使用本机 modelscope 目录中的 YOLOE 找物模型和红绿灯 YOLO 模型。
-5. `provider: mock` 仍可用于无模型测试；真实模式下模型缺失或依赖缺失会向 server 回报 `command.failed`，不会静默返回 mock。
-6. `complete_after_frames` 只用于自动化测试，默认保持 0，由找物稳定命中、绿灯稳定或 30 秒超时结束任务。
-7. 退出 phone 端、控制连接断开或窗口关闭时，会停止所有 active receiver 并释放本地端口；sender 未发帧就断开会回报 `command.failed`。
+3. 端侧通过 `RemoteTaskReporter` 上报 `command.accepted/progress/completed/failed`，包括 `peer.receiver.waiting_vision`、`peer.receiver.ready`、`peer.video.first_frame`、`peer.video.frame_processed` 和 `peer.video.timeout`。
+4. Python phone 启动并注册后会后台预热视觉模型；如果任务请求先于模型加载完成到达，会先上报 `peer.receiver.waiting_vision`，server 播报等待，眼镜暂不采集。
+5. `peer.receiver.ready` 表示 receiver 和视觉模型都已准备好，server 才会通知眼镜开始连接并采集。
+6. 每帧通过 `VisionProcessor` 调用本地视觉识别；`phone.preview.yaml` 默认使用本机 modelscope 目录中的 YOLOE 找物模型和红绿灯 YOLO 模型。
+7. `provider: mock` 仍可用于无模型测试；真实模式下模型缺失或依赖缺失会向 server 回报 `command.failed`，不会静默返回 mock。
+8. `complete_after_frames` 只用于自动化测试，默认保持 0，由找物稳定命中、绿灯稳定或 30 秒超时结束任务。
+9. 退出 phone 端、控制连接断开或窗口关闭时，会停止所有 active receiver 并释放本地端口；sender 未发帧就断开会回报 `command.failed`。
 
 `RemoteTaskReporter` 只是 Python 参考端 helper，不是跨语言必需对象。Swift、JavaScript、Kotlin 或 C 端侧只要发送等价的 `command.*` 控制事件即可。
 
@@ -82,6 +84,12 @@ runs/audio-chat/python-phone/latest-rgb.png
 ```bash
 uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.txt
 ```
+
+这个依赖文件包含 YOLOE 文本 prompt 需要的 `clip` 包；不要依赖 Ultralytics 运行时自动安装，否则 `uv` 虚拟环境中可能因为没有 `pip` 而失败。
+
+首次找物还会下载 `mobileclip_blt.ts` 文本编码权重，文件约 572MB。Python phone 会把它放到 `runs/audio-chat/python-phone/vision-cache/`；真实联调前可以先启动一次 Python phone 让它完成缓存，该文件是端侧模型缓存，不需要提交。
+
+`phone.preview.yaml` 默认 `device: auto`，Python phone 会优先用 CUDA，否则使用 CPU，不会自动使用 macOS MPS。YOLOE / MobileCLIP 路径里可能出现 float64 张量，MPS 不支持这一类型；需要实验 MPS 时再显式改成 `device: mps`。
 
 ## 启动
 
