@@ -20,6 +20,7 @@ peer_video:
   yolo_mock:
     enabled: true
     per_frame: true
+    complete_after_frames: 1
 supports:
   sensors: []
   actuators: []

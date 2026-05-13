@@ -32,6 +32,7 @@ class PeerVideoReceiver:
     latest_frame: bytes | None = None
     frame_count: int = 0
     last_detection: dict[str, Any] | None = None
+    complete_after_frames: int = 0
     close_reason: str = ""
     _runner: web.AppRunner | None = field(default=None, init=False)
     _stop_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
@@ -149,6 +150,9 @@ class PeerVideoReceiver:
                 data={"detection": self.last_detection},
                 metrics={"frame_count": self.frame_count, "frame_size": len(frame)},
             )
+            if self.complete_after_frames > 0 and self.frame_count >= self.complete_after_frames:
+                self.close_reason = "mock_result"
+                self._stop_event.set()
         return ws
 
     async def close(self, reason: str) -> None:

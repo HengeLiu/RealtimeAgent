@@ -13,8 +13,8 @@ from audio_chat_python_phone_mock.remote_task import RemoteCommand, RemoteTaskRe
 def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
     """测试目标：验证 Python phone peer receiver 可独立接收 JPEG 帧并返回 mock 结果。
 
-    测试方法：使用随机本地端口启动 receiver，通过 aiohttp WebSocket 发送一帧二进制
-    JPEG-like 数据，等待短超时完成。
+    测试方法：使用随机本地端口启动 receiver，配置收到 1 帧后完成，通过 aiohttp
+    WebSocket 发送一帧二进制 JPEG-like 数据。
     预期结果：上报 ready、first_frame、frame_processed 和 completed，最终 result
     包含 source=mock、found=true 和 frame_count=1。
     """
@@ -42,8 +42,9 @@ def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
             reporter=RemoteTaskReporter(command=command, producer_id="dev-phone", role="receiver", send_event=send_event),
             listen_host="127.0.0.1",
             listen_port=_unused_port(),
-            timeout_seconds=0.2,
+            timeout_seconds=5,
             public_host="127.0.0.1",
+            complete_after_frames=1,
         )
         task = asyncio.create_task(receiver.run())
         await _wait_for_status(sent, "peer.receiver.ready")

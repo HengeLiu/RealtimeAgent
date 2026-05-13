@@ -793,7 +793,9 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
             command = RemoteCommand.from_event(event)
             config = dict(self.peer_video_config or {})
             params = dict(command.params or {})
+            yolo_mock_config = dict(config.get("yolo_mock") or {})
             timeout_seconds = float(params.get("timeout_seconds") or config.get("timeout_seconds") or 30)
+            complete_after_frames = int(yolo_mock_config.get("complete_after_frames") or config.get("complete_after_frames") or 0)
             reporter = RemoteTaskReporter(
                 command=command,
                 producer_id=self.device_id,
@@ -807,6 +809,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 listen_port=int(config.get("listen_port") or 19081),
                 timeout_seconds=timeout_seconds,
                 public_host=str(config.get("public_host") or config.get("advertise_host") or "127.0.0.1"),
+                complete_after_frames=complete_after_frames,
             )
             self.peer_video_receivers[command.command_id] = receiver
             task = asyncio.create_task(receiver.run())
