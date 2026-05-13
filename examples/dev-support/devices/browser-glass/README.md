@@ -8,7 +8,7 @@
 2. 手动发送 wake / interrupt / close / heartbeat 等控制事件。
 3. 使用真实麦克风进行全链路实时对话。
 4. 上传 WAV / PCM 文件，按真实时间模拟 `sensor.mic` 长连接。
-5. 使用摄像头或图片样例响应 `sensor.rgb` 请求。
+5. 使用摄像头或图片样例响应 `sensor.rgb` 请求，也可以手动上传图片触发回显测试。
 6. 播放 server 下发的 `actuator.speaker` 音频。
 7. 模拟 `actuator.haptic` 执行器。
 8. 收到 `peer.video.sender.start` 后连接 Python phone receiver，并按 fps 发送 JPEG 帧。
@@ -81,3 +81,15 @@ command.requested command=peer.video.sender.start
 2. `离线音频实时注入`：把本地音频按 20ms chunk 发送，模拟真实长连接。
 
 离线实时注入会在文件末尾追加短静音尾巴，发送 final chunk 后进入可继续上传下一段的暂停状态。快速批量回放和 CI 验收不由 browser-glass 承担，后续由 `python-playback-glass` 负责。
+
+## 图片回显测试
+
+`browser-glass` 可以和 `python-phone` 视频显示端配合做本地图片回显测试：
+
+1. 启动 server。
+2. 启动 `python-phone` 视频显示端。
+3. 打开 `browser-glass` 页面并连接注册。
+4. 在“带图输入”区域选择图片，点击“上传所选图片”。
+
+图片会以 `sensor.rgb` 输入流上传到 server，server 再转发给同一 `user_id` 下声明
+`endpoint.role.visual_display` 或 `actuator.display.rgb` 的显示设备。

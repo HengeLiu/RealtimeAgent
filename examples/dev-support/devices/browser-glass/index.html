@@ -82,8 +82,9 @@
         <button id="chooseImageSample" class="secondary" type="button">从样例目录选择图片</button>
         <span id="imageSampleName" class="file-name">未选择图片，按需使用摄像头</span>
         <input id="imageFile" class="hidden" type="file" accept="image/*" multiple />
+        <button id="uploadImageNow" type="button" disabled>上传所选图片</button>
       </div>
-      <p class="hint">图片只在服务端请求 sensor.rgb 时上传；未选择图片时浏览器会请求摄像头拍一张。</p>
+      <p class="hint">服务端请求 sensor.rgb 时会自动上传图片；也可以手动上传所选图片，未选择图片时浏览器会请求摄像头拍一张。</p>
     </section>
 
     <section class="panel">
@@ -171,6 +172,7 @@
     const stopAudioButton = document.getElementById("stopAudio");
     const chooseAudioSampleButton = document.getElementById("chooseAudioSample");
     const chooseImageSampleButton = document.getElementById("chooseImageSample");
+    const uploadImageNowButton = document.getElementById("uploadImageNow");
     const audioSampleNameEl = document.getElementById("audioSampleName");
     const imageSampleNameEl = document.getElementById("imageSampleName");
     const buildRecordCommandButton = document.getElementById("buildRecordCommand");
@@ -311,6 +313,7 @@
       wakeButton.disabled = !registered || dialogOpen;
       interruptButton.disabled = !dialogOpen;
       closeButton.disabled = !dialogOpen;
+      uploadImageNowButton.disabled = !registered;
     }
 
     function updateAudioButtons() {
@@ -1595,6 +1598,9 @@
       }).catch((err) => log(`choose image sample failed: ${err.message}`));
     };
     buildRecordCommandButton.onclick = buildPlaybackRecordCommand;
+    uploadImageNowButton.onclick = () => {
+      uploadSingleVisualSnapshot({payload: {reason: "manual_browser_upload"}}).catch((err) => log(`upload image failed: ${err.message}`));
+    };
     closeButton.onclick = async () => {
       await stopMic();
       await delay(300);

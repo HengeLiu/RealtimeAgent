@@ -211,10 +211,12 @@ def _system_routes() -> list[dict[str, Any]]:
 
 
 def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """按端侧声明的系统音频属性编译内部路由。
+    """按端侧声明的系统级属性编译内部路由。
 
-    主要逻辑：`supports` 目前只表达业务传感器/执行器；麦克风和扬声器属于系统音频主链路，
-    由 `audio_chat.audio_input/audio_output` 属性声明后补齐内部订阅。
+    主要逻辑：`supports` 只表达端侧可被调用的业务传感器/执行器；麦克风、扬声器和
+    显示窗口属于系统链路，由 properties 声明后补齐内部订阅。显示窗口消费已经进入
+    server 的 `sensor.rgb` 输入流，因此订阅的是 `stream.input.*`，不是
+    `stream.control.*`。
     参数：`properties` 为注册 payload 中的属性字典。
     返回值：需要追加的内部路由列表。
     异常情况：属性缺失或不匹配时返回空列表。
@@ -227,7 +229,27 @@ def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> 
     if str(data.get("audio_chat.audio_output") or "").strip() == "actuator.speaker":
         routes.append({"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}})
         routes.append({"event": "command.*"})
+    if _truthy_property(data.get("actuator.display.rgb")) or _truthy_property(data.get("endpoint.role.visual_display")):
+        routes.append({"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}})
     return _dedupe_routes(routes)
+
+
+def _truthy_property(value: Any) -> bool:
+    """判断 properties 中的布尔声明是否启用。
+
+    主要逻辑：端侧配置可能来自 YAML、JSON 或命令行环境，兼容 bool、数字和常见字符串。
+    参数：`value` 为待判断属性值。
+    返回值：启用时返回 True。
+    异常情况：无，未知值按 False 处理。
+    """
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return False
 
 
 def _expand_structured_supports(supports: Any) -> Any:

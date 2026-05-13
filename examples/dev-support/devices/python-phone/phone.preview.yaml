@@ -1,11 +1,14 @@
-mode: forever
+mode: preview
 server_url: http://127.0.0.1:8765
 user_id: user-browser-glass-001
 device_id: dev-python-phone-preview
+name: Python 手机视频显示端
 properties:
   device_role: phone
   endpoint.role.phone: true
+  endpoint.role.visual_display: true
   endpoint.compute.vision: true
+  actuator.display.rgb: true
   peer.video.receiver: true
 peer_video:
   enabled: true
@@ -18,13 +21,13 @@ peer_video:
     enabled: true
     per_frame: true
 supports:
-  sensors:
-    - type: rgb
-      modes: [single, continuous]
-      default:
-        format: jpeg
-        frequency_hz: 1
-        sample_count: 1
-  actuators:
-    - type: vibrator
-      commands: [vibrate]
+  sensors: []
+  actuators: []
+display:
+  enabled: true
+  backend: pyside6
+  window_title: audio-chat Python Phone
+  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.png
+  max_fps: 15
+  log_limit: 200
+  show_debug_events: true
