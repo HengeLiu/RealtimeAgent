@@ -129,6 +129,7 @@ class PeerVideoTaskMixin:
         result = dict(completed.data.get("result") or {})
         if not result:
             result = dict(completed.data)
+        await self.stop_peer_video(reason="phone_completed", include_phone=False)
         return result
 
     async def wait_status(self, handle: CommandHandle, status: str, *, timeout_seconds: float) -> CommandEvent:
@@ -187,7 +188,7 @@ class PeerVideoTaskMixin:
 
         return await asyncio.wait_for(_wait(), timeout=timeout_seconds)
 
-    async def stop_peer_video(self, *, reason: str = "task_cancelled") -> None:
+    async def stop_peer_video(self, *, reason: str = "task_cancelled", include_phone: bool = True) -> None:
         """停止已启动的 peer video 两端命令。
 
         参数：`reason` 为停止原因。
@@ -195,11 +196,14 @@ class PeerVideoTaskMixin:
         异常情况：单端 stop 失败会被忽略，避免取消流程卡住。
         """
 
-        for handle in (getattr(self, "glass_handle", None), getattr(self, "phone_handle", None)):
+        handles = [getattr(self, "glass_handle", None)]
+        if include_phone:
+            handles.append(getattr(self, "phone_handle", None))
+        for handle in handles:
             if handle is None:
                 continue
             try:
-                await handle.stop(reason=reason)
+                await asyncio.wait_for(handle.stop(reason=reason), timeout=2)
             except Exception:
                 continue
 

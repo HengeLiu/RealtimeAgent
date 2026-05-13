@@ -31,12 +31,10 @@
     .log-box { width: 100%; height: 170px; min-height: 170px; resize: none; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 10px; border-radius: 6px; border: 1px solid #243248; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
     .hint { color: #5e6a7d; font-size: 13px; margin: 4px 0 0; }
     .visual-toolbar { display: grid; grid-template-columns: auto auto minmax(180px, 1fr) auto; gap: 12px; align-items: center; margin: 14px 0; }
-    .visual-preview { display: grid; grid-template-columns: minmax(320px, 680px); gap: 12px; align-items: start; margin-top: 10px; }
+    .visual-preview { display: grid !important; grid-template-columns: minmax(320px, 680px); gap: 12px; align-items: start; margin-top: 10px; }
     .preview-stage label { margin-bottom: 8px; }
-    .preview-canvas, .source-video { width: 100%; aspect-ratio: 16 / 9; background: #0f1722; border: 1px solid #253047; border-radius: 6px; object-fit: contain; box-sizing: border-box; }
+    .preview-canvas { width: 100%; aspect-ratio: 16 / 9; background: #0f1722; border: 1px solid #253047; border-radius: 6px; object-fit: contain; box-sizing: border-box; }
     .source-video { display: none; pointer-events: none; }
-    .visual-preview.source-video .preview-canvas { display: none; }
-    .visual-preview.source-video .source-video { display: block; }
     .frame-strip { display: flex; gap: 12px; max-width: min(100%, 900px); overflow-x: auto; padding: 12px 0 4px; }
     .frame-thumb { flex: 0 0 auto; width: 78px; height: 54px; border: 2px solid #ef4444; border-radius: 6px; background: #0f1722; object-fit: cover; }
     @media (max-width: 980px) { body { padding-bottom: 430px; } .log-dock { grid-template-columns: 1fr; } .log-box { height: 150px; min-height: 150px; } }
@@ -96,7 +94,7 @@
         <span id="visualInputName" class="file-name">未选择图片或视频，按需使用摄像头</span>
         <button id="uploadImageNow" type="button" disabled>上传当前帧</button>
       </div>
-      <div class="visual-preview">
+      <div id="visualPreviewArea" class="visual-preview">
         <div class="preview-stage">
           <label>采集帧预览</label>
           <canvas id="visualFramePreview" class="preview-canvas" width="960" height="540"></canvas>
@@ -200,7 +198,7 @@
     const visualInputNameEl = document.getElementById("visualInputName");
     const selectedVideoSourceEl = document.getElementById("selectedVideoSource");
     const visualFramePreviewEl = document.getElementById("visualFramePreview");
-    const visualPreviewEl = document.querySelector(".visual-preview");
+    const visualPreviewEl = document.getElementById("visualPreviewArea");
     const capturedFrameStripEl = document.getElementById("capturedFrameStrip");
     const buildRecordCommandButton = document.getElementById("buildRecordCommand");
     const recordCommandEl = document.getElementById("recordCommand");
@@ -567,7 +565,7 @@
       }
       selectedVideoObjectUrl = URL.createObjectURL(file);
       selectedVideoSourceEl.src = selectedVideoObjectUrl;
-      selectedVideoSourceEl.style.display = "block";
+      selectedVideoSourceEl.style.display = "none";
       selectedVideoSourceEl.load();
       updateVisualInputState();
       renderSelectedVideoPreview().catch((err) => log(`video preview failed: ${err.message}`));
@@ -603,6 +601,7 @@
 
     function updateVisualInputState() {
       const active = activeVisualInputKind();
+      showVisualPreview();
       if (active === "image") {
         visualInputNameEl.textContent = summarizeFiles(selectedImageSampleFiles, "已选择图片");
         visualInputNameEl.title = "当前使用图片输入";
@@ -619,6 +618,12 @@
       visualPreviewEl.classList.toggle("source-camera", active === "camera");
       uploadImageNowButton.textContent = active === "video" ? "上传当前视频帧" : (active === "image" ? "上传所选图片" : "上传当前帧");
       renderStatus();
+    }
+
+    function showVisualPreview() {
+      visualPreviewEl.hidden = false;
+      visualPreviewEl.style.display = "grid";
+      visualFramePreviewEl.style.display = "block";
     }
 
     async function chooseFileFromSampleDirectory({kind, accept, multiple}) {
@@ -1039,7 +1044,10 @@
       controlWs = new WebSocket(controlUrl);
       controlWs.onmessage = (message) => handleControlEvent(JSON.parse(message.data));
       controlWs.onerror = () => log("control ws error");
-      controlWs.onclose = (evt) => log(`control ws closed code=${evt.code} reason=${evt.reason || "-"}`);
+      controlWs.onclose = (evt) => {
+        log(`control ws closed code=${evt.code} reason=${evt.reason || "-"}`);
+        stopPeerVideoSender("control_ws_closed", null, {notify: false});
+      };
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("control websocket open timeout")), 5000);
         controlWs.onopen = () => {
@@ -1178,6 +1186,7 @@
         params,
         frameSeq: 0,
         stopped: false,
+        terminalReported: false,
       };
       ws.onopen = () => {
         log("peer.sender.connected");
@@ -1197,10 +1206,13 @@
       };
       ws.onerror = () => {
         log("peer video sender ws error");
-        sendCommandEvent("command.failed", commandEvent, {message: "peer video sender websocket error"});
+        failPeerVideoSender(commandEvent, "peer video sender websocket error");
       };
-      ws.onclose = () => {
-        log("peer video sender ws closed");
+      ws.onclose = (evt) => {
+        log(`peer video sender ws closed code=${evt.code} reason=${evt.reason || "-"}`);
+        if (peerVideoSender && !peerVideoSender.stopped) {
+          failPeerVideoSender(commandEvent, `peer video sender websocket closed: ${evt.reason || evt.code || "closed"}`);
+        }
       };
     }
 
@@ -1216,18 +1228,33 @@
       return await captureVisualFrame(options);
     }
 
-    async function stopPeerVideoSender(reason = "manual_stop", commandEvent = null) {
+    function failPeerVideoSender(commandEvent, message) {
+      if (peerVideoSender) {
+        peerVideoSender.terminalReported = true;
+        peerVideoSender.stopped = true;
+        if (peerVideoSender.timer) clearInterval(peerVideoSender.timer);
+        stopSelectedVideoCapture();
+      }
+      sendCommandEvent("command.failed", commandEvent, {
+        message,
+        error_code: "peer_video_sender_failed",
+      });
+      peerVideoSender = null;
+    }
+
+    async function stopPeerVideoSender(reason = "manual_stop", commandEvent = null, options = {}) {
+      const notify = options.notify !== false;
       if (peerVideoSender) {
         peerVideoSender.stopped = true;
         if (peerVideoSender.timer) clearInterval(peerVideoSender.timer);
-        if (peerVideoSender.ws && peerVideoSender.ws.readyState === WebSocket.OPEN) {
+        if (peerVideoSender.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(peerVideoSender.ws.readyState)) {
           peerVideoSender.ws.close(1000, reason);
         }
         stopSelectedVideoCapture();
         log(`peer.video.sender.stop reason=${reason}`);
         peerVideoSender = null;
       }
-      if (commandEvent) {
+      if (commandEvent && notify) {
         sendCommandEvent("command.completed", commandEvent, {
           target_command_id: ((commandEvent.payload || {}).params || {}).command_id,
           result: {stopped: true, reason},
@@ -1405,6 +1432,8 @@
           error: err.message,
           request_id: requestId,
         }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+      } finally {
+        stopSelectedVideoCapture();
       }
     }
 
@@ -1462,6 +1491,8 @@
     }
 
     async function renderSelectedVideoPreview() {
+      showVisualPreview();
+      drawPreviewPlaceholder("正在加载视频预览");
       await ensureSelectedVideoReady();
       selectedVideoSourceEl.pause();
       if (selectedVideoSourceEl.currentTime !== 0) {
@@ -1469,6 +1500,7 @@
         await waitForVideoSeek(selectedVideoSourceEl);
       }
       await waitForVideoPaint(selectedVideoSourceEl, 120);
+      drawVideoFrameToPreview("video preview");
     }
 
     async function playSelectedVideoForCapture() {
@@ -1503,6 +1535,36 @@
       return await encodeBoundedJpegFrame(canvas, width, height);
     }
 
+    function drawVideoFrameToPreview(label) {
+      const sourceWidth = selectedVideoSourceEl.videoWidth || RGB_CAPTURE_MAX_WIDTH;
+      const sourceHeight = selectedVideoSourceEl.videoHeight || RGB_CAPTURE_MAX_HEIGHT;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      visualFramePreviewEl.width = width;
+      visualFramePreviewEl.height = height;
+      const ctx = visualFramePreviewEl.getContext("2d");
+      ctx.drawImage(selectedVideoSourceEl, 0, 0, width, height);
+      ctx.fillStyle = "rgba(15, 23, 34, 0.72)";
+      ctx.fillRect(8, 8, Math.min(width - 16, 360), 28);
+      ctx.fillStyle = "#dbe7ff";
+      ctx.font = "14px ui-monospace, Menlo, monospace";
+      ctx.fillText(label || "video preview", 18, 27);
+    }
+
+    function drawPreviewPlaceholder(text) {
+      visualFramePreviewEl.width = RGB_CAPTURE_MAX_WIDTH;
+      visualFramePreviewEl.height = RGB_CAPTURE_MAX_HEIGHT;
+      const ctx = visualFramePreviewEl.getContext("2d");
+      ctx.fillStyle = "#0f1722";
+      ctx.fillRect(0, 0, visualFramePreviewEl.width, visualFramePreviewEl.height);
+      ctx.fillStyle = "#dbe7ff";
+      ctx.font = "24px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(text || "等待采集帧", visualFramePreviewEl.width / 2, visualFramePreviewEl.height / 2);
+      ctx.textAlign = "start";
+    }
+
     async function ensureSelectedVideoReady() {
       const file = selectedVideoSampleFile || document.getElementById("videoFile").files[0];
       if (!file) throw new Error("请选择视频文件");
@@ -1534,7 +1596,13 @@
 
     async function waitForVideoPaint(video, fallbackMs) {
       if (typeof video.requestVideoFrameCallback === "function") {
-        await new Promise((resolve) => video.requestVideoFrameCallback(() => resolve()));
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, Math.max(80, Math.min(300, fallbackMs || 120)));
+          video.requestVideoFrameCallback(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
         return;
       }
       await delay(Math.max(40, Math.min(200, fallbackMs || 120)));
@@ -1955,6 +2023,9 @@
 
     bindBrowserConfigPersistence();
     audioModeSelect.addEventListener("change", updateInputModePanels);
+    window.addEventListener("beforeunload", () => {
+      stopPeerVideoSender("page_unload", null, {notify: false});
+    });
     updateInputModePanels();
     renderStatus();
     restoreSampleSelections().finally(() => {

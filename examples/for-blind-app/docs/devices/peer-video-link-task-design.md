@@ -218,7 +218,50 @@ params：
 
 端侧收到 stop 后必须释放摄像头、关闭 peer 连接、关闭接收端口或停止回显窗口状态，并返回 `command.completed` 或 `command.failed`。
 
-## 7. 状态回报约定
+## 7. 生命周期和释放边界
+
+视频长连接由三层共同维护，不能只依赖业务 timeout：
+
+| 层级 | 负责对象 | 建立职责 | 释放职责 | 异常职责 |
+| --- | --- | --- | --- | --- |
+| SDK command runtime | `CommandHandle` / `CommandResultBroker` | 在下发 `command.requested` 前登记 command 与目标设备 | 设备离线时把该设备未完成 command 标记为 `failed` | 控制连接断开、心跳超时必须唤醒等待中的 Task |
+| server Task | `FindObjectTask` / `TrafficLightTask` | 先启动 phone receiver，再启动 glass sender | 任务完成、失败、取消时 stop 已启动端侧，phone completed 后主动 stop glass sender | 任一端 failed 时 fail Task，并清理另一端 |
+| phone receiver | Python phone / 后续 iOS phone | 打开本地 receiver，回显视频，逐帧 YOLO mock | timeout、用户关闭、server stop、进程退出时关闭 receiver | sender WebSocket 断开时上报 `peer.video.sender_disconnected`，无帧时 failed |
+| glass sender | browser-glass / 后续眼镜端 | 连接 phone receiver 并按 fps 发送 JPEG 帧 | server stop、页面关闭、控制连接断开时停止 timer 并关闭 WebSocket | peer WebSocket error/close 时上报 `command.failed` |
+
+关键约束：
+
+1. `timeout_seconds` 是业务兜底，不是资源释放的唯一机制。
+2. phone/glass 任一控制连接离线，SDK 必须让对应 command 进入 failed，Task 不能继续等待端侧主动回包。
+3. phone receiver 的 peer WebSocket 断开必须结束 receiver；如果已经收到帧，可以按 mock 结果完成；如果一帧未收到，应 failed。
+4. Task 成功拿到 phone completed 后，仍要主动停止 glass sender，不能只等 receiver 关闭后由 sender 自行感知。
+5. Python phone 退出时必须停止所有仍在运行的 peer receiver，避免端口占用和旧任务悬挂。
+
+释放时序：
+
+```plantuml
+@startuml
+participant "Task" as Task
+participant "SDK CommandRuntime" as SDK
+participant "Python Phone" as Phone
+participant "Browser Glass" as Glass
+
+Phone --> Task : command.completed(mock_result)
+Task -> Glass : peer.video.sender.start.stop
+Glass -> Glass : clear frame timer / close peer ws
+Glass --> Task : command.completed(stop)
+Task -> Task : TaskRef.completed
+
+...异常路径...
+
+Phone -> SDK : control ws disconnected
+SDK --> Task : command.failed(device_offline)
+Task -> Glass : peer.video.sender.start.stop
+Task -> Task : TaskRef.failed
+@enduml
+```
+
+## 8. 状态回报约定
 
 端侧状态全部走现有 `command.progress`，payload 中用 `status` 表达子状态。
 
@@ -401,7 +444,7 @@ server 运行产物示例：
 }
 ```
 
-## 8. Task 与 `TaskContext` 的结合方式
+## 9. Task 与 `TaskContext` 的结合方式
 
 ### 8.1 Task 启动逻辑
 
@@ -513,7 +556,7 @@ Task 取消时：
 3. 如果其中一端已经断开，记录 warning，不阻塞另一端清理。
 4. 输出简短提示，例如“已停止找物”。
 
-## 9. Python phone 改造要求
+## 10. Python phone 改造要求
 
 Python phone 参考端需要从“接收 server 转发 stream 的预览端”扩展为“peer video receiver + 本地视觉 mock 处理端”。
 
@@ -621,7 +664,7 @@ peer_video:
     log_level: "INFO"
 ```
 
-## 10. Browser glass 改造要求
+## 11. Browser glass 改造要求
 
 browser-glass 需要支持 `peer.video.sender.start`。
 
@@ -675,7 +718,7 @@ properties:
 
 如果后续要让 server 根据 supports 自动编译 command 路由，可以再把 peer video 做成结构化 capability。本阶段先用 properties 和 command 通配能力保持改动小。
 
-## 11. server Task 改造要求
+## 12. server Task 改造要求
 
 ### 11.1 `find_object_task`
 
@@ -719,7 +762,7 @@ Task -> phone receiver start
 
 `mock_state` 后续也应从模型可见 schema 中移除，改为 phone mock 默认结果。
 
-## 12. 错误处理
+## 13. 错误处理
 
 | 场景 | 处理 |
 | --- | --- |
@@ -732,7 +775,7 @@ Task -> phone receiver start
 | phone 30 秒超时 | stop glass，按 mock result 完成 |
 | 任一端 command.failed | stop 另一端，Task fail |
 
-## 13. 验收方案
+## 14. 验收方案
 
 ### 13.1 本地联调启动顺序
 
@@ -803,7 +846,7 @@ browser-glass：
 5. `test_python_phone_forks_yolo_mock_for_each_frame`
 6. `test_browser_glass_handles_peer_video_sender_command`
 
-## 14. 分阶段实施
+## 15. 分阶段实施
 
 ### Phase 1：协议和 Task 骨架
 

@@ -199,15 +199,16 @@ opencv-python
 numpy 间接依赖
 ```
 
-需要新增 optional dependency group，不建议放进 SDK 默认依赖：
+真实 YOLO 依赖属于 Python phone 参考端的运行依赖，不属于 server SDK 必需依赖，也不应该要求非 Python 端侧理解 `audio-chat` 的 Python 包 extras。首版放在 phone 端自己的 requirements 文件中：
 
-```toml
-[project.optional-dependencies]
-vision = [
-    "ultralytics>=8.3.0",
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
-]
+```text
+examples/dev-support/devices/python-phone/requirements.vision.txt
+```
+
+安装方式：
+
+```bash
+uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.txt
 ```
 
 `mediapipe` 首版不加入。原因：
@@ -457,7 +458,7 @@ Python phone 端新增日志事件：
 | 场景 | 行为 |
 | --- | --- |
 | 模型路径缺失 | `command.failed`，message 写明缺失的环境变量或配置项。 |
-| `ultralytics` 未安装 | `command.failed`，提示安装 `audio-chat[vision]`。 |
+| `ultralytics` 未安装 | `command.failed`，提示在 Python phone 端安装 `requirements.vision.txt`。 |
 | 单帧解码失败 | 记录 WARNING，继续等待下一帧。 |
 | 单帧推理异常 | 记录 ERROR，连续失败达到阈值后 `command.failed`。 |
 | 30 秒未找到物体 | `command.completed(found=false)`。 |
@@ -598,3 +599,52 @@ export YOLOE_MODEL_PATH=/absolute/path/to/yoloe-11l-seg.pt
 5. 每帧都有真实识别日志，不再打印 `yolo.mock.frame_processed`。
 6. server Task 最终结果中 `source` 为 `yolo` 或 `yoloe`，不是 `mock`。
 7. 无模型或依赖缺失时，Task failed 并给出明确错误，不静默降级为 mock。
+
+## 15. 实施记录
+
+### 阶段 1：抽象视觉处理接口
+
+- 状态：已完成
+- 目标：把 `fork_yolo_mock()` 收口到统一 `VisionProcessor` 后面，保证真实 YOLO 和 mock 共享 peer video 调用链。
+- 实现：新增 `audio_chat_python_phone_mock.vision` 子模块，包含 `config.py`、`processor.py`、`result.py`；`PeerVideoReceiver` 改为调用 `VisionProcessor.prepare_session()`、`process_frame()` 和 `build_final_result()`。
+- 文件：`examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/*`、`peer_video.py`、`phone_mock.py`。
+- 验证：新增 `test_vision_processor_mock_provider_keeps_existing_result_shape`，确认 mock provider 不依赖真实模型且结果结构保持兼容。
+
+### 阶段 2：迁移红绿灯 YOLO
+
+- 状态：已完成
+- 目标：迁移旧 `trafficlight_detection.py` 的 YOLO 检测、类别过滤和多数表决逻辑。
+- 实现：新增 `vision/traffic_light.py`，支持 `trafficlight.pt`、`FILTERED_CLASSES`、`go/stop/countdown_*` 到 `green/red/yellow` 的映射，以及 history majority 稳定判断；保留 HSV fallback，并把 fallback source 标记为 `hsv_fallback`。
+- 文件：`vision/traffic_light.py`、`phone.preview.yaml`。
+- 验证：新增 `test_traffic_light_majority_vote_with_fake_model`，用假模型验证 3 帧稳定绿灯后 `can_cross=true`。
+
+### 阶段 3：迁移找物 YOLOE
+
+- 状态：已完成
+- 目标：迁移旧 `yoloe_backend.py` 的文本 prompt 检测能力，按 `object_name` 识别目标。
+- 实现：新增 `vision/find_object.py`，支持 `YOLOE.set_classes([object_name], get_text_pe(...))`、mask/box 归一化、最大目标选择、稳定命中计数、bbox/center/area_ratio/direction_hint 输出。
+- 文件：`vision/find_object.py`、`vision/models.py`。
+- 验证：代码路径已通过编译检查；真实 YOLOE 模型联调需要在 Python phone 端安装 `requirements.vision.txt` 后进行。
+
+### 阶段 4：配置和依赖
+
+- 状态：已完成
+- 目标：让 Python phone 默认可指向本机 modelscope 模型目录，同时不把视觉依赖加入 SDK 基础安装。
+- 实现：`phone.preview.yaml` 新增 `vision.provider=yolo`，模型路径指向 `/Users/elio/.cache/modelscope/hub/models/archifancy/AIGlasses_for_navigation`；`pyproject.toml` 新增 `vision` optional dependencies。
+- 文件：`phone.preview.yaml`、`pyproject.toml`。
+- 验证：新增 `test_phone_preview_config_declares_real_yolo_models` 和 `test_vision_config_uses_modelscope_default_paths`。
+
+### 阶段 5：待人工验收
+
+- 状态：待人工验收
+- 目标：用真实 browser-glass + Python phone + server 观察端到端识别结果。
+- 验收步骤：
+
+```bash
+uv pip install -e ".[vision,gui]"
+uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run audio-chat.web.open --print-url
+```
+
+- 观察点：Python phone 日志应出现 `vision.model.loaded`、`vision.frame.processed`；server `command-events.jsonl` 的 `peer.video.frame_processed` 应包含 `source=yolo` 或 `source=yoloe`；最终 Task result 不应再是 `source=mock`。

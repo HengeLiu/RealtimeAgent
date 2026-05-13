@@ -10,7 +10,7 @@ from typing import Any, Callable
 from aiohttp import web
 
 from .remote_task import RemoteCommand, RemoteTaskReporter
-from .vision_mock import build_mock_result, fork_yolo_mock
+from .vision import VisionProcessor, build_vision_processor
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,10 @@ class PeerVideoReceiver:
     sender_connected: bool = False
     complete_after_frames: int = 0
     frame_callback: Callable[[bytes, dict[str, Any]], Any] | None = None
+    vision_processor: VisionProcessor | None = None
     close_reason: str = ""
+    failure_message: str = ""
+    failure_code: str = "peer_video_failed"
     _runner: web.AppRunner | None = field(default=None, init=False)
     _stop_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
@@ -53,6 +56,8 @@ class PeerVideoReceiver:
         try:
             await self.reporter.accepted(message="peer video receiver accepted")
             await self.reporter.progress("peer.receiver.starting", message="正在启动手机视频接收端")
+            self.vision_processor = self.vision_processor or build_vision_processor(None)
+            await self.vision_processor.prepare_session(purpose=self.purpose, object_name=self.object_name)
             await self._start_server()
             await self.reporter.progress(
                 "peer.receiver.ready",
@@ -64,22 +69,25 @@ class PeerVideoReceiver:
             except TimeoutError:
                 self.close_reason = "timeout"
                 await self.reporter.progress("peer.video.timeout", message="peer video receiver timeout")
-            result = build_mock_result(
-                purpose=self.purpose,
-                object_name=self.object_name,
-                frame_count=self.frame_count,
-                last_detection=self.last_detection,
-            )
+            result = await self.vision_processor.build_final_result(frame_count=self.frame_count, last_detection=self.last_detection)
             if self.close_reason == "server_stop":
-                result = {"stopped": True, "frame_count": self.frame_count, "source": "mock"}
+                result = {"stopped": True, "frame_count": self.frame_count, "source": self.vision_processor.provider}
             if self.close_reason == "sender_disconnected" and self.frame_count <= 0:
                 result = {
                     "failed": True,
                     "frame_count": self.frame_count,
-                    "source": "mock",
+                    "source": self.vision_processor.provider,
                     "message": "眼镜视频发送端已断开，未收到可处理的视频帧",
                 }
-            logger.info("vision.mock.result peer_session_id=%s result=%s", self.peer_session_id, result)
+            if self.close_reason == "vision_failed":
+                result = {
+                    "failed": True,
+                    "frame_count": self.frame_count,
+                    "source": self.vision_processor.provider,
+                    "message": self.failure_message or "视觉识别失败",
+                    "error_code": self.failure_code,
+                }
+            logger.info("vision.session.completed peer_session_id=%s result=%s", self.peer_session_id, result)
             if result.get("failed"):
                 await self.reporter.failed(
                     message=str(result.get("message") or "peer video failed"),
@@ -90,8 +98,20 @@ class PeerVideoReceiver:
                 await self.reporter.completed(result=result, message=str(result.get("message") or "peer video completed"))
             return result
         except Exception as exc:  # noqa: BLE001 - 参考端需要把 receiver 错误上报给 server
-            await self.reporter.failed(message=str(exc), error_code="peer_video_receiver_failed")
-            raise
+            provider = self.vision_processor.provider if self.vision_processor is not None else "unknown"
+            result = {
+                "failed": True,
+                "frame_count": self.frame_count,
+                "source": provider,
+                "message": str(exc),
+                "error_code": "peer_video_receiver_failed",
+            }
+            logger.exception("peer.video.receiver_failed peer_session_id=%s", self.peer_session_id)
+            try:
+                await self.reporter.failed(message=str(exc), error_code="peer_video_receiver_failed", data=result)
+            except Exception:  # noqa: BLE001 - 失败回报异常只能记录，避免后台 task 泄漏异常
+                logger.exception("peer.video.receiver_failed_report_failed peer_session_id=%s", self.peer_session_id)
+            return result
         finally:
             await self.close("completed")
 
@@ -163,16 +183,29 @@ class PeerVideoReceiver:
                         message="收到第一帧 peer video",
                         metrics={"frame_count": self.frame_count, "frame_size": len(frame)},
                     )
-                self.last_detection = await fork_yolo_mock(frame, purpose=self.purpose, object_name=self.object_name)
+                if self.vision_processor is None:
+                    self.vision_processor = build_vision_processor(None)
+                    await self.vision_processor.prepare_session(purpose=self.purpose, object_name=self.object_name)
+                frame_result = await self.vision_processor.process_frame(frame, frame_count=self.frame_count)
+                self.last_detection = dict(frame_result.detection)
                 await self.reporter.progress(
                     "peer.video.frame_processed",
                     message="peer video frame processed",
                     data={"detection": self.last_detection},
-                    metrics={"frame_count": self.frame_count, "frame_size": len(frame)},
+                    metrics={"frame_count": self.frame_count, "frame_size": len(frame), **dict(frame_result.metrics)},
                 )
-                if self.complete_after_frames > 0 and self.frame_count >= self.complete_after_frames:
-                    self.close_reason = "mock_result"
+                if frame_result.should_complete:
+                    self.close_reason = "vision_result"
                     self._stop_event.set()
+                if self.complete_after_frames > 0 and self.frame_count >= self.complete_after_frames:
+                    self.close_reason = "test_frame_limit"
+                    self._stop_event.set()
+        except Exception as exc:  # noqa: BLE001 - 视觉识别异常需要结束本次远程任务
+            logger.exception("peer.video.vision_failed peer_session_id=%s", self.peer_session_id)
+            self.close_reason = "vision_failed"
+            self.failure_message = str(exc)
+            self.failure_code = "peer_video_vision_failed"
+            self._stop_event.set()
         finally:
             if not self._stop_event.is_set():
                 self.close_reason = "sender_disconnected"

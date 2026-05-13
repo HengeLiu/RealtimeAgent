@@ -19,6 +19,7 @@ from .gui import GuiEventBridge, PhonePreviewWindow
 from .peer_video import PeerVideoReceiver
 from .playback_fallback import NetworkPythonPlaybackEndpoint as FallbackNetworkPythonPlaybackEndpoint
 from .remote_task import RemoteCommand, RemoteTaskReporter
+from .vision import VisionConfig, build_vision_processor
 
 try:
     from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
@@ -395,6 +396,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         vision_frames: dict[str, list[bytes]] | None = None,
         display: dict[str, Any] | None = None,
         peer_video: dict[str, Any] | None = None,
+        vision: dict[str, Any] | VisionConfig | None = None,
         gui_bridge: GuiEventBridge | None = None,
     ) -> None:
         display_config = dict(display or {})
@@ -431,6 +433,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         self.task_command_scripts = dict(task_command_scripts or {})
         self.vision_frames = dict(vision_frames or {})
         self.peer_video_config = dict(peer_video or {})
+        self.vision_config = vision if isinstance(vision, VisionConfig) else VisionConfig.from_mapping(vision if isinstance(vision, dict) else None)
         self.peer_video_receivers: dict[str, PeerVideoReceiver] = {}
         self.peer_video_tasks: dict[str, asyncio.Task] = {}
         self.task_command_events: list[dict[str, Any]] = []
@@ -811,11 +814,12 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 public_host=str(config.get("public_host") or config.get("advertise_host") or "127.0.0.1"),
                 complete_after_frames=complete_after_frames,
                 frame_callback=lambda frame, metadata: self._handle_peer_video_frame(frame, metadata),
+                vision_processor=build_vision_processor(self.vision_config),
             )
             self.peer_video_receivers[command.command_id] = receiver
             task = asyncio.create_task(receiver.run())
             self.peer_video_tasks[command.command_id] = task
-            task.add_done_callback(lambda _: self.peer_video_tasks.pop(command.command_id, None))
+            task.add_done_callback(lambda finished, command_id=command.command_id: self._on_peer_video_task_done(command_id, finished))
         except Exception as exc:  # noqa: BLE001 - 端侧命令解析错误需要回报给 server
             await self._send_command_event(
                 control_ws,
@@ -827,6 +831,25 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                     "message": str(exc),
                 },
             )
+
+    def _on_peer_video_task_done(self, command_id: str, task: asyncio.Task) -> None:
+        """收口 peer video 后台任务结果。
+
+        主要逻辑：清理 receiver/task 映射，并主动读取 task exception，避免 asyncio 报
+        `Task exception was never retrieved`。正常失败应已经通过 command.failed 回报给 server。
+        参数：`command_id` 为原始 command id，`task` 为已结束的后台任务。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self.peer_video_tasks.pop(command_id, None)
+        self.peer_video_receivers.pop(command_id, None)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            if self.gui_bridge is not None:
+                self.gui_bridge.emit_log("ERROR", f"peer video receiver 异常退出: {type(exc).__name__}: {exc}")
 
     def _handle_peer_video_frame(self, frame: bytes, metadata: dict[str, Any]) -> None:
         """把 peer video 直连帧送入本地视频显示链路。
@@ -885,6 +908,33 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                 "result": {"stopped": True},
             },
         )
+
+    async def _stop_all_peer_video_receivers(self, *, reason: str) -> None:
+        """停止当前 phone 端所有 peer video receiver。
+
+        主要逻辑：CLI 退出、控制连接断开或窗口关闭时，显式通知每个 receiver 停止，
+        并短暂等待后台任务释放本地 WebSocket 端口，避免下次启动仍占用端口或 server
+        侧长期等待旧命令。
+        参数：`reason` 为停止原因。
+        返回值：无。
+        异常情况：单个 receiver 停止失败只记录到 GUI，不阻塞整体退出。
+        """
+
+        receivers = list(self.peer_video_receivers.values())
+        for receiver in receivers:
+            try:
+                await receiver.stop(reason)
+            except Exception as exc:  # noqa: BLE001 - 退出清理必须尽量完成其他 receiver
+                if self.gui_bridge is not None:
+                    self.gui_bridge.emit_log("ERROR", f"peer video receiver 停止失败: {type(exc).__name__}: {exc}")
+        tasks = [task for task in self.peer_video_tasks.values() if not task.done()]
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=2.0)
+            _ = done
+            for task in pending:
+                task.cancel()
+        self.peer_video_receivers.clear()
+        self.peer_video_tasks.clear()
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
         if self.gui_bridge is not None:
@@ -986,6 +1036,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                         control_task.cancel()
                         stream_task.cancel()
             finally:
+                await self._stop_all_peer_video_receivers(reason="phone_endpoint_closing")
                 if self.video_preview is not None:
                     self.video_preview.close()
                 if self.gui_bridge is not None:
@@ -1006,6 +1057,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         result["video_frames"] = list(self.video_frames)
         result["video_errors"] = list(self.video_errors)
         result["video_frame_store"] = self.frame_store.summary() if self.frame_store else {}
+        result["vision"] = {"provider": self.vision_config.provider, "device": self.vision_config.device}
         result["peer_video_receivers"] = {
             command_id: {"frame_count": receiver.frame_count, "peer_session_id": receiver.peer_session_id}
             for command_id, receiver in self.peer_video_receivers.items()
@@ -1052,6 +1104,7 @@ def _build_endpoint_from_config(config: dict[str, Any], *, gui_bridge: GuiEventB
         vision_frames=vision_frames,
         display=display_config,
         peer_video=dict(config.get("peer_video") or {}),
+        vision=dict(config.get("vision") or {}),
         gui_bridge=gui_bridge,
     )
 

@@ -21,6 +21,27 @@ peer_video:
     enabled: true
     per_frame: true
     complete_after_frames: 0
+vision:
+  provider: yolo
+  device: auto
+  frame_stride: 1
+  save_annotated_frame: runs/audio-chat/python-phone/latest-yolo.jpg
+  fallback_to_mock: false
+  find_object:
+    backend: yoloe
+    model_path: /Users/elio/.cache/modelscope/hub/models/archifancy/AIGlasses_for_navigation/yoloe-11l-seg.pt
+    conf: 0.20
+    iou: 0.45
+    imgsz: 640
+    stable_hits: 2
+    min_area_ratio: 0.001
+  traffic_light:
+    backend: yolo
+    model_path: /Users/elio/.cache/modelscope/hub/models/archifancy/AIGlasses_for_navigation/trafficlight.pt
+    conf: 0.25
+    history_size: 5
+    majority_threshold: 3
+    enable_hsv_fallback: true
 supports:
   sensors: []
   actuators: []

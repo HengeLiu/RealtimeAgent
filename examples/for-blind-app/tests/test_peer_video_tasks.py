@@ -82,6 +82,16 @@ class EagerPeerEndpoint(RecordingEndpoint):
                     payload={"command_id": command_id, "command": command, "status": "peer.sender.connected"},
                 )
             )
+        if command.endswith(".stop"):
+            self.app.publish_control_event(
+                Event(
+                    event_name="command.completed",
+                    user_id=self.user_id,
+                    producer_id=self.device_id,
+                    session_id=self.device_id,
+                    payload={"command_id": command_id, "command": command, "result": {"stopped": True}},
+                )
+            )
 
 
 def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
@@ -163,6 +173,7 @@ def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
                 },
             )
         )
+        await _complete_stop_command(app, glass)
         ref = await asyncio.wait_for(create_task, timeout=2)
         assert ref.state == "completed"
         assert app.task_engine.query(ref.task_id).summary == "找物完成"
@@ -212,6 +223,37 @@ def test_peer_video_task_keeps_eager_command_progress(tmp_path: Path) -> None:
         )
         ref = await asyncio.wait_for(create_task, timeout=2)
         assert ref.state == "completed"
+
+    asyncio.run(run())
+
+
+def test_peer_video_task_fails_when_phone_disconnects(tmp_path: Path) -> None:
+    """测试目标：验证 phone 端控制连接断开时 Task 不会继续等待视频命令超时。
+
+    测试方法：启动找物 Task，phone 收到 receiver start 后直接标记设备离线。
+    预期结果：SDK 将 phone 上未完成的 command 转成 failed，Task 快速进入 failed。
+    """
+
+    async def run() -> None:
+        app = _app_with_peer_tasks(tmp_path)
+        phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
+        glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+
+        create_task = asyncio.create_task(
+            app.task_engine.create(
+                task_type="find_object_task",
+                user_id="user-peer",
+                session_id="dev-glass",
+                input_data={"object_name": "水杯", "timeout_seconds": 30},
+            )
+        )
+        await _wait_for_command(phone)
+        app.mark_device_connection_offline("dev-phone", reason="test_phone_disconnect")
+        ref = await asyncio.wait_for(create_task, timeout=1)
+        assert ref.state == "failed"
+        assert "device offline" in ref.metadata["error"]
 
     asyncio.run(run())
 
@@ -351,5 +393,21 @@ async def _drive_successful_peer_video(app: AudioChatApp, phone: RecordingEndpoi
             producer_id="dev-phone",
             session_id="dev-phone",
             payload={"command_id": phone_cmd, "command": "peer.video.receiver.start", "result": result},
+        )
+    )
+    await _complete_stop_command(app, glass)
+
+
+async def _complete_stop_command(app: AudioChatApp, endpoint: RecordingEndpoint) -> None:
+    """等待并完成端侧 stop 命令。"""
+
+    stop_command = await _wait_for_command(endpoint, count=2)
+    app.publish_control_event(
+        Event(
+            event_name="command.completed",
+            user_id=endpoint.user_id,
+            producer_id=endpoint.device_id,
+            session_id=endpoint.device_id,
+            payload={"command_id": stop_command.payload["command_id"], "command": stop_command.payload["command"], "result": {"stopped": True}},
         )
     )

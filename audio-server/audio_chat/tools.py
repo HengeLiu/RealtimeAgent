@@ -1787,18 +1787,26 @@ class DeviceRuntime:
         if not candidates and capability is None:
             candidates = list(self._app.control_service.get_active_device_set(self.user_id).devices)
         active_devices = list(self._app.control_service.get_active_device_set(self.user_id).devices)
+        active_summary = [
+            {
+                "device_id": str(getattr(device, "device_id", "")),
+                "name": str(getattr(device, "name", getattr(device, "device_name", ""))),
+                "properties": dict(getattr(device, "properties", {}) or {}),
+            }
+            for device in active_devices
+        ]
         if capability is not None and not candidates and active_devices:
             raise CapabilityNotSupportedError(
                 f"no online device supports capability: {capability}",
                 code=ErrorCode.NOT_FOUND,
-                details={"capability": capability, "selector": selector or {}},
+                details={"capability": capability, "selector": selector or {}, "active_devices": active_summary},
             )
         devices = [device for device in candidates if self._selector_matches(device, selector or {})]
         if not devices:
             raise DeviceNotFoundError(
                 f"no online device matches capability: {capability or 'command'}",
                 code=ErrorCode.NOT_FOUND,
-                details={"capability": capability, "selector": selector or {}},
+                details={"capability": capability, "selector": selector or {}, "active_devices": active_summary},
             )
         if require_single and len(devices) > 1:
             raise AmbiguousDeviceError(

@@ -70,10 +70,18 @@ runs/audio-chat/python-phone/latest-rgb.png
 1. 注册属性包含 `device_role: phone`、`endpoint.compute.vision: true` 和 `peer.video.receiver: true`。
 2. 收到 `peer.video.receiver.start` 后，Python phone 会打开 `ws://<phone-ip>:19081/peer-video/<peer_session_id>`。
 3. 端侧通过 `RemoteTaskReporter` 上报 `command.accepted/progress/completed/failed`，包括 `peer.receiver.ready`、`peer.video.first_frame`、`peer.video.frame_processed` 和 `peer.video.timeout`。
-4. 每帧调用 `fork_yolo_mock(frame, purpose, object_name)`，当前只打印 `yolo.mock.frame_processed` 并生成 mock 结果。
-5. `phone.preview.yaml` 默认不按首帧立即完成，保持视频回显到 30 秒超时后再返回 mock 结果；自动化测试可单独把 `complete_after_frames` 设为正数。
+4. 每帧通过 `VisionProcessor` 调用本地视觉识别；`phone.preview.yaml` 默认使用本机 modelscope 目录中的 YOLOE 找物模型和红绿灯 YOLO 模型。
+5. `provider: mock` 仍可用于无模型测试；真实模式下模型缺失或依赖缺失会向 server 回报 `command.failed`，不会静默返回 mock。
+6. `complete_after_frames` 只用于自动化测试，默认保持 0，由找物稳定命中、绿灯稳定或 30 秒超时结束任务。
+7. 退出 phone 端、控制连接断开或窗口关闭时，会停止所有 active receiver 并释放本地端口；sender 未发帧就断开会回报 `command.failed`。
 
 `RemoteTaskReporter` 只是 Python 参考端 helper，不是跨语言必需对象。Swift、JavaScript、Kotlin 或 C 端侧只要发送等价的 `command.*` 控制事件即可。
+
+真实 YOLO 识别依赖是 Python phone 参考端自己的运行依赖，不属于 server SDK 必需依赖。使用 Python phone 跑真实模型前，在端侧 Python 环境中安装：
+
+```bash
+uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.txt
+```
 
 ## 启动
 

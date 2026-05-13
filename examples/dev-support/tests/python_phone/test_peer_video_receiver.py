@@ -82,6 +82,91 @@ def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
     asyncio.run(run())
 
 
+def test_peer_video_receiver_fails_when_sender_disconnects_before_frame() -> None:
+    """测试目标：验证眼镜发送端断开且未发送任何帧时，phone receiver 不会等到超时。
+
+    测试方法：启动 receiver，建立 WebSocket 后立即关闭，不发送二进制帧。
+    预期结果：receiver 上报 `peer.video.sender_disconnected` 和 `command.failed`，
+    返回结果标记 failed。
+    """
+
+    async def run() -> None:
+        sent: list[Event] = []
+
+        async def send_event(event: Event) -> None:
+            sent.append(event)
+
+        command = RemoteCommand(
+            command_id="cmd-phone",
+            command="peer.video.receiver.start",
+            user_id="user-peer",
+            session_id="dev-phone",
+            params={
+                "peer_session_id": "task-peer-disconnect",
+                "task_type": "find_object_task",
+                "purpose": "find_object",
+                "object_name": "水杯",
+            },
+        )
+        receiver = PeerVideoReceiver(
+            command=command,
+            reporter=RemoteTaskReporter(command=command, producer_id="dev-phone", role="receiver", send_event=send_event),
+            listen_host="127.0.0.1",
+            listen_port=_unused_port(),
+            timeout_seconds=5,
+            public_host="127.0.0.1",
+        )
+        task = asyncio.create_task(receiver.run())
+        await _wait_for_status(sent, "peer.receiver.ready")
+        async with ClientSession() as session:
+            async with session.ws_connect(receiver.receiver_info()["url"]):
+                pass
+        result = await asyncio.wait_for(task, timeout=1)
+        statuses = [event.payload.get("status") for event in sent]
+        assert result["failed"] is True
+        assert "peer.video.sender_disconnected" in statuses
+        assert sent[-1].event_name == "command.failed"
+
+    asyncio.run(run())
+
+
+def test_peer_video_receiver_reports_vision_prepare_failure_without_leaking_task_exception() -> None:
+    """测试目标：验证视觉依赖缺失时 receiver 通过 command.failed 回报且不抛后台异常。
+
+    测试方法：注入一个 prepare_session 会失败的视觉处理器，直接等待 `run()`。
+    预期结果：`run()` 返回 failed result，最后一个控制事件是 command.failed。
+    """
+
+    async def run() -> None:
+        sent: list[Event] = []
+
+        async def send_event(event: Event) -> None:
+            sent.append(event)
+
+        command = RemoteCommand(
+            command_id="cmd-phone",
+            command="peer.video.receiver.start",
+            user_id="user-peer",
+            session_id="dev-phone",
+            params={"peer_session_id": "task-peer", "purpose": "find_object", "object_name": "水杯"},
+        )
+        receiver = PeerVideoReceiver(
+            command=command,
+            reporter=RemoteTaskReporter(command=command, producer_id="dev-phone", role="receiver", send_event=send_event),
+            listen_host="127.0.0.1",
+            listen_port=_unused_port(),
+            vision_processor=FailingVisionProcessor(),
+        )
+
+        result = await receiver.run()
+
+        assert result["failed"] is True
+        assert "视觉依赖缺失" in result["message"]
+        assert sent[-1].event_name == "command.failed"
+
+    asyncio.run(run())
+
+
 async def _wait_for_status(events: list[Event], status: str) -> None:
     """等待 fake reporter 收到指定状态。"""
 
@@ -99,3 +184,13 @@ def _unused_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+class FailingVisionProcessor:
+    """用于模拟视觉依赖缺失的处理器。"""
+
+    provider = "yolo"
+
+    async def prepare_session(self, *, purpose: str, object_name: str) -> None:
+        _ = purpose, object_name
+        raise RuntimeError("视觉依赖缺失")

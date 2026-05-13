@@ -59,6 +59,34 @@ uv run python -m pytest audio-server/tests/test_memory_service.py -q
 1. 明确当前相关测试是否能跑。
 2. 记录任何与本计划无关的既有失败，例如缺失 `audio_chat_python_glass` 包。
 
+## Phase 0.5：生命周期和释放边界补齐
+
+目标：解决真实联调中“设备已经退出但 Task 仍在等待”和“没有可用绑定设备难排查”的问题。
+
+改动：
+
+1. SDK command runtime 在下发命令前登记 command 与目标设备。
+2. 控制 WebSocket 断开或心跳超时时，把该设备上未完成的 command 标记为 `command.failed`。
+3. Task 在 phone completed 后主动 stop glass sender；失败、取消时 stop 已启动端侧。
+4. Python phone 退出时停止所有 peer receiver，释放本地 WebSocket 端口。
+5. Python phone receiver 在 sender WebSocket 断开时结束本次 receiver；无帧断开按 failed 上报。
+6. browser-glass 在 peer WebSocket error/close、控制连接断开和页面关闭时停止 sender。
+7. 设备选择失败时在错误 details 中带上当前在线设备摘要，便于定位 user_id、device_role 或绑定问题。
+
+验收：
+
+```bash
+uv run python -m pytest examples/for-blind-app/tests/test_peer_video_tasks.py -q
+uv run python -m pytest examples/dev-support/tests/python_phone/test_peer_video_receiver.py -q
+uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py -q
+```
+
+完成标准：
+
+1. phone/glass 任一端离线都能让 Task 快速进入 failed，而不是等完整业务 timeout。
+2. phone 端退出后不遗留 peer receiver 端口。
+3. browser 端 sender 的 timer 和 WebSocket 在 stop/error/unload 时都被释放。
+
 ## Phase 1：端侧状态回报 helper
 
 目标：让端侧代码不用手写重复的 `command.progress` JSON，同时保持跨语言协议简单。

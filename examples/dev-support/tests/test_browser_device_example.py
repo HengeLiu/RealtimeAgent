@@ -71,6 +71,8 @@ def test_browser_device_declares_and_handles_peer_video_sender() -> None:
     assert "sendPeerVideoFrame" in html
     assert "peer.sender.connected" in html
     assert "peer.video.frame.sent" in html
+    assert "peer_video_sender_failed" in html
+    assert "beforeunload" in html
 
 
 def test_browser_device_supports_realtime_offline_audio_modes() -> None:
@@ -119,9 +121,13 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert 'id="audioFile" class="hidden"' in html
     assert 'id="imageFile" class="hidden"' in html
     assert 'id="videoFile" class="hidden"' in html
+    assert 'id="visualPreviewArea" class="visual-preview"' in html
     assert 'id="visualFramePreview"' in html
     assert 'id="selectedVideoSource"' in html
-    assert 'id="videoPlaceholder"' in html
+    assert 'id="selectedVideoSource" class="source-video" muted playsinline preload="metadata"' in html
+    assert "controls></video>" not in html
+    assert "pointer-events: none" in html
+    assert 'selectedVideoSourceEl.style.display = "block"' not in html
     assert 'id="capturedFrameStrip"' in html
     assert "frame-thumb" in html
     assert "source-image" in html
@@ -129,6 +135,11 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert "source-camera" in html
     assert 'classList.toggle("source-video", active === "video")' in html
     assert "renderSelectedImagePreview" in html
+    assert "renderSelectedVideoPreview" in html
+    assert "drawVideoFrameToPreview" in html
+    assert "drawPreviewPlaceholder" in html
+    assert "showVisualPreview" in html
+    assert "stopSelectedVideoCapture" in html
     assert "图片和视频只能二选一" in html
     assert "clearSelectedVideoSample()" in html
     assert "clearSelectedImageSamples()" in html

@@ -72,6 +72,7 @@ command.requested command=peer.video.sender.start
 3. 上报 `peer.sender.connecting` 和 `peer.sender.connected`。
 4. 按 `params.source.fps` 抽帧；如果已选择视频，则播放视频并按当前播放时间抽取 JPEG 帧；如果已选择图片样例，则循环发送图片样例；否则使用摄像头。
 5. 收到 `peer.video.sender.start.stop` 后停止定时器并关闭 WebSocket。
+6. peer WebSocket error/close、控制连接断开或页面关闭时，也会停止 sender；异常断开会通过 `command.failed` 回报 server。
 
 本地日志会打印 `peer.video.sender.start`、`peer.sender.connected`、`peer.video.frame.sent` 和 `peer.video.sender.stop`，用于和 phone 日志、server runs 对齐。
 
