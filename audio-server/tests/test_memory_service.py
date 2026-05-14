@@ -35,14 +35,14 @@ class CaptureMessagesModel:
     model = "mock-capture-model"
 
     def __init__(self) -> None:
-        self.system_prompt = ""
+        self.prompt = ""
         self.messages = []
-        self.system_prompts = []
+        self.prompts = []
 
     def stream_messages(self, *, messages: list[dict], tools: list[dict]):
         """记录入参并返回一段固定文本。"""
 
-        self.system_prompts.append(self.system_prompt)
+        self.prompts.append(self.prompt)
         self.messages.append(list(messages))
         yield "已读取记忆。"
 
@@ -271,7 +271,7 @@ def test_text_agent_model_request_includes_memory_content(tmp_path) -> None:
             runs_root=str(tmp_path / "runs"),
             agent_mode="text",
             memory_enabled=True,
-            text_system_prompt="你是测试助手。",
+            text_prompt="你是测试助手。",
         )
     )
     app.memory_service.add_memory(
@@ -295,10 +295,10 @@ def test_text_agent_model_request_includes_memory_content(tmp_path) -> None:
         )
     )
 
-    system_prompt = model.system_prompts[0]
+    prompt = model.prompts[0]
     request_path = tmp_path / "runs" / "user-memory-prompt" / "sess-memory-prompt" / "model-request.json"
     request = json.loads(request_path.read_text(encoding="utf-8"))
-    assert "用户喜欢导航提示先说方向再说距离。" in system_prompt
+    assert "用户喜欢导航提示先说方向再说距离。" in prompt
     assert "用户喜欢导航提示先说方向再说距离。" in request["messages"][0]["content"]
     assert "个性化信息：" in request["messages"][0]["content"]
 
@@ -316,8 +316,8 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
             runs_root=str(tmp_path / "runs"),
             memory_enabled=True,
             memory_path=str(tmp_path / "memory"),
-            realtime_instructions="你是测试助手。",
-            text_system_prompt="你是测试助手。",
+            realtime_prompt="你是测试助手。",
+            text_prompt="你是测试助手。",
         )
     )
     app.memory_service.manager_agent = FakeMemoryManager(
@@ -346,8 +346,8 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
         ]
     )
 
-    assert "长期记忆规则" in app.config.realtime_instructions
-    assert "长期记忆规则" in app.config.text_system_prompt
+    assert "长期记忆规则" in app.config.realtime_prompt
+    assert "长期记忆规则" in app.config.text_prompt
     assert "manage_memory" in {tool["function"]["name"] for tool in app.tool_gateway.provider_schemas()}
 
     write_result = asyncio.run(
@@ -398,7 +398,7 @@ def test_memory_manager_is_configured_as_system_capability(tmp_path) -> None:
 app_name: memory-manager-app
 agent:
   text:
-    model_provider: mock
+    provider: mock
     model: mock-text
 memory:
   enabled: true
@@ -417,7 +417,7 @@ memory:
     assert app.memory_service.manager_agent.model == "qwen-memory"
     assert isinstance(app.conversation_memory.summarizer, LlmMessageSummarizer)
     assert app.conversation_memory.summarizer.model == "qwen-memory"
-    assert app.config.text_model_provider == "mock"
+    assert app.config.text_provider == "mock"
 
 
 def test_memory_manage_requires_real_manager_agent(tmp_path) -> None:

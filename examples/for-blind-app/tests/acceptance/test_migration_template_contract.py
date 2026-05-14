@@ -31,11 +31,16 @@ def test_for_blind_capability_files_are_valid_python_and_use_public_api() -> Non
     """
 
     allowed_public_imports = {
+        "AssetRef",
         "BaseTask",
         "BaseTool",
+        "CommandEvent",
+        "CommandHandle",
         "TaskContext",
+        "TaskEventView",
         "TaskSignal",
         "ToolContext",
+        "ToolError",
         "ToolResult",
         "ToolSpec",
     }
@@ -87,12 +92,12 @@ def test_for_blind_capabilities_use_context_device_api() -> None:
     """测试目标：确认当前能力确实通过新版 Context 设备 API 使用设备能力。
 
     测试方法：检查 Tool 和 Task 中的关键公开调用。
-    预期结果：视觉能力请求单次 RGB 资产，用户可感知提示进入 Output Service。
+    预期结果：Tool 仍通过 Context 请求单帧 RGB；Task 不再直接播报内部执行状态。
     """
 
     tools = (CAPABILITY_ROOT / "tools.py").read_text(encoding="utf-8")
     tasks = (CAPABILITY_ROOT / "tasks.py").read_text(encoding="utf-8")
 
     assert "context.devices.sensors.rgb.one(" in tools
-    assert "context.devices.sensors.rgb.one(" in tasks
-    assert "context.output.say(" in tasks
+    assert "context.devices.commands.start(" in tasks
+    assert "context.output.say(" not in tasks

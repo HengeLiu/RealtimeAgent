@@ -22,6 +22,12 @@ from audio_chat.tools import ToolGateway
 
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
 OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
+REALTIME_TOOL_CALL_PROMPT_RULE = (
+    "当用户请求需要调用工具、启动后台任务、查询设备或执行动作时，必须直接调用合适的工具；"
+    "在工具调用完成并收到工具结果前，不要先向用户播报“我要调用工具”“正在调用工具”“请稍等”等提示音频。"
+    "永远不要向用户朗读工具名称、函数名、参数、JSON、schema、调用过程或系统实现细节。"
+    "工具结果返回后，再用简短自然中文说明用户真正需要知道的结果。"
+)
 
 
 def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -67,7 +73,7 @@ class RealtimeProviderConfig:
     voice: str = "Tina"
     session_idle_timeout_seconds: int = 60
     websocket_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-    instructions: str = "你是中文语音助手。请用简短口语回答用户。"
+    prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     tools: list[dict[str, Any]] = field(default_factory=list)
     visual_frame_interval_seconds: float = 1.0
     visual_frame_timeout_seconds: float = 1.5
@@ -135,7 +141,6 @@ class QwenOmniRealtimeAdapter:
         self._output_modalities: list[Any] = []
         self._completed_tool_call_ids: set[str] = set()
         self._pending_tool_followup_response: dict[str, Any] | None = None
-        self._suppress_current_response_audio = False
         self._current_response_audio_emitted = False
         self._session_updated = threading.Event()
         self._operation_lock = threading.RLock()
@@ -206,7 +211,7 @@ class QwenOmniRealtimeAdapter:
             "input_audio_transcription_model": "paraformer-realtime-v2",
             "enable_turn_detection": True,
             "turn_detection_type": turn_detection_type,
-            "instructions": self.config.instructions,
+            "instructions": self.config.prompt,
         }
         if self.config.tools:
             session_update_kwargs["tools"] = self.config.tools
@@ -354,7 +359,6 @@ class QwenOmniRealtimeAdapter:
             self._output_modalities = []
             self._completed_tool_call_ids.clear()
             self._pending_tool_followup_response = None
-            self._suppress_current_response_audio = False
             self._current_response_audio_emitted = False
 
     def _handle_provider_event(self, message: dict[str, Any]) -> None:
@@ -365,14 +369,10 @@ class QwenOmniRealtimeAdapter:
         if event_type == "session.updated":
             self._session_updated.set()
         if event_type == "response.created":
-            self._suppress_current_response_audio = False
             self._current_response_audio_emitted = False
             callbacks.provider_event(_summarize_omni_event(message))
             return
         if event_type == "response.output_item.added":
-            item = message.get("item") if isinstance(message.get("item"), dict) else {}
-            if item.get("type") in {"function_call", "tool_call"}:
-                self._suppress_current_response_audio = True
             callbacks.provider_event(_summarize_omni_event(message))
             return
         if event_type == "response.audio.delta":
@@ -382,21 +382,10 @@ class QwenOmniRealtimeAdapter:
                     "event": "omni.response.audio.delta",
                     "provider": "qwen",
                     "delta_base64_len": len(raw_delta),
-                    "suppressed": self._suppress_current_response_audio,
                 }
             )
             if raw_delta:
                 audio = base64.b64decode(raw_delta)
-                if self._suppress_current_response_audio:
-                    callbacks.provider_event(
-                        {
-                            "event": "omni.response.audio.delta.suppressed",
-                            "provider": "qwen",
-                            "audio_bytes": len(audio),
-                            "reason": "tool_call_response",
-                        }
-                    )
-                    return
                 callbacks.provider_event(
                     {
                         "event": "omni.response.audio.delta.decoded",
@@ -424,11 +413,9 @@ class QwenOmniRealtimeAdapter:
         if event_type == "response.done":
             callbacks.provider_event(_summarize_omni_event(message))
             self._create_pending_tool_followup_response()
-            self._suppress_current_response_audio = False
             self._current_response_audio_emitted = False
             return
         if event_type in {"response.function_call_arguments.delta", "response.tool_call_arguments.delta"}:
-            self._suppress_current_response_audio = True
             callbacks.provider_event(_summarize_omni_event(message))
             if callbacks.tool_call_delta is not None:
                 callbacks.tool_call_delta(
@@ -440,7 +427,6 @@ class QwenOmniRealtimeAdapter:
                 )
             return
         if event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
-            self._suppress_current_response_audio = True
             callbacks.provider_event(_summarize_omni_event(message))
             if callbacks.tool_call_done is not None:
                 call_id = str(message.get("call_id") or message.get("item_id") or message.get("id") or "")
@@ -559,7 +545,7 @@ class QwenOmniRealtimeAdapter:
             image_path = _resolve_capture_photo_tool_image_path(result)
             image_bytes = image_path.read_bytes() if image_path is not None else None
             create_followup_response = True
-            response_instructions = _tool_result_followup_instructions(self.config.instructions, result)
+            response_instructions = _tool_result_followup_instructions(self.config.prompt, result)
             if image_bytes:
                 append_video = getattr(self._conversation, "append_video", None)
                 if callable(append_video):
@@ -605,7 +591,7 @@ class QwenOmniRealtimeAdapter:
                                     "response_create": "provider_auto_after_commit",
                                 }
                             )
-                        response_instructions = _capture_photo_response_instructions(self.config.instructions)
+                        response_instructions = _capture_photo_response_instructions(self.config.prompt)
                         create_followup_response = False
                 elif self._callbacks:
                     self._callbacks.error(
@@ -793,12 +779,31 @@ def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str
         task_rule = "如果这是后台任务或计时器启动失败，必须明确告诉用户任务没有启动、不会按时提醒。"
     return (
         f"{base}\n\n"
-        "刚刚的工具调用失败了。"
-        f"工具名：{name}。失败原因：{message}。"
-        "本次回答必须把失败事实直接告知用户，不能声称工具已经执行成功。"
+        "刚刚的操作失败了。"
+        f"失败原因：{message}。"
+        "本次回答必须把失败事实直接告知用户，不能声称操作已经执行成功。"
+        "不要向用户复述工具名、函数名、参数或调用过程。"
         f"{task_rule}"
         "请用简短口语中文说明，并在合适时建议用户重试。"
     )
+
+
+def _append_realtime_tool_call_prompt_rule(prompt: str) -> str:
+    """追加 Realtime 工具调用语音约束。
+
+    主要逻辑：把“工具请求先调用工具，不要先播报工具准备过程”的规则集中追加到
+    provider instructions，避免每个应用配置都重复维护同一段约束。
+    参数：`prompt` 为应用配置中的基础提示词。
+    返回值：追加约束后的提示词。
+    异常情况：无。
+    """
+
+    base = prompt.strip()
+    if REALTIME_TOOL_CALL_PROMPT_RULE in base:
+        return base
+    if not base:
+        return REALTIME_TOOL_CALL_PROMPT_RULE
+    return f"{base}\n\n{REALTIME_TOOL_CALL_PROMPT_RULE}"
 
 
 class MockRealtimeProviderAdapter:
@@ -1114,11 +1119,11 @@ class RealtimeAudioAgentCore:
         self._failed_sessions.discard(session_id)
         tools = self._realtime_tool_schemas()
         history_messages = self._load_runtime_messages(user_id=user_id, session_id=session_id)
-        instructions = self._build_instructions(user_id=user_id)
+        prompt = self._build_prompt(user_id=user_id)
         summary_fragment = self._load_message_summary_fragment(user_id=user_id, session_id=session_id)
         if summary_fragment:
-            instructions = f"{instructions}\n\n{summary_fragment}"
-        session_config = replace(self.realtime_config, tools=tools, instructions=instructions)
+            prompt = f"{prompt}\n\n{summary_fragment}"
+        session_config = replace(self.realtime_config, tools=tools, prompt=prompt)
         self.recorder.record_model_request(
             session_id,
             self._build_model_request(
@@ -1514,7 +1519,7 @@ class RealtimeAudioAgentCore:
 
         history = list(history_messages or [])
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": config.instructions},
+            {"role": "system", "content": config.prompt},
             *history,
             {
                 "role": "user",
@@ -1531,7 +1536,7 @@ class RealtimeAudioAgentCore:
             "provider": config.provider,
             "model": config.model,
             "runner": "agent_core_realtime_audio",
-            "instructions": config.instructions,
+            "prompt": config.prompt,
             "messages": messages,
             "active_history_message_count": len(history),
             "active_history_injected_to": "messages" if history else "",
@@ -1541,16 +1546,16 @@ class RealtimeAudioAgentCore:
             "session_id": session_id,
         }
 
-    def _build_instructions(self, *, user_id: str) -> str:
-        """构造当前 realtime 会话 instructions。
+    def _build_prompt(self, *, user_id: str) -> str:
+        """构造当前 realtime 会话提示词。
 
         主要逻辑：在静态 Omni 指令后追加长期记忆片段，让模型直接获得当前用户的已保存信息。
         参数：`user_id` 为当前用户编号。
-        返回值：发送给 Realtime provider 的 instructions。
+        返回值：发送给 Realtime provider 的提示词。
         异常情况：memory 未启用或读取失败时只返回基础指令。
         """
 
-        base = self.realtime_config.instructions
+        base = _append_realtime_tool_call_prompt_rule(self.realtime_config.prompt)
         memory = self.memory_service
         if memory is None or not getattr(memory, "enabled", False):
             return base

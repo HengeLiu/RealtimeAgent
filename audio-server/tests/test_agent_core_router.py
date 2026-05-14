@@ -350,7 +350,7 @@ class CaptureHistoryTextModel:
     model = "mock-history-model"
 
     def __init__(self) -> None:
-        self.system_prompt = ""
+        self.prompt = ""
         self.messages = []
 
     def stream_messages(self, *, messages: list[dict], tools: list[dict]):

@@ -142,7 +142,7 @@ def test_for_blind_server_yaml_documents_supported_model_routes(tmp_path) -> Non
 
     assert "server.schema.json" not in text
     assert data["agent"]["mode"] in {"text", "realtime_audio", "auto", "custom"}
-    assert data["agent"]["text"]["model_provider"] in {"mock", "openai-compatible", "dashscope-compatible"}
+    assert data["agent"]["text"]["provider"] in {"mock", "openai-compatible", "dashscope-compatible"}
     assert data["agent"]["text"]["model"]
     assert data["agent"]["text"]["asr_provider"] in {"mock", "dashscope"}
     assert data["agent"]["text"]["tts_provider"] in {"mock", "dashscope"}
@@ -154,7 +154,7 @@ def test_for_blind_server_yaml_documents_supported_model_routes(tmp_path) -> Non
     config = AudioChatConfig.from_yaml(app_dir / "server.yaml")
 
     assert config.agent_mode == data["agent"]["mode"]
-    assert config.text_model_provider == data["agent"]["text"]["model_provider"]
+    assert config.text_provider == data["agent"]["text"]["provider"]
     assert config.text_model == data["agent"]["text"]["model"]
     assert config.asr_provider == data["agent"]["text"]["asr_provider"]
     assert config.tts_provider == data["agent"]["text"]["tts_provider"]

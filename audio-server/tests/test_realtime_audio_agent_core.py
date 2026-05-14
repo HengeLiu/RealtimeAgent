@@ -6,6 +6,7 @@ from pathlib import Path
 
 from audio_chat.agent_core.realtime import (
     OMNI_REALTIME_IMAGE_MAX_BYTES,
+    REALTIME_TOOL_CALL_PROMPT_RULE,
     MockRealtimeProviderAdapter,
     RealtimeAudioAgentCore,
     RealtimeProviderCallbacks,
@@ -749,7 +750,7 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
         realtime_config=RealtimeProviderConfig(
             provider="fake",
             model="fake-omni",
-            instructions="你是测试用 Omni 助手。",
+            prompt="你是测试用 Omni 助手。",
         ),
         provider_factory=lambda config: _new_fake(config, instances),
         tool_gateway=app.tool_gateway,
@@ -781,6 +782,8 @@ def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(
     assert "agent_core_realtime_audio" in model_request
     assert "input_audio_stream" in model_request
     assert "你是测试用 Omni 助手。" in model_request
+    assert REALTIME_TOOL_CALL_PROMPT_RULE in instances[0].config.prompt
+    assert REALTIME_TOOL_CALL_PROMPT_RULE in model_request
     assert "echo_realtime" in model_request
     assert "capture_photo" not in model_request
     assert "interpret_current_view" not in model_request
@@ -815,7 +818,7 @@ def test_realtime_open_loads_device_message_history_as_flat_messages(tmp_path) -
         output_service=app.output_service,
         recorder=app.recorder,
         control_service=app.control_service,
-        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni", instructions="你是测试用 Omni 助手。"),
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni", prompt="你是测试用 Omni 助手。"),
         provider_factory=lambda config: _new_fake(config, instances),
         tool_gateway=app.tool_gateway,
         max_context_messages=10,
@@ -825,7 +828,7 @@ def test_realtime_open_loads_device_message_history_as_flat_messages(tmp_path) -
     app.agent_core.open(user_id=user_id, session_id=device_id)
 
     request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
-    assert "我刚才想去南门。" not in instances[0].config.instructions
+    assert "我刚才想去南门。" not in instances[0].config.prompt
     assert "我刚才想去南门。" not in request["messages"][0]["content"]
     assert request["messages"][1] == {"role": "user", "content": "我刚才想去南门。"}
     assert request["messages"][2] == {"role": "assistant", "content": "我会继续按南门方向引导。"}
@@ -838,7 +841,7 @@ def test_realtime_open_keeps_summary_in_system_and_active_history_as_messages(tm
     """测试目标：验证 Realtime 把摘要放 system，把 active 历史平铺到 messages。
 
     测试方法：先压缩一批历史消息，再打开 fake Realtime provider 会话。
-    预期结果：instructions/system 包含 summary；保留的 active 历史只出现在后续
+    预期结果：prompt/system 包含 summary；保留的 active 历史只出现在后续
     user/assistant messages 中。
     """
 
@@ -862,7 +865,7 @@ def test_realtime_open_keeps_summary_in_system_and_active_history_as_messages(tm
         output_service=app.output_service,
         recorder=app.recorder,
         control_service=app.control_service,
-        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni", instructions="你是测试用 Omni 助手。"),
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni", prompt="你是测试用 Omni 助手。"),
         provider_factory=lambda config: _new_fake(config, instances),
         tool_gateway=app.tool_gateway,
         max_context_messages=10,
@@ -871,11 +874,11 @@ def test_realtime_open_keeps_summary_in_system_and_active_history_as_messages(tm
     app.agent_core.open(user_id=user_id, session_id=device_id)
 
     request = json.loads((tmp_path / "runs" / user_id / device_id / "model-request.json").read_text(encoding="utf-8"))
-    instructions = instances[0].config.instructions
-    assert "更早历史对话的压缩摘要" in instructions
-    assert "实时压缩前消息 0 已被归档" in instructions
-    assert "实时压缩前消息 6" not in instructions
-    assert request["messages"][0]["content"] == instructions
+    prompt = instances[0].config.prompt
+    assert "更早历史对话的压缩摘要" in prompt
+    assert "实时压缩前消息 0 已被归档" in prompt
+    assert "实时压缩前消息 6" not in prompt
+    assert request["messages"][0]["content"] == prompt
     assert request["messages"][1]["content"] == "实时压缩前消息 6"
     assert request["messages"][2]["content"] == "实时压缩前消息 7"
     assert request["messages"][3]["content"][0]["type"] == "input_audio_stream"
@@ -905,7 +908,7 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
 
     records = []
     conversation = FakeConversation()
-    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="继续回答"))
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="继续回答"))
     provider._conversation = conversation
     provider._output_modalities = ["text", "audio"]
     provider._callbacks = RealtimeProviderCallbacks(
@@ -960,7 +963,7 @@ def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> Non
 
     records = []
     conversation = FakeConversation()
-    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="基础指令"))
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="基础指令"))
     provider._conversation = conversation
     provider._output_modalities = ["text", "audio"]
     provider._callbacks = RealtimeProviderCallbacks(
@@ -986,10 +989,11 @@ def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> Non
 
     instructions = conversation.responses[0]["instructions"]
     assert "基础指令" in instructions
-    assert "工具调用失败" in instructions
+    assert "操作失败" in instructions
     assert "unknown task: timer" in instructions
     assert "任务没有启动" in instructions
-    assert "不能声称工具已经执行成功" in instructions
+    assert "不能声称操作已经执行成功" in instructions
+    assert "不要向用户复述工具名" in instructions
 
 
 def test_qwen_omni_final_audio_chunk_commits_input_boundary() -> None:
@@ -1094,7 +1098,7 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
 
     records = []
     conversation = FakeConversation()
-    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="结合图片回答"))
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="结合图片回答"))
     provider._conversation = conversation
     provider._output_modalities = ["text", "audio"]
     provider._callbacks = RealtimeProviderCallbacks(
@@ -1179,7 +1183,7 @@ def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> N
 
     records = []
     conversation = FakeConversation()
-    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", instructions="结合图片回答"))
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="结合图片回答"))
     provider._conversation = conversation
     provider._output_modalities = ["text", "audio"]
     provider._callbacks = RealtimeProviderCallbacks(
@@ -1298,12 +1302,12 @@ def test_realtime_tool_bridge_prefers_done_arguments_over_delta_copy() -> None:
     assert gateway.input_data == {}
 
 
-def test_qwen_omni_suppresses_audio_while_generating_tool_arguments() -> None:
-    """测试目标：验证 Omni 生成工具参数期间的音频不会下发到扬声器。
+def test_qwen_omni_does_not_suppress_audio_while_generating_tool_arguments() -> None:
+    """测试目标：验证 Omni adapter 不再用一刀切方式屏蔽工具期音频。
 
     测试方法：模拟 provider 进入 function call 参数增量后继续发送 audio delta。
-    预期结果：adapter 记录 suppressed 事件，不调用 audio_delta，也不会在 audio.done
-    时关闭一个从未打开的输出流。
+    预期结果：adapter 仍按 provider 原始事件下发 audio delta；是否生成工具前提示
+    由 Realtime 提示词约束控制，不在 adapter 层做整段音频吞弃。
     """
 
     from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
@@ -1331,9 +1335,10 @@ def test_qwen_omni_suppresses_audio_while_generating_tool_arguments() -> None:
     provider._handle_provider_event({"type": "response.audio.delta", "delta": "AQI="})
     provider._handle_provider_event({"type": "response.audio.done"})
 
-    assert audio_chunks == []
-    assert audio_done == []
-    assert any(record.get("event") == "omni.response.audio.delta.suppressed" for record in records)
+    assert audio_chunks == [b"\x01\x02"]
+    assert len(audio_done) == 1
+    assert any(record.get("event") == "omni.response.audio.delta.decoded" for record in records)
+    assert not any(record.get("event") == "omni.response.audio.delta.suppressed" for record in records)
 
 
 def test_realtime_provider_text_is_persisted_to_user_messages(tmp_path) -> None:

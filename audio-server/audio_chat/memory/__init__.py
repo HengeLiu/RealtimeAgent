@@ -581,7 +581,7 @@ class LlmMemoryManagementAgent:
         completion = client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": _memory_manager_system_prompt()},
+                {"role": "system", "content": _memory_manager_prompt()},
                 {
                     "role": "user",
                     "content": json.dumps(
@@ -640,7 +640,7 @@ def _record_to_internal_dict(record: MemoryRecord) -> dict[str, Any]:
     }
 
 
-def _memory_manager_system_prompt() -> str:
+def _memory_manager_prompt() -> str:
     return (
         "你是记忆管理子Agent。你只输出JSON，不输出解释。\n"
         "你要根据用户提供的上下文信息和已有记忆，决定是否需要新增、更新或删除长期记忆。\n"

@@ -118,7 +118,7 @@ uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_sampl
 agent:
   mode: "text"
   text:
-    model_provider: "dashscope-compatible"
+    provider: "dashscope-compatible"
     model: "qwen-plus"
     asr_provider: "dashscope"
     asr_model: "fun-asr-realtime"
@@ -137,7 +137,7 @@ uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/ser
 uv run audio-chat.server.run --app-name for-blind-app
 ```
 
-如果只是先验证文本链路形状，可以把 `model_provider/asr_provider/tts_provider` 都设成 `mock`。mock ASR 在 playback 测试里会用 WAV 文件名作为转写文本，mock TTS 会生成诊断音，不需要任何 API Key。
+如果只是先验证文本链路形状，可以把 `provider/asr_provider/tts_provider` 都设成 `mock`。mock ASR 在 playback 测试里会用 WAV 文件名作为转写文本，mock TTS 会生成诊断音，不需要任何 API Key。
 
 如果要接 OpenAI-compatible 或本地兼容服务，只替换文本模型段：
 
@@ -145,7 +145,7 @@ uv run audio-chat.server.run --app-name for-blind-app
 agent:
   mode: "text"
   text:
-    model_provider: "openai-compatible"
+    provider: "openai-compatible"
     model: "你的模型名"
 ```
 

@@ -48,7 +48,7 @@ auth:
 agent:
   mode: "text"
   text:
-    model_provider: "mock"
+    provider: "mock"
     asr_provider: "mock"
     tts_provider: "mock"
 tools:

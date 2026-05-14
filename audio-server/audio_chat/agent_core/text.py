@@ -450,10 +450,10 @@ class TextAgentCore:
         )
         assistant_parts: list[str] = []
         tools = self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
-        system_prompt = self._build_system_prompt(user_id=user_id, session_id=session_id)
-        previous_system_prompt = getattr(self.text_model, "system_prompt", None)
-        if previous_system_prompt is not None:
-            setattr(self.text_model, "system_prompt", system_prompt)
+        prompt = self._build_prompt(user_id=user_id, session_id=session_id)
+        previous_prompt = getattr(self.text_model, "prompt", None)
+        if previous_prompt is not None:
+            setattr(self.text_model, "prompt", prompt)
         self.recorder.record_model_request(
             session_id,
             {
@@ -462,8 +462,8 @@ class TextAgentCore:
                 "runner": "agent_core_text",
                 "user_id": user_id,
                 "session_id": session_id,
-                "system_prompt": system_prompt,
-                "messages": [{"role": "system", "content": system_prompt}, *list(messages)],
+                "prompt": prompt,
+                "messages": [{"role": "system", "content": prompt}, *list(messages)],
                 "tools": tools,
                 "tool_count": len(tools),
             },
@@ -539,8 +539,8 @@ class TextAgentCore:
                         },
                     )
         finally:
-            if previous_system_prompt is not None:
-                setattr(self.text_model, "system_prompt", previous_system_prompt)
+            if previous_prompt is not None:
+                setattr(self.text_model, "prompt", previous_prompt)
         return "".join(assistant_parts)
 
     def _stream_model(self, *, messages: list[dict[str, Any]], transcript: str, tools: list[dict]) -> Any:
@@ -578,17 +578,17 @@ class TextAgentCore:
             messages = messages[-self.max_context_messages :]
         return messages
 
-    def _build_system_prompt(self, *, user_id: str, session_id: str) -> str:
-        """构造当前轮文本模型 system prompt。
+    def _build_prompt(self, *, user_id: str, session_id: str) -> str:
+        """构造当前轮文本模型提示词。
 
         主要逻辑：在静态提示词后追加长期记忆和更早历史摘要，避免把已压缩的原始
         对话重复放回 messages。
         参数：`user_id` 为当前用户编号，`session_id` 为设备级会话编号。
-        返回值：发送给文本模型的 system prompt。
+        返回值：发送给文本模型的提示词。
         异常情况：memory 或历史摘要读取失败时跳过对应片段。
         """
 
-        parts = [str(getattr(self.text_model, "system_prompt", TEXT_AGENT_SYSTEM_PROMPT))]
+        parts = [str(getattr(self.text_model, "prompt", TEXT_AGENT_SYSTEM_PROMPT))]
         memory = self.memory_service
         if memory is not None and getattr(memory, "enabled", False):
             try:

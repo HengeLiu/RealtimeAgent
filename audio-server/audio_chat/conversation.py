@@ -100,7 +100,7 @@ class LlmMessageSummarizer:
             completion = client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": _message_summary_system_prompt()},
+                    {"role": "system", "content": _message_summary_prompt()},
                     {
                         "role": "user",
                         "content": json.dumps(
@@ -122,7 +122,7 @@ class LlmMessageSummarizer:
         return content
 
 
-def _message_summary_system_prompt() -> str:
+def _message_summary_prompt() -> str:
     return (
         "你是会话历史摘要子Agent。你只输出中文结构化摘要，不输出JSON，不解释你的工作过程。\n"
         "你的任务是把 previous_summary 与 archived_messages 合并成一份更新后的滚动摘要。\n"

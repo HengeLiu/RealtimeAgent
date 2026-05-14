@@ -159,7 +159,7 @@ agent:
     # Omni 输出音色，取值由 provider 决定。
     voice: "Tina"
     # Realtime 会话系统指令。
-    instructions: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
+    prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
     # Realtime 会话空闲超时秒数。
     session_idle_timeout_seconds: 60
     # 自定义 realtime adapter 导入路径；provider=custom 时才需要。
@@ -169,11 +169,11 @@ agent:
     # 文本模型 provider。mock 用于本地无密钥测试；
     # dashscope-compatible 使用 DashScope OpenAI-compatible 接口；
     # openai-compatible 使用 OPENAI_API_KEY / OPENAI_BASE_URL。
-    model_provider: "mock"
+    provider: "mock"
     # 文本模型名。DashScope 常用 qwen-plus；本地兼容服务填服务端模型名。
     model: "mock-text"
     # 文本模型系统提示词。
-    system_prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
+    prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
     # ASR provider。mock 会在回放测试中使用 WAV 文件名作为转写文本；dashscope 调真实实时 ASR。
     asr_provider: "mock"
     # ASR 模型名。当前代码的 dashscope ASR provider 使用 Recognition 实时接口；

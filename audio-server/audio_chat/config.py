@@ -93,9 +93,9 @@ class AssetConfig:
 
 @dataclass(frozen=True)
 class AgentTextConfig:
-    model_provider: str = "mock"
+    provider: str = "mock"
     model: str = "mock-text"
-    system_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
+    prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
     tts_provider: str = "mock"
@@ -114,7 +114,7 @@ class AgentRealtimeConfig:
     model: str = "qwen3.5-omni-plus-realtime"
     turn_detection: str = "provider"
     voice: str = "Tina"
-    instructions: str = "你是中文语音助手。请用简短口语回答用户。"
+    prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     session_idle_timeout_seconds: int = 60
     custom_adapter: str = ""
     visual_frame_interval_seconds: float = 1.0
@@ -261,8 +261,9 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     data["__config_path"] = str(config_path)
     data = _apply_env_overrides(data)
     data = _apply_path_defaults(data)
-    text = data.get("agent", {}).get("text", {})
     agent_data = dict(data.get("agent", {}))
+    text = dict(agent_data.get("text", {}))
+    realtime = dict(agent_data.get("realtime", {}))
     agent_mode = str(agent_data.get("mode") or "").strip() or "realtime_audio"
     return AudioChatYamlConfig(
         app_name=str(data.get("app_name") or data.get("app-name") or ""),
@@ -277,7 +278,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         agent=AgentConfig(
             mode=agent_mode or "realtime_audio",
             custom_core=agent_data.get("custom_core", ""),
-            realtime=AgentRealtimeConfig(**agent_data.get("realtime", {})),
+            realtime=AgentRealtimeConfig(**realtime),
             text=AgentTextConfig(**text),
         ),
         output=OutputConfig(**data.get("output", {})),
@@ -448,8 +449,9 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "AUDIO_CHAT_AUTH_MODE": ("auth", "mode"),
         "AUDIO_CHAT_ASR_PROVIDER": ("agent", "text", "asr_provider"),
         "AUDIO_CHAT_ASR_MODEL": ("agent", "text", "asr_model"),
-        "AUDIO_CHAT_TEXT_MODEL_PROVIDER": ("agent", "text", "model_provider"),
+        "AUDIO_CHAT_TEXT_PROVIDER": ("agent", "text", "provider"),
         "AUDIO_CHAT_TEXT_MODEL": ("agent", "text", "model"),
+        "AUDIO_CHAT_TEXT_PROMPT": ("agent", "text", "prompt"),
         "AUDIO_CHAT_TTS_PROVIDER": ("agent", "text", "tts_provider"),
         "AUDIO_CHAT_TTS_MODEL": ("agent", "text", "tts_model"),
         "AUDIO_CHAT_TTS_VOICE": ("agent", "text", "tts_voice"),
@@ -457,7 +459,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "AUDIO_CHAT_REALTIME_PROVIDER": ("agent", "realtime", "provider"),
         "AUDIO_CHAT_REALTIME_MODEL": ("agent", "realtime", "model"),
         "AUDIO_CHAT_REALTIME_VOICE": ("agent", "realtime", "voice"),
-        "AUDIO_CHAT_REALTIME_INSTRUCTIONS": ("agent", "realtime", "instructions"),
+        "AUDIO_CHAT_REALTIME_PROMPT": ("agent", "realtime", "prompt"),
         "AUDIO_CHAT_REALTIME_TURN_DETECTION": ("agent", "realtime", "turn_detection"),
     }
     for env_name, path in mapping.items():

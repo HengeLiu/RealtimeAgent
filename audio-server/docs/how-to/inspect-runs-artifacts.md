@@ -83,7 +83,7 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 
 | 文件 | 用途 |
 | --- | --- |
-| `model-request.json` | 模型请求快照。Realtime Omni 不是传统 Chat Completions，但这里保存等价视图，包括 instructions、messages、tools。 |
+| `model-request.json` | 模型请求快照。Realtime Omni 不是传统 Chat Completions，但这里保存等价视图，包括 prompt、messages、tools。 |
 | `agent-events.jsonl` | Agent Core 事件。包括 session open/close、input commit、provider event、delta 首包/完成摘要、tool result ready。 |
 | `events.jsonl` | 控制面事件。包括设备注册、唤醒、音频 session open/close、stream output 请求等。 |
 | `tool-events.jsonl` | 新版工具调用日志。包括工具名称、输入参数、返回结果、错误、耗时。 |

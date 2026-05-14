@@ -233,11 +233,11 @@ def _provider_key_check(config: AudioChatYamlConfig) -> dict:
     text = config.agent.text
     if (
         text.asr_provider == "dashscope"
-        or text.model_provider in {"dashscope", "dashscope-compatible"}
+        or text.provider in {"dashscope", "dashscope-compatible"}
         or text.tts_provider == "dashscope"
     ):
         required.append("DASHSCOPE_API_KEY")
-    if text.model_provider == "openai-compatible":
+    if text.provider == "openai-compatible":
         required.append("OPENAI_API_KEY")
     if config.agent.mode == "realtime_audio" and config.agent.realtime.provider in {"qwen", "dashscope"}:
         required.append("DASHSCOPE_API_KEY")
@@ -272,7 +272,7 @@ def _provider_runtime_profile_check(config: AudioChatYamlConfig) -> dict:
     text = config.agent.text
     real_provider_requested = any(
         provider not in {"mock", ""}
-        for provider in (text.asr_provider, text.model_provider, text.tts_provider)
+        for provider in (text.asr_provider, text.provider, text.tts_provider)
     ) or (config.agent.mode == "realtime_audio" and config.agent.realtime.provider not in {"mock", ""})
     if not real_provider_requested:
         profile = "mock"
@@ -288,7 +288,7 @@ def _provider_runtime_profile_check(config: AudioChatYamlConfig) -> dict:
         "profile": profile,
         "providers": {
             "asr": text.asr_provider,
-            "text": text.model_provider,
+            "text": text.provider,
             "tts": text.tts_provider,
             "realtime": config.agent.realtime.provider if config.agent.mode == "realtime_audio" else "",
         },

@@ -84,9 +84,9 @@ class AudioChatConfig:
     audio_session_max_duration_seconds: float = 0.0
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
-    text_model_provider: str = "mock"
+    text_provider: str = "mock"
     text_model: str = "mock-text"
-    text_system_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
+    text_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     text_max_context_messages: int = 30
     tts_provider: str = "mock"
     tts_model: str = "mock-tts"
@@ -110,7 +110,7 @@ class AudioChatConfig:
     realtime_model: str = "qwen3.5-omni-plus-realtime"
     realtime_turn_detection: str = "provider"
     realtime_voice: str = "Tina"
-    realtime_instructions: str = "你是中文语音助手。请用简短口语回答用户。"
+    realtime_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     realtime_session_idle_timeout_seconds: int = 60
     realtime_visual_frame_interval_seconds: float = 1.0
     realtime_visual_frame_timeout_seconds: float = 1.5
@@ -211,9 +211,9 @@ class AudioChatConfig:
             audio_session_max_duration_seconds=loaded.audio_pipeline.max_session_seconds,
             asr_provider=text.asr_provider,
             asr_model=text.asr_model,
-            text_model_provider=text.model_provider,
+            text_provider=text.provider,
             text_model=text.model,
-            text_system_prompt=_with_memory_instructions(text.system_prompt, enabled=memory_enabled),
+            text_prompt=_with_memory_instructions(text.prompt, enabled=memory_enabled),
             text_max_context_messages=text.max_context_messages,
             tts_provider=text.tts_provider,
             tts_model=text.tts_model,
@@ -237,7 +237,7 @@ class AudioChatConfig:
             realtime_model=realtime.model,
             realtime_turn_detection=realtime.turn_detection,
             realtime_voice=realtime.voice,
-            realtime_instructions=_with_memory_instructions(realtime.instructions, enabled=memory_enabled),
+            realtime_prompt=_with_memory_instructions(realtime.prompt, enabled=memory_enabled),
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
             realtime_visual_frame_interval_seconds=realtime.visual_frame_interval_seconds,
             realtime_visual_frame_timeout_seconds=realtime.visual_frame_timeout_seconds,
@@ -449,7 +449,7 @@ class AudioChatApp:
                 model=self.config.realtime_model,
                 turn_detection=self.config.realtime_turn_detection,
                 voice=self.config.realtime_voice,
-                instructions=getattr(self.config, "realtime_instructions", "你是中文语音助手。请用简短口语回答用户。"),
+                prompt=getattr(self.config, "realtime_prompt", "你是中文语音助手。请用简短口语回答用户。"),
                 session_idle_timeout_seconds=self.config.realtime_session_idle_timeout_seconds,
                 visual_frame_interval_seconds=getattr(self.config, "realtime_visual_frame_interval_seconds", 1.0),
                 visual_frame_timeout_seconds=getattr(self.config, "realtime_visual_frame_timeout_seconds", 1.5),
@@ -463,9 +463,9 @@ class AudioChatApp:
                 max_retries=self.config.provider_max_retries,
             ),
             text_model_config=TextModelProviderConfig(
-                provider=self.config.text_model_provider,
+                provider=self.config.text_provider,
                 model=self.config.text_model,
-                system_prompt=self.config.text_system_prompt,
+                prompt=self.config.text_prompt,
                 allow_mock_fallback=self.config.allow_mock_fallback,
                 request_timeout_seconds=self.config.provider_request_timeout_seconds,
                 max_retries=self.config.provider_max_retries,
@@ -1097,8 +1097,8 @@ def _normalize_runtime_config(config: AudioChatConfig) -> AudioChatConfig:
         return config
     return replace(
         config,
-        realtime_instructions=_with_memory_instructions(config.realtime_instructions, enabled=True),
-        text_system_prompt=_with_memory_instructions(config.text_system_prompt, enabled=True),
+        realtime_prompt=_with_memory_instructions(config.realtime_prompt, enabled=True),
+        text_prompt=_with_memory_instructions(config.text_prompt, enabled=True),
     )
 
 

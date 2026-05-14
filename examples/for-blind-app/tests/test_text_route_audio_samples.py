@@ -44,7 +44,7 @@ def _build_for_blind_text_app(tmp_path: Path, monkeypatch) -> AudioChatApp:
             agent_mode="text",
             asr_provider="mock",
             asr_model="mock-asr",
-            text_model_provider="mock",
+            text_provider="mock",
             text_model="mock-text",
             tts_provider="mock",
             tts_model="mock-tts",

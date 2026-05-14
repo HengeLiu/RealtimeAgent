@@ -11,13 +11,21 @@ from aiohttp import WSMsgType, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.app_loader import load_app_config, load_config_as_app
-from audio_chat.observability import LogContext, configure_console_logging, get_logger, log_debug, log_error, log_info, log_warning
+from audio_chat.observability import (
+    LogContext,
+    configure_console_logging,
+    get_logger,
+    log_debug,
+    log_error,
+    log_info,
+    log_warning,
+    should_log_control_event_to_terminal,
+)
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunkCodec
 from audio_chat.stream.service import StreamNotOpenError
 
 AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
 AUDIO_CHAT_SWEEPER_TASK_KEY = web.AppKey("audio_chat_sweeper_task", asyncio.Task)
-QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
 
 
 @dataclass
@@ -66,7 +74,7 @@ class NetworkDeviceConnection:
         返回值：无。
         异常情况：队列写入失败时异常会留在 loop 回调中。
         """
-        if event.event_name not in QUIET_CONTROL_EVENTS:
+        if should_log_control_event_to_terminal(event):
             log_debug(
                 get_logger("audio_chat.server"),
                 f"下发控制事件 {event.event_name}",
@@ -286,7 +294,7 @@ class AudioChatHttpServer:
                 try:
                     event = Event.from_dict(json.loads(message.data))
                     self._validate_device_session_alias(event)
-                    if event.event_name not in QUIET_CONTROL_EVENTS:
+                    if should_log_control_event_to_terminal(event):
                         log_debug(
                             self.logger,
                             f"收到控制事件 {event.event_name}",
@@ -557,7 +565,7 @@ def main(argv: list[str] | None = None) -> None:
                 "runs_root": config.runs_root,
                 "agent_mode": config.agent_mode,
                 "realtime_provider": config.realtime_provider,
-                "text_model_provider": config.text_model_provider,
+                "text_provider": config.text_provider,
             }
         ),
     )

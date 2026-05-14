@@ -92,7 +92,7 @@ def test_first_model_request_logs_full_snapshot_once(tmp_path, caplog) -> None:
 def test_realtime_first_model_request_terminal_snapshot_only_logs_model_visible_messages(tmp_path, caplog) -> None:
     """测试目标：验证 Realtime 首次模型请求终端日志只打印模型可见上下文。
 
-    测试方法：构造同时包含 `instructions`、`history_messages` 和规范化 `messages`
+    测试方法：构造同时包含 `prompt`、`history_messages` 和规范化 `messages`
     的 Realtime 请求，并捕获首次快照日志。
     预期结果：终端日志包含 `messages/tools`，但不重复打印 Realtime 中间调试字段。
     """
@@ -104,13 +104,13 @@ def test_realtime_first_model_request_terminal_snapshot_only_logs_model_visible_
         "runner": "agent_core_realtime_audio",
         "user_id": "user-realtime",
         "session_id": "dev-realtime",
-        "instructions": "系统提示词，包含历史摘要。",
+        "prompt": "系统提示词，包含历史摘要。",
         "messages": [
             {"role": "system", "content": "系统提示词，包含历史摘要。"},
             {"role": "user", "content": [{"type": "input_audio_stream", "stream_type": "sensor.mic"}]},
         ],
         "history_messages": [{"role": "user", "content": "历史用户输入"}],
-        "history_injected_to": "instructions",
+        "active_history_injected_to": "prompt",
         "tools": [{"type": "function", "name": "capture_photo", "parameters": {"type": "object"}}],
         "tool_count": 1,
     }
@@ -125,9 +125,9 @@ def test_realtime_first_model_request_terminal_snapshot_only_logs_model_visible_
     assert '"tools"' in snapshot
     assert "系统提示词，包含历史摘要。" in snapshot
     assert "input_audio_stream" in snapshot
-    assert '"instructions"' not in snapshot
+    assert '"prompt"' not in snapshot
     assert '"history_messages"' not in snapshot
-    assert '"history_injected_to"' not in snapshot
+    assert '"active_history_injected_to"' not in snapshot
 
 
 def test_system_error_logs_payload_details(tmp_path, caplog) -> None:
@@ -229,6 +229,95 @@ def test_normal_control_event_does_not_log_payload_as_error_message(tmp_path, ca
     matched = [record for record in caplog.records if record.getMessage() == "控制事件 stream.control.open.requested"]
     assert matched
     assert not any(hasattr(record, "error_message") for record in matched)
+
+
+def test_command_progress_logs_message_as_status_message_not_error(tmp_path, caplog) -> None:
+    """测试目标：普通 `command.progress` 不能把业务 message 打成错误字段。
+
+    测试方法：记录一条低频 command.progress 控制事件。
+    预期结果：终端日志包含 status_message，但不包含 error_message。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    event = Event(
+        event_name="command.progress",
+        user_id="user-log",
+        producer_id="dev-phone",
+        session_id="sess-log",
+        payload={
+            "status": "peer.receiver.ready",
+            "message": "receiver ready",
+        },
+    )
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_event(event)
+
+    matched = [record for record in caplog.records if record.getMessage() == "控制事件 command.progress"]
+    assert matched
+    assert any(getattr(record, "status_message", None) == "receiver ready" for record in matched)
+    assert not any(hasattr(record, "error_message") for record in matched)
+
+
+def test_high_frequency_frame_progress_only_writes_artifacts(tmp_path, caplog) -> None:
+    """测试目标：逐帧视觉进度不应刷终端日志。
+
+    测试方法：记录 `peer.video.frame_processed` 控制事件及路由结果，并开启 DEBUG 捕获。
+    预期结果：事件和路由仍写入 jsonl，但终端不出现控制事件和路由摘要。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    event = Event(
+        event_name="command.progress",
+        user_id="user-log",
+        producer_id="dev-phone",
+        session_id="sess-log",
+        payload={
+            "status": "peer.video.frame_processed",
+            "message": "peer video frame processed",
+            "task_id": "task-log",
+        },
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
+        recorder.record_event(event)
+        recorder.record_event_route(event, {"matched_count": 1, "delivered_count": 1})
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "控制事件 command.progress" not in messages
+    assert "事件路由 command.progress" not in messages
+    assert (tmp_path / "runs" / "control-events.jsonl").exists()
+    assert (tmp_path / "runs" / "control-routes.jsonl").exists()
+
+
+def test_process_dispatch_task_signal_only_writes_artifacts(tmp_path, caplog) -> None:
+    """测试目标：普通 process dispatch 任务信号不应刷终端日志。
+
+    测试方法：记录一条 `task.event.dispatch.accepted` 且 `task_event_type=process` 的信号。
+    预期结果：信号写入 task-signals.jsonl，但终端不输出 `任务信号 ...`。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    record = {
+        "signal_name": "task.event.dispatch.accepted",
+        "task_id": "task-log",
+        "task_type": "find_object_task",
+        "session_id": "sess-log",
+        "user_id": "user-log",
+        "payload": {
+            "event_name": "task.event.process",
+            "event_id": "evt-log",
+            "task_event_type": "process",
+        },
+        "allow_direct_notify": False,
+        "requires_agent_decision": False,
+    }
+
+    with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
+        recorder.record_task_signal("sess-log", record)
+
+    assert not any(record.getMessage() == "任务信号 task.event.dispatch.accepted" for record in caplog.records)
+    assert (tmp_path / "runs" / "user-log" / "sess-log" / "task-signals.jsonl").exists()
 
 
 def test_realtime_provider_error_terminal_log_keeps_actionable_message(tmp_path, caplog) -> None:

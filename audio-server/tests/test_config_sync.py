@@ -109,3 +109,40 @@ observability:
 
     assert loaded.observability.log_timezone == "Asia/Shanghai"
     assert runtime_config.log_timezone == "Asia/Shanghai"
+
+
+def test_agent_prompt_and_provider_config_names_are_canonical(tmp_path) -> None:
+    """测试目标：确认 Agent 配置统一使用 `provider/model/prompt` 命名。
+
+    测试方法：写入同时包含 text 与 realtime 的最小 YAML，并读取配置对象。
+    预期结果：文本链路和 Realtime 链路都通过同名字段取得 provider、model 和 prompt。
+    """
+
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        """
+agent:
+  mode: realtime_audio
+  text:
+    provider: mock
+    model: mock-text
+    prompt: 文本提示词
+  realtime:
+    provider: mock
+    model: mock-realtime
+    prompt: 实时提示词
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+
+    assert loaded.agent.text.provider == "mock"
+    assert loaded.agent.text.prompt == "文本提示词"
+    assert loaded.agent.realtime.provider == "mock"
+    assert loaded.agent.realtime.prompt == "实时提示词"
+    assert runtime_config.text_provider == "mock"
+    assert runtime_config.text_prompt == "文本提示词"
+    assert runtime_config.realtime_provider == "mock"
+    assert runtime_config.realtime_prompt == "实时提示词"

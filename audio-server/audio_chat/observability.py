@@ -44,6 +44,7 @@ DELTA_SUMMARY_DONE_EVENTS = {
     "omni.response.audio_transcript.done": "omni.response.audio_transcript.delta",
 }
 QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
+HIGH_FREQUENCY_CONTROL_PROGRESS_STATUSES = {"peer.video.frame_processed"}
 DEBUG_ONLY_CONTROL_PREFIXES = ("stream.",)
 VISIBLE_STREAM_EVENTS = {
     "stream.opened",
@@ -153,6 +154,21 @@ def _resolve_log_timezone(timezone_name: str):
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
         return datetime.now().astimezone().tzinfo
+
+
+def should_log_control_event_to_terminal(event: Event) -> bool:
+    """判断控制事件是否需要出现在终端日志。
+
+    主要逻辑：控制事件仍完整写入 jsonl；终端只保留低频或关键事件。逐帧视觉进度
+    这类高频事件会刷掉有效信息，因此仅落盘，不在终端输出。
+    参数：`event` 为控制事件。
+    返回值：需要输出终端日志时返回 True。
+    异常情况：无。
+    """
+
+    if event.event_name in QUIET_CONTROL_EVENTS:
+        return False
+    return not _is_high_frequency_control_progress(event)
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -325,10 +341,11 @@ class RunRecorder:
         if event.session_id:
             self._append_jsonl(self.session_dir(event.session_id, user_id=event.user_id) / "events.jsonl", event.to_dict())
         self._append_jsonl(self.runs_root / "control-events.jsonl", event.to_dict())
-        if event.event_name in QUIET_CONTROL_EVENTS:
+        if not should_log_control_event_to_terminal(event):
             return
         payload = event.payload or {}
         error_fields = _error_log_fields(payload.get("provider_error_message") or payload.get("message") or payload.get("error"))
+        error_message = _control_event_error_message(event, payload, error_fields)
         if event.event_name.startswith("system.error"):
             level_logger = log_warning if payload.get("severity") == "warning" else log_error
         elif event.event_name.startswith(DEBUG_ONLY_CONTROL_PREFIXES):
@@ -346,9 +363,11 @@ class RunRecorder:
                 event=event.event_name,
                 fields={
                     "stream_type": event.stream_type,
+                    "status": payload.get("status"),
+                    "status_message": _compact_text(payload.get("message"), limit=200) if error_message is None else None,
                     "reason": payload.get("reason"),
                     "error_type": payload.get("error_type"),
-                    "error_message": error_fields.get("error_message") or _compact_text(payload.get("message"), limit=1000),
+                    "error_message": error_message,
                     "provider_error_code": error_fields.get("provider_error_code") or payload.get("provider_error_code"),
                     "provider_error_type": error_fields.get("provider_error_type") or payload.get("provider_error_type"),
                     "provider_event_id": error_fields.get("provider_event_id") or payload.get("provider_event_id"),
@@ -380,6 +399,8 @@ class RunRecorder:
         self._append_jsonl(self.runs_root / "control-routes.jsonl", payload)
         if event.session_id:
             self._append_jsonl(self.session_dir(event.session_id, user_id=event.user_id) / "control-routes.jsonl", payload)
+        if not should_log_control_event_to_terminal(event):
+            return
         detail_path = str(self.session_file(event.session_id, "control-routes.jsonl")) if event.session_id else str(self.runs_root / "control-routes.jsonl")
         log_debug(
             self.logger,
@@ -532,6 +553,8 @@ class RunRecorder:
         """
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "task-signals.jsonl", record)
+        if _is_quiet_task_signal(record):
+            return
         log_info(
             self.logger,
             f"任务信号 {record.get('signal_name')}",
@@ -1065,6 +1088,36 @@ def _compact_text(value: Any, limit: int = 120) -> str | None:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
+def _is_high_frequency_control_progress(event: Event) -> bool:
+    """判断是否是逐帧类高频控制进度。"""
+
+    if event.event_name != "command.progress":
+        return False
+    payload = event.payload or {}
+    status = str(payload.get("status") or "").strip()
+    if status in HIGH_FREQUENCY_CONTROL_PROGRESS_STATUSES:
+        return True
+    return str(payload.get("message") or "").strip().lower() == "peer video frame processed"
+
+
+def _control_event_error_message(event: Event, payload: dict[str, Any], error_fields: dict[str, str | None]) -> str | None:
+    """只在真正错误事件中输出 error_message。"""
+
+    has_provider_error = bool(payload.get("provider_error_message") or payload.get("provider_error_code") or payload.get("provider_error_type"))
+    if event.event_name.startswith("system.error") or event.event_name == "command.failed" or payload.get("error_type") or has_provider_error:
+        return error_fields.get("error_message") or _compact_text(payload.get("message"), limit=1000)
+    return None
+
+
+def _is_quiet_task_signal(record: dict[str, Any]) -> bool:
+    """判断任务信号是否只适合落盘、不适合刷终端。"""
+
+    if record.get("signal_name") != "task.event.dispatch.accepted":
+        return False
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    return payload.get("task_event_type") == "process" and not record.get("requires_agent_decision") and not record.get("allow_direct_notify")
+
+
 def _error_log_fields(value: Any) -> dict[str, str | None]:
     """从 provider 或 SDK 错误对象中提取终端可读字段。
 
@@ -1145,6 +1198,8 @@ def _model_request_terminal_snapshot(record: dict[str, Any]) -> dict[str, Any]:
     messages = record.get("messages")
     if isinstance(messages, list):
         snapshot["messages"] = messages
+    elif record.get("prompt"):
+        snapshot["messages"] = [{"role": "system", "content": record.get("prompt")}]
     elif record.get("instructions"):
         snapshot["messages"] = [{"role": "system", "content": record.get("instructions")}]
     if "tools" in record:

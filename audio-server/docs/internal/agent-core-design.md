@@ -403,7 +403,7 @@ Tool 内部异常应由 `ToolExecutor` 转换成 `ToolResult.failed()`。Agent C
 
 Agent Core 必须记录以下信息：
 
-1. `model-request.json`：provider、model、runner、system prompt 或 instructions、messages、tools、tool_count、user_id、session_id。
+1. `model-request.json`：provider、model、runner、prompt、messages、tools、tool_count、user_id、session_id。
 2. `agent-events.jsonl`：session open/close、输入提交、provider 事件、首个 delta、delta 完成、tool call、tool result、视觉帧追加、错误恢复。
 3. `messages.jsonl`：用户转写、助手最终文本、工具调用和工具结果审计。
 4. `tool trace`：工具名、入参、耗时、结果和错误。
@@ -427,7 +427,7 @@ agent:
     visual_frame_timeout_seconds: 1.5
     visual_frame_freshness_seconds: 0.0
   text:
-    model_provider: mock
+    provider: mock
     model: mock-text
     asr_provider: mock
     asr_model: mock-asr

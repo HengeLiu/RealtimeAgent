@@ -2030,7 +2030,7 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 处理流程：
 
 1. `RealtimeSessionManager` 打开 provider realtime session。
-2. `RealtimeToolBridge` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema；`RealtimeProviderAdapter` 发送 session 配置，包括 instructions、voice、音频格式、tool schema、turn detection。
+2. `RealtimeToolBridge` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema；`RealtimeProviderAdapter` 发送 session 配置，包括 prompt、voice、音频格式、tool schema、turn detection。
 3. `RealtimeInputAdapter` 将 `sensor.mic` stream chunk 映射为 provider audio append 事件。
 4. `RealtimeTurnBoundary` 监听 provider VAD 事件。收到 `input_audio_buffer.speech_started` 后，`RealtimeVisualSampler` 按固定间隔请求 `sensor.rgb` 单帧资产，并把图片追加到同一条 provider realtime turn。
 5. `RealtimeVisualSampler` 不要求端侧一直上传相机流；它每次通过 `AssetService.request_asset(stream_type=sensor.rgb)` 请求当前帧。端侧如果摄像头已打开，就直接抓当前帧；如果摄像头未打开，就在处理请求时打开摄像头再上传。
@@ -3767,7 +3767,7 @@ agent:
     custom_adapter: ""
   text:
     # 文本模型 provider。可选 dashscope-compatible / openai-compatible / custom。
-    model_provider: "dashscope-compatible"
+    provider: "dashscope-compatible"
     # 文本模型名。
     model: "qwen-plus"
     # ASR provider。可选 dashscope / openai-compatible / custom。
