@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     1. `argparse.Namespace`：包含输入目录和输出目录。
     """
 
-    current_dir = Path(__file__).resolve().parent
+    current_dir = Path(__file__).resolve().parent / "m4a"
     parser = argparse.ArgumentParser(description="批量转换 audio-sample 目录下的 m4a")
     parser.add_argument(
         "--input-dir",
