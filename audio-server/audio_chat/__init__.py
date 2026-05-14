@@ -9,7 +9,20 @@ from audio_chat.mcp import McpGateway, McpToolSpec
 from audio_chat.memory import MemoryRecord, MemoryService, MemoryStore
 from audio_chat.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType
 from audio_chat.skills import SkillDocument, SkillService
-from audio_chat.tasks import BaseTask, JsonlTaskStore, TaskContext, TaskEngine, TaskEventView, TaskRef, TaskSignal, TaskSignalBridge, TaskSpec, TaskStore
+from audio_chat.tasks import (
+    BaseTask,
+    JsonlTaskStore,
+    TaskAgentReply,
+    TaskContext,
+    TaskEngine,
+    TaskEventView,
+    TaskRef,
+    TaskRunResult,
+    TaskSignal,
+    TaskSignalBridge,
+    TaskSpec,
+    TaskStore,
+)
 from audio_chat.context import CapabilityTrace, TaskDeviceFacade, ToolDeviceFacade
 from audio_chat.tools import (
     ActuatorResult,
@@ -87,7 +100,9 @@ __all__ = [
     "TaskDeviceFacade",
     "TaskEngine",
     "TaskEventView",
+    "TaskAgentReply",
     "TaskRef",
+    "TaskRunResult",
     "TaskSignal",
     "TaskSignalBridge",
     "TaskSpec",

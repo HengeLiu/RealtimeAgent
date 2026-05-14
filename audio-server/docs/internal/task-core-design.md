@@ -190,6 +190,7 @@ class TaskSpec:
     timeout_seconds: float | None = None
     cancel_supported: bool = True
     max_running_per_user: int | None = None
+    start_result_timeout_seconds: float = 0.3
 ```
 
 建议后续扩展：
@@ -249,7 +250,9 @@ class TaskRef:
 
 ```python
 class BaseTask:
-    async def run(self, context: TaskContext) -> None: ...
+    task_spec = TaskSpec(task_type="...")
+
+    async def run(self, context: TaskContext) -> TaskRunResult | None: ...
     async def on_start(self, context: TaskContext, event: TaskEventView) -> None: ...
     async def on_process(self, context: TaskContext, event: TaskEventView) -> None: ...
     async def on_status(self, context: TaskContext, event: TaskEventView) -> None: ...
@@ -262,18 +265,19 @@ class BaseTask:
 
 1. `run()` 在 Task Core 的后台 runner 中执行，启动后 `TaskEngine.create()` 立即返回 `TaskRef`。
 2. `run()` 用于初始化任务、下发第一批端侧命令、登记需要监听的事件源和调度器；它不应该长时间阻塞等待整个任务完成。
-3. Task 实例创建后由 Task Core 纳入管理，直到显式完成、失败、取消或超时。
-4. 端侧 `command.*`、数据流状态、调度器到点、设备离线、用户取消等外部输入都保持为统一 `Event` 信封。
-5. Task Core 只允许 `start`、`process`、`status`、`finish`、`cancel`、`error` 六种事件类型，业务代码不能新增事件类型。
-6. 六种事件类型不是新的协议域，而是 Task Core 从 `Event.event_name` 和 `payload` 中推导出来的处理语义。
-7. 事件来源仍通过系统级 `event_name` 的第一层平面隔离，例如 `control`、`stream`、`task`、`system`。
-8. 业务差异写入系统级 `Event.payload`，例如 `payload.status="peer.receiver.ready"`、`payload.result={...}`、`payload.error_code="device_offline"`。
-9. Task Core 根据推导出的 `task_event_type` 调用当前实例的 `_process_start()`、`_process_process()`、`_process_status()`、`_process_finish()`、`_process_cancel()` 或 `_process_error()`。
-10. `BaseTask._process_finish()` 固定负责终态注入，内部调用可覆写的 `on_finish()`，最后由模板方法完成状态流转。
-11. `BaseTask._process_error()` 固定负责失败注入，内部调用可覆写的 `on_error()`，最后由模板方法完成状态流转。
-12. `on_cancel()` 用于清理端侧命令、stream、schedule 和本地资源。
+3. `run()` 可以返回 `TaskRunResult`，其中的 `TaskAgentReply` 用来告诉 Agent 启动成功或失败后应如何简短回应用户；这不是任务最终结果。
+4. Task 实例创建后由 Task Core 纳入管理，直到显式完成、失败、取消或超时。
+5. 端侧 `command.*`、数据流状态、调度器到点、设备离线、用户取消等外部输入都保持为统一 `Event` 信封。
+6. Task Core 只允许 `start`、`process`、`status`、`finish`、`cancel`、`error` 六种事件类型，业务代码不能新增事件类型。
+7. 六种事件类型不是新的协议域，而是 Task Core 从 `Event.event_name` 和 `payload` 中推导出来的处理语义。
+8. 事件来源仍通过系统级 `event_name` 的第一层平面隔离，例如 `control`、`stream`、`task`、`system`。
+9. 业务差异写入系统级 `Event.payload`，例如 `payload.status="peer.receiver.ready"`、`payload.result={...}`、`payload.error_code="device_offline"`。
+10. Task Core 根据推导出的 `task_event_type` 调用当前实例的 `_process_start()`、`_process_process()`、`_process_status()`、`_process_finish()`、`_process_cancel()` 或 `_process_error()`。
+11. `BaseTask._process_finish()` 固定负责终态注入，内部调用可覆写的 `on_finish()`，最后由模板方法完成状态流转。
+12. `BaseTask._process_error()` 固定负责失败注入，内部调用可覆写的 `on_error()`，最后由模板方法完成状态流转。
+13. `on_cancel()` 用于清理端侧命令、stream、schedule 和本地资源。
 
-当前实现仍是 `on_start()` / `on_signal()` / `on_cancel()` 三个入口。后续迁移时可以先兼容旧入口：默认 `run()` 调用 `on_start(context)`，旧 `TaskSignal` 由适配层转换成统一 `Event` 信封，再形成 `TaskEventView` 后分发。
+当前实现已经支持显式 `task_spec = TaskSpec(...)`，并在类创建时同步旧的 `task_type/input_model` 类属性以兼容发现器和旧测试。默认 `BaseTask.run()` 仍会委托 `on_start(context)`，只作为旧任务的兼容入口；新任务应显式实现 `run()`。
 
 ### 7.4 Task 事件视图
 

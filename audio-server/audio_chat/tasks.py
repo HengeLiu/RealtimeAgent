@@ -54,6 +54,84 @@ class TaskSpec:
     timeout_seconds: float | None = None
     cancel_supported: bool = True
     max_running_per_user: int | None = None
+    start_result_timeout_seconds: float = 0.3
+
+
+@dataclass(frozen=True)
+class TaskAgentReply:
+    """Task 启动后给 Agent 的回复建议。
+
+    主要功能：把“任务启动成功或失败后，Agent 应如何简短回应用户”的建议从
+    任意字符串收敛成结构化数据，避免模型只看到裸 `TaskRef` 后自由发挥。
+    """
+
+    message: str = ""
+    instructions: str = ""
+    allow_direct_notify: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """转换为可写入 TaskRef.metadata 的字典。"""
+
+        return {
+            "message": self.message,
+            "instructions": self.instructions,
+            "allow_direct_notify": self.allow_direct_notify,
+        }
+
+
+@dataclass(frozen=True)
+class TaskRunResult:
+    """Task.run() 的启动阶段返回值。
+
+    主要功能：表达 Task actor 是否完成启动初始化，以及希望 Agent 对用户说什么。
+    该对象只描述“启动阶段”，不代表长任务最终完成结果。
+    """
+
+    ok: bool = True
+    agent_reply: TaskAgentReply | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def started(
+        cls,
+        *,
+        message: str = "",
+        instructions: str = "",
+        allow_direct_notify: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> "TaskRunResult":
+        """创建启动成功结果。"""
+
+        return cls(
+            ok=True,
+            agent_reply=TaskAgentReply(
+                message=message,
+                instructions=instructions,
+                allow_direct_notify=allow_direct_notify,
+            ),
+            metadata=dict(metadata or {}),
+        )
+
+    @classmethod
+    def failed(
+        cls,
+        *,
+        message: str,
+        instructions: str = "",
+        allow_direct_notify: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> "TaskRunResult":
+        """创建启动失败结果。"""
+
+        return cls(
+            ok=False,
+            agent_reply=TaskAgentReply(
+                message=message,
+                instructions=instructions,
+                allow_direct_notify=allow_direct_notify,
+            ),
+            metadata=dict(metadata or {}),
+        )
 
 
 @dataclass(frozen=True)
@@ -245,17 +323,42 @@ class BaseTask:
     timeout_seconds: float | None = None
     cancel_supported: bool = True
     max_running_per_user: int | None = None
+    task_spec: TaskSpec | None = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """同步显式 TaskSpec 到旧类属性。
+
+        主要逻辑：新 Task 推荐声明 `task_spec = TaskSpec(...)`；为了兼容发现器、
+        测试和少量旧代码读取 `task_cls.task_type/input_model`，在类创建时回填这些
+        稳定属性。
+        """
+
+        super().__init_subclass__(**kwargs)
+        declared = getattr(cls, "task_spec", None)
+        if not isinstance(declared, TaskSpec):
+            return
+        cls.task_type = declared.task_type
+        cls.input_model = declared.input_model
+        cls.start_tool_name = declared.start_tool_name
+        cls.version = declared.version
+        cls.timeout_seconds = declared.timeout_seconds
+        cls.cancel_supported = declared.cancel_supported
+        cls.max_running_per_user = declared.max_running_per_user
+        cls.start_result_timeout_seconds = declared.start_result_timeout_seconds
 
     @classmethod
     def spec(cls) -> TaskSpec:
         """返回 Task 运行规格。
 
-        主要逻辑：从类属性读取稳定字段，注册表和调度器统一使用该描述。
+        主要逻辑：优先读取显式 `task_spec`，兼容旧类属性声明。
         参数：无。
         返回值：`TaskSpec`。
         异常情况：`task_type` 为空时由注册表负责报错。
         """
 
+        declared = getattr(cls, "task_spec", None)
+        if isinstance(declared, TaskSpec):
+            return declared
         return TaskSpec(
             task_type=cls.task_type or cls.__name__,
             input_model=getattr(cls, "input_model", dict),
@@ -264,19 +367,21 @@ class BaseTask:
             timeout_seconds=getattr(cls, "timeout_seconds", None),
             cancel_supported=bool(getattr(cls, "cancel_supported", True)),
             max_running_per_user=getattr(cls, "max_running_per_user", None),
+            start_result_timeout_seconds=float(getattr(cls, "start_result_timeout_seconds", 0.3) or 0),
         )
 
-    async def run(self, context: TaskContext) -> None:
+    async def run(self, context: TaskContext) -> TaskRunResult | None:
         """任务后台入口。
 
         主要逻辑：默认兼容旧任务，把启动行为委托给 `on_start()`；新任务可以覆盖
-        本方法启动后台流程，然后快速返回或自行等待外部事件。
+        本方法启动后台流程，然后返回启动阶段的 `TaskRunResult`。
         参数：`context` 为 SDK 注入上下文。
-        返回值：无。
+        返回值：启动阶段结果；旧任务可以返回 None。
         异常情况：异常会被 TaskRunner 捕获并转换为 `task.event.error`。
         """
 
         await self._invoke_event_hook("on_start", context, None)
+        return None
 
     async def on_start(self, context: TaskContext, event: TaskEventView | None = None) -> None:
         """任务启动回调。
@@ -481,7 +586,7 @@ class TaskRegistry:
         self._tasks: dict[str, type[BaseTask]] = {}
 
     def register(self, task_cls: type[BaseTask]) -> None:
-        task_type = task_cls.task_type or task_cls.__name__
+        task_type = task_cls.spec().task_type or task_cls.task_type or task_cls.__name__
         if not task_type:
             raise AudioChatError("task_type is required", code=ErrorCode.INVALID_ARGUMENT)
         if task_type in self._tasks:
@@ -531,7 +636,7 @@ class TaskAutoDiscovery:
                 for name, obj in inspect.getmembers(module, inspect.isclass):
                     if not self._is_concrete_task(name, obj):
                         continue
-                    task_type = obj.task_type or obj.__name__
+                    task_type = obj.spec().task_type or obj.task_type or obj.__name__
                     owner = f"{obj.__module__}.{obj.__name__}"
                     previous = seen.get(task_type)
                     if previous is not None:
@@ -945,15 +1050,24 @@ class TaskEngine:
             )
         )
         context = self._context(user_id=user_id, session_id=session_id, ref=ref)
-        self.runner.submit(task_id, self._run_task(task_id, task, context))
+        run_future = self.runner.submit(task_id, self._run_task(task_id, task, context))
+        start_result_timeout = max(0.0, float(spec.start_result_timeout_seconds or 0))
+        if start_result_timeout > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(run_future)), timeout=start_result_timeout)
+            except asyncio.TimeoutError:
+                pass
         await asyncio.sleep(0)
-        return ref
+        return self.query(task_id)
 
-    async def _run_task(self, task_id: str, task: BaseTask, context: TaskContext) -> None:
+    async def _run_task(self, task_id: str, task: BaseTask, context: TaskContext) -> TaskRunResult | None:
         """运行 Task actor，并把未捕获异常转换为 `task.event.error`。"""
 
         try:
-            await task.run(context)
+            result = await task.run(context)
+            if isinstance(result, TaskRunResult):
+                self._apply_run_result(task_id, result)
+            return result if isinstance(result, TaskRunResult) else None
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -977,6 +1091,26 @@ class TaskEngine:
                 },
             )
             self.dispatch_event(event)
+            return None
+
+    def _apply_run_result(self, task_id: str, result: TaskRunResult) -> TaskRef:
+        """把 Task.run() 启动结果写回 TaskRef。
+
+        主要逻辑：不直接改变任务终态，只把 Agent 回复建议和启动元数据写入
+        `metadata.task_run_result`，供 TaskStartTool 返回给 Agent。
+        """
+
+        ref = self.query(task_id)
+        metadata = {
+            "task_run_result": {
+                "ok": result.ok,
+                "agent_reply": result.agent_reply.to_dict() if result.agent_reply is not None else {},
+                **dict(result.metadata or {}),
+            }
+        }
+        updated = replace(ref, metadata={**dict(ref.metadata), **metadata, "updated_at": time.time()})
+        self.store.put(updated)
+        return updated
 
     def dispatch_event(self, event: Event) -> TaskRef | None:
         """把 `task.event.*` 系统事件路由到具体 Task actor。

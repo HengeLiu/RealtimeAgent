@@ -4,7 +4,7 @@ import asyncio
 
 from pydantic import BaseModel, Field
 
-from audio_chat.tasks import BaseTask, TaskEngine
+from audio_chat.tasks import BaseTask, TaskEngine, TaskRunResult, TaskSpec
 from audio_chat.tools import SystemToolContext, TaskRuntimeManagerTool, TaskStartTool, ToolExecutor
 
 
@@ -26,6 +26,18 @@ class TimerAliasTask(BaseTask):
         message: str = Field(default="", description="计时结束时播报的话。")
 
     input_model = Input
+
+
+class SpecDeclaredStartReplyTask(BaseTask):
+    """测试用显式 TaskSpec 和 TaskRunResult 任务。"""
+
+    task_spec = TaskSpec(task_type="spec_declared_start_reply_task", start_result_timeout_seconds=1.0)
+    description = "显式 TaskSpec 测试任务"
+
+    async def run(self, context):
+        """返回启动阶段的 Agent 回复建议。"""
+
+        return TaskRunResult.started(message="后台任务已启动。", instructions="只说明任务已启动。")
 
 
 def _context(engine: TaskEngine) -> SystemToolContext:
@@ -79,6 +91,30 @@ def test_task_start_tool_starts_and_runtime_manager_queries_cancels_and_lists_ta
     cancelled = asyncio.run(manager.run(context, {"action": "cancel", "task_id": task_id}))
     assert cancelled.ok is True
     assert cancelled.data["state"] == "cancelled"
+
+
+def test_task_start_tool_uses_task_spec_and_run_agent_reply() -> None:
+    """测试目标：验证 Task 可用显式 TaskSpec 声明，并通过 run() 返回 Agent 回复建议。
+
+    测试方法：注册 `task_spec = TaskSpec(...)` 的任务，通过自动启动 Tool 创建任务。
+    预期结果：registry 能识别 task_type，ToolResult.message 使用 run() 返回的建议文案。
+    """
+
+    engine = TaskEngine()
+    engine.register(SpecDeclaredStartReplyTask)
+    tool = TaskStartTool(
+        task_type="spec_declared_start_reply_task",
+        description=SpecDeclaredStartReplyTask.description,
+        input_model=SpecDeclaredStartReplyTask.spec().input_model,
+    )
+    context = _context(engine)
+
+    result = asyncio.run(tool.run(context, {}))
+
+    assert result.ok is True
+    assert result.message == "后台任务已启动。"
+    assert result.meta["agent_reply"]["instructions"] == "只说明任务已启动。"
+    assert result.data["metadata"]["task_run_result"]["ok"] is True
 
 
 def test_task_start_tool_exposes_task_specific_input_schema() -> None:

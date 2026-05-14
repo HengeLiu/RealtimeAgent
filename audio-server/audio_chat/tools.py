@@ -2145,7 +2145,8 @@ class TaskRuntimeManagerTool(BaseTool):
                     },
                     error=error,
                 )
-            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+            agent_reply = _task_ref_agent_reply(ref)
+            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=agent_reply.get("message") or ref.state)
         return ToolResult.failed(ToolError(f"unknown task action: {action}", code=ErrorCode.INVALID_ARGUMENT))
 
 
@@ -2203,11 +2204,33 @@ class TaskStartTool(BaseTool):
                 },
                 error=error,
             )
+        agent_reply = _task_ref_agent_reply(ref)
+        message = str(agent_reply.get("message") or f"{self.task_type} started")
+        meta = {"operation": "task_start", "start_tool_name": self.name}
+        if agent_reply:
+            meta["agent_reply"] = agent_reply
+        if ref.state == "failed":
+            error = {
+                "code": ErrorCode.UNKNOWN.value,
+                "message": message,
+                "retryable": True,
+                "details": {"task_id": ref.task_id, "task_type": ref.task_type},
+            }
+            return ToolResult(
+                ok=False,
+                data=ref.__dict__,
+                message=message,
+                assets=[],
+                artifacts=[],
+                tasks=[ref],
+                meta=meta,
+                error=error,
+            )
         return ToolResult.success(
             data=ref.__dict__,
             tasks=[ref],
-            message=f"{self.task_type} started",
-            meta={"operation": "task_start", "start_tool_name": self.name},
+            message=message,
+            meta=meta,
         )
 
 
@@ -2216,6 +2239,19 @@ def _default_task_start_tool_name(task_type: str) -> str:
     if normalized.endswith("_task"):
         return f"start_{normalized}"
     return f"start_{normalized}_task"
+
+
+def _task_ref_agent_reply(ref: Any) -> dict[str, Any]:
+    """从 TaskRef 中提取 Task.run() 写入的 Agent 回复建议。"""
+
+    metadata = getattr(ref, "metadata", {}) or {}
+    run_result = metadata.get("task_run_result") if isinstance(metadata, dict) else None
+    if not isinstance(run_result, dict):
+        return {}
+    agent_reply = run_result.get("agent_reply")
+    if not isinstance(agent_reply, dict):
+        return {}
+    return {k: v for k, v in agent_reply.items() if v not in (None, "")}
 
 
 def _task_start_tool_description(*, task_type: str, description: str) -> str:
