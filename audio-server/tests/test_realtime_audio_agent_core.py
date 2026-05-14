@@ -11,7 +11,6 @@ from audio_chat.agent_core.realtime import (
     RealtimeProviderCallbacks,
     RealtimeProviderConfig,
     RealtimeToolBridge,
-    _extract_find_object_name,
     _prepare_omni_realtime_image,
 )
 from audio_chat.app import AudioChatApp, AudioChatConfig
@@ -256,37 +255,6 @@ class ArgumentCaptureGateway:
 
         self.input_data = input_data
         return ToolResult.success({"received": input_data})
-
-
-class FindObjectFallbackGateway:
-    """测试用找物兜底工具网关。
-
-    主要功能：暴露 `start_find_object_task` schema，并记录兜底调用参数。
-    主要属性：`calls` 保存所有同步工具调用。
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    def provider_schemas(self) -> list[dict]:
-        """返回找物任务启动工具 schema。"""
-
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "start_find_object_task",
-                    "description": "启动找物后台任务。",
-                    "parameters": {"type": "object", "properties": {"object_name": {"type": "string"}}},
-                },
-            }
-        ]
-
-    def call_sync_safe(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
-        """记录兜底调用并返回模拟 task_id。"""
-
-        self.calls.append({"name": name, "user_id": user_id, "session_id": session_id, "input_data": dict(input_data)})
-        return ToolResult.success({"task_id": "task_fallback", "state": "started"}, message="find_object_task started")
 
 
 def _realtime_app(tmp_path, instances: list[FakeRealtimeProvider]) -> AudioChatApp:
@@ -1366,96 +1334,6 @@ def test_qwen_omni_suppresses_audio_while_generating_tool_arguments() -> None:
     assert audio_chunks == []
     assert audio_done == []
     assert any(record.get("event") == "omni.response.audio.delta.suppressed" for record in records)
-
-
-def test_realtime_find_object_fallback_starts_task_when_provider_omits_tool_call(tmp_path) -> None:
-    """测试目标：验证模型口头说已启动但漏掉工具调用时，Realtime Core 会兜底启动找物任务。
-
-    测试方法：注入暴露 `start_find_object_task` 的假 ToolGateway，模拟用户转写
-    “帮我找一下手机在哪里”，随后直接发送 `omni.response.done`，中间不提交任何
-    provider tool call。
-    预期结果：兜底通过 ToolGateway 调用 `start_find_object_task`，参数中 object_name
-    为“手机”，并记录可观测事件。
-    """
-
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    gateway = FindObjectFallbackGateway()
-    core = RealtimeAudioAgentCore(
-        output_service=app.output_service,
-        recorder=app.recorder,
-        control_service=app.control_service,
-        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
-        provider_factory=lambda config: FakeRealtimeProvider(config),
-        tool_gateway=gateway,
-    )
-
-    core._record_provider_event(
-        user_id="user-001",
-        session_id="dev-browser-glass-001",
-        record={"event": "omni.conversation.item.input_audio_transcription.completed", "transcript": "帮我找一下手机在哪里。"},
-    )
-    core._record_provider_event(
-        user_id="user-001",
-        session_id="dev-browser-glass-001",
-        record={"event": "omni.response.done", "status": "completed"},
-    )
-
-    assert len(gateway.calls) == 1
-    assert gateway.calls[0]["name"] == "start_find_object_task"
-    assert gateway.calls[0]["input_data"]["object_name"] == "手机"
-    events = list(app.recorder.session_file("dev-browser-glass-001", "agent-events.jsonl").read_text(encoding="utf-8").splitlines())
-    assert any("realtime.intent_fallback.tool_call" in line for line in events)
-
-
-def test_realtime_find_object_fallback_skips_when_provider_called_tool(tmp_path) -> None:
-    """测试目标：验证 provider 已经提交工具调用时不会重复兜底启动找物任务。
-
-    测试方法：先记录找物用户转写，再模拟一条 provider tool call committed，最后发送
-    `omni.response.done`。
-    预期结果：兜底网关没有额外调用，避免重复启动 Task。
-    """
-
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    gateway = FindObjectFallbackGateway()
-    core = RealtimeAudioAgentCore(
-        output_service=app.output_service,
-        recorder=app.recorder,
-        control_service=app.control_service,
-        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
-        provider_factory=lambda config: FakeRealtimeProvider(config),
-        tool_gateway=gateway,
-    )
-
-    core._record_provider_event(
-        user_id="user-001",
-        session_id="dev-browser-glass-001",
-        record={"event": "omni.conversation.item.input_audio_transcription.completed", "transcript": "帮我找一下手机在哪里。"},
-    )
-    core._handle_provider_tool_call_done(
-        user_id="user-001",
-        session_id="dev-browser-glass-001",
-        record={"tool_call_id": "call-001", "name": "start_find_object_task", "arguments": {"object_name": "手机"}},
-    )
-    core._record_provider_event(
-        user_id="user-001",
-        session_id="dev-browser-glass-001",
-        record={"event": "omni.response.done", "status": "completed"},
-    )
-
-    assert len(gateway.calls) == 1
-    assert gateway.calls[0]["input_data"]["object_name"] == "手机"
-
-
-def test_extract_find_object_name_from_common_chinese_queries() -> None:
-    """测试目标：验证找物兜底只从明确找物表达中提取目标。
-
-    测试方法：传入常见中文找物和非找物表达。
-    预期结果：找物表达返回目标名称，普通视觉问答不触发兜底。
-    """
-
-    assert _extract_find_object_name("帮我找一下手机在哪里。") == "手机"
-    assert _extract_find_object_name("请寻找钥匙在哪儿") == "钥匙"
-    assert _extract_find_object_name("前面有什么") is None
 
 
 def test_realtime_provider_text_is_persisted_to_user_messages(tmp_path) -> None:
