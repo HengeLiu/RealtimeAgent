@@ -141,7 +141,7 @@ uv run audio-chat.server.run --app-name for-blind-app
 打开浏览器参考设备：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 查看设备状态：

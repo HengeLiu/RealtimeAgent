@@ -152,6 +152,29 @@ def test_web_open_print_url_is_side_effect_free() -> None:
     assert completed.stdout.strip().startswith("file://")
 
 
+def test_web_open_serve_print_url_uses_local_http_origin() -> None:
+    """测试目标：确认 browser-glass 可通过本地 HTTP origin 打开。
+
+    测试方法：执行 `audio-chat.web.open --serve --print-url`，不真正打开浏览器。
+    预期结果：命令输出 `http://127.0.0.1:8766/.../browser-glass/index.html`
+    且 query 中带有真正的 audio server URL，避免页面误连静态服务端口。
+    """
+
+    completed = subprocess.run(
+        ["uv", "run", "audio-chat.web.open", "--serve", "--print-url"],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    url = completed.stdout.strip()
+    assert url.startswith("http://127.0.0.1:8766/")
+    assert "/examples/dev-support/devices/browser-glass/index.html?" in url
+    assert "server_url=http%3A%2F%2F127.0.0.1%3A8765" in url
+
+
 def test_package_check_can_write_report(tmp_path) -> None:
     """测试目标：确认 SDK 包检查入口能生成 JSON 报告。
 

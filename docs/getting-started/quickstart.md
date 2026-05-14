@@ -47,7 +47,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 在另一个终端运行：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 浏览器参考设备用于快速验证：

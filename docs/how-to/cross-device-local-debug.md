@@ -43,7 +43,7 @@ curl http://127.0.0.1:8765/api/health
 ## 4. 连接浏览器参考设备
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 在浏览器页面中完成设备注册，然后检查：

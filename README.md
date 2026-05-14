@@ -56,7 +56,7 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 uv run audio-chat.server.run --app-name for-blind-app
 
 # 3. 打开浏览器参考端，连接并注册后开始语音或视觉测试
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 
 # 4. 可选：启动 Python phone mock，验证同一 user_id 下多设备协作
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
@@ -65,7 +65,7 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 浏览器设备：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 Python phone mock：
@@ -267,6 +267,18 @@ iOS / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型
 ```bash
 uv run audio-chat.config.sync --app-root examples/for-blind-app/audio-server
 ```
+
+如果要让 iOS、ESP32 或其他局域网设备连接到这台 Mac，把 `server_url` 同步成
+Mac 当前局域网 IP，而不是 `127.0.0.1`：
+
+```bash
+uv run audio-chat.config.sync \
+  --app-root examples/for-blind-app/audio-server \
+  --server-url "http://$(ipconfig getifaddr en0):8765"
+```
+
+如果 Mac 当前使用的是有线网卡或其他网络接口，先用 `ifconfig` 确认实际 IP，
+再把 `--server-url` 改成对应地址，例如 `http://192.168.1.23:8765`。
 
 预检：
 

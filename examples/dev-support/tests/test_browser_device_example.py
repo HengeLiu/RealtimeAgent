@@ -176,6 +176,7 @@ def test_browser_device_persists_form_config_and_stable_device_id() -> None:
     assert 'BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1"' in html
     assert 'DEFAULT_DEVICE_ID = "dev-browser-glass-001"' in html
     assert "loadStoredBrowserConfig()" in html
+    assert "usableStoredServerUrl(stored.server_url)" in html
     assert "resolveInitialBrowserConfig(params)" in html
     assert "applyBrowserConfig(initialBrowserConfig)" in html
     assert "bindBrowserConfigPersistence()" in html

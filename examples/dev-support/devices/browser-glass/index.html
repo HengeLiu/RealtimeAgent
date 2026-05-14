@@ -387,9 +387,6 @@
     }
 
     function defaultServerUrl() {
-      if (location.protocol === "http:" || location.protocol === "https:") {
-        return `${location.protocol}//${location.host}`;
-      }
       return "http://127.0.0.1:8765";
     }
 
@@ -419,10 +416,19 @@
       }
     }
 
+    function usableStoredServerUrl(value) {
+      const normalized = normalizeServerUrl(value);
+      if (!normalized) return "";
+      if ((location.protocol === "http:" || location.protocol === "https:") && normalized === `${location.protocol}//${location.host}`) {
+        return "";
+      }
+      return normalized;
+    }
+
     function resolveInitialBrowserConfig(searchParams) {
       const stored = loadStoredBrowserConfig();
       return {
-        server_url: normalizeServerUrl(searchParams.get("server_url") || stored.server_url || defaultServerUrl()),
+        server_url: normalizeServerUrl(searchParams.get("server_url") || usableStoredServerUrl(stored.server_url) || defaultServerUrl()),
         user_id: searchParams.get("user_id") || stored.user_id || DEFAULT_USER_ID,
         device_id: searchParams.get("device_id") || stored.device_id || DEFAULT_DEVICE_ID,
         name: searchParams.get("name") || stored.name || DEFAULT_DEVICE_NAME,

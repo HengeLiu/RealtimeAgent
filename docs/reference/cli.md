@@ -44,7 +44,19 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 打开浏览器参考端：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
+```
+
+`browser-glass` 使用 ES module 导入本地 TypeScript Device SDK，Chrome 不能在
+`file://` 页面中加载这类本地模块。`--serve` 会用标准库启动一个轻量本地静态服务，
+并打开 `http://127.0.0.1:8766/examples/dev-support/devices/browser-glass/index.html`。
+端口默认固定为 `8766`，这样浏览器的 `localStorage`、IndexedDB 和样例目录授权可以
+在下次启动后继续复用；如果端口被占用，可显式传 `--port`，但换端口会形成新的浏览器
+origin，需要重新授权一次。
+脚本检查时可使用：
+
+```bash
+uv run audio-chat.web.open --serve --print-url
 ```
 
 ## Python 参考设备

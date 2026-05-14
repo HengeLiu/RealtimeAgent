@@ -1,0 +1,16 @@
+mode: in_process
+runs_root: examples/for-blind-app/audio-server/runs
+server_url: http://192.168.10.3:8765
+user_id: user-playback-001
+device_id: dev-python-playback-001
+auth:
+  mode: disabled
+supports:
+  sensors:
+  - type: rgb
+    modes:
+    - single
+    default:
+      format: jpeg
+      frequency_hz: 1
+      sample_count: 1

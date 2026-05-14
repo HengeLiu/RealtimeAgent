@@ -22,17 +22,18 @@
 uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
-打开页面：
+打开页面时使用 CLI 的本地 HTTP 模式：
 
 ```bash
-open examples/dev-support/devices/browser-glass/index.html
+uv run audio-chat.web.open --serve
 ```
 
-或者使用 CLI：
-
-```bash
-uv run audio-chat.web.open --print-url
-```
+当前页面通过 ES module 导入仓库内的 TypeScript Device SDK。Chrome 会拒绝
+`file://` 页面中的本地 module import，所以不要再直接 `open index.html`。
+`--serve` 只启动一个标准库静态服务并自动打开页面；停止时在终端按 `Ctrl+C`。
+默认静态服务地址固定为 `http://127.0.0.1:8766`，这样页面保存的表单、样例目录句柄
+和浏览器授权可以跨重启复用。如果用 `--port` 改成其他端口，浏览器会把它视为新的
+origin，需要重新选择和授权样例目录。
 
 页面会把 Server URL、User ID、Device ID、输入模式和调试事件内容保存到浏览器
 `localStorage`。再次打开时优先使用 URL 参数，其次使用上一次保存的值，最后才使用
