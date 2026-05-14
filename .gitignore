@@ -12,6 +12,9 @@ mobileclip_blt.ts
 examples/dev-support/devices/python-playback-glass/reports/*
 !examples/dev-support/devices/python-playback-glass/reports/.gitkeep
 deprecated*
+*.mp4
+*.mov
+*.avi
 
 # Python generated artifacts
 **/__pycache__/
