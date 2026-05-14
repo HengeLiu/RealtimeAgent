@@ -1,0 +1,14 @@
+{
+  "version": "audio-chat.v1",
+  "event_id": "evt_register_registered",
+  "event_name": "control.device.registered",
+  "timestamp_ms": 1760000000100,
+  "user_id": "user-browser-glass-001",
+  "producer_id": "server-main",
+  "payload": {
+    "device_id": "dev-browser-glass-001",
+    "connection_id": "conn_001",
+    "heartbeat_interval_seconds": 10,
+    "effective_config": {}
+  }
+}

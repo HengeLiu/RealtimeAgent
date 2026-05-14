@@ -1,0 +1,62 @@
+asyncapi: 3.0.0
+info:
+  title: audio-chat device protocol
+  version: 0.1.0
+  description: audio-chat 端侧控制事件和 stream WebSocket 协议。
+servers:
+  local:
+    host: 127.0.0.1:8765
+    protocol: ws
+channels:
+  control:
+    address: /ws/control
+    messages:
+      controlEvent:
+        $ref: '#/components/messages/ControlEvent'
+  stream:
+    address: /ws/stream?device_id={device_id}
+    parameters:
+      device_id:
+        description: 已完成 control WebSocket 注册的设备 ID。
+    messages:
+      streamChunk:
+        $ref: '#/components/messages/StreamChunk'
+operations:
+  sendControlEvent:
+    action: send
+    channel:
+      $ref: '#/channels/control'
+    messages:
+      - $ref: '#/channels/control/messages/controlEvent'
+  receiveControlEvent:
+    action: receive
+    channel:
+      $ref: '#/channels/control'
+    messages:
+      - $ref: '#/channels/control/messages/controlEvent'
+  sendStreamChunk:
+    action: send
+    channel:
+      $ref: '#/channels/stream'
+    messages:
+      - $ref: '#/channels/stream/messages/streamChunk'
+  receiveStreamChunk:
+    action: receive
+    channel:
+      $ref: '#/channels/stream'
+    messages:
+      - $ref: '#/channels/stream/messages/streamChunk'
+components:
+  messages:
+    ControlEvent:
+      name: ControlEvent
+      title: 控制事件信封
+      payload:
+        $ref: './audio-chat-event.schema.json'
+    StreamChunk:
+      name: StreamChunk
+      title: stream 二进制帧
+      summary: 4 字节 big-endian header 长度 + JSON header + payload bytes。
+      payload:
+        type: string
+        format: binary

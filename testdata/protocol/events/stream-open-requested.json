@@ -1,0 +1,20 @@
+{
+  "version": "audio-chat.v1",
+  "event_id": "evt_stream_open_requested",
+  "event_name": "stream.control.open.requested",
+  "timestamp_ms": 1760000000700,
+  "user_id": "user-browser-glass-001",
+  "producer_id": "server-main",
+  "session_id": "dev-browser-glass-001",
+  "stream_id": "stream_rgb_001",
+  "stream_type": "sensor.rgb",
+  "payload": {
+    "request_id": "req_rgb_001",
+    "mode": "single",
+    "params": {
+      "format": "jpeg",
+      "width": 960,
+      "height": 540
+    }
+  }
+}

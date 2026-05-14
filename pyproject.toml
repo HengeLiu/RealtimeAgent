@@ -49,6 +49,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = [
     "audio-server",
+    "audio-device/python/src",
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
@@ -56,6 +57,7 @@ where = [
 ]
 include = [
     "audio_chat*",
+    "audio_chat_device*",
     "audio_chat_python_glass*",
     "audio_chat_python_playback_glass*",
     "audio_chat_python_phone_mock*",
@@ -63,11 +65,12 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-audio_chat = ["py.typed", "spec/*.json"]
+audio_chat = ["py.typed", "spec/*.json", "spec/*.yaml"]
 
 [tool.pytest.ini_options]
 pythonpath = [
     "audio-server",
+    "audio-device/python/src",
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",

@@ -1,5 +1,6 @@
 #include <stdio.h>
 
+#include "audio_chat_device/audio_chat_device.h"
 #include "esp_log.h"
 
 static const char *TAG = "audio_chat_reference";
@@ -26,5 +27,15 @@ static const char *TAG = "audio_chat_reference";
  */
 void app_main(void)
 {
+    audio_chat_device_t device;
+    char registration_json[512];
+    audio_chat_device_init(&device, "user-browser-glass-001", "dev-esp32-glass-001");
+    audio_chat_device_set_name(&device, "ESP32-S3 Glass");
+    audio_chat_device_set_role(&device, "glass");
+    audio_chat_device_add_rgb_sensor(&device);
+    audio_chat_device_add_vibrator(&device);
+    if (audio_chat_device_registration_json(&device, registration_json, sizeof(registration_json)) > 0) {
+        ESP_LOGD(TAG, "registration payload template: %s", registration_json);
+    }
     ESP_LOGI(TAG, "audio-chat ESP32-S3 reference firmware skeleton started");
 }

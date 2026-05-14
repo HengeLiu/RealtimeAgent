@@ -5,6 +5,12 @@ def _html() -> str:
     return Path(__file__).resolve().parents[3].joinpath("examples/dev-support/devices/browser-glass/index.html").read_text(encoding="utf-8")
 
 
+def _browser_sdk_adapter() -> str:
+    return Path(__file__).resolve().parents[3].joinpath(
+        "examples/dev-support/devices/browser-glass/sdk/audio-chat-device-browser.js"
+    ).read_text(encoding="utf-8")
+
+
 def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
     """测试目标：验证 browser-glass 页面声明浏览器 AEC 能力和 audio-chat 协议事件。
 
@@ -30,20 +36,22 @@ def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
 def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     """测试目标：验证 browser-glass JS 实现了 StreamChunkCodec 结构。
 
-    测试方法：检查 JS 中必须写入 4 字节 header_len、JSON header 和 payload，并校验
-    `payload_size`。
-    预期结果：HTML 包含对应编解码结构，不使用 MediaFrame。
+    测试方法：检查页面通过 TypeScript/JavaScript Device SDK 复用 stream chunk
+    编解码，并保留音频分片发送逻辑。
+    预期结果：HTML 包含 SDK codec 调用，不使用 MediaFrame。
     """
     html = _html()
+    sdk_adapter = _browser_sdk_adapter()
 
     assert "function encodeStreamChunk" in html
     assert "function decodeStreamChunk" in html
-    assert "setUint32(0, headerBytes.length, false)" in html
-    assert "JSON.stringify(header)" in html
-    assert "out.set(headerBytes, 4)" in html
-    assert "out.set(new Uint8Array(chunk.payload), 4 + headerBytes.length)" in html
-    assert "getUint32(0, false)" in html
-    assert "payload.byteLength !== header.payload_size" in html
+    assert '"./sdk/audio-chat-device-browser.js"' in html
+    assert "AudioChatDeviceClient" in html
+    assert "DeviceBuilder.define(deviceId)" in html
+    assert "new AudioChatEvent({" in html
+    assert "StreamChunkCodec.encode(new StreamChunk({" in html
+    assert "StreamChunkCodec.decode(raw)" in html
+    assert 'export * from "../../../../../audio-device/typescript/src/index.js";' in sdk_adapter
     assert "MIC_CHUNK_BYTES = INPUT_RATE * DEFAULT_CHUNK_MS / 1000 * 2" in html
     assert "while (micPcmBuffer.byteLength >= MIC_CHUNK_BYTES)" in html
     assert "sendMicPayload(micPcmBuffer.slice(0, MIC_CHUNK_BYTES))" in html

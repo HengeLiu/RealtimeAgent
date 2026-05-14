@@ -1,0 +1,35 @@
+{
+  "$schema": "../../../audio-server/audio_chat/spec/audio-chat-device.schema.json",
+  "device_id": "dev-ios-phone-001",
+  "user_id": "user-browser-glass-001",
+  "name": "iOS Phone",
+  "device_role": "phone",
+  "client_type": "ios",
+  "sdk_version": "ios-reference",
+  "runtime": {
+    "platform": "ios",
+    "language": "swift"
+  },
+  "properties": {
+    "endpoint.role.visual_display": true,
+    "peer.video.receiver": true
+  },
+  "supports": {
+    "sensors": [
+      {
+        "type": "rgb",
+        "modes": ["single", "continuous"],
+        "default": {
+          "format": "jpeg",
+          "frequency_hz": 1
+        }
+      }
+    ],
+    "actuators": [
+      {
+        "type": "vibrator",
+        "commands": ["vibrate"]
+      }
+    ]
+  }
+}

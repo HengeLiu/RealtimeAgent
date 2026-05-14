@@ -22,6 +22,12 @@ deprecated*
 **/*.egg-info/
 dist/
 build/
+**/.build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/CTestTestfile.cmake
+**/cmake_install.cmake
+**/Testing/
 
 # ESP-IDF generated artifacts
 openaiglass-sdk/glass-esp32/build/

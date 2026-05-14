@@ -1,0 +1,15 @@
+{
+  "version": "audio-chat.v1",
+  "event_id": "evt_stream_close_requested",
+  "event_name": "stream.control.close.requested",
+  "timestamp_ms": 1760000000800,
+  "user_id": "user-browser-glass-001",
+  "producer_id": "server-main",
+  "session_id": "dev-browser-glass-001",
+  "stream_id": "stream_rgb_001",
+  "stream_type": "sensor.rgb",
+  "payload": {
+    "stream_type": "sensor.rgb",
+    "reason": "completed"
+  }
+}

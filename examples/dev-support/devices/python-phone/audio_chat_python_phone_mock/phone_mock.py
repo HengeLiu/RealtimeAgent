@@ -14,7 +14,7 @@ from typing import Any
 
 from aiohttp import ClientSession
 
-from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, new_id
+from audio_chat_device import AudioChatEvent as Event, StreamChunk, StreamChunkCodec, new_id
 from .gui import GuiEventBridge, PhonePreviewWindow
 from .peer_video import PeerVideoReceiver
 from .playback_fallback import NetworkPythonPlaybackEndpoint as FallbackNetworkPythonPlaybackEndpoint
@@ -527,7 +527,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         async for message in control_ws:
             if message.type.name != "TEXT":
                 continue
-            event = Event.from_dict(json.loads(message.data))
+            event = Event.from_json(message.data)
             self.received_events.append(event)
             if self.gui_bridge is not None:
                 self.gui_bridge.emit_log("DEBUG", f"control event {event.event_name} stream={event.stream_type or '-'}", debug=True)
@@ -1076,8 +1076,6 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
         async for message in stream_ws:
             if message.type.name != "BINARY":
                 continue
-            from audio_chat.protocol import StreamChunkCodec
-
             chunk = StreamChunkCodec.decode(message.data)
             if chunk.stream_type == "sensor.rgb":
                 self._handle_video_chunk(chunk)
