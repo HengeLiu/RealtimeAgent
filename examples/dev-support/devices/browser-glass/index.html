@@ -130,7 +130,17 @@
     </div>
   </section>
 
-  <script>
+  <script type="module">
+    import {
+      AudioChatDeviceClient,
+      AudioChatEvent,
+      DeviceBuilder,
+      StreamChunk,
+      StreamChunkCodec,
+      newId as sdkNewId,
+      wsUrl as sdkWsUrl,
+    } from "./sdk/audio-chat-device-browser.js";
+
     const PROTOCOL_VERSION = "audio-chat.v1";
     const SERVER_PRODUCER_ID = "server-main";
     const INPUT_RATE = 16000;
@@ -219,6 +229,7 @@
 
     let controlWs = null;
     let streamWs = null;
+    let deviceClient = null;
     let audioContext = null;
     let micStream = null;
     let cameraStream = null;
@@ -709,28 +720,26 @@
     }
 
     function newId(prefix) {
-      return `${prefix}_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`.slice(0, prefix.length + 13);
+      return sdkNewId(prefix);
     }
 
-    function wsUrl(path) {
+    function wsUrl(path, query = {}) {
       const normalized = normalizeServerUrl(document.getElementById("serverUrl").value);
       document.getElementById("serverUrl").value = normalized;
-      const raw = normalized.replace(/\/$/, "");
-      return raw.replace("http://", "ws://").replace("https://", "wss://") + path;
+      return sdkWsUrl(normalized, path, query);
     }
 
     function event(event_name, payload = {}, extra = {}) {
       const deviceId = currentDeviceId();
-      return {
-        version: PROTOCOL_VERSION,
-        event_id: newId("evt"),
-        event_name,
-        timestamp_ms: Date.now(),
-        user_id: document.getElementById("userId").value,
-        producer_id: deviceId,
+      return new AudioChatEvent({
+        eventName: event_name,
+        userId: document.getElementById("userId").value,
+        producerId: deviceId,
         payload,
-        ...extra,
-      };
+        sessionId: extra.session_id || null,
+        streamId: extra.stream_id || null,
+        streamType: extra.stream_type || null,
+      }).toObject();
     }
 
     function currentDeviceId() {
@@ -744,7 +753,8 @@
 
     function sendEvent(item) {
       if (!controlWs || controlWs.readyState !== WebSocket.OPEN) throw new Error("control websocket is not open");
-      controlWs.send(JSON.stringify(item));
+      if (!deviceClient) throw new Error("device sdk client is not ready");
+      deviceClient.sendEvent(item);
       log(`send ${item.event_name}`);
     }
 
@@ -771,9 +781,12 @@
     }
 
     function openStreamSocket() {
-      const streamUrl = wsUrl(`/ws/stream?device_id=${document.getElementById("deviceId").value}`);
+      if (!deviceClient) {
+        deviceClient = createDeviceClient(currentDeviceId());
+      }
+      const streamUrl = wsUrl("/ws/stream", {device_id: currentDeviceId()});
       log(`connect ${streamUrl}`);
-      streamWs = new WebSocket(streamUrl);
+      streamWs = deviceClient.ensureStream();
       streamWs.binaryType = "arraybuffer";
       streamWs.onmessage = (message) => {
         if (typeof message.data !== "string") handleStreamChunk(decodeStreamChunk(message.data));
@@ -833,38 +846,42 @@
     }
 
     function encodeStreamChunk(chunk) {
-      const header = {
+      return StreamChunkCodec.encode(new StreamChunk({
         version: chunk.version || PROTOCOL_VERSION,
-        user_id: chunk.user_id,
-        session_id: chunk.session_id,
-        stream_id: chunk.stream_id,
-        stream_type: chunk.stream_type,
+        userId: chunk.user_id,
+        sessionId: chunk.session_id,
+        streamId: chunk.stream_id,
+        streamType: chunk.stream_type,
         seq: chunk.seq,
-        timestamp_ms: chunk.timestamp_ms || Date.now(),
+        timestampMs: chunk.timestamp_ms || Date.now(),
         codec: chunk.codec || "pcm16le",
-        sample_rate: chunk.sample_rate || INPUT_RATE,
+        sampleRate: chunk.sample_rate || INPUT_RATE,
         channels: chunk.channels || 1,
-        duration_ms: chunk.duration_ms || DEFAULT_CHUNK_MS,
-        payload_size: chunk.payload.byteLength,
+        durationMs: chunk.duration_ms || DEFAULT_CHUNK_MS,
         final: Boolean(chunk.final),
         metadata: chunk.metadata || {},
-      };
-      const headerBytes = new TextEncoder().encode(JSON.stringify(header));
-      const out = new Uint8Array(4 + headerBytes.length + chunk.payload.byteLength);
-      new DataView(out.buffer).setUint32(0, headerBytes.length, false);
-      out.set(headerBytes, 4);
-      out.set(new Uint8Array(chunk.payload), 4 + headerBytes.length);
-      return out.buffer;
+        payload: chunk.payload,
+      }));
     }
 
     function decodeStreamChunk(raw) {
-      const bytes = new Uint8Array(raw);
-      const headerLen = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, false);
-      const headerText = new TextDecoder().decode(bytes.slice(4, 4 + headerLen));
-      const header = JSON.parse(headerText);
-      const payload = bytes.slice(4 + headerLen);
-      if (payload.byteLength !== header.payload_size) throw new Error("payload_size mismatch");
-      return {...header, payload};
+      const chunk = StreamChunkCodec.decode(raw);
+      return {
+        version: chunk.version,
+        user_id: chunk.userId,
+        session_id: chunk.sessionId,
+        stream_id: chunk.streamId,
+        stream_type: chunk.streamType,
+        seq: chunk.seq,
+        timestamp_ms: chunk.timestampMs,
+        codec: chunk.codec,
+        sample_rate: chunk.sampleRate,
+        channels: chunk.channels,
+        duration_ms: chunk.durationMs,
+        final: chunk.final,
+        metadata: chunk.metadata,
+        payload: chunk.payload,
+      };
     }
 
     function floatToPcm16(samples) {
@@ -1018,15 +1035,31 @@
     }
 
     function buildRegistrationPayload(deviceId) {
+      const builder = DeviceBuilder.define(deviceId)
+        .user(document.getElementById("userId").value)
+        .name(document.getElementById("deviceName").value || "浏览器调试设备")
+        .role("glass")
+        .runtime({platform: "browser", language: "javascript", version: navigator.userAgent})
+        .sensorRgb({
+          modes: ["single", "continuous"],
+          format: "jpeg",
+          frequencyHz: 1,
+          sampleCount: 1,
+          width: RGB_CAPTURE_MAX_WIDTH,
+          height: RGB_CAPTURE_MAX_HEIGHT,
+          external: {facing: "environment"},
+        })
+        .actuatorVibrator(["vibrate"]);
+      const payload = builder.registrationPayload();
       return {
-        device_id: deviceId,
-        name: document.getElementById("deviceName").value || "浏览器调试设备",
+        ...payload,
         device_name: "browser-glass",
         client_type: "browser-glass",
         sdk_version: "audio-chat-browser-glass-0.1.0",
         auth: {mode: "disabled"},
         supports: DEVICE_SUPPORTS,
         properties: {
+          ...payload.properties,
           "audio.aec": "browser_webrtc",
           "audio.input.sample_rate": INPUT_RATE,
           "audio.input.chunk_ms": DEFAULT_CHUNK_MS,
@@ -1042,13 +1075,25 @@
       };
     }
 
+    function createDeviceClient(deviceId) {
+      const payload = buildRegistrationPayload(deviceId);
+      return new AudioChatDeviceClient({
+        serverUrl: normalizeServerUrl(document.getElementById("serverUrl").value),
+        device: {
+          user_id: document.getElementById("userId").value,
+          ...payload,
+        },
+      });
+    }
+
     async function connect() {
       saveBrowserConfig();
       const deviceId = currentDeviceId();
+      deviceClient = createDeviceClient(deviceId);
       const controlUrl = wsUrl("/ws/control");
       log(`connect ${controlUrl}`);
-      controlWs = new WebSocket(controlUrl);
-      controlWs.onmessage = (message) => handleControlEvent(JSON.parse(message.data));
+      controlWs = deviceClient.connectControl();
+      controlWs.onmessage = (message) => handleControlEvent(AudioChatEvent.fromObject(JSON.parse(message.data)).toObject());
       controlWs.onerror = () => log("control ws error");
       controlWs.onclose = (evt) => {
         log(`control ws closed code=${evt.code} reason=${evt.reason || "-"}`);

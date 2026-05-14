@@ -1,0 +1,16 @@
+{
+  "version": "audio-chat.v1",
+  "event_id": "evt_command_requested",
+  "event_name": "command.requested",
+  "timestamp_ms": 1760000000200,
+  "user_id": "user-browser-glass-001",
+  "producer_id": "server-main",
+  "session_id": "dev-browser-glass-001",
+  "payload": {
+    "command_id": "cmd_001",
+    "command": "haptic.vibrate",
+    "params": {
+      "duration_ms": 200
+    }
+  }
+}

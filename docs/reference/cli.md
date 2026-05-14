@@ -117,6 +117,18 @@ uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/ser
 uv run audio-chat.sdk.package-check --report runs/default-app/package-check.json
 ```
 
+协议黄金样例和 Python 端侧 SDK 检查：
+
+```bash
+uv run python -m pytest audio-server/tests/test_protocol_schema_examples.py audio-server/tests/test_stream_chunk_codec_contract.py -q
+uv run python -m pytest audio-device/python/tests -q
+cd audio-device/typescript && npm test
+cd audio-device/swift && swift test
+cmake -S audio-device/c -B audio-device/c/build
+cmake --build audio-device/c/build
+ctest --test-dir audio-device/c/build --output-on-failure
+```
+
 无头回放测试：
 
 ```bash

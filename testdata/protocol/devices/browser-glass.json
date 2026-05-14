@@ -1,0 +1,38 @@
+{
+  "$schema": "../../../audio-server/audio_chat/spec/audio-chat-device.schema.json",
+  "device_id": "dev-browser-glass-001",
+  "user_id": "user-browser-glass-001",
+  "name": "浏览器调试设备",
+  "device_role": "glass",
+  "client_type": "browser",
+  "sdk_version": "browser-reference",
+  "runtime": {
+    "platform": "browser",
+    "language": "javascript"
+  },
+  "properties": {
+    "audio_chat.audio_input": "sensor.mic",
+    "audio_chat.audio_output": "actuator.speaker"
+  },
+  "supports": {
+    "sensors": [
+      {
+        "type": "rgb",
+        "modes": ["single", "continuous"],
+        "default": {
+          "format": "jpeg",
+          "frequency_hz": 1,
+          "sample_count": 1,
+          "width": 960,
+          "height": 540
+        }
+      }
+    ],
+    "actuators": [
+      {
+        "type": "vibrator",
+        "commands": ["vibrate"]
+      }
+    ]
+  }
+}

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlparse, urlunparse
 
 from aiohttp import ClientSession
 
-from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, new_id
+from audio_chat_device import AudioChatDeviceClient, AudioChatEvent as Event, StreamChunk, StreamChunkCodec, new_id, ws_url
 
 
 @dataclass(frozen=True)
@@ -56,6 +54,19 @@ class NetworkPythonPlaybackEndpoint:
         self.properties = dict(properties or {})
         self.supports = supports or {"sensors": [{"type": "rgb"}], "actuators": []}
         self.rgb_payload = rgb_payload or b"\xff\xd8python-phone-fallback-rgb\xff\xd9"
+        self.client = AudioChatDeviceClient(
+            server_url=self.server_url,
+            device={
+                "user_id": self.user_id,
+                "device_id": self.device_id,
+                "name": self.device_name,
+                "device_name": self.device_name,
+                "client_type": self.client_type,
+                "auth": self.auth,
+                "properties": self.properties,
+                "supports": self.supports,
+            },
+        )
         self.received_events: list[Event] = []
         self.output_chunks: list[StreamChunk] = []
         self.asset_uploads: list[dict[str, Any]] = []
@@ -66,46 +77,28 @@ class NetworkPythonPlaybackEndpoint:
     def _control_url(self) -> str:
         """返回控制 WebSocket URL。"""
 
-        return _ws_url(self.server_url, "/ws/control")
+        return ws_url(self.server_url, "/ws/control")
 
     def _stream_url(self) -> str:
         """返回 stream WebSocket URL。"""
 
-        return _ws_url(self.server_url, "/ws/stream", {"device_id": self.device_id})
+        return ws_url(self.server_url, "/ws/stream", {"device_id": self.device_id})
 
     async def _send_event(self, ws, event: Event) -> None:
         """发送协议事件。"""
 
-        await ws.send_str(json.dumps(event.to_dict(), ensure_ascii=False))
+        if ws is self.client.control_ws:
+            await self.client.send_event(event)
+            return
+        await ws.send_str(event.to_json())
 
     async def run_until_registered(self, *, session: ClientSession) -> Any:
         """注册设备并返回控制 WebSocket。"""
 
-        control_ws = await session.ws_connect(self._control_url())
-        await self._send_event(
-            control_ws,
-            Event(
-                event_name="control.device.register.requested",
-                user_id=self.user_id,
-                producer_id=self.device_id,
-                payload={
-                    "device_id": self.device_id,
-                    "name": self.device_name,
-                    "device_name": self.device_name,
-                    "client_type": self.client_type,
-                    "auth": self.auth,
-                    "properties": self.properties,
-                    "supports": self.supports,
-                },
-            ),
-        )
-        message = await control_ws.receive(timeout=5)
-        event = Event.from_dict(json.loads(message.data))
+        await self.client.connect(session=session)
+        event = await self.client.register(start_heartbeat=False)
         self.received_events.append(event)
-        if event.event_name != "control.device.registered":
-            await control_ws.close()
-            raise RuntimeError(f"device registration failed: {event.event_name} {event.payload}")
-        return control_ws
+        return self.client.control_ws
 
     async def _open_and_send_rgb_asset(self, control_ws, stream_ws, request: Event) -> None:
         """响应 server 的 RGB 采集请求并上传一帧。"""
@@ -166,7 +159,7 @@ class NetworkPythonPlaybackEndpoint:
         async for message in control_ws:
             if message.type.name != "TEXT":
                 continue
-            event = Event.from_dict(json.loads(message.data))
+            event = Event.from_json(message.data)
             self.received_events.append(event)
             if event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb":
                 await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
@@ -207,11 +200,3 @@ class NetworkPythonPlaybackEndpoint:
             "output_chunk_count": len(self.output_chunks),
             "asset_uploads": list(self.asset_uploads),
         }
-
-
-def _ws_url(server_url: str, path: str, query: dict[str, str] | None = None) -> str:
-    """把 HTTP server URL 转成 WebSocket URL。"""
-
-    parsed = urlparse(server_url)
-    scheme = "wss" if parsed.scheme == "https" else "ws"
-    return urlunparse((scheme, parsed.netloc, path, "", urlencode(query or {}), ""))

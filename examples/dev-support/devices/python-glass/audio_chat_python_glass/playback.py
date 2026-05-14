@@ -8,7 +8,7 @@ from typing import Any
 
 from aiohttp import ClientSession
 
-from audio_chat.protocol import Event
+from audio_chat_device import AudioChatDeviceClient, AudioChatEvent as Event, ws_url
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,20 @@ class NetworkPythonPlaybackEndpoint:
         self.properties = dict(properties or {})
         self.supports = dict(supports or {})
         self.rgb_payload = rgb_payload or b"\xff\xd8mock-rgb\xff\xd9"
+        self.client = AudioChatDeviceClient(
+            server_url=self.server_url,
+            device={
+                "user_id": self.user_id,
+                "device_id": self.device_id,
+                "device_name": self.device_name,
+                "name": self.device_name,
+                "client_type": self.client_type,
+                "sdk_version": "audio-chat-python-glass-compat-0.1.0",
+                "auth": self.auth,
+                "supports": self.supports,
+                "properties": self.properties,
+            },
+        )
         self.received_events: list[Event] = []
         self.sent_events: list[Event] = []
         self.output_chunks: list[Any] = []
@@ -104,18 +118,21 @@ class NetworkPythonPlaybackEndpoint:
     def _control_url(self) -> str:
         """返回 control WebSocket URL。"""
 
-        return self.server_url.replace("http://", "ws://").replace("https://", "wss://") + "/ws/control"
+        return ws_url(self.server_url, "/ws/control")
 
     def _stream_url(self) -> str:
         """返回 stream WebSocket URL。"""
 
-        return self.server_url.replace("http://", "ws://").replace("https://", "wss://") + f"/ws/stream?device_id={self.device_id}"
+        return ws_url(self.server_url, "/ws/stream", {"device_id": self.device_id})
 
     async def _send_event(self, ws, event: Event) -> None:
         """通过 WebSocket 发送控制事件。"""
 
         self.sent_events.append(event)
-        await ws.send_str(json.dumps(event.to_dict(), ensure_ascii=False))
+        if ws is self.client.control_ws:
+            await self.client.send_event(event)
+            return
+        await ws.send_str(event.to_json())
 
     async def run_until_registered(self, *, session: ClientSession):
         """连接 control WebSocket 并完成设备注册。
@@ -125,32 +142,10 @@ class NetworkPythonPlaybackEndpoint:
         异常情况：注册失败或超时时抛出 RuntimeError。
         """
 
-        control_ws = await session.ws_connect(self._control_url())
-        await self._send_event(
-            control_ws,
-            Event(
-                event_name="control.device.register.requested",
-                user_id=self.user_id,
-                producer_id=self.device_id,
-                session_id=self.device_id,
-                payload={
-                    "device_id": self.device_id,
-                    "device_name": self.device_name,
-                    "name": self.device_name,
-                    "client_type": self.client_type,
-                    "sdk_version": "audio-chat-python-glass-compat-0.1.0",
-                    "auth": self.auth,
-                    "supports": self.supports,
-                    "properties": self.properties,
-                },
-            ),
-        )
-        message = await asyncio.wait_for(control_ws.receive(), timeout=5)
-        event = Event.from_dict(json.loads(message.data))
+        await self.client.connect(session=session)
+        event = await self.client.register(start_heartbeat=False)
         self.received_events.append(event)
-        if event.event_name != "control.device.registered":
-            raise RuntimeError(f"device registration failed: {event.payload}")
-        return control_ws
+        return self.client.control_ws
 
     async def run_once(self, audio: PlaybackAudio | bytes | None = None) -> dict[str, Any]:
         """执行一次最小网络注册闭环。

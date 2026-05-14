@@ -148,3 +148,25 @@ def test_endpoint_reference_directories_exist() -> None:
     assert (root / "examples/dev-support/devices/python-phone/phone.mock.yaml").exists()
     assert (root / "examples/for-blind-app/devices/native-ios-phone/AppConfig.example.json").exists()
     assert (root / "examples/for-blind-app/devices/native-esp32-glass/local.env.example").exists()
+
+
+def test_python_phone_reference_uses_python_device_sdk() -> None:
+    """测试目标：验证 Python phone 参考端已经迁移到端侧 SDK。
+
+    测试方法：静态读取 phone mock 源码，检查它导入 `audio_chat_device`，并且不再直接
+    依赖 server 主包的 `audio_chat.protocol`。
+    预期结果：端侧事件和 stream chunk 模型来自 Python Device SDK，避免端侧绑定服务端内部包。
+    """
+
+    root = Path(__file__).resolve().parents[3]
+    source_files = [
+        root / "examples/dev-support/devices/python-glass/audio_chat_python_glass/playback.py",
+        root / "examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/phone_mock.py",
+        root / "examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/playback_fallback.py",
+        root / "examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/remote_task.py",
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
+
+    assert "from audio_chat_device import" in source
+    assert "audio_chat.protocol" not in source
+    assert "AudioChatDeviceClient" in source

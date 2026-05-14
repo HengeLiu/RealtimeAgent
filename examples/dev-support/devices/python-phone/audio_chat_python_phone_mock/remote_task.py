@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from audio_chat.protocol import Event
+from audio_chat_device import AudioChatEvent as Event
 
 logger = logging.getLogger(__name__)
 

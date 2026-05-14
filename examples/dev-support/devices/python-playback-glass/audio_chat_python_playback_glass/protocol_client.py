@@ -3,21 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlunparse
 
 from aiohttp import ClientSession, WSMsgType
+from audio_chat_device import StreamChunk, StreamChunkCodec, new_id, ws_url
 
 PROTOCOL_VERSION = "audio-chat.v1"
-
-
-def new_id(prefix: str) -> str:
-    """生成端侧本地 ID。"""
-
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
 def now_ms() -> int:
@@ -26,29 +19,20 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def ws_url(server_url: str, path: str) -> str:
-    """把 HTTP server URL 转成 WebSocket URL。"""
-
-    parsed = urlparse(server_url)
-    return urlunparse(("wss" if parsed.scheme == "https" else "ws", parsed.netloc, path, "", "", ""))
-
-
 def encode_stream_chunk(header: dict[str, Any], payload: bytes) -> bytes:
-    """编码 StreamChunk 二进制帧。"""
+    """编码 StreamChunk 二进制帧。
 
-    header_bytes = json.dumps({**header, "payload_size": len(payload)}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return len(header_bytes).to_bytes(4, "big") + header_bytes + payload
+    主要逻辑：复用 `audio_chat_device` Python 基准 SDK 的 stream 编解码器，避免
+    回放参考端继续维护独立协议实现。
+    """
+
+    return StreamChunkCodec.encode_header(header, payload)
 
 
 def decode_stream_chunk(raw: bytes) -> dict[str, Any]:
     """解码 StreamChunk 二进制帧。"""
 
-    header_len = int.from_bytes(raw[:4], "big")
-    header = json.loads(raw[4 : 4 + header_len].decode("utf-8"))
-    payload = raw[4 + header_len :]
-    if len(payload) != int(header.get("payload_size") or 0):
-        raise ValueError("payload_size mismatch")
-    return {**header, "payload": payload}
+    return StreamChunkCodec.decode_header(raw)
 
 
 @dataclass
@@ -142,27 +126,26 @@ class PlaybackProtocolClient:
         """确保 stream WebSocket 已连接。"""
 
         if self._stream_ws is None or self._stream_ws.closed:
-            self._stream_ws = await session.ws_connect(ws_url(self.server_url, f"/ws/stream?device_id={self.device_id}"))
+            self._stream_ws = await session.ws_connect(ws_url(self.server_url, "/ws/stream", {"device_id": self.device_id}))
 
     async def send_stream_chunk(self, *, stream_id: str, stream_type: str, seq: int, payload: bytes, codec: str, sample_rate: int, channels: int, duration_ms: int, final: bool, metadata: dict[str, Any] | None = None) -> None:
         """发送一帧输入 stream chunk。"""
 
-        header = {
-            "version": PROTOCOL_VERSION,
-            "user_id": self.user_id,
-            "session_id": self.device_id,
-            "stream_id": stream_id,
-            "stream_type": stream_type,
-            "seq": seq,
-            "timestamp_ms": now_ms(),
-            "codec": codec,
-            "sample_rate": sample_rate,
-            "channels": channels,
-            "duration_ms": duration_ms,
-            "final": final,
-            "metadata": metadata or {},
-        }
-        await self._stream_ws.send_bytes(encode_stream_chunk(header, payload))
+        chunk = StreamChunk(
+            user_id=self.user_id,
+            session_id=self.device_id,
+            stream_id=stream_id,
+            stream_type=stream_type,
+            seq=seq,
+            payload=payload,
+            codec=codec,
+            sample_rate=sample_rate,
+            channels=channels,
+            duration_ms=duration_ms,
+            final=final,
+            metadata=metadata or {},
+        )
+        await self._stream_ws.send_bytes(StreamChunkCodec.encode(chunk))
 
     async def receive_stream_chunk(self, *, timeout: float) -> dict[str, Any]:
         """读取一帧下行 stream chunk。"""

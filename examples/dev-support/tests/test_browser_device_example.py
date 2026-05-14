@@ -215,7 +215,7 @@ def test_browser_device_subscribes_all_event_prefixes_for_debug_log() -> None:
     html = _html()
 
     assert "logBroadcastEvent(item);" in html
-    assert "controlWs.onmessage = (message) => handleControlEvent(JSON.parse(message.data));" in html
+    assert "controlWs.onmessage = (message) => handleControlEvent(AudioChatEvent.fromObject(JSON.parse(message.data)).toObject());" in html
 
 
 def test_browser_device_opens_stream_socket_after_audio_session() -> None:

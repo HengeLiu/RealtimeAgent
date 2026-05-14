@@ -1,0 +1,44 @@
+{
+  "version": "audio-chat.v1",
+  "event_id": "evt_register_requested",
+  "event_name": "control.device.register.requested",
+  "timestamp_ms": 1760000000000,
+  "user_id": "user-browser-glass-001",
+  "producer_id": "dev-browser-glass-001",
+  "payload": {
+    "device_id": "dev-browser-glass-001",
+    "name": "浏览器调试设备",
+    "device_name": "浏览器调试设备",
+    "client_type": "browser",
+    "sdk_version": "browser-reference",
+    "runtime": {
+      "platform": "browser",
+      "language": "javascript"
+    },
+    "properties": {
+      "audio_chat.audio_input": "sensor.mic",
+      "audio_chat.audio_output": "actuator.speaker"
+    },
+    "supports": {
+      "sensors": [
+        {
+          "type": "rgb",
+          "modes": ["single", "continuous"],
+          "default": {
+            "format": "jpeg",
+            "frequency_hz": 1,
+            "sample_count": 1,
+            "width": 960,
+            "height": 540
+          }
+        }
+      ],
+      "actuators": [
+        {
+          "type": "vibrator",
+          "commands": ["vibrate"]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "../../../audio-server/audio_chat/spec/audio-chat-device.schema.json",
+  "device_id": "dev-esp32-glass-001",
+  "user_id": "user-browser-glass-001",
+  "name": "ESP32-S3 Glass",
+  "device_role": "glass",
+  "client_type": "esp32",
+  "sdk_version": "esp32-reference",
+  "runtime": {
+    "platform": "esp32",
+    "language": "c"
+  },
+  "properties": {
+    "audio_chat.audio_input": "sensor.mic",
+    "audio_chat.audio_output": "actuator.speaker"
+  },
+  "supports": {
+    "sensors": [
+      {
+        "type": "rgb",
+        "modes": ["single"],
+        "default": {
+          "format": "jpeg",
+          "frequency_hz": 1,
+          "sample_count": 1
+        }
+      }
+    ],
+    "actuators": [
+      {
+        "type": "vibrator",
+        "commands": ["vibrate"]
+      }
+    ]
+  }
+}
