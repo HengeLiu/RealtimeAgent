@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -19,25 +19,11 @@ class FindObjectTaskInput(BaseModel):
         gt=0,
         description="端侧 peer video 找物任务的最长运行时间，单位秒；普通找物场景建议使用 30 秒。",
     )
-    mock_found: bool = Field(
-        default=True,
-        description="已废弃，仅兼容旧回放：找物结果由手机端 YOLO mock 返回，模型不要填写。",
-    )
-    mock_confidence: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="已废弃，仅兼容旧回放：置信度由手机端 YOLO mock 返回，模型不要填写。",
-    )
 
 
 class TrafficLightTaskInput(BaseModel):
     """红绿灯后台任务启动参数。"""
 
-    mock_state: Literal["green", "red", "yellow"] = Field(
-        default="green",
-        description="已废弃，仅兼容旧回放：红绿灯结果由手机端 YOLO mock 返回，模型不要填写。",
-    )
     timeout_seconds: float = Field(
         default=30,
         gt=0,
@@ -107,7 +93,7 @@ class PeerVideoTaskMixin:
             selector={"device_role": "phone"},
             params=receiver_params,
         )
-        phone_ready = await self.wait_phone_receiver_ready(context, self.phone_handle, timeout_seconds=timeout_seconds + 180)
+        phone_ready = await self.wait_phone_receiver_ready(self.phone_handle, timeout_seconds=timeout_seconds + 180)
         receiver = dict((phone_ready.data.get("data") or {}).get("receiver") or phone_ready.data.get("receiver") or {})
         if not receiver:
             raise RuntimeError("phone peer receiver ready event missing receiver")
@@ -153,59 +139,24 @@ class PeerVideoTaskMixin:
 
         return await asyncio.wait_for(_wait(), timeout=timeout_seconds)
 
-    async def wait_phone_receiver_ready(self, context: TaskContext, handle: CommandHandle, *, timeout_seconds: float) -> CommandEvent:
+    async def wait_phone_receiver_ready(self, handle: CommandHandle, *, timeout_seconds: float) -> CommandEvent:
         """等待 phone receiver 视觉就绪。
 
-        参数：`context` 为任务上下文，`handle` 为 phone receiver 命令句柄，
-        `timeout_seconds` 为包含模型预热在内的最长等待。
+        参数：`handle` 为 phone receiver 命令句柄，`timeout_seconds` 为包含模型预热在内的最长等待。
         返回值：`peer.receiver.ready` 事件。
         异常情况：端侧 failed 或超时时抛出 RuntimeError/TimeoutError。
         """
 
         async def _wait() -> CommandEvent:
-            waiting_notified = False
             async for event in handle.results():
                 if event.state == "failed":
                     raise RuntimeError(str(event.data.get("message") or "peer video receiver failed"))
                 status = self.command_event_status(event)
-                if status == "peer.receiver.waiting_vision" and not waiting_notified:
-                    waiting_notified = True
-                    self.notify_output(context, "手机正在准备视觉模型，请稍等", priority="normal")
                 if status == "peer.receiver.ready":
-                    if waiting_notified:
-                        self.notify_output(context, "手机视觉模型已就绪，开始识别", priority="normal")
                     return event
             raise RuntimeError("peer video command ended before phone receiver ready")
 
         return await asyncio.wait_for(_wait(), timeout=timeout_seconds)
-
-    def notify_output(self, context: TaskContext, text: str, *, priority: str = "normal") -> None:
-        """非阻塞提交任务状态播报。
-
-        主要逻辑：`context.output.say()` 当前会同步触发完整 TTS 合成。任务编排等待
-        phone/glass 状态时，不能让播报阻塞 command 回执消费；因此把播报放到后台
-        线程提交，状态机继续向前推进。
-        参数：`context` 为任务上下文，`text` 为播报文本，`priority` 为输出优先级。
-        返回值：无。
-        异常情况：后台播报失败只记录到系统日志，不影响 peer video 编排。
-        """
-
-        async def _submit() -> None:
-            try:
-                await asyncio.to_thread(_submit_output_text, context, text, priority)
-            except Exception as exc:  # noqa: BLE001 - 状态播报失败不应影响任务主流程
-                recorder = getattr(context.bridge, "recorder", None) if context.bridge is not None else None
-                if recorder is not None and hasattr(recorder, "record_system_event"):
-                    recorder.record_system_event(
-                        {
-                            "event": "peer_video.status_notify_failed",
-                            "task_id": context.task_ref.task_id,
-                            "task_type": context.task_ref.task_type,
-                            "message": str(exc),
-                        }
-                    )
-
-        asyncio.create_task(_submit())
 
     @staticmethod
     def command_event_status(event: CommandEvent) -> str:
@@ -264,10 +215,18 @@ class PeerVideoTaskMixin:
             except Exception:
                 continue
 
-    def emit_task_signal(self, context: TaskContext, *, signal_name: str, payload: dict[str, Any]) -> None:
+    def emit_task_signal(
+        self,
+        context: TaskContext,
+        *,
+        signal_name: str,
+        payload: dict[str, Any],
+        allow_direct_notify: bool = False,
+    ) -> None:
         """向 TaskSignalBridge 发送业务信号。
 
-        参数：`context` 为任务上下文；`signal_name/payload` 为业务信号内容。
+        参数：`context` 为任务上下文；`signal_name/payload` 为业务信号内容；
+        `allow_direct_notify` 控制是否把该信号转成用户可听通知。
         返回值：无。
         异常情况：无 bridge 时直接跳过。
         """
@@ -282,32 +241,9 @@ class PeerVideoTaskMixin:
                 user_id=context.user_id,
                 session_id=context.session_id,
                 payload=payload,
-                allow_direct_notify=False,
+                allow_direct_notify=allow_direct_notify,
             )
         )
-
-
-def _submit_output_text(context: TaskContext, text: str, priority: str) -> None:
-    """在线程中提交状态播报文本。
-
-    主要逻辑：绕开 `context.output.say()` 的 coroutine 包装，直接调用 OutputService。
-    该函数只用于非阻塞状态提示，不承载任务完成播报。
-    参数：`context` 为任务上下文，`text` 为播报内容，`priority` 为输出优先级。
-    返回值：无。
-    异常情况：OutputService 抛出的异常由调用方记录。
-    """
-
-    output = context.output
-    app = getattr(output, "_app")
-    user_id = getattr(output, "user_id")
-    session_id = app.active_session_id(user_id)
-    app.output_service.submit_text(
-        user_id=user_id,
-        session_id=session_id,
-        text=text,
-        priority=priority,
-        ttl_seconds=0,
-    )
 
 
 class FindObjectTask(PeerVideoTaskMixin, BaseTask):
@@ -316,7 +252,7 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
     主要功能：
     1. 编排手机端启动视频接收和 YOLO 找物识别。
     2. 编排眼镜端连接手机端并发送 JPEG 帧。
-    3. 根据手机端 completed result 生成 TaskSignal 和播报。
+    3. 根据手机端 completed result 生成 TaskSignal 并完成任务。
     """
 
     task_type = "find_object_task"
@@ -340,6 +276,12 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
         input_data = dict(context.metadata.get("input") or {})
         object_name = str(input_data.get("object_name") or "目标物").strip()
         timeout_seconds = float(input_data.get("timeout_seconds") or 30)
+        self.emit_task_signal(
+            context,
+            signal_name="find_object.started",
+            payload={"text": f"我开始帮你找{object_name}。", "object_name": object_name},
+            allow_direct_notify=True,
+        )
         try:
             result = await self.start_peer_video(
                 context,
@@ -349,17 +291,18 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
             )
         except Exception as exc:  # noqa: BLE001 - Task 需要清理已启动端侧命令
             await self.stop_peer_video(reason="task_failed")
-            await context.fail(str(exc), payload={"object_name": object_name})
+            message = f"暂时没有找到{object_name}" if isinstance(exc, asyncio.TimeoutError) else f"找{object_name}的任务没有完成，请稍后再试"
+            await context.fail(str(exc), payload={"object_name": object_name, "message": message, "allow_direct_notify": True})
             return
         found = bool(result.get("found", True))
-        payload = {**result, "object_name": result.get("object_name") or object_name}
+        message = str(result.get("message") or (f"已找到{object_name}，它在前方" if found else f"暂时没有找到{object_name}"))
+        payload = {**result, "object_name": result.get("object_name") or object_name, "message": message}
         self.emit_task_signal(
             context,
             signal_name="find_object.found" if found else "find_object.not_found",
             payload=payload,
+            allow_direct_notify=True,
         )
-        message = str(result.get("message") or (f"已找到{object_name}，它在前方" if found else f"暂时没有找到{object_name}"))
-        await context.output.say(message, priority="normal")
         await context.complete(payload, summary="找物完成" if found else "找物未命中")
 
     async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
@@ -370,21 +313,20 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
         event_payload = dict(event.event.payload or {})
         result = dict(event_payload.get("result") or event_payload)
         found = bool(result.get("found", True))
-        payload = {**result, "object_name": result.get("object_name") or object_name}
+        message = str(result.get("message") or (f"已找到{object_name}，它在前方" if found else f"暂时没有找到{object_name}"))
+        payload = {**result, "object_name": result.get("object_name") or object_name, "message": message}
         self.emit_task_signal(
             context,
             signal_name="find_object.found" if found else "find_object.not_found",
             payload=payload,
+            allow_direct_notify=True,
         )
-        message = str(result.get("message") or (f"已找到{object_name}，它在前方" if found else f"暂时没有找到{object_name}"))
-        await context.output.say(message, priority="normal")
         await context.complete(payload, summary="找物完成" if found else "找物未命中")
 
     async def on_cancel(self, context: TaskContext) -> None:
         """取消找物视觉任务。"""
 
         await self.stop_peer_video(reason="task_cancelled")
-        await context.output.say("已停止找物", priority="normal")
 
 
 class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
@@ -393,11 +335,11 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
     主要功能：
     1. 编排手机端启动视频接收和红绿灯 YOLO mock。
     2. 编排眼镜端连接手机端并发送 JPEG 帧。
-    3. 根据手机端结果播报通行建议。
+    3. 根据手机端结果生成 TaskSignal 并完成任务。
     """
 
     task_type = "traffic_light_task"
-    description = "启动红绿灯识别后台任务。用于用户过马路、询问红绿灯状态或需要通行建议时；任务会编排手机和眼镜建立 peer video，由手机端 YOLO mock 逐帧处理并播报建议。"
+    description = "启动红绿灯识别后台任务。用于用户过马路、询问红绿灯状态或需要通行建议时；任务会编排手机和眼镜建立 peer video，由手机端 YOLO mock 逐帧处理并返回通行建议。"
     input_model = TrafficLightTaskInput
 
     def __init__(self) -> None:
@@ -434,7 +376,6 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
             signal_name="traffic_light.green" if state == "green" else "traffic_light.state_detected",
             payload=payload,
         )
-        await context.output.say(suggestion, priority="high" if state == "green" else "normal")
         await context.complete(payload, summary=suggestion)
 
     async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
@@ -450,14 +391,12 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
             signal_name="traffic_light.green" if state == "green" else "traffic_light.state_detected",
             payload=payload,
         )
-        await context.output.say(suggestion, priority="high" if state == "green" else "normal")
         await context.complete(payload, summary=suggestion)
 
     async def on_cancel(self, context: TaskContext) -> None:
         """取消红绿灯识别任务。"""
 
         await self.stop_peer_video(reason="task_cancelled")
-        await context.output.say("已停止红绿灯识别", priority="normal")
 
 
 class TimerTask(BaseTask):
@@ -465,7 +404,7 @@ class TimerTask(BaseTask):
 
     主要功能：
     1. 使用 `TaskContext.schedule_signal()` 表达到点信号。
-    2. 支持取消通知。
+    2. 支持取消。
     3. 到点提示进入 Output Service，不直接控制播放器。
     """
 
@@ -476,7 +415,7 @@ class TimerTask(BaseTask):
     async def on_start(self, context: TaskContext) -> None:
         """启动计时器。
 
-        主要逻辑：记录 scheduled 信号，提交启动提示，再调度 `timer.due`。
+        主要逻辑：记录 scheduled 信号，再调度 `timer.due`。
         参数：`context` 为 SDK 注入上下文。
         返回值：无。
         异常情况：调度或输出失败时由 TaskEngine 记录。
@@ -519,6 +458,3 @@ class TimerTask(BaseTask):
 
     async def on_cancel(self, context: TaskContext) -> None:
         """取消计时器。"""
-
-        if context.devices is not None:
-            await context.output.say("计时器已取消", priority="normal")

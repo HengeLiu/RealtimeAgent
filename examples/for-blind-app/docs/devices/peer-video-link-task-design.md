@@ -741,7 +741,7 @@ Task -> phone receiver start
      -> complete
 ```
 
-输入参数保留 `object_name`。`mock_found` 和 `mock_confidence` 后续应从模型可见 schema 中移除，改为 phone mock 配置内部控制。
+输入参数保留 `object_name` 和 `timeout_seconds`。模型可见 schema 不暴露 mock 结果字段，phone 参考端的超时回放只通过端侧内部配置控制。
 
 ### 11.2 `traffic_light_task`
 
@@ -762,7 +762,7 @@ Task -> phone receiver start
      -> complete
 ```
 
-`mock_state` 后续也应从模型可见 schema 中移除，改为 phone mock 默认结果。
+模型可见 schema 不暴露 mock 状态字段；phone 参考端默认结果由端侧内部配置控制。
 
 ## 13. 错误处理
 

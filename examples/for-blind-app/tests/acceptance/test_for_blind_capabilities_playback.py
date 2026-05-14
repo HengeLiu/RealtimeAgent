@@ -118,7 +118,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
             name="start_find_object_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={"object_name": "水杯", "mock_found": True},
+            input_data={"object_name": "水杯"},
         )
     )
     traffic_light = asyncio.run(
@@ -126,7 +126,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
             name="start_traffic_light_task",
             user_id="user-for-blind",
             session_id=session_id,
-            input_data={"mock_state": "green"},
+            input_data={},
         )
     )
     route = asyncio.run(

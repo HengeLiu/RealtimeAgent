@@ -42,7 +42,7 @@
 
 改动：
 
-1. 检查 `find_object_task`、`traffic_light_task` 当前 schema，标记 `mock_found`、`mock_confidence`、`mock_state` 为过渡字段。
+1. 检查 `find_object_task`、`traffic_light_task` 当前 schema，移除模型可见的 mock 输入字段，只保留端侧内部 mock 配置。
 2. 检查 Python phone 当前 `phone.preview.yaml` 是否和 browser-glass 使用同一 `user_id`。
 3. 检查 browser-glass 注册 payload 是否带 `properties`，并准备增加 `device_role=glass`。
 4. 检查 Python phone 是否能长驻运行并接收 control event。
@@ -343,7 +343,7 @@ on_start
 
 1. 保留 `object_name`。
 2. 新增或保留 `timeout_seconds` 表示端侧视频任务超时。
-3. `mock_found`、`mock_confidence` 不再面向模型暴露；如果暂时兼容，标为 deprecated，并在 prompt/schema 描述中说明模型不要填写。
+3. 模型可见 schema 不暴露 mock 结果字段；phone 端内部 mock 只通过 peer video 命令参数和端侧配置控制。
 
 ### 4.3 红绿灯 Task 改造
 
@@ -364,7 +364,7 @@ on_start
 输入 schema 调整：
 
 1. 保留 `timeout_seconds`。
-2. `mock_state` 不再面向模型暴露；phone mock 决定默认返回 green。
+2. 模型可见 schema 不暴露 mock 状态字段；phone 参考端内部配置决定默认回放结果。
 
 ### 4.4 取消逻辑
 
@@ -570,7 +570,7 @@ browser-glass 日志：
 ### Phase 0：准备和现状清理
 
 - 状态：已完成
-- 实现：确认 `find_object_task` / `traffic_light_task` 原实现仍走 `sensor.rgb.one()` 单帧抓拍；`mock_found`、`mock_confidence`、`mock_state` 已在 schema 描述中标记为废弃兼容字段。
+- 实现：确认 `find_object_task` / `traffic_light_task` 已切到 peer video 编排；模型可见 schema 不再暴露 mock 结果字段，端侧 mock 只作为 phone 参考端内部配置。
 - 验证：`uv run python -m pytest examples/for-blind-app/tests/test_app_name_launch.py audio-server/tests/test_memory_service.py -q`，结果 16 passed。
 - 风险：既有旧 phone task 测试仍依赖 `find_object_phone_task` / `traffic_light_phone_task`，当前主线已迁移到 peer video Task，需要后续单独清理旧测试口径。
 

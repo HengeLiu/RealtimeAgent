@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
-import time
 from pathlib import Path
 
 from audio_chat import AudioChatApp, AudioChatConfig
@@ -179,8 +179,39 @@ def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
         ref = await _wait_for_task_state(app, started.task_id, "finished")
         assert ref.state == "finished"
         assert ref.summary == "找物完成"
+        task_signals_path = tmp_path / "runs/user-peer/dev-glass/task-signals.jsonl"
+        task_signals = [json.loads(line) for line in task_signals_path.read_text(encoding="utf-8").splitlines()]
+        started_signal = next(item for item in task_signals if item["signal_name"] == "find_object.started")
+        finished_signal = next(item for item in task_signals if item["signal_name"] == "find_object.found")
+        assert started_signal["allow_direct_notify"] is True
+        assert started_signal["payload"]["text"] == "我开始帮你找水杯。"
+        assert finished_signal["allow_direct_notify"] is True
+        assert finished_signal["payload"]["message"] == "已找到水杯，位于前方"
 
     asyncio.run(run())
+
+
+def test_peer_video_task_input_schema_hides_deprecated_mock_fields() -> None:
+    """测试目标：验证 peer video Task 的模型可见输入不再暴露废弃 mock 字段。
+
+    测试方法：读取找物和红绿灯 Task 输入的 JSON schema，检查属性列表。
+    预期结果：schema 只包含真实启动参数，避免模型把 mock 字段误解成真实结果。
+    """
+
+    sys.path = [path for path in sys.path if path != str(APP_ROOT)]
+    sys.path.insert(0, str(APP_ROOT))
+    for name in list(sys.modules):
+        if name == "capabilities" or name.startswith("capabilities."):
+            sys.modules.pop(name, None)
+    tasks_module = importlib.import_module("capabilities.tasks")
+    properties = tasks_module.FindObjectTaskInput.model_json_schema().get("properties", {})
+    assert "object_name" in properties
+    assert "timeout_seconds" in properties
+    assert "mock_found" not in properties
+    assert "mock_confidence" not in properties
+    traffic_properties = tasks_module.TrafficLightTaskInput.model_json_schema().get("properties", {})
+    assert "timeout_seconds" in traffic_properties
+    assert "mock_state" not in traffic_properties
 
 
 def test_peer_video_task_keeps_eager_command_progress(tmp_path: Path) -> None:
@@ -230,7 +261,7 @@ def test_peer_video_task_keeps_eager_command_progress(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_peer_video_task_waits_for_phone_vision_ready_before_starting_glass(tmp_path: Path, monkeypatch) -> None:
+def test_peer_video_task_waits_for_phone_vision_ready_before_starting_glass(tmp_path: Path) -> None:
     """测试目标：验证 phone 视觉模型未就绪时，Task 不会提前启动眼镜采集。
 
     测试方法：phone 先回报 `peer.receiver.waiting_vision`，确认 glass 没收到 sender
@@ -240,8 +271,6 @@ def test_peer_video_task_waits_for_phone_vision_ready_before_starting_glass(tmp_
 
     async def run() -> None:
         app = _app_with_peer_tasks(tmp_path)
-        tasks_module = sys.modules["capabilities.tasks"]
-        monkeypatch.setattr(tasks_module, "_submit_output_text", lambda *_args: time.sleep(0.5))
         phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
         glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
         _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
