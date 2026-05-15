@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from audio_chat.agent_core.context import PromptRegistry
 from audio_chat.observability import LogContext, get_logger, log_error
 
 
@@ -123,6 +124,9 @@ class LlmMessageSummarizer:
 
 
 def _message_summary_prompt() -> str:
+    asset = PromptRegistry().maybe_get("message_summarizer")
+    if asset is not None:
+        return asset.content
     return (
         "你是会话历史摘要子Agent。你只输出中文结构化摘要，不输出JSON，不解释你的工作过程。\n"
         "你的任务是把 previous_summary 与 archived_messages 合并成一份更新后的滚动摘要。\n"

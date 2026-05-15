@@ -10,6 +10,7 @@ from audio_chat.observability import RunRecorder
 from audio_chat.output import AssistantTextDelta, OutputService
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
+from audio_chat.agent_core.context import ContextCompileRequest, ContextCompiler, record_context_events
 from audio_chat.agent_core.providers import (
     AsrProviderAdapter,
     AsrProviderConfig,
@@ -217,6 +218,7 @@ class TextAgentCore:
         self.tool_gateway = tool_gateway
         self.memory_service = memory_service
         self.max_context_messages = max(1, int(max_context_messages or 30))
+        self.context_compiler = ContextCompiler()
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 TextAgentCore 使用的 ToolGateway。
@@ -443,22 +445,36 @@ class TextAgentCore:
         异常情况：ToolGateway 会把工具异常转换为 ToolResult，本函数不抛业务异常。
         """
 
-        messages: list[dict[str, Any]] = self._build_runtime_messages(
-            user_id=user_id,
-            session_id=session_id,
-            transcript=transcript,
-        )
         assistant_parts: list[str] = []
-        tools = self.tool_gateway.provider_schemas() if self.tool_gateway is not None else []
-        prompt = self._build_prompt(user_id=user_id, session_id=session_id)
+        context = self.context_compiler.compile(
+            ContextCompileRequest(
+                mode="text",
+                provider=getattr(self.text_model, "provider_name", "unknown"),
+                model=getattr(self.text_model, "model", "unknown"),
+                user_id=user_id,
+                session_id=session_id,
+                base_instructions=str(getattr(self.text_model, "prompt", TEXT_AGENT_SYSTEM_PROMPT)),
+                current_input={"type": "text", "transcript": transcript},
+                include_tools=True,
+                reason="text_agent_turn",
+                memory_service=self.memory_service,
+                control_service=self.control_service,
+                tool_gateway=self.tool_gateway,
+                max_context_messages=self.max_context_messages,
+            )
+        )
+        messages: list[dict[str, Any]] = list(context.messages)
+        tools = list(context.tools)
+        prompt = context.instructions
         previous_prompt = getattr(self.text_model, "prompt", None)
         if previous_prompt is not None:
             setattr(self.text_model, "prompt", prompt)
+        record_context_events(recorder=self.recorder, session_id=session_id, context=context)
         self.recorder.record_model_request(
             session_id,
             {
-                "provider": getattr(self.text_model, "provider_name", "unknown"),
-                "model": getattr(self.text_model, "model", "unknown"),
+                "provider": context.provider,
+                "model": context.model,
                 "runner": "agent_core_text",
                 "user_id": user_id,
                 "session_id": session_id,
@@ -466,6 +482,12 @@ class TextAgentCore:
                 "messages": [{"role": "system", "content": prompt}, *list(messages)],
                 "tools": tools,
                 "tool_count": len(tools),
+                "prompts": context.prompt_records(),
+                "context_sources": context.source_records(),
+                "warnings": context.warnings,
+                "truncations": context.truncations,
+                "notifications": context.notifications,
+                "context_metadata": context.metadata,
             },
         )
         try:
@@ -526,6 +548,17 @@ class TextAgentCore:
                         input_data=dict(tool_call.get("arguments") or {}),
                     )
                     result_dict = self._tool_result_to_dict(result)
+                    self.recorder.record_agent_event(
+                        session_id,
+                        {
+                            "event": "context.source.added",
+                            "source_id": f"tool_result:{tool_call.get('name') or ''}",
+                            "source_kind": "tool",
+                            "source_name": f"tool_result:{tool_call.get('name') or ''}",
+                            "included": True,
+                            "reason": "text_tool_loop_provider_message",
+                        },
+                    )
                     messages.append(_provider_tool_result_message(tool_call=tool_call, result=result_dict))
                     self.control_service.append_message(
                         user_id,

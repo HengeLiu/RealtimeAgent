@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from audio_chat.agent_core import AgentCoreRouter
+from audio_chat.agent_core.context import PromptRegistry
 from audio_chat.agent_core.providers import AsrProviderConfig, TextModelProviderConfig
 from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
@@ -38,14 +39,28 @@ from audio_chat.tools import (
 )
 
 
-MEMORY_AGENT_INSTRUCTIONS = (
-    "长期记忆规则："
-    "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。"
-    "当用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等长期信息时，必须调用 manage_memory 保存或更新，不要只用文字声称已经记住。"
-    "不要保存密码、令牌、验证码、API Key、一次性任务状态、临时情绪或未经确认的推断。"
-    "已保存记忆分为 basic 和 personalized 两层：两类记忆都会在提示词中提供可直接使用的内容。"
-    "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题，且提示词中的记忆不足以回答时，要主动使用 memory_search 工具查询你关注的记忆主题。"
-    "不要编造记忆；查不到就按未知处理。"
+def _prompt_text(name: str, fallback: str) -> str:
+    """从 PromptRegistry 读取提示词，失败时回退到内置文本。
+
+    主要逻辑：配置加载阶段仍需要兼容旧 inline prompt，因此这里不让 registry
+    读取失败阻断应用初始化。
+    """
+
+    asset = PromptRegistry().maybe_get(name)
+    return asset.content if asset is not None else fallback
+
+
+MEMORY_AGENT_INSTRUCTIONS = _prompt_text(
+    "memory_rules",
+    (
+        "长期记忆规则："
+        "你应当使用 manage_memory 工具主动维护关于用户的记忆，包括新增、更新、删除。"
+        "当用户自然说出姓名、年龄、性别、称呼、语言偏好、沟通偏好、住址、常去地点、联系人称呼、导航偏好、出行习惯、饮食偏好、无障碍偏好、提醒或任务设置等长期信息时，必须调用 manage_memory 保存或更新，不要只用文字声称已经记住。"
+        "不要保存密码、令牌、验证码、API Key、一次性任务状态、临时情绪或未经确认的推断。"
+        "已保存记忆分为 basic 和 personalized 两层：两类记忆都会在提示词中提供可直接使用的内容。"
+        "当用户的问题涉及到出行规划、行动建议等与个人习惯、偏好、经验相关的话题，且提示词中的记忆不足以回答时，要主动使用 memory_search 工具查询你关注的记忆主题。"
+        "不要编造记忆；查不到就按未知处理。"
+    ),
 )
 
 

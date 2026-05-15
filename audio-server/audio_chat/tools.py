@@ -705,6 +705,17 @@ class ToolGateway:
                     "playback_decision": getattr(decision, "__dict__", decision),
                 },
             )
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "context.notification.recorded",
+                    "source_id": f"tool:{tool_name}:progress",
+                    "channel": "output",
+                    "event_name": "tool_progress",
+                    "model_visible": False,
+                    "message": message,
+                },
+            )
         return True
 
     def call_sync_safe(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:

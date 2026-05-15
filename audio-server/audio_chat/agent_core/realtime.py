@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
+from audio_chat.agent_core.context import ContextCompileRequest, ContextCompiler, PromptRegistry, record_context_events
 from audio_chat.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
 from audio_chat.asset.service import AssetService
 from audio_chat.control import ControlService
@@ -22,11 +23,23 @@ from audio_chat.tools import ToolGateway
 
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
 OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
-REALTIME_TOOL_CALL_PROMPT_RULE = (
-    "当用户请求需要调用工具、启动后台任务、查询设备或执行动作时，必须直接调用合适的工具；"
-    "在工具调用完成并收到工具结果前，不要先向用户播报“我要调用工具”“正在调用工具”“请稍等”等提示音频。"
-    "永远不要向用户朗读工具名称、函数名、参数、JSON、schema、调用过程或系统实现细节。"
-    "工具结果返回后，再用简短自然中文说明用户真正需要知道的结果。"
+
+
+def _registered_prompt_text(name: str, fallback: str) -> str:
+    """读取已注册 prompt，失败时使用 fallback。"""
+
+    asset = PromptRegistry().maybe_get(name)
+    return asset.content if asset is not None else fallback
+
+
+REALTIME_TOOL_CALL_PROMPT_RULE = _registered_prompt_text(
+    "realtime_tool_call_rules",
+    (
+        "当用户请求需要调用工具、启动后台任务、查询设备或执行动作时，必须直接调用合适的工具；"
+        "在工具调用完成并收到工具结果前，不要先向用户播报“我要调用工具”“正在调用工具”“请稍等”等提示音频。"
+        "永远不要向用户朗读工具名称、函数名、参数、JSON、schema、调用过程或系统实现细节。"
+        "工具结果返回后，再用简短自然中文说明用户真正需要知道的结果。"
+    ),
 )
 
 
@@ -755,14 +768,17 @@ def _prepare_omni_realtime_image(image: bytes, *, max_bytes: int = OMNI_REALTIME
 def _capture_photo_response_instructions(base: str) -> str:
     """构造 capture_photo 后续响应指令。"""
 
-    return (
-        f"{base}\n\n"
-        "刚刚通过 capture_photo 工具提交了一张新的实时照片。"
-        "本次回答必须只基于刚提交的这张照片回答用户上一轮视觉问题；"
-        "如果它和历史照片或历史描述冲突，以刚提交的新照片为准。"
-        "刚才已经完成抓拍，本次不要再次调用 capture_photo。"
-        "不要复述工具参数、文件名或调用过程；看不清时直接说明看不清，不能猜测。"
+    rule = _registered_prompt_text(
+        "capture_photo_followup",
+        (
+            "刚刚通过 capture_photo 工具提交了一张新的实时照片。"
+            "本次回答必须只基于刚提交的这张照片回答用户上一轮视觉问题；"
+            "如果它和历史照片或历史描述冲突，以刚提交的新照片为准。"
+            "刚才已经完成抓拍，本次不要再次调用 capture_photo。"
+            "不要复述工具参数、文件名或调用过程；看不清时直接说明看不清，不能猜测。"
+        ),
     )
+    return f"{base}\n\n{rule}"
 
 
 def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str:
@@ -777,16 +793,19 @@ def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str
     task_rule = ""
     if operation == "task_start" or name == "task_runtime_manager":
         task_rule = "如果这是后台任务或计时器启动失败，必须明确告诉用户任务没有启动、不会按时提醒。"
-    return (
-        f"{base}\n\n"
-        "刚刚的操作失败了。"
-        f"失败原因：{message}。"
-        "本次回答必须把失败事实直接告知用户，不能声称操作已经执行成功。"
-        "不要向用户复述工具名、函数名、参数或调用过程。"
-        f"{task_rule}"
-        "请用简短口语中文说明，并在合适时建议用户重试。"
+    rule = _registered_prompt_text(
+        "tool_result_failure_followup",
+        (
+            "刚刚的操作失败了。"
+            "失败原因：{message}。"
+            "本次回答必须把失败事实直接告知用户，不能声称操作已经执行成功。"
+            "不要向用户复述工具名、函数名、参数或调用过程。"
+            "{task_rule}"
+            "请用简短口语中文说明，并在合适时建议用户重试。"
+        ),
     )
-
+    rendered_rule = rule.replace("{message}", message).replace("{task_rule}", task_rule)
+    return f"{base}\n\n{rendered_rule}"
 
 def _append_realtime_tool_call_prompt_rule(prompt: str) -> str:
     """追加 Realtime 工具调用语音约束。
@@ -1084,6 +1103,7 @@ class RealtimeAudioAgentCore:
         self.provider_factory = provider_factory or self._default_provider_factory
         self.output_adapter = RealtimeOutputAdapter(output_service=output_service, recorder=recorder)
         self.tool_bridge = RealtimeToolBridge(tool_gateway=tool_gateway, recorder=recorder)
+        self.context_compiler = ContextCompiler()
         self._sessions: dict[str, tuple[str, RealtimeProviderAdapter]] = {}
         self._failed_sessions: set[str] = set()
         self._sessions_with_provider_output: set[str] = set()
@@ -1117,13 +1137,27 @@ class RealtimeAudioAgentCore:
         if existing:
             existing[1].close(user_id=user_id, reason="session_replaced")
         self._failed_sessions.discard(session_id)
-        tools = self._realtime_tool_schemas()
-        history_messages = self._load_runtime_messages(user_id=user_id, session_id=session_id)
-        prompt = self._build_prompt(user_id=user_id)
-        summary_fragment = self._load_message_summary_fragment(user_id=user_id, session_id=session_id)
-        if summary_fragment:
-            prompt = f"{prompt}\n\n{summary_fragment}"
-        session_config = replace(self.realtime_config, tools=tools, prompt=prompt)
+        context = self.context_compiler.compile(
+            ContextCompileRequest(
+                mode="realtime_audio",
+                provider=self.realtime_config.provider,
+                model=self.realtime_config.model,
+                user_id=user_id,
+                session_id=session_id,
+                base_instructions=self.realtime_config.prompt,
+                current_input={"type": "input_audio_stream", "stream_type": "sensor.mic"},
+                include_tools=True,
+                include_realtime_tool_rules=True,
+                reason="realtime_session_open",
+                memory_service=self.memory_service,
+                control_service=self.control_service,
+                tool_gateway=self.tool_bridge.tool_gateway,
+                max_context_messages=self.max_context_messages,
+            )
+        )
+        tools = list(context.tools)
+        session_config = replace(self.realtime_config, tools=tools, prompt=context.instructions)
+        record_context_events(recorder=self.recorder, session_id=session_id, context=context)
         self.recorder.record_model_request(
             session_id,
             self._build_model_request(
@@ -1131,7 +1165,8 @@ class RealtimeAudioAgentCore:
                 session_id=session_id,
                 config=session_config,
                 tools=tools,
-                history_messages=history_messages,
+                history_messages=list(context.messages[:-1]) if context.messages else [],
+                context=context,
             ),
         )
         provider = self.provider_factory(session_config)
@@ -1424,6 +1459,17 @@ class RealtimeAudioAgentCore:
                 "provider_result_injection": "handled_by_provider_adapter",
             },
         )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "context.source.added",
+                "source_id": f"tool_result:{result.get('name') or record.get('name') or ''}",
+                "source_kind": "tool",
+                "source_name": f"tool_result:{result.get('name') or record.get('name') or ''}",
+                "included": True,
+                "reason": "realtime_provider_tool_result",
+            },
+        )
         return result
 
     def _realtime_tool_schemas(self) -> list[dict[str, Any]]:
@@ -1504,6 +1550,7 @@ class RealtimeAudioAgentCore:
         config: RealtimeProviderConfig,
         tools: list[dict[str, Any]],
         history_messages: list[dict[str, Any]] | None = None,
+        context: Any = None,
     ) -> dict[str, Any]:
         """构造 Omni Realtime 模型请求快照。
 
@@ -1518,21 +1565,25 @@ class RealtimeAudioAgentCore:
         """
 
         history = list(history_messages or [])
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": config.prompt},
-            *history,
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_audio_stream",
-                        "stream_type": "sensor.mic",
-                        "note": "Realtime 底层持续发送 PCM 音频；这里是等价请求视图。",
-                    }
-                ],
-            },
-        ]
-        return {
+        messages: list[dict[str, Any]]
+        if context is not None and getattr(context, "messages", None):
+            messages = [{"role": "system", "content": config.prompt}, *list(context.messages)]
+        else:
+            messages = [
+                {"role": "system", "content": config.prompt},
+                *history,
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio_stream",
+                            "stream_type": "sensor.mic",
+                            "note": "Realtime 底层持续发送 PCM 音频；这里是等价请求视图。",
+                        }
+                    ],
+                },
+            ]
+        record = {
             "provider": config.provider,
             "model": config.model,
             "runner": "agent_core_realtime_audio",
@@ -1545,6 +1596,18 @@ class RealtimeAudioAgentCore:
             "user_id": user_id,
             "session_id": session_id,
         }
+        if context is not None:
+            record.update(
+                {
+                    "prompts": context.prompt_records(),
+                    "context_sources": context.source_records(),
+                    "warnings": context.warnings,
+                    "truncations": context.truncations,
+                    "notifications": context.notifications,
+                    "context_metadata": context.metadata,
+                }
+            )
+        return record
 
     def _build_prompt(self, *, user_id: str) -> str:
         """构造当前 realtime 会话提示词。

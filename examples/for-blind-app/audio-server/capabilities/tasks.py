@@ -559,7 +559,7 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
         input_model=TrafficLightTaskInput,
         start_result_timeout_seconds=1.0,
     )
-    description = "启动红绿灯识别后台任务。用于用户过马路、询问红绿灯状态或需要通行建议时；任务会编排手机和眼镜建立 peer video，由手机端 YOLO mock 逐帧处理并返回通行建议。"
+    description = "启动红绿灯识别后台任务。用于用户过马路、询问红绿灯状态或需要通行建议时；任务会编排手机和眼镜建立视频协作，由手机端逐帧处理并返回通行建议。"
 
     def __init__(self) -> None:
         self.phone_handle = None

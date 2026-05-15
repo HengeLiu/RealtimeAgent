@@ -31,6 +31,7 @@ dependencies = [
 "audio-chat.esp32.flash" = "audio_chat.cli.esp32:flash"
 "audio-chat.esp32.monitor" = "audio_chat.cli.esp32:monitor"
 "audio-chat.dev.live-check" = "audio_chat.preflight:live_check"
+"audio-chat.context.inspect" = "audio_chat.cli.context:inspect"
 
 [dependency-groups]
 dev = [
@@ -65,7 +66,7 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-audio_chat = ["py.typed", "spec/*.json", "spec/*.yaml"]
+audio_chat = ["py.typed", "spec/*.json", "spec/*.yaml", "prompts/*.yaml", "prompts/*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = [

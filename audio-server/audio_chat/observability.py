@@ -1208,6 +1208,12 @@ def _model_request_terminal_snapshot(record: dict[str, Any]) -> dict[str, Any]:
         snapshot["tool_count"] = record.get("tool_count")
     elif "tools" in snapshot:
         snapshot["tool_count"] = len(snapshot.get("tools") or [])
+    if "prompts" in record:
+        snapshot["prompts"] = record.get("prompts") or []
+    if "context_sources" in record:
+        snapshot["context_sources"] = record.get("context_sources") or []
+    if "warnings" in record:
+        snapshot["warnings"] = record.get("warnings") or []
     return snapshot
 
 

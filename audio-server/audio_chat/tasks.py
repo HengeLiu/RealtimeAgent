@@ -723,9 +723,36 @@ class TaskSignalBridge:
                     "payload": signal.payload,
                 },
             )
+            self.recorder.record_agent_event(
+                signal.session_id or signal.task_id,
+                {
+                    "event": "context.source.added",
+                    "source_id": f"task_signal:{signal.task_id}:{signal.signal_name}",
+                    "source_kind": "runtime",
+                    "source_name": "task_signal",
+                    "included": True,
+                    "task_id": signal.task_id,
+                    "task_type": signal.task_type,
+                    "task_signal_name": signal.signal_name,
+                },
+            )
         if signal.allow_direct_notify and self.output_service and hasattr(self.output_service, "notify_task_signal"):
             try:
                 self.output_service.notify_task_signal(signal)
+                if self.recorder and hasattr(self.recorder, "record_agent_event"):
+                    self.recorder.record_agent_event(
+                        signal.session_id or signal.task_id,
+                        {
+                            "event": "context.notification.recorded",
+                            "source_id": f"task:{signal.task_id}:{signal.signal_name}",
+                            "channel": "output",
+                            "event_name": "task_signal",
+                            "model_visible": bool(signal.requires_agent_decision),
+                            "task_id": signal.task_id,
+                            "task_type": signal.task_type,
+                            "task_signal_name": signal.signal_name,
+                        },
+                    )
             except Exception as exc:  # noqa: BLE001
                 if self.recorder and hasattr(self.recorder, "record_system_event"):
                     self.recorder.record_system_event(

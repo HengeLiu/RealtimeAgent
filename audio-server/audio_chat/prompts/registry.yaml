@@ -1,0 +1,36 @@
+prompts:
+  - name: realtime_system
+    file: realtime_system.md
+    description: Realtime 主 Agent 系统提示词。
+
+  - name: text_system
+    file: text_system.md
+    description: Text 主 Agent 系统提示词。
+
+  - name: memory_rules
+    file: memory_rules.md
+    description: 主 Agent 使用长期记忆的通用规则。
+
+  - name: realtime_tool_call_rules
+    file: realtime_tool_call_rules.md
+    description: Realtime 工具调用和语音泄漏控制规则。
+
+  - name: tool_result_failure_followup
+    file: tool_result_failure_followup.md
+    description: 工具失败后生成简短 follow-up 回复的规则。
+
+  - name: capture_photo_followup
+    file: capture_photo_followup.md
+    description: Realtime capture_photo 后根据新照片回答的规则。
+
+  - name: vision_interpreter
+    file: vision_interpreter.md
+    description: 图片解读子 Agent 提示词。
+
+  - name: memory_manager
+    file: memory_manager.md
+    description: 记忆管理子 Agent 提示词。
+
+  - name: message_summarizer
+    file: message_summarizer.md
+    description: 会话历史摘要子 Agent 提示词。
