@@ -138,7 +138,7 @@ tasks:
 uv run audio-chat.server.run --app-name for-blind-app
 ```
 
-打开浏览器参考设备：
+打开浏览器眼镜模拟组件：
 
 ```bash
 uv run audio-chat.web.open --serve

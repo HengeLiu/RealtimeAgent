@@ -32,11 +32,12 @@
 
 | # | 名称 | 当前状态 | 作用 | 盲人相关 |
 | ---: | --- | --- | --- | --- |
-| 13 | `find_object_task` | 保留，mock 版 | 抓拍一张 RGB 图片，生成 mock 找物结果；YOLO 迁移完成后替换识别逻辑。 | 强相关 |
-| 14 | `traffic_light_task` | 保留，mock 版 | 抓拍一张 RGB 图片，生成 mock 红绿灯状态和通行建议；YOLO 迁移完成后替换识别逻辑。 | 强相关 |
+| 13 | `find_object_task` | 保留，peer video 版 | 通过 `peer.video.receiver.start` / `peer.video.sender.start` 编排 phone 与 glass 建立视频任务链路，phone 端运行 YOLOE 找物并回报结果。 | 强相关 |
+| 14 | `traffic_light_task` | 保留，peer video 版 | 通过 peer video 编排 phone 与 glass 建立视频任务链路，phone 端运行红绿灯 YOLO + HSV fallback，稳定绿灯或超时后回报结果。 | 强相关 |
 | 15 | `timer_task` | 保留 | 调度 `timer.due`，到点后完成；取消时播报。 | 否 |
 
-连续视觉样板、端侧 phone task 迁移样板、导航执行期样板、提醒样板和重复计时器样板已清理。端侧视觉任务等 YOLO 和端侧视觉迁移完成后再重新设计，不保留当前样板实现。
+连续视觉样板、端侧 phone task 迁移样板、导航执行期样板、提醒样板和重复计时器样板已清理。
+端侧视觉任务已经收敛到 peer video 编排；旧 `phone.task.start` 仅作为协议测试和迁移参考。
 
 ## SDK Task 基础设施
 

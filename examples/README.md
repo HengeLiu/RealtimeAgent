@@ -5,7 +5,7 @@
 | 目录 | 当前定位 |
 | --- | --- |
 | `for-blind-app` | 唯一应用示例。用于真实 server 启动、Tool / Task 自动发现、SDK 基础能力和设备级回放。 |
-| `dev-support` | 浏览器、Python phone、Python glass 等本地参考端与契约测试辅助实现。 |
+| `dev-support` | 浏览器眼镜模拟、Python 手机模拟、Python playback glass 等开发/测试支持组件与契约测试辅助实现。它们以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。 |
 
 推荐启动方式：
 

@@ -1,6 +1,7 @@
 # CLI 参考
 
-`audio-chat` 提供一组命令用于启动 server、校验设备、打开参考端、同步配置、做 package 检查和运行端侧辅助任务。
+`audio-chat` 提供一组命令用于启动 server、校验设备、打开开发/测试支持组件、
+同步配置、做 package 检查和运行端侧辅助任务。
 
 所有命令建议通过 `uv run` 执行。
 
@@ -39,15 +40,16 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
 ```
 
-## 浏览器参考设备
+## 浏览器眼镜模拟组件
 
-打开浏览器参考端：
+打开 browser-glass 开发支持组件：
 
 ```bash
 uv run audio-chat.web.open --serve
 ```
 
-`browser-glass` 使用 ES module 导入本地 TypeScript Device SDK，Chrome 不能在
+`browser-glass` 是以 Device 形态运行的浏览器眼镜模拟组件，用于本地联调和手动测试，
+不是 SDK 定义的正式设备类型。它使用 ES module 导入本地 TypeScript Device SDK，Chrome 不能在
 `file://` 页面中加载这类本地模块。`--serve` 会用标准库启动一个轻量本地静态服务，
 并打开 `http://127.0.0.1:8766/examples/dev-support/devices/browser-glass/index.html`。
 端口默认固定为 `8766`，这样浏览器的 `localStorage`、IndexedDB 和样例目录授权可以
@@ -59,24 +61,30 @@ origin，需要重新授权一次。
 uv run audio-chat.web.open --serve --print-url
 ```
 
-## Python 参考设备
+## Python 开发支持组件
 
-Python phone mock：
-
-```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
-```
-
-Python phone RGB 预览：
+Python phone preview，用于当前视频回显、peer video 和 YOLO/YOLOE 视觉任务联调：
 
 ```bash
 uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
-Python glass playback：
+Python phone mock，用于简单协议、RGB 上传和振动 mock 验证：
+
+```bash
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+```
+
+Python glass playback，人工播放参考组件：
 
 ```bash
 uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
+```
+
+Python playback glass 系统回放端：
+
+```bash
+uv run audio-chat.playback-glass.run --help
 ```
 
 ## iOS 参考端
@@ -136,6 +144,7 @@ uv run python -m pytest audio-server/tests/test_protocol_schema_examples.py audi
 uv run python -m pytest audio-device/python/tests -q
 cd audio-device/typescript && npm test
 cd audio-device/swift && swift test
+cd audio-device/kotlin && gradle test
 cmake -S audio-device/c -B audio-device/c/build
 cmake --build audio-device/c/build
 ctest --test-dir audio-device/c/build --output-on-failure

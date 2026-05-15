@@ -1,6 +1,7 @@
 # 快速开始
 
-本页帮助你在本地跑通 `audio-chat` 的最小链路：安装 SDK，启动示例 server，连接浏览器参考设备，并查看调试接口。
+本页帮助你在本地跑通 `audio-chat` 的最小链路：安装 SDK，启动示例 server，
+连接开发/测试支持组件，并查看调试接口。
 
 ## 环境要求
 
@@ -42,7 +43,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-## 打开浏览器参考设备
+## 打开浏览器眼镜模拟组件
 
 在另一个终端运行：
 
@@ -50,7 +51,16 @@ curl http://127.0.0.1:8765/api/debug/playback
 uv run audio-chat.web.open --serve
 ```
 
-浏览器参考设备用于快速验证：
+`--serve` 会启动本地静态服务并打开 browser-glass 页面，默认地址类似：
+
+```text
+http://127.0.0.1:8766/examples/dev-support/devices/browser-glass/index.html?server_url=http%3A%2F%2F127.0.0.1%3A8765
+```
+
+browser-glass 是开发支持组件，页面通过 ES module 导入本地 TypeScript Device SDK。
+本地 HTTP origin 会保留浏览器对麦克风、摄像头和文件选择的授权缓存。
+
+它在协议层注册为普通 Device，用于快速验证：
 
 1. 设备注册。
 2. 浏览器麦克风输入。
@@ -58,23 +68,33 @@ uv run audio-chat.web.open --serve
 4. server 下发 speaker stream。
 5. 控制事件和 stream 生命周期。
 
-## 可选：启动 Python phone mock
+## 可选：启动 Python 手机模拟组件
 
-同一 `user_id` 下可以同时连接多个参考设备：
-
-```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
-```
-
-如果要查看 RGB stream 回显：
+如果要联调当前找物 / 红绿灯视频任务，启动 Python phone preview。它是开发支持组件，
+在协议层注册为普通 Device，不代表 SDK 内置了固定的手机设备类型：
 
 ```bash
 uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
-该命令会打开 PySide6 视频窗口。保持浏览器设备和 Python phone 使用同一个
-`user_id`，在 browser-glass 的“带图输入”区域点击“上传所选图片”，即可把图片通过
-server 回显到 phone 窗口。
+该命令会打开 PySide6 视频窗口，并注册为 `dev-python-phone-preview`。它声明
+`endpoint.role.visual_display`、`endpoint.compute.vision`、`actuator.display.rgb`
+和 `peer.video.receiver`，默认使用 `vision.provider=yolo`，最近原始帧写入
+`runs/audio-chat/python-phone/latest-rgb.png`，YOLO 标注帧写入
+`runs/audio-chat/python-phone/latest-yolo.jpg`。
+
+如果只想验证简单设备协议、RGB 上传或振动 mock，可以另开 mock 配置。这个配置
+同样属于开发/测试支持：
+
+```bash
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+```
+
+联调视频任务时，保持浏览器设备和 Python phone 使用同一个
+`user_id`。当前 browser-glass 的“带图输入”只负责选择图片或视频资源；普通语音期间
+server 的 realtime visual sampler 会按需请求单帧资产，但这类带 `request_id` 的
+资产采样流只进入模型/资产链路，不会转发到 phone 窗口。只有普通连续 RGB stream，
+或找物 / 红绿灯 Task 启动后建立的 `peer.video` 视频任务流，才会在 phone 窗口回显。
 
 ## 校验设备能力文件
 
@@ -113,3 +133,4 @@ sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker
 - 想写业务能力，读 [第一个 Tool 和 Task](../tutorials/build-first-capability.md)。
 - 想接入端侧设备，读 [设备能力与 Context API 开发说明](../../audio-server/docs/how-to/device-capability-development.md)。
 - 想理解命令行入口，读 [CLI 参考](../reference/cli.md)。
+- 想写独立端侧通讯代码，读 `audio-device/<language>/README.md`。

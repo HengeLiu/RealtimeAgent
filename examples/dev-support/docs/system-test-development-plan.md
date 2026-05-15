@@ -318,10 +318,10 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 
 - 状态：已完成。
 - 目标：确认本次实现必须是 `examples/dev-support` 下的端侧设备，不落入 SDK 内部测试框架。
-- 实现：复查 `browser-glass` 的控制事件、StreamChunk 编解码、`sensor.mic`/`sensor.rgb` 上传和 `actuator.speaker` 回执；确认旧 `python-glass` 目录当前不存在，因此不迁移旧 in-process 代码。
+- 实现：复查 `browser-glass` 的控制事件、StreamChunk 编解码、`sensor.mic`/`sensor.rgb` 上传和 `actuator.speaker` 回执；确认 `python-glass` 仍作为人工 playback 参考端保留，自动化系统回放单独落在 `python-playback-glass`。
 - 文件：`examples/dev-support/devices/browser-glass/index.html`、`testdata/audio-sample/`、`testdata/image-sample/`。
 - 验证：`rg` 检查现有协议事件和样例文件；确认没有新增 `audio-server/audio_chat/system_test`。
-- 风险：旧 `pyproject.toml` 和部分历史测试仍保留 `python-glass` 引用，本阶段未清理旧端侧。
+- 风险：`python-glass` 和 `python-playback-glass` 名称相近，文档和命令必须明确区分人工 playback 与自动化回放。
 
 ### 阶段 1：端侧骨架和真实协议注册
 

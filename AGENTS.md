@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-`audio-chat` 是一个面向语音交互、多设备协作和实时数据流的服务端 Python SDK，加上可运行的示例应用和参考端侧实现。AI 编程代理进入本仓库时，默认应把它当作“SDK + 示例应用 + 多端协议”仓库处理，而不是单一业务脚本项目。
+`audio-chat` 是一个面向语音交互、多设备协作和实时数据流的服务端 Python SDK，加上可运行的示例应用、真实端侧参考工程和开发/测试支持组件。AI 编程代理进入本仓库时，默认应把它当作“SDK + 示例应用 + 多端协议 + 开发支持组件”仓库处理，而不是单一业务脚本项目。
 
 核心目标：
 
@@ -19,7 +19,7 @@ audio-server/tests/               # SDK 测试
 audio-server/docs/                # SDK 内部设计、上下文 API、运行产物说明
 docs/                             # 社区向文档、快速开始、教程、命令行和项目结构说明
 examples/for-blind-app/           # 当前主要示例应用
-examples/dev-support/             # 浏览器、Python 手机、Python 眼镜等本地参考端
+examples/dev-support/             # 浏览器眼镜、Python 手机、Python 眼镜等开发/测试支持组件
 testdata/                         # 可复用测试和回放样例
 legacy/                           # 旧项目代码，仅迁移参考
 ```
@@ -52,7 +52,7 @@ examples/for-blind-app/audio-server/
   runs/             # 本地运行产物，不能提交
 ```
 
-参考端侧入口：
+开发/测试支持组件和真实端侧参考入口：
 
 ```text
 examples/dev-support/devices/browser-glass/
@@ -108,13 +108,13 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
 ```
 
-打开浏览器参考端：
+打开浏览器眼镜模拟组件：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
-Python 手机模拟端：
+Python 手机简单 mock 组件：
 
 ```bash
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
@@ -277,7 +277,7 @@ uv run python -m pytest audio-server/tests/integration/test_dashscope_providers.
 - 测试文件命名为 `test_*.py`。
 - SDK 行为测试放 `audio-server/tests/`。
 - 示例应用测试放 `examples/<app>/tests/`。
-- 参考设备测试放对应 `examples/dev-support/tests/` 或示例应用测试目录。
+- 开发/测试支持组件测试放对应 `examples/dev-support/tests/` 或示例应用测试目录。
 - 新测试要用中文注释或 docstring 写明测试目标、测试方法和预期结果。
 - 测试的目的是真实暴露问题，不是只为通过而放宽断言。
 - 如果功能涉及跨设备，必须提供本地可复现联调流程和观察点。
@@ -298,13 +298,13 @@ uv run python -m pytest audio-server/tests/integration/test_dashscope_providers.
    uv run audio-chat.server.run --app-name for-blind-app
    ```
 
-3. 打开浏览器参考端：
+3. 打开浏览器眼镜模拟组件：
 
    ```bash
-   uv run audio-chat.web.open --print-url
+   uv run audio-chat.web.open --serve
    ```
 
-4. 可选启动 Python 手机模拟端：
+4. 可选启动 Python 手机简单 mock 组件：
 
    ```bash
    uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
@@ -430,7 +430,7 @@ tasks/                    # 长流程 Task 运行产物
 
 - SDK 核心能力：改 `audio-server/audio_chat/`，补 `audio-server/tests/`。
 - 示例应用能力：改 `examples/for-blind-app/audio-server/capabilities/`，补 `examples/for-blind-app/tests/`。
-- 参考设备：改 `examples/dev-support/devices/` 或 `examples/for-blind-app/devices/`，补端侧契约或联调说明。
+- 开发/测试支持组件或端侧参考工程：改 `examples/dev-support/devices/` 或 `examples/for-blind-app/devices/`，补端侧契约或联调说明。
 - 文档或协议：同步更新 docs、schema、测试和示例配置。
 
 遇到多设备、模型、ASR、TTS、数据流、播放仲裁、工具调用问题时，不要只凭命名推断实现状态；要用代码位置、测试命令、运行产物和日志说明真实链路。

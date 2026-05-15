@@ -1,8 +1,8 @@
 # audio-chat SDK 总体架构设计
 
-更新时间：2026-05-07
+更新时间：2026-05-15
 
-文档状态：总体架构设计与历史决策记录。本文覆盖了 `audio-chat` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
+文档状态：总体架构设计与历史决策记录。本文覆盖了 `audio-chat` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
 
 ## 1. 文档目的
 
@@ -76,8 +76,8 @@ audio-chat.sdk.package-check
 audio-chat.web.open
 ```
 
-参考端侧不放入 SDK CLI 命名空间，例如 Python 手机端使用
-`python -m audio_chat_python_phone_mock` 从自己的设备包启动。roadmap 中如继续出现
+开发/测试支持组件不放入 SDK CLI 命名空间，例如 Python 手机模拟组件使用
+`python -m audio_chat_python_phone_mock` 从自己的包启动。roadmap 中如继续出现
 `audio-chat.ios.*`、`audio-chat.esp32.*` 等命令，必须明确标注为未实现或后续目标，不能写进 README 的可复制命令区。
 
 ### 3.2 仓库目录
@@ -133,7 +133,7 @@ legacy/
 
 1. `audio_chat` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
 2. `audio-server/audio_chat` 下的 `protocol`、`device_capabilities` 和 `spec/` 定义多端必须共同遵守的公共协议、对象模型和 schema；当前不维护协议兼容性 golden 样例。
-3. `examples/*/devices` 只提供参考端侧实现，用来验证协议、降低联调门槛；正式端侧由开发者在自己的工程中自行实现，不要求放入 SDK 目录。
+3. `examples/dev-support/devices` 提供开发/测试支持组件，用来验证协议、降低联调门槛；`examples/*/devices` 下的应用端侧工程是参考实现。正式端侧由开发者在自己的工程中自行实现，不要求放入 SDK 目录。
 4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
 
 因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备通讯写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
@@ -142,7 +142,7 @@ legacy/
 
 | 旧 SDK 经验                     | audio-chat 取舍                                                          |
 | ------------------------------- | ------------------------------------------------------------------------ |
-| 多端协同运行模型                | 保留为公共协议和参考端侧，不把端侧正式工程塞进 server Python 包。        |
+| 多端协同运行模型                | 保留为公共协议、开发支持组件和端侧参考工程，不把端侧正式工程塞进 server Python 包。 |
 | glass / phone / server 固定角色 | 改成能力和订阅驱动；`client_type` 只用于调试、兼容和默认配置。         |
 | `DeviceGroupContext`          | 改成 `UserDeviceContext`，以 `user_id` 的 active device set 为边界。 |
 | 控制面和媒体面                  | 改成 Control Service 和 Stream Service，开发者只理解 event 和 stream。   |
@@ -167,7 +167,7 @@ legacy/
 | ToolGateway            | 已实现   | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `tests/acceptance/test_protocol_native_tool_task_contract.py` 与 `audio-server/tests/test_agent_core_router.py` 覆盖。                                                                                                                                                      |
 | Task Engine            | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。                                                                                                                                                                                                                             |
 | Output Service         | 已实现   | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `audio-server/tests/test_phase2_providers_output.py` 覆盖。                                                                                                                                                                                                               |
-| Endpoint references    | 已实现   | Python playback、Python phone mock 和 browser-glass 最小参考端侧已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。                                                                                                                           |
+| Endpoint references    | 已实现   | Python playback、Python phone mock 和 browser-glass 最小开发支持组件已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。                                                                                                                           |
 | Memory / Skill / MCP   | 已实现   | C 线路已落地 `MemoryService`、`SkillService`、`McpGateway` 和内置 Tool；由 `audio-server/tests/test_memory_service.py`、`audio-server/tests/test_skill_service.py`、`audio-server/tests/test_mcp_gateway.py`、`audio-server/tests/acceptance/test_indirect_device_context_contract.py` 覆盖。任何需要设备通讯能力的 Memory / Skill / MCP 都必须封装成 Tool 或 Task。 |
 | Signed token / Pairing | 部分实现 | `DeviceAuthenticator` 已支持 `disabled`、`static_token` 和 HMAC `signed_token` 校验；配对管理端、显式解绑和绑定冲突管理仍属于后续部署能力。                                                                                                                                                                                                                                              |
 
@@ -658,16 +658,17 @@ Stream：
 | `stream.output.started`              | device        | 端侧开始播放或执行。                                                                                   |
 | `stream.output.finished`             | device        | 端侧播放或执行完成。                                                                                   |
 | `stream.output.failed`               | device        | 端侧播放或执行失败。                                                                                   |
-| `stream.control.configure.requested` | server        | server 请求端侧调整某类 stream 策略，例如通过 `stream_type=sensor.rgb` 请求 RGB 相机单帧或连续上传。 |
+| `stream.control.open.requested`  | server        | server 请求端侧打开某类 stream，例如通过 `stream_type=sensor.rgb` 请求 RGB 相机单帧或连续上传。 |
+| `stream.control.close.requested` | server        | server 请求端侧关闭某类 stream，例如停止 Realtime 视觉采样或结束 typed sensor stream。 |
 
 端侧控制：
 
 | 事件                                 | 生产者 | 说明                                                                                  |
 | ------------------------------------ | ------ | ------------------------------------------------------------------------------------- |
-| `control.device.command.requested` | server | server 请求具备某项能力且订阅该事件的端侧执行控制动作，例如启动或停止导航、本地推理。 |
-| `control.device.command.started`   | device | 端侧确认控制动作已开始。                                                              |
-| `control.device.command.completed` | device | 端侧确认控制动作已完成。                                                              |
-| `control.device.command.failed`    | device | 端侧控制动作失败。                                                                    |
+| `command.requested` | server | server 请求具备某项能力且订阅该事件的端侧执行控制动作，例如启动或停止导航、本地推理。 |
+| `command.accepted`   | device | 端侧确认控制动作已开始。                                                              |
+| `command.completed` | device | 端侧确认控制动作已完成。                                                              |
+| `command.failed`    | device | 端侧控制动作失败。                                                                    |
 
 Agent、Tool、Task 和系统事件：
 
@@ -724,7 +725,7 @@ filter 字段路径只推荐引用事件信封字段和 `payload` 内字段：
 
 新版协议不支持按旧设备声明字段过滤。事件分发只看订阅的 `event` 和 `filter`。例如订阅
 `{"event":"stream.control.*","filter":{"stream_type":"sensor.rgb"}}`
-表示当 server 发布 `stream.control.configure.requested` 且 `stream_type=sensor.rgb`
+表示当 server 发布 `stream.control.open.requested` 且 `stream_type=sensor.rgb`
 时，该设备会收到 RGB 采集配置事件；订阅
 `{"event":"stream.output.*","filter":{"stream_type":"actuator.speaker"}}`
 表示当 server 发布 `stream.output.open.requested` 且
@@ -1185,7 +1186,7 @@ server 发布事件时不指定接收设备：
 
 ```python
 result = control_service.publish(Event(
-    event_name="stream.control.configure.requested",
+    event_name="stream.control.open.requested",
     user_id=user_id,
     producer_id="server-main",
     stream_type="sensor.rgb",
@@ -1365,8 +1366,8 @@ Agent -> Tool: 需要当前画面
 Tool -> Asset: get_latest(sensor.rgb)
 Asset -> Tool: miss
 Tool -> Asset: request_asset(sensor.rgb, mode=single)
-Asset -> Control: stream.control.configure.requested(sensor.rgb, mode=single)
-Control -> Endpoint: stream.control.configure.requested(stream_type=sensor.rgb)
+Asset -> Control: stream.control.open.requested(sensor.rgb, mode=single)
+Control -> Endpoint: stream.control.open.requested(stream_type=sensor.rgb)
 Endpoint -> Stream: stream.input.opened(stream_type=sensor.rgb)
 Endpoint -> Stream: sensor.rgb chunk(jpeg)
 Stream -> Asset: store(sensor.rgb chunk)
@@ -1568,7 +1569,7 @@ Tool 或 Task 获取传感器数据时，应优先读取缓存，再按需请求
 1. 查询 Asset Store 是否已有满足条件的资产。
 2. 如果命中，直接返回 AssetRef。
 3. 如果未命中，发布带 `stream_type` 的控制事件，由订阅命中的设备上传该 stream。
-4. 发送 stream.control.configure.requested 事件，请端侧上传单帧或短时间片。
+4. 发送 stream.control.open.requested 事件，请端侧上传单帧或短时间片。
 5. 等待 Asset Service 写入 Asset Store。
 6. 返回 AssetRef，或在超时后返回明确失败原因。
 ```
@@ -2828,7 +2829,7 @@ API 命名约定：
 
 1. `publish_event()` 发布当前 `user_id` 范围内的协议事件，由 Control Service 补齐信封、校验事件名、按订阅分发。
 2. `open_output_stream()` 打开 `actuator.*` 输出 stream，用于向设备发送真实字节。
-3. `request_asset()` 是资产链路的便捷方法；它仍然使用 `stream.control.configure.requested` 和 `sensor.*` stream，不引入新协议。
+3. `request_asset()` 是资产链路的便捷方法；它仍然使用 `stream.control.open.requested` 和 `sensor.*` stream，不引入新协议。
 4. `watch_assets()` 读取 Asset Service 已缓存的资产变化，用于 Task 持续处理 `sensor.rgb`、`sensor.depth`、`sensor.imu` 等输入。
 5. `submit_text()` / `submit_audio()` 是输出链路的便捷方法；它们进入 Output Service，再落到 `actuator.speaker` stream。
 6. `StreamWriter`、`AssetRef`、`EventPublishResult` 只是返回值或引用，不是端侧协议对象。
@@ -2844,17 +2845,17 @@ API 命名约定：
 
 1. 如果数据很小、一次性、没有持续吞吐，例如导航目的地、控制参数、开关状态、执行结果摘要，直接放在事件 `payload` 里。
 2. 如果数据是音频、图片、视频帧、深度图、IMU 窗口、文件或任何持续产生的大字节数据，事件只负责配置和生命周期，真实数据必须走 stream。
-3. 事件可以触发 stream，但事件本身不承载 stream 数据。典型做法是发布 `stream.control.configure.requested`，端侧收到后打开或调整 `sensor.*` stream。
+3. 事件可以触发 stream，但事件本身不承载 stream 数据。典型做法是发布 `stream.control.open.requested`，端侧收到后打开 `sensor.*` stream；停止连续采集时发布 `stream.control.close.requested`。
 4. Task 需要连续处理传感器数据时，优先从 Asset Service 的 `watch_assets()` 读取已组装资产；只有音频主链路才默认直接进入 Audio Pipeline / Agent Core。
 
 `UserDeviceContext` 提供的是业务 API，不是第三种通讯协议。每个 API 都会落到控制事件或 stream：
 
 | 开发者意图         | 推荐 API                                                                                           | 底层协议                                                                       | 适合场景                                            |
 | ------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------- |
-| 控制设备执行动作   | `publish_event("control.device.command.requested", payload=...)`                                 | 发布协议事件，由订阅策略分发。                                                 | 启动导航、停止导航、开始本地推理、切换端侧模式。    |
-| 请求设备采集数据   | `publish_event("stream.control.configure.requested", stream_type=...)` 或 `request_asset(...)` | 发布协议事件，端侧再打开 `sensor.*` stream 上传数据。                        | 拍一张照片、上传一段 IMU 窗口、开启低频深度图采样。 |
+| 控制设备执行动作   | `publish_event("command.requested", payload=...)`                                 | 发布协议事件，由订阅策略分发。                                                 | 启动导航、停止导航、开始本地推理、切换端侧模式。    |
+| 请求设备采集数据   | `publish_event("stream.control.open.requested", stream_type=...)` 或 `request_asset(...)` | 发布协议事件，端侧再打开 `sensor.*` stream 上传数据。                        | 拍一张照片、上传一段 IMU 窗口、开启低频深度图采样。 |
 | 向设备发送数据     | `open_output_stream(...)` 或 `submit_text()` / `submit_audio()`                              | 打开 `actuator.*` output stream，再写入字节。                                | 播放音频、振动模式、未来其他执行器字节流。          |
-| 持续处理传感器数据 | `publish_event("stream.control.configure.requested", ...)` + `watch_assets(...)`               | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。  |
+| 持续处理传感器数据 | `publish_event("stream.control.open.requested", ...)` + `watch_assets(...)`，结束时发布 `stream.control.close.requested` | 控制事件配置上传策略，端侧连续写 `sensor.*` stream，Asset Service 逐帧缓存。 | 固定频率视频帧分析、连续深度图分析、IMU 滑窗处理。  |
 | 查询设备状态       | `get_devices()`                                                                                  | 读取 server 内部 `DeviceSnapshot`。                                          | 展示当前在线设备、订阅和调试属性。                  |
 
 Tool / Task 发出的事件能否到达设备，取决于端侧注册时的 `supports` 或底层 `subscriptions`。端侧推荐先声明 `supports`：
@@ -2891,7 +2892,7 @@ Tool / Task 发出的事件能否到达设备，取决于端侧注册时的 `sup
       "filter": {"stream_type": "actuator.haptic"}
     },
     {
-      "event": "control.device.command.requested",
+      "event": "command.requested",
       "filter": {"payload.command_name": "navigation.start"}
     }
   ]
@@ -2962,7 +2963,7 @@ class StartNavigationTool(BaseTool):
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         result = context.devices.publish_event(
-            "control.device.command.requested",
+            "command.requested",
             payload={
                 "command_name": "navigation.start",
                 "params": {
@@ -2983,7 +2984,7 @@ class StartNavigationTool(BaseTool):
 ```
 
 这段代码不会指定 `device_id`。底层会发布
-`control.device.command.requested`，只有订阅命中的在线设备才会收到。
+`command.requested`，只有订阅命中的在线设备才会收到。
 
 采集设备数据：
 
@@ -3012,7 +3013,7 @@ class LookAroundTool(BaseTool):
 `request_asset()` 的语义是：
 
 1. 先查 `Asset Store` 中是否已有满足 `freshness_seconds` 的 `sensor.rgb` 资产。
-2. 如果缓存未命中，SDK 发布 `stream.control.configure.requested(stream_type=sensor.rgb)`。
+2. 如果缓存未命中，SDK 发布 `stream.control.open.requested(stream_type=sensor.rgb)`。
 3. 匹配设备收到事件后自行决定如何打开相机，并通过 `sensor.rgb` stream 上传图片。
 4. Asset Service 写入资产缓存并返回 `AssetRef`。
 
@@ -3024,7 +3025,7 @@ class MotionWindowTask(BaseTask):
 
     async def on_start(self, context: TaskContext) -> None:
         context.devices.publish_event(
-            "stream.control.configure.requested",
+            "stream.control.open.requested",
             stream_type="sensor.imu",
             payload={
                 "mode": "window",
@@ -3036,7 +3037,7 @@ class MotionWindowTask(BaseTask):
 ```
 
 这段代码仍然不是点对点通讯。server 只发布
-`stream.control.configure.requested` 事件；是否下发成功由订阅匹配结果决定，
+`stream.control.open.requested` 事件；是否下发成功由订阅匹配结果决定，
 端侧后续上传的数据仍然走 `sensor.imu` stream。
 
 持续视频帧处理示例：
@@ -3049,7 +3050,7 @@ class VideoFrameAnalyzeTask(BaseTask):
         correlation_id = context.task_id
 
         result = context.devices.publish_event(
-            "stream.control.configure.requested",
+            "stream.control.open.requested",
             stream_type="sensor.rgb",
             payload={
                 "mode": "continuous",
@@ -3075,7 +3076,7 @@ class VideoFrameAnalyzeTask(BaseTask):
 
     async def on_cancel(self, context: TaskContext) -> None:
         context.devices.publish_event(
-            "stream.control.configure.requested",
+            "stream.control.close.requested",
             stream_type="sensor.rgb",
             payload={
                 "mode": "stop",
@@ -3087,11 +3088,11 @@ class VideoFrameAnalyzeTask(BaseTask):
 
 这条链路的协议含义：
 
-1. Task 发布 `stream.control.configure.requested`，payload 里说明 `mode=continuous`、`fps=2`、`format=jpeg`、`asset_policy=cache`。
+1. Task 发布 `stream.control.open.requested`，payload 里说明 `mode=continuous`、`fps=2`、`format=jpeg`、`asset_policy=cache`。
 2. 匹配设备收到事件后按端侧能力打开摄像头，并通过 `sensor.rgb` stream 连续上传帧。
 3. Stream Service 接收字节，Asset Service 把每一帧组装成 `AssetRef`，并按 `correlation_id` 建立索引。
 4. Task 通过 `watch_assets(stream_type="sensor.rgb", correlation_id=...)` 逐帧读取资产并处理。
-5. Task 结束或取消时发布 `mode=stop` 的 `stream.control.configure.requested`，端侧停止上传并关闭相关 stream。
+5. Task 结束或取消时发布 `stream.control.close.requested`，payload 里带 `mode=stop` 和 `correlation_id`，端侧停止上传并关闭相关 stream。
 
 如果只是让设备震动一次、切换一个模式、返回一个很小的状态摘要，不需要 stream，直接使用控制事件 payload 即可。只有当数据需要持续传输或体积明显超过控制事件合理范围时，才建立 stream。
 
@@ -3134,9 +3135,11 @@ await context.devices.submit_text(
 6. `DeviceSnapshot` 是某个时刻的快照，不保证实时同步。执行关键操作前，SDK 应在内部重新检查设备是否仍在线、订阅是否仍满足。
 7. MCP 和 Skill 不允许直接接收或持有 `UserDeviceContext`。如果 MCP 或 Skill 需要影响设备行为，必须封装成 Tool 或 Task，由 Tool / Task 使用 `UserDeviceContext` 完成设备访问。
 
-## 14. 端侧参考实现
+## 14. 开发支持组件和端侧参考工程
 
-`audio-chat` 提供参考端侧实现，但不把这些实现作为 server SDK 的强依赖。
+`audio-chat` 提供开发/测试支持组件和端侧参考工程，但不把这些实现作为 server SDK 的强依赖。
+`examples/dev-support/devices` 下的 browser-glass、python-phone、python-playback-glass
+用于本地联调和系统测试支持；它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
 
 建议目录：
 
@@ -3204,7 +3207,7 @@ examples/dev-support/devices/
 4. 记录 server 下发的 output stream、事件和执行器状态。
 5. 支持断言：
    - 是否收到输出 stream。
-   - 是否收到 `stream.control.configure.requested(stream_type=sensor.rgb)` 并上传对应 `sensor.rgb` 样本。
+   - 是否收到 `stream.control.open.requested(stream_type=sensor.rgb)` 并上传对应 `sensor.rgb` 样本。
    - 是否收到并响应端侧控制事件。
    - 是否触发工具。
    - 是否完成 Task。
@@ -3292,9 +3295,9 @@ uv run audio-chat.web.open --help
 | `audio-chat.config.sync`                 | 同步 server、mock、iOS、ESP32 的本地联调配置。                                              |
 | `audio-chat.dev.preflight`               | 生成预检报告，验证协议事件、stream 类型、配置和依赖。                                       |
 | `audio-chat.playback.glass`              | 启动 Python 回放端，上传 testdata 并断言输出。                                              |
-| `python -m audio_chat_python_phone_mock` | 端侧模块入口，启动 Python 手机 mock，用于验证多设备、端侧 task 和资产回传；它不是 SDK CLI。 |
+| `python -m audio_chat_python_phone_mock` | 开发支持组件入口，启动 Python 手机 mock / preview，用于验证多设备、peer video、端侧 task 和资产回传；它不是 SDK CLI。 |
 | `audio-chat.sdk.package-check`           | 执行 SDK 包边界、公开导入和入口命令检查。                                                   |
-| `audio-chat.web.open`                    | 打开或打印 Web JS endpoint 调试页地址。                                                     |
+| `audio-chat.web.open`                    | 打开或打印 browser-glass 开发支持组件地址。                                                 |
 | `audio-chat.ios.open`                    | 后续目标，当前未落地：打开 iOS endpoint 工程。                                              |
 | `audio-chat.ios.build-sim`               | 后续目标，当前未落地：验证 iOS 模拟器构建。                                                 |
 | `audio-chat.esp32.start`                 | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。                                     |
@@ -3476,7 +3479,7 @@ subscriptions:
     filter:
       stream_type: "sensor.rgb"
 mock_actions:
-  stream.control.configure.requested:
+  stream.control.open.requested:
     upload_asset:
       stream_type: "sensor.rgb"
       file: "testdata/assets/desk.jpg"
@@ -3498,7 +3501,7 @@ uv run audio-chat.ios.build-sim --app-root /path/to/my-app
 Web JS 当前命令形态：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 ESP32 后续目标命令形态，当前未落地：

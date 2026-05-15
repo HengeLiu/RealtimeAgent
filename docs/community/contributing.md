@@ -9,7 +9,7 @@
 1. SDK runtime bug 修复。
 2. Tool / Task 开发体验改进。
 3. 设备能力 schema 和校验改进。
-4. 浏览器、Python、iOS、ESP32 参考端完善。
+4. browser-glass、python-phone、python-playback-glass 等开发/测试支持组件完善，以及 iOS、ESP32 端侧参考工程完善。
 5. 测试、回放、acceptance 脚本。
 6. 文档、教程、排障指南。
 

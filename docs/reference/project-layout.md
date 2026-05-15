@@ -4,6 +4,7 @@
 
 ```text
 audio-server/audio_chat/
+audio-device/
 examples/
 docs/
 testdata/
@@ -35,6 +36,22 @@ audio-server/audio_chat/
   context.py        # ToolContext / TaskContext
 ```
 
+## audio-device
+
+多语言端侧通讯 SDK。它只封装端侧和 server 的通讯协议，不包含业务 Tool / Task、
+硬件驱动、模型、ASR 或 TTS。
+
+```text
+audio-device/
+  python/      # audio_chat_device，Python 端侧通讯 SDK
+  typescript/  # @audio-chat/device，浏览器 / Node / Electron 端侧通讯 SDK
+  swift/       # AudioChatDeviceKit，iOS / macOS 协议模型和 stream codec
+  kotlin/      # Android / JVM 协议模型和 stream codec
+  c/           # ESP32 / 嵌入式 Linux 最小协议核心
+```
+
+每个语言目录下都有独立 README，说明协议、数据模型、导入方式和测试命令。
+
 ## examples
 
 应用样例目录。新应用可以参考：
@@ -56,17 +73,27 @@ examples/for-blind-app/
 
 ## examples/dev-support 和 examples/*/devices
 
-参考端侧实现：
+`examples/dev-support/` 放开发/测试支持组件。它们在代码和协议层通常会注册成普通
+Device，用来验证注册、事件、stream、播放、视觉任务和系统测试回放；但它们不是
+AudioChat SDK 预设的正式设备类型，也不要求开发者真实设备按这些目录结构实现。
+
+开发/测试支持组件：
 
 ```text
 examples/dev-support/devices/browser-glass/
 examples/dev-support/devices/python-glass/
+examples/dev-support/devices/python-playback-glass/
 examples/dev-support/devices/python-phone/
+```
+
+应用目录下的真实端侧参考工程：
+
+```text
 examples/for-blind-app/devices/native-ios-phone/
 examples/for-blind-app/devices/native-esp32-glass/
 ```
 
-这些目录用于帮助开发者理解协议和做本地联调。正式设备可以在独立仓库或自己的工程里实现，只要遵守设备注册、事件和 stream 协议。
+正式设备可以在独立仓库或自己的工程里实现，只要遵守设备注册、事件和 stream 协议。
 
 ## docs
 

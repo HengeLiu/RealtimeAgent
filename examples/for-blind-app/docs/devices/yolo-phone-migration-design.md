@@ -1,5 +1,11 @@
 # Python phone YOLO 真实识别迁移设计
 
+更新时间：2026-05-15
+
+当前状态：迁移已落地。Python phone preview 默认使用 `vision.provider=yolo`，找物走
+YOLOE + MobileCLIP 文本编码，红绿灯走 `trafficlight.pt` + HSV fallback；mock 只作为
+无模型测试 provider。
+
 ## 1. 背景
 
 当前 `for-blind-app` 的找物和红绿灯任务已经改成跨端 peer video：
@@ -7,9 +13,10 @@
 1. server Task 编排 Python phone 启动 `peer.video.receiver.start`。
 2. browser-glass 连接 phone receiver 并持续发送 JPEG 帧。
 3. Python phone 端显示视频回显。
-4. Python phone 端当前仍调用 `fork_yolo_mock()`，只打印 mock 日志并在超时后返回 mock 结果。
+4. Python phone 端通过 `VisionProcessor` 运行真实视觉处理，保存 `latest-yolo.jpg`
+   标注帧，并通过 `command.progress(peer.video.frame_processed)` 回报 detection。
 
-下一步要把旧项目 `/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/origin-src` 中的 YOLO 相关实现迁移到当前 `examples/dev-support/devices/python-phone`，让 Python phone 真正完成：
+本文记录把旧项目 `/Users/elio/dev/llm-project/OpenAIglasses_for_Navigation/origin-src` 中的 YOLO 相关实现迁移到当前 `examples/dev-support/devices/python-phone` 的设计和实施结果：
 
 1. 找物：根据用户目标物名称识别目标，输出位置、置信度和可播报结果。
 2. 红绿灯：识别红、黄、绿灯状态，稳定后输出是否可通行。
@@ -66,7 +73,7 @@
 
 ```text
 examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/peer_video.py
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision_mock.py
+examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/
 examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/phone_mock.py
 examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
@@ -80,21 +87,21 @@ skinparam componentStyle rectangle
 participant "Browser Glass" as Glass
 participant "PeerVideoReceiver" as Receiver
 participant "phone_mock GUI" as GUI
-participant "vision_mock" as Mock
+participant "VisionProcessor" as Processor
 participant "RemoteTaskReporter" as Reporter
 participant "Server Task" as Task
 
 Glass -> Receiver : JPEG frame
 Receiver -> GUI : frame_callback(frame)
-Receiver -> Mock : fork_yolo_mock(frame, purpose, object_name)
-Mock --> Receiver : mock detection
+Receiver -> Processor : process_frame(frame, purpose, object_name)
+Processor --> Receiver : detection
 Receiver -> Reporter : command.progress(peer.video.frame_processed)
-Receiver -> Reporter : command.completed(mock result)
+Receiver -> Reporter : command.completed(vision result)
 Reporter -> Task : command.*
 @enduml
 ```
 
-迁移后，`vision_mock.py` 不再作为主实现，但保留为 fallback/test provider。新增真实视觉模块后调用链变为：
+`provider=mock` 不再作为主实现，只保留为测试 provider。真实视觉模块调用链为：
 
 ```plantuml
 @startuml
@@ -183,7 +190,7 @@ vision:
     enable_hsv_fallback: true
 ```
 
-`device: auto` 在 Python phone 参考端中会优先选择 CUDA，否则使用 CPU；不会自动选择 macOS MPS。原因是 YOLOE / MobileCLIP 文本编码路径可能产生 float64 张量，而 MPS 不支持 float64。确实要试 MPS 时可以显式配置 `device: mps`，但这属于端侧实验配置。
+`device: auto` 在 Python phone 开发支持组件中会优先选择 CUDA，否则使用 CPU；不会自动选择 macOS MPS。原因是 YOLOE / MobileCLIP 文本编码路径可能产生 float64 张量，而 MPS 不支持 float64。确实要试 MPS 时可以显式配置 `device: mps`，但这属于端侧实验配置。
 
 约束：
 
@@ -201,7 +208,7 @@ opencv-python
 numpy 间接依赖
 ```
 
-真实 YOLO 依赖属于 Python phone 参考端的运行依赖，不属于 server SDK 必需依赖，也不应该要求非 Python 端侧理解 `audio-chat` 的 Python 包 extras。首版放在 phone 端自己的 requirements 文件中：
+真实 YOLO 依赖属于 Python phone 开发支持组件的运行依赖，不属于 server SDK 必需依赖，也不应该要求非 Python 端侧理解 `audio-chat` 的 Python 包 extras。首版放在 phone 端自己的 requirements 文件中：
 
 ```text
 examples/dev-support/devices/python-phone/requirements.vision.txt
@@ -478,7 +485,7 @@ Python phone 端新增日志事件：
 
 ### Phase 1：抽象视觉处理接口
 
-目标：不引入真实模型，先把 `fork_yolo_mock()` 包到统一接口后面。
+目标：不引入真实模型，先把旧 mock 行为包到统一接口后面。
 
 改动：
 
@@ -570,7 +577,7 @@ uv run python -m pytest examples/dev-support/tests/python_phone/test_phone_yolo_
 ```bash
 uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 环境变量：
@@ -614,7 +621,7 @@ export YOLOE_MODEL_PATH=/absolute/path/to/yoloe-11l-seg.pt
 ### 阶段 1：抽象视觉处理接口
 
 - 状态：已完成
-- 目标：把 `fork_yolo_mock()` 收口到统一 `VisionProcessor` 后面，保证真实 YOLO 和 mock 共享 peer video 调用链。
+- 目标：把旧 mock 行为收口到统一 `VisionProcessor` 后面，保证真实 YOLO 和 mock 共享 peer video 调用链。
 - 实现：新增 `audio_chat_python_phone_mock.vision` 子模块，包含 `config.py`、`processor.py`、`result.py`；`PeerVideoReceiver` 改为调用 `VisionProcessor.prepare_session()`、`process_frame()` 和 `build_final_result()`。
 - 文件：`examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/*`、`peer_video.py`、`phone_mock.py`。
 - 验证：新增 `test_vision_processor_mock_provider_keeps_existing_result_shape`，确认 mock provider 不依赖真实模型且结果结构保持兼容。
@@ -653,7 +660,7 @@ export YOLOE_MODEL_PATH=/absolute/path/to/yoloe-11l-seg.pt
 uv pip install -e ".[vision,gui]"
 uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
 uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 - 观察点：Python phone 日志应出现 `vision.model.loaded`、`vision.frame.processed`；server `command-events.jsonl` 的 `peer.video.frame_processed` 应包含 `source=yolo` 或 `source=yoloe`；最终 Task result 不应再是 `source=mock`。

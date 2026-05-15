@@ -245,7 +245,8 @@ AssetRef(
 
 设备注册文件应该按传感器和执行器分开声明，不再使用 `supports.id` 这种扁平写法。
 
-推荐结构如下。注意：这是新版目标结构；当前仓库里的设备校验 schema 和浏览器参考端能力文件仍处在目标结构阶段，后续实现需要同步升级 schema、注册编译器和参考端。
+推荐结构如下。注意：这是新版目标结构；当前仓库里的设备校验 schema 和 browser-glass
+开发支持组件能力文件仍处在目标结构阶段，后续实现需要同步升级 schema、注册编译器和开发支持组件。
 
 ```yaml
 $schema: ../../../../audio-server/audio_chat/spec/audio-chat-device.schema.json
@@ -990,6 +991,12 @@ glass = await context.devices.commands.start(
 ```
 
 这里 `CommandHandle.results()` 只消费端侧状态，视频帧不经过 server，也不放进 `TaskSignal` 或控制信令 payload。
+
+注意：Realtime visual sampler 在用户说话期间也会请求 `sensor.rgb`，但它生成的是带
+`request_id` 的单资产采样流。这类流只进入模型 / Asset Service，不会被 Stream
+Service 冻结为 phone 的消费者，也不会在 Task 前建立眼镜到手机的视频连接。只有
+`commands.start(name="peer.video.receiver.start")` 和
+`commands.start(name="peer.video.sender.start")` 都发生后，peer video 才开始发送。
 
 ### 8.5 TaskSignal 与系统事件的关系
 

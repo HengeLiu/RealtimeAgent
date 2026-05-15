@@ -1,5 +1,11 @@
 # 多语言端侧通讯 SDK 设计文档
 
+更新时间：2026-05-15
+
+当前状态：首批 SDK 已落在 `audio-device/`，包括 Python、TypeScript、Swift、
+Kotlin/Java 和 C。设计中的“建议新增目录”已按当前仓库实际实现为
+`audio-device/<language>/`；每个语言目录下都有 README、数据模型和测试入口。
+
 ## 1. 背景
 
 `audio-chat` 当前服务端 SDK 主要由 Python 实现，但真实端侧可能运行在浏览器、iOS、Android、ESP32、Linux 网关、桌面应用或其他嵌入式环境中。端侧语言可能是 JavaScript、TypeScript、Swift、Kotlin、Java、C、C++、Dart、Go、Rust、C# 等。
@@ -569,7 +575,7 @@ server 的 `runs/` 产物仍是最终排障证据；端侧 SDK 的日志应能�
 下一阶段应先建设 `audio-chat-protocol`，再实现 P0 语言 SDK：
 
 1. Python：作为基准实现和测试 harness。
-2. TypeScript：覆盖浏览器参考端和 Node 端侧。
+2. TypeScript：覆盖 browser-glass 开发支持组件和 Node 端侧。
 3. Swift：抽出现有 iOS 参考端协议层。
 4. Kotlin/Java：覆盖 Android。
 5. C：覆盖 ESP32 和嵌入式 Linux。

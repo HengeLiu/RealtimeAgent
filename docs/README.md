@@ -1,15 +1,15 @@
 # audio-chat 文档目录
 
-`audio-chat` 是一个 server-side Python SDK，用于构建语音优先、多设备协作、实时 stream 驱动的 AI Agent 应用。它适合智能眼镜、手机协作、浏览器参考设备、ESP32 或其他端侧传感器设备参与的应用原型和产品化探索。
+`audio-chat` 是一个 server-side Python SDK，用于构建语音优先、多设备协作、实时 stream 驱动的 AI Agent 应用。它适合智能眼镜、手机协作、ESP32 或其他端侧传感器设备参与的应用原型和产品化探索。仓库中的 `browser-glass`、`python-phone` 等属于开发/测试支持组件：它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
 
 本文档目录面向社区开发者，目标是帮助开发者快速判断项目是否适合自己、跑通第一个样例，并理解如何扩展 Tool、Task 和设备能力。
 
 ## 先读什么
 
 1. [项目定位](getting-started/what-is-audio-chat.md)：了解 `audio-chat` 解决什么问题，以及它不解决什么问题。
-2. [快速开始](getting-started/quickstart.md)：准备环境，启动 server，连接浏览器参考设备。
+2. [快速开始](getting-started/quickstart.md)：准备环境，启动 server，连接开发/测试支持组件。
 3. [第一个 Tool 和 Task](tutorials/build-first-capability.md)：理解业务能力如何接入 Agent。
-4. [跨设备本地联调](how-to/cross-device-local-debug.md)：按 server、glass、phone、iOS、ESP32 的顺序做联调。
+4. [跨设备本地联调](how-to/cross-device-local-debug.md)：按 server、开发支持组件、真实端侧参考工程的顺序做联调。
 5. [CLI 参考](reference/cli.md)：查看常用 `audio-chat.*` 命令。
 
 ## 社区开发者文档

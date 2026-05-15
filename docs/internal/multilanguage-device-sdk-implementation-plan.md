@@ -1,5 +1,12 @@
 # 多语言端侧通讯 SDK 实施计划
 
+更新时间：2026-05-15
+
+当前状态：Phase 1 到 Phase 8 的最小主线已落地。协议 schema 和黄金样例位于
+`audio-server/audio_chat/spec/` 与 `testdata/protocol/`；多语言 SDK 位于
+`audio-device/`，目录名已从早期计划中的 `sdks/` 收敛为 `audio-device/`，与
+`audio-server/` 对应；Python phone、browser-glass、Python playback glass 等开发/测试支持组件已按当前协议迁移。
+
 ## 1. 实施原则
 
 1. 先协议，后 SDK。
@@ -443,11 +450,11 @@ uv run audio-chat.esp32.build --dry-run
 - ESP32 参考固件可以引入 C SDK header。
 - stream chunk 编解码与 Python 黄金样例一致。
 
-## 11. Phase 7：参考端迁移
+## 11. Phase 7：开发支持组件和参考端迁移
 
 ### 11.1 目标
 
-让现有参考端使用 SDK，减少重复协议代码。
+让现有开发支持组件和端侧参考工程使用 SDK，减少重复协议代码。
 
 ### 11.2 迁移顺序
 
@@ -455,9 +462,9 @@ uv run audio-chat.esp32.build --dry-run
 2. Browser glass。
 3. iOS native phone。
 4. ESP32-S3 skeleton。
-5. Python phone mock。
+5. Python phone mock / preview。
 
-### 11.3 每个参考端迁移要求
+### 11.3 每个组件 / 参考端迁移要求
 
 - 保留原有功能入口和命令。
 - 删除重复事件信封构造代码。
@@ -644,7 +651,7 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 - 验证：
   - `cd audio-device/typescript && npm test`，结果 `5 passed`。
   - `uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py examples/dev-support/tests/test_web_glass_endpoint.py -q`，结果 `21 passed`。
-- 风险：browser-glass 仍保留页面内业务事件处理函数，这是交互式参考端 UI 逻辑；底层通讯对象已迁移到 TypeScript SDK。
+- 风险：browser-glass 仍保留页面内业务事件处理函数，这是交互式开发支持组件 UI 逻辑；底层通讯对象已迁移到 TypeScript SDK。
 
 ### 阶段 4：Swift SDK
 
@@ -678,12 +685,12 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
   - `cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/build && ctest --test-dir audio-device/c/build --output-on-failure`，结果 `100% tests passed, 0 tests failed out of 1`。
 - 风险：未执行 ESP-IDF 真机构建和串口监视；需要在安装 ESP-IDF 后继续跑 `uv run audio-chat.esp32.build --dry-run`。
 
-### 阶段 7：参考端迁移
+### 阶段 7：开发支持组件和参考端迁移
 
 - 状态：部分完成。
 - 已完成：
   - Python playback glass 复用 Python SDK stream codec。
-  - Python phone mock 的事件、URL 和 stream chunk 模型迁移到 `audio_chat_device`；其共享 Python 网络基类也已切到 `AudioChatDeviceClient`。
+  - Python phone mock / preview 开发支持组件的事件、URL 和 stream chunk 模型迁移到 `audio_chat_device`；其共享 Python 网络基类也已切到 `AudioChatDeviceClient`。
   - browser-glass 复用 TypeScript SDK 的 `AudioChatDeviceClient`、`AudioChatEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。
   - ESP32-S3 skeleton 接入 C SDK source/header。
 - 未完成：

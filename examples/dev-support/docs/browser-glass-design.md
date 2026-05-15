@@ -1,23 +1,29 @@
 # Browser Glass 设计文档
 
-更新时间：2026-05-12
+更新时间：2026-05-15
 
-文档状态：浏览器参考端设计文档。本文以当前 `examples/dev-support/devices/browser-glass` 的实现为准，说明它在开发支持链路中的职责和边界。录制式系统测试的自动化回放端侧，以 [录制式系统集成测试设计](system-test-recording-design.md) 中的 `python-playback-glass` 为准。
+文档状态：浏览器眼镜模拟组件设计文档。本文以当前
+`examples/dev-support/devices/browser-glass` 的实现为准，说明它作为开发/测试支持组件
+在联调链路中的职责和边界。录制式系统测试的自动化回放组件，以
+[录制式系统集成测试设计](system-test-recording-design.md) 中的 `python-playback-glass` 为准。
 
 ## 1. 定位
 
-`browser-glass` 是运行在浏览器里的交互式眼镜参考端。它是一个普通 Device 示例，不是 SDK 协议类型，也不是自动化 CI 主入口。
+`browser-glass` 是运行在浏览器里的交互式眼镜模拟组件。它属于开发/测试支持组件：
+在协议层注册为普通 Device，用来模拟眼镜侧的麦克风、RGB、speaker 和 peer video sender；
+它不是 SDK 协议类型，也不是开发者必须采用的正式设备形态，更不是自动化 CI 主入口。
 
 它承担：
 
-1. 手动注册设备。
+1. 以开发支持组件身份手动注册 Device。
 2. 手动触发 wake / interrupt / close。
 3. 使用真实麦克风上传 `sensor.mic`。
 4. 使用离线音频样例按真实时间节奏上传 `sensor.mic`。
 5. 在 server 请求 `sensor.rgb` 时上传图片样例或摄像头抓拍。
 6. 播放 server 下发的 `actuator.speaker`。
 7. 模拟 `actuator.haptic` 的开始、完成和关闭回执。
-8. 展示运行日志和广播事件，帮助开发者观察真实协议链路。
+8. 收到 `peer.video.sender.start` 后连接 Python phone receiver，并按 fps 发送 JPEG 帧。
+9. 展示运行日志和广播事件，帮助开发者观察真实协议链路。
 
 它不承担：
 
@@ -26,7 +32,9 @@
 3. 自动化批量回放和 CI 主入口。
 4. 直接生成最终系统测试 Case。
 
-`browser-glass` 可以辅助录制 Case：它记录用户选择的音频和图片样例，后续生成 `python-playback-glass record` 命令或元数据。真正从 runs 产物归纳 Case、自动回放 Case 的职责属于 `python-playback-glass`。
+`browser-glass` 可以辅助录制 Case：它记录用户选择的音频和图片样例，后续生成
+`python-playback-glass record` 命令或元数据。真正从 runs 产物归纳 Case、自动回放
+Case 的职责属于 `python-playback-glass`。
 
 ## 2. 当前目录
 
@@ -147,7 +155,9 @@ chunk_ms: 20
 
 ## 6. 图片输入
 
-当前 `sensor.rgb` 只在 server 请求时上传，不提供手动“立即上传图片”按钮。
+当前 `sensor.rgb` 只在 server 请求时上传，不提供手动“立即上传图片”按钮。页面只提供
+“选择图片”和“选择视频”两个资源选择按钮；真正上传由 server 下发的
+`stream.control.open.requested` 或 `peer.video.sender.start` 触发。
 
 数据源优先级：
 
@@ -164,6 +174,25 @@ chunk_ms: 20
 5. 页面发送 `stream.input.closed(sensor.rgb)`。
 
 当前实现会把图片压缩到较小 JPEG，避免控制面或 stream 面传输过大的图片。
+
+带 `request_id` 的 `sensor.rgb` 输入流代表单资产采样，例如 realtime visual sampler
+在用户说话期间给模型追加当前画面。server 会把这类流写入资产服务，但不会把它们转发给
+Python phone 等显示设备。只有不带 `request_id` 的普通连续 RGB stream，或下方
+peer video 任务流，才会进入端侧显示 / 处理设备。
+
+## 6.1 peer video 任务发送
+
+找物和红绿灯 Task 不通过 `sensor.rgb` 单资产流把视频转发给手机。当前流程是：
+
+1. 模型明确调用 `start_find_object_task` 或 `start_traffic_light_task`。
+2. server 先向 Python phone 下发 `peer.video.receiver.start`。
+3. phone 回报 `peer.receiver.ready`，并提供 receiver WebSocket URL。
+4. server 再向 browser-glass 下发 `peer.video.sender.start`。
+5. browser-glass 连接 phone receiver，按 fps 抽取图片、视频或摄像头当前帧，发送 JPEG。
+6. 收到 `peer.video.sender.start.stop`、控制连接关闭、页面关闭或 WebSocket 异常时停止发送。
+
+这个顺序保证 Task 之前眼镜不会把视频帧发送到手机；说话期间的 realtime visual sampler
+只服务模型视觉输入，不建立眼镜到手机的直连。
 
 ## 7. 输出和执行器
 

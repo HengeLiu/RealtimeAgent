@@ -20,7 +20,7 @@ server:
 
 ## 2. 校验设备能力文件
 
-先校验浏览器参考设备：
+先校验浏览器眼镜模拟组件的能力文件：
 
 ```bash
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
@@ -40,7 +40,7 @@ uv run audio-chat.server.run --app-name for-blind-app
 curl http://127.0.0.1:8765/api/health
 ```
 
-## 4. 连接浏览器参考设备
+## 4. 连接浏览器眼镜模拟组件
 
 ```bash
 uv run audio-chat.web.open --serve
@@ -59,26 +59,46 @@ curl http://127.0.0.1:8765/api/debug/devices
 3. `device_id` 唯一。
 4. 能力声明包含当前要测试的传感器或执行器。
 
-## 5. 可选：连接 Python phone mock
+说明：browser-glass 是开发/测试支持组件。它会像真实端侧一样注册成 Device，
+从而覆盖控制事件、stream 和输出播放链路；但它不是 AudioChat SDK 的正式设备类型。
 
-```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
-```
+## 5. 可选：连接 Python 手机模拟组件
 
-如果要查看 RGB stream：
+当前找物 / 红绿灯联调优先使用 preview 配置：
 
 ```bash
 uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
-视频显示端通过 properties 声明 `endpoint.role.visual_display` 和
-`actuator.display.rgb`，不再把自己注册成 RGB 传感器。浏览器参考端连接后，选择图片并
-点击“上传所选图片”，server 会把该 `sensor.rgb` 输入流转发给同一 `user_id` 下的
-Python phone 窗口。观察点：
+如果只验证简单协议、RGB 上传或振动 mock，再使用 mock 配置：
+
+```bash
+uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+```
+
+Python phone 同样是开发/测试支持组件。它在协议层注册为普通 Device，用来模拟手机侧
+显示、视觉计算和 peer video receiver，不代表 SDK 内置固定手机类型。
+
+preview 配置通过 properties 声明 `device_role=phone`、`endpoint.role.visual_display`、
+`endpoint.compute.vision`、`actuator.display.rgb` 和 `peer.video.receiver`，不再把
+自己注册成 RGB 传感器。当前有两类 RGB 流需要区分：
+
+1. realtime visual sampler 的单资产请求：server 在语音 `speech_started` 到
+   `speech_stopped` 之间向 browser-glass 请求 `sensor.rgb`，该输入流带 `request_id`，
+   只进入模型/资产链路，不会转发到 Python phone。
+2. 任务视频流：模型明确调用 `start_find_object_task` 或 `start_traffic_light_task`
+   后，server 先下发 `peer.video.receiver.start` 给 phone，再下发
+   `peer.video.sender.start` 给 browser-glass；这时眼镜才会把 JPEG 视频帧直连发送到
+   phone。
+
+观察点：
 
 1. Python phone 窗口状态栏的 `registered=true` 和 `frame` 计数。
 2. `runs/audio-chat/python-phone/latest-rgb.png` 是否更新。
-3. server `stream-events.jsonl` 中 `sensor.rgb` 的 opened/chunk/closed 事件。
+3. `runs/audio-chat/python-phone/latest-yolo.jpg` 是否显示 YOLO 标注框。
+4. server `command-events.jsonl` 中是否按顺序出现 `peer.video.receiver.start` 和
+   `peer.video.sender.start`。
+5. server `stream-events.jsonl` 中带 `request_id` 的资产采样流不应包含 phone consumer。
 
 ## 6. 可选：运行 iOS 参考端
 

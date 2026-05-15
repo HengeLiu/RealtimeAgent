@@ -86,7 +86,7 @@ await context.output.say("已完成画面分析", priority="normal")
 ```bash
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 uv run audio-chat.server.run --app-name for-blind-app
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 for-blind-app 默认运行产物位于 `examples/for-blind-app/audio-server/runs/`。旧文档里的

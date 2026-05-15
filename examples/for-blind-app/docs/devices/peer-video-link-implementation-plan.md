@@ -1,13 +1,17 @@
 # 跨端设备直连视频任务开发计划
 
+更新时间：2026-05-15
+
+当前状态：计划主体已完成。`find_object_task` 和 `traffic_light_task` 已改为 peer video 编排；browser-glass 已实现 sender；Python phone preview 已实现 receiver、GUI 回显、真实 YOLO / YOLOE 视觉处理、超时结果和直接通知回流。本文保留阶段拆分，同时用“当前实现”标注最新口径。
+
 ## 1. 计划目标
 
-本文基于 [跨端设备直连视频任务设计](peer-video-link-task-design.md)，把找物和红绿灯任务从“server 请求单帧图片并 mock”推进到“server Task 编排 browser-glass 与 Python phone 建立视频连接，phone 端逐帧 YOLO mock 处理并回报状态”。
+本文基于 [跨端设备直连视频任务设计](peer-video-link-task-design.md)，把找物和红绿灯任务从“server 请求单帧图片并 mock”推进到“server Task 编排 browser-glass 与 Python phone 建立视频连接，phone 端逐帧运行视觉处理并回报状态”。
 
 本轮开发目标：
 
 1. server Task 使用 `TaskContext.devices.commands.start()` 编排 phone receiver 和 glass sender。
-2. Python phone 实现 `peer.video.receiver.start`，显示视频回显，逐帧 fork YOLO mock，并回报状态。
+2. Python phone 实现 `peer.video.receiver.start`，显示视频回显，逐帧运行 `VisionProcessor`，并回报状态。
 3. browser-glass 实现 `peer.video.sender.start`，向 phone receiver 发送 JPEG 帧。
 4. 端侧状态仍使用现有 `command.accepted/progress/completed/failed`，不新增系统级协议。
 5. SDK 或参考端提供状态回报 helper，开发者只定义状态名、业务 payload 和结果 schema。
@@ -20,7 +24,7 @@
 | 范围 | 目录 / 文件 | 说明 |
 | --- | --- | --- |
 | for-blind Task | `examples/for-blind-app/audio-server/capabilities/tasks.py` | 改造 `find_object_task` 和 `traffic_light_task` 的启动、状态消费、取消逻辑。 |
-| Python phone | `examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/` | 增加 peer receiver、状态 reporter、YOLO mock、超时和关闭处理。 |
+| Python phone | `examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/` | 增加 peer receiver、状态 reporter、`VisionProcessor`、YOLO / YOLOE 处理、超时和关闭处理。 |
 | browser-glass | `examples/dev-support/devices/browser-glass/index.html` | 增加 peer sender 命令处理、帧采集、发送和 stop。 |
 | 设备配置 | `examples/dev-support/devices/browser-glass/device.audio-chat.yaml`、`examples/dev-support/devices/python-phone/phone.preview.yaml` | 增加 `device_role`、peer video properties 和默认 user 对齐。 |
 | 测试 | `audio-server/tests/`、`examples/for-blind-app/tests/`、`examples/dev-support/tests/` | 覆盖 Task 编排、状态回报、端侧 receiver/sender 行为。 |
@@ -28,7 +32,7 @@
 
 ### 2.2 本计划不改
 
-1. 不迁移真实 YOLO 模型。
+1. 不把真实 YOLO 模型依赖放进 server SDK；模型依赖属于 Python phone 开发支持组件。
 2. 不新增独立于 `command.*` 的控制协议。
 3. 不把视频帧传回 server 做推理。
 4. 不强制 WebRTC；首版使用简单可调试的局域网 WebSocket/JPEG 帧通道即可。
@@ -151,7 +155,7 @@ examples/dev-support/tests/python_phone/test_remote_task_reporter.py
 
 ## Phase 2：Python phone peer receiver
 
-目标：Python phone 能作为视频接收端，收到 browser-glass JPEG 帧后显示回显、逐帧 YOLO mock，并在 30 秒后上报 mock 结果。
+目标：Python phone 能作为视频接收端，收到 browser-glass JPEG 帧后显示回显、逐帧执行视觉处理，并按稳定识别或业务超时上报结果。
 
 ### 2.1 新增 peer video receiver
 
@@ -159,7 +163,7 @@ examples/dev-support/tests/python_phone/test_remote_task_reporter.py
 
 ```text
 examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/peer_video.py
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision_mock.py
+examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/
 ```
 
 `peer_video.py` 职责：
@@ -172,16 +176,16 @@ examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision_mo
    - `progress(status="peer.receiver.ready", data={"receiver": ...})`
 4. 收到首帧后上报 `peer.video.first_frame`。
 5. 每帧更新预览窗口或最新帧缓存。
-6. 每帧调用 `fork_yolo_mock(frame)`。
-7. 关闭按钮或 timeout 后生成 mock result，并 `completed(result=...)`。
+6. 每帧调用 `VisionProcessor.process_frame()`。
+7. 关闭按钮、稳定命中或 timeout 后生成 result，并 `completed(result=...)`。
 8. 收到 stop 后关闭 receiver 和预览状态。
 
-`vision_mock.py` 职责：
+`vision/` 职责：
 
-1. 提供 `fork_yolo_mock(frame, purpose, object_name)`。
-2. 每帧打印 `yolo.mock.frame_processed`。
-3. 找物默认返回 label=`object_name`、confidence=0.76。
-4. 红绿灯默认返回 state=`green`、can_cross=true。
+1. 提供 `VisionProcessor.prepare_session()` 和 `VisionProcessor.process_frame()`。
+2. 找物使用 YOLOE 和文本 prompt，红绿灯使用 YOLO 检测并带 HSV fallback。
+3. 保存 `latest-yolo.jpg` 标注帧，便于确认模型真的在跑。
+4. `provider: mock` 只用于无模型测试。
 
 ### 2.2 关闭和超时
 
@@ -194,17 +198,17 @@ peer_video:
   listen_port: 19081
   timeout_seconds: 30
   close_button_enabled: true
-  yolo_mock:
-    enabled: true
-    per_frame: true
+vision:
+  provider: yolo
+  save_annotated_frame: runs/audio-chat/python-phone/latest-yolo.jpg
 ```
 
 关闭规则：
 
 | 触发 | phone 上报 |
 | --- | --- |
-| 用户点击关闭 | `progress(status="peer.video.closed_by_user")` 后 `completed(result=mock_result)` |
-| 30 秒超时 | `progress(status="peer.video.timeout")` 后 `completed(result=mock_result)` |
+| 用户点击关闭 | `progress(status="peer.video.closed_by_user")` 后 `completed(result=vision_result)` |
+| 30 秒超时 | `progress(status="peer.video.timeout")` 后 `completed(result=timeout_result)` |
 | server stop | 停止 receiver，返回 `completed(result={"stopped": true})` |
 | receiver 异常 | `failed(message=...)` |
 
@@ -218,8 +222,8 @@ examples/dev-support/tests/python_phone/test_peer_video_receiver.py
 
 1. `peer.video.receiver.start` 返回 `peer.receiver.ready`。
 2. WebSocket 收到一帧后保存最新帧。
-3. 每帧触发一次 YOLO mock。
-4. timeout 后返回找物 mock result。
+3. 每帧触发一次视觉处理。
+4. timeout 后返回找物未命中结果。
 5. stop 后释放 receiver。
 
 完成标准：
@@ -292,7 +296,7 @@ examples/dev-support/tests/browser_glass/test_peer_video_sender.py
 
 完成标准：
 
-1. browser-glass 可以在没有真实摄像头时用上传图片循环发帧。
+1. browser-glass 可以在没有真实摄像头时用已选择图片循环发帧。
 2. phone 能收到帧并显示/保存最新帧。
 
 ## Phase 4：server Task peer video 编排
@@ -343,7 +347,8 @@ on_start
 
 1. 保留 `object_name`。
 2. 新增或保留 `timeout_seconds` 表示端侧视频任务超时。
-3. 模型可见 schema 不暴露 mock 结果字段；phone 端内部 mock 只通过 peer video 命令参数和端侧配置控制。
+3. 模型可见 schema 不暴露端侧内部 provider 细节；phone 端通过 `vision.provider`
+   选择真实 YOLO / YOLOE 或测试 mock。
 
 ### 4.3 红绿灯 Task 改造
 
@@ -462,13 +467,13 @@ uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devi
 终端 3：
 
 ```bash
-uv run audio-chat.web.open --print-url
+uv run audio-chat.web.open --serve
 ```
 
 操作：
 
 1. 在 browser-glass 页面确认 `user_id=user-browser-glass-001`。
-2. 选择摄像头或上传一张图片作为帧来源。
+2. 选择图片或视频作为帧来源；未选择时按需使用摄像头。
 3. 发起“帮我找水杯”。
 4. 发起“看看红绿灯能不能过”。
 
@@ -480,16 +485,16 @@ server runs：
 2. `command.start.requested peer.video.sender.start`
 3. `command.progress status=peer.receiver.ready`
 4. `command.progress status=peer.sender.connected`
-5. `command.completed result.source=mock`
+5. `command.completed result.source=yolo/yoloe`，或测试环境为 `mock`
 6. `task.completed`
 
 phone 日志：
 
 1. `peer.video.receiver.start`
 2. `peer.video.first_frame`
-3. `yolo.mock.frame_processed`
+3. `peer video 帧处理完成`，并包含 `source=yolo` / `source=yoloe`
 4. `peer.video.timeout` 或 `peer.video.closed_by_user`
-5. `vision.mock.result`
+5. `command.completed` 中包含找物或红绿灯结果
 
 browser-glass 日志：
 
@@ -501,8 +506,8 @@ browser-glass 日志：
 完成标准：
 
 1. phone 端看到视频回显或最新帧文件更新。
-2. 每帧 YOLO mock 日志出现。
-3. 30 秒内自动返回 mock result，或点击关闭后返回 mock result。
+2. 每帧 YOLO / YOLOE 日志出现。
+3. 找物稳定命中、红绿灯稳定绿灯或业务超时后返回视觉结果；点击关闭后返回关闭结果。
 4. 用户听到找物或红绿灯结果播报。
 
 ## Phase 7：文档和开发者体验
@@ -530,7 +535,7 @@ browser-glass 日志：
 ## 4. 建议提交顺序
 
 1. `补充端侧远程任务回报 helper`
-2. `实现 Python phone 视频接收和 YOLO mock`
+2. `实现 Python phone 视频接收和视觉处理`
 3. `实现 browser-glass peer 视频发送`
 4. `改造找物和红绿灯 Task`
 5. `补齐 peer video 配置和验收测试`
@@ -548,7 +553,7 @@ browser-glass 日志：
 | --- | --- | --- |
 | browser 不能直连 phone WebSocket | 视频无法真正点对点 | 首版允许同局域网调试；必要时加 server relay，但保持 peer command 模型不变。 |
 | phone GUI 和 asyncio 冲突 | 视频窗口卡顿或无法退出 | 先复用现有 OpenCV/FrameStore；PySide6 控制台后续单独演进。 |
-| 每帧 fork 过多导致堆积 | phone CPU 飙高 | YOLO mock worker 增加并发上限和丢帧策略，只保证日志可观察。 |
+| 每帧推理堆积 | phone CPU 飙高 | 视觉处理增加并发上限、丢帧策略和 DEBUG 级耗时日志。 |
 | Task 等待状态卡住 | 任务长期 running | 每个等待点加 timeout，失败时 stop 已启动端。 |
 | 端侧状态名混乱 | 开源开发者难排查 | SDK helper 打印结构化日志，文档给命名建议，但不强行枚举所有业务状态。 |
 | 旧测试仍依赖单帧抓拍 | CI 失败 | 明确拆分旧抓拍 Tool 测试和新 peer video Task 测试，必要时调整旧测试描述。 |
@@ -559,8 +564,8 @@ browser-glass 日志：
 
 1. `find_object_task` 和 `traffic_light_task` 通过 `commands.start()` 编排 phone/glass。
 2. Python phone 能收到 browser-glass 发来的帧。
-3. Python phone 每帧打印 YOLO mock 日志。
-4. Python phone timeout 或按钮关闭后上报 mock result。
+3. Python phone 每帧打印 YOLO / YOLOE 日志。
+4. Python phone timeout 或按钮关闭后上报视觉结果。
 5. server Task 收到 result 后完成并播报。
 6. 自动测试覆盖 Task 编排顺序、phone reporter、phone receiver 和配置 selector。
 7. README 给出三端启动顺序和观察点。
@@ -570,7 +575,7 @@ browser-glass 日志：
 ### Phase 0：准备和现状清理
 
 - 状态：已完成
-- 实现：确认 `find_object_task` / `traffic_light_task` 已切到 peer video 编排；模型可见 schema 不再暴露 mock 结果字段，端侧 mock 只作为 phone 参考端内部配置。
+- 实现：确认 `find_object_task` / `traffic_light_task` 已切到 peer video 编排；模型可见 schema 不暴露端侧内部 provider 细节，`vision.provider=mock` 只作为 phone 参考端测试配置。
 - 验证：`uv run python -m pytest examples/for-blind-app/tests/test_app_name_launch.py audio-server/tests/test_memory_service.py -q`，结果 16 passed。
 - 风险：既有旧 phone task 测试仍依赖 `find_object_phone_task` / `traffic_light_phone_task`，当前主线已迁移到 peer video Task，需要后续单独清理旧测试口径。
 
@@ -583,9 +588,9 @@ browser-glass 日志：
 ### Phase 2：Python phone peer receiver
 
 - 状态：已完成，GUI 关闭按钮待人工体验验收
-- 实现：新增 `peer_video.py` 和 `vision_mock.py`；receiver 打开 `/peer-video/<peer_session_id>` WebSocket，收到二进制 JPEG 帧后触发 `fork_yolo_mock()` 并上报 `peer.video.first_frame`、`peer.video.frame_processed`，timeout 后返回 mock result。
+- 实现：新增 `peer_video.py` 和 `vision/`；receiver 打开 `/peer-video/<peer_session_id>` WebSocket，收到二进制 JPEG 帧后调用 `VisionProcessor` 并上报 `peer.video.first_frame`、`peer.video.frame_processed`，timeout 后返回视觉结果。
 - 验证：`uv run python -m pytest examples/dev-support/tests/python_phone/test_peer_video_receiver.py -q`，通过。
-- 风险：当前自动测试验证的是 WebSocket 收帧和 mock result，未做 OpenCV 窗口关闭按钮的人工验收。
+- 风险：当前自动测试验证的是 WebSocket 收帧和结果回报，GUI 关闭按钮仍需要人工体验验收。
 
 ### Phase 3：browser-glass peer sender
 

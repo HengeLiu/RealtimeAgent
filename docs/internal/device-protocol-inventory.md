@@ -1,5 +1,11 @@
 # 端侧协议盘点和冻结候选
 
+更新时间：2026-05-15
+
+当前状态：本盘点已经用于 `audio-device/` 首批 SDK 实现。当前协议仍以结构化
+`supports`、`command.*`、`stream.control.open.requested` 和
+`stream.control.close.requested` 为准；端侧注册 payload 不允许手写 `routes`。
+
 ## 1. 盘点范围
 
 本文件记录多语言端侧通讯 SDK 第一轮实现前的真实协议现状。结论来自当前代码和参考端，不从设计预期反推。
@@ -14,7 +20,7 @@
 | stream 生命周期 | `audio-server/audio_chat/stream/service.py` |
 | 能力声明校验 | `audio-server/audio_chat/device_capabilities.py` |
 | Python 回放端 | `examples/dev-support/devices/python-playback-glass/audio_chat_python_playback_glass/protocol_client.py` |
-| 浏览器参考端 | `examples/dev-support/devices/browser-glass/index.html` |
+| 浏览器眼镜模拟组件 | `examples/dev-support/devices/browser-glass/index.html` |
 | iOS 参考端 | `examples/for-blind-app/devices/native-ios-phone/AudioChatPhone/Core/` |
 | ESP32-S3 参考端 | `examples/for-blind-app/devices/native-esp32-glass/firmware/main/audio_chat_reference_main.c` |
 
@@ -131,12 +137,12 @@ header 字段：
 | `final` | 是 | 是否最后一帧。 |
 | `metadata` | 否 | request_id、source_path 等调试字段。 |
 
-## 6. 参考端差异
+## 6. 开发支持组件和参考端差异
 
-| 参考端 | 现状 | 第一轮处理 |
+| 组件 / 参考端 | 现状 | 第一轮处理 |
 | --- | --- | --- |
-| Python playback glass / Python phone 共享网络基类 | 已通过真实 `/ws/control` 和 `/ws/stream` 回放；原本自带 URL、注册事件和 stream chunk 编解码。 | 已切到 `audio_chat_device.AudioChatDeviceClient`、`AudioChatEvent`、`ws_url` 和 `StreamChunkCodec`。 |
-| browser-glass | HTML 内保留交互式 UI 和业务事件处理，但底层通讯对象已迁移。 | 已通过本地 adapter re-export TypeScript SDK，并复用 `AudioChatDeviceClient`、`AudioChatEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。 |
+| Python playback glass / Python phone 开发支持组件共享网络基类 | 已通过真实 `/ws/control` 和 `/ws/stream` 回放；原本自带 URL、注册事件和 stream chunk 编解码。 | 已切到 `audio_chat_device.AudioChatDeviceClient`、`AudioChatEvent`、`ws_url` 和 `StreamChunkCodec`。 |
+| browser-glass 开发支持组件 | HTML 内保留交互式 UI 和业务事件处理，但底层通讯对象已迁移。 | 已通过本地 adapter re-export TypeScript SDK，并复用 `AudioChatDeviceClient`、`AudioChatEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。 |
 | iOS Swift phone | `AudioChatEvent.swift` 和 `StreamChunkCodec.swift` 自带协议实现。 | 后续 Swift Package 阶段迁移。 |
 | ESP32-S3 | 当前是可构建骨架，协议清单写在 C 注释中。 | 后续 C SDK 阶段迁移 header 和 codec。 |
 

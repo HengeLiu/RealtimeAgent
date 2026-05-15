@@ -1,14 +1,17 @@
-# browser-glass
+# browser-glass 开发支持组件
 
-`browser-glass` 是 audio-chat 的浏览器设备示例，用来承担开发测试中的感知和执行角色。它不是协议类型，也不要求开发者真实设备使用浏览器实现。
+`browser-glass` 是 AudioChat SDK 的浏览器端开发/测试支持组件，用来在本地模拟眼镜侧
+感知和执行能力。它在代码实现和协议交互上会注册为普通 Device，因此可以真实覆盖
+设备注册、控制事件、stream、播放和 peer video；但它不是 SDK 定义的正式设备类型，
+也不要求开发者真实眼镜设备使用浏览器实现。
 
 ## 主要用途
 
-1. 手动注册 Device。
+1. 以开发支持组件身份手动注册 Device。
 2. 手动发送 wake / interrupt / close / heartbeat 等控制事件。
 3. 使用真实麦克风进行全链路实时对话。
 4. 上传 WAV / PCM 文件，按真实时间模拟 `sensor.mic` 长连接。
-5. 使用视频、图片样例或摄像头响应 `sensor.rgb` 请求，也可以手动上传图片触发回显测试。
+5. 使用视频、图片样例或摄像头响应 `sensor.rgb` 请求。
 6. 播放 server 下发的 `actuator.speaker` 音频。
 7. 模拟 `actuator.haptic` 执行器。
 8. 收到 `peer.video.sender.start` 后连接 Python phone receiver，并按 fps 发送 JPEG 帧。
@@ -28,9 +31,8 @@ uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server
 uv run audio-chat.web.open --serve
 ```
 
-当前页面通过 ES module 导入仓库内的 TypeScript Device SDK。Chrome 会拒绝
-`file://` 页面中的本地 module import，所以不要再直接 `open index.html`。
-`--serve` 只启动一个标准库静态服务并自动打开页面；停止时在终端按 `Ctrl+C`。
+当前页面通过 ES module 导入仓库内的 TypeScript Device SDK。`--serve` 会启动一个
+标准库静态服务并自动打开页面；停止时在终端按 `Ctrl+C`。
 默认静态服务地址固定为 `http://127.0.0.1:8766`，这样页面保存的表单、样例目录句柄
 和浏览器授权可以跨重启复用。如果用 `--port` 改成其他端口，浏览器会把它视为新的
 origin，需要重新选择和授权样例目录。
@@ -42,7 +44,8 @@ origin，需要重新选择和授权样例目录。
 
 ## 协议口径
 
-页面注册为普通 Device。新的推荐入口是 [device.audio-chat.yaml](device.audio-chat.yaml)，它声明端侧支持的传感器和执行器：
+页面在协议层注册为普通 Device。新的推荐入口是
+[device.audio-chat.yaml](device.audio-chat.yaml)，它声明该开发支持组件模拟的传感器和执行器：
 
 1. `device_id`
 2. `user_id`
@@ -56,7 +59,10 @@ origin，需要重新选择和授权样例目录。
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
 ```
 
-校验命令会按 `supports` 生成注册事件所需的内部路由。页面运行时也按同一口径提交 `supports`，server 负责生成业务路由；页面不再手写事件路由。设备收到事件后，通过实际 stream 行为证明自己能生产或消费对应数据。
+校验命令会按 `supports` 生成注册事件所需的内部路由。页面运行时也按同一口径提交
+`supports`，server 负责生成业务路由。组件收到事件后，通过
+实际 stream 行为证明自己能生产或消费对应数据。正式端侧可以复用同一协议和多语言
+SDK，不需要复用这个浏览器页面结构。
 
 ## peer video sender
 
@@ -86,17 +92,22 @@ command.requested command=peer.video.sender.start
 1. `真实麦克风实时对话`：使用浏览器麦克风持续上传 `sensor.mic`。
 2. `离线音频实时注入`：把本地音频按 20ms chunk 发送，模拟真实长连接。
 
-离线实时注入会在文件末尾追加短静音尾巴，发送 final chunk 后进入可继续上传下一段的暂停状态。快速批量回放和 CI 验收不由 browser-glass 承担，后续由 `python-playback-glass` 负责。
+离线实时注入会在文件末尾追加短静音尾巴，发送 final chunk 后进入可继续上传下一段的暂停状态。批量回放和 CI 验收由 `python-playback-glass` 承担。
 
 ## 图片和视频回显测试
 
-`browser-glass` 可以和 `python-phone` 视频显示端配合做本地视觉回显测试：
+`browser-glass` 可以和 `python-phone` 手机模拟组件配合做本地视觉任务联调：
 
 1. 启动 server。
-2. 启动 `python-phone` 视频显示端。
+2. 启动 `python-phone` 手机视频/视觉模拟组件。
 3. 打开 `browser-glass` 页面并连接注册。
-4. 在“带图输入”区域选择图片并点击“上传所选图片”，或选择视频后触发找物 / 红绿灯 Task。
+4. 在“带图输入”区域选择图片或视频。
+5. 通过语音触发找物 / 红绿灯 Task，例如“帮我找一下凳子在哪里”或“帮我留意前面的红绿灯”。
 
-图片会以 `sensor.rgb` 输入流上传到 server，server 再转发给同一 `user_id` 下声明
-`endpoint.role.visual_display` 或 `actuator.display.rgb` 的显示设备。
-视频不会一次性上传文件本身，而是在浏览器按采集频率抽取当前播放帧，作为 JPEG 帧走 `sensor.rgb` 或 peer video WebSocket。采集请求不会控制视频进度，只有切换资源、停止 peer sender、重置页面或关闭页面时才会停止这个隐藏的视频时间线。
+普通 realtime 视觉采样会在说话期间向 browser-glass 请求带 `request_id` 的
+`sensor.rgb` 单资产帧；这类帧只进入模型/资产链路，不会转发给 Python phone。
+模型明确调用 `start_find_object_task` 或 `start_traffic_light_task` 后，server 才会
+先启动 Python phone receiver，再向 browser-glass 下发 `peer.video.sender.start`。
+视频不会一次性上传文件本身，而是在浏览器按采集频率抽取当前播放帧，作为 JPEG 帧走
+peer video WebSocket。采集请求不会控制视频进度，只有切换资源、停止 peer sender、
+重置页面或关闭页面时才会停止这个隐藏的视频时间线。
