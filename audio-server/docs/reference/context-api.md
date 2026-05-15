@@ -2,7 +2,10 @@
 
 本文是 `audio-chat` 当前 Context 设备 API 的架构契约和设计说明。它用于固定公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。它不是当前版本的开发操作手册；按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](../how-to/device-capability-development.md)。
 
-当前仓库以 typed device API 作为唯一推荐开发入口，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.actuators.vibrator.one()`、`context.devices.commands.call()` 和 `context.output.say()`。从当前实现迁移到目标 API 时，优先替换旧的 `request_asset()`、`publish_event()`、`watch_assets()` 和 `submit_text()` 写法。
+当前仓库以 typed device API 作为唯一推荐开发入口，例如
+`context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、
+`context.devices.actuators.vibrator.one()`、`context.devices.commands.call()` 和
+`context.output.say()`。
 
 ## 1. 设计原则
 
@@ -243,10 +246,9 @@ AssetRef(
 
 ## 4. 设备能力注册
 
-设备注册文件应该按传感器和执行器分开声明，不再使用 `supports.id` 这种扁平写法。
+设备注册文件按传感器和执行器分开声明。
 
-推荐结构如下。注意：这是新版目标结构；当前仓库里的设备校验 schema 和 browser-glass
-开发支持组件能力文件仍处在目标结构阶段，后续实现需要同步升级 schema、注册编译器和开发支持组件。
+推荐结构如下：
 
 ```yaml
 $schema: ../../../../audio-server/audio_chat/spec/audio-chat-device.schema.json
@@ -1032,7 +1034,7 @@ traffic_light_task -> start_traffic_light_task
 timer_task -> start_timer_task
 ```
 
-每个启动 Tool 的参数 schema 来自 Task 的 `input_model`。`input_model` 与 Tool 的 `ToolSpec.input_model` 使用同一套规则：推荐用 Pydantic `BaseModel` 定义输入，字段类型、必填项、默认值、范围约束和 `Field(description=...)` 会进入 provider tool schema；JSON Schema dict 只作为兼容入口。模型不需要知道 `TaskEngine.create()`、`task_type` 或 `input_data` 这类内部字段，只需要调用具体启动 Tool：
+每个启动 Tool 的参数 schema 来自 Task 的 `input_model`。`input_model` 与 Tool 的 `ToolSpec.input_model` 使用同一套规则：推荐用 Pydantic `BaseModel` 定义输入，字段类型、必填项、默认值、范围约束和 `Field(description=...)` 会进入 provider tool schema；JSON Schema dict 用于外部 schema 生成场景。模型不需要知道 `TaskEngine.create()`、`task_type` 或 `input_data` 这类内部字段，只需要调用具体启动 Tool：
 
 ```json
 {
@@ -1408,7 +1410,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 
 ## 16. 架构收敛要求
 
-本仓库的设备 API 只保留当前架构。后续新增能力必须遵守：
+本仓库的设备 API 只保留当前架构。新增能力必须遵守：
 
 1. 文档、模板和示例只暴露 typed facade。
 2. 设备能力文件只使用结构化 `supports.sensors` / `supports.actuators`。

@@ -13,4 +13,4 @@
 
 ## Internal
 
-- [audio-server 架构设计](internal/audio-server-architecture-design.md)
+内部文档只作为维护 `audio-server/audio_chat` 时的设计参考；开发和联调以 How-to 与 Reference 为准。

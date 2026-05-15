@@ -42,6 +42,6 @@ uv run audio-chat.server.run --app-name for-blind-app
 当前边界：
 
 - 后台任务由 SDK 自动生成的 `start_*_task` Tool 启动，`task_runtime_manager` 负责查询、取消和列表。
-- 找物、红绿灯当前通过 peer video 在 Python phone 端处理；跨端视频连接见 [跨端设备直连视频任务设计](docs/devices/peer-video-link-task-design.md)，真实 YOLO 迁移方案见 [Python phone YOLO 真实识别迁移设计](docs/devices/yolo-phone-migration-design.md)。
+- 找物、红绿灯通过 peer video 在 Python phone 端处理；跨端视频连接见 [跨端设备直连视频任务设计](docs/devices/peer-video-link-task-design.md)。
 - 地图和搜索没有配置 MCP 时返回明确 fallback。
 - 图片、音频等媒体字节走 stream，业务代码只处理 `AssetRef`。

@@ -979,9 +979,9 @@ start_find_object_task
 4. App 层只传递统一 `Event`，不解释业务状态。
 5. Task 完成、失败、播报和业务信号由 Task 实例负责，Task Core 负责状态机、调度、存储和输出仲裁。
 
-## 19. 迁移计划
+## 19. 维护约束
 
-详细开发计划见 [task-core-implementation-plan.md](task-core-implementation-plan.md)。本设计文档只保留目标架构、语义约束和验收方向。
+本文档只记录目标架构、语义约束和验收方向。具体开发以当前代码、测试和 How-to 文档为准。
 
 ## 20. 测试计划
 

@@ -39,10 +39,9 @@
 
 - [贡献指南](community/contributing.md)
 
-## 内部设计与阶段记录
+## 内部设计文档
 
 SDK 内部设计记录位于 [audio-server/docs](../audio-server/docs/)，示例项目设计记录位于各 `examples/<project>/docs` 目录。这些文档可以公开阅读，但不作为稳定 API 或稳定使用入口。
 
 - [多语言端侧通讯 SDK 设计文档](internal/multilanguage-device-sdk-design.md)
-- [多语言端侧通讯 SDK 实施计划](internal/multilanguage-device-sdk-implementation-plan.md)
 - [端侧协议盘点和冻结候选](internal/device-protocol-inventory.md)

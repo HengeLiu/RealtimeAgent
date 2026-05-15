@@ -316,7 +316,7 @@ uv run python -m pytest audio-server/tests examples/for-blind-app/tests examples
 
 ## 运行产物与日志索引
 
-服务启动时，`audio_chat.runs` 会打印一次 `运行产物目录索引`。其中 `runs_root` 是当前应用的运行产物根目录；后续事件日志不再重复打印 `detail_path`、`session_detail_path` 或 `path`，排查时按启动索引定位文件。
+服务启动时，`audio_chat.runs` 会打印一次 `运行产物目录索引`。其中 `runs_root` 是当前应用的运行产物根目录，排查时按启动索引定位文件。
 
 根目录文件：
 

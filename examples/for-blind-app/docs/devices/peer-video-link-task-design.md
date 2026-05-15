@@ -2,14 +2,11 @@
 
 更新时间：2026-05-15
 
-当前状态：已落地到 `for-blind-app`、`browser-glass` 和 `python-phone`。本文保留设计背景，同时把链路更新到当前实现：找物和红绿灯 Task 已经使用 peer video 编排，Python phone 端可运行真实 YOLO / YOLOE；mock provider 只作为无模型测试降级入口。
-
-开发计划见 [跨端设备直连视频任务开发计划](peer-video-link-implementation-plan.md)。
+当前状态：已落地到 `for-blind-app`、`browser-glass` 和 `python-phone`。找物和红绿灯 Task 使用 peer video 编排，Python phone 端可运行真实 YOLO / YOLOE；mock provider 只作为无模型测试降级入口。
 
 ## 1. 背景
 
-找物和红绿灯识别已经迁移到手机端运行视觉处理。旧方案是 server 侧 Task 请求眼镜上传一张
-`sensor.rgb` 图片给 server，再由 server mock 视觉结果；当前主线已经改成：
+找物和红绿灯识别在 Python phone 开发支持组件中运行视觉处理。链路职责如下：
 
 1. 眼镜端持续采集画面。
 2. 手机端接收视频回显。
@@ -37,14 +34,12 @@
 
 当前实现已经接入 Python phone 端真实 YOLO / YOLOE。mock provider 只用于无模型环境和自动化测试，不作为主链路。
 
-## 3. 非目标
-
-本阶段不做：
+## 3. 当前边界
 
 1. 不在 server 内处理视频帧。
 2. 不把视频帧作为 TaskSignal 或 control event payload 传输。
 3. 不新增一套独立于 `command.*` 的端侧任务状态协议。
-4. 不要求 browser-glass 和 Python phone 真正 WebRTC 点对点；首版可用局域网 WebSocket/HTTP 视频通道或 server 辅助 relay，但协议模型必须按 peer link 表达。
+4. browser-glass 和 Python phone 使用本地 WebSocket peer video 通道，不要求 WebRTC 点对点。
 5. 不把 YOLO 依赖放进 server SDK；真实模型依赖仍属于 Python phone 开发支持组件自己的运行环境。
 
 ## 4. 总体模型
@@ -99,7 +94,7 @@ Task -> TaskEngine : complete(...)
 5. `command.failed` 可承载任一端建链失败。
 6. Task 可以把重要 `CommandEvent` 转成 `TaskSignal`，但不把 TaskSignal 当作底层传输。
 
-结论：本阶段不新增 `peer.*` 系统级事件。新增的是一组标准设备命令名称和 payload schema。
+结论：当前协议不新增 `peer.*` 系统级事件，peer video 使用一组标准设备命令名称和 payload schema。
 
 ## 6. 设备命令约定
 
@@ -233,8 +228,8 @@ params：
 | --- | --- | --- | --- | --- |
 | SDK command runtime | `CommandHandle` / `CommandResultBroker` | 在下发 `command.requested` 前登记 command 与目标设备 | 设备离线时把该设备未完成 command 标记为 `failed` | 控制连接断开、心跳超时必须唤醒等待中的 Task |
 | server Task | `FindObjectTask` / `TrafficLightTask` | 先启动 phone receiver，再启动 glass sender | 任务完成、失败、取消时 stop 已启动端侧，phone completed 后主动 stop glass sender | 任一端 failed 时 fail Task，并清理另一端 |
-| phone receiver | Python phone / 后续 iOS phone | 打开本地 receiver，回显视频，逐帧运行 `VisionProcessor` | timeout、用户关闭、server stop、进程退出时关闭 receiver | sender WebSocket 断开时上报 `peer.video.sender_disconnected`，无帧时 failed |
-| glass sender | browser-glass / 后续眼镜端 | 连接 phone receiver 并按 fps 发送 JPEG 帧 | server stop、页面关闭、控制连接断开时停止 timer 并关闭 WebSocket | peer WebSocket error/close 时上报 `command.failed` |
+| phone receiver | Python phone | 打开本地 receiver，回显视频，逐帧运行 `VisionProcessor` | timeout、用户关闭、server stop、进程退出时关闭 receiver | sender WebSocket 断开时上报 `peer.video.sender_disconnected`，无帧时 failed |
+| glass sender | browser-glass | 连接 phone receiver 并按 fps 发送 JPEG 帧 | server stop、页面关闭、控制连接断开时停止 timer 并关闭 WebSocket | peer WebSocket error/close 时上报 `command.failed` |
 
 关键约束：
 
@@ -242,7 +237,7 @@ params：
 2. phone/glass 任一控制连接离线，SDK 必须让对应 command 进入 failed，Task 不能继续等待端侧主动回包。
 3. phone receiver 的 peer WebSocket 断开必须结束 receiver；如果已经收到可完成结果，可以按视觉结果完成；如果一帧未收到，应 failed。
 4. Task 成功拿到 phone completed 后，仍要主动停止 glass sender，不能只等 receiver 关闭后由 sender 自行感知。
-5. Python phone 退出时必须停止所有仍在运行的 peer receiver，避免端口占用和旧任务悬挂。
+5. Python phone 退出时必须停止所有仍在运行的 peer receiver，避免端口占用和任务悬挂。
 
 释放时序：
 
@@ -716,19 +711,11 @@ properties:
   peer.video.receiver: true
 ```
 
-如果后续要让 server 根据 supports 自动编译 command 路由，可以再把 peer video 做成结构化 capability。本阶段先用 properties 和 command 通配能力保持改动小。
+server 根据 properties 和 command 通配能力完成 peer video 路由。
 
-## 12. server Task 改造要求
+## 12. server Task 执行流程
 
-### 11.1 `find_object_task`
-
-旧逻辑：
-
-```text
-Task -> sensor.rgb.one() -> mock 结果 -> complete
-```
-
-目标逻辑：
+### 12.1 `find_object_task`
 
 ```text
 Task -> phone receiver start
@@ -742,15 +729,7 @@ Task -> phone receiver start
 输入参数保留 `object_name` 和 `timeout_seconds`。模型可见 schema 不暴露端侧 provider
 细节；phone 参考端通过 `vision.provider` 选择真实 YOLO / YOLOE 或测试 mock。
 
-### 11.2 `traffic_light_task`
-
-旧逻辑：
-
-```text
-Task -> sensor.rgb.one() -> mock 红绿灯状态 -> complete
-```
-
-目标逻辑：
+### 12.2 `traffic_light_task`
 
 ```text
 Task -> phone receiver start

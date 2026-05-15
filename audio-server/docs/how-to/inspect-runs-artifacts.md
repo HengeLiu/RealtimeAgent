@@ -163,44 +163,6 @@ user_id=user-browser-device-001 device_id=dev-browser-xxxx session_id=dev-browse
 
 日常语音对话排障通常不用看它。排查后台任务恢复、定时任务、长任务状态时再看。
 
-## 后续可整理点
-
-当前 runs 产物已经按 `<runs_root>/<user_id>/<device_id>` 分层，仍有一些文件组织可以继续优化：
-
-1. `agent-events.jsonl` 和 `model-events.jsonl` 内容重复。
-2. `tool-events.jsonl` 记录 Tool 调用。
-3. `output-decisions.jsonl` 和 `playback-decisions.jsonl` 语义重叠。
-4. `.pcm` 原始 payload 文件和日常调试文件混在同一层，导致 session 目录很乱。
-5. `input-stream_rgb_<id>.pcm` 后缀不准确，RGB/JPEG 资产不应该表现成 `.pcm`。
-
-建议后续把用户设备目录调整为：
-
-```text
-<user_id>/<device_id>/
-  summary.json
-  model-request.json
-  events.jsonl
-  agent-events.jsonl
-  stream-events.jsonl
-  tool-events.jsonl
-  task-signals.jsonl
-  assets.jsonl
-  playback-decisions.jsonl
-  media/
-    input/
-      stream_in_<id>.pcm
-      stream_rgb_<id>.jpg
-    output/
-      stream_out_<id>.wav
-      stream_out_<id>.pcm
-  compatibility/
-    model-events.jsonl
-    tool-events.jsonl
-    output-decisions.jsonl
-```
-
-这不是协议变化，只是观测产物目录整理。
-
 ## 快速定位命令
 
 查看某个 session 下面有哪些文件：

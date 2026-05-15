@@ -80,8 +80,9 @@ Python phone 同样是开发/测试支持组件。它在协议层注册为普通
 显示、视觉计算和 peer video receiver，不代表 SDK 内置固定手机类型。
 
 preview 配置通过 properties 声明 `device_role=phone`、`endpoint.role.visual_display`、
-`endpoint.compute.vision`、`actuator.display.rgb` 和 `peer.video.receiver`，不再把
-自己注册成 RGB 传感器。当前有两类 RGB 流需要区分：
+`endpoint.compute.vision`、`actuator.display.rgb` 和 `peer.video.receiver`。它作为
+显示与视觉计算组件运行，RGB 画面来自 browser-glass 或 peer video sender。当前有两类
+RGB 流需要区分：
 
 1. realtime visual sampler 的单资产请求：server 在语音 `speech_started` 到
    `speech_stopped` 之间向 browser-glass 请求 `sensor.rgb`，该输入流带 `request_id`，

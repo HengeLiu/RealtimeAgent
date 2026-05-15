@@ -7,7 +7,7 @@
 - 用户可听输出：统一使用 `await context.output.say(...)`，不直接写 speaker。
 - 麦克风和扬声器属于系统音频主链路，不作为普通 `supports` capability 暴露。
 
-当前新 Tool 可以优先试用 typed facade；不要再用旧草案里的 `request_asset()`、`publish_event()`、`watch_assets()` 或 `submit_text()`。
+Tool / Task 通过 typed facade 使用设备能力。
 
 ## 设备能力文件
 
@@ -79,8 +79,6 @@ await context.output.say("已完成画面分析", priority="normal")
 - `stream.control.open.requested`
 - `stream.control.close.requested`
 
-不再存在 configure 事件。
-
 ## 常用命令和观察点
 
 ```bash
@@ -89,6 +87,5 @@ uv run audio-chat.server.run --app-name for-blind-app
 uv run audio-chat.web.open --serve
 ```
 
-for-blind-app 默认运行产物位于 `examples/for-blind-app/audio-server/runs/`。旧文档里的
-`runs/<app_name>/<user_id>/<device_id>/assets.jsonl` 应按当前配置理解为
-`<runs_root>/<user_id>/<device_id>/assets.jsonl`。
+for-blind-app 默认运行产物位于 `examples/for-blind-app/audio-server/runs/`。一次
+session 的资产事件位于 `<runs_root>/<user_id>/<device_id>/assets.jsonl`。

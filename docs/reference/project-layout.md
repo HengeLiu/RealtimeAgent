@@ -1,6 +1,6 @@
 # 项目结构
 
-`audio-chat` 仓库围绕 server-side Python SDK、应用样例、端侧参考实现、测试和文档组织。
+`audio-chat` 仓库围绕 server-side Python SDK、应用样例、端侧通讯 SDK、开发支持组件、测试和文档组织。
 
 ```text
 audio-server/audio_chat/
@@ -8,7 +8,6 @@ audio-device/
 examples/
 docs/
 testdata/
-legacy/
 ```
 
 ## audio_chat
@@ -122,7 +121,3 @@ uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_sampl
 ## testdata
 
 契约、回放和样例数据目录。适合保存可复现输入，而不是保存真实用户数据。
-
-## legacy
-
-旧实现和迁移参考。新开发默认不从 `legacy` 开始。
