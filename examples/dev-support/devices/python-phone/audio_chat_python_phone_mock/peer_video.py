@@ -204,7 +204,6 @@ class PeerVideoReceiver:
                 self.latest_frame = frame
                 self.frame_count += 1
                 self._emit_log("DEBUG", f"收到 peer video 帧 frame_count={self.frame_count} bytes={len(frame)}")
-                await self._emit_frame(frame)
                 if first_frame:
                     self._emit_log("INFO", f"收到第一帧 peer video bytes={len(frame)}")
                     await self.reporter.progress(
@@ -233,6 +232,14 @@ class PeerVideoReceiver:
                     data={"detection": self.last_detection},
                     metrics={"frame_count": self.frame_count, "frame_size": len(frame), **dict(frame_result.metrics)},
                 )
+                annotated_frame = self._encode_annotated_frame(frame_result.annotated_image)
+                if annotated_frame is not None:
+                    await self._emit_frame(
+                        annotated_frame,
+                        metadata={"annotated": True, "display_source": "vision_annotated"},
+                    )
+                else:
+                    await self._emit_frame(frame)
                 if frame_result.should_complete:
                     self.close_reason = "vision_result"
                     self._emit_log("INFO", f"视觉结果触发任务完成 frame_count={self.frame_count}")
@@ -241,6 +248,8 @@ class PeerVideoReceiver:
                     self.close_reason = "test_frame_limit"
                     self._emit_log("INFO", f"测试帧数上限触发任务完成 frame_count={self.frame_count}")
                     self._stop_event.set()
+                if self._stop_event.is_set():
+                    break
         except Exception as exc:  # noqa: BLE001 - 视觉识别异常需要结束本次远程任务
             logger.exception("peer.video.vision_failed peer_session_id=%s", self.peer_session_id)
             self._emit_log("ERROR", f"peer video 视觉处理失败: {type(exc).__name__}: {exc}")
@@ -358,12 +367,38 @@ class PeerVideoReceiver:
         except asyncio.CancelledError:
             pass
 
-    async def _emit_frame(self, frame: bytes) -> None:
+    def _encode_annotated_frame(self, image: Any | None) -> bytes | None:
+        """把视觉标注图编码成 GUI 可显示的 JPEG 字节。
+
+        主要逻辑：YOLO 处理器返回的是 OpenCV BGR 图像，浏览器和 Tk GUI 预览需要
+        JPEG/PNG 字节；这里只在真实存在标注图时编码，mock 或跳帧场景继续显示原始帧。
+        参数：`image` 为 OpenCV 图像或 None。
+        返回值：编码后的 JPEG 字节；无可用标注图或编码失败时返回 None。
+        异常情况：OpenCV 导入或编码异常只记录 DEBUG 日志，不中断识别任务。
+        """
+
+        if image is None:
+            return None
+        try:
+            import cv2
+
+            ok, encoded = cv2.imencode(".jpg", image)
+            if not ok:
+                self._emit_log("DEBUG", f"peer video 标注帧编码失败 frame_count={self.frame_count}")
+                return None
+            return bytes(encoded.tobytes())
+        except Exception:  # noqa: BLE001 - 预览标注失败不应中断识别和命令回报
+            logger.exception("peer.video.annotated_frame_encode_failed peer_session_id=%s frame_count=%s", self.peer_session_id, self.frame_count)
+            self._emit_log("DEBUG", f"peer video 标注帧编码异常 frame_count={self.frame_count}")
+            return None
+
+    async def _emit_frame(self, frame: bytes, *, metadata: dict[str, Any] | None = None) -> None:
         """把 peer video 帧转交给端侧显示和调试链路。
 
         主要逻辑：receiver 负责直连 WebSocket 收帧；GUI、最近帧保存和统计属于 phone
-        endpoint，因此通过回调把原始 JPEG 帧和轻量元数据交给上层。
-        参数：`frame` 为收到的 JPEG/PNG 字节。
+        endpoint，因此通过回调把 JPEG 帧和轻量元数据交给上层；真实视觉处理可传入
+        标注后的 JPEG，让预览窗口展示检测框。
+        参数：`frame` 为收到或生成的 JPEG/PNG 字节，`metadata` 为额外显示元数据。
         返回值：无。
         异常情况：回调异常只记录日志，不中断 peer video 任务。
         """
@@ -371,12 +406,16 @@ class PeerVideoReceiver:
         if self.frame_callback is None:
             self._emit_log("DEBUG", f"peer video 帧未配置显示回调 frame_count={self.frame_count}")
             return
-        metadata = {
+        base_metadata = {
             "peer_session_id": self.peer_session_id,
             "purpose": self.purpose,
             "object_name": self.object_name,
             "frame_count": self.frame_count,
         }
+        if metadata:
+            metadata = {**base_metadata, **metadata}
+        else:
+            metadata = base_metadata
         try:
             result = self.frame_callback(frame, metadata)
             if inspect.isawaitable(result):

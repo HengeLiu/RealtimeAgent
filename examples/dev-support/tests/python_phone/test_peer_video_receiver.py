@@ -8,6 +8,7 @@ from aiohttp import ClientSession
 from audio_chat.protocol import Event
 from audio_chat_python_phone_mock.peer_video import PeerVideoReceiver
 from audio_chat_python_phone_mock.remote_task import RemoteCommand, RemoteTaskReporter
+from audio_chat_python_phone_mock.vision.result import VisionFrameResult
 
 
 def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
@@ -78,6 +79,65 @@ def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:
         assert "peer.video.first_frame" in statuses
         assert "peer.video.frame_processed" in statuses
         assert sent[-1].event_name == "command.completed"
+
+    asyncio.run(run())
+
+
+def test_peer_video_receiver_emits_annotated_frame_when_yolo_returns_overlay() -> None:
+    """测试目标：验证真实视觉处理返回标注图时，phone GUI 收到带识别框的预览帧。
+
+    测试方法：注入一个返回 OpenCV 标注图的视觉处理器，发送一帧原始 peer video
+    字节，记录 `frame_callback` 收到的内容。
+    预期结果：回调收到的是重新编码后的 JPEG 标注图，并带有 `annotated=True`
+    元数据，证明 GUI 预览链路不是只显示原始视频帧。
+    """
+
+    async def run() -> None:
+        sent: list[Event] = []
+        frames: list[dict] = []
+
+        async def send_event(event: Event) -> None:
+            sent.append(event)
+
+        command = RemoteCommand(
+            command_id="cmd-phone",
+            command="peer.video.receiver.start",
+            user_id="user-peer",
+            session_id="dev-phone",
+            params={
+                "peer_session_id": "task-peer-yolo",
+                "task_type": "find_object_task",
+                "purpose": "find_object",
+                "object_name": "水杯",
+            },
+        )
+        receiver = PeerVideoReceiver(
+            command=command,
+            reporter=RemoteTaskReporter(command=command, producer_id="dev-phone", role="receiver", send_event=send_event),
+            listen_host="127.0.0.1",
+            listen_port=_unused_port(),
+            timeout_seconds=5,
+            public_host="127.0.0.1",
+            complete_after_frames=1,
+            vision_processor=AnnotatingVisionProcessor(),
+            frame_callback=lambda frame, metadata: frames.append({"bytes": frame, "metadata": metadata}),
+        )
+        raw_frame = b"\xff\xd8raw-frame\xff\xd9"
+        task = asyncio.create_task(receiver.run())
+        await _wait_for_status(sent, "peer.receiver.ready")
+        async with ClientSession() as session:
+            async with session.ws_connect(receiver.receiver_info()["url"]) as ws:
+                await ws.send_bytes(raw_frame)
+                await asyncio.sleep(0.05)
+        result = await task
+
+        assert result["source"] == "yoloe"
+        assert frames
+        assert frames[0]["bytes"] != raw_frame
+        assert frames[0]["bytes"].startswith(b"\xff\xd8")
+        assert frames[0]["metadata"]["annotated"] is True
+        assert frames[0]["metadata"]["display_source"] == "vision_annotated"
+        assert frames[0]["metadata"]["frame_count"] == 1
 
     asyncio.run(run())
 
@@ -261,3 +321,32 @@ class SlowVisionProcessor:
     async def build_final_result(self, *, frame_count: int, last_detection: dict | None) -> dict:
         _ = last_detection
         return {"stopped": True, "frame_count": frame_count, "source": "yolo"}
+
+
+class AnnotatingVisionProcessor:
+    """用于模拟 YOLO 返回标注图的处理器。"""
+
+    provider = "yolo"
+
+    def __init__(self) -> None:
+        self.log_callback = None
+
+    async def prepare_session(self, *, purpose: str, object_name: str) -> None:
+        _ = purpose, object_name
+
+    async def process_frame(self, frame: bytes, *, frame_count: int) -> VisionFrameResult:
+        _ = frame, frame_count
+        import numpy as np
+
+        image = np.zeros((32, 48, 3), dtype=np.uint8)
+        image[:, :] = (0, 255, 0)
+        image[4:28, 6:42] = (0, 0, 255)
+        return VisionFrameResult(
+            detection={"type": "find_object", "object_name": "水杯", "found": False, "source": "yoloe"},
+            metrics={"provider": "yoloe", "inference_ms": 3},
+            annotated_image=image,
+        )
+
+    async def build_final_result(self, *, frame_count: int, last_detection: dict | None) -> dict:
+        _ = last_detection
+        return {"type": "find_object", "found": False, "frame_count": frame_count, "source": "yoloe"}

@@ -349,6 +349,156 @@ def test_peer_video_task_waits_for_phone_vision_ready_before_starting_glass(tmp_
     asyncio.run(run())
 
 
+def test_peer_video_task_fails_when_phone_vision_ready_timeout(tmp_path: Path) -> None:
+    """测试目标：验证 phone 视觉准备阶段不会让任务无限停在 started。
+
+    测试方法：把找物 Task 的视觉准备超时缩短到 0.05 秒，phone 只回报
+    `peer.receiver.waiting_vision`，不再回报 ready。
+    预期结果：任务进入 failed，且不会启动 glass sender。
+    """
+
+    async def run() -> None:
+        app = _app_with_peer_tasks(tmp_path)
+        tasks_module = sys.modules["capabilities.tasks"]
+        old_timeout = tasks_module.FindObjectTask.vision_ready_timeout_seconds
+        tasks_module.FindObjectTask.vision_ready_timeout_seconds = 0.05
+        try:
+            phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
+            glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
+            _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
+            _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+
+            create_task = asyncio.create_task(
+                app.task_engine.create(
+                    task_type="find_object_task",
+                    user_id="user-peer",
+                    session_id="dev-glass",
+                    input_data={"object_name": "水杯", "timeout_seconds": 1},
+                )
+            )
+            phone_command = await _wait_for_command(phone)
+            phone_cmd = phone_command.payload["command_id"]
+            app.publish_control_event(
+                Event(
+                    event_name="command.progress",
+                    user_id="user-peer",
+                    producer_id="dev-phone",
+                    session_id="dev-phone",
+                    payload={
+                        "command_id": phone_cmd,
+                        "command": "peer.video.receiver.start",
+                        "status": "peer.receiver.waiting_vision",
+                    },
+                )
+            )
+
+            started = await asyncio.wait_for(create_task, timeout=1)
+            ref = await _wait_for_task_state(app, started.task_id, "failed", timeout_seconds=1)
+
+            assert ref.state == "failed"
+            assert "手机视觉模型准备超时" in ref.metadata["error"]
+            assert not _command_events(glass)
+        finally:
+            tasks_module.FindObjectTask.vision_ready_timeout_seconds = old_timeout
+
+    asyncio.run(run())
+
+
+def test_find_object_task_reports_not_found_after_peer_business_timeout(tmp_path: Path) -> None:
+    """测试目标：验证 phone 业务超时后的未找到结果仍能通知到大模型和眼镜端。
+
+    测试方法：把找物输入超时设为 0.05 秒，先让 phone 和 glass 建立 peer video，
+    等超过原始业务超时后再发布 phone `command.completed found=false`。
+    预期结果：Task 不会被 TaskEngine 提前标记 timeout，而是进入 finished，并写入
+    `find_object.not_found` 直接通知信号。
+    """
+
+    async def run() -> None:
+        app = _app_with_peer_tasks(tmp_path)
+        tasks_module = sys.modules["capabilities.tasks"]
+        old_ready_timeout = tasks_module.FindObjectTask.vision_ready_timeout_seconds
+        old_grace = tasks_module.FindObjectTask.completion_grace_seconds
+        tasks_module.FindObjectTask.vision_ready_timeout_seconds = 0.1
+        tasks_module.FindObjectTask.completion_grace_seconds = 0.3
+        try:
+            phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
+            glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
+            _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
+            _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+
+            create_task = asyncio.create_task(
+                app.task_engine.create(
+                    task_type="find_object_task",
+                    user_id="user-peer",
+                    session_id="dev-glass",
+                    input_data={"object_name": "水杯", "timeout_seconds": 0.05},
+                )
+            )
+            phone_command = await _wait_for_command(phone)
+            phone_cmd = phone_command.payload["command_id"]
+            app.publish_control_event(
+                Event(
+                    event_name="command.progress",
+                    user_id="user-peer",
+                    producer_id="dev-phone",
+                    session_id="dev-phone",
+                    payload={
+                        "command_id": phone_cmd,
+                        "command": "peer.video.receiver.start",
+                        "status": "peer.receiver.ready",
+                        "data": {"receiver": {"transport": "websocket", "url": "ws://127.0.0.1:19081/peer-video/task"}},
+                    },
+                )
+            )
+            glass_command = await _wait_for_command(glass)
+            glass_cmd = glass_command.payload["command_id"]
+            app.publish_control_event(
+                Event(
+                    event_name="command.progress",
+                    user_id="user-peer",
+                    producer_id="dev-glass",
+                    session_id="dev-glass",
+                    payload={"command_id": glass_cmd, "command": "peer.video.sender.start", "status": "peer.sender.connected"},
+                )
+            )
+            await asyncio.sleep(0.08)
+            app.publish_control_event(
+                Event(
+                    event_name="command.completed",
+                    user_id="user-peer",
+                    producer_id="dev-phone",
+                    session_id="dev-phone",
+                    payload={
+                        "command_id": phone_cmd,
+                        "command": "peer.video.receiver.start",
+                        "result": {
+                            "type": "find_object",
+                            "object_name": "水杯",
+                            "found": False,
+                            "message": "暂时没有找到水杯",
+                            "source": "mock",
+                        },
+                    },
+                )
+            )
+            await _complete_stop_command(app, glass)
+            started = await asyncio.wait_for(create_task, timeout=1)
+            ref = await _wait_for_task_state(app, started.task_id, "finished")
+
+            assert ref.state == "finished"
+            assert ref.summary == "找物未命中"
+            task_signals_path = tmp_path / "runs/user-peer/dev-glass/task-signals.jsonl"
+            task_signals = [json.loads(line) for line in task_signals_path.read_text(encoding="utf-8").splitlines()]
+            not_found_signal = next(item for item in task_signals if item["signal_name"] == "find_object.not_found")
+            assert not_found_signal["allow_direct_notify"] is True
+            assert not_found_signal["payload"]["message"] == "暂时没有找到水杯"
+        finally:
+            tasks_module.FindObjectTask.vision_ready_timeout_seconds = old_ready_timeout
+            tasks_module.FindObjectTask.completion_grace_seconds = old_grace
+
+    asyncio.run(run())
+
+
 def test_peer_video_task_fails_when_phone_disconnects(tmp_path: Path) -> None:
     """测试目标：验证 phone 端控制连接断开时 Task 不会继续等待视频命令超时。
 
@@ -407,8 +557,11 @@ def test_traffic_light_task_reports_green_with_high_priority_path(tmp_path: Path
         started = await asyncio.wait_for(create_task, timeout=2)
         ref = await _wait_for_task_state(app, started.task_id, "finished")
         assert ref.state == "finished"
-        task_signals = (tmp_path / "runs/user-peer/dev-glass/task-signals.jsonl").read_text(encoding="utf-8")
-        assert "traffic_light.green" in task_signals
+        task_signals_path = tmp_path / "runs/user-peer/dev-glass/task-signals.jsonl"
+        task_signals = [json.loads(line) for line in task_signals_path.read_text(encoding="utf-8").splitlines()]
+        green_signal = next(item for item in task_signals if item["signal_name"] == "traffic_light.green")
+        assert green_signal["allow_direct_notify"] is True
+        assert green_signal["payload"]["message"] == "绿灯，可以在确认安全后通行"
 
     asyncio.run(run())
 

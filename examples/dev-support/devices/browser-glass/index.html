@@ -30,7 +30,8 @@
     .log-panel h2 { margin: 0 0 6px; }
     .log-box { width: 100%; height: 170px; min-height: 170px; resize: none; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 10px; border-radius: 6px; border: 1px solid #243248; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
     .hint { color: #5e6a7d; font-size: 13px; margin: 4px 0 0; }
-    .visual-toolbar { display: grid; grid-template-columns: auto auto minmax(180px, 1fr) auto; gap: 12px; align-items: center; margin: 14px 0; }
+    .visual-toolbar { display: grid; grid-template-columns: auto auto minmax(180px, 1fr); gap: 12px; align-items: center; margin: 14px 0; }
+    .visual-toolbar button { min-width: 104px; height: 36px; }
     .visual-preview { display: grid !important; grid-template-columns: minmax(320px, 680px); gap: 12px; align-items: start; margin-top: 10px; }
     .preview-stage label { margin-bottom: 8px; }
     .preview-canvas { width: 100%; aspect-ratio: 16 / 9; background: #0f1722; border: 1px solid #253047; border-radius: 6px; object-fit: contain; box-sizing: border-box; }
@@ -87,12 +88,11 @@
     <section class="panel">
       <h2>带图输入</h2>
       <div class="visual-toolbar">
-        <button id="chooseImageSample" class="secondary" type="button">从样例目录选择图片</button>
+        <button id="chooseImageSample" class="secondary" type="button">选择图片</button>
         <input id="imageFile" class="hidden" type="file" accept="image/*" multiple />
         <button id="chooseVideoSample" class="secondary" type="button">选择视频</button>
         <input id="videoFile" class="hidden" type="file" accept="video/*" />
         <span id="visualInputName" class="file-name">未选择图片或视频，按需使用摄像头</span>
-        <button id="uploadImageNow" type="button" disabled>上传当前帧</button>
       </div>
       <div id="visualPreviewArea" class="visual-preview">
         <div class="preview-stage">
@@ -206,7 +206,6 @@
     const chooseAudioSampleButton = document.getElementById("chooseAudioSample");
     const chooseImageSampleButton = document.getElementById("chooseImageSample");
     const chooseVideoSampleButton = document.getElementById("chooseVideoSample");
-    const uploadImageNowButton = document.getElementById("uploadImageNow");
     const audioSampleNameEl = document.getElementById("audioSampleName");
     const visualInputNameEl = document.getElementById("visualInputName");
     const selectedVideoSourceEl = document.getElementById("selectedVideoSource");
@@ -357,7 +356,6 @@
       wakeButton.disabled = !registered || dialogOpen;
       interruptButton.disabled = !dialogOpen;
       closeButton.disabled = !dialogOpen;
-      uploadImageNowButton.disabled = !registered || activeVisualInputKind() === "camera";
     }
 
     function updateAudioButtons() {
@@ -639,7 +637,6 @@
       visualPreviewEl.classList.toggle("source-image", active === "image");
       visualPreviewEl.classList.toggle("source-video", active === "video");
       visualPreviewEl.classList.toggle("source-camera", active === "camera");
-      uploadImageNowButton.textContent = active === "video" ? "上传当前视频帧" : (active === "image" ? "上传所选图片" : "上传当前帧");
       renderStatus();
     }
 
@@ -2082,9 +2079,6 @@
       }).catch((err) => log(`choose video sample failed: ${err.message}`));
     };
     buildRecordCommandButton.onclick = buildPlaybackRecordCommand;
-    uploadImageNowButton.onclick = () => {
-      uploadSingleVisualSnapshot({payload: {reason: "manual_browser_upload"}}).catch((err) => log(`upload image failed: ${err.message}`));
-    };
     closeButton.onclick = async () => {
       await stopMic();
       await delay(300);

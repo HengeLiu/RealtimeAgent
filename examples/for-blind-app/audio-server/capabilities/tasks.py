@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -58,6 +60,47 @@ class PeerVideoTaskMixin:
 
     phone_handle: CommandHandle | None
     glass_handle: CommandHandle | None
+    vision_ready_timeout_seconds = 120.0
+    completion_grace_seconds = 10.0
+
+    def extend_peer_video_task_timeout(self, context: TaskContext, *, peer_timeout_seconds: float) -> None:
+        """延长 peer video Task 的总超时。
+
+        主要逻辑：用户输入的 `timeout_seconds` 是端侧视频识别时长，不应直接作为
+        TaskEngine 的总生命周期超时。真实链路还包含视觉模型准备、眼镜连接、端侧
+        completed 回传和 stop 清理；这里把总超时扩展为准备超时 + 识别超时 + 收口余量，
+        避免 server 先把任务标记 timeout，导致 phone 回传的未找到结果被丢弃。
+        参数：`context` 为任务上下文，`peer_timeout_seconds` 为端侧业务识别时长。
+        返回值：无。
+        异常情况：缺少 TaskEngine 或更新失败时静默跳过，保持 Task 主流程可继续。
+        """
+
+        if context.engine is None:
+            return
+        total_timeout = (
+            float(peer_timeout_seconds or 0)
+            + float(getattr(self, "vision_ready_timeout_seconds", 120.0) or 0)
+            + float(getattr(self, "completion_grace_seconds", 10.0) or 0)
+        )
+        if total_timeout <= 0:
+            return
+        try:
+            ref = context.engine.query(context.task_ref.task_id)
+            now = time.time()
+            updated = replace(
+                ref,
+                metadata={
+                    **dict(ref.metadata),
+                    "timeout_seconds": total_timeout,
+                    "deadline_at": now + total_timeout,
+                    "peer_video_timeout_seconds": float(peer_timeout_seconds or 0),
+                    "peer_video_timeout_extended": True,
+                },
+            )
+            context.engine.store.put(updated)
+            context.task_ref = updated
+        except Exception:
+            return
 
     async def start_peer_video_receiver(
         self,
@@ -252,21 +295,47 @@ class PeerVideoTaskMixin:
             except Exception:
                 continue
 
-    def watch_command_failure(self, context: TaskContext, handle: CommandHandle, *, user_message: str) -> None:
+    def watch_command_failure(
+        self,
+        context: TaskContext,
+        handle: CommandHandle,
+        *,
+        user_message: str,
+        ready_timeout_message: str | None = None,
+    ) -> None:
         """后台监听长命令失败。
 
         主要逻辑：Task.run() 现在只负责启动命令并快速返回，不再长期阻塞消费
         `CommandHandle.results()`；因此需要一个轻量 watcher 覆盖设备离线等只进入
-        command broker 的失败路径。正常 completed 仍由 `task.event.finish` 处理。
+        command broker 的失败路径。正常 completed 仍由 `task.event.finish` 处理。如果
+        传入 `ready_timeout_message`，还会在 phone receiver 上报 ready 前增加一次
+        模型准备超时保护，避免任务无限停在 started。
         参数：`context` 为任务上下文；`handle` 为长命令句柄；`user_message` 为失败时
-        给用户和 Agent 的简短说明。
+        给用户和 Agent 的简短说明；`ready_timeout_message` 为视觉准备超时说明。
         返回值：无。
         异常情况：watcher 自身异常不向外传播，避免影响 Task actor 主流程。
         """
 
         async def _watch() -> None:
             try:
-                async for event in handle.results():
+                iterator = handle.results().__aiter__()
+                ready_deadline = asyncio.get_running_loop().time() + float(getattr(self, "vision_ready_timeout_seconds", 120.0) or 120.0)
+                ready_seen = ready_timeout_message is None
+                while True:
+                    try:
+                        if ready_seen:
+                            event = await iterator.__anext__()
+                        else:
+                            remaining = ready_deadline - asyncio.get_running_loop().time()
+                            if remaining <= 0:
+                                await self._fail_ready_timeout(context, str(ready_timeout_message))
+                                return
+                            event = await asyncio.wait_for(iterator.__anext__(), timeout=remaining)
+                    except StopAsyncIteration:
+                        return
+                    except asyncio.TimeoutError:
+                        await self._fail_ready_timeout(context, str(ready_timeout_message))
+                        return
                     if event.state == "completed":
                         return
                     if event.state == "failed":
@@ -275,11 +344,27 @@ class PeerVideoTaskMixin:
                             payload={"message": user_message, "allow_direct_notify": True},
                         )
                         return
+                    if self.command_event_status(event) == "peer.receiver.ready":
+                        ready_seen = True
             except Exception:
                 return
 
         task = asyncio.create_task(_watch())
         self._watch_tasks = [*getattr(self, "_watch_tasks", []), task]
+
+    async def _fail_ready_timeout(self, context: TaskContext, message: str) -> None:
+        """把 phone 视觉准备超时转成任务失败。"""
+
+        timeout_seconds = float(getattr(self, "vision_ready_timeout_seconds", 120.0) or 120.0)
+        await context.fail(
+            message,
+            payload={
+                "message": message,
+                "allow_direct_notify": True,
+                "reason": "peer_receiver_ready_timeout",
+                "timeout_seconds": timeout_seconds,
+            },
+        )
 
     def emit_task_signal(
         self,
@@ -346,6 +431,7 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
         input_data = dict(context.metadata.get("input") or {})
         object_name = str(input_data.get("object_name") or "目标物").strip()
         timeout_seconds = float(input_data.get("timeout_seconds") or 30)
+        self.extend_peer_video_task_timeout(context, peer_timeout_seconds=timeout_seconds)
         self.emit_task_signal(
             context,
             signal_name="find_object.started",
@@ -359,7 +445,12 @@ class FindObjectTask(PeerVideoTaskMixin, BaseTask):
                 object_name=object_name,
                 timeout_seconds=timeout_seconds,
             )
-            self.watch_command_failure(context, self.phone_handle, user_message=f"找{object_name}的任务没有完成，请稍后再试")
+            self.watch_command_failure(
+                context,
+                self.phone_handle,
+                user_message=f"找{object_name}的任务没有完成，请稍后再试",
+                ready_timeout_message=f"手机视觉模型准备超时，找{object_name}的任务没有完成",
+            )
         except Exception as exc:  # noqa: BLE001 - Task 需要清理已启动端侧命令
             await self.stop_peer_video(reason="task_failed")
             message = f"找{object_name}的任务没有启动成功，请稍后再试"
@@ -486,13 +577,19 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
 
         input_data = dict(context.metadata.get("input") or {})
         timeout_seconds = float(input_data.get("timeout_seconds") or 30)
+        self.extend_peer_video_task_timeout(context, peer_timeout_seconds=timeout_seconds)
         try:
             self.phone_handle = await self.start_peer_video_receiver(
                 context,
                 purpose="traffic_light",
                 timeout_seconds=timeout_seconds,
             )
-            self.watch_command_failure(context, self.phone_handle, user_message="红绿灯识别任务没有完成，请稍后再试")
+            self.watch_command_failure(
+                context,
+                self.phone_handle,
+                user_message="红绿灯识别任务没有完成，请稍后再试",
+                ready_timeout_message="手机视觉模型准备超时，红绿灯识别任务没有完成",
+            )
         except Exception as exc:  # noqa: BLE001 - Task 需要清理已启动端侧命令
             await self.stop_peer_video(reason="task_failed")
             message = "红绿灯识别任务没有启动成功，请稍后再试"
@@ -533,6 +630,7 @@ class TrafficLightTask(PeerVideoTaskMixin, BaseTask):
             context,
             signal_name="traffic_light.green" if state == "green" else "traffic_light.state_detected",
             payload=payload,
+            allow_direct_notify=True,
         )
         await context.complete(payload, summary=suggestion)
 

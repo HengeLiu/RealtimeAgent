@@ -543,12 +543,14 @@ class AudioChatApp:
             return
         if event.event_name == "stream.input.opened":
             self._register_endpoint_input_stream(event)
-            self.control_service.publish(event)
+            if not event.payload.get("request_id"):
+                self.control_service.publish(event)
             return
         if event.event_name == "stream.input.closed":
             self._mark_asset_request_failed(event)
             self._mark_endpoint_input_closed(event)
-            self.control_service.publish(event)
+            if not event.payload.get("request_id"):
+                self.control_service.publish(event)
             return
         if event.event_name == "control.user.dialog.close.requested":
             if self._should_ignore_model_close_request(event):
@@ -793,6 +795,7 @@ class AudioChatApp:
         if self.stream_service.registry.has(event.stream_id):
             return
         raw_format = dict(event.payload.get("format") or {})
+        consumer_device_ids = () if event.payload.get("request_id") else None
         handle = self.stream_service.open_stream(
             user_id=event.user_id,
             session_id=device_id,
@@ -800,6 +803,7 @@ class AudioChatApp:
             producer_id=event.producer_id,
             format=_stream_format_from_dict(raw_format) if raw_format else self.stream_service.default_format_for(event.stream_type),
             stream_id=event.stream_id,
+            consumer_device_ids=consumer_device_ids,
         )
         self._active_device_by_user[event.user_id] = handle.session_id
         self._device_dialogs_by_user.setdefault(

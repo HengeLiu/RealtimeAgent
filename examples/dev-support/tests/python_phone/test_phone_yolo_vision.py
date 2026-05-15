@@ -167,6 +167,42 @@ def test_yoloe_text_weight_download_uses_phone_cache_dir(tmp_path, monkeypatch) 
     assert Path.cwd() == tmp_path
 
 
+def test_yoloe_text_weight_corrupted_cache_is_removed_and_retried(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 MobileCLIP 文本权重缓存损坏时会自动清理并重试。
+
+    测试方法：在运行产物缓存目录放入假 `mobileclip_blt.ts`，让假模型第一次抛出
+    PyTorch zip archive 损坏错误，第二次返回文本特征。
+    预期结果：坏缓存被删除，文本编码重试成功，当前工作目录恢复到调用前目录。
+    """
+
+    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+
+    class FakeTextModel:
+        calls = 0
+
+        def get_text_pe(self, texts):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(
+                    "PytorchStreamReader failed reading zip archive: failed finding central directory"
+                )
+            return {"texts": texts, "calls": self.calls}
+
+    cache_dir = tmp_path / "runs/audio-chat/python-phone/vision-cache"
+    cache_dir.mkdir(parents=True)
+    broken_weight = cache_dir / "mobileclip_blt.ts"
+    broken_weight.write_bytes(b"incomplete archive")
+    fake_model = FakeTextModel()
+    monkeypatch.chdir(tmp_path)
+
+    result = find_object_module._get_yoloe_text_pe(fake_model, ["钥匙"])
+
+    assert result == {"texts": ["钥匙"], "calls": 2}
+    assert fake_model.calls == 2
+    assert broken_weight.exists() is False
+    assert Path.cwd() == tmp_path
+
+
 def test_auto_device_avoids_mps_for_yoloe_float64_compatibility(monkeypatch) -> None:
     """测试目标：验证自动设备选择不会在 Mac 上默认使用 MPS。
 

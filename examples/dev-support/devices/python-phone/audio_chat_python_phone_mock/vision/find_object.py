@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _TEXT_MODEL_DOWNLOAD_LOCK = Lock()
 _TEXT_MODEL_CACHE_DIR = Path("runs/audio-chat/python-phone/vision-cache")
+_TEXT_MODEL_CACHE_PATTERNS = ("mobileclip*", "*.ts.tmp", "*.pt.tmp")
 
 
 @dataclass
@@ -277,11 +278,86 @@ def _get_yoloe_text_pe(model: Any, texts: list[str], *, log_callback: Callable[[
     with _TEXT_MODEL_DOWNLOAD_LOCK:
         os.chdir(cache_dir)
         try:
-            _emit_callback_log(log_callback, "INFO", f"YOLOE 文本编码开始 cache_dir={cache_dir}")
-            return model.get_text_pe(texts)
+            for attempt in range(2):
+                try:
+                    _emit_callback_log(
+                        log_callback,
+                        "INFO",
+                        f"YOLOE 文本编码开始 cache_dir={cache_dir} attempt={attempt + 1}",
+                    )
+                    return model.get_text_pe(texts)
+                except RuntimeError as exc:
+                    if attempt == 0 and _is_corrupted_torch_archive_error(exc):
+                        removed = _remove_cached_text_model_assets(cache_dir, log_callback=log_callback)
+                        _emit_callback_log(
+                            log_callback,
+                            "WARNING",
+                            f"YOLOE 文本编码权重缓存损坏，已清理并准备重试 removed={len(removed)}",
+                        )
+                        continue
+                    raise
         finally:
             os.chdir(cwd)
             _emit_callback_log(log_callback, "INFO", f"YOLOE 文本编码结束，工作目录已恢复 cwd={cwd}")
+
+
+def _is_corrupted_torch_archive_error(exc: BaseException) -> bool:
+    """判断异常是否来自 PyTorch 权重压缩包损坏。
+
+    主要逻辑：Ultralytics 下载 MobileCLIP 文本编码权重时，如果下载中断，会留下
+    不完整的 `.ts` 文件。PyTorch 读取这类文件时通常报 central directory 或
+    zip archive 错误。这里只匹配这类明确的坏缓存错误，避免误删其他模型文件。
+    参数：`exc` 为模型加载阶段抛出的异常。
+    返回值：命中坏缓存特征时返回 True，否则返回 False。
+    异常情况：无。
+    """
+
+    message = str(exc).lower()
+    return (
+        ("pytorchstreamreader" in message and "zip archive" in message)
+        or "failed finding central directory" in message
+        or "not a zip archive" in message
+    )
+
+
+def _remove_cached_text_model_assets(
+    cache_dir: Path,
+    *,
+    log_callback: Callable[[str, str], Any] | None = None,
+) -> list[Path]:
+    """删除可能损坏的 YOLOE 文本编码缓存文件。
+
+    主要逻辑：只清理 Python phone 运行产物目录下的 MobileCLIP 文本权重和临时下载
+    文件，保留其他视觉运行产物。每个删除动作都会记录 DEBUG 日志，方便确认实际处理
+    了哪个文件。
+    参数：`cache_dir` 为文本权重缓存目录，`log_callback` 为可选 GUI 日志回调。
+    返回值：已经删除的文件路径列表。
+    异常情况：删除失败时记录 WARNING，继续处理其他文件。
+    """
+
+    removed: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in _TEXT_MODEL_CACHE_PATTERNS:
+        for path in cache_dir.glob(pattern):
+            if path in seen or not path.is_file():
+                continue
+            seen.add(path)
+            try:
+                size = path.stat().st_size
+                path.unlink()
+                removed.append(path)
+                _emit_callback_log(
+                    log_callback,
+                    "DEBUG",
+                    f"已删除 YOLOE 文本编码缓存 path={path} size={size}",
+                )
+            except OSError as exc:
+                _emit_callback_log(
+                    log_callback,
+                    "WARNING",
+                    f"删除 YOLOE 文本编码缓存失败 path={path} error={exc}",
+                )
+    return removed
 
 
 def _emit_callback_log(log_callback: Callable[[str, str], Any] | None, level: str, message: str) -> None:

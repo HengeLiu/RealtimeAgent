@@ -519,3 +519,111 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
     assert any(event.event_name == "stream.output.close.requested" for event in first.events)
     assert any(event.event_name == "stream.output.cancelled" for event in first.events)
     assert [event.event_name for event in second.events] == []
+
+
+def test_asset_capture_rgb_stream_does_not_route_to_phone_display(tmp_path) -> None:
+    """测试目标：确认实时视觉采样的单资产 RGB 流不会在 Task 前转发给手机。
+
+    测试方法：注册一台带 RGB 的眼镜和一台订阅 RGB 输入的手机；眼镜上报带
+    `request_id` 的 `stream.input.opened` 并发送一帧。
+    预期结果：该流只进入服务端资产链路，不向手机下发 open/close 事件或视频 chunk。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+
+    class Connection:
+        def __init__(self, device_id: str) -> None:
+            self.device_id = device_id
+            self.events = []
+            self.chunks = []
+
+        def push_event(self, event: Event) -> None:
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            self.chunks.append(chunk)
+
+        def close(self, *, reason: str) -> None:
+            self.closed_reason = reason
+
+    phone = Connection("dev-python-phone-preview")
+    glass = Connection("dev-browser-glass-001")
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-browser-glass-001",
+            producer_id=phone.device_id,
+            payload={
+                "device_id": phone.device_id,
+                "auth": {"mode": "disabled"},
+                "properties": {
+                    "endpoint.role.visual_display": True,
+                    "endpoint.compute.vision": True,
+                    "actuator.display.rgb": True,
+                },
+                "supports": {"sensors": [], "actuators": []},
+            },
+        ),
+        phone,
+    )
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-browser-glass-001",
+            producer_id=glass.device_id,
+            payload={
+                "device_id": glass.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
+            },
+        ),
+        glass,
+    )
+
+    app.publish_control_event(
+        Event(
+            event_name="stream.input.opened",
+            user_id="user-browser-glass-001",
+            producer_id=glass.device_id,
+            session_id=glass.device_id,
+            stream_id="stream_rgb_asset_probe",
+            stream_type="sensor.rgb",
+            payload={
+                "stream_type": "sensor.rgb",
+                "request_id": "asset_req_probe",
+                "reason": "realtime_visual_sampler",
+                "format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
+            },
+        )
+    )
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-browser-glass-001",
+            session_id=glass.device_id,
+            stream_id="stream_rgb_asset_probe",
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=b"fake-jpeg",
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+        )
+    )
+    app.publish_control_event(
+        Event(
+            event_name="stream.input.closed",
+            user_id="user-browser-glass-001",
+            producer_id=glass.device_id,
+            session_id=glass.device_id,
+            stream_id="stream_rgb_asset_probe",
+            stream_type="sensor.rgb",
+            payload={"stream_type": "sensor.rgb", "request_id": "asset_req_probe", "reason": "asset_done"},
+        )
+    )
+
+    handle = app.stream_service.registry.get("stream_rgb_asset_probe")
+    assert handle.consumer_device_ids == ()
+    assert phone.chunks == []
+    assert not any(event.stream_id == "stream_rgb_asset_probe" for event in phone.events)

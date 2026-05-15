@@ -147,7 +147,7 @@ class StreamService:
             format=stream_format,
         )
         self.registry.register(handle)
-        if stream_type.startswith("sensor.") and stream_type != "sensor.mic":
+        if stream_type.startswith("sensor.") and stream_type != "sensor.mic" and consumer_device_ids is None:
             match_event = Event(
                 event_name="stream.input.opened",
                 user_id=user_id,
@@ -165,6 +165,7 @@ class StreamService:
                 selection=selection,
             )
             consumers = tuple(device.device_id for device in matched)
+        if stream_type.startswith("sensor.") and stream_type != "sensor.mic":
             handle.consumer_device_ids = consumers
         if stream_type.startswith("actuator."):
             match_event = Event(
