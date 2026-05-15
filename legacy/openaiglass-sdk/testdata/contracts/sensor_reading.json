@@ -1,7 +1,0 @@
-{
-  "sensor_type": "heading",
-  "payload": {
-    "heading_degrees": 90
-  },
-  "timestamp_ms": 1745539200000
-}
