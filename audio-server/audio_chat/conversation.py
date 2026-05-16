@@ -131,6 +131,8 @@ def _message_summary_prompt() -> str:
         "你是会话历史摘要子Agent。你只输出中文结构化摘要，不输出JSON，不解释你的工作过程。\n"
         "你的任务是把 previous_summary 与 archived_messages 合并成一份更新后的滚动摘要。\n"
         "不要逐条复述聊天记录；要去重、归纳、保留会影响后续回答的事实、上下文和注意事项。\n"
+        "视觉与环境线索只能作为历史观察记录，不能写成当前画面、当前图片或当前传感器状态。\n"
+        "如果历史里出现看图、读图、拍照、相机超时、图片理解结果，只记录为过去某轮的结果或失败；后续新的视觉请求仍应依赖主Agent重新获取当前视觉输入。\n"
         "如果 archived_messages 与 previous_summary 冲突，以较新的 archived_messages 为准，并在注意事项中说明。\n"
         "输出必须使用以下标题，标题顺序固定：\n"
         "用户身份与偏好：\n"
@@ -252,7 +254,12 @@ class ConversationMemoryService:
         summary = self.load_latest_summary(user_id=user_id, device_id=device_id)
         if summary is None or not summary.content.strip():
             return ""
-        return "以下是更早历史对话的压缩摘要，回答时应保持一致：\n" + summary.content.strip()
+        return (
+            "以下是更早历史对话的压缩摘要，只用于保持用户偏好、任务背景和历史事实一致。"
+            "其中的视觉与环境线索都是过去某轮的观察，不代表当前图片、当前画面或当前传感器状态；"
+            "当用户提出新的看图、读图、眼前/前方观察请求时，应重新依赖当前可用视觉输入或视觉采集工具：\n"
+            + summary.content.strip()
+        )
 
     def compact_if_needed(
         self,

@@ -47,6 +47,20 @@ sensor.mic -> ASR -> TextAgentCore -> MultimodalMessageBuilder
 4. 额外追加一条由系统构造的多模态 follow-up user message，把刚返回的图片 / 视频资产作为 content block 放入下一次模型请求。
 5. 记录 source map 和 `model-request.json` 摘要，证明本轮模型确实收到了哪个资产。
 
+### 历史视觉消息治理
+
+Text 视觉链路不能把历史里的图片描述、相机超时、旧包装识别结果长期裸露在 active messages 中。否则用户换图后再说“朗读图片内容”时，主模型可能把上一张图片的 assistant 回复当成当前上下文，直接回答旧图。
+
+这里不在 `TextAgentCore` 中增加关键词过滤或强制工具调用逻辑。正确边界是复用现有 summary / compact 能力：
+
+1. `ConversationMemoryService` 继续维护三层历史：active messages、summary fragment、完整 audit messages。
+2. for-blind-app 将 `user.message_compact_threshold` 调低，只保留最近少量 active messages，把更早历史交给摘要子 Agent。
+3. `message_summarizer` 必须把“视觉与环境线索”写成历史观察，不能写成当前图片、当前画面或当前传感器状态。
+4. summary fragment 注入主 Agent 时必须说明：摘要里的视觉线索只代表过去某轮观察；新的看图、读图、眼前/前方观察请求仍应依赖当前视觉输入或采集工具。
+5. `messages.jsonl`、history 归档和资产文件仍完整保存，供排障复盘；只是这些旧原文不再长期直接进入主模型当前请求。
+
+这条规则的目的不是替模型做视觉意图判断，而是把容易过期的视觉事实从“当前可直接续写的对话”降级成“历史背景”。是否需要调用 `capture_photo` 仍由主模型根据用户本轮问题、工具列表和系统提示决定。
+
 ## 与工具调用的边界
 
 ### 保留的工具

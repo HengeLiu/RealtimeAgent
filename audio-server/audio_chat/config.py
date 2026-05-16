@@ -40,6 +40,8 @@ class UserConfig:
     active_device_set_policy: str = "single"
     message_store: dict[str, Any] = field(default_factory=lambda: {"type": "jsonl", "root": "runs/default-app/users"})
     recent_message_limit: int = 200
+    message_compact_threshold: int = 30
+    message_compact_keep_latest: int = 5
 
 
 @dataclass(frozen=True)

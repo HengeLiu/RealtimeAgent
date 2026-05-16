@@ -35,6 +35,8 @@ QUIET_AGENT_EVENTS = {
     "omni.response.audio.delta",
     "omni.response.function_call_arguments.delta",
     "omni.response.tool_call_arguments.delta",
+    "text.response_gate.buffered",
+    "text.response_gate.released",
 }
 DELTA_SUMMARY_DONE_EVENTS = {
     "assistant_audio.done": "assistant_audio.delta",

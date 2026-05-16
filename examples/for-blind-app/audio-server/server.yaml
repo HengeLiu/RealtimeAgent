@@ -21,6 +21,10 @@ auth:
 user:
   active_device_set_policy: "single"
   recent_message_limit: 200
+  # Text 多模态链路里，旧图片描述、相机超时等历史结论不能长期裸露在活跃上下文中。
+  # 低阈值会更早触发 LLM 摘要，只保留最近少量消息；摘要会明确标注视觉线索是历史观察。
+  message_compact_threshold: 10
+  message_compact_keep_latest: 4
 
 control:
   transport: "websocket"

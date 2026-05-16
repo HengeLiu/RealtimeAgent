@@ -111,6 +111,32 @@ observability:
     assert runtime_config.log_timezone == "Asia/Shanghai"
 
 
+def test_config_loads_message_compaction_policy(tmp_path) -> None:
+    """测试目标：确认会话摘要压缩策略可由 YAML 配置控制。
+
+    测试方法：写入 user.message_compact_threshold 和 keep_latest 后加载运行配置。
+    预期结果：运行时会使用配置值，而不是固定的默认阈值。
+    """
+
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        """
+user:
+  message_compact_threshold: 10
+  message_compact_keep_latest: 4
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+
+    assert loaded.user.message_compact_threshold == 10
+    assert loaded.user.message_compact_keep_latest == 4
+    assert runtime_config.message_compact_threshold == 10
+    assert runtime_config.message_compact_keep_latest == 4
+
+
 def test_agent_prompt_and_provider_config_names_are_canonical(tmp_path) -> None:
     """测试目标：确认 Agent 配置统一使用 `provider/model/prompt` 命名。
 

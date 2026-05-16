@@ -79,6 +79,7 @@ def test_conversation_memory_service_compacts_active_messages(tmp_path) -> None:
     assert "用户身份与偏好" in summaries[-1]["content"]
     assert summarizer.calls[-1]["message_count"] == 27
     assert "更早历史对话的压缩摘要" in prompt_fragment
+    assert "不代表当前图片、当前画面或当前传感器状态" in prompt_fragment
     assert summaries[-1]["content"] in prompt_fragment
 
 
