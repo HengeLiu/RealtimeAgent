@@ -6,7 +6,7 @@ import time
 from types import SimpleNamespace
 
 from audio_chat.asset import AssetRef
-from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter
+from audio_chat.agent_core.providers import DashScopeCompatibleTextModelAdapter, OpenAICompatibleTextModelAdapter
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.protocol import StreamChunk
 from audio_chat.tools import BaseTool, ToolContext, ToolResult
@@ -265,6 +265,36 @@ def test_openai_compatible_stream_messages_aggregates_tool_call_delta() -> None:
             "arguments": {"city": "shanghai"},
         }
     ]
+
+
+def test_dashscope_compatible_text_model_disables_thinking() -> None:
+    """测试目标：验证 DashScope 兼容 Text provider 显式关闭 thinking。
+
+    测试方法：绕过真实 OpenAI 客户端，注入假 chat.completions.create 并捕获请求参数。
+    预期结果：请求通过 `extra_body` 携带 `enable_thinking=False`，避免 qwen3.6 默认思考模式增加延迟。
+    """
+
+    captured: dict = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="好", tool_calls=[]))])
+
+    adapter = DashScopeCompatibleTextModelAdapter.__new__(DashScopeCompatibleTextModelAdapter)
+    adapter.model = "qwen3.6-flash"
+    adapter.prompt = "你是中文助手"
+    adapter._cancelled = False
+    adapter.endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    adapter.request_timeout_seconds = 15
+    adapter.max_retries = 1
+    adapter.extra_body = {"enable_thinking": False}
+    adapter._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+
+    items = list(adapter.stream_messages(messages=[{"role": "user", "content": "看一下"}], tools=[]))
+
+    assert items == ["好"]
+    assert captured["extra_body"] == {"enable_thinking": False}
+    assert adapter.request_options_snapshot()["extra_body"] == {"enable_thinking": False}
 
 
 def _fake_chat_stream(**kwargs):

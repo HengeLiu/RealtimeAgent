@@ -666,6 +666,11 @@ class TextAgentCore:
                     "warnings": context.warnings,
                     "truncations": context.truncations,
                     "notifications": context.notifications,
+                    "provider_request_options": (
+                        self.text_model.request_options_snapshot()
+                        if hasattr(self.text_model, "request_options_snapshot")
+                        else {}
+                    ),
                     "context_metadata": {**context.metadata, "request_reason": reason},
                 },
             )

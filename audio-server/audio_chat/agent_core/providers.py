@@ -458,6 +458,7 @@ class OpenAICompatibleTextModelAdapter:
         request_timeout_seconds: float = 5.0,
         max_retries: int = 1,
         prompt: str = TEXT_AGENT_SYSTEM_PROMPT,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         api_key = os.getenv(api_key_env)
         if not api_key:
@@ -472,6 +473,7 @@ class OpenAICompatibleTextModelAdapter:
         self.request_timeout_seconds = request_timeout_seconds
         self.max_retries = max_retries
         self.endpoint = os.getenv(base_url_env) or "https://api.openai.com/v1"
+        self.extra_body = dict(extra_body or {})
         self._cancelled = False
         self._client = OpenAI(
             api_key=api_key,
@@ -500,15 +502,19 @@ class OpenAICompatibleTextModelAdapter:
         """
 
         self._cancelled = False
-        stream = self._client.chat.completions.create(
-            model=self.model,
-            messages=[
+        request_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
                 {"role": "system", "content": getattr(self, "prompt", TEXT_AGENT_SYSTEM_PROMPT)},
                 *messages,
             ],
-            tools=tools or None,
-            stream=True,
-        )
+            "tools": tools or None,
+            "stream": True,
+        }
+        extra_body = getattr(self, "extra_body", {})
+        if extra_body:
+            request_kwargs["extra_body"] = dict(extra_body)
+        stream = self._client.chat.completions.create(**request_kwargs)
         pending_tool_calls: dict[int, dict[str, str]] = {}
         for item in stream:
             if self._cancelled:
@@ -549,6 +555,23 @@ class OpenAICompatibleTextModelAdapter:
     def cancel(self) -> None:
         self._cancelled = True
 
+    def request_options_snapshot(self) -> dict[str, Any]:
+        """返回当前 provider 请求选项快照。
+
+        主要逻辑：只暴露影响模型行为的稳定字段，写入 `model-request.json` 用于
+        排查延迟、thinking 模式和兼容接口参数是否生效。
+        参数：无。
+        返回值：请求选项字典。
+        异常情况：无。
+        """
+
+        return {
+            "endpoint": self.endpoint,
+            "request_timeout_seconds": self.request_timeout_seconds,
+            "max_retries": self.max_retries,
+            "extra_body": dict(getattr(self, "extra_body", {})),
+        }
+
 
 class DashScopeCompatibleTextModelAdapter(OpenAICompatibleTextModelAdapter):
     provider_name = "dashscope-compatible"
@@ -569,6 +592,7 @@ class DashScopeCompatibleTextModelAdapter(OpenAICompatibleTextModelAdapter):
             request_timeout_seconds=request_timeout_seconds,
             max_retries=max_retries,
             prompt=prompt,
+            extra_body={"enable_thinking": False},
         )
 
 
