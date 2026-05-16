@@ -33,6 +33,8 @@ expect:
   tools:
     called:
       - capture_photo
+    succeeded:
+      - capture_photo
   assets:
     sensor.rgb:
       min_count: 1

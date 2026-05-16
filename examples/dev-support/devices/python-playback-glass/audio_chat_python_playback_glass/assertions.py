@@ -73,6 +73,7 @@ def assert_case(case: PlaybackCase, *, runs_root: str | Path | None, stats: Play
     _assert_includes(failures, "events.includes", (expect.get("events") or {}).get("includes") or [], _event_names(artifacts, stats))
     _assert_includes(failures, "streams.includes", (expect.get("streams") or {}).get("includes") or [], _stream_types(artifacts, stats))
     _assert_includes(failures, "tools.called", (expect.get("tools") or {}).get("called") or [], _tool_names(artifacts))
+    _assert_includes(failures, "tools.succeeded", (expect.get("tools") or {}).get("succeeded") or [], _successful_tool_names(artifacts))
     _assert_includes(failures, "tasks.signals.includes", ((expect.get("tasks") or {}).get("signals") or {}).get("includes") or [], _task_signals(artifacts))
     for stream_type, config in (expect.get("assets") or {}).items():
         actual = sum(1 for item in artifacts["assets"] if item.get("stream_type") == stream_type)
@@ -89,7 +90,12 @@ def assert_case(case: PlaybackCase, *, runs_root: str | Path | None, stats: Play
         ok=not failures,
         failed_assertions=failures,
         runs_dir=str(runs_dir) if runs_dir else "",
-        summary={"streams": sorted(_stream_types(artifacts, stats)), "tools": sorted(_tool_names(artifacts)), "output_chunks": len(stats.output_chunks)},
+        summary={
+            "streams": sorted(_stream_types(artifacts, stats)),
+            "tools": sorted(_tool_names(artifacts)),
+            "successful_tools": sorted(_successful_tool_names(artifacts)),
+            "output_chunks": len(stats.output_chunks),
+        },
     )
 
 
@@ -130,6 +136,16 @@ def _tool_names(artifacts: dict[str, Any]) -> set[str]:
     """从 tool-events.jsonl 中提取工具名。"""
 
     return {str(item.get("tool_name") or item.get("name") or item.get("function_name")) for item in artifacts["tool_events"] if item.get("tool_name") or item.get("name") or item.get("function_name")}
+
+
+def _successful_tool_names(artifacts: dict[str, Any]) -> set[str]:
+    """从 tool-events.jsonl 中提取执行成功的工具名。"""
+
+    return {
+        str(item.get("tool_name") or item.get("name") or item.get("function_name"))
+        for item in artifacts["tool_events"]
+        if item.get("ok") is True and (item.get("tool_name") or item.get("name") or item.get("function_name"))
+    }
 
 
 def _task_signals(artifacts: dict[str, Any]) -> set[str]:

@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from audio_chat.protocol import Event, StreamChunk
 
 NOISY_LIBRARY_LOG_LEVELS: tuple[tuple[str, int], ...] = (
-    ("aiohttp.access", logging.INFO),
+    ("aiohttp.access", logging.WARNING),
     ("dashscope", logging.WARNING),
     ("httpcore", logging.WARNING),
     ("httpx", logging.WARNING),
@@ -44,6 +44,7 @@ DELTA_SUMMARY_DONE_EVENTS = {
     "omni.response.audio_transcript.done": "omni.response.audio_transcript.delta",
 }
 QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
+QUIET_CONTROL_PREFIXES = ("stream.",)
 HIGH_FREQUENCY_CONTROL_PROGRESS_STATUSES = {"peer.video.frame_processed"}
 DEBUG_ONLY_CONTROL_PREFIXES = ("stream.",)
 VISIBLE_STREAM_EVENTS = {
@@ -168,6 +169,8 @@ def should_log_control_event_to_terminal(event: Event) -> bool:
 
     if event.event_name in QUIET_CONTROL_EVENTS:
         return False
+    if event.event_name.startswith(QUIET_CONTROL_PREFIXES):
+        return False
     return not _is_high_frequency_control_progress(event)
 
 
@@ -224,7 +227,8 @@ class RunRecorder:
         self._stream_chunk_stats: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._agent_event_counts: dict[tuple[str, str], int] = {}
         self._model_request_started_at: dict[str, float] = {}
-        self._delta_stats: dict[tuple[str, str], dict[str, Any]] = {}
+        self._delta_stats: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._turn_timeline: dict[str, dict[str, Any]] = {}
         self._first_model_request_logged = False
         self._artifact_index_logged = False
         self._log_artifact_index_once()
@@ -446,6 +450,37 @@ class RunRecorder:
             stats["bytes"] = int(stats.get("bytes") or 0) + int(record.get("payload_size") or 0)
             stats["last_seq"] = record.get("seq")
             stats["last_at"] = now
+            if name == "stream.chunk.received" and stream_type == "sensor.mic":
+                if stats["count"] == 1:
+                    self.record_timeline_checkpoint(
+                        session_id,
+                        checkpoint="text.timeline.audio.first_chunk_received",
+                        user_id=str(record.get("user_id") or ""),
+                        stream_id=stream_id,
+                        fields={
+                            "seq": record.get("seq"),
+                            "payload_size": record.get("payload_size"),
+                            "stream_type": stream_type,
+                        },
+                    )
+                if record.get("final"):
+                    self.record_timeline_checkpoint(
+                        session_id,
+                        checkpoint="text.timeline.audio.input_done",
+                        user_id=str(record.get("user_id") or ""),
+                        stream_id=stream_id,
+                        fields={
+                            "seq": record.get("seq"),
+                            "payload_size": record.get("payload_size"),
+                            "stream_type": stream_type,
+                            "input_chunk_count": stats.get("count"),
+                            "input_bytes": stats.get("bytes"),
+                            "input_duration_ms": _elapsed_ms(
+                                float(stats.get("started_at") or now),
+                                float(stats.get("last_at") or now),
+                            ),
+                        },
+                    )
             return
         if name not in VISIBLE_STREAM_EVENTS:
             return
@@ -516,6 +551,109 @@ class RunRecorder:
             self._record_delta_summary_done(session_id=session_id, done_event=event, record=record, context=context)
             return
         log_info(self.logger, f"Agent事件 {event}", context)
+
+    def record_timeline_checkpoint(
+        self,
+        session_id: str,
+        *,
+        checkpoint: str,
+        user_id: str | None = None,
+        stream_id: str | None = None,
+        fields: dict[str, Any] | None = None,
+        repeat: bool = False,
+    ) -> None:
+        """记录 Text 实时链路的关键时间点。
+
+        主要逻辑：把用户关心的端到端时间点同时写入 `agent-events.jsonl` /
+        `model-events.jsonl` 并打印到终端。默认同一 checkpoint 每轮只记录一次，
+        避免高频 delta 刷屏。
+        参数：`checkpoint` 为时间点事件名；`fields` 是该时间点的补充摘要。
+        返回值：无。
+        异常情况：文件写入失败时抛出底层 IO 异常。
+        """
+
+        if not session_id:
+            return
+        now = time.monotonic()
+        timeline = self._turn_timeline.setdefault(session_id, {"checkpoints": {}, "last_at": None})
+        checkpoints: dict[str, float] = timeline.setdefault("checkpoints", {})
+        if not repeat and checkpoint in checkpoints:
+            return
+        previous_at = timeline.get("last_at")
+        checkpoints[checkpoint] = now
+        timeline["last_at"] = now
+        base_at = checkpoints.get("text.timeline.audio.first_chunk_received")
+        wall_time = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        extra = dict(fields or {})
+        record = {
+            "event": checkpoint,
+            "checkpoint": checkpoint,
+            "user_id": user_id,
+            "stream_id": stream_id,
+            "at": wall_time,
+            "since_audio_start_ms": _elapsed_ms(base_at, now),
+            "since_previous_checkpoint_ms": _elapsed_ms(previous_at, now),
+            **extra,
+        }
+        self._bind_from_record(session_id, record)
+        self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
+        self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
+        log_info(
+            self.logger,
+            f"实时链路时间点 {checkpoint}",
+            LogContext(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                event=checkpoint,
+                fields={
+                    "at": wall_time,
+                    "since_audio_start_ms": record.get("since_audio_start_ms"),
+                    "since_previous_checkpoint_ms": record.get("since_previous_checkpoint_ms"),
+                    **extra,
+                    "detail_path": str(self.session_file(session_id, "agent-events.jsonl")),
+                },
+            ),
+        )
+        if checkpoint == "text.timeline.tts.audio_done":
+            self._record_timeline_summary(session_id=session_id, user_id=user_id)
+
+    def _record_timeline_summary(self, *, session_id: str, user_id: str | None) -> None:
+        """打印 Text 实时链路关键时间点汇总。"""
+
+        timeline = self._turn_timeline.get(session_id) or {}
+        checkpoints: dict[str, float] = dict(timeline.get("checkpoints") or {})
+        base_at = checkpoints.get("text.timeline.audio.first_chunk_received")
+        if base_at is None:
+            return
+        names = [
+            "text.timeline.audio.first_chunk_received",
+            "text.timeline.audio.input_done",
+            "text.timeline.asr.first_char",
+            "text.timeline.asr.done",
+            "text.timeline.llm.first_token",
+            "text.timeline.llm.done",
+            "text.timeline.tts.first_audio_chunk",
+            "text.timeline.tts.audio_done",
+        ]
+        offsets = {name: _elapsed_ms(base_at, checkpoints.get(name)) for name in names}
+        record = {
+            "event": "text.timeline.summary",
+            "user_id": user_id,
+            "offsets_ms": offsets,
+        }
+        self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
+        self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
+        log_info(
+            self.logger,
+            "实时链路时间线汇总",
+            LogContext(
+                user_id=user_id,
+                session_id=session_id,
+                event="text.timeline.summary",
+                fields={**offsets, "detail_path": str(self.session_file(session_id, "agent-events.jsonl"))},
+            ),
+        )
 
     def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
         """记录 Tool 调用轨迹。
@@ -971,7 +1109,7 @@ class RunRecorder:
         异常情况：无。
         """
 
-        key = (session_id, event)
+        key = (session_id, event, str(record.get("stream_id") or ""))
         now = time.monotonic()
         stats = self._delta_stats.setdefault(
             key,
@@ -1021,7 +1159,7 @@ class RunRecorder:
         """
 
         delta_event = DELTA_SUMMARY_DONE_EVENTS[done_event]
-        key = (session_id, delta_event)
+        key = (session_id, delta_event, str(record.get("stream_id") or ""))
         stats = self._delta_stats.pop(key, None)
         if stats is None:
             log_info(self.logger, f"delta 完成 {done_event}", context)

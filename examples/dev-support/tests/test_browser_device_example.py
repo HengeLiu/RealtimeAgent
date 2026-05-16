@@ -70,7 +70,7 @@ def test_browser_device_declares_and_handles_peer_video_sender() -> None:
     assert "startPeerVideoSender" in html
     assert "sendPeerVideoFrame" in html
     assert "peer.sender.connected" in html
-    assert "peer.video.frame.sent" in html
+    assert "peer.video.frame.sent" not in html
     assert "peer_video_sender_failed" in html
     assert "beforeunload" in html
 
@@ -305,6 +305,8 @@ def test_browser_device_defers_output_close_until_audio_arrives() -> None:
     assert "if (!request || !outputStarted.has(streamId)) return;" in close_body
     assert "if (!outputStarted.has(chunk.stream_id))" in stream_body
     assert "outputStarted.add(chunk.stream_id)" in stream_body
+    assert "recordOutputChunk(chunk, durationMs)" in stream_body
+    assert "summarizeOutputPlayback(streamId, \"drained\")" in close_body
     assert 'sendEvent(event("stream.output.finished"' in close_body
     assert 'sendEvent(event("stream.output.closed"' in close_body
 

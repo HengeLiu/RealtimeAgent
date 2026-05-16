@@ -187,7 +187,7 @@ class PlaybackProtocolClient:
         payload = pcm + b"\x00" * (int(tail_silence_ms / chunk_ms) * chunk_bytes)
         await self.send_event(self.event("stream.input.opened", {"stream_type": "sensor.mic", "format": {"codec": "pcm16le", "sample_rate": sample_rate, "channels": 1, "chunk_ms": chunk_ms}, "source": "python_playback_glass"}, session_id=self.device_id, stream_id=stream_id, stream_type="sensor.mic"))
         self.stats.input_streams[stream_id] = {"stream_type": "sensor.mic", "bytes_sent": 0, "chunks": 0}
-        await asyncio.sleep(0.12)
+        await asyncio.sleep(0.5)
         seq = 0
         for offset in range(0, len(payload), chunk_bytes):
             part = payload[offset : offset + chunk_bytes]
@@ -224,5 +224,8 @@ class PlaybackProtocolClient:
         await self.send_event(self.event("stream.input.opened", {"stream_type": "sensor.rgb", "format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1}, "request_id": request_id, "image_count": 1}, session_id=self.device_id, stream_id=stream_id, stream_type="sensor.rgb"))
         await asyncio.sleep(0.12)
         await self.send_stream_chunk(stream_id=stream_id, stream_type="sensor.rgb", seq=0, payload=payload, codec="jpeg", sample_rate=1, channels=1, duration_ms=1, final=True, metadata={"request_id": request_id, "image_index": 0, "image_count": 1, "reason": "fixture_uploaded"})
+        # 控制 WebSocket 和 stream WebSocket 到达顺序不完全一致；关闭前短暂等待，
+        # 避免 server 先处理 close 再处理图片二进制帧。
+        await asyncio.sleep(0.12)
         await self.send_event(self.event("stream.input.closed", {"stream_type": "sensor.rgb", "reason": "fixture_uploaded", "request_id": request_id, "image_count": 1}, session_id=self.device_id, stream_id=stream_id, stream_type="sensor.rgb"))
         self.stats.asset_uploads.append({"stream_id": stream_id, "stream_type": "sensor.rgb", "path": str(image_path), "payload_size": len(payload)})

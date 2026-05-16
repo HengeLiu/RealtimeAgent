@@ -1119,6 +1119,28 @@ class OutputRouter:
                 sample_rate=handle.format.sample_rate,
                 channels=handle.format.channels,
             )
+        if isinstance(source, StreamingTtsOutputSource):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.done",
+                    "stream_id": stream_id,
+                    "payload_size": len(payload),
+                    "tts": source.metrics(),
+                    "stream_format": handle.format.__dict__,
+                },
+            )
+            self.recorder.record_timeline_checkpoint(
+                session_id,
+                checkpoint="text.timeline.tts.audio_done",
+                user_id=user_id,
+                stream_id=stream_id,
+                fields={
+                    "payload_size": len(payload),
+                    "tts": source.metrics(),
+                    "stream_format": handle.format.__dict__,
+                },
+            )
         self.recorder.record_stream_event(
             session_id,
             {
@@ -1355,6 +1377,19 @@ class OutputRouter:
                     **dict(metadata or {}),
                 },
             )
+            if isinstance(source, StreamingTtsOutputSource):
+                self.recorder.record_timeline_checkpoint(
+                    session_id,
+                    checkpoint="text.timeline.tts.first_audio_chunk",
+                    user_id=user_id,
+                    stream_id=stream_id,
+                    fields={
+                        "payload_size": written_bytes,
+                        "chunk_count": chunk_count,
+                        "tts": source.metrics(),
+                        **dict(metadata or {}),
+                    },
+                )
             self._seq_by_stream[stream_id] = seq
 
     def _start_tts_drain_pump(

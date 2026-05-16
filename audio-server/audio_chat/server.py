@@ -4,6 +4,8 @@ import argparse
 import asyncio
 import importlib
 import json
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +30,37 @@ AUDIO_CHAT_SERVER_KEY = web.AppKey("audio_chat_server", object)
 AUDIO_CHAT_SWEEPER_TASK_KEY = web.AppKey("audio_chat_sweeper_task", asyncio.Task)
 
 
+def _elapsed_ms(start: object, end: object) -> int | None:
+    """计算两个单调时间点之间的毫秒差。
+
+    主要逻辑：日志埋点可能遇到缺失字段，缺失或无法转换时返回 `None`，
+    避免排障日志影响主链路。
+    参数：`start` 和 `end` 为 `time.monotonic()` 风格的秒级时间。
+    返回值：整数毫秒或 `None`。
+    异常情况：类型转换失败时吞掉异常并返回 `None`。
+    """
+
+    if start is None or end is None:
+        return None
+    try:
+        return int((float(end) - float(start)) * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass(frozen=True)
+class QueuedStreamPayload:
+    """下行 stream WebSocket 队列项。
+
+    主要功能：在原始二进制 payload 外携带入队时间和 stream 摘要，便于只打印
+    首包和汇总级发送日志，而不恢复逐 chunk 噪音。
+    主要属性：`raw` 是待发送二进制；`meta` 保存 stream_id、seq、payload_size 等。
+    """
+
+    raw: bytes
+    meta: dict[str, Any]
+
+
 @dataclass
 class NetworkDeviceConnection:
     """真实 endpoint 的网络连接状态。
@@ -41,10 +74,12 @@ class NetworkDeviceConnection:
     device_id: str
     loop: asyncio.AbstractEventLoop
     event_queue: asyncio.Queue[Event] = field(default_factory=asyncio.Queue)
-    stream_queue: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
+    stream_queue: asyncio.Queue[QueuedStreamPayload] = field(default_factory=asyncio.Queue)
     connection_id: str | None = None
     _control_ws: web.WebSocketResponse | None = None
     _stream_ws: web.WebSocketResponse | None = None
+    _stream_send_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _stream_send_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def bind_control_ws(self, ws: web.WebSocketResponse) -> None:
         """绑定控制 WebSocket。
@@ -87,6 +122,8 @@ class NetworkDeviceConnection:
                     fields={"stream_type": event.stream_type},
                 ),
             )
+        if event.event_name == "stream.output.close.requested" and event.stream_type == "actuator.speaker":
+            self._log_stream_send_summary(event)
         self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
 
     def push_stream_chunk(self, chunk: object) -> None:
@@ -97,7 +134,65 @@ class NetworkDeviceConnection:
         返回值：无。
         异常情况：对象不符合编码协议时会在调用方线程抛出异常。
         """
-        self.loop.call_soon_threadsafe(self.stream_queue.put_nowait, StreamChunkCodec.encode(chunk))  # type: ignore[arg-type]
+        raw = StreamChunkCodec.encode(chunk)  # type: ignore[arg-type]
+        stream_id = str(getattr(chunk, "stream_id", "") or "")
+        stream_type = str(getattr(chunk, "stream_type", "") or "")
+        payload_size = len(getattr(chunk, "payload", b"") or b"")
+        meta = {
+            "user_id": getattr(chunk, "user_id", None),
+            "session_id": getattr(chunk, "session_id", None),
+            "stream_id": stream_id,
+            "stream_type": stream_type,
+            "seq": getattr(chunk, "seq", None),
+            "payload_size": payload_size,
+            "enqueued_at": time.monotonic(),
+        }
+        if stream_type == "actuator.speaker":
+            self._record_stream_payload_enqueued(meta)
+        self.loop.call_soon_threadsafe(self.stream_queue.put_nowait, QueuedStreamPayload(raw=raw, meta=meta))
+
+    def mark_stream_payload_sent(self, meta: dict[str, Any], *, sent_at: float) -> None:
+        """记录下行 stream chunk 已完成 WebSocket send。
+
+        主要逻辑：只对 speaker output 打首包发送日志；全量统计在 close.requested 时
+        统一输出，避免每个 chunk 刷屏。
+        参数：`meta` 是入队时记录的摘要；`sent_at` 是 send_bytes 返回后的时间。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if meta.get("stream_type") != "actuator.speaker":
+            return
+        stream_id = str(meta.get("stream_id") or "")
+        if not stream_id:
+            return
+        with self._stream_send_lock:
+            stats = self._stream_send_stats.setdefault(stream_id, {})
+            stats["sent_count"] = int(stats.get("sent_count") or 0) + 1
+            stats["sent_bytes"] = int(stats.get("sent_bytes") or 0) + int(meta.get("payload_size") or 0)
+            stats["last_sent_at"] = sent_at
+            stats["last_sent_seq"] = meta.get("seq")
+            first_sent = "first_sent_at" not in stats
+            if first_sent:
+                stats["first_sent_at"] = sent_at
+        if first_sent:
+            enqueued_at = meta.get("enqueued_at")
+            log_info(
+                get_logger("audio_chat.server"),
+                "下行音频首包已发送",
+                LogContext(
+                    user_id=str(meta.get("user_id") or ""),
+                    session_id=str(meta.get("session_id") or ""),
+                    device_id=self.device_id,
+                    stream_id=stream_id,
+                    event="stream.output.first_chunk.sent",
+                    fields={
+                        "seq": meta.get("seq"),
+                        "payload_size": meta.get("payload_size"),
+                        "queue_wait_ms": _elapsed_ms(enqueued_at, sent_at),
+                    },
+                ),
+            )
 
     def close(self, *, reason: str) -> None:
         """关闭当前网络连接。
@@ -111,6 +206,84 @@ class NetworkDeviceConnection:
         for ws in (self._control_ws, self._stream_ws):
             if ws is not None and not ws.closed:
                 self.loop.call_soon_threadsafe(asyncio.create_task, ws.close(message=reason.encode("utf-8")))
+
+    def _record_stream_payload_enqueued(self, meta: dict[str, Any]) -> None:
+        """记录 speaker output chunk 入队。"""
+
+        stream_id = str(meta.get("stream_id") or "")
+        if not stream_id:
+            return
+        now = float(meta.get("enqueued_at") or time.monotonic())
+        with self._stream_send_lock:
+            stats = self._stream_send_stats.setdefault(
+                stream_id,
+                {
+                    "user_id": meta.get("user_id"),
+                    "session_id": meta.get("session_id"),
+                    "first_enqueued_at": now,
+                    "first_enqueued_seq": meta.get("seq"),
+                    "enqueued_count": 0,
+                    "enqueued_bytes": 0,
+                },
+            )
+            stats["enqueued_count"] = int(stats.get("enqueued_count") or 0) + 1
+            stats["enqueued_bytes"] = int(stats.get("enqueued_bytes") or 0) + int(meta.get("payload_size") or 0)
+            stats["last_enqueued_at"] = now
+            stats["last_enqueued_seq"] = meta.get("seq")
+            first_enqueued = stats["enqueued_count"] == 1
+        if first_enqueued:
+            log_info(
+                get_logger("audio_chat.server"),
+                "下行音频首包入队",
+                LogContext(
+                    user_id=str(meta.get("user_id") or ""),
+                    session_id=str(meta.get("session_id") or ""),
+                    device_id=self.device_id,
+                    stream_id=stream_id,
+                    event="stream.output.first_chunk.enqueued",
+                    fields={
+                        "seq": meta.get("seq"),
+                        "payload_size": meta.get("payload_size"),
+                    },
+                ),
+            )
+
+    def _log_stream_send_summary(self, event: Event) -> None:
+        """在 output close 时打印下行发送汇总。"""
+
+        stream_id = event.stream_id or ""
+        if not stream_id:
+            return
+        with self._stream_send_lock:
+            stats = dict(self._stream_send_stats.pop(stream_id, {}))
+        if not stats:
+            return
+        first_enqueued_at = stats.get("first_enqueued_at")
+        first_sent_at = stats.get("first_sent_at")
+        last_sent_at = stats.get("last_sent_at")
+        last_enqueued_at = stats.get("last_enqueued_at")
+        log_info(
+            get_logger("audio_chat.server"),
+            "下行音频发送汇总",
+            LogContext(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                device_id=self.device_id,
+                stream_id=stream_id,
+                event="stream.output.send.summary",
+                fields={
+                    "enqueued_count": stats.get("enqueued_count"),
+                    "enqueued_bytes": stats.get("enqueued_bytes"),
+                    "sent_count": stats.get("sent_count"),
+                    "sent_bytes": stats.get("sent_bytes"),
+                    "first_queue_to_first_send_ms": _elapsed_ms(first_enqueued_at, first_sent_at),
+                    "first_queue_to_last_send_ms": _elapsed_ms(first_enqueued_at, last_sent_at),
+                    "last_enqueue_to_close_request_ms": _elapsed_ms(last_enqueued_at, time.monotonic()),
+                    "first_seq": stats.get("first_enqueued_seq"),
+                    "last_seq": stats.get("last_sent_seq") or stats.get("last_enqueued_seq"),
+                },
+            ),
+        )
 
 
 class AudioChatHttpServer:
@@ -383,11 +556,46 @@ class AudioChatHttpServer:
         reported_errors: set[str] = set()
         suppressed_errors: dict[str, int] = {}
         received_count = 0
+        background_dispatches: set[asyncio.Task] = set()
 
         async def sender() -> None:
             while not ws.closed:
-                raw = await connection.stream_queue.get()
-                await ws.send_bytes(raw)
+                queued = await connection.stream_queue.get()
+                await ws.send_bytes(queued.raw)
+                connection.mark_stream_payload_sent(queued.meta, sent_at=time.monotonic())
+
+        def finish_background_dispatch(task: asyncio.Task, *, dispatched_chunk) -> None:
+            """收口后台 final mic 分发任务。"""
+
+            background_dispatches.discard(task)
+            try:
+                task.result()
+            except Exception as exc:  # noqa: BLE001 - 后台任务不能让异常丢失
+                log_error(
+                    self.logger,
+                    f"后台 Stream chunk 处理失败 {type(exc).__name__}: {exc}",
+                    LogContext(
+                        user_id=dispatched_chunk.user_id,
+                        session_id=dispatched_chunk.session_id,
+                        device_id=device_id,
+                        stream_id=dispatched_chunk.stream_id,
+                        event="stream.background_dispatch.failed",
+                    ),
+                )
+                error = self._error_event(
+                    exc,
+                    event=Event(
+                        event_name="stream.chunk.received",
+                        user_id=dispatched_chunk.user_id,
+                        producer_id=device_id,
+                        session_id=dispatched_chunk.session_id,
+                        stream_id=dispatched_chunk.stream_id,
+                        stream_type=dispatched_chunk.stream_type,
+                    ),
+                    raw="background final mic dispatch",
+                )
+                self.audio_app.recorder.record_event(error)
+                self.audio_app.recorder.record_system_event(error.to_dict())
 
         sender_task = asyncio.create_task(sender())
         try:
@@ -400,7 +608,16 @@ class AudioChatHttpServer:
                     if chunk.session_id != device_id:
                         raise ValueError("stream chunk session_id must equal device_id")
                     received_count += 1
-                    self.audio_app.write_input_chunk(chunk)
+                    # Stream Service / Agent Core 是同步入口；放到线程执行，避免接收侧处理
+                    # 大量 mic chunk 时饿住同一 aiohttp loop 上的控制/音频下行发送协程。
+                    # final mic chunk 会触发 ASR、LLM 和 Tool 调用，继续后台执行，避免 Text
+                    # 工具等待端侧资产时阻塞同一条 WebSocket 继续接收图片帧。
+                    if chunk.stream_type == "sensor.mic" and chunk.final:
+                        task = asyncio.create_task(asyncio.to_thread(self.audio_app.write_input_chunk, chunk))
+                        background_dispatches.add(task)
+                        task.add_done_callback(lambda item, dispatched_chunk=chunk: finish_background_dispatch(item, dispatched_chunk=dispatched_chunk))
+                    else:
+                        await asyncio.to_thread(self.audio_app.write_input_chunk, chunk)
                 except Exception as exc:
                     if chunk is not None:
                         user_id = chunk.user_id

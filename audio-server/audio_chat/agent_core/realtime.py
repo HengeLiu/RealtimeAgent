@@ -1117,6 +1117,7 @@ class RealtimeAudioAgentCore:
         self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
         self._audio_stream_by_session: dict[str, str] = {}
         self._closed_audio_streams_by_session: dict[str, set[str]] = {}
+        self._state_by_session: dict[str, str] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -1190,6 +1191,7 @@ class RealtimeAudioAgentCore:
             model=self.realtime_config.model,
             tool_count=len(tools),
         )
+        self._set_turn_state(user_id, session_id, "listening", reason="session_opened")
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         """追加 Audio Pipeline 归一后的 sensor.mic chunk。
@@ -1236,6 +1238,8 @@ class RealtimeAudioAgentCore:
             session_id=chunk.session_id,
             payload={"payload_size": len(chunk.payload), "final": chunk.final},
         )
+        if chunk.payload:
+            self._set_turn_state(chunk.user_id, chunk.session_id, "listening", reason="input_audio_appended")
 
     def on_audio_input_closed(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
         """通知 Realtime 当前音频输入 stream 已关闭。
@@ -1309,6 +1313,8 @@ class RealtimeAudioAgentCore:
             session_id=session_id or "",
             payload={"reason": reason},
         )
+        if session_id:
+            self._set_turn_state(user_id, session_id, "interrupted", reason=reason)
 
     def close(self, user_id: str, reason: str) -> None:
         """关闭用户 realtime 会话。
@@ -1350,12 +1356,14 @@ class RealtimeAudioAgentCore:
                 format=fmt,
                 metadata=metadata,
             )
+            or self._set_turn_state(user_id, session_id, "speaking", reason="audio_delta")
             or self._sessions_with_provider_output.add(session_id),
             audio_done=lambda metadata: self.output_adapter.emit_audio_done(
                 user_id=user_id,
                 session_id=session_id,
                 metadata=metadata,
-            ),
+            )
+            or self._set_turn_state(user_id, session_id, "completed", reason="audio_done"),
             provider_event=lambda record: self._record_provider_event(
                 user_id=user_id,
                 session_id=session_id,
@@ -1440,6 +1448,7 @@ class RealtimeAudioAgentCore:
             name=record.get("name"),
             arguments=record.get("arguments"),
         )
+        self._set_turn_state(user_id, session_id, "tool_running", reason=str(result.get("name") or record.get("name") or "tool_call"))
         self._tool_call_count_by_session[session_id] = self._tool_call_count_by_session.get(session_id, 0) + 1
         self._append_tool_messages(
             user_id=user_id,
@@ -1655,6 +1664,7 @@ class RealtimeAudioAgentCore:
             except Exception:
                 pass
         if first_failure:
+            self._set_turn_state(user_id, session_id, "failed", reason=str(record.get("event") or "provider_failed"))
             self._record_system_error(
                 user_id=user_id,
                 session_id=session_id,
@@ -1679,6 +1689,7 @@ class RealtimeAudioAgentCore:
         """记录 provider 事件到 runs 和统一事件缓存。"""
 
         self.recorder.record_agent_event(session_id, record)
+        self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
         self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
@@ -1687,6 +1698,20 @@ class RealtimeAudioAgentCore:
             session_id=session_id,
             payload=dict(record),
         )
+
+    def _map_provider_turn_state(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """把 Omni provider 原始事件映射到统一 turn 状态事件。"""
+
+        event = str(record.get("event") or "")
+        state = ""
+        if event == "omni.input_audio_buffer.speech_started":
+            state = "listening"
+        elif event in {"omni.input_audio_buffer.speech_stopped", "omni.input.committed"}:
+            state = "thinking"
+        elif event == "omni.response.done":
+            state = "completed"
+        if state:
+            self._set_turn_state(user_id, session_id, state, reason=event, provider_event=event)
 
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 provider VAD 事件启动或停止视觉帧采样。
@@ -2060,6 +2085,26 @@ class RealtimeAudioAgentCore:
 
         self._event_buffer.record_event(event, user_id=user_id, session_id=session_id, payload=payload)
         self.recorder.record_agent_event(session_id, {"event": event, "user_id": user_id, **payload})
+
+    def _set_turn_state(self, user_id: str, session_id: str, state: str, *, reason: str, provider_event: str = "") -> None:
+        """记录 Realtime/Omni 链路的统一 turn 状态事件。"""
+
+        previous = self._state_by_session.get(session_id, "listening")
+        if previous == state:
+            return
+        self._state_by_session[session_id] = state
+        self._record_event(
+            "agent.turn_state.changed",
+            user_id=user_id,
+            session_id=session_id,
+            agent_core="RealtimeAudioAgentCore",
+            modality="realtime_audio",
+            provider=self.realtime_config.provider,
+            previous_state=previous,
+            state=state,
+            reason=reason,
+            provider_event=provider_event or None,
+        )
 
     def _record_system_error(
         self,

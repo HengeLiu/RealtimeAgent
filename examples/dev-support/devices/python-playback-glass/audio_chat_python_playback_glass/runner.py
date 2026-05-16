@@ -55,7 +55,7 @@ async def run_case(case: PlaybackCase, *, server_url: str, runs_root: str | Path
                 try:
                     item = await client.receive_control_event(timeout=1)
                 except asyncio.TimeoutError:
-                    if audio_task and audio_task.done() and client.stats.output_chunks:
+                    if audio_task and audio_task.done() and client.stats.output_chunks and _case_can_finish(case, client, speaker_streams):
                         break
                     continue
                 name = item.get("event_name")
@@ -120,6 +120,22 @@ def _select_sensor_fixture(case: PlaybackCase, stream_type: str) -> Path:
     if not fixtures:
         raise RuntimeError(f"no fixture configured for {stream_type}: {case.path}")
     return resolve_repo_path(str(fixtures[0]["path"]), base=case.path.parent)
+
+
+def _case_can_finish(case: PlaybackCase, client: PlaybackProtocolClient, speaker_streams: set[str]) -> bool:
+    """判断当前回放 case 是否已经可以自动收口。
+
+    主要逻辑：普通问答只要麦克风发完并收到 speaker 输出即可结束；带传感器 fixture
+    的 case 需要至少完成一次 asset 上传，并等待工具后的第二段 speaker 输出，避免
+    把工具 progress audio 误当成最终回答。
+    """
+
+    sensor_inputs = case.inputs.get("sensors") or {}
+    if not sensor_inputs:
+        return True
+    if not client.stats.asset_uploads:
+        return False
+    return len(speaker_streams) >= 2
 
 
 async def run_suite(suite: PlaybackSuite, *, server_url: str, runs_root: str | Path | None, report_dir: Path | None, fail_fast: bool = False) -> list[CaseReport]:

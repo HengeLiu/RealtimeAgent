@@ -117,11 +117,17 @@ def _send_final_mic(app: AudioChatApp, session_id: str) -> None:
     )
 
 
+def _session_file(tmp_path, session_id: str, name: str):
+    """返回当前测试用户会话下的运行产物文件路径。"""
+
+    return tmp_path / "runs" / "user-progress" / session_id / name
+
+
 def test_progress_audio_only_when_first_model_output_is_tool_call(tmp_path) -> None:
     """测试目标：验证工具前置播报只在模型首输出为 Tool 调用时触发。
 
     测试方法：用首输出 Tool 调用的模型驱动 TextAgentCore，并注册可消费 speaker 的端侧。
-    预期结果：runs 中写入 `tool.progress_message.emitted`，端侧收到 cached prompt 音频。
+    预期结果：runs 中写入 `tool.progress_message.emitted`，并生成 cached prompt 音频产物。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
@@ -132,20 +138,19 @@ def test_progress_audio_only_when_first_model_output_is_tool_call(tmp_path) -> N
 
     _send_final_mic(app, "sess-progress-tool-first")
 
-    model_events = (tmp_path / "runs" / "sessions" / "sess-progress-tool-first" / "model-events.jsonl").read_text(
-        encoding="utf-8"
-    )
+    model_events = _session_file(tmp_path, "sess-progress-tool-first", "model-events.jsonl").read_text(encoding="utf-8")
     assert "tool.progress_message.emitted" in model_events
     assert "tool_progress_audio" in model_events
     assert "cached_prompt_audio" in model_events
-    assert connection.chunks
+    assert list((_session_file(tmp_path, "sess-progress-tool-first", "audio").glob("output-*.wav")))
 
 
-def test_progress_audio_not_inserted_after_text_delta(tmp_path) -> None:
-    """测试目标：验证首输出是文本时不插入工具前置播报。
+def test_text_gate_preserves_pre_tool_text_and_skips_progress_audio(tmp_path) -> None:
+    """测试目标：验证 Text 门控会保留工具前模型提示，并避免重复插入系统前置播报。
 
-    测试方法：模型先输出文本，再返回 Tool 调用。
-    预期结果：工具仍会执行，但没有 `tool.progress_message.emitted`。
+    测试方法：模型先输出“我先想一下。”，随后返回 Tool 调用。
+    预期结果：工具仍会执行；工具前文本进入最终消息和 TTS；由于模型已经先提示用户，
+    系统不再额外播放 `progress_message`。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
@@ -156,13 +161,15 @@ def test_progress_audio_not_inserted_after_text_delta(tmp_path) -> None:
 
     _send_final_mic(app, "sess-progress-text-first")
 
-    model_events = (tmp_path / "runs" / "sessions" / "sess-progress-text-first" / "model-events.jsonl").read_text(
-        encoding="utf-8"
-    )
+    model_events = _session_file(tmp_path, "sess-progress-text-first", "model-events.jsonl").read_text(encoding="utf-8")
+    messages = _session_file(tmp_path, "sess-progress-text-first", "messages.jsonl").read_text(encoding="utf-8")
+    assert "text.response_gate.released" in model_events
+    assert "text.response_gate.discarded" not in model_events
     assert "tool.progress_message.emitted" not in model_events
-    assert "progress_lookup" in (tmp_path / "runs" / "sessions" / "sess-progress-text-first" / "tool-events.jsonl").read_text(
-        encoding="utf-8"
-    )
+    assert "我先想一下。" in messages
+    assert "查询完成" in messages
+    assert "progress_lookup" in _session_file(tmp_path, "sess-progress-text-first", "tool-events.jsonl").read_text(encoding="utf-8")
+    assert list((_session_file(tmp_path, "sess-progress-text-first", "audio").glob("output-*.wav")))
 
 
 def test_progress_audio_realtime_generation_mode(tmp_path) -> None:
@@ -186,8 +193,6 @@ def test_progress_audio_realtime_generation_mode(tmp_path) -> None:
 
     _send_final_mic(app, "sess-progress-realtime")
 
-    model_events = (tmp_path / "runs" / "sessions" / "sess-progress-realtime" / "model-events.jsonl").read_text(
-        encoding="utf-8"
-    )
+    model_events = _session_file(tmp_path, "sess-progress-realtime", "model-events.jsonl").read_text(encoding="utf-8")
     assert '"generation_mode": "realtime"' in model_events
     assert "cached_prompt_audio" not in model_events

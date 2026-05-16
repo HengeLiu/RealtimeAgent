@@ -699,6 +699,14 @@ def test_realtime_mode_uses_builtin_mock_provider_for_local_chain(tmp_path) -> N
     assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
     assert any(event.event == "session.opened" for event in app.agent_core.events())
     assert any(event.event == "mock_realtime.input.committed" for event in app.agent_core.events())
+    assert any(
+        event.event == "agent.turn_state.changed" and event.payload.get("state") == "speaking"
+        for event in app.agent_core.events()
+    )
+    model_events = (tmp_path / "runs" / "user-001" / handle.session_id / "model-events.jsonl").read_text()
+    assert "agent.turn_state.changed" in model_events
+    assert '"agent_core": "RealtimeAudioAgentCore"' in model_events
+    assert '"modality": "realtime_audio"' in model_events
 
 
 def test_realtime_commit_input_forwards_to_provider_and_records_event(tmp_path) -> None:

@@ -254,6 +254,50 @@ class MultiDeltaRecoveryTextModel:
         pass
 
 
+class UnpunctuatedDeltaTextModel:
+    """测试用文本模型：首个 delta 没有停顿标点。"""
+
+    provider_name = "mock-unpunctuated-delta"
+    model = "mock-unpunctuated-delta-model"
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """逐字返回文本，用于验证 Text 链路不等待标点或完整回复。"""
+
+        yield "你"
+        yield "好"
+        yield "。"
+
+    def stream_text(self, transcript: str):
+        yield "unused"
+
+    def cancel(self) -> None:
+        pass
+
+
+class InterruptingTextModel:
+    """测试用文本模型：首段文本后触发用户打断。"""
+
+    provider_name = "mock-interrupting"
+    model = "mock-interrupting-model"
+
+    def __init__(self, on_after_first_delta) -> None:
+        self.on_after_first_delta = on_after_first_delta
+        self.cancelled = False
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """先返回可播文本，再模拟端侧上报打断。"""
+
+        yield "正在回答，"
+        self.on_after_first_delta()
+        yield "这段不应该继续播出。"
+
+    def stream_text(self, transcript: str):
+        yield "unused"
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
 class FailingOutputAdapter:
     """测试用输出适配器：模拟 TTS/output 状态损坏。"""
 
@@ -578,6 +622,113 @@ def test_text_agent_continues_streaming_after_reopening_tts_source(tmp_path) -> 
     assert agent_events_text.count("output.tts_stream_reopen") == 1
     assert "output.recovered" not in agent_events_text
     assert len(list((session_dir / "audio").glob("output-*.wav"))) == 1
+
+
+def test_text_agent_records_turn_states_and_releases_each_text_delta(tmp_path) -> None:
+    """测试目标：验证 Text 链路记录状态机，并逐 delta 释放文本到 TTS。
+
+    测试方法：模型返回两段文本 delta。
+    预期结果：runs 中记录 transcribing/thinking/speaking 完整状态，且两段文本均被释放。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.agent_core.text_model = MultiDeltaRecoveryTextModel()
+    user_id = "user-text-state"
+    session_id = "sess-text-state"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-text-state",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "agent.turn_state.changed" in agent_events_text
+    assert '"agent_core": "TextAgentCore"' in agent_events_text
+    assert '"modality": "text"' in agent_events_text
+    assert '"state": "transcribing"' in agent_events_text
+    assert '"state": "thinking"' in agent_events_text
+    assert '"state": "completed"' in agent_events_text
+    assert "text_delta_realtime" in agent_events_text
+    assert agent_events_text.count("text.response_gate.released") == 2
+
+
+def test_text_agent_releases_first_text_delta_without_waiting_for_punctuation(tmp_path) -> None:
+    """测试目标：验证第一个无标点 text delta 到达后立刻进入 TTS。
+
+    测试方法：模型逐字返回“你”“好”“。”，首个 delta 没有任何自然停顿标点。
+    预期结果：runs 中记录三次实时释放，说明 Text gate 没有等待标点、长度阈值或完整回复。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.agent_core.text_model = UnpunctuatedDeltaTextModel()
+    user_id = "user-text-realtime-delta"
+    session_id = "sess-text-realtime-delta"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-text-realtime-delta",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "你好。" in messages_text
+    assert agent_events_text.count("text.response_gate.released") == 3
+    assert agent_events_text.count('"reason": "text_delta_realtime"') == 3
+
+
+def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> None:
+    """测试目标：验证用户打断时只保存已经释放给用户的助手文本。
+
+    测试方法：模型首段文本释放后触发 `interrupt()`，随后尝试继续输出第二段文本。
+    预期结果：第二段不会进入消息历史；assistant 消息带 interrupted 元数据。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-text-interrupt"
+    session_id = "sess-text-interrupt"
+    app.agent_core.open(user_id, session_id)
+    app.agent_core.text_model = InterruptingTextModel(
+        on_after_first_delta=lambda: app.agent_core.interrupt(user_id, reason="unit_interrupt")
+    )
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-text-interrupt",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "正在回答，" in messages_text
+    assert "这段不应该继续播出。" not in messages_text
+    assert '"interrupted": true' in messages_text
+    assert '"interrupted_reason": "unit_interrupt"' in messages_text
+    assert "response.interrupted" in agent_events_text
+    assert '"state": "interrupted"' in agent_events_text
+    assert app.agent_core.text_model.cancelled
 
 
 def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:

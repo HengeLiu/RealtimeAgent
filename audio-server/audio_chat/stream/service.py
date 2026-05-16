@@ -234,6 +234,7 @@ class StreamService:
             chunk.session_id,
             {
                 "event": "stream.chunk.received",
+                "user_id": chunk.user_id,
                 "stream_id": chunk.stream_id,
                 "stream_type": chunk.stream_type,
                 "seq": chunk.seq,
@@ -257,6 +258,7 @@ class StreamService:
             chunk.session_id,
             {
                 "event": "stream.chunk.sent",
+                "user_id": chunk.user_id,
                 "stream_id": chunk.stream_id,
                 "stream_type": chunk.stream_type,
                 "seq": chunk.seq,

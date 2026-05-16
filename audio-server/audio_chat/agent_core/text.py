@@ -113,6 +113,19 @@ class AsrPipeline:
         try:
             for event in provider.append_audio(chunk):
                 name = "input_transcript.done" if event.final else "input_transcript.delta"
+                if event.text:
+                    self.recorder.record_timeline_checkpoint(
+                        chunk.session_id,
+                        checkpoint="text.timeline.asr.first_char",
+                        user_id=chunk.user_id,
+                        stream_id=chunk.stream_id,
+                        fields={
+                            "provider": provider.provider_name,
+                            "model": provider.model,
+                            "text_preview": event.text[:40],
+                            "text_chars": len(event.text),
+                        },
+                    )
                 self.recorder.record_agent_event(
                     chunk.session_id,
                     {
@@ -120,9 +133,22 @@ class AsrPipeline:
                         "text": event.text,
                         "provider": provider.provider_name,
                         "model": provider.model,
+                        "stream_id": chunk.stream_id,
                     },
                 )
                 if event.final:
+                    self.recorder.record_timeline_checkpoint(
+                        chunk.session_id,
+                        checkpoint="text.timeline.asr.done",
+                        user_id=chunk.user_id,
+                        stream_id=chunk.stream_id,
+                        fields={
+                            "provider": provider.provider_name,
+                            "model": provider.model,
+                            "text_preview": event.text[:80],
+                            "text_chars": len(event.text),
+                        },
+                    )
                     final_text = event.text
         finally:
             if chunk.final:
@@ -186,6 +212,136 @@ class TextOutputAdapter:
         )
 
 
+class TextResponseGate:
+    """Text 模型输出门控器。
+
+    主要功能：在一次 LLM streaming 调用内接收文本 delta 后立即释放给 TTS；
+    如果随后出现工具调用，已经释放的自然语言提示也会保留到最终 assistant 消息，
+    避免把模型对用户的合理说明误判为废话。
+    主要方法：`buffer()` 缓冲文本，`release()` 释放给输出链路，`discard()` 丢弃。
+    主要属性：`emitted_text` 表示本次调用是否已有文本真正进入输出链路。
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        emit,
+        recorder: RunRecorder,
+    ) -> None:
+        self.user_id = user_id
+        self.session_id = session_id
+        self.emit = emit
+        self.recorder = recorder
+        self._buffer: list[str] = []
+        self.emitted_text = False
+
+    def buffer(self, text: str) -> None:
+        """缓冲一段模型文本。
+
+        主要逻辑：空文本忽略；非空文本先进入内存缓冲，随后由调用方立即释放给
+        TTS。保留缓冲层是为了统一记录、工具调用前 flush 和错误恢复语义。
+        参数：`text` 为模型 streaming delta。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if not text:
+            return
+        self._buffer.append(text)
+        self._record(
+            "text.response_gate.buffered",
+            delta_chars=len(text),
+            buffered_chars=sum(len(item) for item in self._buffer),
+            buffered_parts=len(self._buffer),
+        )
+
+    @property
+    def has_buffered_text(self) -> bool:
+        """返回当前是否有尚未释放的模型文本。"""
+
+        return bool(self._buffer)
+
+    def release(self) -> tuple[list[str], bool]:
+        """释放缓冲文本。
+
+        主要逻辑：按原 delta 顺序写入输出链路；如果输出失败，仍返回完整文本用于
+        消息历史，但后续 delta 不再继续尝试输出，保持旧 TextAgentCore 的恢复语义。
+        参数：无。
+        返回值：`(released_texts, output_ok)`。
+        异常情况：输出异常由 `emit` 包装为 False，本函数不抛出。
+        """
+
+        return self._release(reason="explicit_release")
+
+    def release_ready(self, *, reason: str) -> tuple[list[str], bool]:
+        """在文本 delta 到达后立即释放。
+
+        主要逻辑：Text 链路不能等自然停顿或完整回复结束后才送 TTS；每个模型
+        text delta 到达后都应尽快进入 TTS，让端侧尽早收到 speaker 音频。
+        参数：`reason` 标识触发释放的原因。
+        返回值：`(released_texts, output_ok)`。
+        异常情况：输出异常由 `_release()` 内部记录和降级。
+        """
+
+        if not self._buffer:
+            return [], True
+        return self._release(reason=reason)
+
+    def _release(self, *, reason: str) -> tuple[list[str], bool]:
+        """执行实际释放并记录原因。"""
+
+        texts = list(self._buffer)
+        self._buffer.clear()
+        output_ok = True
+        for text in texts:
+            if output_ok:
+                if not self.emit(text):
+                    output_ok = False
+                else:
+                    self.emitted_text = True
+        if texts:
+            self._record(
+                "text.response_gate.released",
+                released_chars=sum(len(item) for item in texts),
+                released_parts=len(texts),
+                output_ok=output_ok,
+                reason=reason,
+            )
+        return texts, output_ok
+
+    def discard(self, *, reason: str) -> list[str]:
+        """丢弃缓冲文本。
+
+        主要逻辑：保留给后续更细粒度策略使用；默认工具调用路径不丢弃文本，避免
+        误删模型对用户的合理提示。
+        参数：`reason` 为丢弃原因。
+        返回值：被丢弃的文本片段，便于测试和诊断。
+        异常情况：无。
+        """
+
+        texts = list(self._buffer)
+        self._buffer.clear()
+        if texts:
+            self._record(
+                "text.response_gate.discarded",
+                reason=reason,
+                discarded_chars=sum(len(item) for item in texts),
+                discarded_parts=len(texts),
+                discarded_preview="".join(texts)[:80],
+            )
+        return texts
+
+    def _record(self, event: str, **payload) -> None:
+        """记录门控事件。"""
+
+        self.recorder.record_agent_event(
+            self.session_id,
+            {"event": event, "user_id": self.user_id, **payload},
+        )
+
+
 class TextAgentCore:
     RECOVERABLE_ERROR_MESSAGE = DEFAULT_RECOVERABLE_ERROR_MESSAGE
 
@@ -219,6 +375,8 @@ class TextAgentCore:
         self.memory_service = memory_service
         self.max_context_messages = max(1, int(max_context_messages or 30))
         self.context_compiler = ContextCompiler()
+        self._state_by_user: dict[str, str] = {}
+        self._interruption_reason_by_user: dict[str, str] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 TextAgentCore 使用的 ToolGateway。
@@ -245,15 +403,19 @@ class TextAgentCore:
         self._session_by_user[user_id] = session_id
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
+        self._set_turn_state(chunk.user_id, chunk.session_id, "transcribing", reason="audio_final_check")
         transcript = self.asr_pipeline.append_audio(chunk)
         if transcript is None:
             return
+        self._set_turn_state(chunk.user_id, chunk.session_id, "thinking", reason="transcript_final")
         turn_key = self._turn_key(chunk=chunk, transcript=transcript)
         if turn_key in self._responded_input_streams:
             self._record_duplicate_turn(chunk=chunk, transcript=transcript, turn_key=turn_key, reason="duplicate_turn")
+            self._set_turn_state(chunk.user_id, chunk.session_id, "completed", reason="duplicate_turn")
             return
         self._responded_input_streams.add(turn_key)
         self._cancelled_users.discard(chunk.user_id)
+        self._interruption_reason_by_user.pop(chunk.user_id, None)
         self.control_service.append_message(
             chunk.user_id,
             {
@@ -307,6 +469,7 @@ class TextAgentCore:
             final=True,
             context="final_flush",
         )
+        interrupted_reason = self._interruption_reason_by_user.pop(chunk.user_id, None)
         self.control_service.append_message(
             chunk.user_id,
             {
@@ -315,6 +478,8 @@ class TextAgentCore:
                 "content": assistant_text,
                 "event": "assistant_text.done",
                 "error": str(response_error) if response_error is not None else None,
+                "interrupted": bool(interrupted_reason),
+                "interrupted_reason": interrupted_reason,
             },
         )
         self.control_service.publish(
@@ -333,6 +498,14 @@ class TextAgentCore:
             agent_core="TextAgentCore",
             assistant_text=assistant_text,
             recovered_from_error=response_error is not None,
+            interrupted=bool(interrupted_reason),
+            interrupted_reason=interrupted_reason,
+        )
+        self._set_turn_state(
+            chunk.user_id,
+            chunk.session_id,
+            "interrupted" if interrupted_reason else ("failed" if response_error is not None else "completed"),
+            reason=interrupted_reason or ("response_error" if response_error is not None else "response_done"),
         )
 
     @staticmethod
@@ -491,18 +664,37 @@ class TextAgentCore:
             },
         )
         try:
+            model_text_delta_count = 0
+            model_text_chars = 0
             for _ in range(4):
                 tool_calls: list[dict[str, Any]] = []
                 model_output_started = False
-                first_output_was_tool_call = False
-                output_failed = False
+                gate = TextResponseGate(
+                    user_id=user_id,
+                    session_id=session_id,
+                    recorder=self.recorder,
+                    emit=lambda text: self._emit_assistant_text_delta(
+                        user_id=user_id,
+                        session_id=session_id,
+                        text=text,
+                    ),
+                )
                 for item in self._stream_model(messages=messages, transcript=transcript, tools=tools):
                     if user_id in self._cancelled_users:
+                        self._record_event(
+                            "response.interrupted",
+                            user_id=user_id,
+                            session_id=session_id,
+                            reason=self._interruption_reason_by_user.get(user_id, "user_interrupt"),
+                            released_chars=sum(len(part) for part in assistant_parts),
+                            buffered_chars=sum(len(part) for part in getattr(gate, "_buffer", [])),
+                        )
                         return "".join(assistant_parts)
                     if isinstance(item, dict) and item.get("type") == "tool_call":
                         if not model_output_started:
                             model_output_started = True
-                            first_output_was_tool_call = True
+                        released_texts, _output_ok = gate.release()
+                        assistant_parts.extend(released_texts)
                         tool_calls.append(item)
                         self._record_event(
                             "tool_call.delta",
@@ -515,38 +707,47 @@ class TextAgentCore:
                     text_delta = self._extract_text_delta(item)
                     if not text_delta:
                         continue
+                    model_text_delta_count += 1
+                    model_text_chars += len(text_delta)
+                    self.recorder.record_timeline_checkpoint(
+                        session_id,
+                        checkpoint="text.timeline.llm.first_token",
+                        user_id=user_id,
+                        fields={
+                            "provider": getattr(self.text_model, "provider_name", "unknown"),
+                            "model": getattr(self.text_model, "model", "unknown"),
+                            "text_preview": text_delta[:40],
+                            "delta_chars": len(text_delta),
+                        },
+                    )
                     if not model_output_started:
                         model_output_started = True
-                    assistant_parts.append(text_delta)
-                    if output_failed:
-                        continue
-                    if not self._emit_output_best_effort(
-                        user_id=user_id,
-                        session_id=session_id,
-                        stream_id=None,
-                        stream_type=None,
-                        text=text_delta,
-                        final=False,
-                        context="assistant_text_delta",
-                    ):
-                        output_failed = True
+                    gate.buffer(text_delta)
+                    released_texts, _output_ok = gate.release_ready(reason="text_delta_realtime")
+                    assistant_parts.extend(released_texts)
                 if not tool_calls or self.tool_gateway is None:
+                    released_texts, _output_ok = gate.release()
+                    assistant_parts.extend(released_texts)
                     break
+                released_texts, _output_ok = gate.release()
+                assistant_parts.extend(released_texts)
                 messages.append(_provider_tool_call_message(tool_calls))
                 for tool_call in tool_calls:
-                    if first_output_was_tool_call:
+                    if not gate.emitted_text:
                         self.tool_gateway.emit_progress_once(
                             name=str(tool_call.get("name") or ""),
                             user_id=user_id,
                             session_id=session_id,
                             output_service=self.output_service,
                         )
+                    self._set_turn_state(user_id, session_id, "tool_running", reason=str(tool_call.get("name") or "tool_call"))
                     result = self._call_tool(
                         name=str(tool_call.get("name") or ""),
                         user_id=user_id,
                         session_id=session_id,
                         input_data=dict(tool_call.get("arguments") or {}),
                     )
+                    self._set_turn_state(user_id, session_id, "thinking", reason="tool_result_returned")
                     result_dict = self._tool_result_to_dict(result)
                     self.recorder.record_agent_event(
                         session_id,
@@ -574,6 +775,17 @@ class TextAgentCore:
         finally:
             if previous_prompt is not None:
                 setattr(self.text_model, "prompt", previous_prompt)
+        self.recorder.record_timeline_checkpoint(
+            session_id,
+            checkpoint="text.timeline.llm.done",
+            user_id=user_id,
+            fields={
+                "provider": getattr(self.text_model, "provider_name", "unknown"),
+                "model": getattr(self.text_model, "model", "unknown"),
+                "text_delta_count": model_text_delta_count,
+                "text_chars": model_text_chars,
+            },
+        )
         return "".join(assistant_parts)
 
     def _stream_model(self, *, messages: list[dict[str, Any]], transcript: str, tools: list[dict]) -> Any:
@@ -659,6 +871,27 @@ class TextAgentCore:
             input_data=input_data,
         )
 
+    def _emit_assistant_text_delta(self, *, user_id: str, session_id: str, text: str) -> bool:
+        """释放一段助手文本并同步 Text turn 状态。
+
+        主要逻辑：文本真正进入输出链路前把状态切到 speaking；输出异常仍由
+        `_emit_output_best_effort()` 转为可恢复事件。
+        参数：`user_id/session_id/text` 定位本轮输出。
+        返回值：输出成功返回 True。
+        异常情况：不向外抛出输出异常。
+        """
+
+        self._set_turn_state(user_id, session_id, "speaking", reason="assistant_text_released")
+        return self._emit_output_best_effort(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=None,
+            stream_type=None,
+            text=text,
+            final=False,
+            context="assistant_text_delta",
+        )
+
     @staticmethod
     def _tool_result_to_dict(result: ToolResult) -> dict:
         return {
@@ -696,13 +929,19 @@ class TextAgentCore:
 
     def interrupt(self, user_id: str, *, reason: str) -> None:
         self._cancelled_users.add(user_id)
+        self._interruption_reason_by_user[user_id] = reason
+        session_id = self._session_by_user.get(user_id, "")
         self.asr_pipeline.cancel()
         self.text_model.cancel()
+        if session_id:
+            self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         self.recorder.record_agent_event(
-            "interruptions",
+            session_id or "interruptions",
             {"event": "agent.response.cancelled", "user_id": user_id, "reason": reason},
         )
-        self._record_event("response.cancelled", user_id=user_id, reason=reason)
+        self._record_event("response.cancelled", user_id=user_id, session_id=session_id, reason=reason)
+        if session_id:
+            self._set_turn_state(user_id, session_id, "interrupted", reason=reason)
 
     def close(self, user_id: str, *, reason: str) -> None:
         """关闭文本 Agent 会话。
@@ -742,3 +981,29 @@ class TextAgentCore:
         self._event_buffer.record_event(event, user_id=user_id, session_id=session_id, payload=payload)
         if session_id:
             self.recorder.record_agent_event(session_id, {"event": event, "user_id": user_id, **payload})
+
+    def _set_turn_state(self, user_id: str, session_id: str, state: str, *, reason: str) -> None:
+        """记录 Text 链路状态机变化。
+
+        主要逻辑：只记录状态变化，避免同一状态重复刷屏；状态同时进入统一
+        Agent event buffer 和 runs，便于真实端侧回放后按时间线排查。
+        参数：`user_id/session_id` 定位会话；`state` 是新状态；`reason` 是触发原因。
+        返回值：无。
+        异常情况：无。
+        """
+
+        key = user_id or session_id
+        previous = self._state_by_user.get(key, "listening")
+        if previous == state:
+            return
+        self._state_by_user[key] = state
+        self._record_event(
+            "agent.turn_state.changed",
+            user_id=user_id,
+            session_id=session_id,
+            agent_core="TextAgentCore",
+            modality="text",
+            previous_state=previous,
+            state=state,
+            reason=reason,
+        )

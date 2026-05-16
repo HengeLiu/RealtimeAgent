@@ -64,6 +64,8 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "function startHeartbeat()" in html
     assert "close_mode: \"close_after_reply\"" in html
     assert "function delay(ms)" in html
+    assert "function logTimestamp()" in html
+    assert "fractionalSecondDigits: 3" in html
     assert "function defaultServerUrl()" in html
     assert "function normalizeServerUrl(raw)" in html
     assert 'url.hostname === "0.0.0.0"' in html
@@ -79,8 +81,9 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "BARGE_IN_MAX_PEAK = 0.72" in html
     assert "barge-in detected rms=" in html
     assert "peak=${level.peak.toFixed(4)}" in html
-    assert "recv audio chunk bytes=" in html
-    assert "duration_ms=${durationMs}" in html
+    assert "recv audio chunk bytes=" not in html
+    assert "playback first audio chunk stream_id=" in html
+    assert "playback scheduled stream_id=" in html
     assert "audioContext.createGain()" in html
     assert "if (!outputStarted.has(chunk.stream_id))" in html
     assert "stopAllOutputPlayback(\"barge_in_local\")" in html

@@ -262,19 +262,35 @@
     let lastCapturedPreviewAt = 0;
     let lastCapturedThumbnailAt = 0;
     let peerVideoSender = null;
+    const outputPlaybackStats = new Map();
 
     function delay(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    function logTimestamp() {
+      return new Date().toLocaleTimeString("zh-CN", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        fractionalSecondDigits: 3,
+      });
+    }
+
     function log(line) {
-      const at = new Date().toLocaleTimeString();
+      const at = logTimestamp();
       logEl.value += `[${at}] ${line}\n`;
       logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function isQuietEventName(eventName) {
+      return eventName === "control.device.heartbeat.received" || String(eventName || "").startsWith("stream.");
+    }
+
     function logBroadcastEvent(item) {
-      const at = new Date().toLocaleTimeString();
+      if (isQuietEventName(item.event_name)) return;
+      const at = logTimestamp();
       const payload = JSON.stringify({
         event_name: item.event_name,
         session_id: item.session_id || null,
@@ -758,7 +774,7 @@
       if (!controlWs || controlWs.readyState !== WebSocket.OPEN) throw new Error("control websocket is not open");
       if (!deviceClient) throw new Error("device sdk client is not ready");
       deviceClient.sendEvent(item);
-      log(`send ${item.event_name}`);
+      if (!isQuietEventName(item.event_name)) log(`send ${item.event_name}`);
     }
 
     function safeSendEvent(item) {
@@ -771,6 +787,60 @@
 
     function isAudioSending() {
       return openingMic || activeAudioSource === "live_mic" || activeAudioSource === "offline_realtime";
+    }
+
+    function outputStats(streamId) {
+      const key = String(streamId || "");
+      if (!outputPlaybackStats.has(key)) {
+        outputPlaybackStats.set(key, {
+          openedAt: null,
+          firstChunkAt: null,
+          playbackScheduledAt: null,
+          bytes: 0,
+          chunks: 0,
+          audioMs: 0,
+        });
+      }
+      return outputPlaybackStats.get(key);
+    }
+
+    function markOutputOpen(streamId) {
+      const stats = outputStats(streamId);
+      stats.openedAt = performance.now();
+      log(`playback output open requested stream_id=${streamId}`);
+    }
+
+    function recordOutputChunk(chunk, durationMs) {
+      const stats = outputStats(chunk.stream_id);
+      const now = performance.now();
+      stats.bytes += chunk.payload.byteLength;
+      stats.chunks += 1;
+      stats.audioMs += durationMs;
+      if (!stats.firstChunkAt) {
+        stats.firstChunkAt = now;
+        const sinceOpenMs = stats.openedAt ? Math.round(now - stats.openedAt) : null;
+        log(`playback first audio chunk stream_id=${chunk.stream_id} bytes=${chunk.payload.byteLength} sample_rate=${chunk.sample_rate || INPUT_RATE} duration_ms=${durationMs} since_open_ms=${sinceOpenMs ?? "-"}`);
+      }
+    }
+
+    function markPlaybackScheduled(streamId, scheduledStart, durationSeconds) {
+      const stats = outputStats(streamId);
+      if (stats.playbackScheduledAt) return;
+      const now = performance.now();
+      stats.playbackScheduledAt = now;
+      const delayMs = audioContext ? Math.max(0, Math.round((scheduledStart - audioContext.currentTime) * 1000)) : null;
+      const sinceFirstChunkMs = stats.firstChunkAt ? Math.round(now - stats.firstChunkAt) : null;
+      log(`playback scheduled stream_id=${streamId} scheduled_delay_ms=${delayMs ?? "-"} chunk_duration_ms=${Math.round(durationSeconds * 1000)} since_first_chunk_ms=${sinceFirstChunkMs ?? "-"} audio_context_state=${audioContext ? audioContext.state : "-"}`);
+    }
+
+    function summarizeOutputPlayback(streamId, reason) {
+      const stats = outputPlaybackStats.get(String(streamId || ""));
+      if (!stats) return;
+      const now = performance.now();
+      const wallMs = stats.openedAt ? Math.round(now - stats.openedAt) : null;
+      const sinceFirstChunkMs = stats.firstChunkAt ? Math.round(now - stats.firstChunkAt) : null;
+      log(`playback ${reason} stream_id=${streamId} chunks=${stats.chunks} bytes=${stats.bytes} audio_ms=${stats.audioMs} wall_ms=${wallMs ?? "-"} since_first_chunk_ms=${sinceFirstChunkMs ?? "-"}`);
+      outputPlaybackStats.delete(String(streamId || ""));
     }
 
     async function ensureStreamSocketOpen() {
@@ -1131,7 +1201,7 @@
 
     async function handleControlEvent(item) {
       logBroadcastEvent(item);
-      log(`recv ${item.event_name}`);
+      if (!isQuietEventName(item.event_name)) log(`recv ${item.event_name}`);
       if (item.event_name === "control.device.registered") {
         enableRegisteredControls();
         log(`registered connection_id=${item.payload.connection_id}`);
@@ -1149,9 +1219,11 @@
         renderStatus();
         log("audio session opened; waiting for manual start audio");
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.speaker") {
+        markOutputOpen(item.stream_id);
         await ensureStreamSocketOpen();
       } else if (item.event_name === "stream.output.close.requested") {
         pendingOutputClose.set(item.stream_id, item);
+        log(`playback close requested stream_id=${item.stream_id}`);
         closeOutputWhenDrained(item.stream_id);
       } else if (item.event_name === "stream.input.closed" && item.stream_type === "sensor.mic") {
         markMicInputClosed(item.stream_id, (item.payload && item.payload.reason) || "server_closed");
@@ -1279,7 +1351,6 @@
       });
       sender.ws.send(frame.bytes);
       sender.frameSeq += 1;
-      log(`peer.video.frame.sent seq=${sender.frameSeq} bytes=${frame.bytes.byteLength}`);
     }
 
     async function capturePeerVideoFrame(options = {}) {
@@ -1947,7 +2018,7 @@
       }
       if (chunk.stream_type !== "actuator.speaker") return;
       const durationMs = Math.round((chunk.payload.byteLength / 2) / (chunk.sample_rate || INPUT_RATE) * 1000);
-      log(`recv audio chunk bytes=${chunk.payload.byteLength} sample_rate=${chunk.sample_rate || INPUT_RATE} duration_ms=${durationMs}`);
+      recordOutputChunk(chunk, durationMs);
       if (!outputStarted.has(chunk.stream_id)) {
         outputStarted.add(chunk.stream_id);
         sendEvent(event("stream.output.started", {stream_type: "actuator.speaker"}, {
@@ -1979,6 +2050,7 @@
         closeOutputWhenDrained(chunk.stream_id);
       };
       playbackTime = Math.max(playbackTime, audioContext.currentTime);
+      markPlaybackScheduled(chunk.stream_id, playbackTime, buffer.duration);
       node.start(playbackTime);
       playbackTime += buffer.duration;
       playbackNodes.push({node, streamId: chunk.stream_id});
@@ -1992,6 +2064,7 @@
       pendingOutputClose.delete(streamId);
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);
+      summarizeOutputPlayback(streamId, "drained");
       sendEvent(event("stream.output.finished", {stream_type: "actuator.speaker"}, {
         session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
       }));
@@ -2010,6 +2083,7 @@
       if (playbackNodes.length === 0 && audioContext) playbackTime = audioContext.currentTime;
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);
+      summarizeOutputPlayback(streamId, `stopped reason=${reason}`);
       sendEvent(event("stream.output.closed", {stream_type: "actuator.speaker", reason}, {
         session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
       }));
