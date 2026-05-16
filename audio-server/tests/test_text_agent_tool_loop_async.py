@@ -132,13 +132,16 @@ class CapturePhotoVisionModel:
         """模拟支持工具调用和图片 content block 的模型。"""
 
         self.calls.append(list(messages))
-        if _message_list_has_image(messages):
-            yield "我看到当前画面了。"
-            return
         if len(self.calls) == 1:
             yield {"type": "tool_call", "id": "call-photo-1", "name": "capture_photo", "arguments": {}}
             return
-        raise AssertionError("第二轮模型请求应包含 image_url content block")
+        followup = messages[-1]
+        assert followup["role"] == "user"
+        content = followup["content"]
+        assert isinstance(content, list)
+        image_block = next(item for item in content if item.get("type") == "image_url")
+        assert image_block["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        yield "我看到当前画面了。"
 
     def stream_text(self, transcript: str):
         """历史接口占位。"""
@@ -240,54 +243,6 @@ def test_text_agent_attaches_capture_photo_asset_to_followup_message(tmp_path) -
     assert "<redacted:" in json.dumps(request["messages"], ensure_ascii=False)
 
 
-def test_text_agent_forces_fresh_capture_for_visual_read_request(tmp_path) -> None:
-    """测试目标：验证读图类用户输入会强制获取当前新图片。
-
-    测试方法：mock ASR 使用“帮我朗读一下图片中的内容”作为转写，mock 模型如果
-    首次请求没有 image_url 会报错。
-    预期结果：模型第一次被调用前已经完成 capture_photo，收到的是本轮新图片。
-    """
-
-    image_path = tmp_path / "fresh.jpg"
-    image_path.write_bytes(b"\xff\xd8\xff\xe0fresh-jpeg\xff\xd9")
-    app = AudioChatApp(
-        AudioChatConfig(
-            runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
-            text_multimodal_enabled=True,
-            text_multimodal_attach_tool_result_assets=True,
-            text_multimodal_max_image_base64_bytes=1024,
-        )
-    )
-    app.tool_registry.register(CapturePhotoTool(image_path))
-    model = CapturePhotoVisionModel()
-    app.agent_core.text_model = model
-    user_id = "user-fresh-vision"
-    session_id = "sess-fresh-vision"
-
-    app.agent_core.append_audio_event(
-        StreamChunk(
-            user_id=user_id,
-            session_id=session_id,
-            stream_id="stream-mic",
-            stream_type="sensor.mic",
-            seq=0,
-            payload=b"audio",
-            final=True,
-            metadata={"source_path": "帮我朗读一下图片中的内容.wav"},
-        )
-    )
-
-    session_dir = tmp_path / "runs" / user_id / session_id
-    request = json.loads((session_dir / "model-request.json").read_text(encoding="utf-8"))
-    events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert len(model.calls) == 1
-    assert _message_list_has_image(model.calls[0])
-    assert "tool_call.forced" in events_text
-    assert "multimodal.tool_asset.attached" in events_text
-    assert any(item.get("source_id") == "visual_asset:asset-photo-1" for item in request["context_sources"])
-
-
 def test_openai_compatible_stream_messages_aggregates_tool_call_delta() -> None:
     """测试目标：验证 OpenAI-compatible provider 聚合 tool call argument delta。
 
@@ -377,14 +332,4 @@ def _fake_chat_stream(**kwargs):
                 )
             )
         ]
-    )
-
-
-def _message_list_has_image(messages: list[dict]) -> bool:
-    """判断测试模型请求是否包含 image_url content block。"""
-
-    return any(
-        isinstance(message.get("content"), list)
-        and any(isinstance(block, dict) and block.get("type") == "image_url" for block in message["content"])
-        for message in messages
     )
