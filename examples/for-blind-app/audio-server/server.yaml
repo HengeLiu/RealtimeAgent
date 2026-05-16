@@ -82,8 +82,23 @@ agent:
     custom_adapter: ""
   text:
     provider: "dashscope-compatible"
-    model: "qwen-plus"
-    prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。用户要求寻找某个物体、持续观察某个目标、帮他留意某个东西在哪里时，必须调用找物任务工具启动后台任务；在工具和任务没有返回明确结果前，只能说明已开始寻找或正在识别，不能自行判断已经找到，也不能编造目标位置、距离或方向。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
+    model: "qwen3.6-flash"
+    prompt: "你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。当用户问题明确涉及当前画面、图片或视频，而当前消息没有附带视觉输入时，你可以调用 capture_photo 获取当前照片。capture_photo 只负责获取图片，不负责理解图片。工具返回后，系统会在下一次消息中附带刚获取的图片。图片附带后，你必须只基于本轮附带的视觉输入回答，不要引用历史图片替代当前画面。看不清、缺少关键帧或无法判断距离时，直接说明不确定，不要编造。用户要求寻找某个物体、持续观察某个目标、帮他留意某个东西在哪里时，必须调用找物任务工具启动后台任务；在工具和任务没有返回明确结果前，只能说明已开始寻找或正在识别，不能自行判断已经找到，也不能编造目标位置、距离或方向。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。"
+    multimodal:
+      enabled: true
+      attach_tool_result_assets: true
+      max_images_per_turn: 4
+      image_freshness_seconds: 2
+      max_image_base64_bytes: 7500000
+      max_capture_photo_calls_per_turn: 1
+      video:
+        enabled: true
+        prefer_native_video: true
+        max_inline_bytes: 50000000
+        max_duration_seconds: 120
+        sample_fps: 1.0
+        max_frames: 16
+        frame_jpeg_quality: 85
     asr_provider: "dashscope"
     asr_model: "fun-asr-realtime"
     tts_provider: "dashscope"
@@ -113,7 +128,6 @@ tools:
     fail_fast: true
   allowlist: []
   denylist:
-    - "capture_photo"
     - "interpret_image"
     - "interpret_current_view"
   default_timeout_seconds: 30

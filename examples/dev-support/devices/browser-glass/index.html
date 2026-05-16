@@ -1442,7 +1442,7 @@
         let bytesSent = 0;
         for (let index = 0; index < images.length; index += 1) {
           const image = images[index];
-          streamWs.send(encodeStreamChunk({
+          const encoded = encodeStreamChunk({
             user_id: document.getElementById("userId").value,
             session_id: activeSession,
             stream_id: rgbStreamId,
@@ -1462,7 +1462,10 @@
               image_count: images.length,
               reason: (item && item.payload && item.payload.reason) || reason,
             },
-          }));
+          });
+          const bufferedBefore = streamWs.bufferedAmount;
+          streamWs.send(encoded);
+          log(`send sensor.rgb chunk stream_id=${rgbStreamId} seq=${index} bytes=${image.bytes.byteLength} encoded=${encoded.byteLength} request_id=${requestId || "-"} ws_state=${streamWs.readyState} buffered_before=${bufferedBefore} buffered_after=${streamWs.bufferedAmount}`);
           bytesSent += image.bytes.byteLength;
         }
         await waitStreamSocketBufferedDrain();

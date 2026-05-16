@@ -146,3 +146,44 @@ agent:
     assert runtime_config.text_prompt == "文本提示词"
     assert runtime_config.realtime_provider == "mock"
     assert runtime_config.realtime_prompt == "实时提示词"
+
+
+def test_agent_text_multimodal_config_is_loaded(tmp_path) -> None:
+    """测试目标：确认 Text 多模态配置会从 YAML 同步到运行时配置。
+
+    测试方法：写入包含 agent.text.multimodal 的最小 YAML，加载后检查 loaded 和
+    AudioChatConfig 字段。
+    预期结果：图片、抓拍次数和视频配置都能被运行时读取。
+    """
+
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        """
+agent:
+  text:
+    provider: dashscope-compatible
+    model: qwen3.6-flash
+    multimodal:
+      enabled: true
+      attach_tool_result_assets: true
+      max_images_per_turn: 2
+      max_image_base64_bytes: 12345
+      max_capture_photo_calls_per_turn: 1
+      video:
+        enabled: true
+        prefer_native_video: true
+        max_inline_bytes: 54321
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+
+    assert loaded.agent.text.multimodal.enabled is True
+    assert loaded.agent.text.multimodal.max_images_per_turn == 2
+    assert loaded.agent.text.multimodal.video.enabled is True
+    assert runtime_config.text_multimodal_enabled is True
+    assert runtime_config.text_multimodal_attach_tool_result_assets is True
+    assert runtime_config.text_multimodal_max_image_base64_bytes == 12345
+    assert runtime_config.text_multimodal_video_max_inline_bytes == 54321

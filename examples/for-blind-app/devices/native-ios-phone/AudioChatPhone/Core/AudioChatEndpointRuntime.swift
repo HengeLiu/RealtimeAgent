@@ -356,16 +356,20 @@ final class AudioChatEndpointRuntime: ObservableObject {
         do {
             try await ensureStreamSocket()
             let streamID = AudioChatIDs.make(prefix: "stream_rgb")
+            var openPayload: [String: Any] = [
+                "stream_type": "sensor.rgb",
+                "format": ["codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1],
+                "reason": reason,
+            ]
+            if let requestID {
+                openPayload["request_id"] = requestID
+            }
             try await sendControlEvent(
                 AudioChatEvent(
                     eventName: "stream.input.opened",
                     userID: config.userID,
                     producerID: config.deviceID,
-                    payload: [
-                        "stream_type": "sensor.rgb",
-                        "format": ["codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1],
-                        "reason": reason,
-                    ],
+                    payload: openPayload,
                     sessionID: sessionID,
                     streamID: streamID,
                     streamType: "sensor.rgb",
@@ -399,12 +403,19 @@ final class AudioChatEndpointRuntime: ObservableObject {
             )
             try await streamSocket?.send(.data(AudioChatStreamChunkCodec.encode(chunk)))
             let closeReason = directFrame == nil ? "ios_rgb_uploaded" : "ios_direct_rgb_uploaded"
+            var closePayload: [String: Any] = [
+                "stream_type": "sensor.rgb",
+                "reason": closeReason,
+            ]
+            if let requestID {
+                closePayload["request_id"] = requestID
+            }
             try await sendControlEvent(
                 AudioChatEvent(
                     eventName: "stream.input.closed",
                     userID: config.userID,
                     producerID: config.deviceID,
-                    payload: ["stream_type": "sensor.rgb", "reason": closeReason],
+                    payload: closePayload,
                     sessionID: sessionID,
                     streamID: streamID,
                     streamType: "sensor.rgb",

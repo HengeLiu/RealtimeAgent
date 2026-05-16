@@ -11,6 +11,7 @@ from audio_chat.output import AssistantTextDelta, OutputService
 from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from audio_chat.agent_core.context import ContextCompileRequest, ContextCompiler, record_context_events
+from audio_chat.agent_core.multimodal import ModelMessageManager, MultimodalMessagePolicy
 from audio_chat.agent_core.providers import (
     AsrProviderAdapter,
     AsrProviderConfig,
@@ -356,6 +357,7 @@ class TextAgentCore:
         tool_gateway: ToolGateway | None = None,
         memory_service: Any = None,
         max_context_messages: int = 30,
+        multimodal_policy: MultimodalMessagePolicy | None = None,
     ) -> None:
         self.control_service = control_service
         self.output_service = output_service
@@ -375,6 +377,7 @@ class TextAgentCore:
         self.memory_service = memory_service
         self.max_context_messages = max(1, int(max_context_messages or 30))
         self.context_compiler = ContextCompiler()
+        self.message_manager = ModelMessageManager(multimodal_policy)
         self._state_by_user: dict[str, str] = {}
         self._interruption_reason_by_user: dict[str, str] = {}
 
@@ -643,30 +646,35 @@ class TextAgentCore:
         if previous_prompt is not None:
             setattr(self.text_model, "prompt", prompt)
         record_context_events(recorder=self.recorder, session_id=session_id, context=context)
-        self.recorder.record_model_request(
-            session_id,
-            {
-                "provider": context.provider,
-                "model": context.model,
-                "runner": "agent_core_text",
-                "user_id": user_id,
-                "session_id": session_id,
-                "prompt": prompt,
-                "messages": [{"role": "system", "content": prompt}, *list(messages)],
-                "tools": tools,
-                "tool_count": len(tools),
-                "prompts": context.prompt_records(),
-                "context_sources": context.source_records(),
-                "warnings": context.warnings,
-                "truncations": context.truncations,
-                "notifications": context.notifications,
-                "context_metadata": context.metadata,
-            },
-        )
+        dynamic_context_sources: list[dict[str, Any]] = []
+
+        def record_current_model_request(*, reason: str) -> None:
+            self.recorder.record_model_request(
+                session_id,
+                {
+                    "provider": context.provider,
+                    "model": context.model,
+                    "runner": "agent_core_text",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "prompt": prompt,
+                    "messages": [{"role": "system", "content": prompt}, *self._model_request_messages(messages)],
+                    "tools": tools,
+                    "tool_count": len(tools),
+                    "prompts": context.prompt_records(),
+                    "context_sources": [*context.source_records(), *dynamic_context_sources],
+                    "warnings": context.warnings,
+                    "truncations": context.truncations,
+                    "notifications": context.notifications,
+                    "context_metadata": {**context.metadata, "request_reason": reason},
+                },
+            )
+
         try:
             model_text_delta_count = 0
             model_text_chars = 0
-            for _ in range(4):
+            for iteration in range(4):
+                record_current_model_request(reason=f"text_agent_turn_iteration_{iteration + 1}")
                 tool_calls: list[dict[str, Any]] = []
                 model_output_started = False
                 gate = TextResponseGate(
@@ -761,6 +769,17 @@ class TextAgentCore:
                         },
                     )
                     messages.append(_provider_tool_result_message(tool_call=tool_call, result=result_dict))
+                    update = self.message_manager.append_tool_result_followup(
+                        messages=messages,
+                        tool_call=tool_call,
+                        tool_result=result_dict,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                    messages.extend(update.messages)
+                    dynamic_context_sources.extend(update.source_records)
+                    for event in update.events:
+                        self.recorder.record_agent_event(session_id, event)
                     self.control_service.append_message(
                         user_id,
                         {
@@ -904,6 +923,42 @@ class TextAgentCore:
             "meta": result.meta or {},
             "error": result.error,
         }
+
+    @staticmethod
+    def _model_request_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """返回适合写入 `model-request.json` 的消息快照。
+
+        主要逻辑：真实 provider 请求使用完整 data URL；运行产物只保留 content block
+        类型和 data URL 长度，避免把 base64 大字段写入调试文件。
+        参数：`messages` 为即将传给 provider 的消息。
+        返回值：可 JSON 序列化的脱敏消息列表。
+        异常情况：无。
+        """
+
+        return [TextAgentCore._redact_message_for_record(message) for message in messages]
+
+    @staticmethod
+    def _redact_message_for_record(message: dict[str, Any]) -> dict[str, Any]:
+        record = dict(message)
+        content = record.get("content")
+        if isinstance(content, list):
+            record["content"] = [TextAgentCore._redact_content_block(item) for item in content]
+        return record
+
+    @staticmethod
+    def _redact_content_block(block: Any) -> Any:
+        if not isinstance(block, dict):
+            return block
+        item = dict(block)
+        for key in ("image_url", "video_url"):
+            nested = item.get(key)
+            if isinstance(nested, dict):
+                nested_copy = dict(nested)
+                url = str(nested_copy.get("url") or "")
+                if url.startswith("data:"):
+                    nested_copy["url"] = f"{url[:32]}...<redacted:{len(url)} chars>"
+                item[key] = nested_copy
+        return item
 
     @staticmethod
     def _jsonable(value: Any) -> Any:

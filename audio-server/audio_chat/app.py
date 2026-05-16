@@ -7,6 +7,7 @@ from pathlib import Path
 
 from audio_chat.agent_core import AgentCoreRouter
 from audio_chat.agent_core.context import PromptRegistry
+from audio_chat.agent_core.multimodal import MultimodalMessagePolicy
 from audio_chat.agent_core.providers import AsrProviderConfig, TextModelProviderConfig
 from audio_chat.agent_core.realtime import RealtimeProviderConfig
 from audio_chat.asset import AssetService
@@ -103,6 +104,19 @@ class AudioChatConfig:
     text_model: str = "mock-text"
     text_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     text_max_context_messages: int = 30
+    text_multimodal_enabled: bool = False
+    text_multimodal_attach_tool_result_assets: bool = False
+    text_multimodal_max_images_per_turn: int = 4
+    text_multimodal_image_freshness_seconds: float = 2.0
+    text_multimodal_max_image_base64_bytes: int = 7_500_000
+    text_multimodal_max_capture_photo_calls_per_turn: int = 1
+    text_multimodal_video_enabled: bool = False
+    text_multimodal_video_prefer_native_video: bool = True
+    text_multimodal_video_max_inline_bytes: int = 50_000_000
+    text_multimodal_video_max_duration_seconds: float = 120.0
+    text_multimodal_video_sample_fps: float = 1.0
+    text_multimodal_video_max_frames: int = 16
+    text_multimodal_video_frame_jpeg_quality: int = 85
     tts_provider: str = "mock"
     tts_model: str = "mock-tts"
     tts_voice: str = "mock"
@@ -230,6 +244,19 @@ class AudioChatConfig:
             text_model=text.model,
             text_prompt=_with_memory_instructions(text.prompt, enabled=memory_enabled),
             text_max_context_messages=text.max_context_messages,
+            text_multimodal_enabled=text.multimodal.enabled,
+            text_multimodal_attach_tool_result_assets=text.multimodal.attach_tool_result_assets,
+            text_multimodal_max_images_per_turn=text.multimodal.max_images_per_turn,
+            text_multimodal_image_freshness_seconds=text.multimodal.image_freshness_seconds,
+            text_multimodal_max_image_base64_bytes=text.multimodal.max_image_base64_bytes,
+            text_multimodal_max_capture_photo_calls_per_turn=text.multimodal.max_capture_photo_calls_per_turn,
+            text_multimodal_video_enabled=text.multimodal.video.enabled,
+            text_multimodal_video_prefer_native_video=text.multimodal.video.prefer_native_video,
+            text_multimodal_video_max_inline_bytes=text.multimodal.video.max_inline_bytes,
+            text_multimodal_video_max_duration_seconds=text.multimodal.video.max_duration_seconds,
+            text_multimodal_video_sample_fps=text.multimodal.video.sample_fps,
+            text_multimodal_video_max_frames=text.multimodal.video.max_frames,
+            text_multimodal_video_frame_jpeg_quality=text.multimodal.video.frame_jpeg_quality,
             tts_provider=text.tts_provider,
             tts_model=text.tts_model,
             tts_voice=text.tts_voice,
@@ -484,6 +511,21 @@ class AudioChatApp:
                 allow_mock_fallback=self.config.allow_mock_fallback,
                 request_timeout_seconds=self.config.provider_request_timeout_seconds,
                 max_retries=self.config.provider_max_retries,
+            ),
+            multimodal_policy=MultimodalMessagePolicy(
+                enabled=self.config.text_multimodal_enabled,
+                attach_tool_result_assets=self.config.text_multimodal_attach_tool_result_assets,
+                max_images_per_turn=self.config.text_multimodal_max_images_per_turn,
+                image_freshness_seconds=self.config.text_multimodal_image_freshness_seconds,
+                max_image_base64_bytes=self.config.text_multimodal_max_image_base64_bytes,
+                max_capture_photo_calls_per_turn=self.config.text_multimodal_max_capture_photo_calls_per_turn,
+                video_enabled=self.config.text_multimodal_video_enabled,
+                video_prefer_native_video=self.config.text_multimodal_video_prefer_native_video,
+                video_max_inline_bytes=self.config.text_multimodal_video_max_inline_bytes,
+                video_max_duration_seconds=self.config.text_multimodal_video_max_duration_seconds,
+                video_sample_fps=self.config.text_multimodal_video_sample_fps,
+                video_max_frames=self.config.text_multimodal_video_max_frames,
+                video_frame_jpeg_quality=self.config.text_multimodal_video_frame_jpeg_quality,
             ),
             max_context_messages=self.config.text_max_context_messages,
             tool_gateway=self.tool_gateway,

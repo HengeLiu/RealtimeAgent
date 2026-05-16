@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> None:
         checks.append(_skipped("recent_playback", "disabled by dev_checks.require_recent_playback_ok"))
     checks.append(_provider_key_check(loaded))
     checks.append(_provider_runtime_profile_check(loaded))
+    checks.append(_text_multimodal_config_check(loaded))
     checks.append(_mcp_config_check(loaded))
     checks.append(_memory_skill_config_check(loaded))
     checks.append(_endpoint_config_check(loaded))
@@ -105,6 +106,7 @@ def live_check(argv: list[str] | None = None) -> None:
         _recent_playback_observation(loaded),
         _provider_key_check(loaded),
         _provider_runtime_profile_check(loaded),
+        _text_multimodal_config_check(loaded),
         _mcp_config_check(loaded),
         _memory_skill_config_check(loaded),
         _reference_endpoint_config_consistency_check(Path(args.generated_dir), loaded),
@@ -297,6 +299,39 @@ def _provider_runtime_profile_check(config: AudioChatYamlConfig) -> dict:
         "allow_mock_fallback": text.allow_mock_fallback,
         "missing_env": key_check["missing_env"],
         "errors": [] if profile != "blocked_missing_provider_key" else key_check["errors"],
+    }
+
+
+def _text_multimodal_config_check(config: AudioChatYamlConfig) -> dict:
+    """检查 Text 多模态配置是否与 provider/model 基本匹配。
+
+    主要逻辑：多模态启用时要求 Text provider 是 Chat Completions 兼容形态，并使用
+    已知支持视觉 content block 的模型命名。这里只做静态预检，不发真实模型请求。
+    """
+
+    text = config.agent.text
+    multimodal = text.multimodal
+    if not multimodal.enabled:
+        return {"name": "text_multimodal", "ok": True, "enabled": False}
+    errors: list[str] = []
+    warnings: list[str] = []
+    if text.provider not in {"dashscope-compatible", "openai-compatible"}:
+        errors.append(f"text multimodal requires chat-compatible provider, got {text.provider}")
+    model_name = str(text.model or "").lower()
+    if "qwen3" not in model_name and "vl" not in model_name and "vision" not in model_name:
+        warnings.append(f"text multimodal model name does not look vision-capable: {text.model}")
+    if not multimodal.attach_tool_result_assets:
+        warnings.append("agent.text.multimodal.enabled is true but attach_tool_result_assets is false")
+    return {
+        "name": "text_multimodal",
+        "ok": not errors,
+        "enabled": True,
+        "provider": text.provider,
+        "model": text.model,
+        "attach_tool_result_assets": multimodal.attach_tool_result_assets,
+        "video_enabled": multimodal.video.enabled,
+        "warnings": warnings,
+        "errors": errors,
     }
 
 

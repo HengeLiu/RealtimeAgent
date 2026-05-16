@@ -106,6 +106,40 @@ class AgentTextConfig:
     allow_mock_fallback: bool = True
     request_timeout_seconds: float = 5.0
     max_retries: int = 1
+    multimodal: "AgentTextMultimodalConfig" = field(default_factory=lambda: AgentTextMultimodalConfig())
+
+
+@dataclass(frozen=True)
+class AgentTextMultimodalVideoConfig:
+    """Text 多模态视频配置。
+
+    主要功能：描述 Text provider 是否接收原生 video block，以及视频过大时的
+    抽帧策略参数。
+    """
+
+    enabled: bool = False
+    prefer_native_video: bool = True
+    max_inline_bytes: int = 50_000_000
+    max_duration_seconds: float = 120.0
+    sample_fps: float = 1.0
+    max_frames: int = 16
+    frame_jpeg_quality: int = 85
+
+
+@dataclass(frozen=True)
+class AgentTextMultimodalConfig:
+    """Text 多模态 message 配置。
+
+    主要功能：控制工具返回图片 / 视频资产后，是否把资产拼入下一次 Text 模型请求。
+    """
+
+    enabled: bool = False
+    attach_tool_result_assets: bool = False
+    max_images_per_turn: int = 4
+    image_freshness_seconds: float = 2.0
+    max_image_base64_bytes: int = 7_500_000
+    max_capture_photo_calls_per_turn: int = 1
+    video: AgentTextMultimodalVideoConfig = field(default_factory=AgentTextMultimodalVideoConfig)
 
 
 @dataclass(frozen=True)
@@ -263,6 +297,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
     data = _apply_path_defaults(data)
     agent_data = dict(data.get("agent", {}))
     text = dict(agent_data.get("text", {}))
+    text_multimodal = _text_multimodal_config(text.pop("multimodal", {}))
     realtime = dict(agent_data.get("realtime", {}))
     agent_mode = str(agent_data.get("mode") or "").strip() or "realtime_audio"
     return AudioChatYamlConfig(
@@ -279,7 +314,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
             mode=agent_mode or "realtime_audio",
             custom_core=agent_data.get("custom_core", ""),
             realtime=AgentRealtimeConfig(**realtime),
-            text=AgentTextConfig(**text),
+            text=AgentTextConfig(**text, multimodal=text_multimodal),
         ),
         output=OutputConfig(**data.get("output", {})),
         tools=_tool_config(data.get("tools", {"enabled": True})),
@@ -310,6 +345,43 @@ def _memory_config(raw: dict[str, Any]) -> MemoryConfig:
         store_type=str(data.get("store_type") or "jsonl"),
         path=str(data.get("path") or "runs/default-app"),
         manager=manager,
+    )
+
+
+def _text_multimodal_config(raw: dict[str, Any]) -> AgentTextMultimodalConfig:
+    """解析 Text 多模态配置。
+
+    主要逻辑：只读取当前公开字段，忽略未知字段，避免实验配置影响启动。
+    """
+
+    data = dict(raw or {})
+    video = AgentTextMultimodalVideoConfig(
+        **_known(
+            data.get("video", {}),
+            {
+                "enabled",
+                "prefer_native_video",
+                "max_inline_bytes",
+                "max_duration_seconds",
+                "sample_fps",
+                "max_frames",
+                "frame_jpeg_quality",
+            },
+        )
+    )
+    return AgentTextMultimodalConfig(
+        **_known(
+            data,
+            {
+                "enabled",
+                "attach_tool_result_assets",
+                "max_images_per_turn",
+                "image_freshness_seconds",
+                "max_image_base64_bytes",
+                "max_capture_photo_calls_per_turn",
+            },
+        ),
+        video=video,
     )
 
 

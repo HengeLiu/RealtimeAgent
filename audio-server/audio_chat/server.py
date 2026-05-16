@@ -556,7 +556,9 @@ class AudioChatHttpServer:
         reported_errors: set[str] = set()
         suppressed_errors: dict[str, int] = {}
         received_count = 0
-        background_dispatches: set[asyncio.Task] = set()
+        dispatch_queues: dict[str, asyncio.Queue[object]] = {}
+        dispatch_workers: dict[str, asyncio.Task] = {}
+        stop_dispatch_worker = object()
 
         async def sender() -> None:
             while not ws.closed:
@@ -564,38 +566,103 @@ class AudioChatHttpServer:
                 await ws.send_bytes(queued.raw)
                 connection.mark_stream_payload_sent(queued.meta, sent_at=time.monotonic())
 
-        def finish_background_dispatch(task: asyncio.Task, *, dispatched_chunk) -> None:
-            """收口后台 final mic 分发任务。"""
+        async def report_stream_error(exc: Exception, *, chunk: Any | None) -> None:
+            """记录 stream chunk 处理错误，并尽量回送给端侧。
 
-            background_dispatches.discard(task)
-            try:
-                task.result()
-            except Exception as exc:  # noqa: BLE001 - 后台任务不能让异常丢失
-                log_error(
-                    self.logger,
-                    f"后台 Stream chunk 处理失败 {type(exc).__name__}: {exc}",
-                    LogContext(
-                        user_id=dispatched_chunk.user_id,
-                        session_id=dispatched_chunk.session_id,
-                        device_id=device_id,
-                        stream_id=dispatched_chunk.stream_id,
-                        event="stream.background_dispatch.failed",
-                    ),
-                )
-                error = self._error_event(
-                    exc,
-                    event=Event(
-                        event_name="stream.chunk.received",
-                        user_id=dispatched_chunk.user_id,
-                        producer_id=device_id,
-                        session_id=dispatched_chunk.session_id,
-                        stream_id=dispatched_chunk.stream_id,
-                        stream_type=dispatched_chunk.stream_type,
-                    ),
-                    raw="background final mic dispatch",
-                )
-                self.audio_app.recorder.record_event(error)
-                self.audio_app.recorder.record_system_event(error.to_dict())
+            主要逻辑：接收解码错误和后台分发错误共用同一套去重、终端日志和
+            system.error.raised 记录，避免并发分发后错误被后台任务吞掉。
+            参数：`exc` 是异常；`chunk` 是已解码的 stream chunk，解码失败时为 `None`。
+            返回值：无。
+            异常情况：WebSocket 已关闭时不再回写错误事件。
+            """
+
+            if chunk is not None:
+                user_id = chunk.user_id
+                session_id = chunk.session_id
+                stream_id = chunk.stream_id
+                stream_type = chunk.stream_type
+                seq = chunk.seq
+            else:
+                user_id = "unknown"
+                session_id = None
+                stream_id = None
+                stream_type = None
+                seq = None
+            dedupe_key = f"{device_id}:{stream_id}:{type(exc).__name__}:{str(exc)}"
+            if dedupe_key in reported_errors:
+                suppressed_errors[dedupe_key] = suppressed_errors.get(dedupe_key, 0) + 1
+                return
+            reported_errors.add(dedupe_key)
+            log_method = log_warning if isinstance(exc, StreamNotOpenError) else log_error
+            log_method(
+                self.logger,
+                f"Stream chunk 处理失败 {type(exc).__name__}: {exc}",
+                LogContext(
+                    user_id=user_id,
+                    session_id=session_id,
+                    device_id=device_id,
+                    stream_id=stream_id,
+                    fields={
+                        "stream_type": stream_type,
+                        "seq": seq,
+                        "note": "同类错误后续会被折叠到断开摘要" if isinstance(exc, StreamNotOpenError) else None,
+                    },
+                ),
+            )
+            error = Event(
+                event_name="system.error.raised",
+                user_id=user_id,
+                producer_id="server-main",
+                session_id=session_id,
+                stream_id=stream_id,
+                stream_type=stream_type,
+                payload={
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "transport": "stream_ws",
+                    "device_id": device_id,
+                    "seq": seq,
+                    "severity": "warning" if isinstance(exc, StreamNotOpenError) else "error",
+                },
+            )
+            self.audio_app.recorder.record_event(error)
+            self.audio_app.recorder.record_system_event(error.to_dict())
+            if not ws.closed:
+                await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
+
+        async def dispatch_worker(stream_id: str, queue: asyncio.Queue[object]) -> None:
+            """按单个 stream 顺序写入应用层，避免跨 stream 队头阻塞。
+
+            主要逻辑：同一 `stream_id` 内仍串行调用 `write_input_chunk`，保证音频、
+            图片等分片顺序；不同 `stream_id` 拥有独立 worker，因此麦克风 backlog
+            不会阻塞同一 WebSocket 上后续到达的 RGB 资产帧。
+            参数：`stream_id` 为数据流标识；`queue` 为该流待处理 chunk 队列。
+            返回值：无。
+            异常情况：单个 chunk 失败只记录错误，worker 继续消费后续 chunk。
+            """
+
+            while True:
+                item = await queue.get()
+                try:
+                    if item is stop_dispatch_worker:
+                        return
+                    chunk = item
+                    try:
+                        await asyncio.to_thread(self.audio_app.write_input_chunk, chunk)
+                    except Exception as exc:  # noqa: BLE001 - 后台分发必须记录所有异常
+                        await report_stream_error(exc, chunk=chunk)
+                finally:
+                    queue.task_done()
+
+        def enqueue_dispatch(chunk: Any) -> None:
+            """把已解码 chunk 放入对应 stream 的后台分发队列。"""
+
+            queue = dispatch_queues.get(chunk.stream_id)
+            if queue is None:
+                queue = asyncio.Queue()
+                dispatch_queues[chunk.stream_id] = queue
+                dispatch_workers[chunk.stream_id] = asyncio.create_task(dispatch_worker(chunk.stream_id, queue))
+            queue.put_nowait(chunk)
 
         sender_task = asyncio.create_task(sender())
         try:
@@ -608,69 +675,29 @@ class AudioChatHttpServer:
                     if chunk.session_id != device_id:
                         raise ValueError("stream chunk session_id must equal device_id")
                     received_count += 1
-                    # Stream Service / Agent Core 是同步入口；放到线程执行，避免接收侧处理
-                    # 大量 mic chunk 时饿住同一 aiohttp loop 上的控制/音频下行发送协程。
-                    # final mic chunk 会触发 ASR、LLM 和 Tool 调用，继续后台执行，避免 Text
-                    # 工具等待端侧资产时阻塞同一条 WebSocket 继续接收图片帧。
-                    if chunk.stream_type == "sensor.mic" and chunk.final:
-                        task = asyncio.create_task(asyncio.to_thread(self.audio_app.write_input_chunk, chunk))
-                        background_dispatches.add(task)
-                        task.add_done_callback(lambda item, dispatched_chunk=chunk: finish_background_dispatch(item, dispatched_chunk=dispatched_chunk))
-                    else:
-                        await asyncio.to_thread(self.audio_app.write_input_chunk, chunk)
+                    if chunk.stream_type != "sensor.mic":
+                        log_info(
+                            self.logger,
+                            "上行资产chunk已到达",
+                            LogContext(
+                                user_id=chunk.user_id,
+                                session_id=chunk.session_id,
+                                device_id=device_id,
+                                stream_id=chunk.stream_id,
+                                event="stream.input.asset_chunk.received",
+                                fields={
+                                    "stream_type": chunk.stream_type,
+                                    "seq": chunk.seq,
+                                    "payload_size": len(chunk.payload),
+                                    "final": chunk.final,
+                                    "request_id": chunk.metadata.get("request_id"),
+                                    "metadata_keys": sorted(chunk.metadata.keys()),
+                                },
+                            ),
+                        )
+                    enqueue_dispatch(chunk)
                 except Exception as exc:
-                    if chunk is not None:
-                        user_id = chunk.user_id
-                        session_id = chunk.session_id
-                        stream_id = chunk.stream_id
-                        stream_type = chunk.stream_type
-                        seq = chunk.seq
-                    else:
-                        user_id = "unknown"
-                        session_id = None
-                        stream_id = None
-                        stream_type = None
-                        seq = None
-                    dedupe_key = f"{device_id}:{stream_id}:{type(exc).__name__}:{str(exc)}"
-                    if dedupe_key in reported_errors:
-                        suppressed_errors[dedupe_key] = suppressed_errors.get(dedupe_key, 0) + 1
-                        continue
-                    reported_errors.add(dedupe_key)
-                    log_method = log_warning if isinstance(exc, StreamNotOpenError) else log_error
-                    log_method(
-                        self.logger,
-                        f"Stream chunk 处理失败 {type(exc).__name__}: {exc}",
-                        LogContext(
-                            user_id=user_id,
-                            session_id=session_id,
-                            device_id=device_id,
-                            stream_id=stream_id,
-                            fields={
-                                "stream_type": stream_type,
-                                "seq": seq,
-                                "note": "同类错误后续会被折叠到断开摘要" if isinstance(exc, StreamNotOpenError) else None,
-                            },
-                        ),
-                    )
-                    error = Event(
-                        event_name="system.error.raised",
-                        user_id=user_id,
-                        producer_id="server-main",
-                        session_id=session_id,
-                        stream_id=stream_id,
-                        stream_type=stream_type,
-                        payload={
-                            "message": str(exc),
-                            "error_type": type(exc).__name__,
-                            "transport": "stream_ws",
-                            "device_id": device_id,
-                            "seq": seq,
-                            "severity": "warning" if isinstance(exc, StreamNotOpenError) else "error",
-                        },
-                    )
-                    self.audio_app.recorder.record_event(error)
-                    self.audio_app.recorder.record_system_event(error.to_dict())
-                    await ws.send_str(json.dumps(error.to_dict(), ensure_ascii=False))
+                    await report_stream_error(exc, chunk=chunk)
         finally:
             for dedupe_key, count in suppressed_errors.items():
                 log_warning(
@@ -678,6 +705,27 @@ class AudioChatHttpServer:
                     "Stream chunk 重复错误已折叠",
                     LogContext(device_id=device_id, fields={"dedupe_key": dedupe_key, "suppressed_count": count}),
                 )
+            for queue in dispatch_queues.values():
+                queue.put_nowait(stop_dispatch_worker)
+            if dispatch_workers:
+                done, pending = await asyncio.wait(dispatch_workers.values(), timeout=5)
+                for task in done:
+                    try:
+                        task.result()
+                    except Exception as exc:  # noqa: BLE001 - worker 顶层异常需要落日志
+                        log_error(
+                            self.logger,
+                            f"Stream 分发 worker 异常退出 {type(exc).__name__}: {exc}",
+                            LogContext(device_id=device_id, event="stream.dispatch_worker.failed"),
+                        )
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    log_warning(
+                        self.logger,
+                        "Stream 分发 worker 关闭超时",
+                        LogContext(device_id=device_id, fields={"pending_worker_count": len(pending)}),
+                    )
             sender_task.cancel()
             log_info(self.logger, "Stream WebSocket 已断开", LogContext(device_id=device_id, fields={"received_chunks": received_count}))
         return ws
