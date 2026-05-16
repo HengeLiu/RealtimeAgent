@@ -237,6 +237,8 @@ class TextResponseGate:
         self.recorder = recorder
         self._buffer: list[str] = []
         self.emitted_text = False
+        self._buffered_event_recorded = False
+        self._realtime_release_event_recorded = False
 
     def buffer(self, text: str) -> None:
         """缓冲一段模型文本。
@@ -251,12 +253,15 @@ class TextResponseGate:
         if not text:
             return
         self._buffer.append(text)
-        self._record(
-            "text.response_gate.buffered",
-            delta_chars=len(text),
-            buffered_chars=sum(len(item) for item in self._buffer),
-            buffered_parts=len(self._buffer),
-        )
+        if not self._buffered_event_recorded:
+            self._buffered_event_recorded = True
+            self._record(
+                "text.response_gate.buffered",
+                delta_chars=len(text),
+                buffered_chars=sum(len(item) for item in self._buffer),
+                buffered_parts=len(self._buffer),
+                sampled=True,
+            )
 
     @property
     def has_buffered_text(self) -> bool:
@@ -302,13 +307,18 @@ class TextResponseGate:
                     output_ok = False
                 else:
                     self.emitted_text = True
-        if texts:
+        should_record = bool(texts)
+        if reason == "text_delta_realtime":
+            should_record = should_record and not self._realtime_release_event_recorded
+            self._realtime_release_event_recorded = True
+        if should_record:
             self._record(
                 "text.response_gate.released",
                 released_chars=sum(len(item) for item in texts),
                 released_parts=len(texts),
                 output_ok=output_ok,
                 reason=reason,
+                sampled=reason == "text_delta_realtime",
             )
         return texts, output_ok
 
@@ -675,9 +685,74 @@ class TextAgentCore:
                 },
             )
 
+        def process_tool_call(tool_call: dict[str, Any], *, emit_progress: bool) -> None:
+            if emit_progress:
+                self.tool_gateway.emit_progress_once(
+                    name=str(tool_call.get("name") or ""),
+                    user_id=user_id,
+                    session_id=session_id,
+                    output_service=self.output_service,
+                )
+            self._set_turn_state(user_id, session_id, "tool_running", reason=str(tool_call.get("name") or "tool_call"))
+            result = self._call_tool(
+                name=str(tool_call.get("name") or ""),
+                user_id=user_id,
+                session_id=session_id,
+                input_data=dict(tool_call.get("arguments") or {}),
+            )
+            self._set_turn_state(user_id, session_id, "thinking", reason="tool_result_returned")
+            result_dict = self._tool_result_to_dict(result)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "context.source.added",
+                    "source_id": f"tool_result:{tool_call.get('name') or ''}",
+                    "source_kind": "tool",
+                    "source_name": f"tool_result:{tool_call.get('name') or ''}",
+                    "included": True,
+                    "reason": "text_tool_loop_provider_message",
+                },
+            )
+            messages.append(_provider_tool_result_message(tool_call=tool_call, result=result_dict))
+            update = self.message_manager.append_tool_result_followup(
+                messages=messages,
+                tool_call=tool_call,
+                tool_result=result_dict,
+                user_id=user_id,
+                session_id=session_id,
+            )
+            messages.extend(update.messages)
+            dynamic_context_sources.extend(update.source_records)
+            for event in update.events:
+                self.recorder.record_agent_event(session_id, event)
+            self.control_service.append_message(
+                user_id,
+                {
+                    "session_id": session_id,
+                    "role": "tool",
+                    "tool_call_id": tool_call.get("id"),
+                    "name": tool_call.get("name"),
+                    "content": result_dict,
+                    "event": "tool.result",
+                },
+            )
+
         try:
             model_text_delta_count = 0
             model_text_chars = 0
+            forced_capture = self._fresh_visual_capture_tool_call(transcript=transcript, tools=tools)
+            if forced_capture is not None and self.tool_gateway is not None:
+                self._record_event(
+                    "tool_call.forced",
+                    user_id=user_id,
+                    session_id=session_id,
+                    tool_call_id=str(forced_capture.get("id") or ""),
+                    tool_name="capture_photo",
+                    reason="fresh_visual_input_required",
+                    transcript=transcript,
+                )
+                messages.append(_provider_tool_call_message([forced_capture]))
+                process_tool_call(forced_capture, emit_progress=True)
             for iteration in range(4):
                 record_current_model_request(reason=f"text_agent_turn_iteration_{iteration + 1}")
                 tool_calls: list[dict[str, Any]] = []
@@ -746,56 +821,7 @@ class TextAgentCore:
                 assistant_parts.extend(released_texts)
                 messages.append(_provider_tool_call_message(tool_calls))
                 for tool_call in tool_calls:
-                    if not gate.emitted_text:
-                        self.tool_gateway.emit_progress_once(
-                            name=str(tool_call.get("name") or ""),
-                            user_id=user_id,
-                            session_id=session_id,
-                            output_service=self.output_service,
-                        )
-                    self._set_turn_state(user_id, session_id, "tool_running", reason=str(tool_call.get("name") or "tool_call"))
-                    result = self._call_tool(
-                        name=str(tool_call.get("name") or ""),
-                        user_id=user_id,
-                        session_id=session_id,
-                        input_data=dict(tool_call.get("arguments") or {}),
-                    )
-                    self._set_turn_state(user_id, session_id, "thinking", reason="tool_result_returned")
-                    result_dict = self._tool_result_to_dict(result)
-                    self.recorder.record_agent_event(
-                        session_id,
-                        {
-                            "event": "context.source.added",
-                            "source_id": f"tool_result:{tool_call.get('name') or ''}",
-                            "source_kind": "tool",
-                            "source_name": f"tool_result:{tool_call.get('name') or ''}",
-                            "included": True,
-                            "reason": "text_tool_loop_provider_message",
-                        },
-                    )
-                    messages.append(_provider_tool_result_message(tool_call=tool_call, result=result_dict))
-                    update = self.message_manager.append_tool_result_followup(
-                        messages=messages,
-                        tool_call=tool_call,
-                        tool_result=result_dict,
-                        user_id=user_id,
-                        session_id=session_id,
-                    )
-                    messages.extend(update.messages)
-                    dynamic_context_sources.extend(update.source_records)
-                    for event in update.events:
-                        self.recorder.record_agent_event(session_id, event)
-                    self.control_service.append_message(
-                        user_id,
-                        {
-                            "session_id": session_id,
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id"),
-                            "name": tool_call.get("name"),
-                            "content": result_dict,
-                            "event": "tool.result",
-                        },
-                    )
+                    process_tool_call(tool_call, emit_progress=not gate.emitted_text)
         finally:
             if previous_prompt is not None:
                 setattr(self.text_model, "prompt", previous_prompt)
@@ -817,6 +843,68 @@ class TextAgentCore:
         if callable(stream_messages):
             return stream_messages(messages=messages, tools=tools)
         return self.text_model.stream_text(transcript)
+
+    def _fresh_visual_capture_tool_call(self, *, transcript: str, tools: list[dict]) -> dict[str, Any] | None:
+        """判断当前用户输入是否必须先获取新照片。
+
+        主要逻辑：端侧选择新图片后，只有服务端请求 `sensor.rgb` 时浏览器才会上
+        传这张图片。若用户本轮明确要求读图、看图、识别当前画面，而模型直接用
+        历史图片回答，就会复用上一张图。因此这里把“需要当前视觉输入”的语义
+        收敛成强制 `capture_photo` 工具调用，确保每个视觉 turn 都拿到新资产。
+        参数：`transcript` 是当前 ASR 文本；`tools` 是本轮暴露给模型的工具 schema。
+        返回值：需要强制抓拍时返回内部 tool_call 字典，否则返回 None。
+        异常情况：无。
+        """
+
+        if "capture_photo" not in self._tool_names(tools):
+            return None
+        text = transcript.strip()
+        if not text:
+            return None
+        visual_keywords = (
+            "图片",
+            "照片",
+            "图中",
+            "图里",
+            "画面",
+            "前面",
+            "眼前",
+            "看一下",
+            "看看",
+            "看到",
+            "识别",
+            "朗读",
+            "读一下",
+            "念一下",
+            "文字",
+            "内容",
+            "包装",
+            "标签",
+            "说明",
+            "屏幕",
+        )
+        if not any(keyword in text for keyword in visual_keywords):
+            return None
+        return {
+            "type": "tool_call",
+            "id": "forced_capture_photo_current_turn",
+            "name": "capture_photo",
+            "arguments": {"timeout_seconds": 15},
+        }
+
+    @staticmethod
+    def _tool_names(tools: list[dict]) -> set[str]:
+        """从 provider tool schema 中提取工具名。"""
+
+        names: set[str] = set()
+        for item in tools or []:
+            function = item.get("function") if isinstance(item, dict) else None
+            if isinstance(function, dict) and function.get("name"):
+                names.add(str(function.get("name")))
+                continue
+            if isinstance(item, dict) and item.get("name"):
+                names.add(str(item.get("name")))
+        return names
 
     def _build_runtime_messages(self, *, user_id: str, session_id: str, transcript: str) -> list[dict[str, Any]]:
         """构造发送给文本模型的运行时消息。
