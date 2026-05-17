@@ -76,6 +76,39 @@ class ToolCallingModel:
         """取消测试模型。"""
 
 
+class TextThenToolCallingModel:
+    """先输出一段自然语言，再发起工具调用的测试模型。"""
+
+    provider_name = "mock-text-then-tool"
+    model = "mock-text-then-tool-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """模拟模型先说“我先查一下”，再返回 function call。"""
+
+        self.calls += 1
+        if self.calls == 1:
+            yield "我先查一下。"
+            yield {
+                "type": "tool_call",
+                "id": "call-city-1",
+                "name": "city_lookup",
+                "arguments": {"city": "shanghai"},
+            }
+            return
+        yield "工具结果已回填。"
+
+    def stream_text(self, transcript: str):
+        """历史接口占位，当前测试不应调用。"""
+
+        yield "unused"
+
+    def cancel(self) -> None:
+        """取消测试模型。"""
+
+
 class CapturePhotoTool(BaseTool):
     """测试用抓拍 Tool。
 
@@ -183,9 +216,48 @@ def test_text_agent_tool_loop_is_safe_inside_running_event_loop(tmp_path) -> Non
     session_dir = tmp_path / "runs" / "user-tool" / "sess-async-tool"
     message_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
     trace_text = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
-    assert "tool.result" in message_text
+    assert "assistant_tool_call.done" in message_text
+    assert "tool_result.done" in message_text
     assert "工具结果已回填。" in message_text
     assert "city_lookup" in trace_text
+
+
+def test_text_agent_supports_text_delta_before_tool_call(tmp_path) -> None:
+    """测试目标：验证 Text 链路兼容“先说话，后 function call”的模型输出顺序。
+
+    测试方法：mock 模型第一轮先返回文本 delta，再返回 `city_lookup` tool_call；
+    工具结果回填后第二轮返回最终文本。
+    预期结果：先发出的文本会被保留，工具仍会真实执行，最终消息包含两段助手文本。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.tool_registry.register(CityTool())
+    app.agent_core.text_model = TextThenToolCallingModel()
+    user_id = "user-text-then-tool"
+    session_id = "sess-text-then-tool"
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-mic",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    message_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    trace_text = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
+    events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+
+    assert "我先查一下。工具结果已回填。" in message_text
+    assert "assistant_tool_call.done" in message_text
+    assert "tool_result.done" in message_text
+    assert "city_lookup" in trace_text
+    assert events_text.index("assistant_text.delta") < events_text.index("tool_call.delta")
 
 
 def test_text_agent_attaches_capture_photo_asset_to_followup_message(tmp_path) -> None:
@@ -267,6 +339,31 @@ def test_openai_compatible_stream_messages_aggregates_tool_call_delta() -> None:
     ]
 
 
+def test_openai_compatible_stream_messages_allows_text_before_tool_call() -> None:
+    """测试目标：验证 OpenAI-compatible provider 保留 tool call 前的文本 delta。
+
+    测试方法：假 stream 先返回 content，再返回 tool_calls argument delta。
+    预期结果：adapter 输出顺序为文本 delta 在前、统一 tool_call 在后。
+    """
+
+    adapter = OpenAICompatibleTextModelAdapter.__new__(OpenAICompatibleTextModelAdapter)
+    adapter.model = "fake-model"
+    adapter._cancelled = False
+    adapter._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_fake_text_then_tool_stream)))
+
+    items = list(adapter.stream_messages(messages=[{"role": "user", "content": "hi"}], tools=[{"type": "function"}]))
+
+    assert items == [
+        "我先查一下。",
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "city_lookup",
+            "arguments": {"city": "shanghai"},
+        },
+    ]
+
+
 def test_dashscope_compatible_text_model_disables_thinking() -> None:
     """测试目标：验证 DashScope 兼容 Text provider 显式关闭 thinking。
 
@@ -327,6 +424,29 @@ def _fake_chat_stream(**kwargs):
                             index=0,
                             id=None,
                             function=SimpleNamespace(name=None, arguments='"shanghai"}'),
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+
+
+def _fake_text_then_tool_stream(**kwargs):
+    """构造先 content 后 tool_call 的 OpenAI-compatible streaming chunk。"""
+
+    _ = kwargs
+    yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="我先查一下。", tool_calls=[]))])
+    yield SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(
+                    content=None,
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id="call-1",
+                            function=SimpleNamespace(name="city_lookup", arguments='{"city": "shanghai"}'),
                         )
                     ],
                 )

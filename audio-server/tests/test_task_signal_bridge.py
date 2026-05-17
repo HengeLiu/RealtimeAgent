@@ -79,6 +79,39 @@ def test_task_signal_bridge_records_agent_sync_artifacts_and_direct_notify(tmp_p
     assert connection.chunks
 
 
+def test_task_signal_bridge_can_write_agent_visible_message(tmp_path) -> None:
+    """测试目标：验证需要 Agent 决策的 TaskSignal 会回灌到消息历史。
+
+    测试方法：给 TaskSignalBridge 注入 ControlService，处理 requires_agent_decision 信号。
+    预期结果：messages.jsonl 中出现可被 Text 上下文加载的任务结果消息。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    bridge = TaskSignalBridge(
+        recorder=app.recorder,
+        output_service=app.output_service,
+        control_service=app.control_service,
+    )
+
+    bridge.handle_signal(
+        TaskSignal(
+            task_id="task-bridge",
+            task_type="navigation",
+            signal_name="navigation.checkpoint",
+            user_id="user-bridge",
+            session_id="sess-bridge",
+            payload={"text": "已到达路口"},
+            requires_agent_decision=True,
+            allow_direct_notify=False,
+        )
+    )
+
+    messages = (tmp_path / "runs" / "user-bridge" / "sess-bridge" / "messages.jsonl").read_text(encoding="utf-8")
+    assert "task_signal.result" in messages
+    assert "任务结果：已到达路口" in messages
+    assert "navigation.checkpoint" in messages
+
+
 def test_task_signal_bridge_direct_notify_uses_complete_text_tts(tmp_path) -> None:
     """测试目标：验证 Task 到点通知使用完整文本 TTS 后再打开输出流。
 

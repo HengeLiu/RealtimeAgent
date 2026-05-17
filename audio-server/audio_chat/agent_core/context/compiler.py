@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -318,6 +319,20 @@ def _resolve_prompt(registry: PromptRegistry, prompt_name: str) -> str:
 
 def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
     role = str(record.get("role") or "").strip()
+    if role == "assistant" and isinstance(record.get("tool_calls"), list):
+        tool_calls = [_normalize_tool_call(item) for item in record.get("tool_calls") or [] if isinstance(item, dict)]
+        tool_calls = [item for item in tool_calls if item is not None]
+        if tool_calls:
+            content = record.get("content") if isinstance(record.get("content"), str) else ""
+            return {"role": "assistant", "content": content, "tool_calls": tool_calls}
+    if role == "tool":
+        tool_call_id = str(record.get("tool_call_id") or "").strip()
+        if not tool_call_id:
+            return None
+        content = record.get("content")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
     if role not in {"user", "assistant"}:
         return None
     content = record.get("content")
@@ -325,6 +340,21 @@ def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
     if not text:
         return None
     return {"role": role, "content": text}
+
+
+def _normalize_tool_call(item: dict[str, Any]) -> dict[str, Any] | None:
+    call_id = str(item.get("id") or item.get("tool_call_id") or "").strip()
+    name = str(item.get("name") or "").strip()
+    arguments = item.get("arguments") or {}
+    function = item.get("function") if isinstance(item.get("function"), dict) else None
+    if function is not None:
+        name = str(function.get("name") or name).strip()
+        arguments = function.get("arguments", arguments)
+    if not call_id or not name:
+        return None
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments, ensure_ascii=False, default=str)
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
 def _tool_schema_name(schema: dict[str, Any]) -> str:

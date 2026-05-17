@@ -694,12 +694,14 @@ class TaskAutoDiscovery:
 class TaskSignalBridge:
     """TaskSignal 桥接层。
 
-    主要功能：Task 不直接写消息、不直接播放、不直接重入 Agent；信号统一通过本层回流。
+    主要功能：Task 不直接写消息、不直接播放、不直接重入 Agent；信号统一通过本层
+    记录，并在需要 Agent 决策时回灌为 Text 可见消息。
     """
 
-    def __init__(self, *, recorder: Any = None, output_service: Any = None) -> None:
+    def __init__(self, *, recorder: Any = None, output_service: Any = None, control_service: Any = None) -> None:
         self.recorder = recorder
         self.output_service = output_service
+        self.control_service = control_service
 
     def handle_signal(self, signal: TaskSignal) -> None:
         """处理任务信号。
@@ -736,6 +738,20 @@ class TaskSignalBridge:
                     "task_signal_name": signal.signal_name,
                 },
             )
+            if self.control_service is not None and signal.user_id and signal.session_id:
+                self.control_service.append_message(
+                    signal.user_id,
+                    {
+                        "session_id": signal.session_id,
+                        "role": "user",
+                        "content": _task_signal_message_content(signal),
+                        "event": "task_signal.result",
+                        "source": "task_signal_bridge",
+                        "task_id": signal.task_id,
+                        "task_type": signal.task_type,
+                        "task_signal_name": signal.signal_name,
+                    },
+                )
         if signal.allow_direct_notify and self.output_service and hasattr(self.output_service, "notify_task_signal"):
             try:
                 self.output_service.notify_task_signal(signal)
@@ -1689,6 +1705,33 @@ def _task_signal_to_dict(signal: TaskSignal) -> dict[str, Any]:
     data = asdict(signal)
     data["artifacts"] = [_ref_to_dict(item) for item in signal.artifacts]
     return data
+
+
+def _task_signal_message_content(signal: TaskSignal) -> str:
+    """把 TaskSignal 转成可回灌给 Text 模型的消息文本。
+
+    主要逻辑：保留 task_id、task_type、signal_name 和 payload。若 payload 内有
+    `text` 字段，先放在开头，便于模型优先读到任务结果摘要。
+    参数：`signal` 为任务信号。
+    返回值：一段中文前缀加 JSON 详情的文本。
+    异常情况：payload 无法序列化时退化为字符串。
+    """
+
+    payload = signal.payload if isinstance(signal.payload, dict) else {"value": signal.payload}
+    text = str(payload.get("text") or payload.get("message") or "").strip()
+    detail = {
+        "task_id": signal.task_id,
+        "task_type": signal.task_type,
+        "signal_name": signal.signal_name,
+        "payload": payload,
+    }
+    try:
+        detail_text = json.dumps(detail, ensure_ascii=False, default=str)
+    except TypeError:
+        detail_text = json.dumps({**detail, "payload": str(payload)}, ensure_ascii=False)
+    if text:
+        return f"任务结果：{text}\n{detail_text}"
+    return f"任务结果：{detail_text}"
 
 
 def _task_signal_from_dict(data: dict[str, Any]) -> TaskSignal:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,11 +22,21 @@ class FakeControl:
     """测试用 ControlService。"""
 
     def load_messages(self, *, user_id: str, session_id: str, limit: int) -> list[dict[str, Any]]:
-        """返回包含 tool 审计消息的历史。"""
+        """返回包含成对 tool_call/tool_result 的历史。"""
 
         return [
             {"role": "user", "content": "上一轮问题"},
-            {"role": "tool", "content": {"ok": True}},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call-weather-1", "name": "lookup_weather", "arguments": {"city": "上海"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-weather-1",
+                "name": "lookup_weather",
+                "content": {"ok": True, "data": {"weather": "晴"}},
+            },
             {"role": "assistant", "content": "上一轮回答"},
         ]
 
@@ -47,11 +58,11 @@ class FakeToolGateway:
         return list(self.schemas)
 
 
-def test_text_context_compiler_records_sources_and_excludes_tool_history() -> None:
+def test_text_context_compiler_records_sources_and_replays_tool_history() -> None:
     """测试目标：验证 text 上下文由 ContextCompiler 统一生成。
 
     测试方法：注入 fake memory、history 和工具 schema。
-    预期结果：instructions 包含记忆和摘要，messages 不包含孤立 tool history，source map 完整。
+    预期结果：instructions 包含记忆和摘要，messages 包含成对工具历史，source map 完整。
     """
 
     context = ContextCompiler().compile(
@@ -83,7 +94,11 @@ def test_text_context_compiler_records_sources_and_excludes_tool_history() -> No
     assert "系统提示" in context.instructions
     assert "喜欢简短回答" in context.instructions
     assert "当前对话状态" in context.instructions
-    assert [message["role"] for message in context.messages] == ["user", "assistant", "user"]
+    assert [message["role"] for message in context.messages] == ["user", "assistant", "tool", "assistant", "user"]
+    assert context.messages[1]["tool_calls"][0]["function"]["name"] == "lookup_weather"
+    assert context.messages[1]["tool_calls"][0]["function"]["arguments"] == '{"city": "上海"}'
+    assert context.messages[2]["tool_call_id"] == "call-weather-1"
+    assert json.loads(context.messages[2]["content"])["data"]["weather"] == "晴"
     assert context.messages[-1]["content"] == "当前问题"
     assert context.tools[0]["function"]["name"] == "lookup_weather"
     source_names = {source.source_name for source in context.context_sources}
@@ -134,3 +149,29 @@ def test_realtime_context_compiler_filters_inline_vision_tools() -> None:
     assert [tool["name"] for tool in context.tools] == ["task_runtime_manager"]
     assert context.modal_inputs[0]["type"] == "input_audio_stream"
     assert any(source.source_name == "realtime_tool_call_rules" for source in context.context_sources)
+
+
+def test_text_context_compiler_drops_orphan_tool_result_after_trimming() -> None:
+    """测试目标：验证上下文裁剪不会留下孤立 tool result。
+
+    测试方法：使用包含工具调用历史的 fake control，并把 max_context_messages 设为 3。
+    预期结果：被裁剪掉 assistant tool_call 后，配套 tool result 也不会进入 provider messages。
+    """
+
+    context = ContextCompiler().compile(
+        ContextCompileRequest(
+            mode="text",
+            provider="mock",
+            model="mock-text",
+            user_id="user-1",
+            session_id="dev-1",
+            base_instructions="系统提示",
+            current_input={"type": "text", "transcript": "当前问题"},
+            control_service=FakeControl(),
+            max_context_messages=3,
+        )
+    )
+
+    assert [message["role"] for message in context.messages] == ["assistant", "user"]
+    assert context.messages[0]["content"] == "上一轮回答"
+    assert context.messages[1]["content"] == "当前问题"

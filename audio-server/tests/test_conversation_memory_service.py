@@ -130,6 +130,13 @@ def test_conversation_memory_service_restores_active_messages_from_full_messages
         {"session_id": device_id, "role": "user", "content": "旧消息 1"},
         {"session_id": device_id, "role": "assistant", "content": ""},
         {"session_id": device_id, "role": "tool", "content": {"ok": True}},
+        {
+            "session_id": device_id,
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "name": "city_lookup", "arguments": {"city": "上海"}}],
+        },
+        {"session_id": device_id, "role": "tool", "tool_call_id": "call-1", "name": "city_lookup", "content": {"ok": True}},
         {"session_id": device_id, "role": "assistant", "content": "旧消息 2"},
     ]
     (device_dir / "messages.jsonl").write_text(
@@ -139,7 +146,10 @@ def test_conversation_memory_service_restores_active_messages_from_full_messages
 
     active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
 
-    assert [item["content"] for item in active] == ["旧消息 1", "旧消息 2"]
+    assert [item["role"] for item in active] == ["user", "assistant", "tool", "assistant"]
+    assert active[1]["tool_calls"][0]["name"] == "city_lookup"
+    assert active[2]["tool_call_id"] == "call-1"
+    assert active[3]["content"] == "旧消息 2"
     assert _read_jsonl(device_dir / "messages.jsonl") == legacy_records
     assert not (device_dir / "active-messages.jsonl").exists()
 
@@ -147,8 +157,8 @@ def test_conversation_memory_service_restores_active_messages_from_full_messages
 def test_conversation_memory_service_keeps_full_messages_and_visible_active_separate(tmp_path) -> None:
     """测试目标：验证完整审计消息和模型可见 active messages 分开维护。
 
-    测试方法：追加 user、空 assistant、tool 和 assistant 文本消息。
-    预期结果：messages 保存全部 4 条；内存 active 只保存 user 和非空 assistant 文本。
+    测试方法：追加 user、空 assistant、成对 tool_call/tool_result 和 assistant 文本消息。
+    预期结果：messages 保存全部消息；内存 active 保留可合法回灌的工具调用过程。
     """
 
     service = ConversationMemoryService(tmp_path / "runs")
@@ -156,16 +166,79 @@ def test_conversation_memory_service_keeps_full_messages_and_visible_active_sepa
     device_id = "dev-a"
     service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "user", "content": "你好"})
     service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "assistant", "content": ""})
-    service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "tool", "content": {"ok": True}})
+    service.append_message(
+        user_id=user_id,
+        device_id=device_id,
+        message={
+            "session_id": device_id,
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "name": "city_lookup", "arguments": {"city": "上海"}}],
+        },
+    )
+    service.append_message(
+        user_id=user_id,
+        device_id=device_id,
+        message={
+            "session_id": device_id,
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "city_lookup",
+            "content": {"ok": True},
+        },
+    )
     service.append_message(user_id=user_id, device_id=device_id, message={"session_id": device_id, "role": "assistant", "content": "你好"})
 
     device_dir = tmp_path / "runs" / user_id / device_id
     active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
     legacy = _read_jsonl(device_dir / "messages.jsonl")
-    assert [item["content"] for item in active] == ["你好", "你好"]
-    assert len(legacy) == 4
-    assert [item["role"] for item in legacy] == ["user", "assistant", "tool", "assistant"]
+    assert [item["role"] for item in active] == ["user", "assistant", "tool", "assistant"]
+    assert active[1]["tool_calls"][0]["name"] == "city_lookup"
+    assert active[2]["tool_call_id"] == "call-1"
+    assert len(legacy) == 5
+    assert [item["role"] for item in legacy] == ["user", "assistant", "assistant", "tool", "assistant"]
     assert not (device_dir / "active-messages.jsonl").exists()
+
+
+def test_conversation_memory_service_keeps_omni_tool_records_audit_only(tmp_path) -> None:
+    """测试目标：确认 Text 历史修复不会改变 Omni Realtime 工具审计语义。
+
+    测试方法：写入 `source=omni_realtime` 的 assistant tool_call 和 tool result。
+    预期结果：messages.jsonl 保存完整审计，但 active history 不把 Omni 工具过程回灌。
+    """
+
+    service = ConversationMemoryService(tmp_path / "runs")
+    user_id = "user-a"
+    device_id = "dev-a"
+    records = [
+        {"session_id": device_id, "role": "user", "content": "你好"},
+        {
+            "session_id": device_id,
+            "role": "assistant",
+            "content": "",
+            "source": "omni_realtime",
+            "tool_calls": [{"id": "call-omni", "name": "capture_photo", "arguments": {}}],
+        },
+        {
+            "session_id": device_id,
+            "role": "tool",
+            "source": "omni_realtime",
+            "tool_call_id": "call-omni",
+            "name": "capture_photo",
+            "content": {"ok": True},
+        },
+        {"session_id": device_id, "role": "assistant", "content": "已看完。"},
+    ]
+    for record in records:
+        service.append_message(user_id=user_id, device_id=device_id, message=record)
+
+    active = service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)
+    legacy = _read_jsonl(tmp_path / "runs" / user_id / device_id / "messages.jsonl")
+
+    assert [item["role"] for item in active] == ["user", "assistant"]
+    assert [item["content"] for item in active] == ["你好", "已看完。"]
+    assert len(legacy) == 4
+    assert any(item.get("source") == "omni_realtime" for item in legacy)
 
 
 def test_conversation_memory_service_compacts_full_message_backup_with_tool_records(tmp_path) -> None:
@@ -182,8 +255,23 @@ def test_conversation_memory_service_compacts_full_message_backup_with_tool_reco
     device_id = "dev-a"
     records = [
         {"session_id": device_id, "role": "user", "content": "用户 1", "created_at": 1_700_000_001},
-        {"session_id": device_id, "role": "assistant", "content": "", "event": "assistant_tool_call.done", "created_at": 1_700_000_002},
-        {"session_id": device_id, "role": "tool", "content": {"ok": True}, "event": "tool_result.done", "created_at": 1_700_000_003},
+        {
+            "session_id": device_id,
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "name": "city_lookup", "arguments": {"city": "上海"}}],
+            "event": "assistant_tool_call.done",
+            "created_at": 1_700_000_002,
+        },
+        {
+            "session_id": device_id,
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "city_lookup",
+            "content": {"ok": True},
+            "event": "tool_result.done",
+            "created_at": 1_700_000_003,
+        },
         {"session_id": device_id, "role": "assistant", "content": "助手 1", "created_at": 1_700_000_004},
         {"session_id": device_id, "role": "user", "content": "用户 2", "created_at": 1_700_000_005},
         {"session_id": device_id, "role": "assistant", "content": "助手 2", "created_at": 1_700_000_006},
@@ -202,4 +290,4 @@ def test_conversation_memory_service_compacts_full_message_backup_with_tool_reco
     assert [item["event"] for item in history if item.get("event")] == ["assistant_tool_call.done", "tool_result.done"]
     assert [item["content"] for item in active] == ["助手 2"]
     assert [item["content"] for item in messages] == ["助手 2"]
-    assert summarizer.calls[-1]["message_count"] == 3
+    assert summarizer.calls[-1]["message_count"] == 5

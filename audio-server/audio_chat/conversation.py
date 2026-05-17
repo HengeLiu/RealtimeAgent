@@ -147,6 +147,12 @@ def _messages_for_summary(messages: list[dict[str, Any]]) -> list[dict[str, str]
     result: list[dict[str, str]] = []
     for message in messages:
         role = str(message.get("role") or "").strip()
+        if role == "assistant" and message.get("tool_calls"):
+            result.append({"role": role, "content": _compact_tool_calls_for_summary(message.get("tool_calls"))})
+            continue
+        if role == "tool":
+            result.append({"role": role, "content": _compact_tool_result_for_summary(message)})
+            continue
         if role not in {"user", "assistant"}:
             continue
         content = _compact_text(message.get("content"), limit=1000)
@@ -430,14 +436,43 @@ def _normalize_record(record: dict[str, Any], *, user_id: str, device_id: str) -
 
 def _is_model_visible_record(record: dict[str, Any]) -> bool:
     role = str(record.get("role") or "").strip()
-    if role not in {"user", "assistant"}:
-        return False
-    content = record.get("content")
-    return isinstance(content, str) and bool(content.strip())
+    if role == "assistant":
+        if _is_omni_realtime_tool_record(record):
+            return False
+        if _record_tool_calls(record):
+            return True
+        content = record.get("content")
+        return isinstance(content, str) and bool(content.strip())
+    if role == "tool":
+        if _is_omni_realtime_tool_record(record):
+            return False
+        return bool(str(record.get("tool_call_id") or "").strip())
+    if role == "user":
+        content = record.get("content")
+        return isinstance(content, str) and bool(content.strip())
+    return False
 
 
 def _model_visible_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [record for record in records if _is_model_visible_record(record)]
+    visible: list[dict[str, Any]] = []
+    pending_tool_call_ids: set[str] = set()
+    for record in records:
+        role = str(record.get("role") or "").strip()
+        if _is_omni_realtime_tool_record(record):
+            continue
+        if role == "assistant" and _record_tool_calls(record):
+            visible.append(record)
+            pending_tool_call_ids.update(_record_tool_call_ids(record))
+            continue
+        if role == "tool":
+            tool_call_id = str(record.get("tool_call_id") or "").strip()
+            if tool_call_id and tool_call_id in pending_tool_call_ids:
+                visible.append(record)
+                pending_tool_call_ids.discard(tool_call_id)
+            continue
+        if role in {"user", "assistant"} and _is_model_visible_record(record):
+            visible.append(record)
+    return visible
 
 
 def _split_records_by_visible_count(
@@ -448,7 +483,7 @@ def _split_records_by_visible_count(
     """按模型可见消息数量切分完整消息记录。
 
     主要逻辑：`messages.jsonl` 中包含 tool 调用过程，不能简单按行数切分。这里按
-    user/assistant 非空文本的数量确定边界，同时保留边界前的完整工具过程。
+    模型可见消息的数量确定边界，同时保留边界前的完整工具过程。
     参数：`records` 为完整 active 备份，`visible_count` 为要归档的模型可见消息数。
     返回值：`(archived_full, kept_full)`。
     异常情况：visible_count 小于等于 0 时不归档。
@@ -497,6 +532,52 @@ def _compact_text(value: Any, *, limit: int) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit].rstrip()}..."
+
+
+def _record_tool_calls(record: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = record.get("tool_calls")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _record_tool_call_ids(record: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for item in _record_tool_calls(record):
+        raw_id = item.get("id") or item.get("tool_call_id")
+        if raw_id:
+            ids.add(str(raw_id))
+    return ids
+
+
+def _is_omni_realtime_tool_record(record: dict[str, Any]) -> bool:
+    source = str(record.get("source") or "").strip()
+    return source == "omni_realtime" and (bool(_record_tool_calls(record)) or str(record.get("role") or "") == "tool")
+
+
+def _compact_tool_calls_for_summary(value: Any) -> str:
+    if not isinstance(value, list):
+        return "调用工具：未知"
+    parts = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = str(item.get("name") or function.get("name") or "").strip()
+        arguments = item.get("arguments")
+        if arguments is None:
+            arguments = function.get("arguments")
+        arguments_text = json.dumps(arguments or {}, ensure_ascii=False, default=str)
+        parts.append(f"{name or '未知工具'}({_compact_text(arguments_text, limit=300)})")
+    return "调用工具：" + "；".join(parts) if parts else "调用工具：未知"
+
+
+def _compact_tool_result_for_summary(message: dict[str, Any]) -> str:
+    name = str(message.get("name") or "未知工具").strip()
+    content = message.get("content")
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False, default=str)
+    return f"工具结果 {name}：{_compact_text(content, limit=1000)}"
 
 
 def _safe_path_part(value: str) -> str:

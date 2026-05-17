@@ -400,7 +400,11 @@ class AudioChatApp:
         )
         self.task_engine = TaskEngine(
             store=_build_task_store(self.config),
-            bridge=TaskSignalBridge(recorder=self.recorder, output_service=self.output_service),
+            bridge=TaskSignalBridge(
+                recorder=self.recorder,
+                output_service=self.output_service,
+                control_service=self.control_service if self.config.agent_mode == "text" else None,
+            ),
             device_context_factory=lambda user_id: TaskDeviceFacade(
                 context=DeviceRuntime(user_id=user_id, app=self, allow_long_running=True)
             ),

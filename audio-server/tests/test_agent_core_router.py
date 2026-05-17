@@ -448,7 +448,8 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
     trace_text = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
     model_request = (session_dir / "model-request.json").read_text(encoding="utf-8")
 
-    assert "tool.result" in message_text
+    assert "assistant_tool_call.done" in message_text
+    assert "tool_result.done" in message_text
     assert "上海天气已查询。" in message_text
     assert "lookup_weather" in trace_text
     assert "你是中文语音助手" in model_request
@@ -825,6 +826,71 @@ def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -
     assert runtime_messages[-1]["role"] == "user"
     assert request["messages"][1]["content"] == "我刚才说我要去电梯口。"
     assert "历史已加载。" in (tmp_path / "runs" / user_id / device_id / "messages.jsonl").read_text(encoding="utf-8")
+
+
+def test_text_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path) -> None:
+    """测试目标：验证 Text 新一轮请求会把成对工具/任务结果回灌到 provider messages。
+
+    测试方法：预置 assistant tool_call 和 tool result 历史，再触发一轮文本输入。
+    预期结果：模型收到合法的 assistant.tool_calls + tool 消息，而不是只收到普通助手文本。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="text",
+            text_max_context_messages=10,
+        )
+    )
+    user_id = "user-tool-history"
+    device_id = "dev-tool-history"
+    messages_path = tmp_path / "runs" / user_id / device_id / "messages.jsonl"
+    messages_path.parent.mkdir(parents=True, exist_ok=True)
+    history = [
+        {"session_id": device_id, "role": "user", "content": "帮我看看红绿灯。"},
+        {
+            "session_id": device_id,
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-task-1",
+                    "name": "start_traffic_light_task",
+                    "arguments": {"question": "现在可以过马路了吗"},
+                }
+            ],
+        },
+        {
+            "session_id": device_id,
+            "role": "tool",
+            "tool_call_id": "call-task-1",
+            "name": "start_traffic_light_task",
+            "content": {"ok": True, "tasks": [{"task_id": "task-1", "state": "running"}]},
+        },
+        {"session_id": device_id, "role": "assistant", "content": "红绿灯任务已启动。"},
+    ]
+    messages_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in history) + "\n", encoding="utf-8")
+    model = CaptureHistoryTextModel()
+    app.agent_core.text_model = model
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=device_id,
+            stream_id="stream-tool-history",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    runtime_messages = model.messages[0]
+    assert [message["role"] for message in runtime_messages[:4]] == ["user", "assistant", "tool", "assistant"]
+    assert runtime_messages[1]["tool_calls"][0]["function"]["name"] == "start_traffic_light_task"
+    assert json.loads(runtime_messages[1]["tool_calls"][0]["function"]["arguments"]) == {"question": "现在可以过马路了吗"}
+    assert runtime_messages[2]["tool_call_id"] == "call-task-1"
+    assert json.loads(runtime_messages[2]["content"])["tasks"][0]["state"] == "running"
 
 
 def test_text_agent_injects_latest_message_summary_without_duplicate_history(tmp_path) -> None:
