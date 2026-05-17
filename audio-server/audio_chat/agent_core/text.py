@@ -532,16 +532,17 @@ class TextAgentCore:
                 final=False,
                 context="fallback_text",
             )
-        self._emit_output_best_effort(
-            user_id=chunk.user_id,
-            session_id=chunk.session_id,
-            stream_id=chunk.stream_id,
-            stream_type=chunk.stream_type,
-            text="",
-            final=True,
-            context="final_flush",
-        )
         interrupted_reason = self._interruption_reason_by_user.pop(chunk.user_id, None)
+        if interrupted_reason is None:
+            self._emit_output_best_effort(
+                user_id=chunk.user_id,
+                session_id=chunk.session_id,
+                stream_id=chunk.stream_id,
+                stream_type=chunk.stream_type,
+                text="",
+                final=True,
+                context="final_flush",
+            )
         self.control_service.append_message(
             chunk.user_id,
             {
@@ -1103,7 +1104,6 @@ class TextAgentCore:
         self._cancelled_users.add(user_id)
         self._interruption_reason_by_user[user_id] = reason
         session_id = self._session_by_user.get(user_id, "")
-        self.asr_pipeline.cancel()
         self.text_model.cancel()
         if session_id:
             self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)

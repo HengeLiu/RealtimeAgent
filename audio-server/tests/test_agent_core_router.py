@@ -309,6 +309,37 @@ class FailingOutputAdapter:
         raise RuntimeError("fallback output failed")
 
 
+class RecordingOutputAdapter:
+    """测试用输出适配器：记录 Text 链路写出的文本分片。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def emit_text_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
+        """记录输出参数，便于断言打断后不会继续 flush。"""
+
+        self.calls.append({"user_id": user_id, "session_id": session_id, "text": text, "final": final})
+
+
+class CancelRecordingAsrPipeline:
+    """测试用 ASR 代理：记录 Text 打断是否误取消正在收音的 ASR。"""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.cancelled = False
+
+    def append_audio(self, chunk: StreamChunk):
+        """转发音频分片到真实测试 ASR。"""
+
+        return self.inner.append_audio(chunk)
+
+    def cancel(self) -> None:
+        """记录取消调用，并继续转发给真实 ASR。"""
+
+        self.cancelled = True
+        self.inner.cancel()
+
+
 class StreamingFailCompleteSucceedTTS:
     """测试用 TTS：流式首包失败，但完整文本合成可用。"""
 
@@ -706,6 +737,8 @@ def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> No
     user_id = "user-text-interrupt"
     session_id = "sess-text-interrupt"
     app.agent_core.open(user_id, session_id)
+    app.agent_core.output_adapter = RecordingOutputAdapter()
+    app.agent_core.asr_pipeline = CancelRecordingAsrPipeline(app.agent_core.asr_pipeline)
     app.agent_core.text_model = InterruptingTextModel(
         on_after_first_delta=lambda: app.agent_core.interrupt(user_id, reason="unit_interrupt")
     )
@@ -732,6 +765,8 @@ def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> No
     assert "response.interrupted" in agent_events_text
     assert '"state": "interrupted"' in agent_events_text
     assert app.agent_core.text_model.cancelled
+    assert not app.agent_core.asr_pipeline.cancelled
+    assert {"user_id": user_id, "session_id": session_id, "text": "", "final": True} not in app.agent_core.output_adapter.calls
 
 
 def test_text_agent_asr_delta_cancels_active_output(tmp_path) -> None:

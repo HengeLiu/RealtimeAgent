@@ -2025,6 +2025,10 @@
         return;
       }
       if (chunk.stream_type !== "actuator.speaker") return;
+      if (outputClosed.has(chunk.stream_id)) {
+        log(`drop audio chunk for closed output stream_id=${chunk.stream_id} seq=${chunk.seq}`);
+        return;
+      }
       const durationMs = Math.round((chunk.payload.byteLength / 2) / (chunk.sample_rate || INPUT_RATE) * 1000);
       recordOutputChunk(chunk, durationMs);
       if (!outputStarted.has(chunk.stream_id)) {

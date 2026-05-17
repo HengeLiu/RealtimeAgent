@@ -86,6 +86,8 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "playback scheduled stream_id=" in html
     assert "audioContext.createGain()" in html
     assert "if (!outputStarted.has(chunk.stream_id))" in html
+    assert "if (outputClosed.has(chunk.stream_id))" in html
+    assert "drop audio chunk for closed output stream_id=" in html
     assert "stopAllOutputPlayback(\"barge_in_local\")" in html
     assert "stream.output.cancel.requested" in html
     assert "stream.output.failed" in html

@@ -305,6 +305,10 @@ def test_browser_device_defers_output_close_until_audio_arrives() -> None:
     assert "if (!request || !outputStarted.has(streamId)) return;" in close_body
     assert "if (!outputStarted.has(chunk.stream_id))" in stream_body
     assert "outputStarted.add(chunk.stream_id)" in stream_body
+    assert "if (outputClosed.has(chunk.stream_id))" in stream_body
+    assert stream_body.index("if (outputClosed.has(chunk.stream_id))") < stream_body.index(
+        "recordOutputChunk(chunk, durationMs)"
+    )
     assert "recordOutputChunk(chunk, durationMs)" in stream_body
     assert "summarizeOutputPlayback(streamId, \"drained\")" in close_body
     assert 'sendEvent(event("stream.output.finished"' in close_body
