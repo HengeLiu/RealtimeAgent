@@ -16,6 +16,33 @@ deprecated*
 *.mov
 *.avi
 
+.env
+# Android/Gradle generated artifacts
+.gradle/
+**/build/
+**/.gradle/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild
+.cxx
+android-sdk/
+
+# Android/Gradle generated artifacts
+.gradle/
+**/build/
+**/.gradle/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild
+.cxx
+
+# Android Phone app specific
+examples/android-phone/
+
 # Python generated artifacts
 **/__pycache__/
 **/*.py[cod]
