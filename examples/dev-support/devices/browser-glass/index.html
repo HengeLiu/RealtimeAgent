@@ -1243,8 +1243,13 @@
         sendEvent(event("stream.output.closed", {stream_type: "actuator.haptic", reason: "browser_device_haptic_logged"}, {
           session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
         }));
-      } else if (item.event_name === "stream.output.cancel.requested" || item.event_name === "stream.output.cancelled") {
-        stopOutputPlayback(item.stream_id, "server_cancelled");
+      } else if (
+        item.event_name === "stream.output.cancel.requested"
+        || item.event_name === "stream.output.cancelled"
+        || item.event_name === "stream.output.failed"
+      ) {
+        const reason = (item.payload && item.payload.reason) || "server_cancelled";
+        stopOutputPlayback(item.stream_id, reason);
       } else if (item.event_name === "control.audio_session.close.requested") {
         await stopMic();
         sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: currentDeviceId()}));

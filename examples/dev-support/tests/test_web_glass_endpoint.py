@@ -88,7 +88,8 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "if (!outputStarted.has(chunk.stream_id))" in html
     assert "stopAllOutputPlayback(\"barge_in_local\")" in html
     assert "stream.output.cancel.requested" in html
-    assert "stopOutputPlayback(item.stream_id, \"server_cancelled\")" in html
+    assert "stream.output.failed" in html
+    assert "stopOutputPlayback(item.stream_id, reason)" in html
     assert "control websocket open timeout" in html
     assert "control ws closed code=${evt.code}" in html
     assert "connect failed: ${err.message}" in html
