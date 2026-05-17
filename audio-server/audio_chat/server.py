@@ -13,6 +13,8 @@ from aiohttp import WSMsgType, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.app_loader import load_app_config, load_config_as_app
+from audio_chat.auth import setup_auth_routes
+from audio_chat.admin import setup_admin_routes
 from audio_chat.observability import (
     LogContext,
     configure_console_logging,
@@ -318,6 +320,10 @@ class AudioChatHttpServer:
         app.router.add_get("/api/debug/tasks", self.debug_tasks)
         app.router.add_get("/ws/control", self.control_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
+        
+        setup_auth_routes(app)
+        setup_admin_routes(app)
+        
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
         return app
@@ -446,6 +452,19 @@ class AudioChatHttpServer:
         返回值：WebSocket response。
         异常情况：JSON 或协议错误会向端侧发送 `system.error.raised` 后继续等待下一条。
         """
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            from audio_chat.auth.jwt_handler import verify_token
+            token_data = verify_token(token, token_type="access")
+            if token_data is None:
+                log_warning(self.logger, "控制 WebSocket Token 验证失败", LogContext(fields={"token": token[:20]}))
+                ws = web.WebSocketResponse()
+                await ws.prepare(request)
+                await ws.close(code=4001, message=b"Invalid token")
+                return ws
+            log_info(self.logger, "控制 WebSocket Token 验证成功", LogContext(fields={"user_id": token_data.user_id}))
+        
         ws = web.WebSocketResponse(heartbeat=15)
         await ws.prepare(request)
         peer = request.remote or "-"
@@ -545,6 +564,19 @@ class AudioChatHttpServer:
         返回值：WebSocket response。
         异常情况：未注册设备连接会返回 404。
         """
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            from audio_chat.auth.jwt_handler import verify_token
+            token_data = verify_token(token, token_type="access")
+            if token_data is None:
+                log_warning(self.logger, "Stream WebSocket Token 验证失败", LogContext(fields={"token": token[:20]}))
+                ws = web.WebSocketResponse()
+                await ws.prepare(request)
+                await ws.close(code=4001, message=b"Invalid token")
+                return ws
+            log_info(self.logger, "Stream WebSocket Token 验证成功", LogContext(fields={"user_id": token_data.user_id}))
+        
         device_id = request.query.get("device_id", "")
         connection = self.connections.get(device_id)
         if connection is None:

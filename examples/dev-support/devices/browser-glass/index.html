@@ -57,6 +57,8 @@
       <button id="wake" disabled>模拟唤醒</button>
       <button id="interrupt" class="secondary" disabled>模拟打断</button>
       <button id="close" class="secondary" disabled>结束连续对话</button>
+      <button id="testPeerVideo" class="secondary" disabled>测试直连</button>
+      <button id="stopPeerVideo" class="secondary" disabled>断开直连</button>
     </div>
 
     <div class="status">
@@ -170,7 +172,7 @@
     const DEFAULT_RECORD_RUNS_ROOT = "examples/for-blind-app/audio-server/runs";
     const DEFAULT_RECORD_OUT = "examples/dev-support/devices/python-playback-glass/cases/draft/recorded.yaml";
     const DEFAULT_DEVICE_ID = "dev-browser-glass-001";
-    const DEFAULT_USER_ID = "user-browser-glass-001";
+    const DEFAULT_USER_ID = "user-test-001";
     const DEFAULT_DEVICE_NAME = "浏览器调试设备";
     const DEVICE_SUPPORTS = {
       sensors: [
@@ -201,6 +203,8 @@
     const wakeButton = document.getElementById("wake");
     const interruptButton = document.getElementById("interrupt");
     const closeButton = document.getElementById("close");
+    const testPeerVideoButton = document.getElementById("testPeerVideo");
+    const stopPeerVideoButton = document.getElementById("stopPeerVideo");
     const startAudioButton = document.getElementById("startAudio");
     const stopAudioButton = document.getElementById("stopAudio");
     const chooseAudioSampleButton = document.getElementById("chooseAudioSample");
@@ -372,6 +376,8 @@
       wakeButton.disabled = !registered || dialogOpen;
       interruptButton.disabled = !dialogOpen;
       closeButton.disabled = !dialogOpen;
+      testPeerVideoButton.disabled = !registered;
+      stopPeerVideoButton.disabled = !peerVideoSender;
     }
 
     function updateAudioButtons() {
@@ -1382,6 +1388,7 @@
         stopSelectedVideoCapture();
         log(`peer.video.sender.stop reason=${reason}`);
         peerVideoSender = null;
+        renderStatus();
       }
       if (commandEvent && notify) {
         sendCommandEvent("command.completed", commandEvent, {
@@ -2124,6 +2131,48 @@
     interruptButton.onclick = () => {
       sendEvent(event("control.user.interrupt.detected", {reason: "browser_device_manual_interrupt"}, {session_id: currentDeviceId()}));
       stopAllOutputPlayback("manual_interrupt");
+    };
+    testPeerVideoButton.onclick = async () => {
+      try {
+        testPeerVideoButton.disabled = true;
+        log("开始测试眼镜手机直连...");
+        
+        const userId = document.getElementById("userId").value;
+        const serverUrl = document.getElementById("serverUrl").value;
+        
+        const response = await fetch(`${serverUrl}/api/test/peer-video`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            object_name: "测试物体",
+            timeout_seconds: 10
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          log(`直连测试已启动: ${JSON.stringify(result)}`);
+        } else {
+          log(`直连测试失败: ${response.status} ${response.statusText}`);
+        }
+      } catch (err) {
+        log(`直连测试错误: ${err.message}`);
+      } finally {
+        testPeerVideoButton.disabled = false;
+      }
+    };
+    stopPeerVideoButton.onclick = async () => {
+      try {
+        log("断开眼镜手机直连...");
+        await stopPeerVideoSender("manual_stop", null);
+        log("直连已断开");
+        renderStatus();
+      } catch (err) {
+        log(`断开直连错误: ${err.message}`);
+      }
     };
     startAudioButton.onclick = () => {
       openAudioInput().catch((err) => log(`start audio failed: ${err.message}`));
