@@ -1,8 +1,10 @@
 import json
+import threading
 
 import pytest
 
 from audio_chat.agent_core.base import AgentCoreEvent
+from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter
 from audio_chat.agent_core.router import AgentCoreRouter
 from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
@@ -338,6 +340,18 @@ class CancelRecordingAsrPipeline:
 
         self.cancelled = True
         self.inner.cancel()
+
+
+class CloseRecordingStream:
+    """测试用模型流对象：记录底层流是否被关闭。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        """记录 close 调用。"""
+
+        self.closed = True
 
 
 class StreamingFailCompleteSucceedTTS:
@@ -767,6 +781,25 @@ def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> No
     assert app.agent_core.text_model.cancelled
     assert not app.agent_core.asr_pipeline.cancelled
     assert {"user_id": user_id, "session_id": session_id, "text": "", "final": True} not in app.agent_core.output_adapter.calls
+
+
+def test_openai_compatible_text_model_cancel_closes_active_stream() -> None:
+    """测试目标：验证 Text provider 取消时会关闭底层流式连接。
+
+    测试方法：绕过网络构造 adapter，注入带 close 方法的 active stream 后调用 cancel。
+    预期结果：cancel 标记置位，底层 stream 的 close 被调用，避免打断后等待 provider 超时。
+    """
+
+    adapter = object.__new__(OpenAICompatibleTextModelAdapter)
+    adapter._cancelled = False
+    adapter._stream_lock = threading.RLock()
+    stream = CloseRecordingStream()
+    adapter._active_stream = stream
+
+    adapter.cancel()
+
+    assert adapter._cancelled
+    assert stream.closed
 
 
 def test_text_agent_asr_delta_cancels_active_output(tmp_path) -> None:

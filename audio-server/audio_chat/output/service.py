@@ -256,6 +256,9 @@ class StreamingTTS(Protocol):
     def finish(self) -> bytes:
         ...
 
+    def cancel(self) -> None:
+        ...
+
 
 class MockStreamingTTS:
     """本地调试用流式 TTS。
@@ -352,6 +355,9 @@ class MockStreamingTTS:
 
     def finish(self) -> bytes:
         return b""
+
+    def cancel(self) -> None:
+        return None
 
 
 class DashScopeStreamingTTS:
@@ -509,6 +515,28 @@ class DashScopeStreamingTTS:
             self._complete.wait(timeout=max(0.1, self.request_timeout_seconds))
         return self.drain_audio(wait_seconds=0.2)
 
+    def cancel(self) -> None:
+        """取消当前 TTS streaming task，不等待服务端 complete。
+
+        主要逻辑：用户打断时不能再调用 `streaming_complete()`，否则会把打断路径
+        阻塞在 provider 尾包等待上；这里优先调用 SDK 的 cancel/close 能力，并
+        唤醒所有等待者。
+        参数：无。
+        返回值：无。
+        异常情况：provider 已关闭或 SDK 不支持时静默忽略。
+        """
+
+        self._complete.set()
+        for method_name in ("streaming_cancel", "close"):
+            method = getattr(self._synthesizer, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                method()
+                return
+            except Exception:
+                continue
+
     def _normalize_sample_rate(self, pcm: bytes) -> bytes:
         if self._source_sample_rate_hz == self.sample_rate_hz:
             return pcm
@@ -616,15 +644,20 @@ class StreamingTtsOutputSource:
         """关闭当前 TTS provider 任务。
 
         主要逻辑：如果当前回答已经 final complete，则无需重复关闭；如果被打断或
-        会话关闭时仍有未完成文本，则尽力 complete，避免 provider 连接泄漏。
+        会话关闭时仍有未完成文本，则取消 provider streaming task，避免打断路径
+        继续等待尾包或把残留音频写回播放队列。
         参数：无。
-        返回值：provider close 阶段 drain 出来的尾部音频，调用方可选择丢弃。
+        返回值：已到达但尚未写出的音频；打断路径通常会丢弃它。
         异常情况：provider 状态异常时向上抛出，便于调用方记录。
         """
 
         if self._completed:
             return b""
-        return self.finish()
+        self._completed = True
+        cancel = getattr(self.tts, "cancel", None)
+        if callable(cancel):
+            cancel()
+        return self.drain_audio()
 
     def clone_pending_with(self, tts: StreamingTTS) -> "StreamingTtsOutputSource":
         """用新的 provider 复制当前尚未合成的文本。"""
@@ -1449,11 +1482,19 @@ class OutputRouter:
 
         threading.Thread(target=_run, name=f"tts-drain-{stream_id}", daemon=True).start()
 
-    def mark_endpoint_playback_finished(self, user_id: str, session_id: str | None, stream_id: str | None) -> None:
+    def mark_endpoint_playback_finished(
+        self,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        *,
+        reason: str = "endpoint_finished",
+    ) -> None:
         """处理端侧回报的播放完成事件。
 
         主要逻辑：当端侧发送 `stream.output.finished/closed` 时，释放 PlaybackArbiter
-        中可能残留的 active 输出，并在有排队输出时立即接续播放。
+        中可能残留的 active 输出，关闭服务端 output stream 阻止迟到分片继续下发，
+        并在有排队输出时立即接续播放。
         参数：`user_id` 为用户标识；`session_id` 为端侧会话；`stream_id` 为已完成的输出流。
         返回值：无。
         异常情况：`stream_id` 为空或不是当前 active 输出时忽略。
@@ -1461,6 +1502,11 @@ class OutputRouter:
 
         if not stream_id:
             return
+        endpoint_source = self._source_by_stream.get(stream_id)
+        try:
+            self.stream_service.close_stream(stream_id, reason=f"endpoint_{reason}")
+        except Exception:
+            pass
         next_output = self.arbiter.on_playback_finished(user_id, stream_id)
         for stored_session, stored_stream_id in list(self._stream_by_session.items()):
             if stored_stream_id == stream_id:
@@ -1468,6 +1514,11 @@ class OutputRouter:
                 self._native_source_by_session.pop(stored_session, None)
                 self._queued_sessions.discard(stored_session)
         self._source_by_stream.pop(stream_id, None)
+        if endpoint_source is not None:
+            try:
+                endpoint_source.close()
+            except Exception:
+                pass
         if next_output is not None:
             self._queued_sessions.discard(next_output.intent.session_id)
             self._play_queued_output(next_output)
@@ -1758,7 +1809,14 @@ class OutputService:
 
         self.router.add_finish_listener(listener)
 
-    def mark_endpoint_playback_finished(self, *, user_id: str, session_id: str | None, stream_id: str | None) -> None:
+    def mark_endpoint_playback_finished(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_finished",
+    ) -> None:
         """接收端侧播放完成回报。
 
         主要逻辑：把端侧 `stream.output.finished/closed` 转为 Output Router 的播放完成信号。
@@ -1767,7 +1825,7 @@ class OutputService:
         异常情况：无。
         """
 
-        self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id)
+        self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id, reason=reason)
 
     def close_text_session(self, session_id: str, *, reason: str = "audio_session_closed") -> None:
         """关闭文本链路连续对话级 TTS provider。"""

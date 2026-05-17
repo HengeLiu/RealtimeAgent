@@ -674,6 +674,7 @@ class AudioChatApp:
                 user_id=event.user_id,
                 session_id=event.session_id,
                 stream_id=event.stream_id,
+                reason=str(event.payload.get("reason") or event.event_name),
             )
             self._maybe_close_pending_audio_session(event.user_id, event.session_id)
             return

@@ -475,6 +475,8 @@ class OpenAICompatibleTextModelAdapter:
         self.endpoint = os.getenv(base_url_env) or "https://api.openai.com/v1"
         self.extra_body = dict(extra_body or {})
         self._cancelled = False
+        self._active_stream: Any | None = None
+        self._stream_lock = threading.RLock()
         self._client = OpenAI(
             api_key=api_key,
             base_url=os.getenv(base_url_env) or None,
@@ -515,29 +517,38 @@ class OpenAICompatibleTextModelAdapter:
         if extra_body:
             request_kwargs["extra_body"] = dict(extra_body)
         stream = self._client.chat.completions.create(**request_kwargs)
+        with self._stream_lock:
+            self._active_stream = stream
         pending_tool_calls: dict[int, dict[str, str]] = {}
-        for item in stream:
-            if self._cancelled:
-                return
-            choice = item.choices[0]
-            delta = choice.delta
-            text_delta = getattr(delta, "content", None) or ""
-            if text_delta:
-                yield text_delta
-            for tool_call in getattr(delta, "tool_calls", None) or []:
-                index = int(getattr(tool_call, "index", 0) or 0)
-                record = pending_tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                call_id = getattr(tool_call, "id", None)
-                if call_id:
-                    record["id"] = str(call_id)
-                function = getattr(tool_call, "function", None)
-                if function is not None:
-                    name = getattr(function, "name", None)
-                    arguments = getattr(function, "arguments", None)
-                    if name:
-                        record["name"] = str(name)
-                    if arguments:
-                        record["arguments"] += str(arguments)
+        try:
+            for item in stream:
+                if self._cancelled:
+                    return
+                choice = item.choices[0]
+                delta = choice.delta
+                text_delta = getattr(delta, "content", None) or ""
+                if text_delta:
+                    yield text_delta
+                for tool_call in getattr(delta, "tool_calls", None) or []:
+                    index = int(getattr(tool_call, "index", 0) or 0)
+                    record = pending_tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    call_id = getattr(tool_call, "id", None)
+                    if call_id:
+                        record["id"] = str(call_id)
+                    function = getattr(tool_call, "function", None)
+                    if function is not None:
+                        name = getattr(function, "name", None)
+                        arguments = getattr(function, "arguments", None)
+                        if name:
+                            record["name"] = str(name)
+                        if arguments:
+                            record["arguments"] += str(arguments)
+        finally:
+            with self._stream_lock:
+                if self._active_stream is stream:
+                    self._active_stream = None
+        if self._cancelled:
+            return
         for index in sorted(pending_tool_calls):
             record = pending_tool_calls[index]
             arguments_text = record.get("arguments", "")
@@ -554,6 +565,14 @@ class OpenAICompatibleTextModelAdapter:
 
     def cancel(self) -> None:
         self._cancelled = True
+        with self._stream_lock:
+            stream = self._active_stream
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def request_options_snapshot(self) -> dict[str, Any]:
         """返回当前 provider 请求选项快照。

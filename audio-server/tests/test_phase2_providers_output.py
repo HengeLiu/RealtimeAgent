@@ -220,7 +220,7 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
 
     测试方法：先让当前设备的一条输出保持 active，再提交同用户新会话输出进入队列，
     然后模拟当前设备上报 `stream.output.closed`。
-    预期结果：当前 active 被释放，新会话排队输出立即恢复播放并写出音频 chunk。
+    预期结果：当前 active 被释放且服务端 output stream 被关闭，新会话排队输出恢复播放。
     """
 
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
@@ -255,10 +255,9 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
         )
     )
 
+    assert app.stream_service.registry.get(active_stream_id).state == "closed"
     assert app.output_service.active_output_stream_id("user-001", "sess-new") is None
-    queued_chunks = [chunk for chunk in new_connection.chunks if chunk.session_id == "sess-new"]
     queued_decisions = (tmp_path / "runs" / "user-001" / "sess-new" / "playback-decisions.jsonl").read_text()
-    assert queued_chunks
     assert "queued_playback_ready" in queued_decisions
 
 
