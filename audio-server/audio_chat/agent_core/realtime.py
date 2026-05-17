@@ -1690,7 +1690,6 @@ class RealtimeAudioAgentCore:
 
         self.recorder.record_agent_event(session_id, record)
         self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
-        self._handle_provider_barge_in(user_id=user_id, session_id=session_id, record=record)
         self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
@@ -1713,35 +1712,6 @@ class RealtimeAudioAgentCore:
             state = "completed"
         if state:
             self._set_turn_state(user_id, session_id, state, reason=event, provider_event=event)
-
-    def _handle_provider_barge_in(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
-        """根据 provider 语音起点处理服务端侧打断。
-
-        主要逻辑：端侧本地 barge-in 依赖浏览器或硬件的能量门限，可能因为 AEC、
-        麦克风增益或播放状态估计不准而漏报。Realtime provider 已经持续接收
-        AEC 后麦克风流；当 provider 在当前输出仍活跃时上报新的
-        `speech_started`，说明用户大概率正在插话，此时直接复用统一 interrupt
-        链路取消当前模型响应和输出播放。
-        参数：`user_id`、`session_id` 定位会话；`record` 为 provider 原始事件。
-        返回值：无。
-        异常情况：无。
-        """
-
-        if str(record.get("event") or "") != "omni.input_audio_buffer.speech_started":
-            return
-        active_stream_id = self.output_service.active_output_stream_id(user_id, session_id)
-        if active_stream_id is None:
-            return
-        self.recorder.record_agent_event(
-            session_id,
-            {
-                "event": "realtime.provider_barge_in.detected",
-                "user_id": user_id,
-                "stream_id": active_stream_id,
-                "reason": "provider_speech_started_during_output",
-            },
-        )
-        self.interrupt(user_id, reason="provider_barge_in")
 
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 provider VAD 事件启动或停止视觉帧采样。

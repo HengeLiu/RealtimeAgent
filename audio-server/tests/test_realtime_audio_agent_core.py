@@ -134,18 +134,6 @@ class FakeRealtimeProvider:
         assert self.callbacks is not None
         self.callbacks.audio_done({"provider": "fake", "model": self.config.model})
 
-    def emit_provider_event(self, record: dict) -> None:
-        """模拟 provider 原始事件。
-
-        主要逻辑：测试 Realtime Core 对 provider VAD、状态和内部事件的处理。
-        参数：`record` 为 provider 原始事件字典。
-        返回值：无。
-        异常情况：callbacks 未初始化时断言失败。
-        """
-
-        assert self.callbacks is not None
-        self.callbacks.provider_event(record)
-
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """记录输入提交并模拟 provider 输出完成。"""
         self.emit_done()
@@ -415,41 +403,6 @@ def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
 
     assert instances[0].cancelled is True
     assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
-
-
-def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> None:
-    """测试目标：验证 provider 检测到用户插话时服务端会取消当前输出。
-
-    测试方法：fake provider 先输出一段正在播放的音频，再模拟
-    `omni.input_audio_buffer.speech_started`。
-    预期结果：fake cancel 被调用，端侧收到 output cancel 事件，旧回复不会继续播放。
-    """
-
-    instances: list[FakeRealtimeProvider] = []
-    app = _realtime_app(tmp_path, instances)
-    connection = Connection("dev-web")
-    register_speaker(app, connection)
-    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
-    app.write_input_chunk(
-        StreamChunk(
-            user_id="user-001",
-            session_id=handle.session_id,
-            stream_id=handle.stream_id,
-            stream_type="sensor.mic",
-            seq=0,
-            payload=b"\x00\x00" * 320,
-            final=False,
-        )
-    )
-
-    instances[0].emit_provider_event({"event": "omni.input_audio_buffer.speech_started", "provider": "fake"})
-
-    assert instances[0].cancelled is True
-    event_names = [event.event_name for event in connection.events]
-    assert "stream.output.cancel.requested" in event_names
-    assert "stream.output.cancelled" in event_names
-    model_events = (tmp_path / "runs" / "user-001" / handle.session_id / "model-events.jsonl").read_text()
-    assert "realtime.provider_barge_in.detected" in model_events
 
 
 def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> None:
