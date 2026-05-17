@@ -7,7 +7,9 @@ from audio_chat.agent_core.router import AgentCoreRouter
 from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
 from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import StreamChunk
+from audio_chat.output import AssistantTextDelta
+from audio_chat.output.service import OutputItem
+from audio_chat.protocol import Event, StreamChunk
 from audio_chat.tasks import BaseTask, TaskSignal
 from audio_chat.tools import BaseTool, ToolContext, ToolResult
 
@@ -730,6 +732,80 @@ def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> No
     assert "response.interrupted" in agent_events_text
     assert '"state": "interrupted"' in agent_events_text
     assert app.agent_core.text_model.cancelled
+
+
+def test_text_agent_asr_delta_cancels_active_output(tmp_path) -> None:
+    """测试目标：验证 Text 链路播放期间听到新语音会取消当前 TTS。
+
+    测试方法：先手动让 OutputService 打开一条未 final 的 speaker 输出，再向
+    TextAgentCore 送入一片非 final 麦克风音频，触发 mock ASR delta。
+    预期结果：端侧收到 output cancel 事件，runs 中记录 ASR 侧 barge-in。
+    """
+
+    class Connection:
+        """测试连接，保存下发到端侧的事件和音频。"""
+
+        def __init__(self, device_id: str) -> None:
+            self.device_id = device_id
+            self.events: list[Event] = []
+            self.chunks: list[StreamChunk] = []
+
+        def push_event(self, event: Event) -> None:
+            """记录控制事件。"""
+
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            """记录音频 chunk。"""
+
+            self.chunks.append(chunk)
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-text-barge-in"
+    session_id = "dev-text-barge-in"
+    connection = Connection(session_id)
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=user_id,
+            producer_id=session_id,
+            payload={
+                "device_id": session_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    app.agent_core.open(user_id, session_id)
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(
+            user_id=user_id,
+            session_id=session_id,
+            text="这是一段还在播放的回答。",
+            intent=OutputItem(user_id=user_id, session_id=session_id, priority="normal"),
+        )
+    )
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-text-barge-in",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"new speech",
+            final=False,
+        )
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert "stream.output.cancel.requested" in event_names
+    assert "stream.output.cancelled" in event_names
+    agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "text.asr_barge_in.detected" in agent_events_text
+    assert "response.cancelled" in agent_events_text
 
 
 def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:

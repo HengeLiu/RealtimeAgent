@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, Callable
 
 from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
@@ -157,9 +157,16 @@ def _provider_tool_result_message(*, tool_call: dict[str, Any], result: dict[str
 
 
 class AsrPipeline:
-    def __init__(self, *, config: AsrProviderConfig, recorder: RunRecorder) -> None:
+    def __init__(
+        self,
+        *,
+        config: AsrProviderConfig,
+        recorder: RunRecorder,
+        on_transcript_event: Callable[[StreamChunk, Any], None] | None = None,
+    ) -> None:
         self.config = config
         self.recorder = recorder
+        self.on_transcript_event = on_transcript_event
         self._providers: dict[str, AsrProviderAdapter] = {}
         self._lock = threading.RLock()
 
@@ -193,6 +200,8 @@ class AsrPipeline:
                         "stream_id": chunk.stream_id,
                     },
                 )
+                if self.on_transcript_event is not None:
+                    self.on_transcript_event(chunk, event)
                 if event.final:
                     self.recorder.record_timeline_checkpoint(
                         chunk.session_id,
@@ -419,7 +428,11 @@ class TextAgentCore:
         self.output_service = output_service
         self.output_adapter = TextOutputAdapter(output_service=output_service, recorder=recorder)
         self.recorder = recorder
-        self.asr_pipeline = AsrPipeline(config=asr_config or AsrProviderConfig(), recorder=recorder)
+        self.asr_pipeline = AsrPipeline(
+            config=asr_config or AsrProviderConfig(),
+            recorder=recorder,
+            on_transcript_event=self._handle_asr_transcript_event,
+        )
         self.text_model, downgrade_reason = build_text_model(text_model_config or TextModelProviderConfig())
         if downgrade_reason:
             self.recorder.record_system_event(
@@ -1055,6 +1068,36 @@ class TextAgentCore:
         """
 
         self._record_event("input.committed", user_id=user_id, session_id=session_id, reason=reason)
+
+    def _handle_asr_transcript_event(self, chunk: StreamChunk, event: Any) -> None:
+        """根据 ASR 中间文本处理 Text 链路打断。
+
+        主要逻辑：Text 链路不像 Omni provider 那样直接暴露 `speech_started` 事件；
+        对实时 ASR 来说，播放期间出现非 final transcript delta 就是最早可用的
+        插话信号。此处只在当前用户同一音频会话仍有活跃输出时取消旧回复，后续
+        ASR final 仍按正常新一轮用户输入进入模型。
+        参数：`chunk` 为触发 ASR 事件的麦克风分片；`event` 为 ASR transcript 事件。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if bool(getattr(event, "final", False)):
+            return
+        text = str(getattr(event, "text", "") or "").strip()
+        if not text:
+            return
+        active_stream_id = self.output_service.active_output_stream_id(chunk.user_id, chunk.session_id)
+        if active_stream_id is None:
+            return
+        self._record_event(
+            "text.asr_barge_in.detected",
+            user_id=chunk.user_id,
+            session_id=chunk.session_id,
+            stream_id=chunk.stream_id,
+            output_stream_id=active_stream_id,
+            text_preview=text[:40],
+        )
+        self.interrupt(chunk.user_id, reason="asr_barge_in")
 
     def interrupt(self, user_id: str, *, reason: str) -> None:
         self._cancelled_users.add(user_id)
