@@ -172,8 +172,9 @@ skill:
   allow_tool_policy: true
 
 mcp:
-  enabled: false
-  config_path: ""
+  enabled: true
+  # 路线规划使用远程 Amap MCP；URL 和 Bearer Token 从环境变量读取。
+  config_path: "examples/for-blind-app/audio-server/mcp.yaml"
   default_timeout_seconds: 30
 
 endpoint_defaults:

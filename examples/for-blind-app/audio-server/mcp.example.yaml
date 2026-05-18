@@ -1,0 +1,14 @@
+servers:
+  - name: amap
+    transport: streamable_http
+    # 摩搭社区部署后提供的远程 MCP Streamable HTTP 地址。
+    url: "${AMAP_MCP_URL}"
+    headers:
+      Authorization: "Bearer ${AMAP_MCP_BEARER_TOKEN}"
+
+tools:
+  - name: amap.route_plan
+    server: amap
+    # 高德官方 MCP 的步行规划工具名。应用层继续使用稳定的 amap.route_plan。
+    target_name: maps_direction_walking
+    description: "高德地图步行路线规划。参数包含 origin 和 destination。"

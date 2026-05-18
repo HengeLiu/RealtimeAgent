@@ -183,8 +183,8 @@ class ToolContext:
     """Tool 执行上下文。
 
     主要功能：由 SDK 注入用户、会话、设备、输出和资产上下文；Tool 不自行构造。
-    公开边界：普通业务 Tool 只能通过显式设备 API、输出 API 和资产 API 完成动作，
-    不直接暴露 tasks、memory、skills、mcp 等内部服务入口。
+    公开边界：普通业务 Tool 通过显式设备 API、输出 API、资产 API 和受控服务
+    门面完成动作；后台任务运行时仍只通过系统 Tool 暴露。
     """
 
     user_id: str
@@ -192,6 +192,9 @@ class ToolContext:
     devices: "ToolDeviceFacade"
     output: Any = None
     assets: Any = None
+    memory: Any = None
+    skills: Any = None
+    mcp: Any = None
     metadata: dict = None
 
     def __post_init__(self) -> None:
@@ -509,13 +512,11 @@ class ToolContextFactory:
         context_cls = SystemToolContext if tool_name in SYSTEM_CONTEXT_TOOL_NAMES else ToolContext
         internal_devices = DeviceRuntime(user_id=user_id, app=self.app, allow_long_running=False)
         kwargs = {}
+        kwargs.update({"memory": self.memory_service, "skills": self.skill_service, "mcp": self.mcp_gateway})
         if context_cls is SystemToolContext:
             kwargs.update(
                 {
                     "tasks": self.task_engine,
-                    "memory": self.memory_service,
-                    "skills": self.skill_service,
-                    "mcp": self.mcp_gateway,
                 }
             )
         return context_cls(

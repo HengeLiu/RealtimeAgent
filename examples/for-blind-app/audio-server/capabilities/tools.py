@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import os
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +18,7 @@ CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS = 15
 VISION_MODEL_DEFAULT = "qwen3.6-plus"
 VISION_BASE_URL_DEFAULT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 VISION_IMAGE_BASE64_MAX_BYTES = 7_500_000
+BOCHA_SEARCH_API_URL_DEFAULT = "https://api.bochaai.com/v1/web-search"
 
 
 class CapturePhotoInput(BaseModel):
@@ -359,7 +364,7 @@ class QueryRoutePlanOutput(BaseModel):
 class QueryRoutePlanTool(BaseTool):
     """路线规划查询 Tool。
 
-    主要功能：优先调用 MCP 路线规划工具；没有 MCP 时返回明确 fallback，不启动后台导航任务。
+    主要功能：调用配置好的 Amap MCP 路线规划工具；没有 MCP 时返回明确 fallback，不启动后台导航任务。
     """
 
     spec = ToolSpec(
@@ -373,14 +378,14 @@ class QueryRoutePlanTool(BaseTool):
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行路线规划查询。
 
-        主要逻辑：优先调用 `amap.route_plan` MCP mock；不可用时返回明确 fallback。
+        主要逻辑：调用 `amap.route_plan` MCP 工具；不可用时返回明确 fallback。
         参数：`input_data` 可包含 `destination`、`origin`。
         返回值：路线规划摘要。
         异常情况：MCP 未启用或失败时返回 fallback，不伪装真实地图成功。
         """
 
-        destination = input_data["destination"]
-        origin = input_data["origin"]
+        destination = str(input_data["destination"]).strip()
+        origin = str(input_data["origin"]).strip()
         mcp = getattr(context, "mcp", None)
         if mcp is None:
             return ToolResult.success(
@@ -398,7 +403,10 @@ class QueryRoutePlanTool(BaseTool):
                 data={"provider": "fallback", "destination": destination, "route_ready": False, "error": str(exc)},
                 message="路线规划进入 fallback",
             )
-        return ToolResult.success(data={"route_ready": True, "route": route}, message="路线已准备")
+        return ToolResult.success(
+            data={"route_ready": True, "provider": "amap_mcp", "destination": destination, "route": route},
+            message="路线已准备",
+        )
 
 
 class SearchWebInput(BaseModel):
@@ -406,6 +414,8 @@ class SearchWebInput(BaseModel):
 
     query: str = Field(default="盲人导航安全提示", description="要搜索的问题或关键词。")
     limit: int = Field(default=3, ge=1, le=10, description="最多返回的搜索结果数量。")
+    freshness: str = Field(default="noLimit", description="搜索时间范围，例如 noLimit、oneDay、oneWeek、oneMonth、oneYear。")
+    summary: bool = Field(default=True, description="是否让 Bocha 返回摘要内容。")
     timeout_seconds: float = Field(default=5, gt=0, description="等待搜索结果的超时时间，单位秒。")
 
 
@@ -421,7 +431,7 @@ class SearchWebOutput(BaseModel):
 
 
 class SearchWebTool(BaseTool):
-    """搜索 MCP wrapper Tool。"""
+    """联网搜索 Tool。"""
 
     spec = ToolSpec(
         name="search_web",
@@ -434,23 +444,27 @@ class SearchWebTool(BaseTool):
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """执行搜索。
 
-        主要逻辑：调用 `web.search` MCP mock；没有真实 key 时返回明确 fallback 来源。
+        主要逻辑：调用 Bocha Web Search API；没有 API Key 时返回明确 fallback 来源。
         参数：`input_data` 包含 `query`。
         返回值：搜索摘要和引用列表。
-        异常情况：MCP 不可用时返回 fallback 结果，不把大正文塞进控制事件。
+        异常情况：Bocha 未配置或调用失败时返回 fallback 结果，不把大正文塞进控制事件。
         """
 
-        query = input_data["query"]
-        mcp = getattr(context, "mcp", None)
-        if mcp is None:
+        query = str(input_data["query"]).strip()
+        api_key = os.getenv("BOCHA_SEARCH_API_KEY") or os.getenv("BOCHA_API_KEY")
+        if not api_key:
             return ToolResult.success(
                 data={"provider": "fallback", "fallback": True, "query": query, "items": []},
-                message="搜索服务未配置，暂时没有搜索结果",
+                message="搜索服务未配置 BOCHA_SEARCH_API_KEY，暂时没有搜索结果",
             )
         try:
-            result = mcp.call(
-                tool_name="web.search",
-                arguments={"query": query, "limit": int(input_data["limit"])},
+            search = await asyncio.to_thread(
+                _call_bocha_web_search,
+                api_key=api_key,
+                query=query,
+                count=int(input_data["limit"]),
+                freshness=str(input_data.get("freshness") or "noLimit"),
+                summary=bool(input_data.get("summary", True)),
                 timeout_seconds=float(input_data["timeout_seconds"]),
             )
         except Exception as exc:
@@ -458,4 +472,70 @@ class SearchWebTool(BaseTool):
                 data={"provider": "fallback", "fallback": True, "query": query, "error": str(exc), "items": []},
                 message="搜索服务暂时不可用",
             )
-        return ToolResult.success(data={"query": query, "search": result}, message="搜索完成")
+        return ToolResult.success(
+            data={"provider": "bocha", "fallback": False, "query": query, "items": search["items"], "search": search},
+            message="搜索完成",
+        )
+
+
+def _call_bocha_web_search(
+    *,
+    api_key: str,
+    query: str,
+    count: int,
+    freshness: str,
+    summary: bool,
+    timeout_seconds: float,
+) -> dict:
+    """调用 Bocha Web Search API 并归一化结果。
+
+    主要逻辑：向 `BOCHA_SEARCH_API_URL` 指定的接口发送 JSON 请求，默认使用
+    `https://api.bochaai.com/v1/web-search`；响应中只保留标题、链接、摘要、站点和发布时间。
+    参数：`api_key` 为 Bocha API Key，`query` 为搜索词，`count` 为返回条数。
+    返回值：包含 provider、raw 和 items 的结构化字典。
+    异常情况：HTTP 非 2xx、JSON 无法解析或响应结构异常时抛出 RuntimeError。
+    """
+
+    api_url = os.getenv("BOCHA_SEARCH_API_URL") or BOCHA_SEARCH_API_URL_DEFAULT
+    payload = {
+        "query": query,
+        "freshness": freshness,
+        "summary": summary,
+        "count": count,
+    }
+    request = urllib_request.Request(
+        api_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8")
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Bocha 搜索 HTTP {exc.code}: {detail}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Bocha 搜索网络失败：{exc.reason}") from exc
+    try:
+        raw = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Bocha 搜索返回非 JSON：{exc}") from exc
+    pages = (((raw.get("data") or {}).get("webPages") or {}).get("value") or [])
+    if not isinstance(pages, list):
+        raise RuntimeError("Bocha 搜索返回结构缺少 data.webPages.value[]")
+    items = [_normalize_bocha_page(page) for page in pages[:count] if isinstance(page, dict)]
+    return {"provider": "bocha", "api_url": api_url, "raw": raw, "items": items}
+
+
+def _normalize_bocha_page(page: dict) -> dict:
+    """把 Bocha 单条网页结果归一成模型和端侧更容易消费的结构。"""
+
+    return {
+        "title": str(page.get("name") or page.get("title") or "").strip(),
+        "url": str(page.get("url") or "").strip(),
+        "snippet": str(page.get("snippet") or "").strip(),
+        "summary": str(page.get("summary") or page.get("content") or "").strip(),
+        "site_name": str(page.get("siteName") or "").strip(),
+        "date_published": str(page.get("datePublished") or "").strip(),
+    }

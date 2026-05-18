@@ -23,8 +23,8 @@
 | 8 | `capture_photo` | App 能力，当前通过 `tools.denylist` 暂不暴露给模型 | 通过 `context.devices.sensors.rgb.one()` 抓拍当前画面，返回 AssetRef。 | 否 |
 | 9 | `interpret_image` | App 能力，当前通过 `tools.denylist` 暂不暴露给模型 | 解读指定图片资产。 | 否 |
 | 10 | `interpret_current_view` | App 能力，当前通过 `tools.denylist` 暂不暴露给模型 | 抓取当前画面并做图片解读编排。 | 否 |
-| 11 | `query_route_plan` | App 能力 | 调 MCP `amap.route_plan` mock/fallback 查询路线。 | 否 |
-| 12 | `search_web` | App 能力 | 调 MCP `web.search` mock/fallback 搜索资料。 | 否 |
+| 11 | `query_route_plan` | App 能力 | 调 Amap MCP `amap.route_plan` 查询路线；配置层可用 `target_name` 映射到远端真实工具名。未配置时返回明确 fallback。 | 否 |
+| 12 | `search_web` | App 能力 | 调 Bocha Web Search API 搜索资料；未配置 API Key 时返回明确 fallback。 | 否 |
 
 业务 Task 不再手写重复的启动 Tool；SDK 会按 TaskSpec 自动生成 `start_find_object_task`、`start_traffic_light_task`、`start_timer_task` 这类模型可见启动 Tool。
 

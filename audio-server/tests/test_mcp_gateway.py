@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 import yaml
@@ -92,3 +93,151 @@ def test_mcp_call_tool_is_exposed_and_uses_gateway(tmp_path) -> None:
 
     assert result.ok is True
     assert result.data["result"]["distance"] == 120
+
+
+def test_mcp_gateway_calls_streamable_http_tool(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 Gateway 可以通过 Streamable HTTP 调用外部 MCP tool。
+
+    测试方法：写入一个 streamable_http server，把本地 `amap.route_plan`
+    映射到远端 `maps_direction_walking`，monkeypatch HTTP 层模拟
+    initialize、initialized notification 和 tools/call。
+    预期结果：Gateway 返回外部 MCP 的 route result，HTTP 请求携带 Bearer
+    Token，并使用映射后的远端工具名。
+    """
+
+    config_path = tmp_path / "mcp.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "servers": [
+                    {
+                        "name": "amap",
+                        "transport": "streamable_http",
+                        "url": "${AMAP_MCP_URL}",
+                        "headers": {"Authorization": "Bearer ${AMAP_MCP_BEARER_TOKEN}"},
+                    }
+                ],
+                "tools": [{"name": "amap.route_plan", "server": "amap", "target_name": "maps_direction_walking"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    class FakeHeaders(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    class FakeResponse:
+        def __init__(self, body: dict, headers: dict | None = None) -> None:
+            self._body = body
+            self.headers = FakeHeaders(headers or {})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._body, ensure_ascii=False).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        calls.append({"payload": payload, "headers": dict(request.header_items()), "timeout": timeout})
+        if payload.get("method") == "initialize":
+            return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}}, {"Mcp-Session-Id": "session-1"})
+        if payload.get("method") == "notifications/initialized":
+            return FakeResponse({})
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {"content": [{"type": "text", "text": "路线已规划"}]},
+            }
+        )
+
+    monkeypatch.setenv("AMAP_MCP_URL", "https://mcp.example.com/mcp")
+    monkeypatch.setenv("AMAP_MCP_BEARER_TOKEN", "test-token")
+    monkeypatch.setattr("audio_chat.mcp.urllib_request.urlopen", fake_urlopen)
+    gateway = McpGateway(enabled=True, config_path=config_path)
+
+    result = gateway.call(tool_name="amap.route_plan", arguments={"origin": "家", "destination": "地铁站"}, timeout_seconds=3)
+
+    assert result["tool_name"] == "amap.route_plan"
+    assert result["target_name"] == "maps_direction_walking"
+    assert result["server"] == "amap"
+    assert result["arguments"]["destination"] == "地铁站"
+    assert result["result"]["content"][0]["text"] == "路线已规划"
+    assert [call["payload"]["method"] for call in calls] == ["initialize", "notifications/initialized", "tools/call"]
+    assert calls[0]["headers"]["Authorization"] == "Bearer test-token"
+    assert calls[1]["headers"]["Mcp-session-id"] == "session-1"
+    assert calls[2]["payload"]["params"]["name"] == "maps_direction_walking"
+
+
+def test_mcp_gateway_reports_empty_streamable_http_url(tmp_path, monkeypatch) -> None:
+    """测试目标：验证远程 MCP URL 未注入时返回可读错误。
+
+    测试方法：配置 `url: ${AMAP_MCP_URL}`，但不设置环境变量，直接调用工具。
+    预期结果：Gateway 抛出明确的 URL 缺失错误，而不是底层 urllib 的
+    `unknown url type`。
+    """
+
+    config_path = tmp_path / "mcp.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "servers": [{"name": "amap", "transport": "streamable_http", "url": "${AMAP_MCP_URL}"}],
+                "tools": [{"name": "amap.route_plan", "server": "amap", "target_name": "maps_direction_walking"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("AMAP_MCP_URL", raising=False)
+    gateway = McpGateway(enabled=True, config_path=config_path)
+
+    with pytest.raises(McpError, match="mcp server url is required"):
+        gateway.call(tool_name="amap.route_plan", arguments={"origin": "家", "destination": "地铁站"}, timeout_seconds=3)
+
+
+def test_mcp_gateway_loads_local_env_next_to_config(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 MCP 配置可以读取同目录本地 env 文件。
+
+    测试方法：不设置系统环境变量，把远程 URL 和 Bearer Token 写入
+    `mcp.local.env`，再加载包含 `${AMAP_MCP_URL}` 的配置。
+    预期结果：Gateway smoke 能看到有效 URL，headers 只暴露字段名不泄露密钥。
+    """
+
+    config_path = tmp_path / "mcp.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "servers": [
+                    {
+                        "name": "amap",
+                        "transport": "streamable_http",
+                        "url": "${AMAP_MCP_URL}",
+                        "headers": {"Authorization": "Bearer ${AMAP_MCP_BEARER_TOKEN}"},
+                    }
+                ],
+                "tools": [{"name": "amap.route_plan", "server": "amap"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.local.env").write_text(
+        "AMAP_MCP_URL=https://mcp.example.com/mcp\nAMAP_MCP_BEARER_TOKEN=local-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("AMAP_MCP_URL", raising=False)
+    monkeypatch.delenv("AMAP_MCP_BEARER_TOKEN", raising=False)
+
+    gateway = McpGateway(enabled=True, config_path=config_path)
+    smoke = gateway.smoke_external_servers()
+
+    assert smoke[0]["ok"] is True
+    assert smoke[0]["url"] == "https://mcp.example.com/mcp"
+    assert smoke[0]["headers"] == ["Authorization"]

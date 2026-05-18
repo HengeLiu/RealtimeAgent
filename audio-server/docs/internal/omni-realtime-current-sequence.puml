@@ -1,0 +1,272 @@
+@startuml
+title Omni Realtime 当前实现时序图（一）：会话建立与音频上行
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 12
+autonumber
+
+actor "用户" as User
+
+box "端侧：examples/dev-support/devices/browser-glass/index.html" #E8F2FF
+participant "Browser Glass\nhandleControlMessage()" as Browser
+participant "Control WS\n/ws/control" as ControlWS
+participant "Stream WS\n/ws/stream\n当前实现上下行复用" as StreamWS
+participant "麦克风采集\nopenMicStream()" as Mic
+participant "播放器\nscheduleAudioChunk()" as Player
+end box
+
+box "服务器：audio_chat" #FFF4E0
+participant "AudioChatHttpServer" as Server
+participant "AudioChatApp" as App
+participant "ControlService" as ControlService
+participant "StreamService" as StreamService
+participant "AudioPipeline" as AudioPipeline
+participant "RealtimeAudioAgentCore" as Core
+participant "ContextCompiler\nToolGateway" as Context
+participant "QwenOmniRealtimeAdapter" as Adapter
+participant "OutputService" as OutputService
+end box
+
+participant "DashScope\nOmniRealtimeConversation" as Omni
+
+User -> Browser: 端侧唤醒检测成功
+Browser -> ControlWS: control.user.wake.detected
+ControlWS -> Server: Event
+Server -> App: publish_control_event()
+App -> ControlService: publish(control.user.wake.detected)
+App -> ControlService: publish(control.audio_session.open.requested)
+ControlService -> ControlWS: 下发 control.audio_session.open.requested
+ControlWS -> Browser: control.audio_session.open.requested
+Browser -> ControlWS: control.audio_session.opened
+
+ControlWS -> Server: Event
+Server -> App: publish_control_event()
+App -> ControlService: publish(control.audio_session.opened)
+App -> App: _mark_audio_session_opened()
+App -> Core: open(user_id, session_id=device_id)
+Core -> Context: compile(mode=realtime_audio)
+Context --> Core: instructions + tools + messages
+Core -> Adapter: open(callbacks)
+Adapter -> Omni: connect()
+Adapter -> Omni: update_session(output audio/text,\ninput PCM16 16k,\noutput PCM16 24k,\nturn_detection,\nparaformer-realtime-v2,\ntools)
+Omni --> Adapter: session.updated
+Adapter --> Core: provider_event(omni.session.updated)
+Core -> Core: record_model_request()\nrecord session.opened\nstate=listening
+
+Browser -> StreamWS: 建立 /ws/stream
+StreamWS -> Server: WebSocket connected
+Server -> App: mark_stream_connection_opened(device_id)
+note right of App
+  当前实现只有 agent_mode=text 时
+  这里预热 Text TTS。
+  Omni Realtime 模式下直接返回。
+end note
+
+Browser -> Mic: openMicStream()
+Mic -> Browser: getUserMedia(echoCancellation/noiseSuppression/autoGainControl)
+Browser -> ControlWS: stream.input.opened(sensor.mic,\nstream_id=stream_in_x)
+ControlWS -> Server: Event
+Server -> App: publish_control_event()
+App -> StreamService: open input stream handle
+App -> ControlService: publish(stream.input.opened)
+
+loop 麦克风持续采集，每片 PCM 16k mono
+  Mic -> Browser: onaudioprocess()
+  Browser -> StreamWS: StreamChunk(sensor.mic, payload, final=false)
+  StreamWS -> Server: 二进制 chunk
+  Server -> App: dispatch(chunk)
+  App -> AudioPipeline: dispatch(sensor.mic)
+  AudioPipeline -> AudioPipeline: FormatValidator\nPcm16Resampler\nVolumeProbe/可选ServerVad
+  note right of AudioPipeline
+    Omni Realtime 默认依赖 provider turn detection。
+    如果配置不是 server VAD，AudioPipeline
+    不产生 speech_start/stop 边界。
+  end note
+  AudioPipeline -> Core: append_audio_event(normalized_chunk)
+  Core -> Core: 记录 audio stream\n缓存最近音频
+  Core -> Core: open(user_id, session_id)\n同 session 已存在则直接返回
+  Core -> Adapter: append_audio(chunk)
+  Adapter -> Omni: append_audio(base64 PCM)
+end
+
+alt 端侧发送 final chunk
+  Browser -> StreamWS: StreamChunk(sensor.mic, final=true)
+  StreamWS -> Server: 二进制 chunk
+  Server -> App: dispatch(chunk)
+  App -> AudioPipeline: dispatch(sensor.mic)
+  AudioPipeline -> Core: append_audio_event(final chunk)
+  Core -> Adapter: append_audio(final chunk)
+  Adapter -> Omni: append_audio(payload)
+  Adapter -> Adapter: commit_input(reason=final_chunk)
+  Adapter -> Omni: commit()/commit_input_audio()
+else 连续对话保持打开
+  note over Browser,Omni
+    当前实现中 sensor.mic 可以持续写入同一条 /ws/stream。
+    输入边界主要由 Omni provider 的 turn detection 决定。
+  end note
+end
+
+newpage
+title Omni Realtime 当前实现时序图（二）：provider事件、播放、打断、视觉采样和关闭
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 12
+autonumber
+
+actor "用户" as User
+
+box "端侧：examples/dev-support/devices/browser-glass/index.html" #E8F2FF
+participant "Browser Glass\nhandleControlMessage()" as Browser
+participant "Control WS\n/ws/control" as ControlWS
+participant "Stream WS\n/ws/stream\n当前实现上下行复用" as StreamWS
+participant "播放器\nscheduleAudioChunk()" as Player
+participant "摄像头/RGB\nhandleRgbConfigure()" as Camera
+end box
+
+box "服务器：audio_chat" #FFF4E0
+participant "AudioChatHttpServer" as Server
+participant "AudioChatApp" as App
+participant "ControlService" as ControlService
+participant "StreamService" as StreamService
+participant "RealtimeAudioAgentCore" as Core
+participant "QwenOmniRealtimeAdapter" as Adapter
+participant "RealtimeOutputAdapter" as OutputAdapter
+participant "OutputService" as OutputService
+participant "AssetService" as AssetService
+participant "ToolGateway" as ToolGateway
+end box
+
+participant "DashScope\nOmniRealtimeConversation" as Omni
+
+group provider 判断用户开始/停止说话
+  Omni --> Adapter: input_audio_buffer.speech_started
+  Adapter --> Core: provider_event(omni.input_audio_buffer.speech_started)
+  Core -> Core: _map_provider_turn_state(listening)
+  Core -> OutputService: active_output_stream_id()
+  alt 当前有正在输出的 speaker stream
+    Core -> Adapter: cancel(reason=provider_speech_started)
+    Adapter -> Omni: cancel_response()
+    Core -> OutputService: interrupt_user(reason=provider_speech_started)
+    OutputService -> StreamService: cancel output stream
+    StreamService -> ControlService: stream.output.cancel.requested/closed
+    ControlService -> ControlWS: 下发取消事件
+    ControlWS -> Browser: stream.output.cancel.requested 或 stream.output.closed
+    Browser -> Player: stopOutputPlayback()
+  else 当前没有正在输出的 speaker stream
+    Core -> Core: record realtime.provider_speech_started.no_active_output
+  end
+  Core -> Core: _start_visual_sampler()
+  note over Core,Browser
+    当前实现没有把 omni.input_audio_buffer.speech_started
+    显式转换为 audio.speech.started 下发给浏览器。
+    浏览器虽然有 audio.speech.started 分支，但 Omni 路径主要靠
+    stream.output.cancel.requested/closed 执行停止播放。
+  end note
+
+  Omni --> Adapter: input_audio_buffer.speech_stopped
+  Adapter --> Core: provider_event(omni.input_audio_buffer.speech_stopped)
+  Core -> Core: _map_provider_turn_state(thinking)
+  Core -> Core: _stop_visual_sampler()
+end
+
+opt 视觉采样启用 visual_frame_interval_seconds > 0
+  loop 每隔 visual_frame_interval_seconds
+    Core -> AssetService: request_asset(sensor.rgb,\ndevice_id=session_id)
+    AssetService -> ControlService: stream.control.open.requested(sensor.rgb)
+    ControlService -> ControlWS: 下发 RGB 单帧请求
+    ControlWS -> Browser: stream.control.open.requested(sensor.rgb)
+    Browser -> Camera: handleRgbConfigure()
+    Camera -> StreamWS: StreamChunk(sensor.rgb jpeg)
+    StreamWS -> Server: 二进制 chunk
+    Server -> App: dispatch(chunk)
+    App -> AssetService: store_chunk(sensor.rgb)
+    AssetService --> Core: Asset(uri=jpeg)
+    Core -> Adapter: append_image(jpeg)
+    Adapter -> Omni: append_video(base64 jpeg)
+  end
+end
+
+group provider 返回语音响应
+  Omni --> Adapter: response.created / output_item.added
+  Adapter --> Core: provider_event(...)
+  Omni --> Adapter: response.audio.delta(base64 PCM24k)
+  Adapter -> Adapter: base64 decode
+  Adapter --> Core: audio_delta(bytes, format=pcm16le/24k)
+  Core -> OutputAdapter: emit_audio_delta()
+  OutputAdapter -> OutputService: on_assistant_audio_delta(final=false)
+  OutputService -> StreamService: open/write actuator.speaker stream
+  StreamService -> ControlService: stream.output.open.requested
+  ControlService -> ControlWS: 下发 output open
+  ControlWS -> Browser: stream.output.open.requested
+  Browser -> StreamWS: ensureStreamSocketOpen()
+  StreamService -> StreamWS: StreamChunk(actuator.speaker)
+  StreamWS -> Browser: 二进制 speaker chunk
+  Browser -> Player: scheduleAudioChunk()
+
+  Omni --> Adapter: response.audio.done
+  Adapter --> Core: audio_done()
+  Core -> OutputAdapter: emit_audio_done()
+  OutputAdapter -> OutputService: on_assistant_audio_delta(final=true)
+  OutputService -> StreamService: close_stream(reason=assistant_audio.done)
+  StreamService -> ControlService: stream.output.finish.requested
+  ControlService -> ControlWS: 下发 output finish
+  ControlWS -> Browser: stream.output.finish.requested
+  Browser -> Player: closeOutputWhenDrained()
+  Player --> Browser: 播放队列排空
+  Browser -> ControlWS: stream.output.finished
+  ControlWS -> Server: Event
+  Server -> App: publish_control_event()
+  App -> OutputService: mark_endpoint_playback_finished()
+end
+
+group provider 转写和消息记录
+  Omni --> Adapter: conversation.item.input_audio_transcription.completed
+  Adapter --> Core: provider_event(transcript)
+  Core -> ControlService: append_message(role=user,\nsource=omni_realtime)
+  Omni --> Adapter: response.audio_transcript/text delta/done
+  Adapter --> Core: provider_event(text/transcript)
+  Core -> ControlService: append_message(role=assistant,\nsource=omni_realtime)
+end
+
+group 工具调用
+  Omni --> Adapter: response.function_call_arguments.done\n或 response.output_item.done(function_call)
+  Adapter --> Core: tool_call_done(call_id, name, arguments)
+  Core -> ToolGateway: call_tool()
+  ToolGateway --> Core: ToolResult
+  Core -> ControlService: append_message(assistant tool_call)\nappend_message(tool result)
+  Core --> Adapter: result dict
+  Adapter -> Omni: create_item(function_call_output)
+  alt 普通工具结果
+    Adapter -> Adapter: defer follow-up response
+    Omni --> Adapter: response.done
+    Adapter -> Omni: create_response()
+  else capture_photo 且有图片结果
+    Adapter -> Omni: append_video(image)
+    Adapter -> Omni: commit()
+  end
+end
+
+group 用户/服务器关闭连续对话
+  Browser -> ControlWS: control.user.dialog.close.requested
+  ControlWS -> Server: Event
+  Server -> App: publish_control_event()
+  App -> ControlService: control.audio_session.close.requested
+  ControlService -> ControlWS: 下发 close requested
+  ControlWS -> Browser: control.audio_session.close.requested
+  Browser -> Browser: stopMic()
+  Browser -> Player: waitPlaybackDrained()
+  Browser -> ControlWS: control.audio_session.closed
+  Browser -> StreamWS: closeStreamSocket()
+  ControlWS -> Server: Event
+  Server -> App: publish_control_event()
+  App -> App: _finalize_audio_session()
+  App -> Core: close(user_id, reason)
+  Core -> Core: _stop_visual_sampler()
+  Core -> Adapter: close(reason)
+  Adapter -> Omni: close()
+  Core -> OutputService: interrupt_user(reason)
+end
+
+@enduml
