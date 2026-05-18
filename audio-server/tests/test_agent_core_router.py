@@ -13,19 +13,28 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta
 from audio_chat.output.service import OutputItem
 from audio_chat.protocol import Event, StreamChunk
+from audio_chat.realtime_pipeline import (
+    PipelineEventEmitter,
+    RealtimeAudioNormalizer,
+    RealtimeOutputController,
+    TextInputBoundary,
+    TextRealtimePipeline,
+    TextResponseEngine,
+)
 from audio_chat.tasks import BaseTask, TaskSignal
 from audio_chat.tools import BaseTool, ToolContext, ToolResult
 
 
 def test_agent_mode_text_builds_text_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=text` 是当前可运行 Agent Core。
+    """测试目标：验证 `agent.mode=text` 构建 TextRealtimePipeline。
 
     测试方法：用 text 模式创建 AudioChatApp。
-    预期结果：app 正常初始化，并带有 `append_audio_event` 方法。
+    预期结果：app 正常初始化，外层是 TextRealtimePipeline，内部保留 TextAgentCore。
     """
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
 
-    assert isinstance(app.agent_core, TextAgentCore)
+    assert isinstance(app.agent_core, TextRealtimePipeline)
+    assert isinstance(app.agent_core.core, TextAgentCore)
     assert hasattr(app.agent_core, "append_audio_event")
 
 
@@ -44,11 +53,66 @@ def test_agent_mode_auto_defaults_to_text_for_now(tmp_path) -> None:
     """测试目标：验证 `agent.mode=auto` 当前保守落到文本链路。
 
     测试方法：用 auto 模式创建 AudioChatApp。
-    预期结果：返回 TextAgentCore；文档中声明后续再接端侧能力判断。
+    预期结果：返回 TextRealtimePipeline；文档中声明后续再接端侧能力判断。
     """
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="auto"))
 
-    assert isinstance(app.agent_core, TextAgentCore)
+    assert isinstance(app.agent_core, TextRealtimePipeline)
+    assert isinstance(app.agent_core.core, TextAgentCore)
+
+
+def test_text_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
+    """测试目标：验证 Text realtime 时序图中的核心组件都有真实代码对象。
+
+    测试方法：创建 text 模式应用，检查 pipeline 内部组件类型，并手动驱动
+    session/upstream/downstream 生命周期入口。
+    预期结果：组件不是概念占位，且生命周期入口会输出稳定的 pipeline 事件。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    pipeline = app.agent_core
+
+    assert isinstance(pipeline, TextRealtimePipeline)
+    assert isinstance(pipeline.core, TextAgentCore)
+    assert isinstance(pipeline.normalizer, RealtimeAudioNormalizer)
+    assert isinstance(pipeline.input_boundary, TextInputBoundary)
+    assert isinstance(pipeline.response_engine, TextResponseEngine)
+    assert isinstance(pipeline.output_controller, RealtimeOutputController)
+    assert isinstance(pipeline.emitter, PipelineEventEmitter)
+
+    pipeline.open("user-pipeline", "session-pipeline")
+    pipeline.on_audio_input_opened(
+        user_id="user-pipeline",
+        session_id="session-pipeline",
+        stream_id="stream-in-pipeline",
+    )
+    pipeline.on_downstream_opened(
+        user_id="user-pipeline",
+        session_id="session-pipeline",
+        stream_id="stream-out-pipeline",
+    )
+    pipeline.core.on_speech_started(
+        "user-pipeline",
+        "session-pipeline",
+        stream_id="stream-in-pipeline",
+        reason="paraformer_sentence_begin",
+        diagnostics={"sentence_id": 1},
+    )
+    pipeline.core.on_speech_stopped(
+        "user-pipeline",
+        "session-pipeline",
+        stream_id="stream-in-pipeline",
+        reason="paraformer_sentence_end",
+        diagnostics={"sentence_id": 1},
+    )
+
+    emitted_names = [event.event for event in pipeline.emitter.events()]
+    assert "response_engine_ready" in emitted_names
+    assert "session_ready" in emitted_names
+    assert "upstream_ready" in emitted_names
+    assert "downstream_ready" in emitted_names
+    assert "speech_started" in emitted_names
+    assert "speech_stopped" in emitted_names
 
 
 def test_agent_mode_custom_fails_fast(tmp_path) -> None:
@@ -1525,7 +1589,7 @@ def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> Non
     """测试目标：验证 TaskEngine 支持 create/query/cancel 和 TaskSignalBridge 回流 Agent。
 
     测试方法：注册 DemoTask 后创建任务，任务启动时发出 requires_agent_decision 事件。
-    预期结果：任务可查询和取消，runs 中写入 task signal 与 agent context sync 事件。
+    预期结果：任务进入 started 状态后可查询和取消，runs 中写入 task signal 与 agent context sync 事件。
     """
 
     import asyncio
@@ -1542,7 +1606,7 @@ def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> Non
         )
     )
 
-    assert app.task_engine.query(ref.task_id).state == "running"
+    assert app.task_engine.query(ref.task_id).state == "started"
     cancelled = asyncio.run(app.task_engine.cancel(ref.task_id, reason="test_done"))
     assert cancelled.state == "cancelled"
 

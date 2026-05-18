@@ -226,11 +226,15 @@ def test_task_engine_scheduled_event_flows_back_to_task() -> None:
         engine.create(task_type="scheduled_complete_task", user_id="user-due", session_id="sess-due")
     )
 
+    before_schedule = time.time()
     engine.schedule_signal(task_id=ref.task_id, signal_name="scheduled.done", delay_seconds=0.01)
     time.sleep(0.05)
 
     assert _wait_for_state(engine, ref.task_id, "finished").state == "finished"
-    signal_names = [signal.signal_name for signal in engine.store.signals_for_task(ref.task_id)]
+    signals = engine.store.signals_for_task(ref.task_id)
+    signal_names = [signal.signal_name for signal in signals]
     assert "task.signal.scheduled" in signal_names
     assert "scheduled.done" in signal_names
     assert "task.finished" in signal_names
+    due_signal = next(signal for signal in signals if signal.signal_name == "scheduled.done")
+    assert due_signal.created_at >= before_schedule + 0.005

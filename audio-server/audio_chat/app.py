@@ -104,6 +104,7 @@ class AudioChatConfig:
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
     asr_max_sentence_silence_ms: int = 800
+    asr_disfluency_removal_enabled: bool = True
     text_provider: str = "mock"
     text_model: str = "mock-text"
     text_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
@@ -248,6 +249,7 @@ class AudioChatConfig:
             asr_provider=text.asr_provider,
             asr_model=text.asr_model,
             asr_max_sentence_silence_ms=text.asr_max_sentence_silence_ms,
+            asr_disfluency_removal_enabled=text.asr_disfluency_removal_enabled,
             text_provider=text.provider,
             text_model=text.model,
             text_prompt=_with_memory_instructions(text.prompt, enabled=memory_enabled),
@@ -515,6 +517,7 @@ class AudioChatApp:
                 allow_mock_fallback=self.config.allow_mock_fallback,
                 realtime_timeout_seconds=self.config.provider_request_timeout_seconds,
                 max_sentence_silence_ms=self.config.asr_max_sentence_silence_ms,
+                disfluency_removal_enabled=self.config.asr_disfluency_removal_enabled,
                 max_retries=self.config.provider_max_retries,
             ),
             text_model_config=TextModelProviderConfig(
@@ -692,6 +695,16 @@ class AudioChatApp:
             )
             self._maybe_close_pending_audio_session(event.user_id, event.session_id)
             return
+        if event.event_name == "downstream.pause.requested":
+            self.control_service.publish(event)
+            if hasattr(self.agent_core, "pause_downstream"):
+                self.agent_core.pause_downstream(event.user_id, event.session_id or self._active_device_by_user.get(event.user_id, ""))
+            return
+        if event.event_name == "downstream.resume.requested":
+            self.control_service.publish(event)
+            if hasattr(self.agent_core, "resume_downstream"):
+                self.agent_core.resume_downstream(event.user_id, event.session_id or self._active_device_by_user.get(event.user_id, ""))
+            return
         self.control_service.publish(event)
 
     def dispatch(self, chunk: StreamChunk) -> None:
@@ -773,13 +786,26 @@ class AudioChatApp:
         """标记端侧 stream WebSocket 已建立。
 
         主要逻辑：当前协议的 `/ws/stream` 同时承载上行麦克风和下行扬声器数据。
-        端侧在连续对话开始时建立该长连接，因此这里按设备会话预热 Text TTS session，
-        让首个 assistant text delta 到达时可以直接进入已准备好的 provider。
+        端侧在连续对话开始时建立该长连接，因此这里把它通知给 realtime pipeline
+        的下行绑定入口；Text pipeline 会在内部预热 TTS session。
         """
 
         if not device_id:
             return
         if self.config.agent_mode != "text":
+            return
+        user_id = ""
+        for candidate_user_id, candidate_device_id in self._active_device_by_user.items():
+            if candidate_device_id == device_id:
+                user_id = candidate_user_id
+                break
+        if hasattr(self.agent_core, "on_downstream_opened"):
+            self.agent_core.on_downstream_opened(
+                user_id=user_id,
+                session_id=device_id,
+                stream_id=f"{device_id}:downstream",
+                stream_type="actuator.speaker",
+            )
             return
         self.output_service.prepare_text_session(device_id, reason="stream_ws_opened")
 
@@ -792,6 +818,8 @@ class AudioChatApp:
         state.close_mode = mode
         state.close_reason = reason
         state.state = "closing"
+        if hasattr(self.agent_core, "prepare_close"):
+            self.agent_core.prepare_close(user_id, device_id, reason=reason)
         if mode == "close_after_reply" and self.output_service.active_output_stream_id(user_id, device_id) is not None:
             self.recorder.record_event(
                 Event(

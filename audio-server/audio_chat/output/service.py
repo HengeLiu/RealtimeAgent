@@ -1170,7 +1170,46 @@ class OutputRouter:
         source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
     ) -> None:
         handle = self.stream_service.registry.get(stream_id)
+        if (
+            handle.state != "open"
+            or self._stream_by_session.get(session_id) != stream_id
+            or self._source_by_stream.get(stream_id) is not source
+        ):
+            try:
+                source.close()
+            except Exception:
+                pass
+            self._payload_by_stream.pop(stream_id, None)
+            self._source_by_stream.pop(stream_id, None)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.finish_ignored",
+                    "stream_id": stream_id,
+                    "stream_state": handle.state,
+                    "reason": "stream_no_longer_active",
+                },
+            )
+            return
         finish_payload = source.finish() or b""
+        if (
+            handle.state != "open"
+            or self._stream_by_session.get(session_id) != stream_id
+            or self._source_by_stream.get(stream_id) is not source
+        ):
+            self._payload_by_stream.pop(stream_id, None)
+            self._source_by_stream.pop(stream_id, None)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.finish_ignored",
+                    "stream_id": stream_id,
+                    "stream_state": handle.state,
+                    "reason": "stream_cancelled_during_tts_finish",
+                    "discarded_bytes": len(finish_payload),
+                },
+            )
+            return
         if finish_payload:
             self._write_tts_payload(
                 user_id=user_id,
@@ -1768,6 +1807,19 @@ class OutputRouter:
         if not text:
             return None
         mode = (generation_mode or self.tool_progress_audio_mode or "cached").strip().lower()
+        if mode in {"disabled", "off", "none"}:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool.progress_audio.skipped",
+                    "source": "tool_progress_audio",
+                    "tool_name": tool_name,
+                    "generation_mode": mode,
+                    "message": text,
+                    "reason": "tool_progress_audio_disabled",
+                },
+            )
+            return None
         cache_key = f"tool-progress:{tool_name}:{text}"
         intent = OutputItem(
             user_id=user_id,

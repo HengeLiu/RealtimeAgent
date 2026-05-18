@@ -6,6 +6,7 @@ from typing import Callable
 from audio_chat.agent_core.base import AgentCore
 from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
+from audio_chat.realtime_pipeline import RealtimeOutputController, TextRealtimePipeline
 
 
 @dataclass
@@ -55,11 +56,29 @@ class AgentCoreRouter:
 
         normalized = _normalize_mode(mode)
         if normalized == "text":
-            return TextAgentCore(**_text_kwargs(kwargs))
+            core = TextAgentCore(**_text_kwargs(kwargs))
+            output_service = kwargs.get("output_service")
+            recorder = kwargs.get("recorder")
+            if output_service is None or recorder is None:
+                return core
+            return TextRealtimePipeline(
+                core=core,
+                output_controller=RealtimeOutputController(output_service=output_service, recorder=recorder),
+                recorder=recorder,
+            )
         if normalized == "realtime_audio":
             return RealtimeAudioAgentCore(**kwargs)
         if normalized == "auto":
-            return TextAgentCore(**_text_kwargs(kwargs))
+            core = TextAgentCore(**_text_kwargs(kwargs))
+            output_service = kwargs.get("output_service")
+            recorder = kwargs.get("recorder")
+            if output_service is None or recorder is None:
+                return core
+            return TextRealtimePipeline(
+                core=core,
+                output_controller=RealtimeOutputController(output_service=output_service, recorder=recorder),
+                recorder=recorder,
+            )
         factory = self.factories.get(normalized)
         if factory is not None:
             return factory(**kwargs)

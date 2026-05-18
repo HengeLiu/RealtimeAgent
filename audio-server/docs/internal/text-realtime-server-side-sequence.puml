@@ -1,0 +1,196 @@
+@startuml
+title TextRealtimePipeline 内部时序（统一对比粒度）
+
+autonumber
+skinparam responseMessageBelowArrow true
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 12
+
+participant "AudioChatRealtimePipeline Caller\nAudioChatApp" as Caller
+
+box "TextRealtimePipeline / Text 实现" #FFF4E5
+participant "TextRealtimePipeline\n[差异] Pipeline实现" as Pipeline
+participant "RealtimeAudioNormalizer\n[共享] 格式适配/重采样" as Normalizer
+participant "TextAgentCore\n[差异] 对话语义/上下文/打断" as Core
+participant "TextInputBoundary\n[差异] Paraformer事件解释" as Boundary
+participant "TextResponseEngine\n[差异] 文本模型 + TTS" as Response
+participant "RealtimeOutputController\n[共享] 下行水位/输出状态" as Output
+participant "PipelineEventEmitter\n[共享] 统一事件输出" as Emitter
+end box
+
+box "Text Providers / Text 专属外部能力" #E8F2FF
+participant "Paraformer Realtime V2\nASR provider" as AsrProvider
+participant "Text Model Provider\n文本模型" as TextModel
+participant "Streaming TTS Provider\n语音合成" as TtsProvider
+end box
+
+== 1. 会话初始化 ==
+
+Caller -> Pipeline: open_session(user_id, session_id)
+Pipeline -> Core: open_session(user_id, session_id)
+Core -> Core: compile context\ninitialize message buffers\nstate=listening
+Core -> Boundary: prepare_session(config.asr)
+Core -> Response: prepare_session(context)
+Pipeline -> Emitter: emit(session_ready)
+Emitter --> Caller: PipelineEvent.session_ready
+
+== 2. 上下行连接绑定 ==
+
+Caller -> Pipeline: attach_upstream(stream_ref)
+Pipeline -> Core: attach_upstream(stream_ref)
+Core -> Boundary: attach_upstream(stream_ref)
+Boundary -> AsrProvider: connect and start task\nmax_sentence_silence=config
+AsrProvider --> Boundary: task started
+Boundary --> Core: upstream_ready
+Core --> Pipeline: upstream_ready
+Pipeline -> Emitter: emit(upstream_ready)
+Emitter --> Caller: PipelineEvent.upstream_ready
+
+Caller -> Pipeline: attach_downstream(stream_ref)
+Pipeline -> Core: attach_downstream(stream_ref)
+Core -> Response: attach_downstream(stream_ref)
+Response -> TtsProvider: prepare streaming session
+TtsProvider --> Response: tts ready
+Core -> Output: bind downstream stream_ref
+Output --> Core: downstream_ready
+Core --> Pipeline: downstream_ready
+Pipeline -> Emitter: emit(downstream_ready)
+Emitter --> Caller: PipelineEvent.downstream_ready
+
+== 3. 上行音频处理 ==
+
+loop audio_session 未关闭
+  Caller -> Pipeline: append_input_audio(chunk)
+  Pipeline -> Normalizer: process(chunk)
+  Normalizer --> Pipeline: normalized chunk
+  Pipeline -> Core: append_input_audio(normalized chunk)
+  Core -> Boundary: append_audio(normalized chunk)
+  Boundary -> AsrProvider: audio frame
+end
+
+== 4. 输入边界：用户开始说话 ==
+
+AsrProvider --> Boundary: sentence_begin
+Boundary --> Core: InputBoundaryEvent.speech_started
+Core -> Core: user_speaking=true
+Core --> Pipeline: PipelineEvent.speech_started
+Pipeline -> Emitter: emit(speech_started)
+Emitter --> Caller: PipelineEvent.speech_started
+
+alt assistant output is active
+  Core -> Core: append assistant partial message\ncontent=generated_text + "<用户打断>"
+  Core -> Core: mark current generation interrupted
+  Core -> Response: cancel_current_response(generation_id)
+  Core -> Output: cancel_active_output()
+  Output --> Core: output_cancel_requested
+  Core --> Pipeline: PipelineEvent.output_cancel_requested
+  Pipeline -> Emitter: emit(output_cancel_requested)
+  Emitter --> Caller: PipelineEvent.output_cancel_requested
+else no active output
+  Core -> Core: keep listening
+end
+
+note over Core,Response
+旧 generation 的 LLM/TTS 回调必须按 generation_id 丢弃。
+丢弃旧回调不能写 response.failed，也不能触发错误兜底音频。
+end note
+
+== 5. 输入边界：用户停止说话并形成用户消息 ==
+
+AsrProvider --> Boundary: partial transcript
+Boundary --> Core: InputBoundaryEvent.transcript_delta(text)
+Core -> Core: update transcript buffer
+
+AsrProvider --> Boundary: sentence_end + final transcript
+Boundary --> Core: InputBoundaryEvent.speech_stopped(text)
+Core -> Core: user_speaking=false\nappend user message(text)\nstate=thinking
+Core --> Pipeline: PipelineEvent.speech_stopped
+Pipeline -> Emitter: emit(speech_stopped)
+Emitter --> Caller: PipelineEvent.speech_stopped
+
+== 6. 回复生成：Text 模式差异点 ==
+
+Core -> Response: start_response(context + user message)
+Response -> TextModel: stream request
+
+loop text delta -> TTS audio chunk
+  TextModel --> Response: text delta
+  Response --> Core: ResponseEvent.text_delta(text)
+  Core -> Core: append assistant text buffer
+  Core -> Response: synthesize_text_delta(text)
+  Response -> TtsProvider: push text delta
+  TtsProvider --> Response: audio chunk
+  Response --> Core: ResponseEvent.audio_delta(bytes, format)
+  Core -> Output: enqueue_output_audio(bytes, format)
+  Output --> Core: output_audio_delta
+  Core --> Pipeline: PipelineEvent.output_audio_delta
+  Pipeline -> Emitter: emit(output_audio_delta)
+  Emitter --> Caller: PipelineEvent.output_audio_delta(bytes, format)
+end
+
+TextModel --> Response: done
+Response -> TtsProvider: flush()
+TtsProvider --> Response: remaining audio / done
+Response --> Core: ResponseEvent.output_finished
+Core -> Core: append assistant message(full content)\nstate=listening
+Core -> Output: finish_output()
+Output --> Core: output_finished
+Core --> Pipeline: PipelineEvent.output_finished
+Pipeline -> Emitter: emit(output_finished)
+Emitter --> Caller: PipelineEvent.output_finished
+
+== 7. 共享下行水位控制 ==
+
+Caller -> Pipeline: pause_downstream()
+Pipeline -> Output: pause()
+Output -> Core: downstream_paused=true
+
+Caller -> Pipeline: resume_downstream()
+Pipeline -> Output: resume()
+Output --> Core: buffered output_audio_delta
+Core --> Pipeline: PipelineEvent.output_audio_delta
+Pipeline -> Emitter: emit(output_audio_delta)
+Emitter --> Caller: PipelineEvent.output_audio_delta(bytes, format)
+
+== 8. 关闭连续对话 ==
+
+alt idle timeout
+  Core -> Core: idle timer reached
+  Core --> Pipeline: PipelineEvent.close_requested(reason=idle_timeout)
+else text model requests close
+  TextModel --> Response: tool_call(close_audio_session)
+  Response --> Core: ResponseEvent.close_tool_call(tool_call_id)
+  Core -> Core: append assistant tool_call message
+  Core -> Core: append tool result message
+  Core --> Pipeline: PipelineEvent.close_requested
+end
+Pipeline -> Emitter: emit(close_requested)
+Emitter --> Caller: PipelineEvent.close_requested
+
+Caller -> Pipeline: detach_upstream(reason)
+Pipeline -> Core: detach_upstream(reason)
+Core -> Boundary: close()
+Boundary -> AsrProvider: finish task / close
+
+Caller -> Pipeline: prepare_close(reason)
+Pipeline -> Core: prepare_close(reason)
+Core -> Output: stop_accepting_new_output()
+Core -> Response: finish_or_cancel()
+Response -> TtsProvider: drain or cancel
+Core -> Output: finish_or_cancel()
+Output --> Core: output_finished or output_cancel_requested
+Core --> Pipeline: PipelineEvent.output_finished\nor PipelineEvent.output_cancel_requested
+Pipeline -> Emitter: emit(output_finished/output_cancel_requested)
+Emitter --> Caller: PipelineEvent.output_finished\nor PipelineEvent.output_cancel_requested
+
+Caller -> Pipeline: close_session(reason)
+Pipeline -> Core: close_session(reason)
+Core -> Response: close()
+Response -> TtsProvider: close
+Core -> Core: clear state
+Core --> Pipeline: PipelineEvent.session_closed
+Pipeline -> Emitter: emit(session_closed)
+Emitter --> Caller: PipelineEvent.session_closed
+
+@enduml

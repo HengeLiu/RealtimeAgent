@@ -126,7 +126,7 @@ class AsrProviderConfig:
     max_sentence_silence_ms: int = 800
     semantic_punctuation_enabled: bool = False
     punctuation_prediction_enabled: bool = True
-    disfluency_removal_enabled: bool = False
+    disfluency_removal_enabled: bool = True
     inverse_text_normalization_enabled: bool = True
     heartbeat: bool = True
     max_retries: int = 1
@@ -221,7 +221,7 @@ class DashScopeAsrProviderAdapter:
         max_sentence_silence_ms: int = 800,
         semantic_punctuation_enabled: bool = False,
         punctuation_prediction_enabled: bool = True,
-        disfluency_removal_enabled: bool = False,
+        disfluency_removal_enabled: bool = True,
         inverse_text_normalization_enabled: bool = True,
         heartbeat: bool = True,
     ) -> None:
@@ -547,6 +547,8 @@ class OpenAICompatibleTextModelAdapter:
         if extra_body:
             request_kwargs["extra_body"] = dict(extra_body)
         stream = self._client.chat.completions.create(**request_kwargs)
+        if not hasattr(self, "_stream_lock"):
+            self._stream_lock = threading.RLock()
         with self._stream_lock:
             self._active_stream = stream
         pending_tool_calls: dict[int, dict[str, str]] = {}

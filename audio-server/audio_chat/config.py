@@ -110,6 +110,7 @@ class AgentTextConfig:
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
     asr_max_sentence_silence_ms: int = 800
+    asr_disfluency_removal_enabled: bool = True
     tts_provider: str = "mock"
     tts_model: str = "mock-tts"
     tts_voice: str = "mock"
@@ -536,6 +537,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "AUDIO_CHAT_ASR_PROVIDER": ("agent", "text", "asr_provider"),
         "AUDIO_CHAT_ASR_MODEL": ("agent", "text", "asr_model"),
         "AUDIO_CHAT_ASR_MAX_SENTENCE_SILENCE_MS": ("agent", "text", "asr_max_sentence_silence_ms"),
+        "AUDIO_CHAT_ASR_DISFLUENCY_REMOVAL_ENABLED": ("agent", "text", "asr_disfluency_removal_enabled"),
         "AUDIO_CHAT_TEXT_PROVIDER": ("agent", "text", "provider"),
         "AUDIO_CHAT_TEXT_MODEL": ("agent", "text", "model"),
         "AUDIO_CHAT_TEXT_PROMPT": ("agent", "text", "prompt"),

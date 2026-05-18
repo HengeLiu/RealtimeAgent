@@ -1330,17 +1330,7 @@ class TaskEngine:
         schedule_id = new_id("task_schedule")
         resolved_user_id = user_id if user_id is not None else str(ref.metadata.get("user_id") or "")
         resolved_session_id = session_id if session_id is not None else (str(ref.metadata.get("session_id") or "") or None)
-        signal = TaskSignal(
-            task_id=task_id,
-            task_type=ref.task_type,
-            signal_name=normalized_signal_name,
-            user_id=resolved_user_id,
-            session_id=resolved_session_id,
-            payload=dict(payload or {}),
-            priority=priority,
-            requires_agent_decision=requires_agent_decision,
-            allow_direct_notify=allow_direct_notify,
-        )
+        signal_payload = dict(payload or {})
         metadata = {
             "schedule_id": schedule_id,
             "task_id": task_id,
@@ -1356,6 +1346,17 @@ class TaskEngine:
             with self._schedule_lock:
                 self._scheduled_signals.pop(schedule_id, None)
                 self._schedule_metadata.pop(schedule_id, None)
+            signal = TaskSignal(
+                task_id=task_id,
+                task_type=ref.task_type,
+                signal_name=normalized_signal_name,
+                user_id=resolved_user_id,
+                session_id=resolved_session_id,
+                payload=dict(signal_payload),
+                priority=priority,
+                requires_agent_decision=requires_agent_decision,
+                allow_direct_notify=allow_direct_notify,
+            )
             asyncio.run(self.handle_signal(signal))
 
         timer = threading.Timer(delay, _fire)

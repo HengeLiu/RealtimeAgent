@@ -196,3 +196,33 @@ def test_progress_audio_realtime_generation_mode(tmp_path) -> None:
     model_events = _session_file(tmp_path, "sess-progress-realtime", "model-events.jsonl").read_text(encoding="utf-8")
     assert '"generation_mode": "realtime"' in model_events
     assert "cached_prompt_audio" not in model_events
+
+
+def test_progress_audio_disabled_mode_does_not_emit_audio(tmp_path) -> None:
+    """测试目标：验证可通过配置关闭工具前置播报音频。
+
+    测试方法：配置 `output_tool_progress_audio_mode=disabled` 后直接提交工具前置播报。
+    预期结果：返回 None，不向端侧写入音频 chunk，只在 runs 中记录 skipped 诊断。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="text",
+            output_tool_progress_audio_mode="disabled",
+        )
+    )
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection)
+
+    decision = app.output_service.submit_tool_progress(
+        user_id="user-progress",
+        session_id="sess-progress-disabled",
+        tool_name="capture_photo",
+        messages=["我先拍张照片看看。"],
+    )
+
+    model_events = (tmp_path / "runs" / "_unbound" / "sess-progress-disabled" / "model-events.jsonl").read_text(encoding="utf-8")
+    assert decision is None
+    assert not connection.chunks
+    assert "tool.progress_audio.skipped" in model_events

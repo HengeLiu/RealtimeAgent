@@ -1,0 +1,117 @@
+@startuml
+title Realtime Pipeline 组件复用与差异边界
+
+skinparam componentStyle rectangle
+skinparam wrapWidth 220
+skinparam maxMessageSize 120
+
+package "Pipeline 外部共享" #F3F8E8 {
+  [AudioChatApp] as App
+  [ControlService\n统一控制事件路由] as Control
+  [StreamService\n统一stream生命周期] as Stream
+  [AudioChatRealtimePipeline\n统一接口] as Contract
+}
+
+package "Pipeline 内部可共用" #E8F7E8 {
+  [RealtimeAudioNormalizer\n格式适配/重采样/轻量诊断] as Normalizer
+  [RealtimeOutputController\n下行水位/输出状态/finish-cancel语义] as Output
+  [PipelineEventEmitter\n统一PipelineEvent输出] as Emitter
+  [RealtimeTurnState Base\nturn状态/消息buffer/打断标记公共结构] as TurnState
+}
+
+package "TextRealtimePipeline 必须实现" #FFF4E5 {
+  [TextRealtimePipeline] as TextPipeline
+  [TextAgentCore\n文本链路对话语义] as TextCore
+  [TextInputBoundary\nParaformer句子事件解释] as TextBoundary
+  [TextResponseEngine\nText LLM + Streaming TTS] as TextResponse
+  [AsrProviderSession\nparaformer-realtime-v2] as Asr
+  [TextModelSession] as LLM
+  [TtsProviderSession] as TTS
+}
+
+package "OmniRealtimePipeline 必须实现" #E8F2FF {
+  [OmniRealtimePipeline] as OmniPipeline
+  [OmniAgentCore\nOmni链路对话语义] as OmniCore
+  [OmniInputBoundary\nOmni speech事件解释] as OmniBoundary
+  [OmniResponseEngine\nOmni音频响应事件解释] as OmniResponse
+  [OmniProviderSession\nVAD + ASR + LLM + TTS] as OmniSession
+}
+
+App --> Contract
+Contract --> TextPipeline : mode=text
+Contract --> OmniPipeline : mode=omni
+
+TextPipeline --> Normalizer
+TextPipeline --> TextCore
+TextPipeline --> Output
+TextPipeline --> Emitter
+TextCore --> TurnState
+TextCore --> TextBoundary
+TextCore --> TextResponse
+TextBoundary --> Asr
+TextResponse --> LLM
+TextResponse --> TTS
+
+OmniPipeline --> Normalizer
+OmniPipeline --> OmniCore
+OmniPipeline --> Output
+OmniPipeline --> Emitter
+OmniCore --> TurnState
+OmniCore --> OmniBoundary
+OmniCore --> OmniResponse
+OmniBoundary --> OmniSession
+OmniResponse --> OmniSession
+
+note right of Contract
+外部只能依赖统一接口：
+open_session
+attach_upstream
+attach_downstream
+append_input_audio
+pause/resume_downstream
+prepare_close / close_session
+end note
+
+note bottom of Emitter
+两个 pipeline 必须输出同一组事件：
+session_ready
+upstream_ready / downstream_ready
+speech_started / speech_stopped
+output_audio_delta
+output_finished / output_cancel_requested
+close_requested / session_closed
+end note
+
+note right of Output
+RealtimeOutputController 是 pipeline 内部共享抽象。
+实现时可以包装或复用现有 OutputService 的
+output stream 写入、finish、cancel 和播放回执能力。
+它不替代外层 StreamService / ControlService。
+end note
+
+note bottom of TextBoundary
+Text 差异点：
+输入边界来自 Paraformer 句子事件。
+sentence_begin -> speech_started
+sentence_end/final transcript -> speech_stopped
+end note
+
+note bottom of OmniBoundary
+Omni 差异点：
+输入边界来自 Omni 模型服务 speech 事件。
+provider原始事件只能在这里被解释，
+不能穿透到外部调用方。
+end note
+
+note bottom of TextResponse
+Text 回复链路：
+final transcript -> Text LLM -> TTS -> output_audio_delta
+end note
+
+note bottom of OmniResponse
+Omni 回复链路：
+Omni 模型服务直接返回音频 delta，
+由 OmniResponseEngine 解释成统一输出事件。
+end note
+
+@enduml
