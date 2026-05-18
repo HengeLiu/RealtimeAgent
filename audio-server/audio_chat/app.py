@@ -341,6 +341,7 @@ class DeviceDialogState:
     close_pending: bool = False
     close_mode: str = ""
     close_reason: str = ""
+    endpoint_playback_stream_ids: set[str] = field(default_factory=set)
 
     def touch(self) -> None:
         """刷新会话最近活跃时间。"""
@@ -695,6 +696,10 @@ class AudioChatApp:
                 stream_id=event.stream_id,
                 reason=str(event.payload.get("reason") or event.event_name),
             )
+            state = self._device_dialogs_by_user.get(event.user_id)
+            if state is not None and state.device_id == event.session_id:
+                state.endpoint_playback_stream_ids.discard(event.stream_id or "")
+                state.touch()
             self._maybe_close_pending_audio_session(event.user_id, event.session_id)
             return
         if event.event_name == "downstream.pause.requested":
@@ -1075,6 +1080,11 @@ class AudioChatApp:
     def _handle_output_finished(self, user_id: str, session_id: str, stream_id: str) -> None:
         """处理 Output Service 当前输出完成事件。"""
 
+        state = self._device_dialogs_by_user.get(user_id)
+        if state is not None and state.device_id == session_id:
+            # Output Service 的完成事件表示服务端已发完音频，不代表端侧已经播完。
+            # 这里单独记录端侧待播放的 stream，避免空闲检查在长音频尾部误关会话。
+            state.endpoint_playback_stream_ids.add(stream_id)
         self._maybe_close_pending_audio_session(user_id, session_id)
 
     def _maybe_close_pending_audio_session(self, user_id: str, session_id: str | None) -> None:
@@ -1243,6 +1253,8 @@ class AudioChatApp:
                 if state.close_pending or state.state != "opened":
                     continue
                 if self.output_service.active_output_stream_id(user_id, state.device_id) is not None:
+                    continue
+                if state.endpoint_playback_stream_ids:
                     continue
                 if current - state.last_activity_at <= self.config.audio_session_idle_timeout_seconds:
                     continue

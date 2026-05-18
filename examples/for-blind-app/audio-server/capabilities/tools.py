@@ -343,6 +343,101 @@ def _asset_local_path(asset: AssetRef) -> Path | None:
     return None
 
 
+def _looks_like_lnglat(value: str) -> bool:
+    """判断字符串是否已经是高德需要的 `经度,纬度` 坐标。
+
+    主要逻辑：只接受两个可解析数字，避免把中文地址误传给路线规划。
+    参数：`value` 为用户或上游工具给出的地点字符串。
+    返回值：形如 `121.4,31.1` 时返回 True。
+    异常情况：解析失败时返回 False。
+    """
+
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 2:
+        return False
+    try:
+        longitude = float(parts[0])
+        latitude = float(parts[1])
+    except ValueError:
+        return False
+    return -180 <= longitude <= 180 and -90 <= latitude <= 90
+
+
+def _mcp_text_json(call_result: dict) -> dict:
+    """从 MCP `content[text]` 响应里解析 JSON。
+
+    主要逻辑：高德 MCP 返回的 JSON 放在 `result.content[].text` 字符串中，
+    本函数取第一个可解析的 JSON 文本。
+    参数：`call_result` 为 `McpGateway.call()` 的包装结果。
+    返回值：解析后的 JSON 对象。
+    异常情况：远端标记 `isError`、无文本或 JSON 非对象时抛出 `ValueError`。
+    """
+
+    result = dict(call_result.get("result") or {})
+    if result.get("isError"):
+        text = _mcp_first_text(result)
+        raise ValueError(text or "mcp tool returned error")
+    for item in result.get("content") or []:
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("mcp text json is not an object")
+        return parsed
+    raise ValueError("mcp response has no json text content")
+
+
+def _mcp_first_text(result: dict) -> str:
+    """读取 MCP result 中第一段文本，主要用于错误说明。"""
+
+    for item in result.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "text":
+            return str(item.get("text") or "").strip()
+    return ""
+
+
+def _extract_geo_location(call_result: dict, label: str) -> tuple[str, dict]:
+    """从 `maps_geo` 结果中提取第一个坐标。
+
+    主要逻辑：解析 MCP 文本 JSON，读取 `return[0].location`。
+    参数：`call_result` 为 `amap.geo` 调用结果，`label` 用于错误说明。
+    返回值：坐标字符串和对应地理编码条目。
+    异常情况：无可用坐标时抛出 `ValueError`。
+    """
+
+    parsed = _mcp_text_json(call_result)
+    candidates = parsed.get("return") or []
+    if not isinstance(candidates, list):
+        raise ValueError(f"{label} 地理编码结果格式不正确")
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        location = str(item.get("location") or "").strip()
+        if _looks_like_lnglat(location):
+            return location, item
+    raise ValueError(f"{label} 未找到可用坐标")
+
+
+def _route_point_for_mcp(mcp, *, value: str, label: str, timeout_seconds: float) -> tuple[str, dict | None]:
+    """把地址或坐标转换为路线规划可用坐标。
+
+    主要逻辑：如果输入已经是坐标则直接返回；否则调用 `amap.geo`
+    转换中文地址。
+    参数：`mcp` 为 MCP 网关，`value` 为地点，`label` 用于错误说明，
+    `timeout_seconds` 为单次 MCP 调用超时。
+    返回值：坐标字符串和可选地理编码条目。
+    异常情况：MCP 不可用或地址无法编码时向上抛出异常。
+    """
+
+    if _looks_like_lnglat(value):
+        return value, None
+    geo_result = mcp.call(tool_name="amap.geo", arguments={"address": value}, timeout_seconds=timeout_seconds)
+    return _extract_geo_location(geo_result, label)
+
+
 class QueryRoutePlanInput(BaseModel):
     """路线规划查询 Tool 输入参数。"""
 
@@ -393,9 +488,21 @@ class QueryRoutePlanTool(BaseTool):
                 message="路线服务未配置，无法规划真实路线",
             )
         try:
+            origin_location, origin_geo = _route_point_for_mcp(
+                mcp,
+                value=origin,
+                label="起点",
+                timeout_seconds=float(input_data["timeout_seconds"]),
+            )
+            destination_location, destination_geo = _route_point_for_mcp(
+                mcp,
+                value=destination,
+                label="终点",
+                timeout_seconds=float(input_data["timeout_seconds"]),
+            )
             route = mcp.call(
                 tool_name="amap.route_plan",
-                arguments={"origin": origin, "destination": destination},
+                arguments={"origin": origin_location, "destination": destination_location},
                 timeout_seconds=float(input_data["timeout_seconds"]),
             )
         except Exception as exc:
@@ -404,7 +511,17 @@ class QueryRoutePlanTool(BaseTool):
                 message="路线规划进入 fallback",
             )
         return ToolResult.success(
-            data={"route_ready": True, "provider": "amap_mcp", "destination": destination, "route": route},
+            data={
+                "route_ready": True,
+                "provider": "amap_mcp",
+                "destination": destination,
+                "origin": origin,
+                "origin_location": origin_location,
+                "destination_location": destination_location,
+                "origin_geo": origin_geo,
+                "destination_geo": destination_geo,
+                "route": route,
+            },
             message="路线已准备",
         )
 

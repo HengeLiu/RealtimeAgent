@@ -316,6 +316,64 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
     assert "queued_playback_ready" in queued_decisions
 
 
+def test_audio_session_idle_waits_for_endpoint_playback_finished(tmp_path) -> None:
+    """测试目标：验证音频会话空闲关闭不会抢在端侧播放完成前发生。
+
+    测试方法：打开连续对话会话，提交一段 TTS 输出并让服务端发出
+    `stream.output.finish.requested`，但暂不模拟端侧 `stream.output.finished`。
+    预期结果：维护任务在端侧仍有待播放 stream 时不关闭会话；端侧回报播放完成后，
+    空闲计时从播放完成点重新开始。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            audio_session_idle_timeout_seconds=1,
+            agent_mode="text",
+        )
+    )
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    app.publish_control_event(
+        Event(
+            event_name="control.audio_session.opened",
+            user_id="user-001",
+            producer_id="dev-playback",
+            session_id="dev-playback",
+            payload={"reason": "browser_device_opened"},
+        )
+    )
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="dev-playback", text="长回复")
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id="dev-playback", text="", final=True)
+    )
+    stream_id = next(event.stream_id for event in connection.events if event.event_name == "stream.output.finish.requested")
+    state = app._device_dialogs_by_user["user-001"]
+    assert stream_id in state.endpoint_playback_stream_ids
+
+    result = app.run_maintenance_once(now=state.last_activity_at + 2)
+    assert result["closed_audio_sessions"] == []
+    assert not any(event.event_name == "control.audio_session.close.requested" for event in connection.events)
+
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.finished",
+            user_id="user-001",
+            producer_id="dev-playback",
+            session_id="dev-playback",
+            stream_id=stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker"},
+        )
+    )
+    state = app._device_dialogs_by_user["user-001"]
+    assert stream_id not in state.endpoint_playback_stream_ids
+    assert app.run_maintenance_once(now=state.last_activity_at + 2)["closed_audio_sessions"] == ["dev-playback"]
+
+
 def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_path) -> None:
     """测试目标：验证显式 `on_blocked="drop"` 不会被全局默认 queue 覆盖。
 

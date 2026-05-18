@@ -233,8 +233,10 @@
     let sessionId = null;
     let inputStreamId = null;
     let seq = 0;
-    let playbackTime = 0;
-    let playbackNodes = [];
+    let playbackWorkletNode = null;
+    let playbackWorkletReady = null;
+    let playbackWriteChain = Promise.resolve();
+    let playbackStreams = new Map();
     let streamStates = new Map();
     let offlineAudio = null;
     let offlineTimer = null;
@@ -1988,7 +1990,9 @@
           session_id: currentDeviceId(), stream_id: chunk.stream_id, stream_type: chunk.stream_type,
         }));
       }
-      playPcm16(chunk);
+      playbackWriteChain = playbackWriteChain
+        .then(() => playPcm16(chunk))
+        .catch((err) => log(`playback write failed stream_id=${chunk.stream_id}: ${err.message}`));
     }
 
     async function ensureAudioContext() {
@@ -1997,36 +2001,170 @@
       return audioContext;
     }
 
-    async function playPcm16(chunk) {
-      await ensureAudioContext();
-      const samples = resampleLinear(pcm16ToFloat(chunk.payload), chunk.sample_rate || INPUT_RATE, audioContext.sampleRate);
-      const buffer = audioContext.createBuffer(1, samples.length, audioContext.sampleRate);
-      buffer.copyToChannel(samples, 0);
-      const node = audioContext.createBufferSource();
-      node.buffer = buffer;
-      const gain = audioContext.createGain();
-      gain.gain.value = 1.0;
-      node.connect(gain);
-      gain.connect(audioContext.destination);
-      node.onended = () => {
-        playbackNodes = playbackNodes.filter((item) => item.node !== node);
-        closeOutputWhenDrained(chunk.stream_id);
+    function playbackWorkletCode() {
+      return `
+        class PcmPlaybackProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.queue = [];
+            this.current = null;
+            this.finished = new Set();
+            this.openStreams = new Set();
+            this.underrunFrames = 0;
+            this.underrunEvents = 0;
+            this.wasUnderrun = false;
+            this.port.onmessage = (event) => this.handleMessage(event.data || {});
+          }
+
+          handleMessage(message) {
+            if (message.type === "push") {
+              const samples = message.samples instanceof Float32Array
+                ? message.samples
+                : new Float32Array(message.samples || 0);
+              this.queue.push({streamId: message.streamId, samples, offset: 0});
+              this.openStreams.add(message.streamId);
+              return;
+            }
+            if (message.type === "finish") {
+              this.finished.add(message.streamId);
+              this.maybeNotifyDrained(message.streamId);
+              return;
+            }
+            if (message.type === "stop") {
+              this.queue = this.queue.filter((item) => item.streamId !== message.streamId);
+              if (this.current && this.current.streamId === message.streamId) this.current = null;
+              this.finished.delete(message.streamId);
+              this.openStreams.delete(message.streamId);
+              return;
+            }
+            if (message.type === "stopAll") {
+              this.queue = [];
+              this.current = null;
+              this.finished.clear();
+              this.openStreams.clear();
+            }
+          }
+
+          hasQueuedStream(streamId) {
+            if (this.current && this.current.streamId === streamId) return true;
+            return this.queue.some((item) => item.streamId === streamId);
+          }
+
+          maybeNotifyDrained(streamId) {
+            if (!this.finished.has(streamId) || this.hasQueuedStream(streamId)) return;
+            this.finished.delete(streamId);
+            this.openStreams.delete(streamId);
+            this.port.postMessage({type: "drained", streamId});
+          }
+
+          nextSample() {
+            while (!this.current || this.current.offset >= this.current.samples.length) {
+              const finishedStreamId = this.current ? this.current.streamId : null;
+              this.current = this.queue.shift() || null;
+              if (finishedStreamId) this.maybeNotifyDrained(finishedStreamId);
+              if (!this.current) return 0;
+            }
+            const value = this.current.samples[this.current.offset] || 0;
+            this.current.offset += 1;
+            return value;
+          }
+
+          process(_inputs, outputs) {
+            const output = outputs[0] && outputs[0][0];
+            if (!output) return true;
+            for (let i = 0; i < output.length; i += 1) {
+              const hadData = this.current || this.queue.length > 0;
+              output[i] = this.nextSample();
+              const hasOpenStreams = this.openStreams.size > 0;
+              if (!hadData && hasOpenStreams) {
+                this.underrunFrames += 1;
+                if (!this.wasUnderrun) {
+                  this.underrunEvents += 1;
+                  this.wasUnderrun = true;
+                  this.port.postMessage({
+                    type: "underrun",
+                    frames: this.underrunFrames,
+                    events: this.underrunEvents,
+                  });
+                }
+              } else if (hadData) {
+                this.wasUnderrun = false;
+              }
+            }
+            if (this.current && this.current.offset >= this.current.samples.length) {
+              const streamId = this.current.streamId;
+              this.current = null;
+              this.maybeNotifyDrained(streamId);
+            }
+            return true;
+          }
+        }
+
+        registerProcessor("pcm-playback-processor", PcmPlaybackProcessor);
+      `;
+    }
+
+    async function ensurePlaybackWorklet() {
+      const context = await ensureAudioContext();
+      if (playbackWorkletNode) return playbackWorkletNode;
+      if (!context.audioWorklet) throw new Error("AudioWorklet is not supported by this browser");
+      if (!playbackWorkletReady) {
+        const blob = new Blob([playbackWorkletCode()], {type: "application/javascript"});
+        const url = URL.createObjectURL(blob);
+        playbackWorkletReady = context.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+      }
+      await playbackWorkletReady;
+      playbackWorkletNode = new AudioWorkletNode(context, "pcm-playback-processor", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      playbackWorkletNode.port.onmessage = (event) => {
+        const message = event.data || {};
+        if (message.type === "drained") {
+          const state = playbackStreams.get(message.streamId);
+          if (state) state.drained = true;
+          closeOutputWhenDrained(message.streamId);
+          return;
+        }
+        if (message.type === "underrun") {
+          log(`playback worklet underrun frames=${message.frames} events=${message.events}`);
+        }
       };
-      playbackTime = Math.max(playbackTime, audioContext.currentTime);
-      markPlaybackScheduled(chunk.stream_id, playbackTime, buffer.duration);
-      node.start(playbackTime);
-      playbackTime += buffer.duration;
-      playbackNodes.push({node, streamId: chunk.stream_id});
+      playbackWorkletNode.connect(context.destination);
+      log("playback worklet ready");
+      return playbackWorkletNode;
+    }
+
+    async function playPcm16(chunk) {
+      if (outputClosed.has(chunk.stream_id)) return;
+      const node = await ensurePlaybackWorklet();
+      if (outputClosed.has(chunk.stream_id)) return;
+      const samples = resampleLinear(pcm16ToFloat(chunk.payload), chunk.sample_rate || INPUT_RATE, audioContext.sampleRate);
+      const state = playbackStreams.get(chunk.stream_id) || {queuedFrames: 0, finished: false, drained: false};
+      state.queuedFrames += samples.length;
+      playbackStreams.set(chunk.stream_id, state);
+      markPlaybackScheduled(chunk.stream_id, audioContext.currentTime, samples.length / audioContext.sampleRate);
+      node.port.postMessage(
+        {type: "push", streamId: chunk.stream_id, samples},
+        [samples.buffer],
+      );
     }
 
     function closeOutputWhenDrained(streamId) {
       const request = pendingOutputClose.get(streamId);
       if (!request || !outputStarted.has(streamId)) return;
-      const streamHasNodes = playbackNodes.some((item) => item.streamId === streamId);
-      if (streamHasNodes || !audioContext || audioContext.currentTime < playbackTime - 0.03) return;
+      const state = playbackStreams.get(streamId);
+      if (state && !state.finished && playbackWorkletNode) {
+        state.finished = true;
+        playbackWorkletNode.port.postMessage({type: "finish", streamId});
+        return;
+      }
+      if (state && !state.drained) return;
       pendingOutputClose.delete(streamId);
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);
+      playbackStreams.delete(streamId);
       summarizeOutputPlayback(streamId, "drained");
       sendEvent(event("stream.output.finished", {stream_type: "actuator.speaker"}, {
         session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
@@ -2034,13 +2172,9 @@
     }
 
     function stopOutputPlayback(streamId, reason) {
-      const targetNodes = playbackNodes.filter((item) => item.streamId === streamId);
-      for (const item of targetNodes) {
-        try { item.node.onended = null; item.node.stop(); } catch (_) {}
-      }
-      playbackNodes = playbackNodes.filter((item) => item.streamId !== streamId);
+      if (playbackWorkletNode) playbackWorkletNode.port.postMessage({type: "stop", streamId});
+      playbackStreams.delete(streamId);
       pendingOutputClose.delete(streamId);
-      if (playbackNodes.length === 0 && audioContext) playbackTime = audioContext.currentTime;
       if (outputClosed.has(streamId)) return;
       outputClosed.add(streamId);
       summarizeOutputPlayback(streamId, `stopped reason=${reason}`);
@@ -2050,13 +2184,14 @@
     }
 
     function stopAllOutputPlayback(reason) {
-      const streamIds = Array.from(new Set(playbackNodes.map((item) => item.streamId)));
+      const streamIds = Array.from(playbackStreams.keys());
       for (const streamId of streamIds) stopOutputPlayback(streamId, reason);
+      if (playbackWorkletNode) playbackWorkletNode.port.postMessage({type: "stopAll"});
     }
 
     async function waitPlaybackDrained(timeoutMs = 10000) {
       const startedAt = Date.now();
-      while (playbackNodes.length > 0 || (audioContext && audioContext.currentTime < playbackTime - 0.03)) {
+      while (Array.from(playbackStreams.values()).some((state) => !state.drained)) {
         if (Date.now() - startedAt > timeoutMs) {
           log("playback drain timeout before audio session close");
           break;

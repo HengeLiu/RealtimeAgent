@@ -29,6 +29,7 @@ HIGH_FREQUENCY_AGENT_EVENTS = {
     "omni.conversation.item.input_audio_transcription.delta",
     "omni.response.audio.delta.decoded",
     "omni.response.audio_transcript.delta",
+    "pipeline.output_audio_delta",
     "assistant_audio.delta",
 }
 QUIET_AGENT_TURN_STATE_REASONS = {
@@ -49,9 +50,15 @@ QUIET_AGENT_EVENTS = {
 DELTA_SUMMARY_DONE_EVENTS = {
     "assistant_audio.done": "assistant_audio.delta",
     "omni.response.audio.done": "omni.response.audio.delta.decoded",
+    "pipeline.output_finished": "pipeline.output_audio_delta",
     "input_transcript.done": "input_transcript.delta",
     "omni.conversation.item.input_audio_transcription.completed": "omni.conversation.item.input_audio_transcription.delta",
     "omni.response.audio_transcript.done": "omni.response.audio_transcript.delta",
+}
+DELTA_DONE_TEXT_DUPLICATED_BY_MESSAGE_EVENTS = {
+    "input_transcript.done",
+    "omni.conversation.item.input_audio_transcription.completed",
+    "omni.response.audio_transcript.done",
 }
 QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
 QUIET_CONTROL_PREFIXES = ("stream.",)
@@ -1178,6 +1185,7 @@ class RunRecorder:
             return
         now = time.monotonic()
         text = record.get("text") or record.get("transcript") or stats.get("text")
+        visible_text = None if done_event in DELTA_DONE_TEXT_DUPLICATED_BY_MESSAGE_EVENTS else _compact_text(text, limit=160)
         log_info(
             self.logger,
             f"delta 完成 {done_event}",
@@ -1191,7 +1199,7 @@ class RunRecorder:
                     "delta_count": stats.get("count"),
                     "bytes": stats.get("bytes"),
                     "duration_ms": _elapsed_ms(float(stats.get("started_at") or now), now),
-                    "text": _compact_text(text, limit=160),
+                    "text": visible_text,
                     "detail_path": str(self.session_file(session_id, "agent-events.jsonl")),
                 },
             ),

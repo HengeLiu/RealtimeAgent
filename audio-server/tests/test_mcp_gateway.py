@@ -241,3 +241,73 @@ def test_mcp_gateway_loads_local_env_next_to_config(tmp_path, monkeypatch) -> No
     assert smoke[0]["ok"] is True
     assert smoke[0]["url"] == "https://mcp.example.com/mcp"
     assert smoke[0]["headers"] == ["Authorization"]
+
+
+def test_mcp_gateway_reloads_local_env_when_url_was_missing(tmp_path, monkeypatch) -> None:
+    """测试目标：验证服务启动后补写本地 env 文件也能恢复 MCP URL。
+
+    测试方法：先在没有 `mcp.local.env` 时创建 Gateway，再写入 env 文件，
+    monkeypatch HTTP 层模拟一次完整 Streamable HTTP 调用。
+    预期结果：调用前自动重新加载配置，最终请求到补写后的 URL。
+    """
+
+    config_path = tmp_path / "mcp.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "servers": [
+                    {
+                        "name": "amap",
+                        "transport": "streamable_http",
+                        "url": "${AMAP_MCP_URL}",
+                        "headers": {"Authorization": "Bearer ${AMAP_MCP_BEARER_TOKEN}"},
+                    }
+                ],
+                "tools": [{"name": "amap.route_plan", "server": "amap", "target_name": "maps_direction_walking"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("AMAP_MCP_URL", raising=False)
+    monkeypatch.delenv("AMAP_MCP_BEARER_TOKEN", raising=False)
+    gateway = McpGateway(enabled=True, config_path=config_path)
+    (tmp_path / "mcp.local.env").write_text(
+        "AMAP_MCP_URL=https://mcp.example.com/mcp\nAMAP_MCP_BEARER_TOKEN=late-token\n",
+        encoding="utf-8",
+    )
+    seen_urls: list[str] = []
+
+    class FakeHeaders(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    class FakeResponse:
+        def __init__(self, body: dict, headers: dict | None = None) -> None:
+            self._body = body
+            self.headers = FakeHeaders(headers or {})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._body, ensure_ascii=False).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        seen_urls.append(request.full_url)
+        payload = json.loads(request.data.decode("utf-8"))
+        if payload.get("method") == "initialize":
+            return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {}}, {"Mcp-Session-Id": "session-2"})
+        if payload.get("method") == "notifications/initialized":
+            return FakeResponse({})
+        return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": []}})
+
+    monkeypatch.setattr("audio_chat.mcp.urllib_request.urlopen", fake_urlopen)
+
+    result = gateway.call(tool_name="amap.route_plan", arguments={"origin": "家", "destination": "地铁站"}, timeout_seconds=3)
+
+    assert result["target_name"] == "maps_direction_walking"
+    assert seen_urls == ["https://mcp.example.com/mcp", "https://mcp.example.com/mcp", "https://mcp.example.com/mcp"]

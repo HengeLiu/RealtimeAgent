@@ -89,6 +89,8 @@ class McpGateway:
 
         config_path = Path(path).resolve()
         self._local_env = _load_local_env(config_path)
+        self._servers.clear()
+        self._tools.clear()
         raw_text = config_path.read_text(encoding="utf-8")
         data = json.loads(raw_text) if config_path.suffix == ".json" else yaml.safe_load(raw_text)
         root = dict(data or {})
@@ -342,6 +344,7 @@ class McpGateway:
         session_id: str | None = None,
         expect_response: bool,
     ) -> dict[str, Any]:
+        server = self._server_with_latest_config(server)
         url = server.url.strip()
         if not url:
             raise McpError(
@@ -392,6 +395,28 @@ class McpGateway:
         if session_value:
             decoded["_session_id"] = session_value
         return decoded
+
+    def _server_with_latest_config(self, server: McpServerSpec) -> McpServerSpec:
+        """在远程 URL 缺失时重新读取 MCP 配置。
+
+        主要逻辑：服务进程可能先启动，随后才写入 `mcp.local.env`。
+        若当前 server URL 为空或不是 HTTP URL，就重新加载配置文件和同目录
+        env 文件，避免必须完全重启服务才能拿到本地 MCP 地址。
+        参数：`server` 为当前已注册 server。
+        返回值：最新配置中的同名 server；找不到时返回原 server。
+        异常情况：配置文件不存在或读取失败时保留原错误路径。
+        """
+
+        url = server.url.strip()
+        if url.startswith(("http://", "https://")):
+            return server
+        if not self.config_path or not self.config_path.exists():
+            return server
+        try:
+            self.load_config(self.config_path)
+        except Exception:
+            return server
+        return self._servers.get(server.name, server)
 
 
 def _iter_server_items(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:

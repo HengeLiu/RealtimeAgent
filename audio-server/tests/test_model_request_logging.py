@@ -418,6 +418,96 @@ def test_omni_input_transcription_delta_terminal_logs_are_summarized(tmp_path, c
     assert agent_events.read_text(encoding="utf-8").count("omni.conversation.item.input_audio_transcription.delta") == 3
 
 
+def test_final_transcript_text_only_appears_on_message_write_terminal_log(tmp_path, caplog) -> None:
+    """测试目标：最终转写文本不在 delta 完成和消息写入中重复打印。
+
+    测试方法：先记录 Omni 输入转写完成摘要，再记录用户消息写入。
+    预期结果：delta 完成日志保留统计字段但不带 text；消息写入日志带最终文本。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    final_text = "你再帮我查一下，从我家到虹漕南路地铁站怎么走。"
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_agent_event(
+            "sess-final-text",
+            {
+                "event": "omni.conversation.item.input_audio_transcription.delta",
+                "provider": "qwen",
+                "text": final_text,
+            },
+        )
+        recorder.record_agent_event(
+            "sess-final-text",
+            {
+                "event": "omni.conversation.item.input_audio_transcription.completed",
+                "provider": "qwen",
+                "text": final_text,
+            },
+        )
+        recorder.log_message(
+            "user-final-text",
+            {
+                "session_id": "sess-final-text",
+                "role": "user",
+                "event": "input_transcript.done",
+                "content": final_text,
+            },
+        )
+
+    done_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "delta 完成 omni.conversation.item.input_audio_transcription.completed"
+    ]
+    message_records = [record for record in caplog.records if record.getMessage() == "消息写入 user"]
+    assert done_records and not hasattr(done_records[0], "text")
+    assert message_records and getattr(message_records[0], "text") == final_text
+
+
+def test_final_assistant_transcript_text_only_appears_on_message_write_terminal_log(tmp_path, caplog) -> None:
+    """测试目标：最终助手文本不在 audio transcript 完成和消息写入中重复打印。
+
+    测试方法：先记录 Omni 输出文本 delta/done，再记录助手消息写入。
+    预期结果：delta 完成日志只带统计字段；助手消息写入日志带最终文本。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    final_text = "路线还是没查出来，系统可能有点问题。"
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_agent_event(
+            "sess-assistant-final-text",
+            {
+                "event": "omni.response.audio_transcript.delta",
+                "provider": "qwen",
+                "text": final_text,
+            },
+        )
+        recorder.record_agent_event(
+            "sess-assistant-final-text",
+            {
+                "event": "omni.response.audio_transcript.done",
+                "provider": "qwen",
+                "text": final_text,
+            },
+        )
+        recorder.log_message(
+            "user-assistant-final-text",
+            {
+                "session_id": "sess-assistant-final-text",
+                "role": "assistant",
+                "event": "assistant_text.done",
+                "content": final_text,
+            },
+        )
+
+    done_records = [record for record in caplog.records if record.getMessage() == "delta 完成 omni.response.audio_transcript.done"]
+    message_records = [record for record in caplog.records if record.getMessage() == "消息写入 assistant"]
+    assert done_records and not hasattr(done_records[0], "text")
+    assert message_records and getattr(message_records[0], "text") == final_text
+
+
 def test_realtime_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) -> None:
     """测试目标：Realtime 热路径状态变更不应逐条刷终端。
 
@@ -528,6 +618,49 @@ def test_context_source_added_only_writes_artifacts(tmp_path, caplog) -> None:
     agent_events = tmp_path / "runs" / "user-context" / "sess-context" / "agent-events.jsonl"
     assert agent_events.exists()
     assert agent_events.read_text(encoding="utf-8").count("context.source.added") == 2
+
+
+def test_pipeline_output_audio_delta_terminal_logs_are_summarized(tmp_path, caplog) -> None:
+    """测试目标：pipeline 输出音频分片不应逐条刷终端。
+
+    测试方法：连续记录三条 `pipeline.output_audio_delta`，再记录 `pipeline.output_finished`。
+    预期结果：终端只有首个 delta 和完成摘要，完整分片仍写入 agent-events.jsonl。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        for _ in range(3):
+            recorder.record_agent_event(
+                "sess-pipeline-audio",
+                {
+                    "event": "pipeline.output_audio_delta",
+                    "user_id": "user-pipeline-audio",
+                    "provider": "qwen",
+                    "model": "qwen3.5-omni-plus-realtime",
+                    "payload_size": 15360,
+                },
+            )
+        recorder.record_agent_event(
+            "sess-pipeline-audio",
+            {
+                "event": "pipeline.output_finished",
+                "user_id": "user-pipeline-audio",
+                "provider": "qwen",
+                "model": "qwen3.5-omni-plus-realtime",
+            },
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages.count("首个 delta pipeline.output_audio_delta") == 1
+    assert messages.count("delta 完成 pipeline.output_finished") == 1
+    assert "Agent事件 pipeline.output_audio_delta" not in messages
+    done_records = [record for record in caplog.records if record.getMessage() == "delta 完成 pipeline.output_finished"]
+    assert done_records and getattr(done_records[0], "delta_count") == 3
+    assert done_records and getattr(done_records[0], "bytes") == 46080
+    agent_events = tmp_path / "runs" / "user-pipeline-audio" / "sess-pipeline-audio" / "agent-events.jsonl"
+    assert agent_events.exists()
+    assert agent_events.read_text(encoding="utf-8").count("pipeline.output_audio_delta") == 3
 
 
 def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) -> None:

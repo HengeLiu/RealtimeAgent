@@ -59,6 +59,19 @@ def test_query_route_plan_calls_configured_amap_mcp(tmp_path, monkeypatch) -> No
             {
                 "tools": [
                     {
+                        "name": "amap.geo",
+                        "description": "高德地址解析",
+                        "mock_result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps({"return": [{"location": "121.413866,31.156773"}]}, ensure_ascii=False),
+                                }
+                            ],
+                            "isError": False,
+                        },
+                    },
+                    {
                         "name": "amap.route_plan",
                         "description": "高德路线规划",
                         "mock_result": {"distance": 120, "duration": 90},
@@ -83,6 +96,8 @@ def test_query_route_plan_calls_configured_amap_mcp(tmp_path, monkeypatch) -> No
     assert result.ok is True
     assert result.data["route_ready"] is True
     assert result.data["provider"] == "amap_mcp"
+    assert result.data["origin_location"] == "121.413866,31.156773"
+    assert result.data["destination_location"] == "121.413866,31.156773"
     assert result.data["route"]["result"]["distance"] == 120
 
 
