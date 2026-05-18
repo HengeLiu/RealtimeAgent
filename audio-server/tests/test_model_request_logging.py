@@ -203,30 +203,27 @@ def test_system_error_logs_nested_provider_error_fields(tmp_path, caplog) -> Non
 def test_normal_control_event_does_not_log_payload_as_error_message(tmp_path, caplog) -> None:
     """测试目标：验证普通控制事件不会把 payload 误写成 error_message。
 
-    测试方法：记录一条正常的 `stream.control.open.requested` 控制事件。
+    测试方法：记录一条正常的低频 `command.progress` 控制事件。
     预期结果：终端日志保留 stream_type/request_id 等正常字段，但没有 error_message。
     """
 
     recorder = RunRecorder(tmp_path / "runs")
     event = Event(
-        event_name="stream.control.open.requested",
+        event_name="command.progress",
         user_id="user-log",
-        producer_id="server-main",
+        producer_id="dev-phone",
         session_id="sess-log",
-        stream_type="sensor.rgb",
         payload={
-            "stream_type": "sensor.rgb",
-            "mode": "single",
+            "status": "peer.receiver.ready",
+            "message": "receiver ready",
             "request_id": "asset_req_log",
-            "width": 960,
-            "height": 540,
         },
     )
 
     with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
         recorder.record_event(event)
 
-    matched = [record for record in caplog.records if record.getMessage() == "控制事件 stream.control.open.requested"]
+    matched = [record for record in caplog.records if record.getMessage() == "控制事件 command.progress"]
     assert matched
     assert not any(hasattr(record, "error_message") for record in matched)
 
@@ -381,6 +378,156 @@ def test_agent_event_logs_capture_photo_image_context(tmp_path, caplog) -> None:
     assert any(getattr(record, "image_sha256", None) == "abc123" for record in caplog.records)
     assert any(getattr(record, "image_bytes", None) == 167512 for record in caplog.records)
     assert any(getattr(record, "replayed_audio_bytes", None) == 96000 for record in caplog.records)
+
+
+def test_omni_input_transcription_delta_terminal_logs_are_summarized(tmp_path, caplog) -> None:
+    """测试目标：Omni 转写 delta 不应逐条刷终端。
+
+    测试方法：连续记录三条 `omni.conversation.item.input_audio_transcription.delta`，
+    再记录 completed 事件。
+    预期结果：终端只有首个 delta 和完成摘要，完整 delta 仍写入 agent-events.jsonl。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        for text in ("看", "一下", "前面"):
+            recorder.record_agent_event(
+                "sess-omni-delta",
+                {
+                    "event": "omni.conversation.item.input_audio_transcription.delta",
+                    "provider": "qwen",
+                    "text": text,
+                },
+            )
+        recorder.record_agent_event(
+            "sess-omni-delta",
+            {
+                "event": "omni.conversation.item.input_audio_transcription.completed",
+                "provider": "qwen",
+                "text": "看一下前面",
+            },
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages.count("首个 delta omni.conversation.item.input_audio_transcription.delta") == 1
+    assert messages.count("delta 完成 omni.conversation.item.input_audio_transcription.completed") == 1
+    assert "Agent事件 omni.conversation.item.input_audio_transcription.delta" not in messages
+    agent_events = tmp_path / "runs" / "_unbound" / "sess-omni-delta" / "agent-events.jsonl"
+    assert agent_events.exists()
+    assert agent_events.read_text(encoding="utf-8").count("omni.conversation.item.input_audio_transcription.delta") == 3
+
+
+def test_realtime_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) -> None:
+    """测试目标：Realtime 热路径状态变更不应逐条刷终端。
+
+    测试方法：记录 `audio_delta` 和 `input_audio_appended` 两类 turn state。
+    预期结果：事件仍写入 agent-events.jsonl，但终端不输出 `Agent事件 agent.turn_state.changed`。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        for reason, state in (("audio_delta", "speaking"), ("input_audio_appended", "listening")):
+            recorder.record_agent_event(
+                "sess-turn-hot",
+                {
+                    "event": "agent.turn_state.changed",
+                    "user_id": "user-turn-hot",
+                    "agent_core": "RealtimeAudioAgentCore",
+                    "provider": "qwen",
+                    "reason": reason,
+                    "state": state,
+                },
+            )
+
+    assert not any(record.getMessage() == "Agent事件 agent.turn_state.changed" for record in caplog.records)
+    agent_events = tmp_path / "runs" / "user-turn-hot" / "sess-turn-hot" / "agent-events.jsonl"
+    assert agent_events.exists()
+    text = agent_events.read_text(encoding="utf-8")
+    assert '"reason": "audio_delta"' in text
+    assert '"reason": "input_audio_appended"' in text
+
+
+def test_text_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) -> None:
+    """测试目标：Text 链路热路径状态变更不应逐条刷终端。
+
+    测试方法：记录 `assistant_text_released` 和 `audio_final_check` 两类 turn state。
+    预期结果：事件仍写入 agent-events.jsonl，但终端不输出 `Agent事件 agent.turn_state.changed`。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        for reason, state in (("assistant_text_released", "speaking"), ("audio_final_check", "transcribing")):
+            recorder.record_agent_event(
+                "sess-text-hot",
+                {
+                    "event": "agent.turn_state.changed",
+                    "user_id": "user-text-hot",
+                    "agent_core": "TextAgentCore",
+                    "reason": reason,
+                    "state": state,
+                },
+            )
+
+    assert not any(record.getMessage() == "Agent事件 agent.turn_state.changed" for record in caplog.records)
+    agent_events = tmp_path / "runs" / "user-text-hot" / "sess-text-hot" / "agent-events.jsonl"
+    assert agent_events.exists()
+    text = agent_events.read_text(encoding="utf-8")
+    assert '"reason": "assistant_text_released"' in text
+    assert '"reason": "audio_final_check"' in text
+
+
+def test_realtime_boundary_turn_state_still_logs_to_terminal(tmp_path, caplog) -> None:
+    """测试目标：低频边界状态仍然保留终端日志。
+
+    测试方法：记录 provider speech started 映射出的 turn state。
+    预期结果：终端仍输出 `Agent事件 agent.turn_state.changed`，避免关键状态不可见。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        recorder.record_agent_event(
+            "sess-turn-boundary",
+            {
+                "event": "agent.turn_state.changed",
+                "user_id": "user-turn-boundary",
+                "agent_core": "RealtimeAudioAgentCore",
+                "provider": "qwen",
+                "reason": "omni.input_audio_buffer.speech_started",
+                "state": "user_speaking",
+            },
+        )
+
+    assert any(record.getMessage() == "Agent事件 agent.turn_state.changed" for record in caplog.records)
+
+
+def test_context_source_added_only_writes_artifacts(tmp_path, caplog) -> None:
+    """测试目标：上下文来源明细不应在终端重复刷屏。
+
+    测试方法：记录两条 `context.source.added` 事件。
+    预期结果：事件写入 agent-events.jsonl，但终端不输出 `Agent事件 context.source.added`。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+
+    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+        for source_name in ("history", "memory"):
+            recorder.record_agent_event(
+                "sess-context",
+                {
+                    "event": "context.source.added",
+                    "user_id": "user-context",
+                    "source": source_name,
+                },
+            )
+
+    assert not any(record.getMessage() == "Agent事件 context.source.added" for record in caplog.records)
+    agent_events = tmp_path / "runs" / "user-context" / "sess-context" / "agent-events.jsonl"
+    assert agent_events.exists()
+    assert agent_events.read_text(encoding="utf-8").count("context.source.added") == 2
 
 
 def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) -> None:

@@ -26,11 +26,19 @@ STORAGE_PATH_LOG_FIELDS = {"detail_path", "session_detail_path", "path"}
 HIGH_FREQUENCY_AGENT_EVENTS = {
     "input_transcript.delta",
     "assistant_text.delta",
+    "omni.conversation.item.input_audio_transcription.delta",
     "omni.response.audio.delta.decoded",
     "omni.response.audio_transcript.delta",
     "assistant_audio.delta",
 }
+QUIET_AGENT_TURN_STATE_REASONS = {
+    "audio_delta",
+    "input_audio_appended",
+    "assistant_text_released",
+    "audio_final_check",
+}
 QUIET_AGENT_EVENTS = {
+    "context.source.added",
     "realtime.input_audio.appended",
     "omni.response.audio.delta",
     "omni.response.function_call_arguments.delta",
@@ -42,7 +50,7 @@ DELTA_SUMMARY_DONE_EVENTS = {
     "assistant_audio.done": "assistant_audio.delta",
     "omni.response.audio.done": "omni.response.audio.delta.decoded",
     "input_transcript.done": "input_transcript.delta",
-    "omni.conversation.item.input_audio_transcription.completed": "input_transcript.delta",
+    "omni.conversation.item.input_audio_transcription.completed": "omni.conversation.item.input_audio_transcription.delta",
     "omni.response.audio_transcript.done": "omni.response.audio_transcript.delta",
 }
 QUIET_CONTROL_EVENTS = {"control.device.heartbeat.received"}
@@ -551,6 +559,8 @@ class RunRecorder:
             return
         if event in DELTA_SUMMARY_DONE_EVENTS:
             self._record_delta_summary_done(session_id=session_id, done_event=event, record=record, context=context)
+            return
+        if _is_quiet_agent_turn_state(record):
             return
         log_info(self.logger, f"Agent事件 {event}", context)
 
@@ -1256,6 +1266,19 @@ def _is_quiet_task_signal(record: dict[str, Any]) -> bool:
         return False
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
     return payload.get("task_event_type") == "process" and not record.get("requires_agent_decision") and not record.get("allow_direct_notify")
+
+
+def _is_quiet_agent_turn_state(record: dict[str, Any]) -> bool:
+    """判断 Agent turn 状态事件是否属于热路径噪音。
+
+    主要逻辑：Realtime 的音频片段状态、Text 的文本释放和音频 final 检查都可能
+    在一次回复中反复出现；完整事件仍写入 runs，终端不再逐条打印。
+    参数：`record` 为 Agent 事件记录。
+    返回值：需要静默终端输出时返回 True。
+    异常情况：无。
+    """
+
+    return record.get("event") == "agent.turn_state.changed" and record.get("reason") in QUIET_AGENT_TURN_STATE_REASONS
 
 
 def _error_log_fields(value: Any) -> dict[str, str | None]:
