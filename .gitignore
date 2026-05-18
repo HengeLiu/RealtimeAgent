@@ -41,7 +41,7 @@ captures/
 .cxx
 
 # Android Phone app specific
-examples/android-phone/
+# examples/android-phone/ 被追踪，不忽略
 
 # Python generated artifacts
 **/__pycache__/

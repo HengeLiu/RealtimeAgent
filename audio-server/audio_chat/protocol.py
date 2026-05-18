@@ -187,6 +187,7 @@ class Event:
     session_id: str | None = None
     stream_id: str | None = None
     stream_type: str | StreamType | None = None
+    trace_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "event_name", str(self.event_name))
@@ -212,6 +213,8 @@ class Event:
             data["stream_id"] = self.stream_id
         if self.stream_type is not None:
             data["stream_type"] = self.stream_type
+        if self.trace_id is not None:
+            data["trace_id"] = self.trace_id
         validate_event_envelope_dict(data)
         return data
 
@@ -228,6 +231,7 @@ class Event:
             session_id=data.get("session_id"),
             stream_id=data.get("stream_id"),
             stream_type=data.get("stream_type"),
+            trace_id=data.get("trace_id"),
             payload=dict(data.get("payload") or {}),
         )
 

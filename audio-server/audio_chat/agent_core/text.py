@@ -370,6 +370,7 @@ class TextAgentCore:
         self._responded_input_streams: set[str] = set()
         self._cancelled_users: set[str] = set()
         self._session_by_user: dict[str, str] = {}
+        self._trace_id_by_user: dict[str, str] = {}
         self._event_buffer = AgentEventBuffer()
         self.tool_gateway = tool_gateway
         self.memory_service = memory_service
@@ -390,17 +391,19 @@ class TextAgentCore:
 
         self.tool_gateway = tool_gateway
 
-    def open(self, user_id: str, session_id: str) -> None:
+    def open(self, user_id: str, session_id: str, trace_id: str | None = None) -> None:
         """打开文本 Agent 会话。
 
         主要逻辑：文本链路不需要提前连接模型 provider，只记录统一会话事件。
-        参数：`user_id` 为用户标识，`session_id` 为当前会话。
+        参数：`user_id` 为用户标识，`session_id` 为当前会话，`trace_id` 为链路追踪标识。
         返回值：无。
         异常情况：无。
         """
 
-        self._record_event("session.opened", user_id=user_id, session_id=session_id, agent_core="TextAgentCore")
+        self._record_event("session.opened", user_id=user_id, session_id=session_id, agent_core="TextAgentCore", trace_id=trace_id)
         self._session_by_user[user_id] = session_id
+        if trace_id:
+            self._trace_id_by_user[user_id] = trace_id
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         self._set_turn_state(chunk.user_id, chunk.session_id, "transcribing", reason="audio_final_check")
@@ -965,19 +968,23 @@ class TextAgentCore:
 
         return self._event_buffer.events()
 
-    def _record_event(self, event: str, *, user_id: str = "", session_id: str = "", **payload) -> None:
+    def _record_event(self, event: str, *, user_id: str = "", session_id: str = "", trace_id: str | None = None, **payload) -> None:
         """同时写入内存事件和 runs 产物。
 
         参数：
         1. `event`：统一 Agent 事件名。
         2. `user_id`：用户编号。
         3. `session_id`：会话编号。
-        4. `payload`：补充字段。
+        4. `trace_id`：链路追踪标识。
+        5. `payload`：补充字段。
 
         返回值：无。
         异常情况：无。
         """
 
+        final_trace_id = trace_id or self._trace_id_by_user.get(user_id or session_id)
+        if final_trace_id:
+            payload["trace_id"] = final_trace_id
         self._event_buffer.record_event(event, user_id=user_id, session_id=session_id, payload=payload)
         if session_id:
             self.recorder.record_agent_event(session_id, {"event": event, "user_id": user_id, **payload})

@@ -496,6 +496,7 @@ class AudioChatHttpServer:
                                 device_id=event.producer_id,
                                 stream_id=event.stream_id,
                                 event=event.event_name,
+                                trace_id=event.trace_id,
                                 fields={"stream_type": event.stream_type},
                             ),
                         )

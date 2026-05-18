@@ -344,6 +344,7 @@ control-routes.jsonl      # 控制事件订阅匹配和投递结果
 system-events.jsonl       # 系统错误、降级和恢复事件
 capability-events.jsonl   # 跨会话能力调用轨迹
 command-events.jsonl      # 跨会话设备命令轨迹
+trace-events.jsonl        # 按 trace_id 聚合的统一事件日志，便于链路追踪
 debug/playback.json       # 当前播放仲裁快照，对应 /api/debug/playback
 tasks/                    # 长流程 Task 运行产物
 ```
@@ -378,6 +379,7 @@ tasks/                    # 长流程 Task 运行产物
 3. 工具行为不符合预期：看 `tool-events.jsonl` 和相关资产文件。
 4. 播放、打断、输出异常：看 `output-decisions.jsonl`、`playback-decisions.jsonl`、`/api/debug/playback`。
 5. 设备没有收到事件：看根目录 `control-routes.jsonl`。
+6. 链路追踪：使用 `trace-events.jsonl` 按 trace_id 查询完整事件链路。
 
 `runs/`、日志、真实用户音频、图片和视频不能提交。
 

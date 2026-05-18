@@ -59,7 +59,7 @@ VISIBLE_STREAM_EVENTS = {
 class LogContext:
     """终端日志上下文。
 
-    主要功能：统一传递 `user_id`、`session_id`、`device_id`、`stream_id` 等链路字段。
+    主要功能：统一传递 `user_id`、`session_id`、`device_id`、`stream_id`、`trace_id` 等链路字段。
     主要属性：`fields` 保存额外业务字段，格式化器会以 `key=value` 形式追加到日志末尾。
     """
 
@@ -68,13 +68,14 @@ class LogContext:
     device_id: str | None = None
     stream_id: str | None = None
     event: str | None = None
+    trace_id: str | None = None
     fields: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为 logging extra 字段。"""
 
         result: dict[str, Any] = {}
-        for key in ("user_id", "session_id", "device_id", "stream_id", "event"):
+        for key in ("user_id", "session_id", "device_id", "stream_id", "event", "trace_id"):
             value = getattr(self, key)
             if value and key not in STANDARD_LOG_RECORD_FIELDS:
                 result[key] = value
@@ -102,20 +103,28 @@ class LineFormatter(logging.Formatter):
         self.timezone = _resolve_log_timezone(self.timezone_name)
 
     def format(self, record: logging.LogRecord) -> str:
-        """格式化为 `time level logger message key=value`。"""
+        """格式化为 JSON 格式日志。"""
 
         timestamp = datetime.now(tz=self.timezone).isoformat(timespec="milliseconds")
         message = record.getMessage()
-        line = f"{timestamp} {record.levelname} {record.name} {message}"
         standard = STANDARD_LOG_RECORD_FIELDS | {"exc_info", "exc_text", "stack_info"}
-        fields: list[str] = []
+        
+        log_entry = {
+            "timestamp": timestamp,
+            "level": record.levelname,
+            "logger": record.name,
+            "message": message,
+        }
+        
         for key, value in sorted(record.__dict__.items()):
             if key in standard or key in STORAGE_PATH_LOG_FIELDS or key.startswith("_"):
                 continue
-            fields.append(f"{key}={_format_log_value(value)}")
-        if fields:
-            line = f"{line} {' '.join(fields)}"
-        return line
+            log_entry[key] = value
+        
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        
+        return json.dumps(log_entry, ensure_ascii=False)
 
 
 def configure_console_logging(level: str = "INFO", *, timezone_name: str = "local") -> None:
@@ -260,6 +269,7 @@ class RunRecorder:
                         "system-events.jsonl": "系统错误、降级和恢复事件",
                         "capability-events.jsonl": "跨会话能力调用轨迹",
                         "command-events.jsonl": "跨会话设备命令轨迹",
+                        "trace-events.jsonl": "按 trace_id 聚合的统一事件日志",
                         "debug/playback.json": "当前播放仲裁快照",
                     },
                     "session_files": {
@@ -345,6 +355,8 @@ class RunRecorder:
         if event.session_id:
             self._append_jsonl(self.session_dir(event.session_id, user_id=event.user_id) / "events.jsonl", event.to_dict())
         self._append_jsonl(self.runs_root / "control-events.jsonl", event.to_dict())
+        if event.trace_id:
+            self._append_jsonl(self.runs_root / "trace-events.jsonl", event.to_dict())
         if not should_log_control_event_to_terminal(event):
             return
         payload = event.payload or {}
@@ -365,6 +377,7 @@ class RunRecorder:
                 device_id=event.producer_id,
                 stream_id=event.stream_id,
                 event=event.event_name,
+                trace_id=event.trace_id,
                 fields={
                     "stream_type": event.stream_type,
                     "status": payload.get("status"),
@@ -492,6 +505,7 @@ class RunRecorder:
                 session_id=session_id,
                 stream_id=stream_id,
                 event=name,
+                trace_id=record.get("trace_id"),
                 fields={
                     "stream_type": stream_type,
                     "producer_id": record.get("producer_id"),
@@ -508,6 +522,8 @@ class RunRecorder:
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
+        if record.get("trace_id"):
+            self._append_jsonl(self.runs_root / "trace-events.jsonl", record)
         event = str(record.get("event") or "")
         error_fields = _error_log_fields(
             record.get("provider_error_message") or record.get("message") or record.get("error") or record.get("raw")
@@ -516,6 +532,7 @@ class RunRecorder:
             user_id=record.get("user_id"),
             session_id=session_id,
             event=event,
+            trace_id=record.get("trace_id"),
             fields={
                 "provider": record.get("provider"),
                 "model": record.get("model"),
@@ -665,6 +682,8 @@ class RunRecorder:
         """
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "tool-events.jsonl", record)
+        if record.get("trace_id"):
+            self._append_jsonl(self.runs_root / "trace-events.jsonl", record)
         log_info(
             self.logger,
             f"工具调用 {record.get('tool_name')}",
@@ -714,6 +733,8 @@ class RunRecorder:
         """
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "assets.jsonl", record)
+        if record.get("trace_id"):
+            self._append_jsonl(self.runs_root / "trace-events.jsonl", record)
         log_info(
             self.logger,
             f"资产事件 {record.get('event')}",
