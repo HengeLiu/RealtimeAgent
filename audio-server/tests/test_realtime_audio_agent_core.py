@@ -342,7 +342,7 @@ def test_realtime_audio_done_closes_current_output_stream(tmp_path) -> None:
     """测试目标：验证 provider audio done 会关闭当前 output stream。
 
     测试方法：先 append 一片音频触发 output stream，再让 fake provider 发送 done。
-    预期结果：端侧收到 `stream.output.close.requested`。
+    预期结果：端侧收到 `stream.output.finish.requested`。
     """
     instances: list[FakeRealtimeProvider] = []
     app = _realtime_app(tmp_path, instances)
@@ -363,7 +363,7 @@ def test_realtime_audio_done_closes_current_output_stream(tmp_path) -> None:
     )
     instances[0].emit_done()
 
-    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
     model_events = (tmp_path / "runs" / "user-001" / handle.session_id / "model-events.jsonl").read_text()
     assert "assistant_audio.done" in model_events
 
@@ -403,6 +403,46 @@ def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
 
     assert instances[0].cancelled is True
     assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
+
+
+def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> None:
+    """测试目标：验证 Omni provider 的 speech_started 事件能停止当前播放。
+
+    测试方法：让 fake realtime provider 先输出一片未完成音频，再模拟
+    `omni.input_audio_buffer.speech_started`。
+    预期结果：provider cancel 被调用，端侧收到 output cancel 事件。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    core = app.agent_core
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    assert app.output_service.active_output_stream_id("user-001", "dev-web") is not None
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert instances[0].cancelled is True
+    assert "stream.output.cancel.requested" in event_names
+    assert "stream.output.cancelled" in event_names
+    agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "realtime.provider_speech_started.interrupt" in agent_events_text
 
 
 def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> None:
@@ -696,7 +736,7 @@ def test_realtime_mode_uses_builtin_mock_provider_for_local_chain(tmp_path) -> N
     )
 
     assert connection.chunks
-    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
     assert any(event.event == "session.opened" for event in app.agent_core.events())
     assert any(event.event == "mock_realtime.input.committed" for event in app.agent_core.events())
     assert any(
@@ -735,7 +775,7 @@ def test_realtime_commit_input_forwards_to_provider_and_records_event(tmp_path) 
 
     app.agent_core.commit_input("user-001", handle.session_id, reason="unit_commit")
 
-    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
     assert any(event.event == "input.committed" for event in app.agent_core.events())
 
 

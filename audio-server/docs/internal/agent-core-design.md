@@ -175,7 +175,7 @@ Output -> Device : actuator.speaker stream
 7. 文本 delta 交给 `TextOutputAdapter`，再进入 Output Service 做 TTS 和播放。
 8. 最终助手文本写入消息存储。
 
-文本链路的 turn boundary 由 ASR final chunk 决定。`commit_input()` 当前只记录公共事件，不强制生成新 turn。
+当前文本链路的 turn boundary 仍由 ASR final chunk 临时决定。目标架构中，唤醒后的连续音频必须直达服务器，`TextAgentCore` 不依赖端侧 VAD 或端侧 commit；服务器独立 VAD 服务根据上行 PCM 产出 `speech_start`、`speech_end` 和 `silence_timeout`，再由 Text turn controller 决定打断旧回复或提交新 turn。`commit_input()` 当前只记录公共事件，不强制生成新 turn。
 
 ### 6.2 `realtime_audio`
 
@@ -190,6 +190,8 @@ Output -> Device : actuator.speaker stream
 7. provider 失败时，Agent Core 标记 session failed，后续音频 chunk 不再继续 append，避免错误刷屏。
 
 Realtime 链路的 turn boundary 不由 server 手动拼接。VAD 模式下，应遵守 provider 文档，只发送 provider 支持的输入事件；显式 `commit_input()` 只在当前 provider adapter 明确支持时使用。
+
+连续对话期间，端侧音频上行长连接建立后，音频持续直达 provider。端侧不根据本地 VAD 判断用户是否插话。`omni.input_audio_buffer.speech_started` 是 Omni 链路的权威 speech-start 事件；Agent Core 收到该事件后应取消当前 response / output generation，并通过控制面通知端侧停止当前 speaker 播放。端侧只执行停止播放，不自行判断 speech-start。
 
 ### 6.3 `auto`
 
@@ -292,7 +294,7 @@ System prompt 不承载：
 
 当前 `RealtimeAudioAgentCore` 支持 Realtime turn 内同步视觉帧：
 
-1. 收到 provider `omni.input_audio_buffer.speech_started` 后启动视觉采样。
+1. 收到 provider `omni.input_audio_buffer.speech_started` 后，取消当前 response / output generation、通知端侧停止当前 speaker 播放，并启动视觉采样。
 2. 每隔 `agent.realtime.visual_frame_interval_seconds` 请求一次 `sensor.rgb` 单帧。
 3. 请求成功后读取 JPEG bytes，通过 provider adapter 的 `append_image()` 追加到当前 Realtime 会话。
 4. 收到 `omni.input_audio_buffer.speech_stopped` 后停止采样。

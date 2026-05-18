@@ -139,7 +139,7 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
 
 
 def test_text_agent_core_final_mic_chunk_emits_output() -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root="runs/test-agent-core"))
+    app = AudioChatApp(AudioChatConfig(runs_root="runs/test-agent-core", agent_mode="text"))
 
     class Connection:
         device_id = "dev-playback"
@@ -160,14 +160,15 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
             event_name="control.device.register.requested",
             user_id="user-001",
             producer_id="dev-playback",
-            payload={
-                "device_id": "dev-playback",
-                "auth": {"mode": "disabled"},
-                "supports": {"sensors": [], "actuators": []},
-            },
-        ),
-        connection,
-    )
+                payload={
+                    "device_id": "dev-playback",
+                    "auth": {"mode": "disabled"},
+                    "supports": {"sensors": [], "actuators": []},
+                    "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                },
+            ),
+            connection,
+        )
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-playback")
 
     app.write_input_chunk(
@@ -195,7 +196,7 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
     不会因为 session_id 已响应过而跳过第二轮。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
 
     class Connection:
         device_id = "dev-continuous"
@@ -283,7 +284,7 @@ def test_text_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path, 
 
     monkeypatch.setattr(text_module, "build_asr_provider", lambda config: (ClosingAsrProvider(), None))
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
 
     class Connection:
         device_id = "dev-recreate-asr"
@@ -421,12 +422,13 @@ def test_mic_input_close_is_pushed_to_producer_device(tmp_path) -> None:
             user_id="user-browser-glass",
             producer_id=connection.device_id,
             payload={
-                "device_id": connection.device_id,
-                "auth": {"mode": "disabled"},
-                "supports": {"sensors": [], "actuators": []},
-            },
-        ),
-        connection,
+                        "device_id": connection.device_id,
+                        "auth": {"mode": "disabled"},
+                        "supports": {"sensors": [], "actuators": []},
+                        "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                    },
+                ),
+                connection,
     )
     assert response.event_name == "control.device.registered"
     handle = app.open_input_stream(user_id="user-browser-glass", producer_id=connection.device_id)
@@ -474,6 +476,7 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
                     "device_id": connection.device_id,
                     "auth": {"mode": "disabled"},
                     "supports": {"sensors": [], "actuators": []},
+                    "properties": {"audio_chat.audio_output": "actuator.speaker"},
                 },
             ),
             connection,
@@ -516,7 +519,7 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
     assert cancel_handle.consumer_device_ids == ("dev-first-speaker",)
     assert [chunk.stream_id for chunk in first.chunks] == [handle.stream_id]
     assert second.chunks == []
-    assert any(event.event_name == "stream.output.close.requested" for event in first.events)
+    assert any(event.event_name == "stream.output.finish.requested" for event in first.events)
     assert any(event.event_name == "stream.output.cancelled" for event in first.events)
     assert [event.event_name for event in second.events] == []
 

@@ -69,7 +69,6 @@ def main(argv: list[str] | None = None) -> None:
         "stream_types": sorted(STREAM_TYPES),
         "checks": checks,
         "not_implemented": {
-            "audio_pipeline.vad": "server VAD is diagnostic only; Agent/provider still owns turn boundary",
             "audio_pipeline.asr_sidecar": "not implemented",
         },
     }
@@ -452,6 +451,9 @@ def _audio_pipeline_check(config: AudioChatYamlConfig) -> dict:
         degradations.append("audio_pipeline.volume_normalize currently records volume metrics only; it does not change PCM samples")
     if audio.vad in {"", "disabled", "off", "false"}:
         degradations.append("audio_pipeline.vad disabled by config")
+    elif audio.vad in {"server", "server_only", "server_vad"}:
+        processors.append("server_vad")
+        degradations.append("audio_pipeline.vad uses server-side VAD for Text realtime speech boundaries")
     elif audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"}:
         processors.append("quality_vad_probe")
         degradations.append("audio_pipeline.vad is diagnostic only; Agent/provider still owns turn boundary")
@@ -480,13 +482,15 @@ def _audio_pipeline_check(config: AudioChatYamlConfig) -> dict:
         "vad": {
             "mode": audio.vad,
             "status": (
-                "diagnostic"
+                "server"
+                if audio.vad in {"server", "server_only", "server_vad"}
+                else "diagnostic"
                 if audio.vad in {"endpoint_or_server", "diagnostic", "server_diagnostic"}
                 else "provider"
                 if audio.vad == "provider"
                 else "disabled"
             ),
-            "owns_turn_boundary": False,
+            "owns_turn_boundary": audio.vad in {"server", "server_only", "server_vad", "provider"},
         },
         "degradations": degradations,
         "errors": errors,

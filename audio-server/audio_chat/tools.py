@@ -881,7 +881,7 @@ class OutputStreamWriter:
     def close(self, *, reason: str = "completed") -> None:
         """请求关闭当前 output stream。
 
-        主要逻辑：调用 Stream Service 发布 `stream.output.close.requested`。
+        主要逻辑：调用 Stream Service 发布 output 完成或关闭请求。
         参数：`reason` 为关闭原因。
         返回值：无。
         异常情况：stream 不存在时由 Stream Service 抛出异常。
@@ -1265,6 +1265,11 @@ class OutputFacade:
             priority=priority,
             ttl_seconds=ttl_seconds,
         )
+
+    async def close_audio_session(self, *, reason: str = "model_requested", close_mode: str = "close_now") -> None:
+        """请求服务器关闭当前连续对话音频会话。"""
+
+        self._app.close_audio_session(self.user_id, reason=reason, mode=close_mode)
 
 
 class AssetFacade:
@@ -2161,6 +2166,34 @@ class TaskRuntimeManagerTool(BaseTool):
         return ToolResult.failed(ToolError(f"unknown task action: {action}", code=ErrorCode.INVALID_ARGUMENT))
 
 
+class CloseAudioSessionTool(BaseTool):
+    """关闭当前连续对话音频会话的内置 Tool。"""
+
+    class Input(BaseModel):
+        reason: str = Field(default="model_requested", description="关闭连续对话的原因。")
+
+    spec = ToolSpec(
+        name="close_audio_session",
+        description=(
+            "当用户明确表示结束连续对话、先不用了、可以停止、退出语音会话或关闭连接时调用。"
+            "本工具只请求服务器关闭当前 audio session，不用于普通回答。"
+        ),
+        input_model=Input,
+        capability_type="tool",
+        tags=["audio_session", "system"],
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        reason = str(input_data.get("reason") or "model_requested").strip() or "model_requested"
+        if context.output is None or not hasattr(context.output, "close_audio_session"):
+            return ToolResult.failed(ToolError("audio session close is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        await context.output.close_audio_session(reason=reason, close_mode="close_now")
+        return ToolResult.success(
+            data={"requested": True, "reason": reason},
+            message="已请求关闭连续对话。",
+        )
+
+
 class TaskStartTool(BaseTool):
     """由 SDK 根据 BaseTask 自动生成的模型可见启动 Tool。"""
 
@@ -2490,6 +2523,7 @@ class McpCallTool(BaseTool):
 BUILTIN_TOOLS = (
     QueryDeviceStateTool,
     TaskRuntimeManagerTool,
+    CloseAudioSessionTool,
 )
 
 EXTENSION_BUILTIN_TOOLS = (

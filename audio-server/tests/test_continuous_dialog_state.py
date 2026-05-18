@@ -35,6 +35,10 @@ def register_audio_device(app: AudioChatApp, connection: Connection, user_id: st
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
+                "properties": {
+                    "audio_chat.audio_input": "sensor.mic",
+                    "audio_chat.audio_output": "actuator.speaker",
+                },
             },
         ),
         connection,
@@ -76,7 +80,7 @@ def test_turn_ignored_does_not_close_persistent_realtime_session(tmp_path) -> No
 
     assert "user-dialog" in app.agent_core._sessions
     assert not any(event.event_name == "control.audio_session.close.requested" for event in connection.events)
-    model_events = (tmp_path / "runs" / "sessions" / session_id / "model-events.jsonl").read_text(encoding="utf-8")
+    model_events = app.recorder.session_file(session_id, "model-events.jsonl").read_text(encoding="utf-8")
     assert "control.audio_session.turn.ignored" in model_events
 
 
@@ -112,7 +116,7 @@ def test_model_close_request_is_ignored_without_explicit_allow(tmp_path) -> None
     )
 
     assert not any(event.event_name == "control.audio_session.close.requested" for event in connection.events)
-    model_events = (tmp_path / "runs" / "sessions" / session_id / "model-events.jsonl").read_text(encoding="utf-8")
+    model_events = app.recorder.session_file(session_id, "model-events.jsonl").read_text(encoding="utf-8")
     assert "control.audio_session.turn.ignored" in model_events
     assert "model_called_close" in model_events
 

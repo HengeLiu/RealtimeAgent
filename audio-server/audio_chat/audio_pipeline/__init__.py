@@ -7,6 +7,7 @@ from audio_chat.audio_pipeline.service import (
     FormatValidator,
     Pcm16Resampler,
     QualityVadProbe,
+    ServerVadProcessor,
     VolumeProbe,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "FormatValidator",
     "Pcm16Resampler",
     "QualityVadProbe",
+    "ServerVadProcessor",
     "VolumeProbe",
 ]

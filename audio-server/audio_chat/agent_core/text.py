@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import asdict, is_dataclass
 from typing import Any, Callable
 
@@ -177,6 +178,24 @@ class AsrPipeline:
         try:
             for event in provider.append_audio(chunk):
                 name = "input_transcript.done" if event.final else "input_transcript.delta"
+                event_payload = {
+                    "event": name,
+                    "text": event.text,
+                    "provider": provider.provider_name,
+                    "model": provider.model,
+                    "stream_id": chunk.stream_id,
+                }
+                for attr in (
+                    "sentence_id",
+                    "sentence_begin",
+                    "sentence_end",
+                    "begin_time_ms",
+                    "end_time_ms",
+                    "words",
+                ):
+                    value = getattr(event, attr, None)
+                    if value not in (None, False, []):
+                        event_payload[attr] = value
                 if event.text:
                     self.recorder.record_timeline_checkpoint(
                         chunk.session_id,
@@ -190,16 +209,7 @@ class AsrPipeline:
                             "text_chars": len(event.text),
                         },
                     )
-                self.recorder.record_agent_event(
-                    chunk.session_id,
-                    {
-                        "event": name,
-                        "text": event.text,
-                        "provider": provider.provider_name,
-                        "model": provider.model,
-                        "stream_id": chunk.stream_id,
-                    },
-                )
+                self.recorder.record_agent_event(chunk.session_id, event_payload)
                 if self.on_transcript_event is not None:
                     self.on_transcript_event(chunk, event)
                 if event.final:
@@ -220,6 +230,30 @@ class AsrPipeline:
             if chunk.final:
                 self._close_provider(provider_key)
         return final_text
+
+    def prepare_provider(self, *, stream_id: str, session_id: str | None = None) -> None:
+        """提前建立指定麦克风输入流的 ASR provider。
+
+        主要逻辑：Text realtime 标准要求上行音频长连接建立时就连接 realtime ASR，
+        避免第一帧音频到达后才承担 provider 建连延迟。`session_id` 只用于观测事件。
+        参数：`stream_id` 为上行麦克风 stream；`session_id` 为当前音频会话。
+        返回值：无。
+        异常情况：provider 创建失败时沿用 `_provider_for()` 的降级或抛错策略。
+        """
+
+        if not stream_id:
+            return
+        self._provider_for(stream_id)
+        self.recorder.record_agent_event(
+            session_id or stream_id,
+            {"event": "text.asr_provider.prepared", "stream_id": stream_id, "provider": self.config.provider, "model": self.config.model},
+        )
+
+    def close_provider(self, *, stream_id: str) -> None:
+        """关闭指定麦克风输入流的 ASR provider。"""
+
+        if stream_id:
+            self._close_provider(stream_id)
 
     def cancel(self) -> None:
         with self._lock:
@@ -423,6 +457,7 @@ class TextAgentCore:
         memory_service: Any = None,
         max_context_messages: int = 30,
         multimodal_policy: MultimodalMessagePolicy | None = None,
+        on_user_activity: Callable[[str, str], None] | None = None,
     ) -> None:
         self.control_service = control_service
         self.output_service = output_service
@@ -449,6 +484,12 @@ class TextAgentCore:
         self.message_manager = ModelMessageManager(multimodal_policy)
         self._state_by_user: dict[str, str] = {}
         self._interruption_reason_by_user: dict[str, str] = {}
+        self._assistant_output_guard_by_user: dict[str, tuple[int, int]] = {}
+        self._response_generation_by_user: dict[str, int] = {}
+        self._interrupted_generation_reason_by_user: dict[str, dict[int, str]] = {}
+        self._asr_started_sentence_keys: set[str] = set()
+        self._asr_stopped_sentence_keys: set[str] = set()
+        self._on_user_activity = on_user_activity
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 TextAgentCore 使用的 ToolGateway。
@@ -474,18 +515,49 @@ class TextAgentCore:
         self._record_event("session.opened", user_id=user_id, session_id=session_id, agent_core="TextAgentCore")
         self._session_by_user[user_id] = session_id
 
+    def bind_user_activity_callback(self, callback: Callable[[str, str], None]) -> None:
+        """绑定用户有效语音活动回调。
+
+        主要逻辑：连续麦克风长连接会持续发送静音音频，不能用每个音频 chunk 刷新
+        对话空闲时间；只有 ASR 句边界或最终用户输入才算有效用户活动。
+        """
+
+        self._on_user_activity = callback
+
+    def on_audio_input_opened(self, *, user_id: str, session_id: str, stream_id: str) -> None:
+        """通知 Text 链路上行麦克风 stream 已建立。"""
+
+        self.asr_pipeline.prepare_provider(stream_id=stream_id, session_id=session_id)
+
+    def on_audio_input_closed(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
+        """通知 Text 链路上行麦克风 stream 已关闭。"""
+
+        self.asr_pipeline.close_provider(stream_id=stream_id)
+        self._record_event(
+            "audio_input.closed",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+        )
+
     def append_audio_event(self, chunk: StreamChunk) -> None:
         self._set_turn_state(chunk.user_id, chunk.session_id, "transcribing", reason="audio_final_check")
         transcript = self.asr_pipeline.append_audio(chunk)
         if transcript is None:
             return
+        if self._should_ignore_transcript_as_echo(chunk=chunk, transcript=transcript):
+            self._set_turn_state(chunk.user_id, chunk.session_id, "completed", reason="echo_guard_ignored")
+            return
         self._set_turn_state(chunk.user_id, chunk.session_id, "thinking", reason="transcript_final")
+        self._mark_user_activity(chunk.user_id, chunk.session_id)
         turn_key = self._turn_key(chunk=chunk, transcript=transcript)
         if turn_key in self._responded_input_streams:
             self._record_duplicate_turn(chunk=chunk, transcript=transcript, turn_key=turn_key, reason="duplicate_turn")
             self._set_turn_state(chunk.user_id, chunk.session_id, "completed", reason="duplicate_turn")
             return
         self._responded_input_streams.add(turn_key)
+        generation = self._next_response_generation(chunk.user_id)
         self._cancelled_users.discard(chunk.user_id)
         self._interruption_reason_by_user.pop(chunk.user_id, None)
         self.control_service.append_message(
@@ -512,12 +584,35 @@ class TextAgentCore:
             session_id=chunk.session_id,
             agent_core="TextAgentCore",
         )
+        if not chunk.final:
+            thread = threading.Thread(
+                target=self._run_response_turn,
+                kwargs={"chunk": chunk, "transcript": transcript, "generation": generation},
+                name=f"text-response-{chunk.session_id}",
+                daemon=True,
+            )
+            thread.start()
+            return
+        self._run_response_turn(chunk=chunk, transcript=transcript, generation=generation)
+
+    def _run_response_turn(self, *, chunk: StreamChunk, transcript: str, generation: int) -> None:
+        """执行 Text 模型、工具和输出回复。
+
+        主要逻辑：连续上行链路中，ASR 可能在非 final chunk 上给出最终文本；此时回复必须
+        脱离 mic stream worker 后台执行，否则长文本/TTS 会阻塞后续麦克风 chunk、VAD 和
+        打断处理。显式 final chunk 仍可同步调用本方法，保持离线回放和单元测试语义。
+        参数：`chunk` 为触发本轮回复的音频片；`transcript` 为用户最终文本。
+        返回值：无。
+        异常情况：模型或输出异常会转成可恢复回复并写入 runs。
+        """
+
         response_error: Exception | None = None
         try:
             assistant_text = self._run_tool_loop(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
                 transcript=transcript,
+                generation=generation,
             )
         except Exception as exc:
             response_error = exc
@@ -532,7 +627,12 @@ class TextAgentCore:
                 final=False,
                 context="fallback_text",
             )
-        interrupted_reason = self._interruption_reason_by_user.pop(chunk.user_id, None)
+        interrupted_reason = self._response_cancel_reason(chunk.user_id, generation)
+        self._interrupted_generation_reason_by_user.get(chunk.user_id, {}).pop(generation, None)
+        if self._response_generation_by_user.get(chunk.user_id) == generation:
+            self._interruption_reason_by_user.pop(chunk.user_id, None)
+        if interrupted_reason and assistant_text and not assistant_text.endswith("<用户打断>"):
+            assistant_text = f"{assistant_text}<用户打断>"
         if interrupted_reason is None:
             self._emit_output_best_effort(
                 user_id=chunk.user_id,
@@ -580,6 +680,93 @@ class TextAgentCore:
             "interrupted" if interrupted_reason else ("failed" if response_error is not None else "completed"),
             reason=interrupted_reason or ("response_error" if response_error is not None else "response_done"),
         )
+        if not interrupted_reason:
+            self._extend_assistant_output_guard(chunk.user_id, start_ms=None, tail_ms=1500)
+
+    def _should_ignore_transcript_as_echo(self, *, chunk: StreamChunk, transcript: str) -> bool:
+        """判断 ASR final 是否落在助手输出保护窗内。
+
+        主要逻辑：Text 链路当前仍在同一个 mic stream worker 中同步生成回复；助手播放期间
+        的麦克风 chunk 可能排队到回复结束后才送入 ASR。若 chunk 时间戳落在助手输出开始
+        到播放尾音保护窗之间，则把该 final 当作潜在回声丢弃，避免助手自问自答。
+        参数：`chunk` 为触发 final 的音频片；`transcript` 为 ASR final 文本。
+        返回值：需要忽略返回 True。
+        异常情况：无。
+        """
+
+        guard = self._assistant_output_guard_by_user.get(chunk.user_id)
+        if guard is None:
+            return False
+        if chunk.final:
+            return False
+        start_ms, until_ms = guard
+        timestamp_ms = int(chunk.timestamp_ms or self._now_ms())
+        if timestamp_ms < start_ms or timestamp_ms > until_ms:
+            return False
+        self._record_event(
+            "input_transcript.ignored",
+            user_id=chunk.user_id,
+            session_id=chunk.session_id,
+            stream_id=chunk.stream_id,
+            reason="assistant_output_echo_guard",
+            transcript=transcript,
+            chunk_timestamp_ms=timestamp_ms,
+            guard_start_ms=start_ms,
+            guard_until_ms=until_ms,
+        )
+        return True
+
+    def _extend_assistant_output_guard(self, user_id: str, *, start_ms: int | None, tail_ms: int) -> None:
+        """更新助手输出后的输入保护窗口。"""
+
+        now_ms = self._now_ms()
+        current = self._assistant_output_guard_by_user.get(user_id)
+        if current and start_ms is not None:
+            guard_start = min(current[0], start_ms)
+        else:
+            guard_start = start_ms if start_ms is not None else (current[0] if current else now_ms)
+        guard_until = max(current[1] if current else 0, now_ms + max(0, int(tail_ms)))
+        self._assistant_output_guard_by_user[user_id] = (guard_start, guard_until)
+
+    @staticmethod
+    def _now_ms() -> int:
+        return int(time.time() * 1000)
+
+    def _next_response_generation(self, user_id: str) -> int:
+        """生成用户维度的回复代次。
+
+        主要逻辑：连续对话中上一轮长回复可能仍在后台线程里运行；新一轮输入开始后，
+        旧代次必须自动失效，避免旧回复在线程恢复后继续输出或覆盖新轮状态。
+        参数：`user_id` 为用户编号。
+        返回值：新的递增代次。
+        异常情况：无。
+        """
+
+        generation = self._response_generation_by_user.get(user_id, 0) + 1
+        self._response_generation_by_user[user_id] = generation
+        self._interrupted_generation_reason_by_user.setdefault(user_id, {})
+        return generation
+
+    def _response_cancel_reason(self, user_id: str, generation: int) -> str | None:
+        """返回指定回复代次是否已取消。
+
+        主要逻辑：先看该代次是否被显式打断；如果当前用户已经进入更高代次，说明
+        旧后台回复已被新输入取代，也必须停止。保留 `_cancelled_users` 作为生命周期
+        接口的兼容兜底，但正常实时链路按 generation 判断。
+        参数：`user_id` 为用户编号；`generation` 为回复代次。
+        返回值：取消原因；未取消返回 None。
+        异常情况：无。
+        """
+
+        interrupted = self._interrupted_generation_reason_by_user.get(user_id, {})
+        if generation in interrupted:
+            return interrupted[generation]
+        current_generation = self._response_generation_by_user.get(user_id, 0)
+        if generation < current_generation:
+            return "superseded_by_new_turn"
+        if user_id in self._cancelled_users:
+            return self._interruption_reason_by_user.get(user_id, "user_interrupt")
+        return None
 
     @staticmethod
     def _turn_key(*, chunk: StreamChunk, transcript: str) -> str:
@@ -681,7 +868,7 @@ class TextAgentCore:
             )
             return False
 
-    def _run_tool_loop(self, *, user_id: str, session_id: str, transcript: str) -> str:
+    def _run_tool_loop(self, *, user_id: str, session_id: str, transcript: str, generation: int) -> str:
         """运行 Text Agent 工具循环。
 
         主要逻辑：支持 provider 通过 `stream_messages(messages, tools)` 返回
@@ -763,12 +950,13 @@ class TextAgentCore:
                     ),
                 )
                 for item in self._stream_model(messages=messages, transcript=transcript, tools=tools):
-                    if user_id in self._cancelled_users:
+                    cancel_reason = self._response_cancel_reason(user_id, generation)
+                    if cancel_reason is not None:
                         self._record_event(
                             "response.interrupted",
                             user_id=user_id,
                             session_id=session_id,
-                            reason=self._interruption_reason_by_user.get(user_id, "user_interrupt"),
+                            reason=cancel_reason,
                             released_chars=sum(len(part) for part in assistant_parts),
                             buffered_chars=sum(len(part) for part in getattr(gate, "_buffer", [])),
                         )
@@ -989,6 +1177,8 @@ class TextAgentCore:
         """
 
         self._set_turn_state(user_id, session_id, "speaking", reason="assistant_text_released")
+        if text:
+            self._extend_assistant_output_guard(user_id, start_ms=self._now_ms(), tail_ms=1500)
         return self._emit_output_best_effort(
             user_id=user_id,
             session_id=session_id,
@@ -1070,39 +1260,174 @@ class TextAgentCore:
 
         self._record_event("input.committed", user_id=user_id, session_id=session_id, reason=reason)
 
-    def _handle_asr_transcript_event(self, chunk: StreamChunk, event: Any) -> None:
-        """根据 ASR 中间文本处理 Text 链路打断。
+    def on_speech_started(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict | None = None,
+    ) -> None:
+        """处理服务端 VAD 的语音开始事件。
 
-        主要逻辑：Text 链路不像 Omni provider 那样直接暴露 `speech_started` 事件；
-        对实时 ASR 来说，播放期间出现非 final transcript delta 就是最早可用的
-        插话信号。此处只在当前用户同一音频会话仍有活跃输出时取消旧回复，后续
-        ASR final 仍按正常新一轮用户输入进入模型。
+        主要逻辑：Text realtime 链路由服务端 VAD 判断用户开始说话；如果上一轮回复仍在
+        生成、工具执行或播放，则取消旧回复和当前 output stream。没有活跃回复时只记录
+        speech_start，不改变当前输入处理。
+        参数：`user_id/session_id/stream_id` 定位音频会话；`reason` 标识触发来源；
+        `diagnostics` 是 VAD 诊断。
+        返回值：无。
+        异常情况：取消失败由下游 provider 或 output service 记录。
+        """
+
+        active_stream_id = self.output_service.active_output_stream_id(user_id, session_id)
+        state = self._state_by_user.get(user_id, "")
+        should_cancel = active_stream_id is not None or state in {"thinking", "speaking", "tool_running"}
+        self._record_event(
+            "text.vad.speech_started",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            output_stream_id=active_stream_id,
+            state=state,
+            will_cancel=should_cancel,
+            diagnostics=diagnostics or {},
+        )
+        self.control_service.publish(
+            Event(
+                event_name="audio.speech.started",
+                user_id=user_id,
+                producer_id=SERVER_PRODUCER_ID,
+                session_id=session_id,
+                payload={
+                    "stream_id": stream_id,
+                    "reason": reason,
+                    "diagnostics": diagnostics or {},
+                },
+            )
+        )
+        self._mark_user_activity(user_id, session_id)
+        if should_cancel:
+            self.interrupt(user_id, reason=reason)
+
+    def on_speech_stopped(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict | None = None,
+    ) -> None:
+        """处理服务端 VAD 的语音结束事件。
+
+        主要逻辑：当前 Text 链路仍以 ASR final 作为提交点，speech_stop 只作为服务器
+        turn boundary 观测事件，后续可接入显式 ASR commit。
+        参数：`user_id/session_id/stream_id` 定位音频会话；`reason` 标识触发来源；
+        `diagnostics` 是 VAD 诊断。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._record_event(
+            "text.vad.speech_stopped",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            diagnostics=diagnostics or {},
+        )
+        self.control_service.publish(
+            Event(
+                event_name="audio.speech.stopped",
+                user_id=user_id,
+                producer_id=SERVER_PRODUCER_ID,
+                session_id=session_id,
+                payload={
+                    "stream_id": stream_id,
+                    "reason": reason,
+                    "diagnostics": diagnostics or {},
+                },
+            )
+        )
+        self._mark_user_activity(user_id, session_id)
+
+    def _handle_asr_transcript_event(self, chunk: StreamChunk, event: Any) -> None:
+        """根据 ASR 结构化事件处理 Text 链路语音边界和打断。
+
+        主要逻辑：Paraformer realtime 会在 `result-generated.output.sentence`
+        中返回 `sentence_begin` 和 `sentence_end`。Text realtime 以这些 provider
+        VAD 字段作为主判定来源；`text` partial 只保留为非 Paraformer provider 的
+        过渡兜底。后续 ASR final 仍按正常新一轮用户输入进入模型。
         参数：`chunk` 为触发 ASR 事件的麦克风分片；`event` 为 ASR transcript 事件。
         返回值：无。
         异常情况：无。
         """
 
-        if bool(getattr(event, "final", False)):
+        sentence_key = self._asr_sentence_key(chunk=chunk, event=event)
+        if bool(getattr(event, "sentence_begin", False)) and sentence_key not in self._asr_started_sentence_keys:
+            self._asr_started_sentence_keys.add(sentence_key)
+            self.on_speech_started(
+                chunk.user_id,
+                chunk.session_id,
+                stream_id=chunk.stream_id,
+                reason="paraformer_sentence_begin",
+                diagnostics=self._asr_boundary_diagnostics(event),
+            )
             return
-        text = str(getattr(event, "text", "") or "").strip()
-        if not text:
-            return
-        active_stream_id = self.output_service.active_output_stream_id(chunk.user_id, chunk.session_id)
-        if active_stream_id is None:
-            return
-        self._record_event(
-            "text.asr_barge_in.detected",
-            user_id=chunk.user_id,
-            session_id=chunk.session_id,
-            stream_id=chunk.stream_id,
-            output_stream_id=active_stream_id,
-            text_preview=text[:40],
-        )
-        self.interrupt(chunk.user_id, reason="asr_barge_in")
+
+        if bool(getattr(event, "sentence_end", False)) and sentence_key not in self._asr_stopped_sentence_keys:
+            self._asr_stopped_sentence_keys.add(sentence_key)
+            self.on_speech_stopped(
+                chunk.user_id,
+                chunk.session_id,
+                stream_id=chunk.stream_id,
+                reason="paraformer_sentence_end",
+                diagnostics=self._asr_boundary_diagnostics(event),
+            )
+
+        return
+
+    def _mark_user_activity(self, user_id: str, session_id: str) -> None:
+        """记录有效用户语音活动。"""
+
+        if self._on_user_activity is not None:
+            self._on_user_activity(user_id, session_id)
+
+    def _asr_sentence_key(self, *, chunk: StreamChunk, event: Any) -> str:
+        """生成 ASR 句子边界去重 key。"""
+
+        sentence_id = getattr(event, "sentence_id", None)
+        if sentence_id is None:
+            sentence_id = f"seq:{chunk.seq}"
+        return f"{chunk.session_id}:{chunk.stream_id}:{sentence_id}"
+
+    def _asr_boundary_diagnostics(self, event: Any) -> dict[str, Any]:
+        """生成可落盘的 ASR 句子边界诊断信息。"""
+
+        diagnostics: dict[str, Any] = {}
+        for name in (
+            "sentence_id",
+            "sentence_begin",
+            "sentence_end",
+            "begin_time_ms",
+            "end_time_ms",
+            "text",
+        ):
+            value = getattr(event, name, None)
+            if value not in (None, False, ""):
+                diagnostics[name] = value
+        words = getattr(event, "words", None)
+        if isinstance(words, list):
+            diagnostics["word_count"] = len(words)
+        return diagnostics
 
     def interrupt(self, user_id: str, *, reason: str) -> None:
         self._cancelled_users.add(user_id)
         self._interruption_reason_by_user[user_id] = reason
+        generation = self._response_generation_by_user.get(user_id)
+        if generation is not None:
+            self._interrupted_generation_reason_by_user.setdefault(user_id, {})[generation] = reason
         session_id = self._session_by_user.get(user_id, "")
         self.text_model.cancel()
         if session_id:
@@ -1126,6 +1451,14 @@ class TextAgentCore:
 
         self._cancelled_users.discard(user_id)
         session_id = self._session_by_user.pop(user_id, None)
+        if session_id:
+            prefix = f"{session_id}:"
+            self._asr_started_sentence_keys = {
+                key for key in self._asr_started_sentence_keys if not key.startswith(prefix)
+            }
+            self._asr_stopped_sentence_keys = {
+                key for key in self._asr_stopped_sentence_keys if not key.startswith(prefix)
+            }
         self.asr_pipeline.cancel()
         self.text_model.cancel()
         if session_id and hasattr(self.output_service, "close_text_session"):

@@ -1690,6 +1690,7 @@ class RealtimeAudioAgentCore:
 
         self.recorder.record_agent_event(session_id, record)
         self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
+        self._handle_provider_speech_started_interrupt(user_id=user_id, session_id=session_id, record=record)
         self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
@@ -1712,6 +1713,54 @@ class RealtimeAudioAgentCore:
             state = "completed"
         if state:
             self._set_turn_state(user_id, session_id, state, reason=event, provider_event=event)
+
+    def _handle_provider_speech_started_interrupt(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """根据 Omni provider 的 speech_started 事件取消旧输出。
+
+        主要逻辑：连续对话中，用户是否开始说话由 Omni provider 判断；服务端收到
+        `speech_started` 后取消 provider 当前响应，并通过 Output Service 下发
+        `stream.output.cancel.requested`，浏览器只负责执行停止播放。
+        """
+
+        event = str(record.get("event") or "")
+        if event != "omni.input_audio_buffer.speech_started":
+            return
+        reason = "provider_speech_started"
+        active_stream_id = self.output_service.active_output_stream_id(user_id, session_id)
+        if active_stream_id is None:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "realtime.provider_speech_started.no_active_output",
+                    "reason": reason,
+                },
+            )
+            return
+        existing = self._sessions.get(user_id)
+        if existing:
+            existing[1].cancel(user_id=user_id, reason=reason)
+        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "realtime.provider_speech_started.interrupt",
+                "reason": reason,
+                "interrupted_stream_id": decision.interrupted_stream_id,
+                "playback_action": decision.action,
+                "playback_reason": decision.reason,
+            },
+        )
+        self._event_buffer.record_event(
+            "provider_speech_started.interrupt",
+            user_id=user_id,
+            session_id=session_id,
+            payload={
+                "reason": reason,
+                "interrupted_stream_id": decision.interrupted_stream_id,
+                "playback_action": decision.action,
+                "playback_reason": decision.reason,
+            },
+        )
 
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 provider VAD 事件启动或停止视觉帧采样。

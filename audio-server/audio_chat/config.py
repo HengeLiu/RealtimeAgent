@@ -72,11 +72,20 @@ class StreamConfig:
 
 
 @dataclass(frozen=True)
+class AudioSessionConfig:
+    """连续对话音频会话配置。"""
+
+    idle_timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
 class AudioPipelineConfig:
     aec: str = "endpoint_only"
     resample: str = "auto"
     volume_normalize: bool = True
-    vad: str = "endpoint_or_server"
+    vad: str = "provider"
+    vad_rms_threshold: int = 96
+    vad_silence_timeout_ms: int = 600
     asr_sidecar: str = "optional"
     silence_close_seconds: int = 15
     max_session_seconds: int = 0
@@ -100,6 +109,7 @@ class AgentTextConfig:
     prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
+    asr_max_sentence_silence_ms: int = 800
     tts_provider: str = "mock"
     tts_model: str = "mock-tts"
     tts_voice: str = "mock"
@@ -275,6 +285,7 @@ class AudioChatYamlConfig:
     user: UserConfig = field(default_factory=UserConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
     stream: StreamConfig = field(default_factory=StreamConfig)
+    audio_session: AudioSessionConfig = field(default_factory=AudioSessionConfig)
     audio_pipeline: AudioPipelineConfig = field(default_factory=AudioPipelineConfig)
     asset: AssetConfig = field(default_factory=AssetConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -310,6 +321,7 @@ def load_yaml_config(path: str | Path) -> AudioChatYamlConfig:
         user=UserConfig(**data.get("user", {})),
         control=ControlConfig(**data.get("control", {})),
         stream=StreamConfig(**data.get("stream", {})),
+        audio_session=AudioSessionConfig(**_known(data.get("audio_session", {}), {"idle_timeout_seconds"})),
         audio_pipeline=AudioPipelineConfig(**data.get("audio_pipeline", {})),
         asset=AssetConfig(**data.get("asset", {})),
         agent=AgentConfig(
@@ -523,6 +535,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "AUDIO_CHAT_AUTH_MODE": ("auth", "mode"),
         "AUDIO_CHAT_ASR_PROVIDER": ("agent", "text", "asr_provider"),
         "AUDIO_CHAT_ASR_MODEL": ("agent", "text", "asr_model"),
+        "AUDIO_CHAT_ASR_MAX_SENTENCE_SILENCE_MS": ("agent", "text", "asr_max_sentence_silence_ms"),
         "AUDIO_CHAT_TEXT_PROVIDER": ("agent", "text", "provider"),
         "AUDIO_CHAT_TEXT_MODEL": ("agent", "text", "model"),
         "AUDIO_CHAT_TEXT_PROMPT": ("agent", "text", "prompt"),

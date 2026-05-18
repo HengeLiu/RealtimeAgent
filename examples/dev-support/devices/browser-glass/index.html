@@ -154,10 +154,6 @@
     const CAPTURE_PREVIEW_MIN_INTERVAL_MS = 500;
     const CAPTURE_THUMBNAIL_MIN_INTERVAL_MS = 1000;
     const CAPTURE_THUMBNAIL_MAX_COUNT = 8;
-    const BARGE_IN_RMS_THRESHOLD = 0.055;
-    const BARGE_IN_REQUIRED_FRAMES = 8;
-    const BARGE_IN_MAX_PEAK = 0.72;
-    const BARGE_IN_COOLDOWN_MS = 1800;
     const BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1";
     const SAMPLE_HANDLE_DB = "audio-chat.browser-glass.samples";
     const SAMPLE_HANDLE_STORE = "handles";
@@ -248,8 +244,6 @@
     let pendingOutputClose = new Map();
     let micPcmBuffer = new Uint8Array(0);
     let openingMic = false;
-    let interruptSentAt = 0;
-    let speechDuringPlaybackFrames = 0;
     let heartbeatTimer = null;
     let sampleDbPromise = null;
     let selectedAudioSampleFileHandle = null;
@@ -1067,46 +1061,6 @@
       return out;
     }
 
-    function audioLevel(samples) {
-      let sum = 0;
-      let peak = 0;
-      for (let i = 0; i < samples.length; i += 1) {
-        const value = Math.abs(samples[i]);
-        sum += value * value;
-        if (value > peak) peak = value;
-      }
-      return {rms: Math.sqrt(sum / Math.max(1, samples.length)), peak};
-    }
-
-    function isPlaybackActive() {
-      return playbackNodes.length > 0 || (audioContext && audioContext.currentTime < playbackTime - 0.05);
-    }
-
-    function sendInterruptIfNeeded(level) {
-      if (!sessionId || !inputStreamId || !isPlaybackActive()) {
-        speechDuringPlaybackFrames = 0;
-        return;
-      }
-      const looksLikeTransient = level.peak > BARGE_IN_MAX_PEAK && level.rms < 0.16;
-      if (level.rms < BARGE_IN_RMS_THRESHOLD || looksLikeTransient) {
-        speechDuringPlaybackFrames = 0;
-        return;
-      }
-      speechDuringPlaybackFrames += 1;
-      const now = Date.now();
-      if (speechDuringPlaybackFrames < BARGE_IN_REQUIRED_FRAMES || now - interruptSentAt < BARGE_IN_COOLDOWN_MS) return;
-      interruptSentAt = now;
-      speechDuringPlaybackFrames = 0;
-      log(`barge-in detected rms=${level.rms.toFixed(4)} peak=${level.peak.toFixed(4)}`);
-      stopAllOutputPlayback("barge_in_local");
-      sendEvent(event("control.user.interrupt.detected", {
-        reason: "barge_in",
-        rms: level.rms,
-        peak: level.peak,
-        required_frames: BARGE_IN_REQUIRED_FRAMES,
-      }, {session_id: currentDeviceId()}));
-    }
-
     function buildRegistrationPayload(deviceId) {
       const builder = DeviceBuilder.define(deviceId)
         .user(document.getElementById("userId").value)
@@ -1221,9 +1175,9 @@
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.speaker") {
         markOutputOpen(item.stream_id);
         await ensureStreamSocketOpen();
-      } else if (item.event_name === "stream.output.close.requested") {
+      } else if (item.event_name === "stream.output.close.requested" || item.event_name === "stream.output.finish.requested") {
         pendingOutputClose.set(item.stream_id, item);
-        log(`playback close requested stream_id=${item.stream_id}`);
+        log(`playback finish requested stream_id=${item.stream_id}`);
         closeOutputWhenDrained(item.stream_id);
       } else if (item.event_name === "stream.input.closed" && item.stream_type === "sensor.mic") {
         markMicInputClosed(item.stream_id, (item.payload && item.payload.reason) || "server_closed");
@@ -1250,12 +1204,10 @@
       ) {
         const reason = (item.payload && item.payload.reason) || "server_cancelled";
         stopOutputPlayback(item.stream_id, reason);
+      } else if (item.event_name === "audio.speech.started") {
+        stopAllOutputPlayback("server_speech_started");
       } else if (item.event_name === "control.audio_session.close.requested") {
-        await stopMic();
-        sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: currentDeviceId()}));
-        sessionId = null;
-        closeStreamSocket("audio_session_closed");
-        renderStatus();
+        await closeAudioSessionByServerRequest();
       }
     }
 
@@ -2001,7 +1953,6 @@
         processor.onaudioprocess = (evt) => {
           if (!streamWs || streamWs.readyState !== WebSocket.OPEN || !inputStreamId) return;
           const input = evt.inputBuffer.getChannelData(0);
-          sendInterruptIfNeeded(audioLevel(input));
           const pcm16 = floatToPcm16(resampleLinear(input, audioContext.sampleRate, INPUT_RATE));
           micPcmBuffer = concatBytes(micPcmBuffer, pcm16);
           while (micPcmBuffer.byteLength >= MIC_CHUNK_BYTES) {
@@ -2080,9 +2031,6 @@
       sendEvent(event("stream.output.finished", {stream_type: "actuator.speaker"}, {
         session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
       }));
-      sendEvent(event("stream.output.closed", {stream_type: "actuator.speaker", reason: "playback_drained"}, {
-        session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
-      }));
     }
 
     function stopOutputPlayback(streamId, reason) {
@@ -2104,6 +2052,26 @@
     function stopAllOutputPlayback(reason) {
       const streamIds = Array.from(new Set(playbackNodes.map((item) => item.streamId)));
       for (const streamId of streamIds) stopOutputPlayback(streamId, reason);
+    }
+
+    async function waitPlaybackDrained(timeoutMs = 10000) {
+      const startedAt = Date.now();
+      while (playbackNodes.length > 0 || (audioContext && audioContext.currentTime < playbackTime - 0.03)) {
+        if (Date.now() - startedAt > timeoutMs) {
+          log("playback drain timeout before audio session close");
+          break;
+        }
+        await delay(30);
+      }
+    }
+
+    async function closeAudioSessionByServerRequest() {
+      await stopMic();
+      await waitPlaybackDrained();
+      sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: currentDeviceId()}));
+      sessionId = null;
+      closeStreamSocket("audio_session_closed");
+      renderStatus();
     }
 
     async function stopMic() {

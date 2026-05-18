@@ -96,10 +96,14 @@ class AudioChatConfig:
     audio_pipeline_aec: str = "endpoint_only"
     audio_pipeline_resample: str = "auto"
     audio_pipeline_volume_normalize: bool = True
-    audio_pipeline_vad: str = "endpoint_or_server"
+    audio_pipeline_vad: str = "provider"
+    audio_pipeline_vad_rms_threshold: int = 96
+    audio_pipeline_vad_silence_timeout_ms: int = 600
     audio_session_max_duration_seconds: float = 0.0
+    audio_session_idle_timeout_seconds: float = 30.0
     asr_provider: str = "mock"
     asr_model: str = "mock-asr"
+    asr_max_sentence_silence_ms: int = 800
     text_provider: str = "mock"
     text_model: str = "mock-text"
     text_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
@@ -237,9 +241,13 @@ class AudioChatConfig:
             audio_pipeline_resample=loaded.audio_pipeline.resample,
             audio_pipeline_volume_normalize=loaded.audio_pipeline.volume_normalize,
             audio_pipeline_vad=loaded.audio_pipeline.vad,
+            audio_pipeline_vad_rms_threshold=loaded.audio_pipeline.vad_rms_threshold,
+            audio_pipeline_vad_silence_timeout_ms=loaded.audio_pipeline.vad_silence_timeout_ms,
+            audio_session_idle_timeout_seconds=loaded.audio_session.idle_timeout_seconds,
             audio_session_max_duration_seconds=loaded.audio_pipeline.max_session_seconds,
             asr_provider=text.asr_provider,
             asr_model=text.asr_model,
+            asr_max_sentence_silence_ms=text.asr_max_sentence_silence_ms,
             text_provider=text.provider,
             text_model=text.model,
             text_prompt=_with_memory_instructions(text.prompt, enabled=memory_enabled),
@@ -506,6 +514,7 @@ class AudioChatApp:
                 model=self.config.asr_model,
                 allow_mock_fallback=self.config.allow_mock_fallback,
                 realtime_timeout_seconds=self.config.provider_request_timeout_seconds,
+                max_sentence_silence_ms=self.config.asr_max_sentence_silence_ms,
                 max_retries=self.config.provider_max_retries,
             ),
             text_model_config=TextModelProviderConfig(
@@ -534,9 +543,12 @@ class AudioChatApp:
             max_context_messages=self.config.text_max_context_messages,
             tool_gateway=self.tool_gateway,
             memory_service=self.memory_service,
+            on_user_activity=self._mark_user_audio_activity,
         )
         if hasattr(self.agent_core, "bind_tool_gateway"):
             self.agent_core.bind_tool_gateway(self.tool_gateway)
+        if hasattr(self.agent_core, "bind_user_activity_callback"):
+            self.agent_core.bind_user_activity_callback(self._mark_user_audio_activity)
         self.text_agent_core = self.agent_core
         self.audio_pipeline = AudioPipeline(
             agent_core=self.agent_core,
@@ -547,6 +559,8 @@ class AudioChatApp:
                 resample=self.config.audio_pipeline_resample,
                 volume_probe=self.config.audio_pipeline_volume_normalize,
                 vad=self.config.audio_pipeline_vad,
+                vad_rms_threshold=self.config.audio_pipeline_vad_rms_threshold,
+                vad_silence_timeout_ms=self.config.audio_pipeline_vad_silence_timeout_ms,
             ),
         )
         self.stream_service.set_dispatcher(self)
@@ -682,7 +696,6 @@ class AudioChatApp:
 
     def dispatch(self, chunk: StreamChunk) -> None:
         if chunk.stream_type == "sensor.mic":
-            self._touch_audio_session(chunk.user_id, chunk.session_id)
             self.audio_pipeline.dispatch(chunk)
             return
         if chunk.stream_type in {"sensor.rgb", "sensor.depth", "sensor.imu", "sensor.tof"}:
@@ -755,6 +768,20 @@ class AudioChatApp:
 
     def write_input_chunk(self, chunk: StreamChunk) -> None:
         self.stream_service.on_chunk(chunk)
+
+    def mark_stream_connection_opened(self, device_id: str) -> None:
+        """标记端侧 stream WebSocket 已建立。
+
+        主要逻辑：当前协议的 `/ws/stream` 同时承载上行麦克风和下行扬声器数据。
+        端侧在连续对话开始时建立该长连接，因此这里按设备会话预热 Text TTS session，
+        让首个 assistant text delta 到达时可以直接进入已准备好的 provider。
+        """
+
+        if not device_id:
+            return
+        if self.config.agent_mode != "text":
+            return
+        self.output_service.prepare_text_session(device_id, reason="stream_ws_opened")
 
     def close_audio_session(self, user_id: str, *, reason: str = "completed", mode: str = "close_now") -> None:
         device_id = self._active_device_by_user.get(user_id)
@@ -872,6 +899,12 @@ class AudioChatApp:
             event.user_id,
             DeviceDialogState(user_id=event.user_id, device_id=handle.session_id, state="opened"),
         ).touch()
+        if handle.stream_type == "sensor.mic" and hasattr(self.agent_core, "on_audio_input_opened"):
+            self.agent_core.on_audio_input_opened(
+                user_id=handle.user_id,
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+            )
 
     def _mark_endpoint_input_closed(self, event: Event) -> None:
         if not event.stream_id:
@@ -941,6 +974,15 @@ class AudioChatApp:
         if state is None or (session_id is not None and state.device_id != session_id):
             return
         state.touch()
+
+    def _mark_user_audio_activity(self, user_id: str, session_id: str) -> None:
+        """刷新连续对话的有效用户语音活跃时间。
+
+        主要逻辑：麦克风长连接会持续上传静音和环境声，不能把每个音频 chunk 都当成
+        用户活跃；该方法只由 ASR 句边界或最终输入触发。
+        """
+
+        self._touch_audio_session(user_id, session_id)
 
     def _handle_output_finished(self, user_id: str, session_id: str, stream_id: str) -> None:
         """处理 Output Service 当前输出完成事件。"""
@@ -1108,6 +1150,16 @@ class AudioChatApp:
                 broker.fail_device_commands(device_id=device_id, reason="heartbeat_timeout")
         closed_streams = self.stream_service.close_idle_streams(now=current)
         closed_sessions: list[str] = []
+        if self.config.audio_session_idle_timeout_seconds > 0:
+            for user_id, state in list(self._device_dialogs_by_user.items()):
+                if state.close_pending or state.state != "opened":
+                    continue
+                if self.output_service.active_output_stream_id(user_id, state.device_id) is not None:
+                    continue
+                if current - state.last_activity_at <= self.config.audio_session_idle_timeout_seconds:
+                    continue
+                self.close_audio_session(user_id, reason="audio_session_idle_timeout", mode="close_now")
+                closed_sessions.append(state.device_id)
         if self.config.audio_session_max_duration_seconds > 0:
             for user_id, state in list(self._device_dialogs_by_user.items()):
                 if state.close_pending:

@@ -239,4 +239,4 @@ def test_preflight_generates_p0_json_report(tmp_path) -> None:
         "live_server",
         "recent_playback",
     }
-    assert data["not_implemented"]["audio_pipeline.vad"]
+    assert "audio_pipeline.vad" not in data["not_implemented"]

@@ -273,7 +273,11 @@ class StreamService:
         if handle.state == "closed":
             return
         handle.state = "closed"
-        event_name = "stream.output.close.requested" if handle.stream_type.startswith("actuator.") else "stream.input.closed"
+        event_name = (
+            "stream.output.finish.requested"
+            if handle.stream_type == "actuator.speaker"
+            else ("stream.output.close.requested" if handle.stream_type.startswith("actuator.") else "stream.input.closed")
+        )
         event = Event(
             event_name=event_name,
             user_id=handle.user_id,

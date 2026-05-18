@@ -6,6 +6,7 @@ from audio_chat.audio_pipeline import (
     FormatValidator,
     Pcm16Resampler,
     QualityVadProbe,
+    ServerVadProcessor,
     VolumeProbe,
 )
 from audio_chat.protocol import StreamChunk
@@ -95,6 +96,24 @@ def test_volume_and_vad_probe_only_record_quality_statistics() -> None:
     assert vad.diagnostics["diagnostic_only"] is True
 
 
+def test_server_vad_processor_emits_speech_boundaries() -> None:
+    """测试目标：验证服务端 VAD 能输出语音开始和结束边界。
+
+    测试方法：先输入高 RMS 音频，再输入足够长的静音片段。
+    预期结果：第一片触发 speech_started，连续静音后触发 speech_stopped。
+    """
+
+    vad = ServerVadProcessor(threshold=96, silence_timeout_ms=40)
+
+    started = vad.process(_chunk(payload=b"\xff\x7f" * 320, duration_ms=20))
+    stopped = vad.process(_chunk(payload=b"\x00\x00" * 320, duration_ms=40))
+
+    assert started.diagnostics["speech_started"] is True
+    assert started.diagnostics["speech_active"] is True
+    assert stopped.diagnostics["speech_stopped"] is True
+    assert stopped.diagnostics["speech_active"] is False
+
+
 def test_audio_pipeline_runs_processor_chain_before_agent_core() -> None:
     """测试目标：验证 Audio Pipeline 不再只有最小格式校验。
 
@@ -110,3 +129,42 @@ def test_audio_pipeline_runs_processor_chain_before_agent_core() -> None:
     assert agent.chunks[0].sample_rate == 16000
     processors = [item["processor"] for item in pipeline.last_diagnostics]
     assert processors == ["format_validator", "pcm16_resampler", "volume_probe", "quality_vad_probe"]
+
+
+def test_audio_pipeline_server_vad_notifies_agent_core() -> None:
+    """测试目标：验证 Audio Pipeline 会把服务端 VAD 边界通知给 Agent Core。
+
+    测试方法：注入带 `on_speech_started` 钩子的测试 Agent，并启用 `server_only` VAD。
+    预期结果：Agent 在收到音频前先收到 speech_started 事件。
+    """
+
+    class VadAwareAgent(AgentCore):
+        """测试用 Agent Core，记录服务端 VAD 回调。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.speech_started: list[dict] = []
+
+        def on_speech_started(self, user_id: str, session_id: str, *, stream_id: str, reason: str, diagnostics: dict) -> None:
+            """记录 speech_started 回调。"""
+
+            self.speech_started.append(
+                {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "stream_id": stream_id,
+                    "reason": reason,
+                    "diagnostics": diagnostics,
+                    "chunks_seen": len(self.chunks),
+                }
+            )
+
+    agent = VadAwareAgent()
+    pipeline = AudioPipeline(agent_core=agent, config=AudioPipelineConfig(vad="server_only", vad_rms_threshold=96))
+
+    pipeline.process(_chunk(payload=b"\xff\x7f" * 320))
+
+    assert len(agent.speech_started) == 1
+    assert agent.speech_started[0]["reason"] == "server_vad_speech_started"
+    assert agent.speech_started[0]["chunks_seen"] == 0
+    assert agent.chunks

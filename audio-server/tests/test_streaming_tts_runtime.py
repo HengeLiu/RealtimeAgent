@@ -150,7 +150,7 @@ def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
     assert fake_tts.texts == ["第一句"]
     assert fake_tts.finished
     assert sum(len(chunk.payload) for chunk in connection.chunks) == 1920
-    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
 
 
 def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> None:
@@ -428,4 +428,4 @@ def test_native_audio_delta_done_closes_stream_with_declared_sample_rate(tmp_pat
     )
 
     assert connection.chunks[0].sample_rate == 24000
-    assert any(event.event_name == "stream.output.close.requested" for event in connection.events)
+    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)

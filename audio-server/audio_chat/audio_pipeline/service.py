@@ -17,6 +17,7 @@ class AudioPipelineConfig:
     volume_probe: bool = True
     vad: str = "diagnostic"
     vad_rms_threshold: int = 96
+    vad_silence_timeout_ms: int = 600
 
 
 @dataclass(frozen=True)
@@ -234,8 +235,7 @@ class QualityVadProbe:
     def process(self, chunk: StreamChunk) -> AudioProcessorResult:
         """生成轻量 VAD 诊断。
 
-        主要逻辑：用 RMS 小于阈值判断 near_silence，不参与 turn boundary，也不替代
-        endpoint 或 provider VAD。
+        主要逻辑：用 RMS 小于阈值判断 near_silence，只用于健康诊断，不参与 turn boundary。
         参数：`chunk` 为 PCM16 音频片。
         返回值：原 chunk 和 VAD 统计。
         异常情况：无。
@@ -251,6 +251,73 @@ class QualityVadProbe:
                 "diagnostic_only": True,
             },
         )
+
+
+class ServerVadProcessor:
+    """服务端 VAD 处理器。
+
+    主要功能：在 Text realtime 链路中由服务器根据上行音频判断 speech_start 和
+    speech_stop，避免浏览器端自行决定用户是否插话。
+    主要方法：`process()` 基于 PCM16 RMS 阈值维护连续语音状态，并返回边界诊断。
+    主要属性：`threshold` 是语音起点阈值，`silence_timeout_ms` 是结束语音所需的连续
+    静音时长。
+    """
+
+    name = "server_vad"
+
+    def __init__(self, *, threshold: int = 96, silence_timeout_ms: int = 600) -> None:
+        self.threshold = max(1, int(threshold))
+        self.silence_timeout_ms = max(20, int(silence_timeout_ms))
+        self._in_speech = False
+        self._silence_ms = 0
+
+    def process(self, chunk: StreamChunk) -> AudioProcessorResult:
+        """检测服务端语音边界。
+
+        主要逻辑：PCM RMS 达到阈值时触发 speech_started；进入语音状态后，连续静音超过
+        `silence_timeout_ms` 触发 speech_stopped。该处理器只负责生成边界事件，音频本身
+        原样传给 Agent Core。
+        参数：`chunk` 为经过格式校验和重采样后的麦克风音频。
+        返回值：原 chunk 和 VAD 边界诊断。
+        异常情况：空 payload 按静音处理。
+        """
+
+        rms = audioop.rms(chunk.payload, 2) if chunk.payload else 0
+        chunk_ms = int(chunk.duration_ms or self._estimate_duration_ms(chunk))
+        speech_started = False
+        speech_stopped = False
+
+        if rms >= self.threshold:
+            self._silence_ms = 0
+            if not self._in_speech:
+                self._in_speech = True
+                speech_started = True
+        elif self._in_speech:
+            self._silence_ms += max(1, chunk_ms)
+            if self._silence_ms >= self.silence_timeout_ms:
+                self._in_speech = False
+                self._silence_ms = 0
+                speech_stopped = True
+
+        return AudioProcessorResult(
+            chunk=chunk,
+            diagnostics={
+                "speech_started": speech_started,
+                "speech_stopped": speech_stopped,
+                "speech_active": self._in_speech,
+                "rms": rms,
+                "threshold": self.threshold,
+                "silence_timeout_ms": self.silence_timeout_ms,
+                "diagnostic_only": False,
+            },
+        )
+
+    @staticmethod
+    def _estimate_duration_ms(chunk: StreamChunk) -> int:
+        if not chunk.payload or chunk.sample_rate <= 0 or chunk.channels <= 0:
+            return 0
+        sample_count = len(chunk.payload) // 2 // chunk.channels
+        return int(sample_count * 1000 / chunk.sample_rate)
 
 
 class AudioPipeline:
@@ -278,8 +345,8 @@ class AudioPipeline:
     def process(self, chunk: StreamChunk) -> None:
         """处理一片麦克风音频。
 
-        主要逻辑：依次执行格式校验、重采样、音量探针和 VAD 质量探针，再调用 Agent Core 的
-        `append_audio_event()`；turn boundary 不在 Audio Pipeline 内判断。
+        主要逻辑：依次执行格式校验、重采样、音量探针和 VAD 处理器；当启用服务端 VAD
+        时先把 speech_start/stop 通知 Agent Core，再调用 `append_audio_event()`。
         参数：`chunk` 为 sensor.mic StreamChunk。
         返回值：无。
         异常情况：格式不符合预期或 Agent Core 缺少接口时抛出异常。
@@ -291,6 +358,7 @@ class AudioPipeline:
             current = result.chunk
             diagnostics.append({"processor": processor.name, **dict(result.diagnostics)})
         self.last_diagnostics = diagnostics
+        self._emit_vad_boundaries(current, diagnostics)
         self.agent_core.append_audio_event(current)
 
     def dispatch(self, chunk: StreamChunk) -> None:
@@ -322,6 +390,8 @@ class AudioPipeline:
                 "resample": self.config.resample,
                 "volume_probe": self.config.volume_probe,
                 "vad": self.config.vad,
+                "vad_rms_threshold": self.config.vad_rms_threshold,
+                "vad_silence_timeout_ms": self.config.vad_silence_timeout_ms,
             },
             "last_diagnostics": list(self.last_diagnostics),
         }
@@ -330,6 +400,34 @@ class AudioPipeline:
         processors: list[AudioProcessor] = [FormatValidator(self.config), Pcm16Resampler(self.config)]
         if self.config.volume_probe:
             processors.append(VolumeProbe())
-        if self.config.vad not in {"disabled", "off", "false"}:
+        if self.config.vad in {"server", "server_only", "server_vad"}:
+            processors.append(
+                ServerVadProcessor(
+                    threshold=self.config.vad_rms_threshold,
+                    silence_timeout_ms=self.config.vad_silence_timeout_ms,
+                )
+            )
+        elif self.config.vad not in {"disabled", "off", "false", "provider"}:
             processors.append(QualityVadProbe(threshold=self.config.vad_rms_threshold))
         return processors
+
+    def _emit_vad_boundaries(self, chunk: StreamChunk, diagnostics: list[dict]) -> None:
+        for item in diagnostics:
+            if item.get("processor") != "server_vad":
+                continue
+            if item.get("speech_started") and hasattr(self.agent_core, "on_speech_started"):
+                self.agent_core.on_speech_started(
+                    chunk.user_id,
+                    chunk.session_id,
+                    stream_id=chunk.stream_id,
+                    reason="server_vad_speech_started",
+                    diagnostics=dict(item),
+                )
+            if item.get("speech_stopped") and hasattr(self.agent_core, "on_speech_stopped"):
+                self.agent_core.on_speech_stopped(
+                    chunk.user_id,
+                    chunk.session_id,
+                    stream_id=chunk.stream_id,
+                    reason="server_vad_speech_stopped",
+                    diagnostics=dict(item),
+                )

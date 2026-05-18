@@ -287,7 +287,7 @@ def test_browser_device_defers_output_close_until_audio_arrives() -> None:
 
     测试方法：静态检查 browser-glass 在 `closeOutputWhenDrained()` 中要求当前
     output stream 已经收到音频并发送过 `stream.output.started`，再允许上报
-    `stream.output.finished/closed`。
+    `stream.output.finished`。
     预期结果：Text TTS 这类短音频不会因为 close.requested 先到而只听到提示音。
     """
 
@@ -312,7 +312,6 @@ def test_browser_device_defers_output_close_until_audio_arrives() -> None:
     assert "recordOutputChunk(chunk, durationMs)" in stream_body
     assert "summarizeOutputPlayback(streamId, \"drained\")" in close_body
     assert 'sendEvent(event("stream.output.finished"' in close_body
-    assert 'sendEvent(event("stream.output.closed"' in close_body
 
 
 def test_browser_device_keeps_parallel_stream_state_for_audio_and_rgb() -> None:

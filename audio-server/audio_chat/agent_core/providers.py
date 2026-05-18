@@ -124,6 +124,11 @@ class AsrProviderConfig:
     allow_mock_fallback: bool = True
     realtime_timeout_seconds: float = 5.0
     max_sentence_silence_ms: int = 800
+    semantic_punctuation_enabled: bool = False
+    punctuation_prediction_enabled: bool = True
+    disfluency_removal_enabled: bool = False
+    inverse_text_normalization_enabled: bool = True
+    heartbeat: bool = True
     max_retries: int = 1
 
 
@@ -139,8 +144,22 @@ class TextModelProviderConfig:
 
 @dataclass(frozen=True)
 class TranscriptEvent:
+    """实时 ASR 事件。
+
+    主要功能：承载 provider 返回的文本增量、final 文本以及 Paraformer 这类
+    ASR/VAD 合一模型给出的句子边界。TextAgentCore 基于这些结构化字段生成
+    内部 speech_started / speech_stopped 事件。
+    """
+
     text: str
     final: bool = False
+    sentence_id: int | None = None
+    sentence_begin: bool = False
+    sentence_end: bool = False
+    begin_time_ms: int | None = None
+    end_time_ms: int | None = None
+    words: list[dict] | None = None
+    raw: dict | None = None
 
 
 class AsrProviderAdapter(Protocol):
@@ -200,6 +219,11 @@ class DashScopeAsrProviderAdapter:
         *,
         timeout_seconds: float = 5.0,
         max_sentence_silence_ms: int = 800,
+        semantic_punctuation_enabled: bool = False,
+        punctuation_prediction_enabled: bool = True,
+        disfluency_removal_enabled: bool = False,
+        inverse_text_normalization_enabled: bool = True,
+        heartbeat: bool = True,
     ) -> None:
         api_key = os.getenv("DASHSCOPE_API_KEY")
         if not api_key:
@@ -226,17 +250,19 @@ class DashScopeAsrProviderAdapter:
 
         class _Callback(RecognitionCallback):
             def on_event(self, result):  # pragma: no cover - exercised in integration
-                text, final = _extract_recognition_sentence(result)
-                if not text:
+                event = _extract_recognition_event(result)
+                if event is None:
                     return
+                text = event.text
+                final = event.final
                 if final:
                     adapter._final_sentences.append(text)
                     adapter._final_text = "".join(adapter._final_sentences)
                     adapter._latest_partial = ""
                     adapter._emitted_final_text = True
-                else:
+                elif text:
                     adapter._latest_partial = text
-                adapter._events.put(TranscriptEvent(text=text, final=final))
+                adapter._events.put(event)
 
             def on_complete(self):  # pragma: no cover - exercised in integration
                 if not adapter._final_text and adapter._latest_partial:
@@ -251,8 +277,12 @@ class DashScopeAsrProviderAdapter:
             model=model,
             format="pcm",
             sample_rate=16000,
-            semantic_punctuation_enabled=False,
+            semantic_punctuation_enabled=semantic_punctuation_enabled,
             max_sentence_silence=max_sentence_silence_ms,
+            punctuation_prediction_enabled=punctuation_prediction_enabled,
+            disfluency_removal_enabled=disfluency_removal_enabled,
+            inverse_text_normalization_enabled=inverse_text_normalization_enabled,
+            heartbeat=heartbeat,
             callback=_Callback(),
         )
         self._recognition.start()
@@ -624,6 +654,11 @@ def build_asr_provider(config: AsrProviderConfig) -> tuple[AsrProviderAdapter, s
                 model=config.model,
                 timeout_seconds=config.realtime_timeout_seconds,
                 max_sentence_silence_ms=config.max_sentence_silence_ms,
+                semantic_punctuation_enabled=config.semantic_punctuation_enabled,
+                punctuation_prediction_enabled=config.punctuation_prediction_enabled,
+                disfluency_removal_enabled=config.disfluency_removal_enabled,
+                inverse_text_normalization_enabled=config.inverse_text_normalization_enabled,
+                heartbeat=config.heartbeat,
             ), None
         raise ProviderUnavailable(f"unsupported ASR provider: {config.provider}")
     except ProviderUnavailable as exc:
@@ -657,17 +692,60 @@ def build_text_model(config: TextModelProviderConfig) -> tuple[TextModelAdapter,
         return MockTextModelAdapter(model="mock-text", prompt=config.prompt), str(exc)
 
 
-def _extract_recognition_sentence(result) -> tuple[str, bool]:
+def _extract_recognition_event(result) -> TranscriptEvent | None:
+    """从 DashScope RecognitionResult 中提取结构化实时 ASR 事件。
+
+    主要逻辑：Paraformer realtime 的 `result-generated` 可能先返回
+    `sentence_begin=true` 且 `text=""` 的边界事件，后续再返回文本增量和
+    `sentence_end=true` 的 final。这里保留完整 sentence 字段，避免 Text 链路
+    只能看到 text/final 而丢失 provider VAD 信号。
+    参数：`result` 为 DashScope SDK 回调结果。
+    返回值：可供 TextAgentCore 消费的 TranscriptEvent；无有效 sentence 时返回 None。
+    异常情况：SDK 字段读取失败时返回 None。
+    """
+
     getter = getattr(result, "get_sentence", None)
     if not callable(getter):
-        return "", False
+        return None
     try:
         sentence = getter()
     except Exception:
-        return "", False
+        return None
     if not isinstance(sentence, dict):
+        return None
+    text = str(sentence.get("text") or "")
+    sentence_begin = bool(sentence.get("sentence_begin") is True)
+    sentence_end = bool(sentence.get("sentence_end") is True or sentence.get("end_time") is not None)
+    if not text and not sentence_begin and not sentence_end:
+        return None
+    return TranscriptEvent(
+        text=text,
+        final=sentence_end,
+        sentence_id=_int_or_none(sentence.get("sentence_id")),
+        sentence_begin=sentence_begin,
+        sentence_end=sentence_end,
+        begin_time_ms=_int_or_none(sentence.get("begin_time")),
+        end_time_ms=_int_or_none(sentence.get("end_time")),
+        words=sentence.get("words") if isinstance(sentence.get("words"), list) else None,
+        raw=dict(sentence),
+    )
+
+
+def _extract_recognition_sentence(result) -> tuple[str, bool]:
+    """兼容旧测试和旧调用点的 DashScope sentence 抽取函数。"""
+
+    event = _extract_recognition_event(result)
+    if event is None:
         return "", False
-    text = sentence.get("text")
-    if text is None:
-        return "", False
-    return str(text), sentence.get("end_time") is not None
+    return event.text, event.final
+
+
+def _int_or_none(value) -> int | None:
+    """把 provider 返回的时间戳或编号转换为 int。"""
+
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

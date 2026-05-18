@@ -25,7 +25,6 @@ def test_audio_pipeline_contract_exposes_processors_and_preflight_status(tmp_pat
         "format_validator",
         "pcm16_resampler",
         "volume_probe",
-        "quality_vad_probe",
     ]
 
     report = tmp_path / "preflight.json"
@@ -51,5 +50,5 @@ def test_audio_pipeline_contract_exposes_processors_and_preflight_status(tmp_pat
     assert audio_check["resample"]["status"] == "enabled"
     assert audio_check["volume_probe"]["enabled"] is True
     assert audio_check["volume_probe"]["changes_audio"] is False
-    assert audio_check["vad"]["status"] == "diagnostic"
-    assert audio_check["vad"]["owns_turn_boundary"] is False
+    assert audio_check["vad"]["status"] == "server"
+    assert audio_check["vad"]["owns_turn_boundary"] is True

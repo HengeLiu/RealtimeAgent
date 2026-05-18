@@ -938,6 +938,7 @@ class OutputRouter:
         self._cached_audio_by_key: dict[tuple[str, int, int], bytes] = {}
         self._payload_by_stream: dict[str, bytearray] = {}
         self._queued_sessions: set[str] = set()
+        self._continuous_text_sessions: set[str] = set()
         self._finish_listeners: list[Callable[[str, str, str], None]] = []
         self._tts_pump_streams: set[str] = set()
         self._write_lock = threading.RLock()
@@ -953,6 +954,42 @@ class OutputRouter:
         """
 
         self._finish_listeners.append(listener)
+
+    def prepare_text_session(
+        self,
+        session_id: str,
+        *,
+        reason: str = "downstream_stream_opened",
+        continuous: bool = True,
+    ) -> None:
+        """提前建立连续对话级 Text TTS session。
+
+        主要逻辑：Text realtime 标准要求下行音频连接建立时就准备 TTS provider，
+        避免首个 assistant text delta 到达后才承担 provider 建连延迟。一次回答
+        finish 后会立刻准备下一次回答可用的 session；真正关闭只发生在 audio session
+        结束时。
+        参数：`session_id` 为设备级音频会话；`reason` 为触发原因。
+        返回值：无。
+        异常情况：provider 创建失败时沿用 `_new_tts()` 的降级或抛错策略。
+        """
+
+        if not session_id:
+            return
+        if continuous:
+            self._continuous_text_sessions.add(session_id)
+        if session_id in self._source_by_session:
+            return
+        source = StreamingTtsOutputSource(tts=self._new_tts())
+        self._source_by_session[session_id] = source
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "output.tts_session.prepared",
+                "session_id": session_id,
+                "reason": reason,
+                "tts": source.metrics(),
+            },
+        )
 
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
         intent = self._intent_with_defaults(delta.intent or OutputItem(user_id=delta.user_id, session_id=delta.session_id))
@@ -1186,7 +1223,8 @@ class OutputRouter:
         )
         self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
         self._stream_by_session.pop(session_id, None)
-        self._source_by_session.pop(session_id, None)
+        if self._source_by_session.get(session_id) is source:
+            self._source_by_session.pop(session_id, None)
         self._source_by_stream.pop(stream_id, None)
         self._native_source_by_session.pop(session_id, None)
         next_output = self.arbiter.on_playback_finished(user_id, stream_id)
@@ -1195,6 +1233,8 @@ class OutputRouter:
         if next_output is not None:
             self._queued_sessions.discard(next_output.intent.session_id)
             self._play_queued_output(next_output)
+        elif session_id in self._continuous_text_sessions:
+            self.prepare_text_session(session_id, reason="output_finished_reprepare")
 
     def _drain_text_source_to_stream(
         self,
@@ -1327,11 +1367,25 @@ class OutputRouter:
         异常情况：provider close 失败时记录系统事件，不向外抛出。
         """
 
+        self._continuous_text_sessions.discard(session_id)
+        stream_id = self._stream_by_session.get(session_id)
         source = self._source_by_session.pop(session_id, None)
         if source is None:
             return
         try:
-            source.close()
+            if stream_id and source.final_requested:
+                finish_payload = source.finish() or b""
+                if finish_payload:
+                    self._write_tts_payload(
+                        user_id="",
+                        session_id=session_id,
+                        stream_id=stream_id,
+                        payload=finish_payload,
+                        source=source,
+                        metadata={"flush": "session_close"},
+                    )
+            else:
+                source.close()
             self.recorder.record_agent_event(
                 session_id,
                 {"event": "output.tts_session.closed", "session_id": session_id, "reason": reason},
@@ -1826,6 +1880,11 @@ class OutputService:
         """
 
         self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id, reason=reason)
+
+    def prepare_text_session(self, session_id: str, *, reason: str = "downstream_stream_opened") -> None:
+        """提前建立文本链路连续对话级 TTS provider。"""
+
+        self.router.prepare_text_session(session_id, reason=reason)
 
     def close_text_session(self, session_id: str, *, reason: str = "audio_session_closed") -> None:
         """关闭文本链路连续对话级 TTS provider。"""

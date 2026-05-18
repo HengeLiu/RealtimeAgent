@@ -31,14 +31,21 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
             },
         ),
         connection,
     )
 
 
+def session_text(app: AudioChatApp, session_id: str, filename: str) -> str:
+    """读取当前 recorder 绑定目录中的 session 文件。"""
+
+    return app.recorder.session_file(session_id, filename).read_text(encoding="utf-8")
+
+
 def test_text_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-playback")
@@ -55,7 +62,7 @@ def test_text_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> No
         )
     )
 
-    model_events = (tmp_path / "runs" / "sessions" / handle.session_id / "model-events.jsonl").read_text()
+    model_events = session_text(app, handle.session_id, "model-events.jsonl")
     assert model_events.index("assistant_audio.delta") < model_events.index('"final": true')
     assert model_events.count("assistant_text.delta") >= 2
     assert len(connection.chunks) >= 2
@@ -88,7 +95,7 @@ def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
         AssistantTextDelta(user_id="user-001", session_id="sess-output-2", text="critical priority", intent=high)
     )
 
-    decisions = (tmp_path / "runs" / "sessions" / "sess-output" / "playback-decisions.jsonl").read_text()
+    decisions = session_text(app, "sess-output", "playback-decisions.jsonl")
     assert "interrupt" in decisions
     assert any(event.event_name == "stream.output.cancelled" for event in connection.events)
 
@@ -115,7 +122,7 @@ def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
     event_names = [event.event_name for event in connection.events]
     assert "stream.output.cancel.requested" in event_names
     assert "stream.output.cancelled" in event_names
-    decisions = (tmp_path / "runs" / "sessions" / "sess-interrupt" / "playback-decisions.jsonl").read_text()
+    decisions = app.recorder.session_file("dev-playback", "playback-decisions.jsonl").read_text()
     assert "cancel_current" in decisions
 
 
@@ -143,8 +150,8 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
         AssistantTextDelta(user_id="user-001", session_id="sess-high", text="", final=True, intent=high)
     )
 
-    low_decisions = (tmp_path / "runs" / "sessions" / "sess-low" / "playback-decisions.jsonl").read_text()
-    high_decisions = (tmp_path / "runs" / "sessions" / "sess-high" / "playback-decisions.jsonl").read_text()
+    low_decisions = session_text(app, "sess-low", "playback-decisions.jsonl")
+    high_decisions = session_text(app, "sess-high", "playback-decisions.jsonl")
     assert "play_now" in low_decisions
     assert "interrupt" in high_decisions
     assert len([event for event in connection.events if event.event_name == "stream.output.open.requested"]) >= 3
@@ -173,7 +180,7 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="", final=True, intent=active)
     )
 
-    queued_decisions = (tmp_path / "runs" / "sessions" / "sess-queued" / "playback-decisions.jsonl").read_text()
+    queued_decisions = session_text(app, "sess-queued", "playback-decisions.jsonl")
     assert "queue" in queued_decisions
     assert "ttl_expired" in queued_decisions
 
@@ -210,7 +217,7 @@ def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> N
     )
 
     queued_chunks = [chunk for chunk in connection.chunks if chunk.session_id == "sess-queued"]
-    queued_decisions = (tmp_path / "runs" / "sessions" / "sess-queued" / "playback-decisions.jsonl").read_text()
+    queued_decisions = session_text(app, "sess-queued", "playback-decisions.jsonl")
     assert "queued_playback_ready" in queued_decisions
     assert sum(len(chunk.payload) for chunk in queued_chunks) >= 880
 
@@ -287,7 +294,7 @@ def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_
 
     blocked_decisions = [
         json.loads(line)
-        for line in (tmp_path / "runs" / "sessions" / "sess-blocked" / "playback-decisions.jsonl").read_text().splitlines()
+        for line in session_text(app, "sess-blocked", "playback-decisions.jsonl").splitlines()
         if line.strip()
     ]
     assert blocked_decisions[-1]["action"] == "drop"
@@ -316,7 +323,7 @@ def test_native_audio_empty_done_does_not_open_output_stream(tmp_path) -> None:
     )
 
     assert not any(event.event_name == "stream.output.open.requested" for event in connection.events)
-    model_events = (tmp_path / "runs" / "sessions" / "sess-native-empty" / "model-events.jsonl").read_text()
+    model_events = session_text(app, "sess-native-empty", "model-events.jsonl")
     assert "assistant_audio.done" in model_events
     assert '"empty_output": true' in model_events
 
@@ -346,7 +353,7 @@ def test_native_audio_delta_is_split_by_stream_format_chunk_size(tmp_path) -> No
     assert {len(chunk.payload) for chunk in connection.chunks} == {960}
     assert {chunk.sample_rate for chunk in connection.chunks} == {24000}
     assert {chunk.duration_ms for chunk in connection.chunks} == {20}
-    model_events = (tmp_path / "runs" / "sessions" / "sess-native-large" / "model-events.jsonl").read_text()
+    model_events = session_text(app, "sess-native-large", "model-events.jsonl")
     assert '"chunk_count": 16' in model_events
 
 
@@ -367,7 +374,7 @@ def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:
     chunk = connection.chunks[0]
     stream_id = chunk.stream_id
     handle = app.stream_service.registry.get(stream_id)
-    model_events = (tmp_path / "runs" / "sessions" / "sess-format" / "model-events.jsonl").read_text()
+    model_events = session_text(app, "sess-format", "model-events.jsonl")
     assert handle.format.sample_rate == 22050
     assert chunk.sample_rate == 22050
     assert '"sample_rate_hz": 22050' in model_events
@@ -416,11 +423,11 @@ def test_cached_prompt_audio_reuses_audio_and_records_wav(tmp_path) -> None:
     assert second.action == "play_now"
     assert len(connection.chunks) == 2
     assert connection.chunks[0].payload == connection.chunks[1].payload
-    first_events = (tmp_path / "runs" / "sessions" / "sess-cache-one" / "model-events.jsonl").read_text()
-    second_events = (tmp_path / "runs" / "sessions" / "sess-cache-two" / "model-events.jsonl").read_text()
+    first_events = session_text(app, "sess-cache-one", "model-events.jsonl")
+    second_events = session_text(app, "sess-cache-two", "model-events.jsonl")
     assert '"cached": false' in first_events
     assert '"cached": true' in second_events
-    wavs = list((tmp_path / "runs" / "sessions" / "sess-cache-two").glob("output-*.wav"))
+    wavs = list(app.recorder.media_dir("sess-cache-two", "actuator.speaker").glob("output-*.wav"))
     assert len(wavs) == 1
     with wave.open(str(wavs[0]), "rb") as handle:
         assert handle.getframerate() == 16000
@@ -453,8 +460,8 @@ def test_notification_coordinator_respects_task_signal_notify_and_agent_sync(tmp
     bridge.handle_signal(signal)
 
     assert connection.chunks == []
-    task_signals = (tmp_path / "runs" / "sessions" / "sess-task" / "task-signals.jsonl").read_text()
-    agent_events = (tmp_path / "runs" / "sessions" / "sess-task" / "agent-events.jsonl").read_text()
+    task_signals = session_text(app, "sess-task", "task-signals.jsonl")
+    agent_events = session_text(app, "sess-task", "agent-events.jsonl")
     assert "reroute_required" in task_signals
     assert "task.requires_agent_context_sync" in agent_events
 

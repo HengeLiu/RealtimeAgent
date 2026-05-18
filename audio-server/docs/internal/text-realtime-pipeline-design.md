@@ -103,45 +103,331 @@ Text 链路的“实时”不能只表示服务端使用了 streaming API，而�
 - `stream.output.first_chunk.enqueued` 很早但 `stream.output.first_chunk.sent` 很晚，说明服务端 event loop 或 WebSocket 下行发送被阻塞；不能把这类问题误判成 TTS 慢。
 - `stream.output.first_chunk.sent` 与端侧 `playback first audio chunk` 基本同时出现，但 `since_open_ms` 较大，说明 output stream 打开早于 TTS 首包，真实空等发生在 TTS 首音频生成阶段。
 
-## 当前链路
+## 当前代码实现时序
+
+更详细的浏览器 / 服务器边界、浏览器音频前处理、服务器 VAD 目标边界和历史浏览器 VAD 问题，见独立图文：[text-realtime-browser-server-boundary.md](text-realtime-browser-server-boundary.md)。
+
+设计边界必须统一：唤醒后进入连续对话，端侧建立音频上行长连接。在释放连接之前，音频持续直达服务器；根据音频流做 speech start、speech end、barge-in、turn commit 等判断都是服务器职责。Omni / realtime 链路由 Omni provider 输出 `input_audio_buffer.speech_started` / `speech_stopped` 等事件；Text 链路由服务器独立 VAD 服务输出等价事件。浏览器或真实眼镜端只负责唤醒、采集、上行、播放和执行服务器下发的停止播放指令。
 
 ```plantuml
 @startuml
-title 当前 Text 链路
+title 当前 Text 链路：正常回复时序
 
-participant "端侧 sensor.mic" as Mic
-participant "AudioPipeline" as Audio
+participant "Browser Glass" as Browser
+participant "AudioChatHttpServer.stream_ws" as StreamWS
+participant "stream dispatch worker" as Worker
+participant "AudioChatApp" as App
+participant "StreamService" as Stream
 participant "AsrPipeline" as ASR
 participant "TextAgentCore" as Text
 participant "ContextCompiler" as Ctx
 participant "Text Model" as LLM
 participant "ToolGateway" as Tool
 participant "OutputService" as Out
-participant "Streaming TTS" as TTS
-participant "端侧 speaker" as Speaker
+participant "DashScope Streaming TTS" as TTS
+participant "control ws" as ControlWS
+participant "speaker playback" as Speaker
+database "runs artifacts" as Runs
 
-Mic -> Audio: PCM chunk
-Audio -> Text: append_audio_event(chunk)
+Browser -> StreamWS: sensor.mic chunk
+StreamWS -> Worker: enqueue by stream_id
+Worker -> App: write_input_chunk(chunk)
+App -> Stream: write_endpoint_chunk(chunk)
+Stream -> App: dispatch(chunk)
+App -> Text: append_audio_event(chunk)
 Text -> ASR: append_audio(chunk)
-ASR --> Text: final transcript
-Text -> Ctx: compile(prompt, memory, history, tools)
-Text -> LLM: stream_messages(messages, tools)
-LLM --> Text: text delta 或 tool_call
-Text -> Tool: call_sync_safe()
-Tool --> Text: ToolResult
-Text -> LLM: tool result follow-up
-LLM --> Text: final text delta
-Text -> Out: assistant_text.delta
-Out -> TTS: synthesize_delta()
-Out -> Speaker: actuator.speaker chunk
+ASR --> Text: partial transcript events
+Text -> Runs: input_transcript.delta
+alt final transcript
+  ASR --> Text: final transcript
+  Text -> Runs: input_transcript.done
+  Text -> Ctx: compile context
+  Text -> LLM: stream_messages(messages, tools)
+  loop text delta
+    LLM --> Text: text delta
+    Text -> Runs: text.response_gate.buffered/released
+    Text -> Out: assistant_text.delta
+    Out -> TTS: streaming_call(text)
+    TTS --> Out: audio bytes via callback
+    Out -> Stream: write_chunk(actuator.speaker)
+    Stream -> ControlWS: stream.output.open.requested
+    Stream -> Browser: speaker binary chunks
+    Browser -> Speaker: WebAudio schedule
+  end
+  opt tool_call
+    LLM --> Text: tool_call
+    Text -> Tool: call_sync_safe()
+    Tool --> Text: ToolResult
+    Text -> LLM: tool result messages
+  end
+  Text -> Out: assistant_text.delta(final=True)
+  Out -> TTS: streaming_complete()
+  Out -> Stream: close_stream(reason=assistant_audio.done)
+  Text -> Runs: assistant_text.done / response.done
+end
 @enduml
 ```
+
+当前正常回复路径的关键事实：
+
+- `AudioChatHttpServer.stream_ws()` 已经把每个 `stream_id` 的 chunk 放进独立 worker，并用 `asyncio.to_thread(self.audio_app.write_input_chunk, chunk)` 调用应用层；这解决了早期 event loop 被同步处理饿住的问题，但同一个 mic stream 内仍是串行处理。
+- `TextAgentCore.append_audio_event()` 同时负责 ASR、模型请求、工具循环、TTS 输出 final flush 和消息写入；也就是说一次 final transcript 会在同一个调用栈中完成整个 Text turn。
+- `OutputService.on_agent_text_delta()` 在首个文本 delta 释放时就可能打开 speaker stream；真实音频首包取决于 TTS callback，不能用 stream opened 代表用户听到声音。
+- `_finish_stream()` 在服务端 TTS 完成后会关闭 output stream 并释放 PlaybackArbiter active 状态；这表示“服务端没有更多音频要发”，不等价于“端侧已经播放完”。
+
+```plantuml
+@startuml
+title 目标 Text 链路：服务器 VAD 触发 barge-in
+
+participant "Browser Glass" as Browser
+participant "stream ws" as StreamWS
+participant "AudioFrameBuffer" as Frame
+participant "Server VAD Service" as VAD
+participant "TextTurnController" as Turn
+participant "TextResponseWorker" as Resp
+participant "OutputService" as Out
+participant "control ws" as ControlWS
+participant "speaker playback" as Speaker
+database "runs artifacts" as Runs
+
+Browser -> StreamWS: continuous sensor.mic chunks
+StreamWS -> Frame: normalize and frame PCM
+Frame -> VAD: 10/20/30ms audio frames
+VAD --> Turn: speech_start
+Turn -> Resp: cancel current response generation
+Turn -> Out: interrupt_user(reason=server_vad_speech_start)
+Out -> ControlWS: stream.output.close.requested / playback.stop
+ControlWS -> Browser: stop current speaker stream
+Browser -> Speaker: stop WebAudio playback
+VAD -> Runs: vad.speech_started
+Turn -> Runs: response.cancelled / turn_state=interrupted
+
+note right of Browser
+浏览器不判断用户是否说话。
+它只持续上行音频，并执行服务器下发的停止播放。
+end note
+@enduml
+```
+
+```plantuml
+@startuml
+title 当前 Text 链路：ASR partial 临时打断路径（待替换）
+
+participant "Browser Glass" as Browser
+participant "stream ws" as StreamWS
+participant "stream dispatch worker" as Worker
+participant "TextAgentCore" as Text
+participant "AsrPipeline" as ASR
+participant "OutputService" as Out
+database "runs artifacts" as Runs
+
+Browser -> StreamWS: sensor.mic chunk while assistant may be speaking
+StreamWS -> Worker: enqueue chunk
+Worker -> Text: append_audio_event(chunk)
+Text -> ASR: append_audio(chunk)
+ASR --> Text: input_transcript.delta
+Text -> Out: active_output_stream_id(user_id, session_id)
+alt active output exists
+  Out --> Text: stream_out_x
+  Text -> Runs: text.asr_barge_in.detected
+  Text -> Text: interrupt(user_id, reason=asr_barge_in)
+else no active output
+  Out --> Text: None
+  Text -> Runs: only input_transcript.delta
+end
+
+note right of Out
+当前判定依赖服务端 PlaybackArbiter active。
+如果服务端已经 close_stream 并释放 active，
+但浏览器仍在播放 WebAudio 队列，
+这里会误判为 no active output。
+
+目标实现中，这条路径应被独立 Server VAD 的
+speech_start 事件替换；ASR partial 不应承担 VAD 职责。
+end note
+@enduml
+```
+
+```plantuml
+@startuml
+title 当前 Text 链路：TTS 收尾失败和重开空输出流
+
+participant "TextAgentCore" as Text
+participant "OutputService" as Out
+participant "Streaming TTS" as TTS
+participant "StreamService" as Stream
+participant "Browser Glass" as Browser
+database "runs artifacts" as Runs
+
+Text -> Out: assistant_text.delta(final=True)
+Out -> TTS: streaming_complete()
+TTS --> Out: raises or provider stream failed
+Out -> Runs: output.tts_stream_reopen
+Out -> Stream: fail_stream(old stream, reason=tts_stream_reopen)
+Stream -> Browser: stream.output.failed / close requested
+Out -> Stream: open new speaker stream
+Out -> Runs: stream.opened(new stream)
+Out -> Stream: close new stream with 0 bytes
+
+note right of Out
+这条分支会让一次已经有音频输出的回复，
+在收尾阶段额外产生 failed + 空 stream。
+它会污染播放时序，也会影响 active playback 判断。
+end note
+@enduml
+```
+
+## 当前实现暴露的问题
+
+### 1. 服务端 output stream 完成不等于端侧播放完成
+
+当前 `OutputRouter._finish_stream()` 在 TTS drain 完成后调用 `stream_service.close_stream()`，随后 `PlaybackArbiter.on_playback_finished()` 释放 active。这个时刻只说明服务端已经把音频 chunk 下发完，不说明浏览器 WebAudio 队列已经播放完。
+
+真实日志里经常出现：
+
+- 服务端：`stream.closed reason=assistant_audio.done`
+- 浏览器：后续仍有 `scheduled_delay_ms` 或长时间 `playback drained`
+
+因此服务端用 `active_output_stream_id()` 判断 ASR barge-in 是不可靠的。更根本的问题是：ASR partial 不应承担 VAD 职责。Text 链路应先由服务器 VAD 根据连续上行音频产出 `speech_start`，再由 `speech_start` 取消旧回复和停止端侧播放。
+
+### 2. TextAgentCore 把整轮响应放在 `append_audio_event()` 同步调用栈内
+
+当前 `append_audio_event()` 在拿到 final transcript 后，会继续完成 context compile、LLM streaming、工具调用、TTS final flush、assistant message 写入。虽然 `server.py` 已经把 stream chunk 分发放进 worker，但同一个 mic stream 的 worker 仍会被这一整轮 Text response 占住。
+
+这导致 Text 链路和 Omni 的根本差异：
+
+- Omni provider 在一个实时会话里同时处理输入音频、输出音频、打断和 response cancellation。
+- Text 链路目前是 final transcript 后启动一次同步 Text turn；打断依赖另一路 control event 或下一段 ASR partial 事件。
+
+如果用户插话只能靠服务端 ASR partial 触发，就会受到上面“active playback 状态不可靠”的影响。目标实现不依赖浏览器 VAD，也不依赖 ASR partial 来发现 speech start，而是依赖服务器 VAD。
+
+### 3. 浏览器 VAD 不应作为协议语义
+
+当前浏览器实现里，`control.user.interrupt.detected` 可能由本地 RMS/peak 阈值触发，也可能完全不出现。这个不确定性说明它不能作为连续对话协议语义。15:16 的日志中没有 `control.user.interrupt.detected`，只有后续 `input_transcript.delta/done`，这说明服务端没有收到浏览器打断事件。
+
+正确方案不是继续增强浏览器 VAD，而是移除其默认职责：端侧持续上行音频，服务器 VAD 产出 `speech_start` 后，服务器再取消旧回复并通知端侧停止播放。
+
+### 4. TTS 收尾失败被当成整条输出失败处理
+
+日志中的 `output.tts_stream_reopen reason=streaming_tts_provider_failed` 出现在已经产生 `assistant_audio.done bytes=485760` 之后。也就是说主要音频已经输出，失败发生在 provider 收尾或重开恢复逻辑阶段。
+
+这类失败不应该再打开一个新的空 speaker stream。更合理的处理是：
+
+- 已经输出过音频时，收尾失败降级为 warning。
+- 关闭当前 stream 并记录 TTS finalization warning。
+- 不再触发 retry/reopen 空流。
+
+## 基于时序图的修改方案
+
+### 修改一：引入服务器 VAD，统一 Text 的 speech boundary
+
+目标：让服务器根据连续上行音频判断用户是否开始说话、是否结束说话，而不是依赖浏览器或 ASR partial。
+
+建议新增服务端音频节点：
+
+- `AudioFrameBuffer`：把连续 PCM 切成 VAD 算法需要的 10/20/30ms frame，统一采样率和声道。
+- `ServerVadService`：专门 VAD 算法，输出 `speech_start`、`speech_end`、`silence_timeout`。
+- `TextTurnController`：消费 VAD 事件，`speech_start` 取消当前 response generation，`speech_end/silence_timeout` 提交本轮输入。
+
+端侧播放状态仍要同步给服务器，但它只表示“当前输出是否已播放完成”，不能替代 VAD。
+
+### 修改二：服务器 speech_start 下发停止播放
+
+目标：让端侧停止播放由服务器决策触发。
+
+建议流程：
+
+1. `ServerVadService` 发现 `speech_start`。
+2. `TextTurnController` 取消当前 Text response generation。
+3. `OutputService` 停止旧 output stream、TTS source 和 sender queue。
+4. 服务器通过控制面下发停止当前 speaker stream 的事件。
+5. 浏览器或真实眼镜端只执行停止播放，并回报 `stream.output.closed`。
+
+浏览器不再根据本地 VAD 发送 `control.user.interrupt.detected`。手动按钮可以保留为用户显式关闭/打断，但不能作为连续对话默认路径。
+
+### 修改三：Text response 从 mic stream worker 中拆出去
+
+目标：让同一条 mic stream worker 只负责 ASR 输入和 transcript 事件，不承载 LLM/TTS 的完整响应生命周期。
+
+建议拆成两个阶段：
+
+```plantuml
+@startuml
+title 建议改造：ASR 输入和 Text response 解耦
+
+participant "stream dispatch worker" as Worker
+participant "ServerVadService" as VAD
+participant "AsrPipeline" as ASR
+participant "TextTurnController" as Turn
+queue "response task queue" as Queue
+participant "TextResponseWorker" as Resp
+participant "OutputService" as Out
+
+Worker -> VAD: append audio frame
+Worker -> ASR: append audio frame
+VAD --> Turn: speech_start / speech_end
+ASR --> Turn: partial/final transcript events
+Turn -> Queue: enqueue final transcript response job
+Worker --> Worker: return quickly
+
+Queue -> Resp: response job
+Resp -> Resp: compile context / LLM / Tool loop
+Resp -> Out: assistant_text.delta
+
+Turn -> Resp: interrupt signal
+Resp -> Resp: cancel model/tool/tts for current response
+@enduml
+```
+
+拆分后：
+
+- mic chunk worker 不再被 LLM/TTS 阻塞。
+- VAD speech_start 和手动 interrupt 都能操作同一个 response task。
+- 后续可以对 response task 做 generation id，避免旧回复在被打断后继续写消息或音频。
+
+### 修改四：建立 Text response generation id，防止旧回复越权收尾
+
+当前仅靠 `_cancelled_users` 和 `interrupted_reason` 表示取消，粒度太粗。建议每次 final transcript 创建一个 `response_id`：
+
+- `TextAgentCore` 当前 active response 保存 `response_id`、`user_id`、`device_id`、`input_stream_id`。
+- 所有 LLM delta、tool result、TTS delta、final flush 都必须带 `response_id`。
+- `interrupt()` 增加当前 response 的 cancelled 标记。
+- 任何旧 response 的 final flush、assistant_text.done、TTS retry 都必须先检查 response 是否仍 active。
+
+这样可以明确阻止“旧长笑话被打断后，几十秒后又写入 assistant_text.done”这类现象。
+
+### 修改五：TTS finalization failure 不再 reopen 空输出流
+
+`_retry_text_output_with_new_source()` 应区分两类错误：
+
+- 首个音频前失败：可以 fallback 或 retry。
+- 已经输出过音频后，在 final/complete 阶段失败：记录 warning，关闭当前流，不重开空流。
+
+需要在 `StreamingTtsOutputSource` 或 `OutputRouter` 里记录 `submitted_text`、`written_audio_bytes`、`first_audio_at`，用它判断是否已经产生有效输出。
+
+### 修改六：VAD 观测必须进入 runs
+
+服务器 VAD 事件必须进入 runs，而不是依赖浏览器控制台判断：
+
+- `vad.speech_started`
+- `vad.speech_stopped`
+- `vad.silence_timeout`
+- `vad.probability` 或算法置信度。
+- 触发事件的 `input_stream_id`、frame 时间戳和 response generation。
+
+### 推荐实施顺序
+
+1. 先做服务器 VAD 节点和 `TextTurnController`，把 `speech_start/speech_end` 写入 runs。（当前代码已先落地服务器 VAD 节点和 speech_start 取消旧输出。）
+2. 用 `speech_start` 替换浏览器本地 VAD，统一由服务器取消旧 response 并下发停止播放；ASR partial 仅保留为过渡兜底。
+3. 再做 Text response generation id，防止旧 response 在打断后继续 final flush、TTS retry 或写 assistant done。
+4. 然后把 Text response worker 从 mic stream worker 中拆出去，形成 `VAD/ASR event -> response task` 的明确边界。
+5. 最后清理 TTS 收尾失败策略：已输出音频后的 finalization failure 不 reopen 空流，只记录 warning。
 
 ## 与 Omni 链路的差异
 
 | 维度 | Omni / realtime | Text |
 | --- | --- | --- |
-| Turn boundary | provider 内置 VAD / semantic VAD | 当前依赖 ASR final |
+| Turn boundary | provider 内置 VAD / semantic VAD | 目标为服务器独立 VAD；当前临时依赖 ASR final |
 | 模型输入 | PCM 音频流和工具 schema | transcript、messages、工具 schema |
 | 输出 | provider 原生 PCM audio delta | 文本 delta 经 TTS |
 | 工具调用 | provider event 驱动，结果回填 provider | SDK tool loop 驱动，结果回填 text model |
@@ -245,7 +531,7 @@ Text 链路不能把 “tool_call 之前出现的文本” 简单判定为模型
 - TTS 侧依赖 streaming source 和后台 drain pump 尽快拉取音频；如果 provider 本身首包慢，运行产物应通过 `assistant_audio.delta` 与 `stream.output.summary` 的时间差暴露。
 - 所有释放事件记录 `reason`，例如 `text_delta_realtime` 或 `explicit_release`。
 - Output stream 可以在首个文本 delta 释放时提前打开，但真实首响不能用 `stream.output.open.requested` 衡量；必须以 `stream.output.first_chunk.enqueued`、`stream.output.first_chunk.sent` 和端侧 `playback first audio chunk` 判定。
-- `AudioChatHttpServer.stream_ws()` 不能在 aiohttp event loop 内同步执行大量 `write_input_chunk()`；非 final stream chunk 使用 `asyncio.to_thread()` 顺序处理，final mic chunk 使用后台 task 处理，避免 ASR/LLM/Tool 或大量 mic chunk 阻塞控制事件与下行音频发送。
+- `AudioChatHttpServer.stream_ws()` 不能在 aiohttp event loop 内同步执行大量 `write_input_chunk()`；当前按 `stream_id` 建立 dispatch worker，并在 worker 内使用 `asyncio.to_thread()` 调用应用层，避免 ASR/LLM/Tool 或大量 mic chunk 阻塞控制事件与下行音频发送。
 
 当前还没有引入跨 Text/TTS 的独立背压队列，也没有改变 `OutputService` 的播放仲裁策略；本阶段先保证 Text gate 不再成为首音频延迟来源。
 
@@ -257,12 +543,12 @@ Text 链路不能把 “tool_call 之前出现的文本” 简单判定为模型
 
 已落地语义：
 
-- `TextAgentCore.interrupt()` 会取消 ASR、text model 和当前用户输出流。
+- `TextAgentCore.interrupt()` 会取消 text model 和当前用户输出流；当前不再取消 ASR provider，避免用户插话过程中把正在收音的 ASR 会话直接关掉。
 - 如果打断发生在 Text 模型仍在 streaming 的过程中，工具循环只返回已经释放给 TTS 的文本。
 - 最终 assistant 消息带 `interrupted=true` 和 `interrupted_reason`。
 - runs 中记录 `response.interrupted`、`agent.response.cancelled` 和 `agent.turn_state.changed(state=interrupted)`。
 
-真实麦克风 speech-start 触发质量、false interruption 过滤和用户实际听感，需要通过端侧 VAD / 唤醒策略继续人工验收；本阶段先保证 server 在收到 `control.user.interrupt.detected` 后具备正确收口语义。
+真实麦克风 speech-start 触发质量、false interruption 过滤和用户实际听感，需要通过服务器 VAD / Omni provider VAD 继续验收；端侧只负责唤醒、持续上行音频和执行服务器下发的停止播放。本阶段当前代码只具备收到 `control.user.interrupt.detected` 后的基本收口语义，目标方案必须改为服务器 speech_start 驱动的 barge-in，见上文“基于时序图的修改方案”。
 
 ## Phase 1 验收
 
@@ -307,10 +593,10 @@ Gate -> Msg: assistant_text.done
 - `audio-server/audio_chat/agent_core/text.py`
   - `TextResponseGate`：缓冲、逐 delta 实时释放、显式释放和 discard 观测事件。
   - `TextAgentCore._set_turn_state()`：Text turn 状态机事件。
-  - `TextAgentCore.interrupt()`：服务端打断收口和当前输出取消。
+  - `TextAgentCore.interrupt()`：服务端打断收口、text model cancel 和当前输出取消；不取消 ASR。
 - `audio-server/audio_chat/server.py`
   - 下行 speaker stream 记录 `stream.output.first_chunk.enqueued`、`stream.output.first_chunk.sent(queue_wait_ms)` 和 `stream.output.send.summary`。
-  - stream WebSocket 接收循环把非 final stream chunk 放到 worker thread 顺序处理，避免同步 `write_input_chunk()` 饿住 aiohttp event loop。
+  - stream WebSocket 接收循环按 `stream_id` 建立 dispatch worker，并在线程中调用 `write_input_chunk()`，避免同步处理饿住 aiohttp event loop。
 - `examples/dev-support/devices/browser-glass/index.html`
   - 浏览器日志使用毫秒级时间戳。
   - 只记录 speaker 首包、调度、drain 汇总，不再逐 chunk 打印音频接收日志。

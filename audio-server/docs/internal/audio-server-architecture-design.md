@@ -443,7 +443,7 @@ Output --> Stream : actuator.speaker
 | Endpoint        | 任意端侧设备，例如 ESP32 眼镜、Web、iOS 或 Python 回放端。                                                                 |
 | Control Service | 控制事件入口，负责设备注册、订阅、用户唤醒、音频会话打开和关闭等控制面事件。                                               |
 | Stream Service  | stream 字节入口，负责 `sensor.mic` 和 `actuator.speaker` 等 stream 的打开、写入、关闭。                                |
-| Audio Pipeline  | 音频主链路，负责 `sensor.mic` 的格式归一、质量诊断和路由；文本链路的 ASR / turn boundary 由 `TextAgentCore` 内部完成。 |
+| Audio Pipeline  | 音频主链路，负责 `sensor.mic` 的格式归一、质量诊断和路由；连续对话期间音频直达服务器，Omni 链路由 provider VAD 决定 turn，Text 链路目标由服务器独立 VAD 决定 turn。 |
 | Agent Core      | 大模型对话核心，可以是 `RealtimeAudioAgentCore` 或 `TextAgentCore`。                                                   |
 | Output Service  | 输出链路，负责把 Agent / Task 的输出交给播放仲裁，并最终写入 `actuator.speaker` stream。                                 |
 
@@ -641,7 +641,7 @@ server 可以释放音频会话的情况：
 | `control.audio_session.opened`          | device        | 端侧确认音频会话已打开，`producer_id` 是该端侧设备编号。 |
 | `control.audio_session.close.requested` | server        | server 要求被投递到的端侧释放会话。                        |
 | `control.audio_session.closed`          | device        | 端侧确认关闭，`producer_id` 是该端侧设备编号。           |
-| `control.user.interrupt.detected`       | device/server | 用户打断或 server 侧取消。                                 |
+| `control.user.interrupt.detected`       | device/server | 用户显式手动打断或 server 侧取消。连续对话默认不由端侧 VAD 产生该事件。 |
 
 Stream：
 
@@ -1329,7 +1329,7 @@ StreamRegistry --> StreamHandle
 
 1. `sensor.mic` 进入 `Audio Pipeline`。
 2. 如果 Agent Core 支持原生音频输入，音频 delta 直连进入 `RealtimeAudioAgentCore`。
-3. 如果 Agent Core 只支持文本输入，归一后的音频进入 `TextAgentCore`，由其内部 `AsrPipeline` 和 `TextTurnBoundary` 完成 ASR / turn commit。
+3. 如果 Agent Core 只支持文本输入，目标链路是归一后的音频先进入服务器 VAD 和 ASR，再由 `TextTurnBoundary` 根据服务器 `speech_start/speech_end` 完成打断和 turn commit；当前实现仍由 `TextAgentCore` 内部 `AsrPipeline` 临时代管。
 4. `actuator.speaker` 从模型原生音频或 streaming TTS 进入 `Output Router` 和 `Playback Arbiter`。
 
 相机、深度相机、IMU、GPS 等不是每轮对话的必需输入，不应默认进入 Agent Core。它们更适合作为对话资产：
@@ -1420,7 +1420,7 @@ Endpoint -> Stream: stream.input.closed(stream_type=sensor.rgb)
 3. 声道转换。
 4. 音量归一。
 5. 可选噪声抑制。
-6. 可选质量诊断 VAD，用于判断静音、音量和链路健康。
+6. 可选质量诊断 VAD，用于判断静音、音量和链路健康；不拥有连续对话 turn boundary。
 7. 可选 ASR sidecar，仅用于调试转写或质量诊断，不作为 `TextAgentCore` 主链路输入。
 8. 根据 Agent Core 类型把归一后的音频路由到 `RealtimeAudioAgentCore` 或 `TextAgentCore`。
 
@@ -1430,12 +1430,12 @@ Endpoint -> Stream: stream.input.closed(stream_type=sensor.rgb)
 2. 不决定 Tool 是否调用。
 3. 不决定输出播放优先级。
 4. 不缓存图片、深度图、IMU 等对话资产。
-5. 不负责文本链路的主 ASR 和 turn boundary，这部分属于 `TextAgentCore`。
+5. 不负责 Omni provider VAD；不负责端侧 VAD。Text 链路目标是在服务器音频管线中接入独立 VAD 服务，再由 Text turn controller 消费 `speech_start/speech_end`。
 
 音频链路分两条：
 
-1. 直连链路：`sensor.mic` -> 格式归一 / 质量诊断 -> `RealtimeAudioAgentCore.append_audio()`。
-2. 文本链路：`sensor.mic` -> 格式归一 / 质量诊断 -> `TextAgentCore.append_audio_event()`，再由 `TextAgentCore` 内部完成 ASR / turn commit。
+1. Omni 直连链路：`sensor.mic` -> 格式归一 / 质量诊断 -> `RealtimeAudioAgentCore.append_audio()`，turn boundary 由 Omni provider 的 `input_audio_buffer.speech_started/speech_stopped` 等事件决定。
+2. Text 链路目标：`sensor.mic` -> 格式归一 / server VAD -> ASR / Text turn controller -> Text response task。当前实现仍由 `TextAgentCore.append_audio_event()` 临时承担 ASR 和 turn commit，后续需要拆分。
 
 ### 9.2 类图
 
@@ -1484,7 +1484,7 @@ stream:
     resample: auto
     volume_normalize: true
     noise_suppression: optional
-    vad: endpoint_or_server
+    vad: server_only
     asr_sidecar: optional
     aec: endpoint_only
 ```
@@ -1602,7 +1602,7 @@ motion = await context.assets.get_or_request(
 Agent Core 不应直接接收所有资产 stream。推荐关系是：
 
 1. `RealtimeAudioAgentCore` 只直连音频主链路。
-2. `TextAgentCore` 接收归一后的 `sensor.mic` 音频，并在内部完成 ASR、turn boundary 和文本模型循环。
+2. `TextAgentCore` 目标上接收服务器 VAD / ASR 产生的 turn 事件和 transcript，再执行文本模型循环；当前实现仍直接接收归一后的 `sensor.mic` 音频并在内部完成 ASR / turn commit。
 3. 图片、深度图、IMU 作为 Tool 调用结果或上下文附件进入模型请求。
 4. 未来如果模型支持实时视觉输入，可以新增 `RealtimeMultimodalAgentCore`，但也应明确哪些视觉 stream 进入实时链路，不能默认把所有资产推给模型。
 
@@ -2033,14 +2033,14 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 1. `RealtimeSessionManager` 打开 provider realtime session。
 2. `RealtimeToolBridge` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema；`RealtimeProviderAdapter` 发送 session 配置，包括 prompt、voice、音频格式、tool schema、turn detection。
 3. `RealtimeInputAdapter` 将 `sensor.mic` stream chunk 映射为 provider audio append 事件。
-4. `RealtimeTurnBoundary` 监听 provider VAD 事件。收到 `input_audio_buffer.speech_started` 后，`RealtimeVisualSampler` 按固定间隔请求 `sensor.rgb` 单帧资产，并把图片追加到同一条 provider realtime turn。
+4. `RealtimeTurnBoundary` 监听 provider VAD 事件。收到 `input_audio_buffer.speech_started` 后，一方面取消当前 response / output generation 并通知端侧停止当前 speaker 播放，另一方面启动 `RealtimeVisualSampler` 按固定间隔请求 `sensor.rgb` 单帧资产，并把图片追加到同一条 provider realtime turn。
 5. `RealtimeVisualSampler` 不要求端侧一直上传相机流；它每次通过 `AssetService.request_asset(stream_type=sensor.rgb)` 请求当前帧。端侧如果摄像头已打开，就直接抓当前帧；如果摄像头未打开，就在处理请求时打开摄像头再上传。
 6. provider 产生 tool call 时，`RealtimeToolBridge` 调用统一 `ToolGateway`。视觉类工具如 `capture_photo`、`interpret_current_view` 不暴露给 Omni Realtime，避免和内联图片输入形成两套视觉链路。
 7. 工具结果回填 provider。
 8. provider 产生 `audio_delta` 时，`RealtimeOutputAdapter` 立即转为 `assistant_audio.delta`。
 9. provider 产生 `text_delta` 时，记录到 messages 和调试产物。
 10. 收到 `input_audio_buffer.speech_stopped` 后，停止本轮 `RealtimeVisualSampler`，并下发 `stream.control.close.requested(stream_type=sensor.rgb)` 要求端侧释放摄像头；如果当前音频 stream 已关闭、音频设备已离线或同一设备没有在线 `sensor.rgb` 能力，也立即停止采样，不持续刷请求；`response.done` 和会话关闭只作为异常兜底清理。
-11. 用户打断时调用 provider cancel，并通知 Output Service 取消旧 output stream。
+11. 用户显式手动打断时调用 provider cancel，并通知 Output Service 取消旧 output stream；语音插话打断默认由 provider `speech_started` 触发，不由端侧本地 VAD 触发。
 
 可复用组件：
 
@@ -2120,7 +2120,7 @@ TextToolLoop --> ToolGateway
 处理流程：
 
 1. `AsrPipeline` 接收 `sensor.mic` stream chunk。
-2. `TextTurnBoundary` 根据端侧 commit、server VAD 或最大静音时间决定提交一轮输入。
+2. `TextTurnBoundary` 根据服务器 VAD 的 `speech_start/speech_end` 和最大静音时间决定打断旧回复或提交一轮输入；不依赖端侧 VAD 或端侧 commit 作为连续对话默认边界。
 3. `AsrPipeline` 输出最终 transcript，也可输出转写增量用于日志。
 4. `MessageBuilder` 将 transcript、近期 messages、memory、skill、设备上下文组装成模型输入。
 5. `TextToolLoop` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema。
@@ -3175,7 +3175,7 @@ examples/dev-support/devices/
 3. playback ring buffer。
 4. 统一 stream chunk 编码。
 5. 播放输出和 AEC reference 同源。
-6. 端侧打断事件 `control.user.interrupt.detected`。
+6. 端侧只保留显式手动打断事件；连续对话中的语音打断由服务器根据上行音频流判断，再下发停止播放。
 7. 相机和 IMU 等传感器不走特殊 RPC，统一按 stream 控制事件调整上传策略。
 
 ### 14.2 Web JS Endpoint
@@ -3243,7 +3243,7 @@ examples/dev-support/devices/
 当前 Omni Realtime 视觉输入链路采用“语音 turn 内重复提交当前帧”的方案：
 
 1. server 等待 provider session 配置生效后开始接收实时音频。
-2. provider 上报 `input_audio_buffer.speech_started` 后，server 每秒通过 `sensor.rgb` 请求一张当前视野图片。
+2. provider 上报 `input_audio_buffer.speech_started` 后，server 取消当前回复 / 输出 generation，通知端侧停止旧 speaker 播放，并每秒通过 `sensor.rgb` 请求一张当前视野图片。
 3. browser-glass 如果摄像头已经打开，就直接从现有 `MediaStream` 抓一帧；如果摄像头还没有打开，就按 `stream.control.open.requested(stream_type=sensor.rgb)` 请求打开摄像头并上传一帧。server 每轮请求前会检查触发当前语音的同一台设备是否仍有在线 RGB 能力；没有时停止视觉采样，不改用同一用户下其他设备。
 4. server 收到图片资产后立即通过 provider adapter 追加到当前 Omni Realtime 会话。
 5. provider 上报 `input_audio_buffer.speech_stopped` 后，server 停止每秒请求图片，并通知端侧关闭 `sensor.rgb` 摄像头采集。
@@ -3719,9 +3719,14 @@ audio_pipeline:
   resample: "auto"
   # 是否做音量归一化。影响 ASR 稳定性，但可能改变原始音频诊断特征。
   volume_normalize: true
-  # 质量诊断 VAD 所在位置。endpoint_or_server 表示端侧可做，server 可兜底；TextAgentCore 的主 turn boundary 仍在 Agent Core 内部。
-  # 可选 endpoint_only / server_only / endpoint_or_server / disabled。
-  vad: "endpoint_or_server"
+  # VAD 所在位置。连续对话默认只能由服务器或 provider 判断；端侧不拥有 turn boundary。
+  # Omni realtime 使用 provider；Text realtime 目标使用 server_only。
+  # 可选 provider / server_only / disabled。
+  vad: "server_only"
+  # server_only VAD 的 RMS 起点阈值。
+  vad_rms_threshold: 96
+  # server_only VAD 判定 speech_end 所需的连续静音时长。
+  vad_silence_timeout_ms: 600
   # ASR sidecar 策略。这里只用于调试转写或质量诊断；TextAgentCore 的主 ASR 由 agent.text.asr_* 配置控制。
   # 可选 required / optional / disabled。
   asr_sidecar: "optional"
@@ -3760,7 +3765,8 @@ agent:
     # Realtime 模型名。
     model: "qwen3.5-omni-plus-realtime"
     # turn detection 归属。provider 表示使用模型服务内置 turn detection。
-    # 可选 provider / server / endpoint。
+    # 连续对话不允许 endpoint 拥有 turn boundary。
+    # 可选 provider / server。
     turn_detection: "provider"
     # 模型输出音色。取值由 provider 决定。
     voice: "Tina"

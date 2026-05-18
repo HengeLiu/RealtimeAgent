@@ -46,9 +46,13 @@ audio_pipeline:
   resample: auto
   volume_normalize: true
   vad: provider
+  vad_rms_threshold: 96
+  vad_silence_timeout_ms: 600
   asr_sidecar: disabled
   silence_close_seconds: 15
   max_session_seconds: 0
+audio_session:
+  idle_timeout_seconds: 30
 asset:
   store_type: filesystem
   max_asset_bytes: 10485760
@@ -74,7 +78,8 @@ agent:
     model: qwen-plus
     prompt: 你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。用户要求寻找某个物体、持续观察某个目标、帮他留意某个东西在哪里时，必须调用找物任务工具启动后台任务；在工具和任务没有返回明确结果前，只能说明已开始寻找或正在识别，不能自行判断已经找到，也不能编造目标位置、距离或方向。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。
     asr_provider: dashscope
-    asr_model: fun-asr-realtime
+    asr_model: paraformer-realtime-v2
+    asr_max_sentence_silence_ms: 800
     tts_provider: dashscope
     tts_model: cosyvoice-v3-flash
     tts_voice: longanhuan

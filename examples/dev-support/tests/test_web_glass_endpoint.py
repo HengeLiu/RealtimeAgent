@@ -76,11 +76,9 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "audio session already active; ignore duplicate open request" in html
     assert "wakeButton.disabled = true" in html
     assert "control.user.interrupt.detected" in html
-    assert "BARGE_IN_RMS_THRESHOLD = 0.055" in html
-    assert "BARGE_IN_REQUIRED_FRAMES = 8" in html
-    assert "BARGE_IN_MAX_PEAK = 0.72" in html
-    assert "barge-in detected rms=" in html
-    assert "peak=${level.peak.toFixed(4)}" in html
+    assert "BARGE_IN_RMS_THRESHOLD" not in html
+    assert "sendInterruptIfNeeded" not in html
+    assert "barge-in detected rms=" not in html
     assert "recv audio chunk bytes=" not in html
     assert "playback first audio chunk stream_id=" in html
     assert "playback scheduled stream_id=" in html
@@ -88,7 +86,7 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "if (!outputStarted.has(chunk.stream_id))" in html
     assert "if (outputClosed.has(chunk.stream_id))" in html
     assert "drop audio chunk for closed output stream_id=" in html
-    assert "stopAllOutputPlayback(\"barge_in_local\")" in html
+    assert "stopAllOutputPlayback(\"manual_interrupt\")" in html
     assert "stream.output.cancel.requested" in html
     assert "stream.output.failed" in html
     assert "stopOutputPlayback(item.stream_id, reason)" in html

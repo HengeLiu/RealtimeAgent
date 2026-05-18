@@ -88,6 +88,7 @@ def _text_kwargs(kwargs: dict) -> dict:
         "max_context_messages",
         "memory_service",
         "multimodal_policy",
+        "on_user_activity",
     }
     return {
         key: value

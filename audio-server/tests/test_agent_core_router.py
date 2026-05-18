@@ -1,10 +1,11 @@
 import json
 import threading
+import time
 
 import pytest
 
 from audio_chat.agent_core.base import AgentCoreEvent
-from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter
+from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter, TranscriptEvent
 from audio_chat.agent_core.router import AgentCoreRouter
 from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
@@ -321,6 +322,78 @@ class RecordingOutputAdapter:
         """记录输出参数，便于断言打断后不会继续 flush。"""
 
         self.calls.append({"user_id": user_id, "session_id": session_id, "text": text, "final": final})
+
+
+class ImmediateFinalAsrProvider:
+    """测试用 ASR provider，收到任意音频立即返回 final。"""
+
+    provider_name = "immediate-final-asr"
+    model = "immediate-final-asr"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
+        """返回固定 final 文本。"""
+
+        return [TranscriptEvent(text=self.text, final=True)]
+
+    def cancel(self) -> None:
+        """测试 provider 无需释放资源。"""
+
+
+class BlockingTextModel:
+    """测试用文本模型，阻塞直到测试放行。"""
+
+    provider_name = "blocking-text"
+    model = "blocking-text-model"
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.cancelled = False
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """等待测试放行后返回文本。"""
+
+        self.started.set()
+        self.release.wait(timeout=2)
+        yield "后台回复完成。"
+
+    def stream_text(self, transcript: str):
+        yield from self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[])
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class SupersededBlockingTextModel:
+    """测试用文本模型：首轮阻塞，第二轮立即返回。"""
+
+    provider_name = "superseded-blocking-text"
+    model = "superseded-blocking-text-model"
+
+    def __init__(self) -> None:
+        self.first_started = threading.Event()
+        self.first_release = threading.Event()
+        self.calls = 0
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """首轮等待测试放行，第二轮直接返回文本。"""
+
+        self.calls += 1
+        if self.calls == 1:
+            self.first_started.set()
+            self.first_release.wait(timeout=2)
+            yield "旧回复不应该输出。"
+            return
+        yield "新回复应该输出。"
+
+    def stream_text(self, transcript: str):
+        yield from self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[])
+
+    def cancel(self) -> None:
+        """测试模型不需要真实取消。"""
 
 
 class CancelRecordingAsrPipeline:
@@ -802,12 +875,12 @@ def test_openai_compatible_text_model_cancel_closes_active_stream() -> None:
     assert stream.closed
 
 
-def test_text_agent_asr_delta_cancels_active_output(tmp_path) -> None:
-    """测试目标：验证 Text 链路播放期间听到新语音会取消当前 TTS。
+def test_text_agent_asr_delta_does_not_cancel_active_output(tmp_path) -> None:
+    """测试目标：验证 Text 链路不再用 ASR partial 文本触发插话。
 
     测试方法：先手动让 OutputService 打开一条未 final 的 speaker 输出，再向
     TextAgentCore 送入一片非 final 麦克风音频，触发 mock ASR delta。
-    预期结果：端侧收到 output cancel 事件，runs 中记录 ASR 侧 barge-in。
+    预期结果：端侧不会收到 output cancel 事件，runs 中也不会记录 ASR 侧 barge-in。
     """
 
     class Connection:
@@ -869,11 +942,344 @@ def test_text_agent_asr_delta_cancels_active_output(tmp_path) -> None:
     )
 
     event_names = [event.event_name for event in connection.events]
+    assert "stream.output.cancel.requested" not in event_names
+    assert "stream.output.cancelled" not in event_names
+    agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "text.asr_barge_in.detected" not in agent_events_text
+    assert "response.cancelled" not in agent_events_text
+
+
+def test_text_agent_server_vad_cancels_active_output(tmp_path) -> None:
+    """测试目标：验证 Text realtime 由服务端 VAD 触发插话取消。
+
+    测试方法：启用 `server_only` VAD，先打开一条未完成 speaker 输出，再输入高 RMS
+    麦克风音频片。
+    预期结果：端侧收到 output cancel 事件，runs 记录 text.vad.speech_started。
+    """
+
+    class Connection:
+        """测试连接，保存下发到端侧的事件和音频。"""
+
+        def __init__(self, device_id: str) -> None:
+            self.device_id = device_id
+            self.events: list[Event] = []
+            self.chunks: list[StreamChunk] = []
+
+        def push_event(self, event: Event) -> None:
+            """记录控制事件。"""
+
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            """记录音频 chunk。"""
+
+            self.chunks.append(chunk)
+
+    app = AudioChatApp(
+        AudioChatConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="text",
+            audio_pipeline_vad="server_only",
+            audio_pipeline_vad_rms_threshold=96,
+            audio_pipeline_vad_silence_timeout_ms=40,
+        )
+    )
+    user_id = "user-text-server-vad"
+    session_id = "dev-text-server-vad"
+    connection = Connection(session_id)
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=user_id,
+            producer_id=session_id,
+            payload={
+                "device_id": session_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    app.agent_core.open(user_id, session_id)
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(
+            user_id=user_id,
+            session_id=session_id,
+            text="这是一段还在播放的回答。",
+            intent=OutputItem(user_id=user_id, session_id=session_id, priority="normal"),
+        )
+    )
+
+    app.audio_pipeline.process(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-text-server-vad",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\xff\x7f" * 320,
+            final=False,
+            duration_ms=20,
+        )
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert "audio.speech.started" in event_names
     assert "stream.output.cancel.requested" in event_names
     assert "stream.output.cancelled" in event_names
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert "text.asr_barge_in.detected" in agent_events_text
-    assert "response.cancelled" in agent_events_text
+    assert "text.vad.speech_started" in agent_events_text
+    assert "server_vad_speech_started" in agent_events_text
+
+
+def test_text_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) -> None:
+    """测试目标：验证 Paraformer sentence_begin 能作为 Text realtime 的插话信号。
+
+    测试方法：注入返回 `sentence_begin=True` 且无文本的 ASR provider，并让助手输出
+    处于播放状态。
+    预期结果：端侧收到 output cancel 事件，runs 记录 `paraformer_sentence_begin`。
+    """
+
+    class Connection:
+        """测试连接，保存下发到端侧的事件和音频。"""
+
+        def __init__(self, device_id: str) -> None:
+            self.device_id = device_id
+            self.events: list[Event] = []
+            self.chunks: list[StreamChunk] = []
+
+        def push_event(self, event: Event) -> None:
+            """记录控制事件。"""
+
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            """记录音频 chunk。"""
+
+            self.chunks.append(chunk)
+
+    class SentenceBeginAsrProvider:
+        """测试用 ASR provider，模拟 Paraformer 句子开始事件。"""
+
+        provider_name = "dashscope"
+        model = "paraformer-realtime-v2"
+
+        def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
+            """返回一次无文本 sentence_begin 事件。"""
+
+            return [
+                TranscriptEvent(
+                    text="",
+                    final=False,
+                    sentence_id=1,
+                    sentence_begin=True,
+                    begin_time_ms=900,
+                )
+            ]
+
+        def cancel(self) -> None:
+            """测试 provider 无需释放资源。"""
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-text-paraformer-begin"
+    session_id = "dev-text-paraformer-begin"
+    stream_id = "stream-text-paraformer-begin"
+    connection = Connection(session_id)
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=user_id,
+            producer_id=session_id,
+            payload={
+                "device_id": session_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    app.agent_core.open(user_id, session_id)
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(
+            user_id=user_id,
+            session_id=session_id,
+            text="这是一段还在播放的回答。",
+            intent=OutputItem(user_id=user_id, session_id=session_id, priority="normal"),
+        )
+    )
+    app.agent_core.asr_pipeline._providers[stream_id] = SentenceBeginAsrProvider()
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert "audio.speech.started" in event_names
+    assert "stream.output.cancel.requested" in event_names
+    assert "stream.output.cancelled" in event_names
+    agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "text.vad.speech_started" in agent_events_text
+    assert "paraformer_sentence_begin" in agent_events_text
+
+
+def test_text_agent_ignores_asr_final_inside_assistant_output_guard(tmp_path) -> None:
+    """测试目标：验证助手播放期间捕获到的 ASR final 不会触发自问自答。
+
+    测试方法：手动设置 TextAgentCore 的助手输出保护窗，并注入立即返回 final 的测试
+    ASR provider；送入时间戳落在保护窗内的麦克风 chunk。
+    预期结果：不会写入 user 消息，也不会启动 agent.response.started，只记录
+    input_transcript.ignored。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-echo-guard"
+    session_id = "dev-echo-guard"
+    stream_id = "stream-echo-guard"
+    now_ms = int(time.time() * 1000)
+    app.agent_core.open(user_id, session_id)
+    app.agent_core._assistant_output_guard_by_user[user_id] = (now_ms - 500, now_ms + 1500)
+    app.agent_core.asr_pipeline._providers[stream_id] = ImmediateFinalAsrProvider("我想收割。")
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+            timestamp_ms=now_ms,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    messages_path = session_dir / "messages.jsonl"
+    messages_text = messages_path.read_text(encoding="utf-8") if messages_path.exists() else ""
+    assert "input_transcript.ignored" in agent_events_text
+    assert "assistant_output_echo_guard" in agent_events_text
+    assert "我想收割" not in messages_text
+    assert "agent.response.started" not in agent_events_text
+
+
+def test_text_agent_realtime_final_runs_response_in_background(tmp_path) -> None:
+    """测试目标：验证实时 ASR final 不会阻塞麦克风 stream worker。
+
+    测试方法：注入立即返回 final 的 ASR provider 和会阻塞的 Text model，并用
+    `final=False` 的麦克风 chunk 触发回复。
+    预期结果：`append_audio_event()` 在模型放行前返回；随后放行后台线程，助手消息写入。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-bg-response"
+    session_id = "dev-bg-response"
+    stream_id = "stream-bg-response"
+    model = BlockingTextModel()
+    app.agent_core.text_model = model
+    app.agent_core.open(user_id, session_id)
+    app.agent_core.asr_pipeline._providers[stream_id] = ImmediateFinalAsrProvider("给我讲一个超长的故事。")
+
+    started_at = time.time()
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+    elapsed = time.time() - started_at
+
+    assert elapsed < 0.2
+    assert model.started.wait(timeout=1)
+    model.release.set()
+    deadline = time.time() + 2
+    session_dir = tmp_path / "runs" / user_id / session_id
+    while time.time() < deadline:
+        messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+        if "后台回复完成" in messages_text:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("background text response did not finish")
+
+
+def test_text_agent_old_background_response_is_superseded_by_new_turn(tmp_path) -> None:
+    """测试目标：验证旧后台回复被新一轮输入取代后不会继续输出。
+
+    测试方法：首轮实时 ASR final 触发阻塞模型；第二轮实时 ASR final 进入新 generation；
+    再放行首轮模型。
+    预期结果：只输出第二轮文本，首轮旧回复不会进入输出链路或助手消息。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-supersede"
+    session_id = "dev-supersede"
+    first_stream_id = "stream-supersede-1"
+    second_stream_id = "stream-supersede-2"
+    model = SupersededBlockingTextModel()
+    output_adapter = RecordingOutputAdapter()
+    app.agent_core.text_model = model
+    app.agent_core.output_adapter = output_adapter
+    app.agent_core.open(user_id, session_id)
+    app.agent_core.asr_pipeline._providers[first_stream_id] = ImmediateFinalAsrProvider("给我讲一个超长的故事。")
+    app.agent_core.asr_pipeline._providers[second_stream_id] = ImmediateFinalAsrProvider("停一下，换个话题。")
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=first_stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+    assert model.first_started.wait(timeout=1)
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=second_stream_id,
+            stream_type="sensor.mic",
+            seq=1,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+    model.first_release.set()
+
+    deadline = time.time() + 2
+    session_dir = tmp_path / "runs" / user_id / session_id
+    while time.time() < deadline:
+        messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+        if "新回复应该输出" in messages_text:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("new background text response did not finish")
+
+    output_text = "".join(str(item["text"]) for item in output_adapter.calls)
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    assert "新回复应该输出" in output_text
+    assert "旧回复不应该输出" not in output_text
+    assert "旧回复不应该输出" not in messages_text
 
 
 def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:

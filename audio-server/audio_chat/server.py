@@ -122,7 +122,7 @@ class NetworkDeviceConnection:
                     fields={"stream_type": event.stream_type},
                 ),
             )
-        if event.event_name == "stream.output.close.requested" and event.stream_type == "actuator.speaker":
+        if event.event_name in {"stream.output.close.requested", "stream.output.finish.requested"} and event.stream_type == "actuator.speaker":
             self._log_stream_send_summary(event)
         self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
 
@@ -552,6 +552,7 @@ class AudioChatHttpServer:
         ws = web.WebSocketResponse(heartbeat=15)
         await ws.prepare(request)
         connection.bind_stream_ws(ws)
+        self.audio_app.mark_stream_connection_opened(device_id)
         log_info(self.logger, "Stream WebSocket 已连接", LogContext(device_id=device_id))
         reported_errors: set[str] = set()
         suppressed_errors: dict[str, int] = {}

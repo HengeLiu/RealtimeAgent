@@ -226,8 +226,10 @@ def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> 
     routes: list[dict[str, Any]] = []
     if str(data.get("audio_chat.audio_input") or "").strip() == "sensor.mic":
         routes.append({"event": "control.audio_session.*"})
+        routes.append({"event": "audio.speech.*"})
     if str(data.get("audio_chat.audio_output") or "").strip() == "actuator.speaker":
         routes.append({"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}})
+        routes.append({"event": "audio.speech.*"})
         routes.append({"event": "command.*"})
     if _truthy_property(data.get("actuator.display.rgb")) or _truthy_property(data.get("endpoint.role.visual_display")):
         routes.append({"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}})

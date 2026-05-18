@@ -18,7 +18,7 @@ def test_python_playback_sdk_loop_writes_runs_artifacts(tmp_path: Path) -> None:
     assert "control.device.registered" in names
     assert "control.audio_session.open.requested" in names
     assert "stream.output.open.requested" in names
-    assert "stream.output.close.requested" in names
+    assert "stream.output.finish.requested" in names
     assert "control.audio_session.close.requested" in names
     assert result["passed"] is True
 

@@ -80,6 +80,10 @@ stream:
   max_chunk_bytes: 1048576
   # stream 空闲超时秒数。
   idle_timeout_seconds: 20
+
+audio_session:
+  # Text realtime 连续对话在 listening 状态下的空闲关闭时间。
+  idle_timeout_seconds: 30
   # sensor.mic 默认输入格式。
   default_sensor_mic:
     # 当前音频链路默认使用小端 PCM16。
@@ -117,8 +121,10 @@ audio_pipeline:
   resample: "auto"
   # 是否启用音量归一化。排障原始音频问题时可临时关闭。
   volume_normalize: true
-  # VAD / turn boundary 策略。realtime_audio 通常交给 provider；text 链路可由端侧或服务端辅助。
+  # VAD / turn boundary 策略。realtime_audio 与 paraformer text 链路通常用 provider。
   vad: "provider"
+  vad_rms_threshold: 96
+  vad_silence_timeout_ms: 600
   # 旁路 ASR 策略。Text 主链路的 ASR 由 agent.text.asr_provider 控制。
   asr_sidecar: "disabled"
   # 静默多少秒后可以关闭音频会话。
@@ -179,6 +185,8 @@ agent:
     # ASR 模型名。当前代码的 dashscope ASR provider 使用 Recognition 实时接口；
     # 配置 dashscope 时应使用 fun-asr-realtime。qwen3-asr-flash 属于非实时文件识别/HTTP 调用，不适配此路径。
     asr_model: "mock-asr"
+    # Paraformer realtime 句子等待时间，单位毫秒。
+    asr_max_sentence_silence_ms: 800
     # TTS provider。mock 生成诊断音；dashscope 调真实 CosyVoice。
     tts_provider: "mock"
     # TTS 模型名。DashScope 常用 cosyvoice-v3-flash。
