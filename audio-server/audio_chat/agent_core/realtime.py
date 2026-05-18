@@ -86,7 +86,11 @@ class RealtimeProviderConfig:
     voice: str = "Tina"
     session_idle_timeout_seconds: int = 60
     websocket_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-    prompt: str = "你是中文语音助手。请用简短口语回答用户。"
+    prompt: str = (
+        "你是中文语音助手。请用简短口语回答用户。"
+        "历史助手消息中如果出现 `<用户打断>`，表示标记前的内容用户可能已经听到，"
+        "标记后的内容是系统已经生成但未继续播报给用户的上下文，只能作为后续回答参考。"
+    )
     tools: list[dict[str, Any]] = field(default_factory=list)
     visual_frame_interval_seconds: float = 1.0
     visual_frame_timeout_seconds: float = 1.5
@@ -398,11 +402,13 @@ class QwenOmniRealtimeAdapter:
             return
         if event_type == "response.audio.delta":
             raw_delta = str(message.get("delta") or "")
+            response_id = _omni_response_id(message)
             callbacks.provider_event(
                 {
                     "event": "omni.response.audio.delta",
                     "provider": "qwen",
                     "delta_base64_len": len(raw_delta),
+                    "response_id": response_id,
                 }
             )
             if raw_delta:
@@ -422,14 +428,16 @@ class QwenOmniRealtimeAdapter:
                         "model": self.config.model,
                         "voice": self.config.voice,
                         "provider_event": event_type,
+                        "response_id": response_id,
                     },
                 )
                 self._current_response_audio_emitted = True
             return
         if event_type == "response.audio.done":
-            callbacks.provider_event({"event": "omni.response.audio.done", "provider": "qwen"})
+            response_id = _omni_response_id(message)
+            callbacks.provider_event({"event": "omni.response.audio.done", "provider": "qwen", "response_id": response_id})
             if self._current_response_audio_emitted:
-                callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type})
+                callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type, "response_id": response_id})
             return
         if event_type == "response.done":
             callbacks.provider_event(_summarize_omni_event(message))
@@ -1119,6 +1127,8 @@ class RealtimeAudioAgentCore:
         self._assistant_text_by_session: dict[str, list[str]] = {}
         self._response_generation_by_session: dict[str, int] = {}
         self._interrupted_response_generation_by_session: dict[str, int] = {}
+        self._response_key_by_session: dict[str, str] = {}
+        self._interrupted_response_key_by_session: dict[str, str] = {}
         self._recorded_user_transcripts: set[tuple[str, str]] = set()
         self._tool_call_count_by_session: dict[str, int] = {}
         self._active_user_audio_by_session: dict[str, list[bytes]] = {}
@@ -1788,13 +1798,15 @@ class RealtimeAudioAgentCore:
         异常情况：OutputService 写入异常向上抛出。
         """
 
-        if self._is_current_response_interrupted(session_id=session_id):
+        response_key = self._response_key_from_record(metadata)
+        if self._is_response_inactive(session_id=session_id, response_key=response_key):
             self.recorder.record_agent_event(
                 session_id,
                 {
                     "event": "omni.response.audio_delta_ignored_after_interrupt",
                     "reason": "interrupted_response",
                     "payload_size": len(audio),
+                    "response_key": response_key,
                 },
             )
             return
@@ -1818,7 +1830,8 @@ class RealtimeAudioAgentCore:
         异常情况：OutputService 写入异常向上抛出。
         """
 
-        if self._is_current_response_interrupted(session_id=session_id):
+        response_key = self._response_key_from_record(metadata)
+        if self._is_response_inactive(session_id=session_id, response_key=response_key):
             self.recorder.record_agent_event(
                 session_id,
                 {
@@ -1826,6 +1839,7 @@ class RealtimeAudioAgentCore:
                     "reason": "interrupted_response",
                     "provider": metadata.get("provider"),
                     "model": metadata.get("model"),
+                    "response_key": response_key,
                 },
             )
             return
@@ -1846,13 +1860,17 @@ class RealtimeAudioAgentCore:
         if event != "omni.response.created":
             return
         self._response_generation_by_session[session_id] = self._response_generation_by_session.get(session_id, 0) + 1
+        generation = self._response_generation_by_session[session_id]
+        self._response_key_by_session[session_id] = self._response_key_from_record(record) or f"generation:{generation}"
         self._assistant_text_by_session.pop(session_id, None)
 
     def _mark_current_response_interrupted(self, *, user_id: str, session_id: str, reason: str) -> None:
         """标记当前 provider response 已被用户打断。
 
-        主要逻辑：打断时清空已累计但尚未落库的助手文本，并记录当前 response 轮次，
-        后续同轮次的 transcript done 不再追加到 messages。
+        主要逻辑：打断时封存已累计但尚未落库的助手文本，并记录当前 response 轮次，
+        后续同轮次的 transcript done 不再追加到 messages。若 OutputService 能提供播放
+        进度估算，则把 `<用户打断>` 插入到已播放和已生成未播放文本之间；Omni 原生
+        audio 暂无 provider 字幕游标时保守放在已生成文本末尾。
         参数：`session_id` 为会话标识，`reason` 为打断原因。
         返回值：无。
         异常情况：无。
@@ -1860,18 +1878,45 @@ class RealtimeAudioAgentCore:
 
         generation = self._response_generation_by_session.get(session_id, 0)
         self._interrupted_response_generation_by_session[session_id] = generation
+        self._interrupted_response_key_by_session[session_id] = self._response_key_by_session.get(session_id, f"generation:{generation}")
         partial = "".join(self._assistant_text_by_session.get(session_id, [])).strip()
         if partial and self.control_service is not None:
+            played_text = partial
+            unheard_text = ""
+            split_source = "omni_generated_tail"
+            estimate = getattr(self.output_service, "estimate_played_text_prefix", None)
+            if callable(estimate):
+                try:
+                    estimated_played = estimate(user_id=user_id, session_id=session_id)
+                except Exception as exc:  # noqa: BLE001
+                    estimated_played = None
+                    self.recorder.record_agent_event(
+                        session_id,
+                        {
+                            "event": "omni.response.interrupted_played_text_estimate_failed",
+                            "reason": reason,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                if isinstance(estimated_played, str) and len(estimated_played) < len(partial):
+                    played_text = estimated_played
+                    unheard_text = partial[len(estimated_played) :]
+                    split_source = "output_service_estimate"
+            content = f"{played_text}<用户打断>{unheard_text}"
             self.control_service.append_message(
                 user_id,
                 {
                     "session_id": session_id,
                     "role": "assistant",
-                    "content": f"{partial}<用户打断>",
+                    "content": content,
                     "event": "assistant_text.interrupted",
                     "source": "omni_realtime",
                 },
             )
+        else:
+            played_text = ""
+            unheard_text = ""
+            split_source = "empty_partial"
         self._assistant_text_by_session.pop(session_id, None)
         self.recorder.record_agent_event(
             session_id,
@@ -1879,6 +1924,10 @@ class RealtimeAudioAgentCore:
                 "event": "omni.response.marked_interrupted",
                 "reason": reason,
                 "response_generation": generation,
+                "partial_chars": len(partial),
+                "played_chars": len(played_text),
+                "unheard_chars": len(unheard_text),
+                "split_source": split_source,
             },
         )
 
@@ -1887,6 +1936,32 @@ class RealtimeAudioAgentCore:
 
         generation = self._response_generation_by_session.get(session_id, 0)
         return self._interrupted_response_generation_by_session.get(session_id) == generation
+
+    def _response_key_from_record(self, record: dict[str, Any] | None) -> str:
+        """从 provider record 或 metadata 中提取稳定 response 标识。"""
+
+        if not isinstance(record, dict):
+            return ""
+        response = record.get("response") if isinstance(record.get("response"), dict) else {}
+        item = record.get("item") if isinstance(record.get("item"), dict) else {}
+        value = (
+            record.get("response_id")
+            or record.get("responseId")
+            or record.get("id")
+            or response.get("id")
+            or item.get("response_id")
+        )
+        return str(value or "")
+
+    def _is_response_inactive(self, *, session_id: str, response_key: str = "") -> bool:
+        """判断 provider 回调是否属于已打断或过期 response。"""
+
+        if response_key:
+            current_key = self._response_key_by_session.get(session_id, "")
+            if current_key and response_key != current_key:
+                return True
+            return self._interrupted_response_key_by_session.get(session_id) == response_key
+        return self._is_current_response_interrupted(session_id=session_id)
 
     def _handle_provider_speech_started_interrupt(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 Omni provider 的 speech_started 事件取消旧输出。
@@ -1902,6 +1977,8 @@ class RealtimeAudioAgentCore:
         reason = "provider_speech_started"
         stream_id = self._audio_stream_by_session.get(session_id, "")
         self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        if getattr(self, "_pipeline_event_control_enabled", False):
+            return
         self._publish_provider_speech_event(
             event_name="audio.speech.started",
             user_id=user_id,
@@ -1962,6 +2039,8 @@ class RealtimeAudioAgentCore:
             return
         reason = "provider_speech_stopped"
         self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        if getattr(self, "_pipeline_event_control_enabled", False):
+            return
         self._publish_provider_speech_event(
             event_name="audio.speech.stopped",
             user_id=user_id,
@@ -2338,14 +2417,14 @@ class RealtimeAudioAgentCore:
             )
             return
         if event in {"omni.response.audio_transcript.delta", "omni.response.text.delta", "omni.response.output_text.delta"}:
-            if self._is_current_response_interrupted(session_id=session_id):
+            if self._is_response_inactive(session_id=session_id, response_key=self._response_key_from_record(record)):
                 return
             delta = str(record.get("delta") or record.get("text") or "")
             if delta:
                 self._assistant_text_by_session.setdefault(session_id, []).append(delta)
             return
         if event in {"omni.response.audio_transcript.done", "omni.response.text.done", "omni.response.output_text.done"}:
-            if self._is_current_response_interrupted(session_id=session_id):
+            if self._is_response_inactive(session_id=session_id, response_key=self._response_key_from_record(record)):
                 self._assistant_text_by_session.pop(session_id, None)
                 self.recorder.record_agent_event(
                     session_id,
@@ -2479,6 +2558,9 @@ class RealtimeAudioAgentCore:
 def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
     event_type = str(message.get("type") or "unknown")
     record: dict[str, Any] = {"event": f"omni.{event_type}", "provider": "qwen"}
+    response_id = _omni_response_id(message)
+    if response_id:
+        record["response_id"] = response_id
     if event_type == "response.audio_transcript.delta":
         record["delta"] = message.get("delta")
     elif event_type == "response.audio_transcript.done":
@@ -2509,3 +2591,11 @@ def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
         record["tool_call_id"] = item.get("call_id") or item.get("id")
         record["tool_name"] = item.get("name")
     return record
+
+
+def _omni_response_id(message: dict[str, Any]) -> str:
+    """从 Omni provider 原始事件中提取 response id。"""
+
+    response = message.get("response") if isinstance(message.get("response"), dict) else {}
+    item = message.get("item") if isinstance(message.get("item"), dict) else {}
+    return str(message.get("response_id") or response.get("id") or item.get("response_id") or "")

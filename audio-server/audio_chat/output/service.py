@@ -43,6 +43,7 @@ class AssistantTextDelta:
     text: str
     final: bool = False
     intent: OutputItem | None = None
+    generation_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -575,6 +576,7 @@ class StreamingTtsOutputSource:
     tts: StreamingTTS
     _pending_text: str = ""
     _submitted_text_content: str = ""
+    generation_id: int | None = None
     final_requested: bool = False
     _submitted_text: bool = False
     _completed: bool = False
@@ -673,6 +675,7 @@ class StreamingTtsOutputSource:
             tts=tts,
             _pending_text=self._pending_text,
             _submitted_text_content=self._submitted_text_content,
+            generation_id=self.generation_id,
             final_requested=self.final_requested,
         )
 
@@ -952,7 +955,11 @@ class OutputRouter:
         self._queued_sessions: set[str] = set()
         self._continuous_text_sessions: set[str] = set()
         self._finish_listeners: list[Callable[[str, str, str], None]] = []
+        self._audio_delta_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._tts_pump_streams: set[str] = set()
+        self._paused_sessions: set[str] = set()
+        self._paused_payload_by_stream: dict[str, list[tuple[bytes, dict]]] = {}
+        self._text_generation_by_session: dict[str, int] = {}
         self._write_lock = threading.RLock()
 
     def add_finish_listener(self, listener: Callable[[str, str, str], None]) -> None:
@@ -966,6 +973,60 @@ class OutputRouter:
         """
 
         self._finish_listeners.append(listener)
+
+    def add_audio_delta_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """注册输出音频分片监听器。"""
+
+        self._audio_delta_listeners.append(listener)
+
+    def _notify_audio_delta(self, record: dict[str, Any]) -> None:
+        """通知 pipeline 输出桥已写入音频分片。"""
+
+        for listener in list(self._audio_delta_listeners):
+            try:
+                listener(dict(record))
+            except Exception as exc:  # noqa: BLE001
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.error.raised",
+                        "component": "OutputRouter",
+                        "reason": "audio_delta_listener_failed",
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "session_id": record.get("session_id"),
+                        "stream_id": record.get("stream_id"),
+                        "severity": "warning",
+                    }
+                )
+
+    def pause_session(self, *, user_id: str, session_id: str) -> None:
+        """暂停指定 session 的 output stream 写入。"""
+
+        self._paused_sessions.add(session_id)
+        self.recorder.record_agent_event(session_id, {"event": "output.downstream.paused", "user_id": user_id})
+
+    def resume_session(self, *, user_id: str, session_id: str) -> None:
+        """恢复指定 session 的 output stream 写入并冲刷暂停期间的缓冲音频。"""
+
+        self._paused_sessions.discard(session_id)
+        self.recorder.record_agent_event(session_id, {"event": "output.downstream.resumed", "user_id": user_id})
+        for stream_id in list(self._stream_by_session.values()):
+            try:
+                handle = self.stream_service.registry.get(stream_id)
+            except Exception:
+                continue
+            if handle.session_id != session_id:
+                continue
+            source = self._source_by_stream.get(stream_id)
+            if source is None:
+                continue
+            self._flush_paused_payload(
+                user_id=handle.user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                source=source,
+            )
+            if getattr(source, "final_requested", False):
+                self._finish_stream(handle.user_id, session_id, stream_id, source)
 
     def estimate_played_text_prefix(self, *, user_id: str, session_id: str) -> str | None:
         """估算当前 Text TTS 输出已经播放到的文本前缀。
@@ -1051,6 +1112,22 @@ class OutputRouter:
     def on_agent_text_delta(self, delta: AssistantTextDelta) -> None:
         intent = self._intent_with_defaults(delta.intent or OutputItem(user_id=delta.user_id, session_id=delta.session_id))
         source = self._source_by_session.get(delta.session_id)
+        if delta.generation_id is not None:
+            active_generation = self._text_generation_by_session.get(delta.session_id)
+            if active_generation is not None and delta.generation_id < active_generation:
+                self.recorder.record_agent_event(
+                    delta.session_id,
+                    {
+                        "event": "assistant_text.delta_ignored",
+                        "reason": "stale_generation",
+                        "generation_id": delta.generation_id,
+                        "active_generation_id": active_generation,
+                        "text_chars": len(delta.text),
+                        "final": delta.final,
+                    },
+                )
+                return
+            self._text_generation_by_session[delta.session_id] = delta.generation_id
         if source is None and not delta.text and delta.final:
             self.recorder.record_agent_event(
                 delta.session_id,
@@ -1066,6 +1143,25 @@ class OutputRouter:
         if source is None:
             source = StreamingTtsOutputSource(tts=self._new_tts())
             self._source_by_session[delta.session_id] = source
+        if delta.generation_id is not None:
+            if source.generation_id is not None and source.generation_id != delta.generation_id:
+                self.recorder.record_agent_event(
+                    delta.session_id,
+                    {
+                        "event": "output.tts_source.replaced",
+                        "reason": "generation_changed",
+                        "old_generation_id": source.generation_id,
+                        "new_generation_id": delta.generation_id,
+                    },
+                )
+                try:
+                    source.close()
+                except Exception:
+                    pass
+                source = StreamingTtsOutputSource(tts=self._new_tts(), generation_id=delta.generation_id)
+                self._source_by_session[delta.session_id] = source
+            else:
+                source.generation_id = delta.generation_id
         if delta.text:
             source.append_text(delta.text)
         if delta.final:
@@ -1180,6 +1276,9 @@ class OutputRouter:
             written_bytes = 0
             chunk_count = 0
             for part in self._split_native_audio_payload(payload, source=source):
+                if session_id in self._paused_sessions:
+                    self._paused_payload_by_stream.setdefault(stream_id, []).append((part, dict(metadata or {})))
+                    continue
                 chunk = StreamChunk(
                     user_id=user_id,
                     session_id=session_id,
@@ -1199,18 +1298,40 @@ class OutputRouter:
                 written_bytes += len(part)
                 chunk_count += 1
                 seq += 1
-            self.recorder.record_agent_event(
-                session_id,
-                {
+            if chunk_count:
+                record = {
                     "event": "assistant_audio.delta",
+                    "user_id": user_id,
+                    "session_id": session_id,
                     "stream_id": stream_id,
                     "payload_size": written_bytes,
                     "chunk_count": chunk_count,
                     "native_audio": source.metrics(),
                     "stream_format": handle_format.__dict__,
+                }
+                self.recorder.record_agent_event(session_id, record)
+                self._notify_audio_delta(record)
+            else:
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "assistant_audio.delta_buffered_while_paused",
+                        "stream_id": stream_id,
+                        "payload_size": len(payload),
+                        "native_audio": source.metrics(),
+                    },
+                )
+            self._seq_by_stream[stream_id] = seq
+        if final and session_id in self._paused_sessions:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.done_buffered_while_paused",
+                    "stream_id": stream_id,
+                    "native_audio": source.metrics(),
                 },
             )
-            self._seq_by_stream[stream_id] = seq
+            return
         if final:
             self.recorder.record_agent_event(
                 session_id,
@@ -1227,11 +1348,25 @@ class OutputRouter:
         source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
     ) -> None:
         handle = self.stream_service.registry.get(stream_id)
-        if (
-            handle.state != "open"
-            or self._stream_by_session.get(session_id) != stream_id
-            or self._source_by_stream.get(stream_id) is not source
-        ):
+        active_source = self._source_by_stream.get(stream_id)
+        if active_source is not source:
+            try:
+                source.close()
+            except Exception:
+                pass
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.finish_ignored",
+                    "stream_id": stream_id,
+                    "stream_state": handle.state,
+                    "reason": "source_no_longer_active",
+                    "active_source_type": type(active_source).__name__ if active_source is not None else None,
+                    "finish_source_type": type(source).__name__,
+                },
+            )
+            return
+        if handle.state != "open" or self._stream_by_session.get(session_id) != stream_id:
             try:
                 source.close()
             except Exception:
@@ -1245,9 +1380,12 @@ class OutputRouter:
                     "stream_id": stream_id,
                     "stream_state": handle.state,
                     "reason": "stream_no_longer_active",
+                    "active_session_stream_id": self._stream_by_session.get(session_id),
+                    "finish_source_type": type(source).__name__,
                 },
             )
             return
+        self._flush_paused_payload(user_id=user_id, session_id=session_id, stream_id=stream_id, source=source)
         finish_payload = source.finish() or b""
         if (
             handle.state != "open"
@@ -1508,6 +1646,7 @@ class OutputRouter:
         payload: bytes,
         source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
         metadata: dict | None = None,
+        bypass_pause: bool = False,
     ) -> None:
         """写入 Text TTS 产生的可播放音频。
 
@@ -1524,6 +1663,33 @@ class OutputRouter:
         with self._write_lock:
             handle = self.stream_service.registry.get(stream_id)
             if handle.state != "open":
+                return
+            if isinstance(source, StreamingTtsOutputSource) and source.generation_id is not None:
+                active_generation = self._text_generation_by_session.get(session_id)
+                if active_generation is not None and source.generation_id != active_generation:
+                    self.recorder.record_agent_event(
+                        session_id,
+                        {
+                            "event": "assistant_audio.delta_ignored",
+                            "reason": "stale_generation",
+                            "stream_id": stream_id,
+                            "generation_id": source.generation_id,
+                            "active_generation_id": active_generation,
+                            "payload_size": len(payload),
+                        },
+                    )
+                    return
+            if not bypass_pause and session_id in self._paused_sessions:
+                self._paused_payload_by_stream.setdefault(stream_id, []).append((payload, dict(metadata or {})))
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "assistant_audio.delta_buffered_while_paused",
+                        "stream_id": stream_id,
+                        "payload_size": len(payload),
+                        "source": source.metrics(),
+                    },
+                )
                 return
             seq = self._seq_by_stream.get(stream_id, 0)
             written_bytes = 0
@@ -1550,8 +1716,10 @@ class OutputRouter:
                 seq += 1
             self.recorder.record_agent_event(
                 session_id,
-                {
+                record := {
                     "event": "assistant_audio.delta",
+                    "user_id": user_id,
+                    "session_id": session_id,
                     "stream_id": stream_id,
                     "payload_size": written_bytes,
                     "chunk_count": chunk_count,
@@ -1560,6 +1728,7 @@ class OutputRouter:
                     **dict(metadata or {}),
                 },
             )
+            self._notify_audio_delta(record)
             if isinstance(source, StreamingTtsOutputSource):
                 self.recorder.record_timeline_checkpoint(
                     session_id,
@@ -1574,6 +1743,30 @@ class OutputRouter:
                     },
                 )
             self._seq_by_stream[stream_id] = seq
+
+    def _flush_paused_payload(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+    ) -> None:
+        """冲刷暂停期间缓冲的 output 音频。"""
+
+        buffered = self._paused_payload_by_stream.pop(stream_id, [])
+        if not buffered:
+            return
+        for payload, metadata in buffered:
+            self._write_tts_payload(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                payload=payload,
+                source=source,
+                metadata={"resume_flush": True, **dict(metadata or {})},
+                bypass_pause=True,
+            )
 
     def _start_tts_drain_pump(
         self,
@@ -1972,6 +2165,11 @@ class OutputService:
 
         self.router.add_finish_listener(listener)
 
+    def add_output_audio_delta_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """注册当前输出音频分片回调。"""
+
+        self.router.add_audio_delta_listener(listener)
+
     def mark_endpoint_playback_finished(
         self,
         *,
@@ -2004,6 +2202,16 @@ class OutputService:
         """估算当前 Text TTS 输出已经播放到的文本前缀。"""
 
         return self.router.estimate_played_text_prefix(user_id=user_id, session_id=session_id)
+
+    def pause_session(self, *, user_id: str, session_id: str) -> None:
+        """暂停指定连续对话的下行音频写入。"""
+
+        self.router.pause_session(user_id=user_id, session_id=session_id)
+
+    def resume_session(self, *, user_id: str, session_id: str) -> None:
+        """恢复指定连续对话的下行音频写入。"""
+
+        self.router.resume_session(user_id=user_id, session_id=session_id)
 
     def on_assistant_audio_delta(
         self,

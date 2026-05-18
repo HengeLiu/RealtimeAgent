@@ -1638,10 +1638,105 @@ def test_realtime_interrupted_provider_text_is_persisted_with_interrupt_marker(t
     assert "这段旧回复<用户打断>" in messages
     assert "这段旧回复不应写入" not in messages
     assert "这是新回复。" in messages
-    agent_events_text = (tmp_path / "runs" / "user-001" / "sess-001" / "agent-events.jsonl").read_text(
-        encoding="utf-8"
+
+
+def test_realtime_interrupt_keeps_generated_unheard_suffix_in_message(tmp_path) -> None:
+    """测试目标：验证 Omni 打断消息保留已生成但未播放的 transcript 后缀。
+
+    测试方法：模拟 provider 已生成“我是乐鑫”，并让 OutputService 估算用户只听到
+    “我是”。
+    预期结果：Omni messages 中 `<用户打断>` 插入在已播放和未播放文本之间。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: FakeRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
     )
-    assert "omni.response.message_suppressed_after_interrupt" in agent_events_text
+
+    def estimate_played_text_prefix(*, user_id: str, session_id: str) -> str:
+        """模拟 Omni 播放进度：用户只听到了前两个字。"""
+
+        return "我是"
+
+    app.output_service.estimate_played_text_prefix = estimate_played_text_prefix
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.created", "provider": "fake", "response_id": "resp-1"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": "我是乐鑫", "response_id": "resp-1"},
+    )
+    core._mark_current_response_interrupted(user_id="user-001", session_id="sess-001", reason="unit_interrupt")
+
+    messages = (tmp_path / "runs" / "user-001" / "sess-001" / "messages.jsonl").read_text(encoding="utf-8")
+    assert "我是<用户打断>乐鑫" in messages
+    agent_events = app.recorder.session_file("sess-001", "agent-events.jsonl").read_text(encoding="utf-8")
+    assert '"split_source": "output_service_estimate"' in agent_events
+    assert '"unheard_chars": 2' in agent_events
+
+
+def test_realtime_stale_provider_response_id_is_ignored_after_new_response(tmp_path) -> None:
+    """测试目标：验证 Omni 旧 response 的迟到文本不会跨 generation 写入 messages。
+
+    测试方法：模拟 old response 被打断后创建 new response，再让 old response 带旧
+    response_id 返回 done。
+    预期结果：旧 done 被忽略，新 response 正常写入。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: FakeRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.created", "provider": "fake", "response_id": "resp-old"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": "旧回复", "response_id": "resp-old"},
+    )
+    core._mark_current_response_interrupted(user_id="user-001", session_id="sess-001", reason="unit_interrupt")
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.created", "provider": "fake", "response_id": "resp-new"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.done", "transcript": "旧回复不应写入", "response_id": "resp-old"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": "新回复", "response_id": "resp-new"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.done", "transcript": "", "response_id": "resp-new"},
+    )
+
+    messages = (tmp_path / "runs" / "user-001" / "sess-001" / "messages.jsonl").read_text(encoding="utf-8")
+    assert "旧回复<用户打断>" in messages
+    assert "旧回复不应写入" not in messages
+    assert "新回复" in messages
 
 
 def test_realtime_tool_call_is_persisted_to_user_messages(tmp_path) -> None:

@@ -1271,12 +1271,76 @@ def test_text_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) ->
     )
 
     event_names = [event.event_name for event in connection.events]
-    assert "audio.speech.started" in event_names
+    assert event_names.count("audio.speech.started") == 1
     assert "stream.output.cancel.requested" in event_names
     assert "stream.output.cancelled" in event_names
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "text.vad.speech_started" in agent_events_text
     assert "paraformer_sentence_begin" in agent_events_text
+
+
+def test_text_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_path) -> None:
+    """测试目标：验证 Text 输出音频通过 PipelineEvent 桥接，并受下行水位控制。
+
+    测试方法：注册浏览器眼镜连接，暂停下行后提交一段 Text delta，再恢复下行。
+    预期结果：暂停期间不写端侧音频；恢复后写出音频，并记录 `pipeline.output_audio_delta`。
+    """
+
+    class Connection:
+        """测试连接，保存端侧事件和音频分片。"""
+
+        def __init__(self, device_id: str) -> None:
+            self.device_id = device_id
+            self.events: list[Event] = []
+            self.chunks: list[StreamChunk] = []
+
+        def push_event(self, event: Event) -> None:
+            """记录控制事件。"""
+
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            """记录下行音频。"""
+
+            self.chunks.append(chunk)
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-text-pause"
+    session_id = "dev-text-pause"
+    connection = Connection(session_id)
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=user_id,
+            producer_id=session_id,
+            payload={
+                "device_id": session_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    app.agent_core.open(user_id, session_id)
+    app.agent_core.on_downstream_opened(
+        user_id=user_id,
+        session_id=session_id,
+        stream_id=f"{session_id}:downstream",
+        stream_type="actuator.speaker",
+    )
+
+    app.agent_core.pause_downstream(user_id, session_id)
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id=user_id, session_id=session_id, text="暂停期间先不要写出。", generation_id=1)
+    )
+    assert connection.chunks == []
+
+    app.agent_core.resume_downstream(user_id, session_id)
+    assert connection.chunks
+    agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "pipeline.output_audio_delta" in agent_events_text
+    assert "assistant_audio.delta_buffered_while_paused" in agent_events_text
 
 
 def test_text_agent_ignores_asr_final_inside_assistant_output_guard(tmp_path) -> None:
@@ -1531,6 +1595,48 @@ def test_text_output_estimates_played_prefix_for_interrupt(tmp_path, monkeypatch
     )
 
     assert app.output_service.estimate_played_text_prefix(user_id="user-prefix", session_id="dev-prefix") == "abcde"
+
+
+def test_text_interrupt_keeps_generated_unheard_suffix_in_message(tmp_path) -> None:
+    """测试目标：验证打断消息保留已经生成但尚未播放的文本。
+
+    测试方法：手动记录一段已释放给 TTS 的 assistant partial，并让输出服务估算用户
+    只听到了前两个字。
+    预期结果：messages 中 `<用户打断>` 插入在已播放和未播放文本之间，后缀继续作为
+    后续模型上下文保留。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-interrupt-unheard"
+    session_id = "dev-interrupt-unheard"
+    app.agent_core.open(user_id, session_id)
+    generation = app.agent_core._next_response_generation(user_id)
+    app.agent_core._remember_assistant_parts(user_id=user_id, generation=generation, parts=["我是乐鑫"])
+
+    def estimate_played_text_prefix(*, user_id: str, session_id: str) -> str:
+        """模拟播放进度：用户只听到了前两个字。"""
+
+        return "我是"
+
+    app.agent_core.output_service.estimate_played_text_prefix = estimate_played_text_prefix
+    app.agent_core._finalize_interrupted_generation(
+        user_id=user_id,
+        session_id=session_id,
+        generation=generation,
+        reason="paraformer_sentence_begin",
+    )
+
+    messages = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / user_id / session_id / "messages.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert messages[-1]["event"] == "assistant_text.interrupted"
+    assert messages[-1]["content"] == "我是<用户打断>乐鑫"
+    agent_events = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert '"played_chars": 2' in agent_events
+    assert '"unheard_chars": 2' in agent_events
 
 
 def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:

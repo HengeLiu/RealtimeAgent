@@ -20,6 +20,19 @@ class PipelineEventEmitter:
     def __init__(self, *, recorder: RunRecorder) -> None:
         self.recorder = recorder
         self._events: list[PipelineEvent] = []
+        self._listeners: list[Callable[[PipelineEvent], None]] = []
+
+    def add_listener(self, listener: Callable[[PipelineEvent], None]) -> None:
+        """注册 pipeline 事件监听器。
+
+        主要逻辑：AudioChatApp 通过监听器消费稳定的 PipelineEvent，把原先散落在
+        Text/Omni core 内部的控制动作逐步收敛到统一控制面。
+        参数：`listener` 接收一个 PipelineEvent。
+        返回值：无。
+        异常情况：监听器异常会被记录为 system event，不中断音频热路径。
+        """
+
+        self._listeners.append(listener)
 
     def emit(
         self,
@@ -51,6 +64,20 @@ class PipelineEventEmitter:
                     **dict(payload),
                 },
             )
+        for listener in list(self._listeners):
+            try:
+                listener(item)
+            except Exception as exc:  # noqa: BLE001
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.error.raised",
+                        "component": "PipelineEventEmitter",
+                        "session_id": session_id,
+                        "pipeline_event": event,
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "severity": "warning",
+                    }
+                )
         return item
 
     def events(self) -> list[PipelineEvent]:
@@ -152,12 +179,14 @@ class RealtimeOutputController:
         """记录端侧下行高水位暂停请求。"""
 
         self._paused_sessions.add(session_id)
+        self.output_service.pause_session(user_id=user_id, session_id=session_id)
         self.recorder.record_agent_event(session_id, {"event": "realtime_output.paused", "user_id": user_id})
 
     def resume(self, *, user_id: str, session_id: str) -> None:
         """记录端侧下行低水位恢复请求。"""
 
         self._paused_sessions.discard(session_id)
+        self.output_service.resume_session(user_id=user_id, session_id=session_id)
         self.recorder.record_agent_event(session_id, {"event": "realtime_output.resumed", "user_id": user_id})
 
     def cancel_active_output(self, *, user_id: str, session_id: str, reason: str) -> None:

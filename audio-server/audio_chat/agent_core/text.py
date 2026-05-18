@@ -302,13 +302,27 @@ class TextOutputAdapter:
         self.output_service = output_service
         self.recorder = recorder
 
-    def emit_text_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
+    def emit_text_delta(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        text: str,
+        final: bool = False,
+        generation_id: int | None = None,
+    ) -> None:
         self.recorder.record_agent_event(
             session_id,
             {"event": "assistant_text.delta", "text": text, "final": final},
         )
         self.output_service.on_assistant_text_delta(
-            AssistantTextDelta(user_id=user_id, session_id=session_id, text=text, final=final)
+            AssistantTextDelta(
+                user_id=user_id,
+                session_id=session_id,
+                text=text,
+                final=final,
+                generation_id=generation_id,
+            )
         )
 
 
@@ -629,6 +643,7 @@ class TextAgentCore:
                 text=assistant_text,
                 final=False,
                 context="fallback_text",
+                generation=generation,
             )
         interrupted_reason = self._response_cancel_reason(chunk.user_id, generation)
         self._interrupted_generation_reason_by_user.get(chunk.user_id, {}).pop(generation, None)
@@ -645,6 +660,7 @@ class TextAgentCore:
                 text="",
                 final=True,
                 context="final_flush",
+                generation=generation,
             )
         message_already_finalized = self._generation_finalized_reason(chunk.user_id, generation) is not None
         if not message_already_finalized:
@@ -815,9 +831,12 @@ class TextAgentCore:
                     reason=reason,
                     error=f"{type(exc).__name__}: {exc}",
                 )
+        played_text = partial
+        unheard_text = ""
         if isinstance(estimated_played, str) and len(estimated_played) < len(partial):
-            partial = estimated_played
-        content = f"{partial}<用户打断>" if partial else ""
+            played_text = estimated_played
+            unheard_text = partial[len(estimated_played) :]
+        content = f"{played_text}<用户打断>{unheard_text}" if partial else ""
         self.control_service.append_message(
             user_id,
             {
@@ -838,6 +857,8 @@ class TextAgentCore:
             generation=generation,
             content_chars=len(content),
             partial_chars=len(partial),
+            played_chars=len(played_text),
+            unheard_chars=len(unheard_text),
             estimated_played_chars=len(estimated_played) if isinstance(estimated_played, str) else None,
         )
         return True
@@ -938,6 +959,7 @@ class TextAgentCore:
         text: str,
         final: bool,
         context: str,
+        generation: int | None = None,
     ) -> bool:
         """尽力向输出链路发送文本 delta，输出失败时只记录不抛出。
 
@@ -950,7 +972,18 @@ class TextAgentCore:
         """
 
         try:
-            self.output_adapter.emit_text_delta(user_id=user_id, session_id=session_id, text=text, final=final)
+            try:
+                self.output_adapter.emit_text_delta(
+                    user_id=user_id,
+                    session_id=session_id,
+                    text=text,
+                    final=final,
+                    generation_id=generation,
+                )
+            except TypeError as exc:
+                if "generation_id" not in str(exc):
+                    raise
+                self.output_adapter.emit_text_delta(user_id=user_id, session_id=session_id, text=text, final=final)
             return True
         except Exception as exc:
             record_agent_recovery_error(
@@ -1049,6 +1082,7 @@ class TextAgentCore:
                         user_id=user_id,
                         session_id=session_id,
                         text=text,
+                        generation=generation,
                     ),
                 )
                 for item in self._stream_model(messages=messages, transcript=transcript, tools=tools):
@@ -1272,7 +1306,7 @@ class TextAgentCore:
             input_data=input_data,
         )
 
-    def _emit_assistant_text_delta(self, *, user_id: str, session_id: str, text: str) -> bool:
+    def _emit_assistant_text_delta(self, *, user_id: str, session_id: str, text: str, generation: int) -> bool:
         """释放一段助手文本并同步 Text turn 状态。
 
         主要逻辑：文本真正进入输出链路前把状态切到 speaking；输出异常仍由
@@ -1293,6 +1327,7 @@ class TextAgentCore:
             text=text,
             final=False,
             context="assistant_text_delta",
+            generation=generation,
         )
 
     @staticmethod
@@ -1399,21 +1434,22 @@ class TextAgentCore:
             will_cancel=should_cancel,
             diagnostics=diagnostics or {},
         )
-        self.control_service.publish(
-            Event(
-                event_name="audio.speech.started",
-                user_id=user_id,
-                producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
-                payload={
-                    "stream_id": stream_id,
-                    "reason": reason,
-                    "diagnostics": diagnostics or {},
-                },
+        if not getattr(self, "_pipeline_event_control_enabled", False):
+            self.control_service.publish(
+                Event(
+                    event_name="audio.speech.started",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    session_id=session_id,
+                    payload={
+                        "stream_id": stream_id,
+                        "reason": reason,
+                        "diagnostics": diagnostics or {},
+                    },
+                )
             )
-        )
         self._mark_user_activity(user_id, session_id)
-        if should_cancel:
+        if should_cancel and not getattr(self, "_pipeline_event_control_enabled", False):
             self.interrupt(user_id, reason=reason)
 
     def on_speech_stopped(
@@ -1443,19 +1479,20 @@ class TextAgentCore:
             reason=reason,
             diagnostics=diagnostics or {},
         )
-        self.control_service.publish(
-            Event(
-                event_name="audio.speech.stopped",
-                user_id=user_id,
-                producer_id=SERVER_PRODUCER_ID,
-                session_id=session_id,
-                payload={
-                    "stream_id": stream_id,
-                    "reason": reason,
-                    "diagnostics": diagnostics or {},
-                },
+        if not getattr(self, "_pipeline_event_control_enabled", False):
+            self.control_service.publish(
+                Event(
+                    event_name="audio.speech.stopped",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    session_id=session_id,
+                    payload={
+                        "stream_id": stream_id,
+                        "reason": reason,
+                        "diagnostics": diagnostics or {},
+                    },
+                )
             )
-        )
         self._mark_user_activity(user_id, session_id)
 
     def _handle_asr_transcript_event(self, chunk: StreamChunk, event: Any) -> None:

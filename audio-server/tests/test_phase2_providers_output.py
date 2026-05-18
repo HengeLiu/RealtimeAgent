@@ -21,6 +21,54 @@ class Connection:
         self.chunks.append(chunk)
 
 
+class FinishPayloadTTS:
+    """测试用 TTS：普通 delta 和 final flush 都返回可识别音频。"""
+
+    provider_name = "finish-payload"
+    model = "finish-payload"
+    streaming = True
+
+    def __init__(self) -> None:
+        self.text_chars = 0
+
+    def synthesize_delta(self, text: str) -> bytes:
+        """按文本长度返回固定 PCM，模拟流式 TTS 首段音频。"""
+
+        self.text_chars += len(text)
+        return b"\x01\x00" * 480
+
+    def synthesize_text(self, text: str) -> bytes:
+        """返回完整文本播报音频，模拟 Task/Tool 直接通知。"""
+
+        self.text_chars += len(text)
+        return b"\x03\x00" * 480
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """测试 TTS 没有后台音频。"""
+
+        return b""
+
+    def finish(self) -> bytes:
+        """返回 final flush 音频，用于验证尾音没有被误删。"""
+
+        return b"\x02\x00" * 480
+
+    def cancel(self) -> None:
+        """测试中不需要额外取消动作。"""
+
+        return None
+
+    def metrics(self) -> dict:
+        """返回输出格式所需的最小指标。"""
+
+        return {
+            "provider": self.provider_name,
+            "model": self.model,
+            "sample_rate_hz": 24000,
+            "text_chars": self.text_chars,
+        }
+
+
 def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "user-001") -> None:
     app.register_device(
         Event(
@@ -550,3 +598,43 @@ def test_playback_debug_snapshot_records_active_queue_and_decisions(tmp_path) ->
     assert any(decision["action"] == "queue" for decision in snapshot["recent_decisions"])
     saved = json.loads((tmp_path / "runs" / "debug" / "playback.json").read_text())
     assert saved["active"]["user-001"]["session_id"] == "sess-active-debug"
+
+
+def test_native_output_finish_does_not_clear_active_text_tts_stream(tmp_path) -> None:
+    """测试目标：验证直接通知音频结束不会清掉同会话正在播放的 Text TTS stream。
+
+    测试方法：先启动一条 Text TTS 输出流，再模拟 Task 直接通知通过 native audio
+    入口写入并结束，随后继续提交 Text delta 和 final。
+    预期结果：native source mismatch 只记录忽略，不会删除 Text TTS 的 active source；
+    Text final 仍能 flush 尾音并正常写出 stream.output.summary。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app.output_service.router._injected_tts = FinishPayloadTTS()
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    session_id = "sess-mixed-output"
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id=session_id, text="助手长回复开头")
+    )
+    active_stream_id = connection.chunks[-1].stream_id
+
+    app.output_service.submit_output(
+        OutputItem(user_id="user-001", session_id=session_id, priority="normal"),
+        "任务失败通知",
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id=session_id, text="助手长回复结尾")
+    )
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-001", session_id=session_id, text="", final=True)
+    )
+
+    model_events = session_text(app, session_id, "model-events.jsonl")
+    stream_events = session_text(app, session_id, "stream-events.jsonl")
+    assert "source_no_longer_active" in model_events
+    assert "stream_no_longer_active" not in model_events
+    assert "stream.output.summary" in stream_events
+    assert f'"stream_id": "{active_stream_id}"' in stream_events
+    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)

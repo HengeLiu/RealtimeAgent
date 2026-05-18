@@ -552,6 +552,8 @@ class AudioChatApp:
             self.agent_core.bind_tool_gateway(self.tool_gateway)
         if hasattr(self.agent_core, "bind_user_activity_callback"):
             self.agent_core.bind_user_activity_callback(self._mark_user_audio_activity)
+        if hasattr(self.agent_core, "bind_pipeline_event_handler"):
+            self.agent_core.bind_pipeline_event_handler(self._handle_pipeline_event)
         self.text_agent_core = self.agent_core
         self.audio_pipeline = AudioPipeline(
             agent_core=self.agent_core,
@@ -706,6 +708,66 @@ class AudioChatApp:
                 self.agent_core.resume_downstream(event.user_id, event.session_id or self._active_device_by_user.get(event.user_id, ""))
             return
         self.control_service.publish(event)
+
+    def _handle_pipeline_event(self, event) -> None:
+        """消费 Realtime Pipeline 输出的统一控制事件。
+
+        主要逻辑：Text/Omni core 只负责解释 provider 边界并发出 PipelineEvent；
+        App 在这里统一发布端侧控制事件或触发取消动作，避免两条链路各自直接操作
+        ControlService。
+        参数：`event` 为 pipeline 发出的稳定事件对象。
+        返回值：无。
+        异常情况：事件缺少必要字段时只记录 system event。
+        """
+
+        payload = dict(getattr(event, "payload", {}) or {})
+        event_name = str(getattr(event, "event", "") or "")
+        user_id = str(getattr(event, "user_id", "") or "")
+        session_id = str(getattr(event, "session_id", "") or "")
+        stream_id = str(getattr(event, "stream_id", "") or payload.get("stream_id") or "")
+        if event_name == "speech_started":
+            self.control_service.publish(
+                Event(
+                    event_name="audio.speech.started",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    payload={
+                        "stream_id": stream_id,
+                        "reason": payload.get("reason", "pipeline_speech_started"),
+                        "diagnostics": payload.get("diagnostics") or {
+                            key: value
+                            for key, value in payload.items()
+                            if key in {"provider_event", "provider", "model", "state", "will_cancel"}
+                        },
+                    },
+                )
+            )
+            return
+        if event_name == "speech_stopped":
+            self.control_service.publish(
+                Event(
+                    event_name="audio.speech.stopped",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    payload={
+                        "stream_id": stream_id,
+                        "reason": payload.get("reason", "pipeline_speech_stopped"),
+                        "diagnostics": payload.get("diagnostics") or {
+                            key: value
+                            for key, value in payload.items()
+                            if key in {"provider_event", "provider", "model"}
+                        },
+                    },
+                )
+            )
+            return
+        if event_name == "output_cancel_requested":
+            self.agent_core.interrupt(user_id, reason=str(payload.get("reason") or "pipeline_output_cancel_requested"))
+            return
 
     def dispatch(self, chunk: StreamChunk) -> None:
         if chunk.stream_type == "sensor.mic":

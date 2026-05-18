@@ -16,7 +16,11 @@ class ProviderUnavailable(RuntimeError):
     pass
 
 
-TEXT_AGENT_SYSTEM_PROMPT = "你是中文语音助手。请用简短口语回答用户。"
+TEXT_AGENT_SYSTEM_PROMPT = (
+    "你是中文语音助手。请用简短口语回答用户。"
+    "历史助手消息中如果出现 `<用户打断>`，表示标记前的内容用户可能已经听到，"
+    "标记后的内容是系统已经生成但未继续播报给用户的上下文，只能作为后续回答参考。"
+)
 
 
 @dataclass(frozen=True)

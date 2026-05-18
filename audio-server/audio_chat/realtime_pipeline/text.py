@@ -44,6 +44,7 @@ class TextInputBoundary:
             active_stream_id = core.output_service.active_output_stream_id(user_id, session_id)
             state = getattr(core, "_state_by_user", {}).get(user_id, "")
             will_cancel = active_stream_id is not None or state in {"thinking", "speaking", "tool_running"}
+            setattr(core, "_pipeline_event_control_enabled", True)
             emitter.emit(
                 "speech_started",
                 user_id=user_id,
@@ -133,6 +134,48 @@ class TextResponseEngine:
         self.core = core
         self.output_controller = output_controller
         self.emitter = emitter
+        self._text_sessions: set[str] = set()
+        self._install_output_bridge()
+
+    def _install_output_bridge(self) -> None:
+        """把 Text TTS 输出事件桥接为统一 PipelineEvent。"""
+
+        output_service = self.output_controller.output_service
+        add_delta_listener = getattr(output_service, "add_output_audio_delta_listener", None)
+        if callable(add_delta_listener):
+            add_delta_listener(self._on_output_audio_delta)
+        add_finish_listener = getattr(output_service, "add_output_finished_listener", None)
+        if callable(add_finish_listener):
+            add_finish_listener(self._on_output_finished)
+
+    def _on_output_audio_delta(self, record: dict[str, Any]) -> None:
+        """把 OutputService 已写入的 Text 音频分片转成 pipeline 事件。"""
+
+        session_id = str(record.get("session_id") or "")
+        if session_id not in self._text_sessions:
+            return
+        self.emitter.emit(
+            "output_audio_delta",
+            user_id=str(record.get("user_id") or ""),
+            session_id=session_id,
+            stream_id=str(record.get("stream_id") or ""),
+            payload_size=record.get("payload_size"),
+            chunk_count=record.get("chunk_count"),
+            source="text_tts",
+        )
+
+    def _on_output_finished(self, user_id: str, session_id: str, stream_id: str) -> None:
+        """把 OutputService 完成回调转成 pipeline output_finished。"""
+
+        if session_id not in self._text_sessions:
+            return
+        self.emitter.emit(
+            "output_finished",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            source="text_tts",
+        )
 
     def prepare_session(self, *, user_id: str, session_id: str) -> PipelineEvent:
         """记录 Text 回复引擎已准备好。"""
@@ -148,6 +191,7 @@ class TextResponseEngine:
             stream_id=stream_ref.stream_id,
             reason="pipeline_attach_downstream",
         )
+        self._text_sessions.add(stream_ref.session_id)
         return self.emitter.emit(
             "downstream_ready",
             user_id=stream_ref.user_id,
@@ -169,6 +213,9 @@ class TextResponseEngine:
     def close(self, *, user_id: str, reason: str) -> None:
         """关闭 Text 回复引擎。"""
 
+        session_id = getattr(self.core, "_session_by_user", {}).get(user_id)
+        if session_id:
+            self._text_sessions.discard(session_id)
         self.core.close(user_id, reason=reason)
 
 
@@ -231,6 +278,11 @@ class TextRealtimePipeline:
             object.__setattr__(self, name, value)
             return
         setattr(self.core, name, value)
+
+    def bind_pipeline_event_handler(self, handler) -> None:
+        """绑定 AudioChatApp 的 PipelineEvent 控制面处理器。"""
+
+        self.emitter.add_listener(handler)
 
     def open_session(self, user_id: str, session_id: str) -> PipelineEvent:
         """打开 Text realtime 连续对话 session。"""

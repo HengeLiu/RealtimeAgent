@@ -55,7 +55,8 @@ class OmniInputBoundary:
             if event == "omni.input_audio_buffer.speech_started":
                 active_stream_id = output_controller.active_output_stream_id(user_id=user_id, session_id=session_id)
                 state = getattr(core, "_state_by_session", {}).get(session_id, "")
-                will_cancel = active_stream_id is not None or state in {"thinking", "speaking", "tool_running"}
+                will_cancel = True
+                setattr(core, "_pipeline_event_control_enabled", True)
                 emitter.emit(
                     "speech_started",
                     user_id=user_id,
@@ -273,6 +274,11 @@ class OmniRealtimePipeline:
             object.__setattr__(self, name, value)
             return
         setattr(self.core, name, value)
+
+    def bind_pipeline_event_handler(self, handler) -> None:
+        """绑定 AudioChatApp 的 PipelineEvent 控制面处理器。"""
+
+        self.emitter.add_listener(handler)
 
     def open_session(self, user_id: str, session_id: str) -> PipelineEvent:
         """打开 Omni realtime 连续对话 session。"""
