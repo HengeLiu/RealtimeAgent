@@ -337,10 +337,11 @@ class QwenOmniRealtimeAdapter:
     def cancel(self, *, user_id: str, reason: str) -> None:
         """取消当前 Omni 响应。
 
-        主要逻辑：调用 provider cancel_response；provider 不支持或当前无响应时只记录错误回调。
+        主要逻辑：调用 provider cancel_response；provider 不支持或当前无响应时只记录
+        provider 事件，不把正常打断路径升级成会话失败。
         参数：`user_id`、`reason` 用于日志。
         返回值：无。
-        异常情况：异常会转成 callbacks.error。
+        异常情况：无。provider 异常会作为 `omni.response.cancel.skipped` 观测事件记录。
         """
         if self._conversation is None:
             return
@@ -349,7 +350,14 @@ class QwenOmniRealtimeAdapter:
                 self._conversation.cancel_response()
         except Exception as exc:  # noqa: BLE001 - provider SDK may raise transport-specific errors
             if self._callbacks:
-                self._callbacks.error(str(exc), {"event": "omni.response.cancel.failed", "reason": reason})
+                self._callbacks.provider_event(
+                    {
+                        "event": "omni.response.cancel.skipped",
+                        "provider": "qwen",
+                        "reason": reason,
+                        "message": str(exc),
+                    }
+                )
 
     def close(self, *, user_id: str, reason: str) -> None:
         """关闭 Omni Realtime 会话。
@@ -1109,6 +1117,8 @@ class RealtimeAudioAgentCore:
         self._sessions_with_provider_output: set[str] = set()
         self._event_buffer = AgentEventBuffer()
         self._assistant_text_by_session: dict[str, list[str]] = {}
+        self._response_generation_by_session: dict[str, int] = {}
+        self._interrupted_response_generation_by_session: dict[str, int] = {}
         self._recorded_user_transcripts: set[tuple[str, str]] = set()
         self._tool_call_count_by_session: dict[str, int] = {}
         self._active_user_audio_by_session: dict[str, list[bytes]] = {}
@@ -1118,11 +1128,25 @@ class RealtimeAudioAgentCore:
         self._audio_stream_by_session: dict[str, str] = {}
         self._closed_audio_streams_by_session: dict[str, set[str]] = {}
         self._state_by_session: dict[str, str] = {}
+        self._user_activity_callback: Callable[[str, str], None] | None = None
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
 
         self.tool_bridge.bind_tool_gateway(tool_gateway)
+
+    def bind_user_activity_callback(self, callback: Callable[[str, str], None]) -> None:
+        """绑定有效用户语音活动回调。
+
+        主要逻辑：Omni 链路由 provider 判断用户语音边界，只有 speech_started /
+        speech_stopped 这类有效语音事件才刷新连续对话活跃时间，普通静音音频 chunk
+        不会刷新空闲计时。
+        参数：`callback` 接收 user_id 和 session_id。
+        返回值：无。
+        异常情况：回调异常会被吞掉并记录为系统事件，避免影响音频主链路。
+        """
+
+        self._user_activity_callback = callback
 
     def open(self, user_id: str, session_id: str) -> None:
         """打开用户 realtime provider 会话。
@@ -1239,7 +1263,11 @@ class RealtimeAudioAgentCore:
             payload={"payload_size": len(chunk.payload), "final": chunk.final},
         )
         if chunk.payload:
-            self._set_turn_state(chunk.user_id, chunk.session_id, "listening", reason="input_audio_appended")
+            self._mark_realtime_input_activity(
+                user_id=chunk.user_id,
+                session_id=chunk.session_id,
+                reason="input_audio_appended",
+            )
 
     def on_audio_input_closed(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
         """通知 Realtime 当前音频输入 stream 已关闭。
@@ -1300,6 +1328,8 @@ class RealtimeAudioAgentCore:
         """
         existing = self._sessions.get(user_id)
         session_id = existing[0] if existing else None
+        if session_id:
+            self._mark_current_response_interrupted(user_id=user_id, session_id=session_id, reason=reason)
         if existing:
             existing[1].cancel(user_id=user_id, reason=reason)
         self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
@@ -1349,21 +1379,18 @@ class RealtimeAudioAgentCore:
 
     def _callbacks(self, *, user_id: str, session_id: str) -> RealtimeProviderCallbacks:
         return RealtimeProviderCallbacks(
-            audio_delta=lambda audio, fmt, metadata: self.output_adapter.emit_audio_delta(
+            audio_delta=lambda audio, fmt, metadata: self._handle_provider_audio_delta(
                 user_id=user_id,
                 session_id=session_id,
                 audio=audio,
                 format=fmt,
                 metadata=metadata,
-            )
-            or self._set_turn_state(user_id, session_id, "speaking", reason="audio_delta")
-            or self._sessions_with_provider_output.add(session_id),
-            audio_done=lambda metadata: self.output_adapter.emit_audio_done(
+            ),
+            audio_done=lambda metadata: self._handle_provider_audio_done(
                 user_id=user_id,
                 session_id=session_id,
                 metadata=metadata,
-            )
-            or self._set_turn_state(user_id, session_id, "completed", reason="audio_done"),
+            ),
             provider_event=lambda record: self._record_provider_event(
                 user_id=user_id,
                 session_id=session_id,
@@ -1689,8 +1716,10 @@ class RealtimeAudioAgentCore:
         """记录 provider 事件到 runs 和统一事件缓存。"""
 
         self.recorder.record_agent_event(session_id, record)
+        self._track_provider_response_event(session_id=session_id, record=record)
         self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
         self._handle_provider_speech_started_interrupt(user_id=user_id, session_id=session_id, record=record)
+        self._handle_provider_speech_stopped(user_id=user_id, session_id=session_id, record=record)
         self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
@@ -1706,40 +1735,197 @@ class RealtimeAudioAgentCore:
         event = str(record.get("event") or "")
         state = ""
         if event == "omni.input_audio_buffer.speech_started":
-            state = "listening"
+            state = "user_speaking"
         elif event in {"omni.input_audio_buffer.speech_stopped", "omni.input.committed"}:
             state = "thinking"
         elif event == "omni.response.done":
-            state = "completed"
+            status = str(record.get("status") or "").lower()
+            if self._is_current_response_interrupted(session_id=session_id):
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "omni.response.done_ignored_after_interrupt",
+                        "reason": "interrupted_response",
+                    },
+                )
+                return
+            if status == "cancelled":
+                state = "interrupted"
+            else:
+                state = "completed"
         if state:
             self._set_turn_state(user_id, session_id, state, reason=event, provider_event=event)
+
+    def _mark_realtime_input_activity(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """记录连续麦克风输入，但不覆盖正在生成或播放的 turn 状态。
+
+        主要逻辑：实时链路中麦克风会持续上行，input chunk 只能证明连接仍在工作，
+        不能说明用户开始或停止说话；真实 turn boundary 必须来自 provider speech 事件。
+        参数：`user_id/session_id` 定位会话，`reason` 写入诊断事件。
+        返回值：无。
+        异常情况：无。
+        """
+
+        current_state = self._state_by_session.get(session_id, "")
+        if current_state in {"", "completed", "interrupted", "failed"}:
+            self._set_turn_state(user_id, session_id, "listening", reason=reason)
+
+    def _handle_provider_audio_delta(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        metadata: dict[str, Any],
+    ) -> None:
+        """处理 provider 下行音频增量，并丢弃已打断 generation 的迟到音频。
+
+        主要逻辑：用户打断后，旧 provider 可能仍继续吐音频；这些音频不能再写入
+        OutputService，否则端侧会继续听到旧回答。
+        参数：`audio/format/metadata` 为 provider 音频回调内容。
+        返回值：无。
+        异常情况：OutputService 写入异常向上抛出。
+        """
+
+        if self._is_current_response_interrupted(session_id=session_id):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.audio_delta_ignored_after_interrupt",
+                    "reason": "interrupted_response",
+                    "payload_size": len(audio),
+                },
+            )
+            return
+        self.output_adapter.emit_audio_delta(
+            user_id=user_id,
+            session_id=session_id,
+            audio=audio,
+            format=format,
+            metadata=metadata,
+        )
+        self._set_turn_state(user_id, session_id, "speaking", reason="audio_delta")
+        self._sessions_with_provider_output.add(session_id)
+
+    def _handle_provider_audio_done(self, *, user_id: str, session_id: str, metadata: dict[str, Any]) -> None:
+        """处理 provider 下行音频完成，并忽略已打断 generation 的迟到完成回调。
+
+        主要逻辑：打断是正常控制流，旧 generation 的 audio_done 不能重新 finish
+        已取消的 output stream，也不能把 turn 状态改成 completed。
+        参数：`metadata` 为 provider 完成事件摘要。
+        返回值：无。
+        异常情况：OutputService 写入异常向上抛出。
+        """
+
+        if self._is_current_response_interrupted(session_id=session_id):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.audio_done_ignored_after_interrupt",
+                    "reason": "interrupted_response",
+                    "provider": metadata.get("provider"),
+                    "model": metadata.get("model"),
+                },
+            )
+            return
+        self.output_adapter.emit_audio_done(user_id=user_id, session_id=session_id, metadata=metadata)
+        self._set_turn_state(user_id, session_id, "completed", reason="audio_done")
+
+    def _track_provider_response_event(self, *, session_id: str, record: dict[str, Any]) -> None:
+        """跟踪 provider response 轮次，便于区分被打断的旧响应。
+
+        主要逻辑：Omni provider 可能在取消后仍然吐出旧 response 的 done/transcript。
+        这里用 session 内递增序号标记当前 response，打断时只屏蔽同一轮次的旧输出。
+        参数：`session_id` 为会话标识，`record` 为 provider 事件。
+        返回值：无。
+        异常情况：无。
+        """
+
+        event = str(record.get("event") or "")
+        if event != "omni.response.created":
+            return
+        self._response_generation_by_session[session_id] = self._response_generation_by_session.get(session_id, 0) + 1
+        self._assistant_text_by_session.pop(session_id, None)
+
+    def _mark_current_response_interrupted(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """标记当前 provider response 已被用户打断。
+
+        主要逻辑：打断时清空已累计但尚未落库的助手文本，并记录当前 response 轮次，
+        后续同轮次的 transcript done 不再追加到 messages。
+        参数：`session_id` 为会话标识，`reason` 为打断原因。
+        返回值：无。
+        异常情况：无。
+        """
+
+        generation = self._response_generation_by_session.get(session_id, 0)
+        self._interrupted_response_generation_by_session[session_id] = generation
+        partial = "".join(self._assistant_text_by_session.get(session_id, [])).strip()
+        if partial and self.control_service is not None:
+            self.control_service.append_message(
+                user_id,
+                {
+                    "session_id": session_id,
+                    "role": "assistant",
+                    "content": f"{partial}<用户打断>",
+                    "event": "assistant_text.interrupted",
+                    "source": "omni_realtime",
+                },
+            )
+        self._assistant_text_by_session.pop(session_id, None)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.response.marked_interrupted",
+                "reason": reason,
+                "response_generation": generation,
+            },
+        )
+
+    def _is_current_response_interrupted(self, *, session_id: str) -> bool:
+        """判断当前 provider response 是否已被打断。"""
+
+        generation = self._response_generation_by_session.get(session_id, 0)
+        return self._interrupted_response_generation_by_session.get(session_id) == generation
 
     def _handle_provider_speech_started_interrupt(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 Omni provider 的 speech_started 事件取消旧输出。
 
         主要逻辑：连续对话中，用户是否开始说话由 Omni provider 判断；服务端收到
-        `speech_started` 后取消 provider 当前响应，并通过 Output Service 下发
-        `stream.output.cancel.requested`，浏览器只负责执行停止播放。
+        `speech_started` 后先下发统一 `audio.speech.started` 控制事件，再取消 provider
+        当前响应，并通过 Output Service 下发 `stream.output.cancel.requested`。
         """
 
         event = str(record.get("event") or "")
         if event != "omni.input_audio_buffer.speech_started":
             return
         reason = "provider_speech_started"
+        stream_id = self._audio_stream_by_session.get(session_id, "")
+        self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        self._publish_provider_speech_event(
+            event_name="audio.speech.started",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            record=record,
+        )
         active_stream_id = self.output_service.active_output_stream_id(user_id, session_id)
+        self._mark_current_response_interrupted(user_id=user_id, session_id=session_id, reason=reason)
+        existing = self._sessions.get(user_id)
+        if existing:
+            existing[1].cancel(user_id=user_id, reason=reason)
+        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         if active_stream_id is None:
             self.recorder.record_agent_event(
                 session_id,
                 {
                     "event": "realtime.provider_speech_started.no_active_output",
                     "reason": reason,
+                    "playback_action": decision.action,
+                    "playback_reason": decision.reason,
                 },
             )
-            return
-        existing = self._sessions.get(user_id)
-        if existing:
-            existing[1].cancel(user_id=user_id, reason=reason)
-        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         self.recorder.record_agent_event(
             session_id,
             {
@@ -1761,6 +1947,102 @@ class RealtimeAudioAgentCore:
                 "playback_reason": decision.reason,
             },
         )
+
+    def _handle_provider_speech_stopped(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
+        """把 Omni provider 的 speech_stopped 事件发布成统一端侧控制事件。
+
+        主要逻辑：端侧只理解标准 `audio.speech.stopped`，不应该感知 Omni 原始事件名。
+        参数：`record` 为 provider 事件摘要。
+        返回值：无。
+        异常情况：无。
+        """
+
+        event = str(record.get("event") or "")
+        if event != "omni.input_audio_buffer.speech_stopped":
+            return
+        reason = "provider_speech_stopped"
+        self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        self._publish_provider_speech_event(
+            event_name="audio.speech.stopped",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=self._audio_stream_by_session.get(session_id, ""),
+            reason=reason,
+            record=record,
+        )
+
+    def _publish_provider_speech_event(
+        self,
+        *,
+        event_name: str,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        reason: str,
+        record: dict[str, Any],
+    ) -> None:
+        """向端侧发布 Omni provider 归一后的用户语音边界事件。
+
+        主要逻辑：浏览器端需要根据 `audio.speech.started` 暂停播放器写入并清空
+        本地播放队列；该语义不能依赖服务器侧 output stream 是否仍处于 active。
+        参数：`event_name` 为标准控制事件名；`record` 用于携带诊断信息。
+        返回值：无。
+        异常情况：ControlService 发布异常会写入 system event，避免打断流程中断。
+        """
+
+        if self.control_service is None:
+            return
+        diagnostics = {
+            "provider_event": record.get("event"),
+            "provider": record.get("provider"),
+            "model": record.get("model"),
+        }
+        try:
+            self.control_service.publish(
+                Event(
+                    event_name=event_name,
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    session_id=session_id,
+                    payload={
+                        "stream_id": stream_id,
+                        "reason": reason,
+                        "diagnostics": diagnostics,
+                    },
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.recorder.record_system_event(
+                {
+                    "event": "system.error.raised",
+                    "component": "RealtimeAudioAgentCore",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "reason": reason,
+                    "user_id": user_id,
+                    "session_id": session_id,
+                }
+            )
+
+    def _notify_user_activity(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """通知外层连续对话有真实用户语音活动。"""
+
+        if self._user_activity_callback is None:
+            return
+        try:
+            self._user_activity_callback(user_id, session_id)
+        except Exception as exc:  # noqa: BLE001
+            self.recorder.record_system_event(
+                {
+                    "event": "system.error.raised",
+                    "component": "RealtimeAudioAgentCore",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "reason": reason,
+                    "user_id": user_id,
+                    "session_id": session_id,
+                }
+            )
 
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 provider VAD 事件启动或停止视觉帧采样。
@@ -2056,11 +2338,23 @@ class RealtimeAudioAgentCore:
             )
             return
         if event in {"omni.response.audio_transcript.delta", "omni.response.text.delta", "omni.response.output_text.delta"}:
+            if self._is_current_response_interrupted(session_id=session_id):
+                return
             delta = str(record.get("delta") or record.get("text") or "")
             if delta:
                 self._assistant_text_by_session.setdefault(session_id, []).append(delta)
             return
         if event in {"omni.response.audio_transcript.done", "omni.response.text.done", "omni.response.output_text.done"}:
+            if self._is_current_response_interrupted(session_id=session_id):
+                self._assistant_text_by_session.pop(session_id, None)
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "omni.response.message_suppressed_after_interrupt",
+                        "reason": "interrupted_response",
+                    },
+                )
+                return
             content = str(record.get("transcript") or record.get("text") or "").strip()
             if not content:
                 content = "".join(self._assistant_text_by_session.get(session_id, [])).strip()

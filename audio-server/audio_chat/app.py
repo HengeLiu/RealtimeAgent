@@ -792,8 +792,6 @@ class AudioChatApp:
 
         if not device_id:
             return
-        if self.config.agent_mode != "text":
-            return
         user_id = ""
         for candidate_user_id, candidate_device_id in self._active_device_by_user.items():
             if candidate_device_id == device_id:

@@ -128,12 +128,21 @@ class RealtimeOutputController:
         self._closed_sessions: set[str] = set()
         self._downstream_by_session: dict[str, str] = {}
 
-    def bind_downstream(self, *, user_id: str, session_id: str, stream_id: str, reason: str = "downstream_attached") -> None:
-        """绑定下行扬声器 stream，并预热 Text TTS session。"""
+    def bind_downstream(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        reason: str = "downstream_attached",
+        prepare_text_output: bool = True,
+    ) -> None:
+        """绑定下行扬声器 stream，并按链路需要预热 Text TTS session。"""
 
         self._downstream_by_session[session_id] = stream_id
         self._closed_sessions.discard(session_id)
-        self.output_service.prepare_text_session(session_id, reason=reason)
+        if prepare_text_output:
+            self.output_service.prepare_text_session(session_id, reason=reason)
         self.recorder.record_agent_event(
             session_id,
             {"event": "realtime_output.downstream_bound", "user_id": user_id, "stream_id": stream_id, "reason": reason},

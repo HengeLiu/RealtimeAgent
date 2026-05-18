@@ -7,13 +7,16 @@ import pytest
 from audio_chat.agent_core.base import AgentCoreEvent
 from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter, TranscriptEvent
 from audio_chat.agent_core.router import AgentCoreRouter
-from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
 from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.output import AssistantTextDelta
 from audio_chat.output.service import OutputItem
 from audio_chat.protocol import Event, StreamChunk
 from audio_chat.realtime_pipeline import (
+    OmniAgentCore,
+    OmniInputBoundary,
+    OmniRealtimePipeline,
+    OmniResponseEngine,
     PipelineEventEmitter,
     RealtimeAudioNormalizer,
     RealtimeOutputController,
@@ -39,14 +42,15 @@ def test_agent_mode_text_builds_text_core(tmp_path) -> None:
 
 
 def test_agent_mode_realtime_audio_builds_realtime_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=realtime_audio` 能创建 RealtimeAudioAgentCore。
+    """测试目标：验证 `agent.mode=realtime_audio` 能创建 OmniRealtimePipeline。
 
     测试方法：用 `agent_mode=realtime_audio` 创建 AudioChatApp。
     预期结果：app 正常初始化，不在构造阶段连接真实 provider。
     """
     app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio"))
 
-    assert isinstance(app.agent_core, RealtimeAudioAgentCore)
+    assert isinstance(app.agent_core, OmniRealtimePipeline)
+    assert isinstance(app.agent_core.core, OmniAgentCore)
 
 
 def test_agent_mode_auto_defaults_to_text_for_now(tmp_path) -> None:
@@ -104,6 +108,58 @@ def test_text_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> No
         stream_id="stream-in-pipeline",
         reason="paraformer_sentence_end",
         diagnostics={"sentence_id": 1},
+    )
+
+    emitted_names = [event.event for event in pipeline.emitter.events()]
+    assert "response_engine_ready" in emitted_names
+    assert "session_ready" in emitted_names
+    assert "upstream_ready" in emitted_names
+    assert "downstream_ready" in emitted_names
+    assert "speech_started" in emitted_names
+    assert "speech_stopped" in emitted_names
+
+
+def test_omni_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
+    """测试目标：验证 Omni realtime 时序图中的核心组件都有真实代码对象。
+
+    测试方法：创建 mock realtime_audio 应用，检查 pipeline 内部组件类型，并手动驱动
+    session/upstream/downstream 生命周期和 provider speech 事件。
+    预期结果：组件不是概念占位，且 provider 原始事件会转换成稳定 pipeline 事件。
+    """
+
+    app = AudioChatApp(
+        AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio", realtime_provider="mock")
+    )
+    pipeline = app.agent_core
+
+    assert isinstance(pipeline, OmniRealtimePipeline)
+    assert isinstance(pipeline.core, OmniAgentCore)
+    assert isinstance(pipeline.normalizer, RealtimeAudioNormalizer)
+    assert isinstance(pipeline.input_boundary, OmniInputBoundary)
+    assert isinstance(pipeline.response_engine, OmniResponseEngine)
+    assert isinstance(pipeline.output_controller, RealtimeOutputController)
+    assert isinstance(pipeline.emitter, PipelineEventEmitter)
+
+    pipeline.open("user-pipeline", "session-pipeline")
+    pipeline.on_audio_input_opened(
+        user_id="user-pipeline",
+        session_id="session-pipeline",
+        stream_id="stream-in-pipeline",
+    )
+    pipeline.on_downstream_opened(
+        user_id="user-pipeline",
+        session_id="session-pipeline",
+        stream_id="stream-out-pipeline",
+    )
+    pipeline.core._record_provider_event(
+        user_id="user-pipeline",
+        session_id="session-pipeline",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "mock"},
+    )
+    pipeline.core._record_provider_event(
+        user_id="user-pipeline",
+        session_id="session-pipeline",
+        record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "mock"},
     )
 
     emitted_names = [event.event for event in pipeline.emitter.events()]

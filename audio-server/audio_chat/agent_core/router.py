@@ -4,9 +4,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from audio_chat.agent_core.base import AgentCore
-from audio_chat.agent_core.realtime import RealtimeAudioAgentCore
 from audio_chat.agent_core.text import TextAgentCore
-from audio_chat.realtime_pipeline import RealtimeOutputController, TextRealtimePipeline
+from audio_chat.realtime_pipeline import RealtimeOutputController, TextRealtimePipeline, create_omni_realtime_pipeline
 
 
 @dataclass
@@ -67,7 +66,7 @@ class AgentCoreRouter:
                 recorder=recorder,
             )
         if normalized == "realtime_audio":
-            return RealtimeAudioAgentCore(**kwargs)
+            return create_omni_realtime_pipeline(**_omni_kwargs(kwargs))
         if normalized == "auto":
             core = TextAgentCore(**_text_kwargs(kwargs))
             output_service = kwargs.get("output_service")
@@ -108,6 +107,25 @@ def _text_kwargs(kwargs: dict) -> dict:
         "memory_service",
         "multimodal_policy",
         "on_user_activity",
+    }
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if key in allowed
+    }
+
+
+def _omni_kwargs(kwargs: dict) -> dict:
+    allowed = {
+        "output_service",
+        "recorder",
+        "control_service",
+        "asset_service",
+        "realtime_config",
+        "provider_factory",
+        "tool_gateway",
+        "memory_service",
+        "max_context_messages",
     }
     return {
         key: value

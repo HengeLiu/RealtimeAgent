@@ -263,6 +263,7 @@ def _realtime_app(tmp_path, instances: list[FakeRealtimeProvider]) -> AudioChatA
     app.agent_core = RealtimeAudioAgentCore(
         output_service=app.output_service,
         recorder=app.recorder,
+        control_service=app.control_service,
         realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
         provider_factory=lambda config: _new_fake(config, instances),
     )
@@ -368,6 +369,92 @@ def test_realtime_audio_done_closes_current_output_stream(tmp_path) -> None:
     assert "assistant_audio.done" in model_events
 
 
+def test_realtime_provider_speech_started_publishes_control_event_after_output_finish(tmp_path) -> None:
+    """测试目标：验证 Omni speech_started 不依赖服务器 output stream 仍处于 active。
+
+    测试方法：先让 fake provider 完成一段输出，再模拟 provider 发现用户开始说话。
+    预期结果：端侧仍收到 `audio.speech.started`，provider cancel 被调用，旧 generation
+    被标记为打断。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+    instances[0].emit_done()
+    connection.events.clear()
+
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {
+            "event": "omni.input_audio_buffer.speech_started",
+            "provider": "fake",
+            "model": "fake-omni",
+        }
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert "audio.speech.started" in event_names
+    assert instances[0].cancelled is True
+    agent_events_text = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "omni.response.marked_interrupted" in agent_events_text
+
+
+def test_realtime_provider_speech_stopped_publishes_control_event(tmp_path) -> None:
+    """测试目标：验证 Omni speech_stopped 会发布统一端侧事件。
+
+    测试方法：打开 fake realtime 会话后直接模拟 provider speech_stopped。
+    预期结果：端侧收到 `audio.speech.stopped`，payload 中保留上行 stream_id。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+    connection.events.clear()
+
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {
+            "event": "omni.input_audio_buffer.speech_stopped",
+            "provider": "fake",
+            "model": "fake-omni",
+        }
+    )
+
+    stopped = [event for event in connection.events if event.event_name == "audio.speech.stopped"]
+    assert stopped
+    assert stopped[0].payload.get("stream_id") == handle.stream_id
+
+
 def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
     """测试目标：验证用户打断会取消 provider 响应和当前播放。
 
@@ -439,10 +526,55 @@ def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> Non
 
     event_names = [event.event_name for event in connection.events]
     assert instances[0].cancelled is True
+    assert "audio.speech.started" in event_names
     assert "stream.output.cancel.requested" in event_names
     assert "stream.output.cancelled" in event_names
+    chunks_before_late_delta = len(connection.chunks)
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.audio_delta(
+        b"\x02\x00" * 480,
+        StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20),
+        {"provider": "fake", "model": "fake-omni"},
+    )
+    instances[0].callbacks.audio_done({"provider": "fake", "model": "fake-omni"})
+    assert len(connection.chunks) == chunks_before_late_delta
     agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "realtime.provider_speech_started.interrupt" in agent_events_text
+    assert "omni.response.audio_delta_ignored_after_interrupt" in agent_events_text
+    assert "omni.response.audio_done_ignored_after_interrupt" in agent_events_text
+
+
+def test_realtime_provider_speech_started_cancels_response_without_active_output(tmp_path) -> None:
+    """测试目标：验证 Omni speech_started 即使没有正在播放的 output 也会取消 provider。
+
+    测试方法：只建立上行 realtime 会话，不让 fake provider 先输出音频，直接模拟
+    `omni.input_audio_buffer.speech_started`。
+    预期结果：provider cancel 被调用，runs 中记录无 active output 的打断决策。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    core = app.agent_core
+    session_id = "dev-web"
+    core.open(user_id="user-001", session_id=session_id)
+
+    assert app.output_service.active_output_stream_id("user-001", session_id) is None
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id=session_id,
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+
+    assert instances[0].cancelled is True
+    assert any(event.event_name == "audio.speech.started" for event in connection.events)
+    agent_events_text = (tmp_path / "runs" / "user-001" / session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "realtime.provider_speech_started.no_active_output" in agent_events_text
+    assert "omni.response.marked_interrupted" in agent_events_text
 
 
 def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> None:
@@ -1436,6 +1568,80 @@ def test_realtime_provider_text_is_persisted_to_user_messages(tmp_path) -> None:
     assert "帮我查一下有哪些设备在线。" in messages
     assert '"role": "assistant"' in messages
     assert "当前有 1 台设备在线。" in messages
+
+
+def test_realtime_interrupted_provider_text_is_persisted_with_interrupt_marker(tmp_path) -> None:
+    """测试目标：验证被用户打断的 Omni partial response 会带打断标记写入 messages。
+
+    测试方法：模拟 provider 开始一轮 response、输出部分文本后收到 speech_started，
+    再让旧 response 返回 transcript done；随后再模拟一轮新的正常 response。
+    预期结果：旧 partial 只以 `<用户打断>` 结尾写入一次，旧 done 不再追加，
+    新的回复正常写入 messages。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    core = RealtimeAudioAgentCore(
+        control_service=app.control_service,
+        output_service=app.output_service,
+        recorder=app.recorder,
+        realtime_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: FakeRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={
+            "event": "omni.conversation.item.input_audio_transcription.completed",
+            "transcript": "第一个问题。",
+        },
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.created", "provider": "fake"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": "这段旧回复"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.done", "transcript": "这段旧回复不应写入。"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.created", "provider": "fake"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.delta", "delta": "这是新回复。"},
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="sess-001",
+        record={"event": "omni.response.audio_transcript.done", "transcript": ""},
+    )
+
+    messages = (tmp_path / "runs" / "user-001" / "sess-001" / "messages.jsonl").read_text(encoding="utf-8")
+    assert "第一个问题。" in messages
+    assert "这段旧回复<用户打断>" in messages
+    assert "这段旧回复不应写入" not in messages
+    assert "这是新回复。" in messages
+    agent_events_text = (tmp_path / "runs" / "user-001" / "sess-001" / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "omni.response.message_suppressed_after_interrupt" in agent_events_text
 
 
 def test_realtime_tool_call_is_persisted_to_user_messages(tmp_path) -> None:
