@@ -49,3 +49,43 @@ def test_runs_layout_stores_sensor_assets_in_type_directories(tmp_path: Path) ->
 
     assert recorder.media_dir("dev-layout", "sensor.rgb") == tmp_path / "runs" / "user-layout" / "dev-layout" / "photos"
     assert recorder.media_dir("dev-layout", "sensor.imu") == tmp_path / "runs" / "user-layout" / "dev-layout" / "imu"
+
+
+def test_timeline_summary_allows_missing_checkpoints(tmp_path: Path) -> None:
+    """测试目标：验证实时链路耗时汇总允许部分 checkpoint 尚未到达。
+
+    测试方法：只记录音频首帧和 TTS 完成两个时间点，模拟连续音频流里
+    `tts.audio_done` 早于 `audio.input_done` 的顺序。
+    预期结果：记录 TTS 完成时不抛异常，summary 中缺失时间点的 offset 为 None。
+    """
+
+    recorder = RunRecorder(tmp_path / "runs")
+    recorder.bind_device(user_id="user-layout", device_id="dev-layout")
+
+    recorder.record_timeline_checkpoint(
+        "dev-layout",
+        checkpoint="text.timeline.audio.first_chunk_received",
+        user_id="user-layout",
+        stream_id="stream-in",
+        fields={"seq": 0, "payload_size": 640, "stream_type": "sensor.mic"},
+    )
+    recorder.record_timeline_checkpoint(
+        "dev-layout",
+        checkpoint="text.timeline.tts.audio_done",
+        user_id="user-layout",
+        stream_id="stream-out",
+        fields={
+            "payload_size": 504480,
+            "tts": {"provider": "dashscope", "model": "cosyvoice-v3-flash"},
+            "stream_format": {"codec": "pcm16le", "sample_rate": 24000, "channels": 1, "chunk_ms": 40},
+        },
+    )
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / "user-layout" / "dev-layout" / "agent-events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    summary = next(event for event in events if event.get("event") == "text.timeline.summary")
+    assert summary["offsets_ms"]["text.timeline.audio.input_done"] is None
+    assert summary["offsets_ms"]["text.timeline.asr.done"] is None
+    assert isinstance(summary["offsets_ms"]["text.timeline.tts.audio_done"], int)

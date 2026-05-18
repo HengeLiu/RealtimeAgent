@@ -1337,8 +1337,8 @@ def _parse_error_value(value: Any) -> Any:
     return None
 
 
-def _elapsed_ms(start: float | None, end: float) -> int | None:
-    if start is None:
+def _elapsed_ms(start: float | None, end: float | None) -> int | None:
+    if start is None or end is None:
         return None
     return int((end - start) * 1000)
 

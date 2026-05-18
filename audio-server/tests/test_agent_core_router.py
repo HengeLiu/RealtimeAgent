@@ -516,6 +516,33 @@ class SupersededBlockingTextModel:
         """测试模型不需要真实取消。"""
 
 
+class ReleasedThenBlockingTextModel:
+    """测试用文本模型：先释放一段文本，再阻塞等待打断。"""
+
+    provider_name = "released-then-blocking-text"
+    model = "released-then-blocking-text-model"
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """先输出可听见片段，再等待测试放行后尝试输出旧片段。"""
+
+        yield "这段已经说出口。"
+        self.started.set()
+        self.release.wait(timeout=2)
+        yield "这段取消后不应该出现。"
+
+    def stream_text(self, transcript: str):
+        """兼容旧 TextModelAdapter 接口。"""
+
+        yield from self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[])
+
+    def cancel(self) -> None:
+        """测试模型不需要真实取消。"""
+
+
 class CancelRecordingAsrPipeline:
     """测试用 ASR 代理：记录 Text 打断是否误取消正在收音的 ASR。"""
 
@@ -1400,6 +1427,110 @@ def test_text_agent_old_background_response_is_superseded_by_new_turn(tmp_path) 
     assert "新回复应该输出" in output_text
     assert "旧回复不应该输出" not in output_text
     assert "旧回复不应该输出" not in messages_text
+
+
+def test_text_agent_interrupt_immediately_finalizes_partial_message(tmp_path) -> None:
+    """测试目标：验证 Text Realtime 打断时立即封存当前助手 partial。
+
+    测试方法：让首轮模型先释放一段文本后阻塞，再模拟 Paraformer sentence_begin
+    打断，随后才放行旧模型继续返回。
+    预期结果：messages 中先出现带 `<用户打断>` 的 assistant interrupted 记录，
+    后续旧模型文本不会追加到 messages，也不会破坏 user/assistant 顺序。
+    """
+
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    user_id = "user-interrupt-finalize"
+    session_id = "dev-interrupt-finalize"
+    stream_id = "stream-interrupt-finalize"
+    model = ReleasedThenBlockingTextModel()
+    output_adapter = RecordingOutputAdapter()
+    app.agent_core.text_model = model
+    app.agent_core.output_adapter = output_adapter
+    app.agent_core.open(user_id, session_id)
+    app.agent_core.asr_pipeline._providers[stream_id] = ImmediateFinalAsrProvider("请讲一个很长的故事。")
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+    assert model.started.wait(timeout=1)
+
+    app.agent_core.on_speech_started(
+        user_id,
+        session_id,
+        stream_id=stream_id,
+        reason="paraformer_sentence_begin",
+        diagnostics={"sentence_id": 2},
+    )
+    model.release.set()
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        messages = [json.loads(line) for line in (session_dir / "messages.jsonl").read_text(encoding="utf-8").splitlines()]
+        if any(item.get("event") == "assistant_text.interrupted" for item in messages):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("interrupted assistant message was not finalized")
+
+    time.sleep(0.1)
+    messages = [json.loads(line) for line in (session_dir / "messages.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [item["role"] for item in messages[:2]] == ["user", "assistant"]
+    assert messages[1]["event"] == "assistant_text.interrupted"
+    assert messages[1]["content"] == "这段已经说出口。<用户打断>"
+    assert messages[1]["interrupted"] is True
+    assert messages[1]["interrupted_reason"] == "paraformer_sentence_begin"
+    assert all("这段取消后不应该出现" not in str(item.get("content", "")) for item in messages)
+    assert sum(1 for item in messages if item.get("role") == "assistant") == 1
+
+
+def test_text_output_estimates_played_prefix_for_interrupt(tmp_path, monkeypatch) -> None:
+    """测试目标：验证打断消息可按已播放音频估算文本前缀。
+
+    测试方法：注入固定 10 秒音频的 TTS，并把当前时间固定在首包后 5 秒。
+    预期结果：OutputService 返回约一半文本，避免把完整回复误标为已听完。
+    """
+
+    class FixedDurationTTS:
+        """测试用 TTS：每次合成固定 10 秒 PCM。"""
+
+        def synthesize_delta(self, text: str) -> bytes:
+            """返回 10 秒、100Hz、单声道 PCM16 音频。"""
+
+            return b"\x01\x00" * 1000
+
+        def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+            """没有额外后台音频。"""
+
+            return b""
+
+        def finish(self) -> bytes:
+            """没有尾包。"""
+
+            return b""
+
+        def metrics(self) -> dict:
+            """返回固定首包时间和采样率。"""
+
+            return {"sample_rate_hz": 100, "first_audio_at": 100.0}
+
+    monkeypatch.setattr("audio_chat.output.service.time.time", lambda: 105.0)
+    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app.output_service.router._injected_tts = FixedDurationTTS()
+
+    app.output_service.on_assistant_text_delta(
+        AssistantTextDelta(user_id="user-prefix", session_id="dev-prefix", text="abcdefghij", final=False)
+    )
+
+    assert app.output_service.estimate_played_text_prefix(user_id="user-prefix", session_id="dev-prefix") == "abcde"
 
 
 def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:

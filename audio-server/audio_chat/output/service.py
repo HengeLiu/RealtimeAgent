@@ -574,6 +574,7 @@ class StreamingTtsOutputSource:
 
     tts: StreamingTTS
     _pending_text: str = ""
+    _submitted_text_content: str = ""
     final_requested: bool = False
     _submitted_text: bool = False
     _completed: bool = False
@@ -607,6 +608,7 @@ class StreamingTtsOutputSource:
         if text:
             payload = self.tts.synthesize_delta(text)
             self._pending_text = ""
+            self._submitted_text_content += text
             self._submitted_text = True
             return payload
         drain = getattr(self.tts, "drain_audio", None)
@@ -616,6 +618,11 @@ class StreamingTtsOutputSource:
 
     def metrics(self) -> dict:
         return self.tts.metrics()
+
+    def submitted_text(self) -> str:
+        """返回已经提交给 TTS provider 的文本。"""
+
+        return self._submitted_text_content
 
     def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
         drain = getattr(self.tts, "drain_audio", None)
@@ -662,7 +669,12 @@ class StreamingTtsOutputSource:
     def clone_pending_with(self, tts: StreamingTTS) -> "StreamingTtsOutputSource":
         """用新的 provider 复制当前尚未合成的文本。"""
 
-        return StreamingTtsOutputSource(tts=tts, _pending_text=self._pending_text, final_requested=self.final_requested)
+        return StreamingTtsOutputSource(
+            tts=tts,
+            _pending_text=self._pending_text,
+            _submitted_text_content=self._submitted_text_content,
+            final_requested=self.final_requested,
+        )
 
 
 @dataclass
@@ -954,6 +966,51 @@ class OutputRouter:
         """
 
         self._finish_listeners.append(listener)
+
+    def estimate_played_text_prefix(self, *, user_id: str, session_id: str) -> str | None:
+        """估算当前 Text TTS 输出已经播放到的文本前缀。
+
+        主要逻辑：服务器无法直接知道端侧播放器的精确播放游标，只能根据当前 output
+        stream 已写入音频时长、TTS 首包时间和已提交给 TTS 的文本做保守估算。该值
+        只用于打断消息展示，不能作为协议级播放回执。
+        参数：`user_id/session_id` 定位当前输出。
+        返回值：估算出的文本前缀；没有活跃 Text TTS stream 时返回 None。
+        异常情况：无。
+        """
+
+        active = self.arbiter._active_by_user.get(user_id)
+        if active is None:
+            return None
+        active_intent, stream_id, _active_source = active
+        if session_id and active_intent.session_id != session_id:
+            return None
+        source = self._source_by_stream.get(stream_id)
+        if not isinstance(source, StreamingTtsOutputSource):
+            return None
+        text = source.submitted_text()
+        if not text:
+            return ""
+        payload = self._payload_by_stream.get(stream_id, bytearray())
+        if not payload:
+            return ""
+        try:
+            stream_format = self.stream_service.registry.get(stream_id).format
+        except Exception:
+            return None
+        bytes_per_second = max(1, int(stream_format.sample_rate) * max(1, int(stream_format.channels)) * 2)
+        generated_audio_seconds = len(payload) / bytes_per_second
+        if generated_audio_seconds <= 0:
+            return ""
+        first_audio_at = source.metrics().get("first_audio_at")
+        if not isinstance(first_audio_at, (int, float)) or first_audio_at <= 0:
+            return None
+        elapsed_seconds = max(0.0, time.time() - float(first_audio_at))
+        ratio = max(0.0, min(1.0, elapsed_seconds / generated_audio_seconds))
+        char_count = max(0, min(len(text), int(len(text) * ratio)))
+        if 0 < char_count < len(text):
+            while char_count < len(text) and text[char_count - 1].isspace():
+                char_count += 1
+        return text[:char_count]
 
     def prepare_text_session(
         self,
@@ -1942,6 +1999,11 @@ class OutputService:
         """关闭文本链路连续对话级 TTS provider。"""
 
         self.router.close_text_session(session_id, reason=reason)
+
+    def estimate_played_text_prefix(self, *, user_id: str, session_id: str) -> str | None:
+        """估算当前 Text TTS 输出已经播放到的文本前缀。"""
+
+        return self.router.estimate_played_text_prefix(user_id=user_id, session_id=session_id)
 
     def on_assistant_audio_delta(
         self,

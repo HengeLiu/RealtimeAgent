@@ -487,6 +487,9 @@ class TextAgentCore:
         self._assistant_output_guard_by_user: dict[str, tuple[int, int]] = {}
         self._response_generation_by_user: dict[str, int] = {}
         self._interrupted_generation_reason_by_user: dict[str, dict[int, str]] = {}
+        self._assistant_parts_by_generation: dict[str, dict[int, list[str]]] = {}
+        self._finalized_generation_reason_by_user: dict[str, dict[int, str]] = {}
+        self._generation_lock = threading.RLock()
         self._asr_started_sentence_keys: set[str] = set()
         self._asr_stopped_sentence_keys: set[str] = set()
         self._on_user_activity = on_user_activity
@@ -643,18 +646,20 @@ class TextAgentCore:
                 final=True,
                 context="final_flush",
             )
-        self.control_service.append_message(
-            chunk.user_id,
-            {
-                "session_id": chunk.session_id,
-                "role": "assistant",
-                "content": assistant_text,
-                "event": "assistant_text.done",
-                "error": str(response_error) if response_error is not None else None,
-                "interrupted": bool(interrupted_reason),
-                "interrupted_reason": interrupted_reason,
-            },
-        )
+        message_already_finalized = self._generation_finalized_reason(chunk.user_id, generation) is not None
+        if not message_already_finalized:
+            self.control_service.append_message(
+                chunk.user_id,
+                {
+                    "session_id": chunk.session_id,
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "event": "assistant_text.done",
+                    "error": str(response_error) if response_error is not None else None,
+                    "interrupted": bool(interrupted_reason),
+                    "interrupted_reason": interrupted_reason,
+                },
+            )
         self.control_service.publish(
             Event(
                 event_name="agent.response.completed",
@@ -673,7 +678,9 @@ class TextAgentCore:
             recovered_from_error=response_error is not None,
             interrupted=bool(interrupted_reason),
             interrupted_reason=interrupted_reason,
+            message_already_finalized=message_already_finalized,
         )
+        self._cleanup_generation(chunk.user_id, generation)
         self._set_turn_state(
             chunk.user_id,
             chunk.session_id,
@@ -743,9 +750,104 @@ class TextAgentCore:
         """
 
         generation = self._response_generation_by_user.get(user_id, 0) + 1
-        self._response_generation_by_user[user_id] = generation
-        self._interrupted_generation_reason_by_user.setdefault(user_id, {})
+        with self._generation_lock:
+            self._response_generation_by_user[user_id] = generation
+            self._interrupted_generation_reason_by_user.setdefault(user_id, {})
+            self._assistant_parts_by_generation.setdefault(user_id, {})[generation] = []
         return generation
+
+    def _remember_assistant_parts(self, *, user_id: str, generation: int, parts: list[str]) -> None:
+        """记录当前 generation 已经释放给输出链路的助手文本。
+
+        主要逻辑：Text realtime 的模型回复在后台线程里持续生成；用户打断发生在
+        另一个麦克风处理线程中，因此必须把已释放文本放到 generation 共享状态里。
+        参数：`user_id` 定位用户；`generation` 定位回复轮次；`parts` 为释放文本片段。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if not parts:
+            return
+        with self._generation_lock:
+            self._assistant_parts_by_generation.setdefault(user_id, {}).setdefault(generation, []).extend(parts)
+
+    def _generation_finalized_reason(self, user_id: str, generation: int) -> str | None:
+        """返回指定 generation 是否已经写入最终 assistant 消息。"""
+
+        with self._generation_lock:
+            return self._finalized_generation_reason_by_user.get(user_id, {}).get(generation)
+
+    def _finalize_interrupted_generation(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        generation: int,
+        reason: str,
+    ) -> bool:
+        """在打断发生时立即封存当前 generation 的 assistant partial。
+
+        主要逻辑：设计文档要求打断当下就写入已生成 assistant 文本并追加
+        `<用户打断>`，不能等旧模型线程自然返回。该方法保证同一 generation
+        只写一次，避免旧线程完成后重复追加 messages。
+        参数：`user_id/session_id/generation` 定位回复；`reason` 为打断原因。
+        返回值：本次是否新写入了 assistant 消息。
+        异常情况：无。
+        """
+
+        with self._generation_lock:
+            finalized = self._finalized_generation_reason_by_user.setdefault(user_id, {})
+            if generation in finalized:
+                return False
+            parts = list(self._assistant_parts_by_generation.setdefault(user_id, {}).get(generation, []))
+            finalized[generation] = reason
+        partial = "".join(parts)
+        estimated_played = None
+        estimate = getattr(self.output_service, "estimate_played_text_prefix", None)
+        if callable(estimate):
+            try:
+                estimated_played = estimate(user_id=user_id, session_id=session_id)
+            except Exception as exc:  # noqa: BLE001
+                self._record_event(
+                    "response.interrupted_played_text_estimate_failed",
+                    user_id=user_id,
+                    session_id=session_id,
+                    reason=reason,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        if isinstance(estimated_played, str) and len(estimated_played) < len(partial):
+            partial = estimated_played
+        content = f"{partial}<用户打断>" if partial else ""
+        self.control_service.append_message(
+            user_id,
+            {
+                "session_id": session_id,
+                "role": "assistant",
+                "content": content,
+                "event": "assistant_text.interrupted",
+                "interrupted": True,
+                "interrupted_reason": reason,
+                "source": "text_agent",
+            },
+        )
+        self._record_event(
+            "response.interrupted_message_finalized",
+            user_id=user_id,
+            session_id=session_id,
+            reason=reason,
+            generation=generation,
+            content_chars=len(content),
+            partial_chars=len(partial),
+            estimated_played_chars=len(estimated_played) if isinstance(estimated_played, str) else None,
+        )
+        return True
+
+    def _cleanup_generation(self, user_id: str, generation: int) -> None:
+        """清理已完成 generation 的临时文本缓冲。"""
+
+        with self._generation_lock:
+            self._assistant_parts_by_generation.get(user_id, {}).pop(generation, None)
+            self._finalized_generation_reason_by_user.get(user_id, {}).pop(generation, None)
 
     def _response_cancel_reason(self, user_id: str, generation: int) -> str | None:
         """返回指定回复代次是否已取消。
@@ -966,6 +1068,7 @@ class TextAgentCore:
                             model_output_started = True
                         released_texts, _output_ok = gate.release()
                         assistant_parts.extend(released_texts)
+                        self._remember_assistant_parts(user_id=user_id, generation=generation, parts=released_texts)
                         tool_calls.append(item)
                         self._record_event(
                             "tool_call.delta",
@@ -996,12 +1099,15 @@ class TextAgentCore:
                     gate.buffer(text_delta)
                     released_texts, _output_ok = gate.release_ready(reason="text_delta_realtime")
                     assistant_parts.extend(released_texts)
+                    self._remember_assistant_parts(user_id=user_id, generation=generation, parts=released_texts)
                 if not tool_calls or self.tool_gateway is None:
                     released_texts, _output_ok = gate.release()
                     assistant_parts.extend(released_texts)
+                    self._remember_assistant_parts(user_id=user_id, generation=generation, parts=released_texts)
                     break
                 released_texts, _output_ok = gate.release()
                 assistant_parts.extend(released_texts)
+                self._remember_assistant_parts(user_id=user_id, generation=generation, parts=released_texts)
                 provider_tool_call_message = _provider_tool_call_message(tool_calls)
                 messages.append(provider_tool_call_message)
                 self.control_service.append_message(
@@ -1429,6 +1535,13 @@ class TextAgentCore:
         if generation is not None:
             self._interrupted_generation_reason_by_user.setdefault(user_id, {})[generation] = reason
         session_id = self._session_by_user.get(user_id, "")
+        if generation is not None and session_id:
+            self._finalize_interrupted_generation(
+                user_id=user_id,
+                session_id=session_id,
+                generation=generation,
+                reason=reason,
+            )
         self.text_model.cancel()
         if session_id:
             self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
