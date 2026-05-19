@@ -151,8 +151,8 @@ testdata/protocol/
 建议新增：
 
 ```text
-audio-server/tests/test_protocol_schema_examples.py
-audio-server/tests/test_stream_chunk_codec_contract.py
+audio-server/tests/protocol/test_protocol_schema_examples.py
+audio-server/tests/protocol/test_stream_chunk_codec_contract.py
 ```
 
 测试目标：
@@ -164,8 +164,8 @@ audio-server/tests/test_stream_chunk_codec_contract.py
 
 ### 5.5 验收标准
 
-- `uv run python -m pytest audio-server/tests/test_protocol_schema_examples.py -q` 通过。
-- `uv run python -m pytest audio-server/tests/test_stream_chunk_codec_contract.py -q` 通过。
+- `uv run python -m pytest audio-server/tests/protocol/test_protocol_schema_examples.py -q` 通过。
+- `uv run python -m pytest audio-server/tests/protocol/test_stream_chunk_codec_contract.py -q` 通过。
 - 所有黄金样例都有用途说明。
 
 ## 6. Phase 2：Python 基准 Device SDK
@@ -576,7 +576,7 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 7. 跑通：
 
    ```bash
-   uv run python -m pytest audio-server/tests/test_protocol_schema_examples.py -q
+   uv run python -m pytest audio-server/tests/protocol/test_protocol_schema_examples.py -q
    uv run python -m pytest audio-device/python/tests -q
    uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
    ```
@@ -616,12 +616,12 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
   - `audio-server/audio_chat/spec/audio-chat-error-codes.yaml`
   - `audio-server/audio_chat/spec/audio-chat-asyncapi.yaml`
   - `testdata/protocol/`
-  - `audio-server/tests/test_protocol_schema_examples.py`
-  - `audio-server/tests/test_stream_chunk_codec_contract.py`
+  - `audio-server/tests/protocol/test_protocol_schema_examples.py`
+  - `audio-server/tests/protocol/test_stream_chunk_codec_contract.py`
   - `docs/reference/cli.md`
 - 验证：
-  - `uv run python -m pytest audio-server/tests/test_protocol_schema_examples.py audio-server/tests/test_stream_chunk_codec_contract.py -q`，结果 `5 passed`。
-  - `uv run python -m pytest audio-server/tests/test_device_capabilities_semantics.py audio-server/tests/test_protocol_contracts.py -q`，结果 `14 passed`。
+  - `uv run python -m pytest audio-server/tests/protocol/test_protocol_schema_examples.py audio-server/tests/protocol/test_stream_chunk_codec_contract.py -q`，结果 `5 passed`。
+  - `uv run python -m pytest audio-server/tests/protocol/test_device_capabilities_semantics.py audio-server/tests/protocol/test_protocol_contracts.py -q`，结果 `14 passed`。
 - 风险：当前 schema 做了第一版事件名冻结；后续若新增事件，需要同步 schema、黄金样例和 SDK 类型。
 
 ### 阶段 2：Python 基准 Device SDK
@@ -647,10 +647,10 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
   - `audio-device/typescript/`
   - `examples/dev-support/devices/browser-glass/index.html`
   - `examples/dev-support/devices/browser-glass/sdk/audio-chat-device-browser.js`
-  - `examples/dev-support/tests/test_web_glass_endpoint.py`
+  - `examples/dev-support/tests/browser/test_web_glass_endpoint.py`
 - 验证：
   - `cd audio-device/typescript && npm test`，结果 `5 passed`。
-  - `uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py examples/dev-support/tests/test_web_glass_endpoint.py -q`，结果 `21 passed`。
+  - `uv run python -m pytest examples/dev-support/tests/browser/test_browser_device_example.py examples/dev-support/tests/browser/test_web_glass_endpoint.py -q`，结果 `21 passed`。
 - 风险：browser-glass 仍保留页面内业务事件处理函数，这是交互式开发支持组件 UI 逻辑；底层通讯对象已迁移到 TypeScript SDK。
 
 ### 阶段 4：Swift SDK
@@ -697,7 +697,7 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
   - iOS Xcode 工程尚未引入 Swift Package。
 - 验证：
   - `uv run python -m pytest examples/dev-support/tests/python_playback_glass -q`，结果 `8 passed`。
-  - `uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py examples/dev-support/tests/test_web_glass_endpoint.py -q`，结果 `21 passed`。
+  - `uv run python -m pytest examples/dev-support/tests/browser/test_browser_device_example.py examples/dev-support/tests/browser/test_web_glass_endpoint.py -q`，结果 `21 passed`。
 - 风险：iOS 和真实 ESP32 仍需要用户手动构建/真机验收。
 
 ### 阶段 8：发布与文档

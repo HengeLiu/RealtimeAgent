@@ -162,7 +162,7 @@ aec_output_bytes=<n>
 无硬件环境时先运行：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/test_esp32_s3_endpoint_contract.py examples/for-blind-app/tests/test_endpoint_config_sync.py -q
+uv run python -m pytest examples/for-blind-app/tests/endpoints/test_esp32_s3_endpoint_contract.py examples/for-blind-app/tests/config/test_endpoint_config_sync.py -q
 ```
 
 该验收只证明协议、配置、参考状态机和 ESP-IDF 工程骨架正确，不替代真机 Wi-Fi、I2S、

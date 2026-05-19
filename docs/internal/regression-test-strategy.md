@@ -149,9 +149,9 @@ SDK 层允许使用测试替身，但必须遵守以下原则：
 
 当前已有基础：
 
-- `audio-server/tests/test_protocol_contracts.py`
-- `audio-server/tests/test_protocol_schema_examples.py`
-- `audio-server/tests/test_stream_chunk_codec_contract.py`
+- `audio-server/tests/protocol/test_protocol_contracts.py`
+- `audio-server/tests/protocol/test_protocol_schema_examples.py`
+- `audio-server/tests/protocol/test_stream_chunk_codec_contract.py`
 - `testdata/protocol/`
 
 ### 3.4 自动化要求
@@ -162,11 +162,11 @@ SDK 层允许使用测试替身，但必须遵守以下原则：
 
 ```bash
 uv run python -m pytest \
-  audio-server/tests/test_protocol_contracts.py \
-  audio-server/tests/test_protocol_schema_examples.py \
-  audio-server/tests/test_stream_chunk_codec_contract.py \
-  audio-device/python/tests/test_events.py \
-  audio-device/python/tests/test_stream_codec.py \
+  audio-server/tests/protocol/test_protocol_contracts.py \
+  audio-server/tests/protocol/test_protocol_schema_examples.py \
+  audio-server/tests/protocol/test_stream_chunk_codec_contract.py \
+  audio-device/python/tests/protocol/test_events.py \
+  audio-device/python/tests/protocol/test_stream_codec.py \
   -q
 ```
 
@@ -253,13 +253,13 @@ Device SDK 的典型测试输出包括：
 
 当前已有基础：
 
-- `audio-server/tests/test_typed_device_context_api.py`
-- `audio-server/tests/test_agent_core_router.py`
-- `audio-server/tests/test_text_agent_tool_loop_async.py`
-- `audio-server/tests/test_task_engine_scheduler.py`
-- `audio-server/tests/test_task_manage_tool.py`
-- `audio-server/tests/test_stream_and_audio_pipeline.py`
-- `audio-server/tests/test_streaming_tts_runtime.py`
+- `audio-server/tests/sdk/runtime/test_typed_device_context_api.py`
+- `audio-server/tests/sdk/agent_core/test_agent_core_router.py`
+- `audio-server/tests/sdk/agent_core/test_text_agent_tool_loop_async.py`
+- `audio-server/tests/sdk/runtime/test_task_engine_scheduler.py`
+- `audio-server/tests/sdk/runtime/test_task_manage_tool.py`
+- `audio-server/tests/sdk/runtime/test_stream_and_audio_pipeline.py`
+- `audio-server/tests/sdk/runtime/test_streaming_tts_runtime.py`
 
 ### 4.3 Device SDK 测试内容
 
@@ -276,10 +276,10 @@ Device SDK 的典型测试输出包括：
 
 当前已有基础：
 
-- `audio-device/python/tests/test_device_builder.py`
-- `audio-device/python/tests/test_events.py`
-- `audio-device/python/tests/test_stream_codec.py`
-- `audio-device/python/tests/test_contract_websocket.py`
+- `audio-device/python/tests/client/test_device_builder.py`
+- `audio-device/python/tests/protocol/test_events.py`
+- `audio-device/python/tests/protocol/test_stream_codec.py`
+- `audio-device/python/tests/client/test_contract_websocket.py`
 - `audio-device/typescript/tests/`
 - `audio-device/c/tests/`
 
@@ -430,7 +430,7 @@ SDK 层回归测试必须覆盖：
 
 当前已有基础：
 
-- `audio-server/tests/integration/test_dashscope_providers.py`
+- `audio-server/tests/model_provider/test_dashscope_providers.py`
 
 ### 5.3 测试档位
 
@@ -465,7 +465,7 @@ L2 可以自动化，但不作为每次提交默认必跑项。原因是它依�
 建议命令：
 
 ```bash
-uv run python -m pytest audio-server/tests/integration/test_dashscope_providers.py -q
+uv run python -m pytest audio-server/tests/model_provider/test_dashscope_providers.py -q
 ```
 
 后续拆分为：
@@ -522,7 +522,7 @@ uv run audio-chat.test.model.latency
 
 - `examples/for-blind-app/tests/`
 - `examples/dev-support/tests/`
-- `examples/for-blind-app/tests/test_text_route_audio_samples.py`
+- `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`
 
 ### 6.3 测试档位
 
@@ -556,7 +556,7 @@ iOS、ESP32、真实摄像头、真实麦克风、真实模型。
 ```bash
 uv run python -m pytest examples/for-blind-app/tests -q
 uv run python -m pytest examples/dev-support/tests -q
-uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
 ```
 
 后续拆分为：
@@ -986,7 +986,7 @@ uv run python -m pytest -m sdk -q
 
 ```text
 audio-server/tests/sdk/test_server_device_loopback.py
-audio-device/python/tests/test_contract_websocket.py
+audio-device/python/tests/client/test_contract_websocket.py
 runs/regression-reports/latest/l1-interop-report.json
 ```
 
@@ -1000,8 +1000,8 @@ uv run python -m pytest -m sdk -m device_sdk -q
 
 ```bash
 uv run python -m pytest \
-  audio-device/python/tests/test_contract_websocket.py \
-  audio-server/tests/test_typed_device_context_api.py \
+  audio-device/python/tests/client/test_contract_websocket.py \
+  audio-server/tests/sdk/runtime/test_typed_device_context_api.py \
   -q
 ```
 
@@ -1030,7 +1030,7 @@ uv run python -m pytest \
 
 ```text
 audio-server/tests/model_provider/
-audio-server/tests/integration/test_dashscope_providers.py
+audio-server/tests/model_provider/test_dashscope_providers.py
 runs/provider-tests/
 runs/regression-reports/latest/l2-model-provider-report.json
 ```
@@ -1146,17 +1146,17 @@ uv run python -m pytest -m replay -q
 - 文件：
   - `pyproject.toml`
   - `conftest.py`
-  - `audio-server/tests/test_protocol_contracts.py`
-  - `audio-server/tests/test_protocol_schema_examples.py`
-  - `audio-server/tests/test_stream_chunk_codec_contract.py`
-  - `audio-device/python/tests/test_events.py`
-  - `audio-device/python/tests/test_stream_codec.py`
-  - `audio-device/python/tests/test_device_builder.py`
-  - `audio-device/python/tests/test_contract_websocket.py`
-  - `audio-server/tests/test_typed_device_context_api.py`
-  - `audio-server/tests/test_agent_core_router.py`
-  - `audio-server/tests/integration/test_dashscope_providers.py`
-  - `examples/for-blind-app/tests/test_text_route_audio_samples.py`
+  - `audio-server/tests/protocol/test_protocol_contracts.py`
+  - `audio-server/tests/protocol/test_protocol_schema_examples.py`
+  - `audio-server/tests/protocol/test_stream_chunk_codec_contract.py`
+  - `audio-device/python/tests/protocol/test_events.py`
+  - `audio-device/python/tests/protocol/test_stream_codec.py`
+  - `audio-device/python/tests/client/test_device_builder.py`
+  - `audio-device/python/tests/client/test_contract_websocket.py`
+  - `audio-server/tests/sdk/runtime/test_typed_device_context_api.py`
+  - `audio-server/tests/sdk/agent_core/test_agent_core_router.py`
+  - `audio-server/tests/model_provider/test_dashscope_providers.py`
+  - `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`
 - 验证：
   - `uv run python -m pytest -m protocol_spec -q`，结果：`3 passed`。
   - `uv run python -m pytest -m protocol -q`，结果：`14 passed`。
@@ -1184,7 +1184,7 @@ uv run python -m pytest -m replay -q
 - 目标：让协议层测试不只验证正例，还能拦截旧协议写法、非法事件信封和非法生命周期跳转。
 - 实现：
   - 新增 `audio-server/audio_chat/protocol_state.py`，用独立状态机校验 `command.*`、输入 stream、输出 stream 的事件顺序。
-  - 新增 `audio-server/tests/test_protocol_state_machines.py`，覆盖命令标准生命周期、进度早于接受、终态后继续发事件、输入 stream 未 opened 就 closed、输出 stream finished 早于 started、输出 stream 取消流程等系统级协议顺序。
+  - 新增 `audio-server/tests/protocol/test_protocol_state_machines.py`，覆盖命令标准生命周期、进度早于接受、终态后继续发事件、输入 stream 未 opened 就 closed、输出 stream finished 早于 started、输出 stream 取消流程等系统级协议顺序。
   - 扩充 `testdata/protocol/invalid/`，新增旧 `capabilities`、旧 `routes`、媒体 payload、点对点路由字段、未知事件名等反例 fixtures。
   - 在 `test_protocol_schema_examples.py` 中增加反例 fixture 消费测试，确保反例能被 schema enum 或运行时信封 / 能力校验拦截。
   - 收紧 `validate_device_capabilities_file()`，让设备能力文件运行时校验和 schema 的顶层字段约束保持一致，避免旧字段被静默忽略。
@@ -1192,8 +1192,8 @@ uv run python -m pytest -m replay -q
 - 文件：
   - `audio-server/audio_chat/protocol_state.py`
   - `audio-server/audio_chat/device_capabilities.py`
-  - `audio-server/tests/test_protocol_state_machines.py`
-  - `audio-server/tests/test_protocol_schema_examples.py`
+  - `audio-server/tests/protocol/test_protocol_state_machines.py`
+  - `audio-server/tests/protocol/test_protocol_schema_examples.py`
   - `testdata/protocol/invalid/devices/legacy-capabilities.json`
   - `testdata/protocol/invalid/devices/legacy-routes.json`
   - `testdata/protocol/invalid/events/control-payload-media.json`
@@ -1225,8 +1225,8 @@ uv run python -m pytest -m replay -q
   - 当前 Kotlin 仓库没有 `gradlew`，本机也没有系统 `gradle`，因此 Kotlin 原生 contract 在本轮报告中为 skip；这比伪造通过更符合回归测试目标。
 - 文件：
   - `audio-device/python/src/audio_chat_device/events.py`
-  - `audio-device/python/tests/test_events.py`
-  - `audio-device/python/tests/test_multilanguage_device_sdk_contracts.py`
+  - `audio-device/python/tests/protocol/test_events.py`
+  - `audio-device/python/tests/multilanguage/test_multilanguage_device_sdk_contracts.py`
   - `audio-device/typescript/src/events.js`
   - `audio-device/typescript/tests/device.test.js`
 - 验证：
@@ -1253,8 +1253,8 @@ uv run python -m pytest -m replay -q
   - 新增错误协议输入测试，确认 stream 注册为 `sensor.mic` 后，如果收到同 `stream_id` 但 `stream_type=sensor.rgb` 的 chunk，会在 StreamService 入口被拒绝，不进入 Agent Core。
   - fake provider 只存在于测试 harness 中，不进入 `audio_chat` 真实 SDK 包；真实 provider 切换仍由 `AudioChatConfig` 和现有 provider builder 控制。
 - 文件：
-  - `audio-server/tests/server_sdk_harness.py`
-  - `audio-server/tests/test_server_sdk_protocol_integration.py`
+  - `audio-server/tests/helpers/server_sdk_harness.py`
+  - `audio-server/tests/sdk/runtime/test_server_sdk_protocol_integration.py`
 - 验证：
   - `uv run python -m pytest -m sdk -q`，结果：`41 passed`。
   - `uv run python -m pytest -m protocol -q`，结果：`26 passed`。
@@ -1280,7 +1280,7 @@ uv run python -m pytest -m replay -q
 - 文件：
   - `pyproject.toml`
   - `conftest.py`
-  - `audio-server/tests/test_server_device_loopback.py`
+  - `audio-server/tests/sdk/interop/test_server_device_loopback.py`
   - `audio-server/audio_chat/stream/service.py`
 - 验证：
   - `uv run python -m pytest -m interop -q`，结果：`1 passed`。
@@ -1313,11 +1313,11 @@ uv run python -m pytest -m replay -q
   - 为 `audio-server/tests/` 补 `__init__.py`，让测试辅助模块通过 `tests.model_provider.*` 方式导入，避免依赖 pytest 的临时导入路径。
   - Realtime provider 配置新增 `max_concurrent_sessions`，默认值为 10；`QwenOmniRealtimeAdapter.open()` 在建立 WebSocket 前占用进程内槽位，达到上限时记录 `omni.provider.concurrency_limited` 并拒绝新会话，`close()` 或打开失败时释放槽位。
 - 文件：
-  - `audio-server/tests/integration/test_dashscope_providers.py`
+  - `audio-server/tests/model_provider/test_dashscope_providers.py`
   - `audio-server/tests/model_provider/__init__.py`
   - `audio-server/tests/model_provider/artifacts.py`
   - `audio-server/tests/__init__.py`
-  - `audio-server/tests/test_server_sdk_protocol_integration.py`
+  - `audio-server/tests/sdk/runtime/test_server_sdk_protocol_integration.py`
   - `audio-server/audio_chat/agent_core/realtime.py`
   - `audio-server/audio_chat/config.py`
   - `audio-server/audio_chat/app.py`
@@ -1361,27 +1361,27 @@ uv run python -m pytest -m replay -q
   - L3 报告输入摘要增加 for-blind-app 根目录、真实音频 / 图片 / 视频样例目录、端侧参考工程清单和人工验收缺口。
   - 将 replay / hardware 报告从 `l3-app-report.json` 拆成 `l3-replay-report.json`、`l3-hardware-report.json`，避免不同 L3 子层互相覆盖。
 - 文件：
-  - `examples/for-blind-app/tests/test_text_route_audio_samples.py`
+  - `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`
   - `examples/dev-support/devices/python-glass/audio_chat_python_glass/playback.py`
-  - `examples/dev-support/tests/test_network_server_playback.py`
-  - `examples/dev-support/tests/test_browser_device_example.py`
-  - `examples/dev-support/tests/test_python_phone_mock_vision_task.py`
+  - `examples/dev-support/tests/network/test_network_server_playback.py`
+  - `examples/dev-support/tests/browser/test_browser_device_example.py`
+  - `examples/dev-support/tests/python_phone_mock/test_python_phone_mock_vision_task.py`
   - `examples/for-blind-app/tests/acceptance/test_capability_template_playback.py`
   - `examples/for-blind-app/tests/acceptance/test_for_blind_capabilities_playback.py`
   - `examples/for-blind-app/tests/acceptance/test_phone_visual_task_playback.py`
-  - `examples/for-blind-app/tests/test_app_name_launch.py`
-  - `examples/for-blind-app/tests/test_endpoint_config_sync.py`
-  - `examples/for-blind-app/tests/test_esp32_s3_endpoint_contract.py`
-  - `examples/for-blind-app/tests/test_ios_phone_endpoint_contract.py`
+  - `examples/for-blind-app/tests/config/test_app_name_launch.py`
+  - `examples/for-blind-app/tests/config/test_endpoint_config_sync.py`
+  - `examples/for-blind-app/tests/endpoints/test_esp32_s3_endpoint_contract.py`
+  - `examples/for-blind-app/tests/endpoints/test_ios_phone_endpoint_contract.py`
   - `examples/for-blind-app/devices/native-esp32-glass/audio_chat_esp32_s3/esp32_aec.py`
   - `conftest.py`
 - 验证：
   - `uv run python -m pytest -m app -q`，结果：`1 passed`。
   - `uv run python -m pytest -m replay -q`，结果：`3 passed`。
-  - `uv run python -m pytest examples/dev-support/tests/playback/test_python_playback.py examples/dev-support/tests/test_network_server_playback.py -q`，结果：`7 passed`。
-  - `uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py examples/dev-support/tests/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
+  - `uv run python -m pytest examples/dev-support/tests/playback/test_python_playback.py examples/dev-support/tests/network/test_network_server_playback.py -q`，结果：`7 passed`。
+  - `uv run python -m pytest examples/dev-support/tests/browser/test_browser_device_example.py examples/dev-support/tests/python_phone_mock/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
   - `uv run python -m pytest examples/dev-support/tests -q`，结果：`62 passed`。
-  - `uv run python -m pytest examples/for-blind-app/tests/acceptance/test_phone_visual_task_playback.py examples/for-blind-app/tests/test_app_name_launch.py examples/for-blind-app/tests/test_endpoint_config_sync.py examples/for-blind-app/tests/test_esp32_s3_endpoint_contract.py examples/for-blind-app/tests/test_ios_phone_endpoint_contract.py -q`，结果：`23 passed`。
+  - `uv run python -m pytest examples/for-blind-app/tests/acceptance/test_phone_visual_task_playback.py examples/for-blind-app/tests/config/test_app_name_launch.py examples/for-blind-app/tests/config/test_endpoint_config_sync.py examples/for-blind-app/tests/endpoints/test_esp32_s3_endpoint_contract.py examples/for-blind-app/tests/endpoints/test_ios_phone_endpoint_contract.py -q`，结果：`23 passed`。
   - `uv run python -m pytest examples/for-blind-app/tests -q`，结果：`61 passed`。
 - 运行证据：
   - `runs/regression-reports/latest/l3-app-report.json`

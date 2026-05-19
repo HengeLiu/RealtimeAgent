@@ -113,7 +113,7 @@ uv run audio-chat.playback.glass \
 Text 模型路线的无头验收可以直接复用 `testdata/audio-sample/` 下的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock text model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
 ```
 
 ## 更换模型和模态
@@ -364,7 +364,7 @@ uv run python -m pytest
 真实 provider 集成测试需要配置对应 API Key：
 
 ```bash
-uv run python -m pytest audio-server/tests/integration/test_dashscope_providers.py -q
+uv run python -m pytest audio-server/tests/model_provider/test_dashscope_providers.py -q
 ```
 
 ## 文档

@@ -64,7 +64,7 @@ AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS=500
 协议级验收：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/test_esp32_s3_endpoint_contract.py examples/for-blind-app/tests/test_endpoint_config_sync.py -q
+uv run python -m pytest examples/for-blind-app/tests/endpoints/test_esp32_s3_endpoint_contract.py examples/for-blind-app/tests/config/test_endpoint_config_sync.py -q
 ```
 
 已有实验桥接说明见 [ESP32-S3 Endpoint Bridge 联调说明](../../docs/devices/esp32-s3-endpoint-bridge.md)。

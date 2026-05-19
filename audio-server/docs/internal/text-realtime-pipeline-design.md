@@ -600,19 +600,19 @@ Gate -> Msg: assistant_text.done
 - `examples/dev-support/devices/browser-glass/index.html`
   - 浏览器日志使用毫秒级时间戳。
   - 只记录 speaker 首包、调度、drain 汇总，不再逐 chunk 打印音频接收日志。
-- `audio-server/tests/test_progress_audio.py`
+- `audio-server/tests/sdk/runtime/test_progress_audio.py`
   - 覆盖首输出 tool_call 的 progress audio。
   - 覆盖先文本再 tool_call 时保留工具前文本且不重复播 progress audio。
-- `audio-server/tests/test_agent_core_router.py`
+- `audio-server/tests/sdk/agent_core/test_agent_core_router.py`
   - 覆盖逐 delta 实时释放，包括无标点首个 delta 立即释放。
   - 覆盖 Text 状态机事件。
   - 覆盖打断后只保存已释放 assistant 文本。
 
 ## 验证记录
 
-- `uv run python -m pytest audio-server/tests/test_progress_audio.py audio-server/tests/test_agent_core_router.py -k 'text_agent or progress_audio' -q`
+- `uv run python -m pytest audio-server/tests/sdk/runtime/test_progress_audio.py audio-server/tests/sdk/agent_core/test_agent_core_router.py -k 'text_agent or progress_audio' -q`
   - 结果：通过，15 passed。
-- `uv run python -m pytest audio-server/tests/test_realtime_audio_agent_core.py audio-server/tests/test_context_compiler.py audio-server/tests/test_voice_session_modes.py -q`
+- `uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_audio_agent_core.py audio-server/tests/sdk/agent_core/test_context_compiler.py audio-server/tests/sdk/runtime/test_voice_session_modes.py -q`
   - 结果：通过，29 passed。
 - `uv run python -m audio_chat_python_playback_glass run --server-url http://127.0.0.1:18765 --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml --runs-root /tmp/audio-chat-text-e2e/runs --report /tmp/audio-chat-text-e2e/reports/smoke/report.json`
   - 配置：临时 `/tmp/audio-chat-text-e2e/server.yaml`，`agent.mode=text`，ASR/Text/TTS 均为 mock provider，复用 for-blind capabilities，清空临时 denylist 以允许 `capture_photo`。

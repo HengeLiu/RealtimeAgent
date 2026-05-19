@@ -54,8 +54,8 @@
 验收：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/test_app_name_launch.py -q
-uv run python -m pytest audio-server/tests/test_memory_service.py -q
+uv run python -m pytest examples/for-blind-app/tests/config/test_app_name_launch.py -q
+uv run python -m pytest audio-server/tests/sdk/runtime/test_memory_service.py -q
 ```
 
 完成标准：
@@ -80,9 +80,9 @@ uv run python -m pytest audio-server/tests/test_memory_service.py -q
 验收：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/test_peer_video_tasks.py -q
+uv run python -m pytest examples/for-blind-app/tests/capabilities/test_peer_video_tasks.py -q
 uv run python -m pytest examples/dev-support/tests/python_phone/test_peer_video_receiver.py -q
-uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py -q
+uv run python -m pytest examples/dev-support/tests/browser/test_browser_device_example.py -q
 ```
 
 完成标准：
@@ -383,7 +383,7 @@ on_start
 验收测试：
 
 ```text
-examples/for-blind-app/tests/test_peer_video_tasks.py
+examples/for-blind-app/tests/capabilities/test_peer_video_tasks.py
 ```
 
 测试目标：
@@ -431,7 +431,7 @@ properties:
 验收测试：
 
 ```text
-examples/for-blind-app/tests/test_peer_video_device_config.py
+examples/for-blind-app/tests/endpoints/test_peer_video_device_config.py
 ```
 
 测试目标：
@@ -576,7 +576,7 @@ browser-glass 日志：
 
 - 状态：已完成
 - 实现：确认 `find_object_task` / `traffic_light_task` 已切到 peer video 编排；模型可见 schema 不暴露端侧内部 provider 细节，`vision.provider=mock` 只作为 phone 参考端测试配置。
-- 验证：`uv run python -m pytest examples/for-blind-app/tests/test_app_name_launch.py audio-server/tests/test_memory_service.py -q`，结果 16 passed。
+- 验证：`uv run python -m pytest examples/for-blind-app/tests/config/test_app_name_launch.py audio-server/tests/sdk/runtime/test_memory_service.py -q`，结果 16 passed。
 - 风险：既有旧 phone task 测试仍依赖 `find_object_phone_task` / `traffic_light_phone_task`，当前主线已迁移到 peer video Task，需要后续单独清理旧测试口径。
 
 ### Phase 1：端侧状态回报 helper
@@ -596,20 +596,20 @@ browser-glass 日志：
 
 - 状态：已完成，浏览器真实摄像头待人工体验验收
 - 实现：`index.html` 增加 `peer.video.sender.start` / stop 命令处理，连接 phone receiver WebSocket，按 fps 发送摄像头或图片样例 JPEG 帧，并声明 `device_role=glass`、`peer.video.sender=true`。
-- 验证：`uv run python -m pytest examples/dev-support/tests/test_browser_device_example.py -q` 覆盖静态契约。
+- 验证：`uv run python -m pytest examples/dev-support/tests/browser/test_browser_device_example.py -q` 覆盖静态契约。
 
 ### Phase 4：server Task peer video 编排
 
 - 状态：已完成
 - 实现：`find_object_task` 和 `traffic_light_task` 改为通过 `TaskContext.devices.commands.start()` 先启动 phone receiver，再启动 glass sender；完成结果来自 phone `command.completed.result`，取消时按 glass -> phone 顺序 stop。
-- 验证：`uv run python -m pytest examples/for-blind-app/tests/test_peer_video_tasks.py -q`，通过。
+- 验证：`uv run python -m pytest examples/for-blind-app/tests/capabilities/test_peer_video_tasks.py -q`，通过。
 - 实现备注：控制信令 payload 不使用字段名 `video`，改用 `media_config`，避免 SDK 的媒体字节保护误判。
 
 ### Phase 5：设备配置和路由约定
 
 - 状态：已完成
 - 实现：`browser-glass/device.audio-chat.yaml` 和 `python-phone/phone.preview.yaml` 对齐 `user_id=user-browser-glass-001`，分别声明 `device_role=glass/phone` 和 peer video properties。
-- 验证：`uv run python -m pytest examples/for-blind-app/tests/test_peer_video_device_config.py -q`，通过。
+- 验证：`uv run python -m pytest examples/for-blind-app/tests/endpoints/test_peer_video_device_config.py -q`，通过。
 
 ### Phase 6：端到端联调和运行产物
 

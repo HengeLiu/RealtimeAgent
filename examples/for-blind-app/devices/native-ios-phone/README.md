@@ -139,8 +139,8 @@ Xcode 中设置 Team 和 Bundle Identifier。这个参考端默认不申请 iPho
 ```bash
 # 在项目根目录执行
 uv run python -m pytest \
-  examples/for-blind-app/tests/test_ios_phone_endpoint_contract.py \
-  examples/for-blind-app/tests/test_endpoint_config_sync.py \
+  examples/for-blind-app/tests/endpoints/test_ios_phone_endpoint_contract.py \
+  examples/for-blind-app/tests/config/test_endpoint_config_sync.py \
   -q
 ```
 

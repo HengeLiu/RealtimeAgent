@@ -36,7 +36,7 @@ uv run python -m pytest -q
 针对文档或开发者体验变更，建议至少跑：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
 uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
 ```
 
