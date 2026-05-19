@@ -21,7 +21,7 @@ from audio_chat.protocol import (
     PROTOCOL_VERSION,
     SERVER_PRODUCER_ID,
     Event,
-    new_id,
+    create_unique_id,
     validate_control_event_payload,
     validate_event_name,
 )
@@ -58,7 +58,7 @@ class Device:
     properties: dict[str, Any]
     routes: list[_Route]
     connection_state: str = "online"
-    connection_id: str = field(default_factory=lambda: new_id("conn"))
+    connection_id: str = field(default_factory=lambda: create_unique_id("conn"))
     last_seen_at: float = field(default_factory=time.time)
     last_error: dict[str, Any] | None = None
     register_failed_reason: str | None = None

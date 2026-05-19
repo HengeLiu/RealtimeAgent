@@ -22,7 +22,9 @@ data class StreamChunk(
     val duration_ms: Int = 0,
     val final: Boolean = false,
     val metadata: Map<String, Any?> = emptyMap(),
-    val timestamp_ms: Long = System.currentTimeMillis()
+    val timestamp_ms: Long = System.currentTimeMillis(),
+    val trace_id: String? = null,
+    val task_trace_id: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -52,7 +54,7 @@ object StreamChunkCodec {
      * 编码 StreamChunk 为二进制数据
      */
     fun encode(chunk: StreamChunk): ByteArray {
-        val header = mapOf(
+        val header = mutableMapOf(
             "version" to "audio-chat.v1",
             "user_id" to chunk.user_id,
             "session_id" to chunk.session_id,
@@ -68,6 +70,8 @@ object StreamChunkCodec {
             "final" to chunk.final,
             "metadata" to chunk.metadata
         )
+        chunk.trace_id?.let { header["trace_id"] = it }
+        chunk.task_trace_id?.let { header["task_trace_id"] = it }
 
         val headerJson = GsonFactory.gson.toJson(header)
         val headerBytes = headerJson.toByteArray(Charsets.UTF_8)
@@ -124,7 +128,9 @@ object StreamChunkCodec {
             duration_ms = (header["duration_ms"] as? Number)?.toInt() ?: 0,
             final = header["final"] as? Boolean ?: false,
             metadata = (header["metadata"] as? Map<String, Any?>) ?: emptyMap(),
-            timestamp_ms = (header["timestamp_ms"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            timestamp_ms = (header["timestamp_ms"] as? Number)?.toLong() ?: System.currentTimeMillis(),
+            trace_id = header["trace_id"] as? String,
+            task_trace_id = header["task_trace_id"] as? String
         )
     }
 

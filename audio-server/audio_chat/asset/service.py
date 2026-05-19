@@ -9,7 +9,7 @@ from threading import Lock
 
 from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, new_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, create_unique_id
 from audio_chat.stream import StreamService
 
 
@@ -73,7 +73,7 @@ class AssetStore:
         返回值：新建的 `AssetRef`。
         异常情况：文件系统写入失败时抛出对应 IO 异常。
         """
-        asset_id = new_id("asset")
+        asset_id = create_unique_id("asset")
         suffix = _asset_suffix(chunk.stream_type)
         if self.recorder is not None:
             self.recorder.bind_device(user_id=chunk.user_id, device_id=chunk.session_id)
@@ -319,7 +319,7 @@ class AssetService:
         cached = self.store.query(user_id=user_id, stream_type=stream_type, freshness_seconds=freshness_seconds, limit=1)
         if cached:
             return cached[-1]
-        request_id = new_id("asset_req")
+        request_id = create_unique_id("asset_req")
         pending = _PendingAssetCapture(user_id=user_id, stream_type=stream_type, request_id=request_id)
         with self._lock:
             self._pending[request_id] = pending

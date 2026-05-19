@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 
 from audio_chat.agent_core.context import PromptRegistry
 from audio_chat.errors import AudioChatError, ErrorCode
-from audio_chat.protocol import new_id
+from audio_chat.protocol import create_unique_id
 
 
 MemoryType = Literal["basic", "personalized"]
@@ -385,7 +385,7 @@ class MemoryService:
         normalized_source: MemorySource = source if source in {"user_requested", "agent_inferred", "system"} else "agent_inferred"  # type: ignore[assignment]
         return self.store.write(
             MemoryRecord(
-                memory_id=new_id("mem"),
+                memory_id=create_unique_id("mem"),
                 user_id=user_id,
                 memory_type=normalized_type,
                 topic=normalized_topic,

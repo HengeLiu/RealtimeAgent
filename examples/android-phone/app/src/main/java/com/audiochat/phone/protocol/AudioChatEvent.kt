@@ -14,17 +14,57 @@ data class AudioChatEvent(
     val stream_id: String = "",
     val stream_type: String = "",
     val command_id: String? = null,
+    val trace_id: String? = null,
+    val task_trace_id: String? = null,
     val payload: Map<String, Any?> = emptyMap(),
     val version: String = "audio-chat.v1",
+    val event_id: String = newId(),
     val timestamp_ms: Long = System.currentTimeMillis()
 ) {
     fun toJson(): String {
         return GsonFactory.gson.toJson(this)
     }
 
+    fun toMap(): Map<String, Any?> {
+        val map = mutableMapOf<String, Any?>()
+        map["version"] = version
+        map["event_id"] = event_id
+        map["event_name"] = event_name
+        map["timestamp_ms"] = timestamp_ms
+        map["user_id"] = user_id
+        map["producer_id"] = producer_id
+        if (session_id.isNotEmpty()) map["session_id"] = session_id
+        if (stream_id.isNotEmpty()) map["stream_id"] = stream_id
+        if (stream_type.isNotEmpty()) map["stream_type"] = stream_type
+        if (command_id != null) map["command_id"] = command_id
+        if (trace_id != null) map["trace_id"] = trace_id
+        if (task_trace_id != null) map["task_trace_id"] = task_trace_id
+        map["payload"] = payload
+        return map
+    }
+
     companion object {
         fun fromJson(json: String): AudioChatEvent {
-            return GsonFactory.gson.fromJson(json, AudioChatEvent::class.java)
+            val map = GsonFactory.fromJson<Map<String, Any?>>(json)
+            return fromMap(map)
+        }
+
+        fun fromMap(map: Map<String, Any?>): AudioChatEvent {
+            return AudioChatEvent(
+                event_name = map["event_name"] as String,
+                user_id = map["user_id"] as String,
+                producer_id = map["producer_id"] as? String ?: "",
+                session_id = map["session_id"] as? String ?: "",
+                stream_id = map["stream_id"] as? String ?: "",
+                stream_type = map["stream_type"] as? String ?: "",
+                command_id = map["command_id"] as? String,
+                trace_id = map["trace_id"] as? String,
+                task_trace_id = map["task_trace_id"] as? String,
+                payload = (map["payload"] as? Map<String, Any?>) ?: emptyMap(),
+                version = map["version"] as? String ?: "audio-chat.v1",
+                event_id = map["event_id"] as? String ?: newId(),
+                timestamp_ms = (map["timestamp_ms"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            )
         }
 
         /**

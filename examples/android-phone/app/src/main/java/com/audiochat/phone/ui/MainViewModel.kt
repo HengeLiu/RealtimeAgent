@@ -20,6 +20,9 @@ import com.audiochat.phone.auth.TokenManager
 import com.audiochat.phone.audio.AudioCaptureManager
 import com.audiochat.phone.audio.AudioPlaybackManager
 import com.audiochat.phone.audio.AudioCaptureService
+import com.audiochat.phone.device.Device
+import com.audiochat.phone.device.DeviceConfig
+import com.audiochat.phone.device.DeviceListener
 import com.audiochat.phone.device.DeviceManager
 import com.audiochat.phone.device.DeviceIdManager
 import com.audiochat.phone.error.ErrorHandler
@@ -144,7 +147,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(PhoneUiState())
     val uiState: StateFlow<PhoneUiState> = _uiState.asStateFlow()
 
-    private var deviceManager: DeviceManager? = null
+    private var deviceManager: Device? = null
     private var audioCaptureManager: AudioCaptureManager? = null
     private var audioPlaybackManager: AudioPlaybackManager? = null
     private var cameraManager: CameraManager? = null
@@ -230,10 +233,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 addLog("INFO", "正在连接服务器...")
                 val state = _uiState.value
-                
+
                 val localIp = getLocalIpAddress()
 
-                deviceManager = DeviceManager(
+                val config = DeviceConfig(
                     serverUrl = state.serverUrl,
                     userId = state.userId,
                     deviceId = state.deviceId,
@@ -247,14 +250,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "audio_chat.audio_input" to "sensor.mic",
                         "audio_chat.audio_output" to "actuator.speaker",
                         "local_ip" to localIp
-                    ),
-                    context = getApplication()
+                    )
                 )
 
-                setupDeviceCallbacks()
+                deviceManager = DeviceManager.create(config)
+                deviceManager?.setListener(createDeviceListener())
+                deviceManager?.setContext(getApplication())
+
                 addEvent("control.device.register", "send", "userId=${state.userId}, deviceId=${state.deviceId}")
-                deviceManager?.connectAndRegister()
-                deviceManager?.startStreamAndHeartbeat()
+                deviceManager?.connect()
+                deviceManager?.start()
 
                 // 自动启动常驻服务
                 startForegroundService()
@@ -350,9 +355,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun setupDeviceCallbacks() {
-        deviceManager?.apply {
-            onDeviceRegistered = {
+    private fun createDeviceListener(): DeviceListener {
+        return object : DeviceListener {
+            override fun onDeviceRegistered() {
                 _uiState.value = _uiState.value.copy(
                     isRegistered = true,
                     isConnected = true,
@@ -364,7 +369,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 initializeAudio()
             }
 
-            onStreamConnected = {
+            override fun onStreamConnected() {
                 _uiState.value = _uiState.value.copy(
                     isStreamConnected = true,
                     streamState = "connected"
@@ -373,32 +378,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 addEvent("stream.connected", "recv", "流连接已建立")
             }
 
-            onHeartbeatReceived = {
+            override fun onHeartbeatReceived() {
                 _uiState.value = _uiState.value.copy(lastHeartbeatTime = System.currentTimeMillis())
                 addEvent("control.device.heartbeat.sent", "send", "")
             }
 
-            onRgbCaptureRequest = { requestId ->
+            override fun onRgbCaptureRequest(requestId: String) {
                 handleRgbCaptureRequest(requestId)
             }
 
-            onCommandReceived = { event ->
+            override fun onCommandReceived(event: AudioChatEvent) {
                 handleCommand(event)
             }
 
-            onAudioOutputChunk = { chunk ->
+            override fun onAudioOutputChunk(chunk: StreamChunk) {
                 handleAudioOutput(chunk)
             }
 
-            onEventReceived = { eventName, detail ->
+            override fun onEvent(eventName: String, detail: String) {
                 addEvent(eventName, "recv", detail)
                 val s = _uiState.value
-                val newCount = when {
-                    eventName.startsWith("control.") -> s.controlEventsCount + 1
-                    eventName.startsWith("stream.") -> s.streamEventsCount + 1
-                    eventName.startsWith("command.") -> s.commandEventsCount + 1
-                    else -> s.eventsReceived
-                }
                 _uiState.value = s.copy(
                     eventsReceived = s.eventsReceived + 1,
                     controlEventsCount = if (eventName.startsWith("control.")) s.controlEventsCount + 1 else s.controlEventsCount,
@@ -407,21 +406,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            onRawMessage = { direction, message ->
+            override fun onRawMessage(direction: String, message: String) {
                 val prefix = if (direction == "send") ">>> " else "<<< "
                 val newMessages = (_uiState.value.rawMessages + "$prefix$message").takeLast(50)
                 _uiState.value = _uiState.value.copy(rawMessages = newMessages)
             }
 
-            onReconnectNeeded = {
+            override fun onReconnectNeeded() {
                 addLog("WARN", "连接断开, 正在重连...")
                 viewModelScope.launch {
                     try {
                         deviceManager?.disconnect()
                         delay(1000)
                         addEvent("control.device.register", "send", "重连")
-                        deviceManager?.connectAndRegister()
-                        deviceManager?.startStreamAndHeartbeat()
+                        deviceManager?.connect()
+                        deviceManager?.start()
                         addLog("INFO", "重连完成")
                     } catch (e: Exception) {
                         addLog("ERROR", "重连失败: ${e.message}")
@@ -429,22 +428,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            onYoloModelLoaded = { loaded ->
+            override fun onYoloModelLoaded(loaded: Boolean) {
                 _uiState.value = _uiState.value.copy(yoloModelLoaded = loaded)
                 addLog("INFO", "YOLO模型${if (loaded) "加载成功" else "加载失败"}")
             }
 
-            onPeerVideoFrame = { frameResult ->
+            override fun onPeerVideoFrame(frameResult: Map<String, Any>) {
+                val detections = frameResult["detections"] as? List<*> ?: emptyList<Any>()
                 _uiState.value = _uiState.value.copy(
-                    currentFrame = frameResult,
-                    currentDetections = frameResult.detections,
                     framesProcessed = _uiState.value.framesProcessed + 1,
-                    yoloInferenceTimeMs = frameResult.inferenceTimeMs,
-                    yoloLastDetectionCount = frameResult.detections.size
+                    yoloInferenceTimeMs = (frameResult["inferenceTimeMs"] as? Number)?.toLong() ?: 0L,
+                    yoloLastDetectionCount = detections.size
                 )
             }
 
-            onPeerVideoTaskCompleted = { result ->
+            override fun onPeerVideoTaskCompleted(result: Map<String, Any>) {
                 addLog("INFO", "Peer video 任务完成: $result")
                 val found = result["found"] as? Boolean ?: false
                 if (found) {
@@ -454,7 +452,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            onPeerVideoClientConnected = { clientIp ->
+            override fun onPeerVideoClientConnected(clientIp: String) {
                 addLog("INFO", "眼镜直连已连接: $clientIp")
                 _uiState.value = _uiState.value.copy(
                     isPeerVideoConnected = true,
@@ -465,7 +463,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 addEvent("peer.video.connected", "recv", "clientIp=$clientIp")
             }
 
-            onPeerVideoClientDisconnected = {
+            override fun onPeerVideoClientDisconnected() {
                 addLog("INFO", "眼镜直连已断开")
                 _uiState.value = _uiState.value.copy(
                     isPeerVideoConnected = false,

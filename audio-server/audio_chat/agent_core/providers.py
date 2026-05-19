@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
-from audio_chat.protocol import StreamChunk, new_id
+from audio_chat.protocol import StreamChunk, create_unique_id
 
 
 class ProviderUnavailable(RuntimeError):
@@ -219,7 +219,7 @@ class DashScopeAsrProviderAdapter:
         self._latest_partial = ""
         self._final_sentences: list[str] = []
         self._emitted_final_text = False
-        self._session_id = new_id("asr")
+        self._session_id = create_unique_id("asr")
 
         adapter = self
         dashscope.api_key = api_key

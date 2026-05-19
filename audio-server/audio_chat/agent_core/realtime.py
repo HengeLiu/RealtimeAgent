@@ -18,7 +18,7 @@ from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService
 from audio_chat.output.service import OutputItem
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, create_unique_id
 from audio_chat.tools import ToolGateway
 
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
@@ -1118,6 +1118,8 @@ class RealtimeAudioAgentCore:
         self._audio_stream_by_session: dict[str, str] = {}
         self._closed_audio_streams_by_session: dict[str, set[str]] = {}
         self._state_by_session: dict[str, str] = {}
+        self._trace_id_by_user: dict[str, str] = {}
+        self._task_trace_id_by_user: dict[str, str] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -1183,6 +1185,8 @@ class RealtimeAudioAgentCore:
             )
             raise
         self._sessions[user_id] = (session_id, provider)
+        # 生成会话级 trace_id
+        self._trace_id_by_user[user_id] = create_unique_id("session_trace")
         self._record_event(
             "session.opened",
             user_id=user_id,
@@ -1688,6 +1692,10 @@ class RealtimeAudioAgentCore:
     def _record_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """记录 provider 事件到 runs 和统一事件缓存。"""
 
+        # 注入 task_trace_id
+        task_trace_id = self._task_trace_id_by_user.get(user_id)
+        if task_trace_id:
+            record["task_trace_id"] = task_trace_id
         self.recorder.record_agent_event(session_id, record)
         self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
         self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
@@ -1706,6 +1714,8 @@ class RealtimeAudioAgentCore:
         state = ""
         if event == "omni.input_audio_buffer.speech_started":
             state = "listening"
+            # 新用户语音开始，生成新的 task_trace_id
+            self._task_trace_id_by_user[user_id] = create_unique_id("task_trace")
         elif event in {"omni.input_audio_buffer.speech_stopped", "omni.input.committed"}:
             state = "thinking"
         elif event == "omni.response.done":
@@ -2080,9 +2090,11 @@ class RealtimeAudioAgentCore:
             },
         )
 
-    def _record_event(self, event: str, *, user_id: str, session_id: str, **payload) -> None:
+    def _record_event(self, event: str, *, user_id: str, session_id: str, task_trace_id: str | None = None, **payload) -> None:
         """记录统一 Agent 事件到内存和 runs。"""
 
+        if task_trace_id:
+            payload["task_trace_id"] = task_trace_id
         self._event_buffer.record_event(event, user_id=user_id, session_id=session_id, payload=payload)
         self.recorder.record_agent_event(session_id, {"event": event, "user_id": user_id, **payload})
 

@@ -69,13 +69,14 @@ class LogContext:
     stream_id: str | None = None
     event: str | None = None
     trace_id: str | None = None
+    task_trace_id: str | None = None
     fields: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为 logging extra 字段。"""
 
         result: dict[str, Any] = {}
-        for key in ("user_id", "session_id", "device_id", "stream_id", "event", "trace_id"):
+        for key in ("user_id", "session_id", "device_id", "stream_id", "event", "trace_id", "task_trace_id"):
             value = getattr(self, key)
             if value and key not in STANDARD_LOG_RECORD_FIELDS:
                 result[key] = value
@@ -522,7 +523,7 @@ class RunRecorder:
         self._bind_from_record(session_id, record)
         self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
         self._append_jsonl(self.session_dir(session_id) / "model-events.jsonl", record)
-        if record.get("trace_id"):
+        if record.get("trace_id") or record.get("task_trace_id"):
             self._append_jsonl(self.runs_root / "trace-events.jsonl", record)
         event = str(record.get("event") or "")
         error_fields = _error_log_fields(
@@ -533,6 +534,7 @@ class RunRecorder:
             session_id=session_id,
             event=event,
             trace_id=record.get("trace_id"),
+            task_trace_id=record.get("task_trace_id"),
             fields={
                 "provider": record.get("provider"),
                 "model": record.get("model"),
@@ -765,6 +767,9 @@ class RunRecorder:
         path = self.session_dir(session_id) / "model-request.json"
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         self._model_request_started_at[session_id] = time.monotonic()
+        # 如果有 task_trace_id，写入完整链路日志
+        if record.get("task_trace_id"):
+            self._append_jsonl(self.runs_root / "trace-events.jsonl", record)
         if not self._first_model_request_logged:
             self._first_model_request_logged = True
             self._log_first_model_request(session_id=session_id, record=record)
@@ -775,6 +780,8 @@ class RunRecorder:
                 user_id=record.get("user_id"),
                 session_id=session_id,
                 event="model.request",
+                trace_id=record.get("trace_id"),
+                task_trace_id=record.get("task_trace_id"),
                 fields={
                     "provider": record.get("provider"),
                     "model": record.get("model"),

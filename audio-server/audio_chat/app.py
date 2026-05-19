@@ -19,7 +19,7 @@ from audio_chat.mcp import McpGateway
 from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, create_unique_id
 from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
 from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignalBridge, TaskStore
@@ -662,7 +662,7 @@ class AudioChatApp:
             stream_type=stream_type,
             producer_id=producer_id,
             format=format or StreamFormat(),
-            stream_id=new_id("stream_in"),
+            stream_id=create_unique_id("stream_in"),
         )
         self.control_service.publish(
             Event(

@@ -2,13 +2,9 @@ package com.audiochat.phone.device
 
 import android.content.Context
 import android.util.Log
-import com.audiochat.phone.network.AudioChatEventListener
-import com.audiochat.phone.network.AudioChatWebSocketClient
 import com.audiochat.phone.protocol.AudioChatEvent
 import com.audiochat.phone.protocol.DeviceSupports
 import com.audiochat.phone.protocol.StreamChunk
-import com.audiochat.phone.protocol.StreamChunkCodec
-import com.audiochat.phone.video.PeerVideoTaskManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,101 +15,86 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 设备管理器
- * 完全复刻 Python 端 NetworkPythonPhoneMockEndpoint 的核心逻辑：
- * 1. 设备注册
- * 2. 心跳保持
- * 3. 控制事件处理
- * 4. 流数据传输
- * 5. Peer Video 接收
+ * 实现 Device 接口，负责设备注册、心跳、命令处理等业务逻辑
+ * 底层通过 DeviceConnection 与服务器通信，解耦 WebSocket 实现
  */
-class DeviceManager(
-    private val serverUrl: String,
-    val userId: String,
-    val deviceId: String,
-    private val accessToken: String? = null,
-    private val deviceName: String = "android-phone",
-    private val properties: Map<String, Any?> = emptyMap(),
-    private val supports: DeviceSupports = DeviceSupports(),
-    private val context: Context? = null
-) {
+class DeviceManager private constructor(
+    private val config: DeviceConfig,
+    private val connection: DeviceConnection
+) : Device {
+
     companion object {
         private const val TAG = "DeviceManager"
         private const val DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000L
+
+        /**
+         * 创建设备管理器
+         */
+        fun create(config: DeviceConfig): DeviceManager {
+            val connection = WebSocketDeviceConnection(
+                serverUrl = config.serverUrl,
+                userId = config.userId,
+                deviceId = config.deviceId,
+                accessToken = config.accessToken
+            )
+            return DeviceManager(config, connection)
+        }
     }
 
-    private var wsClient: AudioChatWebSocketClient? = null
-    private var heartbeatJob: Job? = null
+    override val deviceId: String = config.deviceId
+    override val userId: String = config.userId
+
+    private var listener: DeviceListener? = null
+    private var context: Context? = null
+
     private val isRegistered = AtomicBoolean(false)
     private val isRunning = AtomicBoolean(false)
-    private var peerVideoTaskManager: PeerVideoTaskManager? = null
+    private var heartbeatJob: Job? = null
 
-    // 回调接口
-    var onRgbCaptureRequest: ((requestId: String) -> Unit)? = null
-    var onCommandReceived: ((event: AudioChatEvent) -> Unit)? = null
-    var onAudioOutputChunk: ((chunk: StreamChunk) -> Unit)? = null
-    var onDeviceRegistered: (() -> Unit)? = null
-    var onStreamConnected: (() -> Unit)? = null
-    var onHeartbeatReceived: (() -> Unit)? = null
-    var onEventReceived: ((eventName: String, detail: String) -> Unit)? = null
-    var onRawMessage: ((direction: String, message: String) -> Unit)? = null
-    var onPeerVideoFrame: ((PeerVideoTaskManager.FrameResult) -> Unit)? = null
-    var onPeerVideoTaskCompleted: ((Map<String, Any>) -> Unit)? = null
-    var onPeerVideoClientConnected: ((String) -> Unit)? = null
-    var onPeerVideoClientDisconnected: (() -> Unit)? = null
-    var onReconnectNeeded: (() -> Unit)? = null
-    var onYoloModelLoaded: ((Boolean) -> Unit)? = null
+    init {
+        connection.setListener(createConnectionListener())
+    }
+
+    override fun setListener(listener: DeviceListener?) {
+        this.listener = listener
+    }
+
+    override fun setContext(context: Context) {
+        this.context = context
+    }
+
+    override val isRegistered: Boolean
+        get() = isRegistered.get()
+
+    override val isRunning: Boolean
+        get() = isRunning.get()
 
     /**
-     * 连接并注册设备
+     * 连接到服务器并注册设备
      */
-    suspend fun connectAndRegister() {
+    override suspend fun connect() {
         if (isRunning.get()) return
 
         isRunning.set(true)
-        wsClient = AudioChatWebSocketClient(
-            serverUrl = serverUrl,
-            userId = userId,
-            deviceId = deviceId,
-            accessToken = accessToken,
-            eventListener = createEventListener()
-        )
-
-        if (context != null) {
-            peerVideoTaskManager = PeerVideoTaskManager(context, this)
-            val initialized = peerVideoTaskManager?.initialize() ?: false
-            peerVideoTaskManager?.onFrameProcessed = { frameResult ->
-                onPeerVideoFrame?.invoke(frameResult)
-            }
-            peerVideoTaskManager?.onTaskCompleted = { result ->
-                onPeerVideoTaskCompleted?.invoke(result)
-            }
-            peerVideoTaskManager?.onPeerConnected = { clientIp ->
-                onPeerVideoClientConnected?.invoke(clientIp)
-            }
-            peerVideoTaskManager?.onPeerDisconnected = {
-                onPeerVideoClientDisconnected?.invoke()
-            }
-            onYoloModelLoaded?.invoke(initialized)
-        }
 
         try {
-            // 连接控制 WebSocket
-            wsClient?.connectControl()
-            
+            // 连接控制通道
+            connection.connectControl()
+
             // 等待连接建立
             delay(500)
-            
+
             // 发送设备注册请求
             val registerEvent = AudioChatEvent.createRegisterEvent(
                 userId = userId,
                 deviceId = deviceId,
-                deviceName = deviceName,
-                properties = properties,
-                supports = supports
+                deviceName = config.deviceName,
+                properties = config.properties,
+                supports = config.supports
             )
-            wsClient?.sendEvent(registerEvent)
+            connection.sendEvent(registerEvent)
             Log.i(TAG, "设备注册请求已发送: $deviceId")
-            
+
         } catch (e: Exception) {
             Log.e(TAG, "连接失败", e)
             isRunning.set(false)
@@ -123,53 +104,38 @@ class DeviceManager(
 
     /**
      * 启动流连接和心跳
-     * 注意：Stream WebSocket 现在按需建立，不再在启动时自动连接
      */
-    fun startStreamAndHeartbeat() {
+    override fun start() {
         if (!isRunning.get()) return
-
-        // 不再自动连接 Stream WebSocket，按需建立
-        // 启动心跳（心跳通过 Control WebSocket 发送）
         startHeartbeat(DEFAULT_HEARTBEAT_INTERVAL_MS)
-    }
-
-    /**
-     * 确保流连接已建立（按需）
-     */
-    fun ensureStreamConnected(): Boolean {
-        return wsClient?.ensureStreamConnected() ?: false
     }
 
     /**
      * 断开连接
      */
-    fun disconnect() {
+    override fun disconnect() {
         isRunning.set(false)
         isRegistered.set(false)
-        
+
         heartbeatJob?.cancel()
         heartbeatJob = null
-        
-        wsClient?.disconnect()
-        wsClient = null
-        
+
+        connection.disconnect()
         Log.i(TAG, "设备已断开连接")
     }
 
     /**
      * 上传 RGB 图片
      */
-    fun uploadRgbImage(jpegData: ByteArray, requestId: String) {
-        if (!isRunning.get() || wsClient == null) {
+    override fun uploadRgbImage(jpegData: ByteArray, requestId: String) {
+        if (!isRunning.get()) {
             Log.w(TAG, "未连接，无法上传图片")
             return
         }
 
-        val scope = CoroutineScope(Dispatchers.IO)
-        scope.launch {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                // 按需建立流连接
-                if (!ensureStreamConnected()) {
+                if (!connection.ensureStreamConnected()) {
                     Log.e(TAG, "无法建立流连接")
                     return@launch
                 }
@@ -184,7 +150,7 @@ class DeviceManager(
                     streamType = "sensor.rgb",
                     requestId = requestId
                 )
-                wsClient?.sendEvent(openedEvent)
+                connection.sendEvent(openedEvent)
 
                 // 发送图片数据
                 val imageChunk = StreamChunkCodec.createImageChunk(
@@ -195,7 +161,7 @@ class DeviceManager(
                     seq = 0,
                     requestId = requestId
                 )
-                wsClient?.sendChunk(imageChunk)
+                connection.sendChunk(imageChunk)
 
                 // 发送流关闭事件
                 delay(50)
@@ -206,7 +172,7 @@ class DeviceManager(
                     streamType = "sensor.rgb",
                     reason = "android_phone_rgb_uploaded"
                 )
-                wsClient?.sendEvent(closedEvent)
+                connection.sendEvent(closedEvent)
 
                 Log.d(TAG, "RGB 图片上传完成: ${jpegData.size} bytes")
             } catch (e: Exception) {
@@ -218,9 +184,7 @@ class DeviceManager(
     /**
      * 上传音频数据
      */
-    fun uploadAudioData(pcmData: ByteArray, streamId: String, seq: Int, isFinal: Boolean = false) {
-        if (wsClient == null) return
-
+    override fun uploadAudioData(pcmData: ByteArray, streamId: String, seq: Int, isFinal: Boolean) {
         val chunk = StreamChunkCodec.createAudioChunk(
             userId = userId,
             sessionId = deviceId,
@@ -229,83 +193,81 @@ class DeviceManager(
             seq = seq,
             isFinal = isFinal
         )
-        wsClient?.sendChunk(chunk)
+        connection.sendChunk(chunk)
     }
 
     /**
      * 发送命令响应
      */
-    fun sendCommandResponse(event: AudioChatEvent) {
-        wsClient?.sendEvent(event)
+    override fun sendCommandResponse(event: AudioChatEvent) {
+        connection.sendEvent(event)
     }
 
     /**
      * 发送任意事件
      */
-    fun sendEvent(event: AudioChatEvent) {
-        wsClient?.sendEvent(event)
-        onRawMessage?.invoke("send", event.toJson())
+    override fun sendEvent(event: AudioChatEvent) {
+        connection.sendEvent(event)
+        listener?.onRawMessage("send", event.toJson())
     }
 
     /**
-     * 创建事件监听器
+     * 创建连接监听器
      */
-    private fun createEventListener(): AudioChatEventListener {
-        return object : AudioChatEventListener {
-            override fun onControlConnected() {
-                Log.i(TAG, "控制 WebSocket 已连接")
-            }
+    private fun createConnectionListener() = object : DeviceConnectionListener {
+        override fun onControlConnected() {
+            Log.i(TAG, "控制通道已连接")
+        }
 
-            override fun onControlEvent(event: AudioChatEvent) {
-                onRawMessage?.invoke("recv", event.toJson())
-                onEventReceived?.invoke(event.event_name, event.payload.toString())
-                handleControlEvent(event)
-            }
+        override fun onControlEvent(event: AudioChatEvent) {
+            listener?.onRawMessage("recv", event.toJson())
+            listener?.onEvent(event.event_name, event.payload.toString())
+            handleControlEvent(event)
+        }
 
-            override fun onControlError(error: Throwable) {
-                Log.e(TAG, "控制 WebSocket 错误", error)
-                onEventReceived?.invoke("control.error", error.message ?: "")
-            }
+        override fun onControlError(error: Throwable) {
+            Log.e(TAG, "控制通道错误", error)
+            listener?.onEvent("control.error", error.message ?: "")
+        }
 
-            override fun onControlDisconnected(code: Int, reason: String) {
-                Log.w(TAG, "控制 WebSocket 已关闭: code=$code reason=$reason")
-                isRunning.set(false)
-                isRegistered.set(false)
-                onEventReceived?.invoke("control.disconnected", "code=$code reason=$reason")
-                onReconnectNeeded?.invoke()
-            }
+        override fun onControlDisconnected(code: Int, reason: String) {
+            Log.w(TAG, "控制通道已关闭: code=$code reason=$reason")
+            isRunning.set(false)
+            isRegistered.set(false)
+            listener?.onEvent("control.disconnected", "code=$code reason=$reason")
+            listener?.onReconnectNeeded()
+        }
 
-            override fun onReconnectNeeded(type: String) {
-                Log.w(TAG, "WebSocket $type 需要重连")
-                onReconnectNeeded?.invoke()
-            }
+        override fun onStreamConnected() {
+            Log.i(TAG, "流通道已连接")
+            listener?.onStreamConnected()
+            listener?.onEvent("stream.connected", "")
+        }
 
-            override fun onStreamConnected() {
-                Log.i(TAG, "流 WebSocket 已连接")
-                onStreamConnected?.invoke()
-                onEventReceived?.invoke("stream.connected", "")
-            }
-
-            override fun onStreamChunk(chunk: StreamChunk) {
-                when (chunk.stream_type) {
-                    "actuator.speaker" -> {
-                        onAudioOutputChunk?.invoke(chunk)
-                    }
-                    else -> {
-                        Log.d(TAG, "收到其他流数据: ${chunk.stream_type}")
-                    }
+        override fun onStreamChunk(chunk: StreamChunk) {
+            when (chunk.stream_type) {
+                "actuator.speaker" -> {
+                    listener?.onAudioOutputChunk(chunk)
+                }
+                else -> {
+                    Log.d(TAG, "收到其他流数据: ${chunk.stream_type}")
                 }
             }
+        }
 
-            override fun onStreamError(error: Throwable) {
-                Log.e(TAG, "流 WebSocket 错误", error)
-                onEventReceived?.invoke("stream.error", error.message ?: "")
-            }
+        override fun onStreamError(error: Throwable) {
+            Log.e(TAG, "流通道错误", error)
+            listener?.onEvent("stream.error", error.message ?: "")
+        }
 
-            override fun onStreamDisconnected(code: Int, reason: String) {
-                Log.w(TAG, "流 WebSocket 已关闭: code=$code reason=$reason")
-                onEventReceived?.invoke("stream.disconnected", "code=$code reason=$reason")
-            }
+        override fun onStreamDisconnected(code: Int, reason: String) {
+            Log.w(TAG, "流通道已关闭: code=$code reason=$reason")
+            listener?.onEvent("stream.disconnected", "code=$code reason=$reason")
+        }
+
+        override fun onReconnectNeeded(type: String) {
+            Log.w(TAG, "WebSocket $type 需要重连")
+            listener?.onReconnectNeeded()
         }
     }
 
@@ -319,16 +281,16 @@ class DeviceManager(
             "control.device.registered" -> {
                 Log.i(TAG, "设备注册成功!")
                 isRegistered.set(true)
-                
+
                 // 提取心跳间隔
                 val heartbeatInterval = (event.payload["heartbeat_interval_seconds"] as? Number)?.toLong()
                     ?.times(1000) ?: DEFAULT_HEARTBEAT_INTERVAL_MS
-                
+
                 // 重启心跳（使用 server 返回的间隔）
                 heartbeatJob?.cancel()
                 startHeartbeat(heartbeatInterval)
-                
-                onDeviceRegistered?.invoke()
+
+                listener?.onDeviceRegistered()
             }
 
             "control.device.register.failed" -> {
@@ -342,7 +304,7 @@ class DeviceManager(
                     "sensor.rgb" -> {
                         val requestId = event.payload["request_id"] as? String
                         Log.i(TAG, "收到 RGB 采集请求: requestId=$requestId")
-                        onRgbCaptureRequest?.invoke(requestId ?: "")
+                        listener?.onRgbCaptureRequest(requestId ?: "")
                     }
                     else -> {
                         Log.w(TAG, "不支持的流类型请求: ${event.stream_type}")
@@ -351,10 +313,8 @@ class DeviceManager(
             }
 
             "command.requested" -> {
-                // 收到命令请求
                 Log.i(TAG, "收到命令请求: ${event.payload}")
-                handleCommandRequest(event)
-                onCommandReceived?.invoke(event)
+                listener?.onCommandReceived(event)
             }
 
             "stream.output.close.requested" -> {
@@ -368,7 +328,7 @@ class DeviceManager(
                     stream_type = event.stream_type,
                     payload = mapOf("stream_type" to event.stream_type)
                 )
-                wsClient?.sendEvent(finishedEvent)
+                connection.sendEvent(finishedEvent)
 
                 val closedEvent = AudioChatEvent(
                     event_name = "stream.output.closed",
@@ -379,32 +339,11 @@ class DeviceManager(
                     stream_type = event.stream_type,
                     payload = mapOf("stream_type" to event.stream_type, "reason" to "android_phone_closed")
                 )
-                wsClient?.sendEvent(closedEvent)
+                connection.sendEvent(closedEvent)
             }
 
             else -> {
                 Log.d(TAG, "未处理的事件: ${event.event_name}")
-            }
-        }
-    }
-
-    /**
-     * 处理命令请求
-     */
-    private fun handleCommandRequest(event: AudioChatEvent) {
-        val command = event.payload["command"] as? String ?: return
-
-        when (command) {
-            "peer.video.receiver.start" -> {
-                Log.i(TAG, "处理 peer.video.receiver.start 命令")
-                peerVideoTaskManager?.handleReceiverStartCommand(event)
-            }
-            "peer.video.receiver.stop" -> {
-                Log.i(TAG, "处理 peer.video.receiver.stop 命令")
-                peerVideoTaskManager?.handleReceiverStopCommand(event)
-            }
-            else -> {
-                Log.w(TAG, "未处理的命令: $command")
             }
         }
     }
@@ -417,11 +356,11 @@ class DeviceManager(
             while (isActive && isRunning.get()) {
                 try {
                     delay(intervalMs)
-                    
+
                     if (isRunning.get()) {
                         val heartbeatEvent = AudioChatEvent.createHeartbeatEvent(userId, deviceId)
-                        wsClient?.sendEvent(heartbeatEvent)
-                        onHeartbeatReceived?.invoke()
+                        connection.sendEvent(heartbeatEvent)
+                        listener?.onHeartbeatReceived()
                         Log.d(TAG, "心跳已发送")
                     }
                 } catch (e: Exception) {
@@ -432,10 +371,4 @@ class DeviceManager(
             }
         }
     }
-
-    val registered: Boolean
-        get() = isRegistered.get()
-
-    val running: Boolean
-        get() = isRunning.get()
 }

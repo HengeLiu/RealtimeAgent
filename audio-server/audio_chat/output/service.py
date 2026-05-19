@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from audio_chat.observability import RunRecorder
-from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, new_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, create_unique_id
 from audio_chat.stream import StreamService
 
 PRIORITY_ORDER = {"low": 0, "normal": 1, "high": 2, "critical": 3}
@@ -825,7 +825,7 @@ class PlaybackArbiter:
             stream_type="actuator.speaker",
             producer_id=SERVER_PRODUCER_ID,
             format=format or StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
-            stream_id=new_id("stream_out"),
+            stream_id=create_unique_id("stream_out"),
         )
         self._active_by_user[intent.user_id] = (intent, handle.stream_id, source)
         return handle.stream_id

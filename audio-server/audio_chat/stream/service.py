@@ -6,7 +6,7 @@ from typing import Protocol
 
 from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, create_unique_id
 
 
 class StreamDispatcher(Protocol):
@@ -134,7 +134,7 @@ class StreamService:
         返回值：`StreamHandle`。
         异常情况：stream 类型、格式或 selection 非法时抛出 `ValueError`。
         """
-        stream_id = stream_id or new_id("stream")
+        stream_id = stream_id or create_unique_id("stream")
         stream_format = format or self.default_format_for(stream_type)
         self._validate_stream(stream_type=stream_type, format=stream_format)
         consumers: tuple[str, ...] = tuple(consumer_device_ids or ())

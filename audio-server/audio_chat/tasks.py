@@ -14,7 +14,7 @@ from typing import Any
 
 from audio_chat.asset import ArtifactRef
 from audio_chat.errors import AudioChatError, ErrorCode
-from audio_chat.protocol import Event, SERVER_PRODUCER_ID, new_id
+from audio_chat.protocol import Event, SERVER_PRODUCER_ID, create_unique_id
 from audio_chat.tools import ToolContext
 
 TASK_EVENT_TYPES = ("start", "process", "status", "finish", "cancel", "error")
@@ -1039,7 +1039,7 @@ class TaskEngine:
         task_cls = self.registry.get(task_type)
         spec = task_cls.spec()
         self._reject_if_concurrency_exceeded(user_id=user_id, spec=spec)
-        task_id = new_id("task")
+        task_id = create_unique_id("task")
         now = time.time()
         timeout_seconds = _resolve_timeout_seconds(spec, input_data or {})
         deadline_at = self.scheduler.deadline_for(started_at=now, timeout_seconds=timeout_seconds)
@@ -1311,7 +1311,7 @@ class TaskEngine:
         delay = float(delay_seconds)
         if delay < 0:
             raise AudioChatError("delay_seconds must be >= 0", code=ErrorCode.INVALID_ARGUMENT)
-        schedule_id = new_id("task_schedule")
+        schedule_id = create_unique_id("task_schedule")
         resolved_user_id = user_id if user_id is not None else str(ref.metadata.get("user_id") or "")
         resolved_session_id = session_id if session_id is not None else (str(ref.metadata.get("session_id") or "") or None)
         signal = TaskSignal(
@@ -1717,7 +1717,7 @@ def _ref_to_dict(ref: Any) -> dict[str, Any]:
 
 def _artifact_from_dict(data: dict[str, Any]) -> ArtifactRef:
     return ArtifactRef(
-        artifact_id=str(data.get("artifact_id") or new_id("artifact")),
+        artifact_id=str(data.get("artifact_id") or create_unique_id("artifact")),
         kind=str(data.get("kind") or "unknown"),
         uri=str(data.get("uri") or ""),
         metadata=dict(data.get("metadata") or {}),

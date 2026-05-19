@@ -27,6 +27,20 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
+# Admin API 独立密钥，用于管理后台接口认证
+ADMIN_SECRET_TOKEN = os.environ.get("ADMIN_SECRET_TOKEN")
+
+
+def verify_admin_token(token: str) -> bool:
+    """验证 Admin Token。
+
+    参数：`token` 为请求头中的 token。
+    返回：验证通过返回 True，否则返回 False。
+    """
+    if not token or not ADMIN_SECRET_TOKEN:
+        return False
+    return secrets.compare_digest(token, ADMIN_SECRET_TOKEN)
+
 
 class TokenData:
     """Token 数据结构"""

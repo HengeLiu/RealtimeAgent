@@ -15,7 +15,7 @@ from audio_chat.asset import ArtifactRef, AssetRef
 from audio_chat.control import PublishResult
 from audio_chat.errors import AudioChatError, ErrorCode
 from audio_chat.memory import memory_record_to_public_dict
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, EventName, StreamChunk, StreamFormat, StreamType, new_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, EventName, StreamChunk, StreamFormat, StreamType, create_unique_id
 
 
 class DeviceNotFoundError(AudioChatError):
@@ -622,7 +622,7 @@ class ToolGateway:
 
     async def call(self, *, name: str, user_id: str, session_id: str, input_data: dict) -> ToolResult:
         started = time.time()
-        trace_id = new_id("tool_trace")
+        trace_id = create_unique_id("tool_trace")
         if not self.policy.allowed(name):
             result = ToolResult.failed(ToolError(f"tool is not allowed: {name}", code=ErrorCode.PERMISSION_DENIED))
             self._record_trace(trace_id, name, user_id, session_id, input_data, result, started)
@@ -1451,7 +1451,7 @@ class _CommandsFacade:
         """执行一次设备命令。"""
 
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=require_single)
-        command_id = new_id("cmd")
+        command_id = create_unique_id("cmd")
         broker = self._context._command_result_broker()
         broker.register_command(
             command_id=command_id,
@@ -1532,7 +1532,7 @@ class _CommandsFacade:
         if not self._allow_long_running:
             raise AudioChatError("long running commands are only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
-        command_id = new_id("cmd")
+        command_id = create_unique_id("cmd")
         broker = self._context._command_result_broker()
         broker.register_command(
             command_id=command_id,
@@ -1703,7 +1703,7 @@ class DeviceRuntime:
             stream_type=stream_type,
             producer_id=SERVER_PRODUCER_ID,
             format=format,
-            stream_id=new_id("stream_out"),
+            stream_id=create_unique_id("stream_out"),
             consumer_device_ids=tuple(str(device.device_id) for device in devices),
         )
         return OutputStreamWriter(context=self, stream_id=handle.stream_id, session_id=session_id, stream_type=stream_type, format=format)
@@ -1788,7 +1788,7 @@ class DeviceRuntime:
         """
 
         devices = self._resolve_devices_for_capability(stream_type, selector=selector, require_single=True)
-        correlation_id = new_id("stream_req")
+        correlation_id = create_unique_id("stream_req")
         payload = self._merge_capability_params(stream_type, devices=devices, params=params)
         payload["correlation_id"] = correlation_id
         payload.setdefault("asset_policy", "cache")
@@ -1908,7 +1908,7 @@ class DeviceRuntime:
             for device in devices
         )
         lease = DeviceLease(
-            lease_id=new_id("lease"),
+            lease_id=create_unique_id("lease"),
             user_id=self.user_id,
             capability=capability,
             selector=dict(selector or {}),
