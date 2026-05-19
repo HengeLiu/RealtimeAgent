@@ -12,6 +12,9 @@ SPEC_ROOT = ROOT / "audio-server/audio_chat/spec"
 TESTDATA_ROOT = ROOT / "testdata/protocol"
 
 
+pytestmark = pytest.mark.protocol
+
+
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -30,6 +33,20 @@ def test_device_golden_examples_match_runtime_capability_validator() -> None:
         assert supports, path
 
 
+def test_invalid_device_examples_are_rejected_by_runtime_capability_validator() -> None:
+    """测试目标：确认旧版设备能力写法不会被运行时校验器静默接受。
+
+    测试方法：读取 `testdata/protocol/invalid/devices` 下的反例夹具并调用
+    `validate_device_capabilities_file()`。
+    预期结果：包含旧 `routes/capabilities` 或旧列表型 supports 的设备文件都会抛错。
+    """
+
+    for path in sorted((TESTDATA_ROOT / "invalid/devices").glob("*.json")):
+        data = _load_json(path)
+        with pytest.raises(ValueError):
+            validate_device_capabilities_file(data)
+
+
 def test_event_golden_examples_match_schema_enum_and_runtime_envelope() -> None:
     """测试目标：确认控制事件黄金样例同时符合 schema 事件名清单和运行时信封。
 
@@ -45,6 +62,25 @@ def test_event_golden_examples_match_schema_enum_and_runtime_envelope() -> None:
         assert data["event_name"] in allowed, path
         event = Event.from_dict(data)
         assert event.to_dict()["event_name"] == data["event_name"]
+
+
+def test_invalid_event_examples_are_rejected_by_schema_or_runtime_envelope() -> None:
+    """测试目标：确认协议反例事件能被 schema 枚举或运行时信封校验拦截。
+
+    测试方法：读取 invalid/events 夹具；未知事件名用 schema enum 拦截，点对点路由
+    和媒体 payload 用 `Event.from_dict()` 拦截。
+    预期结果：每个反例至少被一层协议校验拒绝，不能进入 SDK 行为层。
+    """
+
+    schema = _load_json(SPEC_ROOT / "audio-chat-event.schema.json")
+    allowed = set(schema["properties"]["event_name"]["enum"])
+    for path in sorted((TESTDATA_ROOT / "invalid/events").glob("*.json")):
+        data = _load_json(path)
+        if data["event_name"] not in allowed:
+            assert path.name == "unknown-event.json"
+            continue
+        with pytest.raises(ValueError):
+            Event.from_dict(data)
 
 
 def test_event_schema_rejects_unknown_event_name() -> None:

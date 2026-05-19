@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
+import types
 from pathlib import Path
 
 from audio_chat.agent_core.realtime import (
@@ -11,6 +13,7 @@ from audio_chat.agent_core.realtime import (
     RealtimeAudioAgentCore,
     RealtimeProviderCallbacks,
     RealtimeProviderConfig,
+    RealtimeProviderConcurrencyLimitError,
     RealtimeToolBridge,
     _prepare_omni_realtime_image,
 )
@@ -149,6 +152,16 @@ class FakeRealtimeProvider:
     def close(self, *, user_id: str, reason: str) -> None:
         """记录 close 调用。"""
         self.closed = True
+
+
+def test_realtime_provider_config_defaults_to_ten_concurrent_sessions() -> None:
+    """测试目标：确认 Realtime provider 默认并发上限为 10。
+
+    测试方法：直接创建默认 `RealtimeProviderConfig`。
+    预期结果：未显式配置时，SDK 使用 10 作为真实 provider 并发连接上限。
+    """
+
+    assert RealtimeProviderConfig().max_concurrent_sessions == 10
 
 
 class FixedSummaryAgent:
@@ -1117,6 +1130,114 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert conversation.responses[0]["instructions"] == "继续回答"
     assert any(record.get("event") == "omni.tool_followup_response.created" for record in records)
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
+
+
+def test_qwen_omni_realtime_provider_enforces_concurrency_limit(monkeypatch) -> None:
+    """测试目标：确认真实 Realtime provider 连接入口会按配置限制并发会话。
+
+    测试方法：注入 fake DashScope SDK，把并发上限设为 1；先打开一个会话，再尝试
+    打开第二个同 provider / model / endpoint 会话。
+    预期结果：第二个会话在建立 provider 连接前被拒绝；第一个会话关闭后槽位释放，
+    后续新会话可以正常打开。
+    """
+
+    from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter
+
+    class FakeAudioFormat:
+        """测试用音频格式常量。"""
+
+        PCM_16000HZ_MONO_16BIT = "pcm16le/16000/mono"
+        PCM_24000HZ_MONO_16BIT = "pcm16le/24000/mono"
+
+    class FakeMultiModality:
+        """测试用输出模态常量。"""
+
+        TEXT = "text"
+        AUDIO = "audio"
+
+    class FakeCallback:
+        """测试用 DashScope callback 基类。"""
+
+    class FakeConversation:
+        """测试用 DashScope conversation。
+
+        主要功能：记录连接和关闭状态，`update_session()` 时主动回调
+        `session.updated`，让 adapter 的 open 流程完成。
+        主要属性：`instances` 保存已创建的 conversation，便于判断限流前是否访问 provider。
+        """
+
+        instances: list["FakeConversation"] = []
+
+        def __init__(self, *, model: str, callback: FakeCallback, url: str, api_key: str) -> None:
+            self.model = model
+            self.callback = callback
+            self.url = url
+            self.api_key = api_key
+            self.connected = False
+            self.closed = False
+            FakeConversation.instances.append(self)
+
+        def connect(self) -> None:
+            """模拟 provider WebSocket 连接成功。"""
+
+            self.connected = True
+
+        def update_session(self, **kwargs) -> None:
+            """模拟 provider session 更新成功。"""
+
+            self.session_kwargs = kwargs
+            self.callback.on_event({"type": "session.updated"})
+
+        def close(self) -> None:
+            """模拟 provider 会话关闭。"""
+
+            self.closed = True
+
+    dashscope_module = types.ModuleType("dashscope")
+    dashscope_audio_module = types.ModuleType("dashscope.audio")
+    qwen_omni_module = types.ModuleType("dashscope.audio.qwen_omni")
+    qwen_omni_module.AudioFormat = FakeAudioFormat
+    qwen_omni_module.MultiModality = FakeMultiModality
+    qwen_omni_module.OmniRealtimeCallback = FakeCallback
+    qwen_omni_module.OmniRealtimeConversation = FakeConversation
+    monkeypatch.setitem(sys.modules, "dashscope", dashscope_module)
+    monkeypatch.setitem(sys.modules, "dashscope.audio", dashscope_audio_module)
+    monkeypatch.setitem(sys.modules, "dashscope.audio.qwen_omni", qwen_omni_module)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    records: list[dict] = []
+    callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+    config = RealtimeProviderConfig(
+        provider="qwen",
+        model="fake-omni-limit-test",
+        websocket_url="wss://example.invalid/realtime-limit-test",
+        max_concurrent_sessions=1,
+    )
+
+    first = QwenOmniRealtimeAdapter(config)
+    first.open(user_id="user-001", session_id="session-001", callbacks=callbacks)
+    assert len(FakeConversation.instances) == 1
+    assert FakeConversation.instances[0].connected is True
+
+    second = QwenOmniRealtimeAdapter(config)
+    try:
+        second.open(user_id="user-002", session_id="session-002", callbacks=callbacks)
+        raise AssertionError("第二个并发会话应该被 provider limiter 拒绝")
+    except RealtimeProviderConcurrencyLimitError:
+        pass
+
+    assert len(FakeConversation.instances) == 1
+    assert any(record.get("event") == "omni.provider.concurrency_limited" for record in records)
+
+    first.close(user_id="user-001", reason="test_done")
+    second.open(user_id="user-002", session_id="session-002", callbacks=callbacks)
+    assert len(FakeConversation.instances) == 2
+    second.close(user_id="user-002", reason="test_done")
 
 
 def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> None:

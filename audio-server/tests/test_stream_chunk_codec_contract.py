@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[2]
 STREAM_ROOT = ROOT / "testdata/protocol/streams"
 
 
+pytestmark = pytest.mark.protocol
+
+
 def test_stream_chunk_codec_matches_golden_binary_fixture() -> None:
     """测试目标：确认 server stream 编解码器与跨语言黄金二进制样例一致。
 

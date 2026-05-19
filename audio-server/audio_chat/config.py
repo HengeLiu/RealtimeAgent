@@ -163,6 +163,7 @@ class AgentRealtimeConfig:
     voice: str = "Tina"
     prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     session_idle_timeout_seconds: int = 60
+    max_concurrent_sessions: int = 10
     custom_adapter: str = ""
     visual_frame_interval_seconds: float = 1.0
     visual_frame_timeout_seconds: float = 1.5

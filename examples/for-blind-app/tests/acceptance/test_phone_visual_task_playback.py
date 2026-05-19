@@ -7,6 +7,7 @@ from pathlib import Path
 from aiohttp import ClientSession, web
 
 from audio_chat.app import AudioChatApp, AudioChatConfig
+from audio_chat.errors import AudioChatError
 from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
 from audio_chat.server import AudioChatHttpServer
 
@@ -14,14 +15,14 @@ from audio_chat.server import AudioChatHttpServer
 FOR_BLIND_APP_ROOT = Path(__file__).resolve().parents[4] / "examples" / "for-blind-app" / "audio-server"
 
 
-def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Path) -> None:
-    """测试目标：验收 D 线 phone mock 视觉任务设备级闭环。
+def test_legacy_phone_visual_tasks_are_not_registered_in_peer_video_app(tmp_path: Path) -> None:
+    """测试目标：确认旧 phone visual task 名称不再作为应用 Task 注册。
 
-    测试方法：以真实 WebSocket server 注册 Python phone mock，创建 find_object 和
-    traffic_light 两个迁移样板 Task，让 mock 通过 command 事件和 sensor.rgb stream
-    回报任务结果。
-    预期结果：两个任务完成，RGB 帧不进入控制 payload，runs 产物记录 phone_task 和
-    task.completed 事件。
+    测试方法：以真实 WebSocket server 注册 Python phone mock，然后尝试创建旧
+    `find_object_phone_task`。
+    预期结果：TaskEngine 明确返回 unknown task；当前主线使用
+    `find_object_task` / `traffic_light_task` 编排 peer video，而不是旧
+    `phone.task.start` 业务任务。
     """
 
     async def run() -> None:
@@ -65,20 +66,17 @@ def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Pat
                         asyncio.create_task(endpoint._stream_loop(control_ws, stream_ws)),  # noqa: SLF001
                     ]
                 )
-                find_ref = await app.task_engine.create(
-                    task_type="find_object_phone_task",
-                    user_id="user-accept-phone",
-                    session_id="sess-accept-phone",
-                    input_data={"target": "手机"},
-                )
-                traffic_ref = await app.task_engine.create(
-                    task_type="traffic_light_phone_task",
-                    user_id="user-accept-phone",
-                    session_id="sess-accept-phone",
-                    input_data={"expected_color": "green"},
-                )
-                await _wait_for_completed(app, find_ref.task_id)
-                await _wait_for_completed(app, traffic_ref.task_id)
+                try:
+                    await app.task_engine.create(
+                        task_type="find_object_phone_task",
+                        user_id="user-accept-phone",
+                        session_id="sess-accept-phone",
+                        input_data={"target": "手机"},
+                    )
+                except AudioChatError as exc:
+                    assert "unknown task: find_object_phone_task" in str(exc)
+                else:
+                    raise AssertionError("legacy find_object_phone_task should not be registered")
                 await control_ws.close()
                 await stream_ws.close()
         finally:
@@ -86,31 +84,9 @@ def test_find_object_and_traffic_light_phone_visual_tasks_playback(tmp_path: Pat
                 task.cancel()
             await runner.cleanup()
 
-        assert app.task_engine.query(find_ref.task_id).state == "completed"
-        assert app.task_engine.query(traffic_ref.task_id).state == "completed"
-        assert len(endpoint.frame_log) >= 4
-        control_payload_text = "\n".join(event.to_dict()["payload"].__repr__() for event in endpoint.sent_events)
-        assert "image_base64" not in control_payload_text
-        assert "raw_bytes" not in control_payload_text
-        session_task_signals = (
-            app.recorder.session_dir("sess-accept-phone", user_id="user-accept-phone") / "task-signals.jsonl"
-        ).read_text(encoding="utf-8")
-        device_task_signals = (
-            app.recorder.session_dir("dev-accept-phone", user_id="user-accept-phone") / "task-signals.jsonl"
-        ).read_text(encoding="utf-8")
-        task_signals = session_task_signals + device_task_signals
-        assert "phone_task.started" in task_signals
-        assert "phone_task.progress" in task_signals
-        assert "phone_task.completed" in task_signals
-        assert "task.completed" in task_signals
+        assert "find_object_phone_task" not in app.task_engine.registry.list_task_types()
+        assert "traffic_light_phone_task" not in app.task_engine.registry.list_task_types()
+        assert {"find_object_task", "traffic_light_task"} <= set(app.task_engine.registry.list_task_types())
+        assert endpoint.frame_log == []
 
     asyncio.run(run())
-
-
-async def _wait_for_completed(app: AudioChatApp, task_id: str) -> None:
-    deadline = asyncio.get_running_loop().time() + 3
-    while asyncio.get_running_loop().time() < deadline:
-        if app.task_engine.query(task_id).state == "completed":
-            return
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"task {task_id} did not complete")

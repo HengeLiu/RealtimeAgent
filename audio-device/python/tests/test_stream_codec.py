@@ -9,6 +9,9 @@ from audio_chat_device import StreamChunk, StreamChunkCodec
 ROOT = Path(__file__).resolve().parents[3]
 
 
+pytestmark = [pytest.mark.protocol, pytest.mark.device_sdk]
+
+
 def test_python_device_stream_codec_reads_golden_fixture() -> None:
     """测试目标：确认 Python Device SDK 读取跨语言 stream 黄金样例。
 

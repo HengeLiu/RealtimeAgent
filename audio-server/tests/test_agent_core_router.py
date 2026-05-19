@@ -28,6 +28,9 @@ from audio_chat.tasks import BaseTask, TaskSignal
 from audio_chat.tools import BaseTool, ToolContext, ToolResult
 
 
+pytestmark = pytest.mark.sdk
+
+
 def test_agent_mode_text_builds_text_core(tmp_path) -> None:
     """测试目标：验证 `agent.mode=text` 构建 TextRealtimePipeline。
 

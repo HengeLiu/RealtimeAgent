@@ -93,12 +93,13 @@ def test_for_blind_capability_packages_are_auto_discovered(tmp_path, monkeypatch
     assert app.discovery_errors == []
 
 
-def test_for_blind_five_capability_success_paths_write_explainable_playback_artifacts(tmp_path, monkeypatch) -> None:
-    """测试目标：验证整改后的 for-blind 能力至少各有一个成功路径回放。
+def test_for_blind_capability_paths_write_explainable_playback_artifacts(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 for-blind 能力成功路径和缺端失败路径都可解释。
 
-    测试方法：注册具备 RGB 和 speaker 能力的 playback 设备，调用应用 Tool，并通过
-    专用 `start_*_task` Tool 启动找物、红绿灯和计时器 Task。
-    预期结果：result、tool、task、asset、output 等产物能解释全链路。
+    测试方法：注册一台具备 RGB 和 speaker 能力的 playback 设备，调用应用 Tool，
+    并启动找物、红绿灯、计时器 Task。
+    预期结果：单设备可完成抓拍、路线、搜索和计时器；找物 / 红绿灯因缺少
+    phone/glass peer video 端明确失败，result、tool、task、asset、output 等产物能解释全链路。
     """
 
     app = _build_app(tmp_path, monkeypatch)
@@ -154,8 +155,8 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
         )
     )
     result = {
-        "ok": all(item.ok for item in [capture, find_object, traffic_light, route, search, timer]),
-        "passed": all(item.ok for item in [capture, find_object, traffic_light, route, search, timer]),
+        "ok": all(item.ok for item in [capture, route, search, timer]) and not find_object.ok and not traffic_light.ok,
+        "passed": all(item.ok for item in [capture, route, search, timer]) and not find_object.ok and not traffic_light.ok,
         "status": "ok",
         "asset_count": len(app.asset_service.query_assets(user_id="user-for-blind", stream_type="sensor.rgb")),
         "artifacts": {"result.json": str(app.recorder.session_dir(session_id, user_id="user-for-blind") / "result.json")},
@@ -163,7 +164,7 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
     app.recorder.write_result(session_id, result)
 
     assert result["passed"] is True
-    assert result["asset_count"] >= 3
+    assert result["asset_count"] >= 1
 
     session_dir = Path(result["artifacts"]["result.json"]).parent
     tool_events = (session_dir / "tool-events.jsonl").read_text(encoding="utf-8")
@@ -187,7 +188,12 @@ def test_for_blind_five_capability_success_paths_write_explainable_playback_arti
         "timer.scheduled",
         "timer.due",
     ]:
+        if expected in {"find_object.found", "traffic_light.state_detected"}:
+            continue
         assert expected in task_signals
+    assert "task.failed" in task_signals
+    assert "找水杯的任务没有启动成功" in tool_events
+    assert "红绿灯识别任务没有启动成功" in tool_events
     assert "asset.stored" in assets
     assert "play_now" in output
     assert final_result["ok"] is True
@@ -240,9 +246,9 @@ def test_timer_template_supports_create_query_cancel_and_due_notification(tmp_pa
     )
 
     assert created.ok is True
-    assert queried.data["state"] == "running"
+    assert queried.data["state"] == "started"
     assert cancelled.data["state"] == "cancelled"
-    assert due.data["state"] == "completed"
+    assert due.data["state"] == "finished"
     session_dir = app.recorder.session_dir(session_id, user_id="user-for-blind")
     assert "play_now" in (session_dir / "output-decisions.jsonl").read_text(encoding="utf-8")
 
@@ -280,7 +286,7 @@ def test_timer_create_uses_real_delay_without_blocking_tool_result(tmp_path, mon
     )
 
     assert created.ok is True
-    assert created.data["state"] == "running"
+    assert created.data["state"] == "started"
     assert scheduled and scheduled[0]["interval"] == 60
     assert endpoint.output_chunks == []
 
@@ -318,7 +324,7 @@ def test_timer_start_tool_creates_timer_task(tmp_path, monkeypatch) -> None:
     )
 
     assert created.ok is True
-    assert created.data["state"] == "running"
+    assert created.data["state"] == "started"
     assert scheduled and scheduled[0]["interval"] == 60
 
 

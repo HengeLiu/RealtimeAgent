@@ -214,7 +214,26 @@ class StreamService:
         handle = self.registry.get(chunk.stream_id)
         self._validate_chunk(chunk, handle=handle)
         if handle.state != "open":
-            if handle.state == "closed" and handle.stream_type.startswith("sensor."):
+            allow_late_request_chunk = False
+            if (
+                handle.state == "closed"
+                and handle.stream_type.startswith("sensor.")
+                and chunk.metadata.get("request_id")
+            ):
+                allow_late_request_chunk = True
+                self.recorder.record_stream_event(
+                    chunk.session_id,
+                    {
+                        "event": "stream.chunk.received_after_close",
+                        "stream_id": chunk.stream_id,
+                        "stream_type": chunk.stream_type,
+                        "seq": chunk.seq,
+                        "payload_size": len(chunk.payload),
+                        "reason": "request_asset_control_close_race",
+                        "request_id": chunk.metadata.get("request_id"),
+                    },
+                )
+            elif handle.state == "closed" and handle.stream_type.startswith("sensor."):
                 self.recorder.record_stream_event(
                     chunk.session_id,
                     {
@@ -227,7 +246,8 @@ class StreamService:
                     },
                 )
                 return
-            raise StreamNotOpenError(handle)
+            if not allow_late_request_chunk:
+                raise StreamNotOpenError(handle)
         handle.touch()
         self.recorder.record_stream_payload(chunk)
         self.recorder.record_stream_event(

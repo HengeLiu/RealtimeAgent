@@ -12,6 +12,15 @@ from audio_chat_esp32_s3.esp32_aec import Esp32S3EndpointConfig
 AUDIO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _support_types(config: dict) -> set[str]:
+    """提取结构化 supports 中的能力类型。"""
+
+    supports = config.get("supports") or {}
+    sensors = {f"sensor.{item['type']}" for item in supports.get("sensors", [])}
+    actuators = {f"actuator.{item['type']}" for item in supports.get("actuators", [])}
+    return sensors | actuators
+
+
 def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path: Path) -> None:
     """测试目标：验证 config sync 能生成多端参考配置。
 
@@ -72,10 +81,10 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
     assert 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]' in esp32
     assert 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]' in esp32
     assert "AUDIO_CHAT_SUPPORTS=" in esp32
-    assert '"stream_type":"sensor.rgb"' in esp32
-    assert {item["id"] for item in phone["supports"]} >= {"sensor.rgb", "actuator.speaker"}
-    assert {item["id"] for item in web["supports"]} >= {"sensor.mic", "sensor.rgb", "actuator.speaker"}
-    assert {item["id"] for item in ios["supports"]} >= {"sensor.rgb", "sensor.mic", "actuator.speaker"}
+    assert '"type":"rgb"' in esp32
+    assert _support_types(phone) >= {"sensor.rgb", "actuator.vibrator"}
+    assert _support_types(web) >= {"sensor.rgb", "actuator.vibrator"}
+    assert _support_types(ios) >= {"sensor.rgb", "actuator.vibrator"}
     esp32_config = Esp32S3EndpointConfig.from_env_file(report["files"]["esp32_s3"])
     assert esp32_config.server_url == "http://10.0.0.2:8765"
     assert esp32_config.user_id == "user-sync"
@@ -109,11 +118,11 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     assert {config["user_id"] for config in configs} == {"user-shared"}
     assert len({config["device_id"] for config in configs}) == len(configs)
     assert "phone.task.find_object_phone_task" not in phone.get("properties", {})
-    assert {item["id"] for item in phone["supports"]} >= {"sensor.rgb", "actuator.speaker"}
+    assert _support_types(phone) >= {"sensor.rgb", "actuator.vibrator"}
     assert esp32.device_id == "dev-esp32-s3-001"
     assert "phone.task.find_object_phone_task" not in ios.get("properties", {})
-    assert {item["id"] for item in ios["supports"]} >= {"sensor.rgb", "sensor.mic", "actuator.speaker"}
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in ios["routes"]
+    assert _support_types(ios) >= {"sensor.rgb", "actuator.vibrator"}
+    assert "routes" not in ios
 
 
 def test_endpoint_config_sync_can_emit_signed_token_hint_for_ios(tmp_path: Path) -> None:

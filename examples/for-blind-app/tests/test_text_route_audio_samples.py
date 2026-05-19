@@ -4,6 +4,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from aiohttp import web
 
 from audio_chat import AssetRef
@@ -58,6 +59,7 @@ def _read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+@pytest.mark.replay
 def test_text_route_uses_audio_sample_filename_as_mock_asr_transcript_and_calls_device_tool(tmp_path: Path) -> None:
     """测试目标：验证 text 模型路线可以用真实 AudioSample 音频完成自动化回放。
 
@@ -89,6 +91,7 @@ def test_text_route_uses_audio_sample_filename_as_mock_asr_transcript_and_calls_
     assert "assistant_audio.delta" in model_events
 
 
+@pytest.mark.replay
 def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_path: Path, monkeypatch) -> None:
     """测试目标：验证 text 模型路线中的视觉工具仍遵守 stream/event 协议。
 
@@ -117,6 +120,7 @@ def test_text_route_capture_photo_tool_collects_rgb_asset_from_python_glass(tmp_
     )
 
 
+@pytest.mark.app
 def test_capture_photo_uses_browser_camera_cold_start_timeout(monkeypatch) -> None:
     """测试目标：确认抓拍工具默认等待时间能覆盖浏览器摄像头冷启动。
 
@@ -164,6 +168,7 @@ def test_capture_photo_uses_browser_camera_cold_start_timeout(monkeypatch) -> No
     assert rgb.timeout_seconds == 15
 
 
+@pytest.mark.replay
 def test_text_route_network_python_glass_replays_audio_sample_over_websocket(tmp_path: Path) -> None:
     """测试目标：验证 text 路线可以通过真实 HTTP/WebSocket 端测完成无头自动化。
 

@@ -90,6 +90,7 @@ def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlayback
                 "sdk_version": "audio-chat-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
+                "properties": {"audio_chat.audio_output": "actuator.speaker"},
             },
         ),
         endpoint,
@@ -149,7 +150,7 @@ def test_for_blind_app_tool_and_task_playback_writes_explainable_artifacts(tmp_p
         )
     )
     result = {
-        "ok": capture.ok and timer_ref.state == "running",
+        "ok": capture.ok and timer_ref.state == "started",
         "status": "ok",
         "tool": {"name": "capture_photo", "ok": capture.ok, "asset_count": len(capture.assets or [])},
         "tasks": [

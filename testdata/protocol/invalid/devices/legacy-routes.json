@@ -1,0 +1,18 @@
+{
+  "device_id": "legacy-device-002",
+  "user_id": "user-001",
+  "name": "Legacy routes device",
+  "routes": [
+    {
+      "event": "stream.control.*"
+    }
+  ],
+  "supports": {
+    "sensors": [
+      {
+        "type": "rgb",
+        "modes": ["single"]
+      }
+    ]
+  }
+}

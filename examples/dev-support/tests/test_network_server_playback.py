@@ -20,7 +20,7 @@ def test_network_playback_over_real_websocket_transport(tmp_path: Path) -> None:
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
         server = AudioChatHttpServer(audio_app)
         app = server.create_web_app()
         runner = web.AppRunner(app)
@@ -64,7 +64,7 @@ def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
 
     async def run() -> None:
         wav_path = Path("testdata/audio-sample/wav/看一下我前面有什么.wav")
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
         server = AudioChatHttpServer(audio_app)
         app = server.create_web_app()
         runner = web.AppRunner(app)
@@ -109,7 +109,7 @@ def test_network_multi_device_route_routes_rgb_and_speaker(tmp_path: Path) -> No
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
         server = AudioChatHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
@@ -200,13 +200,14 @@ def test_network_playback_static_token_auth(tmp_path: Path) -> None:
 
     async def run() -> None:
         audio_app = AudioChatApp(
-            AudioChatConfig(
-                runs_root=str(tmp_path / "runs"),
-                auth_mode="static_token",
-                device_tokens={"dev-token": "token-001"},
-                default_actuator_speaker=StreamFormat(sample_rate=16000, chunk_ms=40),
+                AudioChatConfig(
+                    runs_root=str(tmp_path / "runs"),
+                    agent_mode="text",
+                    auth_mode="static_token",
+                    device_tokens={"dev-token": "token-001"},
+                    default_actuator_speaker=StreamFormat(sample_rate=16000, chunk_ms=40),
+                )
             )
-        )
         server = AudioChatHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()

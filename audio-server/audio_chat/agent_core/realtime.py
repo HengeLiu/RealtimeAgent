@@ -23,6 +23,62 @@ from audio_chat.tools import ToolGateway
 
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
 OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
+DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS = 10
+
+
+class RealtimeProviderConcurrencyLimitError(RuntimeError):
+    """Realtime provider 并发连接数超过限制。
+
+    主要功能：在真实 provider 连接数达到上限时给出明确错误，避免继续建立
+    WebSocket 连接触发供应商限流。
+    主要方法：继承 `RuntimeError`，由 provider adapter 在 `open()` 阶段抛出。
+    主要属性：无。
+    """
+
+
+_REALTIME_PROVIDER_LIMITERS: dict[tuple[str, str, str], tuple[int, threading.BoundedSemaphore]] = {}
+_REALTIME_PROVIDER_LIMITERS_LOCK = threading.Lock()
+
+
+def _normalize_realtime_provider_max_concurrent_sessions(value: int | None) -> int:
+    """归一化 realtime provider 最大并发会话数。
+
+    主要逻辑：缺省或非法非正值都回退到 SDK 默认值，确保真实 provider 不会在
+    未配置时无限制创建并发连接。
+    参数：`value` 为配置中读取的并发上限。
+    返回值：大于 0 的并发上限。
+    异常情况：无。
+    """
+
+    try:
+        limit = int(value or DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS)
+    except (TypeError, ValueError):
+        return DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS
+    return limit if limit > 0 else DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS
+
+
+def _realtime_provider_limiter(
+    *, provider: str, model: str, websocket_url: str, max_concurrent_sessions: int
+) -> threading.BoundedSemaphore:
+    """按 provider / model / endpoint 获取进程内并发 limiter。
+
+    主要逻辑：同一个 Python 进程内，相同 provider 目标共享一个 BoundedSemaphore；
+    测试或应用若切换到不同模型 / endpoint，则互不影响。
+    参数：`provider`、`model`、`websocket_url` 描述 provider 目标，`max_concurrent_sessions`
+    为并发上限。
+    返回值：可用于 acquire / release 的信号量。
+    异常情况：无。
+    """
+
+    limit = _normalize_realtime_provider_max_concurrent_sessions(max_concurrent_sessions)
+    key = (str(provider or "").strip(), str(model or "").strip(), str(websocket_url or "").strip().rstrip("/"))
+    with _REALTIME_PROVIDER_LIMITERS_LOCK:
+        existing = _REALTIME_PROVIDER_LIMITERS.get(key)
+        if existing is not None:
+            return existing[1]
+        semaphore = threading.BoundedSemaphore(limit)
+        _REALTIME_PROVIDER_LIMITERS[key] = (limit, semaphore)
+        return semaphore
 
 
 def _registered_prompt_text(name: str, fallback: str) -> str:
@@ -95,6 +151,7 @@ class RealtimeProviderConfig:
     visual_frame_interval_seconds: float = 1.0
     visual_frame_timeout_seconds: float = 1.5
     visual_frame_freshness_seconds: float = 0.0
+    max_concurrent_sessions: int = DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS
 
 
 @dataclass(frozen=True)
@@ -161,6 +218,8 @@ class QwenOmniRealtimeAdapter:
         self._current_response_audio_emitted = False
         self._session_updated = threading.Event()
         self._operation_lock = threading.RLock()
+        self._provider_limiter: threading.BoundedSemaphore | None = None
+        self._provider_slot_acquired = False
 
     def open(self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks) -> None:
         """建立 Omni Realtime 会话。
@@ -192,6 +251,7 @@ class QwenOmniRealtimeAdapter:
         self._callbacks = callbacks
         adapter = self
         dashscope.api_key = api_key
+        self._acquire_provider_slot(user_id=user_id, session_id=session_id, callbacks=callbacks)
 
         class _Callback(OmniRealtimeCallback):
             def on_open(self) -> None:  # pragma: no cover - provider callback
@@ -210,44 +270,52 @@ class QwenOmniRealtimeAdapter:
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - provider callback
                 adapter._handle_provider_event(message)
 
-        self._conversation = OmniRealtimeConversation(
-            model=self.config.model,
-            callback=_Callback(),
-            url=self.config.websocket_url.rstrip("/"),
-            api_key=api_key,
-        )
-        self._conversation.connect()
-        turn_detection_type = "semantic_vad" if self.config.turn_detection in {"provider", "semantic_vad"} else "server_vad"
-        self._output_modalities = [MultiModality.TEXT, MultiModality.AUDIO]
-        session_update_kwargs: dict[str, Any] = {
-            "output_modalities": self._output_modalities,
-            "voice": self.config.voice,
-            "input_audio_format": AudioFormat.PCM_16000HZ_MONO_16BIT,
-            "output_audio_format": AudioFormat.PCM_24000HZ_MONO_16BIT,
-            "enable_input_audio_transcription": True,
-            "input_audio_transcription_model": "paraformer-realtime-v2",
-            "enable_turn_detection": True,
-            "turn_detection_type": turn_detection_type,
-            "instructions": self.config.prompt,
-        }
-        if self.config.tools:
-            session_update_kwargs["tools"] = self.config.tools
-        with self._operation_lock:
-            self._conversation.update_session(**session_update_kwargs)
-        session_updated = self._session_updated.wait(timeout=5)
-        callbacks.provider_event(
-            {
-                "event": "omni.session.opened",
-                "provider": "qwen",
-                "model": self.config.model,
+        try:
+            self._conversation = OmniRealtimeConversation(
+                model=self.config.model,
+                callback=_Callback(),
+                url=self.config.websocket_url.rstrip("/"),
+                api_key=api_key,
+            )
+            self._conversation.connect()
+            turn_detection_type = "semantic_vad" if self.config.turn_detection in {"provider", "semantic_vad"} else "server_vad"
+            self._output_modalities = [MultiModality.TEXT, MultiModality.AUDIO]
+            session_update_kwargs: dict[str, Any] = {
+                "output_modalities": self._output_modalities,
                 "voice": self.config.voice,
-                "input_audio": "pcm16le/16000/mono",
-                "output_audio": "pcm16le/24000/mono",
-                "turn_detection": turn_detection_type,
-                "tool_count": len(self.config.tools),
-                "session_updated": session_updated,
+                "input_audio_format": AudioFormat.PCM_16000HZ_MONO_16BIT,
+                "output_audio_format": AudioFormat.PCM_24000HZ_MONO_16BIT,
+                "enable_input_audio_transcription": True,
+                "input_audio_transcription_model": "paraformer-realtime-v2",
+                "enable_turn_detection": True,
+                "turn_detection_type": turn_detection_type,
+                "instructions": self.config.prompt,
             }
-        )
+            if self.config.tools:
+                session_update_kwargs["tools"] = self.config.tools
+            with self._operation_lock:
+                self._conversation.update_session(**session_update_kwargs)
+            session_updated = self._session_updated.wait(timeout=5)
+            callbacks.provider_event(
+                {
+                    "event": "omni.session.opened",
+                    "provider": "qwen",
+                    "model": self.config.model,
+                    "voice": self.config.voice,
+                    "input_audio": "pcm16le/16000/mono",
+                    "output_audio": "pcm16le/24000/mono",
+                    "turn_detection": turn_detection_type,
+                    "tool_count": len(self.config.tools),
+                    "session_updated": session_updated,
+                    "max_concurrent_sessions": _normalize_realtime_provider_max_concurrent_sessions(
+                        self.config.max_concurrent_sessions
+                    ),
+                }
+            )
+        except Exception:
+            self._conversation = None
+            self._release_provider_slot()
+            raise
 
     def append_audio(self, chunk: StreamChunk) -> None:
         """追加一片麦克风 PCM。
@@ -371,11 +439,12 @@ class QwenOmniRealtimeAdapter:
         返回值：无。
         异常情况：异常会转成 callbacks.error。
         """
-        if self._conversation is None:
+        if self._conversation is None and not self._provider_slot_acquired:
             return
         try:
-            with self._operation_lock:
-                self._conversation.close()
+            if self._conversation is not None:
+                with self._operation_lock:
+                    self._conversation.close()
         except Exception as exc:  # noqa: BLE001
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.session.close.failed", "reason": reason})
@@ -385,6 +454,68 @@ class QwenOmniRealtimeAdapter:
             self._completed_tool_call_ids.clear()
             self._pending_tool_followup_response = None
             self._current_response_audio_emitted = False
+            self._release_provider_slot()
+
+    def _acquire_provider_slot(
+        self, *, user_id: str, session_id: str, callbacks: RealtimeProviderCallbacks
+    ) -> None:
+        """占用一个真实 provider 并发连接槽位。
+
+        主要逻辑：在建立 WebSocket 前尝试获取进程内信号量；达到上限时直接失败，
+        不继续向供应商发起连接请求。
+        参数：`user_id`、`session_id` 用于观测；`callbacks` 负责记录限流事件。
+        返回值：无。
+        异常情况：达到并发上限时抛出 `RealtimeProviderConcurrencyLimitError`。
+        """
+
+        if self._provider_slot_acquired:
+            return
+        limit = _normalize_realtime_provider_max_concurrent_sessions(self.config.max_concurrent_sessions)
+        limiter = _realtime_provider_limiter(
+            provider=self.config.provider,
+            model=self.config.model,
+            websocket_url=self.config.websocket_url,
+            max_concurrent_sessions=limit,
+        )
+        if not limiter.acquire(blocking=False):
+            callbacks.provider_event(
+                {
+                    "event": "omni.provider.concurrency_limited",
+                    "provider": "qwen",
+                    "model": self.config.model,
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "max_concurrent_sessions": limit,
+                }
+            )
+            raise RealtimeProviderConcurrencyLimitError(
+                f"realtime provider qwen concurrent sessions exceeded limit: {limit}"
+            )
+        self._provider_limiter = limiter
+        self._provider_slot_acquired = True
+        callbacks.provider_event(
+            {
+                "event": "omni.provider.slot.acquired",
+                "provider": "qwen",
+                "model": self.config.model,
+                "user_id": user_id,
+                "session_id": session_id,
+                "max_concurrent_sessions": limit,
+            }
+        )
+
+    def _release_provider_slot(self) -> None:
+        """释放当前 adapter 持有的 provider 并发连接槽位。"""
+
+        if not self._provider_slot_acquired or self._provider_limiter is None:
+            self._provider_slot_acquired = False
+            self._provider_limiter = None
+            return
+        try:
+            self._provider_limiter.release()
+        finally:
+            self._provider_slot_acquired = False
+            self._provider_limiter = None
 
     def _handle_provider_event(self, message: dict[str, Any]) -> None:
         callbacks = self._callbacks

@@ -3,6 +3,9 @@ import pytest
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec
 
 
+pytestmark = pytest.mark.protocol
+
+
 def test_event_envelope_uses_audio_chat_v1_without_target_fields() -> None:
     event = Event(
         event_name="stream.output.open.requested",

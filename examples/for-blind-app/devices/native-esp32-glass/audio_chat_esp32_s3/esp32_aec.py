@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from aiohttp import WSMsgType
+from aiohttp import ClientSession, WSMsgType
 
 from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint, PlaybackAudio
 from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat, new_id
@@ -221,6 +221,8 @@ class Esp32AecEndpointState:
             "sdk_version": "audio-chat-endpoint-0.3.0",
             "auth": dict(self.auth),
             "properties": {
+                "audio_chat.audio_input": "sensor.mic",
+                "audio_chat.audio_output": "actuator.speaker",
                 "audio.wake_word": self.wake_word_mode,
                 "audio.aec": self.aec_mode,
                 "audio.playback_reference": self.playback_reference,
@@ -510,6 +512,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             device_name=str(payload["device_name"]),
             client_type=str(payload["client_type"]),
             properties=dict(payload["properties"]),
+            supports=dict(payload["supports"]),
         )
 
     async def _control_loop(self, control_ws, stream_ws, audio_payload: bytes | None) -> None:
@@ -532,7 +535,7 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                     ),
                 )
                 await self._open_and_send_mic(control_ws, stream_ws, self.device_id, audio_payload)
-            elif event.event_name == "stream.output.close.requested":
+            elif event.event_name in {"stream.output.finish.requested", "stream.output.close.requested"}:
                 self.state.mark_playback_finished()
                 await self._send_event(
                     control_ws,
@@ -807,10 +810,59 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
         """执行一次 ESP32-S3 网络协议 smoke。"""
 
         self.state.on_wake_detected()
-        return await super().run_once(audio_payload=audio_payload)
+        async with ClientSession() as session:
+            control_ws = await self.run_until_registered(session=session)
+            stream_ws = await session.ws_connect(self._stream_url())
+            self.client.stream_ws = stream_ws
+            control_task = asyncio.create_task(self._control_loop(control_ws, stream_ws, audio_payload))
+            stream_task = asyncio.create_task(self._stream_loop(control_ws, stream_ws))
+            try:
+                await self._send_event(
+                    control_ws,
+                    Event(
+                        event_name="control.user.wake.detected",
+                        user_id=self.user_id,
+                        producer_id=self.device_id,
+                        session_id=self.device_id,
+                        payload={"source": "esp32-s3-wake-word"},
+                    ),
+                )
+                try:
+                    await asyncio.wait_for(self._output_closed.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                if not self._session_closed.is_set():
+                    self.state.on_audio_session_close_requested("esp32_smoke_completed")
+                    await self._send_event(
+                        control_ws,
+                        Event(
+                            event_name="control.audio_session.closed",
+                            user_id=self.user_id,
+                            producer_id=self.device_id,
+                            session_id=self.device_id,
+                            payload={"reason": "esp32_smoke_completed", "diagnostics": self.state.diagnostics()},
+                        ),
+                    )
+                    self._session_closed.set()
+                try:
+                    await asyncio.wait_for(self._session_closed.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+            finally:
+                control_task.cancel()
+                stream_task.cancel()
+                await stream_ws.close()
+                await control_ws.close()
+        result = self._build_result()
+        self._write_network_playback_artifacts(
+            result,
+            PlaybackAudio(source_path="<memory>", payload=bytes(audio_payload or b"")),
+        )
+        return result
 
     def _build_result(self) -> dict[str, Any]:
         result = super()._build_result()
+        result["event_names"] = [event.event_name for event in self.received_events + self.sent_events]
         result["endpoint"] = "esp32-s3"
         result["diagnostics"] = self.state.diagnostics()
         result["properties"] = dict(self.properties)
@@ -822,10 +874,9 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
             "stream.input.opened",
             "stream.output.open.requested",
             "stream.output.started",
-            "stream.output.close.requested",
+            "stream.output.finish.requested",
             "stream.output.finished",
             "stream.output.closed",
-            "control.audio_session.close.requested",
             "control.audio_session.closed",
         }.issubset(event_names)
         result["passed"] = bool(

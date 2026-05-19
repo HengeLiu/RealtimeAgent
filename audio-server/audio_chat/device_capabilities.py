@@ -34,6 +34,20 @@ DEFAULT_MODES = {
 ALLOWED_MODES = {"single", "continuous"}
 ALLOWED_IMAGE_FORMATS = {"jpeg", "png"}
 ALLOWED_HAPTIC_COMMANDS = {"vibrate"}
+ALLOWED_DEVICE_FILE_KEYS = {
+    "$schema",
+    "device_id",
+    "user_id",
+    "name",
+    "device_name",
+    "device_role",
+    "tags",
+    "client_type",
+    "sdk_version",
+    "runtime",
+    "properties",
+    "supports",
+}
 
 
 @dataclass(frozen=True)
@@ -81,6 +95,9 @@ def validate_device_capabilities_file(data: dict[str, Any], *, require_identity:
     """
 
     if require_identity:
+        unknown_keys = sorted(set(data) - ALLOWED_DEVICE_FILE_KEYS)
+        if unknown_keys:
+            raise ValueError(f"device capability file contains unsupported fields: {unknown_keys}")
         for key in ("device_id", "user_id"):
             if not isinstance(data.get(key), str) or not data.get(key):
                 raise ValueError(f"{key} is required")

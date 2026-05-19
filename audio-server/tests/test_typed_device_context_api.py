@@ -15,6 +15,9 @@ from audio_chat import (
 from audio_chat.protocol import Event
 
 
+pytestmark = pytest.mark.sdk
+
+
 class RecordingEndpoint:
     def __init__(self, *, user_id: str, device_id: str) -> None:
         self.user_id = user_id
@@ -229,7 +232,21 @@ def test_commands_call_returns_stable_result(tmp_path) -> None:
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command")
 
     async def _run() -> CommandResult:
-        return await context.devices.commands.call(name="device.camera.set_zoom", params={"zoom": 2.0})
+        task = asyncio.create_task(context.devices.commands.call(name="device.camera.set_zoom", params={"zoom": 2.0}))
+        deadline = asyncio.get_running_loop().time() + 1
+        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert endpoint.events
+        command_id = endpoint.events[-1].payload["command_id"]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id=user_id,
+                producer_id="dev-command",
+                payload={"command_id": command_id, "message": "zoom updated", "zoom": 2.0},
+            )
+        )
+        return await asyncio.wait_for(task, timeout=1)
 
     result = asyncio.run(_run())
 
@@ -237,7 +254,7 @@ def test_commands_call_returns_stable_result(tmp_path) -> None:
     assert result.ok is True
     assert result.device_count == 1
     assert endpoint.events[-1].payload["command"] == "device.camera.set_zoom"
-    assert endpoint.events[-1].payload["zoom"] == 2.0
+    assert endpoint.events[-1].payload["params"]["zoom"] == 2.0
 
 
 def test_commands_call_selector_routes_only_matching_device(tmp_path) -> None:
@@ -266,11 +283,25 @@ def test_commands_call_selector_routes_only_matching_device(tmp_path) -> None:
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id="sess-typed-command-selector")
 
     async def _run() -> CommandResult:
-        return await context.devices.commands.call(
+        task = asyncio.create_task(context.devices.commands.call(
             name="device.camera.set_zoom",
             selector={"device_role": "front_glass"},
             params={"zoom": 1.5},
+        ))
+        deadline = asyncio.get_running_loop().time() + 1
+        while not glass.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert glass.events
+        command_id = glass.events[-1].payload["command_id"]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id=user_id,
+                producer_id="dev-glass",
+                payload={"command_id": command_id, "message": "zoom updated", "zoom": 1.5},
+            )
         )
+        return await asyncio.wait_for(task, timeout=1)
 
     result = asyncio.run(_run())
 

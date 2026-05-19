@@ -157,6 +157,7 @@ agent:
     provider: mock
     model: mock-realtime
     prompt: 实时提示词
+    max_concurrent_sessions: 7
 """.lstrip(),
         encoding="utf-8",
     )
@@ -168,10 +169,12 @@ agent:
     assert loaded.agent.text.prompt == "文本提示词"
     assert loaded.agent.realtime.provider == "mock"
     assert loaded.agent.realtime.prompt == "实时提示词"
+    assert loaded.agent.realtime.max_concurrent_sessions == 7
     assert runtime_config.text_provider == "mock"
     assert runtime_config.text_prompt == "文本提示词"
     assert runtime_config.realtime_provider == "mock"
     assert runtime_config.realtime_prompt == "实时提示词"
+    assert runtime_config.realtime_max_concurrent_sessions == 7
 
 
 def test_agent_text_multimodal_config_is_loaded(tmp_path) -> None:

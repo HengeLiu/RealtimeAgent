@@ -121,8 +121,6 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
         "sensor.mic",
         "actuator.speaker",
         "PhoneTaskRegistry",
-        "FindObjectPhoneTaskHandler",
-        "TrafficLightPhoneTaskHandler",
         "payload_size",
         "UInt32(headerData.count).bigEndian",
         "DirectCameraSinkServer",

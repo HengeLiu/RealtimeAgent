@@ -101,11 +101,12 @@ def test_browser_device_supports_realtime_offline_audio_modes() -> None:
 
 
 def test_browser_device_switches_visible_fields_by_input_mode() -> None:
-    """测试目标：验证 browser-glass 使用样例目录选择入口和明确的视觉上传按钮。
+    """测试目标：验证 browser-glass 使用样例目录选择入口，不再暴露手动上传按钮。
 
     测试方法：静态检查页面隐藏原生文件 input，使用 File System Access API 的样例
     选择按钮，并提供视频采帧预览入口。
-    预期结果：离线音频、图片和视频样例由按钮选择，视频可在服务端请求采集时按帧抽取。
+    预期结果：离线音频、图片和视频样例由按钮选择，RGB 上传由 server 请求、
+    CLI 或业务 Task 触发，页面不提供绕过协议的手动上传入口。
     """
 
     html = _html()
@@ -114,7 +115,7 @@ def test_browser_device_switches_visible_fields_by_input_mode() -> None:
     assert 'id="chooseAudioSample"' in html
     assert 'id="chooseImageSample"' in html
     assert 'id="chooseVideoSample"' in html
-    assert 'id="uploadImageNow"' in html
+    assert 'id="uploadImageNow"' not in html
     assert "<h2>音频选择</h2>" in html
     assert "<h2>带图输入</h2>" in html
     assert "<h2>自定义事件</h2>" not in html
@@ -369,20 +370,22 @@ def test_browser_device_uploads_camera_snapshot_without_file_input() -> None:
     assert "await uploadRgbImages(await readSelectedImageFrames(), item, \"images_uploaded\")" in selected_body
 
 
-def test_browser_device_has_manual_sensor_rgb_upload_button() -> None:
-    """测试目标：验证 browser-glass 能主动上传图片触发手机回显测试。
+def test_browser_device_does_not_expose_manual_sensor_rgb_upload_button() -> None:
+    """测试目标：验证 browser-glass 不再暴露手动 sensor.rgb 上传按钮。
 
-    测试方法：静态检查按钮、启停状态和 onclick 处理逻辑。
-    预期结果：注册后按钮可用，并复用 `uploadSingleVisualSnapshot()` 发送 sensor.rgb。
+    测试方法：静态检查页面没有旧按钮、旧状态更新和旧 onclick 入口，同时保留
+    `stream.control.open.requested(sensor.rgb)` 的采样处理函数。
+    预期结果：图片选择只作为采样资源，实际上传必须由标准协议事件触发。
     """
 
     html = _html()
 
-    assert 'const uploadImageNowButton = document.getElementById("uploadImageNow")' in html
-    assert "uploadImageNowButton.disabled = !registered" in html
-    assert "uploadImageNowButton.onclick = () =>" in html
-    assert 'reason: "manual_browser_upload"' in html
-    assert "uploadSingleVisualSnapshot({payload: {reason: \"manual_browser_upload\"}})" in html
+    assert 'const uploadImageNowButton = document.getElementById("uploadImageNow")' not in html
+    assert "uploadImageNowButton.disabled = !registered" not in html
+    assert "uploadImageNowButton.onclick = () =>" not in html
+    assert 'reason: "manual_browser_upload"' not in html
+    assert 'item.event_name === "stream.control.open.requested" && item.stream_type === "sensor.rgb"' in html
+    assert "uploadSingleVisualSnapshot(item)" in html
 
 
 def test_browser_device_appends_tail_silence_for_offline_realtime_audio() -> None:

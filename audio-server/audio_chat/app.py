@@ -146,6 +146,7 @@ class AudioChatConfig:
     realtime_voice: str = "Tina"
     realtime_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     realtime_session_idle_timeout_seconds: int = 60
+    realtime_max_concurrent_sessions: int = 10
     realtime_visual_frame_interval_seconds: float = 1.0
     realtime_visual_frame_timeout_seconds: float = 1.5
     realtime_visual_frame_freshness_seconds: float = 0.0
@@ -291,6 +292,7 @@ class AudioChatConfig:
             realtime_voice=realtime.voice,
             realtime_prompt=_with_memory_instructions(realtime.prompt, enabled=memory_enabled),
             realtime_session_idle_timeout_seconds=realtime.session_idle_timeout_seconds,
+            realtime_max_concurrent_sessions=realtime.max_concurrent_sessions,
             realtime_visual_frame_interval_seconds=realtime.visual_frame_interval_seconds,
             realtime_visual_frame_timeout_seconds=realtime.visual_frame_timeout_seconds,
             realtime_visual_frame_freshness_seconds=realtime.visual_frame_freshness_seconds,
@@ -508,6 +510,7 @@ class AudioChatApp:
                 voice=self.config.realtime_voice,
                 prompt=getattr(self.config, "realtime_prompt", "你是中文语音助手。请用简短口语回答用户。"),
                 session_idle_timeout_seconds=self.config.realtime_session_idle_timeout_seconds,
+                max_concurrent_sessions=self.config.realtime_max_concurrent_sessions,
                 visual_frame_interval_seconds=getattr(self.config, "realtime_visual_frame_interval_seconds", 1.0),
                 visual_frame_timeout_seconds=getattr(self.config, "realtime_visual_frame_timeout_seconds", 1.5),
                 visual_frame_freshness_seconds=getattr(self.config, "realtime_visual_frame_freshness_seconds", 0.0),

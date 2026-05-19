@@ -1,0 +1,12 @@
+{
+  "version": "audio-chat.v1",
+  "event_id": "evt_invalid_media",
+  "event_name": "command.requested",
+  "timestamp_ms": 1,
+  "user_id": "user-001",
+  "producer_id": "server-main",
+  "payload": {
+    "command": "sensor.rgb.capture",
+    "image_base64": "abcd"
+  }
+}

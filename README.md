@@ -176,9 +176,10 @@ agent:
     model: "qwen3.5-omni-plus-realtime"
     voice: "Tina"
     turn_detection: "provider"
+    max_concurrent_sessions: 10
 ```
 
-Omni Realtime 同样使用 `DASHSCOPE_API_KEY`。它的主链路是 `sensor.mic -> RealtimeAudioAgentCore -> assistant_audio.delta -> actuator.speaker`，不经过 TextAgentCore 的 ASR 和 TTS。
+Omni Realtime 同样使用 `DASHSCOPE_API_KEY`。SDK 默认最多同时建立 10 条同一 provider / model / endpoint 的 Realtime 连接，达到上限时会拒绝新会话，避免继续冲击供应商限流。它的主链路是 `sensor.mic -> RealtimeAudioAgentCore -> assistant_audio.delta -> actuator.speaker`，不经过 TextAgentCore 的 ASR 和 TTS。
 
 iOS 参考端：
 

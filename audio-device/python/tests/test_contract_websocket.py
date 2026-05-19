@@ -1,9 +1,13 @@
 import asyncio
 import json
 
+import pytest
 from aiohttp import web
 
 from audio_chat_device import AudioChatDeviceClient, DeviceBuilder, StreamChunkCodec
+
+
+pytestmark = [pytest.mark.sdk, pytest.mark.device_sdk]
 
 
 async def _run_contract() -> None:

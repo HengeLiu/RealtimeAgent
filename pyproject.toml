@@ -79,10 +79,22 @@ pythonpath = [
 ]
 testpaths = [
     "audio-server/tests",
+    "audio-device/python/tests",
     "examples/for-blind-app/tests",
     "examples/dev-support/tests",
 ]
 addopts = "-q"
+markers = [
+    "protocol_spec: protocol documentation and source mapping contract tests",
+    "protocol: L0 protocol contract tests",
+    "sdk: L1 SDK system integration tests",
+    "device_sdk: L1 Device SDK protocol contract tests",
+    "interop: L1 Server SDK and Device SDK real transport interoperability tests",
+    "model_provider: L2 real model provider tests",
+    "app: L3 application tests",
+    "replay: L3 replay tests using testdata",
+    "hardware: real hardware or manual-assisted tests",
+]
 filterwarnings = [
     "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning",
 ]

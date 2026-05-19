@@ -42,9 +42,10 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     assert payload["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
     assert payload["properties"]["direct.camera_source"] is True
     assert payload["properties"]["direct.camera.frame_format"] == "audio_chat.direct_frame.v1"
-    assert {"event": "control.audio_session.*"} in payload["routes"]
-    assert {"event": "stream.output.*", "filter": {"stream_type": "actuator.speaker"}} in payload["routes"]
-    assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in payload["routes"]
+    assert "routes" not in payload
+    assert payload["properties"]["audio_chat.audio_input"] == "sensor.mic"
+    assert payload["properties"]["audio_chat.audio_output"] == "actuator.speaker"
+    assert payload["supports"]["sensors"][0]["type"] == "rgb"
     assert "target_device" not in str(payload)
     assert "phone" not in payload["client_type"]
     assert "glass" not in payload["client_type"]
@@ -210,7 +211,7 @@ def test_network_esp32_s3_endpoint_completes_protocol_smoke(tmp_path: Path) -> N
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
         server = AudioChatHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()

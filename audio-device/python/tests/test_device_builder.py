@@ -1,5 +1,10 @@
+import pytest
+
 from audio_chat.device_capabilities import validate_device_capabilities_file
 from audio_chat_device import DeviceBuilder
+
+
+pytestmark = pytest.mark.device_sdk
 
 
 def test_device_builder_outputs_structured_supports_payload() -> None:

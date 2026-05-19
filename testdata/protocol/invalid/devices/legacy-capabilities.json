@@ -1,0 +1,12 @@
+{
+  "device_id": "legacy-device-001",
+  "user_id": "user-001",
+  "name": "Legacy capabilities device",
+  "capabilities": ["camera"],
+  "supports": [
+    {
+      "id": "sensor.rgb",
+      "modes": ["single"]
+    }
+  ]
+}
