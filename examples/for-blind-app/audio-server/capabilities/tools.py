@@ -78,6 +78,95 @@ class CapturePhotoTool(BaseTool):
         )
 
 
+class CaptureHighResPhotoInput(BaseModel):
+    """高清抓拍 Tool 输入参数。"""
+
+    timeout_seconds: float = Field(
+        default=CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS,
+        gt=0,
+        description="等待图片返回的超时时间，单位秒。",
+    )
+
+
+class CaptureHighResPhotoOutput(BaseModel):
+    """高清抓拍 Tool 输出结构。"""
+
+    captured: bool = Field(description="是否收到图片资产。")
+    asset_id: str | None = Field(default=None, description="图片资产 ID。")
+    stream_type: str | None = Field(default=None, description="资产来源类型。")
+    uri: str | None = Field(default=None, description="资产 URI。")
+    mime_type: str | None = Field(default=None, description="资产 MIME 类型。")
+
+
+class CaptureHighResPhotoTool(BaseTool):
+    """高清抓拍 Tool。
+
+    主要功能：当用户需要识别文字、标识牌、菜单、文件等需要高分辨率的场景时，
+    先切换摄像头到高分辨率模式（SXGA 1280x1024），拍摄后恢复默认分辨率（VGA 640x480）。
+    内部自动处理分辨率切换，调用方只需在需要识别细小文字时使用此工具。
+    """
+
+    spec = ToolSpec(
+        name="capture_high_res_photo",
+        description=(
+            "当用户说"看看上面写的什么"、"识别一下文字"、"查看标识牌内容"、"
+            "看看菜单或文件上的小字"等需要高分辨率图片来识别文字时调用。"
+            "此工具会自动切换到高分辨率模式进行拍摄，适合识别细小文字、标识牌、标签等。"
+        ),
+        input_model=CaptureHighResPhotoInput,
+        output_model=CaptureHighResPhotoOutput,
+        progress_message=("我切换到高清模式拍一张。", "稍等，我用高分辨率拍一下。"),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行高清抓拍。
+
+        主要逻辑：
+        1. 通过 `commands.call()` 发送 camera.control 命令切换到 SXGA 高分辨率
+        2. 等待 0.5 秒让传感器稳定
+        3. 通过 `sensor.rgb.one()` 获取高清图片
+        4. 通过 `commands.call()` 恢复 VGA 默认分辨率
+        参数：`context` 为 SDK 注入上下文，`input_data` 包含 timeout_seconds。
+        返回值：成功时返回高清图片资产引用。
+        """
+
+        import asyncio
+
+        # 切换到高分辨率（SXGA 1280x1024）
+        await context.devices.commands.call(
+            command="camera.control",
+            params={"action": "set_framesize", "value": "SXGA"},
+            timeout_seconds=2.0,
+        )
+        # 等待传感器稳定
+        await asyncio.sleep(0.5)
+
+        # 拍摄照片
+        asset = await context.devices.sensors.rgb.one(
+            params={"format": "jpeg"},
+            timeout_seconds=float(input_data.get("timeout_seconds") or CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS),
+        )
+
+        # 恢复默认分辨率（VGA 640x480）
+        await context.devices.commands.call(
+            command="camera.control",
+            params={"action": "set_framesize", "value": "VGA"},
+            timeout_seconds=2.0,
+        )
+
+        return ToolResult.success(
+            data={
+                "captured": True,
+                "asset_id": asset.asset_id,
+                "stream_type": asset.stream_type,
+                "uri": asset.uri,
+                "mime_type": asset.mime_type,
+            },
+            assets=[asset],
+            message="已获取高清图片。",
+        )
+
+
 class InterpretImageInput(BaseModel):
     """图片解读 Tool 输入参数。"""
 
