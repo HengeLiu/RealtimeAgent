@@ -1,6 +1,6 @@
 # python-phone 开发支持组件
 
-`python-phone` 是 AudioChat SDK 的 Python 端开发/测试支持组件，用来在本地模拟手机侧
+`python-phone` 是 RealtimeAgent SDK 的 Python 端开发/测试支持组件，用来在本地模拟手机侧
 显示、视觉计算、远程命令和 peer video receiver。它在代码实现和协议交互上会注册为
 普通 Device，因此可以真实覆盖设备注册、控制事件、stream 和端侧任务回执；但它不是
 SDK 定义的正式手机设备类型，也不要求开发者真实手机端使用 Python 实现。
@@ -31,7 +31,7 @@ Python phone 可以长驻运行成视频/视觉模拟组件，用来显示眼镜
 和 `properties.actuator.display.rgb` 订阅同一用户下的 `sensor.rgb` 输入流。
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 联调时保持 `browser-glass` 和 `python-phone` 的 `user_id` 一致。普通语音期间
@@ -40,7 +40,7 @@ server 的 realtime visual sampler 会向 browser-glass 请求带 `request_id` �
 连续 RGB stream 或 peer video 任务流会显示在 PySide6 窗口。最近一帧默认写入：
 
 ```text
-runs/audio-chat/python-phone/latest-rgb.png
+runs/realtime-agent/python-phone/latest-rgb.png
 ```
 
 ## peer video receiver
@@ -69,7 +69,7 @@ uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.
 
 这个依赖文件包含 YOLOE 文本 prompt 需要的 `clip` 包；不要依赖 Ultralytics 运行时自动安装，否则 `uv` 虚拟环境中可能因为没有 `pip` 而失败。
 
-首次找物还会下载 `mobileclip_blt.ts` 文本编码权重，文件约 572MB。Python phone 会把它放到 `runs/audio-chat/python-phone/vision-cache/`；真实联调前可以先启动一次 Python phone 让它完成缓存，该文件是端侧模型缓存，不需要提交。
+首次找物还会下载 `mobileclip_blt.ts` 文本编码权重，文件约 572MB。Python phone 会把它放到 `runs/realtime-agent/python-phone/vision-cache/`；真实联调前可以先启动一次 Python phone 让它完成缓存，该文件是端侧模型缓存，不需要提交。
 
 `phone.preview.yaml` 默认 `device: auto`，Python phone 会优先用 CUDA，否则使用 CPU，不会自动使用 macOS MPS。YOLOE / MobileCLIP 路径里可能出现 float64 张量，MPS 不支持这一类型；需要实验 MPS 时再显式改成 `device: mps`。
 
@@ -78,13 +78,13 @@ uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.
 终端 1：
 
 ```bash
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 终端 2：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 peer video 联调使用 `phone.preview.yaml`，该配置默认以长驻模式运行。`mode: register_only`

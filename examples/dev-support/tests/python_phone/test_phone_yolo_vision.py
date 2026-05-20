@@ -9,10 +9,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from audio_chat_python_phone_mock.vision.config import VisionConfig
-from audio_chat_python_phone_mock.vision.models import VisionDependencyError
-from audio_chat_python_phone_mock.vision.processor import VisionProcessor
-from audio_chat_python_phone_mock.vision.traffic_light import TrafficLightDetector
+from realtime_agent_python_phone_mock.vision.config import VisionConfig
+from realtime_agent_python_phone_mock.vision.models import VisionDependencyError
+from realtime_agent_python_phone_mock.vision.processor import VisionProcessor
+from realtime_agent_python_phone_mock.vision.traffic_light import TrafficLightDetector
 
 
 def test_vision_config_uses_modelscope_default_paths() -> None:
@@ -56,7 +56,7 @@ def test_traffic_light_majority_vote_with_fake_model(monkeypatch) -> None:
     预期结果：第三帧达到多数阈值后输出 stable=true、state=green、can_cross=true。
     """
 
-    import audio_chat_python_phone_mock.vision.traffic_light as traffic_module
+    import realtime_agent_python_phone_mock.vision.traffic_light as traffic_module
 
     monkeypatch.setattr(traffic_module, "load_ultralytics_model", lambda **_kwargs: FakeTrafficModel())
     config = VisionConfig.from_mapping({"provider": "yolo"}).traffic_light
@@ -97,7 +97,7 @@ def test_yoloe_text_dependency_error_points_to_phone_requirements(monkeypatch) -
     预期结果：抛出 `VisionDependencyError`，错误信息指向 Python phone 自己的依赖文件。
     """
 
-    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+    import realtime_agent_python_phone_mock.vision.find_object as find_object_module
 
     real_import = builtins.__import__
 
@@ -119,7 +119,7 @@ def test_find_object_uses_predict_instead_of_tracker_dependency() -> None:
     预期结果：`_run_segment()` 使用逐帧 predict，避免端侧额外依赖 `lap`。
     """
 
-    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+    import realtime_agent_python_phone_mock.vision.find_object as find_object_module
 
     class FakeYoloeModel:
         predict_called = False
@@ -148,22 +148,22 @@ def test_yoloe_text_weight_download_uses_phone_cache_dir(tmp_path, monkeypatch) 
     预期结果：工作目录位于 Python phone 的运行产物缓存目录。
     """
 
-    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+    import realtime_agent_python_phone_mock.vision.find_object as find_object_module
 
-    class FakeTextModel:
+    class FakeVisionModel:
         called_cwd: Path | None = None
 
         def get_text_pe(self, texts):
             self.called_cwd = Path.cwd()
             return {"texts": texts}
 
-    fake_model = FakeTextModel()
+    fake_model = FakeVisionModel()
     monkeypatch.chdir(tmp_path)
 
     result = find_object_module._get_yoloe_text_pe(fake_model, ["眼镜"])
 
     assert result == {"texts": ["眼镜"]}
-    assert fake_model.called_cwd == tmp_path / "runs/audio-chat/python-phone/vision-cache"
+    assert fake_model.called_cwd == tmp_path / "runs/realtime-agent/python-phone/vision-cache"
     assert Path.cwd() == tmp_path
 
 
@@ -175,9 +175,9 @@ def test_yoloe_text_weight_corrupted_cache_is_removed_and_retried(tmp_path, monk
     预期结果：坏缓存被删除，文本编码重试成功，当前工作目录恢复到调用前目录。
     """
 
-    import audio_chat_python_phone_mock.vision.find_object as find_object_module
+    import realtime_agent_python_phone_mock.vision.find_object as find_object_module
 
-    class FakeTextModel:
+    class FakeVisionModel:
         calls = 0
 
         def get_text_pe(self, texts):
@@ -188,11 +188,11 @@ def test_yoloe_text_weight_corrupted_cache_is_removed_and_retried(tmp_path, monk
                 )
             return {"texts": texts, "calls": self.calls}
 
-    cache_dir = tmp_path / "runs/audio-chat/python-phone/vision-cache"
+    cache_dir = tmp_path / "runs/realtime-agent/python-phone/vision-cache"
     cache_dir.mkdir(parents=True)
     broken_weight = cache_dir / "mobileclip_blt.ts"
     broken_weight.write_bytes(b"incomplete archive")
-    fake_model = FakeTextModel()
+    fake_model = FakeVisionModel()
     monkeypatch.chdir(tmp_path)
 
     result = find_object_module._get_yoloe_text_pe(fake_model, ["钥匙"])
@@ -210,7 +210,7 @@ def test_auto_device_avoids_mps_for_yoloe_float64_compatibility(monkeypatch) -> 
     预期结果：返回 cpu，避免 YOLOE/MobileCLIP 中 float64 张量触发 MPS 不支持错误。
     """
 
-    import audio_chat_python_phone_mock.vision.models as models_module
+    import realtime_agent_python_phone_mock.vision.models as models_module
 
     fake_torch = SimpleNamespace(
         backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),

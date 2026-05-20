@@ -11,13 +11,13 @@ AUDIO_ROOT = Path(__file__).resolve().parents[3]
 def test_package_check_covers_wheel_editable_public_api_and_boundary(tmp_path) -> None:
     """测试目标：冻结发布前检查的最小包检查范围。
 
-    测试方法：运行 `audio-chat.sdk.package-check` 并读取 JSON 报告。
+    测试方法：运行 `realtime-agent.sdk.package-check` 并读取 JSON 报告。
     预期结果：wheel 构建、editable install、公开 API 导入和 endpoint 边界检查都通过。
     """
 
     report = tmp_path / "package-check.json"
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        ["uv", "run", "realtime-agent.sdk.package-check", "--report", str(report)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -47,7 +47,7 @@ def test_release_wheel_does_not_include_private_or_native_endpoint_sources(tmp_p
 
     report = tmp_path / "package-check.json"
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        ["uv", "run", "realtime-agent.sdk.package-check", "--report", str(report)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -64,26 +64,26 @@ def test_release_wheel_does_not_include_private_or_native_endpoint_sources(tmp_p
 def test_endpoint_reference_modules_are_importable_but_not_top_level_exports() -> None:
     """测试目标：确认参考端侧实现可单独导入，但不泄漏到 SDK 顶层公开包。
 
-    测试方法：在当前测试进程导入 endpoint 模块和 `audio_chat` 顶层包。
-    预期结果：endpoint 类只存在于 endpoint 子模块，顶层 `audio_chat` 不暴露它们。
+    测试方法：在当前测试进程导入 endpoint 模块和 `realtime_agent` 顶层包。
+    预期结果：endpoint 类只存在于 endpoint 子模块，顶层 `realtime_agent` 不暴露它们。
     """
 
-    import audio_chat
-    from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
+    import realtime_agent
+    from realtime_agent_python_glass.playback import NetworkPythonPlaybackEndpoint
 
     assert NetworkPythonPlaybackEndpoint is not None
-    assert not hasattr(audio_chat, "NetworkPythonPlaybackEndpoint")
-    assert not hasattr(audio_chat, "PythonPhoneMockEndpoint")
+    assert not hasattr(realtime_agent, "NetworkPythonPlaybackEndpoint")
+    assert not hasattr(realtime_agent, "PythonPhoneMockEndpoint")
 
 
 def test_public_api_imports_from_clean_python_process() -> None:
     """测试目标：确认公开 API 不依赖 pytest 路径副作用。
 
     测试方法：使用 `uv run python -c` 在独立解释器中导入顶层对象。
-    预期结果：开发者安装后可直接从 `audio_chat` 导入扩展 API。
+    预期结果：开发者安装后可直接从 `realtime_agent` 导入扩展 API。
     """
 
-    code = "from audio_chat import AudioChatApp, BaseTool, BaseTask, ToolResult, TaskSignal"
+    code = "from realtime_agent import RealtimeAgentApp, BaseTool, BaseTask, ToolResult, TaskSignal"
     completed = subprocess.run(
         ["uv", "run", "python", "-c", code],
         cwd=AUDIO_ROOT,

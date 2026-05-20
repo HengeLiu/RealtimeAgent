@@ -5,11 +5,11 @@ import json
 
 import pytest
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.config import load_yaml_config
-from audio_chat.conversation import LlmMessageSummarizer
-from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryError, MemoryOperationAction, MemoryOperationPlan, MemoryService
-from audio_chat.protocol import StreamChunk
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.config import load_yaml_config
+from realtime_agent.conversation import LlmMessageSummarizer
+from realtime_agent.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryError, MemoryOperationAction, MemoryOperationPlan, MemoryService
+from realtime_agent.protocol import StreamChunk
 
 
 class FakeMemoryManager:
@@ -29,7 +29,7 @@ class FakeMemoryManager:
 
 
 class CaptureMessagesModel:
-    """测试用文本模型，记录主 Agent 发给模型的 messages。"""
+    """测试用Vision 模型，记录主 Agent 发给模型的 messages。"""
 
     provider_name = "mock-capture"
     model = "mock-capture-model"
@@ -84,7 +84,7 @@ def test_memory_disabled_does_not_expose_memory_tools(tmp_path) -> None:
     预期结果：基础工具仍存在，memory_search 和 manage_memory 不暴露给 Agent。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), memory_enabled=False))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), memory_enabled=False))
 
     names = app.tool_registry.list_names()
     assert "query_device_state" in names
@@ -99,8 +99,8 @@ def test_memory_enabled_exposes_and_executes_builtin_tools(tmp_path) -> None:
     预期结果：写入结果成功，随后搜索能返回同一条记忆。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             memory_enabled=True,
             memory_path=str(tmp_path / "memory"),
@@ -200,7 +200,7 @@ def test_memory_enabled_uses_runs_user_memory_json_by_default(tmp_path) -> None:
     """
 
     runs_root = tmp_path / "runs"
-    app = AudioChatApp(AudioChatConfig(runs_root=str(runs_root), memory_enabled=True))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(runs_root), memory_enabled=True))
     app.memory_service.manager_agent = FakeMemoryManager(
         plans=[
             MemoryOperationPlan(
@@ -257,21 +257,21 @@ def test_memory_records_are_injected_into_prompt_fragment(tmp_path) -> None:
     assert "- 楼梯偏好: 用户默认走左侧楼梯" in fragment
 
 
-def test_text_agent_model_request_includes_memory_content(tmp_path) -> None:
+def test_vision_agent_model_request_includes_memory_content(tmp_path) -> None:
     """测试目标：验证主模型请求 messages 中注入用户记忆正文。
 
-    测试方法：给用户写入一条 personalized 记忆，替换文本模型为可捕获 messages 的
+    测试方法：给用户写入一条 personalized 记忆，替换Vision 模型为可捕获 messages 的
     测试模型，然后发送一段 final 麦克风输入。
     预期结果：`model-request.json` 和模型收到的 system message 都包含记忆正文，而
     不是只包含记忆主题。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
+            agent_mode="vision",
             memory_enabled=True,
-            text_prompt="你是测试助手。",
+            vision_prompt="你是测试助手。",
         )
     )
     app.memory_service.add_memory(
@@ -281,7 +281,7 @@ def test_text_agent_model_request_includes_memory_content(tmp_path) -> None:
         content="用户喜欢导航提示先说方向再说距离。",
     )
     model = CaptureMessagesModel()
-    app.agent_core.text_model = model
+    app.agent_core.vision_model = model
 
     app.agent_core.append_audio_event(
         StreamChunk(
@@ -306,18 +306,18 @@ def test_text_agent_model_request_includes_memory_content(tmp_path) -> None:
 def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_path) -> None:
     """测试目标：验证启用 memory 后模型提示词、工具 schema 和删除动作都可用。
 
-    测试方法：直接构造启用 memory 的 AudioChatApp，检查运行时提示词和工具列表，
+    测试方法：直接构造启用 memory 的 RealtimeAgentApp，检查运行时提示词和工具列表，
     再通过 ToolGateway 写入、删除、查询一条记忆。
     预期结果：提示词包含长期记忆规则，manage_memory 已暴露给模型，删除后查询不到原记忆。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             memory_enabled=True,
             memory_path=str(tmp_path / "memory"),
-            realtime_prompt="你是测试助手。",
-            text_prompt="你是测试助手。",
+            omni_prompt="你是测试助手。",
+            vision_prompt="你是测试助手。",
         )
     )
     app.memory_service.manager_agent = FakeMemoryManager(
@@ -346,8 +346,8 @@ def test_memory_enabled_injects_model_instructions_and_delete_tool_action(tmp_pa
         ]
     )
 
-    assert "长期记忆规则" in app.config.realtime_prompt
-    assert "长期记忆规则" in app.config.text_prompt
+    assert "长期记忆规则" in app.config.omni_prompt
+    assert "长期记忆规则" in app.config.vision_prompt
     assert "manage_memory" in {tool["function"]["name"] for tool in app.tool_gateway.provider_schemas()}
 
     write_result = asyncio.run(
@@ -385,7 +385,7 @@ def test_memory_manager_is_configured_as_system_capability(tmp_path) -> None:
     """测试目标：验证记忆管理子 Agent 来自 memory.manager 配置，而不是 text 模型配置。
 
     测试方法：写入一份 text 模型为 mock、memory.manager 指定 qwen-memory 的
-    server.yaml，并通过 AudioChatConfig 构建 App。
+    server.yaml，并通过 RealtimeAgentConfig 构建 App。
     预期结果：MemoryService 内部 manager 是 LlmMemoryManagementAgent，且使用
     memory.manager.model。
     """
@@ -397,9 +397,9 @@ def test_memory_manager_is_configured_as_system_capability(tmp_path) -> None:
         """
 app_name: memory-manager-app
 agent:
-  text:
+  vision:
     provider: mock
-    model: mock-text
+    model: mock-vision
 memory:
   enabled: true
   manager:
@@ -411,13 +411,13 @@ memory:
     )
 
     loaded = load_yaml_config(config_path)
-    app = AudioChatApp(AudioChatConfig.from_loaded_config(loaded))
+    app = RealtimeAgentApp(RealtimeAgentConfig.from_loaded_config(loaded))
 
     assert isinstance(app.memory_service.manager_agent, LlmMemoryManagementAgent)
     assert app.memory_service.manager_agent.model == "qwen-memory"
     assert isinstance(app.conversation_memory.summarizer, LlmMessageSummarizer)
     assert app.conversation_memory.summarizer.model == "qwen-memory"
-    assert app.config.text_provider == "mock"
+    assert app.config.vision_provider == "mock"
 
 
 def test_memory_manage_requires_real_manager_agent(tmp_path) -> None:

@@ -1,6 +1,6 @@
-# audio-chat 文档目录
+# realtime-agent 文档目录
 
-`audio-chat` 是一套面向多端设备的语音 Agent SDK。它由 Server SDK、Device SDK 和标准通讯协议组成，用于构建语音优先、多设备协作、实时 stream 驱动的 AI Agent 应用。项目内部使用事件协议连接 server 和 device，但社区开发者主要面对的是 Tool、Task、Context API、Device SDK 能力声明和 stream API。
+`realtime-agent` 是一套面向多端设备的语音 Agent SDK。它由 Server SDK、Device SDK 和标准通讯协议组成，用于构建语音优先、多设备协作、实时 stream 驱动的 AI Agent 应用。项目内部使用事件协议连接 server 和 device，但社区开发者主要面对的是 Tool、Task、Context API、Device SDK 能力声明和 stream API。
 
 它适合智能眼镜、手机协作、ESP32 或其他端侧传感器设备参与的应用原型和产品化探索。仓库中的 `browser-glass`、`python-phone` 等属于开发/测试支持组件：它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
 
@@ -8,17 +8,17 @@
 
 ## 先读什么
 
-1. [项目介绍](getting-started/what-is-audio-chat.md)：了解项目定位、代码架构、关键能力和典型使用方式。
+1. [项目介绍](getting-started/what-is-realtime-agent.md)：了解项目定位、代码架构、关键能力和典型使用方式。
 2. [快速开始](getting-started/quickstart.md)：准备环境，启动 server，连接开发/测试支持组件。
 3. [第一个 Tool 和 Task](tutorials/build-first-capability.md)：理解业务能力如何接入 Agent。
 4. [跨设备本地联调](how-to/cross-device-local-debug.md)：按 server、开发支持组件、真实端侧参考工程的顺序做联调。
-5. [CLI 参考](reference/cli.md)：查看常用 `audio-chat.*` 命令。
+5. [CLI 参考](reference/cli.md)：查看常用 `realtime-agent.*` 命令。
 
 ## 社区开发者文档
 
 ### Getting Started
 
-- [项目介绍](getting-started/what-is-audio-chat.md)
+- [项目介绍](getting-started/what-is-realtime-agent.md)
 - [快速开始](getting-started/quickstart.md)
 
 ### Tutorials
@@ -35,7 +35,7 @@
 
 - [项目结构](reference/project-layout.md)
 - [CLI 参考](reference/cli.md)
-- [audio-chat 通讯协议](reference/protocol.md)
+- [realtime-agent 通讯协议](reference/protocol.md)
 - [Context 与设备 API 设计说明](../audio-server/docs/reference/context-api.md)
 
 ### Community

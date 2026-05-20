@@ -107,44 +107,6 @@ wheels = [
 ]
 
 [[package]]
-name = "audio-chat"
-version = "0.1.0rc1"
-source = { editable = "." }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "dashscope" },
-    { name = "openai" },
-    { name = "opencv-python" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-gui = [
-    { name = "pyside6" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "dashscope", specifier = ">=1.25.0" },
-    { name = "openai", specifier = ">=1.30.0,<2" },
-    { name = "opencv-python", specifier = ">=4.9.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.7.0" },
-    { name = "pyyaml", specifier = ">=6.0.0" },
-]
-provides-extras = ["gui"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0.0" }]
-
-[[package]]
 name = "certifi"
 version = "2026.4.22"
 source = { registry = "https://pypi.org/simple" }
@@ -804,6 +766,44 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/86/bf/899e81e4cce32febab4fb42bb97dcdf66bc135272882d1987881a4b519e9/pyyaml-6.0.3-cp312-cp312-win_amd64.whl", hash = "sha256:5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b", size = 154003, upload-time = "2025-09-25T21:32:21.167Z" },
     { url = "https://files.pythonhosted.org/packages/1a/08/67bd04656199bbb51dbed1439b7f27601dfb576fb864099c7ef0c3e55531/pyyaml-6.0.3-cp312-cp312-win_arm64.whl", hash = "sha256:64386e5e707d03a7e172c0701abfb7e10f0fb753ee1d773128192742712a98fd", size = 140344, upload-time = "2025-09-25T21:32:22.617Z" },
 ]
+
+[[package]]
+name = "realtime-agent"
+version = "0.1.0rc1"
+source = { editable = "." }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "dashscope" },
+    { name = "openai" },
+    { name = "opencv-python" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+gui = [
+    { name = "pyside6" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "dashscope", specifier = ">=1.25.0" },
+    { name = "openai", specifier = ">=1.30.0,<2" },
+    { name = "opencv-python", specifier = ">=4.9.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.7.0" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
+]
+provides-extras = ["gui"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0.0" }]
 
 [[package]]
 name = "requests"

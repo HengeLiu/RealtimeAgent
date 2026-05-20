@@ -29,7 +29,7 @@ def _write_server_config(path: Path, *, port: int) -> None:
 def test_live_check_reports_actionable_server_down_state(tmp_path: Path) -> None:
     """测试目标：确认 live-check 在 server 未启动时仍输出可操作诊断。
 
-    测试方法：使用空闲端口配置执行 `audio-chat.dev.live-check`。
+    测试方法：使用空闲端口配置执行 `realtime-agent.dev.live-check`。
     预期结果：命令成功生成报告，`live_server` 检查为 false，并给出启动 server 的建议。
     """
 
@@ -41,7 +41,7 @@ def test_live_check_reports_actionable_server_down_state(tmp_path: Path) -> None
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--server-config",
             str(config),
             "--server-url",
@@ -60,7 +60,7 @@ def test_live_check_reports_actionable_server_down_state(tmp_path: Path) -> None
         [
             "uv",
             "run",
-            "audio-chat.dev.live-check",
+            "realtime-agent.dev.live-check",
             "--config",
             str(config),
             "--generated-dir",
@@ -86,7 +86,7 @@ def test_live_check_recent_playback_action_uses_loaded_app_runs_root(tmp_path: P
     """测试目标：确认 live-check 的提示路径来自 server.yaml，而不是 SDK 硬编码示例名称。
 
     测试方法：用 app-name=custom-app 的配置执行 live-check。
-    预期结果：recent_playback 的下一步提示使用 `runs/custom-app/generated`。
+    预期结果：recent_playback 的下一步提示使用配置加载后的 runs_root。
     """
 
     port = _free_port()
@@ -104,7 +104,7 @@ server:
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--server-config",
             str(config),
             "--server-url",
@@ -123,7 +123,7 @@ server:
         [
             "uv",
             "run",
-            "audio-chat.dev.live-check",
+            "realtime-agent.dev.live-check",
             "--config",
             str(config),
             "--generated-dir",
@@ -140,14 +140,14 @@ server:
     assert completed.returncode == 0, completed.stderr
     data = json.loads(report.read_text(encoding="utf-8"))
     checks = {check["name"]: check for check in data["checks"]}
-    assert "runs/custom-app/generated" in checks["recent_playback"]["action"]
+    assert str(tmp_path / "runs" / "generated") in checks["recent_playback"]["action"]
 
 
 def test_live_check_reports_server_health_when_running(tmp_path: Path) -> None:
     """测试目标：确认 live-check 能识别已启动 server 并读取 debug devices。
 
     测试方法：启动临时后台 server，轮询后执行 live-check。
-    预期结果：`live_server` 检查通过，health 返回 `audio-chat.v1`。
+    预期结果：`live_server` 检查通过，health 返回 `realtime-agent.v1`。
     """
 
     port = _free_port()
@@ -158,7 +158,7 @@ def test_live_check_reports_server_health_when_running(tmp_path: Path) -> None:
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--server-config",
             str(config),
             "--server-url",
@@ -177,7 +177,7 @@ def test_live_check_reports_server_health_when_running(tmp_path: Path) -> None:
         [
             "uv",
             "run",
-            "audio-chat.server.start",
+            "realtime-agent.server.start",
             "--config",
             str(config),
             "--pid-file",
@@ -200,7 +200,7 @@ def test_live_check_reports_server_health_when_running(tmp_path: Path) -> None:
                 [
                     "uv",
                     "run",
-                    "audio-chat.dev.live-check",
+                    "realtime-agent.dev.live-check",
                     "--config",
                     str(config),
                     "--generated-dir",
@@ -223,10 +223,10 @@ def test_live_check_reports_server_health_when_running(tmp_path: Path) -> None:
         data = json.loads(live_report.read_text(encoding="utf-8"))
         checks = {check["name"]: check for check in data["checks"]}
         assert checks["live_server"]["ok"] is True
-        assert checks["live_server"]["server_health"]["protocol_version"] == "audio-chat.v1"
+        assert checks["live_server"]["server_health"]["protocol_version"] == "realtime-agent.v1"
     finally:
         subprocess.run(
-            ["uv", "run", "audio-chat.server.stop", "--pid-file", str(pid_file)],
+            ["uv", "run", "realtime-agent.server.stop", "--pid-file", str(pid_file)],
             cwd=AUDIO_ROOT,
             text=True,
             capture_output=True,

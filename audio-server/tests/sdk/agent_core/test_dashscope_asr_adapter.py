@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 import types
 
-from audio_chat.agent_core.providers import DashScopeAsrProviderAdapter
-from audio_chat.protocol import StreamChunk
+from realtime_agent.agent_core.providers import DashScopeAsrProviderAdapter
+from realtime_agent.protocol import StreamChunk
 
 
 class _FakeRecognitionResult:

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.output import AssistantTextDelta
-from audio_chat.protocol import Event, StreamChunk
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.output import AssistantTextDelta
+from realtime_agent.protocol import Event, StreamChunk
 
 
 class Connection:
@@ -51,7 +51,7 @@ class FixedSummarizer:
         return "当前对话状态：\n- 已压缩旧会话消息。"
 
 
-def register_audio_endpoint(app: AudioChatApp, connection: Connection, *, user_id: str = "user-a") -> None:
+def register_audio_endpoint(app: RealtimeAgentApp, connection: Connection, *, user_id: str = "user-a") -> None:
     """注册一个同时支持 mic 和 speaker 的测试端侧。"""
 
     app.register_device(
@@ -77,7 +77,7 @@ def test_wake_requests_session_and_agent_opens_only_after_endpoint_opened(tmp_pa
     预期结果：端侧收到 open.requested，Agent session.opened 只在 opened 后落盘。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-audio")
     register_audio_endpoint(app, connection)
 
@@ -117,7 +117,7 @@ def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path
     预期结果：请求时不立刻下发 close.requested；输出完成后才下发 close.requested。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-audio")
     register_audio_endpoint(app, connection)
     session_id = app.active_session_id("user-a")
@@ -130,7 +130,7 @@ def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path
             payload={"reason": "test"},
         )
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-a", session_id=session_id, text="正在回答", final=False)
     )
 
@@ -141,7 +141,7 @@ def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path
         for event in connection.events
     )
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-a", session_id=session_id, text="", final=True)
     )
 
@@ -159,7 +159,7 @@ def test_endpoint_closed_releases_dialog_but_keeps_device_identity(tmp_path) -> 
     预期结果：closed 之前 active device 仍存在；closed 之后重新取链路标识仍是同一 device_id。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-audio")
     register_audio_endpoint(app, connection)
     session_id = app.active_session_id("user-a")
@@ -196,8 +196,8 @@ def test_endpoint_closed_compacts_messages_after_dialog(tmp_path) -> None:
     预期结果：active/messages 只保留最新 2 条，旧消息进入 history，并产生 summary 事件。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             message_compact_threshold=6,
             message_compact_keep_latest=2,
@@ -261,8 +261,8 @@ def test_maintenance_sweeper_expires_heartbeat_idle_stream_and_max_duration(tmp_
     预期结果：设备心跳超时离线、stream idle 关闭、音频会话发起 close request。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             control_heartbeat_timeout_seconds=1,
             stream_idle_timeout_seconds=1,

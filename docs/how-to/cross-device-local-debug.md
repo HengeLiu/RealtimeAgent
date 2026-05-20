@@ -23,7 +23,7 @@ server:
 先校验浏览器眼镜模拟组件的能力文件：
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 如果要联调其他设备，也先检查对应配置文件。
@@ -31,7 +31,7 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 ## 3. 启动 server
 
 ```bash
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
 确认 server 健康：
@@ -43,7 +43,7 @@ curl http://127.0.0.1:8765/api/health
 ## 4. 连接浏览器眼镜模拟组件
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 在浏览器页面中完成设备注册，然后检查：
@@ -60,20 +60,20 @@ curl http://127.0.0.1:8765/api/debug/devices
 4. 能力声明包含当前要测试的传感器或执行器。
 
 说明：browser-glass 是开发/测试支持组件。它会像真实端侧一样注册成 Device，
-从而覆盖控制事件、stream 和输出播放链路；但它不是 AudioChat SDK 的正式设备类型。
+从而覆盖控制事件、stream 和输出播放链路；但它不是 RealtimeAgent SDK 的正式设备类型。
 
 ## 5. 可选：连接 Python 手机模拟组件
 
 当前找物 / 红绿灯联调优先使用 preview 配置：
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 如果只验证简单协议、RGB 上传或振动 mock，再使用 mock 配置：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 Python phone 同样是开发/测试支持组件。它在协议层注册为普通 Device，用来模拟手机侧
@@ -95,8 +95,8 @@ RGB 流需要区分：
 观察点：
 
 1. Python phone 窗口状态栏的 `registered=true` 和 `frame` 计数。
-2. `runs/audio-chat/python-phone/latest-rgb.png` 是否更新。
-3. `runs/audio-chat/python-phone/latest-yolo.jpg` 是否显示 YOLO 标注框。
+2. `runs/realtime-agent/python-phone/latest-rgb.png` 是否更新。
+3. `runs/realtime-agent/python-phone/latest-yolo.jpg` 是否显示 YOLO 标注框。
 4. server `command-events.jsonl` 中是否按顺序出现 `peer.video.receiver.start` 和
    `peer.video.sender.start`。
 5. server `stream-events.jsonl` 中带 `request_id` 的资产采样流不应包含 phone consumer。
@@ -104,7 +104,7 @@ RGB 流需要区分：
 ## 6. 可选：运行 iOS 参考端
 
 ```bash
-uv run audio-chat.ios.open
+uv run realtime-agent.ios.open
 ```
 
 iOS 参考端适合验证手机端注册、日志、直连相机接收和 Swift 端协议实现。真机联调时需要同时看 iOS app 日志和 server runs 产物。
@@ -114,8 +114,8 @@ iOS 参考端适合验证手机端注册、日志、直连相机接收和 Swift 
 无硬件时先做 dry-run：
 
 ```bash
-uv run audio-chat.esp32.config
-uv run audio-chat.esp32.build --dry-run
+uv run realtime-agent.esp32.config
+uv run realtime-agent.esp32.build --dry-run
 ```
 
 有 ESP-IDF 和真机时再做 build、flash、monitor。

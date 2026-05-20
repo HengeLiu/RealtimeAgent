@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../audio-server/audio_chat/spec/audio-chat-device.schema.json",
+  "$schema": "../../../audio-server/realtime_agent/spec/realtime-agent-device.schema.json",
   "device_id": "dev-ios-phone-001",
   "user_id": "user-browser-glass-001",
   "name": "iOS Phone",

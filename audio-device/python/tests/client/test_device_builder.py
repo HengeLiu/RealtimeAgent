@@ -1,7 +1,7 @@
 import pytest
 
-from audio_chat.device_capabilities import validate_device_capabilities_file
-from audio_chat_device import DeviceBuilder
+from realtime_agent.device_capabilities import validate_device_capabilities_file
+from realtime_agent_device import DeviceBuilder
 
 
 pytestmark = pytest.mark.device_sdk

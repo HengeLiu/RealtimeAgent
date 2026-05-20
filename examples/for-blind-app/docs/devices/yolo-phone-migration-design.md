@@ -72,9 +72,9 @@ YOLOE + MobileCLIP 文本编码，红绿灯走 `trafficlight.pt` + HSV fallback�
 当前 Python phone 的 peer video 入口：
 
 ```text
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/peer_video.py
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/phone_mock.py
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/peer_video.py
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/vision/
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/phone_mock.py
 examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
@@ -138,7 +138,7 @@ Reporter -> Task : command.*
 建议在 Python phone 包内新增独立视觉子模块：
 
 ```text
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/
   vision/
     __init__.py
     config.py
@@ -171,7 +171,7 @@ vision:
   provider: yolo          # yolo | mock
   device: auto            # auto | cpu | mps | cuda | cuda:0
   frame_stride: 1         # 每 N 帧跑一次模型；1 表示每帧
-  save_annotated_frame: runs/audio-chat/python-phone/latest-yolo.jpg
+  save_annotated_frame: runs/realtime-agent/python-phone/latest-yolo.jpg
   fallback_to_mock: false
   find_object:
     backend: yoloe
@@ -208,7 +208,7 @@ opencv-python
 numpy 间接依赖
 ```
 
-真实 YOLO 依赖属于 Python phone 开发支持组件的运行依赖，不属于 server SDK 必需依赖，也不应该要求非 Python 端侧理解 `audio-chat` 的 Python 包 extras。首版放在 phone 端自己的 requirements 文件中：
+真实 YOLO 依赖属于 Python phone 开发支持组件的运行依赖，不属于 server SDK 必需依赖，也不应该要求非 Python 端侧理解 `realtime-agent` 的 Python 包 extras。首版放在 phone 端自己的 requirements 文件中：
 
 ```text
 examples/dev-support/devices/python-phone/requirements.vision.txt
@@ -216,7 +216,7 @@ examples/dev-support/devices/python-phone/requirements.vision.txt
 
 其中 `git+https://github.com/ultralytics/CLIP.git` 是 YOLOE 文本 prompt 的端侧依赖。必须显式安装，不能依赖 Ultralytics 在运行时调用 `python -m pip` 自动补依赖；`uv` 创建的虚拟环境可能没有 pip，且非 Python 端侧也不应理解 Python SDK 的 extras。
 
-首次调用 YOLOE 文本 prompt 时，Ultralytics 还会下载 `mobileclip_blt.ts` 文本编码权重，文件约 572MB。Python phone 会把它限制到 `runs/audio-chat/python-phone/vision-cache/`；正式联调前应让端侧完成这一次缓存下载，该权重属于端侧模型缓存，不提交到仓库。
+首次调用 YOLOE 文本 prompt 时，Ultralytics 还会下载 `mobileclip_blt.ts` 文本编码权重，文件约 572MB。Python phone 会把它限制到 `runs/realtime-agent/python-phone/vision-cache/`；正式联调前应让端侧完成这一次缓存下载，该权重属于端侧模型缓存，不提交到仓库。
 
 安装方式：
 
@@ -474,7 +474,7 @@ Python phone 端新增日志事件：
 | 模型路径缺失 | `command.failed`，message 写明缺失的环境变量或配置项。 |
 | `ultralytics` 未安装 | `command.failed`，提示在 Python phone 端安装 `requirements.vision.txt`。 |
 | YOLOE 文本依赖 `clip` 未安装 | 在调用 `get_text_pe()` 前失败，`command.failed` 提示安装 Python phone 端的 `requirements.vision.txt`，避免触发 Ultralytics 自动 pip 安装。 |
-| YOLOE 文本编码权重未缓存 | 首次运行会下载约 572MB 的 `mobileclip_blt.ts` 到 `runs/audio-chat/python-phone/vision-cache/`；联调前可先让 phone 端完成缓存，下载产物不提交。 |
+| YOLOE 文本编码权重未缓存 | 首次运行会下载约 572MB 的 `mobileclip_blt.ts` 到 `runs/realtime-agent/python-phone/vision-cache/`；联调前可先让 phone 端完成缓存，下载产物不提交。 |
 | 单帧解码失败 | 记录 WARNING，继续等待下一帧。 |
 | 单帧推理异常 | 记录 ERROR，连续失败达到阈值后 `command.failed`。 |
 | 30 秒未找到物体 | `command.completed(found=false)`。 |
@@ -575,9 +575,9 @@ uv run python -m pytest examples/dev-support/tests/python_phone/test_phone_yolo_
 启动顺序：
 
 ```bash
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
-uv run audio-chat.web.open --serve
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run realtime-agent.web.open --serve
 ```
 
 环境变量：
@@ -622,8 +622,8 @@ export YOLOE_MODEL_PATH=/absolute/path/to/yoloe-11l-seg.pt
 
 - 状态：已完成
 - 目标：把旧 mock 行为收口到统一 `VisionProcessor` 后面，保证真实 YOLO 和 mock 共享 peer video 调用链。
-- 实现：新增 `audio_chat_python_phone_mock.vision` 子模块，包含 `config.py`、`processor.py`、`result.py`；`PeerVideoReceiver` 改为调用 `VisionProcessor.prepare_session()`、`process_frame()` 和 `build_final_result()`。
-- 文件：`examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/*`、`peer_video.py`、`phone_mock.py`。
+- 实现：新增 `realtime_agent_python_phone_mock.vision` 子模块，包含 `config.py`、`processor.py`、`result.py`；`PeerVideoReceiver` 改为调用 `VisionProcessor.prepare_session()`、`process_frame()` 和 `build_final_result()`。
+- 文件：`examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/vision/*`、`peer_video.py`、`phone_mock.py`。
 - 验证：新增 `test_vision_processor_mock_provider_keeps_existing_result_shape`，确认 mock provider 不依赖真实模型且结果结构保持兼容。
 
 ### 阶段 2：迁移红绿灯 YOLO
@@ -658,9 +658,9 @@ export YOLOE_MODEL_PATH=/absolute/path/to/yoloe-11l-seg.pt
 
 ```bash
 uv pip install -e ".[vision,gui]"
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
-uv run audio-chat.web.open --serve
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run realtime-agent.web.open --serve
 ```
 
 - 观察点：Python phone 日志应出现 `vision.model.loaded`、`vision.frame.processed`；server `command-events.jsonl` 的 `peer.video.frame_processed` 应包含 `source=yolo` 或 `source=yoloe`；最终 Task result 不应再是 `source=mock`。

@@ -5,8 +5,8 @@ import logging
 
 import pytest
 
-from audio_chat.protocol import Event
-from audio_chat_python_phone_mock.remote_task import RemoteCommand, RemoteTaskReporter
+from realtime_agent.protocol import Event
+from realtime_agent_python_phone_mock.remote_task import RemoteCommand, RemoteTaskReporter
 
 
 def test_remote_task_reporter_sends_command_events_and_logs(caplog: pytest.LogCaptureFixture) -> None:

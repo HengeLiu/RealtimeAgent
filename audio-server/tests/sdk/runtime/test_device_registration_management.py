@@ -5,10 +5,10 @@ import json
 
 from aiohttp.test_utils import make_mocked_request
 
-from audio_chat.app import AudioChatApp
-from audio_chat.control import ControlService, DeviceAuthenticator
-from audio_chat.protocol import Event
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp
+from realtime_agent.control import ControlService, DeviceAuthenticator
+from realtime_agent.protocol import Event
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 class FakeConnection:
@@ -52,7 +52,7 @@ def _registration(user_id: str, device_id: str, *, token: str = "token-ok") -> E
             "name": f"测试设备 {device_id}",
             "device_name": device_id,
             "client_type": "python-playback",
-            "sdk_version": "audio-chat-test",
+            "sdk_version": "realtime-agent-test",
             "auth": {"mode": "static_token", "token": token},
             "supports": {"sensors": [], "actuators": []},
         },
@@ -145,12 +145,12 @@ def test_unsupported_active_device_set_policy_fails_with_clear_reason() -> None:
 def test_debug_api_returns_device_and_user_snapshots() -> None:
     """测试目标：验证 Debug API 可以解释设备、用户和注册失败状态。
 
-    测试方法：通过 AudioChatHttpServer 的 handler 读取 mocked request。
+    测试方法：通过 RealtimeAgentHttpServer 的 handler 读取 mocked request。
     预期结果：`/api/debug/devices/{device_id}` 和 `/api/debug/users/{user_id}` 返回诊断字段。
     """
 
-    audio_app = AudioChatApp()
-    server = AudioChatHttpServer(audio_app)
+    audio_app = RealtimeAgentApp()
+    server = RealtimeAgentHttpServer(audio_app)
     audio_app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -161,7 +161,7 @@ def test_debug_api_returns_device_and_user_snapshots() -> None:
                 "name": "浏览器调试设备",
                 "device_name": "debug",
                 "client_type": "python-playback",
-                "sdk_version": "audio-chat-test",
+                "sdk_version": "realtime-agent-test",
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
             },

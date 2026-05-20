@@ -5,17 +5,17 @@ import re
 from pathlib import Path
 import tomllib
 
-from audio_chat.config import load_yaml_config
+from realtime_agent.config import load_yaml_config
 
 
 def test_public_extension_contract_exports_required_developer_api() -> None:
     """测试目标：确认 SDK 对业务开发者暴露设计文档要求的公开扩展面。
 
-    测试方法：从 `audio_chat` 顶层包读取 Tool、Task、设备上下文、资产引用和错误对象。
+    测试方法：从 `realtime_agent` 顶层包读取 Tool、Task、设备上下文、资产引用和错误对象。
     预期结果：所有公开对象都可以从顶层导入，开发者不需要理解内部服务模块路径。
     """
 
-    import audio_chat
+    import realtime_agent
 
     required_names = [
         "BaseTool",
@@ -30,11 +30,11 @@ def test_public_extension_contract_exports_required_developer_api() -> None:
         "DeviceSnapshot",
         "AssetRef",
         "ArtifactRef",
-        "AudioChatError",
+        "RealtimeAgentError",
         "ErrorCode",
     ]
 
-    missing = [name for name in required_names if not hasattr(audio_chat, name)]
+    missing = [name for name in required_names if not hasattr(realtime_agent, name)]
     assert missing == []
 
 
@@ -45,8 +45,8 @@ def test_tool_and_task_auto_discovery_contract_exists() -> None:
     预期结果：server 启动不依赖业务开发者在 app.py 中手动注册 Tool / Task。
     """
 
-    tools = importlib.import_module("audio_chat.tools")
-    tasks = importlib.import_module("audio_chat.tasks")
+    tools = importlib.import_module("realtime_agent.tools")
+    tasks = importlib.import_module("realtime_agent.tasks")
 
     for name in [
         "ToolAutoDiscovery",
@@ -79,7 +79,7 @@ def test_task_engine_state_machine_and_signal_bridge_contract() -> None:
     预期结果：长任务状态只能按设计文档声明的路径流转，TaskSignal 可回流消息、通知和 Agent。
     """
 
-    tasks = importlib.import_module("audio_chat.tasks")
+    tasks = importlib.import_module("realtime_agent.tasks")
 
     assert set(tasks.TASK_STATES) == {"started", "finished", "cancelled", "failed"}
     assert ("started", "finished") in tasks.TASK_TRANSITIONS
@@ -99,7 +99,7 @@ def test_output_service_notification_coordinator_contract_exists() -> None:
     预期结果：Task / Tool 不直接操作播放队列，而是通过通知协调层进入 Output Router 和 Playback Arbiter。
     """
 
-    output = importlib.import_module("audio_chat.output")
+    output = importlib.import_module("realtime_agent.output")
 
     for name in ["NotificationCoordinator", "NotificationRequest", "NotificationDecision"]:
         assert hasattr(output, name), name
@@ -113,7 +113,7 @@ def test_turn_recorder_and_run_artifact_contract_exists(tmp_path) -> None:
     预期结果：回放和排障不只依赖日志文本，而能读取稳定 runs 产物。
     """
 
-    observability = importlib.import_module("audio_chat.observability")
+    observability = importlib.import_module("realtime_agent.observability")
     assert hasattr(observability, "TurnRecorder")
 
     recorder = observability.TurnRecorder(runs_root=tmp_path / "runs")
@@ -151,7 +151,7 @@ def test_yaml_config_matches_design_discovery_and_dev_checks_contract() -> None:
 def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
     """测试目标：确认 README 只写真实 CLI，设计文档中未来 CLI 明确标注。
 
-    测试方法：读取 pyproject entry point 并扫描 README / docs 的 audio-chat 点分命令。
+    测试方法：读取 pyproject entry point 并扫描 README / docs 的 realtime-agent 点分命令。
     预期结果：当前入口可执行；未落地入口必须在附近标注后续目标或未落地。
     """
 
@@ -160,7 +160,7 @@ def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
     scripts = set(pyproject["project"]["scripts"])
     readme_commands = {
         command
-        for command in re.findall(r"\baudio-chat\.[a-z0-9.-]+", (root / "README.md").read_text(encoding="utf-8"))
+        for command in re.findall(r"\brealtime-agent\.[a-z0-9.-]+", (root / "README.md").read_text(encoding="utf-8"))
         if not command.endswith(".yaml")
     }
     assert readme_commands <= scripts
@@ -171,8 +171,8 @@ def test_release_gate_docs_and_readme_cli_are_truthful() -> None:
     for path in sorted((root / "docs").glob("*.md")):
         lines = path.read_text(encoding="utf-8").splitlines()
         for index, line in enumerate(lines):
-            for command in re.findall(r"\baudio-chat\.[a-z0-9.-]+", line):
-                if not command.removeprefix("audio-chat.").startswith(prefixes) or command in scripts:
+            for command in re.findall(r"\brealtime-agent\.[a-z0-9.-]+", line):
+                if not command.removeprefix("realtime-agent.").startswith(prefixes) or command in scripts:
                     continue
                 window = "\n".join(lines[max(0, index - 6) : min(len(lines), index + 3)])
                 if not any(marker in window for marker in markers):

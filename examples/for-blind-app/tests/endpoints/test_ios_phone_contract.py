@@ -15,7 +15,7 @@ def test_ios_phone_reference_contains_task_registry_contract() -> None:
     预期结果：iOS 端可通过 contract 验收 phone task 事件链，不需要 Python 代码复用。
     """
 
-    runtime = (IOS_ROOT / "AudioChatPhone/Core/AudioChatEndpointRuntime.swift").read_text(encoding="utf-8")
+    runtime = (IOS_ROOT / "RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift").read_text(encoding="utf-8")
     config = (IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8")
 
     for token in [
@@ -26,7 +26,7 @@ def test_ios_phone_reference_contains_task_registry_contract() -> None:
         "command.completed",
         "DirectCameraSinkServer",
         "direct.camera_sink",
-        "audio_chat.direct_frame.v1",
+        "realtime_agent.direct_frame.v1",
     ]:
         assert token in runtime + config
 

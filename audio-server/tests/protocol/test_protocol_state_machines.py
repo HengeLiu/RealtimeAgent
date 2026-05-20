@@ -1,6 +1,6 @@
 import pytest
 
-from audio_chat.protocol_state import (
+from realtime_agent.protocol_state import (
     validate_command_event_sequence,
     validate_input_stream_event_sequence,
     validate_output_stream_event_sequence,

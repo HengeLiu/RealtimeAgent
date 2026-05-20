@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.tasks import BaseTask, TaskContext, TaskSignal
+from realtime_agent.tasks import BaseTask, TaskContext, TaskSignal
 
 
 class TimerTask(BaseTask):

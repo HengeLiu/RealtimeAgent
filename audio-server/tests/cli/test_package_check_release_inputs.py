@@ -17,7 +17,7 @@ def test_package_check_covers_current_entry_points(tmp_path: Path) -> None:
 
     report = tmp_path / "package-check.json"
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        ["uv", "run", "realtime-agent.sdk.package-check", "--report", str(report)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,

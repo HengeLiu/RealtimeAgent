@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.errors import ErrorCode
-from audio_chat.skills import SkillError, SkillService
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.errors import ErrorCode
+from realtime_agent.skills import SkillError, SkillService
 
 
 def _write_skill(root, name: str, body: str) -> None:
@@ -58,8 +58,8 @@ def test_read_skill_tool_returns_structured_error_for_missing_skill(tmp_path) ->
     预期结果：ToolResult.ok 为 False，错误码为 not_found。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             skill_enabled=True,
             skill_roots=(str(tmp_path / "skills"),),
@@ -98,8 +98,8 @@ tool_allowlist:
 只能读 Skill。
 """,
     )
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             skill_enabled=True,
             skill_roots=(str(root),),

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
-from audio_chat.conversation import ConversationMemoryService
+from realtime_agent.conversation import ConversationMemoryService
 
 
 def _read_jsonl(path):
@@ -100,7 +100,7 @@ def test_conversation_memory_service_skips_compaction_when_summarizer_fails(tmp_
             message={"session_id": device_id, "role": "user", "content": f"第 {index} 条对话"},
         )
 
-    with caplog.at_level(logging.ERROR, logger="audio_chat.runs"):
+    with caplog.at_level(logging.ERROR, logger="realtime_agent.runs"):
         summary = service.compact_if_needed(user_id=user_id, device_id=device_id, threshold=6, keep_latest=2)
 
     device_dir = tmp_path / "runs" / user_id / device_id

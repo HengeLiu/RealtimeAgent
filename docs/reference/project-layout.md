@@ -1,31 +1,31 @@
 # 项目结构
 
-`audio-chat` 仓库围绕 server-side Python SDK、应用样例、端侧通讯 SDK、开发支持组件、测试和文档组织。
+`realtime-agent` 仓库围绕 server-side Python SDK、应用样例、端侧通讯 SDK、开发支持组件、测试和文档组织。
 
 ```text
-audio-server/audio_chat/
+audio-server/realtime_agent/
 audio-device/
 examples/
 docs/
 testdata/
 ```
 
-## audio_chat
+## realtime_agent
 
 SDK 主体代码，Python 导入名是：
 
 ```python
-import audio_chat
+import realtime_agent
 ```
 
 主要模块：
 
 ```text
-audio-server/audio_chat/
+audio-server/realtime_agent/
   agent_core/       # Text / Realtime Agent Core
   asset/            # 资产服务
   audio_pipeline/   # 音频链路
-  cli/              # audio-chat.* 命令
+  cli/              # realtime-agent.* 命令
   control/          # 设备注册、控制事件、事件路由
   output/           # 输出服务和播放仲裁
   stream/           # stream 生命周期和字节传输
@@ -42,9 +42,9 @@ audio-server/audio_chat/
 
 ```text
 audio-device/
-  python/      # audio_chat_device，Python 端侧通讯 SDK
-  typescript/  # @audio-chat/device，浏览器 / Node / Electron 端侧通讯 SDK
-  swift/       # AudioChatDeviceKit，iOS / macOS 协议模型和 stream codec
+  python/      # realtime_agent_device，Python 端侧通讯 SDK
+  typescript/  # @realtime-agent/device，浏览器 / Node / Electron 端侧通讯 SDK
+  swift/       # RealtimeAgentDeviceKit，iOS / macOS 协议模型和 stream codec
   kotlin/      # Android / JVM 协议模型和 stream codec
   c/           # ESP32 / 嵌入式 Linux 最小协议核心
 ```
@@ -74,7 +74,7 @@ examples/for-blind-app/
 
 `examples/dev-support/` 放开发/测试支持组件。它们在代码和协议层通常会注册成普通
 Device，用来验证注册、事件、stream、播放、视觉任务和系统测试回放；但它们不是
-AudioChat SDK 预设的正式设备类型，也不要求开发者真实设备按这些目录结构实现。
+RealtimeAgent SDK 预设的正式设备类型，也不要求开发者真实设备按这些目录结构实现。
 
 开发/测试支持组件：
 
@@ -115,7 +115,7 @@ audio-server/docs/
 
 ```bash
 uv run python -m pytest
-uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
 ```
 
 ## testdata

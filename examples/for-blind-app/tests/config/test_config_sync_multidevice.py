@@ -22,7 +22,7 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--output-dir",
             str(output_dir),
             "--server-url",
@@ -64,22 +64,22 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
         assert config["server_url"] == "http://10.1.2.3:8765"
         assert config["auth"] == {"mode": "static_token", "token": "token-device-api-upgrade"}
         assert config["supports"]
-    assert "AUDIO_CHAT_SERVER_URL=http://10.1.2.3:8765" in esp32_env
-    assert "AUDIO_CHAT_AUTH_MODE=static_token" in esp32_env
-    assert "AUDIO_CHAT_AUTH_TOKEN=token-device-api-upgrade" in esp32_env
-    assert "AUDIO_CHAT_SUPPORTS=" in esp32_env
+    assert "REALTIME_AGENT_SERVER_URL=http://10.1.2.3:8765" in esp32_env
+    assert "REALTIME_AGENT_AUTH_MODE=static_token" in esp32_env
+    assert "REALTIME_AGENT_AUTH_TOKEN=token-device-api-upgrade" in esp32_env
+    assert "REALTIME_AGENT_SUPPORTS=" in esp32_env
 
 
 def test_esp32_config_command_copies_generated_env(tmp_path: Path) -> None:
     """测试目标：验证 ESP32 config 命令能把同步产物复制到参考端侧目录。
 
-    测试方法：先运行 config.sync 到临时目录，再调用 `audio-chat.esp32.config`。
+    测试方法：先运行 config.sync 到临时目录，再调用 `realtime-agent.esp32.config`。
     预期结果：输出 env 文件存在，且内容保持 server_url/user_id/device_id。
     """
 
     generated = tmp_path / "generated"
     subprocess.run(
-        ["uv", "run", "audio-chat.config.sync", "--output-dir", str(generated), "--user-id", "user-esp32"],
+        ["uv", "run", "realtime-agent.config.sync", "--output-dir", str(generated), "--user-id", "user-esp32"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -90,7 +90,7 @@ def test_esp32_config_command_copies_generated_env(tmp_path: Path) -> None:
         [
             "uv",
             "run",
-            "audio-chat.esp32.config",
+            "realtime-agent.esp32.config",
             "--source",
             str(generated / "esp32-s3.local.env"),
             "--output",
@@ -105,5 +105,5 @@ def test_esp32_config_command_copies_generated_env(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     text = output.read_text(encoding="utf-8")
-    assert "AUDIO_CHAT_USER_ID=user-esp32" in text
-    assert "AUDIO_CHAT_DEVICE_ID=dev-esp32-s3-001" in text
+    assert "REALTIME_AGENT_USER_ID=user-esp32" in text
+    assert "REALTIME_AGENT_DEVICE_ID=dev-esp32-s3-001" in text

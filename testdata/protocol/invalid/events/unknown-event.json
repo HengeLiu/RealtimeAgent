@@ -1,5 +1,5 @@
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_unknown",
   "event_name": "device.random.event",
   "timestamp_ms": 1,

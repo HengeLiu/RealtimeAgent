@@ -1,0 +1,40 @@
+$schema: ../../../../audio-server/realtime_agent/spec/realtime-agent-device.schema.json
+
+device_id: dev-python-playback-glass
+user_id: user-system-test
+name: Python 回放眼镜
+device_name: python-playback-glass
+client_type: python-playback-glass
+sdk_version: realtime-agent-python-playback-glass-0.1.0
+
+runtime:
+  platform: python
+  language: python
+  version: 0.1.0
+
+supports:
+  sensors:
+    - type: rgb
+      modes: [single, continuous]
+      default:
+        format: jpeg
+        frequency_hz: 1
+        sample_count: 1
+        duration_seconds: 0
+        width: 960
+        height: 540
+      external:
+        facing: environment
+  actuators:
+    - type: vibrator
+      commands: [vibrate]
+      default:
+        default_pattern: short
+
+properties:
+  debug.playback: true
+  audio.input.sample_rate: 16000
+  audio.input.channels: 1
+  audio.input.chunk_ms: 20
+  realtime_agent.audio_input: sensor.mic
+  realtime_agent.audio_output: actuator.speaker

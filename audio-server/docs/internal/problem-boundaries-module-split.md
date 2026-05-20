@@ -13,7 +13,7 @@
 
 ## 总体原则
 
-1. **SDK 核心只提供通用平台能力**：设备协议、数据流、资产、上下文、工具/任务运行时、输出仲裁、观测能力可以在 `audio_chat`；具体业务工具和任务留在应用目录。
+1. **SDK 核心只提供通用平台能力**：设备协议、数据流、资产、上下文、工具/任务运行时、输出仲裁、观测能力可以在 `realtime_agent`；具体业务工具和任务留在应用目录。
 2. **模型只能看到经过编译的上下文**：系统提示、历史消息、记忆、工具描述、Skill 文档、任务状态都应通过 Context 层进入模型请求。
 3. **设备只理解协议和能力，不理解 Agent Core**：端侧只处理注册、能力声明、控制事件、数据流和输出播放，不依赖模型实现。
 4. **Task 是长程 Action，不是 Agent Core 内部函数**：Task 需要标准生命周期、可取消、可观测、可恢复，而不是一段被工具临时启动的业务代码。
@@ -191,7 +191,7 @@ Knowledge --> Events
 
 ## 需要立即执行的硬约束
 
-1. `audio_chat` SDK 核心包不能新增应用业务 Task fallback。
+1. `realtime_agent` SDK 核心包不能新增应用业务 Task fallback。
 2. Agent Core 不能直接拼接散落 prompt，必须逐步迁入 `prompts` 和 ContextCompiler。
 3. 工具和 Task 不能直接操作 WebSocket、设备连接对象或 provider SDK 对象。
 4. 端侧参考工程不能依赖 Agent Core 内部类或 prompt 语义。

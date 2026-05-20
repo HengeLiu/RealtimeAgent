@@ -8,6 +8,7 @@
 - 麦克风和扬声器属于系统音频主链路，不作为普通 `supports` capability 暴露。
 
 Tool / Task 通过 typed facade 使用设备能力。
+当前新 Tool 可以优先试用 typed facade，只有确实缺少公开 facade 时再补 SDK 能力面。
 
 ## 设备能力文件
 
@@ -37,7 +38,7 @@ supports:
 ## Tool 示例
 
 ```python
-from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 asset = await context.devices.sensors.rgb.one(
@@ -50,7 +51,7 @@ return ToolResult.success(data={"asset_id": asset.asset_id, "uri": asset.uri})
 ## Task 示例
 
 ```python
-from audio_chat import BaseTask, TaskContext
+from realtime_agent import BaseTask, TaskContext
 
 
 async for frame in context.devices.sensors.rgb.stream(fps=1, sample_count=3):
@@ -82,10 +83,11 @@ await context.output.say("已完成画面分析", priority="normal")
 ## 常用命令和观察点
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
-uv run audio-chat.server.run --app-name for-blind-app
-uv run audio-chat.web.open --serve
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
+uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.web.open --serve
 ```
 
 for-blind-app 默认运行产物位于 `examples/for-blind-app/audio-server/runs/`。一次
-session 的资产事件位于 `<runs_root>/<user_id>/<device_id>/assets.jsonl`。
+session 的资产事件位于 `<runs_root>/<user_id>/<device_id>/assets.jsonl`，等价结构也可按
+`runs/<app_name>/<user_id>/<device_id>/assets.jsonl` 理解。

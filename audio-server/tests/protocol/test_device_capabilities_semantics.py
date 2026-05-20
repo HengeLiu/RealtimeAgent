@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat import AudioChatApp, AudioChatConfig, Event, StreamChunk
-from audio_chat.device_capabilities import (
+from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, Event, StreamChunk
+from realtime_agent.device_capabilities import (
     compile_device_capabilities_file,
     compile_internal_routes_from_supports,
     compile_registration_payload,
@@ -37,11 +37,11 @@ class FakeConnection:
 def test_browser_device_capability_file_compiles_to_routes() -> None:
     """测试目标：验证浏览器设备能力文件能编译成协议订阅。
 
-    测试方法：读取 `device.audio-chat.yaml`，检查结构化能力和编译产物。
+    测试方法：读取 `device.realtime-agent.yaml`，检查结构化能力和编译产物。
     预期结果：设备开发者不需要手写 routes，也能得到 RGB 和 haptic 订阅。
     """
 
-    result = compile_device_capabilities_file("examples/dev-support/devices/browser-glass/device.audio-chat.yaml")
+    result = compile_device_capabilities_file("examples/dev-support/devices/browser-glass/device.realtime-agent.yaml")
 
     assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
     routes = compile_internal_routes_from_supports(result["payload"]["supports"])
@@ -71,7 +71,7 @@ def test_structured_supports_compile_to_routes(tmp_path: Path) -> None:
     `sensor.*` / `actuator.*` 能力和订阅。
     """
 
-    capability_file = tmp_path / "device.audio-chat.yaml"
+    capability_file = tmp_path / "device.realtime-agent.yaml"
     capability_file.write_text(
         """
 device_id: dev-structured-glass
@@ -107,9 +107,9 @@ supports:
     result = compile_device_capabilities_file(capability_file)
 
     assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
-    support_ids = set(result["payload"]["properties"]["audio_chat.support_ids"])
+    support_ids = set(result["payload"]["properties"]["realtime_agent.support_ids"])
     assert support_ids == {"sensor.rgb", "sensor.imu", "actuator.haptic"}
-    defaults = result["payload"]["properties"]["audio_chat.support_defaults"]
+    defaults = result["payload"]["properties"]["realtime_agent.support_defaults"]
     assert defaults["sensor.rgb"]["frequency_hz"] == 2
     assert defaults["sensor.rgb"]["formats"] == ["jpeg"]
     assert defaults["sensor.imu"]["frequency_hz"] == 50
@@ -127,7 +127,7 @@ def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path
     预期结果：设备收到事件，debug 快照中能看到编译后的订阅和 support id。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = FakeConnection("dev-browser")
     payload = compile_registration_payload(
         {
@@ -159,7 +159,7 @@ def test_registration_accepts_supports_and_routes_compiled_events(tmp_path: Path
     snapshot = app.control_service.build_device_snapshot("dev-browser")
     assert len(connection.events) == 1
     assert connection.events[-1].stream_type == "sensor.rgb"
-    assert snapshot["properties"]["audio_chat.support_ids"] == ["sensor.rgb"]
+    assert snapshot["properties"]["realtime_agent.support_ids"] == ["sensor.rgb"]
     assert {"event": "control.audio_session.*"} in compile_internal_routes_from_supports(payload["supports"])
     assert {"event": "stream.control.*", "filter": {"stream_type": "sensor.rgb"}} in compile_internal_routes_from_supports(payload["supports"])
 
@@ -171,7 +171,7 @@ def test_registration_compiles_audio_session_route_for_browser_wake_flow(tmp_pat
     预期结果：设备仍能收到 `control.audio_session.open.requested`，避免浏览器端拿不到 sessionId。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = FakeConnection("dev-browser")
     payload = compile_registration_payload(
         {
@@ -253,7 +253,7 @@ def test_sensor_tof_stream_is_stored_as_asset(tmp_path: Path) -> None:
     预期结果：Asset Service 能按 `sensor.tof` 查询到最新资产。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-tof", stream_type="sensor.tof")
     app.write_input_chunk(
         StreamChunk(
@@ -279,9 +279,9 @@ def test_device_validate_cli_outputs_compiled_json(capsys) -> None:
     预期结果：输出包含注册 payload 和编译后的 routes。
     """
 
-    from audio_chat.cli.device import validate
+    from realtime_agent.cli.device import validate
 
-    validate(["examples/dev-support/devices/browser-glass/device.audio-chat.yaml", "--json"])
+    validate(["examples/dev-support/devices/browser-glass/device.realtime-agent.yaml", "--json"])
 
     output = json.loads(capsys.readouterr().out)
     assert output["payload"]["device_id"] == "dev-browser-glass-001"

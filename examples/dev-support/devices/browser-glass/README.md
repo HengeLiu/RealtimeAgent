@@ -1,6 +1,6 @@
 # browser-glass 开发支持组件
 
-`browser-glass` 是 AudioChat SDK 的浏览器端开发/测试支持组件，用来在本地模拟眼镜侧
+`browser-glass` 是 RealtimeAgent SDK 的浏览器端开发/测试支持组件，用来在本地模拟眼镜侧
 感知和执行能力。它在代码实现和协议交互上会注册为普通 Device，因此可以真实覆盖
 设备注册、控制事件、stream、播放和 peer video；但它不是 SDK 定义的正式设备类型，
 也不要求开发者真实眼镜设备使用浏览器实现。
@@ -22,13 +22,13 @@
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 打开页面时使用 CLI 的本地 HTTP 模式：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 当前页面通过 ES module 导入仓库内的 TypeScript Device SDK。`--serve` 会启动一个
@@ -45,7 +45,7 @@ origin，需要重新选择和授权样例目录。
 ## 协议口径
 
 页面在协议层注册为普通 Device。新的推荐入口是
-[device.audio-chat.yaml](device.audio-chat.yaml)，它声明该开发支持组件模拟的传感器和执行器：
+[device.realtime-agent.yaml](device.realtime-agent.yaml)，它声明该开发支持组件模拟的传感器和执行器：
 
 1. `device_id`
 2. `user_id`
@@ -56,7 +56,7 @@ origin，需要重新选择和授权样例目录。
 本地校验：
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
 ```
 
 校验命令会按 `supports` 生成注册事件所需的内部路由。页面运行时也按同一口径提交

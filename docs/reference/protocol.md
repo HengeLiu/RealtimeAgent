@@ -1,6 +1,6 @@
-# audio-chat 通讯协议
+# realtime-agent 通讯协议
 
-本文档是 `audio-chat` 标准通讯协议的正式入口。协议用于连接 Server SDK 和 Device SDK；普通应用开发者不需要把事件作为主要编程模型，但 SDK 维护者、端侧 SDK 实现者和回归测试必须以本文档、schema 和 golden fixtures 为准。
+本文档是 `realtime-agent` 标准通讯协议的正式入口。协议用于连接 Server SDK 和 Device SDK；普通应用开发者不需要把事件作为主要编程模型，但 SDK 维护者、端侧 SDK 实现者和回归测试必须以本文档、schema 和 golden fixtures 为准。
 
 ## 目标和非目标
 
@@ -24,7 +24,7 @@
 当前协议版本固定为：
 
 ```text
-audio-chat.v1
+realtime-agent.v1
 ```
 
 所有控制事件和 stream header 都必须携带该版本。新增不兼容字段、删除字段、修改事件语义或改变二进制帧格式时，必须先走本文档的协议变更流程。
@@ -46,7 +46,7 @@ audio-chat.v1
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_xxx",
   "event_name": "command.completed",
   "timestamp_ms": 1760000000000,
@@ -63,7 +63,7 @@ audio-chat.v1
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `version` | 是 | 协议版本，当前为 `audio-chat.v1`。 |
+| `version` | 是 | 协议版本，当前为 `realtime-agent.v1`。 |
 | `event_id` | 是 | 事件唯一 ID。 |
 | `event_name` | 是 | 事件名，必须在公共事件名清单中。 |
 | `timestamp_ms` | 是 | 事件产生时间，毫秒时间戳。 |
@@ -243,7 +243,7 @@ header 字段：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `version` | 是 | `audio-chat.v1`。 |
+| `version` | 是 | `realtime-agent.v1`。 |
 | `user_id` | 是 | 用户 ID。 |
 | `session_id` | 是 | 会话或设备会话 ID。 |
 | `stream_id` | 是 | stream ID。 |
@@ -265,7 +265,7 @@ header 字段：
 标准错误码位于：
 
 ```text
-audio-server/audio_chat/spec/audio-chat-error-codes.yaml
+audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 ```
 
 当前错误类型包括：
@@ -292,17 +292,17 @@ audio-server/audio_chat/spec/audio-chat-error-codes.yaml
 
 | 协议对象 | 代码位置 | 说明 |
 | --- | --- | --- |
-| 事件信封 | `audio-server/audio_chat/protocol.py` | server runtime 的事件对象和校验入口。 |
-| 设备能力 schema | `audio-server/audio_chat/spec/audio-chat-device.schema.json` | 设备注册和能力声明约束。 |
-| 事件 schema | `audio-server/audio_chat/spec/audio-chat-event.schema.json` | 公共事件名和事件信封约束。 |
-| stream schema | `audio-server/audio_chat/spec/audio-chat-stream.schema.json` | stream header 字段约束。 |
-| AsyncAPI | `audio-server/audio_chat/spec/audio-chat-asyncapi.yaml` | WebSocket 通道和事件说明。 |
-| 错误码 | `audio-server/audio_chat/spec/audio-chat-error-codes.yaml` | 标准错误码和建议处理。 |
-| Server control | `audio-server/audio_chat/control/service.py` | 设备注册、连接状态、事件路由。 |
-| Server stream | `audio-server/audio_chat/stream/service.py` | stream 生命周期和 chunk 处理。 |
-| Server output | `audio-server/audio_chat/output/service.py` | 输出播放仲裁和 speaker stream。 |
-| Context API | `audio-server/audio_chat/context.py` | Tool / Task 调用设备能力的入口。 |
-| Python Device SDK | `audio-device/python/src/audio_chat_device/` | 端侧事件、builder、client、stream codec。 |
+| 事件信封 | `audio-server/realtime_agent/protocol.py` | server runtime 的事件对象和校验入口。 |
+| 设备能力 schema | `audio-server/realtime_agent/spec/realtime-agent-device.schema.json` | 设备注册和能力声明约束。 |
+| 事件 schema | `audio-server/realtime_agent/spec/realtime-agent-event.schema.json` | 公共事件名和事件信封约束。 |
+| stream schema | `audio-server/realtime_agent/spec/realtime-agent-stream.schema.json` | stream header 字段约束。 |
+| AsyncAPI | `audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml` | WebSocket 通道和事件说明。 |
+| 错误码 | `audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml` | 标准错误码和建议处理。 |
+| Server control | `audio-server/realtime_agent/control/service.py` | 设备注册、连接状态、事件路由。 |
+| Server stream | `audio-server/realtime_agent/stream/service.py` | stream 生命周期和 chunk 处理。 |
+| Server output | `audio-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker stream。 |
+| Context API | `audio-server/realtime_agent/context.py` | Tool / Task 调用设备能力的入口。 |
+| Python Device SDK | `audio-device/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
 | TypeScript Device SDK | `audio-device/typescript/src/` | 浏览器 / Node 侧协议模型。 |
 | Swift Device SDK | `audio-device/swift/` | Swift 协议模型和 stream codec。 |
 | Kotlin Device SDK | `audio-device/kotlin/` | Kotlin / JVM 协议模型和 stream codec。 |
@@ -315,11 +315,11 @@ audio-server/audio_chat/spec/audio-chat-error-codes.yaml
 
 ```text
 docs/reference/protocol.md
-audio-server/audio_chat/spec/audio-chat-device.schema.json
-audio-server/audio_chat/spec/audio-chat-event.schema.json
-audio-server/audio_chat/spec/audio-chat-stream.schema.json
-audio-server/audio_chat/spec/audio-chat-asyncapi.yaml
-audio-server/audio_chat/spec/audio-chat-error-codes.yaml
+audio-server/realtime_agent/spec/realtime-agent-device.schema.json
+audio-server/realtime_agent/spec/realtime-agent-event.schema.json
+audio-server/realtime_agent/spec/realtime-agent-stream.schema.json
+audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml
+audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 testdata/protocol/
 ```
 

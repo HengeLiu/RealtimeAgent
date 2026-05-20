@@ -5,10 +5,10 @@ import socket
 
 from aiohttp import ClientSession
 
-from audio_chat.protocol import Event
-from audio_chat_python_phone_mock.peer_video import PeerVideoReceiver
-from audio_chat_python_phone_mock.remote_task import RemoteCommand, RemoteTaskReporter
-from audio_chat_python_phone_mock.vision.result import VisionFrameResult
+from realtime_agent.protocol import Event
+from realtime_agent_python_phone_mock.peer_video import PeerVideoReceiver
+from realtime_agent_python_phone_mock.remote_task import RemoteCommand, RemoteTaskReporter
+from realtime_agent_python_phone_mock.vision.result import VisionFrameResult
 
 
 def test_peer_video_receiver_receives_frame_and_completes_mock_result() -> None:

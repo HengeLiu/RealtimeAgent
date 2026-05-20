@@ -23,7 +23,7 @@ def test_protocol_document_exists_and_declares_required_sections() -> None:
     text = PROTOCOL_DOC.read_text(encoding="utf-8")
 
     required_markers = [
-        "# audio-chat 通讯协议",
+        "# realtime-agent 通讯协议",
         "## 目标和非目标",
         "## 协议版本",
         "## 通道",
@@ -52,15 +52,15 @@ def test_protocol_document_maps_protocol_assets_to_code() -> None:
 
     text = PROTOCOL_DOC.read_text(encoding="utf-8")
     required_paths = [
-        "audio-server/audio_chat/protocol.py",
-        "audio-server/audio_chat/spec/audio-chat-device.schema.json",
-        "audio-server/audio_chat/spec/audio-chat-event.schema.json",
-        "audio-server/audio_chat/spec/audio-chat-stream.schema.json",
-        "audio-server/audio_chat/spec/audio-chat-asyncapi.yaml",
-        "audio-server/audio_chat/spec/audio-chat-error-codes.yaml",
-        "audio-server/audio_chat/control/service.py",
-        "audio-server/audio_chat/stream/service.py",
-        "audio-device/python/src/audio_chat_device/",
+        "audio-server/realtime_agent/protocol.py",
+        "audio-server/realtime_agent/spec/realtime-agent-device.schema.json",
+        "audio-server/realtime_agent/spec/realtime-agent-event.schema.json",
+        "audio-server/realtime_agent/spec/realtime-agent-stream.schema.json",
+        "audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml",
+        "audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml",
+        "audio-server/realtime_agent/control/service.py",
+        "audio-server/realtime_agent/stream/service.py",
+        "audio-device/python/src/realtime_agent_device/",
         "audio-device/typescript/src/",
         "audio-device/swift/",
         "audio-device/kotlin/",

@@ -5,7 +5,7 @@
   "auth": {
     "mode": "disabled"
   },
-  "protocol_version": "audio-chat.v1",
+  "protocol_version": "realtime-agent.v1",
   "properties": {
     "audio.aec": "replaceable",
     "audio.wake_word": "manual"

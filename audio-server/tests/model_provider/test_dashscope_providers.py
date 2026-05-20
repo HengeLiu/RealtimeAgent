@@ -6,17 +6,17 @@ from typing import Any
 
 import pytest
 
-from audio_chat.agent_core.providers import (
+from realtime_agent.agent_core.providers import (
     AsrProviderConfig,
-    TextModelProviderConfig,
+    VisionModelProviderConfig,
     build_asr_provider,
-    build_text_model,
+    build_vision_model,
     run_provider_call_with_policy,
 )
-from audio_chat.agent_core.realtime import QwenOmniRealtimeAdapter, RealtimeProviderCallbacks, RealtimeProviderConfig
-from audio_chat.output import TtsProviderConfig
-from audio_chat.output.service import build_tts_provider
-from audio_chat.protocol import StreamChunk
+from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter, RealtimeProviderCallbacks, RealtimeProviderConfig
+from realtime_agent.output import TtsProviderConfig
+from realtime_agent.output.service import build_tts_provider
+from realtime_agent.protocol import StreamChunk
 from tests.model_provider.artifacts import elapsed_ms, write_provider_result, write_wav
 
 EXPECTED_TEXT = "你好"
@@ -43,7 +43,7 @@ def test_dashscope_asr_provider_transcribes_expected_sample() -> None:
     if not ASR_SAMPLE.exists():
         _generate_asr_sample()
     expected = ASR_EXPECTED.read_text(encoding="utf-8").strip()
-    model = os.getenv("AUDIO_CHAT_ASR_MODEL", "paraformer-realtime-v2")
+    model = os.getenv("REALTIME_AGENT_ASR_MODEL", "paraformer-realtime-v2")
     provider, downgrade = build_asr_provider(
         AsrProviderConfig(
             provider="dashscope",
@@ -94,8 +94,8 @@ def test_dashscope_streaming_tts_real_session_returns_pcm_and_metrics() -> None:
     预期结果：音频非空，metrics 包含首音频延迟，artifact 中记录 WAV 路径。
     """
 
-    model = os.getenv("AUDIO_CHAT_TTS_MODEL", "cosyvoice-v3-flash")
-    voice = os.getenv("AUDIO_CHAT_TTS_VOICE", "longanhuan")
+    model = os.getenv("REALTIME_AGENT_TTS_MODEL", "cosyvoice-v3-flash")
+    voice = os.getenv("REALTIME_AGENT_TTS_VOICE", "longanhuan")
     provider, downgrade = build_tts_provider(
         TtsProviderConfig(
             provider="dashscope",
@@ -141,18 +141,18 @@ def test_dashscope_streaming_tts_real_session_returns_pcm_and_metrics() -> None:
     )
 
 
-def test_dashscope_compatible_text_model_smoke_returns_text_delta() -> None:
-    """测试目标：验证真实 DashScope OpenAI-compatible Text provider 可定位 smoke。
+def test_dashscope_compatible_vision_model_smoke_returns_delta() -> None:
+    """测试目标：验证真实 DashScope OpenAI-compatible Vision provider 可定位 smoke。
 
-    测试方法：使用 `DASHSCOPE_API_KEY` 构建 text model，发送一条短消息并读取首个文本 delta。
+    测试方法：使用 `DASHSCOPE_API_KEY` 构建 vision model，发送一条短消息并读取首个文本 delta。
     预期结果：返回非空文本；失败时 pytest 输出 provider、model、endpoint 和 timeout。
     """
 
-    model = os.getenv("AUDIO_CHAT_TEXT_MODEL", "qwen-plus")
+    model = os.getenv("REALTIME_AGENT_VISION_MODEL", "qwen-plus")
     timeout_seconds = 10
     max_retries = 1
-    provider, downgrade = build_text_model(
-        TextModelProviderConfig(
+    provider, downgrade = build_vision_model(
+        VisionModelProviderConfig(
             provider="dashscope-compatible",
             model=model,
             allow_mock_fallback=False,
@@ -172,7 +172,7 @@ def test_dashscope_compatible_text_model_smoke_returns_text_delta() -> None:
         operation=lambda: next(iter(provider.stream_text("请只回复：ok"))),
     )
     write_provider_result(
-        "text-result.json",
+        "vision-result.json",
         {
             **diagnostic.as_dict(),
             "first_token_latency_ms": diagnostic.elapsed_ms if diagnostic.ok else None,
@@ -190,18 +190,18 @@ def test_dashscope_compatible_text_model_smoke_returns_text_delta() -> None:
     assert result
 
 
-def test_dashscope_compatible_text_model_tool_call_smoke() -> None:
-    """测试目标：验证真实 DashScope-compatible Text provider 的 tool calling 输出可解析。
+def test_dashscope_compatible_vision_model_tool_call_smoke() -> None:
+    """测试目标：验证真实 DashScope-compatible Vision provider 的 tool calling 输出可解析。
 
     测试方法：只暴露一个 `lookup_weather` 工具，并要求模型必须调用该工具查询上海天气。
     预期结果：stream 结束后返回 SDK 内部统一 `tool_call` 字典，artifact 记录工具名、参数和延时。
     """
 
-    model = os.getenv("AUDIO_CHAT_TEXT_MODEL", "qwen-plus")
+    model = os.getenv("REALTIME_AGENT_VISION_MODEL", "qwen-plus")
     timeout_seconds = 15
     max_retries = 1
-    provider, downgrade = build_text_model(
-        TextModelProviderConfig(
+    provider, downgrade = build_vision_model(
+        VisionModelProviderConfig(
             provider="dashscope-compatible",
             model=model,
             allow_mock_fallback=False,
@@ -246,12 +246,12 @@ def test_dashscope_compatible_text_model_tool_call_smoke() -> None:
     first_tool_call = tool_calls[0] if tool_calls else None
     ok = bool(diagnostic.ok and first_tool_call and first_tool_call.get("name") == "lookup_weather")
     write_provider_result(
-        "text-tool-call-result.json",
+        "vision-tool-call-result.json",
         {
             **diagnostic.as_dict(),
             "ok": ok,
             "item_count": len(items),
-            "text_delta_count": sum(1 for item in items if isinstance(item, str) and item),
+            "vision_delta_count": sum(1 for item in items if isinstance(item, str) and item),
             "tool_call_count": len(tool_calls),
             "tool_call": first_tool_call,
             "error": diagnostic.error if diagnostic.error else ("" if ok else "lookup_weather tool_call not found"),
@@ -281,8 +281,8 @@ def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
     audio_done: list[dict[str, Any]] = []
     config = RealtimeProviderConfig(
         provider="qwen",
-        model=os.getenv("AUDIO_CHAT_REALTIME_MODEL", "qwen3.5-omni-plus-realtime"),
-        voice=os.getenv("AUDIO_CHAT_REALTIME_VOICE", "Tina"),
+        model=os.getenv("REALTIME_AGENT_REALTIME_MODEL", "qwen3.5-omni-plus-realtime"),
+        voice=os.getenv("REALTIME_AGENT_REALTIME_VOICE", "Tina"),
     )
     provider = QwenOmniRealtimeAdapter(config)
     callbacks = RealtimeProviderCallbacks(
@@ -293,7 +293,7 @@ def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
     )
 
     started = time.monotonic()
-    realtime_error = ""
+    omni_error = ""
     try:
         if not ASR_SAMPLE.exists():
             _generate_asr_sample()
@@ -309,15 +309,15 @@ def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
                 final=True,
             )
         )
-        deadline = time.monotonic() + float(os.getenv("AUDIO_CHAT_REALTIME_SMOKE_TIMEOUT", "12"))
+        deadline = time.monotonic() + float(os.getenv("REALTIME_AGENT_REALTIME_SMOKE_TIMEOUT", "12"))
         while time.monotonic() < deadline and not audio_outputs and not _has_provider_error(records):
             time.sleep(0.25)
         provider.close(user_id="integration-user", reason="smoke_done")
     except Exception as exc:  # noqa: BLE001
-        realtime_error = f"{type(exc).__name__}: {exc}"
+        omni_error = f"{type(exc).__name__}: {exc}"
         write_provider_result(
             "realtime-result.json",
-            _realtime_result(config=config, records=records, audio_outputs=audio_outputs, audio_done=audio_done, started=started, error=realtime_error),
+            _realtime_result(config=config, records=records, audio_outputs=audio_outputs, audio_done=audio_done, started=started, error=omni_error),
         )
         pytest.fail(
             f"provider=qwen model={config.model} endpoint={config.websocket_url} timeout=provider_sdk "
@@ -326,7 +326,7 @@ def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
 
     write_provider_result(
         "realtime-result.json",
-        _realtime_result(config=config, records=records, audio_outputs=audio_outputs, audio_done=audio_done, started=started, error=realtime_error),
+        _realtime_result(config=config, records=records, audio_outputs=audio_outputs, audio_done=audio_done, started=started, error=omni_error),
     )
     assert records
     assert not _has_provider_error(records)
@@ -338,8 +338,8 @@ def _generate_asr_sample() -> None:
     provider, downgrade = build_tts_provider(
         TtsProviderConfig(
             provider="dashscope",
-            model=os.getenv("AUDIO_CHAT_TTS_MODEL", "cosyvoice-v3-flash"),
-            voice=os.getenv("AUDIO_CHAT_TTS_VOICE", "longanhuan"),
+            model=os.getenv("REALTIME_AGENT_TTS_MODEL", "cosyvoice-v3-flash"),
+            voice=os.getenv("REALTIME_AGENT_TTS_VOICE", "longanhuan"),
             sample_rate_hz=16000,
             allow_mock_fallback=False,
         )

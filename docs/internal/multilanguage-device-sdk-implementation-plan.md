@@ -3,7 +3,7 @@
 更新时间：2026-05-15
 
 当前状态：Phase 1 到 Phase 8 的最小主线已落地。协议 schema 和黄金样例位于
-`audio-server/audio_chat/spec/` 与 `testdata/protocol/`；多语言 SDK 位于
+`audio-server/realtime_agent/spec/` 与 `testdata/protocol/`；多语言 SDK 位于
 `audio-device/`，目录名已从早期计划中的 `sdks/` 收敛为 `audio-device/`，与
 `audio-server/` 对应；Python phone、browser-glass、Python playback glass 等开发/测试支持组件已按当前协议迁移。
 
@@ -65,7 +65,7 @@ skinparam componentStyle rectangle
 ### 4.2 工作项
 
 1. 盘点 server 侧控制事件定义。
-2. 盘点 `audio-chat-device.schema.json` 当前字段。
+2. 盘点 `realtime-agent-device.schema.json` 当前字段。
 3. 盘点 `/ws/control` 注册、心跳、事件路由逻辑。
 4. 盘点 `/ws/stream` chunk 编解码逻辑。
 5. 盘点参考端：
@@ -104,12 +104,12 @@ docs/internal/device-protocol-inventory.md
 ### 5.2 建议文件
 
 ```text
-audio-server/audio_chat/spec/
-  audio-chat-device.schema.json
-  audio-chat-event.schema.json
-  audio-chat-stream.schema.json
-  audio-chat-asyncapi.yaml
-  audio-chat-error-codes.yaml
+audio-server/realtime_agent/spec/
+  realtime-agent-device.schema.json
+  realtime-agent-event.schema.json
+  realtime-agent-stream.schema.json
+  realtime-agent-asyncapi.yaml
+  realtime-agent-error-codes.yaml
 
 testdata/protocol/
   devices/
@@ -133,10 +133,10 @@ testdata/protocol/
 
 ### 5.3 工作项
 
-1. 新增 `audio-chat-event.schema.json`。
-2. 新增 `audio-chat-stream.schema.json`。
-3. 新增 `audio-chat-error-codes.yaml`。
-4. 新增 `audio-chat-asyncapi.yaml`，描述：
+1. 新增 `realtime-agent-event.schema.json`。
+2. 新增 `realtime-agent-stream.schema.json`。
+3. 新增 `realtime-agent-error-codes.yaml`。
+4. 新增 `realtime-agent-asyncapi.yaml`，描述：
    - `/ws/control`
    - `/ws/stream`
    - 注册事件
@@ -179,7 +179,7 @@ audio-server/tests/protocol/test_stream_chunk_codec_contract.py
 ```text
 audio-device/python/
   pyproject.toml
-  src/audio_chat_device/
+  src/realtime_agent_device/
     __init__.py
     client.py
     device.py
@@ -198,7 +198,7 @@ audio-device/python/
 ### 6.3 API 范围
 
 - `DeviceBuilder`
-- `AudioChatDeviceClient`
+- `RealtimeAgentDeviceClient`
 - `on_command()`
 - `on_stream_open()`
 - `send_event()`
@@ -215,8 +215,8 @@ audio-device/python/
 优先从以下文件抽取逻辑：
 
 ```text
-examples/dev-support/devices/python-playback-glass/audio_chat_python_playback_glass/protocol_client.py
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/phone_mock.py
+examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/phone_mock.py
 ```
 
 ### 6.5 测试
@@ -228,7 +228,7 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 
 ### 6.6 验收标准
 
-- Python SDK 不导入 `AudioChatApp`、`ToolGateway`、`TaskEngine`。
+- Python SDK 不导入 `RealtimeAgentApp`、`ToolGateway`、`TaskEngine`。
 - Python playback glass 可切到 SDK 运行。
 - 注册、命令回执、RGB fixture 上传均可通过真实 aiohttp 测试 server。
 
@@ -302,14 +302,14 @@ node scripts/verify-golden-fixtures.mjs
 ```text
 audio-device/swift/
   Package.swift
-  Sources/AudioChatDeviceKit/
-    AudioChatDevice.swift
-    AudioChatDeviceClient.swift
-    AudioChatEvent.swift
-    AudioChatStreamChunk.swift
-    AudioChatErrors.swift
-    AudioChatDiagnostics.swift
-  Tests/AudioChatDeviceKitTests/
+  Sources/RealtimeAgentDeviceKit/
+    RealtimeAgentDevice.swift
+    RealtimeAgentDeviceClient.swift
+    RealtimeAgentEvent.swift
+    RealtimeAgentStreamChunk.swift
+    RealtimeAgentErrors.swift
+    RealtimeAgentDiagnostics.swift
+  Tests/RealtimeAgentDeviceKitTests/
     DeviceBuilderTests.swift
     EventCodecTests.swift
     StreamChunkTests.swift
@@ -319,9 +319,9 @@ audio-device/swift/
 ### 8.3 迁移对象
 
 ```text
-examples/for-blind-app/devices/native-ios-phone/AudioChatPhone/Core/AudioChatEvent.swift
-examples/for-blind-app/devices/native-ios-phone/AudioChatPhone/Core/StreamChunkCodec.swift
-examples/for-blind-app/devices/native-ios-phone/AudioChatPhone/Core/AudioChatEndpointRuntime.swift
+examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEvent.swift
+examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/StreamChunkCodec.swift
+examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift
 ```
 
 ### 8.4 测试
@@ -334,7 +334,7 @@ swift test
 iOS 示例端额外验证：
 
 ```bash
-uv run audio-chat.ios.build-sim
+uv run realtime-agent.ios.build-sim
 ```
 
 ### 8.5 验收标准
@@ -355,13 +355,13 @@ uv run audio-chat.ios.build-sim
 audio-device/kotlin/
   build.gradle.kts
   settings.gradle.kts
-  src/main/kotlin/io/audiochat/device/
-    AudioChatDevice.kt
-    AudioChatDeviceClient.kt
-    AudioChatEvent.kt
-    AudioChatStreamChunk.kt
-    AudioChatErrors.kt
-  src/test/kotlin/io/audiochat/device/
+  src/main/kotlin/io/realtimeagent/device/
+    RealtimeAgentDevice.kt
+    RealtimeAgentDeviceClient.kt
+    RealtimeAgentEvent.kt
+    RealtimeAgentStreamChunk.kt
+    RealtimeAgentErrors.kt
+  src/test/kotlin/io/realtimeagent/device/
     DeviceBuilderTest.kt
     EventCodecTest.kt
     StreamChunkTest.kt
@@ -401,17 +401,17 @@ cd audio-device/kotlin
 ```text
 audio-device/c/
   CMakeLists.txt
-  include/audio_chat_device/
-    audio_chat_device.h
-    audio_chat_event.h
-    audio_chat_stream.h
-    audio_chat_error.h
-    audio_chat_transport.h
+  include/realtime_agent_device/
+    realtime_agent_device.h
+    realtime_agent_event.h
+    realtime_agent_stream.h
+    realtime_agent_error.h
+    realtime_agent_transport.h
   src/
-    audio_chat_device.c
-    audio_chat_event.c
-    audio_chat_stream.c
-    audio_chat_error.c
+    realtime_agent_device.c
+    realtime_agent_event.c
+    realtime_agent_stream.c
+    realtime_agent_error.c
   tests/
     test_device.c
     test_event.c
@@ -441,7 +441,7 @@ ctest --test-dir audio-device/c/build --output-on-failure
 ESP32 dry-run：
 
 ```bash
-uv run audio-chat.esp32.build --dry-run
+uv run realtime-agent.esp32.build --dry-run
 ```
 
 ### 10.5 验收标准
@@ -477,7 +477,7 @@ uv run audio-chat.esp32.build --dry-run
 ```bash
 uv run python -m pytest examples/dev-support/tests -q
 uv run python -m pytest examples/for-blind-app/tests -q
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 涉及 iOS / ESP32 的改动必须说明验证层级：
@@ -526,7 +526,7 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 | SDK | 渠道 | 第一版建议 |
 | --- | --- | --- |
 | Python | PyPI | 先发 `0.1.0a1` 或内部包。 |
-| TypeScript | npm | 先发 scoped 包 `@audio-chat/device`。 |
+| TypeScript | npm | 先发 scoped 包 `@realtime-agent/device`。 |
 | Swift | Git tag + Swift Package Manager | 先用 Git URL 引入。 |
 | Kotlin / Java | Maven Central 或 GitHub Packages | 先内部发布，再上 Maven Central。 |
 | C | 源码包 + ESP-IDF component | 先随仓库发布，再评估 Conan/vcpkg。 |
@@ -567,8 +567,8 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 
 建议第一轮只做 M1 + M2 的最小闭环：
 
-1. 新增 `audio-chat-event.schema.json`。
-2. 新增 `audio-chat-stream.schema.json`。
+1. 新增 `realtime-agent-event.schema.json`。
+2. 新增 `realtime-agent-stream.schema.json`。
 3. 提取 8 到 12 个黄金样例。
 4. 从 Python playback glass 抽出 stream chunk codec。
 5. 建立 `audio-device/python`。
@@ -611,10 +611,10 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 - 目标：把协议定义变成多语言 SDK 的共同输入。
 - 实现：新增事件 schema、stream schema、错误码表、AsyncAPI 草案和 `testdata/protocol/` 黄金样例；新增测试验证设备样例、事件样例和 stream 二进制帧。
 - 文件：
-  - `audio-server/audio_chat/spec/audio-chat-event.schema.json`
-  - `audio-server/audio_chat/spec/audio-chat-stream.schema.json`
-  - `audio-server/audio_chat/spec/audio-chat-error-codes.yaml`
-  - `audio-server/audio_chat/spec/audio-chat-asyncapi.yaml`
+  - `audio-server/realtime_agent/spec/realtime-agent-event.schema.json`
+  - `audio-server/realtime_agent/spec/realtime-agent-stream.schema.json`
+  - `audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml`
+  - `audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml`
   - `testdata/protocol/`
   - `audio-server/tests/protocol/test_protocol_schema_examples.py`
   - `audio-server/tests/protocol/test_stream_chunk_codec_contract.py`
@@ -628,25 +628,25 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 
 - 状态：已完成第一轮最小闭环。
 - 目标：把现有 Python 参考端中可复用的协议逻辑抽成官方基准 SDK。
-- 实现：新增 `audio-device/python`，包含 `DeviceBuilder`、`AudioChatDeviceClient`、事件信封、stream chunk 编解码、命令回执 helper、stream 请求 helper 和诊断快照；Python playback glass 的 stream chunk 编解码已切到 `audio_chat_device.StreamChunkCodec`。
+- 实现：新增 `audio-device/python`，包含 `DeviceBuilder`、`RealtimeAgentDeviceClient`、事件信封、stream chunk 编解码、命令回执 helper、stream 请求 helper 和诊断快照；Python playback glass 的 stream chunk 编解码已切到 `realtime_agent_device.StreamChunkCodec`。
 - 文件：
   - `audio-device/python/`
-  - `examples/dev-support/devices/python-playback-glass/audio_chat_python_playback_glass/protocol_client.py`
+  - `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py`
   - `pyproject.toml`
 - 验证：
   - `uv run python -m pytest audio-device/python/tests -q`，结果 `8 passed`。
   - `uv run python -m pytest examples/dev-support/tests/python_playback_glass -q`，结果 `8 passed`。
-- 风险：Python playback glass 目前优先迁移了协议 codec 和 URL helper；完整替换为 `AudioChatDeviceClient` 主循环可以作为后续清理，不影响当前真实 WebSocket 回放能力。
+- 风险：Python playback glass 目前优先迁移了协议 codec 和 URL helper；完整替换为 `RealtimeAgentDeviceClient` 主循环可以作为后续清理，不影响当前真实 WebSocket 回放能力。
 
 ### 阶段 3：TypeScript / JavaScript SDK
 
 - 状态：已完成第一轮可验证实现。
 - 目标：覆盖浏览器和 Node 端侧，替代 browser-glass 中手写事件信封、设备声明、WebSocket URL 和 stream chunk 编解码。
-- 实现：新增 `audio-device/typescript`，提供 `AudioChatEvent`、`DeviceBuilder`、`StreamChunkCodec` 和 `AudioChatDeviceClient`；browser-glass 已通过 `examples/dev-support/devices/browser-glass/sdk/audio-chat-device-browser.js` re-export 正式 SDK，并在注册、控制连接、事件构造、stream 连接和 chunk 编解码中复用 SDK。
+- 实现：新增 `audio-device/typescript`，提供 `RealtimeAgentEvent`、`DeviceBuilder`、`StreamChunkCodec` 和 `RealtimeAgentDeviceClient`；browser-glass 已通过 `examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js` re-export 正式 SDK，并在注册、控制连接、事件构造、stream 连接和 chunk 编解码中复用 SDK。
 - 文件：
   - `audio-device/typescript/`
   - `examples/dev-support/devices/browser-glass/index.html`
-  - `examples/dev-support/devices/browser-glass/sdk/audio-chat-device-browser.js`
+  - `examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js`
   - `examples/dev-support/tests/browser/test_web_glass_endpoint.py`
 - 验证：
   - `cd audio-device/typescript && npm test`，结果 `5 passed`。
@@ -657,17 +657,17 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 
 - 状态：已完成第一轮可验证实现。
 - 目标：抽出现有 iOS 参考端协议核心，形成 Swift Package。
-- 实现：新增 `audio-device/swift` Swift Package，提供 `AudioChatEvent`、`AudioChatDevice`、`AudioChatStreamChunk` 和 `AudioChatStreamChunkCodec`，并读取包内黄金样例测试。
+- 实现：新增 `audio-device/swift` Swift Package，提供 `RealtimeAgentEvent`、`RealtimeAgentDevice`、`RealtimeAgentStreamChunk` 和 `RealtimeAgentStreamChunkCodec`，并读取包内黄金样例测试。
 - 文件：`audio-device/swift/`。
 - 验证：
   - `cd audio-device/swift && swift test`，结果 `3 passed`。
-- 风险：iOS Xcode 工程尚未实际接入本地 Swift Package；下一步需要在 Xcode 项目中替换现有 `Core/AudioChatEvent.swift` 和 `Core/StreamChunkCodec.swift`，并跑 `uv run audio-chat.ios.build-sim`。
+- 风险：iOS Xcode 工程尚未实际接入本地 Swift Package；下一步需要在 Xcode 项目中替换现有 `Core/RealtimeAgentEvent.swift` 和 `Core/StreamChunkCodec.swift`，并跑 `uv run realtime-agent.ios.build-sim`。
 
 ### 阶段 5：Kotlin / Java SDK
 
 - 状态：代码已完成，未本机执行。
 - 目标：覆盖 Android 和 JVM 网关，Kotlin-first，同时保持 Java 可调用的静态入口。
-- 实现：新增 `audio-device/kotlin`，包含 Gradle 配置、`AudioChatDevice`、`AudioChatEvent`、`StreamChunk`、`StreamChunkCodec` 和 Kotlin 测试草案。
+- 实现：新增 `audio-device/kotlin`，包含 Gradle 配置、`RealtimeAgentDevice`、`RealtimeAgentEvent`、`StreamChunk`、`StreamChunkCodec` 和 Kotlin 测试草案。
 - 文件：`audio-device/kotlin/`。
 - 验证：未执行。本机缺少 Java Runtime 和 Gradle，`java -version` 返回 “Unable to locate a Java Runtime”，`gradle --version` 返回 command not found。
 - 待验收：安装 JDK/Gradle 后执行 `cd audio-device/kotlin && gradle test` 或补 Gradle wrapper 后执行 `./gradlew test`。
@@ -680,18 +680,18 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 - 文件：
   - `audio-device/c/`
   - `examples/for-blind-app/devices/native-esp32-glass/firmware/main/CMakeLists.txt`
-  - `examples/for-blind-app/devices/native-esp32-glass/firmware/main/audio_chat_reference_main.c`
+  - `examples/for-blind-app/devices/native-esp32-glass/firmware/main/realtime_agent_reference_main.c`
 - 验证：
   - `cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/build && ctest --test-dir audio-device/c/build --output-on-failure`，结果 `100% tests passed, 0 tests failed out of 1`。
-- 风险：未执行 ESP-IDF 真机构建和串口监视；需要在安装 ESP-IDF 后继续跑 `uv run audio-chat.esp32.build --dry-run`。
+- 风险：未执行 ESP-IDF 真机构建和串口监视；需要在安装 ESP-IDF 后继续跑 `uv run realtime-agent.esp32.build --dry-run`。
 
 ### 阶段 7：开发支持组件和参考端迁移
 
 - 状态：部分完成。
 - 已完成：
   - Python playback glass 复用 Python SDK stream codec。
-  - Python phone mock / preview 开发支持组件的事件、URL 和 stream chunk 模型迁移到 `audio_chat_device`；其共享 Python 网络基类也已切到 `AudioChatDeviceClient`。
-  - browser-glass 复用 TypeScript SDK 的 `AudioChatDeviceClient`、`AudioChatEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。
+  - Python phone mock / preview 开发支持组件的事件、URL 和 stream chunk 模型迁移到 `realtime_agent_device`；其共享 Python 网络基类也已切到 `RealtimeAgentDeviceClient`。
+  - browser-glass 复用 TypeScript SDK 的 `RealtimeAgentDeviceClient`、`RealtimeAgentEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。
   - ESP32-S3 skeleton 接入 C SDK source/header。
 - 未完成：
   - iOS Xcode 工程尚未引入 Swift Package。

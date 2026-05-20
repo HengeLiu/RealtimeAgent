@@ -1,6 +1,6 @@
 # iOS phone reference endpoint
 
-本目录提供一个最小可运行的 iOS phone 参考端。它用于验证 audio-chat 的
+本目录提供一个最小可运行的 iOS phone 参考端。它用于验证 realtime-agent 的
 `control.device.register.requested`、事件订阅、`/ws/stream` 二进制 stream、
 `sensor.rgb` 上传、测试 `sensor.mic` 上传和 `actuator.speaker` 输出消费。
 同时，它内置一个本地相机 WebSocket 接收服务，用于接收 ESP32 端直连推送的
@@ -12,15 +12,15 @@ event / stream 协议和 server 协作，不新增 RPC，不把媒体字节放�
 ## 目录结构
 
 ```text
-AudioChatPhone.xcodeproj
-AudioChatPhone/
-  AudioChatPhoneApp.swift
+RealtimeAgentPhone.xcodeproj
+RealtimeAgentPhone/
+  RealtimeAgentPhoneApp.swift
   ContentView.swift
   Core/
     AppConfig.swift
-    AudioChatEvent.swift
+    RealtimeAgentEvent.swift
     StreamChunkCodec.swift
-    AudioChatEndpointRuntime.swift
+    RealtimeAgentEndpointRuntime.swift
     IPAddressProvider.swift
     DirectCameraFrameCodec.swift
     DirectWebSocketFrameParser.swift
@@ -40,7 +40,7 @@ App 启动时优先读取 bundle 内的 `AppConfig.json`，找不到时读取
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --output-dir examples/for-blind-app/audio-server/config/generated \
   --server-url http://127.0.0.1:8765 \
   --user-id user-endpoint-001
@@ -50,7 +50,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 cp examples/for-blind-app/audio-server/config/generated/ios-phone.local.json \
-  examples/for-blind-app/devices/native-ios-phone/AudioChatPhone/Resources/AppConfig.json
+  examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Resources/AppConfig.json
 ```
 
 `AppConfig.json` 字段语义和其他参考端一致：
@@ -64,7 +64,7 @@ cp examples/for-blind-app/audio-server/config/generated/ios-phone.local.json \
 - `properties`：声明仅用于日志和 debug 的硬件参数。
 
 直连相机接收服务启动后会把 `ws://<iPhone局域网IP>:9001/ws/camera` 写入注册
-properties。ESP32 端配置该地址后，可按 `audio_chat.direct_frame.v1` 推送 JPEG：
+properties。ESP32 端配置该地址后，可按 `realtime_agent.direct_frame.v1` 推送 JPEG：
 4 字节大端 JSON header 长度、JSON header、JPEG payload。header 中使用
 `stream_type=sensor.rgb`。iOS phone 不会绕过 server 直接参与对话，只缓存最新帧，
 并在收到 server 的 `sensor.rgb` 采集请求时通过 `/ws/stream` 上传。
@@ -72,7 +72,7 @@ properties。ESP32 端配置该地址后，可按 `audio_chat.direct_frame.v1` �
 如果本地启用 signed token：
 
 ```bash
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --auth-mode signed_token \
   --signed-token '<pairing-service-generated-token>' \
   --output-dir examples/for-blind-app/audio-server/config/generated
@@ -85,7 +85,7 @@ uv run audio-chat.config.sync \
 
 ```bash
 # 在项目根目录执行
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 确认 server 可访问：
@@ -99,14 +99,14 @@ curl http://127.0.0.1:8765/api/health
 直接打开工程：
 
 ```bash
-open examples/for-blind-app/devices/native-ios-phone/AudioChatPhone.xcodeproj
+open examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone.xcodeproj
 ```
 
-选择 `AudioChatPhone` scheme 和一个 iPhone Simulator 后运行。也可以命令行构建：
+选择 `RealtimeAgentPhone` scheme 和一个 iPhone Simulator 后运行。也可以命令行构建：
 
 ```bash
 cd examples/for-blind-app/devices/native-ios-phone
-xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
 页面中可执行：
@@ -148,5 +148,5 @@ uv run python -m pytest \
 
 ```bash
 cd examples/for-blind-app/devices/native-ios-phone
-xcodebuild -scheme AudioChatPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from aiohttp import web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -18,15 +18,15 @@ def test_cli_register_only_over_real_websocket_server(tmp_path: Path) -> None:
     """测试目标：验证 pytest 只从外部 CLI 驱动回放端侧连接真实 WebSocket server。
 
     测试方法：测试进程只负责启动 aiohttp server；回放端侧通过子进程
-    `python -m audio_chat_python_playback_glass run` 执行 `register_only` Case。
+    `python -m realtime_agent_python_playback_glass run` 执行 `register_only` Case。
     预期结果：CLI 退出码为 0，report.json 中 Case 通过。
     """
 
     import asyncio
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -47,7 +47,7 @@ def test_cli_register_only_over_real_websocket_server(tmp_path: Path) -> None:
                 [
                     sys.executable,
                     "-m",
-                    "audio_chat_python_playback_glass",
+                    "realtime_agent_python_playback_glass",
                     "run",
                     "--server-url",
                     f"http://127.0.0.1:{port}",

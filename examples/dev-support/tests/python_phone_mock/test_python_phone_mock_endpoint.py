@@ -5,10 +5,10 @@ from pathlib import Path
 
 from aiohttp import ClientSession, web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
-from audio_chat.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, new_id
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
+from realtime_agent.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, new_id
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 def test_python_phone_mock_registers_as_route_driven_endpoint(tmp_path: Path) -> None:
@@ -20,8 +20,8 @@ def test_python_phone_mock_registers_as_route_driven_endpoint(tmp_path: Path) ->
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -59,8 +59,8 @@ def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -153,20 +153,20 @@ def test_endpoint_reference_directories_exist() -> None:
 def test_python_phone_reference_uses_python_device_sdk() -> None:
     """测试目标：验证 Python phone 参考端已经迁移到端侧 SDK。
 
-    测试方法：静态读取 phone mock 源码，检查它导入 `audio_chat_device`，并且不再直接
-    依赖 server 主包的 `audio_chat.protocol`。
+    测试方法：静态读取 phone mock 源码，检查它导入 `realtime_agent_device`，并且不再直接
+    依赖 server 主包的 `realtime_agent.protocol`。
     预期结果：端侧事件和 stream chunk 模型来自 Python Device SDK，避免端侧绑定服务端内部包。
     """
 
     root = Path(__file__).resolve().parents[4]
     source_files = [
-        root / "examples/dev-support/devices/python-glass/audio_chat_python_glass/playback.py",
-        root / "examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/phone_mock.py",
-        root / "examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/playback_fallback.py",
-        root / "examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/remote_task.py",
+        root / "examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py",
+        root / "examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/phone_mock.py",
+        root / "examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/playback_fallback.py",
+        root / "examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/remote_task.py",
     ]
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
 
-    assert "from audio_chat_device import" in source
-    assert "audio_chat.protocol" not in source
-    assert "AudioChatDeviceClient" in source
+    assert "from realtime_agent_device import" in source
+    assert "realtime_agent.protocol" not in source
+    assert "RealtimeAgentDeviceClient" in source

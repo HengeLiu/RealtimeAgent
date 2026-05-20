@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>audio-chat browser-glass</title>
+  <title>realtime-agent browser-glass</title>
   <style>
     body { margin: 24px; padding-bottom: 260px; color: #172033; background: #f6f8fb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { background: #fff; border: 1px solid #d8dee8; border-radius: 8px; padding: 20px; }
@@ -44,7 +44,7 @@
 </head>
 <body>
   <main>
-    <h1>audio-chat browser-glass</h1>
+    <h1>realtime-agent browser-glass</h1>
     <p>浏览器设备示例：承担感知和执行角色，用于手动事件、真实麦克风、离线音频实时注入、摄像头/文件上传和下行播放测试。</p>
     <div class="row">
       <div><label for="serverUrl">Server URL</label><input id="serverUrl" /></div>
@@ -132,16 +132,16 @@
 
   <script type="module">
     import {
-      AudioChatDeviceClient,
-      AudioChatEvent,
+      RealtimeAgentDeviceClient,
+      RealtimeAgentEvent,
       DeviceBuilder,
       StreamChunk,
       StreamChunkCodec,
       newId as sdkNewId,
       wsUrl as sdkWsUrl,
-    } from "./sdk/audio-chat-device-browser.js";
+    } from "./sdk/realtime-agent-device-browser.js";
 
-    const PROTOCOL_VERSION = "audio-chat.v1";
+    const PROTOCOL_VERSION = "realtime-agent.v1";
     const SERVER_PRODUCER_ID = "server-main";
     const INPUT_RATE = 16000;
     const DEFAULT_CHUNK_MS = 20;
@@ -154,8 +154,8 @@
     const CAPTURE_PREVIEW_MIN_INTERVAL_MS = 500;
     const CAPTURE_THUMBNAIL_MIN_INTERVAL_MS = 1000;
     const CAPTURE_THUMBNAIL_MAX_COUNT = 8;
-    const BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1";
-    const SAMPLE_HANDLE_DB = "audio-chat.browser-glass.samples";
+    const BROWSER_CONFIG_STORAGE_KEY = "realtime-agent.browser-glass.v1";
+    const SAMPLE_HANDLE_DB = "realtime-agent.browser-glass.samples";
     const SAMPLE_HANDLE_STORE = "handles";
     const AUDIO_SAMPLE_DIR_KEY = "audio_sample_dir";
     const IMAGE_SAMPLE_DIR_KEY = "image_sample_dir";
@@ -318,7 +318,7 @@
 
     function buildPlaybackRecordCommand() {
       const args = [
-        "uv run python -m audio_chat_python_playback_glass record",
+        "uv run python -m realtime_agent_python_playback_glass record",
         "--runs-root", shellQuote(document.getElementById("recordRunsRoot").value || DEFAULT_RECORD_RUNS_ROOT),
         "--user-id", shellQuote(document.getElementById("userId").value || DEFAULT_USER_ID),
         "--device-id", shellQuote(currentDeviceId()),
@@ -746,7 +746,7 @@
 
     function event(event_name, payload = {}, extra = {}) {
       const deviceId = currentDeviceId();
-      return new AudioChatEvent({
+      return new RealtimeAgentEvent({
         eventName: event_name,
         userId: document.getElementById("userId").value,
         producerId: deviceId,
@@ -1084,7 +1084,7 @@
         ...payload,
         device_name: "browser-glass",
         client_type: "browser-glass",
-        sdk_version: "audio-chat-browser-glass-0.1.0",
+        sdk_version: "realtime-agent-browser-glass-0.1.0",
         auth: {mode: "disabled"},
         supports: DEVICE_SUPPORTS,
         properties: {
@@ -1092,8 +1092,8 @@
           "audio.aec": "browser_webrtc",
           "audio.input.sample_rate": INPUT_RATE,
           "audio.input.chunk_ms": DEFAULT_CHUNK_MS,
-          "audio_chat.audio_input": "sensor.mic",
-          "audio_chat.audio_output": "actuator.speaker",
+          "realtime_agent.audio_input": "sensor.mic",
+          "realtime_agent.audio_output": "actuator.speaker",
           "camera.facing": "environment",
           "device_role": "glass",
           "endpoint.role.glass": true,
@@ -1106,7 +1106,7 @@
 
     function createDeviceClient(deviceId) {
       const payload = buildRegistrationPayload(deviceId);
-      return new AudioChatDeviceClient({
+      return new RealtimeAgentDeviceClient({
         serverUrl: normalizeServerUrl(document.getElementById("serverUrl").value),
         device: {
           user_id: document.getElementById("userId").value,
@@ -1122,7 +1122,7 @@
       const controlUrl = wsUrl("/ws/control");
       log(`connect ${controlUrl}`);
       controlWs = deviceClient.connectControl();
-      controlWs.onmessage = (message) => handleControlEvent(AudioChatEvent.fromObject(JSON.parse(message.data)).toObject());
+      controlWs.onmessage = (message) => handleControlEvent(RealtimeAgentEvent.fromObject(JSON.parse(message.data)).toObject());
       controlWs.onerror = () => log("control ws error");
       controlWs.onclose = (evt) => {
         log(`control ws closed code=${evt.code} reason=${evt.reason || "-"}`);

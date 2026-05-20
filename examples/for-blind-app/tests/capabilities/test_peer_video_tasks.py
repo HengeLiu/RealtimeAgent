@@ -6,8 +6,8 @@ import json
 import sys
 from pathlib import Path
 
-from audio_chat import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event
+from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event
 
 
 APP_ROOT = Path(__file__).resolve().parents[2] / "audio-server"
@@ -44,7 +44,7 @@ class EagerPeerEndpoint(RecordingEndpoint):
     用于暴露 server 在创建订阅前下发命令导致早到回执丢失的竞态。
     """
 
-    def __init__(self, *, app: AudioChatApp, user_id: str, device_id: str, role: str) -> None:
+    def __init__(self, *, app: RealtimeAgentApp, user_id: str, device_id: str, role: str) -> None:
         super().__init__(user_id=user_id, device_id=device_id)
         self.app = app
         self.role = role
@@ -108,8 +108,8 @@ def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
         app = _app_with_peer_tasks(tmp_path)
         phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
         glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
-        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
 
         create_task = asyncio.create_task(
             app.task_engine.create(
@@ -227,8 +227,8 @@ def test_peer_video_task_keeps_eager_command_progress(tmp_path: Path) -> None:
         app = _app_with_peer_tasks(tmp_path)
         phone = EagerPeerEndpoint(app=app, user_id="user-peer", device_id="dev-phone", role="phone")
         glass = EagerPeerEndpoint(app=app, user_id="user-peer", device_id="dev-glass", role="glass")
-        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
 
         create_task = asyncio.create_task(
             app.task_engine.create(
@@ -273,8 +273,8 @@ def test_peer_video_task_waits_for_phone_vision_ready_before_starting_glass(tmp_
         app = _app_with_peer_tasks(tmp_path)
         phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
         glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
-        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
 
         create_task = asyncio.create_task(
             app.task_engine.create(
@@ -365,8 +365,8 @@ def test_peer_video_task_fails_when_phone_vision_ready_timeout(tmp_path: Path) -
         try:
             phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
             glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
-            _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-            _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+            _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+            _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
 
             create_task = asyncio.create_task(
                 app.task_engine.create(
@@ -423,8 +423,8 @@ def test_find_object_task_reports_not_found_after_peer_business_timeout(tmp_path
         try:
             phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
             glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
-            _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-            _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+            _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+            _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
 
             create_task = asyncio.create_task(
                 app.task_engine.create(
@@ -510,8 +510,8 @@ def test_peer_video_task_fails_when_phone_disconnects(tmp_path: Path) -> None:
         app = _app_with_peer_tasks(tmp_path)
         phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
         glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
-        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
 
         create_task = asyncio.create_task(
             app.task_engine.create(
@@ -543,8 +543,8 @@ def test_traffic_light_task_reports_green_with_high_priority_path(tmp_path: Path
         app = _app_with_peer_tasks(tmp_path)
         phone = RecordingEndpoint(user_id="user-peer", device_id="dev-phone")
         glass = RecordingEndpoint(user_id="user-peer", device_id="dev-glass")
-        _register_command_endpoint(app, phone, properties={"device_role": "phone", "audio_chat.audio_output": "actuator.speaker"})
-        _register_command_endpoint(app, glass, properties={"device_role": "glass", "audio_chat.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, phone, properties={"device_role": "phone", "realtime_agent.audio_output": "actuator.speaker"})
+        _register_command_endpoint(app, glass, properties={"device_role": "glass", "realtime_agent.audio_output": "actuator.speaker"})
         create_task = asyncio.create_task(
             app.task_engine.create(
                 task_type="traffic_light_task",
@@ -566,7 +566,7 @@ def test_traffic_light_task_reports_green_with_high_priority_path(tmp_path: Path
     asyncio.run(run())
 
 
-def _app_with_peer_tasks(tmp_path: Path) -> AudioChatApp:
+def _app_with_peer_tasks(tmp_path: Path) -> RealtimeAgentApp:
     """创建注册了 for-blind peer video Task 的测试 app。"""
 
     sys.path = [path for path in sys.path if path != str(APP_ROOT)]
@@ -575,13 +575,13 @@ def _app_with_peer_tasks(tmp_path: Path) -> AudioChatApp:
         if name == "capabilities" or name.startswith("capabilities."):
             sys.modules.pop(name, None)
     tasks_module = importlib.import_module("capabilities.tasks")
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     app.task_engine.register(tasks_module.FindObjectTask)
     app.task_engine.register(tasks_module.TrafficLightTask)
     return app
 
 
-def _register_command_endpoint(app: AudioChatApp, endpoint: RecordingEndpoint, *, properties: dict) -> None:
+def _register_command_endpoint(app: RealtimeAgentApp, endpoint: RecordingEndpoint, *, properties: dict) -> None:
     """注册一台支持 command.* 的测试端侧。"""
 
     response = app.register_device(
@@ -593,7 +593,7 @@ def _register_command_endpoint(app: AudioChatApp, endpoint: RecordingEndpoint, *
                 "device_id": endpoint.device_id,
                 "device_name": endpoint.device_id,
                 "client_type": "peer-video-test",
-                "sdk_version": "audio-chat-test",
+                "sdk_version": "realtime-agent-test",
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": [{"type": "vibrator"}]},
                 "properties": properties,
@@ -627,7 +627,7 @@ async def _wait_for_command(endpoint: RecordingEndpoint, count: int = 1) -> Even
     raise AssertionError(f"endpoint {endpoint.device_id} did not receive command {count}")
 
 
-async def _wait_for_task_state(app: AudioChatApp, task_id: str, state: str, *, timeout_seconds: float = 1.0):
+async def _wait_for_task_state(app: RealtimeAgentApp, task_id: str, state: str, *, timeout_seconds: float = 1.0):
     """等待 TaskEngine 查询到指定状态。"""
 
     deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -645,7 +645,7 @@ def _command_events(endpoint: RecordingEndpoint) -> list[Event]:
     return [event for event in endpoint.events if event.event_name == "command.requested"]
 
 
-async def _drive_successful_peer_video(app: AudioChatApp, phone: RecordingEndpoint, glass: RecordingEndpoint, result: dict) -> None:
+async def _drive_successful_peer_video(app: RealtimeAgentApp, phone: RecordingEndpoint, glass: RecordingEndpoint, result: dict) -> None:
     """驱动一次成功的 peer video 命令回执。"""
 
     phone_command = await _wait_for_command(phone)
@@ -687,7 +687,7 @@ async def _drive_successful_peer_video(app: AudioChatApp, phone: RecordingEndpoi
     await _complete_stop_command(app, glass)
 
 
-async def _complete_stop_command(app: AudioChatApp, endpoint: RecordingEndpoint) -> None:
+async def _complete_stop_command(app: RealtimeAgentApp, endpoint: RecordingEndpoint) -> None:
     """等待并完成端侧 stop 命令。"""
 
     stop_command = await _wait_for_command(endpoint, count=2)

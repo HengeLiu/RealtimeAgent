@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat.app import AudioChatApp
-from audio_chat.app_loader import load_app_config, load_config_as_app, resolve_app_launch
+from realtime_agent.app import RealtimeAgentApp
+from realtime_agent.app_loader import load_app_config, load_config_as_app, resolve_app_launch
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[4]
@@ -28,7 +28,7 @@ def test_app_name_loads_server_yaml_and_auto_registers_capabilities() -> None:
     """Starting by app_name should not require a manual app module."""
 
     config, launch = load_app_config("for-blind-app", app_root=AUDIO_ROOT / "examples")
-    app = AudioChatApp(config)
+    app = RealtimeAgentApp(config)
 
     assert config.app_name == "for-blind-app"
     assert config.app_dir == str(launch.app_dir)
@@ -62,7 +62,7 @@ def test_config_path_infers_app_name_from_server_yaml_parent() -> None:
     """A root server.yaml should infer app metadata without app_name in YAML."""
 
     config, launch = load_config_as_app(AUDIO_ROOT / "examples" / "for-blind-app" / "audio-server" / "server.yaml")
-    app = AudioChatApp(config)
+    app = RealtimeAgentApp(config)
 
     assert config.app_name == "for-blind-app"
     assert config.app_dir == str(launch.app_dir)
@@ -99,7 +99,7 @@ def test_server_start_dry_run_accepts_app_name(tmp_path) -> None:
         [
             "uv",
             "run",
-            "audio-chat.server.start",
+            "realtime-agent.server.start",
             "--app-name",
             "for-blind-app",
             "--pid-file",

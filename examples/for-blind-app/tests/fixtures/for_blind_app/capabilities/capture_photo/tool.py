@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.tools import BaseTool, ToolContext, ToolResult
+from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
 class CapturePhotoTool(BaseTool):

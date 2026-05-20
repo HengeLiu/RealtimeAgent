@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from audio_chat.control import ControlService, DeviceAuthenticator, HmacSignedTokenIssuer
-from audio_chat.protocol import Event
+from realtime_agent.control import ControlService, DeviceAuthenticator, HmacSignedTokenIssuer
+from realtime_agent.protocol import Event
 
 
 class FakeConnection:
@@ -44,7 +44,7 @@ def _registration(user_id: str, device_id: str, token: str) -> Event:
             "device_id": device_id,
             "device_name": device_id,
             "client_type": "python-playback",
-            "sdk_version": "audio-chat-test",
+            "sdk_version": "realtime-agent-test",
             "auth": {"mode": "signed_token", "token": token},
             "supports": {"sensors": [], "actuators": []},
         },
@@ -55,15 +55,15 @@ def _service(monkeypatch, *, now: float = 1_000.0) -> ControlService:
     """创建 signed_token 鉴权服务。
 
     测试目标：统一注入环境变量密钥和固定时间，避免测试受本机环境影响。
-    测试方法：通过 monkeypatch 设置 `AUDIO_CHAT_DEVICE_TOKEN_SECRET`。
+    测试方法：通过 monkeypatch 设置 `REALTIME_AGENT_DEVICE_TOKEN_SECRET`。
     预期结果：所有 token 校验都使用同一密钥和时间源。
     """
 
-    monkeypatch.setenv("AUDIO_CHAT_DEVICE_TOKEN_SECRET", "test-secret")
+    monkeypatch.setenv("REALTIME_AGENT_DEVICE_TOKEN_SECRET", "test-secret")
     return ControlService(
         authenticator=DeviceAuthenticator(
             mode="signed_token",
-            signed_token_secret_env="AUDIO_CHAT_DEVICE_TOKEN_SECRET",
+            signed_token_secret_env="REALTIME_AGENT_DEVICE_TOKEN_SECRET",
             token_clock_skew_seconds=60,
             now=lambda: now,
         )

@@ -1,6 +1,6 @@
-# audio-chat Context 与设备 API 设计说明
+# realtime-agent Context 与设备 API 设计说明
 
-本文是 `audio-chat` 当前 Context 设备 API 的架构契约和设计说明。它用于固定公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。它不是当前版本的开发操作手册；按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](../how-to/device-capability-development.md)。
+本文是 `realtime-agent` 当前 Context 设备 API 的架构契约和设计说明。它用于固定公开 API、Context 分层、设备能力结构、selector 规则和 AssetRef 边界。它不是当前版本的开发操作手册；按当前代码开发设备和能力时，请阅读 [设备注册与功能开发说明](../how-to/device-capability-development.md)。
 
 当前仓库以 typed device API 作为唯一推荐开发入口，例如
 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、
@@ -251,7 +251,7 @@ AssetRef(
 推荐结构如下：
 
 ```yaml
-$schema: ../../../../audio-server/audio_chat/spec/audio-chat-device.schema.json
+$schema: ../../../../audio-server/realtime_agent/spec/realtime-agent-device.schema.json
 
 device_id: dev-browser-glass-001
 user_id: user-demo-001
@@ -1077,7 +1077,7 @@ task_engine.create(
 ## 9. 推荐 Tool 示例
 
 ```python
-from audio_chat import BaseTool, ToolContext
+from realtime_agent import BaseTool, ToolContext
 
 
 class CapturePhotoTool(BaseTool):
@@ -1122,7 +1122,7 @@ class CapturePhotoTool(BaseTool):
 ## 10. 推荐 Task 示例
 
 ```python
-from audio_chat import BaseTask, TaskContext
+from realtime_agent import BaseTask, TaskContext
 
 
 class WatchFrontSceneTask(BaseTask):
@@ -1147,7 +1147,7 @@ class WatchFrontSceneTask(BaseTask):
 跨设备远程任务示例：
 
 ```python
-from audio_chat import BaseTask, TaskContext
+from realtime_agent import BaseTask, TaskContext
 
 
 class PhoneNavigationTask(BaseTask):
@@ -1417,6 +1417,9 @@ curl http://127.0.0.1:8765/api/debug/playback
 3. 端侧只实现 `stream.control.open.requested` / `stream.control.close.requested` 和 `command.*`。
 4. Tool 不直接发布底层事件，不直接请求资产服务，不直接提交音频输出。
 5. Task 的持续能力只能通过 `TaskDeviceFacade` 获取。
+
+从当前实现迁移到目标 API 时，先把业务代码收敛到 typed facade，再清理直接控制信令、
+硬编码设备 ID 和内部服务对象访问。
 
 ## 17. 一句话总结
 

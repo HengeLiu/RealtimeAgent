@@ -1,6 +1,6 @@
 # Task Core 开发计划
 
-本文基于 [task-core-design.md](task-core-design.md)，拆分 `audio-chat` Task Core 的实现步骤。目标是先建立稳定的 Task actor 内核，再迁移端侧命令、计时器和示例任务，避免后台执行、事件路由和业务任务改造同时落地导致排障困难。
+本文基于 [task-core-design.md](task-core-design.md)，拆分 `realtime-agent` Task Core 的实现步骤。目标是先建立稳定的 Task actor 内核，再迁移端侧命令、计时器和示例任务，避免后台执行、事件路由和业务任务改造同时落地导致排障困难。
 
 ## 1. 实施原则
 
@@ -33,7 +33,7 @@ stop
 
 改动范围：
 
-1. `audio-server/audio_chat/tasks.py`
+1. `audio-server/realtime_agent/tasks.py`
 2. `audio-server/tests/`
 3. 与 Task 状态相关的 runs 序列化和反序列化逻辑。
 
@@ -71,7 +71,7 @@ stop
 
 改动范围：
 
-1. `audio-server/audio_chat/tasks.py`
+1. `audio-server/realtime_agent/tasks.py`
 2. 示例应用中的 `BaseTask` 子类。
 3. 相关单元测试。
 
@@ -115,8 +115,8 @@ stop
 
 改动范围：
 
-1. `audio-server/audio_chat/tasks.py`
-2. `audio-server/audio_chat/tools.py` 中 `TaskStartTool` 相关测试。
+1. `audio-server/realtime_agent/tasks.py`
+2. `audio-server/realtime_agent/tools.py` 中 `TaskStartTool` 相关测试。
 3. `audio-server/tests/`。
 
 具体改动：
@@ -152,8 +152,8 @@ stop
 
 改动范围：
 
-1. `audio-server/audio_chat/tasks.py`
-2. `audio-server/audio_chat/app.py`
+1. `audio-server/realtime_agent/tasks.py`
+2. `audio-server/realtime_agent/app.py`
 3. runs 记录和测试。
 
 具体改动：
@@ -193,8 +193,8 @@ stop
 
 改动范围：
 
-1. `audio-server/audio_chat/app.py`
-2. `audio-server/audio_chat/tools.py`
+1. `audio-server/realtime_agent/app.py`
+2. `audio-server/realtime_agent/tools.py`
 3. `examples/for-blind-app/audio-server/capabilities/tasks.py`
 4. `examples/for-blind-app/tests/`
 
@@ -242,9 +242,9 @@ stop
 
 改动范围：
 
-1. `audio-server/audio_chat/observability.py`
-2. `audio-server/audio_chat/tasks.py`
-3. `audio-server/audio_chat/app.py`
+1. `audio-server/realtime_agent/observability.py`
+2. `audio-server/realtime_agent/tasks.py`
+3. `audio-server/realtime_agent/app.py`
 4. `audio-server/docs/how-to/inspect-runs-artifacts.md`
 5. `examples/for-blind-app/tests/`
 

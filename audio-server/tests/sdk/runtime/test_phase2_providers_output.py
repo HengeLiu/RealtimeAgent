@@ -1,11 +1,11 @@
 import json
 import wave
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.output import AssistantTextDelta
-from audio_chat.output.service import NotificationRequest, OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
-from audio_chat.protocol import Event, StreamChunk, StreamFormat
-from audio_chat.tasks import TaskSignal, TaskSignalBridge
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.output import AssistantTextDelta
+from realtime_agent.output.service import NotificationRequest, OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.tasks import TaskSignal, TaskSignalBridge
 
 
 class Connection:
@@ -69,7 +69,7 @@ class FinishPayloadTTS:
         }
 
 
-def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "user-001") -> None:
+def register_speaker(app: RealtimeAgentApp, connection: Connection, user_id: str = "user-001") -> None:
     app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -79,21 +79,21 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
     )
 
 
-def session_text(app: AudioChatApp, session_id: str, filename: str) -> str:
+def session_text(app: RealtimeAgentApp, session_id: str, filename: str) -> str:
     """读取当前 recorder 绑定目录中的 session 文件。"""
 
     return app.recorder.session_file(session_id, filename).read_text(encoding="utf-8")
 
 
-def test_text_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+def test_vision_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> None:
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-playback")
@@ -117,7 +117,7 @@ def test_text_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> No
 
 
 def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
@@ -136,10 +136,10 @@ def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
         on_blocked="queue",
     )
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-output", text="low priority", intent=low)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-output-2", text="critical priority", intent=high)
     )
 
@@ -149,12 +149,12 @@ def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
 
 
 def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     intent = OutputItem(user_id="user-001", session_id="sess-interrupt", priority="normal")
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-interrupt", text="playing", intent=intent)
     )
     app.publish_control_event(
@@ -175,7 +175,7 @@ def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
 
 
 def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     low = OutputItem(
@@ -188,13 +188,13 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
     )
     high = OutputItem(user_id="user-001", session_id="sess-high", priority="critical")
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-low", text="low", intent=low)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-high", text="high", intent=high)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-high", text="", final=True, intent=high)
     )
 
@@ -206,7 +206,7 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
 
 
 def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     active = OutputItem(user_id="user-001", session_id="sess-active", priority="normal")
@@ -218,13 +218,13 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
         ttl_seconds=-1,
     )
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="queued", intent=queued)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="", final=True, intent=active)
     )
 
@@ -233,34 +233,34 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
     assert "ttl_expired" in queued_decisions
 
 
-def test_queued_text_delta_keeps_accumulating_until_playback_turn(tmp_path) -> None:
+def test_queued_vision_delta_keeps_accumulating_until_playback_turn(tmp_path) -> None:
     """测试目标：验证排队输出保存完整 OutputSource，不丢后续 text delta。
 
     测试方法：先启动 active 输出，再提交同优先级 queue 输出，并在排队期间继续追加文本；
     active final 后，queued 输出应播放完整文本产生的音频。
     预期结果：queued session 有 `queued_playback_ready` 决策，输出音频大小覆盖两段文本。
     """
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     active = OutputItem(user_id="user-001", session_id="sess-active", priority="normal")
     queued = OutputItem(user_id="user-001", session_id="sess-queued", priority="normal", on_blocked="queue")
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
     )
     before = len(connection.chunks)
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="hello ", intent=queued)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="world", intent=queued)
     )
     assert len(connection.chunks) == before
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-queued", text="", final=True, intent=queued)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="", final=True, intent=active)
     )
 
@@ -278,7 +278,7 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
     预期结果：当前 active 被释放且服务端 output stream 被关闭，新会话排队输出恢复播放。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     old_connection = Connection("dev-old")
     new_connection = Connection("dev-new")
     register_speaker(app, old_connection)
@@ -286,15 +286,15 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
     active = OutputItem(user_id="user-001", session_id="sess-old", priority="high")
     queued = OutputItem(user_id="user-001", session_id="sess-new", priority="normal", on_blocked="queue")
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-old", text="old output", intent=active)
     )
     active_stream_id = app.output_service.active_output_stream_id("user-001", "sess-old")
     assert active_stream_id is not None
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-new", text="new output", intent=queued)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-new", text="", final=True, intent=queued)
     )
 
@@ -325,11 +325,11 @@ def test_audio_session_idle_waits_for_endpoint_playback_finished(tmp_path) -> No
     空闲计时从播放完成点重新开始。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             audio_session_idle_timeout_seconds=1,
-            agent_mode="text",
+            agent_mode="vision",
         )
     )
     connection = Connection("dev-playback")
@@ -344,10 +344,10 @@ def test_audio_session_idle_waits_for_endpoint_playback_finished(tmp_path) -> No
         )
     )
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="dev-playback", text="长回复")
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="dev-playback", text="", final=True)
     )
     stream_id = next(event.stream_id for event in connection.events if event.event_name == "stream.output.finish.requested")
@@ -380,8 +380,8 @@ def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_
     测试方法：先启动 active 输出，再提交同优先级且显式 drop 的 blocked 输出。
     预期结果：blocked 输出被 drop，不进入队列，也不会产生第二条 speaker stream。
     """
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             output_default_on_blocked="queue",
         )
@@ -391,10 +391,10 @@ def test_explicit_on_blocked_drop_is_not_overridden_by_global_queue_default(tmp_
     active = OutputItem(user_id="user-001", session_id="sess-active", priority="normal")
     blocked = OutputItem(user_id="user-001", session_id="sess-blocked", priority="normal", on_blocked="drop")
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="active", intent=active)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-blocked", text="blocked", intent=blocked)
     )
 
@@ -415,7 +415,7 @@ def test_native_audio_empty_done_does_not_open_output_stream(tmp_path) -> None:
     audio payload。
     预期结果：端侧不会收到 `stream.output.open.requested`，runs 中记录 empty_output。
     """
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
@@ -442,7 +442,7 @@ def test_native_audio_delta_is_split_by_stream_format_chunk_size(tmp_path) -> No
     预期结果：Output Service 按 20ms/960 bytes 拆分，避免超过 stream.max_chunk_bytes，
     并且每片都声明 24k/20ms。
     """
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=8192))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=8192))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
@@ -464,7 +464,7 @@ def test_native_audio_delta_is_split_by_stream_format_chunk_size(tmp_path) -> No
 
 
 def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     app.output_service = OutputService(
         stream_service=app.stream_service,
         recorder=app.recorder,
@@ -473,7 +473,7 @@ def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-format", text="format check")
     )
 
@@ -487,7 +487,7 @@ def test_tts_metrics_stream_format_and_chunk_format_match(tmp_path) -> None:
 
 
 def test_each_output_stream_gets_independent_tts_session(tmp_path) -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
 
@@ -505,7 +505,7 @@ def test_cached_prompt_audio_reuses_audio_and_records_wav(tmp_path) -> None:
     预期结果：两次输出字节一致，第二次命中缓存，两个会话都生成 wav 回放产物。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     fmt = StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40)
@@ -548,7 +548,7 @@ def test_notification_coordinator_respects_task_signal_notify_and_agent_sync(tmp
     预期结果：不产生端侧音频，task signal 和 agent sync 事件都会写入 runs。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     bridge = TaskSignalBridge(recorder=app.recorder, output_service=app.output_service)
@@ -579,7 +579,7 @@ def test_notification_dedupe_and_merge_decisions_are_observable(tmp_path) -> Non
     预期结果：重复通知被丢弃，合并通知只播报一次，debug snapshot 暴露通知决策。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     coordinator = app.output_service.notification_coordinator
@@ -637,16 +637,16 @@ def test_playback_debug_snapshot_records_active_queue_and_decisions(tmp_path) ->
     预期结果：快照和磁盘文件都包含当前 active 与排队输出。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     active = OutputItem(user_id="user-001", session_id="sess-active-debug", priority="normal")
     queued = OutputItem(user_id="user-001", session_id="sess-queued-debug", priority="normal", on_blocked="queue")
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active-debug", text="active", intent=active)
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-queued-debug", text="queued", intent=queued)
     )
 
@@ -658,7 +658,7 @@ def test_playback_debug_snapshot_records_active_queue_and_decisions(tmp_path) ->
     assert saved["active"]["user-001"]["session_id"] == "sess-active-debug"
 
 
-def test_native_output_finish_does_not_clear_active_text_tts_stream(tmp_path) -> None:
+def test_native_output_finish_does_not_clear_active_vision_tts_stream(tmp_path) -> None:
     """测试目标：验证直接通知音频结束不会清掉同会话正在播放的 Text TTS stream。
 
     测试方法：先启动一条 Text TTS 输出流，再模拟 Task 直接通知通过 native audio
@@ -667,13 +667,13 @@ def test_native_output_finish_does_not_clear_active_text_tts_stream(tmp_path) ->
     Text final 仍能 flush 尾音并正常写出 stream.output.summary。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     app.output_service.router._injected_tts = FinishPayloadTTS()
     connection = Connection("dev-playback")
     register_speaker(app, connection)
     session_id = "sess-mixed-output"
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id=session_id, text="助手长回复开头")
     )
     active_stream_id = connection.chunks[-1].stream_id
@@ -682,10 +682,10 @@ def test_native_output_finish_does_not_clear_active_text_tts_stream(tmp_path) ->
         OutputItem(user_id="user-001", session_id=session_id, priority="normal"),
         "任务失败通知",
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id=session_id, text="助手长回复结尾")
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id=session_id, text="", final=True)
     )
 

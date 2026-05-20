@@ -1,8 +1,8 @@
-# audio-chat
+# realtime-agent
 
-`audio-chat` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
+`realtime-agent` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
 
-- `audio-server/audio_chat/`：Python server SDK 源码目录，发布包名为 `audio-chat`，导入名为 `audio_chat`。
+- `audio-server/realtime_agent/`：Python server SDK 源码目录，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
 - `audio-device/`：多语言端侧通讯 SDK，覆盖 Python、TypeScript、Swift、Kotlin/Java 和 C。
 - `examples/`：示例项目、真实端侧参考工程和开发/测试支持组件。`examples/dev-support/`
   下的 browser-glass、python-phone、python-playback-glass 以 Device 形态接入协议，
@@ -22,12 +22,12 @@ uv sync --python 3.11
 uv pip install -e .
 ```
 
-如果 `uv run audio-chat.*` 找不到命令，重新执行 editable 安装。
+如果 `uv run realtime-agent.*` 找不到命令，重新执行 editable 安装。
 
 启动统一示例应用 server：
 
 ```bash
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
 常用调试接口：
@@ -41,9 +41,9 @@ curl http://127.0.0.1:8765/api/debug/playback
 如果需要后台管理 server，可使用：
 
 ```bash
-uv run audio-chat.server.start --config examples/for-blind-app/audio-server/server.yaml
-uv run audio-chat.server.logs
-uv run audio-chat.server.stop
+uv run realtime-agent.server.start --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.logs
+uv run realtime-agent.server.stop
 ```
 
 ## 启动开发支持组件
@@ -52,80 +52,80 @@ uv run audio-chat.server.stop
 
 ```bash
 # 1. 校验端侧能力文件，确认设备能力声明有效
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 
 # 2. 启动应用 server
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 
 # 3. 打开浏览器眼镜模拟组件，连接并注册后开始语音或视觉测试
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 
 # 4. 可选：启动 Python 手机视频/视觉模拟组件，验证同一 user_id 下多端协作
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 这些组件在代码和协议上会注册成普通 Device，所以可以真实覆盖注册、控制事件、
-stream、speaker 输出和 peer video。但它们属于 AudioChat SDK 的开发/测试支持组件；
+stream、speaker 输出和 peer video。但它们属于 RealtimeAgent SDK 的开发/测试支持组件；
 开发者的正式眼镜、手机、嵌入式设备可以在自己的工程里实现，只需要遵守同一协议。
 
 浏览器眼镜模拟组件：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 Python 手机视频/视觉模拟组件：
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 Python 手机简单 mock 组件：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 `phone.preview.yaml` 会打开 PySide6 视频窗口，注册到 server，并订阅同一 `user_id` 下的
 `sensor.rgb` 输入流。普通 realtime 视觉采样中的单资产帧带有 `request_id`，
 只进入模型/资产链路，不会在 Task 前转发给 phone；只有普通连续 RGB stream 或
 `peer.video.sender.start` 建立的视频任务流会显示在窗口里。最近一帧写入
-`runs/audio-chat/python-phone/latest-rgb.png`，YOLO 标注帧写入
-`runs/audio-chat/python-phone/latest-yolo.jpg`。
+`runs/realtime-agent/python-phone/latest-rgb.png`，YOLO 标注帧写入
+`runs/realtime-agent/python-phone/latest-yolo.jpg`。
 
 Python glass playback：
 
 ```bash
-uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
+uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
-发布候选版本当前为 `0.1.0rc1`。发布前优先使用 `audio-chat.sdk.package-check`、
-`audio-chat.dev.preflight` 和关键 pytest 子集确认包边界、示例应用和设备入口仍然一致。
+发布候选版本当前为 `0.1.0rc1`。发布前优先使用 `realtime-agent.sdk.package-check`、
+`realtime-agent.dev.preflight` 和关键 pytest 子集确认包边界、示例应用和设备入口仍然一致。
 
 使用录制音频驱动 playback：
 
 ```bash
-uv run audio-chat.playback.glass \
+uv run realtime-agent.playback.glass \
   --server-url http://127.0.0.1:8765 \
   --audio-wav testdata/audio-sample/看一下我前面有什么.wav
 ```
 
-Text 模型路线的无头验收可以直接复用 `testdata/audio-sample/` 下的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock text model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
+Vision 路线的无头验收可以直接复用 `testdata/audio-sample/` 下的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock vision model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
 ```
 
 ## 更换模型和模态
 
 应用运行配置在 `examples/for-blind-app/audio-server/server.yaml`。`audio-server/config/server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
 
-如果要从 Omni Realtime 切到文本模态测试，把 `agent.mode` 改成 `text`，然后配置 `agent.text` 三段 provider：
+如果要从 Omni Realtime 切到 Vision 模态测试，把 `agent.mode` 改成 `vision`，然后配置 `agent.vision` 三段 provider：
 
 ```yaml
 agent:
-  mode: "text"
-  text:
+  mode: "vision"
+  vision:
     provider: "dashscope-compatible"
     model: "qwen-plus"
     asr_provider: "dashscope"
@@ -137,22 +137,22 @@ agent:
     allow_mock_fallback: true
 ```
 
-这条链路是 `sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker`。当前 `asr_provider: "dashscope"` 走 `dashscope.audio.asr.Recognition` 实时接口，ASR 模型应使用 `fun-asr-realtime`；`qwen3-asr-flash` 是非实时录音文件识别/HTTP 调用模型，不适配这条实时麦克风路径。使用 DashScope 真实 provider 前需要设置：
+这条链路是 `sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker`。当前 `asr_provider: "dashscope"` 走 `dashscope.audio.asr.Recognition` 实时接口，ASR 模型应使用 `fun-asr-realtime`；`qwen3-asr-flash` 是非实时录音文件识别/HTTP 调用模型，不适配这条实时麦克风路径。使用 DashScope 真实 provider 前需要设置：
 
 ```bash
 export DASHSCOPE_API_KEY="你的 DashScope Key"
-uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
-如果只是先验证文本链路形状，可以把 `provider/asr_provider/tts_provider` 都设成 `mock`。mock ASR 在 playback 测试里会用 WAV 文件名作为转写文本，mock TTS 会生成诊断音，不需要任何 API Key。
+如果只是先验证 Vision 链路形状，可以把 `provider/asr_provider/tts_provider` 都设成 `mock`。mock ASR 在 playback 测试里会用 WAV 文件名作为转写文本，mock TTS 会生成诊断音，不需要任何 API Key。
 
-如果要接 OpenAI-compatible 或本地模型服务，只替换文本模型段：
+如果要接 OpenAI-compatible 或本地模型服务，只替换 Vision 模型段：
 
 ```yaml
 agent:
-  mode: "text"
-  text:
+  mode: "vision"
+  vision:
     provider: "openai-compatible"
     model: "你的模型名"
 ```
@@ -164,13 +164,13 @@ export OPENAI_API_KEY="你的 Key"
 export OPENAI_BASE_URL="https://你的模型服务/v1"
 ```
 
-ASR 和 TTS 目前可运行的真实实现主要是 DashScope；本地模型服务只替换文本大模型时，建议先保留 `asr_provider: "mock"`、`tts_provider: "mock"` 或继续使用 DashScope。
+ASR 和 TTS 目前可运行的真实实现主要是 DashScope；本地模型服务只替换 Vision 模型时，建议先保留 `asr_provider: "mock"`、`tts_provider: "mock"` 或继续使用 DashScope。
 
-如果要切回 Omni Realtime，把 `agent.mode` 改成 `realtime_audio`，并配置 `agent.realtime`：
+如果要切回 Omni Realtime，把 `agent.mode` 改成 `omni`，并配置 `agent.omni`：
 
 ```yaml
 agent:
-  mode: "realtime_audio"
+  mode: "omni"
   realtime:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"
@@ -179,19 +179,19 @@ agent:
     max_concurrent_sessions: 10
 ```
 
-Omni Realtime 同样使用 `DASHSCOPE_API_KEY`。SDK 默认最多同时建立 10 条同一 provider / model / endpoint 的 Realtime 连接，达到上限时会拒绝新会话，避免继续冲击供应商限流。它的主链路是 `sensor.mic -> RealtimeAudioAgentCore -> assistant_audio.delta -> actuator.speaker`，不经过 TextAgentCore 的 ASR 和 TTS。
+Omni Realtime 同样使用 `DASHSCOPE_API_KEY`。SDK 默认最多同时建立 10 条同一 provider / model / endpoint 的 Realtime 连接，达到上限时会拒绝新会话，避免继续冲击供应商限流。它的主链路是 `sensor.mic -> OmniRealtimeAgentCore -> assistant_audio.delta -> actuator.speaker`，不经过 VisionRealtimeAgentCore 的 ASR 和 TTS。
 
 iOS 参考端：
 
 ```bash
-uv run audio-chat.ios.open
+uv run realtime-agent.ios.open
 ```
 
 ESP32-S3 参考端：
 
 ```bash
-uv run audio-chat.esp32.config
-uv run audio-chat.esp32.build --dry-run
+uv run realtime-agent.esp32.config
+uv run realtime-agent.esp32.build --dry-run
 ```
 
 ## 开发者工作模型
@@ -221,10 +221,10 @@ examples/<your-app>/audio-server/
   config/
 ```
 
-常用公开基类可从 `audio_chat` 顶层导入：
+常用公开基类可从 `realtime_agent` 顶层导入：
 
 ```python
-from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
+from realtime_agent import BaseTask, BaseTool, ToolContext, ToolResult
 ```
 
 `server.yaml` 中配置自动发现包后，开发者只需要把 `BaseTool` / `BaseTask` 子类放进对应 package。SDK 启动时会扫描这些类，把 Tool schema 注册给 Agent Core，把 Task 类型注册给 Task Engine。业务代码不需要在 `app.py` 里手写注册逻辑。
@@ -254,7 +254,7 @@ from audio_chat import BaseTask, BaseTool, ToolContext, ToolResult
 端侧开发者优先维护设备能力文件。浏览器示例：
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
 ```
 
 设备能力文件当前用于声明结构化 `supports.sensors`、`supports.actuators`、运行环境和调试属性。`selector` 是 Tool / Task 调用设备时的运行期筛选条件，不写进设备能力文件；`external` 可用于端侧私有调试元数据。
@@ -275,14 +275,14 @@ iOS / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型
 生成本地联调配置：
 
 ```bash
-uv run audio-chat.config.sync --app-root examples/for-blind-app/audio-server
+uv run realtime-agent.config.sync --app-root examples/for-blind-app/audio-server
 ```
 
 如果要让 iOS、ESP32 或其他局域网设备连接到这台 Mac，把 `server_url` 同步成
 Mac 当前局域网 IP，而不是 `127.0.0.1`：
 
 ```bash
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --app-root examples/for-blind-app/audio-server \
   --server-url "http://$(ipconfig getifaddr en0):8765"
 ```
@@ -293,23 +293,23 @@ uv run audio-chat.config.sync \
 预检：
 
 ```bash
-uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 发布包检查：
 
 ```bash
-uv run audio-chat.sdk.package-check --report runs/default-app/package-check.json
+uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.json
 ```
 
 建议验收：
 
 ```bash
-uv run audio-chat.dev.preflight \
+uv run realtime-agent.dev.preflight \
   --config examples/for-blind-app/audio-server/server.yaml \
   --report runs/acceptance/preflight.json
 
-uv run audio-chat.sdk.package-check \
+uv run realtime-agent.sdk.package-check \
   --report runs/acceptance/package-check.json
 
 uv run python -m pytest audio-server/tests examples/for-blind-app/tests examples/dev-support/tests -q
@@ -317,7 +317,7 @@ uv run python -m pytest audio-server/tests examples/for-blind-app/tests examples
 
 ## 运行产物与日志索引
 
-服务启动时，`audio_chat.runs` 会打印一次 `运行产物目录索引`。其中 `runs_root` 是当前应用的运行产物根目录，排查时按启动索引定位文件。
+服务启动时，`realtime_agent.runs` 会打印一次 `运行产物目录索引`。其中 `runs_root` 是当前应用的运行产物根目录，排查时按启动索引定位文件。
 
 根目录文件：
 

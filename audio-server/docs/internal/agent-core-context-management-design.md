@@ -6,15 +6,15 @@
 
 - `server.yaml` 提供 text / realtime 主系统提示。
 - `app.py` 在启用 Memory 时追加长期记忆使用规则。
-- `TextAgentCore` 自行拼接 text prompt、长期记忆、历史摘要、active messages 和 tools。
-- `RealtimeAudioAgentCore` 自行拼接 realtime prompt、工具调用语音规则、长期记忆、历史摘要、等价 messages 和 realtime tools。
+- `VisionRealtimeAgentCore` 自行拼接 text prompt、长期记忆、历史摘要、active messages 和 tools。
+- `OmniRealtimeAgentCore` 自行拼接 realtime prompt、工具调用语音规则、长期记忆、历史摘要、等价 messages 和 realtime tools。
 - `tools.py` / `tasks.py` 通过 `ToolSpec.description`、Pydantic `Field(description=...)`、`TaskStartTool` 自动生成工具 schema。
 - `memory/__init__.py`、`conversation.py`、业务视觉 Tool 内部还各自维护子 Agent 提示词。
 
 这些内容都可能影响模型行为，但目前没有统一的命名、版本、来源记录、预算控制和最终上下文快照。后续如果继续在各处直接改字符串，会导致以下问题：
 
 1. 难以确认某段提示词是否真的进入了模型。
-2. Realtime 和 Text 链路的上下文规则容易漂移。
+2. Realtime 和 Vision 链路的上下文规则容易漂移。
 3. 工具 schema、记忆片段、历史摘要和系统提示之间可能互相重复或冲突。
 4. `model-request.json` 能看到最终请求，但缺少每段内容的来源、类型、裁剪原因和预算占用。
 5. 后续做 prompt 优化、A/B、回归测试和真实设备排障时，缺少稳定的对照基线。
@@ -49,7 +49,7 @@
 
 ## 4. 总体设计
 
-新增 `audio_chat.agent_core.context` 包，提供 PromptRegistry、ContextSource、ContextCompiler 和 ModelContext。
+新增 `realtime_agent.agent_core.context` 包，提供 PromptRegistry、ContextSource、ContextCompiler 和 ModelContext。
 
 ```plantuml
 @startuml
@@ -76,7 +76,7 @@ Compiler --> Core : ModelContext
 
 alt text
   Core -> Provider : messages + tools
-else realtime_audio
+else omni
   Core -> Provider : instructions + session tools + audio stream
 end
 @enduml
@@ -91,12 +91,12 @@ end
 建议目录：
 
 ```text
-audio-server/audio_chat/prompts/
+audio-server/realtime_agent/prompts/
   registry.yaml
-  realtime_system.md
+  omni_system.md
   text_system.md
   memory_rules.md
-  realtime_tool_call_rules.md
+  omni_tool_call_rules.md
   tool_result_failure_followup.md
   capture_photo_followup.md
   vision_interpreter.md
@@ -108,8 +108,8 @@ audio-server/audio_chat/prompts/
 
 ```yaml
 prompts:
-  - name: realtime_system
-    file: realtime_system.md
+  - name: omni_system
+    file: omni_system.md
     description: Realtime 主 Agent 系统提示词。
 
   - name: memory_rules
@@ -131,13 +131,13 @@ PromptRegistry 职责：
 
 第一阶段只支持本地文件；后续如果需要 UI、灰度、回滚或 A/B，可把同一接口接到 Langfuse / LangSmith。
 
-第一版目录也保持平铺。每个 prompt 都有全局唯一 `name`，开发者可以直接在 `audio_chat/prompts/` 下找到同名 Markdown 文件。等 prompt 数量明显增长后，再考虑按目录分类。
+第一版目录也保持平铺。每个 prompt 都有全局唯一 `name`，开发者可以直接在 `realtime_agent/prompts/` 下找到同名 Markdown 文件。等 prompt 数量明显增长后，再考虑按目录分类。
 
 这里刻意不在第一版引入 `id/version/scope/mode/owner/variables/tests` 这类完整元数据：
 
 | 字段 | 为什么第一版不需要 |
 | --- | --- |
-| `id` | 对开发者来说 `name` 已经足够表达唯一名称，例如 `realtime_system`。 |
+| `id` | 对开发者来说 `name` 已经足够表达唯一名称，例如 `omni_system`。 |
 | `version` | 当前 prompt 跟随 git 版本管理即可；需要线上灰度或回滚时再引入。 |
 | `scope` | 第一版不需要；用途直接体现在 prompt 名称和 description 中。 |
 | `mode` | 由 ContextCompiler 显式选择 prompt 名称，不在 registry 里再做复杂筛选。 |
@@ -185,7 +185,7 @@ class ContextSource:
 ```python
 @dataclass(frozen=True)
 class ModelContext:
-    mode: Literal["text", "realtime_audio"]
+    mode: Literal["text", "omni"]
     provider: str
     model: str
     instructions: str
@@ -197,7 +197,7 @@ class ModelContext:
     metadata: dict[str, Any]
 ```
 
-Text 链路使用：
+Vision 链路使用：
 
 - `instructions` 作为 system message。
 - `messages` 作为 active history + 当前输入。
@@ -208,7 +208,7 @@ Realtime 链路使用：
 - `instructions` 作为 provider session instructions。
 - `tools` 转成 provider realtime function schema。
 - `messages` 主要用于等价请求视图和后续 provider 支持历史注入时使用。
-- `modal_inputs` 用于描述当前音频流、视觉帧等非文本输入。
+- `modal_inputs` 用于描述当前音频流、视觉帧等非Vision 输入。
 
 ### 5.4 ContextPolicy
 
@@ -250,7 +250,7 @@ context:
 ```python
 @dataclass(frozen=True)
 class ContextCompileRequest:
-    mode: Literal["text", "realtime_audio"]
+    mode: Literal["text", "omni"]
     provider: str
     model: str
     user_id: str
@@ -350,16 +350,16 @@ Tool / Task 相关内容分成三类管理，不能混成同一种 prompt：
 
 ```json
 {
-  "runner": "agent_core_realtime_audio",
+  "runner": "agent_core_omni_audio",
   "provider": "qwen",
   "model": "qwen3.5-omni-plus-realtime",
   "prompts": [
-    {"name": "realtime_system"},
+    {"name": "omni_system"},
     {"name": "memory_rules"},
-    {"name": "realtime_tool_call_rules"}
+    {"name": "omni_tool_call_rules"}
   ],
   "context_sources": [
-    {"source_id": "prompt:realtime_system", "source_kind": "prompt", "source_name": "realtime_system", "token_estimate": 420},
+    {"source_id": "prompt:omni_system", "source_kind": "prompt", "source_name": "omni_system", "token_estimate": 420},
     {"source_id": "memory:user:basic", "source_kind": "memory", "source_name": "long_term_memory", "token_estimate": 120},
     {"source_id": "tools:provider_schema", "source_kind": "tool", "source_name": "tool_schema", "tool_count": 9},
     {"source_id": "tool_result:capture_photo", "source_kind": "tool", "source_name": "tool_result:capture_photo", "included": false, "reason": "inline_vision_result_hidden"}
@@ -388,13 +388,13 @@ Tool / Task 相关内容分成三类管理，不能混成同一种 prompt：
 建议新增：
 
 ```text
-audio-server/audio_chat/
+audio-server/realtime_agent/
   prompts/
     registry.yaml
-    realtime_system.md
+    omni_system.md
     text_system.md
     memory_rules.md
-    realtime_tool_call_rules.md
+    omni_tool_call_rules.md
     tool_result_failure_followup.md
     capture_photo_followup.md
     vision_interpreter.md
@@ -429,13 +429,13 @@ audio-server/docs/internal/
 
 目标：
 
-1. 新增 `audio_chat/prompts/` 平铺目录。
+1. 新增 `realtime_agent/prompts/` 平铺目录。
 2. 新增 `registry.yaml`，每个 prompt 只包含 `name`、`file`、`description`。
 3. 迁移静态 prompt：
-   - `realtime_system.md`
+   - `omni_system.md`
    - `text_system.md`
    - `memory_rules.md`
-   - `realtime_tool_call_rules.md`
+   - `omni_tool_call_rules.md`
    - `vision_interpreter.md`
    - `memory_manager.md`
    - `message_summarizer.md`
@@ -471,26 +471,26 @@ audio-server/docs/internal/
 2. `model-request.json` 能输出 `context_sources`。
 3. trace 中能看出每一段模型可见内容来自 prompt、memory、message、tool、modal 还是 runtime。
 
-### Phase 3：ContextCompiler 接入 TextAgentCore
+### Phase 3：ContextCompiler 接入 VisionRealtimeAgentCore
 
 目标：
 
-1. TextAgentCore 不再直接散落拼接 system prompt、memory、history 和工具上下文。
+1. VisionRealtimeAgentCore 不再直接散落拼接 system prompt、memory、history 和工具上下文。
 2. ContextCompiler 生成 Text 模式的 `instructions/messages/tools`。
 3. 保留当前工具调用、工具结果回填和历史消息语义。
 
 验收：
 
-1. text 模式 model request 与迁移前语义一致。
+1. vision 模式 model request 与迁移前语义一致。
 2. 工具调用和工具结果回填测试通过。
 3. 历史 tool 消息仍不作为孤立 tool message 回灌。
 4. `context_sources` 能解释本轮 text 请求的来源。
 
-### Phase 4：ContextCompiler 接入 RealtimeAudioAgentCore
+### Phase 4：ContextCompiler 接入 OmniRealtimeAgentCore
 
 目标：
 
-1. RealtimeAudioAgentCore 不再自行拼 prompt / history / tools。
+1. OmniRealtimeAgentCore 不再自行拼 prompt / history / tools。
 2. Realtime provider session 使用 `ModelContext.instructions` 和 `ModelContext.tools`。
 3. Realtime 等价 model request 由 ModelContext 生成。
 4. Realtime inline vision tools 过滤迁移到 ContextPolicy。
@@ -521,7 +521,7 @@ audio-server/docs/internal/
 候选命令：
 
 ```bash
-uv run audio-chat.context.inspect --config examples/for-blind-app/audio-server/server.yaml --mode realtime_audio
+uv run realtime-agent.context.inspect --config examples/for-blind-app/audio-server/server.yaml --mode omni
 ```
 
 验收：
@@ -571,7 +571,7 @@ uv run audio-chat.context.inspect --config examples/for-blind-app/audio-server/s
 
 ```bash
 uv run python -m pytest audio-server/tests/sdk/agent_core/test_agent_core_router.py -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_audio_agent_core.py -q
+uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py -q
 uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
 uv run python -m pytest audio-server/tests/sdk/runtime/test_memory_service.py -q
 uv run python -m pytest audio-server/tests/sdk/runtime/test_conversation_memory_service.py -q
@@ -637,49 +637,49 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 ### 阶段 1：建立平铺 PromptRegistry
 
 - 状态：已完成。
-- 实现：新增 `audio_chat/prompts/` 平铺目录、`registry.yaml` 和 9 个 Markdown prompt 文件；新增 `PromptRegistry` 和 `PromptAsset`。
-- 文件：`audio-server/audio_chat/prompts/`、`audio-server/audio_chat/agent_core/context/registry.py`、`audio-server/audio_chat/agent_core/context/models.py`。
+- 实现：新增 `realtime_agent/prompts/` 平铺目录、`registry.yaml` 和 9 个 Markdown prompt 文件；新增 `PromptRegistry` 和 `PromptAsset`。
+- 文件：`audio-server/realtime_agent/prompts/`、`audio-server/realtime_agent/agent_core/context/registry.py`、`audio-server/realtime_agent/agent_core/context/models.py`。
 - 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_context_prompt_registry.py -q` 通过。
-- 风险：`server.yaml` 仍保留 inline prompt，当前实现先记录为 `realtime_system/text_system` 来源；后续如要改成 prompt name 引用，需要单独做配置迁移。
+- 风险：`server.yaml` 仍保留 inline prompt，当前实现先记录为 `omni_system/text_system` 来源；后续如要改成 prompt name 引用，需要单独做配置迁移。
 
 ### 阶段 2：引入 ContextSource 和 ModelContext
 
 - 状态：已完成。
 - 实现：新增 `ContextSource`、`ModelContext`、`ContextPolicy`、`ContextCompiler`；`source_kind` 保持粗粒度分类；model request 支持输出 `context_sources`、`prompts`、`warnings`、`truncations` 和 `context_metadata`。
-- 文件：`audio-server/audio_chat/agent_core/context/`、`audio-server/audio_chat/observability.py`。
+- 文件：`audio-server/realtime_agent/agent_core/context/`、`audio-server/realtime_agent/observability.py`。
 - 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_context_compiler.py -q` 通过。
 - 风险：token 估算第一版使用字符数近似，没有接 provider tokenizer。
 
-### 阶段 3：ContextCompiler 接入 TextAgentCore
+### 阶段 3：ContextCompiler 接入 VisionRealtimeAgentCore
 
 - 状态：已完成。
 - 实现：Text 工具循环改由 ContextCompiler 生成 `instructions/messages/tools`；保留工具调用、工具结果回填和历史 tool 消息不孤立回灌的语义；工具结果回灌时记录 `context.source.added`。
-- 文件：`audio-server/audio_chat/agent_core/text.py`。
-- 验证：`uv run python -m pytest audio-server/tests/sdk/runtime/test_model_request_logging.py audio-server/tests/sdk/agent_core/test_text_agent_tool_loop_async.py -q` 通过。
-- 风险：没有用真实文本模型做 provider 侧回归，本阶段为 mock/契约验证。
+- 文件：`audio-server/realtime_agent/agent_core/text.py`。
+- 验证：`uv run python -m pytest audio-server/tests/sdk/runtime/test_model_request_logging.py audio-server/tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 通过。
+- 风险：没有用真实视觉语言模型做 provider 侧回归，本阶段为 mock/契约验证。
 
-### 阶段 4：ContextCompiler 接入 RealtimeAudioAgentCore
+### 阶段 4：ContextCompiler 接入 OmniRealtimeAgentCore
 
 - 状态：已完成。
 - 实现：Realtime 会话打开时由 ContextCompiler 生成 session instructions、Realtime tools、等价 messages 和 source map；inline vision tool 过滤迁移到 ContextPolicy；Realtime 工具结果记录 `context.source.added`。
-- 文件：`audio-server/audio_chat/agent_core/realtime.py`。
-- 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_audio_agent_core.py -q`、`uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q` 通过。
+- 文件：`audio-server/realtime_agent/agent_core/realtime.py`。
+- 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py -q`、`uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q` 通过。
 - 风险：未做真实 Qwen Omni Realtime 联调；真实 provider 的预音频和工具结果注入仍需设备侧观察。
 
 ### 阶段 5：清理工具可见内容与上下文检查工具
 
 - 状态：已完成可自动验证部分。
-- 实现：新增 `audio-chat.context.inspect` CLI；Tool 前置播报和 Task 直接通知记录 `context.notification.recorded`；清理 for-blind-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
-- 文件：`audio-server/audio_chat/cli/context.py`、`audio-server/audio_chat/tools.py`、`audio-server/audio_chat/tasks.py`、`examples/for-blind-app/audio-server/capabilities/tasks.py`、`pyproject.toml`。
-- 验证：`uv run audio-chat.context.inspect --config examples/for-blind-app/audio-server/server.yaml --mode realtime_audio --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
+- 实现：新增 `realtime-agent.context.inspect` CLI；Tool 前置播报和 Task 直接通知记录 `context.notification.recorded`；清理 for-blind-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
+- 文件：`audio-server/realtime_agent/cli/context.py`、`audio-server/realtime_agent/tools.py`、`audio-server/realtime_agent/tasks.py`、`examples/for-blind-app/audio-server/capabilities/tasks.py`、`pyproject.toml`。
+- 验证：`uv run realtime-agent.context.inspect --config examples/for-blind-app/audio-server/server.yaml --mode omni --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
 - 待验收：Task 进度通知是否默认播报仍需产品体验确认；当前只记录策略和通知事件，不改变默认通知语义。
 
 ### 阶段 6：预算、裁剪和 diff
 
 - 状态：已完成最小闭环。
-- 实现：ContextSource 记录 `token_estimate`；ContextCompiler 超预算时写 warning，不自动裁剪；`audio-chat.context.inspect` 支持 `--compare-model-request`，可与已有 `model-request.json` 做摘要级 diff。
-- 文件：`audio-server/audio_chat/agent_core/context/models.py`、`audio-server/audio_chat/agent_core/context/compiler.py`、`audio-server/audio_chat/cli/context.py`。
-- 验证：`uv run audio-chat.context.inspect --config examples/for-blind-app/audio-server/server.yaml --mode text --text 测试 --compare-model-request /tmp/audio-chat-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
+- 实现：ContextSource 记录 `token_estimate`；ContextCompiler 超预算时写 warning，不自动裁剪；`realtime-agent.context.inspect` 支持 `--compare-model-request`，可与已有 `model-request.json` 做摘要级 diff。
+- 文件：`audio-server/realtime_agent/agent_core/context/models.py`、`audio-server/realtime_agent/agent_core/context/compiler.py`、`audio-server/realtime_agent/cli/context.py`。
+- 验证：`uv run realtime-agent.context.inspect --config examples/for-blind-app/audio-server/server.yaml --mode text --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
 - 风险：第一版不做自动裁剪，后续需要基于真实长对话 runs 再确定裁剪优先级。
 
 ### 验证汇总
@@ -688,10 +688,10 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 
 ```bash
 uv run python -m pytest audio-server/tests/sdk/agent_core/test_context_prompt_registry.py audio-server/tests/sdk/agent_core/test_context_compiler.py -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core audio-server/tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_realtime_audio_builds_realtime_core -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_audio_agent_core.py -q
+uv run python -m pytest audio-server/tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core audio-server/tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_omni_audio_builds_realtime_core -q
+uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py -q
 uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
-uv run python -m pytest audio-server/tests/sdk/runtime/test_model_request_logging.py audio-server/tests/sdk/agent_core/test_text_agent_tool_loop_async.py -q
+uv run python -m pytest audio-server/tests/sdk/runtime/test_model_request_logging.py audio-server/tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q
 uv run python -m pytest audio-server/tests/sdk/runtime/test_memory_service.py audio-server/tests/sdk/runtime/test_conversation_memory_service.py audio-server/tests/sdk/runtime/test_tool_spec_schema.py audio-server/tests/sdk/runtime/test_task_signal_bridge.py -q
 uv run python -m pytest audio-server/tests/cli/test_package_boundary.py -q
 git diff --check

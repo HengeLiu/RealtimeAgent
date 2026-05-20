@@ -42,7 +42,7 @@ Case 的职责属于 `python-playback-glass`。
 examples/dev-support/devices/browser-glass/
   README.md
   browser-glass.yaml
-  device.audio-chat.yaml
+  device.realtime-agent.yaml
   index.html
 ```
 
@@ -63,8 +63,8 @@ supports:
     - type: vibrator
       commands: [vibrate]
 properties:
-  audio_chat.audio_input: sensor.mic
-  audio_chat.audio_output: actuator.speaker
+  realtime_agent.audio_input: sensor.mic
+  realtime_agent.audio_output: actuator.speaker
   audio.aec: browser_webrtc
   debug.manual_events: true
   debug.file_upload: true

@@ -38,7 +38,7 @@ paths:
 启动方式：
 
 ```bash
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
 当前边界：

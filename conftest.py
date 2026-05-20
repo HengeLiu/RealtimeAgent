@@ -26,7 +26,7 @@ LAYER_REPORTS = {
 def pytest_sessionstart(session) -> None:
     """记录 pytest 会话开始时间，供分层测试报告使用。"""
 
-    session.config._audio_chat_started_at = datetime.now(timezone.utc)
+    session.config._realtime_agent_started_at = datetime.now(timezone.utc)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
@@ -39,10 +39,10 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
 
     markexpr = str(getattr(config.option, "markexpr", "") or "").strip()
     layer = _layer_from_markexpr(markexpr)
-    report_dir = Path(os.getenv("AUDIO_CHAT_TEST_REPORT_DIR", "runs/regression-reports/latest"))
+    report_dir = Path(os.getenv("REALTIME_AGENT_TEST_REPORT_DIR", "runs/regression-reports/latest"))
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / LAYER_REPORTS.get(layer, "all-report.json")
-    started_at = getattr(config, "_audio_chat_started_at", datetime.now(timezone.utc))
+    started_at = getattr(config, "_realtime_agent_started_at", datetime.now(timezone.utc))
     finished_at = datetime.now(timezone.utc)
     counts = _pytest_counts(terminalreporter.stats)
     report = {
@@ -98,10 +98,10 @@ def _status_from_exitstatus(exitstatus: int, counts: dict[str, int]) -> str:
 
 def _inputs_for_layer(layer: str) -> dict[str, Any]:
     root = Path.cwd()
-    spec_root = root / "audio-server/audio_chat/spec"
+    spec_root = root / "audio-server/realtime_agent/spec"
     protocol_root = root / "testdata/protocol"
     inputs: dict[str, Any] = {
-        "schemas": sorted(str(path) for path in spec_root.glob("audio-chat-*")),
+        "schemas": sorted(str(path) for path in spec_root.glob("realtime-agent-*")),
         "protocol_fixtures": {
             "devices": _count_files(protocol_root / "devices"),
             "events": _count_files(protocol_root / "events"),
@@ -150,7 +150,7 @@ def _artifacts_for_layer(layer: str, report_path: Path) -> dict[str, str]:
 
     artifacts = {"report": str(report_path)}
     if layer == "model_provider":
-        artifacts["provider_tests"] = os.getenv("AUDIO_CHAT_PROVIDER_TEST_RUNS", "runs/provider-tests/latest")
+        artifacts["provider_tests"] = os.getenv("REALTIME_AGENT_PROVIDER_TEST_RUNS", "runs/provider-tests/latest")
     return artifacts
 
 
@@ -176,7 +176,7 @@ def _failure_summaries(stats: dict[str, list[Any]]) -> list[dict[str, str]]:
 
 def _write_summary(report_dir: Path) -> None:
     reports = sorted(report_dir.glob("*-report.json"))
-    lines = ["# audio-chat 回归测试报告", "", f"更新时间：{datetime.now(timezone.utc).isoformat()}", ""]
+    lines = ["# realtime-agent 回归测试报告", "", f"更新时间：{datetime.now(timezone.utc).isoformat()}", ""]
     for path in reports:
         data = json.loads(path.read_text(encoding="utf-8"))
         lines.append(

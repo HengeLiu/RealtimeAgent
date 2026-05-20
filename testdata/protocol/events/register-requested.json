@@ -1,5 +1,5 @@
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_register_requested",
   "event_name": "control.device.register.requested",
   "timestamp_ms": 1760000000000,
@@ -16,8 +16,8 @@
       "language": "javascript"
     },
     "properties": {
-      "audio_chat.audio_input": "sensor.mic",
-      "audio_chat.audio_output": "actuator.speaker"
+      "realtime_agent.audio_input": "sensor.mic",
+      "realtime_agent.audio_output": "actuator.speaker"
     },
     "supports": {
       "sensors": [

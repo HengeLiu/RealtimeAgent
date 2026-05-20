@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat.agent_core.context import PromptRegistry
+from realtime_agent.agent_core.context import PromptRegistry
 
 
 def test_prompt_registry_loads_flat_prompt_assets() -> None:
@@ -17,11 +17,11 @@ def test_prompt_registry_loads_flat_prompt_assets() -> None:
     registry = PromptRegistry()
     prompts = registry.load_all()
 
-    assert "realtime_system" in prompts
-    assert "text_system" in prompts
+    assert "omni_system" in prompts
+    assert "vision_system" in prompts
     assert "memory_rules" in prompts
-    assert "realtime_tool_call_rules" in prompts
-    assert prompts["realtime_system"].content
+    assert "omni_tool_call_rules" in prompts
+    assert prompts["omni_system"].content
     assert prompts["memory_rules"].file == "memory_rules.md"
 
 

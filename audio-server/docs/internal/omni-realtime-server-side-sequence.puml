@@ -7,7 +7,7 @@ skinparam sequenceMessageAlign center
 skinparam ParticipantPadding 20
 skinparam BoxPadding 12
 
-participant "AudioChatRealtimePipeline Caller\nAudioChatApp" as Caller
+participant "RealtimeAgentRealtimePipeline Caller\nRealtimeAgentApp" as Caller
 
 box "OmniRealtimePipeline / Omni 实现" #FFF4E5
 participant "OmniRealtimePipeline\n[差异] Pipeline实现" as Pipeline

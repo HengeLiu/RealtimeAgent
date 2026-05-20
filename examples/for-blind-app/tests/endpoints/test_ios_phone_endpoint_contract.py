@@ -16,14 +16,14 @@ def test_ios_phone_project_and_config_are_present() -> None:
     """测试目标：验证 iOS phone 参考端已经从协议锚点推进到可打开工程。
 
     测试方法：检查 Xcode project、共享 scheme、AppConfig 示例和 App 内配置资源。
-    预期结果：开发者可以直接打开 `AudioChatPhone.xcodeproj`，并替换 `AppConfig.json`
+    预期结果：开发者可以直接打开 `RealtimeAgentPhone.xcodeproj`，并替换 `AppConfig.json`
     进行 Simulator 或真机协议联调。
     """
 
-    assert (IOS_ROOT / "AudioChatPhone.xcodeproj/project.pbxproj").exists()
-    assert (IOS_ROOT / "AudioChatPhone.xcodeproj/xcshareddata/xcschemes/AudioChatPhone.xcscheme").exists()
-    assert (IOS_ROOT / "AudioChatPhone/AudioChatPhoneApp.swift").exists()
-    assert (IOS_ROOT / "AudioChatPhone/Resources/AppConfig.json").exists()
+    assert (IOS_ROOT / "RealtimeAgentPhone.xcodeproj/project.pbxproj").exists()
+    assert (IOS_ROOT / "RealtimeAgentPhone.xcodeproj/xcshareddata/xcschemes/RealtimeAgentPhone.xcscheme").exists()
+    assert (IOS_ROOT / "RealtimeAgentPhone/RealtimeAgentPhoneApp.swift").exists()
+    assert (IOS_ROOT / "RealtimeAgentPhone/Resources/AppConfig.json").exists()
     assert (IOS_ROOT / "AppConfig.example.json").exists()
 
 
@@ -65,7 +65,7 @@ def test_ios_phone_registration_event_uses_protocol_payload_fields() -> None:
     }
     payload["properties"]["direct.camera_sink"] = True
     payload["properties"]["direct.camera_sink.path"] = "/ws/camera"
-    payload["properties"]["direct.camera_sink.frame_format"] = "audio_chat.direct_frame.v1"
+    payload["properties"]["direct.camera_sink.frame_format"] = "realtime_agent.direct_frame.v1"
 
     assert payload["client_type"] == "ios-phone"
     assert payload["auth"]["mode"] == "disabled"
@@ -73,13 +73,13 @@ def test_ios_phone_registration_event_uses_protocol_payload_fields() -> None:
     assert "phone.task.traffic_light_phone_task" not in payload["properties"]
     assert payload["properties"]["direct.camera_sink"] is True
     assert payload["properties"]["direct.camera_sink.path"] == "/ws/camera"
-    assert payload["properties"]["direct.camera_sink.frame_format"] == "audio_chat.direct_frame.v1"
+    assert payload["properties"]["direct.camera_sink.frame_format"] == "realtime_agent.direct_frame.v1"
     assert "target_device" not in json.dumps(payload)
     assert "target_device_id" not in json.dumps(payload)
     assert any(item["type"] == "rgb" for item in payload["supports"]["sensors"])
     assert any(item["type"] == "vibrator" for item in payload["supports"]["actuators"])
 
-    source = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
+    source = _read("RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift")
     for token in [
         "control.device.register.requested",
         "\"auth\": config.auth.payload",
@@ -98,10 +98,10 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
     且没有 `capture_photo` 或固定设备路由字段。
     """
 
-    runtime = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
-    codec = _read("AudioChatPhone/Core/StreamChunkCodec.swift")
-    direct_codec = _read("AudioChatPhone/Core/DirectCameraFrameCodec.swift")
-    direct_server = _read("AudioChatPhone/Core/DirectCameraSinkServer.swift")
+    runtime = _read("RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift")
+    codec = _read("RealtimeAgentPhone/Core/StreamChunkCodec.swift")
+    direct_codec = _read("RealtimeAgentPhone/Core/DirectCameraFrameCodec.swift")
+    direct_server = _read("RealtimeAgentPhone/Core/DirectCameraSinkServer.swift")
     combined = runtime + codec + direct_codec + direct_server
 
     required_tokens = [
@@ -139,14 +139,14 @@ def test_ios_phone_direct_camera_sink_files_are_part_of_xcode_target() -> None:
     """测试目标：验证 iOS phone 具备 ESP32 相机直连接收入口。
 
     测试方法：静态检查直连相机接收器、帧编解码器和 Xcode target。
-    预期结果：工程能编译这些文件，并且支持 audio-chat 直连帧的 4 字节 header
+    预期结果：工程能编译这些文件，并且支持 realtime-agent 直连帧的 4 字节 header
     长度 + JSON header + JPEG payload 格式。
     """
 
-    project = _read("AudioChatPhone.xcodeproj/project.pbxproj")
-    codec = _read("AudioChatPhone/Core/DirectCameraFrameCodec.swift")
-    server = _read("AudioChatPhone/Core/DirectCameraSinkServer.swift")
-    runtime = _read("AudioChatPhone/Core/AudioChatEndpointRuntime.swift")
+    project = _read("RealtimeAgentPhone.xcodeproj/project.pbxproj")
+    codec = _read("RealtimeAgentPhone/Core/DirectCameraFrameCodec.swift")
+    server = _read("RealtimeAgentPhone/Core/DirectCameraSinkServer.swift")
+    runtime = _read("RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift")
 
     for filename in [
         "IPAddressProvider.swift",
@@ -181,9 +181,9 @@ def test_ios_phone_readme_documents_simulator_real_device_and_signed_token() -> 
 
     readme = _read("README.md")
     for token in [
-        "AudioChatPhone.xcodeproj",
-        "xcodebuild -scheme AudioChatPhone",
-        "audio-chat.config.sync",
+        "RealtimeAgentPhone.xcodeproj",
+        "xcodebuild -scheme RealtimeAgentPhone",
+        "realtime-agent.config.sync",
         "AppConfig.json",
         "signed_token",
         "sensor.rgb",

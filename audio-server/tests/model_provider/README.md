@@ -4,5 +4,5 @@
 
 | 文件 | 测试目标和范围 |
 | --- | --- |
-| `test_dashscope_providers.py` | 验证 DashScope ASR、TTS、Text、Text tool calling 和 Qwen Omni Realtime smoke，并写出 provider artifact。 |
+| `test_dashscope_providers.py` | 验证 DashScope ASR、TTS、Vision、Vision tool calling 和 Qwen Omni Realtime smoke，并写出 provider artifact。 |
 | `artifacts.py` | L2 测试专用 artifact 辅助，负责写 `result.json` 和 WAV。 |

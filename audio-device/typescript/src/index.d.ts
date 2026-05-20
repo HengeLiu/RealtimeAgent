@@ -1,10 +1,10 @@
-export declare const PROTOCOL_VERSION: "audio-chat.v1";
+export declare const PROTOCOL_VERSION: "realtime-agent.v1";
 export declare function newId(prefix: string): string;
 export declare function nowMs(): number;
 export declare function validateEventName(eventName: string): void;
 export declare function wsUrl(serverUrl: string, path: string, query?: Record<string, string>): string;
 
-export declare class AudioChatEvent {
+export declare class RealtimeAgentEvent {
   constructor(args: {
     eventName: string;
     userId: string;
@@ -19,7 +19,7 @@ export declare class AudioChatEvent {
   });
   toObject(): Record<string, unknown>;
   toJson(): string;
-  static fromObject(data: Record<string, unknown>): AudioChatEvent;
+  static fromObject(data: Record<string, unknown>): RealtimeAgentEvent;
 }
 
 export declare class StreamChunk {

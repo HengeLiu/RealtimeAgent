@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from audio_chat.agent_core.context import ContextCompileRequest, ContextCompiler
+from realtime_agent.agent_core.context import ContextCompileRequest, ContextCompiler
 
 
 class FakeMemory:
@@ -58,8 +58,8 @@ class FakeToolGateway:
         return list(self.schemas)
 
 
-def test_text_context_compiler_records_sources_and_replays_tool_history() -> None:
-    """测试目标：验证 text 上下文由 ContextCompiler 统一生成。
+def test_vision_context_compiler_records_sources_and_replays_tool_history() -> None:
+    """测试目标：验证 vision 上下文由 ContextCompiler 统一生成。
 
     测试方法：注入 fake memory、history 和工具 schema。
     预期结果：instructions 包含记忆和摘要，messages 包含成对工具历史，source map 完整。
@@ -67,9 +67,9 @@ def test_text_context_compiler_records_sources_and_replays_tool_history() -> Non
 
     context = ContextCompiler().compile(
         ContextCompileRequest(
-            mode="text",
+            mode="vision",
             provider="mock",
-            model="mock-text",
+            model="mock-vision",
             user_id="user-1",
             session_id="dev-1",
             base_instructions="系统提示",
@@ -102,11 +102,11 @@ def test_text_context_compiler_records_sources_and_replays_tool_history() -> Non
     assert context.messages[-1]["content"] == "当前问题"
     assert context.tools[0]["function"]["name"] == "lookup_weather"
     source_names = {source.source_name for source in context.context_sources}
-    assert {"text_system", "long_term_memory", "history_summary", "active_messages", "current_input", "tool_schema"} <= source_names
+    assert {"vision_system", "long_term_memory", "history_summary", "active_messages", "current_input", "tool_schema"} <= source_names
 
 
 def test_realtime_context_compiler_filters_inline_vision_tools() -> None:
-    """测试目标：验证 realtime 上下文过滤 inline vision 工具。
+    """测试目标：验证 omni 上下文过滤 inline vision 工具。
 
     测试方法：同时提供 `capture_photo` 和普通工具 schema。
     预期结果：Realtime tools 只保留普通工具，并记录 realtime 工具调用规则 prompt。
@@ -114,7 +114,7 @@ def test_realtime_context_compiler_filters_inline_vision_tools() -> None:
 
     context = ContextCompiler().compile(
         ContextCompileRequest(
-            mode="realtime_audio",
+            mode="omni",
             provider="qwen",
             model="qwen-realtime",
             user_id="user-1",
@@ -148,10 +148,10 @@ def test_realtime_context_compiler_filters_inline_vision_tools() -> None:
     assert "不要先向用户播报" in context.instructions
     assert [tool["name"] for tool in context.tools] == ["task_runtime_manager"]
     assert context.modal_inputs[0]["type"] == "input_audio_stream"
-    assert any(source.source_name == "realtime_tool_call_rules" for source in context.context_sources)
+    assert any(source.source_name == "omni_tool_call_rules" for source in context.context_sources)
 
 
-def test_text_context_compiler_drops_orphan_tool_result_after_trimming() -> None:
+def test_vision_context_compiler_drops_orphan_tool_result_after_trimming() -> None:
     """测试目标：验证上下文裁剪不会留下孤立 tool result。
 
     测试方法：使用包含工具调用历史的 fake control，并把 max_context_messages 设为 3。
@@ -160,9 +160,9 @@ def test_text_context_compiler_drops_orphan_tool_result_after_trimming() -> None
 
     context = ContextCompiler().compile(
         ContextCompileRequest(
-            mode="text",
+            mode="vision",
             provider="mock",
-            model="mock-text",
+            model="mock-vision",
             user_id="user-1",
             session_id="dev-1",
             base_instructions="系统提示",

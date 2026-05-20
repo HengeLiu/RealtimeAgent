@@ -1,5 +1,5 @@
-from audio_chat.control import ControlService, DeviceAuthenticator
-from audio_chat.protocol import Event
+from realtime_agent.control import ControlService, DeviceAuthenticator
+from realtime_agent.protocol import Event
 
 
 class FakeConnection:
@@ -41,7 +41,7 @@ def _registration(device_id: str, routes: list[dict]) -> Event:
             "device_id": device_id,
             "device_name": device_id,
             "client_type": "python-playback",
-            "sdk_version": "audio-chat-endpoint-0.1.0",
+            "sdk_version": "realtime-agent-endpoint-0.1.0",
             "auth": {"mode": "disabled"},
             "supports": _supports_for_routes(routes),
         },

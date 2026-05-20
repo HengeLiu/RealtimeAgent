@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -23,7 +23,7 @@ def _clear_capability_modules() -> None:
             sys.modules.pop(name, None)
 
 
-def _build_app(tmp_path, monkeypatch, **overrides) -> AudioChatApp:
+def _build_app(tmp_path, monkeypatch, **overrides) -> RealtimeAgentApp:
     """构造 for-blind-app 测试实例。
 
     测试目标：让导航和搜索 Tool 通过真实自动发现路径注册。
@@ -33,8 +33,8 @@ def _build_app(tmp_path, monkeypatch, **overrides) -> AudioChatApp:
 
     _clear_capability_modules()
     monkeypatch.syspath_prepend(str(APP_ROOT))
-    config = AudioChatConfig.from_yaml(APP_ROOT / "server.yaml")
-    return AudioChatApp(
+    config = RealtimeAgentConfig.from_yaml(APP_ROOT / "server.yaml")
+    return RealtimeAgentApp(
         replace(
             config,
             runs_root=str(tmp_path / "runs"),

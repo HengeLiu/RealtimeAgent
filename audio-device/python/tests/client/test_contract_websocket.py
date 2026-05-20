@@ -4,7 +4,7 @@ import json
 import pytest
 from aiohttp import web
 
-from audio_chat_device import AudioChatDeviceClient, DeviceBuilder, StreamChunkCodec
+from realtime_agent_device import RealtimeAgentDeviceClient, DeviceBuilder, StreamChunkCodec
 
 
 pytestmark = [pytest.mark.sdk, pytest.mark.device_sdk]
@@ -24,7 +24,7 @@ async def _run_contract() -> None:
                 await ws.send_str(
                     json.dumps(
                         {
-                            "version": "audio-chat.v1",
+                            "version": "realtime-agent.v1",
                             "event_id": "evt_registered",
                             "event_name": "control.device.registered",
                             "timestamp_ms": 1,
@@ -41,7 +41,7 @@ async def _run_contract() -> None:
                 await ws.send_str(
                     json.dumps(
                         {
-                            "version": "audio-chat.v1",
+                            "version": "realtime-agent.v1",
                             "event_id": "evt_stream_open",
                             "event_name": "stream.control.open.requested",
                             "timestamp_ms": 2,
@@ -73,7 +73,7 @@ async def _run_contract() -> None:
     port = site._server.sockets[0].getsockname()[1]
 
     device = DeviceBuilder.define("dev-python-001").user("user-001").sensor_rgb(format="jpeg")
-    client = AudioChatDeviceClient(server_url=f"http://127.0.0.1:{port}", device=device)
+    client = RealtimeAgentDeviceClient(server_url=f"http://127.0.0.1:{port}", device=device)
 
     async def handle_rgb(request) -> None:
         await request.opened({"request_id": "req-test"})

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.output import AssistantTextDelta
-from audio_chat.output.service import OutputItem
-from audio_chat.protocol import Event, StreamChunk
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.output import AssistantTextDelta
+from realtime_agent.output.service import OutputItem
+from realtime_agent.protocol import Event, StreamChunk
 
 
 class Connection:
@@ -27,7 +27,7 @@ class Connection:
         self.chunks.append(chunk)
 
 
-def register_speaker(app: AudioChatApp, connection: Connection) -> None:
+def register_speaker(app: RealtimeAgentApp, connection: Connection) -> None:
     """注册可消费 speaker 的端侧。"""
 
     app.register_device(
@@ -39,7 +39,7 @@ def register_speaker(app: AudioChatApp, connection: Connection) -> None:
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -53,11 +53,11 @@ def test_interrupt_records_cancel_close_events_and_output_decision(tmp_path) -> 
     预期结果：端侧收到 cancel.requested/cancelled，runs 中记录 cancel_current 决策。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-interrupt")
     register_speaker(app, connection)
     intent = OutputItem(user_id="user-interrupt", session_id="sess-interrupt", priority="normal")
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-interrupt", session_id="sess-interrupt", text="正在播放", intent=intent)
     )
 

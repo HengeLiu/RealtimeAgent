@@ -1,7 +1,7 @@
 [project]
-name = "audio-chat"
+name = "realtime-agent"
 version = "0.1.0rc1"
-description = "Server-side Python SDK for audio-chat stream-based voice sessions."
+description = "Server-side Python SDK for realtime-agent voice and device sessions."
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "aiohttp>=3.9.0",
@@ -13,25 +13,25 @@ dependencies = [
 ]
 
 [project.scripts]
-"audio-chat.config.sync" = "audio_chat.cli.config:sync"
-"audio-chat.playback.glass" = "audio_chat_python_glass.playback:main"
-"audio-chat.playback-glass.run" = "audio_chat_python_playback_glass.cli:main"
-"audio-chat.dev.preflight" = "audio_chat.preflight:main"
-"audio-chat.server.run" = "audio_chat.server:main"
-"audio-chat.server.start" = "audio_chat.cli.server:start"
-"audio-chat.server.stop" = "audio_chat.cli.server:stop"
-"audio-chat.server.logs" = "audio_chat.cli.server:logs"
-"audio-chat.sdk.package-check" = "audio_chat.cli.sdk:package_check"
-"audio-chat.device.validate" = "audio_chat.cli.device:validate"
-"audio-chat.web.open" = "audio_chat.cli.web:open_web"
-"audio-chat.ios.open" = "audio_chat.cli.ios:open_ios"
-"audio-chat.ios.build-sim" = "audio_chat.cli.ios:build_sim"
-"audio-chat.esp32.config" = "audio_chat.cli.esp32:config"
-"audio-chat.esp32.build" = "audio_chat.cli.esp32:build"
-"audio-chat.esp32.flash" = "audio_chat.cli.esp32:flash"
-"audio-chat.esp32.monitor" = "audio_chat.cli.esp32:monitor"
-"audio-chat.dev.live-check" = "audio_chat.preflight:live_check"
-"audio-chat.context.inspect" = "audio_chat.cli.context:inspect"
+"realtime-agent.config.sync" = "realtime_agent.cli.config:sync"
+"realtime-agent.playback.glass" = "realtime_agent_python_glass.playback:main"
+"realtime-agent.playback-glass.run" = "realtime_agent_python_playback_glass.cli:main"
+"realtime-agent.dev.preflight" = "realtime_agent.preflight:main"
+"realtime-agent.server.run" = "realtime_agent.server:main"
+"realtime-agent.server.start" = "realtime_agent.cli.server:start"
+"realtime-agent.server.stop" = "realtime_agent.cli.server:stop"
+"realtime-agent.server.logs" = "realtime_agent.cli.server:logs"
+"realtime-agent.sdk.package-check" = "realtime_agent.cli.sdk:package_check"
+"realtime-agent.device.validate" = "realtime_agent.cli.device:validate"
+"realtime-agent.web.open" = "realtime_agent.cli.web:open_web"
+"realtime-agent.ios.open" = "realtime_agent.cli.ios:open_ios"
+"realtime-agent.ios.build-sim" = "realtime_agent.cli.ios:build_sim"
+"realtime-agent.esp32.config" = "realtime_agent.cli.esp32:config"
+"realtime-agent.esp32.build" = "realtime_agent.cli.esp32:build"
+"realtime-agent.esp32.flash" = "realtime_agent.cli.esp32:flash"
+"realtime-agent.esp32.monitor" = "realtime_agent.cli.esp32:monitor"
+"realtime-agent.dev.live-check" = "realtime_agent.preflight:live_check"
+"realtime-agent.context.inspect" = "realtime_agent.cli.context:inspect"
 
 [dependency-groups]
 dev = [
@@ -57,16 +57,16 @@ where = [
     "examples/for-blind-app/devices/native-esp32-glass",
 ]
 include = [
-    "audio_chat*",
-    "audio_chat_device*",
-    "audio_chat_python_glass*",
-    "audio_chat_python_playback_glass*",
-    "audio_chat_python_phone_mock*",
-    "audio_chat_esp32_s3*",
+    "realtime_agent*",
+    "realtime_agent_device*",
+    "realtime_agent_python_glass*",
+    "realtime_agent_python_playback_glass*",
+    "realtime_agent_python_phone_mock*",
+    "realtime_agent_esp32_s3*",
 ]
 
 [tool.setuptools.package-data]
-audio_chat = ["py.typed", "spec/*.json", "spec/*.yaml", "prompts/*.yaml", "prompts/*.md"]
+realtime_agent = ["py.typed", "spec/*.json", "spec/*.yaml", "prompts/*.yaml", "prompts/*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = [

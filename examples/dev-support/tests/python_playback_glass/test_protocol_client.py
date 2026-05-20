@@ -1,4 +1,4 @@
-from audio_chat_python_playback_glass.protocol_client import decode_stream_chunk, encode_stream_chunk, ws_url
+from realtime_agent_python_playback_glass.protocol_client import decode_stream_chunk, encode_stream_chunk, ws_url
 
 
 def test_stream_chunk_codec_matches_browser_glass_shape() -> None:

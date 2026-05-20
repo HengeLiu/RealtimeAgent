@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from audio_chat import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from tests.helpers.server_sdk_harness import install_text_turn_providers, register_audio_device
 
 
@@ -11,17 +11,17 @@ pytestmark = pytest.mark.sdk
 
 
 def test_server_sdk_processes_text_turn_from_protocol_events_and_stream_chunks(tmp_path) -> None:
-    """测试目标：验证 Server SDK 能从协议事件和麦克风 stream chunk 驱动完整文本回复。
+    """测试目标：验证 Server SDK 能从协议事件和麦克风 stream chunk 驱动完整Vision 回复。
 
     测试方法：注册测试设备，依次发送 wake、audio_session.opened、stream.input.opened
-    和 final `sensor.mic` chunk；ASR/Text provider 使用测试 harness 注入。
+    和 final `sensor.mic` chunk；ASR/Vision provider 使用测试 harness 注入。
     预期结果：server 下发音频会话和输出 stream 事件，messages 记录用户转写和助手回复。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
+            agent_mode="vision",
             default_sensor_mic=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20),
             default_actuator_speaker=StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=40),
         )
@@ -60,7 +60,7 @@ def test_server_sdk_processes_text_turn_from_protocol_events_and_stream_chunks(t
             payload={"stream_type": "sensor.mic", "format": app.config.default_sensor_mic.__dict__},
         )
     )
-    asr_provider, text_model = install_text_turn_providers(
+    asr_provider, vision_model = install_text_turn_providers(
         app,
         stream_id=stream_id,
         transcript="你是谁",
@@ -89,8 +89,8 @@ def test_server_sdk_processes_text_turn_from_protocol_events_and_stream_chunks(t
     assert "stream.output.finish.requested" in event_names
     assert endpoint.chunks
     assert [chunk.stream_type for chunk in asr_provider.chunks] == ["sensor.mic"]
-    assert text_model.calls
-    model_messages = text_model.calls[-1]["messages"]
+    assert vision_model.calls
+    model_messages = vision_model.calls[-1]["messages"]
     assert model_messages[-1] == {"role": "user", "content": "你是谁"}
 
     session_dir = tmp_path / "runs" / user_id / device_id
@@ -111,7 +111,7 @@ def test_server_sdk_rejects_mismatched_protocol_stream_chunk_before_agent_core(t
     预期结果：StreamService 抛出协议错误，Agent Core 不会收到该错误分片。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-server-sdk-invalid-chunk"
     device_id = "dev-server-sdk-invalid-chunk"
     stream_id = "stream-server-sdk-invalid"

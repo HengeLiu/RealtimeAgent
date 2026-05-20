@@ -2,7 +2,7 @@
 """Omni Realtime 事件探针。
 
 主要功能：
-1. 直接连接 DashScope Omni Realtime，不经过 audio-chat 主链路。
+1. 直接连接 DashScope Omni Realtime，不经过 realtime-agent 主链路。
 2. 发送一段 PCM/WAV 音频，可选发送图片和测试工具定义。
 3. 把服务端原始事件、关键 ID 和事件时机写入 JSONL，便于核对 turn 生命周期。
 
@@ -172,7 +172,7 @@ def _chunk_bytes(payload: bytes, *, sample_rate: int, chunk_ms: int) -> list[byt
 def _tool_schema(*, nested: bool) -> list[dict[str, Any]]:
     """返回测试工具 schema。
 
-    `nested=True` 使用官方文档结构；`nested=False` 使用当前 audio-chat 主链路里的扁平结构，
+    `nested=True` 使用官方文档结构；`nested=False` 使用当前 realtime-agent 主链路里的扁平结构，
     用来验证 SDK/provider 是否只是做了非文档兼容。
     """
 

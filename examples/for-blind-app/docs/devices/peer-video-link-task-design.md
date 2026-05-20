@@ -570,7 +570,7 @@ Python phone 开发支持组件已经从“接收 server 转发 stream 的预览
 建议新增：
 
 ```text
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/
   peer_video.py
   vision/
 ```
@@ -656,7 +656,7 @@ peer_video:
   close_button_enabled: true
 vision:
   provider: yolo
-  save_annotated_frame: runs/audio-chat/python-phone/latest-yolo.jpg
+  save_annotated_frame: runs/realtime-agent/python-phone/latest-yolo.jpg
 ```
 
 ## 11. Browser glass 改造要求
@@ -762,19 +762,19 @@ Task -> phone receiver start
 终端 1：
 
 ```bash
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 终端 2：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 终端 3：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 浏览器页面使用和 phone 相同的 `user_id`，然后让用户发起：

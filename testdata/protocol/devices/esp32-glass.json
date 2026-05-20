@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../audio-server/audio_chat/spec/audio-chat-device.schema.json",
+  "$schema": "../../../audio-server/realtime_agent/spec/realtime-agent-device.schema.json",
   "device_id": "dev-esp32-glass-001",
   "user_id": "user-browser-glass-001",
   "name": "ESP32-S3 Glass",
@@ -11,8 +11,8 @@
     "language": "c"
   },
   "properties": {
-    "audio_chat.audio_input": "sensor.mic",
-    "audio_chat.audio_output": "actuator.speaker"
+    "realtime_agent.audio_input": "sensor.mic",
+    "realtime_agent.audio_output": "actuator.speaker"
   },
   "supports": {
     "sensors": [

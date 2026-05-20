@@ -1,4 +1,4 @@
-# audio-chat 能力规整清单
+# realtime-agent 能力规整清单
 
 本文记录本轮 Tool / Task 规整后的目标状态。判断依据见 [Context 与设备 API 设计说明](../../../../audio-server/docs/reference/context-api.md)：Tool 是 Agent Loop 内一次短调用；Task 是后台运行实例，由自动生成的专用启动 Tool 创建，再由统一运行时管理器查询和取消。
 

@@ -5,7 +5,7 @@
 ## 运行 Case
 
 ```bash
-uv run python -m audio_chat_python_playback_glass run \
+uv run python -m realtime_agent_python_playback_glass run \
   --server-url http://127.0.0.1:8765 \
   --case examples/dev-support/devices/python-playback-glass/cases/smoke/who_are_you.yaml \
   --report runs/python-playback-glass/who_are_you/report.json
@@ -14,7 +14,7 @@ uv run python -m audio_chat_python_playback_glass run \
 运行 suite：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass run \
+uv run python -m realtime_agent_python_playback_glass run \
   --server-url http://127.0.0.1:8765 \
   --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml \
   --report runs/python-playback-glass/smoke/report.json
@@ -25,7 +25,7 @@ uv run python -m audio_chat_python_playback_glass run \
 先用 `browser-glass` 手动跑一次，再从 runs 产物生成 YAML：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass record \
+uv run python -m realtime_agent_python_playback_glass record \
   --runs-root examples/for-blind-app/audio-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \

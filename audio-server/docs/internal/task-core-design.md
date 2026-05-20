@@ -1,10 +1,10 @@
-# audio-chat Task Core 设计
+# realtime-agent Task Core 设计
 
-本文面向当前新版 `audio-chat`，说明 Task Core 的目标架构、当前实现边界和后续演进要求。文档统一使用当前 `audio_chat` 实现中的名称，例如 `TaskEngine`、`TaskRef`、`TaskSignal`、`TaskSignalBridge`、`TaskStartTool`、`TaskRuntimeManagerTool`、`TaskContext` 和 `command.*`。
+本文面向当前新版 `realtime-agent`，说明 Task Core 的目标架构、当前实现边界和后续演进要求。文档统一使用当前 `realtime_agent` 实现中的名称，例如 `TaskEngine`、`TaskRef`、`TaskSignal`、`TaskSignalBridge`、`TaskStartTool`、`TaskRuntimeManagerTool`、`TaskContext` 和 `command.*`。
 
 ## 1. 文档定位
 
-Task Core 是 `audio-chat` 中与 Agent Core 平级的后台任务运行模块。它负责承接长生命周期、可取消、可查询、可恢复或需要端侧协作的任务。
+Task Core 是 `realtime-agent` 中与 Agent Core 平级的后台任务运行模块。它负责承接长生命周期、可取消、可查询、可恢复或需要端侧协作的任务。
 
 本文重点回答：
 
@@ -52,7 +52,7 @@ Task Core 由以下当前实现组件组成：
 | `TaskStartTool` | 根据 `BaseTask.spec()` 自动生成 `start_*_task` 工具。 |
 | `TaskRuntimeManagerTool` | 提供任务类型查询、实例查询和取消能力。 |
 | `TaskDeviceFacade.commands` / `CommandHandle` | Task 通过 Context API 下发端侧命令并接收回报。 |
-| `AudioChatApp._handle_command_result()` | 把端侧 `command.*` 回报转换成 `task.event.*` 后交给 TaskEngine。 |
+| `RealtimeAgentApp._handle_command_result()` | 把端侧 `command.*` 回报转换成 `task.event.*` 后交给 TaskEngine。 |
 | `OutputService.notify_task_signal()` | 在允许直通通知时，把任务信号交给输出仲裁和播放链路。 |
 
 ## 4. 核心边界
@@ -103,7 +103,7 @@ Task Core 不负责：
 
 ```plantuml
 @startuml
-title audio-chat Task Core 总体架构
+title realtime-agent Task Core 总体架构
 
 actor "用户" as User
 participant "Agent Core" as Agent
@@ -544,17 +544,28 @@ TaskEngine.create()
 2. Realtime 工具调用期间的音频压制不会持续几十秒。
 3. Task 实例成为被 Task Core 托管的后台个体，后续事件都回到同一个实例处理。
 
-### 9.2 当前实现偏差
+### 9.2 当前实现状态
 
-当前实现仍然同步等待：
+当前实现已经落地后台 TaskRunner：
 
 ```text
 TaskEngine.create()
-  -> await self.executor.start(task, context)
-  -> await task.on_start(context)
+  -> 创建 TaskRef(started)
+  -> emit task.started
+  -> TaskRunner.submit(task.run(context))
+  -> 最多等待 TaskSpec.start_result_timeout_seconds
+  -> return TaskRef(started)
 ```
 
-这是目前 `start_find_object_task` 等任务启动后静音的根因。`find_object_task` 在 `on_start()` 中等待 phone 端视频任务完成，导致 Tool 调用没有及时返回。
+`TaskEngine.create()` 不再直接同步等待 `on_start()` 或整个端侧长流程。`find_object_task`
+和 `traffic_light_task` 已迁移为在 `run()` 中启动 phone receiver 后快速返回；
+phone ready、phone completed 和端侧失败等后续输入通过 `command.*` 回报转换成
+`task.event.*`，再由 Task Core 分发到同一个 Task 实例处理。
+
+当前剩余差距不再是启动阻塞，而是 peer video Task 仍保留少量
+`CommandHandle.results()` watcher 作为失败、离线和 ready 超时兜底。主流程已经走
+`task.event.*` actor 模型；后续如果继续收敛，应评估这些 watcher 是否可以完全合并到
+统一事件分发和调度机制中。
 
 ### 9.3 为什么需要 TaskRunner
 
@@ -742,7 +753,7 @@ participant "Task.run / on_*" as Task
 participant "TaskDeviceFacade.commands" as Commands
 participant "ControlService" as Control
 participant "Device" as Device
-participant "AudioChatApp" as App
+participant "RealtimeAgentApp" as App
 participant "TaskEngine" as Engine
 participant "TaskRunner" as Runner
 
@@ -758,7 +769,7 @@ Runner -> Task : _process_*(context, event)
 @enduml
 ```
 
-`AudioChatApp._handle_command_result()` 只负责把端侧回报转换成统一 `task.event.*` 事件并交给 `TaskEngine.dispatch_event()`。`TaskEngine` 基于这份 `Event` 生成内部 `TaskEventView` 并分发给具体 Task 实例。事件如何解释由具体 Task 实例定义。
+`RealtimeAgentApp._handle_command_result()` 只负责把端侧回报转换成统一 `task.event.*` 事件并交给 `TaskEngine.dispatch_event()`。`TaskEngine` 基于这份 `Event` 生成内部 `TaskEventView` 并分发给具体 Task 实例。事件如何解释由具体 Task 实例定义。
 
 端侧 `command.*` 回报要进入 Task actor，必须满足：
 
@@ -808,13 +819,24 @@ class FindObjectTask(BaseTask):
         event.event.payload["summary"] = "找物完成"
 ```
 
-需要改进：
+当前实现：
 
-1. `command.failed.message` 应写入 `raw_error`。
-2. 如果端侧提供 `user_message`，才允许直接播报。
-3. 设备离线或心跳超时时，应把未完成 command 标记为 failed，并推进关联 Task。
-4. 当前 `_handle_device_command_report()` 只 `emit_signal()`，不会进入具体 Task 的 `_process_*()`；后续应改为 `TaskEngine.dispatch_event()`。
-5. 当前 peer video Task 在 `on_start()` 内部用 `CommandHandle.results()` 自己等待事件；后续应迁移为由 Task Core 统一分发事件，Task 实例只实现 `on_process()` / `on_finish()` / `on_error()` 这些业务 hook。
+1. `_handle_device_command_report()` 已把端侧 `command.accepted/progress/completed/failed`
+   转换成 `task.event.status/process/finish/error`，并调用 `TaskEngine.dispatch_event()`。
+2. `command.failed.message` 会写入 `raw_error`；未提供 `user_message` 或 `text` 时，
+   对外用户消息会收敛成通用失败文案，避免直接播报端侧原始异常。
+3. `CommandResultBroker.fail_device_commands()` 会在设备离线或心跳超时时失败化该设备上
+   未完成 command，唤醒仍在等待的 watcher。
+4. peer video Task 的主流程已经由 `on_process()` / `on_finish()` / `on_error()` 处理；
+   但仍保留 `CommandHandle.results()` watcher 处理设备离线、ready 超时等兜底路径。
+
+仍需改进：
+
+1. 设备离线、ready 超时等 watcher 兜底路径是否可以全部转换为 `task.event.error`，
+   需要继续收敛。
+2. peer video Task 的失败、取消和清理逻辑需要继续作为 Task Core 事件化模型的验收场景。
+3. 文档和测试应继续区分“主流程事件分发已落地”和“watcher 兜底仍存在”，避免再次把
+   已修复的启动阻塞误判为当前缺口。
 
 ## 14. 会话关闭策略
 
@@ -1001,10 +1023,11 @@ start_find_object_task
 
 ## 21. 最终结论
 
-1. Task Core 是当前 `audio-chat` 的后台任务运行中心，职责与 Agent Core 平级。
+1. Task Core 是当前 `realtime-agent` 的后台任务运行中心，职责与 Agent Core 平级。
 2. 目标模型是 Task actor：`TaskEngine.create()` 创建并托管 Task 实例，`TaskRunner` 后台执行 `run()`，后续所有外部输入都以统一 `Event` 信封进入 TaskEngine，再通过 `TaskEventView` 回到该实例。
 3. 第一阶段实现统一围绕 `TaskEngine`、`TaskRunner`、`TaskEventView`、`TaskSignalBridge`、`TaskStartTool` 和 `TaskRuntimeManagerTool` 演进。
-4. 当前最优先修复是后台化 `TaskEngine.create()`，否则 Realtime 工具调用会继续被长任务阻塞。
-5. 第二优先修复是事件分发入口，把端侧 `command.*`、调度、离线、取消都归一到 `TaskEngine.dispatch_event()`。
-6. 第三优先修复是错误通知策略，避免端侧原始异常直接播报。
-7. 端侧直连视频任务应作为 Task Core 的典型验收场景：启动快返回、后台运行、端侧事件回流、失败可观测、输出可仲裁。
+4. 后台化 `TaskEngine.create()` 已落地，长任务启动不会继续阻塞模型工具调用。
+5. 端侧 `command.*` 到 `task.event.*` 的主分发入口已落地，后续重点是把 watcher
+   兜底、离线失败和取消清理继续收敛到统一 Task actor 模型。
+6. 错误通知策略已经避免直接播报端侧原始异常，但还需要用真实端侧失败场景继续验收。
+7. 端侧直连视频任务仍应作为 Task Core 的典型验收场景：启动快返回、后台运行、端侧事件回流、失败可观测、输出可仲裁。

@@ -8,8 +8,8 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat_python_glass.playback import PythonPlaybackEndpoint
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent_python_glass.playback import PythonPlaybackEndpoint
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -24,7 +24,7 @@ def _clear_capability_modules() -> None:
             sys.modules.pop(name, None)
 
 
-def _build_app(tmp_path, monkeypatch) -> AudioChatApp:
+def _build_app(tmp_path, monkeypatch) -> RealtimeAgentApp:
     """创建 for-blind-app 测试实例。
 
     测试目标：复用真实样板 YAML 和自动发现配置创建应用。
@@ -34,8 +34,8 @@ def _build_app(tmp_path, monkeypatch) -> AudioChatApp:
 
     _clear_capability_modules()
     monkeypatch.syspath_prepend(str(APP_ROOT))
-    config = AudioChatConfig.from_yaml(APP_ROOT / "server.yaml")
-    return AudioChatApp(
+    config = RealtimeAgentConfig.from_yaml(APP_ROOT / "server.yaml")
+    return RealtimeAgentApp(
         replace(
             config,
             runs_root=str(tmp_path / "runs"),
@@ -48,7 +48,7 @@ def _build_app(tmp_path, monkeypatch) -> AudioChatApp:
     )
 
 
-def _register_playback(app: AudioChatApp) -> PythonPlaybackEndpoint:
+def _register_playback(app: RealtimeAgentApp) -> PythonPlaybackEndpoint:
     endpoint = PythonPlaybackEndpoint(
         app=app,
         user_id="user-for-blind",
@@ -70,7 +70,7 @@ def _register_playback(app: AudioChatApp) -> PythonPlaybackEndpoint:
 def test_for_blind_capability_packages_are_auto_discovered(tmp_path, monkeypatch) -> None:
     """测试目标：确认五类老业务能力迁移样板能被 SDK 自动发现。
 
-    测试方法：按 for-blind app YAML 创建 `AudioChatApp`，读取 Tool 和 Task 注册表。
+    测试方法：按 for-blind app YAML 创建 `RealtimeAgentApp`，读取 Tool 和 Task 注册表。
     预期结果：App 级 Tool 和 mock 业务 Task 都可见，专用 start_* Tool 不再注册。
     """
 
@@ -336,13 +336,13 @@ def test_for_blind_examples_use_public_api_and_no_hidden_device_routes() -> None
     """
 
     forbidden_modules = (
-        "audio_chat.tools",
-        "audio_chat.tasks",
-        "audio_chat.control",
-        "audio_chat.stream",
-        "audio_chat.asset",
-        "audio_chat.output",
-        "audio_chat.protocol",
+        "realtime_agent.tools",
+        "realtime_agent.tasks",
+        "realtime_agent.control",
+        "realtime_agent.stream",
+        "realtime_agent.asset",
+        "realtime_agent.output",
+        "realtime_agent.protocol",
     )
     forbidden_terms = [
         "target_device",

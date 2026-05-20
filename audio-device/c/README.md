@@ -1,6 +1,6 @@
-# audio-chat C Device SDK
+# realtime-agent C Device SDK
 
-`audio-chat C Device SDK` 面向 ESP32、嵌入式 Linux 和其他 C/C++ 端侧工程。
+`realtime-agent C Device SDK` 面向 ESP32、嵌入式 Linux 和其他 C/C++ 端侧工程。
 它提供最小协议核心：设备注册 payload 构造和 stream chunk 二进制编解码。
 
 SDK 不绑定 Wi-Fi、WebSocket、JSON 库或 RTOS。真实设备项目可以把这些能力接到
@@ -8,7 +8,7 @@ ESP-IDF、libwebsockets、Mongoose、POSIX socket 或自己的网络层。
 
 ## 遵循的协议
 
-协议版本：`audio-chat.v1`
+协议版本：`realtime-agent.v1`
 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ ESP-IDF、libwebsockets、Mongoose、POSIX socket 或自己的网络层。
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_xxx",
   "event_name": "control.device.register.requested",
   "timestamp_ms": 1760000000000,
@@ -38,28 +38,28 @@ JSON header bytes
 payload bytes
 ```
 
-`audio_chat_stream_decode()` 会校验 header 中的 `payload_size`。
+`realtime_agent_stream_decode()` 会校验 header 中的 `payload_size`。
 
 ## 数据模型
 
-### `audio_chat_device_t`
+### `realtime_agent_device_t`
 
 设备注册声明：
 
 ```c
-audio_chat_device_t device;
-audio_chat_device_init(&device, "user-001", "dev-esp32-001");
-audio_chat_device_set_name(&device, "ESP32 Glass");
-audio_chat_device_set_role(&device, "glass");
-audio_chat_device_add_rgb_sensor(&device);
-audio_chat_device_add_vibrator(&device);
+realtime_agent_device_t device;
+realtime_agent_device_init(&device, "user-001", "dev-esp32-001");
+realtime_agent_device_set_name(&device, "ESP32 Glass");
+realtime_agent_device_set_role(&device, "glass");
+realtime_agent_device_add_rgb_sensor(&device);
+realtime_agent_device_add_vibrator(&device);
 ```
 
 生成注册 payload：
 
 ```c
 char payload[1024];
-int n = audio_chat_device_registration_json(&device, payload, sizeof(payload));
+int n = realtime_agent_device_registration_json(&device, payload, sizeof(payload));
 if (n > 0) {
     // payload 可放入 control.device.register.requested 的 payload 字段
 }
@@ -75,7 +75,7 @@ const uint8_t payload[] = {'a', 'b', 'c'};
 uint8_t raw[128];
 size_t written = 0;
 
-audio_chat_stream_encode(
+realtime_agent_stream_encode(
     header,
     payload,
     sizeof(payload),
@@ -92,7 +92,7 @@ char header_json[128];
 const uint8_t *decoded_payload = NULL;
 size_t decoded_payload_size = 0;
 
-int ok = audio_chat_stream_decode(
+int ok = realtime_agent_stream_decode(
     raw,
     written,
     header_json,
@@ -109,22 +109,22 @@ int ok = audio_chat_stream_decode(
 把目录复制到你的项目，例如：
 
 ```text
-third_party/audio-chat-device-c/
+third_party/realtime-agent-device-c/
 ```
 
 在 `CMakeLists.txt` 中加入：
 
 ```cmake
-add_subdirectory(third_party/audio-chat-device-c)
+add_subdirectory(third_party/realtime-agent-device-c)
 
-target_link_libraries(your_target PRIVATE audio_chat_device)
+target_link_libraries(your_target PRIVATE realtime_agent_device)
 ```
 
 代码中导入：
 
 ```c
-#include "audio_chat_device/audio_chat_device.h"
-#include "audio_chat_device/audio_chat_stream.h"
+#include "realtime_agent_device/realtime_agent_device.h"
+#include "realtime_agent_device/realtime_agent_stream.h"
 ```
 
 ### ESP-IDF 项目
@@ -134,9 +134,9 @@ target_link_libraries(your_target PRIVATE audio_chat_device)
 ```cmake
 idf_component_register(
     SRCS
-        "audio_chat_reference_main.c"
-        "../../../../../../audio-device/c/src/audio_chat_device.c"
-        "../../../../../../audio-device/c/src/audio_chat_stream.c"
+        "realtime_agent_reference_main.c"
+        "../../../../../../audio-device/c/src/realtime_agent_device.c"
+        "../../../../../../audio-device/c/src/realtime_agent_stream.c"
     INCLUDE_DIRS "." "../../../../../../audio-device/c/include"
 )
 ```
@@ -144,10 +144,10 @@ idf_component_register(
 正式项目建议把 C SDK 放入 ESP-IDF component：
 
 ```text
-components/audio_chat_device/
-  include/audio_chat_device/
-  audio_chat_device.c
-  audio_chat_stream.c
+components/realtime_agent_device/
+  include/realtime_agent_device/
+  realtime_agent_device.c
+  realtime_agent_stream.c
   CMakeLists.txt
 ```
 
@@ -155,7 +155,7 @@ component `CMakeLists.txt` 示例：
 
 ```cmake
 idf_component_register(
-    SRCS "audio_chat_device.c" "audio_chat_stream.c"
+    SRCS "realtime_agent_device.c" "realtime_agent_stream.c"
     INCLUDE_DIRS "include"
 )
 ```
@@ -170,7 +170,7 @@ idf_component_register(
 4. 构造 `control.device.register.requested` JSON 并发送。
 5. 收到 `control.device.registered` 后定期发送心跳。
 6. 收到 `stream.control.open.requested` 后打开硬件。
-7. 用 `audio_chat_stream_encode()` 上传二进制帧到 `/ws/stream`。
+7. 用 `realtime_agent_stream_encode()` 上传二进制帧到 `/ws/stream`。
 8. 收到关闭或断线后释放硬件资源。
 
 ## 测试

@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from aiohttp import ClientSession, WSServerHandshakeError, web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat_python_glass.playback import NetworkPythonPlaybackEndpoint
-from audio_chat.protocol import Event, StreamFormat
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent_python_glass.playback import NetworkPythonPlaybackEndpoint
+from realtime_agent.protocol import Event, StreamFormat
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 def test_network_playback_over_real_websocket_transport(tmp_path: Path) -> None:
@@ -20,8 +20,8 @@ def test_network_playback_over_real_websocket_transport(tmp_path: Path) -> None:
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+        server = RealtimeAgentHttpServer(audio_app)
         app = server.create_web_app()
         runner = web.AppRunner(app)
         await runner.setup()
@@ -64,8 +64,8 @@ def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
 
     async def run() -> None:
         wav_path = Path("testdata/audio-sample/wav/看一下我前面有什么.wav")
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+        server = RealtimeAgentHttpServer(audio_app)
         app = server.create_web_app()
         runner = web.AppRunner(app)
         await runner.setup()
@@ -79,7 +79,7 @@ def test_network_playback_streams_recorded_wav_chunks(tmp_path: Path) -> None:
                 device_id="dev-net-wav",
                 runs_root=str(tmp_path / "runs"),
             )
-            from audio_chat_python_glass.playback import load_wav_audio
+            from realtime_agent_python_glass.playback import load_wav_audio
 
             audio = load_wav_audio(wav_path)
             result = await endpoint.run_once(audio=audio)
@@ -109,8 +109,8 @@ def test_network_multi_device_route_routes_rgb_and_speaker(tmp_path: Path) -> No
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -199,16 +199,16 @@ def test_network_playback_static_token_auth(tmp_path: Path) -> None:
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(
-                AudioChatConfig(
+        audio_app = RealtimeAgentApp(
+                RealtimeAgentConfig(
                     runs_root=str(tmp_path / "runs"),
-                    agent_mode="text",
+                    agent_mode="vision",
                     auth_mode="static_token",
                     device_tokens={"dev-token": "token-001"},
                     default_actuator_speaker=StreamFormat(sample_rate=16000, chunk_ms=40),
                 )
             )
-        server = AudioChatHttpServer(audio_app)
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -241,14 +241,14 @@ def test_failed_network_registration_does_not_allow_stream_connection(tmp_path: 
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(
-            AudioChatConfig(
+        audio_app = RealtimeAgentApp(
+            RealtimeAgentConfig(
                 runs_root=str(tmp_path / "runs"),
                 auth_mode="static_token",
                 device_tokens={"dev-token-denied": "token-ok"},
             )
         )
-        server = AudioChatHttpServer(audio_app)
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -268,7 +268,7 @@ def test_failed_network_registration_does_not_allow_stream_connection(tmp_path: 
                                 "device_id": "dev-token-denied",
                                 "device_name": "denied-playback",
                                 "client_type": "python-playback",
-                                "sdk_version": "audio-chat-test",
+                                "sdk_version": "realtime-agent-test",
                                 "auth": {"mode": "static_token", "token": "token-bad"},
                                 "supports": {"sensors": [], "actuators": []},
                             },

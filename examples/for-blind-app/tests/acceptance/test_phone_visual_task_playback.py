@@ -6,10 +6,10 @@ from pathlib import Path
 
 from aiohttp import ClientSession, web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.errors import AudioChatError
-from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.errors import RealtimeAgentError
+from realtime_agent_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 FOR_BLIND_APP_ROOT = Path(__file__).resolve().parents[4] / "examples" / "for-blind-app" / "audio-server"
@@ -32,15 +32,15 @@ def test_legacy_phone_visual_tasks_are_not_registered_in_peer_video_app(tmp_path
             if name == "capabilities" or name.startswith("capabilities."):
                 sys.modules.pop(name, None)
 
-        app = AudioChatApp(
-            AudioChatConfig(
+        app = RealtimeAgentApp(
+            RealtimeAgentConfig(
                 runs_root=str(tmp_path / "runs"),
                 tasks_discover_enabled=True,
                 tasks_discover_packages=("capabilities",),
                 tasks_discover_recursive=True,
             )
         )
-        server = AudioChatHttpServer(app)
+        server = RealtimeAgentHttpServer(app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -73,7 +73,7 @@ def test_legacy_phone_visual_tasks_are_not_registered_in_peer_video_app(tmp_path
                         session_id="sess-accept-phone",
                         input_data={"target": "手机"},
                     )
-                except AudioChatError as exc:
+                except RealtimeAgentError as exc:
                     assert "unknown task: find_object_phone_task" in str(exc)
                 else:
                     raise AssertionError("legacy find_object_phone_task should not be registered")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from audio_chat.audio_pipeline import (
+from realtime_agent.audio_pipeline import (
     AudioPipeline,
     AudioPipelineConfig,
     FormatValidator,
@@ -9,7 +9,7 @@ from audio_chat.audio_pipeline import (
     ServerVadProcessor,
     VolumeProbe,
 )
-from audio_chat.protocol import StreamChunk
+from realtime_agent.protocol import StreamChunk
 
 
 class AgentCore:

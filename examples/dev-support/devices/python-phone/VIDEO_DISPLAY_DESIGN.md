@@ -159,9 +159,9 @@ supports:
 display:
   enabled: true
   backend: pyside6
-  window_title: audio-chat Python Phone
+  window_title: realtime-agent Python Phone
   max_fps: 15
-  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.png
+  save_latest_frame: runs/realtime-agent/python-phone/latest-rgb.png
   log_limit: 200
   show_debug_events: true
 ```
@@ -245,8 +245,8 @@ package "Python Phone Endpoint" {
   [ControlClient] --> [DeviceCommandReporter]
 }
 
-[AudioChat Server] --> [ControlClient] : control events
-[AudioChat Server] --> [StreamClient] : stream chunks
+[RealtimeAgent Server] --> [ControlClient] : control events
+[RealtimeAgent Server] --> [StreamClient] : stream chunks
 @enduml
 ```
 
@@ -398,7 +398,7 @@ FindObjectVisionProcessor
 @startuml
 actor User
 participant Glass as "眼镜端"
-participant Server as "AudioChat Server"
+participant Server as "RealtimeAgent Server"
 participant Phone as "Python 手机端"
 
 Phone -> Server: control.device.register.requested\nproperties 声明 visual_display
@@ -438,7 +438,7 @@ realtime visual sampler 不会把帧发到 phone。
 6. browser-glass 发送 `stream.input.opened(sensor.rgb)`，随后通过 `/ws/stream` 上传 JPEG chunk。
 7. server 在打开该输入流时按 `stream.input.opened(sensor.rgb)` 匹配 phone preview，冻结 `consumer_device_ids`。
 8. server 收到 chunk 后下发给 phone preview。
-9. phone preview 解码并显示，同时写出 `runs/audio-chat/python-phone/latest-rgb.png`。
+9. phone preview 解码并显示，同时写出 `runs/realtime-agent/python-phone/latest-rgb.png`。
 
 观察点：
 
@@ -446,7 +446,7 @@ realtime visual sampler 不会把帧发到 phone。
 2. 根目录 `control-routes.jsonl` 里 `stream.input.opened(sensor.rgb)` 对 phone preview 的路由结果为 delivered。
 3. session `stream-events.jsonl` 里能看到 `consumer_device_ids` 包含 phone preview。
 4. phone 端 stdout 结果或退出摘要中 `video_frames` 数量大于 0，`video_errors` 为空。
-5. `runs/audio-chat/python-phone/latest-rgb.png` 存在，并且内容是 browser-glass 选择的图片。
+5. `runs/realtime-agent/python-phone/latest-rgb.png` 存在，并且内容是 browser-glass 选择的图片。
 
 ## 10. 后续 YOLO 扩展方式
 
@@ -496,10 +496,10 @@ supports:
 display:
   enabled: true
   backend: pyside6
-  window_title: audio-chat python phone
+  window_title: realtime-agent python phone
   max_fps: 15
   close_on_stream_closed: false
-  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.png
+  save_latest_frame: runs/realtime-agent/python-phone/latest-rgb.png
   log_limit: 500
   show_debug_events: true
 
@@ -542,19 +542,19 @@ uv run python -m pytest examples/dev-support/tests/python_phone_mock/test_python
 终端 1：
 
 ```bash
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 终端 2：
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 终端 3 或浏览器：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 手动步骤：
@@ -564,8 +564,8 @@ uv run audio-chat.web.open --serve
 3. 选择一张图片或视频。
 4. 普通 RGB stream 测试：触发一次不带 `request_id` 的 RGB 输入流。
 5. peer video 测试：用语音触发找物或红绿灯 Task，观察 `peer.video.receiver.start` 后才出现回显。
-6. 观察 Python 手机端窗口、`runs/audio-chat/python-phone/latest-rgb.png` 和
-   `runs/audio-chat/python-phone/latest-yolo.jpg`。
+6. 观察 Python 手机端窗口、`runs/realtime-agent/python-phone/latest-rgb.png` 和
+   `runs/realtime-agent/python-phone/latest-yolo.jpg`。
 
 预期结果：
 
@@ -591,7 +591,7 @@ YOLO 接入后增加：
 
 改动：
 
-1. 在 `audio-server/audio_chat/device_capabilities.py` 中扩展 `compile_system_routes_from_properties()`。
+1. 在 `audio-server/realtime_agent/device_capabilities.py` 中扩展 `compile_system_routes_from_properties()`。
 2. 当 `properties.actuator.display.rgb=true` 或 `properties.endpoint.role.visual_display=true` 时，追加内部路由：
 
    ```yaml
@@ -624,10 +624,10 @@ uv run python -m pytest audio-server/tests/protocol/test_device_capabilities_sem
    display:
      enabled: true
      backend: pyside6
-     window_title: audio-chat python phone
+     window_title: realtime-agent python phone
      max_fps: 15
      close_on_stream_closed: false
-     save_latest_frame: runs/audio-chat/python-phone/latest-rgb.png
+     save_latest_frame: runs/realtime-agent/python-phone/latest-rgb.png
      log_limit: 500
      show_debug_events: true
    ```
@@ -644,7 +644,7 @@ uv run python -m pytest audio-server/tests/protocol/test_device_capabilities_sem
 验收：
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 启动后应保持运行，并显示包含视频占位区、连接状态和事件日志的 GUI 窗口。
@@ -655,7 +655,7 @@ uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-
 
 改动：
 
-1. 新增 GUI 模块，例如 `audio_chat_python_phone_mock/gui.py`。
+1. 新增 GUI 模块，例如 `realtime_agent_python_phone_mock/gui.py`。
 2. 实现 `PhonePreviewWindow`、`VideoPanel`、`StatusPanel`、`EventLogPanel`。
 3. 实现 `GuiEventBridge`，把后台网络事件转成 Qt signal。
 4. `StreamChunkImageDecoder` 继续负责解码，GUI 层只接收已解码帧和状态事件。
@@ -695,7 +695,7 @@ uv run python -m pytest examples/dev-support/tests/python_phone_mock/test_python
 
 推荐方案：
 
-1. 新增轻量 CLI，例如 `audio-chat.dev.request-rgb`，只用于开发支持。
+1. 新增轻量 CLI，例如 `realtime-agent.dev.request-rgb`，只用于开发支持。
 2. CLI 通过 server 调试接口或控制面请求同一 `user_id` 下的 `sensor.rgb` 采集。
 3. CLI 不新增业务协议，不绕过 stream；它只触发现有 `stream.control.open.requested(sensor.rgb)`。
 

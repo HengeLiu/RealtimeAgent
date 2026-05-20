@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from audio_chat.config import load_yaml_config
+from realtime_agent.config import load_yaml_config
 
 
 def test_yaml_config_derives_runtime_paths_from_app_name(tmp_path: Path) -> None:
@@ -47,44 +47,44 @@ def test_yaml_config_keeps_explicit_sub_path_overrides(tmp_path: Path) -> None:
         """
 app-name: demo-app
 paths:
-  runtime_root: /tmp/audio-chat/demo
+  runtime_root: /tmp/realtime-agent/demo
 asset:
-  root: /tmp/audio-chat/custom-assets
+  root: /tmp/realtime-agent/custom-assets
 memory:
-  path: /tmp/audio-chat/custom-memory
+  path: /tmp/realtime-agent/custom-memory
 dev_checks:
-  report_path: /tmp/audio-chat/custom-preflight.json
+  report_path: /tmp/realtime-agent/custom-preflight.json
 """.lstrip(),
         encoding="utf-8",
     )
 
     config = load_yaml_config(config_path)
 
-    assert config.observability.runs_root == "/tmp/audio-chat/demo"
-    assert config.user.message_store["root"] == "/tmp/audio-chat/demo/users"
-    assert config.asset.root == "/tmp/audio-chat/custom-assets"
-    assert config.memory.path == "/tmp/audio-chat/custom-memory"
-    assert config.dev_checks.report_path == "/tmp/audio-chat/custom-preflight.json"
+    assert config.observability.runs_root == "/tmp/realtime-agent/demo"
+    assert config.user.message_store["root"] == "/tmp/realtime-agent/demo/users"
+    assert config.asset.root == "/tmp/realtime-agent/custom-assets"
+    assert config.memory.path == "/tmp/realtime-agent/custom-memory"
+    assert config.dev_checks.report_path == "/tmp/realtime-agent/custom-preflight.json"
 
 
-def test_audio_chat_runs_root_env_updates_derived_paths(tmp_path: Path, monkeypatch) -> None:
+def test_realtime_agent_runs_root_env_updates_derived_paths(tmp_path: Path, monkeypatch) -> None:
     """测试目标：确认环境变量覆盖运行根目录时，派生路径一起跟随变化。
 
-    测试方法：设置 AUDIO_CHAT_RUNS_ROOT 后读取只包含 app-name 的配置。
+    测试方法：设置 REALTIME_AGENT_RUNS_ROOT 后读取只包含 app-name 的配置。
     预期结果：runs_root、资产、记忆和 preflight 报告都使用环境变量指定的根目录。
     """
 
-    monkeypatch.setenv("AUDIO_CHAT_RUNS_ROOT", "/tmp/audio-chat/env-root")
+    monkeypatch.setenv("REALTIME_AGENT_RUNS_ROOT", "/tmp/realtime-agent/env-root")
     config_path = tmp_path / "server.yaml"
     config_path.write_text("app-name: demo-app\n", encoding="utf-8")
 
     config = load_yaml_config(config_path)
 
-    assert config.paths.runtime_root == "/tmp/audio-chat/env-root"
-    assert config.observability.runs_root == "/tmp/audio-chat/env-root"
-    assert config.asset.root == "/tmp/audio-chat/env-root/assets"
-    assert config.memory.path == "/tmp/audio-chat/env-root"
-    assert config.dev_checks.report_path == "/tmp/audio-chat/env-root/preflight.json"
+    assert config.paths.runtime_root == "/tmp/realtime-agent/env-root"
+    assert config.observability.runs_root == "/tmp/realtime-agent/env-root"
+    assert config.asset.root == "/tmp/realtime-agent/env-root/assets"
+    assert config.memory.path == "/tmp/realtime-agent/env-root"
+    assert config.dev_checks.report_path == "/tmp/realtime-agent/env-root/preflight.json"
 
 
 def test_for_blind_app_defaults_runs_under_app_directory() -> None:

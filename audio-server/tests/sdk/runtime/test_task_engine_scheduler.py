@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from audio_chat.errors import AudioChatError
-from audio_chat.tasks import BaseTask, TaskEngine
+from realtime_agent.errors import RealtimeAgentError
+from realtime_agent.tasks import BaseTask, TaskEngine
 
 
 class TimeoutTask(BaseTask):
@@ -179,14 +179,14 @@ def test_task_engine_rejects_user_concurrency_over_limit() -> None:
     """测试目标：验证同一用户运行任务数超过限制时会被拒绝。
 
     测试方法：注册 `max_running_per_user=1` 的 Task，连续创建两次。
-    预期结果：第二次创建抛出 AudioChatError。
+    预期结果：第二次创建抛出 RealtimeAgentError。
     """
 
     engine = TaskEngine()
     engine.register(LimitedTask)
     asyncio.run(engine.create(task_type="limited_task", user_id="user-limit", session_id="sess-one"))
 
-    with pytest.raises(AudioChatError, match="concurrency exceeded"):
+    with pytest.raises(RealtimeAgentError, match="concurrency exceeded"):
         asyncio.run(engine.create(task_type="limited_task", user_id="user-limit", session_id="sess-two"))
 
 

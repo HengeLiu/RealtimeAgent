@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = "audio-chat.v1";
+export const PROTOCOL_VERSION = "realtime-agent.v1";
 const FORBIDDEN_EVENT_FIELDS = new Set(["target_device", "target_device_id", "source_device", "source_device_id"]);
 const MEDIA_PAYLOAD_KEYS = new Set([
   "audio",
@@ -75,7 +75,7 @@ export function validateControlEventPayload(payload) {
   walk(payload, "payload");
 }
 
-export class AudioChatEvent {
+export class RealtimeAgentEvent {
   constructor({ eventName, userId, producerId, payload = {}, version = PROTOCOL_VERSION, eventId = newId("evt"), timestampMs = nowMs(), sessionId = null, streamId = null, streamType = null }) {
     this.eventName = eventName;
     this.userId = userId;
@@ -112,7 +112,7 @@ export class AudioChatEvent {
 
   static fromObject(data) {
     validateEventEnvelope(data);
-    return new AudioChatEvent({
+    return new RealtimeAgentEvent({
       version: data.version ?? PROTOCOL_VERSION,
       eventId: data.event_id ?? newId("evt"),
       eventName: data.event_name,

@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "AudioChatDeviceKit",
+    name: "RealtimeAgentDeviceKit",
     platforms: [
         .macOS(.v13),
         .iOS(.v16),
     ],
     products: [
-        .library(name: "AudioChatDeviceKit", targets: ["AudioChatDeviceKit"]),
+        .library(name: "RealtimeAgentDeviceKit", targets: ["RealtimeAgentDeviceKit"]),
     ],
     targets: [
-        .target(name: "AudioChatDeviceKit"),
+        .target(name: "RealtimeAgentDeviceKit"),
         .testTarget(
-            name: "AudioChatDeviceKitTests",
-            dependencies: ["AudioChatDeviceKit"],
+            name: "RealtimeAgentDeviceKitTests",
+            dependencies: ["RealtimeAgentDeviceKit"],
             resources: [
                 .copy("Fixtures/rgb-header.json"),
                 .copy("Fixtures/rgb-chunk.bin"),

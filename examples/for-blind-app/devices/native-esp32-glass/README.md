@@ -1,7 +1,7 @@
 # ESP32-S3 reference endpoint
 
-本目录记录 audio-chat ESP32-S3 真机桥接参考端协议。当前仓库提供
-`audio_chat_esp32_s3.esp32_aec` Python 契约模型和网络 smoke 参考实现，用于冻结
+本目录记录 realtime-agent ESP32-S3 真机桥接参考端协议。当前仓库提供
+`realtime_agent_esp32_s3.esp32_aec` Python 契约模型和网络 smoke 参考实现，用于冻结
 注册、会话、stream 和 AEC 诊断语义；物理 ESP32-S3 固件仍需要在硬件环境中按同一协议
 实现和验收。
 
@@ -20,7 +20,7 @@
 7. 收到 `sensor.rgb` 的 `stream.control.open.requested` 后，打开输入 stream
    上传 JPEG bytes；控制事件只保存 request_id、correlation_id、采样模式等语义字段。
 8. 如果配置了 iOS phone 的直连相机接收地址，同时把同一帧 JPEG 按
-   `audio_chat.direct_frame.v1` 格式推送到 `ws://<phone-ip>:9001/ws/camera`。
+   `realtime_agent.direct_frame.v1` 格式推送到 `ws://<phone-ip>:9001/ws/camera`。
 
 最小注册信息：
 
@@ -33,7 +33,7 @@
     "audio.playback_reference": "endpoint_ring_buffer",
     "sensor.rgb.format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
     "direct.camera_source": true,
-    "direct.camera.frame_format": "audio_chat.direct_frame.v1"
+    "direct.camera.frame_format": "realtime_agent.direct_frame.v1"
   },
 }
 ```
@@ -41,7 +41,7 @@
 本地配置由以下命令生成：
 
 ```bash
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --server-url http://127.0.0.1:8765 \
   --user-id user-endpoint-001
 ```
@@ -54,8 +54,8 @@ device_id、auth、音频格式、wake/AEC 模式、调试属性和订阅列表�
 再把页面展示的 `ws://<phone-ip>:9001/ws/camera` 写入：
 
 ```bash
-AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI=ws://192.168.1.50:9001/ws/camera
-AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS=500
+REALTIME_AGENT_PHONE_CAMERA_SINK_WS_URI=ws://192.168.1.50:9001/ws/camera
+REALTIME_AGENT_PHONE_CAMERA_STREAM_INTERVAL_MS=500
 ```
 
 直连只负责把相机帧送到 iOS phone 缓存；server 仍然通过 `stream.control.*` 请求
@@ -78,14 +78,14 @@ I2S、AEC、摄像头和串口诊断。
 无 ESP-IDF 或无硬件时可以先做无副作用检查：
 
 ```bash
-uv run audio-chat.esp32.build --dry-run
-uv run audio-chat.esp32.monitor --dry-run --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.build --dry-run
+uv run realtime-agent.esp32.monitor --dry-run --port /dev/tty.usbmodemXXXX
 ```
 
 有 ESP-IDF 与真机时再执行：
 
 ```bash
-uv run audio-chat.esp32.build
-uv run audio-chat.esp32.flash --port /dev/tty.usbmodemXXXX
-uv run audio-chat.esp32.monitor --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.build
+uv run realtime-agent.esp32.flash --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.monitor --port /dev/tty.usbmodemXXXX
 ```

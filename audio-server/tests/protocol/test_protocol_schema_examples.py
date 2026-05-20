@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat.device_capabilities import validate_device_capabilities_file
-from audio_chat.protocol import Event
+from realtime_agent.device_capabilities import validate_device_capabilities_file
+from realtime_agent.protocol import Event
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SPEC_ROOT = ROOT / "audio-server/audio_chat/spec"
+SPEC_ROOT = ROOT / "audio-server/realtime_agent/spec"
 TESTDATA_ROOT = ROOT / "testdata/protocol"
 
 
@@ -50,12 +50,12 @@ def test_invalid_device_examples_are_rejected_by_runtime_capability_validator() 
 def test_event_golden_examples_match_schema_enum_and_runtime_envelope() -> None:
     """测试目标：确认控制事件黄金样例同时符合 schema 事件名清单和运行时信封。
 
-    测试方法：从 `audio-chat-event.schema.json` 读取 event_name enum，再用
+    测试方法：从 `realtime-agent-event.schema.json` 读取 event_name enum，再用
     `Event.from_dict()` 解析每个事件样例。
     预期结果：所有样例事件名都在 schema 中，且运行时可以解析。
     """
 
-    schema = _load_json(SPEC_ROOT / "audio-chat-event.schema.json")
+    schema = _load_json(SPEC_ROOT / "realtime-agent-event.schema.json")
     allowed = set(schema["properties"]["event_name"]["enum"])
     for path in sorted((TESTDATA_ROOT / "events").glob("*.json")):
         data = _load_json(path)
@@ -72,7 +72,7 @@ def test_invalid_event_examples_are_rejected_by_schema_or_runtime_envelope() -> 
     预期结果：每个反例至少被一层协议校验拒绝，不能进入 SDK 行为层。
     """
 
-    schema = _load_json(SPEC_ROOT / "audio-chat-event.schema.json")
+    schema = _load_json(SPEC_ROOT / "realtime-agent-event.schema.json")
     allowed = set(schema["properties"]["event_name"]["enum"])
     for path in sorted((TESTDATA_ROOT / "invalid/events").glob("*.json")):
         data = _load_json(path)
@@ -90,13 +90,13 @@ def test_event_schema_rejects_unknown_event_name() -> None:
     预期结果：未知事件名不在 schema enum 中，提醒 SDK 不应把它作为类型化事件暴露。
     """
 
-    schema = _load_json(SPEC_ROOT / "audio-chat-event.schema.json")
+    schema = _load_json(SPEC_ROOT / "realtime-agent-event.schema.json")
     allowed = set(schema["properties"]["event_name"]["enum"])
     assert "device.random.event" not in allowed
     with pytest.raises(ValueError, match="invalid event_name"):
         Event.from_dict(
             {
-                "version": "audio-chat.v1",
+                "version": "realtime-agent.v1",
                 "event_id": "evt_bad",
                 "event_name": "Device.Random",
                 "timestamp_ms": 1,

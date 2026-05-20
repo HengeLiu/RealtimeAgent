@@ -3,6 +3,6 @@ plugins {
 }
 
 subprojects {
-    group = "io.audiochat"
+    group = "io.realtimeagent"
     version = "0.1.0"
 }

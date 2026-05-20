@@ -1,7 +1,7 @@
 import wave
 from pathlib import Path
 
-from audio_chat_python_glass.playback import load_wav_audio, run_playback
+from realtime_agent_python_glass.playback import load_wav_audio, run_playback
 
 
 def test_python_playback_sdk_loop_writes_runs_artifacts(tmp_path: Path) -> None:

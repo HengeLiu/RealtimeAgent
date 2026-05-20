@@ -14,15 +14,15 @@
 
 | 范围 | 文件 |
 | --- | --- |
-| 协议常量和事件信封 | `audio-server/audio_chat/protocol.py` |
-| 设备注册和路由 | `audio-server/audio_chat/control/service.py` |
-| 控制 / stream WebSocket | `audio-server/audio_chat/server.py` |
-| stream 生命周期 | `audio-server/audio_chat/stream/service.py` |
-| 能力声明校验 | `audio-server/audio_chat/device_capabilities.py` |
-| Python 回放端 | `examples/dev-support/devices/python-playback-glass/audio_chat_python_playback_glass/protocol_client.py` |
+| 协议常量和事件信封 | `audio-server/realtime_agent/protocol.py` |
+| 设备注册和路由 | `audio-server/realtime_agent/control/service.py` |
+| 控制 / stream WebSocket | `audio-server/realtime_agent/server.py` |
+| stream 生命周期 | `audio-server/realtime_agent/stream/service.py` |
+| 能力声明校验 | `audio-server/realtime_agent/device_capabilities.py` |
+| Python 回放端 | `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py` |
 | 浏览器眼镜模拟组件 | `examples/dev-support/devices/browser-glass/index.html` |
-| iOS 参考端 | `examples/for-blind-app/devices/native-ios-phone/AudioChatPhone/Core/` |
-| ESP32-S3 参考端 | `examples/for-blind-app/devices/native-esp32-glass/firmware/main/audio_chat_reference_main.c` |
+| iOS 参考端 | `examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/` |
+| ESP32-S3 参考端 | `examples/for-blind-app/devices/native-esp32-glass/firmware/main/realtime_agent_reference_main.c` |
 
 ## 2. 控制事件清单
 
@@ -86,7 +86,7 @@
 实际约束：
 
 - `producer_id` 必须等于 `payload.device_id`。
-- `version` 必须是 `audio-chat.v1`。
+- `version` 必须是 `realtime-agent.v1`。
 - `payload.supports` 必须是结构化 `sensors/actuators`。
 - 注册 payload 不能包含 `routes`，server 会从 `supports` 和 `properties` 编译内部路由。
 - 注册 payload 不能包含旧 `capabilities` 字段。
@@ -105,8 +105,8 @@
 
 系统音频不属于普通 `supports`：
 
-- `sensor.mic` 通过 `properties.audio_chat.audio_input=sensor.mic` 进入系统音频链路。
-- `actuator.speaker` 通过 `properties.audio_chat.audio_output=actuator.speaker` 进入输出播放链路。
+- `sensor.mic` 通过 `properties.realtime_agent.audio_input=sensor.mic` 进入系统音频链路。
+- `actuator.speaker` 通过 `properties.realtime_agent.audio_output=actuator.speaker` 进入输出播放链路。
 
 ## 5. stream header 字段
 
@@ -122,7 +122,7 @@ header 字段：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `version` | 是 | `audio-chat.v1`。 |
+| `version` | 是 | `realtime-agent.v1`。 |
 | `user_id` | 是 | 用户 ID。 |
 | `session_id` | 是 | 当前实现常用设备 ID 或会话 ID。 |
 | `stream_id` | 是 | stream ID。 |
@@ -141,17 +141,17 @@ header 字段：
 
 | 组件 / 参考端 | 现状 | 第一轮处理 |
 | --- | --- | --- |
-| Python playback glass / Python phone 开发支持组件共享网络基类 | 已通过真实 `/ws/control` 和 `/ws/stream` 回放；原本自带 URL、注册事件和 stream chunk 编解码。 | 已切到 `audio_chat_device.AudioChatDeviceClient`、`AudioChatEvent`、`ws_url` 和 `StreamChunkCodec`。 |
-| browser-glass 开发支持组件 | HTML 内保留交互式 UI 和业务事件处理，但底层通讯对象已迁移。 | 已通过本地 adapter re-export TypeScript SDK，并复用 `AudioChatDeviceClient`、`AudioChatEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。 |
-| iOS Swift phone | `AudioChatEvent.swift` 和 `StreamChunkCodec.swift` 自带协议实现。 | 后续 Swift Package 阶段迁移。 |
+| Python playback glass / Python phone 开发支持组件共享网络基类 | 已通过真实 `/ws/control` 和 `/ws/stream` 回放；原本自带 URL、注册事件和 stream chunk 编解码。 | 已切到 `realtime_agent_device.RealtimeAgentDeviceClient`、`RealtimeAgentEvent`、`ws_url` 和 `StreamChunkCodec`。 |
+| browser-glass 开发支持组件 | HTML 内保留交互式 UI 和业务事件处理，但底层通讯对象已迁移。 | 已通过本地 adapter re-export TypeScript SDK，并复用 `RealtimeAgentDeviceClient`、`RealtimeAgentEvent`、`DeviceBuilder` 和 `StreamChunkCodec`。 |
+| iOS Swift phone | `RealtimeAgentEvent.swift` 和 `StreamChunkCodec.swift` 自带协议实现。 | 后续 Swift Package 阶段迁移。 |
 | ESP32-S3 | 当前是可构建骨架，协议清单写在 C 注释中。 | 后续 C SDK 阶段迁移 header 和 codec。 |
 
 ## 7. 必须统一项
 
-1. 事件名清单进入 `audio-chat-event.schema.json`。
-2. stream header 字段进入 `audio-chat-stream.schema.json`。
-3. 端侧错误码进入 `audio-chat-error-codes.yaml`。
-4. WebSocket 通道进入 `audio-chat-asyncapi.yaml`。
+1. 事件名清单进入 `realtime-agent-event.schema.json`。
+2. stream header 字段进入 `realtime-agent-stream.schema.json`。
+3. 端侧错误码进入 `realtime-agent-error-codes.yaml`。
+4. WebSocket 通道进入 `realtime-agent-asyncapi.yaml`。
 5. 黄金样例进入 `testdata/protocol/`。
 6. Python 参考端优先复用基准 SDK 的连接、事件和 stream chunk codec。
 

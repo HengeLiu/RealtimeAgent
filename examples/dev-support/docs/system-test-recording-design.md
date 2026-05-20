@@ -6,7 +6,7 @@
 
 ## 1. 核心定位
 
-`python-playback-glass` 是一个开发支持端侧，不是 `audio_chat` SDK 内部模块。
+`python-playback-glass` 是一个开发支持端侧，不是 `realtime_agent` SDK 内部模块。
 
 它在系统中的身份是“一台可脚本化的眼镜设备”：
 
@@ -22,9 +22,9 @@ server 不能知道它是测试框架。对 server 来说，它和 `browser-glas
 
 本方案禁止以下实现方式：
 
-1. 不在 `audio-server/audio_chat/` 下新增 `system_test` 之类测试框架目录。
-2. 不新增 `audio-chat.system-test.*` 这类 SDK CLI 入口。
-3. 不在回放端侧中实例化 `AudioChatApp`、`AudioChatConfig`。
+1. 不在 `audio-server/realtime_agent/` 下新增 `system_test` 之类测试框架目录。
+2. 不新增 `realtime-agent.system-test.*` 这类 SDK CLI 入口。
+3. 不在回放端侧中实例化 `RealtimeAgentApp`、`RealtimeAgentConfig`。
 4. 不直接调用 `register_device()`、`publish_control_event()`、`open_input_stream()`、`write_input_chunk()`、`stream_service.close_stream()`。
 5. 不直接调用 `ToolGateway`、`TaskEngine`、`OutputService`、`AssetService` 或 server recorder。
 6. 不使用 in-process 模式作为系统测试主路径。
@@ -71,7 +71,7 @@ title python-playback-glass 录制式系统测试流程
 
 actor Developer as Dev
 participant "browser-glass" as Browser
-participant "audio-chat server" as Server
+participant "realtime-agent server" as Server
 participant "runs artifacts" as Runs
 participant "Case Recorder\n(dev-support)" as Recorder
 participant "Case YAML" as Case
@@ -153,7 +153,7 @@ Case Recorder 负责把一次运行归纳成 Case 草稿：
 第一阶段 CLI 应属于 dev-support 端侧工具，例如：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass record \
+uv run python -m realtime_agent_python_playback_glass record \
   --runs-root examples/for-blind-app/audio-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
@@ -167,9 +167,9 @@ uv run python -m audio_chat_python_playback_glass record \
 ```text
 examples/dev-support/devices/python-playback-glass/
   README.md
-  device.audio-chat.yaml
+  device.realtime-agent.yaml
   playback.glass.yaml
-  audio_chat_python_playback_glass/
+  realtime_agent_python_playback_glass/
     __init__.py
     __main__.py
     cli.py
@@ -194,7 +194,7 @@ examples/dev-support/tests/python_playback_glass/
   test_smoke_suite.py
 ```
 
-这里的 `runner.py` 是端侧回放 runner，不是 SDK runner。它可以启动 `protocol_client.py` 连接 server，但不能导入 `audio_chat.app.AudioChatApp`。
+这里的 `runner.py` 是端侧回放 runner，不是 SDK runner。它可以启动 `protocol_client.py` 连接 server，但不能导入 `realtime_agent.app.RealtimeAgentApp`。
 
 ## 8. Case 文件结构
 
@@ -217,8 +217,8 @@ device:
   name: Python 回放眼镜
   client_type: python-playback-glass
   properties:
-    audio_chat.audio_input: sensor.mic
-    audio_chat.audio_output: actuator.speaker
+    realtime_agent.audio_input: sensor.mic
+    realtime_agent.audio_output: actuator.speaker
   supports:
     sensors:
       - type: rgb
@@ -359,7 +359,7 @@ expect:
 截至 2026-05-12，`python-playback-glass` 已按本文定位落在
 `examples/dev-support/devices/python-playback-glass/`，并保持以下边界：
 
-1. 端侧包不导入 `AudioChatApp`、`AudioChatConfig`、`ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
+1. 端侧包不导入 `RealtimeAgentApp`、`RealtimeAgentConfig`、`ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
 2. 回放路径通过 `/ws/control` 和 `/ws/stream` 发送事件与二进制 chunk。
 3. recorder 只读取 runs 文件产物，不调用 server 内部对象。
 4. pytest 覆盖端侧 schema、协议编解码、recorder 和静态边界；完整系统回放仍需要外部启动 server 后执行 suite。

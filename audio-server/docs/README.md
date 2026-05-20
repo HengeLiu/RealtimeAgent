@@ -1,6 +1,6 @@
 # audio-server 文档
 
-本目录保存 server SDK 相关文档，面向需要理解或修改 `audio-server/audio_chat` 的开发者。
+本目录保存 server SDK 相关文档，面向需要理解或修改 `audio-server/realtime_agent` 的开发者。
 
 ## How-to
 
@@ -13,4 +13,4 @@
 
 ## Internal
 
-内部文档只作为维护 `audio-server/audio_chat` 时的设计参考；开发和联调以 How-to 与 Reference 为准。
+内部文档只作为维护 `audio-server/realtime_agent` 时的设计参考；开发和联调以 How-to 与 Reference 为准。

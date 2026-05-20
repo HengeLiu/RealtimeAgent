@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 EXAMPLE_ROOTS = [
-    ROOT / "examples" / "for-blind-app",
+    ROOT / "examples" / "for-blind-app" / "audio-server" / "capabilities",
     ROOT / "examples" / "for-blind-app" / "templates",
 ]
 
@@ -18,22 +18,22 @@ def _python_files() -> list[Path]:
     return sorted(files)
 
 
-def test_examples_and_migration_templates_use_audio_chat_top_level_api() -> None:
-    """测试目标：冻结示例和迁移样板只能依赖 `audio_chat` 顶层开发者 API。
+def test_examples_and_migration_templates_use_realtime_agent_top_level_api() -> None:
+    """测试目标：冻结示例和迁移样板只能依赖 `realtime_agent` 顶层开发者 API。
 
     测试方法：AST 扫描 examples/for-blind-app 与 examples/for-blind-app/templates 下的 Python 文件。
-    预期结果：不出现 `audio_chat.tools`、`audio_chat.tasks`、`audio_chat.control`、
-    `audio_chat.stream`、`audio_chat.asset`、`audio_chat.output` 等内部模块导入。
+    预期结果：不出现 `realtime_agent.tools`、`realtime_agent.tasks`、`realtime_agent.control`、
+    `realtime_agent.stream`、`realtime_agent.asset`、`realtime_agent.output` 等内部模块导入。
     """
 
     forbidden_prefixes = (
-        "audio_chat.tools",
-        "audio_chat.tasks",
-        "audio_chat.control",
-        "audio_chat.stream",
-        "audio_chat.asset",
-        "audio_chat.output",
-        "audio_chat.protocol",
+        "realtime_agent.tools",
+        "realtime_agent.tasks",
+        "realtime_agent.control",
+        "realtime_agent.stream",
+        "realtime_agent.asset",
+        "realtime_agent.output",
+        "realtime_agent.protocol",
     )
     offenders: list[str] = []
     for path in _python_files():

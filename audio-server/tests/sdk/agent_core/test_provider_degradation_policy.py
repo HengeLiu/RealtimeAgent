@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from audio_chat.agent_core.providers import (
-    TextModelProviderConfig,
-    build_text_model,
+from realtime_agent.agent_core.providers import (
+    VisionModelProviderConfig,
+    build_vision_model,
     run_provider_call_with_policy,
 )
 
@@ -78,12 +78,12 @@ def test_openai_compatible_missing_key_fallback_and_fail(monkeypatch) -> None:
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    provider, reason = build_text_model(
-        TextModelProviderConfig(provider="openai-compatible", allow_mock_fallback=True)
+    provider, reason = build_vision_model(
+        VisionModelProviderConfig(provider="openai-compatible", allow_mock_fallback=True)
     )
 
     assert provider.provider_name == "mock"
     assert reason and "OPENAI_API_KEY" in reason
     with pytest.raises(Exception) as exc_info:
-        build_text_model(TextModelProviderConfig(provider="openai-compatible", allow_mock_fallback=False))
+        build_vision_model(VisionModelProviderConfig(provider="openai-compatible", allow_mock_fallback=False))
     assert "OPENAI_API_KEY" in str(exc_info.value)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from audio_chat import Event, EventName, EventPattern, StreamType
-from audio_chat.protocol import CONTROL_EVENTS, STREAM_TYPES
+from realtime_agent import Event, EventName, EventPattern, StreamType
+from realtime_agent.protocol import CONTROL_EVENTS, STREAM_TYPES
 
 
 def test_event_name_and_stream_type_enums_are_protocol_strings() -> None:

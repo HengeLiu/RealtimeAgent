@@ -4,15 +4,15 @@ import time
 
 import pytest
 
-from audio_chat.agent_core.base import AgentCoreEvent
-from audio_chat.agent_core.providers import OpenAICompatibleTextModelAdapter, TranscriptEvent
-from audio_chat.agent_core.router import AgentCoreRouter
-from audio_chat.agent_core.text import TextAgentCore
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.output import AssistantTextDelta
-from audio_chat.output.service import OutputItem
-from audio_chat.protocol import Event, StreamChunk
-from audio_chat.realtime_pipeline import (
+from realtime_agent.agent_core.base import AgentCoreEvent
+from realtime_agent.agent_core.providers import OpenAICompatibleVisionModelAdapter, TranscriptEvent
+from realtime_agent.agent_core.router import AgentCoreRouter
+from realtime_agent.agent_core.vision import VisionRealtimeAgentCore
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.output import AssistantTextDelta
+from realtime_agent.output.service import OutputItem
+from realtime_agent.protocol import Event, StreamChunk
+from realtime_agent.realtime_pipeline import (
     OmniAgentCore,
     OmniInputBoundary,
     OmniRealtimePipeline,
@@ -20,55 +20,55 @@ from audio_chat.realtime_pipeline import (
     PipelineEventEmitter,
     RealtimeAudioNormalizer,
     RealtimeOutputController,
-    TextInputBoundary,
-    TextRealtimePipeline,
-    TextResponseEngine,
+    VisionInputBoundary,
+    VisionRealtimePipeline,
+    VisionResponseEngine,
 )
-from audio_chat.tasks import BaseTask, TaskSignal
-from audio_chat.tools import BaseTool, ToolContext, ToolResult
+from realtime_agent.tasks import BaseTask, TaskSignal
+from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
 pytestmark = pytest.mark.sdk
 
 
 def test_agent_mode_text_builds_text_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=text` 构建 TextRealtimePipeline。
+    """测试目标：验证 `agent.mode=vision` 构建 VisionRealtimePipeline。
 
-    测试方法：用 text 模式创建 AudioChatApp。
-    预期结果：app 正常初始化，外层是 TextRealtimePipeline，内部保留 TextAgentCore。
+    测试方法：用 text 模式创建 RealtimeAgentApp。
+    预期结果：app 正常初始化，外层是 VisionRealtimePipeline，内部保留 VisionRealtimeAgentCore。
     """
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
 
-    assert isinstance(app.agent_core, TextRealtimePipeline)
-    assert isinstance(app.agent_core.core, TextAgentCore)
+    assert isinstance(app.agent_core, VisionRealtimePipeline)
+    assert isinstance(app.agent_core.core, VisionRealtimeAgentCore)
     assert hasattr(app.agent_core, "append_audio_event")
 
 
-def test_agent_mode_realtime_audio_builds_realtime_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=realtime_audio` 能创建 OmniRealtimePipeline。
+def test_agent_mode_omni_audio_builds_realtime_core(tmp_path) -> None:
+    """测试目标：验证 `agent.mode=omni` 能创建 OmniRealtimePipeline。
 
-    测试方法：用 `agent_mode=realtime_audio` 创建 AudioChatApp。
+    测试方法：用 `agent_mode=omni` 创建 RealtimeAgentApp。
     预期结果：app 正常初始化，不在构造阶段连接真实 provider。
     """
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni"))
 
     assert isinstance(app.agent_core, OmniRealtimePipeline)
     assert isinstance(app.agent_core.core, OmniAgentCore)
 
 
 def test_agent_mode_auto_defaults_to_text_for_now(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=auto` 当前保守落到文本链路。
+    """测试目标：验证 `agent.mode=auto` 当前保守落到Vision 链路。
 
-    测试方法：用 auto 模式创建 AudioChatApp。
-    预期结果：返回 TextRealtimePipeline；文档中声明后续再接端侧能力判断。
+    测试方法：用 auto 模式创建 RealtimeAgentApp。
+    预期结果：返回 VisionRealtimePipeline；文档中声明后续再接端侧能力判断。
     """
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="auto"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="auto"))
 
-    assert isinstance(app.agent_core, TextRealtimePipeline)
-    assert isinstance(app.agent_core.core, TextAgentCore)
+    assert isinstance(app.agent_core, VisionRealtimePipeline)
+    assert isinstance(app.agent_core.core, VisionRealtimeAgentCore)
 
 
-def test_text_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
+def test_vision_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
     """测试目标：验证 Text realtime 时序图中的核心组件都有真实代码对象。
 
     测试方法：创建 text 模式应用，检查 pipeline 内部组件类型，并手动驱动
@@ -76,14 +76,14 @@ def test_text_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> No
     预期结果：组件不是概念占位，且生命周期入口会输出稳定的 pipeline 事件。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     pipeline = app.agent_core
 
-    assert isinstance(pipeline, TextRealtimePipeline)
-    assert isinstance(pipeline.core, TextAgentCore)
+    assert isinstance(pipeline, VisionRealtimePipeline)
+    assert isinstance(pipeline.core, VisionRealtimeAgentCore)
     assert isinstance(pipeline.normalizer, RealtimeAudioNormalizer)
-    assert isinstance(pipeline.input_boundary, TextInputBoundary)
-    assert isinstance(pipeline.response_engine, TextResponseEngine)
+    assert isinstance(pipeline.input_boundary, VisionInputBoundary)
+    assert isinstance(pipeline.response_engine, VisionResponseEngine)
     assert isinstance(pipeline.output_controller, RealtimeOutputController)
     assert isinstance(pipeline.emitter, PipelineEventEmitter)
 
@@ -125,13 +125,13 @@ def test_text_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> No
 def test_omni_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
     """测试目标：验证 Omni realtime 时序图中的核心组件都有真实代码对象。
 
-    测试方法：创建 mock realtime_audio 应用，检查 pipeline 内部组件类型，并手动驱动
+    测试方法：创建 mock omni 应用，检查 pipeline 内部组件类型，并手动驱动
     session/upstream/downstream 生命周期和 provider speech 事件。
     预期结果：组件不是概念占位，且 provider 原始事件会转换成稳定 pipeline 事件。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio", realtime_provider="mock")
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni", omni_provider="mock")
     )
     pipeline = app.agent_core
 
@@ -177,11 +177,11 @@ def test_omni_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> No
 def test_agent_mode_custom_fails_fast(tmp_path) -> None:
     """测试目标：验证 custom 模式没有 app-module 工厂时明确失败。
 
-    测试方法：用 custom 模式创建 AudioChatApp。
+    测试方法：用 custom 模式创建 RealtimeAgentApp。
     预期结果：抛出 NotImplementedError。
     """
     with pytest.raises(NotImplementedError, match="custom"):
-        AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="custom"))
+        RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="custom"))
 
 
 class CustomCore:
@@ -238,14 +238,14 @@ def test_agent_core_router_supports_custom_factory() -> None:
     assert built.kwargs["sentinel"] == "ok"
 
 
-def test_text_agent_core_exposes_unified_lifecycle_events(tmp_path) -> None:
-    """测试目标：验证 TextAgentCore 实现统一 AgentCore 生命周期接口。
+def test_vision_agent_core_exposes_unified_lifecycle_events(tmp_path) -> None:
+    """测试目标：验证 VisionRealtimeAgentCore 实现统一 AgentCore 生命周期接口。
 
     测试方法：创建 text app 后调用 open、commit_input、interrupt、close。
     预期结果：`events()` 返回对应统一事件名。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
 
     app.agent_core.open("user-text", "sess-text")
     app.agent_core.commit_input("user-text", "sess-text", reason="unit_commit")
@@ -270,7 +270,7 @@ class WeatherTool(BaseTool):
         """测试目标：验证 Tool 只能通过 ToolContext 执行。
 
         测试方法：返回入参和当前用户上下文。
-        预期结果：TextAgentCore 可通过 ToolGateway 取得该结果并回填模型消息。
+        预期结果：VisionRealtimeAgentCore 可通过 ToolGateway 取得该结果并回填模型消息。
         """
 
         return ToolResult.success(
@@ -279,7 +279,7 @@ class WeatherTool(BaseTool):
         )
 
 
-class ToolCallingTextModel:
+class ToolCallingVisionModel:
     provider_name = "mock-tool"
     model = "mock-tool-model"
 
@@ -315,8 +315,8 @@ class ToolCallingTextModel:
         pass
 
 
-class ToolLoopFailingTextModel:
-    """测试用文本模型：工具调用后的第二轮 provider 请求抛出异常。"""
+class ToolLoopFailingVisionModel:
+    """测试用Vision 模型：工具调用后的第二轮 provider 请求抛出异常。"""
 
     provider_name = "mock-tool-failing"
     model = "mock-tool-failing-model"
@@ -345,8 +345,8 @@ class ToolLoopFailingTextModel:
         pass
 
 
-class RecoveryTextModel:
-    """测试用文本模型：异常后一轮新输入可以继续正常回复。"""
+class RecoveryVisionModel:
+    """测试用Vision 模型：异常后一轮新输入可以继续正常回复。"""
 
     provider_name = "mock-recovery"
     model = "mock-recovery-model"
@@ -363,8 +363,8 @@ class RecoveryTextModel:
         pass
 
 
-class MultiDeltaRecoveryTextModel:
-    """测试用文本模型：把同一条回复拆成多个文本 delta。"""
+class MultiDeltaRecoveryVisionModel:
+    """测试用Vision 模型：把同一条回复拆成多个文本 delta。"""
 
     provider_name = "mock-multi-delta"
     model = "mock-multi-delta-model"
@@ -382,14 +382,14 @@ class MultiDeltaRecoveryTextModel:
         pass
 
 
-class UnpunctuatedDeltaTextModel:
-    """测试用文本模型：首个 delta 没有停顿标点。"""
+class UnpunctuatedDeltaVisionModel:
+    """测试用Vision 模型：首个 delta 没有停顿标点。"""
 
     provider_name = "mock-unpunctuated-delta"
     model = "mock-unpunctuated-delta-model"
 
     def stream_messages(self, *, messages: list[dict], tools: list[dict]):
-        """逐字返回文本，用于验证 Text 链路不等待标点或完整回复。"""
+        """逐字返回文本，用于验证 Vision 链路不等待标点或完整回复。"""
 
         yield "你"
         yield "好"
@@ -402,8 +402,8 @@ class UnpunctuatedDeltaTextModel:
         pass
 
 
-class InterruptingTextModel:
-    """测试用文本模型：首段文本后触发用户打断。"""
+class InterruptingVisionModel:
+    """测试用Vision 模型：首段文本后触发用户打断。"""
 
     provider_name = "mock-interrupting"
     model = "mock-interrupting-model"
@@ -429,19 +429,19 @@ class InterruptingTextModel:
 class FailingOutputAdapter:
     """测试用输出适配器：模拟 TTS/output 状态损坏。"""
 
-    def emit_text_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
+    def emit_vision_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
         """始终抛出输出异常。"""
 
         raise RuntimeError("fallback output failed")
 
 
 class RecordingOutputAdapter:
-    """测试用输出适配器：记录 Text 链路写出的文本分片。"""
+    """测试用输出适配器：记录 Vision 链路写出的Vision 分片。"""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def emit_text_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
+    def emit_vision_delta(self, *, user_id: str, session_id: str, text: str, final: bool = False) -> None:
         """记录输出参数，便于断言打断后不会继续 flush。"""
 
         self.calls.append({"user_id": user_id, "session_id": session_id, "text": text, "final": final})
@@ -465,8 +465,8 @@ class ImmediateFinalAsrProvider:
         """测试 provider 无需释放资源。"""
 
 
-class BlockingTextModel:
-    """测试用文本模型，阻塞直到测试放行。"""
+class BlockingVisionModel:
+    """测试用Vision 模型，阻塞直到测试放行。"""
 
     provider_name = "blocking-text"
     model = "blocking-text-model"
@@ -490,8 +490,8 @@ class BlockingTextModel:
         self.cancelled = True
 
 
-class SupersededBlockingTextModel:
-    """测试用文本模型：首轮阻塞，第二轮立即返回。"""
+class SupersededBlockingVisionModel:
+    """测试用Vision 模型：首轮阻塞，第二轮立即返回。"""
 
     provider_name = "superseded-blocking-text"
     model = "superseded-blocking-text-model"
@@ -519,8 +519,8 @@ class SupersededBlockingTextModel:
         """测试模型不需要真实取消。"""
 
 
-class ReleasedThenBlockingTextModel:
-    """测试用文本模型：先释放一段文本，再阻塞等待打断。"""
+class ReleasedThenBlockingVisionModel:
+    """测试用Vision 模型：先释放一段文本，再阻塞等待打断。"""
 
     provider_name = "released-then-blocking-text"
     model = "released-then-blocking-text-model"
@@ -538,7 +538,7 @@ class ReleasedThenBlockingTextModel:
         yield "这段取消后不应该出现。"
 
     def stream_text(self, transcript: str):
-        """兼容旧 TextModelAdapter 接口。"""
+        """兼容旧 Vision model provider 接口。"""
 
         yield from self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[])
 
@@ -657,8 +657,8 @@ class FirstDeltaFailsThenStreamsTTS:
         return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
 
 
-class CaptureHistoryTextModel:
-    """测试用文本模型，记录 TextAgentCore 传入的运行时 messages。"""
+class CaptureHistoryVisionModel:
+    """测试用Vision 模型，记录 VisionRealtimeAgentCore 传入的运行时 messages。"""
 
     provider_name = "mock-history"
     model = "mock-history-model"
@@ -689,16 +689,16 @@ class FixedSummaryAgent:
         return "当前对话状态：\n- 压缩前消息 0 已被归档。"
 
 
-def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -> None:
-    """测试目标：验证 TextAgentCore 通过 ToolGateway 调用 Tool 并继续模型循环。
+def test_vision_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -> None:
+    """测试目标：验证 VisionRealtimeAgentCore 通过 ToolGateway 调用 Tool 并继续模型循环。
 
-    测试方法：注入会产生一次 tool_call 的 mock 文本模型和测试 Tool，发送 final mic chunk。
+    测试方法：注入会产生一次 tool_call 的 mock Vision 模型和测试 Tool，发送 final mic chunk。
     预期结果：工具结果写入消息历史，模型第二轮生成最终回复，tool trace 被记录。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     app.tool_registry.register(WeatherTool())
-    app.agent_core.text_model = ToolCallingTextModel()
+    app.agent_core.vision_model = ToolCallingVisionModel()
     session_id = "sess-tool-loop"
 
     app.agent_core.append_audio_event(
@@ -726,17 +726,17 @@ def test_text_agent_core_calls_tool_gateway_and_continues_model_loop(tmp_path) -
     assert "lookup_weather" in model_request
 
 
-def test_text_agent_core_recovers_after_provider_error_in_tool_loop(tmp_path) -> None:
+def test_vision_agent_core_recovers_after_provider_error_in_tool_loop(tmp_path) -> None:
     """测试目标：验证工具循环中的 provider 异常会反馈给用户且不阻断后续对话。
 
-    测试方法：mock 文本模型首轮返回工具调用，第二轮抛出 provider 异常；随后替换为
+    测试方法：mock Vision 模型首轮返回工具调用，第二轮抛出 provider 异常；随后替换为
     正常模型并发送另一段 final 麦克风输入。
     预期结果：当前轮写入可恢复错误、中文兜底回复和 system.error；下一轮仍能正常回复。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     app.tool_registry.register(WeatherTool())
-    app.agent_core.text_model = ToolLoopFailingTextModel()
+    app.agent_core.vision_model = ToolLoopFailingVisionModel()
     user_id = "user-recoverable-error"
     session_id = "sess-recoverable-error"
 
@@ -756,12 +756,12 @@ def test_text_agent_core_recovers_after_provider_error_in_tool_loop(tmp_path) ->
     messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
     events_text = (session_dir / "events.jsonl").read_text(encoding="utf-8")
     agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert TextAgentCore.RECOVERABLE_ERROR_MESSAGE in messages_text
+    assert VisionRealtimeAgentCore.RECOVERABLE_ERROR_MESSAGE in messages_text
     assert "system.error.raised" in events_text
     assert "response.failed" in agent_events_text
     assert "provider rejected tool call history" in agent_events_text
 
-    app.agent_core.text_model = RecoveryTextModel()
+    app.agent_core.vision_model = RecoveryVisionModel()
     app.agent_core.append_audio_event(
         StreamChunk(
             user_id=user_id,
@@ -778,18 +778,18 @@ def test_text_agent_core_recovers_after_provider_error_in_tool_loop(tmp_path) ->
     assert "恢复后的回答。" in messages_text
 
 
-def test_text_agent_recovery_does_not_raise_when_fallback_output_fails(tmp_path) -> None:
+def test_vision_agent_recovery_does_not_raise_when_fallback_output_fails(tmp_path) -> None:
     """测试目标：验证恢复提示的 TTS/output 再次失败时不会冒泡到 stream 层。
 
-    测试方法：mock 文本模型在工具循环第二轮抛异常，同时把 output adapter 替换成
+    测试方法：mock Vision 模型在工具循环第二轮抛异常，同时把 output adapter 替换成
     始终抛异常的实现。
     预期结果：`append_audio_event()` 不抛异常，messages 中仍记录兜底文本，agent
     事件中同时包含 `response.failed` 和 `output.failed`。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     app.tool_registry.register(WeatherTool())
-    app.agent_core.text_model = ToolLoopFailingTextModel()
+    app.agent_core.vision_model = ToolLoopFailingVisionModel()
     app.agent_core.output_adapter = FailingOutputAdapter()
     user_id = "user-output-recovery"
     session_id = "sess-output-recovery"
@@ -809,23 +809,23 @@ def test_text_agent_recovery_does_not_raise_when_fallback_output_fails(tmp_path)
     session_dir = tmp_path / "runs" / user_id / session_id
     messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
     agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert TextAgentCore.RECOVERABLE_ERROR_MESSAGE in messages_text
+    assert VisionRealtimeAgentCore.RECOVERABLE_ERROR_MESSAGE in messages_text
     assert "response.failed" in agent_events_text
     assert "output.failed" in agent_events_text
     assert "fallback output failed" in agent_events_text
 
 
-def test_text_agent_streaming_tts_failure_reopens_stream_and_keeps_real_answer(tmp_path) -> None:
+def test_vision_agent_streaming_tts_failure_reopens_stream_and_keeps_real_answer(tmp_path) -> None:
     """测试目标：验证普通回答的流式 TTS 首包失败后会重开 streaming TTS。
 
-    测试方法：mock 文本模型返回真实回答，注入一个首段流式失败、第二次流式成功的
+    测试方法：mock Vision 模型返回真实回答，注入一个首段流式失败、第二次流式成功的
     provider。
     预期结果：消息历史保存真实回答，agent 事件记录 `output.tts_stream_reopen`，
     不使用全文本 TTS 补播，并生成音频。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    app.agent_core.text_model = RecoveryTextModel()
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    app.agent_core.vision_model = RecoveryVisionModel()
     tts = FirstDeltaFailsThenStreamsTTS()
     app.output_service.router._injected_tts = tts
     user_id = "user-streaming-tts-recovery"
@@ -848,7 +848,7 @@ def test_text_agent_streaming_tts_failure_reopens_stream_and_keeps_real_answer(t
     agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
     stream_events_text = (session_dir / "stream-events.jsonl").read_text(encoding="utf-8")
     assert "恢复后的回答。" in messages_text
-    assert TextAgentCore.RECOVERABLE_ERROR_MESSAGE not in messages_text
+    assert VisionRealtimeAgentCore.RECOVERABLE_ERROR_MESSAGE not in messages_text
     assert "response.failed" not in agent_events_text
     assert "output.tts_stream_reopen" in agent_events_text
     assert "output.recovered" not in agent_events_text
@@ -858,15 +858,15 @@ def test_text_agent_streaming_tts_failure_reopens_stream_and_keeps_real_answer(t
     assert list((session_dir / "audio").glob("output-*.wav"))
 
 
-def test_text_agent_continues_streaming_after_reopening_tts_source(tmp_path) -> None:
+def test_vision_agent_continues_streaming_after_reopening_tts_source(tmp_path) -> None:
     """测试目标：验证流式 TTS 失败重开后，本轮后续 delta 继续走 streaming TTS。
 
     测试方法：模型返回两段文本；TTS 第一段流式失败，第二段流式如果被调用会返回音频。
     预期结果：第一段被重试，第二段继续进入新 streaming source，不使用全文本 TTS。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    app.agent_core.text_model = MultiDeltaRecoveryTextModel()
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    app.agent_core.vision_model = MultiDeltaRecoveryVisionModel()
     tts = FirstDeltaFailsThenStreamsTTS()
     app.output_service.router._injected_tts = tts
     user_id = "user-stop-streaming-after-failure"
@@ -895,15 +895,15 @@ def test_text_agent_continues_streaming_after_reopening_tts_source(tmp_path) -> 
     assert len(list((session_dir / "audio").glob("output-*.wav"))) == 1
 
 
-def test_text_agent_records_turn_states_and_releases_each_text_delta(tmp_path) -> None:
-    """测试目标：验证 Text 链路记录状态机，并逐 delta 释放文本到 TTS。
+def test_vision_agent_records_turn_states_and_releases_each_vision_delta(tmp_path) -> None:
+    """测试目标：验证 Vision 链路记录状态机，并逐 delta 释放Vision 到 TTS。
 
     测试方法：模型返回两段文本 delta。
     预期结果：runs 中记录 transcribing/thinking/speaking 完整状态，且两段文本均被释放。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    app.agent_core.text_model = MultiDeltaRecoveryTextModel()
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    app.agent_core.vision_model = MultiDeltaRecoveryVisionModel()
     user_id = "user-text-state"
     session_id = "sess-text-state"
 
@@ -922,32 +922,32 @@ def test_text_agent_records_turn_states_and_releases_each_text_delta(tmp_path) -
     session_dir = tmp_path / "runs" / user_id / session_id
     agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "agent.turn_state.changed" in agent_events_text
-    assert '"agent_core": "TextAgentCore"' in agent_events_text
-    assert '"modality": "text"' in agent_events_text
+    assert '"agent_core": "VisionRealtimeAgentCore"' in agent_events_text
+    assert '"modality": "vision"' in agent_events_text
     assert '"state": "transcribing"' in agent_events_text
     assert '"state": "thinking"' in agent_events_text
     assert '"state": "completed"' in agent_events_text
-    assert "text_delta_realtime" in agent_events_text
-    assert agent_events_text.count("text.response_gate.released") == 2
+    assert "vision_delta_realtime" in agent_events_text
+    assert agent_events_text.count("vision.response_gate.released") == 2
 
 
-def test_text_agent_releases_first_text_delta_without_waiting_for_punctuation(tmp_path) -> None:
+def test_vision_agent_releases_first_vision_delta_without_waiting_for_punctuation(tmp_path) -> None:
     """测试目标：验证第一个无标点 text delta 到达后立刻进入 TTS。
 
     测试方法：模型逐字返回“你”“好”“。”，首个 delta 没有任何自然停顿标点。
     预期结果：runs 中记录三次实时释放，说明 Text gate 没有等待标点、长度阈值或完整回复。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    app.agent_core.text_model = UnpunctuatedDeltaTextModel()
-    user_id = "user-text-realtime-delta"
-    session_id = "sess-text-realtime-delta"
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    app.agent_core.vision_model = UnpunctuatedDeltaVisionModel()
+    user_id = "user-vision-realtime-delta"
+    session_id = "sess-vision-realtime-delta"
 
     app.agent_core.append_audio_event(
         StreamChunk(
             user_id=user_id,
             session_id=session_id,
-            stream_id="stream-text-realtime-delta",
+            stream_id="stream-vision-realtime-delta",
             stream_type="sensor.mic",
             seq=0,
             payload=b"hello",
@@ -959,24 +959,24 @@ def test_text_agent_releases_first_text_delta_without_waiting_for_punctuation(tm
     messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
     agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "你好。" in messages_text
-    assert agent_events_text.count("text.response_gate.released") == 3
-    assert agent_events_text.count('"reason": "text_delta_realtime"') == 3
+    assert agent_events_text.count("vision.response_gate.released") == 3
+    assert agent_events_text.count('"reason": "vision_delta_realtime"') == 3
 
 
-def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> None:
+def test_vision_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> None:
     """测试目标：验证用户打断时只保存已经释放给用户的助手文本。
 
     测试方法：模型首段文本释放后触发 `interrupt()`，随后尝试继续输出第二段文本。
     预期结果：第二段不会进入消息历史；assistant 消息带 interrupted 元数据。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-text-interrupt"
     session_id = "sess-text-interrupt"
     app.agent_core.open(user_id, session_id)
     app.agent_core.output_adapter = RecordingOutputAdapter()
     app.agent_core.asr_pipeline = CancelRecordingAsrPipeline(app.agent_core.asr_pipeline)
-    app.agent_core.text_model = InterruptingTextModel(
+    app.agent_core.vision_model = InterruptingVisionModel(
         on_after_first_delta=lambda: app.agent_core.interrupt(user_id, reason="unit_interrupt")
     )
 
@@ -1001,19 +1001,19 @@ def test_text_agent_interrupt_keeps_only_released_assistant_text(tmp_path) -> No
     assert '"interrupted_reason": "unit_interrupt"' in messages_text
     assert "response.interrupted" in agent_events_text
     assert '"state": "interrupted"' in agent_events_text
-    assert app.agent_core.text_model.cancelled
+    assert app.agent_core.vision_model.cancelled
     assert not app.agent_core.asr_pipeline.cancelled
     assert {"user_id": user_id, "session_id": session_id, "text": "", "final": True} not in app.agent_core.output_adapter.calls
 
 
-def test_openai_compatible_text_model_cancel_closes_active_stream() -> None:
-    """测试目标：验证 Text provider 取消时会关闭底层流式连接。
+def test_openai_compatible_vision_model_cancel_closes_active_stream() -> None:
+    """测试目标：验证 Vision provider 取消时会关闭底层流式连接。
 
     测试方法：绕过网络构造 adapter，注入带 close 方法的 active stream 后调用 cancel。
     预期结果：cancel 标记置位，底层 stream 的 close 被调用，避免打断后等待 provider 超时。
     """
 
-    adapter = object.__new__(OpenAICompatibleTextModelAdapter)
+    adapter = object.__new__(OpenAICompatibleVisionModelAdapter)
     adapter._cancelled = False
     adapter._stream_lock = threading.RLock()
     stream = CloseRecordingStream()
@@ -1025,11 +1025,11 @@ def test_openai_compatible_text_model_cancel_closes_active_stream() -> None:
     assert stream.closed
 
 
-def test_text_agent_asr_delta_does_not_cancel_active_output(tmp_path) -> None:
-    """测试目标：验证 Text 链路不再用 ASR partial 文本触发插话。
+def test_vision_agent_asr_delta_does_not_cancel_active_output(tmp_path) -> None:
+    """测试目标：验证 Vision 链路不再用 ASR partial 文本触发插话。
 
     测试方法：先手动让 OutputService 打开一条未 final 的 speaker 输出，再向
-    TextAgentCore 送入一片非 final 麦克风音频，触发 mock ASR delta。
+    VisionRealtimeAgentCore 送入一片非 final 麦克风音频，触发 mock ASR delta。
     预期结果：端侧不会收到 output cancel 事件，runs 中也不会记录 ASR 侧 barge-in。
     """
 
@@ -1051,7 +1051,7 @@ def test_text_agent_asr_delta_does_not_cancel_active_output(tmp_path) -> None:
 
             self.chunks.append(chunk)
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-text-barge-in"
     session_id = "dev-text-barge-in"
     connection = Connection(session_id)
@@ -1064,13 +1064,13 @@ def test_text_agent_asr_delta_does_not_cancel_active_output(tmp_path) -> None:
                 "device_id": session_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
     )
     app.agent_core.open(user_id, session_id)
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(
             user_id=user_id,
             session_id=session_id,
@@ -1099,12 +1099,12 @@ def test_text_agent_asr_delta_does_not_cancel_active_output(tmp_path) -> None:
     assert "response.cancelled" not in agent_events_text
 
 
-def test_text_agent_server_vad_cancels_active_output(tmp_path) -> None:
+def test_vision_agent_server_vad_cancels_active_output(tmp_path) -> None:
     """测试目标：验证 Text realtime 由服务端 VAD 触发插话取消。
 
     测试方法：启用 `server_only` VAD，先打开一条未完成 speaker 输出，再输入高 RMS
     麦克风音频片。
-    预期结果：端侧收到 output cancel 事件，runs 记录 text.vad.speech_started。
+    预期结果：端侧收到 output cancel 事件，runs 记录 vision.vad.speech_started。
     """
 
     class Connection:
@@ -1125,10 +1125,10 @@ def test_text_agent_server_vad_cancels_active_output(tmp_path) -> None:
 
             self.chunks.append(chunk)
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
+            agent_mode="vision",
             audio_pipeline_vad="server_only",
             audio_pipeline_vad_rms_threshold=96,
             audio_pipeline_vad_silence_timeout_ms=40,
@@ -1146,13 +1146,13 @@ def test_text_agent_server_vad_cancels_active_output(tmp_path) -> None:
                 "device_id": session_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
     )
     app.agent_core.open(user_id, session_id)
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(
             user_id=user_id,
             session_id=session_id,
@@ -1179,11 +1179,11 @@ def test_text_agent_server_vad_cancels_active_output(tmp_path) -> None:
     assert "stream.output.cancel.requested" in event_names
     assert "stream.output.cancelled" in event_names
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert "text.vad.speech_started" in agent_events_text
+    assert "vision.vad.speech_started" in agent_events_text
     assert "server_vad_speech_started" in agent_events_text
 
 
-def test_text_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) -> None:
+def test_vision_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) -> None:
     """测试目标：验证 Paraformer sentence_begin 能作为 Text realtime 的插话信号。
 
     测试方法：注入返回 `sentence_begin=True` 且无文本的 ASR provider，并让助手输出
@@ -1231,7 +1231,7 @@ def test_text_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) ->
         def cancel(self) -> None:
             """测试 provider 无需释放资源。"""
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-text-paraformer-begin"
     session_id = "dev-text-paraformer-begin"
     stream_id = "stream-text-paraformer-begin"
@@ -1245,13 +1245,13 @@ def test_text_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) ->
                 "device_id": session_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
     )
     app.agent_core.open(user_id, session_id)
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(
             user_id=user_id,
             session_id=session_id,
@@ -1278,11 +1278,11 @@ def test_text_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) ->
     assert "stream.output.cancel.requested" in event_names
     assert "stream.output.cancelled" in event_names
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert "text.vad.speech_started" in agent_events_text
+    assert "vision.vad.speech_started" in agent_events_text
     assert "paraformer_sentence_begin" in agent_events_text
 
 
-def test_text_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_path) -> None:
+def test_vision_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_path) -> None:
     """测试目标：验证 Text 输出音频通过 PipelineEvent 桥接，并受下行水位控制。
 
     测试方法：注册浏览器眼镜连接，暂停下行后提交一段 Text delta，再恢复下行。
@@ -1307,7 +1307,7 @@ def test_text_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_pat
 
             self.chunks.append(chunk)
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-text-pause"
     session_id = "dev-text-pause"
     connection = Connection(session_id)
@@ -1320,7 +1320,7 @@ def test_text_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_pat
                 "device_id": session_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -1334,7 +1334,7 @@ def test_text_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_pat
     )
 
     app.agent_core.pause_downstream(user_id, session_id)
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id=user_id, session_id=session_id, text="暂停期间先不要写出。", generation_id=1)
     )
     assert connection.chunks == []
@@ -1346,16 +1346,16 @@ def test_text_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_pat
     assert "assistant_audio.delta_buffered_while_paused" in agent_events_text
 
 
-def test_text_agent_ignores_asr_final_inside_assistant_output_guard(tmp_path) -> None:
+def test_vision_agent_ignores_asr_final_inside_assistant_output_guard(tmp_path) -> None:
     """测试目标：验证助手播放期间捕获到的 ASR final 不会触发自问自答。
 
-    测试方法：手动设置 TextAgentCore 的助手输出保护窗，并注入立即返回 final 的测试
+    测试方法：手动设置 VisionRealtimeAgentCore 的助手输出保护窗，并注入立即返回 final 的测试
     ASR provider；送入时间戳落在保护窗内的麦克风 chunk。
     预期结果：不会写入 user 消息，也不会启动 agent.response.started，只记录
     input_transcript.ignored。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-echo-guard"
     session_id = "dev-echo-guard"
     stream_id = "stream-echo-guard"
@@ -1387,7 +1387,7 @@ def test_text_agent_ignores_asr_final_inside_assistant_output_guard(tmp_path) ->
     assert "agent.response.started" not in agent_events_text
 
 
-def test_text_agent_realtime_final_runs_response_in_background(tmp_path) -> None:
+def test_vision_agent_realtime_final_runs_response_in_background(tmp_path) -> None:
     """测试目标：验证实时 ASR final 不会阻塞麦克风 stream worker。
 
     测试方法：注入立即返回 final 的 ASR provider 和会阻塞的 Text model，并用
@@ -1395,12 +1395,12 @@ def test_text_agent_realtime_final_runs_response_in_background(tmp_path) -> None
     预期结果：`append_audio_event()` 在模型放行前返回；随后放行后台线程，助手消息写入。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-bg-response"
     session_id = "dev-bg-response"
     stream_id = "stream-bg-response"
-    model = BlockingTextModel()
-    app.agent_core.text_model = model
+    model = BlockingVisionModel()
+    app.agent_core.vision_model = model
     app.agent_core.open(user_id, session_id)
     app.agent_core.asr_pipeline._providers[stream_id] = ImmediateFinalAsrProvider("给我讲一个超长的故事。")
 
@@ -1432,7 +1432,7 @@ def test_text_agent_realtime_final_runs_response_in_background(tmp_path) -> None
         raise AssertionError("background text response did not finish")
 
 
-def test_text_agent_old_background_response_is_superseded_by_new_turn(tmp_path) -> None:
+def test_vision_agent_old_background_response_is_superseded_by_new_turn(tmp_path) -> None:
     """测试目标：验证旧后台回复被新一轮输入取代后不会继续输出。
 
     测试方法：首轮实时 ASR final 触发阻塞模型；第二轮实时 ASR final 进入新 generation；
@@ -1440,14 +1440,14 @@ def test_text_agent_old_background_response_is_superseded_by_new_turn(tmp_path) 
     预期结果：只输出第二轮文本，首轮旧回复不会进入输出链路或助手消息。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-supersede"
     session_id = "dev-supersede"
     first_stream_id = "stream-supersede-1"
     second_stream_id = "stream-supersede-2"
-    model = SupersededBlockingTextModel()
+    model = SupersededBlockingVisionModel()
     output_adapter = RecordingOutputAdapter()
-    app.agent_core.text_model = model
+    app.agent_core.vision_model = model
     app.agent_core.output_adapter = output_adapter
     app.agent_core.open(user_id, session_id)
     app.agent_core.asr_pipeline._providers[first_stream_id] = ImmediateFinalAsrProvider("给我讲一个超长的故事。")
@@ -1496,7 +1496,7 @@ def test_text_agent_old_background_response_is_superseded_by_new_turn(tmp_path) 
     assert "旧回复不应该输出" not in messages_text
 
 
-def test_text_agent_interrupt_immediately_finalizes_partial_message(tmp_path) -> None:
+def test_vision_agent_interrupt_immediately_finalizes_partial_message(tmp_path) -> None:
     """测试目标：验证 Text Realtime 打断时立即封存当前助手 partial。
 
     测试方法：让首轮模型先释放一段文本后阻塞，再模拟 Paraformer sentence_begin
@@ -1505,13 +1505,13 @@ def test_text_agent_interrupt_immediately_finalizes_partial_message(tmp_path) ->
     后续旧模型文本不会追加到 messages，也不会破坏 user/assistant 顺序。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-interrupt-finalize"
     session_id = "dev-interrupt-finalize"
     stream_id = "stream-interrupt-finalize"
-    model = ReleasedThenBlockingTextModel()
+    model = ReleasedThenBlockingVisionModel()
     output_adapter = RecordingOutputAdapter()
-    app.agent_core.text_model = model
+    app.agent_core.vision_model = model
     app.agent_core.output_adapter = output_adapter
     app.agent_core.open(user_id, session_id)
     app.agent_core.asr_pipeline._providers[stream_id] = ImmediateFinalAsrProvider("请讲一个很长的故事。")
@@ -1559,7 +1559,7 @@ def test_text_agent_interrupt_immediately_finalizes_partial_message(tmp_path) ->
     assert sum(1 for item in messages if item.get("role") == "assistant") == 1
 
 
-def test_text_output_estimates_played_prefix_for_interrupt(tmp_path, monkeypatch) -> None:
+def test_vision_output_estimates_played_prefix_for_interrupt(tmp_path, monkeypatch) -> None:
     """测试目标：验证打断消息可按已播放音频估算文本前缀。
 
     测试方法：注入固定 10 秒音频的 TTS，并把当前时间固定在首包后 5 秒。
@@ -1589,18 +1589,18 @@ def test_text_output_estimates_played_prefix_for_interrupt(tmp_path, monkeypatch
 
             return {"sample_rate_hz": 100, "first_audio_at": 100.0}
 
-    monkeypatch.setattr("audio_chat.output.service.time.time", lambda: 105.0)
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    monkeypatch.setattr("realtime_agent.output.service.time.time", lambda: 105.0)
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     app.output_service.router._injected_tts = FixedDurationTTS()
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-prefix", session_id="dev-prefix", text="abcdefghij", final=False)
     )
 
     assert app.output_service.estimate_played_text_prefix(user_id="user-prefix", session_id="dev-prefix") == "abcde"
 
 
-def test_text_interrupt_keeps_generated_unheard_suffix_in_message(tmp_path) -> None:
+def test_vision_interrupt_keeps_generated_unheard_suffix_in_message(tmp_path) -> None:
     """测试目标：验证打断消息保留已经生成但尚未播放的文本。
 
     测试方法：手动记录一段已释放给 TTS 的 assistant partial，并让输出服务估算用户
@@ -1609,7 +1609,7 @@ def test_text_interrupt_keeps_generated_unheard_suffix_in_message(tmp_path) -> N
     后续模型上下文保留。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     user_id = "user-interrupt-unheard"
     session_id = "dev-interrupt-unheard"
     app.agent_core.open(user_id, session_id)
@@ -1642,17 +1642,17 @@ def test_text_interrupt_keeps_generated_unheard_suffix_in_message(tmp_path) -> N
     assert '"unheard_chars": 2' in agent_events
 
 
-def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:
+def test_vision_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:
     """测试目标：验证同一个 sensor.mic stream 内可以连续提交多段用户输入。
 
     测试方法：用同一个 stream_id 发送两段 final 麦克风输入，只改变 seq 和 mock ASR
     文件名转写。
-    预期结果：两段输入都会触发 TextAgentCore 响应，不会因为复用 stream_id 被静默跳过。
+    预期结果：两段输入都会触发 VisionRealtimeAgentCore 响应，不会因为复用 stream_id 被静默跳过。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-    model = CaptureHistoryTextModel()
-    app.agent_core.text_model = model
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    model = CaptureHistoryVisionModel()
+    app.agent_core.vision_model = model
     user_id = "user-same-stream"
     session_id = "dev-same-stream"
     stream_id = "stream-in-reused"
@@ -1689,20 +1689,20 @@ def test_text_agent_allows_multiple_turns_on_same_mic_stream(tmp_path) -> None:
     assert len(model.messages) == 2
 
 
-def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -> None:
+def test_vision_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -> None:
     """测试目标：验证同一用户同一设备的新一轮文本请求会加载历史消息。
 
     测试方法：先在 `runs/<user_id>/<device_id>/messages.jsonl` 写入历史 user/assistant
-    对话，再触发 TextAgentCore 处理当前 final 麦克风输入。
+    对话，再触发 VisionRealtimeAgentCore 处理当前 final 麦克风输入。
     预期结果：模型收到的运行时 messages 和 `model-request.json` 都包含历史消息，并以
     当前用户输入收尾。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
-            text_max_context_messages=10,
+            agent_mode="vision",
+            vision_max_context_messages=10,
         )
     )
     user_id = "user-browser-glass-001"
@@ -1714,8 +1714,8 @@ def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -
         {"session_id": device_id, "role": "assistant", "content": "我会帮你留意去电梯口的路线。"},
     ]
     messages_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in history) + "\n", encoding="utf-8")
-    model = CaptureHistoryTextModel()
-    app.agent_core.text_model = model
+    model = CaptureHistoryVisionModel()
+    app.agent_core.vision_model = model
 
     app.agent_core.append_audio_event(
         StreamChunk(
@@ -1738,18 +1738,18 @@ def test_text_agent_loads_device_message_history_from_messages_jsonl(tmp_path) -
     assert "历史已加载。" in (tmp_path / "runs" / user_id / device_id / "messages.jsonl").read_text(encoding="utf-8")
 
 
-def test_text_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path) -> None:
+def test_vision_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path) -> None:
     """测试目标：验证 Text 新一轮请求会把成对工具/任务结果回灌到 provider messages。
 
-    测试方法：预置 assistant tool_call 和 tool result 历史，再触发一轮文本输入。
+    测试方法：预置 assistant tool_call 和 tool result 历史，再触发一轮Vision 输入。
     预期结果：模型收到合法的 assistant.tool_calls + tool 消息，而不是只收到普通助手文本。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
-            text_max_context_messages=10,
+            agent_mode="vision",
+            vision_max_context_messages=10,
         )
     )
     user_id = "user-tool-history"
@@ -1780,8 +1780,8 @@ def test_text_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path) 
         {"session_id": device_id, "role": "assistant", "content": "红绿灯任务已启动。"},
     ]
     messages_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in history) + "\n", encoding="utf-8")
-    model = CaptureHistoryTextModel()
-    app.agent_core.text_model = model
+    model = CaptureHistoryVisionModel()
+    app.agent_core.vision_model = model
 
     app.agent_core.append_audio_event(
         StreamChunk(
@@ -1803,18 +1803,18 @@ def test_text_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path) 
     assert json.loads(runtime_messages[2]["content"])["tasks"][0]["state"] == "running"
 
 
-def test_text_agent_injects_latest_message_summary_without_duplicate_history(tmp_path) -> None:
-    """测试目标：验证文本模型请求会注入历史摘要但不重复展开已压缩原始消息。
+def test_vision_agent_injects_latest_message_summary_without_duplicate_history(tmp_path) -> None:
+    """测试目标：验证Vision 模型请求会注入历史摘要但不重复展开已压缩原始消息。
 
-    测试方法：先通过 ConversationMemoryService 触发一次压缩，再发送新一轮文本输入。
+    测试方法：先通过 ConversationMemoryService 触发一次压缩，再发送新一轮Vision 输入。
     预期结果：system prompt 包含最新摘要；runtime messages 只包含压缩后 active 消息和当前输入。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
-            text_max_context_messages=10,
+            agent_mode="vision",
+            vision_max_context_messages=10,
         )
     )
     app.conversation_memory.summarizer = FixedSummaryAgent()
@@ -1831,8 +1831,8 @@ def test_text_agent_injects_latest_message_summary_without_duplicate_history(tmp
             },
         )
     app.control_service.compact_messages_if_needed(user_id=user_id, session_id=device_id, threshold=6, keep_latest=2)
-    model = CaptureHistoryTextModel()
-    app.agent_core.text_model = model
+    model = CaptureHistoryVisionModel()
+    app.agent_core.vision_model = model
 
     app.agent_core.append_audio_event(
         StreamChunk(
@@ -1890,7 +1890,7 @@ def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> Non
 
     import asyncio
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     app.task_engine.register(DemoTask)
 
     ref = asyncio.run(

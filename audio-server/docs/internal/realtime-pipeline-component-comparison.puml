@@ -6,10 +6,10 @@ skinparam wrapWidth 220
 skinparam maxMessageSize 120
 
 package "Pipeline 外部共享" #F3F8E8 {
-  [AudioChatApp] as App
+  [RealtimeAgentApp] as App
   [ControlService\n统一控制事件路由] as Control
   [StreamService\n统一stream生命周期] as Stream
-  [AudioChatRealtimePipeline\n统一接口] as Contract
+  [RealtimeAgentRealtimePipeline\n统一接口] as Contract
 }
 
 package "Pipeline 内部可共用" #E8F7E8 {
@@ -19,13 +19,13 @@ package "Pipeline 内部可共用" #E8F7E8 {
   [RealtimeTurnState Base\nturn状态/消息buffer/打断标记公共结构] as TurnState
 }
 
-package "TextRealtimePipeline 必须实现" #FFF4E5 {
-  [TextRealtimePipeline] as TextPipeline
-  [TextAgentCore\n文本链路对话语义] as TextCore
-  [TextInputBoundary\nParaformer句子事件解释] as TextBoundary
-  [TextResponseEngine\nText LLM + Streaming TTS] as TextResponse
+package "VisionRealtimePipeline 必须实现" #FFF4E5 {
+  [VisionRealtimePipeline] as TextPipeline
+  [VisionRealtimeAgentCore\nVision 链路对话语义] as TextCore
+  [VisionInputBoundary\nParaformer句子事件解释] as TextBoundary
+  [VisionResponseEngine\nText LLM + Streaming TTS] as TextResponse
   [AsrProviderSession\nparaformer-realtime-v2] as Asr
-  [TextModelSession] as LLM
+  [VisionModelSession] as LLM
   [TtsProviderSession] as TTS
 }
 

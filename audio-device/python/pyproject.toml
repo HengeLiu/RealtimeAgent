@@ -1,7 +1,7 @@
 [project]
-name = "audio-chat-device"
+name = "realtime-agent-device"
 version = "0.1.0"
-description = "Python device communication SDK for audio-chat."
+description = "Python device communication SDK for realtime-agent."
 requires-python = ">=3.11,<3.13"
 dependencies = ["aiohttp>=3.9.0"]
 
@@ -11,4 +11,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["audio_chat_device*"]
+include = ["realtime_agent_device*"]

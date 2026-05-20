@@ -1,12 +1,12 @@
 import pytest
 
-from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec
+from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec
 
 
 pytestmark = pytest.mark.protocol
 
 
-def test_event_envelope_uses_audio_chat_v1_without_target_fields() -> None:
+def test_event_envelope_uses_realtime_agent_v1_without_target_fields() -> None:
     event = Event(
         event_name="stream.output.open.requested",
         user_id="user-001",
@@ -18,7 +18,7 @@ def test_event_envelope_uses_audio_chat_v1_without_target_fields() -> None:
 
     data = event.to_dict()
 
-    assert data["version"] == "audio-chat.v1"
+    assert data["version"] == "realtime-agent.v1"
     assert data["event_name"] == "stream.output.open.requested"
     assert all(not key.endswith("_device_id") for key in data)
 

@@ -1,0 +1,2456 @@
+from __future__ import annotations
+
+import os
+import queue
+import time
+import audioop
+import math
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol
+
+from realtime_agent.observability import RunRecorder
+from realtime_agent.protocol import SERVER_PRODUCER_ID, StreamChunk, StreamFormat, new_id
+from realtime_agent.stream import StreamService
+
+PRIORITY_ORDER = {"low": 0, "normal": 1, "high": 2, "critical": 3}
+
+
+@dataclass(frozen=True)
+class OutputItem:
+    """Output Service 内部输出项。
+
+    主要功能：表示一条已经进入输出链路、等待 TTS、播放仲裁或端侧播放的内容。
+    主要属性：`priority`、`on_interrupted`、`on_blocked` 和 `ttl_seconds` 只服务
+    Output Service 内部调度，不作为 Tool / Task 公开协议对象。
+    """
+
+    user_id: str
+    session_id: str
+    source: str = "agent_reply"
+    priority: str = "normal"
+    on_interrupted: str | None = None
+    on_blocked: str | None = None
+    ttl_seconds: int = 0
+    dedupe_key: str | None = None
+    cached_prompt_key: str | None = None
+
+
+@dataclass(frozen=True)
+class AssistantTextDelta:
+    user_id: str
+    session_id: str
+    text: str
+    final: bool = False
+    intent: OutputItem | None = None
+    generation_id: int | None = None
+
+
+@dataclass(frozen=True)
+class PlaybackDecision:
+    action: str
+    reason: str
+    active_stream_id: str | None = None
+    interrupted_stream_id: str | None = None
+    queued_intent_id: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    priority: str | None = None
+    created_at: float = field(default_factory=time.time)
+
+
+@dataclass(frozen=True)
+class NotificationRequest:
+    """通知请求。
+
+    主要功能：Output Service 内部接收 TaskSignal、系统提醒或业务通知后的统一入口对象。
+    主要属性：`text` 为可播报内容，`priority`、`ttl_seconds`、`dedupe_key` 参与通知决策。
+    """
+
+    user_id: str
+    session_id: str
+    text: str
+    priority: str = "normal"
+    ttl_seconds: int = 0
+    dedupe_key: str | None = None
+    merge_key: str | None = None
+    merge_window_seconds: float = 1.0
+    allow_direct_notify: bool = True
+    requires_agent_context_sync: bool = False
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NotificationDecision:
+    """通知决策。
+
+    主要功能：记录通知协调层是否放行、合并或丢弃通知。
+    """
+
+    action: str
+    reason: str
+    dedupe_key: str | None = None
+    merge_key: str | None = None
+    requires_agent_context_sync: bool = False
+
+
+class NotificationCoordinator:
+    """通知协调器。
+
+    主要功能：接收 TaskSignal 和系统通知，做最小去重决策后进入 Output Router。
+    """
+
+    def __init__(self, *, output_service: "OutputService | None" = None) -> None:
+        self.output_service = output_service
+        self._seen_dedupe_keys: set[str] = set()
+        self._pending_merge: dict[str, tuple[float, NotificationRequest]] = {}
+        self._decisions: list[NotificationDecision] = []
+
+    def submit(self, request: NotificationRequest) -> NotificationDecision:
+        """提交通知。
+
+        主要逻辑：相同 dedupe_key 只放行一次；放行后转为 Output Service 文本提交。
+        参数：`request` 为通知请求。
+        返回值：通知决策。
+        异常情况：下游输出失败时向上抛出。
+        """
+        if request.dedupe_key and request.dedupe_key in self._seen_dedupe_keys:
+            decision = NotificationDecision(
+                action="drop",
+                reason="dedupe",
+                dedupe_key=request.dedupe_key,
+                merge_key=request.merge_key,
+                requires_agent_context_sync=request.requires_agent_context_sync,
+            )
+            self._record_decision(decision)
+            return decision
+        if request.dedupe_key:
+            self._seen_dedupe_keys.add(request.dedupe_key)
+        if request.merge_key:
+            now = time.time()
+            existing = self._pending_merge.get(request.merge_key)
+            if existing is not None and now - existing[0] <= request.merge_window_seconds:
+                previous = existing[1]
+                merged = NotificationRequest(
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    text=f"{previous.text}\n{request.text}".strip(),
+                    priority=_higher_priority(previous.priority, request.priority),
+                    ttl_seconds=max(previous.ttl_seconds, request.ttl_seconds),
+                    dedupe_key=request.dedupe_key,
+                    merge_key=request.merge_key,
+                    merge_window_seconds=request.merge_window_seconds,
+                    allow_direct_notify=request.allow_direct_notify and previous.allow_direct_notify,
+                    requires_agent_context_sync=(
+                        request.requires_agent_context_sync or previous.requires_agent_context_sync
+                    ),
+                    metadata={**previous.metadata, **request.metadata, "merged": True},
+                )
+                self._pending_merge[request.merge_key] = (now, merged)
+                decision = NotificationDecision(
+                    action="merge",
+                    reason="merge_window",
+                    dedupe_key=request.dedupe_key,
+                    merge_key=request.merge_key,
+                    requires_agent_context_sync=merged.requires_agent_context_sync,
+                )
+                self._record_decision(decision)
+                return decision
+            self._pending_merge[request.merge_key] = (now, request)
+        if not request.allow_direct_notify:
+            decision = NotificationDecision(
+                action="hold",
+                reason="direct_notify_disabled",
+                dedupe_key=request.dedupe_key,
+                merge_key=request.merge_key,
+                requires_agent_context_sync=request.requires_agent_context_sync,
+            )
+            self._record_decision(decision)
+            return decision
+        if self.output_service is not None and request.text:
+            self.output_service.submit_text(
+                user_id=request.user_id,
+                session_id=request.session_id,
+                text=request.text,
+                priority=request.priority,
+                ttl_seconds=request.ttl_seconds,
+            )
+        decision = NotificationDecision(
+            action="route",
+            reason="accepted",
+            dedupe_key=request.dedupe_key,
+            merge_key=request.merge_key,
+            requires_agent_context_sync=request.requires_agent_context_sync,
+        )
+        self._record_decision(decision)
+        return decision
+
+    def flush_merge(self, merge_key: str) -> NotificationDecision | None:
+        """提交一条合并后的通知。"""
+
+        item = self._pending_merge.pop(merge_key, None)
+        if item is None:
+            return None
+        _created_at, request = item
+        if self.output_service is not None and request.text and request.allow_direct_notify:
+            self.output_service.submit_text(
+                user_id=request.user_id,
+                session_id=request.session_id,
+                text=request.text,
+                priority=request.priority,
+                ttl_seconds=request.ttl_seconds,
+            )
+        decision = NotificationDecision(
+            action="route" if request.allow_direct_notify else "hold",
+            reason="merged_flush" if request.allow_direct_notify else "direct_notify_disabled",
+            dedupe_key=request.dedupe_key,
+            merge_key=request.merge_key,
+            requires_agent_context_sync=request.requires_agent_context_sync,
+        )
+        self._record_decision(decision)
+        return decision
+
+    def recent_decisions(self, limit: int = 20) -> list[dict]:
+        """返回最近通知决策快照。"""
+
+        return [decision.__dict__ for decision in self._decisions[-limit:]]
+
+    def _record_decision(self, decision: NotificationDecision) -> None:
+        self._decisions.append(decision)
+        if len(self._decisions) > 100:
+            self._decisions = self._decisions[-100:]
+
+
+def _higher_priority(left: str, right: str) -> str:
+    """返回两种优先级中更高的一项。"""
+
+    return left if PRIORITY_ORDER.get(left, 0) >= PRIORITY_ORDER.get(right, 0) else right
+
+
+@dataclass(frozen=True)
+class TtsProviderConfig:
+    provider: str = "mock"
+    model: str = "mock-tts"
+    voice: str = "mock"
+    streaming: bool = True
+    allow_mock_fallback: bool = True
+    websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    sample_rate_hz: int = 22050
+    request_timeout_seconds: float = 5.0
+    max_retries: int = 1
+
+
+class StreamingTTS(Protocol):
+    provider_name: str
+    model: str
+    streaming: bool
+
+    def synthesize_delta(self, text: str) -> bytes:
+        ...
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        ...
+
+    def metrics(self) -> dict:
+        ...
+
+    def finish(self) -> bytes:
+        ...
+
+    def cancel(self) -> None:
+        ...
+
+
+class MockStreamingTTS:
+    """本地调试用流式 TTS。
+
+    主要功能：在没有真实 TTS provider 时，为端到端链路生成可听见的 PCM16 诊断音。
+    主要方法：`synthesize_delta` 将文本片段转成短音频，`metrics` 返回首包延迟指标。
+    主要属性：`sample_rate_hz` 决定输出采样率，`_text_push_count` 用于让连续片段音高略有变化。
+    """
+
+    provider_name = "mock"
+    streaming = True
+
+    def __init__(self, model: str = "mock-tts", voice: str = "mock", sample_rate_hz: int = 16000) -> None:
+        self.model = model
+        self.voice = voice
+        self.sample_rate_hz = sample_rate_hz
+        self._first_text_at: float | None = None
+        self._first_audio_at: float | None = None
+        self._text_push_count = 0
+        self._text_chars = 0
+
+    def synthesize_delta(self, text: str) -> bytes:
+        """把文本 delta 合成为可听见的 PCM16 音频。
+
+        主要逻辑：mock provider 不生成真实语音，只生成带淡入淡出的短正弦音，
+        用于确认 server 到端侧播放器的输出链路确实可用。
+        参数：`text` 为模型输出的文本片段。
+        返回值：小端 PCM16 单声道字节流。
+        异常情况：空文本返回空字节，不抛出异常。
+        """
+
+        if not text:
+            return b""
+        now = time.time()
+        if self._first_text_at is None:
+            self._first_text_at = now
+        self._text_push_count += 1
+        self._text_chars += len(text)
+        duration_seconds = max(0.12, min(0.25, len(text.encode("utf-8")) * 0.012))
+        samples = min(4000, max(1600, int(self.sample_rate_hz * duration_seconds)))
+        frequency_hz = 440 + (self._text_push_count % 4) * 80
+        fade_samples = max(1, min(samples // 3, int(self.sample_rate_hz * 0.025)))
+        amplitude = 0.22
+        pcm = bytearray(samples * 2)
+        for index in range(samples):
+            fade_in = min(1.0, index / fade_samples)
+            fade_out = min(1.0, (samples - index - 1) / fade_samples)
+            envelope = max(0.0, min(fade_in, fade_out))
+            value = int(math.sin(2 * math.pi * frequency_hz * index / self.sample_rate_hz) * amplitude * envelope * 32767)
+            pcm[index * 2 : index * 2 + 2] = value.to_bytes(2, "little", signed=True)
+        if self._first_audio_at is None:
+            self._first_audio_at = time.time()
+        return bytes(pcm)
+
+    def synthesize_text(self, text: str) -> bytes:
+        """一次性合成完整文本。
+
+        主要逻辑：mock provider 没有真实语音合成能力，因此复用 `synthesize_delta()` 生成
+        一段可听诊断音。参数 `text` 为完整播报文本；返回值为 PCM16 音频。
+        异常情况：空文本返回空字节。
+        """
+
+        return self.synthesize_delta(text)
+
+    def metrics(self) -> dict:
+        first_chunk_latency_ms = None
+        if self._first_text_at is not None and self._first_audio_at is not None:
+            first_chunk_latency_ms = int((self._first_audio_at - self._first_text_at) * 1000)
+        return {
+            "provider": self.provider_name,
+            "model": self.model,
+            "voice": self.voice,
+            "sample_rate_hz": self.sample_rate_hz,
+            "first_text_at": self._first_text_at,
+            "first_audio_at": self._first_audio_at,
+            "first_chunk_latency_ms": first_chunk_latency_ms,
+            "tts_first_audio_latency_ms": first_chunk_latency_ms,
+            "text_push_count": self._text_push_count,
+            "text_chars": self._text_chars,
+            "mock": True,
+        }
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """返回已经可用的音频。
+
+        主要逻辑：mock TTS 在 `synthesize_delta()` 中同步生成音频，没有后台队列需要
+        drain，因此这里固定返回空字节。
+        参数：`wait_seconds` 为兼容真实 TTS 的等待时间。
+        返回值：空字节。
+        异常情况：无。
+        """
+
+        return b""
+
+    def finish(self) -> bytes:
+        return b""
+
+    def cancel(self) -> None:
+        return None
+
+
+class DashScopeStreamingTTS:
+    provider_name = "dashscope"
+    streaming = True
+
+    def __init__(
+        self,
+        model: str,
+        voice: str,
+        *,
+        websocket_api_url: str,
+        sample_rate_hz: int,
+        request_timeout_seconds: float = 5.0,
+        max_retries: int = 1,
+    ) -> None:
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        if not api_key:
+            raise RuntimeError("DASHSCOPE_API_KEY is not set; TTS provider downgraded to mock")
+        try:
+            import dashscope
+            from dashscope.audio.tts_v2 import AudioFormat, ResultCallback, SpeechSynthesizer
+        except ImportError as exc:
+            raise RuntimeError("dashscope package is not installed; TTS provider downgraded to mock") from exc
+
+        self.model = model
+        self.voice = voice
+        self.sample_rate_hz = sample_rate_hz
+        self.request_timeout_seconds = request_timeout_seconds
+        self.max_retries = max_retries
+        self._audio: queue.Queue[bytes] = queue.Queue()
+        self._created_at = time.time()
+        self._first_text_at: float | None = None
+        self._first_audio_at: float | None = None
+        self._text_push_count = 0
+        self._text_chars = 0
+        self._complete = threading.Event()
+        self._errors: list[str] = []
+
+        sink = self
+        dashscope.api_key = api_key
+        dashscope.base_websocket_api_url = websocket_api_url
+
+        class _Callback(ResultCallback):
+            def on_data(self, data: bytes) -> None:  # pragma: no cover - exercised in integration
+                if data:
+                    if sink._first_audio_at is None:
+                        sink._first_audio_at = time.time()
+                    sink._audio.put(sink._normalize_sample_rate(bytes(data)))
+
+            def on_error(self, message: str):  # pragma: no cover - exercised in integration
+                sink._errors.append(str(message))
+                sink._complete.set()
+
+            def on_complete(self):  # pragma: no cover - exercised in integration
+                sink._complete.set()
+
+        attr = f"PCM_{sample_rate_hz}HZ_MONO_16BIT"
+        fmt = getattr(AudioFormat, attr, AudioFormat.PCM_22050HZ_MONO_16BIT)
+        self._source_sample_rate_hz = sample_rate_hz if hasattr(AudioFormat, attr) else 22050
+        self._speech_synthesizer_cls = SpeechSynthesizer
+        self._audio_format = fmt
+        self._synthesizer = SpeechSynthesizer(model=model, voice=voice, format=fmt, callback=_Callback())
+
+    def synthesize_delta(self, text: str) -> bytes:
+        if not text:
+            return self.drain_audio()
+        if self._first_text_at is None:
+            self._first_text_at = time.time()
+        self._text_push_count += 1
+        self._text_chars += len(text)
+        self._synthesizer.streaming_call(text)
+        return self.drain_audio()
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        """取出 TTS 回调中已经到达的音频。
+
+        主要逻辑：DashScope TTS 的音频通过 `on_data` 异步回调到达。文本 delta 进入
+        TTS 后不能阻塞等待整段音频，否则会卡住模型流式输出；因此常规 delta 只做
+        非阻塞 drain，final 阶段再带短等待 drain 剩余音频。
+        参数：`wait_seconds` 为首个音频可等待的最长秒数，0 表示只取现有队列。
+        返回值：已经可播放的 PCM 字节。
+        异常情况：无。
+        """
+
+        deadline = time.time() + max(0.0, wait_seconds)
+        chunks: list[bytes] = []
+        while True:
+            try:
+                timeout = 0.0
+                if wait_seconds > 0:
+                    timeout = max(0.0, min(0.05, deadline - time.time()))
+                chunk = self._audio.get(timeout=timeout) if timeout > 0 else self._audio.get_nowait()
+            except queue.Empty:
+                if wait_seconds <= 0 or chunks or time.time() >= deadline:
+                    break
+                continue
+            if chunk:
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def synthesize_text(self, text: str) -> bytes:
+        """一次性合成完整文本。
+
+        主要逻辑：
+        1. Tool / Task 通知这类输出已经拿到完整文本，不需要走增量 TTS。
+        2. 使用 DashScope `SpeechSynthesizer.call()` 的同步语音合成路径，避免先打开
+           output stream 后再等待首包，导致端侧收到空流。
+        3. 对 provider 返回的 PCM 做采样率归一化，保持和 stream format 一致。
+
+        参数：`text` 为完整播报文本。
+        返回值：PCM16 单声道音频字节。
+        异常情况：DashScope 调用失败或超时时向上抛出，让调用方记录明确错误。
+        """
+
+        if not text:
+            return b""
+        now = time.time()
+        if self._first_text_at is None:
+            self._first_text_at = now
+        self._text_push_count += 1
+        self._text_chars += len(text)
+        synthesizer = self._speech_synthesizer_cls(model=self.model, voice=self.voice, format=self._audio_format)
+        timeout_millis = int(max(self.request_timeout_seconds, 15.0) * 1000)
+        payload = synthesizer.call(text, timeout_millis=timeout_millis)
+        if payload and self._first_audio_at is None:
+            self._first_audio_at = time.time()
+        return self._normalize_sample_rate(bytes(payload or b""))
+
+    def metrics(self) -> dict:
+        first_audio_latency_ms = None
+        if self._first_text_at is not None and self._first_audio_at is not None:
+            first_audio_latency_ms = int((self._first_audio_at - self._first_text_at) * 1000)
+        return {
+            "provider": self.provider_name,
+            "model": self.model,
+            "voice": self.voice,
+            "sample_rate_hz": self.sample_rate_hz,
+            "source_sample_rate_hz": self._source_sample_rate_hz,
+            "endpoint": "dashscope.tts_v2.websocket",
+            "timeout_seconds": self.request_timeout_seconds,
+            "max_retries": self.max_retries,
+            "fallback_policy": "fail_after_provider_created",
+            "first_text_at": self._first_text_at,
+            "first_audio_at": self._first_audio_at,
+            "first_chunk_latency_ms": first_audio_latency_ms,
+            "tts_first_audio_latency_ms": first_audio_latency_ms,
+            "text_push_count": self._text_push_count,
+            "text_chars": self._text_chars,
+        }
+
+    def finish(self) -> bytes:
+        self._synthesizer.streaming_complete()
+        if not self._complete.is_set():
+            self._complete.wait(timeout=max(0.1, self.request_timeout_seconds))
+        return self.drain_audio(wait_seconds=0.2)
+
+    def cancel(self) -> None:
+        """取消当前 TTS streaming task，不等待服务端 complete。
+
+        主要逻辑：用户打断时不能再调用 `streaming_complete()`，否则会把打断路径
+        阻塞在 provider 尾包等待上；这里优先调用 SDK 的 cancel/close 能力，并
+        唤醒所有等待者。
+        参数：无。
+        返回值：无。
+        异常情况：provider 已关闭或 SDK 不支持时静默忽略。
+        """
+
+        self._complete.set()
+        for method_name in ("streaming_cancel", "close"):
+            method = getattr(self._synthesizer, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                method()
+                return
+            except Exception:
+                continue
+
+    def _normalize_sample_rate(self, pcm: bytes) -> bytes:
+        if self._source_sample_rate_hz == self.sample_rate_hz:
+            return pcm
+        converted, _state = audioop.ratecv(pcm, 2, 1, self._source_sample_rate_hz, self.sample_rate_hz, None)
+        return converted
+
+
+def build_tts_provider(config: TtsProviderConfig) -> tuple[StreamingTTS, str | None]:
+    try:
+        if config.provider == "mock":
+            return MockStreamingTTS(model=config.model, voice=config.voice, sample_rate_hz=config.sample_rate_hz), None
+        if config.provider == "dashscope":
+            return DashScopeStreamingTTS(
+                model=config.model,
+                voice=config.voice,
+                websocket_api_url=config.websocket_api_url,
+                sample_rate_hz=config.sample_rate_hz,
+                request_timeout_seconds=config.request_timeout_seconds,
+                max_retries=config.max_retries,
+            ), None
+        raise RuntimeError(f"unsupported TTS provider: {config.provider}")
+    except RuntimeError as exc:
+        if not config.allow_mock_fallback:
+            raise
+        return MockStreamingTTS(sample_rate_hz=config.sample_rate_hz), str(exc)
+
+
+@dataclass
+class StreamingTtsOutputSource:
+    """基于 Streaming TTS 的输出源。
+
+    主要功能：持续接收 assistant_text.delta，轮到播放时把累积文本送入 TTS 生成音频。
+    主要属性：`tts` 为当前 output 独立 TTS session，`_pending_text` 为尚未合成的文本。
+    """
+
+    tts: StreamingTTS
+    _pending_text: str = ""
+    _submitted_text_content: str = ""
+    generation_id: int | None = None
+    final_requested: bool = False
+    _submitted_text: bool = False
+    _completed: bool = False
+
+    def append_text(self, text: str) -> None:
+        """追加文本 delta。
+
+        主要逻辑：排队期间只累积文本，播放期间由 router 调用 `synthesize_pending()` 消费。
+        参数：`text` 为模型增量文本。
+        返回值：无。
+        异常情况：无。
+        """
+        self._pending_text += text
+
+    def mark_final(self) -> None:
+        self.final_requested = True
+
+    def stream_format(self) -> StreamFormat:
+        metrics = self.tts.metrics()
+        return StreamFormat(
+            codec="pcm16le",
+            sample_rate=int(metrics.get("sample_rate_hz") or 16000),
+            channels=1,
+            chunk_ms=40,
+        )
+
+    def synthesize_pending(self) -> bytes:
+        if self._completed:
+            raise RuntimeError("streaming TTS task has already completed")
+        text = self._pending_text
+        if text:
+            payload = self.tts.synthesize_delta(text)
+            self._pending_text = ""
+            self._submitted_text_content += text
+            self._submitted_text = True
+            return payload
+        drain = getattr(self.tts, "drain_audio", None)
+        if callable(drain):
+            return drain()
+        return b""
+
+    def metrics(self) -> dict:
+        return self.tts.metrics()
+
+    def submitted_text(self) -> str:
+        """返回已经提交给 TTS provider 的文本。"""
+
+        return self._submitted_text_content
+
+    def drain_audio(self, wait_seconds: float = 0.0) -> bytes:
+        drain = getattr(self.tts, "drain_audio", None)
+        if callable(drain):
+            return drain(wait_seconds)
+        return b""
+
+    def finish(self) -> bytes:
+        """结束当前回答对应的 TTS streaming task。
+
+        主要逻辑：DashScope tts_v2 的 `streaming_call` 属于一次语音合成任务；
+        final 阶段必须调用 `streaming_complete`，否则服务端可能缓存不完整短句，
+        导致当前回答没有尾部音频甚至没有音频。
+        返回值：provider complete 后 drain 出来的 PCM 音频。
+        异常情况：provider complete 失败时向上抛出，交给输出恢复逻辑处理。
+        """
+
+        if self._completed:
+            return b""
+        self._completed = True
+        if not self._submitted_text:
+            return b""
+        return self.tts.finish() or b""
+
+    def close(self) -> bytes:
+        """关闭当前 TTS provider 任务。
+
+        主要逻辑：如果当前回答已经 final complete，则无需重复关闭；如果被打断或
+        会话关闭时仍有未完成文本，则取消 provider streaming task，避免打断路径
+        继续等待尾包或把残留音频写回播放队列。
+        参数：无。
+        返回值：已到达但尚未写出的音频；打断路径通常会丢弃它。
+        异常情况：provider 状态异常时向上抛出，便于调用方记录。
+        """
+
+        if self._completed:
+            return b""
+        self._completed = True
+        cancel = getattr(self.tts, "cancel", None)
+        if callable(cancel):
+            cancel()
+        return self.drain_audio()
+
+    def clone_pending_with(self, tts: StreamingTTS) -> "StreamingTtsOutputSource":
+        """用新的 provider 复制当前尚未合成的文本。"""
+
+        return StreamingTtsOutputSource(
+            tts=tts,
+            _pending_text=self._pending_text,
+            _submitted_text_content=self._submitted_text_content,
+            generation_id=self.generation_id,
+            final_requested=self.final_requested,
+        )
+
+
+@dataclass
+class NativeAudioOutputSource:
+    """原生音频输出源。
+
+    主要功能：保存 Omni / realtime provider 直接输出的 audio delta，不经过 TTS。
+    主要属性：`format` 描述原生音频格式，`chunks` 保存待播放音频。
+    """
+
+    format: StreamFormat
+    metadata: dict = field(default_factory=dict)
+    chunks: list[bytes] = field(default_factory=list)
+    final_requested: bool = False
+
+    def append_text(self, text: str) -> None:
+        return None
+
+    def mark_final(self) -> None:
+        self.final_requested = True
+
+    def stream_format(self) -> StreamFormat:
+        return self.format
+
+    def synthesize_pending(self) -> bytes:
+        if not self.chunks:
+            return b""
+        return self.chunks.pop(0)
+
+    def metrics(self) -> dict:
+        return {"provider": "native_audio", "sample_rate_hz": self.format.sample_rate, **self.metadata}
+
+    def finish(self) -> bytes:
+        return b""
+
+    def chunk_bytes(self) -> int:
+        """计算当前格式下每个 stream chunk 的字节数。
+
+        主要逻辑：当前只支持 pcm16le，按采样率、通道数和 chunk_ms 计算单片大小。
+        参数：无。
+        返回值：每个音频 chunk 的字节数，至少为 2 字节。
+        异常情况：无。
+        """
+        if self.format.codec != "pcm16le":
+            return max(1, self.format.sample_rate * self.format.channels * self.format.chunk_ms // 1000)
+        return max(2, self.format.sample_rate * self.format.channels * self.format.chunk_ms // 1000 * 2)
+
+
+@dataclass
+class CachedAudioOutputSource:
+    """缓存提示音输出源。"""
+
+    cache_key: str
+    audio: bytes
+    format: StreamFormat
+    metadata: dict = field(default_factory=dict)
+    final_requested: bool = True
+
+    def append_text(self, text: str) -> None:
+        return None
+
+    def mark_final(self) -> None:
+        self.final_requested = True
+
+    def stream_format(self) -> StreamFormat:
+        return self.format
+
+    def synthesize_pending(self) -> bytes:
+        payload = self.audio
+        self.audio = b""
+        return payload
+
+    def metrics(self) -> dict:
+        return {"provider": "cached_prompt_audio", "cache_key": self.cache_key, **self.metadata}
+
+    def finish(self) -> bytes:
+        return b""
+
+
+@dataclass
+class QueuedOutput:
+    source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource
+    intent: OutputItem
+    created_at: float = field(default_factory=time.time)
+    source_stream_id: str | None = None
+
+
+class PlaybackArbiter:
+    def __init__(self, *, stream_service: StreamService, recorder: RunRecorder, max_queue_size: int = 32) -> None:
+        self.stream_service = stream_service
+        self.recorder = recorder
+        self.max_queue_size = max_queue_size
+        self._active_by_user: dict[
+            str,
+            tuple[OutputItem, str, StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource],
+        ] = {}
+        self._queue_by_user: dict[str, list[QueuedOutput]] = {}
+        self._recent_decisions: list[PlaybackDecision] = []
+
+    def submit(
+        self,
+        *,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+        intent: OutputItem,
+        format: StreamFormat | None = None,
+    ) -> tuple[PlaybackDecision, str | None]:
+        active = self._active_by_user.get(intent.user_id)
+        if active is None:
+            stream_id = self._open_output_stream(intent, source=source, format=format)
+            decision = PlaybackDecision(action="play_now", reason="no_active_playback", active_stream_id=stream_id, user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
+            self._record(intent.session_id, decision)
+            return decision, stream_id
+        active_intent, active_stream_id, active_source = active
+        if PRIORITY_ORDER[intent.priority] > PRIORITY_ORDER[active_intent.priority]:
+            self.stream_service.cancel_stream(active_stream_id, reason="interrupted_by_higher_priority")
+            if active_intent.on_interrupted == "requeue":
+                self._queue_by_user.setdefault(intent.user_id, []).append(
+                    QueuedOutput(source=active_source, intent=active_intent, source_stream_id=active_stream_id)
+                )
+            stream_id = self._open_output_stream(intent, source=source, format=format)
+            decision = PlaybackDecision(
+                action="interrupt",
+                reason="higher_priority",
+                active_stream_id=stream_id,
+                interrupted_stream_id=active_stream_id,
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                priority=intent.priority,
+            )
+            self._record(intent.session_id, decision)
+            return decision, stream_id
+        if intent.on_blocked == "queue":
+            queue = self._queue_by_user.setdefault(intent.user_id, [])
+            if len(queue) >= self.max_queue_size:
+                decision = PlaybackDecision(action="drop", reason="queue_full", user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
+                self._record(intent.session_id, decision)
+                return decision, None
+            queue.append(QueuedOutput(source=source, intent=intent))
+            decision = PlaybackDecision(action="queue", reason="active_playback_not_preempted", queued_intent_id=intent.dedupe_key or intent.session_id, user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
+            self._record(intent.session_id, decision)
+            return decision, None
+        decision = PlaybackDecision(action="drop", reason="active_playback_not_preempted", user_id=intent.user_id, session_id=intent.session_id, priority=intent.priority)
+        self._record(intent.session_id, decision)
+        return decision, None
+
+    def on_playback_finished(self, user_id: str, stream_id: str) -> QueuedOutput | None:
+        active = self._active_by_user.get(user_id)
+        if active and active[1] == stream_id:
+            self._active_by_user.pop(user_id, None)
+            return self.pop_next(user_id)
+        return None
+
+    def cancel_current(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
+        active = self._active_by_user.pop(user_id, None)
+        if active is None:
+            decision = PlaybackDecision(action="cancel_current", reason="no_active_playback", user_id=user_id, session_id=session_id)
+            self._record(session_id or "interruptions", decision)
+            return decision
+        _intent, stream_id, _source = active
+        self.stream_service.cancel_stream(stream_id, reason=reason)
+        decision = PlaybackDecision(action="cancel_current", reason=reason, interrupted_stream_id=stream_id, user_id=user_id, session_id=session_id, priority=_intent.priority)
+        self._record(session_id or "interruptions", decision)
+        return decision
+
+    def pop_next(self, user_id: str) -> QueuedOutput | None:
+        queue = self._queue_by_user.get(user_id, [])
+        while queue:
+            queued = queue.pop(0)
+            if queued.intent.ttl_seconds and time.time() - queued.created_at > queued.intent.ttl_seconds:
+                self._record(queued.intent.session_id, PlaybackDecision(action="drop", reason="ttl_expired", user_id=queued.intent.user_id, session_id=queued.intent.session_id, priority=queued.intent.priority))
+                continue
+            return queued
+        return None
+
+    def activate_queued(self, queued: QueuedOutput, *, format: StreamFormat | None = None) -> str:
+        stream_id = self._open_output_stream(queued.intent, source=queued.source, format=format)
+        self._record(
+            queued.intent.session_id,
+            PlaybackDecision(action="play_now", reason="queued_playback_ready", active_stream_id=stream_id, user_id=queued.intent.user_id, session_id=queued.intent.session_id, priority=queued.intent.priority),
+        )
+        return stream_id
+
+    def _open_output_stream(
+        self,
+        intent: OutputItem,
+        *,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+        format: StreamFormat | None = None,
+    ) -> str:
+        handle = self.stream_service.open_stream(
+            user_id=intent.user_id,
+            session_id=intent.session_id,
+            stream_type="actuator.speaker",
+            producer_id=SERVER_PRODUCER_ID,
+            format=format or StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
+            stream_id=new_id("stream_out"),
+        )
+        self._active_by_user[intent.user_id] = (intent, handle.stream_id, source)
+        return handle.stream_id
+
+    def _record(self, session_id: str, decision: PlaybackDecision) -> None:
+        self._recent_decisions.append(decision)
+        if len(self._recent_decisions) > 100:
+            self._recent_decisions = self._recent_decisions[-100:]
+        self.recorder.record_playback_decision(session_id, decision.__dict__)
+
+    def debug_snapshot(self, *, recent_limit: int = 20) -> dict:
+        """返回播放仲裁调试快照。"""
+
+        snapshot = {
+            "active": {
+                user_id: {
+                    "session_id": intent.session_id,
+                    "stream_id": stream_id,
+                    "priority": intent.priority,
+                    "source": intent.source,
+                    "on_interrupted": intent.on_interrupted,
+                    "on_blocked": intent.on_blocked,
+                }
+                for user_id, (intent, stream_id, _source) in self._active_by_user.items()
+            },
+            "queued": {
+                user_id: [
+                    {
+                        "session_id": queued.intent.session_id,
+                        "priority": queued.intent.priority,
+                        "source": queued.intent.source,
+                        "ttl_seconds": queued.intent.ttl_seconds,
+                        "age_ms": int((time.time() - queued.created_at) * 1000),
+                    }
+                    for queued in queue
+                ]
+                for user_id, queue in self._queue_by_user.items()
+            },
+            "recent_decisions": [decision.__dict__ for decision in self._recent_decisions[-recent_limit:]],
+        }
+        self.recorder.write_playback_snapshot(snapshot)
+        return snapshot
+
+
+class OutputRouter:
+    def __init__(
+        self,
+        *,
+        stream_service: StreamService,
+        recorder: RunRecorder,
+        tts_config: TtsProviderConfig | None = None,
+        tts: StreamingTTS | None = None,
+        default_priority: str = "normal",
+        default_on_blocked: str = "queue",
+        default_on_interrupted: str = "drop",
+        max_queue_size: int = 32,
+        tool_progress_audio_mode: str = "cached",
+        tool_progress_priority: str = "low",
+        tool_progress_ttl_seconds: int = 10,
+    ) -> None:
+        self.stream_service = stream_service
+        self.recorder = recorder
+        self.tts_config = tts_config or TtsProviderConfig()
+        self._injected_tts = tts
+        self.default_priority = default_priority
+        self.default_on_blocked = default_on_blocked
+        self.default_on_interrupted = default_on_interrupted
+        self.tool_progress_audio_mode = tool_progress_audio_mode
+        self.tool_progress_priority = tool_progress_priority
+        self.tool_progress_ttl_seconds = tool_progress_ttl_seconds
+        self.arbiter = PlaybackArbiter(stream_service=stream_service, recorder=recorder, max_queue_size=max_queue_size)
+        self._stream_by_session: dict[str, str] = {}
+        self._seq_by_stream: dict[str, int] = {}
+        self._source_by_session: dict[str, StreamingTtsOutputSource] = {}
+        self._source_by_stream: dict[str, StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource] = {}
+        self._native_source_by_session: dict[str, NativeAudioOutputSource] = {}
+        self._cached_audio_by_key: dict[tuple[str, int, int], bytes] = {}
+        self._payload_by_stream: dict[str, bytearray] = {}
+        self._queued_sessions: set[str] = set()
+        self._continuous_text_sessions: set[str] = set()
+        self._finish_listeners: list[Callable[[str, str, str], None]] = []
+        self._audio_delta_listeners: list[Callable[[dict[str, Any]], None]] = []
+        self._tts_pump_streams: set[str] = set()
+        self._paused_sessions: set[str] = set()
+        self._paused_payload_by_stream: dict[str, list[tuple[bytes, dict]]] = {}
+        self._text_generation_by_session: dict[str, int] = {}
+        self._write_lock = threading.RLock()
+
+    def add_finish_listener(self, listener: Callable[[str, str, str], None]) -> None:
+        """注册 output stream 完成回调。
+
+        主要逻辑：让 App 能在当前回复播放结束后处理 `close_after_reply`，但不让
+        Output Service 直接持有音频会话状态。
+        参数：`listener` 接收 user_id、session_id、stream_id。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._finish_listeners.append(listener)
+
+    def add_audio_delta_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """注册输出音频分片监听器。"""
+
+        self._audio_delta_listeners.append(listener)
+
+    def _notify_audio_delta(self, record: dict[str, Any]) -> None:
+        """通知 pipeline 输出桥已写入音频分片。"""
+
+        for listener in list(self._audio_delta_listeners):
+            try:
+                listener(dict(record))
+            except Exception as exc:  # noqa: BLE001
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.error.raised",
+                        "component": "OutputRouter",
+                        "reason": "audio_delta_listener_failed",
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "session_id": record.get("session_id"),
+                        "stream_id": record.get("stream_id"),
+                        "severity": "warning",
+                    }
+                )
+
+    def pause_session(self, *, user_id: str, session_id: str) -> None:
+        """暂停指定 session 的 output stream 写入。"""
+
+        self._paused_sessions.add(session_id)
+        self.recorder.record_agent_event(session_id, {"event": "output.downstream.paused", "user_id": user_id})
+
+    def resume_session(self, *, user_id: str, session_id: str) -> None:
+        """恢复指定 session 的 output stream 写入并冲刷暂停期间的缓冲音频。"""
+
+        self._paused_sessions.discard(session_id)
+        self.recorder.record_agent_event(session_id, {"event": "output.downstream.resumed", "user_id": user_id})
+        for stream_id in list(self._stream_by_session.values()):
+            try:
+                handle = self.stream_service.registry.get(stream_id)
+            except Exception:
+                continue
+            if handle.session_id != session_id:
+                continue
+            source = self._source_by_stream.get(stream_id)
+            if source is None:
+                continue
+            self._flush_paused_payload(
+                user_id=handle.user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                source=source,
+            )
+            if getattr(source, "final_requested", False):
+                self._finish_stream(handle.user_id, session_id, stream_id, source)
+
+    def estimate_played_text_prefix(self, *, user_id: str, session_id: str) -> str | None:
+        """估算当前 Vision TTS 输出已经播放到的文本前缀。
+
+        主要逻辑：服务器无法直接知道端侧播放器的精确播放游标，只能根据当前 output
+        stream 已写入音频时长、TTS 首包时间和已提交给 TTS 的文本做保守估算。该值
+        只用于打断消息展示，不能作为协议级播放回执。
+        参数：`user_id/session_id` 定位当前输出。
+        返回值：估算出的文本前缀；没有活跃 Vision TTS stream 时返回 None。
+        异常情况：无。
+        """
+
+        active = self.arbiter._active_by_user.get(user_id)
+        if active is None:
+            return None
+        active_intent, stream_id, _active_source = active
+        if session_id and active_intent.session_id != session_id:
+            return None
+        source = self._source_by_stream.get(stream_id)
+        if not isinstance(source, StreamingTtsOutputSource):
+            return None
+        text = source.submitted_text()
+        if not text:
+            return ""
+        payload = self._payload_by_stream.get(stream_id, bytearray())
+        if not payload:
+            return ""
+        try:
+            stream_format = self.stream_service.registry.get(stream_id).format
+        except Exception:
+            return None
+        bytes_per_second = max(1, int(stream_format.sample_rate) * max(1, int(stream_format.channels)) * 2)
+        generated_audio_seconds = len(payload) / bytes_per_second
+        if generated_audio_seconds <= 0:
+            return ""
+        first_audio_at = source.metrics().get("first_audio_at")
+        if not isinstance(first_audio_at, (int, float)) or first_audio_at <= 0:
+            return None
+        elapsed_seconds = max(0.0, time.time() - float(first_audio_at))
+        ratio = max(0.0, min(1.0, elapsed_seconds / generated_audio_seconds))
+        char_count = max(0, min(len(text), int(len(text) * ratio)))
+        if 0 < char_count < len(text):
+            while char_count < len(text) and text[char_count - 1].isspace():
+                char_count += 1
+        return text[:char_count]
+
+    def prepare_text_session(
+        self,
+        session_id: str,
+        *,
+        reason: str = "downstream_stream_opened",
+        continuous: bool = True,
+    ) -> None:
+        """提前建立连续对话级 Vision TTS session。
+
+        主要逻辑：Vision realtime 标准要求下行音频连接建立时就准备 TTS provider，
+        避免首个 assistant text delta 到达后才承担 provider 建连延迟。一次回答
+        finish 后会立刻准备下一次回答可用的 session；真正关闭只发生在 audio session
+        结束时。
+        参数：`session_id` 为设备级音频会话；`reason` 为触发原因。
+        返回值：无。
+        异常情况：provider 创建失败时沿用 `_new_tts()` 的降级或抛错策略。
+        """
+
+        if not session_id:
+            return
+        if continuous:
+            self._continuous_text_sessions.add(session_id)
+        if session_id in self._source_by_session:
+            return
+        source = StreamingTtsOutputSource(tts=self._new_tts())
+        self._source_by_session[session_id] = source
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "output.tts_session.prepared",
+                "session_id": session_id,
+                "reason": reason,
+                "tts": source.metrics(),
+            },
+        )
+
+    def on_agent_vision_delta(self, delta: AssistantTextDelta) -> None:
+        intent = self._intent_with_defaults(delta.intent or OutputItem(user_id=delta.user_id, session_id=delta.session_id))
+        source = self._source_by_session.get(delta.session_id)
+        if delta.generation_id is not None:
+            active_generation = self._text_generation_by_session.get(delta.session_id)
+            if active_generation is not None and delta.generation_id < active_generation:
+                self.recorder.record_agent_event(
+                    delta.session_id,
+                    {
+                        "event": "assistant_text.delta_ignored",
+                        "reason": "stale_generation",
+                        "generation_id": delta.generation_id,
+                        "active_generation_id": active_generation,
+                        "text_chars": len(delta.text),
+                        "final": delta.final,
+                    },
+                )
+                return
+            self._text_generation_by_session[delta.session_id] = delta.generation_id
+        if source is None and not delta.text and delta.final:
+            self.recorder.record_agent_event(
+                delta.session_id,
+                {
+                    "event": "assistant_audio.done",
+                    "user_id": delta.user_id,
+                    "stream_id": None,
+                    "empty_output": True,
+                    "source": "vision_tts",
+                },
+            )
+            return
+        if source is None:
+            source = StreamingTtsOutputSource(tts=self._new_tts())
+            self._source_by_session[delta.session_id] = source
+        if delta.generation_id is not None:
+            if source.generation_id is not None and source.generation_id != delta.generation_id:
+                self.recorder.record_agent_event(
+                    delta.session_id,
+                    {
+                        "event": "output.tts_source.replaced",
+                        "reason": "generation_changed",
+                        "old_generation_id": source.generation_id,
+                        "new_generation_id": delta.generation_id,
+                    },
+                )
+                try:
+                    source.close()
+                except Exception:
+                    pass
+                source = StreamingTtsOutputSource(tts=self._new_tts(), generation_id=delta.generation_id)
+                self._source_by_session[delta.session_id] = source
+            else:
+                source.generation_id = delta.generation_id
+        if delta.text:
+            source.append_text(delta.text)
+        if delta.final:
+            source.mark_final()
+        if delta.session_id in self._queued_sessions:
+            return
+        stream_id = self._stream_by_session.get(delta.session_id)
+        if stream_id is not None and self.stream_service.registry.get(stream_id).state != "open":
+            self._stream_by_session.pop(delta.session_id, None)
+            stream_id = None
+        if stream_id is None:
+            decision, stream_id = self.arbiter.submit(source=source, intent=intent, format=source.stream_format())
+            if decision.action == "queue":
+                self._queued_sessions.add(delta.session_id)
+                return
+            if decision.action == "drop" or stream_id is None:
+                return
+            self._stream_by_session[delta.session_id] = stream_id
+            self._source_by_stream[stream_id] = source
+            self._start_tts_drain_pump(
+                user_id=delta.user_id,
+                session_id=delta.session_id,
+                stream_id=stream_id,
+                source=source,
+            )
+        try:
+            self._drain_text_source_to_stream(
+                user_id=delta.user_id,
+                session_id=delta.session_id,
+                stream_id=stream_id,
+                source=source,
+                final=delta.final,
+            )
+        except Exception:
+            self._retry_vision_output_with_new_source(
+                user_id=delta.user_id,
+                session_id=delta.session_id,
+                stream_id=stream_id,
+                source=source,
+                intent=intent,
+                final=delta.final,
+            )
+
+    def on_assistant_audio_delta(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        final: bool = False,
+        intent: OutputItem | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        """处理 provider 原生 audio delta。
+
+        主要逻辑：首包到达时通过 Playback Arbiter 打开 actuator.speaker stream；
+        后续 audio delta 写入同一 stream；final=True 时关闭 stream。
+        参数：`audio` 为 provider PCM payload，`format` 为 provider 输出格式。
+        返回值：无。
+        异常情况：stream 服务写入失败时抛出异常。
+        """
+        resolved_intent = self._intent_with_defaults(intent or OutputItem(user_id=user_id, session_id=session_id))
+        source = self._native_source_by_session.get(session_id)
+        if source is None:
+            source = NativeAudioOutputSource(format=format, metadata=dict(metadata or {}))
+            self._native_source_by_session[session_id] = source
+        elif metadata:
+            source.metadata.update(metadata)
+        if audio:
+            source.chunks.append(audio)
+        if final:
+            source.mark_final()
+        if session_id in self._queued_sessions:
+            if final:
+                self.recorder.record_agent_event(
+                    session_id,
+                    {"event": "assistant_audio.done", "native_audio": source.metrics(), "queued": True},
+                )
+            return
+        stream_id = self._stream_by_session.get(session_id)
+        if stream_id is not None and self.stream_service.registry.get(stream_id).state != "open":
+            self._stream_by_session.pop(session_id, None)
+            stream_id = None
+        if stream_id is None and final and not audio and not source.chunks:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.done",
+                    "stream_id": None,
+                    "native_audio": source.metrics(),
+                    "empty_output": True,
+                },
+            )
+            self._native_source_by_session.pop(session_id, None)
+            return
+        if stream_id is None and audio:
+            decision, stream_id = self.arbiter.submit(source=source, intent=resolved_intent, format=source.stream_format())
+            if decision.action == "queue":
+                self._queued_sessions.add(session_id)
+                return
+            if decision.action == "drop" or stream_id is None:
+                return
+            self._stream_by_session[session_id] = stream_id
+            self._source_by_stream[stream_id] = source
+        if stream_id is None:
+            return
+        payload = source.synthesize_pending()
+        seq = self._seq_by_stream.get(stream_id, 0)
+        if payload:
+            handle_format = self.stream_service.registry.get(stream_id).format
+            written_bytes = 0
+            chunk_count = 0
+            for part in self._split_native_audio_payload(payload, source=source):
+                if session_id in self._paused_sessions:
+                    self._paused_payload_by_stream.setdefault(stream_id, []).append((part, dict(metadata or {})))
+                    continue
+                chunk = StreamChunk(
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    stream_type="actuator.speaker",
+                    seq=seq,
+                    payload=part,
+                    codec=handle_format.codec,
+                    sample_rate=handle_format.sample_rate,
+                    channels=handle_format.channels,
+                    duration_ms=handle_format.chunk_ms,
+                    final=False,
+                    metadata={"source": "native_audio", **dict(metadata or {})},
+                )
+                self.stream_service.write_chunk(chunk)
+                self._payload_by_stream.setdefault(stream_id, bytearray()).extend(part)
+                written_bytes += len(part)
+                chunk_count += 1
+                seq += 1
+            if chunk_count:
+                record = {
+                    "event": "assistant_audio.delta",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "stream_id": stream_id,
+                    "payload_size": written_bytes,
+                    "chunk_count": chunk_count,
+                    "native_audio": source.metrics(),
+                    "stream_format": handle_format.__dict__,
+                }
+                self.recorder.record_agent_event(session_id, record)
+                self._notify_audio_delta(record)
+            else:
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "assistant_audio.delta_buffered_while_paused",
+                        "stream_id": stream_id,
+                        "payload_size": len(payload),
+                        "native_audio": source.metrics(),
+                    },
+                )
+            self._seq_by_stream[stream_id] = seq
+        if final and session_id in self._paused_sessions:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.done_buffered_while_paused",
+                    "stream_id": stream_id,
+                    "native_audio": source.metrics(),
+                },
+            )
+            return
+        if final:
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "assistant_audio.done", "stream_id": stream_id, "native_audio": source.metrics()},
+            )
+            self._finish_stream(user_id, session_id, stream_id, source)
+            self._native_source_by_session.pop(session_id, None)
+
+    def _finish_stream(
+        self,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+    ) -> None:
+        handle = self.stream_service.registry.get(stream_id)
+        active_source = self._source_by_stream.get(stream_id)
+        if active_source is not source:
+            try:
+                source.close()
+            except Exception:
+                pass
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.finish_ignored",
+                    "stream_id": stream_id,
+                    "stream_state": handle.state,
+                    "reason": "source_no_longer_active",
+                    "active_source_type": type(active_source).__name__ if active_source is not None else None,
+                    "finish_source_type": type(source).__name__,
+                },
+            )
+            return
+        if handle.state != "open" or self._stream_by_session.get(session_id) != stream_id:
+            try:
+                source.close()
+            except Exception:
+                pass
+            self._payload_by_stream.pop(stream_id, None)
+            self._source_by_stream.pop(stream_id, None)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.finish_ignored",
+                    "stream_id": stream_id,
+                    "stream_state": handle.state,
+                    "reason": "stream_no_longer_active",
+                    "active_session_stream_id": self._stream_by_session.get(session_id),
+                    "finish_source_type": type(source).__name__,
+                },
+            )
+            return
+        self._flush_paused_payload(user_id=user_id, session_id=session_id, stream_id=stream_id, source=source)
+        finish_payload = source.finish() or b""
+        if (
+            handle.state != "open"
+            or self._stream_by_session.get(session_id) != stream_id
+            or self._source_by_stream.get(stream_id) is not source
+        ):
+            self._payload_by_stream.pop(stream_id, None)
+            self._source_by_stream.pop(stream_id, None)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.finish_ignored",
+                    "stream_id": stream_id,
+                    "stream_state": handle.state,
+                    "reason": "stream_cancelled_during_tts_finish",
+                    "discarded_bytes": len(finish_payload),
+                },
+            )
+            return
+        if finish_payload:
+            self._write_tts_payload(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                payload=finish_payload,
+                source=source,
+                metadata={"flush": "finish"},
+            )
+        payload = bytes(self._payload_by_stream.pop(stream_id, bytearray()))
+        if payload and handle.format.codec == "pcm16le":
+            self.recorder.record_output_wav(
+                session_id=session_id,
+                stream_id=stream_id,
+                pcm=payload,
+                sample_rate=handle.format.sample_rate,
+                channels=handle.format.channels,
+            )
+        if isinstance(source, StreamingTtsOutputSource):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "assistant_audio.done",
+                    "stream_id": stream_id,
+                    "payload_size": len(payload),
+                    "tts": source.metrics(),
+                    "stream_format": handle.format.__dict__,
+                },
+            )
+            self.recorder.record_timeline_checkpoint(
+                session_id,
+                checkpoint="text.timeline.tts.audio_done",
+                user_id=user_id,
+                stream_id=stream_id,
+                fields={
+                    "payload_size": len(payload),
+                    "tts": source.metrics(),
+                    "stream_format": handle.format.__dict__,
+                },
+            )
+        self.recorder.record_stream_event(
+            session_id,
+            {
+                "event": "stream.output.summary",
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+                "payload_size": len(payload),
+                "source": source.metrics(),
+            },
+        )
+        self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
+        self._stream_by_session.pop(session_id, None)
+        if self._source_by_session.get(session_id) is source:
+            self._source_by_session.pop(session_id, None)
+        self._source_by_stream.pop(stream_id, None)
+        self._native_source_by_session.pop(session_id, None)
+        next_output = self.arbiter.on_playback_finished(user_id, stream_id)
+        for listener in list(self._finish_listeners):
+            listener(user_id, session_id, stream_id)
+        if next_output is not None:
+            self._queued_sessions.discard(next_output.intent.session_id)
+            self._play_queued_output(next_output)
+        elif session_id in self._continuous_text_sessions:
+            self.prepare_text_session(session_id, reason="output_finished_reprepare")
+
+    def _drain_text_source_to_stream(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource,
+        final: bool,
+    ) -> None:
+        """把当前 Vision TTS source 中的待合成文本写入 output stream。"""
+
+        payload = source.synthesize_pending()
+        if payload:
+            self._write_tts_payload(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                payload=payload,
+                source=source,
+            )
+        if final:
+            self._finish_stream(user_id, session_id, stream_id, source)
+
+    def _retry_vision_output_with_new_source(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource,
+        intent: OutputItem,
+        final: bool,
+    ) -> None:
+        """TTS provider 异常关闭后重开 streaming source 并重试当前 delta。
+
+        主要逻辑：DashScope streaming task 可能在连续对话中被 provider 侧关闭；
+        如果当前 source 仍保留待合成文本，则丢弃旧 source，重开 provider 和 output
+        stream 后重试一次。重试失败才把异常交给上层异常处理。
+        参数：`stream_id` 为已失败的 output stream；`source` 保留当前待合成文本。
+        返回值：无。
+        异常情况：重试仍失败时向上抛出。
+        """
+
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "output.tts_stream_reopen",
+                "user_id": user_id,
+                "stream_id": stream_id,
+                "reason": "streaming_tts_provider_failed",
+                "pending_text_chars": len(source._pending_text),
+            },
+        )
+        self._abort_stream_after_output_error(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason="tts_stream_reopen",
+        )
+        retry_source = source.clone_pending_with(self._new_tts())
+        self._source_by_session[session_id] = retry_source
+        decision, retry_stream_id = self.arbiter.submit(source=retry_source, intent=intent, format=retry_source.stream_format())
+        if decision.action == "queue":
+            self._queued_sessions.add(session_id)
+            return
+        if decision.action == "drop" or retry_stream_id is None:
+            return
+        self._stream_by_session[session_id] = retry_stream_id
+        self._source_by_stream[retry_stream_id] = retry_source
+        self._start_tts_drain_pump(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=retry_stream_id,
+            source=retry_source,
+        )
+        try:
+            self._drain_text_source_to_stream(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=retry_stream_id,
+                source=retry_source,
+                final=final,
+            )
+        except Exception:
+            self._abort_stream_after_output_error(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=retry_stream_id,
+                reason="tts_stream_reopen_failed",
+            )
+            raise
+
+    def _abort_stream_after_output_error(self, *, user_id: str, session_id: str, stream_id: str | None, reason: str) -> None:
+        """输出生成失败后清理已经打开的 output stream。
+
+        主要逻辑：Vision TTS 可能在 stream 已打开后才抛出 provider 异常；此时必须
+        关闭 stream、释放播放仲裁 active 状态并丢弃损坏的 TTS source，否则下一轮
+        正常模型回复会被误判为 `active_playback_not_preempted` 而排队。
+        参数：`user_id/session_id/stream_id` 定位失败输出；`reason` 为关闭原因。
+        返回值：无。
+        异常情况：清理过程尽量吞掉异常，避免覆盖原始 TTS 错误。
+        """
+
+        if stream_id:
+            try:
+                self.stream_service.fail_stream(stream_id, reason=reason)
+            except Exception:
+                try:
+                    self.stream_service.close_stream(stream_id, reason=reason)
+                except Exception:
+                    pass
+            self.arbiter.on_playback_finished(user_id, stream_id)
+            self._source_by_stream.pop(stream_id, None)
+            self._payload_by_stream.pop(stream_id, None)
+            self._seq_by_stream.pop(stream_id, None)
+        if self._stream_by_session.get(session_id) == stream_id:
+            self._stream_by_session.pop(session_id, None)
+        self._source_by_session.pop(session_id, None)
+        self._native_source_by_session.pop(session_id, None)
+        self._queued_sessions.discard(session_id)
+
+    def close_text_session(self, session_id: str, *, reason: str = "audio_session_closed") -> None:
+        """关闭连续对话级 Vision TTS provider。
+
+        主要逻辑：普通回答结束时只关闭端侧 output stream，不关闭 provider streaming
+        task；当用户主动结束或会话超时结束时，才在这里 complete 并移除 source。
+        参数：`session_id` 为设备级会话编号；`reason` 为关闭原因。
+        返回值：无。
+        异常情况：provider close 失败时记录系统事件，不向外抛出。
+        """
+
+        self._continuous_text_sessions.discard(session_id)
+        stream_id = self._stream_by_session.get(session_id)
+        source = self._source_by_session.pop(session_id, None)
+        if source is None:
+            return
+        try:
+            if stream_id and source.final_requested:
+                finish_payload = source.finish() or b""
+                if finish_payload:
+                    self._write_tts_payload(
+                        user_id="",
+                        session_id=session_id,
+                        stream_id=stream_id,
+                        payload=finish_payload,
+                        source=source,
+                        metadata={"flush": "session_close"},
+                    )
+            else:
+                source.close()
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "output.tts_session.closed", "session_id": session_id, "reason": reason},
+            )
+        except Exception as exc:
+            self.recorder.record_system_event(
+                {
+                    "event": "system.error.raised",
+                    "component": "OutputRouter",
+                    "session_id": session_id,
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "severity": "warning",
+                    "reason": reason,
+                }
+            )
+
+    def _write_tts_payload(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        payload: bytes,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+        metadata: dict | None = None,
+        bypass_pause: bool = False,
+    ) -> None:
+        """写入 Vision TTS 产生的可播放音频。
+
+        主要逻辑：TTS 音频可能来自普通 text delta，也可能来自 final 阶段的
+        `streaming_complete()` drain。这里统一写入 output stream 并记录
+        `assistant_audio.delta`，避免尾音在关闭 stream 前丢失。
+        参数：`payload` 为 PCM 音频；`source` 提供 TTS 指标和输出格式。
+        返回值：无。
+        异常情况：stream 已关闭时由 StreamService 抛出。
+        """
+
+        if not payload:
+            return
+        with self._write_lock:
+            handle = self.stream_service.registry.get(stream_id)
+            if handle.state != "open":
+                return
+            if isinstance(source, StreamingTtsOutputSource) and source.generation_id is not None:
+                active_generation = self._text_generation_by_session.get(session_id)
+                if active_generation is not None and source.generation_id != active_generation:
+                    self.recorder.record_agent_event(
+                        session_id,
+                        {
+                            "event": "assistant_audio.delta_ignored",
+                            "reason": "stale_generation",
+                            "stream_id": stream_id,
+                            "generation_id": source.generation_id,
+                            "active_generation_id": active_generation,
+                            "payload_size": len(payload),
+                        },
+                    )
+                    return
+            if not bypass_pause and session_id in self._paused_sessions:
+                self._paused_payload_by_stream.setdefault(stream_id, []).append((payload, dict(metadata or {})))
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "assistant_audio.delta_buffered_while_paused",
+                        "stream_id": stream_id,
+                        "payload_size": len(payload),
+                        "source": source.metrics(),
+                    },
+                )
+                return
+            seq = self._seq_by_stream.get(stream_id, 0)
+            written_bytes = 0
+            chunk_count = 0
+            for part in self._split_output_payload(payload, format=handle.format):
+                chunk = StreamChunk(
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    stream_type="actuator.speaker",
+                    seq=seq,
+                    payload=part,
+                    codec=handle.format.codec,
+                    sample_rate=handle.format.sample_rate,
+                    channels=handle.format.channels,
+                    duration_ms=handle.format.chunk_ms,
+                    final=False,
+                    metadata=dict(metadata or {}),
+                )
+                self.stream_service.write_chunk(chunk)
+                self._payload_by_stream.setdefault(stream_id, bytearray()).extend(part)
+                written_bytes += len(part)
+                chunk_count += 1
+                seq += 1
+            self.recorder.record_agent_event(
+                session_id,
+                record := {
+                    "event": "assistant_audio.delta",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "stream_id": stream_id,
+                    "payload_size": written_bytes,
+                    "chunk_count": chunk_count,
+                    "tts": source.metrics(),
+                    "stream_format": handle.format.__dict__,
+                    **dict(metadata or {}),
+                },
+            )
+            self._notify_audio_delta(record)
+            if isinstance(source, StreamingTtsOutputSource):
+                self.recorder.record_timeline_checkpoint(
+                    session_id,
+                    checkpoint="text.timeline.tts.first_audio_chunk",
+                    user_id=user_id,
+                    stream_id=stream_id,
+                    fields={
+                        "payload_size": written_bytes,
+                        "chunk_count": chunk_count,
+                        "tts": source.metrics(),
+                        **dict(metadata or {}),
+                    },
+                )
+            self._seq_by_stream[stream_id] = seq
+
+    def _flush_paused_payload(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource | NativeAudioOutputSource | CachedAudioOutputSource,
+    ) -> None:
+        """冲刷暂停期间缓冲的 output 音频。"""
+
+        buffered = self._paused_payload_by_stream.pop(stream_id, [])
+        if not buffered:
+            return
+        for payload, metadata in buffered:
+            self._write_tts_payload(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                payload=payload,
+                source=source,
+                metadata={"resume_flush": True, **dict(metadata or {})},
+                bypass_pause=True,
+            )
+
+    def _start_tts_drain_pump(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        source: StreamingTtsOutputSource,
+    ) -> None:
+        """启动 TTS 音频后台 drain。
+
+        主要逻辑：真实 TTS 的 `on_data` 回调可能在两次模型 text delta 之间到达；
+        pump 线程会短等待并写出已到达音频，让 Vision 链路接近 realtime 播放，而不是
+        等下一次模型 delta 或 final 才播放。
+        参数：`stream_id` 定位当前 output stream；`source` 持有 TTS 会话。
+        返回值：无。
+        异常情况：写入失败时记录系统事件，线程退出。
+        """
+
+        if stream_id in self._tts_pump_streams:
+            return
+        self._tts_pump_streams.add(stream_id)
+
+        def _run() -> None:
+            try:
+                while True:
+                    handle = self.stream_service.registry.get(stream_id)
+                    if handle.state != "open" or self._stream_by_session.get(session_id) != stream_id:
+                        return
+                    payload = source.drain_audio(wait_seconds=0.05)
+                    if payload:
+                        self._write_tts_payload(
+                            user_id=user_id,
+                            session_id=session_id,
+                            stream_id=stream_id,
+                            payload=payload,
+                            source=source,
+                            metadata={"drain": "background"},
+                        )
+                    elif source.final_requested:
+                        time.sleep(0.02)
+                    else:
+                        time.sleep(0.01)
+            except Exception as exc:  # noqa: BLE001 - 后台 drain 需要保留诊断
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.error.raised",
+                        "component": "StreamingTTSPump",
+                        "stream_id": stream_id,
+                        "session_id": session_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            finally:
+                self._tts_pump_streams.discard(stream_id)
+
+        threading.Thread(target=_run, name=f"tts-drain-{stream_id}", daemon=True).start()
+
+    def mark_endpoint_playback_finished(
+        self,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        *,
+        reason: str = "endpoint_finished",
+    ) -> None:
+        """处理端侧回报的播放完成事件。
+
+        主要逻辑：当端侧发送 `stream.output.finished/closed` 时，释放 PlaybackArbiter
+        中可能残留的 active 输出，关闭服务端 output stream 阻止迟到分片继续下发，
+        并在有排队输出时立即接续播放。
+        参数：`user_id` 为用户标识；`session_id` 为端侧会话；`stream_id` 为已完成的输出流。
+        返回值：无。
+        异常情况：`stream_id` 为空或不是当前 active 输出时忽略。
+        """
+
+        if not stream_id:
+            return
+        endpoint_source = self._source_by_stream.get(stream_id)
+        try:
+            self.stream_service.close_stream(stream_id, reason=f"endpoint_{reason}")
+        except Exception:
+            pass
+        next_output = self.arbiter.on_playback_finished(user_id, stream_id)
+        for stored_session, stored_stream_id in list(self._stream_by_session.items()):
+            if stored_stream_id == stream_id:
+                self._stream_by_session.pop(stored_session, None)
+                self._native_source_by_session.pop(stored_session, None)
+                self._queued_sessions.discard(stored_session)
+        self._source_by_stream.pop(stream_id, None)
+        if endpoint_source is not None:
+            try:
+                endpoint_source.close()
+            except Exception:
+                pass
+        if next_output is not None:
+            self._queued_sessions.discard(next_output.intent.session_id)
+            self._play_queued_output(next_output)
+        for listener in list(self._finish_listeners):
+            listener(user_id, session_id or "", stream_id)
+
+    def _play_queued_output(self, queued: QueuedOutput) -> None:
+        stream_id = self.arbiter.activate_queued(queued, format=queued.source.stream_format())
+        self._stream_by_session[queued.intent.session_id] = stream_id
+        self._source_by_stream[stream_id] = queued.source
+        payload = queued.source.synthesize_pending()
+        if payload:
+            chunk = StreamChunk(
+                user_id=queued.intent.user_id,
+                session_id=queued.intent.session_id,
+                stream_id=stream_id,
+                stream_type="actuator.speaker",
+                seq=self._seq_by_stream.get(stream_id, 0),
+                payload=payload,
+                sample_rate=self.stream_service.registry.get(stream_id).format.sample_rate,
+                duration_ms=40,
+                final=False,
+            )
+            self.stream_service.write_chunk(chunk)
+            self._payload_by_stream.setdefault(stream_id, bytearray()).extend(payload)
+            self.recorder.record_agent_event(
+                queued.intent.session_id,
+                {
+                    "event": "assistant_audio.delta",
+                    "stream_id": stream_id,
+                    "payload_size": len(payload),
+                    "tts": queued.source.metrics(),
+                    "stream_format": self.stream_service.registry.get(stream_id).format.__dict__,
+                },
+            )
+            self._seq_by_stream[stream_id] = 1
+        if queued.source.final_requested:
+            self._finish_stream(queued.intent.user_id, queued.intent.session_id, stream_id, queued.source)
+
+    def _intent_with_defaults(self, intent: OutputItem) -> OutputItem:
+        return OutputItem(
+            user_id=intent.user_id,
+            session_id=intent.session_id,
+            source=intent.source,
+            priority=intent.priority or self.default_priority,
+            on_interrupted=intent.on_interrupted if intent.on_interrupted is not None else self.default_on_interrupted,
+            on_blocked=intent.on_blocked if intent.on_blocked is not None else self.default_on_blocked,
+            ttl_seconds=intent.ttl_seconds,
+            dedupe_key=intent.dedupe_key,
+            cached_prompt_key=intent.cached_prompt_key,
+        )
+
+    def _split_output_payload(self, payload: bytes, *, format: StreamFormat) -> list[bytes]:
+        """按输出格式拆分 PCM payload。
+
+        主要逻辑：Vision TTS 可能一次 drain 出较长音频；这里按 stream format 的
+        `chunk_ms` 拆成稳定小片，避免一个 StreamChunk 里混入过长音频。
+        参数：`payload` 为待发送音频，`format` 为当前 output stream 格式。
+        返回值：拆分后的音频片段列表。
+        异常情况：无。
+        """
+
+        target_size = max(1, format.sample_rate * format.channels * format.chunk_ms // 1000)
+        if format.codec == "pcm16le":
+            frame_bytes = max(2, format.channels * 2)
+            target_size = max(frame_bytes, target_size * 2)
+            target_size -= target_size % frame_bytes
+        target_size = max(1, min(target_size, self.stream_service.max_chunk_bytes))
+        return [payload[offset : offset + target_size] for offset in range(0, len(payload), target_size)]
+
+    def _split_native_audio_payload(self, payload: bytes, *, source: NativeAudioOutputSource) -> list[bytes]:
+        """把 provider 原生音频拆成协议 chunk。
+
+        主要逻辑：Omni 可能一次返回数百毫秒音频，而 `StreamChunk` 的 header 需要声明
+        真实 chunk_ms，且每片不能超过 `stream.max_chunk_bytes`。这里按输出格式的
+        chunk_ms 计算目标大小，再受 max_chunk_bytes 约束拆分。
+        参数：`payload` 为 provider 原始 PCM；`source` 提供输出音频格式。
+        返回值：拆分后的 payload 列表。
+        异常情况：无。
+        """
+        target_size = min(source.chunk_bytes(), self.stream_service.max_chunk_bytes)
+        if source.format.codec == "pcm16le":
+            frame_bytes = max(2, source.format.channels * 2)
+            target_size = max(frame_bytes, target_size - (target_size % frame_bytes))
+        if target_size <= 0:
+            target_size = len(payload)
+        return [payload[offset : offset + target_size] for offset in range(0, len(payload), target_size)]
+
+    def _new_tts(self) -> StreamingTTS:
+        if self._injected_tts is not None:
+            return self._injected_tts
+        tts, downgrade_reason = build_tts_provider(self.tts_config)
+        if downgrade_reason:
+            self.recorder.record_system_event(
+                {"event": "system.degradation.raised", "component": "StreamingTTS", "reason": downgrade_reason}
+            )
+        if not self.tts_config.streaming or not getattr(tts, "streaming", True):
+            self.recorder.record_system_event(
+                {
+                    "event": "system.degradation.raised",
+                    "component": "StreamingTTS",
+                    "reason": "tts_provider_streaming_disabled",
+                    "provider": getattr(tts, "provider_name", "unknown"),
+                    "model": getattr(tts, "model", "unknown"),
+                }
+            )
+        return tts
+
+    def submit_cached_prompt_audio(
+        self,
+        *,
+        intent: OutputItem,
+        cache_key: str,
+        text: str,
+        format: StreamFormat,
+    ) -> PlaybackDecision:
+        """提交缓存提示音。"""
+
+        key = (cache_key, format.sample_rate, format.channels)
+        audio = self._cached_audio_by_key.get(key)
+        cached_hit = audio is not None
+        if audio is None:
+            audio = MockStreamingTTS(sample_rate_hz=format.sample_rate).synthesize_delta(text)
+            self._cached_audio_by_key[key] = audio
+        source = CachedAudioOutputSource(cache_key=cache_key, audio=audio, format=format, metadata={"cached": cached_hit})
+        resolved_intent = self._intent_with_defaults(
+            OutputItem(
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                source=intent.source or "cached_prompt_audio",
+                priority=intent.priority,
+                on_interrupted=intent.on_interrupted,
+                on_blocked=intent.on_blocked,
+                ttl_seconds=intent.ttl_seconds,
+                dedupe_key=intent.dedupe_key,
+                cached_prompt_key=cache_key,
+            )
+        )
+        decision, stream_id = self.arbiter.submit(source=source, intent=resolved_intent, format=format)
+        if decision.action in {"drop", "queue"} or stream_id is None:
+            return decision
+        self._stream_by_session[resolved_intent.session_id] = stream_id
+        self._source_by_stream[stream_id] = source
+        payload = source.synthesize_pending()
+        if payload:
+            chunk = StreamChunk(
+                user_id=resolved_intent.user_id,
+                session_id=resolved_intent.session_id,
+                stream_id=stream_id,
+                stream_type="actuator.speaker",
+                seq=self._seq_by_stream.get(stream_id, 0),
+                payload=payload,
+                codec=format.codec,
+                sample_rate=format.sample_rate,
+                channels=format.channels,
+                duration_ms=format.chunk_ms,
+                final=False,
+                metadata={"source": "cached_prompt_audio", "cache_key": cache_key},
+            )
+            self.stream_service.write_chunk(chunk)
+            self._payload_by_stream.setdefault(stream_id, bytearray()).extend(payload)
+            self.recorder.record_agent_event(
+                resolved_intent.session_id,
+                {
+                    "event": "assistant_audio.delta",
+                    "stream_id": stream_id,
+                    "payload_size": len(payload),
+                    "cached_prompt_audio": source.metrics(),
+                    "stream_format": format.__dict__,
+                },
+            )
+        self._finish_stream(resolved_intent.user_id, resolved_intent.session_id, stream_id, source)
+        return decision
+
+    def submit_tool_progress_audio(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        tool_name: str,
+        messages: list[str],
+        generation_mode: str | None = None,
+    ) -> PlaybackDecision | None:
+        """提交工具前置播报音频。
+
+        主要逻辑：`cached` 模式复用提示音缓存；`realtime` 模式走当前 TTS 流式输出。
+        参数：`messages` 为 Tool 声明的候选文案，当前选择第一条可用文案。
+        返回值：播放仲裁决策；没有文案时返回 None。
+        异常情况：下游 stream 写入失败时继续抛出，便于验收暴露链路问题。
+        """
+
+        text = next((str(item).strip() for item in messages if str(item).strip()), "")
+        if not text:
+            return None
+        mode = (generation_mode or self.tool_progress_audio_mode or "cached").strip().lower()
+        if mode in {"disabled", "off", "none"}:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool.progress_audio.skipped",
+                    "source": "tool_progress_audio",
+                    "tool_name": tool_name,
+                    "generation_mode": mode,
+                    "message": text,
+                    "reason": "tool_progress_audio_disabled",
+                },
+            )
+            return None
+        cache_key = f"tool-progress:{tool_name}:{text}"
+        intent = OutputItem(
+            user_id=user_id,
+            session_id=session_id,
+            source="tool_progress_audio",
+            priority=self.tool_progress_priority,
+            ttl_seconds=self.tool_progress_ttl_seconds,
+            dedupe_key=cache_key,
+            cached_prompt_key=cache_key,
+        )
+        if mode == "realtime":
+            self.on_agent_vision_delta(
+                AssistantTextDelta(user_id=user_id, session_id=session_id, text=text, final=False, intent=intent)
+            )
+            self.on_agent_vision_delta(
+                AssistantTextDelta(user_id=user_id, session_id=session_id, text="", final=True, intent=intent)
+            )
+            active_stream_id = self._stream_by_session.get(session_id)
+            decision = PlaybackDecision(
+                action="submitted",
+                reason="tool_progress_realtime_tts",
+                active_stream_id=active_stream_id,
+                user_id=user_id,
+                session_id=session_id,
+                priority=self.tool_progress_priority,
+            )
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool.progress_audio.submitted",
+                    "source": "tool_progress_audio",
+                    "tool_name": tool_name,
+                    "generation_mode": mode,
+                    "message": text,
+                    "decision": decision.__dict__,
+                },
+            )
+            return decision
+        decision = self.submit_cached_prompt_audio(
+            intent=intent,
+            cache_key=cache_key,
+            text=text,
+            format=StreamFormat(codec="pcm16le", sample_rate=self.tts_config.sample_rate_hz, channels=1, chunk_ms=40),
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "tool.progress_audio.submitted",
+                "source": "tool_progress_audio",
+                "tool_name": tool_name,
+                "generation_mode": mode,
+                "message": text,
+                "decision": decision.__dict__,
+            },
+        )
+        return decision
+
+
+class OutputService:
+    def __init__(
+        self,
+        *,
+        stream_service: StreamService,
+        recorder: RunRecorder,
+        tts_config: TtsProviderConfig | None = None,
+        default_priority: str = "normal",
+        default_on_blocked: str = "queue",
+        default_on_interrupted: str = "drop",
+        max_queue_size: int = 32,
+        tool_progress_audio_mode: str = "cached",
+        tool_progress_priority: str = "low",
+        tool_progress_ttl_seconds: int = 10,
+    ) -> None:
+        self.router = OutputRouter(
+            stream_service=stream_service,
+            recorder=recorder,
+            tts_config=tts_config,
+            default_priority=default_priority,
+            default_on_blocked=default_on_blocked,
+            default_on_interrupted=default_on_interrupted,
+            max_queue_size=max_queue_size,
+            tool_progress_audio_mode=tool_progress_audio_mode,
+            tool_progress_priority=tool_progress_priority,
+            tool_progress_ttl_seconds=tool_progress_ttl_seconds,
+        )
+        self.notification_coordinator = NotificationCoordinator(output_service=self)
+
+    def on_assistant_vision_delta(self, delta: AssistantTextDelta) -> None:
+        self.router.on_agent_vision_delta(delta)
+
+    def add_output_finished_listener(self, listener: Callable[[str, str, str], None]) -> None:
+        """注册当前输出完成回调。"""
+
+        self.router.add_finish_listener(listener)
+
+    def add_output_audio_delta_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """注册当前输出音频分片回调。"""
+
+        self.router.add_audio_delta_listener(listener)
+
+    def mark_endpoint_playback_finished(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_finished",
+    ) -> None:
+        """接收端侧播放完成回报。
+
+        主要逻辑：把端侧 `stream.output.finished/closed` 转为 Output Router 的播放完成信号。
+        参数：`user_id` 为用户标识；`session_id` 为端侧会话；`stream_id` 为完成的输出流。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id, reason=reason)
+
+    def prepare_text_session(self, session_id: str, *, reason: str = "downstream_stream_opened") -> None:
+        """提前建立Vision 链路连续对话级 TTS provider。"""
+
+        self.router.prepare_text_session(session_id, reason=reason)
+
+    def close_text_session(self, session_id: str, *, reason: str = "audio_session_closed") -> None:
+        """关闭Vision 链路连续对话级 TTS provider。"""
+
+        self.router.close_text_session(session_id, reason=reason)
+
+    def estimate_played_text_prefix(self, *, user_id: str, session_id: str) -> str | None:
+        """估算当前 Vision TTS 输出已经播放到的文本前缀。"""
+
+        return self.router.estimate_played_text_prefix(user_id=user_id, session_id=session_id)
+
+    def pause_session(self, *, user_id: str, session_id: str) -> None:
+        """暂停指定连续对话的下行音频写入。"""
+
+        self.router.pause_session(user_id=user_id, session_id=session_id)
+
+    def resume_session(self, *, user_id: str, session_id: str) -> None:
+        """恢复指定连续对话的下行音频写入。"""
+
+        self.router.resume_session(user_id=user_id, session_id=session_id)
+
+    def on_assistant_audio_delta(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        final: bool = False,
+        intent: OutputItem | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        """接收原生 assistant_audio.delta。
+
+        主要逻辑：Omni Realtime 直接返回 audio delta 时调用本入口，不走 TTS。
+        参数：`audio` 为 PCM payload，`format` 为输出流格式，`final` 表示 provider
+        audio done。
+        返回值：无。
+        异常情况：stream 写入失败时抛出异常。
+        """
+        self.router.on_assistant_audio_delta(
+            user_id=user_id,
+            session_id=session_id,
+            audio=audio,
+            format=format,
+            final=final,
+            intent=intent,
+            metadata=metadata,
+        )
+
+    def submit_text(self, *, user_id: str, session_id: str, text: str, priority: str = "normal", ttl_seconds: int = 0) -> None:
+        """提交文本到 Output Service。
+
+        主要逻辑：由服务内部创建 `OutputItem`，避免 Tool / Task 直接接触输出调度对象。
+        参数：`user_id`、`session_id` 定位会话，`text` 为文本，`priority` 和
+        `ttl_seconds` 为内部调度提示。
+        返回值：无。
+        异常情况：下游 stream 写入失败时向上抛出。
+        """
+        self.submit_output(OutputItem(user_id=user_id, session_id=session_id, priority=priority, ttl_seconds=ttl_seconds), text)
+
+    def submit_audio(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        audio: bytes,
+        format: StreamFormat,
+        priority: str = "normal",
+        metadata: dict | None = None,
+    ) -> None:
+        """提交原生音频到 Output Service。
+
+        主要逻辑：由服务内部创建 `OutputItem`，再走 native audio 输出链路。
+        参数：`audio` 为音频 payload，`format` 为音频格式，`priority` 为调度优先级。
+        返回值：无。
+        异常情况：下游 stream 写入失败时向上抛出。
+        """
+        self.on_assistant_audio_delta(
+            user_id=user_id,
+            session_id=session_id,
+            audio=audio,
+            format=format,
+            final=True,
+            intent=OutputItem(user_id=user_id, session_id=session_id, source="tool_audio", priority=priority),
+            metadata={"source": "tool_audio", **dict(metadata or {})},
+        )
+
+    def submit_cached_prompt_audio(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        cache_key: str,
+        text: str,
+        priority: str = "low",
+        ttl_seconds: int = 10,
+        format: StreamFormat | None = None,
+    ) -> PlaybackDecision:
+        """提交缓存提示音。"""
+
+        return self.router.submit_cached_prompt_audio(
+            intent=OutputItem(
+                user_id=user_id,
+                session_id=session_id,
+                source="cached_prompt_audio",
+                priority=priority,
+                ttl_seconds=ttl_seconds,
+                cached_prompt_key=cache_key,
+            ),
+            cache_key=cache_key,
+            text=text,
+            format=format or StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
+        )
+
+    def submit_tool_progress(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        tool_name: str,
+        messages: list[str],
+        generation_mode: str | None = None,
+    ) -> PlaybackDecision | None:
+        """提交 Tool 前置播报。
+
+        主要逻辑：供 Agent Core 在确认模型首输出是 tool call 后调用，避免普通Vision 回复
+        被插入提示音。
+        参数：`messages` 为候选提示文案；`generation_mode` 支持 cached/realtime。
+        返回值：播放决策或 None。
+        异常情况：无文案时返回 None。
+        """
+
+        return self.router.submit_tool_progress_audio(
+            user_id=user_id,
+            session_id=session_id,
+            tool_name=tool_name,
+            messages=messages,
+            generation_mode=generation_mode,
+        )
+
+    def notify_task_signal(self, signal: Any) -> NotificationDecision:
+        """接收任务信号通知。
+
+        主要逻辑：从 TaskSignal 中提取文本、优先级和 TTL，交给 NotificationCoordinator。
+        参数：`signal` 为 TaskSignal 或同形对象。
+        返回值：`NotificationDecision`。
+        异常情况：下游输出失败时向上抛出。
+        """
+        payload = getattr(signal, "payload", {}) or {}
+        text = str(payload.get("text") or payload.get("message") or "")
+        return self.notification_coordinator.submit(
+            NotificationRequest(
+                user_id=getattr(signal, "user_id"),
+                session_id=getattr(signal, "session_id") or getattr(signal, "task_id"),
+                text=text,
+                priority=getattr(signal, "priority", "normal"),
+                ttl_seconds=getattr(signal, "ttl_seconds", 0),
+                dedupe_key=getattr(signal, "dedupe_key", None),
+                merge_key=payload.get("merge_key") or payload.get("notification_group"),
+                allow_direct_notify=bool(getattr(signal, "allow_direct_notify", True)),
+                requires_agent_context_sync=bool(getattr(signal, "requires_agent_decision", False)),
+                metadata={
+                    "task_id": getattr(signal, "task_id", ""),
+                    "task_type": getattr(signal, "task_type", ""),
+                    "signal_name": getattr(signal, "signal_name", ""),
+                },
+            )
+        )
+
+    def submit_output(self, intent: OutputItem, text: str) -> None:
+        """提交完整文本输出。
+
+        主要逻辑：Tool / Task 通知已经是完整文本，优先使用 TTS provider 的一次性合成能力，
+        再作为原生音频交给 Output Router。这样不会先打开空的 speaker stream，也不会因为
+        DashScope 流式任务尚未启动而在 `streaming_complete()` 阶段失败。
+        参数：`intent` 为内部输出意图，`text` 为完整播报文本。
+        返回值：无。
+        异常情况：TTS 合成或 stream 写入失败时向上抛出，由 TaskSignalBridge 记录系统错误。
+        """
+
+        if not text:
+            return
+        tts = self.router._new_tts()
+        synthesize_text = getattr(tts, "synthesize_text", None)
+        if callable(synthesize_text):
+            audio = synthesize_text(text)
+            if not audio:
+                raise RuntimeError("TTS provider returned empty audio for complete text output")
+            metrics = tts.metrics()
+            self.router.on_assistant_audio_delta(
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                audio=audio,
+                format=StreamFormat(
+                    codec="pcm16le",
+                    sample_rate=int(metrics.get("sample_rate_hz") or self.router.tts_config.sample_rate_hz),
+                    channels=1,
+                    chunk_ms=40,
+                ),
+                final=True,
+                intent=OutputItem(
+                    user_id=intent.user_id,
+                    session_id=intent.session_id,
+                    source=intent.source or "vision_tts",
+                    priority=intent.priority,
+                    on_interrupted=intent.on_interrupted,
+                    on_blocked=intent.on_blocked,
+                    ttl_seconds=intent.ttl_seconds,
+                    dedupe_key=intent.dedupe_key,
+                    cached_prompt_key=intent.cached_prompt_key,
+                ),
+                metadata={"source": "vision_tts", "tts": metrics},
+            )
+            return
+        self.router.on_agent_vision_delta(
+            AssistantTextDelta(user_id=intent.user_id, session_id=intent.session_id, text=text, final=False, intent=intent)
+        )
+        self.router.on_agent_vision_delta(
+            AssistantTextDelta(user_id=intent.user_id, session_id=intent.session_id, text="", final=True, intent=intent)
+        )
+
+    def interrupt_user(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
+        decision = self.router.arbiter.cancel_current(user_id, session_id=session_id, reason=reason)
+        if decision.interrupted_stream_id:
+            self.router._source_by_stream.pop(decision.interrupted_stream_id, None)
+            for stored_session, stream_id in list(self.router._stream_by_session.items()):
+                if stream_id == decision.interrupted_stream_id:
+                    self.router._stream_by_session.pop(stored_session, None)
+                    source = self.router._source_by_session.pop(stored_session, None)
+                    if source is not None:
+                        try:
+                            source.close()
+                        except Exception:
+                            pass
+                    self.router._native_source_by_session.pop(stored_session, None)
+        return decision
+
+    def active_output_stream_id(self, user_id: str, session_id: str | None = None) -> str | None:
+        """查询用户当前活跃 output stream。
+
+        主要逻辑：只暴露只读状态，供音频会话生命周期判断是否可以执行
+        `close_after_reply`。
+        参数：`user_id` 为用户标识，`session_id` 可选用于进一步限定当前会话。
+        返回值：活跃 stream_id；没有活跃输出时返回 None。
+        异常情况：无。
+        """
+
+        active = self.router.arbiter._active_by_user.get(user_id)
+        if active is None:
+            return None
+        intent, stream_id, _source = active
+        if session_id is not None and intent.session_id != session_id:
+            return None
+        return stream_id
+
+    def debug_snapshot(self) -> dict:
+        """返回 Output Service 调试快照。"""
+
+        snapshot = self.router.arbiter.debug_snapshot()
+        snapshot["notifications"] = {"recent_decisions": self.notification_coordinator.recent_decisions()}
+        return snapshot

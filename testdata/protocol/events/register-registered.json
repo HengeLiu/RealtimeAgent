@@ -1,5 +1,5 @@
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_register_registered",
   "event_name": "control.device.registered",
   "timestamp_ms": 1760000000100,

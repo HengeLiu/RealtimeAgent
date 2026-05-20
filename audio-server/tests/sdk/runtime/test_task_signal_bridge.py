@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.asset import ArtifactRef
-from audio_chat.protocol import Event
-from audio_chat.tasks import TaskSignal, TaskSignalBridge
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.asset import ArtifactRef
+from realtime_agent.protocol import Event
+from realtime_agent.tasks import TaskSignal, TaskSignalBridge
 
 
 class SpeakerConnection:
@@ -24,7 +24,7 @@ class SpeakerConnection:
         """关闭测试连接。"""
 
 
-def register_speaker(app: AudioChatApp, connection: SpeakerConnection) -> None:
+def register_speaker(app: RealtimeAgentApp, connection: SpeakerConnection) -> None:
     """注册一个可消费 speaker output stream 的测试设备。"""
 
     app.register_device(
@@ -35,7 +35,7 @@ def register_speaker(app: AudioChatApp, connection: SpeakerConnection) -> None:
             payload={
                 "device_id": "dev-speaker",
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
                 "auth": {"mode": "disabled"},
             },
         ),
@@ -50,7 +50,7 @@ def test_task_signal_bridge_records_agent_sync_artifacts_and_direct_notify(tmp_p
     预期结果：task-signals、agent-events 和 output stream 都产生可检查产物。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = SpeakerConnection()
     register_speaker(app, connection)
     bridge = TaskSignalBridge(recorder=app.recorder, output_service=app.output_service)
@@ -86,7 +86,7 @@ def test_task_signal_bridge_can_write_agent_visible_message(tmp_path) -> None:
     预期结果：messages.jsonl 中出现可被 Text 上下文加载的任务结果消息。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     bridge = TaskSignalBridge(
         recorder=app.recorder,
         output_service=app.output_service,
@@ -112,7 +112,7 @@ def test_task_signal_bridge_can_write_agent_visible_message(tmp_path) -> None:
     assert "navigation.checkpoint" in messages
 
 
-def test_task_signal_bridge_direct_notify_uses_complete_text_tts(tmp_path) -> None:
+def test_task_signal_bridge_direct_notify_uses_complete_vision_tts(tmp_path) -> None:
     """测试目标：验证 Task 到点通知使用完整文本 TTS 后再打开输出流。
 
     测试方法：注入一个只支持 `synthesize_text()` 的 TTS，模拟真实通知类输出不走
@@ -152,7 +152,7 @@ def test_task_signal_bridge_direct_notify_uses_complete_text_tts(tmp_path) -> No
 
             return None
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = SpeakerConnection()
     register_speaker(app, connection)
     fake_tts = CompleteTextTTS()

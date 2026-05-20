@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk
 
 
 class Connection:
@@ -23,7 +23,7 @@ class Connection:
         self.chunks.append(chunk)
 
 
-def register_audio_device(app: AudioChatApp, connection: Connection, user_id: str = "user-dialog") -> None:
+def register_audio_device(app: RealtimeAgentApp, connection: Connection, user_id: str = "user-dialog") -> None:
     """注册支持连续语音会话的测试端侧。"""
 
     app.register_device(
@@ -36,8 +36,8 @@ def register_audio_device(app: AudioChatApp, connection: Connection, user_id: st
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
                 "properties": {
-                    "audio_chat.audio_input": "sensor.mic",
-                    "audio_chat.audio_output": "actuator.speaker",
+                    "realtime_agent.audio_input": "sensor.mic",
+                    "realtime_agent.audio_output": "actuator.speaker",
                 },
             },
         ),
@@ -52,8 +52,8 @@ def test_turn_ignored_does_not_close_persistent_realtime_session(tmp_path) -> No
     预期结果：Realtime session 仍存在，没有下发 close.requested。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime", realtime_provider="mock")
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime", omni_provider="mock")
     )
     connection = Connection("dev-dialog")
     register_audio_device(app, connection)
@@ -91,7 +91,7 @@ def test_model_close_request_is_ignored_without_explicit_allow(tmp_path) -> None
     预期结果：不会下发 close.requested，runs 中记录 ignored。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-dialog")
     register_audio_device(app, connection)
     session_id = app.active_session_id("user-dialog")
@@ -128,7 +128,7 @@ def test_user_close_request_still_closes_session(tmp_path) -> None:
     预期结果：server 下发 `control.audio_session.close.requested`。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-dialog")
     register_audio_device(app, connection)
     session_id = app.active_session_id("user-dialog")

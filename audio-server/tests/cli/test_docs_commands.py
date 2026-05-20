@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from audio_chat import AudioChatConfig
+from realtime_agent import RealtimeAgentConfig
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[3]
@@ -21,15 +21,15 @@ def _project_scripts() -> dict[str, str]:
     return dict(data["project"]["scripts"])
 
 
-def test_readme_audio_chat_commands_exist_in_pyproject() -> None:
+def test_readme_realtime_agent_commands_exist_in_pyproject() -> None:
     """测试目标：防止 README 中的开发命令和 entry point 脱节。
 
-    测试方法：解析 README 中 `uv run audio-chat.*` 命令，排除非 SDK 命令。
+    测试方法：解析 README 中 `uv run realtime-agent.*` 命令，排除非 SDK 命令。
     预期结果：每个文档命令都存在于 `pyproject.toml` 的 project.scripts。
     """
 
     readme = (AUDIO_ROOT / "README.md").read_text(encoding="utf-8")
-    commands = sorted(set(re.findall(r"uv run (audio-chat\.[A-Za-z0-9_.-]+)", readme)))
+    commands = sorted(set(re.findall(r"uv run (realtime-agent\.[A-Za-z0-9_.-]+)", readme)))
     scripts = _project_scripts()
 
     assert commands
@@ -39,7 +39,7 @@ def test_readme_audio_chat_commands_exist_in_pyproject() -> None:
 def test_docs_entry_points_exist_in_pyproject() -> None:
     """测试目标：确认设计文档提到的已实现 entry point 没有缺失。
 
-    测试方法：扫描 README 与当前开发说明中出现的 `audio-chat.*` 命令。
+    测试方法：扫描 README 与当前开发说明中出现的 `realtime-agent.*` 命令。
     预期结果：非 roadmap 文本中的 P0-A 命令都能在 pyproject 中找到。
     """
 
@@ -50,49 +50,49 @@ def test_docs_entry_points_exist_in_pyproject() -> None:
         ]
     )
     required = {
-        "audio-chat.config.sync",
-        "audio-chat.server.start",
-        "audio-chat.server.stop",
-        "audio-chat.server.logs",
-        "audio-chat.web.open",
-        "audio-chat.playback.glass",
-        "audio-chat.dev.preflight",
-        "audio-chat.sdk.package-check",
+        "realtime-agent.config.sync",
+        "realtime-agent.server.start",
+        "realtime-agent.server.stop",
+        "realtime-agent.server.logs",
+        "realtime-agent.web.open",
+        "realtime-agent.playback.glass",
+        "realtime-agent.dev.preflight",
+        "realtime-agent.sdk.package-check",
     }
-    mentioned = set(re.findall(r"\b(audio-chat\.[A-Za-z0-9_.-]+)\b", docs))
+    mentioned = set(re.findall(r"\b(realtime-agent\.[A-Za-z0-9_.-]+)\b", docs))
     scripts = _project_scripts()
 
     assert required <= mentioned
     assert not [command for command in required if command not in scripts]
 
 
-def test_readme_public_classes_import_from_audio_chat() -> None:
+def test_readme_public_classes_import_from_realtime_agent() -> None:
     """测试目标：防止 README 公开 API 示例失效。
 
-    测试方法：解析 README 中 `from audio_chat import ...` 的导入行并实际导入。
-    预期结果：文档中出现的公开类都能从 `audio_chat` 顶层读取。
+    测试方法：解析 README 中 `from realtime_agent import ...` 的导入行并实际导入。
+    预期结果：文档中出现的公开类都能从 `realtime_agent` 顶层读取。
     """
 
     readme = (AUDIO_ROOT / "README.md").read_text(encoding="utf-8")
     imported_names: set[str] = set()
     for line in readme.splitlines():
         line = line.strip()
-        if not line.startswith("from audio_chat import "):
+        if not line.startswith("from realtime_agent import "):
             continue
         node = ast.parse(line).body[0]
         assert isinstance(node, ast.ImportFrom)
         imported_names.update(alias.name for alias in node.names)
 
-    import audio_chat
+    import realtime_agent
 
     assert imported_names
-    assert not [name for name in sorted(imported_names) if not hasattr(audio_chat, name)]
+    assert not [name for name in sorted(imported_names) if not hasattr(realtime_agent, name)]
 
 
 def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) -> None:
     """测试目标：确认 preflight 报告能定位配置、provider 和 endpoint 问题。
 
-    测试方法：执行 `audio-chat.dev.preflight` 到临时报告路径。
+    测试方法：执行 `realtime-agent.dev.preflight` 到临时报告路径。
     预期结果：报告包含 G 线要求的 config validation、provider key 和 endpoint config 检查。
     """
 
@@ -101,7 +101,7 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
         [
             "uv",
             "run",
-            "audio-chat.dev.preflight",
+            "realtime-agent.dev.preflight",
             "--config",
             "examples/for-blind-app/audio-server/server.yaml",
             "--report",
@@ -141,24 +141,24 @@ def test_for_blind_server_yaml_documents_supported_model_routes(tmp_path) -> Non
     data = yaml.safe_load(text)
 
     assert "server.schema.json" not in text
-    assert data["agent"]["mode"] in {"text", "realtime_audio", "auto", "custom"}
-    assert data["agent"]["text"]["provider"] in {"mock", "openai-compatible", "dashscope-compatible"}
-    assert data["agent"]["text"]["model"]
-    assert data["agent"]["text"]["asr_provider"] in {"mock", "dashscope"}
-    assert data["agent"]["text"]["tts_provider"] in {"mock", "dashscope"}
-    assert data["mcp"]["enabled"] is False
+    assert data["agent"]["mode"] in {"vision", "omni", "auto", "custom"}
+    assert data["agent"]["vision"]["provider"] in {"mock", "openai-compatible", "dashscope-compatible"}
+    assert data["agent"]["vision"]["model"]
+    assert data["agent"]["vision"]["asr_provider"] in {"mock", "dashscope"}
+    assert data["agent"]["vision"]["tts_provider"] in {"mock", "dashscope"}
+    assert data["mcp"]["enabled"] is True
 
     app_dir = tmp_path / "for-blind-app"
     app_dir.mkdir()
     shutil.copyfile(config, app_dir / "server.yaml")
-    config = AudioChatConfig.from_yaml(app_dir / "server.yaml")
+    config = RealtimeAgentConfig.from_yaml(app_dir / "server.yaml")
 
     assert config.agent_mode == data["agent"]["mode"]
-    assert config.text_provider == data["agent"]["text"]["provider"]
-    assert config.text_model == data["agent"]["text"]["model"]
-    assert config.asr_provider == data["agent"]["text"]["asr_provider"]
-    assert config.tts_provider == data["agent"]["text"]["tts_provider"]
-    assert config.allow_mock_fallback == data["agent"]["text"]["allow_mock_fallback"]
+    assert config.vision_provider == data["agent"]["vision"]["provider"]
+    assert config.vision_model == data["agent"]["vision"]["model"]
+    assert config.asr_provider == data["agent"]["vision"]["asr_provider"]
+    assert config.tts_provider == data["agent"]["vision"]["tts_provider"]
+    assert config.allow_mock_fallback == data["agent"]["vision"]["allow_mock_fallback"]
 
 
 def test_developer_context_device_design_doc_covers_target_contracts() -> None:
@@ -225,9 +225,9 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
         "ToolSpec",
         "TaskContext",
         "AssetRef | None",
-        "audio-chat.device.validate",
-        "audio-chat.server.run",
-        "audio-chat.web.open",
+        "realtime-agent.device.validate",
+        "realtime-agent.server.run",
+        "realtime-agent.web.open",
         "runs/<app_name>/<user_id>/<device_id>/assets.jsonl",
         "当前新 Tool 可以优先试用 typed facade",
     ]

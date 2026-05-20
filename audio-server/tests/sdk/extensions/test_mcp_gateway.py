@@ -6,9 +6,9 @@ import json
 import pytest
 import yaml
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.errors import ErrorCode
-from audio_chat.mcp import McpError, McpGateway, McpToolSpec
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.errors import ErrorCode
+from realtime_agent.mcp import McpError, McpGateway, McpToolSpec
 
 
 def test_mcp_gateway_loads_config_and_calls_mock_tool(tmp_path) -> None:
@@ -36,10 +36,10 @@ def test_mcp_gateway_loads_config_and_calls_mock_tool(tmp_path) -> None:
     )
     gateway = McpGateway(enabled=True, config_path=config_path)
 
-    result = gateway.call(tool_name="web.search", arguments={"query": "audio-chat"})
+    result = gateway.call(tool_name="web.search", arguments={"query": "realtime-agent"})
 
     assert result["tool_name"] == "web.search"
-    assert result["arguments"]["query"] == "audio-chat"
+    assert result["arguments"]["query"] == "realtime-agent"
     assert result["result"]["items"][0]["title"] == "结果"
 
 
@@ -74,8 +74,8 @@ def test_mcp_call_tool_is_exposed_and_uses_gateway(tmp_path) -> None:
         yaml.safe_dump({"tools": [{"name": "map.route", "mock_result": {"distance": 120}}]}, allow_unicode=True),
         encoding="utf-8",
     )
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             mcp_enabled=True,
             mcp_config_path=str(config_path),
@@ -160,7 +160,7 @@ def test_mcp_gateway_calls_streamable_http_tool(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setenv("AMAP_MCP_URL", "https://mcp.example.com/mcp")
     monkeypatch.setenv("AMAP_MCP_BEARER_TOKEN", "test-token")
-    monkeypatch.setattr("audio_chat.mcp.urllib_request.urlopen", fake_urlopen)
+    monkeypatch.setattr("realtime_agent.mcp.urllib_request.urlopen", fake_urlopen)
     gateway = McpGateway(enabled=True, config_path=config_path)
 
     result = gateway.call(tool_name="amap.route_plan", arguments={"origin": "家", "destination": "地铁站"}, timeout_seconds=3)
@@ -305,7 +305,7 @@ def test_mcp_gateway_reloads_local_env_when_url_was_missing(tmp_path, monkeypatc
             return FakeResponse({})
         return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": []}})
 
-    monkeypatch.setattr("audio_chat.mcp.urllib_request.urlopen", fake_urlopen)
+    monkeypatch.setattr("realtime_agent.mcp.urllib_request.urlopen", fake_urlopen)
 
     result = gateway.call(tool_name="amap.route_plan", arguments={"origin": "家", "destination": "地铁站"}, timeout_seconds=3)
 

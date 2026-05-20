@@ -6,15 +6,15 @@ from pathlib import Path
 
 import yaml
 
-from audio_chat.app import AudioChatConfig
-from audio_chat.config import load_yaml_config
+from realtime_agent.app import RealtimeAgentConfig
+from realtime_agent.config import load_yaml_config
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_config_sync_generates_developer_files(tmp_path) -> None:
-    """测试目标：确认 `audio-chat.config.sync` 能生成开发者本地配置。
+    """测试目标：确认 `realtime-agent.config.sync` 能生成开发者本地配置。
 
     测试方法：把 app-root 指向临时目录，指定 output-dir 后执行同步命令。
     预期结果：生成 server、phone mock、glass playback 三类配置和 sync-result.json。
@@ -26,7 +26,7 @@ def test_config_sync_generates_developer_files(tmp_path) -> None:
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--app-root",
             str(app_root),
             "--output-dir",
@@ -69,7 +69,7 @@ server:
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--app-root",
             str(app_root),
             "--server-config",
@@ -105,7 +105,7 @@ observability:
     )
 
     loaded = load_yaml_config(config_path)
-    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+    runtime_config = RealtimeAgentConfig.from_loaded_config(loaded)
 
     assert loaded.observability.log_timezone == "Asia/Shanghai"
     assert runtime_config.log_timezone == "Asia/Shanghai"
@@ -129,7 +129,7 @@ user:
     )
 
     loaded = load_yaml_config(config_path)
-    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+    runtime_config = RealtimeAgentConfig.from_loaded_config(loaded)
 
     assert loaded.user.message_compact_threshold == 10
     assert loaded.user.message_compact_keep_latest == 4
@@ -140,48 +140,48 @@ user:
 def test_agent_prompt_and_provider_config_names_are_canonical(tmp_path) -> None:
     """测试目标：确认 Agent 配置统一使用 `provider/model/prompt` 命名。
 
-    测试方法：写入同时包含 text 与 realtime 的最小 YAML，并读取配置对象。
-    预期结果：文本链路和 Realtime 链路都通过同名字段取得 provider、model 和 prompt。
+    测试方法：写入同时包含 vision 与 omni 的最小 YAML，并读取配置对象。
+    预期结果：Vision 链路和 Omni 链路都通过同名字段取得 provider、model 和 prompt。
     """
 
     config_path = tmp_path / "server.yaml"
     config_path.write_text(
         """
 agent:
-  mode: realtime_audio
-  text:
+  mode: omni
+  vision:
     provider: mock
-    model: mock-text
-    prompt: 文本提示词
-  realtime:
+    model: mock-vision
+    prompt: 视觉提示词
+  omni:
     provider: mock
-    model: mock-realtime
-    prompt: 实时提示词
+    model: mock-omni
+    prompt: Omni提示词
     max_concurrent_sessions: 7
 """.lstrip(),
         encoding="utf-8",
     )
 
     loaded = load_yaml_config(config_path)
-    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+    runtime_config = RealtimeAgentConfig.from_loaded_config(loaded)
 
-    assert loaded.agent.text.provider == "mock"
-    assert loaded.agent.text.prompt == "文本提示词"
-    assert loaded.agent.realtime.provider == "mock"
-    assert loaded.agent.realtime.prompt == "实时提示词"
-    assert loaded.agent.realtime.max_concurrent_sessions == 7
-    assert runtime_config.text_provider == "mock"
-    assert runtime_config.text_prompt == "文本提示词"
-    assert runtime_config.realtime_provider == "mock"
-    assert runtime_config.realtime_prompt == "实时提示词"
-    assert runtime_config.realtime_max_concurrent_sessions == 7
+    assert loaded.agent.vision.provider == "mock"
+    assert loaded.agent.vision.prompt == "视觉提示词"
+    assert loaded.agent.omni.provider == "mock"
+    assert loaded.agent.omni.prompt == "Omni提示词"
+    assert loaded.agent.omni.max_concurrent_sessions == 7
+    assert runtime_config.vision_provider == "mock"
+    assert runtime_config.vision_prompt == "视觉提示词"
+    assert runtime_config.omni_provider == "mock"
+    assert runtime_config.omni_prompt == "Omni提示词"
+    assert runtime_config.omni_max_concurrent_sessions == 7
 
 
 def test_agent_text_multimodal_config_is_loaded(tmp_path) -> None:
-    """测试目标：确认 Text 多模态配置会从 YAML 同步到运行时配置。
+    """测试目标：确认 Vision 多模态配置会从 YAML 同步到运行时配置。
 
-    测试方法：写入包含 agent.text.multimodal 的最小 YAML，加载后检查 loaded 和
-    AudioChatConfig 字段。
+    测试方法：写入包含 agent.vision.multimodal 的最小 YAML，加载后检查 loaded 和
+    RealtimeAgentConfig 字段。
     预期结果：图片、抓拍次数和视频配置都能被运行时读取。
     """
 
@@ -189,7 +189,7 @@ def test_agent_text_multimodal_config_is_loaded(tmp_path) -> None:
     config_path.write_text(
         """
 agent:
-  text:
+  vision:
     provider: dashscope-compatible
     model: qwen3.6-flash
     multimodal:
@@ -207,12 +207,12 @@ agent:
     )
 
     loaded = load_yaml_config(config_path)
-    runtime_config = AudioChatConfig.from_loaded_config(loaded)
+    runtime_config = RealtimeAgentConfig.from_loaded_config(loaded)
 
-    assert loaded.agent.text.multimodal.enabled is True
-    assert loaded.agent.text.multimodal.max_images_per_turn == 2
-    assert loaded.agent.text.multimodal.video.enabled is True
-    assert runtime_config.text_multimodal_enabled is True
-    assert runtime_config.text_multimodal_attach_tool_result_assets is True
-    assert runtime_config.text_multimodal_max_image_base64_bytes == 12345
-    assert runtime_config.text_multimodal_video_max_inline_bytes == 54321
+    assert loaded.agent.vision.multimodal.enabled is True
+    assert loaded.agent.vision.multimodal.max_images_per_turn == 2
+    assert loaded.agent.vision.multimodal.video.enabled is True
+    assert runtime_config.vision_multimodal_enabled is True
+    assert runtime_config.vision_multimodal_attach_tool_result_assets is True
+    assert runtime_config.vision_multimodal_max_image_base64_bytes == 12345
+    assert runtime_config.vision_multimodal_video_max_inline_bytes == 54321

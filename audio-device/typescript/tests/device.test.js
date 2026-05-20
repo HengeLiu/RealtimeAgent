@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
-import { AudioChatEvent, DeviceBuilder, wsUrl } from "../src/index.js";
+import { RealtimeAgentEvent, DeviceBuilder, wsUrl } from "../src/index.js";
 
 const root = resolve("../..");
 
@@ -20,20 +20,20 @@ test("DeviceBuilder creates structured supports registration payload", () => {
   assert.equal(payload.supports.sensors[0].type, "rgb");
 });
 
-test("AudioChatEvent serializes envelope fields", () => {
-  const event = new AudioChatEvent({
+test("RealtimeAgentEvent serializes envelope fields", () => {
+  const event = new RealtimeAgentEvent({
     eventName: "command.completed",
     userId: "user-001",
     producerId: "dev-js-001",
     payload: { command_id: "cmd-001" },
   }).toObject();
 
-  assert.equal(event.version, "audio-chat.v1");
+  assert.equal(event.version, "realtime-agent.v1");
   assert.equal(event.event_name, "command.completed");
   assert.equal(event.payload.command_id, "cmd-001");
 });
 
-test("AudioChatEvent reads protocol golden fixtures", () => {
+test("RealtimeAgentEvent reads protocol golden fixtures", () => {
   const names = [
     "command-accepted.json",
     "command-completed.json",
@@ -47,18 +47,18 @@ test("AudioChatEvent reads protocol golden fixtures", () => {
   ];
   for (const name of names) {
     const data = JSON.parse(readFileSync(resolve(root, "testdata/protocol/events", name), "utf8"));
-    const event = AudioChatEvent.fromObject(data).toObject();
+    const event = RealtimeAgentEvent.fromObject(data).toObject();
     assert.equal(event.event_name, data.event_name);
     assert.equal(event.user_id, data.user_id);
     assert.equal(event.producer_id, data.producer_id);
   }
 });
 
-test("AudioChatEvent rejects invalid protocol envelope fixtures", () => {
+test("RealtimeAgentEvent rejects invalid protocol envelope fixtures", () => {
   const names = ["control-payload-media.json", "target-device-routing.json"];
   for (const name of names) {
     const data = JSON.parse(readFileSync(resolve(root, "testdata/protocol/invalid/events", name), "utf8"));
-    assert.throws(() => AudioChatEvent.fromObject(data), /forbidden device routing|media bytes/);
+    assert.throws(() => RealtimeAgentEvent.fromObject(data), /forbidden device routing|media bytes/);
   }
 });
 

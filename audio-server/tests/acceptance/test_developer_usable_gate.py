@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from audio_chat.tasks import TaskAutoDiscovery
-from audio_chat.tools import ToolAutoDiscovery
+from realtime_agent.tasks import TaskAutoDiscovery
+from realtime_agent.tools import ToolAutoDiscovery
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[3]
@@ -43,5 +43,5 @@ def test_device_playback_acceptance_and_artifact_schema_exist() -> None:
     """
 
     assert (AUDIO_ROOT / "examples" / "dev-support" / "tests" / "playback" / "test_python_playback.py").exists()
-    assert (AUDIO_ROOT / "audio-server" / "audio_chat" / "cli" / "config.py").exists()
+    assert (AUDIO_ROOT / "audio-server" / "realtime_agent" / "cli" / "config.py").exists()
     assert (AUDIO_ROOT / "audio-server" / "docs" / "how-to" / "inspect-runs-artifacts.md").exists()

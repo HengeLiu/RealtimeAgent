@@ -1,6 +1,6 @@
 # Contributing
 
-感谢你考虑参与 `audio-chat`。
+感谢你考虑参与 `realtime-agent`。
 
 主要贡献说明见 [docs/community/contributing.md](docs/community/contributing.md)。
 

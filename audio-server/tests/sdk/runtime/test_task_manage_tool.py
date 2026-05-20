@@ -4,8 +4,8 @@ import asyncio
 
 from pydantic import BaseModel, Field
 
-from audio_chat.tasks import BaseTask, TaskEngine, TaskRunResult, TaskSpec
-from audio_chat.tools import SystemToolContext, TaskRuntimeManagerTool, TaskStartTool, ToolExecutor
+from realtime_agent.tasks import BaseTask, TaskEngine, TaskRunResult, TaskSpec
+from realtime_agent.tools import SystemToolContext, TaskRuntimeManagerTool, TaskStartTool, ToolExecutor
 
 
 class ManagedToolTask(BaseTask):

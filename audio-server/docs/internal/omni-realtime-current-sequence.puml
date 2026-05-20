@@ -16,13 +16,13 @@ participant "麦克风采集\nopenMicStream()" as Mic
 participant "播放器\nscheduleAudioChunk()" as Player
 end box
 
-box "服务器：audio_chat" #FFF4E0
-participant "AudioChatHttpServer" as Server
-participant "AudioChatApp" as App
+box "服务器：realtime_agent" #FFF4E0
+participant "RealtimeAgentHttpServer" as Server
+participant "RealtimeAgentApp" as App
 participant "ControlService" as ControlService
 participant "StreamService" as StreamService
 participant "AudioPipeline" as AudioPipeline
-participant "RealtimeAudioAgentCore" as Core
+participant "OmniRealtimeAgentCore" as Core
 participant "ContextCompiler\nToolGateway" as Context
 participant "QwenOmniRealtimeAdapter" as Adapter
 participant "OutputService" as OutputService
@@ -45,7 +45,7 @@ Server -> App: publish_control_event()
 App -> ControlService: publish(control.audio_session.opened)
 App -> App: _mark_audio_session_opened()
 App -> Core: open(user_id, session_id=device_id)
-Core -> Context: compile(mode=realtime_audio)
+Core -> Context: compile(mode=omni)
 Context --> Core: instructions + tools + messages
 Core -> Adapter: open(callbacks)
 Adapter -> Omni: connect()
@@ -125,14 +125,14 @@ participant "播放器\nscheduleAudioChunk()" as Player
 participant "摄像头/RGB\nhandleRgbConfigure()" as Camera
 end box
 
-box "服务器：audio_chat" #FFF4E0
-participant "AudioChatHttpServer" as Server
-participant "AudioChatApp" as App
+box "服务器：realtime_agent" #FFF4E0
+participant "RealtimeAgentHttpServer" as Server
+participant "RealtimeAgentApp" as App
 participant "ControlService" as ControlService
 participant "StreamService" as StreamService
-participant "RealtimeAudioAgentCore" as Core
+participant "OmniRealtimeAgentCore" as Core
 participant "QwenOmniRealtimeAdapter" as Adapter
-participant "RealtimeOutputAdapter" as OutputAdapter
+participant "OmniOutputAdapter" as OutputAdapter
 participant "OutputService" as OutputService
 participant "AssetService" as AssetService
 participant "ToolGateway" as ToolGateway

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from audio_chat.tasks import BaseTask, JsonlTaskStore, TaskEngine
+from realtime_agent.tasks import BaseTask, JsonlTaskStore, TaskEngine
 
 
 class PersistentTask(BaseTask):

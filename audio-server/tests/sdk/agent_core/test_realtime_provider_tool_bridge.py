@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
-from audio_chat.agent_core.realtime import RealtimeToolBridge
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk, StreamFormat
-from audio_chat.tools import BaseTool, ToolContext, ToolResult
+from realtime_agent.agent_core.omni import RealtimeToolBridge
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
 class Connection:
@@ -27,7 +27,7 @@ class Connection:
         self.chunks.append(chunk)
 
 
-def register_speaker(app: AudioChatApp, connection: Connection, user_id: str) -> None:
+def register_speaker(app: RealtimeAgentApp, connection: Connection, user_id: str) -> None:
     """注册可消费 actuator.speaker 的测试端侧。"""
 
     app.register_device(
@@ -39,7 +39,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str) ->
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -54,7 +54,7 @@ class RealtimeCityTool(BaseTool):
     主要属性：`name` 是 provider function calling schema 中的函数名。
     """
 
-    name = "realtime_city_lookup"
+    name = "omni_city_lookup"
     description = "查询城市信息"
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -79,12 +79,12 @@ def test_realtime_tool_bridge_commits_json_argument_delta_inside_running_loop(tm
     """
 
     async def _run() -> dict:
-        app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio", realtime_provider="mock"))
+        app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni", omni_provider="mock"))
         app.tool_registry.register(RealtimeCityTool())
         bridge = RealtimeToolBridge(tool_gateway=app.tool_gateway, recorder=app.recorder)
         bridge.append_tool_call_delta(
             tool_call_id="rt-call-1",
-            name="realtime_city_lookup",
+            name="omni_city_lookup",
             arguments_delta='{"city": ',
         )
         bridge.append_tool_call_delta(tool_call_id="rt-call-1", arguments_delta='"hangzhou"}')
@@ -95,14 +95,14 @@ def test_realtime_tool_bridge_commits_json_argument_delta_inside_running_loop(tm
     assert result["ok"] is True
     assert result["data"]["city"] == "hangzhou"
     trace_text = (tmp_path / "runs" / "user-rt" / "sess-rt" / "tool-events.jsonl").read_text(encoding="utf-8")
-    assert "realtime_city_lookup" in trace_text
+    assert "omni_city_lookup" in trace_text
 
 
 class ToolCallingRealtimeProvider:
     """测试用 provider。
 
     主要功能：模拟 provider 先发 function call arguments，再输出一片原生音频。
-    主要属性：`callbacks` 保存 RealtimeAudioAgentCore 注入的回调集合。
+    主要属性：`callbacks` 保存 OmniRealtimeAgentCore 注入的回调集合。
     """
 
     def __init__(self, config) -> None:
@@ -113,7 +113,7 @@ class ToolCallingRealtimeProvider:
         """保存 callbacks 并上报 provider 打开事件。"""
 
         self.callbacks = callbacks
-        callbacks.provider_event({"event": "fake_realtime.session.opened"})
+        callbacks.provider_event({"event": "fake_omni.session.opened"})
 
     def append_audio(self, chunk: StreamChunk) -> None:
         """模拟 provider 工具调用和 audio delta。"""
@@ -124,7 +124,7 @@ class ToolCallingRealtimeProvider:
         self.callbacks.tool_call_delta(
             {
                 "tool_call_id": "rt-call-2",
-                "name": "realtime_city_lookup",
+                "name": "omni_city_lookup",
                 "arguments_delta": '{"city": "suzhou"}',
             }
         )
@@ -147,13 +147,13 @@ class ToolCallingRealtimeProvider:
 
 
 def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) -> None:
-    """测试目标：验证 RealtimeAudioAgentCore 能记录 provider tool call 结果回填。
+    """测试目标：验证 OmniRealtimeAgentCore 能记录 provider tool call 结果回填。
 
     测试方法：注入会触发工具调用的 fake provider，并注册 speaker 端侧消费原生音频。
-    预期结果：runs 中出现 `realtime.tool_result.ready` 和回填状态，端侧收到音频。
+    预期结果：runs 中出现 `omni.tool_result.ready` 和回填状态，端侧收到音频。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="realtime_audio", realtime_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni", omni_provider="mock"))
     app.tool_registry.register(RealtimeCityTool())
     app.agent_core.provider_factory = lambda config: ToolCallingRealtimeProvider(config)
     connection = Connection("dev-rt")
@@ -173,7 +173,7 @@ def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) 
     )
 
     model_events = (tmp_path / "runs" / "user-rt" / handle.session_id / "model-events.jsonl").read_text(encoding="utf-8")
-    assert "realtime.tool_result.ready" in model_events
+    assert "omni.tool_result.ready" in model_events
     assert "handled_by_provider_adapter" in model_events
     assert "tool.progress_message.emitted" not in model_events
     assert "tool_progress_audio" not in model_events

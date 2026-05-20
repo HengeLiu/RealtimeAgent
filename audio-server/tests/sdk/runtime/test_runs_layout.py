@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from audio_chat.observability import RunRecorder
-from audio_chat.protocol import StreamChunk
+from realtime_agent.observability import RunRecorder
+from realtime_agent.protocol import StreamChunk
 
 
 def test_runs_layout_uses_user_device_directory(tmp_path: Path) -> None:

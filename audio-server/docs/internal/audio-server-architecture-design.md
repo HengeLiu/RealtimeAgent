@@ -1,19 +1,19 @@
-# audio-chat SDK 总体架构设计
+# realtime-agent SDK 总体架构设计
 
 更新时间：2026-05-15
 
-文档状态：总体架构设计与历史决策记录。本文覆盖了 `audio-chat` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
+文档状态：总体架构设计与历史决策记录。本文覆盖了 `realtime-agent` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
 
 ## 1. 文档目的
 
-本文档给出新一代 `audio-chat` SDK 的总体设计。它不是对旧 `openaiglass-sdk` 的小修小补，而是基于上一版 SDK 在真实语音链路、Omni Realtime、Text Agent、设备回放、手机任务、播放仲裁和真机联调中暴露的问题，重新定义一个以用户语音会话为中心、对开发者更友好的 Python server SDK。
+本文档给出新一代 `realtime-agent` SDK 的总体设计。它不是对旧 `openaiglass-sdk` 的小修小补，而是基于上一版 SDK 在真实语音链路、Omni Realtime、Vision Agent、设备回放、手机任务、播放仲裁和真机联调中暴露的问题，重新定义一个以用户语音会话为中心、对开发者更友好的 Python server SDK。
 
-`audio-chat` 的核心定位：
+`realtime-agent` 的核心定位：
 
 1. 只承担服务器侧 Python SDK 职责。
 2. 不采集麦克风，不驱动喇叭，不实现端侧硬件控制。
 3. 面向任意数量、任意形态的端侧设备，统一设备注册、事件订阅、stream 协议、Agent Core、Task Engine、Tool 模板和内置能力。
-4. 旧 `openaiglass-sdk` 归入 `legacy` 作为迁移参考，新项目直接使用 `audio-chat`。
+4. 旧 `openaiglass-sdk` 归入 `legacy` 作为迁移参考，新项目直接使用 `realtime-agent`。
 5. 本仓库提供基础端侧参考实现，但这些端侧实现不属于 Python server SDK 核心包。
 
 ## 2. 背景与上一版经验
@@ -26,7 +26,7 @@
 4. 旧版 `BaseTool`、`BaseTask`、`DeviceGroupContext` 已验证了业务能力抽象方向；新版对外统一改为 `BaseTool`、`BaseTask`、`UserDeviceContext`。
 5. `phone-mock` 和 `glass-playback` 对开发效率非常关键，不能只依赖真机。
 6. 播放仲裁和任务通知不能放在业务层，各业务能力只应提交结构化输出请求。
-7. Omni 全模态模型和普通文本模型的 Agent Loop 差异很大，旧版强行塞进一套 `VoiceRuntime` 会导致概念混杂。
+7. Omni 全模态模型和普通视觉语言模型的 Agent Loop 差异很大，旧版强行塞进一套 `VoiceRuntime` 会导致概念混杂。
 8. `CapabilityResult`、`CapabilityTrace`、`MediaAssetRef`、`TaskRef` 这类结构化对象能显著降低排障成本，应该保留并改成更清晰的新命名。
 9. 旧版 Task 事件回流到会话、产物和通知的方向是正确的；新版应把它设计为 Task Engine、Agent Core、Output Service 之间的稳定桥接。
 10. 旧版 preflight、package-check、contract test 和回放断言已经证明“能启动、能联调、能解释失败”是 SDK 产品能力，不是附属脚本。
@@ -34,7 +34,7 @@
 上一版主要困难：
 
 1. 旧版 `VoiceRuntime` 同时承担会话管理、ASR、TTS、Omni Realtime、文本 Agent、播放队列、通知桥接、任务事件、进度音频缓存等职责，文件和认知负担都过重。
-2. Omni 链路和 Text 链路在 turn 定义、输入提交、工具调用、输出音频生成方式上差异很大，但代码里大量共享热路径。
+2. Omni 链路和 Vision 链路在 turn 定义、输入提交、工具调用、输出音频生成方式上差异很大，但代码里大量共享热路径。
 3. 端侧能力边界不够清晰，容易把语音唤醒、AEC、播放器执行和 server 输出仲裁混在一起讨论。
 4. 对外暴露了过多 frame、path、设备类型等低层细节，开发者需要理解太多历史兼容概念。
 5. 旧 SDK 同时包含 server、phone、glass 三端产品化职责，导致 Python 包、端侧工程、业务样板和打包发布边界不够干净。
@@ -42,52 +42,52 @@
 7. `DeviceGroupContext` 对业务开发友好，但名字和 group_id 绑定过深；新版应保留“通过上下文使用设备通讯”的体验，去掉固定 group 和端侧角色前提。
 8. 旧版内置工具和任务覆盖了查询设备、抓拍、任务状态、取消任务、读 Skill、记忆检索等常见能力；新版应继续提供这些能力，但必须通过事件和 stream 实现，不能保留特殊 RPC。
 
-`audio-chat` 的设计目标是把这些经验收敛为更小、更明确、更可替换的模块。
+`realtime-agent` 的设计目标是把这些经验收敛为更小、更明确、更可替换的模块。
 
 ## 3. 产品定位
 
 ### 3.1 SDK 名称
 
-新 SDK 名称：`audio-chat`
+新 SDK 名称：`realtime-agent`
 
 建议 Python 包名：
 
 ```text
-audio-chat
+realtime-agent
 ```
 
 建议 Python 导入名：
 
 ```python
-import audio_chat
+import realtime_agent
 ```
 
 当前已落地 SDK CLI：
 
 ```bash
-audio-chat.server.run
-audio-chat.server.start
-audio-chat.server.stop
-audio-chat.server.logs
-audio-chat.config.sync
-audio-chat.dev.preflight
-audio-chat.playback.glass
-audio-chat.sdk.package-check
-audio-chat.web.open
+realtime-agent.server.run
+realtime-agent.server.start
+realtime-agent.server.stop
+realtime-agent.server.logs
+realtime-agent.config.sync
+realtime-agent.dev.preflight
+realtime-agent.playback.glass
+realtime-agent.sdk.package-check
+realtime-agent.web.open
 ```
 
 开发/测试支持组件不放入 SDK CLI 命名空间，例如 Python 手机模拟组件使用
-`python -m audio_chat_python_phone_mock` 从自己的包启动。roadmap 中如继续出现
-`audio-chat.ios.*`、`audio-chat.esp32.*` 等命令，必须明确标注为未实现或后续目标，不能写进 README 的可复制命令区。
+`python -m realtime_agent_python_phone_mock` 从自己的包启动。roadmap 中如继续出现
+`realtime-agent.ios.*`、`realtime-agent.esp32.*` 等命令，必须明确标注为未实现或后续目标，不能写进 README 的可复制命令区。
 
 ### 3.2 仓库目录
 
-当前仓库已经升级为以 `audio_chat` 为主的根目录结构：
+当前仓库已经升级为以 `realtime_agent` 为主的根目录结构：
 
 ```text
 pyproject.toml
 README.md
-audio-server/audio_chat/
+audio-server/realtime_agent/
 examples/
 docs/
 testdata/
@@ -96,7 +96,7 @@ legacy/
 
 说明：
 
-1. `audio-server/audio_chat` 是 server-side Python SDK 源码目录，也是 Python 导入包名。
+1. `audio-server/realtime_agent` 是 server-side Python SDK 源码目录，也是 Python 导入包名。
 2. `examples` 按项目组织应用、业务能力、参考端侧和应用测试。
 3. `audio-server/tests` 和各 `examples/*/tests` 保留 SDK 契约、回放、集成测试。
 4. `testdata` 保留跨项目共享的音频样例。
@@ -104,7 +104,7 @@ legacy/
 
 ### 3.3 SDK 边界
 
-`audio-chat` 负责：
+`realtime-agent` 负责：
 
 1. 基于 `user_id` 的设备注册、鉴权、心跳和运行中设备集合。
 2. Control Service、事件订阅和事件分发。
@@ -116,7 +116,7 @@ legacy/
 8. 设备级回放和 mock 工具。
 9. 运行态快照、日志、调试产物和预检。
 
-`audio-chat` 不负责：
+`realtime-agent` 不负责：
 
 1. 不负责真实麦克风录音。
 2. 不负责真实喇叭播放。
@@ -129,10 +129,10 @@ legacy/
 
 ### 3.4 新 SDK 的准确定位
 
-`audio-chat` 的交付物是 server 侧 Python SDK，但它不是孤立的 Python 工具包。更准确的定位是：
+`realtime-agent` 的交付物是 server 侧 Python SDK，但它不是孤立的 Python 工具包。更准确的定位是：
 
-1. `audio_chat` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
-2. `audio-server/audio_chat` 下的 `protocol`、`device_capabilities` 和 `spec/` 定义多端必须共同遵守的公共协议、对象模型和 schema；当前不维护协议兼容性 golden 样例。
+1. `realtime_agent` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
+2. `audio-server/realtime_agent` 下的 `protocol`、`device_capabilities` 和 `spec/` 定义多端必须共同遵守的公共协议、对象模型和 schema；当前不维护协议兼容性 golden 样例。
 3. `examples/dev-support/devices` 提供开发/测试支持组件，用来验证协议、降低联调门槛；`examples/*/devices` 下的应用端侧工程是参考实现。正式端侧由开发者在自己的工程中自行实现，不要求放入 SDK 目录。
 4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
 
@@ -140,7 +140,7 @@ legacy/
 
 和旧版三端 SDK 的差异是：
 
-| 旧 SDK 经验                     | audio-chat 取舍                                                          |
+| 旧 SDK 经验                     | realtime-agent 取舍                                                          |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | 多端协同运行模型                | 保留为公共协议、开发支持组件和端侧参考工程，不把端侧正式工程塞进 server Python 包。 |
 | glass / phone / server 固定角色 | 改成能力和订阅驱动；`client_type` 只用于调试、兼容和默认配置。         |
@@ -161,10 +161,10 @@ legacy/
 | ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Control Service        | 已实现   | 设备注册、订阅匹配、事件发布和 debug API 已由 `audio-server/tests/sdk/runtime/test_control_service.py`、`tests/acceptance/test_protocol_routing_acceptance.py` 覆盖。                                                                                                                                                                               |
 | Stream Service         | 已实现   | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `audio-server/tests/sdk/runtime/test_stream_and_audio_pipeline.py`、`examples/dev-support/tests/network/test_network_server_playback.py` 覆盖。                                                                                                                                                                 |
-| Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；text 路线可复用 AudioSample 做无头回放，见 `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
+| Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；Vision 路线可复用 AudioSample 做无头回放，见 `examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
 | Asset Service          | 已实现   | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。                                                                                                                                          |
-| Agent Core             | 部分实现 | Text / Realtime mock 链路、工具发现和 provider schema 已覆盖；TextAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
-| ToolGateway            | 已实现   | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `tests/acceptance/test_protocol_native_tool_task_contract.py` 与 `audio-server/tests/sdk/agent_core/test_agent_core_router.py` 覆盖。                                                                                                                                                      |
+| Agent Core             | 部分实现 | Text / Realtime mock 链路、工具发现和 provider schema 已覆盖；VisionRealtimeAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
+| ToolGateway            | 已实现   | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `audio-server/tests/acceptance/test_auto_discovery_developer_contract.py`、`audio-server/tests/sdk/runtime/test_tool_spec_schema.py` 与 `audio-server/tests/sdk/agent_core/test_agent_core_router.py` 覆盖。                                                                                                                                                      |
 | Task Engine            | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。                                                                                                                                                                                                                             |
 | Output Service         | 已实现   | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `audio-server/tests/sdk/runtime/test_phase2_providers_output.py` 覆盖。                                                                                                                                                                                                               |
 | Endpoint references    | 已实现   | Python playback、Python phone mock 和 browser-glass 最小开发支持组件已进入 `endpoint-reference` lane；iOS phone 已具备最小 SwiftUI 可运行客户端和 contract test；ESP32-S3 目前保留参考目录和配置样例。                                                                                                                           |
@@ -182,18 +182,18 @@ legacy/
 | 设备注册与订阅分发          | `audio-server/tests/sdk/runtime/test_control_service.py`                                                                                                                                       |
 | stream chunk 协议           | `audio-server/tests/protocol/test_protocol_contracts.py`、`audio-server/tests/sdk/runtime/test_stream_and_audio_pipeline.py`                                                                                 |
 | 资产缓存与能力回放          | `examples/for-blind-app/tests/acceptance/test_capability_template_playback.py`                                                                                                                  |
-| Tool / Task 协议原生扩展    | `tests/acceptance/test_protocol_native_tool_task_contract.py`                                                                                                                                                                |
-| Text 模型音频闭环           | `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`                                                                                                                                                                                     |
+| Tool / Task 协议原生扩展    | `audio-server/tests/acceptance/test_auto_discovery_developer_contract.py`、`audio-server/tests/sdk/runtime/test_tool_spec_schema.py`、`audio-server/tests/acceptance/test_task_device_stream_contract.py`                                                                                                                                                                |
+| Vision 模型音频闭环           | `examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py`                                                                                                                                                                                     |
 | Output Service 与播放仲裁   | `audio-server/tests/sdk/runtime/test_phase2_providers_output.py`                                                                                                          |
-| H 线路迁移样板              | `examples/for-blind-app/audio-server/capabilities/{tools.py,tasks.py}`、`examples/for-blind-app/tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
+| H 线路迁移样板              | `examples/for-blind-app/audio-server/capabilities/tools.py`、`examples/for-blind-app/audio-server/capabilities/tasks.py`、`examples/for-blind-app/tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
 | Memory / Skill / MCP 能力面 | `audio-server/tests/sdk/runtime/test_memory_service.py`、`audio-server/tests/sdk/extensions/test_skill_service.py`、`audio-server/tests/sdk/extensions/test_mcp_gateway.py`、`audio-server/tests/acceptance/test_indirect_device_context_contract.py`                                                                |
 
 ### 3.7 公开扩展 API
 
-业务代码应优先从 `audio_chat` 顶层导入扩展类，不依赖内部服务模块路径：
+业务代码应优先从 `realtime_agent` 顶层导入扩展类，不依赖内部服务模块路径：
 
 ```python
-from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec, BaseTask, TaskContext, TaskSignal
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec, BaseTask, TaskContext, TaskSignal
 ```
 
 ## 4. 设计原则
@@ -220,7 +220,7 @@ server 不应决定：
 
 ### 4.2 设备没有固定类型，推荐用 supports 声明能力
 
-`audio-chat` 对外不要求开发者先理解 glass、phone、web、mock 等固定设备类型。所有设备都注册到同一个 `user_id` 的运行中设备集合里，每个设备通过不同 `device_id` 区分，并声明：
+`realtime-agent` 对外不要求开发者先理解 glass、phone、web、mock 等固定设备类型。所有设备都注册到同一个 `user_id` 的运行中设备集合里，每个设备通过不同 `device_id` 区分，并声明：
 
 1. 推荐声明 `supports`，表达自己支持哪些传感器和执行器，例如 `sensor.rgb`、`sensor.mic`、`actuator.speaker`。
 2. 可选声明 `subscriptions`，作为底层路由兼容入口、调试广播订阅或尚未标准化事件的补充。
@@ -328,12 +328,12 @@ server 可做的是：
 
 ### 4.7 Agent Core 可扩展，但运行循环不能混用
 
-Realtime Audio 模型、Text 模型、未来视觉实时模型和转写专用模型可能都需要不同 Agent Core。
+Realtime Audio 模型、Vision 模型、未来视觉实时模型和转写专用模型可能都需要不同 Agent Core。
 
-`audio-chat` 第一版内置：
+`realtime-agent` 第一版内置：
 
-1. `RealtimeAudioAgentCore`
-2. `TextAgentCore`
+1. `OmniRealtimeAgentCore`
+2. `VisionRealtimeAgentCore`
 
 同时预留：
 
@@ -348,7 +348,7 @@ Realtime Audio 模型、Text 模型、未来视觉实时模型和转写专用模
 
 大模型原生输出音频时，输出是 `audio_delta`，应进入 output stream 并实时下发。
 
-大模型输出文本时，输出是 `text_delta`，应实时送入 Streaming TTS，再把 TTS 产出的 `audio_delta` 写入 output stream。除非 TTS provider 不支持流式，否则不应等待完整文本后再合成。
+大模型输出文本时，输出是 `vision_delta`，应实时送入 Streaming TTS，再把 TTS 产出的 `audio_delta` 写入 output stream。除非 TTS provider 不支持流式，否则不应等待完整文本后再合成。
 
 ### 4.9 用户用 `user_id` 组织运行态和历史消息
 
@@ -357,7 +357,7 @@ Realtime Audio 模型、Text 模型、未来视觉实时模型和转写专用模
 每个 `user_id` 绑定一份消息历史：
 
 ```text
-runs/audio-chat/users/<user_id>/messages.jsonl
+runs/realtime-agent/users/<user_id>/messages.jsonl
 ```
 
 或生产环境数据库表。这里保存：
@@ -382,13 +382,13 @@ runs/audio-chat/users/<user_id>/messages.jsonl
 
 ```plantuml
 @startuml
-title audio-chat 新 SDK 总体架构
+title realtime-agent 新 SDK 总体架构
 
 left to right direction
 
 [Device Clients] as Endpoint
 
-package "audio-chat Server SDK" {
+package "realtime-agent Server SDK" {
   [Control Service] as Control
   [Stream Service] as Stream
   [Audio Pipeline] as Audio
@@ -443,11 +443,11 @@ Output --> Stream : actuator.speaker
 | Endpoint        | 任意端侧设备，例如 ESP32 眼镜、Web、iOS 或 Python 回放端。                                                                 |
 | Control Service | 控制事件入口，负责设备注册、订阅、用户唤醒、音频会话打开和关闭等控制面事件。                                               |
 | Stream Service  | stream 字节入口，负责 `sensor.mic` 和 `actuator.speaker` 等 stream 的打开、写入、关闭。                                |
-| Audio Pipeline  | 音频主链路，负责 `sensor.mic` 的格式归一、质量诊断和路由；连续对话期间音频直达服务器，Omni 链路由 provider VAD 决定 turn，Text 链路目标由服务器独立 VAD 决定 turn。 |
-| Agent Core      | 大模型对话核心，可以是 `RealtimeAudioAgentCore` 或 `TextAgentCore`。                                                   |
+| Audio Pipeline  | 音频主链路，负责 `sensor.mic` 的格式归一、质量诊断和路由；连续对话期间音频直达服务器，Omni 链路由 provider VAD 决定 turn，Vision 链路目标由服务器独立 VAD 决定 turn。 |
+| Agent Core      | 大模型对话核心，可以是 `OmniRealtimeAgentCore` 或 `VisionRealtimeAgentCore`。                                                   |
 | Output Service  | 输出链路，负责把 Agent / Task 的输出交给播放仲裁，并最终写入 `actuator.speaker` stream。                                 |
 
-说明：这张图只表达连续对话主干。`Output Service` 在这里是折叠节点，它内部包含 `Output Router` 和 `Playback Arbiter`。`RealtimeOutputAdapter`、`TextOutputAdapter` 是各自 Agent Core 的内部实现，不在主干时序图中展开；详细输出链路见第 12 章。
+说明：这张图只表达连续对话主干。`Output Service` 在这里是折叠节点，它内部包含 `Output Router` 和 `Playback Arbiter`。`OmniOutputAdapter`、`VisionOutputAdapter` 是各自 Agent Core 的内部实现，不在主干时序图中展开；详细输出链路见第 12 章。
 
 ```plantuml
 @startuml
@@ -527,7 +527,7 @@ server 可以释放音频会话的情况：
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_01H...",
   "event_name": "stream.output.open.requested",
   "timestamp_ms": 1760000000000,
@@ -760,7 +760,7 @@ subscriptions=[
 
 ### 6.5 公共契约与稳定性边界
 
-旧 SDK 的一个重要经验是：真正需要稳定的不是所有内部类，而是开发者会直接使用、端侧必须共同理解、测试和回放必须长期复用的公共契约。`audio-chat` 第一版把公共契约分成三类。
+旧 SDK 的一个重要经验是：真正需要稳定的不是所有内部类，而是开发者会直接使用、端侧必须共同理解、测试和回放必须长期复用的公共契约。`realtime-agent` 第一版把公共契约分成三类。
 
 Python 扩展契约：
 
@@ -770,7 +770,7 @@ Python 扩展契约：
 | `BaseTask` / `TaskContext` / `TaskEvent` / `TaskRef` | Task 开发者  | 状态机和事件语义稳定，允许增加可选字段。                             |
 | `UserDeviceContext` / `DeviceSnapshot` / `AssetRef`    | Tool / Task  | 只暴露 event、stream 和只读快照接口，不暴露连接对象。                |
 | `Skill` / `Memory` / `MCPGateway` 的 Tool 封装入口     | 能力包开发者 | MCP 和 Skill 不直接拿设备上下文，必须通过 Tool / Task 间接使用设备。 |
-| `AudioChatError` / `ErrorCode`                           | 所有扩展点   | 所有 SDK 失败都应该返回结构化错误，避免只抛底层异常字符串。          |
+| `RealtimeAgentError` / `ErrorCode`                           | 所有扩展点   | 所有 SDK 失败都应该返回结构化错误，避免只抛底层异常字符串。          |
 
 跨端协议契约：
 
@@ -1044,7 +1044,7 @@ UserDeviceContext --> DeviceSnapshot
     "device_id": "dev-esp32-glass-001",
     "device_name": "elio-glass",
     "client_type": "esp32-glass",
-    "sdk_version": "audio-chat-endpoint-0.1.0",
+    "sdk_version": "realtime-agent-endpoint-0.1.0",
     "auth": {
       "mode": "static_token",
       "token": "pair-demo-token"
@@ -1328,8 +1328,8 @@ StreamRegistry --> StreamHandle
 麦克风虽然也是端侧传感器，但它是整个系统交互的核心依赖，所以 `sensor.mic` 有专用链路：
 
 1. `sensor.mic` 进入 `Audio Pipeline`。
-2. 如果 Agent Core 支持原生音频输入，音频 delta 直连进入 `RealtimeAudioAgentCore`。
-3. 如果 Agent Core 只支持文本输入，目标链路是归一后的音频先进入服务器 VAD 和 ASR，再由 `TextTurnBoundary` 根据服务器 `speech_start/speech_end` 完成打断和 turn commit；当前实现仍由 `TextAgentCore` 内部 `AsrPipeline` 临时代管。
+2. 如果 Agent Core 支持原生音频输入，音频 delta 直连进入 `OmniRealtimeAgentCore`。
+3. 如果 Agent Core 只支持Vision 输入，目标链路是归一后的音频先进入服务器 VAD 和 ASR，再由 `TextTurnBoundary` 根据服务器 `speech_start/speech_end` 完成打断和 turn commit；当前实现仍由 `VisionRealtimeAgentCore` 内部 `AsrPipeline` 临时代管。
 4. `actuator.speaker` 从模型原生音频或 streaming TTS 进入 `Output Router` 和 `Playback Arbiter`。
 
 相机、深度相机、IMU、GPS 等不是每轮对话的必需输入，不应默认进入 Agent Core。它们更适合作为对话资产：
@@ -1391,7 +1391,7 @@ Endpoint -> Stream: stream.input.closed(stream_type=sensor.rgb)
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "user_id": "user-001",
   "session_id": "sess_01H...",
   "stream_id": "stream_in_01H...",
@@ -1421,8 +1421,8 @@ Endpoint -> Stream: stream.input.closed(stream_type=sensor.rgb)
 4. 音量归一。
 5. 可选噪声抑制。
 6. 可选质量诊断 VAD，用于判断静音、音量和链路健康；不拥有连续对话 turn boundary。
-7. 可选 ASR sidecar，仅用于调试转写或质量诊断，不作为 `TextAgentCore` 主链路输入。
-8. 根据 Agent Core 类型把归一后的音频路由到 `RealtimeAudioAgentCore` 或 `TextAgentCore`。
+7. 可选 ASR sidecar，仅用于调试转写或质量诊断，不作为 `VisionRealtimeAgentCore` 主链路输入。
+8. 根据 Agent Core 类型把归一后的音频路由到 `OmniRealtimeAgentCore` 或 `VisionRealtimeAgentCore`。
 
 不负责：
 
@@ -1430,12 +1430,12 @@ Endpoint -> Stream: stream.input.closed(stream_type=sensor.rgb)
 2. 不决定 Tool 是否调用。
 3. 不决定输出播放优先级。
 4. 不缓存图片、深度图、IMU 等对话资产。
-5. 不负责 Omni provider VAD；不负责端侧 VAD。Text 链路目标是在服务器音频管线中接入独立 VAD 服务，再由 Text turn controller 消费 `speech_start/speech_end`。
+5. 不负责 Omni provider VAD；不负责端侧 VAD。Vision 链路目标是在服务器音频管线中接入独立 VAD 服务，再由 Vision turn controller 消费 `speech_start/speech_end`。
 
 音频链路分两条：
 
-1. Omni 直连链路：`sensor.mic` -> 格式归一 / 质量诊断 -> `RealtimeAudioAgentCore.append_audio()`，turn boundary 由 Omni provider 的 `input_audio_buffer.speech_started/speech_stopped` 等事件决定。
-2. Text 链路目标：`sensor.mic` -> 格式归一 / server VAD -> ASR / Text turn controller -> Text response task。当前实现仍由 `TextAgentCore.append_audio_event()` 临时承担 ASR 和 turn commit，后续需要拆分。
+1. Omni 直连链路：`sensor.mic` -> 格式归一 / 质量诊断 -> `OmniRealtimeAgentCore.append_audio()`，turn boundary 由 Omni provider 的 `input_audio_buffer.speech_started/speech_stopped` 等事件决定。
+2. Vision 链路目标：`sensor.mic` -> 格式归一 / server VAD -> ASR / Vision turn controller -> Text response task。当前实现仍由 `VisionRealtimeAgentCore.append_audio_event()` 临时承担 ASR 和 turn commit，后续需要拆分。
 
 ### 9.2 类图
 
@@ -1601,8 +1601,8 @@ motion = await context.assets.get_or_request(
 
 Agent Core 不应直接接收所有资产 stream。推荐关系是：
 
-1. `RealtimeAudioAgentCore` 只直连音频主链路。
-2. `TextAgentCore` 目标上接收服务器 VAD / ASR 产生的 turn 事件和 transcript，再执行文本模型循环；当前实现仍直接接收归一后的 `sensor.mic` 音频并在内部完成 ASR / turn commit。
+1. `OmniRealtimeAgentCore` 只直连音频主链路。
+2. `VisionRealtimeAgentCore` 目标上接收服务器 VAD / ASR 产生的 turn 事件和 transcript，再执行视觉语言模型循环；当前实现仍直接接收归一后的 `sensor.mic` 音频并在内部完成 ASR / turn commit。
 3. 图片、深度图、IMU 作为 Tool 调用结果或上下文附件进入模型请求。
 4. 未来如果模型支持实时视觉输入，可以新增 `RealtimeMultimodalAgentCore`，但也应明确哪些视觉 stream 进入实时链路，不能默认把所有资产推给模型。
 
@@ -1627,11 +1627,11 @@ class AgentCoreRouter {
   +select(user_id, session, model_capability)
 }
 
-class RealtimeAudioAgentCore
-class TextAgentCore
+class OmniRealtimeAgentCore
+class VisionRealtimeAgentCore
 class CustomAgentCore
 interface RealtimeProviderAdapter
-interface TextModelAdapter
+interface VisionModelAdapter
 interface AsrAdapter
 
 class ToolGateway
@@ -1642,23 +1642,23 @@ class MCPGateway
 class UserMessageStore
 class OutputService
 
-AgentCore <|.. RealtimeAudioAgentCore
-AgentCore <|.. TextAgentCore
+AgentCore <|.. OmniRealtimeAgentCore
+AgentCore <|.. VisionRealtimeAgentCore
 AgentCore <|.. CustomAgentCore
 AgentCoreRouter --> AgentCore
-RealtimeAudioAgentCore o--> RealtimeProviderAdapter
-TextAgentCore o--> TextModelAdapter
-TextAgentCore o--> AsrAdapter
-RealtimeAudioAgentCore --> ToolGateway
-TextAgentCore --> ToolGateway
+OmniRealtimeAgentCore o--> RealtimeProviderAdapter
+VisionRealtimeAgentCore o--> VisionModelAdapter
+VisionRealtimeAgentCore o--> AsrAdapter
+OmniRealtimeAgentCore --> ToolGateway
+VisionRealtimeAgentCore --> ToolGateway
 ToolGateway --> TaskEngine
 ToolGateway --> MCPGateway
 ToolGateway --> MemoryService
 ToolGateway --> SkillService
-RealtimeAudioAgentCore --> UserMessageStore
-TextAgentCore --> UserMessageStore
-RealtimeAudioAgentCore --> OutputService
-TextAgentCore --> OutputService
+OmniRealtimeAgentCore --> UserMessageStore
+VisionRealtimeAgentCore --> UserMessageStore
+OmniRealtimeAgentCore --> OutputService
+VisionRealtimeAgentCore --> OutputService
 @enduml
 ```
 
@@ -1670,10 +1670,10 @@ TextAgentCore --> OutputService
 
 核心关系：
 
-1. `RealtimeAudioAgentCore` 和 `TextAgentCore` 是并列的 `AgentCore` 实现，由 `AgentCoreRouter` 根据模型能力和配置选择其中一个。
-2. `RealtimeProviderAdapter` 不是 Agent Core，也不是 `TextAgentCore` 的后续步骤；它只是 `RealtimeAudioAgentCore` 内部用来适配外部 realtime 模型供应商协议的接口。
-3. 文本模型也有自己的 provider 适配接口，例如 `TextModelAdapter`、`AsrAdapter`。它们和 `RealtimeProviderAdapter` 处在同一抽象层，都是“外部服务适配器”。Streaming TTS 不属于 `TextAgentCore`，统一由 `Output Service` 内部的 `Output Router` 持有。
-4. 一个请求不会先经过 `RealtimeAudioAgentCore` 再进入 `TextAgentCore`。两者是两条不同链路：原生音频模型走 realtime 链路，只支持文本模型时走 `TextAgentCore` 内部 ASR + Text Agent + Output Service TTS 链路。
+1. `OmniRealtimeAgentCore` 和 `VisionRealtimeAgentCore` 是并列的 `AgentCore` 实现，由 `AgentCoreRouter` 根据模型能力和配置选择其中一个。
+2. `RealtimeProviderAdapter` 不是 Agent Core，也不是 `VisionRealtimeAgentCore` 的后续步骤；它只是 `OmniRealtimeAgentCore` 内部用来适配外部 realtime 模型供应商协议的接口。
+3. 视觉语言模型也有自己的 provider 适配接口，例如 `VisionModelAdapter`、`AsrAdapter`。它们和 `RealtimeProviderAdapter` 处在同一抽象层，都是“外部服务适配器”。Streaming TTS 不属于 `VisionRealtimeAgentCore`，统一由 `Output Service` 内部的 `Output Router` 持有。
+4. 一个请求不会先经过 `OmniRealtimeAgentCore` 再进入 `VisionRealtimeAgentCore`。两者是两条不同链路：原生音频模型走 realtime 链路，只支持视觉语言模型时走 `VisionRealtimeAgentCore` 内部 ASR + Vision Agent + Output Service TTS 链路。
 
 统一事件：
 
@@ -1701,9 +1701,9 @@ Agent Core 不直接持有业务 Tool，也不直接 import 业务模块。工�
 3. Agent Core 把工具清单转换成 provider 所需的 tool schema。
 4. 模型产生工具调用时，Agent Core 把 provider 原始事件转换成统一 `ToolCall`。
 5. `ToolGateway` 校验、执行、记录和返回 `ToolResult`。
-6. Agent Core 把 `ToolResult` 回填给 provider 或文本模型循环。
+6. Agent Core 把 `ToolResult` 回填给 provider 或视觉语言模型循环。
 
-这条链路对 `RealtimeAudioAgentCore` 和 `TextAgentCore` 必须一致。差异只在 provider 工具协议适配，不在 Tool 本身。
+这条链路对 `OmniRealtimeAgentCore` 和 `VisionRealtimeAgentCore` 必须一致。差异只在 provider 工具协议适配，不在 Tool 本身。
 
 #### 11.2.1 自动发现与注册
 
@@ -1734,7 +1734,7 @@ my_app/
 ```python
 from pydantic import BaseModel, Field
 
-from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class LookAroundInput(BaseModel):
@@ -1885,7 +1885,7 @@ tools = tool_gateway.build_provider_tools(
 
 1. 工具发现阶段不应硬编码成“有设备才暴露工具”。例如 `look_around` 可以始终暴露，执行时如果没有设备订阅 `sensor.rgb` 采集事件，再返回可解释错误。
 2. 如果某个业务希望动态隐藏工具，可以通过 Skill 或 ToolPolicy 实现，但不应让 Agent Core 直接查询设备列表来拼工具清单。
-3. Realtime 模型通常在 session 配置时提交 tool schema；文本模型通常在每次模型请求时提交 tool schema。
+3. Realtime 模型通常在 session 配置时提交 tool schema；视觉语言模型通常在每次模型请求时提交 tool schema。
 
 #### 11.2.3 调用
 
@@ -1938,15 +1938,15 @@ class ToolContext:
 
 #### 11.2.4 Realtime 与 Text 的差异
 
-| 环节             | RealtimeAudioAgentCore                                               | TextAgentCore                                           |
+| 环节             | OmniRealtimeAgentCore                                               | VisionRealtimeAgentCore                                           |
 | ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
 | 工具 schema 提交 | `RealtimeToolBridge` 在 provider session update 时提交。           | `TextToolLoop` 在每次模型请求时提交。                 |
-| 工具调用来源     | provider realtime tool call event。                                  | 文本模型流式响应中的 tool call。                        |
+| 工具调用来源     | provider realtime tool call event。                                  | 视觉语言模型流式响应中的 tool call。                        |
 | 参数增量         | 可能以 delta 形式到达，需要聚合完整 JSON。                           | 可能是完整 JSON，也可能是流式 delta。                   |
 | 结果回填         | `RealtimeToolBridge.submit_tool_result()` 回写 provider session。  | `TextToolLoop` 把结果追加到 messages 后继续模型循环。 |
 | 输出提示         | 工具进度提示走 `context.devices.submit_text()` 或 Output Service。 | 同左。                                                  |
 
-### 11.3 RealtimeAudioAgentCore
+### 11.3 OmniRealtimeAgentCore
 
 定位：
 
@@ -1960,9 +1960,9 @@ class ToolContext:
 
 ```plantuml
 @startuml
-title RealtimeAudioAgentCore 内部类图
+title OmniRealtimeAgentCore 内部类图
 
-class RealtimeAudioAgentCore {
+class OmniRealtimeAgentCore {
   +open()
   +append_audio_event()
   +commit_input()
@@ -1998,33 +1998,33 @@ class RealtimeToolBridge {
   +submit_tool_result()
 }
 
-class RealtimeOutputAdapter {
+class OmniOutputAdapter {
   +map_provider_audio_delta()
-  +map_provider_text_delta()
+  +map_provider_vision_delta()
 }
 
 class AgentEventRecorder
 class ToolGateway
 
-RealtimeAudioAgentCore --> RealtimeSessionManager
-RealtimeAudioAgentCore --> RealtimeInputAdapter
-RealtimeAudioAgentCore --> RealtimeTurnBoundary
-RealtimeAudioAgentCore --> RealtimeToolBridge
-RealtimeAudioAgentCore --> RealtimeOutputAdapter
-RealtimeAudioAgentCore --> AgentEventRecorder
+OmniRealtimeAgentCore --> RealtimeSessionManager
+OmniRealtimeAgentCore --> RealtimeInputAdapter
+OmniRealtimeAgentCore --> RealtimeTurnBoundary
+OmniRealtimeAgentCore --> RealtimeToolBridge
+OmniRealtimeAgentCore --> OmniOutputAdapter
+OmniRealtimeAgentCore --> AgentEventRecorder
 RealtimeSessionManager --> RealtimeProviderAdapter
 RealtimeInputAdapter --> RealtimeProviderAdapter
 RealtimeToolBridge --> RealtimeProviderAdapter
 RealtimeToolBridge --> ToolGateway
-RealtimeOutputAdapter --> RealtimeProviderAdapter
+OmniOutputAdapter --> RealtimeProviderAdapter
 @enduml
 ```
 
 关系说明：
 
-1. `RealtimeAudioAgentCore` 组合一个 `RealtimeProviderAdapter` 实例。
+1. `OmniRealtimeAgentCore` 组合一个 `RealtimeProviderAdapter` 实例。
 2. `RealtimeProviderAdapter` 负责把 OpenAI Realtime、Qwen Omni Realtime 等 provider 的 WebSocket 事件、音频格式、session 配置和工具调用协议转换成 SDK 内部统一事件。
-3. `RealtimeSessionManager`、`RealtimeInputAdapter`、`RealtimeToolBridge`、`RealtimeOutputAdapter` 不各自创建 provider 连接，它们共享同一个 `RealtimeProviderAdapter`。
+3. `RealtimeSessionManager`、`RealtimeInputAdapter`、`RealtimeToolBridge`、`OmniOutputAdapter` 不各自创建 provider 连接，它们共享同一个 `RealtimeProviderAdapter`。
 4. 如果要接入新的 realtime 模型，优先新增一个 `RealtimeProviderAdapter` 实现，而不是新增一个 Agent Core。
 5. 只有当模型运行循环本身不同，例如不是长连接 realtime 语义，才新增新的 `AgentCore` 实现。
 
@@ -2037,8 +2037,8 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 5. `RealtimeVisualSampler` 不要求端侧一直上传相机流；它每次通过 `AssetService.request_asset(stream_type=sensor.rgb)` 请求当前帧。端侧如果摄像头已打开，就直接抓当前帧；如果摄像头未打开，就在处理请求时打开摄像头再上传。
 6. provider 产生 tool call 时，`RealtimeToolBridge` 调用统一 `ToolGateway`。视觉类工具如 `capture_photo`、`interpret_current_view` 不暴露给 Omni Realtime，避免和内联图片输入形成两套视觉链路。
 7. 工具结果回填 provider。
-8. provider 产生 `audio_delta` 时，`RealtimeOutputAdapter` 立即转为 `assistant_audio.delta`。
-9. provider 产生 `text_delta` 时，记录到 messages 和调试产物。
+8. provider 产生 `audio_delta` 时，`OmniOutputAdapter` 立即转为 `assistant_audio.delta`。
+9. provider 产生 `vision_delta` 时，记录到 messages 和调试产物。
 10. 收到 `input_audio_buffer.speech_stopped` 后，停止本轮 `RealtimeVisualSampler`，并下发 `stream.control.close.requested(stream_type=sensor.rgb)` 要求端侧释放摄像头；如果当前音频 stream 已关闭、音频设备已离线或同一设备没有在线 `sensor.rgb` 能力，也立即停止采样，不持续刷请求；`response.done` 和会话关闭只作为异常兜底清理。
 11. 用户显式手动打断时调用 provider cancel，并通知 Output Service 取消旧 output stream；语音插话打断默认由 provider `speech_started` 触发，不由端侧本地 VAD 触发。
 
@@ -2047,13 +2047,13 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 1. `RealtimeProviderAdapter` 可支持 Qwen、OpenAI 或其他 provider。
 2. `RealtimeToolBridge` 可被其他 realtime agent 复用。
 3. `AgentEventRecorder` 可被所有 Agent Core 复用。
-4. `RealtimeOutputAdapter` 的 provider 输出事件到统一 assistant delta 的映射可复用。
+4. `OmniOutputAdapter` 的 provider 输出事件到统一 assistant delta 的映射可复用。
 
-### 11.4 TextAgentCore
+### 11.4 VisionRealtimeAgentCore
 
 定位：
 
-1. 面向只能接受文本输入，或文本工具循环更稳定的模型。
+1. 面向只能接受Vision 输入，或文本工具循环更稳定的模型。
 2. 音频先进入 ASR。
 3. 文本进入 Agent Loop。
 4. 输出文本 delta 实时交给 Output Service，由其内部 Output Router 送入 Streaming TTS。
@@ -2062,9 +2062,9 @@ RealtimeOutputAdapter --> RealtimeProviderAdapter
 
 ```plantuml
 @startuml
-title TextAgentCore 内部类图
+title VisionRealtimeAgentCore 内部类图
 
-class TextAgentCore {
+class VisionRealtimeAgentCore {
   +open()
   +append_audio_event()
   +commit_input()
@@ -2087,7 +2087,7 @@ class MessageBuilder {
   +build_model_messages()
 }
 
-class TextModelAdapter {
+class VisionModelAdapter {
   +run_stream()
 }
 
@@ -2097,22 +2097,22 @@ class TextToolLoop {
   +continue_model()
 }
 
-class TextOutputAdapter {
-  +map_model_text_delta()
+class VisionOutputAdapter {
+  +map_model_vision_delta()
   +map_model_done()
 }
 
 class AgentEventRecorder
 class ToolGateway
 
-TextAgentCore --> AsrPipeline
-TextAgentCore --> TextTurnBoundary
-TextAgentCore --> MessageBuilder
-TextAgentCore --> TextModelAdapter
-TextAgentCore --> TextToolLoop
-TextAgentCore --> TextOutputAdapter
-TextAgentCore --> AgentEventRecorder
-TextToolLoop --> TextModelAdapter
+VisionRealtimeAgentCore --> AsrPipeline
+VisionRealtimeAgentCore --> TextTurnBoundary
+VisionRealtimeAgentCore --> MessageBuilder
+VisionRealtimeAgentCore --> VisionModelAdapter
+VisionRealtimeAgentCore --> TextToolLoop
+VisionRealtimeAgentCore --> VisionOutputAdapter
+VisionRealtimeAgentCore --> AgentEventRecorder
+TextToolLoop --> VisionModelAdapter
 TextToolLoop --> ToolGateway
 @enduml
 ```
@@ -2124,9 +2124,9 @@ TextToolLoop --> ToolGateway
 3. `AsrPipeline` 输出最终 transcript，也可输出转写增量用于日志。
 4. `MessageBuilder` 将 transcript、近期 messages、memory、skill、设备上下文组装成模型输入。
 5. `TextToolLoop` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema。
-6. `TextModelAdapter` 以流式方式调用文本模型。
+6. `VisionModelAdapter` 以流式方式调用视觉语言模型。
 7. `TextToolLoop` 观察工具调用，调用 `ToolGateway`，再继续模型循环。
-8. 模型产生 `text_delta` 时，`TextOutputAdapter` 立即映射为统一 `assistant_text.delta`。
+8. 模型产生 `vision_delta` 时，`VisionOutputAdapter` 立即映射为统一 `assistant_text.delta`。
 9. `assistant_text.delta` 交给 Output Service，由其内部 Output Router 调用 Streaming TTS 并生成 `assistant_audio.delta`。
 10. 完整文本和音频索引写入 `UserMessageStore` 和 runs 产物。
 
@@ -2170,14 +2170,14 @@ app.register_agent_core(
 2. `Playback Arbiter`：播放仲裁层，决定同一用户或同一端侧当前应该播放哪条输出。
 3. `Notification Coordinator`：任务通知、系统提醒和安全提醒的去重、合并、上下文同步和提交入口。
 
-Agent Core 内部的 `RealtimeOutputAdapter`、`TextOutputAdapter` 不属于 `Output Service`。它们只是各自 Agent Core 的内部适配器，负责把模型/provider 的原始输出事件归一化为 SDK 统一事件。
+Agent Core 内部的 `OmniOutputAdapter`、`VisionOutputAdapter` 不属于 `Output Service`。它们只是各自 Agent Core 的内部适配器，负责把模型/provider 的原始输出事件归一化为 SDK 统一事件。
 
 组件归属：
 
 | 组件                         | 归属                            | 说明                                                                                       |
 | ---------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
-| `RealtimeOutputAdapter`    | `RealtimeAudioAgentCore` 内部 | 将 realtime provider 的 `audio_delta` / `text_delta` 映射成统一 assistant delta。      |
-| `TextOutputAdapter`        | `TextAgentCore` 内部          | 将文本模型的 `text_delta` 映射成统一 `assistant_text.delta`。                          |
+| `OmniOutputAdapter`    | `OmniRealtimeAgentCore` 内部 | 将 realtime provider 的 `audio_delta` / `vision_delta` 映射成统一 assistant delta。      |
+| `VisionOutputAdapter`        | `VisionRealtimeAgentCore` 内部          | 将视觉语言模型的 `vision_delta` 映射成统一 `assistant_text.delta`。                          |
 | `Streaming TTS`            | `Output Router` 内部依赖      | 将文本 delta 实时转成音频 delta，可被 agent reply、tool progress、task notification 复用。 |
 | `Output Router`            | `Output Service` 内部         | 选择 native audio、Streaming TTS 或缓存音频。                                              |
 | `Notification Coordinator` | `Output Service` 内部         | 接收 TaskEvent、系统提醒和业务通知，做去重、合并和是否直发判断。                           |
@@ -2204,7 +2204,7 @@ server 可能同时产生多类输出：
 1. 接收 Agent Core 的统一 assistant delta，或 Tool / Task 通过 `submit_text()` / `submit_audio()` 提交后生成的内部 `OutputItem`。
 2. 根据输出来源选择输出生成方式。
 3. 对 Realtime 模型原生 `audio_delta` 直接透传。
-4. 对文本模型 `text_delta` 实时调用 Streaming TTS。
+4. 对视觉语言模型 `vision_delta` 实时调用 Streaming TTS。
 5. 对短提示可使用缓存音频。
 6. 把生成出的 output stream 交给 Playback Arbiter。
 
@@ -2212,17 +2212,17 @@ server 可能同时产生多类输出：
 
 | 模块                      | 做什么                                                                                                                           | 不做什么                                         |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `RealtimeOutputAdapter` | 把 provider 原生 realtime 事件映射成统一 `assistant_audio.delta` / `assistant_text.delta`。                                  | 不决定播放优先级，不直接写端侧 speaker stream。  |
-| `TextOutputAdapter`     | 把文本模型返回的 delta 映射成统一 `assistant_text.delta`。                                                                     | 不持有 TTS，不决定播放优先级。                   |
+| `OmniOutputAdapter` | 把 provider 原生 realtime 事件映射成统一 `assistant_audio.delta` / `assistant_text.delta`。                                  | 不决定播放优先级，不直接写端侧 speaker stream。  |
+| `VisionOutputAdapter`     | 把视觉语言模型返回的 delta 映射成统一 `assistant_text.delta`。                                                                     | 不持有 TTS，不决定播放优先级。                   |
 | `Output Router`         | 把统一输出事件或内部 `OutputItem` 转成可播放的音频来源；native audio 透传，text delta 进入 Streaming TTS，短提示可走缓存音频。 | 不决定是否打断当前播放，不直接选择端侧硬件连接。 |
 | `Playback Arbiter`      | 对同一用户或同一端侧的播放资源做优先级仲裁，决定立即播放、排队、打断或丢弃。                                                     | 不做 TTS，不理解 provider 原始事件。             |
 
 因此链路是：
 
 ```text
-Realtime provider event -> RealtimeOutputAdapter -> assistant_audio.delta -> Output Router -> Playback Arbiter -> Stream Service
+Realtime provider event -> OmniOutputAdapter -> assistant_audio.delta -> Output Router -> Playback Arbiter -> Stream Service
 
-Text model delta -> TextOutputAdapter -> assistant_text.delta -> Output Router -> Streaming TTS -> Playback Arbiter -> Stream Service
+Text model delta -> VisionOutputAdapter -> assistant_text.delta -> Output Router -> Streaming TTS -> Playback Arbiter -> Stream Service
 ```
 
 输出链路时序：
@@ -2231,10 +2231,10 @@ Text model delta -> TextOutputAdapter -> assistant_text.delta -> Output Router -
 @startuml
 title 输出链路细化时序
 
-participant "RealtimeAudioAgentCore" as RealtimeCore
-participant "RealtimeOutputAdapter" as RealtimeAdapter
-participant "TextAgentCore" as TextCore
-participant "TextOutputAdapter" as TextAdapter
+participant "OmniRealtimeAgentCore" as RealtimeCore
+participant "OmniOutputAdapter" as RealtimeAdapter
+participant "VisionRealtimeAgentCore" as TextCore
+participant "VisionOutputAdapter" as TextAdapter
 participant "Output Router" as Router
 participant "Streaming TTS" as TTS
 participant "Playback Arbiter" as Arbiter
@@ -2247,9 +2247,9 @@ Router -> Arbiter: NativeAudioOutputSource
 Arbiter -> Stream: open actuator.speaker stream
 Stream -> Endpoint: audio chunks
 
-TextCore -> TextAdapter: model text_delta
+TextCore -> TextAdapter: model vision_delta
 TextAdapter -> Router: assistant_text.delta
-Router -> TTS: append_text_delta
+Router -> TTS: append_vision_delta
 TTS -> Router: assistant_audio.delta
 Router -> Arbiter: StreamingTtsOutputSource
 Arbiter -> Stream: write actuator.speaker chunks
@@ -2264,7 +2264,7 @@ title Output Router 类图
 class OutputRouter {
   +submit(intent)
   +on_agent_audio_delta(delta)
-  +on_agent_text_delta(delta)
+  +on_agent_vision_delta(delta)
 }
 
 class OutputItem {
@@ -2283,7 +2283,7 @@ class NativeAudioOutputSource {
 }
 
 class StreamingTtsOutputSource {
-  +append_text_delta()
+  +append_vision_delta()
   +audio_delta()
 }
 
@@ -2500,7 +2500,7 @@ Tool 和 Task 是业务开发者最主要的扩展点。它们必须面向能力
 | `ArtifactRef`    | 派生产物引用，包含 `artifact_id`、类型、文本摘要、存储路径和元数据。用于转写、分析报告、任务事件等结构化产物。                    |
 | `TaskRef`        | 任务引用，包含 `task_id`、`task_type`、状态和摘要。                                                                             |
 | `ToolTrace`      | 工具调用轨迹，写入调试产物，不要求业务开发者手动构造。                                                                              |
-| `AudioChatError` | SDK 统一结构化错误，包含 `code`、`message`、`retryable` 和 `details`。                                                      |
+| `RealtimeAgentError` | SDK 统一结构化错误，包含 `code`、`message`、`retryable` 和 `details`。                                                      |
 
 ### 13.1 Tool 模板
 
@@ -2947,7 +2947,7 @@ Tool / Task 提交意图
 ```python
 from pydantic import BaseModel, Field
 
-from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class StartNavigationInput(BaseModel):
@@ -3137,7 +3137,7 @@ await context.devices.submit_text(
 
 ## 14. 开发支持组件和端侧参考工程
 
-`audio-chat` 提供开发/测试支持组件和端侧参考工程，但不把这些实现作为 server SDK 的强依赖。
+`realtime-agent` 提供开发/测试支持组件和端侧参考工程，但不把这些实现作为 server SDK 的强依赖。
 `examples/dev-support/devices` 下的 browser-glass、python-phone、python-playback-glass
 用于本地联调和系统测试支持；它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
 
@@ -3227,7 +3227,7 @@ examples/dev-support/devices/
 
 ### 15.1 日常研发目标
 
-`audio-chat` 第一版应支持四种研发模式：
+`realtime-agent` 第一版应支持四种研发模式：
 
 | 模式               | 用途                                                  | 需要真实设备 |
 | ------------------ | ----------------------------------------------------- | ------------ |
@@ -3257,61 +3257,61 @@ examples/dev-support/devices/
 正式发布后安装：
 
 ```bash
-pip install audio-chat
+pip install realtime-agent
 ```
 
 当前仓库开发时使用 editable 安装：
 
 ```bash
 uv sync --python 3.11
-uv pip install -e audio-chat
+uv pip install -e realtime-agent
 ```
 
 公开导入入口：
 
 ```python
-import audio_chat
+import realtime_agent
 ```
 
 SDK CLI 入口使用点分命令；端侧参考实现使用自己的模块入口。当前仓库已经落地的最小入口是：
 
 ```bash
-uv run audio-chat.dev.preflight --help
-uv run audio-chat.playback.glass --help
-uv run audio-chat.server.run --help
-uv run audio-chat.config.sync --help
-uv run python -m audio_chat_python_phone_mock --help
-uv run audio-chat.web.open --help
+uv run realtime-agent.dev.preflight --help
+uv run realtime-agent.playback.glass --help
+uv run realtime-agent.server.run --help
+uv run realtime-agent.config.sync --help
+uv run python -m realtime_agent_python_phone_mock --help
+uv run realtime-agent.web.open --help
 ```
 
-`audio-chat.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control` 和 `/ws/stream`。server SDK 不内置任何具体端侧页面或端侧类型预判；参考端侧以独立工程或独立文件形式存在，设备类型只在 `control.device.register.requested` 中声明。当前 CLI 状态如下：
+`realtime-agent.server.run` 已不再是占位入口，当前可以读取 YAML 并启动 HTTP / WebSocket 服务，提供 `/api/health`、`/api/debug/devices`、`/ws/control` 和 `/ws/stream`。server SDK 不内置任何具体端侧页面或端侧类型预判；参考端侧以独立工程或独立文件形式存在，设备类型只在 `control.device.register.requested` 中声明。当前 CLI 状态如下：
 
 | 命令                                       | 说明                                                                                        |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `audio-chat.server.run`                  | 前台启动 server，适合日常开发。                                                             |
-| `audio-chat.server.start`                | 后台启动 server，写入 PID 和日志；支持 `--dry-run` 做无副作用检查。                       |
-| `audio-chat.server.stop`                 | 停止后台 server；支持 `--dry-run`。                                                       |
-| `audio-chat.server.logs`                 | 输出或跟随后台 server 日志。                                                                |
-| `audio-chat.config.sync`                 | 同步 server、mock、iOS、ESP32 的本地联调配置。                                              |
-| `audio-chat.dev.preflight`               | 生成预检报告，验证协议事件、stream 类型、配置和依赖。                                       |
-| `audio-chat.playback.glass`              | 启动 Python 回放端，上传 testdata 并断言输出。                                              |
-| `python -m audio_chat_python_phone_mock` | 开发支持组件入口，启动 Python 手机 mock / preview，用于验证多设备、peer video、端侧 task 和资产回传；它不是 SDK CLI。 |
-| `audio-chat.sdk.package-check`           | 执行 SDK 包边界、公开导入和入口命令检查。                                                   |
-| `audio-chat.web.open`                    | 打开或打印 browser-glass 开发支持组件地址。                                                 |
-| `audio-chat.ios.open`                    | 后续目标，当前未落地：打开 iOS endpoint 工程。                                              |
-| `audio-chat.ios.build-sim`               | 后续目标，当前未落地：验证 iOS 模拟器构建。                                                 |
-| `audio-chat.esp32.start`                 | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。                                     |
+| `realtime-agent.server.run`                  | 前台启动 server，适合日常开发。                                                             |
+| `realtime-agent.server.start`                | 后台启动 server，写入 PID 和日志；支持 `--dry-run` 做无副作用检查。                       |
+| `realtime-agent.server.stop`                 | 停止后台 server；支持 `--dry-run`。                                                       |
+| `realtime-agent.server.logs`                 | 输出或跟随后台 server 日志。                                                                |
+| `realtime-agent.config.sync`                 | 同步 server、mock、iOS、ESP32 的本地联调配置。                                              |
+| `realtime-agent.dev.preflight`               | 生成预检报告，验证协议事件、stream 类型、配置和依赖。                                       |
+| `realtime-agent.playback.glass`              | 启动 Python 回放端，上传 testdata 并断言输出。                                              |
+| `python -m realtime_agent_python_phone_mock` | 开发支持组件入口，启动 Python 手机 mock / preview，用于验证多设备、peer video、端侧 task 和资产回传；它不是 SDK CLI。 |
+| `realtime-agent.sdk.package-check`           | 执行 SDK 包边界、公开导入和入口命令检查。                                                   |
+| `realtime-agent.web.open`                    | 打开或打印 browser-glass 开发支持组件地址。                                                 |
+| `realtime-agent.ios.open`                    | 后续目标，当前未落地：打开 iOS endpoint 工程。                                              |
+| `realtime-agent.ios.build-sim`               | 后续目标，当前未落地：验证 iOS 模拟器构建。                                                 |
+| `realtime-agent.esp32.start`                 | 后续目标，当前未落地：构建、烧录并监看 ESP32 endpoint。                                     |
 
 CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、健康检查、端侧参考工程启动和工具链调度。业务项目只提供配置、Tool / Task 代码和可选端侧工程路径。
 
 ### 15.3 本地配置同步
 
-多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此当前提供 `audio-chat.config.sync` 生成参考端侧本地配置。
+多端联调时，server、回放端、手机端和 ESP32 端必须使用同一组 `public_url`、`user_id`、`device_id` 和 token。手动修改这些值容易产生“server 正常启动但设备连错地址”的问题，因此当前提供 `realtime-agent.config.sync` 生成参考端侧本地配置。
 
 当前命令形态：
 
 ```bash
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --app-root examples/for-blind-app \
   --config examples/for-blind-app/audio-server/server.yaml
 ```
@@ -3327,7 +3327,7 @@ uv run audio-chat.config.sync \
 如果自动探测失败，后续目标允许显式指定：
 
 ```bash
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --config examples/for-blind-app/audio-server/server.yaml \
   --public-url http://192.168.1.23:8765
 ```
@@ -3344,15 +3344,15 @@ uv run audio-chat.config.sync \
 最小 server 前台启动：
 
 ```bash
-uv run audio-chat.server.run \
+uv run realtime-agent.server.run \
   --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 业务项目启动时默认不需要指定业务装配入口。Tool / Task 由 YAML 中的自动发现配置加载：
 
 ```bash
-uv run audio-chat.server.run \
-  --config /path/to/my-app/audio-chat.yaml
+uv run realtime-agent.server.run \
+  --config /path/to/my-app/realtime-agent.yaml
 ```
 
 server CLI 负责读取 YAML、创建 SDK 基础服务、自动发现 Tool / Task，并启动 HTTP / WebSocket 服务。
@@ -3360,8 +3360,8 @@ server CLI 负责读取 YAML、创建 SDK 基础服务、自动发现 Tool / Tas
 只有在需要自定义 Agent Core、替换 SDK 内部服务或加载动态插件时，才使用高级装配入口：
 
 ```bash
-uv run audio-chat.server.run \
-  --config /path/to/my-app/audio-chat.yaml \
+uv run realtime-agent.server.run \
+  --config /path/to/my-app/realtime-agent.yaml \
   --app-module my_app.server:configure
 ```
 
@@ -3377,7 +3377,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 Omni Realtime 联调启动：
 
 ```bash
-DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
+DASHSCOPE_API_KEY=xxx uv run realtime-agent.server.run \
   --config examples/for-blind-app/server-omni.yaml
 ```
 
@@ -3387,29 +3387,29 @@ DASHSCOPE_API_KEY=xxx uv run audio-chat.server.run \
 examples/dev-support/devices/browser-glass/index.html
 ```
 
-如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../examples/dev-support/devices/browser-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=realtime_audio` 把音频交给 `RealtimeAudioAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 TextAgentCore ASR 和 TTS。
+如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../examples/dev-support/devices/browser-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=omni` 把音频交给 `OmniRealtimeAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 VisionRealtimeAgentCore ASR 和 TTS。
 
 如果要验证视觉输入，应确认日志中存在：
 
 ```text
-realtime.visual_sampler.started
+omni.visual_sampler.started
 asset.requested stream_type=sensor.rgb
 asset.stored stream_type=sensor.rgb
 omni.input_image_buffer.appended
-realtime.visual_frame.appended
-realtime.visual_sampler.stopped
-realtime.visual_stream.close.requested
+omni.visual_frame.appended
+omni.visual_sampler.stopped
+omni.visual_stream.close.requested
 ```
 
 每个视觉 turn 通常会在 `speech_started` 到 `speech_stopped` 之间追加多张图片，默认间隔为 1 秒；`speech_stopped` 后端侧摄像头应被关闭。
-如果配对的音频设备或 RGB 能力不可用，应看到 `realtime.visual_sampler.paired_stream_unavailable`，并且不再继续出现新的 `asset.requested stream_type=sensor.rgb`。
+如果配对的音频设备或 RGB 能力不可用，应看到 `omni.visual_sampler.paired_stream_unavailable`，并且不再继续出现新的 `asset.requested stream_type=sensor.rgb`。
 
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
 ```bash
-uv run audio-chat.server.start --config examples/for-blind-app/audio-server/server.yaml
-uv run audio-chat.server.logs
-uv run audio-chat.server.stop
+uv run realtime-agent.server.start --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.logs
+uv run realtime-agent.server.stop
 ```
 
 ### 15.5 最小回放闭环
@@ -3419,10 +3419,10 @@ uv run audio-chat.server.stop
 推荐命令：
 
 ```bash
-uv run audio-chat.dev.preflight \
+uv run realtime-agent.dev.preflight \
   --report runs/preflight.json
 
-uv run audio-chat.playback.glass \
+uv run realtime-agent.playback.glass \
   --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
@@ -3462,7 +3462,7 @@ Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅
 当前命令形态：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock \
+uv run python -m realtime_agent_python_phone_mock \
   --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
@@ -3494,20 +3494,20 @@ mock 不模拟 iOS 系统权限、真实摄像头或真实播放器。它只验�
 iOS 后续目标命令形态，当前未落地：
 
 ```bash
-uv run audio-chat.ios.open --app-root /path/to/my-app
-uv run audio-chat.ios.build-sim --app-root /path/to/my-app
+uv run realtime-agent.ios.open --app-root /path/to/my-app
+uv run realtime-agent.ios.build-sim --app-root /path/to/my-app
 ```
 
 Web JS 当前命令形态：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 ESP32 后续目标命令形态，当前未落地：
 
 ```bash
-uv run audio-chat.esp32.start \
+uv run realtime-agent.esp32.start \
   --app-root /path/to/my-app \
   --project-dir /path/to/examples/for-blind-app/devices/native-esp32-glass \
   --idf-root /path/to/esp-idf \
@@ -3528,23 +3528,23 @@ ESP32 命令需要支持：
 
 本地研发：
 
-1. `uv pip install -e audio-chat`
-2. 后续目标，当前未落地：`uv run audio-chat.config.sync --config examples/for-blind-app/audio-server/server.yaml`
-3. `uv run audio-chat.dev.preflight --report runs/preflight.json`
-4. `uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml`
-5. 另一个终端运行 `uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml`
-6. 查看 `runs/audio-chat` 和 `/api/debug/*`
+1. `uv pip install -e realtime-agent`
+2. 后续目标，当前未落地：`uv run realtime-agent.config.sync --config examples/for-blind-app/audio-server/server.yaml`
+3. `uv run realtime-agent.dev.preflight --report runs/preflight.json`
+4. `uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml`
+5. 另一个终端运行 `uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml`
+6. 查看 `runs/realtime-agent` 和 `/api/debug/*`
 
 多设备 mock：
 
 1. 启动 server。
-2. 启动 `audio-chat.playback.glass` 作为语音输入和 speaker 消费设备。
-3. 启动 `python -m audio_chat_python_phone_mock` 作为 RGB / IMU 资产设备。
+2. 启动 `realtime-agent.playback.glass` 作为语音输入和 speaker 消费设备。
+3. 启动 `python -m realtime_agent_python_phone_mock` 作为 RGB / IMU 资产设备。
 4. 触发需要资产的 Tool，确认事件订阅和资产回传。
 
 真机联调：
 
-1. 后续目标，当前未落地：执行 `audio-chat.config.sync`，确保端侧连接 server 的局域网地址正确。
+1. 后续目标，当前未落地：执行 `realtime-agent.config.sync`，确保端侧连接 server 的局域网地址正确。
 2. 启动 server。
 3. 启动 iOS / Web / phone mock 中至少一个端侧算力或资产设备。
 4. 构建、烧录并监看 ESP32。
@@ -3553,7 +3553,7 @@ ESP32 命令需要支持：
 
 ### 15.9 研发预检和 live check
 
-`audio-chat.dev.preflight` 应在不启动真实 server 的情况下检查：
+`realtime-agent.dev.preflight` 应在不启动真实 server 的情况下检查：
 
 1. Python 版本和包安装状态。
 2. YAML 是否可解析。
@@ -3570,7 +3570,7 @@ ESP32 命令需要支持：
 如果 server 已经启动，预检应支持在线检查：
 
 ```bash
-uv run audio-chat.dev.preflight \
+uv run realtime-agent.dev.preflight \
   --config examples/for-blind-app/audio-server/server.yaml \
   --require-server \
   --report runs/preflight-live.json
@@ -3583,20 +3583,20 @@ uv run audio-chat.dev.preflight \
 3. 当前注册设备、订阅和 active device set 符合预期。
 4. 最近一次回放是否通过断言。
 
-建议拆成四个命令，但 `audio-chat.dev.preflight` 可以聚合调用：
+建议拆成四个命令，但 `realtime-agent.dev.preflight` 可以聚合调用：
 
 | 命令                              | 目标                                                                              |
 | --------------------------------- | --------------------------------------------------------------------------------- |
-| `audio-chat.dev.contract-tests` | 后续目标，当前未落地：只跑公共协议和公开对象契约测试。                            |
-| `audio-chat.dev.package-check`  | 后续目标，当前未落地：构建 wheel、安装到临时目录、验证公开导入和 CLI。            |
-| `audio-chat.dev.boundary-check` | 后续目标，当前未落地：扫描 SDK 主包是否依赖业务目录、真实本地配置或固定设备实例。 |
-| `audio-chat.dev.live-check`     | 后续目标，当前未落地：server 已启动时检查健康、设备、订阅和最近回放结果。         |
+| `realtime-agent.dev.contract-tests` | 后续目标，当前未落地：只跑公共协议和公开对象契约测试。                            |
+| `realtime-agent.dev.package-check`  | 后续目标，当前未落地：构建 wheel、安装到临时目录、验证公开导入和 CLI。            |
+| `realtime-agent.dev.boundary-check` | 后续目标，当前未落地：扫描 SDK 主包是否依赖业务目录、真实本地配置或固定设备实例。 |
+| `realtime-agent.dev.live-check`     | 后续目标，当前未落地：server 已启动时检查健康、设备、订阅和最近回放结果。         |
 
 这些检查吸收旧 SDK 的 package-check、contract-tests、preflight 和 live-check 经验。它们的职责是防止“单元测试能过，但 SDK 装不上、端侧协议不一致、业务代码绕过公开契约”的问题进入下一阶段。
 
 ### 15.10 与旧 SDK 启动方式的关系
 
-旧 SDK 的 `openaiglass.config.sync`、`openaiglass.server.run`、`openaiglass.phone.mock`、`openaiglass.glass.start` 已经证明统一 CLI 能显著降低联调成本。`audio-chat` 应保留这个经验，但做两点收敛：
+旧 SDK 的 `openaiglass.config.sync`、`openaiglass.server.run`、`openaiglass.phone.mock`、`openaiglass.glass.start` 已经证明统一 CLI 能显著降低联调成本。`realtime-agent` 应保留这个经验，但做两点收敛：
 
 1. 新 SDK 只提供 server SDK 和端侧参考实现的启动入口，不把业务项目和端侧工程塞进同一个 Python 包边界。
 2. 所有启动命令都围绕 `user_id`、设备注册、订阅和 stream 协议工作，不再以固定 glass / phone 类型作为协议前提。
@@ -3634,7 +3634,7 @@ auth:
     dev-esp32-glass-001: "pair-demo-token"
     dev-ios-phone-001: "pair-phone-token"
   # signed_token 模式下的签名密钥环境变量名。
-  signed_token_secret_env: "AUDIO_CHAT_DEVICE_TOKEN_SECRET"
+  signed_token_secret_env: "REALTIME_AGENT_DEVICE_TOKEN_SECRET"
   # 注册 token 允许的最大时钟偏差秒数。只影响 signed_token。
   token_clock_skew_seconds: 60
 
@@ -3648,7 +3648,7 @@ user:
     # 可选 jsonl / sqlite。jsonl 适合开发和排障；sqlite 适合单机长时间运行。
     type: "jsonl"
     # 用户消息根目录。每个 user_id 独立文件。
-    root: "runs/audio-chat/users"
+    root: "runs/realtime-agent/users"
   # 每个 user_id 保留最近多少条消息用于快速读取。0 表示不限制，由实现自行分页。
   recent_message_limit: 200
 
@@ -3720,14 +3720,14 @@ audio_pipeline:
   # 是否做音量归一化。影响 ASR 稳定性，但可能改变原始音频诊断特征。
   volume_normalize: true
   # VAD 所在位置。连续对话默认只能由服务器或 provider 判断；端侧不拥有 turn boundary。
-  # Omni realtime 使用 provider；Text realtime 目标使用 server_only。
+  # Omni realtime 使用 provider；Vision realtime 目标使用 server_only。
   # 可选 provider / server_only / disabled。
   vad: "server_only"
   # server_only VAD 的 RMS 起点阈值。
   vad_rms_threshold: 96
   # server_only VAD 判定 speech_end 所需的连续静音时长。
   vad_silence_timeout_ms: 600
-  # ASR sidecar 策略。这里只用于调试转写或质量诊断；TextAgentCore 的主 ASR 由 agent.text.asr_* 配置控制。
+  # ASR sidecar 策略。这里只用于调试转写或质量诊断；VisionRealtimeAgentCore 的主 ASR 由 agent.vision.asr_* 配置控制。
   # 可选 required / optional / disabled。
   asr_sidecar: "optional"
   # 连续静默多少秒后可关闭音频会话。
@@ -3741,7 +3741,7 @@ asset:
   # 可选 filesystem / memory。
   store_type: "filesystem"
   # 资产文件根目录。
-  root: "runs/audio-chat/assets"
+  root: "runs/realtime-agent/assets"
   # 单个资产最大字节数，防止端侧误传大文件。
   max_asset_bytes: 10485760
   # 默认资产过期秒数。
@@ -3755,7 +3755,7 @@ asset:
 # agent 控制 Agent Core 选择和模型 provider。
 agent:
   # Agent Core 模式。auto 根据模型能力和端侧音频会话自动选择。
-  # 可选 auto / realtime_audio / text / custom。
+  # 可选 auto / omni / text / custom。
   mode: "auto"
   # 自定义 Agent Core 的 Python 导入路径，仅 mode=custom 时使用。
   custom_core: ""
@@ -3775,9 +3775,9 @@ agent:
     # 自定义 provider adapter 导入路径，仅 provider=custom 时使用。
     custom_adapter: ""
   text:
-    # 文本模型 provider。可选 dashscope-compatible / openai-compatible / custom。
+    # 视觉语言模型 provider。可选 dashscope-compatible / openai-compatible / custom。
     provider: "dashscope-compatible"
-    # 文本模型名。
+    # 视觉语言模型名。
     model: "qwen-plus"
     # ASR provider。可选 dashscope / openai-compatible / custom。
     asr_provider: "dashscope"
@@ -3791,7 +3791,7 @@ agent:
     tts_voice: "longanhuan"
     # 是否启用流式 TTS。true 可降低首包延迟。
     streaming_tts: true
-    # 文本模型最大上下文消息数。
+    # 视觉语言模型最大上下文消息数。
     max_context_messages: 30
 
 # output 控制 assistant_audio.delta / assistant_text.delta 到端侧播放的链路。
@@ -3854,7 +3854,7 @@ tasks:
     # 任务状态存储。可选 sqlite / jsonl / memory。
     type: "sqlite"
     # sqlite/jsonl 存储路径。
-    path: "runs/audio-chat/tasks.sqlite"
+    path: "runs/realtime-agent/tasks.sqlite"
 
 # memory 控制长期记忆能力。
 memory:
@@ -3863,7 +3863,7 @@ memory:
   # 记忆存储类型。可选 jsonl / sqlite / custom。
   store_type: "jsonl"
   # 记忆存储根目录或文件路径。
-  path: "runs/audio-chat/memory"
+  path: "runs/realtime-agent/memory"
   # 记忆整理由独立 LLM 子 Agent 完成，不提供规则式、本地式或 mock 降级。
   manager:
     # 记忆整理模型名。
@@ -3913,12 +3913,12 @@ endpoint_defaults:
 # 它不改变业务逻辑，只影响能记录多少信息、是否保存输入输出 stream、是否暴露调试接口。
 observability:
   # 运行产物根目录。回放事件、stream 片段、模型请求快照都会写到这里。
-  runs_root: "runs/audio-chat"
+  runs_root: "runs/realtime-agent"
   # 是否保存输入 stream。排障有用，但可能包含敏感音频，正式环境应谨慎开启。
   record_input_streams: true
   # 是否保存输出 stream。用于验证 TTS、播放仲裁和端侧播放问题。
   record_output_streams: true
-  # 是否保存模型事件。用于排查首包延迟、tool call、text_delta/audio_delta。
+  # 是否保存模型事件。用于排查首包延迟、tool call、vision_delta/audio_delta。
   record_model_events: true
   # 是否保存控制事件 JSONL。
   record_control_events: true
@@ -3940,19 +3940,19 @@ dev_checks:
   # 最近回放结果路径。为空时自动读取 runs_root 下最新 playback。
   recent_playback_result: ""
   # preflight JSON 报告默认输出路径。
-  report_path: "runs/audio-chat/preflight.json"
+  report_path: "runs/realtime-agent/preflight.json"
 ```
 
 当前实现说明：
 
-1. `agent.mode=text` 已落地为 TextAgentCore。
-2. `agent.mode=realtime_audio` 已落地最小 Qwen Omni Realtime 链路，输入为 `sensor.mic` PCM 16 kHz，输出为 native `assistant_audio.delta`，再下发到 `actuator.speaker`。
-3. `agent.mode=auto` 当前保守默认走 text；后续稳定读取端侧 `audio.aec=browser_webrtc` 或 `endpoint` 后再自动优先 realtime。
+1. `agent.mode=vision` 已落地为 VisionRealtimeAgentCore。
+2. `agent.mode=omni` 已落地最小 Qwen Omni Realtime 链路，输入为 `sensor.mic` PCM 16 kHz，输出为 native `assistant_audio.delta`，再下发到 `actuator.speaker`。
+3. `agent.mode=auto` 当前保守默认走 vision；后续稳定读取端侧 `audio.aec=browser_webrtc` 或 `endpoint` 后再自动优先 realtime。
 4. `agent.mode=custom` 当前 fail fast，需要业务 `--app-module` 提供自定义 core 工厂后才能启用。
 
 ## 17. 可观测性
 
-`audio-chat` 必须把“能联调”作为第一等能力。
+`realtime-agent` 必须把“能联调”作为第一等能力。
 
 ### 17.1 日志要求
 
@@ -3992,10 +3992,10 @@ dev_checks:
 每个用户和会话建议落盘：
 
 ```text
-runs/audio-chat/users/<user_id>/
+runs/realtime-agent/users/<user_id>/
   messages.jsonl
 
-runs/audio-chat/sessions/<session_id>/
+runs/realtime-agent/sessions/<session_id>/
   events.jsonl
   stream-events.jsonl
   agent-events.jsonl
@@ -4102,7 +4102,7 @@ TurnRecorder --> UserMessageStore
 必须保留 Python playback endpoint：
 
 ```bash
-audio-chat.playback.glass \
+realtime-agent.playback.glass \
   --config examples/blind-assistant/playback/look_around.yaml
 ```
 
@@ -4133,7 +4133,7 @@ audio-chat.playback.glass \
 每次回放都必须写出：
 
 ```text
-runs/audio-chat/playback/<run_id>/
+runs/realtime-agent/playback/<run_id>/
   events.jsonl
   stream-events.jsonl
   agent-events.jsonl
@@ -4166,7 +4166,7 @@ runs/audio-chat/playback/<run_id>/
 ```text
 legacy/openaiglass-sdk/
 legacy/openaiglass-for-blind/
-audio-server/audio_chat/
+audio-server/realtime_agent/
 examples/
 ```
 
@@ -4192,13 +4192,13 @@ examples/
 
 ### 19.3 推荐迁移顺序
 
-1. 先实现 `audio-chat` 最小 server。
+1. 先实现 `realtime-agent` 最小 server。
 2. 实现 Control Service 和 `user_id` active device set。
 3. 实现 Python playback endpoint。
 4. 实现 Python mock endpoint。
 5. 迁移一个最小 `look_around` 样例，使用 `sensor.rgb` stream 单帧样本，不保留特殊 `capture_photo` RPC。
-6. 接入 TextAgentCore。
-7. 接入 RealtimeAudioAgentCore。
+6. 接入 VisionRealtimeAgentCore。
+7. 接入 OmniRealtimeAgentCore。
 8. 迁移 ESP32 AEC 试验链路。
 9. 迁移 iOS endpoint。
 10. 再迁移找物、红绿灯、导航等业务样板。
@@ -4209,14 +4209,14 @@ examples/
 
 最小闭环：
 
-1. `audio-chat` server 启动。
+1. `realtime-agent` server 启动。
 2. Python playback endpoint 注册到 `user_id`。
 3. 设备订阅事件。
 4. playback 上报 `control.user.wake.detected`。
 5. server 下发 `control.audio_session.open.requested`。
 6. playback 打开 `sensor.mic` stream。
-7. TextAgentCore 做 ASR mock 或固定 transcript。
-8. TextAgentCore 输出固定 `text_delta`。
+7. VisionRealtimeAgentCore 做 ASR mock 或固定 transcript。
+8. VisionRealtimeAgentCore 输出固定 `vision_delta`。
 9. Streaming TTS mock 输出 `audio_delta`。
 10. Playback Arbiter 打开 `actuator.speaker` stream 并下发 PCM。
 11. server 释放 audio session。
@@ -4226,8 +4226,8 @@ examples/
 
 ```bash
 uv run python -m pytest tests -q
-uv run audio-chat.dev.preflight --report runs/preflight.json
-uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
+uv run realtime-agent.dev.preflight --report runs/preflight.json
+uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
 ## 21. 第二阶段能力
@@ -4236,7 +4236,7 @@ uv run audio-chat.playback.glass --config examples/dev-support/devices/python-gl
 
 1. 接 DashScope ASR。
 2. 接 DashScope Streaming TTS。
-3. 接 OpenAI-compatible 文本模型。
+3. 接 OpenAI-compatible 视觉语言模型。
 4. 接 Qwen Omni Realtime。
 5. 接 ESP32 AEC endpoint。
 6. 支持用户打断。
@@ -4262,16 +4262,16 @@ uv run audio-chat.playback.glass --config examples/dev-support/devices/python-gl
 | 风险                       | 说明                                               | 缓解                                                                   |
 | -------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------- |
 | 事件订阅系统过度复杂       | 如果第一版支持完整表达式语言，会拖慢落地。         | 第一版只支持 `event + filter`，filter 限定为字段等值和数组包含匹配。 |
-| 新旧 SDK 并存导致认知分裂  | 开发者不知道该用哪套。                             | README 明确新项目优先 `audio-chat`，旧项目稳定期保留旧 SDK。         |
+| 新旧 SDK 并存导致认知分裂  | 开发者不知道该用哪套。                             | README 明确新项目优先 `realtime-agent`，旧项目稳定期保留旧 SDK。         |
 | Realtime provider 协议差异 | OpenAI、Qwen、其他 provider 事件名和音频格式不同。 | 建立 `RealtimeProviderAdapter`，只向上输出统一 Agent 事件。          |
 | 端侧 AEC 效果不稳定        | ESP32、Web、iOS 表现不同。                         | 能力声明 + server 侧质量诊断 + AEC 试验固件持续回放。                  |
 | 下行输出仲裁复杂           | Agent、Task、安全提醒同时抢播。                    | 从第一阶段就实现 `Playback Arbiter`，业务不得直接播。                |
 | Tool 副作用和用户打断冲突  | 用户打断时工具可能已执行。                         | 引入 `generation_id`、工具副作用日志和可取消任务策略。               |
-| 过早抽象 provider          | 支持太多模型会拖慢落地。                           | 第一阶段只做 mock/text，第二阶段只优先 Qwen Omni + 一套文本模型。      |
+| 过早抽象 provider          | 支持太多模型会拖慢落地。                           | 第一阶段只做 mock/text，第二阶段只优先 Qwen Omni + 一套视觉语言模型。      |
 
 ## 24. 参考资料
 
-1. OpenAI Realtime API 概览：说明 Realtime API 支持低延迟多模态、原生 speech-to-speech，以及音频和文本输入输出。
+1. OpenAI Realtime API 概览：说明 Realtime API 支持低延迟多模态、原生 speech-to-speech，以及音频和Vision 输入输出。
    [https://platform.openai.com/docs/guides/realtime/overview](https://platform.openai.com/docs/guides/realtime/overview)
 2. OpenAI Realtime WebSocket 指南：说明 WebSocket 是低层接口，调用方需要发送和处理音频 chunk。
    [https://platform.openai.com/docs/guides/realtime-websocket](https://platform.openai.com/docs/guides/realtime-websocket)

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from audio_chat import BaseTask, CommandEvent, CommandHandle, TaskContext, TaskEventView, TaskRunResult, TaskSignal, TaskSpec
+from realtime_agent import BaseTask, CommandEvent, CommandHandle, TaskContext, TaskEventView, TaskRunResult, TaskSignal, TaskSpec
 
 
 class FindObjectTaskInput(BaseModel):

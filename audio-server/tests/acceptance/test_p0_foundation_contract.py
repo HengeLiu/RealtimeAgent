@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat.config import load_yaml_config
-from audio_chat.errors import ErrorCode
-from audio_chat.tasks import BaseTask, TaskAutoDiscovery, TaskSignal, TaskRegistry
-from audio_chat.tools import BaseTool, ToolAutoDiscovery, ToolError, ToolRegistry, ToolResult
+from realtime_agent.config import load_yaml_config
+from realtime_agent.errors import ErrorCode
+from realtime_agent.tasks import BaseTask, TaskAutoDiscovery, TaskSignal, TaskRegistry
+from realtime_agent.tools import BaseTool, ToolAutoDiscovery, ToolError, ToolRegistry, ToolResult
 
 
 def test_tool_result_public_contract_fields() -> None:
@@ -107,8 +107,8 @@ def test_auto_discovery_recurses_skips_internal_and_fails_on_duplicate(tmp_path,
     sub = pkg / "nested"
     sub.mkdir(parents=True)
     (pkg / "__init__.py").write_text(
-        "from audio_chat.tools import BaseTool\n"
-        "from audio_chat.tasks import BaseTask\n"
+        "from realtime_agent.tools import BaseTool\n"
+        "from realtime_agent.tasks import BaseTask\n"
         "class RootTool(BaseTool):\n"
         "    name = 'root_tool'\n"
         "class RootTask(BaseTask):\n"
@@ -119,8 +119,8 @@ def test_auto_discovery_recurses_skips_internal_and_fails_on_duplicate(tmp_path,
     )
     (sub / "__init__.py").write_text("", encoding="utf-8")
     (sub / "feature.py").write_text(
-        "from audio_chat.tools import BaseTool\n"
-        "from audio_chat.tasks import BaseTask\n"
+        "from realtime_agent.tools import BaseTool\n"
+        "from realtime_agent.tasks import BaseTask\n"
         "class NestedTool(BaseTool):\n"
         "    name = 'nested_tool'\n"
         "class NestedTask(BaseTask):\n"
@@ -136,8 +136,8 @@ def test_auto_discovery_recurses_skips_internal_and_fails_on_duplicate(tmp_path,
     assert {task.task_type for task in tasks} == {"root_task", "nested_task"}
 
     (sub / "duplicate.py").write_text(
-        "from audio_chat.tools import BaseTool\n"
-        "from audio_chat.tasks import BaseTask\n"
+        "from realtime_agent.tools import BaseTool\n"
+        "from realtime_agent.tasks import BaseTask\n"
         "class DuplicateTool(BaseTool):\n"
         "    name = 'nested_tool'\n"
         "class DuplicateTask(BaseTask):\n"
@@ -160,7 +160,7 @@ def test_discovery_records_import_errors_when_not_fail_fast(tmp_path, monkeypatc
     pkg = tmp_path / "broken_pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text(
-        "from audio_chat.tools import BaseTool\n"
+        "from realtime_agent.tools import BaseTool\n"
         "class WorkingTool(BaseTool):\n"
         "    name = 'working_tool'\n",
         encoding="utf-8",
@@ -209,7 +209,7 @@ def test_registry_duplicate_names_fail_fast() -> None:
 def test_preflight_generates_p0_json_report(tmp_path) -> None:
     """测试目标：确认 preflight 聚合检查能生成 P0 JSON 报告。
 
-    测试方法：运行 `audio_chat.preflight` 模块，读取输出 JSON。
+    测试方法：运行 `realtime_agent.preflight` 模块，读取输出 JSON。
     预期结果：报告状态为 ok，包含 contract、package、boundary 和降级说明。
     """
 
@@ -218,7 +218,7 @@ def test_preflight_generates_p0_json_report(tmp_path) -> None:
         [
             sys.executable,
             "-m",
-            "audio_chat.preflight",
+            "realtime_agent.preflight",
             "--config",
             "examples/for-blind-app/audio-server/server.yaml",
             "--report",

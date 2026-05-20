@@ -7,9 +7,9 @@ from pathlib import Path
 
 from aiohttp import ClientSession, web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -19,9 +19,9 @@ for path in (PYTHON_PHONE_ROOT, PYTHON_GLASS_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint  # noqa: E402
-from audio_chat_python_phone_mock.phone_mock import OpenCvVideoPreview  # noqa: E402
-from audio_chat_python_phone_mock.gui import GuiEventBridge  # noqa: E402
+from realtime_agent_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint  # noqa: E402
+from realtime_agent_python_phone_mock.phone_mock import OpenCvVideoPreview  # noqa: E402
+from realtime_agent_python_phone_mock.gui import GuiEventBridge  # noqa: E402
 
 
 class FakeCv2:
@@ -113,8 +113,8 @@ def test_sensor_rgb_input_stream_routes_to_python_phone_video_display(tmp_path: 
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)

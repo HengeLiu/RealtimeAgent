@@ -22,16 +22,16 @@
 必须遵守：
 
 1. 新能力放在 `examples/dev-support/devices/python-playback-glass/`。
-2. Case、suite、report 和 recorder 都属于 dev-support 端侧工具，不属于 `audio_chat` SDK。
+2. Case、suite、report 和 recorder 都属于 dev-support 端侧工具，不属于 `realtime_agent` SDK。
 3. 回放设备只通过真实 HTTP/WebSocket 协议连接 server。
 4. 断言可以读取 server runs 产物，但不能通过 server 内部对象拿结果。
 5. pytest 只负责启动 server、启动回放设备、检查报告。
 
 明确禁止：
 
-1. 不新增 `audio-server/audio_chat/system_test/`。
-2. 不新增 `audio-chat.system-test.run` 或 `audio-chat.system-test.record`。
-3. 不在回放设备里实例化 `AudioChatApp` 或 `AudioChatConfig`。
+1. 不新增 `audio-server/realtime_agent/system_test/`。
+2. 不新增 `realtime-agent.system-test.run` 或 `realtime-agent.system-test.record`。
+3. 不在回放设备里实例化 `RealtimeAgentApp` 或 `RealtimeAgentConfig`。
 4. 不直接调用 `ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
 5. 不直接调用 `register_device()`、`publish_control_event()`、`open_input_stream()`、`write_input_chunk()`、`stream_service.close_stream()`。
 6. 不把 in-process playback 作为系统测试主路径。
@@ -41,9 +41,9 @@
 ```text
 examples/dev-support/devices/python-playback-glass/
   README.md
-  device.audio-chat.yaml
+  device.realtime-agent.yaml
   playback.glass.yaml
-  audio_chat_python_playback_glass/
+  realtime_agent_python_playback_glass/
     __init__.py
     __main__.py
     cli.py
@@ -71,11 +71,11 @@ examples/dev-support/tests/python_playback_glass/
 命令入口第一阶段使用 module 形式，避免污染 SDK CLI：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass run --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml
-uv run python -m audio_chat_python_playback_glass record --runs-root examples/for-blind-app/audio-server/runs ...
+uv run python -m realtime_agent_python_playback_glass run --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml
+uv run python -m realtime_agent_python_playback_glass record --runs-root examples/for-blind-app/audio-server/runs ...
 ```
 
-后续如果需要 pyproject script，也应命名为 dev-support 端侧工具，例如 `audio-chat.playback-glass.run`，不能使用 `audio-chat.system-test.*`。
+后续如果需要 pyproject script，也应命名为 dev-support 端侧工具，例如 `realtime-agent.playback-glass.run`，不能使用 `realtime-agent.system-test.*`。
 
 ## 4. 阶段拆分
 
@@ -85,8 +85,8 @@ uv run python -m audio_chat_python_playback_glass record --runs-root examples/fo
 
 任务：
 
-1. 审核 `examples/dev-support/devices/python-glass/audio_chat_python_glass/playback.py`。
-2. 标记只能借鉴的 in-process 实现，例如直接使用 `AudioChatApp` 的部分。
+1. 审核 `examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py`。
+2. 标记只能借鉴的 in-process 实现，例如直接使用 `RealtimeAgentApp` 的部分。
 3. 标记可以迁移的网络协议实现，例如 `/ws/control`、`/ws/stream`、StreamChunk 编解码、输出回执。
 4. 确认 `testdata/audio-sample/` 文件路径和 WAV 格式。
 5. 确认 `testdata/image-sample/` 图片作为 `sensor.rgb` fixture 的上传格式。
@@ -104,7 +104,7 @@ uv run python -m audio_chat_python_playback_glass record --runs-root examples/fo
 任务：
 
 1. 新增 `python-playback-glass` 目录和 README。
-2. 新增 `device.audio-chat.yaml`，声明 `sensor.rgb` 和 `vibrator` 等能力。
+2. 新增 `device.realtime-agent.yaml`，声明 `sensor.rgb` 和 `vibrator` 等能力。
 3. 实现 `protocol_client.py`：
    - 连接 `/ws/control`
    - 发送 `control.device.register.requested`
@@ -113,12 +113,12 @@ uv run python -m audio_chat_python_playback_glass record --runs-root examples/fo
 4. 实现基础 CLI：
    - `run --server-url ... --case ...`
    - `record --runs-root ...`
-5. 补端侧静态测试，确保没有导入 `audio_chat.app.AudioChatApp`。
+5. 补端侧静态测试，确保没有导入 `realtime_agent.app.RealtimeAgentApp`。
 
 验收：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass run \
+uv run python -m realtime_agent_python_playback_glass run \
   --server-url http://127.0.0.1:8765 \
   --case examples/dev-support/devices/python-playback-glass/cases/smoke/register_only.yaml
 ```
@@ -127,7 +127,7 @@ uv run python -m audio_chat_python_playback_glass run \
 
 1. server `/api/debug/devices` 能看到 `python-playback-glass`。
 2. runs 中出现设备注册事件。
-3. 代码搜索确认没有 `AudioChatApp`、`ToolGateway`、`TaskEngine` 等内部依赖。
+3. 代码搜索确认没有 `RealtimeAgentApp`、`ToolGateway`、`TaskEngine` 等内部依赖。
 
 ### 阶段 2：Case Schema 和最小回放 Case
 
@@ -145,7 +145,7 @@ uv run python -m audio_chat_python_playback_glass run \
 验收：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass run \
+uv run python -m realtime_agent_python_playback_glass run \
   --server-url http://127.0.0.1:8765 \
   --case examples/dev-support/devices/python-playback-glass/cases/smoke/who_are_you.yaml \
   --report runs/python-playback-glass/who_are_you/report.json
@@ -216,7 +216,7 @@ uv run python -m audio_chat_python_playback_glass run \
 示例：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass record \
+uv run python -m realtime_agent_python_playback_glass record \
   --runs-root examples/for-blind-app/audio-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
@@ -257,7 +257,7 @@ cases:
 验收：
 
 ```bash
-uv run python -m audio_chat_python_playback_glass run \
+uv run python -m realtime_agent_python_playback_glass run \
   --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml \
   --server-url http://127.0.0.1:8765 \
   --report runs/python-playback-glass/smoke/report.json
@@ -320,16 +320,16 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 - 目标：确认本次实现必须是 `examples/dev-support` 下的端侧设备，不落入 SDK 内部测试框架。
 - 实现：复查 `browser-glass` 的控制事件、StreamChunk 编解码、`sensor.mic`/`sensor.rgb` 上传和 `actuator.speaker` 回执；确认 `python-glass` 仍作为人工 playback 参考端保留，自动化系统回放单独落在 `python-playback-glass`。
 - 文件：`examples/dev-support/devices/browser-glass/index.html`、`testdata/audio-sample/`、`testdata/image-sample/`。
-- 验证：`rg` 检查现有协议事件和样例文件；确认没有新增 `audio-server/audio_chat/system_test`。
+- 验证：`rg` 检查现有协议事件和样例文件；确认没有新增 `audio-server/realtime_agent/system_test`。
 - 风险：`python-glass` 和 `python-playback-glass` 名称相近，文档和命令必须明确区分人工 playback 与自动化回放。
 
 ### 阶段 1：端侧骨架和真实协议注册
 
 - 状态：已完成。
 - 目标：新增 `python-playback-glass` 端侧骨架，支持真实 `/ws/control` 注册和心跳。
-- 实现：新增端侧包、`device.audio-chat.yaml`、`playback.glass.yaml`、README、CLI 入口和 `PlaybackProtocolClient`；协议客户端只使用 `aiohttp` WebSocket，不导入 `AudioChatApp`、`AudioChatConfig`、`ToolGateway` 等 server 内部对象。
-- 文件：`examples/dev-support/devices/python-playback-glass/audio_chat_python_playback_glass/{__main__.py,cli.py,case_schema.py,protocol_client.py}`、`pyproject.toml`。
-- 验证：`uv run python -m audio_chat_python_playback_glass --help` 通过；`uv run audio-chat.playback-glass.run --help` 通过；`uv run audio-chat.device.validate examples/dev-support/devices/python-playback-glass/device.audio-chat.yaml --json` 通过。
+- 实现：新增端侧包、`device.realtime-agent.yaml`、`playback.glass.yaml`、README、CLI 入口和 `PlaybackProtocolClient`；协议客户端只使用 `aiohttp` WebSocket，不导入 `RealtimeAgentApp`、`RealtimeAgentConfig`、`ToolGateway` 等 server 内部对象。
+- 文件：`examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/{__main__.py,cli.py,case_schema.py,protocol_client.py}`、`pyproject.toml`。
+- 验证：`uv run python -m realtime_agent_python_playback_glass --help` 通过；`uv run realtime-agent.playback-glass.run --help` 通过；`uv run realtime-agent.device.validate examples/dev-support/devices/python-playback-glass/device.realtime-agent.yaml --json` 通过。
 - 待验收：需要启动真实 server 后运行 `register_only.yaml`，在 `/api/debug/devices` 和 runs 中观察注册事件。
 
 ### 阶段 2：Case Schema 和最小回放 Case

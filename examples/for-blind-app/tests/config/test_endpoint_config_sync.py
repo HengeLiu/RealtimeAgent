@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from audio_chat_esp32_s3.esp32_aec import Esp32S3EndpointConfig
+from realtime_agent_esp32_s3.esp32_aec import Esp32S3EndpointConfig
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[4]
@@ -24,7 +24,7 @@ def _support_types(config: dict) -> set[str]:
 def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path: Path) -> None:
     """测试目标：验证 config sync 能生成多端参考配置。
 
-    测试方法：执行 `audio-chat.config.sync`，指定统一 server_url、user_id 和静态 token。
+    测试方法：执行 `realtime-agent.config.sync`，指定统一 server_url、user_id 和静态 token。
     预期结果：server、glass playback、python phone mock、browser-glass、iOS、ESP32-S3
     配置全部生成，且共享同一组 server_url、user_id 和鉴权 token。
     """
@@ -34,7 +34,7 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
         [
             "uv",
             "run",
-            "audio-chat.config.sync",
+            "realtime-agent.config.sync",
             "--app-root",
             str(tmp_path / "app"),
             "--output-dir",
@@ -71,16 +71,16 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
         assert config["user_id"] == "user-sync"
         assert config["auth"]["mode"] == "static_token"
         assert config["auth"]["token"] == "token-sync"
-    assert "AUDIO_CHAT_SERVER_URL=http://10.0.0.2:8765" in esp32
-    assert "AUDIO_CHAT_CONTROL_WS_URL=ws://10.0.0.2:8765/ws/control" in esp32
-    assert "AUDIO_CHAT_STREAM_WS_URL=ws://10.0.0.2:8765/ws/stream" in esp32
-    assert "AUDIO_CHAT_USER_ID=user-sync" in esp32
-    assert "AUDIO_CHAT_AUTH_MODE=static_token" in esp32
-    assert "AUDIO_CHAT_AUTH_TOKEN=token-sync" in esp32
-    assert "AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000" in esp32
-    assert 'AUDIO_CHAT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]' in esp32
-    assert 'AUDIO_CHAT_STREAMS_CONSUME=["actuator.speaker"]' in esp32
-    assert "AUDIO_CHAT_SUPPORTS=" in esp32
+    assert "REALTIME_AGENT_SERVER_URL=http://10.0.0.2:8765" in esp32
+    assert "REALTIME_AGENT_CONTROL_WS_URL=ws://10.0.0.2:8765/ws/control" in esp32
+    assert "REALTIME_AGENT_STREAM_WS_URL=ws://10.0.0.2:8765/ws/stream" in esp32
+    assert "REALTIME_AGENT_USER_ID=user-sync" in esp32
+    assert "REALTIME_AGENT_AUTH_MODE=static_token" in esp32
+    assert "REALTIME_AGENT_AUTH_TOKEN=token-sync" in esp32
+    assert "REALTIME_AGENT_AUDIO_SAMPLE_RATE=16000" in esp32
+    assert 'REALTIME_AGENT_STREAMS_PRODUCE=["sensor.mic","sensor.rgb"]' in esp32
+    assert 'REALTIME_AGENT_STREAMS_CONSUME=["actuator.speaker"]' in esp32
+    assert "REALTIME_AGENT_SUPPORTS=" in esp32
     assert '"type":"rgb"' in esp32
     assert _support_types(phone) >= {"sensor.rgb", "actuator.vibrator"}
     assert _support_types(web) >= {"sensor.rgb", "actuator.vibrator"}
@@ -101,7 +101,7 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
 
     output_dir = tmp_path / "generated"
     subprocess.run(
-        ["uv", "run", "audio-chat.config.sync", "--output-dir", str(output_dir), "--user-id", "user-shared"],
+        ["uv", "run", "realtime-agent.config.sync", "--output-dir", str(output_dir), "--user-id", "user-shared"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -134,7 +134,7 @@ def test_endpoint_config_sync_can_emit_signed_token_hint_for_ios(tmp_path: Path)
 
     output_dir = tmp_path / "generated"
     subprocess.run(
-        ["uv", "run", "audio-chat.config.sync", "--output-dir", str(output_dir), "--auth-mode", "signed_token"],
+        ["uv", "run", "realtime-agent.config.sync", "--output-dir", str(output_dir), "--auth-mode", "signed_token"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,

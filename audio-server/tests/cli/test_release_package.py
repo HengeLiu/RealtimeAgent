@@ -12,14 +12,14 @@ AUDIO_ROOT = Path(__file__).resolve().parents[3]
 def test_release_package_check_reports_release_candidate_gate(tmp_path: Path) -> None:
     """测试目标：确认发布候选 package-check 输出完整 release candidate 报告。
 
-    测试方法：运行 `audio-chat.sdk.package-check`，读取报告中的版本、wheel、
+    测试方法：运行 `realtime-agent.sdk.package-check`，读取报告中的版本、wheel、
     端侧源码和边界检查结果。
     预期结果：报告为通过状态，版本带 rc 标识，wheel 安装导入和源码边界检查都通过。
     """
 
     report = tmp_path / "package-check.json"
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        ["uv", "run", "realtime-agent.sdk.package-check", "--report", str(report)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -49,8 +49,19 @@ def test_for_blind_app_can_be_copied_to_temp_project_and_generate_endpoint_confi
     shutil.copytree(AUDIO_ROOT / "examples" / "for-blind-app", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     output_dir = tmp_path / "generated"
 
+    app_server = app_copy / "audio-server"
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.config.sync", "--app-root", str(app_copy), "--server-config", str(app_copy / "server.yaml"), "--output-dir", str(output_dir)],
+        [
+            "uv",
+            "run",
+            "realtime-agent.config.sync",
+            "--app-root",
+            str(app_server),
+            "--server-config",
+            str(app_server / "server.yaml"),
+            "--output-dir",
+            str(output_dir),
+        ],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from audio_chat.cli.esp32 import _esp32_project_manifest_check
+from realtime_agent.cli.esp32 import _esp32_project_manifest_check
 
 
 AUDIO_ROOT = Path(__file__).resolve().parents[4]
@@ -26,12 +26,12 @@ def test_esp32_reference_firmware_manifest_is_complete() -> None:
 def test_esp32_build_dry_run_reports_command_with_reference_project() -> None:
     """测试目标：确认 ESP32 build 命令能在无副作用模式下使用参考工程。
 
-    测试方法：执行 `audio-chat.esp32.build --dry-run`。
+    测试方法：执行 `realtime-agent.esp32.build --dry-run`。
     预期结果：命令返回 0，并输出将要执行的 idf.py build 命令；不要求本机安装 ESP-IDF。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.esp32.build", "--dry-run"],
+        ["uv", "run", "realtime-agent.esp32.build", "--dry-run"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -46,12 +46,12 @@ def test_esp32_build_dry_run_reports_command_with_reference_project() -> None:
 def test_esp32_monitor_dry_run_reports_command_with_reference_project() -> None:
     """测试目标：确认 ESP32 monitor 命令能在无副作用模式下使用参考工程。
 
-    测试方法：执行 `audio-chat.esp32.monitor --dry-run`。
+    测试方法：执行 `realtime-agent.esp32.monitor --dry-run`。
     预期结果：命令返回 0，并输出将要执行的 monitor 命令。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.esp32.monitor", "--dry-run", "--port", "/dev/tty.fake"],
+        ["uv", "run", "realtime-agent.esp32.monitor", "--dry-run", "--port", "/dev/tty.fake"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,

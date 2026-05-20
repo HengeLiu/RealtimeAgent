@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat_device import AudioChatEvent
+from realtime_agent_device import RealtimeAgentEvent
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -13,28 +13,28 @@ PROTOCOL_ROOT = ROOT / "testdata/protocol"
 pytestmark = [pytest.mark.protocol, pytest.mark.device_sdk]
 
 
-def test_audio_chat_event_round_trips_json() -> None:
+def test_realtime_agent_event_round_trips_json() -> None:
     """测试目标：确认端侧 SDK 的事件信封可 JSON 往返。
 
     测试方法：构造 `command.completed` 事件，序列化后再解析。
     预期结果：事件名、producer 和 payload 保持一致。
     """
 
-    event = AudioChatEvent(
+    event = RealtimeAgentEvent(
         event_name="command.completed",
         user_id="user-001",
         producer_id="dev-001",
         payload={"command_id": "cmd-001"},
     )
 
-    decoded = AudioChatEvent.from_json(event.to_json())
+    decoded = RealtimeAgentEvent.from_json(event.to_json())
 
     assert decoded.event_name == "command.completed"
     assert decoded.producer_id == "dev-001"
     assert decoded.payload["command_id"] == "cmd-001"
 
 
-def test_audio_chat_event_rejects_invalid_event_name() -> None:
+def test_realtime_agent_event_rejects_invalid_event_name() -> None:
     """测试目标：确认端侧 SDK 不接受明显非法的事件名格式。
 
     测试方法：构造包含大写字母的事件名并序列化。
@@ -42,20 +42,20 @@ def test_audio_chat_event_rejects_invalid_event_name() -> None:
     """
 
     with pytest.raises(ValueError, match="invalid event_name"):
-        AudioChatEvent(event_name="Command.Completed", user_id="user-001", producer_id="dev-001").to_dict()
+        RealtimeAgentEvent(event_name="Command.Completed", user_id="user-001", producer_id="dev-001").to_dict()
 
 
 def test_python_device_event_reads_protocol_golden_fixtures() -> None:
     """测试目标：确认 Python Device SDK 能消费协议层控制事件黄金样例。
 
     测试方法：读取 `testdata/protocol/events` 下的所有事件 JSON，并通过
-    `AudioChatEvent.from_dict()` 解析后再序列化。
+    `RealtimeAgentEvent.from_dict()` 解析后再序列化。
     预期结果：所有标准事件都能保持事件名、用户和 producer 信息。
     """
 
     for path in sorted((PROTOCOL_ROOT / "events").glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        event = AudioChatEvent.from_dict(data)
+        event = RealtimeAgentEvent.from_dict(data)
         encoded = event.to_dict()
         assert encoded["event_name"] == data["event_name"], path
         assert encoded["user_id"] == data["user_id"], path
@@ -75,4 +75,4 @@ def test_python_device_event_rejects_invalid_protocol_envelope_fixtures() -> Non
             continue
         data = json.loads(path.read_text(encoding="utf-8"))
         with pytest.raises(ValueError):
-            AudioChatEvent.from_dict(data)
+            RealtimeAgentEvent.from_dict(data)

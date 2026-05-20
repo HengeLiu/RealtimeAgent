@@ -4,15 +4,15 @@ import asyncio
 
 import pytest
 
-from audio_chat import (
+from realtime_agent import (
     AmbiguousDeviceError,
-    AudioChatApp,
-    AudioChatConfig,
+    RealtimeAgentApp,
+    RealtimeAgentConfig,
     CommandResult,
     DeviceNotFoundError,
     ToolContextFactory,
 )
-from audio_chat.protocol import Event
+from realtime_agent.protocol import Event
 
 
 pytestmark = pytest.mark.sdk
@@ -37,7 +37,7 @@ class RecordingEndpoint:
 
 
 def register_endpoint(
-    app: AudioChatApp,
+    app: RealtimeAgentApp,
     endpoint: RecordingEndpoint,
     *,
     support_routes: list[dict],
@@ -64,7 +64,7 @@ def register_endpoint(
                 "device_id": endpoint.device_id,
                 "device_name": endpoint.device_id,
                 "client_type": "typed-context-test",
-                "sdk_version": "audio-chat-test",
+                "sdk_version": "realtime-agent-test",
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": sensors, "actuators": actuators},
                 "properties": properties or {},
@@ -83,7 +83,7 @@ def test_tool_context_exposes_typed_facades_and_blocks_streaming(tmp_path) -> No
     预期结果：短生命周期 Tool 能看到 typed facade，长流接口会返回权限错误。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     context = ToolContextFactory(app=app).create(user_id="user-typed-tool", session_id="sess-typed-tool")
 
     assert context.devices.sensors.rgb is not None
@@ -104,7 +104,7 @@ def test_sensor_one_requires_unique_matching_device(tmp_path) -> None:
     预期结果：抛出 AmbiguousDeviceError，要求调用方补充 selector。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=0.01))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=0.01))
     user_id = "user-typed-ambiguous"
     for device_id in ("dev-rgb-1", "dev-rgb-2"):
         register_endpoint(
@@ -130,9 +130,9 @@ def test_sensor_one_selector_can_narrow_device(tmp_path) -> None:
     表示已进入真实采集等待流程。
     """
 
-    from audio_chat import StreamTimeoutError
+    from realtime_agent import StreamTimeoutError
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=0.01))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=0.01))
     user_id = "user-typed-selector"
     front = RecordingEndpoint(user_id=user_id, device_id="dev-front")
     side = RecordingEndpoint(user_id=user_id, device_id="dev-side")
@@ -168,9 +168,9 @@ def test_sensor_one_returns_when_endpoint_reports_capture_failed(tmp_path) -> No
     预期结果：等待方立即以 StreamTimeoutError 返回，并记录 `asset.request.failed`。
     """
 
-    from audio_chat import StreamTimeoutError
+    from realtime_agent import StreamTimeoutError
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=5))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=5))
     user_id = "user-rgb-failed"
     endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-rgb-failed")
     register_endpoint(
@@ -221,7 +221,7 @@ def test_commands_call_returns_stable_result(tmp_path) -> None:
     预期结果：返回 CommandResult，并且端侧收到控制事件。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     user_id = "user-typed-command"
     endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-command")
     register_endpoint(
@@ -264,7 +264,7 @@ def test_commands_call_selector_routes_only_matching_device(tmp_path) -> None:
     预期结果：只有匹配设备收到命令事件。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     user_id = "user-typed-command-selector"
     phone = RecordingEndpoint(user_id=user_id, device_id="dev-phone")
     glass = RecordingEndpoint(user_id=user_id, device_id="dev-glass")

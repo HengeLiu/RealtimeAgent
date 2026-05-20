@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from audio_chat_python_playback_glass.recorder import RecordOptions, record_case
+from realtime_agent_python_playback_glass.recorder import RecordOptions, record_case
 
 
 def test_recorder_generates_stable_case_without_dynamic_ids(tmp_path: Path) -> None:

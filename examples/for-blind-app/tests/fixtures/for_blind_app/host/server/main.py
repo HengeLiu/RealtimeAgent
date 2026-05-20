@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 
 
-def create_app(config: AudioChatConfig | None = None) -> AudioChatApp:
+def create_app(config: RealtimeAgentConfig | None = None) -> RealtimeAgentApp:
     """创建测试用 basic app。"""
 
-    return AudioChatApp(config or AudioChatConfig())
+    return RealtimeAgentApp(config or RealtimeAgentConfig())

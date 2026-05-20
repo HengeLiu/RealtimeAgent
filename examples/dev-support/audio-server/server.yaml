@@ -13,10 +13,10 @@ auth:
   mode: "disabled"
 
 agent:
-  mode: "text"
-  text:
+  mode: "vision"
+  vision:
     provider: "mock"
-    model: "mock-text"
+    model: "mock-vision"
     asr_provider: "mock"
     tts_provider: "mock"
     streaming_tts: true

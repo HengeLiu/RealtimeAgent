@@ -2,7 +2,7 @@
 """Omni Realtime 工具调用稳定性探针。
 
 主要功能：
-1. 直接连接 DashScope Omni Realtime，不经过 audio-chat server。
+1. 直接连接 DashScope Omni Realtime，不经过 realtime-agent server。
 2. 使用同一段用户音频和同一个 `start_find_object_task` 工具 schema 做多轮重复测试。
 3. 统计每轮是否真正产生 function call、是否先输出普通音频、是否出现“已启动任务”但没有工具调用。
 4. 生成逐轮 JSONL 原始事件和汇总 JSON，便于判断 Omni 工具调用不稳定是否真实存在。
@@ -385,7 +385,7 @@ def _tool_schema(*, schema: str) -> list[dict[str, Any]]:
     """构造 `start_find_object_task` 工具 schema。
 
     参数：
-    - `schema=flat`：使用当前 audio-chat Qwen adapter 传入 Omni 的扁平 function schema。
+    - `schema=flat`：使用当前 realtime-agent Qwen adapter 传入 Omni 的扁平 function schema。
     - `schema=nested`：使用 OpenAI 风格嵌套 function schema 做对照。
     """
 

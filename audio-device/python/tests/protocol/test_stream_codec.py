@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat_device import StreamChunk, StreamChunkCodec
+from realtime_agent_device import StreamChunk, StreamChunkCodec
 
 
 ROOT = Path(__file__).resolve().parents[4]

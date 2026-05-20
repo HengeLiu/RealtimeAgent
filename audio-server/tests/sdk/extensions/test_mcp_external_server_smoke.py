@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import yaml
 
-from audio_chat.mcp import McpGateway
+from realtime_agent.mcp import McpGateway
 
 
 def test_mcp_external_server_smoke_reports_structured_errors(tmp_path) -> None:
@@ -18,7 +18,7 @@ def test_mcp_external_server_smoke_reports_structured_errors(tmp_path) -> None:
         yaml.safe_dump(
             {
                 "servers": [
-                    {"name": "broken_stdio", "transport": "stdio", "command": "audio-chat-mcp-missing"},
+                    {"name": "broken_stdio", "transport": "stdio", "command": "realtime-agent-mcp-missing"},
                     {"name": "broken_sse", "transport": "sse"},
                     {"name": "http_ok", "transport": "streamable_http", "url": "http://127.0.0.1:9898/mcp"},
                 ],
@@ -38,7 +38,7 @@ def test_mcp_external_server_smoke_reports_structured_errors(tmp_path) -> None:
     gateway = McpGateway(enabled=True, config_path=config_path)
 
     results = {item["name"]: item for item in gateway.smoke_external_servers()}
-    call_result = gateway.call(tool_name="web.search", arguments={"query": "audio-chat"})
+    call_result = gateway.call(tool_name="web.search", arguments={"query": "realtime-agent"})
 
     assert results["broken_stdio"]["ok"] is False
     assert results["broken_stdio"]["transport"] == "stdio"

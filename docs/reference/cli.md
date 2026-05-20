@@ -1,6 +1,6 @@
 # CLI 参考
 
-`audio-chat` 提供一组命令用于启动 server、校验设备、打开开发/测试支持组件、
+`realtime-agent` 提供一组命令用于启动 server、校验设备、打开开发/测试支持组件、
 同步配置、做 package 检查和运行端侧辅助任务。
 
 所有命令建议通过 `uv run` 执行。
@@ -17,13 +17,13 @@ uv pip install -e .
 启动示例应用：
 
 ```bash
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
 按配置启动：
 
 ```bash
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 ## 设备能力
@@ -31,13 +31,13 @@ uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server
 校验设备能力文件：
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 输出 JSON：
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml --json
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
 ```
 
 ## 浏览器眼镜模拟组件
@@ -45,7 +45,7 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 打开 browser-glass 开发支持组件：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 `browser-glass` 是以 Device 形态运行的浏览器眼镜模拟组件，用于本地联调和手动测试，
@@ -58,7 +58,7 @@ origin，需要重新授权一次。
 脚本检查时可使用：
 
 ```bash
-uv run audio-chat.web.open --serve --print-url
+uv run realtime-agent.web.open --serve --print-url
 ```
 
 ## Python 开发支持组件
@@ -66,25 +66,25 @@ uv run audio-chat.web.open --serve --print-url
 Python phone preview，用于当前视频回显、peer video 和 YOLO/YOLOE 视觉任务联调：
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 Python phone mock，用于简单协议、RGB 上传和振动 mock 验证：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 Python glass playback，人工播放参考组件：
 
 ```bash
-uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
+uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
 Python playback glass 系统回放端：
 
 ```bash
-uv run audio-chat.playback-glass.run --help
+uv run realtime-agent.playback-glass.run --help
 ```
 
 ## iOS 参考端
@@ -92,13 +92,13 @@ uv run audio-chat.playback-glass.run --help
 打开 iOS 参考端：
 
 ```bash
-uv run audio-chat.ios.open
+uv run realtime-agent.ios.open
 ```
 
 构建 iOS simulator：
 
 ```bash
-uv run audio-chat.ios.build-sim
+uv run realtime-agent.ios.build-sim
 ```
 
 ## ESP32-S3 参考端
@@ -106,21 +106,21 @@ uv run audio-chat.ios.build-sim
 生成本地配置：
 
 ```bash
-uv run audio-chat.esp32.config
+uv run realtime-agent.esp32.config
 ```
 
 无硬件检查：
 
 ```bash
-uv run audio-chat.esp32.build --dry-run
+uv run realtime-agent.esp32.build --dry-run
 ```
 
 有 ESP-IDF 和硬件时：
 
 ```bash
-uv run audio-chat.esp32.build
-uv run audio-chat.esp32.flash --port /dev/tty.usbmodemXXXX
-uv run audio-chat.esp32.monitor --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.build
+uv run realtime-agent.esp32.flash --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.monitor --port /dev/tty.usbmodemXXXX
 ```
 
 ## 开发检查
@@ -128,13 +128,13 @@ uv run audio-chat.esp32.monitor --port /dev/tty.usbmodemXXXX
 预检：
 
 ```bash
-uv run audio-chat.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 发布包检查：
 
 ```bash
-uv run audio-chat.sdk.package-check --report runs/default-app/package-check.json
+uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.json
 ```
 
 协议黄金样例和 Python 端侧 SDK 检查：
@@ -153,7 +153,7 @@ ctest --test-dir audio-device/c/build --output-on-failure
 无头回放测试：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
 ```
 
 全部测试：

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-PROVIDER_RUNS_DIR = Path(os.getenv("AUDIO_CHAT_PROVIDER_TEST_RUNS", "runs/provider-tests/latest"))
+PROVIDER_RUNS_DIR = Path(os.getenv("REALTIME_AGENT_PROVIDER_TEST_RUNS", "runs/provider-tests/latest"))
 
 
 def elapsed_ms(started: float) -> int:

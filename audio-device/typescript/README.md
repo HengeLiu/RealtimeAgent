@@ -1,16 +1,16 @@
-# @audio-chat/device
+# @realtime-agent/device
 
-`@audio-chat/device` 是 JavaScript / TypeScript 端侧通讯 SDK。它面向浏览器、
-Node、Electron、WebView 等运行时，负责和 `audio-chat` server 建立控制通道和
+`@realtime-agent/device` 是 JavaScript / TypeScript 端侧通讯 SDK。它面向浏览器、
+Node、Electron、WebView 等运行时，负责和 `realtime-agent` server 建立控制通道和
 stream 通道。
 
 当前第一版重点覆盖协议模型和 stream chunk 编解码；浏览器参考端已经通过
-`examples/dev-support/devices/browser-glass/sdk/audio-chat-device-browser.js`
+`examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js`
 复用该协议形态。
 
 ## 遵循的协议
 
-协议版本：`audio-chat.v1`
+协议版本：`realtime-agent.v1`
 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ stream 通道。
 
 ```ts
 {
-  version: "audio-chat.v1",
+  version: "realtime-agent.v1",
   event_id: "evt_xxx",
   event_name: "stream.input.opened",
   timestamp_ms: 1760000000000,
@@ -60,12 +60,12 @@ const device = DeviceBuilder.define("dev-browser-001")
   .actuatorVibrator(["vibrate"]);
 ```
 
-### `AudioChatEvent`
+### `RealtimeAgentEvent`
 
 控制事件信封：
 
 ```js
-const event = new AudioChatEvent({
+const event = new RealtimeAgentEvent({
   eventName: "command.completed",
   userId: "user-001",
   producerId: "dev-browser-001",
@@ -81,7 +81,7 @@ ws.send(event.toJson());
 ```js
 const raw = StreamChunkCodec.encodeHeader(
   {
-    version: "audio-chat.v1",
+    version: "realtime-agent.v1",
     user_id: "user-001",
     session_id: "dev-browser-001",
     stream_id: "stream-rgb-001",
@@ -99,7 +99,7 @@ const raw = StreamChunkCodec.encodeHeader(
 );
 ```
 
-### `AudioChatDeviceClient`
+### `RealtimeAgentDeviceClient`
 
 提供控制 WebSocket 和 stream WebSocket 的基础封装：
 
@@ -114,7 +114,7 @@ const raw = StreamChunkCodec.encodeHeader(
 
 ```js
 import {
-  AudioChatDeviceClient,
+  RealtimeAgentDeviceClient,
   DeviceBuilder,
   StreamChunkCodec,
 } from "./audio-device/typescript/src/index.js";
@@ -126,7 +126,7 @@ import {
 浏览器参考端为了避免跨目录静态文件访问，使用了本地 adapter：
 
 ```js
-import { StreamChunkCodec } from "./sdk/audio-chat-device-browser.js";
+import { StreamChunkCodec } from "./sdk/realtime-agent-device-browser.js";
 ```
 
 真实项目中建议把 SDK 复制到前端源码目录，或通过 npm 包引入。
@@ -136,7 +136,7 @@ import { StreamChunkCodec } from "./sdk/audio-chat-device-browser.js";
 当前包还没有发布到 npm。接入方式：
 
 ```bash
-cp -R audio-device/typescript your-project/vendor/audio-chat-device
+cp -R audio-device/typescript your-project/vendor/realtime-agent-device
 ```
 
 在 `package.json` 中使用本地依赖：
@@ -144,7 +144,7 @@ cp -R audio-device/typescript your-project/vendor/audio-chat-device
 ```json
 {
   "dependencies": {
-    "@audio-chat/device": "file:./vendor/audio-chat-device"
+    "@realtime-agent/device": "file:./vendor/realtime-agent-device"
   }
 }
 ```
@@ -158,15 +158,15 @@ npm install
 导入：
 
 ```js
-import { DeviceBuilder, StreamChunkCodec } from "@audio-chat/device";
+import { DeviceBuilder, StreamChunkCodec } from "@realtime-agent/device";
 ```
 
-后续发布到 npm 时建议包名保持为 `@audio-chat/device`。
+后续发布到 npm 时建议包名保持为 `@realtime-agent/device`。
 
 ## 最小注册示例
 
 ```js
-import { AudioChatDeviceClient, DeviceBuilder } from "@audio-chat/device";
+import { RealtimeAgentDeviceClient, DeviceBuilder } from "@realtime-agent/device";
 
 const device = DeviceBuilder.define("dev-browser-001")
   .user("user-001")
@@ -174,7 +174,7 @@ const device = DeviceBuilder.define("dev-browser-001")
   .role("glass")
   .sensorRgb({ modes: ["single"], format: "jpeg" });
 
-const client = new AudioChatDeviceClient({
+const client = new RealtimeAgentDeviceClient({
   serverUrl: "http://127.0.0.1:8765",
   device,
   WebSocketImpl: WebSocket,

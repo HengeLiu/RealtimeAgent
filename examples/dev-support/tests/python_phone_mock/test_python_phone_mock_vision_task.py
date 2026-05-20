@@ -5,10 +5,10 @@ from pathlib import Path
 
 from aiohttp import ClientSession, web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint, PhoneTaskHandlerRegistry
-from audio_chat.protocol import Event
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint, PhoneTaskHandlerRegistry
+from realtime_agent.protocol import Event
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 def test_python_phone_mock_does_not_register_legacy_business_task_handlers_by_default() -> None:
@@ -35,8 +35,8 @@ def test_python_phone_mock_rejects_legacy_phone_task_start_without_business_hand
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)

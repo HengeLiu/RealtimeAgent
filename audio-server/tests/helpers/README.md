@@ -4,5 +4,5 @@
 
 | 文件 | 测试目标和范围 |
 | --- | --- |
-| `server_sdk_harness.py` | Server SDK 系统级测试 harness，提供 recording endpoint、脚本化 ASR/Text provider 和设备注册 helper。 |
+| `server_sdk_harness.py` | Server SDK 系统级测试 harness，提供 recording endpoint、脚本化 ASR/Vision provider 和设备注册 helper。 |
 | `__init__.py` | 让 `tests.helpers.*` 可以稳定导入。 |

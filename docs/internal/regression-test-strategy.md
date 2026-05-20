@@ -2,7 +2,7 @@
 
 更新时间：2026-05-19
 
-当前状态：设计草案。本文档用于统一 `audio-chat` 后续自动化回归测试的分层、范围、命令和测试替身边界。
+当前状态：设计草案。本文档用于统一 `realtime-agent` 后续自动化回归测试的分层、范围、命令和测试替身边界。
 
 ## 1. 背景
 
@@ -89,7 +89,7 @@ package "L0 协议层测试" {
 
 SDK 层允许使用测试替身，但必须遵守以下原则：
 
-1. 不 mock SDK 内部核心逻辑，例如 `TextAgentCore`、`ToolGateway`、`Context API`、`ControlService`、`StreamService`。
+1. 不 mock SDK 内部核心逻辑，例如 `VisionRealtimeAgentCore`、`ToolGateway`、`Context API`、`ControlService`、`StreamService`。
 2. 只替换外部不稳定依赖，例如 LLM、ASR、TTS、Realtime provider、外部 transport、时间、文件系统和真实硬件。
 3. 测试替身必须实现与真实 provider 相同的 contract。
 4. 测试替身集中放在测试目录，例如 `audio-server/tests/fakes/`，避免散落在大量测试文件中。
@@ -173,7 +173,7 @@ uv run python -m pytest \
 后续可以封装成：
 
 ```bash
-uv run audio-chat.test.protocol
+uv run realtime-agent.test.protocol
 ```
 
 ### 3.5 回归测试准入
@@ -255,7 +255,7 @@ Device SDK 的典型测试输出包括：
 
 - `audio-server/tests/sdk/runtime/test_typed_device_context_api.py`
 - `audio-server/tests/sdk/agent_core/test_agent_core_router.py`
-- `audio-server/tests/sdk/agent_core/test_text_agent_tool_loop_async.py`
+- `audio-server/tests/sdk/agent_core/test_vision_agent_tool_loop_async.py`
 - `audio-server/tests/sdk/runtime/test_task_engine_scheduler.py`
 - `audio-server/tests/sdk/runtime/test_task_manage_tool.py`
 - `audio-server/tests/sdk/runtime/test_stream_and_audio_pipeline.py`
@@ -298,14 +298,14 @@ SDK 层测试使用以下方法：
 
 ### 4.5 Fake Provider 标准化
 
-当前测试中存在较多内联 fake provider，例如测试文件内定义的固定文本模型、工具调用模型、失败 TTS、立即 final ASR 等。后续应统一迁移到：
+当前测试中存在较多内联 fake provider，例如测试文件内定义的固定视觉语言模型、工具调用模型、失败 TTS、立即 final ASR 等。后续应统一迁移到：
 
 ```text
 audio-server/tests/fakes/
   fake_asr.py
-  fake_text_model.py
+  fake_vision_model.py
   fake_tts.py
-  fake_realtime.py
+  fake_omni.py
   fake_transport.py
 ```
 
@@ -313,7 +313,7 @@ audio-server/tests/fakes/
 
 | Fake | 用途 |
 | --- | --- |
-| `ScriptedTextModel` | 按脚本返回文本 delta、tool call、错误。 |
+| `ScriptedVisionModel` | 按脚本返回文本 delta、tool call、错误。 |
 | `ScriptedAsrProvider` | 根据输入 chunk 或 source_path 返回 transcript。 |
 | `ScriptedTtsProvider` | 返回固定 PCM，支持首包失败、finish、cancel。 |
 | `ScriptedRealtimeProvider` | 模拟 session open、audio delta、tool call、error、close。 |
@@ -324,7 +324,7 @@ Fake provider 必须实现与真实 provider 相同的 Protocol，并通过 cont
 
 ```text
 audio-server/tests/provider_contracts/
-  test_text_model_contract.py
+  test_vision_model_contract.py
   test_asr_contract.py
   test_tts_contract.py
   test_realtime_contract.py
@@ -362,9 +362,9 @@ uv run python -m pytest audio-device/python/tests -q
 后续拆分为：
 
 ```bash
-uv run audio-chat.test.sdk.server
-uv run audio-chat.test.sdk.device
-uv run audio-chat.test.sdk.interop
+uv run realtime-agent.test.sdk.server
+uv run realtime-agent.test.sdk.device
+uv run realtime-agent.test.sdk.interop
 ```
 
 ### 4.8 回归测试准入
@@ -420,7 +420,7 @@ SDK 层回归测试必须覆盖：
 
 | 类型 | 测试内容 |
 | --- | --- |
-| Text provider | OpenAI-compatible、DashScope-compatible、streaming text、tool calling。 |
+| Vision provider | OpenAI-compatible、DashScope-compatible、streaming text、tool calling。 |
 | ASR provider | 固定 WAV / PCM 输入、final transcript、句子边界、超时。 |
 | TTS provider | streaming TTS、首音频延迟、PCM 格式、finish、cancel。 |
 | Realtime provider | session open、音频输入、audio delta、tool call、interrupt、close。 |
@@ -456,7 +456,7 @@ L2 可以自动化，但不作为每次提交默认必跑项。原因是它依�
 | 测试 | 自动化 | 默认必跑 |
 | --- | --- | --- |
 | fake provider contract | 是 | 是，归入 L1。 |
-| real text provider smoke | 是 | 否，手动或 nightly。 |
+| real vision provider smoke | 是 | 否，手动或 nightly。 |
 | real ASR / TTS smoke | 是 | 否，手动或 release 前。 |
 | realtime audio smoke | 是或半自动 | 否，手动或 release 前。 |
 | latency benchmark | 是 | 否，nightly / release candidate。 |
@@ -471,19 +471,19 @@ uv run python -m pytest audio-server/tests/model_provider/test_dashscope_provide
 后续拆分为：
 
 ```bash
-uv run audio-chat.test.model.text
-uv run audio-chat.test.model.asr
-uv run audio-chat.test.model.tts
-uv run audio-chat.test.model.realtime
-uv run audio-chat.test.model.latency
+uv run realtime-agent.test.model.text
+uv run realtime-agent.test.model.asr
+uv run realtime-agent.test.model.tts
+uv run realtime-agent.test.model.realtime
+uv run realtime-agent.test.model.latency
 ```
 
 ### 5.5 回归测试准入
 
 大模型接入层回归测试必须覆盖：
 
-1. 真实 text provider 返回非空 streaming delta。
-2. 真实 text provider tool call 可解析。
+1. 真实 vision provider 返回非空 streaming delta。
+2. 真实 vision provider tool call 可解析。
 3. 真实 ASR provider 能处理固定音频样例。
 4. 真实 TTS provider 能输出可播放音频 chunk。
 5. 真实 Realtime provider 可打开和关闭 session。
@@ -522,7 +522,7 @@ uv run audio-chat.test.model.latency
 
 - `examples/for-blind-app/tests/`
 - `examples/dev-support/tests/`
-- `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`
+- `examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py`
 
 ### 6.3 测试档位
 
@@ -556,15 +556,15 @@ iOS、ESP32、真实摄像头、真实麦克风、真实模型。
 ```bash
 uv run python -m pytest examples/for-blind-app/tests -q
 uv run python -m pytest examples/dev-support/tests -q
-uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
 ```
 
 后续拆分为：
 
 ```bash
-uv run audio-chat.test.app.for-blind
-uv run audio-chat.test.app.dev-support
-uv run audio-chat.test.app.replay
+uv run realtime-agent.test.app.for-blind
+uv run realtime-agent.test.app.dev-support
+uv run realtime-agent.test.app.replay
 ```
 
 ### 6.5 回归测试准入
@@ -736,18 +736,18 @@ runs/regression-reports/
 
 ```text
 docs/reference/protocol.md
-audio-server/audio_chat/spec/audio-chat-device.schema.json
-audio-server/audio_chat/spec/audio-chat-event.schema.json
-audio-server/audio_chat/spec/audio-chat-stream.schema.json
-audio-server/audio_chat/spec/audio-chat-asyncapi.yaml
-audio-server/audio_chat/spec/audio-chat-error-codes.yaml
+audio-server/realtime_agent/spec/realtime-agent-device.schema.json
+audio-server/realtime_agent/spec/realtime-agent-event.schema.json
+audio-server/realtime_agent/spec/realtime-agent-stream.schema.json
+audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml
+audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 testdata/protocol/
 ```
 
 `docs/reference/protocol.md` 至少包含：
 
 1. 协议目标和非目标。
-2. 协议版本，例如 `audio-chat.v1`。
+2. 协议版本，例如 `realtime-agent.v1`。
 3. 控制通道和 stream 通道说明。
 4. 事件信封字段。
 5. 设备注册 payload。
@@ -765,13 +765,13 @@ testdata/protocol/
 
 | 协议对象 | 代码位置 | 说明 |
 | --- | --- | --- |
-| 事件信封 | `audio-server/audio_chat/protocol.py` | server runtime 的事件对象和校验入口。 |
-| 设备能力 schema | `audio-server/audio_chat/spec/audio-chat-device.schema.json` | 设备注册和能力声明约束。 |
-| 事件 schema | `audio-server/audio_chat/spec/audio-chat-event.schema.json` | 公共事件名和事件信封约束。 |
-| stream schema | `audio-server/audio_chat/spec/audio-chat-stream.schema.json` | stream header 字段约束。 |
-| AsyncAPI | `audio-server/audio_chat/spec/audio-chat-asyncapi.yaml` | WebSocket 通道和事件说明。 |
-| 错误码 | `audio-server/audio_chat/spec/audio-chat-error-codes.yaml` | 标准错误码和建议处理。 |
-| Python Device SDK | `audio-device/python/src/audio_chat_device/` | 端侧事件、builder、client、stream codec。 |
+| 事件信封 | `audio-server/realtime_agent/protocol.py` | server runtime 的事件对象和校验入口。 |
+| 设备能力 schema | `audio-server/realtime_agent/spec/realtime-agent-device.schema.json` | 设备注册和能力声明约束。 |
+| 事件 schema | `audio-server/realtime_agent/spec/realtime-agent-event.schema.json` | 公共事件名和事件信封约束。 |
+| stream schema | `audio-server/realtime_agent/spec/realtime-agent-stream.schema.json` | stream header 字段约束。 |
+| AsyncAPI | `audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml` | WebSocket 通道和事件说明。 |
+| 错误码 | `audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml` | 标准错误码和建议处理。 |
+| Python Device SDK | `audio-device/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
 | TypeScript Device SDK | `audio-device/typescript/src/` | 浏览器 / Node 侧协议模型。 |
 | Swift / Kotlin / C SDK | `audio-device/<language>/` | 端侧协议模型和 stream codec。 |
 | golden fixtures | `testdata/protocol/` | 跨语言测试输入。 |
@@ -940,7 +940,7 @@ Swift / Kotlin 在对应测试工程补齐后加入验收命令。
 目标：
 
 1. 标准化 Server SDK 测试替身，减少测试文件内联 fake provider。
-2. 抽出 `ScriptedTextModel`、`ScriptedAsrProvider`、`ScriptedTtsProvider`、`ScriptedRealtimeProvider`。
+2. 抽出 `ScriptedVisionModel`、`ScriptedAsrProvider`、`ScriptedTtsProvider`、`ScriptedRealtimeProvider`。
 3. 给 fake provider 写 contract 测试，确保 fake 与真实 provider adapter 形状一致。
 4. 补齐以协议事件、stream chunk、模型 delta 为输入的 Context API、Tool runtime、Task runtime、OutputService、runs artifact 集成测试。
 
@@ -1022,7 +1022,7 @@ uv run python -m pytest \
 1. 为真实 provider smoke 增加 marker 和标准命令。
 2. 禁止 L2 使用 mock fallback。
 3. 输出 provider test artifact，例如 `result.json`、latency summary、WAV 和 provider events。
-4. 补真实 text provider tool calling smoke。
+4. 补真实 vision provider tool calling smoke。
 5. 补 Realtime 最小 audio input / output smoke。
 6. 建立小规模稳定性和延迟测试。
 
@@ -1098,7 +1098,7 @@ uv run python -m pytest -m replay -q
 2. L1 Server SDK 已有协议输入驱动的系统级集成测试和集中测试 harness；仍可继续把历史测试中的内联 fake provider 逐步收敛到统一 contract。
 3. L1 Device SDK 已覆盖 Python / TypeScript 主要协议 contract，并通过分层测试调度 Swift / C / Kotlin 原生测试；Kotlin 当前因缺少 Gradle wrapper 或系统 Gradle 会被明确 skip。
 4. L1 互操作层已通过真实 WebSocket 验证 Server SDK 与 Python Device SDK 的注册、RGB stream、command 和 output stream 闭环。
-5. L2 大模型接入层已有真实 DashScope ASR、TTS、Text、Text tool calling 和 Qwen Omni Realtime smoke，并输出 `runs/provider-tests/latest/` 产物；Realtime 当前仍可能受外部 provider 容量限流影响。
+5. L2 大模型接入层已有真实 DashScope ASR、TTS、Vision、Vision tool calling 和 Qwen Omni Realtime smoke，并输出 `runs/provider-tests/latest/` 产物；Realtime 当前仍可能受外部 provider 容量限流影响。
 6. Realtime provider 连接入口已增加 SDK 内部并发限流，默认 `max_concurrent_sessions=10`，避免同一 provider / model / endpoint 在单进程内无限制建立 WebSocket 连接。
 7. L3 应用层已收敛到 for-blind-app 业务能力、真实 WAV 回放和端侧参考工程自动化测试；真机、浏览器摄像头权限和真实硬件音频效果仍需要人工 checklist。
 8. pytest markers 和轻量 JSON 测试报告已经落地，分层命令会写入 `runs/regression-reports/latest/`。
@@ -1156,7 +1156,7 @@ uv run python -m pytest -m replay -q
   - `audio-server/tests/sdk/runtime/test_typed_device_context_api.py`
   - `audio-server/tests/sdk/agent_core/test_agent_core_router.py`
   - `audio-server/tests/model_provider/test_dashscope_providers.py`
-  - `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`
+  - `examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py`
 - 验证：
   - `uv run python -m pytest -m protocol_spec -q`，结果：`3 passed`。
   - `uv run python -m pytest -m protocol -q`，结果：`14 passed`。
@@ -1174,7 +1174,7 @@ uv run python -m pytest -m replay -q
   - `runs/regression-reports/latest/summary.md`
 - 风险：
   - `app` marker 当前只覆盖一个稳定应用组件测试，完整 L3 回放收敛留到 Phase 7。
-  - `replay` marker 尚未正式启用，因为现有 `test_text_route_audio_samples.py` 中部分回放测试当前失败，需要后续按 L3 阶段单独修复。
+  - `replay` marker 尚未正式启用，因为现有 `test_vision_route_audio_samples.py` 中部分回放测试当前失败，需要后续按 L3 阶段单独修复。
   - L1 fake provider 仍未标准化，留到 Phase 4。
   - Swift / Kotlin / C 的完整 Device SDK contract 尚未补齐，留到 Phase 3。
 
@@ -1183,15 +1183,15 @@ uv run python -m pytest -m replay -q
 - 状态：已完成首轮落地
 - 目标：让协议层测试不只验证正例，还能拦截旧协议写法、非法事件信封和非法生命周期跳转。
 - 实现：
-  - 新增 `audio-server/audio_chat/protocol_state.py`，用独立状态机校验 `command.*`、输入 stream、输出 stream 的事件顺序。
+  - 新增 `audio-server/realtime_agent/protocol_state.py`，用独立状态机校验 `command.*`、输入 stream、输出 stream 的事件顺序。
   - 新增 `audio-server/tests/protocol/test_protocol_state_machines.py`，覆盖命令标准生命周期、进度早于接受、终态后继续发事件、输入 stream 未 opened 就 closed、输出 stream finished 早于 started、输出 stream 取消流程等系统级协议顺序。
   - 扩充 `testdata/protocol/invalid/`，新增旧 `capabilities`、旧 `routes`、媒体 payload、点对点路由字段、未知事件名等反例 fixtures。
   - 在 `test_protocol_schema_examples.py` 中增加反例 fixture 消费测试，确保反例能被 schema enum 或运行时信封 / 能力校验拦截。
   - 收紧 `validate_device_capabilities_file()`，让设备能力文件运行时校验和 schema 的顶层字段约束保持一致，避免旧字段被静默忽略。
   - 更新 `conftest.py` 的报告输入摘要，L0 报告会记录正例和反例 fixture 数量。
 - 文件：
-  - `audio-server/audio_chat/protocol_state.py`
-  - `audio-server/audio_chat/device_capabilities.py`
+  - `audio-server/realtime_agent/protocol_state.py`
+  - `audio-server/realtime_agent/device_capabilities.py`
   - `audio-server/tests/protocol/test_protocol_state_machines.py`
   - `audio-server/tests/protocol/test_protocol_schema_examples.py`
   - `testdata/protocol/invalid/devices/legacy-capabilities.json`
@@ -1224,7 +1224,7 @@ uv run python -m pytest -m replay -q
   - 新增 `test_multilanguage_device_sdk_contracts.py`，在 `device_sdk` 分层中调用 TypeScript、Swift、C、Kotlin 各自原生测试命令；本机缺少工具时明确 skip。
   - 当前 Kotlin 仓库没有 `gradlew`，本机也没有系统 `gradle`，因此 Kotlin 原生 contract 在本轮报告中为 skip；这比伪造通过更符合回归测试目标。
 - 文件：
-  - `audio-device/python/src/audio_chat_device/events.py`
+  - `audio-device/python/src/realtime_agent_device/events.py`
   - `audio-device/python/tests/protocol/test_events.py`
   - `audio-device/python/tests/multilanguage/test_multilanguage_device_sdk_contracts.py`
   - `audio-device/typescript/src/events.js`
@@ -1247,11 +1247,11 @@ uv run python -m pytest -m replay -q
 - 状态：已完成首轮落地
 - 目标：把 Server SDK 的测试入口收敛为“协议输入 -> SDK 行为 -> 协议输出 / 运行产物”的系统级集成测试，并集中 test-only fake provider。
 - 实现：
-  - 新增 `server_sdk_harness.py`，集中提供 `RecordingEndpoint`、`ScriptedAsrProvider`、`ScriptedTextModel`、音频设备注册和 provider 注入 helper。
-  - 新增 `test_server_sdk_protocol_integration.py`，用协议事件和 `sensor.mic` stream chunk 驱动完整 Text turn。
-  - 完整 turn 测试覆盖 `control.user.wake.detected`、`control.audio_session.opened`、`stream.input.opened`、麦克风 chunk、ASR final transcript、Text provider delta、输出 stream 下发和 `messages.jsonl` 记录。
+  - 新增 `server_sdk_harness.py`，集中提供 `RecordingEndpoint`、`ScriptedAsrProvider`、`ScriptedVisionModel`、音频设备注册和 provider 注入 helper。
+  - 新增 `test_server_sdk_protocol_integration.py`，用协议事件和 `sensor.mic` stream chunk 驱动完整 Vision turn。
+  - 完整 turn 测试覆盖 `control.user.wake.detected`、`control.audio_session.opened`、`stream.input.opened`、麦克风 chunk、ASR final transcript、Vision provider delta、输出 stream 下发和 `messages.jsonl` 记录。
   - 新增错误协议输入测试，确认 stream 注册为 `sensor.mic` 后，如果收到同 `stream_id` 但 `stream_type=sensor.rgb` 的 chunk，会在 StreamService 入口被拒绝，不进入 Agent Core。
-  - fake provider 只存在于测试 harness 中，不进入 `audio_chat` 真实 SDK 包；真实 provider 切换仍由 `AudioChatConfig` 和现有 provider builder 控制。
+  - fake provider 只存在于测试 harness 中，不进入 `realtime_agent` 真实 SDK 包；真实 provider 切换仍由 `RealtimeAgentConfig` 和现有 provider builder 控制。
 - 文件：
   - `audio-server/tests/helpers/server_sdk_harness.py`
   - `audio-server/tests/sdk/runtime/test_server_sdk_protocol_integration.py`
@@ -1264,7 +1264,7 @@ uv run python -m pytest -m replay -q
   - `runs/regression-reports/latest/l0-protocol-report.json`
   - `runs/regression-reports/latest/l1-device-sdk-report.json`
 - 风险：
-  - 当前 Server SDK harness 先覆盖 Text Agent Core 主路径；Realtime Audio Agent Core 的 provider callback、音频 delta 和工具桥仍留到 Phase 5/6 继续补。
+  - 当前 Server SDK harness 先覆盖 Vision Realtime Agent Core 主路径；Omni Realtime Agent Core 的 provider callback、音频 delta 和工具桥仍留到 Phase 5/6 继续补。
   - 现有 `sdk` marker 仍包含部分偏结构检查的测试；后续可以逐步把纯结构检查从 L1 抽离，保留系统级协议输入测试作为主验收入口。
 
 ### Phase 5：L1 SDK 互操作测试落地
@@ -1273,7 +1273,7 @@ uv run python -m pytest -m replay -q
 - 目标：用真实 WebSocket 验证 Server SDK 与 Python Device SDK 在不启动示例应用、不接真实模型的情况下完成协议闭环。
 - 实现：
   - 新增 `interop` pytest marker 和 `runs/regression-reports/latest/l1-interop-report.json` 报告入口。
-  - 新增 `test_server_device_loopback.py`，启动真实 `AudioChatHttpServer`，再用 `AudioChatDeviceClient` 连接 `/ws/control` 和 `/ws/stream`。
+  - 新增 `test_server_device_loopback.py`，启动真实 `RealtimeAgentHttpServer`，再用 `RealtimeAgentDeviceClient` 连接 `/ws/control` 和 `/ws/stream`。
   - 互操作测试覆盖设备注册、结构化能力声明、server 请求 RGB、device 上传 RGB chunk、server 写入 asset、server 下发 command、device 回执 accepted / progress / completed、server 下发 output stream、device 收到输出 chunk。
   - 测试生成本轮 loopback 摘要到临时 runs 目录中的 `loopback-contract-report.json`，记录 server URL、事件名、output chunk 数量、asset_id 和 command_id。
   - 修复真实互操作暴露的跨 WebSocket 竞态：短采集流中，端侧可能先通过 control WebSocket 发 `stream.input.closed`，server 再处理 stream WebSocket 上已经到达的 final chunk。`StreamService.on_chunk()` 现在允许带 `request_id` 的 sensor late chunk 继续进入资产服务，并记录 `stream.chunk.received_after_close`。
@@ -1281,7 +1281,7 @@ uv run python -m pytest -m replay -q
   - `pyproject.toml`
   - `conftest.py`
   - `audio-server/tests/sdk/interop/test_server_device_loopback.py`
-  - `audio-server/audio_chat/stream/service.py`
+  - `audio-server/realtime_agent/stream/service.py`
 - 验证：
   - `uv run python -m pytest -m interop -q`，结果：`1 passed`。
   - `uv run python -m pytest -m sdk -q`，结果：`42 passed`。
@@ -1295,7 +1295,7 @@ uv run python -m pytest -m replay -q
 - 风险：
   - 互操作层当前先覆盖 Python Device SDK；TypeScript / Swift / Kotlin / C 仍以原生 contract 为主，真实 WebSocket 互操作后续按语言逐步补。
   - 本轮 output stream 验证到 open、chunk、finish requested 和端侧 finished 回执；取消路径可以在后续互操作扩展中补齐。
-  - Realtime Audio Agent Core 真实 provider 互操作仍留到 L2 大模型接入测试，不在 Phase 5 用 mock 伪装成真实模型能力。
+  - Omni Realtime Agent Core 真实 provider 互操作仍留到 L2 大模型接入测试，不在 Phase 5 用 mock 伪装成真实模型能力。
 
 ### Phase 6：L2 大模型接入测试落地
 
@@ -1304,8 +1304,8 @@ uv run python -m pytest -m replay -q
 - 实现：
   - 扩充 `test_dashscope_providers.py`，真实 DashScope / DashScope-compatible provider 测试统一写入 `runs/provider-tests/latest/`。
   - 新增 `audio-server/tests/model_provider/artifacts.py`，集中封装 L2 provider 测试的 JSON artifact 和 WAV 写出逻辑，避免每个 provider 测试各自散落临时文件写法。
-  - Text provider smoke 改为使用 `run_provider_call_with_policy()`，产物记录 provider、model、endpoint、timeout、retry、fallback policy、首 token 延迟和首个 delta。
-  - 新增真实 text provider tool calling smoke：只暴露 `lookup_weather` 一个工具，要求模型调用该工具，并断言 SDK 内部统一 `tool_call` 结构可解析。
+  - Vision provider smoke 改为使用 `run_provider_call_with_policy()`，产物记录 provider、model、endpoint、timeout、retry、fallback policy、首 token 延迟和首个 delta。
+  - 新增真实 vision provider tool calling smoke：只暴露 `lookup_weather` 一个工具，要求模型调用该工具，并断言 SDK 内部统一 `tool_call` 结构可解析。
   - TTS smoke 现在写出 `tts-output.wav`，并在 `tts-result.json` 中记录首音频延迟、音频字节数、模型、音色和 metrics。
   - ASR smoke 现在写出 `asr-result.json`，记录固定 `sensor.mic` PCM 样例、识别文本、期望文本和耗时。
   - Realtime smoke 从“只打开关闭会话”提升为“打开会话、追加固定 PCM、等待 audio delta”，并在失败时写出 `realtime-result.json`。
@@ -1318,12 +1318,12 @@ uv run python -m pytest -m replay -q
   - `audio-server/tests/model_provider/artifacts.py`
   - `audio-server/tests/__init__.py`
   - `audio-server/tests/sdk/runtime/test_server_sdk_protocol_integration.py`
-  - `audio-server/audio_chat/agent_core/realtime.py`
-  - `audio-server/audio_chat/config.py`
-  - `audio-server/audio_chat/app.py`
+  - `audio-server/realtime_agent/agent_core/realtime.py`
+  - `audio-server/realtime_agent/config.py`
+  - `audio-server/realtime_agent/app.py`
   - `conftest.py`
 - 验证：
-  - `AUDIO_CHAT_TEST_REPORT_DIR=runs/regression-reports/l2-nonrealtime uv run python -m pytest -m model_provider -k 'not qwen_omni' -q`，结果：`4 passed`。
+  - `REALTIME_AGENT_TEST_REPORT_DIR=runs/regression-reports/l2-nonrealtime uv run python -m pytest -m model_provider -k 'not qwen_omni' -q`，结果：`4 passed`。
   - `uv run python -m pytest -m model_provider -q`，结果：`4 passed, 1 failed`。
 - 运行证据：
   - `runs/provider-tests/latest/asr-result.json`
@@ -1346,10 +1346,10 @@ uv run python -m pytest -m replay -q
 - 状态：已完成第三轮收敛，dev-support 与 for-blind-app 自动化入口均已通过
 - 目标：让应用层测试只表达 for-blind-app 业务能力、真实样例回放和端侧参考工程可用性，不再承担 L0/L1/L2 的基础协议和 SDK 验证职责。
 - 实现：
-  - 给 `test_text_route_audio_samples.py` 中三个真实 WAV 回放测试加 `replay` marker，使 `uv run python -m pytest -m replay -q` 不再是空集合。
+  - 给 `test_vision_route_audio_samples.py` 中三个真实 WAV 回放测试加 `replay` marker，使 `uv run python -m pytest -m replay -q` 不再是空集合。
   - 将 Python glass 进程内回放端点从兼容占位实现为真正的协议驱动端点：注册设备、发布唤醒和音频会话事件、按 WAV `chunk_ms` 切分 `sensor.mic` chunk，并响应 `sensor.rgb` 单帧请求。
   - 将 Python glass 网络端点从“只注册”扩展为可通过 `/ws/control` 和 `/ws/stream` 上传真实 WAV PCM chunk，等待 server 写出 `model-request.json`。
-  - 修复 Python glass 网络回放端点的多设备路由表达：默认端点声明 `audio_chat.audio_input/output`，但显式 `camera.role` 设备不再被默认标记为 speaker，避免 RGB-only 设备收到 `actuator.speaker` chunk。
+  - 修复 Python glass 网络回放端点的多设备路由表达：默认端点声明 `realtime_agent.audio_input/output`，但显式 `camera.role` 设备不再被默认标记为 speaker，避免 RGB-only 设备收到 `actuator.speaker` chunk。
   - 修复网络回放中的跨 WebSocket 发送节奏：音频 chunk 发送过程中让出事件循环，并在发送 `stream.input.closed` 前给 stream 通道短暂 drain 窗口，避免 control close 先被 server 处理导致 mic chunk 被误判为 late chunk。
   - 将 browser-glass 静态测试对齐当前设计：页面只选择音频 / 图片 / 视频采样资源，不再断言旧的手动 `uploadImageNow` 按钮；RGB 上传必须由 server 请求、CLI 或业务 Task 触发。
   - 将 Python phone mock 旧视觉任务测试对齐当前边界：默认不内置 `find_object_phone_task` / `traffic_light_phone_task` 业务 handler；旧 `phone.task.start` 在未显式注册 handler 时必须通过 `command.failed` 暴露，而不是在参考端里伪造业务能力。
@@ -1357,12 +1357,12 @@ uv run python -m pytest -m replay -q
   - 补齐 Python playback 参考端的 `register()` 测试夹具入口和 `sensor_profiles` 回放能力；这是测试端点兼容，不是把业务逻辑塞回 SDK。
   - 修复 for-blind-app 测试夹具中未 await 的 `context.output.say()`，让 Output Service 真实写出播放产物。
   - 将 config sync / iOS / ESP32 静态契约测试对齐结构化 `supports` 和 `properties`，不再断言旧 `routes` 字段或旧 Swift `FindObjectPhoneTaskHandler` token。
-  - 修复 ESP32-S3 网络 smoke：注册 payload 声明 `audio_chat.audio_input/output`，网络端点等待 server 的 audio session open 后再上传 `sensor.mic`，并在播放完成后上报 session closed。
+  - 修复 ESP32-S3 网络 smoke：注册 payload 声明 `realtime_agent.audio_input/output`，网络端点等待 server 的 audio session open 后再上传 `sensor.mic`，并在播放完成后上报 session closed。
   - L3 报告输入摘要增加 for-blind-app 根目录、真实音频 / 图片 / 视频样例目录、端侧参考工程清单和人工验收缺口。
   - 将 replay / hardware 报告从 `l3-app-report.json` 拆成 `l3-replay-report.json`、`l3-hardware-report.json`，避免不同 L3 子层互相覆盖。
 - 文件：
-  - `examples/for-blind-app/tests/replay/test_text_route_audio_samples.py`
-  - `examples/dev-support/devices/python-glass/audio_chat_python_glass/playback.py`
+  - `examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py`
+  - `examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py`
   - `examples/dev-support/tests/network/test_network_server_playback.py`
   - `examples/dev-support/tests/browser/test_browser_device_example.py`
   - `examples/dev-support/tests/python_phone_mock/test_python_phone_mock_vision_task.py`
@@ -1373,7 +1373,7 @@ uv run python -m pytest -m replay -q
   - `examples/for-blind-app/tests/config/test_endpoint_config_sync.py`
   - `examples/for-blind-app/tests/endpoints/test_esp32_s3_endpoint_contract.py`
   - `examples/for-blind-app/tests/endpoints/test_ios_phone_endpoint_contract.py`
-  - `examples/for-blind-app/devices/native-esp32-glass/audio_chat_esp32_s3/esp32_aec.py`
+  - `examples/for-blind-app/devices/native-esp32-glass/realtime_agent_esp32_s3/esp32_aec.py`
   - `conftest.py`
 - 验证：
   - `uv run python -m pytest -m app -q`，结果：`1 passed`。

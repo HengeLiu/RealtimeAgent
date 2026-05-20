@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk
-from audio_chat.tools import BaseTool, ToolContext, ToolResult
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk
+from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
 class Connection:
@@ -24,7 +24,7 @@ class Connection:
         self.chunks.append(chunk)
 
 
-def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "user-progress") -> None:
+def register_speaker(app: RealtimeAgentApp, connection: Connection, user_id: str = "user-progress") -> None:
     """注册一个可消费 speaker 输出的测试设备。"""
 
     app.register_device(
@@ -103,7 +103,7 @@ class TextThenToolCallModel(FirstToolCallModel):
         yield "查询完成"
 
 
-def _send_final_mic(app: AudioChatApp, session_id: str) -> None:
+def _send_final_mic(app: RealtimeAgentApp, session_id: str) -> None:
     app.agent_core.append_audio_event(
         StreamChunk(
             user_id="user-progress",
@@ -126,15 +126,15 @@ def _session_file(tmp_path, session_id: str, name: str):
 def test_progress_audio_only_when_first_model_output_is_tool_call(tmp_path) -> None:
     """测试目标：验证工具前置播报只在模型首输出为 Tool 调用时触发。
 
-    测试方法：用首输出 Tool 调用的模型驱动 TextAgentCore，并注册可消费 speaker 的端侧。
+    测试方法：用首输出 Tool 调用的模型驱动 VisionRealtimeAgentCore，并注册可消费 speaker 的端侧。
     预期结果：runs 中写入 `tool.progress_message.emitted`，并生成 cached prompt 音频产物。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     app.tool_registry.register(ProgressTool())
-    app.agent_core.text_model = FirstToolCallModel()
+    app.agent_core.vision_model = FirstToolCallModel()
 
     _send_final_mic(app, "sess-progress-tool-first")
 
@@ -145,7 +145,7 @@ def test_progress_audio_only_when_first_model_output_is_tool_call(tmp_path) -> N
     assert list((_session_file(tmp_path, "sess-progress-tool-first", "audio").glob("output-*.wav")))
 
 
-def test_text_gate_preserves_pre_tool_text_and_skips_progress_audio(tmp_path) -> None:
+def test_vision_gate_preserves_pre_tool_text_and_skips_progress_audio(tmp_path) -> None:
     """测试目标：验证 Text 门控会保留工具前模型提示，并避免重复插入系统前置播报。
 
     测试方法：模型先输出“我先想一下。”，随后返回 Tool 调用。
@@ -153,18 +153,18 @@ def test_text_gate_preserves_pre_tool_text_and_skips_progress_audio(tmp_path) ->
     系统不再额外播放 `progress_message`。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     app.tool_registry.register(ProgressTool())
-    app.agent_core.text_model = TextThenToolCallModel()
+    app.agent_core.vision_model = TextThenToolCallModel()
 
     _send_final_mic(app, "sess-progress-text-first")
 
     model_events = _session_file(tmp_path, "sess-progress-text-first", "model-events.jsonl").read_text(encoding="utf-8")
     messages = _session_file(tmp_path, "sess-progress-text-first", "messages.jsonl").read_text(encoding="utf-8")
-    assert "text.response_gate.released" in model_events
-    assert "text.response_gate.discarded" not in model_events
+    assert "vision.response_gate.released" in model_events
+    assert "vision.response_gate.discarded" not in model_events
     assert "tool.progress_message.emitted" not in model_events
     assert "我先想一下。" in messages
     assert "查询完成" in messages
@@ -179,17 +179,17 @@ def test_progress_audio_realtime_generation_mode(tmp_path) -> None:
     预期结果：runs 中记录 realtime generation_mode，且不会使用 cached prompt source。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
+            agent_mode="vision",
             output_tool_progress_audio_mode="realtime",
         )
     )
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     app.tool_registry.register(ProgressTool())
-    app.agent_core.text_model = FirstToolCallModel()
+    app.agent_core.vision_model = FirstToolCallModel()
 
     _send_final_mic(app, "sess-progress-realtime")
 
@@ -205,10 +205,10 @@ def test_progress_audio_disabled_mode_does_not_emit_audio(tmp_path) -> None:
     预期结果：返回 None，不向端侧写入音频 chunk，只在 runs 中记录 skipped 诊断。
     """
 
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
+            agent_mode="vision",
             output_tool_progress_audio_mode="disabled",
         )
     )

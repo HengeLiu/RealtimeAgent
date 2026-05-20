@@ -1,4 +1,4 @@
-import { AudioChatEvent } from "./events.js";
+import { RealtimeAgentEvent } from "./events.js";
 import { StreamChunkCodec } from "./stream.js";
 
 export function wsUrl(serverUrl, path, query = {}) {
@@ -9,7 +9,7 @@ export function wsUrl(serverUrl, path, query = {}) {
   return url.toString();
 }
 
-export class AudioChatDeviceClient {
+export class RealtimeAgentDeviceClient {
   constructor({ serverUrl, device, WebSocketImpl = globalThis.WebSocket }) {
     this.serverUrl = serverUrl.replace(/\/$/, "");
     this.device = device;
@@ -22,7 +22,7 @@ export class AudioChatDeviceClient {
   }
 
   event(eventName, payload = {}, extra = {}) {
-    return new AudioChatEvent({
+    return new RealtimeAgentEvent({
       eventName,
       userId: this.userId,
       producerId: this.deviceId,

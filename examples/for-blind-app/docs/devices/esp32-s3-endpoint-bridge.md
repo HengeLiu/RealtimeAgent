@@ -8,7 +8,7 @@
 
 Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮没有连接物理 ESP32-S3。因此本文件记录最小真机联调入口、事件检查点和 AEC reference 写入要求；真机日志尚未产生，不能把 ESP32 真机能力描述为已完成。
 
-2026-05-07 更新：本轮已补齐 `audio_chat_esp32_s3.esp32_aec` 中的 ESP32-S3
+2026-05-07 更新：本轮已补齐 `realtime_agent_esp32_s3.esp32_aec` 中的 ESP32-S3
 协议参考状态机、网络参考端和自动契约测试。它能覆盖注册 payload、wake 后才打开
 `sensor.mic`、speaker output 回执、AEC reference ring 诊断、`sensor.rgb` stream 抓拍
 语义和 config sync 字段。`examples/for-blind-app/devices/native-esp32-glass/firmware` 也提供最小 ESP-IDF 工程骨架，
@@ -20,7 +20,7 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 1. 当前 `examples/for-blind-app/devices/native-esp32-glass/firmware` 参考工程
 2. 当前 `examples/for-blind-app/devices/native-esp32-glass` 端侧协议说明
 
-当前参考代码里的关键经验需要迁移到新版 audio-chat endpoint bridge：
+当前参考代码里的关键经验需要迁移到新版 realtime-agent endpoint bridge：
 
 1. AEC reference ring buffer。
 2. mic send queue。
@@ -33,18 +33,18 @@ Phase 2.5 已完成 server 侧协议、provider 和 playback 验收，但本轮�
 先使用 mock playback 配置确认 server SDK 基线：
 
 ```bash
-uv run audio-chat.dev.preflight --report runs/audio-chat/preflight-phase25.json
-uv run audio-chat.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
+uv run realtime-agent.dev.preflight --report runs/realtime-agent/preflight-phase25.json
+uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
 ```
 
 接真机时应使用 server YAML 配置作为入口，并把日志级别调到 DEBUG：
 
 ```bash
-LOG_LEVEL=DEBUG uv run audio-chat.server.run \
+LOG_LEVEL=DEBUG uv run realtime-agent.server.run \
   --config examples/for-blind-app/audio-server/server.yaml
 ```
 
-如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、TextAgentCore 和 Output Service，必须使用当前 stream chunk 协议。
+如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、VisionRealtimeAgentCore 和 Output Service，必须使用当前 stream chunk 协议。
 
 ## ESP32 端启动与刷写
 
@@ -75,20 +75,20 @@ ESP32-S3 端最小 bridge 固件需要提交：
 本地配置不应手写。先执行：
 
 ```bash
-uv run audio-chat.config.sync \
+uv run realtime-agent.config.sync \
   --server-url http://<server-lan-ip>:8765 \
   --user-id <user-id>
 ```
 
 然后把生成的 `config/generated/esp32-s3.local.env` 写入固件配置或 Kconfig。该文件包含：
 
-1. `AUDIO_CHAT_CONTROL_WS_URL`
-2. `AUDIO_CHAT_STREAM_WS_URL`
-3. `AUDIO_CHAT_USER_ID`
-4. `AUDIO_CHAT_DEVICE_ID`
-5. `AUDIO_CHAT_AUTH_MODE` / `AUDIO_CHAT_AUTH_TOKEN`
-6. `AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000`
-7. `AUDIO_CHAT_AUDIO_CHUNK_MS=20`
+1. `REALTIME_AGENT_CONTROL_WS_URL`
+2. `REALTIME_AGENT_STREAM_WS_URL`
+3. `REALTIME_AGENT_USER_ID`
+4. `REALTIME_AGENT_DEVICE_ID`
+5. `REALTIME_AGENT_AUTH_MODE` / `REALTIME_AGENT_AUTH_TOKEN`
+6. `REALTIME_AGENT_AUDIO_SAMPLE_RATE=16000`
+7. `REALTIME_AGENT_AUDIO_CHUNK_MS=20`
 8. properties 和 supports JSON
 
 当前 bridge 刷写前需要在 Kconfig 或本地配置里写入 server WebSocket 地址、WiFi 和设备
@@ -96,7 +96,7 @@ token。真实命令应在真机联调时补入本文件，避免提交本地 Wi
 
 ## 成功事件链
 
-真机验收必须在 `runs/audio-chat/...` 和 ESP32 串口日志中看到以下链路：
+真机验收必须在 `runs/realtime-agent/...` 和 ESP32 串口日志中看到以下链路：
 
 1. `control.device.registered`
 2. `control.user.wake.detected`

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from audio_chat_python_playback_glass.case_schema import load_case, load_suite
+from realtime_agent_python_playback_glass.case_schema import load_case, load_suite
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -18,7 +18,7 @@ def test_case_schema_loads_smoke_case_with_default_device_fields() -> None:
 
     assert case.id == "who_are_you"
     assert case.device["client_type"] == "python-playback-glass"
-    assert case.device["properties"]["audio_chat.audio_input"] == "sensor.mic"
+    assert case.device["properties"]["realtime_agent.audio_input"] == "sensor.mic"
     assert case.inputs["audio"]["path"].endswith("你是谁呀.wav")
     assert "actuator.speaker" in case.expect["streams"]["includes"]
 

@@ -26,7 +26,7 @@ def test_for_blind_capability_files_are_flat_and_minimal() -> None:
 def test_for_blind_capability_files_are_valid_python_and_use_public_api() -> None:
     """测试目标：确认精简后的能力文件语法正确并只依赖公开扩展面。
 
-    测试方法：用 AST 解析 `tools.py` 和 `tasks.py`，检查 `from audio_chat import ...` 导入。
+    测试方法：用 AST 解析 `tools.py` 和 `tasks.py`，检查 `from realtime_agent import ...` 导入。
     预期结果：业务能力可直接复制，不需要 import SDK 内部服务对象。
     """
 
@@ -50,12 +50,12 @@ def test_for_blind_capability_files_are_valid_python_and_use_public_api() -> Non
         if path.name == "__init__.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imported_from_audio_chat = set()
+        imported_from_realtime_agent = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "audio_chat":
-                imported_from_audio_chat.update(alias.name for alias in node.names)
-        assert imported_from_audio_chat
-        assert imported_from_audio_chat <= allowed_public_imports
+            if isinstance(node, ast.ImportFrom) and node.module == "realtime_agent":
+                imported_from_realtime_agent.update(alias.name for alias in node.names)
+        assert imported_from_realtime_agent
+        assert imported_from_realtime_agent <= allowed_public_imports
 
 
 def test_for_blind_capabilities_do_not_use_hidden_device_rpc_or_device_id_routing() -> None:

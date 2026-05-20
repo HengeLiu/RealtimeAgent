@@ -1,12 +1,12 @@
-# audio-chat Kotlin / Java SDK
+# realtime-agent Kotlin / Java SDK
 
-`audio-chat Kotlin / Java SDK` 是 Android/JVM 端侧通讯 SDK。它采用 Kotlin-first
+`realtime-agent Kotlin / Java SDK` 是 Android/JVM 端侧通讯 SDK。它采用 Kotlin-first
 API，同时保留 Java 可调用的静态入口。当前版本提供协议数据模型、设备注册
 payload 构造和 stream chunk 基础编解码。
 
 ## 遵循的协议
 
-协议版本：`audio-chat.v1`
+协议版本：`realtime-agent.v1`
 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ payload 构造和 stream chunk 基础编解码。
 控制事件字段和其他 SDK 保持一致：
 
 ```kotlin
-AudioChatEvent(
+RealtimeAgentEvent(
     eventName = "command.completed",
     userId = "user-001",
     producerId = "dev-android-001",
@@ -34,12 +34,12 @@ payload bytes
 
 ## 数据模型
 
-### `AudioChatDevice`
+### `RealtimeAgentDevice`
 
 构建设备注册 payload：
 
 ```kotlin
-val payload = AudioChatDevice.define("dev-android-001")
+val payload = RealtimeAgentDevice.define("dev-android-001")
     .user("user-001")
     .name("Android phone")
     .role("phone")
@@ -59,12 +59,12 @@ val payload = AudioChatDevice.define("dev-android-001")
 - `properties`
 - `supports`
 
-### `AudioChatEvent`
+### `RealtimeAgentEvent`
 
 事件信封模型：
 
 ```kotlin
-val event = AudioChatEvent(
+val event = RealtimeAgentEvent(
     eventName = "control.device.register.requested",
     userId = "user-001",
     producerId = "dev-android-001",
@@ -101,30 +101,30 @@ header JSON，再交给 codec 编码。
    到你的 Android/JVM 项目，例如：
 
    ```text
-   your-project/audio-chat-device/
+   your-project/realtime-agent-device/
    ```
 
 2. 在根 `settings.gradle.kts` 中加入：
 
    ```kotlin
-   include(":audio-chat-device")
-   project(":audio-chat-device").projectDir = file("audio-chat-device")
+   include(":realtime-agent-device")
+   project(":realtime-agent-device").projectDir = file("realtime-agent-device")
    ```
 
 3. 在 App 或 JVM module 中依赖：
 
    ```kotlin
    dependencies {
-       implementation(project(":audio-chat-device"))
+       implementation(project(":realtime-agent-device"))
    }
    ```
 
 4. 导入：
 
    ```kotlin
-   import io.audiochat.device.AudioChatDevice
-   import io.audiochat.device.AudioChatEvent
-   import io.audiochat.device.StreamChunkCodec
+   import io.realtimeagent.device.RealtimeAgentDevice
+   import io.realtimeagent.device.RealtimeAgentEvent
+   import io.realtimeagent.device.StreamChunkCodec
    ```
 
 ### 发布到 Maven 后的导入方式
@@ -133,7 +133,7 @@ header JSON，再交给 codec 编码。
 
 ```kotlin
 dependencies {
-    implementation("io.audiochat:device-client:0.1.0")
+    implementation("io.realtimeagent:device-client:0.1.0")
 }
 ```
 
@@ -150,7 +150,7 @@ val webSocket = okHttpClient.newWebSocket(request, listener)
 ```
 
 收到 server 事件后解析为 Map，再按 `event_name` 分发；发送时使用
-`AudioChatEvent.toMap()` 生成字段。
+`RealtimeAgentEvent.toMap()` 生成字段。
 
 ## 测试
 

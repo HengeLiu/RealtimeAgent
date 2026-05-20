@@ -7,20 +7,20 @@ from contextlib import suppress
 import pytest
 from aiohttp import web
 
-from audio_chat import AudioChatApp, AudioChatConfig, ToolContextFactory
-from audio_chat.output.service import OutputItem
-from audio_chat.protocol import StreamFormat
-from audio_chat.server import AudioChatHttpServer
-from audio_chat_device import AudioChatDeviceClient, DeviceBuilder
+from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, ToolContextFactory
+from realtime_agent.output.service import OutputItem
+from realtime_agent.protocol import StreamFormat
+from realtime_agent.server import RealtimeAgentHttpServer
+from realtime_agent_device import RealtimeAgentDeviceClient, DeviceBuilder
 
 
 pytestmark = [pytest.mark.sdk, pytest.mark.device_sdk, pytest.mark.interop]
 
 
-async def _start_loopback_server(app: AudioChatApp) -> tuple[web.AppRunner, str]:
-    """启动真实 AudioChatHttpServer，并返回可连接的本地 URL。"""
+async def _start_loopback_server(app: RealtimeAgentApp) -> tuple[web.AppRunner, str]:
+    """启动真实 RealtimeAgentHttpServer，并返回可连接的本地 URL。"""
 
-    server = AudioChatHttpServer(app)
+    server = RealtimeAgentHttpServer(app)
     web_app = server.create_web_app()
     runner = web.AppRunner(web_app)
     await runner.setup()
@@ -34,10 +34,10 @@ async def _start_loopback_server(app: AudioChatApp) -> tuple[web.AppRunner, str]
 
 
 async def _run_loopback_contract(tmp_path) -> None:
-    app = AudioChatApp(
-        AudioChatConfig(
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
-            agent_mode="text",
+            agent_mode="vision",
             default_actuator_speaker=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=40),
             asset_request_timeout_seconds=3,
         )
@@ -50,9 +50,9 @@ async def _run_loopback_contract(tmp_path) -> None:
         .user(user_id)
         .name("Loopback Python Device")
         .sensor_rgb(modes=["single"], format="jpeg", frequency_hz=1)
-        .property("audio_chat.audio_output", "actuator.speaker")
+        .property("realtime_agent.audio_output", "actuator.speaker")
     )
-    client = AudioChatDeviceClient(server_url=server_url, device=device)
+    client = RealtimeAgentDeviceClient(server_url=server_url, device=device)
     context = ToolContextFactory(app=app).create(user_id=user_id, session_id=device_id)
     received_events = []
     output_chunks = []
@@ -159,7 +159,7 @@ async def _run_loopback_contract(tmp_path) -> None:
 def test_python_device_sdk_interoperates_with_real_server_sdk_websocket(tmp_path) -> None:
     """测试目标：验证真实 Server SDK 与 Python Device SDK 可以通过 WebSocket 闭环。
 
-    测试方法：启动 `AudioChatHttpServer`，用 `AudioChatDeviceClient` 连接真实
+    测试方法：启动 `RealtimeAgentHttpServer`，用 `RealtimeAgentDeviceClient` 连接真实
     `/ws/control` 和 `/ws/stream`，依次触发 RGB 采集、设备命令和输出 stream。
     预期结果：server 获得 RGB asset 和 command.completed，device 收到 output
     stream chunk，并生成互操作测试报告。

@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from audio_chat import AudioChatApp
-from audio_chat.agent_core.providers import TranscriptEvent
-from audio_chat.protocol import Event, StreamChunk
+from realtime_agent import RealtimeAgentApp
+from realtime_agent.agent_core.providers import TranscriptEvent
+from realtime_agent.protocol import Event, StreamChunk
 
 
 @dataclass
@@ -77,15 +77,15 @@ class ScriptedAsrProvider:
         self.cancelled = True
 
 
-class ScriptedTextModel:
-    """脚本化文本模型 provider。
+class ScriptedVisionModel:
+    """脚本化Vision 模型 provider。
 
     主要功能：按预设 delta 返回助手回复，并记录 Server SDK 编译后的模型输入。
     主要属性：`calls` 保存每轮 `messages/tools`，用于断言上下文和工具面。
     """
 
-    provider_name = "test-scripted-text"
-    model = "test-scripted-text-model"
+    provider_name = "test-scripted-vision"
+    model = "test-scripted-vision-model"
 
     def __init__(self, deltas: Iterable[str]) -> None:
         self.deltas = list(deltas)
@@ -102,7 +102,7 @@ class ScriptedTextModel:
             yield delta
 
     def stream_text(self, transcript: str):
-        """兼容旧 TextModelAdapter 接口。"""
+        """兼容旧 Vision model provider 接口。"""
 
         yield from self.stream_messages(messages=[{"role": "user", "content": transcript}], tools=[])
 
@@ -112,7 +112,7 @@ class ScriptedTextModel:
         self.cancelled = True
 
 
-def register_audio_device(app: AudioChatApp, *, user_id: str, device_id: str) -> RecordingEndpoint:
+def register_audio_device(app: RealtimeAgentApp, *, user_id: str, device_id: str) -> RecordingEndpoint:
     """注册一台具备系统麦克风和扬声器链路的测试设备。
 
     主要逻辑：设备公开 `supports` 仍为空结构，麦克风和扬声器通过 properties 声明为
@@ -136,8 +136,8 @@ def register_audio_device(app: AudioChatApp, *, user_id: str, device_id: str) ->
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
                 "properties": {
-                    "audio_chat.audio_input": "sensor.mic",
-                    "audio_chat.audio_output": "actuator.speaker",
+                    "realtime_agent.audio_input": "sensor.mic",
+                    "realtime_agent.audio_output": "actuator.speaker",
                 },
             },
         ),
@@ -148,23 +148,23 @@ def register_audio_device(app: AudioChatApp, *, user_id: str, device_id: str) ->
 
 
 def install_text_turn_providers(
-    app: AudioChatApp,
+    app: RealtimeAgentApp,
     *,
     stream_id: str,
     transcript: str,
     response_deltas: Iterable[str],
-) -> tuple[ScriptedAsrProvider, ScriptedTextModel]:
-    """把脚本化 ASR 和文本模型安装到 Text Agent Core。
+) -> tuple[ScriptedAsrProvider, ScriptedVisionModel]:
+    """把脚本化 ASR 和Vision 模型安装到 Vision Realtime Agent Core。
 
     主要逻辑：仅在测试内替换 provider 对象，真实 SDK 构造和配置路径不受影响。
     参数：`stream_id` 绑定本轮麦克风输入流，`transcript` 和 `response_deltas` 描述模型脚本。
-    返回值：安装后的 ASR provider 和文本模型 provider。
-    异常情况：当前 app 不是 Text 链路或缺少 provider 容器时抛出 AttributeError。
+    返回值：安装后的 ASR provider 和Vision 模型 provider。
+    异常情况：当前 app 不是 Vision 链路或缺少 provider 容器时抛出 AttributeError。
     """
 
     core = getattr(app.agent_core, "core", app.agent_core)
     asr_provider = ScriptedAsrProvider(transcript)
-    text_model = ScriptedTextModel(response_deltas)
+    vision_model = ScriptedVisionModel(response_deltas)
     core.asr_pipeline._providers[stream_id] = asr_provider
-    core.text_model = text_model
-    return asr_provider, text_model
+    core.vision_model = vision_model
+    return asr_provider, vision_model

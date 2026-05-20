@@ -1,5 +1,5 @@
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_command_failed",
   "event_name": "command.failed",
   "timestamp_ms": 1760000000600,

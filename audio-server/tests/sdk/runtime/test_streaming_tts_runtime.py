@@ -4,10 +4,10 @@ import audioop
 import json
 import time
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.output import AssistantTextDelta
-from audio_chat.output.service import MockStreamingTTS, TtsProviderConfig, build_tts_provider
-from audio_chat.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.output import AssistantTextDelta
+from realtime_agent.output.service import MockStreamingTTS, TtsProviderConfig, build_tts_provider
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 
 
 class Connection:
@@ -29,7 +29,7 @@ class Connection:
         self.chunks.append(chunk)
 
 
-def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "user-001") -> None:
+def register_speaker(app: RealtimeAgentApp, connection: Connection, user_id: str = "user-001") -> None:
     """注册一个可消费 speaker stream 的测试设备。"""
 
     app.register_device(
@@ -41,7 +41,7 @@ def register_speaker(app: AudioChatApp, connection: Connection, user_id: str = "
                 "device_id": connection.device_id,
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -74,11 +74,11 @@ def test_output_service_persists_tts_latency_metrics_in_audio_delta_event(tmp_pa
     预期结果：端侧收到音频，`model-events.jsonl` 中记录 `first_chunk_latency_ms`。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-tts", text="hello")
     )
 
@@ -134,16 +134,16 @@ def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
 
             return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     fake_tts = FinishFlushTTS()
     app.output_service.router._injected_tts = fake_tts
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-flush", text="第一句")
     )
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-flush", text="", final=True)
     )
 
@@ -193,7 +193,7 @@ def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> Non
 
             return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     router = app.output_service.router
@@ -206,18 +206,18 @@ def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> Non
 
     router._new_tts = next_tts  # type: ignore[method-assign]
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-task", text="第一轮")
     )
     first_task = router._source_by_session["sess-task"].tts
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-task", text="", final=True)
     )
 
     assert first_task.finished
     assert "sess-task" not in router._source_by_session
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-task", text="第二轮")
     )
     second_task = router._source_by_session["sess-task"].tts
@@ -227,7 +227,7 @@ def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> Non
     assert connection.chunks
 
 
-def test_output_service_background_drains_tts_audio_between_text_deltas(tmp_path) -> None:
+def test_output_service_background_drains_tts_audio_between_vision_deltas(tmp_path) -> None:
     """测试目标：验证 TTS 回调音频不必等下一次 text delta 或 final 才下发。
 
     测试方法：注入一个 `synthesize_delta()` 不返回音频、但 `drain_audio()` 返回音频的
@@ -271,13 +271,13 @@ def test_output_service_background_drains_tts_audio_between_text_deltas(tmp_path
 
             return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     fake_tts = BackgroundDrainTTS()
     app.output_service.router._injected_tts = fake_tts
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-background", text="后台音频")
     )
     deadline = time.time() + 1.0
@@ -289,18 +289,18 @@ def test_output_service_background_drains_tts_audio_between_text_deltas(tmp_path
     assert sum(len(chunk.payload) for chunk in connection.chunks) == 960
 
 
-def test_text_tts_empty_final_does_not_open_output_stream(tmp_path) -> None:
+def test_vision_tts_empty_final_does_not_open_output_stream(tmp_path) -> None:
     """测试目标：验证没有任何文本 delta 时，空 final 不会打开扬声器输出流。
 
     测试方法：直接提交 `text=""、final=True` 的 AssistantTextDelta。
     预期结果：端侧不会收到 `stream.output.open.requested`，runs 记录 empty_output。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
 
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-empty-final", text="", final=True)
     )
 
@@ -312,7 +312,7 @@ def test_text_tts_empty_final_does_not_open_output_stream(tmp_path) -> None:
     assert '"empty_output": true' in model_events
 
 
-def test_text_tts_failure_releases_active_playback_for_next_turn(tmp_path) -> None:
+def test_vision_tts_failure_releases_active_playback_for_next_turn(tmp_path) -> None:
     """测试目标：验证 TTS 在 output stream 打开后失败时，会释放 active 播放状态。
 
     测试方法：先注入一个 `synthesize_delta()` 抛异常的 TTS，触发输出失败；再换成
@@ -347,13 +347,13 @@ def test_text_tts_failure_releases_active_playback_for_next_turn(tmp_path) -> No
 
             return {"provider": self.provider_name, "model": self.model, "sample_rate_hz": 24000}
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
     connection = Connection("dev-speaker")
     register_speaker(app, connection)
     app.output_service.router._injected_tts = FailingTTS()
 
     try:
-        app.output_service.on_assistant_text_delta(
+        app.output_service.on_assistant_vision_delta(
             AssistantTextDelta(user_id="user-001", session_id="sess-failing-tts", text="会失败")
         )
     except RuntimeError as exc:
@@ -362,7 +362,7 @@ def test_text_tts_failure_releases_active_playback_for_next_turn(tmp_path) -> No
         raise AssertionError("expected TTS failure")
 
     app.output_service.router._injected_tts = MockStreamingTTS(sample_rate_hz=24000)
-    app.output_service.on_assistant_text_delta(
+    app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-after-failure", text="恢复播放")
     )
 
@@ -406,7 +406,7 @@ def test_native_audio_delta_done_closes_stream_with_declared_sample_rate(tmp_pat
     预期结果：端侧收到 24k chunk，并收到 output close 事件。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-native")
     register_speaker(app, connection)
     fmt = StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20)

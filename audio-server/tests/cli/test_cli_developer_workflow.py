@@ -10,22 +10,22 @@ AUDIO_ROOT = Path(__file__).resolve().parents[3]
 
 
 DEVELOPER_COMMANDS = [
-    "audio-chat.config.sync",
-    "audio-chat.server.run",
-    "audio-chat.server.start",
-    "audio-chat.server.stop",
-    "audio-chat.server.logs",
-    "audio-chat.web.open",
-    "audio-chat.ios.open",
-    "audio-chat.ios.build-sim",
-    "audio-chat.esp32.config",
-    "audio-chat.esp32.build",
-    "audio-chat.esp32.flash",
-    "audio-chat.esp32.monitor",
-    "audio-chat.playback.glass",
-    "audio-chat.dev.preflight",
-    "audio-chat.dev.live-check",
-    "audio-chat.sdk.package-check",
+    "realtime-agent.config.sync",
+    "realtime-agent.server.run",
+    "realtime-agent.server.start",
+    "realtime-agent.server.stop",
+    "realtime-agent.server.logs",
+    "realtime-agent.web.open",
+    "realtime-agent.ios.open",
+    "realtime-agent.ios.build-sim",
+    "realtime-agent.esp32.config",
+    "realtime-agent.esp32.build",
+    "realtime-agent.esp32.flash",
+    "realtime-agent.esp32.monitor",
+    "realtime-agent.playback.glass",
+    "realtime-agent.dev.preflight",
+    "realtime-agent.dev.live-check",
+    "realtime-agent.sdk.package-check",
 ]
 
 
@@ -66,12 +66,12 @@ def test_developer_entry_points_show_help() -> None:
 def test_python_phone_endpoint_module_shows_help() -> None:
     """测试目标：确认 Python 手机参考端通过自身 module 入口启动，而不是 SDK CLI。
 
-    测试方法：执行 `uv run python -m audio_chat_python_phone_mock --help`。
-    预期结果：命令输出帮助文本，说明端侧入口不依赖 `audio_chat` SDK 命令命名空间。
+    测试方法：执行 `uv run python -m realtime_agent_python_phone_mock --help`。
+    预期结果：命令输出帮助文本，说明端侧入口不依赖 `realtime_agent` SDK 命令命名空间。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "python", "-m", "audio_chat_python_phone_mock", "--help"],
+        ["uv", "run", "python", "-m", "realtime_agent_python_phone_mock", "--help"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -95,7 +95,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
         [
             "uv",
             "run",
-            "audio-chat.server.start",
+            "realtime-agent.server.start",
             "--config",
             "examples/for-blind-app/audio-server/server.yaml",
             "--pid-file",
@@ -114,7 +114,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
     assert log_file.read_text(encoding="utf-8").strip()
 
     logs = subprocess.run(
-        ["uv", "run", "audio-chat.server.logs", "--log-file", str(log_file)],
+        ["uv", "run", "realtime-agent.server.logs", "--log-file", str(log_file)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -124,7 +124,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
     assert "dry-run start" in logs.stdout
 
     stop = subprocess.run(
-        ["uv", "run", "audio-chat.server.stop", "--pid-file", str(pid_file), "--dry-run"],
+        ["uv", "run", "realtime-agent.server.stop", "--pid-file", str(pid_file), "--dry-run"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -136,12 +136,12 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
 def test_web_open_print_url_is_side_effect_free() -> None:
     """测试目标：确认 browser-glass 打开命令支持无副作用检查模式。
 
-    测试方法：执行 `audio-chat.web.open --print-url`。
+    测试方法：执行 `realtime-agent.web.open --print-url`。
     预期结果：命令不启动浏览器，只输出可打开的 file URL。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.web.open", "--print-url"],
+        ["uv", "run", "realtime-agent.web.open", "--print-url"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -155,13 +155,13 @@ def test_web_open_print_url_is_side_effect_free() -> None:
 def test_web_open_serve_print_url_uses_local_http_origin() -> None:
     """测试目标：确认 browser-glass 可通过本地 HTTP origin 打开。
 
-    测试方法：执行 `audio-chat.web.open --serve --print-url`，不真正打开浏览器。
+    测试方法：执行 `realtime-agent.web.open --serve --print-url`，不真正打开浏览器。
     预期结果：命令输出 `http://127.0.0.1:8766/.../browser-glass/index.html`
     且 query 中带有真正的 audio server URL，避免页面误连静态服务端口。
     """
 
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.web.open", "--serve", "--print-url"],
+        ["uv", "run", "realtime-agent.web.open", "--serve", "--print-url"],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,
@@ -178,13 +178,13 @@ def test_web_open_serve_print_url_uses_local_http_origin() -> None:
 def test_package_check_can_write_report(tmp_path) -> None:
     """测试目标：确认 SDK 包检查入口能生成 JSON 报告。
 
-    测试方法：执行 `audio-chat.sdk.package-check --report`。
+    测试方法：执行 `realtime-agent.sdk.package-check --report`。
     预期结果：报告 ok，且至少覆盖当前 pyproject 中的开发者命令。
     """
 
     report = tmp_path / "package-check.json"
     completed = subprocess.run(
-        ["uv", "run", "audio-chat.sdk.package-check", "--report", str(report)],
+        ["uv", "run", "realtime-agent.sdk.package-check", "--report", str(report)],
         cwd=AUDIO_ROOT,
         text=True,
         capture_output=True,

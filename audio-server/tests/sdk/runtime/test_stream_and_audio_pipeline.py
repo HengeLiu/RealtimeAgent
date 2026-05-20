@@ -1,12 +1,12 @@
 import json
 from pathlib import Path
 
-import audio_chat.agent_core.text as text_module
-from audio_chat.agent_core import TextAgentCore
-from audio_chat.agent_core.providers import TranscriptEvent
-from audio_chat.audio_pipeline import AudioPipeline, FormatNormalizer
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
+import realtime_agent.agent_core.vision as text_module
+from realtime_agent.agent_core import VisionRealtimeAgentCore
+from realtime_agent.agent_core.providers import TranscriptEvent
+from realtime_agent.audio_pipeline import AudioPipeline, FormatNormalizer
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
 
 
 def test_stream_chunk_codec_preserves_binary_header_and_payload() -> None:
@@ -40,8 +40,8 @@ def test_stream_chunk_codec_preserves_binary_header_and_payload() -> None:
 
 
 def test_audio_pipeline_rejects_non_mic_stream() -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root="runs/test-audio-pipeline"))
-    pipeline = AudioPipeline(text_agent_core=app.text_agent_core)
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root="runs/test-audio-pipeline"))
+    pipeline = AudioPipeline(vision_agent_core=app.vision_agent_core)
     chunk = StreamChunk(
         user_id="user-001",
         session_id="sess-001",
@@ -76,12 +76,12 @@ def test_format_normalizer_accepts_default_sensor_mic_format() -> None:
 def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
     """测试目标：验证默认 stream 限制可以承载浏览器抓拍 JPEG。
 
-    测试方法：使用默认 `AudioChatConfig` 打开 `sensor.rgb` 输入流，并上传一个明显
+    测试方法：使用默认 `RealtimeAgentConfig` 打开 `sensor.rgb` 输入流，并上传一个明显
     大于 8KiB 的 JPEG payload。
     预期结果：服务端不再按音频小包限制拒绝图片，资产能进入缓存。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     handle = app.open_input_stream(
         user_id="user-browser-photo",
         producer_id="dev-browser-glass",
@@ -121,7 +121,7 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
     返回当前配置的 chunk 大小。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=123456))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), stream_max_chunk_bytes=123456))
     response = app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -138,8 +138,8 @@ def test_device_registration_reports_effective_stream_limit(tmp_path) -> None:
     assert response.payload["effective_config"]["stream.max_chunk_bytes"] == 123456
 
 
-def test_text_agent_core_final_mic_chunk_emits_output() -> None:
-    app = AudioChatApp(AudioChatConfig(runs_root="runs/test-agent-core", agent_mode="text"))
+def test_vision_agent_core_final_mic_chunk_emits_output() -> None:
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root="runs/test-agent-core", agent_mode="vision"))
 
     class Connection:
         device_id = "dev-playback"
@@ -164,7 +164,7 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
                     "device_id": "dev-playback",
                     "auth": {"mode": "disabled"},
                     "supports": {"sensors": [], "actuators": []},
-                    "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                    "properties": {"realtime_agent.audio_output": "actuator.speaker"},
                 },
             ),
             connection,
@@ -187,7 +187,7 @@ def test_text_agent_core_final_mic_chunk_emits_output() -> None:
     assert connection.chunks
 
 
-def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_path) -> None:
+def test_vision_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_path) -> None:
     """测试目标：验证连续对话同一 session 内的多轮麦克风输入都能触发回复。
 
     测试方法：注册一个浏览器式端侧，在同一 active session 下依次打开两条
@@ -196,7 +196,7 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
     不会因为 session_id 已响应过而跳过第二轮。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
 
     class Connection:
         device_id = "dev-continuous"
@@ -224,7 +224,7 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
                     "sensors": [{"type": "mic"}],
                     "actuators": [{"type": "speaker"}],
                 },
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -252,8 +252,8 @@ def test_text_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_p
     assert [message["role"] for message in messages].count("assistant") == 2
 
 
-def test_text_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path, monkeypatch) -> None:
-    """测试目标：验证 Text 链路每条麦克风输入流使用独立 ASR 会话。
+def test_vision_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 Vision 链路每条麦克风输入流使用独立 ASR 会话。
 
     测试方法：把 ASR provider 替换成 final 后关闭自身的假实现，在同一 session 下
     连续提交两条 `sensor.mic` stream。
@@ -284,7 +284,7 @@ def test_text_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path, 
 
     monkeypatch.setattr(text_module, "build_asr_provider", lambda config: (ClosingAsrProvider(), None))
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
 
     class Connection:
         device_id = "dev-recreate-asr"
@@ -312,7 +312,7 @@ def test_text_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path, 
                     "sensors": [{"type": "mic"}],
                     "actuators": [{"type": "speaker"}],
                 },
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         connection,
@@ -348,7 +348,7 @@ def test_stream_lifecycle_idle_timeout_and_input_failed_events(tmp_path) -> None
     预期结果：运行态进入 failed/closed，并写入对应生命周期事件。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), stream_idle_timeout_seconds=0.01))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), stream_idle_timeout_seconds=0.01))
     failed = app.open_input_stream(user_id="user-life", producer_id="dev-life")
 
     app.stream_service.fail_stream(failed.stream_id, reason="bad_header")
@@ -370,7 +370,7 @@ def test_closed_input_stream_late_chunk_is_dropped(tmp_path) -> None:
     预期结果：写入过程不抛 `StreamNotOpenError`，不会进入音频处理，只记录 dropped 生命周期事件。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     handle = app.open_input_stream(user_id="user-late", producer_id="dev-late")
     app.stream_service.close_stream(handle.stream_id, reason="idle_timeout")
 
@@ -401,7 +401,7 @@ def test_mic_input_close_is_pushed_to_producer_device(tmp_path) -> None:
     输入流。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
 
     class Connection:
         device_id = "dev-browser-glass"
@@ -425,7 +425,7 @@ def test_mic_input_close_is_pushed_to_producer_device(tmp_path) -> None:
                         "device_id": connection.device_id,
                         "auth": {"mode": "disabled"},
                         "supports": {"sensors": [], "actuators": []},
-                        "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                        "properties": {"realtime_agent.audio_output": "actuator.speaker"},
                     },
                 ),
                 connection,
@@ -449,7 +449,7 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
     预期结果：后续字节和生命周期事件只发送给打开 stream 时匹配到的第一个设备。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
 
     class Connection:
         def __init__(self, device_id: str) -> None:
@@ -476,7 +476,7 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
                     "device_id": connection.device_id,
                     "auth": {"mode": "disabled"},
                     "supports": {"sensors": [], "actuators": []},
-                    "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                    "properties": {"realtime_agent.audio_output": "actuator.speaker"},
                 },
             ),
             connection,
@@ -532,7 +532,7 @@ def test_asset_capture_rgb_stream_does_not_route_to_phone_display(tmp_path) -> N
     预期结果：该流只进入服务端资产链路，不向手机下发 open/close 事件或视频 chunk。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
 
     class Connection:
         def __init__(self, device_id: str) -> None:
@@ -594,7 +594,7 @@ def test_asset_capture_rgb_stream_does_not_route_to_phone_display(tmp_path) -> N
             payload={
                 "stream_type": "sensor.rgb",
                 "request_id": "asset_req_probe",
-                "reason": "realtime_visual_sampler",
+                "reason": "omni_visual_sampler",
                 "format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
             },
         )

@@ -1,6 +1,6 @@
-# audio-chat-device Python SDK
+# realtime-agent-device Python SDK
 
-`audio-chat-device` 是 Python 端侧通讯 SDK。它只负责设备端和 `audio-chat`
+`realtime-agent-device` 是 Python 端侧通讯 SDK。它只负责设备端和 `realtime-agent`
 server 通讯，不包含业务 Tool / Task、不包含硬件驱动、不依赖 server 内部运行时。
 
 适用场景：
@@ -12,7 +12,7 @@ server 通讯，不包含业务 Tool / Task、不包含硬件驱动、不依赖 
 
 ## 遵循的协议
 
-本 SDK 遵循 `audio-chat.v1` 端侧协议：
+本 SDK 遵循 `realtime-agent.v1` 端侧协议：
 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ server 通讯，不包含业务 Tool / Task、不包含硬件驱动、不依赖 
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_xxx",
   "event_name": "command.completed",
   "timestamp_ms": 1760000000000,
@@ -74,7 +74,7 @@ device = (
 - `supports.sensors`
 - `supports.actuators`
 
-### `AudioChatEvent`
+### `RealtimeAgentEvent`
 
 控制事件信封。通常不需要直接构造 JSON 字典，可通过 `client.event()` 或
 `client.send_event_name()` 发送。
@@ -88,7 +88,7 @@ device = (
 - `StreamChunkCodec.encode_header(header, payload)`
 - `StreamChunkCodec.decode_header(raw)`
 
-### `AudioChatDeviceClient`
+### `RealtimeAgentDeviceClient`
 
 负责：
 
@@ -114,7 +114,7 @@ uv pip install -e .
 然后在代码中导入：
 
 ```python
-from audio_chat_device import AudioChatDeviceClient, DeviceBuilder
+from realtime_agent_device import RealtimeAgentDeviceClient, DeviceBuilder
 ```
 
 ### 复制到独立项目
@@ -131,17 +131,17 @@ from audio_chat_device import AudioChatDeviceClient, DeviceBuilder
 3. 业务代码导入：
 
    ```python
-   from audio_chat_device import AudioChatDeviceClient
+   from realtime_agent_device import RealtimeAgentDeviceClient
    ```
 
-后续如果发布到 PyPI，建议包名保持为 `audio-chat-device`。
+后续如果发布到 PyPI，建议包名保持为 `realtime-agent-device`。
 
 ## 最小注册示例
 
 ```python
 import asyncio
 
-from audio_chat_device import AudioChatDeviceClient, DeviceBuilder
+from realtime_agent_device import RealtimeAgentDeviceClient, DeviceBuilder
 
 
 async def main() -> None:
@@ -154,7 +154,7 @@ async def main() -> None:
         .actuator_vibrator(["vibrate"])
     )
 
-    client = AudioChatDeviceClient(
+    client = RealtimeAgentDeviceClient(
         server_url="http://127.0.0.1:8765",
         device=device,
     )

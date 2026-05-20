@@ -35,13 +35,13 @@ def test_browser_device_uses_simplified_device_registration_protocol() -> None:
 def test_browser_device_supports_match_checked_capability_file() -> None:
     """测试目标：验证页面内置 supports 与设备能力文件保持同一套语义 ID。
 
-    测试方法：读取 `device.audio-chat.yaml`，并静态检查页面注册能力覆盖浏览器已实现能力。
+    测试方法：读取 `device.realtime-agent.yaml`，并静态检查页面注册能力覆盖浏览器已实现能力。
     预期结果：浏览器页面和能力文件都使用 `sensor.mic`、`sensor.rgb`、
     `actuator.speaker`、`actuator.haptic`，避免示例互相矛盾。
     """
 
     html = _html()
-    capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.audio-chat.yaml").read_text(encoding="utf-8"))
+    capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.realtime-agent.yaml").read_text(encoding="utf-8"))
     sensor_types = {item["type"] for item in capability_file["supports"]["sensors"]}
     actuator_types = {item["type"] for item in capability_file["supports"]["actuators"]}
 
@@ -49,8 +49,8 @@ def test_browser_device_supports_match_checked_capability_file() -> None:
     assert "vibrator" in actuator_types
     assert 'type: "rgb"' in html
     assert 'type: "vibrator"' in html
-    assert '"audio_chat.audio_input": "sensor.mic"' in html
-    assert '"audio_chat.audio_output": "actuator.speaker"' in html
+    assert '"realtime_agent.audio_input": "sensor.mic"' in html
+    assert '"realtime_agent.audio_output": "actuator.speaker"' in html
 
 
 def test_browser_device_declares_and_handles_peer_video_sender() -> None:
@@ -61,7 +61,7 @@ def test_browser_device_declares_and_handles_peer_video_sender() -> None:
     """
 
     html = _html()
-    capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.audio-chat.yaml").read_text(encoding="utf-8"))
+    capability_file = yaml.safe_load((BROWSER_DEVICE_ROOT / "device.realtime-agent.yaml").read_text(encoding="utf-8"))
 
     assert capability_file["properties"]["device_role"] == "glass"
     assert capability_file["properties"]["peer.video.sender"] is True
@@ -174,7 +174,7 @@ def test_browser_device_persists_form_config_and_stable_device_id() -> None:
 
     html = _html()
 
-    assert 'BROWSER_CONFIG_STORAGE_KEY = "audio-chat.browser-glass.v1"' in html
+    assert 'BROWSER_CONFIG_STORAGE_KEY = "realtime-agent.browser-glass.v1"' in html
     assert 'DEFAULT_DEVICE_ID = "dev-browser-glass-001"' in html
     assert "loadStoredBrowserConfig()" in html
     assert "usableStoredServerUrl(stored.server_url)" in html
@@ -217,7 +217,7 @@ def test_browser_device_subscribes_all_event_prefixes_for_debug_log() -> None:
     html = _html()
 
     assert "logBroadcastEvent(item);" in html
-    assert "controlWs.onmessage = (message) => handleControlEvent(AudioChatEvent.fromObject(JSON.parse(message.data)).toObject());" in html
+    assert "controlWs.onmessage = (message) => handleControlEvent(RealtimeAgentEvent.fromObject(JSON.parse(message.data)).toObject());" in html
 
 
 def test_browser_device_opens_stream_socket_after_audio_session() -> None:
@@ -388,7 +388,7 @@ def test_browser_device_does_not_expose_manual_sensor_rgb_upload_button() -> Non
     assert "uploadSingleVisualSnapshot(item)" in html
 
 
-def test_browser_device_appends_tail_silence_for_offline_realtime_audio() -> None:
+def test_browser_device_appends_tail_silence_for_offline_omni_audio() -> None:
     """测试目标：验证离线音频实时注入会追加短静音尾巴。
 
     测试方法：静态检查 browser-glass 在读取离线音频后追加固定静音片段。
@@ -414,7 +414,7 @@ def test_browser_device_open_cli_defaults_to_new_example() -> None:
     预期结果：默认入口指向 `examples/dev-support/devices/browser-glass/index.html`。
     """
 
-    source = (ROOT / "audio-server" / "audio_chat" / "cli" / "web.py").read_text(encoding="utf-8")
+    source = (ROOT / "audio-server" / "realtime_agent" / "cli" / "web.py").read_text(encoding="utf-8")
 
     assert "examples/dev-support/devices/browser-glass/index.html" in source
     old_default = "examples/dev-support/devices/browser" + "-device/index.html"

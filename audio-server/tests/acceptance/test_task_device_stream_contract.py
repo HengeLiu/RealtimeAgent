@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk, StreamFormat
-from audio_chat.tasks import BaseTask, TaskContext, TaskSignal
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.tasks import BaseTask, TaskContext, TaskSignal
 
 
 class RgbTaskEndpoint:
@@ -13,7 +13,7 @@ class RgbTaskEndpoint:
     主要功能：只响应 stream.control.open.requested，通过 sensor.rgb stream 上传帧。
     """
 
-    def __init__(self, *, app: AudioChatApp, user_id: str, device_id: str) -> None:
+    def __init__(self, *, app: RealtimeAgentApp, user_id: str, device_id: str) -> None:
         self.app = app
         self.user_id = user_id
         self.device_id = device_id
@@ -129,7 +129,7 @@ class CancellableRgbTask(ContinuousRgbProductionTask):
         )
 
 
-def register_endpoint(app: AudioChatApp, endpoint: RgbTaskEndpoint) -> None:
+def register_endpoint(app: RealtimeAgentApp, endpoint: RgbTaskEndpoint) -> None:
     """注册 RGB 生产端点。"""
 
     response = app.register_device(
@@ -155,7 +155,7 @@ def test_continuous_sensor_task_uses_only_event_and_stream(tmp_path) -> None:
     预期结果：任务完成、资产落地、task signal 记录帧数，未引入 device_id RPC。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_root=str(tmp_path / "assets")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), asset_root=str(tmp_path / "assets")))
     app.task_engine.register(ContinuousRgbProductionTask)
     endpoint = RgbTaskEndpoint(app=app, user_id="user-rgb", device_id="dev-rgb")
     register_endpoint(app, endpoint)
@@ -191,7 +191,7 @@ def test_cancelling_sensor_task_publishes_stop_configure_event(tmp_path) -> None
     预期结果：端侧收到第二个 configure event，payload.mode 为 stop。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), asset_root=str(tmp_path / "assets")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), asset_root=str(tmp_path / "assets")))
     app.task_engine.register(CancellableRgbTask)
     endpoint = RgbTaskEndpoint(app=app, user_id="user-rgb-cancel", device_id="dev-rgb-cancel")
     register_endpoint(app, endpoint)

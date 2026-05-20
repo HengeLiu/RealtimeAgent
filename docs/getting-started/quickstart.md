@@ -1,6 +1,6 @@
 # 快速开始
 
-本页帮助你在本地跑通 `audio-chat` 的最小链路：安装 SDK，启动示例 server，
+本页帮助你在本地跑通 `realtime-agent` 的最小链路：安装 SDK，启动示例 server，
 连接开发/测试支持组件，并查看调试接口。
 
 ## 环境要求
@@ -17,7 +17,7 @@ uv sync --python 3.11
 uv pip install -e .
 ```
 
-如果 `uv run audio-chat.*` 找不到命令，重新执行 editable 安装：
+如果 `uv run realtime-agent.*` 找不到命令，重新执行 editable 安装：
 
 ```bash
 uv pip install -e .
@@ -26,7 +26,7 @@ uv pip install -e .
 ## 启动示例 server
 
 ```bash
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
 默认 server 地址：
@@ -48,7 +48,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 在另一个终端运行：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 `--serve` 会启动本地静态服务并打开 browser-glass 页面，默认地址类似：
@@ -74,20 +74,20 @@ browser-glass 是开发支持组件，页面通过 ES module 导入本地 TypeSc
 在协议层注册为普通 Device，不代表 SDK 内置了固定的手机设备类型：
 
 ```bash
-uv run --extra gui python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 该命令会打开 PySide6 视频窗口，并注册为 `dev-python-phone-preview`。它声明
 `endpoint.role.visual_display`、`endpoint.compute.vision`、`actuator.display.rgb`
 和 `peer.video.receiver`，默认使用 `vision.provider=yolo`，最近原始帧写入
-`runs/audio-chat/python-phone/latest-rgb.png`，YOLO 标注帧写入
-`runs/audio-chat/python-phone/latest-yolo.jpg`。
+`runs/realtime-agent/python-phone/latest-rgb.png`，YOLO 标注帧写入
+`runs/realtime-agent/python-phone/latest-yolo.jpg`。
 
 如果只想验证简单设备协议、RGB 上传或振动 mock，可以另开 mock 配置。这个配置
 同样属于开发/测试支持：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 联调视频任务时，保持浏览器设备和 Python phone 使用同一个
@@ -99,7 +99,7 @@ server 的 realtime visual sampler 会按需请求单帧资产，但这类带 `r
 ## 校验设备能力文件
 
 ```bash
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 设备能力文件描述端侧支持哪些传感器和执行器。业务 Tool / Task 会通过 Context API 使用这些能力。
@@ -107,13 +107,13 @@ uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/dev
 ## 跑一个无头回放测试
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
 ```
 
 这条链路使用录制音频样例和 mock ASR，覆盖：
 
 ```text
-sensor.mic -> ASR -> TextAgentCore -> Tool -> Streaming TTS -> actuator.speaker
+sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker
 ```
 
 ## 看运行产物

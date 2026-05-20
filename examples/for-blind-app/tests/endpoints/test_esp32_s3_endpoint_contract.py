@@ -6,15 +6,15 @@ from pathlib import Path
 
 from aiohttp import web
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat_esp32_s3.esp32_aec import (
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent_esp32_s3.esp32_aec import (
     DEFAULT_CHUNK_BYTES,
     Esp32AecEndpointState,
     Esp32S3EndpointConfig,
     NetworkEsp32S3Endpoint,
 )
-from audio_chat.protocol import Event
-from audio_chat.server import AudioChatHttpServer
+from realtime_agent.protocol import Event
+from realtime_agent.server import RealtimeAgentHttpServer
 
 
 def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
@@ -41,10 +41,10 @@ def test_esp32_s3_registration_payload_matches_event_stream_contract() -> None:
     assert payload["properties"]["audio.playback_reference"] == "endpoint_ring_buffer"
     assert payload["properties"]["sensor.rgb.format"]["codec"] == "jpeg"
     assert payload["properties"]["direct.camera_source"] is True
-    assert payload["properties"]["direct.camera.frame_format"] == "audio_chat.direct_frame.v1"
+    assert payload["properties"]["direct.camera.frame_format"] == "realtime_agent.direct_frame.v1"
     assert "routes" not in payload
-    assert payload["properties"]["audio_chat.audio_input"] == "sensor.mic"
-    assert payload["properties"]["audio_chat.audio_output"] == "actuator.speaker"
+    assert payload["properties"]["realtime_agent.audio_input"] == "sensor.mic"
+    assert payload["properties"]["realtime_agent.audio_output"] == "actuator.speaker"
     assert payload["supports"]["sensors"][0]["type"] == "rgb"
     assert "target_device" not in str(payload)
     assert "phone" not in payload["client_type"]
@@ -131,7 +131,7 @@ def test_esp32_s3_rgb_config_can_update_direct_camera_sink_uri() -> None:
 
 
 def test_esp32_s3_encodes_direct_rgb_frame_for_ios_sink() -> None:
-    """测试目标：验证 ESP32-S3 参考端编码 audio-chat 相机直连帧。
+    """测试目标：验证 ESP32-S3 参考端编码 realtime-agent 相机直连帧。
 
     测试方法：调用状态机的直连相机帧编码方法，拆出 4 字节大端 header 长度、
     JSON header 和 JPEG payload。
@@ -159,7 +159,7 @@ def test_esp32_s3_encodes_direct_rgb_frame_for_ios_sink() -> None:
 def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
     """测试目标：验证 ESP32-S3 `.env` 字段可被参考端解析。
 
-    测试方法：写入与 `audio-chat.config.sync` 相同形态的 env 文件并读取。
+    测试方法：写入与 `realtime-agent.config.sync` 相同形态的 env 文件并读取。
     预期结果：server、user、device、auth、音频格式和 AEC 字段进入配置对象，注册
     payload 使用同一组值。
     """
@@ -168,18 +168,18 @@ def test_esp32_s3_config_env_round_trip(tmp_path: Path) -> None:
     env_path.write_text(
         "\n".join(
             [
-                "AUDIO_CHAT_SERVER_URL=http://10.0.0.2:8765",
-                "AUDIO_CHAT_USER_ID=user-sync",
-                "AUDIO_CHAT_DEVICE_ID=dev-sync-esp32",
-                "AUDIO_CHAT_AUTH_MODE=static_token",
-                "AUDIO_CHAT_AUTH_TOKEN=token-sync",
-                "AUDIO_CHAT_AUDIO_SAMPLE_RATE=16000",
-                "AUDIO_CHAT_AUDIO_CHANNELS=1",
-                "AUDIO_CHAT_AUDIO_CHUNK_MS=20",
-                "AUDIO_CHAT_AEC_MODE=endpoint",
-                "AUDIO_CHAT_PLAYBACK_REFERENCE=endpoint_ring_buffer",
-                "AUDIO_CHAT_PHONE_CAMERA_SINK_WS_URI=ws://10.0.0.3:9001/ws/camera",
-                "AUDIO_CHAT_PHONE_CAMERA_STREAM_INTERVAL_MS=250",
+                "REALTIME_AGENT_SERVER_URL=http://10.0.0.2:8765",
+                "REALTIME_AGENT_USER_ID=user-sync",
+                "REALTIME_AGENT_DEVICE_ID=dev-sync-esp32",
+                "REALTIME_AGENT_AUTH_MODE=static_token",
+                "REALTIME_AGENT_AUTH_TOKEN=token-sync",
+                "REALTIME_AGENT_AUDIO_SAMPLE_RATE=16000",
+                "REALTIME_AGENT_AUDIO_CHANNELS=1",
+                "REALTIME_AGENT_AUDIO_CHUNK_MS=20",
+                "REALTIME_AGENT_AEC_MODE=endpoint",
+                "REALTIME_AGENT_PLAYBACK_REFERENCE=endpoint_ring_buffer",
+                "REALTIME_AGENT_PHONE_CAMERA_SINK_WS_URI=ws://10.0.0.3:9001/ws/camera",
+                "REALTIME_AGENT_PHONE_CAMERA_STREAM_INTERVAL_MS=250",
             ]
         ),
         encoding="utf-8",
@@ -211,8 +211,8 @@ def test_network_esp32_s3_endpoint_completes_protocol_smoke(tmp_path: Path) -> N
     """
 
     async def run() -> None:
-        audio_app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs"), agent_mode="text"))
-        server = AudioChatHttpServer(audio_app)
+        audio_app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+        server = RealtimeAgentHttpServer(audio_app)
         runner = web.AppRunner(server.create_web_app())
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)

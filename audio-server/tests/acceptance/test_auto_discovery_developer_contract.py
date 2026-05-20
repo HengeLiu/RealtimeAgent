@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.tasks import BaseTask, TaskAutoDiscovery
-from audio_chat.tools import BaseTool, ToolAutoDiscovery, ToolError
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.tasks import BaseTask, TaskAutoDiscovery
+from realtime_agent.tools import BaseTool, ToolAutoDiscovery, ToolError
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "examples" / "for-blind-app" / "tests" / "fixtures" / "for_blind_app"
@@ -30,7 +30,7 @@ def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_
 
     clear_capabilities_modules()
     monkeypatch.syspath_prepend(str(FIXTURE_ROOT))
-    config = AudioChatConfig(
+    config = RealtimeAgentConfig(
         runs_root=str(tmp_path / "runs"),
         asset_root=str(tmp_path / "runs" / "assets"),
         tools_discover_enabled=True,
@@ -41,7 +41,7 @@ def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_
         tasks_discover_recursive=True,
     )
 
-    app = AudioChatApp(config)
+    app = RealtimeAgentApp(config)
 
     assert "capture_photo" in app.tool_registry.list_names()
     assert "timer" in app.task_engine.registry.list_task_types()
@@ -61,7 +61,7 @@ def test_for_blind_app_discovery_contract_skips_internal_and_fails_duplicates(tm
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (feature / "__init__.py").write_text("", encoding="utf-8")
     (feature / "tool.py").write_text(
-        "from audio_chat.tools import BaseTool\n"
+        "from realtime_agent.tools import BaseTool\n"
         "class DemoTool(BaseTool):\n"
         "    name = 'demo_tool'\n"
         "class _HiddenTool(BaseTool):\n"
@@ -69,7 +69,7 @@ def test_for_blind_app_discovery_contract_skips_internal_and_fails_duplicates(tm
         encoding="utf-8",
     )
     (feature / "task.py").write_text(
-        "from audio_chat.tasks import BaseTask\n"
+        "from realtime_agent.tasks import BaseTask\n"
         "class DemoTask(BaseTask):\n"
         "    task_type = 'demo_task'\n",
         encoding="utf-8",
@@ -84,8 +84,8 @@ def test_for_blind_app_discovery_contract_skips_internal_and_fails_duplicates(tm
     assert [task.task_type for task in tasks] == ["demo_task"]
 
     (feature / "duplicate.py").write_text(
-        "from audio_chat.tools import BaseTool\n"
-        "from audio_chat.tasks import BaseTask\n"
+        "from realtime_agent.tools import BaseTool\n"
+        "from realtime_agent.tasks import BaseTask\n"
         "class DuplicateTool(BaseTool):\n"
         "    name = 'demo_tool'\n"
         "class DuplicateTask(BaseTask):\n"

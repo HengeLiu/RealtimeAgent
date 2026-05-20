@@ -186,11 +186,11 @@ Manual 模式这次测试方法是正确的：客户端显式提交输入边界�
    - VAD 模式下不要在端侧 final chunk 或工具回填后随意调用 commit。
    - 工具 schema 应优先按官方嵌套结构验证和实现，避免依赖非文档兼容行为。
 
-## audio-chat 当前 Omni 链路试验
+## realtime-agent 当前 Omni 链路试验
 
 ### 测试目标
 
-前面的试验验证的是 DashScope Omni Realtime 原生协议。这里进一步验证当前 `audio-chat` 主链路里的 `QwenOmniRealtimeAdapter`，也就是：
+前面的试验验证的是 DashScope Omni Realtime 原生协议。这里进一步验证当前 `realtime-agent` 主链路里的 `QwenOmniRealtimeAdapter`，也就是：
 
 ```text
 用户音频 -> Omni 触发 capture_photo -> adapter 回填工具结果 -> adapter 重放音频并追加图片 -> Omni 返回最终回答
@@ -199,21 +199,21 @@ Manual 模式这次测试方法是正确的：客户端显式提交输入边界�
 探针脚本：
 
 ```bash
-tools/audio_chat_omni_chain_probe.py
+tools/realtime_agent_omni_chain_probe.py
 ```
 
-这个脚本直接使用当前 `audio_chat.agent_core.realtime.QwenOmniRealtimeAdapter`，不绕过 adapter 内部逻辑。
+这个脚本直接使用当前 `realtime_agent.agent_core.omni.QwenOmniRealtimeAdapter`，不绕过 adapter 内部逻辑。
 
 ### VAD 输入，不发送 final
 
 命令：
 
 ```bash
-uv run python tools/audio_chat_omni_chain_probe.py \
+uv run python tools/realtime_agent_omni_chain_probe.py \
   --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
   --image 'examples/for-blind-app/audio-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
   --wait-seconds 18 \
-  --out runs/omni-realtime-probe/audio-chat-chain-flat-vad-events.jsonl
+  --out runs/omni-realtime-probe/realtime-agent-chain-flat-vad-events.jsonl
 ```
 
 关键现象：
@@ -248,12 +248,12 @@ uv run python tools/audio_chat_omni_chain_probe.py \
 命令：
 
 ```bash
-uv run python tools/audio_chat_omni_chain_probe.py \
+uv run python tools/realtime_agent_omni_chain_probe.py \
   --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
   --image 'examples/for-blind-app/audio-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
   --send-final \
   --wait-seconds 18 \
-  --out runs/omni-realtime-probe/audio-chat-chain-flat-send-final-events.jsonl
+  --out runs/omni-realtime-probe/realtime-agent-chain-flat-send-final-events.jsonl
 ```
 
 关键现象：
@@ -281,7 +281,7 @@ uv run python tools/audio_chat_omni_chain_probe.py \
 
 ### 当前主链路问题判断
 
-这次测试说明，当前 `audio-chat` 的 Omni 链路不是“工具没有调用”或“图片没有追加”，而是工具结果后的视觉输入编排方式有问题：
+这次测试说明，当前 `realtime-agent` 的 Omni 链路不是“工具没有调用”或“图片没有追加”，而是工具结果后的视觉输入编排方式有问题：
 
 ```text
 function_call_output -> replay original audio -> append image -> commit -> 依赖 provider 自动 response

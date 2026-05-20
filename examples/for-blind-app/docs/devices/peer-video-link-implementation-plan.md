@@ -24,9 +24,9 @@
 | 范围 | 目录 / 文件 | 说明 |
 | --- | --- | --- |
 | for-blind Task | `examples/for-blind-app/audio-server/capabilities/tasks.py` | 改造 `find_object_task` 和 `traffic_light_task` 的启动、状态消费、取消逻辑。 |
-| Python phone | `examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/` | 增加 peer receiver、状态 reporter、`VisionProcessor`、YOLO / YOLOE 处理、超时和关闭处理。 |
+| Python phone | `examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/` | 增加 peer receiver、状态 reporter、`VisionProcessor`、YOLO / YOLOE 处理、超时和关闭处理。 |
 | browser-glass | `examples/dev-support/devices/browser-glass/index.html` | 增加 peer sender 命令处理、帧采集、发送和 stop。 |
-| 设备配置 | `examples/dev-support/devices/browser-glass/device.audio-chat.yaml`、`examples/dev-support/devices/python-phone/phone.preview.yaml` | 增加 `device_role`、peer video properties 和默认 user 对齐。 |
+| 设备配置 | `examples/dev-support/devices/browser-glass/device.realtime-agent.yaml`、`examples/dev-support/devices/python-phone/phone.preview.yaml` | 增加 `device_role`、peer video properties 和默认 user 对齐。 |
 | 测试 | `audio-server/tests/`、`examples/for-blind-app/tests/`、`examples/dev-support/tests/` | 覆盖 Task 编排、状态回报、端侧 receiver/sender 行为。 |
 | 文档 | `examples/for-blind-app/docs/devices/`、`examples/dev-support/devices/python-phone/README.md`、`examples/dev-support/devices/browser-glass/README.md` | 补充启动、观察点和端侧开发说明。 |
 
@@ -61,7 +61,7 @@ uv run python -m pytest audio-server/tests/sdk/runtime/test_memory_service.py -q
 完成标准：
 
 1. 明确当前相关测试是否能跑。
-2. 记录任何与本计划无关的既有失败，例如缺失 `audio_chat_python_glass` 包。
+2. 记录任何与本计划无关的既有失败，例如缺失 `realtime_agent_python_glass` 包。
 
 ## Phase 0.5：生命周期和释放边界补齐
 
@@ -100,7 +100,7 @@ uv run python -m pytest examples/dev-support/tests/browser/test_browser_device_e
 建议新增文件：
 
 ```text
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/remote_task.py
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/remote_task.py
 ```
 
 核心对象：
@@ -162,8 +162,8 @@ examples/dev-support/tests/python_phone/test_remote_task_reporter.py
 建议新增：
 
 ```text
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/peer_video.py
-examples/dev-support/devices/python-phone/audio_chat_python_phone_mock/vision/
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/peer_video.py
+examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/vision/
 ```
 
 `peer_video.py` 职责：
@@ -200,7 +200,7 @@ peer_video:
   close_button_enabled: true
 vision:
   provider: yolo
-  save_annotated_frame: runs/audio-chat/python-phone/latest-yolo.jpg
+  save_annotated_frame: runs/realtime-agent/python-phone/latest-yolo.jpg
 ```
 
 关闭规则：
@@ -268,7 +268,7 @@ examples/dev-support/devices/browser-glass/index.html
 更新：
 
 ```text
-examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 新增 properties：
@@ -405,7 +405,7 @@ examples/for-blind-app/tests/capabilities/test_peer_video_tasks.py
 
 改动：
 
-1. `browser-glass/device.audio-chat.yaml` 增加：
+1. `browser-glass/device.realtime-agent.yaml` 增加：
 
 ```yaml
 properties:
@@ -455,19 +455,19 @@ examples/for-blind-app/tests/endpoints/test_peer_video_device_config.py
 终端 1：
 
 ```bash
-uv run audio-chat.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
 ```
 
 终端 2：
 
 ```bash
-uv run python -m audio_chat_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 终端 3：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 操作：
@@ -582,7 +582,7 @@ browser-glass 日志：
 ### Phase 1：端侧状态回报 helper
 
 - 状态：已完成
-- 实现：新增 `audio_chat_python_phone_mock.remote_task.RemoteCommand` 和 `RemoteTaskReporter`，统一生成 `command.accepted/progress/completed/failed`，自动带 `command_id`、`command`、`peer_session_id`、`task_type`、`role`。
+- 实现：新增 `realtime_agent_python_phone_mock.remote_task.RemoteCommand` 和 `RemoteTaskReporter`，统一生成 `command.accepted/progress/completed/failed`，自动带 `command_id`、`command`、`peer_session_id`、`task_type`、`role`。
 - 验证：`uv run python -m pytest examples/dev-support/tests/python_phone/test_remote_task_reporter.py -q`，通过。
 
 ### Phase 2：Python phone peer receiver
@@ -608,7 +608,7 @@ browser-glass 日志：
 ### Phase 5：设备配置和路由约定
 
 - 状态：已完成
-- 实现：`browser-glass/device.audio-chat.yaml` 和 `python-phone/phone.preview.yaml` 对齐 `user_id=user-browser-glass-001`，分别声明 `device_role=glass/phone` 和 peer video properties。
+- 实现：`browser-glass/device.realtime-agent.yaml` 和 `python-phone/phone.preview.yaml` 对齐 `user_id=user-browser-glass-001`，分别声明 `device_role=glass/phone` 和 peer video properties。
 - 验证：`uv run python -m pytest examples/for-blind-app/tests/endpoints/test_peer_video_device_config.py -q`，通过。
 
 ### Phase 6：端到端联调和运行产物

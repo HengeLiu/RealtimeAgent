@@ -7,12 +7,12 @@ def _html() -> str:
 
 def _browser_sdk_adapter() -> str:
     return Path(__file__).resolve().parents[4].joinpath(
-        "examples/dev-support/devices/browser-glass/sdk/audio-chat-device-browser.js"
+        "examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js"
     ).read_text(encoding="utf-8")
 
 
 def test_web_glass_html_contains_required_webrtc_and_protocol_events() -> None:
-    """测试目标：验证 browser-glass 页面声明浏览器 AEC 能力和 audio-chat 协议事件。
+    """测试目标：验证 browser-glass 页面声明浏览器 AEC 能力和 realtime-agent 协议事件。
 
     测试方法：读取静态 HTML，检查 getUserMedia 约束和关键控制事件名。
     预期结果：页面包含 AEC/NS/AGC、注册、唤醒、输入打开和输出回执事件。
@@ -45,10 +45,10 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
 
     assert "function encodeStreamChunk" in html
     assert "function decodeStreamChunk" in html
-    assert '"./sdk/audio-chat-device-browser.js"' in html
-    assert "AudioChatDeviceClient" in html
+    assert '"./sdk/realtime-agent-device-browser.js"' in html
+    assert "RealtimeAgentDeviceClient" in html
     assert "DeviceBuilder.define(deviceId)" in html
-    assert "new AudioChatEvent({" in html
+    assert "new RealtimeAgentEvent({" in html
     assert "StreamChunkCodec.encode(new StreamChunk({" in html
     assert "StreamChunkCodec.decode(raw)" in html
     assert 'export * from "../../../../../audio-device/typescript/src/index.js";' in sdk_adapter
@@ -124,7 +124,7 @@ def test_web_glass_is_not_served_by_sdk_server() -> None:
     测试方法：检查 server 源码不包含 `/browser-glass` 路由和 `web_glass` handler。
     预期结果：server 只暴露协议和 debug API，不预判具体端侧类型。
     """
-    server_source = Path(__file__).resolve().parents[4].joinpath("audio-server/audio_chat/server.py").read_text(
+    server_source = Path(__file__).resolve().parents[4].joinpath("audio-server/realtime_agent/server.py").read_text(
         encoding="utf-8"
     )
 

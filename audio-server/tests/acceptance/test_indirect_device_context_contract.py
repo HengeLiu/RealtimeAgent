@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import inspect
 
-from audio_chat.mcp import McpGateway
-from audio_chat.memory import MemoryService
-from audio_chat.skills import SkillService
-from audio_chat.tools import ToolContext, ToolDeviceFacade
+from realtime_agent.mcp import McpGateway
+from realtime_agent.memory import MemoryService
+from realtime_agent.skills import SkillService
+from realtime_agent.tools import ToolContext, ToolDeviceFacade
 
 
 def test_memory_skill_mcp_services_do_not_accept_user_device_context() -> None:

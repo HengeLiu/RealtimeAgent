@@ -1,8 +1,8 @@
 # Paraformer Realtime V2 调研与接入实验
 
-本文记录 `paraformer-realtime-v2` 在当前 audio-chat 项目中的接入判断。目标不是立刻改主链路，而是先回答几个关键问题：
+本文记录 `paraformer-realtime-v2` 在当前 realtime-agent 项目中的接入判断。目标不是立刻改主链路，而是先回答几个关键问题：
 
-- 它是否能替代当前 Text Realtime 链路里分散的 ASR、VAD、标点预测和语气词过滤能力。
+- 它是否能替代当前 Vision Realtime 链路里分散的 ASR、VAD、标点预测和语气词过滤能力。
 - 服务端能否从模型回调中知道“用户开始说话”和“用户结束说话”。
 - 如果能接入，应该接到哪一层，哪些能力仍然需要保留或重新设计。
 
@@ -34,9 +34,9 @@
 
 ## 当前项目现状
 
-当前 Text Realtime 的 ASR 已经有 DashScope 适配器：
+当前 Vision Realtime 的 ASR 已经有 DashScope 适配器：
 
-- 代码位置：`audio-server/audio_chat/agent_core/providers.py`
+- 代码位置：`audio-server/realtime_agent/agent_core/providers.py`
 - 类：`DashScopeAsrProviderAdapter`
 - 当前参数：
   - `format="pcm"`
@@ -58,7 +58,7 @@
 - `words`
 - `stash`
 
-这导致我们之前把“服务器 VAD”和“ASR final”拆成了两条复杂路径，实际上 Paraformer 可以至少承担“开始说话标记、结束一句话、ASR 文本、标点、时间戳”的大部分文本链路判定。
+这导致我们之前把“服务器 VAD”和“ASR final”拆成了两条复杂路径，实际上 Paraformer 可以至少承担“开始说话标记、结束一句话、ASR 文本、标点、时间戳”的大部分Vision 链路判定。
 
 ## 实验脚本
 
@@ -225,7 +225,7 @@ final 结果：
 
 ```text
 sentence_begin=true && 当前 sentence_id 未触发过
-  -> text.vad.speech_started / input_audio_buffer.speech_started
+  -> vision.vad.speech_started / input_audio_buffer.speech_started
 ```
 
 限制：
@@ -240,7 +240,7 @@ sentence_begin=true && 当前 sentence_id 未触发过
 
 ```text
 sentence_end=true 或 end_time != null
-  -> text.vad.speech_stopped / input_transcript.done
+  -> vision.vad.speech_stopped / input_transcript.done
 ```
 
 这和官方 `max_sentence_silence` 参数一致：当语音后静音超过阈值，系统判定句子结束。
@@ -278,7 +278,7 @@ AsrRealtimeEvent
   raw
 ```
 
-然后由 Text Realtime 控制器基于结构化事件转换为：
+然后由 Vision Realtime 控制器基于结构化事件转换为：
 
 - `server.speech_started`
 - `input_transcript.delta`
@@ -287,7 +287,7 @@ AsrRealtimeEvent
 
 这样模型 provider 只负责“如实上报事件”，业务链路负责解释事件。
 
-### 建议二：Text Realtime 默认使用 `paraformer-realtime-v2`
+### 建议二：Vision Realtime 默认使用 `paraformer-realtime-v2`
 
 当前 `examples/for-blind-app/audio-server/server.yaml` 仍是：
 
@@ -316,7 +316,7 @@ heartbeat: true
 
 ### 建议三：替换现有独立 ServerVadProcessor 的主判定职责
 
-如果采用 Paraformer 作为 Text Realtime 的 ASR/VAD 合一 provider，则主链路应改为：
+如果采用 Paraformer 作为 Vision Realtime 的 ASR/VAD 合一 provider，则主链路应改为：
 
 ```text
 上行音频 -> Paraformer Realtime Provider
@@ -347,13 +347,13 @@ text 非空
 
 官方说明 `heartbeat=true` 时，持续发送静音音频可以保持连接不中断；默认不启用时，即使持续发送静音也可能 60 秒超时。
 
-这和当前新的端侧标准模型一致：唤醒后，上行连接在连续对话期间持续发送麦克风音频。若没有用户说话，连接中会存在静音段，因此 Text Realtime 的 Paraformer provider 应开启 heartbeat。
+这和当前新的端侧标准模型一致：唤醒后，上行连接在连续对话期间持续发送麦克风音频。若没有用户说话，连接中会存在静音段，因此 Vision Realtime 的 Paraformer provider 应开启 heartbeat。
 
 ## 建议的实施顺序
 
 1. 新增结构化 ASR 事件类型，先不改控制流。
 2. 修改 `DashScopeAsrProviderAdapter`，保留并输出 `sentence_begin`、`begin_time`、`end_time`、`sentence_end`、`words`。
-3. 在 Text Realtime 控制器中只接受一个 speech 判定来源：
+3. 在 Vision Realtime 控制器中只接受一个 speech 判定来源：
    - Paraformer provider 可用时，以 Paraformer 为准。
    - Mock provider 或非 Paraformer provider 时，才启用独立 VAD fallback。
 4. 将 `server speech_started` 映射到端侧控制事件，用于暂停播放和清空播放队列。
@@ -367,7 +367,7 @@ text 非空
 
 ## 当前结论
 
-`paraformer-realtime-v2` 适合引入当前 Text Realtime 链路，并且应该作为 ASR + VAD 断句 + 标点 + 时间戳的统一 provider。
+`paraformer-realtime-v2` 适合引入当前 Vision Realtime 链路，并且应该作为 ASR + VAD 断句 + 标点 + 时间戳的统一 provider。
 
 但它不是像 Omni Realtime 那样返回独立的 `input_audio_buffer.speech_started` 服务事件。它的等价信号在 `result-generated.output.sentence` 里：
 

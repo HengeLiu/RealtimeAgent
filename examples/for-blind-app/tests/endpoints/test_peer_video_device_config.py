@@ -16,7 +16,7 @@ def test_peer_video_device_configs_share_user_and_roles() -> None:
     预期结果：两端 user_id 一致，且分别声明 phone receiver / glass sender 能力。
     """
 
-    browser = yaml.safe_load((ROOT / "dev-support/devices/browser-glass/device.audio-chat.yaml").read_text(encoding="utf-8"))
+    browser = yaml.safe_load((ROOT / "dev-support/devices/browser-glass/device.realtime-agent.yaml").read_text(encoding="utf-8"))
     phone = yaml.safe_load((ROOT / "dev-support/devices/python-phone/phone.preview.yaml").read_text(encoding="utf-8"))
 
     assert browser["user_id"] == phone["user_id"] == "user-browser-glass-001"

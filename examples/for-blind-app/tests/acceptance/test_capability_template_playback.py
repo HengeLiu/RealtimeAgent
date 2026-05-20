@@ -4,8 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 
 
 class ForBlindAppPlaybackEndpoint:
@@ -14,7 +14,7 @@ class ForBlindAppPlaybackEndpoint:
     主要功能：模拟具备 `sensor.rgb` 上传和 `actuator.speaker` 消费能力的端侧设备。
     """
 
-    def __init__(self, *, app: AudioChatApp, user_id: str, device_id: str) -> None:
+    def __init__(self, *, app: RealtimeAgentApp, user_id: str, device_id: str) -> None:
         self.app = app
         self.user_id = user_id
         self.device_id = device_id
@@ -77,7 +77,7 @@ class ForBlindAppPlaybackEndpoint:
         self.app.stream_service.close_stream(handle.stream_id, reason="fixture_upload_done")
 
 
-def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlaybackEndpoint) -> None:
+def register_for_blind_endpoint(app: RealtimeAgentApp, endpoint: ForBlindAppPlaybackEndpoint) -> None:
     response = app.register_device(
         Event(
             event_name="control.device.register.requested",
@@ -87,10 +87,10 @@ def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlayback
                 "device_id": endpoint.device_id,
                 "device_name": endpoint.device_id,
                 "client_type": "for-blind-app-playback",
-                "sdk_version": "audio-chat-endpoint-0.1.0",
+                "sdk_version": "realtime-agent-endpoint-0.1.0",
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
-                "properties": {"audio_chat.audio_output": "actuator.speaker"},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
             },
         ),
         endpoint,
@@ -98,17 +98,17 @@ def register_for_blind_endpoint(app: AudioChatApp, endpoint: ForBlindAppPlayback
     assert response.event_name == "control.device.registered"
 
 
-def build_for_blind_app(tmp_path, monkeypatch) -> AudioChatApp:
+def build_for_blind_app(tmp_path, monkeypatch) -> RealtimeAgentApp:
     fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "for_blind_app"
     for name in list(__import__("sys").modules):
         if name == "capabilities" or name.startswith("capabilities."):
             __import__("sys").modules.pop(name, None)
     monkeypatch.syspath_prepend(str(fixture_root))
-    return AudioChatApp(
-        AudioChatConfig(
+    return RealtimeAgentApp(
+        RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             asset_root=str(tmp_path / "runs" / "assets"),
-            agent_mode="text",
+            agent_mode="vision",
             tools_discover_enabled=True,
             tools_discover_packages=("capabilities",),
             tools_discover_recursive=True,

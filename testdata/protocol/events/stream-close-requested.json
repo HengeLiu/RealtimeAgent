@@ -1,5 +1,5 @@
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_stream_close_requested",
   "event_name": "stream.control.close.requested",
   "timestamp_ms": 1760000000800,

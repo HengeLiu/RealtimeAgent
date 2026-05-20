@@ -1,0 +1,32 @@
+version: realtime-agent.v1
+error_codes:
+  registration_failed:
+    retryable: false
+    description: 设备注册被 server 拒绝。
+  auth_failed:
+    retryable: false
+    description: token 缺失、过期或签名错误。
+  unsupported_capability:
+    retryable: false
+    description: 端侧声明或请求的能力不受支持。
+  permission_denied:
+    retryable: false
+    description: 相机、麦克风、蓝牙等权限被拒绝。
+  hardware_unavailable:
+    retryable: true
+    description: 传感器或执行器初始化失败。
+  stream_busy:
+    retryable: true
+    description: 同一能力正在执行，无法并发打开。
+  stream_codec_error:
+    retryable: false
+    description: codec、payload 或 header 格式错误。
+  network_disconnected:
+    retryable: true
+    description: WebSocket 断开。
+  protocol_violation:
+    retryable: false
+    description: 收到不符合 schema 的事件。
+  timeout:
+    retryable: true
+    description: 等待 server 或硬件响应超时。

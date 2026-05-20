@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from audio_chat.agent_core.base import AgentEventBuffer
-from audio_chat.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
+from realtime_agent.agent_core.base import AgentEventBuffer
+from realtime_agent.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
 
 
 class Recorder:
@@ -64,14 +64,14 @@ def test_record_agent_recovery_error_writes_shared_error_surfaces() -> None:
         session_id="dev-recovery",
         stream_id="stream-in",
         stream_type="sensor.mic",
-        component="TextAgentCore",
+        component="VisionRealtimeAgentCore",
         error=RuntimeError("provider failed"),
         agent_event="response.failed",
         record={"provider": "fake"},
     )
 
     assert event.event_name == "system.error.raised"
-    assert event.payload["component"] == "TextAgentCore"
+    assert event.payload["component"] == "VisionRealtimeAgentCore"
     assert event.payload["error_type"] == "RuntimeError"
     assert event.payload["recoverable"] is True
     assert event.payload["fallback_text"] == DEFAULT_RECOVERABLE_ERROR_MESSAGE

@@ -10,8 +10,8 @@ from urllib import request as urllib_request
 
 from pydantic import BaseModel, Field
 
-from audio_chat import AssetRef, BaseTool, ToolContext, ToolError, ToolResult, ToolSpec
-from audio_chat.errors import ErrorCode
+from realtime_agent import AssetRef, BaseTool, ToolContext, ToolError, ToolResult, ToolSpec
+from realtime_agent.errors import ErrorCode
 
 
 CAPTURE_PHOTO_DEFAULT_TIMEOUT_SECONDS = 15
@@ -175,7 +175,7 @@ class InterpretCurrentViewTool(BaseTool):
     spec = ToolSpec(
         name="interpret_current_view",
         description=(
-            "文本链路中，当用户询问前方、眼前、当前画面、障碍物、文字或路况时调用；"
+            "Vision 链路中，当用户询问前方、眼前、当前画面、障碍物、文字或路况时调用；"
             "本工具会先拍照，再用视觉模型解读，并直接返回可播报的中文结果。"
         ),
         input_model=InterpretCurrentViewInput,
@@ -187,7 +187,7 @@ class InterpretCurrentViewTool(BaseTool):
         """执行当前画面抓拍和解读。
 
         主要逻辑：先通过 `sensor.rgb.one()` 请求端侧上传一帧图片，再复用图片解读
-        helper 调视觉模型。这样 TextAgentCore 只需要执行 Tool，不需要知道视觉链路内部编排。
+        helper 调视觉模型。这样 VisionRealtimeAgentCore 只需要执行 Tool，不需要知道视觉链路内部编排。
         参数：`context` 为 SDK 注入上下文，`input_data` 包含 query 和超时设置。
         返回值：成功时包含图片资产和 interpretation。
         异常情况：拍照失败由底层 Context API 转成 ToolResult；解读失败返回失败结果。
@@ -225,15 +225,15 @@ class InterpretCurrentViewTool(BaseTool):
 def _interpret_asset_with_vision_model(*, asset: AssetRef, query: str, timeout_seconds: float) -> ToolResult:
     """调用视觉模型解读图片资产。
 
-    主要逻辑：本地测试可通过 `AUDIO_CHAT_VISION_MODEL_PROVIDER=mock` 使用确定性结果；
+    主要逻辑：本地测试可通过 `REALTIME_AGENT_VISION_MODEL_PROVIDER=mock` 使用确定性结果；
     真实运行时使用 DashScope OpenAI-compatible Chat Completions，模型默认 qwen3.6-plus。
     参数：`asset` 为图片资产引用；`query` 为用户问题；`timeout_seconds` 为模型超时。
     返回值：包含 `interpretation` 的 ToolResult。
     异常情况：图片路径不可读、缺少 API Key 或 provider 报错时返回失败 ToolResult。
     """
 
-    model = os.getenv("AUDIO_CHAT_VISION_MODEL") or os.getenv("DASHSCOPE_VISION_MODEL") or VISION_MODEL_DEFAULT
-    if os.getenv("AUDIO_CHAT_VISION_MODEL_PROVIDER") == "mock":
+    model = os.getenv("REALTIME_AGENT_VISION_MODEL") or os.getenv("DASHSCOPE_VISION_MODEL") or VISION_MODEL_DEFAULT
+    if os.getenv("REALTIME_AGENT_VISION_MODEL_PROVIDER") == "mock":
         text = "我已经根据刚拍到的照片完成识别。"
         return ToolResult.success(
             data={"interpreted": True, "interpretation": text, "model": "mock-vision", "asset_id": asset.asset_id},

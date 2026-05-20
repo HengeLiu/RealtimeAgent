@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from audio_chat.observability import LineFormatter, RunRecorder
-from audio_chat.protocol import Event, StreamChunk
+from realtime_agent.observability import LineFormatter, RunRecorder
+from realtime_agent.protocol import Event, StreamChunk
 
 
 def test_line_formatter_uses_configured_timezone() -> None:
@@ -16,7 +16,7 @@ def test_line_formatter_uses_configured_timezone() -> None:
     formatter = LineFormatter(timezone_name="Asia/Shanghai")
     record = logging.makeLogRecord(
         {
-            "name": "audio_chat.test",
+            "name": "realtime_agent.test",
             "levelno": logging.INFO,
             "levelname": "INFO",
             "msg": "timezone check",
@@ -36,7 +36,7 @@ def test_run_recorder_logs_artifact_index_once_on_startup(tmp_path, caplog) -> N
     预期结果：日志包含 runs 根目录、全局文件和会话文件索引，不依赖后续事件重复打印路径。
     """
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         RunRecorder(tmp_path / "runs")
 
     index_logs = [record for record in caplog.records if "运行产物目录索引" in record.getMessage()]
@@ -49,7 +49,7 @@ def test_run_recorder_logs_artifact_index_once_on_startup(tmp_path, caplog) -> N
 def test_first_model_request_logs_full_snapshot_once(tmp_path, caplog) -> None:
     """测试目标：验证首次大模型调用前会在终端日志打印完整请求快照。
 
-    测试方法：连续记录两次 model request，并用 caplog 捕获 `audio_chat.runs` 日志。
+    测试方法：连续记录两次 model request，并用 caplog 捕获 `realtime_agent.runs` 日志。
     预期结果：只有第一次包含完整 JSON，且 JSON 中能看到 system prompt、messages 和 tools。
     """
 
@@ -76,7 +76,7 @@ def test_first_model_request_logs_full_snapshot_once(tmp_path, caplog) -> None:
         "tool_count": 1,
     }
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_model_request("sess-001", request)
         recorder.record_model_request("sess-002", request)
 
@@ -101,7 +101,7 @@ def test_realtime_first_model_request_terminal_snapshot_only_logs_model_visible_
     request = {
         "provider": "qwen",
         "model": "qwen3.5-omni-plus-realtime",
-        "runner": "agent_core_realtime_audio",
+        "runner": "agent_core_omni_audio",
         "user_id": "user-realtime",
         "session_id": "dev-realtime",
         "prompt": "系统提示词，包含历史摘要。",
@@ -115,7 +115,7 @@ def test_realtime_first_model_request_terminal_snapshot_only_logs_model_visible_
         "tool_count": 1,
     }
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_model_request("dev-realtime", request)
 
     snapshots = [record.getMessage() for record in caplog.records if "首次模型请求完整快照" in record.getMessage()]
@@ -153,7 +153,7 @@ def test_system_error_logs_payload_details(tmp_path, caplog) -> None:
         },
     )
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_event(event)
         recorder.record_system_event(event.to_dict())
 
@@ -191,7 +191,7 @@ def test_system_error_logs_nested_provider_error_fields(tmp_path, caplog) -> Non
         },
     )
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_event(event)
         recorder.record_system_event(event.to_dict())
 
@@ -220,7 +220,7 @@ def test_normal_control_event_does_not_log_payload_as_error_message(tmp_path, ca
         },
     )
 
-    with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
+    with caplog.at_level(logging.DEBUG, logger="realtime_agent.runs"):
         recorder.record_event(event)
 
     matched = [record for record in caplog.records if record.getMessage() == "控制事件 command.progress"]
@@ -247,7 +247,7 @@ def test_command_progress_logs_message_as_status_message_not_error(tmp_path, cap
         },
     )
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_event(event)
 
     matched = [record for record in caplog.records if record.getMessage() == "控制事件 command.progress"]
@@ -276,7 +276,7 @@ def test_high_frequency_frame_progress_only_writes_artifacts(tmp_path, caplog) -
         },
     )
 
-    with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
+    with caplog.at_level(logging.DEBUG, logger="realtime_agent.runs"):
         recorder.record_event(event)
         recorder.record_event_route(event, {"matched_count": 1, "delivered_count": 1})
 
@@ -310,7 +310,7 @@ def test_process_dispatch_task_signal_only_writes_artifacts(tmp_path, caplog) ->
         "requires_agent_decision": False,
     }
 
-    with caplog.at_level(logging.DEBUG, logger="audio_chat.runs"):
+    with caplog.at_level(logging.DEBUG, logger="realtime_agent.runs"):
         recorder.record_task_signal("sess-log", record)
 
     assert not any(record.getMessage() == "任务信号 task.event.dispatch.accepted" for record in caplog.records)
@@ -334,7 +334,7 @@ def test_realtime_provider_error_terminal_log_keeps_actionable_message(tmp_path,
         },
     }
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_agent_event(
             "sess-log",
             {
@@ -360,7 +360,7 @@ def test_agent_event_logs_capture_photo_image_context(tmp_path, caplog) -> None:
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_agent_event(
             "sess-log",
             {
@@ -390,7 +390,7 @@ def test_omni_input_transcription_delta_terminal_logs_are_summarized(tmp_path, c
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         for text in ("看", "一下", "前面"):
             recorder.record_agent_event(
                 "sess-omni-delta",
@@ -428,7 +428,7 @@ def test_final_transcript_text_only_appears_on_message_write_terminal_log(tmp_pa
     recorder = RunRecorder(tmp_path / "runs")
     final_text = "你再帮我查一下，从我家到虹漕南路地铁站怎么走。"
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_agent_event(
             "sess-final-text",
             {
@@ -475,7 +475,7 @@ def test_final_assistant_transcript_text_only_appears_on_message_write_terminal_
     recorder = RunRecorder(tmp_path / "runs")
     final_text = "路线还是没查出来，系统可能有点问题。"
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_agent_event(
             "sess-assistant-final-text",
             {
@@ -517,14 +517,14 @@ def test_realtime_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) 
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         for reason, state in (("audio_delta", "speaking"), ("input_audio_appended", "listening")):
             recorder.record_agent_event(
                 "sess-turn-hot",
                 {
                     "event": "agent.turn_state.changed",
                     "user_id": "user-turn-hot",
-                    "agent_core": "RealtimeAudioAgentCore",
+                    "agent_core": "OmniRealtimeAgentCore",
                     "provider": "qwen",
                     "reason": reason,
                     "state": state,
@@ -539,8 +539,8 @@ def test_realtime_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) 
     assert '"reason": "input_audio_appended"' in text
 
 
-def test_text_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) -> None:
-    """测试目标：Text 链路热路径状态变更不应逐条刷终端。
+def test_vision_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) -> None:
+    """测试目标：Vision 链路热路径状态变更不应逐条刷终端。
 
     测试方法：记录 `assistant_text_released` 和 `audio_final_check` 两类 turn state。
     预期结果：事件仍写入 agent-events.jsonl，但终端不输出 `Agent事件 agent.turn_state.changed`。
@@ -548,14 +548,14 @@ def test_text_hot_turn_state_terminal_logs_are_suppressed(tmp_path, caplog) -> N
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         for reason, state in (("assistant_text_released", "speaking"), ("audio_final_check", "transcribing")):
             recorder.record_agent_event(
                 "sess-text-hot",
                 {
                     "event": "agent.turn_state.changed",
                     "user_id": "user-text-hot",
-                    "agent_core": "TextAgentCore",
+                    "agent_core": "VisionRealtimeAgentCore",
                     "reason": reason,
                     "state": state,
                 },
@@ -578,13 +578,13 @@ def test_realtime_boundary_turn_state_still_logs_to_terminal(tmp_path, caplog) -
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_agent_event(
             "sess-turn-boundary",
             {
                 "event": "agent.turn_state.changed",
                 "user_id": "user-turn-boundary",
-                "agent_core": "RealtimeAudioAgentCore",
+                "agent_core": "OmniRealtimeAgentCore",
                 "provider": "qwen",
                 "reason": "omni.input_audio_buffer.speech_started",
                 "state": "user_speaking",
@@ -603,7 +603,7 @@ def test_context_source_added_only_writes_artifacts(tmp_path, caplog) -> None:
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         for source_name in ("history", "memory"):
             recorder.record_agent_event(
                 "sess-context",
@@ -629,7 +629,7 @@ def test_pipeline_output_audio_delta_terminal_logs_are_summarized(tmp_path, capl
 
     recorder = RunRecorder(tmp_path / "runs")
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         for _ in range(3):
             recorder.record_agent_event(
                 "sess-pipeline-audio",
@@ -680,7 +680,7 @@ def test_stream_chunk_terminal_logs_are_summarized_on_close(tmp_path, caplog) ->
         payload=b"\x00\x00",
     )
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         for seq in range(3):
             recorder.record_stream_event(
                 chunk.session_id,
@@ -741,7 +741,7 @@ def test_important_terminal_logs_hide_storage_paths_but_keep_artifacts(tmp_path,
         "tools": [],
     }
 
-    with caplog.at_level(logging.INFO, logger="audio_chat.runs"):
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
         recorder.record_model_request("sess-path", request)
         recorder.record_tool_trace("sess-path", {"tool_name": "demo_tool", "user_id": "user-path", "ok": True})
 

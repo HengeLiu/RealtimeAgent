@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from audio_chat.app import AudioChatApp, AudioChatConfig
-from audio_chat.protocol import CONTROL_EVENTS, Event
-from audio_chat.tasks import TaskRef
+from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import CONTROL_EVENTS, Event
+from realtime_agent.tasks import TaskRef
 
 
 def test_phone_task_command_contract_uses_event_and_stream_semantics() -> None:
@@ -51,7 +51,7 @@ def test_phone_command_report_is_bridged_to_task_engine(tmp_path: Path) -> None:
     预期结果：任务进入 finished，runs 中写入 `task.event.dispatch.accepted` 和 `task.finished`。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     created = TaskRef(
         task_id="task-phone-001",
         task_type="remote_vision_task",

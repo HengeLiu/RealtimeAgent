@@ -1,12 +1,12 @@
-# AudioChatDeviceKit
+# RealtimeAgentDeviceKit
 
-`AudioChatDeviceKit` 是 Swift Package 形式的 audio-chat 端侧通讯 SDK。它面向
+`RealtimeAgentDeviceKit` 是 Swift Package 形式的 realtime-agent 端侧通讯 SDK。它面向
 iOS 和 macOS，负责协议数据模型和 stream chunk 编解码。它不包含相机、麦克风、
 扬声器、蓝牙或 UI 实现。
 
 ## 遵循的协议
 
-协议版本：`audio-chat.v1`
+协议版本：`realtime-agent.v1`
 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ iOS 和 macOS，负责协议数据模型和 stream chunk 编解码。它不包�
 控制事件信封：
 
 ```swift
-AudioChatEvent(
+RealtimeAgentEvent(
     eventName: "control.device.register.requested",
     userID: "user-001",
     producerID: "dev-ios-001",
@@ -32,16 +32,16 @@ JSON header bytes
 payload bytes
 ```
 
-`AudioChatStreamChunkCodec` 会校验 `payload_size`。
+`RealtimeAgentStreamChunkCodec` 会校验 `payload_size`。
 
 ## 数据模型
 
-### `AudioChatDevice`
+### `RealtimeAgentDevice`
 
 用于构建设备注册 payload：
 
 ```swift
-let device = AudioChatDevice(deviceID: "dev-ios-001")
+let device = RealtimeAgentDevice(deviceID: "dev-ios-001")
     .user("user-001")
     .named("iPhone")
     .role("phone")
@@ -51,7 +51,7 @@ let device = AudioChatDevice(deviceID: "dev-ios-001")
 let payload = device.registrationPayload
 ```
 
-### `AudioChatEvent`
+### `RealtimeAgentEvent`
 
 控制事件信封，字段与 server `Event.to_dict()` 对齐：
 
@@ -66,12 +66,12 @@ let payload = device.registrationPayload
 - `stream_type`
 - `payload`
 
-### `AudioChatStreamChunk`
+### `RealtimeAgentStreamChunk`
 
 表达 `/ws/stream` 的 header 和 payload：
 
 ```swift
-let chunk = AudioChatStreamChunk(
+let chunk = RealtimeAgentStreamChunk(
     userID: "user-001",
     sessionID: "dev-ios-001",
     streamID: "stream-rgb-001",
@@ -86,7 +86,7 @@ let chunk = AudioChatStreamChunk(
     metadata: ["request_id": "req-001"]
 )
 
-let data = try AudioChatStreamChunkCodec.encode(chunk)
+let data = try RealtimeAgentStreamChunkCodec.encode(chunk)
 ```
 
 ## 导入到自己的项目
@@ -101,11 +101,11 @@ let data = try AudioChatStreamChunkCodec.encode(chunk)
    /path/to/OpenAIglassesDemo/audio-device/swift
    ```
 
-4. 把 `AudioChatDeviceKit` 加到目标 target。
+4. 把 `RealtimeAgentDeviceKit` 加到目标 target。
 5. 代码中导入：
 
    ```swift
-   import AudioChatDeviceKit
+   import RealtimeAgentDeviceKit
    ```
 
 ### 复制到独立仓库
@@ -116,15 +116,15 @@ let data = try AudioChatStreamChunkCodec.encode(chunk)
 ## 最小注册 payload 示例
 
 ```swift
-import AudioChatDeviceKit
+import RealtimeAgentDeviceKit
 
-let device = AudioChatDevice(deviceID: "dev-ios-phone-001")
+let device = RealtimeAgentDevice(deviceID: "dev-ios-phone-001")
     .user("user-001")
     .named("iOS Phone")
     .role("phone")
     .sensorRgb(modes: ["single"], format: "jpeg", frequencyHz: 1)
 
-let event = AudioChatEvent(
+let event = RealtimeAgentEvent(
     eventName: "control.device.register.requested",
     userID: "user-001",
     producerID: "dev-ios-phone-001",
@@ -138,15 +138,15 @@ let json = try JSONSerialization.data(withJSONObject: event.dictionary)
 
 当前仓库里的 iOS 参考端已有：
 
-- `AudioChatEvent.swift`
+- `RealtimeAgentEvent.swift`
 - `StreamChunkCodec.swift`
-- `AudioChatEndpointRuntime.swift`
+- `RealtimeAgentEndpointRuntime.swift`
 
-`AudioChatDeviceKit` 是这些协议层的包化版本。下一步接入时建议：
+`RealtimeAgentDeviceKit` 是这些协议层的包化版本。下一步接入时建议：
 
 1. 在 Xcode 工程中加入本地 Swift Package。
-2. 用 `AudioChatDeviceKit.AudioChatEvent` 替换参考端本地事件信封。
-3. 用 `AudioChatDeviceKit.AudioChatStreamChunkCodec` 替换本地 stream codec。
+2. 用 `RealtimeAgentDeviceKit.RealtimeAgentEvent` 替换参考端本地事件信封。
+3. 用 `RealtimeAgentDeviceKit.RealtimeAgentStreamChunkCodec` 替换本地 stream codec。
 4. 保留相机、HTTP/WebSocket、UI 和权限代码在 App target 中。
 
 ## 测试

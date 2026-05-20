@@ -46,8 +46,8 @@ server:
 auth:
   mode: "disabled"
 agent:
-  mode: "text"
-  text:
+  mode: "vision"
+  vision:
     provider: "mock"
     asr_provider: "mock"
     tts_provider: "mock"
@@ -69,7 +69,7 @@ dev_checks:
         [
             "uv",
             "run",
-            "audio-chat.server.start",
+            "realtime-agent.server.start",
             "--config",
             str(config),
             "--pid-file",
@@ -94,10 +94,10 @@ dev_checks:
                     break
             except Exception:
                 time.sleep(0.1)
-        assert health == {"status": "ok", "protocol_version": "audio-chat.v1", "app_name": tmp_path.name}
+        assert health == {"status": "ok", "protocol_version": "realtime-agent.v1", "app_name": tmp_path.name}
     finally:
         stop = subprocess.run(
-            ["uv", "run", "audio-chat.server.stop", "--pid-file", str(pid_file)],
+            ["uv", "run", "realtime-agent.server.stop", "--pid-file", str(pid_file)],
             cwd=AUDIO_ROOT,
             text=True,
             capture_output=True,

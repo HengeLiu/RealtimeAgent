@@ -1,6 +1,6 @@
 # 第一个 Tool 和 Task
 
-`audio-chat` 推荐把业务能力分成 Tool 和 Task。
+`realtime-agent` 推荐把业务能力分成 Tool 和 Task。
 
 - **Tool**：一次性短动作，例如拍照、查路线、搜索资料。
 - **Task**：持续或后台动作，例如找物、红绿灯观察、计时器、导航执行过程。
@@ -33,7 +33,7 @@ Tool 适合处理一次性动作。下面是简化后的抓拍 Tool 结构：
 ```python
 from pydantic import BaseModel, Field
 
-from audio_chat import BaseTool, ToolContext, ToolResult, ToolSpec
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class CapturePhotoInput(BaseModel):
@@ -80,7 +80,7 @@ Task 适合处理持续动作或后台动作。下面是简化后的计时器 Ta
 ```python
 from pydantic import BaseModel, Field
 
-from audio_chat import BaseTask, TaskContext
+from realtime_agent import BaseTask, TaskContext
 
 
 class TimerTaskInput(BaseModel):
@@ -135,13 +135,13 @@ tasks:
 启动 server：
 
 ```bash
-uv run audio-chat.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
 打开浏览器眼镜模拟组件：
 
 ```bash
-uv run audio-chat.web.open --serve
+uv run realtime-agent.web.open --serve
 ```
 
 查看设备状态：

@@ -4,7 +4,7 @@ import asyncio
 
 from pydantic import BaseModel, Field
 
-from audio_chat import AudioChatApp, AudioChatConfig, BaseTool, ToolContext, ToolResult, ToolSpec
+from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class WeatherInput(BaseModel):
@@ -46,7 +46,7 @@ def test_tool_spec_pydantic_model_generates_provider_schema_and_validates_input(
     预期结果：schema 中包含字段说明、必填项和范围约束；调用时完成默认值填充。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     app.tool_registry.register(WeatherSpecTool())
 
     schema = next(item for item in app.tool_gateway.provider_schemas() if item["function"]["name"] == "weather_spec")
@@ -77,7 +77,7 @@ def test_tool_spec_validation_error_returns_structured_tool_result(tmp_path) -> 
     预期结果：ToolGateway 返回 invalid_argument 错误，错误详情包含字段校验信息。
     """
 
-    app = AudioChatApp(AudioChatConfig(runs_root=str(tmp_path / "runs")))
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     app.tool_registry.register(WeatherSpecTool())
 
     result = asyncio.run(

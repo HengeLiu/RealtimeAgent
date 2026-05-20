@@ -10,6 +10,6 @@
 | `test_context_prompt_registry.py` | 验证 prompt registry 与上下文 prompt 注入。 |
 | `test_dashscope_asr_adapter.py` | 验证 DashScope ASR adapter 的本地 contract 和边界处理。 |
 | `test_provider_degradation_policy.py` | 验证 provider 降级策略、mock fallback 边界和错误暴露。 |
-| `test_realtime_audio_agent_core.py` | 验证 Realtime Audio Agent Core、Qwen adapter、工具桥、打断和并发限流。 |
+| `test_omni_audio_agent_core.py` | 验证 Omni Realtime Agent Core、Qwen adapter、工具桥、打断和并发限流。 |
 | `test_realtime_provider_tool_bridge.py` | 验证 Realtime provider tool call 到 ToolGateway 的桥接。 |
-| `test_text_agent_tool_loop_async.py` | 验证 Text Agent Core 的异步 tool loop、消息回填和恢复路径。 |
+| `test_vision_agent_tool_loop_async.py` | 验证 Vision Realtime Agent Core 的异步 tool loop、消息回填和恢复路径。 |

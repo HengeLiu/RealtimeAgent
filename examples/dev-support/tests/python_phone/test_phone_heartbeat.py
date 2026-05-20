@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from audio_chat.protocol import Event
-from audio_chat_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
+from realtime_agent.protocol import Event
+from realtime_agent_python_phone_mock.phone_mock import NetworkPythonPhoneMockEndpoint
 
 
 class FakeControlWebSocket:

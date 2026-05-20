@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你考虑参与 `audio_chat`。这个项目目前处在 SDK 开源前后的快速演进阶段，贡献时请优先保证代码、文档和测试能够反映真实实现状态。
+感谢你考虑参与 `realtime_agent`。这个项目目前处在 SDK 开源前后的快速演进阶段，贡献时请优先保证代码、文档和测试能够反映真实实现状态。
 
 ## 贡献方向
 
@@ -36,8 +36,8 @@ uv run python -m pytest -q
 针对文档或开发者体验变更，建议至少跑：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_text_route_audio_samples.py -q
-uv run audio-chat.device.validate examples/dev-support/devices/browser-glass/device.audio-chat.yaml
+uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
+uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 ## 代码风格

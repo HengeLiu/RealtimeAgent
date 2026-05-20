@@ -1,7 +1,7 @@
 {
-  "name": "@audio-chat/device",
+  "name": "@realtime-agent/device",
   "version": "0.1.0",
-  "description": "TypeScript/JavaScript device communication SDK for audio-chat.",
+  "description": "TypeScript/JavaScript device communication SDK for realtime-agent.",
   "type": "module",
   "main": "./src/index.js",
   "exports": {

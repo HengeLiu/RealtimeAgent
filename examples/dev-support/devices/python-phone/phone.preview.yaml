@@ -25,7 +25,7 @@ vision:
   provider: yolo
   device: auto
   frame_stride: 1
-  save_annotated_frame: runs/audio-chat/python-phone/latest-yolo.jpg
+  save_annotated_frame: runs/realtime-agent/python-phone/latest-yolo.jpg
   fallback_to_mock: false
   find_object:
     backend: yoloe
@@ -48,8 +48,8 @@ supports:
 display:
   enabled: true
   backend: pyside6
-  window_title: audio-chat Python Phone
-  save_latest_frame: runs/audio-chat/python-phone/latest-rgb.png
+  window_title: realtime-agent Python Phone
+  save_latest_frame: runs/realtime-agent/python-phone/latest-rgb.png
   max_fps: 15
   log_limit: 200
   show_debug_events: true

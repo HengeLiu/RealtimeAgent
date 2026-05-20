@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "audio-chat-device"
+rootProject.name = "realtime-agent-device"
 include(":device")

@@ -8,7 +8,7 @@ Kotlin/Java 和 C。设计中的“建议新增目录”已按当前仓库实际
 
 ## 1. 背景
 
-`audio-chat` 当前服务端 SDK 主要由 Python 实现，但真实端侧可能运行在浏览器、iOS、Android、ESP32、Linux 网关、桌面应用或其他嵌入式环境中。端侧语言可能是 JavaScript、TypeScript、Swift、Kotlin、Java、C、C++、Dart、Go、Rust、C# 等。
+`realtime-agent` 当前服务端 SDK 主要由 Python 实现，但真实端侧可能运行在浏览器、iOS、Android、ESP32、Linux 网关、桌面应用或其他嵌入式环境中。端侧语言可能是 JavaScript、TypeScript、Swift、Kotlin、Java、C、C++、Dart、Go、Rust、C# 等。
 
 这些端侧都需要完成同一类通讯任务：
 
@@ -55,7 +55,7 @@ Kotlin/Java 和 C。设计中的“建议新增目录”已按当前仓库实际
 - 不在端侧 SDK 中实现业务 Tool / Task。
 - 不在端侧 SDK 中实现摄像头、麦克风、扬声器、蓝牙、Wi-Fi 或传感器驱动。
 - 不要求所有语言 SDK 第一版都支持完整 media pipeline。
-- 不把 server 内部 `AudioChatApp`、`ToolGateway`、`TaskEngine` 暴露给端侧 SDK。
+- 不把 server 内部 `RealtimeAgentApp`、`ToolGateway`、`TaskEngine` 暴露给端侧 SDK。
 - 不把 `legacy/` 旧协议复制为新 SDK API。
 
 ## 3. 当前协议基础
@@ -64,7 +64,7 @@ Kotlin/Java 和 C。设计中的“建议新增目录”已按当前仓库实际
 
 | 类型 | 当前约束 |
 | --- | --- |
-| 设备能力 | `audio-server/audio_chat/spec/audio-chat-device.schema.json`，使用结构化 `supports.sensors` 和 `supports.actuators`。 |
+| 设备能力 | `audio-server/realtime_agent/spec/realtime-agent-device.schema.json`，使用结构化 `supports.sensors` 和 `supports.actuators`。 |
 | 注册事件 | `control.device.register.requested`、`control.device.registered`、`control.device.register.failed`。 |
 | 命令事件 | `command.requested`、`command.accepted`、`command.progress`、`command.completed`、`command.failed`。 |
 | stream 控制 | `stream.control.open.requested`、`stream.control.close.requested`。 |
@@ -103,7 +103,7 @@ package "协议定义" {
   [错误码表]
 }
 
-package "audio-chat server" {
+package "realtime-agent server" {
   [Control WebSocket]
   [Stream WebSocket]
   [Device Registry]
@@ -139,12 +139,12 @@ package "audio-chat server" {
 建议新增独立协议目录：
 
 ```text
-audio-server/audio_chat/spec/
-  audio-chat-device.schema.json       # 已存在，继续作为设备能力声明 schema
-  audio-chat-event.schema.json        # 新增，控制事件信封和事件 payload schema
-  audio-chat-stream.schema.json       # 新增，stream header schema
-  audio-chat-asyncapi.yaml            # 新增，WebSocket 通道与事件说明
-  audio-chat-error-codes.yaml         # 新增，端侧错误码和建议处理方式
+audio-server/realtime_agent/spec/
+  realtime-agent-device.schema.json       # 已存在，继续作为设备能力声明 schema
+  realtime-agent-event.schema.json        # 新增，控制事件信封和事件 payload schema
+  realtime-agent-stream.schema.json       # 新增，stream header schema
+  realtime-agent-asyncapi.yaml            # 新增，WebSocket 通道与事件说明
+  realtime-agent-error-codes.yaml         # 新增，端侧错误码和建议处理方式
 ```
 
 ### 5.1 事件信封
@@ -153,7 +153,7 @@ audio-server/audio_chat/spec/
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "event_id": "evt_xxx",
   "event_name": "command.completed",
   "timestamp_ms": 1760000000000,
@@ -170,7 +170,7 @@ audio-server/audio_chat/spec/
 
 | 字段 | 规则 |
 | --- | --- |
-| `version` | 协议版本，第一版固定为 `audio-chat.v1`。 |
+| `version` | 协议版本，第一版固定为 `realtime-agent.v1`。 |
 | `event_id` | 端侧或 server 生成的事件唯一 ID。 |
 | `event_name` | 受 schema 约束的事件名，不允许 SDK 用户手写自由字符串。 |
 | `timestamp_ms` | 事件产生时的毫秒时间戳。 |
@@ -225,7 +225,7 @@ header 示例：
 
 ```json
 {
-  "version": "audio-chat.v1",
+  "version": "realtime-agent.v1",
   "user_id": "user-001",
   "session_id": "session-001",
   "stream_id": "stream_rgb_001",
@@ -264,7 +264,7 @@ const device = Device.define("dev-phone-001")
   .sensorRgb({ modes: ["single", "continuous"], format: "jpeg" })
   .actuatorVibrator(["vibrate"]);
 
-const client = new AudioChatDeviceClient({
+const client = new RealtimeAgentDeviceClient({
   serverUrl: "http://127.0.0.1:8765",
   device,
 });
@@ -291,14 +291,14 @@ await client.register();
 ### 6.2 Swift 示例
 
 ```swift
-let device = AudioChatDevice(id: "dev-ios-phone-001")
+let device = RealtimeAgentDevice(id: "dev-ios-phone-001")
     .user("user-001")
     .name("iPhone")
     .role("phone")
     .sensorRgb(modes: [.single, .continuous], format: .jpeg)
     .actuatorVibrator(commands: [.vibrate])
 
-let client = AudioChatDeviceClient(serverURL: serverURL, device: device)
+let client = RealtimeAgentDeviceClient(serverURL: serverURL, device: device)
 
 client.onStreamOpen(.sensorRgb) { request in
     let jpeg = try await camera.captureJpeg()
@@ -324,19 +324,19 @@ try await client.register()
 C SDK 不追求高级 DSL，第一版使用结构体和回调：
 
 ```c
-audio_chat_device_t device = audio_chat_device_init("user-001", "dev-esp32-001");
-audio_chat_device_set_name(&device, "ESP32 Glass");
-audio_chat_device_set_role(&device, "glass");
-audio_chat_device_add_rgb_sensor(&device, AUDIO_CHAT_MODE_SINGLE, AUDIO_CHAT_IMAGE_JPEG);
+realtime_agent_device_t device = realtime_agent_device_init("user-001", "dev-esp32-001");
+realtime_agent_device_set_name(&device, "ESP32 Glass");
+realtime_agent_device_set_role(&device, "glass");
+realtime_agent_device_add_rgb_sensor(&device, REALTIME_AGENT_MODE_SINGLE, REALTIME_AGENT_IMAGE_JPEG);
 
-audio_chat_client_t *client = audio_chat_client_new(&config, &device);
+realtime_agent_client_t *client = realtime_agent_client_new(&config, &device);
 
-audio_chat_client_on_stream_open(client, "sensor.rgb", handle_rgb_open, camera_ctx);
-audio_chat_client_on_command(client, "vibrate", handle_vibrate, motor_ctx);
+realtime_agent_client_on_stream_open(client, "sensor.rgb", handle_rgb_open, camera_ctx);
+realtime_agent_client_on_command(client, "vibrate", handle_vibrate, motor_ctx);
 
-audio_chat_client_connect(client);
-audio_chat_client_register(client);
-audio_chat_client_loop(client);
+realtime_agent_client_connect(client);
+realtime_agent_client_register(client);
+realtime_agent_client_loop(client);
 ```
 
 C SDK 重点是：
@@ -352,11 +352,11 @@ C SDK 重点是：
 
 | 语言 | 包名建议 | 发布渠道 | 覆盖端侧 | 第一版范围 |
 | --- | --- | --- | --- | --- |
-| Python | `audio-chat-device` | PyPI | Python 模拟端、Linux 端侧、测试工具 | 注册、命令、stream、测试 harness。 |
-| TypeScript / JavaScript | `@audio-chat/device` | npm | 浏览器、Node、Electron、WebView | 浏览器和 Node 双 runtime，优先浏览器。 |
-| Swift | `AudioChatDeviceKit` | Swift Package Manager | iOS、macOS | 抽出现有 iOS 参考端核心协议。 |
-| Kotlin / Java | `io.audiochat:device-client` | Maven Central | Android、JVM 网关 | Kotlin-first，Java 可调用。 |
-| C / C++ | `audio-chat-device-c` | 源码包、ESP-IDF component、Conan/vcpkg 可选 | ESP32、嵌入式 Linux | C core + C++ wrapper 可后置。 |
+| Python | `realtime-agent-device` | PyPI | Python 模拟端、Linux 端侧、测试工具 | 注册、命令、stream、测试 harness。 |
+| TypeScript / JavaScript | `@realtime-agent/device` | npm | 浏览器、Node、Electron、WebView | 浏览器和 Node 双 runtime，优先浏览器。 |
+| Swift | `RealtimeAgentDeviceKit` | Swift Package Manager | iOS、macOS | 抽出现有 iOS 参考端核心协议。 |
+| Kotlin / Java | `io.realtimeagent:device-client` | Maven Central | Android、JVM 网关 | Kotlin-first，Java 可调用。 |
+| C / C++ | `realtime-agent-device-c` | 源码包、ESP-IDF component、Conan/vcpkg 可选 | ESP32、嵌入式 Linux | C core + C++ wrapper 可后置。 |
 
 ### 7.2 P1 语言
 
@@ -376,7 +376,7 @@ PHP、Ruby 等语言可以通过协议文档和 OpenAPI/AsyncAPI 生成基础客
 协议版本和 SDK 版本分开管理：
 
 ```text
-protocol version: audio-chat.v1
+protocol version: realtime-agent.v1
 python sdk:      0.1.0
 typescript sdk:  0.1.0
 swift sdk:       0.1.0
@@ -384,8 +384,8 @@ swift sdk:       0.1.0
 
 兼容性规则：
 
-- `audio-chat.v1` 内新增可选字段，不破坏旧 SDK。
-- 删除字段、改字段类型、改事件语义必须进入 `audio-chat.v2`。
+- `realtime-agent.v1` 内新增可选字段，不破坏旧 SDK。
+- 删除字段、改字段类型、改事件语义必须进入 `realtime-agent.v2`。
 - SDK 启动注册时必须上报 `sdk_version` 和 `runtime`。
 - server 注册回包中可以返回 `min_protocol_version`、`recommended_sdk_version`、`heartbeat_interval_seconds`。
 - SDK 收到未知事件时不能崩溃，应进入 `onUnknownEvent` 或日志 WARNING。
@@ -470,7 +470,7 @@ SDK 应内置状态机，避免端侧应用重复处理：
 
 | 测试类型 | 目标 |
 | --- | --- |
-| schema 测试 | DeviceBuilder 输出必须通过 `audio-chat-device.schema.json`。 |
+| schema 测试 | DeviceBuilder 输出必须通过 `realtime-agent-device.schema.json`。 |
 | 编解码测试 | 事件信封和 stream chunk 编解码与 Python 基准一致。 |
 | 契约测试 | 启动真实 aiohttp 测试 server，完成注册、命令回执、stream 上传。 |
 | 静态边界测试 | SDK 不导入 server 内部模块，不依赖示例应用私有代码。 |
@@ -506,12 +506,12 @@ audio-device/
 当协议稳定后，可以拆出独立仓库或使用多仓库发布：
 
 ```text
-audio-chat-protocol
-audio-chat-device-python
-audio-chat-device-js
-audio-chat-device-swift
-audio-chat-device-android
-audio-chat-device-c
+realtime-agent-protocol
+realtime-agent-device-python
+realtime-agent-device-js
+realtime-agent-device-swift
+realtime-agent-device-android
+realtime-agent-device-c
 ```
 
 包发布原则：
@@ -572,7 +572,7 @@ server 的 `runs/` 产物仍是最终排障证据；端侧 SDK 的日志应能�
 
 ## 16. 推荐结论
 
-下一阶段应先建设 `audio-chat-protocol`，再实现 P0 语言 SDK：
+下一阶段应先建设 `realtime-agent-protocol`，再实现 P0 语言 SDK：
 
 1. Python：作为基准实现和测试 harness。
 2. TypeScript：覆盖 browser-glass 开发支持组件和 Node 端侧。
