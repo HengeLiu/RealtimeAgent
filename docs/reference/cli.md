@@ -140,8 +140,8 @@ uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.
 协议黄金样例和 Python 端侧 SDK 检查：
 
 ```bash
-uv run python -m pytest audio-server/tests/protocol/test_protocol_schema_examples.py audio-server/tests/protocol/test_stream_chunk_codec_contract.py -q
-uv run python -m pytest audio-device/python/tests -q
+uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py protocol/protocol-tests/test_stream_chunk_codec_contract.py -q
+uv run python -m pytest audio-device/python/unit-tests audio-device/python/protocol-tests -q
 cd audio-device/typescript && npm test
 cd audio-device/swift && swift test
 cd audio-device/kotlin && gradle test
@@ -153,7 +153,7 @@ ctest --test-dir audio-device/c/build --output-on-failure
 无头回放测试：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
 全部测试：

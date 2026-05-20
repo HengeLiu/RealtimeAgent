@@ -570,11 +570,11 @@ uv run realtime-agent.context.inspect --config examples/for-blind-app/audio-serv
 优先跑：
 
 ```bash
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_agent_core_router.py -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
-uv run python -m pytest audio-server/tests/sdk/runtime/test_memory_service.py -q
-uv run python -m pytest audio-server/tests/sdk/runtime/test_conversation_memory_service.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_agent_core_router.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_memory_service.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py -q
 ```
 
 ### 人工联调观察点
@@ -639,7 +639,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 - 状态：已完成。
 - 实现：新增 `realtime_agent/prompts/` 平铺目录、`registry.yaml` 和 9 个 Markdown prompt 文件；新增 `PromptRegistry` 和 `PromptAsset`。
 - 文件：`audio-server/realtime_agent/prompts/`、`audio-server/realtime_agent/agent_core/context/registry.py`、`audio-server/realtime_agent/agent_core/context/models.py`。
-- 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_context_prompt_registry.py -q` 通过。
+- 验证：`uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_context_prompt_registry.py -q` 通过。
 - 风险：`server.yaml` 仍保留 inline prompt，当前实现先记录为 `omni_system/text_system` 来源；后续如要改成 prompt name 引用，需要单独做配置迁移。
 
 ### 阶段 2：引入 ContextSource 和 ModelContext
@@ -647,7 +647,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 - 状态：已完成。
 - 实现：新增 `ContextSource`、`ModelContext`、`ContextPolicy`、`ContextCompiler`；`source_kind` 保持粗粒度分类；model request 支持输出 `context_sources`、`prompts`、`warnings`、`truncations` 和 `context_metadata`。
 - 文件：`audio-server/realtime_agent/agent_core/context/`、`audio-server/realtime_agent/observability.py`。
-- 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_context_compiler.py -q` 通过。
+- 验证：`uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_context_compiler.py -q` 通过。
 - 风险：token 估算第一版使用字符数近似，没有接 provider tokenizer。
 
 ### 阶段 3：ContextCompiler 接入 VisionRealtimeAgentCore
@@ -655,7 +655,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 - 状态：已完成。
 - 实现：Text 工具循环改由 ContextCompiler 生成 `instructions/messages/tools`；保留工具调用、工具结果回填和历史 tool 消息不孤立回灌的语义；工具结果回灌时记录 `context.source.added`。
 - 文件：`audio-server/realtime_agent/agent_core/text.py`。
-- 验证：`uv run python -m pytest audio-server/tests/sdk/runtime/test_model_request_logging.py audio-server/tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 通过。
+- 验证：`uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_model_request_logging.py audio-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 通过。
 - 风险：没有用真实视觉语言模型做 provider 侧回归，本阶段为 mock/契约验证。
 
 ### 阶段 4：ContextCompiler 接入 OmniRealtimeAgentCore
@@ -663,7 +663,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 - 状态：已完成。
 - 实现：Realtime 会话打开时由 ContextCompiler 生成 session instructions、Realtime tools、等价 messages 和 source map；inline vision tool 过滤迁移到 ContextPolicy；Realtime 工具结果记录 `context.source.added`。
 - 文件：`audio-server/realtime_agent/agent_core/realtime.py`。
-- 验证：`uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py -q`、`uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q` 通过。
+- 验证：`uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q`、`uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q` 通过。
 - 风险：未做真实 Qwen Omni Realtime 联调；真实 provider 的预音频和工具结果注入仍需设备侧观察。
 
 ### 阶段 5：清理工具可见内容与上下文检查工具
@@ -687,26 +687,26 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 已通过：
 
 ```bash
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_context_prompt_registry.py audio-server/tests/sdk/agent_core/test_context_compiler.py -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core audio-server/tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_omni_audio_builds_realtime_core -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py -q
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
-uv run python -m pytest audio-server/tests/sdk/runtime/test_model_request_logging.py audio-server/tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q
-uv run python -m pytest audio-server/tests/sdk/runtime/test_memory_service.py audio-server/tests/sdk/runtime/test_conversation_memory_service.py audio-server/tests/sdk/runtime/test_tool_spec_schema.py audio-server/tests/sdk/runtime/test_task_signal_bridge.py -q
-uv run python -m pytest audio-server/tests/cli/test_package_boundary.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_context_prompt_registry.py audio-server/protocol-tests/sdk/agent_core/test_context_compiler.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core audio-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_omni_audio_builds_realtime_core -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_model_request_logging.py audio-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_memory_service.py audio-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py audio-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py audio-server/protocol-tests/sdk/runtime/test_task_signal_bridge.py -q
+uv run python -m pytest audio-server/unit-tests/cli/test_package_boundary.py -q
 git diff --check
 ```
 
 已发现但未在本阶段处理的既有失败：
 
 ```bash
-uv run python -m pytest audio-server/tests/sdk/agent_core/test_agent_core_router.py -q
+uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_agent_core_router.py -q
 ```
 
 其中 `test_task_engine_create_query_cancel_and_agent_event_bridge` 期望 Task 状态为 `running`，当前实现返回 `started`。
 
 ```bash
-uv run python -m pytest audio-server/tests/cli/test_release_package.py audio-server/tests/cli/test_package_check_release_inputs.py -q
+uv run python -m pytest audio-server/unit-tests/cli/test_release_package.py audio-server/unit-tests/cli/test_package_check_release_inputs.py -q
 ```
 
 其中 `test_for_blind_app_can_be_copied_to_temp_project_and_generate_endpoint_configs` 查找复制后 `for-blind-app/server.yaml`，当前示例应用实际配置位于 `examples/for-blind-app/audio-server/server.yaml`。

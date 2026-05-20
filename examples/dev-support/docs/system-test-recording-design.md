@@ -187,7 +187,7 @@ examples/dev-support/devices/python-playback-glass/
     smoke.yaml
   reports/
 
-examples/dev-support/tests/python_playback_glass/
+examples/dev-support/unit-tests/python_playback_glass/
   test_case_schema.py
   test_recorder.py
   test_protocol_client.py

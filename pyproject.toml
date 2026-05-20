@@ -71,6 +71,8 @@ realtime_agent = ["py.typed", "spec/*.json", "spec/*.yaml", "prompts/*.yaml", "p
 [tool.pytest.ini_options]
 pythonpath = [
     "audio-server",
+    "audio-server/protocol-tests",
+    "audio-server/model-provider-tests",
     "audio-device/python/src",
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
@@ -78,10 +80,21 @@ pythonpath = [
     "examples/for-blind-app/devices/native-esp32-glass",
 ]
 testpaths = [
-    "audio-server/tests",
-    "audio-device/python/tests",
-    "examples/for-blind-app/tests",
-    "examples/dev-support/tests",
+    "protocol/unit-tests",
+    "protocol/protocol-tests",
+    "audio-server/unit-tests",
+    "audio-server/protocol-tests",
+    "audio-server/model-provider-tests",
+    "audio-device/python/unit-tests",
+    "audio-device/python/protocol-tests",
+    "examples/for-blind-app/unit-tests",
+    "examples/for-blind-app/app-tests",
+    "examples/for-blind-app/replay-tests",
+    "examples/for-blind-app/hardware-tests",
+    "examples/dev-support/unit-tests",
+    "examples/dev-support/app-tests",
+    "examples/dev-support/replay-tests",
+    "examples/dev-support/hardware-tests",
 ]
 addopts = "-q"
 markers = [

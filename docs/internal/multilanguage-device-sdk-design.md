@@ -478,7 +478,7 @@ SDK 应内置状态机，避免端侧应用重复处理：
 跨语言黄金样例：
 
 ```text
-testdata/protocol/
+protocol/data/fixtures/
   device.browser-glass.json
   device.ios-phone.json
   event.register.requested.json

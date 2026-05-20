@@ -107,7 +107,7 @@ uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass
 ## 跑一个无头回放测试
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
 这条链路使用录制音频样例和 mock ASR，覆盖：

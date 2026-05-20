@@ -1,0 +1,8 @@
+{
+  "protocol": {
+    "data": {
+      "version": "realtime-agent.data.v1",
+      "description": "事件信封、事件名、payload schema、stream header、错误码和协议 fixture 的版本。"
+    }
+  }
+}

@@ -525,7 +525,7 @@ vision:
 先修复并通过现有回显测试：
 
 ```bash
-uv run python -m pytest examples/dev-support/tests/python_phone_mock/test_python_phone_video_display.py -q
+uv run python -m pytest examples/dev-support/unit-tests/python_phone_mock/test_python_phone_video_display.py -q
 ```
 
 预期结果：
@@ -606,7 +606,7 @@ YOLO 接入后增加：
 验收：
 
 ```bash
-uv run python -m pytest audio-server/tests/protocol/test_device_capabilities_semantics.py -q
+uv run python -m pytest protocol/protocol-tests/test_device_capabilities_semantics.py -q
 ```
 
 ### 阶段 2：修正 `phone.preview.yaml`
@@ -676,7 +676,7 @@ uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/
 
 改动：
 
-1. 更新 `examples/dev-support/tests/python_phone_mock/test_python_phone_video_display.py`，使 phone preview 使用新的 properties 和无生产 sensor 的 supports。
+1. 更新 `examples/dev-support/unit-tests/python_phone_mock/test_python_phone_video_display.py`，使 phone preview 使用新的 properties 和无生产 sensor 的 supports。
 2. 保持测试使用真实 aiohttp server、真实 `/ws/control`、真实 `/ws/stream`。
 3. 断言 phone 收到帧、保存最近帧、`consumer_device_ids` 包含 phone preview。
 4. 增加一条负向测试：未声明 visual display 的普通设备不会收到 `sensor.rgb` chunk。
@@ -685,7 +685,7 @@ uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/
 验收：
 
 ```bash
-uv run python -m pytest examples/dev-support/tests/python_phone_mock/test_python_phone_video_display.py -q
+uv run python -m pytest examples/dev-support/unit-tests/python_phone_mock/test_python_phone_video_display.py -q
 ```
 
 ### 阶段 5：补一个可重复的触发入口
@@ -733,7 +733,7 @@ uv run python -m pytest examples/dev-support/tests/python_phone_mock/test_python
 验收：
 
 ```bash
-uv run python -m pytest audio-server/tests/cli/test_docs_commands.py -q
+uv run python -m pytest audio-server/unit-tests/cli/test_docs_commands.py -q
 ```
 
 如果文档命令无法自动覆盖本链路，至少执行一次手动联调并记录实际命令和结果。

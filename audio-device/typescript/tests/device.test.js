@@ -46,7 +46,7 @@ test("RealtimeAgentEvent reads protocol golden fixtures", () => {
     "stream-open-requested.json",
   ];
   for (const name of names) {
-    const data = JSON.parse(readFileSync(resolve(root, "testdata/protocol/events", name), "utf8"));
+    const data = JSON.parse(readFileSync(resolve(root, "protocol/data/fixtures/events", name), "utf8"));
     const event = RealtimeAgentEvent.fromObject(data).toObject();
     assert.equal(event.event_name, data.event_name);
     assert.equal(event.user_id, data.user_id);
@@ -57,7 +57,7 @@ test("RealtimeAgentEvent reads protocol golden fixtures", () => {
 test("RealtimeAgentEvent rejects invalid protocol envelope fixtures", () => {
   const names = ["control-payload-media.json", "target-device-routing.json"];
   for (const name of names) {
-    const data = JSON.parse(readFileSync(resolve(root, "testdata/protocol/invalid/events", name), "utf8"));
+    const data = JSON.parse(readFileSync(resolve(root, "protocol/data/fixtures/invalid/events", name), "utf8"));
     assert.throws(() => RealtimeAgentEvent.fromObject(data), /forbidden device routing|media bytes/);
   }
 });

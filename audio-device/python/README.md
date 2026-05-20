@@ -216,7 +216,7 @@ client.diagnostics_snapshot()
 ## 测试
 
 ```bash
-uv run python -m pytest audio-device/python/tests -q
+uv run python -m pytest audio-device/python/unit-tests audio-device/python/protocol-tests -q
 ```
 
 当前测试覆盖：

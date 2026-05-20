@@ -1,0 +1,8 @@
+{
+  "protocol": {
+    "behavior": {
+      "version": "realtime-agent.behavior.v1",
+      "description": "server 和 device 收到协议事件后的响应事件、处理流程、状态更新和运行产物规范版本。"
+    }
+  }
+}

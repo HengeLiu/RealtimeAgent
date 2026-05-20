@@ -152,7 +152,7 @@ header 字段：
 2. stream header 字段进入 `realtime-agent-stream.schema.json`。
 3. 端侧错误码进入 `realtime-agent-error-codes.yaml`。
 4. WebSocket 通道进入 `realtime-agent-asyncapi.yaml`。
-5. 黄金样例进入 `testdata/protocol/`。
+5. 黄金样例进入 `protocol/data/fixtures/`。
 6. Python 参考端优先复用基准 SDK 的连接、事件和 stream chunk codec。
 
 ## 8. 可后置项

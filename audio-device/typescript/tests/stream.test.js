@@ -7,8 +7,8 @@ import { StreamChunk, StreamChunkCodec } from "../src/index.js";
 const root = resolve("../..");
 
 test("StreamChunkCodec reads golden fixture", () => {
-  const header = JSON.parse(readFileSync(resolve(root, "testdata/protocol/streams/rgb-header.json"), "utf8"));
-  const raw = readFileSync(resolve(root, "testdata/protocol/streams/rgb-chunk.bin"));
+  const header = JSON.parse(readFileSync(resolve(root, "protocol/data/fixtures/streams/rgb-header.json"), "utf8"));
+  const raw = readFileSync(resolve(root, "protocol/data/fixtures/streams/rgb-chunk.bin"));
   const decoded = StreamChunkCodec.decodeHeader(raw);
 
   for (const [key, value] of Object.entries(header)) {

@@ -24,5 +24,10 @@ uv run realtime-agent.dev.preflight \
   --config examples/for-blind-app/audio-server/server.yaml \
   --report runs/acceptance/preflight.json
 
-uv run python -m pytest examples/for-blind-app/tests examples/dev-support/tests -q
+uv run python -m pytest \
+  examples/for-blind-app/app-tests \
+  examples/for-blind-app/replay-tests \
+  examples/dev-support/unit-tests \
+  examples/dev-support/app-tests \
+  -q
 ```

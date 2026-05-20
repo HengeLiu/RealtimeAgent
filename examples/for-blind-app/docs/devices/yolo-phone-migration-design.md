@@ -567,7 +567,7 @@ testdata/vision/
 ```bash
 TRAFFIC_LIGHT_MODEL_PATH=/path/to/trafficlight.pt \
 YOLOE_MODEL_PATH=/path/to/yoloe-11l-seg.pt \
-uv run python -m pytest examples/dev-support/tests/python_phone/test_phone_yolo_vision.py -q
+uv run python -m pytest examples/dev-support/unit-tests/python_phone/test_phone_yolo_vision.py -q
 ```
 
 ### 跨设备联调

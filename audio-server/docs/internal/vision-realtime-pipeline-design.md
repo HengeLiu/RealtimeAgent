@@ -600,19 +600,19 @@ Gate -> Msg: assistant_text.done
 - `examples/dev-support/devices/browser-glass/index.html`
   - 浏览器日志使用毫秒级时间戳。
   - 只记录 speaker 首包、调度、drain 汇总，不再逐 chunk 打印音频接收日志。
-- `audio-server/tests/sdk/runtime/test_progress_audio.py`
+- `audio-server/protocol-tests/sdk/runtime/test_progress_audio.py`
   - 覆盖首输出 tool_call 的 progress audio。
   - 覆盖先文本再 tool_call 时保留工具前文本且不重复播 progress audio。
-- `audio-server/tests/sdk/agent_core/test_agent_core_router.py`
+- `audio-server/protocol-tests/sdk/agent_core/test_agent_core_router.py`
   - 覆盖逐 delta 实时释放，包括无标点首个 delta 立即释放。
   - 覆盖 Vision 状态机事件。
   - 覆盖打断后只保存已释放 assistant 文本。
 
 ## 验证记录
 
-- `uv run python -m pytest audio-server/tests/sdk/runtime/test_progress_audio.py audio-server/tests/sdk/agent_core/test_agent_core_router.py -k 'vision_agent or progress_audio' -q`
+- `uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_progress_audio.py audio-server/protocol-tests/sdk/agent_core/test_agent_core_router.py -k 'vision_agent or progress_audio' -q`
   - 结果：通过，15 passed。
-- `uv run python -m pytest audio-server/tests/sdk/agent_core/test_omni_audio_agent_core.py audio-server/tests/sdk/agent_core/test_context_compiler.py audio-server/tests/sdk/runtime/test_voice_session_modes.py -q`
+- `uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py audio-server/protocol-tests/sdk/agent_core/test_context_compiler.py audio-server/protocol-tests/sdk/runtime/test_voice_session_modes.py -q`
   - 结果：通过，29 passed。
 - `uv run python -m realtime_agent_python_playback_glass run --server-url http://127.0.0.1:18765 --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml --runs-root /tmp/realtime-agent-text-e2e/runs --report /tmp/realtime-agent-text-e2e/reports/smoke/report.json`
   - 配置：临时 `/tmp/realtime-agent-text-e2e/server.yaml`，`agent.mode=vision`，ASR/Vision/TTS 均为 mock provider，复用 for-blind capabilities，清空临时 denylist 以允许 `capture_photo`。
@@ -629,7 +629,7 @@ Gate -> Msg: assistant_text.done
 待补充：
 
 - 真实 DashScope ASR/Vision/TTS provider 和真机麦克风/扬声器体验未在本轮验证；本轮是 mock provider + 真实 WebSocket 端侧协议验证。
-- `examples/dev-support/tests/playback/test_python_playback.py` 仍有旧 in-process playback 失败：`run_playback()` 兼容占位没有输出 chunk，且测试引用了不存在的 `testdata/audio-sample/wav/看一下我前面有什么.wav`。这不影响本轮使用的网络无头端侧 `python-playback-glass` 结果，但需要后续单独清理旧测试。
+- `examples/dev-support/unit-tests/playback/test_python_playback.py` 仍有旧 in-process playback 失败：`run_playback()` 兼容占位没有输出 chunk，且测试引用了不存在的 `testdata/audio-sample/wav/看一下我前面有什么.wav`。这不影响本轮使用的网络无头端侧 `python-playback-glass` 结果，但需要后续单独清理旧测试。
 
 ## 真实回放发现并修复的问题
 

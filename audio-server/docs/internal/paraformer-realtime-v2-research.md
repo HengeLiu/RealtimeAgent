@@ -102,7 +102,7 @@ uv run python tools/paraformer_realtime_probe.py \
 ```bash
 uv run python tools/paraformer_realtime_probe.py \
   --mode both \
-  --input audio-server/tests/fixtures/provider/dashscope-nihao-16k.pcm \
+  --input audio-server/model-provider-tests/fixtures/provider/dashscope-nihao-16k.pcm \
   --output-jsonl runs/paraformer-probe/nihao-both-events.jsonl \
   --summary-json runs/paraformer-probe/nihao-both-summary.json \
   --leading-silence-ms 500 \

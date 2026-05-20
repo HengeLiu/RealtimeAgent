@@ -4,12 +4,13 @@
 
 - `audio-server/realtime_agent/`：Python server SDK 源码目录，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
 - `audio-device/`：多语言端侧通讯 SDK，覆盖 Python、TypeScript、Swift、Kotlin/Java 和 C。
+- `protocol/`：server 和 device 共同依赖的协议文档、fixture 和协议资产检查。
 - `examples/`：示例项目、真实端侧参考工程和开发/测试支持组件。`examples/dev-support/`
   下的 browser-glass、python-phone、python-playback-glass 以 Device 形态接入协议，
   但定位是帮助开发者联调和验证 SDK，不是 SDK 预设的正式设备类型。
 - `docs/`：架构设计、联调和排障文档。
 - `testdata/`：跨示例复用的音频样例。
-- `audio-server/tests/`、`examples/*/tests/`：SDK 和示例项目的自动化测试。
+- `*/unit-tests/`、`*/protocol-tests/`、`*/app-tests/`、`*/replay-tests/`：按模块拆分的自动化测试。
 
 server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)。
 
@@ -113,7 +114,7 @@ uv run realtime-agent.playback.glass \
 Vision 路线的无头验收可以直接复用 `testdata/audio-sample/` 下的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock vision model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
 ## 更换模型和模态
@@ -312,7 +313,17 @@ uv run realtime-agent.dev.preflight \
 uv run realtime-agent.sdk.package-check \
   --report runs/acceptance/package-check.json
 
-uv run python -m pytest audio-server/tests examples/for-blind-app/tests examples/dev-support/tests -q
+uv run python -m pytest \
+  protocol/protocol-tests \
+  audio-server/unit-tests \
+  audio-server/protocol-tests \
+  audio-device/python/unit-tests \
+  audio-device/python/protocol-tests \
+  examples/for-blind-app/app-tests \
+  examples/for-blind-app/replay-tests \
+  examples/dev-support/unit-tests \
+  examples/dev-support/app-tests \
+  -q
 ```
 
 ## 运行产物与日志索引
@@ -357,14 +368,26 @@ assets/                   # 其他资产
 
 ## 测试
 
+项目测试按 P0 协议资产检查、L1 事件行为一致性、L2 大模型能力、L3 应用能力组织。完整说明见 [测试体系说明](docs/testing.md)。
+
 ```bash
 uv run python -m pytest
+```
+
+常用分层回归：
+
+```bash
+uv run python -m pytest -m protocol -q
+uv run python -m pytest -m sdk -q
+uv run python -m pytest -m device_sdk -q
+uv run python -m pytest -m model_provider -q
+uv run python -m pytest -m replay -q
 ```
 
 真实 provider 集成测试需要配置对应 API Key：
 
 ```bash
-uv run python -m pytest audio-server/tests/model_provider/test_dashscope_providers.py -q
+uv run python -m pytest audio-server/model-provider-tests/test_dashscope_providers.py -q
 ```
 
 ## 文档

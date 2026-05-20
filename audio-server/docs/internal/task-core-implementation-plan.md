@@ -355,7 +355,7 @@ stop
 
 已验证：
 
-1. `uv run python -m pytest audio-server/tests/sdk/runtime/test_task_engine_scheduler.py audio-server/tests/sdk/runtime/test_task_engine_persistence.py audio-server/tests/sdk/runtime/test_task_manage_tool.py audio-server/tests/acceptance/test_architecture_design_contract_acceptance.py examples/for-blind-app/tests/capabilities/test_phone_task_contract.py examples/for-blind-app/tests/capabilities/test_peer_video_tasks.py -q`
+1. `uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_task_engine_scheduler.py audio-server/protocol-tests/sdk/runtime/test_task_engine_persistence.py audio-server/protocol-tests/sdk/runtime/test_task_manage_tool.py audio-server/protocol-tests/acceptance/test_architecture_design_contract_acceptance.py examples/for-blind-app/app-tests/capabilities/test_phone_task_contract.py examples/for-blind-app/app-tests/capabilities/test_peer_video_tasks.py -q`
    - 结果：26 passed。
 
 补充说明：

@@ -115,7 +115,7 @@ audio-server/docs/
 
 ```bash
 uv run python -m pytest
-uv run python -m pytest examples/for-blind-app/tests/replay/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
 ## testdata

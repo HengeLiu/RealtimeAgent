@@ -61,7 +61,7 @@ examples/dev-support/devices/python-playback-glass/
     smoke.yaml
   reports/
 
-examples/dev-support/tests/python_playback_glass/
+examples/dev-support/unit-tests/python_playback_glass/
   test_case_schema.py
   test_recorder.py
   test_protocol_client.py
@@ -373,6 +373,6 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 - 状态：已完成。
 - 目标：支持每次改代码后跑一组系统 Case，并保留 pytest 外层边界。
 - 实现：新增 `suites/smoke.yaml` 和 `run --suite`；新增 `--fail-fast`、`--keep-runs` 参数；新增 `examples/dev-support/tests/python_playback_glass`，测试 schema、协议编解码、recorder 和 server 内部依赖禁用规则。
-- 文件：`suites/smoke.yaml`、`examples/dev-support/tests/python_playback_glass/*`。
+- 文件：`suites/smoke.yaml`、`examples/dev-support/unit-tests/python_playback_glass/*`。
 - 验证：`uv run python -m pytest examples/dev-support/tests/python_playback_glass -q` 通过，结果 `8 passed`；其中 `test_cli_register_only_over_real_websocket_server` 启动真实 aiohttp server，并通过子进程 CLI 执行 `register_only` Case。
 - 待验收：pytest 已覆盖真实 WebSocket 注册链路；包含音频、图片、工具和输出的完整 smoke suite 仍需要外部启动 mock provider server 后执行。

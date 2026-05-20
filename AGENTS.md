@@ -15,7 +15,12 @@
 
 ```text
 audio-server/realtime_agent/          # SDK 主体，Python 导入名 realtime_agent
-audio-server/tests/               # SDK 测试
+protocol/                         # 协议说明、协议数据资产和协议资产检查
+audio-server/unit-tests/          # Server SDK 单元测试和 CLI 轻量边界
+audio-server/protocol-tests/      # Server SDK L1 协议行为测试
+audio-server/model-provider-tests/ # L2 大模型接入测试
+audio-device/python/unit-tests/   # Python Device SDK 单元测试
+audio-device/python/protocol-tests/ # Python Device SDK L1 协议行为测试
 audio-server/docs/                # SDK 内部设计、上下文 API、运行产物说明
 docs/                             # 社区向文档、快速开始、教程、命令行和项目结构说明
 examples/for-blind-app/           # 当前主要示例应用
@@ -251,6 +256,10 @@ sensor.mic -> OmniRealtimeAgentCore -> assistant_audio.delta -> actuator.speaker
 
 ## 测试策略
 
+项目测试按 P0 协议资产检查、L1 事件行为一致性、L2 大模型能力、L3 应用能力组织。完整说明见 `docs/testing.md`。
+
+修改协议数据结构时先跑 P0；修改 server / device 对事件的处理动作时必须跑 L1；修改真实模型 provider 时跑 L2；修改应用或端侧参考工程时跑 L3。不要把“协议资产检查通过”写成“server/device 行为已验证”，也不要把契约测试通过写成真机已验证。
+
 全部测试：
 
 ```bash
@@ -260,24 +269,39 @@ uv run python -m pytest
 常用子集：
 
 ```bash
-uv run python -m pytest audio-server/tests -q
-uv run python -m pytest examples/for-blind-app/tests -q
-uv run python -m pytest examples/dev-support/tests -q
-uv run python -m pytest examples/for-blind-app/tests/test_text_route_audio_samples.py -q
+uv run python -m pytest protocol/protocol-tests -q
+uv run python -m pytest audio-server/protocol-tests -q
+uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest examples/for-blind-app/app-tests -q
+uv run python -m pytest examples/for-blind-app/replay-tests -q
+uv run python -m pytest examples/dev-support/unit-tests examples/dev-support/app-tests -q
+```
+
+分层回归：
+
+```bash
+uv run python -m pytest -m protocol -q
+uv run python -m pytest -m sdk -q
+uv run python -m pytest -m device_sdk -q
+uv run python -m pytest -m interop -q
+uv run python -m pytest -m model_provider -q
+uv run python -m pytest -m replay -q
 ```
 
 真实模型提供方集成测试：
 
 ```bash
-uv run python -m pytest audio-server/tests/integration/test_dashscope_providers.py -q
+uv run python -m pytest audio-server/model-provider-tests/test_dashscope_providers.py -q
 ```
 
 测试编写要求：
 
 - 测试文件命名为 `test_*.py`。
-- SDK 行为测试放 `audio-server/tests/`。
-- 示例应用测试放 `examples/<app>/tests/`。
-- 开发/测试支持组件测试放对应 `examples/dev-support/tests/` 或示例应用测试目录。
+- 协议资产检查放 `protocol/protocol-tests/`。
+- Server SDK 行为测试放 `audio-server/protocol-tests/`。
+- Device SDK 行为测试放 `audio-device/python/protocol-tests/` 或对应语言目录。
+- 示例应用测试放 `examples/<app>/app-tests/`、`replay-tests/` 或 `hardware-tests/`。
+- 开发/测试支持组件测试放 `examples/dev-support/unit-tests/`、`app-tests/`、`replay-tests/` 或 `hardware-tests/`。
 - 新测试要用中文注释或 docstring 写明测试目标、测试方法和预期结果。
 - 测试的目的是真实暴露问题，不是只为通过而放宽断言。
 - 如果功能涉及跨设备，必须提供本地可复现联调流程和观察点。
@@ -428,8 +452,8 @@ tasks/                    # 长流程 Task 运行产物
 
 开始改代码前先确认任务属于哪一层：
 
-- SDK 核心能力：改 `audio-server/realtime_agent/`，补 `audio-server/tests/`。
-- 示例应用能力：改 `examples/for-blind-app/audio-server/capabilities/`，补 `examples/for-blind-app/tests/`。
+- SDK 核心能力：改 `audio-server/realtime_agent/`，补 `audio-server/protocol-tests/`，必要时补 `audio-server/unit-tests/`。
+- 示例应用能力：改 `examples/for-blind-app/audio-server/capabilities/`，补 `examples/for-blind-app/app-tests/` 或 `replay-tests/`。
 - 开发/测试支持组件或端侧参考工程：改 `examples/dev-support/devices/` 或 `examples/for-blind-app/devices/`，补端侧契约或联调说明。
 - 文档或协议：同步更新 docs、schema、测试和示例配置。
 

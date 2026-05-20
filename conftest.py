@@ -99,9 +99,13 @@ def _status_from_exitstatus(exitstatus: int, counts: dict[str, int]) -> str:
 def _inputs_for_layer(layer: str) -> dict[str, Any]:
     root = Path.cwd()
     spec_root = root / "audio-server/realtime_agent/spec"
-    protocol_root = root / "testdata/protocol"
+    protocol_root = root / "protocol/data/fixtures"
     inputs: dict[str, Any] = {
         "schemas": sorted(str(path) for path in spec_root.glob("realtime-agent-*")),
+        "protocol_versions": {
+            "data": str(root / "protocol/data/version.json"),
+            "behavior": str(root / "protocol/behavior/version.json"),
+        },
         "protocol_fixtures": {
             "devices": _count_files(protocol_root / "devices"),
             "events": _count_files(protocol_root / "events"),
@@ -112,7 +116,7 @@ def _inputs_for_layer(layer: str) -> dict[str, Any]:
         },
     }
     if layer == "protocol_spec":
-        inputs["protocol_document"] = str(root / "docs/reference/protocol.md")
+        inputs["protocol_document"] = str(root / "protocol/docs/protocol.md")
     if layer == "model_provider":
         inputs["providers"] = {
             "dashscope": bool(os.getenv("DASHSCOPE_API_KEY")),

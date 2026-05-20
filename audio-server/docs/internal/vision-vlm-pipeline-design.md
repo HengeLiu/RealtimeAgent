@@ -506,7 +506,7 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
   - `audio-server/realtime_agent/preflight.py`
   - `examples/for-blind-app/audio-server/server.yaml`
 - 验证：
-  - `uv run python -m pytest audio-server/tests/sdk/config/test_config_sync.py -q` 已通过。
+  - `uv run python -m pytest audio-server/protocol-tests/sdk/config/test_config_sync.py -q` 已通过。
   - `uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml --report runs/default-app/text-vlm-preflight.json` 已通过。
 
 ### Phase 2：Message 管理和工具结果图片拼接
@@ -524,7 +524,7 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
   - `audio-server/realtime_agent/agent_core/text.py`
   - `audio-server/realtime_agent/agent_core/router.py`
 - 验证：
-  - `uv run python -m pytest audio-server/tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 已通过。
+  - `uv run python -m pytest audio-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 已通过。
   - 新增测试确认 mock 模型第一轮调用 `capture_photo` 后，第二轮收到 `image_url` content block。
 
 ### Phase 3：图片追问和资产选择
