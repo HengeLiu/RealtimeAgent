@@ -147,7 +147,7 @@ class AgentVisionMultimodalConfig:
     """
 
     enabled: bool = False
-    attach_tool_result_assets: bool = False
+    attach_visual_assets: bool = False
     max_images_per_turn: int = 4
     image_freshness_seconds: float = 2.0
     max_image_base64_bytes: int = 7_500_000
@@ -165,9 +165,25 @@ class AgentOmniConfig:
     session_idle_timeout_seconds: int = 60
     max_concurrent_sessions: int = 10
     custom_adapter: str = ""
-    visual_frame_interval_seconds: float = 1.0
-    visual_frame_timeout_seconds: float = 1.5
-    visual_frame_freshness_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class AgentRealtimeVideoConfig:
+    """全局实时视觉采样配置。"""
+
+    enabled: bool = True
+    frame_interval_seconds: float = 1.0
+    frame_timeout_seconds: float = 1.5
+    frame_ttl_seconds: float = 5.0
+    max_frames_per_turn: int = 8
+    direction: str = "front"
+
+
+@dataclass(frozen=True)
+class AgentVisualConfig:
+    """Agent 视觉输入配置。"""
+
+    realtime_video: AgentRealtimeVideoConfig = field(default_factory=AgentRealtimeVideoConfig)
 
 
 @dataclass(frozen=True)
@@ -176,6 +192,7 @@ class AgentConfig:
     custom_core: str = ""
     omni: AgentOmniConfig = field(default_factory=AgentOmniConfig)
     vision: AgentVisionConfig = field(default_factory=AgentVisionConfig)
+    visual: AgentVisualConfig = field(default_factory=AgentVisualConfig)
 
 
 @dataclass(frozen=True)
@@ -314,6 +331,7 @@ def load_yaml_config(path: str | Path) -> RealtimeAgentYamlConfig:
     vision = dict(agent_data.get("vision", {}))
     vision_multimodal = _vision_multimodal_config(vision.pop("multimodal", {}))
     omni = dict(agent_data.get("omni", {}))
+    visual = _agent_visual_config(agent_data.get("visual", {}))
     agent_mode = str(agent_data.get("mode") or "").strip() or "omni"
     return RealtimeAgentYamlConfig(
         app_name=str(data.get("app_name") or data.get("app-name") or ""),
@@ -331,6 +349,7 @@ def load_yaml_config(path: str | Path) -> RealtimeAgentYamlConfig:
             custom_core=agent_data.get("custom_core", ""),
             omni=AgentOmniConfig(**omni),
             vision=AgentVisionConfig(**vision, multimodal=vision_multimodal),
+            visual=visual,
         ),
         output=OutputConfig(**data.get("output", {})),
         tools=_tool_config(data.get("tools", {"enabled": True})),
@@ -390,7 +409,7 @@ def _vision_multimodal_config(raw: dict[str, Any]) -> AgentVisionMultimodalConfi
             data,
             {
                 "enabled",
-                "attach_tool_result_assets",
+                "attach_visual_assets",
                 "max_images_per_turn",
                 "image_freshness_seconds",
                 "max_image_base64_bytes",
@@ -399,6 +418,26 @@ def _vision_multimodal_config(raw: dict[str, Any]) -> AgentVisionMultimodalConfi
         ),
         video=video,
     )
+
+
+def _agent_visual_config(raw: dict[str, Any]) -> AgentVisualConfig:
+    """解析 Agent 视觉输入配置。"""
+
+    data = dict(raw or {})
+    realtime_video = AgentRealtimeVideoConfig(
+        **_known(
+            data.get("realtime_video", {}),
+            {
+                "enabled",
+                "frame_interval_seconds",
+                "frame_timeout_seconds",
+                "frame_ttl_seconds",
+                "max_frames_per_turn",
+                "direction",
+            },
+        )
+    )
+    return AgentVisualConfig(realtime_video=realtime_video)
 
 
 def resolve_config_path(path: str | Path) -> Path:

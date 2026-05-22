@@ -288,15 +288,20 @@ System prompt 不承载：
 
 ### 9.1 Vision 链路视觉能力
 
-Vision 链路中，图片通常由模型调用高层 Tool 获取，例如 `capture_photo`。Tool 只负责获取真实资产；是否解释图片、如何回答，由模型在工具结果回填后继续决策。
+Vision 链路有两类图片入口：
+
+1. 模型调用高层 Tool 获取，例如 `capture_photo`。Tool 只负责获取真实资产；是否解释图片、如何回答，由模型在工具结果回填后继续决策。
+2. `agent.visual.realtime_video.enabled=true` 时，`VisionRealtimeAgentCore` 会在用户语音 turn 内主动请求 `sensor.rgb` 单帧，采集结果先进入照片资产 buffer；ASR final 后、调用 VL 模型前，由 `VlVisualAppender` 按当前 turn 批量 claim 并 append 到用户 message，文本说明包含图片顺序、时间戳和 direction。
+
+Vision/VL 不在采样线程里直接调用模型。这样可以把短周期抓拍、长周期视觉任务和自动采样统一到照片资产生命周期里，同时保持 Chat Completions 风格 provider 的一次请求语义。
 
 ### 9.2 Realtime 链路视觉采样
 
 当前 `OmniRealtimeAgentCore` 支持 Realtime turn 内同步视觉帧：
 
 1. 收到 provider `omni.input_audio_buffer.speech_started` 后，取消当前 response / output generation、通知端侧停止当前 speaker 播放，并启动视觉采样。
-2. 每隔 `agent.omni.visual_frame_interval_seconds` 请求一次 `sensor.rgb` 单帧。
-3. 请求成功后读取 JPEG bytes，通过 provider adapter 的 `append_image()` 追加到当前 Realtime 会话。
+2. 每隔 `agent.visual.realtime_video.frame_interval_seconds` 请求一次 `sensor.rgb` 单帧。
+3. 请求成功后由 `OmniVisualAppender` claim 照片资产，优先读取内存 payload，再通过 provider adapter 的 `append_image()` 追加到当前 Realtime 会话。
 4. 收到 `omni.input_audio_buffer.speech_stopped` 后停止采样。
 5. 收到 `omni.response.done` 时兜底停止采样，避免线程泄漏。
 6. 音频输入 stream 关闭时停止与它配对的视觉采样。
@@ -425,9 +430,14 @@ agent:
     model: qwen3.5-omni-plus-realtime
     turn_detection: provider
     voice: Tina
-    visual_frame_interval_seconds: 1.0
-    visual_frame_timeout_seconds: 1.5
-    visual_frame_freshness_seconds: 0.0
+  visual:
+    realtime_video:
+      enabled: true
+      frame_interval_seconds: 1.0
+      frame_timeout_seconds: 1.5
+      frame_ttl_seconds: 5.0
+      max_frames_per_turn: 8
+      direction: front
   vision:
     provider: mock
     model: mock-vision

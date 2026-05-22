@@ -103,10 +103,17 @@ def _vision_kwargs(kwargs: dict) -> dict:
         "asr_config",
         "vision_model_config",
         "tool_gateway",
+        "asset_service",
         "max_context_messages",
         "memory_service",
         "multimodal_policy",
         "on_user_activity",
+        "realtime_video_enabled",
+        "visual_frame_interval_seconds",
+        "visual_frame_timeout_seconds",
+        "visual_frame_ttl_seconds",
+        "visual_max_frames_per_turn",
+        "visual_direction",
     }
     return {
         key: value

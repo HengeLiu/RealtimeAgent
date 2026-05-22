@@ -94,6 +94,7 @@ def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path
                 )
                 assert asset is not None
                 assert asset.stream_type == "sensor.rgb"
+                assert audio_app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
                 assert Path(asset.uri).read_bytes() == b"\xff\xd8phone-rgb\xff\xd9"
 
                 handle = audio_app.stream_service.open_stream(

@@ -1,4 +1,5 @@
 import json
+from threading import Event as ThreadEvent
 from pathlib import Path
 
 import realtime_agent.agent_core.vision as text_module
@@ -110,6 +111,221 @@ def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
     asset = app.asset_service.query_assets(user_id="user-browser-photo", stream_type="sensor.rgb")[-1]
     assert asset.metadata["payload_size"] == len(payload)
     assert Path(asset.uri).is_absolute()
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
+    assert Path(asset.uri).read_bytes() == payload
+
+
+def test_rgb_asset_enters_turn_buffer_and_can_be_claimed_once(tmp_path) -> None:
+    """测试目标：验证 sensor.rgb 上传后进入 turn buffer，并且只能被业务消费一次。
+
+    测试方法：上传一帧带 turn_id / ttl / direction 的 RGB chunk，随后通过
+    `claim_photo_asset()` 连续 claim 两次。
+    预期结果：第一次 claim 成功，第二次返回 already_claimed；磁盘资产仍可查询。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    handle = app.open_input_stream(
+        user_id="user-photo-buffer",
+        producer_id="dev-photo-buffer",
+        stream_type="sensor.rgb",
+        format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+    )
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-photo-buffer",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=b"\xff\xd8photo-buffer\xff\xd9",
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={
+                "request_id": "asset_req_buffer",
+                "turn_id": "turn-buffer-1",
+                "ttl_seconds": 5,
+                "capture_reason": "capture_photo",
+                "direction": "front",
+            },
+        )
+    )
+
+    asset = app.asset_service.query_assets(user_id="user-photo-buffer", stream_type="sensor.rgb")[-1]
+    first = app.asset_service.claim_photo_asset(
+        asset_id=asset.asset_id,
+        consumer="agent_inline",
+        owner="test",
+        reason="unit",
+    )
+    second = app.asset_service.claim_photo_asset(
+        asset_id=asset.asset_id,
+        consumer="tool_internal",
+        owner="test",
+        reason="unit",
+    )
+
+    assert asset.metadata["turn_id"] == "turn-buffer-1"
+    assert asset.metadata["direction"] == "front"
+    assert first.ok is True
+    assert second.ok is False
+    assert second.reason == "already_claimed"
+    assert app.asset_service.query_assets(user_id="user-photo-buffer", stream_type="sensor.rgb")
+
+
+def test_turn_buffer_clear_does_not_delete_runs_asset(tmp_path) -> None:
+    """测试目标：验证 turn 结束只清理内存 buffer，不删除磁盘 runs 资产。
+
+    测试方法：上传一帧 RGB 后调用 `clear_turn_buffer()`，再尝试 claim 和查询磁盘资产。
+    预期结果：claim 返回 not_buffered，但 `query_assets()` 仍可读到 AssetRef 和文件。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    handle = app.open_input_stream(
+        user_id="user-photo-clear",
+        producer_id="dev-photo-clear",
+        stream_type="sensor.rgb",
+        format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+    )
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-photo-clear",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=b"\xff\xd8photo-clear\xff\xd9",
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"turn_id": "turn-clear-1", "ttl_seconds": 5},
+        )
+    )
+    asset = app.asset_service.query_assets(user_id="user-photo-clear", stream_type="sensor.rgb")[-1]
+
+    cleared = app.asset_service.clear_turn_buffer(
+        user_id="user-photo-clear",
+        session_id=handle.session_id,
+        turn_id="turn-clear-1",
+        reason="unit_turn_end",
+    )
+    claim = app.asset_service.claim_photo_asset(
+        asset_id=asset.asset_id,
+        consumer="agent_inline",
+        owner="test",
+        reason="after_clear",
+    )
+
+    assert cleared == 1
+    assert claim.ok is False
+    assert claim.reason == "not_buffered"
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
+    assert Path(asset.uri).is_file()
+
+
+def test_rgb_asset_ttl_expiry_blocks_claim_but_keeps_archive(tmp_path) -> None:
+    """测试目标：验证 ttl_seconds 只限制 turn buffer 消费，不影响 runs 归档。
+
+    测试方法：上传一帧 TTL 很短的 RGB 图片，等待过期后 claim。
+    预期结果：claim 返回 expired，异步归档文件仍存在。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    handle = app.open_input_stream(
+        user_id="user-photo-expire",
+        producer_id="dev-photo-expire",
+        stream_type="sensor.rgb",
+        format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+    )
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-photo-expire",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=b"\xff\xd8photo-expire\xff\xd9",
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"turn_id": "turn-expire-1", "ttl_seconds": 0.001},
+        )
+    )
+    asset = app.asset_service.query_assets(user_id="user-photo-expire", stream_type="sensor.rgb")[-1]
+
+    import time
+
+    time.sleep(0.01)
+    claim = app.asset_service.claim_photo_asset(
+        asset_id=asset.asset_id,
+        consumer="agent_inline",
+        owner="test",
+        reason="after_expired",
+    )
+
+    assert claim.ok is False
+    assert claim.reason == "expired"
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
+    assert Path(asset.uri).is_file()
+
+
+def test_rgb_asset_memory_payload_available_before_archive(tmp_path, monkeypatch) -> None:
+    """测试目标：验证异步归档未完成时主链路仍可读取内存 payload。
+
+    测试方法：阻塞 AssetStore 后台归档线程，上传 RGB 后立即读取内存 payload。
+    预期结果：`write_input_chunk()` 不等待磁盘写入，payload 可从内存读取，归档释放后
+    文件最终落盘。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    release_archive = ThreadEvent()
+    archive_started = ThreadEvent()
+    original_archive = app.asset_service.store._archive_payload
+
+    def delayed_archive(**kwargs):
+        archive_started.set()
+        release_archive.wait(timeout=1)
+        return original_archive(**kwargs)
+
+    monkeypatch.setattr(app.asset_service.store, "_archive_payload", delayed_archive)
+    handle = app.open_input_stream(
+        user_id="user-photo-memory",
+        producer_id="dev-photo-memory",
+        stream_type="sensor.rgb",
+        format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+    )
+    payload = b"\xff\xd8photo-memory\xff\xd9"
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-photo-memory",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=payload,
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"turn_id": "turn-memory-1", "ttl_seconds": 5},
+        )
+    )
+    asset = app.asset_service.query_assets(user_id="user-photo-memory", stream_type="sensor.rgb")[-1]
+
+    assert archive_started.wait(timeout=1)
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=0.01) is False
+    assert app.asset_service.get_asset_payload(asset.asset_id) == payload
+
+    release_archive.set()
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
     assert Path(asset.uri).read_bytes() == payload
 
 

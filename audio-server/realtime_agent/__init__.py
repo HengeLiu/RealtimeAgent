@@ -49,6 +49,7 @@ from realtime_agent.tools import (
     ToolSpec,
     TaskStartTool,
     ToolTrace,
+    VisualAssetRef,
 )
 
 __all__ = [
@@ -116,4 +117,5 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "ToolTrace",
+    "VisualAssetRef",
 ]

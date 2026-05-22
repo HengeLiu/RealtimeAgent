@@ -13,6 +13,12 @@
   "payload_size": 3,
   "final": true,
   "metadata": {
-    "request_id": "req_rgb_001"
+    "request_id": "req_rgb_001",
+    "turn_id": "turn_rgb_001",
+    "ttl_seconds": 5,
+    "capture_reason": "capture_photo",
+    "captured_at_ms": 1760000000900,
+    "sequence_index": 0,
+    "direction": "front"
   }
 }

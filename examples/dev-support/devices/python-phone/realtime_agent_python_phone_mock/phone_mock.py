@@ -472,6 +472,15 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
 
         stream_id = new_id("stream_rgb")
         request_id = request.payload.get("request_id")
+        metadata = {
+            "request_id": request_id,
+            "turn_id": request.payload.get("turn_id"),
+            "ttl_seconds": request.payload.get("ttl_seconds"),
+            "capture_reason": request.payload.get("capture_reason") or "device_push",
+            "captured_at_ms": int(time.time() * 1000),
+            "sequence_index": 0,
+            "direction": request.payload.get("direction") or "front",
+        }
         await self._send_event(
             control_ws,
             Event(
@@ -502,7 +511,7 @@ class NetworkPythonPhoneMockEndpoint(NetworkPythonPlaybackEndpoint):
                     channels=1,
                     duration_ms=1,
                     final=True,
-                    metadata={"request_id": request_id},
+                    metadata=metadata,
                 )
             )
         )

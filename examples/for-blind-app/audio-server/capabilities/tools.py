@@ -10,7 +10,7 @@ from urllib import request as urllib_request
 
 from pydantic import BaseModel, Field
 
-from realtime_agent import AssetRef, BaseTool, ToolContext, ToolError, ToolResult, ToolSpec
+from realtime_agent import AssetRef, BaseTool, ToolContext, ToolError, ToolResult, ToolSpec, VisualAssetRef
 from realtime_agent.errors import ErrorCode
 
 
@@ -79,6 +79,14 @@ class CapturePhotoTool(BaseTool):
                 "mime_type": asset.mime_type,
             },
             assets=[asset],
+            visual_assets=[
+                VisualAssetRef(
+                    asset=asset,
+                    visibility="append_to_agent",
+                    consumer="agent_inline",
+                    text_context="这是刚拍摄的当前画面，请结合用户问题回答。",
+                )
+            ],
             message="已获取当前画面。",
         )
 
@@ -218,6 +226,14 @@ class InterpretCurrentViewTool(BaseTool):
         return ToolResult.success(
             data=data,
             assets=[asset],
+            visual_assets=[
+                VisualAssetRef(
+                    asset=asset,
+                    visibility="internal_only",
+                    consumer="tool_internal",
+                    text_context="图片已经由 interpret_current_view 内部视觉模型分析，主模型只读取文本结果。",
+                )
+            ],
             message=str(data.get("interpretation") or result.message),
         )
 
@@ -239,6 +255,14 @@ def _interpret_asset_with_vision_model(*, asset: AssetRef, query: str, timeout_s
             data={"interpreted": True, "interpretation": text, "model": "mock-vision", "asset_id": asset.asset_id},
             message=text,
             assets=[asset],
+            visual_assets=[
+                VisualAssetRef(
+                    asset=asset,
+                    visibility="internal_only",
+                    consumer="tool_internal",
+                    text_context="图片已经由 interpret_image 内部视觉模型分析，主模型只读取文本结果。",
+                )
+            ],
         )
     image_path = _asset_local_path(asset)
     if image_path is None:
@@ -325,6 +349,14 @@ def _interpret_asset_with_vision_model(*, asset: AssetRef, query: str, timeout_s
         data={"interpreted": True, "interpretation": text, "model": model, "asset_id": asset.asset_id},
         message=text,
         assets=[asset],
+        visual_assets=[
+            VisualAssetRef(
+                asset=asset,
+                visibility="internal_only",
+                consumer="tool_internal",
+                text_context="图片已经由 interpret_image 内部视觉模型分析，主模型只读取文本结果。",
+            )
+        ],
     )
 
 

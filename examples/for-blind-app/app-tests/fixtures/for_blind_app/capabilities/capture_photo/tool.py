@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from realtime_agent.tools import BaseTool, ToolContext, ToolResult
+from realtime_agent.tools import BaseTool, ToolContext, ToolResult, VisualAssetRef
 
 
 class CapturePhotoTool(BaseTool):
@@ -18,4 +18,15 @@ class CapturePhotoTool(BaseTool):
         )
         if asset is None:
             return ToolResult.success(data={"captured": False}, message="asset timeout")
-        return ToolResult.success(data={"captured": True, "asset_id": asset.asset_id}, assets=[asset])
+        return ToolResult.success(
+            data={"captured": True, "asset_id": asset.asset_id},
+            assets=[asset],
+            visual_assets=[
+                VisualAssetRef(
+                    asset=asset,
+                    visibility="append_to_agent",
+                    consumer="agent_inline",
+                    text_context="这是测试抓拍的当前画面。",
+                )
+            ],
+        )

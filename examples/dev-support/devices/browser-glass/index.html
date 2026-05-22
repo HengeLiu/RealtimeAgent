@@ -1385,6 +1385,7 @@
 
     async function uploadRgbImages(images, item = null, reason = "images_uploaded") {
       const requestId = item && item.payload && item.payload.request_id;
+      const payload = (item && item.payload) || {};
       const rgbStreamId = newId("stream_rgb");
       const activeSession = currentDeviceId();
       try {
@@ -1415,11 +1416,17 @@
             final: index === images.length - 1,
             metadata: {
               request_id: requestId,
+              turn_id: payload.turn_id,
+              ttl_seconds: payload.ttl_seconds,
+              capture_reason: payload.capture_reason || payload.reason || reason,
+              captured_at_ms: Date.now(),
+              sequence_index: index,
+              direction: payload.direction || "front",
               width: image.width,
               height: image.height,
               image_index: index,
               image_count: images.length,
-              reason: (item && item.payload && item.payload.reason) || reason,
+              reason: payload.reason || reason,
             },
           });
           const bufferedBefore = streamWs.bufferedAmount;
@@ -1493,6 +1500,12 @@
             final: index === frameCount - 1,
             metadata: {
               request_id: requestId,
+              turn_id: payload.turn_id,
+              ttl_seconds: payload.ttl_seconds,
+              capture_reason: payload.capture_reason || payload.reason || "video_frames_uploaded",
+              captured_at_ms: Date.now(),
+              sequence_index: index,
+              direction: payload.direction || "front",
               width: image.width,
               height: image.height,
               image_index: index,

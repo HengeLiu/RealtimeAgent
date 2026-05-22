@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig
-from realtime_agent.protocol import Event
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 
 
 APP_ROOT = Path(__file__).resolve().parents[2] / "audio-server"
@@ -93,6 +93,111 @@ class EagerPeerEndpoint(RecordingEndpoint):
                     payload={"command_id": command_id, "command": command, "result": {"stopped": True}},
                 )
             )
+
+
+class RgbObservationEndpoint(RecordingEndpoint):
+    """自定义视觉 Task 测试用 RGB 端侧。"""
+
+    def __init__(self, *, app: RealtimeAgentApp, user_id: str, device_id: str) -> None:
+        super().__init__(user_id=user_id, device_id=device_id)
+        self.app = app
+
+    def push_event(self, event: Event) -> None:
+        """收到连续 RGB 请求后立即上传两帧图片。"""
+
+        super().push_event(event)
+        if event.event_name != "stream.control.open.requested" or event.stream_type != "sensor.rgb":
+            return
+        handle = self.app.open_input_stream(
+            user_id=self.user_id,
+            producer_id=self.device_id,
+            stream_type="sensor.rgb",
+            format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+        )
+        for seq in range(2):
+            self.app.write_input_chunk(
+                StreamChunk(
+                    user_id=self.user_id,
+                    session_id=handle.session_id,
+                    stream_id=handle.stream_id,
+                    stream_type="sensor.rgb",
+                    seq=seq,
+                    payload=b"\xff\xd8custom-visual-%d\xff\xd9" % seq,
+                    codec="jpeg",
+                    sample_rate=1,
+                    channels=1,
+                    duration_ms=1,
+                    final=seq == 1,
+                    metadata={
+                        "correlation_id": event.payload.get("correlation_id"),
+                        "turn_id": event.payload.get("turn_id"),
+                        "ttl_seconds": event.payload.get("ttl_seconds") or 5,
+                        "capture_reason": event.payload.get("capture_reason") or "task_sampling",
+                        "captured_at_ms": 1760000001000 + seq,
+                        "sequence_index": seq,
+                        "direction": event.payload.get("direction") or "front",
+                    },
+                )
+            )
+        self.app.stream_service.close_stream(handle.stream_id, reason="custom_visual_fixture_done")
+
+
+def test_custom_visual_task_records_observations_for_followup_query(tmp_path: Path) -> None:
+    """测试目标：验证自定义视觉 Task 生成 observation，而不是把原图 append 给主模型。
+
+    测试方法：注册 RGB 端侧，启动 `custom_visual_task`，等待任务完成后调用
+    `custom_visual_task_query` Tool 查询历史。
+    预期结果：任务完成、observation 历史可查询，资产已被 task_runtime claim。
+    """
+
+    async def run() -> None:
+        sys.path = [path for path in sys.path if path != str(APP_ROOT)]
+        sys.path.insert(0, str(APP_ROOT))
+        for name in list(sys.modules):
+            if name == "capabilities" or name.startswith("capabilities."):
+                sys.modules.pop(name, None)
+        tasks_module = importlib.import_module("capabilities.tasks")
+        app = RealtimeAgentApp(
+            RealtimeAgentConfig(
+                runs_root=str(tmp_path / "runs"),
+                asset_root=str(tmp_path / "assets"),
+                tasks_max_running_per_user=4,
+            )
+        )
+        app.task_engine.register(tasks_module.CustomVisualTask)
+        app.tool_registry.register(tasks_module.CustomVisualTaskQueryTool())
+        endpoint = RgbObservationEndpoint(app=app, user_id="user-custom-visual", device_id="dev-rgb-custom")
+        _register_rgb_endpoint(app, endpoint)
+
+        started = await app.task_engine.create(
+            task_type="custom_visual_task",
+            user_id="user-custom-visual",
+            session_id="dev-rgb-custom",
+            input_data={
+                "mode": "scan",
+                "instruction": "帮我看一下周围有什么",
+                "duration_seconds": 1,
+                "frame_interval_seconds": 0.2,
+                "max_observations": 2,
+            },
+        )
+        finished = await _wait_for_task_state(app, started.task_id, "finished")
+        query = await app.tool_gateway.call(
+            name="custom_visual_task_query",
+            user_id="user-custom-visual",
+            session_id="dev-rgb-custom",
+            input_data={"task_id": started.task_id},
+        )
+
+        assert finished.state == "finished"
+        assert query.ok is True
+        assert query.data["count"] == 2
+        assert query.data["observations"][0]["direction"] == "front"
+        assets_text = (tmp_path / "runs/user-custom-visual/dev-rgb-custom/assets.jsonl").read_text(encoding="utf-8")
+        assert "asset.claimed" in assets_text
+        assert "task_runtime" in assets_text
+
+    asyncio.run(run())
 
 
 def test_find_object_task_orchestrates_phone_then_glass(tmp_path: Path) -> None:
@@ -597,6 +702,43 @@ def _register_command_endpoint(app: RealtimeAgentApp, endpoint: RecordingEndpoin
                 "auth": {"mode": "disabled"},
                 "supports": {"sensors": [], "actuators": [{"type": "vibrator"}]},
                 "properties": properties,
+            },
+        ),
+        endpoint,
+    )
+    assert response.event_name == "control.device.registered"
+
+
+def _register_rgb_endpoint(app: RealtimeAgentApp, endpoint: RecordingEndpoint) -> None:
+    """注册一台支持连续 RGB 采集的测试端侧。"""
+
+    response = app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=endpoint.user_id,
+            producer_id=endpoint.device_id,
+            payload={
+                "device_id": endpoint.device_id,
+                "device_name": endpoint.device_id,
+                "client_type": "custom-visual-test",
+                "sdk_version": "realtime-agent-test",
+                "auth": {"mode": "disabled"},
+                "supports": {
+                    "sensors": [
+                        {
+                            "type": "rgb",
+                            "modes": ["continuous", "single"],
+                            "default": {
+                                "format": "jpeg",
+                                "frequency_hz": 1,
+                                "ttl_seconds": 5,
+                                "direction": "front",
+                            },
+                        }
+                    ],
+                    "actuators": [],
+                },
+                "properties": {},
             },
         ),
         endpoint,

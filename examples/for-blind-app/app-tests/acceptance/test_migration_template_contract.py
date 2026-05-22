@@ -41,10 +41,11 @@ def test_for_blind_capability_files_are_valid_python_and_use_public_api() -> Non
             "TaskRunResult",
             "TaskSignal",
             "TaskSpec",
-            "ToolContext",
+        "ToolContext",
         "ToolError",
         "ToolResult",
         "ToolSpec",
+        "VisualAssetRef",
     }
     for path in _python_files():
         if path.name == "__init__.py":

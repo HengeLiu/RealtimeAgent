@@ -39,7 +39,7 @@ sensor.mic -> ASR -> VisionRealtimeAgentCore -> MultimodalMessageBuilder
 
 不能直接复用的是 Omni provider 内部的 conversation item 管理。Omni 的 `_conversation.create_item()`、`append_audio()`、`append_video()`、`commit()`、`response.create()` 处理的是 Realtime provider 的会话事件和音频 / 视频提交语义；Vision provider 使用的是 Chat Completions 风格的 `messages` 数组和 tool call follow-up 语义，两者生命周期不同。
 
-新的 Vision 视觉链路应新增一层 `ModelMessageManager` 或 `MultimodalMessageBuilder`，职责限定为：
+当前 Vision 视觉链路使用 `agent_core.visual.VlVisualAppender` 包装 `ModelMessageManager`，职责限定为：
 
 1. 基于 `ContextCompiler` 输出的 `ModelContext.messages` 生成 Vision provider 请求。
 2. 在同轮工具循环中接收 `capture_photo` / `capture_video_clip` 的 `ToolResult`。
@@ -104,8 +104,8 @@ ASR final
   -> VisionRealtimeAgentCore 编译纯文本请求，工具列表包含 capture_photo
   -> qwen3.6-flash 判断当前问题需要看图，发起 capture_photo tool_call
   -> ToolGateway 执行 capture_photo，返回 AssetRef
-  -> ModelMessageManager 追加 tool result message
-  -> ModelMessageManager 追加带 image content block 的 follow-up user message
+  -> VisionRealtimeAgentCore 追加 tool result message
+  -> VlVisualAppender 追加带 image content block 的 follow-up user message
   -> qwen3.6-flash 基于图片继续回答
   -> 文本 delta 进入 TTS
 ```
@@ -128,7 +128,7 @@ ASR final
 
 ### 3. Realtime 视觉采样已有当前帧
 
-如果后续 Vision 链路也接入类似 Omni 的 visual sampler，且当前语音 turn 内已经采集过新帧，则可直接使用该帧，不重复请求摄像头。
+Vision 链路已接入 realtime-video 采样器。用户语音 turn 内采集到的新帧会先进入照片资产 buffer；VL 模型请求前由 `VlVisualAppender` 统一批量 append，不再依赖 `capture_photo` Tool 才能获得当前画面。
 
 约束：
 
@@ -365,7 +365,7 @@ agent:
     model: "qwen3.6-flash"
     multimodal:
       enabled: true
-      attach_tool_result_assets: true
+      attach_visual_assets: true
       max_images_per_turn: 4
       image_freshness_seconds: 2
       max_image_base64_bytes: 7500000
@@ -529,10 +529,10 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
 
 ### Phase 3：图片追问和资产选择
 
-- 状态：部分完成。
+- 状态：已完成当前自动 append 边界。
 - 实现：
-  - `ModelMessageManager` 已支持从任意 ToolResult 的 `assets` 或兼容 `data.asset_id/uri/mime_type` 中提取图片资产。
-  - 已有图片追问还缺少端侧“用户显式选择图片”的事件入口和最近资产索引，因此本阶段先完成消息拼接能力，未默认复用历史图。
+  - `VlVisualAppender` 只从 `ToolResult.visual_assets` 中读取 `visibility=append_to_agent` 的显式视觉资产，不再根据 `ToolResult.assets` 自动推断主模型能看到原图。
+  - 当前 turn buffer 中未消费的照片会在 Vision/VL 模型请求前批量 claim 并追加，`model-request.json` 只保留脱敏 image block 和 source map。
 - 待验收 / 后续：
   - 需要补端侧上传 / 选择图片的控制事件或资产选择入口后，再启用“这张图 / 刚才那张”的自动选择。
 

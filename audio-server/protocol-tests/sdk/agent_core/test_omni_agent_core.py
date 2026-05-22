@@ -302,6 +302,7 @@ class FakeAssetService:
         self.image_path = image_path
         self.request_count = 0
         self.requests: list[dict] = []
+        self.claims: list[dict] = []
 
     def request_asset(self, **kwargs) -> AssetRef:
         """返回一帧本地测试图片。"""
@@ -319,6 +320,18 @@ class FakeAssetService:
             size_bytes=self.image_path.stat().st_size,
             metadata={"request_count": self.request_count},
         )
+
+    def claim_photo_asset(self, **kwargs):
+        """记录 Omni 视觉帧 claim。"""
+
+        self.claims.append(dict(kwargs))
+        return types.SimpleNamespace(ok=True, reason="", claim=types.SimpleNamespace(claim_id=f"claim-{len(self.claims)}"))
+
+    def get_asset_payload(self, asset_id: str) -> bytes | None:
+        """模拟内存 payload 缺失，测试磁盘回退路径。"""
+
+        _ = asset_id
+        return None
 
 
 def test_realtime_append_audio_does_not_require_final_and_opens_speaker_stream(tmp_path) -> None:
@@ -648,6 +661,9 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
 
     assert asset_service.request_count >= 1
     assert asset_service.requests[0]["device_ids"] == ("dev-web",)
+    assert asset_service.claims
+    assert asset_service.claims[0]["consumer"] == "agent_inline"
+    assert asset_service.claims[0]["reason"] == "realtime_video_append"
     assert instances[0].images
     assert instances[0].images[0][0] == image_path.read_bytes()
     assert instances[0].images[0][1]["frame_index"] == 0

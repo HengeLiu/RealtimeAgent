@@ -51,6 +51,7 @@ def _build_for_blind_text_app(tmp_path: Path, monkeypatch) -> RealtimeAgentApp:
             tts_model="mock-tts",
             tts_voice="mock",
             allow_mock_fallback=True,
+            visual_realtime_video_enabled=False,
         )
     )
 

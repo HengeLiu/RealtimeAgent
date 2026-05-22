@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from realtime_agent.asset import AssetRef
 from realtime_agent.agent_core.providers import DashScopeCompatibleVisionModelAdapter, OpenAICompatibleVisionModelAdapter
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
-from realtime_agent.protocol import StreamChunk
-from realtime_agent.tools import BaseTool, ToolContext, ToolResult
+from realtime_agent.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.tools import BaseTool, ToolContext, ToolResult, VisualAssetRef
 
 
 class CityTool(BaseTool):
@@ -144,6 +144,15 @@ class CapturePhotoTool(BaseTool):
         return ToolResult.success(
             data={"captured": True, "asset_id": asset.asset_id, "uri": asset.uri, "mime_type": asset.mime_type},
             assets=[asset],
+            visual_assets=[
+                VisualAssetRef(
+                    asset=asset,
+                    visibility="append_to_agent",
+                    consumer="agent_inline",
+                    text_context="这是测试抓拍的当前画面。",
+                    claim_required=False,
+                )
+            ],
             message="已获取当前画面。",
         )
 
@@ -183,6 +192,186 @@ class CapturePhotoVisionModel:
 
     def cancel(self) -> None:
         """取消测试模型。"""
+
+
+class VisibilityPhotoTool(BaseTool):
+    """测试视觉资产 visibility 的抓拍 Tool。"""
+
+    name = "capture_photo"
+    description = "采集当前画面"
+
+    def __init__(self, image_path, *, visibility: str | None) -> None:
+        self.image_path = image_path
+        self.visibility = visibility
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """按指定 visibility 返回图片资产。"""
+
+        asset = AssetRef(
+            asset_id=f"asset-{self.visibility or 'assets-only'}",
+            user_id=context.user_id,
+            session_id=context.session_id,
+            stream_type="sensor.rgb",
+            mime_type="image/jpeg",
+            created_at_ms=int(time.time() * 1000),
+            uri=str(self.image_path),
+            size_bytes=self.image_path.stat().st_size,
+        )
+        visual_assets = []
+        if self.visibility is not None:
+            visual_assets.append(
+                VisualAssetRef(
+                    asset=asset,
+                    visibility=self.visibility,  # type: ignore[arg-type]
+                    consumer="tool_internal" if self.visibility == "internal_only" else "agent_inline",
+                    text_context="visibility 测试图片。",
+                    claim_required=False,
+                )
+            )
+        return ToolResult.success(
+            data={"captured": True, "asset_id": asset.asset_id},
+            assets=[asset],
+            visual_assets=visual_assets,
+            message="已获取当前画面。",
+        )
+
+
+class NoImplicitVisualAppendModel:
+    """确认非 append_to_agent 资产不会被拼入模型的测试模型。"""
+
+    provider_name = "mock-no-implicit-visual"
+    model = "mock-no-implicit-visual-model"
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+        self.prompt = ""
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """第一轮请求抓拍，第二轮确认没有 image_url。"""
+
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            yield {"type": "tool_call", "id": "call-photo-1", "name": "capture_photo", "arguments": {}}
+            return
+        assert not _messages_contain_image_block(messages)
+        yield "我只能看到工具文本结果。"
+
+    def stream_text(self, transcript: str):
+        """历史接口占位。"""
+
+        yield "unused"
+
+    def cancel(self) -> None:
+        """取消测试模型。"""
+
+
+class TurnBufferVisionModel:
+    """测试用 turn buffer 多模态模型。"""
+
+    provider_name = "mock-turn-buffer"
+    model = "mock-turn-buffer-model"
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+        self.prompt = ""
+
+    def stream_messages(self, *, messages: list[dict], tools: list[dict]):
+        """校验当前 turn buffer 图片会在首轮模型请求前批量 append。"""
+
+        self.calls.append(list(messages))
+        followup = messages[-1]
+        assert followup["role"] == "user"
+        content = followup["content"]
+        assert isinstance(content, list)
+        text_block = next(item for item in content if item.get("type") == "text")
+        assert "第 1 张" in text_block["text"]
+        assert "direction=front" in text_block["text"]
+        image_block = next(item for item in content if item.get("type") == "image_url")
+        assert image_block["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        yield "已结合实时画面。"
+
+    def stream_text(self, transcript: str):
+        """历史接口占位。"""
+
+        yield "unused"
+
+    def cancel(self) -> None:
+        """取消测试模型。"""
+
+
+class RgbCaptureConnection:
+    """测试用 RGB 端侧连接。
+
+    主要功能：收到服务端 `stream.control.open.requested` 后立刻上传一帧 JPEG。
+    主要属性：`events` 保存控制事件，`opened_requests` 记录服务端主动采集请求。
+    """
+
+    def __init__(self, *, app: RealtimeAgentApp, device_id: str, image: bytes) -> None:
+        self.app = app
+        self.device_id = device_id
+        self.image = image
+        self.events: list[Event] = []
+        self.opened_requests: list[Event] = []
+
+    def push_event(self, event: Event) -> None:
+        """响应服务端下发的 RGB 采集控制事件。"""
+
+        self.events.append(event)
+        if event.event_name != "stream.control.open.requested" or event.stream_type != "sensor.rgb":
+            return
+        self.opened_requests.append(event)
+        handle = self.app.open_input_stream(
+            user_id=event.user_id,
+            producer_id=self.device_id,
+            stream_type="sensor.rgb",
+            format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=0),
+        )
+        self.app.write_input_chunk(
+            StreamChunk(
+                user_id=event.user_id,
+                session_id=self.device_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.rgb",
+                seq=len(self.opened_requests) - 1,
+                payload=self.image,
+                codec="jpeg",
+                sample_rate=1,
+                channels=1,
+                final=True,
+                metadata={
+                    "request_id": event.payload.get("request_id"),
+                    "turn_id": event.session_id or self.device_id,
+                    "ttl_seconds": event.payload.get("ttl_seconds"),
+                    "capture_reason": event.payload.get("capture_reason"),
+                    "captured_at_ms": int(time.time() * 1000),
+                    "sequence_index": len(self.opened_requests) - 1,
+                    "direction": event.payload.get("direction") or "front",
+                },
+            )
+        )
+
+    def push_stream_chunk(self, chunk: StreamChunk) -> None:
+        """本测试不消费下行音频分片。"""
+
+        _ = chunk
+
+
+def register_rgb_device(app: RealtimeAgentApp, connection: RgbCaptureConnection, user_id: str) -> None:
+    """注册支持 RGB 单帧采集的测试端侧。"""
+
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=user_id,
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [{"type": "rgb", "modes": ["single", "continuous"]}], "actuators": []},
+            },
+        ),
+        connection,
+    )
 
 
 def test_vision_agent_tool_loop_is_safe_inside_running_event_loop(tmp_path) -> None:
@@ -276,7 +465,7 @@ def test_vision_agent_attaches_capture_photo_asset_to_followup_message(tmp_path)
             runs_root=str(tmp_path / "runs"),
             agent_mode="vision",
             vision_multimodal_enabled=True,
-            vision_multimodal_attach_tool_result_assets=True,
+            vision_multimodal_attach_visual_assets=True,
             vision_multimodal_max_image_base64_bytes=1024,
         )
     )
@@ -313,6 +502,173 @@ def test_vision_agent_attaches_capture_photo_asset_to_followup_message(tmp_path)
     ]
     assert image_messages
     assert "<redacted:" in json.dumps(request["messages"], ensure_ascii=False)
+
+
+def test_vision_agent_does_not_append_assets_without_append_visibility(tmp_path) -> None:
+    """测试目标：验证 `ToolResult.assets` 和 `internal_only` 不会让主模型看到原图。
+
+    测试方法：分别运行只返回 `assets`、返回 `internal_only visual_assets` 的抓拍 Tool。
+    预期结果：第二轮模型 messages 中没有 image_url content block。
+    """
+
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg\xff\xd9")
+    for visibility in (None, "internal_only"):
+        app = RealtimeAgentApp(
+            RealtimeAgentConfig(
+                runs_root=str(tmp_path / f"runs-{visibility or 'assets-only'}"),
+                agent_mode="vision",
+                vision_multimodal_enabled=True,
+                vision_multimodal_attach_visual_assets=True,
+                vision_multimodal_max_image_base64_bytes=1024,
+            )
+        )
+        app.tool_registry.register(VisibilityPhotoTool(image_path, visibility=visibility))
+        model = NoImplicitVisualAppendModel()
+        app.agent_core.vision_model = model
+        app.agent_core.append_audio_event(
+            StreamChunk(
+                user_id=f"user-{visibility or 'assets-only'}",
+                session_id=f"sess-{visibility or 'assets-only'}",
+                stream_id="stream-mic",
+                stream_type="sensor.mic",
+                seq=0,
+                payload=b"hello",
+                final=True,
+            )
+        )
+        assert len(model.calls) == 2
+
+
+def test_vision_agent_batches_turn_buffer_assets_before_model_request(tmp_path) -> None:
+    """测试目标：验证 Vision/VL 会在模型请求前批量 append 当前 turn buffer 图片。
+
+    测试方法：先通过 AssetService 上传一帧 `sensor.rgb`，再触发一次 Vision 文本 turn。
+    预期结果：首轮 provider messages 已包含带顺序、时间和 direction 的图片说明，
+    图片资产被 claim，model-request 中只记录脱敏 image block。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="vision",
+            vision_multimodal_enabled=True,
+            vision_multimodal_attach_visual_assets=True,
+            vision_multimodal_max_image_base64_bytes=1024,
+        )
+    )
+    model = TurnBufferVisionModel()
+    app.agent_core.vision_model = model
+    user_id = "user-turn-buffer"
+    session_id = "sess-turn-buffer"
+    app.asset_service.store_chunk(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="rgb-stream-turn",
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=b"\xff\xd8turn-buffer-jpeg\xff\xd9",
+            final=True,
+            metadata={
+                "turn_id": session_id,
+                "ttl_seconds": 5,
+                "capture_reason": "realtime_video",
+                "captured_at_ms": 1760000001000,
+                "sequence_index": 0,
+                "direction": "front",
+            },
+        )
+    )
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-mic",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    request = json.loads((session_dir / "model-request.json").read_text(encoding="utf-8"))
+    events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assets_text = (session_dir / "assets.jsonl").read_text(encoding="utf-8")
+
+    assert len(model.calls) == 1
+    assert "multimodal.turn_asset.attached" in events_text
+    assert "asset.claimed" in assets_text
+    assert any(item.get("reason") == "realtime_video_turn_flush" for item in request["context_sources"])
+    assert "<redacted:" in json.dumps(request["messages"], ensure_ascii=False)
+
+
+def test_vision_realtime_video_auto_collects_frame_without_tool(tmp_path) -> None:
+    """测试目标：验证 Vision 链路在用户语音 turn 内会自动采集 RGB 帧。
+
+    测试方法：注册支持 RGB 的测试端侧，让服务端在处理最终音频前主动下发
+    `stream.control.open.requested`，端侧同步上传 JPEG。
+    预期结果：不依赖 Tool 调用，首轮 VL 模型请求已经包含 realtime-video 图片，
+    并记录采集、buffer 和 claim 事件。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="vision",
+            vision_multimodal_enabled=True,
+            vision_multimodal_attach_visual_assets=True,
+            vision_multimodal_max_image_base64_bytes=1024,
+            visual_realtime_video_enabled=True,
+            visual_realtime_video_frame_interval_seconds=0.05,
+            visual_realtime_video_frame_timeout_seconds=0.5,
+            visual_realtime_video_frame_ttl_seconds=5,
+            visual_realtime_video_max_frames_per_turn=1,
+            visual_realtime_video_direction="front",
+        )
+    )
+    user_id = "user-vision-auto-video"
+    session_id = "sess-vision-auto-video"
+    connection = RgbCaptureConnection(app=app, device_id=session_id, image=b"\xff\xd8auto-rgb\xff\xd9")
+    register_rgb_device(app, connection, user_id)
+    model = TurnBufferVisionModel()
+    app.agent_core.vision_model = model
+
+    app.agent_core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id="stream-mic-auto-video",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"hello",
+            final=True,
+        )
+    )
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    request = json.loads((session_dir / "model-request.json").read_text(encoding="utf-8"))
+    events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assets_text = (session_dir / "assets.jsonl").read_text(encoding="utf-8")
+
+    assert connection.opened_requests
+    assert len(model.calls) == 1
+    assert "vision.visual_frame.buffered" in events_text
+    assert "multimodal.turn_asset.attached" in events_text
+    assert "asset.claimed" in assets_text
+    assert any(item.get("reason") == "realtime_video_turn_flush" for item in request["context_sources"])
+
+
+def _messages_contain_image_block(messages: list[dict]) -> bool:
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(block, dict) and block.get("type") == "image_url" for block in content):
+            return True
+    return False
 
 
 def test_openai_compatible_stream_messages_aggregates_tool_call_delta() -> None:

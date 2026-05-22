@@ -110,7 +110,7 @@ class RealtimeAgentConfig:
     vision_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     vision_max_context_messages: int = 30
     vision_multimodal_enabled: bool = False
-    vision_multimodal_attach_tool_result_assets: bool = False
+    vision_multimodal_attach_visual_assets: bool = False
     vision_multimodal_max_images_per_turn: int = 4
     vision_multimodal_image_freshness_seconds: float = 2.0
     vision_multimodal_max_image_base64_bytes: int = 7_500_000
@@ -147,9 +147,12 @@ class RealtimeAgentConfig:
     omni_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     omni_session_idle_timeout_seconds: int = 60
     omni_max_concurrent_sessions: int = 10
-    omni_visual_frame_interval_seconds: float = 1.0
-    omni_visual_frame_timeout_seconds: float = 1.5
-    omni_visual_frame_freshness_seconds: float = 0.0
+    visual_realtime_video_enabled: bool = True
+    visual_realtime_video_frame_interval_seconds: float = 1.0
+    visual_realtime_video_frame_timeout_seconds: float = 1.5
+    visual_realtime_video_frame_ttl_seconds: float = 5.0
+    visual_realtime_video_max_frames_per_turn: int = 8
+    visual_realtime_video_direction: str = "front"
     tools_discover_enabled: bool = False
     tools_discover_packages: tuple[str, ...] = ()
     tools_discover_recursive: bool = False
@@ -213,6 +216,7 @@ class RealtimeAgentConfig:
     def from_loaded_config(cls, loaded: RealtimeAgentYamlConfig) -> "RealtimeAgentConfig":
         vision = loaded.agent.vision
         omni = loaded.agent.omni
+        realtime_video = loaded.agent.visual.realtime_video
         memory_enabled = loaded.memory.enabled
         return cls(
             app_name=getattr(loaded, "app_name", ""),
@@ -256,7 +260,7 @@ class RealtimeAgentConfig:
             vision_prompt=_with_memory_instructions(vision.prompt, enabled=memory_enabled),
             vision_max_context_messages=vision.max_context_messages,
             vision_multimodal_enabled=vision.multimodal.enabled,
-            vision_multimodal_attach_tool_result_assets=vision.multimodal.attach_tool_result_assets,
+            vision_multimodal_attach_visual_assets=vision.multimodal.attach_visual_assets,
             vision_multimodal_max_images_per_turn=vision.multimodal.max_images_per_turn,
             vision_multimodal_image_freshness_seconds=vision.multimodal.image_freshness_seconds,
             vision_multimodal_max_image_base64_bytes=vision.multimodal.max_image_base64_bytes,
@@ -293,9 +297,12 @@ class RealtimeAgentConfig:
             omni_prompt=_with_memory_instructions(omni.prompt, enabled=memory_enabled),
             omni_session_idle_timeout_seconds=omni.session_idle_timeout_seconds,
             omni_max_concurrent_sessions=omni.max_concurrent_sessions,
-            omni_visual_frame_interval_seconds=omni.visual_frame_interval_seconds,
-            omni_visual_frame_timeout_seconds=omni.visual_frame_timeout_seconds,
-            omni_visual_frame_freshness_seconds=omni.visual_frame_freshness_seconds,
+            visual_realtime_video_enabled=realtime_video.enabled,
+            visual_realtime_video_frame_interval_seconds=realtime_video.frame_interval_seconds,
+            visual_realtime_video_frame_timeout_seconds=realtime_video.frame_timeout_seconds,
+            visual_realtime_video_frame_ttl_seconds=realtime_video.frame_ttl_seconds,
+            visual_realtime_video_max_frames_per_turn=realtime_video.max_frames_per_turn,
+            visual_realtime_video_direction=realtime_video.direction,
             tools_discover_enabled=loaded.tools.discover.enabled,
             tools_discover_packages=tuple(loaded.tools.discover.packages),
             tools_discover_recursive=loaded.tools.discover.recursive,
@@ -511,9 +518,12 @@ class RealtimeAgentApp:
                 prompt=getattr(self.config, "omni_prompt", "你是中文语音助手。请用简短口语回答用户。"),
                 session_idle_timeout_seconds=self.config.omni_session_idle_timeout_seconds,
                 max_concurrent_sessions=self.config.omni_max_concurrent_sessions,
-                visual_frame_interval_seconds=getattr(self.config, "omni_visual_frame_interval_seconds", 1.0),
-                visual_frame_timeout_seconds=getattr(self.config, "omni_visual_frame_timeout_seconds", 1.5),
-                visual_frame_freshness_seconds=getattr(self.config, "omni_visual_frame_freshness_seconds", 0.0),
+                realtime_video_enabled=self.config.visual_realtime_video_enabled,
+                visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
+                visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,
+                visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
+                visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
+                visual_direction=self.config.visual_realtime_video_direction,
             ),
             asr_config=AsrProviderConfig(
                 provider=self.config.asr_provider,
@@ -534,7 +544,7 @@ class RealtimeAgentApp:
             ),
             multimodal_policy=MultimodalMessagePolicy(
                 enabled=self.config.vision_multimodal_enabled,
-                attach_tool_result_assets=self.config.vision_multimodal_attach_tool_result_assets,
+                attach_visual_assets=self.config.vision_multimodal_attach_visual_assets,
                 max_images_per_turn=self.config.vision_multimodal_max_images_per_turn,
                 image_freshness_seconds=self.config.vision_multimodal_image_freshness_seconds,
                 max_image_base64_bytes=self.config.vision_multimodal_max_image_base64_bytes,
@@ -551,6 +561,12 @@ class RealtimeAgentApp:
             tool_gateway=self.tool_gateway,
             memory_service=self.memory_service,
             on_user_activity=self._mark_user_audio_activity,
+            realtime_video_enabled=self.config.visual_realtime_video_enabled,
+            visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
+            visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,
+            visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
+            visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
+            visual_direction=self.config.visual_realtime_video_direction,
         )
         if hasattr(self.agent_core, "bind_tool_gateway"):
             self.agent_core.bind_tool_gateway(self.tool_gateway)

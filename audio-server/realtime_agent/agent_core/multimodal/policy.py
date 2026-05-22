@@ -7,14 +7,14 @@ from dataclasses import dataclass
 class MultimodalMessagePolicy:
     """Vision 多模态消息策略。
 
-    主要功能：集中描述 Vision 链路是否允许把工具返回的图片 / 视频资产拼入
+    主要功能：集中描述 Vision 链路是否允许把显式视觉资产拼入
     provider message，以及单轮图片数量、大小和抓拍次数限制。
-    主要属性：`enabled` 控制总开关，`attach_tool_result_assets` 控制工具结果资产
+    主要属性：`enabled` 控制总开关，`attach_visual_assets` 控制显式视觉资产
     是否进入 follow-up message。
     """
 
     enabled: bool = False
-    attach_tool_result_assets: bool = False
+    attach_visual_assets: bool = False
     max_images_per_turn: int = 4
     image_freshness_seconds: float = 2.0
     max_image_base64_bytes: int = 7_500_000

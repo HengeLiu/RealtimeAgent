@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
-from typing import Any
+from dataclasses import asdict, dataclass, replace
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from realtime_agent import BaseTask, CommandEvent, CommandHandle, TaskContext, TaskEventView, TaskRunResult, TaskSignal, TaskSpec
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class FindObjectTaskInput(BaseModel):
@@ -48,6 +49,92 @@ class TimerTaskInput(BaseModel):
         default=True,
         description="是否由 SDK 调度器自动在到点时触发提醒；普通用户计时器必须保持 true。",
     )
+
+
+class CustomVisualTaskInput(BaseModel):
+    """自定义视觉 Task 启动参数。"""
+
+    mode: Literal["scan", "monitor", "scheduled"] = Field(
+        default="monitor",
+        description="视觉任务模式：scan 表示短周期识别，monitor 表示条件监测，scheduled 表示定时视觉总结。",
+    )
+    instruction: str = Field(description="用户用自然语言描述的视觉任务目标。")
+    frame_interval_seconds: float = Field(default=1.0, gt=0, description="采样间隔，单位秒。")
+    duration_seconds: float = Field(default=5.0, gt=0, description="本次任务最长持续时间，单位秒。")
+    trigger_condition: str = Field(default="", description="触发通知条件，例如公交车出现、有人生气、水流出现。")
+    max_observations: int = Field(default=5, gt=0, le=20, description="最多保留的视觉观察数量。")
+
+
+class CustomVisualTaskQueryInput(BaseModel):
+    """自定义视觉 Task 查询参数。"""
+
+    task_id: str = Field(description="要查询的自定义视觉 Task ID。")
+
+
+@dataclass(frozen=True)
+class VisualTaskPlan:
+    """自定义视觉任务计划。
+
+    主要功能：保存从自然语言任务中归一出的采样、持续时间、触发条件和停止条件。
+    """
+
+    mode: str
+    instruction: str
+    frame_interval_seconds: float
+    duration_seconds: float
+    trigger_condition: str = ""
+    max_observations: int = 5
+
+
+@dataclass(frozen=True)
+class VisualObservation:
+    """视觉观察结果。
+
+    主要功能：记录 Task runtime 对单张照片的结构化观察，供后续追问查询，而不是把
+    原始图片重复 append 给主模型。
+    """
+
+    observation_id: str
+    task_id: str
+    asset_id: str
+    captured_at_ms: int
+    direction: str
+    analyzer: str
+    structured_result: dict[str, Any]
+    summary: str
+    confidence: float = 1.0
+
+
+VISUAL_OBSERVATION_HISTORY: dict[str, list[VisualObservation]] = {}
+
+
+class CustomVisualTaskQueryTool(BaseTool):
+    """查询自定义视觉 Task observation 历史。"""
+
+    spec = ToolSpec(
+        name="custom_visual_task_query",
+        description="查询自定义视觉任务已经生成的观察结果，用于用户后续追问。",
+        input_model=CustomVisualTaskQueryInput,
+        output_model=dict,
+        capability_type="task",
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行 observation 查询。
+
+        主要逻辑：从应用层内存历史中读取指定 task_id 的 VisualObservation，不重新消费
+        旧照片资产。
+        参数：`context` 为 Tool 上下文；`input_data.task_id` 指定任务。
+        返回值：包含 observations 的 ToolResult。
+        异常情况：无。
+        """
+
+        task_id = str(input_data.get("task_id") or "").strip()
+        observations = [asdict(item) for item in VISUAL_OBSERVATION_HISTORY.get(task_id, [])]
+        return ToolResult.success(
+            data={"task_id": task_id, "observations": observations, "count": len(observations)},
+            message="已查询视觉任务观察历史。",
+        )
 
 
 class PeerVideoTaskMixin:
@@ -381,6 +468,167 @@ class PeerVideoTaskMixin:
         返回值：无。
         异常情况：无 bridge 时直接跳过。
         """
+
+        if context.bridge is None:
+            return
+        context.bridge.handle_signal(
+            TaskSignal(
+                task_id=context.task_ref.task_id,
+                task_type=context.task_ref.task_type,
+                signal_name=signal_name,
+                user_id=context.user_id,
+                session_id=context.session_id,
+                payload=payload,
+                allow_direct_notify=allow_direct_notify,
+            )
+        )
+
+
+class CustomVisualTask(BaseTask):
+    """自定义视觉 Task。
+
+    主要功能：根据用户自然语言计划启动应用层视觉采样，生成 `VisualObservation`
+    和 `TaskSignal`，不把每帧原始图片 append 给主模型。
+    """
+
+    task_spec = TaskSpec(
+        task_type="custom_visual_task",
+        input_model=CustomVisualTaskInput,
+        start_result_timeout_seconds=1.0,
+    )
+    description = (
+        "启动自定义视觉任务。适用于 360 识别、万物监测、定时视觉总结等长周期视觉需求；"
+        "任务会采样当前 RGB 图片并生成 observation，默认不把原图直接交给主模型。"
+    )
+
+    async def run(self, context: TaskContext) -> TaskRunResult:
+        """启动自定义视觉任务。
+
+        主要逻辑：解析输入得到 VisualTaskPlan，快速返回启动结果；具体采样在当前
+        Task actor 中按间隔执行并写入 observation 历史。
+        参数：`context` 为 SDK 注入的任务上下文。
+        返回值：启动阶段 `TaskRunResult`。
+        异常情况：设备不可用或采样失败时任务进入 failed。
+        """
+
+        input_data = dict(context.metadata.get("input") or {})
+        plan = VisualTaskPlan(
+            mode=str(input_data.get("mode") or "monitor"),
+            instruction=str(input_data.get("instruction") or "").strip(),
+            frame_interval_seconds=float(input_data.get("frame_interval_seconds") or 1.0),
+            duration_seconds=float(input_data.get("duration_seconds") or 5.0),
+            trigger_condition=str(input_data.get("trigger_condition") or "").strip(),
+            max_observations=int(input_data.get("max_observations") or 5),
+        )
+        VISUAL_OBSERVATION_HISTORY.setdefault(context.task_ref.task_id, [])
+        self._emit_visual_signal(
+            context,
+            signal_name="custom_visual_task.started",
+            payload={"plan": asdict(plan), "message": "自定义视觉任务已启动。"},
+            allow_direct_notify=True,
+        )
+        asyncio.create_task(self._run_collection(context, plan))
+        return TaskRunResult.started(
+            message="自定义视觉任务已启动。",
+            instructions="请只告诉用户视觉任务已经启动，不要编造观察结果；后续结果以 TaskSignal 或 custom_visual_task_query 为准。",
+        )
+
+    async def _run_collection(self, context: TaskContext, plan: VisualTaskPlan) -> None:
+        """后台执行 observation 收集并处理失败。"""
+
+        try:
+            await self._collect_observations(context, plan)
+        except Exception as exc:  # noqa: BLE001
+            await context.fail(
+                str(exc),
+                payload={"message": "自定义视觉任务没有完成，请稍后再试。", "allow_direct_notify": True},
+            )
+
+    async def _collect_observations(self, context: TaskContext, plan: VisualTaskPlan) -> None:
+        """执行视觉采样并生成 observation。
+
+        主要逻辑：使用统一 `TaskContext.devices.sensors.rgb.stream()` 获取图片资产，
+        每张图片 claim 为 `task_runtime`，然后转成轻量 observation。
+        参数：`context` 为任务上下文，`plan` 为视觉任务计划。
+        返回值：无。
+        异常情况：采样异常向上抛出，由 `run()` 转成任务失败。
+        """
+
+        started_at = time.monotonic()
+        observations: list[VisualObservation] = []
+        timeout_seconds = max(plan.duration_seconds, plan.frame_interval_seconds)
+        async for asset in context.devices.sensors.rgb.stream(
+            fps=max(0.1, 1.0 / plan.frame_interval_seconds),
+            timeout_seconds=timeout_seconds,
+        ):
+            if context.assets is not None:
+                context.assets.claim_photo(
+                    asset_id=asset.asset_id,
+                    consumer="task_runtime",
+                    owner=f"task:{context.task_ref.task_id}",
+                    reason="custom_visual_task_observation",
+                )
+            observation = self._build_observation(context=context, asset=asset, plan=plan, index=len(observations))
+            observations.append(observation)
+            VISUAL_OBSERVATION_HISTORY.setdefault(context.task_ref.task_id, []).append(observation)
+            self._emit_visual_signal(
+                context,
+                signal_name="custom_visual_task.observed",
+                payload={"observation": asdict(observation), "plan": asdict(plan)},
+                allow_direct_notify=self._should_notify(plan, observation),
+            )
+            if len(observations) >= plan.max_observations:
+                break
+            if time.monotonic() - started_at >= plan.duration_seconds:
+                break
+        await context.complete(
+            {
+                "plan": asdict(plan),
+                "observation_count": len(observations),
+                "observations": [asdict(item) for item in observations],
+            },
+            summary=f"自定义视觉任务完成，生成 {len(observations)} 条观察。",
+        )
+
+    def _build_observation(self, *, context: TaskContext, asset, plan: VisualTaskPlan, index: int) -> VisualObservation:
+        """构造单条 VisualObservation。"""
+
+        captured_at_ms = int(asset.metadata.get("captured_at_ms") or asset.created_at_ms)
+        direction = str(asset.metadata.get("direction") or "front")
+        summary = f"第 {index + 1} 次观察已记录：{plan.instruction}"
+        return VisualObservation(
+            observation_id=f"{context.task_ref.task_id}:obs:{index + 1}",
+            task_id=context.task_ref.task_id,
+            asset_id=asset.asset_id,
+            captured_at_ms=captured_at_ms,
+            direction=direction,
+            analyzer="custom_visual_task.runtime",
+            structured_result={
+                "mode": plan.mode,
+                "instruction": plan.instruction,
+                "trigger_condition": plan.trigger_condition,
+                "asset_id": asset.asset_id,
+            },
+            summary=summary,
+            confidence=1.0,
+        )
+
+    def _should_notify(self, plan: VisualTaskPlan, observation: VisualObservation) -> bool:
+        """判断 observation 是否直接通知用户。"""
+
+        if plan.mode in {"scan", "scheduled"}:
+            return True
+        return bool(plan.trigger_condition and plan.trigger_condition in observation.summary)
+
+    def _emit_visual_signal(
+        self,
+        context: TaskContext,
+        *,
+        signal_name: str,
+        payload: dict[str, Any],
+        allow_direct_notify: bool = False,
+    ) -> None:
+        """发送自定义视觉 TaskSignal。"""
 
         if context.bridge is None:
             return

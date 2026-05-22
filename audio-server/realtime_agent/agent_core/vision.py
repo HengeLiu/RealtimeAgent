@@ -22,6 +22,8 @@ from realtime_agent.agent_core.providers import (
     build_vision_model,
 )
 from realtime_agent.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
+from realtime_agent.agent_core.visual import VisualAppendContext, VlVisualAppender
+from realtime_agent.asset import AssetService
 from realtime_agent.errors import ErrorCode
 from realtime_agent.tools import ToolError, ToolGateway, ToolResult
 
@@ -468,10 +470,17 @@ class VisionRealtimeAgentCore:
         asr_config: AsrProviderConfig | None = None,
         vision_model_config: VisionModelProviderConfig | None = None,
         tool_gateway: ToolGateway | None = None,
+        asset_service: AssetService | None = None,
         memory_service: Any = None,
         max_context_messages: int = 30,
         multimodal_policy: MultimodalMessagePolicy | None = None,
         on_user_activity: Callable[[str, str], None] | None = None,
+        realtime_video_enabled: bool = False,
+        visual_frame_interval_seconds: float = 1.0,
+        visual_frame_timeout_seconds: float = 1.5,
+        visual_frame_ttl_seconds: float = 5.0,
+        visual_max_frames_per_turn: int = 8,
+        visual_direction: str = "front",
     ) -> None:
         self.control_service = control_service
         self.output_service = output_service
@@ -492,10 +501,12 @@ class VisionRealtimeAgentCore:
         self._session_by_user: dict[str, str] = {}
         self._event_buffer = AgentEventBuffer()
         self.tool_gateway = tool_gateway
+        self.asset_service = asset_service
         self.memory_service = memory_service
         self.max_context_messages = max(1, int(max_context_messages or 30))
         self.context_compiler = ContextCompiler()
-        self.message_manager = ModelMessageManager(multimodal_policy)
+        self.message_manager = ModelMessageManager(multimodal_policy, asset_service=asset_service)
+        self.visual_appender = VlVisualAppender(self.message_manager)
         self._state_by_user: dict[str, str] = {}
         self._interruption_reason_by_user: dict[str, str] = {}
         self._assistant_output_guard_by_user: dict[str, tuple[int, int]] = {}
@@ -507,6 +518,17 @@ class VisionRealtimeAgentCore:
         self._asr_started_sentence_keys: set[str] = set()
         self._asr_stopped_sentence_keys: set[str] = set()
         self._on_user_activity = on_user_activity
+        self.realtime_video_enabled = bool(realtime_video_enabled)
+        self.visual_frame_interval_seconds = float(visual_frame_interval_seconds or 0)
+        self.visual_frame_timeout_seconds = float(visual_frame_timeout_seconds or 0)
+        self.visual_frame_ttl_seconds = float(visual_frame_ttl_seconds or 0)
+        self.visual_max_frames_per_turn = max(0, int(visual_max_frames_per_turn or 0))
+        self.visual_direction = str(visual_direction or "front").strip() or "front"
+        self._audio_stream_by_session: dict[str, str] = {}
+        self._closed_audio_streams_by_session: dict[str, set[str]] = {}
+        self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
+        self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
+        self._visual_sampler_frame_count_by_session: dict[str, int] = {}
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 VisionRealtimeAgentCore 使用的 ToolGateway。
@@ -544,11 +566,15 @@ class VisionRealtimeAgentCore:
     def on_audio_input_opened(self, *, user_id: str, session_id: str, stream_id: str) -> None:
         """通知 Vision 链路上行麦克风 stream 已建立。"""
 
+        self._audio_stream_by_session[session_id] = stream_id
+        self._closed_audio_streams_by_session.get(session_id, set()).discard(stream_id)
         self.asr_pipeline.prepare_provider(stream_id=stream_id, session_id=session_id)
 
     def on_audio_input_closed(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
         """通知 Vision 链路上行麦克风 stream 已关闭。"""
 
+        self._closed_audio_streams_by_session.setdefault(session_id, set()).add(stream_id)
+        self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=f"audio_stream_closed:{reason}")
         self.asr_pipeline.close_provider(stream_id=stream_id)
         self._record_event(
             "audio_input.closed",
@@ -559,11 +585,21 @@ class VisionRealtimeAgentCore:
         )
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
+        self._audio_stream_by_session[chunk.session_id] = chunk.stream_id
+        self._start_visual_sampler(
+            user_id=chunk.user_id,
+            session_id=chunk.session_id,
+            stream_id=chunk.stream_id,
+            reason="audio_chunk",
+        )
         self._set_turn_state(chunk.user_id, chunk.session_id, "transcribing", reason="audio_final_check")
         transcript = self.asr_pipeline.append_audio(chunk)
         if transcript is None:
+            if chunk.final:
+                self._stop_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, reason="audio_final_without_transcript")
             return
         if self._should_ignore_transcript_as_echo(chunk=chunk, transcript=transcript):
+            self._stop_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, reason="echo_guard_ignored")
             self._set_turn_state(chunk.user_id, chunk.session_id, "completed", reason="echo_guard_ignored")
             return
         self._set_turn_state(chunk.user_id, chunk.session_id, "thinking", reason="transcript_final")
@@ -571,6 +607,7 @@ class VisionRealtimeAgentCore:
         turn_key = self._turn_key(chunk=chunk, transcript=transcript)
         if turn_key in self._responded_input_streams:
             self._record_duplicate_turn(chunk=chunk, transcript=transcript, turn_key=turn_key, reason="duplicate_turn")
+            self._stop_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, reason="duplicate_turn")
             self._set_turn_state(chunk.user_id, chunk.session_id, "completed", reason="duplicate_turn")
             return
         self._responded_input_streams.add(turn_key)
@@ -601,6 +638,8 @@ class VisionRealtimeAgentCore:
             session_id=chunk.session_id,
             agent_core="VisionRealtimeAgentCore",
         )
+        self._stop_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, reason="transcript_final", wait=True)
+        self._maybe_capture_visual_frame_before_response(user_id=chunk.user_id, session_id=chunk.session_id)
         if not chunk.final:
             thread = threading.Thread(
                 target=self._run_response_turn,
@@ -703,6 +742,12 @@ class VisionRealtimeAgentCore:
             "interrupted" if interrupted_reason else ("failed" if response_error is not None else "completed"),
             reason=interrupted_reason or ("response_error" if response_error is not None else "response_done"),
         )
+        if self.asset_service is not None:
+            self.asset_service.clear_turn_buffer(
+                user_id=chunk.user_id,
+                session_id=chunk.session_id,
+                reason=interrupted_reason or ("response_error" if response_error is not None else "response_done"),
+            )
         if not interrupted_reason:
             self._extend_assistant_output_guard(chunk.user_id, start_ms=None, tail_ms=1500)
 
@@ -1039,6 +1084,12 @@ class VisionRealtimeAgentCore:
             setattr(self.vision_model, "prompt", prompt)
         record_context_events(recorder=self.recorder, session_id=session_id, context=context)
         dynamic_context_sources: list[dict[str, Any]] = []
+        visual_context = VisualAppendContext(user_id=user_id, session_id=session_id)
+        turn_visual_update = self.visual_appender.flush_turn_assets(visual_context)
+        messages.extend(turn_visual_update.messages)
+        dynamic_context_sources.extend(turn_visual_update.source_records)
+        for event in turn_visual_update.events:
+            self.recorder.record_agent_event(session_id, event)
 
         def record_current_model_request(*, reason: str) -> None:
             self.recorder.record_model_request(
@@ -1184,12 +1235,11 @@ class VisionRealtimeAgentCore:
                         },
                     )
                     messages.append(_provider_tool_result_message(tool_call=tool_call, result=result_dict))
-                    update = self.message_manager.append_tool_result_followup(
+                    update = self.visual_appender.append_visual_assets(
                         messages=messages,
                         tool_call=tool_call,
                         tool_result=result_dict,
-                        user_id=user_id,
-                        session_id=session_id,
+                        context=visual_context,
                     )
                     messages.extend(update.messages)
                     dynamic_context_sources.extend(update.source_records)
@@ -1337,6 +1387,7 @@ class VisionRealtimeAgentCore:
             "data": VisionRealtimeAgentCore._jsonable(result.data),
             "message": result.message,
             "assets": [VisionRealtimeAgentCore._jsonable(item) for item in result.assets or []],
+            "visual_assets": [VisionRealtimeAgentCore._jsonable(item) for item in result.visual_assets or []],
             "artifacts": [VisionRealtimeAgentCore._jsonable(item) for item in result.artifacts or []],
             "tasks": [VisionRealtimeAgentCore._jsonable(item) for item in result.tasks or []],
             "meta": result.meta or {},
@@ -1449,6 +1500,7 @@ class VisionRealtimeAgentCore:
                 )
             )
         self._mark_user_activity(user_id, session_id)
+        self._start_visual_sampler(user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
         if should_cancel and not getattr(self, "_pipeline_event_control_enabled", False):
             self.interrupt(user_id, reason=reason)
 
@@ -1494,6 +1546,227 @@ class VisionRealtimeAgentCore:
                 )
             )
         self._mark_user_activity(user_id, session_id)
+        self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
+
+    def _start_visual_sampler(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
+        """启动 Vision 当前语音 turn 的视觉采样。
+
+        主要逻辑：Vision/VL 模型不能像 Omni 一样边流式追加图片给 provider，因此这里
+        只负责把服务端主动采集到的 RGB 帧写入照片资产 buffer，真正 append 发生在模型
+        请求前的 `flush_turn_assets()`。
+        参数：`user_id/session_id/stream_id` 定位当前音频 turn；`reason` 标识启动来源。
+        返回值：无。
+        异常情况：无可用 RGB 设备或配置关闭时直接跳过。
+        """
+
+        if not self.realtime_video_enabled:
+            return
+        if self.asset_service is None:
+            return
+        interval = float(self.visual_frame_interval_seconds or 0)
+        if interval <= 0:
+            return
+        if stream_id:
+            self._audio_stream_by_session[session_id] = stream_id
+        existing = self._visual_sampler_threads_by_session.get(session_id)
+        if existing and existing.is_alive():
+            return
+        if not self._has_paired_visual_capture_device(user_id=user_id, session_id=session_id):
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "vision.visual_sampler.paired_stream_unavailable",
+                    "frame_index": self._visual_sampler_frame_count_by_session.get(session_id, 0),
+                    "audio_stream_id": self._audio_stream_by_session.get(session_id),
+                    "reason": reason,
+                },
+            )
+            return
+        self._visual_sampler_frame_count_by_session[session_id] = 0
+        stop_event = threading.Event()
+        self._visual_sampler_stop_by_session[session_id] = stop_event
+        thread = threading.Thread(
+            target=self._visual_sampler_loop,
+            kwargs={"user_id": user_id, "session_id": session_id, "stop_event": stop_event, "interval": interval},
+            name=f"vision-visual-{session_id}",
+            daemon=True,
+        )
+        self._visual_sampler_threads_by_session[session_id] = thread
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "vision.visual_sampler.started",
+                "interval_seconds": interval,
+                "reason": reason,
+            },
+        )
+        thread.start()
+
+    def _stop_visual_sampler(self, *, user_id: str, session_id: str, reason: str, wait: bool = False) -> None:
+        """停止 Vision 当前语音 turn 的视觉采样。"""
+
+        stop_event = self._visual_sampler_stop_by_session.pop(session_id, None)
+        thread = self._visual_sampler_threads_by_session.pop(session_id, None)
+        if stop_event is None and thread is None:
+            return
+        if stop_event is not None:
+            stop_event.set()
+        if wait and thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=max(0.05, float(self.visual_frame_timeout_seconds or 0.5)))
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "vision.visual_sampler.stopped",
+                "reason": reason,
+                "frame_count": self._visual_sampler_frame_count_by_session.get(session_id, 0),
+            },
+        )
+        self._request_visual_stream_close(user_id=user_id, session_id=session_id, reason=reason)
+
+    def _request_visual_stream_close(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """请求端侧关闭本轮 Vision realtime 视觉采集。"""
+
+        event = Event(
+            event_name="stream.control.close.requested",
+            user_id=user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=session_id,
+            stream_type="sensor.rgb",
+            payload={"stream_type": "sensor.rgb", "mode": "stop", "reason": f"vision_realtime_visual_sampler_{reason}"},
+        )
+        matched = self.control_service.resolve_matching_devices(event, selection="all")
+        publish_result = self.control_service._push_event_to_device_ids(
+            event,
+            tuple(device.device_id for device in matched),
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "vision.visual_stream.close.requested",
+                "reason": reason,
+                "matched_count": publish_result.matched_count,
+                "delivered_count": publish_result.delivered_count,
+                "matched_device_ids": list(publish_result.matched_device_ids),
+            },
+        )
+
+    def _visual_sampler_loop(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stop_event: threading.Event,
+        interval: float,
+    ) -> None:
+        """按固定间隔请求 RGB 单帧写入 turn buffer。"""
+
+        while not stop_event.is_set():
+            frame_index = self._visual_sampler_frame_count_by_session.get(session_id, 0)
+            if self.visual_max_frames_per_turn and frame_index >= self.visual_max_frames_per_turn:
+                self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="max_frames_per_turn")
+                return
+            started_at = time.monotonic()
+            try:
+                if not self._has_paired_visual_capture_device(user_id=user_id, session_id=session_id):
+                    self.recorder.record_agent_event(
+                        session_id,
+                        {
+                            "event": "vision.visual_sampler.paired_stream_unavailable",
+                            "frame_index": frame_index,
+                            "audio_stream_id": self._audio_stream_by_session.get(session_id),
+                        },
+                    )
+                    self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="paired_stream_unavailable")
+                    return
+                self._request_visual_frame_for_buffer(user_id=user_id, session_id=session_id, frame_index=frame_index)
+            except Exception as exc:  # noqa: BLE001 - 后台采样不能打断音频和回复主链路
+                self.recorder.record_agent_event(
+                    session_id,
+                    {
+                        "event": "vision.visual_frame.failed",
+                        "frame_index": frame_index,
+                        "message": str(exc),
+                    },
+                )
+            self._visual_sampler_frame_count_by_session[session_id] = frame_index + 1
+            elapsed = time.monotonic() - started_at
+            stop_event.wait(max(0.0, interval - elapsed))
+
+    def _has_paired_visual_capture_device(self, *, user_id: str, session_id: str) -> bool:
+        """检查当前音频设备是否仍在线且支持 RGB 采集。"""
+
+        audio_stream_id = self._audio_stream_by_session.get(session_id)
+        if not audio_stream_id:
+            return False
+        if audio_stream_id in self._closed_audio_streams_by_session.get(session_id, set()):
+            return False
+        event = Event(
+            event_name="stream.control.open.requested",
+            user_id=user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=session_id,
+            stream_type="sensor.rgb",
+            payload={"stream_type": "sensor.rgb", "mode": "single", "reason": "vision_realtime_visual_sampler_probe"},
+        )
+        return any(
+            device.device_id == session_id
+            for device in self.control_service.resolve_matching_devices(event, selection="all")
+        )
+
+    def _request_visual_frame_for_buffer(self, *, user_id: str, session_id: str, frame_index: int) -> None:
+        """请求一张 RGB 照片资产，等待 AssetService 写入 turn buffer。"""
+
+        if self.asset_service is None:
+            return
+        asset = self.asset_service.request_asset(
+            user_id=user_id,
+            stream_type="sensor.rgb",
+            freshness_seconds=0.0,
+            params={
+                "format": "jpeg",
+                "frequency_hz": 1,
+                "sample_count": 1,
+                "duration_seconds": 0,
+                "ttl_seconds": self.visual_frame_ttl_seconds,
+                "capture_reason": "realtime_video",
+                "direction": self.visual_direction,
+            },
+            session_id=session_id,
+            timeout_seconds=max(0.05, float(self.visual_frame_timeout_seconds or 1.5)),
+            device_ids=(session_id,),
+        )
+        if asset is None:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "vision.visual_frame.missing",
+                    "frame_index": frame_index,
+                    "timeout_seconds": self.visual_frame_timeout_seconds,
+                },
+            )
+            return
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "vision.visual_frame.buffered",
+                "asset_id": asset.asset_id,
+                "frame_index": frame_index,
+                "direction": asset.metadata.get("direction") or self.visual_direction,
+            },
+        )
+
+    def _maybe_capture_visual_frame_before_response(self, *, user_id: str, session_id: str) -> None:
+        """在进入 VL 模型前确保短语音 turn 至少有一次采样机会。"""
+
+        if not self.realtime_video_enabled or self.asset_service is None:
+            return
+        frame_count = self._visual_sampler_frame_count_by_session.get(session_id, 0)
+        if frame_count > 0:
+            return
+        if not self._has_paired_visual_capture_device(user_id=user_id, session_id=session_id):
+            return
+        self._request_visual_frame_for_buffer(user_id=user_id, session_id=session_id, frame_index=0)
+        self._visual_sampler_frame_count_by_session[session_id] = 1
 
     def _handle_asr_transcript_event(self, chunk: StreamChunk, event: Any) -> None:
         """根据 ASR 结构化事件处理 Vision 链路语音边界和打断。
@@ -1602,6 +1875,7 @@ class VisionRealtimeAgentCore:
         self._cancelled_users.discard(user_id)
         session_id = self._session_by_user.pop(user_id, None)
         if session_id:
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
             prefix = f"{session_id}:"
             self._asr_started_sentence_keys = {
                 key for key in self._asr_started_sentence_keys if not key.startswith(prefix)
@@ -1609,6 +1883,9 @@ class VisionRealtimeAgentCore:
             self._asr_stopped_sentence_keys = {
                 key for key in self._asr_stopped_sentence_keys if not key.startswith(prefix)
             }
+            self._audio_stream_by_session.pop(session_id, None)
+            self._closed_audio_streams_by_session.pop(session_id, None)
+            self._visual_sampler_frame_count_by_session.pop(session_id, None)
         self.asr_pipeline.cancel()
         self.vision_model.cancel()
         if session_id and hasattr(self.output_service, "close_text_session"):

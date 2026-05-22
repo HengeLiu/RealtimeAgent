@@ -30,6 +30,9 @@ def test_stream_chunk_codec_matches_golden_binary_fixture() -> None:
             assert len(decoded.payload) == value
             continue
         assert getattr(decoded, key) == value
+    assert decoded.metadata["ttl_seconds"] == 5
+    assert decoded.metadata["capture_reason"] == "capture_photo"
+    assert decoded.metadata["direction"] == "front"
     assert decoded.payload == b"abc"
 
 

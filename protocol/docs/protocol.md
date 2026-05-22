@@ -126,6 +126,8 @@ supports:
         format: jpeg
         frequency_hz: 1
         sample_count: 1
+        ttl_seconds: 5
+        direction: front
   actuators:
     - type: vibrator
       commands: [vibrate]
@@ -201,6 +203,31 @@ Device --> Server: stream.input.closed
 @enduml
 ```
 
+`sensor.rgb` 采集请求 payload 可以携带照片资产策略字段，但不能携带图片 bytes：
+
+```json
+{
+  "stream_type": "sensor.rgb",
+  "mode": "single",
+  "format": "jpeg",
+  "request_id": "asset_req_xxx",
+  "correlation_id": "turn_or_task_id",
+  "turn_id": "turn_xxx",
+  "ttl_seconds": 5,
+  "capture_reason": "capture_photo",
+  "frequency_hz": 1,
+  "sample_count": 1,
+  "direction": "front"
+}
+```
+
+字段约束：
+
+1. `ttl_seconds` 只表示服务端 turn buffer 内的最长自动可消费时间，不表示磁盘 runs 产物保留时间。
+2. `direction` 第一阶段默认 `front`；未来可以由端侧 IMU / 姿态融合解析后写入。
+3. `correlation_id` 可关联连续采样或 Task 运行实例。
+4. 新字段均为可选字段，旧端侧忽略未知字段时不应失败。
+
 ## 输出 stream 生命周期
 
 server 请求端侧打开输出 stream：
@@ -256,9 +283,22 @@ header 字段：
 | `duration_ms` | 条件 | 音频 chunk 时长；图片可为 `0`。 |
 | `payload_size` | 是 | payload 字节数，必须与实际 payload 长度一致。 |
 | `final` | 是 | 是否最后一帧。 |
-| `metadata` | 否 | `request_id`、`source_path` 等诊断字段。 |
+| `metadata` | 否 | `request_id`、`turn_id`、`ttl_seconds`、`capture_reason`、`captured_at_ms`、`sequence_index`、`direction` 等诊断和照片资产字段。 |
 
 解码器必须拒绝 `payload_size` 与实际 payload 长度不一致的帧。
+
+`sensor.rgb` chunk metadata 建议字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `request_id` | 条件 | server 请求采集时必填，用于匹配 pending 请求。 |
+| `correlation_id` | 否 | 连续采样或 Task 关联 ID。 |
+| `turn_id` | 否 | 当前用户 turn ID；端侧不知道时由 server 写入或补齐。 |
+| `ttl_seconds` | 否 | 上传方请求的 turn buffer 有效期，单位秒。 |
+| `capture_reason` | 否 | `capture_photo`、`realtime_video`、`task_sampling`、`device_push` 等。 |
+| `captured_at_ms` | 否 | 端侧实际拍摄时间。 |
+| `sequence_index` | 否 | 同一 turn / correlation 下的图片序号。 |
+| `direction` | 否 | 用户语义方向，默认 `front`。 |
 
 ## 错误码
 

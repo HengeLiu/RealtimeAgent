@@ -53,11 +53,28 @@ class PlaybackRejectedError(RealtimeAgentError):
 
 
 @dataclass(frozen=True)
+class VisualAssetRef:
+    """Tool 返回的视觉资产消费描述。
+
+    主要功能：显式告诉 Agent Core 某个资产是否可以 append 给主模型，避免继续把
+    `ToolResult.assets` 当作自动看图依据。
+    主要属性：`visibility` 控制主模型是否可见原图，`consumer` 描述消费路径，
+    `text_context` 是 append 时配套给模型的文字说明。
+    """
+
+    asset: AssetRef
+    visibility: Literal["append_to_agent", "internal_only"] = "internal_only"
+    consumer: Literal["agent_inline", "tool_internal", "task_runtime"] = "tool_internal"
+    text_context: str = ""
+    claim_required: bool = True
+
+
+@dataclass(frozen=True)
 class ToolResult:
     """Tool 执行结果。
 
     主要功能：作为 ToolGateway 返回给 Agent Core 的稳定结构，避免直接暴露任意异常。
-    主要属性：`ok` 标识成功与否，`data/message/assets/artifacts/tasks/meta/error`
+    主要属性：`ok` 标识成功与否，`data/message/assets/visual_assets/artifacts/tasks/meta/error`
     是公开冻结字段。
     """
 
@@ -65,6 +82,7 @@ class ToolResult:
     data: Any = None
     message: str = ""
     assets: list[AssetRef] | None = None
+    visual_assets: list[VisualAssetRef] | None = None
     artifacts: list[ArtifactRef] | None = None
     tasks: list[Any] | None = None
     meta: dict | None = None
@@ -77,6 +95,7 @@ class ToolResult:
         *,
         message: str = "",
         assets: list[AssetRef] | None = None,
+        visual_assets: list[VisualAssetRef] | None = None,
         artifacts: list[ArtifactRef] | None = None,
         tasks: list[Any] | None = None,
         meta: dict | None = None,
@@ -93,6 +112,7 @@ class ToolResult:
             data=data,
             message=message,
             assets=assets or [],
+            visual_assets=visual_assets or [],
             artifacts=artifacts or [],
             tasks=tasks or [],
             meta=meta or {},
@@ -110,7 +130,7 @@ class ToolResult:
         """
         error_dict = error.to_dict()
         message = str(error_dict.get("message") or error)
-        return cls(ok=False, message=message, assets=[], artifacts=[], tasks=[], meta={}, error=error_dict)
+        return cls(ok=False, message=message, assets=[], visual_assets=[], artifacts=[], tasks=[], meta={}, error=error_dict)
 
     @property
     def content(self) -> Any:
@@ -1292,6 +1312,24 @@ class AssetFacade:
                 if asset.asset_id == asset_id:
                     return asset
         return None
+
+    def claim_photo(self, *, asset_id: str, consumer: str, owner: str, reason: str = "") -> bool:
+        """claim 一张 turn buffer 照片。
+
+        主要逻辑：暴露给 Tool / Task 的轻量门面；返回 True 表示成功 claim，未知资产
+        视为未进入自动消费 buffer，返回 False。
+        参数：`asset_id` 为照片资产，`consumer/owner/reason` 描述消费方。
+        返回值：是否成功 claim。
+        异常情况：底层资产服务异常会向上抛出。
+        """
+
+        result = self._app.asset_service.claim_photo_asset(
+            asset_id=asset_id,
+            consumer=consumer,  # type: ignore[arg-type]
+            owner=owner,
+            reason=reason,
+        )
+        return result.ok
 
 
 class _SensorCapability:

@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Lock
+from threading import Thread
 
+from realtime_agent.asset.photo_asset import PhotoAsset, PhotoAssetConsumer
+from realtime_agent.asset.turn_buffer import PhotoAssetClaimResult, TurnPhotoBuffer
 from realtime_agent.control import ControlService
 from realtime_agent.observability import RunRecorder
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, new_id
@@ -62,8 +65,17 @@ class AssetStore:
         self.recorder = recorder
         self._assets: list[AssetRef] = []
         self._expires_at_by_asset_id: dict[str, float] = {}
+        self._memory_payload_by_asset_id: dict[str, bytes] = {}
+        self._archive_done_by_asset_id: dict[str, ThreadEvent] = {}
 
-    def put(self, *, chunk: StreamChunk, device_id: str, ttl_seconds: float | None = None) -> AssetRef:
+    def put(
+        self,
+        *,
+        chunk: StreamChunk,
+        device_id: str,
+        ttl_seconds: float | None = None,
+        metadata: dict | None = None,
+    ) -> AssetRef:
         """保存一个资产 chunk。
 
         主要逻辑：根据 stream 类型选择文件后缀，写入 payload，并把 request_id、seq、
@@ -80,10 +92,9 @@ class AssetStore:
             path = self.recorder.media_dir(chunk.session_id, chunk.stream_type) / f"{asset_id}{suffix}"
         else:
             path = self.root / chunk.user_id / chunk.session_id / _asset_subdir(chunk.stream_type) / f"{asset_id}{suffix}"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(chunk.payload)
         storage_path = path.resolve()
         created_at = time.time()
+        payload = bytes(chunk.payload)
         ref = AssetRef(
             asset_id=asset_id,
             user_id=chunk.user_id,
@@ -92,18 +103,50 @@ class AssetStore:
             mime_type="image/jpeg" if chunk.stream_type == "sensor.rgb" else "application/octet-stream",
             created_at_ms=int(created_at * 1000),
             uri=str(storage_path),
-            size_bytes=len(chunk.payload),
+            size_bytes=len(payload),
             metadata={
                 "seq": chunk.seq,
-                "payload_size": len(chunk.payload),
+                "payload_size": len(payload),
                 "producer_id": device_id,
-                **dict(chunk.metadata),
+                **dict(metadata if metadata is not None else chunk.metadata),
             },
         )
         if ttl_seconds:
             self._expires_at_by_asset_id[asset_id] = time.time() + ttl_seconds
+        self._memory_payload_by_asset_id[asset_id] = payload
+        done = ThreadEvent()
+        self._archive_done_by_asset_id[asset_id] = done
         self._assets.append(ref)
+        Thread(
+            target=self._archive_payload,
+            kwargs={"asset": ref, "path": path, "payload": payload, "done": done},
+            name=f"asset-archive-{asset_id}",
+            daemon=True,
+        ).start()
         return ref
+
+    def memory_payload(self, asset_id: str) -> bytes | None:
+        """读取内存中的资产 payload。
+
+        主要逻辑：提供给模型 append 链路使用，避免异步落盘尚未完成时只能读磁盘。
+        参数：`asset_id` 为资产编号。
+        返回值：命中返回 bytes，否则返回 None。
+        异常情况：无。
+        """
+
+        return self._memory_payload_by_asset_id.get(asset_id)
+
+    def wait_for_archive(self, asset_id: str, *, timeout_seconds: float = 1.0) -> bool:
+        """等待指定资产异步归档完成。
+
+        主要逻辑：仅用于测试和排障，不参与主业务链路。
+        参数：`asset_id` 为资产编号，`timeout_seconds` 为最长等待秒数。
+        返回值：完成返回 True，超时或未知资产返回 False。
+        异常情况：无。
+        """
+
+        done = self._archive_done_by_asset_id.get(asset_id)
+        return bool(done and done.wait(timeout_seconds))
 
     def latest(self, *, user_id: str, stream_type: str) -> AssetRef | None:
         """查询未过期的最新资产。
@@ -166,6 +209,59 @@ class AssetStore:
         expires_at = self._expires_at_by_asset_id.get(asset.asset_id)
         return expires_at is not None and expires_at < time.time()
 
+    def _archive_payload(self, *, asset: AssetRef, path: Path, payload: bytes, done: ThreadEvent) -> None:
+        """后台归档资产 payload 到 runs 磁盘。
+
+        主要逻辑：写入临时文件后原子替换，避免模型或排障读取到半截文件；失败只记录
+        system / asset event，不影响内存资产消费。
+        """
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_name(f".{path.name}.{asset.asset_id}.tmp")
+            temp_path.write_bytes(payload)
+            temp_path.replace(path)
+            if self.recorder is not None and asset.session_id and hasattr(self.recorder, "record_asset_event"):
+                self.recorder.record_asset_event(
+                    asset.session_id,
+                    {
+                        "event": "asset.archive.completed",
+                        "user_id": asset.user_id,
+                        "asset_id": asset.asset_id,
+                        "stream_type": asset.stream_type,
+                        "uri": asset.uri,
+                        "size_bytes": len(payload),
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001
+            if self.recorder is not None:
+                if asset.session_id and hasattr(self.recorder, "record_asset_event"):
+                    self.recorder.record_asset_event(
+                        asset.session_id,
+                        {
+                            "event": "asset.archive.failed",
+                            "user_id": asset.user_id,
+                            "asset_id": asset.asset_id,
+                            "stream_type": asset.stream_type,
+                            "uri": asset.uri,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                if hasattr(self.recorder, "record_system_event"):
+                    self.recorder.record_system_event(
+                        {
+                            "event": "asset.archive.failed",
+                            "user_id": asset.user_id,
+                            "session_id": asset.session_id,
+                            "asset_id": asset.asset_id,
+                            "stream_type": asset.stream_type,
+                            "uri": asset.uri,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+        finally:
+            done.set()
+
 
 class _PendingAssetCapture:
     """等待端侧回传的内部资产捕获状态。
@@ -212,6 +308,7 @@ class AssetService:
         self.max_asset_bytes = max_asset_bytes
         self._pending: dict[str, _PendingAssetCapture] = {}
         self._lock = Lock()
+        self.turn_buffer = TurnPhotoBuffer()
 
     def store_chunk(self, chunk: StreamChunk) -> AssetRef:
         """存储端侧上传的资产 chunk，并唤醒匹配的 pending request。
@@ -224,11 +321,24 @@ class AssetService:
         """
         if len(chunk.payload) > self.max_asset_bytes:
             raise ValueError("asset exceeds asset.max_asset_bytes")
+        metadata = self._photo_metadata(chunk)
+        ttl_seconds = _float_or_none(metadata.get("ttl_seconds"))
         ref = self.store.put(
             chunk=chunk,
             device_id=self._producer_from_stream(chunk.stream_id),
-            ttl_seconds=self.default_ttl_seconds,
+            ttl_seconds=ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds,
+            metadata=metadata,
         )
+        if chunk.stream_type == "sensor.rgb":
+            self.turn_buffer.put(
+                PhotoAsset(
+                    asset_ref=ref,
+                    turn_id=str(ref.metadata.get("turn_id") or ref.session_id or ""),
+                    created_at_ms=ref.created_at_ms,
+                    expires_at_ms=_expires_at_ms(ref.created_at_ms, ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds),
+                    metadata=dict(ref.metadata),
+                )
+            )
         request_id = str(chunk.metadata.get("request_id") or "")
         with self._lock:
             pending = list(self._pending.values())
@@ -265,6 +375,87 @@ class AssetService:
                 },
             )
         return ref
+
+    def claim_photo_asset(
+        self,
+        *,
+        asset_id: str,
+        consumer: PhotoAssetConsumer,
+        owner: str,
+        reason: str = "",
+    ) -> PhotoAssetClaimResult:
+        """claim 一张 turn buffer 中的照片资产。
+
+        主要逻辑：委托 `TurnPhotoBuffer` 执行一次性消费控制，并把 claim 结果写入
+        `assets.jsonl` 方便排障。
+        参数：`asset_id` 为照片资产 ID，`consumer/owner/reason` 描述消费方。
+        返回值：`PhotoAssetClaimResult`。
+        异常情况：无。
+        """
+
+        result = self.turn_buffer.claim(asset_id=asset_id, consumer=consumer, owner=owner, reason=reason)
+        session_id = result.asset.session_id if result.asset is not None else None
+        if session_id and hasattr(self.recorder, "record_asset_event"):
+            self.recorder.record_asset_event(
+                session_id,
+                {
+                    "event": "asset.claimed" if result.ok else "asset.claim.skipped",
+                    "asset_id": asset_id,
+                    "consumer": consumer,
+                    "owner": owner,
+                    "reason": reason,
+                    "skip_reason": "" if result.ok else result.reason,
+                    "claim_id": result.claim.claim_id if result.claim is not None else None,
+                },
+            )
+        return result
+
+    def get_asset_payload(self, asset_id: str) -> bytes | None:
+        """读取资产内存 payload。
+
+        主要逻辑：用于模型视觉 append 链路，在异步落盘完成前也能直接读取照片内容。
+        参数：`asset_id` 为资产编号。
+        返回值：命中返回 bytes，未命中返回 None。
+        异常情况：无。
+        """
+
+        return self.store.memory_payload(asset_id)
+
+    def wait_for_archive(self, asset_id: str, *, timeout_seconds: float = 1.0) -> bool:
+        """等待资产异步归档完成。
+
+        主要逻辑：测试和排障专用，不应放在主业务链路中等待。
+        参数：`asset_id` 为资产编号；`timeout_seconds` 为最长等待时间。
+        返回值：归档完成返回 True，否则返回 False。
+        异常情况：无。
+        """
+
+        return self.store.wait_for_archive(asset_id, timeout_seconds=timeout_seconds)
+
+    def clear_turn_buffer(self, *, user_id: str, session_id: str | None, turn_id: str | None = None, reason: str = "") -> int:
+        """清理 turn buffer 中的照片资产。
+
+        主要逻辑：只清内存 buffer，不删除磁盘 runs 资产；用于用户 turn 完成、失败或
+        被打断后的自动消费边界收口。
+        参数：`user_id/session_id/turn_id` 定位清理范围，`reason` 写入排障日志。
+        返回值：清理的照片数量。
+        异常情况：无。
+        """
+
+        cleared = self.turn_buffer.clear_turn(user_id=user_id, session_id=session_id, turn_id=turn_id)
+        if session_id and hasattr(self.recorder, "record_asset_event"):
+            self.recorder.record_asset_event(
+                session_id,
+                {
+                    "event": "asset.buffer.cleared",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "reason": reason,
+                    "cleared_count": cleared,
+                },
+            )
+        return cleared
 
     def fail_request(
         self,
@@ -325,6 +516,11 @@ class AssetService:
             self._pending[request_id] = pending
         payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(params or {})}
         payload["request_id"] = request_id
+        if stream_type == "sensor.rgb":
+            payload.setdefault("format", payload.get("format") or "jpeg")
+            payload.setdefault("ttl_seconds", self.default_ttl_seconds)
+            payload.setdefault("capture_reason", payload.get("reason") or "capture_photo")
+            payload.setdefault("direction", "front")
         self._reject_media_bytes(payload)
         event = Event(
             event_name="stream.control.open.requested",
@@ -471,6 +667,28 @@ class AssetService:
         """
         return self.store.window(user_id=user_id, stream_type=stream_type, limit=limit)
 
+    def _photo_metadata(self, chunk: StreamChunk) -> dict:
+        """归一化照片资产 metadata。
+
+        主要逻辑：所有 `sensor.rgb` 上传都补齐 upload_mode、turn_id、captured_at_ms、
+        sequence_index 和 direction；其他 stream 只透传原始 metadata。
+        参数：`chunk` 为端侧上传的 stream chunk。
+        返回值：可写入 AssetRef 的 metadata。
+        异常情况：无。
+        """
+
+        metadata = dict(chunk.metadata)
+        if chunk.stream_type != "sensor.rgb":
+            return metadata
+        request_id = str(metadata.get("request_id") or "")
+        metadata.setdefault("upload_mode", "server_requested" if request_id else "device_push")
+        metadata.setdefault("turn_id", chunk.stream_id or chunk.session_id)
+        metadata.setdefault("capture_reason", metadata.get("reason") or ("server_requested" if request_id else "device_push"))
+        metadata.setdefault("captured_at_ms", chunk.timestamp_ms)
+        metadata.setdefault("sequence_index", chunk.seq)
+        metadata.setdefault("direction", "front")
+        return metadata
+
     def _producer_from_stream(self, stream_id: str) -> str:
         """从 stream registry 解析资产 producer 设备。
 
@@ -525,3 +743,17 @@ def _asset_suffix(stream_type: str) -> str:
     if stream_type in {"sensor.depth", "sensor.tof"}:
         return ".bin"
     return ".bin"
+
+
+def _float_or_none(value) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _expires_at_ms(created_at_ms: int, ttl_seconds: float | None) -> int | None:
+    if ttl_seconds is None:
+        return None
+    return int(created_at_ms + ttl_seconds * 1000)

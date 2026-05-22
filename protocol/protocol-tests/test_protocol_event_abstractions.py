@@ -35,3 +35,34 @@ def test_event_patterns_are_protocol_strings() -> None:
     """
 
     assert str(EventPattern.STREAM_CONTROL_ALL) == "stream.control.*"
+
+
+def test_rgb_stream_open_payload_accepts_photo_asset_metadata() -> None:
+    """测试目标：确认 `stream.control.open.requested` 可携带照片资产策略字段。
+
+    测试方法：构造 sensor.rgb 采集请求，payload 包含 ttl、capture_reason 和 direction。
+    预期结果：控制事件信封可正常序列化，且没有新增事件名或媒体 bytes。
+    """
+
+    event = Event(
+        event_name=EventName.STREAM_CONTROL_OPEN_REQUESTED,
+        user_id="user-photo",
+        producer_id="server-main",
+        stream_type=StreamType.SENSOR_RGB,
+        payload={
+            "stream_type": "sensor.rgb",
+            "mode": "single",
+            "format": "jpeg",
+            "request_id": "asset_req_001",
+            "turn_id": "turn_001",
+            "ttl_seconds": 5,
+            "capture_reason": "capture_photo",
+            "direction": "front",
+        },
+    )
+
+    data = event.to_dict()
+
+    assert data["event_name"] == "stream.control.open.requested"
+    assert data["payload"]["ttl_seconds"] == 5
+    assert data["payload"]["direction"] == "front"

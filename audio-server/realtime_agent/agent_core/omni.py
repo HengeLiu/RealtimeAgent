@@ -13,6 +13,7 @@ from typing import Any, Callable, Protocol
 from realtime_agent.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from realtime_agent.agent_core.context import ContextCompileRequest, ContextCompiler, PromptRegistry, record_context_events
 from realtime_agent.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
+from realtime_agent.agent_core.visual import OmniVisualAppender, VisualAppendContext
 from realtime_agent.asset.service import AssetService
 from realtime_agent.control import ControlService
 from realtime_agent.observability import RunRecorder
@@ -148,9 +149,12 @@ class RealtimeProviderConfig:
         "标记后的内容是系统已经生成但未继续播报给用户的上下文，只能作为后续回答参考。"
     )
     tools: list[dict[str, Any]] = field(default_factory=list)
+    realtime_video_enabled: bool = True
     visual_frame_interval_seconds: float = 1.0
     visual_frame_timeout_seconds: float = 1.5
-    visual_frame_freshness_seconds: float = 0.0
+    visual_frame_ttl_seconds: float = 5.0
+    visual_max_frames_per_turn: int = 8
+    visual_direction: str = "front"
     max_concurrent_sessions: int = DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS
 
 
@@ -2274,6 +2278,8 @@ class OmniRealtimeAgentCore:
     def _start_visual_sampler(self, *, user_id: str, session_id: str) -> None:
         """启动当前 turn 的视觉帧采样线程。"""
 
+        if not bool(self.omni_config.realtime_video_enabled):
+            return
         interval = float(self.omni_config.visual_frame_interval_seconds or 0)
         if interval <= 0 or self.asset_service is None:
             return
@@ -2370,8 +2376,11 @@ class OmniRealtimeAgentCore:
 
         frame_index = 0
         timeout = float(self.omni_config.visual_frame_timeout_seconds or 1.5)
-        freshness = float(self.omni_config.visual_frame_freshness_seconds or 0.0)
+        max_frames = max(0, int(self.omni_config.visual_max_frames_per_turn or 0))
         while not stop_event.is_set():
+            if max_frames and frame_index >= max_frames:
+                self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="max_frames_per_turn")
+                return
             started_at = time.monotonic()
             try:
                 if not self._has_paired_visual_capture_device(user_id=user_id, session_id=session_id):
@@ -2391,7 +2400,6 @@ class OmniRealtimeAgentCore:
                     session_id=session_id,
                     frame_index=frame_index,
                     timeout_seconds=timeout,
-                    freshness_seconds=freshness,
                 )
             except Exception as exc:  # noqa: BLE001 - 后台采样异常只能记录，不能打断音频主链路
                 self.recorder.record_agent_event(
@@ -2441,7 +2449,6 @@ class OmniRealtimeAgentCore:
         session_id: str,
         frame_index: int,
         timeout_seconds: float,
-        freshness_seconds: float,
     ) -> None:
         """请求一帧 RGB 资产并追加到当前 Realtime provider。"""
 
@@ -2453,19 +2460,21 @@ class OmniRealtimeAgentCore:
         asset = self.asset_service.request_asset(
             user_id=user_id,
             stream_type="sensor.rgb",
-            freshness_seconds=freshness_seconds,
+            freshness_seconds=0.0,
             params={
                 "format": "jpeg",
                 "frequency_hz": 1,
                 "sample_count": 1,
                 "duration_seconds": 0,
-                "reason": "realtime_visual_sampler",
+                "ttl_seconds": self.omni_config.visual_frame_ttl_seconds,
+                "capture_reason": "realtime_video",
+                "direction": self.omni_config.visual_direction,
             },
             session_id=session_id,
             timeout_seconds=timeout_seconds,
             device_ids=(session_id,),
         )
-        if asset is None or not asset.uri:
+        if asset is None:
             self.recorder.record_agent_event(
                 session_id,
                 {
@@ -2476,42 +2485,17 @@ class OmniRealtimeAgentCore:
                 },
             )
             return
-        image_path = Path(str(asset.uri)).expanduser()
-        if not image_path.is_file():
-            self.recorder.record_agent_event(
-                session_id,
-                {
-                    "event": "omni.visual_frame.missing_file",
-                    "provider": self.omni_config.provider,
-                    "frame_index": frame_index,
-                    "asset_id": asset.asset_id,
-                    "uri": asset.uri,
-                },
-            )
-            return
-        image_bytes = image_path.read_bytes()
         provider = existing[1]
-        provider.append_image(
-            image_bytes,
-            user_id=user_id,
-            session_id=session_id,
-            metadata={
-                "frame_index": frame_index,
-                "asset_id": asset.asset_id,
-                "uri": asset.uri,
-                "stream_type": asset.stream_type,
-            },
-        )
-        self.recorder.record_agent_event(
-            session_id,
-            {
-                "event": "omni.visual_frame.appended",
-                "provider": self.omni_config.provider,
-                "frame_index": frame_index,
-                "asset_id": asset.asset_id,
-                "image_bytes": len(image_bytes),
-                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
-            },
+        OmniVisualAppender(
+            asset_service=self.asset_service,
+            recorder=self.recorder,
+            provider_name=self.omni_config.provider,
+            default_direction=self.omni_config.visual_direction,
+        ).append_agent_inline(
+            provider=provider,
+            asset=asset,
+            context=VisualAppendContext(user_id=user_id, session_id=session_id),
+            frame_index=frame_index,
         )
 
     def _capture_provider_message(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:

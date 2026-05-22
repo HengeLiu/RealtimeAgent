@@ -194,7 +194,7 @@ agent:
     model: qwen3.6-flash
     multimodal:
       enabled: true
-      attach_tool_result_assets: true
+      attach_visual_assets: true
       max_images_per_turn: 2
       max_image_base64_bytes: 12345
       max_capture_photo_calls_per_turn: 1
@@ -213,6 +213,41 @@ agent:
     assert loaded.agent.vision.multimodal.max_images_per_turn == 2
     assert loaded.agent.vision.multimodal.video.enabled is True
     assert runtime_config.vision_multimodal_enabled is True
-    assert runtime_config.vision_multimodal_attach_tool_result_assets is True
+    assert runtime_config.vision_multimodal_attach_visual_assets is True
     assert runtime_config.vision_multimodal_max_image_base64_bytes == 12345
     assert runtime_config.vision_multimodal_video_max_inline_bytes == 54321
+
+
+def test_agent_visual_realtime_video_config_is_loaded(tmp_path) -> None:
+    """测试目标：确认全局 realtime-video 配置会从 YAML 同步到运行时配置。
+
+    测试方法：写入 `agent.visual.realtime_video` 配置并加载。
+    预期结果：运行时配置读取 frame 间隔、TTL、上限和 direction，且不依赖旧
+    `agent.omni.visual_frame_*` 字段。
+    """
+
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        """
+agent:
+  visual:
+    realtime_video:
+      enabled: true
+      frame_interval_seconds: 0.5
+      frame_timeout_seconds: 1.2
+      frame_ttl_seconds: 6
+      max_frames_per_turn: 3
+      direction: front
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    runtime_config = RealtimeAgentConfig.from_loaded_config(loaded)
+
+    assert runtime_config.visual_realtime_video_enabled is True
+    assert runtime_config.visual_realtime_video_frame_interval_seconds == 0.5
+    assert runtime_config.visual_realtime_video_frame_timeout_seconds == 1.2
+    assert runtime_config.visual_realtime_video_frame_ttl_seconds == 6
+    assert runtime_config.visual_realtime_video_max_frames_per_turn == 3
+    assert runtime_config.visual_realtime_video_direction == "front"

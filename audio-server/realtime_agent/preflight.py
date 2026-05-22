@@ -319,15 +319,15 @@ def _vision_multimodal_config_check(config: RealtimeAgentYamlConfig) -> dict:
     model_name = str(vision.model or "").lower()
     if "qwen3" not in model_name and "vl" not in model_name and "vision" not in model_name:
         warnings.append(f"vision multimodal model name does not look vision-capable: {vision.model}")
-    if not multimodal.attach_tool_result_assets:
-        warnings.append("agent.vision.multimodal.enabled is true but attach_tool_result_assets is false")
+    if not multimodal.attach_visual_assets:
+        warnings.append("agent.vision.multimodal.enabled is true but attach_visual_assets is false")
     return {
         "name": "vision_multimodal",
         "ok": not errors,
         "enabled": True,
         "provider": vision.provider,
         "model": vision.model,
-        "attach_tool_result_assets": multimodal.attach_tool_result_assets,
+        "attach_visual_assets": multimodal.attach_visual_assets,
         "video_enabled": multimodal.video.enabled,
         "warnings": warnings,
         "errors": errors,

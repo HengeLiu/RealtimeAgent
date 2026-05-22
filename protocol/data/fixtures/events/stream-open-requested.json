@@ -10,7 +10,12 @@
   "stream_type": "sensor.rgb",
   "payload": {
     "request_id": "req_rgb_001",
+    "stream_type": "sensor.rgb",
     "mode": "single",
+    "format": "jpeg",
+    "ttl_seconds": 5,
+    "capture_reason": "capture_photo",
+    "direction": "front",
     "params": {
       "format": "jpeg",
       "width": 960,

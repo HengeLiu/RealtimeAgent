@@ -135,6 +135,7 @@ participant "QwenOmniRealtimeAdapter" as Adapter
 participant "OmniOutputAdapter" as OutputAdapter
 participant "OutputService" as OutputService
 participant "AssetService" as AssetService
+participant "OmniVisualAppender" as VisualAppender
 participant "ToolGateway" as ToolGateway
 end box
 
@@ -171,8 +172,8 @@ group provider 判断用户开始/停止说话
   Core -> Core: _stop_visual_sampler()
 end
 
-opt 视觉采样启用 visual_frame_interval_seconds > 0
-  loop 每隔 visual_frame_interval_seconds
+opt 视觉采样启用 agent.visual.realtime_video.enabled
+  loop 每隔 agent.visual.realtime_video.frame_interval_seconds
     Core -> AssetService: request_asset(sensor.rgb,\ndevice_id=session_id)
     AssetService -> ControlService: stream.control.open.requested(sensor.rgb)
     ControlService -> ControlWS: 下发 RGB 单帧请求
@@ -182,8 +183,9 @@ opt 视觉采样启用 visual_frame_interval_seconds > 0
     StreamWS -> Server: 二进制 chunk
     Server -> App: dispatch(chunk)
     App -> AssetService: store_chunk(sensor.rgb)
-    AssetService --> Core: Asset(uri=jpeg)
-    Core -> Adapter: append_image(jpeg)
+    AssetService --> Core: AssetRef + memory payload
+    Core -> VisualAppender: claim + read memory payload
+    VisualAppender -> Adapter: append_image(jpeg)
     Adapter -> Omni: append_video(base64 jpeg)
   end
 end

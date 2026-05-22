@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -134,7 +135,15 @@ class NetworkPythonPlaybackEndpoint:
                     channels=1,
                     duration_ms=1,
                     final=True,
-                    metadata={"request_id": request.payload.get("request_id")},
+                    metadata={
+                        "request_id": request.payload.get("request_id"),
+                        "turn_id": request.payload.get("turn_id"),
+                        "ttl_seconds": request.payload.get("ttl_seconds"),
+                        "capture_reason": request.payload.get("capture_reason") or "device_push",
+                        "captured_at_ms": int(time.time() * 1000),
+                        "sequence_index": 0,
+                        "direction": request.payload.get("direction") or "front",
+                    },
                 )
             )
         )
