@@ -3,8 +3,8 @@
 `realtime-agent` 仓库围绕 server-side Python SDK、应用样例、端侧通讯 SDK、开发支持组件、测试和文档组织。
 
 ```text
-audio-server/realtime_agent/
-audio-device/
+agent-server/realtime_agent/
+devices/
 examples/
 docs/
 testdata/
@@ -21,7 +21,7 @@ import realtime_agent
 主要模块：
 
 ```text
-audio-server/realtime_agent/
+agent-server/realtime_agent/
   agent_core/       # Text / Realtime Agent Core
   asset/            # 资产服务
   audio_pipeline/   # 音频链路
@@ -35,13 +35,13 @@ audio-server/realtime_agent/
   context.py        # ToolContext / TaskContext
 ```
 
-## audio-device
+## devices
 
 多语言端侧通讯 SDK。它只封装端侧和 server 的通讯协议，不包含业务 Tool / Task、
 硬件驱动、模型、ASR 或 TTS。
 
 ```text
-audio-device/
+devices/
   python/      # realtime_agent_device，Python 端侧通讯 SDK
   typescript/  # @realtime-agent/device，浏览器 / Node / Electron 端侧通讯 SDK
   swift/       # RealtimeAgentDeviceKit，iOS / macOS 协议模型和 stream codec
@@ -57,7 +57,7 @@ audio-device/
 
 ```text
 examples/for-blind-app/
-  audio-server/
+  agent-server/
     server.yaml
     capabilities/
       __init__.py
@@ -104,10 +104,10 @@ docs/tutorials/
 docs/how-to/
 docs/reference/
 docs/community/
-audio-server/docs/
+agent-server/docs/
 ```
 
-社区开发者优先阅读 `getting-started`、`tutorials`、`how-to` 和 `reference`。SDK 内部设计记录位于 `audio-server/docs/`；示例项目设计记录位于各 `examples/<project>/docs/`。
+社区开发者优先阅读 `getting-started`、`tutorials`、`how-to` 和 `reference`。SDK 内部设计记录位于 `agent-server/docs/`；示例项目设计记录位于各 `examples/<project>/docs/`。
 
 ## tests
 

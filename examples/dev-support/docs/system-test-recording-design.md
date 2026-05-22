@@ -22,7 +22,7 @@ server 不能知道它是测试框架。对 server 来说，它和 `browser-glas
 
 本方案禁止以下实现方式：
 
-1. 不在 `audio-server/realtime_agent/` 下新增 `system_test` 之类测试框架目录。
+1. 不在 `agent-server/realtime_agent/` 下新增 `system_test` 之类测试框架目录。
 2. 不新增 `realtime-agent.system-test.*` 这类 SDK CLI 入口。
 3. 不在回放端侧中实例化 `RealtimeAgentApp`、`RealtimeAgentConfig`。
 4. 不直接调用 `register_device()`、`publish_control_event()`、`open_input_stream()`、`write_input_chunk()`、`stream_service.close_stream()`。
@@ -30,7 +30,7 @@ server 不能知道它是测试框架。对 server 来说，它和 `browser-glas
 6. 不使用 in-process 模式作为系统测试主路径。
 7. 不把 Case Runner 做成 server 内部调度器。
 
-如果某个测试为了 SDK 单元或组件测试确实需要 in-process，那应放在 `audio-server/tests/`，并明确命名为组件测试；它不属于本文讨论的系统级端侧回放测试。
+如果某个测试为了 SDK 单元或组件测试确实需要 in-process，那应放在 `agent-server/tests/`，并明确命名为组件测试；它不属于本文讨论的系统级端侧回放测试。
 
 ## 3. 背景
 
@@ -154,7 +154,7 @@ Case Recorder 负责把一次运行归纳成 Case 草稿：
 
 ```bash
 uv run python -m realtime_agent_python_playback_glass record \
-  --runs-root examples/for-blind-app/audio-server/runs \
+  --runs-root examples/for-blind-app/agent-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
   --audio testdata/audio-sample/看一下我前面有什么.wav \
@@ -334,7 +334,7 @@ expect:
           "actual": []
         }
       ],
-      "runs_dir": "examples/for-blind-app/audio-server/runs/user-system-test/dev-python-playback-glass"
+      "runs_dir": "examples/for-blind-app/agent-server/runs/user-system-test/dev-python-playback-glass"
     }
   ]
 }

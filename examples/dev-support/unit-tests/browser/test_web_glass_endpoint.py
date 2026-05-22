@@ -51,7 +51,7 @@ def test_web_glass_stream_chunk_codec_shape_is_protocol_compatible() -> None:
     assert "new RealtimeAgentEvent({" in html
     assert "StreamChunkCodec.encode(new StreamChunk({" in html
     assert "StreamChunkCodec.decode(raw)" in html
-    assert 'export * from "../../../../../audio-device/typescript/src/index.js";' in sdk_adapter
+    assert 'export * from "../../../../../devices/typescript/src/index.js";' in sdk_adapter
     assert "MIC_CHUNK_BYTES = INPUT_RATE * DEFAULT_CHUNK_MS / 1000 * 2" in html
     assert "while (micPcmBuffer.byteLength >= MIC_CHUNK_BYTES)" in html
     assert "sendMicPayload(micPcmBuffer.slice(0, MIC_CHUNK_BYTES))" in html
@@ -124,7 +124,7 @@ def test_web_glass_is_not_served_by_sdk_server() -> None:
     测试方法：检查 server 源码不包含 `/browser-glass` 路由和 `web_glass` handler。
     预期结果：server 只暴露协议和 debug API，不预判具体端侧类型。
     """
-    server_source = Path(__file__).resolve().parents[4].joinpath("audio-server/realtime_agent/server.py").read_text(
+    server_source = Path(__file__).resolve().parents[4].joinpath("agent-server/realtime_agent/server.py").read_text(
         encoding="utf-8"
     )
 

@@ -12,7 +12,7 @@ from realtime_agent_python_phone_mock.phone_mock import NetworkPythonPhoneMockEn
 from realtime_agent.server import RealtimeAgentHttpServer
 
 
-FOR_BLIND_APP_ROOT = Path(__file__).resolve().parents[4] / "examples" / "for-blind-app" / "audio-server"
+FOR_BLIND_APP_ROOT = Path(__file__).resolve().parents[4] / "examples" / "for-blind-app" / "agent-server"
 
 
 def test_legacy_phone_visual_tasks_are_not_registered_in_peer_video_app(tmp_path: Path) -> None:

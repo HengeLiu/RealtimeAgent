@@ -14,14 +14,14 @@
 ## 主要目录
 
 ```text
-audio-server/realtime_agent/          # SDK 主体，Python 导入名 realtime_agent
+agent-server/realtime_agent/          # SDK 主体，Python 导入名 realtime_agent
 protocol/                         # 协议说明、协议数据资产和协议资产检查
-audio-server/unit-tests/          # Server SDK 单元测试和 CLI 轻量边界
-audio-server/protocol-tests/      # Server SDK L1 协议行为测试
-audio-server/model-provider-tests/ # L2 大模型接入测试
-audio-device/python/unit-tests/   # Python Device SDK 单元测试
-audio-device/python/protocol-tests/ # Python Device SDK L1 协议行为测试
-audio-server/docs/                # SDK 内部设计、上下文 API、运行产物说明
+agent-server/unit-tests/          # Server SDK 单元测试和 CLI 轻量边界
+agent-server/protocol-tests/      # Server SDK L1 协议行为测试
+agent-server/model-provider-tests/ # L2 大模型接入测试
+devices/python/unit-tests/   # Python Device SDK 单元测试
+devices/python/protocol-tests/ # Python Device SDK L1 协议行为测试
+agent-server/docs/                # SDK 内部设计、上下文 API、运行产物说明
 docs/                             # 社区向文档、快速开始、教程、命令行和项目结构说明
 examples/for-blind-app/           # 当前主要示例应用
 examples/dev-support/             # 浏览器眼镜、Python 手机、Python 眼镜等开发/测试支持组件
@@ -32,7 +32,7 @@ legacy/                           # 旧项目代码，仅迁移参考
 SDK 关键模块：
 
 ```text
-audio-server/realtime_agent/
+agent-server/realtime_agent/
   agent_core/       # 文本 / 实时音频 Agent Core
   asset/            # 图片、音频等资产服务
   audio_pipeline/   # 音频输入输出链路
@@ -49,7 +49,7 @@ audio-server/realtime_agent/
 示例应用入口：
 
 ```text
-examples/for-blind-app/audio-server/
+examples/for-blind-app/agent-server/
   server.yaml
   capabilities/
     tools.py
@@ -82,7 +82,7 @@ uv pip install -e .
 
 - 运行依赖：`aiohttp`、`dashscope`、`openai`、`opencv-python`、`pydantic`、`pyyaml`。
 - 测试依赖：`pytest`。
-- pytest 已配置 `pythonpath`，覆盖 `audio-server`、Python 参考端和 ESP32 参考包路径。
+- pytest 已配置 `pythonpath`，覆盖 `agent-server`、Python 参考端和 ESP32 参考包路径。
 
 ## 常用命令
 
@@ -95,7 +95,7 @@ uv run realtime-agent.server.run --app-name for-blind-app
 按配置启动：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 健康检查和调试接口：
@@ -154,7 +154,7 @@ uv run realtime-agent.esp32.build --dry-run
 预检和发布包检查：
 
 ```bash
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
 uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.json
 ```
 
@@ -163,7 +163,7 @@ uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.
 新代码必须优先遵守这些边界：
 
 - SDK 核心包 `realtime_agent` 提供通用能力，不放具体业务逻辑。
-- 示例应用的业务工具 / 任务放在 `examples/<app>/audio-server/capabilities/`。
+- 示例应用的业务工具 / 任务放在 `examples/<app>/agent-server/capabilities/`。
 - 工具 / 任务只能通过 `ToolContext` / `TaskContext` 访问设备、资产、输出和上下文能力，不直接操作 WebSocket、内部服务对象或硬编码 `device_id`。
 - 麦克风和扬声器属于系统音频主链路，不作为普通设备 `supports` capability 暴露。
 - 图片、音频、视频、深度图等大字节数据必须走数据流或资产服务，不放进控制信令 JSON。
@@ -237,7 +237,7 @@ supports:
 应用配置在：
 
 ```text
-examples/for-blind-app/audio-server/server.yaml
+examples/for-blind-app/agent-server/server.yaml
 ```
 
 文本模型链路：
@@ -270,8 +270,8 @@ uv run python -m pytest
 
 ```bash
 uv run python -m pytest protocol/protocol-tests -q
-uv run python -m pytest audio-server/protocol-tests -q
-uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
+uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest examples/for-blind-app/app-tests -q
 uv run python -m pytest examples/for-blind-app/replay-tests -q
 uv run python -m pytest examples/dev-support/unit-tests examples/dev-support/app-tests -q
@@ -291,15 +291,15 @@ uv run python -m pytest -m replay -q
 真实模型提供方集成测试：
 
 ```bash
-uv run python -m pytest audio-server/model-provider-tests/test_dashscope_providers.py -q
+uv run python -m pytest agent-server/model-provider-tests/test_dashscope_providers.py -q
 ```
 
 测试编写要求：
 
 - 测试文件命名为 `test_*.py`。
 - 协议资产检查放 `protocol/protocol-tests/`。
-- Server SDK 行为测试放 `audio-server/protocol-tests/`。
-- Device SDK 行为测试放 `audio-device/python/protocol-tests/` 或对应语言目录。
+- Server SDK 行为测试放 `agent-server/protocol-tests/`。
+- Device SDK 行为测试放 `devices/python/protocol-tests/` 或对应语言目录。
 - 示例应用测试放 `examples/<app>/app-tests/`、`replay-tests/` 或 `hardware-tests/`。
 - 开发/测试支持组件测试放 `examples/dev-support/unit-tests/`、`app-tests/`、`replay-tests/` 或 `hardware-tests/`。
 - 新测试要用中文注释或 docstring 写明测试目标、测试方法和预期结果。
@@ -355,7 +355,7 @@ iOS 和 ESP32 相关改动要额外说明实际验证层级：只是构建、模
 `runs/` 是主要排障证据目录，默认位于应用目录下，例如：
 
 ```text
-examples/for-blind-app/audio-server/runs
+examples/for-blind-app/agent-server/runs
 ```
 
 程序启动时，`realtime_agent.runs` 会打印一次 `运行产物目录索引`，其中的 `runs_root` 就是当前应用的运行产物根目录。后续事件日志不再重复打印 `detail_path`、`session_detail_path` 或 `path`，避免终端被同一类存储路径刷屏；排查时按启动索引和下表定位文件。
@@ -423,9 +423,9 @@ tasks/                    # 长流程 Task 运行产物
 - `README.md`：项目快速开始和主流程。
 - `docs/reference/project-layout.md`：目录结构。
 - `docs/reference/cli.md`：命令行参考。
-- `audio-server/docs/how-to/device-capability-development.md`：设备能力与上下文 API。
-- `audio-server/docs/how-to/inspect-runs-artifacts.md`：运行产物说明。
-- `audio-server/docs/reference/context-api.md`：上下文 API 目标设计。
+- `agent-server/docs/how-to/device-capability-development.md`：设备能力与上下文 API。
+- `agent-server/docs/how-to/inspect-runs-artifacts.md`：运行产物说明。
+- `agent-server/docs/reference/context-api.md`：上下文 API 目标设计。
 - `examples/for-blind-app/docs/`：示例应用相关设计和验收记录。
 
 修改协议、目录结构、命令行、配置、运行产物或跨设备流程时，要同步更新相关文档。文档中的测试结果必须和真实命令结果一致，不能只写设计预期。
@@ -452,8 +452,8 @@ tasks/                    # 长流程 Task 运行产物
 
 开始改代码前先确认任务属于哪一层：
 
-- SDK 核心能力：改 `audio-server/realtime_agent/`，补 `audio-server/protocol-tests/`，必要时补 `audio-server/unit-tests/`。
-- 示例应用能力：改 `examples/for-blind-app/audio-server/capabilities/`，补 `examples/for-blind-app/app-tests/` 或 `replay-tests/`。
+- SDK 核心能力：改 `agent-server/realtime_agent/`，补 `agent-server/protocol-tests/`，必要时补 `agent-server/unit-tests/`。
+- 示例应用能力：改 `examples/for-blind-app/agent-server/capabilities/`，补 `examples/for-blind-app/app-tests/` 或 `replay-tests/`。
 - 开发/测试支持组件或端侧参考工程：改 `examples/dev-support/devices/` 或 `examples/for-blind-app/devices/`，补端侧契约或联调说明。
 - 文档或协议：同步更新 docs、schema、测试和示例配置。
 

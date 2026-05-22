@@ -61,8 +61,8 @@ sensor.mic -> OmniRealtimeAgentCore -> assistant_audio.delta -> actuator.speaker
 
 ```text
 realtime-agent
-├── audio-server/realtime_agent/       # Server SDK，Python 导入名 realtime_agent
-├── audio-device/                  # 多语言 Device SDK
+├── agent-server/realtime_agent/       # Server SDK，Python 导入名 realtime_agent
+├── devices/                  # 多语言 Device SDK
 ├── examples/                      # 示例应用、真实端侧参考工程和开发支持组件
 ├── docs/                          # 社区文档和内部设计记录
 └── testdata/                      # 协议、回放和测试样例
@@ -70,10 +70,10 @@ realtime-agent
 
 ### Server SDK
 
-Server SDK 位于 `audio-server/realtime_agent/`，负责大模型运行时、设备能力调用和服务端基础设施：
+Server SDK 位于 `agent-server/realtime_agent/`，负责大模型运行时、设备能力调用和服务端基础设施：
 
 ```text
-audio-server/realtime_agent/
+agent-server/realtime_agent/
   agent_core/       # Text / Realtime Agent Core
   audio_pipeline/   # ASR、TTS 和音频输入输出链路
   control/          # 设备注册、连接状态和控制通讯
@@ -90,10 +90,10 @@ Server SDK 的使用者主要是应用开发者。他们在应用目录里编写
 
 ### Device SDK
 
-Device SDK 位于 `audio-device/`，负责端侧与 server 的通讯层封装：
+Device SDK 位于 `devices/`，负责端侧与 server 的通讯层封装：
 
 ```text
-audio-device/
+devices/
   python/      # realtime_agent_device，Python 端侧通讯 SDK
   typescript/  # @realtime-agent/device，浏览器 / Node / Electron 端侧通讯 SDK
   swift/       # RealtimeAgentDeviceKit，iOS / macOS 协议模型和 stream codec
@@ -114,14 +114,14 @@ server 和 device 的底层通讯使用统一协议，包括：
 - 二进制 stream chunk 编解码。
 - 错误码和诊断信息。
 
-这些协议资产位于 `audio-server/realtime_agent/spec/` 和 `docs/internal/`。它们主要面向 SDK 维护者、跨语言 SDK 实现者和调试工具。普通应用开发者应该优先使用 Server SDK 和 Device SDK 暴露的能力 API。
+这些协议资产位于 `agent-server/realtime_agent/spec/` 和 `docs/internal/`。它们主要面向 SDK 维护者、跨语言 SDK 实现者和调试工具。普通应用开发者应该优先使用 Server SDK 和 Device SDK 暴露的能力 API。
 
 ### 示例应用和开发支持组件
 
 `examples/for-blind-app/` 是当前主要示例应用，展示如何组织一个真实语音 Agent 应用：
 
 ```text
-examples/for-blind-app/audio-server/
+examples/for-blind-app/agent-server/
   server.yaml
   capabilities/
     tools.py
@@ -148,12 +148,12 @@ Tool 适合一次性短动作，例如拍照、查路线、搜索资料。Task �
 业务能力放在应用目录下：
 
 ```text
-examples/<your-app>/audio-server/capabilities/
+examples/<your-app>/agent-server/capabilities/
   tools.py
   tasks.py
 ```
 
-SDK 会自动发现并注册这些能力。业务代码不应该写进 `audio-server/realtime_agent/` 核心包。
+SDK 会自动发现并注册这些能力。业务代码不应该写进 `agent-server/realtime_agent/` 核心包。
 
 ### Context API
 
@@ -249,7 +249,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 新应用可以参考以下目录结构：
 
 ```text
-examples/<your-app>/audio-server/
+examples/<your-app>/agent-server/
   server.yaml
   capabilities/
     __init__.py
@@ -358,7 +358,7 @@ asyncio.run(main())
 2. Device 应用开发者关心 Device SDK、能力声明、handler、stream API 和真实硬件驱动。
 3. SDK 维护者关心事件协议、schema、AsyncAPI、跨语言兼容和黄金样例。
 4. 事件协议是内部通讯机制，不是普通业务开发者的主路径 API。
-5. `legacy/` 只作为迁移参考；新功能应优先使用当前 `realtime_agent` 和 `audio-device` API。
+5. `legacy/` 只作为迁移参考；新功能应优先使用当前 `realtime_agent` 和 `devices` API。
 
 ## 下一步阅读
 
@@ -366,4 +366,4 @@ asyncio.run(main())
 - [第一个 Tool 和 Task](../tutorials/build-first-capability.md)
 - [跨设备本地联调](../how-to/cross-device-local-debug.md)
 - [项目结构](../reference/project-layout.md)
-- [设备能力与 Context API 开发说明](../../audio-server/docs/how-to/device-capability-development.md)
+- [设备能力与 Context API 开发说明](../../agent-server/docs/how-to/device-capability-development.md)

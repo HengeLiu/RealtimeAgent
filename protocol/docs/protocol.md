@@ -305,7 +305,7 @@ header 字段：
 标准错误码位于：
 
 ```text
-audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
+agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 ```
 
 当前错误类型包括：
@@ -332,21 +332,21 @@ audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 
 | 协议对象 | 代码位置 | 说明 |
 | --- | --- | --- |
-| 事件信封 | `audio-server/realtime_agent/protocol.py` | server runtime 的事件对象和校验入口。 |
-| 设备能力 schema | `audio-server/realtime_agent/spec/realtime-agent-device.schema.json` | 设备注册和能力声明约束。 |
-| 事件 schema | `audio-server/realtime_agent/spec/realtime-agent-event.schema.json` | 公共事件名和事件信封约束。 |
-| stream schema | `audio-server/realtime_agent/spec/realtime-agent-stream.schema.json` | stream header 字段约束。 |
-| AsyncAPI | `audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml` | WebSocket 通道和事件说明。 |
-| 错误码 | `audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml` | 标准错误码和建议处理。 |
-| Server control | `audio-server/realtime_agent/control/service.py` | 设备注册、连接状态、事件路由。 |
-| Server stream | `audio-server/realtime_agent/stream/service.py` | stream 生命周期和 chunk 处理。 |
-| Server output | `audio-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker stream。 |
-| Context API | `audio-server/realtime_agent/context.py` | Tool / Task 调用设备能力的入口。 |
-| Python Device SDK | `audio-device/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
-| TypeScript Device SDK | `audio-device/typescript/src/` | 浏览器 / Node 侧协议模型。 |
-| Swift Device SDK | `audio-device/swift/` | Swift 协议模型和 stream codec。 |
-| Kotlin Device SDK | `audio-device/kotlin/` | Kotlin / JVM 协议模型和 stream codec。 |
-| C Device SDK | `audio-device/c/` | C / ESP32 最小协议核心。 |
+| 事件信封 | `agent-server/realtime_agent/protocol.py` | server runtime 的事件对象和校验入口。 |
+| 设备能力 schema | `agent-server/realtime_agent/spec/realtime-agent-device.schema.json` | 设备注册和能力声明约束。 |
+| 事件 schema | `agent-server/realtime_agent/spec/realtime-agent-event.schema.json` | 公共事件名和事件信封约束。 |
+| stream schema | `agent-server/realtime_agent/spec/realtime-agent-stream.schema.json` | stream header 字段约束。 |
+| AsyncAPI | `agent-server/realtime_agent/spec/realtime-agent-asyncapi.yaml` | WebSocket 通道和事件说明。 |
+| 错误码 | `agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml` | 标准错误码和建议处理。 |
+| Server control | `agent-server/realtime_agent/control/service.py` | 设备注册、连接状态、事件路由。 |
+| Server stream | `agent-server/realtime_agent/stream/service.py` | stream 生命周期和 chunk 处理。 |
+| Server output | `agent-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker stream。 |
+| Context API | `agent-server/realtime_agent/context.py` | Tool / Task 调用设备能力的入口。 |
+| Python Device SDK | `devices/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
+| TypeScript Device SDK | `devices/typescript/src/` | 浏览器 / Node 侧协议模型。 |
+| Swift Device SDK | `devices/swift/` | Swift 协议模型和 stream codec。 |
+| Kotlin Device SDK | `devices/kotlin/` | Kotlin / JVM 协议模型和 stream codec。 |
+| C Device SDK | `devices/c/` | C / ESP32 最小协议核心。 |
 | golden fixtures | `protocol/data/fixtures/` | 跨语言测试输入。 |
 
 ## 协议资产
@@ -355,11 +355,11 @@ audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 
 ```text
 protocol/docs/protocol.md
-audio-server/realtime_agent/spec/realtime-agent-device.schema.json
-audio-server/realtime_agent/spec/realtime-agent-event.schema.json
-audio-server/realtime_agent/spec/realtime-agent-stream.schema.json
-audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml
-audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml
+agent-server/realtime_agent/spec/realtime-agent-device.schema.json
+agent-server/realtime_agent/spec/realtime-agent-event.schema.json
+agent-server/realtime_agent/spec/realtime-agent-stream.schema.json
+agent-server/realtime_agent/spec/realtime-agent-asyncapi.yaml
+agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 protocol/data/version.json
 protocol/behavior/version.json
 protocol/data/fixtures/

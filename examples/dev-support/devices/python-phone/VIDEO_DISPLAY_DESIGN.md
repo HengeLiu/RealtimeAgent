@@ -542,7 +542,7 @@ uv run python -m pytest examples/dev-support/unit-tests/python_phone_mock/test_p
 终端 1：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 终端 2：
@@ -591,7 +591,7 @@ YOLO 接入后增加：
 
 改动：
 
-1. 在 `audio-server/realtime_agent/device_capabilities.py` 中扩展 `compile_system_routes_from_properties()`。
+1. 在 `agent-server/realtime_agent/device_capabilities.py` 中扩展 `compile_system_routes_from_properties()`。
 2. 当 `properties.actuator.display.rgb=true` 或 `properties.endpoint.role.visual_display=true` 时，追加内部路由：
 
    ```yaml
@@ -733,7 +733,7 @@ uv run python -m pytest examples/dev-support/unit-tests/python_phone_mock/test_p
 验收：
 
 ```bash
-uv run python -m pytest audio-server/unit-tests/cli/test_docs_commands.py -q
+uv run python -m pytest agent-server/unit-tests/cli/test_docs_commands.py -q
 ```
 
 如果文档命令无法自动覆盖本链路，至少执行一次手动联调并记录实际命令和结果。

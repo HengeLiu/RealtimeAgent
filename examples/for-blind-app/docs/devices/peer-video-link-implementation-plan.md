@@ -23,11 +23,11 @@
 
 | 范围 | 目录 / 文件 | 说明 |
 | --- | --- | --- |
-| for-blind Task | `examples/for-blind-app/audio-server/capabilities/tasks.py` | 改造 `find_object_task` 和 `traffic_light_task` 的启动、状态消费、取消逻辑。 |
+| for-blind Task | `examples/for-blind-app/agent-server/capabilities/tasks.py` | 改造 `find_object_task` 和 `traffic_light_task` 的启动、状态消费、取消逻辑。 |
 | Python phone | `examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/` | 增加 peer receiver、状态 reporter、`VisionProcessor`、YOLO / YOLOE 处理、超时和关闭处理。 |
 | browser-glass | `examples/dev-support/devices/browser-glass/index.html` | 增加 peer sender 命令处理、帧采集、发送和 stop。 |
 | 设备配置 | `examples/dev-support/devices/browser-glass/device.realtime-agent.yaml`、`examples/dev-support/devices/python-phone/phone.preview.yaml` | 增加 `device_role`、peer video properties 和默认 user 对齐。 |
-| 测试 | `audio-server/tests/`、`examples/for-blind-app/tests/`、`examples/dev-support/tests/` | 覆盖 Task 编排、状态回报、端侧 receiver/sender 行为。 |
+| 测试 | `agent-server/tests/`、`examples/for-blind-app/tests/`、`examples/dev-support/tests/` | 覆盖 Task 编排、状态回报、端侧 receiver/sender 行为。 |
 | 文档 | `examples/for-blind-app/docs/devices/`、`examples/dev-support/devices/python-phone/README.md`、`examples/dev-support/devices/browser-glass/README.md` | 补充启动、观察点和端侧开发说明。 |
 
 ### 2.2 本计划不改
@@ -55,7 +55,7 @@
 
 ```bash
 uv run python -m pytest examples/for-blind-app/app-tests/config/test_app_name_launch.py -q
-uv run python -m pytest audio-server/protocol-tests/sdk/runtime/test_memory_service.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_memory_service.py -q
 ```
 
 完成标准：
@@ -308,7 +308,7 @@ examples/dev-support/tests/browser_glass/test_peer_video_sender.py
 建议在：
 
 ```text
-examples/for-blind-app/audio-server/capabilities/tasks.py
+examples/for-blind-app/agent-server/capabilities/tasks.py
 ```
 
 内部新增 helper，先不抽到 SDK：
@@ -455,7 +455,7 @@ examples/for-blind-app/app-tests/endpoints/test_peer_video_device_config.py
 终端 1：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 终端 2：
@@ -522,7 +522,7 @@ browser-glass 日志：
    - 说明非 Python 端侧只要发送等价 `command.*` 事件。
 2. `examples/dev-support/devices/browser-glass/README.md`
    - 增加 peer sender 和图片循环帧说明。
-3. `audio-server/docs/reference/context-api.md`
+3. `agent-server/docs/reference/context-api.md`
    - 增加“Task 编排端侧远程命令”的 peer video 示例。
 4. `examples/for-blind-app/docs/devices/peer-video-link-task-design.md`
    - 根据实现结果更新实际命令字段、测试命令和限制。
@@ -576,7 +576,7 @@ browser-glass 日志：
 
 - 状态：已完成
 - 实现：确认 `find_object_task` / `traffic_light_task` 已切到 peer video 编排；模型可见 schema 不暴露端侧内部 provider 细节，`vision.provider=mock` 只作为 phone 参考端测试配置。
-- 验证：`uv run python -m pytest examples/for-blind-app/app-tests/config/test_app_name_launch.py audio-server/protocol-tests/sdk/runtime/test_memory_service.py -q`，结果 16 passed。
+- 验证：`uv run python -m pytest examples/for-blind-app/app-tests/config/test_app_name_launch.py agent-server/protocol-tests/sdk/runtime/test_memory_service.py -q`，结果 16 passed。
 - 风险：既有旧 phone task 测试仍依赖 `find_object_phone_task` / `traffic_light_phone_task`，当前主线已迁移到 peer video Task，需要后续单独清理旧测试口径。
 
 ### Phase 1：端侧状态回报 helper

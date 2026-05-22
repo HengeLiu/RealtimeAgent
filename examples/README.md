@@ -14,14 +14,14 @@
 uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
-`--app-name for-blind-app` 会自动解析 `examples/for-blind-app/audio-server`，加载其中的 `server.yaml`，并把同级 `capabilities` 目录加入 Tool / Task 自动发现。所有 app 的 `server.yaml` 都必须放在 app 的 `audio-server` 根目录；如果 YAML 没有显式配置 `app_name`，SDK 会使用应用目录名。
+`--app-name for-blind-app` 会自动解析 `examples/for-blind-app/agent-server`，加载其中的 `server.yaml`，并把同级 `capabilities` 目录加入 Tool / Task 自动发现。所有 app 的 `server.yaml` 都必须放在 app 的 `agent-server` 根目录；如果 YAML 没有显式配置 `app_name`，SDK 会使用应用目录名。
 
 推荐验收：
 
 ```bash
 # 在项目根目录执行
 uv run realtime-agent.dev.preflight \
-  --config examples/for-blind-app/audio-server/server.yaml \
+  --config examples/for-blind-app/agent-server/server.yaml \
   --report runs/acceptance/preflight.json
 
 uv run python -m pytest \

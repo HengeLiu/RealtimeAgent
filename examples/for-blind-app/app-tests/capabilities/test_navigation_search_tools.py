@@ -12,7 +12,7 @@ from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 
 
 ROOT = Path(__file__).resolve().parents[4]
-APP_ROOT = ROOT / "examples" / "for-blind-app" / "audio-server"
+APP_ROOT = ROOT / "examples" / "for-blind-app" / "agent-server"
 
 
 def _clear_capability_modules() -> None:

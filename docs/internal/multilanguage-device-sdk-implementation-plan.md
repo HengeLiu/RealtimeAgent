@@ -3,9 +3,9 @@
 更新时间：2026-05-15
 
 当前状态：Phase 1 到 Phase 8 的最小主线已落地。协议 schema 和黄金样例位于
-`audio-server/realtime_agent/spec/` 与 `protocol/data/fixtures/`；多语言 SDK 位于
-`audio-device/`，目录名已从早期计划中的 `sdks/` 收敛为 `audio-device/`，与
-`audio-server/` 对应；Python phone、browser-glass、Python playback glass 等开发/测试支持组件已按当前协议迁移。
+`agent-server/realtime_agent/spec/` 与 `protocol/data/fixtures/`；多语言 SDK 位于
+`devices/`，目录名已从早期计划中的 `sdks/` 收敛为 `devices/`，与
+`agent-server/` 对应；Python phone、browser-glass、Python playback glass 等开发/测试支持组件已按当前协议迁移。
 
 ## 1. 实施原则
 
@@ -104,7 +104,7 @@ docs/internal/device-protocol-inventory.md
 ### 5.2 建议文件
 
 ```text
-audio-server/realtime_agent/spec/
+agent-server/realtime_agent/spec/
   realtime-agent-device.schema.json
   realtime-agent-event.schema.json
   realtime-agent-stream.schema.json
@@ -177,7 +177,7 @@ protocol/protocol-tests/test_stream_chunk_codec_contract.py
 ### 6.2 建议目录
 
 ```text
-audio-device/python/
+devices/python/
   pyproject.toml
   src/realtime_agent_device/
     __init__.py
@@ -222,7 +222,7 @@ examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/phone
 ### 6.5 测试
 
 ```bash
-uv run python -m pytest audio-device/python/tests -q
+uv run python -m pytest devices/python/tests -q
 uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 ```
 
@@ -241,7 +241,7 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 ### 7.2 建议目录
 
 ```text
-audio-device/typescript/
+devices/typescript/
   package.json
   tsconfig.json
   src/
@@ -275,7 +275,7 @@ audio-device/typescript/
 ### 7.4 测试
 
 ```bash
-cd audio-device/typescript
+cd devices/typescript
 npm test
 ```
 
@@ -300,7 +300,7 @@ node scripts/verify-golden-fixtures.mjs
 ### 8.2 建议目录
 
 ```text
-audio-device/swift/
+devices/swift/
   Package.swift
   Sources/RealtimeAgentDeviceKit/
     RealtimeAgentDevice.swift
@@ -327,7 +327,7 @@ examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/Realtime
 ### 8.4 测试
 
 ```bash
-cd audio-device/swift
+cd devices/swift
 swift test
 ```
 
@@ -352,7 +352,7 @@ uv run realtime-agent.ios.build-sim
 ### 9.2 建议目录
 
 ```text
-audio-device/kotlin/
+devices/kotlin/
   build.gradle.kts
   settings.gradle.kts
   src/main/kotlin/io/realtimeagent/device/
@@ -380,7 +380,7 @@ audio-device/kotlin/
 ### 9.4 测试
 
 ```bash
-cd audio-device/kotlin
+cd devices/kotlin
 ./gradlew test
 ```
 
@@ -399,7 +399,7 @@ cd audio-device/kotlin
 ### 10.2 建议目录
 
 ```text
-audio-device/c/
+devices/c/
   CMakeLists.txt
   include/realtime_agent_device/
     realtime_agent_device.h
@@ -433,9 +433,9 @@ audio-device/c/
 ### 10.4 测试
 
 ```bash
-cmake -S audio-device/c -B audio-device/c/build
-cmake --build audio-device/c/build
-ctest --test-dir audio-device/c/build --output-on-failure
+cmake -S devices/c -B devices/c/build
+cmake --build devices/c/build
+ctest --test-dir devices/c/build --output-on-failure
 ```
 
 ESP32 dry-run：
@@ -507,18 +507,18 @@ docs/how-to/debug-device-sdk.md
 每个语言 SDK 自带 README：
 
 ```text
-audio-device/<language>-device/README.md
+devices/<language>-device/README.md
 ```
 
 ### 12.3 发布前检查
 
 ```bash
-uv run python -m pytest audio-server/tests -q
-uv run python -m pytest audio-device/python/tests -q
-cd audio-device/typescript && npm test
-cd audio-device/swift && swift test
-cd audio-device/kotlin && ./gradlew test
-cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/build
+uv run python -m pytest agent-server/tests -q
+uv run python -m pytest devices/python/tests -q
+cd devices/typescript && npm test
+cd devices/swift && swift test
+cd devices/kotlin && ./gradlew test
+cmake -S devices/c -B devices/c/build && cmake --build devices/c/build
 ```
 
 ### 12.4 发布渠道
@@ -557,9 +557,9 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 | 里程碑 | 目标 | 主要产物 |
 | --- | --- | --- |
 | M1 | 协议冻结候选 | inventory、event schema、stream schema、黄金样例。 |
-| M2 | Python 基准跑通 | `audio-device/python`、真实 WebSocket 契约测试。 |
-| M3 | 浏览器端 SDK 跑通 | `audio-device/typescript`、browser-glass 迁移。 |
-| M4 | iOS SDK 跑通 | `audio-device/swift`、iOS 示例端迁移。 |
+| M2 | Python 基准跑通 | `devices/python`、真实 WebSocket 契约测试。 |
+| M3 | 浏览器端 SDK 跑通 | `devices/typescript`、browser-glass 迁移。 |
+| M4 | iOS SDK 跑通 | `devices/swift`、iOS 示例端迁移。 |
 | M5 | Android 与 C 端骨架 | Kotlin/C SDK 编解码和注册测试。 |
 | M6 | 发布准备 | API 文档、debug 文档、package check、版本策略。 |
 
@@ -571,13 +571,13 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 2. 新增 `realtime-agent-stream.schema.json`。
 3. 提取 8 到 12 个黄金样例。
 4. 从 Python playback glass 抽出 stream chunk codec。
-5. 建立 `audio-device/python`。
+5. 建立 `devices/python`。
 6. 让 Python playback glass 改用 SDK。
 7. 跑通：
 
    ```bash
    uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py -q
-   uv run python -m pytest audio-device/python/tests -q
+   uv run python -m pytest devices/python/tests -q
    uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
    ```
 
@@ -611,10 +611,10 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 - 目标：把协议定义变成多语言 SDK 的共同输入。
 - 实现：新增事件 schema、stream schema、错误码表、AsyncAPI 草案和 `protocol/data/fixtures/` 黄金样例；新增测试验证设备样例、事件样例和 stream 二进制帧。
 - 文件：
-  - `audio-server/realtime_agent/spec/realtime-agent-event.schema.json`
-  - `audio-server/realtime_agent/spec/realtime-agent-stream.schema.json`
-  - `audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml`
-  - `audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml`
+  - `agent-server/realtime_agent/spec/realtime-agent-event.schema.json`
+  - `agent-server/realtime_agent/spec/realtime-agent-stream.schema.json`
+  - `agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml`
+  - `agent-server/realtime_agent/spec/realtime-agent-asyncapi.yaml`
   - `protocol/data/fixtures/`
   - `protocol/protocol-tests/test_protocol_schema_examples.py`
   - `protocol/protocol-tests/test_stream_chunk_codec_contract.py`
@@ -628,13 +628,13 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 
 - 状态：已完成第一轮最小闭环。
 - 目标：把现有 Python 参考端中可复用的协议逻辑抽成官方基准 SDK。
-- 实现：新增 `audio-device/python`，包含 `DeviceBuilder`、`RealtimeAgentDeviceClient`、事件信封、stream chunk 编解码、命令回执 helper、stream 请求 helper 和诊断快照；Python playback glass 的 stream chunk 编解码已切到 `realtime_agent_device.StreamChunkCodec`。
+- 实现：新增 `devices/python`，包含 `DeviceBuilder`、`RealtimeAgentDeviceClient`、事件信封、stream chunk 编解码、命令回执 helper、stream 请求 helper 和诊断快照；Python playback glass 的 stream chunk 编解码已切到 `realtime_agent_device.StreamChunkCodec`。
 - 文件：
-  - `audio-device/python/`
+  - `devices/python/`
   - `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py`
   - `pyproject.toml`
 - 验证：
-  - `uv run python -m pytest audio-device/python/tests -q`，结果 `8 passed`。
+  - `uv run python -m pytest devices/python/tests -q`，结果 `8 passed`。
   - `uv run python -m pytest examples/dev-support/tests/python_playback_glass -q`，结果 `8 passed`。
 - 风险：Python playback glass 目前优先迁移了协议 codec 和 URL helper；完整替换为 `RealtimeAgentDeviceClient` 主循环可以作为后续清理，不影响当前真实 WebSocket 回放能力。
 
@@ -642,14 +642,14 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 
 - 状态：已完成第一轮可验证实现。
 - 目标：覆盖浏览器和 Node 端侧，替代 browser-glass 中手写事件信封、设备声明、WebSocket URL 和 stream chunk 编解码。
-- 实现：新增 `audio-device/typescript`，提供 `RealtimeAgentEvent`、`DeviceBuilder`、`StreamChunkCodec` 和 `RealtimeAgentDeviceClient`；browser-glass 已通过 `examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js` re-export 正式 SDK，并在注册、控制连接、事件构造、stream 连接和 chunk 编解码中复用 SDK。
+- 实现：新增 `devices/typescript`，提供 `RealtimeAgentEvent`、`DeviceBuilder`、`StreamChunkCodec` 和 `RealtimeAgentDeviceClient`；browser-glass 已通过 `examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js` re-export 正式 SDK，并在注册、控制连接、事件构造、stream 连接和 chunk 编解码中复用 SDK。
 - 文件：
-  - `audio-device/typescript/`
+  - `devices/typescript/`
   - `examples/dev-support/devices/browser-glass/index.html`
   - `examples/dev-support/devices/browser-glass/sdk/realtime-agent-device-browser.js`
   - `examples/dev-support/unit-tests/browser/test_web_glass_endpoint.py`
 - 验证：
-  - `cd audio-device/typescript && npm test`，结果 `5 passed`。
+  - `cd devices/typescript && npm test`，结果 `5 passed`。
   - `uv run python -m pytest examples/dev-support/unit-tests/browser/test_browser_device_example.py examples/dev-support/unit-tests/browser/test_web_glass_endpoint.py -q`，结果 `21 passed`。
 - 风险：browser-glass 仍保留页面内业务事件处理函数，这是交互式开发支持组件 UI 逻辑；底层通讯对象已迁移到 TypeScript SDK。
 
@@ -657,32 +657,32 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 
 - 状态：已完成第一轮可验证实现。
 - 目标：抽出现有 iOS 参考端协议核心，形成 Swift Package。
-- 实现：新增 `audio-device/swift` Swift Package，提供 `RealtimeAgentEvent`、`RealtimeAgentDevice`、`RealtimeAgentStreamChunk` 和 `RealtimeAgentStreamChunkCodec`，并读取包内黄金样例测试。
-- 文件：`audio-device/swift/`。
+- 实现：新增 `devices/swift` Swift Package，提供 `RealtimeAgentEvent`、`RealtimeAgentDevice`、`RealtimeAgentStreamChunk` 和 `RealtimeAgentStreamChunkCodec`，并读取包内黄金样例测试。
+- 文件：`devices/swift/`。
 - 验证：
-  - `cd audio-device/swift && swift test`，结果 `3 passed`。
+  - `cd devices/swift && swift test`，结果 `3 passed`。
 - 风险：iOS Xcode 工程尚未实际接入本地 Swift Package；下一步需要在 Xcode 项目中替换现有 `Core/RealtimeAgentEvent.swift` 和 `Core/StreamChunkCodec.swift`，并跑 `uv run realtime-agent.ios.build-sim`。
 
 ### 阶段 5：Kotlin / Java SDK
 
 - 状态：代码已完成，未本机执行。
 - 目标：覆盖 Android 和 JVM 网关，Kotlin-first，同时保持 Java 可调用的静态入口。
-- 实现：新增 `audio-device/kotlin`，包含 Gradle 配置、`RealtimeAgentDevice`、`RealtimeAgentEvent`、`StreamChunk`、`StreamChunkCodec` 和 Kotlin 测试草案。
-- 文件：`audio-device/kotlin/`。
+- 实现：新增 `devices/kotlin`，包含 Gradle 配置、`RealtimeAgentDevice`、`RealtimeAgentEvent`、`StreamChunk`、`StreamChunkCodec` 和 Kotlin 测试草案。
+- 文件：`devices/kotlin/`。
 - 验证：未执行。本机缺少 Java Runtime 和 Gradle，`java -version` 返回 “Unable to locate a Java Runtime”，`gradle --version` 返回 command not found。
-- 待验收：安装 JDK/Gradle 后执行 `cd audio-device/kotlin && gradle test` 或补 Gradle wrapper 后执行 `./gradlew test`。
+- 待验收：安装 JDK/Gradle 后执行 `cd devices/kotlin && gradle test` 或补 Gradle wrapper 后执行 `./gradlew test`。
 
 ### 阶段 6：C SDK
 
 - 状态：已完成第一轮可验证实现。
 - 目标：覆盖 ESP32 和嵌入式 Linux，提供协议核心和可替换 transport 基础。
-- 实现：新增 `audio-device/c`，提供 CMake library、设备注册 payload 构造和 stream chunk 编解码；ESP32-S3 参考固件 CMake 已接入 C SDK source/header，`app_main` 使用 C SDK 生成注册 payload 模板。
+- 实现：新增 `devices/c`，提供 CMake library、设备注册 payload 构造和 stream chunk 编解码；ESP32-S3 参考固件 CMake 已接入 C SDK source/header，`app_main` 使用 C SDK 生成注册 payload 模板。
 - 文件：
-  - `audio-device/c/`
+  - `devices/c/`
   - `examples/for-blind-app/devices/native-esp32-glass/firmware/main/CMakeLists.txt`
   - `examples/for-blind-app/devices/native-esp32-glass/firmware/main/realtime_agent_reference_main.c`
 - 验证：
-  - `cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/build && ctest --test-dir audio-device/c/build --output-on-failure`，结果 `100% tests passed, 0 tests failed out of 1`。
+  - `cmake -S devices/c -B devices/c/build && cmake --build devices/c/build && ctest --test-dir devices/c/build --output-on-failure`，结果 `100% tests passed, 0 tests failed out of 1`。
 - 风险：未执行 ESP-IDF 真机构建和串口监视；需要在安装 ESP-IDF 后继续跑 `uv run realtime-agent.esp32.build --dry-run`。
 
 ### 阶段 7：开发支持组件和参考端迁移
@@ -706,9 +706,9 @@ cmake -S audio-device/c -B audio-device/c/build && cmake --build audio-device/c/
 - 实现：各 SDK 均有 README 和本地验证命令；CLI 文档补充协议黄金样例和多语言 SDK 检查命令。
 - 文件：
   - `docs/reference/cli.md`
-  - `audio-device/python/README.md`
-  - `audio-device/typescript/README.md`
-  - `audio-device/swift/README.md`
-  - `audio-device/kotlin/README.md`
-  - `audio-device/c/README.md`
+  - `devices/python/README.md`
+  - `devices/typescript/README.md`
+  - `devices/swift/README.md`
+  - `devices/kotlin/README.md`
+  - `devices/c/README.md`
 - 未执行：PyPI、npm、SwiftPM tag、Maven Central、Conan/vcpkg、ESP-IDF component registry 发布。

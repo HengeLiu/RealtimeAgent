@@ -49,8 +49,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = [
-    "audio-server",
-    "audio-device/python/src",
+    "agent-server",
+    "devices/python/src",
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
@@ -70,10 +70,10 @@ realtime_agent = ["py.typed", "spec/*.json", "spec/*.yaml", "prompts/*.yaml", "p
 
 [tool.pytest.ini_options]
 pythonpath = [
-    "audio-server",
-    "audio-server/protocol-tests",
-    "audio-server/model-provider-tests",
-    "audio-device/python/src",
+    "agent-server",
+    "agent-server/protocol-tests",
+    "agent-server/model-provider-tests",
+    "devices/python/src",
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
@@ -82,11 +82,11 @@ pythonpath = [
 testpaths = [
     "protocol/unit-tests",
     "protocol/protocol-tests",
-    "audio-server/unit-tests",
-    "audio-server/protocol-tests",
-    "audio-server/model-provider-tests",
-    "audio-device/python/unit-tests",
-    "audio-device/python/protocol-tests",
+    "agent-server/unit-tests",
+    "agent-server/protocol-tests",
+    "agent-server/model-provider-tests",
+    "devices/python/unit-tests",
+    "devices/python/protocol-tests",
     "examples/for-blind-app/unit-tests",
     "examples/for-blind-app/app-tests",
     "examples/for-blind-app/replay-tests",

@@ -41,7 +41,7 @@ uv run realtime-agent.playback.glass --config examples/dev-support/devices/pytho
 
 ```bash
 LOG_LEVEL=DEBUG uv run realtime-agent.server.run \
-  --config examples/for-blind-app/audio-server/server.yaml
+  --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 如果当前 CLI 尚未接入长期运行 server 命令，应先使用 playback endpoint 或后续最小 bridge server 承载同一套 Control Service、Stream Service、VisionRealtimeAgentCore 和 Output Service，必须使用当前 stream chunk 协议。

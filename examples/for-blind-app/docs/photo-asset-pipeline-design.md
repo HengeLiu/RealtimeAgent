@@ -386,8 +386,8 @@ Device SDK：
 建议命令：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
-uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
+uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest -m sdk -q
 uv run python -m pytest -m device_sdk -q
 ```

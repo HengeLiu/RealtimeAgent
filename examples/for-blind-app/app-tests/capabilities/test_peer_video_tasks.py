@@ -10,7 +10,7 @@ from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 
 
-APP_ROOT = Path(__file__).resolve().parents[2] / "audio-server"
+APP_ROOT = Path(__file__).resolve().parents[2] / "agent-server"
 
 
 class RecordingEndpoint:

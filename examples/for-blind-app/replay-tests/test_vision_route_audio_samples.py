@@ -15,7 +15,7 @@ from realtime_agent_python_glass.playback import NetworkPythonPlaybackEndpoint, 
 
 
 AUDIO_SAMPLE_ROOT = Path("testdata/audio-sample")
-APP_ROOT = Path("examples/for-blind-app/audio-server")
+APP_ROOT = Path("examples/for-blind-app/agent-server")
 
 
 def _clear_capability_modules() -> None:

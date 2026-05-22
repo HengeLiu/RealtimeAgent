@@ -10,7 +10,7 @@
 示例：
     uv run python tools/realtime_agent_omni_chain_probe.py \
       --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
-      --image 'examples/for-blind-app/audio-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
+      --image 'examples/for-blind-app/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
       --out runs/omni-realtime-probe/realtime-agent-chain-events.jsonl
 """
 

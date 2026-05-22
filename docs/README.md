@@ -29,15 +29,15 @@
 
 - [跨设备本地联调](how-to/cross-device-local-debug.md)
 - [测试体系说明](testing.md)
-- [设备能力与 Context API 开发说明](../audio-server/docs/how-to/device-capability-development.md)
-- [runs 目录产物说明](../audio-server/docs/how-to/inspect-runs-artifacts.md)
+- [设备能力与 Context API 开发说明](../agent-server/docs/how-to/device-capability-development.md)
+- [runs 目录产物说明](../agent-server/docs/how-to/inspect-runs-artifacts.md)
 
 ### Reference
 
 - [项目结构](reference/project-layout.md)
 - [CLI 参考](reference/cli.md)
 - [realtime-agent 通讯协议](../protocol/docs/protocol.md)
-- [Context 与设备 API 设计说明](../audio-server/docs/reference/context-api.md)
+- [Context 与设备 API 设计说明](../agent-server/docs/reference/context-api.md)
 
 ### Community
 
@@ -45,7 +45,7 @@
 
 ## 内部设计文档
 
-SDK 内部设计记录位于 [audio-server/docs](../audio-server/docs/)，示例项目设计记录位于各 `examples/<project>/docs` 目录。这些文档可以公开阅读，但不作为稳定 API 或稳定使用入口。
+SDK 内部设计记录位于 [agent-server/docs](../agent-server/docs/)，示例项目设计记录位于各 `examples/<project>/docs` 目录。这些文档可以公开阅读，但不作为稳定 API 或稳定使用入口。
 
 - [多语言端侧通讯 SDK 设计文档](internal/multilanguage-device-sdk-design.md)
 - [端侧协议盘点和冻结候选](internal/device-protocol-inventory.md)

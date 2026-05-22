@@ -41,7 +41,7 @@ App 启动时优先读取 bundle 内的 `AppConfig.json`，找不到时读取
 ```bash
 # 在项目根目录执行
 uv run realtime-agent.config.sync \
-  --output-dir examples/for-blind-app/audio-server/config/generated \
+  --output-dir examples/for-blind-app/agent-server/config/generated \
   --server-url http://127.0.0.1:8765 \
   --user-id user-endpoint-001
 ```
@@ -49,7 +49,7 @@ uv run realtime-agent.config.sync \
 然后把生成的 iOS 配置覆盖到 App 资源目录：
 
 ```bash
-cp examples/for-blind-app/audio-server/config/generated/ios-phone.local.json \
+cp examples/for-blind-app/agent-server/config/generated/ios-phone.local.json \
   examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Resources/AppConfig.json
 ```
 
@@ -75,7 +75,7 @@ properties。ESP32 端配置该地址后，可按 `realtime_agent.direct_frame.v
 uv run realtime-agent.config.sync \
   --auth-mode signed_token \
   --signed-token '<pairing-service-generated-token>' \
-  --output-dir examples/for-blind-app/audio-server/config/generated
+  --output-dir examples/for-blind-app/agent-server/config/generated
 ```
 
 如果只传 `--auth-mode signed_token` 而不传 `--signed-token`，生成配置会保留
@@ -85,7 +85,7 @@ uv run realtime-agent.config.sync \
 
 ```bash
 # 在项目根目录执行
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 确认 server 可访问：

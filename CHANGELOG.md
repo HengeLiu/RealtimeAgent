@@ -12,7 +12,7 @@
 
 ### 架构变更点
 
-- 仓库目录按 `realtime_agent` 开源项目重新整理：server SDK 进入 `audio-server/`，示例应用和端侧参考实现按项目归入 `examples/`。
+- 仓库目录按 `realtime_agent` 开源项目重新整理：server SDK 进入 `agent-server/`，示例应用和端侧参考实现按项目归入 `examples/`。
 - Context API、设备能力声明和 stream/event 协议继续作为端侧接入边界。
 
 ### 当前不兼容点

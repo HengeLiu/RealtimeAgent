@@ -1,18 +1,24 @@
 # realtime-agent
 
-`realtime-agent` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
+`realtime-agent` 是一个面向大模型应用的实时音视频对话和跨设备任务管理框架。它把语音输入、视觉采集、模型对话、工具调用、后台任务、设备控制和播放仲裁组织成一套可扩展的 server-side Python SDK，让应用可以用同一个协议连接眼镜、手机、浏览器模拟器和嵌入式设备。
 
-- `audio-server/realtime_agent/`：Python server SDK 源码目录，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
-- `audio-device/`：多语言端侧通讯 SDK，覆盖 Python、TypeScript、Swift、Kotlin/Java 和 C。
+项目重点解决这些问题：
+
+- 实时多模态对话：支持 Vision/VL 链路和 Omni Realtime 链路，能够处理语音、图片、视频帧和模型流式输出。
+- 跨设备协作：设备通过统一协议注册能力，server 按 `user_id`、`device_id` 和 `supports` 路由传感器、执行器和控制事件。
+- Tool / Task 运行时：短动作由 Tool 执行，持续监测、找物、看红绿灯、跨设备视觉任务等长流程由 Task 管理。
+- 资产与上下文管理：图片等大字节数据进入统一资产链路，再按模型类型 append 到上下文，避免业务工具重复处理 provider 差异。
+- 可观测和可回放：运行产物记录模型请求、设备事件、工具结果、任务信号、音频和图片，方便复盘真实链路。
+
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动；这些能力由端侧设备实现并通过协议声明。业务能力通过 Context 表达设备使用意图，不直接操作 WebSocket 或内部服务对象。当前可用开发方式以 [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)。
+
+仓库主要目录：
+
+- `agent-server/realtime_agent/`：Python server SDK 源码，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
+- `devices/`：多语言端侧通讯 SDK，覆盖 Python、TypeScript、Swift、Kotlin/Java 和 C。
+- `examples/`：示例应用、真实端侧参考工程和开发/测试支持组件。
 - `protocol/`：server 和 device 共同依赖的协议文档、fixture 和协议资产检查。
-- `examples/`：示例项目、真实端侧参考工程和开发/测试支持组件。`examples/dev-support/`
-  下的 browser-glass、python-phone、python-playback-glass 以 Device 形态接入协议，
-  但定位是帮助开发者联调和验证 SDK，不是 SDK 预设的正式设备类型。
 - `docs/`：架构设计、联调和排障文档。
-- `testdata/`：跨示例复用的音频样例。
-- `*/unit-tests/`、`*/protocol-tests/`、`*/app-tests/`、`*/replay-tests/`：按模块拆分的自动化测试。
-
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)。
 
 ## 快速开始
 
@@ -42,7 +48,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 如果需要后台管理 server，可使用：
 
 ```bash
-uv run realtime-agent.server.start --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.start --config examples/for-blind-app/agent-server/server.yaml
 uv run realtime-agent.server.logs
 uv run realtime-agent.server.stop
 ```
@@ -119,7 +125,7 @@ uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_au
 
 ## 更换模型和模态
 
-应用运行配置在 `examples/for-blind-app/audio-server/server.yaml`。`audio-server/config/server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
+应用运行配置在 `examples/for-blind-app/agent-server/server.yaml`。`agent-server/config/server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
 
 如果要从 Omni Realtime 切到 Vision 模态测试，把 `agent.mode` 改成 `vision`，然后配置 `agent.vision` 三段 provider：
 
@@ -142,7 +148,7 @@ agent:
 
 ```bash
 export DASHSCOPE_API_KEY="你的 DashScope Key"
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
 uv run realtime-agent.server.run --app-name for-blind-app
 ```
 
@@ -197,7 +203,7 @@ uv run realtime-agent.esp32.build --dry-run
 
 ## 开发者工作模型
 
-当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)。
+当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)。
 
 当前开发口径：
 
@@ -212,7 +218,7 @@ uv run realtime-agent.esp32.build --dry-run
 默认应用目录结构如下：
 
 ```text
-examples/<your-app>/audio-server/
+examples/<your-app>/agent-server/
   server.yaml
   capabilities/
     __init__.py
@@ -236,12 +242,12 @@ from realtime_agent import BaseTask, BaseTool, ToolContext, ToolResult
 2. 列出它需要哪些端侧能力：设备文件用 `supports.sensors` / `supports.actuators` 声明；业务代码使用 `context.devices.sensors.rgb`、`context.devices.sensors.imu`、`context.devices.sensors.tof`、`context.devices.actuators.vibrator` 这类 typed facade。
 3. 确认端侧设备能力文件中已经声明对应能力，例如 `type: rgb`、`type: imu`、`type: tof` 或 `type: vibrator`。
 4. 在 Tool / Task 中通过 Context API 表达能力调用，不直接操作 WebSocket 或硬编码 `device_id`。
-5. 用 `<runs_root>/...` 中的运行产物验证链路。for-blind-app 默认写入 `examples/for-blind-app/audio-server/runs/`。
+5. 用 `<runs_root>/...` 中的运行产物验证链路。for-blind-app 默认写入 `examples/for-blind-app/agent-server/runs/`。
 
 业务样例：
 
 - `examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器。
-- `examples/for-blind-app/audio-server/capabilities`：业务能力样例。
+- `examples/for-blind-app/agent-server/capabilities`：业务能力样例。
 
 关键约束：
 
@@ -276,7 +282,7 @@ iOS / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型
 生成本地联调配置：
 
 ```bash
-uv run realtime-agent.config.sync --app-root examples/for-blind-app/audio-server
+uv run realtime-agent.config.sync --app-root examples/for-blind-app/agent-server
 ```
 
 如果要让 iOS、ESP32 或其他局域网设备连接到这台 Mac，把 `server_url` 同步成
@@ -284,7 +290,7 @@ Mac 当前局域网 IP，而不是 `127.0.0.1`：
 
 ```bash
 uv run realtime-agent.config.sync \
-  --app-root examples/for-blind-app/audio-server \
+  --app-root examples/for-blind-app/agent-server \
   --server-url "http://$(ipconfig getifaddr en0):8765"
 ```
 
@@ -294,7 +300,7 @@ uv run realtime-agent.config.sync \
 预检：
 
 ```bash
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 发布包检查：
@@ -307,7 +313,7 @@ uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.
 
 ```bash
 uv run realtime-agent.dev.preflight \
-  --config examples/for-blind-app/audio-server/server.yaml \
+  --config examples/for-blind-app/agent-server/server.yaml \
   --report runs/acceptance/preflight.json
 
 uv run realtime-agent.sdk.package-check \
@@ -315,10 +321,10 @@ uv run realtime-agent.sdk.package-check \
 
 uv run python -m pytest \
   protocol/protocol-tests \
-  audio-server/unit-tests \
-  audio-server/protocol-tests \
-  audio-device/python/unit-tests \
-  audio-device/python/protocol-tests \
+  agent-server/unit-tests \
+  agent-server/protocol-tests \
+  devices/python/unit-tests \
+  devices/python/protocol-tests \
   examples/for-blind-app/app-tests \
   examples/for-blind-app/replay-tests \
   examples/dev-support/unit-tests \
@@ -387,13 +393,13 @@ uv run python -m pytest -m replay -q
 真实 provider 集成测试需要配置对应 API Key：
 
 ```bash
-uv run python -m pytest audio-server/model-provider-tests/test_dashscope_providers.py -q
+uv run python -m pytest agent-server/model-provider-tests/test_dashscope_providers.py -q
 ```
 
 ## 文档
 
 - [文档目录](docs/README.md)
-- [设备注册与功能开发说明](audio-server/docs/how-to/device-capability-development.md)
-- [Context 与设备 API 设计说明](audio-server/docs/reference/context-api.md)
-- [运行产物说明](audio-server/docs/how-to/inspect-runs-artifacts.md)
-- [内部设计文档](audio-server/docs/README.md)
+- [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md)
+- [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)
+- [运行产物说明](agent-server/docs/how-to/inspect-runs-artifacts.md)
+- [内部设计文档](agent-server/docs/README.md)

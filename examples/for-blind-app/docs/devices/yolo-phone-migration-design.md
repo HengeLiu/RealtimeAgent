@@ -575,7 +575,7 @@ uv run python -m pytest examples/dev-support/unit-tests/python_phone/test_phone_
 启动顺序：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 uv run realtime-agent.web.open --serve
 ```
@@ -658,7 +658,7 @@ export YOLOE_MODEL_PATH=/absolute/path/to/yoloe-11l-seg.pt
 
 ```bash
 uv pip install -e ".[vision,gui]"
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
 uv run realtime-agent.web.open --serve
 ```

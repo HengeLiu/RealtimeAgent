@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[4]
-CAPABILITY_ROOT = ROOT / "examples" / "for-blind-app" / "audio-server" / "capabilities"
+CAPABILITY_ROOT = ROOT / "examples" / "for-blind-app" / "agent-server" / "capabilities"
 
 
 def _python_files() -> list[Path]:

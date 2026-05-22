@@ -1,4 +1,4 @@
 server_url: http://127.0.0.1:8765
-runs_root: examples/for-blind-app/audio-server/runs
+runs_root: examples/for-blind-app/agent-server/runs
 report: runs/python-playback-glass/report.json
 suite: examples/dev-support/devices/python-playback-glass/suites/smoke.yaml

@@ -36,7 +36,7 @@ def test_cli_register_only_over_real_websocket_server(tmp_path: Path) -> None:
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(
             [
-                str(ROOT / "audio-server"),
+                str(ROOT / "agent-server"),
                 str(ROOT / "examples/dev-support/devices/python-playback-glass"),
                 env.get("PYTHONPATH", ""),
             ]

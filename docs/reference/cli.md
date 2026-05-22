@@ -23,7 +23,7 @@ uv run realtime-agent.server.run --app-name for-blind-app
 按配置启动：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 ## 设备能力
@@ -128,7 +128,7 @@ uv run realtime-agent.esp32.monitor --port /dev/tty.usbmodemXXXX
 预检：
 
 ```bash
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/audio-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
 ```
 
 发布包检查：
@@ -141,13 +141,13 @@ uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.
 
 ```bash
 uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py protocol/protocol-tests/test_stream_chunk_codec_contract.py -q
-uv run python -m pytest audio-device/python/unit-tests audio-device/python/protocol-tests -q
-cd audio-device/typescript && npm test
-cd audio-device/swift && swift test
-cd audio-device/kotlin && gradle test
-cmake -S audio-device/c -B audio-device/c/build
-cmake --build audio-device/c/build
-ctest --test-dir audio-device/c/build --output-on-failure
+uv run python -m pytest devices/python/unit-tests devices/python/protocol-tests -q
+cd devices/typescript && npm test
+cd devices/swift && swift test
+cd devices/kotlin && gradle test
+cmake -S devices/c -B devices/c/build
+cmake --build devices/c/build
+ctest --test-dir devices/c/build --output-on-failure
 ```
 
 无头回放测试：

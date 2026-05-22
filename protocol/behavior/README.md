@@ -4,7 +4,7 @@
 
 这里不是测试执行入口。真正的行为验证分别落在：
 
-- `audio-server/protocol-tests/`
-- `audio-device/python/protocol-tests/`
+- `agent-server/protocol-tests/`
+- `devices/python/protocol-tests/`
 
 事件处理规范版本记录在 `version.json`，与数据结构协议版本独立演进。

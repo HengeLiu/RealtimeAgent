@@ -13,7 +13,7 @@ L2 大模型能力测试
 L3 应用能力测试
 ```
 
-协议本身不是运行时，不会执行动作。P0 只检查协议资产是否完整、可解析、可版本化；真正的系统级行为测试放在 L1，由 `audio-server` 和 `audio-device` 的运行时代码验证“收到什么事件后应该返回什么事件、触发什么处理流程、写出什么运行产物”。
+协议本身不是运行时，不会执行动作。P0 只检查协议资产是否完整、可解析、可版本化；真正的系统级行为测试放在 L1，由 `agent-server` 和 `devices` 的运行时代码验证“收到什么事件后应该返回什么事件、触发什么处理流程、写出什么运行产物”。
 
 ```text
 P0 协议资产是共同输入
@@ -34,8 +34,8 @@ L3 应用能力通过，自动化产品功能具备运行前提
 | 模块 | 单元测试 | 层级测试 |
 | --- | --- | --- |
 | 协议资产 | `protocol/unit-tests/` | `protocol/protocol-tests/` |
-| Server SDK | `audio-server/unit-tests/` | `audio-server/protocol-tests/`、`audio-server/model-provider-tests/` |
-| Python Device SDK | `audio-device/python/unit-tests/` | `audio-device/python/protocol-tests/` |
+| Server SDK | `agent-server/unit-tests/` | `agent-server/protocol-tests/`、`agent-server/model-provider-tests/` |
+| Python Device SDK | `devices/python/unit-tests/` | `devices/python/protocol-tests/` |
 | for-blind-app | `examples/for-blind-app/unit-tests/` | `examples/for-blind-app/app-tests/`、`replay-tests/`、`hardware-tests/` |
 | dev-support | `examples/dev-support/unit-tests/` | `examples/dev-support/app-tests/`、`replay-tests/`、`hardware-tests/` |
 
@@ -57,15 +57,15 @@ protocol/
 | 数据结构协议 | `protocol.data.version` | 事件信封、事件名、payload schema、stream header、错误码、golden fixture、反例 fixture。 |
 | 事件处理规范 | `protocol.behavior.version` | server 和 device 收到某类事件后应该返回什么事件、触发什么流程、更新什么状态、写出什么产物。 |
 
-数据结构协议主要通过 JSON / YAML / schema / fixture 显式存储。事件处理规范是 L1 conformance 的输入，真正的行为验证发生在 `audio-server/protocol-tests/` 和 `audio-device/python/protocol-tests/`。
+数据结构协议主要通过 JSON / YAML / schema / fixture 显式存储。事件处理规范是 L1 conformance 的输入，真正的行为验证发生在 `agent-server/protocol-tests/` 和 `devices/python/protocol-tests/`。
 
 ## 4. 各层范围
 
 | 层级 | 测试目标 | 主要位置 |
 | --- | --- | --- |
 | P0 协议资产检查 | 检查协议文档、schema、fixture、错误码、行为规范引用和版本号。 | `protocol/protocol-tests/` |
-| L1 事件行为一致性 | 检查 Server SDK / Device SDK 面对协议事件时是否按事件处理规范执行动作。 | `audio-server/protocol-tests/`、`audio-device/python/protocol-tests/` |
-| L2 大模型能力 | 检查真实 ASR、TTS、Vision/Text、Realtime provider 的能力、稳定性、延迟和错误诊断。 | `audio-server/model-provider-tests/` |
+| L1 事件行为一致性 | 检查 Server SDK / Device SDK 面对协议事件时是否按事件处理规范执行动作。 | `agent-server/protocol-tests/`、`devices/python/protocol-tests/` |
+| L2 大模型能力 | 检查真实 ASR、TTS、Vision/Text、Realtime provider 的能力、稳定性、延迟和错误诊断。 | `agent-server/model-provider-tests/` |
 | L3 应用能力 | 检查 for-blind-app、dev-support、真实样例回放和端侧参考工程。 | `examples/for-blind-app/app-tests/`、`examples/for-blind-app/replay-tests/`、`examples/dev-support/app-tests/` |
 
 ## 5. 常用回归命令
@@ -81,8 +81,8 @@ uv run python -m pytest -m protocol -q
 L1 事件行为一致性：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
-uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
+uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest -m sdk -q
 uv run python -m pytest -m device_sdk -q
 uv run python -m pytest -m interop -q
@@ -91,7 +91,7 @@ uv run python -m pytest -m interop -q
 L2 大模型能力：
 
 ```bash
-uv run python -m pytest audio-server/model-provider-tests -q
+uv run python -m pytest agent-server/model-provider-tests -q
 uv run python -m pytest -m model_provider -q
 ```
 
@@ -124,10 +124,10 @@ uv run python -m pytest
 | --- | --- | --- |
 | 协议数据结构、事件名、payload、stream header | `protocol/protocol-tests` 或 `-m protocol` | 如果改变处理动作，加跑 `-m sdk`、`-m device_sdk`。 |
 | 事件处理规范 | `-m sdk`、`-m device_sdk` | `-m interop`。 |
-| Server SDK control / stream / output / task / Context API | `audio-server/protocol-tests` 或 `-m sdk` | `-m interop`。 |
-| Device SDK | `audio-device/python/protocol-tests` 或 `-m device_sdk` | `-m interop`。 |
+| Server SDK control / stream / output / task / Context API | `agent-server/protocol-tests` 或 `-m sdk` | `-m interop`。 |
+| Device SDK | `devices/python/protocol-tests` 或 `-m device_sdk` | `-m interop`。 |
 | Server/Device WebSocket 互操作 | `-m interop` | `-m sdk`、`-m device_sdk`。 |
-| ASR / TTS / Vision / Realtime provider adapter | `audio-server/model-provider-tests` 或 `-m model_provider` | 相关 L1 SDK 测试。 |
+| ASR / TTS / Vision / Realtime provider adapter | `agent-server/model-provider-tests` 或 `-m model_provider` | 相关 L1 SDK 测试。 |
 | for-blind-app 业务能力 | `examples/for-blind-app/app-tests` | `examples/for-blind-app/replay-tests`。 |
 | dev-support 端侧参考工程 | `examples/dev-support/unit-tests`、`examples/dev-support/app-tests` | 相关 L1 interop 或 L3 replay。 |
 

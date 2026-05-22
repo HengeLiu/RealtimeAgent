@@ -1,1 +1,1 @@
-export * from "../../../../../audio-device/typescript/src/index.js";
+export * from "../../../../../devices/typescript/src/index.js";

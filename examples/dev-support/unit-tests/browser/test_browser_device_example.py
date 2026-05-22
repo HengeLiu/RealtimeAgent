@@ -414,7 +414,7 @@ def test_browser_device_open_cli_defaults_to_new_example() -> None:
     预期结果：默认入口指向 `examples/dev-support/devices/browser-glass/index.html`。
     """
 
-    source = (ROOT / "audio-server" / "realtime_agent" / "cli" / "web.py").read_text(encoding="utf-8")
+    source = (ROOT / "agent-server" / "realtime_agent" / "cli" / "web.py").read_text(encoding="utf-8")
 
     assert "examples/dev-support/devices/browser-glass/index.html" in source
     old_default = "examples/dev-support/devices/browser" + "-device/index.html"

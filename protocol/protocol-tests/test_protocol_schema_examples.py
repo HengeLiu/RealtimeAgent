@@ -8,7 +8,7 @@ from realtime_agent.protocol import Event
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC_ROOT = ROOT / "audio-server/realtime_agent/spec"
+SPEC_ROOT = ROOT / "agent-server/realtime_agent/spec"
 TESTDATA_ROOT = ROOT / "protocol/data/fixtures"
 
 

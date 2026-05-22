@@ -52,19 +52,19 @@ def test_protocol_document_maps_protocol_assets_to_code() -> None:
 
     text = PROTOCOL_DOC.read_text(encoding="utf-8")
     required_paths = [
-        "audio-server/realtime_agent/protocol.py",
-        "audio-server/realtime_agent/spec/realtime-agent-device.schema.json",
-        "audio-server/realtime_agent/spec/realtime-agent-event.schema.json",
-        "audio-server/realtime_agent/spec/realtime-agent-stream.schema.json",
-        "audio-server/realtime_agent/spec/realtime-agent-asyncapi.yaml",
-        "audio-server/realtime_agent/spec/realtime-agent-error-codes.yaml",
-        "audio-server/realtime_agent/control/service.py",
-        "audio-server/realtime_agent/stream/service.py",
-        "audio-device/python/src/realtime_agent_device/",
-        "audio-device/typescript/src/",
-        "audio-device/swift/",
-        "audio-device/kotlin/",
-        "audio-device/c/",
+        "agent-server/realtime_agent/protocol.py",
+        "agent-server/realtime_agent/spec/realtime-agent-device.schema.json",
+        "agent-server/realtime_agent/spec/realtime-agent-event.schema.json",
+        "agent-server/realtime_agent/spec/realtime-agent-stream.schema.json",
+        "agent-server/realtime_agent/spec/realtime-agent-asyncapi.yaml",
+        "agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml",
+        "agent-server/realtime_agent/control/service.py",
+        "agent-server/realtime_agent/stream/service.py",
+        "devices/python/src/realtime_agent_device/",
+        "devices/typescript/src/",
+        "devices/swift/",
+        "devices/kotlin/",
+        "devices/c/",
         "protocol/data/fixtures/",
     ]
     for path in required_paths:

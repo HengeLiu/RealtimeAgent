@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from realtime_agent.tasks import TaskAutoDiscovery
+from realtime_agent.tools import ToolAutoDiscovery
+
+
+AUDIO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_for_blind_app_example_exists_with_tool_and_task_templates(monkeypatch) -> None:
+    """测试目标：冻结功能开发者可复制 app-root 的最低门槛。
+
+    测试方法：检查 `examples/for-blind-app` 目录，并用自动发现扫描样板能力。
+    预期结果：至少有一个 Tool 样板和一个 Task 样板，且无需修改 SDK 内部 app.py。
+    """
+
+    project_root = AUDIO_ROOT / "examples" / "for-blind-app"
+    app_root = project_root / "agent-server"
+    assert (project_root / "README.md").exists()
+    assert (app_root / "server.yaml").exists()
+    assert (app_root / "capabilities" / "tools.py").exists()
+    assert (app_root / "capabilities" / "tasks.py").exists()
+    for module_name in list(sys.modules):
+        if module_name == "capabilities" or module_name.startswith("capabilities."):
+            sys.modules.pop(module_name, None)
+    monkeypatch.syspath_prepend(str(app_root))
+
+    tools = ToolAutoDiscovery().discover(["capabilities"], recursive=True)
+    tasks = TaskAutoDiscovery().discover(["capabilities"], recursive=True)
+
+    assert {"capture_photo", "query_route_plan", "search_web"} <= {tool.name for tool in tools}
+    assert {"find_object_task", "traffic_light_task", "timer_task"}.issubset({task.task_type for task in tasks})
+
+
+def test_device_playback_acceptance_and_artifact_schema_exist() -> None:
+    """测试目标：确认开发者闭环包含设备级回放和可检查运行产物说明。
+
+    测试方法：检查 playback 验收测试、配置同步入口和运行产物文档。
+    预期结果：后续能力线路不能只提交内部单元测试，必须保留设备级验收入口。
+    """
+
+    assert (AUDIO_ROOT / "examples" / "dev-support" / "unit-tests" / "playback" / "test_python_playback.py").exists()
+    assert (AUDIO_ROOT / "agent-server" / "realtime_agent" / "cli" / "config.py").exists()
+    assert (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "inspect-runs-artifacts.md").exists()

@@ -2,7 +2,7 @@
 
 更新时间：2026-05-15
 
-当前状态：本盘点已经用于 `audio-device/` 首批 SDK 实现。当前协议仍以结构化
+当前状态：本盘点已经用于 `devices/` 首批 SDK 实现。当前协议仍以结构化
 `supports`、`command.*`、`stream.control.open.requested` 和
 `stream.control.close.requested` 为准；端侧注册 payload 不允许手写 `routes`。
 
@@ -14,11 +14,11 @@
 
 | 范围 | 文件 |
 | --- | --- |
-| 协议常量和事件信封 | `audio-server/realtime_agent/protocol.py` |
-| 设备注册和路由 | `audio-server/realtime_agent/control/service.py` |
-| 控制 / stream WebSocket | `audio-server/realtime_agent/server.py` |
-| stream 生命周期 | `audio-server/realtime_agent/stream/service.py` |
-| 能力声明校验 | `audio-server/realtime_agent/device_capabilities.py` |
+| 协议常量和事件信封 | `agent-server/realtime_agent/protocol.py` |
+| 设备注册和路由 | `agent-server/realtime_agent/control/service.py` |
+| 控制 / stream WebSocket | `agent-server/realtime_agent/server.py` |
+| stream 生命周期 | `agent-server/realtime_agent/stream/service.py` |
+| 能力声明校验 | `agent-server/realtime_agent/device_capabilities.py` |
 | Python 回放端 | `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py` |
 | 浏览器眼镜模拟组件 | `examples/dev-support/devices/browser-glass/index.html` |
 | iOS 参考端 | `examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/` |

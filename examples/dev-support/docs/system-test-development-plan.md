@@ -29,7 +29,7 @@
 
 明确禁止：
 
-1. 不新增 `audio-server/realtime_agent/system_test/`。
+1. 不新增 `agent-server/realtime_agent/system_test/`。
 2. 不新增 `realtime-agent.system-test.run` 或 `realtime-agent.system-test.record`。
 3. 不在回放设备里实例化 `RealtimeAgentApp` 或 `RealtimeAgentConfig`。
 4. 不直接调用 `ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
@@ -72,7 +72,7 @@ examples/dev-support/unit-tests/python_playback_glass/
 
 ```bash
 uv run python -m realtime_agent_python_playback_glass run --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml
-uv run python -m realtime_agent_python_playback_glass record --runs-root examples/for-blind-app/audio-server/runs ...
+uv run python -m realtime_agent_python_playback_glass record --runs-root examples/for-blind-app/agent-server/runs ...
 ```
 
 后续如果需要 pyproject script，也应命名为 dev-support 端侧工具，例如 `realtime-agent.playback-glass.run`，不能使用 `realtime-agent.system-test.*`。
@@ -217,7 +217,7 @@ uv run python -m realtime_agent_python_playback_glass run \
 
 ```bash
 uv run python -m realtime_agent_python_playback_glass record \
-  --runs-root examples/for-blind-app/audio-server/runs \
+  --runs-root examples/for-blind-app/agent-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
   --audio testdata/audio-sample/看一下我前面有什么.wav \
@@ -320,7 +320,7 @@ uv run python -m pytest examples/dev-support/tests/python_playback_glass -q
 - 目标：确认本次实现必须是 `examples/dev-support` 下的端侧设备，不落入 SDK 内部测试框架。
 - 实现：复查 `browser-glass` 的控制事件、StreamChunk 编解码、`sensor.mic`/`sensor.rgb` 上传和 `actuator.speaker` 回执；确认 `python-glass` 仍作为人工 playback 参考端保留，自动化系统回放单独落在 `python-playback-glass`。
 - 文件：`examples/dev-support/devices/browser-glass/index.html`、`testdata/audio-sample/`、`testdata/image-sample/`。
-- 验证：`rg` 检查现有协议事件和样例文件；确认没有新增 `audio-server/realtime_agent/system_test`。
+- 验证：`rg` 检查现有协议事件和样例文件；确认没有新增 `agent-server/realtime_agent/system_test`。
 - 风险：`python-glass` 和 `python-playback-glass` 名称相近，文档和命令必须明确区分人工 playback 与自动化回放。
 
 ### 阶段 1：端侧骨架和真实协议注册

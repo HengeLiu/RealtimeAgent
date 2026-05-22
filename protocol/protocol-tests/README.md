@@ -22,4 +22,4 @@ uv run python -m pytest -m protocol -q
 1. 修改数据结构协议时，先更新 `protocol/docs/protocol.md` 和 `protocol/data/fixtures/`。
 2. 正例 fixture 应覆盖跨语言 SDK 都需要消费的稳定输入。
 3. 反例 fixture 应覆盖旧协议字段、未知事件名、非法 payload 和非法 stream。
-4. 如果变更影响事件处理动作，不在本目录补系统行为测试，而是去 `audio-server/protocol-tests/` 或 `audio-device/python/protocol-tests/` 补 L1 用例。
+4. 如果变更影响事件处理动作，不在本目录补系统行为测试，而是去 `agent-server/protocol-tests/` 或 `devices/python/protocol-tests/` 补 L1 用例。

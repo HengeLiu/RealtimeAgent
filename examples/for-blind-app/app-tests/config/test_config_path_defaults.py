@@ -90,12 +90,12 @@ def test_realtime_agent_runs_root_env_updates_derived_paths(tmp_path: Path, monk
 def test_for_blind_app_defaults_runs_under_app_directory() -> None:
     """测试目标：验证真实示例 app 默认把 runs 放在 app-root 下。
 
-    测试方法：读取 `examples/for-blind-app/audio-server/server.yaml`。
-    预期结果：运行根目录为 `examples/for-blind-app/audio-server/runs`，memory.path 等于运行根目录。
+    测试方法：读取 `examples/for-blind-app/agent-server/server.yaml`。
+    预期结果：运行根目录为 `examples/for-blind-app/agent-server/runs`，memory.path 等于运行根目录。
     """
 
-    config = load_yaml_config("examples/for-blind-app/audio-server/server.yaml")
+    config = load_yaml_config("examples/for-blind-app/agent-server/server.yaml")
 
-    assert config.paths.runtime_root == "examples/for-blind-app/audio-server/runs"
-    assert config.observability.runs_root == "examples/for-blind-app/audio-server/runs"
-    assert config.memory.path == "examples/for-blind-app/audio-server/runs"
+    assert config.paths.runtime_root == "examples/for-blind-app/agent-server/runs"
+    assert config.observability.runs_root == "examples/for-blind-app/agent-server/runs"
+    assert config.memory.path == "examples/for-blind-app/agent-server/runs"

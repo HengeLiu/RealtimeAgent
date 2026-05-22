@@ -19,7 +19,7 @@ def test_app_name_resolves_app_directory_config_and_capabilities() -> None:
     launch = resolve_app_launch("for-blind-app", app_root=AUDIO_ROOT / "examples")
 
     assert launch.app_name == "for-blind-app"
-    assert launch.app_dir == (AUDIO_ROOT / "examples" / "for-blind-app" / "audio-server").resolve()
+    assert launch.app_dir == (AUDIO_ROOT / "examples" / "for-blind-app" / "agent-server").resolve()
     assert launch.config_path == launch.app_dir / "server.yaml"
     assert launch.capabilities_dir == launch.app_dir / "capabilities"
 
@@ -61,12 +61,12 @@ def test_app_name_loads_server_yaml_and_auto_registers_capabilities() -> None:
 def test_config_path_infers_app_name_from_server_yaml_parent() -> None:
     """A root server.yaml should infer app metadata without app_name in YAML."""
 
-    config, launch = load_config_as_app(AUDIO_ROOT / "examples" / "for-blind-app" / "audio-server" / "server.yaml")
+    config, launch = load_config_as_app(AUDIO_ROOT / "examples" / "for-blind-app" / "agent-server" / "server.yaml")
     app = RealtimeAgentApp(config)
 
     assert config.app_name == "for-blind-app"
     assert config.app_dir == str(launch.app_dir)
-    assert config.config_path.endswith("examples/for-blind-app/audio-server/server.yaml")
+    assert config.config_path.endswith("examples/for-blind-app/agent-server/server.yaml")
     tool_names = set(app.tool_registry.list_names())
     assert "capture_photo" in tool_names
     assert "interpret_current_view" in tool_names

@@ -2,9 +2,9 @@
 
 更新时间：2026-05-15
 
-当前状态：首批 SDK 已落在 `audio-device/`，包括 Python、TypeScript、Swift、
+当前状态：首批 SDK 已落在 `devices/`，包括 Python、TypeScript、Swift、
 Kotlin/Java 和 C。设计中的“建议新增目录”已按当前仓库实际实现为
-`audio-device/<language>/`；每个语言目录下都有 README、数据模型和测试入口。
+`devices/<language>/`；每个语言目录下都有 README、数据模型和测试入口。
 
 ## 1. 背景
 
@@ -64,7 +64,7 @@ Kotlin/Java 和 C。设计中的“建议新增目录”已按当前仓库实际
 
 | 类型 | 当前约束 |
 | --- | --- |
-| 设备能力 | `audio-server/realtime_agent/spec/realtime-agent-device.schema.json`，使用结构化 `supports.sensors` 和 `supports.actuators`。 |
+| 设备能力 | `agent-server/realtime_agent/spec/realtime-agent-device.schema.json`，使用结构化 `supports.sensors` 和 `supports.actuators`。 |
 | 注册事件 | `control.device.register.requested`、`control.device.registered`、`control.device.register.failed`。 |
 | 命令事件 | `command.requested`、`command.accepted`、`command.progress`、`command.completed`、`command.failed`。 |
 | stream 控制 | `stream.control.open.requested`、`stream.control.close.requested`。 |
@@ -139,7 +139,7 @@ package "realtime-agent server" {
 建议新增独立协议目录：
 
 ```text
-audio-server/realtime_agent/spec/
+agent-server/realtime_agent/spec/
   realtime-agent-device.schema.json       # 已存在，继续作为设备能力声明 schema
   realtime-agent-event.schema.json        # 新增，控制事件信封和事件 payload schema
   realtime-agent-stream.schema.json       # 新增，stream header schema
@@ -495,7 +495,7 @@ protocol/data/fixtures/
 第一阶段建议仍在当前 monorepo 中维护：
 
 ```text
-audio-device/
+devices/
   python/
   typescript/
   swift/

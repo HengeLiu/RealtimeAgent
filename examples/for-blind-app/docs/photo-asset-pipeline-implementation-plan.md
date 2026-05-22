@@ -46,7 +46,7 @@ uv run python -m pytest -m protocol_spec -q
 建议新增或改造模块：
 
 ```text
-audio-server/realtime_agent/asset/
+agent-server/realtime_agent/asset/
   photo_asset.py
   turn_buffer.py
   service.py
@@ -71,7 +71,7 @@ audio-server/realtime_agent/asset/
 建议命令：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
 uv run python -m pytest -m sdk -q
 ```
 
@@ -98,7 +98,7 @@ uv run python -m pytest -m sdk -q
 建议命令：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
 uv run python -m pytest examples/for-blind-app/app-tests -q
 ```
 
@@ -109,7 +109,7 @@ uv run python -m pytest examples/for-blind-app/app-tests -q
 建议新增模块：
 
 ```text
-audio-server/realtime_agent/agent_core/visual/
+agent-server/realtime_agent/agent_core/visual/
   appender.py
   omni_appender.py
   vl_appender.py
@@ -148,8 +148,8 @@ Omni 即时 append 细分任务：
 建议命令：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
-uv run python -m pytest audio-server/model-provider-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
+uv run python -m pytest agent-server/model-provider-tests -q
 ```
 
 如果真实 provider 不稳定，可以先跑非 realtime 子集：
@@ -195,7 +195,7 @@ agent:
 建议命令：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
 uv run python -m pytest examples/for-blind-app/app-tests -q
 ```
 
@@ -251,7 +251,7 @@ uv run python -m pytest examples/for-blind-app/replay-tests -q
 建议命令：
 
 ```bash
-uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest examples/dev-support/unit-tests examples/dev-support/app-tests -q
 ```
 
@@ -306,14 +306,14 @@ uv run python -m pytest -m protocol_spec -q
 Server SDK：
 
 ```bash
-uv run python -m pytest audio-server/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
 uv run python -m pytest -m sdk -q
 ```
 
 Device SDK：
 
 ```bash
-uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest -m device_sdk -q
 ```
 
@@ -327,7 +327,7 @@ uv run python -m pytest examples/for-blind-app/replay-tests -q
 大模型能力：
 
 ```bash
-uv run python -m pytest audio-server/model-provider-tests -q
+uv run python -m pytest agent-server/model-provider-tests -q
 uv run python -m pytest -m model_provider -q
 ```
 
@@ -367,11 +367,11 @@ uv run python -m pytest
 已执行验证：
 
 ```bash
-uv run python -m py_compile audio-server/realtime_agent/asset/photo_asset.py audio-server/realtime_agent/asset/turn_buffer.py audio-server/realtime_agent/asset/service.py audio-server/realtime_agent/tools.py audio-server/realtime_agent/agent_core/vision.py audio-server/realtime_agent/agent_core/multimodal/messages.py audio-server/realtime_agent/agent_core/multimodal/assets.py audio-server/realtime_agent/config.py audio-server/realtime_agent/app.py examples/for-blind-app/audio-server/capabilities/tools.py examples/for-blind-app/audio-server/capabilities/tasks.py examples/for-blind-app/app-tests/capabilities/test_peer_video_tasks.py
+uv run python -m py_compile agent-server/realtime_agent/asset/photo_asset.py agent-server/realtime_agent/asset/turn_buffer.py agent-server/realtime_agent/asset/service.py agent-server/realtime_agent/tools.py agent-server/realtime_agent/agent_core/vision.py agent-server/realtime_agent/agent_core/multimodal/messages.py agent-server/realtime_agent/agent_core/multimodal/assets.py agent-server/realtime_agent/config.py agent-server/realtime_agent/app.py examples/for-blind-app/agent-server/capabilities/tools.py examples/for-blind-app/agent-server/capabilities/tasks.py examples/for-blind-app/app-tests/capabilities/test_peer_video_tasks.py
 uv run python -m pytest protocol/protocol-tests -q
-uv run python -m pytest audio-server/protocol-tests -q
+uv run python -m pytest agent-server/protocol-tests -q
 uv run python -m pytest examples/for-blind-app/app-tests -q
-uv run python -m pytest audio-device/python/protocol-tests -q
+uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest examples/dev-support/unit-tests examples/dev-support/app-tests -q
 uv run python -m pytest examples/for-blind-app/replay-tests -q
 uv run python -m pytest -m protocol_spec -q

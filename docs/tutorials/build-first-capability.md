@@ -12,7 +12,7 @@
 推荐应用结构：
 
 ```text
-examples/<your-app>/audio-server/
+examples/<your-app>/agent-server/
   server.yaml
   capabilities/
     __init__.py
@@ -109,7 +109,7 @@ class TimerTask(BaseTask):
 真实任务还需要处理完成、失败、取消和通知。可以参考：
 
 ```text
-examples/for-blind-app/audio-server/capabilities/tasks.py
+examples/for-blind-app/agent-server/capabilities/tasks.py
 ```
 
 ## 让 SDK 发现能力
@@ -153,7 +153,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 查看运行产物：
 
 ```bash
-find examples/for-blind-app/audio-server/runs -maxdepth 4 -type f | sort
+find examples/for-blind-app/agent-server/runs -maxdepth 4 -type f | sort
 ```
 
-排查模型请求、工具调用和设备事件时，优先看 [runs 目录产物说明](../../audio-server/docs/how-to/inspect-runs-artifacts.md)。
+排查模型请求、工具调用和设备事件时，优先看 [runs 目录产物说明](../../agent-server/docs/how-to/inspect-runs-artifacts.md)。

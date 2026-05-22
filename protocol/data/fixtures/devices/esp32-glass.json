@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../audio-server/realtime_agent/spec/realtime-agent-device.schema.json",
+  "$schema": "../../../agent-server/realtime_agent/spec/realtime-agent-device.schema.json",
   "device_id": "dev-esp32-glass-001",
   "user_id": "user-browser-glass-001",
   "name": "ESP32-S3 Glass",

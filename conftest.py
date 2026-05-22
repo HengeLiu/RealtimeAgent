@@ -98,7 +98,7 @@ def _status_from_exitstatus(exitstatus: int, counts: dict[str, int]) -> str:
 
 def _inputs_for_layer(layer: str) -> dict[str, Any]:
     root = Path.cwd()
-    spec_root = root / "audio-server/realtime_agent/spec"
+    spec_root = root / "agent-server/realtime_agent/spec"
     protocol_root = root / "protocol/data/fixtures"
     inputs: dict[str, Any] = {
         "schemas": sorted(str(path) for path in spec_root.glob("realtime-agent-*")),

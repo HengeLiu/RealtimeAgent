@@ -1,4 +1,4 @@
-$schema: ../../../../audio-server/realtime_agent/spec/realtime-agent-device.schema.json
+$schema: ../../../../agent-server/realtime_agent/spec/realtime-agent-device.schema.json
 
 device_id: dev-python-playback-glass
 user_id: user-system-test

@@ -140,7 +140,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 5. `model-request.json`：模型最终看到了什么 prompt、messages 和 tools。
 6. `system-events.jsonl`：系统级异常和 provider 降级。
 
-详细文件说明见 [runs 目录产物说明](../../audio-server/docs/how-to/inspect-runs-artifacts.md)。
+详细文件说明见 [runs 目录产物说明](../../agent-server/docs/how-to/inspect-runs-artifacts.md)。
 
 ## 常见判断
 

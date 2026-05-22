@@ -10,7 +10,7 @@ m4a
 runs
 examples/for-blind-app/audio-server/.env
 examples/for-blind-app/audio-server/local.env
-examples/for-blind-app/audio-server/mcp.local.env
+examples/for-blind-app/agent-server/mcp.local.env
 mobileclip_blt.ts
 examples/dev-support/devices/python-playback-glass/reports/*
 !examples/dev-support/devices/python-playback-glass/reports/.gitkeep
