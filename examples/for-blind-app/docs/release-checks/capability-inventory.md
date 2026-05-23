@@ -39,14 +39,14 @@
 连续视觉样板、端侧 phone task 迁移样板、导航执行期样板、提醒样板和重复计时器样板已清理。
 端侧视觉任务已经收敛到 peer video 编排；旧 `phone.task.start` 仅作为协议测试和迁移参考。
 
-## 规划中的照片资产链路重构
+## 规划中的自定义视觉能力
 
 为支持 360 识别、万物监测、定时视觉任务和更长周期的自定义视觉能力，后续需要统一
-`sensor.rgb` 照片资产上传、turn 级 buffer、业务消费 claim、Omni / Vision 模型图片
-append 适配和协议测试。设计和开发计划见：
+自然语言参数提取、VisualTaskPlan、VisualObservation、触发条件、循环采样和后续追问历史。
+SDK 层照片资产链路已经拆到 `agent-server/docs/internal/`；应用侧设计和开发计划见：
 
-- [照片资产处理链路重构设计](../photo-asset-pipeline-design.md)
-- [照片资产处理链路重构开发计划](../photo-asset-pipeline-implementation-plan.md)
+- [for-blind-app 自定义视觉功能设计](../photo-asset-pipeline-design.md)
+- [for-blind-app 自定义视觉功能开发计划](../photo-asset-pipeline-implementation-plan.md)
 
 ## SDK Task 基础设施
 

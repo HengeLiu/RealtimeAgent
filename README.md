@@ -1,24 +1,18 @@
 # realtime-agent
 
-`realtime-agent` 是一个面向大模型应用的实时音视频对话和跨设备任务管理框架。它把语音输入、视觉采集、模型对话、工具调用、后台任务、设备控制和播放仲裁组织成一套可扩展的 server-side Python SDK，让应用可以用同一个协议连接眼镜、手机、浏览器模拟器和嵌入式设备。
+`realtime-agent` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
 
-项目重点解决这些问题：
-
-- 实时多模态对话：支持 Vision/VL 链路和 Omni Realtime 链路，能够处理语音、图片、视频帧和模型流式输出。
-- 跨设备协作：设备通过统一协议注册能力，server 按 `user_id`、`device_id` 和 `supports` 路由传感器、执行器和控制事件。
-- Tool / Task 运行时：短动作由 Tool 执行，持续监测、找物、看红绿灯、跨设备视觉任务等长流程由 Task 管理。
-- 资产与上下文管理：图片等大字节数据进入统一资产链路，再按模型类型 append 到上下文，避免业务工具重复处理 provider 差异。
-- 可观测和可回放：运行产物记录模型请求、设备事件、工具结果、任务信号、音频和图片，方便复盘真实链路。
-
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动；这些能力由端侧设备实现并通过协议声明。业务能力通过 Context 表达设备使用意图，不直接操作 WebSocket 或内部服务对象。当前可用开发方式以 [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)。
-
-仓库主要目录：
-
-- `agent-server/realtime_agent/`：Python server SDK 源码，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
+- `agent-server/realtime_agent/`：Python server SDK 源码目录，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
 - `devices/`：多语言端侧通讯 SDK，覆盖 Python、TypeScript、Swift、Kotlin/Java 和 C。
-- `examples/`：示例应用、真实端侧参考工程和开发/测试支持组件。
 - `protocol/`：server 和 device 共同依赖的协议文档、fixture 和协议资产检查。
+- `examples/`：示例项目、真实端侧参考工程和开发/测试支持组件。`examples/dev-support/`
+  下的 browser-glass、python-phone、python-playback-glass 以 Device 形态接入协议，
+  但定位是帮助开发者联调和验证 SDK，不是 SDK 预设的正式设备类型。
 - `docs/`：架构设计、联调和排障文档。
+- `testdata/`：跨示例复用的音频样例。
+- `*/unit-tests/`、`*/protocol-tests/`、`*/app-tests/`、`*/replay-tests/`：按模块拆分的自动化测试。
+
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)。
 
 ## 快速开始
 
@@ -208,7 +202,9 @@ uv run realtime-agent.esp32.build --dry-run
 当前开发口径：
 
 - Tool 使用 `ToolContext`，只做短生命周期动作。
+- Tool 默认执行超时为 10 秒，单个 Tool 可以更短但不能更长；超过 10 秒或需要持续状态的能力应实现为 Task。
 - Task 使用 `TaskContext`，可以做持续数据流和异步状态维护。
+- Task 启动 Tool 默认只等待 3 秒启动阶段结果，不继承后台 Task 的生命周期超时。
 - Tool 使用已落地的 typed facade，例如 `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 和 `context.assets.get()`。
 - Task 在 Tool 能力基础上额外开放持续 stream 和长命令接口，例如 `context.devices.sensors.rgb.stream()`、`context.devices.commands.start()` 和 `context.devices.commands.subscribe_result()`。
 - 麦克风和喇叭是系统音频通道，不作为普通设备能力开放。

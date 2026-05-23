@@ -14,3 +14,6 @@
 ## Internal
 
 内部文档只作为维护 `agent-server/realtime_agent` 时的设计参考；开发和联调以 How-to 与 Reference 为准。
+
+- [SDK 照片资产处理链路设计](internal/photo-asset-pipeline-design.md)
+- [SDK 照片资产处理链路开发计划](internal/photo-asset-pipeline-implementation-plan.md)
