@@ -18,8 +18,8 @@ RealtimeAgentPhone/
   ContentView.swift
   Core/
     AppConfig.swift
-    RealtimeAgentEvent.swift
-    StreamChunkCodec.swift
+    RealtimeAgentEvent.swift      # 历史本地模型，当前不参与 target 编译
+    StreamChunkCodec.swift        # 历史本地 codec，当前不参与 target 编译
     RealtimeAgentEndpointRuntime.swift
     IPAddressProvider.swift
     DirectCameraFrameCodec.swift
@@ -30,6 +30,18 @@ RealtimeAgentPhone/
     AppConfig.example.json
 AppConfig.example.json
 ```
+
+当前 Xcode 工程已经通过本地 Swift Package 依赖接入：
+
+```text
+../../../../devices/swift
+```
+
+参考端运行时使用 `RealtimeAgentDeviceKit` 提供的 `RealtimeAgentDeviceClient`、
+`RealtimeAgentEvent`、`RealtimeAgentStreamChunk` 和 `RealtimeAgentStreamChunkCodec`。
+本目录中历史同名文件只保留作迁移对照，不再参与 `RealtimeAgentPhone` target 编译。
+App target 仍保留 UI、配置读取、直连相机接收服务和状态展示；通用注册、心跳、事件分发
+和 stream chunk 收发已经由 SDK 接管。
 
 ## 配置
 

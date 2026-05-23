@@ -12,6 +12,10 @@ def _read(relative: str) -> str:
     return (IOS_ROOT / relative).read_text(encoding="utf-8")
 
 
+def _read_root(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
+
+
 def test_ios_phone_project_and_config_are_present() -> None:
     """测试目标：验证 iOS phone 参考端已经从协议锚点推进到可打开工程。
 
@@ -79,12 +83,15 @@ def test_ios_phone_registration_event_uses_protocol_payload_fields() -> None:
     assert any(item["type"] == "rgb" for item in payload["supports"]["sensors"])
     assert any(item["type"] == "vibrator" for item in payload["supports"]["actuators"])
 
-    source = _read("RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift")
+    runtime = _read("RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift")
+    sdk_device = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDevice.swift")
+    sdk_client = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceClient.swift")
+    source = runtime + sdk_device + sdk_client
     for token in [
         "control.device.register.requested",
-        "\"auth\": config.auth.payload",
-        "\"properties\": properties",
-        "\"supports\": config.supports.map",
+        ".auth(config.auth.payload)",
+        ".properties(properties)",
+        ".supports(config.supports.map",
         "direct.camera_sink.uris",
     ]:
         assert token in source
@@ -102,7 +109,11 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
     codec = _read("RealtimeAgentPhone/Core/StreamChunkCodec.swift")
     direct_codec = _read("RealtimeAgentPhone/Core/DirectCameraFrameCodec.swift")
     direct_server = _read("RealtimeAgentPhone/Core/DirectCameraSinkServer.swift")
-    combined = runtime + codec + direct_codec + direct_server
+    sdk_client = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceClient.swift")
+    sdk_command = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentCommandResponder.swift")
+    sdk_input = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentInputStreamRequest.swift")
+    sdk_output = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentOutputStreamSession.swift")
+    combined = runtime + codec + direct_codec + direct_server + sdk_client + sdk_command + sdk_input + sdk_output
 
     required_tokens = [
         "/ws/control",

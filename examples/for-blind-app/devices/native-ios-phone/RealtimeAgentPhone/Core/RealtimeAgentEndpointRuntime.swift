@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import RealtimeAgentDeviceKit
 
 /// realtime-agent iOS phone 参考端运行时。
 ///
@@ -23,11 +24,9 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
 
     let config: AppConfig
 
-    private var controlSocket: URLSessionWebSocketTask?
-    private var streamSocket: URLSessionWebSocketTask?
-    private var outputStreamsStarted = Set<String>()
+    private var client: RealtimeAgentDeviceClient?
+    private var microphone: MicrophoneStreamer?
     private var speakerBuffer = Data()
-    private var sequenceByStream: [String: Int] = [:]
     private let phoneTaskRegistry = PhoneTaskRegistry()
     private var directCameraSinkServer: DirectCameraSinkServer?
     private var latestDirectCameraFrame: DirectCameraFrame?
@@ -40,9 +39,15 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     func connectAndRegister() async {
         do {
             startDirectCameraSink()
-            try await ensureControlSocket()
-            try await sendRegistration()
-            try await ensureStreamSocket()
+            let client = try makeClient()
+            configureClient(client)
+            self.client = client
+            microphone = MicrophoneStreamer(client: client)
+            controlState = "已连接，等待注册"
+            try await client.connectAndRegister()
+            controlState = "已注册"
+            streamState = "已连接"
+            appendLog("registration sent")
         } catch {
             appendLog("connect failed: \(error.localizedDescription)")
         }
@@ -50,10 +55,9 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
 
     /// 断开两条 WebSocket 连接。
     func disconnect() async {
-        controlSocket?.cancel(with: .normalClosure, reason: nil)
-        streamSocket?.cancel(with: .normalClosure, reason: nil)
-        controlSocket = nil
-        streamSocket = nil
+        await client?.close()
+        client = nil
+        microphone = nil
         controlState = "已断开"
         streamState = "已断开"
         stopDirectCameraSink()
@@ -105,224 +109,114 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     /// 手动上传一段 20ms 静音 PCM，验证 `sensor.mic` stream 格式。
     func uploadTestMicPCM() async {
         do {
-            try await ensureStreamSocket()
-            let sessionID = config.deviceID
-            let streamID = RealtimeAgentIDs.make(prefix: "stream_mic")
-            try await openInputStream(streamType: "sensor.mic", sessionID: sessionID, streamID: streamID, payload: [
-                "stream_type": "sensor.mic",
-                "format": ["codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20],
-            ])
+            let microphone = try ensureMicrophone()
             let payload = Data(repeating: 0, count: 640)
-            let chunk = RealtimeAgentStreamChunk(
-                userID: config.userID,
-                sessionID: sessionID,
-                streamID: streamID,
-                streamType: "sensor.mic",
-                seq: nextSeq(streamID: streamID),
-                payload: payload,
-                codec: "pcm16le",
-                sampleRate: 16000,
-                channels: 1,
-                durationMS: 20,
-                final: true
-            )
-            try await streamSocket?.send(.data(RealtimeAgentStreamChunkCodec.encode(chunk)))
-            try await sendControlEvent(
-                RealtimeAgentEvent(
-                eventName: "stream.input.closed",
-                userID: config.userID,
-                producerID: config.deviceID,
-                payload: ["stream_type": "sensor.mic", "reason": "ios_test_pcm_done"],
-                sessionID: chunk.sessionID,
-                streamID: streamID,
-                streamType: "sensor.mic"
-                )
-            )
+            try await microphone.open(sessionID: config.deviceID)
+            try await microphone.sendPCM16LE(payload, sessionID: config.deviceID, final: true)
+            try await microphone.close(sessionID: config.deviceID, reason: "ios_test_pcm_done")
             appendLog("sensor.mic uploaded bytes=\(payload.count)")
         } catch {
             appendLog("sensor.mic upload failed: \(error.localizedDescription)")
         }
     }
 
-    private func ensureControlSocket() async throws {
-        if controlSocket != nil {
-            return
+    private func makeClient() throws -> RealtimeAgentDeviceClient {
+        guard let serverURL = URL(string: config.serverURL) else {
+            throw RealtimeAgentDeviceError.invalidURL(config.serverURL)
         }
-        let socket = URLSession.shared.webSocketTask(with: try websocketURL(path: "/ws/control"))
-        controlSocket = socket
-        socket.resume()
-        controlState = "已连接，等待注册"
-        Task { await receiveControlLoop(socket) }
-    }
-
-    private func ensureStreamSocket() async throws {
-        if streamSocket != nil {
-            return
-        }
-        let socket = URLSession.shared.webSocketTask(with: try websocketURL(path: "/ws/stream", query: [
-            URLQueryItem(name: "device_id", value: config.deviceID)
-        ]))
-        streamSocket = socket
-        socket.resume()
-        streamState = "已连接"
-        Task { await receiveStreamLoop(socket) }
-    }
-
-    private func sendRegistration() async throws {
         var properties = config.properties.mapValues { $0.object }
         properties["direct.camera_sink"] = true
         properties["direct.camera_sink.path"] = "/ws/camera"
         properties["direct.camera_sink.port"] = Int(config.directCameraSinkPort)
         properties["direct.camera_sink.uris"] = directCameraSinkURIs
         properties["direct.camera_sink.frame_format"] = "realtime_agent.direct_frame.v1"
-        let event = RealtimeAgentEvent(
-            eventName: "control.device.register.requested",
-            userID: config.userID,
-            producerID: config.deviceID,
-            payload: [
-                "device_id": config.deviceID,
-                "name": "iOS 设备示例",
-                "device_name": "ios-phone-reference",
-                "client_type": "ios-phone",
-                "sdk_version": "realtime-agent-ios-reference-0.1.0",
-                "auth": config.auth.payload,
-                "properties": properties,
-                "supports": config.supports.mapValues { $0.object },
-            ],
-            version: config.protocolVersion
+        let device = RealtimeAgentDevice(deviceID: config.deviceID)
+            .user(config.userID)
+            .named("ios-phone-reference")
+            .clientType("ios-phone")
+            .sdkVersion("realtime-agent-ios-reference-0.1.0")
+            .auth(config.auth.payload)
+            .properties(properties)
+            .supports(config.supports.mapValues { $0.object })
+        let configuration = RealtimeAgentClientConfiguration(
+            protocolVersion: config.protocolVersion,
+            autoFailUnhandledCommands: false
         )
-        try await sendControlEvent(event)
-        appendLog("registration sent")
+        return RealtimeAgentDeviceClient(serverURL: serverURL, device: device, configuration: configuration)
     }
 
-    private func receiveControlLoop(_ socket: URLSessionWebSocketTask) async {
-        while controlSocket === socket {
-            do {
-                let message = try await socket.receive()
-                guard case let .string(text) = message,
-                      let data = text.data(using: .utf8),
-                      let dictionary = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    continue
-                }
-                let event = try RealtimeAgentEvent(dictionary: dictionary)
-                await handleControlEvent(event)
-            } catch {
-                controlState = "接收中断"
-                appendLog("control receive stopped: \(error.localizedDescription)")
-                return
-            }
+    private func configureClient(_ client: RealtimeAgentDeviceClient) {
+        client.onStreamOpen("sensor.rgb") { [weak self] request in
+            await self?.uploadRGBFrame(request: request, reason: "server_requested")
+        }
+        client.onAnyCommand { [weak self] responder in
+            await self?.handlePhoneTaskCommand(responder)
+        }
+        client.onOutputChunk("actuator.speaker") { [weak self] chunk, _ in
+            await self?.handleOutputChunk(chunk)
+        }
+        client.onEvent("control.audio_session.close.requested") { [weak self] event in
+            await self?.closeAudioSession(event)
         }
     }
 
-    private func receiveStreamLoop(_ socket: URLSessionWebSocketTask) async {
-        while streamSocket === socket {
-            do {
-                let message = try await socket.receive()
-                guard case let .data(data) = message else {
-                    continue
-                }
-                let chunk = try RealtimeAgentStreamChunkCodec.decode(data)
-                await handleOutputChunk(chunk)
-            } catch {
-                streamState = "接收中断"
-                appendLog("stream receive stopped: \(error.localizedDescription)")
-                return
-            }
+    private func ensureClient() throws -> RealtimeAgentDeviceClient {
+        guard let client else {
+            throw RealtimeAgentDeviceError.transportClosed("client is not connected")
         }
+        return client
     }
 
-    private func handleControlEvent(_ event: RealtimeAgentEvent) async {
-        appendLog("event <- \(event.eventName)")
-        switch event.eventName {
-        case "control.device.registered":
-            controlState = "已注册"
-            let heartbeatConnection = event.payload["connection_id"] as? String
-            try? await sendControlEvent(
-                RealtimeAgentEvent(
-                    eventName: "control.device.heartbeat.received",
-                    userID: config.userID,
-                    producerID: config.deviceID,
-                    payload: ["connection_id": heartbeatConnection ?? ""],
-                    version: config.protocolVersion
-                )
-            )
-        case "stream.control.open.requested" where event.streamType == "sensor.rgb":
-            await uploadRGBFrame(
-                sessionID: event.sessionID ?? config.deviceID,
-                requestID: event.payload["request_id"] as? String,
-                reason: "server_requested"
-            )
-        case "command.requested":
-            await handlePhoneTaskCommand(event)
-        case "stream.output.close.requested":
-            await finishOutputStream(event)
-        case "stream.output.cancel.requested":
-            await cancelOutputStream(event)
-        case "control.audio_session.close.requested":
-            try? await sendControlEvent(
-                RealtimeAgentEvent(
-                    eventName: "control.audio_session.closed",
-                    userID: config.userID,
-                    producerID: config.deviceID,
-                    payload: ["reason": "ios_phone_closed"],
-                    sessionID: event.sessionID,
-                    version: config.protocolVersion
-                )
-            )
-        default:
-            break
+    private func ensureMicrophone() throws -> MicrophoneStreamer {
+        if let microphone {
+            return microphone
         }
+        let microphone = MicrophoneStreamer(client: try ensureClient())
+        self.microphone = microphone
+        return microphone
     }
 
-    private func handlePhoneTaskCommand(_ event: RealtimeAgentEvent) async {
+    private func closeAudioSession(_ event: RealtimeAgentEvent) async {
+        do {
+            try await ensureClient().sendEvent(
+                name: "control.audio_session.closed",
+                payload: ["reason": "ios_phone_closed"],
+                sessionID: event.sessionID
+            )
+            appendLog("event -> control.audio_session.closed")
+        } catch {
+            appendLog("audio session close failed: \(error.localizedDescription)")
+        }
+    }
+    private func handlePhoneTaskCommand(_ responder: RealtimeAgentCommandResponder) async {
+        let event = responder.request
         let taskType = event.payload["task_type"] as? String ?? ""
         let taskID = event.payload["task_id"] as? String ?? RealtimeAgentIDs.make(prefix: "ios_phone_task")
         guard let handler = phoneTaskRegistry.handler(taskType: taskType) else {
-            try? await sendPhoneTaskEvent(
-                "command.failed",
-                command: event,
-                payload: ["task_id": taskID, "task_type": taskType, "message": "unknown phone task"]
-            )
+            try? await responder.failed(code: "phone_task.unknown", message: "unknown phone task")
+            appendPhoneTaskEvent("command.failed")
             return
         }
-        try? await sendPhoneTaskEvent(
-            "command.accepted",
-            command: event,
-            payload: ["task_id": taskID, "task_type": taskType, "state": "started"]
-        )
+        try? await responder.accepted(["task_id": taskID, "task_type": taskType, "state": "started"])
+        appendPhoneTaskEvent("command.accepted")
         await uploadRGBFrame(
             sessionID: config.deviceID,
             requestID: taskID,
             reason: "phone_task"
         )
-        try? await sendPhoneTaskEvent(
-            "command.progress",
-            command: event,
-            payload: ["task_id": taskID, "task_type": taskType, "progress": 1.0]
-        )
+        try? await responder.progress(["task_id": taskID, "task_type": taskType, "progress": 1.0])
+        appendPhoneTaskEvent("command.progress")
         let result = handler.result(command: event, frameCount: max(1, directCameraFrameCount))
-        try? await sendPhoneTaskEvent(
-            "command.completed",
-            command: event,
-            payload: [
-                "task_id": taskID,
-                "task_type": taskType,
-                "summary": result.summary,
-                "result": result.payload,
-            ]
-        )
+        try? await responder.completed([
+            "task_id": taskID,
+            "task_type": taskType,
+            "summary": result.summary,
+            "result": result.payload,
+        ])
+        appendPhoneTaskEvent("command.completed")
     }
 
-    private func sendPhoneTaskEvent(_ eventName: String, command: RealtimeAgentEvent, payload: [String: Any]) async throws {
-        let event = RealtimeAgentEvent(
-            eventName: eventName,
-            userID: config.userID,
-            producerID: config.deviceID,
-            payload: payload,
-            sessionID: config.deviceID,
-            version: config.protocolVersion
-        )
-        try await sendControlEvent(event)
+    private func appendPhoneTaskEvent(_ eventName: String) {
         phoneTaskEventLog.insert(eventName, at: 0)
         if phoneTaskEventLog.count > 30 {
             phoneTaskEventLog.removeLast(phoneTaskEventLog.count - 30)
@@ -334,27 +228,40 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
             speakerBuffer.append(chunk.payload)
             speakerBytesBuffered = speakerBuffer.count
         }
-        if !outputStreamsStarted.contains(chunk.streamID) {
-            outputStreamsStarted.insert(chunk.streamID)
-            try? await sendControlEvent(
-                RealtimeAgentEvent(
-                    eventName: "stream.output.started",
-                    userID: config.userID,
-                    producerID: config.deviceID,
-                    payload: ["stream_type": chunk.streamType],
-                    sessionID: chunk.sessionID,
-                    streamID: chunk.streamID,
-                    streamType: chunk.streamType,
-                    version: config.protocolVersion
-                )
-            )
-        }
         appendLog("stream <- \(chunk.streamType) bytes=\(chunk.payload.count)")
+    }
+
+    private func uploadRGBFrame(request: RealtimeAgentInputStreamRequest, reason: String) async {
+        do {
+            let (payload, metadata, closeReason) = rgbPayloadAndMetadata(requestID: request.requestID)
+            var openedPayload: [String: Any] = [
+                "format": ["codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1],
+                "reason": reason,
+            ]
+            if let requestID = request.requestID {
+                openedPayload["request_id"] = requestID
+            }
+            try await request.opened(openedPayload)
+            try await request.write(
+                payload,
+                codec: "jpeg",
+                sampleRate: 1,
+                channels: 1,
+                durationMS: 1,
+                final: true,
+                metadata: metadata
+            )
+            try await request.closed(reason: closeReason)
+            rgbUploadCount += 1
+            appendLog("sensor.rgb uploaded bytes=\(payload.count)")
+        } catch {
+            appendLog("sensor.rgb upload failed: \(error.localizedDescription)")
+        }
     }
 
     private func uploadRGBFrame(sessionID: String, requestID: String?, reason: String) async {
         do {
-            try await ensureStreamSocket()
+            let client = try ensureClient()
             let streamID = RealtimeAgentIDs.make(prefix: "stream_rgb")
             var openPayload: [String: Any] = [
                 "stream_type": "sensor.rgb",
@@ -364,35 +271,25 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
             if let requestID {
                 openPayload["request_id"] = requestID
             }
-            try await sendControlEvent(
-                RealtimeAgentEvent(
-                    eventName: "stream.input.opened",
-                    userID: config.userID,
-                    producerID: config.deviceID,
-                    payload: openPayload,
-                    sessionID: sessionID,
-                    streamID: streamID,
-                    streamType: "sensor.rgb",
-                    version: config.protocolVersion
-                )
+            let openEvent = RealtimeAgentEvent(
+                eventName: "stream.input.opened",
+                userID: config.userID,
+                producerID: config.deviceID,
+                payload: openPayload,
+                sessionID: sessionID,
+                streamID: streamID,
+                streamType: "sensor.rgb",
+                version: config.protocolVersion
             )
-            let directFrame = latestDirectCameraFrame
-            let payload = directFrame?.payload ?? Self.testJPEGPayload()
-            var metadata: [String: Any] = requestID.map { ["request_id": $0] } ?? [:]
-            if let directFrame {
-                metadata["source"] = "direct_camera_sink"
-                metadata["direct_stream_id"] = directFrame.streamID
-                metadata["direct_seq"] = directFrame.sequence
-                metadata["direct_ts_ms"] = directFrame.timestampMS
-            } else {
-                metadata["source"] = "ios_reference_test_frame"
-            }
+            try await client.sendEvent(openEvent)
+            appendLog("event -> stream.input.opened")
+            let (payload, metadata, closeReason) = rgbPayloadAndMetadata(requestID: requestID)
             let chunk = RealtimeAgentStreamChunk(
                 userID: config.userID,
                 sessionID: sessionID,
                 streamID: streamID,
                 streamType: "sensor.rgb",
-                seq: nextSeq(streamID: streamID),
+                seq: 0,
                 payload: payload,
                 codec: "jpeg",
                 sampleRate: 1,
@@ -401,8 +298,7 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
                 final: true,
                 metadata: metadata
             )
-            try await streamSocket?.send(.data(RealtimeAgentStreamChunkCodec.encode(chunk)))
-            let closeReason = directFrame == nil ? "ios_rgb_uploaded" : "ios_direct_rgb_uploaded"
+            try await client.sendStreamChunk(chunk)
             var closePayload: [String: Any] = [
                 "stream_type": "sensor.rgb",
                 "reason": closeReason,
@@ -410,23 +306,38 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
             if let requestID {
                 closePayload["request_id"] = requestID
             }
-            try await sendControlEvent(
-                RealtimeAgentEvent(
-                    eventName: "stream.input.closed",
-                    userID: config.userID,
-                    producerID: config.deviceID,
-                    payload: closePayload,
-                    sessionID: sessionID,
-                    streamID: streamID,
-                    streamType: "sensor.rgb",
-                    version: config.protocolVersion
-                )
+            let closeEvent = RealtimeAgentEvent(
+                eventName: "stream.input.closed",
+                userID: config.userID,
+                producerID: config.deviceID,
+                payload: closePayload,
+                sessionID: sessionID,
+                streamID: streamID,
+                streamType: "sensor.rgb",
+                version: config.protocolVersion
             )
+            try await client.sendEvent(closeEvent)
+            appendLog("event -> stream.input.closed")
             rgbUploadCount += 1
             appendLog("sensor.rgb uploaded bytes=\(payload.count)")
         } catch {
             appendLog("sensor.rgb upload failed: \(error.localizedDescription)")
         }
+    }
+
+    private func rgbPayloadAndMetadata(requestID: String?) -> (Data, [String: Any], String) {
+        let directFrame = latestDirectCameraFrame
+        let payload = directFrame?.payload ?? Self.testJPEGPayload()
+        var metadata: [String: Any] = requestID.map { ["request_id": $0] } ?? [:]
+        if let directFrame {
+            metadata["source"] = "direct_camera_sink"
+            metadata["direct_stream_id"] = directFrame.streamID
+            metadata["direct_seq"] = directFrame.sequence
+            metadata["direct_ts_ms"] = directFrame.timestampMS
+            return (payload, metadata, "ios_direct_rgb_uploaded")
+        }
+        metadata["source"] = "ios_reference_test_frame"
+        return (payload, metadata, "ios_rgb_uploaded")
     }
 
     private func handleDirectCameraFrame(_ frame: DirectCameraFrame) {
@@ -435,90 +346,6 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
         directCameraBytes += frame.payload.count
         directCameraState = "已接收 \(directCameraFrameCount) 帧"
         appendLog("direct camera frame bytes=\(frame.payload.count) seq=\(frame.sequence)")
-    }
-
-    private func finishOutputStream(_ event: RealtimeAgentEvent) async {
-        try? await sendControlEvent(
-            RealtimeAgentEvent(
-                eventName: "stream.output.finished",
-                userID: config.userID,
-                producerID: config.deviceID,
-                payload: ["stream_type": event.streamType ?? ""],
-                sessionID: event.sessionID,
-                streamID: event.streamID,
-                streamType: event.streamType,
-                version: config.protocolVersion
-            )
-        )
-        try? await sendControlEvent(
-            RealtimeAgentEvent(
-                eventName: "stream.output.closed",
-                userID: config.userID,
-                producerID: config.deviceID,
-                payload: ["stream_type": event.streamType ?? "", "reason": "ios_phone_buffered"],
-                sessionID: event.sessionID,
-                streamID: event.streamID,
-                streamType: event.streamType,
-                version: config.protocolVersion
-            )
-        )
-    }
-
-    private func cancelOutputStream(_ event: RealtimeAgentEvent) async {
-        try? await sendControlEvent(
-            RealtimeAgentEvent(
-                eventName: "stream.output.cancelled",
-                userID: config.userID,
-                producerID: config.deviceID,
-                payload: ["stream_type": event.streamType ?? "", "reason": "ios_phone_cancelled"],
-                sessionID: event.sessionID,
-                streamID: event.streamID,
-                streamType: event.streamType,
-                version: config.protocolVersion
-            )
-        )
-    }
-
-    private func openInputStream(streamType: String, sessionID: String, streamID: String, payload: [String: Any]) async throws {
-        try await sendControlEvent(
-            RealtimeAgentEvent(
-                eventName: "stream.input.opened",
-                userID: config.userID,
-                producerID: config.deviceID,
-                payload: payload,
-                sessionID: sessionID,
-                streamID: streamID,
-                streamType: streamType,
-                version: config.protocolVersion
-            )
-        )
-    }
-
-    private func sendControlEvent(_ event: RealtimeAgentEvent) async throws {
-        guard let controlSocket else {
-            throw RealtimeAgentEndpointError.missingWebSocket("control")
-        }
-        try await controlSocket.send(.string(event.jsonString))
-        appendLog("event -> \(event.eventName)")
-    }
-
-    private func websocketURL(path: String, query: [URLQueryItem] = []) throws -> URL {
-        guard var components = URLComponents(string: config.serverURL) else {
-            throw RealtimeAgentEndpointError.invalidURL(config.serverURL)
-        }
-        components.scheme = components.scheme == "https" ? "wss" : "ws"
-        components.path = path
-        components.queryItems = query.isEmpty ? nil : query
-        guard let url = components.url else {
-            throw RealtimeAgentEndpointError.invalidURL("\(config.serverURL)\(path)")
-        }
-        return url
-    }
-
-    private func nextSeq(streamID: String) -> Int {
-        let current = sequenceByStream[streamID] ?? 0
-        sequenceByStream[streamID] = current + 1
-        return current
     }
 
     private func appendLog(_ message: String) {

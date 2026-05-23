@@ -19,6 +19,7 @@
 		B00000000000000000000010 /* DirectCameraFrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000112 /* DirectCameraFrameCodec.swift */; };
 		B00000000000000000000011 /* DirectWebSocketFrameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000113 /* DirectWebSocketFrameParser.swift */; };
 		B00000000000000000000012 /* DirectCameraSinkServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000114 /* DirectCameraSinkServer.swift */; };
+		B00000000000000000000013 /* RealtimeAgentDeviceKit in Frameworks */ = {isa = PBXBuildFile; productRef = B00000000000000000000902 /* RealtimeAgentDeviceKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +44,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B00000000000000000000013 /* RealtimeAgentDeviceKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -117,6 +119,9 @@
 			dependencies = (
 			);
 			name = RealtimeAgentPhone;
+			packageProductDependencies = (
+				B00000000000000000000902 /* RealtimeAgentDeviceKit */,
+			);
 			productName = RealtimeAgentPhone;
 			productReference = B00000000000000000000109 /* RealtimeAgentPhone.app */;
 			productType = "com.apple.product-type.application";
@@ -140,6 +145,9 @@
 				Base,
 			);
 			mainGroup = B00000000000000000000301;
+			packageReferences = (
+				B00000000000000000000901 /* XCLocalSwiftPackageReference "../../../../devices/swift" */,
+			);
 			productRefGroup = B00000000000000000000305 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -169,8 +177,6 @@
 				B00000000000000000000001 /* RealtimeAgentPhoneApp.swift in Sources */,
 				B00000000000000000000002 /* ContentView.swift in Sources */,
 				B00000000000000000000003 /* AppConfig.swift in Sources */,
-				B00000000000000000000004 /* RealtimeAgentEvent.swift in Sources */,
-				B00000000000000000000005 /* StreamChunkCodec.swift in Sources */,
 				B00000000000000000000006 /* RealtimeAgentEndpointRuntime.swift in Sources */,
 				B00000000000000000000009 /* IPAddressProvider.swift in Sources */,
 				B00000000000000000000010 /* DirectCameraFrameCodec.swift in Sources */,
@@ -373,6 +379,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B00000000000000000000901 /* XCLocalSwiftPackageReference "../../../../devices/swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../../devices/swift";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B00000000000000000000902 /* RealtimeAgentDeviceKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RealtimeAgentDeviceKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B00000000000000000000601 /* Project object */;
 }

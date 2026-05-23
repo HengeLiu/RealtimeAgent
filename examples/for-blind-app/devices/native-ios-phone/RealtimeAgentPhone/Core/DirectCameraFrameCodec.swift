@@ -1,4 +1,5 @@
 import Foundation
+import RealtimeAgentDeviceKit
 
 enum DirectCameraFrameDecodeError: Error, LocalizedError, Equatable {
     case rawTooShort
