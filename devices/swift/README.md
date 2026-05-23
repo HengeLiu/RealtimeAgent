@@ -1,8 +1,11 @@
 # RealtimeAgentDeviceKit
 
 `RealtimeAgentDeviceKit` 是 Swift Package 形式的 realtime-agent 端侧通讯 SDK。它面向
-iOS 和 macOS，负责协议数据模型和 stream chunk 编解码。它不包含相机、麦克风、
-扬声器、蓝牙或 UI 实现。
+iOS 和 macOS，负责协议数据模型、stream chunk 编解码、WebSocket 通讯、注册、心跳、
+command 分发、stream 生命周期 helper，以及可复用的音频 / RGB 适配器入口。
+
+下一阶段 iOS 端可运行 SDK 的目标设计和分阶段开发计划见
+[iOS 设备侧 SDK 设计文档与开发计划](IOS_DEVICE_SDK_DESIGN_PLAN.md)。
 
 ## 遵循的协议
 
@@ -89,6 +92,93 @@ let chunk = RealtimeAgentStreamChunk(
 let data = try RealtimeAgentStreamChunkCodec.encode(chunk)
 ```
 
+## 最小通讯示例
+
+```swift
+import Foundation
+import RealtimeAgentDeviceKit
+
+let device = RealtimeAgentDevice(deviceID: "dev-ios-phone-001")
+    .user("user-001")
+    .named("iOS Phone")
+    .role("phone")
+    .sensorRgb(modes: ["single"], format: "jpeg", frequencyHz: 1)
+
+let client = RealtimeAgentDeviceClient(
+    serverURL: URL(string: "http://127.0.0.1:8765")!,
+    device: device
+)
+
+client.onCommand("phone.scan_object") { command in
+    try await command.accepted(["state": "started"])
+    try await command.completed(["result": ["status": "ok"]])
+}
+
+client.onStreamOpen("sensor.rgb") { request in
+    let jpeg = Data([0xFF, 0xD8, 0xFF, 0xD9])
+    try await request.opened(["request_id": request.requestID ?? ""])
+    try await request.write(
+        jpeg,
+        codec: "jpeg",
+        sampleRate: 1,
+        channels: 1,
+        final: true,
+        metadata: ["request_id": request.requestID ?? ""]
+    )
+    try await request.closed(reason: "frame_uploaded")
+}
+
+try await client.connectAndRegister()
+```
+
+## 音频和 RGB 适配器
+
+`MicrophoneStreamer` 封装 `sensor.mic` 的输入 stream 生命周期，调用方可以把已经转换好的
+PCM16LE 16 kHz mono payload 写入 SDK：
+
+```swift
+let pcmBytes = AudioPCMConverter.pcm16LE(fromFloat32: floatSamples)
+let microphone = MicrophoneStreamer(client: client)
+try await microphone.open()
+try await microphone.sendPCM16LE(pcmBytes, final: false)
+try await microphone.close()
+```
+
+`SpeakerPlayer` 可以绑定 `actuator.speaker` 输出 stream，把服务端下发的 payload 暂存在
+缓冲区：
+
+```swift
+let speaker = SpeakerPlayer()
+speaker.bind(to: client)
+```
+
+如果 App 要直接把 payload 交给自己的播放器，也可以改用 `onOutputChunk`：
+
+```swift
+client.onOutputChunk("actuator.speaker") { chunk, session in
+    try await playPCMInAppAudioEngine(chunk.payload)
+    if chunk.final {
+        try await session.finished(reason: "played")
+        try await session.closed(reason: "played")
+    }
+}
+```
+
+`CameraFrameUploader` 可以把 `stream.control.open.requested(sensor.rgb)` 映射为单帧 JPEG
+上传，也可以按请求中的 `sample_count` / `frequency_hz` 做连续采样：
+
+```swift
+let camera = ClosureCameraFrameSource {
+    try await captureJPEGFromAppCamera()
+}
+CameraFrameUploader.registerSingleFrameHandler(client: client, source: camera)
+CameraFrameUploader.registerFrameHandler(client: client, source: camera)
+```
+
+当前 SDK 负责协议生命周期和 chunk 收发；真实 `AVAudioEngine`、`AVAudioPlayerNode`、
+`AVCaptureSession` 权限申请和硬件会话仍建议放在 App target 内，再把 PCM/JPEG bytes
+交给这些适配器。
+
 ## 导入到自己的项目
 
 ### 通过 Swift Package Manager 引入本地包
@@ -142,12 +232,12 @@ let json = try JSONSerialization.data(withJSONObject: event.dictionary)
 - `StreamChunkCodec.swift`
 - `RealtimeAgentEndpointRuntime.swift`
 
-`RealtimeAgentDeviceKit` 是这些协议层的包化版本。下一步接入时建议：
+`RealtimeAgentDeviceKit` 已经提供通用通讯客户端和协议 helper。当前 iOS 参考端已经引入
+本地 Swift Package，并复用 SDK 的事件模型、stream codec、WebSocket 注册、心跳、事件分发
+和 stream chunk 收发。后续迁移参考端时建议：
 
-1. 在 Xcode 工程中加入本地 Swift Package。
-2. 用 `RealtimeAgentDeviceKit.RealtimeAgentEvent` 替换参考端本地事件信封。
-3. 用 `RealtimeAgentDeviceKit.RealtimeAgentStreamChunkCodec` 替换本地 stream codec。
-4. 保留相机、HTTP/WebSocket、UI 和权限代码在 App target 中。
+1. 把可复用的真实媒体采集和播放协议逻辑继续下沉到 SDK 适配器。
+2. 保留相机、HTTP/WebSocket UI、配置读取和权限代码在 App target 中。
 
 ## 测试
 
@@ -161,9 +251,13 @@ swift test
 - stream chunk 黄金样例读取。
 - stream chunk 对象往返。
 - 设备注册 payload 构造。
+- 控制事件 JSON 往返和异常 payload 校验。
+- 设备注册、command 分发、RGB stream helper、output 生命周期。
+- `MicrophoneStreamer` 和 `CameraFrameUploader` 的协议级行为。
 
 ## 当前限制
 
-- SDK 只提供协议模型和 codec，没有封装 `URLSessionWebSocketTask` 客户端。
-- iOS 真机权限、相机、麦克风和播放由 App 自己实现。
+- SDK 已封装 `URLSessionWebSocketTask` 通讯客户端，iOS 参考端已迁移到
+  `RealtimeAgentDeviceClient`，但真机后台切换、网络断线重连和长连接抖动还未验证。
+- iOS 真机权限、真实相机采集、麦克风采集和扬声器播放仍由 App target 自己实现。
 - 尚未发布为远程 Swift Package tag。

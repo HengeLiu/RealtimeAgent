@@ -25,16 +25,21 @@ def test_typescript_device_sdk_native_contracts() -> None:
     _run(["npm", "test"], cwd=ROOT / "devices/typescript")
 
 
-def test_swift_device_sdk_native_contracts() -> None:
+def test_swift_device_sdk_native_contracts(tmp_path: Path) -> None:
     """测试目标：确认 Swift Device SDK 的原生测试能验证端侧协议对象。
 
-    测试方法：在 `devices/swift` 下执行 `swift test`。
+    测试方法：在 `devices/swift` 下执行 `swift test`，并使用 pytest 临时目录
+    作为 SwiftPM scratch path，避免目录重命名后复用旧 `.build` 绝对路径缓存。
     预期结果：设备注册 payload 和 stream codec 测试全部通过。
     """
 
     if not shutil.which("swift"):
         pytest.skip("swift is not installed")
-    _run(["swift", "test"], cwd=ROOT / "devices/swift", timeout_seconds=180)
+    _run(
+        ["swift", "test", "--scratch-path", str(tmp_path / "swift-build")],
+        cwd=ROOT / "devices/swift",
+        timeout_seconds=180,
+    )
 
 
 def test_c_device_sdk_native_contracts() -> None:

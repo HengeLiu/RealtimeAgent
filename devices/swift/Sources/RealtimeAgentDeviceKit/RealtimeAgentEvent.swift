@@ -15,6 +15,10 @@ public enum RealtimeAgentIDs {
 public enum RealtimeAgentDeviceError: Error, LocalizedError {
     case invalidEvent(String)
     case invalidStreamChunk(String)
+    case invalidURL(String)
+    case missingWebSocket(String)
+    case registrationFailed(String)
+    case transportClosed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -22,11 +26,19 @@ public enum RealtimeAgentDeviceError: Error, LocalizedError {
             return "事件格式错误：\(message)"
         case let .invalidStreamChunk(message):
             return "stream chunk 格式错误：\(message)"
+        case let .invalidURL(message):
+            return "URL 无效：\(message)"
+        case let .missingWebSocket(message):
+            return "WebSocket 未连接：\(message)"
+        case let .registrationFailed(message):
+            return "设备注册失败：\(message)"
+        case let .transportClosed(message):
+            return "连接已关闭：\(message)"
         }
     }
 }
 
-public struct RealtimeAgentEvent {
+public struct RealtimeAgentEvent: @unchecked Sendable {
     public var eventName: String
     public var userID: String
     public var producerID: String
@@ -80,6 +92,20 @@ public struct RealtimeAgentEvent {
         self.streamType = dictionary["stream_type"] as? String
     }
 
+    public init(jsonData: Data) throws {
+        guard let dictionary = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            throw RealtimeAgentDeviceError.invalidEvent("json is not object")
+        }
+        try self.init(dictionary: dictionary)
+    }
+
+    public init(jsonString: String) throws {
+        guard let data = jsonString.data(using: .utf8) else {
+            throw RealtimeAgentDeviceError.invalidEvent("json string is not utf8")
+        }
+        try self.init(jsonData: data)
+    }
+
     public var dictionary: [String: Any] {
         var data: [String: Any] = [
             "version": version,
@@ -94,5 +120,20 @@ public struct RealtimeAgentEvent {
         if let streamID { data["stream_id"] = streamID }
         if let streamType { data["stream_type"] = streamType }
         return data
+    }
+
+    public var jsonData: Data {
+        get throws {
+            try JSONSerialization.data(withJSONObject: dictionary, options: [])
+        }
+    }
+
+    public var jsonString: String {
+        get throws {
+            guard let text = String(data: try jsonData, encoding: .utf8) else {
+                throw RealtimeAgentDeviceError.invalidEvent("json data is not utf8")
+            }
+            return text
+        }
     }
 }

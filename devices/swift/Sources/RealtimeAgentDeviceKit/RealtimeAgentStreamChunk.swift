@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RealtimeAgentStreamChunk {
+public struct RealtimeAgentStreamChunk: @unchecked Sendable {
     public var userID: String
     public var sessionID: String
     public var streamID: String
@@ -77,6 +77,26 @@ public enum RealtimeAgentStreamChunkCodec {
     }
 
     public static func decode(_ data: Data) throws -> RealtimeAgentStreamChunk {
+        let decoded = try decodeHeader(data)
+        return RealtimeAgentStreamChunk(
+            userID: try string(decoded.header, "user_id"),
+            sessionID: try string(decoded.header, "session_id"),
+            streamID: try string(decoded.header, "stream_id"),
+            streamType: try string(decoded.header, "stream_type"),
+            seq: try int(decoded.header, "seq"),
+            payload: decoded.payload,
+            codec: try string(decoded.header, "codec"),
+            sampleRate: try int(decoded.header, "sample_rate"),
+            channels: try int(decoded.header, "channels"),
+            durationMS: try int(decoded.header, "duration_ms"),
+            timestampMS: Int64(try int(decoded.header, "timestamp_ms")),
+            version: decoded.header["version"] as? String ?? audioChatProtocolVersion,
+            final: decoded.header["final"] as? Bool ?? false,
+            metadata: decoded.header["metadata"] as? [String: Any] ?? [:]
+        )
+    }
+
+    public static func decodeHeader(_ data: Data) throws -> (header: [String: Any], payload: Data) {
         guard data.count >= 4 else {
             throw RealtimeAgentDeviceError.invalidStreamChunk("message too short")
         }
@@ -94,22 +114,7 @@ public enum RealtimeAgentStreamChunkCodec {
         guard payloadSize == payload.count else {
             throw RealtimeAgentDeviceError.invalidStreamChunk("payload_size mismatch")
         }
-        return RealtimeAgentStreamChunk(
-            userID: try string(header, "user_id"),
-            sessionID: try string(header, "session_id"),
-            streamID: try string(header, "stream_id"),
-            streamType: try string(header, "stream_type"),
-            seq: try int(header, "seq"),
-            payload: payload,
-            codec: try string(header, "codec"),
-            sampleRate: try int(header, "sample_rate"),
-            channels: try int(header, "channels"),
-            durationMS: try int(header, "duration_ms"),
-            timestampMS: Int64(try int(header, "timestamp_ms")),
-            version: header["version"] as? String ?? audioChatProtocolVersion,
-            final: header["final"] as? Bool ?? false,
-            metadata: header["metadata"] as? [String: Any] ?? [:]
-        )
+        return (header, payload)
     }
 
     private static func string(_ header: [String: Any], _ key: String) throws -> String {
