@@ -104,6 +104,7 @@ class CancellableRgbTask(ContinuousRgbProductionTask):
     """测试用可取消 RGB 任务。"""
 
     task_type = "cancellable_rgb_production"
+    start_result_timeout_seconds = 0.05
 
     async def on_start(self, context: TaskContext) -> None:
         """只请求端侧开始上传，不主动完成。"""

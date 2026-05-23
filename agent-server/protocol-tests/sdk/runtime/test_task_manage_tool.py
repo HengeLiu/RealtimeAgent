@@ -5,7 +5,7 @@ import asyncio
 from pydantic import BaseModel, Field
 
 from realtime_agent.tasks import BaseTask, TaskEngine, TaskRunResult, TaskSpec
-from realtime_agent.tools import SystemToolContext, TaskRuntimeManagerTool, TaskStartTool, ToolExecutor
+from realtime_agent.tools import SystemToolContext, TASK_START_TOOL_TIMEOUT_SECONDS, TaskRuntimeManagerTool, TaskStartTool, ToolExecutor
 
 
 class ManagedToolTask(BaseTask):
@@ -26,6 +26,14 @@ class TimerAliasTask(BaseTask):
         message: str = Field(default="", description="计时结束时播报的话。")
 
     input_model = Input
+
+
+class LongLifecycleTask(BaseTask):
+    """测试用长生命周期 Task。"""
+
+    task_type = "long_lifecycle_task"
+    description = "长生命周期任务"
+    timeout_seconds = 60
 
 
 class SpecDeclaredStartReplyTask(BaseTask):
@@ -148,6 +156,30 @@ def test_task_start_tool_exposes_task_specific_input_schema() -> None:
     assert timer.data["task_type"] == "timer_task"
     assert timer.data["metadata"]["input"]["seconds"] == 60
     assert timer.data["metadata"]["input"]["message"] == "一分钟到了"
+
+
+def test_task_start_tool_uses_start_timeout_not_task_lifecycle_timeout() -> None:
+    """测试目标：验证 Task 启动 Tool 不继承后台任务总生命周期超时。
+
+    测试方法：定义 timeout_seconds=60 的长生命周期 Task，并创建自动启动 Tool。
+    预期结果：启动 Tool 的 timeout_seconds 使用默认 3 秒，后台 TaskRef 仍保留 60 秒生命周期超时。
+    """
+
+    engine = TaskEngine()
+    engine.register(LongLifecycleTask)
+    tool = TaskStartTool(
+        task_type="long_lifecycle_task",
+        description=LongLifecycleTask.description,
+        input_model=LongLifecycleTask.spec().input_model,
+        timeout_seconds=LongLifecycleTask.spec().start_result_timeout_seconds,
+    )
+    context = _context(engine)
+
+    result = asyncio.run(tool.run(context, {}))
+
+    assert tool.resolved_spec().timeout_seconds == TASK_START_TOOL_TIMEOUT_SECONDS
+    assert result.ok is True
+    assert result.data["metadata"]["timeout_seconds"] == 60
 
 
 def test_task_start_tool_validates_task_input_model() -> None:

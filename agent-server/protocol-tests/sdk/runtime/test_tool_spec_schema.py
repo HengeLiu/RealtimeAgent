@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from pydantic import BaseModel, Field
 
-from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, BaseTool, ToolContext, ToolResult, ToolSpec
+from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, BaseTool, ToolContext, ToolError, ToolResult, ToolSpec
+from realtime_agent.tools import TOOL_DEFAULT_TIMEOUT_SECONDS, TOOL_MAX_TIMEOUT_SECONDS
 
 
 class WeatherInput(BaseModel):
@@ -37,6 +39,21 @@ class WeatherSpecTool(BaseTool):
         """返回校验后的入参。"""
 
         return ToolResult.success({"city": input_data["city"], "days": input_data["days"]})
+
+
+class OverlongTool(BaseTool):
+    """测试用超长 Tool。"""
+
+    spec = ToolSpec(
+        name="overlong_tool",
+        description="错误示例：超过短生命周期 Tool 超时上限。",
+        timeout_seconds=TOOL_MAX_TIMEOUT_SECONDS + 1,
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """测试不会实际运行。"""
+
+        return ToolResult.success({})
 
 
 def test_tool_spec_pydantic_model_generates_provider_schema_and_validates_input(tmp_path) -> None:
@@ -93,3 +110,32 @@ def test_tool_spec_validation_error_returns_structured_tool_result(tmp_path) -> 
     assert result.error is not None
     assert result.error["code"] == "invalid_argument"
     assert result.error["details"]["errors"][0]["loc"] == ("days",)
+
+
+def test_plain_tool_without_timeout_uses_short_action_default(tmp_path) -> None:
+    """测试目标：验证普通 Tool 未声明超时时由架构层使用 10 秒默认值。
+
+    测试方法：注册未声明 timeout_seconds 的 Tool，读取 ToolGateway 内部 schema。
+    预期结果：执行层保留短生命周期默认超时，不需要每个 Tool 重复声明。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    app.tool_registry.register(WeatherSpecTool())
+
+    schema = next(item for item in app.tool_gateway.schemas() if item["name"] == "weather_spec")
+
+    assert schema["timeout_seconds"] == TOOL_DEFAULT_TIMEOUT_SECONDS
+    assert TOOL_DEFAULT_TIMEOUT_SECONDS == 10.0
+
+
+def test_tool_registry_rejects_timeout_over_short_action_limit(tmp_path) -> None:
+    """测试目标：验证普通 Tool 不能声明超过 10 秒的运行超时。
+
+    测试方法：注册 timeout_seconds 超过上限的 Tool。
+    预期结果：注册阶段抛出 ToolError，提示开发者应改用 Task。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    with pytest.raises(ToolError, match="max short-action timeout"):
+        app.tool_registry.register(OverlongTool())

@@ -23,6 +23,7 @@ TASK_EVENT_NAMES = {f"task.event.{event_type}" for event_type in TASK_EVENT_TYPE
 TERMINAL_TASK_STATES = {"finished", "cancelled", "failed"}
 
 TASK_STATES = ("started", "finished", "cancelled", "failed")
+TASK_START_RESULT_TIMEOUT_SECONDS = 3.0
 
 LEGACY_TASK_STATE_MAP = {
     "scheduled": "started",
@@ -54,7 +55,7 @@ class TaskSpec:
     timeout_seconds: float | None = None
     cancel_supported: bool = True
     max_running_per_user: int | None = None
-    start_result_timeout_seconds: float = 0.3
+    start_result_timeout_seconds: float = TASK_START_RESULT_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -367,7 +368,9 @@ class BaseTask:
             timeout_seconds=getattr(cls, "timeout_seconds", None),
             cancel_supported=bool(getattr(cls, "cancel_supported", True)),
             max_running_per_user=getattr(cls, "max_running_per_user", None),
-            start_result_timeout_seconds=float(getattr(cls, "start_result_timeout_seconds", 0.3) or 0),
+            start_result_timeout_seconds=float(
+                getattr(cls, "start_result_timeout_seconds", TASK_START_RESULT_TIMEOUT_SECONDS) or 0
+            ),
         )
 
     async def run(self, context: TaskContext) -> TaskRunResult | None:

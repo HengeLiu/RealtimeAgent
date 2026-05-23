@@ -106,6 +106,8 @@ TaskDeviceFacade o-- TaskCommandFacade
 ### 2.1 ToolContext
 
 `ToolContext` 用于 Agent Loop 内部的短生命周期工具调用。Tool 应该完成一次明确动作，并快速返回结果。
+架构层默认给普通 Tool 设置 10 秒执行超时；单个 Tool 可以声明更短超时，但不能超过 10 秒。
+如果能力需要超过 10 秒、持续监听、跨设备编排或可取消恢复，应实现为 Task。
 
 允许使用：
 
@@ -1035,6 +1037,9 @@ timer_task -> start_timer_task
 ```
 
 每个启动 Tool 的参数 schema 来自 Task 的 `input_model`。`input_model` 与 Tool 的 `ToolSpec.input_model` 使用同一套规则：推荐用 Pydantic `BaseModel` 定义输入，字段类型、必填项、默认值、范围约束和 `Field(description=...)` 会进入 provider tool schema；JSON Schema dict 用于外部 schema 生成场景。模型不需要知道 `TaskEngine.create()`、`task_type` 或 `input_data` 这类内部字段，只需要调用具体启动 Tool：
+
+`TaskStartTool` 只受 Task 启动阶段超时限制，默认 3 秒。它不继承后台 Task 的
+`timeout_seconds`，后者表示任务生命周期上限，例如找物或红绿灯识别最长运行时间。
 
 ```json
 {

@@ -487,7 +487,7 @@ class RealtimeAgentApp:
                 description=str(getattr(task_cls, "description", "") or f"启动 {task_type} 后台任务。"),
                 input_model=task_spec.input_model,
                 tool_name=task_spec.start_tool_name or str(task_info.get("start_tool_name") or ""),
-                timeout_seconds=task_spec.timeout_seconds,
+                timeout_seconds=task_spec.start_result_timeout_seconds,
             )
             self.tool_registry.register(start_tool)
             SYSTEM_CONTEXT_TOOL_NAMES.add(start_tool.resolved_spec().name)

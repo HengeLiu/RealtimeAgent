@@ -177,6 +177,10 @@ CapabilityTrace = ToolTrace
 
 ProgressMessage = str | tuple[str, ...] | list[str]
 
+TOOL_DEFAULT_TIMEOUT_SECONDS = 10.0
+TOOL_MAX_TIMEOUT_SECONDS = 10.0
+TASK_START_TOOL_TIMEOUT_SECONDS = 3.0
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -313,6 +317,7 @@ class ToolRegistry:
             raise ToolError("tool name is required", code=ErrorCode.INVALID_ARGUMENT)
         if name in self._tools:
             raise ToolError(f"duplicate tool name: {name}", code=ErrorCode.PROTOCOL_ERROR)
+        _validate_tool_timeout(spec)
         tool.name = name
         tool.description = spec.description
         tool.input_model = spec.input_model
@@ -461,7 +466,7 @@ class ToolSchemaBuilder:
             "tags": list(spec.tags),
             "progress_message": _first_progress_message(spec.progress_message),
             "progress_messages": _progress_candidates(spec.progress_message),
-            "timeout_seconds": spec.timeout_seconds,
+            "timeout_seconds": _effective_tool_timeout(spec),
         }
 
     def build_provider_schema(self, tool: BaseTool) -> dict:
@@ -559,10 +564,8 @@ class ToolExecutor:
         try:
             validated_input = self._validate_input(tool, input_data)
             coroutine = tool.run(context, validated_input)
-            timeout_seconds = tool.resolved_spec().timeout_seconds
-            if timeout_seconds:
-                return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
-            return await coroutine
+            timeout_seconds = _effective_tool_timeout(tool.resolved_spec())
+            return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
         except ValidationError as exc:
             return ToolResult.failed(
                 ToolError(
@@ -2243,21 +2246,21 @@ class TaskStartTool(BaseTool):
         description: str,
         input_model: Any = dict,
         tool_name: str | None = None,
-        timeout_seconds: float | None = None,
+        timeout_seconds: float | None = TASK_START_TOOL_TIMEOUT_SECONDS,
     ) -> None:
         self.task_type = task_type
         self.name = tool_name or _default_task_start_tool_name(task_type)
         task_description = str(description or f"启动 {task_type} 后台任务。").strip()
         self.description = task_description
         self.input_model = input_model
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = _coerce_tool_timeout(timeout_seconds, fallback=TASK_START_TOOL_TIMEOUT_SECONDS)
         self.spec = ToolSpec(
             name=self.name,
             description=_task_start_tool_description(task_type=task_type, description=task_description),
             input_model=input_model,
             capability_type="task",
             tags=["task", "start", task_type],
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=self.timeout_seconds,
         )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -2322,6 +2325,41 @@ def _default_task_start_tool_name(task_type: str) -> str:
     if normalized.endswith("_task"):
         return f"start_{normalized}"
     return f"start_{normalized}_task"
+
+
+def _coerce_tool_timeout(timeout_seconds: float | None, *, fallback: float) -> float:
+    """归一 Tool 超时配置。
+
+    主要逻辑：未声明时使用调用方给定默认值；声明值必须为正数。
+    参数：`timeout_seconds` 为 Tool 显式超时，`fallback` 为默认超时。
+    返回值：归一后的秒数。
+    异常情况：非正数抛出 `ToolError`。
+    """
+
+    raw = fallback if timeout_seconds is None else timeout_seconds
+    value = float(raw)
+    if value <= 0:
+        raise ToolError("tool timeout_seconds must be > 0", code=ErrorCode.INVALID_ARGUMENT)
+    return value
+
+
+def _effective_tool_timeout(spec: ToolSpec) -> float:
+    """返回 ToolExecutor 实际使用的超时时间。"""
+
+    timeout_seconds = _coerce_tool_timeout(spec.timeout_seconds, fallback=TOOL_DEFAULT_TIMEOUT_SECONDS)
+    if timeout_seconds > TOOL_MAX_TIMEOUT_SECONDS:
+        raise ToolError(
+            "tool timeout_seconds exceeds max short-action timeout",
+            code=ErrorCode.PROTOCOL_ERROR,
+            details={"timeout_seconds": timeout_seconds, "max_timeout_seconds": TOOL_MAX_TIMEOUT_SECONDS},
+        )
+    return timeout_seconds
+
+
+def _validate_tool_timeout(spec: ToolSpec) -> None:
+    """校验 Tool 注册时的短生命周期超时上限。"""
+
+    _effective_tool_timeout(spec)
 
 
 def _task_ref_agent_reply(ref: Any) -> dict[str, Any]:

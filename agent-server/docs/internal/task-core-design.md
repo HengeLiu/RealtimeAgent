@@ -190,7 +190,7 @@ class TaskSpec:
     timeout_seconds: float | None = None
     cancel_supported: bool = True
     max_running_per_user: int | None = None
-    start_result_timeout_seconds: float = 0.3
+    start_result_timeout_seconds: float = 3.0
 ```
 
 建议后续扩展：
@@ -198,7 +198,6 @@ class TaskSpec:
 ```python
 recoverable: bool = False
 session_close_policy: Literal["continue", "cancel", "pause"] = "cancel"
-start_timeout_seconds: float = 3.0
 ```
 
 ### 7.2 TaskRef
