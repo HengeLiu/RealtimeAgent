@@ -58,8 +58,8 @@ Browser -> StreamWS: 建立 /ws/stream
 StreamWS -> Server: WebSocket connected
 Server -> App: mark_stream_connection_opened(device_id)
 note right of App
-  当前实现只有 agent_mode=text 时
-  这里预热 Text TTS。
+  当前实现只有 agent_mode=vision 时
+  这里预热 Vision TTS。
   Omni Realtime 模式下直接返回。
 end note
 

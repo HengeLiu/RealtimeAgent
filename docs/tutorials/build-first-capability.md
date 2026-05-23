@@ -156,4 +156,4 @@ curl http://127.0.0.1:8765/api/debug/devices
 find examples/for-blind-app/agent-server/runs -maxdepth 4 -type f | sort
 ```
 
-排查模型请求、工具调用和设备事件时，优先看 [runs 目录产物说明](../../agent-server/docs/how-to/inspect-runs-artifacts.md)。
+排查模型请求、工具调用和设备事件时，优先看 [runs 目录产物说明](../../agent-server/docs/how-to/运行产物排查说明.md)。

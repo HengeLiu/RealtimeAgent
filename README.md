@@ -12,7 +12,7 @@
 - `testdata/`：跨示例复用的音频样例。
 - `*/unit-tests/`、`*/protocol-tests/`、`*/app-tests/`、`*/replay-tests/`：按模块拆分的自动化测试。
 
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)。
+server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](agent-server/docs/how-to/设备能力开发说明.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](agent-server/docs/reference/上下文设备接口设计.md)。
 
 ## 快速开始
 
@@ -197,7 +197,7 @@ uv run realtime-agent.esp32.build --dry-run
 
 ## 开发者工作模型
 
-当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)。
+当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](agent-server/docs/how-to/设备能力开发说明.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](agent-server/docs/reference/上下文设备接口设计.md)。
 
 当前开发口径：
 
@@ -395,7 +395,7 @@ uv run python -m pytest agent-server/model-provider-tests/test_dashscope_provide
 ## 文档
 
 - [文档目录](docs/README.md)
-- [设备注册与功能开发说明](agent-server/docs/how-to/device-capability-development.md)
-- [Context 与设备 API 设计说明](agent-server/docs/reference/context-api.md)
-- [运行产物说明](agent-server/docs/how-to/inspect-runs-artifacts.md)
+- [设备注册与功能开发说明](agent-server/docs/how-to/设备能力开发说明.md)
+- [Context 与设备 API 设计说明](agent-server/docs/reference/上下文设备接口设计.md)
+- [运行产物说明](agent-server/docs/how-to/运行产物排查说明.md)
 - [内部设计文档](agent-server/docs/README.md)

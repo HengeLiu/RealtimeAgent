@@ -423,9 +423,9 @@ tasks/                    # 长流程 Task 运行产物
 - `README.md`：项目快速开始和主流程。
 - `docs/reference/project-layout.md`：目录结构。
 - `docs/reference/cli.md`：命令行参考。
-- `agent-server/docs/how-to/device-capability-development.md`：设备能力与上下文 API。
-- `agent-server/docs/how-to/inspect-runs-artifacts.md`：运行产物说明。
-- `agent-server/docs/reference/context-api.md`：上下文 API 目标设计。
+- `agent-server/docs/how-to/设备能力开发说明.md`：设备能力与上下文 API。
+- `agent-server/docs/how-to/运行产物排查说明.md`：运行产物说明。
+- `agent-server/docs/reference/上下文设备接口设计.md`：上下文 API 目标设计。
 - `examples/for-blind-app/docs/`：示例应用相关设计和验收记录。
 
 修改协议、目录结构、命令行、配置、运行产物或跨设备流程时，要同步更新相关文档。文档中的测试结果必须和真实命令结果一致，不能只写设计预期。

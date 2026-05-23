@@ -1,0 +1,141 @@
+@startuml
+title Vision Realtime 期望时序：端侧视角
+
+autonumber
+skinparam responseMessageBelowArrow true
+skinparam sequenceMessageAlign center
+
+participant "Mic Capture\n麦克风采集" as Mic
+participant "Local Wake Detector\n本地语音唤醒" as Wake
+participant "Audio Preprocess\nAEC/NS/AGC" as Preprocess
+participant "Control WS Client\n控制长连接" as Control
+participant "Upstream Audio WS\n上行音频长连接" as Upstream
+participant "Downstream Audio WS\n下行音频长连接" as Downstream
+queue "Downlink Audio Queue\n下行音频缓存队列" as Queue
+participant "Speaker Playback\n扬声器播放" as Speaker
+participant "RealtimeAgent Server\n服务器" as Server
+
+== 1. 本地持续采集与语音唤醒 ==
+
+Mic -> Wake: continuous mic frames
+
+loop before wake detected
+  Mic -> Wake: raw mic frame
+  Wake -> Wake: local wake strategy\nbutton / auto / keyword
+end
+
+note over Mic,Wake
+端侧可按自己的策略开启麦克风。
+唤醒成功前，麦克风音频只在端侧用于唤醒检测，
+不发送给服务器。
+end note
+
+== 2. 唤醒成功后建立连续对话连接 ==
+
+Wake -> Control: wake detected
+Control -> Server: control.user.wake.detected
+Server --> Control: control.audio_session.open.requested
+Control -> Server: control.audio_session.opened
+
+Upstream -> Server: open upstream audio ws\nsensor.mic
+Downstream -> Server: open downstream audio ws\nactuator.speaker
+
+note over Upstream,Downstream
+上行音频连接和下行音频连接是两个独立长连接。
+唤醒后进入连续对话，直到服务器要求关闭 audio_session。
+end note
+
+== 3. 连续上行：麦克风音频始终发送给服务器 ==
+
+loop until audio_session.close requested
+  Mic -> Preprocess: raw mic frame
+  Preprocess -> Upstream: PCM chunk
+  Upstream -> Server: sensor.mic chunk
+end
+
+note over Preprocess
+端侧 AEC/NS/AGC 只做音频质量处理。
+端侧不做 VAD，不生成 speech_start / speech_stop。
+end note
+
+== 4. 接收服务器 VAD 事件 ==
+
+Server --> Control: speech_start
+Control -> Control: record user_speaking=true
+Server --> Control: speech_stop
+Control -> Control: record user_speaking=false
+
+note over Control
+speech_start / speech_stop 来自服务器。
+端侧只更新本地播放控制状态，
+不据此提交用户输入。
+end note
+
+== 5. 接收下行音频并启动播放 ==
+
+Server --> Downstream: assistant audio chunk
+Downstream -> Queue: enqueue audio chunk
+Queue -> Speaker: write first playable chunk
+Speaker -> Speaker: start playback
+
+loop while assistant audio response is not complete
+  Server --> Downstream: assistant audio chunk
+  Downstream -> Queue: enqueue audio chunk
+  Queue -> Speaker: write next chunk when playable
+end
+
+== 6. 下行缓存队列水位控制 ==
+
+alt queue high watermark reached
+  Queue -> Control: queue almost full
+  Control -> Server: downstream.pause.requested
+else queue low watermark reached
+  Queue -> Control: queue needs more audio
+  Control -> Server: downstream.resume.requested
+end
+
+note over Queue,Speaker
+浏览器维护自己的下行音频缓存队列。
+完整音频响应结束前，队列应尽量保持既不空也不满：
+队列空会导致播放卡顿，队列满会导致网络/内存压力。
+end note
+
+== 7. 播放期间收到服务器 speech_start ==
+
+Server --> Control: speech_start
+Control -> Speaker: is playing?
+
+alt speaker is playing
+  Control -> Speaker: pause writing to player
+  Control -> Queue: clear queued but not played audio
+  Control -> Server: playback.paused_for_speech_start
+else speaker is not playing
+  Control -> Control: only record speech_start
+end
+
+note over Speaker,Queue
+暂停播放动作指停止继续向播放器写入新音频。
+已收到但尚未播放的下行缓存必须清空。
+end note
+
+== 8. 服务器决定关闭连续对话 ==
+
+Server --> Control: audio_session.close.requested
+Control -> Upstream: close upstream immediately
+Upstream -> Server: upstream closed
+
+Control -> Queue: stop accepting new audio
+Queue -> Speaker: wait current played audio finish
+Speaker -> Control: playback drained
+
+Control -> Downstream: close downstream audio ws
+Downstream -> Server: downstream closed
+Control -> Server: control.audio_session.closed
+
+== 9. 回到等待语音唤醒 ==
+
+Control -> Wake: audio session closed
+Wake -> Wake: return to local wake detection
+Mic -> Wake: continuous mic frames
+
+@enduml

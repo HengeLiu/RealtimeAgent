@@ -13,9 +13,20 @@
 5. 下行水位控制通过统一接口暂停或恢复。
 6. 连续对话关闭由服务器决定，端侧只执行关闭流程。
 
-端侧标准见：[端侧音频交互标准.md](端侧音频交互标准.md)。
+端侧标准见：[端侧音频会话标准.md](端侧音频会话标准.md)。
 
-Vision 链路原始标准见：[视觉语言模型实时音频链路处理标准.md](视觉语言模型实时音频链路处理标准.md)。
+Vision 链路原始标准见：[Vision实时服务器侧标准.md](Vision实时服务器侧标准.md)。
+
+## 图文件索引
+
+| 文件 | 图类型 | 说明 |
+| --- | --- | --- |
+| `实时Pipeline外部契约时序.puml` | 外部契约时序 | 端侧、`RealtimeAgentApp`、`ControlService`、`StreamService` 与统一 `RealtimeAgentRealtimePipeline` 的交互边界；不展开 Vision / Omni 内部细节。 |
+| `实时Pipeline组件边界图.puml` | 组件边界图 | 对比 Vision Realtime 和 Omni Realtime 哪些组件共享、哪些组件各自实现；不是时序图。 |
+| `Vision实时Pipeline内部时序.puml` | Vision 内部时序 | `VisionRealtimePipeline` 内部如何经 ASR、Vision 模型、TTS 和统一输出控制完成一轮实时语音对话。 |
+| `Omni实时Pipeline内部时序.puml` | Omni 内部时序 | `OmniRealtimePipeline` 内部如何解释 Omni provider 的 speech/audio/tool 事件并映射到统一 pipeline 事件。 |
+| `Vision实时端侧音频时序.puml` | 端侧标准时序 | 端侧从本地唤醒、建立上下行音频连接、播放、打断到关闭会话的期望行为。 |
+| `Omni浏览器眼镜当前端到端时序.puml` | 当前端到端样例 | 浏览器眼镜参考端与 Omni Realtime 当前实现的端到端细节；用于排障，不作为统一 pipeline 契约。 |
 
 ## 设计原则
 
@@ -116,7 +127,7 @@ pipeline 对 `RealtimeAgentApp` 只输出统一 `PipelineEvent`：
 ### 外部契约时序
 
 ```plantuml
-!include realtime-agent-realtime-pipeline-contract.puml
+!include 实时Pipeline外部契约时序.puml
 ```
 
 ## 组件边界
@@ -144,7 +155,7 @@ pipeline 对 `RealtimeAgentApp` 只输出统一 `PipelineEvent`：
 ### 组件复用与差异图
 
 ```plantuml
-!include realtime-pipeline-component-comparison.puml
+!include 实时Pipeline组件边界图.puml
 ```
 
 ## VisionRealtimePipeline 设计
@@ -235,7 +246,7 @@ Vision 链路有两个关闭来源：
 ### Vision 内部时序
 
 ```plantuml
-!include vision-realtime-server-side-sequence.puml
+!include Vision实时Pipeline内部时序.puml
 ```
 
 ## OmniRealtimePipeline 设计
@@ -308,7 +319,7 @@ Omni 链路有两个关闭来源：
 ### Omni 内部时序
 
 ```plantuml
-!include omni-realtime-server-side-sequence.puml
+!include Omni实时Pipeline内部时序.puml
 ```
 
 ## 两条链路的差异对比
@@ -407,7 +418,7 @@ pipeline 内部至少需要维护以下状态：
 设计落地后，至少需要满足以下验收点：
 
 1. Vision 和 Omni 都通过同一组 `RealtimeAgentRealtimePipeline` 接口接入 `RealtimeAgentApp`。
-2. 端侧只需要实现 [端侧音频交互标准.md](端侧音频交互标准.md)，不需要关心 Vision / Omni 差异。
+2. 端侧只需要实现 [端侧音频会话标准.md](端侧音频会话标准.md)，不需要关心 Vision / Omni 差异。
 3. Vision 链路上行连接建立时预热 ASR，下行连接建立时预热 TTS。
 4. Omni 链路 provider 事件只在 `OmniInputBoundary` / `OmniResponseEngine` 内解释。
 5. 用户插话时，两条链路都写入 assistant partial message，并追加 `<用户打断>`。
@@ -416,4 +427,3 @@ pipeline 内部至少需要维护以下状态：
 8. 连续对话关闭时，Vision 释放 ASR 和 TTS，Omni 释放 Omni provider session。
 9. 空闲超时和模型关闭请求都能触发 `close_requested`。
 10. 下行水位控制对 Vision 和 Omni 使用同一套 pause / resume 接口。
-

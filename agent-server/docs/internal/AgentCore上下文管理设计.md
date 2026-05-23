@@ -4,26 +4,26 @@
 
 当前 Agent Core 的大模型上下文由多个模块分别拼接：
 
-- `server.yaml` 提供 text / realtime 主系统提示。
+- `server.yaml` 提供 Vision Realtime / Omni Realtime 主系统提示。
 - `app.py` 在启用 Memory 时追加长期记忆使用规则。
-- `VisionRealtimeAgentCore` 自行拼接 text prompt、长期记忆、历史摘要、active messages 和 tools。
-- `OmniRealtimeAgentCore` 自行拼接 realtime prompt、工具调用语音规则、长期记忆、历史摘要、等价 messages 和 realtime tools。
+- `VisionRealtimeAgentCore` 自行拼接 Vision prompt、长期记忆、历史摘要、active messages 和 tools。
+- `OmniRealtimeAgentCore` 自行拼接 Omni prompt、工具调用语音规则、长期记忆、历史摘要、等价 messages 和 Omni Realtime tools。
 - `tools.py` / `tasks.py` 通过 `ToolSpec.description`、Pydantic `Field(description=...)`、`TaskStartTool` 自动生成工具 schema。
 - `memory/__init__.py`、`conversation.py`、业务视觉 Tool 内部还各自维护子 Agent 提示词。
 
 这些内容都可能影响模型行为，但目前没有统一的命名、版本、来源记录、预算控制和最终上下文快照。后续如果继续在各处直接改字符串，会导致以下问题：
 
 1. 难以确认某段提示词是否真的进入了模型。
-2. Realtime 和 Vision 链路的上下文规则容易漂移。
+2. Vision Realtime 和 Omni Realtime 链路的上下文规则容易漂移。
 3. 工具 schema、记忆片段、历史摘要和系统提示之间可能互相重复或冲突。
 4. `model-request.json` 能看到最终请求，但缺少每段内容的来源、类型、裁剪原因和预算占用。
 5. 后续做 prompt 优化、A/B、回归测试和真实设备排障时，缺少稳定的对照基线。
 
-现状详见 `agent-server/docs/internal/agent-core-context-inventory.md`。
+现状详见 `agent-server/docs/internal/AgentCore上下文现状盘点.md`。
 
 ## 2. 目标
 
-本方案目标是新增一层轻量的上下文管理基础设施，让所有模型可见内容先进入统一编译流程，再交给 Text / Realtime / 子 Agent provider。
+本方案目标是新增一层轻量的上下文管理基础设施，让所有模型可见内容先进入统一编译流程，再交给 Vision Realtime / Omni Realtime / 子 Agent provider。
 
 具体目标：
 
@@ -31,7 +31,7 @@
 2. 为每段 prompt 建立简单唯一的 `name`，让开发者能按名称找到并调整。
 3. 用统一 `ContextCompiler` 构造最终 `ModelContext`。
 4. 为每次模型调用记录 `context_sources`、prompt 名称、工具列表、历史消息策略、记忆片段和裁剪原因。
-5. 支持 Text 和 Realtime 两条运行循环共享同一套上下文策略，同时保留 provider 差异。
+5. 支持 Vision Realtime 和 Omni Realtime 两条运行循环共享同一套上下文策略，同时保留 provider 差异。
 6. 把“常驻上下文”和“按需上下文”分开，减少系统提示膨胀。
 7. 为后续 token budget、prompt 回归测试、上下文 diff 和线上平台接入保留扩展点。
 
@@ -44,7 +44,7 @@
 3. 不重写所有提示词文案。
 4. 不改变端侧协议、Tool API、Task API 或 Output Service 语义。
 5. 不把业务 Task 兜底逻辑写进 SDK core。
-6. 不要求 Realtime 和 Text 共用同一个 provider turn loop。
+6. 不要求 Vision Realtime 和 Omni Realtime 共用同一个 provider turn loop。
 7. 不在第一阶段重写 Tool / Task 的用户通知行为，只先盘点、收敛入口和补可观测记录。
 
 ## 4. 总体设计
@@ -55,7 +55,7 @@
 @startuml
 title Agent Core Context 管理总体设计
 
-participant "AgentCore\nText / Realtime" as Core
+participant "AgentCore\nVision / Omni" as Core
 participant "ContextCompiler" as Compiler
 database "PromptRegistry\nYAML + Markdown" as Registry
 participant "MemoryService" as Memory
@@ -74,7 +74,7 @@ Compiler -> Policy : apply mode/provider/tool/budget rules
 Compiler -> Recorder : record context_sources / warnings
 Compiler --> Core : ModelContext
 
-alt text
+alt vision
   Core -> Provider : messages + tools
 else omni
   Core -> Provider : instructions + session tools + audio stream
@@ -94,7 +94,7 @@ end
 agent-server/realtime_agent/prompts/
   registry.yaml
   omni_system.md
-  text_system.md
+  vision_system.md
   memory_rules.md
   omni_tool_call_rules.md
   tool_result_failure_followup.md
@@ -110,7 +110,7 @@ agent-server/realtime_agent/prompts/
 prompts:
   - name: omni_system
     file: omni_system.md
-    description: Realtime 主 Agent 系统提示词。
+    description: Omni Realtime 主 Agent 系统提示词。
 
   - name: memory_rules
     file: memory_rules.md
@@ -180,12 +180,12 @@ class ContextSource:
 
 ### 5.3 ModelContext
 
-`ModelContext` 是 ContextCompiler 的输出，Text / Realtime 只消费这个结构。
+`ModelContext` 是 ContextCompiler 的输出，Vision Realtime / Omni Realtime 只消费这个结构。
 
 ```python
 @dataclass(frozen=True)
 class ModelContext:
-    mode: Literal["text", "omni"]
+    mode: Literal["vision", "omni"]
     provider: str
     model: str
     instructions: str
@@ -203,12 +203,12 @@ Vision 链路使用：
 - `messages` 作为 active history + 当前输入。
 - `tools` 作为 Chat Completions tools。
 
-Realtime 链路使用：
+Omni Realtime 链路使用：
 
 - `instructions` 作为 provider session instructions。
 - `tools` 转成 provider realtime function schema。
 - `messages` 主要用于等价请求视图和后续 provider 支持历史注入时使用。
-- `modal_inputs` 用于描述当前音频流、视觉帧等非Vision 输入。
+- `modal_inputs` 用于描述当前音频流、视觉帧等非 Vision 输入。
 
 ### 5.4 ContextPolicy
 
@@ -250,7 +250,7 @@ context:
 ```python
 @dataclass(frozen=True)
 class ContextCompileRequest:
-    mode: Literal["text", "omni"]
+    mode: Literal["vision", "omni"]
     provider: str
     model: str
     user_id: str
@@ -392,7 +392,7 @@ agent-server/realtime_agent/
   prompts/
     registry.yaml
     omni_system.md
-    text_system.md
+    vision_system.md
     memory_rules.md
     omni_tool_call_rules.md
     tool_result_failure_followup.md
@@ -417,8 +417,8 @@ agent-server/tests/
 
 ```text
 agent-server/docs/internal/
-  agent-core-context-inventory.md
-  agent-core-context-management-design.md
+  AgentCore上下文现状盘点.md
+  AgentCore上下文管理设计.md
 ```
 
 ## 9. 开发计划
@@ -433,7 +433,7 @@ agent-server/docs/internal/
 2. 新增 `registry.yaml`，每个 prompt 只包含 `name`、`file`、`description`。
 3. 迁移静态 prompt：
    - `omni_system.md`
-   - `text_system.md`
+   - `vision_system.md`
    - `memory_rules.md`
    - `omni_tool_call_rules.md`
    - `vision_interpreter.md`
@@ -476,7 +476,7 @@ agent-server/docs/internal/
 目标：
 
 1. VisionRealtimeAgentCore 不再直接散落拼接 system prompt、memory、history 和工具上下文。
-2. ContextCompiler 生成 Text 模式的 `instructions/messages/tools`。
+2. ContextCompiler 生成 Vision 模式的 `instructions/messages/tools`。
 3. 保留当前工具调用、工具结果回填和历史消息语义。
 
 验收：
@@ -484,7 +484,7 @@ agent-server/docs/internal/
 1. vision 模式 model request 与迁移前语义一致。
 2. 工具调用和工具结果回填测试通过。
 3. 历史 tool 消息仍不作为孤立 tool message 回灌。
-4. `context_sources` 能解释本轮 text 请求的来源。
+4. `context_sources` 能解释本轮 Vision 请求的来源。
 
 ### Phase 4：ContextCompiler 接入 OmniRealtimeAgentCore
 
@@ -556,8 +556,8 @@ uv run realtime-agent.context.inspect --config examples/for-blind-app/agent-serv
 | --- | --- |
 | registry 加载 | prompt 的 `name` 唯一，文件存在 |
 | prompt 读取 | registry 能按 `name` 读取 Markdown 正文；缺失文件时报错 |
-| text context | system + active messages + tools 顺序正确 |
-| realtime context | instructions + tools + input_audio_stream 等价视图正确 |
+| vision context | system + active messages + tools 顺序正确 |
+| omni context | instructions + tools + input_audio_stream 等价视图正确 |
 | tool policy | denylist / allowlist / Skill policy 生效 |
 | tool result policy | 工具结果按策略进入或不进入下一轮模型上下文 |
 | task notification | Task 启动、进度、完成、失败通知路径符合预期 |
@@ -582,7 +582,7 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversatio
 1. `model-request.json` 是否能解释最终模型上下文。
 2. `agent-events.jsonl` 是否记录 context compile 事件。
 3. Realtime 工具调用前是否仍有 provider 预音频。
-4. 视觉问题是否仍能通过 Realtime 视觉帧回答。
+4. 视觉问题是否仍能通过 Omni Realtime 视觉帧回答。
 5. 找物、红绿灯、计时器是否仍通过 TaskStartTool 启动。
 
 ## 11. 关键设计取舍
@@ -591,10 +591,10 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversatio
 
 当前主要问题是代码内上下文来源混乱。外部平台能解决 prompt 存储、版本、回滚和 UI，但不能自动解决：
 
-1. Text / Realtime 两条链路的上下文编译差异。
+1. Vision Realtime / Omni Realtime 两条链路的上下文编译差异。
 2. Tool schema 和 TaskStartTool 的模型可见内容。
 3. Memory、summary、active messages 的预算和裁剪。
-4. Realtime 音频、视觉帧和 provider 私有事件。
+4. Omni Realtime 音频、视觉帧和 provider 私有事件。
 
 所以第一阶段先在 repo 内建立 PromptRegistry 和 ContextCompiler。等对象模型稳定后，再把 PromptRegistry 后端替换成外部平台。
 
@@ -602,17 +602,17 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversatio
 
 system prompt 越长，越难控制冲突，也越浪费 token。长期记忆详情、Skill 文档、Task 运行详情和外部资料应该按需读取。常驻 system prompt 只保留稳定规则。
 
-### 11.3 为什么保留 Text / Realtime provider 差异
+### 11.3 为什么保留 Vision Realtime / Omni Realtime provider 差异
 
-Text 是 Chat Completions 风格：`system + messages + tools`。
+Vision Realtime 是级联链路：`system + messages + tools`，由 ASR 产出文本 turn，再调用视觉语言模型和流式 TTS。
 
-Realtime 是 session instructions + function tools + audio stream + provider events。强行抽成完全一样的 messages 会掩盖真实协议差异。因此统一的是 `ModelContext` 语义，不是强迫 provider payload 完全一致。
+Omni Realtime 是 session instructions + function tools + audio stream + provider events。强行抽成完全一样的 messages 会掩盖真实协议差异。因此统一的是 `ModelContext` 语义，不是强迫 provider payload 完全一致。
 
 ## 12. 待确认问题
 
 1. PromptRegistry 第一版是否允许 app 覆盖 SDK 默认 prompt？
 2. `server.yaml` 中现有 prompt 是否迁移为 prompt name 引用，还是继续允许 inline prompt？
-3. Realtime `capture_photo` 特例是否保留为 ContextPolicy hook，还是迁回 for-blind-app 能力层？
+3. Omni Realtime `capture_photo` 特例是否保留为 ContextPolicy hook，还是迁回 for-blind-app 能力层？
 4. Token 估算第一版使用近似字符数，还是引入 provider tokenizer？
 5. `context.inspect` CLI 是否需要同时支持读取最近一次 runs 产物做 diff？
 6. Tool result 默认是否进入下一轮模型上下文，是否允许单个 Tool 覆盖？
@@ -625,7 +625,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 
 落地后，Agent Core 的职责会变成：
 
-1. 决定当前要运行 text 还是 realtime loop。
+1. 决定当前要运行 Vision Realtime 还是 Omni Realtime loop。
 2. 请求 ContextCompiler 生成 ModelContext。
 3. 把 ModelContext 交给 provider。
 4. 把 provider 输出、tool call 和错误写回统一 runs。
@@ -640,7 +640,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 - 实现：新增 `realtime_agent/prompts/` 平铺目录、`registry.yaml` 和 9 个 Markdown prompt 文件；新增 `PromptRegistry` 和 `PromptAsset`。
 - 文件：`agent-server/realtime_agent/prompts/`、`agent-server/realtime_agent/agent_core/context/registry.py`、`agent-server/realtime_agent/agent_core/context/models.py`。
 - 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_context_prompt_registry.py -q` 通过。
-- 风险：`server.yaml` 仍保留 inline prompt，当前实现先记录为 `omni_system/text_system` 来源；后续如要改成 prompt name 引用，需要单独做配置迁移。
+- 风险：`server.yaml` 仍保留 inline prompt，当前实现先记录为 `omni_system/vision_system` 来源；后续如要改成 prompt name 引用，需要单独做配置迁移。
 
 ### 阶段 2：引入 ContextSource 和 ModelContext
 
@@ -653,16 +653,16 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 ### 阶段 3：ContextCompiler 接入 VisionRealtimeAgentCore
 
 - 状态：已完成。
-- 实现：Text 工具循环改由 ContextCompiler 生成 `instructions/messages/tools`；保留工具调用、工具结果回填和历史 tool 消息不孤立回灌的语义；工具结果回灌时记录 `context.source.added`。
-- 文件：`agent-server/realtime_agent/agent_core/text.py`。
+- 实现：Vision Realtime 工具循环改由 ContextCompiler 生成 `instructions/messages/tools`；保留工具调用、工具结果回填和历史 tool 消息不孤立回灌的语义；工具结果回灌时记录 `context.source.added`。
+- 文件：`agent-server/realtime_agent/agent_core/vision.py`。
 - 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_model_request_logging.py agent-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 通过。
 - 风险：没有用真实视觉语言模型做 provider 侧回归，本阶段为 mock/契约验证。
 
 ### 阶段 4：ContextCompiler 接入 OmniRealtimeAgentCore
 
 - 状态：已完成。
-- 实现：Realtime 会话打开时由 ContextCompiler 生成 session instructions、Realtime tools、等价 messages 和 source map；inline vision tool 过滤迁移到 ContextPolicy；Realtime 工具结果记录 `context.source.added`。
-- 文件：`agent-server/realtime_agent/agent_core/realtime.py`。
+- 实现：Omni Realtime 会话打开时由 ContextCompiler 生成 session instructions、Omni Realtime tools、等价 messages 和 source map；inline vision tool 过滤迁移到 ContextPolicy；Omni Realtime 工具结果记录 `context.source.added`。
+- 文件：`agent-server/realtime_agent/agent_core/omni.py`。
 - 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q`、`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q` 通过。
 - 风险：未做真实 Qwen Omni Realtime 联调；真实 provider 的预音频和工具结果注入仍需设备侧观察。
 
@@ -679,7 +679,7 @@ Realtime 是 session instructions + function tools + audio stream + provider eve
 - 状态：已完成最小闭环。
 - 实现：ContextSource 记录 `token_estimate`；ContextCompiler 超预算时写 warning，不自动裁剪；`realtime-agent.context.inspect` 支持 `--compare-model-request`，可与已有 `model-request.json` 做摘要级 diff。
 - 文件：`agent-server/realtime_agent/agent_core/context/models.py`、`agent-server/realtime_agent/agent_core/context/compiler.py`、`agent-server/realtime_agent/cli/context.py`。
-- 验证：`uv run realtime-agent.context.inspect --config examples/for-blind-app/agent-server/server.yaml --mode text --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
+- 验证：`uv run realtime-agent.context.inspect --config examples/for-blind-app/agent-server/server.yaml --mode vision --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
 - 风险：第一版不做自动裁剪，后续需要基于真实长对话 runs 再确定裁剪优先级。
 
 ### 验证汇总

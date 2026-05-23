@@ -1,6 +1,6 @@
 # Task Core 开发计划
 
-本文基于 [task-core-design.md](task-core-design.md)，拆分 `realtime-agent` Task Core 的实现步骤。目标是先建立稳定的 Task actor 内核，再迁移端侧命令、计时器和示例任务，避免后台执行、事件路由和业务任务改造同时落地导致排障困难。
+本文基于 [TaskCore设计.md](TaskCore设计.md)，拆分 `realtime-agent` Task Core 的实现步骤。目标是先建立稳定的 Task actor 内核，再迁移端侧命令、计时器和示例任务，避免后台执行、事件路由和业务任务改造同时落地导致排障困难。
 
 ## 1. 实施原则
 
@@ -245,7 +245,7 @@ stop
 1. `agent-server/realtime_agent/observability.py`
 2. `agent-server/realtime_agent/tasks.py`
 3. `agent-server/realtime_agent/app.py`
-4. `agent-server/docs/how-to/inspect-runs-artifacts.md`
+4. `agent-server/docs/how-to/运行产物排查说明.md`
 5. `examples/for-blind-app/tests/`
 
 具体改动：

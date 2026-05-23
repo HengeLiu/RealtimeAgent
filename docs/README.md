@@ -29,15 +29,15 @@
 
 - [跨设备本地联调](how-to/cross-device-local-debug.md)
 - [测试体系说明](testing.md)
-- [设备能力与 Context API 开发说明](../agent-server/docs/how-to/device-capability-development.md)
-- [runs 目录产物说明](../agent-server/docs/how-to/inspect-runs-artifacts.md)
+- [设备能力与 Context API 开发说明](../agent-server/docs/how-to/设备能力开发说明.md)
+- [runs 目录产物说明](../agent-server/docs/how-to/运行产物排查说明.md)
 
 ### Reference
 
 - [项目结构](reference/project-layout.md)
 - [CLI 参考](reference/cli.md)
 - [realtime-agent 通讯协议](../protocol/docs/protocol.md)
-- [Context 与设备 API 设计说明](../agent-server/docs/reference/context-api.md)
+- [Context 与设备 API 设计说明](../agent-server/docs/reference/上下文设备接口设计.md)
 
 ### Community
 

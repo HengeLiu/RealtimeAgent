@@ -20,10 +20,10 @@ package "Pipeline 内部可共用" #E8F7E8 {
 }
 
 package "VisionRealtimePipeline 必须实现" #FFF4E5 {
-  [VisionRealtimePipeline] as TextPipeline
-  [VisionRealtimeAgentCore\nVision 链路对话语义] as TextCore
-  [VisionInputBoundary\nParaformer句子事件解释] as TextBoundary
-  [VisionResponseEngine\nText LLM + Streaming TTS] as TextResponse
+  [VisionRealtimePipeline] as VisionPipeline
+  [VisionRealtimeAgentCore\nVision 链路对话语义] as VisionCore
+  [VisionInputBoundary\nParaformer句子事件解释] as VisionBoundary
+  [VisionResponseEngine\nVision LLM + Streaming TTS] as VisionResponse
   [AsrProviderSession\nparaformer-realtime-v2] as Asr
   [VisionModelSession] as LLM
   [TtsProviderSession] as TTS
@@ -38,19 +38,19 @@ package "OmniRealtimePipeline 必须实现" #E8F2FF {
 }
 
 App --> Contract
-Contract --> TextPipeline : mode=text
+Contract --> VisionPipeline : mode=vision
 Contract --> OmniPipeline : mode=omni
 
-TextPipeline --> Normalizer
-TextPipeline --> TextCore
-TextPipeline --> Output
-TextPipeline --> Emitter
-TextCore --> TurnState
-TextCore --> TextBoundary
-TextCore --> TextResponse
-TextBoundary --> Asr
-TextResponse --> LLM
-TextResponse --> TTS
+VisionPipeline --> Normalizer
+VisionPipeline --> VisionCore
+VisionPipeline --> Output
+VisionPipeline --> Emitter
+VisionCore --> TurnState
+VisionCore --> VisionBoundary
+VisionCore --> VisionResponse
+VisionBoundary --> Asr
+VisionResponse --> LLM
+VisionResponse --> TTS
 
 OmniPipeline --> Normalizer
 OmniPipeline --> OmniCore
@@ -89,8 +89,8 @@ output stream 写入、finish、cancel 和播放回执能力。
 它不替代外层 StreamService / ControlService。
 end note
 
-note bottom of TextBoundary
-Text 差异点：
+note bottom of VisionBoundary
+Vision 差异点：
 输入边界来自 Paraformer 句子事件。
 sentence_begin -> speech_started
 sentence_end/final transcript -> speech_stopped
@@ -103,9 +103,9 @@ provider原始事件只能在这里被解释，
 不能穿透到外部调用方。
 end note
 
-note bottom of TextResponse
-Text 回复链路：
-final transcript -> Text LLM -> TTS -> output_audio_delta
+note bottom of VisionResponse
+Vision 回复链路：
+final transcript -> Vision LLM -> TTS -> output_audio_delta
 end note
 
 note bottom of OmniResponse

@@ -6,9 +6,9 @@
 
 该标准只约束服务器内部的 Vision 链路：上行麦克风音频进入服务器后，如何接入 Paraformer realtime ASR，如何驱动视觉语言模型和流式 TTS，如何处理用户插话，以及服务器如何关闭当前连续对话。
 
-服务器侧标准时序图见：[vision-realtime-server-side-sequence.puml](vision-realtime-server-side-sequence.puml)。
+服务器侧标准时序图见：[Vision实时Pipeline内部时序.puml](Vision实时Pipeline内部时序.puml)。
 
-端侧与服务器之间的音频会话标准见：[device-audio-session-standard.md](device-audio-session-standard.md)。端侧只负责唤醒、采集、上行、播放缓存和执行服务器事件，不负责连续对话阶段的 VAD、turn boundary 或打断判断。
+端侧与服务器之间的音频会话标准见：[端侧音频会话标准.md](端侧音频会话标准.md)。端侧只负责唤醒、采集、上行、播放缓存和执行服务器事件，不负责连续对话阶段的 VAD、turn boundary 或打断判断。
 
 ## 适用范围
 
@@ -244,7 +244,7 @@ participant "RealtimeAgentApp\n应用编排" as App
 participant "ControlService\n事件发布/设备路由" as Control
 participant "StreamService\nstream 生命周期" as Stream
 participant "AudioPipeline\n格式适配/重采样" as AudioPipe
-participant "VisionRealtimeAgentCore\nVision Realtime状态机" as TextCore
+participant "VisionRealtimeAgentCore\nVision Realtime状态机" as VisionCore
 participant "AsrPipeline\nASR provider wrapper" as AsrPipe
 participant "DashScopeAsrProviderAdapter\nParaformer 适配器" as AsrAdapter
 participant "OutputService\nTTS/输出仲裁" as Output
@@ -272,13 +272,13 @@ ControlWs --> Device: control.audio_session.open.requested
 
 Device -> ControlWs: control.audio_session.opened
 ControlWs -> App: open agent session
-App -> TextCore: open(user_id, session_id)
+App -> VisionCore: open(user_id, session_id)
 
 Device -> StreamWs: open /ws/stream for upstream mic
 StreamWs -> App: bind stream connection to registered device
 App -> Stream: open/register sensor.mic stream
-App -> TextCore: on upstream mic stream opened
-TextCore -> AsrPipe: prepare_provider(stream_id)
+App -> VisionCore: on upstream mic stream opened
+VisionCore -> AsrPipe: prepare_provider(stream_id)
 AsrPipe -> AsrAdapter: create DashScopeAsrProviderAdapter
 AsrAdapter -> Paraformer: WebSocket connect
 AsrAdapter -> Paraformer: run-task(model=paraformer-realtime-v2,\nheartbeat=true,\nmax_sentence_silence=config.asr.max_sentence_silence_ms)
@@ -304,8 +304,8 @@ loop continuous dialog until server closes session
   Device -> StreamWs: sensor.mic audio bytes
   StreamWs -> App: StreamChunk(bound mic stream)
   App -> AudioPipe: process(chunk)
-  AudioPipe -> TextCore: append_audio_event(normalized chunk)
-  TextCore -> AsrPipe: append_audio(chunk)
+  AudioPipe -> VisionCore: append_audio_event(normalized chunk)
+  VisionCore -> AsrPipe: append_audio(chunk)
 
   AsrPipe -> AsrAdapter: append_audio(chunk)
   AsrAdapter -> Paraformer: binary audio frame
@@ -313,11 +313,11 @@ loop continuous dialog until server closes session
   alt Paraformer sentence_begin
     Paraformer --> AsrAdapter: result-generated(sentence_begin=true,\ntext="", sentence_id, begin_time)
     AsrAdapter --> AsrPipe: TranscriptEvent(sentence_begin=true,\ntext="", final=false)
-    AsrPipe --> TextCore: provider event
-    TextCore -> Control: publish(audio.speech.started)
+    AsrPipe --> VisionCore: provider event
+    VisionCore -> Control: publish(audio.speech.started)
     Control --> ControlWs: route to endpoint
     ControlWs --> Device: audio.speech.started
-    TextCore -> Output: interrupt_user(reason=paraformer_sentence_begin)
+    VisionCore -> Output: interrupt_user(reason=paraformer_sentence_begin)
     Output -> Stream: cancel current speaker stream if any
     Stream --> StreamWs: stream.output.cancel.requested / cancelled
     StreamWs --> Device: stop current playback
@@ -326,17 +326,17 @@ loop continuous dialog until server closes session
   alt Paraformer partial text
     Paraformer --> AsrAdapter: result-generated(text partial,\nend_time=null)
     AsrAdapter --> AsrPipe: TranscriptEvent(text, final=false)
-    AsrPipe --> TextCore: input_transcript.delta
+    AsrPipe --> VisionCore: input_transcript.delta
   end
 
   alt Paraformer sentence_end
     Paraformer --> AsrAdapter: result-generated(sentence_end=true,\nend_time, final text)
     AsrAdapter --> AsrPipe: TranscriptEvent(text, final=true,\nsentence_end=true)
-    AsrPipe --> TextCore: provider event + input_transcript.done(text)
-    TextCore -> Control: publish(audio.speech.stopped)
+    AsrPipe --> VisionCore: provider event + input_transcript.done(text)
+    VisionCore -> Control: publish(audio.speech.stopped)
     Control --> ControlWs: route to endpoint
     ControlWs --> Device: audio.speech.stopped
-    TextCore -> TextCore: start response generation N
+    VisionCore -> VisionCore: start response generation N
   end
 end
 
@@ -351,12 +351,12 @@ end note
 
 == 3. 正常回复生成和下行音频 ==
 
-TextCore -> LLM: stream_messages(context + final transcript)
+VisionCore -> LLM: stream_messages(context + final transcript)
 
 loop assistant text delta
-  LLM --> TextCore: text delta
-  TextCore -> TextCore: append delta to current assistant message buffer
-  TextCore -> Output: on_assistant_vision_delta(text)
+  LLM --> VisionCore: text delta
+  VisionCore -> VisionCore: append delta to current assistant message buffer
+  VisionCore -> Output: on_assistant_vision_delta(text)
   Output -> TTS: push text to prepared TTS session
   TTS --> Output: assistant audio chunk
   Output -> Stream: write actuator.speaker chunk
@@ -364,42 +364,42 @@ loop assistant text delta
   StreamWs --> Device: assistant audio bytes
 end
 
-LLM --> TextCore: done
-TextCore -> Output: final empty delta / flush
-TextCore -> TextCore: append assistant message(content=full generated text)
+LLM --> VisionCore: done
+VisionCore -> Output: final empty delta / flush
+VisionCore -> VisionCore: append assistant message(content=full generated text)
 Output -> Stream: finish current output stream
 Stream --> StreamWs: stream.output.finish.requested
 StreamWs --> Device: stream.output.finish.requested
 Device -> ControlWs: stream.output.finished(reason=playback_drained)
 ControlWs -> App: output finished
 App -> Output: on_playback_finished()
-TextCore -> TextCore: state = listening
+VisionCore -> VisionCore: state = listening
 
 == 4. 用户插话：sentence_begin 打断当前回复 ==
 
 Device -> StreamWs: sensor.mic audio bytes while assistant playing
 StreamWs -> App: StreamChunk(bound mic stream)
 App -> AudioPipe: process(chunk)
-AudioPipe -> TextCore: append_audio_event(chunk)
-TextCore -> AsrPipe: append_audio(chunk)
+AudioPipe -> VisionCore: append_audio_event(chunk)
+VisionCore -> AsrPipe: append_audio(chunk)
 AsrPipe -> AsrAdapter: append_audio(chunk)
 AsrAdapter -> Paraformer: binary audio frame
 
 Paraformer --> AsrAdapter: result-generated(sentence_begin=true,\ntext="", sentence_id=M)
 AsrAdapter --> AsrPipe: TranscriptEvent(sentence_begin=true)
-AsrPipe --> TextCore: provider event
+AsrPipe --> VisionCore: provider event
 
-TextCore -> Control: publish(audio.speech.started)
+VisionCore -> Control: publish(audio.speech.started)
 Control --> ControlWs: route to endpoint
 ControlWs --> Device: audio.speech.started
-TextCore -> TextCore: append interrupted assistant message\ncontent=generated_text + "<用户打断>"
-TextCore -> Output: interrupt_user(reason=paraformer_sentence_begin)
+VisionCore -> VisionCore: append interrupted assistant message\ncontent=generated_text + "<用户打断>"
+VisionCore -> Output: interrupt_user(reason=paraformer_sentence_begin)
 Output -> Stream: cancel current speaker stream
 Stream --> StreamWs: stream.output.cancel.requested / cancelled
 StreamWs --> Device: stop current playback
-TextCore -> TextCore: mark generation N interrupted
+VisionCore -> VisionCore: mark generation N interrupted
 
-note over TextCore,Output
+note over VisionCore,Output
 插话是正常控制流。
 当前 generation 已经产生并下发过的 vision_delta 不能丢。
 VisionRealtimeAgentCore 需要把已生成文本追加到 assistant message，
@@ -410,34 +410,34 @@ end note
 
 Paraformer --> AsrAdapter: result-generated(partial text)
 AsrAdapter --> AsrPipe: TranscriptEvent(text, final=false)
-AsrPipe --> TextCore: input_transcript.delta
+AsrPipe --> VisionCore: input_transcript.delta
 
 Paraformer --> AsrAdapter: result-generated(sentence_end=true,\nfinal text)
 AsrAdapter --> AsrPipe: TranscriptEvent(final=true,\nsentence_end=true)
-AsrPipe --> TextCore: input_transcript.done(new text)
-TextCore -> LLM: start response generation N+1
+AsrPipe --> VisionCore: input_transcript.done(new text)
+VisionCore -> LLM: start response generation N+1
 
 == 5. 服务器关闭连续对话 ==
 
 alt listening idle timeout
-  TextCore -> TextCore: idle timer reached\nconfig.audio_session.idle_timeout_ms
+  VisionCore -> VisionCore: idle timer reached\nconfig.audio_session.idle_timeout_ms
 else LLM calls close audio session tool
-  LLM --> TextCore: tool_call(close_audio_session)
-  TextCore -> TextCore: append tool call/result messages
+  LLM --> VisionCore: tool_call(close_audio_session)
+  VisionCore -> VisionCore: append tool call/result messages
 end
 
-TextCore -> Control: publish(control.audio_session.close.requested)
+VisionCore -> Control: publish(control.audio_session.close.requested)
 Control --> ControlWs: route to endpoint
 ControlWs --> Device: control.audio_session.close.requested
 
 Device -> StreamWs: close upstream mic connection
 StreamWs -> App: input stream closed
-App -> TextCore: close / cancel ASR
-TextCore -> AsrPipe: cancel providers
+App -> VisionCore: close / cancel ASR
+VisionCore -> AsrPipe: cancel providers
 AsrPipe -> AsrAdapter: cancel()
 AsrAdapter -> Paraformer: finish-task / close WebSocket
 
-TextCore -> Output: stop accepting new output
+VisionCore -> Output: stop accepting new output
 Output -> TTS: finish pending text / drain generated audio
 TTS --> Output: remaining audio chunks / tts done
 Output -> TTS: close prepared TTS session
@@ -445,13 +445,13 @@ Output -> Stream: finish or cancel speaker stream
 Device -> StreamWs: close downstream speaker connection after playback drained
 Device -> ControlWs: control.audio_session.closed
 ControlWs -> App: close session
-App -> TextCore: close(user_id)
+App -> VisionCore: close(user_id)
 
 @enduml
 
 ```
 
-如果文档渲染环境不支持 `!include`，请直接打开 [vision-realtime-server-side-sequence.puml](vision-realtime-server-side-sequence.puml) 查看完整时序图。
+如果文档渲染环境不支持 `!include`，请直接打开 [Vision实时Pipeline内部时序.puml](Vision实时Pipeline内部时序.puml) 查看完整时序图。
 
 ## 实现约束
 

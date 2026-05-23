@@ -22,7 +22,7 @@ import realtime_agent
 
 ```text
 agent-server/realtime_agent/
-  agent_core/       # Text / Realtime Agent Core
+  agent_core/       # Vision / Omni Agent Core
   asset/            # 资产服务
   audio_pipeline/   # 音频链路
   cli/              # realtime-agent.* 命令

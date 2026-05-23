@@ -384,7 +384,7 @@ agent:
 
 ## Prompt 约束
 
-Text system prompt 需要补充多模态规则：
+Vision system prompt 需要补充多模态规则：
 
 ```text
 当用户问题明确涉及当前画面、图片或视频，而当前消息没有附带视觉输入时，你可以调用 capture_photo 获取当前照片。
@@ -436,8 +436,8 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
 1. `agent.vision.model` 改为 `qwen3.6-flash`。
 2. 增加 `agent.vision.multimodal` 配置。
 3. 预检确认当前 provider/model 支持图片 content block。
-4. Text prompt 增加多模态规则。
-5. Text 工具暴露面移除 `capture_photo` denylist，继续隐藏 `interpret_current_view`、`interpret_image`、`interpret_video`。
+4. Vision prompt 增加多模态规则。
+5. Vision 工具暴露面移除 `capture_photo` denylist，继续隐藏 `interpret_current_view`、`interpret_image`、`interpret_video`。
 
 ### Phase 2：Message 管理和工具结果图片拼接
 
@@ -495,11 +495,11 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
 
 - 状态：已完成。
 - 实现：
-  - `AgentTextConfig` 增加 `multimodal` 配置，运行时同步到 `RealtimeAgentConfig`。
+  - Vision 配置增加 `multimodal` 配置，运行时同步到 `RealtimeAgentConfig`。
   - 示例应用 Vision 主模型切到 `qwen3.6-flash`。
-  - Text prompt 增加 `capture_photo` 和多模态 follow-up 规则。
-  - Text 工具 denylist 移除 `capture_photo`，继续隐藏 `interpret_image`、`interpret_current_view`。
-  - 预检增加 `text_multimodal` 静态检查，确认 provider/model 与多模态配置基本匹配。
+  - Vision prompt 增加 `capture_photo` 和多模态 follow-up 规则。
+  - Vision 工具 denylist 移除 `capture_photo`，继续隐藏 `interpret_image`、`interpret_current_view`。
+  - 预检增加 Vision 多模态静态检查，确认 provider/model 与多模态配置基本匹配。
 - 文件：
   - `agent-server/realtime_agent/config.py`
   - `agent-server/realtime_agent/app.py`
@@ -521,7 +521,7 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
   - `context_sources` 增加 `visual_asset:*` source map，`agent-events.jsonl` 记录 `multimodal.tool_asset.attached`。
 - 文件：
   - `agent-server/realtime_agent/agent_core/multimodal/`
-  - `agent-server/realtime_agent/agent_core/text.py`
+  - `agent-server/realtime_agent/agent_core/vision.py`
   - `agent-server/realtime_agent/agent_core/router.py`
 - 验证：
   - `uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 已通过。
@@ -549,7 +549,7 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
 
 - 状态：待人工验收。
 - 已完成的自动验证：
-  - 单测覆盖 Text 工具循环、图片 follow-up message、配置解析和预检。
+  - 单测覆盖 Vision 工具循环、图片 follow-up message、配置解析和预检。
 - 待人工验收：
   - browser-glass 问“前面有什么”时，确认模型先调用 `capture_photo`。
   - 确认 runs 中最新 `model-request.json` 包含脱敏后的 `image_url` content block 和 `visual_asset:*` source map。

@@ -4,8 +4,8 @@
 
 当前仓库同时支持两条语音交互链路：
 
-- Omni / realtime 链路：`sensor.mic -> Omni Realtime provider -> 原生 audio delta -> actuator.speaker`
-- Vision 链路：`sensor.mic -> ASR -> text LLM -> streaming TTS -> actuator.speaker`
+- Omni Realtime 链路：`sensor.mic -> Omni Realtime provider -> 原生 audio delta -> actuator.speaker`
+- Vision Realtime 链路：`sensor.mic -> ASR -> Vision LLM -> streaming TTS -> actuator.speaker`
 
 Omni 链路把 ASR、turn detection、LLM、TTS 和工具调用时机交给 provider。Vision 链路使用普通视觉语言模型，必须由 SDK 自己编排 turn、工具调用、TTS、播放和打断。
 
@@ -105,7 +105,7 @@ Vision 链路的“实时”不能只表示服务端使用了 streaming API，�
 
 ## 当前代码实现时序
 
-更详细的浏览器 / 服务器边界、浏览器音频前处理、服务器 VAD 目标边界和历史浏览器 VAD 问题，见独立图文：[vision-realtime-browser-server-boundary.md](vision-realtime-browser-server-boundary.md)。
+更详细的浏览器 / 服务器边界、浏览器音频前处理、服务器 VAD 目标边界和历史浏览器 VAD 问题，原先曾拆成独立图文；当前仓库没有保留单独文件，相关语义以本文和 [端侧音频会话标准.md](端侧音频会话标准.md) 为准。
 
 设计边界必须统一：唤醒后进入连续对话，端侧建立音频上行长连接。在释放连接之前，音频持续直达服务器；根据音频流做 speech start、speech end、barge-in、turn commit 等判断都是服务器职责。Omni / realtime 链路由 Omni provider 输出 `input_audio_buffer.speech_started` / `speech_stopped` 等事件；Vision 链路由服务器独立 VAD 服务输出等价事件。浏览器或真实眼镜端只负责唤醒、采集、上行、播放和执行服务器下发的停止播放指令。
 
@@ -184,7 +184,7 @@ participant "stream ws" as StreamWS
 participant "AudioFrameBuffer" as Frame
 participant "Server VAD Service" as VAD
 participant "VisionTurnController" as Turn
-participant "TextResponseWorker" as Resp
+participant "VisionResponseWorker" as Resp
 participant "OutputService" as Out
 participant "control ws" as ControlWS
 participant "speaker playback" as Speaker
@@ -360,7 +360,7 @@ participant "ServerVadService" as VAD
 participant "AsrPipeline" as ASR
 participant "VisionTurnController" as Turn
 queue "response task queue" as Queue
-participant "TextResponseWorker" as Resp
+participant "VisionResponseWorker" as Resp
 participant "OutputService" as Out
 
 Worker -> VAD: append audio frame
@@ -443,11 +443,11 @@ title 目标 Vision 实时语音链路
 participant "AudioPipeline" as Audio
 participant "VisionTurnController" as Turn
 participant "ASR Adapter" as ASR
-participant "TextResponseController" as Resp
+participant "VisionResponseController" as Resp
 participant "ContextCompiler" as Ctx
-participant "TextResponseGate" as Gate
+participant "VisionResponseGate" as Gate
 participant "ToolGateway" as Tool
-participant "TextSpeechController" as Speech
+participant "VisionSpeechController" as Speech
 participant "OutputService" as Out
 
 Audio -> Turn: normalized PCM
@@ -567,7 +567,7 @@ Vision 链路不能把 “tool_call 之前出现的文本” 简单判定为模�
 title 当前已落地 Vision 工具调用与播报顺序
 
 participant "Vision Model" as LLM
-participant "TextResponseGate" as Gate
+participant "VisionResponseGate" as Gate
 participant "ToolGateway" as Tool
 participant "OutputService/TTS" as Out
 database "messages.jsonl" as Msg
@@ -590,8 +590,8 @@ Gate -> Msg: assistant_text.done
 
 实现文件：
 
-- `agent-server/realtime_agent/agent_core/text.py`
-  - `TextResponseGate`：缓冲、逐 delta 实时释放、显式释放和 discard 观测事件。
+- `agent-server/realtime_agent/agent_core/vision.py`
+  - `VisionResponseGate`：缓冲、逐 delta 实时释放、显式释放和 discard 观测事件。
   - `VisionRealtimeAgentCore._set_turn_state()`：Vision turn 状态机事件。
   - `VisionRealtimeAgentCore.interrupt()`：服务端打断收口、vision model cancel 和当前输出取消；不取消 ASR。
 - `agent-server/realtime_agent/server.py`

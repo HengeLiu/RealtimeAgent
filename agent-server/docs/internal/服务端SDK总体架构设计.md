@@ -2,7 +2,7 @@
 
 更新时间：2026-05-15
 
-文档状态：总体架构设计与历史决策记录。本文覆盖了 `realtime-agent` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/device-capability-development.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/context-api.md) 为准。
+文档状态：总体架构设计与历史决策记录。本文覆盖了 `realtime-agent` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/设备能力开发说明.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/上下文设备接口设计.md) 为准。
 
 ## 1. 文档目的
 
@@ -110,7 +110,7 @@ legacy/
 2. Control Service、事件订阅和事件分发。
 3. stream 生命周期协议和 stream 字节传输。
 4. server 侧 stream 归一、模态转换和质量诊断。
-5. Realtime Audio / Text 两类 Agent Core，并允许扩展更多 Agent Core。
+5. Vision Realtime / Omni Realtime 两类 Agent Core，并允许扩展更多 Agent Core。
 6. Agent Loop、Tool、Task、Skill、Memory、MCP 等扩展面。
 7. 输出 stream 仲裁。
 8. 设备级回放和 mock 工具。
@@ -163,7 +163,7 @@ legacy/
 | Stream Service         | 已实现   | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`、`examples/dev-support/app-tests/network/test_network_server_playback.py` 覆盖。                                                                                                                                                                 |
 | Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；Vision 路线可复用 AudioSample 做无头回放，见 `examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
 | Asset Service          | 已实现   | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。                                                                                                                                          |
-| Agent Core             | 部分实现 | Text / Realtime mock 链路、工具发现和 provider schema 已覆盖；VisionRealtimeAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
+| Agent Core             | 部分实现 | Vision / Omni mock 链路、工具发现和 provider schema 已覆盖；VisionRealtimeAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
 | ToolGateway            | 已实现   | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `agent-server/protocol-tests/acceptance/test_auto_discovery_developer_contract.py`、`agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py` 与 `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py` 覆盖。                                                                                                                                                      |
 | Task Engine            | 部分实现 | 已有 `BaseTask`、状态机、TaskEventBridge 和最小执行器；持久化、恢复、超时、并发限制属于 D 线路。                                                                                                                                                                                                                             |
 | Output Service         | 已实现   | 文本输出、原生音频输出、播放仲裁、通知协调和 output stream 已由 `agent-server/protocol-tests/sdk/runtime/test_phase2_providers_output.py` 覆盖。                                                                                                                                                                                                               |
@@ -304,7 +304,7 @@ stream 数据负责字节：
 
 统一使用 stream 不等于所有 stream 都进入同一条实时 Agent 输入链路。
 
-1. `sensor.mic` / `actuator.speaker` 是对话主链路，有专用的音频会话、音频预处理、Realtime Audio Core、Text Core 模态转换和播放仲裁。
+1. `sensor.mic` / `actuator.speaker` 是对话主链路，有专用的音频会话、音频预处理、Omni Realtime Core、Vision Realtime 模态转换和播放仲裁。
 2. `sensor.rgb`、`sensor.tof`、`sensor.imu` 等是对话资产，默认进入资产缓存，供 Tool、Task 或模型上下文按需取用；`sensor.depth` 仅作为旧配置兼容名称。
 3. 如果端侧主动上传资产，server 直接缓存并建立索引。
 4. 如果缓存中没有需要的资产，Tool 通过 `UserDeviceContext` 请求资产；具体 stream 控制事件由 Control Service 生成并下发。
@@ -1329,7 +1329,7 @@ StreamRegistry --> StreamHandle
 
 1. `sensor.mic` 进入 `Audio Pipeline`。
 2. 如果 Agent Core 支持原生音频输入，音频 delta 直连进入 `OmniRealtimeAgentCore`。
-3. 如果 Agent Core 只支持Vision 输入，目标链路是归一后的音频先进入服务器 VAD 和 ASR，再由 `TextTurnBoundary` 根据服务器 `speech_start/speech_end` 完成打断和 turn commit；当前实现仍由 `VisionRealtimeAgentCore` 内部 `AsrPipeline` 临时代管。
+3. 如果 Agent Core 只支持 Vision 输入，目标链路是归一后的音频先进入服务器 VAD 和 ASR，再由 `VisionTurnBoundary` 根据服务器 `speech_start/speech_end` 完成打断和 turn commit；当前实现仍由 `VisionRealtimeAgentCore` 内部 `AsrPipeline` 临时代管。
 4. `actuator.speaker` 从模型原生音频或 streaming TTS 进入 `Output Router` 和 `Playback Arbiter`。
 
 相机、深度相机、IMU、GPS 等不是每轮对话的必需输入，不应默认进入 Agent Core。它们更适合作为对话资产：
@@ -1435,7 +1435,7 @@ Endpoint -> Stream: stream.input.closed(stream_type=sensor.rgb)
 音频链路分两条：
 
 1. Omni 直连链路：`sensor.mic` -> 格式归一 / 质量诊断 -> `OmniRealtimeAgentCore.append_audio()`，turn boundary 由 Omni provider 的 `input_audio_buffer.speech_started/speech_stopped` 等事件决定。
-2. Vision 链路目标：`sensor.mic` -> 格式归一 / server VAD -> ASR / Vision turn controller -> Text response task。当前实现仍由 `VisionRealtimeAgentCore.append_audio_event()` 临时承担 ASR 和 turn commit，后续需要拆分。
+2. Vision 链路目标：`sensor.mic` -> 格式归一 / server VAD -> ASR / Vision turn controller -> Vision response task。当前实现仍由 `VisionRealtimeAgentCore.append_audio_event()` 临时承担 ASR 和 turn commit，后续需要拆分。
 
 ### 9.2 类图
 
@@ -1904,7 +1904,7 @@ ToolCall(
 
 ```text
 1. Agent Core 收到 provider tool call 事件。
-2. RealtimeToolBridge 或 TextToolLoop 解析 tool_name、call_id 和 arguments。
+2. OmniToolBridge 或 VisionToolLoop 解析 tool_name、call_id 和 arguments。
 3. ToolGateway 校验工具是否存在、当前会话是否允许、参数是否符合 input_model。
 4. ToolContextFactory 创建 ToolContext，注入 UserDeviceContext、TaskEngine、MemoryService、MCPGateway、SkillService。
 5. ToolExecutor 按超时、并发、取消策略调用 BaseTool.run()。
@@ -1936,14 +1936,14 @@ class ToolContext:
 4. 如果工具执行会产生长流程，应创建 server 侧 Task，并返回 `task_id` 或状态摘要。
 5. 用户打断时，Agent Core 取消当前模型响应；已开始执行的 Tool 是否取消由 ToolExecutor 和 TaskEngine 根据工具声明决定。
 
-#### 11.2.4 Realtime 与 Text 的差异
+#### 11.2.4 Omni Realtime 与 Vision Realtime 的差异
 
 | 环节             | OmniRealtimeAgentCore                                               | VisionRealtimeAgentCore                                           |
 | ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
-| 工具 schema 提交 | `RealtimeToolBridge` 在 provider session update 时提交。           | `TextToolLoop` 在每次模型请求时提交。                 |
+| 工具 schema 提交 | `OmniToolBridge` 在 provider session update 时提交。           | `VisionToolLoop` 在每次模型请求时提交。                 |
 | 工具调用来源     | provider realtime tool call event。                                  | 视觉语言模型流式响应中的 tool call。                        |
 | 参数增量         | 可能以 delta 形式到达，需要聚合完整 JSON。                           | 可能是完整 JSON，也可能是流式 delta。                   |
-| 结果回填         | `RealtimeToolBridge.submit_tool_result()` 回写 provider session。  | `TextToolLoop` 把结果追加到 messages 后继续模型循环。 |
+| 结果回填         | `OmniToolBridge.submit_tool_result()` 回写 provider session。  | `VisionToolLoop` 把结果追加到 messages 后继续模型循环。 |
 | 输出提示         | 工具进度提示走 `context.devices.submit_text()` 或 Output Service。 | 同左。                                                  |
 
 ### 11.3 OmniRealtimeAgentCore
@@ -2078,7 +2078,7 @@ class AsrPipeline {
   +events()
 }
 
-class TextTurnBoundary {
+class VisionTurnBoundary {
   +decide_commit()
 }
 
@@ -2091,7 +2091,7 @@ class VisionModelAdapter {
   +run_stream()
 }
 
-class TextToolLoop {
+class VisionToolLoop {
   +observe_tool_calls()
   +invoke_tool()
   +continue_model()
@@ -2106,26 +2106,26 @@ class AgentEventRecorder
 class ToolGateway
 
 VisionRealtimeAgentCore --> AsrPipeline
-VisionRealtimeAgentCore --> TextTurnBoundary
+VisionRealtimeAgentCore --> VisionTurnBoundary
 VisionRealtimeAgentCore --> MessageBuilder
 VisionRealtimeAgentCore --> VisionModelAdapter
-VisionRealtimeAgentCore --> TextToolLoop
+VisionRealtimeAgentCore --> VisionToolLoop
 VisionRealtimeAgentCore --> VisionOutputAdapter
 VisionRealtimeAgentCore --> AgentEventRecorder
-TextToolLoop --> VisionModelAdapter
-TextToolLoop --> ToolGateway
+VisionToolLoop --> VisionModelAdapter
+VisionToolLoop --> ToolGateway
 @enduml
 ```
 
 处理流程：
 
 1. `AsrPipeline` 接收 `sensor.mic` stream chunk。
-2. `TextTurnBoundary` 根据服务器 VAD 的 `speech_start/speech_end` 和最大静音时间决定打断旧回复或提交一轮输入；不依赖端侧 VAD 或端侧 commit 作为连续对话默认边界。
+2. `VisionTurnBoundary` 根据服务器 VAD 的 `speech_start/speech_end` 和最大静音时间决定打断旧回复或提交一轮输入；不依赖端侧 VAD 或端侧 commit 作为连续对话默认边界。
 3. `AsrPipeline` 输出最终 transcript，也可输出转写增量用于日志。
 4. `MessageBuilder` 将 transcript、近期 messages、memory、skill、设备上下文组装成模型输入。
-5. `TextToolLoop` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema。
+5. `VisionToolLoop` 通过 `ToolGateway` 发现可用工具并生成 provider tool schema。
 6. `VisionModelAdapter` 以流式方式调用视觉语言模型。
-7. `TextToolLoop` 观察工具调用，调用 `ToolGateway`，再继续模型循环。
+7. `VisionToolLoop` 观察工具调用，调用 `ToolGateway`，再继续模型循环。
 8. 模型产生 `vision_delta` 时，`VisionOutputAdapter` 立即映射为统一 `assistant_text.delta`。
 9. `assistant_text.delta` 交给 Output Service，由其内部 Output Router 调用 Streaming TTS 并生成 `assistant_audio.delta`。
 10. 完整文本和音频索引写入 `UserMessageStore` 和 runs 产物。
@@ -2134,7 +2134,7 @@ TextToolLoop --> ToolGateway
 
 1. `AsrPipeline` 可给 `HybridAgentCore` 使用。
 2. `MessageBuilder` 可给所有文本主导模型使用。
-3. `TextToolLoop` 可给文本、视觉文本、多 agent 编排复用。
+3. `VisionToolLoop` 可给 Vision Realtime 和其他文本主导的多 agent 编排复用。
 4. Streaming TTS 能力由 Output Router 统一持有，可给 task notification、tool progress 复用。
 
 ### 11.5 未来 Agent Core 扩展
@@ -2222,7 +2222,7 @@ server 可能同时产生多类输出：
 ```text
 Realtime provider event -> OmniOutputAdapter -> assistant_audio.delta -> Output Router -> Playback Arbiter -> Stream Service
 
-Text model delta -> VisionOutputAdapter -> assistant_text.delta -> Output Router -> Streaming TTS -> Playback Arbiter -> Stream Service
+Vision model delta -> VisionOutputAdapter -> assistant_text.delta -> Output Router -> Streaming TTS -> Playback Arbiter -> Stream Service
 ```
 
 输出链路时序：
@@ -2231,24 +2231,24 @@ Text model delta -> VisionOutputAdapter -> assistant_text.delta -> Output Router
 @startuml
 title 输出链路细化时序
 
-participant "OmniRealtimeAgentCore" as RealtimeCore
-participant "OmniOutputAdapter" as RealtimeAdapter
-participant "VisionRealtimeAgentCore" as TextCore
-participant "VisionOutputAdapter" as TextAdapter
+participant "OmniRealtimeAgentCore" as OmniCore
+participant "OmniOutputAdapter" as OmniAdapter
+participant "VisionRealtimeAgentCore" as VisionCore
+participant "VisionOutputAdapter" as VisionAdapter
 participant "Output Router" as Router
 participant "Streaming TTS" as TTS
 participant "Playback Arbiter" as Arbiter
 participant "Stream Service" as Stream
 participant Endpoint
 
-RealtimeCore -> RealtimeAdapter: provider audio_delta
-RealtimeAdapter -> Router: assistant_audio.delta
+OmniCore -> OmniAdapter: provider audio_delta
+OmniAdapter -> Router: assistant_audio.delta
 Router -> Arbiter: NativeAudioOutputSource
 Arbiter -> Stream: open actuator.speaker stream
 Stream -> Endpoint: audio chunks
 
-TextCore -> TextAdapter: model vision_delta
-TextAdapter -> Router: assistant_text.delta
+VisionCore -> VisionAdapter: model vision_delta
+VisionAdapter -> Router: assistant_text.delta
 Router -> TTS: append_vision_delta
 TTS -> Router: assistant_audio.delta
 Router -> Arbiter: StreamingTtsOutputSource
@@ -3755,14 +3755,14 @@ asset:
 # agent 控制 Agent Core 选择和模型 provider。
 agent:
   # Agent Core 模式。auto 根据模型能力和端侧音频会话自动选择。
-  # 可选 auto / omni / text / custom。
+  # 可选 auto / omni / vision / custom。
   mode: "auto"
   # 自定义 Agent Core 的 Python 导入路径，仅 mode=custom 时使用。
   custom_core: ""
-  realtime:
-    # Realtime provider。可选 qwen / openai / custom。
+  omni:
+    # Omni Realtime provider。可选 qwen / openai / custom。
     provider: "qwen"
-    # Realtime 模型名。
+    # Omni Realtime 模型名。
     model: "qwen3.5-omni-plus-realtime"
     # turn detection 归属。provider 表示使用模型服务内置 turn detection。
     # 连续对话不允许 endpoint 拥有 turn boundary。
@@ -3770,11 +3770,11 @@ agent:
     turn_detection: "provider"
     # 模型输出音色。取值由 provider 决定。
     voice: "Tina"
-    # Realtime 会话空闲超时秒数。
+    # Omni Realtime 会话空闲超时秒数。
     session_idle_timeout_seconds: 60
     # 自定义 provider adapter 导入路径，仅 provider=custom 时使用。
     custom_adapter: ""
-  text:
+  vision:
     # 视觉语言模型 provider。可选 dashscope-compatible / openai-compatible / custom。
     provider: "dashscope-compatible"
     # 视觉语言模型名。
@@ -4267,7 +4267,7 @@ uv run realtime-agent.playback.glass --config examples/dev-support/devices/pytho
 | 端侧 AEC 效果不稳定        | ESP32、Web、iOS 表现不同。                         | 能力声明 + server 侧质量诊断 + AEC 试验固件持续回放。                  |
 | 下行输出仲裁复杂           | Agent、Task、安全提醒同时抢播。                    | 从第一阶段就实现 `Playback Arbiter`，业务不得直接播。                |
 | Tool 副作用和用户打断冲突  | 用户打断时工具可能已执行。                         | 引入 `generation_id`、工具副作用日志和可取消任务策略。               |
-| 过早抽象 provider          | 支持太多模型会拖慢落地。                           | 第一阶段只做 mock/text，第二阶段只优先 Qwen Omni + 一套视觉语言模型。      |
+| 过早抽象 provider          | 支持太多模型会拖慢落地。                           | 第一阶段只做 mock/Vision，第二阶段只优先 Qwen Omni + 一套视觉语言模型。      |
 
 ## 24. 参考资料
 

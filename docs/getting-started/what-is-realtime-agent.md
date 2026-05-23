@@ -74,7 +74,7 @@ Server SDK 位于 `agent-server/realtime_agent/`，负责大模型运行时、�
 
 ```text
 agent-server/realtime_agent/
-  agent_core/       # Text / Realtime Agent Core
+  agent_core/       # Vision / Omni Agent Core
   audio_pipeline/   # ASR、TTS 和音频输入输出链路
   control/          # 设备注册、连接状态和控制通讯
   stream/           # 音频、图片、视频和传感器数据流
@@ -366,4 +366,4 @@ asyncio.run(main())
 - [第一个 Tool 和 Task](../tutorials/build-first-capability.md)
 - [跨设备本地联调](../how-to/cross-device-local-debug.md)
 - [项目结构](../reference/project-layout.md)
-- [设备能力与 Context API 开发说明](../../agent-server/docs/how-to/device-capability-development.md)
+- [设备能力与 Context API 开发说明](../../agent-server/docs/how-to/设备能力开发说明.md)

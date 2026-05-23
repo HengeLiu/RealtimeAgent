@@ -131,7 +131,7 @@ Pipeline --> App: PipelineEvent.session_closed
 
 note over App,Pipeline
 这张图只描述 pipeline 外部契约。
-Text 和 Omni 的内部实现分别在独立 pipeline 内部时序图中描述。
+Vision 和 Omni 的内部实现分别在独立 pipeline 内部时序图中描述。
 end note
 
 @enduml

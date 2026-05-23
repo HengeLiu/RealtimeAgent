@@ -126,11 +126,11 @@ sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuato
 4. `events.jsonl`
 5. `system-events.jsonl`
 
-详细说明见 [runs 目录产物说明](../../agent-server/docs/how-to/inspect-runs-artifacts.md)。
+详细说明见 [runs 目录产物说明](../../agent-server/docs/how-to/运行产物排查说明.md)。
 
 ## 下一步
 
 - 想写业务能力，读 [第一个 Tool 和 Task](../tutorials/build-first-capability.md)。
-- 想接入端侧设备，读 [设备能力与 Context API 开发说明](../../agent-server/docs/how-to/device-capability-development.md)。
+- 想接入端侧设备，读 [设备能力与 Context API 开发说明](../../agent-server/docs/how-to/设备能力开发说明.md)。
 - 想理解命令行入口，读 [CLI 参考](../reference/cli.md)。
 - 想写独立端侧通讯代码，读 `devices/<language>/README.md`。

@@ -58,9 +58,9 @@ package "L3 应用层测试" {
 }
 
 package "L2 大模型接入层测试" {
-  [真实 Text Provider]
+  [真实 Vision Provider]
   [真实 ASR/TTS]
-  [真实 Realtime Provider]
+  [真实 Omni Realtime Provider]
   [延迟与稳定性观测]
 }
 
@@ -86,9 +86,9 @@ package "P0 协议资产检查" {
 [Server SDK] --> [事件处理规范]
 [Device SDK] --> [事件处理规范]
 [事件处理规范] --> [Schema]
-[真实 Text Provider] --> [Server SDK]
+[真实 Vision Provider] --> [Server SDK]
 [真实 ASR/TTS] --> [Server SDK]
-[真实 Realtime Provider] --> [Server SDK]
+[真实 Omni Realtime Provider] --> [Server SDK]
 @enduml
 ```
 
@@ -484,7 +484,7 @@ SDK 层回归测试必须覆盖：
 | Vision provider | OpenAI-compatible、DashScope-compatible、streaming text、tool calling。 |
 | ASR provider | 固定 WAV / PCM 输入、final transcript、句子边界、超时。 |
 | TTS provider | streaming TTS、首音频延迟、PCM 格式、finish、cancel。 |
-| Realtime provider | session open、音频输入、audio delta、tool call、interrupt、close。 |
+| Omni Realtime provider | session open、音频输入、audio delta、tool call、interrupt、close。 |
 | 稳定性 | 连续短问答、连续 tool call、连续 realtime session。 |
 | 性能 | 首 token、首音频、总耗时、失败率。 |
 | 观测 | `result.json`、provider events、WAV、messages、model request。 |
@@ -1107,7 +1107,7 @@ uv run python -m pytest -m model_provider -q
 1. 没有 API Key 时 L2 自动 skip，不影响默认本地回归。
 2. 有 API Key 时 L2 产出清晰诊断和 artifact。
 3. L2 失败信息包含 provider、model、endpoint、timeout、fallback policy。
-4. text、ASR、TTS、Realtime 至少各有一个真实 provider smoke。
+4. Vision、ASR、TTS、Omni Realtime 至少各有一个真实 provider smoke。
 5. tool calling 至少有一个真实 provider 最小测试。
 6. L2 报告记录 provider、model、首 token、首音频、总耗时、错误和生成音频路径。
 
@@ -1379,7 +1379,7 @@ uv run python -m pytest -m replay -q
   - `agent-server/model-provider-tests/artifacts.py`
   - `agent-server/tests/__init__.py`
   - `agent-server/protocol-tests/sdk/runtime/test_server_sdk_protocol_integration.py`
-  - `agent-server/realtime_agent/agent_core/realtime.py`
+  - `agent-server/realtime_agent/agent_core/omni.py`
   - `agent-server/realtime_agent/config.py`
   - `agent-server/realtime_agent/app.py`
   - `conftest.py`
@@ -1388,8 +1388,8 @@ uv run python -m pytest -m replay -q
   - `uv run python -m pytest -m model_provider -q`，结果：`4 passed, 1 failed`。
 - 运行证据：
   - `runs/provider-tests/latest/asr-result.json`
-  - `runs/provider-tests/latest/text-result.json`
-  - `runs/provider-tests/latest/text-tool-call-result.json`
+  - `runs/provider-tests/latest/vision-result.json`
+  - `runs/provider-tests/latest/vision-tool-call-result.json`
   - `runs/provider-tests/latest/tts-result.json`
   - `runs/provider-tests/latest/tts-output.wav`
   - `runs/provider-tests/latest/realtime-result.json`
@@ -1454,7 +1454,7 @@ uv run python -m pytest -m replay -q
   - L3 自动化仍不等价于真机验收；browser 摄像头权限、iOS 真机、ESP32 真机和真实 peer video 视觉效果仍需要人工 checklist。
 - 风险：
   - 当前 L3 自动化已覆盖 for-blind-app 真实 WAV 回放，但浏览器摄像头权限、iOS 真机和 ESP32 真机仍需要人工 checklist。
-  - 当前 ESP32-S3 network smoke 使用 Text/mock provider，验证协议闭环和端侧 AEC 计数，不代表真实硬件音频效果。
+  - 当前 ESP32-S3 network smoke 使用 Vision/mock provider，验证协议闭环和端侧 AEC 计数，不代表真实硬件音频效果。
 
 ### 后续阶段
 

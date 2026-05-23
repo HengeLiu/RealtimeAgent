@@ -4,16 +4,16 @@
 
 ## How-to
 
-- [设备能力与 Context API 开发说明](how-to/device-capability-development.md)
-- [runs 目录产物说明](how-to/inspect-runs-artifacts.md)
+- [设备能力与 Context API 开发说明](how-to/设备能力开发说明.md)
+- [runs 目录产物说明](how-to/运行产物排查说明.md)
 
 ## Reference
 
-- [Context 与设备 API 设计说明](reference/context-api.md)
+- [Context 与设备 API 设计说明](reference/上下文设备接口设计.md)
 
 ## Internal
 
 内部文档只作为维护 `agent-server/realtime_agent` 时的设计参考；开发和联调以 How-to 与 Reference 为准。
 
-- [SDK 照片资产处理链路设计](internal/photo-asset-pipeline-design.md)
-- [SDK 照片资产处理链路开发计划](internal/photo-asset-pipeline-implementation-plan.md)
+- [SDK 照片资产处理链路设计](internal/照片资产处理链路设计.md)
+- [SDK 照片资产处理链路开发计划](internal/照片资产处理链路实施计划.md)
