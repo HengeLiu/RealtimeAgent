@@ -39,6 +39,7 @@
 - [端侧 App 接入指南](reference/device-app-integration.md)
 - [设备事件行为标准](reference/device-event-behavior.md)
 - [端侧 SDK 事件行为实现蓝图](reference/device-sdk-event-blueprint.md)
+- [Swift 端 Device SDK 与 Device App 开发计划](reference/swift-device-sdk-and-app-development-plan.md)
 - [realtime-agent 通讯协议](../protocol/docs/protocol.md)
 - [Context 与设备 API 设计说明](../agent-server/docs/reference/上下文设备接口设计.md)
 
