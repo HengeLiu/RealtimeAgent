@@ -65,7 +65,7 @@ realtime-agent.v1
 | --- | --- | --- |
 | `version` | 是 | 协议版本，当前为 `realtime-agent.v1`。 |
 | `event_id` | 是 | 事件唯一 ID。 |
-| `event_name` | 是 | 事件名，必须在公共事件名清单中。 |
+| `event_name` | 是 | 事件名。标准事件必须在公共事件名清单中；业务扩展事件使用 `custom.*` 命名空间，并需要通过协议 schema 和路由白名单显式放行。自定义业务命令必须使用 `custom.command.*` 或普通 `custom.<domain>.*`，不能复用标准 `command.*` 或 `stream.output.*`。 |
 | `timestamp_ms` | 是 | 事件产生时间，毫秒时间戳。 |
 | `user_id` | 是 | 用户标识。 |
 | `producer_id` | 是 | 事件生产者，端侧通常是 `device_id`。 |
@@ -175,7 +175,7 @@ command.failed
 
 ## 输入 stream 生命周期
 
-server 请求端侧打开输入 stream：
+server 请求端侧打开持续输入 stream：
 
 ```text
 stream.control.open.requested
@@ -198,25 +198,27 @@ participant Device
 
 Server -> Device: stream.control.open.requested
 Device --> Server: stream.input.opened
-Device -> Server: /ws/stream chunk(s)
+loop fixed frequency chunks
+  Device -> Server: /ws/stream chunk
+end
+Server -> Device: stream.control.close.requested
 Device --> Server: stream.input.closed
 @enduml
 ```
 
-`sensor.rgb` 采集请求 payload 可以携带照片资产策略字段，但不能携带图片 bytes：
+`sensor.rgb` 视频输入 payload 可以携带采集策略字段，但不能携带图片 bytes。实时视频链路使用 `mode=continuous`，open 后按固定频率持续推帧，close 后停止：
 
 ```json
 {
   "stream_type": "sensor.rgb",
-  "mode": "single",
+  "mode": "continuous",
   "format": "jpeg",
   "request_id": "asset_req_xxx",
   "correlation_id": "turn_or_task_id",
   "turn_id": "turn_xxx",
   "ttl_seconds": 5,
-  "capture_reason": "capture_photo",
+  "capture_reason": "realtime_video",
   "frequency_hz": 1,
-  "sample_count": 1,
   "direction": "front"
 }
 ```
@@ -227,6 +229,7 @@ Device --> Server: stream.input.closed
 2. `direction` 第一阶段默认 `front`；未来可以由端侧 IMU / 姿态融合解析后写入。
 3. `correlation_id` 可关联连续采样或 Task 运行实例。
 4. 新字段均为可选字段，旧端侧忽略未知字段时不应失败。
+5. `sample_count` 只用于 `mode=single` 或有限帧采样；实时视频输入不应设置固定 `sample_count`，应由 close 事件结束。
 
 ## 输出 stream 生命周期
 

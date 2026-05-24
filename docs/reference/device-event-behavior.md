@@ -1,0 +1,360 @@
+# 设备事件行为标准
+
+本文整理 server 与 device 之间三类基础功能的标准事件行为：设备注册、开启实时对话、设备消费其他 server 事件。结论以当前主线实现和 `examples/dev-support/devices/browser-glass/index.html` 的真实麦克风实时对话链路为主要参考。
+
+## 1. 设计边界
+
+server 与 device 的通讯分两条通道：
+
+| 通道 | 地址 | 内容 |
+| --- | --- | --- |
+| control WebSocket | `/ws/control` | JSON `Event`，用于注册、心跳、会话、命令、stream 生命周期控制和回执。 |
+| stream WebSocket | `/ws/stream?device_id=<device_id>` | 二进制 `StreamChunk`，用于麦克风、图片、音频播放等媒体数据。 |
+
+控制事件里不能放音频、图片、视频等大字节数据。大字节数据必须走 stream WebSocket 或资产服务。
+
+`sensor.mic` 和 `actuator.speaker` 属于系统音频主链路，不作为普通 `supports` 能力声明：
+
+- `properties.realtime_agent.audio_input=sensor.mic` 表示设备可以作为系统麦克风输入端。
+- `properties.realtime_agent.audio_output=actuator.speaker` 表示设备可以作为系统扬声器输出端。
+- 普通视觉、执行器能力仍放在结构化 `supports.sensors` / `supports.actuators` 中，例如 `rgb`、`vibrator`。
+
+## 2. 设备注册
+
+标准动作：
+
+1. App 通过 Device SDK 配置设备身份、启用的硬件能力和自定义事件 handler。
+2. SDK 根据配置生成设备 profile 和注册 payload。
+3. SDK 建立 `/ws/control`。
+4. SDK 发送 `control.device.register.requested`。
+5. server 处理注册请求。
+6. server 建立该设备后续可消费的事件范围。
+7. server 返回 `control.device.registered` 或 `control.device.register.failed`。
+8. SDK 收到 `control.device.registered` 后启动周期心跳 `control.device.heartbeat.received`。
+
+App 开发者不应该手写注册 JSON。注册事件、`supports`、`properties` 和心跳都由 Device SDK 根据配置自动生成。
+
+目标 SDK 使用形态：
+
+```text
+sdk = DeviceClient(
+  device_id="dev-browser-glass-001",
+  user_id="user-browser-glass-001",
+  name="浏览器调试设备",
+  runtime=Runtime.browser(),
+  audio_input=AudioInput.enabled(),
+  camera=Camera.enabled(),
+  speaker=Speaker.enabled(buffer=PlaybackBuffer.default())
+)
+
+sdk.on_custom_command("haptic.vibrate", handleVibrate)
+sdk.on_event("custom.navigation.route.updated", handleRouteUpdated)
+
+sdk.start()
+```
+
+SDK 内部生成的注册 payload 必须使用结构化能力，不允许生成旧 `routes` 或旧 `capabilities`。例如启用 camera 时，SDK 自动生成 `supports.sensors[].type=rgb`；启用 audio input / speaker 时，SDK 自动生成对应的系统音频 `properties`。完整 JSON 信封只放在通讯协议和 SDK 实现蓝图中，作为 SDK 开发者和协议测试参考，不作为 App 接入方式。
+
+```plantuml
+@startuml
+participant "Device App" as App
+participant "Device SDK" as SDK
+participant Server
+
+App -> SDK: configure device and start()
+SDK -> SDK: build device profile and registration payload
+SDK -> Server: open /ws/control
+SDK -> Server: control.device.register.requested
+alt success
+  Server -> SDK: control.device.registered
+  SDK -> App: onRegistered()
+  loop every heartbeat interval
+    SDK -> Server: control.device.heartbeat.received
+  end
+else failed
+  Server -> SDK: control.device.register.failed
+  SDK -> App: onRegisterFailed(reason)
+end
+@enduml
+```
+
+## 3. 开启实时对话
+
+实时对话不是 device 自己直接进入对话状态，而是先由唤醒事件触发 server 下发音频会话打开请求。会话打开后，对话过程同时包含三条主链路：麦克风音频上行、可选视频上行、server 音频下行播放。
+
+端侧 SDK 负责封装硬件接入、协议状态机和 stream chunk。麦克风、相机、喇叭默认禁用；App 必须显式 enable 后，SDK 才会使用平台默认 hardware adapter 自动注册这些能力。App 也可以覆盖默认 adapter，例如使用外接麦克风、测试音频文件、图片样例、自定义播放器。SDK 的职责是把输入字节或帧封装成 `StreamChunk` 写入 `/ws/stream`，以及把 server 下发的 speaker output chunk 写入播放 buffer 和 speaker sink。
+
+目标 SDK 使用形态：
+
+```text
+sdk = DeviceClient(
+  audio_input=AudioInput.enabled(),
+  camera=Camera.enabled(),
+  speaker=Speaker.enabled(buffer=PlaybackBuffer.default())
+)
+
+sdk.on_custom_command("haptic.vibrate", handleVibrate)
+sdk.on_event("custom.navigation.route.updated", handleRouteUpdated)
+
+sdk.start()
+```
+
+显式 enable 后，App 不需要在业务代码里手写 WebSocket 发送麦克风字节，也不需要手写 WebSocket 接收 speaker 字节。平台默认 adapter 可用时，App 甚至不需要手动绑定硬件；只有默认 adapter 不适用时才覆盖 source/sink。
+
+标准动作：
+
+1. device 已完成注册和心跳。
+2. 用户触发唤醒，device 发送 `control.user.wake.detected`。
+3. server 向设备下发 `control.audio_session.open.requested`。
+4. device 确认可以进入音频上行状态，建立或复用 `/ws/stream?device_id=<device_id>`，并确认 SDK 已启用且可读取 `sensor.mic`。
+5. device 发送 `control.audio_session.opened`，表示端侧已经接受本次音频会话打开请求；payload 中携带本次 `sensor.mic` 上行 stream 标识和音频格式。
+6. SDK 从绑定的 `sensor.mic` source 按 `chunk_ms` 读取 PCM 字节，封装为 `StreamChunk sensor.mic`，通过 stream WebSocket 持续发送。
+7. 麦克风硬件或系统录音资源由端侧自行决定何时打开；语音唤醒设备可以在注册完成后就保持麦克风采集。
+8. server 根据连续音频流自行判断语音开始、语音结束和 turn 边界；device 不做 VAD，不用 `final=True` 表达一句话结束。
+9. 如果实时对话需要视频输入，server 下发一次 `stream.control.open.requested`，声明 `stream_type=sensor.rgb`、`mode=continuous`、`frequency_hz` 和格式参数。
+10. device 打开或复用 SDK 默认相机 adapter，或 App 覆盖的摄像头、视频文件、图片样例 source，发送 `stream.input.opened`，再按 `frequency_hz` 读取帧并通过 stream WebSocket 持续上传 `sensor.rgb` 视频帧 chunk。
+11. 视频输入链路保持打开，直到 server 下发 `stream.control.close.requested` 或音频会话关闭；device 停止采集后发送 `stream.input.closed`。采集失败时发送 `stream.input.failed`。
+12. 当 server 需要播放模型回复音频时，下发 `stream.output.open.requested (actuator.speaker)`；SDK 确认本地 `actuator.speaker` sink 已经可写，随后接收 stream WebSocket 下发的 `actuator.speaker` chunk。
+13. SDK 负责维护内置的 speaker 播放 buffer，并按配置的播放启动水位线、高水位线和低水位线决定何时开始播放、何时暂停或恢复 server 下行写出。App 开发者只配置 SDK 的播放 buffer 参数，不在业务 App 中实现这套 buffer。
+14. 播放期间麦克风仍持续上行；端侧不判断用户是否开始说话，也不判断是否构成打断。端侧只需要响应 server 下发的 `stream.output.cancel.requested`。
+15. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.closed` 或 `stream.output.cancelled`。
+16. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.close.requested` 或 `stream.output.finish.requested`；device 等 SDK 播放 buffer 和本地 sink drain 完成后发送 `stream.output.closed`。
+17. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和视频输入，等待下行播放 drain 后，发送 `control.audio_session.closed`。
+
+系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立上行 stream 通道并发送 `control.audio_session.opened`，再持续发二进制 chunk；不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
+
+麦克风的最小契约是：SDK 在显式启用音频输入后，必须能从默认 adapter 或 App 覆盖的 source 读取 `codec/sample_rate/channels/chunk_ms` 一致的音频字节。source 可以是真实系统麦克风、浏览器 `MediaStream`、音频文件或测试样例。SDK 不关心底层硬件具体打开时机，但在 `control.audio_session.opened` 后必须能持续读取并上传。
+
+浏览器参考端的视频输入使用同一条 stream WebSocket 上传 `sensor.rgb`。如果已经选择视频或图片样例，端侧优先从样例按固定频率抽帧；没有样例时再打开摄像头按固定频率采集。视频帧、图片字节同样不能放进 control event。`stream.control.open.requested` 表示打开一条可维护的视频输入链路，不表示 server 每次需要一张照片时重新请求。
+
+系统音频下行使用 `actuator.speaker` output stream。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
+
+喇叭的最小契约是：SDK 在显式启用 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App 覆盖的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain`、`cancel`、`close` 能力。`stream.output.closed` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 close 时立即发送。
+
+端侧 speaker 播放 buffer 由 SDK 实现，而不是由业务 App 或 speaker sink 实现。App 开发者只需要在 SDK 初始化时配置 buffer 大小和水位线，用来在播放流畅度和内存占用之间取舍：
+
+- SDK buffer 达到高水位线：SDK 发送 `downstream.pause.requested`，payload 至少包含当前 `stream_id`、`buffered_ms`、`high_watermark_ms` 和 `reason="speaker_buffer_high"`。
+- SDK buffer 下降到低水位线：SDK 发送 `downstream.resume.requested`，payload 至少包含当前 `stream_id`、`buffered_ms`、`low_watermark_ms` 和 `reason="speaker_buffer_low"`。
+- 暂停期间 SDK 继续把本地 buffer 中的数据写入 speaker sink；server 不应继续向端侧写出新的 speaker chunk，而应等 resume 后再恢复写出。
+- cancel 优先级高于水位线。收到 `stream.output.cancel.requested` 后，SDK 必须停止播放并清空本地 buffer，不再等待低水位线。
+
+打断不是音频会话关闭。播放期间端侧仍只负责持续上传 `sensor.mic` chunk；端侧不需要知道 server 为什么发出 `stream.output.cancel.requested`。收到该事件后，端侧停止正在播放的下行音频并回执。
+
+```plantuml
+@startuml
+participant Device
+participant Server
+
+Device -> Server: control.user.wake.detected
+Server -> Device: control.audio_session.open.requested
+Device -> Server: open /ws/stream?device_id=...
+Device -> Server: control.audio_session.opened
+loop 20ms chunk
+  Device -> Device: read mic source
+  Device -> Server: StreamChunk sensor.mic
+end
+opt visual input requested
+  Server -> Device: stream.control.open.requested (sensor.rgb, mode=continuous, frequency_hz)
+  Device -> Device: open camera or visual sample
+  Device -> Server: stream.input.opened (sensor.rgb)
+  loop fixed frequency video frames
+    Device -> Server: StreamChunk sensor.rgb
+  end
+  Server -> Device: stream.control.close.requested (sensor.rgb)
+  Device -> Server: stream.input.closed (sensor.rgb)
+end
+opt assistant audio output
+  Server -> Device: stream.output.open.requested (actuator.speaker)
+  Server -> Device: StreamChunk actuator.speaker
+  Device -> Device: drain SDK playback buffer to speaker sink
+  Device -> Server: stream.output.started
+  alt output cancel requested
+    Server -> Device: stream.output.cancel.requested
+    Device -> Device: stop speaker and clear SDK playback buffer
+    Device -> Server: stream.output.closed or stream.output.cancelled
+  else response audio completed
+    Server -> Device: stream.output.close.requested
+    Device -> Device: drain SDK playback buffer and speaker sink
+    Device -> Server: stream.output.closed
+  end
+end
+Server -> Device: control.audio_session.close.requested
+Device -> Device: close audio session, drain playback
+Device -> Server: control.audio_session.closed
+@enduml
+```
+
+### 3.1 音频下行播放与水位线流控
+
+音频下行播放单独作为一条子链路维护。`stream.output.open.requested` 只表示 server 准备向端侧写出 speaker 音频；真正的播放节奏由端侧 SDK 的播放 buffer 和本地 speaker sink 共同决定。
+
+SDK 内置播放 buffer，App 不需要自己实现接收队列、水位线判断或 `downstream.pause/resume` 事件。App 只在初始化 SDK 时配置 buffer 参数，例如启动播放水位线、低水位线、高水位线和最大 buffer 时长；SDK 根据这些参数向 server 反馈暂停或恢复下行写出。
+
+```plantuml
+@startuml
+participant Device
+participant Server
+
+Server -> Device: stream.output.open.requested (actuator.speaker)
+Device -> Device: prepare SDK playback buffer
+Device -> Device: prepare bound speaker sink
+loop downstream audio chunks
+  Server -> Device: StreamChunk actuator.speaker
+  Device -> Device: enqueue SDK playback buffer
+  opt buffer reaches start watermark
+    Device -> Device: start draining SDK buffer to speaker sink
+    Device -> Server: stream.output.started
+  end
+  opt buffer reaches high watermark
+    Device -> Server: downstream.pause.requested (buffered_ms, high_watermark_ms)
+    Server -> Server: pause downstream writes and buffer output payload
+  end
+  opt buffer drains to low watermark
+    Device -> Server: downstream.resume.requested (buffered_ms, low_watermark_ms)
+    Server -> Device: buffered StreamChunk actuator.speaker
+  end
+end
+alt output cancel requested
+  Server -> Device: stream.output.cancel.requested
+  Device -> Device: stop speaker sink and clear SDK playback buffer
+  Device -> Server: stream.output.closed or stream.output.cancelled
+else response audio completed
+  Server -> Device: stream.output.close.requested or stream.output.finish.requested
+  Device -> Device: drain SDK playback buffer and speaker sink
+  Device -> Server: stream.output.closed
+end
+@enduml
+```
+
+## 4. 设备消费其他 server 事件
+
+本节只定义注册、实时对话主链路之外的 server 事件。device 只消费自己通过注册路由订阅到的事件。标准事件按标准生命周期回执；`custom.*` 事件不强制标准回执，App 如需回报业务结果，应发送另一个 `custom.*` 事件。
+
+严格按“前三章没有讲过的新 server -> device 事件名”计算，标准协议事件不应该在本节继续扩展含义。`command.requested` 属于标准命令事件族；`stream.output.open.requested` / `stream.output.close.requested` / `stream.output.cancel.requested` 属于标准 output stream 生命周期，已经在第 3 节作为 `actuator.speaker` 下行播放生命周期讲过。为了避免和这些内置事件族冲突，业务扩展必须使用 `custom.*` 事件名。
+
+端侧 SDK 的事件分发必须使用明确的命名空间隔离，不能只靠“未命中内置 handler 再兜底”这种隐式约定。标准事件继续使用 `control.*`、`stream.*`、`command.*`、`system.*` 等命名空间；所有业务扩展或 App 自定义事件必须使用 `custom.*` 命名空间。
+
+SDK 路由规则：
+
+1. `event_name` 以 `custom.` 开头：SDK 不进入任何标准内置状态机，只进入自定义事件分发器。
+2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、实时视频、speaker 播放、标准命令等内置状态机。
+3. 标准事件不能再投递给自定义 `on_event`。比如 `stream.output.open.requested (actuator.speaker)` 只能进入第 3 节的 speaker 播放链路，不应再触发自定义事件处理。
+
+未来端侧 SDK 应提供的额外消费入口如下：
+
+| server 事件 | 目标 SDK 消费方式 | 含义 | 端侧动作 |
+| --- | --- | --- | --- |
+| `custom.command.requested` | `on_custom_command(...)`；也可以用 `on_event(...)` | 业务自定义的低频端侧动作，例如业务模式切换、peer video 控制、自定义硬件动作 | 执行业务命令；如需回报业务结果，使用 `ctx.emit("custom.<domain>.<event>", payload)` 发送自定义事件 |
+| 其他 `custom.<domain>.*` | `on_event(...)` | 项目扩展事件或 App 自定义事件 | App 自己解释 payload；如事件有生命周期要求，必须按自定义事件自己的协议回执 |
+
+实时视频输入的 `stream.control.open.requested (sensor.rgb)` / `stream.control.close.requested (sensor.rgb)` 已在第 3 节定义，不在本节重复。实时音频会话的 `control.audio_session.*` 也由第 3 节定义。
+
+自定义事件命名建议使用 `custom.<app_or_domain>.<event_name>`，必要时追加状态后缀，例如：
+
+```json
+{
+  "event_name": "custom.navigation.route.updated",
+  "payload": {
+    "route_id": "route_001",
+    "distance_m": 120
+  }
+}
+```
+
+`custom.*` 事件不能伪装成标准事件生命周期。`custom.command.*` 是独立的自定义事件族，只用于业务扩展；不能替代标准 `command.*`。speaker 音频播放永远使用标准 `stream.output.* (actuator.speaker)` 链路。非音频业务动作优先使用 `custom.command.requested` 或普通 `custom.<domain>.*` 事件，不暴露 `custom.output.*` 作为 App 开发者主路径。
+
+这是后续协议目标设计。落地实现时需要同步更新事件 schema、server 路由白名单和端侧 SDK 路由逻辑，允许 `custom.*` 事件名通过校验和订阅。
+
+文档中的 `on_event(...)`、`on_custom_command(...)` 表示 SDK 暴露给 App 的公开注册 API；`handle*` / `dispatch*` 只表示 SDK 内部状态机和路由函数，不是端侧 App 开发者直接实现的 API。
+
+### 4.1 自定义命令事件
+
+`custom.command.requested` 用于低频、离散、以业务语义为中心的端侧动作，例如：
+
+- 震动一次：`payload.command="haptic.vibrate"`。
+- 切换端侧模式：例如进入低功耗、静音、引导模式。
+- 启动或停止本地业务能力：例如 peer video sender / receiver、本地导航、本地推理任务。
+
+这类事件不承载媒体数据，也不要求后续一定有 stream chunk。payload 只描述命令名、参数和关联 ID。SDK 不强制 App 返回固定生命周期事件；如需回报业务结果，App 通过 `ctx.emit(...)` 发送自定义事件。
+
+标准动作：
+
+1. server 下发 `custom.command.requested`。
+2. handler 执行业务动作。
+3. 如果需要告诉 server 业务结果，handler 调用 `ctx.emit("custom.<domain>.<event>", payload)`。
+
+### 4.2 未来 SDK 消费方式示例
+
+以下示例是目标 SDK 设计，不表示当前代码已经全部实现。设计目标是各语言 SDK 都能用 `on_event` 或更语义化的 `on_*` 入口直接消费事件，不要求业务代码手写 control WebSocket 分发。
+
+#### Python
+
+```python
+async def handle_vibrate(ctx):
+    duration_ms = ctx.payload.get("duration_ms", 120)
+    await device.haptics.vibrate(duration_ms)
+    await ctx.emit("custom.haptic.vibrate.done", {"duration_ms": duration_ms})
+
+client.on_custom_command("haptic.vibrate", handle_vibrate)
+client.on_event("custom.navigation.route.updated", lambda event: app.handle_custom_event(event))
+```
+
+#### Swift
+
+```swift
+client.onCustomCommand("haptic.vibrate") { ctx in
+    let durationMs = ctx.payload["duration_ms"] as? Int ?? 120
+    try await haptics.vibrate(durationMs: durationMs)
+    try await ctx.emit("custom.haptic.vibrate.done", ["duration_ms": durationMs])
+}
+
+client.onEvent("custom.navigation.route.updated") { event in
+    try await app.handleCustomEvent(event)
+}
+```
+
+#### Java
+
+```java
+client.onCustomCommand("haptic.vibrate", ctx -> {
+    int durationMs = ctx.payload().getInt("duration_ms", 120);
+    haptics.vibrate(durationMs);
+    ctx.emit("custom.haptic.vibrate.done", Map.of("duration_ms", durationMs));
+});
+
+client.onEvent("custom.navigation.route.updated", event -> {
+    app.handleCustomEvent(event);
+});
+```
+
+#### C
+
+```c
+static void on_vibrate(ra_command_t *cmd, void *user_data) {
+    int duration_ms = ra_command_payload_int(cmd, "duration_ms", 120);
+    app_haptics_vibrate(duration_ms);
+    ra_command_emit(cmd, "custom.haptic.vibrate.done", "{ \"duration_ms\": 120 }");
+}
+
+ra_client_on_custom_command(client, "haptic.vibrate", on_vibrate, NULL);
+ra_client_on_event(client, "custom.navigation.route.updated", on_custom_event, NULL);
+```
+
+SDK 应保证这些 handler 只收到本设备已订阅且路由命中的事件；handler 内只关心业务动作和回执，不需要自己解析底层 WebSocket 路由。
+
+## 5. 当前回归测试入口
+
+标准行为测试落在：
+
+```bash
+uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_device_event_behavior_standard.py -q
+```
+
+该测试文件覆盖：
+
+- browser-glass 形状注册后，设备能按声明消费标准 server 事件。
+- wake 后必须先收到 `control.audio_session.open.requested`，端侧回 `control.audio_session.opened` 后实时对话才进入可用状态。
+- 系统 `sensor.mic` 输入由 `control.audio_session.opened/closed` 表达生命周期，音频数据通过 stream WebSocket 持续发送；语音边界由 server 判定。
+- device 消费实时视频 `stream.control.open.requested` 后，必须持续上传 RGB chunk，直到 close。
+- device 消费 `custom.command.requested` 后，必须回自定义命令生命周期事件。
+- 非音频业务动作必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`，不能复用标准 `stream.output.*`。
