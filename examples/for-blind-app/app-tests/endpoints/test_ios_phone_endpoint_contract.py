@@ -132,6 +132,8 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
         "stream.output.closed",
         "custom.command.requested",
         "onCustomCommand",
+        "realtime_agent.custom_command_consumer",
+        "realtime_agent.custom_event_subscriptions",
         "RealtimeAgentCustomCommandContext",
         "downstream.pause.requested",
         "downstream.resume.requested",

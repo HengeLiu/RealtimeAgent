@@ -79,6 +79,7 @@ class EventPattern(StrEnum):
 
     ALL = "*"
     CONTROL_AUDIO_SESSION_ALL = "control.audio_session.*"
+    AUDIO_SPEECH_ALL = "audio.speech.*"
     COMMAND_ALL = "command.*"
     STREAM_CONTROL_ALL = "stream.control.*"
     STREAM_INPUT_ALL = "stream.input.*"
@@ -101,10 +102,12 @@ class StreamType(StrEnum):
 
 
 CONTROL_EVENTS = {event.value for event in EventName}
+CONTROL_EVENT_PATTERNS = {pattern.value for pattern in EventPattern}
 
 STREAM_TYPES = {stream_type.value for stream_type in StreamType}
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+CUSTOM_EVENT_PREFIX = "custom."
 FORBIDDEN_EVENT_FIELDS = {"target_device", "target_device_id", "source_device", "source_device_id"}
 MEDIA_PAYLOAD_KEYS = {
     "audio",
@@ -140,6 +143,26 @@ def validate_event_name(event_name: str) -> None:
         raise ValueError("event_name is required")
     if "*" in event_name or not EVENT_NAME_PATTERN.fullmatch(event_name):
         raise ValueError(f"invalid event_name format: {event_name}")
+
+
+def is_allowed_event_name(event_name: str) -> bool:
+    """判断事件名是否属于标准协议或业务自定义命名空间。"""
+
+    return event_name in CONTROL_EVENTS or event_name.startswith(CUSTOM_EVENT_PREFIX)
+
+
+def is_allowed_route_event(event_name: str) -> bool:
+    """判断设备注册路由中的事件名或通配模式是否允许。"""
+
+    if event_name in CONTROL_EVENTS:
+        return True
+    if event_name in CONTROL_EVENT_PATTERNS:
+        return True
+    if event_name.startswith(CUSTOM_EVENT_PREFIX):
+        return True
+    if event_name == "custom.*":
+        return True
+    return False
 
 
 def validate_control_event_payload(payload: dict[str, Any]) -> None:

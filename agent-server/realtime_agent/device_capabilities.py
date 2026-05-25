@@ -233,7 +233,8 @@ def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> 
     主要逻辑：`supports` 只表达端侧可被调用的业务传感器/执行器；麦克风、扬声器、
     显示窗口和 peer video 命令端点属于系统链路，由 properties 声明后补齐内部订阅。
     显示窗口消费已经进入 server 的 `sensor.rgb` 输入流，因此订阅的是
-    `stream.input.*`，不是 `stream.control.*`。
+    `stream.input.*`，不是 `stream.control.*`。App 通过端侧 SDK 语法糖注册的自定义
+    回调会被 SDK 写入 properties，server 再编译成 `custom.*` 路由。
     参数：`properties` 为注册 payload 中的属性字典。
     返回值：需要追加的内部路由列表。
     异常情况：属性缺失或不匹配时返回空列表。
@@ -252,7 +253,35 @@ def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> 
         routes.append({"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}})
     if _truthy_property(data.get("peer.video.receiver")) or _truthy_property(data.get("peer.video.sender")):
         routes.append({"event": "command.*"})
+    if _truthy_property(data.get("realtime_agent.custom_command_consumer")):
+        routes.append({"event": "custom.command.requested"})
+    for event_name in _custom_event_subscriptions(data):
+        routes.append({"event": event_name})
     return _dedupe_routes(routes)
+
+
+def _custom_event_subscriptions(properties: dict[str, Any]) -> list[str]:
+    """读取端侧 SDK 声明的自定义事件订阅。
+
+    主要逻辑：只接受 `custom.*` 或具体 `custom.<domain>.<event>`，避免 App 通过
+    自定义订阅绕过标准协议状态机。
+    参数：`properties` 为注册 payload 中的属性字典。
+    返回值：合法的自定义事件订阅列表。
+    异常情况：非法项会被忽略；注册校验仍会在最终路由层兜底。
+    """
+
+    raw = properties.get("realtime_agent.custom_event_subscriptions")
+    if isinstance(raw, str):
+        candidates = [item.strip() for item in raw.split(",")]
+    elif isinstance(raw, list):
+        candidates = [str(item).strip() for item in raw]
+    else:
+        candidates = []
+    return [
+        event_name
+        for event_name in candidates
+        if event_name == "custom.*" or event_name.startswith("custom.")
+    ]
 
 
 def _truthy_property(value: Any) -> bool:

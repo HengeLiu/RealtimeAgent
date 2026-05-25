@@ -334,7 +334,17 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
 
     private func registrationPayload() -> [String: Any] {
         let allowed = ["device_id", "name", "device_name", "client_type", "sdk_version", "auth", "supports", "properties", "runtime"]
-        return device.registrationPayload.filter { allowed.contains($0.key) }
+        var payload = device.registrationPayload.filter { allowed.contains($0.key) }
+        var properties = payload["properties"] as? [String: Any] ?? [:]
+        if !customCommandHandlers.isEmpty {
+            properties["realtime_agent.custom_command_consumer"] = true
+            properties["realtime_agent.custom_commands"] = Array(customCommandHandlers.keys).sorted()
+        }
+        if !eventHandlers.isEmpty {
+            properties["realtime_agent.custom_event_subscriptions"] = Array(eventHandlers.keys).sorted()
+        }
+        payload["properties"] = properties
+        return payload
     }
 
     private func dispatchCustomEvent(_ event: RealtimeAgentEvent) async throws -> Bool {

@@ -165,6 +165,8 @@ ra_device_client_start(client);
 
 App 开发者不应使用标准 `command.*` 或 `stream.output.*` 做业务扩展。标准 `stream.output.*` 只给 SDK 内置 speaker 播放链路使用。
 
+App 不需要手写事件 routes。只要在 `connect/register` 前调用 `on_custom_command(...)` 或 `on_event(...)`，Device SDK 会在设备注册时自动声明对应的 `custom.*` 消费能力，server 会按声明路由下发事件。
+
 ## 6. 播放 buffer 配置
 
 如果启用 speaker，SDK 默认使用以下播放 buffer 配置：

@@ -175,6 +175,27 @@ func eventJSON(
     #expect(client.diagnosticsSnapshot().registered)
 }
 
+@Test func clientRegistrationIncludesCustomCallbackSubscriptions() async throws {
+    let transport = MockRealtimeAgentTransport()
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 60]
+        ),
+    ]
+    let client = makeClient(transport: transport)
+    client.onCustomCommand("haptic.vibrate") { _ in }
+    client.onEvent("custom.navigation.route.updated") { _ in }
+
+    _ = try await client.register(startHeartbeat: false)
+
+    let sent = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
+    let properties = sent.payload["properties"] as? [String: Any]
+    #expect(properties?["realtime_agent.custom_command_consumer"] as? Bool == true)
+    #expect(properties?["realtime_agent.custom_commands"] as? [String] == ["haptic.vibrate"])
+    #expect(properties?["realtime_agent.custom_event_subscriptions"] as? [String] == ["custom.navigation.route.updated"])
+}
+
 @Test func standardClientBuildsProfileFromEnabledHardware() async throws {
     let client = try DeviceClient(
         serverURL: "http://127.0.0.1:8765",

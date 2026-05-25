@@ -364,6 +364,18 @@ uv run python -m pytest examples/for-blind-app/app-tests -q
 - 验证：
   - `uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py examples/for-blind-app/app-tests -q`
 
+### Phase 3.5：custom 事件协议闭环补齐
+
+- 状态：已完成。
+- 实现：
+  - event schema 从纯标准事件 enum 调整为“标准事件 enum + `custom.*` pattern”，同时补齐 `audio.speech.started/stopped` 标准事件，避免运行时和 schema 漂移。
+  - `ControlService` 只允许标准事件或 `custom.*` 进入公共 publish，注册路由只允许标准 route pattern、标准事件或 `custom.*`。
+  - `compile_system_routes_from_properties()` 支持从端侧 SDK 注册 properties 编译 `custom.command.requested` 和具体 `custom.<domain>.*` 路由。
+  - Swift Device SDK 在 App 调用 `onCustomCommand(...)` / `onEvent(...)` 后，会自动在注册 payload properties 中声明 custom 消费能力，App 不需要手写 routes。
+- 验证：
+  - `uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py protocol/protocol-tests/test_device_capabilities_semantics.py agent-server/protocol-tests/sdk/runtime/test_control_service.py examples/for-blind-app/app-tests/endpoints/test_ios_phone_contract.py examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py -q`
+  - `swift test --package-path devices/swift`
+
 ### 本次完整回归
 
 ```bash

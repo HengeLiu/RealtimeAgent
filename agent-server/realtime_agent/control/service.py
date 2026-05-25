@@ -21,6 +21,8 @@ from realtime_agent.protocol import (
     PROTOCOL_VERSION,
     SERVER_PRODUCER_ID,
     Event,
+    is_allowed_event_name,
+    is_allowed_route_event,
     new_id,
     validate_control_event_payload,
     validate_event_name,
@@ -313,7 +315,7 @@ class RegistrationValidator:
                 raise ValueError("route.event is required")
             if event_name == "*" and not self.allow_route_all:
                 raise ValueError("route '*' is disabled by config")
-            if event_name != "*" and not event_name.endswith("*") and event_name not in CONTROL_EVENTS:
+            if event_name != "*" and not is_allowed_route_event(event_name):
                 raise ValueError(f"unknown route event: {event_name}")
             if not isinstance(item.get("filter", {}), dict):
                 raise ValueError("route.filter must be an object")
@@ -1107,7 +1109,7 @@ class ControlService:
     def _validate_event(event: Event) -> None:
         validate_event_name(event.event_name)
         validate_control_event_payload(event.payload)
-        if event.event_name not in CONTROL_EVENTS:
+        if not is_allowed_event_name(event.event_name):
             raise ValueError(f"unknown event_name: {event.event_name}")
         if not event.user_id or not event.producer_id:
             raise ValueError("event requires user_id and producer_id")

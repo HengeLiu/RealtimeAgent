@@ -123,6 +123,57 @@ def test_publish_resolves_by_route() -> None:
     assert sensor.events == []
 
 
+def test_custom_routes_are_compiled_from_registration_properties() -> None:
+    """测试目标：验证 server 能按端侧 SDK 的 custom 语法糖声明投递业务事件。
+
+    测试方法：注册一个只声明自定义命令和一个自定义事件订阅的设备，然后分别发布
+    匹配和不匹配事件。
+    预期结果：`custom.command.requested` 和已订阅的 `custom.*` 能投递，未订阅事件不投递。
+    """
+
+    service = ControlService()
+    endpoint = FakeConnection("dev-custom")
+    registration = _registration("dev-custom", [])
+    registration.payload["properties"] = {
+        "realtime_agent.custom_command_consumer": True,
+        "realtime_agent.custom_event_subscriptions": ["custom.navigation.route.updated"],
+    }
+    service.register_device(registration, endpoint)
+
+    command_result = service.publish(
+        Event(
+            event_name="custom.command.requested",
+            user_id="user-001",
+            producer_id="server-main",
+            payload={"command": "haptic.vibrate", "payload": {"duration_ms": 120}},
+        )
+    )
+    event_result = service.publish(
+        Event(
+            event_name="custom.navigation.route.updated",
+            user_id="user-001",
+            producer_id="server-main",
+            payload={"route_id": "route-001"},
+        )
+    )
+    miss_result = service.publish(
+        Event(
+            event_name="custom.navigation.route.removed",
+            user_id="user-001",
+            producer_id="server-main",
+            payload={"route_id": "route-001"},
+        )
+    )
+
+    assert command_result.delivered_count == 1
+    assert event_result.delivered_count == 1
+    assert miss_result.delivered_count == 0
+    assert [event.event_name for event in endpoint.events] == [
+        "custom.command.requested",
+        "custom.navigation.route.updated",
+    ]
+
+
 def test_stream_event_routes_by_route_without_capabilities() -> None:
     """测试目标：验证 stream 事件只按订阅命中，不要求设备重复声明 capabilities。
 

@@ -263,7 +263,7 @@ SDK 路由规则：
 
 `custom.*` 事件不能伪装成标准事件生命周期。`custom.command.*` 是独立的自定义事件族，只用于业务扩展；不能替代标准 `command.*`。speaker 音频播放永远使用标准 `stream.output.* (actuator.speaker)` 链路。非音频业务动作优先使用 `custom.command.requested` 或普通 `custom.<domain>.*` 事件，不暴露 `custom.output.*` 作为 App 开发者主路径。
 
-这是后续协议目标设计。落地实现时需要同步更新事件 schema、server 路由白名单和端侧 SDK 路由逻辑，允许 `custom.*` 事件名通过校验和订阅。
+当前协议实现已经允许 `custom.*` 事件名通过 schema 和 server 运行时校验。App 通过端侧 SDK 的 `on_custom_command(...)` / `on_event(...)` 注册回调后，SDK 会在设备注册 payload 的 properties 中声明自定义消费能力，server 再据此生成 `custom.command.requested` 或具体 `custom.<domain>.*` 投递路由。App 不需要手写 routes。
 
 文档中的 `on_event(...)`、`on_custom_command(...)` 表示 SDK 暴露给 App 的公开注册 API；`handle*` / `dispatch*` 只表示 SDK 内部状态机和路由函数，不是端侧 App 开发者直接实现的 API。
 

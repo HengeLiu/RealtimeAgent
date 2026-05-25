@@ -246,6 +246,30 @@ def test_peer_video_properties_compile_to_command_route() -> None:
     assert {"event": "command.*"} in sender_routes
 
 
+def test_custom_properties_compile_to_custom_routes_only() -> None:
+    """测试目标：验证 App 语法糖注册的 custom 消费能力会变成 server 投递路由。
+
+    测试方法：传入 SDK 注册 payload 中的自定义命令和自定义事件 properties。
+    预期结果：生成 `custom.command.requested` 和具体 `custom.*` 路由，忽略非 custom 项。
+    """
+
+    routes = compile_system_routes_from_properties(
+        {
+            "realtime_agent.custom_command_consumer": True,
+            "realtime_agent.custom_event_subscriptions": [
+                "custom.navigation.route.updated",
+                "command.requested",
+                "stream.output.*",
+            ],
+        }
+    )
+
+    assert {"event": "custom.command.requested"} in routes
+    assert {"event": "custom.navigation.route.updated"} in routes
+    assert {"event": "command.requested"} not in routes
+    assert {"event": "stream.output.*"} not in routes
+
+
 def test_sensor_tof_stream_is_stored_as_asset(tmp_path: Path) -> None:
     """测试目标：验证 ToF 相机不是只停留在注册语义中，也能作为资产流入库。
 

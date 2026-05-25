@@ -63,6 +63,10 @@ openaiglass-for-blind/testdata/video/*
 !openaiglass-for-blind/testdata/video/.gitkeep
 
 # iOS generated artifacts
+devices/swift/.swiftpm/
+examples/device_demo/ios/DeviceDemo.xcodeproj/project.xcworkspace/
+examples/device_demo/ios/**/xcuserdata/
+examples/device_demo/ios/**/*.xcuserstate
 openaiglass-sdk/phone-ios/build*
 openaiglass-sdk/phone-ios/DerivedData/
 openaiglass-sdk/phone-ios/**/*.xcresult
