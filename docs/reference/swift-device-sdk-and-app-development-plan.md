@@ -326,3 +326,79 @@ Swift 端稳定后，再按同一契约扩展其他语言：
 - C / 嵌入式 Device SDK。
 
 扩展时不重新设计协议，只复用本期沉淀的 App 接入 API、SDK 状态机、`custom.*` 路由和 speaker buffer 行为。
+
+## 9. 本期执行记录
+
+### 阶段 1：Swift SDK 配置与注册
+
+- 状态：已完成。
+- 实现：新增 `DeviceClient` 标准入口，支持 `AudioInput.disabled/enabled`、`Camera.disabled/enabled`、`Speaker.disabled/enabled`。SDK 根据显式 enable 生成注册 profile：音频输入和 speaker 写入 `properties.realtime_agent.*`，相机写入 `supports.sensors[].type=rgb`。
+- 文件：`devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceOptions.swift`、`RealtimeAgentDevice.swift`、`RealtimeAgentDeviceClient.swift`。
+- 验证：`swift test --package-path devices/swift` 通过，覆盖 `standardClientBuildsProfileFromEnabledHardware`。
+
+### 阶段 2：control / stream 通道
+
+- 状态：已完成。
+- 实现：保留并复用已有 `URLSessionWebSocketTask` control / stream 双通道、`RealtimeAgentEvent` JSON codec 和 `RealtimeAgentStreamChunkCodec` 二进制 codec；新增标准事件 dispatch 边界，`custom.*` 先进入自定义路由，标准事件进入 SDK 内部状态机。
+- 文件：`RealtimeAgentDeviceClient.swift`、`RealtimeAgentEvent.swift`、`RealtimeAgentStreamChunk.swift`。
+- 验证：Swift event/chunk codec 测试、注册测试、stream upload 测试通过。
+
+- 状态：已完成到可真机验证。
+- 实现：`control.audio_session.open.requested` 由 SDK 内部消费；启用 audio input 后 SDK 建立 stream 通道、发送 `control.audio_session.opened`，并消费 `RealtimeAgentMicrophoneSource` 产出的 PCM16LE chunk 上传为 `sensor.mic`。`AudioInput.enabled()` 默认使用 AVFoundation 麦克风 adapter；App 仍可覆盖 source。`control.audio_session.close.requested` 由 SDK 停止上行并回 `control.audio_session.closed`。
+- 文件：`RealtimeAgentDeviceOptions.swift`、`RealtimeAgentDeviceClient.swift`、`Media/MicrophoneStreamer.swift`、`Media/AVFoundationAdapters.swift`。
+- 验证：`audioSessionOpenStartsEnabledMicrophoneSource` 通过，验证 open 后自动发送 `control.audio_session.opened` 和 `sensor.mic` chunk。
+- 风险：AVFoundation 默认麦克风 adapter 已编译通过；真实采集、权限弹窗、蓝牙路由和复杂音频会话需要真机验证。
+
+### 阶段 4：实时视频输入
+
+- 状态：已完成到可真机验证。
+- 实现：启用 camera 后 SDK 注册 `sensor.rgb` 能力；`Camera.enabled()` 默认使用 AVFoundation 相机 adapter；App 仍可覆盖 `RealtimeAgentCameraFrameSource`。SDK 消费 `stream.control.open.requested(sensor.rgb)`，支持单帧和按 `sample_count/frequency_hz` 连续上传 JPEG chunk。
+- 文件：`RealtimeAgentDeviceOptions.swift`、`Media/CameraFrameSource.swift`、`Media/AVFoundationAdapters.swift`、`examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift`。
+- 验证：`cameraUploaderRespondsToRgbRequest`、`cameraUploaderRespondsToContinuousRgbRequest` 通过；iOS App 构建通过。
+- 风险：AVFoundation 默认相机 adapter 已编译通过；真实相机权限、前后摄像头选择和设备可用性需要真机验证。
+
+### 阶段 5：speaker 下行播放与水位线
+
+- 状态：已完成到可真机验证。
+- 实现：新增 SDK 内置 `SpeakerPlaybackBuffer`，支持默认水位线 `120/300/800/1200ms`。`Speaker.enabled()` 默认使用 AVFoundation speaker sink；App 仍可覆盖 sink。`stream.output.open.requested(actuator.speaker)` 只进入 speaker 标准链路；chunk 入 buffer 后触发 `stream.output.started`，高水位触发 `downstream.pause.requested`，drain 到低水位触发 `downstream.resume.requested`，close/cancel 由 SDK 回执并清空状态。
+- 文件：`Media/SpeakerPlaybackBuffer.swift`、`Media/AVFoundationAdapters.swift`、`RealtimeAgentDeviceClient.swift`、`RealtimeAgentDeviceOptions.swift`。
+- 验证：`speakerBufferSendsPauseAndResumeByWatermark`、`outputSessionSendsCancelEvent`、`clientDispatchesOutputChunkToHandler` 通过。
+- 风险：AVFoundation 默认 speaker sink 已编译通过；真实播放效果、音频路由和打断后停止播放需要真机验证。
+
+### 阶段 6：custom 事件语法糖
+
+- 状态：已完成。
+- 实现：新增 `onCustomCommand(...)`、只允许 `custom.*` 的 `onEvent(...)`、`RealtimeAgentCustomCommandContext.payload` 和 `ctx.emit(...)`。标准 `stream.output.*`、`control.audio_session.*` 等事件不会投递给 App 的 `onEvent`。
+- 文件：`RealtimeAgentCustomCommandContext.swift`、`RealtimeAgentDeviceClient.swift`。
+- 验证：`clientDispatchesCustomCommandRequested`、`clientDispatchesCustomEventHandler`、`standardEventsDoNotTriggerOnEventHandler` 通过。
+
+### Swift Device App 阶段
+
+- 状态：已完成 SDK 标准入口改造和构建验证。
+- 实现：参考 App 通过 `DeviceClient` 初始化，配置项新增 `audio_input.enabled`、`camera.enabled`、`speaker.enabled` 和 `speaker.buffer.*`；默认配置结构支持硬件缺省 disabled，资源样例显式 enabled。App 不再注册标准事件 handler，只注册 `onCustomCommand("haptic.vibrate")` 和 `onEvent("custom.navigation.route.updated")`。
+- 文件：`examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/AppConfig.swift`、`RealtimeAgentEndpointRuntime.swift`、`ContentView.swift`、`Resources/AppConfig*.json`、`README.md`。
+- 验证：`build_sim` 使用 `RealtimeAgentPhone` scheme、`iPhone 17` simulator 编译通过，无 warning。
+- 待人工验收：启动 server 后运行 iOS App，观察 `/api/debug/devices`、runs 中 `events.jsonl` / `stream-events.jsonl`、speaker cancel 清空 buffer，以及真实麦克风 / speaker / 相机权限链路。
+
+### 本次执行过的验证
+
+```bash
+swift test --package-path devices/swift
+```
+
+结果：20 个 Swift 测试全部通过。
+
+```bash
+uv run python -m pytest examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py -q
+```
+
+结果：9 个参考 App 契约测试全部通过。
+
+```text
+XcodeBuildMCP build_sim
+project: examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone.xcodeproj
+scheme: RealtimeAgentPhone
+destination: iPhone 17, iOS Simulator
+```
+
+结果：构建成功，无 warning。

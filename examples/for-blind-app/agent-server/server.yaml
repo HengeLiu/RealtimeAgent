@@ -76,8 +76,8 @@ asset:
   selection_policy: "latest"
 
 agent:
-  mode: "vision"
-  # mode: "omni"
+  # mode: "vision"
+  mode: "omni"
   omni:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"

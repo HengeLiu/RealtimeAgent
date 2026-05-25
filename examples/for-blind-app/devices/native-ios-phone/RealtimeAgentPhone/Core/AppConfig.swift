@@ -3,7 +3,7 @@ import Foundation
 /// JSON 配置中的通用值。
 ///
 /// 主要功能：
-/// 1. 保留 `properties` 和 `supports` 中的布尔、数字、字符串、数组和对象。
+/// 1. 保留 `properties` 和历史配置字段中的布尔、数字、字符串、数组和对象。
 /// 2. 避免 Swift 侧把协议字段压缩成固定枚举，便于跟随 server 配置演进。
 enum JSONValue: Codable, Equatable {
     case string(String)
@@ -94,11 +94,50 @@ struct AuthConfig: Codable, Equatable {
     }
 }
 
+/// SDK 自动硬件接入开关。
+///
+/// 主要功能：保持硬件默认禁用，只有配置显式 `enabled=true` 时才让 SDK 注册并维护对应链路。
+struct HardwareEnableConfig: Codable, Equatable {
+    var enabled: Bool
+
+    static let disabled = HardwareEnableConfig(enabled: false)
+}
+
+/// speaker 播放 buffer 配置。
+struct SpeakerBufferConfig: Codable, Equatable {
+    var startWatermarkMS: Int
+    var lowWatermarkMS: Int
+    var highWatermarkMS: Int
+    var maxBufferMS: Int
+
+    enum CodingKeys: String, CodingKey {
+        case startWatermarkMS = "start_watermark_ms"
+        case lowWatermarkMS = "low_watermark_ms"
+        case highWatermarkMS = "high_watermark_ms"
+        case maxBufferMS = "max_buffer_ms"
+    }
+
+    static let `default` = SpeakerBufferConfig(
+        startWatermarkMS: 120,
+        lowWatermarkMS: 300,
+        highWatermarkMS: 800,
+        maxBufferMS: 1200
+    )
+}
+
+/// speaker 自动接入配置。
+struct SpeakerConfig: Codable, Equatable {
+    var enabled: Bool
+    var buffer: SpeakerBufferConfig
+
+    static let disabled = SpeakerConfig(enabled: false, buffer: .default)
+}
+
 /// iOS phone 参考端配置。
 ///
 /// 主要功能：
-/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、properties 和 supports。
-/// 2. 为注册事件提供当前协议 payload。
+/// 1. 从 `AppConfig.json` 读取 server、user、device、auth、硬件 enable 和 properties。
+/// 2. 为 SDK 标准入口提供当前配置。
 /// 3. 缺少配置文件时提供本地默认值，便于打开工程后立即编译。
 struct AppConfig: Codable, Equatable {
     var serverURL: String
@@ -107,6 +146,9 @@ struct AppConfig: Codable, Equatable {
     var auth: AuthConfig
     var protocolVersion: String
     var directCameraSinkPort: UInt16
+    var audioInput: HardwareEnableConfig
+    var camera: HardwareEnableConfig
+    var speaker: SpeakerConfig
     var properties: [String: JSONValue]
     var supports: [String: JSONValue]
 
@@ -117,6 +159,9 @@ struct AppConfig: Codable, Equatable {
         case auth
         case protocolVersion = "protocol_version"
         case directCameraSinkPort = "direct_camera_sink_port"
+        case audioInput = "audio_input"
+        case camera
+        case speaker
         case properties
         case supports
     }
@@ -129,6 +174,9 @@ struct AppConfig: Codable, Equatable {
         auth = try container.decode(AuthConfig.self, forKey: .auth)
         protocolVersion = try container.decodeIfPresent(String.self, forKey: .protocolVersion) ?? "realtime-agent.v1"
         directCameraSinkPort = try container.decodeIfPresent(UInt16.self, forKey: .directCameraSinkPort) ?? 9001
+        audioInput = try container.decodeIfPresent(HardwareEnableConfig.self, forKey: .audioInput) ?? .disabled
+        camera = try container.decodeIfPresent(HardwareEnableConfig.self, forKey: .camera) ?? .disabled
+        speaker = try container.decodeIfPresent(SpeakerConfig.self, forKey: .speaker) ?? .disabled
         properties = try container.decodeIfPresent([String: JSONValue].self, forKey: .properties) ?? [:]
         supports = try container.decodeIfPresent([String: JSONValue].self, forKey: .supports) ?? [:]
     }
@@ -141,6 +189,9 @@ struct AppConfig: Codable, Equatable {
         try container.encode(auth, forKey: .auth)
         try container.encode(protocolVersion, forKey: .protocolVersion)
         try container.encode(directCameraSinkPort, forKey: .directCameraSinkPort)
+        try container.encode(audioInput, forKey: .audioInput)
+        try container.encode(camera, forKey: .camera)
+        try container.encode(speaker, forKey: .speaker)
         try container.encode(properties, forKey: .properties)
         try container.encode(supports, forKey: .supports)
     }
@@ -152,6 +203,9 @@ struct AppConfig: Codable, Equatable {
         auth: AuthConfig,
         protocolVersion: String,
         directCameraSinkPort: UInt16 = 9001,
+        audioInput: HardwareEnableConfig = .disabled,
+        camera: HardwareEnableConfig = .disabled,
+        speaker: SpeakerConfig = .disabled,
         properties: [String: JSONValue],
         supports: [String: JSONValue] = [:]
     ) {
@@ -161,6 +215,9 @@ struct AppConfig: Codable, Equatable {
         self.auth = auth
         self.protocolVersion = protocolVersion
         self.directCameraSinkPort = directCameraSinkPort
+        self.audioInput = audioInput
+        self.camera = camera
+        self.speaker = speaker
         self.properties = properties
         self.supports = supports
     }
@@ -187,6 +244,9 @@ struct AppConfig: Codable, Equatable {
         auth: AuthConfig(mode: "disabled", token: nil, signedToken: nil),
         protocolVersion: "realtime-agent.v1",
         directCameraSinkPort: 9001,
+        audioInput: .disabled,
+        camera: .disabled,
+        speaker: .disabled,
         properties: [
             "direct.camera_sink": .bool(true),
             "direct.camera_sink.path": .string("/ws/camera"),
@@ -194,24 +254,6 @@ struct AppConfig: Codable, Equatable {
             "audio.aec": .string("replaceable"),
             "audio.wake_word": .string("manual"),
         ],
-        supports: [
-            "sensors": .array([
-                .object([
-                    "type": .string("rgb"),
-                    "modes": .array([.string("single"), .string("continuous")]),
-                    "default": .object([
-                        "format": .string("jpeg"),
-                        "frequency_hz": .number(1),
-                        "sample_count": .number(1),
-                    ]),
-                ])
-            ]),
-            "actuators": .array([
-                .object([
-                    "type": .string("vibrator"),
-                    "commands": .array([.string("vibrate")]),
-                ])
-            ]),
-        ]
+        supports: [:]
     )
 }

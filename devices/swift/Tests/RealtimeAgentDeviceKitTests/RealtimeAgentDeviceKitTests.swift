@@ -43,6 +43,46 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
     func close() async {}
 }
 
+final class SendableFlag: @unchecked Sendable {
+    var value = false
+}
+
+final class RecordingSpeakerSink: RealtimeAgentSpeakerSink, @unchecked Sendable {
+    var chunks: [RealtimeAgentStreamChunk] = []
+    var cancelCalled = false
+
+    func prepare(format _: RealtimeAgentSpeakerFormat) async throws {}
+
+    func write(_ chunk: RealtimeAgentStreamChunk) async throws {
+        chunks.append(chunk)
+    }
+
+    func drain() async throws {}
+
+    func cancel() async {
+        cancelCalled = true
+    }
+}
+
+func makeClient(
+    transport: MockRealtimeAgentTransport,
+    audioInput: AudioInput = .disabled(),
+    camera: Camera = .disabled(),
+    speaker: Speaker = .disabled()
+) -> RealtimeAgentDeviceClient {
+    let device = RealtimeAgentDevice(deviceID: "dev-ios-001")
+        .user("user-001")
+        .applying(audioInput: audioInput, camera: camera, speaker: speaker)
+    return RealtimeAgentDeviceClient(
+        serverURL: URL(string: "http://127.0.0.1:8765")!,
+        device: device,
+        transport: transport,
+        audioInput: audioInput,
+        camera: camera,
+        speaker: speaker
+    )
+}
+
 func eventJSON(
     _ eventName: String,
     payload: [String: Any] = [:],
@@ -135,76 +175,54 @@ func eventJSON(
     #expect(client.diagnosticsSnapshot().registered)
 }
 
-@Test func clientDispatchesCommandRequested() async throws {
-    let transport = MockRealtimeAgentTransport()
-    let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
-    let client = RealtimeAgentDeviceClient(
-        serverURL: URL(string: "http://127.0.0.1:8765")!,
-        device: device,
-        transport: transport
-    )
-    client.onCommand("phone.scan_object") { command in
-        try await command.accepted(["state": "started"])
-        try await command.progress(["progress": 1.0])
-        try await command.completed(["result": ["status": "ok"]])
-    }
-    let event = RealtimeAgentEvent(
-        eventName: "command.requested",
+@Test func standardClientBuildsProfileFromEnabledHardware() async throws {
+    let client = try DeviceClient(
+        serverURL: "http://127.0.0.1:8765",
+        deviceID: "dev-ios-001",
         userID: "user-001",
-        producerID: "server-main",
-        payload: ["command": "phone.scan_object", "command_id": "cmd-001"],
-        sessionID: "dev-ios-001"
+        name: "iPhone",
+        audioInput: .enabled(),
+        camera: .enabled(frequencyHz: 2, sampleCount: 3),
+        speaker: .enabled(buffer: .default)
     )
 
-    #expect(try await client.dispatchEvent(event))
-
-    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
-    #expect(names == ["command.accepted", "command.progress", "command.completed"])
+    let payload = client.device.registrationPayload
+    let properties = payload["properties"] as? [String: Any]
+    #expect(properties?["realtime_agent.audio_input"] as? String == "sensor.mic")
+    #expect(properties?["realtime_agent.audio_output"] as? String == "actuator.speaker")
+    let supports = payload["supports"] as? [String: Any]
+    let sensors = supports?["sensors"] as? [[String: Any]]
+    #expect(sensors?.first?["type"] as? String == "rgb")
+    #expect((sensors?.first?["default"] as? [String: Any])?["sample_count"] as? Int == 3)
 }
 
-@Test func clientDispatchesAnyCommandHandler() async throws {
-    let transport = MockRealtimeAgentTransport()
-    let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
-    let client = RealtimeAgentDeviceClient(
-        serverURL: URL(string: "http://127.0.0.1:8765")!,
-        device: device,
-        transport: transport
-    )
-    client.onAnyCommand { command in
-        try await command.completed(["result": ["handled": true]])
-    }
-    let event = RealtimeAgentEvent(
-        eventName: "command.requested",
-        userID: "user-001",
-        producerID: "server-main",
-        payload: ["command": "phone.dynamic_task", "command_id": "cmd-002"],
-        sessionID: "dev-ios-001"
-    )
-
-    #expect(try await client.dispatchEvent(event))
-
-    let sent = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
-    #expect(sent.eventName == "command.completed")
-    #expect(sent.payload["command"] as? String == "phone.dynamic_task")
+@Test func enabledHardwareUsesDefaultAVFoundationAdaptersWhenAvailable() throws {
+    #if canImport(AVFoundation)
+    #expect(AudioInput.enabled().source != nil)
+    #expect(Camera.enabled().source != nil)
+    #expect(Speaker.enabled().sink != nil)
+    #endif
 }
 
-@Test func clientDispatchesCustomControlEventHandler() async throws {
-    let transport = MockRealtimeAgentTransport()
-    let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
-    let client = RealtimeAgentDeviceClient(
-        serverURL: URL(string: "http://127.0.0.1:8765")!,
-        device: device,
-        transport: transport
-    )
-    client.onEvent("control.audio_session.close.requested") { event in
-        try await client.sendEvent(
-            name: "control.audio_session.closed",
-            payload: ["reason": "test_closed"],
-            sessionID: event.sessionID
-        )
+struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
+    var chunks: [Data]
+
+    func streamPCM16LE(configuration _: RealtimeAgentMicrophoneConfiguration) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { continuation in
+            for chunk in chunks {
+                continuation.yield(chunk)
+            }
+            continuation.finish()
+        }
     }
+}
+
+@Test func audioSessionOpenStartsEnabledMicrophoneSource() async throws {
+    let transport = MockRealtimeAgentTransport()
+    let source = ArrayMicrophoneSource(chunks: [Data(repeating: 1, count: 640), Data(repeating: 2, count: 640)])
+    let client = makeClient(transport: transport, audioInput: .enabled(source: source))
     let event = RealtimeAgentEvent(
-        eventName: "control.audio_session.close.requested",
+        eventName: "control.audio_session.open.requested",
         userID: "user-001",
         producerID: "server-main",
         payload: [:],
@@ -212,10 +230,79 @@ func eventJSON(
     )
 
     #expect(try await client.dispatchEvent(event))
+    try await Task.sleep(nanoseconds: 30_000_000)
+
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names == ["control.audio_session.opened"])
+    #expect(transport.sentStreamData.count == 2)
+    let chunk = try RealtimeAgentStreamChunkCodec.decode(transport.sentStreamData[0])
+    #expect(chunk.streamType == "sensor.mic")
+    #expect(chunk.sessionID == "session-001")
+}
+
+@Test func clientDispatchesCustomCommandRequested() async throws {
+    let transport = MockRealtimeAgentTransport()
+    let client = makeClient(transport: transport)
+    client.onCustomCommand("haptic.vibrate") { context in
+        let durationMS = context.payload["duration_ms"] as? Int ?? 0
+        try await context.emit("custom.haptic.vibrate.done", ["duration_ms": durationMS])
+    }
+    let event = RealtimeAgentEvent(
+        eventName: "custom.command.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["command": "haptic.vibrate", "payload": ["duration_ms": 120]],
+        sessionID: "dev-ios-001"
+    )
+
+    #expect(try await client.dispatchEvent(event))
+
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names == ["custom.haptic.vibrate.done"])
+    let sent = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
+    #expect(sent.payload["duration_ms"] as? Int == 120)
+}
+
+@Test func clientDispatchesCustomEventHandler() async throws {
+    let transport = MockRealtimeAgentTransport()
+    let client = makeClient(transport: transport)
+    client.onEvent("custom.navigation.route.updated") { event in
+        try await client.sendEvent(name: "custom.navigation.route.applied", payload: event.payload)
+    }
+    let event = RealtimeAgentEvent(
+        eventName: "custom.navigation.route.updated",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["route_id": "route-001"],
+        sessionID: "dev-ios-001"
+    )
+
+    #expect(try await client.dispatchEvent(event))
 
     let sent = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
-    #expect(sent.eventName == "control.audio_session.closed")
-    #expect(sent.sessionID == "session-001")
+    #expect(sent.eventName == "custom.navigation.route.applied")
+    #expect(sent.payload["route_id"] as? String == "route-001")
+}
+
+@Test func standardEventsDoNotTriggerOnEventHandler() async throws {
+    let transport = MockRealtimeAgentTransport()
+    let client = makeClient(transport: transport)
+    let customEventCalled = SendableFlag()
+    client.onEvent("custom.test.event") { _ in
+        customEventCalled.value = true
+    }
+    let event = RealtimeAgentEvent(
+        eventName: "stream.output.open.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "actuator.speaker"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-001",
+        streamType: "actuator.speaker"
+    )
+
+    #expect(try await client.dispatchEvent(event) == false)
+    #expect(customEventCalled.value == false)
 }
 
 @Test func clientDispatchesStreamOpenAndUploadsChunk() async throws {
@@ -261,12 +348,7 @@ func eventJSON(
 
 @Test func outputSessionSendsLifecycleEvents() async throws {
     let transport = MockRealtimeAgentTransport()
-    let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
-    let client = RealtimeAgentDeviceClient(
-        serverURL: URL(string: "http://127.0.0.1:8765")!,
-        device: device,
-        transport: transport
-    )
+    let client = makeClient(transport: transport, speaker: .enabled())
     let open = RealtimeAgentEvent(
         eventName: "stream.output.open.requested",
         userID: "user-001",
@@ -290,17 +372,12 @@ func eventJSON(
     #expect(try await client.dispatchEvent(close))
 
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
-    #expect(names == ["stream.output.finished", "stream.output.closed"])
+    #expect(names == ["stream.output.closed"])
 }
 
 @Test func outputSessionSendsCancelEvent() async throws {
     let transport = MockRealtimeAgentTransport()
-    let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
-    let client = RealtimeAgentDeviceClient(
-        serverURL: URL(string: "http://127.0.0.1:8765")!,
-        device: device,
-        transport: transport
-    )
+    let client = makeClient(transport: transport, speaker: .enabled())
     let cancel = RealtimeAgentEvent(
         eventName: "stream.output.cancel.requested",
         userID: "user-001",
@@ -318,16 +395,13 @@ func eventJSON(
     #expect(sent.payload["reason"] as? String == "cancel_requested")
 }
 
-@Test func clientDispatchesOutputChunkToHandler() async throws {
+@Test func speakerSinkReceivesOutputChunkThroughSDKBuffer() async throws {
     let transport = MockRealtimeAgentTransport()
-    let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
-    let client = RealtimeAgentDeviceClient(
-        serverURL: URL(string: "http://127.0.0.1:8765")!,
-        device: device,
-        transport: transport
+    let sink = RecordingSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
     )
-    let speaker = SpeakerPlayer()
-    speaker.bind(to: client)
     let chunk = RealtimeAgentStreamChunk(
         userID: "user-001",
         sessionID: "dev-ios-001",
@@ -342,11 +416,63 @@ func eventJSON(
     )
 
     #expect(try await client.dispatchStreamChunk(chunk))
+    try await Task.sleep(nanoseconds: 40_000_000)
 
-    #expect(speaker.bufferedBytes == 3)
-    #expect(speaker.chunks.first?.streamID == "stream-speaker-001")
+    #expect(sink.chunks.first?.streamID == "stream-speaker-001")
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["stream.output.started"])
+}
+
+@Test func speakerBufferSendsPauseAndResumeByWatermark() async throws {
+    let transport = MockRealtimeAgentTransport()
+    let buffer = PlaybackBuffer(startWatermarkMS: 20, lowWatermarkMS: 20, highWatermarkMS: 40, maxBufferMS: 80)
+    let client = makeClient(transport: transport, speaker: .enabled(buffer: buffer))
+    let chunk1 = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-001",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm1".utf8),
+        codec: "pcm16le",
+        sampleRate: 16000,
+        channels: 1,
+        durationMS: 20
+    )
+    let chunk2 = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-001",
+        streamType: "actuator.speaker",
+        seq: 1,
+        payload: Data("pcm2".utf8),
+        codec: "pcm16le",
+        sampleRate: 16000,
+        channels: 1,
+        durationMS: 20
+    )
+    let close = RealtimeAgentEvent(
+        eventName: "stream.output.close.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "actuator.speaker"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-001",
+        streamType: "actuator.speaker"
+    )
+
+    #expect(try await client.dispatchStreamChunk(chunk1))
+    #expect(try await client.dispatchStreamChunk(chunk2))
+    try await Task.sleep(nanoseconds: 80_000_000)
+    #expect(try await client.dispatchEvent(close))
+
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names == [
+        "stream.output.started",
+        "downstream.pause.requested",
+        "downstream.resume.requested",
+        "stream.output.closed",
+    ])
 }
 
 @Test func audioPCMConverterCreatesTwentyMSMonoChunk() throws {
@@ -404,8 +530,16 @@ func eventJSON(
 
     #expect(try await client.dispatchEvent(event))
 
+    let opened = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
+    let format = opened.payload["format"] as? [String: Any]
+    #expect(format?["codec"] as? String == "jpeg")
+    #expect(format?["sample_rate"] as? Int == 1)
+    #expect(format?["channels"] as? Int == 1)
     let chunk = try RealtimeAgentStreamChunkCodec.decode(transport.sentStreamData[0])
     #expect(chunk.streamType == "sensor.rgb")
+    #expect(chunk.codec == format?["codec"] as? String)
+    #expect(chunk.sampleRate == format?["sample_rate"] as? Int)
+    #expect(chunk.channels == format?["channels"] as? Int)
     #expect(chunk.metadata["request_id"] as? String == "req-001")
     #expect(chunk.metadata["capture_reason"] as? String == "test")
 }
@@ -445,6 +579,10 @@ func eventJSON(
     #expect(try await client.dispatchEvent(event))
 
     #expect(transport.sentStreamData.count == 3)
+    let opened = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
+    let format = opened.payload["format"] as? [String: Any]
+    #expect(format?["codec"] as? String == "jpeg")
+    #expect(format?["sample_rate"] as? Int == 5)
     let chunks = try transport.sentStreamData.map { try RealtimeAgentStreamChunkCodec.decode($0) }
     #expect(chunks.map(\.seq) == [0, 1, 2])
     #expect(chunks.map(\.final) == [false, false, true])

@@ -2,18 +2,19 @@
   "server_url": "http://127.0.0.1:8765",
   "user_id": "user-for-blind-app",
   "device_id": "dev-ios-phone-001",
-  "device_name": "native-ios-phone",
-  "client_type": "native-ios-phone",
-  "supports": {
-    "sensors": [
-      {
-        "type": "rgb",
-        "modes": ["single", "continuous"],
-        "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}
-      }
-    ],
-    "actuators": [
-      {"type": "vibrator", "commands": ["vibrate"]}
-    ]
-  }
+  "auth": {"mode": "disabled"},
+  "protocol_version": "realtime-agent.v1",
+  "direct_camera_sink_port": 9001,
+  "audio_input": {"enabled": true},
+  "camera": {"enabled": true},
+  "speaker": {
+    "enabled": true,
+    "buffer": {
+      "start_watermark_ms": 120,
+      "low_watermark_ms": 300,
+      "high_watermark_ms": 800,
+      "max_buffer_ms": 1200
+    }
+  },
+  "properties": {}
 }

@@ -7,8 +7,8 @@ import RealtimeAgentDeviceKit
 /// 主要功能：
 /// 1. 使用 `/ws/control` 注册设备并订阅事件。
 /// 2. 使用 `/ws/stream` 上传 `sensor.rgb` / `sensor.mic` 测试 stream。
-/// 3. 消费 `actuator.speaker` 下行 stream，把音频字节写入内存 buffer 并上报播放回执。
-/// 4. 保持端侧只通过 event / stream 协议与 server 协作。
+/// 3. 通过 SDK speaker sink 观察下行音频字节统计。
+/// 4. 保持 App 只通过 DeviceClient 标准入口和 custom 回调与 server 协作。
 @MainActor
 final class RealtimeAgentEndpointRuntime: ObservableObject {
     @Published private(set) var controlState = "未连接"
@@ -16,7 +16,6 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     @Published private(set) var eventLog: [String] = []
     @Published private(set) var speakerBytesBuffered = 0
     @Published private(set) var rgbUploadCount = 0
-    @Published private(set) var phoneTaskEventLog: [String] = []
     @Published private(set) var directCameraState = "未启动"
     @Published private(set) var directCameraSinkURIs: [String] = []
     @Published private(set) var directCameraFrameCount = 0
@@ -27,7 +26,6 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     private var client: RealtimeAgentDeviceClient?
     private var microphone: MicrophoneStreamer?
     private var speakerBuffer = Data()
-    private let phoneTaskRegistry = PhoneTaskRegistry()
     private var directCameraSinkServer: DirectCameraSinkServer?
     private var latestDirectCameraFrame: DirectCameraFrame?
 
@@ -42,7 +40,6 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
             let client = try makeClient()
             configureClient(client)
             self.client = client
-            microphone = MicrophoneStreamer(client: client)
             controlState = "已连接，等待注册"
             try await client.connectAndRegister()
             controlState = "已注册"
@@ -130,33 +127,40 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
         properties["direct.camera_sink.port"] = Int(config.directCameraSinkPort)
         properties["direct.camera_sink.uris"] = directCameraSinkURIs
         properties["direct.camera_sink.frame_format"] = "realtime_agent.direct_frame.v1"
-        let device = RealtimeAgentDevice(deviceID: config.deviceID)
-            .user(config.userID)
-            .named("ios-phone-reference")
-            .clientType("ios-phone")
-            .sdkVersion("realtime-agent-ios-reference-0.1.0")
-            .auth(config.auth.payload)
-            .properties(properties)
-            .supports(config.supports.mapValues { $0.object })
         let configuration = RealtimeAgentClientConfiguration(
             protocolVersion: config.protocolVersion,
             autoFailUnhandledCommands: false
         )
-        return RealtimeAgentDeviceClient(serverURL: serverURL, device: device, configuration: configuration)
+        let audioInput: AudioInput = config.audioInput.enabled ? .enabled() : .disabled()
+        let camera: Camera = config.camera.enabled ? .enabled() : .disabled()
+        let speakerBuffer = PlaybackBuffer(
+            startWatermarkMS: config.speaker.buffer.startWatermarkMS,
+            lowWatermarkMS: config.speaker.buffer.lowWatermarkMS,
+            highWatermarkMS: config.speaker.buffer.highWatermarkMS,
+            maxBufferMS: config.speaker.buffer.maxBufferMS
+        )
+        let speaker: Speaker = config.speaker.enabled ? .enabled(buffer: speakerBuffer) : .disabled()
+        return try DeviceClient(
+            serverURL: serverURL.absoluteString,
+            deviceID: config.deviceID,
+            userID: config.userID,
+            name: "ios-phone-reference",
+            clientType: "ios-phone",
+            audioInput: audioInput,
+            camera: camera,
+            speaker: speaker,
+            auth: config.auth.payload,
+            properties: properties,
+            configuration: configuration
+        )
     }
 
     private func configureClient(_ client: RealtimeAgentDeviceClient) {
-        client.onStreamOpen("sensor.rgb") { [weak self] request in
-            await self?.uploadRGBFrame(request: request, reason: "server_requested")
+        client.onCustomCommand("haptic.vibrate") { [weak self] context in
+            await self?.handleHapticCommand(context)
         }
-        client.onAnyCommand { [weak self] responder in
-            await self?.handlePhoneTaskCommand(responder)
-        }
-        client.onOutputChunk("actuator.speaker") { [weak self] chunk, _ in
-            await self?.handleOutputChunk(chunk)
-        }
-        client.onEvent("control.audio_session.close.requested") { [weak self] event in
-            await self?.closeAudioSession(event)
+        client.onEvent("custom.navigation.route.updated") { [weak self] event in
+            await self?.handleNavigationEvent(event)
         }
     }
 
@@ -176,53 +180,20 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
         return microphone
     }
 
-    private func closeAudioSession(_ event: RealtimeAgentEvent) async {
+    private func handleHapticCommand(_ context: RealtimeAgentCustomCommandContext) async {
         do {
-            try await ensureClient().sendEvent(
-                name: "control.audio_session.closed",
-                payload: ["reason": "ios_phone_closed"],
-                sessionID: event.sessionID
-            )
-            appendLog("event -> control.audio_session.closed")
+            let durationMS = context.payload["duration_ms"] as? Int ?? 120
+            appendLog("custom command haptic.vibrate duration=\(durationMS)")
+            try await context.emit("custom.haptic.vibrate.done", ["duration_ms": durationMS])
+            appendLog("event -> custom.haptic.vibrate.done")
         } catch {
-            appendLog("audio session close failed: \(error.localizedDescription)")
-        }
-    }
-    private func handlePhoneTaskCommand(_ responder: RealtimeAgentCommandResponder) async {
-        let event = responder.request
-        let taskType = event.payload["task_type"] as? String ?? ""
-        let taskID = event.payload["task_id"] as? String ?? RealtimeAgentIDs.make(prefix: "ios_phone_task")
-        guard let handler = phoneTaskRegistry.handler(taskType: taskType) else {
-            try? await responder.failed(code: "phone_task.unknown", message: "unknown phone task")
-            appendPhoneTaskEvent("command.failed")
-            return
-        }
-        try? await responder.accepted(["task_id": taskID, "task_type": taskType, "state": "started"])
-        appendPhoneTaskEvent("command.accepted")
-        await uploadRGBFrame(
-            sessionID: config.deviceID,
-            requestID: taskID,
-            reason: "phone_task"
-        )
-        try? await responder.progress(["task_id": taskID, "task_type": taskType, "progress": 1.0])
-        appendPhoneTaskEvent("command.progress")
-        let result = handler.result(command: event, frameCount: max(1, directCameraFrameCount))
-        try? await responder.completed([
-            "task_id": taskID,
-            "task_type": taskType,
-            "summary": result.summary,
-            "result": result.payload,
-        ])
-        appendPhoneTaskEvent("command.completed")
-    }
-
-    private func appendPhoneTaskEvent(_ eventName: String) {
-        phoneTaskEventLog.insert(eventName, at: 0)
-        if phoneTaskEventLog.count > 30 {
-            phoneTaskEventLog.removeLast(phoneTaskEventLog.count - 30)
+            appendLog("custom command failed: \(error.localizedDescription)")
         }
     }
 
+    private func handleNavigationEvent(_ event: RealtimeAgentEvent) async {
+        appendLog("custom event <- \(event.eventName)")
+    }
     private func handleOutputChunk(_ chunk: RealtimeAgentStreamChunk) async {
         if chunk.streamType == "actuator.speaker" {
             speakerBuffer.append(chunk.payload)
@@ -360,31 +331,5 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
         data.append(Data("realtime-agent-ios-rgb".utf8))
         data.append(contentsOf: [0xFF, 0xD9])
         return data
-    }
-}
-
-/// iOS phone 参考端任务 handler 结果。
-struct PhoneTaskCommandResult {
-    var summary: String
-    var payload: [String: Any]
-}
-
-/// iOS phone 参考端任务 handler 协议。
-protocol PhoneTaskHandler {
-    var taskType: String { get }
-    func result(command: RealtimeAgentEvent, frameCount: Int) -> PhoneTaskCommandResult
-}
-
-/// iOS phone 参考端任务注册表。
-final class PhoneTaskRegistry {
-    private let handlers: [String: PhoneTaskHandler]
-
-    init() {
-        let builtins: [PhoneTaskHandler] = []
-        self.handlers = Dictionary(uniqueKeysWithValues: builtins.map { ($0.taskType, $0) })
-    }
-
-    func handler(taskType: String) -> PhoneTaskHandler? {
-        handlers[taskType]
     }
 }

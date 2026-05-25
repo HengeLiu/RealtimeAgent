@@ -51,6 +51,8 @@ class EventName(StrEnum):
     STREAM_OUTPUT_STARTED = "stream.output.started"
     STREAM_OUTPUT_FINISHED = "stream.output.finished"
     STREAM_OUTPUT_FAILED = "stream.output.failed"
+    DOWNSTREAM_PAUSE_REQUESTED = "downstream.pause.requested"
+    DOWNSTREAM_RESUME_REQUESTED = "downstream.resume.requested"
     STREAM_CONTROL_OPEN_REQUESTED = "stream.control.open.requested"
     STREAM_CONTROL_CONFIGURE_REQUESTED = "stream.control.open.requested"
     STREAM_CONTROL_CLOSE_REQUESTED = "stream.control.close.requested"

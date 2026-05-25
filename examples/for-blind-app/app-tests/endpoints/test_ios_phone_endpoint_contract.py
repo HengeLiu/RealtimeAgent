@@ -32,11 +32,10 @@ def test_ios_phone_project_and_config_are_present() -> None:
 
 
 def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
-    """测试目标：验证 iOS 配置字段与其他参考端侧保持同一语义。
+    """测试目标：验证 iOS 配置字段符合新版 Device SDK 标准入口。
 
-    测试方法：读取 `AppConfig.example.json`，检查 server、user、device、auth、
-    properties、supports 和 routes。
-    预期结果：iOS 不引入专用配置字段，优先用 supports 声明设备语义能力。
+    测试方法：读取 `AppConfig.example.json`，检查 server、user、device、auth 和显式硬件 enable。
+    预期结果：iOS 不要求 App 手写 supports，麦克风、相机、speaker 由 SDK 根据 enable 自动声明。
     """
 
     config = json.loads((IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8"))
@@ -44,19 +43,22 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["server_url"].startswith("http://")
     assert config["user_id"]
     assert config["device_id"] == "dev-ios-phone-001"
+    assert config["auth"]["mode"] == "disabled"
+    assert config["audio_input"]["enabled"] is True
+    assert config["camera"]["enabled"] is True
+    assert config["speaker"]["enabled"] is True
+    assert config["speaker"]["buffer"]["high_watermark_ms"] == 800
     assert "phone.task.find_object_phone_task" not in config.get("properties", {})
     assert "phone.task.traffic_light_phone_task" not in config.get("properties", {})
-    supports = config["supports"]
-    assert any(item["type"] == "rgb" for item in supports["sensors"])
-    assert any(item["type"] == "vibrator" for item in supports["actuators"])
+    assert "supports" not in config
 
 
 def test_ios_phone_registration_event_uses_protocol_payload_fields() -> None:
     """测试目标：验证 iOS 注册事件遵守当前 control.device.register.requested 字段约定。
 
     测试方法：读取 AppConfig 示例和 Swift 源码，检查注册 payload 必备字段。
-    预期结果：注册事件携带 user_id、device_id、auth、properties、supports 和 routes，
-    不包含 target_device 或固定 phone/glass 路由字段。
+    预期结果：注册事件携带 user_id、device_id、auth 和 properties；supports 由 SDK 根据
+    显式硬件 enable 自动生成，不要求 App 配置手写。
     """
 
     config = json.loads((IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8"))
@@ -65,7 +67,6 @@ def test_ios_phone_registration_event_uses_protocol_payload_fields() -> None:
         "client_type": "ios-phone",
         "auth": config.get("auth") or {"mode": "disabled"},
         "properties": config.get("properties") or {},
-        "supports": config["supports"],
     }
     payload["properties"]["direct.camera_sink"] = True
     payload["properties"]["direct.camera_sink.path"] = "/ws/camera"
@@ -80,19 +81,26 @@ def test_ios_phone_registration_event_uses_protocol_payload_fields() -> None:
     assert payload["properties"]["direct.camera_sink.frame_format"] == "realtime_agent.direct_frame.v1"
     assert "target_device" not in json.dumps(payload)
     assert "target_device_id" not in json.dumps(payload)
-    assert any(item["type"] == "rgb" for item in payload["supports"]["sensors"])
-    assert any(item["type"] == "vibrator" for item in payload["supports"]["actuators"])
 
     runtime = _read("RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift")
     sdk_device = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDevice.swift")
     sdk_client = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceClient.swift")
-    source = runtime + sdk_device + sdk_client
+    sdk_options = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceOptions.swift")
+    sdk_avfoundation = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/Media/AVFoundationAdapters.swift")
+    source = runtime + sdk_device + sdk_client + sdk_options + sdk_avfoundation
     for token in [
         "control.device.register.requested",
-        ".auth(config.auth.payload)",
-        ".properties(properties)",
-        ".supports(config.supports.map",
+        "DeviceClient(",
+        "auth: config.auth.payload",
+        "properties: properties",
+        "applying(audioInput: audioInput, camera: camera, speaker: speaker)",
+        "properties[\"realtime_agent.audio_input\"]",
+        "properties[\"realtime_agent.audio_output\"]",
+        "copy.sensors.append",
         "direct.camera_sink.uris",
+        "RealtimeAgentDefaultMicrophoneSource",
+        "RealtimeAgentDefaultCameraFrameSource",
+        "RealtimeAgentDefaultSpeakerSink",
     ]:
         assert token in source
 
@@ -110,28 +118,28 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
     direct_codec = _read("RealtimeAgentPhone/Core/DirectCameraFrameCodec.swift")
     direct_server = _read("RealtimeAgentPhone/Core/DirectCameraSinkServer.swift")
     sdk_client = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceClient.swift")
-    sdk_command = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentCommandResponder.swift")
+    sdk_custom = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentCustomCommandContext.swift")
     sdk_input = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentInputStreamRequest.swift")
     sdk_output = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentOutputStreamSession.swift")
-    combined = runtime + codec + direct_codec + direct_server + sdk_client + sdk_command + sdk_input + sdk_output
+    sdk_buffer = _read_root("devices/swift/Sources/RealtimeAgentDeviceKit/Media/SpeakerPlaybackBuffer.swift")
+    combined = runtime + codec + direct_codec + direct_server + sdk_client + sdk_custom + sdk_input + sdk_output + sdk_buffer
 
     required_tokens = [
         "/ws/control",
         "/ws/stream",
         "stream.control.open.requested",
         "stream.output.started",
-        "stream.output.finished",
         "stream.output.closed",
-        "command.requested",
-        "command.accepted",
-        "command.progress",
-        "command.completed",
+        "custom.command.requested",
+        "onCustomCommand",
+        "RealtimeAgentCustomCommandContext",
+        "downstream.pause.requested",
+        "downstream.resume.requested",
         "stream.input.opened",
         "stream.input.closed",
         "sensor.rgb",
         "sensor.mic",
         "actuator.speaker",
-        "PhoneTaskRegistry",
         "payload_size",
         "UInt32(headerData.count).bigEndian",
         "DirectCameraSinkServer",
@@ -180,6 +188,18 @@ def test_ios_phone_direct_camera_sink_files_are_part_of_xcode_target() -> None:
     assert "latestDirectCameraFrame" in runtime
     assert "direct_camera_sink" in runtime
     assert "direct_camera_sent" not in runtime
+
+
+def test_ios_phone_declares_hardware_permissions() -> None:
+    """测试目标：验证真机运行默认 AVFoundation adapter 所需权限已声明。
+
+    测试方法：读取 Info.plist，检查相机和麦克风用途说明。
+    预期结果：iOS 真机启动默认相机和麦克风 adapter 时不会因缺少用途说明崩溃。
+    """
+
+    plist = _read("RealtimeAgentPhone/Info.plist")
+    assert "NSCameraUsageDescription" in plist
+    assert "NSMicrophoneUsageDescription" in plist
 
 
 def test_ios_phone_readme_documents_simulator_real_device_and_signed_token() -> None:

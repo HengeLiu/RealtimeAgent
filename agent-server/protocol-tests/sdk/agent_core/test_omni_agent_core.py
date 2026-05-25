@@ -399,8 +399,8 @@ def test_realtime_provider_speech_started_publishes_control_event_after_output_f
     """测试目标：验证 Omni speech_started 不依赖服务器 output stream 仍处于 active。
 
     测试方法：先让 fake provider 完成一段输出，再模拟 provider 发现用户开始说话。
-    预期结果：端侧仍收到 `audio.speech.started`，provider cancel 被调用，旧 generation
-    被标记为打断。
+    预期结果：端侧仍收到 `audio.speech.started`；因为当前没有正在生成或播放的回复，
+    provider 不应被取消，也不应把下一轮 response 提前标记为打断。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -434,11 +434,12 @@ def test_realtime_provider_speech_started_publishes_control_event_after_output_f
 
     event_names = [event.event_name for event in connection.events]
     assert "audio.speech.started" in event_names
-    assert instances[0].cancelled is True
+    assert instances[0].cancelled is False
     agent_events_text = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
         encoding="utf-8"
     )
-    assert "omni.response.marked_interrupted" in agent_events_text
+    assert "omni.provider_speech_started.no_active_response" in agent_events_text
+    assert "omni.response.marked_interrupted" not in agent_events_text
 
 
 def test_realtime_provider_speech_stopped_publishes_control_event(tmp_path) -> None:
@@ -570,12 +571,12 @@ def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> Non
     assert "omni.response.audio_done_ignored_after_interrupt" in agent_events_text
 
 
-def test_realtime_provider_speech_started_cancels_response_without_active_output(tmp_path) -> None:
-    """测试目标：验证 Omni speech_started 即使没有正在播放的 output 也会取消 provider。
+def test_realtime_provider_speech_started_does_not_cancel_without_active_response(tmp_path) -> None:
+    """测试目标：验证用户正常开始说话时不会提前取消后续回复。
 
-    测试方法：只建立上行 realtime 会话，不让 fake provider 先输出音频，直接模拟
+    测试方法：只建立上行 realtime 会话，不让 fake provider 先创建 response，直接模拟
     `omni.input_audio_buffer.speech_started`。
-    预期结果：provider cancel 被调用，runs 中记录无 active output 的打断决策。
+    预期结果：provider cancel 不被调用，runs 中记录当前没有可打断的 active response。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -586,6 +587,43 @@ def test_realtime_provider_speech_started_cancels_response_without_active_output
     session_id = "dev-web"
     core.open(user_id="user-001", session_id=session_id)
 
+    assert app.output_service.active_output_stream_id("user-001", session_id) is None
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id=session_id,
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+
+    assert instances[0].cancelled is False
+    assert any(event.event_name == "audio.speech.started" for event in connection.events)
+    agent_events_text = (tmp_path / "runs" / "user-001" / session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "omni.provider_speech_started.no_active_response" in agent_events_text
+    assert "omni.response.marked_interrupted" not in agent_events_text
+
+
+def test_realtime_provider_speech_started_cancels_active_response_without_output(tmp_path) -> None:
+    """测试目标：验证没有下行音频但 response 正在生成时仍能被用户打断。
+
+    测试方法：建立 fake realtime 会话，先模拟 provider 创建 response，再模拟
+    `omni.input_audio_buffer.speech_started`。
+    预期结果：provider cancel 被调用，runs 中记录当前 response 已被打断。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    core = app.agent_core
+    session_id = "dev-web"
+    core.open(user_id="user-001", session_id=session_id)
+
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {"event": "omni.response.created", "provider": "fake", "response_id": "resp-active"}
+    )
     assert app.output_service.active_output_stream_id("user-001", session_id) is None
 
     core._record_provider_event(

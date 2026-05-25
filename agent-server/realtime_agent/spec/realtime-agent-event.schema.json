@@ -44,6 +44,8 @@
         "stream.output.failed",
         "stream.output.cancel.requested",
         "stream.output.cancelled",
+        "downstream.pause.requested",
+        "downstream.resume.requested",
         "agent.response.started",
         "agent.response.completed",
         "tool.call.started",

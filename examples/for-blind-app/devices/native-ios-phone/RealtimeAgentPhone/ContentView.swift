@@ -17,6 +17,9 @@ struct ContentView: View {
                     labeled("User", runtime.config.userID)
                     labeled("Device", runtime.config.deviceID)
                     labeled("Auth", runtime.config.auth.mode)
+                    labeled("Audio input", runtime.config.audioInput.enabled ? "enabled" : "disabled")
+                    labeled("Camera", runtime.config.camera.enabled ? "enabled" : "disabled")
+                    labeled("Speaker", runtime.config.speaker.enabled ? "enabled" : "disabled")
                 }
 
                 Section("状态") {

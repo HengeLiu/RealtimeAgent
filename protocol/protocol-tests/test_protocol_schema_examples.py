@@ -105,3 +105,32 @@ def test_event_schema_rejects_unknown_event_name() -> None:
                 "payload": {},
             }
         )
+
+
+def test_downstream_watermark_events_are_standard_protocol_events() -> None:
+    """测试目标：确认 speaker buffer 水位线事件属于标准协议事件。
+
+    测试方法：读取事件 schema 的 event_name enum，并分别构造 pause / resume 事件
+    交给运行时信封解析。
+    预期结果：端侧 SDK 发送的水位线事件不会被 server 按未知事件拒绝。
+    """
+
+    schema = _load_json(SPEC_ROOT / "realtime-agent-event.schema.json")
+    allowed = set(schema["properties"]["event_name"]["enum"])
+    for name in ["downstream.pause.requested", "downstream.resume.requested"]:
+        assert name in allowed
+        event = Event.from_dict(
+            {
+                "version": "realtime-agent.v1",
+                "event_id": f"evt_{name.replace('.', '_')}",
+                "event_name": name,
+                "timestamp_ms": 1,
+                "user_id": "user-001",
+                "producer_id": "dev-001",
+                "session_id": "dev-001",
+                "stream_id": "stream-speaker-001",
+                "stream_type": "actuator.speaker",
+                "payload": {"stream_type": "actuator.speaker", "buffered_ms": 800},
+            }
+        )
+        assert event.event_name == name

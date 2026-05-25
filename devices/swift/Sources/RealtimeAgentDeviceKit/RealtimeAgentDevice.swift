@@ -89,6 +89,43 @@ public struct RealtimeAgentDevice: @unchecked Sendable {
         return copy
     }
 
+    /// 根据标准硬件配置补齐注册 profile。
+    ///
+    /// 主要功能：把显式 enable 的麦克风、相机和扬声器转换为 server 可识别的 `properties` 和 `supports`。
+    public func applying(audioInput: AudioInput, camera: Camera, speaker: Speaker) -> RealtimeAgentDevice {
+        var copy = self
+        if audioInput.enabled {
+            copy.properties["realtime_agent.audio_input"] = audioInput.configuration.streamType
+            copy.properties["realtime_agent.audio_input.format"] = [
+                "codec": audioInput.configuration.codec,
+                "sample_rate": audioInput.configuration.sampleRate,
+                "channels": audioInput.configuration.channels,
+                "chunk_ms": audioInput.configuration.chunkMS,
+            ]
+        }
+        if speaker.enabled {
+            copy.properties["realtime_agent.audio_output"] = "actuator.speaker"
+            copy.properties["realtime_agent.audio_output.buffer"] = [
+                "start_watermark_ms": speaker.buffer.startWatermarkMS,
+                "low_watermark_ms": speaker.buffer.lowWatermarkMS,
+                "high_watermark_ms": speaker.buffer.highWatermarkMS,
+                "max_buffer_ms": speaker.buffer.maxBufferMS,
+            ]
+        }
+        if camera.enabled && !copy.sensors.contains(where: { $0["type"] as? String == "rgb" }) {
+            copy.sensors.append([
+                "type": "rgb",
+                "modes": camera.modes,
+                "default": [
+                    "format": camera.format,
+                    "frequency_hz": camera.frequencyHz,
+                    "sample_count": camera.sampleCount,
+                ],
+            ])
+        }
+        return copy
+    }
+
     /// 设置注册鉴权 payload。
     ///
     /// 主要功能：把 static token 或 signed token 等端侧鉴权信息写入注册 payload。

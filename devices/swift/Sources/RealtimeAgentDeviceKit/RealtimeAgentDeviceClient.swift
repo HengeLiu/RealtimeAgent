@@ -2,13 +2,13 @@ import Foundation
 
 /// realtime-agent 端侧通讯客户端。
 ///
-/// 主要功能：管理 control / stream WebSocket、设备注册、心跳、事件分发和 stream chunk 收发。
-/// 主要方法：`connectAndRegister()` 建立连接并注册，`onCommand()` 和 `onStreamOpen()` 注册端侧回调。
+/// 主要功能：管理 control / stream WebSocket、设备注册、心跳、标准事件状态机、`custom.*`
+/// 事件分发和 stream chunk 收发。
+/// 主要方法：`connectAndRegister()` 建立连接并注册，`onCustomCommand()` 和 `onEvent("custom.*")`
+/// 注册 App 业务回调。
 public final class RealtimeAgentDeviceClient: @unchecked Sendable {
-    public typealias CommandHandler = @Sendable (RealtimeAgentCommandResponder) async throws -> Void
+    public typealias CustomCommandHandler = @Sendable (RealtimeAgentCustomCommandContext) async throws -> Void
     public typealias StreamOpenHandler = @Sendable (RealtimeAgentInputStreamRequest) async throws -> Void
-    public typealias OutputStreamHandler = @Sendable (RealtimeAgentOutputStreamSession) async throws -> Void
-    public typealias OutputChunkHandler = @Sendable (RealtimeAgentStreamChunk, RealtimeAgentOutputStreamSession) async throws -> Void
     public typealias EventHandler = @Sendable (RealtimeAgentEvent) async throws -> Void
 
     public let serverURL: URL
@@ -20,14 +20,18 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var heartbeatTask: Task<Void, Never>?
     private var controlReceiveTask: Task<Void, Never>?
     private var streamReceiveTask: Task<Void, Never>?
-    private var commandHandlers: [String: CommandHandler] = [:]
+    private var customCommandHandlers: [String: CustomCommandHandler] = [:]
     private var streamOpenHandlers: [String: StreamOpenHandler] = [:]
-    private var outputStreamHandlers: [String: OutputStreamHandler] = [:]
-    private var outputChunkHandlers: [String: OutputChunkHandler] = [:]
     private var eventHandlers: [String: EventHandler] = [:]
     private var outputSessions: [String: RealtimeAgentOutputStreamSession] = [:]
+    private var speakerBuffers: [String: SpeakerPlaybackBuffer] = [:]
+    private var speakerDrainTasks: [String: Task<Void, Never>] = [:]
     private var startedOutputStreams = Set<String>()
     private var sequenceByStream: [String: Int] = [:]
+    private var audioInput: AudioInput = .disabled()
+    private var camera: Camera = .disabled()
+    private var speaker: Speaker = .disabled()
+    private var microphoneTask: Task<Void, Never>?
 
     /// 创建默认 URLSession WebSocket 客户端。
     ///
@@ -45,6 +49,42 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         )
     }
 
+    /// 使用标准语法糖创建设备客户端。
+    ///
+    /// 主要功能：App 只声明设备标识和显式启用的硬件能力，SDK 自动生成注册 profile。
+    public convenience init(
+        serverURL: String,
+        deviceID: String,
+        userID: String,
+        name: String,
+        clientType: String = "ios",
+        audioInput: AudioInput = .disabled(),
+        camera: Camera = .disabled(),
+        speaker: Speaker = .disabled(),
+        auth: [String: Any]? = nil,
+        properties: [String: Any] = [:],
+        configuration: RealtimeAgentClientConfiguration = .default
+    ) throws {
+        guard let url = URL(string: serverURL) else {
+            throw RealtimeAgentDeviceError.invalidURL(serverURL)
+        }
+        var device = RealtimeAgentDevice(deviceID: deviceID)
+            .user(userID)
+            .named(name)
+            .clientType(clientType)
+            .sdkVersion("realtime-agent-swift-device-sdk-0.2.0")
+            .properties(properties)
+            .applying(audioInput: audioInput, camera: camera, speaker: speaker)
+        if let auth {
+            device = device.auth(auth)
+        }
+        self.init(serverURL: url, device: device, configuration: configuration)
+        self.audioInput = audioInput
+        self.camera = camera
+        self.speaker = speaker
+        installEnabledHardwareAdapters()
+    }
+
     /// 创建可注入 transport 的客户端。
     ///
     /// 主要用途：单元测试可注入 mock transport，生产环境使用默认 URLSession transport。
@@ -52,12 +92,19 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         serverURL: URL,
         device: RealtimeAgentDevice,
         configuration: RealtimeAgentClientConfiguration = .default,
-        transport: RealtimeAgentWebSocketTransport
+        transport: RealtimeAgentWebSocketTransport,
+        audioInput: AudioInput = .disabled(),
+        camera: Camera = .disabled(),
+        speaker: Speaker = .disabled()
     ) {
         self.serverURL = serverURL
         self.device = device
         self.configuration = configuration
         self.transport = transport
+        self.audioInput = audioInput
+        self.camera = camera
+        self.speaker = speaker
+        installEnabledHardwareAdapters()
     }
 
     public var userID: String {
@@ -116,48 +163,36 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         heartbeatTask?.cancel()
         controlReceiveTask?.cancel()
         streamReceiveTask?.cancel()
+        microphoneTask?.cancel()
+        speakerDrainTasks.values.forEach { $0.cancel() }
         heartbeatTask = nil
         controlReceiveTask = nil
         streamReceiveTask = nil
+        microphoneTask = nil
+        speakerDrainTasks = [:]
         await transport.close()
         diagnostics.controlState = "closed"
         diagnostics.streamState = "closed"
     }
 
-    /// 注册端侧命令处理器。
-    public func onCommand(_ command: String, handler: @escaping CommandHandler) {
-        commandHandlers[command] = handler
-    }
-
-    /// 注册所有 command 的兜底处理器。
+    /// 注册自定义业务命令处理器。
     ///
-    /// 主要功能：端侧参考应用可统一处理由 Task 下发的 `command.requested`，再自行根据 payload 分派。
-    public func onAnyCommand(handler: @escaping CommandHandler) {
-        commandHandlers["*"] = handler
+    /// 说明：只处理 `custom.command.requested` 中的业务 `payload.command`，不复用标准 command 生命周期。
+    public func onCustomCommand(_ command: String, handler: @escaping CustomCommandHandler) {
+        customCommandHandlers[command] = handler
     }
 
     /// 注册指定控制事件处理器。
     ///
     /// 主要功能：让 App 处理 SDK 暂未内置语义的协议事件，例如 audio session 生命周期。
     public func onEvent(_ eventName: String, handler: @escaping EventHandler) {
+        precondition(eventName.starts(with: "custom."), "onEvent only accepts custom.* events")
         eventHandlers[eventName] = handler
     }
 
     /// 注册输入 stream 打开请求处理器。
     public func onStreamOpen(_ streamType: String, handler: @escaping StreamOpenHandler) {
         streamOpenHandlers[streamType] = handler
-    }
-
-    /// 注册输出 stream 处理器。
-    public func onOutputStream(_ streamType: String, handler: @escaping OutputStreamHandler) {
-        outputStreamHandlers[streamType] = handler
-    }
-
-    /// 注册输出 chunk 处理器。
-    ///
-    /// 主要功能：让 App 消费 `actuator.speaker` 等下行 stream 的真实 payload。
-    public func onOutputChunk(_ streamType: String, handler: @escaping OutputChunkHandler) {
-        outputChunkHandlers[streamType] = handler
     }
 
     /// 发送控制事件。
@@ -203,25 +238,38 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     /// 返回值：命中 SDK 或 App 注册的处理器时返回 true，否则返回 false。
     @discardableResult
     public func dispatchEvent(_ event: RealtimeAgentEvent) async throws -> Bool {
-        if let handler = eventHandlers[event.eventName] {
-            try await handler(event)
-            return true
+        if event.eventName.starts(with: "custom.") {
+            return try await dispatchCustomEvent(event)
         }
         switch event.eventName {
+        case "control.audio_session.open.requested":
+            return try await handleAudioSessionOpen(event)
+        case "control.audio_session.close.requested":
+            return try await handleAudioSessionClose(event)
         case "command.requested":
             return try await dispatchCommand(event)
         case "stream.control.open.requested":
             return try await dispatchStreamOpen(event)
+        case "stream.control.close.requested":
+            return try await dispatchStreamClose(event)
         case "stream.output.open.requested":
-            _ = outputSession(for: event)
+            guard outputStreamType(for: event) == "actuator.speaker", speaker.enabled else {
+                diagnostics.unhandledEvents += 1
+                return false
+            }
+            try await prepareSpeakerSession(for: event)
             return true
         case "stream.output.close.requested", "stream.output.finish.requested":
             let session = outputSession(for: event)
-            try await session.finished()
+            try await drainSpeakerIfNeeded(streamID: session.streamID)
             try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
             return true
         case "stream.output.cancel.requested":
             let session = outputSession(for: event)
+            speakerDrainTasks[session.streamID]?.cancel()
+            speakerDrainTasks.removeValue(forKey: session.streamID)
+            await speakerBuffers[session.streamID]?.cancel()
+            speakerBuffers.removeValue(forKey: session.streamID)
             try await session.cancelled(reason: "cancel_requested")
             return true
         default:
@@ -266,7 +314,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     /// 返回值：chunk 属于输出 stream 并被 SDK 处理时返回 true，否则返回 false。
     @discardableResult
     public func dispatchStreamChunk(_ chunk: RealtimeAgentStreamChunk) async throws -> Bool {
-        guard chunk.streamType.starts(with: "actuator.") else {
+        guard chunk.streamType == "actuator.speaker", speaker.enabled else {
             return false
         }
         try await handleOutputChunk(chunk)
@@ -289,19 +337,34 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         return device.registrationPayload.filter { allowed.contains($0.key) }
     }
 
+    private func dispatchCustomEvent(_ event: RealtimeAgentEvent) async throws -> Bool {
+        if event.eventName == "custom.command.requested" {
+            let command = event.payload["command"] as? String ?? ""
+            guard let handler = customCommandHandlers[command] else {
+                diagnostics.unhandledEvents += 1
+                return false
+            }
+            let context = customCommandContext(for: event)
+            try await handler(context)
+            return true
+        }
+        if let handler = eventHandlers[event.eventName] {
+            try await handler(event)
+            return true
+        }
+        diagnostics.unhandledEvents += 1
+        return false
+    }
+
     private func dispatchCommand(_ event: RealtimeAgentEvent) async throws -> Bool {
         let command = event.payload["command"] as? String ?? ""
-        guard let handler = commandHandlers[command] ?? commandHandlers["*"] else {
-            diagnostics.unhandledEvents += 1
-            if configuration.autoFailUnhandledCommands {
-                let responder = commandResponder(for: event)
-                try await responder.failed(code: "command.unhandled", message: "no handler registered for command: \(command)")
-                return true
-            }
-            return false
+        diagnostics.unhandledEvents += 1
+        if configuration.autoFailUnhandledCommands {
+            let responder = commandResponder(for: event)
+            try await responder.failed(code: "command.unhandled", message: "no handler registered for command: \(command)")
+            return true
         }
-        try await handler(commandResponder(for: event))
-        return true
+        return false
     }
 
     private func dispatchStreamOpen(_ event: RealtimeAgentEvent) async throws -> Bool {
@@ -314,8 +377,80 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         return true
     }
 
+    private func dispatchStreamClose(_ event: RealtimeAgentEvent) async throws -> Bool {
+        let streamType = event.streamType ?? event.payload["stream_type"] as? String ?? ""
+        guard streamType == "sensor.rgb" else {
+            diagnostics.unhandledEvents += 1
+            return false
+        }
+        try await sendEvent(
+            name: "stream.input.closed",
+            payload: ["stream_type": streamType, "reason": "server_requested"],
+            sessionID: event.sessionID,
+            streamID: event.streamID,
+            streamType: streamType
+        )
+        return true
+    }
+
+    private func handleAudioSessionOpen(_ event: RealtimeAgentEvent) async throws -> Bool {
+        guard audioInput.enabled else {
+            diagnostics.unhandledEvents += 1
+            return false
+        }
+        try await ensureStream()
+        let streamID = event.streamID ?? event.payload["stream_id"] as? String ?? RealtimeAgentIDs.make(prefix: "stream_mic")
+        try await sendEvent(
+            name: "control.audio_session.opened",
+            payload: [
+                "stream_type": audioInput.configuration.streamType,
+                "stream_id": streamID,
+                "format": [
+                    "codec": audioInput.configuration.codec,
+                    "sample_rate": audioInput.configuration.sampleRate,
+                    "channels": audioInput.configuration.channels,
+                    "chunk_ms": audioInput.configuration.chunkMS,
+                ],
+            ],
+            sessionID: event.sessionID ?? deviceID,
+            streamID: streamID,
+            streamType: audioInput.configuration.streamType
+        )
+        startMicrophoneSourceIfNeeded(sessionID: event.sessionID ?? deviceID, streamID: streamID)
+        return true
+    }
+
+    private func handleAudioSessionClose(_ event: RealtimeAgentEvent) async throws -> Bool {
+        microphoneTask?.cancel()
+        microphoneTask = nil
+        for streamID in speakerBuffers.keys {
+            try await drainSpeakerIfNeeded(streamID: streamID)
+        }
+        try await sendEvent(
+            name: "control.audio_session.closed",
+            payload: ["reason": "device_audio_session_closed"],
+            sessionID: event.sessionID ?? deviceID
+        )
+        return true
+    }
+
     private func commandResponder(for event: RealtimeAgentEvent) -> RealtimeAgentCommandResponder {
         RealtimeAgentCommandResponder(request: event) { [weak self] name, payload in
+            guard let self else {
+                throw RealtimeAgentDeviceError.transportClosed("client released")
+            }
+            try await self.sendEvent(
+                name: name,
+                payload: payload,
+                sessionID: event.sessionID,
+                streamID: event.streamID,
+                streamType: event.streamType
+            )
+        }
+    }
+
+    private func customCommandContext(for event: RealtimeAgentEvent) -> RealtimeAgentCustomCommandContext {
+        RealtimeAgentCustomCommandContext(event: event) { [weak self] name, payload in
             guard let self else {
                 throw RealtimeAgentDeviceError.transportClosed("client released")
             }
@@ -374,6 +509,28 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         return session
     }
 
+    private func outputStreamType(for event: RealtimeAgentEvent) -> String {
+        event.streamType ?? event.payload["stream_type"] as? String ?? ""
+    }
+
+    private func prepareSpeakerSession(for event: RealtimeAgentEvent) async throws {
+        let session = outputSession(for: event)
+        if speakerBuffers[session.streamID] == nil {
+            let sink = speaker.sink ?? RealtimeAgentNoopSpeakerSink()
+            try await sink.prepare(format: speakerFormat(for: event))
+            speakerBuffers[session.streamID] = SpeakerPlaybackBuffer(configuration: speaker.buffer, sink: sink)
+        }
+    }
+
+    private func speakerFormat(for event: RealtimeAgentEvent) -> RealtimeAgentSpeakerFormat {
+        let format = event.payload["format"] as? [String: Any] ?? [:]
+        return RealtimeAgentSpeakerFormat(
+            codec: format["codec"] as? String ?? "pcm16le",
+            sampleRate: intValue(format["sample_rate"]) ?? 16_000,
+            channels: intValue(format["channels"]) ?? 1
+        )
+    }
+
     private func handleOutputChunk(_ chunk: RealtimeAgentStreamChunk) async throws {
         let event = RealtimeAgentEvent(
             eventName: "stream.output.open.requested",
@@ -385,17 +542,141 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             streamType: chunk.streamType
         )
         let session = outputSession(for: event)
-        if !startedOutputStreams.contains(chunk.streamID) {
-            startedOutputStreams.insert(chunk.streamID)
-            try await session.started()
-            if let handler = outputStreamHandlers[chunk.streamType] {
-                try await handler(session)
-            }
-        }
-        if let handler = outputChunkHandlers[chunk.streamType] {
-            try await handler(chunk, session)
+        if speakerBuffers[chunk.streamID] == nil {
+            try await prepareSpeakerSession(for: event)
         }
         try await session.append(chunk)
+        let actions = try await speakerBuffers[chunk.streamID]?.append(chunk) ?? []
+        try await applySpeakerActions(actions, session: session)
+    }
+
+    private func drainSpeakerIfNeeded(streamID: String) async throws {
+        guard let buffer = speakerBuffers[streamID] else { return }
+        let actions = try await buffer.drainAvailable()
+        if let session = outputSessions[streamID] {
+            try await applySpeakerActions(actions, session: session)
+        }
+        try await buffer.drainSink()
+        speakerDrainTasks[streamID]?.cancel()
+        speakerDrainTasks.removeValue(forKey: streamID)
+        speakerBuffers.removeValue(forKey: streamID)
+    }
+
+    private func applySpeakerActions(_ actions: [SpeakerPlaybackAction], session: RealtimeAgentOutputStreamSession) async throws {
+        for action in actions {
+            switch action {
+            case .started:
+                if !startedOutputStreams.contains(session.streamID) {
+                    startedOutputStreams.insert(session.streamID)
+                    try await session.started()
+                    startSpeakerDrainLoop(session: session)
+                }
+            case let .pause(bufferedMS, highWatermarkMS):
+                try await sendEvent(
+                    name: "downstream.pause.requested",
+                    payload: [
+                        "stream_id": session.streamID,
+                        "stream_type": session.streamType,
+                        "buffered_ms": bufferedMS,
+                        "high_watermark_ms": highWatermarkMS,
+                        "reason": "speaker_buffer_high",
+                    ],
+                    sessionID: session.sessionID,
+                    streamID: session.streamID,
+                    streamType: session.streamType
+                )
+            case let .resume(bufferedMS, lowWatermarkMS):
+                try await sendEvent(
+                    name: "downstream.resume.requested",
+                    payload: [
+                        "stream_id": session.streamID,
+                        "stream_type": session.streamType,
+                        "buffered_ms": bufferedMS,
+                        "low_watermark_ms": lowWatermarkMS,
+                        "reason": "speaker_buffer_low",
+                    ],
+                    sessionID: session.sessionID,
+                    streamID: session.streamID,
+                    streamType: session.streamType
+                )
+            case .overflow:
+                diagnostics.lastMediaError = "speaker buffer overflow"
+            }
+        }
+    }
+
+    private func startSpeakerDrainLoop(session: RealtimeAgentOutputStreamSession) {
+        if speakerDrainTasks[session.streamID] != nil {
+            return
+        }
+        speakerDrainTasks[session.streamID] = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    if let buffer = self.speakerBuffers[session.streamID], !buffer.isEmpty {
+                        let actions = try await buffer.drainNext()
+                        try await self.applySpeakerActions(actions, session: session)
+                    }
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                } catch {
+                    self.diagnostics.lastMediaError = error.localizedDescription
+                    return
+                }
+            }
+        }
+    }
+
+    private func installEnabledHardwareAdapters() {
+        if camera.enabled, let source = camera.source {
+            CameraFrameUploader.registerFrameHandler(
+                client: self,
+                source: source,
+                options: CameraFrameUploadOptions(
+                    codec: camera.format,
+                    sampleRate: Int(camera.frequencyHz),
+                    sleepBetweenContinuousFrames: true
+                ),
+                defaultSampleCount: camera.sampleCount
+            )
+        }
+    }
+
+    private func startMicrophoneSourceIfNeeded(sessionID: String, streamID: String) {
+        guard let source = audioInput.source else { return }
+        microphoneTask?.cancel()
+        let configuration = audioInput.configuration
+        microphoneTask = Task { [weak self] in
+            guard let self else { return }
+            var sequence = 0
+            do {
+                for try await payload in source.streamPCM16LE(configuration: configuration) {
+                    if Task.isCancelled { return }
+                    let chunk = RealtimeAgentStreamChunk(
+                        userID: self.userID,
+                        sessionID: sessionID,
+                        streamID: streamID,
+                        streamType: configuration.streamType,
+                        seq: sequence,
+                        payload: payload,
+                        codec: configuration.codec,
+                        sampleRate: configuration.sampleRate,
+                        channels: configuration.channels,
+                        durationMS: configuration.chunkMS
+                    )
+                    sequence += 1
+                    try await self.sendStreamChunk(chunk)
+                }
+            } catch {
+                self.diagnostics.lastMediaError = error.localizedDescription
+            }
+        }
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? Double { return Int(value) }
+        if let value = value as? String { return Int(value) }
+        return nil
     }
 
     private func startHeartbeat(intervalSeconds: Double) {

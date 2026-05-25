@@ -356,5 +356,5 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_device_even
 - wake 后必须先收到 `control.audio_session.open.requested`，端侧回 `control.audio_session.opened` 后实时对话才进入可用状态。
 - 系统 `sensor.mic` 输入由 `control.audio_session.opened/closed` 表达生命周期，音频数据通过 stream WebSocket 持续发送；语音边界由 server 判定。
 - device 消费实时视频 `stream.control.open.requested` 后，必须持续上传 RGB chunk，直到 close。
-- device 消费 `custom.command.requested` 后，必须回自定义命令生命周期事件。
+- device 消费 `custom.command.requested` 后，如需回报业务结果，使用 `ctx.emit("custom.<domain>.<event>", payload)` 发送自定义事件。
 - 非音频业务动作必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`，不能复用标准 `stream.output.*`。

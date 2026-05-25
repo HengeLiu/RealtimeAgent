@@ -2,12 +2,12 @@ import Foundation
 
 /// 输出 stream 会话 helper。
 ///
-/// 主要功能：封装 speaker、haptic 等端侧输出的 started、finished、closed、failed 和 cancelled 回执。
+/// 主要功能：封装 speaker 输出的 started、closed、failed 和 cancelled 回执。
 public struct RealtimeAgentOutputStreamSession: @unchecked Sendable {
     public let streamID: String
     public let streamType: String
+    public let sessionID: String?
 
-    private let sessionID: String?
     private let sendEvent: @Sendable (String, [String: Any], String?, String?, String?) async throws -> Void
     private let appendChunkHandler: @Sendable (RealtimeAgentStreamChunk) async throws -> Void
 
@@ -33,11 +33,6 @@ public struct RealtimeAgentOutputStreamSession: @unchecked Sendable {
     /// 追加一帧输出 chunk 给 App 自定义处理器。
     public func append(_ chunk: RealtimeAgentStreamChunk) async throws {
         try await appendChunkHandler(chunk)
-    }
-
-    /// 回报输出已完成。
-    public func finished() async throws {
-        try await sendEvent("stream.output.finished", ["stream_type": streamType], sessionID, streamID, streamType)
     }
 
     /// 回报输出已关闭。

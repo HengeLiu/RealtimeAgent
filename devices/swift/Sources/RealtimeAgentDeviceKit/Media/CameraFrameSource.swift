@@ -81,6 +81,12 @@ public enum CameraFrameUploader {
                 "mode": request.request.payload["mode"] as? String ?? (sampleCount > 1 ? "continuous" : "single"),
                 "sample_count": sampleCount,
                 "frequency_hz": frequencyHz,
+                "format": [
+                    "codec": options.codec,
+                    "sample_rate": frequencyHz,
+                    "channels": options.channels,
+                    "chunk_ms": options.durationMS,
+                ],
             ]
             try await request.opened(openedPayload)
             for index in 0..<sampleCount {

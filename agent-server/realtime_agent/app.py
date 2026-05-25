@@ -698,6 +698,8 @@ class RealtimeAgentApp:
             self._handle_device_command_report(event)
             return
         if event.event_name == "control.audio_session.opened":
+            if event.stream_id and event.stream_type:
+                self._register_endpoint_input_stream(event)
             self.control_service.publish(event)
             device_id = self._event_device_id(event)
             self._mark_audio_session_opened(event.user_id, device_id)

@@ -109,6 +109,63 @@ def test_wake_requests_session_and_agent_opens_only_after_endpoint_opened(tmp_pa
     assert "session.opened" in (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
 
 
+def test_audio_session_opened_registers_mic_stream_before_chunks(tmp_path) -> None:
+    """测试目标：验证新版音频会话打开事件可以直接声明麦克风 stream。
+
+    测试方法：端侧发送带 `stream_id/stream_type/format` 的
+    `control.audio_session.opened`，随后直接上传 `sensor.mic` chunk。
+    预期结果：server 在 opened 阶段注册 mic stream，首个音频 chunk 不再报 unknown stream。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-audio")
+    register_audio_endpoint(app, connection)
+    stream_id = "stream-mic-opened"
+
+    app.publish_control_event(
+        Event(
+            event_name="control.user.wake.detected",
+            user_id="user-a",
+            producer_id="dev-audio",
+            payload={"wake_word": "manual"},
+        )
+    )
+    app.mark_stream_connection_opened("dev-audio")
+    app.publish_control_event(
+        Event(
+            event_name="control.audio_session.opened",
+            user_id="user-a",
+            producer_id="dev-audio",
+            session_id="dev-audio",
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            payload={
+                "stream_id": stream_id,
+                "stream_type": "sensor.mic",
+                "format": {"codec": "pcm16le", "sample_rate": 16000, "channels": 1, "chunk_ms": 20},
+            },
+        )
+    )
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-a",
+            session_id="dev-audio",
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            codec="pcm16le",
+            sample_rate=16000,
+            channels=1,
+            duration_ms=20,
+            final=False,
+        )
+    )
+
+    assert app.stream_service.registry.get(stream_id).stream_type == "sensor.mic"
+    assert (tmp_path / "runs" / "user-a" / "dev-audio" / "stream-events.jsonl").exists()
+
+
 def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path) -> None:
     """测试目标：验证 `close_after_reply` 等当前 output stream 结束后再请求关闭会话。
 

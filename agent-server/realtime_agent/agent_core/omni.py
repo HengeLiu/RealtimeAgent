@@ -1260,6 +1260,7 @@ class OmniRealtimeAgentCore:
         self._sessions_with_provider_output: set[str] = set()
         self._event_buffer = AgentEventBuffer()
         self._assistant_text_by_session: dict[str, list[str]] = {}
+        self._active_response_sessions: set[str] = set()
         self._response_generation_by_session: dict[str, int] = {}
         self._interrupted_response_generation_by_session: dict[str, int] = {}
         self._response_key_by_session: dict[str, str] = {}
@@ -1992,8 +1993,12 @@ class OmniRealtimeAgentCore:
         """
 
         event = str(record.get("event") or "")
+        if event == "omni.response.done":
+            self._active_response_sessions.discard(session_id)
+            return
         if event != "omni.response.created":
             return
+        self._active_response_sessions.add(session_id)
         self._response_generation_by_session[session_id] = self._response_generation_by_session.get(session_id, 0) + 1
         generation = self._response_generation_by_session[session_id]
         self._response_key_by_session[session_id] = self._response_key_from_record(record) or f"generation:{generation}"
@@ -2123,6 +2128,22 @@ class OmniRealtimeAgentCore:
             record=record,
         )
         active_stream_id = self.output_service.active_output_stream_id(user_id, session_id)
+        response_active = session_id in self._active_response_sessions
+        if active_stream_id is None and not response_active:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.provider_speech_started.no_active_response",
+                    "reason": reason,
+                },
+            )
+            self._event_buffer.record_event(
+                "provider_speech_started.no_active_response",
+                user_id=user_id,
+                session_id=session_id,
+                payload={"reason": reason},
+            )
+            return
         self._mark_current_response_interrupted(user_id=user_id, session_id=session_id, reason=reason)
         existing = self._sessions.get(user_id)
         if existing:

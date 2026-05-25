@@ -243,7 +243,6 @@ stream.output.open.requested
 
 ```text
 stream.output.started
-stream.output.finished
 stream.output.closed
 stream.output.failed
 stream.output.cancelled
@@ -257,7 +256,16 @@ stream.output.finish.requested
 stream.output.cancel.requested
 ```
 
-输出 stream 用于 speaker 播放、显示输出或其他端侧执行器输出。播放仲裁由 Server SDK 的 Output Service 管理，Device SDK 负责消费事件和回报状态。
+标准输出 stream 仅用于系统 speaker 播放，即 `stream_type=actuator.speaker`。显示输出、震动、自定义执行器或其他业务动作不能复用 `stream.output.*`，必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`。播放仲裁由 Server SDK 的 Output Service 管理，Device SDK 负责消费事件、维护 speaker buffer、写入 speaker sink 并回报状态。
+
+speaker 播放 buffer 的下行流控事件：
+
+```text
+downstream.pause.requested
+downstream.resume.requested
+```
+
+`downstream.pause.requested` 表示端侧 SDK speaker buffer 达到高水位线，payload 至少包含 `stream_id`、`stream_type`、`buffered_ms`、`high_watermark_ms` 和 `reason="speaker_buffer_high"`。`downstream.resume.requested` 表示端侧 buffer 下降到低水位线，payload 至少包含 `stream_id`、`stream_type`、`buffered_ms`、`low_watermark_ms` 和 `reason="speaker_buffer_low"`。
 
 ## Stream 二进制帧
 
