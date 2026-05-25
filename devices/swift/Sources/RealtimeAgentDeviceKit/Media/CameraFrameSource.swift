@@ -53,7 +53,7 @@ public struct CameraFrameUploadOptions: Sendable, Equatable {
 
 /// 相机帧上传工具。
 ///
-/// 主要功能：注册 `sensor.rgb` 单帧 handler，把 server 请求转换为 opened、JPEG chunk 和 closed。
+/// 主要功能：注册 `sensor.rgb` handler，把 server 请求转换为 opened、JPEG chunk 和 closed。
 public enum CameraFrameUploader {
     /// 注册单帧 RGB handler。
     public static func registerSingleFrameHandler(
@@ -66,7 +66,7 @@ public enum CameraFrameUploader {
 
     /// 注册 RGB handler，支持 single 和 continuous 请求。
     ///
-    /// 主要功能：根据请求 payload 中的 `sample_count` / `frequency_hz` 连续上传多帧 JPEG。
+    /// 主要功能：`mode=single` 时上传有限帧，`mode=continuous` 时按 `frequency_hz` 持续上传直到 server close。
     public static func registerFrameHandler(
         client: RealtimeAgentDeviceClient,
         source: RealtimeAgentCameraFrameSource,
@@ -74,12 +74,11 @@ public enum CameraFrameUploader {
         defaultSampleCount: Int = 1
     ) {
         client.onStreamOpen("sensor.rgb") { request in
-            let sampleCount = max(1, intValue(request.request.payload["sample_count"]) ?? defaultSampleCount)
+            let mode = request.request.payload["mode"] as? String ?? "single"
             let frequencyHz = max(1, intValue(request.request.payload["frequency_hz"]) ?? options.sampleRate)
-            let openedPayload: [String: Any] = [
+            var openedPayload: [String: Any] = [
                 "request_id": request.requestID ?? "",
-                "mode": request.request.payload["mode"] as? String ?? (sampleCount > 1 ? "continuous" : "single"),
-                "sample_count": sampleCount,
+                "mode": mode,
                 "frequency_hz": frequencyHz,
                 "format": [
                     "codec": options.codec,
@@ -88,7 +87,37 @@ public enum CameraFrameUploader {
                     "chunk_ms": options.durationMS,
                 ],
             ]
+            let isContinuous = mode == "continuous"
+            let sampleCount = max(1, intValue(request.request.payload["sample_count"]) ?? defaultSampleCount)
+            if !isContinuous {
+                openedPayload["sample_count"] = sampleCount
+            }
             try await request.opened(openedPayload)
+            if isContinuous {
+                var index = 0
+                while true {
+                    try Task.checkCancellation()
+                    let jpeg = try await source.captureJPEG()
+                    var metadata = metadata(from: request)
+                    metadata["sample_index"] = index
+                    metadata["frequency_hz"] = frequencyHz
+                    try await request.write(
+                        jpeg,
+                        codec: options.codec,
+                        sampleRate: frequencyHz,
+                        channels: options.channels,
+                        durationMS: options.durationMS,
+                        final: false,
+                        metadata: metadata
+                    )
+                    index += 1
+                    if options.sleepBetweenContinuousFrames {
+                        try await Task.sleep(nanoseconds: UInt64(1_000_000_000 / frequencyHz))
+                    } else {
+                        await Task.yield()
+                    }
+                }
+            }
             for index in 0..<sampleCount {
                 let jpeg = try await source.captureJPEG()
                 var metadata = metadata(from: request)

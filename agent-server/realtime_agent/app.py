@@ -918,6 +918,8 @@ class RealtimeAgentApp:
         raise ValueError(f"no active device for user: {user_id}")
 
     def write_input_chunk(self, chunk: StreamChunk) -> None:
+        if chunk.stream_type.startswith("sensor.") and not self.stream_service.registry.has(chunk.stream_id):
+            self._register_endpoint_input_stream_from_chunk(chunk)
         self.stream_service.on_chunk(chunk)
 
     def mark_stream_connection_opened(self, device_id: str) -> None:
@@ -1063,6 +1065,57 @@ class RealtimeAgentApp:
             event.user_id,
             DeviceDialogState(user_id=event.user_id, device_id=handle.session_id, state="opened"),
         ).touch()
+        if handle.stream_type == "sensor.mic" and hasattr(self.agent_core, "on_audio_input_opened"):
+            self.agent_core.on_audio_input_opened(
+                user_id=handle.user_id,
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+            )
+
+    def _register_endpoint_input_stream_from_chunk(self, chunk: StreamChunk) -> None:
+        """根据先到达的上行 chunk 补注册输入 stream。
+
+        主要逻辑：control WebSocket 和 stream WebSocket 之间没有全局顺序保证，端侧即使
+        先发送 `stream.input.opened`，server 也可能先收到二进制 chunk。这里只对
+        `sensor.*` 上行数据做容错补注册，避免单帧图片或首个 mic chunk 因控制事件晚到
+        被误判为 unknown stream。
+        参数：`chunk` 为先于 opened 控制事件到达的上行数据。
+        返回值：无。
+        异常情况：stream 类型或格式不合法时由 StreamService 抛出异常。
+        """
+
+        device_id = chunk.session_id
+        handle = self.stream_service.open_stream(
+            user_id=chunk.user_id,
+            session_id=device_id,
+            stream_type=chunk.stream_type,
+            producer_id=device_id,
+            format=StreamFormat(
+                codec=chunk.codec,
+                sample_rate=chunk.sample_rate,
+                channels=chunk.channels,
+                chunk_ms=chunk.duration_ms,
+            ),
+            stream_id=chunk.stream_id,
+            consumer_device_ids=() if chunk.metadata.get("request_id") else None,
+        )
+        self._active_device_by_user[chunk.user_id] = handle.session_id
+        self._device_dialogs_by_user.setdefault(
+            chunk.user_id,
+            DeviceDialogState(user_id=chunk.user_id, device_id=handle.session_id, state="opened"),
+        ).touch()
+        self.recorder.record_stream_event(
+            handle.session_id,
+            {
+                "event": "stream.opened_from_first_chunk",
+                "stream_id": handle.stream_id,
+                "stream_type": handle.stream_type,
+                "seq": chunk.seq,
+                "payload_size": len(chunk.payload),
+                "reason": "control_stream_order_race",
+                "request_id": chunk.metadata.get("request_id"),
+            },
+        )
         if handle.stream_type == "sensor.mic" and hasattr(self.agent_core, "on_audio_input_opened"):
             self.agent_core.on_audio_input_opened(
                 user_id=handle.user_id,

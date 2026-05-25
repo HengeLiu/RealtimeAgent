@@ -268,6 +268,23 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     }
 }
 
+struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
+    var chunks: [Data]
+    var delayNanoseconds: UInt64
+
+    func streamPCM16LE(configuration _: RealtimeAgentMicrophoneConfiguration) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                for chunk in chunks {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                    continuation.yield(chunk)
+                }
+                continuation.finish()
+            }
+        }
+    }
+}
+
 @Test func audioSessionOpenStartsEnabledMicrophoneSource() async throws {
     let transport = MockRealtimeAgentTransport()
     let source = ArrayMicrophoneSource(chunks: [Data(repeating: 1, count: 640), Data(repeating: 2, count: 640)])
@@ -307,6 +324,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     )
 
     #expect(try await client.dispatchEvent(event))
+    try await Task.sleep(nanoseconds: 30_000_000)
 
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["custom.haptic.vibrate.done"])
@@ -388,6 +406,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     )
 
     #expect(try await client.dispatchEvent(event))
+    try await Task.sleep(nanoseconds: 30_000_000)
 
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["stream.input.opened", "stream.input.closed"])
@@ -564,7 +583,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
 }
 
 @Test func outputFinishWaitsForInFlightSpeakerChunkAndIgnoresTooLateChunks() async throws {
-    // 测试目标：finish 控制事件早于 stream chunk 处理完成时，SDK 不能漏播已在处理中的音频，也不能让更晚到达的 chunk 重新静音麦克风。
+    // 测试目标：finish 控制事件早于 stream chunk 处理完成时，SDK 不能漏播已在处理中的音频，也不能让更晚到达的 chunk 重新进入播放队列。
     // 测试方法：用慢 prepare 模拟真机播放器准备耗时，并发处理首个 chunk 与 finish 事件，finish 完成后再投递迟到 chunk。
     // 预期结果：首个 chunk 被写入 sink；finish 完成后的迟到 chunk 被忽略，不会再次进入播放队列。
     let transport = MockRealtimeAgentTransport()
@@ -615,6 +634,53 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
 
     #expect(try await client.dispatchStreamChunk(lateChunk) == false)
     #expect(sink.chunks.map(\.seq) == [0])
+}
+
+@Test func speakerPlaybackDoesNotPauseMicrophoneUpload() async throws {
+    // 测试目标：确认播放 speaker 下行期间，SDK 仍持续上传 sensor.mic。
+    // 测试方法：打开音频会话后立即分发一帧 speaker chunk，同时让麦克风 source 延迟产出三帧 PCM。
+    // 预期结果：三帧麦克风 chunk 都发送到 stream WebSocket，符合全双工和文档约定。
+    let transport = MockRealtimeAgentTransport()
+    let source = DelayedMicrophoneSource(
+        chunks: [
+            Data(repeating: 1, count: 640),
+            Data(repeating: 2, count: 640),
+            Data(repeating: 3, count: 640),
+        ],
+        delayNanoseconds: 20_000_000
+    )
+    let sink = RecordingSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        audioInput: .enabled(source: source),
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let openAudio = RealtimeAgentEvent(
+        eventName: "control.audio_session.open.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [:],
+        sessionID: "session-001"
+    )
+    let speakerChunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-duplex",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+
+    #expect(try await client.dispatchEvent(openAudio))
+    #expect(try await client.dispatchStreamChunk(speakerChunk))
+    try await Task.sleep(nanoseconds: 120_000_000)
+
+    let uploaded = try transport.sentStreamData.map { try RealtimeAgentStreamChunkCodec.decode($0) }
+    #expect(uploaded.filter { $0.streamType == "sensor.mic" }.count == 3)
 }
 
 @Test func speakerBufferSendsPauseAndResumeByWatermark() async throws {
@@ -723,6 +789,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     )
 
     #expect(try await client.dispatchEvent(event))
+    try await Task.sleep(nanoseconds: 30_000_000)
 
     let opened = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
     let format = opened.payload["format"] as? [String: Any]
@@ -749,11 +816,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     let source = ClosureCameraFrameSource {
         Data("jpeg".utf8)
     }
-    CameraFrameUploader.registerFrameHandler(
-        client: client,
-        source: source,
-        options: CameraFrameUploadOptions(sampleRate: 5, sleepBetweenContinuousFrames: false)
-    )
+    CameraFrameUploader.registerFrameHandler(client: client, source: source, options: CameraFrameUploadOptions(sampleRate: 50))
     let event = RealtimeAgentEvent(
         eventName: "stream.control.open.requested",
         userID: "user-001",
@@ -762,8 +825,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
             "stream_type": "sensor.rgb",
             "request_id": "req-002",
             "mode": "continuous",
-            "sample_count": 3,
-            "frequency_hz": 5,
+            "frequency_hz": 50,
         ],
         sessionID: "dev-ios-001",
         streamID: "stream-rgb-002",
@@ -771,17 +833,31 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     )
 
     #expect(try await client.dispatchEvent(event))
+    try await Task.sleep(nanoseconds: 90_000_000)
+    let close = RealtimeAgentEvent(
+        eventName: "stream.control.close.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "sensor.rgb"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-rgb-002",
+        streamType: "sensor.rgb"
+    )
+    #expect(try await client.dispatchEvent(close))
+    try await Task.sleep(nanoseconds: 30_000_000)
 
-    #expect(transport.sentStreamData.count == 3)
+    #expect(transport.sentStreamData.count >= 2)
     let opened = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
     let format = opened.payload["format"] as? [String: Any]
     #expect(format?["codec"] as? String == "jpeg")
-    #expect(format?["sample_rate"] as? Int == 5)
+    #expect(format?["sample_rate"] as? Int == 50)
+    #expect(opened.payload["sample_count"] == nil)
     let chunks = try transport.sentStreamData.map { try RealtimeAgentStreamChunkCodec.decode($0) }
-    #expect(chunks.map(\.seq) == [0, 1, 2])
-    #expect(chunks.map(\.final) == [false, false, true])
-    #expect(chunks.last?.metadata["sample_count"] as? Int == 3)
-    #expect(chunks.last?.metadata["frequency_hz"] as? Int == 5)
+    #expect(Array(chunks.map(\.seq).prefix(2)) == [0, 1])
+    #expect(chunks.allSatisfy { $0.final == false })
+    #expect(chunks.last?.metadata["frequency_hz"] as? Int == 50)
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names.contains("stream.input.closed"))
 }
 
 @Test func streamCodecRoundTripsChunk() throws {

@@ -115,6 +115,42 @@ def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
     assert Path(asset.uri).read_bytes() == payload
 
 
+def test_sensor_chunk_before_open_event_auto_registers_input_stream(tmp_path) -> None:
+    """测试目标：验证 stream chunk 先于 opened 控制事件到达时不会被误判为 unknown stream。
+
+    测试方法：不预先调用 `open_input_stream()`，直接写入带 request_id 的 `sensor.rgb`
+    单帧 chunk，模拟 control WebSocket 和 stream WebSocket 跨连接乱序。
+    预期结果：服务端按 chunk 补注册输入 stream，图片资产正常进入 runs 归档。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    payload = b"\xff\xd8" + b"race-photo" + b"\xff\xd9"
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-race-photo",
+            session_id="dev-ios-001",
+            stream_id="stream-rgb-race",
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=payload,
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"request_id": "asset_req_race"},
+        )
+    )
+
+    handle = app.stream_service.registry.get("stream-rgb-race")
+    assert handle.producer_id == "dev-ios-001"
+    assert handle.consumer_device_ids == ()
+    asset = app.asset_service.query_assets(user_id="user-race-photo", stream_type="sensor.rgb")[-1]
+    assert asset.metadata["request_id"] == "asset_req_race"
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
+    assert Path(asset.uri).read_bytes() == payload
+
+
 def test_rgb_asset_enters_turn_buffer_and_can_be_claimed_once(tmp_path) -> None:
     """测试目标：验证 sensor.rgb 上传后进入 turn buffer，并且只能被业务消费一次。
 

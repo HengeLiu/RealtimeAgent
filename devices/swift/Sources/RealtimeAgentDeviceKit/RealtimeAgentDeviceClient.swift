@@ -24,6 +24,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var customCommandHandlers: [String: CustomCommandHandler] = [:]
     private var streamOpenHandlers: [String: StreamOpenHandler] = [:]
     private var eventHandlers: [String: EventHandler] = [:]
+    private var inputStreamTasks: [String: Task<Void, Never>] = [:]
     private var outputSessions: [String: RealtimeAgentOutputStreamSession] = [:]
     private var speakerBuffers: [String: SpeakerPlaybackBuffer] = [:]
     private var speakerPreparationTasks: [String: Task<SpeakerPlaybackBuffer, Error>] = [:]
@@ -34,8 +35,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var completedOutputStreams = Set<String>()
     private var sequenceByStream: [String: Int] = [:]
     private var debugLogHandler: DebugLogHandler?
-    private let microphoneUploadMuteLock = NSLock()
-    private var microphoneUploadMuteReasons = Set<String>()
     private var audioInput: AudioInput = .disabled()
     private var camera: Camera = .disabled()
     private var speaker: Speaker = .disabled()
@@ -177,6 +176,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         controlReceiveTask?.cancel()
         streamReceiveTask?.cancel()
         microphoneTask?.cancel()
+        inputStreamTasks.values.forEach { $0.cancel() }
         speakerPreparationTasks.values.forEach { $0.cancel() }
         speakerDrainTasks.values.forEach { $0.cancel() }
         for buffer in speakerBuffers.values {
@@ -186,6 +186,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         controlReceiveTask = nil
         streamReceiveTask = nil
         microphoneTask = nil
+        inputStreamTasks = [:]
         speakerPreparationTasks = [:]
         speakerDrainTasks = [:]
         speakerBuffers = [:]
@@ -193,7 +194,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         speakerDrainedChunkCounts = [:]
         startedOutputStreams = []
         completedOutputStreams = []
-        clearMicrophoneUploadMutes()
         await transport.close()
         diagnostics.controlState = "closed"
         diagnostics.streamState = "closed"
@@ -295,7 +295,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             await debugLog("speaker close requested stream=\(session.streamID) event=\(event.eventName)")
             try await finishSpeakerOutput(streamID: session.streamID)
             try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
-            unmuteMicrophoneUpload(reason: "speaker:\(session.streamID)")
             return true
         case "stream.output.cancel.requested":
             let session = outputSession(for: event)
@@ -311,7 +310,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             startedOutputStreams.remove(session.streamID)
             completedOutputStreams.insert(session.streamID)
             try await session.cancelled(reason: "cancel_requested")
-            unmuteMicrophoneUpload(reason: "speaker:\(session.streamID)")
             return true
         default:
             diagnostics.unhandledEvents += 1
@@ -435,7 +433,21 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             diagnostics.unhandledEvents += 1
             return false
         }
-        try await handler(inputStreamRequest(for: event))
+        let request = inputStreamRequest(for: event)
+        inputStreamTasks[request.streamID]?.cancel()
+        inputStreamTasks[request.streamID] = Task { [weak self, request] in
+            do {
+                try await handler(request)
+            } catch is CancellationError {
+                try? await request.closed(reason: "server_requested")
+            } catch {
+                await self?.debugLog(
+                    "input stream failed stream=\(request.streamID) type=\(request.streamType) error=\(error.localizedDescription)"
+                )
+                try? await request.failed(code: "input_stream.handler_failed", message: error.localizedDescription)
+            }
+            self?.inputStreamTasks.removeValue(forKey: request.streamID)
+        }
         return true
     }
 
@@ -445,13 +457,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             diagnostics.unhandledEvents += 1
             return false
         }
-        try await sendEvent(
-            name: "stream.input.closed",
-            payload: ["stream_type": streamType, "reason": "server_requested"],
-            sessionID: event.sessionID,
-            streamID: event.streamID,
-            streamType: streamType
-        )
+        if let streamID = event.streamID ?? event.payload["stream_id"] as? String,
+           let task = inputStreamTasks.removeValue(forKey: streamID) {
+            task.cancel()
+        }
         return true
     }
 
@@ -487,7 +496,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         microphoneTask = nil
         for streamID in Array(speakerBuffers.keys) {
             try await drainSpeakerIfNeeded(streamID: streamID)
-            unmuteMicrophoneUpload(reason: "speaker:\(streamID)")
         }
         try await sendEvent(
             name: "control.audio_session.closed",
@@ -658,7 +666,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         if speakerBuffers[chunk.streamID] == nil {
             try await prepareSpeakerSession(for: event)
         }
-        muteMicrophoneUpload(reason: "speaker:\(session.streamID)")
         try await session.append(chunk)
         let actions = try await speakerBuffers[chunk.streamID]?.append(chunk) ?? []
         if let snapshot = await speakerBuffers[chunk.streamID]?.snapshot(),
@@ -856,9 +863,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             do {
                 for try await payload in source.streamPCM16LE(configuration: configuration) {
                     if Task.isCancelled { return }
-                    if self.isMicrophoneUploadMuted {
-                        continue
-                    }
                     let chunk = RealtimeAgentStreamChunk(
                         userID: self.userID,
                         sessionID: sessionID,
@@ -878,30 +882,6 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                 self.diagnostics.lastMediaError = error.localizedDescription
             }
         }
-    }
-
-    private var isMicrophoneUploadMuted: Bool {
-        microphoneUploadMuteLock.lock()
-        defer { microphoneUploadMuteLock.unlock() }
-        return !microphoneUploadMuteReasons.isEmpty
-    }
-
-    private func muteMicrophoneUpload(reason: String) {
-        microphoneUploadMuteLock.lock()
-        microphoneUploadMuteReasons.insert(reason)
-        microphoneUploadMuteLock.unlock()
-    }
-
-    private func unmuteMicrophoneUpload(reason: String) {
-        microphoneUploadMuteLock.lock()
-        microphoneUploadMuteReasons.remove(reason)
-        microphoneUploadMuteLock.unlock()
-    }
-
-    private func clearMicrophoneUploadMutes() {
-        microphoneUploadMuteLock.lock()
-        microphoneUploadMuteReasons.removeAll()
-        microphoneUploadMuteLock.unlock()
     }
 
     private func intValue(_ value: Any?) -> Int? {
