@@ -258,6 +258,8 @@ stream.output.cancel.requested
 
 标准输出 stream 仅用于系统 speaker 播放，即 `stream_type=actuator.speaker`。显示输出、震动、自定义执行器或其他业务动作不能复用 `stream.output.*`，必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`。播放仲裁由 Server SDK 的 Output Service 管理，Device SDK 负责消费事件、维护 speaker buffer、写入 speaker sink 并回报状态。
 
+`stream.output.finish.requested` 表示 server 已经写完本轮 output stream。由于 control WebSocket 和 stream WebSocket 彼此独立，finish 控制事件可能早于最后几个二进制 chunk 到达端侧；speaker finish payload 应尽量包含 `output_chunk_count`、`output_last_seq` 和 `output_bytes`。Device SDK 收到 `output_last_seq` 时，必须等到该序号的 speaker chunk 已经进入本地播放 buffer 后再执行 drain 和 `stream.output.closed` 回执。
+
 speaker 播放 buffer 的下行流控事件：
 
 ```text

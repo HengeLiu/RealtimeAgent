@@ -31,6 +31,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var speakerDrainTasks: [String: Task<Void, Never>] = [:]
     private var speakerReceivedChunkCounts: [String: Int] = [:]
     private var speakerDrainedChunkCounts: [String: Int] = [:]
+    private var speakerAppendedLastSeq: [String: Int] = [:]
     private var startedOutputStreams = Set<String>()
     private var completedOutputStreams = Set<String>()
     private var sequenceByStream: [String: Int] = [:]
@@ -43,6 +44,8 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private static let speakerDrainYieldEveryChunks = 64
     private static let streamReceiveReconnectBaseSleepNanoseconds: UInt64 = 100_000_000
     private static let speakerFinishGraceNanoseconds: UInt64 = 300_000_000
+    private static let speakerFinishExpectedChunkTimeoutNanoseconds: UInt64 = 2_000_000_000
+    private static let speakerFinishExpectedChunkPollNanoseconds: UInt64 = 20_000_000
 
     /// 创建默认 URLSession WebSocket 客户端。
     ///
@@ -192,6 +195,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         speakerBuffers = [:]
         speakerReceivedChunkCounts = [:]
         speakerDrainedChunkCounts = [:]
+        speakerAppendedLastSeq = [:]
         startedOutputStreams = []
         completedOutputStreams = []
         await transport.close()
@@ -293,7 +297,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         case "stream.output.close.requested", "stream.output.finish.requested":
             let session = outputSession(for: event)
             await debugLog("speaker close requested stream=\(session.streamID) event=\(event.eventName)")
-            try await finishSpeakerOutput(streamID: session.streamID)
+            try await finishSpeakerOutput(
+                streamID: session.streamID,
+                expectedLastSeq: outputExpectedLastSeq(for: event)
+            )
             try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
             return true
         case "stream.output.cancel.requested":
@@ -307,6 +314,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             speakerBuffers.removeValue(forKey: session.streamID)
             speakerReceivedChunkCounts.removeValue(forKey: session.streamID)
             speakerDrainedChunkCounts.removeValue(forKey: session.streamID)
+            speakerAppendedLastSeq.removeValue(forKey: session.streamID)
             startedOutputStreams.remove(session.streamID)
             completedOutputStreams.insert(session.streamID)
             try await session.cancelled(reason: "cancel_requested")
@@ -584,6 +592,19 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         event.streamType ?? event.payload["stream_type"] as? String ?? ""
     }
 
+    private func outputExpectedLastSeq(for event: RealtimeAgentEvent) -> Int? {
+        if let lastSeq = intValue(event.payload["output_last_seq"]) {
+            return lastSeq
+        }
+        if let lastSeq = intValue(event.payload["last_seq"]) {
+            return lastSeq
+        }
+        if let chunkCount = intValue(event.payload["output_chunk_count"]), chunkCount > 0 {
+            return chunkCount - 1
+        }
+        return nil
+    }
+
     private func prepareSpeakerSession(for event: RealtimeAgentEvent) async throws {
         let session = outputSession(for: event)
         if completedOutputStreams.contains(session.streamID) {
@@ -675,15 +696,45 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             )
         }
         try await applySpeakerActions(actions, session: session)
+        let currentLastSeq = speakerAppendedLastSeq[chunk.streamID] ?? -1
+        speakerAppendedLastSeq[chunk.streamID] = max(currentLastSeq, chunk.seq)
     }
 
-    private func finishSpeakerOutput(streamID: String) async throws {
+    private func finishSpeakerOutput(streamID: String, expectedLastSeq: Int?) async throws {
+        if let expectedLastSeq {
+            await waitForExpectedSpeakerChunk(streamID: streamID, expectedLastSeq: expectedLastSeq)
+        } else {
+            try? await Task.sleep(nanoseconds: Self.speakerFinishGraceNanoseconds)
+        }
         if let task = speakerPreparationTasks[streamID] {
             _ = try await task.value
         }
-        try? await Task.sleep(nanoseconds: Self.speakerFinishGraceNanoseconds)
         completedOutputStreams.insert(streamID)
         try await drainSpeakerIfNeeded(streamID: streamID)
+    }
+
+    private func waitForExpectedSpeakerChunk(streamID: String, expectedLastSeq: Int) async {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        await debugLog(
+            "speaker finish wait stream=\(streamID) expected_last_seq=\(expectedLastSeq) current_last_seq=\(speakerAppendedLastSeq[streamID] ?? -1)"
+        )
+        while !Task.isCancelled {
+            let currentLastSeq = speakerAppendedLastSeq[streamID] ?? -1
+            if currentLastSeq >= expectedLastSeq {
+                await debugLog(
+                    "speaker finish wait completed stream=\(streamID) expected_last_seq=\(expectedLastSeq) current_last_seq=\(currentLastSeq)"
+                )
+                return
+            }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            if elapsed >= Self.speakerFinishExpectedChunkTimeoutNanoseconds {
+                await debugLog(
+                    "speaker finish wait timeout stream=\(streamID) expected_last_seq=\(expectedLastSeq) current_last_seq=\(currentLastSeq)"
+                )
+                return
+            }
+            try? await Task.sleep(nanoseconds: Self.speakerFinishExpectedChunkPollNanoseconds)
+        }
     }
 
     private func drainSpeakerIfNeeded(streamID: String) async throws {
@@ -707,6 +758,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         speakerPreparationTasks.removeValue(forKey: streamID)
         speakerReceivedChunkCounts.removeValue(forKey: streamID)
         speakerDrainedChunkCounts.removeValue(forKey: streamID)
+        speakerAppendedLastSeq.removeValue(forKey: streamID)
         startedOutputStreams.remove(streamID)
         await debugLog("speaker drain completed stream=\(streamID)")
     }

@@ -53,7 +53,7 @@ def build_sim(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="realtime-agent.ios.build-sim", description="构建 realtime-agent iOS Simulator 参考端")
     parser.add_argument("--project", default="examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone.xcodeproj", help="Xcode 工程路径")
     parser.add_argument("--scheme", default="RealtimeAgentPhone")
-    parser.add_argument("--destination", default="platform=iOS Simulator,name=iPhone 16")
+    parser.add_argument("--destination", default="generic/platform=iOS Simulator")
     parser.add_argument("--dry-run", action="store_true", help="只输出 xcodebuild 命令，不执行构建")
     args = parser.parse_args(argv)
 

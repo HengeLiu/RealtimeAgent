@@ -327,14 +327,24 @@ class StreamService:
             },
         )
 
-    def request_output_finish(self, stream_id: str, *, reason: str = "completed") -> None:
+    def request_output_finish(
+        self,
+        stream_id: str,
+        *,
+        reason: str = "completed",
+        output_bytes: int | None = None,
+        output_chunk_count: int | None = None,
+        output_last_seq: int | None = None,
+    ) -> None:
         """通知端侧 output stream 已写完，但不关闭服务端 stream 句柄。
 
         主要逻辑：`stream.output.finish.requested` 只表示 server 已经没有更多
         `StreamChunk` 要写入；端侧还需要把 SDK buffer 和本地 speaker sink drain
         完成后再回 `stream.output.closed`。因此这里把状态标记为
         `finish_requested`，由 `mark_output_endpoint_closed()` 最终收口。
-        参数：`stream_id` 为 output stream 标识，`reason` 为写完原因。
+        参数：`stream_id` 为 output stream 标识，`reason` 为写完原因；
+        `output_bytes`、`output_chunk_count`、`output_last_seq` 用于跨 WebSocket
+        场景下让端侧判断 finish 前的最后一帧是否已经进入播放队列。
         返回值：无。
         异常情况：stream 不存在或不是 output stream 时抛出 `ValueError`。
         """
@@ -346,6 +356,13 @@ class StreamService:
             return
         handle.state = "finish_requested"
         event_name = "stream.output.finish.requested" if handle.stream_type == "actuator.speaker" else "stream.output.close.requested"
+        payload = {"stream_type": handle.stream_type, "reason": reason}
+        if output_bytes is not None:
+            payload["output_bytes"] = output_bytes
+        if output_chunk_count is not None:
+            payload["output_chunk_count"] = output_chunk_count
+        if output_last_seq is not None:
+            payload["output_last_seq"] = output_last_seq
         event = Event(
             event_name=event_name,
             user_id=handle.user_id,
@@ -353,19 +370,23 @@ class StreamService:
             session_id=handle.session_id,
             stream_id=handle.stream_id,
             stream_type=handle.stream_type,
-            payload={"stream_type": handle.stream_type, "reason": reason},
+            payload=payload,
         )
         self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
-        self.recorder.record_stream_event(
-            handle.session_id,
-            {
-                "event": "stream.output.finish_requested",
-                "stream_id": handle.stream_id,
-                "stream_type": handle.stream_type,
-                "reason": reason,
-                "state": handle.state,
-            },
-        )
+        record = {
+            "event": "stream.output.finish_requested",
+            "stream_id": handle.stream_id,
+            "stream_type": handle.stream_type,
+            "reason": reason,
+            "state": handle.state,
+        }
+        if output_bytes is not None:
+            record["output_bytes"] = output_bytes
+        if output_chunk_count is not None:
+            record["output_chunk_count"] = output_chunk_count
+        if output_last_seq is not None:
+            record["output_last_seq"] = output_last_seq
+        self.recorder.record_stream_event(handle.session_id, record)
 
     def mark_output_endpoint_started(self, stream_id: str, *, reason: str = "endpoint_started") -> None:
         """记录端侧已经开始播放 output stream。"""

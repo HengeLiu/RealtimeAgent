@@ -118,7 +118,7 @@ sdk.start()
 13. SDK 负责维护内置的 speaker 播放 buffer，并按配置的播放启动水位线、高水位线和低水位线决定何时开始播放、何时暂停或恢复 server 下行写出。App 开发者只配置 SDK 的播放 buffer 参数，不在业务 App 中实现这套 buffer。
 14. 播放期间麦克风仍持续上行；端侧不判断用户是否开始说话，也不判断是否构成打断。端侧只需要响应 server 下发的 `stream.output.cancel.requested`。
 15. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.closed` 或 `stream.output.cancelled`。
-16. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.close.requested` 或 `stream.output.finish.requested`；device 等 SDK 播放 buffer 和本地 sink drain 完成后发送 `stream.output.closed`。
+16. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.close.requested` 或 `stream.output.finish.requested`；对 speaker 音频，finish payload 会尽量携带 `output_chunk_count`、`output_last_seq` 和 `output_bytes`，device 先确认最后一帧已经进入 SDK 播放 buffer，再等 buffer 和本地 sink drain 完成后发送 `stream.output.closed`。
 17. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和视频输入，等待下行播放 drain 后，发送 `control.audio_session.closed`。
 
 系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立上行 stream 通道并发送 `control.audio_session.opened`，再持续发二进制 chunk；不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
@@ -127,7 +127,7 @@ sdk.start()
 
 浏览器参考端的视频输入使用同一条 stream WebSocket 上传 `sensor.rgb`。如果已经选择视频或图片样例，端侧优先从样例按固定频率抽帧；没有样例时再打开摄像头按固定频率采集。视频帧、图片字节同样不能放进 control event。`stream.control.open.requested` 表示打开一条可维护的视频输入链路，不表示 server 每次需要一张照片时重新请求。
 
-系统音频下行使用 `actuator.speaker` output stream。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
+系统音频下行使用 `actuator.speaker` output stream。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。由于控制事件和二进制 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和关闭回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
 
 喇叭的最小契约是：SDK 在显式启用 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App 覆盖的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain`、`cancel`、`close` 能力。`stream.output.closed` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 close 时立即发送。
 

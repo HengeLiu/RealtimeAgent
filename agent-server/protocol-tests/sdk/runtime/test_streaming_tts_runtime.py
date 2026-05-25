@@ -150,7 +150,10 @@ def test_output_service_flushes_streaming_tts_audio_on_final(tmp_path) -> None:
     assert fake_tts.texts == ["第一句"]
     assert fake_tts.finished
     assert sum(len(chunk.payload) for chunk in connection.chunks) == 1920
-    assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
+    finish = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
+    assert finish.payload["output_bytes"] == 1920
+    assert finish.payload["output_chunk_count"] == len(connection.chunks)
+    assert finish.payload["output_last_seq"] == connection.chunks[-1].seq
 
 
 def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> None:

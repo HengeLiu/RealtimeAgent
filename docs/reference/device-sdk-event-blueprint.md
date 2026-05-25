@@ -300,6 +300,7 @@ alt output cancel requested
   SDK -> Server: stream.output.closed or stream.output.cancelled
 else response audio completed
   Server -> SDK: stream.output.close.requested or stream.output.finish.requested
+  SDK -> SDK: wait output_last_seq chunk if provided
   SDK -> SDK: drain SDK playback buffer
   SDK -> App: drain speaker sink
   SDK -> Server: stream.output.closed

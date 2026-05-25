@@ -214,10 +214,15 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
     private let playbackLock = NSLock()
     private var pendingPlaybackBuffers = 0
     private var drainContinuations: [CheckedContinuation<Void, Never>] = []
+    private var preparedSpeakerFormat: RealtimeAgentSpeakerFormat?
 
     public init() {}
 
     public func prepare(format: RealtimeAgentSpeakerFormat) async throws {
+        if isPreparedForCurrentPlayback(format) {
+            return
+        }
+
         #if os(iOS) || os(tvOS) || os(visionOS)
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
@@ -248,6 +253,7 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
         if !player.isPlaying {
             player.play()
         }
+        setPreparedSpeakerFormat(format)
     }
 
     public func write(_ chunk: RealtimeAgentStreamChunk) async throws {
@@ -267,7 +273,30 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
     public func cancel() async {
         player.stop()
         engine.stop()
+        setPreparedSpeakerFormat(nil)
         resumeDrainContinuationsAfterCancel()
+    }
+
+    private func isPreparedForCurrentPlayback(_ format: RealtimeAgentSpeakerFormat) -> Bool {
+        playbackLock.lock()
+        let prepared = preparedSpeakerFormat == format
+        playbackLock.unlock()
+        guard prepared else {
+            return false
+        }
+        if !engine.isRunning {
+            return false
+        }
+        if !player.isPlaying {
+            player.play()
+        }
+        return true
+    }
+
+    private func setPreparedSpeakerFormat(_ format: RealtimeAgentSpeakerFormat?) {
+        playbackLock.lock()
+        preparedSpeakerFormat = format
+        playbackLock.unlock()
     }
 
     private func incrementPendingPlaybackBuffers() {

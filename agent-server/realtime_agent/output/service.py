@@ -1499,6 +1499,8 @@ class OutputRouter:
                     "stream_format": handle.format.__dict__,
                 },
             )
+        output_chunk_count = self._seq_by_stream.get(stream_id, 0)
+        output_last_seq = output_chunk_count - 1 if output_chunk_count > 0 else None
         self.recorder.record_stream_event(
             session_id,
             {
@@ -1506,10 +1508,18 @@ class OutputRouter:
                 "stream_id": stream_id,
                 "stream_type": "actuator.speaker",
                 "payload_size": len(payload),
+                "output_chunk_count": output_chunk_count,
+                "output_last_seq": output_last_seq,
                 "source": source.metrics(),
             },
         )
-        self.stream_service.request_output_finish(stream_id, reason="assistant_audio.done")
+        self.stream_service.request_output_finish(
+            stream_id,
+            reason="assistant_audio.done",
+            output_bytes=len(payload),
+            output_chunk_count=output_chunk_count,
+            output_last_seq=output_last_seq,
+        )
         ack_timeout_seconds = self._endpoint_ack_timeout_seconds_for_payload(
             payload_size=len(payload),
             stream_format=handle.format,

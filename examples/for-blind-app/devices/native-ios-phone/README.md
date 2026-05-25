@@ -124,7 +124,7 @@ open examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone.xcodepro
 
 ```bash
 cd examples/for-blind-app/devices/native-ios-phone
-xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme RealtimeAgentPhone -destination 'generic/platform=iOS Simulator' build
 ```
 
 页面中可执行：
@@ -170,5 +170,5 @@ uv run python -m pytest \
 
 ```bash
 cd examples/for-blind-app/devices/native-ios-phone
-xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme RealtimeAgentPhone -destination 'generic/platform=iOS Simulator' build
 ```

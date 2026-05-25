@@ -636,6 +636,69 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(sink.chunks.map(\.seq) == [0])
 }
 
+@Test func outputFinishWaitsForExpectedLastSeqAcrossControlAndStreamRace() async throws {
+    // 测试目标：finish 控制事件先于最后一帧 stream chunk 到达时，SDK 不能提前关闭本轮播放。
+    // 测试方法：先处理 seq=0，再让携带 output_last_seq=1 的 finish 进入等待，随后补到 seq=1。
+    // 预期结果：seq=1 仍会进入 speaker sink，且 SDK 最后再发送 stream.output.closed。
+    let transport = MockRealtimeAgentTransport()
+    let sink = RecordingSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let firstChunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-ordered-finish",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm0".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let secondChunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-ordered-finish",
+        streamType: "actuator.speaker",
+        seq: 1,
+        payload: Data("pcm1".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let finish = RealtimeAgentEvent(
+        eventName: "stream.output.finish.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [
+            "stream_type": "actuator.speaker",
+            "output_chunk_count": 2,
+            "output_last_seq": 1,
+        ],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-ordered-finish",
+        streamType: "actuator.speaker"
+    )
+
+    #expect(try await client.dispatchStreamChunk(firstChunk))
+    async let finishHandled: Bool = client.dispatchEvent(finish)
+    try await Task.sleep(nanoseconds: 450_000_000)
+    let namesBeforeLastChunk = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(!namesBeforeLastChunk.contains("stream.output.closed"))
+
+    #expect(try await client.dispatchStreamChunk(secondChunk))
+    #expect(try await finishHandled)
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    #expect(sink.chunks.map(\.seq) == [0, 1])
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names.contains("stream.output.closed"))
+}
+
 @Test func speakerPlaybackDoesNotPauseMicrophoneUpload() async throws {
     // 测试目标：确认播放 speaker 下行期间，SDK 仍持续上传 sensor.mic。
     // 测试方法：打开音频会话后立即分发一帧 speaker chunk，同时让麦克风 source 延迟产出三帧 PCM。
