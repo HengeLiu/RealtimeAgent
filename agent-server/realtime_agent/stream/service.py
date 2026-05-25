@@ -324,23 +324,27 @@ class StreamService:
             },
         )
 
-    def cancel_stream(self, stream_id: str, *, reason: str) -> None:
+    def request_output_finish(self, stream_id: str, *, reason: str = "completed") -> None:
+        """通知端侧 output stream 已写完，但不关闭服务端 stream 句柄。
+
+        主要逻辑：`stream.output.finish.requested` 只表示 server 已经没有更多
+        `StreamChunk` 要写入；端侧还需要把 SDK buffer 和本地 speaker sink drain
+        完成后再回 `stream.output.closed`。因此这里把状态标记为
+        `finish_requested`，由 `mark_output_endpoint_closed()` 最终收口。
+        参数：`stream_id` 为 output stream 标识，`reason` 为写完原因。
+        返回值：无。
+        异常情况：stream 不存在或不是 output stream 时抛出 `ValueError`。
+        """
+
         handle = self.registry.get(stream_id)
-        if handle.state == "cancelled":
+        if not handle.stream_type.startswith("actuator."):
+            raise ValueError(f"not an output stream: {stream_id}")
+        if handle.state in {"finish_requested", "closed", "cancel_requested", "cancelled", "failed"}:
             return
-        handle.state = "cancelled"
-        request = Event(
-            event_name="stream.output.cancel.requested",
-            user_id=handle.user_id,
-            producer_id=SERVER_PRODUCER_ID,
-            session_id=handle.session_id,
-            stream_id=handle.stream_id,
-            stream_type=handle.stream_type,
-            payload={"stream_type": handle.stream_type, "reason": reason},
-        )
-        self.control_service._push_event_to_device_ids(request, handle.consumer_device_ids)
+        handle.state = "finish_requested"
+        event_name = "stream.output.finish.requested" if handle.stream_type == "actuator.speaker" else "stream.output.close.requested"
         event = Event(
-            event_name="stream.output.cancelled",
+            event_name=event_name,
             user_id=handle.user_id,
             producer_id=SERVER_PRODUCER_ID,
             session_id=handle.session_id,
@@ -352,11 +356,88 @@ class StreamService:
         self.recorder.record_stream_event(
             handle.session_id,
             {
+                "event": "stream.output.finish_requested",
+                "stream_id": handle.stream_id,
+                "stream_type": handle.stream_type,
+                "reason": reason,
+                "state": handle.state,
+            },
+        )
+
+    def mark_output_endpoint_started(self, stream_id: str, *, reason: str = "endpoint_started") -> None:
+        """记录端侧已经开始播放 output stream。"""
+
+        handle = self.registry.get(stream_id)
+        if not handle.stream_type.startswith("actuator."):
+            raise ValueError(f"not an output stream: {stream_id}")
+        self.recorder.record_stream_event(
+            handle.session_id,
+            {
+                "event": "stream.output.endpoint_started",
+                "stream_id": handle.stream_id,
+                "stream_type": handle.stream_type,
+                "reason": reason,
+                "state": handle.state,
+            },
+        )
+
+    def mark_output_endpoint_closed(self, stream_id: str, *, reason: str = "endpoint_closed", state: str = "closed") -> None:
+        """记录端侧 output stream 终态并关闭服务端句柄。
+
+        主要逻辑：只有端侧回 `stream.output.closed/cancelled/failed` 后，server
+        才把 output stream 从 `finish_requested/cancel_requested/open` 进入终态。
+        """
+
+        handle = self.registry.get(stream_id)
+        if not handle.stream_type.startswith("actuator."):
+            raise ValueError(f"not an output stream: {stream_id}")
+        if handle.state in {"closed", "cancelled", "failed"}:
+            return
+        handle.state = state
+        self.recorder.record_stream_event(
+            handle.session_id,
+            {
+                "event": "stream.output.endpoint_closed",
+                "stream_id": handle.stream_id,
+                "stream_type": handle.stream_type,
+                "reason": reason,
+                "state": state,
+            },
+        )
+        self.recorder.record_stream_event(
+            handle.session_id,
+            {
                 "event": "stream.closed",
                 "stream_id": handle.stream_id,
                 "stream_type": handle.stream_type,
                 "reason": reason,
-                "state": "cancelled",
+                "state": state,
+            },
+        )
+
+    def cancel_stream(self, stream_id: str, *, reason: str) -> None:
+        handle = self.registry.get(stream_id)
+        if handle.state in {"cancel_requested", "cancelled", "closed", "failed"}:
+            return
+        handle.state = "cancel_requested"
+        request = Event(
+            event_name="stream.output.cancel.requested",
+            user_id=handle.user_id,
+            producer_id=SERVER_PRODUCER_ID,
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type=handle.stream_type,
+            payload={"stream_type": handle.stream_type, "reason": reason},
+        )
+        self.control_service._push_event_to_device_ids(request, handle.consumer_device_ids)
+        self.recorder.record_stream_event(
+            handle.session_id,
+            {
+                "event": "stream.output.cancel_requested",
+                "stream_id": handle.stream_id,
+                "stream_type": handle.stream_type,
+                "reason": reason,
+                "state": handle.state,
             },
         )
 

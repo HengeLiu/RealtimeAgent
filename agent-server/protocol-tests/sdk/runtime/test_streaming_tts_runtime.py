@@ -216,6 +216,18 @@ def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> Non
 
     assert first_task.finished
     assert "sess-task" not in router._source_by_session
+    first_finish = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.closed",
+            user_id="user-001",
+            producer_id="dev-speaker",
+            session_id="sess-task",
+            stream_id=first_finish.stream_id,
+            stream_type="actuator.speaker",
+            payload={"reason": "test_endpoint_drain_done"},
+        )
+    )
 
     app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-task", text="第二轮")
@@ -225,6 +237,43 @@ def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> Non
     assert second_task is not first_task
     assert second_task.texts == ["第二轮"]
     assert connection.chunks
+
+
+def test_output_endpoint_ack_timeout_releases_active_playback(tmp_path) -> None:
+    """测试目标：验证端侧不回 output closed 时 Server 会超时释放播放状态。
+
+    测试方法：提交一轮文本并 final，只让 Server 下发 `stream.output.finish.requested`，
+    不模拟端侧 `stream.output.closed`，随后触发维护任务。
+    预期结果：stream 被标记为 failed，active playback 被释放，并记录 endpoint ack timeout。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            tts_provider="mock",
+            output_endpoint_ack_timeout_seconds=0.01,
+        )
+    )
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection, user_id="user-timeout")
+
+    app.output_service.on_assistant_vision_delta(
+        AssistantTextDelta(user_id="user-timeout", session_id="sess-timeout", text="需要回执")
+    )
+    app.output_service.on_assistant_vision_delta(
+        AssistantTextDelta(user_id="user-timeout", session_id="sess-timeout", text="", final=True)
+    )
+    finish_event = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
+
+    result = app.run_maintenance_once(now=time.time() + 1)
+
+    assert finish_event.stream_id in result["output_endpoint_ack_timeouts"]
+    assert app.output_service.active_output_stream_id("user-timeout", "sess-timeout") is None
+    assert app.stream_service.registry.get(finish_event.stream_id).state == "failed"
+    stream_events = (tmp_path / "runs" / "user-timeout" / "sess-timeout" / "stream-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "stream.output.endpoint_ack.timeout" in stream_events
 
 
 def test_output_service_background_drains_tts_audio_between_vision_deltas(tmp_path) -> None:

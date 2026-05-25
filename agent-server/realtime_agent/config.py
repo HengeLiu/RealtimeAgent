@@ -206,6 +206,7 @@ class OutputConfig:
     tool_progress_audio_mode: str = "cached"
     tool_progress_priority: str = "low"
     tool_progress_ttl_seconds: int = 10
+    endpoint_ack_timeout_seconds: float = 5.0
 
 
 @dataclass(frozen=True)

@@ -135,6 +135,7 @@ output:
   default_on_blocked: "queue"
   max_queue_size: 32
   tool_progress_audio_mode: "disabled"
+  endpoint_ack_timeout_seconds: 5.0
 
 tools:
   enabled: true

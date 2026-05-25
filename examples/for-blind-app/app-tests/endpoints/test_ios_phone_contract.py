@@ -7,28 +7,36 @@ ROOT = Path(__file__).resolve().parents[4]
 IOS_ROOT = ROOT / "examples" / "for-blind-app" / "devices" / "native-ios-phone"
 
 
-def test_ios_phone_reference_contains_task_registry_contract() -> None:
-    """测试目标：验证 iOS phone 参考端具备 phone task 契约样板。
+def test_ios_phone_reference_uses_device_sdk_event_contract() -> None:
+    """测试目标：验证 iOS phone 参考端使用新版 Device SDK 事件契约。
 
-    测试方法：静态检查 Swift 运行时和配置，确认注册了 command 订阅、任务 registry
-    和 find_object / traffic_light handler。
-    预期结果：iOS 端可通过 contract 验收 phone task 事件链，不需要 Python 代码复用。
+    测试方法：静态检查 Swift 运行时和配置，确认通过 `DeviceClient`、custom event
+    和显式硬件 enable 接入，不再保留旧 phone task registry 样板。
+    预期结果：iOS 参考端以 Device SDK 语法糖接入注册、事件和硬件能力。
     """
 
     runtime = (IOS_ROOT / "RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift").read_text(encoding="utf-8")
     config = (IOS_ROOT / "AppConfig.example.json").read_text(encoding="utf-8")
 
     for token in [
-        "PhoneTaskRegistry",
-        "command.requested",
-        "command.accepted",
-        "command.progress",
-        "command.completed",
-        "DirectCameraSinkServer",
+        "DeviceClient(",
+        "RealtimeAgentDeviceClient",
+        "onCustomCommand",
+        "custom.haptic.vibrate.done",
+        "AudioInput",
+        "Camera",
+        "Speaker",
+        "audio_input",
+        "camera",
+        "speaker",
         "direct.camera_sink",
         "realtime_agent.direct_frame.v1",
     ]:
         assert token in runtime + config
 
+    assert "PhoneTaskRegistry" not in runtime
+    assert "command.accepted" not in runtime
+    assert "command.progress" not in runtime
+    assert "command.completed" not in runtime
     assert "target_device" not in runtime
     assert "target_device_id" not in runtime

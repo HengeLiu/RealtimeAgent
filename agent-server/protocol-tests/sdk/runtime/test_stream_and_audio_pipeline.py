@@ -736,7 +736,8 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
     assert [chunk.stream_id for chunk in first.chunks] == [handle.stream_id]
     assert second.chunks == []
     assert any(event.event_name == "stream.output.finish.requested" for event in first.events)
-    assert any(event.event_name == "stream.output.cancelled" for event in first.events)
+    assert any(event.event_name == "stream.output.cancel.requested" for event in first.events)
+    assert not any(event.event_name == "stream.output.cancelled" for event in first.events)
     assert [event.event_name for event in second.events] == []
 
 

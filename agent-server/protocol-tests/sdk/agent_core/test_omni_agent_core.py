@@ -301,6 +301,7 @@ class FakeAssetService:
     def __init__(self, image_path: Path) -> None:
         self.image_path = image_path
         self.request_count = 0
+        self.query_count = 0
         self.requests: list[dict] = []
         self.claims: list[dict] = []
 
@@ -320,6 +321,24 @@ class FakeAssetService:
             size_bytes=self.image_path.stat().st_size,
             metadata={"request_count": self.request_count},
         )
+
+    def query_assets(self, **kwargs) -> list[AssetRef]:
+        """模拟 continuous RGB stream 已经写入最新一帧。"""
+
+        self.query_count += 1
+        return [
+            AssetRef(
+                asset_id=f"asset-query-{self.query_count}",
+                user_id=str(kwargs.get("user_id") or "user-001"),
+                session_id="dev-web",
+                stream_type=str(kwargs.get("stream_type") or "sensor.rgb"),
+                mime_type="image/jpeg",
+                created_at_ms=int(time.time() * 1000),
+                uri=str(self.image_path),
+                size_bytes=self.image_path.stat().st_size,
+                metadata={"query_count": self.query_count},
+            )
+        ]
 
     def claim_photo_asset(self, **kwargs):
         """记录 Omni 视觉帧 claim。"""
@@ -421,6 +440,18 @@ def test_realtime_provider_speech_started_publishes_control_event_after_output_f
         )
     )
     instances[0].emit_done()
+    finish_event = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.closed",
+            user_id="user-001",
+            producer_id="dev-web",
+            session_id=handle.session_id,
+            stream_id=finish_event.stream_id,
+            stream_type="actuator.speaker",
+            payload={"reason": "test_endpoint_drain_done"},
+        )
+    )
     connection.events.clear()
 
     assert instances[0].callbacks is not None
@@ -555,7 +586,7 @@ def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> Non
     assert instances[0].cancelled is True
     assert "audio.speech.started" in event_names
     assert "stream.output.cancel.requested" in event_names
-    assert "stream.output.cancelled" in event_names
+    assert "stream.output.cancelled" not in event_names
     chunks_before_late_delta = len(connection.chunks)
     assert instances[0].callbacks is not None
     instances[0].callbacks.audio_delta(
@@ -642,13 +673,12 @@ def test_realtime_provider_speech_started_cancels_active_response_without_output
 
 
 def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> None:
-    """测试目标：验证 Omni Realtime 语音 turn 内会按间隔追加 RGB 图片。
+    """测试目标：验证 Omni Realtime 会从 continuous RGB stream 缓存中追加图片。
 
-    测试方法：注入 fake realtime provider 和 fake asset service，模拟 provider
-    上报 `speech_started`，等待后台视觉采样线程请求图片并 append 到 provider，
-    再模拟 `speech_stopped` 停止采样。
-    预期结果：fake provider 至少收到一张图片，runs 中记录视觉采样开始、追加和停止，
-    并向端侧下发 `sensor.rgb` 关闭请求。
+    测试方法：注入 fake realtime provider 和 fake asset service，打开会话后等待后台
+    视觉线程读取最新 RGB 缓存并 append 到 provider，最后关闭会话。
+    预期结果：server 下发 `mode=continuous` 的 RGB 打开请求，fake provider 至少收到
+    一张图片，runs 中记录视觉采样开始、追加和停止。
     """
 
     image_path = tmp_path / "frame.jpg"
@@ -683,22 +713,13 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
             payload=b"\x01\x02",
         )
     )
-    core._record_provider_event(
-        user_id="user-001",
-        session_id="dev-web",
-        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
-    )
     deadline = time.time() + 1
     while time.time() < deadline and not instances[0].images:
         time.sleep(0.02)
-    core._record_provider_event(
-        user_id="user-001",
-        session_id="dev-web",
-        record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "fake"},
-    )
+    core.close("user-001", reason="test_done")
 
-    assert asset_service.request_count >= 1
-    assert asset_service.requests[0]["device_ids"] == ("dev-web",)
+    assert asset_service.query_count >= 1
+    assert asset_service.request_count == 0
     assert asset_service.claims
     assert asset_service.claims[0]["consumer"] == "agent_inline"
     assert asset_service.claims[0]["reason"] == "realtime_video_append"
@@ -710,6 +731,13 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
     assert "omni.visual_frame.appended" in agent_events
     assert "omni.visual_sampler.stopped" in agent_events
     assert "omni.visual_stream.close.requested" in agent_events
+    open_events = [
+        event
+        for event in connection.events
+        if event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb"
+    ]
+    assert open_events
+    assert open_events[0].payload["mode"] == "continuous"
     assert any(
         event.event_name == "stream.control.close.requested" and event.stream_type == "sensor.rgb"
         for event in connection.events

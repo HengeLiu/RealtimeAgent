@@ -933,6 +933,7 @@ class OutputRouter:
         tool_progress_audio_mode: str = "cached",
         tool_progress_priority: str = "low",
         tool_progress_ttl_seconds: int = 10,
+        endpoint_ack_timeout_seconds: float = 5.0,
     ) -> None:
         self.stream_service = stream_service
         self.recorder = recorder
@@ -944,6 +945,7 @@ class OutputRouter:
         self.tool_progress_audio_mode = tool_progress_audio_mode
         self.tool_progress_priority = tool_progress_priority
         self.tool_progress_ttl_seconds = tool_progress_ttl_seconds
+        self.endpoint_ack_timeout_seconds = endpoint_ack_timeout_seconds
         self.arbiter = PlaybackArbiter(stream_service=stream_service, recorder=recorder, max_queue_size=max_queue_size)
         self._stream_by_session: dict[str, str] = {}
         self._seq_by_stream: dict[str, int] = {}
@@ -958,7 +960,10 @@ class OutputRouter:
         self._audio_delta_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._tts_pump_streams: set[str] = set()
         self._paused_sessions: set[str] = set()
+        self._paused_streams: set[str] = set()
         self._paused_payload_by_stream: dict[str, list[tuple[bytes, dict]]] = {}
+        self._endpoint_state_by_stream: dict[str, dict[str, Any]] = {}
+        self._pending_endpoint_ack_by_stream: dict[str, dict[str, Any]] = {}
         self._text_generation_by_session: dict[str, int] = {}
         self._write_lock = threading.RLock()
 
@@ -1028,6 +1033,43 @@ class OutputRouter:
             if getattr(source, "final_requested", False):
                 self._finish_stream(handle.user_id, session_id, stream_id, source)
 
+    def pause_stream(self, *, user_id: str, session_id: str, stream_id: str) -> None:
+        """按 stream_id 暂停 speaker output 写出。"""
+
+        self._paused_streams.add(stream_id)
+        self._endpoint_state_by_stream.setdefault(stream_id, {})["state"] = "endpoint_paused"
+        self.recorder.record_stream_event(
+            session_id,
+            {
+                "event": "stream.output.endpoint_paused",
+                "user_id": user_id,
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+            },
+        )
+
+    def resume_stream(self, *, user_id: str, session_id: str, stream_id: str) -> None:
+        """按 stream_id 恢复 speaker output 写出并冲刷暂停缓存。"""
+
+        self._paused_streams.discard(stream_id)
+        self._endpoint_state_by_stream.setdefault(stream_id, {})["state"] = "endpoint_resumed"
+        self.recorder.record_stream_event(
+            session_id,
+            {
+                "event": "stream.output.endpoint_resumed",
+                "user_id": user_id,
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+                "buffered_chunk_count": len(self._paused_payload_by_stream.get(stream_id, [])),
+            },
+        )
+        source = self._source_by_stream.get(stream_id)
+        if source is None:
+            return
+        self._flush_paused_payload(user_id=user_id, session_id=session_id, stream_id=stream_id, source=source)
+        if getattr(source, "final_requested", False):
+            self._finish_stream(user_id, session_id, stream_id, source)
+
     def estimate_played_text_prefix(self, *, user_id: str, session_id: str) -> str | None:
         """估算当前 Vision TTS 输出已经播放到的文本前缀。
 
@@ -1072,6 +1114,11 @@ class OutputRouter:
             while char_count < len(text) and text[char_count - 1].isspace():
                 char_count += 1
         return text[:char_count]
+
+    def _is_downstream_paused(self, *, session_id: str, stream_id: str) -> bool:
+        """判断当前 output stream 是否被端侧水位线暂停。"""
+
+        return session_id in self._paused_sessions or stream_id in self._paused_streams
 
     def prepare_text_session(
         self,
@@ -1276,7 +1323,7 @@ class OutputRouter:
             written_bytes = 0
             chunk_count = 0
             for part in self._split_native_audio_payload(payload, source=source):
-                if session_id in self._paused_sessions:
+                if self._is_downstream_paused(session_id=session_id, stream_id=stream_id):
                     self._paused_payload_by_stream.setdefault(stream_id, []).append((part, dict(metadata or {})))
                     continue
                 chunk = StreamChunk(
@@ -1322,7 +1369,7 @@ class OutputRouter:
                     },
                 )
             self._seq_by_stream[stream_id] = seq
-        if final and session_id in self._paused_sessions:
+        if final and self._is_downstream_paused(session_id=session_id, stream_id=stream_id):
             self.recorder.record_agent_event(
                 session_id,
                 {
@@ -1455,20 +1502,21 @@ class OutputRouter:
                 "source": source.metrics(),
             },
         )
-        self.stream_service.close_stream(stream_id, reason="assistant_audio.done")
-        self._stream_by_session.pop(session_id, None)
+        self.stream_service.request_output_finish(stream_id, reason="assistant_audio.done")
+        self._endpoint_state_by_stream[stream_id] = {
+            "state": "finish_requested",
+            "user_id": user_id,
+            "session_id": session_id,
+            "stream_id": stream_id,
+            "stream_type": "actuator.speaker",
+            "finish_requested_at": time.time(),
+            "ack_deadline_at": time.time() + self.endpoint_ack_timeout_seconds,
+            "payload_size": len(payload),
+        }
+        self._pending_endpoint_ack_by_stream[stream_id] = self._endpoint_state_by_stream[stream_id]
         if self._source_by_session.get(session_id) is source:
             self._source_by_session.pop(session_id, None)
-        self._source_by_stream.pop(stream_id, None)
         self._native_source_by_session.pop(session_id, None)
-        next_output = self.arbiter.on_playback_finished(user_id, stream_id)
-        for listener in list(self._finish_listeners):
-            listener(user_id, session_id, stream_id)
-        if next_output is not None:
-            self._queued_sessions.discard(next_output.intent.session_id)
-            self._play_queued_output(next_output)
-        elif session_id in self._continuous_text_sessions:
-            self.prepare_text_session(session_id, reason="output_finished_reprepare")
 
     def _drain_text_source_to_stream(
         self,
@@ -1679,7 +1727,7 @@ class OutputRouter:
                         },
                     )
                     return
-            if not bypass_pause and session_id in self._paused_sessions:
+            if not bypass_pause and self._is_downstream_paused(session_id=session_id, stream_id=stream_id):
                 self._paused_payload_by_stream.setdefault(stream_id, []).append((payload, dict(metadata or {})))
                 self.recorder.record_agent_event(
                     session_id,
@@ -1845,11 +1893,121 @@ class OutputRouter:
 
         if not stream_id:
             return
-        endpoint_source = self._source_by_stream.get(stream_id)
+        self._complete_endpoint_playback(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            terminal_state="closed",
+        )
+
+    def mark_endpoint_playback_started(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_started",
+    ) -> None:
+        """处理端侧播放开始回执。"""
+
+        if not stream_id:
+            return
+        effective_session_id = session_id or ""
         try:
-            self.stream_service.close_stream(stream_id, reason=f"endpoint_{reason}")
+            handle = self.stream_service.registry.get(stream_id)
+            effective_session_id = handle.session_id
+            self.stream_service.mark_output_endpoint_started(stream_id, reason=reason)
         except Exception:
             pass
+        state = self._endpoint_state_by_stream.setdefault(stream_id, {})
+        state.update(
+            {
+                "state": "endpoint_started",
+                "user_id": user_id,
+                "session_id": effective_session_id,
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+                "endpoint_started_at": time.time(),
+                "reason": reason,
+            }
+        )
+
+    def mark_endpoint_playback_cancelled(
+        self,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        *,
+        reason: str = "endpoint_cancelled",
+    ) -> None:
+        """处理端侧播放取消回执。"""
+
+        if not stream_id:
+            return
+        self._complete_endpoint_playback(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            terminal_state="cancelled",
+        )
+
+    def mark_endpoint_playback_failed(
+        self,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        *,
+        reason: str = "endpoint_failed",
+    ) -> None:
+        """处理端侧播放失败回执。"""
+
+        if not stream_id:
+            return
+        self._complete_endpoint_playback(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            terminal_state="failed",
+        )
+
+    def _complete_endpoint_playback(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str,
+        reason: str,
+        terminal_state: str,
+    ) -> None:
+        """把端侧 output 终态回执转成 Server 内部状态释放。"""
+
+        endpoint_source = self._source_by_stream.get(stream_id)
+        try:
+            self.stream_service.mark_output_endpoint_closed(
+                stream_id,
+                reason=f"endpoint_{reason}",
+                state=terminal_state,
+            )
+        except Exception:
+            pass
+        self._pending_endpoint_ack_by_stream.pop(stream_id, None)
+        state = self._endpoint_state_by_stream.setdefault(stream_id, {})
+        state.update(
+            {
+                "state": f"endpoint_{terminal_state}",
+                "user_id": user_id,
+                "session_id": session_id,
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+                "endpoint_closed_at": time.time(),
+                "reason": reason,
+            }
+        )
+        self._paused_streams.discard(stream_id)
+        self._paused_payload_by_stream.pop(stream_id, None)
         next_output = self.arbiter.on_playback_finished(user_id, stream_id)
         for stored_session, stored_stream_id in list(self._stream_by_session.items()):
             if stored_stream_id == stream_id:
@@ -1867,6 +2025,44 @@ class OutputRouter:
             self._play_queued_output(next_output)
         for listener in list(self._finish_listeners):
             listener(user_id, session_id or "", stream_id)
+        if next_output is None and session_id in self._continuous_text_sessions:
+            self.prepare_text_session(session_id, reason="endpoint_output_closed_reprepare")
+
+    def sweep_endpoint_ack_timeouts(self, *, now: float | None = None) -> list[str]:
+        """释放长期没有端侧终态回执的 output stream。
+
+        主要逻辑：Server 写完音频后等待端侧回 `stream.output.closed`。如果端侧
+        掉线或 SDK 未回执，后台维护任务会记录 timeout 并释放播放仲裁，避免后续
+        回复被永久阻塞。
+        """
+
+        current = time.time() if now is None else now
+        timed_out: list[str] = []
+        for stream_id, state in list(self._pending_endpoint_ack_by_stream.items()):
+            deadline = float(state.get("ack_deadline_at") or 0)
+            if deadline > current:
+                continue
+            timed_out.append(stream_id)
+            session_id = str(state.get("session_id") or "")
+            user_id = str(state.get("user_id") or "")
+            self.recorder.record_stream_event(
+                session_id,
+                {
+                    "event": "stream.output.endpoint_ack.timeout",
+                    "user_id": user_id,
+                    "stream_id": stream_id,
+                    "stream_type": state.get("stream_type") or "actuator.speaker",
+                    "timeout_seconds": self.endpoint_ack_timeout_seconds,
+                },
+            )
+            self._complete_endpoint_playback(
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                reason="endpoint_ack_timeout",
+                terminal_state="failed",
+            )
+        return timed_out
 
     def _play_queued_output(self, queued: QueuedOutput) -> None:
         stream_id = self.arbiter.activate_queued(queued, format=queued.source.stream_format())
@@ -2142,6 +2338,7 @@ class OutputService:
         tool_progress_audio_mode: str = "cached",
         tool_progress_priority: str = "low",
         tool_progress_ttl_seconds: int = 10,
+        endpoint_ack_timeout_seconds: float = 5.0,
     ) -> None:
         self.router = OutputRouter(
             stream_service=stream_service,
@@ -2154,6 +2351,7 @@ class OutputService:
             tool_progress_audio_mode=tool_progress_audio_mode,
             tool_progress_priority=tool_progress_priority,
             tool_progress_ttl_seconds=tool_progress_ttl_seconds,
+            endpoint_ack_timeout_seconds=endpoint_ack_timeout_seconds,
         )
         self.notification_coordinator = NotificationCoordinator(output_service=self)
 
@@ -2188,6 +2386,47 @@ class OutputService:
 
         self.router.mark_endpoint_playback_finished(user_id, session_id, stream_id, reason=reason)
 
+    def mark_endpoint_playback_started(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_started",
+    ) -> None:
+        """接收端侧播放开始回执。"""
+
+        self.router.mark_endpoint_playback_started(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+        )
+
+    def mark_endpoint_playback_cancelled(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_cancelled",
+    ) -> None:
+        """接收端侧播放取消回执。"""
+
+        self.router.mark_endpoint_playback_cancelled(user_id, session_id, stream_id, reason=reason)
+
+    def mark_endpoint_playback_failed(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_failed",
+    ) -> None:
+        """接收端侧播放失败回执。"""
+
+        self.router.mark_endpoint_playback_failed(user_id, session_id, stream_id, reason=reason)
+
     def prepare_text_session(self, session_id: str, *, reason: str = "downstream_stream_opened") -> None:
         """提前建立Vision 链路连续对话级 TTS provider。"""
 
@@ -2212,6 +2451,21 @@ class OutputService:
         """恢复指定连续对话的下行音频写入。"""
 
         self.router.resume_session(user_id=user_id, session_id=session_id)
+
+    def pause_stream(self, *, user_id: str, session_id: str, stream_id: str) -> None:
+        """按 stream_id 暂停下行音频写入。"""
+
+        self.router.pause_stream(user_id=user_id, session_id=session_id, stream_id=stream_id)
+
+    def resume_stream(self, *, user_id: str, session_id: str, stream_id: str) -> None:
+        """按 stream_id 恢复下行音频写入。"""
+
+        self.router.resume_stream(user_id=user_id, session_id=session_id, stream_id=stream_id)
+
+    def sweep_endpoint_ack_timeouts(self, *, now: float | None = None) -> list[str]:
+        """清理端侧 output 回执超时。"""
+
+        return self.router.sweep_endpoint_ack_timeouts(now=now)
 
     def on_assistant_audio_delta(
         self,
@@ -2417,6 +2671,8 @@ class OutputService:
     def interrupt_user(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
         decision = self.router.arbiter.cancel_current(user_id, session_id=session_id, reason=reason)
         if decision.interrupted_stream_id:
+            self.router._paused_streams.discard(decision.interrupted_stream_id)
+            self.router._paused_payload_by_stream.pop(decision.interrupted_stream_id, None)
             self.router._source_by_stream.pop(decision.interrupted_stream_id, None)
             for stored_session, stream_id in list(self.router._stream_by_session.items()):
                 if stream_id == decision.interrupted_stream_id:
@@ -2453,4 +2709,8 @@ class OutputService:
 
         snapshot = self.router.arbiter.debug_snapshot()
         snapshot["notifications"] = {"recent_decisions": self.notification_coordinator.recent_decisions()}
+        snapshot["output_streams"] = {
+            stream_id: dict(state)
+            for stream_id, state in self.router._endpoint_state_by_stream.items()
+        }
         return snapshot

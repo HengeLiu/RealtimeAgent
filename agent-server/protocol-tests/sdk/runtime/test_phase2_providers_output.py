@@ -92,6 +92,30 @@ def session_text(app: RealtimeAgentApp, session_id: str, filename: str) -> str:
     return app.recorder.session_file(session_id, filename).read_text(encoding="utf-8")
 
 
+def close_output_stream(
+    app: RealtimeAgentApp,
+    *,
+    user_id: str = "user-001",
+    producer_id: str = "dev-playback",
+    session_id: str,
+    stream_id: str,
+    reason: str = "test_endpoint_drain_done",
+) -> None:
+    """模拟端侧 speaker buffer 和本地播放器已经 drain 完成。"""
+
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.closed",
+            user_id=user_id,
+            producer_id=producer_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker", "reason": reason},
+        )
+    )
+
+
 def test_vision_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> None:
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     connection = Connection("dev-playback")
@@ -145,7 +169,8 @@ def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
 
     decisions = session_text(app, "sess-output", "playback-decisions.jsonl")
     assert "interrupt" in decisions
-    assert any(event.event_name == "stream.output.cancelled" for event in connection.events)
+    assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
+    assert not any(event.event_name == "stream.output.cancelled" for event in connection.events)
 
 
 def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
@@ -169,7 +194,7 @@ def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
 
     event_names = [event.event_name for event in connection.events]
     assert "stream.output.cancel.requested" in event_names
-    assert "stream.output.cancelled" in event_names
+    assert "stream.output.cancelled" not in event_names
     decisions = app.recorder.session_file("dev-playback", "playback-decisions.jsonl").read_text()
     assert "cancel_current" in decisions
 
@@ -197,6 +222,9 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
     app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-high", text="", final=True, intent=high)
     )
+    high_stream_id = app.output_service.active_output_stream_id("user-001", "sess-high")
+    assert high_stream_id is not None
+    close_output_stream(app, session_id="sess-high", stream_id=high_stream_id)
 
     low_decisions = session_text(app, "sess-low", "playback-decisions.jsonl")
     high_decisions = session_text(app, "sess-high", "playback-decisions.jsonl")
@@ -227,6 +255,9 @@ def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
     app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="", final=True, intent=active)
     )
+    active_stream_id = app.output_service.active_output_stream_id("user-001", "sess-active")
+    assert active_stream_id is not None
+    close_output_stream(app, session_id="sess-active", stream_id=active_stream_id)
 
     queued_decisions = session_text(app, "sess-queued", "playback-decisions.jsonl")
     assert "queue" in queued_decisions
@@ -263,6 +294,9 @@ def test_queued_vision_delta_keeps_accumulating_until_playback_turn(tmp_path) ->
     app.output_service.on_assistant_vision_delta(
         AssistantTextDelta(user_id="user-001", session_id="sess-active", text="", final=True, intent=active)
     )
+    active_stream_id = app.output_service.active_output_stream_id("user-001", "sess-active")
+    assert active_stream_id is not None
+    close_output_stream(app, session_id="sess-active", stream_id=active_stream_id)
 
     queued_chunks = [chunk for chunk in connection.chunks if chunk.session_id == "sess-queued"]
     queued_decisions = session_text(app, "sess-queued", "playback-decisions.jsonl")
@@ -311,7 +345,7 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
     )
 
     assert app.stream_service.registry.get(active_stream_id).state == "closed"
-    assert app.output_service.active_output_stream_id("user-001", "sess-new") is None
+    assert app.output_service.active_output_stream_id("user-001", "sess-new") is not None
     queued_decisions = (tmp_path / "runs" / "user-001" / "sess-new" / "playback-decisions.jsonl").read_text()
     assert "queued_playback_ready" in queued_decisions
 
@@ -351,6 +385,17 @@ def test_audio_session_idle_waits_for_endpoint_playback_finished(tmp_path) -> No
         AssistantTextDelta(user_id="user-001", session_id="dev-playback", text="", final=True)
     )
     stream_id = next(event.stream_id for event in connection.events if event.event_name == "stream.output.finish.requested")
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.started",
+            user_id="user-001",
+            producer_id="dev-playback",
+            session_id="dev-playback",
+            stream_id=stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker"},
+        )
+    )
     state = app._device_dialogs_by_user["user-001"]
     assert stream_id in state.endpoint_playback_stream_ids
 
@@ -492,6 +537,9 @@ def test_each_output_stream_gets_independent_tts_session(tmp_path) -> None:
     register_speaker(app, connection)
 
     app.output_service.submit_output(OutputItem(user_id="user-001", session_id="sess-one"), "one")
+    first_stream_id = app.output_service.active_output_stream_id("user-001", "sess-one")
+    assert first_stream_id is not None
+    close_output_stream(app, session_id="sess-one", stream_id=first_stream_id)
     app.output_service.submit_output(OutputItem(user_id="user-001", session_id="sess-two"), "two")
 
     stream_ids = {chunk.stream_id for chunk in connection.chunks}
@@ -517,6 +565,9 @@ def test_cached_prompt_audio_reuses_audio_and_records_wav(tmp_path) -> None:
         text="timer done",
         format=fmt,
     )
+    first_stream_id = app.output_service.active_output_stream_id("user-001", "sess-cache-one")
+    assert first_stream_id is not None
+    close_output_stream(app, session_id="sess-cache-one", stream_id=first_stream_id)
     second = app.output_service.submit_cached_prompt_audio(
         user_id="user-001",
         session_id="sess-cache-two",
@@ -592,6 +643,9 @@ def test_notification_dedupe_and_merge_decisions_are_observable(tmp_path) -> Non
             dedupe_key="notify-1",
         )
     )
+    first_stream_id = app.output_service.active_output_stream_id("user-001", "sess-notify-one")
+    assert first_stream_id is not None
+    close_output_stream(app, session_id="sess-notify-one", stream_id=first_stream_id)
     duplicate = coordinator.submit(
         NotificationRequest(
             user_id="user-001",

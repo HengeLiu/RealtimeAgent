@@ -202,6 +202,19 @@ def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path
         AssistantTextDelta(user_id="user-a", session_id=session_id, text="", final=True)
     )
 
+    stream_id = app.output_service.router._stream_by_session[session_id]
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.closed",
+            user_id="user-a",
+            producer_id="dev-audio",
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="actuator.speaker",
+            payload={"reason": "test_endpoint_drain_done"},
+        )
+    )
+
     assert any(
         event.event_name == "control.audio_session.close.requested"
         and event.payload.get("close_mode") == "close_after_reply"

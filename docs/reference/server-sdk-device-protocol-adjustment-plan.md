@@ -329,7 +329,58 @@ uv run python -m pytest examples/for-blind-app/app-tests -q
 | 有 started 但没有声音 | Device SDK speaker sink / iOS 音频会话。 |
 | 有照片存储但模型说看不到 | Server 视觉帧 append 时序。 |
 
-## 5. 不在本轮 Server SDK 调整中的内容
+## 5. 实施记录
+
+### Phase 1：协议入口和基础状态机收口
+
+- 状态：已完成。
+- 实现：
+  - `StreamService` 新增 `request_output_finish()`、`mark_output_endpoint_started()` 和 `mark_output_endpoint_closed()`，区分 server 写完和端侧播放完成。
+  - `OutputService` 在 `assistant_audio.done` 后只下发 `stream.output.finish.requested`，保留 active playback，等待端侧 `stream.output.closed/cancelled/failed` 或 ack timeout。
+  - 新增 `output.endpoint_ack_timeout_seconds` 默认值和示例配置，维护任务会记录 `stream.output.endpoint_ack.timeout` 并释放状态。
+  - `stream.output.started/closed/cancelled/failed` 在 `RealtimeAgentApp.publish_control_event()` 中进入标准回执处理。
+- 验证：
+  - `uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py agent-server/protocol-tests/sdk/runtime/test_audio_session_lifecycle.py agent-server/protocol-tests/sdk/runtime/test_streaming_tts_runtime.py agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py -q`
+
+### Phase 2：speaker 流控和播放回执闭环
+
+- 状态：已完成。
+- 实现：
+  - `downstream.pause.requested` / `downstream.resume.requested` 改为优先按 `stream_id` 控制 output stream，缺少 stream_id 时才退回 session 粒度。
+  - `OutputRouter` 新增 stream 粒度 pause/resume 状态和暂停缓存，resume 后按原 seq 继续写出。
+  - cancel 后只下发 `stream.output.cancel.requested`，等待端侧 `stream.output.cancelled/closed/failed` 或后续 timeout，不再由 Server 自发伪造 `stream.output.cancelled`。
+  - `/api/debug/playback` 的 output snapshot 增加 output stream 状态。
+- 验证：
+  - `uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_phase2_providers_output.py agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py -q`
+
+### Phase 3：实时视觉输入链路标准化
+
+- 状态：已完成 Server SDK 侧基础链路，待真机验证端侧连续上传节奏。
+- 实现：
+  - `OmniRealtimeAgentCore` 在 realtime session 打开后请求同一设备的 `sensor.rgb` continuous stream。
+  - 视觉线程不再每次通过 `request_asset(mode=single)` 抓拍，而是消费 `AssetService` 中同 session 的最新 `sensor.rgb` asset buffer 并追加到 provider。
+  - provider VAD 事件只确保视觉线程运行，不再把视觉 stream 限定为单个 turn；视觉 stream 在音频 session / agent session 关闭时才请求 close。
+  - 测试更新为校验 `stream.control.open.requested(mode=continuous)`、paired device 过滤和 continuous buffer append。
+- 验证：
+  - `uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py examples/for-blind-app/app-tests -q`
+
+### 本次完整回归
+
+```bash
+uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py agent-server/protocol-tests/sdk/runtime/test_audio_session_lifecycle.py agent-server/protocol-tests/sdk/runtime/test_streaming_tts_runtime.py agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py agent-server/protocol-tests/sdk/runtime/test_phase2_providers_output.py agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py examples/for-blind-app/app-tests -q
+```
+
+结果：通过。
+
+### Phase 4：真机联调验收
+
+- 状态：待人工验收。
+- 建议观察点：
+  - Server logs / runs 中应先看到 `stream.control.open.requested`，payload `mode=continuous`，再看到连续 `sensor.rgb` asset stored / `omni.visual_frame.appended`。
+  - speaker 链路应看到 `stream.output.finish.requested` 后，等待端侧 `stream.output.started` 与 `stream.output.closed`；如果端侧没有回执，Server 会记录 `stream.output.endpoint_ack.timeout`。
+  - 端侧无声时优先看是否缺少 `stream.output.started`；如果有 started 但无声，再回到 Swift Device SDK speaker sink 排查。
+
+## 6. 不在本轮 Server SDK 调整中的内容
 
 以下问题需要单独在 Device SDK 或 Device APP 中处理，不应混进 Server SDK 调整：
 

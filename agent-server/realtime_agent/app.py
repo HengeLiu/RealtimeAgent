@@ -139,6 +139,7 @@ class RealtimeAgentConfig:
     output_tool_progress_audio_mode: str = "cached"
     output_tool_progress_priority: str = "low"
     output_tool_progress_ttl_seconds: int = 10
+    output_endpoint_ack_timeout_seconds: float = 5.0
     agent_mode: str = "omni"
     omni_provider: str = "qwen"
     omni_model: str = "qwen3.5-omni-plus-realtime"
@@ -289,6 +290,7 @@ class RealtimeAgentConfig:
             output_tool_progress_audio_mode=loaded.output.tool_progress_audio_mode,
             output_tool_progress_priority=loaded.output.tool_progress_priority,
             output_tool_progress_ttl_seconds=loaded.output.tool_progress_ttl_seconds,
+            output_endpoint_ack_timeout_seconds=loaded.output.endpoint_ack_timeout_seconds,
             agent_mode=_normalize_agent_mode(loaded.agent.mode),
             omni_provider=omni.provider,
             omni_model=omni.model,
@@ -417,6 +419,7 @@ class RealtimeAgentApp:
             tool_progress_audio_mode=self.config.output_tool_progress_audio_mode,
             tool_progress_priority=self.config.output_tool_progress_priority,
             tool_progress_ttl_seconds=self.config.output_tool_progress_ttl_seconds,
+            endpoint_ack_timeout_seconds=self.config.output_endpoint_ack_timeout_seconds,
         )
         self.task_engine = TaskEngine(
             store=_build_task_store(self.config),
@@ -709,6 +712,19 @@ class RealtimeAgentApp:
             self.control_service.publish(event)
             self._finalize_audio_session(event.user_id, reason=event.payload.get("reason", "endpoint_closed"))
             return
+        if event.event_name == "stream.output.started":
+            self.control_service.publish(event)
+            self.output_service.mark_endpoint_playback_started(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                reason=str(event.payload.get("reason") or event.event_name),
+            )
+            state = self._device_dialogs_by_user.get(event.user_id)
+            if state is not None and state.device_id == event.session_id:
+                state.endpoint_playback_stream_ids.add(event.stream_id or "")
+                state.touch()
+            return
         if event.event_name in {"stream.output.finished", "stream.output.closed"}:
             self.control_service.publish(event)
             self.output_service.mark_endpoint_playback_finished(
@@ -723,15 +739,49 @@ class RealtimeAgentApp:
                 state.touch()
             self._maybe_close_pending_audio_session(event.user_id, event.session_id)
             return
+        if event.event_name == "stream.output.cancelled":
+            self.control_service.publish(event)
+            self.output_service.mark_endpoint_playback_cancelled(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                reason=str(event.payload.get("reason") or event.event_name),
+            )
+            state = self._device_dialogs_by_user.get(event.user_id)
+            if state is not None and state.device_id == event.session_id:
+                state.endpoint_playback_stream_ids.discard(event.stream_id or "")
+                state.touch()
+            self._maybe_close_pending_audio_session(event.user_id, event.session_id)
+            return
+        if event.event_name == "stream.output.failed":
+            self.control_service.publish(event)
+            self.output_service.mark_endpoint_playback_failed(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                reason=str(event.payload.get("reason") or event.event_name),
+            )
+            state = self._device_dialogs_by_user.get(event.user_id)
+            if state is not None and state.device_id == event.session_id:
+                state.endpoint_playback_stream_ids.discard(event.stream_id or "")
+                state.touch()
+            self._maybe_close_pending_audio_session(event.user_id, event.session_id)
+            return
         if event.event_name == "downstream.pause.requested":
             self.control_service.publish(event)
-            if hasattr(self.agent_core, "pause_downstream"):
-                self.agent_core.pause_downstream(event.user_id, event.session_id or self._active_device_by_user.get(event.user_id, ""))
+            session_id = event.session_id or self._active_device_by_user.get(event.user_id, "")
+            if event.stream_id:
+                self.output_service.pause_stream(user_id=event.user_id, session_id=session_id, stream_id=event.stream_id)
+            else:
+                self.output_service.pause_session(user_id=event.user_id, session_id=session_id)
             return
         if event.event_name == "downstream.resume.requested":
             self.control_service.publish(event)
-            if hasattr(self.agent_core, "resume_downstream"):
-                self.agent_core.resume_downstream(event.user_id, event.session_id or self._active_device_by_user.get(event.user_id, ""))
+            session_id = event.session_id or self._active_device_by_user.get(event.user_id, "")
+            if event.stream_id:
+                self.output_service.resume_stream(user_id=event.user_id, session_id=session_id, stream_id=event.stream_id)
+            else:
+                self.output_service.resume_session(user_id=event.user_id, session_id=session_id)
             return
         self.control_service.publish(event)
 
@@ -1268,6 +1318,7 @@ class RealtimeAgentApp:
             for device_id in expired_devices:
                 broker.fail_device_commands(device_id=device_id, reason="heartbeat_timeout")
         closed_streams = self.stream_service.close_idle_streams(now=current)
+        output_ack_timeouts = self.output_service.sweep_endpoint_ack_timeouts(now=current)
         closed_sessions: list[str] = []
         if self.config.audio_session_idle_timeout_seconds > 0:
             for user_id, state in list(self._device_dialogs_by_user.items()):
@@ -1292,6 +1343,7 @@ class RealtimeAgentApp:
         return {
             "expired_devices": list(expired_devices),
             "closed_streams": [handle.stream_id for handle in closed_streams],
+            "output_endpoint_ack_timeouts": output_ack_timeouts,
             "closed_audio_sessions": closed_sessions,
         }
 
