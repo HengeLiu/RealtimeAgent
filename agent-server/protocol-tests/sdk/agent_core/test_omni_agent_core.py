@@ -673,12 +673,13 @@ def test_realtime_provider_speech_started_cancels_active_response_without_output
 
 
 def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> None:
-    """测试目标：验证 Omni Realtime 会从 continuous RGB stream 缓存中追加图片。
+    """测试目标：验证 Omni Realtime 只在 provider VAD turn 内按需追加图片。
 
-    测试方法：注入 fake realtime provider 和 fake asset service，打开会话后等待后台
-    视觉线程读取最新 RGB 缓存并 append 到 provider，最后关闭会话。
-    预期结果：server 下发 `mode=continuous` 的 RGB 打开请求，fake provider 至少收到
-    一张图片，runs 中记录视觉采样开始、追加和停止。
+    测试方法：注入 fake realtime provider 和 fake asset service，先追加音频打开会话，
+    确认不会立刻请求 RGB；再模拟 provider 上报 speech_started，等待后台线程请求单帧
+    并 append 到 provider，最后关闭会话。
+    预期结果：会话打开阶段不采集图片；speech_started 后通过 AssetService 请求当前
+    单帧图片，runs 中记录视觉采样开始、追加和停止。
     """
 
     image_path = tmp_path / "frame.jpg"
@@ -713,13 +714,27 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
             payload=b"\x01\x02",
         )
     )
+    time.sleep(0.1)
+    assert asset_service.request_count == 0
+    assert asset_service.query_count == 0
+    assert not instances[0].images
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
     deadline = time.time() + 1
     while time.time() < deadline and not instances[0].images:
         time.sleep(0.02)
     core.close("user-001", reason="test_done")
 
-    assert asset_service.query_count >= 1
-    assert asset_service.request_count == 0
+    assert asset_service.query_count == 0
+    assert asset_service.request_count >= 1
+    assert asset_service.requests[0]["freshness_seconds"] == 0.0
+    assert asset_service.requests[0]["device_ids"] == ("dev-web",)
+    assert asset_service.requests[0]["params"]["sample_count"] == 1
+    assert asset_service.requests[0]["params"]["capture_reason"] == "realtime_video"
     assert asset_service.claims
     assert asset_service.claims[0]["consumer"] == "agent_inline"
     assert asset_service.claims[0]["reason"] == "realtime_video_append"
@@ -730,18 +745,7 @@ def test_realtime_core_appends_rgb_frames_during_provider_vad_turn(tmp_path) -> 
     assert "omni.visual_sampler.started" in agent_events
     assert "omni.visual_frame.appended" in agent_events
     assert "omni.visual_sampler.stopped" in agent_events
-    assert "omni.visual_stream.close.requested" in agent_events
-    open_events = [
-        event
-        for event in connection.events
-        if event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb"
-    ]
-    assert open_events
-    assert open_events[0].payload["mode"] == "continuous"
-    assert any(
-        event.event_name == "stream.control.close.requested" and event.stream_type == "sensor.rgb"
-        for event in connection.events
-    )
+    assert "omni.visual_stream.open.requested" not in agent_events
 
 
 def test_realtime_visual_sampler_stops_when_no_rgb_device(tmp_path) -> None:

@@ -1047,12 +1047,19 @@ class OutputRouter:
                 "stream_type": "actuator.speaker",
             },
         )
+        state = self._endpoint_state_by_stream.setdefault(stream_id, {})
+        state["paused_at"] = time.time()
 
     def resume_stream(self, *, user_id: str, session_id: str, stream_id: str) -> None:
         """按 stream_id 恢复 speaker output 写出并冲刷暂停缓存。"""
 
         self._paused_streams.discard(stream_id)
-        self._endpoint_state_by_stream.setdefault(stream_id, {})["state"] = "endpoint_resumed"
+        state = self._endpoint_state_by_stream.setdefault(stream_id, {})
+        state["state"] = "endpoint_resumed"
+        paused_at = state.pop("paused_at", None)
+        if paused_at is not None and "ack_deadline_at" in state:
+            pause_seconds = max(0.0, time.time() - float(paused_at))
+            state["ack_deadline_at"] = float(state["ack_deadline_at"]) + pause_seconds
         self.recorder.record_stream_event(
             session_id,
             {
@@ -1503,6 +1510,10 @@ class OutputRouter:
             },
         )
         self.stream_service.request_output_finish(stream_id, reason="assistant_audio.done")
+        ack_timeout_seconds = self._endpoint_ack_timeout_seconds_for_payload(
+            payload_size=len(payload),
+            stream_format=handle.format,
+        )
         self._endpoint_state_by_stream[stream_id] = {
             "state": "finish_requested",
             "user_id": user_id,
@@ -1510,7 +1521,12 @@ class OutputRouter:
             "stream_id": stream_id,
             "stream_type": "actuator.speaker",
             "finish_requested_at": time.time(),
-            "ack_deadline_at": time.time() + self.endpoint_ack_timeout_seconds,
+            "ack_deadline_at": time.time() + ack_timeout_seconds,
+            "ack_timeout_seconds": ack_timeout_seconds,
+            "playback_duration_seconds": self._playback_duration_seconds(
+                payload_size=len(payload),
+                stream_format=handle.format,
+            ),
             "payload_size": len(payload),
         }
         self._pending_endpoint_ack_by_stream[stream_id] = self._endpoint_state_by_stream[stream_id]
@@ -1816,6 +1832,27 @@ class OutputRouter:
                 bypass_pause=True,
             )
 
+    def _playback_duration_seconds(self, *, payload_size: int, stream_format: StreamFormat) -> float:
+        """估算端侧实际播放 output PCM 所需时间。
+
+        主要逻辑：endpoint ack 等待不能只按固定网络超时计算。对于 PCM 输出，应按
+        sample_rate、channels 和 16bit 样本宽度估算真实播放时长；其他编码回退到
+        配置的固定超时。
+        """
+
+        if payload_size <= 0:
+            return 0.0
+        if stream_format.codec != "pcm16le":
+            return 0.0
+        bytes_per_second = max(1, int(stream_format.sample_rate) * max(1, int(stream_format.channels)) * 2)
+        return float(payload_size) / float(bytes_per_second)
+
+    def _endpoint_ack_timeout_seconds_for_payload(self, *, payload_size: int, stream_format: StreamFormat) -> float:
+        """计算等待端侧播放完成回执的超时时间。"""
+
+        playback_seconds = self._playback_duration_seconds(payload_size=payload_size, stream_format=stream_format)
+        return max(float(self.endpoint_ack_timeout_seconds), playback_seconds + float(self.endpoint_ack_timeout_seconds))
+
     def _start_tts_drain_pump(
         self,
         *,
@@ -2052,7 +2089,8 @@ class OutputRouter:
                     "user_id": user_id,
                     "stream_id": stream_id,
                     "stream_type": state.get("stream_type") or "actuator.speaker",
-                    "timeout_seconds": self.endpoint_ack_timeout_seconds,
+                    "timeout_seconds": state.get("ack_timeout_seconds") or self.endpoint_ack_timeout_seconds,
+                    "playback_duration_seconds": state.get("playback_duration_seconds"),
                 },
             )
             self._complete_endpoint_playback(

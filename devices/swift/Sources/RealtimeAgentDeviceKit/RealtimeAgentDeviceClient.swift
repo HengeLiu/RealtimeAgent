@@ -10,6 +10,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     public typealias CustomCommandHandler = @Sendable (RealtimeAgentCustomCommandContext) async throws -> Void
     public typealias StreamOpenHandler = @Sendable (RealtimeAgentInputStreamRequest) async throws -> Void
     public typealias EventHandler = @Sendable (RealtimeAgentEvent) async throws -> Void
+    public typealias DebugLogHandler = @Sendable (String) async -> Void
 
     public let serverURL: URL
     public let device: RealtimeAgentDevice
@@ -25,13 +26,24 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var eventHandlers: [String: EventHandler] = [:]
     private var outputSessions: [String: RealtimeAgentOutputStreamSession] = [:]
     private var speakerBuffers: [String: SpeakerPlaybackBuffer] = [:]
+    private var speakerPreparationTasks: [String: Task<SpeakerPlaybackBuffer, Error>] = [:]
     private var speakerDrainTasks: [String: Task<Void, Never>] = [:]
+    private var speakerReceivedChunkCounts: [String: Int] = [:]
+    private var speakerDrainedChunkCounts: [String: Int] = [:]
     private var startedOutputStreams = Set<String>()
+    private var completedOutputStreams = Set<String>()
     private var sequenceByStream: [String: Int] = [:]
+    private var debugLogHandler: DebugLogHandler?
+    private let microphoneUploadMuteLock = NSLock()
+    private var microphoneUploadMuteReasons = Set<String>()
     private var audioInput: AudioInput = .disabled()
     private var camera: Camera = .disabled()
     private var speaker: Speaker = .disabled()
     private var microphoneTask: Task<Void, Never>?
+    private static let speakerDrainIdleSleepNanoseconds: UInt64 = 5_000_000
+    private static let speakerDrainYieldEveryChunks = 64
+    private static let streamReceiveReconnectBaseSleepNanoseconds: UInt64 = 100_000_000
+    private static let speakerFinishGraceNanoseconds: UInt64 = 300_000_000
 
     /// 创建默认 URLSession WebSocket 客户端。
     ///
@@ -160,16 +172,28 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
 
     /// 关闭 WebSocket、心跳和接收任务。
     public func close() async {
+        await debugLog("client close requested")
         heartbeatTask?.cancel()
         controlReceiveTask?.cancel()
         streamReceiveTask?.cancel()
         microphoneTask?.cancel()
+        speakerPreparationTasks.values.forEach { $0.cancel() }
         speakerDrainTasks.values.forEach { $0.cancel() }
+        for buffer in speakerBuffers.values {
+            await buffer.cancel()
+        }
         heartbeatTask = nil
         controlReceiveTask = nil
         streamReceiveTask = nil
         microphoneTask = nil
+        speakerPreparationTasks = [:]
         speakerDrainTasks = [:]
+        speakerBuffers = [:]
+        speakerReceivedChunkCounts = [:]
+        speakerDrainedChunkCounts = [:]
+        startedOutputStreams = []
+        completedOutputStreams = []
+        clearMicrophoneUploadMutes()
         await transport.close()
         diagnostics.controlState = "closed"
         diagnostics.streamState = "closed"
@@ -193,6 +217,13 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     /// 注册输入 stream 打开请求处理器。
     public func onStreamOpen(_ streamType: String, handler: @escaping StreamOpenHandler) {
         streamOpenHandlers[streamType] = handler
+    }
+
+    /// 注册 SDK 内部诊断日志处理器。
+    ///
+    /// 主要功能：把 speaker 播放缓冲、起播、暂停、恢复和错误等端侧状态交给 App 展示或落盘。
+    public func onDebugLog(_ handler: @escaping DebugLogHandler) {
+        debugLogHandler = handler
     }
 
     /// 发送控制事件。
@@ -261,16 +292,26 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             return true
         case "stream.output.close.requested", "stream.output.finish.requested":
             let session = outputSession(for: event)
-            try await drainSpeakerIfNeeded(streamID: session.streamID)
+            await debugLog("speaker close requested stream=\(session.streamID) event=\(event.eventName)")
+            try await finishSpeakerOutput(streamID: session.streamID)
             try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
+            unmuteMicrophoneUpload(reason: "speaker:\(session.streamID)")
             return true
         case "stream.output.cancel.requested":
             let session = outputSession(for: event)
+            await debugLog("speaker cancel requested stream=\(session.streamID)")
             speakerDrainTasks[session.streamID]?.cancel()
             speakerDrainTasks.removeValue(forKey: session.streamID)
             await speakerBuffers[session.streamID]?.cancel()
+            speakerPreparationTasks[session.streamID]?.cancel()
+            speakerPreparationTasks.removeValue(forKey: session.streamID)
             speakerBuffers.removeValue(forKey: session.streamID)
+            speakerReceivedChunkCounts.removeValue(forKey: session.streamID)
+            speakerDrainedChunkCounts.removeValue(forKey: session.streamID)
+            startedOutputStreams.remove(session.streamID)
+            completedOutputStreams.insert(session.streamID)
             try await session.cancelled(reason: "cancel_requested")
+            unmuteMicrophoneUpload(reason: "speaker:\(session.streamID)")
             return true
         default:
             diagnostics.unhandledEvents += 1
@@ -315,6 +356,13 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     @discardableResult
     public func dispatchStreamChunk(_ chunk: RealtimeAgentStreamChunk) async throws -> Bool {
         guard chunk.streamType == "actuator.speaker", speaker.enabled else {
+            if chunk.streamType.starts(with: "actuator.") {
+                await debugLog("output chunk ignored stream_type=\(chunk.streamType) speaker_enabled=\(speaker.enabled)")
+            }
+            return false
+        }
+        guard !completedOutputStreams.contains(chunk.streamID) else {
+            await debugLog("speaker late chunk ignored stream=\(chunk.streamID) seq=\(chunk.seq)")
             return false
         }
         try await handleOutputChunk(chunk)
@@ -330,6 +378,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         let current = sequenceByStream[streamID] ?? 0
         sequenceByStream[streamID] = current + 1
         return current
+    }
+
+    private func debugLog(_ message: String) async {
+        await debugLogHandler?(message)
     }
 
     private func registrationPayload() -> [String: Any] {
@@ -433,8 +485,9 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private func handleAudioSessionClose(_ event: RealtimeAgentEvent) async throws -> Bool {
         microphoneTask?.cancel()
         microphoneTask = nil
-        for streamID in speakerBuffers.keys {
+        for streamID in Array(speakerBuffers.keys) {
             try await drainSpeakerIfNeeded(streamID: streamID)
+            unmuteMicrophoneUpload(reason: "speaker:\(streamID)")
         }
         try await sendEvent(
             name: "control.audio_session.closed",
@@ -525,11 +578,43 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
 
     private func prepareSpeakerSession(for event: RealtimeAgentEvent) async throws {
         let session = outputSession(for: event)
-        if speakerBuffers[session.streamID] == nil {
-            let sink = speaker.sink ?? RealtimeAgentNoopSpeakerSink()
-            try await sink.prepare(format: speakerFormat(for: event))
-            speakerBuffers[session.streamID] = SpeakerPlaybackBuffer(configuration: speaker.buffer, sink: sink)
+        if completedOutputStreams.contains(session.streamID) {
+            return
         }
+        if speakerBuffers[session.streamID] != nil {
+            return
+        }
+        if let task = speakerPreparationTasks[session.streamID] {
+            let buffer = try await task.value
+            if speakerBuffers[session.streamID] == nil,
+               !completedOutputStreams.contains(session.streamID) {
+                speakerBuffers[session.streamID] = buffer
+            }
+            return
+        }
+        let sink = speaker.sink ?? RealtimeAgentNoopSpeakerSink()
+        let format = speakerFormat(for: event)
+        let bufferConfiguration = speaker.buffer
+        let task = Task<SpeakerPlaybackBuffer, Error> {
+            try await sink.prepare(format: format)
+            return SpeakerPlaybackBuffer(configuration: bufferConfiguration, sink: sink)
+        }
+        speakerPreparationTasks[session.streamID] = task
+        await debugLog(
+            "speaker prepare stream=\(session.streamID) codec=\(format.codec) sample_rate=\(format.sampleRate) channels=\(format.channels) start_ms=\(bufferConfiguration.startWatermarkMS) low_ms=\(bufferConfiguration.lowWatermarkMS) high_ms=\(bufferConfiguration.highWatermarkMS) max_ms=\(bufferConfiguration.maxBufferMS)"
+        )
+        do {
+            let buffer = try await task.value
+            speakerPreparationTasks.removeValue(forKey: session.streamID)
+            if speakerBuffers[session.streamID] == nil,
+               !completedOutputStreams.contains(session.streamID) {
+                speakerBuffers[session.streamID] = buffer
+            }
+        } catch {
+            speakerPreparationTasks.removeValue(forKey: session.streamID)
+            throw error
+        }
+        await debugLog("speaker prepared stream=\(session.streamID)")
     }
 
     private func speakerFormat(for event: RealtimeAgentEvent) -> RealtimeAgentSpeakerFormat {
@@ -541,35 +626,82 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         )
     }
 
-    private func handleOutputChunk(_ chunk: RealtimeAgentStreamChunk) async throws {
-        let event = RealtimeAgentEvent(
+    private func outputOpenEvent(for chunk: RealtimeAgentStreamChunk) -> RealtimeAgentEvent {
+        RealtimeAgentEvent(
             eventName: "stream.output.open.requested",
             userID: chunk.userID,
             producerID: "server",
-            payload: ["stream_type": chunk.streamType],
+            payload: [
+                "stream_type": chunk.streamType,
+                "format": [
+                    "codec": chunk.codec,
+                    "sample_rate": chunk.sampleRate,
+                    "channels": chunk.channels,
+                ],
+            ],
             sessionID: chunk.sessionID,
             streamID: chunk.streamID,
             streamType: chunk.streamType
         )
+    }
+
+    private func handleOutputChunk(_ chunk: RealtimeAgentStreamChunk) async throws {
+        let event = outputOpenEvent(for: chunk)
         let session = outputSession(for: event)
+        let receivedCount = (speakerReceivedChunkCounts[chunk.streamID] ?? 0) + 1
+        speakerReceivedChunkCounts[chunk.streamID] = receivedCount
+        if shouldLogSpeakerChunk(count: receivedCount) {
+            await debugLog(
+                "speaker chunk received stream=\(chunk.streamID) seq=\(chunk.seq) count=\(receivedCount) bytes=\(chunk.payload.count) duration_ms=\(chunk.durationMS)"
+            )
+        }
         if speakerBuffers[chunk.streamID] == nil {
             try await prepareSpeakerSession(for: event)
         }
+        muteMicrophoneUpload(reason: "speaker:\(session.streamID)")
         try await session.append(chunk)
         let actions = try await speakerBuffers[chunk.streamID]?.append(chunk) ?? []
+        if let snapshot = await speakerBuffers[chunk.streamID]?.snapshot(),
+           shouldLogSpeakerBuffer(count: receivedCount, actions: actions) {
+            await debugLog(
+                "speaker buffer append stream=\(chunk.streamID) buffered_ms=\(snapshot.bufferedMS) queued=\(snapshot.queuedChunks) bytes=\(snapshot.bufferedBytes) started=\(snapshot.hasStarted) paused=\(snapshot.isPaused) actions=\(describeSpeakerActions(actions))"
+            )
+        }
         try await applySpeakerActions(actions, session: session)
     }
 
+    private func finishSpeakerOutput(streamID: String) async throws {
+        if let task = speakerPreparationTasks[streamID] {
+            _ = try await task.value
+        }
+        try? await Task.sleep(nanoseconds: Self.speakerFinishGraceNanoseconds)
+        completedOutputStreams.insert(streamID)
+        try await drainSpeakerIfNeeded(streamID: streamID)
+    }
+
     private func drainSpeakerIfNeeded(streamID: String) async throws {
+        await debugLog("speaker drain requested stream=\(streamID)")
+        let drainTask = speakerDrainTasks.removeValue(forKey: streamID)
+        drainTask?.cancel()
+        if let drainTask {
+            await drainTask.value
+        }
         guard let buffer = speakerBuffers[streamID] else { return }
+        let before = await buffer.snapshot()
+        await debugLog(
+            "speaker drain available stream=\(streamID) buffered_ms=\(before.bufferedMS) queued=\(before.queuedChunks) bytes=\(before.bufferedBytes)"
+        )
         let actions = try await buffer.drainAvailable()
         if let session = outputSessions[streamID] {
             try await applySpeakerActions(actions, session: session)
         }
         try await buffer.drainSink()
-        speakerDrainTasks[streamID]?.cancel()
-        speakerDrainTasks.removeValue(forKey: streamID)
         speakerBuffers.removeValue(forKey: streamID)
+        speakerPreparationTasks.removeValue(forKey: streamID)
+        speakerReceivedChunkCounts.removeValue(forKey: streamID)
+        speakerDrainedChunkCounts.removeValue(forKey: streamID)
+        startedOutputStreams.remove(streamID)
+        await debugLog("speaker drain completed stream=\(streamID)")
     }
 
     private func applySpeakerActions(_ actions: [SpeakerPlaybackAction], session: RealtimeAgentOutputStreamSession) async throws {
@@ -578,10 +710,14 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             case .started:
                 if !startedOutputStreams.contains(session.streamID) {
                     startedOutputStreams.insert(session.streamID)
+                    await debugLog("speaker action started stream=\(session.streamID)")
                     try await session.started()
                     startSpeakerDrainLoop(session: session)
                 }
             case let .pause(bufferedMS, highWatermarkMS):
+                await debugLog(
+                    "speaker action pause stream=\(session.streamID) buffered_ms=\(bufferedMS) high_ms=\(highWatermarkMS)"
+                )
                 try await sendEvent(
                     name: "downstream.pause.requested",
                     payload: [
@@ -596,6 +732,9 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                     streamType: session.streamType
                 )
             case let .resume(bufferedMS, lowWatermarkMS):
+                await debugLog(
+                    "speaker action resume stream=\(session.streamID) buffered_ms=\(bufferedMS) low_ms=\(lowWatermarkMS)"
+                )
                 try await sendEvent(
                     name: "downstream.resume.requested",
                     payload: [
@@ -609,30 +748,86 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                     streamID: session.streamID,
                     streamType: session.streamType
                 )
-            case .overflow:
+            case let .overflow(bufferedMS, overflowMS):
                 diagnostics.lastMediaError = "speaker buffer overflow"
+                await debugLog(
+                    "speaker action overflow stream=\(session.streamID) buffered_ms=\(bufferedMS) overflow_ms=\(overflowMS)"
+                )
             }
         }
+    }
+
+    private func shouldLogSpeakerChunk(count: Int) -> Bool {
+        count <= 5 || count % 50 == 0
+    }
+
+    private func shouldLogSpeakerBuffer(count: Int, actions: [SpeakerPlaybackAction]) -> Bool {
+        shouldLogSpeakerChunk(count: count) || !actions.isEmpty
+    }
+
+    private func describeSpeakerActions(_ actions: [SpeakerPlaybackAction]) -> String {
+        if actions.isEmpty {
+            return "none"
+        }
+        return actions.map { action in
+            switch action {
+            case let .started(bufferedMS):
+                return "started(\(bufferedMS)ms)"
+            case let .pause(bufferedMS, highWatermarkMS):
+                return "pause(\(bufferedMS)/\(highWatermarkMS)ms)"
+            case let .resume(bufferedMS, lowWatermarkMS):
+                return "resume(\(bufferedMS)/\(lowWatermarkMS)ms)"
+            case let .overflow(bufferedMS, overflowMS):
+                return "overflow(\(bufferedMS)+\(overflowMS)ms)"
+            }
+        }.joined(separator: ",")
     }
 
     private func startSpeakerDrainLoop(session: RealtimeAgentOutputStreamSession) {
         if speakerDrainTasks[session.streamID] != nil {
             return
         }
-        speakerDrainTasks[session.streamID] = Task { [weak self] in
+        guard let buffer = speakerBuffers[session.streamID] else {
+            return
+        }
+        let streamID = session.streamID
+        speakerDrainTasks[session.streamID] = Task { [weak self, buffer] in
+            await self?.debugLog("speaker drain loop started stream=\(streamID)")
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
-                    if let buffer = self.speakerBuffers[session.streamID], !buffer.isEmpty {
+                    var drainedInBurst = 0
+                    while !(await buffer.isEmpty), !Task.isCancelled {
                         let actions = try await buffer.drainNext()
                         try await self.applySpeakerActions(actions, session: session)
+                        let drainedCount = (self.speakerDrainedChunkCounts[streamID] ?? 0) + 1
+                        self.speakerDrainedChunkCounts[streamID] = drainedCount
+                        drainedInBurst += 1
+                        if self.shouldLogSpeakerChunk(count: drainedCount) {
+                            let snapshot = await buffer.snapshot()
+                            await self.debugLog(
+                                "speaker drain tick stream=\(streamID) count=\(drainedCount) buffered_ms=\(snapshot.bufferedMS) queued=\(snapshot.queuedChunks) bytes=\(snapshot.bufferedBytes)"
+                            )
+                        }
+                        if drainedInBurst % Self.speakerDrainYieldEveryChunks == 0 {
+                            await Task.yield()
+                        }
                     }
-                    try await Task.sleep(nanoseconds: 20_000_000)
+                    if drainedInBurst == 0 {
+                        try await Task.sleep(nanoseconds: Self.speakerDrainIdleSleepNanoseconds)
+                    } else {
+                        await Task.yield()
+                    }
+                } catch is CancellationError {
+                    await self.debugLog("speaker drain loop cancelled stream=\(streamID)")
+                    return
                 } catch {
                     self.diagnostics.lastMediaError = error.localizedDescription
+                    await self.debugLog("speaker drain error stream=\(streamID) error=\(error.localizedDescription)")
                     return
                 }
             }
+            await self?.debugLog("speaker drain loop stopped stream=\(streamID)")
         }
     }
 
@@ -661,6 +856,9 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             do {
                 for try await payload in source.streamPCM16LE(configuration: configuration) {
                     if Task.isCancelled { return }
+                    if self.isMicrophoneUploadMuted {
+                        continue
+                    }
                     let chunk = RealtimeAgentStreamChunk(
                         userID: self.userID,
                         sessionID: sessionID,
@@ -680,6 +878,30 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                 self.diagnostics.lastMediaError = error.localizedDescription
             }
         }
+    }
+
+    private var isMicrophoneUploadMuted: Bool {
+        microphoneUploadMuteLock.lock()
+        defer { microphoneUploadMuteLock.unlock() }
+        return !microphoneUploadMuteReasons.isEmpty
+    }
+
+    private func muteMicrophoneUpload(reason: String) {
+        microphoneUploadMuteLock.lock()
+        microphoneUploadMuteReasons.insert(reason)
+        microphoneUploadMuteLock.unlock()
+    }
+
+    private func unmuteMicrophoneUpload(reason: String) {
+        microphoneUploadMuteLock.lock()
+        microphoneUploadMuteReasons.remove(reason)
+        microphoneUploadMuteLock.unlock()
+    }
+
+    private func clearMicrophoneUploadMutes() {
+        microphoneUploadMuteLock.lock()
+        microphoneUploadMuteReasons.removeAll()
+        microphoneUploadMuteLock.unlock()
     }
 
     private func intValue(_ value: Any?) -> Int? {
@@ -723,17 +945,47 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private func startStreamReceiveLoop() {
         streamReceiveTask?.cancel()
         streamReceiveTask = Task { [weak self] in
+            var consecutiveFailures = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
                     let chunk = try await self.receiveStreamChunk()
+                    consecutiveFailures = 0
                     _ = try await self.dispatchStreamChunk(chunk)
+                } catch is CancellationError {
+                    return
                 } catch {
                     self.recordStreamError(error)
-                    return
+                    consecutiveFailures += 1
+                    await self.debugLog(
+                        "stream receive error attempt=\(consecutiveFailures) error=\(error.localizedDescription)"
+                    )
+                    guard self.shouldRetryStreamReceive(after: consecutiveFailures) else {
+                        await self.debugLog("stream receive loop stopped after \(consecutiveFailures) failures")
+                        return
+                    }
+                    self.diagnostics.streamState = "disconnected"
+                    try? await Task.sleep(
+                        nanoseconds: self.streamReceiveReconnectDelayNanoseconds(attempt: consecutiveFailures)
+                    )
                 }
             }
         }
+    }
+
+    private func shouldRetryStreamReceive(after consecutiveFailures: Int) -> Bool {
+        switch configuration.reconnectPolicy {
+        case .disabled:
+            return false
+        case let .exponentialBackoff(maxAttempts):
+            return consecutiveFailures <= maxAttempts
+        }
+    }
+
+    private func streamReceiveReconnectDelayNanoseconds(attempt: Int) -> UInt64 {
+        let cappedExponent = min(max(attempt - 1, 0), 4)
+        let multiplier = UInt64(1 << cappedExponent)
+        return Self.streamReceiveReconnectBaseSleepNanoseconds * multiplier
     }
 
     private func recordControlError(_ error: Error) {

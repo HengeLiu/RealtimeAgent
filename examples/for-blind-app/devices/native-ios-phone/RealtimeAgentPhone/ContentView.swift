@@ -30,6 +30,7 @@ struct ContentView: View {
                     labeled("RGB uploads", "\(runtime.rgbUploadCount)")
                     labeled("Direct camera frames", "\(runtime.directCameraFrameCount)")
                     labeled("Direct camera bytes", "\(runtime.directCameraBytes)")
+                    labeled("Log file", runtime.logFilePath)
                     if !runtime.directCameraSinkURIs.isEmpty {
                         labeled("Direct camera URI", runtime.directCameraSinkURIs.joined(separator: "\n"))
                     }
@@ -50,6 +51,9 @@ struct ContentView: View {
                     }
                     Button("停止直连相机接收") {
                         runtime.stopDirectCameraSink()
+                    }
+                    Button("清空日志") {
+                        runtime.clearLogs()
                     }
                     Button("断开连接", role: .destructive) {
                         Task { await runtime.disconnect() }

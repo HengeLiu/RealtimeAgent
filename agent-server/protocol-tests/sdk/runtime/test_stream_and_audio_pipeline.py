@@ -608,6 +608,53 @@ def test_closed_input_stream_late_chunk_is_dropped(tmp_path) -> None:
     assert dropped[-1]["reason"] == "input_stream_closed_late_chunk"
 
 
+def test_closed_rgb_stream_final_chunk_is_stored_as_asset(tmp_path) -> None:
+    """测试目标：验证相机单帧上传在 close/chunk 乱序时不会丢失。
+
+    测试方法：打开 `sensor.rgb` 输入流后先关闭 stream，再发送不带 request_id 的
+    final JPEG chunk，模拟 iOS 端先发关闭控制事件、后到二进制资产分片的竞态。
+    预期结果：迟到 final chunk 被记录为 close 后收到，图片仍进入资产服务。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    handle = app.open_input_stream(
+        user_id="user-late-photo",
+        producer_id="dev-late-photo",
+        stream_type="sensor.rgb",
+        format=StreamFormat(codec="jpeg", sample_rate=1, channels=1, chunk_ms=1),
+    )
+    app.stream_service.close_stream(handle.stream_id, reason="camera_frame_uploaded")
+    payload = b"\xff\xd8late-photo\xff\xd9"
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-late-photo",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=payload,
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"capture_reason": "visual_sampler"},
+        )
+    )
+
+    asset = app.asset_service.query_assets(user_id="user-late-photo", stream_type="sensor.rgb")[-1]
+    assert asset.metadata["payload_size"] == len(payload)
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
+    assert Path(asset.uri).read_bytes() == payload
+
+    events_path = app.recorder.session_file(handle.session_id, "stream-events.jsonl")
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    received_after_close = [event for event in events if event.get("event") == "stream.chunk.received_after_close"]
+    assert received_after_close[-1]["stream_id"] == handle.stream_id
+    assert received_after_close[-1]["reason"] == "input_stream_closed_final_chunk_race"
+
+
 def test_mic_input_close_is_pushed_to_producer_device(tmp_path) -> None:
     """测试目标：服务端关闭麦克风输入流时，原生产端能收到关闭事件。
 

@@ -118,10 +118,10 @@ struct SpeakerBufferConfig: Codable, Equatable {
     }
 
     static let `default` = SpeakerBufferConfig(
-        startWatermarkMS: 120,
-        lowWatermarkMS: 300,
-        highWatermarkMS: 800,
-        maxBufferMS: 1200
+        startWatermarkMS: 600,
+        lowWatermarkMS: 3000,
+        highWatermarkMS: 12000,
+        maxBufferMS: 20000
     )
 }
 

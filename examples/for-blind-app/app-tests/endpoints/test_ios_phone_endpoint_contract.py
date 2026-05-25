@@ -47,7 +47,12 @@ def test_ios_phone_config_schema_matches_endpoint_protocol() -> None:
     assert config["audio_input"]["enabled"] is True
     assert config["camera"]["enabled"] is True
     assert config["speaker"]["enabled"] is True
-    assert config["speaker"]["buffer"]["high_watermark_ms"] == 800
+    assert config["speaker"]["buffer"] == {
+        "start_watermark_ms": 600,
+        "low_watermark_ms": 3000,
+        "high_watermark_ms": 12000,
+        "max_buffer_ms": 20000,
+    }
     assert "phone.task.find_object_phone_task" not in config.get("properties", {})
     assert "phone.task.traffic_light_phone_task" not in config.get("properties", {})
     assert "supports" not in config

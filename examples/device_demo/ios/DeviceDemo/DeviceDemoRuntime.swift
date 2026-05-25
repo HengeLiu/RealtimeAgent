@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OSLog
 import RealtimeAgentDeviceKit
 
 /// Device Demo 的运行阶段。
@@ -29,15 +30,24 @@ final class DeviceDemoRuntime: ObservableObject {
     @Published private(set) var logs: [String] = []
 
     let cameraPreview = CameraPreviewController()
+    let logFilePath: String
 
     private var client: DeviceClient?
     private var diagnosticsTask: Task<Void, Never>?
+    private let logFileURL: URL
+    private let logFileQueue = DispatchQueue(label: "realtime-agent.device-demo.log-file")
+    private let logger = Logger(subsystem: "dev.realtimeagent.device-demo", category: "runtime")
 
     private static let serverURLKey = "DeviceDemo.serverURL"
     private static let defaultServerURL = "http://192.168.10.10:8765"
 
     init() {
         serverURL = UserDefaults.standard.string(forKey: Self.serverURLKey) ?? Self.defaultServerURL
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let logFileURL = documentsURL.appendingPathComponent("DeviceDemo.log")
+        self.logFileURL = logFileURL
+        self.logFilePath = logFileURL.path
     }
 
     /// 开始实时音视频对话。
@@ -85,6 +95,17 @@ final class DeviceDemoRuntime: ObservableObject {
         diagnostics = RealtimeAgentDiagnostics()
     }
 
+    /// 清空调试弹窗和沙盒文件中的日志。
+    ///
+    /// 主要用途：真机复现播放问题前清掉历史事件，避免把旧日志误认为本次链路状态。
+    func clearLogs() {
+        logs.removeAll()
+        logFileQueue.async { [logFileURL] in
+            try? FileManager.default.removeItem(at: logFileURL)
+        }
+        appendLog("logs cleared")
+    }
+
     private func makeClient() throws -> DeviceClient {
         try DeviceClient(
             serverURL: serverURL,
@@ -102,10 +123,10 @@ final class DeviceDemoRuntime: ObservableObject {
             ),
             speaker: .enabled(
                 buffer: PlaybackBuffer(
-                    startWatermarkMS: 120,
-                    lowWatermarkMS: 300,
-                    highWatermarkMS: 800,
-                    maxBufferMS: 1200
+                    startWatermarkMS: 600,
+                    lowWatermarkMS: 3000,
+                    highWatermarkMS: 12000,
+                    maxBufferMS: 20000
                 )
             ),
             auth: ["mode": "disabled"],
@@ -121,6 +142,9 @@ final class DeviceDemoRuntime: ObservableObject {
     }
 
     private func configureCustomEvents(_ client: DeviceClient) {
+        client.onDebugLog { [weak self] message in
+            await self?.appendSDKDebugLog(message)
+        }
         client.onCustomCommand("demo.ping") { [weak self] context in
             await self?.appendLog("custom command <- demo.ping")
             try await context.emit("custom.demo.pong", ["ok": true])
@@ -168,10 +192,40 @@ final class DeviceDemoRuntime: ObservableObject {
     }
 
     private func appendLog(_ message: String) {
-        logs.insert(message, at: 0)
-        if logs.count > 80 {
-            logs.removeLast(logs.count - 80)
+        let line = "\(Self.logTimestamp()) \(message)"
+        logs.insert(line, at: 0)
+        if logs.count > 200 {
+            logs.removeLast(logs.count - 200)
         }
+        logger.info("\(line, privacy: .public)")
+        writeLogLineToFile(line)
+    }
+
+    private func appendSDKDebugLog(_ message: String) {
+        appendLog("sdk \(message)")
+    }
+
+    private func writeLogLineToFile(_ line: String) {
+        logFileQueue.async { [logFileURL] in
+            let data = Data((line + "\n").utf8)
+            if !FileManager.default.fileExists(atPath: logFileURL.path) {
+                _ = FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: logFileURL) else {
+                return
+            }
+            defer {
+                try? handle.close()
+            }
+            _ = try? handle.seekToEnd()
+            handle.write(data)
+        }
+    }
+
+    private static func logTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter.string(from: Date())
     }
 }
 

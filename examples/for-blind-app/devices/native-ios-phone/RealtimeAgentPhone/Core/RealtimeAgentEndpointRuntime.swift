@@ -22,15 +22,24 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     @Published private(set) var directCameraBytes = 0
 
     let config: AppConfig
+    let logFilePath: String
 
     private var client: RealtimeAgentDeviceClient?
     private var microphone: MicrophoneStreamer?
     private var speakerBuffer = Data()
+    private var speakerChunkCount = 0
     private var directCameraSinkServer: DirectCameraSinkServer?
     private var latestDirectCameraFrame: DirectCameraFrame?
+    private let logFileURL: URL
+    private let logFileQueue = DispatchQueue(label: "realtime-agent.phone.log-file")
 
     init(config: AppConfig) {
         self.config = config
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let logFileURL = documentsURL.appendingPathComponent("RealtimeAgentPhone.log")
+        self.logFileURL = logFileURL
+        self.logFilePath = logFileURL.path
     }
 
     /// 建立控制和 stream WebSocket，并发送注册事件。
@@ -55,10 +64,22 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
         await client?.close()
         client = nil
         microphone = nil
+        speakerChunkCount = 0
         controlState = "已断开"
         streamState = "已断开"
         stopDirectCameraSink()
         appendLog("disconnected")
+    }
+
+    /// 清空 App 内最近事件和沙盒日志文件。
+    ///
+    /// 主要用途：真机联调前清掉历史噪音，只保留本次播放链路日志。
+    func clearLogs() {
+        eventLog.removeAll()
+        logFileQueue.async { [logFileURL] in
+            try? FileManager.default.removeItem(at: logFileURL)
+        }
+        appendLog("logs cleared")
     }
 
     /// 启动端侧直连相机接收服务。
@@ -156,6 +177,9 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     }
 
     private func configureClient(_ client: RealtimeAgentDeviceClient) {
+        client.onDebugLog { [weak self] message in
+            await self?.appendSDKDebugLog(message)
+        }
         client.onCustomCommand("haptic.vibrate") { [weak self] context in
             await self?.handleHapticCommand(context)
         }
@@ -198,6 +222,13 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
         if chunk.streamType == "actuator.speaker" {
             speakerBuffer.append(chunk.payload)
             speakerBytesBuffered = speakerBuffer.count
+            speakerChunkCount += 1
+            if shouldLogSpeakerChunk(count: speakerChunkCount) {
+                appendLog(
+                    "app speaker chunk stream=\(chunk.streamID) seq=\(chunk.seq) count=\(speakerChunkCount) bytes=\(chunk.payload.count) total_bytes=\(speakerBytesBuffered)"
+                )
+            }
+            return
         }
         appendLog("stream <- \(chunk.streamType) bytes=\(chunk.payload.count)")
     }
@@ -320,10 +351,43 @@ final class RealtimeAgentEndpointRuntime: ObservableObject {
     }
 
     private func appendLog(_ message: String) {
-        eventLog.insert(message, at: 0)
-        if eventLog.count > 30 {
-            eventLog.removeLast(eventLog.count - 30)
+        let line = "\(Self.logTimestamp()) \(message)"
+        eventLog.insert(line, at: 0)
+        if eventLog.count > 200 {
+            eventLog.removeLast(eventLog.count - 200)
         }
+        writeLogLineToFile(line)
+    }
+
+    private func appendSDKDebugLog(_ message: String) {
+        appendLog("sdk \(message)")
+    }
+
+    private func shouldLogSpeakerChunk(count: Int) -> Bool {
+        count <= 5 || count % 50 == 0
+    }
+
+    private func writeLogLineToFile(_ line: String) {
+        logFileQueue.async { [logFileURL] in
+            let data = Data((line + "\n").utf8)
+            if !FileManager.default.fileExists(atPath: logFileURL.path) {
+                _ = FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: logFileURL) else {
+                return
+            }
+            defer {
+                try? handle.close()
+            }
+            _ = try? handle.seekToEnd()
+            handle.write(data)
+        }
+    }
+
+    private static func logTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter.string(from: Date())
     }
 
     private static func testJPEGPayload() -> Data {

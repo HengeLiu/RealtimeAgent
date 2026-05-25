@@ -166,7 +166,7 @@ let client = try DeviceClient(..., camera: .enabled(source: camera))
 
 ```swift
 let speaker = Speaker.enabled(
-    buffer: PlaybackBuffer(startWatermarkMS: 120, lowWatermarkMS: 300, highWatermarkMS: 800, maxBufferMS: 1200),
+    buffer: PlaybackBuffer(startWatermarkMS: 600, lowWatermarkMS: 3000, highWatermarkMS: 12000, maxBufferMS: 20000),
     sink: AppSpeakerSink()
 )
 ```

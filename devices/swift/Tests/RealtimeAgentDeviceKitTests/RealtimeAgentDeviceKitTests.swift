@@ -9,6 +9,8 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
     var controlInbox: [String] = []
     var sentStreamData: [Data] = []
     var streamInbox: [Data] = []
+    var streamReceiveResults: [Result<Data, Error>] = []
+    var streamConnectCount = 0
 
     func connectControl(url: URL) async throws {
         controlConnectedURL = url
@@ -16,6 +18,7 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
 
     func connectStream(url: URL) async throws {
         streamConnectedURL = url
+        streamConnectCount += 1
     }
 
     func sendControl(text: String) async throws {
@@ -34,6 +37,9 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
     }
 
     func receiveStream() async throws -> Data {
+        if !streamReceiveResults.isEmpty {
+            return try streamReceiveResults.removeFirst().get()
+        }
         guard !streamInbox.isEmpty else {
             throw RealtimeAgentDeviceError.transportClosed("empty stream inbox")
         }
@@ -47,11 +53,26 @@ final class SendableFlag: @unchecked Sendable {
     var value = false
 }
 
-final class RecordingSpeakerSink: RealtimeAgentSpeakerSink, @unchecked Sendable {
+actor LogRecorder {
+    private var messages: [String] = []
+
+    func append(_ message: String) {
+        messages.append(message)
+    }
+
+    func snapshot() -> [String] {
+        messages
+    }
+}
+
+class RecordingSpeakerSink: RealtimeAgentSpeakerSink, @unchecked Sendable {
     var chunks: [RealtimeAgentStreamChunk] = []
+    var preparedFormats: [RealtimeAgentSpeakerFormat] = []
     var cancelCalled = false
 
-    func prepare(format _: RealtimeAgentSpeakerFormat) async throws {}
+    func prepare(format: RealtimeAgentSpeakerFormat) async throws {
+        preparedFormats.append(format)
+    }
 
     func write(_ chunk: RealtimeAgentStreamChunk) async throws {
         chunks.append(chunk)
@@ -61,6 +82,15 @@ final class RecordingSpeakerSink: RealtimeAgentSpeakerSink, @unchecked Sendable 
 
     func cancel() async {
         cancelCalled = true
+    }
+}
+
+final class SlowPrepareSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
+    var prepareDelayNanoseconds: UInt64 = 80_000_000
+
+    override func prepare(format: RealtimeAgentSpeakerFormat) async throws {
+        try await Task.sleep(nanoseconds: prepareDelayNanoseconds)
+        try await super.prepare(format: format)
     }
 }
 
@@ -417,6 +447,9 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
 }
 
 @Test func speakerSinkReceivesOutputChunkThroughSDKBuffer() async throws {
+    // 测试目标：speaker chunk 先于 output open 控制事件到达时，SDK 必须使用 chunk 自带格式准备播放器。
+    // 测试方法：直接分发一帧 24k PCM speaker chunk，不先分发 stream.output.open.requested。
+    // 预期结果：测试 sink 收到 chunk，且 prepare 使用 24k 采样率，避免真机按 16k 播放导致低速低频。
     let transport = MockRealtimeAgentTransport()
     let sink = RecordingSpeakerSink()
     let client = makeClient(
@@ -431,7 +464,7 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
         seq: 0,
         payload: Data("pcm".utf8),
         codec: "pcm16le",
-        sampleRate: 16000,
+        sampleRate: 24000,
         channels: 1,
         durationMS: 20
     )
@@ -440,8 +473,148 @@ struct ArrayMicrophoneSource: RealtimeAgentMicrophoneSource {
     try await Task.sleep(nanoseconds: 40_000_000)
 
     #expect(sink.chunks.first?.streamID == "stream-speaker-001")
+    #expect(sink.preparedFormats.first?.sampleRate == 24000)
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["stream.output.started"])
+}
+
+@Test func speakerDebugLogReportsPlaybackLifecycle() async throws {
+    // 测试目标：端侧 App 能通过 SDK debug 回调看到 speaker 播放链路状态。
+    // 测试方法：注册 onDebugLog 后分发一帧达到起播水位的 speaker chunk。
+    // 预期结果：日志中包含 prepare、started 和 drain tick，便于真机排查无声或卡顿。
+    let transport = MockRealtimeAgentTransport()
+    let sink = RecordingSpeakerSink()
+    let recorder = LogRecorder()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    client.onDebugLog { message in
+        await recorder.append(message)
+    }
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-debug",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+
+    #expect(try await client.dispatchStreamChunk(chunk))
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    let logs = await recorder.snapshot()
+    #expect(logs.contains { $0.contains("speaker prepare stream=stream-speaker-debug") })
+    #expect(logs.contains { $0.contains("speaker action started stream=stream-speaker-debug") })
+    #expect(logs.contains { $0.contains("speaker drain tick stream=stream-speaker-debug") })
+}
+
+@Test func streamReceiveLoopReconnectsAndKeepsSpeakerOutputAlive() async throws {
+    // 测试目标：stream WebSocket 中途断开后，SDK 不能永久停止接收 speaker 音频。
+    // 测试方法：注册后让 stream receive 先抛一次断开错误，再返回一帧 speaker chunk。
+    // 预期结果：SDK 会重新连接 stream，并把断线后的 speaker chunk 写入播放 sink。
+    let transport = MockRealtimeAgentTransport()
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 60]
+        ),
+    ]
+    let sink = RecordingSpeakerSink()
+    let recorder = LogRecorder()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    client.onDebugLog { message in
+        await recorder.append(message)
+    }
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-reconnect",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    transport.streamReceiveResults = [
+        .failure(RealtimeAgentDeviceError.transportClosed("test stream drop")),
+        .success(try RealtimeAgentStreamChunkCodec.encode(chunk)),
+    ]
+
+    try await client.connectAndRegister(startHeartbeat: false)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    await client.close()
+
+    #expect(transport.streamConnectCount >= 2)
+    #expect(sink.chunks.first?.streamID == "stream-speaker-reconnect")
+    #expect(sink.preparedFormats.first?.sampleRate == 24000)
+    let logs = await recorder.snapshot()
+    #expect(logs.contains { $0.contains("stream receive error attempt=1") })
+    #expect(logs.contains { $0.contains("speaker chunk received stream=stream-speaker-reconnect") })
+}
+
+@Test func outputFinishWaitsForInFlightSpeakerChunkAndIgnoresTooLateChunks() async throws {
+    // 测试目标：finish 控制事件早于 stream chunk 处理完成时，SDK 不能漏播已在处理中的音频，也不能让更晚到达的 chunk 重新静音麦克风。
+    // 测试方法：用慢 prepare 模拟真机播放器准备耗时，并发处理首个 chunk 与 finish 事件，finish 完成后再投递迟到 chunk。
+    // 预期结果：首个 chunk 被写入 sink；finish 完成后的迟到 chunk 被忽略，不会再次进入播放队列。
+    let transport = MockRealtimeAgentTransport()
+    let sink = SlowPrepareSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let firstChunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-finish-race",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm0".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let finish = RealtimeAgentEvent(
+        eventName: "stream.output.finish.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "actuator.speaker"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-finish-race",
+        streamType: "actuator.speaker"
+    )
+    let lateChunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-finish-race",
+        streamType: "actuator.speaker",
+        seq: 1,
+        payload: Data("pcm1".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+
+    async let firstHandled = client.dispatchStreamChunk(firstChunk)
+    try await Task.sleep(nanoseconds: 10_000_000)
+    #expect(try await client.dispatchEvent(finish))
+    #expect(try await firstHandled)
+    #expect(sink.chunks.map(\.seq) == [0])
+
+    #expect(try await client.dispatchStreamChunk(lateChunk) == false)
+    #expect(sink.chunks.map(\.seq) == [0])
 }
 
 @Test func speakerBufferSendsPauseAndResumeByWatermark() async throws {

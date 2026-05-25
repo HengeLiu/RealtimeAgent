@@ -1364,7 +1364,6 @@ class OmniRealtimeAgentCore:
             tool_count=len(tools),
         )
         self._set_turn_state(user_id, session_id, "listening", reason="session_opened")
-        self._start_visual_sampler(user_id=user_id, session_id=session_id)
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         """追加 Audio Pipeline 归一后的 sensor.mic chunk。
@@ -1419,12 +1418,15 @@ class OmniRealtimeAgentCore:
             )
 
     def on_audio_input_opened(self, *, user_id: str, session_id: str, stream_id: str) -> None:
-        """记录端侧麦克风输入已打开，并确保 paired RGB continuous stream 已请求。"""
+        """记录端侧麦克风输入已打开。
+
+        主要逻辑：麦克风打开只代表端侧进入待听状态，不能提前请求 RGB 上传。
+        视觉帧采样由 provider 的 speech_started 事件触发，避免把会话启动时的旧画面
+        当成用户当前问题的上下文。
+        """
 
         self._audio_stream_by_session[session_id] = stream_id
         self._closed_audio_streams_by_session.setdefault(session_id, set()).discard(stream_id)
-        if self._sessions.get(user_id) and self._sessions[user_id][0] == session_id:
-            self._start_visual_sampler(user_id=user_id, session_id=session_id)
 
     def on_audio_input_closed(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
         """通知 Realtime 当前音频输入 stream 已关闭。
@@ -2292,18 +2294,21 @@ class OmniRealtimeAgentCore:
             )
 
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
-        """根据 provider VAD 事件确认视觉采样处于运行状态。
+        """根据 provider VAD 事件管理视觉采样生命周期。
 
-        主要逻辑：实时视觉输入是 audio session 级 continuous stream。Provider
-        VAD 事件不再负责关闭摄像头，只在发现用户开始说话时确保采样线程仍运行。
+        主要逻辑：端侧摄像头预览可以常开，但向模型上传的 RGB 帧只能跟随真实用户
+        语音 turn。provider 确认 speech_started 后开始按需请求单帧，speech_stopped 后
+        停止后续请求，避免会话空闲阶段继续采集或复用旧图。
         """
 
         event = str(record.get("event") or "")
         if event == "omni.input_audio_buffer.speech_started":
             self._start_visual_sampler(user_id=user_id, session_id=session_id)
+        elif event == "omni.input_audio_buffer.speech_stopped":
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_speech_stopped")
 
     def _start_visual_sampler(self, *, user_id: str, session_id: str) -> None:
-        """启动当前会话的实时视觉帧消费线程。"""
+        """启动当前用户语音 turn 的实时视觉帧消费线程。"""
 
         if not bool(self.omni_config.realtime_video_enabled):
             return
@@ -2315,7 +2320,6 @@ class OmniRealtimeAgentCore:
             return
         stop_event = threading.Event()
         self._visual_sampler_stop_by_session[session_id] = stop_event
-        self._request_visual_stream_open(user_id=user_id, session_id=session_id)
         thread = threading.Thread(
             target=self._visual_sampler_loop,
             kwargs={"user_id": user_id, "session_id": session_id, "stop_event": stop_event, "interval": interval},
@@ -2334,7 +2338,11 @@ class OmniRealtimeAgentCore:
         thread.start()
 
     def _request_visual_stream_open(self, *, user_id: str, session_id: str) -> None:
-        """按标准协议请求端侧打开 continuous RGB 输入链路。"""
+        """按标准协议请求端侧打开 continuous RGB 输入链路。
+
+        说明：该方法保留给真正 continuous RGB 设备使用。当前 Omni 主链路默认通过
+        AssetService 按 speech turn 请求单帧，避免会话启动后端侧只上传首帧造成旧图。
+        """
 
         if self.control_service is None:
             return
@@ -2413,12 +2421,15 @@ class OmniRealtimeAgentCore:
 
         if self.control_service is None:
             return
+        stream_id = self._visual_stream_id_by_session.pop(session_id, None)
+        if stream_id is None:
+            return
         event = Event(
             event_name="stream.control.close.requested",
             user_id=user_id,
             producer_id=SERVER_PRODUCER_ID,
             session_id=session_id,
-            stream_id=self._visual_stream_id_by_session.pop(session_id, None),
+            stream_id=stream_id,
             stream_type="sensor.rgb",
             payload={"stream_type": "sensor.rgb", "mode": "continuous", "reason": f"realtime_visual_sampler_{reason}"},
         )
@@ -2512,9 +2523,8 @@ class OmniRealtimeAgentCore:
             user_id=user_id,
             producer_id=SERVER_PRODUCER_ID,
             session_id=session_id,
-            stream_id=self._visual_stream_id_by_session.get(session_id),
             stream_type="sensor.rgb",
-            payload={"stream_type": "sensor.rgb", "mode": "continuous", "reason": "realtime_visual_sampler_probe"},
+            payload={"stream_type": "sensor.rgb", "mode": "single", "reason": "realtime_visual_sampler_probe"},
         )
         return any(
             device.device_id == session_id
@@ -2529,31 +2539,30 @@ class OmniRealtimeAgentCore:
         frame_index: int,
         timeout_seconds: float,
     ) -> None:
-        """把 continuous RGB 输入链路中的最新帧追加到当前 Realtime provider。"""
+        """请求一张当前 RGB 帧并追加到当前 Realtime provider。"""
 
         if self.asset_service is None:
             return
         existing = self._sessions.get(user_id)
         if not existing or existing[0] != session_id:
             return
-        deadline = time.monotonic() + max(0.0, timeout_seconds)
-        asset = None
-        appended_ids = self._visual_appended_asset_ids_by_session.setdefault(session_id, set())
-        while time.monotonic() <= deadline and asset is None:
-            candidates = self.asset_service.query_assets(
-                user_id=user_id,
-                stream_type="sensor.rgb",
-                freshness_seconds=self.omni_config.visual_frame_ttl_seconds,
-            )
-            for candidate in reversed(candidates):
-                if candidate.session_id != session_id:
-                    continue
-                if candidate.asset_id in appended_ids:
-                    continue
-                asset = candidate
-                break
-            if asset is None:
-                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        asset = self.asset_service.request_asset(
+            user_id=user_id,
+            stream_type="sensor.rgb",
+            freshness_seconds=0.0,
+            params={
+                "format": "jpeg",
+                "frequency_hz": 1,
+                "sample_count": 1,
+                "duration_seconds": 0,
+                "ttl_seconds": self.omni_config.visual_frame_ttl_seconds,
+                "capture_reason": "realtime_video",
+                "direction": self.omni_config.visual_direction,
+            },
+            session_id=session_id,
+            timeout_seconds=max(0.05, timeout_seconds),
+            device_ids=(session_id,),
+        )
         if asset is None:
             self.recorder.record_agent_event(
                 session_id,
@@ -2562,11 +2571,14 @@ class OmniRealtimeAgentCore:
                     "provider": self.omni_config.provider,
                     "frame_index": frame_index,
                     "timeout_seconds": timeout_seconds,
-                    "source": "continuous_stream_buffer",
+                    "source": "asset_request",
                 },
             )
             return
         provider = existing[1]
+        appended_ids = self._visual_appended_asset_ids_by_session.setdefault(session_id, set())
+        if asset.asset_id in appended_ids:
+            return
         appended_ids.add(asset.asset_id)
         OmniVisualAppender(
             asset_service=self.asset_service,

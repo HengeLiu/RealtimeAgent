@@ -276,6 +276,48 @@ def test_output_endpoint_ack_timeout_releases_active_playback(tmp_path) -> None:
     assert "stream.output.endpoint_ack.timeout" in stream_events
 
 
+def test_output_endpoint_ack_timeout_covers_native_audio_duration(tmp_path) -> None:
+    """测试目标：验证原生 Realtime 音频的回执超时覆盖真实播放时长。
+
+    测试方法：提交一段约 3 秒的 24k PCM assistant_audio，并配置很短的基础 ack 超时。
+    先在 1 秒后运行维护任务，再在 5 秒后运行维护任务。
+    预期结果：1 秒时不会释放 active playback；超过音频时长加基础余量后才超时释放。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            output_endpoint_ack_timeout_seconds=0.01,
+        )
+    )
+    connection = Connection("dev-speaker")
+    register_speaker(app, connection, user_id="user-native-timeout")
+    fmt = StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20)
+    audio = b"\x00\x00" * (fmt.sample_rate * 3)
+
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-native-timeout",
+        session_id="sess-native-timeout",
+        audio=audio,
+        format=fmt,
+    )
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-native-timeout",
+        session_id="sess-native-timeout",
+        audio=b"",
+        format=fmt,
+        final=True,
+    )
+    finish_event = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
+
+    early_result = app.run_maintenance_once(now=time.time() + 1)
+    assert finish_event.stream_id not in early_result["output_endpoint_ack_timeouts"]
+    assert app.output_service.active_output_stream_id("user-native-timeout", "sess-native-timeout") == finish_event.stream_id
+
+    late_result = app.run_maintenance_once(now=time.time() + 5)
+    assert finish_event.stream_id in late_result["output_endpoint_ack_timeouts"]
+
+
 def test_output_service_background_drains_tts_audio_between_vision_deltas(tmp_path) -> None:
     """测试目标：验证 TTS 回调音频不必等下一次 text delta 或 final 才下发。
 

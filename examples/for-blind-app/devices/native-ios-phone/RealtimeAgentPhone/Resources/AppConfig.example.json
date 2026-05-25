@@ -10,10 +10,10 @@
   "speaker": {
     "enabled": true,
     "buffer": {
-      "start_watermark_ms": 120,
-      "low_watermark_ms": 300,
-      "high_watermark_ms": 800,
-      "max_buffer_ms": 1200
+      "start_watermark_ms": 600,
+      "low_watermark_ms": 3000,
+      "high_watermark_ms": 12000,
+      "max_buffer_ms": 20000
     }
   },
   "properties": {}

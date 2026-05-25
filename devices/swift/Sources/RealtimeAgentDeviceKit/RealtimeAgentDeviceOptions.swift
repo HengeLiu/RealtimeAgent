@@ -89,10 +89,10 @@ public struct PlaybackBuffer: Sendable, Equatable {
     public var maxBufferMS: Int
 
     public init(
-        startWatermarkMS: Int = 120,
-        lowWatermarkMS: Int = 300,
-        highWatermarkMS: Int = 800,
-        maxBufferMS: Int = 1200
+        startWatermarkMS: Int = 600,
+        lowWatermarkMS: Int = 3000,
+        highWatermarkMS: Int = 12000,
+        maxBufferMS: Int = 20000
     ) {
         self.startWatermarkMS = startWatermarkMS
         self.lowWatermarkMS = lowWatermarkMS

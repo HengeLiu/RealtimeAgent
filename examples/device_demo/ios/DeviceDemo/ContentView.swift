@@ -161,6 +161,7 @@ private struct DebugSheet: View {
                     labeled("Received output chunks", "\(runtime.diagnostics.receivedOutputChunks)")
                     labeled("Unhandled events", "\(runtime.diagnostics.unhandledEvents)")
                     labeled("Media error", runtime.diagnostics.lastMediaError ?? "-")
+                    labeled("Log file", runtime.logFilePath)
                 }
 
                 Section("日志") {
@@ -176,6 +177,9 @@ private struct DebugSheet: View {
                 }
 
                 Section("操作") {
+                    Button("清空日志") {
+                        runtime.clearLogs()
+                    }
                     Button("停止对话", role: .destructive) {
                         Task { await runtime.stopConversation() }
                     }
