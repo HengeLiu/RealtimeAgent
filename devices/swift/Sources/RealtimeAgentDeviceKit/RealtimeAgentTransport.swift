@@ -1,19 +1,36 @@
 import Foundation
 
+enum RealtimeAgentStreamChannel: Hashable, Sendable {
+    case audioInput
+    case audioOutput
+    case visualInput
+
+    var debugName: String {
+        switch self {
+        case .audioInput:
+            return "audio_input"
+        case .audioOutput:
+            return "audio_output"
+        case .visualInput:
+            return "visual_input"
+        }
+    }
+}
+
 protocol RealtimeAgentWebSocketTransport: AnyObject, Sendable {
     func connectControl(url: URL) async throws
-    func connectStream(url: URL) async throws
+    func connectStream(channel: RealtimeAgentStreamChannel, url: URL) async throws
     func sendControl(text: String) async throws
     func receiveControl() async throws -> String
-    func sendStream(data: Data) async throws
-    func receiveStream() async throws -> Data
+    func sendStream(data: Data, channel: RealtimeAgentStreamChannel) async throws
+    func receiveStream(channel: RealtimeAgentStreamChannel) async throws -> Data
     func close() async
 }
 
 final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchecked Sendable {
     private let session: URLSession
     private var controlSocket: URLSessionWebSocketTask?
-    private var streamSocket: URLSessionWebSocketTask?
+    private var streamSockets: [RealtimeAgentStreamChannel: URLSessionWebSocketTask] = [:]
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -25,9 +42,10 @@ final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @
         socket.resume()
     }
 
-    func connectStream(url: URL) async throws {
+    func connectStream(channel: RealtimeAgentStreamChannel, url: URL) async throws {
         let socket = session.webSocketTask(with: url)
-        streamSocket = socket
+        streamSockets[channel]?.cancel(with: .normalClosure, reason: nil)
+        streamSockets[channel] = socket
         socket.resume()
     }
 
@@ -49,16 +67,16 @@ final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @
         return text
     }
 
-    func sendStream(data: Data) async throws {
-        guard let streamSocket else {
-            throw RealtimeAgentDeviceError.missingWebSocket("stream")
+    func sendStream(data: Data, channel: RealtimeAgentStreamChannel) async throws {
+        guard let streamSocket = streamSockets[channel] else {
+            throw RealtimeAgentDeviceError.missingWebSocket(channel.debugName)
         }
         try await streamSocket.send(.data(data))
     }
 
-    func receiveStream() async throws -> Data {
-        guard let streamSocket else {
-            throw RealtimeAgentDeviceError.missingWebSocket("stream")
+    func receiveStream(channel: RealtimeAgentStreamChannel) async throws -> Data {
+        guard let streamSocket = streamSockets[channel] else {
+            throw RealtimeAgentDeviceError.missingWebSocket(channel.debugName)
         }
         let message = try await streamSocket.receive()
         guard case let .data(data) = message else {
@@ -69,8 +87,10 @@ final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @
 
     func close() async {
         controlSocket?.cancel(with: .normalClosure, reason: nil)
-        streamSocket?.cancel(with: .normalClosure, reason: nil)
+        for socket in streamSockets.values {
+            socket.cancel(with: .normalClosure, reason: nil)
+        }
         controlSocket = nil
-        streamSocket = nil
+        streamSockets = [:]
     }
 }

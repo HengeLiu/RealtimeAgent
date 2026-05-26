@@ -1,7 +1,7 @@
 # iOS phone reference endpoint
 
 本目录提供一个最小可运行的 iOS phone 参考端。它用于验证 Swift Device SDK 的标准接入：
-设备注册、显式启用音频 / 相机 / speaker、`/ws/stream` 二进制 stream、`sensor.rgb` 上传、
+设备注册、显式启用音频 / 相机 / speaker、拆分后的三条媒体 WebSocket、`sensor.rgb` 上传、
 测试 `sensor.mic` 上传、`actuator.speaker` 输出消费和 `custom.*` 业务事件。
 同时，它内置一个本地相机 WebSocket 接收服务，用于接收 ESP32 端直连推送的
 JPEG 帧，并在 server 请求 `sensor.rgb` 时优先上传最近一帧。
@@ -85,7 +85,7 @@ cp examples/for-blind-app/agent-server/config/generated/ios-phone.local.json \
 properties。ESP32 端配置该地址后，可按 `realtime_agent.direct_frame.v1` 推送 JPEG：
 4 字节大端 JSON header 长度、JSON header、JPEG payload。header 中使用
 `stream_type=sensor.rgb`。iOS phone 不会绕过 server 直接参与对话，只缓存最新帧，
-并在收到 server 的 `sensor.rgb` 采集请求时通过 `/ws/stream` 上传。
+并在收到 server 的 `sensor.rgb` 采集请求时通过视觉上行链路上传。
 
 如果本地启用 signed token：
 
@@ -131,8 +131,9 @@ xcodebuild -scheme RealtimeAgentPhone -destination 'generic/platform=iOS Simulat
 
 - “连接并注册”：连接 `/ws/control`，发送 `control.device.register.requested`。
 - “启动直连相机接收”：打开本机 `9001/ws/camera`，接收 ESP32 推送的 JPEG 帧。
-- “上传 sensor.rgb 测试帧”：通过 `/ws/stream` 上传一帧测试 JPEG。
-- “上传 sensor.mic 测试 PCM”：通过 `/ws/stream` 上传 20ms 静音 PCM。
+- “上传 sensor.rgb 测试帧”：通过 `/ws/stream/visual/input` 上传一帧测试 JPEG。
+- “上传 sensor.mic 测试 PCM”：通过 `/ws/stream/audio/input` 上传 20ms 静音 PCM。
+- `actuator.speaker` 下行音频通过 `/ws/stream/audio/output` 接收。
 - 收到 `actuator.speaker` 下行 chunk 时，由 SDK speaker buffer 维护 started、pause/resume、
   close 和 cancel；页面只显示最近收到的 speaker 字节数。
 - 收到 `custom.command.requested` 且 `payload.command=haptic.vibrate` 时，App 通过

@@ -77,7 +77,7 @@ class NetworkDeviceConnection:
     stream_queue: asyncio.Queue[QueuedStreamPayload] = field(default_factory=asyncio.Queue)
     connection_id: str | None = None
     _control_ws: web.WebSocketResponse | None = None
-    _stream_ws: web.WebSocketResponse | None = None
+    _stream_websockets: dict[str, web.WebSocketResponse] = field(default_factory=dict)
     _stream_send_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
     _stream_send_lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -91,15 +91,23 @@ class NetworkDeviceConnection:
         """
         self._control_ws = ws
 
-    def bind_stream_ws(self, ws: web.WebSocketResponse) -> None:
+    def bind_stream_ws(self, ws: web.WebSocketResponse, *, channel: str) -> None:
         """绑定 stream WebSocket。
 
-        主要逻辑：stream 连接可以晚于控制连接建立，绑定后 sender task 会消费缓存队列。
-        参数：`ws` 为 aiohttp WebSocket。
+        主要逻辑：媒体链路已经按方向和媒体类型拆分，同一设备可以同时存在
+        audio input、audio output、visual input 等 stream WebSocket。这里按通道名保存
+        当前连接，重连时覆盖同名通道。
+        参数：`ws` 为 aiohttp WebSocket；`channel` 为逻辑通道名。
         返回值：无。
         异常情况：无。
         """
-        self._stream_ws = ws
+        old_ws = self._stream_websockets.get(channel)
+        if old_ws is not None and not old_ws.closed:
+            self.loop.call_soon_threadsafe(
+                asyncio.create_task,
+                old_ws.close(message=f"{channel}_replaced".encode("utf-8")),
+            )
+        self._stream_websockets[channel] = ws
 
     def push_event(self, event: Event) -> None:
         """投递下行控制事件。
@@ -203,7 +211,8 @@ class NetworkDeviceConnection:
         返回值：无。
         异常情况：WebSocket 已关闭时忽略。
         """
-        for ws in (self._control_ws, self._stream_ws):
+        sockets = [self._control_ws, *self._stream_websockets.values()]
+        for ws in sockets:
             if ws is not None and not ws.closed:
                 self.loop.call_soon_threadsafe(asyncio.create_task, ws.close(message=reason.encode("utf-8")))
 
@@ -317,6 +326,9 @@ class RealtimeAgentHttpServer:
         app.router.add_get("/api/debug/playback", self.debug_playback)
         app.router.add_get("/api/debug/tasks", self.debug_tasks)
         app.router.add_get("/ws/control", self.control_ws)
+        app.router.add_get("/ws/stream/audio/input", self.audio_input_ws)
+        app.router.add_get("/ws/stream/audio/output", self.audio_output_ws)
+        app.router.add_get("/ws/stream/visual/input", self.visual_input_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
@@ -537,10 +549,72 @@ class RealtimeAgentHttpServer:
         return ws
 
     async def stream_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """处理旧版双向二进制 stream WebSocket。
+
+        主要逻辑：保留 `/ws/stream` 作为调试端和历史端侧的兼容入口。新版端侧应使用
+        audio input、audio output、visual input 三条专用链路。
+        """
+
+        return await self._stream_ws(
+            request,
+            channel="legacy",
+            allow_input=True,
+            allow_output=True,
+            allowed_input_stream_types=None,
+            mark_downstream_ready=True,
+        )
+
+    async def audio_input_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """处理端侧麦克风音频上行 WebSocket。"""
+
+        return await self._stream_ws(
+            request,
+            channel="audio_input",
+            allow_input=True,
+            allow_output=False,
+            allowed_input_stream_types={"sensor.mic"},
+            mark_downstream_ready=False,
+        )
+
+    async def audio_output_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """处理 server 到端侧 speaker 音频下行 WebSocket。"""
+
+        return await self._stream_ws(
+            request,
+            channel="audio_output",
+            allow_input=False,
+            allow_output=True,
+            allowed_input_stream_types=set(),
+            mark_downstream_ready=True,
+        )
+
+    async def visual_input_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """处理端侧视觉单帧图片上行 WebSocket。"""
+
+        return await self._stream_ws(
+            request,
+            channel="visual_input",
+            allow_input=True,
+            allow_output=False,
+            allowed_input_stream_types={"sensor.rgb"},
+            mark_downstream_ready=False,
+        )
+
+    async def _stream_ws(
+        self,
+        request: web.Request,
+        *,
+        channel: str,
+        allow_input: bool,
+        allow_output: bool,
+        allowed_input_stream_types: set[str] | None,
+        mark_downstream_ready: bool,
+    ) -> web.WebSocketResponse:
         """处理二进制 stream WebSocket。
 
         主要逻辑：上行消息用 `StreamChunkCodec.decode()` 解码后写入 Stream Service；
-        下行消息从设备连接的 stream 队列读取并按原始二进制发送。
+        下行消息从设备连接的 stream 队列读取并按原始二进制发送。新版协议按媒体方向
+        拆成多条物理链路，本方法用参数描述每条链路允许的输入和输出方向。
         参数：aiohttp request，必须带 `device_id` query。
         返回值：WebSocket response。
         异常情况：未注册设备连接会返回 404。
@@ -551,9 +625,14 @@ class RealtimeAgentHttpServer:
             raise web.HTTPNotFound(text="device is not registered on control websocket")
         ws = web.WebSocketResponse(heartbeat=15)
         await ws.prepare(request)
-        connection.bind_stream_ws(ws)
-        self.audio_app.mark_stream_connection_opened(device_id)
-        log_info(self.logger, "Stream WebSocket 已连接", LogContext(device_id=device_id))
+        connection.bind_stream_ws(ws, channel=channel)
+        if mark_downstream_ready:
+            self.audio_app.mark_stream_connection_opened(device_id, channel=channel)
+        log_info(
+            self.logger,
+            "Stream WebSocket 已连接",
+            LogContext(device_id=device_id, fields={"channel": channel, "allow_input": allow_input, "allow_output": allow_output}),
+        )
         reported_errors: set[str] = set()
         suppressed_errors: dict[str, int] = {}
         received_count = 0
@@ -665,16 +744,24 @@ class RealtimeAgentHttpServer:
                 dispatch_workers[chunk.stream_id] = asyncio.create_task(dispatch_worker(chunk.stream_id, queue))
             queue.put_nowait(chunk)
 
-        sender_task = asyncio.create_task(sender())
+        sender_task = asyncio.create_task(sender()) if allow_output else None
         try:
             async for message in ws:
                 if message.type != WSMsgType.BINARY:
+                    continue
+                if not allow_input:
+                    await report_stream_error(
+                        ValueError(f"stream channel does not accept input: {channel}"),
+                        chunk=None,
+                    )
                     continue
                 chunk = None
                 try:
                     chunk = StreamChunkCodec.decode(message.data)
                     if chunk.session_id != device_id:
                         raise ValueError("stream chunk session_id must equal device_id")
+                    if allowed_input_stream_types is not None and chunk.stream_type not in allowed_input_stream_types:
+                        raise ValueError(f"stream_type {chunk.stream_type} is not allowed on {channel}")
                     received_count += 1
                     if chunk.stream_type != "sensor.mic":
                         log_info(
@@ -727,8 +814,13 @@ class RealtimeAgentHttpServer:
                         "Stream 分发 worker 关闭超时",
                         LogContext(device_id=device_id, fields={"pending_worker_count": len(pending)}),
                     )
-            sender_task.cancel()
-            log_info(self.logger, "Stream WebSocket 已断开", LogContext(device_id=device_id, fields={"received_chunks": received_count}))
+            if sender_task is not None:
+                sender_task.cancel()
+            log_info(
+                self.logger,
+                "Stream WebSocket 已断开",
+                LogContext(device_id=device_id, fields={"channel": channel, "received_chunks": received_count}),
+            )
         return ws
 
     @staticmethod

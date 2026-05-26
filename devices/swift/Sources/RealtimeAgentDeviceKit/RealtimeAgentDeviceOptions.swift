@@ -32,7 +32,7 @@ public struct AudioInput: Sendable {
 
 /// 设备端 SDK 的相机能力配置。
 ///
-/// 主要功能：表达 App 是否允许 SDK 自动注册并维护 `sensor.rgb` 输入链路。
+/// 主要功能：表达 App 是否允许 SDK 自动注册并维护请求驱动的 `sensor.rgb` 单帧输入链路。
 public struct Camera: Sendable {
     public var enabled: Bool
     public var modes: [String]
@@ -43,7 +43,7 @@ public struct Camera: Sendable {
 
     private init(
         enabled: Bool,
-        modes: [String] = ["single", "continuous"],
+        modes: [String] = ["single"],
         format: String = "jpeg",
         frequencyHz: Double = 1,
         sampleCount: Int = 1,
@@ -62,7 +62,7 @@ public struct Camera: Sendable {
     }
 
     public static func enabled(
-        modes: [String] = ["single", "continuous"],
+        modes: [String] = ["single"],
         format: String = "jpeg",
         frequencyHz: Double = 1,
         sampleCount: Int = 1,

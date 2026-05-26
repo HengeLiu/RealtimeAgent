@@ -6,8 +6,8 @@ import RealtimeAgentDeviceKit
 ///
 /// 主要功能：
 /// 1. 使用 `/ws/control` 注册设备并订阅事件。
-/// 2. 使用 `/ws/stream` 上传 `sensor.rgb` / `sensor.mic` 测试 stream。
-/// 3. 通过 SDK speaker sink 观察下行音频字节统计。
+/// 2. 使用拆分后的媒体 WebSocket 上传 `sensor.rgb` / `sensor.mic` 测试 stream。
+/// 3. 通过 SDK speaker sink 观察 `actuator.speaker` 下行音频字节统计。
 /// 4. 保持 App 只通过 DeviceClient 标准入口和 custom 回调与 server 协作。
 @MainActor
 final class RealtimeAgentEndpointRuntime: ObservableObject {

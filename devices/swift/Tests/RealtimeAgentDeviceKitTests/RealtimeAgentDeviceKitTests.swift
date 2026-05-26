@@ -5,10 +5,13 @@ import Testing
 final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchecked Sendable {
     var controlConnectedURL: URL?
     var streamConnectedURL: URL?
+    var streamConnectedURLs: [RealtimeAgentStreamChannel: URL] = [:]
     var sentControlTexts: [String] = []
     var controlInbox: [String] = []
     var sentStreamData: [Data] = []
+    var sentStreamDataByChannel: [RealtimeAgentStreamChannel: [Data]] = [:]
     var streamInbox: [Data] = []
+    var streamInboxByChannel: [RealtimeAgentStreamChannel: [Data]] = [:]
     var streamReceiveResults: [Result<Data, Error>] = []
     var streamConnectCount = 0
 
@@ -16,8 +19,9 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
         controlConnectedURL = url
     }
 
-    func connectStream(url: URL) async throws {
+    func connectStream(channel: RealtimeAgentStreamChannel, url: URL) async throws {
         streamConnectedURL = url
+        streamConnectedURLs[channel] = url
         streamConnectCount += 1
     }
 
@@ -32,13 +36,19 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
         return controlInbox.removeFirst()
     }
 
-    func sendStream(data: Data) async throws {
+    func sendStream(data: Data, channel: RealtimeAgentStreamChannel) async throws {
         sentStreamData.append(data)
+        sentStreamDataByChannel[channel, default: []].append(data)
     }
 
-    func receiveStream() async throws -> Data {
+    func receiveStream(channel: RealtimeAgentStreamChannel) async throws -> Data {
         if !streamReceiveResults.isEmpty {
             return try streamReceiveResults.removeFirst().get()
+        }
+        if var inbox = streamInboxByChannel[channel], !inbox.isEmpty {
+            let data = inbox.removeFirst()
+            streamInboxByChannel[channel] = inbox
+            return data
         }
         guard !streamInbox.isEmpty else {
             throw RealtimeAgentDeviceError.transportClosed("empty stream inbox")
@@ -244,7 +254,9 @@ func eventJSON(
     let supports = payload["supports"] as? [String: Any]
     let sensors = supports?["sensors"] as? [[String: Any]]
     #expect(sensors?.first?["type"] as? String == "rgb")
-    #expect((sensors?.first?["default"] as? [String: Any])?["sample_count"] as? Int == 3)
+    #expect(sensors?.first?["modes"] as? [String] == ["single"])
+    #expect((sensors?.first?["default"] as? [String: Any])?["sample_count"] as? Int == 1)
+    #expect((sensors?.first?["default"] as? [String: Any])?["frequency_hz"] == nil)
 }
 
 @Test func enabledHardwareUsesDefaultAVFoundationAdaptersWhenAvailable() throws {
@@ -303,6 +315,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["control.audio_session.opened"])
     #expect(transport.sentStreamData.count == 2)
+    #expect(transport.streamConnectedURLs[.audioInput]?.absoluteString == "ws://127.0.0.1:8765/ws/stream/audio/input?device_id=dev-ios-001")
     let chunk = try RealtimeAgentStreamChunkCodec.decode(transport.sentStreamData[0])
     #expect(chunk.streamType == "sensor.mic")
     #expect(chunk.sessionID == "session-001")
@@ -410,7 +423,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
 
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["stream.input.opened", "stream.input.closed"])
-    #expect(transport.streamConnectedURL?.absoluteString == "ws://127.0.0.1:8765/ws/stream?device_id=dev-ios-001")
+    #expect(transport.streamConnectedURLs[.visualInput]?.absoluteString == "ws://127.0.0.1:8765/ws/stream/visual/input?device_id=dev-ios-001")
     let chunk = try RealtimeAgentStreamChunkCodec.decode(transport.sentStreamData[0])
     #expect(chunk.streamType == "sensor.rgb")
     #expect(String(data: chunk.payload, encoding: .utf8) == "abc")
@@ -823,6 +836,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
 
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["stream.input.opened", "stream.input.closed"])
+    #expect(transport.streamConnectedURLs[.audioInput]?.absoluteString == "ws://127.0.0.1:8765/ws/stream/audio/input?device_id=dev-ios-001")
     let chunk = try RealtimeAgentStreamChunkCodec.decode(transport.sentStreamData[0])
     #expect(chunk.streamType == "sensor.mic")
     #expect(chunk.codec == "pcm16le")
@@ -861,6 +875,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(format?["channels"] as? Int == 1)
     let chunk = try RealtimeAgentStreamChunkCodec.decode(transport.sentStreamData[0])
     #expect(chunk.streamType == "sensor.rgb")
+    #expect(transport.streamConnectedURLs[.visualInput]?.absoluteString == "ws://127.0.0.1:8765/ws/stream/visual/input?device_id=dev-ios-001")
     #expect(chunk.codec == format?["codec"] as? String)
     #expect(chunk.sampleRate == format?["sample_rate"] as? Int)
     #expect(chunk.channels == format?["channels"] as? Int)
@@ -868,7 +883,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(chunk.metadata["capture_reason"] as? String == "test")
 }
 
-@Test func cameraUploaderRespondsToContinuousRgbRequest() async throws {
+@Test func cameraUploaderTreatsLegacyContinuousRgbRequestAsSingleFrame() async throws {
     let transport = MockRealtimeAgentTransport()
     let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
     let client = RealtimeAgentDeviceClient(
@@ -879,7 +894,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     let source = ClosureCameraFrameSource {
         Data("jpeg".utf8)
     }
-    CameraFrameUploader.registerFrameHandler(client: client, source: source, options: CameraFrameUploadOptions(sampleRate: 50))
+    CameraFrameUploader.registerFrameHandler(client: client, source: source, options: CameraFrameUploadOptions(sampleRate: 1))
     let event = RealtimeAgentEvent(
         eventName: "stream.control.open.requested",
         userID: "user-001",
@@ -896,31 +911,23 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     )
 
     #expect(try await client.dispatchEvent(event))
-    try await Task.sleep(nanoseconds: 90_000_000)
-    let close = RealtimeAgentEvent(
-        eventName: "stream.control.close.requested",
-        userID: "user-001",
-        producerID: "server-main",
-        payload: ["stream_type": "sensor.rgb"],
-        sessionID: "dev-ios-001",
-        streamID: "stream-rgb-002",
-        streamType: "sensor.rgb"
-    )
-    #expect(try await client.dispatchEvent(close))
     try await Task.sleep(nanoseconds: 30_000_000)
 
-    #expect(transport.sentStreamData.count >= 2)
+    #expect(transport.sentStreamData.count == 1)
     let opened = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
     let format = opened.payload["format"] as? [String: Any]
     #expect(format?["codec"] as? String == "jpeg")
-    #expect(format?["sample_rate"] as? Int == 50)
-    #expect(opened.payload["sample_count"] == nil)
+    #expect(format?["sample_rate"] as? Int == 1)
+    #expect(opened.payload["mode"] as? String == "single")
+    #expect(opened.payload["sample_count"] as? Int == 1)
+    #expect(opened.payload["requested_mode_ignored"] as? String == "continuous")
     let chunks = try transport.sentStreamData.map { try RealtimeAgentStreamChunkCodec.decode($0) }
-    #expect(Array(chunks.map(\.seq).prefix(2)) == [0, 1])
-    #expect(chunks.allSatisfy { $0.final == false })
-    #expect(chunks.last?.metadata["frequency_hz"] as? Int == 50)
+    #expect(chunks.map(\.seq) == [0])
+    #expect(chunks.allSatisfy { $0.final })
+    #expect(chunks.last?.metadata["sample_count"] as? Int == 1)
+    #expect(chunks.last?.metadata["frequency_hz"] == nil)
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
-    #expect(names.contains("stream.input.closed"))
+    #expect(names == ["stream.input.opened", "stream.input.closed"])
 }
 
 @Test func streamCodecRoundTripsChunk() throws {

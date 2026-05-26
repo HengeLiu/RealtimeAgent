@@ -21,6 +21,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var heartbeatTask: Task<Void, Never>?
     private var controlReceiveTask: Task<Void, Never>?
     private var streamReceiveTask: Task<Void, Never>?
+    private var connectedStreamChannels = Set<RealtimeAgentStreamChannel>()
     private var customCommandHandlers: [String: CustomCommandHandler] = [:]
     private var streamOpenHandlers: [String: StreamOpenHandler] = [:]
     private var eventHandlers: [String: EventHandler] = [:]
@@ -168,8 +169,13 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     public func connectAndRegister(startHeartbeat shouldStartHeartbeat: Bool = true) async throws {
         _ = try await register(startHeartbeat: shouldStartHeartbeat)
         startControlReceiveLoop()
-        try await ensureStream()
-        startStreamReceiveLoop()
+        if audioInput.enabled {
+            try await ensureStream(channel: .audioInput)
+        }
+        if speaker.enabled {
+            try await ensureStream(channel: .audioOutput)
+            startStreamReceiveLoop()
+        }
     }
 
     /// 关闭 WebSocket、心跳和接收任务。
@@ -198,6 +204,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         speakerAppendedLastSeq = [:]
         startedOutputStreams = []
         completedOutputStreams = []
+        connectedStreamChannels = []
         await transport.close()
         diagnostics.controlState = "closed"
         diagnostics.streamState = "closed"
@@ -325,31 +332,28 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         }
     }
 
-    /// 确保 stream WebSocket 已连接。
+    /// 确保当前配置需要的 stream WebSocket 已连接。
     public func ensureStream() async throws {
-        if diagnostics.streamState == "connected" {
-            return
+        if audioInput.enabled {
+            try await ensureStream(channel: .audioInput)
         }
-        try await transport.connectStream(
-            url: try websocketURL(
-                path: "/ws/stream",
-                query: [URLQueryItem(name: "device_id", value: deviceID)]
-            )
-        )
-        diagnostics.streamState = "connected"
+        if speaker.enabled {
+            try await ensureStream(channel: .audioOutput)
+        }
     }
 
     /// 发送一帧 stream chunk。
     public func sendStreamChunk(_ chunk: RealtimeAgentStreamChunk) async throws {
-        try await ensureStream()
-        try await transport.sendStream(data: try RealtimeAgentStreamChunkCodec.encode(chunk))
+        let channel = streamChannel(for: chunk.streamType)
+        try await ensureStream(channel: channel)
+        try await transport.sendStream(data: try RealtimeAgentStreamChunkCodec.encode(chunk), channel: channel)
         diagnostics.sentStreamChunks += 1
     }
 
     /// 从 stream WebSocket 读取一帧 chunk。
     public func receiveStreamChunk() async throws -> RealtimeAgentStreamChunk {
-        try await ensureStream()
-        let chunk = try RealtimeAgentStreamChunkCodec.decode(try await transport.receiveStream())
+        try await ensureStream(channel: .audioOutput)
+        let chunk = try RealtimeAgentStreamChunkCodec.decode(try await transport.receiveStream(channel: .audioOutput))
         if chunk.streamType.starts(with: "actuator.") {
             diagnostics.receivedOutputChunks += 1
         }
@@ -384,6 +388,46 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         let current = sequenceByStream[streamID] ?? 0
         sequenceByStream[streamID] = current + 1
         return current
+    }
+
+    private func ensureStream(channel: RealtimeAgentStreamChannel) async throws {
+        if connectedStreamChannels.contains(channel), diagnostics.streamState == "connected" {
+            return
+        }
+        try await transport.connectStream(
+            channel: channel,
+            url: try websocketURL(
+                path: streamPath(for: channel),
+                query: [URLQueryItem(name: "device_id", value: deviceID)]
+            )
+        )
+        connectedStreamChannels.insert(channel)
+        diagnostics.streamState = "connected"
+        await debugLog("stream connected channel=\(channel.debugName)")
+    }
+
+    private func streamPath(for channel: RealtimeAgentStreamChannel) -> String {
+        switch channel {
+        case .audioInput:
+            return "/ws/stream/audio/input"
+        case .audioOutput:
+            return "/ws/stream/audio/output"
+        case .visualInput:
+            return "/ws/stream/visual/input"
+        }
+    }
+
+    private func streamChannel(for streamType: String) -> RealtimeAgentStreamChannel {
+        switch streamType {
+        case "sensor.mic":
+            return .audioInput
+        case "sensor.rgb":
+            return .visualInput
+        case "actuator.speaker":
+            return .audioOutput
+        default:
+            return streamType.starts(with: "actuator.") ? .audioOutput : .visualInput
+        }
     }
 
     private func debugLog(_ message: String) async {
@@ -897,10 +941,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                 source: source,
                 options: CameraFrameUploadOptions(
                     codec: camera.format,
-                    sampleRate: Int(camera.frequencyHz),
+                    sampleRate: 1,
                     sleepBetweenContinuousFrames: true
                 ),
-                defaultSampleCount: camera.sampleCount
+                defaultSampleCount: 1
             )
         }
     }

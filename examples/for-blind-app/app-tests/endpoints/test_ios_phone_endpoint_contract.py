@@ -131,7 +131,9 @@ def test_ios_phone_handles_control_and_stream_events_without_hidden_rpc() -> Non
 
     required_tokens = [
         "/ws/control",
-        "/ws/stream",
+        "/ws/stream/audio/input",
+        "/ws/stream/audio/output",
+        "/ws/stream/visual/input",
         "stream.control.open.requested",
         "stream.output.started",
         "stream.output.closed",

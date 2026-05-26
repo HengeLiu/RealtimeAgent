@@ -109,11 +109,22 @@ def sync(argv: list[str] | None = None) -> None:
                 "device_id": "dev-ios-phone-001",
                 "auth": auth_config,
                 "protocol_version": "realtime-agent.v1",
+                "direct_camera_sink_port": 9001,
+                "audio_input": {"enabled": True},
+                "camera": {"enabled": True},
+                "speaker": {
+                    "enabled": True,
+                    "buffer": {
+                        "start_watermark_ms": 600,
+                        "low_watermark_ms": 3000,
+                        "high_watermark_ms": 12000,
+                        "max_buffer_ms": 20000,
+                    },
+                },
                 "properties": {
                     "audio.aec": "replaceable",
                     "audio.wake_word": "manual",
                 },
-                "supports": _ios_supports(),
             },
             ensure_ascii=False,
             indent=2,
@@ -239,12 +250,6 @@ def _glass_supports() -> dict[str, Any]:
             {"type": "rgb", "modes": ["single"], "default": {"format": "jpeg", "frequency_hz": 1, "sample_count": 1}}
         ]
     }
-
-
-def _ios_supports() -> dict[str, Any]:
-    """生成 iOS 参考端注册使用的设备语义能力。"""
-
-    return _phone_supports()
 
 
 def _auth(mode: str, token: str, signed_token: str = "") -> dict[str, str]:

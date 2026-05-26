@@ -15,7 +15,9 @@ iOS 和 macOS，负责协议数据模型、stream chunk 编解码、control / st
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
 | Control WebSocket | `/ws/control` | 注册、心跳、命令、stream 生命周期事件。 |
-| Stream WebSocket | `/ws/stream?device_id=<device_id>` | 二进制 stream 数据。 |
+| Audio Input WebSocket | `/ws/stream/audio/input?device_id=<device_id>` | 端侧上传 `sensor.mic` PCM chunk。 |
+| Audio Output WebSocket | `/ws/stream/audio/output?device_id=<device_id>` | 端侧接收 server 下发的 `actuator.speaker` chunk。 |
+| Visual Input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | server 请求后，端侧上传一帧 `sensor.rgb` 图片。 |
 
 控制事件信封：
 
@@ -83,7 +85,7 @@ let device = RealtimeAgentDevice(deviceID: "dev-ios-001")
     .user("user-001")
     .named("iPhone")
     .role("phone")
-    .sensorRgb(modes: ["single", "continuous"], format: "jpeg", frequencyHz: 1)
+    .sensorRgb(modes: ["single"], format: "jpeg")
     .actuatorVibrator(commands: ["vibrate"])
 
 let payload = device.registrationPayload
@@ -106,7 +108,7 @@ let payload = device.registrationPayload
 
 ### `RealtimeAgentStreamChunk`
 
-表达 `/ws/stream` 的 header 和 payload：
+表达媒体 WebSocket 的 header 和 payload：
 
 ```swift
 let chunk = RealtimeAgentStreamChunk(
@@ -148,8 +150,8 @@ App 仍可以传入 source/sink 覆盖默认 adapter，例如使用外接麦克�
 图片样例或自定义播放器。
 
 `Camera.enabled(source:)` 可以注入 JPEG frame source。SDK 会响应
-`stream.control.open.requested(sensor.rgb)`，按请求中的 `sample_count` / `frequency_hz`
-上传一帧或连续帧：
+`stream.control.open.requested(sensor.rgb, mode=single, sample_count=1)`，在 server 请求后
+上传一帧 JPEG，然后关闭该逻辑输入流：
 
 ```swift
 let camera = ClosureCameraFrameSource {
@@ -204,7 +206,7 @@ let device = RealtimeAgentDevice(deviceID: "dev-ios-phone-001")
     .user("user-001")
     .named("iOS Phone")
     .role("phone")
-    .sensorRgb(modes: ["single"], format: "jpeg", frequencyHz: 1)
+    .sensorRgb(modes: ["single"], format: "jpeg")
 
 let event = RealtimeAgentEvent(
     eventName: "control.device.register.requested",

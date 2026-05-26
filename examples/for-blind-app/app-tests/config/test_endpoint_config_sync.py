@@ -71,6 +71,10 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
         assert config["user_id"] == "user-sync"
         assert config["auth"]["mode"] == "static_token"
         assert config["auth"]["token"] == "token-sync"
+    assert ios["audio_input"]["enabled"] is True
+    assert ios["camera"]["enabled"] is True
+    assert ios["speaker"]["enabled"] is True
+    assert "supports" not in ios
     assert "REALTIME_AGENT_SERVER_URL=http://10.0.0.2:8765" in esp32
     assert "REALTIME_AGENT_CONTROL_WS_URL=ws://10.0.0.2:8765/ws/control" in esp32
     assert "REALTIME_AGENT_STREAM_WS_URL=ws://10.0.0.2:8765/ws/stream" in esp32
@@ -84,7 +88,6 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
     assert '"type":"rgb"' in esp32
     assert _support_types(phone) >= {"sensor.rgb", "actuator.vibrator"}
     assert _support_types(web) >= {"sensor.rgb", "actuator.vibrator"}
-    assert _support_types(ios) >= {"sensor.rgb", "actuator.vibrator"}
     esp32_config = Esp32S3EndpointConfig.from_env_file(report["files"]["esp32_s3"])
     assert esp32_config.server_url == "http://10.0.0.2:8765"
     assert esp32_config.user_id == "user-sync"
@@ -121,7 +124,10 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     assert _support_types(phone) >= {"sensor.rgb", "actuator.vibrator"}
     assert esp32.device_id == "dev-esp32-s3-001"
     assert "phone.task.find_object_phone_task" not in ios.get("properties", {})
-    assert _support_types(ios) >= {"sensor.rgb", "actuator.vibrator"}
+    assert ios["audio_input"]["enabled"] is True
+    assert ios["camera"]["enabled"] is True
+    assert ios["speaker"]["enabled"] is True
+    assert "supports" not in ios
     assert "routes" not in ios
 
 

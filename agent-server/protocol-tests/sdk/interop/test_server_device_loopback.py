@@ -5,11 +5,11 @@ import json
 from contextlib import suppress
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientSession, WSMsgType, web
 
 from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, ToolContextFactory
 from realtime_agent.output.service import OutputItem
-from realtime_agent.protocol import StreamFormat
+from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
 from realtime_agent.server import RealtimeAgentHttpServer
 from realtime_agent_device import RealtimeAgentDeviceClient, DeviceBuilder
 
@@ -156,6 +156,173 @@ async def _run_loopback_contract(tmp_path) -> None:
         await runner.cleanup()
 
 
+async def _receive_event(ws, *, timeout: float = 2.0) -> Event:
+    """从 WebSocket 读取一个 JSON 控制事件。
+
+    测试目标：让拆分 WebSocket 测试直接验证真实 server 返回的协议事件。
+    测试方法：读取一帧 TEXT 消息并按 `Event` 解码。
+    预期结果：收到合法 JSON 控制事件；超时或类型错误时断言失败。
+    """
+
+    message = await ws.receive(timeout=timeout)
+    assert message.type == WSMsgType.TEXT
+    return Event.from_dict(json.loads(message.data))
+
+
+async def _register_raw_device(session: ClientSession, server_url: str, *, user_id: str, device_id: str):
+    """通过裸 aiohttp WebSocket 注册一个测试设备。
+
+    测试目标：避免复用旧 Python Device SDK 的 `/ws/stream` 兼容入口，直接覆盖新链路。
+    测试方法：连接 `/ws/control`，发送注册事件，等待 `control.device.registered`。
+    预期结果：server 接受注册，并允许后续按 device_id 建立三条媒体 WebSocket。
+    """
+
+    ws_base = server_url.replace("http://", "ws://").replace("https://", "wss://")
+    control = await session.ws_connect(f"{ws_base}/ws/control")
+    await control.send_str(
+        json.dumps(
+            Event(
+                event_name="control.device.register.requested",
+                user_id=user_id,
+                producer_id=device_id,
+                payload={
+                    "device_id": device_id,
+                    "name": "Raw Split Stream Device",
+                    "client_type": "raw-test-device",
+                    "auth": {"mode": "disabled"},
+                    "properties": {
+                        "realtime_agent.audio_input": "sensor.mic",
+                        "realtime_agent.audio_output": "actuator.speaker",
+                    },
+                    "supports": {"sensors": [{"type": "rgb", "modes": ["single"], "default": {"format": "jpeg", "sample_count": 1}}]},
+                },
+            ).to_dict(),
+            ensure_ascii=False,
+        )
+    )
+    registered = await _receive_event(control)
+    assert registered.event_name == "control.device.registered"
+    return control
+
+
+def _chunk(
+    *,
+    user_id: str,
+    device_id: str,
+    stream_id: str,
+    stream_type: str,
+    payload: bytes,
+    codec: str,
+    seq: int = 0,
+    sample_rate: int = 16000,
+    channels: int = 1,
+    duration_ms: int = 20,
+    metadata: dict | None = None,
+) -> bytes:
+    """构造一帧协议二进制 chunk。
+
+    测试目标：统一生成 mic、rgb 和 speaker chunk，避免测试手写二进制。
+    测试方法：使用生产 `StreamChunkCodec.encode`。
+    预期结果：返回可直接写入媒体 WebSocket 的 bytes。
+    """
+
+    return StreamChunkCodec.encode(
+        StreamChunk(
+            user_id=user_id,
+            session_id=device_id,
+            stream_id=stream_id,
+            stream_type=stream_type,
+            seq=seq,
+            payload=payload,
+            final=True,
+            codec=codec,
+            sample_rate=sample_rate,
+            channels=channels,
+            duration_ms=duration_ms,
+            metadata=dict(metadata or {}),
+        )
+    )
+
+
+async def _run_split_stream_contract(tmp_path) -> None:
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="vision",
+            default_actuator_speaker=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20),
+            asset_request_timeout_seconds=3,
+        )
+    )
+    runner, server_url = await _start_loopback_server(app)
+    user_id = "user-split"
+    device_id = "dev-split"
+    ws_base = server_url.replace("http://", "ws://").replace("https://", "wss://")
+    try:
+        async with ClientSession() as session:
+            control = await _register_raw_device(session, server_url, user_id=user_id, device_id=device_id)
+            audio_input = await session.ws_connect(f"{ws_base}/ws/stream/audio/input?device_id={device_id}")
+            visual_input = await session.ws_connect(f"{ws_base}/ws/stream/visual/input?device_id={device_id}")
+            audio_output = await session.ws_connect(f"{ws_base}/ws/stream/audio/output?device_id={device_id}")
+
+            await audio_input.send_bytes(
+                _chunk(
+                    user_id=user_id,
+                    device_id=device_id,
+                    stream_id="stream_mic_split",
+                    stream_type="sensor.mic",
+                    payload=b"\x00" * 640,
+                    codec="pcm16le",
+                )
+            )
+            await visual_input.send_bytes(
+                _chunk(
+                    user_id=user_id,
+                    device_id=device_id,
+                    stream_id="stream_rgb_split",
+                    stream_type="sensor.rgb",
+                    payload=b"\xff\xd8split-rgb\xff\xd9",
+                    codec="jpeg",
+                    sample_rate=1,
+                    duration_ms=1,
+                    metadata={"request_id": "req-split"},
+                )
+            )
+            await audio_input.send_bytes(
+                _chunk(
+                    user_id=user_id,
+                    device_id=device_id,
+                    stream_id="stream_rgb_wrong_channel",
+                    stream_type="sensor.rgb",
+                    payload=b"\xff\xd8wrong-channel\xff\xd9",
+                    codec="jpeg",
+                    sample_rate=1,
+                    duration_ms=1,
+                )
+            )
+            error = await _receive_event(audio_input)
+            assert error.event_name == "system.error.raised"
+            assert "is not allowed on audio_input" in error.payload["message"]
+
+            app.output_service.submit_audio(
+                user_id=user_id,
+                session_id=device_id,
+                audio=b"\x01\x02" * 320,
+                format=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20),
+            )
+            output_message = await audio_output.receive(timeout=2)
+            assert output_message.type == WSMsgType.BINARY
+            output_chunk = StreamChunkCodec.decode(output_message.data)
+            assert output_chunk.stream_type == "actuator.speaker"
+            assert output_chunk.payload
+
+            await control.close()
+            await audio_input.close()
+            await visual_input.close()
+            await audio_output.close()
+    finally:
+        await runner.cleanup()
+
+
 def test_python_device_sdk_interoperates_with_real_server_sdk_websocket(tmp_path) -> None:
     """测试目标：验证真实 Server SDK 与 Python Device SDK 可以通过 WebSocket 闭环。
 
@@ -166,3 +333,15 @@ def test_python_device_sdk_interoperates_with_real_server_sdk_websocket(tmp_path
     """
 
     asyncio.run(_run_loopback_contract(tmp_path))
+
+
+def test_server_accepts_split_media_websockets(tmp_path) -> None:
+    """测试目标：验证 server 已按协议拆分媒体 WebSocket。
+
+    测试方法：启动真实 HTTP server，裸连接 `/ws/control` 完成注册，然后分别连接
+    `/ws/stream/audio/input`、`/ws/stream/visual/input` 和 `/ws/stream/audio/output`。
+    预期结果：麦克风 chunk 只能走音频上行，RGB chunk 只能走视觉上行，speaker chunk
+    只能从音频下行收到；把 RGB 发到音频上行会返回协议错误。
+    """
+
+    asyncio.run(_run_split_stream_contract(tmp_path))

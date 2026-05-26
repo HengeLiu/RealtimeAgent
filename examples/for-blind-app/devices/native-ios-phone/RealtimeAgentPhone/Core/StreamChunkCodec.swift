@@ -3,7 +3,7 @@ import Foundation
 /// realtime-agent stream chunk。
 ///
 /// 主要功能：
-/// 1. 表达 `/ws/stream` 二进制消息中的 JSON header 和 payload。
+/// 1. 表达媒体 WebSocket 二进制消息中的 JSON header 和 payload。
 /// 2. 支持端侧上传 `sensor.rgb` / `sensor.mic`，也支持消费 `actuator.speaker`。
 struct RealtimeAgentStreamChunk {
     var userID: String

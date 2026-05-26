@@ -118,8 +118,7 @@ public struct RealtimeAgentDevice: @unchecked Sendable {
                 "modes": camera.modes,
                 "default": [
                     "format": camera.format,
-                    "frequency_hz": camera.frequencyHz,
-                    "sample_count": camera.sampleCount,
+                    "sample_count": 1,
                 ],
             ])
         }

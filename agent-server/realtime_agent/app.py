@@ -922,11 +922,11 @@ class RealtimeAgentApp:
             self._register_endpoint_input_stream_from_chunk(chunk)
         self.stream_service.on_chunk(chunk)
 
-    def mark_stream_connection_opened(self, device_id: str) -> None:
-        """标记端侧 stream WebSocket 已建立。
+    def mark_stream_connection_opened(self, device_id: str, *, channel: str = "legacy") -> None:
+        """标记端侧下行 stream WebSocket 已建立。
 
-        主要逻辑：当前协议的 `/ws/stream` 同时承载上行麦克风和下行扬声器数据。
-        端侧在连续对话开始时建立该长连接，因此这里把它通知给 realtime pipeline
+        主要逻辑：新版协议把麦克风上行、speaker 下行和视觉上行拆成多条物理链路。
+        只有 speaker 下行链路或旧版双向 `/ws/stream` 建立时，才通知 realtime pipeline
         的下行绑定入口；Text pipeline 会在内部预热 TTS session。
         """
 
@@ -941,11 +941,11 @@ class RealtimeAgentApp:
             self.agent_core.on_downstream_opened(
                 user_id=user_id,
                 session_id=device_id,
-                stream_id=f"{device_id}:downstream",
+                stream_id=f"{device_id}:{channel}:downstream",
                 stream_type="actuator.speaker",
             )
             return
-        self.output_service.prepare_text_session(device_id, reason="stream_ws_opened")
+        self.output_service.prepare_text_session(device_id, reason=f"{channel}_stream_ws_opened")
 
     def close_audio_session(self, user_id: str, *, reason: str = "completed", mode: str = "close_now") -> None:
         device_id = self._active_device_by_user.get(user_id)
