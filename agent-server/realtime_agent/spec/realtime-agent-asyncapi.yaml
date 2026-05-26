@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 info:
   title: realtime-agent device protocol
   version: 0.1.0
-  description: realtime-agent 端侧控制事件和 stream WebSocket 协议。
+  description: realtime-agent 端侧控制事件和多媒体 WebSocket 协议。
 servers:
   local:
     host: 127.0.0.1:8765
@@ -13,8 +13,24 @@ channels:
     messages:
       controlEvent:
         $ref: '#/components/messages/ControlEvent'
-  stream:
-    address: /ws/stream?device_id={device_id}
+  audioInput:
+    address: /ws/stream/audio/input?device_id={device_id}
+    parameters:
+      device_id:
+        description: 已完成 control WebSocket 注册的设备 ID。
+    messages:
+      streamChunk:
+        $ref: '#/components/messages/StreamChunk'
+  audioOutput:
+    address: /ws/stream/audio/output?device_id={device_id}
+    parameters:
+      device_id:
+        description: 已完成 control WebSocket 注册的设备 ID。
+    messages:
+      streamChunk:
+        $ref: '#/components/messages/StreamChunk'
+  visualInput:
+    address: /ws/stream/visual/input?device_id={device_id}
     parameters:
       device_id:
         description: 已完成 control WebSocket 注册的设备 ID。
@@ -34,18 +50,24 @@ operations:
       $ref: '#/channels/control'
     messages:
       - $ref: '#/channels/control/messages/controlEvent'
-  sendStreamChunk:
+  sendAudioInputChunk:
     action: send
     channel:
-      $ref: '#/channels/stream'
+      $ref: '#/channels/audioInput'
     messages:
-      - $ref: '#/channels/stream/messages/streamChunk'
-  receiveStreamChunk:
+      - $ref: '#/channels/audioInput/messages/streamChunk'
+  receiveAudioOutputChunk:
     action: receive
     channel:
-      $ref: '#/channels/stream'
+      $ref: '#/channels/audioOutput'
     messages:
-      - $ref: '#/channels/stream/messages/streamChunk'
+      - $ref: '#/channels/audioOutput/messages/streamChunk'
+  sendVisualInputChunk:
+    action: send
+    channel:
+      $ref: '#/channels/visualInput'
+    messages:
+      - $ref: '#/channels/visualInput/messages/streamChunk'
 components:
   messages:
     ControlEvent:

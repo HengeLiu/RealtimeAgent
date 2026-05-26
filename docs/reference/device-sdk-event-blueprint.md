@@ -26,7 +26,9 @@ package "Device App" {
 package "Device SDK" {
   [Device Profile]
   [Control Channel]
-  [Stream Channel]
+  [Audio Input Channel]
+  [Audio Output Channel]
+  [Visual Input Channel]
   [Event Router]
   [Registration Manager]
   [Realtime AV Session]
@@ -36,7 +38,9 @@ package "Device SDK" {
 
 package "Server Boundary" {
   [Control WebSocket]
-  [Stream WebSocket]
+  [Audio Input WebSocket]
+  [Audio Output WebSocket]
+  [Visual Input WebSocket]
 }
 
 [Mic Adapter] --> [Realtime AV Session]
@@ -49,11 +53,14 @@ package "Server Boundary" {
 [Heartbeat Manager] --> [Control Channel]
 [Event Router] --> [Realtime AV Session]
 [Event Router] --> [Server Event Consumers]
-[Realtime AV Session] --> [Stream Channel]
-[Server Event Consumers] --> [Stream Channel]
+[Realtime AV Session] --> [Audio Input Channel]
+[Realtime AV Session] --> [Visual Input Channel]
+[Server Event Consumers] --> [Audio Output Channel]
 
 [Control Channel] --> [Control WebSocket]
-[Stream Channel] --> [Stream WebSocket]
+[Audio Input Channel] --> [Audio Input WebSocket]
+[Audio Output Channel] --> [Audio Output WebSocket]
+[Visual Input Channel] --> [Visual Input WebSocket]
 @enduml
 ```
 
@@ -63,7 +70,9 @@ SDK 对外需要暴露的抽象能力：
 | --- | --- |
 | Device Profile | 生成注册 payload，包含身份、runtime、properties、supports。 |
 | Control Channel | 连接 `/ws/control`，发送和接收 JSON Event。 |
-| Stream Channel | 连接 `/ws/stream?device_id=...`，收发 StreamChunk。 |
+| Audio Input Channel | 连接 `/ws/stream/audio/input?device_id=...`，发送 `sensor.mic` StreamChunk。 |
+| Audio Output Channel | 连接 `/ws/stream/audio/output?device_id=...`，接收 `actuator.speaker` StreamChunk。 |
+| Visual Input Channel | 连接 `/ws/stream/visual/input?device_id=...`，发送 `sensor.rgb`、图片帧或实时视频帧 StreamChunk。 |
 | Event Router | 按事件名和 stream_type 分发 server 事件。 |
 | Registration Manager | 管理注册、注册失败、重连和心跳启动。 |
 | Realtime AV Session | 管理唤醒、音频会话、麦克风流和视觉流。 |
@@ -76,9 +85,9 @@ SDK 必须提供“默认禁用、显式启用、可覆盖 adapter”的硬件�
 
 | 绑定对象 | 方向 | SDK 使用方式 | 最小能力 |
 | --- | --- | --- | --- |
-| `sensor.mic` source | SDK/App -> SDK -> Server | 显式启用后，SDK 从默认或覆盖 source 读取 PCM 字节，封装 `StreamChunk sensor.mic` 写入 `/ws/stream` | `format`、`readChunk()` 或 async chunk producer、`close()` |
-| `sensor.rgb` source | SDK/App -> SDK -> Server | 显式启用后，SDK 按 server 请求的 `frequency_hz` 读取帧，封装 `StreamChunk sensor.rgb` 写入 `/ws/stream` | `format`、`readFrame()`、`close()` |
-| `actuator.speaker` sink | Server -> SDK -> SDK/App | 显式启用后，SDK 接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或覆盖 sink 播放 | `prepare(format)`、`writeChunk()`、`drain()`、`cancel()`、`close()` |
+| `sensor.mic` source | SDK/App -> SDK -> Server | 显式启用后，SDK 从默认或覆盖 source 读取 PCM 字节，封装 `StreamChunk sensor.mic` 写入音频上行链路 | `format`、`readChunk()` 或 async chunk producer、`close()` |
+| `sensor.rgb` source | SDK/App -> SDK -> Server | 显式启用后，SDK 按 server 请求的 `frequency_hz` 读取帧，封装 `StreamChunk sensor.rgb` 写入视觉上行链路 | `format`、`readFrame()`、`close()` |
+| `actuator.speaker` sink | Server -> SDK -> SDK/App | 显式启用后，SDK 从音频下行链路接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或覆盖 sink 播放 | `prepare(format)`、`writeChunk()`、`drain()`、`cancel()`、`close()` |
 | 自定义业务动作 | Server -> SDK -> App | SDK 通过 `custom.command.*` 或其他 `custom.*` 调用 App 注册的 handler | `on_custom_command(...)` 或 `on_event(...)` |
 
 目标 API 形态示例：
@@ -204,7 +213,7 @@ FUNCTION heartbeatLoop(interval_seconds):
 
 ## 3. 开启实时对话
 
-实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App 覆盖 adapter；SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用 stream 通道，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、可选视频上行和 server 音频下行播放。
+实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App 覆盖 adapter；SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用音频上行、音频下行和按需视觉上行链路，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、可选视频上行和 server 音频下行播放。
 
 ### 3.1 时序图
 
@@ -218,21 +227,23 @@ App -> SDK: wake()
 SDK -> Server: control.user.wake.detected
 Server -> SDK: control.audio_session.open.requested
 SDK -> App: ensure mic source is bound and readable
-SDK -> Server: open /ws/stream?device_id=...
+SDK -> Server: open /ws/stream/audio/input?device_id=...
+SDK -> Server: open /ws/stream/audio/output?device_id=...
 SDK -> Server: control.audio_session.opened
 loop mic chunks
   SDK -> App: read mic source
   App -> SDK: mic pcm chunk
-  SDK -> Server: StreamChunk sensor.mic
+  SDK -> Server: StreamChunk sensor.mic over audio input link
 end
 
 opt visual input requested
   Server -> SDK: stream.control.open.requested (sensor.rgb, mode=continuous, frequency_hz)
+  SDK -> Server: open /ws/stream/visual/input?device_id=...
   SDK -> App: openCameraOrVisualSample(request)
   SDK -> Server: stream.input.opened (sensor.rgb)
   loop fixed frequency visual chunks
     App -> SDK: video frame
-    SDK -> Server: StreamChunk sensor.rgb
+    SDK -> Server: StreamChunk sensor.rgb over visual input link
   end
   Server -> SDK: stream.control.close.requested (sensor.rgb)
   SDK -> Server: stream.input.closed (sensor.rgb)
@@ -240,7 +251,7 @@ end
 
 opt assistant audio output
   Server -> SDK: stream.output.open.requested (actuator.speaker)
-  Server -> SDK: StreamChunk actuator.speaker
+  Server -> SDK: StreamChunk actuator.speaker over audio output link
   SDK -> SDK: enqueue SDK playback buffer
   SDK -> App: write SDK playback buffer to bound speaker sink
   SDK -> Server: stream.output.started
@@ -277,7 +288,7 @@ Server -> SDK: stream.output.open.requested (actuator.speaker)
 SDK -> SDK: create SDK playback buffer
 SDK -> App: prepare bound speaker sink
 loop downstream audio chunks
-  Server -> SDK: StreamChunk actuator.speaker
+  Server -> SDK: StreamChunk actuator.speaker over audio output link
   SDK -> SDK: enqueue SDK playback buffer
   opt buffer reaches start watermark
     SDK -> SDK: start playback drain loop
@@ -286,11 +297,11 @@ loop downstream audio chunks
   end
   opt buffer reaches high watermark
     SDK -> Server: downstream.pause.requested (buffered_ms, high_watermark_ms)
-    Server -> Server: pause downstream writes and buffer output payload
+    Server -> Server: pause audio output link writes and buffer output payload
   end
   opt buffer drains to low watermark
     SDK -> Server: downstream.resume.requested (buffered_ms, low_watermark_ms)
-    Server -> SDK: buffered StreamChunk actuator.speaker
+    Server -> SDK: buffered StreamChunk actuator.speaker over audio output link
   end
 end
 alt output cancel requested
@@ -317,7 +328,9 @@ TYPE RealtimeAVSession:
   mic_state
   visual_stream_id
   visual_state
-  stream_channel_state
+  audio_input_channel_state
+  audio_output_channel_state
+  visual_input_channel_state
   playback_state
 
 FUNCTION wake(wake_source):
@@ -336,7 +349,8 @@ FUNCTION handleAudioSessionOpenRequested(event):
   realtime.session_id = event.session_id OR profile.device_id
   REQUIRE adapters.input["sensor.mic"] exists
   micAdapter = adapters.input["sensor.mic"]
-  stream.ensureOpen(device_id = profile.device_id)
+  audioInputChannel.ensureOpen(device_id = profile.device_id)
+  audioOutputChannel.ensureOpen(device_id = profile.device_id)
   realtime.mic_stream_id = newStreamId("stream_mic")
   realtime.mic_state = "open"
 
@@ -361,7 +375,7 @@ FUNCTION micUploadLoop():
   LOOP while realtime.mic_state == "open":
     WAIT until micAdapter has next chunk
     chunk = micAdapter.readChunk()
-    stream.sendChunk(StreamChunk(
+    audioInputChannel.sendChunk(StreamChunk(
       user_id = profile.user_id,
       session_id = realtime.session_id,
       stream_id = realtime.mic_stream_id,
@@ -384,6 +398,7 @@ FUNCTION handleVisualOpenRequested(event):
   frequency_hz = request.frequency_hz OR visualAdapter.default_frequency_hz
 
   TRY:
+    visualInputChannel.ensureOpen(device_id = profile.device_id)
     visualSource = visualAdapter.open(request)
     realtime.visual_stream_id = visual_stream_id
     realtime.visual_state = "open"
@@ -405,7 +420,7 @@ FUNCTION handleVisualOpenRequested(event):
     LOOP while realtime.visual_state == "open":
       WAIT until next visual tick at frequency_hz
       frame = visualSource.readFrame()
-      stream.sendChunk(StreamChunk(
+      visualInputChannel.sendChunk(StreamChunk(
         user_id = profile.user_id,
         session_id = event.session_id OR realtime.session_id,
         stream_id = visual_stream_id,
@@ -859,14 +874,14 @@ STATE Registering:
 
 STATE Registered:
   on audio_session.open.requested:
-    ensure upstream stream channel
+    ensure audio input and audio output channels
     move to DialogOpening
   on control closed:
     stop heartbeat
     move to Disconnected
 
 STATE DialogOpening:
-  on stream channel ready:
+  on audio input and audio output channels ready:
     send audio_session.opened
     move to DialogOpen
 
@@ -895,9 +910,9 @@ STATE DialogClosing:
 
 1. 注册成功：SDK 发送 `control.device.register.requested`，收到 `registered` 后启动心跳。
 2. 注册失败：SDK 收到 `register.failed` 后不启动心跳，并向应用暴露失败原因。
-3. 实时音频打开：收到 `control.audio_session.open.requested` 后，SDK 建立或复用 stream 通道，回 `control.audio_session.opened`，并在 payload 中声明 `sensor.mic` 上行 stream。
+3. 实时音频打开：收到 `control.audio_session.open.requested` 后，SDK 建立或复用音频上行和音频下行两条物理链路，回 `control.audio_session.opened`，并在 payload 中声明 `sensor.mic` 上行 stream。
 4. 麦克风连续上传：SDK 持续发送 `sensor.mic` chunk，且 `final=True` 不代表端侧 VAD 语音结束。
-5. 视频输入：收到 `stream.control.open.requested (sensor.rgb, mode=continuous)` 后，SDK 回 `stream.input.opened`，按 `frequency_hz` 持续上传 RGB chunk；收到 `stream.control.close.requested` 或会话关闭后回 `stream.input.closed`。
-6. 输出播放：收到标准 `stream.output.open.requested (actuator.speaker)` 和输出 chunk 后，SDK 回 `stream.output.started`；收到 `stream.output.close.requested` 后，等待本地 drain，再回 `stream.output.closed`。
+5. 视频输入：收到 `stream.control.open.requested (sensor.rgb, mode=continuous)` 后，SDK 建立或复用视觉上行链路，回 `stream.input.opened`，按 `frequency_hz` 持续上传 RGB chunk；收到 `stream.control.close.requested` 或会话关闭后回 `stream.input.closed`。
+6. 输出播放：收到标准 `stream.output.open.requested (actuator.speaker)` 和音频下行 chunk 后，SDK 回 `stream.output.started`；收到 `stream.output.close.requested` 后，等待本地 drain，再回 `stream.output.closed`。
 7. 自定义命令执行：收到 `custom.command.requested` 后，SDK 调用 App 通过 `on_custom_command(...)` 注册的回调；如需回报业务结果，handler 使用 `ctx.emit("custom.<domain>.<event>", payload)`。
 8. 关闭会话：收到 `control.audio_session.close.requested` 后，SDK 结束本次音频会话、等待播放 drain、回 `control.audio_session.closed`。

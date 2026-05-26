@@ -1,6 +1,6 @@
 # 端侧 App 接入指南
 
-本文面向端侧 App 开发者，目标是说明“用最少的标准代码接入 Device SDK”。App 开发者不需要理解 control WebSocket、stream WebSocket、标准事件状态机或媒体 chunk 封装；这些由各语言 Device SDK 负责。
+本文面向端侧 App 开发者，目标是说明“用最少的标准代码接入 Device SDK”。App 开发者不需要理解 control WebSocket、多条媒体 WebSocket、标准事件状态机或媒体 chunk 封装；这些由各语言 Device SDK 负责。
 
 ## 1. App 开发者负责什么
 
@@ -13,7 +13,7 @@ App 开发者只负责四类事情：
 
 App 开发者不负责：
 
-- 手写 `/ws/control` 或 `/ws/stream` 连接。
+- 手写 `/ws/control`、音频上行、音频下行或视觉上行 WebSocket 连接。
 - 手写 `control.device.register.requested`、心跳、音频 session、stream 生命周期事件。
 - 手写麦克风 PCM chunk、相机帧 chunk 或 speaker 下行 chunk。
 - 实现 speaker 播放 buffer、水位线、`downstream.pause.requested` / `downstream.resume.requested`。
@@ -44,6 +44,9 @@ App 开发者不需要手写注册 JSON，也不需要直接维护 `supports`、
 | `on_event("custom.navigation.route.updated", ...)` | 可消费对应 `custom.*` 事件 |
 
 SDK 内部仍然会发送标准 `control.device.register.requested`，但 App 开发者只面对配置 API。
+SDK 内部应把媒体传输拆成多条物理链路：`sensor.mic` 使用音频上行链路，
+`actuator.speaker` 使用音频下行链路，`sensor.rgb` 或图片帧使用视觉上行链路。
+App 不需要关心这些 WebSocket 的建立、重连和背压。
 
 ## 4. 标准接入代码
 
@@ -191,7 +194,7 @@ speaker = Speaker.enabled(
 )
 ```
 
-App 只配置 buffer 参数，不实现 buffer 队列，也不直接发送 `downstream.pause.requested` / `downstream.resume.requested`。
+App 只配置 buffer 参数，不实现 buffer 队列，也不直接发送 `downstream.pause.requested` / `downstream.resume.requested`。下行背压只作用在音频下行链路，不能阻塞麦克风或视觉上行。
 
 ## 7. 只消费自定义事件的设备
 

@@ -1,17 +1,23 @@
 # 设备事件行为标准
 
-本文整理 server 与 device 之间三类基础功能的标准事件行为：设备注册、开启实时对话、设备消费其他 server 事件。结论以当前主线实现和 `examples/dev-support/devices/browser-glass/index.html` 的真实麦克风实时对话链路为主要参考。
+本文整理 server 与 device 之间三类基础功能的标准事件行为：设备注册、开启实时对话、设备消费其他 server 事件。本文描述目标协议行为；如果当前实现仍与本文不一致，应以本文作为后续改造边界。
 
 ## 1. 设计边界
 
-server 与 device 的通讯分两条通道：
+server 与 device 的通讯分为控制通道和多条媒体传输链路。控制通道只承载 JSON
+事件；媒体链路按方向和媒体类型拆开，不能把麦克风上行、speaker 下行和视觉帧
+塞进同一条物理 WebSocket。
 
 | 通道 | 地址 | 内容 |
 | --- | --- | --- |
 | control WebSocket | `/ws/control` | JSON `Event`，用于注册、心跳、会话、命令、stream 生命周期控制和回执。 |
-| stream WebSocket | `/ws/stream?device_id=<device_id>` | 二进制 `StreamChunk`，用于麦克风、图片、音频播放等媒体数据。 |
+| audio input WebSocket | `/ws/stream/audio/input?device_id=<device_id>` | 端侧到 server 的 `sensor.mic` 二进制 `StreamChunk`。 |
+| audio output WebSocket | `/ws/stream/audio/output?device_id=<device_id>` | server 到端侧的 `actuator.speaker` 二进制 `StreamChunk`。 |
+| visual input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | 端侧到 server 的 `sensor.rgb`、图片帧或实时视频帧 `StreamChunk`。 |
 
-控制事件里不能放音频、图片、视频等大字节数据。大字节数据必须走 stream WebSocket 或资产服务。
+控制事件里不能放音频、图片、视频等大字节数据。大字节数据必须走对应的媒体
+WebSocket 或资产服务。`stream_id` 和 `stream_type` 只表示逻辑流，不表示所有
+逻辑流共享同一条物理连接。
 
 `sensor.mic` 和 `actuator.speaker` 属于系统音频主链路，不作为普通 `supports` 能力声明：
 
@@ -82,7 +88,7 @@ end
 
 实时对话不是 device 自己直接进入对话状态，而是先由唤醒事件触发 server 下发音频会话打开请求。会话打开后，对话过程同时包含三条主链路：麦克风音频上行、可选视频上行、server 音频下行播放。
 
-端侧 SDK 负责封装硬件接入、协议状态机和 stream chunk。麦克风、相机、喇叭默认禁用；App 必须显式 enable 后，SDK 才会使用平台默认 hardware adapter 自动注册这些能力。App 也可以覆盖默认 adapter，例如使用外接麦克风、测试音频文件、图片样例、自定义播放器。SDK 的职责是把输入字节或帧封装成 `StreamChunk` 写入 `/ws/stream`，以及把 server 下发的 speaker output chunk 写入播放 buffer 和 speaker sink。
+端侧 SDK 负责封装硬件接入、协议状态机和 stream chunk。麦克风、相机、喇叭默认禁用；App 必须显式 enable 后，SDK 才会使用平台默认 hardware adapter 自动注册这些能力。App 也可以覆盖默认 adapter，例如使用外接麦克风、测试音频文件、图片样例、自定义播放器。SDK 的职责是把输入字节或帧封装成 `StreamChunk` 写入对应的媒体链路，把 server 下发的 speaker output chunk 从音频下行链路写入播放 buffer 和 speaker sink。
 
 目标 SDK 使用形态：
 
@@ -106,28 +112,28 @@ sdk.start()
 1. device 已完成注册和心跳。
 2. 用户触发唤醒，device 发送 `control.user.wake.detected`。
 3. server 向设备下发 `control.audio_session.open.requested`。
-4. device 确认可以进入音频上行状态，建立或复用 `/ws/stream?device_id=<device_id>`，并确认 SDK 已启用且可读取 `sensor.mic`。
+4. device 确认可以进入实时音频状态，建立或复用音频上行 `/ws/stream/audio/input?device_id=<device_id>` 和音频下行 `/ws/stream/audio/output?device_id=<device_id>` 两条链路，并确认 SDK 已启用且可读取 `sensor.mic`、可写入 `actuator.speaker`。
 5. device 发送 `control.audio_session.opened`，表示端侧已经接受本次音频会话打开请求；payload 中携带本次 `sensor.mic` 上行 stream 标识和音频格式。
-6. SDK 从绑定的 `sensor.mic` source 按 `chunk_ms` 读取 PCM 字节，封装为 `StreamChunk sensor.mic`，通过 stream WebSocket 持续发送。
+6. SDK 从绑定的 `sensor.mic` source 按 `chunk_ms` 读取 PCM 字节，封装为 `StreamChunk sensor.mic`，通过音频上行链路持续发送。
 7. 麦克风硬件或系统录音资源由端侧自行决定何时打开；语音唤醒设备可以在注册完成后就保持麦克风采集。
 8. server 根据连续音频流自行判断语音开始、语音结束和 turn 边界；device 不做 VAD，不用 `final=True` 表达一句话结束。
 9. 如果实时对话需要视频输入，server 下发一次 `stream.control.open.requested`，声明 `stream_type=sensor.rgb`、`mode=continuous`、`frequency_hz` 和格式参数。
-10. device 打开或复用 SDK 默认相机 adapter，或 App 覆盖的摄像头、视频文件、图片样例 source，发送 `stream.input.opened`，再按 `frequency_hz` 读取帧并通过 stream WebSocket 持续上传 `sensor.rgb` 视频帧 chunk。
+10. device 打开或复用 SDK 默认相机 adapter，或 App 覆盖的摄像头、视频文件、图片样例 source，建立或复用视觉上行链路，发送 `stream.input.opened`，再按 `frequency_hz` 读取帧并通过视觉上行链路持续上传 `sensor.rgb` 视频帧 chunk。
 11. 视频输入链路保持打开，直到 server 下发 `stream.control.close.requested` 或音频会话关闭；device 停止采集后发送 `stream.input.closed`。采集失败时发送 `stream.input.failed`。
-12. 当 server 需要播放模型回复音频时，下发 `stream.output.open.requested (actuator.speaker)`；SDK 确认本地 `actuator.speaker` sink 已经可写，随后接收 stream WebSocket 下发的 `actuator.speaker` chunk。
+12. 当 server 需要播放模型回复音频时，下发 `stream.output.open.requested (actuator.speaker)`；SDK 确认本地 `actuator.speaker` sink 已经可写，随后从音频下行链路接收 `actuator.speaker` chunk。
 13. SDK 负责维护内置的 speaker 播放 buffer，并按配置的播放启动水位线、高水位线和低水位线决定何时开始播放、何时暂停或恢复 server 下行写出。App 开发者只配置 SDK 的播放 buffer 参数，不在业务 App 中实现这套 buffer。
 14. 播放期间麦克风仍持续上行；端侧不判断用户是否开始说话，也不判断是否构成打断。端侧只需要响应 server 下发的 `stream.output.cancel.requested`。
 15. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.closed` 或 `stream.output.cancelled`。
 16. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.close.requested` 或 `stream.output.finish.requested`；对 speaker 音频，finish payload 会尽量携带 `output_chunk_count`、`output_last_seq` 和 `output_bytes`，device 先确认最后一帧已经进入 SDK 播放 buffer，再等 buffer 和本地 sink drain 完成后发送 `stream.output.closed`。
 17. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和视频输入，等待下行播放 drain 后，发送 `control.audio_session.closed`。
 
-系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立上行 stream 通道并发送 `control.audio_session.opened`，再持续发二进制 chunk；不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
+系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立音频上行链路并发送 `control.audio_session.opened`，再持续发二进制 chunk；不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
 
 麦克风的最小契约是：SDK 在显式启用音频输入后，必须能从默认 adapter 或 App 覆盖的 source 读取 `codec/sample_rate/channels/chunk_ms` 一致的音频字节。source 可以是真实系统麦克风、浏览器 `MediaStream`、音频文件或测试样例。SDK 不关心底层硬件具体打开时机，但在 `control.audio_session.opened` 后必须能持续读取并上传。
 
-浏览器参考端的视频输入使用同一条 stream WebSocket 上传 `sensor.rgb`。如果已经选择视频或图片样例，端侧优先从样例按固定频率抽帧；没有样例时再打开摄像头按固定频率采集。视频帧、图片字节同样不能放进 control event。`stream.control.open.requested` 表示打开一条可维护的视频输入链路，不表示 server 每次需要一张照片时重新请求。
+视频输入使用独立的视觉上行链路上传 `sensor.rgb`，不能和麦克风上行或 speaker 下行共用一条物理 WebSocket。如果已经选择视频或图片样例，端侧优先从样例按固定频率抽帧；没有样例时再打开摄像头按固定频率采集。视频帧、图片字节同样不能放进 control event。`stream.control.open.requested` 表示打开一条可维护的视频输入链路，不表示 server 每次需要一张照片时重新请求。
 
-系统音频下行使用 `actuator.speaker` output stream。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。由于控制事件和二进制 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和关闭回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
+系统音频下行使用独立的 `actuator.speaker` output 链路。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。由于控制事件和音频下行 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和关闭回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
 
 喇叭的最小契约是：SDK 在显式启用 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App 覆盖的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain`、`cancel`、`close` 能力。`stream.output.closed` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 close 时立即发送。
 
@@ -135,7 +141,7 @@ sdk.start()
 
 - SDK buffer 达到高水位线：SDK 发送 `downstream.pause.requested`，payload 至少包含当前 `stream_id`、`buffered_ms`、`high_watermark_ms` 和 `reason="speaker_buffer_high"`。
 - SDK buffer 下降到低水位线：SDK 发送 `downstream.resume.requested`，payload 至少包含当前 `stream_id`、`buffered_ms`、`low_watermark_ms` 和 `reason="speaker_buffer_low"`。
-- 暂停期间 SDK 继续把本地 buffer 中的数据写入 speaker sink；server 不应继续向端侧写出新的 speaker chunk，而应等 resume 后再恢复写出。
+- 暂停期间 SDK 继续把本地 buffer 中的数据写入 speaker sink；server 不应继续在音频下行链路写出新的 speaker chunk，而应等 resume 后再恢复写出。该背压只影响音频下行链路，不能阻塞 `sensor.mic` 或 `sensor.rgb` 上行。
 - cancel 优先级高于水位线。收到 `stream.output.cancel.requested` 后，SDK 必须停止播放并清空本地 buffer，不再等待低水位线。
 
 打断不是音频会话关闭。播放期间端侧仍只负责持续上传 `sensor.mic` chunk；端侧不需要知道 server 为什么发出 `stream.output.cancel.requested`。收到该事件后，端侧停止正在播放的下行音频并回执。
@@ -147,25 +153,27 @@ participant Server
 
 Device -> Server: control.user.wake.detected
 Server -> Device: control.audio_session.open.requested
-Device -> Server: open /ws/stream?device_id=...
+Device -> Server: open /ws/stream/audio/input?device_id=...
+Device -> Server: open /ws/stream/audio/output?device_id=...
 Device -> Server: control.audio_session.opened
 loop 20ms chunk
   Device -> Device: read mic source
-  Device -> Server: StreamChunk sensor.mic
+  Device -> Server: StreamChunk sensor.mic over audio input link
 end
 opt visual input requested
   Server -> Device: stream.control.open.requested (sensor.rgb, mode=continuous, frequency_hz)
+  Device -> Server: open /ws/stream/visual/input?device_id=...
   Device -> Device: open camera or visual sample
   Device -> Server: stream.input.opened (sensor.rgb)
   loop fixed frequency video frames
-    Device -> Server: StreamChunk sensor.rgb
+    Device -> Server: StreamChunk sensor.rgb over visual input link
   end
   Server -> Device: stream.control.close.requested (sensor.rgb)
   Device -> Server: stream.input.closed (sensor.rgb)
 end
 opt assistant audio output
   Server -> Device: stream.output.open.requested (actuator.speaker)
-  Server -> Device: StreamChunk actuator.speaker
+  Server -> Device: StreamChunk actuator.speaker over audio output link
   Device -> Device: drain SDK playback buffer to speaker sink
   Device -> Server: stream.output.started
   alt output cancel requested
@@ -199,7 +207,7 @@ Server -> Device: stream.output.open.requested (actuator.speaker)
 Device -> Device: prepare SDK playback buffer
 Device -> Device: prepare bound speaker sink
 loop downstream audio chunks
-  Server -> Device: StreamChunk actuator.speaker
+  Server -> Device: StreamChunk actuator.speaker over audio output link
   Device -> Device: enqueue SDK playback buffer
   opt buffer reaches start watermark
     Device -> Device: start draining SDK buffer to speaker sink
@@ -207,11 +215,11 @@ loop downstream audio chunks
   end
   opt buffer reaches high watermark
     Device -> Server: downstream.pause.requested (buffered_ms, high_watermark_ms)
-    Server -> Server: pause downstream writes and buffer output payload
+    Server -> Server: pause audio output link writes and buffer output payload
   end
   opt buffer drains to low watermark
     Device -> Server: downstream.resume.requested (buffered_ms, low_watermark_ms)
-    Server -> Device: buffered StreamChunk actuator.speaker
+    Server -> Device: buffered StreamChunk actuator.speaker over audio output link
   end
 end
 alt output cancel requested
@@ -354,7 +362,7 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_device_even
 
 - browser-glass 形状注册后，设备能按声明消费标准 server 事件。
 - wake 后必须先收到 `control.audio_session.open.requested`，端侧回 `control.audio_session.opened` 后实时对话才进入可用状态。
-- 系统 `sensor.mic` 输入由 `control.audio_session.opened/closed` 表达生命周期，音频数据通过 stream WebSocket 持续发送；语音边界由 server 判定。
-- device 消费实时视频 `stream.control.open.requested` 后，必须持续上传 RGB chunk，直到 close。
+- 系统 `sensor.mic` 输入由 `control.audio_session.opened/closed` 表达生命周期，音频数据通过音频上行链路持续发送；语音边界由 server 判定。
+- device 消费实时视频 `stream.control.open.requested` 后，必须通过视觉上行链路持续上传 RGB chunk，直到 close。
 - device 消费 `custom.command.requested` 后，如需回报业务结果，使用 `ctx.emit("custom.<domain>.<event>", payload)` 发送自定义事件。
 - 非音频业务动作必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`，不能复用标准 `stream.output.*`。

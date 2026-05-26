@@ -31,14 +31,16 @@ realtime-agent.v1
 
 ## 通道
 
-协议包含两个主要通道：
+协议包含控制通道和多条媒体传输链路。控制通道只传 JSON 事件；媒体链路按方向和媒体类型拆分，避免全双工音频、视觉帧和输出播放互相阻塞。
 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
 | Control WebSocket | `/ws/control` | 设备注册、心跳、命令、stream 生命周期、输出播放状态。 |
-| Stream WebSocket | `/ws/stream` | 音频、图片、视频、传感器数据和 speaker 输出等二进制数据。 |
+| Audio Input WebSocket | `/ws/stream/audio/input?device_id={device_id}` | 端侧到 server 的 `sensor.mic` 二进制数据。 |
+| Audio Output WebSocket | `/ws/stream/audio/output?device_id={device_id}` | server 到端侧的 `actuator.speaker` 二进制数据。 |
+| Visual Input WebSocket | `/ws/stream/visual/input?device_id={device_id}` | 端侧到 server 的 `sensor.rgb`、图片帧或视频帧二进制数据。 |
 
-控制通道只传 JSON 事件，不传媒体大字节。音频、图片、视频、深度图等大字节数据必须走 stream 通道。
+控制通道只传 JSON 事件，不传媒体大字节。音频、图片、视频、深度图等大字节数据必须走对应的媒体链路。`stream_id` 和 `stream_type` 是逻辑流标识，不表示所有媒体共享同一条物理 WebSocket。
 
 ## 控制事件信封
 
@@ -145,8 +147,8 @@ supports:
 
 系统音频不作为普通 `supports` 暴露：
 
-1. `sensor.mic` 通过系统音频输入链路进入 server。
-2. `actuator.speaker` 通过输出播放链路进入端侧。
+1. `sensor.mic` 通过独立的音频上行链路进入 server。
+2. `actuator.speaker` 通过独立的音频下行链路进入端侧。
 
 ## 命令生命周期
 
@@ -199,7 +201,7 @@ participant Device
 Server -> Device: stream.control.open.requested
 Device --> Server: stream.input.opened
 loop fixed frequency chunks
-  Device -> Server: /ws/stream chunk
+  Device -> Server: visual input WebSocket chunk
 end
 Server -> Device: stream.control.close.requested
 Device --> Server: stream.input.closed
@@ -256,9 +258,9 @@ stream.output.finish.requested
 stream.output.cancel.requested
 ```
 
-标准输出 stream 仅用于系统 speaker 播放，即 `stream_type=actuator.speaker`。显示输出、震动、自定义执行器或其他业务动作不能复用 `stream.output.*`，必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`。播放仲裁由 Server SDK 的 Output Service 管理，Device SDK 负责消费事件、维护 speaker buffer、写入 speaker sink 并回报状态。
+标准输出 stream 仅用于系统 speaker 播放，即 `stream_type=actuator.speaker`。显示输出、震动、自定义执行器或其他业务动作不能复用 `stream.output.*`，必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`。播放仲裁由 Server SDK 的 Output Service 管理，Device SDK 负责消费事件、维护 speaker buffer、从音频下行链路读取 speaker chunk、写入 speaker sink 并回报状态。
 
-`stream.output.finish.requested` 表示 server 已经写完本轮 output stream。由于 control WebSocket 和 stream WebSocket 彼此独立，finish 控制事件可能早于最后几个二进制 chunk 到达端侧；speaker finish payload 应尽量包含 `output_chunk_count`、`output_last_seq` 和 `output_bytes`。Device SDK 收到 `output_last_seq` 时，必须等到该序号的 speaker chunk 已经进入本地播放 buffer 后再执行 drain 和 `stream.output.closed` 回执。
+`stream.output.finish.requested` 表示 server 已经写完本轮 output stream。由于 control WebSocket 和音频下行 WebSocket 彼此独立，finish 控制事件可能早于最后几个二进制 chunk 到达端侧；speaker finish payload 应尽量包含 `output_chunk_count`、`output_last_seq` 和 `output_bytes`。Device SDK 收到 `output_last_seq` 时，必须等到该序号的 speaker chunk 已经进入本地播放 buffer 后再执行 drain 和 `stream.output.closed` 回执。
 
 speaker 播放 buffer 的下行流控事件：
 
@@ -267,11 +269,11 @@ downstream.pause.requested
 downstream.resume.requested
 ```
 
-`downstream.pause.requested` 表示端侧 SDK speaker buffer 达到高水位线，payload 至少包含 `stream_id`、`stream_type`、`buffered_ms`、`high_watermark_ms` 和 `reason="speaker_buffer_high"`。`downstream.resume.requested` 表示端侧 buffer 下降到低水位线，payload 至少包含 `stream_id`、`stream_type`、`buffered_ms`、`low_watermark_ms` 和 `reason="speaker_buffer_low"`。
+`downstream.pause.requested` 表示端侧 SDK speaker buffer 达到高水位线，payload 至少包含 `stream_id`、`stream_type`、`buffered_ms`、`high_watermark_ms` 和 `reason="speaker_buffer_high"`。`downstream.resume.requested` 表示端侧 buffer 下降到低水位线，payload 至少包含 `stream_id`、`stream_type`、`buffered_ms`、`low_watermark_ms` 和 `reason="speaker_buffer_low"`。这组背压事件只影响音频下行链路，不能暂停或阻塞 `sensor.mic`、`sensor.rgb` 等上行链路。
 
 ## Stream 二进制帧
 
-stream 通道二进制帧格式：
+各媒体 WebSocket 使用同一种二进制帧格式：
 
 ```text
 4 bytes big-endian header length
@@ -352,8 +354,8 @@ agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 | AsyncAPI | `agent-server/realtime_agent/spec/realtime-agent-asyncapi.yaml` | WebSocket 通道和事件说明。 |
 | 错误码 | `agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml` | 标准错误码和建议处理。 |
 | Server control | `agent-server/realtime_agent/control/service.py` | 设备注册、连接状态、事件路由。 |
-| Server stream | `agent-server/realtime_agent/stream/service.py` | stream 生命周期和 chunk 处理。 |
-| Server output | `agent-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker stream。 |
+| Server stream | `agent-server/realtime_agent/stream/service.py` | stream 生命周期、逻辑流登记和 chunk 处理。 |
+| Server output | `agent-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker 音频下行链路。 |
 | Context API | `agent-server/realtime_agent/context.py` | Tool / Task 调用设备能力的入口。 |
 | Python Device SDK | `devices/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
 | TypeScript Device SDK | `devices/typescript/src/` | 浏览器 / Node 侧协议模型。 |
