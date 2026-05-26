@@ -31,6 +31,7 @@ channels:
         $ref: '#/components/messages/StreamChunk'
   visualInput:
     address: /ws/stream/visual/input?device_id={device_id}
+    description: server 请求触发的视觉上行链路；当前阶段每次请求只上传一张 sensor.rgb 图片。
     parameters:
       device_id:
         description: 已完成 control WebSocket 注册的设备 ID。

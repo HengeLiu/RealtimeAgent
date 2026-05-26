@@ -38,7 +38,7 @@ realtime-agent.v1
 | Control WebSocket | `/ws/control` | 设备注册、心跳、命令、stream 生命周期、输出播放状态。 |
 | Audio Input WebSocket | `/ws/stream/audio/input?device_id={device_id}` | 端侧到 server 的 `sensor.mic` 二进制数据。 |
 | Audio Output WebSocket | `/ws/stream/audio/output?device_id={device_id}` | server 到端侧的 `actuator.speaker` 二进制数据。 |
-| Visual Input WebSocket | `/ws/stream/visual/input?device_id={device_id}` | 端侧到 server 的 `sensor.rgb`、图片帧或视频帧二进制数据。 |
+| Visual Input WebSocket | `/ws/stream/visual/input?device_id={device_id}` | server 请求后，端侧到 server 的 `sensor.rgb` 单帧图片二进制数据。 |
 
 控制通道只传 JSON 事件，不传媒体大字节。音频、图片、视频、深度图等大字节数据必须走对应的媒体链路。`stream_id` 和 `stream_type` 是逻辑流标识，不表示所有媒体共享同一条物理 WebSocket。
 
@@ -123,10 +123,9 @@ control.device.register.requested
 supports:
   sensors:
     - type: rgb
-      modes: [single, continuous]
+      modes: [single]
       default:
         format: jpeg
-        frequency_hz: 1
         sample_count: 1
         ttl_seconds: 5
         direction: front
@@ -139,7 +138,7 @@ supports:
 
 | supports 写法 | 内部能力 ID | 说明 |
 | --- | --- | --- |
-| `sensors[].type=rgb` | `sensor.rgb` | RGB 图片或视频帧。 |
+| `sensors[].type=rgb` | `sensor.rgb` | server 请求触发的一张 RGB 图片。 |
 | `sensors[].type=imu` | `sensor.imu` | IMU 数据。 |
 | `sensors[].type=tof` | `sensor.tof` | 深度或 ToF 数据。 |
 | `actuators[].type=vibrator` | `actuator.haptic` | 震动或触觉反馈。 |
@@ -177,7 +176,7 @@ command.failed
 
 ## 输入 stream 生命周期
 
-server 请求端侧打开持续输入 stream：
+server 请求端侧打开一次输入 stream：
 
 ```text
 stream.control.open.requested
@@ -200,27 +199,24 @@ participant Device
 
 Server -> Device: stream.control.open.requested
 Device --> Server: stream.input.opened
-loop fixed frequency chunks
-  Device -> Server: visual input WebSocket chunk
-end
-Server -> Device: stream.control.close.requested
+Device -> Server: visual input WebSocket chunk final=true
 Device --> Server: stream.input.closed
 @enduml
 ```
 
-`sensor.rgb` 视频输入 payload 可以携带采集策略字段，但不能携带图片 bytes。实时视频链路使用 `mode=continuous`，open 后按固定频率持续推帧，close 后停止：
+`sensor.rgb` 视觉输入 payload 可以携带采集策略字段，但不能携带图片 bytes。当前阶段视觉输入是请求驱动的单帧采集：server 每次需要画面上下文时发送一次 `stream.control.open.requested`，端侧只上传一张图片，并在该图片 chunk 上设置 `final=true`，随后发送 `stream.input.closed`：
 
 ```json
 {
   "stream_type": "sensor.rgb",
-  "mode": "continuous",
+  "mode": "single",
   "format": "jpeg",
   "request_id": "asset_req_xxx",
   "correlation_id": "turn_or_task_id",
   "turn_id": "turn_xxx",
   "ttl_seconds": 5,
-  "capture_reason": "realtime_video",
-  "frequency_hz": 1,
+  "capture_reason": "realtime_visual_frame",
+  "sample_count": 1,
   "direction": "front"
 }
 ```
@@ -229,9 +225,9 @@ Device --> Server: stream.input.closed
 
 1. `ttl_seconds` 只表示服务端 turn buffer 内的最长自动可消费时间，不表示磁盘 runs 产物保留时间。
 2. `direction` 第一阶段默认 `front`；未来可以由端侧 IMU / 姿态融合解析后写入。
-3. `correlation_id` 可关联连续采样或 Task 运行实例。
+3. `correlation_id` 可关联用户 turn 或 Task 运行实例。
 4. 新字段均为可选字段，旧端侧忽略未知字段时不应失败。
-5. `sample_count` 只用于 `mode=single` 或有限帧采样；实时视频输入不应设置固定 `sample_count`，应由 close 事件结束。
+5. 当前阶段 `sensor.rgb` 只使用 `mode=single` 和 `sample_count=1`。server 不应下发频率或重复采集字段；端侧只在请求到达后采集一张图片。
 
 ## 输出 stream 生命周期
 
@@ -307,10 +303,10 @@ header 字段：
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `request_id` | 条件 | server 请求采集时必填，用于匹配 pending 请求。 |
-| `correlation_id` | 否 | 连续采样或 Task 关联 ID。 |
+| `correlation_id` | 否 | 用户 turn 或 Task 关联 ID。 |
 | `turn_id` | 否 | 当前用户 turn ID；端侧不知道时由 server 写入或补齐。 |
 | `ttl_seconds` | 否 | 上传方请求的 turn buffer 有效期，单位秒。 |
-| `capture_reason` | 否 | `capture_photo`、`realtime_video`、`task_sampling`、`device_push` 等。 |
+| `capture_reason` | 否 | `capture_photo`、`realtime_visual_frame`、`task_sampling` 等；当前不使用端侧主动 `device_push`。 |
 | `captured_at_ms` | 否 | 端侧实际拍摄时间。 |
 | `sequence_index` | 否 | 同一 turn / correlation 下的图片序号。 |
 | `direction` | 否 | 用户语义方向，默认 `front`。 |

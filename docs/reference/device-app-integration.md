@@ -26,7 +26,7 @@ SDK 默认不注册任何音视频硬件能力。App 必须显式启用，SDK �
 | 能力 | 默认 | 显式启用后 SDK 做什么 | App 何时需要自定义 adapter |
 | --- | --- | --- | --- |
 | 麦克风 `sensor.mic` | 禁用 | SDK 打开或接入平台默认麦克风，维护音频上行 chunk | 使用外部麦克风、音频文件、测试样例或平台默认 adapter 不可用 |
-| 相机 `sensor.rgb` | 禁用 | SDK 打开或接入平台默认相机，按 server 请求频率上传帧 | 使用特定镜头、图片样例、视频文件或平台默认 adapter 不可用 |
+| 相机 `sensor.rgb` | 禁用 | SDK 打开或接入平台默认相机，收到 server 单帧采集请求后上传一张图片 | 使用特定镜头、图片样例、视频文件或平台默认 adapter 不可用 |
 | 喇叭 `actuator.speaker` | 禁用 | SDK 打开或接入平台默认播放器，维护下行播放 buffer 和水位线 | 使用自定义播放器、蓝牙设备、文件输出或平台默认 adapter 不可用 |
 
 不需要音视频的设备可以只作为自定义事件消费节点运行，例如独立算力节点、网关、控制器。
@@ -46,6 +46,8 @@ App 开发者不需要手写注册 JSON，也不需要直接维护 `supports`、
 SDK 内部仍然会发送标准 `control.device.register.requested`，但 App 开发者只面对配置 API。
 SDK 内部应把媒体传输拆成多条物理链路：`sensor.mic` 使用音频上行链路，
 `actuator.speaker` 使用音频下行链路，`sensor.rgb` 或图片帧使用视觉上行链路。
+视觉上行不是后台常驻采集；当前设计是一条请求触发一张图片，只有 server 下发
+`stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)` 后才采集。
 App 不需要关心这些 WebSocket 的建立、重连和背压。
 
 ## 4. 标准接入代码

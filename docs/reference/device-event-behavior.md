@@ -13,7 +13,7 @@ server 与 device 的通讯分为控制通道和多条媒体传输链路。控�
 | control WebSocket | `/ws/control` | JSON `Event`，用于注册、心跳、会话、命令、stream 生命周期控制和回执。 |
 | audio input WebSocket | `/ws/stream/audio/input?device_id=<device_id>` | 端侧到 server 的 `sensor.mic` 二进制 `StreamChunk`。 |
 | audio output WebSocket | `/ws/stream/audio/output?device_id=<device_id>` | server 到端侧的 `actuator.speaker` 二进制 `StreamChunk`。 |
-| visual input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | 端侧到 server 的 `sensor.rgb`、图片帧或实时视频帧 `StreamChunk`。 |
+| visual input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | server 请求后，端侧到 server 的 `sensor.rgb` 单帧图片 `StreamChunk`。 |
 
 控制事件里不能放音频、图片、视频等大字节数据。大字节数据必须走对应的媒体
 WebSocket 或资产服务。`stream_id` 和 `stream_type` 只表示逻辑流，不表示所有
@@ -86,7 +86,7 @@ end
 
 ## 3. 开启实时对话
 
-实时对话不是 device 自己直接进入对话状态，而是先由唤醒事件触发 server 下发音频会话打开请求。会话打开后，对话过程同时包含三条主链路：麦克风音频上行、可选视频上行、server 音频下行播放。
+实时对话不是 device 自己直接进入对话状态，而是先由唤醒事件触发 server 下发音频会话打开请求。会话打开后，对话过程同时包含三条主链路：麦克风音频上行、按请求触发的单帧视觉上行、server 音频下行播放。
 
 端侧 SDK 负责封装硬件接入、协议状态机和 stream chunk。麦克风、相机、喇叭默认禁用；App 必须显式 enable 后，SDK 才会使用平台默认 hardware adapter 自动注册这些能力。App 也可以覆盖默认 adapter，例如使用外接麦克风、测试音频文件、图片样例、自定义播放器。SDK 的职责是把输入字节或帧封装成 `StreamChunk` 写入对应的媒体链路，把 server 下发的 speaker output chunk 从音频下行链路写入播放 buffer 和 speaker sink。
 
@@ -117,21 +117,21 @@ sdk.start()
 6. SDK 从绑定的 `sensor.mic` source 按 `chunk_ms` 读取 PCM 字节，封装为 `StreamChunk sensor.mic`，通过音频上行链路持续发送。
 7. 麦克风硬件或系统录音资源由端侧自行决定何时打开；语音唤醒设备可以在注册完成后就保持麦克风采集。
 8. server 根据连续音频流自行判断语音开始、语音结束和 turn 边界；device 不做 VAD，不用 `final=True` 表达一句话结束。
-9. 如果实时对话需要视频输入，server 下发一次 `stream.control.open.requested`，声明 `stream_type=sensor.rgb`、`mode=continuous`、`frequency_hz` 和格式参数。
-10. device 打开或复用 SDK 默认相机 adapter，或 App 覆盖的摄像头、视频文件、图片样例 source，建立或复用视觉上行链路，发送 `stream.input.opened`，再按 `frequency_hz` 读取帧并通过视觉上行链路持续上传 `sensor.rgb` 视频帧 chunk。
-11. 视频输入链路保持打开，直到 server 下发 `stream.control.close.requested` 或音频会话关闭；device 停止采集后发送 `stream.input.closed`。采集失败时发送 `stream.input.failed`。
+9. 如果实时对话需要视觉输入，server 下发一次 `stream.control.open.requested`，声明 `stream_type=sensor.rgb`、`mode=single`、`sample_count=1`、`request_id` 和格式参数。
+10. device 打开或复用 SDK 默认相机 adapter，或 App 覆盖的摄像头、视频文件、图片样例 source，建立或复用视觉上行链路，发送 `stream.input.opened`，采集一帧后通过视觉上行链路上传一个 `sensor.rgb` 图片 chunk，且该 chunk 必须 `final=true`。
+11. 一次视觉请求只产生一张图片。device 发送该图片后立即发送 `stream.input.closed`；采集失败时发送 `stream.input.failed`。当前阶段不定义端侧主动后台推送，也不定义周期性采集画面。
 12. 当 server 需要播放模型回复音频时，下发 `stream.output.open.requested (actuator.speaker)`；SDK 确认本地 `actuator.speaker` sink 已经可写，随后从音频下行链路接收 `actuator.speaker` chunk。
 13. SDK 负责维护内置的 speaker 播放 buffer，并按配置的播放启动水位线、高水位线和低水位线决定何时开始播放、何时暂停或恢复 server 下行写出。App 开发者只配置 SDK 的播放 buffer 参数，不在业务 App 中实现这套 buffer。
 14. 播放期间麦克风仍持续上行；端侧不判断用户是否开始说话，也不判断是否构成打断。端侧只需要响应 server 下发的 `stream.output.cancel.requested`。
 15. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.closed` 或 `stream.output.cancelled`。
 16. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.close.requested` 或 `stream.output.finish.requested`；对 speaker 音频，finish payload 会尽量携带 `output_chunk_count`、`output_last_seq` 和 `output_bytes`，device 先确认最后一帧已经进入 SDK 播放 buffer，再等 buffer 和本地 sink drain 完成后发送 `stream.output.closed`。
-17. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和视频输入，等待下行播放 drain 后，发送 `control.audio_session.closed`。
+17. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和未完成的视觉采集，等待下行播放 drain 后，发送 `control.audio_session.closed`。
 
 系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立音频上行链路并发送 `control.audio_session.opened`，再持续发二进制 chunk；不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
 
 麦克风的最小契约是：SDK 在显式启用音频输入后，必须能从默认 adapter 或 App 覆盖的 source 读取 `codec/sample_rate/channels/chunk_ms` 一致的音频字节。source 可以是真实系统麦克风、浏览器 `MediaStream`、音频文件或测试样例。SDK 不关心底层硬件具体打开时机，但在 `control.audio_session.opened` 后必须能持续读取并上传。
 
-视频输入使用独立的视觉上行链路上传 `sensor.rgb`，不能和麦克风上行或 speaker 下行共用一条物理 WebSocket。如果已经选择视频或图片样例，端侧优先从样例按固定频率抽帧；没有样例时再打开摄像头按固定频率采集。视频帧、图片字节同样不能放进 control event。`stream.control.open.requested` 表示打开一条可维护的视频输入链路，不表示 server 每次需要一张照片时重新请求。
+视觉输入使用独立的视觉上行链路上传 `sensor.rgb`，不能和麦克风上行或 speaker 下行共用一条物理 WebSocket。当前阶段视觉链路是请求驱动的单帧采集：server 每次需要画面上下文时下发一次 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)`，端侧只采集并上传一张图片，然后关闭该逻辑输入流。如果已经选择图片或视频样例，端侧只从样例中取一帧；没有样例时再打开摄像头采集一帧。图片字节不能放进 control event，也不能在没有 server 请求时无节制后台上传。
 
 系统音频下行使用独立的 `actuator.speaker` output 链路。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。由于控制事件和音频下行 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和关闭回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
 
@@ -161,14 +161,11 @@ loop 20ms chunk
   Device -> Server: StreamChunk sensor.mic over audio input link
 end
 opt visual input requested
-  Server -> Device: stream.control.open.requested (sensor.rgb, mode=continuous, frequency_hz)
+  Server -> Device: stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)
   Device -> Server: open /ws/stream/visual/input?device_id=...
-  Device -> Device: open camera or visual sample
+  Device -> Device: capture one camera or visual sample frame
   Device -> Server: stream.input.opened (sensor.rgb)
-  loop fixed frequency video frames
-    Device -> Server: StreamChunk sensor.rgb over visual input link
-  end
-  Server -> Device: stream.control.close.requested (sensor.rgb)
+  Device -> Server: StreamChunk sensor.rgb final=true over visual input link
   Device -> Server: stream.input.closed (sensor.rgb)
 end
 opt assistant audio output
@@ -245,7 +242,7 @@ end
 SDK 路由规则：
 
 1. `event_name` 以 `custom.` 开头：SDK 不进入任何标准内置状态机，只进入自定义事件分发器。
-2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、实时视频、speaker 播放、标准命令等内置状态机。
+2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、视觉单帧采集、speaker 播放、标准命令等内置状态机。
 3. 标准事件不能再投递给自定义 `on_event`。比如 `stream.output.open.requested (actuator.speaker)` 只能进入第 3 节的 speaker 播放链路，不应再触发自定义事件处理。
 
 未来端侧 SDK 应提供的额外消费入口如下：
@@ -255,7 +252,7 @@ SDK 路由规则：
 | `custom.command.requested` | `on_custom_command(...)`；也可以用 `on_event(...)` | 业务自定义的低频端侧动作，例如业务模式切换、peer video 控制、自定义硬件动作 | 执行业务命令；如需回报业务结果，使用 `ctx.emit("custom.<domain>.<event>", payload)` 发送自定义事件 |
 | 其他 `custom.<domain>.*` | `on_event(...)` | 项目扩展事件或 App 自定义事件 | App 自己解释 payload；如事件有生命周期要求，必须按自定义事件自己的协议回执 |
 
-实时视频输入的 `stream.control.open.requested (sensor.rgb)` / `stream.control.close.requested (sensor.rgb)` 已在第 3 节定义，不在本节重复。实时音频会话的 `control.audio_session.*` 也由第 3 节定义。
+视觉单帧采集的 `stream.control.open.requested (sensor.rgb)` 已在第 3 节定义，不在本节重复。实时音频会话的 `control.audio_session.*` 也由第 3 节定义。
 
 自定义事件命名建议使用 `custom.<app_or_domain>.<event_name>`，必要时追加状态后缀，例如：
 
@@ -363,6 +360,6 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_device_even
 - browser-glass 形状注册后，设备能按声明消费标准 server 事件。
 - wake 后必须先收到 `control.audio_session.open.requested`，端侧回 `control.audio_session.opened` 后实时对话才进入可用状态。
 - 系统 `sensor.mic` 输入由 `control.audio_session.opened/closed` 表达生命周期，音频数据通过音频上行链路持续发送；语音边界由 server 判定。
-- device 消费实时视频 `stream.control.open.requested` 后，必须通过视觉上行链路持续上传 RGB chunk，直到 close。
+- device 消费视觉单帧采集 `stream.control.open.requested` 后，必须通过视觉上行链路上传一个 `final=true` 的 RGB chunk，并发送 `stream.input.closed`。
 - device 消费 `custom.command.requested` 后，如需回报业务结果，使用 `ctx.emit("custom.<domain>.<event>", payload)` 发送自定义事件。
 - 非音频业务动作必须使用 `custom.command.requested` 或普通 `custom.<domain>.*`，不能复用标准 `stream.output.*`。

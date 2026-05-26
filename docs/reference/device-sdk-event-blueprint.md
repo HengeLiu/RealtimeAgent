@@ -72,10 +72,10 @@ SDK 对外需要暴露的抽象能力：
 | Control Channel | 连接 `/ws/control`，发送和接收 JSON Event。 |
 | Audio Input Channel | 连接 `/ws/stream/audio/input?device_id=...`，发送 `sensor.mic` StreamChunk。 |
 | Audio Output Channel | 连接 `/ws/stream/audio/output?device_id=...`，接收 `actuator.speaker` StreamChunk。 |
-| Visual Input Channel | 连接 `/ws/stream/visual/input?device_id=...`，发送 `sensor.rgb`、图片帧或实时视频帧 StreamChunk。 |
+| Visual Input Channel | 连接 `/ws/stream/visual/input?device_id=...`，在 server 请求后发送 `sensor.rgb` 单帧图片 StreamChunk。 |
 | Event Router | 按事件名和 stream_type 分发 server 事件。 |
 | Registration Manager | 管理注册、注册失败、重连和心跳启动。 |
-| Realtime AV Session | 管理唤醒、音频会话、麦克风流和视觉流。 |
+| Realtime AV Session | 管理唤醒、音频会话、麦克风流、视觉单帧采集和 speaker 播放。 |
 | Server Event Consumers | 处理 `stream.control.*`、speaker 专用 `stream.output.*`、`downstream.*`、`custom.*` 并发送回执。 |
 | Heartbeat Manager | 注册成功后按 server 返回间隔发送心跳。 |
 
@@ -86,7 +86,7 @@ SDK 必须提供“默认禁用、显式启用、可覆盖 adapter”的硬件�
 | 绑定对象 | 方向 | SDK 使用方式 | 最小能力 |
 | --- | --- | --- | --- |
 | `sensor.mic` source | SDK/App -> SDK -> Server | 显式启用后，SDK 从默认或覆盖 source 读取 PCM 字节，封装 `StreamChunk sensor.mic` 写入音频上行链路 | `format`、`readChunk()` 或 async chunk producer、`close()` |
-| `sensor.rgb` source | SDK/App -> SDK -> Server | 显式启用后，SDK 按 server 请求的 `frequency_hz` 读取帧，封装 `StreamChunk sensor.rgb` 写入视觉上行链路 | `format`、`readFrame()`、`close()` |
+| `sensor.rgb` source | SDK/App -> SDK -> Server | 显式启用后，SDK 只在收到 server 单帧采集请求时读取一帧，封装 `StreamChunk sensor.rgb` 写入视觉上行链路 | `format`、`readFrame()`、`close()` |
 | `actuator.speaker` sink | Server -> SDK -> SDK/App | 显式启用后，SDK 从音频下行链路接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或覆盖 sink 播放 | `prepare(format)`、`writeChunk()`、`drain()`、`cancel()`、`close()` |
 | 自定义业务动作 | Server -> SDK -> App | SDK 通过 `custom.command.*` 或其他 `custom.*` 调用 App 注册的 handler | `on_custom_command(...)` 或 `on_event(...)` |
 
@@ -213,7 +213,7 @@ FUNCTION heartbeatLoop(interval_seconds):
 
 ## 3. 开启实时对话
 
-实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App 覆盖 adapter；SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用音频上行、音频下行和按需视觉上行链路，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、可选视频上行和 server 音频下行播放。
+实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App 覆盖 adapter；SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用音频上行、音频下行和按需视觉上行链路，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、server 请求触发的视觉单帧采集和 server 音频下行播放。
 
 ### 3.1 时序图
 
@@ -237,15 +237,12 @@ loop mic chunks
 end
 
 opt visual input requested
-  Server -> SDK: stream.control.open.requested (sensor.rgb, mode=continuous, frequency_hz)
+  Server -> SDK: stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)
   SDK -> Server: open /ws/stream/visual/input?device_id=...
-  SDK -> App: openCameraOrVisualSample(request)
+  SDK -> App: captureOneCameraOrVisualSampleFrame(request)
   SDK -> Server: stream.input.opened (sensor.rgb)
-  loop fixed frequency visual chunks
-    App -> SDK: video frame
-    SDK -> Server: StreamChunk sensor.rgb over visual input link
-  end
-  Server -> SDK: stream.control.close.requested (sensor.rgb)
+  App -> SDK: image frame
+  SDK -> Server: StreamChunk sensor.rgb final=true over visual input link
   SDK -> Server: stream.input.closed (sensor.rgb)
 end
 
@@ -394,14 +391,15 @@ FUNCTION handleVisualOpenRequested(event):
   REQUIRE adapters.input["sensor.rgb"] exists
   visual_stream_id = event.stream_id OR newStreamId("stream_rgb")
   request = event.payload
+  REQUIRE request.mode == "single"
+  REQUIRE request.sample_count == null OR request.sample_count == 1
   visualAdapter = adapters.input["sensor.rgb"]
-  frequency_hz = request.frequency_hz OR visualAdapter.default_frequency_hz
 
   TRY:
     visualInputChannel.ensureOpen(device_id = profile.device_id)
     visualSource = visualAdapter.open(request)
     realtime.visual_stream_id = visual_stream_id
-    realtime.visual_state = "open"
+    realtime.visual_state = "capturing_one_frame"
 
     control.send(Event(
       event_name = "stream.input.opened",
@@ -417,28 +415,42 @@ FUNCTION handleVisualOpenRequested(event):
       }
     ))
 
-    LOOP while realtime.visual_state == "open":
-      WAIT until next visual tick at frequency_hz
-      frame = visualSource.readFrame()
-      visualInputChannel.sendChunk(StreamChunk(
-        user_id = profile.user_id,
-        session_id = event.session_id OR realtime.session_id,
-        stream_id = visual_stream_id,
+    frame = visualSource.readFrame()
+    visualInputChannel.sendChunk(StreamChunk(
+      user_id = profile.user_id,
+      session_id = event.session_id OR realtime.session_id,
+      stream_id = visual_stream_id,
+      stream_type = "sensor.rgb",
+      seq = 0,
+      payload = frame.bytes,
+      codec = frame.codec,
+      sample_rate = 1,
+      channels = 1,
+      duration_ms = 0,
+      final = true,
+      metadata = {
+        request_id = request.request_id,
+        sample_index = 0,
+        sample_count = 1,
+        width = frame.width,
+        height = frame.height,
+        captured_at_ms = nowMs()
+      }
+    ))
+
+    control.send(Event(
+      event_name = "stream.input.closed",
+      user_id = profile.user_id,
+      producer_id = profile.device_id,
+      session_id = event.session_id OR realtime.session_id,
+      stream_id = visual_stream_id,
+      stream_type = "sensor.rgb",
+      payload = {
         stream_type = "sensor.rgb",
-        seq = nextSeq(visual_stream_id),
-        payload = frame.bytes,
-        codec = frame.codec,
-        sample_rate = frame.sample_rate,
-        channels = 1,
-        duration_ms = frame.duration_ms,
-        final = false,
-        metadata = {
-          request_id = request.request_id,
-          width = frame.width,
-          height = frame.height,
-          captured_at_ms = nowMs()
-        }
-      ))
+        request_id = request.request_id,
+        reason = "single_frame_uploaded"
+      }
+    ))
 
   CATCH error:
     control.send(Event(
@@ -455,11 +467,16 @@ FUNCTION handleVisualOpenRequested(event):
         error = error.message
       }
     ))
+  FINALLY:
+    visualAdapter.close(visual_stream_id)
+    realtime.visual_state = "closed"
+    realtime.visual_stream_id = null
 
 FUNCTION handleVisualCloseRequested(event):
   IF event.stream_type != "sensor.rgb":
     RETURN
 
+  // 当前视觉链路是一请求一张。close 只用于取消尚未完成的采集，或兼容未来扩展模式。
   realtime.visual_state = "closing"
   visualAdapter = adapters.input["sensor.rgb"]
   visualAdapter.close(event.stream_id OR realtime.visual_stream_id)
@@ -638,7 +655,7 @@ SDK 事件路由必须用事件命名空间隔离标准事件和自定义事件�
 路由规则必须固定为：
 
 1. `event_name` 以 `custom.` 开头：SDK 不进入任何标准内置状态机，只进入自定义事件分发器。
-2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、实时视频、speaker 播放、标准命令等内置状态机。
+2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、视觉单帧采集、speaker 播放、标准命令等内置状态机。
 3. 标准事件不能再投递给自定义 `on_event`。因此 `stream.output.open.requested (actuator.speaker)` 只会进入 speaker 播放状态机，不会同时触发自定义事件回调。
 
 未来 SDK 应支持的其他消费入口：
@@ -711,12 +728,12 @@ FUNCTION dispatchServerEvent(event):
       RETURN
 
     CASE "stream.control.open.requested":
-      // Realtime video input is defined in section 3.
+      // Visual single-frame capture is defined in section 3.
       handleInputOpenRequested(event)
       RETURN
 
     CASE "stream.control.close.requested":
-      // Realtime video input is defined in section 3.
+      // Visual single-frame capture is defined in section 3.
       IF event.stream_type == "sensor.rgb":
         handleVisualCloseRequested(event)
       ELSE:
@@ -758,7 +775,7 @@ FUNCTION dispatchCustomEvent(event):
 
 ### 4.4 输入采集 consumer 伪代码
 
-本小节是第 3 节视频输入链路的 SDK 内部路由细节，放在这里是为了展示 consumer 分发形态；它不是本节定义的“其他事件”。
+本小节是第 3 节视觉单帧采集链路的 SDK 内部路由细节，放在这里是为了展示 consumer 分发形态；它不是本节定义的“其他事件”。
 
 ```text
 FUNCTION handleInputOpenRequested(event):
@@ -889,7 +906,7 @@ STATE DialogOpen:
   on mic chunk:
     send StreamChunk sensor.mic
   on visual request:
-    upload sensor.rgb stream
+    capture and upload one sensor.rgb frame
   on output request:
     play output and ack
   on custom.command.requested:
@@ -912,7 +929,7 @@ STATE DialogClosing:
 2. 注册失败：SDK 收到 `register.failed` 后不启动心跳，并向应用暴露失败原因。
 3. 实时音频打开：收到 `control.audio_session.open.requested` 后，SDK 建立或复用音频上行和音频下行两条物理链路，回 `control.audio_session.opened`，并在 payload 中声明 `sensor.mic` 上行 stream。
 4. 麦克风连续上传：SDK 持续发送 `sensor.mic` chunk，且 `final=True` 不代表端侧 VAD 语音结束。
-5. 视频输入：收到 `stream.control.open.requested (sensor.rgb, mode=continuous)` 后，SDK 建立或复用视觉上行链路，回 `stream.input.opened`，按 `frequency_hz` 持续上传 RGB chunk；收到 `stream.control.close.requested` 或会话关闭后回 `stream.input.closed`。
+5. 视觉单帧采集：收到 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)` 后，SDK 建立或复用视觉上行链路，回 `stream.input.opened`，上传一个 `final=true` 的 RGB chunk，然后回 `stream.input.closed`。
 6. 输出播放：收到标准 `stream.output.open.requested (actuator.speaker)` 和音频下行 chunk 后，SDK 回 `stream.output.started`；收到 `stream.output.close.requested` 后，等待本地 drain，再回 `stream.output.closed`。
 7. 自定义命令执行：收到 `custom.command.requested` 后，SDK 调用 App 通过 `on_custom_command(...)` 注册的回调；如需回报业务结果，handler 使用 `ctx.emit("custom.<domain>.<event>", payload)`。
 8. 关闭会话：收到 `control.audio_session.close.requested` 后，SDK 结束本次音频会话、等待播放 drain、回 `control.audio_session.closed`。
