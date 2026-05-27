@@ -18,7 +18,7 @@ enum DeviceDemoPhase: String {
 /// 主要功能：
 /// 1. 通过代码式 SDK API 声明设备、注册能力和启用默认硬件链路。
 /// 2. 维护 App 页面状态、诊断快照和最近日志。
-/// 3. 把相机预览与 SDK 的 `sensor.rgb` 单帧上传共用同一个采集源，避免 App 开发者手写 stream chunk。
+/// 3. 把请求驱动的单帧相机采集交给 SDK，避免 App 开发者手写 stream chunk。
 @MainActor
 final class DeviceDemoRuntime: ObservableObject {
     @Published var serverURL: String {
@@ -52,7 +52,7 @@ final class DeviceDemoRuntime: ObservableObject {
 
     /// 开始实时音视频对话。
     ///
-    /// 主要逻辑：先申请系统权限，再启动相机预览，最后用新的 SDK 代码式注册方式连接 server。
+    /// 主要逻辑：先申请系统权限，再用 SDK 代码式注册方式连接 server；相机只在 server 请求单帧时打开。
     /// 参数：无。
     /// 返回值：无。
     /// 异常情况：权限被拒绝、server 地址错误或 WebSocket 连接失败时进入失败状态并写入日志。
@@ -63,7 +63,6 @@ final class DeviceDemoRuntime: ObservableObject {
 
         do {
             try await requestMediaPermissions()
-            try await cameraPreview.start()
 
             let client = try makeClient()
             configureCustomEvents(client)

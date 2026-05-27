@@ -42,16 +42,12 @@ private final class RealtimeAgentMicrophoneCaptureSession: @unchecked Sendable {
     func start() throws {
         #if os(iOS) || os(tvOS) || os(visionOS)
         let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
         try audioSession.setPreferredSampleRate(Double(configuration.sampleRate))
         try audioSession.setActive(true)
         #endif
 
         let input = engine.inputNode
-        #if os(iOS)
-        // iOS 真机连续对话需要系统语音处理，否则扬声器回放容易被麦克风重新收进去。
-        try input.setVoiceProcessingEnabled(true)
-        #endif
         let inputFormat = input.outputFormat(forBus: 0)
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -225,7 +221,7 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
 
         #if os(iOS) || os(tvOS) || os(visionOS)
         let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
         try audioSession.setPreferredSampleRate(Double(format.sampleRate))
         try audioSession.setActive(true)
         #endif

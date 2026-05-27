@@ -242,6 +242,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         try await transport.sendControl(text: try event.jsonString)
         diagnostics.sentEvents += 1
         diagnostics.lastEventName = event.eventName
+        await debugLog("control -> \(event.eventName) stream=\(event.streamID ?? "-") type=\(event.streamType ?? "-")")
     }
 
     /// 按事件名构造并发送控制事件。
@@ -272,6 +273,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         let event = try RealtimeAgentEvent(jsonString: text)
         diagnostics.receivedEvents += 1
         diagnostics.lastEventName = event.eventName
+        await debugLog("control <- \(event.eventName) stream=\(event.streamID ?? "-") type=\(event.streamType ?? "-")")
         return event
     }
 
@@ -486,10 +488,12 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             return false
         }
         let request = inputStreamRequest(for: event)
+        await debugLog("input stream open requested stream=\(request.streamID) type=\(request.streamType) request_id=\(request.requestID ?? "-")")
         inputStreamTasks[request.streamID]?.cancel()
         inputStreamTasks[request.streamID] = Task { [weak self, request] in
             do {
                 try await handler(request)
+                await self?.debugLog("input stream handler completed stream=\(request.streamID) type=\(request.streamType)")
             } catch is CancellationError {
                 try? await request.closed(reason: "server_requested")
             } catch {
@@ -523,6 +527,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         }
         try await ensureStream()
         let streamID = event.streamID ?? event.payload["stream_id"] as? String ?? RealtimeAgentIDs.make(prefix: "stream_mic")
+        await debugLog("audio session open requested session=\(event.sessionID ?? deviceID) mic_stream=\(streamID)")
         try await sendEvent(
             name: "control.audio_session.opened",
             payload: [
@@ -956,6 +961,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         microphoneTask = Task { [weak self] in
             guard let self else { return }
             var sequence = 0
+            await self.debugLog("mic source started session=\(sessionID) stream=\(streamID)")
             do {
                 for try await payload in source.streamPCM16LE(configuration: configuration) {
                     if Task.isCancelled { return }
@@ -973,9 +979,14 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                     )
                     sequence += 1
                     try await self.sendStreamChunk(chunk)
+                    if sequence <= 5 || sequence % 50 == 0 {
+                        await self.debugLog("mic chunk sent stream=\(streamID) seq=\(sequence - 1) bytes=\(payload.count)")
+                    }
                 }
+                await self.debugLog("mic source finished stream=\(streamID) chunks=\(sequence)")
             } catch {
                 self.diagnostics.lastMediaError = error.localizedDescription
+                await self.debugLog("mic source error stream=\(streamID) error=\(error.localizedDescription)")
             }
         }
     }
