@@ -1,5 +1,7 @@
 app-name: "device_demo"
 
+# 路径约定：默认运行产物写入当前应用目录下的 runs/。
+# 如需整体迁移运行目录，只配置 paths.runtime_root。
 paths: {}
 
 server:
@@ -8,24 +10,130 @@ server:
   public_url: "http://127.0.0.1:8765"
   log_level: "DEBUG"
   debug_api_enabled: true
+  shutdown_grace_seconds: 10
 
 auth:
   mode: "disabled"
+  device_tokens: {}
+  signed_token_secret_env: "REALTIME_AGENT_DEVICE_TOKEN_SECRET"
+  token_clock_skew_seconds: 60
 
-agent:
-  mode: "vision"
-  vision:
-    provider: "mock"
-    model: "mock-vision"
-    asr_provider: "mock"
-    tts_provider: "mock"
-    streaming_tts: true
-    allow_mock_fallback: true
+user:
+  active_device_set_policy: "single"
+  recent_message_limit: 200
+  message_compact_threshold: 10
+  message_compact_keep_latest: 4
+
+control:
+  transport: "websocket"
+  heartbeat_timeout_seconds: 30
+  heartbeat_check_interval_seconds: 5
+  max_routes_per_device: 64
+  allow_route_all: false
+  route_filter_mode: "exact"
+  exclude_producer_by_default: true
+
+stream:
+  transport: "websocket_binary"
+  max_chunk_bytes: 1048576
+  idle_timeout_seconds: 20
+  default_sensor_mic:
+    codec: "pcm16le"
+    sample_rate: 16000
+    channels: 1
+    chunk_ms: 20
+  default_actuator_speaker:
+    codec: "pcm16le"
+    sample_rate: 24000
+    channels: 1
+    chunk_ms: 20
+  sensors:
+    rgb_ttl_seconds: 30
+    depth_ttl_seconds: 10
+    imu_ttl_seconds: 10
 
 audio_pipeline:
-  vad: "server"
+  aec: "endpoint_only"
+  resample: "auto"
+  volume_normalize: true
+  # device demo 使用真实 Omni provider 判断 speech_start/speech_stopped。
+  vad: "provider"
   vad_rms_threshold: 96
   vad_silence_timeout_ms: 600
+  asr_sidecar: "disabled"
+  silence_close_seconds: 15
+  max_session_seconds: 0
+
+audio_session:
+  idle_timeout_seconds: 30
+
+asset:
+  store_type: "filesystem"
+  max_asset_bytes: 10485760
+  default_ttl_seconds: 60
+  request_timeout_seconds: 5
+  selection_policy: "latest"
+
+agent:
+  mode: "omni"
+  omni:
+    provider: "qwen"
+    model: "qwen3.5-omni-plus-realtime"
+    turn_detection: "provider"
+    voice: "Tina"
+    prompt: "你的名字是'乐鑫'。你是 Swift Device SDK 真机验证用的中文语音助手。每个用户语音输入期间，系统可能会按需附带当前视野图片。如果用户的问题明确涉及图片、眼前、前面、看到的画面、这是什么、周围有什么等视觉内容，请直接基于这些图片简短回答。如果用户的问题不涉及视觉内容，请直接回答用户问题，不要描述图片，也不要提到你收到了图片。请使用简短、口语化、直接的中文回答。不要输出代码块。"
+    session_idle_timeout_seconds: 60
+    max_concurrent_sessions: 10
+    custom_adapter: ""
+  visual:
+    realtime_video:
+      enabled: true
+      frame_interval_seconds: 1.0
+      frame_timeout_seconds: 1.5
+      frame_ttl_seconds: 5
+      max_frames_per_turn: 8
+      direction: front
+  vision:
+    provider: "dashscope-compatible"
+    model: "qwen3.6-flash"
+    prompt: "你的名字是'乐鑫'。你是 Swift Device SDK 真机验证用的中文语音助手。Text 链路不会自动附带当前图片；只有当本轮语音明确要求看当前图片、当前画面、眼前/前面有什么、读图、朗读图片中文字、识别包装/标签/屏幕/照片内容时，才基于本轮新获取的图片回答。看不清或缺少关键帧时，直接说明不确定，不要编造。请使用简短、口语化、直接的中文回答。不要输出代码块。"
+    multimodal:
+      enabled: true
+      attach_visual_assets: true
+      max_images_per_turn: 4
+      image_freshness_seconds: 2
+      max_image_base64_bytes: 7500000
+      max_capture_photo_calls_per_turn: 1
+      video:
+        enabled: true
+        prefer_native_video: true
+        max_inline_bytes: 50000000
+        max_duration_seconds: 120
+        sample_fps: 1.0
+        max_frames: 16
+        frame_jpeg_quality: 85
+    asr_provider: "dashscope"
+    asr_model: "paraformer-realtime-v2"
+    asr_max_sentence_silence_ms: 800
+    asr_disfluency_removal_enabled: true
+    tts_provider: "dashscope"
+    tts_model: "cosyvoice-v3-flash"
+    tts_voice: "longanhuan"
+    streaming_tts: true
+    max_context_messages: 30
+    allow_mock_fallback: false
+    request_timeout_seconds: 15
+    max_retries: 1
+
+output:
+  default_priority: "normal"
+  default_ttl_seconds: 10
+  allow_same_priority_interrupt: false
+  default_on_interrupted: "drop"
+  default_on_blocked: "queue"
+  max_queue_size: 32
+  tool_progress_audio_mode: "disabled"
+  endpoint_ack_timeout_seconds: 5.0
 
 tools:
   enabled: true
@@ -35,22 +143,59 @@ tools:
     packages: []
     recursive: true
     fail_fast: true
+  allowlist: []
+  denylist:
+    - "interpret_image"
+    - "interpret_current_view"
+  default_timeout_seconds: 30
+  allow_parallel_calls: true
 
 tasks:
   enabled: false
-
-mcp:
-  enabled: false
+  store:
+    type: "jsonl"
+  discover:
+    enabled: true
+    packages: []
+    recursive: true
+    fail_fast: true
+  max_running_per_user: 16
 
 memory:
   enabled: false
+  store_type: "jsonl"
+  manager:
+    model: "qwen-plus"
+    api_key_env: "DASHSCOPE_API_KEY"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    timeout_seconds: 5
+    max_retries: 1
+
+skill:
+  enabled: false
+  roots: []
+  allow_tool_policy: true
+
+mcp:
+  enabled: false
+  config_path: ""
+  default_timeout_seconds: 30
+
+endpoint_defaults:
+  wake_word: "browser"
+  aec: "endpoint_only"
 
 observability:
+  log_timezone: "Asia/Shanghai"
   record_input_streams: true
   record_output_streams: true
   record_model_events: true
   record_control_events: true
   record_stream_events: true
+  max_debug_sessions: 100
+  retention_days: 7
 
 dev_checks:
+  run_package_check: true
+  run_boundary_check: true
   require_recent_playback_ok: false

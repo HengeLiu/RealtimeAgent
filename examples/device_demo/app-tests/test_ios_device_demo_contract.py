@@ -72,15 +72,19 @@ def test_device_demo_server_config_is_independent_from_for_blind_app() -> None:
     """测试目标：确认真机 SDK 验证使用独立 server 配置。
 
     测试方法：读取 `examples/device_demo/agent-server/server.yaml`。
-    预期结果：配置名为 `device_demo`，使用 mock provider，不加载 for-blind 业务能力。
+    预期结果：配置名为 `device_demo`，使用真实 provider，禁用 mock fallback，
+    不加载 for-blind 业务能力。
     """
 
     config = yaml.safe_load(_read("agent-server/server.yaml"))
 
     assert config["app-name"] == "device_demo"
-    assert config["agent"]["vision"]["provider"] == "mock"
-    assert config["agent"]["vision"]["asr_provider"] == "mock"
-    assert config["agent"]["vision"]["tts_provider"] == "mock"
+    assert config["agent"]["mode"] == "omni"
+    assert config["agent"]["omni"]["provider"] == "qwen"
+    assert config["agent"]["vision"]["provider"] == "dashscope-compatible"
+    assert config["agent"]["vision"]["asr_provider"] == "dashscope"
+    assert config["agent"]["vision"]["tts_provider"] == "dashscope"
+    assert config["agent"]["vision"]["allow_mock_fallback"] is False
     assert config["tools"]["discover"]["packages"] == []
     assert config["tasks"]["enabled"] is False
 
