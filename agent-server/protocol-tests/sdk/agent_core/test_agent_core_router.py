@@ -1183,6 +1183,123 @@ def test_vision_agent_server_vad_cancels_active_output(tmp_path) -> None:
     assert "server_vad_speech_started" in agent_events_text
 
 
+def test_vision_agent_audio_chunk_does_not_start_visual_sampler_before_speech_start(tmp_path) -> None:
+    """测试目标：验证 Vision 链路不会在普通麦克风 chunk 到达时提前启动视觉采样。
+
+    测试方法：替换 `_start_visual_sampler()` 为记录函数，先写入一片非 final 音频，
+    再显式触发 speech_started。
+    预期结果：普通音频 chunk 不触发拍照采集；只有 speech_started 会启动视觉采样。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    core = app.agent_core.core
+    starts: list[dict[str, object]] = []
+
+    def record_start(**kwargs) -> None:
+        """记录视觉采样启动参数。"""
+
+        starts.append(dict(kwargs))
+
+    core._start_visual_sampler = record_start
+    user_id = "user-vision-no-early-capture"
+    session_id = "dev-vision-no-early-capture"
+    stream_id = "stream-vision-no-early-capture"
+    core.open(user_id, session_id)
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+            duration_ms=20,
+        )
+    )
+    assert starts == []
+
+    core.on_speech_started(
+        user_id,
+        session_id,
+        stream_id=stream_id,
+        reason="server_vad_speech_started",
+        diagnostics={"rms": 128},
+    )
+    assert len(starts) == 1
+    assert starts[0]["reason"] == "server_vad_speech_started"
+
+
+def test_vision_agent_server_vad_commits_continuous_mock_asr(tmp_path) -> None:
+    """测试目标：验证连续麦克风流在 server VAD speech_stopped 后能提交 ASR 并回复。
+
+    测试方法：启用 server_only VAD，输入一片高 RMS 语音和一片足够长的静音；
+    mock ASR 只在 final chunk 返回最终文本，因此 speech_stopped 必须显式 commit。
+    预期结果：messages 写入用户转写，输出适配器收到基于 mock transcript 的回复。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="vision",
+            audio_pipeline_vad="server_only",
+            audio_pipeline_vad_rms_threshold=96,
+            audio_pipeline_vad_silence_timeout_ms=40,
+        )
+    )
+    output_adapter = RecordingOutputAdapter()
+    app.agent_core.core.output_adapter = output_adapter
+    user_id = "user-vision-vad-commit"
+    session_id = "dev-vision-vad-commit"
+    stream_id = "stream-vision-vad-commit"
+    app.agent_core.open(user_id, session_id)
+
+    app.audio_pipeline.process(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\xff\x7f" * 320,
+            final=False,
+            duration_ms=20,
+        )
+    )
+    assert output_adapter.calls == []
+
+    app.audio_pipeline.process(
+        StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=1,
+            payload=b"\x00\x00" * 320,
+            final=False,
+            duration_ms=40,
+        )
+    )
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        output_text = "".join(str(item["text"]) for item in output_adapter.calls)
+        if "我听到了：mock transcript。" in output_text:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("server VAD speech_stopped did not commit mock ASR response")
+
+    session_dir = tmp_path / "runs" / user_id / session_id
+    messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
+    agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "mock transcript" in messages_text
+    assert "vision.vad.speech_started" in agent_events_text
+    assert "vision.vad.speech_stopped" in agent_events_text
+    assert "input_transcript.done" in agent_events_text
+
+
 def test_vision_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) -> None:
     """测试目标：验证 Paraformer sentence_begin 能作为 Text realtime 的插话信号。
 

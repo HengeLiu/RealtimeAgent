@@ -22,6 +22,11 @@ agent:
     streaming_tts: true
     allow_mock_fallback: true
 
+audio_pipeline:
+  vad: "server"
+  vad_rms_threshold: 96
+  vad_silence_timeout_ms: 600
+
 tools:
   enabled: true
   builtin_enabled: true

@@ -233,6 +233,31 @@ class AsrPipeline:
                 self._close_provider(provider_key)
         return final_text
 
+    def commit_audio(self, chunk: StreamChunk) -> str | None:
+        """提交当前连续麦克风输入，取回 ASR 最终文本。
+
+        主要逻辑：连续麦克风链路不会用 `StreamChunk.final` 表达一句话结束；
+        server VAD 的 speech_stopped 才是本地 turn boundary。这里构造一个空
+        final chunk 交给 ASR provider，让 mock ASR 和真实实时 ASR 都有统一的
+        commit 入口。
+        """
+
+        final_chunk = StreamChunk(
+            user_id=chunk.user_id,
+            session_id=chunk.session_id,
+            stream_id=chunk.stream_id,
+            stream_type=chunk.stream_type,
+            seq=chunk.seq,
+            payload=b"",
+            codec=chunk.codec,
+            sample_rate=chunk.sample_rate,
+            channels=chunk.channels,
+            duration_ms=0,
+            final=True,
+            metadata=dict(chunk.metadata or {}),
+        )
+        return self.append_audio(final_chunk)
+
     def prepare_provider(self, *, stream_id: str, session_id: str | None = None) -> None:
         """提前建立指定麦克风输入流的 ASR provider。
 
@@ -525,6 +550,7 @@ class VisionRealtimeAgentCore:
         self.visual_max_frames_per_turn = max(0, int(visual_max_frames_per_turn or 0))
         self.visual_direction = str(visual_direction or "front").strip() or "front"
         self._audio_stream_by_session: dict[str, str] = {}
+        self._latest_audio_chunk_by_session: dict[str, StreamChunk] = {}
         self._closed_audio_streams_by_session: dict[str, set[str]] = {}
         self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
         self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
@@ -586,18 +612,22 @@ class VisionRealtimeAgentCore:
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         self._audio_stream_by_session[chunk.session_id] = chunk.stream_id
-        self._start_visual_sampler(
-            user_id=chunk.user_id,
-            session_id=chunk.session_id,
-            stream_id=chunk.stream_id,
-            reason="audio_chunk",
-        )
+        self._latest_audio_chunk_by_session[chunk.session_id] = chunk
         self._set_turn_state(chunk.user_id, chunk.session_id, "transcribing", reason="audio_final_check")
         transcript = self.asr_pipeline.append_audio(chunk)
         if transcript is None:
             if chunk.final:
-                self._stop_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, reason="audio_final_without_transcript")
+                self._stop_visual_sampler(
+                    user_id=chunk.user_id,
+                    session_id=chunk.session_id,
+                    reason="audio_final_without_transcript",
+                )
             return
+        self._handle_final_transcript(chunk=chunk, transcript=transcript)
+
+    def _handle_final_transcript(self, *, chunk: StreamChunk, transcript: str) -> None:
+        """处理 ASR 最终文本并触发 Vision 回复。"""
+
         if self._should_ignore_transcript_as_echo(chunk=chunk, transcript=transcript):
             self._stop_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, reason="echo_guard_ignored")
             self._set_turn_state(chunk.user_id, chunk.session_id, "completed", reason="echo_guard_ignored")
@@ -1515,8 +1545,8 @@ class VisionRealtimeAgentCore:
     ) -> None:
         """处理服务端 VAD 的语音结束事件。
 
-        主要逻辑：当前 Vision 链路仍以 ASR final 作为提交点，speech_stop 只作为服务器
-        turn boundary 观测事件，后续可接入显式 ASR commit。
+        主要逻辑：server VAD 的 speech_stop 是连续麦克风输入的一句话结束边界；
+        这里会停止本轮视觉采样，并用上一片真实语音 chunk 显式提交 ASR。
         参数：`user_id/session_id/stream_id` 定位音频会话；`reason` 标识触发来源；
         `diagnostics` 是 VAD 诊断。
         返回值：无。
@@ -1547,6 +1577,27 @@ class VisionRealtimeAgentCore:
             )
         self._mark_user_activity(user_id, session_id)
         self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
+        chunk = self._latest_audio_chunk_by_session.get(session_id)
+        if chunk is None or chunk.stream_id != stream_id:
+            self._record_event(
+                "vision.asr_commit.skipped",
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                reason="latest_audio_chunk_missing",
+            )
+            return
+        transcript = self.asr_pipeline.commit_audio(chunk)
+        if transcript is None:
+            self._record_event(
+                "vision.asr_commit.empty",
+                user_id=user_id,
+                session_id=session_id,
+                stream_id=stream_id,
+                reason=reason,
+            )
+            return
+        self._handle_final_transcript(chunk=chunk, transcript=transcript)
 
     def _start_visual_sampler(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
         """启动 Vision 当前语音 turn 的视觉采样。
