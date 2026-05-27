@@ -1386,9 +1386,14 @@ class OmniRealtimeAgentCore:
         self._cache_replay_audio(chunk)
         self.open(chunk.user_id, chunk.session_id)
         _session_id, provider = self._sessions[chunk.user_id]
+        has_payload = bool(chunk.payload)
+        if has_payload:
+            self._audio_since_commit_by_session.add(chunk.session_id)
         try:
             provider.append_audio(chunk)
         except Exception as exc:
+            if has_payload:
+                self._audio_since_commit_by_session.discard(chunk.session_id)
             self._mark_session_failed(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1414,7 +1419,6 @@ class OmniRealtimeAgentCore:
             payload={"payload_size": len(chunk.payload), "final": chunk.final},
         )
         if chunk.payload:
-            self._audio_since_commit_by_session.add(chunk.session_id)
             self._mark_realtime_input_activity(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1911,13 +1915,12 @@ class OmniRealtimeAgentCore:
         event = str(record.get("event") or "")
         if event == "omni.input_audio_buffer.speech_started":
             self._provider_speech_active_by_session.add(session_id)
-            self._audio_since_commit_by_session.add(session_id)
         elif event in {"omni.input_audio_buffer.speech_stopped", "omni.input_audio_buffer.committed", "omni.input.committed"}:
             self._provider_speech_active_by_session.discard(session_id)
-            if event != "omni.input_audio_buffer.speech_stopped":
-                self._audio_since_commit_by_session.discard(session_id)
+            self._audio_since_commit_by_session.discard(session_id)
         elif event == "omni.response.done":
             self._provider_speech_active_by_session.discard(session_id)
+            self._audio_since_commit_by_session.discard(session_id)
 
     def _map_provider_turn_state(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """把 Omni provider 原始事件映射到统一 turn 状态事件。"""
@@ -2336,6 +2339,8 @@ class OmniRealtimeAgentCore:
             self._start_visual_sampler(user_id=user_id, session_id=session_id)
         elif event == "omni.input_audio_buffer.speech_stopped":
             self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_speech_stopped")
+        elif event == "omni.response.done":
+            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_response_done")
 
     def _start_visual_sampler(self, *, user_id: str, session_id: str) -> None:
         """启动当前用户语音 turn 的实时视觉帧消费线程。"""

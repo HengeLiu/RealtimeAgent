@@ -82,7 +82,7 @@ private struct ConversationView: View {
                 .aspectRatio(0.72, contentMode: .fit)
                 .overlay {
                     if !runtime.cameraPreview.isRunning {
-                        Text("等待视觉请求")
+                        Text("正在启动相机")
                             .font(.title3.weight(.medium))
                             .foregroundStyle(.blue)
                     }

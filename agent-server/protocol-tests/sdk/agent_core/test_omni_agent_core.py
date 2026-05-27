@@ -833,6 +833,59 @@ def test_realtime_visual_sampler_stops_when_no_rgb_device(tmp_path) -> None:
     assert "omni.visual_sampler.stopped" in agent_events
 
 
+def test_realtime_visual_sampler_waits_for_real_audio_before_requesting_rgb(tmp_path) -> None:
+    """测试目标：验证 provider 只上报 speech_started 但本轮还没有音频时不会请求图片。
+
+    测试方法：打开 Omni 会话并注册同设备 RGB 能力，但不追加任何 mic 音频，直接模拟
+    provider 上报 `speech_started`。
+    预期结果：视觉采样被协议保护丢弃，不调用 AssetService，也不会把图片先于音频追加给 provider。
+    """
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = FakeAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    core = OmniRealtimeAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        omni_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.1,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.open(user_id="user-001", session_id="dev-web")
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    agent_events_path = tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl"
+    deadline = time.time() + 1
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "omni.visual_frame.discarded" in agent_events:
+            break
+        time.sleep(0.02)
+    core.close("user-001", reason="test_done")
+
+    agent_events = agent_events_path.read_text(encoding="utf-8")
+    assert asset_service.request_count == 0
+    assert not instances[0].images
+    assert "omni.visual_frame.discarded" in agent_events
+    assert "visual_turn_inactive" in agent_events
+    assert '"audio_since_commit": false' in agent_events
+
+
 def test_realtime_visual_sampler_drops_frame_returned_after_speech_stopped(tmp_path) -> None:
     """测试目标：验证语音结束后才返回的图片不会追加到 provider。
 
@@ -899,6 +952,77 @@ def test_realtime_visual_sampler_drops_frame_returned_after_speech_stopped(tmp_p
     agent_events = agent_events_path.read_text(encoding="utf-8")
     assert asset_service.request_count == 1
     assert not instances[0].images
+    assert "omni.visual_frame.discarded" in agent_events
+    assert "visual_turn_inactive_after_asset" in agent_events
+
+
+def test_realtime_visual_sampler_drops_frame_returned_after_response_done(tmp_path) -> None:
+    """测试目标：验证回复完成后才返回的视觉帧不会污染下一轮输入。
+
+    测试方法：使用阻塞 AssetService 让视觉请求卡住；provider 上报 speech_started 后
+    确认请求已发起，随后模拟 `response.done`，再放行图片返回。
+    预期结果：采样线程停止，迟到图片被丢弃，不会调用 provider.append_image。
+    """
+
+    image_path = tmp_path / "late-response-frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = BlockingAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    core = OmniRealtimeAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        omni_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.5,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    assert asset_service.request_started.wait(timeout=1.0)
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.response.done", "provider": "fake", "status": "completed"},
+    )
+    asset_service.release_request.set()
+    deadline = time.time() + 1
+    agent_events_path = tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl"
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "omni.visual_frame.discarded" in agent_events:
+            break
+        time.sleep(0.02)
+    core.close("user-001", reason="test_done")
+
+    agent_events = agent_events_path.read_text(encoding="utf-8")
+    assert asset_service.request_count == 1
+    assert not instances[0].images
+    assert "omni.visual_sampler.stopped" in agent_events
+    assert "provider_response_done" in agent_events
     assert "omni.visual_frame.discarded" in agent_events
     assert "visual_turn_inactive_after_asset" in agent_events
 

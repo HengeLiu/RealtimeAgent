@@ -4,9 +4,10 @@ import RealtimeAgentDeviceKit
 import SwiftUI
 import UIKit
 
-/// 请求驱动的 SDK RGB 帧来源。
+/// 连续预览和请求驱动的 SDK RGB 帧来源。
 ///
-/// 主要功能：只在 SDK 响应 `sensor.rgb` 单帧请求时临时启动相机、采集一帧 JPEG 并停止。
+/// 主要功能：对话期间保持摄像头预览连续运行；SDK 收到 `sensor.rgb` 单帧请求时，
+/// 直接从同一个相机会话取当前画面上传，不改变预览生命周期。
 final class CameraPreviewController: NSObject, ObservableObject, RealtimeAgentCameraFrameSource, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     let session = AVCaptureSession()
 
@@ -57,10 +58,7 @@ final class CameraPreviewController: NSObject, ObservableObject, RealtimeAgentCa
     /// 捕获一帧 JPEG，供 SDK 响应 `sensor.rgb` 请求。
     func captureJPEG() async throws -> Data {
         clearCurrentJPEG()
-        try await startForSingleCapture()
-        defer {
-            stopAfterSingleCapture()
-        }
+        try await startRunningIfNeeded()
         for _ in 0..<40 {
             if let data = currentJPEG() {
                 return data
@@ -86,7 +84,7 @@ final class CameraPreviewController: NSObject, ObservableObject, RealtimeAgentCa
         lock.unlock()
     }
 
-    private func startForSingleCapture() async throws {
+    private func startRunningIfNeeded() async throws {
         try await configureIfNeeded()
         await withCheckedContinuation { continuation in
             queue.async {
@@ -97,17 +95,6 @@ final class CameraPreviewController: NSObject, ObservableObject, RealtimeAgentCa
                     self.isRunning = true
                     continuation.resume()
                 }
-            }
-        }
-    }
-
-    private func stopAfterSingleCapture() {
-        queue.async {
-            if self.session.isRunning {
-                self.session.stopRunning()
-            }
-            Task { @MainActor in
-                self.isRunning = false
             }
         }
     }
