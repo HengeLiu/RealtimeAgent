@@ -1271,6 +1271,9 @@ class OmniRealtimeAgentCore:
         self._last_user_audio_by_session: dict[str, list[bytes]] = {}
         self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
         self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
+        self._visual_sampler_generation_by_session: dict[str, int] = {}
+        self._provider_speech_active_by_session: set[str] = set()
+        self._audio_since_commit_by_session: set[str] = set()
         self._visual_stream_id_by_session: dict[str, str] = {}
         self._visual_appended_asset_ids_by_session: dict[str, set[str]] = {}
         self._audio_stream_by_session: dict[str, str] = {}
@@ -1411,6 +1414,7 @@ class OmniRealtimeAgentCore:
             payload={"payload_size": len(chunk.payload), "final": chunk.final},
         )
         if chunk.payload:
+            self._audio_since_commit_by_session.add(chunk.session_id)
             self._mark_realtime_input_activity(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1518,6 +1522,9 @@ class OmniRealtimeAgentCore:
         if session_id:
             self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
             self._visual_appended_asset_ids_by_session.pop(session_id, None)
+            self._provider_speech_active_by_session.discard(session_id)
+            self._audio_since_commit_by_session.discard(session_id)
+            self._visual_sampler_generation_by_session.pop(session_id, None)
         if existing:
             existing[1].close(user_id=user_id, reason=reason)
         if session_id:
@@ -1844,6 +1851,9 @@ class OmniRealtimeAgentCore:
         """
         first_failure = session_id not in self._failed_sessions
         self._failed_sessions.add(session_id)
+        self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_failed")
+        self._provider_speech_active_by_session.discard(session_id)
+        self._audio_since_commit_by_session.discard(session_id)
         existing = self._sessions.pop(user_id, None)
         if existing:
             try:
@@ -1877,6 +1887,7 @@ class OmniRealtimeAgentCore:
 
         self.recorder.record_agent_event(session_id, record)
         self._track_provider_response_event(session_id=session_id, record=record)
+        self._track_provider_input_buffer_state(session_id=session_id, record=record)
         self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
         self._handle_provider_speech_started_interrupt(user_id=user_id, session_id=session_id, record=record)
         self._handle_provider_speech_stopped(user_id=user_id, session_id=session_id, record=record)
@@ -1888,6 +1899,25 @@ class OmniRealtimeAgentCore:
             session_id=session_id,
             payload=dict(record),
         )
+
+    def _track_provider_input_buffer_state(self, *, session_id: str, record: dict[str, Any]) -> None:
+        """跟踪 provider 当前输入 buffer 是否仍能接收图片。
+
+        主要逻辑：Qwen Omni 要求同一输入 buffer 中先有音频，图片只能作为该轮
+        音频的补充。provider 自动提交后，下一轮 buffer 重新变为空；此时迟到的
+        图片必须丢弃，不能先于下一轮音频追加。
+        """
+
+        event = str(record.get("event") or "")
+        if event == "omni.input_audio_buffer.speech_started":
+            self._provider_speech_active_by_session.add(session_id)
+            self._audio_since_commit_by_session.add(session_id)
+        elif event in {"omni.input_audio_buffer.speech_stopped", "omni.input_audio_buffer.committed", "omni.input.committed"}:
+            self._provider_speech_active_by_session.discard(session_id)
+            if event != "omni.input_audio_buffer.speech_stopped":
+                self._audio_since_commit_by_session.discard(session_id)
+        elif event == "omni.response.done":
+            self._provider_speech_active_by_session.discard(session_id)
 
     def _map_provider_turn_state(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """把 Omni provider 原始事件映射到统一 turn 状态事件。"""
@@ -2319,10 +2349,18 @@ class OmniRealtimeAgentCore:
         if existing and existing.is_alive():
             return
         stop_event = threading.Event()
+        generation = self._visual_sampler_generation_by_session.get(session_id, 0) + 1
+        self._visual_sampler_generation_by_session[session_id] = generation
         self._visual_sampler_stop_by_session[session_id] = stop_event
         thread = threading.Thread(
             target=self._visual_sampler_loop,
-            kwargs={"user_id": user_id, "session_id": session_id, "stop_event": stop_event, "interval": interval},
+            kwargs={
+                "user_id": user_id,
+                "session_id": session_id,
+                "stop_event": stop_event,
+                "interval": interval,
+                "generation": generation,
+            },
             name=f"realtime-visual-{session_id}",
             daemon=True,
         )
@@ -2333,6 +2371,7 @@ class OmniRealtimeAgentCore:
                 "event": "omni.visual_sampler.started",
                 "provider": self.omni_config.provider,
                 "interval_seconds": interval,
+                "generation": generation,
             },
         )
         thread.start()
@@ -2401,12 +2440,16 @@ class OmniRealtimeAgentCore:
             return
         if stop_event is not None:
             stop_event.set()
+        self._visual_sampler_generation_by_session[session_id] = (
+            self._visual_sampler_generation_by_session.get(session_id, 0) + 1
+        )
         self.recorder.record_agent_event(
             session_id,
             {
                 "event": "omni.visual_sampler.stopped",
                 "provider": self.omni_config.provider,
                 "reason": reason,
+                "generation": self._visual_sampler_generation_by_session.get(session_id),
             },
         )
         self._request_visual_stream_close(user_id=user_id, session_id=session_id, reason=reason)
@@ -2461,6 +2504,7 @@ class OmniRealtimeAgentCore:
         session_id: str,
         stop_event: threading.Event,
         interval: float,
+        generation: int,
     ) -> None:
         """按固定间隔请求并追加当前视觉帧。
 
@@ -2474,6 +2518,14 @@ class OmniRealtimeAgentCore:
         while not stop_event.is_set():
             started_at = time.monotonic()
             try:
+                if not self._can_append_visual_frame(session_id=session_id, generation=generation):
+                    self._record_visual_frame_discarded(
+                        session_id=session_id,
+                        frame_index=frame_index,
+                        reason="visual_turn_inactive",
+                        generation=generation,
+                    )
+                    return
                 if not self._has_paired_visual_capture_device(user_id=user_id, session_id=session_id):
                     self.recorder.record_agent_event(
                         session_id,
@@ -2491,6 +2543,7 @@ class OmniRealtimeAgentCore:
                     session_id=session_id,
                     frame_index=frame_index,
                     timeout_seconds=timeout,
+                    generation=generation,
                 )
             except Exception as exc:  # noqa: BLE001 - 后台采样异常只能记录，不能打断音频主链路
                 self.recorder.record_agent_event(
@@ -2505,6 +2558,46 @@ class OmniRealtimeAgentCore:
             frame_index += 1
             elapsed = time.monotonic() - started_at
             stop_event.wait(max(0.0, interval - elapsed))
+
+    def _can_append_visual_frame(self, *, session_id: str, generation: int) -> bool:
+        """判断图片是否仍属于当前 provider 语音输入 buffer。
+
+        主要逻辑：采样线程可能正在等待端侧上传图片；等待期间 provider 可能已经
+        speech_stopped 并自动提交 buffer。只有采样代际仍匹配、provider 仍处于当前
+        用户语音段，并且本轮 buffer 已经追加过音频时，才允许追加图片。
+        """
+
+        return (
+            self._visual_sampler_generation_by_session.get(session_id) == generation
+            and session_id in self._provider_speech_active_by_session
+            and session_id in self._audio_since_commit_by_session
+        )
+
+    def _record_visual_frame_discarded(
+        self,
+        *,
+        session_id: str,
+        frame_index: int,
+        reason: str,
+        generation: int,
+        asset_id: str | None = None,
+    ) -> None:
+        """记录被丢弃的视觉帧，便于区分协议保护和端侧丢图。"""
+
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.visual_frame.discarded",
+                "provider": self.omni_config.provider,
+                "frame_index": frame_index,
+                "reason": reason,
+                "generation": generation,
+                "current_generation": self._visual_sampler_generation_by_session.get(session_id),
+                "speech_active": session_id in self._provider_speech_active_by_session,
+                "audio_since_commit": session_id in self._audio_since_commit_by_session,
+                **({"asset_id": asset_id} if asset_id else {}),
+            },
+        )
 
     def _has_paired_visual_capture_device(self, *, user_id: str, session_id: str) -> bool:
         """检查当前音频设备是否仍在线且支持 RGB 采集。
@@ -2538,6 +2631,7 @@ class OmniRealtimeAgentCore:
         session_id: str,
         frame_index: int,
         timeout_seconds: float,
+        generation: int,
     ) -> None:
         """请求一张当前 RGB 帧并追加到当前 Realtime provider。"""
 
@@ -2573,6 +2667,15 @@ class OmniRealtimeAgentCore:
                     "timeout_seconds": timeout_seconds,
                     "source": "asset_request",
                 },
+            )
+            return
+        if not self._can_append_visual_frame(session_id=session_id, generation=generation):
+            self._record_visual_frame_discarded(
+                session_id=session_id,
+                frame_index=frame_index,
+                reason="visual_turn_inactive_after_asset",
+                generation=generation,
+                asset_id=asset.asset_id,
             )
             return
         provider = existing[1]

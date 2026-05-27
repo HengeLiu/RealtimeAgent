@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 import types
 from pathlib import Path
@@ -351,6 +352,27 @@ class FakeAssetService:
 
         _ = asset_id
         return None
+
+
+class BlockingAssetService(FakeAssetService):
+    """测试用阻塞资产服务。
+
+    主要功能：模拟端侧在 speech_stopped 之后才返回的 RGB 资产。
+    主要属性：`request_started` 表示服务端已经发起请求，`release_request`
+    用于放行这次请求。
+    """
+
+    def __init__(self, image_path: Path) -> None:
+        super().__init__(image_path)
+        self.request_started = threading.Event()
+        self.release_request = threading.Event()
+
+    def request_asset(self, **kwargs) -> AssetRef:
+        """等待测试放行后再返回图片，模拟迟到的端侧上传。"""
+
+        self.request_started.set()
+        self.release_request.wait(timeout=1.0)
+        return super().request_asset(**kwargs)
 
 
 def test_realtime_append_audio_does_not_require_final_and_opens_speaker_stream(tmp_path) -> None:
@@ -809,6 +831,76 @@ def test_realtime_visual_sampler_stops_when_no_rgb_device(tmp_path) -> None:
     assert not instances[0].images
     assert "omni.visual_sampler.paired_stream_unavailable" in agent_events
     assert "omni.visual_sampler.stopped" in agent_events
+
+
+def test_realtime_visual_sampler_drops_frame_returned_after_speech_stopped(tmp_path) -> None:
+    """测试目标：验证语音结束后才返回的图片不会追加到 provider。
+
+    测试方法：使用阻塞 AssetService 让视觉请求卡住；provider 上报 speech_started
+    后确认请求已发起，随后先上报 speech_stopped，再放行图片返回。
+    预期结果：图片被记录为 discarded，不会调用 provider.append_image，避免 Qwen
+    下一轮输入 buffer 出现“图片早于音频”的协议错误。
+    """
+
+    image_path = tmp_path / "late-frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = BlockingAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    core = OmniRealtimeAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        omni_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.5,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    assert asset_service.request_started.wait(timeout=1.0)
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "fake"},
+    )
+    asset_service.release_request.set()
+    deadline = time.time() + 1
+    agent_events_path = tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl"
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "omni.visual_frame.discarded" in agent_events:
+            break
+        time.sleep(0.02)
+    core.close("user-001", reason="test_done")
+
+    agent_events = agent_events_path.read_text(encoding="utf-8")
+    assert asset_service.request_count == 1
+    assert not instances[0].images
+    assert "omni.visual_frame.discarded" in agent_events
+    assert "visual_turn_inactive_after_asset" in agent_events
 
 
 def test_realtime_visual_sampler_ignores_other_rgb_device(tmp_path) -> None:
