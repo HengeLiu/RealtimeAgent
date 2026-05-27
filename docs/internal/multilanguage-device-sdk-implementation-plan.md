@@ -71,7 +71,7 @@ skinparam componentStyle rectangle
 5. 盘点参考端：
    - `examples/dev-support/devices/python-playback-glass/`
    - `examples/dev-support/devices/browser-glass/`
-   - `examples/for-blind-app/devices/native-ios-phone/`
+   - `examples/device_demo/ios/`
    - `examples/for-blind-app/devices/native-esp32-glass/`
 6. 输出协议差异清单，标记必须统一的字段。
 
@@ -114,7 +114,7 @@ agent-server/realtime_agent/spec/
 protocol/data/fixtures/
   devices/
     browser-glass.json
-    ios-phone.json
+    ios-device-demo.json
     esp32-glass.json
   events/
     register-requested.json
@@ -319,9 +319,9 @@ devices/swift/
 ### 8.3 迁移对象
 
 ```text
-examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEvent.swift
-examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/StreamChunkCodec.swift
-examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift
+examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift
+devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentEvent.swift
+devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentStreamChunk.swift
 ```
 
 ### 8.4 测试

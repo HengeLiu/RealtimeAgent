@@ -115,7 +115,7 @@ final class DeviceDemoRuntime: ObservableObject {
             clientType: "ios-device-demo",
             audioInput: .enabled(),
             camera: .enabled(
-                modes: ["single", "continuous"],
+                modes: ["single"],
                 format: "jpeg",
                 frequencyHz: 1,
                 sampleCount: 1,

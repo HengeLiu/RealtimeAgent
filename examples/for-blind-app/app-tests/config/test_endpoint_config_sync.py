@@ -25,7 +25,7 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
     """测试目标：验证 config sync 能生成多端参考配置。
 
     测试方法：执行 `realtime-agent.config.sync`，指定统一 server_url、user_id 和静态 token。
-    预期结果：server、glass playback、python phone mock、browser-glass、iOS、ESP32-S3
+    预期结果：server、glass playback、python phone mock、browser-glass、iOS SDK Demo、ESP32-S3
     配置全部生成，且共享同一组 server_url、user_id 和鉴权 token。
     """
 
@@ -55,7 +55,7 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
 
     report = json.loads((output_dir / "sync-result.json").read_text(encoding="utf-8"))
     assert report["ok"] is True
-    expected_keys = {"server", "phone_mock", "glass_playback", "web_glass", "ios_phone", "esp32_s3"}
+    expected_keys = {"server", "phone_mock", "glass_playback", "web_glass", "ios_device_demo", "esp32_s3"}
     assert expected_keys.issubset(report["files"])
     for path in report["files"].values():
         assert Path(path).exists()
@@ -63,7 +63,7 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
     phone = yaml.safe_load(Path(report["files"]["phone_mock"]).read_text(encoding="utf-8"))
     glass = yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8"))
     web = yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8"))
-    ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_device_demo"]).read_text(encoding="utf-8"))
     esp32 = Path(report["files"]["esp32_s3"]).read_text(encoding="utf-8")
 
     for config in (phone, glass, web, ios):
@@ -73,6 +73,7 @@ def test_endpoint_config_sync_generates_all_reference_endpoint_configs(tmp_path:
         assert config["auth"]["token"] == "token-sync"
     assert ios["audio_input"]["enabled"] is True
     assert ios["camera"]["enabled"] is True
+    assert ios["camera"]["modes"] == ["single"]
     assert ios["speaker"]["enabled"] is True
     assert "supports" not in ios
     assert "REALTIME_AGENT_SERVER_URL=http://10.0.0.2:8765" in esp32
@@ -114,7 +115,7 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     phone = yaml.safe_load(Path(report["files"]["phone_mock"]).read_text(encoding="utf-8"))
     glass = yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8"))
     web = yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8"))
-    ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_device_demo"]).read_text(encoding="utf-8"))
     esp32 = Esp32S3EndpointConfig.from_env_file(report["files"]["esp32_s3"])
 
     configs = [phone, glass, web, ios, {"user_id": esp32.user_id, "device_id": esp32.device_id}]
@@ -123,9 +124,10 @@ def test_endpoint_config_sync_uses_distinct_device_ids_under_same_user(tmp_path:
     assert "phone.task.find_object_phone_task" not in phone.get("properties", {})
     assert _support_types(phone) >= {"sensor.rgb", "actuator.vibrator"}
     assert esp32.device_id == "dev-esp32-s3-001"
-    assert "phone.task.find_object_phone_task" not in ios.get("properties", {})
+    assert ios["device_id"] == "dev-device-demo-ios-001"
     assert ios["audio_input"]["enabled"] is True
     assert ios["camera"]["enabled"] is True
+    assert ios["camera"]["modes"] == ["single"]
     assert ios["speaker"]["enabled"] is True
     assert "supports" not in ios
     assert "routes" not in ios
@@ -135,7 +137,7 @@ def test_endpoint_config_sync_can_emit_signed_token_hint_for_ios(tmp_path: Path)
     """测试目标：验证 signed_token 模式下 iOS 配置不会静默退回 disabled。
 
     测试方法：执行 config sync 并显式指定 `--auth-mode signed_token`，不提供实际 token。
-    预期结果：生成的 iOS 配置保留 signed_token 模式，并写入开发者生成 token 的提示。
+    预期结果：生成的 iOS SDK Demo 配置保留 signed_token 模式，并写入开发者生成 token 的提示。
     """
 
     output_dir = tmp_path / "generated"
@@ -147,7 +149,7 @@ def test_endpoint_config_sync_can_emit_signed_token_hint_for_ios(tmp_path: Path)
         check=True,
     )
     report = json.loads((output_dir / "sync-result.json").read_text(encoding="utf-8"))
-    ios = json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_device_demo"]).read_text(encoding="utf-8"))
 
     assert ios["auth"]["mode"] == "signed_token"
     assert "generate signed_token" in ios["auth"]["hint"]

@@ -11,7 +11,7 @@ AUDIO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> None:
-    """测试目标：验证 config.sync 同步 server、playback、phone、web、iOS、ESP32 六类配置。
+    """测试目标：验证 config.sync 同步 server、playback、phone、web、iOS SDK Demo、ESP32 六类配置。
 
     测试方法：指定统一 server_url、user_id 和静态 token 后执行同步命令。
     预期结果：server YAML 的 public_url/auth 与所有端侧配置一致，端侧 device_id 不冲突。
@@ -41,12 +41,11 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
 
     report = json.loads((output_dir / "sync-result.json").read_text(encoding="utf-8"))
     server = yaml.safe_load(Path(report["files"]["server"]).read_text(encoding="utf-8"))
-    endpoint_configs = [
-        yaml.safe_load(Path(report["files"]["phone_mock"]).read_text(encoding="utf-8")),
-        yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8")),
-        yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8")),
-        json.loads(Path(report["files"]["ios_phone"]).read_text(encoding="utf-8")),
-    ]
+    phone = yaml.safe_load(Path(report["files"]["phone_mock"]).read_text(encoding="utf-8"))
+    glass = yaml.safe_load(Path(report["files"]["glass_playback"]).read_text(encoding="utf-8"))
+    web = yaml.safe_load(Path(report["files"]["web_glass"]).read_text(encoding="utf-8"))
+    ios = json.loads(Path(report["files"]["ios_device_demo"]).read_text(encoding="utf-8"))
+    endpoint_configs = [phone, glass, web, ios]
     esp32_env = Path(report["files"]["esp32_s3"]).read_text(encoding="utf-8")
 
     assert server["server"]["public_url"] == "http://10.1.2.3:8765"
@@ -55,7 +54,7 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
         "dev-python-playback-001",
         "dev-python-phone-001",
         "dev-browser-glass-001",
-        "dev-ios-phone-001",
+        "dev-device-demo-ios-001",
         "dev-esp32-s3-001",
     }
     assert {config["user_id"] for config in endpoint_configs} == {"user-device-api-upgrade"}
@@ -63,7 +62,13 @@ def test_config_sync_updates_server_and_all_endpoint_configs(tmp_path: Path) -> 
     for config in endpoint_configs:
         assert config["server_url"] == "http://10.1.2.3:8765"
         assert config["auth"] == {"mode": "static_token", "token": "token-device-api-upgrade"}
+    for config in (phone, glass, web):
         assert config["supports"]
+    assert ios["audio_input"]["enabled"] is True
+    assert ios["camera"]["enabled"] is True
+    assert ios["camera"]["modes"] == ["single"]
+    assert ios["speaker"]["enabled"] is True
+    assert "supports" not in ios
     assert "REALTIME_AGENT_SERVER_URL=http://10.1.2.3:8765" in esp32_env
     assert "REALTIME_AGENT_AUTH_MODE=static_token" in esp32_env
     assert "REALTIME_AGENT_AUTH_TOKEN=token-device-api-upgrade" in esp32_env

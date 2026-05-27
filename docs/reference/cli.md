@@ -87,15 +87,15 @@ Python playback glass 系统回放端：
 uv run realtime-agent.playback-glass.run --help
 ```
 
-## iOS 参考端
+## iOS SDK Demo
 
-打开 iOS 参考端：
+打开 Swift Device SDK Demo：
 
 ```bash
 uv run realtime-agent.ios.open
 ```
 
-构建 iOS simulator：
+构建 Swift Device SDK Demo：
 
 ```bash
 uv run realtime-agent.ios.build-sim

@@ -1071,7 +1071,7 @@ UserDeviceContext --> DeviceSnapshot
 | `producer_id`           | 事件生产者，必须等于 `payload.device_id`。                                                                               |
 | `payload.device_id`     | 设备稳定标识。由开发者或端侧生成，不能作为事件接收方字段使用。                                                             |
 | `payload.device_name`   | 人可读名称，只用于调试和设备列表。                                                                                         |
-| `payload.client_type`   | 端侧实现标识，例如 `esp32-glass`、`ios-phone`、`python-playback`；只用于调试、兼容和默认配置，不作为强设备类型路由。 |
+| `payload.client_type`   | 端侧实现标识，例如 `esp32-glass`、`ios-device-demo`、`python-playback`；只用于调试、兼容和默认配置，不作为强设备类型路由。 |
 | `payload.sdk_version`   | 端侧协议版本，用于兼容检查。                                                                                               |
 | `payload.auth`          | 注册鉴权信息。不同鉴权模式字段不同。                                                                                       |
 | `payload.properties`    | 可选调试属性和硬件参数说明，不参与路由。                                                                                   |
@@ -3146,7 +3146,7 @@ await context.devices.submit_text(
 ```text
 examples/for-blind-app/devices/
   native-esp32-glass/
-  native-ios-phone/
+examples/device_demo/ios/
 examples/dev-support/devices/
   browser-glass/
   python-glass/
@@ -3632,7 +3632,7 @@ auth:
   # 不要提交真实 token；正式项目应通过本地私有配置或环境变量覆盖。
   device_tokens:
     dev-esp32-glass-001: "pair-demo-token"
-    dev-ios-phone-001: "pair-phone-token"
+    dev-device-demo-ios-001: "pair-phone-token"
   # signed_token 模式下的签名密钥环境变量名。
   signed_token_secret_env: "REALTIME_AGENT_DEVICE_TOKEN_SECRET"
   # 注册 token 允许的最大时钟偏差秒数。只影响 signed_token。

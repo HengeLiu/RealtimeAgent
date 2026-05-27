@@ -373,7 +373,7 @@ uv run python -m pytest examples/for-blind-app/app-tests -q
   - `compile_system_routes_from_properties()` 支持从端侧 SDK 注册 properties 编译 `custom.command.requested` 和具体 `custom.<domain>.*` 路由。
   - Swift Device SDK 在 App 调用 `onCustomCommand(...)` / `onEvent(...)` 后，会自动在注册 payload properties 中声明 custom 消费能力，App 不需要手写 routes。
 - 验证：
-  - `uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py protocol/protocol-tests/test_device_capabilities_semantics.py agent-server/protocol-tests/sdk/runtime/test_control_service.py examples/for-blind-app/app-tests/endpoints/test_ios_phone_contract.py examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py -q`
+  - `uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py protocol/protocol-tests/test_device_capabilities_semantics.py agent-server/protocol-tests/sdk/runtime/test_control_service.py examples/device_demo/app-tests -q`
   - `swift test --package-path devices/swift`
 
 ### 本次完整回归

@@ -140,14 +140,15 @@ def test_python_phone_mock_uploads_rgb_and_consumes_haptic_stream(tmp_path: Path
 def test_endpoint_reference_directories_exist() -> None:
     """测试目标：验证第 13 节要求的参考端侧目录已经建立。
 
-    测试方法：检查 browser-glass、python-phone、iOS 和 ESP32-S3 目录中的最小配置。
+    测试方法：检查 browser-glass、python-phone、iOS SDK Demo 和 ESP32-S3 目录中的最小配置。
     预期结果：每个端侧都有 README 或示例配置，便于后续并行小组继续实现。
     """
 
     root = Path(__file__).resolve().parents[4]
     assert (root / "examples/dev-support/devices/browser-glass/README.md").exists()
     assert (root / "examples/dev-support/devices/python-phone/phone.mock.yaml").exists()
-    assert (root / "examples/for-blind-app/devices/native-ios-phone/AppConfig.example.json").exists()
+    assert (root / "examples/device_demo/ios/DeviceDemo.xcodeproj/project.pbxproj").exists()
+    assert (root / "examples/device_demo/agent-server/server.yaml").exists()
     assert (root / "examples/for-blind-app/devices/native-esp32-glass/local.env.example").exists()
 
 

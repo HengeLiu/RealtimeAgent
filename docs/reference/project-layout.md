@@ -64,8 +64,14 @@ examples/for-blind-app/
       tools.py
       tasks.py
   devices/
-    native-ios-phone/
     native-esp32-glass/
+
+examples/device_demo/
+  agent-server/
+    server.yaml
+  ios/
+    DeviceDemo.xcodeproj/
+    DeviceDemo/
 ```
 
 业务能力应该放在应用目录下，而不是写进 SDK 核心包。
@@ -88,8 +94,13 @@ examples/dev-support/devices/python-phone/
 应用目录下的真实端侧参考工程：
 
 ```text
-examples/for-blind-app/devices/native-ios-phone/
 examples/for-blind-app/devices/native-esp32-glass/
+```
+
+Swift Device SDK 的最小真机验证 App 独立放在：
+
+```text
+examples/device_demo/ios/
 ```
 
 正式设备可以在独立仓库或自己的工程里实现，只要遵守设备注册、事件和 stream 协议。

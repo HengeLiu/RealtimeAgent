@@ -1,6 +1,6 @@
 mode: in_process
 runs_root: examples/for-blind-app/agent-server/runs
-server_url: http://192.168.10.3:8765
+server_url: http://127.0.0.1:8765
 user_id: user-playback-001
 device_id: dev-python-playback-001
 auth:

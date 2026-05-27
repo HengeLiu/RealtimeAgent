@@ -1,7 +1,7 @@
 {
   "ok": true,
   "app_root": "examples/for-blind-app/agent-server",
-  "server_url": "http://192.168.10.3:8765",
+  "server_url": "http://127.0.0.1:8765",
   "user_id": "user-playback-001",
   "output_dir": "examples/for-blind-app/agent-server/config/generated",
   "files": {
@@ -9,7 +9,7 @@
     "phone_mock": "examples/for-blind-app/agent-server/config/generated/phone.mock.yaml",
     "glass_playback": "examples/for-blind-app/agent-server/config/generated/glass.playback.yaml",
     "web_glass": "examples/for-blind-app/agent-server/config/generated/browser-glass.yaml",
-    "ios_phone": "examples/for-blind-app/agent-server/config/generated/ios-phone.local.json",
+    "ios_device_demo": "examples/for-blind-app/agent-server/config/generated/ios-device-demo.local.json",
     "esp32_s3": "examples/for-blind-app/agent-server/config/generated/esp32-s3.local.env"
   }
 }

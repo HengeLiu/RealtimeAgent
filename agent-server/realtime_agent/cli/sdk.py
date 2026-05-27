@@ -240,7 +240,6 @@ def _wheel_contents_check(wheel_path: Path) -> dict:
         ".pyc",
         "runs/",
         "examples/",
-        "examples/for-blind-app/devices/native-ios-phone/",
         "examples/for-blind-app/devices/native-esp32-glass/",
         "examples/dev-support/devices/browser-glass/",
         "local.env",
@@ -336,11 +335,12 @@ def _endpoint_source_check(audio_root: Path) -> dict:
     """
 
     required_files = {
-        "ios_phone": [
-            "examples/for-blind-app/devices/native-ios-phone/README.md",
-            "examples/for-blind-app/devices/native-ios-phone/AppConfig.example.json",
-            "examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone.xcodeproj/project.pbxproj",
-            "examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift",
+        "ios_device_demo": [
+            "examples/device_demo/README.md",
+            "examples/device_demo/agent-server/server.yaml",
+            "examples/device_demo/ios/DeviceDemo.xcodeproj/project.pbxproj",
+            "examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift",
+            "examples/device_demo/ios/DeviceDemo/Info.plist",
         ],
         "esp32_s3": [
             "examples/for-blind-app/devices/native-esp32-glass/README.md",
@@ -394,7 +394,7 @@ def _source_boundary_check(audio_root: Path) -> dict:
         if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):
             continue
         text = path.read_text(encoding="utf-8")
-        for needle in ("realtime_agent.endpoints", "examples.", "examples/for-blind-app/devices/native-ios-phone", "examples/for-blind-app/devices/native-esp32-glass"):
+        for needle in ("realtime_agent.endpoints", "examples.", "examples/for-blind-app/devices/native-esp32-glass"):
             if needle in text:
                 offenders.append(f"{path.relative_to(audio_root)}:{needle}")
     errors = [f"server SDK core imports endpoint/example boundary: {item}" for item in offenders]

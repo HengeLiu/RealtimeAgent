@@ -1,12 +1,20 @@
 {
   "server_url": "http://127.0.0.1:8765",
-  "user_id": "user-for-blind-app",
-  "device_id": "dev-ios-phone-001",
-  "auth": {"mode": "disabled"},
+  "user_id": "user-playback-001",
+  "device_id": "dev-device-demo-ios-001",
+  "auth": {
+    "mode": "disabled"
+  },
   "protocol_version": "realtime-agent.v1",
-  "direct_camera_sink_port": 9001,
-  "audio_input": {"enabled": true},
-  "camera": {"enabled": true},
+  "audio_input": {
+    "enabled": true
+  },
+  "camera": {
+    "enabled": true,
+    "modes": [
+      "single"
+    ]
+  },
   "speaker": {
     "enabled": true,
     "buffer": {

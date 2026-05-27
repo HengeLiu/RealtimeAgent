@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[3]
+DEMO_ROOT = ROOT / "examples" / "device_demo"
+IOS_ROOT = DEMO_ROOT / "ios"
+
+
+def _read(relative: str) -> str:
+    return (DEMO_ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_device_demo_ios_project_uses_local_swift_device_sdk() -> None:
+    """测试目标：确认 Swift Device SDK 验证入口只依赖本仓库 SDK。
+
+    测试方法：读取 DeviceDemo Xcode 工程，检查本地 Swift Package 引用和 target。
+    预期结果：工程引用 `../../../devices/swift`，不引用 for-blind-app 或其他工作区。
+    """
+
+    project = _read("ios/DeviceDemo.xcodeproj/project.pbxproj")
+
+    assert "DeviceDemo" in project
+    assert "RealtimeAgentDeviceKit" in project
+    assert "XCLocalSwiftPackageReference \"../../../devices/swift\"" in project
+    assert "relativePath = ../../../devices/swift;" in project
+    assert "for-blind-app" not in project
+    assert "AIGlassForBlind" not in project
+    assert "OpenAIglassesDemo/devices/swift" not in project
+
+
+def test_device_demo_runtime_enables_sdk_hardware_without_business_app_code() -> None:
+    """测试目标：确认 DeviceDemo 是 SDK 验证 App，不承载 for-blind 业务逻辑。
+
+    测试方法：静态检查 Swift 运行时、调试日志和硬件 enable 配置。
+    预期结果：App 只通过 `DeviceClient` 启用麦克风、单帧相机和 speaker。
+    """
+
+    runtime = _read("ios/DeviceDemo/DeviceDemoRuntime.swift")
+    content = _read("ios/DeviceDemo/ContentView.swift")
+    source = runtime + content
+
+    for token in [
+        "import RealtimeAgentDeviceKit",
+        "DeviceClient(",
+        "audioInput: .enabled()",
+        "camera: .enabled(",
+        "modes: [\"single\"]",
+        "speaker: .enabled(",
+        "onDebugLog",
+        "DeviceDemo.log",
+        "control.user.wake.detected",
+    ]:
+        assert token in source
+
+    for forbidden in [
+        "for-blind-app",
+        "RealtimeAgentPhone",
+        "DirectCameraSinkServer",
+        "phone.task.",
+        "target_device",
+        "target_device_id",
+        "modes: [\"single\", \"continuous\"]",
+    ]:
+        assert forbidden not in source
+
+
+def test_device_demo_server_config_is_independent_from_for_blind_app() -> None:
+    """测试目标：确认真机 SDK 验证使用独立 server 配置。
+
+    测试方法：读取 `examples/device_demo/agent-server/server.yaml`。
+    预期结果：配置名为 `device_demo`，使用 mock provider，不加载 for-blind 业务能力。
+    """
+
+    config = yaml.safe_load(_read("agent-server/server.yaml"))
+
+    assert config["app-name"] == "device_demo"
+    assert config["agent"]["vision"]["provider"] == "mock"
+    assert config["agent"]["vision"]["asr_provider"] == "mock"
+    assert config["agent"]["vision"]["tts_provider"] == "mock"
+    assert config["tools"]["discover"]["packages"] == []
+    assert config["tasks"]["enabled"] is False
+
+
+def test_device_demo_declares_required_ios_permissions() -> None:
+    """测试目标：确认真机运行需要的 iOS 权限声明仍然存在。
+
+    测试方法：读取 DeviceDemo 的 Info.plist。
+    预期结果：相机、麦克风和局域网权限文案齐全。
+    """
+
+    plist = _read("ios/DeviceDemo/Info.plist")
+
+    assert "NSCameraUsageDescription" in plist
+    assert "NSMicrophoneUsageDescription" in plist
+    assert "NSLocalNetworkUsageDescription" in plist

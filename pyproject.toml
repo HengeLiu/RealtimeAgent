@@ -91,6 +91,7 @@ testpaths = [
     "examples/for-blind-app/app-tests",
     "examples/for-blind-app/replay-tests",
     "examples/for-blind-app/hardware-tests",
+    "examples/device_demo/app-tests",
     "examples/dev-support/unit-tests",
     "examples/dev-support/app-tests",
     "examples/dev-support/replay-tests",

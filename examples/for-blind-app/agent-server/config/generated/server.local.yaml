@@ -3,7 +3,7 @@ paths: {}
 server:
   host: 0.0.0.0
   port: 8765
-  public_url: http://192.168.10.3:8765
+  public_url: http://127.0.0.1:8765
   log_level: DEBUG
   debug_api_enabled: true
   shutdown_grace_seconds: 10
@@ -15,6 +15,8 @@ auth:
 user:
   active_device_set_policy: single
   recent_message_limit: 200
+  message_compact_threshold: 10
+  message_compact_keep_latest: 4
 control:
   transport: websocket
   heartbeat_timeout_seconds: 30
@@ -69,6 +71,7 @@ agent:
     prompt: 你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。每个用户语音输入期间，系统可能会持续附带当前视野图片。如果用户的问题明确涉及图片、眼前、前面、看到的画面、这是什么、周围有什么等视觉内容，请直接基于这些图片简短回答。如果用户要求寻找某个物体、持续观察某个目标、帮他留意某个东西在哪里，必须直接调用找物任务工具启动后台任务；工具和任务没有返回结果前，不要先播报“我要调用工具”“正在调用工具”“请稍等”，不要朗读工具名称、函数名、参数、JSON
       或调用过程，也不能自行判断已经找到、编造目标位置、距离或方向。如果用户的问题不涉及视觉内容，例如看天气、看路线、看资料、看状态、计时器、提醒、闲聊，请直接回答用户问题，不要描述图片，也不要提到你收到了图片。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的非视觉工具。不要输出代码块。
     session_idle_timeout_seconds: 60
+    max_concurrent_sessions: 10
     custom_adapter: ''
   visual:
     realtime_video:
@@ -80,11 +83,30 @@ agent:
       direction: front
   vision:
     provider: dashscope-compatible
-    model: qwen-plus
-    prompt: 你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。用户要求寻找某个物体、持续观察某个目标、帮他留意某个东西在哪里时，必须调用找物任务工具启动后台任务；在工具和任务没有返回明确结果前，只能说明已开始寻找或正在识别，不能自行判断已经找到，也不能编造目标位置、距离或方向。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。
+    model: qwen3.6-flash
+    prompt: 你的名字是'乐鑫'。你是盲人眼镜上的中文语音助手，能帮助盲人用户识别图片、障碍物、引导过马路等。Text链路不会自动附带当前图片；只有你调用
+      capture_photo 后，系统才会在下一轮模型请求里附带本次新获取的图片。凡是用户本轮明确要求看当前图片、当前画面、眼前/前面有什么、读图、朗读图片中文字、识别包装/标签/屏幕/照片内容，或者说“再看一眼、重新看、再试一下、直接看一眼、获取一张新的照片”等要求刷新当前视觉信息时，你必须先调用
+      capture_photo 获取当前照片，不能直接用历史图片或上一轮描述回答，也不能因为历史消息里有图片就跳过本轮抓拍。capture_photo 只负责获取图片，不负责理解图片。工具返回后，系统会在下一次消息中附带刚获取的图片。图片附带后，你必须只基于本轮附带的视觉输入回答，不要引用历史图片替代当前画面。只有用户明确追问“刚才那张图/上一张图/继续解释刚才图片”时，才可以基于历史图片相关回答；如果用户说“这张图、图片中、帮我朗读图片内容”但没有明确指代历史图，应视为当前新图请求并调用
+      capture_photo。看不清、缺少关键帧或无法判断距离时，直接说明不确定，不要编造。用户要求寻找某个物体、持续观察某个目标、帮他留意某个东西在哪里时，必须调用找物任务工具启动后台任务；在工具和任务没有返回明确结果前，只能说明已开始寻找或正在识别，不能自行判断已经找到，也不能编造目标位置、距离或方向。请使用简短、口语化、直接的中文回答。必要时可以调用已提供的工具。不要输出代码块。
+    multimodal:
+      enabled: true
+      attach_visual_assets: true
+      max_images_per_turn: 4
+      image_freshness_seconds: 2
+      max_image_base64_bytes: 7500000
+      max_capture_photo_calls_per_turn: 1
+      video:
+        enabled: true
+        prefer_native_video: true
+        max_inline_bytes: 50000000
+        max_duration_seconds: 120
+        sample_fps: 1.0
+        max_frames: 16
+        frame_jpeg_quality: 85
     asr_provider: dashscope
     asr_model: paraformer-realtime-v2
     asr_max_sentence_silence_ms: 800
+    asr_disfluency_removal_enabled: true
     tts_provider: dashscope
     tts_model: cosyvoice-v3-flash
     tts_voice: longanhuan
@@ -100,6 +122,8 @@ output:
   default_on_interrupted: drop
   default_on_blocked: queue
   max_queue_size: 32
+  tool_progress_audio_mode: disabled
+  endpoint_ack_timeout_seconds: 5.0
 tools:
   enabled: true
   builtin_enabled: true
@@ -110,13 +134,14 @@ tools:
     fail_fast: true
   allowlist: []
   denylist:
-  - capture_photo
   - interpret_image
   - interpret_current_view
   default_timeout_seconds: 30
   allow_parallel_calls: true
 tasks:
   enabled: true
+  store:
+    type: jsonl
   discover:
     enabled: true
     packages: []
@@ -137,8 +162,8 @@ skill:
   roots: []
   allow_tool_policy: true
 mcp:
-  enabled: false
-  config_path: ''
+  enabled: true
+  config_path: examples/for-blind-app/agent-server/mcp.yaml
   default_timeout_seconds: 30
 endpoint_defaults:
   wake_word: browser

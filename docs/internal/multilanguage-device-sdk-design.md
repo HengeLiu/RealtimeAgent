@@ -291,7 +291,7 @@ await client.register();
 ### 6.2 Swift 示例
 
 ```swift
-let device = RealtimeAgentDevice(id: "dev-ios-phone-001")
+let device = RealtimeAgentDevice(id: "dev-device-demo-ios-001")
     .user("user-001")
     .name("iPhone")
     .role("phone")
@@ -480,7 +480,7 @@ SDK 应内置状态机，避免端侧应用重复处理：
 ```text
 protocol/data/fixtures/
   device.browser-glass.json
-  device.ios-phone.json
+  device.ios-device-demo.json
   event.register.requested.json
   event.command.requested.json
   event.command.completed.json

@@ -619,7 +619,7 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Re
         "phone_mock": generated_dir / "phone.mock.yaml",
         "glass_playback": generated_dir / "glass.playback.yaml",
         "web_glass": generated_dir / "browser-glass.yaml",
-        "ios_phone": generated_dir / "ios-phone.local.json",
+        "ios_device_demo": generated_dir / "ios-device-demo.local.json",
         "esp32_s3": generated_dir / "esp32-s3.local.env",
     }
     missing = [name for name, path in files.items() if not path.exists()]
@@ -645,9 +645,9 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Re
                 errors.append(f"{name} server_url differs from live-check config")
             user_ids.add(str(data.get("user_id", "")))
             device_ids.add(str(data.get("device_id", "")))
-        ios = json.loads(files["ios_phone"].read_text(encoding="utf-8"))
+        ios = json.loads(files["ios_device_demo"].read_text(encoding="utf-8"))
         if ios.get("server_url") != expected_server_url:
-            errors.append("ios_phone server_url differs from live-check config")
+            errors.append("ios_device_demo server_url differs from live-check config")
         user_ids.add(str(ios.get("user_id", "")))
         device_ids.add(str(ios.get("device_id", "")))
         esp32_values = _read_env_values(files["esp32_s3"])

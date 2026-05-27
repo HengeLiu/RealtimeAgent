@@ -4,6 +4,8 @@
 
 本文档记录近期为了修复 iOS 真机听不到声音、播放不稳定、回声触发打断等问题而做过的关键变更，以及这些变更中已经暴露为错误方向或高度可疑的点。本文档的目的不是证明这些方案可用，而是为后续回退和重写保留事实边界。
 
+2026-05-27 收敛说明：`for-blind-app` 下的旧 iOS App 工程已经从当前可运行入口中移除。Swift Device SDK 的真机验证入口迁移到 `examples/device_demo/ios/`，后续不要再以 `for-blind-app` 的旧 iOS App 作为 SDK 验证对象。
+
 ## 当前现象
 
 近期多次真机联调表现不一致：
@@ -40,9 +42,9 @@ devices/swift/Sources/RealtimeAgentDeviceKit/Media/SpeakerPlaybackBuffer.swift
 devices/swift/Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceClient.swift
 devices/swift/Tests/RealtimeAgentDeviceKitTests/RealtimeAgentDeviceKitTests.swift
 examples/for-blind-app/agent-server/server.yaml
-examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/ContentView.swift
-examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift
-examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Resources/AppConfig.json
+examples/device_demo/ios/DeviceDemo/ContentView.swift
+examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift
+examples/device_demo/agent-server/server.yaml
 ```
 
 ## 已明确错误或高度可疑的变更点
@@ -220,9 +222,9 @@ examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Resources/App
 
 涉及文件：
 
-- `examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/ContentView.swift`
-- `examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift`
-- `examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Resources/AppConfig.json`
+- `examples/device_demo/ios/DeviceDemo/ContentView.swift`
+- `examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift`
+- `examples/device_demo/agent-server/server.yaml`
 
 近期改动：
 

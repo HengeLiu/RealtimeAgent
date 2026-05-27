@@ -25,6 +25,10 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>NSCameraUsageDescription</key>
 	<string>Device Demo 需要使用摄像头作为实时对话的视频输入。</string>
 	<key>NSMicrophoneUsageDescription</key>

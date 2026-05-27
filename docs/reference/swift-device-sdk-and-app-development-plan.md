@@ -7,7 +7,7 @@
 本期开发分成两大部分：
 
 1. **Swift Device SDK 开发**：在 `devices/swift/` 中实现端侧标准 SDK，封装注册、心跳、control/stream WebSocket、标准事件状态机、默认硬件 adapter、speaker 播放 buffer、水位线流控和 `custom.*` 语法糖。
-2. **Swift Device App 开发**：在 `examples/for-blind-app/devices/native-ios-phone/` 中把参考 App 改造成 SDK 使用示例，App 只通过标准接入代码启用硬件、注册业务回调和启动 SDK。
+2. **Swift Device App 开发**：在 `examples/device_demo/ios/` 中维护最小 SDK Demo App，App 只通过标准接入代码启用硬件、注册业务回调和启动 SDK，不依赖任何具体业务应用。
 
 最终 Swift App 的主代码应接近：
 
@@ -298,7 +298,7 @@ App 开发者不应该直接处理标准协议事件。
 | Swift 单元测试 | event、chunk、profile、buffer、callback registry | `devices/swift/Tests/` |
 | Swift loopback 测试 | control/stream 双通道、注册、心跳、custom 事件 | `devices/swift/Tests/` |
 | 协议契约测试 | 确认 Swift SDK 行为符合标准协议 | `devices/swift/Tests/` 或 `agent-server/protocol-tests/` |
-| iOS 构建测试 | 确认参考 App 能构建 | `examples/for-blind-app/devices/native-ios-phone/` |
+| iOS 构建测试 | 确认 SDK Demo App 能构建 | `examples/device_demo/ios/` |
 | 真机联调 | 确认真实麦克风、相机、喇叭 | 手工流程记录到 App README |
 
 ## 7. 交付顺序
@@ -353,7 +353,7 @@ Swift 端稳定后，再按同一契约扩展其他语言：
 
 - 状态：已完成到可真机验证。
 - 实现：启用 camera 后 SDK 注册 `sensor.rgb` 能力；`Camera.enabled()` 默认使用 AVFoundation 相机 adapter；App 仍可覆盖 `RealtimeAgentCameraFrameSource`。SDK 消费 `stream.control.open.requested(sensor.rgb)`，支持单帧和按 `sample_count/frequency_hz` 连续上传 JPEG chunk。
-- 文件：`RealtimeAgentDeviceOptions.swift`、`Media/CameraFrameSource.swift`、`Media/AVFoundationAdapters.swift`、`examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/RealtimeAgentEndpointRuntime.swift`。
+- 文件：`RealtimeAgentDeviceOptions.swift`、`Media/CameraFrameSource.swift`、`Media/AVFoundationAdapters.swift`、`examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift`。
 - 验证：`cameraUploaderRespondsToRgbRequest`、`cameraUploaderRespondsToContinuousRgbRequest` 通过；iOS App 构建通过。
 - 风险：AVFoundation 默认相机 adapter 已编译通过；真实相机权限、前后摄像头选择和设备可用性需要真机验证。
 
@@ -375,9 +375,9 @@ Swift 端稳定后，再按同一契约扩展其他语言：
 ### Swift Device App 阶段
 
 - 状态：已完成 SDK 标准入口改造和构建验证。
-- 实现：参考 App 通过 `DeviceClient` 初始化，配置项新增 `audio_input.enabled`、`camera.enabled`、`speaker.enabled` 和 `speaker.buffer.*`；默认配置结构支持硬件缺省 disabled，资源样例显式 enabled。App 不再注册标准事件 handler，只注册 `onCustomCommand("haptic.vibrate")` 和 `onEvent("custom.navigation.route.updated")`。
-- 文件：`examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/AppConfig.swift`、`RealtimeAgentEndpointRuntime.swift`、`ContentView.swift`、`Resources/AppConfig*.json`、`README.md`。
-- 验证：`build_sim` 使用 `RealtimeAgentPhone` scheme、`iPhone 17` simulator 编译通过，无 warning。
+- 实现：SDK Demo App 通过 `DeviceClient` 初始化，代码式启用 `audioInput`、单帧 `camera` 和 `speaker`；server 配置放在 `examples/device_demo/agent-server/server.yaml`，用于验证 SDK 链路，不加载 for-blind-app 业务能力。
+- 文件：`examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift`、`ContentView.swift`、`Info.plist`、`examples/device_demo/README.md`。
+- 验证：`xcodebuild` 使用 `DeviceDemo` scheme 构建通过，无 warning。
 - 待人工验收：启动 server 后运行 iOS App，观察 `/api/debug/devices`、runs 中 `events.jsonl` / `stream-events.jsonl`、speaker cancel 清空 buffer，以及真实麦克风 / speaker / 相机权限链路。
 
 ### 本次执行过的验证
@@ -389,15 +389,15 @@ swift test --package-path devices/swift
 结果：20 个 Swift 测试全部通过。
 
 ```bash
-uv run python -m pytest examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py -q
+uv run python -m pytest examples/device_demo/app-tests examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py -q
 ```
 
-结果：9 个参考 App 契约测试全部通过。
+结果：SDK Demo 契约测试和配置同步测试通过。
 
 ```text
 XcodeBuildMCP build_sim
-project: examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone.xcodeproj
-scheme: RealtimeAgentPhone
+project: examples/device_demo/ios/DeviceDemo.xcodeproj
+scheme: DeviceDemo
 destination: iPhone 17, iOS Simulator
 ```
 

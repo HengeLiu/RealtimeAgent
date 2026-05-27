@@ -50,7 +50,7 @@ def sync(argv: list[str] | None = None) -> None:
     glass_target = output_dir / "glass.playback.yaml"
     phone_target = output_dir / "phone.mock.yaml"
     web_target = output_dir / "browser-glass.yaml"
-    ios_target = output_dir / "ios-phone.local.json"
+    ios_target = output_dir / "ios-device-demo.local.json"
     esp32_target = output_dir / "esp32-s3.local.env"
     server_data = _read_yaml(server_config)
     runs_root = _runtime_root_from_server_config(server_config)
@@ -61,7 +61,7 @@ def sync(argv: list[str] | None = None) -> None:
             "dev-python-playback-001": args.auth_token,
             "dev-python-phone-001": args.auth_token,
             "dev-browser-glass-001": args.auth_token,
-            "dev-ios-phone-001": args.auth_token,
+            "dev-device-demo-ios-001": args.auth_token,
             "dev-esp32-s3-001": args.auth_token,
         }
     _write_yaml(server_target, server_data)
@@ -106,12 +106,11 @@ def sync(argv: list[str] | None = None) -> None:
             {
                 "server_url": args.server_url,
                 "user_id": args.user_id,
-                "device_id": "dev-ios-phone-001",
+                "device_id": "dev-device-demo-ios-001",
                 "auth": auth_config,
                 "protocol_version": "realtime-agent.v1",
-                "direct_camera_sink_port": 9001,
                 "audio_input": {"enabled": True},
-                "camera": {"enabled": True},
+                "camera": {"enabled": True, "modes": ["single"]},
                 "speaker": {
                     "enabled": True,
                     "buffer": {
@@ -168,7 +167,7 @@ def sync(argv: list[str] | None = None) -> None:
             "phone_mock": str(phone_target),
             "glass_playback": str(glass_target),
             "web_glass": str(web_target),
-            "ios_phone": str(ios_target),
+            "ios_device_demo": str(ios_target),
             "esp32_s3": str(esp32_target),
         },
     }
@@ -230,7 +229,7 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
 
 
 def _phone_supports() -> dict[str, Any]:
-    """生成 Python phone mock 和 iOS 参考端共用的设备语义能力。"""
+    """生成 Python phone mock 和 browser-glass 共用的设备语义能力。"""
 
     return {
         "sensors": [

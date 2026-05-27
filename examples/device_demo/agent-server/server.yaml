@@ -1,0 +1,51 @@
+app-name: "device_demo"
+
+paths: {}
+
+server:
+  host: "0.0.0.0"
+  port: 8765
+  public_url: "http://127.0.0.1:8765"
+  log_level: "DEBUG"
+  debug_api_enabled: true
+
+auth:
+  mode: "disabled"
+
+agent:
+  mode: "vision"
+  vision:
+    provider: "mock"
+    model: "mock-vision"
+    asr_provider: "mock"
+    tts_provider: "mock"
+    streaming_tts: true
+    allow_mock_fallback: true
+
+tools:
+  enabled: true
+  builtin_enabled: true
+  discover:
+    enabled: true
+    packages: []
+    recursive: true
+    fail_fast: true
+
+tasks:
+  enabled: false
+
+mcp:
+  enabled: false
+
+memory:
+  enabled: false
+
+observability:
+  record_input_streams: true
+  record_output_streams: true
+  record_model_events: true
+  record_control_events: true
+  record_stream_events: true
+
+dev_checks:
+  require_recent_playback_ok: false

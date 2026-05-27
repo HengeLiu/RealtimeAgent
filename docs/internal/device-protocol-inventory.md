@@ -21,7 +21,7 @@
 | 能力声明校验 | `agent-server/realtime_agent/device_capabilities.py` |
 | Python 回放端 | `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py` |
 | 浏览器眼镜模拟组件 | `examples/dev-support/devices/browser-glass/index.html` |
-| iOS 参考端 | `examples/for-blind-app/devices/native-ios-phone/RealtimeAgentPhone/Core/` |
+| iOS SDK Demo | `examples/device_demo/ios/DeviceDemo/` |
 | ESP32-S3 参考端 | `examples/for-blind-app/devices/native-esp32-glass/firmware/main/realtime_agent_reference_main.c` |
 
 ## 2. 控制事件清单

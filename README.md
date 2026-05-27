@@ -268,10 +268,10 @@ uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass
 - `examples/dev-support/devices/python-glass`
 - `examples/dev-support/devices/python-playback-glass`
 - `examples/dev-support/devices/python-phone`
-- `examples/for-blind-app/devices/native-ios-phone`
+- `examples/device_demo/ios`
 - `examples/for-blind-app/devices/native-esp32-glass`
 
-iOS / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型或 ESP32 真机效果已经完成。
+iOS SDK Demo / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型或 ESP32 真机效果已经完成。
 
 ## 配置同步与检查
 

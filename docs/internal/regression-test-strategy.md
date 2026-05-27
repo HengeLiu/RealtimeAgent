@@ -1433,7 +1433,7 @@ uv run python -m pytest -m replay -q
   - `examples/for-blind-app/app-tests/config/test_app_name_launch.py`
   - `examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py`
   - `examples/for-blind-app/app-tests/endpoints/test_esp32_s3_endpoint_contract.py`
-  - `examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py`
+  - `examples/device_demo/app-tests/test_ios_device_demo_contract.py`
   - `examples/for-blind-app/devices/native-esp32-glass/realtime_agent_esp32_s3/esp32_aec.py`
   - `conftest.py`
 - 验证：
@@ -1442,7 +1442,7 @@ uv run python -m pytest -m replay -q
   - `uv run python -m pytest examples/dev-support/unit-tests/playback/test_python_playback.py examples/dev-support/app-tests/network/test_network_server_playback.py -q`，结果：`7 passed`。
   - `uv run python -m pytest examples/dev-support/unit-tests/browser/test_browser_device_example.py examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
   - `uv run python -m pytest examples/dev-support/tests -q`，结果：`62 passed`。
-  - `uv run python -m pytest examples/for-blind-app/app-tests/acceptance/test_phone_visual_task_playback.py examples/for-blind-app/app-tests/config/test_app_name_launch.py examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py examples/for-blind-app/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py -q`，结果：`23 passed`。
+  - `uv run python -m pytest examples/for-blind-app/app-tests/acceptance/test_phone_visual_task_playback.py examples/for-blind-app/app-tests/config/test_app_name_launch.py examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py examples/for-blind-app/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/device_demo/app-tests -q`，结果：`23 passed`。
   - `uv run python -m pytest examples/for-blind-app/tests -q`，结果：`61 passed`。
 - 运行证据：
   - `runs/regression-reports/latest/l3-app-report.json`

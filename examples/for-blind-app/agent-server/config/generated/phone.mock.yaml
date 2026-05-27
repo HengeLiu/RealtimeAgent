@@ -1,5 +1,5 @@
 mode: register_only
-server_url: http://192.168.10.3:8765
+server_url: http://127.0.0.1:8765
 user_id: user-playback-001
 device_id: dev-python-phone-001
 auth:
