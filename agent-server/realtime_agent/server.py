@@ -74,10 +74,10 @@ class NetworkDeviceConnection:
     device_id: str
     loop: asyncio.AbstractEventLoop
     event_queue: asyncio.Queue[Event] = field(default_factory=asyncio.Queue)
-    stream_queue: asyncio.Queue[QueuedStreamPayload] = field(default_factory=asyncio.Queue)
     connection_id: str | None = None
     _control_ws: web.WebSocketResponse | None = None
     _stream_websockets: dict[str, web.WebSocketResponse] = field(default_factory=dict)
+    _stream_queues: dict[str, asyncio.Queue[QueuedStreamPayload]] = field(default_factory=dict)
     _stream_send_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
     _stream_send_lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -108,6 +108,23 @@ class NetworkDeviceConnection:
                 old_ws.close(message=f"{channel}_replaced".encode("utf-8")),
             )
         self._stream_websockets[channel] = ws
+        self._stream_queues[channel] = asyncio.Queue()
+
+    def stream_queue_for(self, channel: str) -> asyncio.Queue[QueuedStreamPayload]:
+        """返回指定 stream WebSocket 绑定时创建的下行队列。
+
+        主要逻辑：每次同一 channel 重连都会换一条新队列，旧 sender 任务只能继续等待
+        旧队列，不能抢走新连接的 speaker 下行音频。
+        参数：`channel` 为 audio_output、audio_input、visual_input 或 legacy。
+        返回值：当前 channel 对应的异步队列。
+        异常情况：channel 尚未绑定时创建空队列，避免服务端在连接建立前抛错。
+        """
+
+        queue = self._stream_queues.get(channel)
+        if queue is None:
+            queue = asyncio.Queue()
+            self._stream_queues[channel] = queue
+        return queue
 
     def push_event(self, event: Event) -> None:
         """投递下行控制事件。
@@ -157,7 +174,9 @@ class NetworkDeviceConnection:
         }
         if stream_type == "actuator.speaker":
             self._record_stream_payload_enqueued(meta)
-        self.loop.call_soon_threadsafe(self.stream_queue.put_nowait, QueuedStreamPayload(raw=raw, meta=meta))
+        channel = self._stream_channel_for_type(stream_type)
+        queue = self.stream_queue_for(channel)
+        self.loop.call_soon_threadsafe(queue.put_nowait, QueuedStreamPayload(raw=raw, meta=meta))
 
     def mark_stream_payload_sent(self, meta: dict[str, Any], *, sent_at: float) -> None:
         """记录下行 stream chunk 已完成 WebSocket send。
@@ -215,6 +234,20 @@ class NetworkDeviceConnection:
         for ws in sockets:
             if ws is not None and not ws.closed:
                 self.loop.call_soon_threadsafe(asyncio.create_task, ws.close(message=reason.encode("utf-8")))
+        self._stream_queues.clear()
+
+    def _stream_channel_for_type(self, stream_type: str) -> str:
+        """把协议 stream_type 映射到物理 WebSocket channel。"""
+
+        if stream_type == "actuator.speaker":
+            audio_output = self._stream_websockets.get("audio_output")
+            if audio_output is not None and not audio_output.closed:
+                return "audio_output"
+            legacy = self._stream_websockets.get("legacy")
+            if legacy is not None and not legacy.closed:
+                return "legacy"
+            return "audio_output"
+        return "legacy"
 
     def _record_stream_payload_enqueued(self, meta: dict[str, Any]) -> None:
         """记录 speaker output chunk 入队。"""
@@ -641,8 +674,9 @@ class RealtimeAgentHttpServer:
         stop_dispatch_worker = object()
 
         async def sender() -> None:
+            stream_queue = connection.stream_queue_for(channel)
             while not ws.closed:
-                queued = await connection.stream_queue.get()
+                queued = await stream_queue.get()
                 await ws.send_bytes(queued.raw)
                 connection.mark_stream_payload_sent(queued.meta, sent_at=time.monotonic())
 

@@ -41,13 +41,13 @@ private final class RealtimeAgentMicrophoneCaptureSession: @unchecked Sendable {
 
     func start() throws {
         #if os(iOS) || os(tvOS) || os(visionOS)
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
-        try audioSession.setPreferredSampleRate(Double(configuration.sampleRate))
-        try audioSession.setActive(true)
+        try RealtimeAgentAudioSession.configureVoiceConversation(sampleRate: Double(configuration.sampleRate))
         #endif
 
         let input = engine.inputNode
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        try? input.setVoiceProcessingEnabled(true)
+        #endif
         let inputFormat = input.outputFormat(forBus: 0)
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -209,8 +209,10 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
     private var format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     private let playbackLock = NSLock()
     private var pendingPlaybackBuffers = 0
-    private var drainContinuations: [CheckedContinuation<Void, Never>] = []
+    private var pendingPlaybackMS = 0
     private var preparedSpeakerFormat: RealtimeAgentSpeakerFormat?
+    private static let drainPollNanoseconds: UInt64 = 20_000_000
+    private static let drainGraceNanoseconds: UInt64 = 3_000_000_000
 
     public init() {}
 
@@ -220,10 +222,7 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
         }
 
         #if os(iOS) || os(tvOS) || os(visionOS)
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
-        try audioSession.setPreferredSampleRate(Double(format.sampleRate))
-        try audioSession.setActive(true)
+        try RealtimeAgentAudioSession.configureVoiceConversation(sampleRate: Double(format.sampleRate))
         #endif
 
         guard format.codec == "pcm16le" else {
@@ -256,21 +255,21 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
         guard let buffer = pcmBuffer(from: chunk.payload, format: format) else {
             throw RealtimeAgentDeviceError.invalidStreamChunk("cannot create speaker pcm buffer")
         }
-        incrementPendingPlaybackBuffers()
+        incrementPendingPlaybackBuffers(durationMS: chunk.durationMS)
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            self?.markPlaybackBufferFinished()
+            self?.markPlaybackBufferFinished(durationMS: chunk.durationMS)
         }
     }
 
     public func drain() async throws {
-        await waitUntilPlaybackQueueEmpty()
+        try await waitUntilPlaybackQueueEmpty()
     }
 
     public func cancel() async {
         player.stop()
         engine.stop()
         setPreparedSpeakerFormat(nil)
-        resumeDrainContinuationsAfterCancel()
+        clearPendingPlaybackAfterCancel()
     }
 
     private func isPreparedForCurrentPlayback(_ format: RealtimeAgentSpeakerFormat) -> Bool {
@@ -295,50 +294,56 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
         playbackLock.unlock()
     }
 
-    private func incrementPendingPlaybackBuffers() {
+    private func incrementPendingPlaybackBuffers(durationMS: Int) {
         playbackLock.lock()
         pendingPlaybackBuffers += 1
+        pendingPlaybackMS += max(durationMS, 0)
         playbackLock.unlock()
     }
 
-    private func resumeDrainContinuationsAfterCancel() {
+    private func clearPendingPlaybackAfterCancel() {
         playbackLock.lock()
         pendingPlaybackBuffers = 0
-        let continuations = drainContinuations
-        drainContinuations.removeAll()
+        pendingPlaybackMS = 0
         playbackLock.unlock()
-        continuations.forEach { $0.resume() }
     }
 
-    private func markPlaybackBufferFinished() {
+    private func markPlaybackBufferFinished(durationMS: Int) {
         playbackLock.lock()
         pendingPlaybackBuffers = max(0, pendingPlaybackBuffers - 1)
-        guard pendingPlaybackBuffers == 0 else {
-            playbackLock.unlock()
-            return
-        }
-        let continuations = drainContinuations
-        drainContinuations.removeAll()
+        pendingPlaybackMS = max(0, pendingPlaybackMS - max(durationMS, 0))
         playbackLock.unlock()
-        continuations.forEach { $0.resume() }
     }
 
-    private func waitUntilPlaybackQueueEmpty() async {
-        await withCheckedContinuation { continuation in
-            if !appendDrainContinuationIfNeeded(continuation) {
-                continuation.resume()
+    private func waitUntilPlaybackQueueEmpty() async throws {
+        let timeoutNanoseconds = playbackDrainTimeoutNanoseconds()
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        while true {
+            let pending = pendingPlaybackSnapshot()
+            if pending.buffers == 0 {
+                return
             }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            if elapsed >= timeoutNanoseconds {
+                throw RealtimeAgentDeviceError.transportClosed(
+                    "speaker playback drain timeout: pending_buffers=\(pending.buffers) pending_ms=\(pending.ms)"
+                )
+            }
+            try await Task.sleep(nanoseconds: Self.drainPollNanoseconds)
         }
     }
 
-    private func appendDrainContinuationIfNeeded(_ continuation: CheckedContinuation<Void, Never>) -> Bool {
+    private func pendingPlaybackSnapshot() -> (buffers: Int, ms: Int) {
         playbackLock.lock()
-        defer { playbackLock.unlock() }
-        guard pendingPlaybackBuffers > 0 else {
-            return false
-        }
-        drainContinuations.append(continuation)
-        return true
+        let snapshot = (pendingPlaybackBuffers, pendingPlaybackMS)
+        playbackLock.unlock()
+        return snapshot
+    }
+
+    private func playbackDrainTimeoutNanoseconds() -> UInt64 {
+        let pendingMS = pendingPlaybackSnapshot().ms
+        let pendingNanoseconds = UInt64(max(pendingMS, 0)) * 1_000_000
+        return pendingNanoseconds + Self.drainGraceNanoseconds
     }
 
     private func pcmBuffer(from data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
@@ -363,6 +368,25 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
         return buffer
     }
 }
+
+#if os(iOS) || os(tvOS) || os(visionOS)
+private enum RealtimeAgentAudioSession {
+    /// 配置适合实时语音对话的系统音频会话。
+    ///
+    /// 主要逻辑：使用 `.voiceChat` 让系统启用语音处理链路，包括回声抑制、自动增益和噪声处理；
+    /// 默认走扬声器，避免端侧示例 App 每次麦克风或 speaker 准备时互相覆盖为普通播放模式。
+    static func configureVoiceConversation(sampleRate: Double) throws {
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(
+            .playAndRecord,
+            mode: .voiceChat,
+            options: [.defaultToSpeaker, .allowBluetooth]
+        )
+        try audioSession.setPreferredSampleRate(sampleRate)
+        try audioSession.setActive(true)
+    }
+}
+#endif
 
 private final class RealtimeAgentAudioConverterInput: @unchecked Sendable {
     private let buffer: AVAudioPCMBuffer

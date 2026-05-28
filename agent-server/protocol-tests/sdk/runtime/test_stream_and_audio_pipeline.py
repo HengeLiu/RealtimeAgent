@@ -1,4 +1,5 @@
 import json
+import asyncio
 from threading import Event as ThreadEvent
 from pathlib import Path
 
@@ -8,6 +9,17 @@ from realtime_agent.agent_core.providers import TranscriptEvent
 from realtime_agent.audio_pipeline import AudioPipeline, FormatNormalizer
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
+from realtime_agent.server import NetworkDeviceConnection
+
+
+class _FakeWebSocket:
+    """测试用 WebSocket，占位模拟 aiohttp WebSocket 的关闭行为。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self, *, message: bytes = b"") -> None:
+        self.closed = True
 
 
 def test_stream_chunk_codec_preserves_binary_header_and_payload() -> None:
@@ -38,6 +50,42 @@ def test_stream_chunk_codec_preserves_binary_header_and_payload() -> None:
     assert decoded.final is True
     assert decoded.metadata == {"trace_id": "golden-stream"}
     assert decoded.payload == b"\x01\x02\x03\x04"
+
+
+def test_rebound_audio_output_uses_fresh_stream_queue() -> None:
+    """测试目标：验证 audio output WebSocket 重连后，旧 sender 不能抢走新下行音频。
+
+    测试方法：同一设备先后绑定两次 audio_output，保存旧队列后投递一帧 speaker chunk。
+    预期结果：chunk 只进入新连接队列，旧连接队列保持为空。
+    """
+
+    async def run_case() -> None:
+        loop = asyncio.get_running_loop()
+        connection = NetworkDeviceConnection(device_id="dev-ios-001", loop=loop)
+        connection.bind_stream_ws(_FakeWebSocket(), channel="audio_output")  # type: ignore[arg-type]
+        old_queue = connection.stream_queue_for("audio_output")
+        connection.bind_stream_ws(_FakeWebSocket(), channel="audio_output")  # type: ignore[arg-type]
+        new_queue = connection.stream_queue_for("audio_output")
+
+        chunk = StreamChunk(
+            user_id="user-001",
+            session_id="session-001",
+            stream_id="stream-out-001",
+            stream_type="actuator.speaker",
+            seq=0,
+            payload=b"\x00\x00",
+        )
+        connection.push_stream_chunk(chunk)
+        await asyncio.sleep(0)
+
+        assert old_queue.empty()
+        assert new_queue.qsize() == 1
+        queued = await new_queue.get()
+        decoded = StreamChunkCodec.decode(queued.raw)
+        assert decoded.stream_id == "stream-out-001"
+        assert decoded.stream_type == "actuator.speaker"
+
+    asyncio.run(run_case())
 
 
 def test_audio_pipeline_rejects_non_mic_stream() -> None:

@@ -301,16 +301,33 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                 diagnostics.unhandledEvents += 1
                 return false
             }
-            try await prepareSpeakerSession(for: event)
+            let session = outputSession(for: event)
+            do {
+                try await prepareSpeakerSession(for: event)
+            } catch {
+                try? await failSpeakerOutput(
+                    session: session,
+                    code: "speaker.prepare_failed",
+                    message: error.localizedDescription
+                )
+            }
             return true
         case "stream.output.close.requested", "stream.output.finish.requested":
             let session = outputSession(for: event)
             await debugLog("speaker close requested stream=\(session.streamID) event=\(event.eventName)")
-            try await finishSpeakerOutput(
-                streamID: session.streamID,
-                expectedLastSeq: outputExpectedLastSeq(for: event)
-            )
-            try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
+            do {
+                try await finishSpeakerOutput(
+                    streamID: session.streamID,
+                    expectedLastSeq: outputExpectedLastSeq(for: event)
+                )
+                try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
+            } catch {
+                try? await failSpeakerOutput(
+                    session: session,
+                    code: "speaker.finish_failed",
+                    message: error.localizedDescription
+                )
+            }
             return true
         case "stream.output.cancel.requested":
             let session = outputSession(for: event)
@@ -377,7 +394,17 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             await debugLog("speaker late chunk ignored stream=\(chunk.streamID) seq=\(chunk.seq)")
             return false
         }
-        try await handleOutputChunk(chunk)
+        do {
+            try await handleOutputChunk(chunk)
+        } catch {
+            let session = outputSession(for: outputOpenEvent(for: chunk))
+            try? await failSpeakerOutput(
+                session: session,
+                code: "speaker.chunk_failed",
+                message: error.localizedDescription
+            )
+            throw error
+        }
         return true
     }
 
@@ -760,6 +787,27 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         }
         completedOutputStreams.insert(streamID)
         try await drainSpeakerIfNeeded(streamID: streamID)
+    }
+
+    private func failSpeakerOutput(
+        session: RealtimeAgentOutputStreamSession,
+        code: String,
+        message: String
+    ) async throws {
+        diagnostics.lastMediaError = message
+        await debugLog("speaker failed stream=\(session.streamID) code=\(code) message=\(message)")
+        speakerDrainTasks[session.streamID]?.cancel()
+        speakerDrainTasks.removeValue(forKey: session.streamID)
+        await speakerBuffers[session.streamID]?.cancel()
+        speakerPreparationTasks[session.streamID]?.cancel()
+        speakerPreparationTasks.removeValue(forKey: session.streamID)
+        speakerBuffers.removeValue(forKey: session.streamID)
+        speakerReceivedChunkCounts.removeValue(forKey: session.streamID)
+        speakerDrainedChunkCounts.removeValue(forKey: session.streamID)
+        speakerAppendedLastSeq.removeValue(forKey: session.streamID)
+        startedOutputStreams.remove(session.streamID)
+        completedOutputStreams.insert(session.streamID)
+        try await session.failed(code: code, message: message)
     }
 
     private func waitForExpectedSpeakerChunk(streamID: String, expectedLastSeq: Int) async {

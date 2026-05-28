@@ -104,6 +104,18 @@ final class SlowPrepareSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
     }
 }
 
+final class FailingPrepareSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
+    override func prepare(format _: RealtimeAgentSpeakerFormat) async throws {
+        throw RealtimeAgentDeviceError.transportClosed("prepare failed for test")
+    }
+}
+
+final class FailingDrainSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
+    override func drain() async throws {
+        throw RealtimeAgentDeviceError.transportClosed("drain failed for test")
+    }
+}
+
 func makeClient(
     transport: MockRealtimeAgentTransport,
     audioInput: AudioInput = .disabled(),
@@ -710,6 +722,79 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(sink.chunks.map(\.seq) == [0, 1])
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names.contains("stream.output.closed"))
+}
+
+@Test func speakerPrepareFailureReportsOutputFailed() async throws {
+    // 测试目标：默认播放器准备失败时，SDK 不能让 control 接收循环直接退出并导致服务端等待 endpoint ack 超时。
+    // 测试方法：注入 prepare 必定失败的 speaker sink，然后分发 output open 控制事件。
+    // 预期结果：SDK 发送 stream.output.failed，错误原因可从控制事件中回传给服务端。
+    let transport = MockRealtimeAgentTransport()
+    let sink = FailingPrepareSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let open = RealtimeAgentEvent(
+        eventName: "stream.output.open.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "actuator.speaker"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-prepare-failed",
+        streamType: "actuator.speaker"
+    )
+
+    #expect(try await client.dispatchEvent(open))
+
+    let events = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0) }
+    #expect(events.map(\.eventName) == ["stream.output.failed"])
+    let error = events.first?.payload["error"] as? [String: Any]
+    #expect(error?["code"] as? String == "speaker.prepare_failed")
+}
+
+@Test func speakerDrainFailureReportsOutputFailed() async throws {
+    // 测试目标：播放器 drain 失败或超时时，SDK 必须给服务端明确失败回执，避免输出流长期停在 finish_requested。
+    // 测试方法：注入 drain 必定失败的 speaker sink，先处理一帧 speaker chunk，再处理 finish 控制事件。
+    // 预期结果：SDK 先发送 stream.output.started，随后发送 stream.output.failed。
+    let transport = MockRealtimeAgentTransport()
+    let sink = FailingDrainSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-drain-failed",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm0".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let finish = RealtimeAgentEvent(
+        eventName: "stream.output.finish.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [
+            "stream_type": "actuator.speaker",
+            "output_chunk_count": 1,
+            "output_last_seq": 0,
+        ],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-drain-failed",
+        streamType: "actuator.speaker"
+    )
+
+    #expect(try await client.dispatchStreamChunk(chunk))
+    #expect(try await client.dispatchEvent(finish))
+
+    let events = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0) }
+    #expect(events.map(\.eventName) == ["stream.output.started", "stream.output.failed"])
+    let error = events.last?.payload["error"] as? [String: Any]
+    #expect(error?["code"] as? String == "speaker.finish_failed")
 }
 
 @Test func speakerPlaybackDoesNotPauseMicrophoneUpload() async throws {

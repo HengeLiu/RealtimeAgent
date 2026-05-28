@@ -101,3 +101,19 @@ def test_device_demo_declares_required_ios_permissions() -> None:
     assert "NSCameraUsageDescription" in plist
     assert "NSMicrophoneUsageDescription" in plist
     assert "NSLocalNetworkUsageDescription" in plist
+
+
+def test_swift_default_audio_adapter_enables_voice_processing() -> None:
+    """测试目标：确认 Swift 默认音频适配器启用系统语音处理，降低外放回声再次触发模型。
+
+    测试方法：静态检查 AVFoundation 默认适配器里的音频会话模式和输入节点 voice processing。
+    预期结果：默认麦克风和 speaker 共用 `.voiceChat` 会话，并对 input node 调用 voice processing。
+    """
+
+    adapter = (ROOT / "devices/swift/Sources/RealtimeAgentDeviceKit/Media/AVFoundationAdapters.swift").read_text(
+        encoding="utf-8"
+    )
+
+    assert "mode: .voiceChat" in adapter
+    assert "setVoiceProcessingEnabled(true)" in adapter
+    assert "configureVoiceConversation" in adapter
