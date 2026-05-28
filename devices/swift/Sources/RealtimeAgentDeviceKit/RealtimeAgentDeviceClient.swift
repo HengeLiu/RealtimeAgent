@@ -30,6 +30,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var speakerBuffers: [String: SpeakerPlaybackBuffer] = [:]
     private var speakerPreparationTasks: [String: Task<SpeakerPlaybackBuffer, Error>] = [:]
     private var speakerDrainTasks: [String: Task<Void, Never>] = [:]
+    private var speakerFinishTasks: [String: Task<Void, Never>] = [:]
     private var speakerReceivedChunkCounts: [String: Int] = [:]
     private var speakerDrainedChunkCounts: [String: Int] = [:]
     private var speakerAppendedLastSeq: [String: Int] = [:]
@@ -188,6 +189,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         inputStreamTasks.values.forEach { $0.cancel() }
         speakerPreparationTasks.values.forEach { $0.cancel() }
         speakerDrainTasks.values.forEach { $0.cancel() }
+        speakerFinishTasks.values.forEach { $0.cancel() }
         for buffer in speakerBuffers.values {
             await buffer.cancel()
         }
@@ -198,6 +200,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         inputStreamTasks = [:]
         speakerPreparationTasks = [:]
         speakerDrainTasks = [:]
+        speakerFinishTasks = [:]
         speakerBuffers = [:]
         speakerReceivedChunkCounts = [:]
         speakerDrainedChunkCounts = [:]
@@ -315,23 +318,17 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         case "stream.output.close.requested", "stream.output.finish.requested":
             let session = outputSession(for: event)
             await debugLog("speaker close requested stream=\(session.streamID) event=\(event.eventName)")
-            do {
-                try await finishSpeakerOutput(
-                    streamID: session.streamID,
-                    expectedLastSeq: outputExpectedLastSeq(for: event)
-                )
-                try await session.closed(reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed")
-            } catch {
-                try? await failSpeakerOutput(
-                    session: session,
-                    code: "speaker.finish_failed",
-                    message: error.localizedDescription
-                )
-            }
+            scheduleSpeakerOutputFinish(
+                session: session,
+                reason: event.eventName == "stream.output.finish.requested" ? "finished" : "closed",
+                expectedLastSeq: outputExpectedLastSeq(for: event)
+            )
             return true
         case "stream.output.cancel.requested":
             let session = outputSession(for: event)
             await debugLog("speaker cancel requested stream=\(session.streamID)")
+            speakerFinishTasks[session.streamID]?.cancel()
+            speakerFinishTasks.removeValue(forKey: session.streamID)
             speakerDrainTasks[session.streamID]?.cancel()
             speakerDrainTasks.removeValue(forKey: session.streamID)
             await speakerBuffers[session.streamID]?.cancel()
@@ -780,13 +777,41 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         if let expectedLastSeq {
             await waitForExpectedSpeakerChunk(streamID: streamID, expectedLastSeq: expectedLastSeq)
         } else {
-            try? await Task.sleep(nanoseconds: Self.speakerFinishGraceNanoseconds)
+            try await Task.sleep(nanoseconds: Self.speakerFinishGraceNanoseconds)
         }
         if let task = speakerPreparationTasks[streamID] {
             _ = try await task.value
         }
         completedOutputStreams.insert(streamID)
         try await drainSpeakerIfNeeded(streamID: streamID)
+    }
+
+    private func scheduleSpeakerOutputFinish(
+        session: RealtimeAgentOutputStreamSession,
+        reason: String,
+        expectedLastSeq: Int?
+    ) {
+        speakerFinishTasks[session.streamID]?.cancel()
+        speakerFinishTasks[session.streamID] = Task { [weak self, session] in
+            guard let self else { return }
+            do {
+                try await self.finishSpeakerOutput(
+                    streamID: session.streamID,
+                    expectedLastSeq: expectedLastSeq
+                )
+                guard !Task.isCancelled else { return }
+                try await session.closed(reason: reason)
+            } catch is CancellationError {
+                await self.debugLog("speaker finish cancelled stream=\(session.streamID)")
+            } catch {
+                try? await self.failSpeakerOutput(
+                    session: session,
+                    code: "speaker.finish_failed",
+                    message: error.localizedDescription
+                )
+            }
+            self.speakerFinishTasks.removeValue(forKey: session.streamID)
+        }
     }
 
     private func failSpeakerOutput(
@@ -796,6 +821,8 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     ) async throws {
         diagnostics.lastMediaError = message
         await debugLog("speaker failed stream=\(session.streamID) code=\(code) message=\(message)")
+        speakerFinishTasks[session.streamID]?.cancel()
+        speakerFinishTasks.removeValue(forKey: session.streamID)
         speakerDrainTasks[session.streamID]?.cancel()
         speakerDrainTasks.removeValue(forKey: session.streamID)
         await speakerBuffers[session.streamID]?.cancel()

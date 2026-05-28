@@ -116,6 +116,18 @@ final class FailingDrainSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
     }
 }
 
+final class BlockingDrainSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
+    var drainStarted = false
+
+    override func drain() async throws {
+        drainStarted = true
+        while !Task.isCancelled {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        throw CancellationError()
+    }
+}
+
 func makeClient(
     transport: MockRealtimeAgentTransport,
     audioInput: AudioInput = .disabled(),
@@ -152,6 +164,22 @@ func eventJSON(
         streamType: streamType,
         timestampMS: 1
     ).jsonString
+}
+
+func waitForSentEvent(
+    _ eventName: String,
+    transport: MockRealtimeAgentTransport,
+    timeoutNanoseconds: UInt64 = 1_000_000_000
+) async throws -> [RealtimeAgentEvent] {
+    let startedAt = DispatchTime.now().uptimeNanoseconds
+    while DispatchTime.now().uptimeNanoseconds - startedAt < timeoutNanoseconds {
+        let events = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0) }
+        if events.contains(where: { $0.eventName == eventName }) {
+            return events
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    throw RealtimeAgentDeviceError.transportClosed("timeout waiting for sent event: \(eventName)")
 }
 
 @Test func streamCodecReadsGoldenFixture() throws {
@@ -466,7 +494,8 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(try await client.dispatchEvent(open))
     #expect(try await client.dispatchEvent(close))
 
-    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    let events = try await waitForSentEvent("stream.output.closed", transport: transport)
+    let names = events.map(\.eventName)
     #expect(names == ["stream.output.closed"])
 }
 
@@ -656,6 +685,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(try await client.dispatchEvent(finish))
     #expect(try await firstHandled)
     #expect(sink.chunks.map(\.seq) == [0])
+    _ = try await waitForSentEvent("stream.output.closed", transport: transport)
 
     #expect(try await client.dispatchStreamChunk(lateChunk) == false)
     #expect(sink.chunks.map(\.seq) == [0])
@@ -717,7 +747,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
 
     #expect(try await client.dispatchStreamChunk(secondChunk))
     #expect(try await finishHandled)
-    try await Task.sleep(nanoseconds: 50_000_000)
+    _ = try await waitForSentEvent("stream.output.closed", transport: transport)
 
     #expect(sink.chunks.map(\.seq) == [0, 1])
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
@@ -791,10 +821,69 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(try await client.dispatchStreamChunk(chunk))
     #expect(try await client.dispatchEvent(finish))
 
-    let events = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0) }
+    let events = try await waitForSentEvent("stream.output.failed", transport: transport)
     #expect(events.map(\.eventName) == ["stream.output.started", "stream.output.failed"])
     let error = events.last?.payload["error"] as? [String: Any]
     #expect(error?["code"] as? String == "speaker.finish_failed")
+}
+
+@Test func outputCancelPreemptsPendingFinishDrain() async throws {
+    // 测试目标：播放 drain 尚未结束时，cancel 控制事件必须抢占 finish，避免真机打断晚到。
+    // 测试方法：注入永不自然 drain 完成的 speaker sink，先触发 finish，再立即触发 cancel。
+    // 预期结果：SDK 先发送 stream.output.cancelled，不发送 stream.output.closed，且 sink 收到 cancel。
+    let transport = MockRealtimeAgentTransport()
+    let sink = BlockingDrainSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-cancel-finish",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm0".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let finish = RealtimeAgentEvent(
+        eventName: "stream.output.finish.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [
+            "stream_type": "actuator.speaker",
+            "output_chunk_count": 1,
+            "output_last_seq": 0,
+        ],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-cancel-finish",
+        streamType: "actuator.speaker"
+    )
+    let cancel = RealtimeAgentEvent(
+        eventName: "stream.output.cancel.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "actuator.speaker"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-cancel-finish",
+        streamType: "actuator.speaker"
+    )
+
+    #expect(try await client.dispatchStreamChunk(chunk))
+    #expect(try await client.dispatchEvent(finish))
+    try await Task.sleep(nanoseconds: 40_000_000)
+    #expect(sink.drainStarted)
+    #expect(try await client.dispatchEvent(cancel))
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names.contains("stream.output.started"))
+    #expect(names.contains("stream.output.cancelled"))
+    #expect(!names.contains("stream.output.closed"))
+    #expect(sink.cancelCalled)
 }
 
 @Test func speakerPlaybackDoesNotPauseMicrophoneUpload() async throws {
@@ -887,7 +976,8 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     try await Task.sleep(nanoseconds: 80_000_000)
     #expect(try await client.dispatchEvent(close))
 
-    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    let events = try await waitForSentEvent("stream.output.closed", transport: transport)
+    let names = events.map(\.eventName)
     #expect(names == [
         "stream.output.started",
         "downstream.pause.requested",
