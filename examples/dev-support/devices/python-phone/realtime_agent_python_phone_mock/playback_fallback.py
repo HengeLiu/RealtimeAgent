@@ -172,6 +172,19 @@ class NetworkPythonPlaybackEndpoint:
             self.received_events.append(event)
             if event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb":
                 await self._open_and_send_rgb_asset(control_ws, stream_ws, event)
+            elif event.event_name == "stream.output.open.requested" and event.stream_type == "actuator.speaker":
+                await self._send_event(
+                    control_ws,
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=self.user_id,
+                        producer_id=self.device_id,
+                        session_id=self.device_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                        payload={"stream_type": event.stream_type, "reason": "fallback_ready"},
+                    ),
+                )
 
     async def _stream_loop(self, control_ws, stream_ws) -> None:
         """记录下行 stream chunk。"""

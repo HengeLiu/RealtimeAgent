@@ -215,6 +215,8 @@ FUNCTION heartbeatLoop(interval_seconds):
 
 实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App 覆盖 adapter；SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用音频上行、音频下行和按需视觉上行链路，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、server 请求触发的视觉单帧采集和 server 音频下行播放。
 
+麦克风上行的准备完成标记使用会话级 `control.audio_session.opened`，不再额外发送 `stream.input.opened (sensor.mic)`。端侧必须先确认音频上行链路可写、`sensor.mic` source 可读，再发送 `control.audio_session.opened`；server 只有在收到该回执后，才能把本轮实时对话视为可用并消费后续 `sensor.mic` chunk。
+
 ### 3.1 时序图
 
 ```plantuml
@@ -229,6 +231,7 @@ Server -> SDK: control.audio_session.open.requested
 SDK -> App: ensure mic source is bound and readable
 SDK -> Server: open /ws/stream/audio/input?device_id=...
 SDK -> Server: open /ws/stream/audio/output?device_id=...
+SDK -> App: prepare or reuse session speaker sink
 SDK -> Server: control.audio_session.opened
 loop mic chunks
   SDK -> App: read mic source
@@ -248,6 +251,9 @@ end
 
 opt assistant audio output
   Server -> SDK: stream.output.open.requested (actuator.speaker)
+  SDK -> SDK: reset per-output playback state
+  SDK -> App: reuse session speaker sink
+  SDK -> Server: stream.output.ready
   Server -> SDK: StreamChunk actuator.speaker over audio output link
   SDK -> SDK: enqueue SDK playback buffer
   SDK -> App: write SDK playback buffer to bound speaker sink
@@ -275,6 +281,8 @@ SDK -> Server: control.audio_session.closed
 
 音频下行播放从主实时对话图中拆出来单独说明。这里的 buffer 是端侧 SDK 的内置播放 buffer，不是 App 或 speaker sink 的自定义队列。App 只提供 `actuator.speaker` sink，并配置 SDK buffer 的启动水位线、低水位线、高水位线和最大容量。
 
+音频下行物理 WebSocket 和 session 级 speaker sink/runtime 已经在 `control.audio_session.opened` 之前建立或准备完成。`stream.output.open.requested` 不表示重新打开 `/ws/stream/audio/output`，也不要求每轮重建播放器；它只要求端侧在这条已建立的音频下行链路上重置本轮逻辑 output stream 状态，例如 `stream_id`、seq 计数、start/close/cancel 标记、上轮残留 buffer 和水位线状态。这个 open/requested 和 ready 握手的粒度是每轮 assistant 回复一次，不是每个音频 chunk 一次。server 下发 `stream.output.open.requested` 后必须等待端侧回 `stream.output.ready`，确认本轮逻辑状态已经干净可写，再向音频下行链路写入第一包 `actuator.speaker` chunk；同一轮回复的后续 chunk 直接走已建立的音频下行链路，不再重复 open/requested 和 ready。`stream.output.started` 只表示端侧达到起播水位并开始向 speaker sink 写出，不表示准备完成。
+
 ```plantuml
 @startuml
 participant "Device App" as App
@@ -282,8 +290,9 @@ participant "Device SDK" as SDK
 participant Server
 
 Server -> SDK: stream.output.open.requested (actuator.speaker)
-SDK -> SDK: create SDK playback buffer
-SDK -> App: prepare bound speaker sink
+SDK -> SDK: reset per-output playback state
+SDK -> App: reuse session speaker sink
+SDK -> Server: stream.output.ready
 loop downstream audio chunks
   Server -> SDK: StreamChunk actuator.speaker over audio output link
   SDK -> SDK: enqueue SDK playback buffer
@@ -348,6 +357,8 @@ FUNCTION handleAudioSessionOpenRequested(event):
   micAdapter = adapters.input["sensor.mic"]
   audioInputChannel.ensureOpen(device_id = profile.device_id)
   audioOutputChannel.ensureOpen(device_id = profile.device_id)
+  speakerSink = adapters.output["actuator.speaker"]
+  speakerSink.prepare(realtime.default_speaker_format)
   realtime.mic_stream_id = newStreamId("stream_mic")
   realtime.mic_state = "open"
 
@@ -504,13 +515,33 @@ FUNCTION handleSpeakerOutputOpenRequested(event):
   REQUIRE adapters.output["actuator.speaker"] exists
   speakerSink = adapters.output["actuator.speaker"]
   output = outputRegistry.open(event.stream_id, event.stream_type)
-  playbackBuffer = playbackBuffers.create(
+  playbackBuffer = playbackBuffers.resetOrCreate(
     stream_id = event.stream_id,
     config = sdkConfig.playback_buffer["actuator.speaker"]
   )
-  speakerSink.prepare(event.payload.format)
+  IF event.payload.format differs from speakerSink.currentFormat:
+    speakerSink.reconfigure(event.payload.format)
   output.playback_buffer_id = playbackBuffer.id
   output.pause_sent = false
+  output.state = "opened"
+
+  control.send(Event(
+    event_name = "stream.output.ready",
+    user_id = profile.user_id,
+    producer_id = profile.device_id,
+    session_id = event.session_id OR realtime.session_id,
+    stream_id = event.stream_id,
+    stream_type = event.stream_type,
+    payload = {
+      stream_type = event.stream_type,
+      reason = "device_speaker_ready",
+      format = event.payload.format
+    }
+  ))
+
+  // 这里准备的是本轮逻辑 speaker output stream，不重新打开 audio output WebSocket，
+  // 也不重建 session 级 speaker sink；除非本轮音频格式变化，才重新配置 sink。
+  // server 必须等到 stream.output.ready 后，才向已建立的音频下行链路写入 speaker chunk。
 
 FUNCTION onSpeakerOutputChunk(chunk):
   output = outputRegistry.get(chunk.stream_id)
@@ -908,7 +939,9 @@ STATE DialogOpen:
   on visual request:
     capture and upload one sensor.rgb frame
   on output request:
-    play output and ack
+    reset per-output state and send stream.output.ready
+  on speaker chunk:
+    enqueue output and send stream.output.started when playback starts
   on custom.command.requested:
     dispatch custom command callback
   on audio_session.close.requested:
@@ -927,9 +960,9 @@ STATE DialogClosing:
 
 1. 注册成功：SDK 发送 `control.device.register.requested`，收到 `registered` 后启动心跳。
 2. 注册失败：SDK 收到 `register.failed` 后不启动心跳，并向应用暴露失败原因。
-3. 实时音频打开：收到 `control.audio_session.open.requested` 后，SDK 建立或复用音频上行和音频下行两条物理链路，回 `control.audio_session.opened`，并在 payload 中声明 `sensor.mic` 上行 stream。
-4. 麦克风连续上传：SDK 持续发送 `sensor.mic` chunk，且 `final=True` 不代表端侧 VAD 语音结束。
+3. 实时音频打开：收到 `control.audio_session.open.requested` 后，SDK 建立或复用音频上行和音频下行两条物理链路，确认 `sensor.mic` 可读后回 `control.audio_session.opened`，并在 payload 中声明 `sensor.mic` 上行 stream。
+4. 麦克风连续上传：SDK 在 `control.audio_session.opened` 后持续发送 `sensor.mic` chunk，且 `final=True` 不代表端侧 VAD 语音结束。
 5. 视觉单帧采集：收到 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)` 后，SDK 建立或复用视觉上行链路，回 `stream.input.opened`，上传一个 `final=true` 的 RGB chunk，然后回 `stream.input.closed`。
-6. 输出播放：收到标准 `stream.output.open.requested (actuator.speaker)` 和音频下行 chunk 后，SDK 回 `stream.output.started`；收到 `stream.output.close.requested` 后，等待本地 drain，再回 `stream.output.closed`。
+6. 输出播放：收到标准 `stream.output.open.requested (actuator.speaker)` 后，SDK 在已建立的音频下行链路和 session 级 speaker runtime 上重置本轮逻辑 output stream 状态，并先回 `stream.output.ready`；server 收到该回执后才能下发音频 chunk。SDK 达到起播水位并开始写 speaker sink 时回 `stream.output.started`；收到 `stream.output.close.requested` 后，等待本地 drain，再回 `stream.output.closed`。
 7. 自定义命令执行：收到 `custom.command.requested` 后，SDK 调用 App 通过 `on_custom_command(...)` 注册的回调；如需回报业务结果，handler 使用 `ctx.emit("custom.<domain>.<event>", payload)`。
 8. 关闭会话：收到 `control.audio_session.close.requested` 后，SDK 结束本次音频会话、等待播放 drain、回 `control.audio_session.closed`。

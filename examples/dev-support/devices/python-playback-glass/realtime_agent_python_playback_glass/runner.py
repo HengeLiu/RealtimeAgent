@@ -79,6 +79,15 @@ async def run_case(case: PlaybackCase, *, server_url: str, runs_root: str | Path
                     await client.ensure_stream(session)
                     stream_id = str(item.get("stream_id"))
                     speaker_streams.add(stream_id)
+                    await client.send_event(
+                        client.event(
+                            "stream.output.ready",
+                            {"stream_type": "actuator.speaker", "reason": "python_playback_glass_ready"},
+                            session_id=client.device_id,
+                            stream_id=stream_id,
+                            stream_type="actuator.speaker",
+                        )
+                    )
                     asyncio.create_task(_drain_stream(client, stream_id=stream_id))
                 elif name == "stream.output.close.requested" and item.get("stream_type") == "actuator.speaker":
                     await client.close_output(str(item.get("stream_id")))

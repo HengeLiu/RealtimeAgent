@@ -332,6 +332,18 @@ def test_device_consumes_server_events_with_acknowledgement_events(tmp_path) -> 
             final=True,
         )
     )
+    assert endpoint.chunks == []
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.ready",
+            user_id=user_id,
+            producer_id=device_id,
+            session_id=device_id,
+            stream_id=speaker.stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker", "reason": "browser_device_ready"},
+        )
+    )
     app.stream_service.close_stream(speaker.stream_id, reason="assistant_audio_done")
     for event_name in ("stream.output.started", "stream.output.closed"):
         app.publish_control_event(

@@ -20,6 +20,7 @@ INPUT_STREAM_EVENTS = {
 
 OUTPUT_STREAM_EVENTS = {
     "stream.output.open.requested",
+    "stream.output.ready",
     "stream.output.started",
     "stream.output.finished",
     "stream.output.closed",
@@ -114,9 +115,9 @@ def validate_input_stream_event_sequence(event_names: Iterable[str]) -> None:
 def validate_output_stream_event_sequence(event_names: Iterable[str]) -> None:
     """校验一次输出 stream 的控制事件顺序。
 
-    主要逻辑：server 请求打开输出 stream，端侧开始播放后进入 finished、closed、
-    cancelled 或 failed 终态；如果 server 发出取消请求，端侧最终必须回到 cancelled
-    或 failed。
+    主要逻辑：server 请求打开输出 stream，端侧先回 ready 表示本轮逻辑输出状态
+    已经重置完成，随后开始播放并进入 finished、closed、cancelled 或 failed 终态；
+    如果 server 发出取消请求，端侧最终必须回到 cancelled 或 failed。
     参数：`event_names` 是按发生顺序排列的事件名列表。
     返回值：无。
     异常情况：started 之前 finished、取消请求没有回执、终态后继续发事件时抛出 `ValueError`。
@@ -129,13 +130,23 @@ def validate_output_stream_event_sequence(event_names: Iterable[str]) -> None:
     if names[0] != "stream.output.open.requested":
         raise ValueError("output stream sequence must start with stream.output.open.requested")
 
+    ready = False
     started = False
     cancel_requested = False
     terminal_seen = False
     for index, name in enumerate(names[1:], start=1):
         if terminal_seen:
             raise ValueError(f"output stream sequence has event after terminal state at index {index}")
+        if name == "stream.output.ready":
+            if ready:
+                raise ValueError("stream.output.ready must appear at most once")
+            if started:
+                raise ValueError("stream.output.ready must appear before stream.output.started")
+            ready = True
+            continue
         if name == "stream.output.started":
+            if not ready:
+                raise ValueError("stream.output.started must appear after stream.output.ready")
             if started:
                 raise ValueError("stream.output.started must appear at most once")
             started = True
@@ -148,8 +159,8 @@ def validate_output_stream_event_sequence(event_names: Iterable[str]) -> None:
             terminal_seen = True
             continue
         if name == "stream.output.closed":
-            if not started:
-                raise ValueError("stream.output.closed must appear after stream.output.started")
+            if not ready:
+                raise ValueError("stream.output.closed must appear after stream.output.ready")
             terminal_seen = True
             continue
         if name == "stream.output.cancel.requested":

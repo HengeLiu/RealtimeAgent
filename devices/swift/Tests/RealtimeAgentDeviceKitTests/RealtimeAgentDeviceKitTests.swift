@@ -130,6 +130,7 @@ final class BlockingDrainSpeakerSink: RecordingSpeakerSink, @unchecked Sendable 
 
 func makeClient(
     transport: MockRealtimeAgentTransport,
+    configuration: RealtimeAgentClientConfiguration = .default,
     audioInput: AudioInput = .disabled(),
     camera: Camera = .disabled(),
     speaker: Speaker = .disabled()
@@ -140,6 +141,7 @@ func makeClient(
     return RealtimeAgentDeviceClient(
         serverURL: URL(string: "http://127.0.0.1:8765")!,
         device: device,
+        configuration: configuration,
         transport: transport,
         audioInput: audioInput,
         camera: camera,
@@ -496,7 +498,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
 
     let events = try await waitForSentEvent("stream.output.closed", transport: transport)
     let names = events.map(\.eventName)
-    #expect(names == ["stream.output.closed"])
+    #expect(names == ["stream.output.ready", "stream.output.closed"])
 }
 
 @Test func outputSessionSendsCancelEvent() async throws {
@@ -548,7 +550,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(sink.chunks.first?.streamID == "stream-speaker-001")
     #expect(sink.preparedFormats.first?.sampleRate == 24000)
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
-    #expect(names == ["stream.output.started"])
+    #expect(names == ["stream.output.ready", "stream.output.started"])
 }
 
 @Test func speakerDebugLogReportsPlaybackLifecycle() async throws {
@@ -634,6 +636,98 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     let logs = await recorder.snapshot()
     #expect(logs.contains { $0.contains("stream receive error attempt=1") })
     #expect(logs.contains { $0.contains("speaker chunk received stream=stream-speaker-reconnect") })
+}
+
+@Test func audioSessionOpenRestartsStoppedSpeakerReceiveLoop() async throws {
+    // 测试目标：audio output 接收循环曾经因断线停止后，下一次实时音频会话打开必须重新接收 speaker chunk。
+    // 测试方法：用禁用重连策略让首次 receive 抛错并停止循环，再分发 audio_session.open.requested 和一帧 speaker chunk。
+    // 预期结果：SDK 在新会话打开时重启 audio output 接收循环，speaker sink 收到 chunk 并发送 stream.output.started。
+    let transport = MockRealtimeAgentTransport()
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 60]
+        ),
+    ]
+    let sink = RecordingSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        configuration: RealtimeAgentClientConfiguration(reconnectPolicy: .disabled),
+        audioInput: .enabled(source: ArrayMicrophoneSource(chunks: [])),
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-new-session",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let openAudio = RealtimeAgentEvent(
+        eventName: "control.audio_session.open.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [:],
+        sessionID: "dev-ios-001"
+    )
+    transport.streamReceiveResults = [
+        .failure(RealtimeAgentDeviceError.transportClosed("test stream receive stopped")),
+    ]
+
+    try await client.connectAndRegister(startHeartbeat: false)
+    try await Task.sleep(nanoseconds: 80_000_000)
+    transport.streamInboxByChannel[.audioOutput] = [try RealtimeAgentStreamChunkCodec.encode(chunk)]
+    #expect(try await client.dispatchEvent(openAudio))
+    _ = try await waitForSentEvent("stream.output.started", transport: transport)
+    await client.close()
+
+    #expect(sink.chunks.first?.streamID == "stream-speaker-new-session")
+}
+
+@Test func outputSessionCreationIsSafeAcrossControlAndStreamTasks() async throws {
+    // 测试目标：control 事件和 stream chunk 并发到达时，共享 output session 状态不能发生字典并发访问崩溃。
+    // 测试方法：并发分发同一个 speaker stream 的 open 控制事件和首个 speaker chunk。
+    // 预期结果：SDK 能稳定复用同一个 output session，speaker sink 收到音频并发送 started 回执。
+    let transport = MockRealtimeAgentTransport()
+    let sink = RecordingSpeakerSink()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    let open = RealtimeAgentEvent(
+        eventName: "stream.output.open.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "actuator.speaker"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-concurrent-session",
+        streamType: "actuator.speaker"
+    )
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-concurrent-session",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+
+    async let openHandled = client.dispatchEvent(open)
+    async let chunkHandled = client.dispatchStreamChunk(chunk)
+
+    #expect(try await openHandled)
+    #expect(try await chunkHandled)
+    _ = try await waitForSentEvent("stream.output.started", transport: transport)
+    #expect(sink.chunks.first?.streamID == "stream-speaker-concurrent-session")
 }
 
 @Test func outputFinishWaitsForInFlightSpeakerChunkAndIgnoresTooLateChunks() async throws {
@@ -785,7 +879,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
 @Test func speakerDrainFailureReportsOutputFailed() async throws {
     // 测试目标：播放器 drain 失败或超时时，SDK 必须给服务端明确失败回执，避免输出流长期停在 finish_requested。
     // 测试方法：注入 drain 必定失败的 speaker sink，先处理一帧 speaker chunk，再处理 finish 控制事件。
-    // 预期结果：SDK 先发送 stream.output.started，随后发送 stream.output.failed。
+    // 预期结果：SDK 先发送 stream.output.ready 和 stream.output.started，随后发送 stream.output.failed。
     let transport = MockRealtimeAgentTransport()
     let sink = FailingDrainSpeakerSink()
     let client = makeClient(
@@ -822,7 +916,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(try await client.dispatchEvent(finish))
 
     let events = try await waitForSentEvent("stream.output.failed", transport: transport)
-    #expect(events.map(\.eventName) == ["stream.output.started", "stream.output.failed"])
+    #expect(events.map(\.eventName) == ["stream.output.ready", "stream.output.started", "stream.output.failed"])
     let error = events.last?.payload["error"] as? [String: Any]
     #expect(error?["code"] as? String == "speaker.finish_failed")
 }
@@ -979,6 +1073,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     let events = try await waitForSentEvent("stream.output.closed", transport: transport)
     let names = events.map(\.eventName)
     #expect(names == [
+        "stream.output.ready",
         "stream.output.started",
         "downstream.pause.requested",
         "downstream.resume.requested",

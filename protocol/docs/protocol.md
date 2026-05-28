@@ -240,11 +240,14 @@ stream.output.open.requested
 端侧响应：
 
 ```text
+stream.output.ready
 stream.output.started
 stream.output.closed
 stream.output.failed
 stream.output.cancelled
 ```
+
+`stream.output.ready` 表示端侧已经在既有音频下行链路和 session 级 speaker runtime 上重置好本轮逻辑 output stream 状态，server 收到后才能写入本轮第一包 `actuator.speaker` chunk。它不表示重新打开 WebSocket 或重建播放器。
 
 server 可以发送：
 

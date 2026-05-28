@@ -1177,6 +1177,9 @@
       } else if (item.event_name === "stream.output.open.requested" && item.stream_type === "actuator.speaker") {
         markOutputOpen(item.stream_id);
         await ensureStreamSocketOpen();
+        sendEvent(event("stream.output.ready", {stream_type: "actuator.speaker", reason: "browser_device_ready"}, {
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: item.stream_type,
+        }));
       } else if (item.event_name === "stream.output.close.requested" || item.event_name === "stream.output.finish.requested") {
         pendingOutputClose.set(item.stream_id, item);
         log(`playback finish requested stream_id=${item.stream_id}`);

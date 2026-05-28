@@ -2,7 +2,7 @@ import Foundation
 
 /// 输出 stream 会话 helper。
 ///
-/// 主要功能：封装 speaker 输出的 started、closed、failed 和 cancelled 回执。
+/// 主要功能：封装 speaker 输出的 ready、started、closed、failed 和 cancelled 回执。
 public struct RealtimeAgentOutputStreamSession: @unchecked Sendable {
     public let streamID: String
     public let streamType: String
@@ -28,6 +28,17 @@ public struct RealtimeAgentOutputStreamSession: @unchecked Sendable {
     /// 回报输出已开始。
     public func started() async throws {
         try await sendEvent("stream.output.started", ["stream_type": streamType], sessionID, streamID, streamType)
+    }
+
+    /// 回报本轮输出流已经准备好接收音频分片。
+    public func ready(reason: String = "speaker_ready") async throws {
+        try await sendEvent(
+            "stream.output.ready",
+            ["stream_type": streamType, "reason": reason],
+            sessionID,
+            streamID,
+            streamType
+        )
     }
 
     /// 追加一帧输出 chunk 给 App 自定义处理器。

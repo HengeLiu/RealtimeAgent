@@ -1980,6 +1980,44 @@ class OutputRouter:
             }
         )
 
+    def mark_endpoint_playback_ready(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_ready",
+    ) -> None:
+        """处理端侧 output ready 回执。
+
+        主要逻辑：`stream.output.ready` 只表示端侧已经重置本轮逻辑 output stream
+        状态，server 可以开始写首包；它不等价于开始播放，也不释放播放仲裁。
+        参数：`user_id` 为用户标识，`session_id` 为端侧会话，`stream_id` 为输出流。
+        返回值：无。
+        异常情况：`stream_id` 为空时忽略。
+        """
+
+        if not stream_id:
+            return
+        effective_session_id = session_id or ""
+        try:
+            handle = self.stream_service.registry.get(stream_id)
+            effective_session_id = handle.session_id
+        except Exception:
+            pass
+        state = self._endpoint_state_by_stream.setdefault(stream_id, {})
+        state.update(
+            {
+                "state": "endpoint_ready",
+                "user_id": user_id,
+                "session_id": effective_session_id,
+                "stream_id": stream_id,
+                "stream_type": "actuator.speaker",
+                "endpoint_ready_at": time.time(),
+                "reason": reason,
+            }
+        )
+
     def mark_endpoint_playback_cancelled(
         self,
         user_id: str,
@@ -2445,6 +2483,23 @@ class OutputService:
         """接收端侧播放开始回执。"""
 
         self.router.mark_endpoint_playback_started(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+        )
+
+    def mark_endpoint_playback_ready(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None,
+        stream_id: str | None,
+        reason: str = "endpoint_ready",
+    ) -> None:
+        """接收端侧 output ready 回执。"""
+
+        self.router.mark_endpoint_playback_ready(
             user_id=user_id,
             session_id=session_id,
             stream_id=stream_id,

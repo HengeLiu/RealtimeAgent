@@ -17,11 +17,24 @@ class Connection:
         self.device_id = device_id
         self.events = []
         self.chunks = []
+        self.app: RealtimeAgentApp | None = None
 
     def push_event(self, event: Event) -> None:
         """记录控制事件。"""
 
         self.events.append(event)
+        if event.event_name == "stream.output.open.requested" and self.app is not None:
+            self.app.publish_control_event(
+                Event(
+                    event_name="stream.output.ready",
+                    user_id=event.user_id,
+                    producer_id=self.device_id,
+                    session_id=event.session_id,
+                    stream_id=event.stream_id,
+                    stream_type=event.stream_type,
+                    payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+                )
+            )
 
     def push_stream_chunk(self, chunk: StreamChunk) -> None:
         """记录输出音频。"""
@@ -32,6 +45,7 @@ class Connection:
 def register_speaker(app: RealtimeAgentApp, connection: Connection, user_id: str = "user-001") -> None:
     """注册一个可消费 speaker stream 的测试设备。"""
 
+    connection.app = app
     app.register_device(
         Event(
             event_name="control.device.register.requested",

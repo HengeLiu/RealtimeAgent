@@ -712,6 +712,22 @@ class RealtimeAgentApp:
             self.control_service.publish(event)
             self._finalize_audio_session(event.user_id, reason=event.payload.get("reason", "endpoint_closed"))
             return
+        if event.event_name == "stream.output.ready":
+            if event.stream_id:
+                try:
+                    self.stream_service.mark_output_endpoint_ready(
+                        event.stream_id,
+                        reason=str(event.payload.get("reason") or event.event_name),
+                    )
+                except Exception:
+                    pass
+            self.output_service.mark_endpoint_playback_ready(
+                user_id=event.user_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                reason=str(event.payload.get("reason") or event.event_name),
+            )
+            return
         if event.event_name == "stream.output.started":
             self.control_service.publish(event)
             self.output_service.mark_endpoint_playback_started(

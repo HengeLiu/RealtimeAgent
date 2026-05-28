@@ -286,7 +286,18 @@ class NetworkPythonPlaybackEndpoint:
             self.received_events.append(event)
             if await self.client.dispatch_event(event):
                 continue
-            if event.event_name == "stream.output.started":
+            if event.event_name == "stream.output.open.requested" and event.stream_type == "actuator.speaker":
+                await self._send_event(
+                    control_ws,
+                    self.client.event(
+                        "stream.output.ready",
+                        {"stream_type": event.stream_type, "reason": "python_glass_ready"},
+                        session_id=self.device_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                    ),
+                )
+            elif event.event_name == "stream.output.started":
                 self._started_output_streams.add(str(event.stream_id or ""))
             elif event.event_name in {"stream.output.finish.requested", "stream.output.close.requested"}:
                 await self._send_event(
@@ -502,6 +513,18 @@ class PythonPlaybackEndpoint:
         self.events.append(event)
         if event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb":
             self._upload_rgb_asset(event)
+        elif event.event_name == "stream.output.open.requested" and event.stream_type == "actuator.speaker":
+            self.app.publish_control_event(
+                Event(
+                    event_name="stream.output.ready",
+                    user_id=self.user_id,
+                    producer_id=self.device_id,
+                    session_id=self.device_id,
+                    stream_id=event.stream_id,
+                    stream_type=event.stream_type,
+                    payload={"stream_type": event.stream_type, "reason": "python_glass_ready"},
+                )
+            )
         elif event.event_name == "control.audio_session.close.requested":
             self.app.publish_control_event(
                 Event(

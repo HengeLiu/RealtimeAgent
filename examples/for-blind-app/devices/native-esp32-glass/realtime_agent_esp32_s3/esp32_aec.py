@@ -535,6 +535,19 @@ class NetworkEsp32S3Endpoint(NetworkPythonPlaybackEndpoint):
                     ),
                 )
                 await self._open_and_send_mic(control_ws, stream_ws, self.device_id, audio_payload)
+            elif event.event_name == "stream.output.open.requested" and event.stream_type == "actuator.speaker":
+                await self._send_event(
+                    control_ws,
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=self.user_id,
+                        producer_id=self.device_id,
+                        session_id=self.device_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                        payload={"stream_type": event.stream_type, "reason": "esp32_speaker_ready"},
+                    ),
+                )
             elif event.event_name in {"stream.output.finish.requested", "stream.output.close.requested"}:
                 self.state.mark_playback_finished()
                 await self._send_event(

@@ -86,13 +86,14 @@ def test_input_stream_sequence_rejects_close_before_opened() -> None:
 def test_output_stream_sequence_accepts_playback_lifecycle() -> None:
     """测试目标：确认输出 stream 可以表达一次完整播放。
 
-    测试方法：校验 open requested -> started -> finished 事件序列。
+    测试方法：校验 open requested -> ready -> started -> finished 事件序列。
     预期结果：状态机不抛异常，server sdk 可把它作为播放完成信号消费。
     """
 
     validate_output_stream_event_sequence(
         [
             "stream.output.open.requested",
+            "stream.output.ready",
             "stream.output.started",
             "stream.output.finished",
         ]
@@ -102,16 +103,33 @@ def test_output_stream_sequence_accepts_playback_lifecycle() -> None:
 def test_output_stream_sequence_accepts_cancel_lifecycle() -> None:
     """测试目标：确认输出 stream 支持取消请求和取消回执。
 
-    测试方法：校验 open requested -> started -> cancel requested -> cancelled 事件序列。
+    测试方法：校验 open requested -> ready -> started -> cancel requested -> cancelled 事件序列。
     预期结果：状态机不抛异常，端侧 SDK 可稳定映射为播放取消行为。
     """
 
     validate_output_stream_event_sequence(
         [
             "stream.output.open.requested",
+            "stream.output.ready",
             "stream.output.started",
             "stream.output.cancel.requested",
             "stream.output.cancelled",
+        ]
+    )
+
+
+def test_output_stream_sequence_accepts_ready_then_closed_without_started() -> None:
+    """测试目标：确认空输出或未达到起播水位的输出可以在 ready 后直接关闭。
+
+    测试方法：校验 open requested -> ready -> closed 事件序列。
+    预期结果：状态机不抛异常，端侧可表达没有进入本地播放的输出终态。
+    """
+
+    validate_output_stream_event_sequence(
+        [
+            "stream.output.open.requested",
+            "stream.output.ready",
+            "stream.output.closed",
         ]
     )
 

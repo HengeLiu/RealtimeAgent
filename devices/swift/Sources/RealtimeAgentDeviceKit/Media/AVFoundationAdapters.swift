@@ -46,7 +46,7 @@ private final class RealtimeAgentMicrophoneCaptureSession: @unchecked Sendable {
 
         let input = engine.inputNode
         #if os(iOS) || os(tvOS) || os(visionOS)
-        try? input.setVoiceProcessingEnabled(true)
+        try RealtimeAgentAudioSession.enableVoiceProcessing(on: input, role: "microphone")
         #endif
         let inputFormat = input.outputFormat(forBus: 0)
         guard let targetFormat = AVAudioFormat(
@@ -223,6 +223,7 @@ public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @u
 
         #if os(iOS) || os(tvOS) || os(visionOS)
         try RealtimeAgentAudioSession.configureVoiceConversation(sampleRate: Double(format.sampleRate))
+        try RealtimeAgentAudioSession.enableVoiceProcessing(on: engine.outputNode, role: "speaker")
         #endif
 
         guard format.codec == "pcm16le" else {
@@ -384,6 +385,20 @@ private enum RealtimeAgentAudioSession {
         )
         try audioSession.setPreferredSampleRate(sampleRate)
         try audioSession.setActive(true)
+    }
+
+    /// 启用系统语音处理链路。
+    ///
+    /// 主要逻辑：让麦克风和扬声器都进入 AVAudioEngine 的 voice-processing I/O 路径，
+    /// 这样系统回声消除器可以获得播放参考信号，降低端侧播报被本机麦克风再次采集后触发误打断的概率。
+    static func enableVoiceProcessing(on node: AVAudioIONode, role: String) throws {
+        do {
+            try node.setVoiceProcessingEnabled(true)
+        } catch {
+            throw RealtimeAgentDeviceError.transportClosed(
+                "cannot enable \(role) voice processing: \(error.localizedDescription)"
+            )
+        }
     }
 }
 #endif

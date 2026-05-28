@@ -450,6 +450,18 @@ def test_vision_agent_core_final_mic_chunk_emits_output() -> None:
 
         def push_event(self, event: Event) -> None:
             self.events.append(event)
+            if event.event_name == "stream.output.open.requested":
+                app.publish_control_event(
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=event.user_id,
+                        producer_id=self.device_id,
+                        session_id=event.session_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                        payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+                    )
+                )
 
         def push_stream_chunk(self, chunk: StreamChunk) -> None:
             self.chunks.append(chunk)
@@ -507,6 +519,18 @@ def test_vision_agent_core_replies_to_multiple_input_streams_in_same_session(tmp
 
         def push_event(self, event: Event) -> None:
             self.events.append(event)
+            if event.event_name == "stream.output.open.requested":
+                app.publish_control_event(
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=event.user_id,
+                        producer_id=self.device_id,
+                        session_id=event.session_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                        payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+                    )
+                )
 
         def push_stream_chunk(self, chunk: StreamChunk) -> None:
             self.chunks.append(chunk)
@@ -595,6 +619,18 @@ def test_vision_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path
 
         def push_event(self, event: Event) -> None:
             self.events.append(event)
+            if event.event_name == "stream.output.open.requested":
+                app.publish_control_event(
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=event.user_id,
+                        producer_id=self.device_id,
+                        session_id=event.session_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                        payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+                    )
+                )
 
         def push_stream_chunk(self, chunk: StreamChunk) -> None:
             self.chunks.append(chunk)
@@ -857,6 +893,18 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
             seq=0,
             payload=b"\x00\x01",
             duration_ms=40,
+        )
+    )
+    assert first.chunks == []
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.ready",
+            user_id="user-output",
+            producer_id=first.device_id,
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker", "reason": "test_ready"},
         )
     )
     app.stream_service.close_stream(handle.stream_id, reason="done")
