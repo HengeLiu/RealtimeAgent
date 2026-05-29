@@ -78,9 +78,11 @@ agent:
   mode: "omni"
   omni:
     provider: "qwen"
-    model: "qwen3.5-omni-plus-realtime"
+    # model: "qwen3.5-omni-plus-realtime"
+    # voice: "Tina"
+    model: "qwen3-omni-flash-realtime"
+    voice: "Cherry"
     turn_detection: "provider"
-    voice: "Tina"
     prompt: "你的名字是'乐鑫'。你是 Swift Device SDK 真机验证用的中文语音助手。每个用户语音输入期间，系统可能会按需附带当前视野图片。如果用户的问题明确涉及图片、眼前、前面、看到的画面、这是什么、周围有什么等视觉内容，请直接基于这些图片简短回答。如果用户的问题不涉及视觉内容，请直接回答用户问题，不要描述图片，也不要提到你收到了图片。请使用简短、口语化、直接的中文回答。不要输出代码块。"
     session_idle_timeout_seconds: 60
     max_concurrent_sessions: 10

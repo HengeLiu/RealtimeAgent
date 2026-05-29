@@ -107,7 +107,7 @@ def test_swift_default_audio_adapter_enables_voice_processing() -> None:
     """测试目标：确认 Swift 默认音频适配器启用系统语音处理，降低外放回声再次触发模型。
 
     测试方法：静态检查 AVFoundation 默认适配器里的音频会话模式和输入节点 voice processing。
-    预期结果：默认麦克风和 speaker 共用 `.voiceChat` 会话，并对 input node 调用 voice processing。
+    预期结果：默认麦克风和 speaker 共用 `.voiceChat` 会话和同一个 voice-processing engine。
     """
 
     adapter = (ROOT / "devices/swift/Sources/RealtimeAgentDeviceKit/Media/AVFoundationAdapters.swift").read_text(
@@ -116,4 +116,7 @@ def test_swift_default_audio_adapter_enables_voice_processing() -> None:
 
     assert "mode: .voiceChat" in adapter
     assert "setVoiceProcessingEnabled(true)" in adapter
+    assert "RealtimeAgentVoiceConversationEngine.shared" in adapter
+    assert "final class RealtimeAgentVoiceConversationEngine" in adapter
+    assert "private let voiceEngine = RealtimeAgentVoiceConversationEngine.shared" in adapter
     assert "configureVoiceConversation" in adapter
