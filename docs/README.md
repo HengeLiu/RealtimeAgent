@@ -8,16 +8,18 @@
 
 ## 先读什么
 
-1. [项目介绍](getting-started/what-is-realtime-agent.md)：了解项目定位、代码架构、关键能力和典型使用方式。
-2. [快速开始](getting-started/quickstart.md)：准备环境，启动 server，连接开发/测试支持组件。
-3. [第一个 Tool 和 Task](tutorials/build-first-capability.md)：理解业务能力如何接入 Agent。
-4. [跨设备本地联调](how-to/cross-device-local-debug.md)：按 server、开发支持组件、真实端侧参考工程的顺序做联调。
-5. [CLI 参考](reference/cli.md)：查看常用 `realtime-agent.*` 命令。
+1. [开发者总览](getting-started/developer-overview.md)：快速了解项目价值、核心能力、扩展方式和本地验证路径。
+2. [项目介绍](getting-started/what-is-realtime-agent.md)：了解项目定位、代码架构、关键能力和典型使用方式。
+3. [快速开始](getting-started/quickstart.md)：准备环境，启动 server，连接开发/测试支持组件。
+4. [第一个 Tool 和 Task](tutorials/build-first-capability.md)：理解业务能力如何接入 Agent。
+5. [跨设备本地联调](how-to/cross-device-local-debug.md)：按 server、开发支持组件、真实端侧参考工程的顺序做联调。
+6. [CLI 参考](reference/cli.md)：查看常用 `realtime-agent.*` 命令。
 
 ## 社区开发者文档
 
 ### Getting Started
 
+- [开发者总览](getting-started/developer-overview.md)
 - [项目介绍](getting-started/what-is-realtime-agent.md)
 - [快速开始](getting-started/quickstart.md)
 

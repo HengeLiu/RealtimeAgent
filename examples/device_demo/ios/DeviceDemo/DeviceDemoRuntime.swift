@@ -39,7 +39,7 @@ final class DeviceDemoRuntime: ObservableObject {
     private let logger = Logger(subsystem: "dev.realtimeagent.device-demo", category: "runtime")
 
     private static let serverURLKey = "DeviceDemo.serverURL"
-    private static let defaultServerURL = "http://192.168.10.10:8765"
+    private static let defaultServerURL = "http://172.16.213.60:8765"
 
     init() {
         serverURL = UserDefaults.standard.string(forKey: Self.serverURLKey) ?? Self.defaultServerURL
