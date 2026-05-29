@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="190" viewBox="0 0 980 190" role="img" aria-labelledby="title desc">
+  <title id="title">realtime-agent handwritten wordmark</title>
+  <desc id="desc">A handwritten-style realtime-agent wordmark. The real prefix is blue, and time-agent is dark blue.</desc>
+  <defs>
+    <style>
+      .word {
+        font-family: "Noteworthy", "Chalkboard SE", "Arial Rounded MT Bold", "Segoe Print", cursive;
+        font-size: 108px;
+        font-weight: 700;
+        letter-spacing: 0;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .real {
+        fill: #2f80ed;
+      }
+      .rest {
+        fill: #1d3557;
+      }
+    </style>
+  </defs>
+
+  <text x="58" y="126" class="word">
+    <tspan class="real">real</tspan><tspan class="rest">time-agent</tspan>
+  </text>
+</svg>
