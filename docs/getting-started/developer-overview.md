@@ -1,8 +1,14 @@
 # 开发者总览
 
+<p align="center">
+  <img src="../assets/realtime-agent-logo.svg" alt="realtime-agent logo" width="120" />
+</p>
+
 `realtime-agent` 是一个面向实时语音、视觉输入和多设备协作的 Agent 开发框架。它把大模型对话、工具调用、后台任务、设备能力和运行排障组织成一套可扩展的 Server SDK、Device SDK 和通讯协议。
 
 如果你想做的不只是一个网页聊天机器人，而是一个可以听、说、看、调用设备、调度长流程任务的实时 AI 应用，这个项目可以作为基础框架。
+
+![realtime-agent 简化架构图](../assets/realtime-agent-overview.svg)
 
 ## 1. 项目是什么
 
@@ -25,119 +31,89 @@
 2. 接入端侧设备：使用 Device SDK 声明设备能力，把真实摄像头、麦克风、播放、震动、屏幕或其他端侧能力接进来。
 3. 优化模型链路：调整提示词、上下文、provider、ASR、TTS、视觉模型和 realtime 音频模型，让应用在延迟、效果和稳定性之间取得更好的平衡。
 
-这也是项目最重要的价值：它不是只提供一个 demo，而是提供一套可运行、可扩展、可排障的实时 Agent 应用骨架。开发者可以先用示例验证完整链路，再替换其中的工具、任务、设备、提示词和模型链路。
+项目提供的示例应用不是一次性演示代码，而是一个可继续扩展的起点。开发者可以先用示例验证完整链路，再根据自己的场景替换工具、任务、设备、提示词和模型链路。
 
 ## 2. 已支持的产品能力
 
 ### 2.1 实时音视频对话
 
-项目已经支持实时语音对话，并可以把视觉输入接入对话链路。典型链路包括：
+项目支持实时语音对话，并可以在对话过程中接入图片或视频输入。开发者可以基于它构建语音优先、视觉辅助的 Agent 应用，例如智能眼镜助手、视觉问答、导航辅助、远程协作或多模态设备原型。
 
-```text
-sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker
-```
+这类应用通常不只是“把一句话发给模型再返回文本”，而是需要持续维护语音会话、处理用户打断、尽快播放回答、在合适的时机采集视觉输入，并把模型输出转成端侧可播放的语音。`realtime-agent` 提供了一个已经打通的实时对话基础能力，开发者可以先关注自己的应用场景，而不是从零搭建实时音视频交互框架。
 
-这条链路适合使用视觉语言模型完成“听用户说话、必要时看图、调用工具、再用语音回答”的应用。
-
-项目也支持原生实时音频模型链路：
-
-```text
-sensor.mic -> OmniRealtimeAgentCore -> assistant_audio.delta -> actuator.speaker
-```
-
-这条链路适合接入可以直接处理音频输入输出的实时模型。Server 侧会把模型音频 delta 映射到统一的播放和运行产物体系里，避免上层应用直接依赖某个 provider 的原始事件格式。
-
-端侧可以是浏览器模拟眼镜、Python 设备、iOS 参考端、ESP32 参考端，或者开发者自己实现的设备应用。项目不强绑定某一种硬件，而是通过能力声明和 Device SDK 接入不同设备。
+项目不强绑定某一种硬件。浏览器模拟设备、Python 设备、iOS 参考端、ESP32 参考端，以及开发者自己的设备应用，都可以作为实时对话的输入和输出端。
 
 ### 2.2 对话中调用工具
 
-Agent 可以在对话过程中调用工具。工具适合一次性、短生命周期动作，例如：
+项目支持 Agent 在对话过程中调用工具。工具适合把外部信息、设备动作或业务系统能力接入对话，例如：
 
-- 拍一张当前画面。
-- 查询路线。
-- 搜索资料。
-- 触发设备震动。
-- 发送一次设备命令。
-- 读取某个资产或传感器结果。
+- 查询路线、天气、搜索结果或业务数据。
+- 请求设备拍照、震动、显示提示或执行一次命令。
+- 读取一次传感器结果或获取一份运行中的资产。
+- 调用开发者自己的服务、数据库或业务 API。
 
-工具通过 `ToolContext` 访问设备、资产、输出和上下文能力。开发者不需要在工具里直接操作 WebSocket、拼控制事件或硬编码设备 ID。
+对 SDK 使用者来说，工具的意义是把“模型会说话”扩展成“模型能做事”。开发者可以把一个明确、短生命周期的动作封装成工具，让模型在需要时决定是否调用。
 
-工具调用链路可以概括为：
-
-```plantuml
-@startuml
-actor "用户" as User
-participant "Device" as Device
-participant "Server" as Server
-participant "Agent Core" as Agent
-participant "Tool" as Tool
-participant "Context API" as Context
-
-User -> Device: 语音或文本输入
-Device -> Server: 音频 / 文本 / 视觉输入
-Server -> Agent: 编译模型上下文和工具列表
-Agent -> Tool: 模型决定调用工具
-Tool -> Context: 请求设备、资产或输出能力
-Context -> Device: 标准控制事件或 stream 请求
-Device --> Context: 回执、数据或资产
-Tool --> Agent: ToolResult
-Agent --> Server: 最终回复
-Server -> Device: TTS / speaker 输出
-@enduml
-```
-
-这让工具开发更接近普通 Python 业务代码，同时保留底层事件和运行产物，便于排查。
+项目已经把工具调用和实时对话连接在一起：用户可以用语音提出需求，Agent 在同一轮对话中调用工具，再把结果继续用语音反馈给用户。
 
 ### 2.3 对话中启动后台任务
 
-除了短动作工具，项目还支持后台任务。后台任务适合持续运行、订阅数据流或维护状态的流程，例如：
+项目支持 Agent 在对话中启动后台任务。后台任务适合那些不能用一次工具调用完成、需要持续运行或维护状态的流程，例如：
 
-- 持续找物。
-- 持续观察红绿灯。
-- 导航过程管理。
-- 周期性检查设备状态。
-- 监听某类传感器数据并在条件满足时输出提醒。
+- 持续找物或观察环境变化。
+- 导航、提醒、巡检等长流程。
+- 持续消费视频、传感器或设备状态。
+- 在条件满足时主动输出提醒或触发设备动作。
 
-工具和任务的边界很重要：
+对开发者来说，后台任务提供了一种更自然的建模方式：一次性动作写成工具，持续性流程写成任务。这样 Agent 既可以回答用户当前的问题，也可以启动一个在后台持续推进的流程。
 
 ```text
 Tool：现在做一次，快速返回结果。
 Task：持续做一段时间，可以接收信号、维护状态、产生多次输出。
 ```
 
-Agent 可以在对话中通过自动生成的 `start_*_task` 工具启动后台任务，后续任务运行状态会进入任务运行产物和调试链路。
-
 ## 3. 核心运行链路
 
-### 文本 / 视觉链路
+### Omni 全模态模型链路
 
-文本 / 视觉链路适合用 ASR、视觉语言模型和 TTS 拼成语音 Agent：
-
-```text
-设备麦克风
-  -> ASR
-  -> VisionRealtimeAgentCore
-  -> 工具调用或视觉资产拼接
-  -> 语言模型回复
-  -> Streaming TTS
-  -> 设备 speaker 播放
-```
-
-这条链路的优势是容易接入成熟视觉语言模型，也方便通过工具把图片、视频片段、搜索结果和设备能力加入模型上下文。
-
-### 实时音频链路
-
-实时音频链路适合接入原生 realtime / omni 模型：
+Omni 全模态模型链路已经接入原生 realtime / omni 模型。语音输入、对话理解、语音输出和部分多模态能力主要由同一个全模态模型承担：
 
 ```text
 设备麦克风
-  -> Realtime / Omni provider
-  -> provider 输出音频 delta
+  -> Omni / Realtime 模型
+  -> 模型输出音频 delta
   -> Server 输出仲裁
   -> 设备 speaker 播放
 ```
 
-这条链路关注低延迟语音交互。Server SDK 会统一处理音频 session、播放输出、打断、事件记录和运行产物。
+这条链路更适合快速上手和低延迟语音交互。它的组件少，实时连接、语音理解和语音输出的边界更集中，整体实现更简单，也更容易获得可打断、可恢复的流式语音体验。
+
+它的代价是可选择性和灵活性较低。开发者通常受限于少数支持 realtime / omni 的模型，输出形态也更偏语音对话本身；如果需要非常细的提示词控制、复杂视觉上下文、多阶段工具编排或自定义 ASR / TTS 策略，调优空间会相对有限。
+
+### VL 视觉语言模型链路
+
+VL 视觉语言模型链路已经把 ASR、视觉语言模型、工具调用和 TTS 组合成语音 Agent。每个节点可以选择不同 provider 或模型：
+
+```text
+设备麦克风
+  -> VAD / 语气词过滤 / 打断过滤
+  -> ASR / 标点预测
+  -> VL 模型
+  -> 工具调用或视觉资产拼接
+  -> 文本回复
+  -> Streaming TTS
+  -> 设备 speaker 播放
+```
+
+这条链路更复杂，开发和调试门槛更高，端到端延迟通常也更高。因为它要把 ASR、视觉输入、LLM、工具调用、TTS 和输出播放串起来，任何一个节点的延迟或失败都会影响整体体验。
+
+它的优势是灵活度更高。开发者可以为每个节点选择最合适的模型或服务，可以更细地控制提示词、工具描述、视觉资产进入上下文的方式和最终输出内容，也可以通过控制模型输出节奏，让多轮交互和工具调用过程更顺滑，例如在调用工具前先给用户自然提示。对于需要复杂视觉理解、强工具编排、拟人化多轮交互、可解释排障和长期提示词优化的应用，VL 链路的上限更高，但同时也需要投入更多工程和测试成本。
+
+### 两条链路如何选择
+
+如果目标是尽快做出可用的实时语音体验，优先从 Omni 全模态模型链路开始；它更简单、延迟更低、可靠性更容易控制。
+
+如果目标是深度定制视觉理解、工具编排、提示词策略和多 provider 组合，可以选择 VL 视觉语言模型链路；它更灵活，但复杂度、延迟和可靠性风险也更高。
 
 ### 工具调用链路
 
@@ -198,35 +174,45 @@ examples/<your-app>/agent-server/capabilities/
 4. 用浏览器眼镜或 Python 设备联调。
 5. 查看 `runs/` 中的 `model-request.json`、`tool-events.jsonl` 和 `agent-events.jsonl`。
 
-### 4.2 扩展设备能力：设备协议和能力声明
+### 4.2 扩展设备能力：Device SDK 代码声明
 
-如果你想接入新设备，例如新的眼镜、手机 App、机器人、ESP32 或 Linux 网关，优先从 Device SDK 和能力声明开始。
+如果你想接入新设备，例如新的眼镜、手机 App、机器人、ESP32 或 Linux 网关，优先从 Device SDK 开始。最新规范推荐在设备应用代码中直接声明和启用设备能力，而不是维护一份独立的 `supports` YAML。
 
 设备侧的职责是：
 
 - 注册到 server。
-- 声明自己支持哪些传感器、执行器和 stream。
+- 在 Device SDK 中启用自己支持的传感器、执行器和 stream。
 - 处理 server 下发的控制事件。
 - 上传音频、图片、视频或传感器数据。
 - 消费 server 下发的 speaker stream 或设备命令。
 
-设备能力声明示例：
+以 Swift Device SDK 为例，App 通过 `DeviceClient` 显式启用麦克风、相机和 speaker。SDK 会根据这些配置生成注册 payload，并维护对应的音频、视觉和播放链路：
 
-```yaml
-supports:
-  sensors:
-    - type: rgb
-      modes: [single, continuous]
-      default:
-        format: jpeg
-        frequency_hz: 1
-        sample_count: 1
-  actuators:
-    - type: vibrator
-      commands: [vibrate]
+```swift
+import RealtimeAgentDeviceKit
+
+let client = try DeviceClient(
+    serverURL: "http://127.0.0.1:8765",
+    deviceID: "dev-ios-phone-001",
+    userID: "user-001",
+    name: "iOS Phone",
+    audioInput: .enabled(),
+    camera: .enabled(source: cameraFrameSource),
+    speaker: .enabled(buffer: .default)
+)
+
+client.onCustomCommand("haptic.vibrate") { context in
+    let durationMS = context.payload["duration_ms"] as? Int ?? 120
+    try await haptics.vibrate(durationMS: durationMS)
+    try await context.emit("custom.haptic.vibrate.done", ["duration_ms": durationMS])
+}
+
+try await client.connectAndRegister()
 ```
 
-端侧开发者不需要理解 Agent Core 内部如何选择工具，也不应该依赖某个模型 provider 的内部事件。端侧只需要把真实硬件能力接到 Device SDK 暴露的注册、能力、命令和 stream API 上。
+这种方式的好处是设备能力和真实硬件接入代码放在一起：App 启用了哪些能力，SDK 就注册哪些能力；App 没有启用的麦克风、相机或 speaker，不会被误报给 server。
+
+端侧开发者不需要理解 Agent Core 内部如何选择工具，也不应该依赖某个模型 provider 的内部事件。端侧只需要把真实硬件能力接到 Device SDK 暴露的注册、命令和 stream API 上。Swift 端更完整的接入方式见 [RealtimeAgentDeviceKit](../../devices/swift/README.md)。
 
 ### 4.3 优化模型链路：提示词 / 上下文 / ASR / TTS / Vision / Realtime
 
@@ -257,8 +243,8 @@ supports:
 | 增加一个业务工具 | `examples/<app>/agent-server/capabilities/tools.py` | 适合一次性动作 |
 | 增加一个后台任务 | `examples/<app>/agent-server/capabilities/tasks.py` | 适合持续流程 |
 | 调整示例应用配置 | `examples/<app>/agent-server/server.yaml` | 控制模型、工具、任务和运行参数 |
-| 接入新设备 | `devices/<language>/` 或自己的端侧工程 | 使用 Device SDK 或协议模型 |
-| 调整设备能力声明 | `device.realtime-agent.yaml` 或 DeviceBuilder | 声明 sensors、actuators、endpoint 能力 |
+| 接入新设备 | `devices/<language>/` 或自己的端侧工程 | 使用 Device SDK 启用端侧能力 |
+| 调整设备能力 | Device SDK 配置和端侧 adapter | 在代码中启用 audioInput、camera、speaker 或自定义命令 |
 | 优化提示词 / ASR / TTS / 模型 | prompt、上下文配置、provider 配置和 provider 实现 | 保持 Tool / Task 和设备协议稳定 |
 | 查看运行问题 | `runs/`、debug API、协议测试 | 用产物定位模型、工具、设备和播放问题 |
 | 修改 SDK 核心能力 | `agent-server/realtime_agent/` | 只有通用能力才应该进入 SDK |

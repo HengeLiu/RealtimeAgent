@@ -44,7 +44,7 @@ uv run realtime-agent.server.run --config examples/device_demo/agent-server/serv
 确认 iPhone 能访问 Mac 的局域网地址，例如：
 
 ```text
-http://172.16.213.60:8765/api/health
+http://192.168.10.10:8765/api/health
 ```
 
 打开 Xcode 工程：
