@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="560" viewBox="0 0 1500 560" role="img" aria-labelledby="title desc">
+  <title id="title">realtime-agent overview</title>
+  <desc id="desc">Multiple devices connect through a protocol layer into the server. The server contains an API entry layer, realtime agent runtime, model lanes, and capabilities.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="0" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .outer { fill: #f8fbff; stroke: #172033; stroke-width: 4; stroke-linejoin: round; }
+      .dash { fill: none; stroke: #172033; stroke-width: 3.2; stroke-dasharray: 10 10; stroke-linecap: round; stroke-linejoin: round; }
+      .device-box { fill: #e8f1ff; stroke: #172033; stroke-width: 2.6; }
+      .server-box { fill: #eaf3ff; stroke: #172033; stroke-width: 2.6; }
+      .api-box { fill: #d8e8ff; stroke: #172033; stroke-width: 3; }
+      .runtime { fill: #1d3557; stroke: #172033; stroke-width: 3; }
+      .runtime-item { fill: #ffffff; }
+      .chip-blue { fill: #2f80ed; stroke: #172033; stroke-width: 2.3; }
+      .chip-soft { fill: #ffffff; stroke: #172033; stroke-width: 2.3; }
+      .protocol { fill: #f8fbff; stroke: #172033; stroke-width: 3.2; stroke-dasharray: 10 10; stroke-linecap: round; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 38px; font-weight: 850; fill: #172033; }
+      .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 17px; font-weight: 650; fill: #334155; }
+      .section { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 28px; font-weight: 850; fill: #172033; }
+      .label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 22px; font-weight: 800; fill: #172033; }
+      .label-white { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 22px; font-weight: 800; fill: #ffffff; }
+      .small { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; font-weight: 700; fill: #172033; }
+      .small-white { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; font-weight: 700; fill: #ffffff; }
+      .tiny { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13.5px; font-weight: 650; fill: #334155; }
+      .tiny-white { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13.5px; font-weight: 650; fill: #ffffff; }
+    </style>
+  </defs>
+
+  <rect x="10" y="10" width="1480" height="540" rx="44" class="outer"/>
+  <text x="750" y="58" text-anchor="middle" class="title">realtime-agent</text>
+  <text x="750" y="88" text-anchor="middle" class="subtitle">Realtime runtime for devices, models, tools, tasks, and observable runs</text>
+
+  <!-- Devices -->
+  <rect x="58" y="124" width="358" height="398" rx="30" class="dash"/>
+  <text x="237" y="158" text-anchor="middle" class="section">Devices</text>
+  <text x="237" y="181" text-anchor="middle" class="tiny">Inputs, outputs, and actuators</text>
+
+  <g transform="translate(134 224)" filter="url(#shadow)">
+    <rect x="0" y="0" width="206" height="46" rx="14" class="device-box"/>
+    <text x="103" y="21" text-anchor="middle" class="small">Device A</text>
+    <text x="103" y="37" text-anchor="middle" class="tiny">Mic / Camera / Speaker</text>
+  </g>
+  <g transform="translate(134 298)" filter="url(#shadow)">
+    <rect x="0" y="0" width="206" height="46" rx="14" class="device-box"/>
+    <text x="103" y="21" text-anchor="middle" class="small">Device B</text>
+    <text x="103" y="37" text-anchor="middle" class="tiny">Display / Haptic / Sensors</text>
+  </g>
+  <g transform="translate(134 372)" filter="url(#shadow)">
+    <rect x="0" y="0" width="206" height="46" rx="14" class="device-box"/>
+    <text x="103" y="21" text-anchor="middle" class="small">Device C</text>
+    <text x="103" y="37" text-anchor="middle" class="tiny">Custom App / Hardware</text>
+  </g>
+  <g transform="translate(134 446)" filter="url(#shadow)">
+    <rect x="0" y="0" width="206" height="46" rx="14" class="device-box"/>
+    <text x="103" y="29" text-anchor="middle" class="small">...</text>
+  </g>
+
+  <!-- Protocol -->
+  <rect x="466" y="162" width="84" height="324" rx="24" class="protocol"/>
+  <text x="508" y="324" text-anchor="middle" class="small" transform="rotate(-90 508 324)">Data &amp; Protocol</text>
+
+  <!-- Server -->
+  <rect x="606" y="124" width="838" height="398" rx="32" class="dash"/>
+  <text x="1025" y="158" text-anchor="middle" class="section">Server</text>
+  <text x="1025" y="181" text-anchor="middle" class="tiny">API, runtime, model lanes, capabilities, and runs</text>
+
+  <!-- Server API: top aligns with Runtime, bottom aligns with Model Lanes -->
+  <g transform="translate(646 212)" filter="url(#shadow)">
+    <rect x="0" y="0" width="136" height="268" rx="24" class="api-box"/>
+    <text x="68" y="40" text-anchor="middle" class="label">Server</text>
+    <text x="68" y="67" text-anchor="middle" class="label">API</text>
+    <rect x="24" y="94" width="88" height="28" rx="9" class="chip-soft"/>
+    <text x="68" y="114" text-anchor="middle" class="tiny">register</text>
+    <rect x="24" y="132" width="88" height="28" rx="9" class="chip-soft"/>
+    <text x="68" y="152" text-anchor="middle" class="tiny">stream</text>
+    <rect x="24" y="170" width="88" height="28" rx="9" class="chip-soft"/>
+    <text x="68" y="190" text-anchor="middle" class="tiny">route</text>
+    <rect x="24" y="208" width="88" height="28" rx="9" class="chip-soft"/>
+    <text x="68" y="228" text-anchor="middle" class="tiny">auth</text>
+  </g>
+
+  <!-- Runtime -->
+  <g transform="translate(820 212)" filter="url(#shadow)">
+    <rect x="0" y="0" width="396" height="210" rx="28" class="runtime"/>
+    <text x="198" y="38" text-anchor="middle" class="label-white">Realtime Agent Runtime</text>
+    <text x="198" y="64" text-anchor="middle" class="tiny-white">session, interruption, output recovery, context, and runs</text>
+    <rect x="34" y="88" width="146" height="45" rx="15" class="runtime-item"/>
+    <text x="107" y="108" text-anchor="middle" class="small">Agent Loop</text>
+    <text x="107" y="126" text-anchor="middle" class="tiny">turn state</text>
+    <rect x="216" y="88" width="146" height="45" rx="15" class="runtime-item"/>
+    <text x="289" y="108" text-anchor="middle" class="small">Context</text>
+    <text x="289" y="126" text-anchor="middle" class="tiny">devices / assets</text>
+    <rect x="34" y="151" width="146" height="45" rx="15" class="runtime-item"/>
+    <text x="107" y="171" text-anchor="middle" class="small">Output</text>
+    <text x="107" y="189" text-anchor="middle" class="tiny">TTS / speaker</text>
+    <rect x="216" y="151" width="146" height="45" rx="15" class="runtime-item"/>
+    <text x="289" y="171" text-anchor="middle" class="small">Runs</text>
+    <text x="289" y="189" text-anchor="middle" class="tiny">debug evidence</text>
+  </g>
+
+  <!-- Capabilities: right of runtime, vertically arranged -->
+  <g transform="translate(1250 212)" filter="url(#shadow)">
+    <rect x="0" y="0" width="156" height="210" rx="24" class="server-box"/>
+    <text x="78" y="38" text-anchor="middle" class="label">Capabilities</text>
+    <rect x="28" y="74" width="100" height="42" rx="13" class="chip-blue"/>
+    <text x="78" y="101" text-anchor="middle" class="small-white">Tools</text>
+    <rect x="28" y="136" width="100" height="42" rx="13" class="chip-blue"/>
+    <text x="78" y="163" text-anchor="middle" class="small-white">Tasks</text>
+  </g>
+
+  <!-- Model lanes: bottom aligns with Server API bottom -->
+  <g transform="translate(820 448)" filter="url(#shadow)">
+    <rect x="0" y="0" width="396" height="32" rx="13" class="server-box"/>
+    <text x="90" y="22" text-anchor="middle" class="small">Model Lanes</text>
+    <rect x="182" y="6" width="82" height="20" rx="8" class="chip-blue"/>
+    <text x="223" y="21" text-anchor="middle" class="tiny-white">Omni</text>
+    <rect x="282" y="6" width="82" height="20" rx="8" class="chip-soft"/>
+    <text x="323" y="21" text-anchor="middle" class="tiny">VL</text>
+  </g>
+</svg>
